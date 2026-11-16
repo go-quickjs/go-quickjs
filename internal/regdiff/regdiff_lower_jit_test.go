@@ -1,6 +1,6 @@
 //go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))
 
-package v8bench
+package regdiff
 
 import (
 	"cmp"
@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,34 +66,50 @@ const regLowerShow = `globalThis.__regShow = function (v) {
 };
 globalThis.__regIs = function (f, text) { return typeof f === "function" && Function.prototype.toString.call(f) === text };`
 
-// regLowerCheck lowers every function of src's register code, validates
+// regLowerCompile is src compiled, with the register form on, or nil
+// where it does not compile.
+func regLowerCompile(src string) *bytecode.Function {
+	prog, err := parser.Parse(src, parser.Options{})
+	if err != nil {
+		return nil
+	}
+	top, err := compiler.Compile(prog, compiler.Options{Text: src})
+	if err != nil {
+		return nil
+	}
+	return top
+}
+
+// regLowerLimited reports whether s, a call's answer as text or its
+// error, is a runtime's past its time or its memory.
+func regLowerLimited(s string) bool {
+	return strings.Contains(s, "memory limit") || strings.Contains(s, "deadline exceeded") || strings.Contains(s, "interrupted")
+}
+
+// regLowerCheck lowers every function of top's register code, validates
 // each program, and runs those of its top-level functions with numbers as
 // their arguments: through ir's evaluator alone, which leaves at what it
 // cannot make; and in a runtime of the VM's with the VM making that
 // (vm.RegLowerCall), each answer compared with an ordinary call's in a
-// second runtime that has run the same calls before it.
-func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
+// second runtime that has run the same calls before it. Where parts is
+// more than 1, it runs the part-th of that many runs of consecutive
+// functions, in the order of their names; all of them where parts is 0
+// or 1. Its caller holds the register form and tier on for the process
+// (TestRegLowerEvaluate).
+func regLowerCheck(t *testing.T, st *regLowerStats, top *bytecode.Function, part, parts int) {
 	t.Helper()
-	compiler.SetRegisterForm(true)
-	defer compiler.SetRegisterForm(os.Getenv("QJS_REG") != "")
-	compile1 := func(src string) *bytecode.Function {
-		prog, err := parser.Parse(src, parser.Options{})
-		if err != nil {
-			return nil
-		}
-		top, err := compiler.Compile(prog, compiler.Options{Text: src})
-		if err != nil {
-			return nil
-		}
-		return top
-	}
-	top := compile1(src)
-	show := compile1(regLowerShow)
+	show := regLowerCompile(regLowerShow)
 	if top == nil || show == nil {
 		t.Logf("not compiled")
 		return
 	}
 	programs := map[*bytecode.Function]*ir.Program{}
+	// Every part lowers every function, and the first part alone counts
+	// them and reports an invalid one.
+	lowering := st
+	if part != 0 {
+		lowering = newRegLowerStats()
+	}
 	var walk func(fn *bytecode.Function)
 	walk = func(fn *bytecode.Function) {
 		for _, c := range fn.Constants {
@@ -104,23 +121,25 @@ func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
 			if f.RegCode() == nil {
 				continue
 			}
-			st.functions++
+			lowering.functions++
 			p, err := compile.LowerRegInline(f.RegCode(), f)
 			if err != nil {
 				var rf *compile.Refusal
 				if errors.As(err, &rf) {
-					st.refused[rf.Reason]++
+					lowering.refused[rf.Reason]++
 				} else {
-					st.refused[err.Error()]++
+					lowering.refused[err.Error()]++
 				}
 				continue
 			}
 			if err := p.Validate(); err != nil {
-				st.invalid++
-				t.Errorf("%s: invalid lowering: %v\n%s", f.Name, err, f.RegCode())
+				lowering.invalid++
+				if lowering == st {
+					t.Errorf("%s: invalid lowering: %v\n%s", f.Name, err, f.RegCode())
+				}
 				continue
 			}
-			st.lowered++
+			lowering.lowered++
 			programs[f] = p
 		}
 	}
@@ -133,7 +152,7 @@ func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
 			named[c.Fn.Name] = c.Fn
 		}
 	}
-	withRegTier(true, func() {
+	func() {
 		// Two runtimes, the same calls made in each: a's evaluated, b's
 		// ordinary.
 		var rts [2]*vm.Runtime
@@ -198,6 +217,9 @@ func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
 			}
 		})
 		for k, name := range names {
+			if parts > 1 && k*parts/len(names) != part {
+				continue
+			}
 			fn := named[name]
 			p := programs[fn]
 			if p == nil || seen[name] != 1 || p.Params > 4 || fn.Kind != bytecode.KindNormal || !regLowerIdent.MatchString(name) {
@@ -275,9 +297,7 @@ func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
 					cancel()
 					r.SetContext(context.Background())
 				}
-				if limited := func(s string) bool {
-					return strings.Contains(s, "memory limit") || strings.Contains(s, "deadline exceeded") || strings.Contains(s, "interrupted")
-				}; limited(got) || limited(want) {
+				if regLowerLimited(got) || regLowerLimited(want) {
 					// A runtime past its time or its memory, which the two
 					// reach at different points, the evaluator's slower: the
 					// runtimes part there, and are made anew for the next
@@ -294,17 +314,66 @@ func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
 				}
 			}
 		}
-	})
+	}()
 }
 
 // regLowerTuples is how many sets of arguments each function is called
-// with: QUICKJS_REGLOWER_ARGS's number, a sample for a routine run, or 8.
+// with: QUICKJS_REGLOWER_ARGS's number; 8, the full sweep, where
+// QUICKJS_REGLOWER_FULL is 1; or a sample of 3, the first of them all 3s.
 func regLowerTuples() int {
 	var n int
 	if _, err := fmt.Sscanf(os.Getenv("QUICKJS_REGLOWER_ARGS"), "%d", &n); err == nil && n > 0 {
 		return n
 	}
-	return 8
+	if os.Getenv("QUICKJS_REGLOWER_FULL") == "1" {
+		return 8
+	}
+	return 3
+}
+
+// regLowerChunks is how many runs of consecutive functions
+// TestRegLowerEvaluate splits the micro-benchmarks' into, each run beside
+// the others: the largest of the corpus's programs, most of the test's
+// time. 1, the whole, where QUICKJS_REGLOWER_FULL is 1. The calls are
+// those of the whole, each compared as there, but a part's program is
+// compiled and run anew, and its functions have not been called as the
+// whole's calls before them called them, so RegLowerCall finds no
+// register frame for some calls it evaluates in the whole, and makes them
+// plainly (a pure body's closure has no frame until pureCall has given up
+// on it 64 times). Of the corpus's 3,520 calls with 3 sets of arguments,
+// 258 ran to the end in the evaluator and 4 went on in runReg with the
+// micro-benchmarks whole, 199 and 0 in 16 parts; a call of either is
+// compared alike. The full sweep keeps the whole.
+func regLowerChunks() int {
+	if os.Getenv("QUICKJS_REGLOWER_FULL") == "1" {
+		return 1
+	}
+	return 16
+}
+
+// add adds o's counts to s's.
+func (s *regLowerStats) add(o *regLowerStats) {
+	s.functions += o.functions
+	s.lowered += o.lowered
+	s.invalid += o.invalid
+	s.runs += o.runs
+	s.returned += o.returned
+	s.generic += o.generic
+	s.budget += o.budget
+	s.ranToEnd += o.ranToEnd
+	s.compared += o.compared
+	s.limited += o.limited
+	s.varies += o.varies
+	for _, m := range [][2]map[string]int{{s.refused, o.refused}, {s.exits, o.exits}, {s.resumed, o.resumed}, {s.skipped, o.skipped}} {
+		for k, n := range m[1] {
+			m[0][k] += n
+		}
+	}
+}
+
+// newRegLowerStats is a regLowerStats with its maps made.
+func newRegLowerStats() *regLowerStats {
+	return &regLowerStats{refused: map[string]int{}, exits: map[string]int{}, resumed: map[string]int{}, skipped: map[string]int{}}
 }
 
 // regLowerShard reports whether the corpus test name is in the shard
@@ -334,35 +403,95 @@ func regLowerShard(name string) bool {
 // evaluator with the VM making what it does not and runReg going on where
 // it leaves for good (vm.RegLowerCall) -- each answer of the latter
 // compared with an ordinary call's.
+//
+// The corpus's cases run beside each other, each in runtimes of its own,
+// and the micro-benchmarks' functions in regLowerChunks parts: the
+// register form and tier are on for the process until every case is done,
+// and the counts of each are added up under a lock.
 func TestRegLowerEvaluate(t *testing.T) {
-	st := &regLowerStats{refused: map[string]int{}, exits: map[string]int{}, resumed: map[string]int{}, skipped: map[string]int{}}
-	regDiffHook = func(t *testing.T, src string, calls []string) { regLowerCheck(t, st, src) }
-	defer func() { regDiffHook = nil }()
+	if testing.Short() {
+		t.Skip("lowers and evaluates the register interpreter's whole corpus")
+	}
+	compiler.SetRegisterForm(true)
+	vm.SetRegTier(true)
+	st := newRegLowerStats()
+	var mu sync.Mutex
+	check := func(t *testing.T, top *bytecode.Function, part, parts int) {
+		own := newRegLowerStats()
+		regLowerCheck(t, own, top, part, parts)
+		mu.Lock()
+		st.add(own)
+		mu.Unlock()
+	}
+	regDiffHook = func(t *testing.T, src string, calls []string) { check(t, regLowerCompile(src), 0, 1) }
+	t.Cleanup(func() {
+		// After every case, the parallel ones' included.
+		regDiffHook = nil
+		env := os.Getenv("QJS_REG") != ""
+		compiler.SetRegisterForm(env)
+		vm.SetRegTier(env)
+		regLowerReport(t, st)
+	})
+	// micro is the micro-benchmarks' case, in parts.
+	micro := func(t *testing.T) {
+		src, _ := regDiffMicro(t)
+		n := regLowerChunks()
+		for c := range n {
+			t.Run(strconv.Itoa(c), func(t *testing.T) {
+				t.Parallel()
+				regDiffAlone.RLock()
+				defer regDiffAlone.RUnlock()
+				// Each part's program its own, as each case's is.
+				check(t, regLowerCompile(src), c, n)
+			})
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		f    func(*testing.T)
 	}{
+		// The longest first, to start first.
+		{"Microbenchmarks", micro}, {"Int32", TestRegDiffInt32}, {"V8Suite", TestRegDiffV8Suite},
 		{"Appends", TestRegDiffAppends}, {"ArgumentsForms", TestRegDiffArgumentsForms}, {"BlockFunctions", TestRegDiffBlockFunctions},
 		{"CallTargets", TestRegDiffCallTargets}, {"ChainsAndClosures", TestRegDiffChainsAndClosures}, {"CharCodeAt", TestRegDiffCharCodeAt},
 		{"Classes", TestRegDiffClasses}, {"Constructions", TestRegDiffConstructions}, {"ElemWrites", TestRegDiffElemWrites},
 		{"Eval", TestRegDiffEval}, {"EvalCode", TestRegDiffEvalCode}, {"FarJumps", TestRegDiffFarJumps}, {"FarNames", TestRegDiffFarNames},
 		{"FarRegisters", TestRegDiffFarRegisters}, {"FinallyCopies", TestRegDiffFinallyCopies}, {"FinallyDeep", TestRegDiffFinallyDeep},
 		{"ForOfIn", TestRegDiffForOfIn}, {"GeneratorSteps", TestRegDiffGeneratorSteps}, {"Generators", TestRegDiffGenerators},
-		{"ImportCalls", TestRegDiffImportCalls}, {"Int32", TestRegDiffInt32}, {"LabelsSwitchDelete", TestRegDiffLabelsSwitchDelete},
+		{"ImportCalls", TestRegDiffImportCalls}, {"LabelsSwitchDelete", TestRegDiffLabelsSwitchDelete},
 		{"LeafRun", TestRegDiffLeafRun}, {"Length", TestRegDiffLength}, {"Literals", TestRegDiffLiterals}, {"LoopBindings", TestRegDiffLoopBindings},
-		{"Microbenchmarks", TestRegDiffMicrobenchmarks}, {"Names", TestRegDiffNames}, {"ObjectLiterals", TestRegDiffObjectLiterals},
+		{"Names", TestRegDiffNames}, {"ObjectLiterals", TestRegDiffObjectLiterals},
 		{"Patterns", TestRegDiffPatterns}, {"RegExpLiteralCalls", TestRegDiffRegExpLiteralCalls}, {"RegExpLiterals", TestRegDiffRegExpLiterals},
 		{"RegExpWideConstants", TestRegDiffRegExpWideConstants}, {"RestArguments", TestRegDiffRestArguments}, {"Sites", TestRegDiffSites},
 		{"StackSitesPast16Bits", TestRegDiffStackSitesPast16Bits}, {"StacksAndNames", TestRegDiffStacksAndNames}, {"Steps", TestRegDiffSteps},
 		{"StrictGlobalStores", TestRegDiffStrictGlobalStores}, {"TailCalls", TestRegDiffTailCalls}, {"TopLevel", TestRegDiffTopLevel},
-		{"Try", TestRegDiffTry}, {"Typed", TestRegDiffTyped}, {"Using", TestRegDiffUsing}, {"V8Suite", TestRegDiffV8Suite},
+		{"Try", TestRegDiffTry}, {"Typed", TestRegDiffTyped}, {"Using", TestRegDiffUsing},
 		{"WideForms", TestRegDiffWideForms}, {"With", TestRegDiffWith},
 	} {
 		if !regLowerShard(tc.name) {
 			continue
 		}
-		t.Run(tc.name, tc.f)
+		t.Run(tc.name, func(t *testing.T) {
+			if !regLowerAlone[tc.name] {
+				t.Parallel()
+			}
+			tc.f(t)
+		})
 	}
+}
+
+// regLowerAlone are the cases of regDiffAll, which sets regcomp.OnRefuse
+// for the process and holds regDiffAlone to itself: TestRegLowerEvaluate
+// runs them one after another before the others, which run beside each
+// other, so that none waits for them nor they for it.
+var regLowerAlone = map[string]bool{
+	"CallTargets": true, "EvalCode": true, "FarJumps": true, "FinallyCopies": true,
+	"FinallyDeep": true, "StackSitesPast16Bits": true, "WideForms": true,
+}
+
+// regLowerReport logs what TestRegLowerEvaluate found, and fails it where
+// nothing was compared.
+func regLowerReport(t *testing.T, st *regLowerStats) {
 	type row struct {
 		k string
 		n int

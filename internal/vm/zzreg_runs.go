@@ -362,9 +362,9 @@ func (r *Runtime) regCharCodeAt(f *frame, c *regCode, k *regKept, regs *[1 << 16
 						}
 						// ToIntegerOrInfinity truncates toward zero, so any
 						// position above -1 and below the length is a code
-						// unit's.
+						// unit's, but in the empty string, which has none.
 						v := Float(math.NaN())
-						if s := o.String(); x > -1 && x < float64(s.Len()) {
+						if s := o.String(); x > -1 && x < float64(s.Len()) && !s.IsEmpty() {
 							v = Int(s.CharCodeAt(int(x)))
 						}
 						regs[w.A()] = v

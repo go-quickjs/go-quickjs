@@ -20,6 +20,9 @@ The main areas are:
   local time and `Temporal` are bindings over
   [go-intl](https://github.com/go-quickjs/go-intl), which holds the locale
   data, the calendars and the time zones.
+- `internal/regdiff`: tests only, the register interpreter's differential
+  tests, over cases of their own and the corpora `internal/v8bench` holds
+  for the benchmark runners.
 - `stdlib`: opt-in host functionality.
 - `cmd/qjs`: the command-line host.
 - `conformance`: the test262 runner. The test262 checkout is external.
@@ -158,6 +161,15 @@ Do not manually edit generated files or their binary companions:
   the package's `zzjit_*.go` files only. After changing a method of
   `jitFeedback`, run `go generate ./internal/vm`; `TestSnapshotGenerated`
   fails while either file is out of date.
+- `internal/vm/zzzyn_native_handlers_amd64.s`, the register interpreter's
+  native handlers on amd64 and their table, machine code made by
+  `nativeEmit` in `zzzyn_native_gen_amd64_test.go` with the JIT's
+  assembler (docs/register-interpreter.md, "Native handlers"). After
+  changing the emitter, or a layout its offsets come from -- the context,
+  a frame, a Runtime field it reads -- run `go generate ./internal/vm`
+  on amd64 (`go test -run '^TestRegNativeGenerated$' -nativegen
+  ./internal/vm` alone); `TestRegNativeGenerated` fails while the file is
+  out of date, under either build tag.
 - `internal/vm/*_layoutpad.go` and `internal/vm/layoutpad_*.go`, the layout
   lock's pads and the constants that size them for each configuration,
   written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.

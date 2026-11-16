@@ -231,9 +231,9 @@ var __work = %s, __only = %s, __runs = %d;
 // main that ends it, and the loop, for runs runs of the tests whose names
 // begin with one of the comma-separated only, or all of them.
 func microDriver(runs int, only string) (string, error) {
-	end := strings.LastIndex(microbench, "\nif (typeof scriptArgs === \"undefined\")")
-	if end < 0 {
-		return "", fmt.Errorf("microbench.js: no call of main to leave out")
+	src, err := microSource()
+	if err != nil {
+		return "", err
 	}
 	work := make([][2]any, len(microWork))
 	for i, w := range microWork {
@@ -251,7 +251,17 @@ func microDriver(runs int, only string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return microbench[:end+1] + microbenchExtra + fmt.Sprintf(microLoop, w, o, max(runs, 1)), nil
+	return src + fmt.Sprintf(microLoop, w, o, max(runs, 1)), nil
+}
+
+// microSource is microbench.js without the call of its main that ends it,
+// then microbench_extra.js: the tests, which a driver calls.
+func microSource() (string, error) {
+	end := strings.LastIndex(microbench, "\nif (typeof scriptArgs === \"undefined\")")
+	if end < 0 {
+		return "", fmt.Errorf("microbench.js: no call of main to leave out")
+	}
+	return microbench[:end+1] + microbenchExtra, nil
 }
 
 // runMicro runs the driver in a runtime of e's, which is given the

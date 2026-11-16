@@ -1138,6 +1138,23 @@ func TestLoneSurrogatesThroughTheEngine(t *testing.T) {
 	}
 }
 
+// TestCharCodeAtBelowZeroOfEmpty is s.charCodeAt(p) at a position between
+// -1 and 0, which truncates to 0: NaN in the empty string, which has no code
+// unit there, as in any other past its end. The tree tier's and the register
+// interpreter's call of the built-in gave -1 from the second call on.
+func TestCharCodeAtBelowZeroOfEmpty(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	src := `function f(s, x) { return s.charCodeAt(x) }
+		var r = []
+		for (var i = 0; i < 3; i++) r.push(f("", -0.5), f("", -0.9), f("", 0), f("a", -0.5), f("ab", 1.5))
+		r.join()`
+	want := "NaN,NaN,NaN,97,98,NaN,NaN,NaN,97,98,NaN,NaN,NaN,97,98"
+	if got := evalString(t, rt, src); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
 // A string is its code units, so two strings built out of the same units are
 // the same string however they were built: the halves of a pair that meet at a
 // join are the character the pair spells, and one character has one spelling.

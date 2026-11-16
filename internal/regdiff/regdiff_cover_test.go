@@ -1,4 +1,4 @@
-package v8bench
+package regdiff
 
 import (
 	"fmt"
@@ -13,12 +13,14 @@ import (
 // cases compile, eval code's included: the forms here are register code.
 func regDiffAll(t *testing.T, src string, calls []string) {
 	t.Helper()
+	regDiffAlone.Lock()
+	defer regDiffAlone.Unlock()
 	var refused []string
 	regcomp.OnRefuse = func(fn *bytecode.Function, why string) {
 		refused = append(refused, fn.Name+": "+why)
 	}
 	defer func() { regcomp.OnRefuse = nil }()
-	regDiff(t, src, calls)
+	regDiffLocked(t, src, calls)
 	for _, r := range refused {
 		t.Errorf("refused: %s", r)
 	}

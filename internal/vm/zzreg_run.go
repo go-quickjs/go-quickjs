@@ -110,6 +110,11 @@ func (r *Runtime) runReg(f *frame, c *regCode, start int) (Value, error) {
 	if r.stopped != nil {
 		return Undefined, r.stopped
 	}
+	if regNativeOn {
+		// amd64's native handlers, which leave to this table's handlers
+		// what they do not do (zzzyn_native_amd64.go).
+		return r.nativeRun(f, c, start)
+	}
 	st := r.regEnter(f, c)
 	regs, code, pc := st.regs, c.code, start
 	var w bytecode.RInstr
@@ -162,6 +167,10 @@ type regState struct {
 	kept regKept
 	err  error
 	next *regState
+	// native is the native handlers' context of the frames this state
+	// runs (zzzyn_native_amd64.go), made at its first native run and
+	// kept with the state.
+	native *nativeCtx
 }
 
 // regEnter is a state for frame f running c.

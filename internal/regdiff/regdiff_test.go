@@ -1,17 +1,18 @@
-package v8bench
+package regdiff
 
 import (
 	"context"
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -61,6 +62,20 @@ func regDiffRun(t *testing.T, src string, calls []string) []string {
 // the tier off differ -- a clock, Math.random -- is not compared. It
 // returns how many functions the tier gave register code.
 func regDiff(t *testing.T, src string, calls []string) int64 {
+	t.Helper()
+	regDiffAlone.RLock()
+	defer regDiffAlone.RUnlock()
+	return regDiffLocked(t, src, calls)
+}
+
+// regDiffAlone is held by regDiffAll alone, which sets regcomp.OnRefuse
+// for the process, and shared by every other comparison: where those run
+// at once (TestRegLowerEvaluate's subtests), no other program compiles
+// while a refusal is taken for regDiffAll's.
+var regDiffAlone sync.RWMutex
+
+// regDiffLocked is regDiff, its caller holding regDiffAlone.
+func regDiffLocked(t *testing.T, src string, calls []string) int64 {
 	t.Helper()
 	if regDiffHook != nil {
 		// Another test's reading of the corpus (regDiffHook).
@@ -118,25 +133,33 @@ func regDiffResult(call string) string {
 	return fmt.Sprintf(`(function () { var r = %s; var g = global_res; try { g = JSON.stringify(g) } catch (e) { g = String(g) } return String(r) + " / " + g })()`, call)
 }
 
+// regDiffMicro is the micro-benchmarks' program, as the v8bench runner's
+// micro mode loads it, and a call of each test with a little of its work.
+func regDiffMicro(t *testing.T) (src string, calls []string) {
+	t.Helper()
+	tests, work, err := v8bench.Corpus("micro", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src = `if (typeof console === "undefined") globalThis.console = { log: function () {} };
+if (typeof performance === "undefined") globalThis.performance = { now: function () { return 0 } };
+var global_res;
+` + tests
+	calls = make([]string, 0, len(work))
+	for _, w := range work {
+		// A little of each test's work: enough for its loops to turn and
+		// its functions to run as each tier runs them.
+		n := max(w.N/4096, 1)
+		calls = append(calls, regDiffResult(fmt.Sprintf("%s(%d)", w.Name, n)))
+	}
+	return src, calls
+}
+
 func TestRegDiffMicrobenchmarks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs every micro-benchmark three times")
 	}
-	end := strings.LastIndex(microbench, "\nif (typeof scriptArgs === \"undefined\")")
-	if end < 0 {
-		t.Fatal("microbench.js: no call of main to leave out")
-	}
-	src := `if (typeof console === "undefined") globalThis.console = { log: function () {} };
-if (typeof performance === "undefined") globalThis.performance = { now: function () { return 0 } };
-var global_res;
-` + microbench[:end+1] + microbenchExtra
-	calls := make([]string, 0, len(microWork))
-	for _, w := range microWork {
-		// A little of each test's work: enough for its loops to turn and
-		// its functions to run as each tier runs them.
-		n := max(w.n/4096, 1)
-		calls = append(calls, regDiffResult(fmt.Sprintf("%s(%d)", w.name, n)))
-	}
+	src, calls := regDiffMicro(t)
 	if built := regDiff(t, src, calls); built < 100 {
 		t.Errorf("only %d functions ran as register code", built)
 	}
@@ -150,15 +173,12 @@ func TestRegDiffV8Suite(t *testing.T) {
 	if dir == "" {
 		t.Skip("QUICKJS_V8_DIR names no checkout of the V8 suite (v8bench -fetch)")
 	}
-	var src strings.Builder
-	for _, f := range suites["v8"].files {
-		b, err := os.ReadFile(filepath.Join(dir, f))
-		if err != nil {
-			t.Skip(err)
-		}
-		src.Write(b)
-		src.WriteString("\n")
+	files, _, err := v8bench.Corpus("v8", dir)
+	if err != nil {
+		t.Skip(err)
 	}
+	var src strings.Builder
+	src.WriteString(files)
 	// Each benchmark run three times, its own checks of its answers on --
 	// Richards' counts, DeltaBlue's projections, Crypto's decryption,
 	// NavierStokes' checksum, Splay's tree -- and what it leaves to see

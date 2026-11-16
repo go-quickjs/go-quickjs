@@ -551,6 +551,158 @@ one indirect call, a handler that stores a pointer has a frame and a
 write-barrier check, and a Go call passes no more than the four arguments
 in registers, so the state's fields are loads.
 
+## Native handlers
+
+On amd64 a register frame runs by native threaded handlers
+(`zzzyn_native_amd64.go`), machine code for the hot operations over the
+same instructions and the same frames; the Go table is what they leave
+work to, and every other architecture's interpreter. `runReg` hands its
+frame to `nativeRun` before its loop; `QJS_NONATIVE` set in the
+environment (read once, `regNativeOn`) keeps the frames in the Go table's
+loop, to compare the two and as an escape hatch.
+
+**The dispatch.** Each handler ends in its own dispatch, as V8's
+Ignition's do: the next instruction read, its operation's handler's
+address loaded from the native table, an indirect jump -- four
+instructions, nothing spilled. The pinned registers hold what every
+handler needs: `RBX` the instruction's address, `R12` the frame's
+registers, `R13` the native table, `R15` the closure's caches, `R11` the
+back-edge budget, `R10` the least tag, `RDI` the context; `RAX` holds the
+instruction word, and `RCX`, `RDX`, `RSI`, `R8`, `R9` and three SSE
+registers are a handler's scratch.
+
+**What is native.** The numbers' arithmetic, increments, `-x`, `+x`,
+the bitwise operators of any number (by ToInt32) and the
+compare-and-branches, of registers, immediates and upvalues; truthiness
+of a boolean, a number, an object, a string, undefined and null; `==`
+and `!=` of numbers, of one word kind and of undefined or null against
+anything; `===` and `!==` (two strings by identity and length, and two flat ones
+of one length by their text, eight bytes at a time, up to 1,024 bytes:
+a longer text is Go's, so that an exit reads the counters a host's stop
+zeroes, which a loop comparing it each turn would not otherwise see until
+its budget ran out); moves, constants, upvalues read and written,
+and globals read and written by their site; property reads and writes by
+the site's cache, its own entry or the entries of the shapes it met
+before (`propPoly`), and a property added by the transition it
+remembers; `o.n +=` of an own number; `in` by the
+runtime's in cache, `typeof`, the length of an array or a string, the
+elements of dense arrays (read, `x[++i]`, `x[i++]`, written over any
+element) and typed arrays (every kind but Float16 and BigInt64); short
+BigInts' add, sub and mul; and calls and returns:
+`call_w` and `call_method_w` enter a callee their site's cache knows as
+`rhCallW` does -- its this, the frame record, the stack top and depth --
+and run it, the caller's state pushed on the native frame stack; a
+callee that keeps its arguments (one that reads `arguments`, which
+`rhCallW` leaves to `regCallMiss`) is entered as `regEnterW` enters it,
+its arguments appended to the runtime's argument stack; and a leaf that
+returns a parameter or a constant is answered with no frame, while one
+Go answers frameless otherwise (a pure body, one that reads or writes
+its this) is entered with a frame, cheaper here than an exit. `ret` pops
+the frame, and gives an entered frame's arguments back. Later additions:
+`x--` as `x++`; a string's or a number's method (`get_method_w`), from
+the realm's cache of their prototypes' data properties (`primProps`), as
+`regGetMethod` reads it; for-of's step over a dense array by the
+intrinsic iterator, its end included; `s.charCodeAt(i)`
+(`char_code_at`) of a flat string, the built-in read from the same cache;
+BigInt64Array's and BigUint64Array's elements read and written, a BigInt
+held in its Value; Uint8ClampedArray's writes, clamped and rounded to
+even; the compare-and-branches of two such BigInts, as 128-bit integers;
+an element written at the length of an array with room for it, as
+`appendElem` appends it, the array's and its prototype chain's index
+keys and elements checked;
+and a call in tail position while the stack is shallower than
+`tailCallDepth`, which is `call_w`'s. Deeper, Go gives the frame to the
+callee in place (`regTailTo`); where it is the base frame, `nativeRun`
+goes on with the callee's code in the same code entry
+(`nativeRestart`), rather than ending it for `regRestartRun` to run each
+callee in an entry of its own. A fast path that misses jumps to
+the exit; nothing is written before it does.
+
+**The exit stub.** An operation of no native handler has the exit stub's
+address in the table, and every miss jumps to it. It writes the
+instruction, its index and the budget to the context, makes the top
+frame's state where it is not made (`topOK`) as `nativeTop` makes it --
+the state Go made for its depth before given the frame, its code,
+closure and window, the callers' pcs written -- and calls the
+instruction's Go handler
+from `regTable` itself, through `nativeCallH`: a function that the Go
+function that entered the code called, as the JIT's `callGo` is, which
+gives the handler its arguments in Go's registers and its frame the room
+they spill to. Where the handler gives back `^pc`, the stub calls the
+slow function from `regSlowTable` the same way; the code goes on at the
+pc they give, the pinned registers put back from the context, the budget
+the runtime's `backEdges` across the calls. Where the frame has ended
+(`regDone`), and where Go has made no state for the depth yet, the stub
+returns to `nativeRun`, which ends the frame, or makes the state and runs
+the instruction, and enters the code again; so does a call the native frame
+stack has no room for, and the base frame's return. The call made
+`array_push_args3_single`, whose pushes exit, 19% faster than the return
+and the entry (199 to 162 ns an operation), and `string_indexOf` 13%. There is no second interpreter: what the Go table does, an exit does. A frame the code entered itself that ends in Go
+-- a throw, a return that closes captured upvalues -- ends there as
+`rhCallW` ends a callee after `runReg` (`nativeEnd`), and its caller goes
+on or meets the throw. Its state is made for it from its frame record
+when Go first needs it (`nativeTop`), and the callers' pcs, which only Go
+reads -- a stack trace, the debugger -- are written then
+(`nativeFillPCs`).
+
+**The context.** What the code reads beyond the pinned registers is the
+context, `nativeCtx`, which a frame's `regState` keeps, made at its first
+native run: the top frame's code, caches and closure, the runtime's
+fields it reads (by addresses set once), and the native frame stack, one
+record a call the code made itself. The stack starts at 8 records and Go
+doubles it when a call finds it full, up to 128; a call past that is
+Go's, whose frame runs in a code entry of its own. Each runtime's states
+are its own, so separate runtimes on separate goroutines share no
+context.
+
+**Generation and the shared-code rules.** The handlers are written with
+the JIT's assembler by `nativeEmit`, a test's code
+(`zzzyn_native_gen_amd64_test.go`), and assembled into the binary as one
+TEXT symbol of bytes and the table as GLOBL/DATA
+(`zzzyn_native_handlers_amd64.s`, `go generate ./internal/vm`);
+`TestRegNativeGenerated` fails while the file is not what the emitter
+makes. The package's code needs no assembler and no JIT. The block is one
+for every runtime and every build tag: position-independent, never
+patched, with no runtime's constant in it -- every address it needs is
+the context's, and the Runtime's and a closureCode's fields, whose
+offsets the JIT's tag changes, are read relative to a base the context
+gives (`rtBase`, `ccBase`), which the test checks under each tag.
+
+**The marking rule.** A handler stores a number's word alone where the
+register held no pointer; a pointer word it stores plainly while the
+collector does not mark, and by the barrier's routine
+(`nativeStoreRef`, a store with Go's write barrier) while it does,
+reading the runtime's write-barrier flag. That is the only difference:
+the code does the same work whether the collector marks or not, and
+never leaves native code or calls Go for the marking's sake.
+`TestRegNativeKernels`, `TestRegNativeFastPaths` and `TestRegNativeCalls`
+run each case with the flag read as set and as clear and fail on a
+different answer or a different count of exits;
+`TestRegNativeCallExits` checks the call handler against `rhCallW` case
+by case, and `TestRegNativeConcurrent` two runtimes at once.
+
+**Room for feedback.** The JIT's next step gives each function a
+feedback vector, as Ignition does: a slot a site, into which every
+handler, native and Go, ORs the kinds of value it met (a small integer,
+a double, a string, anything else; elements' kinds; a site of several
+shapes), the hotness of calls and back edges coming from the budget the
+code already keeps. The context has its pointer (`fv`, none yet), which
+the frame record keeps and a call switches as it switches the closure's
+caches; and no handler uses `R14`, which is kept for it to be pinned in,
+so that a handler's note is one OR to memory and spills nothing.
+`TestRegNativeCaches` (internal/regdiff) runs the register interpreter's
+corpus natively and by the Go table and checks that the caches the JIT
+reads -- the property sites, the global sites' epochs, the call sites'
+kinds and callees (`RegCacheDigest`) -- end up the same: the native fast
+paths and the Go handlers they leave to fill them alike.
+
+**Preemption.** The code is not preemptible: Go reaches it at the exits,
+and a loop that never exits still spends the back-edge budget, and a
+recursion the interrupt counter, which the handlers count down as the Go
+handlers do and exit at its end, so that the interrupt check, and with
+it the scheduler and the collector, run as often as in the Go table's
+loop.
+
 ## Frames and calls
 
 A call between two register functions is made in the loop's case and a
@@ -1241,7 +1393,7 @@ tried (2026-10-02).
   files, the V8 suite's programs and generated int32 arithmetic -- overflow
   past int32, -0, NaN, shifts by 32 or more, `>>> 0`, mixes with doubles --
   with the register tier on and off, and compares every result.
-  (Built: `internal/v8bench/regdiff_test.go`, run after every step.)
+  (Built: `internal/regdiff/regdiff_test.go`, run after every step.)
 
 Deferred, 2026-11-09, on these measurements:
 

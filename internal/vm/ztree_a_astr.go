@@ -52,8 +52,8 @@ func init() {
 					}
 					// ToIntegerOrInfinity truncates toward zero, so any
 					// position above -1 and below the length is a code
-					// unit's.
-					if s := o.String(); f > -1 && f < float64(s.Len()) {
+					// unit's, but in the empty string, which has none.
+					if s := o.String(); f > -1 && f < float64(s.Len()) && !s.IsEmpty() {
 						return Int(s.CharCodeAt(int(f)))
 					}
 					return Float(nan())
