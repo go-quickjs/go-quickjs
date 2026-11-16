@@ -1505,6 +1505,20 @@ func (e *escaper) liveAt(o, m *virtual, b *Block) bool {
 	if o.held {
 		return true
 	}
+	def := o.defBlock()
+	if o.phi == nil && def == b {
+		// Taken in the merge's own block, past its phis: every path from
+		// the merge makes it again first, but for another phi there that
+		// merges it as m does, which is the same object. A register
+		// loop's header is its body's first block (the compile package's
+		// loopTest), where the turn's object is taken anew.
+		for _, u := range e.phiUses[o.id] {
+			if u != m.phi && u.Block == b {
+				return true
+			}
+		}
+		return false
+	}
 	f := e.f
 	used := make([]bool, len(f.Blocks))
 	for _, id := range e.useBlocks[o.id] {
@@ -1525,7 +1539,6 @@ func (e *escaper) liveAt(o, m *virtual, b *Block) bool {
 			}
 		}
 	}
-	def := o.defBlock()
 	seen := make([]bool, len(f.Blocks))
 	work := []*Block{b}
 	seen[b.ID] = true

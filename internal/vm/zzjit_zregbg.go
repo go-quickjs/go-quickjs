@@ -26,7 +26,9 @@ import (
 // runs in the interpreter, or in its code that the compile replaces, which
 // goes on running, valid, called by its native callers, as V8's does; a
 // compile of a function deoptimized since is thrown away, as the stack
-// form's is (jitReoptimized). A build that asked what the snapshot was not asked (a
+// form's is (jitReoptimized). Code for a frame waiting at a loop
+// (jitRegLoopCode) is compiled so too, and kept beside the function's code
+// at its install (jitRegInstall's osrAt). A build that asked what the snapshot was not asked (a
 // miss), or whose questions took back what they cannot, is built on the
 // runtime's goroutine at the install instead.
 
@@ -42,8 +44,13 @@ type jitRegJob struct {
 	// form's is (jitReoptimized), what that taught asked for anew.
 	deopts uint16
 	// frameAt is the loop's header a frame waits at for the compile
-	// (jitRegFrameAt), whose entry escape analysis keeps.
-	frameAt int
+	// (jitRegFrameAt), whose entry escape analysis keeps. osrAt, where not
+	// 0, is that header for code kept for a loop (jitRegLoopCode), to be
+	// kept beside osrBeside, the function's code it was asked beside,
+	// if that is still the function's at the install (jitRegInstallOSR).
+	frameAt   int
+	osrAt     int
+	osrBeside *jitRegEntry
 	// miss has the worker leave the build as a miss (QJS_JIT_STRESS's
 	// miss), built on the runtime's goroutine at the install.
 	miss bool
@@ -160,15 +167,23 @@ func jitRegScratchBase(p *ir.Program) int {
 func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 	s := r.jit
 	j.done = make(chan struct{})
-	if s.regPendingJobs == nil {
-		s.regPendingJobs = map[jitKey]*jitRegJob{}
-	}
-	s.regPendingJobs[j.key] = j
 	s.regJobs = append(s.regJobs, j)
-	if cc := j.cl.closureCode; cc != nil {
-		// Its calls go to the JIT, which installs it once done
-		// (jitRegEnter).
-		cc.jitEnters = true
+	if j.osrAt != 0 {
+		// Code for a loop, which the function's code it is asked beside
+		// waits for: its frames waiting at the loop go on in the
+		// interpreter meanwhile (jitRegLoopCode), as the stack form's wait
+		// for their entry's pending compile.
+		j.osrBeside.osrJob = j
+	} else {
+		if s.regPendingJobs == nil {
+			s.regPendingJobs = map[jitKey]*jitRegJob{}
+		}
+		s.regPendingJobs[j.key] = j
+		if cc := j.cl.closureCode; cc != nil {
+			// Its calls go to the JIT, which installs it once done
+			// (jitRegEnter).
+			cc.jitEnters = true
+		}
 	}
 	s.bgSubmitted++
 	jitWorkers.submit(j)
@@ -257,6 +272,9 @@ func (s *jitState) jitRegAbandonJobs() {
 		if cc := j.cl.closureCode; cc != nil {
 			cc.jitEnters = cc.jitReg != nil
 		}
+		if b := j.osrBeside; b != nil && b.osrJob == j {
+			b.osrJob = nil
+		}
 		for {
 			st := j.state.Load()
 			if st == jitJobDone {
@@ -280,6 +298,9 @@ func (s *jitState) jitRegAbandonJobs() {
 // the code, as jitRegHot gives it, where it has none meanwhile.
 func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	s := r.jit
+	// The links the job's feedback asked for are let go of by none until
+	// its code holds them (regUnlink).
+	defer s.regBuilding(&j.rf)()
 	defer func() {
 		if cc := j.cl.closureCode; cc != nil {
 			// Its calls enter it if it has code, installed or not.
@@ -292,8 +313,20 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	}()
 	e := j.e
 	old := s.regCache[j.key]
-	called := old != nil && s.regCalled(old)
-	if j.key.gone() || e.life.deopts != j.deopts || called {
+	if j.osrAt != 0 {
+		if b := j.osrBeside; b.osrJob == j {
+			b.osrJob = nil
+		}
+		if j.key.gone() || e.life.deopts != j.deopts || old != j.osrBeside || old.invalid || old.code == nil || old.dropped {
+			// Gone; deoptimized since; or the code it was asked beside
+			// compiled again, invalid or let go of: frames in the
+			// function's loops are the new code's to learn of, as the
+			// stack form's code kept for a loop goes once its function's is
+			// compiled again (osrReplaced).
+			s.bgDiscarded++
+			return
+		}
+	} else if called := old != nil && s.regCalled(old); j.key.gone() || e.life.deopts != j.deopts || called {
 		// Gone; or deoptimized since, compiled for what it has learned
 		// once a budget is spent (jitRegInvalidate); or run by a native
 		// call under way, which finds its code in the cache (jitRegLevelAt),
@@ -354,11 +387,20 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
-		} else if !r.jitRegPlace(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, 0)) {
+		} else if !r.jitRegPlace(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, j.osrAt)) {
 			// No room: asked again at a later sample.
 			s.bgDiscarded++
 			return
 		}
+	}
+	if j.osrAt != 0 {
+		if e.code != nil {
+			// Kept beside the function's code, which a frame waiting at
+			// the loop goes on in at its next check (jitRegLoopCode); a
+			// refusal keeps nothing, as on the spot.
+			s.regKeepOSR(old, e)
+		}
+		return
 	}
 	if e.code == nil && old != nil && old.code != nil && !old.invalid {
 		// A refusal replaces no valid code (jitRegCompileFor), asked
@@ -367,6 +409,10 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		return
 	}
 	r.jitRegCached(j.key, e)
+	// No more than the budget held after, as after a compile on the spot
+	// (jitRegCompileFor): what the code describes, and what its callees
+	// learned of it as callers joined them, count past the room it asked.
+	defer s.settle()
 	if cc := j.cl.closureCode; cc != nil && j.cl.reg == j.c {
 		switch {
 		case e.code == nil:

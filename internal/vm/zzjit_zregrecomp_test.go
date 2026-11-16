@@ -17,14 +17,18 @@ import (
 // it -- the call native in the new code, with no entry after it -- the
 // frame found none there and had the function compiled again at once
 // with it (jitRegResumeSeen): two compiles for one, zlib's loop of ten
-// thousand instructions twice in a row.
+// thousand instructions twice in a row. The function is read from an
+// array's element, which no compile seeds a call from (regCallTargets'
+// binding read before the call): one read from a global the first compile
+// calls natively already.
 func TestJITRegReoptimizeResumes(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	const src = `
 function dec(x) { if (x > 5) return dec(x - 5) + 1; return x }
-function loop(n, m) { var s = 0; for (var i = 0; i < n; i++) { s = s + 1; if (i > m) s = dec(s) } return s }
+var fns = [dec]
+function loop(n, m) { var s = 0; for (var i = 0; i < n; i++) { s = s + 1; if (i > m) s = fns[0](s) } return s }
 `
 	rts := regNativeRuntimes(t, src)
 	r := rts[0]

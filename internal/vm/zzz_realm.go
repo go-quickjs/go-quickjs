@@ -7,8 +7,8 @@ import "weak"
 // registry has not gone with it. It runs on a goroutine of its own, and
 // reads only what is set before the cleanup is, which never changes.
 func cellCollected[_ any](q *cleanupQueue, w weak.Pointer[finalizationCell]) {
-	if c := w.Value(); c != nil {
-		q.push(pendingCleanup{registry: c.registry, held: c.held, cell: c})
+	if w.Value() != nil {
+		q.push(pendingCleanup{cell: w})
 	}
 }
 

@@ -946,7 +946,11 @@ func TestJITMegamorphicWritesByGo(t *testing.T) {
 		run(`each(64)`)
 	}
 	e := jitNativeForTest(t, r, "mark")
-	if p := r.global.getOwn(r.atoms.intern("mark")).value().Object().fn().closure; !jitSiteMegamorphicForTest(t, r, p, e, bytecode.OpSetProp, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI) {
+	// The register form inlines mark in each from the first compile, its
+	// write's misses calls of Go there too (jitRegPlainSet's inlined
+	// callee): the site, which no exit teaches, keeps its cases and its
+	// misses Go's, which is what the test is of.
+	if p := r.global.getOwn(r.atoms.intern("mark")).value().Object().fn().closure; !regJITForTest() && !jitSiteMegamorphicForTest(t, r, p, e, bytecode.OpSetProp, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI) {
 		t.Fatal("mark's write is not megamorphic: no test of its misses")
 	}
 	ee := jitNativeForTest(t, r, "each")

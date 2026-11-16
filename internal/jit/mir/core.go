@@ -3969,6 +3969,37 @@ func goCallWord(site *ssa.CallSite) uint64 {
 	return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
 }
 
+// windowGoCall reports whether a call of Go, v, made where register code's
+// native call of a function does not make it natively (ssa.CallSite's
+// Window), has more operands than the context's (abi.MaxGoArgs): it
+// writes them to the callee's window past the VM's stack's top -- the
+// function in its register 0, a method call's receiver in 1, the
+// arguments from 2 -- where Go reads them (the VM's jitRegGoCallOn),
+// as the window's layout is the frame Go makes for the call. The stack
+// form's call left native code at its checks instead, and Go ran a callee
+// with no code from its start (abi.ExitEnter); register code, whose window
+// holds the operands, makes such a call as it makes any other.
+func windowGoCall(v *ssa.Value, site *ssa.CallSite) bool {
+	return len(v.Args) > abi.MaxGoArgs && site.Window != 0 && !site.Super && !site.Forward && site.Accessor == ssa.AccessorNone
+}
+
+// windowGoDisp is where in the callee's window a wide call of Go
+// (windowGoCall) writes its operand i: a method call's receiver, its first
+// operand, in register 1, the function in 0, the arguments from 2.
+func windowGoDisp(i int, method bool, vs int32) int32 {
+	switch {
+	case method && i == 0:
+		return vs
+	case method && i == 1:
+		return 0
+	case method:
+		return int32(i) * vs
+	case i == 0:
+		return 0
+	}
+	return int32(i+1) * vs
+}
+
 // derivedFunction is the function object whose code a derived
 // construction runs (abi.Context's Function): the class constructed, or,
 // for one with no constructor of its own, the class whose code it runs

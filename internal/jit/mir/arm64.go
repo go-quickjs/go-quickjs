@@ -4030,7 +4030,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			op := goCallWord(site)
 			c.cold = append(c.cold, func() {
 				c.a.Bind(goCold)
-				c.goCallOp(v, op, true)
+				if windowGoCall(v, site) {
+					c.goCallWindow(v, op)
+				} else {
+					c.goCallOp(v, op, true)
+				}
 				c.a.B(join)
 			})
 		}
@@ -4039,7 +4043,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	if !site.Alloc && !site.Receiver {
 		// As amd64's: natively while the collector marks, its result stored
 		// with Go's barrier then, a receiver from a pool shaded first.
-		if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+		if c.enc.CallGo != 0 && (len(v.Args) <= abi.MaxGoArgs || windowGoCall(v, site)) {
 			join, generic = c.a.NewLabel(), true
 		}
 		c.poolShade(sites)
@@ -5310,9 +5314,10 @@ func (c *a64Compiler) windowArgs(t *ssa.CallSite, locals, ctx, a arm64.Reg) {
 	vs := int32(c.enc.ValueSize)
 	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
 	c.a.Load(ctx, a64Ctx, abi.OffNext)
-	c.movImm(a, uint64(t.Argc))
+	argc := windowArgc(t)
+	c.movImm(a, uint64(argc))
 	c.a.Store(ctx, abi.OffArgc, a)
-	for i := range t.Argc {
+	for i := range argc {
 		at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Load(a, locals, int32(2+i)*vs+c.enc.NumOffset)
 		c.a.Store(ctx, at+num, a)
@@ -7995,6 +8000,34 @@ func (c *a64Compiler) goCallOp(v *ssa.Value, op uint64, saving bool) {
 		c.goCallingLive(v, st, stub)
 	}
 	c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+	c.setG(v, a64A)
+}
+
+// goCallWindow is amd64's: a call of Go of more operands than the context
+// has room for (windowGoCall), written to the callee's window past the
+// VM's stack's top, in D, the room checked first.
+func (c *a64Compiler) goCallWindow(v *ssa.Value, op uint64) {
+	vs := int32(c.enc.ValueSize)
+	method := op>>abi.GoOpKindShift&0xff == abi.GoCallMethod
+	st, _ := c.goState(op, v.Index, v, nil)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	room := int64(len(v.Args) + 1)
+	if method {
+		room--
+	}
+	c.a.Load(a64D, a64Ctx, abi.OffStackTop)
+	c.a.Load(a64D, a64D, 0)
+	c.a.AddImm(a64B, a64D, room, true)
+	c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
+	c.a.Cmp(a64B, a64A, true)
+	c.a.BCond(arm64.HI, stub)
+	c.a.Load(a64B, a64Ctx, abi.OffStackBase)
+	c.a.AddLsl(a64D, a64B, a64D, 4)
+	for i, x := range v.Args {
+		c.directOperand(v, x, a64D, windowGoDisp(i, method, vs))
+	}
+	c.goCalling(st, &stub)
+	c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*vs+c.enc.NumOffset)
 	c.setG(v, a64A)
 }
 

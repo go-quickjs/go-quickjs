@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -755,21 +757,43 @@ func TestJITOSRInTheBackground(t *testing.T) {
 			return c.v
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, append(osrRounds("carried", ""), osrRounds("carried", "")...)...)
-	if r.regOn() {
-		// Register code compiles the function's code in the background,
-		// the code kept for a loop on the spot, for the frame waiting
-		// there (jitRegCompile's osrAt).
+	if regJITForTest() {
+		// Register code compiles the code kept for a loop in the
+		// background too (jitRegCompile's osrAt): the frame waiting at the
+		// loop goes on in the interpreter until it is installed, at the
+		// second check after it was handed over, and in it from then on.
+		// The first long call that leaves is the frame (osrRounds' last).
+		rounds := osrRounds("carried", "")
+		r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, rounds[:len(rounds)-1]...)
 		_, re := jitNamedForTest(r, "carried")
 		pc := osrRegHeader(t, re)
 		if re.isLoop(pc) {
 			t.Fatalf("the function's code took the loop's entry")
 		}
-		if oe := re.osr; oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned == 0 || r.jit.bgSubmitted == 0 {
-			t.Fatalf("the frame did not go on in code of its own: %+v; %d compiled in the background", oe, r.jit.bgSubmitted)
+		if re.osr != nil || r.jit.osrLearned != 0 {
+			t.Fatalf("code for the loop before a frame waited there: %+v", re.osr)
+		}
+		submitted, entries := r.jit.bgSubmitted, r.JITStats().SSAEntries
+		jitCallForTest(t, r, rounds[len(rounds)-1], 200000)
+		oe := re.osr
+		if oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned != 1 || re.osrJob != nil {
+			t.Fatalf("the frame did not go on in code of its own: %+v, %d learned, pending %v", oe, r.jit.osrLearned, re.osrJob != nil)
+		}
+		if r.jit.bgSubmitted != submitted+1 || r.jit.bgDiscarded != 0 || r.JITStats().SSAEntries == entries {
+			t.Fatalf("submitted %d, discarded %d, entered %d: want the loop's code compiled in the background and entered",
+				r.jit.bgSubmitted-submitted, r.jit.bgDiscarded, r.JITStats().SSAEntries-entries)
+		}
+		for _, src := range rounds {
+			n, _, _ := strings.Cut(strings.TrimPrefix(src, "carried("), ",")
+			want, _ := strconv.Atoi(n)
+			jitCallForTest(t, r, src, float64(want))
+		}
+		if re.osr != oe || r.jit.osrLearned != 1 {
+			t.Fatalf("the loop's code compiled again: %+v, %d learned", re.osr, r.jit.osrLearned)
 		}
 		return
 	}
+	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, append(osrRounds("carried", ""), osrRounds("carried", "")...)...)
 	e := jitCallbackEntry(r, "carried")
 	pc := osrHeader(t, e)
 	if e.ssa.HasEntry(pc) {
@@ -1052,11 +1076,17 @@ func TestJITOSRCounted(t *testing.T) {
 		if oe.bytes < oe.code.Footprint() {
 			t.Fatalf("%d bytes counted for %d of code", oe.bytes, oe.code.Footprint())
 		}
+		// With what each function's state holds (regAccount).
 		held := 0
 		for _, x := range s.regCache {
 			held += x.bytes
 			if x.osr != nil {
 				held += x.osr.bytes
+			}
+		}
+		for _, l := range s.regLearned {
+			if l.regCounted {
+				held += l.bytes
 			}
 		}
 		if s.regHeld != held {

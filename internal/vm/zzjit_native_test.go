@@ -2319,32 +2319,50 @@ func TestJITRuntimeGuardReentry(t *testing.T) {
 
 func TestJITRuntimeCancellation(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	p := compileForTest(t, `function forever() { let i=0; for(;;) i++ } forever()`)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	r.SetContext(ctx)
-	_, err := r.Run(p)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("cancel = %v", err)
-	}
-	if r.jit == nil || r.jit.entries == 0 || r.jit.budgets == 0 {
-		t.Fatal("loop never entered native code")
+	entries, hosts, budgets := jitCancelledNativeForTest(t, r,
+		`function spin(n) { for (let i = 0; i !== n; i++); }`, `spin(1000)`, `spin(-1)`)
+	if entries == 0 || budgets == 0 {
+		t.Fatalf("loop never checked its budget natively: %d entries, %d host exits, %d budgets", entries, hosts, budgets)
 	}
 }
 
 func TestJITPropertyLoopCancellation(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	p := compileForTest(t, `function forever(o){for(;;){o.x=(o.x+1)|0}}forever({x:0})`)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	entries, hosts, budgets := jitCancelledNativeForTest(t, r,
+		`function spin(o, n) { for (let i = 0; i !== n; i++) o.x = (o.x + 1) | 0 }`, `spin({x: 0}, 1000)`, `spin({x: 0}, -1)`)
+	if entries == 0 || hosts != 0 || budgets == 0 {
+		t.Fatalf("native property loop did not check its budget: %d entries, %d host exits, %d budgets", entries, hosts, budgets)
+	}
+}
+
+// jitCancelledNativeForTest runs src and then warm, which compiles and
+// runs a loop natively, and then forever, the loop that never ends, under
+// a deadline, which must stop it; it returns what the JIT counted of
+// forever's run: native entries, host exits and budget checks. The
+// deadline begins once the loop has code: begun before, a first compile
+// slower than it -- a cold process on arm64 under emulation, or under
+// checkptr on a loaded runner -- had the context done before native code
+// was entered, which left at its first check of it, no budget spent. It
+// is a second, which only bounds the run: 30 ms had passed, on an
+// emulated arm64 process among thirty others, before forever's call
+// entered the code (0 entries).
+func jitCancelledNativeForTest(t *testing.T, r *Runtime, src, warm, forever string) (entries, hosts, budgets uint64) {
+	t.Helper()
+	if _, err := r.Run(compileForTest(t, src+"; "+warm)); err != nil {
+		t.Fatal(err)
+	}
+	if r.jit == nil || r.jit.entries == 0 {
+		t.Fatalf("%s never entered native code", warm)
+	}
+	p := compileForTest(t, forever)
+	entries0, hosts0, budgets0 := r.jit.entries, r.jit.hosts, r.jit.budgets
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	r.SetContext(ctx)
-	_, err := r.Run(p)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("property loop cancellation: %v", err)
+	if _, err := r.Run(p); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%s: cancel = %v", forever, err)
 	}
-	if r.jit == nil || r.jit.entries == 0 || r.jit.hosts != 0 || r.jit.budgets == 0 {
-		t.Fatal("native property loop did not check its budget")
-	}
+	return r.jit.entries - entries0, r.jit.hosts - hosts0, r.jit.budgets - budgets0
 }
 
 func TestJITRuntimeCloseAfterGuard(t *testing.T) {
@@ -2758,12 +2776,14 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 		}
 		return in
 	}
+	checked := 0
 	for round := 0; round < 6; round++ {
 		entered := uint64(0)
 		if r.jit != nil {
 			entered = r.jit.entered
 		}
 		in := linked()
+		driver := jitRegEntryNamedForTest(r, "round") != nil
 		if _, err := r.Run(call); err != nil {
 			t.Fatal(err)
 		}
@@ -2771,6 +2791,17 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 		if round < 2 {
 			continue
 		}
+		if !driver && jitRegEntryNamedForTest(r, "round") != nil {
+			// The driver's own register code installed in this run, which
+			// it entered with a call of its chains under way: a call that
+			// run made by Go, as any run does once its function's code
+			// comes. When it comes depends on the room the cold stream
+			// leaves, which the code's size decides: in round 2 on
+			// Windows, earlier on Linux. The rounds after are exact.
+			t.Logf("round %d: the driver compiled in it, not counted", round)
+			continue
+		}
+		checked++
 		if n := r.jit.entered - entered; n != 0 {
 			t.Fatalf("round %d: %d native calls left for Go", round, n)
 		}
@@ -2789,6 +2820,9 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 				}
 			}
 		}
+	}
+	if checked < 3 {
+		t.Fatalf("%d rounds counted, of the four after the warm-up", checked)
 	}
 	if r.jit.evicted == 0 && r.jit.refusedRoom == 0 {
 		t.Fatal("the cold functions never filled the cache")
@@ -7286,9 +7320,10 @@ func TestJITCallsThroughParentsWithoutCode(t *testing.T) {
 	s := r.jitState()
 	span := jitGlobalClosureForTest(r, "Span")
 	var se *jitEntry
-	if jitPortReg(r, span) {
+	if regJITForTest() {
 		// The register form keeps its function's deferral in the state
-		// that outlives its compiles (jitRegForAs).
+		// that outlives its compiles (jitRegForAs), keyed by its register
+		// code, which Span has none of yet.
 		se = s.regLearnedOf(r.jitRegKeyOf(span))
 	} else {
 		se = r.jitFor(span)
@@ -7928,6 +7963,15 @@ func TestJITSSAProfitReturns(t *testing.T) {
 		t.Fatalf("step kept running natively: %+v", e)
 	}
 	heavy := r.global.getOwn(r.atoms.intern("heavy")).value().Object().fn().closure
+	if regJITForTest() && slices.Contains(jitInlinedNamesForTest(r, "drive"), "heavy") {
+		// Register code seeds drive's call of heavy from the binding
+		// (regCallTargets) and inlines it, loop and all: heavy runs in
+		// drive's code, which must not be the one given up.
+		if e := jitPortCode(r, jitGlobalClosureForTest(r, "drive")); e == nil || e.entrySlow {
+			t.Fatalf("drive, which inlines heavy, left native code: %+v", e)
+		}
+		return
+	}
 	if e := jitPortCode(r, heavy); e == nil || e.entrySlow {
 		t.Fatalf("heavy left native code: %+v", e)
 	}
@@ -8875,10 +8919,15 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 			if got, want := gv.String().Go(), wv.String().Go(); got != want {
 				t.Fatalf("got %s, interpreter %s", got, want)
 			}
+			// Register code's call of more operands than a call of Go
+			// takes in the context is Go's all the same, its operands in
+			// the callee's window (mir's windowGoCall): made as the others
+			// are, no callee run from its start.
+			entersFromStart := tc.entered && !regJITForTest()
 			switch {
-			case tc.entered && r.jit.entered == entered:
+			case entersFromStart && r.jit.entered == entered:
 				t.Fatalf("no native call ran its callee from its start: %+v", r.JITStats())
-			case !tc.entered && (r.jit.goCalls == goCalls || r.jit.entered != entered):
+			case !entersFromStart && (r.jit.goCalls == goCalls || r.jit.entered != entered):
 				t.Fatalf("Go made %d of the calls, %d ran from their callees' start: %+v", r.jit.goCalls-goCalls, r.jit.entered-entered, r.JITStats())
 			}
 		})

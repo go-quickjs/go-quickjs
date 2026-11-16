@@ -734,10 +734,12 @@ its own, to `jitSnapDepth` -- into a `jitRegSnapshot`, which has
 interfaces it would; a worker builds, optimizes and compiles from it
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
-or a back edge, or a call of the function itself, which a compile handed to
-the workers marks (`closureCode`'s `jitEnters`) so that its calls go to the
-JIT (`jitRegEnter`), as the stack form's calls install theirs
-(`tryJITAt`) -- putting back what the questions appended to the
+or a back edge, or any call Go makes of a function with code or a compile
+pending (`jitRegEnter`): a compile handed to the workers marks its
+function's closure (`closureCode`'s `jitEnters`) so that its calls go to the
+JIT, and a call of code compiled again in the background installs the
+replacement as one of its first code does, as the stack form's calls
+install theirs (`tryJITAt`) -- putting back what the questions appended to the
 feedback's lists (`replay`) and placing the code as the compile on the spot
 (`jitRegPlace`). A question the snapshot was not asked is a miss
 (`jitSnapMiss`): the compile is built at the install instead
@@ -747,8 +749,15 @@ native callers, and is not compiled again (`regPendingJobs`). A compile of
 a function deoptimized since it was prepared is thrown away at the install,
 as the stack form's is (`jitRegJob`'s `deopts`), and so is one whose code
 in the cache a native call still runs (`jitRegEntry`'s `levels`), that code
-asked to be compiled again. Top-level code is compiled on the spot, as the
-stack form's is.
+asked to be compiled again. Code for a frame waiting at a loop whose entry
+escape analysis dropped (`jitRegLoopCode`) is compiled in the background
+too, as the stack form's is and as V8's OSR compiles are concurrent: the
+job (`osrAt`) waits beside the function's code it was asked for
+(`jitRegEntry`'s `osrJob`), the frame goes on in the interpreter meanwhile,
+and the install keeps the code beside that code (`regKeepOSR`) -- or throws
+it away where the function deoptimized or its code was compiled again or
+let go of since, its loops then the new code's to learn of. Top-level code
+is compiled on the spot, as the stack form's is.
 
 **Compiling again.** Code is compiled again, in place, when:
 
@@ -1110,7 +1119,17 @@ refills. So too a replace's leaf of the RegExp a `call_method_w` marked
 window's register on the way to the call alone (the VM's
 `regConstOperand`). A call in tail position is made as any call while the
 stack is shallow (`ssa.OpTailRoom` guarding it), and leaves for the
-interpreter deeper, which makes it in constant space.
+interpreter deeper, which makes it in constant space. A call of more
+operands than the context's operands hold (`abi.MaxGoArgs`) is a native
+call all the same, and where it does not make its call natively -- a
+callee with no code, one past those it calls, a context past the deepest
+-- a call of Go whose operands it writes to the callee's window past the
+VM's stack's top rather than to the context, the room checked first, the
+window's layout the frame Go makes the call of (`mir`'s `windowGoCall`,
+the VM's `jitRegWideCall`): the stack form's left native code at its
+checks, and had Go run a callee with no code from its start
+(`abi.ExitEnter`), which register code has no need of. Such a call with no
+native callee is left to an exit.
 
 **Steps.** A loop's step (`iter_next`) writes its register only where the
 loop goes on: the builder assigns the step's value in the block after it
@@ -1558,7 +1577,15 @@ accumulator a loop replaces each turn (`sum = sum.add(v)`) is its properties
 alone. Another phi's use of one is at the end of the predecessor it comes
 from (`liveAt`): a register loop's end, which the copy of its test before
 the loop reaches too, merges the object the loop began with from that way
-alone, which no turn of the loop is on. A use that needs an object made -- a call's operand, a store into an
+alone, which no turn of the loop is on. A register loop's header is its
+body's first block, where an object the turn makes is taken anew past the
+header's phis: one taken in the merge's own block is used past it only by
+another phi there (`liveAt`), every other path making it again first. And a
+construction's receiver register, `new_w`'s R[A+1], is the construction's
+to write, read by nothing, as a plain call's is (`RegAccess`, `liveRegs`):
+were it live, it had carried the last turn's object round the loop to the
+function's entry, which loads it, and no such object could be left unmade.
+A use that needs an object made -- a call's operand, a store into an
 object that is made, a return -- has the code make it there, from its pool,
 its properties defined along the additions that made its state, and it is
 that object past there. An object made on every path anyway is made where it
@@ -1620,7 +1647,14 @@ a derived constructor, whose this may not be bound yet. A scope's end that
 closes a register it captures (`close_regs`, lowered to `ir.CloseUpvalues`
 of its registers) has the build inline no call of the closure past it, as
 past a stack form's `CloseUpvalues`. A call is found to call the closure by its window's
-register 0 in the call's state (`calledClosures`); one of a callee given it
+register 0 in the call's state (`calledClosures`). That register is a copy
+of the closure's (`move r5, r4; call_w r5 = r5(1)`), which an entry after
+an operation Go ran before the call -- a call before it whose inlined
+callee left to Go -- loads: such a load is the closure too where every
+state of that operation names one of its values in the register, which the
+operation does not write, Go having made the frame of one of them, the
+closure of its template (`resumeCopies`), as an entry's load of the
+closure's own register is. One of a callee given it
 by its window's function, copied just before from a parameter's register
 (`givenCall`), so that a register callee calling what it is given is
 inlined with the closure in it (`InlineCallsGiven`). At an exit, Go makes
@@ -2098,10 +2132,11 @@ no level's frame made for a native callee's (`jitRegPlainWhole`):
 the stack form's operations (`jitRegFrameless`, `jitOpFrameless`, which
 learns the layouts' copies) -- an object pattern's rest, a computed key
 converted or defined, a literal's `__proto__`; a method's home object set,
-a method defined and a class's field initializer given, of the closure's
-names, as the stack form's `jitGoHostPlain` makes them -- and a for...in's cursor,
-a for...of's cursor of an array and a loop's step over an array where it
-reads its dense storage or is done (`ssa.CallSite`'s `ForIn`, `ForOf`,
+a method defined, a literal's or a class's getter or setter defined, a
+class's field initializer given and a function named after its key, of
+the closure's names, as the stack form's `jitGoHostPlain` makes them --
+and a for...in's cursor, a for...of's cursor of an array and a loop's
+step over an array where it reads its dense storage or is done (`ssa.CallSite`'s `ForIn`, `ForOf`,
 `Step`: `jitGoCallPlain`'s `jitForInPlain`, `jitForOfPlain`,
 `jitStepPlain`); and on the frame otherwise. A class linked to its parent
 (`new_class`) and an object spread that runs a getter Go makes on the
@@ -2131,11 +2166,18 @@ it has no code of (`jitRegWhole`): the registers it reads are given the
 values the code passed, its result, the register it writes, goes to the
 call's keep cell, and what it wrote in the frame is put back -- the code
 keeps values in the frame's registers as it found them -- but a captured
-register of the run's own frame, where its cell holds it. On a native
-callee's frame its level's frames are made first, as for any call of Go
-that runs script (`jitRegGoCallNested`). What does not go on at the next
-instruction -- a throw, a handler of the frame's that took one, the
-runtime stopped, the code found invalid -- the exit at the call finishes
+register of the run's own frame, where its cell holds it. In code whose
+captured registers are in cells of their own, those cells are opened on
+the window's registers first, each holding what it holds
+(`jitRegReopenCells`), as Go has them before it runs the frame at an
+exit: a cell native code gave a register at a scope's end (`cellsClose`)
+is open on no register, which still holds what it held when native code
+entered -- read there, every later turn's let of a loop was the turn's
+the code entered at. On a native callee's frame its level's frames are
+made first, as for any call of Go that runs script
+(`jitRegGoCallNested`). What does not go on at the next instruction -- a
+throw, a handler of the frame's that took one, the runtime stopped, the
+code found invalid -- the exit at the call finishes
 (`regPending`, `regFinishWhole`): the register the instruction wrote, or
 the handler's, written over the exit's records, the instruction never run
 again. Which instructions are whole Hosts the registers each reads and
@@ -2279,7 +2321,9 @@ method call of the realm's `Function.prototype.call`, `G.call(x, ...)` --
 TypeScript's `_super.call(this, ...)` -- calls G natively, as the stack
 form's (`jitCalledVia`): learned at its calls of Go (`jitRegViaSeen`), the
 call checks the method is `call` and its receiver G (`ssa.CallSite`'s
-`Via`) and writes G's window from G, x and the rest; never inlined. A
+`Via`) and writes G's window from G, x and the rest, a G that keeps its
+arguments given them past x in its context (`FrameArgs`, `windowArgs`), as
+the stack form's call gives them; never inlined. A
 receiver to coerce at a register call -- a sloppy G given null -- has Go
 make the call from native code rather than leave. A call that meets any other function leaves
 native code for Go, which learns there what to call next -- a call in tail
@@ -2513,12 +2557,14 @@ is V8's call frequency where the feedback knows it (`Frequency`): a call
 made less often than `ssa.MinInliningFrequency` (0.05, V8's
 `min_inlining_frequency` as V8 runs: the flag's 0.15 is lowered to 0.05
 wherever Maglev is on, as it is by default) for each invocation of the
-function compiled is not inlined, and is made a native call, unless its
-callee is small: 10 instructions or fewer as the bounds count them
-(`maxInlineSmall`, V8's `max_inlined_bytecode_size_small` of 27 bytes; 8
-register instructions), which V8's Turbolev inlines however seldom the
-call is made, its code about the call's, and which then inlines no more
-than a small callee's worth with its own callees (`smallCallee`); the
+function compiled is not inlined, whatever its callee's size, and is made
+a native call -- by the builder (`inlineSiteAt`, `planCallback` for a
+loop's callback) and by the feedback before it offers the callee (the
+stack form's `jitCallCold`, register code's `regCallCold`), a call inside
+a callee inlined excepted -- as Turbofan's JSInliningHeuristic asks the
+frequency before it forces a small function in, Turbofan being the
+optimizing compiler Node runs (the exemption of a small callee at a cold
+call is Turbolev's, which Node does not run); the
 frequencies are known once the function has run 59 times
 (`jitCountsEnough`); the most frequent come
 first, a call whose frequency is not known taken as made once outside the
@@ -2798,6 +2844,16 @@ realms warms up and compiles twice, and a call of another realm's function
 leaves native code for Go to switch the realm. Code never meets a realm it
 was not compiled for, so that nothing in it checks.
 
+A realm a host drops is reachable from what the JIT keeps of it -- the pools
+of its functions' code, what they learned, the closures their calls met --
+however its key holds it, so the flush lets go of it (`regFlush`), as
+`jitFlushRealms` does the stack form's: a realm none of whose code was used
+and none of whose functions ran since the flush's last look (their
+`regLifeUses`) has its functions' state let go of, with their entries with
+no code and their programs (`regLetGoLife`); its code goes as any unused
+code does. One that has only gone quiet warms up again if it runs again.
+Its key gone, the rest goes with it (`regAge`).
+
 **Refusals.** A refusal is an entry with no code, and marks the template
 refused (`closureCode`'s `jitRegRefused`), so that its samples ask nothing
 more -- but a function of host operations alone, which is lowered again once
@@ -2896,7 +2952,37 @@ it went on in, native callers' calls -- date it (`regAge`), and a compile
 makes it young (`jitRegEntry`'s `used`, its epoch); `makeRoom` reclaims it
 with theirs, refusals first, then code unused this epoch and the one before,
 least recently used first (`regVictims`, `regReclaim`); and `flush` drops
-code unused between two of its looks (`regFlush`). Code let go of so has its
+code unused between two of its looks (`regFlush`) -- code used is code that
+ran, and the callees of code used, inlined there (its keep's `inlined`, what
+it learned of its calls) or called natively (its keep's `links`), whose own
+uses do not count those runs, as `flush` finds the stack form's.
+
+A function's state (`regLearned`, a `jitEntry`) counts too, as the stack
+form's entry's `measure` counts what it learned: the entry and what it
+learned, its pools' objects among it (`regAccount`, `regCounted`), counted
+as it grows where its code joins a callee's callers (`regJoinCallers`), as a
+compile caches its code, and at every look of the cache's. A compile is
+placed only in room for its code and for what it had the state hold besides
+-- the pools of the literals, closures and constructions it makes, filled as
+it was built -- as the stack form's install asks room for its entry's
+`learnedBytes` with the code (`jitRegPlace`, `jitInstall`); and the state is
+held busy meanwhile, no victim of the room its own compile makes
+(`regLifeSpare`), as the stack form's `roomFor` holds its entry. It is made in the
+room for it (`regLearnedOf`), as the stack form's entry is (`jitWarmFor`);
+where there is none it is kept all the same, uncounted, and counted once its
+function's compile asks for its room with the code's (`jitRegRoomAhead`) or
+at the cache's next look, which then makes the room among it -- the stack
+form's entry is made at its function's first call, this at its first
+sample, after its first run, and refused, a loop driving a program's phases
+had had no code once the first phase filled the budget. The state of a
+function the cache holds nothing for is reclaimed with the refusals, least
+recently made first (its `serial`, which orders its function's refusal
+and programs among theirs too, `regVictimSerial`: ties left to the cache's
+maps had a full budget's compiles differ from run to run), and so is a
+refusal's with it; a state
+reclaimed when listed leaves the floor as it was, which a stream of
+functions each taking another's room had otherwise made every compile list
+the cache again. Code let go of so has its
 function warm up anew (`regLetGo`), and compiled again it is compiled with
 what its function learned that holds no object, which outlives its code
 (`regLearned`): the sites whose speculation failed, the reads and the
@@ -2935,6 +3021,20 @@ program, which native callers call -- is let go of for a compile asked under
 another program's native frame, or flushed there. Code replaced while a run
 or a call is in it is closed once the last leaves it (`dropped`,
 `regClose`).
+
+A link (`regLinks`) is counted by the code that calls through it
+(`jitLink`'s `refs`, `regHoldLinks`: once for each entry's keep, as it is
+placed and as it is closed), and is let go of once its function has nothing
+in the cache, no code calls through it and no compile under way -- on the
+runtime's goroutine (`regBuilds`) or in the background -- asked for it
+(`regUnlink`), as the stack form's `unlink`; a call Go makes for a native
+caller gives a function a link, for a generic call to find it by its hint
+(`regHint`), only if the cache holds something of it (`regLinkIfCached`).
+A link let go of frees its slot of the hint table but leaves the slot its
+function (`regUnhint`): a template of the function, of the link's realm,
+may still name the slot, and a generic call compares the function and its
+own realm alone, so the slot is given to no link of the same function after
+(`regFreeHint`), whose realm's code that template's closures would call.
 
 A function's programs (`regLowered`, one lowering of each kind it was
 asked for) are a cache its compiles are made from, which the budget can

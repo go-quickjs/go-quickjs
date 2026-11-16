@@ -253,6 +253,17 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 				// The callee's feedback learned what the owner's code was
 				// not compiled for: compiled again for it (jitRegReopt).
 				r.jitRegReopt(cl, owner)
+			case x.threw && !atSite && !owner.life.reopt && slices.ContainsFunc(l.nativeCalls, func(y jitInline) bool { return int(y.pc) == at && y.forEach && !y.cbLeft }):
+				// A loop's callback that threw, inlined in the loop: counted
+				// against its inlining there (jitInlineLeft's cbLeft), as the
+				// stack form's unwinding of the loop's callback counts it --
+				// left inlined, a callback that throws at every call left
+				// native code at each.
+				r.jitInlineLeft(l, at)
+				if l.inlineReopt {
+					l.inlineReopt = false
+					r.jitRegReopt(cl, owner)
+				}
 			case atSite || x.threw || owner.life.reopt:
 				// Left at a site of the callee's -- or by code to be
 				// compiled again, which may be what it leaves for -- not
@@ -398,7 +409,9 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		}
 		learned = true
 	case abi.ExitHost:
-		s.hosts++
+		// Counted once, where the run left (jitRegLeft), as the stack
+		// form counts an inlined callee's exit (runSSALoop): counted here
+		// too, each such exit had been two.
 		f.pc = regSrc(c, pc) + 1
 		s.noteRegHost(c, pc)
 		if miss {

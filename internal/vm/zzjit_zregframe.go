@@ -420,15 +420,28 @@ func (r *Runtime) jitRegReopenCells(f *frame, e *jitRegEntry, wb int, ctx *abi.C
 		clear(f.openUpvalues[len(kept):])
 		f.openUpvalues = kept
 	}
-	regs := jitRegCapturedRegs(e.p.Captured)
-	cells := unsafe.Slice((**upvalue)(ctx.Cells), len(regs))
-	for k, reg := range regs {
+	// The captured registers in their cells' order (jitRegCapturedRegs),
+	// walked without making their list: a call of Go run whole on the
+	// frame asks this at each call (jitRegWhole).
+	n := 0
+	for _, captured := range e.p.Captured {
+		if captured {
+			n++
+		}
+	}
+	cells := unsafe.Slice((**upvalue)(ctx.Cells), n)
+	k := 0
+	for reg, captured := range e.p.Captured {
+		if !captured {
+			continue
+		}
 		slot := &r.stack[wb+reg]
 		if u := cells[k]; u.slot != slot {
 			*slot = *u.slot
 			u.slot = slot
 			f.openUpvalues = append(f.openUpvalues, u)
 		}
+		k++
 	}
 	ctx.Open = uint64(len(f.openUpvalues))
 }

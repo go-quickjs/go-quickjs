@@ -129,12 +129,18 @@ type cleanupQueue struct {
 }
 
 // pendingCleanup is one registration whose target has been collected.
+//
+// cell is the registration, so that draining can drop it and so that an
+// unregister that happened first can cancel it, held weakly as the cleanup
+// holds it (watchForCollection): its registry keeps it, and the registry's
+// callback's realm the registry. Held strongly, the queue had kept the
+// registry, its callback and the callback's realm alive from the cleanup's
+// run, on the collector's goroutine, until the runtime's next turn -- a realm
+// a host had dropped among them, for as long as its turns were apart. A
+// registry nothing else keeps has no callback to call (the specification's
+// CleanupSomeFinalizationRegistry is for registries alive).
 type pendingCleanup struct {
-	registry *Object
-	held     Value
-	// cell is the registration, so that draining can drop it and so that an
-	// unregister that happened first can cancel it.
-	cell *finalizationCell
+	cell weak.Pointer[finalizationCell]
 }
 
 func (q *cleanupQueue) push(c pendingCleanup) {
@@ -162,17 +168,18 @@ func (q *cleanupQueue) take() []pendingCleanup {
 func (r *Runtime) runCleanups() {
 	pending := r.cleanups.take()
 	for _, p := range pending {
-		if p.cell.unregistered {
+		c := p.cell.Value()
+		if c == nil || c.unregistered {
 			continue
 		}
-		p.cell.done = true
-		d, ok := p.registry.dataOf().(*finalizationData)
+		c.done = true
+		d, ok := c.registry.dataOf().(*finalizationData)
 		if !ok || !isCallable(d.cleanup) {
 			continue
 		}
 		prev := r.asyncCtx
 		r.asyncCtx = d.ctx
-		_, err := r.call(d.cleanup, Undefined, []Value{p.held})
+		_, err := r.call(d.cleanup, Undefined, []Value{c.held})
 		r.asyncCtx = prev
 		if err != nil {
 			r.reportUncaught(err)

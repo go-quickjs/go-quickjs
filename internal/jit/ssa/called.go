@@ -128,6 +128,7 @@ func (b *builder) calledClosures() (map[int]int, map[string]int) {
 		}
 		return states[pc]
 	}
+	copies := newResumeCopies(f, p)
 	// callee is the value the call at pc calls, the slot below its
 	// arguments, if it is a call of the root's own code, no method's.
 	callee := func(pc int) (*Value, bool) {
@@ -246,6 +247,8 @@ func (b *builder) calledClosures() (map[int]int, map[string]int) {
 				return true, true
 			case a.Op == OpLoadSlot && a.Block.PC < 0 && a.Aux == home && home >= 0,
 				a.Op == OpConst && a.Const.Kind == ir.Uninitialized:
+				return true, false
+			case copies.holds(a, in):
 				return true, false
 			}
 			return false, false
@@ -427,4 +430,79 @@ func containsInt(xs []int, x int) bool {
 		}
 	}
 	return false
+}
+
+// resumeCopies answers, for register code, which slots its entries load
+// hold a closure the code only calls (calledClosures, unmadeAlone).
+type resumeCopies struct {
+	f *Func
+	p *ir.Program
+	// at is each entry Go goes on at only after the operation before it
+	// (Entry's Resume), by its block: its PC; sites the states of each
+	// operation, by its PC, made when first asked for.
+	at    map[*Block]int
+	sites map[int][]*FrameState
+}
+
+func newResumeCopies(f *Func, p *ir.Program) *resumeCopies {
+	c := &resumeCopies{f: f, p: p}
+	if p.Origin == nil {
+		return c
+	}
+	for _, e := range f.Entries {
+		if e.Resume {
+			if c.at == nil {
+				c.at = map[*Block]int{}
+			}
+			c.at[e.Block] = e.PC
+		}
+	}
+	return c
+}
+
+// holds reports whether a is the slot such an entry loads where it holds
+// one of the values in: every state of the operation before the entry --
+// the root's own, and those inside a callee inlined there, whose slots
+// below the callee's are the root's at the call -- names one of them at
+// the slot, which the operation does not write. Go goes on there only
+// after it ran that operation on the frame it made of such a state, the
+// closure made of its template. Register code's call reads its callee in
+// a window register that a copy of the closure's register wrote (move
+// r5, r4; call_w r5 = r5(1)), live across a call before it whose inlined
+// callee may leave to Go, where the stack form's has the closure's local
+// alone (calledHome).
+func (c *resumeCopies) holds(a *Value, in map[*Value]bool) bool {
+	if a.Op != OpLoadSlot || c.at == nil {
+		return false
+	}
+	q, ok := c.at[a.Block]
+	if !ok || q <= 0 || q > len(c.p.Code) {
+		return false
+	}
+	w := &c.p.Code[q-1]
+	if d, e := w.Writes(); d == a.Aux || e == a.Aux || w.Op == ir.Host && w.Dest == a.Aux ||
+		w.Window && a.Aux >= w.Left.Slot && a.Aux < w.Left.Slot+2+w.Extra {
+		return false
+	}
+	if c.sites == nil {
+		c.sites = map[int][]*FrameState{}
+		add := func(s *FrameState) {
+			if s != nil && s.Site >= 0 && !slices.Contains(c.sites[s.Site], s) {
+				c.sites[s.Site] = append(c.sites[s.Site], s)
+			}
+		}
+		for _, blk := range c.f.Blocks {
+			for _, v := range blk.Values {
+				add(v.State)
+			}
+			add(blk.State)
+		}
+	}
+	states := c.sites[q-1]
+	for _, s := range states {
+		if x := s.Slot(a.Aux); x == nil || !in[x] {
+			return false
+		}
+	}
+	return len(states) != 0
 }

@@ -296,10 +296,10 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.cur.nest >= maxInlineDepth {
 		return false
 	}
-	if f, ok := b.siteFrequency(pc); ok && f < minInliningFrequency && !smallCallee(fp.site.Inline.Program) {
+	if f, ok := b.siteFrequency(pc); ok && f < minInliningFrequency {
 		// Its call made too seldom, as V8's call reducer gives the
-		// callback's call the frequency of the call of the built-in --
-		// but a small callback (smallCallee).
+		// callback's call the frequency of the call of the built-in,
+		// whatever the callback's size.
 		return false
 	}
 	s := *fp.site.Inline
@@ -3263,10 +3263,6 @@ func makesClosure(p *ir.Program) bool {
 }
 
 type builder struct {
-	// coldSmall marks the callee inlineSiteAt is about to inline at a call
-	// made too seldom for any but a small one (smallCallee), for
-	// inlineFrame to keep its inlining within a small callee's.
-	coldSmall bool
 	// inlineAsked are InlineCalls' answers, each program's once a build
 	// (inlineCallsOf).
 	inlineAsked []inlineAnswer
@@ -3851,7 +3847,10 @@ type FrequencyFeedback interface {
 
 // minInliningFrequency is V8's min_inlining_frequency as V8 runs: a call
 // made less often than this for each invocation of the function being
-// compiled is not inlined, but a small callee (smallCallee). The flag's
+// compiled is not inlined, whatever its callee's size, as Turbofan's
+// JSInliningHeuristic asks the frequency before it forces a small
+// function in -- Turbofan being the optimizing compiler Node runs; the
+// exemption of a small callee is Turbolev's (CanInlineCall). The flag's
 // default is 0.15, but V8 lowers it to 0.05 wherever Maglev is on, as it
 // is by default (flag-definitions.h's
 // DEFINE_WEAK_VALUE_IMPLICATION(maglev, min_inlining_frequency, 0.05)):
@@ -3860,19 +3859,6 @@ type FrequencyFeedback interface {
 // calls of Vector2D's plus and minus, each made in an eighth of
 // recurse's runs.
 const minInliningFrequency = 0.05
-
-// smallCallee reports whether p is a callee small enough to be inlined
-// however seldom its call is made: maxInlineSmall instructions or fewer,
-// counted as inlining's bounds count them (inlineSize), V8's
-// max_inlined_bytecode_size_small, 27 bytes -- 8 instructions of register
-// code's program, 10 of the stack form's -- its code about the call's it
-// replaces. V8's Maglev-built optimizing compiler, Turbolev, inlines such
-// a callee whatever the call site's frequency (CanInlineCall); Turbofan's
-// heuristic asks the frequency first. A cold call's inlining stays
-// within that, its callee's own callees counted in (inlineFrame).
-func smallCallee(p *ir.Program) bool {
-	return p != nil && inlineSize(p) <= maxInlineSmall
-}
 
 // MinInliningFrequency is minInliningFrequency, for the VM, which decides
 // a call made less often a native call, not one to inline (its
@@ -4125,12 +4111,10 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 		return nil, false
 	}
 	// Made too seldom to pay for its code, as V8's heuristic finds a call
-	// below min_inlining_frequency -- but a small callee (smallCallee).
-	freq, counted := b.siteFrequency(pc)
-	cold := counted && freq < minInliningFrequency
-	// inlineFrame bounds what it inlines for a cold call, nested ones
-	// asking afresh.
-	b.coldSmall = cold
+	// below min_inlining_frequency, whatever the callee's size.
+	if freq, counted := b.siteFrequency(pc); counted && freq < minInliningFrequency {
+		return nil, false
+	}
 	var site InlineSite
 	ok := false
 	switch {
@@ -4149,7 +4133,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	if ok {
 		calls, givenCalls, ok = b.inlineCalls(site, isAccessor)
 	}
-	if !ok || !inlineFits(*total, inlineSize(site.Program)) || cold && !smallCallee(site.Program) ||
+	if !ok || !inlineFits(*total, inlineSize(site.Program)) ||
 		site.Argc < 0 || site.Params < 0 || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
 		return nil, false
 	}
@@ -4488,7 +4472,9 @@ func (b *builder) unmadeAlone() error {
 		}
 		// The local it is kept in, the instruction after it: an entry's
 		// load of it is the closure too, made by the interpreter, as
-		// calledClosures has it, and so is its dead zone's marker.
+		// calledClosures has it, and so is its dead zone's marker; and,
+		// in register code, a copy of it an entry after an operation Go
+		// ran loads (resumeCopies).
 		p := b.root.p
 		home := calledHome(p, pc0, b.f.FrameLocals)
 		set, also := map[*Value]bool{}, map[*Value]bool{}
@@ -4508,6 +4494,7 @@ func (b *builder) unmadeAlone() error {
 		for _, v := range phis {
 			set[v] = true
 		}
+		copies := newResumeCopies(b.f, p)
 		for changed := true; changed; {
 			changed = false
 			for _, v := range phis {
@@ -4515,7 +4502,7 @@ func (b *builder) unmadeAlone() error {
 					continue
 				}
 				for _, a := range v.Args {
-					if !set[a] && !also[a] {
+					if !set[a] && !also[a] && !copies.holds(a, set) {
 						delete(set, v)
 						changed = true
 						break
@@ -4584,8 +4571,6 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 		return nil, false
 	}
 	nslots, before, keeps := b.nslots, *total, b.f.Keeps
-	cold := b.coldSmall
-	b.coldSmall = false
 	*total += inlineSize(site.Program)
 	fr := b.f.newFrame()
 	*fr = frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
@@ -4678,11 +4663,6 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 			return refuse()
 		}
 		b.enter(cur)
-	}
-	if cold && *total-before > maxInlineSmall {
-		// A small callee inlined at a cold call that came to inline more
-		// than a small one's worth.
-		return refuse()
 	}
 	if !inlineFits(before, *total-before) {
 		// Past the function's budget only a small callee is inlined, its
@@ -5927,6 +5907,29 @@ func (b *builder) typeofCall(blk *Block, pc int, cells uintptr) {
 	r := f.newValue(miss, OpKept, Tagged, kept, call)
 	r.Shadow = kept
 	b.write(slot, miss, r)
+}
+
+// windowTypeof is typeofCall for register code's typeof at pc, in (its
+// Window): its operand the window's register, its result in.Dest's.
+func (b *builder) windowTypeof(blk *Block, pc int, in ir.Instruction, cells uintptr) {
+	f := b.f
+	x := b.read(in.Left.Slot, blk)
+	cell := f.newValue(blk, OpTypeofCell, Source, x)
+	cell.Const = ir.Value{Bits: uint64(cells)}
+	none := f.newValue(blk, OpCellNone, Bool, cell)
+	st := b.state(blk, pc)
+	miss, hit, _ := b.split(blk, none, true)
+	v := f.newValue(hit, OpLoadCell, Tagged, cell)
+	v.Shadow = cell
+	b.assign(in.Dest, hit, v)
+	call := f.newValue(miss, OpCall, Tagged, x)
+	f.cache(call).Calls = b.callsAt(pc)
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeepAt(pc)
+	st.addUse()
+	kept := f.newValue(miss, OpCallCell, Source, call)
+	r := f.newValue(miss, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.assign(in.Dest, miss, r)
 }
 
 // substring is the address of String.prototype.substring, slice, substr
@@ -9398,6 +9401,16 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 	case calls[0].InstanceOf:
 		args = append(args, b.read(a, blk), b.read(in.Right.Slot, blk))
 	case calls[0].TypeOf:
+		if tf, ok := b.fb.(TypeofFeedback); ok && b.goCalls() {
+			if cells, ok := tf.TypeofCells(); ok && cells != 0 {
+				// Its name loaded from the runtime's table, Go's for what
+				// native code cannot tell, as the stack form's
+				// (typeofCall): a call of Go at each had been register
+				// code's.
+				b.windowTypeof(blk, pc, in, cells)
+				return
+			}
+		}
 		args = append(args, b.read(a, blk))
 	}
 	if calls[0].Method {

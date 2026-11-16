@@ -533,12 +533,16 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 			if regJITForTest() {
 				// The register form's native callers leave a call of code
 				// they may not call to Go, a call of Go (jitLink's
-				// clearCode), which enters the code at its start: the
-				// stack form's ExitEnter (jitEnterCallee) it has none of.
-				entries := mid.ssaStats.entries
+				// clearCode) -- here of more operands than the context
+				// holds, read from the callee's window (mir's
+				// windowGoCall) -- which constructs with the class, its
+				// frame the interpreter's, and goes on natively after it:
+				// the stack form's ExitEnter (jitEnterCallee) it has none
+				// of. No exit.
+				hosts, goCalls := r.jit.hosts, r.jit.goCalls
 				agree()
-				if mid.ssaStats.entries == entries {
-					t.Errorf("Go never ran Mid's code from its start")
+				if r.jit.goCalls == goCalls || r.jit.hosts != hosts {
+					t.Errorf("Go made %d of the constructions, %d exits", r.jit.goCalls-goCalls, r.jit.hosts-hosts)
 				}
 				return
 			}

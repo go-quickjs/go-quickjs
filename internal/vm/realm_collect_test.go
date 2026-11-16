@@ -10,11 +10,11 @@ import (
 
 // realmsAlive collects until no more of refs go, a turn of the runtime's
 // between collections, as a host that runs on has, and says how many are
-// left: what is queued for a finalization callback holds a realm until the
-// turn after the cleanup has run, on a goroutine of its own. That goroutine
-// is given twice the time at each round, a quarter of a second in all: a
-// millisecond each, eight rounds had not been enough for it on a loaded
-// Windows runner, twice (TestJITDroppedRealmsAreCollected/finalization).
+// left. What is queued for a finalization callback no longer holds a realm
+// (pendingCleanup), whenever the cleanup's goroutine runs: it had, until
+// the turn after the cleanup ran, which the rounds' sleeps, twice as long
+// at each, had waited for -- not long enough on a loaded Windows runner
+// (TestJITDroppedRealmsAreCollected/finalization).
 func realmsAlive(r *Runtime, refs []weak.Pointer[Realm]) int {
 	left := len(refs)
 	for i := range 8 {
@@ -128,6 +128,52 @@ func TestDroppedRealmsAreCollected(t *testing.T) {
 			runtime.KeepAlive(fn)
 		})
 	}
+}
+
+// A realm whose registration's target the collector has let go of goes
+// whether or not the runtime has had a turn since to run the callback: the
+// queue of callbacks to run (cleanupQueue) holds its registration weakly. It
+// had held the registry, and so its callback's realm, from the cleanup's
+// run, on a goroutine of the collector's, until the next turn, which a test
+// collecting dropped realms then had to wait for -- a realm left alive when
+// the cleanup ran after its last turn (TestJITDroppedRealmsAreCollected's
+// finalization, on a loaded runner). The test waits on what it can see: the
+// queue holding the registration, which no turn takes from it here.
+func TestDroppedRealmQueuedCleanupLetsGo(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	fn := compileForTest(t, `var h = {}; new FinalizationRegistry(function () {}).register({}, h);`)
+	re := r.NewRealm()
+	ref := weak.Make(re)
+	if _, err := r.RunIn(re, fn); err != nil {
+		t.Fatal(err)
+	}
+	queued := func() int {
+		r.cleanups.mu.Lock()
+		defer r.cleanups.mu.Unlock()
+		return len(r.cleanups.pending)
+	}
+	for i := 0; queued() == 0; i++ {
+		if i == 1000 {
+			t.Fatal("the target's cleanup never ran")
+		}
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+	// The realm alive until its registration was queued; dropped now.
+	runtime.KeepAlive(re)
+	for range 4 {
+		runtime.GC()
+	}
+	if ref.Value() != nil {
+		t.Fatal("the dropped realm is alive while its registration's callback is queued")
+	}
+	// The registration let go of with its registry: the runtime's next turn
+	// calls nothing.
+	if err := r.DrainJobs(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.KeepAlive(fn)
 }
 
 // A realm that has run no script goes as one that has: the first thing that

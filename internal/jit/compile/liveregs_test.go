@@ -82,7 +82,7 @@ func denseLiveRegs(p *ir.Program, rc *bytecode.RegCode) (live []uint64, words in
 				for _, r := range writes {
 					kill(in, r)
 				}
-				if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RCallW || w.Op() == bytecode.RCallWT {
+				if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RCallW || w.Op() == bytecode.RCallWT || w.Op() == bytecode.RNewW {
 					kill(in, int(w.A())+1)
 				}
 				if all {
@@ -318,5 +318,57 @@ func walkMarkBools(p *ir.Program) {
 				in.Bools |= 1
 			}
 		}
+	}
+}
+
+// A construction's receiver register, R[A+1] of new_w, is the
+// construction's to write, as a plain call's is: no register the code
+// reads, it is live nowhere -- not at the function's entry, nor round the
+// loop that constructs, where a phi of the last turn's object with the
+// slot the entry loads had kept escape analysis from leaving the object
+// unmade.
+func TestLiveRegsConstructionReceiver(t *testing.T) {
+	compiler.SetRegisterForm(true)
+	defer compiler.SetRegisterForm(bytecode.RegDefault())
+	text := `function V(x) { this.x = x }
+	function f(n) { let s = 0; for (let i = 0; i < n; i++) { const v = new V(i); s += v.x } return s }`
+	prog, err := parser.Parse(text, parser.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	top, err := compiler.Compile(prog, compiler.Options{Source: "construct.js", Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fn *bytecode.Function
+	for _, c := range top.Constants {
+		if c.Kind == bytecode.ConstFunction && c.Fn != nil && c.Fn.Name == "f" {
+			fn = c.Fn
+		}
+	}
+	if fn == nil || fn.RegCode() == nil {
+		t.Fatal("f has no register code")
+	}
+	rc := fn.RegCode()
+	recv := -1
+	for _, w := range rc.Code {
+		if w.Op() == bytecode.RNewW {
+			recv = int(w.A()) + 1
+		}
+	}
+	if recv < 0 {
+		t.Fatal("f constructs nothing")
+	}
+	p, err := LowerReg(rc, fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for pc := range p.Code {
+		if slices.Contains(slices.Collect(p.Live.Slots(pc)), recv) {
+			t.Errorf("pc %d: the construction's receiver register %d is live", pc, recv)
+		}
+	}
+	if !liveRegsMatch(t, fn, p) {
+		t.Error("liveness is not the dense dataflow's")
 	}
 }

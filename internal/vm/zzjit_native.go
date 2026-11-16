@@ -895,6 +895,14 @@ type jitEntry struct {
 	// nativeCallers are the stack form's. Keys, which hold no function
 	// alive: what a caller learned outlives its code.
 	regCallers []jitKey
+	// regCounted marks, for a function's register code, the state the
+	// JIT keeps for it (jitState's regLearned), whose bytes (bytes) count
+	// in what the JIT holds (regHeld) as a stack form's entry's measure
+	// counts what it learned (regAccount); regFlushed marks one whose
+	// code the cache let go of (regLetGo), whose next compile is one
+	// again of code dropped (jitState's recompiled), as a ghost's
+	// dropped marks the stack form's.
+	regCounted, regFlushed bool
 	// inlinePending marks calls found to inline since the code was
 	// compiled (jitLearned's callSites), which it is compiled again for
 	// once the calls around them have been seen.
@@ -1106,7 +1114,10 @@ type jitState struct {
 	// the entries kept for a frame (jitRegCalleesKeptNoEntries), which ask
 	// for no more of them, as seeding is the stack form's.
 	regKeptSeeding bool
-	// regHeld is what the register code in regCache takes (held).
+	// regHeld is what the register code in regCache takes (held), and
+	// what the JIT keeps for each function besides, its learned state in
+	// regLearned (regAccount), as the stack form's entryBytes counts its
+	// entries' code and what they learned.
 	regHeld int
 	// regLearned is what the code made from a function's register code
 	// learned at its exits, by the function's key, kept across its
@@ -1125,6 +1136,12 @@ type jitState struct {
 	// regLowered, before which a program not asked for since is let go of
 	// (regFlush).
 	regLowerLook uint64
+	// regBuilds are the feedback of the register compiles under way on
+	// the runtime's goroutine, built or installed (jitRegCompile,
+	// jitRegInstall): the links their code is to call through, which no
+	// code holds yet (jitLink's refs), are let go of by none meanwhile
+	// (regUnlink).
+	regBuilds []**jitRegFeedback
 	// regHostOps counts register code's host exits by the register
 	// instruction Go ran whole, by its operation, for tests
 	// (RegNativeStats' HostOps): an array, not a map of the operation's
@@ -2035,7 +2052,7 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 			}
 		}
 	default:
-		if x.re != nil {
+		if x.reg {
 			s.regReclaim(x, now)
 			return true
 		}

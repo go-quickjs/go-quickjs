@@ -486,13 +486,13 @@ function drive(n) {
 }
 `
 
-// TestJITRegSmallCalleeAtColdCall checks the inliner's small-callee
-// exemption from the call frequency rule (ssa's smallCallee), as V8
-// inlines a callee of max_inlined_bytecode_size_small bytes however
-// seldom its call is made: at a call made in one of thirty-two of its
-// function's runs, below minInliningFrequency, a callee within the small bound in
-// register code's units is inlined, a larger one is not -- though the
-// larger one is inlined where its call is made at every run. Exact
+// TestJITRegSmallCalleeAtColdCall pins V8's rule as Node runs it,
+// Turbofan's: at a call made in one of thirty-two of its function's runs,
+// below minInliningFrequency, no callee is inlined, however small -- tiny,
+// within V8's max_inlined_bytecode_size_small, nor big -- the frequency
+// asked before a small function is forced in (JSInliningHeuristic); big is
+// inlined where its call is made at every run. The exemption of a small
+// callee at a cold call is Turbolev's, which Node does not run. Exact
 // answers with the JIT and without, the collector idle and marking.
 func TestJITRegSmallCalleeAtColdCall(t *testing.T) {
 	if !jitSSABackend {
@@ -545,11 +545,11 @@ func TestJITRegSmallCalleeAtColdCall(t *testing.T) {
 				}
 				return got
 			}
-			if got := inlined("rare"); !got["tiny"] || got["big"] {
-				t.Errorf("rare inlined %v, want tiny alone", got)
+			if got := inlined("rare"); len(got) != 0 {
+				t.Errorf("rare inlined %v, want neither tiny nor big", got)
 			}
-			if got := inlined("often"); !got["big"] {
-				t.Errorf("often inlined %v, want big", got)
+			if got := inlined("often"); len(got) != 1 || !got["big"] {
+				t.Errorf("often inlined %v, want big alone", got)
 			}
 		})
 	}

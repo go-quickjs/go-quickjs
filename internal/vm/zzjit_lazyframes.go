@@ -89,9 +89,12 @@ func (r *Runtime) jitMakeLazyFrames() {
 }
 
 // jitLazyDone ends the innermost call of Go's put-off frames, as the call
-// returns.
+// returns, keeping nothing of it: the frame and the realm it held, past
+// the list's end, had kept a realm a host dropped alive -- a deep
+// recursion's, whose calls of Go put their levels off.
 func (r *Runtime) jitLazyDone() {
 	s := r.jit
+	s.lazy[len(s.lazy)-1] = jitLazyLevels{}
 	s.lazy = s.lazy[:len(s.lazy)-1]
 	s.lazyTop = 0
 	if n := len(s.lazy); n != 0 && !s.lazy[n-1].made {

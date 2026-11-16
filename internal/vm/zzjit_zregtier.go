@@ -722,8 +722,13 @@ func (r *Runtime) jitRegReoptimize(cl *closure, c *regCode, e *jitRegEntry, at i
 	// was compiled again at once with it (jitRegResumeSeen) -- zlib's loop
 	// of ten thousand instructions twice, in a row, at each compile for
 	// what it learned. And the runs of e's code Go is inside, after their
-	// calls of Go, where e has no entry.
-	if life != nil && at >= 0 && !slices.Contains(life.resumed, uint32(at)) {
+	// calls of Go, where e has no entry. Not a loop's header, which this
+	// compile keeps for the frame where it is due (jitRegFrameAt), as the
+	// stack form's compile in a run does (jitRecompileInRun), and no later
+	// one: learned for good, its entry was never one escape analysis could
+	// drop, its objects made at every turn, and a frame that stayed there
+	// never went on in code of its own (jitRegLoopCode).
+	if life != nil && at >= 0 && !slices.Contains(life.resumed, uint32(at)) && (at == 0 || regLoopAround(c, at) != at) {
 		life.resumed = append(life.resumed, uint32(at))
 	}
 	s := r.jit
@@ -767,8 +772,24 @@ func (s *jitState) regLearnedOf(key jitKey) *jitEntry {
 	if s.regLearned == nil {
 		s.regLearned = map[jitKey]*jitEntry{}
 	}
-	l := &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}}
+	// Kept in the room for it, as the stack form's entry is made in the
+	// room for it (jitWarmFor), the cache letting go of what it may
+	// (makeRoom), other functions' state among it. Where there is none --
+	// all the cache holds young code, say -- it is kept all the same,
+	// counted once its function is compiled, which asks for its room, or at
+	// the cache's next look (regAge), whose room it is then made among:
+	// the stack form's entry is made at its function's first call, this at
+	// the function's first sample, after its first run, and a loop driving
+	// a program's phases had none made for it, and so no code, once the
+	// first phase had filled the budget.
+	s.budget = s.rt.jitBudget()
+	room := s.makeRoom(jitEntryFixed)
+	// Numbered as the stack form's entries are (serial), which makeRoom
+	// takes the least recently made of first among those of an epoch.
+	s.serial++
+	l := &jitEntry{jitLearned: &jitLearned{reg: true, regLink: s.regLinks[key]}, used: s.epoch(), serial: s.serial, regCounted: room}
 	s.regLearned[key] = l
+	s.regAccount(l)
 	return l
 }
 
@@ -1016,10 +1037,11 @@ func (r *Runtime) jitRegWriteSeen(f *frame, c *regCode, e *jitRegEntry, rpc int,
 // interpreter where the code leaves it, or has no entry there.
 func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int) (Value, error) {
 	e := cl.closureCode.jitReg
-	if e == nil && r.jit != nil && r.jit.inFlight() {
-		// A compile of it in the background (jitEnters): installed now if
-		// done, as the stack form's calls install theirs (tryJITAt), and
-		// entered from this call on.
+	if r.jit != nil && r.jit.inFlight() {
+		// A call is a check, as the stack form's is (tryJITAt): compiles
+		// in the background that are done installed now -- its first, or
+		// one replacing the code it has, which goes on running until then
+		// -- and entered from this call on.
 		r.jitDrain()
 		e = cl.closureCode.jitReg
 	}
@@ -1258,8 +1280,9 @@ func (r *Runtime) jitRegLoop(st *regState, target int) int {
 	if e != nil && e.life.loopSlow && !forced {
 		// Code whose runs begun at a loop do not pay (loopSlow): the
 		// interpreter runs the loop, and Go enters it again once retried,
-		// as the stack form's tryJITAt has it (jitRetrySlow).
-		e.life.slowCalls++
+		// as the stack form's tryJITAt has it (jitRetrySlow), which
+		// counts the call (slowCalls): counted here too, each had been
+		// two, and the code retried at half the calls.
 		r.jitRegRetrySlow(e)
 	}
 	if e == nil || !e.goesOn || jitRunSlow(e.life, osr) {
@@ -1345,7 +1368,10 @@ func (r *Runtime) jitRegLoopCode(f *frame, c *regCode, e *jitRegEntry, target in
 			return o
 		}
 	}
-	if e.invalid || !slices.Contains(e.unentered, target) {
+	if e.invalid || !slices.Contains(e.unentered, target) || e.osrJob != nil {
+		// No loop of its own to compile code for; or code for one being
+		// compiled in the background, which the frame waits out in the
+		// interpreter (jitRegInstallOSR).
 		return nil
 	}
 	if at := uintptr(unsafe.Pointer(f)); e.osrMiss != at || e.osrMissPC != target {
@@ -1356,11 +1382,22 @@ func (r *Runtime) jitRegLoopCode(f *frame, c *regCode, e *jitRegEntry, target in
 	if target <= 0 {
 		return nil
 	}
-	s := r.jit
 	o := r.jitRegCompile(f.cl, c, e.key, false, target)
 	if o == nil || o.code == nil {
+		// No room, a refusal, or compiled in the background.
 		return nil
 	}
+	r.jit.regKeepOSR(e, o)
+	if _, ok := o.loopEntry(target); ok {
+		return o
+	}
+	return nil
+}
+
+// regKeepOSR keeps o, code compiled for a frame waiting at a loop of e's
+// function (jitRegLoopCode), beside e, the function's code, in place of
+// what e kept before.
+func (s *jitState) regKeepOSR(e, o *jitRegEntry) {
 	if old := e.osr; old != nil {
 		s.regHeld -= old.bytes
 		old.dropped = true
@@ -1369,10 +1406,6 @@ func (r *Runtime) jitRegLoopCode(f *frame, c *regCode, e *jitRegEntry, target in
 	o.osrOf, e.osr = e, o
 	s.regHeld += o.bytes
 	s.osrLearned++
-	if _, ok := o.loopEntry(target); ok {
-		return o
-	}
-	return nil
 }
 
 // jitRegFramesLeave counts a frame of e's function, cl's, its register

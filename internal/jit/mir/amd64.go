@@ -1853,7 +1853,11 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			op := goCallWord(site)
 			c.cold = append(c.cold, func() {
 				c.a.Bind(goCold)
-				c.goCallOp(v, op, guard, true)
+				if windowGoCall(v, site) {
+					c.goCallWindow(v, op, guard)
+				} else {
+					c.goCallOp(v, op, guard, true)
+				}
 				c.a.Jmp(join)
 			})
 		}
@@ -1868,7 +1872,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		// what a push or a pop moves (push, pop). A receiver taken from a
 		// pool is shaded first (poolShade). A call that does not make it
 		// natively Go makes, where the code may call Go (join).
-		if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+		if c.enc.CallGo != 0 && (len(v.Args) <= abi.MaxGoArgs || windowGoCall(v, site)) {
 			join, generic = c.a.NewLabel(), true
 		}
 		c.poolShade(sites)
@@ -5250,6 +5254,36 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard guardTo, saving bool)
 	c.setG(v, scratchA)
 }
 
+// goCallWindow is goCallOp for a call of Go of more operands than the
+// context has room for (windowGoCall): they are written to the callee's
+// window past the VM's stack's top, where Go reads them, the room checked
+// first, as a native call's -- without it, the call leaves.
+func (c *compiler) goCallWindow(v *ssa.Value, op uint64, guard guardTo) {
+	vs := int32(c.enc.ValueSize)
+	method := op>>abi.GoOpKindShift&0xff == abi.GoCallMethod
+	st, _ := c.goState(op, v.Index, v, nil)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	room := int32(len(v.Args) + 1)
+	if method {
+		room--
+	}
+	c.a.Load(scratchC, regCtx, abi.OffStackTop)
+	c.a.Load(scratchC, scratchC, 0)
+	c.a.Lea(scratchB, scratchC, room)
+	c.a.CmpMem(scratchB, regCtx, abi.OffStackEnd, true)
+	c.a.Jcc(amd64.CondA, stub)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.AddMem(scratchC, regCtx, abi.OffStackBase)
+	c.a.MovQToX(xScratch2, scratchC)
+	inC := true
+	for i, x := range v.Args {
+		c.directOperand(v, x, true, windowGoDisp(i, method, vs), &inC)
+	}
+	c.goCalling(st, &stub)
+	c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*vs+c.enc.NumOffset)
+	c.setG(v, scratchA)
+}
+
 // goArg writes x's words to the context's operand at at (abi.GoArg): its
 // number word, and its pointer word read where it came from, or 0.
 func (c *compiler) goArg(at int32, x *ssa.Value) {
@@ -6792,7 +6826,8 @@ func (c *compiler) windowForward(t *ssa.CallSite, locals, ctx amd64.Reg) {
 
 // windowArgs gives a register callee that keeps its arguments
 // (ssa.CallSite's FrameArgs) all of them and their count in its context,
-// ctx, read from its window at locals, where the call wrote them, as the
+// ctx, read from its window at locals, where the call wrote them -- a call
+// through Function.prototype.call's past its receiver (windowArgc) -- as the
 // stack form's call writes them (call's setup): plain stores, the
 // collector marking or not, of what the VM's stack holds as long as the
 // callee runs. It uses a.
@@ -6800,8 +6835,9 @@ func (c *compiler) windowArgs(t *ssa.CallSite, locals, ctx, a amd64.Reg) {
 	vs := int32(c.enc.ValueSize)
 	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
 	c.a.Load(ctx, regCtx, abi.OffNext)
-	c.storeImm(ctx, abi.OffArgc, uint64(t.Argc), a)
-	for i := range t.Argc {
+	argc := windowArgc(t)
+	c.storeImm(ctx, abi.OffArgc, uint64(argc), a)
+	for i := range argc {
 		at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Load(a, locals, int32(2+i)*vs+c.enc.NumOffset)
 		c.a.Store(ctx, at+num, a)
