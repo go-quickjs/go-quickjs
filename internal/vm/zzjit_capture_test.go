@@ -12,7 +12,7 @@ import (
 )
 
 // A direct eval in a strict closure assigns what its maker shares with it,
-// as one in a sloppy closure does: the JIT's closureAssigned counted only
+// as one in a sloppy closure does: the removed stack JIT counted only
 // HasDirectEval, which marks sloppy functions alone, so the maker's native
 // code took the let as no closure's to assign, kept what it had read of it
 // across the closure's call, and added 1 three times where the eval had

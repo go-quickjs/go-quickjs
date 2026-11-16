@@ -32,14 +32,14 @@ import (
 // else: a leaf's check and its call had otherwise cost the interpreter
 // more than the frame they spare.
 //
-// The functions are generic, each instantiated with struct{} alone: Go
-// lays a generic function's instantiations out after every function and
-// closure of the package (see zzz_direct.go). initDataViewBuiltins
+// The functions are generic, each instantiated with struct{} alone: Go lays a
+// generic function's instantiations out after every function and closure of
+// the package (docs/optimizing.md, "The layout lock"). initDataViewBuiltins
 // reaches them through dataViewLeaves, called where its last call,
-// defToStringTag's, was: its code grows within the padding that rounds it
-// to 32 bytes, and every function and closure of the package stays at its
-// address (go tool nm). The checks are given their places in leafChecks
-// once, when the first realm makes its DataView.prototype.
+// defToStringTag's, was: its code grows within the padding that rounds it to
+// 32 bytes, and every function and closure of the package stays at its address
+// (go tool nm). The checks are given their places in leafChecks once, when the
+// first realm makes its DataView.prototype.
 
 // dataViewLeafOnce gives the DataView's leaves their checks.
 var dataViewLeafOnce sync.Once
@@ -108,8 +108,7 @@ func dataViewLeafChecks[_ any]() {
 // form, its type and the built-in's function, for anything that form does
 // not make. Its methods are what would be closures: a generic function's
 // closures are laid out ahead of every generic instantiation there was,
-// and moved them all (directRest, which runs every callback a built-in
-// calls, among them).
+// and moved them all.
 type dataViewLeaf[_ any] struct {
 	spec     dataViewType
 	slow     NativeFunc

@@ -33,11 +33,11 @@ package vm
 // layout's chain, which the source's layout keeps already, so that a
 // source of one realm spread in another keeps no realm alive.
 //
-// Its functions are generic, each instantiated with struct{} alone: Go lays
-// a generic function's instantiations out after every function and closure
-// of the package (see zzz_direct.go). copyDataProps asks spreadShaped where
-// it reserved the target's room, and grows within the padding that rounds
-// it to 32 bytes.
+// Its functions are generic, each instantiated with struct{} alone: Go lays a
+// generic function's instantiations out after every function and closure of
+// the package (docs/optimizing.md, "The layout lock"). copyDataProps asks
+// spreadShaped where it reserved the target's room, and grows within the
+// padding that rounds it to 32 bytes.
 
 // spreadRoots is how many roots a source's layout keeps the spread's
 // layout for: the literals spreading objects of one layout, which a

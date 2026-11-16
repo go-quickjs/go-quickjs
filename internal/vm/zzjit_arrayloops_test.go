@@ -53,7 +53,7 @@ const arrayLoopsSetup = `
 // the loop's checks find -- a hole, an element past the array's end now,
 // a callback's result whose truth is Go's to decide -- Go goes on with
 // from that index, after the callback's result where the loop has it
-// (jitLoopFinish). Each answer is the interpreter's, and mapNums's,
+// (jitRegLoopFinish). Each answer is the interpreter's, and mapNums's,
 // filterEven's, someAt's and findIndexAt's loops neither leave their
 // code nor call Go but to make the array.
 func TestJITArrayLoops(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 // A local a function assigned keeps its old value in a value that goes on
 // reading the word out of the local's slot, where native code left it: its
 // frame is written only at an exit. A native call's level Go finishes
-// (jitUnwindNative) has the records of its call applied, for what reads its
+// (jitRegUnwind) has the records of its call applied, for what reads its
 // frame meanwhile, and its code goes on after the call. Written over by
 // the record, the slot had the value read another's pointer: Box2D's
 // CollidePolygons, in the background, took a transform for a polygon.

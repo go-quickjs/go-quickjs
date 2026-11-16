@@ -295,9 +295,9 @@ the loop, `runReg`, and W the call path after it, `rhCallW`. A handler
 is a function of its own, so an edit to one moves no other's code but
 those after it in its file; there is no switch whose cases a lock would
 hold, and so no golden file of case offsets and no lever inside the
-loop. The native handlers' block is not anchored: it is laid out in
-`handlerOps`' order, new handlers last, after the closures, and arm64's
-is not tuned at all.
+loop. The native handlers' block is anchored by H (above); inside it the
+handlers are laid out in `handlerOps`' order, new handlers last, and
+arm64's block is not tuned at all.
 
 The pads are never called and their variables never read: one init calls
 them behind a variable that is never true, which keeps the linker from
@@ -317,7 +317,9 @@ the targets were recorded at.
 When a change lands, run `go generate ./internal/vm`. A change that adds
 hot code where no lever reaches it should add a position or an anchor
 (`layoutlock.txt`), its target recorded at the base it is compared with.
-How the lock was made and measured: `docs/performance-plan.md`.
+What the lock leaves free, with the measurement of the lock against the
+layout it pinned, is in `docs/performance-plan.md` ("Measurement and
+tooling").
 
 ## Builds and the machine
 

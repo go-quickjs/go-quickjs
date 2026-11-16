@@ -341,7 +341,7 @@ func TestJITLexicalGlobals(t *testing.T) {
 }
 
 // A regular expression literal's object is taken natively from a pool of
-// RegExps of its pattern the VM fills (jitLiteralAt): each evaluation a
+// RegExps of its pattern the VM fills (jitRegExpLiteral): each evaluation a
 // fresh one, its lastIndex its own and 0, its prototype RegExp.prototype,
 // past many refills of the pool. Every answer is the interpreter's. While
 // the collector marks, native code takes each from the pool itself
@@ -878,7 +878,7 @@ func TestJITSSAGlobals(t *testing.T) {
 // an object stay native, carried by their cells, though only Go uses them;
 // Go makes the call from native code (ssa.GoCall), or after an exit. (h stores, so it is not inlined; TestJITSSAInline
 // inlines.) The loops do enough besides to be worth running natively
-// (jitSSAProfit). A function compiled at its first call, before the
+// (jitRegStretchWork). A function compiled at its first call, before the
 // interpreter has run its global reads, finds the global where the global
 // object has it; deleting and defining it again moves it, which the cell's
 // key check sees.
@@ -1615,13 +1615,11 @@ func TestJITHostErrors(t *testing.T) {
 func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	t.Helper()
 	// The tiers the JIT works with are the runtime's own: the register
-	// interpreter and the register JIT where runtimes with the JIT run
-	// register code (QJS_JITREG, SetJITRegTier), the stack interpreter,
-	// the tree tier and the stack JIT otherwise. A runtime made without
-	// the JIT, to compare with, runs the register interpreter.
+	// interpreter and the register JIT. A runtime made without the JIT, to
+	// compare with, runs the register interpreter.
 	r := New(cfg)
 	// Boundary tests force promotion so guard and budget assertions cannot
-	// pass by running only the existing tiers.
+	// pass by running only the interpreter.
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
 	// Without QJS_JIT_STRESS's budgets and deoptimizations, whose exits the
 	// tests' counts of native calls, exits and compiles are not written
@@ -1651,7 +1649,7 @@ func jitDefaultsForTest(r *Runtime) {
 // jitOtherGuards is how many guards failed in r's code but the map checks
 // of property sites, which deoptimize for a shape the code was not compiled
 // for, or at a site that knew none, and feed the sites' caches
-// (jitPropertyDeopt): code compiled at its first call, before its sites
+// (jitRegDeoptSeen): code compiled at its first call, before its sites
 // have run, deoptimizes once at each, as V8's code does for insufficient
 // feedback. jitOtherHosts is so for host exits, where an inlined callee
 // leaves such an operation to Go.
@@ -1777,8 +1775,8 @@ func TestJITSSAManySpills(t *testing.T) {
 }
 
 // A function whose native stretches mostly end leaving for Go after little
-// work runs in the tree tier once its first stretches show it
-// (jitSSAProfit): a loop leaving at every iteration for a call of more
+// work runs in the interpreter once its first stretches show it
+// (jitRegStretchWork): a loop leaving at every iteration for a call of more
 // arguments than Go is called with from native code (abi.MaxGoArgs) costs
 // more at the exits than native code saves. A loop doing real work stays
 // native, and so does one doing real work around calls Go makes from
@@ -1789,7 +1787,7 @@ func TestJITSSAProfitability(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// m lets its mapped arguments object out: Go calls it, never native
-	// code (jitNativeCallee).
+	// code (jitRegNativeCallee).
 	setup := `function O(){this.v=0}O.prototype.m=function(i){const a=arguments;this.v+=a[0];return this.v};
 		function calls(o,n){let s=0;for(let i=0;i<n;i++)s+=o.m(i,1,2,3,4,5,6);return s}
 		function gocalls(o,n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+o.m(i))|0}return s}
@@ -1832,16 +1830,16 @@ func TestJITSSAProfitability(t *testing.T) {
 	}
 }
 
-// Calls of Go count toward judging code as stretches do (jitSSAProfit):
+// Calls of Go count toward judging code as stretches do (jitRegStretchWork):
 // builtins, entered three times, each a loop of 40,000 calls of
 // String.prototype.codePointAt and little else, was judged every jitSSAProbe
-// entries, so never, and ran natively, slower than the tree tier, as
+// entries, so never, and ran natively, slower than the interpreter, as
 // RegExp's run blocks did; now it is judged after its first calls and
-// the tree tier runs it. mixed, as many calls with real work around each,
+// the interpreter runs it. mixed, as many calls with real work around each,
 // stays native. And a native callee is judged by its own calls of Go
-// (jitCalleeProfit): heavy, called natively by outer, ten calls of Go and
+// (jitRegCalleeProfit): heavy, called natively by outer, ten calls of Go and
 // nothing else each time, had its native callers call it natively
-// whatever it cost; now Go runs it, in the tree tier, and outer's code
+// whatever it cost; now Go runs it, in the interpreter, and outer's code
 // calls it through Go (notNative). light, called so too, does real work
 // around its calls and is called natively still. Each answer is the
 // interpreter's.
@@ -3384,7 +3382,8 @@ func TestJITSSAReoptimize(t *testing.T) {
 		return jitClosureCodeForTest(r, cl)
 	}
 	// cmp's comparisons of objects go to Go at every iteration, which makes
-	// the tree tier run it (jitSSAProfit); scale's addition goes once a call.
+	// the interpreter run it (jitRegStretchWork); scale's addition goes once
+	// a call.
 	for _, name := range []string{"scale", "cmp"} {
 		e := entry(name)
 		if e == nil {
@@ -3418,7 +3417,7 @@ func TestJITSSAReoptimize(t *testing.T) {
 // interpreter's, and only the calls go to Go, called from native code
 // (ssa.GoCall): m stores, so it is not inlined (TestJITSSAInline inlines). Its store gives the receiver a
 // shape after run was compiled for the one it had, so run deoptimizes and
-// is compiled again for the new one (jitPropertyDeopt).
+// is compiled again for the new one (jitRegDeoptSeen).
 func TestJITSSAPrototypeMethods(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -3467,8 +3466,8 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 			// The third call runs compiled -- the first's read, compiled
 			// before it ran, deoptimized, and the code was compiled again
 			// once the second had run with its cache's feedback settled
-			// (jitTierUp): a call of Go for each of its calls, and no exit,
-			// for them or the reads.
+			// (jitRegWarmUp): a call of Go for each of its calls, and no
+			// exit, for them or the reads.
 			if n := r.jit.goCalls - goCalls; n != 40 || r.jit.hosts-hosts > 1 {
 				t.Fatalf("run called Go %d times for 40 calls, and left native code %d times", n, r.jit.hosts-hosts)
 			}
@@ -3734,8 +3733,8 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 // call of Go passes (abi.MaxGoArgs) is made natively while the collector
 // marks, as any is, and leaves native code no more: it had left then
 // (abi.Context's ExitMarking, gone), every iteration of a long marking,
-// which the profit check (jitSSAProfit) was not to judge -- code judged on
-// such exits had Go stop entering it for good (entrySlow), as CI met at
+// which the profit check (jitRegStretchWork) was not to judge -- code judged
+// on such exits had Go stop entering it for good (entrySlow), as CI met at
 // two CPUs.
 func TestJITSSAWideConstructionsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
@@ -3820,11 +3819,11 @@ func jitCollectorHeldForTest(t *testing.T) {
 }
 
 // A small method is inlined at a call the new pipeline has seen call it
-// (jitCallSeen, ssa.InlineSite): the loop then never leaves native code, a
+// (jitRegCallSeen, ssa.InlineSite): the loop then never leaves native code, a
 // missing argument is undefined, and the receiver is the call's. A method
 // replaced fails the call's check, Go makes the call, and the call is no
 // longer inlined but made natively, to either function, as V8's feedback
-// goes polymorphic (jitInlinedCalls). Each answer is the interpreter's.
+// goes polymorphic (regCallSites). Each answer is the interpreter's.
 func TestJITSSAInline(t *testing.T) {
 
 	if !jitSSABackend {
@@ -4445,7 +4444,7 @@ func TestJITSSANativePush(t *testing.T) {
 	for _, c := range cases {
 		warm := `{const a=[];[` + c.fn + `(a,300),show(a)].join()}`
 		// Until the push's read's cache has settled, which the code is
-		// compiled again on (jitTierUp).
+		// compiled again on (jitRegWarmUp).
 		for range 8 {
 			run(c.name, warm)
 		}
@@ -4812,11 +4811,11 @@ func TestJITSSACallsSettleLate(t *testing.T) {
 
 // A read that meets objects of several shapes, its property on their
 // prototypes, is compiled for each, up to jitPropertyCases, as V8's
-// polymorphic inline caches are (jitPolySeen, ssa.PropertyCase): a loop over
-// four kinds of object then never leaves native code for its reads, a
+// polymorphic inline caches are (jitPolySeenOp, ssa.PropertyCase): a loop
+// over four kinds of object then never leaves native code for its reads, a
 // method's or a field's. A fifth leaves for Go; a prototype's property
-// changed is read again, and one a nearer prototype comes to have fails
-// that one's shape check. Each answer is the interpreter's.
+// changed is read again, and one a nearer prototype comes to have fails that
+// one's shape check. Each answer is the interpreter's.
 func TestJITSSAPolymorphicReads(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -5038,7 +5037,8 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 
 // A native call whose callee left native code, which Go finished, goes on
 // in its caller's code after the call, where the callee would have
-// returned to (runSSA's resume), as V8's lazy deoptimization leaves the
+// returned to (jitRegStretch's resume), as V8's lazy deoptimization leaves
+// the
 // caller's frame alone: s, t and p, live across the call in registers and
 // a keep cell, are as they were: tick, whose loop keeps it from being
 // inlined, leaves at its addition of an object, L, whose conversion Go
@@ -5069,7 +5069,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 		}
 	}
 	// Rounds enough for the code to settle: each deoptimization has it
-	// compiled again once a round has spent its budget (jitTierUp).
+	// compiled again once a round has spent its budget (jitRegWarmUp).
 	resumedLate := uint64(0)
 	for i := range 9 {
 		wv, err := want.Run(compileForTest(t, src))
@@ -5217,8 +5217,8 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 
 // A function whose reads meet new shapes for as long as it runs, one read
 // after another, deoptimizes at each, its code invalidated, and is compiled
-// again only once the existing tiers have spent their budget, its caches'
-// feedback settled meanwhile (jitTierUp): at most once a phase, however
+// again only once the interpreter has spent its budget, its caches'
+// feedback settled meanwhile (jitRegWarmUp): at most once a phase, however
 // many of the phase's calls meet the new shape, and still native after
 // its 36 phases, within its deoptimizations' limit (jitMaxDeopts). Its
 // answers are the interpreter's.
@@ -5281,11 +5281,11 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 
 // A read whose receivers turn out to be of several shapes, met one after
 // another, deoptimizes at a new one, as V8's map checks do, its code
-// invalidated, and is compiled again once the existing tiers have spent
-// their budget, its cache's feedback settled meanwhile (jitTierUp): once
+// invalidated, and is compiled again once the interpreter has spent its
+// budget, its cache's feedback settled meanwhile (jitRegWarmUp): once
 // for them all where an invocation meets them all, no more often than the
 // new shapes in any case; the code then reads each natively. So too where the
-// code runs called natively, its exits Go's to finish (jitFinishExit):
+// code runs called natively, its exits Go's to finish (jitRegFinishLevel):
 // many calls at, which reads one.
 func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 	if !jitSSABackend {
@@ -5350,7 +5350,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 			// interpreter before its back edges have spent the budget, and
 			// one compile takes them all. Called natively, at's budget, as
 			// many invocations as a runtime compiling at the first call
-			// waits for, one (jitTierBudget), is spent at its next call,
+			// waits for, one (jitRegBudget), is spent at its next call,
 			// before that meets the next shape: a compile for each, as V8's
 			// would be at such a threshold.
 			if max := map[string]uint64{"sum": 1, "at": 3}[c.fn]; compiles == 0 || compiles > max {
@@ -5362,7 +5362,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 
 // A method call whose read has met objects of several classes, its cache
 // polymorphic, is decided when its function's code is first compiled to
-// call natively each method the cache found (jitSeenCallees): its entry's,
+// call natively each method the cache found (jitRegSeenCallees): its entry's,
 // those it keeps for other shapes, and those it had before. Typescript's
 // Symbol.prototype.visible, whose this.isType() and this.isMember() a
 // subclass each overrides, had inlined one -- the entries for other shapes
@@ -5421,7 +5421,7 @@ func TestJITSSASeedsPolymorphicMethodCalls(t *testing.T) {
 
 // A method call compiled for one class's method that meets another's
 // calls natively, from its next compile, every method its read has met by
-// then (jitSeenTargets), as V8's call feedback holds a polymorphic call's
+// then (jitRegSeenCallees), as V8's call feedback holds a polymorphic call's
 // targets: one compile for them all, rather than an exit, and a compile,
 // for each. sumKinds is compiled while only Sym's objects reach it, then
 // meets three subclasses' overrides at once.
@@ -5519,10 +5519,10 @@ func TestJITGenericCallsCompileTheirCallees(t *testing.T) {
 // A class compiled to ES5 calls its parent's constructor through the
 // parent its function captured, _super.call(this, ...): the call is
 // decided when the constructor's code is first compiled, the parent read
-// from the captured binding now (jitViaRead, jitChainValue), and made
+// from the captured binding now, and made
 // natively from then on -- and, where the parent has no code to call, its
 // code dropped to make room, the parent compiled again for native callers
-// at the call (jitCallTarget), where Go had made the call at each
+// at the call (jitRegKnownCallee), where Go had made the call at each
 // construction from then on. Typescript's AST called ASTSpan so, and its
 // subclasses theirs, through Go, 160,000 times a run.
 func TestJITCallsThroughCapturedParents(t *testing.T) {
@@ -5578,13 +5578,13 @@ func TestJITCallsThroughCapturedParents(t *testing.T) {
 // A call through Function.prototype.call of a parent with no code when the
 // call is decided -- its compile put off for want of room (jitEntry's
 // deferred) -- is made natively all the same, through the parent's link
-// (jitNativeOrLinked), as any call is, and the parent compiled at the
+// as any call is, and the parent compiled at the
 // call once it may be: decided so, it had been Go's for good, the
 // caller's code never compiled again for it -- Typescript's
 // BinaryExpression's, ASTList's and IdentifierToken's constructors' calls
 // of their parents, 30,000 a run each. AST's call is decided as its code
-// is first compiled (jitSeedBuiltin), Leaf's, of a parent its read does
-// not say, at the call's exits (jitCallSeen).
+// is first compiled (regCallSites), Leaf's, of a parent its read does
+// not say, at the call's exits (jitRegViaSeen).
 func TestJITCallsThroughParentsWithoutCode(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -5634,8 +5634,8 @@ func TestJITCallsThroughParentsWithoutCode(t *testing.T) {
 	}
 }
 
-// A construction the existing tiers have made is decided when a function's
-// code is first compiled, as a call is (jitSeedCalls), once its
+// A construction the interpreter has made is decided when a function's
+// code is first compiled, as a call is (regCallSites), once its
 // constructor has code: mk1 learns new V from its exits, which compiles V
 // for native callers; mk2's first code then makes it natively, from a
 // pool, V inlined, without being compiled again for it.
@@ -5849,8 +5849,8 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 	}
 }
 
-// An assignment to a global native code does not write leaves for Go
-// (jitHost), as the interpreter makes it, and the function around it
+// An assignment to a global native code does not write leaves for Go,
+// which makes it as the interpreter does, and the function around it
 // compiles: DeltaBlue's drivers assign planner = new Planner(), then
 // build their constraints in loops. A global var, a script's let, a name
 // never declared (sloppily made a global), strictly the same (an assigned
@@ -5973,7 +5973,7 @@ func TestJITSSAWritesGlobals(t *testing.T) {
 
 // Every level of native calls Go finishes after the innermost left native
 // code goes on natively where its call returns to, not only the outermost
-// (jitUnwindNative, runSSAIn): top calls mid natively, which calls leaf,
+// (jitRegUnwind, jitRegGoOnAt): top calls mid natively, which calls leaf,
 // whose loop adds an object, which Go converts; Go finishes leaf, then mid
 // goes on in its native code, in its own context,
 // then top. A throw from leaf, and a frame of a construction, are made as
@@ -6193,7 +6193,7 @@ func TestJITSSAContextsGrow(t *testing.T) {
 // method gets its receiver; recursion goes as deep as there are contexts
 // (jitContexts, more once it needs them), then through Go. A callee that leaves native code -- for
 // a builtin, a throw the caller catches, a speculation that fails -- has
-// its frame and its callers' made by Go (jitUnwindNative), which finishes
+// its frame and its callers' made by Go (jitRegUnwind), which finishes
 // them. Each answer is the interpreter's.
 func TestJITSSANativeCalls(t *testing.T) {
 	jitNoLoopInlineForTest(t)
@@ -6416,7 +6416,7 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 
 // The collector may begin marking while a native callee runs, at a call
 // of Go it makes: its calls of Go are the callee's to be judged by
-// (jitCalleeProfit), its constructions after it native all the same, as
+// (jitRegCalleeProfit), its constructions after it native all the same, as
 // they had been Go's (markingCall), and not counted. Here mid, called
 // natively, calls parseInt, a call of Go at which marking begins, then
 // constructs a P: mid counts its 600 calls of parseInt alone. The answer is
@@ -6607,7 +6607,7 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Rounds enough for f to settle, each deoptimization compiled again
-		// for once a round has spent its budget (jitTierUp); the last but
+		// for once a round has spent its budget (jitRegWarmUp); the last but
 		// one with the collector idle, which the last, marking, leaves
 		// native code no more often than -- a pool run out leaves at its
 		// construction either way, for Go to fill it.
@@ -6639,10 +6639,10 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 
 // A call that calls several functions calls each natively, up to
 // jitCallTargets, as V8's polymorphic call feedback does: one more leaves
-// for Go. A callee with no loop, which Go would not enter (LowerSSA), is
-// compiled for its native callers alone (LowerSSAInline); leaf's calls keep
-// it from being inlined. One that leaves
-// native code on too many of its calls (jitUnwindShare) is called by Go
+// for Go. A callee with no loop is compiled as any function is
+// (compile.LowerReg), for Go to enter and native callers both; leaf's
+// calls keep it from being inlined. One that leaves native code on too
+// many of its calls (jitUnwindShare) is called by Go
 // again. And Go finishes native calls that left native code inside native
 // calls of frames it is finishing, its unwinds nested. Each answer is the
 // interpreter's.
@@ -6711,9 +6711,8 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 			if n := calledNatively() - polyCalls; len(entry("poly").nativeCalls) != 4 || n != 400 {
 				t.Fatalf("poly called its four callees natively %d times of 400", n)
 			}
-			// Compiled for native callers alone: the stack form's code so
-			// (ssaCallee, LowerSSAInline); the register form compiles a
-			// function with no loop as any other.
+			// A function with no loop is compiled as any other
+			// (compile.LowerReg), not for native callers alone.
 			leaf := jitPortNamed(r, "leaf")
 			if e := jitPortCode(r, leaf); e == nil || entry("useLeaf").ssaStats.hosts != leafHosts {
 				t.Fatalf("leaf, with no loop, was not called natively: %+v", e)
@@ -6845,10 +6844,9 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 	}
 }
 
-// A native callee with no loop, which Go does not compile (LowerSSA) and
-// only native callers call natively (LowerSSAInline), dropped by the cache,
-// is compiled for them again at the first call Go then makes for them
-// (abi.ExitEnter, jitEnterCallee): its callers' code would otherwise leave
+// A native callee with no loop, dropped by the cache, is compiled for its
+// native callers again at the first call Go then makes for them
+// (jitRegKnownCallee): its callers' code would otherwise leave
 // for Go at each call from then on, which had been most of EarleyBoyer's
 // slow runs (sc_assq, one_way_unify1_nboyer).
 func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
@@ -6883,9 +6881,8 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 		run("warm-up")
 	}
 	leafCl, callerCl := jitPortNamed(r, "leaf"), jitPortNamed(r, "useLeaf")
-	// Compiled for native callers alone: the stack form's code so
-	// (ssaCallee, LowerSSAInline); the register form compiles a function
-	// with no loop as any other, for Go to enter and native callers both.
+	// A function with no loop is compiled as any other (compile.LowerReg),
+	// for Go to enter and native callers both.
 	callee := func(e *jitEntry) bool { return true }
 	e, caller := jitPortCode(r, leafCl), jitPortCode(r, callerCl)
 	if e == nil || !callee(e) || caller == nil || !slices.Contains(jitPortLinks(r, callerCl), jitPortLink(r, leafCl)) {
@@ -6963,7 +6960,8 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 				t.Fatalf("%s calls nothing natively: %+v", tc.caller, e)
 			}
 			// Its callees left native code at every call so far, which may
-			// have made Go stop entering it (jitSSAProfit): it does again.
+			// have made Go stop entering it (jitRegStretchWork): it does
+			// again.
 			e.entrySlow, e.ssaStats = false, jitSSAStats{}
 			for _, x := range e.nativeCalls {
 				if x.cl == nil {
@@ -7145,7 +7143,8 @@ func jitCalleeContextsKeepNothing(t *testing.T) {
 	}
 }
 
-// A string constant is pushed by Go (jitHost), and a throw left to the
+// A string constant is read natively (jitRegFeedback's StringCell), and a
+// throw left to the
 // interpreter, which throws it, as V8's code calls its runtime to throw: a
 // function with either, a message it throws on a cold path most often,
 // compiles, and its loop after the constant runs natively, not in the
@@ -7587,7 +7586,7 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 // V8's polymorphic stores keep a map and a transition for each: it notes,
 // after Go made it at an exit, what the site's cache found (an own
 // property, or the transition the property was added along), and the code
-// is compiled again with them (jitPolyWriteSeen). adds puts s on objects
+// is compiled again with them (jitRegWriteSeen). adds puts s on objects
 // of four shapes, as DeltaBlue's Constraint puts strength on its
 // subclasses' receivers; writes stores p5 into objects of two shapes, past
 // the eight properties native code searches a table for, as RayTrace's
@@ -7998,7 +7997,7 @@ func TestJITSSACallSavesReuseSlots(t *testing.T) {
 // run, and its construction there decided then: once the branch runs, f
 // is compiled again only for the branch's property reads, which knew no
 // shape -- not for the construction, learned at its call, a compile of
-// its own (jitCalleeAt; every construction of DeltaBlue's had cost one).
+// its own (every construction of DeltaBlue's had cost one).
 // Each answer is the interpreter's.
 func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 	t.Parallel()
@@ -8375,8 +8374,8 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 	}
 }
 
-// A compile reads its sites' stack depths (jitKnownReceiver, chainSite,
-// Intrinsic) from the program it compiles, not from the function lowered
+// A compile reads its sites (jitRegFeedback's Intrinsic) from the program
+// it compiles, not from the function lowered
 // again for inlining: blocks, whose method reads have no feedback yet, is
 // lowered once, as a function on its own. Lowered for inlining too, a
 // function kept both programs as long as its code lived: RegExp's run
@@ -8552,7 +8551,8 @@ func TestJITSSAReadsWhatIsNotANumber(t *testing.T) {
 }
 
 // Code a native call runs has Go make the calls it has no native code for
-// (jitGoCallNested), as code at a run's own level does, and goes on: inner,
+// (jitRegGoCallNested), as code at a run's own level does, and goes on:
+// inner,
 // called natively by mid, called natively by top, calls probe, a Go
 // function, and String; it had left native code at every such call, and
 // Go had finished each level. While a call runs, each level has a frame,
@@ -8767,7 +8767,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 // probe takes there -- probe, a Go function, at each of those calls and
 // between them -- and every Error's stack a callback of map's takes from
 // m ("at P.m", "at Q.m") is the interpreter's. (Each callee works around its
-// calls, so that it pays: jitCalleeProfit.)
+// calls, so that it pays: jitRegCalleeProfit.)
 func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -8928,7 +8928,7 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 }
 
 // A built-in a call of Go calls is called as callDirect calls one
-// (jitCallMade), without its other cases first: its frame for a stack
+// (jitRegNativeMade), without its other cases first: its frame for a stack
 // trace -- a RangeError's from String.prototype.repeat, through a native
 // callee -- the memory meter charged for its result as callDirect charges
 // it, and a bound function, Math.max and Function.prototype.call still
@@ -9066,7 +9066,7 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 // at the loop's header, in the new code; a throw goes to the caller's
 // catch. Each answer is the interpreter's, and native code runs the
 // iterations after a leave. (loop does work around its calls, so that it
-// pays: jitSSAProfit.)
+// pays: jitRegStretchWork.)
 func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -9088,8 +9088,8 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 					return Int(1), nil
 				}
 				cl := rt.global.getOwn(rt.atoms.intern("loop")).value().Object().fn().closure
-				// Compiled again for what it learned, as the stack form's
-				// jitReoptimize does under the call (jitRegReoptimize).
+				// Compiled again for what it learned, as under the call
+				// (jitRegReoptimize).
 				if e := jitPortRegEntry(rt, cl); e != nil && e.code != nil {
 					rt.jitRegReopt(cl, e)
 					if ne := rt.jitRegReoptimize(cl, cl.reg, e, -1); ne != nil && ne != e {
@@ -9146,7 +9146,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 // pinned), root's own call of Go has leaf compiled again, and root calls
 // leaf again, now in its new code, which calls Go, its new code pinned --
 // under which leaf is not compiled again, a native call being in it
-// (otherwiseInUse). The code each call returns to -- pinned -- stays open
+// (jitRegLearnedDue). The code each call returns to -- pinned -- stays open
 // until root's native code leaves; code leaf was compiled again for in
 // between, which nothing ran since, is closed when replaced. Each answer
 // is the interpreter's.
@@ -9694,7 +9694,7 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	// Rounds enough for f to settle: what its inlined callees' sites met
 	// it is compiled again for once a round has spent its budget
-	// (jitTierUp).
+	// (jitRegLearnedDue).
 	for i := range 9 {
 		wv, err := want.Run(compileForTest(t, `String(f(300))`))
 		if err != nil {
@@ -9785,7 +9785,8 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 		}
 		if src == `String(late(400))` && i == 14 {
 			// Its literal first met after the code was compiled: compiled
-			// again once Go made the fields' transitions (jitDefineSeen).
+			// again once Go made the fields' transitions (jitRegFeedback's
+			// Define).
 			e := jitPortCode(r, late)
 			if e == nil || e.entrySlow || e.ssaStats.hosts-lateHosts > 2 {
 				t.Fatalf("late leaves native code at its literal: %+v", e)
@@ -9809,7 +9810,7 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 // A string constant is read natively, from a cell the code keeps it in
 // (jitFeedback.StringCell), its pointer word there: compared, stored in a
 // property and an array literal, passed to a native call, returned. Go had
-// pushed each one (jitHost), leaving native code at every push. Each
+// pushed each one, leaving native code at every push. Each
 // answer is the interpreter's.
 func TestJITSSAStringConstants(t *testing.T) {
 	if !jitSSABackend {
@@ -10207,8 +10208,8 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 // its caller before initialize's stores had run in Go -- leaves at each
 // such site, and its cache learns the shape there. As V8 optimizes again
 // once it has the feedback it lacked, the caller is compiled again for it
-// (jitFinishExit), and does not count those exits against inlining the
-// callee (jitShapeMiss): before, sixteen of them stopped it, and every
+// (jitRegInlineLeft), and does not count those exits against inlining
+// the callee (jitRegShapeMiss): before, sixteen of them stopped it, and every
 // construction then left native code. Each answer is the interpreter's.
 func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 	t.Skip("register JIT gap: an inlined callee's deoptimization does not have its caller compiled again for what it learned (docs/performance-plan.md, the register JIT's remaining gaps)")
@@ -10440,7 +10441,7 @@ func TestJITSSATypeOf(t *testing.T) {
 
 // A guard's exit Go has no entry to go on natively after leaves the rest
 // of its loop's iteration to the interpreter, which goes on natively at the
-// header, in the same run (jitGoOn): one read of a primitive in a
+// header, in the same run (jitRegLeaveTo): one read of a primitive in a
 // thousand iterations leaves once, and the loop's stretches go on. Code
 // that leaves so at every other iteration does the same each time, and is
 // never compiled with an entry where Go went on: as V8's code, it is

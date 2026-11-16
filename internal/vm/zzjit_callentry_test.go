@@ -11,9 +11,9 @@ import (
 // enters it, though register code's start is no place to make them so
 // (ssa.Func's StartOnly, false for register code): its call entry makes
 // them undefined (mir's callEntry), and Go, which runs a callee with no
-// call entry from its start (abi.ExitEnter), does (jitStartLocals) -- no
-// call writes them now. Each callee here reads such a local before it assigns it, in a
-// frame where the call before wrote its third argument, the same slot,
+// call entry from its start (abi.ExitEnter), does so too -- no call
+// writes them now. Each callee here reads such a local before it assigns it,
+// in a frame where the call before wrote its third argument, the same slot,
 // past the VM's stack's top: left as it was, it reads 777.
 func TestJITCallEntryClearsLocals(t *testing.T) {
 	jitNoLoopInlineForTest(t)

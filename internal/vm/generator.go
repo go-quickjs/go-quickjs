@@ -229,8 +229,8 @@ type asyncRequest struct {
 // suspendSignal is returned by the interpreter when a generator yields.
 //
 // It travels as an error so that the existing return path carries it, but it is
-// deliberately not a *Thrown, so the handler search in unwindToHandler ignores
-// it and a try/catch inside a generator cannot swallow a yield.
+// deliberately not a *Thrown, so the handler search (regCatch) ignores it
+// and a try/catch inside a generator cannot swallow a yield.
 type suspendSignal struct {
 	value Value
 	// await marks a suspension caused by `await` rather than `yield`.

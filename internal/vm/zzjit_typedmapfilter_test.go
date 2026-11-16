@@ -58,7 +58,7 @@ const typedMapFilterSetup = `
 // makes before the loop, where the species is the type's own constructor
 // as it was made, each callback's result stored in it as a number
 // (OpElemWrite) -- anything else Go's to convert and store, the loop going
-// on from there in Go (jitLoopFinish); filter's elements kept appended to
+// on from there in Go (jitRegLoopFinish); filter's elements kept appended to
 // an Array, of which Go makes the typed array after the loop, as the
 // method makes it then. Each answer is the interpreter's, and mapTwice's
 // and filterOdd's loops neither leave their code nor call their callbacks

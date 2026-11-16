@@ -34,7 +34,7 @@ const cursorSetup = `
 
 // A native callee's cursors -- for...of's, for...in's, an array pattern's
 // -- are its frame's operands, which Go steps from native code on the
-// frame of its level (jitGoCallNested), or native code steps itself over
+// frame of its level (jitRegGoCallNested), or native code steps itself over
 // an array; where the callee leaves, Go makes its frame with the cursor in
 // it, which a throw's unwinding or a return closes as the interpreter's.
 // Such callees -- 75 of npm's own code -- had been refused for native

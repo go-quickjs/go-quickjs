@@ -3,18 +3,16 @@
 package vm
 
 // Native code's call of RegExp.prototype's exec or test (zzz_regexpleaf.go)
-// on a RegExp that is no literal's is learned to be a leaf's at the call of
-// Go that makes it, once a site, and compiled next a leaf's call of Go of its
-// own (ssa.GoLeaf), made through the VM's routine for leaves without a
-// frame, as jitLeafSeen learns the leaves jitGoCallPlain makes. A literal's
-// call stays a call of Go, which gives the literal's pool its RegExp back
-// (jitRegExpLitPool).
+// is compiled a leaf's call of Go of its own (ssa.GoLeaf), made through the
+// VM's routine for leaves without a frame, where its site's cache holds the
+// built-in at the compile (jitRegFeedback's Leaf). A literal's call is one
+// too, its RegExp taken from the literal's pool, to which the leaf gives it
+// back (jitRegExpLeafGive).
 //
-// The functions are generic, instantiated with struct{} alone, and called
-// where jitRegExpLitPool's call of jitRegExpLitPC was: its code grows by
-// the dictionary and the runtime, within the padding that rounds it to 32
-// bytes, and every function and closure of the package stays at its
-// address (go tool nm).
+// The functions are generic, instantiated with struct{} alone: Go lays a
+// generic function's instantiations out after every function and closure of
+// the package, so that every function and closure stays at its address (go
+// tool nm).
 
 // jitRegExpNativeCheck is the check native code's leaf's call of exec or
 // test, op, asks (regexpNativeChecks), which passes on a global or a sticky

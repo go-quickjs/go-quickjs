@@ -106,9 +106,8 @@ func jitPortCallPCs(r *Runtime, cl *closure) []int {
 	return pcs
 }
 
-// jitPortDrop drops cl's function's code in r as the cache drops code to
-// make room -- the stack form's entry (dropEntry), or the register code
-// (regLetGo) -- and reports whether it had code to drop.
+// jitPortDrop drops cl's function's register code in r as the cache drops
+// code to make room (regLetGo), and reports whether it had code to drop.
 func jitPortDrop(r *Runtime, cl *closure) bool {
 	s := r.jit
 	if s == nil {
@@ -199,9 +198,9 @@ func jitPortValid(r *Runtime, cl *closure) bool {
 	return e != nil && e.code != nil && !e.invalid
 }
 
-// jitPortEntryPCs is where cl's code may be entered: by its stack
-// bytecode's pcs (jitEntryPCs), or by its register code's, each one
-// whose lowering's first instruction the code has an entry at.
+// jitPortEntryPCs is where cl's code may be entered: its register code's
+// pcs, each one whose lowering's first instruction the code has an entry
+// at.
 func jitPortEntryPCs(r *Runtime, cl *closure) []int {
 
 	e := jitPortRegEntry(r, cl)
@@ -215,9 +214,8 @@ func jitPortEntryPCs(r *Runtime, cl *closure) []int {
 }
 
 // jitPortLoopHeaders is cl's start and its loops' headers, in order: the
-// targets of its stack bytecode's backward jumps (jitLoopHeadersOf), or
-// the headers of the loops its register code was compiled with entries
-// at (jitRegEntry's loops), by register pc.
+// headers of the loops its register code was compiled with entries at
+// (jitRegEntry's loops), by register pc.
 func jitPortLoopHeaders(r *Runtime, cl *closure) []int {
 
 	pcs := []int{0}

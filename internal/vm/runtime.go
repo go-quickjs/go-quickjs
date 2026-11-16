@@ -502,7 +502,7 @@ type Realm struct {
 	// with callIntrinsic1.
 	hasInstanceFn, regexpExecFn *Object
 	// applyFn is Function.prototype.apply, which a call of apply given a
-	// function's own arguments stands in for; see applyArguments.
+	// function's own arguments stands in for; see regApplyArgs.
 	applyFn *Object
 	// callFn is Function.prototype.call, whose calls callDirect makes
 	// itself; see callThrough.

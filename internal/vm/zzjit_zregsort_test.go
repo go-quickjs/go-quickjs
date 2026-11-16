@@ -141,7 +141,8 @@ func testJITRegSortNative(t *testing.T) {
 
 // An exit from a sort register code makes natively, anywhere in it --
 // here a back edge's budget run out, or a deoptimization of QJS_JIT_STRESS's
-// -- has Go sort the array again from the first, as it was (jitLoopFinish):
+// -- has Go sort the array again from the first, as it was
+// (jitRegLoopFinish):
 // every answer is still the interpreter's.
 func TestJITRegSortRestarts(t *testing.T) {
 	if !jitSSABackend {

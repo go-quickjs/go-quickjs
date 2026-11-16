@@ -158,8 +158,8 @@ func rhIterClose(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) 
 
 // rhIterCloseThrow is iter_close_throw.
 func rhIterCloseThrow(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
-	// As closeIteratorsIn closes a cursor an exception leaves: what its
-	// return method throws is dropped.
+	// A cursor an exception leaves is closed, and what its return method
+	// throws is dropped.
 	r := st.r
 	st.at(pc)
 	cur := cursorOf(regs[w.B()])

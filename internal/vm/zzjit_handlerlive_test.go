@@ -8,7 +8,7 @@ import "testing"
 // their try statements assign before and after the call that throws, from
 // an inlined callee, a native call or a call Go makes, in nested try
 // statements and loops: what a handler reads is live wherever it is in
-// force, and only that (compile's liveLocals) -- every exit inside a try
+// force, and only that (compile's liveRegs) -- every exit inside a try
 // writes those locals, whose values the handler, run by the interpreter or
 // natively, reads; a local the handler does not read, dead past its
 // iteration's try, is no frame state's past it.

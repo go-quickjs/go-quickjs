@@ -12,11 +12,10 @@ package vm
 // against the margin below maxStringLength, and making the string calls
 // nothing and throws nothing.
 //
-// It is generic, instantiated with struct{} alone, and called where
-// jitGoAdd's call of add was: Go lays a generic function's
-// instantiations out after every function and closure of the package (see
-// zzz_direct.go), and jitGoAdd's code grows within the padding that rounds
-// it to 32 bytes.
+// It is generic, instantiated with struct{} alone, and called where jitGoAdd's
+// call of add was: Go lays a generic function's instantiations out after every
+// function and closure of the package (docs/optimizing.md, "The layout lock"),
+// and jitGoAdd's code grows within the padding that rounds it to 32 bytes.
 
 // jitAddHook is a + b, of primitives jitGoAdd has checked: a number and a
 // string concatenated, and anything else as add makes it.

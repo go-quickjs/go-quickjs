@@ -87,9 +87,9 @@ const forEachSetup = `
 
 // A forEach on an array is a loop of the caller's native code (ssa's
 // forEachCall), its callback called natively, where Go had made every
-// forEach and run its callbacks in the tree tier; what the loop's checks
+// forEach and run its callbacks in the interpreter; what the loop's checks
 // find -- a hole, an element past the array's end now, a callback that
-// leaves -- Go goes on with from that index (jitLoopFinish), as V8's
+// leaves -- Go goes on with from that index (jitRegLoopFinish), as V8's
 // builtin continuation frames do. Each answer is the interpreter's, and
 // sums, whose loop meets none of it, neither leaves its code nor calls Go.
 func TestJITForEachLoop(t *testing.T) {
@@ -138,7 +138,7 @@ func TestJITForEachLoop(t *testing.T) {
 
 // A callback that leaves native code where the loop's code cannot go on
 // after its call -- invalidated meanwhile -- has Go go on with the loop
-// from the index after the callback's (jitLoopFinish's after), the
+// from the index after the callback's (jitRegLoopFinish's after), the
 // callback called once for each element: each answer is the
 // interpreter's.
 func TestJITForEachAfterCallback(t *testing.T) {
@@ -260,8 +260,8 @@ const afterCallbackSetup = `
 
 // stackSetup's throws throws from its forEach's callback, which leaves
 // native code there, Go making the frames of the levels native code had
-// (jitUnwindNative); undefinedCall's callback calls a global that is not
-// there, a call of Go from the native callback (jitGoCallNested); both
+// (jitRegUnwind); undefinedCall's callback calls a global that is not
+// there, a call of Go from the native callback (jitRegGoCallNested); both
 // from a driver's loop, natively.
 const stackSetup = `
 	var nums = [1, 2, 3]
@@ -280,7 +280,7 @@ const stackSetup = `
 // A stack trace taken in a callback of a forEach native code makes a loop
 // of shows the forEach's frame, "at Array.forEach", where Go's forEach
 // has it -- the frame Go makes between the loop's level and its callee's
-// (jitPushLoopFrame) -- as the interpreter's trace does; and, in a loop Go
+// (jitRegPushLoopFrame) -- as the interpreter's trace does; and, in a loop Go
 // goes on with after a hole (holeStack), its caller's frame at the call,
 // past it, as the interpreter's is during one.
 func TestJITForEachStackTrace(t *testing.T) {
@@ -339,7 +339,8 @@ const reduceSetup = `
 // A reduce on an array is a loop of the caller's native code, as a
 // forEach is (ssa's forEachCall), its accumulator a slot of the loop's
 // that each callback's result replaces; what its checks find, Go goes on
-// with from the index, the accumulator as the loop had it (jitLoopFinish).
+// with from the index, the accumulator as the loop had it
+// (jitRegLoopFinish).
 // Each answer is the interpreter's, and sumInit's loop neither leaves its
 // code nor calls Go.
 func TestJITReduceLoop(t *testing.T) {

@@ -70,14 +70,14 @@ func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
 // each calling others natively and compiled again as it learns, a run
 // gives what the interpreter gives, and every function's link calls the
 // code of the entry the cache holds. Before, the cache dropped the entry a
-// compile for native callers was being made for (jitNativeCallee made room
-// before it was busy), whose code its link then called with nothing to keep
-// it; Go ran code the cache had dropped since it was found (runSSAIn); a
+// compile for native callers was being made for (jitRegNativeCallee made
+// room before it was busy), whose code its link then called with nothing to
+// keep it; Go ran code the cache had dropped since it was found; a
 // function was compiled again while a native call of it had not returned,
 // which then returned into the new code's place, or had its frame read by
-// the new code's entry (otherwiseInUse); and a native callee's caller went
+// the new code's entry; and a native callee's caller went
 // on at the place the old code had returned to in new code put there
-// (jitUnwindNative): Octane's Typescript failed, a different way each run.
+// (jitRegUnwind): Octane's Typescript failed, a different way each run.
 func TestJITEvictionKeepsRunningCode(t *testing.T) {
 	// Leaves the JIT refuses on their own -- property reads, no loop --
 	// which it compiles for the native callers it then meets: each

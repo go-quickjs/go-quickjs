@@ -12,7 +12,7 @@ import (
 
 // A construction with a class whose constructor is the one a class without
 // one has -- super(...args), no fields -- is made natively as a
-// construction with the class it extends (jitDerivedBase), as V8 skips a
+// construction with the class it extends (jitRegDerivedBase), as V8 skips a
 // default derived constructor: its object made as the derived class makes
 // one, its prototype the derived class's, the parent's body run on it.
 // The call checks the class still extends that parent: made to extend
@@ -543,8 +543,8 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 // Super) -- never inlined in it: the frame a super() constructs with is
 // the parent's own, its this the instance's binding, its function the
 // running one's prototype. A parent its code may inline with the calls it
-// makes (jitInlinesCalls) was taken for one of the native calls a compile
-// again inlines (jitInlineNativeCalls), its super() then made by Go at an
+// makes was taken for one of the native calls a compile again inlines,
+// its super() then made by Go at an
 // exit each time, its target no native call of the code's: in AWFY's
 // DeltaBlue, a UnaryConstraint's super() of AbstractConstraint, which
 // calls Strength.of, at every construction; here Abs calls norm. Each round agrees with the
@@ -607,7 +607,7 @@ func TestJITDerivedSuperNotInlined(t *testing.T) {
 // callee's frame; one made before super() shares a binding not yet
 // initialized, which only a frame of the VM's has, and its making leaves
 // native code, Go finishing the construction. A constructor whose arrows
-// all come after its super()s (jitArrowBeforeSuper) has its super() made
+// all come after its super()s (jitRegArrowBeforeSuper) has its super() made
 // natively, and Go, making an arrow on a frame it entered the code with,
 // binds the frame's this as that super() bound it (jitBindThis). Each
 // arrow, called later, reads the this its constructor bound -- and one

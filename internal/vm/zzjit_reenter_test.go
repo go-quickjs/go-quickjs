@@ -44,7 +44,7 @@ func jitLongRunForTest(t *testing.T, setup, warm, src string) (string, JITStats)
 // A long invocation whose loop fails a guard its code was compiled with
 // goes on in code compiled again for what failed, its old code invalidated,
 // entered at a loop's back edge once the interpreter has spent the budget
-// (jitTierUp), as V8 enters code optimized again by on-stack replacement:
+// (jitRegWarmUp), as V8 enters code optimized again by on-stack replacement:
 // the run that left is no run of the code while the interpreter goes on
 // with its frame. Counted one, the code had been entered again as it was,
 // failing again at every back edge the interpreter offered it, each
@@ -72,7 +72,7 @@ func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
 
 // An element read compiled before it ran, as a number for an addition
 // with no feedback yet, that meets a string learns at the deoptimization
-// that it reads a string's character (jitIndexSeen), as a host exit does,
+// that it reads a string's character (jitRegIndexSeen), as a host exit does,
 // and is compiled so next, where the compiles that made it generic a guard
 // at a time had taken one each -- an array's element as a number, then as
 // it is, then a string's. PDF.js's font decryption builds a string in one
@@ -108,7 +108,7 @@ func TestJITStringReadLearnedAtDeopt(t *testing.T) {
 
 // An element read an append takes is read as it is from the first compile,
 // so it meets a string at a host exit, not a guard, and is compiled for one
-// on the budget of what code learns there (jitLearnedDue): a few hundred
+// on the budget of what code learns there (jitRegLearnedDue): a few hundred
 // exits, however long the string, about what a guard's failure and the compile
 // it asks for cost.
 func TestJITStringReadLearnedAtHostExit(t *testing.T) {
@@ -252,9 +252,9 @@ func TestJITGenericOperatorsAnswers(t *testing.T) {
 		out.join()`)
 }
 
-// A run whose frame Go goes on with in the interpreter (jitGoOn) -- code
+// A run whose frame Go goes on with in the interpreter (jitRegGoOn) -- code
 // judged not to pay (entrySlow), the rest of the invocation interpreted --
-// is no run of its code meanwhile (jitLeaveCode), as a deoptimized one is
+// is no run of its code meanwhile (jitRegLeaveTo), as a deoptimized one is
 // not: it goes on natively, if at all, at an entry of the code as it is
 // then, and the code may be compiled again for a run that begins
 // meanwhile. Counted, a run of PDF.js's font parsers had blocked their
@@ -319,13 +319,13 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 }
 
 // A frame native code made -- a native call's callee -- whose code Go
-// finishes after it left at a PC with no entry (jitFinishExit) goes on in
-// the interpreter only to its loop's next header, and natively from there
-// (jitGoOn), as a frame Go entered the code with does: not in the
+// finishes after it left at a PC with no entry (jitRegFinishLevel) goes on
+// in the interpreter only to its loop's next header, and natively from there
+// (jitRegGoOn), as a frame Go entered the code with does: not in the
 // interpreter for the rest of its invocation, until the next back-edge
 // budget ran out. callee leaves at its one read of a primitive in one of
 // every five of caller's native calls of it -- leaving at more than one in
-// four, it would not be called natively (jitUnwound) -- and goes on
+// four, it would not be called natively (jitRegUnwound) -- and goes on
 // natively at its header each time. Each answer is the interpreter's.
 func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	if !jitSSABackend {

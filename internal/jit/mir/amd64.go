@@ -1930,7 +1930,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// receiver, the arguments -- written straight where the callee has
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
-	// result replaces them (the VM's jitCallResult).
+	// result replaces them (the VM's jitRegUnwind).
 	// But a callee that reads its arguments past its parameters is given
 	// all of them in its context (FrameArgs), copied from where the state
 	// keeps them.
@@ -2175,7 +2175,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	}
 	// A receiver written straight into the callee's context: one it reads,
 	// or a method call's, which a callee that does not read it has too --
-	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
+	// a frame Go makes for it (jitRegGoCallNested, jitRegUnwind) shows it
 	// in a stack trace, as the interpreter's does.
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	// Whether xScratch2 keeps the callee's frame's address (below).
@@ -3561,7 +3561,7 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 // next iteration's capture the new one. The frame Go entered the code
 // with has its cells open on its slots: one closed so is no longer, and
 // Go opens its new one there once native code has left it
-// (jitReopenRunCells). Anything else goes to slow, where Go makes them.
+// (jitRegReopenCells). Anything else goes to slow, where Go makes them.
 // It uses every scratch register, and xScratch0 and xScratch1.
 func (c *compiler) cellsClose(site *ssa.CallSite, slow amd64.Label) {
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
@@ -7202,7 +7202,7 @@ func (c *compiler) record(kind, pc, depth, site uint64, then *amd64.Label) {
 }
 
 // recordsTail applies an exit's records natively, as the VM's
-// jitApplyRecords does in Go, and returns, whether the collector marks
+// jitRegApplyRecords does in Go, and returns, whether the collector marks
 // (abi.Encoding's WriteBarrier) or not. It reads every value the records
 // write before writing any, since one may read a slot another writes: the
 // first pass (recordsRead) leaves each record's value in its Word and, for
@@ -7436,7 +7436,7 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 		}
 		c.storeImm(regCtx, abi.OffExitKind, abi.ExitReturn, scratchA)
 		// Where it returned from, roughly -- its block's PC -- for the work
-		// the stretch did (the VM's jitSSAProfit).
+		// the stretch did (the VM's jitRegStretchWork).
 		c.storeImm(regCtx, abi.OffExitSite, uint64(b.PC), scratchA)
 		if c.f.GenEntry {
 			// A generator a loop's step resumed natively finishes there

@@ -39,7 +39,7 @@ func refuse(pc int, why string) error { return &Refusal{PC: pc, Reason: why} }
 const hostOnly = "host operations without native loop or array work"
 
 // GeneratorResumable reports whether a loop's step may resume a generator
-// of fn by a native call of its code (the VM's jitGenCallable, ssa.Func's
+// of fn by a native call of its code (the VM's jitRegGenCallable, ssa.Func's
 // GenEntry): a synchronous generator whose body has no yield*
 // (bytecode.Function's HasYieldStar, which the compiler records) and so
 // no await, which only an async function's has, whose locals no closure
@@ -141,7 +141,7 @@ func argumentsOwn(fn *bytecode.Function) bool {
 // forwardsNatively reports whether fn's apply_arguments may hand on its
 // call's arguments as they were given (ir.Program's Forwards): not where a
 // mapped arguments object would alias a parameter the code, or a closure,
-// assigns, whose value it then hands on (the VM's applyArguments), and not
+// assigns, whose value it then hands on (the VM's regApplyArgs), and not
 // a generator's or an async function's, whose frame a resumption makes of
 // its own, no native call's.
 func forwardsNatively(fn *bytecode.Function) bool {

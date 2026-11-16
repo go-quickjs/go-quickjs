@@ -11,7 +11,8 @@ import (
 // given back for the next result, as the interpreter gives them back
 // (bigRelease): an operator's operand that is a fresh operator's result,
 // and the value of a local that holds its values alone, which the
-// result is stored over (ssa.CallSite's Release, the VM's soleLocals).
+// result is stored over (ssa.CallSite's Release, the VM's
+// regSoleRegisters).
 // The programs are the root package's TestBigIntGivenBack,
 // TestBigIntSoleLocalPending and TestBigIntSoleLocals: what is given back
 // and what may not be -- a value an array, a call, a string, a global, a

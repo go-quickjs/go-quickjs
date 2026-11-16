@@ -1056,7 +1056,7 @@ type Entry struct {
 	// instruction it ran (a host exit's, a call's): not a function's start,
 	// a loop's header, a handler, nor a place the lowering asks for (ir's
 	// Entries). Without it, Go goes on in the interpreter to the next loop
-	// header, as after a guard's exit (the VM's jitGoOn): escape analysis
+	// header, as after a guard's exit (the VM's jitRegGoOn): escape analysis
 	// drops one where it merges an object the code does not make with the
 	// slot it loads (escape.go).
 	Resume bool

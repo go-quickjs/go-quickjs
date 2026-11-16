@@ -57,9 +57,8 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 		t.Fatalf("f was not compiled again with an entry after its call at %d: %v", pc-1, cv.unresumed())
 	}
 	e = cv.e
-	// The stack form's frame goes on in the interpreter there once, where
-	// the entry is learned (jitGoOn); the register form's goes on in the
-	// code compiled again at once, from the call on (jitRegResumeSeen).
+	// The frame goes on in the code compiled again at once, from the call
+	// on (jitRegResumeSeen), not in the interpreter.
 	want := uint64(1)
 	if cv.reg != nil {
 		want = 0

@@ -200,7 +200,8 @@ func TestJITAccessorsNative(t *testing.T) {
 		{"scaleds", `scaleds(40)`, `scaleds(2000)`, false},
 	} {
 		// Warm until its caches' feedback has settled and its code, compiled
-		// again for it on the existing tiers' budget (jitTierUp), is valid.
+		// again for it on the interpreter's budget (jitRegLearnedDue), is
+		// valid.
 		for i := 0; i < 8; i++ {
 			if _, err := r.Run(compileForTest(t, c.warm)); err != nil {
 				t.Fatal(err)

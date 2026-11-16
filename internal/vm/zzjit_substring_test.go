@@ -118,7 +118,7 @@ const onceSetup = `
 
 // A loop run once, compiled once, makes its one-character charAt natively
 // from its first compile, known by its method's name on String.prototype
-// (jitFeedback's stringMethodRead): decode's 4,000 calls make no call of
+// (jitRegFeedback's Substring): decode's 4,000 calls make no call of
 // Go. A charAt of another object's, by the name, leaves the call's check
 // of its function, and is Go's once the call is generic: mimic's answer is
 // the interpreter's, with a few exits, not one at each call.

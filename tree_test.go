@@ -359,16 +359,16 @@ var treeScripts = []string{
 	 [count(100000, 0), pick(0), pick(1), pick(5)].join()`,
 	`function f(n) { var r = [], o = { valueOf() { r.push("v"); return 2 } }; for (var i = 0; i < n; i++) { while (i < o) { r.push("w" + i); i++ } r.push("i" + i) }
 	   var x = 0; do x += o; while (x < 7); r.push(x); return r.join() } f(5)`,
-	// A loop's comparison made in place (loopCmp), and where it is not of
-	// two numbers: a string, undefined, NaN, an object, a BigInt, and a
-	// bound that changes from a number to a string inside the loop.
+	// A loop's comparison, and where it is not of two numbers: a string,
+	// undefined, NaN, an object, a BigInt, and a bound that changes from a
+	// number to a string inside the loop.
 	`function f(n) { var r = []; for (var i = 0; i < n; i++) r.push(i); for (var j = 5; j >= 3; j--) r.push(j); for (var k = 0; k <= 2; k++) r.push("k" + k); return r.join() }
 	 function g(n) { var c = 0; for (var i = 0; i < n; i++) { c++; if (c > 5) break } return c }
 	 function h(n) { var c = 0, i = 0; while (i < n) { i++; c++; if (i == 2) n = "4" } return c + typeof n }
 	 [f(3), f("3"), f(undefined), f(NaN), f({ valueOf() { return 2 } }), f(2n), g(Infinity), g(-0), h(10)].join(" ")`,
-	// A step ending a loop's body, which the loop makes in place (tstep),
-	// of a number, a string, a BigInt, an object, undefined, and a local
-	// the body makes a string; by loopCmp and by loopW.
+	// A step ending a loop's body, of a number, a string, a BigInt, an
+	// object, undefined, and a local the body makes a string; in a for loop
+	// and in a while loop.
 	`function f(s) { var r = []; for (var i = s; i < 3; i++) r.push(typeof i + i); return r.join() }
 	 function g(s) { var r = [], i = s; while (r.length < 3) { r.push(typeof i + i); i-- } return r.join() }
 	 function h() { var r = []; for (var i = 0; i < 6; i++) { if (i == 2) i = "3"; r.push(typeof i + i) } return r.join() }

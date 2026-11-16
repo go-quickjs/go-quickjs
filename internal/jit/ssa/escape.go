@@ -15,7 +15,7 @@ import (
 // data names a materialized object: by a word no value has, its fields at
 // its home past the frame's slots (abi.VirtualBase), and Go makes the
 // object of them there, one for every slot naming it (the VM's
-// jitMaterialize), as V8's deoptimizer materializes it.
+// jitRegMaterialize), as V8's deoptimizer materializes it.
 //
 // An object is a pool's (abi.ObjectPool): an object literal's (CallSite's
 // Literal), or a construction's receiver whose constructor the code

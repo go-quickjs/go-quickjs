@@ -630,7 +630,8 @@ made of because of the places go-quickjs leads: strings and regular
 expressions over whole texts, which Go's runtime and the engine's matcher do
 well, and Splay's allocation-heavy setup.
 
-What the gap is made of:
+What the gap was made of at `acffb1aa`, in the stack design measured
+here:
 
 - **Dispatching instructions.** QuickJS's interpreter jumps straight from one
   instruction's code to the next, and the C compiler keeps the interpreter's
@@ -645,7 +646,7 @@ What the gap is made of:
   1.1 to 3.0 times over six loops of simple instructions (1.8 by their
   geometric mean), `empty_loop` and the extra tests `loop_sum`,
   `loop_arith`, `loop_locals`, `loop_elements` and `loop_props` run with
-  the tree tier off, `QJS_NOTREE=1`. Fusing common instruction sequences
+  the tree tier off (`QJS_NOTREE=1`, a switch removed with the tier). Fusing common instruction sequences
   into single instructions (`a[i]`, `a[++i]`, `x & 0xff`,
   `local * local`) reduces how many are dispatched. Nearly
   every function runs instead as trees of Go closures, a node for every few

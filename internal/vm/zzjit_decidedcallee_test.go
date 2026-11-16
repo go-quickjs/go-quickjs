@@ -11,7 +11,8 @@ import "testing"
 // calls Set.hasSome natively; Set.hasSome decides the call at its exits and
 // is compiled again, inlining nothing more itself (a loop calling what it
 // is given is inlined only where a closure is given it). That compile has
-// contains compiled again (jitCallersReopt), which now inlines Set.hasSome,
+// contains compiled again (jitRegCallersReopt), which now inlines
+// Set.hasSome,
 // Vector.hasSome and the closure, and does not make it.
 const decidedSetup = `
 	class Vector {

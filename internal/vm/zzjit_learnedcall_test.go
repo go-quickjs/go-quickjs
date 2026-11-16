@@ -12,8 +12,8 @@ import (
 // A callee Go does not enter itself (no loop), whose code, compiled before
 // it ran, left at each native call -- so that native callers stopped
 // calling it (notNative) -- and learned there what to be compiled for,
-// has each call Go makes of it count as an invocation of its budget
-// (jitLearnedCall), and is compiled again for it, native callers calling
+// has each call Go makes of it count as an invocation of its budget, and
+// is compiled again for it, native callers calling
 // it again. Before, nothing counted Go's calls of it, and every call was
 // Go's for good: microbench_extra's private_method's calls of #get, its
 // loop a call of Go at each turn. Each answer is the interpreter's.

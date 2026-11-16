@@ -78,7 +78,7 @@ const cellsCloseSetup = `
 // function's pool, as V8's code allocates a block's context at each
 // iteration, where Go had made each -- on the frame Go entered the code
 // with too, whose cells Go opens on its slots again once native code
-// leaves it (jitReopenRunCells). Each answer is the interpreter's, and
+// leaves it (jitRegReopenCells). Each answer is the interpreter's, and
 // loops' pool grew, as only native code's taking makes it.
 func TestJITCellsClosed(t *testing.T) {
 	t.Parallel()

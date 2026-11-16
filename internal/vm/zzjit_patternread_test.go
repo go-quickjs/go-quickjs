@@ -56,7 +56,7 @@ func TestJITPatternReadsAbsent(t *testing.T) {
 // which the callee leaves for Go to finish it (its call pending, as when
 // its code is due to be compiled again): the read's value goes on top of
 // its source, which stays, as the interpreter's get_prop_under leaves them
-// (jitCallResult). Taken for a call's operands, the source had been dropped
+// (jitRegUnwind). Taken for a call's operands, the source had been dropped
 // with a slot below it, and the callee had returned 0.
 func TestJITPatternReadPending(t *testing.T) {
 	if !jitSSABackend {
@@ -79,7 +79,8 @@ func TestJITPatternReadPending(t *testing.T) {
 // An object pattern's read is compiled to search its source's own table
 // alone until it misses there: its first miss deoptimizes, once, and the
 // site looks in the megamorphic cache from then on, Go reading what that
-// has not (jitDeoptSeen, jitFeedback's Property). A read that never misses
+// has not (jitRegDeoptSeen, jitRegFeedback's Property). A read that never
+// misses
 // has no branch for Go -- microbench's local_destruct, compiled with one
 // at each of its eight reads, had taken 9% longer.
 func TestJITPatternReadsLearnTheirMisses(t *testing.T) {

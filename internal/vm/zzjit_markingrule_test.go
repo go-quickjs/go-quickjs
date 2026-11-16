@@ -16,7 +16,7 @@ import (
 // jitMarkingWork is what one run of a test of the micro-benchmarks did that
 // a breach of the marking rule changes: its calls of Go, the times native
 // code left for Go, the runs the interpreter finished, and the records of
-// exits Go applied (jitApplyRecords, jit.ApplyExit), which native code
+// exits Go applied (jitRegApplyRecords, jit.ApplyExit), which native code
 // applies itself as it leaves (mir's recordsTail).
 type jitMarkingWork struct{ calls, hosts, interpreted, records uint64 }
 

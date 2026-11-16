@@ -13,7 +13,7 @@ import (
 // -- which native code does not make (ssa's escape.go): their properties
 // are the values stored, read where they are used. Then each meets what
 // leaves native code while such an object is live, where Go makes it, of
-// the frame state's words and its home (jitMaterialize): a property read
+// the frame state's words and its home (jitRegMaterialize): a property read
 // as a number that is no number, a throw inside an inlined constructor, a
 // property added where the code had never added it -- after which probe
 // sees the objects as Go made them:

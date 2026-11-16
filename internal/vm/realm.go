@@ -85,7 +85,7 @@ func (r *Runtime) initRealm() {
 	// them, until a script changes them.
 	armRealm(r)
 	// What a RegExp literal's call of the built-in exec or test asks of
-	// RegExp.prototype, from native code (jitRegExpLitPool).
+	// RegExp.prototype, from native code (jitRegExpPoolGive).
 	r.regexpProtoShape = r.proto.regexp.shape
 	// The names a built realm has interned are the base of the atom tables
 	// made after it.

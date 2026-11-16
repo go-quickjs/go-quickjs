@@ -107,8 +107,8 @@ func TestJITClosuresShareCode(t *testing.T) {
 // taken back by on-stack replacement in a long invocation that left it
 // once -- here at a call of a function its call had not met, which leaves
 // for Go to learn it, its code compiled again for it -- as at any long
-// loop: kept out of the invocation the interpreter goes on with
-// (jitDeoptBlocks), AWFY DeltaBlue's forEach had run the rest of each of
+// loop: kept out of the invocation the interpreter goes on with, AWFY
+// DeltaBlue's forEach had run the rest of each of
 // its long loops in the interpreter, a million calls of its callbacks a
 // run.
 func TestJITSlowLoopGoesBackNative(t *testing.T) {
@@ -119,7 +119,7 @@ func TestJITSlowLoopGoesBackNative(t *testing.T) {
 	// arrays, which judges it slow; and called natively by one compiled, on
 	// arrays of one, its call learning inc: a long invocation's call of dbl
 	// leaves, for Go to learn it, and Go finishes the level
-	// (jitUnwindNative), the interpreter going on with the rest.
+	// (jitRegUnwind), the interpreter going on with the rest.
 	setup := `
 		function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s = (s + fn(a[i])) | 0; return s }
 		function inc(x) { return x + 1 }

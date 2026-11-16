@@ -99,9 +99,9 @@ func TestJITGenStepCollects(t *testing.T) {
 
 // An exception a generator a step resumed natively throws has the stack
 // the interpreter's has: the generator's frame, its next's, the loop's --
-// made in a call of Go from the generator's code (jitGoCallNested), and in
-// the interpreter, which a failed speculation leaves the resumption to
-// (jitGenFrame).
+// made in a call of Go from the generator's code (jitRegGoCallNested), and
+// in the interpreter, which a failed speculation leaves the resumption to
+// (jitRegGenFill).
 func TestJITGenStepStack(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {

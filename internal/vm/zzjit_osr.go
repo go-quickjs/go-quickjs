@@ -22,7 +22,7 @@ type jitLearned struct {
 	reg     bool
 	regLink *jitLink
 	// failed and failedEntries are the sites, by slot IR PC, and the
-	// entries, by PC, whose speculation failed in the code (jitDeoptimized).
+	// entries, by PC, whose speculation failed in the code (jitRegDeoptSeen).
 	failed        []int32
 	failedEntries []uint32
 	// bigints are the sites, by slot IR PC, of arithmetic and comparisons
@@ -47,7 +47,7 @@ type jitLearned struct {
 	cellsPool *abi.ObjectPool
 	// poly are the property sites' cases and accessors the code met that
 	// their caches cannot hold, and whether each is megamorphic, which it
-	// is compiled again for (jitRegDeoptSeen, jitPolySeen).
+	// is compiled again for (jitRegDeoptSeen, jitPolySeenOp).
 	poly []jitPolySite
 	// typedReads are the element reads, by PC, whose result no native
 	// operation takes as a number, whose receivers have been typed arrays
@@ -100,7 +100,8 @@ type jitLearned struct {
 	// native code.
 	inlines   []jitInline
 	notInline []int32
-	// callSites is what jitCallSeen knows of each call, by PC: how often it
+	// callSites is what jitRegCallSettling knows of each call, by PC: how
+	// often it
 	// has left native code, up to jitCallsToInline, then jitCallDone or
 	// jitCallInlined; nil until a call does.
 	callSites []uint8
@@ -116,7 +117,7 @@ type jitLearned struct {
 // an object round it unmade (ssa.Func's Unentered): the entry would have
 // the loop's objects made every turn, on every call, for a frame that
 // needs it once. So a frame that does -- one found in the loop by two
-// checks in a row (jitLearnLoopEntry) -- goes on in code compiled for it
+// checks in a row (jitRegLoopCode) -- goes on in code compiled for it
 // and kept apart, as V8 keeps code for on-stack replacement: the same
 // function, with the loop's entry, that Go enters only at such a loop.
 // Native callers go on calling the function's code, and later invocations
@@ -129,7 +130,7 @@ type jitLearned struct {
 // (jitLearned), and is compiled again as any code is, at the budgets any
 // code is. It is not in the cache: no closure's hint names it, and its
 // bytes count in the function's entry's (measure), whose room it takes,
-// which goes with it (dropEntry). Its link is its own, never in the
+// which goes with it (dropReg). Its link is its own, never in the
 // runtime's: nothing calls through it, so that compiling it changes what
 // no native caller calls.
 
@@ -138,7 +139,7 @@ type jitLearned struct {
 // function called at all more than that is one its objects' staying unmade
 // pays in -- unless three of those calls in four left the code: an object
 // left unmade for them is made at their exit, and they would ask for those
-// entries back, in code of their own (jitLearnLoopEntry): a compile to give
+// entries back, in code of their own (jitRegLoopCode): a compile to give
 // them up and one to have them again, for code that gains nothing.
 // carried_exit_3000's 254 calls took 4% longer for those two compiles. One
 // call would not do: where each call meets something new -- a loop reading a

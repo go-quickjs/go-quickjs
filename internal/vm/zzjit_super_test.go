@@ -125,11 +125,11 @@ const definitionSetup = `
 // A native callee's definitions of class members and object literals'
 // methods -- new_class, set_home_object, define_method, a getter's, a
 // private name's and member's, install_private_methods -- are Go's from
-// native code, on the frame Go makes of its level (jitGoCallNested), which
-// has its closure and this, or with no frame where they run no script and
-// throw nothing (jitGoHostPlain): they read no local, which native code
-// holds, nor the function object, which it has not (compile's
-// frameDefinition).
+// native code, on the frame Go makes of its level (jitRegGoCallNested),
+// which has its closure and this, or with no frame where they run no
+// script and throw nothing (jitRegFrameless): they read no local, which
+// native code holds, nor the function object, which it has not (compile's
+// regDefinition).
 // Such callees -- 161 functions of npm's own code making classes, 124
 // literals' methods, 190 private members' -- had been called by Go.
 func TestJITDefinitionCallees(t *testing.T) {

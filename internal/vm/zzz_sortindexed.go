@@ -15,8 +15,8 @@ package vm
 //
 // Its functions are generic, instantiated with struct{} alone: Go lays a
 // generic function's instantiations out after every function and closure of
-// the package (see zzz_direct.go); sortIndexedAtoms, which ownKeys and
-// shrinkArray inline, calls it.
+// the package (docs/optimizing.md, "The layout lock"); sortIndexedAtoms, which
+// ownKeys and shrinkArray inline, calls it.
 
 // sortIndexed sorts a by index. No two keys have the same index.
 //

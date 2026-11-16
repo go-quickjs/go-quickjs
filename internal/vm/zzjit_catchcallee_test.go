@@ -35,7 +35,7 @@ const catchCalleeSetup = `
 	}`
 
 // A callee with exception handlers is called natively: a frame Go makes of
-// it where it leaves has the handlers in force there (jitHandlers), which
+// it where it leaves has the handlers in force there (regCatch), which
 // the interpreter's unwinding of a throw -- from a call of Go, a native
 // callee, Go's own operation -- finds, and finally clauses run on every
 // completion. It is not inlined, an inlined frame having no handlers of its

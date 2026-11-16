@@ -70,7 +70,7 @@ func TestJITForwardingConstructors(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	// Each class constructed once, as a program's setup does, before
 	// build's loop is compiled: a forwarding constructor is inlined once
-	// its code has run (jitHasRun).
+	// its code has run.
 	steady := []string{`(new B.V(1, 2), new B.A(1), new B.W(1, 2, 3), 0)`}
 	for range 6 {
 		steady = append(steady, `build(300, 1)`)

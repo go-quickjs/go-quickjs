@@ -136,7 +136,7 @@ concurrently.
   An older gofmt cannot parse such a file, so CI formats with the newest Go
   and tests with both.
 - Native code does the same work whether the collector marks or not
-  (internal/jit/README.md, "The write barrier"): a native path stores its
+  (internal/jit/README.md, "The write barrier and the marking rule"): a native path stores its
   pointers through the barrier's routine while the collector marks, and never
   leaves native code or calls Go for the marking's sake, or it is not
   compiled natively. `TestJITSameWorkWhileMarking` runs the micro-benchmarks

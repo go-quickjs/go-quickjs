@@ -3,12 +3,12 @@ package vm
 import "testing"
 
 // TestOwnCacheOnlyForPlainOwnData pins what a read or write site's own fast
-// path (propCache.own, storeOwn) answers: a plain data property the object
-// has itself. An entry for a property found on a prototype, an accessor of
-// the object's own or a prototype's, or a write that adds the property is
-// of the same receiver shape, and must still be left to the full cache,
-// which reads the holder or calls the accessor -- in either tier, and from a
-// pure body, which reads through own too.
+// path (propCache.own, rhGetProp's and rhSetProp's) answers: a plain data
+// property the object has itself. An entry for a property found on a
+// prototype, an accessor of the object's own or a prototype's, or a write
+// that adds the property is of the same receiver shape, and must still be
+// left to the full cache, which reads the holder or calls the accessor -- in
+// either tier, and from a pure body, which reads through own too.
 func TestOwnCacheOnlyForPlainOwnData(t *testing.T) {
 	t.Parallel()
 	const src = `

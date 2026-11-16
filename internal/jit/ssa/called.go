@@ -17,7 +17,7 @@ import (
 // inlined, and the closure, which nothing is then left to see, is not
 // made, as a loop's callback the function makes is not (MadeCallback): its
 // slots hold its template, which Go makes the closure from at an exit
-// (jitMaterialize). The function's first build says which closures they
+// (jitRegMaterialize). The function's first build says which closures they
 // are (calledClosures), their uses being in its SSA, and a second build
 // inlines their calls (calledSite) and leaves them unmade (unmakeCalled).
 

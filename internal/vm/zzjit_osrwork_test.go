@@ -74,10 +74,10 @@ func TestJITLoopEntriesSpendTheBudget(t *testing.T) {
 	}
 }
 
-// A run the interpreter went on with after the code left it (jitGoOn) --
+// A run the interpreter went on with after the code left it (jitRegGoOn) --
 // native code entered again at a loop's header by a check it forced,
 // which spends nothing of the loop's -- spends a budget for what the code
-// learned as an invocation does (jitEntry's goOns, jitLearnedSpent): the
+// learned as an invocation does (jitEntry's goOns, jitRegSpent): the
 // code is compiled again for it however it runs. Octane Typescript's
 // Symbol.prototype.visible, judged slow and entered only so, left at a
 // call it had learned in thousands of such runs, its first code never

@@ -53,7 +53,7 @@ const typedLoopsSetup = `
 // prototype), each element read as a number (OpElemRead); what the loop
 // does not read -- an element past a view shrunk meanwhile, a Float16's --
 // Go goes on with from that index, as %TypedArray%.prototype's method
-// does (jitLoopFinish). Each answer is the interpreter's, stack traces
+// does (jitRegLoopFinish). Each answer is the interpreter's, stack traces
 // included ("at Int32Array.forEach"), and eachSum's, reduceInit's,
 // someAt's and findIndexOf's loops neither leave their code nor call Go.
 func TestJITTypedArrayLoops(t *testing.T) {

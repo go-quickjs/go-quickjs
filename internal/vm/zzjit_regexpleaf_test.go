@@ -18,8 +18,8 @@ import (
 // read right after (regexpNativeChecks), and esc's exec, from a native
 // callee of escs's loop, are made through the VM's routine for leaves, with
 // the collector idle and while it marks, each answer the interpreter's and
-// Node's (regexpLeafTestWant). A literal's, whose RegExp its call of Go
-// gives back to the literal's pool (jitRegExpLitPool), stays a call of Go.
+// Node's (regexpLeafTestWant). A literal's is a leaf's call too, which
+// gives its RegExp back to the literal's pool (jitRegExpLeafGive).
 func TestJITRegExpLeaves(t *testing.T) {
 	t.Skip("register JIT gap: exec and test calls are not the leaf calls they should be: 1 exec and 3 test, not 1 and 2 (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
@@ -120,7 +120,7 @@ function booms(n) { var out = []; for (var i = 0; i < n; i++) out.push(boom(i ==
 	}
 
 	// find's exec, of a global's RegExp, is compiled a leaf's call from
-	// the first (jitRegExpLeafGuess), not learned at a call of Go and
+	// the first (jitRegFeedback's Leaf), not learned at a call of Go and
 	// compiled again for.
 	r = jitAgreesForTest(t, setup, "find(200)", "find(200)", "find(200)")
 	leaves = 0

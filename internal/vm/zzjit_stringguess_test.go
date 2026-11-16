@@ -22,7 +22,7 @@ const stringGuessSetup = `
 
 // An object meeting a method read the code took for a string's has the
 // read's cache take it, as the interpreter's read would have, and the code
-// compiled again for its shape (jitPolySeen): each loop, run once on a
+// compiled again for its shape (jitPolySeenOp): each loop, run once on a
 // class's instance, leaves its code a few times, not at every entry --
 // where it had, 64 times or more, until it was judged slow and left to the
 // existing tiers. Each answer is the interpreter's.

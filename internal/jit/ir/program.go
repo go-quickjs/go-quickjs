@@ -202,7 +202,7 @@ const (
 	StringConcat
 	// StringPart is a concat's part converted -- a template's to_string,
 	// a chain's '' + part -- whose string that concat alone reads
-	// (compile's stringParts): Left at Dest as it is, where it is a
+	// (compile's regStringParts): Left at Dest as it is, where it is a
 	// number, a string, a boolean, null or undefined, whose conversion
 	// calls nothing and which the concat converts the same; anything else
 	// leaves for Go, which converts it there, before the parts after it

@@ -151,7 +151,7 @@ func TestJITCallsLinkedBeforeCode(t *testing.T) {
 
 // A call of one argument in a function that reads "charCodeAt" is made as
 // any other, natively or by Go, unless its function is the method that
-// read took (jitcompile's charCodeCalls): PDF.js's Type1Font_wrap's
+// read took (jitRegFeedback's CharCode): PDF.js's Type1Font_wrap's
 // cff.push(field.charCodeAt(i)) had been lowered as a charCodeAt too,
 // which left native code at every character, and its code was judged not
 // to pay. Once compiled, wrap runs natively at every call, and leaves it
@@ -267,7 +267,7 @@ func TestJITCharCodeAtByTarget(t *testing.T) {
 
 // An element of a typed array a local holds, read by a local key
 // (get_local_index) as it is, for ==, is learned at its exit as a[i]'s is
-// (jitIndexOperands): read as a typed array's number from the next compile
+// (jitRegElemSeen): read as a typed array's number from the next compile
 // on. It had left native code at every invocation, the rest of each run by
 // the interpreter: PDF.js's Huffman tables, lengths[val] == len. Once
 // compiled, 20 calls neither leave native code nor finish in the

@@ -46,11 +46,11 @@ func jitCallForTest(t *testing.T, r *Runtime, src string, want float64) {
 	}
 }
 
-// A function due to be compiled in the background runs in the existing
-// tiers while it is lowered there, and then compiled there, until its code
-// is installed, at the Kth check after its compile was handed over -- a
-// call of it is one (tryJITAt), and so is its loop's in a tree
-// (tryJITLoop) -- and natively from then on.
+// A function due to be compiled in the background runs in the interpreter
+// while it is lowered there, and then compiled there, until its code is
+// installed, at the Kth check after its compile was handed over -- a call
+// of it is one (jitRegEnter), and so is a sample at its loop's back edge
+// (jitRegHot) -- and natively from then on.
 func TestJITBackgroundFirstCompile(t *testing.T) {
 	t.Parallel()
 	const k = 3
@@ -205,13 +205,11 @@ func TestJITBackgroundUnscheduled(t *testing.T) {
 	}
 }
 
-// A loop's code installed at the loop's own check in a tree is entered
-// there, by on-stack replacement, as code compiled on the spot is: the
-// tree that runs the frame recovers its exit, though the function had no
-// code when it was called -- its compile pending, whose frame a tree had
-// run nested without recovering, and the script's own tree had taken the
-// loop's result for the script's (jitTreeRecovery). Each answer is the
-// interpreter's, the compile installed at any check.
+// A loop's code installed at the loop's own check is entered there, by
+// on-stack replacement, as code compiled on the spot is (jitRegLoop),
+// though the function had no code when it was called, its compile
+// pending. Each answer is the interpreter's, the compile installed at any
+// check.
 func TestJITBackgroundInstallAtNestedLoop(t *testing.T) {
 	const src = `
 		function plain(a, b) { return a * 3 + b }
@@ -238,10 +236,10 @@ func TestJITBackgroundInstallAtNestedLoop(t *testing.T) {
 	}
 }
 
-// A callee compiled for its native callers (jitNativeCallee) is compiled
-// in the background too: none of its code at once, its callers calling it
-// through its link, which leaves for Go to run it, until the code, its
-// native callers' alone (ssaCallee), is installed.
+// A callee compiled for its native callers (jitRegNativeCallee) is
+// compiled in the background too: none of its code at once, its callers
+// calling it through its link, which leaves for Go to run it, until the
+// code, its native callers' alone (jitRegCompile's callee), is installed.
 func TestJITBackgroundCalleeCompile(t *testing.T) {
 	t.Parallel()
 	r := jitBackgroundForTest(t, 1)
@@ -356,14 +354,13 @@ func TestJITBackgroundSnapshotMiss(t *testing.T) {
 	jitCallForTest(t, r, `sum(100)`, 4950)
 }
 
-// A compile in the background whose code would call through a link its
-// callee's function let go meanwhile -- the callee's entry dropped, as
-// jitHotEntry drops it to compile it again for Go to enter, its link with
-// it, no installed code holding the link, and the callee's next entry
-// given another -- is built again on the runtime's goroutine at its
-// install (staleLinks): installed as it was, it called through the old
-// link, which never had code again, and made every call of the callee
-// through Go. Its native calls are then the callee's link's.
+// A compile in the background whose callee's code is let go meanwhile --
+// the callee's entry dropped and its function compiled again -- calls
+// through the callee's link all the same, a function's for good, by its
+// key (regLinks), whatever code it has: it is installed as it was built,
+// and its native calls are then the callee's link's. A compile that called
+// through a link let go with its code had made every call of the callee
+// through Go.
 func TestJITBackgroundStaleLink(t *testing.T) {
 	r := jitBackgroundForTest(t, 1)
 	if _, err := r.Run(compileForTest(t, `function half(x) { return x / 2 }
@@ -387,8 +384,7 @@ func TestJITBackgroundStaleLink(t *testing.T) {
 	}
 	link := jitLinkOfForTest(r, half)
 	// loop's call of half met by the interpreter, whose cache register
-	// code's compile reads its target from (regCallSites), as the stack
-	// form's compile seeds it (jitSeedCalls).
+	// code's compile reads its target from (regCallSites).
 	r.jitEnabled = false
 	jitCallForTest(t, r, `loop(3)`, 1.5)
 	r.jitEnabled = true
@@ -425,7 +421,8 @@ func jitBackgroundRuntime(t *testing.T) *Runtime {
 // this, the answer "not now" had left it Go's for good, Go entering the
 // target at each call, however soon it was compiled -- AWFY's Richards at
 // five times its time -- and so too where the compile had not begun, the
-// runtime having as many in the background as it may (jitCalleeAwaited).
+// runtime having as many in the background as it may (jitRegCompile,
+// jobsFull).
 func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -467,7 +464,7 @@ func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
 
 // A function with no loop, compiled once hot, in the background: its calls
 // enter the code once it is installed. Refused for the compile's being under
-// way, Go never asked again, and the recursion stayed in the tree tier.
+// way, Go never asked again, and the recursion stayed in the interpreter.
 func TestJITBackgroundHotCodeIsEntered(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -524,10 +521,9 @@ func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
 	`
 	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, `caller(20000)`, `caller(20000)`)
 	// Register code's compiles in the background hold for no callee's
-	// (jitRegSubmit): what holding gains the stack form's, its
-	// callee inlined, its objects left unmade -- the loop's entry
-	// dropped for them (unentered) -- is asked of register code all
-	// the same.
+	// (jitRegSubmit): what holding would gain, its callee inlined, its
+	// objects left unmade -- the loop's entry dropped for them
+	// (unentered) -- register code has all the same.
 	_, re := jitNamedForTest(r, "once")
 	v, err := r.Run(compileForTest(t, `P.prototype.add`))
 	if err != nil {

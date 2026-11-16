@@ -301,8 +301,8 @@ func (r *Runtime) jitDeepAddFrom(before, next *shape, proto *Object, key Atom) (
 	return a, true
 }
 
-// jitPolyWriteSeenOp is jitPolyWriteSeen's, of either form's code: the
-// write at pc, its site's cache cache, of key where named, to o, of shape
+// jitPolyWriteSeenOp is what jitRegWriteSeen learns in e: the write at
+// pc, its site's cache cache, of key where named, to o, of shape
 // before then.
 func (r *Runtime) jitPolyWriteSeenOp(e *jitEntry, pc int, cache *propCache, key Atom, named bool, o *Object, before *shape) {
 	i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
@@ -364,8 +364,8 @@ type jitPropOp struct {
 // plain reports whether op is a plain read: get_prop's, not a method's.
 func (op *jitPropOp) plain() bool { return !op.write && !op.method }
 
-// jitPolySeenOp is jitPolySeen's, of either form's code: the read op at pc
-// that native code left to Go.
+// jitPolySeenOp is what jitRegReadSeen and jitRegHostSeen learn in e: the
+// read op at pc that native code left to Go.
 func (r *Runtime) jitPolySeenOp(e *jitEntry, pc int, op jitPropOp) {
 	recv := op.recv
 	if recv.IsString() && op.method && !slices.Contains(e.strSites, uint32(pc)) {
@@ -515,8 +515,8 @@ func jitPolyPrim(e *jitEntry, pc int) bool {
 	return false
 }
 
-// jitDeoptSeenOp is jitDeoptSeen's, of either form's code: the operation op
-// at pc, which deoptimized in the code of compile serial, before the
+// jitDeoptSeenOp is what jitRegDeoptSeen learns in e: the operation op at
+// pc, which deoptimized in the code of compile serial, before the
 // interpreter makes it.
 func (r *Runtime) jitDeoptSeenOp(e *jitEntry, pc int, op jitPropOp, serial uint32) {
 	if e == nil {
@@ -1011,8 +1011,8 @@ func jitNoteSeen(p *propPoly, old, n propCache) *propPoly {
 	return p
 }
 
-// jitSeenSite is jitSeenFeedback's, of either form's code: the site at pc,
-// its cache, a write's or a read's, of key where named.
+// jitSeenSite is what jitRegSeenFeedback learns in e: the site at pc, its
+// cache, a write's or a read's, of key where named.
 func (r *Runtime) jitSeenSite(e *jitEntry, pc int, cache *propCache, write bool, key Atom, named bool) {
 	if cache.poly == nil {
 		return
@@ -1385,7 +1385,7 @@ func jitAllocated() (bytes, objects uint64) {
 	return s[0].Value.Uint64(), s[1].Value.Uint64()
 }
 
-// jitRefused is compileSSA's refusal of a program it does not compile:
+// jitRefused is a compile's refusal of a program it does not compile:
 // for good, unlike jit.ErrCodeBudget's, which the cache's releasing code
 // may lift, or jit.ErrUnavailable's, which no compile will.
 var jitRefused = errors.New("jit: the program is refused")
@@ -1440,7 +1440,7 @@ type jitFeedback struct {
 	called int
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlineTotal) -- which had no code
-	// for native callers: compiled after it (jitWantedCallees). linked
+	// for native callers: compiled after it. linked
 	// are the callees it calls through their links before they have code,
 	// compiled after it too, which native code then calls, the caller's code
 	// as it is.
@@ -1607,7 +1607,7 @@ type jitInline struct {
 	exits uint32
 	// pool, for a construction made natively, is where its objects come
 	// from (abi.ObjectPool); via marks a call of Function.prototype.call
-	// that calls cl's function (jitCalledVia).
+	// that calls cl's function (jitRegViaSeen).
 	pool *abi.ObjectPool
 	via  bool
 	// forEach marks a call of Array.prototype.forEach, or another of
@@ -3004,7 +3004,7 @@ func jitCountAt(calls []jitInline, pc int) int {
 }
 
 // jitCallableClosure is o and its closure, if a call in cl's code may make
-// it natively or inline it, as jitCalled has a callee; or nil.
+// it natively or inline it, as jitRegCalled has a callee; or nil.
 func (r *Runtime) jitCallableClosure(cl *closure, o *Object) (*Object, *closure) {
 	return r.jitClosureFor(cl, o, false)
 }
@@ -3028,9 +3028,10 @@ func (r *Runtime) jitNativeTargetOf(fd *funcData, cl *closure, construct bool) b
 		fd.closure.scope() == cl.scope() && (construct || !isClassConstructorKind(fd.closure.fn.Kind))
 }
 
-// jitChainReads is how many reads jitChainValue follows: a global and the
-// properties after it, Flog.RayTracer.Vector's three, and the five of
-// Flog.RayTracer.Vector.prototype.subtract, a method's, with one to spare.
+// jitChainReads is how many reads a chain from a global follows: the global
+// and the properties after it, Flog.RayTracer.Vector's three, and the five
+// of Flog.RayTracer.Vector.prototype.subtract, a method's, with one to
+// spare.
 const jitChainReads = 6
 
 // jitGlobalValue is the value of the global name, as a read of it in cl's
@@ -4043,8 +4044,9 @@ func (r *Runtime) jitPoolObject(o *Object) *Object {
 	return newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, props)
 }
 
-// jitRefillPoolsOf is jitRefillPools of the construction at pc of e's code
-// -- its register pc, in register code -- with o.
+// jitRefillPoolsOf refills the pools of the construction at register pc pc
+// of e's code that constructs with o: one run out, made larger, and one
+// made for another prototype than o's. It reports whether one had run out.
 func (r *Runtime) jitRefillPoolsOf(e *jitEntry, pc int, o *Object) (refilled bool) {
 	// Both lists, without making one of them: this runs at every exit at
 	// a construction.
@@ -4686,8 +4688,9 @@ func (fb *jitFeedback) deepCase(d *jitDeepRead) ssa.PropertyCase {
 	return k
 }
 
-// deepCasesOf is deepCases', of either form's code: the read at pc, its
-// cache c (nil for none).
+// deepCasesOf is the cases of the read at pc, its cache c (nil for none),
+// whose property is past the two prototypes a cache holds: those the code
+// met at its exits, and those the cache's reads met.
 func (fb *jitFeedback) deepCasesOf(pc int, c *propCache) []ssa.PropertyCase {
 	var cases []ssa.PropertyCase
 	if fb.e != nil && fb.root == nil {
@@ -4841,8 +4844,8 @@ type jitSSAStats struct {
 	goCalls uint64
 	// calleeGoCalls counts those it made as a native callee
 	// (jitRegGoCallNested), and calleeWork the work it did natively before
-	// each, as jitSSAProfit estimates a stretch's (jitRegCalleeProfit), since
-	// its calls in (jitLink's in) were last counted from 0.
+	// each, as jitRegStretchWork counts a stretch's (jitRegCalleeProfit),
+	// since its calls in (jitLink's in) were last counted from 0.
 	calleeGoCalls, calleeWork uint64
 	// runGoCalls counts those it made in runs begun at a loop that Go makes
 	// for good, and runWork the work it did natively before each
@@ -4960,15 +4963,15 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 	s.ssaSharedGen++
 }
 
-// jitContexts is how many contexts are made first: one for each runSSA
-// running, each native call another (abi.Context.Level); and as many more
-// as there are each time they run out, as a stack grows, as deep as the
-// VM's frames may go (jitContextsMost). A context is some 17 KB: the first
-// jitContexts are of the JIT's budget (jitBudget), which every runtime
-// that runs native code holds; the rest are the native levels' stack, as
-// V8's optimized frames are on the machine stack and not in its code
-// space, which a recursion takes as it deepens and gives back once it has
-// returned (jitShrinkContexts). With at most 96 of them, AWFY's Havlak,
+// jitContexts is how many contexts are made first: one for each run of
+// native code (jitRegStretch), each native call another (abi.Context.Level);
+// and as many more as there are each time they run out, as a stack grows, as
+// deep as the VM's frames may go (jitContextsMost). A context is some 17 KB:
+// the first jitContexts are of the JIT's budget (jitBudget), which every
+// runtime that runs native code holds; the rest are the native levels'
+// stack, as V8's optimized frames are on the machine stack and not in its
+// code space, which a recursion takes as it deepens and gives back once it
+// has returned (jitShrinkContexts). With at most 96 of them, AWFY's Havlak,
 // whose depth-first search recurses deeper, ran its deeper levels in the
 // interpreter, and EarleyBoyer's unifier had finished most of its calls in
 // Go with no more than 24.
@@ -5280,13 +5283,12 @@ const (
 // callee's, whose call wrote its arguments to its context: arguments[k] -- the first operand k, the second the local
 // the arguments object is kept in once made -- or, of one operand, that
 // local, arguments.length; and whether it answers. While the object is
-// not made, an index of the arguments is the argument, as the
-// interpreter's argumentsIndex reads it -- a mapped object's too, which
-// aliases parameters the function never assigns (compile's
-// argumentsOwn), or, where it or a closure assigns them, the parameter
-// the index aliases, which the code passes past the two operands
-// (ir.Program's ArgumentParams) -- and their count is how many there are.
-// The rest it leaves to the code's exit, where Go makes it.
+// not made, an index of the arguments is the argument, as the arguments
+// object reads it -- a mapped object's too, which aliases parameters the
+// function never assigns (compile's argumentsOwn), or, where it or a closure
+// assigns them, the parameter the index aliases, which the code passes past
+// the two operands (ir.Program's ArgumentParams) -- and their count is how
+// many there are. The rest it leaves to the code's exit, where Go makes it.
 func (r *Runtime) jitArgument(ctx *abi.Context) (Value, bool) {
 	// A native callee's, whose call wrote them to its context
 	// (jitFrameArgs).

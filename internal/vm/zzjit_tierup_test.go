@@ -74,11 +74,11 @@ func jitTierRuntimeWithForTest(t *testing.T, threshold uint16, setup string, ins
 
 // An eager deoptimization of a function's current code invalidates it, as
 // V8's deoptimizer does: Go enters it no more, nor do native callers call
-// it, its link cleared; the existing tiers run the function, and it is
-// compiled again once they have spent a fresh budget -- as many
-// invocations as it took to compile it first (jitCallThreshold), each its
-// length (jitTierBudget) -- for what its caches learned meanwhile: f,
-// compiled for A, meets B, runs in the tree tier for three calls, and is
+// it, its link cleared; the interpreter runs the function, and it is
+// compiled again once it has spent a fresh budget -- as many invocations
+// as it took to compile it first (jitCallThreshold), each its length
+// (jitRegBudget) -- for what its caches learned meanwhile: f, compiled
+// for A, meets B, runs in the interpreter for three calls, and is
 // compiled again at the fourth, for both, never deoptimizing again. Each
 // answer is the interpreter's.
 func TestJITDeoptInvalidates(t *testing.T) {
@@ -95,12 +95,10 @@ func TestJITDeoptInvalidates(t *testing.T) {
 	if e.invalid || e.ssaSerial != 1 || jitLinkOfForTest(r, fcl).entry == 0 {
 		t.Fatalf("f is not compiled at its fourth call: %+v", e)
 	}
-	// Invocations of B's of ten turns in the stack form, whose loops' back
-	// edges spend the budget only at a full budget of them (jitTierWork);
-	// of none in register code's, whose back edges each spend their loop's
-	// length of it (jitRegEdges), so that what the invocations spend is
-	// their own length, as the stack form's do -- but the one that
-	// deoptimizes, which meets B at its first turn.
+	// Invocations of B's, whose back edges each spend their loop's length
+	// of the budget (jitRegEdges), so that what the invocations spend is
+	// their own length -- but the one that deoptimizes, which meets B at
+	// its first turn.
 	deopt, fb := `f(b,10)`, `f(b,10)`
 	deopt, fb = `f(b,1)`, `f(b,0)`
 	run(deopt)
@@ -298,9 +296,9 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 
 // Code that learns at its exits what to be compiled again for is not
 // invalidated, as V8 never invalidates code for feedback: it is the tier
-// that learns it -- the existing tiers' caches note no call's target --
-// and runs on, compiled again once it has spent a budget since it began
-// to learn (jitLearnedDue): apply, compiled at its fourth call, learns at
+// that learns it -- the interpreter's caches note no call's target -- and
+// runs on, compiled again once it has spent a budget since it began to
+// learn (jitRegLearnedDue): apply, compiled at its fourth call, learns at
 // its calls of Go that its callback is inc, keeps its code, Go entering
 // it, and is compiled again, inc inlined, only once a budget of its
 // invocations has passed, Go making no call of inc after.
@@ -388,7 +386,7 @@ func v8TierRuntimeForTest(t *testing.T, setup string) (*Runtime, func(src string
 // NotifyICChanged does: g, the same, meeting a second shape at its 100th
 // call, is compiled at its 900th, the change found when its budget was
 // spent at its 400th, not before. Neither has a loop, whose back edges
-// would spend their budget too (jitTierWork).
+// would spend their budget too (jitRegEdgeWork).
 func TestJITV8Budgets(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -447,7 +445,7 @@ func TestJITV8Budgets(t *testing.T) {
 // function's budget is spent while the loop still runs, as V8's
 // MaybeOptimizeFrame has it, not after a fixed number of back-edge
 // budgets: each full budget of back edges spends its count of them, each
-// the loop's length (jitTierWork). h, long, with a short loop, has spent
+// the loop's length (jitRegEdgeWork). h, long, with a short loop, has spent
 // part of its budget after a run of a quarter of it, and is compiled and
 // entered at its loop in its second run, a long one, its first call
 // spending next to none of it.
@@ -489,7 +487,7 @@ func TestJITV8LoopTierUp(t *testing.T) {
 }
 
 // A loop's back edges spend its function's budget at the loop's own
-// length (loopAt), not at the mean of its function's loops': k's short
+// length (jitRegEdgeWork), not at the mean of its function's loops': k's short
 // loop, run for half its budget at its length, is not compiled, where at
 // the mean, which k's long loop makes many times as long, the budget would
 // have been spent several times over; run for twice it, it is.
@@ -552,15 +550,15 @@ func TestJITCompilesLongFunctions(t *testing.T) {
 	}
 }
 
-// A function warming up (jitWarmFor) that a native caller's call asks for
-// is compiled at once, as one with no entry is (jitFor): g, a loop that
-// defines an accessor of a computed key (define_getter_index), which its
-// lowering for native callers refuses, has been called a few
-// times, its budget far from spent, when its caller learns the call, and
-// is compiled for Go to enter and its callers to call -- not refused for
-// native callers for good, its warming entry taken for a compile that had
-// been tried. So AWFY's Richards' runTask, compiled first, had made every
-// call of its tasks' functions by Go, at three and a half times the time.
+// A function warming up (jitRegWarmUp) that a native caller's call asks for
+// is compiled at once, as one with no entry is (jitRegNativeCallee): g, a
+// loop that defines an accessor of a computed key (define_getter_index),
+// which its lowering for native callers refuses, has been called a few
+// times, its budget far from spent, when its caller learns the call, and is
+// compiled for Go to enter and its callers to call -- not refused for native
+// callers for good, its warming entry taken for a compile that had been
+// tried. So AWFY's Richards' runTask, compiled first, had made every call of
+// its tasks' functions by Go, at three and a half times the time.
 func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -598,11 +596,11 @@ func jitRareCallForTest(call string) string {
 // seldom warms up as any function does, and is compiled once it has spent
 // its own budget -- not at its native caller's first call of it, nor when
 // that caller is compiled: it would not be inlined in V8 either
-// (jitCalledOften), and Mandreel's per-frame functions, __udivmoddi4's
-// 1,233 instructions among them, had been compiled so. g, called by h's
-// code once in twenty-five of h's calls, is compiled at about its own 400th call,
-// and is called natively by h from then on. Meanwhile h's call waits for
-// it, decided no more at each of g's calls (jitCallWaiting).
+// (jitRegCalledOften), and Mandreel's per-frame functions, __udivmoddi4's
+// 1,233 instructions among them, had been compiled so. g, called by h's code
+// once in twenty-five of h's calls, is compiled at about its own 400th call,
+// and is called natively by h from then on. Meanwhile h's call waits for it,
+// decided no more at each of g's calls (jitCallWaiting).
 func TestJITLongCalleeWarmsUp(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -687,7 +685,7 @@ func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
 		t.Fatalf("g compiled at its %d. call", calls)
 	}
 	// h's code is compiled again for the call once it has spent a budget
-	// (jitLearnedDue).
+	// (jitRegLearnedDue).
 	for range 2 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}
@@ -728,8 +726,8 @@ func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
 // A long callee native callers may not call through its link -- an arrow
 // that reads this, its link's frame none of its own -- whose calls Go makes
 // for its native caller meanwhile, warms up so too, called seldom: its
-// calls Go makes spend its budget, those the existing tiers answer without
-// a frame (jitInvokedFrameless) as well, and the call is decided once it
+// calls Go makes spend its budget, those the interpreter answers without
+// a frame as well, and the call is decided once it
 // is compiled, not settled as Go's while it warms up.
 func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 	t.Parallel()
@@ -758,7 +756,7 @@ func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 		}
 	}
 	// Its caches' feedback changes in its first calls, which raises what
-	// is left of its budget (jitWarmUp).
+	// is left of its budget (jitRegWarmUp).
 	for range 50 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}

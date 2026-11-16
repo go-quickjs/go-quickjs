@@ -12,8 +12,8 @@ import (
 
 // Code judged not to pay on its first stretches (entrySlow) -- here
 // invocations that do nothing -- is entered by Go again after
-// jitNativeRetry calls the existing tiers made of it, and judged by what it
-// does from then on (jitRetrySlow): a loop that runs long stays native.
+// jitNativeRetry calls the interpreter made of it, and judged by what it
+// does from then on (jitRegRetrySlow): a loop that runs long stays native.
 // Judged once, for good, it had stayed in the interpreter.
 func TestJITSlowCodeJudgedAgain(t *testing.T) {
 	t.Parallel()
@@ -60,7 +60,7 @@ func TestJITSlowCodeJudgedAgain(t *testing.T) {
 
 // A call left to Go (jitCallDone), decided from what it met at its fourth
 // exit -- a bound function, which native code does not call -- is decided
-// again when the code is compiled again (jitSeedCalls), from what the
+// again when the code is compiled again (regCallSites), from what the
 // caches know then: the plain function it calls now, called natively.
 func TestJITCallLeftToGoDecidedAgain(t *testing.T) {
 	t.Parallel()
@@ -259,9 +259,9 @@ func TestJITInlinedConcat(t *testing.T) {
 
 // A native call of a function its code calls natively, which native
 // callers no longer call (notNative), is Go's, and teaches the caller
-// nothing: no target to learn, no code to compile again (jitKnownTargetSeen
-// answers it, as jitCallTarget would). It counts toward the callee's being
-// called natively again (jitRetryNative), which it is after jitNativeRetry
+// nothing: no target to learn, no code to compile again (jitRegKnownCallee
+// answers it). It counts toward the callee's being called natively again
+// (jitRegRetryNative), which it is after jitNativeRetry
 // such calls. Each answer is the interpreter's.
 func TestJITKnownNotNativeCalleeCounted(t *testing.T) {
 	if !jitSSABackend {

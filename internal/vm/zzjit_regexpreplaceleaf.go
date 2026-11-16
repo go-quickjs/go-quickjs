@@ -13,16 +13,15 @@ import (
 // Native code's call of String.prototype.replace given a RegExp that is no
 // literal's and a string, s.replace(re, ""), is a leaf's call (ssa.GoLeaf),
 // made without a frame by the VM's routine for leaves, as exec's and
-// test's are (zzjit_regexpleaf.go): learned at the call of Go that makes
-// it, once a site (jitReplaceLeafSeen), and compiled next a leaf's call of
-// Go of its own -- or from the first compile, where the RegExp is a
-// global's or a captured binding's and the template a string constant
-// (jitReplaceLeafGuess): Octane's runBlocks, each run a few times, had
-// made most of their replaces before the compile that learned them. It had been a call of Go each time -- jitGoCall, its
-// frame and its tick, jitRegExpLitPool's question of whether a literal's
-// RegExp was given, the frame of exec that the matches were collected in
-// -- about 8% of Octane's RegExp with the JIT, more than half the work of a
-// replace of a short string.
+// test's are (zzjit_regexpleaf.go): compiled a leaf's call of Go of its own
+// from the first compile, where its site's cache holds the built-in and
+// the template is a string constant (jitRegFeedback's Leaf): Octane's
+// runBlocks, each run a few times, had made most of their replaces before
+// a compile that learned them at the call of Go. It had been a call of Go
+// each time -- jitGoCall, its frame and its tick, the question of whether
+// a literal's RegExp was given, the frame of exec that the matches were
+// collected in -- about 8% of Octane's RegExp with the JIT, more than half
+// the work of a replace of a short string.
 //
 // The leaf (jitReplaceLeaf) is the built-in's direct replace
 // (replaceDirect), of a string by a RegExp whose flags, exec and

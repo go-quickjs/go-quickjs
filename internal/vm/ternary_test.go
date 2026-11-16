@@ -4,13 +4,11 @@ import (
 	"testing"
 )
 
-// c ? a : b as a value, built as one node where a and b are expressions
-// (logicalJumps, ternaryNode), answers as the interpreter and Node do: a
-// plain test of each kind of value, a comparison the test's jump makes --
-// of numbers, strings, mixed, NaN, null and undefined --, ternaries in a
-// and in b, in an && and holding one, a getter in the branch taken only,
-// and one that throws only where it is taken. A branch that calls stays
-// blocks; every other function is one node and a return.
+// c ? a : b as a value answers as Node does: a plain test of each kind of
+// value, a comparison the test's jump makes -- of numbers, strings, mixed,
+// NaN, null and undefined --, ternaries in a and in b, in an && and holding
+// one, a getter in the branch taken only, and one that throws only where it
+// is taken.
 func TestTernaryExpressions(t *testing.T) {
 	t.Parallel()
 	const src = `

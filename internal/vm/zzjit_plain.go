@@ -29,8 +29,8 @@ import (
 // the call; what it does not make it leaves to them, untouched.
 //
 // It counts no call of Go (ssaStats' goCalls): what such a call costs is
-// a native operation's, which the code's profit (jitSSAProfit) counts as
-// its work. None of these calls is one the JIT learns a native form of at
+// a native operation's, which the code's profit (jitRegStretchWork) counts
+// as its work. None of these calls is one the JIT learns a native form of at
 // its call of Go (jitRegCallSeen): push of one value and pop, Math.random and
 // the searches are not taken here.
 func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
@@ -134,7 +134,7 @@ func jitGoInline(ctx *abi.Context) bool {
 // a frame (pureElemOp) -- a collection's lookup, addition or deletion on
 // its own kind of collection, a weak one's, Date.now, String(x) of a
 // primitive, hasOwnProperty, a push of other than one value, whose native
-// form native code learns for one alone (jitSeedBuiltin). A method call of
+// form native code learns for one alone (regBuiltinSite). A method call of
 // the realm's Function.prototype.call, G.call(recv, ...args), is G's call
 // of recv, as V8 reduces it: hasOwnProperty.call(o, k). The function is
 // one of jitPlainSet's (jitGoCallPlain has asked jitPlainFn), a built-in
@@ -200,9 +200,9 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 // its one character's substring, slice, substr and charAt, its searches,
 // String.fromCharCode, parseInt of a number, and an array's searches --
 // which, made without a frame, it would never learn -- and RegExp's exec
-// and test, whose call of a literal's RegExp gives it back to the
-// literal's pool (jitRegExpLitPool), and whose others native code learns
-// at the call of Go are leaves' (jitRegExpLitSite).
+// and test, whose calls register code learns are leaves' from their sites'
+// caches (jitRegFeedback's Leaf), a literal's among them, whose RegExp the
+// leaf gives back to the literal's pool (jitRegExpLeafGive).
 func jitLeafOp(op uint8) bool {
 	switch op {
 	case 0, elemPush, elemPop, elemRandom, elemStrCharCodeAt, elemStrCharAt, elemStrSlice, elemStrSubstring,

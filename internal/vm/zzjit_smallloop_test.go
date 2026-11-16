@@ -190,10 +190,9 @@ func TestJITInlinedSmallLoopFrames(t *testing.T) {
 		}
 		both := jitBothForTest(t, smallLoopFramesSetup)
 		// G forwards its arguments and is inlined for what its caches
-		// learned (jitHasRun), as the existing tiers run it before it is
-		// compiled; at the tests' threshold it would be compiled at its
-		// first call, whose code, its forward native (ssa.CallSite's
-		// Forward), fills none.
+		// learned, as the interpreter runs it before it is compiled; at the
+		// tests' threshold it would be compiled at its first call, whose
+		// code, its forward native (ssa.CallSite's Forward), fills none.
 		calls, ics := both.jit.jitCallThreshold, both.jit.jitICThreshold
 		jitDefaultsForTest(both.jit)
 		both.script(t, "new G(list, out); new G(list, out); out.n = 0")

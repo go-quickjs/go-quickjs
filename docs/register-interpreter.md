@@ -624,7 +624,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 119 of the 241 operations have a native handler
+**What is native.** 128 of the 241 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,
@@ -636,12 +636,21 @@ polymorphic entries (`propPoly`), a property added by the transition the
 site remembers, `o.n +=`, `in` by the realm's cache and by an array's
 elements, `typeof` and `jtypeof`, a template's parts, `length`, dense
 arrays' and typed arrays' elements (every kind but Float16), short BigInts'
-`+`, `-`, `*` and compares, a string's `charCodeAt`, an element written at
-an array's length where it has room, `Array.prototype.push` of one argument,
-a `switch`'s table, a for-in's step over an array's indices or a snapshot
-of keys, a for-of's step over a dense array or a generator of register code,
-`yield` in a frame that step entered, closing upvalues, and calls and
-returns ([Frames and calls](#frames-and-calls)). A fast path that misses
+`+`, `-`, `*`, their compare-and-branches of two registers and of a register
+and an upvalue, and their `===` and `!==` (equal only if both their words
+are, a BigInt the Value holds being held one way), a string's `charCodeAt`,
+an element written at an array's length where it has room,
+`Array.prototype.push` of one argument, a `switch`'s table, a for-in's step
+over an array's indices or a snapshot of keys, a for-of's step over a dense
+array or a generator of register code, a destructuring's step over an array
+by the intrinsic iterator (`iter_step`), a cursor's close where nothing is
+to be called (`iter_close`), `yield` in a frame that step entered, closing
+upvalues, `instanceof` by OrdinaryHasInstance (the realm's
+`Symbol.hasInstance` as the site's cache finds it, the constructor's own
+data prototype, the value's chain walked), a script-level `let`, `const` or
+`class` read and written by its global site (`globalLex`, at the global
+epoch as a global object's slot is), and calls, constructions and returns
+([Frames and calls](#frames-and-calls)). A fast path that misses
 jumps to the exit before it has written anything. arm64 answers one case
 more: NaN made an integer, which `FCVTZS` gives as 0 where `CVTTSD2SI` has
 no integer.
@@ -678,10 +687,14 @@ the newest Go.
 **Calls of Go with no exit.** What Go does that throws nothing and runs no
 code is called through `nativeCallH` with none of an exit's work: a
 closure (`nativeClosure`), a literal (`nativeLit`), an iterator result
-(`nativeIterRes`), a call of the JIT's code (`nativeJITCall`). A built-in a
-call site has cached is called the same way (`nativeBuiltin`, `regNative`),
-returning to the exit stub's tail, which goes on or ends the frame, so that
-a built-in that throws or calls back is the exit's case.
+(`nativeIterRes`), an object for a construction (`nativeNew`), a call of
+the JIT's code (`nativeJITCall`). A built-in a call site has cached is
+called the same way (`nativeBuiltin`): one that needs no frame -- Math's
+functions, push and pop, a native leaf whose check passes -- with none of
+an exit's state, since it throws nothing and runs no code (`string_at` 61.0
+to 52.0 ns on a Ryzen 5 3600); anything else as `rhCallW` makes it
+(`regNative`), returning to the exit stub's tail, which goes on or ends the
+frame, so that a built-in that throws or calls back is the exit's case.
 
 **Call sites of several callees.** A call site's cache holds one callee.
 Where `call_w` or `call_method_w` meets another, the handler exits with the
@@ -786,31 +799,66 @@ straight code to its first return of at most 12 operations, runs as its
 register code with no frame (`regLeafCode`, `regLeafRun`), its stores to
 upvalues held until it returns so that what it cannot answer gives up
 having changed nothing; a getter of a captured binding is answered from the
-callee's closure (`leafUp`). These are the cases a frame costs more than the
-body, and each is answered alike by every entry -- a call site, a
+callee's closure (`leafUp`). A frameless run gives up while an interrupt is
+due, which its frame then counts. These are the cases a frame costs more
+than the body, and each is answered alike by every entry -- a call site, a
 built-in's callback, natively -- so that no path is slower for having
 skipped another's check.
 
 **Built-ins.** A built-in of the call's realm is a kind of the site's cache
 (`regCallNative`), called with the window's arguments as its slice, without
-a copy. A built-in calling a callback enters the register code directly
-(`regDirect`): its arguments copied into a window at the top of the stack,
-no `defer`, no `recover`. A callback a built-in calls many times
--- a sort's comparator, the callbacks of forEach, map, filter, some, every,
-find, reduce and the typed arrays' -- is kept ready from one call to the
-next (`regCallback`): its window reserved once, and natively its code
-entry's state and context kept too, so that each call writes the window
-and the frame record and runs the code.
+a copy. A call of the realm's `Function.prototype.call` whose callee the
+site's cache holds (`regCallThrough`) enters the callee natively in the
+window one register on, and `apply_args` its target in a window made at
+the stack's top (`nativeApply`), neither with the built-in's frame, which
+stack traces and `f.caller` pass over, as V8 has none. A built-in calling a
+callback enters the register code directly (`regDirect`): its arguments
+copied into a window at the top of the stack, no `defer`, no `recover`.
 
-**Constructions.** `new_w` runs a base constructor of the realm that has
-register code in the window as a register frame, as a call does, its object
-made in register 1 as `constructWithTarget` makes it -- its prototype, the
-room its site's objects came to need, the shape they start from
-(`regConstruct`). Anything else -- a derived class, a bound function, a
-proxy, a built-in -- is constructed by the generic path. A derived
-constructor's this is the binding `super()` binds, read through the frame
-(`this_bound`) by it and the arrows inside it, and `derived_ret` checks
-its result.
+A callback a built-in calls many times -- a sort's comparator, the
+callbacks of forEach, map, filter, some, every, find, reduce and the typed
+arrays', a replacement function of `replace`, `JSON.parse`'s reviver -- is
+kept ready from one call to the next (`regCallback`): its window reserved
+at the stack's top once, and natively its code entry's state and context
+kept too. Each call writes the window's registers and the frame record and
+enters the code (`nativeCallbackRun`): where the last call returned with no
+exit, the state and the context's top frame are still the frame's, and
+only the first instruction and the budget are given before the entry.
+Anything else -- an exit, a throw, a frame given to a callee in place --
+goes on as the native loop does (`nativeDrive`), and the next call makes
+the state and the top frame again. The frame record is pushed for the call
+alone, so that what Go runs between two calls finds no frame of it. A body
+the frameless evaluators answer (`pureCallAt`) is cheaper entered so with a
+frame (`array_some` 50.9 to 42.5 ns); a short straight body of numbers and
+upvalues still runs frameless in the window (`regLeafRun`), and one that
+returns a parameter or a constant is answered from the arguments
+(`callDirect`). A runtime that runs the JIT keeps its leaves on
+`callDirect`, which counts them for tier-up, and so does the Go table,
+whose loop entered for each call is slower than the frameless evaluators.
+A reviver that cannot see a third argument -- fewer than three parameters,
+none a rest parameter, no arguments object or direct eval, no debugger and
+not Node's quirks -- is given no context object, and the parse keeps no
+records of the source text for it (`seesThirdArg`: `json_parse_reviver`
+4,667 to 1,524 ns).
+
+**Constructions.** `new_w` has a call site of its own, whose cache holds
+a constructor the handler enters as `call_w` enters a callee
+(`regCallConstruct`): a function's or a base class's once its objects'
+room is settled, a derived class's, and a forwarder's (`LeafForward`), none
+with fields of its own. Its object is made by Go with no exit (`nativeNew`)
+of the constructor's prototype and root, as `constructWithTarget` makes it
+-- a body that only stores its parameters answered by `leafCall` there --
+and the frame is `regFrameConstruct`, its new.target the constructor, a
+derived class's with its this binding (`regThisBinding`); `ret` gives the
+frame's this where the body returns no object. `super_call` and
+`super_forward` in a derived class's constructor enter the parent
+constructor natively in a window at the stack's top (`nativeSuper`,
+`regFrameSuper`), whose `ret` binds the caller's this as `superBind` does,
+and `derived_ret` is answered in place. A derived constructor's this is the
+binding `super()` binds, read through the frame (`this_bound`) by it and
+the arrows inside it. Anything else -- a bound function, a proxy, a
+built-in, a class with fields -- is constructed by the generic path, the
+site's miss (`regConstruct`).
 
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While
@@ -823,7 +871,8 @@ to the frame's caller. A chain of such calls runs in one frame however long
 it is.
 
 **Arguments.** `arguments.length` and `arguments[i]` of a function whose
-object is made only on demand are `args_len` and `args_index`. A function
+object is made only on demand are `args_len` and `args_index`, which reads
+an index past the parameters from the frame's kept arguments. A function
 whose only use of `arguments` is to hand it to `apply` has no object made:
 each such call is `apply_args`, which hands on the frame's arguments as
 passed. Where an object is made, the frame keeps its arguments on the
@@ -875,9 +924,25 @@ generator and a Map's or a Set's iterator, and `iter_next` steps it at the
 head of each turn, jumping out where it has no value. `iter_next` reads an
 array's element in its dense storage, steps a generator of register code
 directly (below), and calls any other iterator's `next` as register code
-calls. A for-in walks an array's indices by index while its element is in
-its dense storage, and an object's snapshot of keys while it keeps the
-shape they came from.
+calls; a step of an iterator of script reads its result's `done` and
+`value` where they are its own data properties, without the generic read's
+walk (`regStepOf`). A for-in walks an array's indices by index while its
+element is in its dense storage, and an object's snapshot of keys while it
+keeps the shape they came from. Whether nothing up an object's prototype
+chain has an enumerable key, which every for-in asks, is kept in the realm
+by the chain's first object while the chain's validity cell holds
+(`protosNoEnum`). A dictionary's keys -- a plain object whose layout is its
+own -- are made once for its layout and kept (`dictForIn`), the layout
+remembered as a cache remembers one, so that the loop's steps hand them
+out natively as a shared layout's (`dict_for_in` 71 to 11 ns).
+
+Cursors are reused rather than made at each loop. A for-in cursor needs no
+closing, but a loop left early marks it done all the same, so that the next
+loop takes it (`newForInObject`); an array's cursor that `iter_close` or
+`iter_close_throw` closes -- a pattern's end, a for-of left by a break --
+is released (`iterState.released`) and the next cursor over an array takes
+it (`arrCursor`). A pattern's rest element over an array whose rest is all
+in its dense storage is copied at once (`regIterRest`).
 
 A for-of loop's body is in the ranges of the cursor's own handler, which
 closes the iterator as a throw does and throws again; a break, a continue
@@ -929,6 +994,15 @@ resumptions share a binding.
   on where the resumption goes on; the yield copies it back, pops both and
   goes on past the step with the value. A throw, a yield with captures open
   on the window, `yield*` and the rest are Go's.
+- **An async function's first run is a call.** A call site of an async
+  function that keeps no arguments, has no direct eval and nothing of its
+  surroundings runs its body in the call's window as a call runs a callee
+  (`regAsyncRun`), with no generator: one that returns or throws before it
+  awaits settles its promise and is done, and one that awaits makes its
+  generator then, from the window as it is, and queues the await's job as
+  `runAsync`'s first step would. What runs, and in what order, is the same
+  (`TestAsyncFirstRunOrder`, Node's order); what is saved is the generator
+  and the window's copies (`async_call` 318 to 192 ns).
 - **An await's job continues in place.** An async function resumed by its
   await's job goes on at once at an await of a value that is not an object
   or of a fulfilled promise of the realm's constructor, where no job is
@@ -1126,9 +1200,15 @@ rest.
 - **No case lock.** `runReg` is a fixed loop with no cases, so there is no
   golden file of case offsets and no lever inside it, as the switch it
   replaced needed; an operation added changes no instruction of it.
-- **Levers Q and W.** The lock anchors `runReg` (Q) and the call path after
-  it, `rhCallW` (W), at fixed offsets modulo 4 KB (`zzreg_ru_layoutpad.go`,
-  `zzreg_run_a_layoutpad.go`); the handlers follow them in their files.
+- **Levers Q, W and H.** The lock anchors `runReg` (Q) and the call path
+  after it, `rhCallW` (W), at fixed offsets modulo 4 KB
+  (`zzreg_ru_layoutpad.go`, `zzreg_run_a_layoutpad.go`); the Go handlers
+  follow them in their files. The native handlers' block is assembly, laid
+  out after every closure of the package, so that a closure added anywhere
+  moved all of it -- 672 bytes in one round, which made Octane's RegExp and
+  the generator tests slower; H anchors it (`regNativeHandlers`) by a pad
+  of whole 32-byte slots of `int3` in an assembly file before it
+  (`zzzyn_native_a_layoutpad_*.s`).
 - **New handlers go in files of their own.** A Go handler added to
   `zzreg_table.go` moves every handler after it; a branch added to
   `rhCallW` once cost the Go table 7 to 10%. So later handlers are in files

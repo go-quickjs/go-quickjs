@@ -225,7 +225,7 @@ func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.
 	if c != nil && c.fills >= maxCacheFills {
 		// An inlined callee's write whose cache gave up for additions
 		// along chains deeper than it holds, which it noted, is compiled
-		// for them (seenAdds) -- an initializer a class and its subclasses
+		// for them (jitSeenSite) -- an initializer a class and its subclasses
 		// share -- and is megamorphic all the same, as the callee's own
 		// code is: another receiver is Go's from native code, as the
 		// root's write's miss is (ssa's OpPropWrite). Typescript's ASTSpan,
@@ -278,7 +278,7 @@ func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.
 
 // dataSeen reports whether the property site at pc, its cache c, has met
 // data: its cache holds a data property's entry now, or the code met data
-// at its exits (jitPolySeen, jitPolyWriteSeen).
+// at its exits (jitPolySeenOp, jitPolyWriteSeenOp).
 func (fb *jitFeedback) dataSeen(pc int, c *propCache) bool {
 	if c.shape != nil && c.shape != noShape && !c.getter && c.idx >= 0 {
 		return true

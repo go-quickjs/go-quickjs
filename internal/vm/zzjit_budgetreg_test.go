@@ -9,7 +9,7 @@ import (
 
 // A loop that calls nothing counts its back-edge budget in a register
 // (mir's budget), stored back wherever Go may read it: Go measures the
-// work native code did by the budget it spent (jitSSAProfit), the loop's
+// work native code did by the budget it spent (jitRegStretchWork), the loop's
 // length a back edge, and gives a new one at each poll. So the work Go
 // counts for a call of such a loop, entered at its start, is its back
 // edges' -- as it was with the budget in memory -- whatever the loop's

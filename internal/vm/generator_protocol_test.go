@@ -370,10 +370,9 @@ func TestHelperStepsAllocate(t *testing.T) {
 // TestGeneratorCloseAllocates pins that closing a generator a loop or a
 // destructuring leaves before its end makes nothing: its return is applied
 // without the result object it would make (iterReturn), and a return at a
-// yield nothing between it and the top of the body sees finishes the
-// generator without a frame or the signal a frame is given
-// (returnAtOnce). A loop or a destructuring allocates its generator and
-// its cursor; each had made a result object and a return signal as well.
+// yield goes on from the instruction after the yield (regGenResume), with
+// no signal made for it. A loop or a destructuring allocates its generator
+// and its cursor; each had made a result object and a return signal as well.
 func TestGeneratorCloseAllocates(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()

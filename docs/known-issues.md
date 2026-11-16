@@ -1,9 +1,10 @@
 # Known issues
 
-Found by a review of the engine, the standard library and go-intl in
-September 2026, after v0.5.0. Each issue was reproduced unless it is marked
-*plausible*. They are ordered by how much harm they allow, and are fixed in
-that order. The commit that fixes an issue names it: `git log --grep KI-01`.
+KI-01 to KI-60 were found by a review of the engine, the standard library and
+go-intl in September 2026, after v0.5.0, and were fixed in order of the harm
+they allow; later issues are numbered as they are found and filed under their
+severity. Each issue was reproduced unless it is marked *plausible*. The
+commit that fixes an issue names it: `git log --grep KI-01`.
 
 - **P0**: a script can corrupt the engine, crash the host process, or reach
   past a boundary it should not.
@@ -18,10 +19,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 ## P0: corruption, crashes, escapes
 
 ### KI-01 Suspended generators and async functions share frame state with later calls
-- **Where:** `internal/vm/generator.go` restores `handlers` and
-  `openUpvalues` into a pooled frame and saves them back sharing the same
-  backing arrays. The next call at the same depth truncates and appends to
-  them (`vm.go`).
+- **Where:** a generator's resumption (`internal/vm/generator.go`,
+  `zzreg_zgen.go`) restores `handlers` and `openUpvalues` into a pooled frame
+  and saves them back sharing the same backing arrays. The next call at the
+  same depth truncates and appends to them (`zzreg_call.go`).
 - **Effect:** a suspended function's catch handlers and captured variables
   are overwritten. The result is a Go panic that closes the runtime, or wrong
   results.
@@ -29,10 +30,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   function with a `try` runs at the same depth; or closures over `let i`
   across `yield`, which give `[3,1,2]` for `[0,1,2]`.
 - **Status:** fixed. The frame lets go of the slices when the generator
-  suspends or ends.
+  suspends or ends (`detachSuspended`).
 
 ### KI-02 `WithMemoryLimit` is not enforced
-- **Where:** `internal/vm/runtime.go`. `accountMemory` has no callers.
+- **Where:** `internal/vm/runtime.go`, whose accounting had no callers. The
+  limit is now `internal/vm/memory.go`'s (`measureMemory`, `memoryMeter`).
 - **Effect:** with a 1 MiB limit, a script can allocate gigabytes of arrays,
   strings and buffers. qjs's `--memory-limit` does nothing either.
 - **Status:** fixed. The runtime measures its own heap by walking it from its
@@ -174,7 +176,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   `NumberFormat` and the rest, as globals.
 
 ### KI-67 Native code read a closure's template from a run since collected
-- **Where:** `internal/vm/zzjit_ssa.go`. A closure native code does not
+- **Where:** the JIT's feedback, `internal/vm/zzjit_zregfeedback.go`
+  (`CalledClosure`) and `zzjit_zregloop.go`. A closure native code does not
   make stood in a frame state as the address of its template in the
   constants of the closure the code was compiled from, one run of the
   program; the entry kept neither.
@@ -183,7 +186,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   exit read freed memory into the frame: `TypeError: 7.04892706e-316 is not
   a function`, or `fatal error: invalid pointer found on stack`.
 - **Status:** fixed. The code keeps the template in a cell of its own, as it
-  keeps string constants (`jitTemplateCell`).
+  keeps string constants (`jitTemplateCell`, `zzz_jittemplate.go`).
   - Test: `TestJITMadeTemplateOutlivesItsRun`.
 
 ## P1: limits, hangs, leaks
@@ -192,7 +195,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Where:**
   - `thrownValue` (`promise.go`) turns a cancelled context into a
     rejection.
-  - `closeIteratorsIn` (`iterate.go`) drops the error.
+  - Closing the iterators an exception leaves drops what their `return`
+    throws, an interrupt among it: the register interpreter's
+    `iter_close_throw` (`rhIterCloseThrow`, `zzreg_table_cold.go`).
   - The interrupt counter is re-armed after reporting, so `DrainJobs`'s
     per-job check rarely sees it.
 - **Effect:** a script past its deadline, or a terminated worker, keeps
@@ -378,9 +383,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   - with the JIT, entries' pools and feedback, the megamorphic cache and
     what its contexts last ran with.
 
-  Shapes went on counting against the tree too: a literal's root, counted as
-  its site first ran, was never given back, and a realm made for each run of
-  a program filled the tree in some tens of thousands of runs.
+  Shapes went on counting against the shape tree too: a literal's root,
+  counted as its site first ran, was never given back, and a realm made for
+  each run of a program filled the tree in some tens of thousands of runs.
 - **Status:** fixed. What caches what a realm's code found is the realm's, and
   goes with it; a cleanup holds its cell weakly, and a registry is kept by the
   realm of its callback; a realm's literals' roots no longer stay in the tree's
@@ -576,8 +581,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   `[[OwnPropertyKeys]]` and `[[IsExtensible]]`, in the standard's order.
 
 ### KI-34 Proxy trap errors are swallowed
-- **Where:** `hasProp` on a proxy's target, and the `with`-scope lookups in
-  `vm.go`.
+- **Where:** `hasProp` on a proxy's target, and the `with`-scope lookups
+  (`internal/vm/with.go`).
 - **Repro:** `"x" in new Proxy(new Proxy({}, {has() { throw 1 }}), {})`
   answers `false`.
 - **Status:** fixed. The proxy half was fixed with KI-04; the `with`-scope
@@ -788,10 +793,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 
   A `this instanceof G` in `G` was false, and a sum over `this.k` went from
   73350 to 73255. A `G` that does not read `this` had none, so a stack frame
-  said `named`, not `Shape.named`. A `G` that uses `arguments` is called so
-  only if it has native code when the call site is decided, which happens
-  once (`jitLinkable`), so a program could meet the bug in one run and not the
-  next.
+  said `named`, not `Shape.named`. A `G` that uses `arguments` was called so
+  only if it had native code when the call site was decided, which happened
+  once, so a program could meet the bug in one run and not the next.
 - **Status:** fixed. The receiver is read from the slot the call already
   worked out, the first argument for a call through `.call`.
   - Test: `TestJITCallThroughCallFrameArguments`, and
@@ -799,19 +803,20 @@ Paths are relative to this repository; `go-intl:` paths are in
     never had the bug.
 
 ### KI-70 A nested loop stopped at a continue before a later test
-- **Where:** `internal/vm/ztree_flow.go`, `flow.loopShape`. A loop whose body
-  is tests runs as one Go loop, each test going on or leaving the loop. A
-  test that went back to the loop's head by itself, where it went on to a
-  later test by another way, was taken for a way out. `if (a) continue;
-  if (b) break;` is that shape in a `while`, a `for...in` and a `for...of`,
-  where `continue` goes to the head; a `for` loop's goes to its update.
+- **Where:** the closure-tree tier, `internal/vm/ztree_flow.go`,
+  `flow.loopShape`. A loop whose body was tests ran as one Go loop, each test
+  going on or leaving the loop. A test that went back to the loop's head by
+  itself, where it went on to a later test by another way, was taken for a
+  way out. `if (a) continue; if (b) break;` is that shape in a `while`, a
+  `for...in` and a `for...of`, where `continue` goes to the head; a `for`
+  loop's goes to its update.
 - **Effect:** in the tree tier, with no error of its own, a loop nested in
   another stopped at its first `continue`, and the code after it ran as if it
-  had finished: the outer loop has one thing to go on to from it, and asks for
-  no result. A loop alone in its function went on from `runTree`, and where the
-  whole function was one structure, whose blocks are dropped, it gave back
-  `undefined` or a number left on the stack, or panicked with an internal
-  error. This gave `e,e`, where Node gives `2,3,e,2,3,e`:
+  had finished: the outer loop had one thing to go on to from it, and asked
+  for no result. A loop alone in its function went on from `runTree`, and
+  where the whole function was one structure, whose blocks were dropped, it
+  gave back `undefined` or a number left on the stack, or panicked with an
+  internal error. This gave `e,e`, where Node gives `2,3,e,2,3,e`:
 
   ```js
   function f(o) {
@@ -826,9 +831,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   ```
 
   Native code was right, so a program's answer could change as it warmed.
-- **Status:** fixed. `loopShape` leaves such a body to the blocks, which go
-  from one to the next as ever. Found by `TestStrAppendRandom`.
-  - Test: `TestLoopContinueBeforeALaterTest`.
+- **Status:** fixed (`loopShape` left such a body to the blocks), and the
+  tree tier that had it was removed in 388324de, with its test,
+  `TestLoopContinueBeforeALaterTest`. The register interpreter and the
+  register JIT follow a loop's jumps as compiled and read no shape into its
+  body. Found by `TestStrAppendRandom`.
 
 ### KI-71 A Go call in native code was given what had taken a box's register
 - **Where:** `internal/jit/mir/core.go`, `allocate`. A box's word need not be
@@ -848,8 +855,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Where:** `internal/jit/compile/lower.go`, `stringConcats`. A template's
   part is converted to a string (a concat of one), which is dropped for what
   is one already. Every `ir.StringAdd` was taken for that, but an addition
-  that has met a string once becomes one by that alone (`hintedStringAdds`),
-  and may be given two numbers afterwards.
+  that has met a string once becomes one by that alone (`Hints`'
+  `StringAdds`, applied by `regHints` in `lowerreg.go`), and may be given two
+  numbers afterwards.
 - **Effect:** with the JIT, a template's value was the number itself:
   `` function f(a, b) { return `${a + b}` } `` called with strings until it
   was compiled, and then `f(1, 2)` gave the number 3, whose `typeof` was
@@ -861,10 +869,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Test: `TestJITTemplateOfAnAddition`.
 
 ### KI-73 A native caller Go resumed read another local's object
-- **Where:** `internal/vm/zzjit_ssa.go`, `jitUnwindNative`, and
-  `zzjit_genstep.go`, `jitGenFrame`. A value native code took from a frame
-  slot reads its pointer word through the slot's address for as long as it
-  lives, whatever the local has been assigned since, because native code
+- **Where:** what finishes the native calls under one whose callee left
+  native code, a generator's resumption among them: now `jitRegUnwind`
+  (`internal/vm/zzjit_zregcall.go`). A value native code took from a frame
+  slot read its pointer word through the slot's address for as long as it
+  lived, whatever the local had been assigned since, because native code
   writes its frame only at an exit. A native caller whose callee left native
   code had the records of its call applied to its frame, for what reads the
   frame while Go finishes the call, and then went on natively after the call.
@@ -886,28 +895,33 @@ Paths are relative to this repository; `go-intl:` paths are in
   `CollidePolygons` taking a transform for a polygon. The run's own level was
   not affected: its records are applied only if it does not go on. Found in
   v0.34.2.
-- **Status:** fixed. The words the records write over are kept and given back
-  as the level goes on natively (`jitKeepSlots`, `jitRestoreSlots`), which also
-  keeps alive objects that slot may have been the only reference to.
+- **Status:** fixed. Go writes a native caller's state into its window
+  (`jit.ExpandCall`, `jitRegApplyRecords`) only for a level it finishes
+  itself; a level that goes on in its native code after the call has no
+  record written over its window (`jitRegUnwind`).
   - Test: `TestJITLevelResumesWithItsSlots`,
     `TestJITLevelKeepsWhatItsCalleeAssigned`.
 
 ### KI-74 A compile in the background taken for a refusal
-- **Where:** `internal/vm/zzjit_ssa.go`, `jitCallSeen`, and `zzjit_native.go`,
-  `tryJITAt`. Each asks a compile for code, which on the spot it has on return.
-  In the background the same call returns nothing yet, which both took for
-  no. A call whose target was an arrow reading `this`, which no empty link may
-  take, was left to Go for good, and so was any such call while the runtime
-  had `jitJobsMax` compiles in the background. A function compiled once hot
-  had its closure refused, and no call entered the code it got.
+- **Where:** the JIT's decision of a native call's target and its entry of
+  hot code, now `internal/vm/zzjit_zregcall.go` (`jitRegCallSeen`,
+  `jitRegTarget`) and `zzjit_zregtier.go` (`jitRegEnter`). Each asked a
+  compile for code, which on the spot it had on return. In the background the
+  same call returned nothing yet, which both took for no. A call whose target
+  was an arrow reading `this`, which no empty link may take, was left to Go
+  for good, and so was any such call while the runtime had `jitJobsMax`
+  compiles in the background. A function compiled once hot had its closure
+  refused, and no call entered the code it got.
 - **Effect:** under `WithJITBackground`, which `qjs --jit` uses, right answers
   taking longer, by how the compiles fell. AWFY's Richards made 39 million
   calls of Go, at five times its time, in some runs and not others; Towers'
-  recursion stayed in the tree tier, a first run of 700 ms for 100. AWFY as a
-  whole took 8.4 s for 5.0 s in the foreground.
-- **Status:** fixed. The call waits and is decided once its target has code
-  (`jitCalleeAwaited`), and a closure is refused only for a refusal. AWFY in
-  the background takes 5.2 s.
+  recursion never entered its native code, a first run of 700 ms for 100.
+  AWFY as a whole took 8.4 s for 5.0 s in the foreground.
+- **Status:** fixed. A native call's target is chosen by its register code,
+  not by whether it has native code yet, and the call goes through the
+  target's link (`jitLink`), which is set when its code is installed, in the
+  background or on the spot (`regLinkUpdate`); a function's calls enter its
+  code once it is installed, and a closure is refused only for a refusal.
   - Test: `TestJITBackgroundCallWaitsForItsTarget`,
     `TestJITBackgroundHotCodeIsEntered`.
 
@@ -994,8 +1008,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Tests: `TestNotifyDeliversUnlocked`, `TestHostJobsReadyAfterRun`.
 
 ### KI-61 A value doubled in a short loop escapes the memory limit
-- **Where:** `internal/vm/memory.go`; the template literal's join in
-  `vm.go`, `Array.prototype.join`, `JSON.stringify` and spread.
+- **Where:** `internal/vm/memory.go`; the template literal's join
+  (`concatParts`, `zvreg_zops.go`), `Array.prototype.join`, `JSON.stringify`
+  and spread.
 - **Effect:** with a 16 MB limit, `` s = `${s}${s}` `` or `s = [s, s].join("")`
   twenty times gave a string of 84 million characters, `a = [...a, ...a]`
   ran on until the process itself was out of memory, and

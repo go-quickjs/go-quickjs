@@ -30,7 +30,7 @@ const argsRecursionSetup = `
 //   - a[i] of an arguments object that aliases nothing is Go's read from
 //     native code (jitKeyedClass, ssa.GoIndex), as an ordinary object's;
 //   - a call of Go leaves code due to be compiled again only where the
-//     compile can be made then (jitCompileDueNow): step's, called natively
+//     compile can be made then (jitRegCompileDueNow): step's, called natively
 //     from deeper in its own recursion, had left at each call for a compile
 //     refused while those calls were in its code.
 //

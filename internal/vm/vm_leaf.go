@@ -100,7 +100,7 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 // leafForward constructs o with a constructor LeafForward marks, whose body
 // is this.k.apply(this, arguments), by calling the method itself. The
 // constructor's frame is pushed as it would stand at its apply, though the
-// body is not run in it, and apply's as applyArguments pushes it, so that a
+// body is not run in it, and apply's as regApplyArgs pushes it, so that a
 // stack trace, f.caller and f.arguments find what they would have. It does
 // so where this.k and its apply are plain data properties the sites' caches
 // answer, apply the built-in one, and k a function; it reports false for

@@ -11,8 +11,8 @@ import (
 // native code tests -- has Go finish it, and its native callers go on
 // natively after their calls, as they do when it does not mark: the only
 // pointer native code stores there before it tests the flag again is the
-// call's result, which Go wrote with its barrier (runSSALoop,
-// jitUnwindNative, mir's resumeCall). They had finished their
+// call's result, which Go wrote with its barrier (jitRegGoOnAt,
+// jitRegUnwind, mir's resumeCall). They had finished their
 // invocations in the interpreter, and what they called with them.
 func TestJITResumesWhileMarking(t *testing.T) {
 	if !jitSSABackend {

@@ -15,7 +15,7 @@ import (
 // Then each meets what leaves native code inside the inlined loop or the
 // closure -- a hole, a shape the code was not compiled for, a throw, a
 // stack trace taken -- where Go makes the method's frame and the closure
-// the code did not make (jitMaterializeIn), the same closure in every
+// the code did not make (jitRegMaterialize), the same closure in every
 // frame naming it. swaps' method assigns its parameter after the call,
 // which the first build, leaving the call to an exit, did not see:
 // inlining the closure there would call it at every turn, so the second

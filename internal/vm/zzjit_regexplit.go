@@ -24,8 +24,8 @@ import (
 // built-in's.
 
 // jitRegExpLitDone gives l's pool v back, the RegExp of the literal that a
-// call jitRegExpLitPool found was done with, lastIndex 0 again, as the
-// pool's RegExps are made (jitFillLiteral), where it has room.
+// call was done with (jitRegLitArgMade), lastIndex 0 again, as the pool's
+// RegExps are made (jitFillLiteral), where it has room.
 func (r *Runtime) jitRegExpLitDone(l *jitLiteral, v Value) {
 	pool := l.pool
 	if !v.IsObject() || pool.Count >= pool.Size || pool.Count >= abi.PoolCapacity {

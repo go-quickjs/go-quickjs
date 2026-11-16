@@ -44,7 +44,7 @@ const MaxSlot = 1 << VirtualHomeShift
 // properties' values follow, VirtualFields on, in its table's order.
 // Go makes the object of them where the exit wrote them, one for
 // each home, which every slot naming it is given (the VM's
-// jitMaterialize), as V8's deoptimizer materializes an object escape
+// jitRegMaterialize), as V8's deoptimizer materializes an object escape
 // analysis removed.
 const (
 	VirtualBase      = 0xFFF9000000000000

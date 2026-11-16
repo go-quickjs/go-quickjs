@@ -17,10 +17,10 @@ import (
 // caller's locals and what the caller captured itself -- and functions
 // made once, which the loop checks it is given. Then each meets what
 // leaves native code inside the callback, where Go makes the callback's
-// frame, and the closure the code did not make (jitMaterialize), and goes
-// on with the loop (jitLoopFinish): a hole, a property of a shape the code
-// was not compiled for, a throw, a call never seen made, an array the
-// callback shortens or lengthens, a this given, a callee inlined in the
+// frame, and the closure the code did not make (jitRegMaterialize), and
+// goes on with the loop (jitRegLoopFinish): a hole, a property of a shape
+// the code was not compiled for, a throw, a call never seen made, an array
+// the callback shortens or lengthens, a this given, a callee inlined in the
 // callback that leaves.
 const callbackSetup = `
 	var nums = [1, 2, 3, 4, 5, 6, 7, 8]
@@ -192,7 +192,7 @@ func TestJITCallbackInlined(t *testing.T) {
 // runs, never called natively: an exit inside the callback inlined in a
 // loop goes back to the run Go entered, which makes the callback's frame
 // and the closure the code did not make, finishes them, and goes on with
-// the loop after the callback's index (runSSA). Each answer is the
+// the loop after the callback's index (jitRegLoopFinish). Each answer is the
 // interpreter's.
 func TestJITCallbackEnteredByGo(t *testing.T) {
 	t.Parallel()

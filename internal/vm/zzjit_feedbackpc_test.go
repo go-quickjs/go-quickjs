@@ -21,7 +21,8 @@ const feedbackPCSetup = `
 	var words = ['abc', 'xbz', 'bbb', 'qrs']
 `
 
-// A call site's feedback is found by its PC (jitFeedback's targetsAt):
+// A call site's feedback is found by its PC (jitRegFeedback's
+// regCallTargets):
 // a callee whose built-ins' calls are made natively, inlined at two sites
 // of one function and inside a loop's callback, in the runtime's realm
 // and another's, gives the interpreter's answers, also once the built-ins

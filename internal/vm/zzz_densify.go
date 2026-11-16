@@ -38,10 +38,10 @@ import (
 // (densifyAt), so that growing it element by element looks at its table a
 // logarithmic number of times.
 //
-// Its function is generic, instantiated with struct{} alone: Go lays a
-// generic function's instantiations out after every function and closure of
-// the package (see zzz_direct.go). setElem asks it as a sparse array's dense
-// storage grows, within the padding that rounds it to 32 bytes.
+// Its function is generic, instantiated with struct{} alone: Go lays a generic
+// function's instantiations out after every function and closure of the
+// package (docs/optimizing.md, "The layout lock"). setElem asks it as a sparse
+// array's dense storage grows, within the padding that rounds it to 32 bytes.
 
 // densify makes o, an object whose dense storage setElem has just grown
 // past a run of holes or while it was sparse, dense again, where it is a

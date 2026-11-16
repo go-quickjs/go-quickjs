@@ -29,15 +29,15 @@ import (
 //
 // Anything else leaves native code as a native callee does, and Go makes
 // the generator's frame from its context, as the step's resumption would
-// have (jitGenFrame), finishes it -- a yield it suspends at is Go's
-// suspension -- and saves what its suspension, or its end, leaves
-// (jitGenDone), the step's caller going on with the result. A generator a
-// step resumes natively is one of these (jitGenCallable): synchronous, no
-// yield*, whose captured locals none -- its frame's locals the generator's
-// alone -- and no call in tail position.
+// have (jitRegGenLevel, jitRegGenFill), finishes it -- a yield it suspends
+// at is Go's suspension -- and saves what its suspension, or its end,
+// leaves (jitRegGenDone), the step's caller going on with the result. A
+// generator a step resumes natively is one of these (jitRegGenCallable):
+// synchronous, no yield*, whose captured locals none -- its frame's locals
+// the generator's alone -- and no call in tail position.
 
 // jitGenStep is a loop's step at pc that has met generators of the
-// closures cls (jitGenStepSeen).
+// closures cls (jitRegGenStepSeen).
 type jitGenStep struct {
 	pc  int32
 	cls []*closure

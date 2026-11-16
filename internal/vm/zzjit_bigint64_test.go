@@ -9,7 +9,7 @@ import (
 )
 
 // BigInt arithmetic and comparisons whose operands, BigInts in the int64
-// range, a site has met (jitBigIntSeen): native code makes them unboxed,
+// range, a site has met (jitRegBigIntSeen): native code makes them unboxed,
 // each result boxed in a keep cell, until a speculation fails -- a result
 // outside the range, a BigInt on the heap, a number -- and the site is
 // Go's. BigInt literals are not compiled, so the constants are globals.

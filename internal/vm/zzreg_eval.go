@@ -45,7 +45,7 @@ func (r *Runtime) regDirectEval(f *frame, c *regCode, pc int, w bytecode.RInstr,
 }
 
 // regEval runs a direct eval's code src in register frame f's scope, as
-// evalDirect runs it in a heap frame's: each binding of the frame's the
+// evalIn runs it in a heap frame's: each binding of the frame's the
 // code names is captured from its register (RegCode.LocalReg), which is
 // what lets the code write it, as a closure the frame makes captures it
 // (regClosure); an upvalue of the frame's is shared.

@@ -41,10 +41,10 @@ const calleeArgsSetup = `
 // its parameters writes them all, and their count, to its callee's context
 // (ssa.CallSite's FrameArgs, abi.Context's Args), as V8's call pushes them
 // all: Go makes the rest parameter's array and the unmapped arguments
-// object of them without a frame (jitGoHostPlain), reads arguments[k] and
+// object of them without a frame (jitRegFrameOp), reads arguments[k] and
 // arguments.length there (jitArgument), and gives them to every frame it
 // makes of the callee's level -- a super() of them, a frame the interpreter
-// finishes (jitCallArgs). Such callees had been refused for native
+// finishes (jitRegFrameArgs). Such callees had been refused for native
 // callers, each call a call of Go: npm's 144 implicit derived
 // constructors, 77 functions of rest parameters, 17 of arguments objects.
 // Every answer is the interpreter's, at every stress setting, and the

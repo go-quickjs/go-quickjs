@@ -4,14 +4,12 @@ import (
 	"testing"
 )
 
-// x && y and x || y as values, built as one node where y is an
-// expression nothing else jumps into (logicalJumps, logicalNode), answer as
-// the interpreter and Node do: x's own value where it decides, of each kind
-// of value there is to test -- 0, -0, NaN, ”, null, 0n and their truthy
-// fellows; chains, an || inside an && and the other way round, a getter in
-// y that runs only where x does not decide and one that throws only then,
-// comparisons, a ternary whose else is an && the then's jump ends at too,
-// which stays blocks, and this read in a derived constructor before super().
+// x && y and x || y as values answer as Node does: x's own value where it
+// decides, of each kind of value there is to test -- 0, -0, NaN, ”, null, 0n
+// and their truthy fellows; chains, an || inside an && and the other way
+// round, a getter in y that runs only where x does not decide and one that
+// throws only then, comparisons, a ternary whose else is an && the then's
+// jump ends at too, and this read in a derived constructor before super().
 // Each function declares a local, which keeps it from being a pure body
 // pureCall would evaluate instead; three rounds alike.
 func TestLogicalExpressions(t *testing.T) {

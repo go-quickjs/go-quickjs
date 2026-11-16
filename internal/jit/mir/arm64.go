@@ -4289,7 +4289,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	}
 	// A receiver written straight into the callee's context: one it reads,
 	// or a method call's, which a callee that does not read it has too --
-	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
+	// a frame Go makes for it (jitRegGoCallNested, jitRegUnwind) shows it
 	// in a stack trace, as the interpreter's does.
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if win {

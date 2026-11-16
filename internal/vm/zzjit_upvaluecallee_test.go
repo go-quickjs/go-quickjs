@@ -10,8 +10,8 @@ import (
 
 // A call of a closure read from a captured binding -- a module's
 // function calling another of its scope -- is decided at the caller's
-// compile from the function the binding holds then (jitCalleeObjectAt),
-// as a global's call is: a function compiled while its first loop runs
+// compile from the function the binding holds then, as a global's call
+// is: a function compiled while its first loop runs
 // inlines the calls of its later loops, which have not run yet, and is
 // not compiled again for them. Decided one call at a time at their exits,
 // RegExp's runBlock0, whose two dozen loops each call Exec, was compiled

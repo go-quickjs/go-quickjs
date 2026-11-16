@@ -105,7 +105,7 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 	// of one (regTickRet, jitRegCallTier), its read's cache knowing A's
 	// shape by then: no deoptimization at the first runs. B's deoptimizes
 	// once, and the interpreter's finishing that run spends the fresh
-	// budget, compiling the code again in the same round (jitRegTierUp).
+	// budget, compiling the code again in the same round (jitRegLearnedDue).
 	wants := []jitShapeRound{{0, 0, 0}, {0, 0, 0}, {1, 0, 1}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}}
 	for i, want := range wants {
 		if got := rounds[i]; got != want {
@@ -124,7 +124,7 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 // cache, as V8's polymorphic inline caches hold four maps, rather than
 // trading one for the other at each receiver until the cache gave up. The
 // second entry, made after the deoptimization, has the code wait a budget
-// more (jitTierUp), as V8's NotifyICChanged does; compiled again, it reads
+// more (jitRegWarmUp), as V8's NotifyICChanged does; compiled again, it reads
 // both natively and never leaves.
 func TestJITShapesMixedDeoptimizeOnce(t *testing.T) {
 	t.Parallel()

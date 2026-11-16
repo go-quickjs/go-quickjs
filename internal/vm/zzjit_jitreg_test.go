@@ -23,9 +23,7 @@ func jitRegLifeForTest(r *Runtime, name string) *jitEntry {
 }
 
 // jitCodeForTest is the entry of the global function name's code, nil
-// where it has none: its stack form's entry with code, or, where it runs
-// register code (jitRegCodeForTest), its register code's state
-// (jitRegLifeForTest).
+// where it has none: its register code's state (jitRegLifeForTest).
 func jitCodeForTest(r *Runtime, name string) *jitEntry {
 	return jitRegLifeForTest(r, name)
 }

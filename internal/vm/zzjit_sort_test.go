@@ -118,7 +118,7 @@ const sortSetup = `
 `
 
 // A typed array's sort and an Array's, by a comparator that does nothing
-// but compute from its arguments (jitSortComparator), are the caller's
+// but compute from its arguments (jitRegSortComparator), are the caller's
 // native code: a merge sort, the comparator inlined, of a copy Go makes
 // and writes back after (jitSortCopy). Each answer is the interpreter's
 // and, but for a comparator that is not consistent, whose order is the
@@ -197,7 +197,7 @@ func testJITSortNative(t *testing.T, built *jitBuiltForTest) {
 // An exit from a sort native code makes, anywhere in it -- here a back
 // edge's budget run out, finished in the interpreter (QJS_JIT_STRESS's
 // deopt) -- has Go sort the array again from the first, as it was
-// (jitLoopFinish): every answer is still the interpreter's.
+// (jitRegLoopFinish): every answer is still the interpreter's.
 func TestJITSortRestarts(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

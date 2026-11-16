@@ -92,7 +92,8 @@ function execs(n) { var c = 0, w = 0, k; for (var i = 0; i < n; i++) { c += /(a+
 
 // A RegExp literal's RegExp is given back to its pool by the call of Go
 // that native code makes of the built-in exec or test, or of a string's
-// replace, split or match, where nothing can tell (jitRegExpLitPool): native code's loop of them takes the one RegExp
+// replace, split or match, where nothing can tell (jitRegLitArgMade,
+// regexpArgCall): native code's loop of them takes the one RegExp
 // over and over, its pool never running out, where a script could tell
 // each is a RegExp of its own -- an exec or a getter of the script's, an
 // argument whose conversion runs it -- and each answer is the

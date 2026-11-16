@@ -12,12 +12,10 @@ import (
 )
 
 // The state the tests of tier-up, of on-stack replacement and of compiles
-// in the background read, in either form of the JIT's: the stack form's
-// entry (jitEntry), or, where the runtime runs register code (regOn), the
-// register code the cache holds for the function (jitRegEntry) and what
-// outlives its compiles (its life, a jitEntry too, whose counts -- starts,
-// deopts, ssaSerial, ssaStats, invalid, warming, tierBudget, nativeCalls
-// -- the register code keeps as the stack form's entry does).
+// in the background read: the register code the cache holds for the
+// function (jitRegEntry) and what outlives its compiles (its life, a
+// jitEntry, whose counts are starts, deopts, ssaSerial, ssaStats, invalid,
+// warming, tierBudget and nativeCalls).
 
 // jitEntryOfForTest is the state of cl's function's code that outlives its
 // compiles: its stack form's entry, or what its register code learned and
@@ -71,7 +69,7 @@ func jitRegLoopsForTest(c *regCode) []int {
 // jitSiteMegamorphicForTest reports whether the property site of cl's
 // function's first instruction of op -- its register code's first of
 // regOps, where the runtime runs register code -- is megamorphic, e being
-// what its code learned (jitSiteMegamorphic): its cache gave up, or its
+// what its code learned (jitRegSiteMegamorphic): its cache gave up, or its
 // code learned it megamorphic at its exits (jitPolySite's mega), by the
 // instruction's pc in its form.
 func jitSiteMegamorphicForTest(t *testing.T, r *Runtime, cl *closure, e *jitEntry, op bytecode.Op, regOps ...bytecode.ROp) bool {
@@ -133,7 +131,7 @@ func jitLongRepeatsForTest(n int) int {
 
 // osrRegHeader is the register pc of the header of the only loop e's
 // register code has no entry at, its objects left unmade there
-// (jitRegEntry's unentered), as osrHeader is the stack form's.
+// (jitRegEntry's unentered).
 func osrRegHeader(t *testing.T, e *jitRegEntry) int {
 	t.Helper()
 	if e == nil || e.code == nil || len(e.unentered) != 1 {
@@ -153,8 +151,7 @@ func regLoopHeaderForTest(r *Runtime, name string) int {
 // jitRegJobForTest prepares a compile of cl's function's register code in
 // the background as jitRegCompile does, for jitRegSubmit to hand over:
 // lowered, its feedback asked ahead (jitRegSnapshotOf), to replace the
-// code the cache holds for the function at its install, as the stack
-// form's compileSSAPrepare prepares one.
+// code the cache holds for the function at its install.
 func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
 	t.Helper()
 	s, c := r.jit, r.regOf(cl)
@@ -177,8 +174,8 @@ func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
 		w: jit.GetWorkspace(), enc: jitEncoding, opts: mir.Settings()}
 }
 
-// jitRegPendingRecompileForTest is jitPendingRecompileForTest for register
-// code: sum compiled on the spot, then compiled again in the background,
+// jitRegPendingRecompileForTest is the register code of sum compiled on
+// the spot, then compiled again in the background,
 // not yet installed: its code, and the compile.
 func jitRegPendingRecompileForTest(t *testing.T, r *Runtime) (*jitRegEntry, *jitRegJob) {
 	t.Helper()
@@ -205,9 +202,8 @@ func jitRegPendingRecompileForTest(t *testing.T, r *Runtime) (*jitRegEntry, *jit
 
 // jitNamedForTest is the state of the code of the function named name
 // that outlives its compiles (jitEntryOfForTest), found by its name among
-// what the JIT holds, as jitCallbackEntry finds the stack form's entry,
-// and its register code where the runtime runs register code: nil for
-// either it has none of.
+// what the JIT holds, and its register code: nil for either it has none
+// of.
 func jitNamedForTest(r *Runtime, name string) (*jitEntry, *jitRegEntry) {
 
 	if r.jit == nil {

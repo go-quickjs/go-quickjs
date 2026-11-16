@@ -13,10 +13,10 @@ package vm
 // === 'strnig' -- is a test that never holds, the value still evaluated.
 // ==, != and their strict forms answer alike, the two sides strings.
 //
-// Its functions are generic, each instantiated with struct{} alone: Go
-// lays a generic function's instantiations out after every function and
-// closure of the package (see zzz_direct.go), where code written anywhere
-// else moves the closures, or the functions after it, against the hot
+// Its functions are generic, each instantiated with struct{} alone: Go lays a
+// generic function's instantiations out after every function and closure of
+// the package (docs/optimizing.md, "The layout lock"), where code written
+// anywhere else moves the closures, or the functions after it, against the hot
 // ones (AGENTS.md).
 
 // The types' indices in typeofNames.

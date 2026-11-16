@@ -46,7 +46,7 @@ func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 	if got := v.String().Go(); got != "0" {
 		t.Fatalf("the top disk is %s, want 0", got)
 	}
-	// Compiled for its native callers alone (jitNativeCallee).
+	// Compiled for its native callers alone (jitRegNativeCallee).
 	e := jitCodeForTest(r, "move")
 	if e == nil {
 		t.Fatalf("move has no code: %+v", e)

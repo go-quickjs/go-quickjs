@@ -1158,11 +1158,11 @@ type propCache struct {
 	fills uint8
 	// ownShape is shape where the entry is of a plain data property the
 	// object has itself and keeps -- not a prototype's, not an accessor, not
-	// one a write adds -- and noShape otherwise: what own and storeOwn
-	// compare an object's shape with, so that their test is one comparison
-	// rather than four. refill sets it from the entry as a whole, and
-	// newPropCaches to noShape: the zero value's nil would match an object
-	// with no shape.
+	// one a write adds -- and noShape otherwise: what own, rhGetProp and
+	// rhSetProp compare an object's shape with, so that their test is one
+	// comparison rather than four. refill sets it from the entry as a whole,
+	// and newPropCaches to noShape: the zero value's nil would match an
+	// object with no shape.
 	ownShape *shape
 }
 

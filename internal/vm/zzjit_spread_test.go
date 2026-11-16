@@ -273,9 +273,9 @@ func TestJITSpreadFrameless(t *testing.T) {
 
 // A loop of object spreads Go makes with the frame -- a getter's source --
 // and of little else, entered at its header by on-stack replacement, is
-// judged not to pay as its calls are made (jitRunGoProfit): the code
+// judged not to pay as its calls are made (jitRegRunGoProfit): the code
 // leaves after the call that finds so, with that call's result in its
-// place (jitCallResult), and the interpreter runs the rest. Each answer is
+// place, and the interpreter runs the rest. Each answer is
 // the interpreter's.
 func TestJITSpreadFramedAtLoops(t *testing.T) {
 	t.Parallel()

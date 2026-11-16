@@ -16,13 +16,13 @@ import (
 // (ssa.InlineSite's LexThis), and the arrow is not made. linkAll's arrow
 // calls a method of what it is given; the arrow, which the loop's native
 // code calls through its call path, has no code of its own, and the call
-// is inlined as the existing tiers met it (jitCalleeInline). Then each meets
+// is inlined as the interpreter's caches met it. Then each meets
 // what leaves native code inside the arrow -- a shape the code was not
 // compiled for, a throw, a stack trace taken -- where Go makes the arrow on
 // the method's frame, its this the method's. plain is no method: its
 // arrow's this is plain's own, undefined made the global object, which it
-// reads where the method's code does not read its this itself (the
-// lowering's makesArrowThis). A derived constructor's arrow, made where
+// reads where the method's code does not read its this itself
+// (ir.Program's ArrowThis). A derived constructor's arrow, made where
 // its this may not be bound yet, is made and called as before.
 const arrowThisSetup = `
 	class Vec {

@@ -984,7 +984,7 @@ type jitState struct {
 	// from how far the counter fell (jitRegStretchWork), adds it back.
 	pollCredit int
 	// lowered are the functions' programs (jitRegLower), and whether each may
-	// be inlined (jitInlinable).
+	// be inlined (its jitLowerInline lowering's error).
 	lowered     map[weak.Pointer[bytecode.Function]]*jitLowering
 	interpreted uint64
 	// slowResumes counts the looks at code judged slow that resumptions

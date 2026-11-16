@@ -21,8 +21,8 @@ import "weak"
 // only until the next literal or until a collection has run
 // (arraySamplesLetGo), and weak after that: a long render can still teach its
 // final length without keeping its result alive. At a turn's end only the
-// counts remain, and acrossTurns, which is what native code asks of a site
-// before it takes its room (jitLiteralArraySource). Sampling starts on the
+// counts remain, and acrossTurns, which says the room held at a turn's end.
+// Sampling starts on the
 // second execution: an array made by code loaded only once must not keep that
 // load's object graph until a sweep.
 //

@@ -2,15 +2,14 @@ package vm
 
 import "testing"
 
-// A call in tail position past tailCallDepth copies its arguments out of
-// its frame, which its callee's reuses: for a strict callee with no
-// arguments object and no rest parameter, into the runtime's tailArgs,
-// the next such call's too (tailArgsOf); for any other, into a copy of its
-// own. Recursions through tail calls thousands deep answer as Node does --
-// one alone, with arguments and with a rest parameter, two by turns, one
-// through a bound function, one that rotates five arguments and one that
-// passes fewer than it takes, one whose frames call a function deep in
-// tail calls of its own between theirs, and one that reads arguments
+// A call in tail position past tailCallDepth gives its frame to its callee
+// in place, the arguments moved to the parameters (regTailInPlace), or gives
+// the frame up, its arguments copied out of the window the callee's frame
+// may reuse (regTail). Recursions through tail calls thousands deep answer
+// as Node does -- one alone, with arguments and with a rest parameter, two
+// by turns, one through a bound function, one that rotates five arguments
+// and one that passes fewer than it takes, one whose frames call a function
+// deep in tail calls of its own between theirs, and one that reads arguments
 // after such a call -- three rounds alike.
 func TestTailCallArguments(t *testing.T) {
 	t.Parallel()

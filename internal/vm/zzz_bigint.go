@@ -3,7 +3,7 @@ package vm
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // BigInt64Array's and BigUint64Array's elements, out of line as
-// zzz_direct.go's calls are: generic functions, which Go lays out after
+// generic functions, which Go lays out after
 // every function and closure of the package, each called where the call
 // it stands for was.
 

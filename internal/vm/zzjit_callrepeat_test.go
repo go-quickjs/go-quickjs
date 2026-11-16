@@ -12,8 +12,8 @@ import (
 // for teaches the code that target at its first exit; at the next, the
 // exit teaches nothing, and the code, which would leave at every such call
 // until its budget for what it learned was spent -- the interpreter
-// finishing each iteration -- is invalidated (jitCallRepeats), as V8's code
-// deoptimizes at a call's wrong target: the existing tiers run the
+// finishing each iteration -- is invalidated (jitRegCallRepeats), as V8's
+// code deoptimizes at a call's wrong target: the interpreter runs the
 // function until it is compiled again with the target. PDF.js's
 // Lexer.getNumber, whose stream.lookChar() met each stream's class in turn,
 // had left at 951 calls so. Each answer is the interpreter's.

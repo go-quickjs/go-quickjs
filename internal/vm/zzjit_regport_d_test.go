@@ -122,8 +122,7 @@ type jitCallbackCode struct {
 }
 
 // jitCallbackCodeForTest is jitCallbackCode of the function named name in
-// r, the stack form's entry's (jitCallbackEntry) or its register code's
-// (regEntryNamedForTest).
+// r, its register code's (regEntryNamedForTest).
 func jitCallbackCodeForTest(r *Runtime, name string) jitCallbackCode {
 	e := regEntryNamedForTest(r, name)
 	if e == nil {
@@ -297,10 +296,9 @@ func regRebuiltVirtualsForTest(t *testing.T, r *Runtime, name string) (bool, int
 	return true, f.Virtuals
 }
 
-// jitEntryNamedForTest is the entry of the function named name in r, in
-// either form: the stack form's (jitCallbackEntry), or the state its
-// register code's compiles share (regLifeNamedForTest), whose targets
-// (jitTargets) and counts are the stack form's entry's counterparts.
+// jitEntryNamedForTest is the entry of the function named name in r: the
+// state its register code's compiles share (regLifeNamedForTest), with
+// its targets (jitTargets) and counts.
 func jitEntryNamedForTest(r *Runtime, name string) *jitEntry {
 	return regLifeNamedForTest(r, name)
 }
@@ -318,9 +316,9 @@ func jitCachedForTest(r *Runtime, name string) (held any, code bool) {
 	return nil, false
 }
 
-// regLinksHeldForTest is jitLinksHeld for register code: every link native
-// callers call through calls into the code the cache holds for its
-// function (regLinks, regCache).
+// regLinksHeldForTest checks that every link native callers call through
+// calls into the code the cache holds for its function (regLinks,
+// regCache).
 func regLinksHeldForTest(s *jitState) error {
 	for key, l := range s.regLinks {
 		if l.entry == 0 {
@@ -336,9 +334,8 @@ func regLinksHeldForTest(s *jitState) error {
 	return nil
 }
 
-// regEntriesFoundForTest is jitEntriesFound for register code: every
-// entry the cache holds is marked held (jitRegEntry's cached), not let go
-// of, and is the one its key names.
+// regEntriesFoundForTest checks that every entry the cache holds is marked
+// held (jitRegEntry's cached), not let go of, and is the one its key names.
 func regEntriesFoundForTest(s *jitState) error {
 	for key, e := range s.regCache {
 		if !e.cached || e.dropped || e.key != key {
@@ -349,10 +346,9 @@ func regEntriesFoundForTest(s *jitState) error {
 }
 
 // jitCalleeCodeForTest is the entry of the global function name, the link
-// native callers call its code through and its code, in either form: the
-// stack form's entry (jitNativeOrCalleeForTest), or its register code's
-// life, link and code. It fails the test where the function has no code,
-// or no link.
+// native callers call its code through and its code: its register
+// code's life, link and code. It fails the test where the function has no
+// code, or no link.
 func jitCalleeCodeForTest(t *testing.T, r *Runtime, name string) (*jitEntry, *jitLink, *jit.SSACode) {
 	t.Helper()
 	cl := jitGlobalClosure(r, name)

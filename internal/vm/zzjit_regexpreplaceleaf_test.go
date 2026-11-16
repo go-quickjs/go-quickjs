@@ -134,7 +134,7 @@ func TestJITRegExpReplaceLeafComplexity(t *testing.T) {
 
 // A replace whose RegExp a global or a captured binding holds, given a
 // string constant, is compiled a leaf's call from the first compile
-// (jitReplaceLeafGuess), never a call of Go to learn it at; its answers
+// (jitRegFeedback's Leaf), never a call of Go to learn it at; its answers
 // the interpreter's and Node's.
 func TestJITRegExpReplaceLeafGuess(t *testing.T) {
 	t.Parallel()

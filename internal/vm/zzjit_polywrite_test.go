@@ -5,7 +5,7 @@ package vm
 import "testing"
 
 // polyWriteSetup's writes stores s into objects of two shapes, which its
-// code's exits note as cases (jitPolyWriteSeen); then into dictionaries,
+// code's exits note as cases (jitRegWriteSeen); then into dictionaries,
 // whose cache is dictShape's, a shape native code is compiled for none of;
 // then into objects of no properties, Object.create(null)'s, whose shape is
 // none. The FormatJS Intl polyfill's pattern parser writes so into the

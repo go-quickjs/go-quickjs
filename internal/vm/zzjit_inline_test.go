@@ -196,7 +196,8 @@ func (b jitBoth) agree(t *testing.T, rounds ...string) {
 
 // An inlined callee's speculations are those its own code learned: a
 // failure its own code met is built generic where it is inlined too, as
-// it is in its own code (jitFeedback's Generic, ownEntry). take's read of
+// it is in its own code (jitRegFeedback's Generic, regLearned). take's
+// read of
 // t.next, an object stored as an element, had been read for a number in
 // every caller that inlined take, though take's own code had learned it
 // was not one: each call left native code, until the call was no longer
@@ -412,13 +413,15 @@ func TestJITClosuresWithKeepsLimited(t *testing.T) {
 
 // A call is left to an exit in an inlined callee only where the callee's
 // own code leaves it to Go -- at an exit, or by a call of Go -- and has
-// never left there (ssa.Func's HostsLeft, jitInlineExit): one its own code
+// never left there (ssa.Func's HostsLeft, jitRegFeedback's InlineExit):
+// one its own code
 // makes natively, without leaving, which counts nothing -- a substring of
 // one character, an array's push -- is no seldom one, and the callee is
 // not inlined for it. Taken for one, AWFY Json's read, inlined with an exit
 // at its substring, left native code at every call until it was no longer
 // inlined, and taught its own code a polymorphic read it never met. Their
-// own code runs first here, called natively, enough to tell (jitCodeRan).
+// own code runs first here, called natively, enough to tell
+// (jitRegCodeRan).
 func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -437,7 +440,7 @@ func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
 		function warm(o, m) { const a = []; for (let k = 0; k < m; k++) { o.next(); o.keep(a) } return a.length }
 		var o = new S('abcabc')`)
 	// Their own code run first, called natively by warm, which does not
-	// inline them: run enough to tell (jitCodeRan) that it has never left
+	// inline them: run enough to tell (jitRegCodeRan) that it has never left
 	// at its substring or its push.
 	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "next" || fn.Name == "keep" }
 	for range 4 {
@@ -463,7 +466,7 @@ func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
 }
 
 // A call a callee's own code leaves to Go and has not made is seldom only
-// where that code has run enough to tell (jitCodeRan): a callee inlined
+// where that code has run enough to tell (jitRegCodeRan): a callee inlined
 // wherever it is called -- a static factory, Item.make here, as AWFY
 // DeltaBlue's Variable.value -- has code compiled for native callers that
 // never runs, and its construction had been taken for a seldom one, the
@@ -488,7 +491,7 @@ func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
 		function drive(n) { let s = 0; for (let i = 0; i < n; i++) { const a = Item.make(i), b = Item.make(i + 1); s += a.x + b.y + a.s.length } return s }`)
 	r := both.jit
 	// The default budgets, which code waits to be compiled again for what
-	// it learned (jitLearnedDue).
+	// it learned (jitRegLearnedDue).
 	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
 	// A runtime running register code makes its JIT's state at its first
 	// use.

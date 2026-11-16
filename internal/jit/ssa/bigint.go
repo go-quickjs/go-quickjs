@@ -187,7 +187,7 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 		// whatever the site met, as V8's code types its BigInt64 values.
 		// Anywhere else the site learns at its exits, first that it met
 		// BigInts and then, once its int64's form overflows, BigInts from
-		// 0 to 2^64-1 (the VM's jitBigIntSeen): made as an int64's before
+		// 0 to 2^64-1 (the VM's jitRegBigIntSeen): made as an int64's before
 		// either, a sum of squares past 2^63 had met an entry's
 		// speculation of an Int64 first, under QJS_JIT_STRESS, and its
 		// phis had been left generic.
@@ -590,9 +590,9 @@ const (
 
 // BigIntRecycleFeedback is Feedback that says which of a function's first
 // 64 locals hold their values alone, read only as operands of operators
-// whose results are values of their own (the VM's soleLocals), and whether
-// its code may give BigInts' blocks back at all: not a generator's or an
-// async function's, whose frames suspend.
+// whose results are values of their own (the VM's regSoleRegisters), and
+// whether its code may give BigInts' blocks back at all: not a generator's
+// or an async function's, whose frames suspend.
 type BigIntRecycleFeedback interface {
 	BigIntSole() (sole uint64, ok bool)
 }

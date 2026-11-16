@@ -142,7 +142,7 @@ func TestJITKeyedReadIndexName(t *testing.T) {
 }
 
 // An inlined callee's element reads are compiled for what its own code met
-// (jitFeedback's ownEntry), as its property sites are: a typed array's
+// (jitState's regLearned), as its property sites are: a typed array's
 // element read natively in the callers it is inlined into, once it has
 // met one. Before, an inlined callee's were the root's alone, none, and
 // read as an array's: Gameboy's memoryReadNormal, parentObj.memory[address],
@@ -633,7 +633,7 @@ func TestJITCapturedLocalCallees(t *testing.T) {
 
 // A native callee whose captured locals are in cells of its own, whose own
 // native callee leaves native code: Go finishes that, and the callee's code
-// goes on natively after its call (jitUnwindNative), with the cells now
+// goes on natively after its call (jitRegUnwind), with the cells now
 // open on the frame Go made for it.
 func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	if !jitSSABackend {

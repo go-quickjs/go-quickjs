@@ -71,8 +71,8 @@ const osrSetup = `
 // calls enough for its code to give up the entries kept for a frame
 // (jitKeptStarts): a long one its code is compiled in, short ones, one in
 // two leaving, which teaches the code that path and no more leave than may
-// (keptCallsLeave), then a long one that leaves early, the frame staying in
-// the loop. args are what comes between the turns and that.
+// (jitRegKeptCallsLeave), then a long one that leaves early, the frame
+// staying in the loop. args are what comes between the turns and that.
 func osrRounds(name, args string) []string {
 	rounds := []string{name + "(200000, " + args + "-1)"}
 	for i := range 2*jitKeptStarts + 2 {
@@ -597,7 +597,7 @@ func TestJITOSRInTheBackground(t *testing.T) {
 
 // A shape one code of a function missed, the other, compiled no later,
 // missing it too is not a code compiled again for it that cannot use it
-// (jitDeoptSeen): the site, of two shapes, stays polymorphic. Each code's
+// (jitRegDeoptSeen): the site, of two shapes, stays polymorphic. Each code's
 // serial its own, its second miss made it megamorphic.
 func TestJITOSRSiteNotMegamorphic(t *testing.T) {
 	t.Parallel()

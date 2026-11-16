@@ -30,8 +30,7 @@ func jitRegEntryForTest(r *Runtime, name string) *jitRegEntry {
 }
 
 // jitRegEntryNamedForTest is the register cache's entry with code of a
-// function named name, any closure's, as jitCallbackEntry finds the stack
-// form's: for functions no global names.
+// function named name, any closure's: for functions no global names.
 func jitRegEntryNamedForTest(r *Runtime, name string) *jitRegEntry {
 	if r.jit == nil {
 		return nil
@@ -45,9 +44,8 @@ func jitRegEntryNamedForTest(r *Runtime, name string) *jitRegEntry {
 }
 
 // jitCodeEntryNamedForTest is the entry of a function named name with code,
-// any closure's: its stack form's entry (jitCallbackEntry), or, where
-// runtimes run register code, its register code's state that outlives its
-// compiles (jitRegEntry's life). nil where it has none.
+// any closure's: its register code's state that outlives its compiles
+// (jitRegEntry's life). nil where it has none.
 func jitCodeEntryNamedForTest(r *Runtime, name string) *jitEntry {
 	if e := jitRegEntryNamedForTest(r, name); e != nil {
 		return e.life
@@ -163,10 +161,9 @@ func jitCompiledHotForTest(t *testing.T, r *Runtime, name string) bool {
 }
 
 // jitWorkForTest is the entry whose ssaStats count the work of the global
-// function name's code (jitSSAProfit, jitRegStretchWork) -- its stack
-// form's entry, its register code's state that outlives its compiles --
-// and the mean length of its loops a back edge is counted as (the stack
-// form's ssaLoop, the register code's loopMean); nil where it has no code.
+// function name's code (jitRegStretchWork) -- its register code's state
+// that outlives its compiles -- and the mean length of its loops a back
+// edge is counted as (the register code's loopMean); nil where it has no code.
 func jitWorkForTest(r *Runtime, name string) (*jitEntry, uint64) {
 	e := jitRegEntryForTest(r, name)
 	if e == nil || e.life == nil {
@@ -177,11 +174,10 @@ func jitWorkForTest(r *Runtime, name string) (*jitEntry, uint64) {
 
 // jitNamedLinkForTest is the global function name's code's state and the link
 // its native callers call it through, failing the test where either is
-// missing (jitEntryForTest): its stack form's entry and that entry's link,
-// or its register code's state that outlives its compiles and the
-// register link (jitState's regLinks). callee says the code is for native
-// callers alone, compiled from the lowering for them (the stack form's
-// ssaCallee, the register code's callee).
+// missing (jitRegEntryForTest): its register code's state that outlives
+// its compiles and the register link (jitState's regLinks). callee says
+// the code is for native callers alone, compiled from the lowering for
+// them (the register code's callee).
 func jitNamedLinkForTest(t *testing.T, r *Runtime, name string) (e *jitEntry, link *jitLink, callee bool) {
 	t.Helper()
 	return jitLinkedOfForTest(t, r, jitGlobalClosureForTest(r, name), name)

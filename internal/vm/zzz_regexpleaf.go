@@ -45,21 +45,19 @@ import (
 // The ops are given without setElemOp, which notes a leaf among those
 // native code's calls of Go make without a frame before anything else is
 // asked of them (leafFns, jitPlainSet): a RegExp literal's call, whose
-// RegExp the call of Go gives back to its literal's pool once it returns
-// (jitRegExpLitPool), must go on being made there. Native code learns at
-// the call of Go that a call of exec or test on any other RegExp is a
-// leaf's (jitRegExpLitSite), which its next compile makes a leaf's call of
-// Go of its own (ssa.GoLeaf).
+// RegExp the call of Go gives back to the literal once it returns
+// (regMarkedCall), must go on being made there. A call of exec or test
+// whose site's cache holds the built-in at the compile is compiled a
+// leaf's call of Go of its own (ssa.GoLeaf, jitRegFeedback's Leaf).
 //
-// The functions are generic, each instantiated with struct{} alone: Go
-// lays a generic function's instantiations out after every function and
-// closure of the package (see zzz_direct.go), and the check is a method
-// of a generic type, used as a method value, which is laid out after them
-// (see zzz_dataview.go). initStringRegExpMethods reaches them through
-// regexpLeaves, called where its last call, defMethod's of search, was:
-// its code shrinks within the padding that rounds it to 32 bytes, and
-// every function and closure of the package stays at its address (go tool
-// nm).
+// The functions are generic, each instantiated with struct{} alone: Go lays a
+// generic function's instantiations out after every function and closure of
+// the package (docs/optimizing.md, "The layout lock"), and the check is a
+// method of a generic type, used as a method value, which is laid out after
+// them (see zzz_dataview.go). initStringRegExpMethods reaches them through
+// regexpLeaves, called where its last call, defMethod's of search, was: its
+// code shrinks within the padding that rounds it to 32 bytes, and every
+// function and closure of the package stays at its address (go tool nm).
 
 // regexpLeafOnce gives exec and test their checks, and hasOwnProperty and
 // isArray theirs (objectLeaves).

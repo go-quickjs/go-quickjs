@@ -10,7 +10,7 @@ import (
 // takes for a string's (jitFeedback's StringProperty) -- at, a method
 // String.prototype has -- and whose cache the interpreter fills with an
 // object's shape before native code first leaves there: the code is
-// compiled again for the shape at that exit (jitPolySeen), not left at
+// compiled again for the shape at that exit (jitPolySeenOp), not left at
 // every read from then on, which a loop doing enough besides kept from
 // being judged slow.
 func TestJITStringGuessFilledLater(t *testing.T) {

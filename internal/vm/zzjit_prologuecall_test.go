@@ -126,9 +126,8 @@ func TestJITPrologueCallees(t *testing.T) {
 
 // A native call of a callee with a prologue whose code is gone -- dropped,
 // or no longer called natively -- with more operands than a call of Go
-// takes (abi.MaxGoArgs), has Go run it from its start (abi.ExitEnter), its
-// frame given the call's arguments from its parameters' slots
-// (jitEnterArgs).
+// takes (abi.MaxGoArgs), is left to Go, a call of Go that enters the code
+// at its start (jitRegEnter), its frame given the call's arguments.
 func TestJITPrologueEnter(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -146,7 +145,8 @@ func TestJITPrologueEnter(t *testing.T) {
 	// The register form's native callers leave a call of code they may
 	// not call to Go, a call of Go (jitLink's clearCode) -- here of
 	// more operands than abi.MaxGoArgs -- which enters the code at its
-	// start: the stack form's ExitEnter (jitEnterCallee) it has none of.
+	// start (jitRegEnter), with no exit of the callee's for it
+	// (abi.ExitEnter).
 	entries := e.ssaStats.entries
 	both.agree(t, `wides17(300, { x: 2 })`, `wides17(30, getter)`)
 	if e.ssaStats.entries == entries {

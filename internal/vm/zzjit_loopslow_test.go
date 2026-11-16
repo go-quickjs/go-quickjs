@@ -37,7 +37,7 @@ func jitAnswersWithForTest(t *testing.T, setup string, install func(*Runtime)) (
 // leaves now, called without one -- costs more natively than in the
 // interpreter, whose own calls of built-ins are cheaper than calls of Go
 // from native code. Its calls of Go are judged as they are made
-// (jitRunGoProfit), not only at the end of the stretch, which for a loop
+// (jitRegRunGoProfit), not only at the end of the stretch, which for a loop
 // entered at its header, by on-stack replacement, was the end of the loop:
 // the code leaves after the call that finds them not to pay, the frame goes
 // back to the interpreter at that loop, and Go does not enter the code
@@ -73,11 +73,11 @@ func TestJITCallsOfGoAtLoops(t *testing.T) {
 // its header by on-stack replacement at every budget, its code judged slow
 // only at its entries at the start, ran a turn, and left the frame to the
 // interpreter until the next budget. Such stretches are judged too
-// (jitSSAProfit's osr): Go no longer enters the code at the loop
+// (jitRegStretchWork's osr): Go no longer enters the code at the loop
 // (loopSlow), and each frame left goes back to the interpreter at the loop;
 // so too a loop over a generator's values, where its steps are calls of Go
 // -- a generator whose locals a closure captures, which no step resumes
-// natively (jitGenCallable). Each answer is Node's.
+// natively (jitRegGenCallable). Each answer is Node's.
 func TestJITLoopExitsAtEachTurn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -118,9 +118,10 @@ func TestJITLoopExitsAtEachTurn(t *testing.T) {
 // few instructions to the next yield -- is resumed in the interpreter, and
 // the resumptions look at the code once for each jitSSAProbe more
 // (jitResumeSkip), counting them all toward Go's retrying it
-// (jitRetrySlow): looked at at each, a loop over the generator's values
+// (jitRegRetrySlow): looked at at each, a loop over the generator's values
 // had spent a twentieth of its time there. The generator's locals a
-// closure captures, so that no step resumes it natively (jitGenCallable):
+// closure captures, so that no step resumes it natively
+// (jitRegGenCallable):
 // Go resumes it at each. Each answer is Node's.
 func TestJITSlowResumptionsLookSeldom(t *testing.T) {
 	if !jitSSABackend {

@@ -770,10 +770,10 @@ const (
 // Any exit inside -- the comparator's result neither a number nor an
 // oddball, which ToNumber would have Go convert; anything else the code
 // does not make -- has Go sort the array again from its first element, as
-// the built-in sorts it (jitLoopFinish). Nothing shows that it did: the
+// the built-in sorts it (jitRegLoopFinish). Nothing shows that it did: the
 // comparator is a function the VM has found free of effects (its body
 // reads its parameters and constants, which are numbers, and computes,
-// compares and branches on them, jitSortComparator), given the array's
+// compares and branches on them, jitRegSortComparator), given the array's
 // numbers, so that the calls made of it before the exit did nothing the
 // calls made again could tell apart, and the array is the same until the
 // copy is written back, in one call of Go after the last comparison.
@@ -6568,7 +6568,7 @@ func (b *builder) plan() error {
 		case ir.TypeTest:
 			// An object it cannot tell exits at the typeof, which Go makes;
 			// the interpreter goes on, the boolean not where the typeof's
-			// string was (compile's typeTests): no entry after it.
+			// string was (compile's lowering of RJTypeof): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
 			ir.ArrayLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
@@ -6781,7 +6781,7 @@ func (b *builder) plan() error {
 	// the start; and none is in a generator whose yields a loop's step
 	// resumes natively, at the entries after them (Func's GenResumes). An
 	// async function's resumption after an await where no entry is runs in
-	// the interpreter (the VM's jitResume).
+	// the interpreter (the VM's jitRegEnter).
 	looped := b.f.bools(len(p.Code) + 1)
 	suspends := false
 	for pc, in := range p.Code {
@@ -8393,7 +8393,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// checks do, but at a megamorphic site, which leaves for Go only
 		// what neither its receiver's own table nor the megamorphic cache
 		// has (PropertySite's Megamorphic); and a private member's, whose
-		// shapes Go learns at its exits (the VM's jitPrivateSeen).
+		// shapes Go learns at its exits (the VM's jitRegPrivateSeen).
 		kind := ir.GuardExit
 		if site.Megamorphic || in.Private {
 			kind = ir.HostExit
@@ -8830,7 +8830,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.goDelete(blk, in, operand, guard)
 	case ir.StringPart:
 		// A part's conversion the concat that reads it makes (compile's
-		// stringParts): checked to be a primitive that converts calling
+		// regStringParts): checked to be a primitive that converts calling
 		// nothing, as it is; where the check failed before, converted by
 		// Go there, as to_string is.
 		if b.fb != nil && b.fb.Generic(pc) {

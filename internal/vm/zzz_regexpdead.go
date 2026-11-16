@@ -49,7 +49,7 @@ import (
 //
 // The functions are generic, each instantiated with struct{} alone: Go
 // lays a generic function's instantiations out after every function and
-// closure of the package (see zzz_direct.go).
+// closure of the package (docs/optimizing.md, "The layout lock").
 
 var ()
 

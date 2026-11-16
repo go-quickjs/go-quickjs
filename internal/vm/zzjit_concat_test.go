@@ -103,10 +103,10 @@ func TestJITLongConcats(t *testing.T) {
 		}
 	}
 	// A part's conversion the concat that reads it makes is no call of Go
-	// of its own (compile's stringParts): the template's 41 parts are three
-	// calls of sixteen operands at most, the chain's ten one -- and the
-	// return's h + '|' + out one -- with no one part's concat nor a chain's
-	// '' + part among them.
+	// of its own (compile's regStringParts): the template's 41 parts are
+	// three calls of sixteen operands at most, the chain's ten one -- and
+	// the return's h + '|' + out one -- with no one part's concat nor a
+	// chain's '' + part among them.
 	for _, c := range []struct {
 		name  string
 		calls int

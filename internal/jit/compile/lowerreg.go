@@ -721,7 +721,8 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 		var to []int
 		switch {
 		case w.Op() == bytecode.RIterNext:
-			// Go may take the loop's end (goBranch).
+			// Go may take the loop's end: a step it runs whole jumps there
+			// (the VM's jitRegWhole).
 			to = append(to, regTarget(pc, w.SC()))
 		case regGoBranches(w):
 			to = append(to, pc+1, pc+2)
