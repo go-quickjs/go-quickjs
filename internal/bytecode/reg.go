@@ -137,8 +137,7 @@ const (
 	RNewObject
 	// RNewArray: R[A] = an array of the C values from R[B].
 	RNewArray
-	// RClosure: R[A] = a closure of Constants[BC].
-	RClosure
+	_ // free: 24, the translation reference's closure, removed
 	// RAdd, RSub, RMul: R[A] = R[B] op R[C].
 	RAdd
 	RSub
@@ -147,9 +146,7 @@ const (
 	// operator: a division, a remainder, a power, a bitwise operator or a
 	// shift, an equality or a relational comparison.
 	RBin
-	// RBinI: R[A] = R[B] op SC, where X is the stack form's Op of the
-	// operator: add, sub, mul, a bitwise operator or a shift.
-	RBinI
+	_ // free: 29, the translation reference's bin_imm, removed
 	// RInc and RDec: R[A] = ToNumeric(R[B]) + 1 or - 1.
 	RInc
 	RDec
@@ -161,23 +158,15 @@ const (
 	// RJmpF and RJmpT: jump by int32(BC) if R[A] is falsy or truthy.
 	RJmpF
 	RJmpT
-	// RJmpCmp: jump by SC if R[A] op R[B] is X's RCmpTrue bit, where X's low
-	// bits are the stack form's Op of the comparison.
-	RJmpCmp
-	// RJmpCmpI is RJmpCmp with the right operand the immediate SB.
-	RJmpCmpI
+	_ // free: 36, the translation reference's jmp_cmp, removed
+	_ // free: 37, the translation reference's jmp_cmp_imm, removed
 	// RRet returns R[A]; RRetUndef returns undefined.
 	RRet
 	RRetUndef
-	// RCall: R[B] = R[A](R[A+1] ... R[A+X]), with this undefined.
-	RCall
-	// RCallMethod: R[B] = R[A+1](R[A+2] ... R[A+1+X]), with this R[A].
-	RCallMethod
-	// RNew: R[B] = new R[A](R[A+1] ... R[A+X]).
-	RNew
-	// RCloseUpvals closes the upvalues of the locals from A up, as
-	// close_upvalues does when a block that captured bindings ends.
-	RCloseUpvals
+	_ // free: 40, the translation reference's call, removed
+	_ // free: 41, the translation reference's call_method, removed
+	_ // free: 42, the translation reference's new, removed
+	_ // free: 43, the translation reference's close_upvals, removed
 
 	// The bitwise operators and shifts, each an operation of its own so
 	// that no instruction decides at run time which operator it is: R[A] =
@@ -276,7 +265,9 @@ const (
 	// RApplyArgs: R[A] = R[B+1].call(R[B], R[B+2], ...the frame's
 	// arguments): f.apply(x, arguments) of a function whose arguments object
 	// is never made (Function.ForwardsArguments), the arguments as passed
-	// handed on without it; R[B] is f and R[B+1] what f.apply read.
+	// handed on without it; R[B] is f and R[B+1] what f.apply read. R[C]
+	// is the arguments binding, where an apply other than the built-in is
+	// given the object, made once.
 	RApplyArgs
 	// RGetIndexPre: R[C] += SX, then R[A] = R[B][R[C]] -- x[++i] and
 	// x[--i] of a local i, its step X a signed 8-bit immediate.
@@ -297,6 +288,75 @@ const (
 	// they lie (arguments_length, arguments_index).
 	RArgsLen
 	RArgsIndex
+	// RConcat: R[A] = the string of R[B] ... R[B+C-1] joined, each a
+	// string or a number, or converted by ToString: a chain of + after a
+	// string literal (the stack form's concat), one string made rather than
+	// one an addition.
+	RConcat
+	// RStrPart: R[A] = "" + R[A] where R[A] is neither a string nor a
+	// number, a part of a chain converted where its addition converted it.
+	RStrPart
+	// RKeyOfBase: R[A] = ToPropertyKey(R[C]), after a TypeError if R[B],
+	// the object it is for, is null or undefined: a computed member's key
+	// both read and written, converted once (to_property_key_of_base). A
+	// string, a symbol or a number is the key as it is.
+	RKeyOfBase
+	// RGetIndexPost: R[A] = R[B][R[C]], then R[C] += SX -- x[i++] and
+	// x[i--] of a local i, the read's key the step's old value.
+	RGetIndexPost
+	// RNewArrayE: R[A] = [], an empty literal made with the room its arrays
+	// came to need: B is its site, which learns it (the tree's
+	// arrayEmptyNode's).
+	RNewArrayE
+	// RAddIndex: R[A][R[B]] += R[C]; RAddIndexK: R[A][C] += R[B], a key
+	// that is an index; RAddIndexI: R[A][R[B]] += SC. Each is a statement's
+	// element update, its value unused, read where the value's evaluation
+	// cannot change what the read sees, as RAddProp's. X, in K and I, says
+	// an update, ++ or --, which converts by ToNumeric where += adds as +
+	// does. The key is converted once.
+	RAddIndex
+	RAddIndexK
+	RAddIndexI
+	// RSwitch: a switch's leading cases whose selectors are literals, looked
+	// up as one: R[A] goes to the body of the first case of Switches[BC]
+	// it strictly equals, and to the next instruction where it equals
+	// none -- the chain of the switch's other cases, or its default.
+	RSwitch
+	// RJTypeof: jump by SC if typeof R[A] is the type of index X&^RCmpTrue
+	// in the VM's typeofNames -- undefined, object, boolean, number,
+	// string, symbol, bigint, function -- and X's RCmpTrue bit says it is,
+	// or neither: typeof x === "name" and its kind as one compare.
+	RJTypeof
+	// RTypeof: R[A] = typeof R[B].
+	RTypeof
+	// RSwitchTypeof: switch (typeof R[A]) of string cases alone: the body
+	// of the first case of Switches[BC] that is the type's name, or the
+	// next instruction.
+	RSwitchTypeof
+	// RNewObjectLit: R[A] = an object literal of the X properties named
+	// ObjKeys[Aux[pc]], their values R[B] on, site C: the literal made at
+	// once, its values evaluated before it, which nothing can tell apart.
+	RNewObjectLit
+	// RAppend: R[A] = R[A] + R[B], an addition to a local the stack
+	// compiler made an append (bytecode.AddOwned): the string the local
+	// alone holds grown in place where it can be (the VM's strAppend),
+	// anything else added as RAdd adds it. Its value is the local's.
+	RAppend
+	// RStrFreeze: R[A], a read of a binding an append grows, is no longer
+	// the binding's alone (the stack form's str_freeze, StrFreezeA).
+	RStrFreeze
+	// RCharCodeAt: R[A] = R[B].charCodeAt(R[X]), the method read at site
+	// C and called with the argument in register X, a local no one else
+	// writes: a string's code unit read where the method is the built-in
+	// and the argument a number, anything else the read and the call
+	// get_method_w and call_method_w make. It is placed at the call; Aux
+	// is the stack instruction of the read, where the read's errors are
+	// placed.
+	RCharCodeAt
+	// RCold is an operation that does not run per turn of a hot loop, its
+	// sub-operation (RColdOp) in X: one opcode value for all of them,
+	// dispatched a second time out of the loop.
+	RCold
 
 	// RInvalid is the last operation there can be, which no code holds:
 	// the interpreter's switch has a case for it so that its jump table
@@ -304,9 +364,59 @@ const (
 	RInvalid ROp = 255
 )
 
-// RCmpTrue is the bit of RJmpCmp's X that says it jumps when the
-// comparison holds, rather than when it does not.
+// RCmpTrue is the bit of a compare-and-branch's X (jtypeof's, a fused
+// set_upval's) that says it jumps when the comparison holds, rather than
+// when it does not.
 const RCmpTrue = 0x80
+
+// RColdOp is cold's sub-operation, in its X.
+type RColdOp uint8
+
+const (
+	// RColdNewRegExp: R[A] = the RegExp literal of Constants[BC].
+	RColdNewRegExp RColdOp = iota
+	// RColdLitExec and RColdLitTest: R[A+1] = the RegExp literal of
+	// Constants[B], and R[A] its exec or test, read at site C -- not read
+	// where it is the realm's built-in, which reading runs nothing to find
+	// (a call's window: the callee, the receiver, the arguments).
+	RColdLitExec
+	RColdLitTest
+	// RColdCallLit: R[B] = R[A](R[A+2] ... R[A+1+C]) with this R[A+1], the
+	// RegExp of a literal of Constants[Aux] that lit_exec or lit_test made:
+	// given back to the literal where the call was the built-in's, given a
+	// primitive, which keeps nothing of it.
+	RColdCallLit
+	// RColdCallArgLit is call_lit with the RegExp of the literal its first
+	// argument, R[A+2]: given back where the call was String.prototype's
+	// replace, split or match searching with it directly (regexpArgCall).
+	RColdCallArgLit
+	// RColdCallDead is call_method_w of exec or replace whose value
+	// nothing reads but its truth: the function told so, as the tree's
+	// deadExec tells it, to make no array or string.
+	RColdCallDead
+	// RColdCallReuse is call_method_w of exec whose value goes to the
+	// local of register B, Aux the stack form's call (execReuseOf): the
+	// array of a match may be made again in the memory of the last.
+	RColdCallReuse
+)
+
+// RColdDead is the bit of call_lit's, call_arg_lit's and call_dead's Aux
+// that says nothing reads the call's value but its truth; the rest is the
+// literal's constant.
+const RColdDead = 1 << 31
+
+var rColdNames = [...]string{
+	RColdNewRegExp: "new_regexp", RColdLitExec: "lit_exec", RColdLitTest: "lit_test",
+	RColdCallLit: "call_lit", RColdCallArgLit: "call_arg_lit", RColdCallDead: "call_dead",
+	RColdCallReuse: "call_reuse",
+}
+
+func (op RColdOp) String() string {
+	if int(op) < len(rColdNames) && rColdNames[op] != "" {
+		return rColdNames[op]
+	}
+	return fmt.Sprintf("cold(%d)", uint8(op))
+}
 
 // LitElem is an element of a literal of constants: Constants[K], or, by
 // Kind, true, false, null or undefined.
@@ -322,6 +432,26 @@ const (
 	LitFalse
 	LitNull
 	LitUndefined
+)
+
+// SwitchCase is a case of an RSwitch's table: its selector, a literal, by
+// Kind -- a number Num, a string Str, Constants[K], true, false, null --
+// and the pc of its body.
+type SwitchCase struct {
+	Kind uint8
+	Num  float64
+	Str  string
+	K    uint32
+	To   uint32
+}
+
+// The kinds of a SwitchCase.
+const (
+	SwitchNum = iota
+	SwitchStr
+	SwitchTrue
+	SwitchFalse
+	SwitchNull
 )
 
 // RegCode is a function's code in the register form.
@@ -355,11 +485,21 @@ type RegCode struct {
 	CallSites int
 	// Aux is, for an instruction that needs one more operand than its word
 	// holds, that operand, by its pc: instanceof's cache site. Nil where no
-	// instruction needs one.
+	// instruction needs one; for add_index, the stack instruction of its
+	// store, where the store's errors are placed.
 	Aux []uint32
+	// Switches is each RSwitch's table, in its cases' order.
+	Switches [][]SwitchCase
 	// Literals are the elements of the code's literals of constants
 	// (RNewArrayK), each a constant or one of the values no constant is.
 	Literals [][]LitElem
+	// ObjKeys are the keys of the code's object literals made at once
+	// (RNewObjectLit), each an index of the function's names.
+	ObjKeys [][]uint16
+	// LocalReg is each local's register, or -1, where the code has a
+	// call_reuse, whose frame's locals the runtime reads by it; nil
+	// otherwise.
+	LocalReg []int32
 	// UsesArguments says the code makes the arguments object, whose frame
 	// keeps the arguments as passed (RArguments).
 	UsesArguments bool
@@ -375,16 +515,13 @@ var rOpNames = [...]string{
 	RLoadThis: "load_this", RCheckRef: "check_ref",
 	RGetUpval: "get_upval", RSetUpval: "set_upval",
 	RGetGlobal: "get_global", RSetGlobal: "set_global",
-	RGetProp: "get_prop", RGetMethod: "get_method", RGetMethodW: "get_method_w", RArgsLen: "args_len", RArgsIndex: "args_index", RSetProp: "set_prop",
+	RGetProp: "get_prop", RGetMethod: "get_method", RGetMethodW: "get_method_w", RArgsLen: "args_len", RArgsIndex: "args_index", RConcat: "concat", RStrPart: "str_part", RKeyOfBase: "key_of_base", RSetProp: "set_prop",
 	RGetIndex: "get_index", RSetIndex: "set_index", RDefineField: "define_field",
-	RNewObject: "new_object", RNewArray: "new_array", RClosure: "closure",
-	RAdd: "add", RSub: "sub", RMul: "mul", RBin: "bin", RBinI: "bin_imm",
+	RNewObject: "new_object", RNewArray: "new_array",
+	RAdd: "add", RSub: "sub", RMul: "mul", RBin: "bin",
 	RInc: "inc", RDec: "dec", RUnary: "unary",
-	RJmp: "jmp", RJmpF: "jmp_false", RJmpT: "jmp_true", RJmpCmp: "jmp_cmp",
-	RJmpCmpI: "jmp_cmp_imm", RRet: "ret", RRetUndef: "ret_undef",
-	RCall: "call", RCallMethod: "call_method", RNew: "new",
-	RCloseUpvals: "close_upvals",
-	RBitAnd:      "bit_and", RBitOr: "bit_or", RBitXor: "bit_xor", RShl: "shl", RShr: "shr", RUShr: "ushr",
+	RJmp: "jmp", RJmpF: "jmp_false", RJmpT: "jmp_true", RRet: "ret", RRetUndef: "ret_undef",
+	RBitAnd: "bit_and", RBitOr: "bit_or", RBitXor: "bit_xor", RShl: "shl", RShr: "shr", RUShr: "ushr",
 	RAndI: "and_imm", ROrI: "or_imm", RXorI: "xor_imm", RShlI: "shl_imm", RShrI: "shr_imm", RUShrI: "ushr_imm",
 	RCallW: "call_w", RAddI: "add_imm", RSubI: "sub_imm",
 	RJLt: "jlt", RJNLt: "jnlt", RJLe: "jle", RJNLe: "jnle", RJGt: "jgt", RJNGt: "jngt", RJGe: "jge", RJNGe: "jnge",
@@ -394,7 +531,7 @@ var rOpNames = [...]string{
 	RPostInc: "post_inc", RPostDec: "post_dec", RGetLength: "get_length",
 	RJEq: "jeq", RJNe: "jne", RJEqI: "jeq_imm", RJNeI: "jne_imm", RJNull: "jnull", RJNotNull: "jnotnull",
 	RThrow: "throw", RInstanceOf: "instanceof", RIn: "in", RDelete: "delete", RArguments: "arguments", RNewArrayK: "new_array_k", RAddProp: "add_prop", RAddPropI: "add_prop_imm", RApplyArgs: "apply_args",
-	RGetIndexPre: "get_index_pre", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
+	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RCold: "cold", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
 }
 
 func (op ROp) String() string {
@@ -409,21 +546,14 @@ func (rc *RegCode) Format(pc int) string {
 	w := rc.Code[pc]
 	r := func(n uint16) string { return fmt.Sprintf("r%d", n) }
 	target := func(off int32) string { return fmt.Sprintf("-> %d", pc+1+int(off)) }
-	cmp := func() string {
-		s := Op(w.X() &^ RCmpTrue).String()
-		if w.X()&RCmpTrue == 0 {
-			return "!" + s
-		}
-		return s
-	}
 	switch op := w.Op(); op {
 	case RMove, RInc, RDec, RPostInc, RPostDec, RGetLength:
 		return fmt.Sprintf("%s %s, %s", op, r(w.A()), r(w.B()))
 	case RLoadInt:
 		return fmt.Sprintf("%s %s, %d", op, r(w.A()), int32(w.BC()))
-	case RLoadConst, RClosure:
+	case RLoadConst:
 		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
-	case RLoadUndef, RLoadNull, RLoadTrue, RLoadFalse, RLoadEmpty, RLoadUninit, RLoadThis, RRet, RCloseUpvals:
+	case RLoadUndef, RLoadNull, RLoadTrue, RLoadFalse, RLoadEmpty, RLoadUninit, RLoadThis, RRet:
 		return fmt.Sprintf("%s %s", op, r(w.A()))
 	case RCheckRef:
 		return fmt.Sprintf("%s %s, local %d", op, r(w.A()), w.B())
@@ -437,6 +567,12 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s name%d @%d, %s", op, w.B(), w.C(), r(w.A()))
 	case RArgsLen:
 		return fmt.Sprintf("%s %s, %s", op, r(w.A()), r(w.B()))
+	case RConcat:
+		return fmt.Sprintf("%s %s = %s..%s", op, r(w.A()), r(w.B()), r(w.B()+w.C()-1))
+	case RStrPart:
+		return fmt.Sprintf("%s %s", op, r(w.A()))
+	case RKeyOfBase:
+		return fmt.Sprintf("%s %s = key of %s for %s", op, r(w.A()), r(w.C()), r(w.B()))
 	case RArgsIndex:
 		return fmt.Sprintf("%s %s, %s[%s]", op, r(w.A()), r(w.B()), r(w.C()))
 	case RGetProp, RGetMethod, RGetMethodW:
@@ -448,27 +584,45 @@ func (rc *RegCode) Format(pc int) string {
 	case RInstanceOf, RIn, RDelete:
 		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
 	case RApplyArgs:
-		return fmt.Sprintf("%s %s = %s.apply(%s, %s, arguments)", op, r(w.A()), r(w.B()+1), r(w.B()), r(w.B()+2))
-	case RThrow, RArguments:
+		return fmt.Sprintf("%s %s = %s.apply(%s, %s, arguments %s)", op, r(w.A()), r(w.B()+1), r(w.B()), r(w.B()+2), r(w.C()))
+	case RThrow, RArguments, RStrFreeze:
 		return fmt.Sprintf("%s %s", op, r(w.A()))
+	case RAppend:
+		return fmt.Sprintf("%s %s, %s", op, r(w.A()), r(w.B()))
+	case RCharCodeAt:
+		return fmt.Sprintf("%s %s = %s.charCodeAt(%s) @%d", op, r(w.A()), r(w.B()), r(uint16(w.X())), w.C())
 	case RGetIndex, RAdd, RSub, RMul, RBitAnd, RBitOr, RBitXor, RShl, RShr, RUShr:
 		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
 	case RSetIndex:
 		return fmt.Sprintf("%s %s[%s], %s", op, r(w.A()), r(w.B()), r(w.C()))
 	case RNewObject:
 		return fmt.Sprintf("%s %s, %d @%d", op, r(w.A()), w.B(), w.C())
+	case RNewObjectLit:
+		return fmt.Sprintf("%s %s, %s x%d @%d", op, r(w.A()), r(w.B()), w.X(), w.C())
 	case RAddProp:
 		return fmt.Sprintf("%s %s @%d, %s", op, r(w.A()), w.C(), r(w.B()))
 	case RAddPropI:
 		return fmt.Sprintf("%s %s @%d, %d", op, r(w.A()), w.C(), w.SB())
 	case RNewArrayK:
 		return fmt.Sprintf("%s %s, x%d @%d", op, r(w.A()), w.B(), w.C())
+	case RAddIndex:
+		return fmt.Sprintf("%s %s[%s], %s", op, r(w.A()), r(w.B()), r(w.C()))
+	case RAddIndexK:
+		return fmt.Sprintf("%s.%d %s[%d], %s", op, w.X(), r(w.A()), w.C(), r(w.B()))
+	case RAddIndexI:
+		return fmt.Sprintf("%s.%d %s[%s], %d", op, w.X(), r(w.A()), r(w.B()), w.SC())
+	case RTypeof:
+		return fmt.Sprintf("%s %s, %s", op, r(w.A()), r(w.B()))
+	case RJTypeof:
+		return fmt.Sprintf("%s %s, %d %v -> %+d", op, r(w.A()), w.X()&^RCmpTrue, w.X()&RCmpTrue != 0, w.SC())
+	case RSwitch, RSwitchTypeof:
+		return fmt.Sprintf("%s %s, table%d", op, r(w.A()), w.BC())
+	case RNewArrayE:
+		return fmt.Sprintf("%s %s @%d", op, r(w.A()), w.B())
 	case RNewArray:
 		return fmt.Sprintf("%s %s, %s x%d", op, r(w.A()), r(w.B()), w.C())
 	case RBin:
 		return fmt.Sprintf("%s.%s %s, %s, %s", op, Op(w.X()), r(w.A()), r(w.B()), r(w.C()))
-	case RBinI:
-		return fmt.Sprintf("%s.%s %s, %s, %d", op, Op(w.X()), r(w.A()), r(w.B()), w.SC())
 	case RAndI, ROrI, RXorI, RShlI, RShrI, RUShrI, RAddI, RSubI:
 		return fmt.Sprintf("%s %s, %s, %d", op, r(w.A()), r(w.B()), w.SC())
 	case RUnary:
@@ -477,30 +631,36 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s", op, target(int32(w.BC())))
 	case RJmpF, RJmpT:
 		return fmt.Sprintf("%s %s %s", op, r(w.A()), target(int32(w.BC())))
-	case RJmpCmp:
-		return fmt.Sprintf("%s %s %s, %s %s", op, cmp(), r(w.A()), r(w.B()), target(w.SC()))
 	case RJNull, RJNotNull:
 		return fmt.Sprintf("%s %s %s", op, r(w.A()), target(w.SC()))
 	case RJLt, RJNLt, RJLe, RJNLe, RJGt, RJNGt, RJGe, RJNGe, RJSEq, RJSNe, RJEq, RJNe:
 		return fmt.Sprintf("%s %s, %s %s", op, r(w.A()), r(w.B()), target(w.SC()))
 	case RJLtI, RJNLtI, RJLeI, RJNLeI, RJGtI, RJNGtI, RJGeI, RJNGeI, RJSEqI, RJSNeI, RJEqI, RJNeI:
 		return fmt.Sprintf("%s %s, %d %s", op, r(w.A()), w.SB(), target(w.SC()))
-	case RJmpCmpI:
-		return fmt.Sprintf("%s %s %s, %d %s", op, cmp(), r(w.A()), w.SB(), target(w.SC()))
 	case RGetIndexI:
 		return fmt.Sprintf("%s %s, %s[%d]", op, r(w.A()), r(w.B()), w.C())
 	case RGetIndexPre:
 		return fmt.Sprintf("%s %s, %s[%s += %d]", op, r(w.A()), r(w.B()), r(w.C()), int8(w.X()))
+	case RGetIndexPost:
+		return fmt.Sprintf("%s %s, %s[%s], %s += %d", op, r(w.A()), r(w.B()), r(w.C()), r(w.C()), int8(w.X()))
 	case RJLtU, RJNLtU, RJLeU, RJNLeU:
 		return fmt.Sprintf("%s %s, u%d %s", op, r(w.A()), w.B(), target(w.SC()))
 	case RSetIndexI:
 		return fmt.Sprintf("%s %s[%d], %s", op, r(w.A()), w.B(), r(w.C()))
 	case RClosureW:
 		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
-	case RCall, RNew, RCallW, RCallMW, RNewW:
+	case RCallW, RCallMW, RNewW:
 		return fmt.Sprintf("%s %s = %s(%d)", op, r(w.B()), r(w.A()), w.X())
-	case RCallMethod:
-		return fmt.Sprintf("%s %s = %s.%s(%d)", op, r(w.B()), r(w.A()), r(w.A()+1), w.X())
+	case RCold:
+		switch sub := RColdOp(w.X()); sub {
+		case RColdNewRegExp:
+			return fmt.Sprintf("%s.%s %s, k%d", op, sub, r(w.A()), w.BC())
+		case RColdLitExec, RColdLitTest:
+			return fmt.Sprintf("%s.%s %s, k%d @%d", op, sub, r(w.A()), w.B(), w.C())
+		case RColdCallLit, RColdCallArgLit, RColdCallDead, RColdCallReuse:
+			return fmt.Sprintf("%s.%s %s = %s(%d)", op, sub, r(w.B()), r(w.A()), w.C())
+		}
+		return fmt.Sprintf("%s.%s %s, %s, %s", op, RColdOp(w.X()), r(w.A()), r(w.B()), r(w.C()))
 	default:
 		return op.String()
 	}

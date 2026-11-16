@@ -360,6 +360,28 @@ type Call struct {
 	Forward bool
 }
 
+// TracePos is where a call is in a stack trace, as V8 places it: at the
+// name called, when the callee ends in one -- `f()`, `a.b()` -- and
+// otherwise at the argument list's parenthesis.
+func (n *Call) TracePos() int {
+	switch c := n.Callee.(type) {
+	case *Ident:
+		if !c.Paren {
+			return int(n.Start)
+		}
+	case *Member:
+		if !c.Computed && c.Property != nil {
+			return c.Property.Pos()
+		}
+	case *Super:
+		return int(n.Start)
+	}
+	if n.Open > 0 {
+		return int(n.Open)
+	}
+	return int(n.Start)
+}
+
 // New is `new Callee(Args)`.
 type New struct {
 	Callee Expr

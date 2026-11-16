@@ -55,6 +55,12 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			ok = reg(a) && reg(b)
 		case bytecode.RArgsIndex:
 			ok = reg(a) && reg(b) && reg(c)
+		case bytecode.RConcat:
+			ok = reg(a) && c >= 2 && int(b)+int(c) <= n
+		case bytecode.RStrPart:
+			ok = reg(a)
+		case bytecode.RKeyOfBase:
+			ok = reg(a) && reg(b) && reg(c)
 		case bytecode.RGetMethodW:
 			ok = int(a)+1 < n && reg(b) && site(c)
 		case bytecode.RSetProp:
@@ -64,7 +70,7 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		case bytecode.RGetIndex, bytecode.RSetIndex, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
 			bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
 			ok = reg(a) && reg(b) && reg(c)
-		case bytecode.RGetIndexPre:
+		case bytecode.RGetIndexPre, bytecode.RGetIndexPost:
 			ok = reg(a) && reg(b) && reg(c)
 		case bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU:
 			ok = reg(a) && int(b) < len(fn.Upvalues) && in(pc, int64(w.SC()))
@@ -77,6 +83,35 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			ok = reg(a) && reg(b)
 		case bytecode.RNewObject:
 			ok = reg(a) && site(c)
+		case bytecode.RNewObjectLit:
+			ok = reg(a) && site(c) && w.X() > 0 && int(b)+int(w.X()) <= n && pc < len(rc.Aux) && int(rc.Aux[pc]) < len(rc.ObjKeys) &&
+				len(rc.ObjKeys[rc.Aux[pc]]) == int(w.X())
+			if ok {
+				for _, k := range rc.ObjKeys[rc.Aux[pc]] {
+					ok = ok && int(k) < len(fn.Names)
+				}
+			}
+		case bytecode.RTypeof, bytecode.RAppend:
+			ok = reg(a) && reg(b)
+		case bytecode.RStrFreeze:
+			ok = reg(a)
+		case bytecode.RCharCodeAt:
+			ok = reg(a) && reg(b) && reg(uint16(w.X())) && site(c) && pc < len(rc.Aux) && int(rc.Aux[pc]) < len(fn.Code)
+		case bytecode.RJTypeof:
+			ok = reg(a) && w.X()&^bytecode.RCmpTrue < 8 && in(pc, int64(w.SC()))
+		case bytecode.RSwitch, bytecode.RSwitchTypeof:
+			ok = reg(a) && int(w.BC()) < len(rc.Switches)
+			if ok {
+				for _, sc := range rc.Switches[w.BC()] {
+					ok = ok && int(sc.To) < len(code)
+				}
+			}
+		case bytecode.RAddIndex:
+			ok = reg(a) && reg(b) && reg(c)
+		case bytecode.RAddIndexK, bytecode.RAddIndexI:
+			ok = reg(a) && reg(b)
+		case bytecode.RNewArrayE:
+			ok = reg(a)
 		case bytecode.RNewArray:
 			ok = reg(a) && int(b)+int(c) <= n
 		case bytecode.RCallW, bytecode.RCallMW:
@@ -113,8 +148,10 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			}
 		case bytecode.RInstanceOf:
 			ok = reg(a) && reg(b) && reg(c) && pc < len(rc.Aux) && rc.Aux[pc] != 0 && int(rc.Aux[pc]) <= int(fn.PropSites)
+		case bytecode.RCold:
+			ok = coldOK(rc, fn, pc, w, reg, site)
 		case bytecode.RApplyArgs:
-			ok = reg(a) && int(b)+3 <= n && rc.ForwardsArguments
+			ok = reg(a) && int(b)+3 <= n && reg(c) && rc.ForwardsArguments
 		case bytecode.RRetUndef:
 		default:
 			ok = false
@@ -132,4 +169,25 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		return "the code runs past its end"
 	}
 	return ""
+}
+
+// coldOK checks cold's operands, by its sub-operation.
+func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RInstr, reg func(uint16) bool, site func(uint16) bool) bool {
+	a, b, c := w.A(), w.B(), w.C()
+	regexpK := func(k uint32) bool { return int(k) < len(fn.Constants) && fn.Constants[k].Kind == bytecode.ConstRegExp }
+	switch bytecode.RColdOp(w.X()) {
+	case bytecode.RColdNewRegExp:
+		return reg(a) && regexpK(w.BC())
+	case bytecode.RColdLitExec, bytecode.RColdLitTest:
+		return reg(a) && reg(a+1) && regexpK(uint32(b)) && site(c)
+	case bytecode.RColdCallLit, bytecode.RColdCallArgLit:
+		return reg(b) && int(a)+2+int(c) <= rc.NumRegs && pc < len(rc.Aux) && regexpK(rc.Aux[pc]&^bytecode.RColdDead) &&
+			(bytecode.RColdOp(w.X()) == bytecode.RColdCallLit || c > 0)
+	case bytecode.RColdCallDead:
+		return reg(b) && int(a)+2+int(c) <= rc.NumRegs && pc < len(rc.Aux) && rc.Aux[pc] == bytecode.RColdDead
+	case bytecode.RColdCallReuse:
+		return reg(b) && int(a)+2+int(c) <= rc.NumRegs && pc < len(rc.Aux) && int(rc.Aux[pc])+1 < len(fn.Code) &&
+			len(rc.LocalReg) == len(fn.Locals)
+	}
+	return false
 }

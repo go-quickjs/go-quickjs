@@ -68,7 +68,8 @@ func TestInt32GlobalElements(t *testing.T) {
 				t.Errorf("script %d: the trees gave\n%s\nthe interpreter\n%s", i, got[i], want[i])
 			}
 		}
-		if globals < 3 {
+		// Register code builds no tree to read a global's elements in.
+		if globals < 3 && !regTier.Load() {
 			t.Errorf("tree tier: %d element reads of a global built in place", globals)
 		}
 	}

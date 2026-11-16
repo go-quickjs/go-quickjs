@@ -143,7 +143,9 @@ func TestTreeFlowBackEdges(t *testing.T) {
 			left[i], res[i] = r.backEdges, v
 			r.Close()
 		}
-		if left[0] != left[1] || !res[0].StrictEquals(res[1]) {
+		// Register code's loops are not the tree's structured ones: it
+		// checks interrupts at its own back edges (regBackEdge).
+		if left[0] != left[1] && !regTier.Load() || !res[0].StrictEquals(res[1]) {
 			t.Errorf("%s: interpreter %v with %d back edges left, tree %v with %d", src, res[0], left[0], res[1], left[1])
 		}
 	}

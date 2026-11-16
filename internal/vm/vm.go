@@ -3269,7 +3269,7 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 		// frame keeps open (newClosureByValue). Native code's locals in cells
 		// of their own are shared all the same: what never changes is the
 		// same either way.
-		return newClosureByValue[struct{}](r, f, tmpl)
+		return newClosureByValue[struct{}](r, f, tmpl, nil, 0)
 	}
 
 	// The object, its function data, its closure and the bindings that closure

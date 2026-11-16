@@ -51,7 +51,11 @@ type arrowFuncObject3v struct {
 // bindings it is the first to share are given, with them. What follows
 // is newClosureIn's, step for step: that function is left as it was, so
 // that a closure that takes nothing by value is made by the same code.
-func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure) *Object {
+//
+// Register code's captured locals are its window's registers, caps the
+// register of each of tmpl's upvalues (bytecode.RegCode's Caps) and wb the
+// window's base; caps is nil for a frame of the stack form.
+func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure, caps []uint16, wb int) *Object {
 	descs := tmpl.fn.Upvalues
 	arrow := tmpl.fn.Kind == bytecode.KindArrow
 	proto := r.funcProtoFor(tmpl.fn)
@@ -107,22 +111,23 @@ func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure) *Object {
 			u, cells = &cells[0], cells[1:]
 		case desc.ByValue:
 			if len(room) == 0 {
-				room = make([]upvalue, cellsWanted[struct{}](f, descs[i:]))
+				room = make([]upvalue, cellsWanted[struct{}](r, f, descs, i, caps, wb))
 			}
 			u, room = &room[0], room[1:]
 		default:
-			if u = openUpvalue(f, int(desc.Index)); u == nil {
+			slot := capturedSlot(r, f, desc, i, caps, wb)
+			if u = openOn(f, slot); u == nil {
 				if len(room) == 0 {
-					room = make([]upvalue, cellsWanted[struct{}](f, descs[i:]))
+					room = make([]upvalue, cellsWanted[struct{}](r, f, descs, i, caps, wb))
 				}
 				u, room = &room[0], room[1:]
-				u.slot = &f.locals[desc.Index]
+				u.slot = slot
 				f.openUpvalues = append(f.openUpvalues, u)
 			}
 			upvalues[i] = u
 			continue
 		}
-		u.closed = f.locals[desc.Index]
+		u.closed = *capturedSlot(r, f, desc, i, caps, wb)
 		u.slot = &u.closed
 		upvalues[i] = u
 	}
@@ -225,12 +230,32 @@ func byValueCount[_ any](descs []bytecode.UpvalueDesc) int {
 // cellsWanted is uncaptured for a closure that takes some of its captures
 // by value: the bindings no upvalue is open on yet, and those it copies,
 // each of which has a cell of its own.
-func cellsWanted[_ any](f *frame, descs []bytecode.UpvalueDesc) int {
+func cellsWanted[_ any](r *Runtime, f *frame, descs []bytecode.UpvalueDesc, from int, caps []uint16, wb int) int {
 	n := 0
-	for _, desc := range descs {
-		if desc.FromParent && (desc.ByValue || openUpvalue(f, int(desc.Index)) == nil) {
+	for i := from; i < len(descs); i++ {
+		if desc := descs[i]; desc.FromParent && (desc.ByValue || openOn(f, capturedSlot(r, f, desc, i, caps, wb)) == nil) {
 			n++
 		}
 	}
 	return n
+}
+
+// capturedSlot is where f keeps the local upvalue i of a closure it makes
+// captures, desc: its slot, or for register code (caps not nil) its
+// register.
+func capturedSlot(r *Runtime, f *frame, desc bytecode.UpvalueDesc, i int, caps []uint16, wb int) *Value {
+	if caps != nil {
+		return &r.stack[wb+int(caps[i])]
+	}
+	return &f.locals[desc.Index]
+}
+
+// openOn is the upvalue f keeps open on slot, or nil.
+func openOn(f *frame, slot *Value) *upvalue {
+	for _, u := range f.openUpvalues {
+		if u.slot == slot {
+			return u
+		}
+	}
+	return nil
 }

@@ -87,6 +87,7 @@ func (r *Runtime) clearReturnedFrames() {
 		f := r.frameAt(i)
 		f.cl, f.locals, f.args, f.callee, f.thisRef = nil, nil, nil, nil, nil
 		f.this, f.newTarget = Value{}, Value{}
+		f.regKind = 0
 		f.evalVars, f.withScopes = nil, nil
 		// A tree's context is left set when it returns, for the next call at
 		// this depth, and holds the closure and the value it returned.

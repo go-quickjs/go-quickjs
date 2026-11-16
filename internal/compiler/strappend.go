@@ -93,12 +93,16 @@ func (c *compiler) enclosingBinding(name string) (*localVar, *compiler) {
 // is appended to. x.length is no read of a string: it keeps nothing, and a
 // string runs no code to answer it, so the object of one (lengthRead) is
 // neither noted nor frozen. while (s.length < n) s += x stays an append.
-func (c *compiler) compiledRead(l *localVar) {
+//
+// The register form is told of each read frozen, n, so that it freezes the
+// same reads (regcomp.Record's Freezes).
+func (c *compiler) compiledRead(l *localVar, n *ast.Ident) {
 	if c.lengthRead {
 		return
 	}
 	l.read = true
 	if l.appended {
+		c.reg.NoteFreeze(n)
 		c.emit(bytecode.OpArgumentsIndex, bytecode.StrFreezeA, 0)
 	}
 }
@@ -238,6 +242,7 @@ func (c *compiler) compileLocalAppend(n *ast.Assign) {
 	l, _ := c.resolveLocal(n.Target.(*ast.Ident).Name)
 	c.reg.NoteRead(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 	c.reg.NoteWrite(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
+	c.reg.NoteAppend(n)
 	c.emit(bytecode.OpGetLocal, l.slot, 0)
 	c.compileExpr(n.Value)
 	// Not by emit, which would fuse it with a local or a constant before it,

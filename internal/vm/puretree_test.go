@@ -38,7 +38,9 @@ func TestPureByTree(t *testing.T) {
 		if got := res[0].Number(); got != 300+149*3 {
 			t.Errorf("tree=%v: n = %v, want %v", tree, got, 300+149*3)
 		}
-		if tree {
+		// What a tree's call is given, where the functions are trees: the
+		// register tier enters register code from a tree directly.
+		if tree && !regTier.Load() {
 			for i, want := range []bool{true, true, false, false} {
 				fd := res[i+1].Object().fn()
 				name := []string{"held", "mark", "one", "viaHeld"}[i]

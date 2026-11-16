@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"slices"
 	"sync/atomic"
 	"unsafe"
 
@@ -118,18 +119,6 @@ func (r *Runtime) regCall(callee, this Value, args []Value) (Value, error) {
 	return v, err
 }
 
-// regCallOp is call and call_method, the instruction before k's pc.
-func (r *Runtime) regCallOp(f *frame, c *regCode, k *regKept, wb int) (Value, error) {
-	pc := k.pc - 1
-	f.pc = c.src[pc] + 1
-	w := regAt(c.code, pc)
-	b := wb + int(w.A())
-	if w.Op() == bytecode.RCall {
-		return r.regCall(r.stack[b], Undefined, r.stack[b+1:b+1+int(w.X())])
-	}
-	return r.regCall(r.stack[b+1], r.stack[b], r.stack[b+2:b+2+int(w.X())])
-}
-
 // regCallW is call_w and call_method_w: a call whose callee's frame
 // starts at the caller's window, R[A], its parameters the arguments where
 // they lie. It writes the call's value to R[B] itself, so that the loop
@@ -155,6 +144,30 @@ func (r *Runtime) regCallW(f *frame, c *regCode, k *regKept, wb int) error {
 			// A leaf is answered first, before the frame's pc is written:
 			// its body reads nothing of the frame and throws nothing.
 			if e.kind&regCallLeaf != 0 {
+				if leaf := e.rc.leaf; leaf >= regLeafArg {
+					v := e.rc.leafVal
+					if p := int(e.rc.leafArg); leaf == regLeafArg {
+						v = Undefined
+						if p < int(w.X()) {
+							v = win[2+p]
+						}
+					}
+					regWindow(r.stack, wb)[w.B()] = v
+					return nil
+				}
+				if e.rc.leaf == regLeafCode {
+					if v, ok := r.regLeafRun(e.cl, e.rc, base, int(w.X())); ok {
+						regWindow(r.stack, wb)[w.B()] = v
+						return nil
+					}
+					if e.cl.pureMiss >= pureMissLimit {
+						// A body that keeps meeting what it cannot run
+						// without a frame is entered with one from now on.
+						e.kind &^= regCallOut | regCallLeaf
+					}
+					f.pc = regSrc(c, pc) + 1
+					return r.regCallMiss(f, c, w, wb)
+				}
 				// The this is given to the body, not written to the
 				// window: a miss writes it (regCallSlow).
 				this, ok := win[1], true
@@ -183,6 +196,9 @@ func (r *Runtime) regCallW(f *frame, c *regCode, k *regKept, wb int) error {
 				return r.regCallMiss(f, c, w, wb)
 			}
 			f.pc = regSrc(c, pc) + 1
+			if e.kind == regCallNative {
+				return r.regNative(e.callee, w, wb)
+			}
 			ok := e.kind == regCallEnter
 			if e.kind == regCallThis {
 				win[1] = e.this
@@ -237,7 +253,9 @@ func (r *Runtime) regCallW(f *frame, c *regCode, k *regKept, wb int) error {
 				if rc.newTarget {
 					nf.newTarget = Undefined
 				}
+				nf.regKind = regFrameCall
 				v, err := r.runReg(nf, rc)
+				nf.regKind = 0
 				if rc.ncap != 0 && len(nf.openUpvalues) != 0 {
 					regCloseUpvalues(nf)
 				}
@@ -304,7 +322,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base int)
 			kind uint8
 			this Value
 		)
-		if e != nil && e.callee == o && e.kind != 0 {
+		if e != nil && e.callee == o && e.kind != 0 && e.kind != regCallNative {
 			// A callee the site knows, whose call is not regCallW's alone.
 			cl, rc, kind, this = e.cl, e.rc, e.kind&^(regCallOut|regCallLeaf), e.this
 		} else if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
@@ -374,6 +392,14 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base int)
 			return r.regEnterW(o, cl, rc, base, argc, r.stack[base+2:base+2+argc], Undefined)
 		}
 	}
+	if calls := f.cl.regCalls; callee.IsObject() && uint(w.C()) < uint(len(calls)) {
+		// A built-in of this realm: the site calls it as callDirect does,
+		// without the generic call's search (regNative).
+		o := callee.Object()
+		if fd := o.fn(); fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) && o != r.callFn {
+			calls[w.C()] = regCallCache{callee: o, kind: regCallNative}
+		}
+	}
 	if regReportOn {
 		regCrossOf(regCrossOut, callee)
 	}
@@ -408,6 +434,9 @@ const (
 	// regCallObjThis is a method's call of a function that coerces its
 	// this, entered as it is for an object receiver.
 	regCallObjThis
+
+	// regCallNative is a built-in of this realm, which regNative calls.
+	regCallNative = 4
 
 	regCallOut = 8
 	// regCallLeaf marks a callee whose body regCallW may answer without a
@@ -479,16 +508,17 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 	if f.thisRef != nil || f.withScopes != nil || f.evalVars != nil || f.native != "" || f.args != nil {
 		regClearFrame(f)
 	}
-	if rc.newTarget {
-		// What an arrow made here captures of new.target.
-		f.newTarget = newTarget
-	}
+	// What an arrow made here captures of new.target, and what a stack
+	// trace reads.
+	f.newTarget = newTarget
+	f.regKind = regFrameEnter
 	if rc.args {
 		f.args = kept
 		p := int(rc.params)
 		f.locals = r.stack[base+2 : base+2+p : base+2+p]
 	}
 	v, err := r.runReg(f, rc)
+	f.regKind = 0
 	if len(f.openUpvalues) != 0 {
 		regCloseUpvalues(f)
 	}
@@ -521,6 +551,16 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 	tmpl := f.cl.consts[k]
 	fn := f.cl.fn
 	caps := c.rc.Caps[k]
+	if c.wide {
+		// What an arrow captures of this is the frame's register 1, which
+		// the frame record does not keep (regEnterW).
+		f.this = r.stack[wb+1]
+	}
+	if t := tmpl.template(); t.fn.CapturesByValue {
+		// What it takes by value copied from its registers, as
+		// newClosureIn's newClosureByValue copies it from the slots.
+		return regMadeClosure(newClosureByValue[struct{}](r, f, t, caps, wb))
+	}
 	// The cells newClosureIn reads, kept in the template's code for the next
 	// closure; the upvalues this closure is the first to open, one
 	// allocation, as newClosureIn's room.
@@ -553,13 +593,13 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 		}
 		cells[cellOfLocal(fn, int(u.Index))] = up
 	}
-	if c.wide {
-		// What an arrow captures of this is the frame's register 1, which
-		// the frame record does not keep (regEnterW).
-		f.this = r.stack[wb+1]
-	}
 	o := r.newClosureIn(f, tmpl, cells)
 	clear(cells)
+	return regMadeClosure(o)
+}
+
+// regMadeClosure is closure_w's closure o, its function's code planned.
+func regMadeClosure(o *Object) *Object {
 	if fd := o.fn(); fd != nil {
 		if atomic.LoadPointer(&fd.closure.fn.VMCode) == nil && fd.closure.fn.Reg != nil && regTier.Load() {
 			firstTree(fd.closure.fn)
@@ -579,6 +619,44 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 func (r *Runtime) regDirect(o *Object, fd *funcData, c *regCode, this Value, args []Value) (Value, error) {
 	if regReportOn {
 		regNoteCross(regCrossDirect, c.fn, "")
+	}
+	// A body answered without a frame is answered here, as callDirect
+	// answers one without register code and regCallW one a register call
+	// makes: a built-in's callback is most often such a body.
+	switch c.leaf {
+	case regLeafArg:
+		if p := int(c.leafArg); p < len(args) {
+			return args[p], nil
+		}
+		return Undefined, nil
+	case regLeafConst:
+		return c.leafVal, nil
+	case regLeafCode:
+		// The parameters' arguments in a window at the top of the stack,
+		// the rest of them unread; the body reads neither its callee's
+		// register nor its this's (regLeafRunnable).
+		m := min(int(c.params), len(args))
+		if base := r.stackTop; base+2+m <= len(r.stack) {
+			w := r.stack[base+2 : base+2+m : base+2+m]
+			for i, a := range args[:m] {
+				w[i] = a
+			}
+			if v, ok := r.regLeafRun(fd.closure, c, base, m); ok {
+				return v, nil
+			}
+		}
+	case regLeafPure:
+		if fd.closure.pureMiss < pureMissLimit {
+			if v, ok := r.pureCall(fd, this, args); ok {
+				return v, nil
+			}
+		}
+	case regLeafThis:
+		if this.IsObject() {
+			if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
+				return v, nil
+			}
+		}
 	}
 	if fd.arrow {
 		this = fd.extra.lexThis
@@ -600,6 +678,229 @@ func (r *Runtime) regDirect(o *Object, fd *funcData, c *regCode, this Value, arg
 		w[2+i] = a
 	}
 	return r.regEnterW(o, fd.closure, c, base, m, args, Undefined)
+}
+
+// regLeafRunnable reports whether rc is a body regLeafRun runs: straight
+// code to its first return, of at most regLeafMax instructions, each a
+// load, a move, an upvalue's read or store or an arithmetic operation of
+// numbers, reading neither the callee's register nor its this's, writing
+// no parameter's register, making at most regLeafStores stores to
+// upvalues and reading none it has stored to. The stores are held until
+// the return, so a run that gives up has changed nothing the frame that
+// then runs the body could see: the arguments are where they were, and no
+// store has been made.
+func regLeafRunnable(rc *bytecode.RegCode) bool {
+	var stored []uint32
+	for i, w := range rc.Code {
+		if i >= regLeafMax {
+			return false
+		}
+		switch w.Op() {
+		case bytecode.RRet:
+			return w.A() >= 2
+		case bytecode.RRetUndef:
+			return true
+		case bytecode.RSetUpval:
+			if len(stored) == regLeafStores || w.A() < 2 {
+				return false
+			}
+			stored = append(stored, uint32(w.BC()))
+			continue
+		case bytecode.RGetUpval:
+			if slices.Contains(stored, uint32(w.BC())) {
+				return false
+			}
+		case bytecode.RAdd, bytecode.RSub, bytecode.RMul:
+			if w.B() < 2 || w.C() < 2 {
+				return false
+			}
+		case bytecode.RAddI, bytecode.RSubI, bytecode.RInc, bytecode.RDec, bytecode.RMove:
+			if w.B() < 2 {
+				return false
+			}
+		case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull,
+			bytecode.RLoadTrue, bytecode.RLoadFalse:
+		default:
+			return false
+		}
+		if int(w.A()) < 2+rc.Params {
+			return false
+		}
+	}
+	return false
+}
+
+// regLeafStores is how many stores to upvalues a body regLeafRun runs may
+// make: they are held until it returns.
+const regLeafStores = 4
+
+// regLeafMax is the longest body regLeafRun runs: past it, a frame costs
+// less than the run's dispatch, as the tree tier finds for pure bodies.
+const regLeafMax = 12
+
+// regLeafOp is an instruction of a body regLeafRun runs: its operation
+// one of a few numbered densely, so that the run's switch is a jump table,
+// and a load's value or an immediate's number made once.
+type regLeafOp struct {
+	op      uint8
+	a, b, c uint16
+	k       Value
+}
+
+// The operations of regLeafOp.
+const (
+	rlMove = iota
+	rlLoad
+	rlGetUp
+	rlSetUp
+	rlAdd
+	rlSub
+	rlMul
+	// rlAddK adds k: add_imm, sub_imm of the negated immediate (x - y is
+	// x + -y, -0 and NaN alike), inc and dec.
+	rlAddK
+	rlRet
+	rlRetUndef
+)
+
+// regLeafOps is rc's code, which regLeafRunnable has passed, as regLeafRun
+// runs it, to its first return.
+func regLeafOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
+	var ops []regLeafOp
+	for _, w := range rc.Code {
+		o := regLeafOp{a: w.A(), b: w.B(), c: w.C()}
+		switch w.Op() {
+		case bytecode.RMove:
+			o.op = rlMove
+		case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull, bytecode.RLoadTrue, bytecode.RLoadFalse:
+			v, ok := regConstOf(fn, w)
+			if !ok {
+				return nil
+			}
+			o.op, o.k = rlLoad, v
+		case bytecode.RGetUpval:
+			o.op, o.b = rlGetUp, uint16(w.BC())
+		case bytecode.RSetUpval:
+			o.op, o.b = rlSetUp, uint16(w.BC())
+		case bytecode.RAdd:
+			o.op = rlAdd
+		case bytecode.RSub:
+			o.op = rlSub
+		case bytecode.RMul:
+			o.op = rlMul
+		case bytecode.RAddI:
+			o.op, o.k = rlAddK, Float(float64(w.SC()))
+		case bytecode.RSubI:
+			o.op, o.k = rlAddK, Float(-float64(w.SC()))
+		case bytecode.RInc:
+			o.op, o.k = rlAddK, Float(1)
+		case bytecode.RDec:
+			o.op, o.k = rlAddK, Float(-1)
+		case bytecode.RRet:
+			o.op = rlRet
+		default:
+			o.op = rlRetUndef
+		}
+		ops = append(ops, o)
+		if o.op >= rlRet {
+			return ops
+		}
+	}
+	return nil
+}
+
+// regLeafRun runs cl's register code c, a regLeafCode body, in the window
+// at base, where the callee, its this and argc arguments are, without a
+// frame: an arithmetic operation of what is no number gives up, before any
+// store, and the call is then made with one. It is the frameless evaluator
+// of a pure body (pureCallAt) for the register form, whose instructions
+// are fewer, dispatched by a switch of their own (regLeafOp).
+func (r *Runtime) regLeafRun(cl *closure, c *regCode, base, argc int) (Value, bool) {
+	if cl.pureMiss >= pureMissLimit {
+		return Undefined, false
+	}
+	top := base + int(c.numRegs)
+	if top > len(r.stack) {
+		return Undefined, false
+	}
+	if top > r.stackHigh {
+		r.stackHigh = top
+	}
+	regs := regWindow(r.stack, base)
+	for i := argc; i < int(c.params+c.inits); i++ {
+		regs[2+i] = Undefined
+	}
+	// The stores to upvalues, made when the body returns.
+	var held [regLeafStores]regHeld
+	n := 0
+	for i := range c.leafOps {
+		o := &c.leafOps[i]
+		switch o.op {
+		case rlMove:
+			regs[o.a] = regs[o.b]
+		case rlLoad:
+			regs[o.a] = o.k
+		case rlGetUp:
+			regs[o.a] = cl.upvalues[o.b].get()
+		case rlSetUp:
+			held[n] = regHeld{cl.upvalues[o.b].slot, regs[o.a]}
+			n++
+		case rlAdd:
+			a, b := regs[o.b], regs[o.c]
+			if !a.IsNumber() || !b.IsNumber() {
+				cl.pureMiss++
+				return Undefined, false
+			}
+			regs[o.a] = regNum(a.Number() + b.Number())
+		case rlSub:
+			a, b := regs[o.b], regs[o.c]
+			if !a.IsNumber() || !b.IsNumber() {
+				cl.pureMiss++
+				return Undefined, false
+			}
+			regs[o.a] = regNum(a.Number() - b.Number())
+		case rlMul:
+			a, b := regs[o.b], regs[o.c]
+			if !a.IsNumber() || !b.IsNumber() {
+				cl.pureMiss++
+				return Undefined, false
+			}
+			regs[o.a] = regNum(a.Number() * b.Number())
+		case rlAddK:
+			a := regs[o.b]
+			if !a.IsNumber() {
+				cl.pureMiss++
+				return Undefined, false
+			}
+			regs[o.a] = regNum(a.Number() + o.k.num)
+		case rlRet:
+			regLeafStore(held[:n])
+			return regs[o.a], true
+		case rlRetUndef:
+			regLeafStore(held[:n])
+			return Undefined, true
+		}
+	}
+	return Undefined, true
+}
+
+// regHeld is a store regLeafRun holds until its body returns: the slot of
+// an upvalue and the value.
+type regHeld struct {
+	p *Value
+	v Value
+}
+
+// regLeafStore makes regLeafRun's held stores, in their order. A number
+// over a number writes its word alone, with no write barrier's check.
+func regLeafStore(held []regHeld) {
+	for _, h := range held {
+		if h.v.IsNumber() && h.p.IsNumber() {
+			h.p.num = h.v.num
+		} else {
+			*h.p = h.v
+		}
+	}
 }
 
 // regPlan gives a closure of a template with register code of the form's
@@ -663,6 +964,8 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 	var v Value
 	var err error
 	switch w.Op() {
+	case bytecode.RCold:
+		return Undefined, r.regColdSub(f, c, k, regs, w)
 	case bytecode.RGetGlobal:
 		v, err = r.regGetGlobal(f, cl, w)
 	case bytecode.RSetGlobal:
@@ -689,8 +992,6 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 		v, err = r.arith(bytecode.OpMul, regs[w.B()], regs[w.C()])
 	case bytecode.RBin:
 		v, err = r.regBinary(bytecode.Op(w.X()), regs[w.B()], regs[w.C()])
-	case bytecode.RBinI:
-		v, err = r.regBinImm(bytecode.Op(w.X()), regs[w.B()], w.SC())
 	case bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI:
 		v, err = r.regBinImm(regStackOp[w.Op()], regs[w.B()], w.SC())
 	case bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
@@ -705,17 +1006,15 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 		return Undefined, r.regDefineField(cl, w, regs[w.A()], regs[w.B()])
 	case bytecode.RNewObject:
 		v = Obj(r.regNewObject(cl, w))
+	case bytecode.RAddIndex:
+		return Undefined, r.regAddIndex(f, c.rc.Aux[pc], regs[w.A()], regs[w.B()], regs[w.C()], false)
+	case bytecode.RAddIndexK:
+		return Undefined, r.regAddIndex(f, c.rc.Aux[pc], regs[w.A()], Int32(int32(w.C())), regs[w.B()], w.X() != 0)
+	case bytecode.RAddIndexI:
+		return Undefined, r.regAddIndex(f, c.rc.Aux[pc], regs[w.A()], regs[w.B()], Int32(w.SC()), w.X() != 0)
 	case bytecode.RNewArray:
 		b := wb + int(w.B())
 		v = Obj(r.newArrayFrom(r.stack[b : b+int(w.C())]))
-	case bytecode.RClosure:
-		v = Obj(r.makeClosure(f, cl.consts[w.BC()]))
-	case bytecode.RNew:
-		b := wb + int(w.A())
-		if v, err = r.construct(regs[w.A()], r.stack[b+1:b+1+int(w.X())]); err == nil {
-			regs[w.B()] = v
-		}
-		return v, err
 	case bytecode.RGetIndexPre:
 		// x[++i]: the step, then the read, each as the stack form makes it.
 		// Assigned, not declared: the switch's err is what the call returns.
@@ -725,6 +1024,19 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 		}
 		regs[w.C()] = n
 		v, err = r.getIndexed(regs[w.B()], n)
+	case bytecode.RGetIndexPost:
+		// x[i++]: the step, its old value the key, then the read, as the
+		// stack form makes them.
+		var old, n Value
+		if old, err = r.toNumeric(regs[w.C()]); err != nil {
+			return Undefined, err
+		}
+		if n, err = r.regStep(old, float64(int8(w.X()))); err != nil {
+			return Undefined, err
+		}
+		o := regs[w.B()]
+		regs[w.C()] = n
+		v, err = r.getIndexed(o, old)
 	case bytecode.RGetIndexI:
 		v, err = r.getIndexed(regs[w.B()], Int32(int32(w.C())))
 	case bytecode.RSetIndexI:
@@ -778,6 +1090,23 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 		} else {
 			v = Int(len(f.args))
 		}
+	case bytecode.RConcat:
+		// The registers are the parts' own, which concatParts may convert
+		// in place: nothing reads them after.
+		b := int(w.B())
+		v, err = concatParts(r, regs[b:b+int(w.C())])
+	case bytecode.RKeyOfBase:
+		if base := regs[w.B()]; base.IsNullish() {
+			return Undefined, r.throwTypeError("cannot read property of %s", r.describe(base))
+		}
+		var k Atom
+		if k, err = r.toPropertyKey(regs[w.C()]); err == nil {
+			// An object's Symbol.toPrimitive may give a symbol: the key
+			// keeps whichever kind it turned out to be.
+			v = r.keyToValue(k)
+		}
+	case bytecode.RStrPart:
+		v, err = r.add(Str(emptyString), regs[w.A()])
 	case bytecode.RArgsIndex:
 		key := regs[w.C()]
 		if !regs[w.B()].IsObject() {
@@ -791,7 +1120,7 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 		v, err = r.getIndexed(regs[w.B()], key)
 	case bytecode.RApplyArgs:
 		b := int(w.B())
-		v, err = r.regApplyArgs(f, regs[b], regs[b+1], regs[b+2])
+		v, err = r.regApplyArgs(f, regs[b], regs[b+1], regs[b+2], &regs[w.C()])
 	case bytecode.RAddProp, bytecode.RAddPropI:
 		b := Int32(w.SB())
 		if w.Op() == bytecode.RAddProp {
@@ -825,11 +1154,6 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 			s.p1 = t
 		}
 		v = Obj(sharedShare(r, s, t))
-	case bytecode.RCloseUpvals:
-		if len(f.openUpvalues) != 0 {
-			r.closeUpvaluesFrom(f, int(w.A()))
-		}
-		return Undefined, nil
 	case bytecode.RAddI:
 		v, err = r.regBinImm(bytecode.OpAdd, regs[w.B()], w.SC())
 	case bytecode.RSubI:
@@ -852,16 +1176,12 @@ func (r *Runtime) regSlow(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 	case bytecode.RJmpF, bytecode.RJmpT:
 		// A truthiness the loop's regTruth does not answer.
 		return Bool(regs[w.A()].Truthy() == (w.Op() == bytecode.RJmpT)), nil
+	case bytecode.RJTypeof:
+		t := typeofKind[struct{}](regs[w.A()])
+		return Bool((t == int(w.X()&^bytecode.RCmpTrue)) == (w.X()&bytecode.RCmpTrue != 0)), nil
 	case bytecode.RJSEq, bytecode.RJSNe:
 		// A === the loop's regStrictEq does not answer: strings, BigInts.
 		return Bool(regs[w.A()].StrictEquals(regs[w.B()]) == (w.Op() == bytecode.RJSEq)), nil
-	case bytecode.RJmpCmp, bytecode.RJmpCmpI:
-		b := Int32(w.SB())
-		if w.Op() == bytecode.RJmpCmp {
-			b = regs[w.B()]
-		}
-		res, err := r.regCompare(bytecode.Op(w.X()&^bytecode.RCmpTrue), regs[w.A()], b)
-		return Bool(res == (w.X()&bytecode.RCmpTrue != 0)), err
 	default:
 		panic("register code: no slow path for " + w.Op().String())
 	}
@@ -995,6 +1315,38 @@ func (r *Runtime) regAddProp(cl *closure, c *regCode, w bytecode.RInstr, obj, b 
 	return r.setValueProp(obj, name, sum, cl.fn.Strict)
 }
 
+// regAddIndex is add_index's slow path: the key converted once, as
+// key_of_base converts it, the element read, b added as + adds or, for an
+// update, stepped as ++ steps, and the sum stored, at store, the stack
+// instruction whose position the store's errors take.
+func (r *Runtime) regAddIndex(f *frame, store uint32, obj, key, b Value, update bool) error {
+	if !key.IsString() && !key.IsNumber() && !key.IsSymbol() {
+		if obj.IsNullish() {
+			return r.throwTypeError("cannot read property of %s", r.describe(obj))
+		}
+		k, err := r.toPropertyKey(key)
+		if err != nil {
+			return err
+		}
+		key = r.keyToValue(k)
+	}
+	cur, err := r.getIndexed(obj, key)
+	if err != nil {
+		return err
+	}
+	var sum Value
+	if update {
+		sum, err = r.regStep(cur, b.Number())
+	} else {
+		sum, err = r.add(cur, b)
+	}
+	if err != nil {
+		return err
+	}
+	f.pc = store + 1
+	return r.setIndexed(obj, key, sum, f.cl.fn.Strict)
+}
+
 // regThrow is throw: the value thrown, from the instruction at pc.
 //
 // next is the pc after the throw's, which the loop holds: the throw's own,
@@ -1010,6 +1362,18 @@ func (r *Runtime) regThrow(f *frame, c *regCode, next int, regs *[1 << 16]Value)
 func (r *Runtime) regIn(key, obj Value) (Value, error) {
 	if !obj.IsObject() {
 		return Undefined, r.throwTypeError("the right operand of \"in\" must be an object")
+	}
+	// An index straight to its walk; a name to the cache, then to its walk,
+	// which remembers the answer there, as the tree's in does.
+	o := obj.Object()
+	if i := uint32(key.num); float64(i) == key.num && i < atomIndexTag {
+		if has, ok := hasIndexQuick(o, i); ok {
+			return Bool(has), nil
+		}
+	} else if has, ok := hasCached(r, key, o); ok {
+		return Bool(has), nil
+	} else if has, ok := hasQuick(r, key, o); ok {
+		return Bool(has), nil
 	}
 	n, err := r.toPropertyName(key)
 	if err != nil {
@@ -1148,6 +1512,22 @@ func (r *Runtime) regGetMethod(cl *closure, c *regCode, w bytecode.RInstr, obj V
 		if v, ok := r.cachedProp(&cl.ic[site], obj.Object(), name); ok {
 			return v, nil
 		}
+	} else {
+		// A string's or a number's method, from the cache of its
+		// prototype's data properties that primProp fills, as the tree's
+		// primMethod reads it: s.indexOf, n.toString.
+		var p *Object
+		if obj.IsString() {
+			p = r.proto.str
+		} else if obj.IsNumber() {
+			p = r.proto.number
+		}
+		if e := &r.primProps[name&63]; p != nil && e.key == name && e.proto == p && e.shape == p.shape {
+			if verifyShapes {
+				checkShape(p)
+			}
+			return p.vals()[e.idx], nil
+		}
 	}
 	return r.getValueProp(obj, name)
 }
@@ -1191,10 +1571,16 @@ func (r *Runtime) regNewObject(cl *closure, w bytecode.RInstr) *Object {
 
 // regApplyArgs is apply_args: target.apply(this, the frame's arguments),
 // which the built-in apply makes with the arguments as passed, no object
-// made; any other apply is given one.
-func (r *Runtime) regApplyArgs(f *frame, target, apply, this Value) (Value, error) {
+// made; any other apply is given one, made once and kept in the arguments
+// binding's register, slot, so that every call is given the same one.
+func (r *Runtime) regApplyArgs(f *frame, target, apply, this Value, slot *Value) (Value, error) {
 	if !apply.IsObject() || apply.Object() != r.applyFn {
-		return r.call(apply, target, []Value{this, Obj(r.newArgumentsObject(f))})
+		o := *slot
+		if !o.IsObject() {
+			o = Obj(r.newArgumentsObject(f))
+			*slot = o
+		}
+		return r.call(apply, target, []Value{this, o})
 	}
 	args := f.args
 	if f.cl.fn.MappedArguments {
@@ -1210,4 +1596,71 @@ func (r *Runtime) regApplyArgs(f *frame, target, apply, this Value) (Value, erro
 		}
 	}
 	return r.applyCall(target, this, args)
+}
+
+// A register frame's regKind: what a stack trace reads of it where the heap
+// frame's this and newTarget are not written.
+const (
+	// regFrameCall is regCallW's frame: its this is its window's second
+	// register, and it is no construct.
+	regFrameCall = 1 + iota
+	// regFrameEnter is regEnterW's: its this is its window's, its
+	// new.target the frame's.
+	regFrameEnter
+)
+
+// regFrameThis is the this and new.target of register frame f, for a stack
+// trace.
+func (r *Runtime) regFrameThis(f *frame) (this, newTarget Value) {
+	this = r.stack[f.base+1]
+	newTarget = Undefined
+	if f.regKind == regFrameEnter {
+		newTarget = f.newTarget
+	}
+	return this, newTarget
+}
+
+// regNative is call_w's call of the built-in o a site has cached, made as
+// callDirect makes one: Math's functions, push and pop and the native
+// leaves answered without a frame where their checks pass, anything else
+// with the built-in's frame. Its value goes to R[B].
+func (r *Runtime) regNative(o *Object, w bytecode.RInstr, wb int) error {
+	base := wb + int(w.A())
+	args := r.stack[base+2 : base+2+int(w.X())]
+	this := Undefined
+	if w.Op() == bytecode.RCallMW {
+		this = r.stack[base+1]
+	}
+	fd := o.fn()
+	v, ok := Undefined, false
+	if fd.mathOp != 0 {
+		v, ok = mathCall(fd.mathOp, args)
+	} else if op := fd.elemOp; op >= elemNativeFirst {
+		if r.meter == nil && leafChecks[op](r, this, args) {
+			var err error
+			v, err = fd.native(r, this, args)
+			ok = err == nil
+		}
+	} else if op != 0 {
+		v, ok = r.pureElemOp(op, this, args, true)
+	}
+	if !ok {
+		if err := r.tick(); err != nil {
+			return err
+		}
+		if err := r.nativeFrame(o, fd, this, args, Undefined); err != nil {
+			return err
+		}
+		var err error
+		v, err = fd.native(r, this, args)
+		r.frameDepth--
+		if r.meter != nil && err == nil {
+			err = r.chargeResult(v)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	r.stack[wb+int(w.B())] = v
+	return nil
 }

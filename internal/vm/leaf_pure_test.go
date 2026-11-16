@@ -59,7 +59,9 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 			t.Errorf("%s missed %d times; a refusal is not its miss", name, n)
 		}
 	}
-	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit {
+	// A tree's call of both tries it frameless until it has missed enough;
+	// the register tier enters its register code directly, untried.
+	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit && !regTier.Load() {
 		t.Errorf("both missed %d times; its calls are what cannot store", n)
 	}
 }

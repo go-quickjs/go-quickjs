@@ -57,6 +57,15 @@ type Record struct {
 	Read  map[*ast.Ident]Res
 	Write map[*ast.Ident]Res
 	Funcs map[*ast.FuncDecl]uint32
+	// Reused are the function expressions a var declaration in a loop
+	// makes only the first time (the compiler's reusedClosures).
+	Reused map[*ast.FuncLit]bool
+	// Appends are the additions the stack compiler made appends to a
+	// local (localAppend), and Freezes the reads it followed by a
+	// str_freeze, of a binding an append grows: what reads one and may
+	// keep it must not see it grow after.
+	Appends map[*ast.Assign]bool
+	Freezes map[*ast.Ident]bool
 	// Bail says the function has something whose resolution the record
 	// cannot express -- a with, an eval's variables, an Annex B function --
 	// and is left to the stack form.
@@ -66,6 +75,28 @@ type Record struct {
 // NewRecord makes an empty record.
 func NewRecord() *Record {
 	return &Record{Read: map[*ast.Ident]Res{}, Write: map[*ast.Ident]Res{}, Funcs: map[*ast.FuncDecl]uint32{}}
+}
+
+// NoteAppend records that n is an append to a local.
+func (r *Record) NoteAppend(n *ast.Assign) {
+	if r == nil {
+		return
+	}
+	if r.Appends == nil {
+		r.Appends = map[*ast.Assign]bool{}
+	}
+	r.Appends[n] = true
+}
+
+// NoteFreeze records that the read id is followed by a str_freeze.
+func (r *Record) NoteFreeze(id *ast.Ident) {
+	if r == nil {
+		return
+	}
+	if r.Freezes == nil {
+		r.Freezes = map[*ast.Ident]bool{}
+	}
+	r.Freezes[id] = true
 }
 
 // NoteRead records a read of id.

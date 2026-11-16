@@ -1,10 +1,13 @@
 package vm
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -66,5 +69,57 @@ func TestRegLoopIsNotBig(t *testing.T) {
 	}
 	if inlined != calls {
 		t.Errorf("runReg inlines %d of its %d calls of regInt32: it has reached Go's big-function size; move code out of it", inlined, calls)
+	}
+}
+
+// TestRegDispatchKeepsNoPC checks that runReg's dispatch stores nothing of
+// the pc to the stack: a case that reads the pc after a call it made
+// without reading it back from kept makes the pc live across the call, and
+// Go then saves it at every dispatch. A goto slow after regSetMiss did, and
+// crypto_am3 and a dozen loops were 8 to 11% slower at every placement
+// (docs/register-interpreter.md, "The loop").
+func TestRegDispatchKeepsNoPC(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and disassembles cmd/qjs")
+	}
+	gotool, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go command")
+	}
+	src, err := os.ReadFile("zzreg_run.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := 0
+	for i, l := range strings.Split(string(src), "\n") {
+		if strings.TrimSpace(l) == "w := regAt(code, pc)" {
+			line = i + 2 // the pc++ after it
+			break
+		}
+	}
+	if line == 0 {
+		t.Fatal("no dispatch in zzreg_run.go")
+	}
+	exe := filepath.Join(t.TempDir(), "qjs.exe")
+	if out, err := exec.Command(gotool, "build", "-o", exe, "../../cmd/qjs").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(gotool, "tool", "objdump", "-s", `vm\.\(\*Runtime\)\.runReg$`, exe).CombinedOutput()
+	if err != nil {
+		t.Fatalf("objdump: %v\n%s", err, out)
+	}
+	at := fmt.Sprintf("zzreg_run.go:%d\t", line)
+	n := 0
+	for _, l := range strings.Split(string(out), "\n") {
+		if !strings.Contains(l, at) {
+			continue
+		}
+		n++
+		if strings.Contains(l, "(SP)") {
+			t.Errorf("runReg's dispatch stores the pc: %s", strings.TrimSpace(l))
+		}
+	}
+	if n == 0 {
+		t.Fatalf("no instruction of %s in runReg", at)
 	}
 }

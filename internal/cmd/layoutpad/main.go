@@ -802,6 +802,7 @@ func solve(c *config, verbose bool) error {
 			v[l.name] = 0
 		}
 	}
+	clear(leverBefore)
 	for iter := 0; iter < 12; iter++ {
 		if err := writeValues(c, v); err != nil {
 			return err
@@ -847,6 +848,10 @@ func describe(v map[string]int) string {
 
 // solveCode moves each code lever's anchor to its target, in the order the
 // pads are laid out, and says whether it changed a lever.
+// leverBefore is each code lever's value before its last change, in the
+// configuration being solved.
+var leverBefore = map[string]int{}
+
 func solveCode(c *config, syms *symtab, v map[string]int, verbose bool) (bool, error) {
 	type item struct {
 		l   lever
@@ -904,6 +909,18 @@ func solveCode(c *config, syms *symtab, v map[string]int, verbose bool) (bool, e
 		case delta == codeMod-slot && nk >= k && k > 0:
 			nk = k - 1
 		}
+		// A pad whose stores are not all perStore bytes -- a store's
+		// displacement past 127 is three bytes longer -- can overshoot
+		// both ways: a lever sent back to the value it had before this
+		// one is sent halfway instead, which settles.
+		if p, ok := leverBefore[it.l.name]; ok && p == nk && nk != k {
+			mid := (k + nk) / 2
+			if mid == k {
+				mid = nk
+			}
+			nk = mid
+		}
+		leverBefore[it.l.name] = k
 		if nk > maxStores {
 			return false, fmt.Errorf("%s: lever %s needs more than %d stores", c, it.l.name, maxStores)
 		}

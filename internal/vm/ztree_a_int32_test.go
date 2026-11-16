@@ -60,7 +60,8 @@ func TestInt32Sums(t *testing.T) {
 		return f
 	}
 	runInt32Script(t, "sums", func(tree bool) {
-		if tree && made < 30 {
+		// Register code has no int32 sums: its functions are not trees.
+		if tree && made < 30 && !regTier.Load() {
 			t.Errorf("tree tier: %d sums made in place", made)
 		}
 		made = 0

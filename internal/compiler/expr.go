@@ -491,7 +491,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
 			c.emit(bytecode.OpGetLocalCheck, l.slot, 0)
 		}
-		c.compiledRead(l)
+		c.compiledRead(l, n)
 		return
 	}
 	if idx, ok := c.resolveUpvalue(n.Name); ok {
@@ -503,7 +503,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 			c.emit(bytecode.OpGetUpvalue, idx, 0)
 		}
 		if l, _ := c.enclosingBinding(n.Name); l != nil {
-			c.compiledRead(l)
+			c.compiledRead(l, n)
 		}
 		return
 	}
@@ -1349,7 +1349,9 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 		}
 		name := c.nameIdx(propKeyName(target.Property))
 		c.dupObject()
-		c.emit(bytecode.OpGetProp, name, 0)
+		// Placed at the member, as the computed read is: a read of null's
+		// property had the position of whatever came before it.
+		c.emitAt(int(target.Start), bytecode.OpGetProp, name, 0)
 		switch {
 		case !keep:
 			// Only the store is wanted, and the increment converts.
@@ -1397,7 +1399,9 @@ func (c *compiler) compileIndexForUpdate(m *ast.Member) {
 		return
 	}
 	c.compileExpr(m.Property)
-	c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
+	// At the key, as V8 places a null object's error here: unplaced, it had
+	// the position of whatever came before it.
+	c.emitAt(m.Property.Pos(), bytecode.OpToPropertyKeyOfBase, 0, 0)
 	c.emit(bytecode.OpDup2, 0, 0)
 }
 
@@ -1584,27 +1588,8 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 	c.emitAt(n.Property.Pos(), bytecode.OpGetProp, c.nameIdx(name), 0)
 }
 
-// callPos is where a call is in a stack trace, as V8 places it: at the name
-// called, when the callee ends in one -- `f()`, `a.b()` -- and otherwise at
-// the argument list's parenthesis.
-func callPos(n *ast.Call) int {
-	switch c := n.Callee.(type) {
-	case *ast.Ident:
-		if !c.Paren {
-			return int(n.Start)
-		}
-	case *ast.Member:
-		if !c.Computed && c.Property != nil {
-			return c.Property.Pos()
-		}
-	case *ast.Super:
-		return int(n.Start)
-	}
-	if n.Open > 0 {
-		return int(n.Open)
-	}
-	return int(n.Start)
-}
+// callPos is where a call is in a stack trace (ast.Call.TracePos).
+func callPos(n *ast.Call) int { return n.TracePos() }
 
 func (c *compiler) compileCall(n *ast.Call) {
 	if phase, ok := importPhase(n); ok {

@@ -48,7 +48,7 @@ func TestRegisterBackendCode(t *testing.T) {
 		function locals(n) { var j, a = 1, b = 2, c = 3, d = 4; for (j = 0; j < n; j++) { a = b; b = c; c = d; d = a } return a }
 		function stores(o, t, n) { for (var j = 0; j < n; j++) { o.a = j; t[3] = j } }
 		function method(o, n) { var s = 0; for (var j = 0; j < n; j++) s += o.sum(0); return s }
-		function post(a, i) { return a[i++] + i }
+		function post(a, i) { var j = i++; return a[i++] + j + i }
 		function cap(n) { var calls = 0; var f = () => { calls++ }; f(); return calls }`)
 	want := map[string]string{
 		"fib": `
@@ -103,6 +103,7 @@ func TestRegisterBackendCode(t *testing.T) {
 	has("method", "get_method")
 	has("method", "call_method_w")
 	has("post", "post_inc")
+	has("post", "get_index_post")
 	has("cap", "closure_w")
 }
 

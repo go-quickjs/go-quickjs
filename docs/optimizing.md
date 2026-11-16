@@ -119,6 +119,17 @@ about the code, the rest about where it and its data are.
   by an odd multiple of 32 relative to its group has its 64-byte
   alignment flipped at every placement. Compare the test's hot functions'
   addresses mod 64 on both sides before calling it a cost.
+- **The interpreter loops' layout inside them.** A pad moves a loop
+  whole; a change to one case moves every case laid out after it
+  against the others and against the dispatch. The placements vary that
+  too: never-taken tests in the first case, executeAt's `OpNop` (three
+  times the placement's number) and runReg's `RNop` (`regInner`, 0 to 7
+  calls of a three-test filler, a permutation over the eight), and in
+  runReg's last case, after which its shared tails are laid out
+  (`regTail`, another permutation), written only into the placement
+  builds: the cases move against the dispatch and the tails against the
+  cases. A test slower at some of those inner layouts and level at others
+  is placement.
 - **Native code's layout inside a function.** Moving a whole native
   function by lines changes little; moving code within its lines, or
   changing distances inside it, does. The JIT's placements move code by

@@ -126,6 +126,10 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 			continue
 		}
 		fr := stackFrame{this: f.this, callee: f.callee}
+		newTarget := f.newTarget
+		if f.regKind != 0 {
+			fr.this, newTarget = r.regFrameThis(f)
+		}
 		if f.cl != nil {
 			fr.fn = f.cl.fn
 			if f.pc > 0 {
@@ -142,7 +146,7 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 				fr.flags |= frameArrow
 			}
 		}
-		if !fr.arrow() && !f.newTarget.IsUndefined() {
+		if !fr.arrow() && !newTarget.IsUndefined() {
 			fr.flags |= frameConstruct
 		}
 		if hidden {

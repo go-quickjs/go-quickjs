@@ -137,6 +137,9 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 
 	if c.fn.Strict && !c.opts.Debug && !c.fn.HasDirectEval {
 		c.reused = reusedClosures(fn)
+		if c.reg != nil {
+			c.reg.Reused = c.reused
+		}
 	}
 
 	// A function that mentions `arguments`, directly or through an arrow that

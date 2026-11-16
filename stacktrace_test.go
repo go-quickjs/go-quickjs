@@ -481,3 +481,19 @@ func TestErrorOwnKeysOrder(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestStackPositionOfANullishMember pins where a trace places the error of
+// a member of null or undefined that is updated or written by an operator,
+// as V8 does: an update at the member, a computed key's conversion at the
+// key. Unplaced, each had the position of whatever was compiled before it.
+func TestStackPositionOfANullishMember(t *testing.T) {
+	checkEval(t, `function o() { return { toString() { return "k" } } }
+function upd(t) { t.x++ }
+function updLoop(t) { for (var i = 0; i < 2; i++) t.x++ }
+function bad(b) { var k = o(); b[k] += 1 }
+function bad2(b) { var k = o(); b[k]++ }
+var r = []
+for (var f of [upd, updLoop, bad, bad2]) for (var i = 0; i < 3; i++) try { f(null) } catch (e) { r.push(e.stack.split(String.fromCharCode(10))[1].trim()) }
+r.filter((s, i) => i % 3 == 2).join(" | ")`,
+		"at upd (<eval>:2:19) | at updLoop (<eval>:3:51) | at bad (<eval>:4:34) | at bad2 (<eval>:5:35)")
+}

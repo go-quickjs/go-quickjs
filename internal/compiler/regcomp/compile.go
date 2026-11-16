@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -58,17 +59,26 @@ type gen struct {
 	// slotReg is the register of each stack slot the function's bindings
 	// are in, or -1.
 	slotReg []int32
-	inits   int
+	// dead is the call whose value the expression being compiled leaves
+	// unused but for its truth: a statement's, a condition's.
+	dead *ast.Call
+	// reuses says the code has a call_reuse, whose frame's locals the
+	// runtime finds by LocalReg.
+	reuses bool
+	inits  int
 	// lexical marks the slots of let and const bindings; tdz those whose
 	// dead zone some read checks or a closure may see.
 	tdz []bool
 	// lazyArgs says the arguments object is made only on demand: its
 	// local's register is undefined until args_index makes it.
 	lazyArgs bool
-	top      int
-	max      int
-	loops    []*loop
-	label    string
+	// leafSites are the stack form's property sites a leaf's register code
+	// has not taken yet (propSite).
+	leafSites map[leafSiteKey][]uint32
+	top       int
+	max       int
+	loops     []*loop
+	label     string
 
 	consts   map[any]uint32
 	names    map[string]uint32
@@ -76,7 +86,17 @@ type gen struct {
 	siteName []uint32
 	auxes    map[int]uint32
 	literals [][]bytecode.LitElem
+	objKeys  [][]uint16
 	calls    int
+	// arrays is how many empty array literals the code has, each a site
+	// that learns its arrays' room.
+	arrays int
+	// stores is, for an instruction that reads and then stores, the
+	// position of its store, whose stack instruction goes to Aux.
+	stores map[int]int32
+	// switches is each switch instruction's table, its cases' bodies by
+	// their marks, bound by the end.
+	switches [][]switchEntry
 	err      string
 }
 
@@ -294,6 +314,47 @@ func (g *gen) stackSite(in bytecode.Instr) uint16 {
 	return uint16(in.B)
 }
 
+// propSite is the cache site of a read (get_prop), a method's read
+// (get_prop_this) or a store (set_prop), op, of the name with index name.
+// In a leaf -- a body the frameless evaluators run from the stack form,
+// with the stack form's sites -- it is the next site of the stack form's
+// of that kind and name not yet taken, so that a run of the register code
+// fills the caches those evaluators read: an entry is the shape's answer
+// for the name and kind, whichever site of them holds it. Anywhere else,
+// and past the stack form's sites, it is a site of its own.
+func (g *gen) propSite(op bytecode.Op, name uint32) uint16 {
+	if g.fn.Leaf == bytecode.LeafNone {
+		return g.site(name)
+	}
+	if g.leafSites == nil {
+		g.leafSites = map[leafSiteKey][]uint32{}
+		for _, in := range g.fn.Code {
+			switch in.Op {
+			case bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp:
+				if in.B != 0 && in.B < uint32(len(g.siteName)) && in.A < uint32(len(g.fn.Names)) {
+					k := leafSiteKey{in.Op, g.fn.Names[in.A]}
+					g.leafSites[k] = append(g.leafSites[k], in.B)
+				}
+			}
+		}
+	}
+	k := leafSiteKey{op, g.fn.Names[name]}
+	q := g.leafSites[k]
+	if len(q) == 0 {
+		return g.site(name)
+	}
+	g.leafSites[k] = q[1:]
+	g.siteName[q[0]] = name
+	return uint16(q[0])
+}
+
+// leafSiteKey is a kind of property access and its name, which propSite
+// pairs the two forms' sites by.
+type leafSiteKey struct {
+	op   bytecode.Op
+	name string
+}
+
 func (g *gen) nameIdx(name string) uint32 {
 	if i, ok := g.names[name]; ok {
 		return i
@@ -422,7 +483,21 @@ func (g *gen) switchStmt(n *ast.SwitchStmt, label string) {
 			}
 		}
 	}
-	d := g.expr(n.Disc, -1)
+	// switch (typeof x) of string cases alone looks x's type up, with no
+	// string made or compared.
+	op := bytecode.RSwitch
+	disc := n.Disc
+	if u, ok := n.Disc.(*ast.Unary); ok && u.Op == "typeof" && g.stringCases(n) {
+		global := false
+		if id, ok := u.Operand.(*ast.Ident); ok {
+			res := g.rec.Read[id]
+			global = res.Kind == ResGlobal || res.Kind == ResNone
+		}
+		if !global {
+			op, disc = bytecode.RSwitchTypeof, u.Operand
+		}
+	}
+	d := g.expr(disc, -1)
 	if g.isBinding(d) {
 		t := g.alloc()
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(t), r16(d), 0))
@@ -435,21 +510,53 @@ func (g *gen) switchStmt(n *ast.SwitchStmt, label string) {
 	g.loops = append(g.loops, l)
 	bodies := make([]*mark, len(n.Cases))
 	def := -1
-	for i, c := range n.Cases {
+	for i := range n.Cases {
 		bodies[i] = g.newMark()
-		if c.Test == nil {
-			def = i
-			continue
-		}
+	}
+	// A run of cases whose selectors are literals, which evaluating does
+	// nothing, is one lookup: strings and numbers compared by === one at
+	// a time each go to the slow path or cost a dispatch. A case of
+	// another selector is compared where it is, between the runs.
+	compare := func(i int) {
 		mark := g.top
-		if imm, ok := imm16(c.Test); ok {
+		if imm, ok := imm16(n.Cases[i].Test); ok {
 			g.jump(bytecode.MakeR(bytecode.RJSEqI, 0, r16(d), uint16(int16(imm)), 0), bodies[i], true)
 		} else {
-			v := g.expr(c.Test, -1)
+			v := g.expr(n.Cases[i].Test, -1)
 			g.jump(bytecode.MakeR(bytecode.RJSEq, 0, r16(d), r16(v), 0), bodies[i], true)
 		}
 		g.top = mark
 	}
+	var table []switchEntry
+	var run []int
+	strs := false
+	flush := func() {
+		if len(table) >= 2 || strs {
+			g.emit(bytecode.MakeRBC(op, 0, r16(d), uint32(len(g.switches))))
+			g.switches = append(g.switches, table)
+		} else {
+			for _, i := range run {
+				compare(i)
+			}
+		}
+		table, run, strs = nil, nil, false
+	}
+	for i, c := range n.Cases {
+		if c.Test == nil {
+			def = i
+			continue
+		}
+		if e, ok := g.switchLit(c.Test); ok {
+			e.body = bodies[i]
+			table = append(table, e)
+			run = append(run, i)
+			strs = strs || e.c.Kind == bytecode.SwitchStr
+			continue
+		}
+		flush()
+		compare(i)
+	}
+	flush()
 	if def >= 0 {
 		g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), bodies[def], false)
 	} else {
@@ -468,13 +575,92 @@ func (g *gen) switchStmt(n *ast.SwitchStmt, label string) {
 	g.loops = g.loops[:len(g.loops)-1]
 }
 
-// declares reports whether the statements declare name, with var, let,
-// const or a function declaration, anywhere but in a nested function: what
-// shadows a function expression's own name.
-func declares(list []ast.Stmt, name string) bool {
+// typeNames are the VM's typeofNames, in its order.
+var typeNames = [8]string{"undefined", "object", "boolean", "number", "string", "symbol", "bigint", "function"}
+
+// typeofCompare is x and the type's index where n compares typeof x with a
+// string literal that names a type, by ===, ==, !== or !=, x not a global's
+// name, whose typeof the backend leaves to the stack form.
+func (g *gen) typeofCompare(n *ast.Binary) (ast.Expr, int, bool) {
+	switch n.Op {
+	case "===", "==", "!==", "!=":
+	default:
+		return nil, 0, false
+	}
+	u, isU := n.Left.(*ast.Unary)
+	s, isS := n.Right.(*ast.StringLit)
+	if !isU || !isS {
+		u, isU = n.Right.(*ast.Unary)
+		s, isS = n.Left.(*ast.StringLit)
+	}
+	if !isU || !isS || u.Op != "typeof" {
+		return nil, 0, false
+	}
+	if id, ok := u.Operand.(*ast.Ident); ok {
+		if res := g.rec.Read[id]; res.Kind == ResGlobal || res.Kind == ResNone {
+			return nil, 0, false
+		}
+	}
+	for i, name := range typeNames {
+		if name == s.Value {
+			return u.Operand, i, true
+		}
+	}
+	return nil, 0, false
+}
+
+// stringCases reports whether every case of n but the default has a
+// string literal for its selector.
+func (g *gen) stringCases(n *ast.SwitchStmt) bool {
+	for _, c := range n.Cases {
+		if _, ok := c.Test.(*ast.StringLit); c.Test != nil && !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// switchEntry is a case of a switch instruction's table, its body's pc
+// the mark's.
+type switchEntry struct {
+	c    bytecode.SwitchCase
+	body *mark
+}
+
+// switchLit is the table's case of a selector that is a literal.
+func (g *gen) switchLit(e ast.Expr) (switchEntry, bool) {
+	if v, ok := numberLit(e); ok {
+		return switchEntry{c: bytecode.SwitchCase{Kind: bytecode.SwitchNum, Num: v}}, true
+	}
+	switch n := e.(type) {
+	case *ast.StringLit:
+		k := g.constIdx(bytecode.Constant{Kind: bytecode.ConstString, Str: n.Value})
+		return switchEntry{c: bytecode.SwitchCase{Kind: bytecode.SwitchStr, Str: n.Value, K: k}}, true
+	case *ast.BoolLit:
+		if n.Value {
+			return switchEntry{c: bytecode.SwitchCase{Kind: bytecode.SwitchTrue}}, true
+		}
+		return switchEntry{c: bytecode.SwitchCase{Kind: bytecode.SwitchFalse}}, true
+	case *ast.NullLit:
+		return switchEntry{c: bytecode.SwitchCase{Kind: bytecode.SwitchNull}}, true
+	}
+	return switchEntry{}, false
+}
+
+// declares reports whether the statements of a function's body declare
+// name, with var or a function declaration anywhere but in a nested
+// function, or with let or const in the body itself: what shadows a
+// function expression's own name. A let or const of a nested block shadows
+// it only there, in a binding of its own.
+func declares(list []ast.Stmt, name string) bool { return declaresIn(list, name, true) }
+
+func declaresIn(list []ast.Stmt, name string, body bool) bool {
 	for _, s := range list {
 		switch n := s.(type) {
 		case *ast.VarDecl:
+			if !body && n.Kind != ast.DeclVar {
+				continue
+			}
 			for _, d := range n.Decls {
 				if id, ok := d.Target.(*ast.Ident); !ok || id.Name == name {
 					return true
@@ -485,27 +671,27 @@ func declares(list []ast.Stmt, name string) bool {
 				return true
 			}
 		case *ast.BlockStmt:
-			if declares(n.Body, name) {
+			if declaresIn(n.Body, name, false) {
 				return true
 			}
 		case *ast.IfStmt:
-			if declares([]ast.Stmt{n.Cons}, name) || n.Alt != nil && declares([]ast.Stmt{n.Alt}, name) {
+			if declaresIn([]ast.Stmt{n.Cons}, name, false) || n.Alt != nil && declaresIn([]ast.Stmt{n.Alt}, name, false) {
 				return true
 			}
 		case *ast.ForStmt:
-			if n.Init != nil && declares([]ast.Stmt{n.Init}, name) || declares([]ast.Stmt{n.Body}, name) {
+			if n.Init != nil && declaresIn([]ast.Stmt{n.Init}, name, false) || declaresIn([]ast.Stmt{n.Body}, name, false) {
 				return true
 			}
 		case *ast.WhileStmt:
-			if declares([]ast.Stmt{n.Body}, name) {
+			if declaresIn([]ast.Stmt{n.Body}, name, false) {
 				return true
 			}
 		case *ast.DoWhileStmt:
-			if declares([]ast.Stmt{n.Body}, name) {
+			if declaresIn([]ast.Stmt{n.Body}, name, false) {
 				return true
 			}
 		case *ast.LabeledStmt:
-			if declares([]ast.Stmt{n.Body}, name) {
+			if declaresIn([]ast.Stmt{n.Body}, name, false) {
 				return true
 			}
 		case *ast.ExprStmt, *ast.ReturnStmt, *ast.EmptyStmt, *ast.BreakStmt, *ast.ContinueStmt:
@@ -792,6 +978,20 @@ func (g *gen) varDecl(n *ast.VarDecl) {
 			g.emit(bytecode.MakeR(bytecode.RLoadUndef, 0, r16(int(g.slotReg[res.Index])), 0, 0))
 			continue
 		}
+		if fn, ok := d.Init.(*ast.FuncLit); ok && n.Kind == ast.DeclVar && g.rec.Reused[fn] && len(g.loops) > 0 {
+			if res, ok := g.rec.Write[id]; ok && (res.Kind == ResLocal || res.Kind == ResLocalInit) && g.slotReg[res.Index] >= 0 {
+				// A function nothing can tell from the one the last
+				// iteration made, which the var holds then: made the
+				// first time, and left after that, as the stack form
+				// makes it.
+				skip := g.newMark()
+				g.jump(bytecode.MakeR(bytecode.RJmpT, 0, r16(int(g.slotReg[res.Index])), 0, 0), skip, false)
+				g.storeIdent(id, d.Init, true)
+				g.top = g.topAfterBindings()
+				g.bind(skip)
+				continue
+			}
+		}
 		g.storeIdent(id, d.Init, true)
 		g.top = g.topAfterBindings()
 	}
@@ -803,22 +1003,38 @@ func (g *gen) varDecl(n *ast.VarDecl) {
 func (g *gen) discard(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Update:
-		if m, ok := n.Operand.(*ast.Member); ok && g.addProp(m, nil, map[string]int32{"++": 1, "--": -1}[n.Op], n.Start) {
-			return
+		if m, ok := n.Operand.(*ast.Member); ok {
+			step := map[string]int32{"++": 1, "--": -1}[n.Op]
+			if g.addProp(m, nil, step, n.Start) || g.addIndex(m, nil, step, n.Start) {
+				return
+			}
 		}
 		g.update(n, false, -1)
 		return
 	case *ast.Assign:
-		if m, ok := n.Target.(*ast.Member); ok && n.Op == "+=" && g.addProp(m, n.Value, 0, int(n.Start)) {
+		if m, ok := n.Target.(*ast.Member); ok && n.Op == "+=" && (g.addProp(m, n.Value, 0, int(n.Start)) || g.addIndex(m, n.Value, 0, int(n.Start))) {
 			return
 		}
 		g.assign(n, -1, false)
 		return
+	case *ast.Call:
+		g.dead = n
 	case *ast.Sequence:
 		for _, x := range n.Exprs {
 			g.discard(x)
 		}
 		return
+	case *ast.Logical:
+		// A short circuit around an append whose value nothing uses, as
+		// the stack form compiles it: the append stores, and leaves
+		// nothing.
+		if a, ok := n.Right.(*ast.Assign); ok && n.Op != "??" && g.rec.Appends[a] {
+			skip := g.newMark()
+			g.cond(n.Left, n.Op == "||", skip)
+			g.discard(a)
+			g.bind(skip)
+			return
+		}
 	}
 	g.expr(e, -1)
 }
@@ -864,7 +1080,8 @@ func pure(e ast.Expr) bool {
 	case *ast.Ident, *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit, *ast.This:
 		return true
 	}
-	return false
+	_, ok := numberLit(e)
+	return ok
 }
 
 // writes reports whether e assigns or updates the binding in slot.
@@ -1002,6 +1219,11 @@ func (g *gen) expr(e ast.Expr, dst int) int {
 			g.emit(bytecode.MakeRBC(bytecode.RLoadConst, 0, r16(d), g.constIdx(bytecode.Constant{Kind: bytecode.ConstString, Str: n.Value})))
 		}
 		return d
+	case *ast.RegexpLit:
+		d := g.dest(dst)
+		g.at(n.Start)
+		g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdNewRegExp), r16(d), g.regexpConst(n)))
+		return d
 	case *ast.BoolLit:
 		d := g.dest(dst)
 		op := bytecode.RLoadFalse
@@ -1082,12 +1304,27 @@ func smallInt(v float64) (int32, bool) {
 	return i, float64(i) == v && !(v == 0 && math.Signbit(v))
 }
 
+// numberLit is the value of e where it is a number literal, or the
+// negation of one: -1 is a unary minus of 1 in the AST, and an operand as
+// much a constant as 1.
+func numberLit(e ast.Expr) (float64, bool) {
+	switch n := e.(type) {
+	case *ast.NumberLit:
+		return n.Value, true
+	case *ast.Unary:
+		if lit, ok := n.Operand.(*ast.NumberLit); ok && n.Op == "-" {
+			return -lit.Value, true
+		}
+	}
+	return 0, false
+}
+
 func imm16(e ast.Expr) (int32, bool) {
-	n, ok := e.(*ast.NumberLit)
+	n, ok := numberLit(e)
 	if !ok {
 		return 0, false
 	}
-	i, ok := smallInt(n.Value)
+	i, ok := smallInt(n)
 	return i, ok && i >= -1<<15 && i < 1<<15
 }
 
@@ -1119,10 +1356,12 @@ func (g *gen) ident(n *ast.Ident, dst int) int {
 			g.at(int(n.Start))
 			g.emit(bytecode.MakeR(bytecode.RCheckRef, 0, r16(r), uint16(res.Index), 0))
 		}
+		g.freeze(n, r)
 		return g.place(r, dst)
 	case ResUpval:
 		d := g.dest(dst)
 		g.emit(bytecode.MakeRBC(bytecode.RGetUpval, 0, r16(d), res.Index))
+		g.freeze(n, d)
 		return d
 	case ResGlobal:
 		d := g.dest(dst)
@@ -1171,6 +1410,11 @@ var immOps = map[string]bytecode.ROp{
 }
 
 func (g *gen) binary(n *ast.Binary, dst int) int {
+	if n.Op == "+" {
+		if d, ok := g.stringChain(n, dst); ok {
+			return d
+		}
+	}
 	switch n.Op {
 	case "instanceof", "in":
 		a := g.guard(g.expr(n.Left, -1), n.Right)
@@ -1257,8 +1501,8 @@ func (g *gen) logical(n *ast.Logical, dst int) int {
 func (g *gen) unary(n *ast.Unary, dst int) int {
 	switch n.Op {
 	case "-":
-		if lit, ok := n.Operand.(*ast.NumberLit); ok {
-			return g.number(-lit.Value, dst)
+		if v, ok := numberLit(n); ok {
+			return g.number(v, dst)
 		}
 		return g.unaryOp(bytecode.OpNeg, n.Operand, dst, n.Start)
 	case "+":
@@ -1275,7 +1519,11 @@ func (g *gen) unary(n *ast.Unary, dst int) int {
 				return g.dest(dst)
 			}
 		}
-		return g.unaryOp(bytecode.OpTypeOf, n.Operand, dst, n.Start)
+		a := g.expr(n.Operand, -1)
+		d := g.dest(dst)
+		g.at(n.Start)
+		g.emit(bytecode.MakeR(bytecode.RTypeof, 0, r16(d), r16(a), 0))
+		return d
 	case "delete":
 		m, ok := n.Operand.(*ast.Member)
 		if !ok || m.Optional {
@@ -1389,6 +1637,18 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 				return
 			}
 		}
+		if x, i, ok := g.typeofCompare(n); ok {
+			// typeof x === "name": the type asked of x, with no string
+			// made or compared.
+			a := g.expr(x, -1)
+			flag := uint8(i)
+			if (n.Op == "===" || n.Op == "==") == when {
+				flag |= bytecode.RCmpTrue
+			}
+			g.at(n.Start)
+			g.jump(bytecode.MakeR(bytecode.RJTypeof, flag, r16(a), 0, 0), target, true)
+			return
+		}
 		if op, ok := g.compareJump(n.Op, when); ok {
 			a := g.guard(g.expr(n.Left, -1), n.Right)
 			g.at(n.Start)
@@ -1407,6 +1667,9 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 			g.jump(bytecode.MakeR(op, 0, r16(a), r16(b), 0), target, true)
 			return
 		}
+	}
+	if c, ok := e.(*ast.Call); ok {
+		g.dead = c
 	}
 	r := g.expr(e, -1)
 	op := bytecode.RJmpF
@@ -1484,7 +1747,8 @@ func (g *gen) runsNoCode(e ast.Expr) bool {
 		return ok && (res.Kind == ResLocal || res.Kind == ResUpval || res.Kind == ResLiteral && res.Lit == nil) &&
 			!(g.fn.ForwardsArguments && g.isArguments(n))
 	}
-	return false
+	_, ok := numberLit(e)
+	return ok
 }
 
 // storeIdent stores value into the binding id names; init says it is the
@@ -1528,7 +1792,41 @@ func (g *gen) storeIdent(id *ast.Ident, value ast.Expr, init bool) int {
 	return 0
 }
 
+// freeze emits str_freeze of r, the read n, where the stack form follows
+// that read by one: the binding is one an append grows, and what reads it
+// here may keep what it read. A read the register form makes no value of
+// -- a compare's operand, a step -- keeps nothing and is not frozen.
+func (g *gen) freeze(n *ast.Ident, r int) {
+	if g.rec.Freezes[n] {
+		g.emit(bytecode.MakeR(bytecode.RStrFreeze, 0, r16(r), 0, 0))
+	}
+}
+
+// appendLocal compiles n, an append to a local whose value nothing uses
+// (Record's Appends), as append, and returns the local's register and
+// whether it did.
+func (g *gen) appendLocal(n *ast.Assign) (int, bool) {
+	id, ok := n.Target.(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	res, ok := g.rec.Write[id]
+	if !ok || res.Kind != ResLocal || int(res.Index) >= len(g.slotReg) || g.slotReg[res.Index] < 0 {
+		return 0, false
+	}
+	r := int(g.slotReg[res.Index])
+	v := g.expr(n.Value, -1)
+	g.at(int(n.Start))
+	g.emit(bytecode.MakeR(bytecode.RAppend, 0, r16(r), r16(v), 0))
+	return r, true
+}
+
 func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
+	if !keep && dst < 0 && n.Op == "+=" && g.rec.Appends[n] {
+		if r, ok := g.appendLocal(n); ok {
+			return r
+		}
+	}
 	if n.Op == "=" {
 		switch t := n.Target.(type) {
 		case *ast.Ident:
@@ -1563,7 +1861,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 			}
 			v := g.expr(n.Value, -1)
 			g.at(int(n.Start))
-			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.site(g.nameIdx(name))))
+			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.propSite(bytecode.OpSetProp, g.nameIdx(name))))
 			return g.place(v, dst)
 		}
 		g.fail("an assignment target the backend does not compile")
@@ -1597,7 +1895,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 		var k int
 		var name uint32
 		if t.Computed {
-			k = g.guard(g.expr(t.Property, -1), n.Value)
+			k = g.key(t, g.guard(g.expr(t.Property, -1), n.Value), o)
 		} else {
 			s, ok := propName(t)
 			if !ok {
@@ -1611,14 +1909,14 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 		if t.Computed {
 			g.emit(bytecode.MakeR(bytecode.RGetIndex, 0, r16(cur), r16(o), r16(k)))
 		} else {
-			g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(cur), r16(o), g.site(name)))
+			g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(cur), r16(o), g.propSite(bytecode.OpGetProp, name)))
 		}
 		v := g.operate(text, op, nil, n.Value, cur, cur, int(n.Start))
 		g.at(int(n.Start))
 		if t.Computed {
 			g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v)))
 		} else {
-			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.site(name)))
+			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.propSite(bytecode.OpSetProp, name)))
 		}
 		return g.place(v, dst)
 	}
@@ -1673,6 +1971,70 @@ func (g *gen) addProp(m *ast.Member, value ast.Expr, imm int32, pos int) bool {
 		g.emit(bytecode.MakeR(op, x, r16(o), uint16(int16(imm)), site))
 	}
 	return true
+}
+
+// addIndex compiles o[k] += value and o[k]++ as addProp does o.name's, one
+// add_index: the key in a register, or an index of 16 bits (add_index_k),
+// and the value a binding no one else writes or a constant, an immediate
+// where the key is in a register (add_index_imm).
+func (g *gen) addIndex(m *ast.Member, value ast.Expr, imm int32, pos int) bool {
+	if !m.Computed {
+		return false
+	}
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		return false
+	}
+	x := uint8(0)
+	valImm := value == nil
+	if valImm {
+		x = 1
+	} else if i, ok := imm16(value); ok {
+		imm, valImm = i, true
+	} else {
+		id, isIdent := value.(*ast.Ident)
+		if !isIdent {
+			return false
+		}
+		res, ok := g.rec.Read[id]
+		if !ok || res.Kind != ResLocal || g.fn.Locals[res.Index].Captured {
+			return false
+		}
+	}
+	key, keyImm := imm16(m.Property)
+	keyImm = keyImm && key >= 0
+	o := g.expr(m.Object, -1)
+	if !keyImm {
+		o = g.guard(o, m.Property)
+		k := g.expr(m.Property, -1)
+		if valImm {
+			g.readStore(m, pos, bytecode.MakeR(bytecode.RAddIndexI, x, r16(o), r16(k), uint16(int16(imm))))
+			return true
+		}
+		v := g.expr(value, -1)
+		g.readStore(m, pos, bytecode.MakeR(bytecode.RAddIndex, 0, r16(o), r16(k), r16(v)))
+		return true
+	}
+	var v int
+	if valImm {
+		v = g.number(float64(imm), -1)
+	} else {
+		v = g.expr(value, -1)
+	}
+	g.readStore(m, pos, bytecode.MakeR(bytecode.RAddIndexK, x, r16(o), r16(v), uint16(key)))
+	return true
+}
+
+// readStore emits w, which reads m and stores to it: placed at m's key,
+// where the stack form reads it, with the store's position, the
+// statement's, kept for its stack instruction (Aux), where an error of the
+// store is placed.
+func (g *gen) readStore(m *ast.Member, pos int, w bytecode.RInstr) {
+	g.at(m.Property.Pos())
+	at := g.emit(w)
+	if g.stores == nil {
+		g.stores = map[int]int32{}
+	}
+	g.stores[at] = int32(pos)
 }
 
 // readForWrite reads the binding a compound assignment or an update of
@@ -1751,8 +2113,8 @@ func (g *gen) update(n *ast.Update, keep bool, dst int) int {
 		o := g.expr(t.Object, -1)
 		cur := g.alloc()
 		if t.Computed {
-			k := g.expr(t.Property, -1)
-			g.at(t.Property.Pos())
+			k := g.key(t, g.expr(t.Property, -1), o)
+			g.at(int(t.Start))
 			g.emit(bytecode.MakeR(bytecode.RGetIndex, 0, r16(cur), r16(o), r16(k)))
 			return g.stepped(n, cur, step, keep, dst, func(v int) {
 				g.at(n.Start)
@@ -1765,11 +2127,11 @@ func (g *gen) update(n *ast.Update, keep bool, dst int) int {
 			return 0
 		}
 		name := g.nameIdx(s)
-		g.at(t.Property.Pos())
-		g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(cur), r16(o), g.site(name)))
+		g.at(int(t.Start))
+		g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(cur), r16(o), g.propSite(bytecode.OpGetProp, name)))
 		return g.stepped(n, cur, step, keep, dst, func(v int) {
 			g.at(n.Start)
-			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.site(name)))
+			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.propSite(bytecode.OpSetProp, name)))
 		})
 	}
 	g.fail("an update target")
@@ -1807,8 +2169,14 @@ func propName(m *ast.Member) (string, bool) {
 // preStepped is the register and step of e where e is ++i or --i of a
 // local i, which an element's read steps in place (RGetIndexPre).
 func (g *gen) preStepped(e ast.Expr) (int, int8, bool) {
+	return g.localStep(e, true)
+}
+
+// localStep is the register and step of e where e is an update of a local
+// i, prefix or postfix as prefix says.
+func (g *gen) localStep(e ast.Expr, prefix bool) (int, int8, bool) {
 	u, ok := e.(*ast.Update)
-	if !ok || !u.Prefix {
+	if !ok || u.Prefix != prefix {
 		return 0, 0, false
 	}
 	id, ok := u.Operand.(*ast.Ident)
@@ -1864,6 +2232,13 @@ func (g *gen) member(n *ast.Member, dst int) int {
 			g.emit(bytecode.MakeR(bytecode.RGetIndexPre, uint8(step), r16(d), r16(o), r16(k)))
 			return d
 		}
+		if k, step, ok := g.localStep(n.Property, false); ok {
+			// x[i++] of a local i: the read and the step as one operation.
+			d := g.dest(dst)
+			g.at(n.Property.Pos())
+			g.emit(bytecode.MakeR(bytecode.RGetIndexPost, uint8(step), r16(d), r16(o), r16(k)))
+			return d
+		}
 		k := g.expr(n.Property, -1)
 		d := g.dest(dst)
 		g.at(n.Property.Pos())
@@ -1881,7 +2256,7 @@ func (g *gen) member(n *ast.Member, dst int) int {
 		g.emit(bytecode.MakeR(bytecode.RGetLength, 0, r16(d), r16(o), 0))
 		return d
 	}
-	g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(d), r16(o), g.site(g.nameIdx(name))))
+	g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(d), r16(o), g.propSite(bytecode.OpGetProp, g.nameIdx(name))))
 	return d
 }
 
@@ -1896,6 +2271,8 @@ func (g *gen) args(args []ast.Expr, at int) {
 }
 
 func (g *gen) call(n *ast.Call, dst int) int {
+	dead := g.dead == n
+	g.dead = nil
 	if n.Optional || len(n.Args) > 255 {
 		g.fail("an optional call or too many arguments")
 		return g.dest(dst)
@@ -1905,9 +2282,16 @@ func (g *gen) call(n *ast.Call, dst int) int {
 			return g.applyArgs(n, m, dst)
 		}
 	}
+	if d, ok := g.charCodeAt(n, dst); ok {
+		return d
+	}
+	if d, ok := g.regexpLitCall(n, dst, dead); ok {
+		return d
+	}
 	argc := len(n.Args)
 	w := g.allocN(2 + argc)
 	op := bytecode.RCallW
+	argLit, mname := false, ""
 	switch c := n.Callee.(type) {
 	case *ast.Member:
 		if c.Optional {
@@ -1927,7 +2311,7 @@ func (g *gen) call(n *ast.Call, dst int) int {
 			}
 			o := g.expr(c.Object, -1)
 			g.at(c.Property.Pos())
-			g.emit(bytecode.MakeR(bytecode.RGetMethodW, 0, r16(w), r16(o), g.site(g.nameIdx(name))))
+			g.emit(bytecode.MakeR(bytecode.RGetMethodW, 0, r16(w), r16(o), g.propSite(bytecode.OpGetPropThis, g.nameIdx(name))))
 		} else if g.into(c.Object, w+1); c.Computed {
 			k := g.expr(c.Property, -1)
 			g.at(c.Property.Pos())
@@ -1939,9 +2323,15 @@ func (g *gen) call(n *ast.Call, dst int) int {
 				return w
 			}
 			g.at(c.Property.Pos())
-			g.emit(bytecode.MakeR(bytecode.RGetMethod, 0, r16(w), r16(w+1), g.site(g.nameIdx(name))))
+			g.emit(bytecode.MakeR(bytecode.RGetMethod, 0, r16(w), r16(w+1), g.propSite(bytecode.OpGetPropThis, g.nameIdx(name))))
 		}
 		op = bytecode.RCallMW
+		if name, ok := propName(c); ok && !c.Computed {
+			mname = name
+			if argc > 0 && (name == "replace" || name == "split" || name == "match") {
+				_, argLit = n.Args[0].(*ast.RegexpLit)
+			}
+		}
 	case *ast.Super:
 		g.fail("super()")
 		return w
@@ -1961,9 +2351,319 @@ func (g *gen) call(n *ast.Call, dst int) int {
 	if d < 0 {
 		d = w
 	}
-	g.at(int(n.Start))
+	g.at(n.TracePos())
+	dead = dead && (mname == "exec" || mname == "replace")
+	if argLit {
+		// A RegExp literal given to replace, split or match, which may
+		// have its RegExp back once the call is done with it.
+		at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallArgLit), r16(w), r16(d), uint16(argc)))
+		g.aux(at, g.regexpConst(n.Args[0].(*ast.RegexpLit))|deadBit(dead))
+		return d
+	}
+	if dead {
+		at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallDead), r16(w), r16(d), uint16(argc)))
+		g.aux(at, deadBit(true))
+		return d
+	}
+	if mname == "exec" && dst >= 0 {
+		if spc, ok := g.reuseCall(n, dst); ok {
+			at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallReuse), r16(w), r16(d), uint16(argc)))
+			g.aux(at, spc)
+			g.reuses = true
+			return d
+		}
+	}
 	g.emit(bytecode.MakeR(op, uint8(argc), r16(w), r16(d), g.callSite()))
 	return d
+}
+
+// deadBit is the bit of a regexp call's Aux that says nothing reads its
+// value but its truth.
+func deadBit(dead bool) uint32 {
+	if dead {
+		return bytecode.RColdDead
+	}
+	return 0
+}
+
+// reuseCall finds the stack form's call of exec n compiles to, whose value
+// the next instruction stores in the local whose register is dst, and
+// returns its pc, which the runtime asks whether its arrays may be made
+// again (execReuseOf). It is the one call_method at n's position.
+func (g *gen) reuseCall(n *ast.Call, dst int) (uint32, bool) {
+	local := -1
+	for i, r := range g.slotReg {
+		if int(r) == dst && !g.fn.Locals[i].Captured {
+			local = i
+		}
+	}
+	if local < 0 {
+		return 0, false
+	}
+	code, pos, found := g.fn.Code, int32(n.TracePos()), -1
+	for i, l := range g.fn.Lines {
+		if l.Pos != pos {
+			continue
+		}
+		end := uint32(len(code))
+		if i+1 < len(g.fn.Lines) {
+			end = g.fn.Lines[i+1].PC
+		}
+		for pc := l.PC; pc < end && int(pc) < len(code); pc++ {
+			if code[pc].Op == bytecode.OpCallMethod {
+				if found >= 0 {
+					return 0, false
+				}
+				found = int(pc)
+			}
+		}
+	}
+	if found < 0 || found+1 >= len(code) || code[found+1].A != uint32(local) {
+		return 0, false
+	}
+	switch code[found+1].Op {
+	case bytecode.OpSetLocal, bytecode.OpPutLocal, bytecode.OpSetLocalGet, bytecode.OpInitLocal:
+		return uint32(found), true
+	}
+	return 0, false
+}
+
+// regexpConst is the constant of the RegExp literal n.
+func (g *gen) regexpConst(n *ast.RegexpLit) uint32 {
+	return g.constIdx(bytecode.Constant{Kind: bytecode.ConstRegExp, Str: n.Pattern, Flags: n.Flags})
+}
+
+// regexpLitCall compiles /x/.exec(...) and /x/.test(...) as lit_exec or
+// lit_test and call_lit, the literal's RegExp the receiver, and reports
+// false for any other call: the method is not read where it is the
+// built-in, and the RegExp, where the built-in given a primitive was
+// called, is the literal's again.
+func (g *gen) regexpLitCall(n *ast.Call, dst int, dead bool) (int, bool) {
+	m, ok := n.Callee.(*ast.Member)
+	if !ok || m.Computed || m.Optional {
+		return 0, false
+	}
+	lit, ok := m.Object.(*ast.RegexpLit)
+	if !ok {
+		return 0, false
+	}
+	name, ok := propName(m)
+	if !ok || name != "exec" && name != "test" {
+		return 0, false
+	}
+	k := g.regexpConst(lit)
+	if k >= limit16 {
+		return 0, false
+	}
+	sub := bytecode.RColdLitExec
+	if name == "test" {
+		sub = bytecode.RColdLitTest
+	}
+	argc := len(n.Args)
+	w := g.allocN(2 + argc)
+	g.at(lit.Start)
+	g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(w), uint16(k), g.propSite(bytecode.OpGetPropThis, g.nameIdx(name))))
+	g.args(n.Args, w+2)
+	d := dst
+	if d < 0 {
+		d = w
+	}
+	g.at(n.TracePos())
+	at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallLit), r16(w), r16(d), uint16(argc)))
+	g.aux(at, k|deadBit(dead && name == "exec"))
+	return d, true
+}
+
+// charCodeAt compiles recv.charCodeAt(i), a receiver in a binding and its
+// argument a local no one else writes in one of the first 256 registers, as
+// char_code_at, and reports false for any other call. The argument is read
+// after the method, as the call reads it, and nothing the read runs can
+// write it.
+func (g *gen) charCodeAt(n *ast.Call, dst int) (int, bool) {
+	m, ok := n.Callee.(*ast.Member)
+	if !ok || m.Computed || m.Optional || len(n.Args) != 1 || !g.inPlace(m.Object) {
+		return 0, false
+	}
+	if _, ok := m.Object.(*ast.Super); ok {
+		return 0, false
+	}
+	if name, ok := propName(m); !ok || name != "charCodeAt" {
+		return 0, false
+	}
+	id, ok := n.Args[0].(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	res, ok := g.rec.Read[id]
+	if !ok || res.Kind != ResLocal || g.fn.Locals[res.Index].Captured || g.slotReg[res.Index] >= 256 {
+		return 0, false
+	}
+	o := g.expr(m.Object, -1)
+	a := g.expr(id, -1)
+	if a >= 256 {
+		g.fail("char_code_at's argument past register 255")
+		return g.dest(dst), true
+	}
+	d := g.dest(dst)
+	site := g.propSite(bytecode.OpGetPropThis, g.nameIdx("charCodeAt"))
+	g.at(n.TracePos())
+	at := g.emit(bytecode.MakeR(bytecode.RCharCodeAt, uint8(a), r16(d), r16(o), site))
+	if g.stores == nil {
+		g.stores = map[int]int32{}
+	}
+	g.stores[at] = int32(m.Property.Pos())
+	return d, true
+}
+
+// key is the register of the key k of t, a computed member read and then
+// written, converted once to a property key with its object o checked
+// first (key_of_base), as the stack form's to_property_key_of_base: the
+// read and the write would otherwise each convert an object's key, and
+// run its toString twice. A literal key needs nothing; a binding's value
+// is converted into a temporary, the binding left as it is. A key that an
+// operator made is a primitive, whose conversion runs nothing and which a
+// null or undefined object fails on in the read as in key_of_base, so it
+// needs nothing either: this.t-1 is converted once whichever way.
+func (g *gen) key(t *ast.Member, k, o int) int {
+	switch t.Property.(type) {
+	case *ast.StringLit, *ast.NumberLit, *ast.Binary, *ast.Unary, *ast.Update, *ast.TemplateLit:
+		return k
+	}
+	d := k
+	if k < g.topAfterBindings() {
+		d = g.alloc()
+	}
+	g.at(t.Property.Pos())
+	g.emit(bytecode.MakeR(bytecode.RKeyOfBase, 0, r16(d), r16(o), r16(k)))
+	return d
+}
+
+// maxChainParts is the most parts stringChain joins in one concat, as the
+// stack form's compileStringChain: a longer chain is joined a run at a
+// time, each run's string the first part of the next.
+const maxChainParts = 32
+
+// stringChain compiles a + b + c + ..., once a string literal among its
+// operands has made every addition from there on a concatenation, as one
+// concat of the parts in consecutive registers, as the stack form's
+// compileStringChain does and with its conversions where it makes them:
+// the operands before the literal added as they were and their sum
+// converted where the literal was added to it, each operand after it
+// converted as soon as it is evaluated (str_part), but a literal or a
+// number, which concat writes out itself. It reports false, having emitted
+// nothing, where the stack form makes the additions.
+func (g *gen) stringChain(n *ast.Binary, dst int) (int, bool) {
+	var adds []*ast.Binary
+	for b := n; ; {
+		adds = append(adds, b)
+		l, ok := b.Left.(*ast.Binary)
+		if !ok || l.Op != "+" {
+			break
+		}
+		b = l
+	}
+	if len(adds) < 2 {
+		return 0, false
+	}
+	slices.Reverse(adds)
+	operand := func(i int) ast.Expr {
+		if i == 0 {
+			return adds[0].Left
+		}
+		return adds[i-1].Right
+	}
+	first := -1
+	for i := range len(adds) + 1 {
+		if _, ok := operand(i).(*ast.StringLit); ok {
+			first = i
+			break
+		}
+		if _, ok := operand(i).(*ast.TemplateLit); ok && i == 0 {
+			// The stack form's chain starts at a template, which this
+			// backend leaves to it.
+			return 0, false
+		}
+	}
+	if first < 0 {
+		return 0, false
+	}
+	empty := func(e ast.Expr) bool {
+		s, ok := e.(*ast.StringLit)
+		return ok && s.Value == ""
+	}
+	parts := 0
+	if first > 0 {
+		parts++
+	}
+	for i := first; i <= len(adds); i++ {
+		if !empty(operand(i)) {
+			parts++
+		}
+	}
+	if parts < 3 {
+		return 0, false
+	}
+	w := g.top
+	k := 0
+	// next is the register of the next part, taken before the part is
+	// compiled into it, so that what the part computes goes past it.
+	next := func() int {
+		g.top = w + k
+		return g.alloc()
+	}
+	part := func() {
+		k++
+		if k == maxChainParts {
+			g.at(int(n.Start))
+			g.emit(bytecode.MakeR(bytecode.RConcat, 0, r16(w), r16(w), uint16(k)))
+			k = 1
+		}
+	}
+	convert := func(pos int) {
+		g.at(pos)
+		g.emit(bytecode.MakeR(bytecode.RStrPart, 0, r16(w+k), 0, 0))
+	}
+	if first > 0 {
+		if first == 1 {
+			g.into(operand(0), next())
+		} else {
+			g.into(adds[first-2], next())
+		}
+		convert(adds[first-1].Start)
+		part()
+	}
+	for i := first; i <= len(adds); i++ {
+		switch e := operand(i); e.(type) {
+		case *ast.StringLit:
+			if empty(e) {
+				continue
+			}
+			g.into(e, next())
+		case *ast.NumberLit:
+			g.into(e, next())
+		default:
+			g.into(e, next())
+			if _, ok := numberLit(e); !ok {
+				convert(adds[i-1].Start)
+			}
+		}
+		part()
+	}
+	d := dst
+	if d < 0 {
+		d = w
+	}
+	if k > 1 {
+		g.at(int(n.Start))
+		g.emit(bytecode.MakeR(bytecode.RConcat, 0, r16(d), r16(w), uint16(k)))
+	} else if d != w {
+		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(d), r16(w), 0))
+	}
+	g.top = w
+	if dst < 0 {
+		g.top = w + 1
+	}
+	return d, true
 }
 
 // isArguments reports whether e is the function's own arguments binding.
@@ -1979,7 +2679,8 @@ func (g *gen) isArguments(e ast.Expr) bool {
 
 // applyArgs compiles f.apply(x, arguments) of a function whose arguments
 // object is never made: f, what f.apply reads and x in three registers,
-// and apply_args, which hands on the frame's arguments as passed.
+// and apply_args, which hands on the frame's arguments as passed, R[C]
+// the arguments binding's register.
 func (g *gen) applyArgs(n *ast.Call, m *ast.Member, dst int) int {
 	if _, ok := m.Object.(*ast.Super); ok {
 		g.fail("super")
@@ -2006,8 +2707,11 @@ func (g *gen) applyArgs(n *ast.Call, m *ast.Member, dst int) int {
 	if d < 0 {
 		d = w
 	}
-	g.at(int(n.Start))
-	g.emit(bytecode.MakeR(bytecode.RApplyArgs, 0, r16(d), r16(w), 0))
+	// The arguments binding's register, undefined until an apply other
+	// than the built-in is given the object, which is kept there so that
+	// every such call is given the same one.
+	g.at(n.TracePos())
+	g.emit(bytecode.MakeR(bytecode.RApplyArgs, 0, r16(d), r16(w), r16(int(g.slotReg[g.rec.Read[n.Args[1].(*ast.Ident)].Index]))))
 	return d
 }
 
@@ -2052,6 +2756,9 @@ func (g *gen) object(n *ast.ObjectLit, dst int) int {
 		g.fail("too many properties")
 		return g.dest(dst)
 	}
+	if lit := g.objectAtOnce(n, dst); lit >= 0 {
+		return lit
+	}
 	d := g.dest(dst)
 	g.at(n.Start)
 	g.emit(bytecode.MakeR(bytecode.RNewObject, 0, r16(d), uint16(len(n.Props)), g.site(0)))
@@ -2082,6 +2789,54 @@ func (g *gen) object(n *ast.ObjectLit, dst int) int {
 	return d
 }
 
+// objectAtOnce compiles a literal of plain keys and values, none twice and
+// no __proto__, of at most 255, as new_object_lit: its values into
+// registers in order, then the object made of them at once, rather than a
+// define_field each. It is -1 for any other literal, nothing emitted.
+func (g *gen) objectAtOnce(n *ast.ObjectLit, dst int) int {
+	if len(n.Props) == 0 || len(n.Props) > 255 {
+		return -1
+	}
+	keys := make([]uint16, 0, len(n.Props))
+	seen := map[string]bool{}
+	for _, p := range n.Props {
+		if p.Kind != ast.PropInit || p.Computed || p.Method {
+			return -1
+		}
+		var key string
+		switch k := p.Key.(type) {
+		case *ast.Ident:
+			key = k.Name
+		case *ast.StringLit:
+			key = k.Value
+		default:
+			return -1
+		}
+		if key == "__proto__" || seen[key] {
+			return -1
+		}
+		seen[key] = true
+	}
+	base := g.allocN(len(n.Props))
+	for i, p := range n.Props {
+		var key string
+		switch k := p.Key.(type) {
+		case *ast.Ident:
+			key = k.Name
+		case *ast.StringLit:
+			key = k.Value
+		}
+		keys = append(keys, g.name16(key))
+		g.into(p.Value, base+i)
+	}
+	g.objKeys = append(g.objKeys, keys)
+	d := g.dest(dst)
+	g.at(n.Start)
+	at := g.emit(bytecode.MakeR(bytecode.RNewObjectLit, uint8(len(n.Props)), r16(d), r16(base), g.site(0)))
+	g.aux(at, uint32(len(g.objKeys)-1))
+	return d
+}
+
 func (g *gen) array(n *ast.ArrayLit, dst int) int {
 	if len(n.Elements) >= limit16 {
 		g.fail("too many elements")
@@ -2094,6 +2849,16 @@ func (g *gen) array(n *ast.ArrayLit, dst int) int {
 		d := g.dest(dst)
 		at := g.emit(bytecode.MakeR(bytecode.RNewArrayK, 0, r16(d), uint16(len(elems)), g.site(0)))
 		g.aux(at, uint32(len(g.literals)-1))
+		return d
+	}
+	if len(n.Elements) == 0 {
+		if g.arrays >= limit16 {
+			g.fail("an array site past 16 bits")
+			return g.dest(dst)
+		}
+		d := g.dest(dst)
+		g.emit(bytecode.MakeR(bytecode.RNewArrayE, 0, r16(d), uint16(g.arrays), 0))
+		g.arrays++
 		return d
 	}
 	base := g.allocN(len(n.Elements))
@@ -2122,14 +2887,12 @@ func (g *gen) constantElements(els []ast.Expr) ([]bytecode.LitElem, bool) {
 	out := make([]bytecode.LitElem, len(els))
 	for i, e := range els {
 		switch v := e.(type) {
-		case *ast.NumberLit:
-			out[i] = bytecode.LitElem{K: g.constIdx(bytecode.Constant{Kind: bytecode.ConstNumber, Num: v.Value})}
-		case *ast.Unary:
-			n, ok := v.Operand.(*ast.NumberLit)
-			if !ok || v.Op != "-" {
+		case *ast.NumberLit, *ast.Unary:
+			n, ok := numberLit(v)
+			if !ok {
 				return nil, false
 			}
-			out[i] = bytecode.LitElem{K: g.constIdx(bytecode.Constant{Kind: bytecode.ConstNumber, Num: -n.Value})}
+			out[i] = bytecode.LitElem{K: g.constIdx(bytecode.Constant{Kind: bytecode.ConstNumber, Num: n})}
 		case *ast.StringLit:
 			out[i] = bytecode.LitElem{K: g.constIdx(bytecode.Constant{Kind: bytecode.ConstString, Str: v.Value})}
 		case *ast.BoolLit:
@@ -2208,6 +2971,23 @@ func (g *gen) finish() *bytecode.RegCode {
 			src[i] = table[j].pc
 		}
 	}
+	var switches [][]bytecode.SwitchCase
+	for _, t := range g.switches {
+		cases := make([]bytecode.SwitchCase, len(t))
+		for i, e := range t {
+			cases[i] = e.c
+			cases[i].To = uint32(e.body.at)
+		}
+		switches = append(switches, cases)
+	}
+	for at, p := range g.stores {
+		j := sort.Search(len(table), func(j int) bool { return table[j].pos > p }) - 1
+		if j >= 0 && int(table[j].pc) < len(g.fn.Code) {
+			g.aux(at, table[j].pc)
+		} else {
+			g.aux(at, src[at])
+		}
+	}
 	for len(g.siteName) <= int(g.fn.PropSites) {
 		g.siteName = append(g.siteName, 0)
 	}
@@ -2219,14 +2999,24 @@ func (g *gen) finish() *bytecode.RegCode {
 		}
 	}
 	rc := &bytecode.RegCode{
-		Aux: aux, Literals: g.literals, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
+		Aux: aux, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
 		ForwardsArguments: g.fn.ForwardsArguments,
 		Code:              g.code, NumRegs: g.max + 1, SrcPC: src, SiteName: g.siteName, This: -1,
-		Wide: true, Params: g.fn.ParamCount, Inits: g.inits, Caps: g.caps, CallSites: g.calls,
+		LocalReg: g.localReg(),
+		Wide:     true, Params: g.fn.ParamCount, Inits: g.inits, Caps: g.caps, CallSites: g.calls,
 	}
 	if why := Verify(rc, g.fn); why != "" {
 		Refuse(g.fn, why)
 		return nil
 	}
 	return rc
+}
+
+// localReg is LocalReg: each local's register, where the code has a
+// call_reuse, and nil otherwise.
+func (g *gen) localReg() []int32 {
+	if !g.reuses {
+		return nil
+	}
+	return append([]int32(nil), g.slotReg...)
 }

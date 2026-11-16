@@ -134,8 +134,18 @@ func usage() {
   placements build -label NAME [-k 8|4] [-out DIR]
   placements compare -dir SUITE [-bench NAME] [-k 8|4] [-rounds 3] [-suite NAMES] [-jit]
   placements compare -micro [-k 8|4] [-rounds 3] [-suite TESTS] [-jit]
-                     [-parallel] [-cpus auto|halves|LIST;LIST] [-v] [-out DIR] A B`)
+                     [-parallel] [-cpus auto|halves|LIST;LIST] [-v] [-out DIR] A B
+  (a label NAME@VAR=VALUE runs NAME's build with VAR=VALUE in its environment)`)
 	os.Exit(2)
+}
+
+// labelExe is placement n of a compared label's build and what its runs add
+// to their environment: a label NAME@VAR=VALUE[@VAR=VALUE] runs NAME's
+// build with those variables, so that one build can be compared with
+// itself under another setting, as QJS_REG=1 runs the register tier.
+func labelExe(out, label string, n int) (string, []string) {
+	parts := strings.Split(label, "@")
+	return exePath(out, parts[0], n), parts[1:]
 }
 
 // defaultOut is where the builds go unless -out says otherwise.
@@ -168,7 +178,40 @@ const (
 	// inner is how many never-taken tests each placement adds to nop's
 	// case, times its number.
 	inner = 3
+	// regGo is the register interpreter's loop; regNop its first case,
+	// which regInner fills, and regLast its last, which regTail fills.
+	regGo   = "internal/vm/zzreg_run.go"
+	regNop  = "\t\tcase bytecode.RNop:\n"
+	regLast = "\t\tcase 127:\n"
+	// regInnerMax is one more than the most calls regInner or regTail
+	// gives a placement, and padKeysLen the keys the tests of the three
+	// fillers read: as many in every placement, so that the zeroed data
+	// after them is where it is whatever the placement.
+	regInnerMax = 8
+	padKeysLen  = 6 * regInnerMax
 )
+
+// regInner is how many calls of padRegInner placement n puts in runReg's
+// first case, nop's, which runs no hot code: each is inlined to three
+// never-taken tests, which move every case laid out after it within the
+// loop, as inner's tests move executeAt's. The pads move runReg as a
+// whole; this moves its cases against each other and against the
+// dispatch, which no pad does. A permutation of 0 to 7 over the eight, so
+// that it follows neither inner's count (3n) nor a bit of the design: -k
+// 4's placements 0, 3, 5 and 6 get 2, 1, 3 and 0. A call is a few of the
+// loop's IR nodes before inlining, which is what Go's big-function size
+// counts; the tests' bytes come after it.
+func regInner(n int) int { return (5*n + 2) % regInnerMax }
+
+// regTail is how many calls of padRegInner placement n puts in runReg's
+// last case, an invalid instruction's, after which the loop's shared tails
+// are laid out -- the slow path, the taken jump, the back edge -- so that
+// they move against the cases as regInner moves the cases against the
+// dispatch: a change that adds or removes code among the cases moves the
+// tails against every case, which regInner does not vary. Another
+// permutation, 7n mod 8: -k 4's placements 0, 3, 5 and 6 get 0, 5, 3 and
+// 2, so that the tails move against the dispatch by 2, 6, 6 and 2 calls.
+func regTail(n int) int { return 7 * n % regInnerMax }
 
 // placementsOf is the placements -k takes: placements 0, 3, 5 and 6 for
 // four, over which every target but the closures is at each phase twice;
@@ -262,6 +305,13 @@ func buildCmd(args []string) error {
 	if bytes.Count(src, []byte(nop)) != 1 {
 		return fmt.Errorf("%s has no case for nop to put the tests in", vmGo)
 	}
+	regSrc, err := os.ReadFile(regGo)
+	if err != nil {
+		return err
+	}
+	if bytes.Count(regSrc, []byte(regNop)) != 1 || bytes.Count(regSrc, []byte(regLast)) != 1 {
+		return fmt.Errorf("%s has no first or no last case to put the tests in", regGo)
+	}
 	for _, p := range pads {
 		if _, err := os.Stat(p); err == nil {
 			return fmt.Errorf("%s exists: a build was interrupted? remove it", p)
@@ -275,6 +325,7 @@ func buildCmd(args []string) error {
 	// does the same before it ends the program.
 	restore := func() {
 		os.WriteFile(vmGo, src, 0o644)
+		os.WriteFile(regGo, regSrc, 0o644)
 		for _, p := range pads {
 			os.Remove(p)
 		}
@@ -290,20 +341,20 @@ func buildCmd(args []string) error {
 
 	for _, n := range placementsOf(*k) {
 		exe := exePath(*out, *label, n)
-		ref, err := buildAt(src, [nPads]int{}, inner*n, dataPhase(n), exe)
+		ref, err := buildAt(src, regSrc, [nPads]int{}, inner*n, n, dataPhase(n), exe)
 		if err != nil {
 			return err
 		}
 		counts := padCounts(ref, n)
-		got, err := buildAt(src, counts, inner*n, dataPhase(n), exe)
+		got, err := buildAt(src, regSrc, counts, inner*n, n, dataPhase(n), exe)
 		if err != nil {
 			return err
 		}
 		if p, want := phases(got), design(n); p != want {
 			return fmt.Errorf("placement %d: phases %v, want %v (pads %v)", n, p, want, counts)
 		}
-		fmt.Printf("%s-%d: pads %v, phases %v, distances %d %d %d %d\n", *label, n, counts, phases(got),
-			got[1]-got[0], got[2]-got[1], got[3]-got[2], got[4]-got[3])
+		fmt.Printf("%s-%d: pads %v, phases %v, runReg's fillers %d %d, distances %d %d %d %d\n", *label, n, counts,
+			phases(got), regInner(n), regTail(n), got[1]-got[0], got[2]-got[1], got[3]-got[2], got[4]-got[3])
 	}
 	fmt.Printf("built %d placements of %s in %s\n", *k, *label, *out)
 	return nil
@@ -311,7 +362,7 @@ func buildCmd(args []string) error {
 
 // buildAt writes the pads and the tests, builds v8bench to exe, and says
 // where the targets are in it.
-func buildAt(src []byte, counts [nPads]int, tests, data int, exe string) ([nPads]uint64, error) {
+func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe string) ([nPads]uint64, error) {
 	var addrs [nPads]uint64
 	var body strings.Builder
 	for i := range tests {
@@ -319,6 +370,9 @@ func buildAt(src []byte, counts [nPads]int, tests, data int, exe string) ([nPads
 	}
 	patched := strings.Replace(string(src), nop, nop+body.String(), 1)
 	if err := os.WriteFile(vmGo, []byte(patched), 0o644); err != nil {
+		return addrs, err
+	}
+	if err := os.WriteFile(regGo, []byte(regFill(regSrc, regInner(n), regTail(n))), 0o644); err != nil {
 		return addrs, err
 	}
 	for p, m := range counts {
@@ -365,6 +419,20 @@ func buildAt(src []byte, counts [nPads]int, tests, data int, exe string) ([nPads
 	return addrs, nil
 }
 
+// regFill is the loop's source with first calls of padRegInner in its
+// nop case and last in its last case, each on keys of its own.
+func regFill(regSrc []byte, first, last int) string {
+	var head, tail strings.Builder
+	for j := range first {
+		fmt.Fprintf(&head, "\t\t\tpadRegInner(uint32(w.A()), %d)\n", 3*j)
+	}
+	for j := range last {
+		fmt.Fprintf(&tail, "\t\t\tpadRegInner(uint32(w.A()), %d)\n", 3*(regInnerMax+j))
+	}
+	s := strings.Replace(string(regSrc), regNop, regNop+head.String(), 1)
+	return strings.Replace(s, regLast, regLast+tail.String(), 1)
+}
+
 // padFile is pad p with m functions. The first holds the one init, which
 // keeps every pad's functions reachable, and the tests' keys: it is before
 // the first target, where its size is the same in every placement.
@@ -372,7 +440,13 @@ func padFile(p, m, tests, data int) []byte {
 	var b strings.Builder
 	b.WriteString("package vm\n\n")
 	if p == 0 {
-		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, 1))
+		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, padKeysLen))
+		// runReg's filler (regInner): three tests, inlined at each call
+		// with i a constant, so that no bound is checked.
+		b.WriteString("func padRegInner(a uint32, i int) {\n" +
+			"\tif a == padKeys[i] {\n\t\tpadSink++\n\t}\n" +
+			"\tif a == padKeys[i+1] {\n\t\tpadSink += 2\n\t}\n" +
+			"\tif a == padKeys[i+2] {\n\t\tpadSink += 3\n\t}\n}\n\n")
 		// The data's phase: the initialized data, which the zeroed data
 		// follows, data bytes more (dataPhase).
 		fmt.Fprintf(&b, "var padData = [%d]byte{1}\n\n", padDataBase+data)
@@ -458,7 +532,8 @@ func compareCmd(args []string) error {
 		res[l] = make([]map[string][]float64, len(ns))
 		for i, n := range ns {
 			res[l][i] = map[string][]float64{}
-			if _, err := os.Stat(exePath(*out, labels[l], n)); err != nil {
+			exe, _ := labelExe(*out, labels[l], n)
+			if _, err := os.Stat(exe); err != nil {
 				return fmt.Errorf("no placement %d of %s: build it first", n, labels[l])
 			}
 		}
@@ -477,7 +552,7 @@ func compareCmd(args []string) error {
 		for i, n := range ns {
 			if !*parallel {
 				for l := range labels {
-					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, nil, &reps)
+					got, err := runPlacement(labels[l], *out, *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, nil, &reps)
 					if err != nil {
 						return err
 					}
@@ -493,7 +568,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				g := groups[(l+i+round)%2]
 				go func() {
-					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, g, &reps)
+					got[l], errs[l] = runPlacement(labels[l], *out, *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, g, &reps)
 					done <- struct{}{}
 				}()
 			}
@@ -597,7 +672,8 @@ func (t *repsTable) of(name string, ms float64) int {
 // whose tests each do the same work every run, and reads each test's time
 // of one operation, in nanoseconds, with no total. On cpus, if any, with
 // GOMAXPROCS as many.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+	exe, env := labelExe(out, label, n)
 	run := func(reps int, only string) ([]named, error) {
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if micro {
@@ -617,6 +693,7 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, jitBackgroun
 		}
 		cmd := exec.Command(exe, args...)
 		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1), "V8BENCH_JITLINE="+strconv.Itoa(jitLines[n%len(jitLines)]))
+		cmd.Env = append(cmd.Env, env...)
 		var outb bytes.Buffer
 		cmd.Stdout = &outb
 		if cpus != nil {

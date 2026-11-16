@@ -818,6 +818,10 @@ type frame struct {
 	// base is the operand stack offset at which this frame's stack begins.
 	base int
 	pc   uint32
+	// regKind says where a register frame keeps what the heap frame's this
+	// and newTarget would (regFrameThis): zero for every other frame, which
+	// the register calls leave it on returning.
+	regKind uint8
 
 	this      Value
 	newTarget Value

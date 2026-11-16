@@ -367,10 +367,75 @@ the ones Go allows:
   Slow paths are out of line and re-read their instruction from the code.
 - **The loop stays below Go's big-function size.** Go's inliner calls a
   function of 5,000 or more IR nodes big and inlines only callees of cost
-  20 or less into it; past that, `IsNumber` and its kind become calls in
-  every case. A test pins it, as `TestIntendedInlining` pins the helpers.
+  20 or less into it; past that, `regInt32` (cost 41, 18 calls),
+  `regTruth`, `Value.IsString`, `propCache.holder` and a dozen more become
+  calls in every case. The count is of the loop's own source, before
+  anything is inlined into it: a helper inlined costs the loop the few
+  nodes of its call, not its body. `TestRegLoopIsNotBig` pins it, as
+  `TestIntendedInlining` pins the helpers, and `internal/cmd/bigfunc`
+  measures it: `go run ./internal/cmd/bigfunc -func runReg` prints the
+  count against 5,000, `-cases 40` each case clause of 40 nodes or more,
+  and the callees above cost 20 the loop would call if it were big. The
+  budget is spent with care, a hot case at a time:
+  - **The compare-and-branches share their taken tail.** A case is a
+    fast path and a `goto`: to `slow` (the slow path, `regSlow`),
+    `cmpSlow`, `typed`, `jump`, or `taken`, a compare-and-branch taken,
+    whose offset `SC` the tail reads. The shared `taken` took 167 nodes out
+    of the 29 compare-and-branches' `off = w.SC()` and 49 instructions out
+    of the loop.
+  - **The slow calls are not shared.** `set_global`, `set_index`'s miss
+    and the operations with no fast path each keep their own call of
+    `regSlow`. Sent to the one `slow` tail, they saved 45 nodes and made
+    `int_arith`, `float_arith`, `loop_sum` and `loop_props` 7 to 11% slower
+    at every placement, the inner ones (`regInner`, `regTail`) included,
+    with every instruction on those loops' paths the same: the loop's
+    blocks laid out otherwise. A tail that stores the pc (`slow`'s
+    `kept.pc = pc`) is reached after a call only with the pc read back
+    from `kept`: set_index's `goto slow` after `regSetMiss` without it made
+    the pc live across the call, Go saved it at every dispatch, and
+    `crypto_am3` and a dozen loops were 8 to 11% slower at every
+    placement. `TestRegDispatchKeepsNoPC` disassembles the loop and fails
+    if its dispatch stores to the stack.
+  - **A case costs what its source says.** The compare-and-branches are
+    about 53 nodes each, the bitwise operators 73 to 77, a fused element
+    read or update 100 to 128, `append` (a call of `regAppend` with the pc
+    kept) about 20.
+  - **A helper that returns a bool with values does not fold.** A
+    `regNums(a, b) (x, y float64, ok bool)` in the compares saved 96 nodes
+    and added 40 instructions: its `ok` is materialised and tested where
+    the written-out `&&` branches. A saving is checked with `hotdiff
+    -funcs '(*Runtime).runReg'` against the build before it.
+  - At d931057d the loop was at 4,981, 19 below the limit; with the
+    shared taken tail and `append` and `str_freeze` as cases of their own
+    it is at 4,875, 125 below.
 - **No constants in registers.** What Go's loop-invariant pass would take
   out of the loop is read from a variable (above).
+- **The loop holds only the hot operations.** Every case added moves the
+  code of every case after it, and the placements, which move the loop as
+  a whole, cannot vary that: each case is a lottery for unrelated tests.
+  An operation that does not run per turn of a hot loop -- a switch's
+  table, `typeof` as a value, an empty literal, what sets a frame up --
+  is a label of the one case that calls `regCold`, which switches on the
+  operation again. Measured: the switch operations as cases of their own
+  made `prop_update` 8.9%, `call_fib` 8.7% and six other tests 5 to 7%
+  slower at every placement; behind `regCold`, all are level and the
+  switches keep their gain.
+- **Opcode values are for per-iteration hot steps.** The 7-bit space holds
+  128 values, each a case. An operation that runs per turn of a hot loop
+  takes a direct value of its own, out of the free list (`runReg`'s
+  `goto invalid` case, which lists them; a value taken out of it and left
+  there does not compile). Every other operation -- stage 2's handlers
+  and iterator steps but the hot ones, a literal's set-up, a rare
+  conversion -- is `cold`, one value, its sub-operation (`RColdOp`) in X,
+  dispatched a second time (`regColdSub`). `cold` is a value of the slow
+  path's case, whose call of `regSlow` already returns an error: with an
+  error check added to `regCold`'s case instead, `empty_loop` was 7.5%
+  and `string_build1` 6.4% slower at every placement, and without it
+  level (the loop's blocks laid out otherwise, every instruction of those
+  loops the same). A value freed goes to the end of the free
+  list, and no hot operation is renumbered: its case's code would move.
+  At the removal of the translation reference the free values are 24,
+  29, 36, 37, 40, 41, 42 and 43, and 127 is `invalid`'s.
 
 What remains is Go's: a register store of a `Value` is a write-barrier
 check, the loop's instruction word is still saved at the dispatch where a
@@ -533,6 +598,13 @@ The translation reference (`6ae14dca`) and the hand-written kernels
 the register window and the code are unchecked, the switch has no range
 check, and nothing a case keeps is live across a call.
 
+Both were removed once the backend (regcomp) covered what they measured:
+the translation (`internal/compiler/regform`, `QJS_REGFORM`), the kernels
+(`QJS_REGHAND`) and the eight operations only the translation emitted --
+`closure`, `bin_imm`, `jmp_cmp`, `jmp_cmp_imm`, `call`, `call_method`,
+`new` and `close_upvals` -- with their cases, slow paths and tests. Their
+figures stay recorded above; the commits named there keep the code.
+
 ### Stage 1: plain functions
 
 - The AST backend for plain functions and arrows: simple parameters,
@@ -626,17 +698,210 @@ What the measurements found, against the design:
   written, and a pure body the frameless evaluator has given up on leaves
   the site's leaf kind. `method_call_leaf` stays near 38 ns against the
   tree's 31: the tree's one node is six register instructions here.
+- **Trivial bodies and built-ins at the call site.** A body whose first
+  instruction returns a parameter, or nothing, is answered by `regCallW`
+  from the window (`regLeafArg`, `regLeafUndef`), not by the frameless
+  evaluator: `method_call_leaf` 40 to 25 ns against the tree's 31. A
+  built-in of this realm is a kind of the site's cache (`regCallNative`),
+  called by `regNative` as `callDirect` calls one -- Math's functions,
+  push and pop and the native leaves without a frame -- rather than
+  through `regCallSlow`, `regCall` and `callDirect`'s search:
+  `array_push` 70 to 52 ns, `array_pop` 64 to 45.
 - **Strict global stores and lazy arguments.** A strict store of a value
   that runs no code asks at the store whether the name resolves
   (`set_global` with X=1), as the stack form's folded `set_global_strict`
   does; `arguments.length` and `arguments[i]` of a function whose object
   is made on demand are `args_len` and `args_index`. The V8 suite has no
   refusal left that costs a crossing.
-- **x[i++] as one operation measured slower** (`crypto_am3` 91 to 101 ns at
-  two placements, 4 ns of it the fusion itself) and was dropped. The
+- **x[i++] is one operation** (`get_index_post`). First measured slower
+  (`crypto_am3` 91 to 101 ns at two placements) against a base whose pads
+  were off their targets; with both builds' pads regenerated, at four
+  placements, `crypto_am3` is 2% faster and Crypto 1 to 4% at every one.
+  NavierStokes, which has no `x[i++]`, is 23% slower at one placement and
+  level at the others: the case moves the loop's code, which that
+  placement puts on a bad alignment (the second of `-k 4`'s placements,
+  placement 3: 54.7 to 67.5 ms, reproduced in two runs). The cliff is in
+  the layout of the cases inside `runReg`, which the lock does not hold;
+  it is left to the step that lays out the loop, the call routine and the
+  entry as one block the lock anchors. `get_method_w`, re-measured the same
+  way, stays: without it `method_call` is 7% slower at every placement and
+  the V8 total slower at every one. The
   loop's own alignment moves the small loops: `loop_locals` is 10.4 to 11.3
   ns with `runReg` at 32 mod 64 and 13.1 at 0, which the placements do not
   vary.
+- **What the tree's mechanisms gave, register code gives too.** The
+  package's tests in register mode found wrong answers and costs the
+  differential test had not: a trace read the heap frame's this and
+  new.target, which the lean call does not write -- a frame's `regKind`
+  now says they are its window's -- and placed a call at its expression's
+  start; a block's `let` hid a function expression's own name; an apply
+  other than the built-in was given a new arguments object each call,
+  now one kept in the binding's register (`apply_args`'s C); a computed
+  key both read and written ran an object's toString twice, now
+  converted once (`key_of_base`, the stack form's
+  `to_property_key_of_base`), which a key an operator made, a
+primitive, does without. The tree's
+  mechanisms the register code lacked are its own now: `concat` and
+  `str_part`, the stack form's string chain, one string made where an
+  addition made one each; closures that take a value by value
+  (`newClosureByValue` reading registers); a loop's function expression
+  made once (the record's `Reused`); `in` through the realm's cache; and
+  a leaf's property reads and stores on the stack form's sites
+  (`propSite`), which the frameless evaluators read, so that a run of its
+  register code fills them. With the tree tier off, the stack
+  interpreter runs everything, register code included.
+- **What a call answers without a frame, every entry answers.** A body
+  that returns a constant is answered at the call site as one returning a
+  parameter is (`regLeafConst`): `func_call` 34 to 19 ns against the
+  tree's 28. A built-in's callback enters through `regDirect`, which now
+  answers the same bodies -- a constant, a parameter, a short pure body
+  through `pureCall`, a this-leaf through `leafCall` -- as `callDirect`
+  does a function without register code; a register closure is planned at
+  `closure_w`, so its callbacks had skipped that and made a frame each:
+  `map_forEach` and `set_forEach` -19%, `typed_forEach` -22%. A pure body
+  `pureByTree` gives a tree is entered as code: `forward_call6`'s
+  six-operand sum was 11% slower through the evaluator.
+- **An empty literal learns its room** (`new_array_empty`, the tree's
+  `arrayEmptyNode` and its site): `array_push_args3` grew every array
+  from nothing, -29%.
+- **An element's update is one operation.** `o[k] += v` and `o[k]++` as
+  statements are `add_index` (a key and a value in registers),
+  `add_index_k` (a 16-bit index) and `add_index_imm` (an immediate value),
+  on `add_prop`'s conditions: the value a constant or a binding no one
+  else writes. The key is converted once; the instruction is placed at the
+  key, where the stack form reads, and Aux names the stack form's store,
+  whose position a store's error takes. `array_update` 18 to 6 ns.
+- **A negative literal is an immediate** wherever a literal is
+  (`numberLit`): `!== -1`, `x + -1`, `x > -2`, a switch's cases.
+- **A switch's literal cases are one lookup** (`switch`, the table in
+  `Switches`): each run of cases whose selectors are literals -- numbers,
+  strings, booleans, null -- between cases of other selectors, made as the
+  tree's `switchLookup` makes its table: integers of a small range by an
+  index, strings by length, then the constant's pointer, then their units.
+  `switch (typeof x)` of string cases asks x's type (`switch_typeof`), and
+  `typeof x === "name"` is one compare-and-branch (`jtypeof`), an object's
+  type asked inline but a proxy's and document.all's. `typeof` is an
+  operation of its own, out of the loop. `string_switch_*` were 5 to 11
+  times the tree's time, a slow-path `===` a case; `typeof_test` 3 times.
+  An empty literal's array is made by a call of its own, not the slow
+  path's.
+- **A typed array's element is out of line, not the slow path's.**
+  `get_index`, `set_index` and their immediate forms answer a dense
+  element inline and send what they miss to `regElemMiss`, which reads or
+  writes a typed array's element in its buffer as `elemAt` and `setElem`
+  do, before the slow path: `typed_*_read` 24 to 15.5 ns and
+  `typed_*_write` 24 to 14 against the tree's 13 and 14. get_index and the
+  immediate forms reach it through a label they share, a jump each in the
+  loop; set_index calls it before its own slow-path call, since with the
+  case made shorter the cases after it moved and `crypto_am3` was 5.5%
+  slower at every placement. An update of a number in place (`add_prop`,
+  `add_index`) writes the number's word alone, as the tree's updates do,
+  with no write barrier's check: `array_update` 6.3 to 5.9 ns,
+  `prop_update` 5.5 to 5.1.
+- **A short body of numbers and upvalues runs as its register code
+  without a frame** (`regLeafCode`, `regLeafRun`): a pure body that is
+  straight code to its first return, of at most 12 loads, moves, upvalue
+  reads and stores and arithmetic operations, reading neither the
+  callee's register nor its this's and writing no parameter's register --
+  a counter, an accumulator, a callback that maps or reduces numbers and
+  counts its calls. It is translated once into operations numbered
+  densely (`regLeafOp`), whose switch is a jump table, and run in the
+  call's window by `regCallW` and `regDirect` (which writes only the
+  parameters' arguments there). Its stores to upvalues, at most four, are
+  held until it returns, and none is read after it is made, so what is no
+  number gives up having changed nothing, and the call is made with a
+  frame, as the frameless evaluator's misses are, counted by the same
+  `pureMiss`. `pureCallAt` dispatched each stack instruction through a
+  switch of scattered cases, and gave up on a store made before an
+  operation: `func_closure_call` 40 to 30 ns over the placements (the
+  tree 33), `closure_counter` -22%, `array_reduce` -15%,
+  `array_reduce_upvalue` 59 to 48 (the tree 62).
+- **An element appended or a hole filled is out of line too**
+  (`regElemMiss`, the tree's `setIndexMiss`: `appendElem`, `fillHole`),
+  not the slow path's: `array_prop_create` 54 to 44 ns and
+  `array_index_append` 56 to 48 in one build (the tree 33 and 36).
+  set_index's miss asks an array for them first, in a function of its own
+  (`regSetMiss`), as the tree's `setIndexMiss` does, rather than after
+  `regElemMiss`'s typed array, `setElem` and `typedStore`, which an array
+  the fast path missed never answers: 41 to 31 ns and 45 to 34 in one
+  build.
+- **A string's length is the loop's,** as an array's is: `get_length`
+  answered only arrays inline and sent a string to the slow path, where the
+  tree's node answers both. `string_length` 15.6 to 7.0 ns in one build
+  (the tree 8.1, the comparison engine 5.5).
+- **A local's appends grow its string in place,** as the tree's do
+  (`strAppend`): the stack compiler, which decides which additions are
+  appends (`localAppend`) and which reads are followed by a `str_freeze`,
+  records both for the backend (the Record's `Appends` and `Freezes`), so
+  that the two forms agree on every binding. An append is `append`; a
+  recorded read the register form makes a value of -- a move, an
+  argument, a store, a return -- is preceded by `str_freeze` of the
+  binding's register. A read the register form makes no value of, a
+  compare's operand or a step, keeps nothing and is not frozen, and
+  `x.length` is no read for either form. A short circuit around an append
+  whose value nothing uses (`r !== l && (t += x)`) is an append too.
+  Both are cases of their own since the loop's budget was measured and
+  its tails shared ("The loop"): `append` a call of `regAppend` with the
+  pc kept, `str_freeze` its test inline, writing only a string an append
+  owns. Before that, with `append` the slow path's and `str_freeze`
+  `regCold`'s (d931057d), the loop had 19 nodes to spare, and over the
+  placements `string_build1` was 52.6 to 34.7 ns, `template_numbers` 130
+  to 101, `local_append_read` 60 to 43, `template_list` 356 to 312, but
+  `local_append_keep`, `local_append_once`, `append_keep_each` and
+  `append_keep_pair` 5 to 9% slower than before, a read's freeze and an
+  append each a second dispatch and a call. As cases: `string_build1`
+  30.5 (the tree 32.4, the comparison engine 49.2), `string_build_large1`
+  29.8, `local_append_keep` 62.8 (the tree 65.6, the comparison engine
+  62.4), `local_append_read` 41.0 (43.6, 58.0), `append_keep_each` 130
+  (135, 120), `local_append_once` 144 (167, 100).
+- **An object literal of plain keys is made at once**
+  (`new_object_lit`): its values go into registers in order and one
+  operation, behind `regCold`, makes the object with its site's room and
+  takes each key's transition, where `new_object` and a `define_field`
+  each went through the slow path. The values evaluated before the object
+  is made is a difference nothing can see: the object is no one's until
+  the literal is done. A computed key, an accessor, a method, a spread,
+  `__proto__`, a key twice or more than 255 keys keep the form of one
+  instruction each. `object_literal_fixed` 171 to 127 ns in one build (the
+  tree 101), 197 to 141 over the placements. Where every key was added
+  along a transition from the site's root, the site keeps the shape they
+  led to (`propCache`'s `next`, its root in `s1`), as the tree's literal
+  node does, and the next object from that root is given its values in
+  place and that shape: 141 to 105 ns in one build, the tree 109.
+- **s.charCodeAt(i) is one operation** (`char_code_at`), as the tree's
+  `charCodeAtCall` node is: a receiver in a binding, the argument a local
+  no one else writes in one of the first 256 registers (X). `regCharCodeAt`
+  reads the code unit where the receiver is a string, the method the
+  built-in found in the cache of a primitive prototype's data properties
+  that `primProp` fills, and the argument a number; anything else is the
+  read and the call as `get_method_w` and `call_method_w` make them, the
+  read placed at its own position (Aux) and the call at the
+  instruction's. The case is a call with the pc kept, 27 nodes. The slow
+  path of a method's read on a string or a number reads the same cache
+  before `getValueProp`. Over the placements, `html_escape_entities` 2,538
+  to 1,813 ns (the tree 1,924, the comparison engine 1,878),
+  `html_escape_mixed` 800 to 636, `int_toString` 81.5 to 77.1 (the tree
+  70, the comparison engine 82); the V8 suite level.
+- **A RegExp literal stays the tree's for now.** As a `new_regexp` through
+  the slow path it made `template_list` 304 to 228 ns (the tree 253:
+  `extra_esc` and its caller no longer crossed), but every function with a
+  literal lost the tree's mechanisms around it: the literal's RegExp given
+  back after `/x/.exec(s)` and `test` (`regexpLitMethod`, the spares), a
+  literal handed to `replace`, `split` or `match` searched without its
+  object (`regexpArgCall`), and an exec's array made again in the memory
+  of the last (`reuseExecCall`) or not at all where nothing reads it.
+  `regexp_sticky` was 255 to 377 ns, `regexp_ascii` 217 to 294, eleven
+  regexp tests 6 to 48% slower at every placement. Those mechanisms are
+  owed to register code before the literal is: they are what the tree
+  wins by.
+- **The opcode space was full but for two values.** The dispatch masks the
+  operation to 7 bits so that its jump table needs no range check, and
+  with `char_code_at` 126 of the 128 values were taken. Widening the mask
+  costs a case value for each of the 128 new values, more than the loop's
+  budget. The translation reference's operations, which the backend never
+  emits, were removed with it (see stage 0): their eight values are free,
+  and `cold`, the one value every cold operation shares, took 126 (the
+  opcode allocation rule, under "The loop").
 
 #### Raw int32 registers (step 5, designed, deferred)
 
@@ -741,5 +1006,5 @@ suite by suite and retired where it no longer wins.
 ### Stage 5: one pipeline
 
 The stack compiler stops emitting code; scope resolution stays as the
-front end both backends shared. `executeAt`, the translation reference and
-the stack form's instruction set go.
+front end both backends shared. `executeAt` and the stack form's
+instruction set go.
