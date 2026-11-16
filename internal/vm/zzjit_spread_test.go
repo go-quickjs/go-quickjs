@@ -220,6 +220,7 @@ func TestJITSpreadOperations(t *testing.T) {
 // copied with the frame, in the same call, and leaves neither, in a loop
 // whose native work pays for them.
 func TestJITSpreadFrameless(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -276,6 +277,7 @@ func TestJITSpreadFrameless(t *testing.T) {
 // place (jitCallResult), and the tree tier runs the rest. Each answer is
 // the interpreter's.
 func TestJITSpreadFramedAtLoops(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

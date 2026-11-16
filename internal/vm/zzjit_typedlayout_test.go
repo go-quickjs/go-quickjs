@@ -276,6 +276,7 @@ func TestJITTypedLayout(t *testing.T) {
 // reads its elements up to the copy's, but never takes it for the view's
 // length, which Go measures.
 func TestJITTypedViewGrownElsewhere(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -395,6 +396,7 @@ func TestJITTypedChangedByCallee(t *testing.T) {
 // less than the last, and the elements read are the ones written. Run
 // with -race too.
 func TestJITTypedSharedGrownConcurrently(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

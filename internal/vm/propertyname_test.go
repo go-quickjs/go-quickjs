@@ -9,6 +9,7 @@ import "testing"
 // here k, made at run time, is in nothing until a property of its name is
 // made, then in o, then deleted from it, each answer as Node gives it.
 func TestPropertyNameAtoms(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var o = { a: 1 }, r = []
 		var k = ['zq', 'x', 'w'].join('')

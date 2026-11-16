@@ -6,6 +6,7 @@ import "testing"
 // point its specification says: after the checks that come before it, before
 // the work that comes after.
 func TestNativeConstructorPrototypeLookup(t *testing.T) {
+	t.Parallel()
 	// The helper counts the reads a construction makes.
 	const setup = `
 		function reads(C, args) {
@@ -68,6 +69,7 @@ func TestNativeConstructorPrototypeLookup(t *testing.T) {
 // A constructor that names no prototype falls back to the one of the realm it
 // came from, and a revoked proxy has no realm left to be asked about.
 func TestConstructThroughARevokedProxy(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var handle
 		  handle = Proxy.revocable(function () {}, {get: function () { handle.revoke() }})
@@ -87,6 +89,7 @@ func TestConstructThroughARevokedProxy(t *testing.T) {
 // prototype the view should have: an argument that cannot be a length is
 // refused first.
 func TestTypedArrayLengthIsConvertedFirst(t *testing.T) {
+	t.Parallel()
 	const target = `var newTarget = function () {}.bind(null)
 		Object.defineProperty(newTarget, "prototype",
 		  {get: function () { throw new RangeError() }})

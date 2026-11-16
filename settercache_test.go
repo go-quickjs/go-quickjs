@@ -8,6 +8,7 @@ import "testing"
 // anything that changes which property a write reaches. Each script writes
 // enough times for the cache to be used.
 func TestSetterCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class A { set v(x) { this.log.push("A" + x) } } class B extends A {} class C extends B { constructor() { super(); this.log = [] } }
 		  var o = new C(); for (var i = 0; i < 3; i++) o.v = i

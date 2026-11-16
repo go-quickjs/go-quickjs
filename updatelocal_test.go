@@ -8,6 +8,7 @@ import "testing"
 // valueOf that reassigns the local overwritten by the update, and a closure
 // seeing what the update wrote. The answers are Node's.
 func TestLocalUpdates(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
 		let i = 5; const a = [i++, i, ++i, i, i--, --i, i];
 		let s = "5"; const b = [s++, typeof s, s, ++s];
@@ -27,6 +28,7 @@ func TestLocalUpdates(t *testing.T) {
 // as the operator does for strings, null, undefined, objects and BigInts.
 // The answers are Node's.
 func TestOperatorCoercionAndImmediates(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
 		var calls = [];
 		function mk(name, v) { return { valueOf() { calls.push(name); return v; } }; }
@@ -52,6 +54,7 @@ func TestOperatorCoercionAndImmediates(t *testing.T) {
 // and a mapped arguments object, whose indices are its parameters. The
 // answers are Node's.
 func TestIndexedStores(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
 		var log = [];
 		Object.defineProperty(Array.prototype, 3, { set(v) { log.push("proto set " + v); }, configurable: true });
@@ -69,6 +72,7 @@ func TestIndexedStores(t *testing.T) {
 }
 
 func TestIndexedReadsOfLocals(t *testing.T) {
+	t.Parallel()
 	// a[i] with both a local is one instruction; what it reads is what the
 	// separate ones read, down to the error and where it points.
 	checkEval(t, `(function () {
@@ -87,6 +91,7 @@ func TestIndexedReadsOfLocals(t *testing.T) {
 }
 
 func TestInstanceofWithoutTheMethodCall(t *testing.T) {
+	t.Parallel()
 	// The default Symbol.hasInstance is answered without calling it where
 	// nothing a script could see would run; everywhere else it is called,
 	// and what it does is observed as it was.
@@ -109,6 +114,7 @@ func TestInstanceofWithoutTheMethodCall(t *testing.T) {
 }
 
 func TestLookupsOfObjectsWithManyProperties(t *testing.T) {
+	t.Parallel()
 	// An object with many properties caches its lookups, misses included;
 	// what a lookup finds is what the object has at the time.
 	checkEval(t, `(function () {
@@ -129,6 +135,7 @@ func TestLookupsOfObjectsWithManyProperties(t *testing.T) {
 }
 
 func TestGlobalsReadAndWrittenInPlace(t *testing.T) {
+	t.Parallel()
 	// A global written by assignment is written in place only when it is a
 	// plain writable data property; anything else is written the long way.
 	checkEval(t, `
@@ -146,6 +153,7 @@ func TestGlobalsReadAndWrittenInPlace(t *testing.T) {
 }
 
 func TestGlobalUpdatesForEffect(t *testing.T) {
+	t.Parallel()
 	// A global updated where its value is not wanted is stored without the
 	// copy the value would have needed.
 	checkEval(t, `
@@ -158,6 +166,7 @@ func TestGlobalUpdatesForEffect(t *testing.T) {
 }
 
 func TestCreatingPropertiesByAssignment(t *testing.T) {
+	t.Parallel()
 	// A property created by assignment is added directly only where nothing
 	// up the chain could have taken the assignment instead.
 	checkEval(t, `(function () {
@@ -181,6 +190,7 @@ func TestCreatingPropertiesByAssignment(t *testing.T) {
 }
 
 func TestIndexedReadsWithAnUpdatedKey(t *testing.T) {
+	t.Parallel()
 	// a[++i] and a[i++] with both locals are one instruction; the object is
 	// read before the key is updated, and every way the update or the read
 	// can go is what it was.
@@ -202,6 +212,7 @@ func TestIndexedReadsWithAnUpdatedKey(t *testing.T) {
 }
 
 func TestApplyingArgumentsWithoutTheObject(t *testing.T) {
+	t.Parallel()
 	// A function that only passes its arguments on with apply makes no
 	// arguments object for the built-in apply; what the callee receives, and
 	// what any other apply is given, is what the object would have been.
@@ -237,6 +248,7 @@ func TestApplyingArgumentsWithoutTheObject(t *testing.T) {
 }
 
 func TestOperatorsWithALocalOnTheRight(t *testing.T) {
+	t.Parallel()
 	// `expr op local` is one instruction for + - *; the left operand is still
 	// coerced before the right, and anything but two numbers is the operator's.
 	checkEval(t, `(function () {
@@ -250,6 +262,7 @@ func TestOperatorsWithALocalOnTheRight(t *testing.T) {
 }
 
 func TestLocalOperatorImmediate(t *testing.T) {
+	t.Parallel()
 	// `local op integer` is one instruction; anything but a number in the
 	// local runs the operator itself, and an error points where it did.
 	checkEval(t, `(function () {
@@ -261,6 +274,7 @@ func TestLocalOperatorImmediate(t *testing.T) {
 }
 
 func TestCompoundAssignmentToANumberKey(t *testing.T) {
+	t.Parallel()
 	// a[i] += x keeps a number key as a number between the read and the
 	// write, which convert it as ever: what either sees is the same key.
 	checkEval(t, `(function () {
@@ -274,6 +288,7 @@ func TestCompoundAssignmentToANumberKey(t *testing.T) {
 }
 
 func TestEqualityOfObjectsAndNull(t *testing.T) {
+	t.Parallel()
 	// x == null, and equality between objects, are answered without the
 	// general comparison; what they answer is what it would.
 	checkEval(t, `(function () {
@@ -291,6 +306,7 @@ func TestEqualityOfObjectsAndNull(t *testing.T) {
 }
 
 func TestSortIsStableAndThorough(t *testing.T) {
+	t.Parallel()
 	// The merge sort keeps equal values in order, stops at a comparator's
 	// error with the array still a permutation, and sorts what it is given.
 	checkEval(t, `(function () {
@@ -314,6 +330,7 @@ func TestSortIsStableAndThorough(t *testing.T) {
 }
 
 func TestPushAndPopOfPlainArrays(t *testing.T) {
+	t.Parallel()
 	// push and pop change a plain dense array in place; anything a setter,
 	// a frozen or sealed array, a hole or a subclass makes different still is.
 	checkEval(t, `(function () {

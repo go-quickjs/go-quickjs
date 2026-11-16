@@ -14,7 +14,7 @@ import (
 // Before, a walked array closed nothing, which V8 and the specification's
 // IteratorClose do not. Each answer is Node's, on both tiers.
 func TestWalkedArrayClose(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	src := `
 		var log = [], out = []
 		var AIP = Object.getPrototypeOf([][Symbol.iterator]())
@@ -64,8 +64,7 @@ func TestWalkedArrayClose(t *testing.T) {
 		"deleted: ",
 	}, "\n")
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			r.Close()

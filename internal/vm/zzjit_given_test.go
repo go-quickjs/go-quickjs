@@ -105,6 +105,7 @@ func sprintf2(format, a, b string) string {
 // interpreter's, whatever leaves native code inside the loop or the
 // closure, under budgets of polls and of finished invocations or not.
 func TestJITGivenClosures(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

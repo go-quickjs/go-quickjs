@@ -11,6 +11,7 @@ import (
 // result of up to four groups each the size class it fills. They had been
 // 16 bytes more, a class up, with the data every other kind of object has.
 func TestArraySizes(t *testing.T) {
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("the sizes are a 64-bit platform's")
 	}

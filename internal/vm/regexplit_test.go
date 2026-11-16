@@ -15,6 +15,7 @@ import (
 // regexp_test, 33% slower after a test whose literal had happened to land
 // there.
 func TestRegExpLiteralSharedEntry(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	consts := make([]bytecode.Constant, 4*regexpLitCount)

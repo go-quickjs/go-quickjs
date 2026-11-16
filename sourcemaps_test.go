@@ -45,6 +45,7 @@ func stackOf(t *testing.T, src string, opts ...quickjs.Option) string {
 // sources are resolved; and as they are without the option, with a loader
 // that finds nothing, or through a script's Error.prepareStackTrace.
 func TestSourceMaps(t *testing.T) {
+	t.Parallel()
 	if got := stackOf(t, mappedInline, quickjs.WithSourceMaps(nil)); got != mappedWant {
 		t.Errorf("inline:\n%s\nwant:\n%s", got, mappedWant)
 	}

@@ -457,6 +457,7 @@ module.exports = out;
 
 // TestHostRequire runs a CommonJS program under the host's require.
 func TestHostRequire(t *testing.T) {
+	t.Parallel()
 	h := newCJSHost(t, cjsFiles)
 	v, err := h.runMain("/app/main.js")
 	if err != nil {
@@ -495,6 +496,7 @@ func TestHostRequire(t *testing.T) {
 // TestHostRequireFromESM runs an ES module that imports CommonJS, a package
 // with both, JSON, and requires through createRequire.
 func TestHostRequireFromESM(t *testing.T) {
+	t.Parallel()
 	h := newCJSHost(t, cjsFiles)
 	ns, err := h.rt.EvalModule("/app/entry.mjs", `
 		import lib, {name} from "./lib/index.js";

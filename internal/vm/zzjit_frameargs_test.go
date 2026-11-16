@@ -88,6 +88,7 @@ func TestJITFrameArguments(t *testing.T) {
 // interpreter's: native code holds the parameters as values, which the
 // object would not see.
 func TestJITFrameArgumentsAliased(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -117,6 +118,7 @@ func TestJITFrameArgumentsAliased(t *testing.T) {
 // native code inside the prologue, and the interpreter binds m from the
 // frame's arguments, the last call's.
 func TestJITTailCallKeepsFrameArguments(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -133,6 +135,7 @@ func TestJITTailCallKeepsFrameArguments(t *testing.T) {
 // generator's frame, which keeps the call's arguments. 188 of npm's own
 // functions had been refused for such a list.
 func TestJITGeneratorParameters(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

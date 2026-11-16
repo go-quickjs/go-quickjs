@@ -15,6 +15,7 @@ import (
 // interpreter does, before and after their prototypes change; and a loop
 // of instanceof over such objects, made before it, runs natively.
 func TestJITPolyProto(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -182,6 +183,7 @@ func TestJITPolyProtoIn(t *testing.T) {
 // holder given another, has another layout, and the read finds what the
 // interpreter does, before and after.
 func TestJITHolderLayoutSaysPrototype(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

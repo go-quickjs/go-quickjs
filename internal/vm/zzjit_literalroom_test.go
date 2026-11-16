@@ -24,6 +24,7 @@ func TestJITLiteralArrayRoomWeakPools(t *testing.T) {
 }
 
 func TestJITLiteralArrayRoom(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	cl := &closure{closureCode: &closureCode{arrays: []*arrayRoom{
@@ -182,6 +183,7 @@ func TestJITLiteralArrayRoomNative(t *testing.T) {
 }
 
 func TestJITLiteralArrayRoomInlined(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
 	if _, err := r.Run(compileForTest(t, `

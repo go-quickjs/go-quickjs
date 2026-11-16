@@ -176,22 +176,21 @@ func regexpPristineCheck(t *testing.T, r *Runtime, c regexpPristineCase, where s
 // and the object changed is no longer pristine.
 func TestRegExpPristine(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		for _, c := range regexpPristineCases {
 			gc := debug.SetGCPercent(-1)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			regexpPristineCheck(t, r, c, map[bool]string{true: "tree tier", false: "interpreter"}[tree])
 			r.Close()
 			debug.SetGCPercent(gc)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A realm's RegExp.prototype and RegExp are pristine once built, with
 // layouts of their own that a change gives each another of; a realm made
 // later has its own, which a change to the first one's leaves pristine.
 func TestRegExpPristineRealms(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	p, ctor := r.proto.regexp, r.proto.regexpCtor

@@ -8,6 +8,7 @@ import "testing"
 // after round, its members' sites the tree tier's where the JIT leaves
 // them to Go, answer what Node's do.
 func TestJITPrivateMembersAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -33,6 +34,7 @@ func TestJITPrivateMembersAgreeWithNode(t *testing.T) {
 // does: a function with a call in tail position, compiled with both
 // cases, had read c2's #m through c1's code.
 func TestJITPrivateCasesOfOneKey(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

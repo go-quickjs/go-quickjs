@@ -25,6 +25,7 @@ func asyncContextRuntime(t *testing.T) (*quickjs.Runtime, *[]string) {
 // context a job sets ends with it. A call from Go leaves the context as it
 // found it.
 func TestAsyncContextThroughJobs(t *testing.T) {
+	t.Parallel()
 	rt, log := asyncContextRuntime(t)
 	_, err := rt.Eval(`
 		let settle;
@@ -67,6 +68,7 @@ func TestAsyncContextThroughJobs(t *testing.T) {
 // What is posted to an AsyncWork runs in the context the work was started in,
 // and a job the host queues in the one it was queued in.
 func TestAsyncContextThroughHostWork(t *testing.T) {
+	t.Parallel()
 	rt, log := asyncContextRuntime(t)
 	rt.SetAsyncContext(mustEval(t, rt, `"started"`))
 	w := rt.StartAsyncWork()

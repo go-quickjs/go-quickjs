@@ -73,6 +73,7 @@ func newDebugged(t *testing.T) (*Runtime, *recorder) {
 }
 
 func TestDebuggerWithJIT(t *testing.T) {
+	t.Parallel()
 	r := New(WithDebugger(), WithJIT())
 	t.Cleanup(func() { r.Close() })
 	h := &recorder{t: t, r: r}
@@ -122,6 +123,7 @@ run(3);
 // and the script's, and evaluates code in the frame that reads and changes
 // them.
 func TestDebuggerBreakpoint(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	id, at := r.rt.SetBreakpoint("calc.js", 2, 0)
 	if len(at) != 0 {
@@ -169,6 +171,7 @@ func TestDebuggerBreakpoint(t *testing.T) {
 // returns to the caller, whose next place to stop is the loop's update, then
 // its test, then its body again.
 func TestDebuggerStepping(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	r.rt.SetBreakpoint("calc.js", 8, 0)
 	steps := []vm.StepAction{vm.StepInto, vm.StepOver, vm.StepOut, vm.StepOver, vm.StepOver}
@@ -195,6 +198,7 @@ func TestDebuggerStepping(t *testing.T) {
 // test is: stepping over a body's last statement stops at the head before
 // the body again, and at the head before the loop ends.
 func TestDebuggerLoopHeads(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	r.rt.SetBreakpoint("heads.js", 3, 0)
 	h.then = func(p *vm.DebugPause) vm.StepAction {
@@ -225,6 +229,7 @@ xs.join();
 // with a debugger attached, and only in a runtime made for one; a runtime
 // made without one compiles no OpDebugStmt at all.
 func TestDebuggerStatement(t *testing.T) {
+	t.Parallel()
 	const src = "let x = 1;\ndebugger;\nx + 1"
 	r, h := newDebugged(t)
 	if v, err := r.EvalFile("d.js", src); err != nil || v.String() != "2" {
@@ -261,6 +266,7 @@ func TestDebuggerStatement(t *testing.T) {
 // those no catch clause on the stack catches, once each however many frames
 // they unwind.
 func TestDebuggerExceptions(t *testing.T) {
+	t.Parallel()
 	const src = `function thrower() { throw new Error("boom"); }
 function caught() { try { thrower(); } catch (e) { return "caught"; } }
 caught();
@@ -321,6 +327,7 @@ func TestDebuggerRequestPause(t *testing.T) {
 // twice, each run compiled for the runtime, and the code of an eval, which
 // has no name.
 func TestDebuggerScripts(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	p, err := Compile("prog.js", "eval('1 + 1')")
 	if err != nil {
@@ -356,6 +363,7 @@ func TestDebuggerScripts(t *testing.T) {
 // statement's object, the script's top-level let and const, and the global
 // object; and code evaluated in a caller's frame sees the caller's bindings.
 func TestDebuggerScopesAndFrames(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	const src = `let top = "T";
 function outer(o) {
@@ -430,6 +438,7 @@ outer(10);
 // function it calls does not stop it, and a frame is of no use once the
 // pause is over.
 func TestDebuggerEvaluate(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	r.rt.SetPauseOnExceptions(vm.PauseOnAllExceptions)
 	r.rt.SetBreakpoint("v.js", 1, 0)
@@ -468,6 +477,7 @@ func TestDebuggerEvaluate(t *testing.T) {
 // specifier, and one in an async function after an await, which the code
 // reaches in a later job.
 func TestDebuggerModulesAndAsync(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	r.rt.SetBreakpoint("m.mjs", 4, 0)
 	var got []string
@@ -500,6 +510,7 @@ export const result = await f();
 // the debugger is told by DebugClosed and refused anything more, and what is
 // posted afterwards is dropped.
 func TestDebuggerCloseInPause(t *testing.T) {
+	t.Parallel()
 	r, h := newDebugged(t)
 	if err := r.Set("closeNow", func() { r.Close() }); err != nil {
 		t.Fatal(err)
@@ -569,6 +580,7 @@ func TestDebuggerPauseLoopClose(t *testing.T) {
 // by SetVariable, are what its closure reads after, and a parameter the
 // closure's own frame assigns is what its maker reads. With the JIT too.
 func TestDebuggerAssignsCaptured(t *testing.T) {
+	t.Parallel()
 	for _, jit := range []bool{false, true} {
 		opts := []Option{WithDebugger()}
 		if jit {

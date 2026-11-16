@@ -1022,23 +1022,14 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 	}
 }
 
-// The hash of a literal's keys is FNV-1a, 64 bits, which takes no seed: a
-// function is shared by runtimes, whose literals of the same keys it says
-// alike.
-const (
-	literalHashStart = 14695981039346656037
-	literalHashPrime = 1099511628211
-)
-
 // noteLiteralKeys records the keys of n, the object literal whose site is the
-// last made, if it has nothing else (bytecode.Function.LiteralKeys). Each key's
-// length goes into the hash, so that ab then c is not a then bc.
+// last made, if it has nothing else (bytecode.Function.LiteralKeys), by their
+// hash (bytecode.HashLiteralKeys).
 func (c *compiler) noteLiteralKeys(n *ast.ObjectLit) {
 	if len(n.Props) == 0 || len(n.Props) > bytecode.MaxLiteralKeys {
 		return
 	}
 	var keys [bytecode.MaxLiteralKeys]string
-	h := uint64(literalHashStart)
 	for i, p := range n.Props {
 		if p.Computed || p.Kind == ast.PropSpread || p.Kind == ast.PropGet || p.Kind == ast.PropSet {
 			return
@@ -1048,19 +1039,8 @@ func (c *compiler) noteLiteralKeys(n *ast.ObjectLit) {
 			return
 		}
 		keys[i] = key
-		for s := uint64(len(key)); ; s >>= 8 {
-			h = (h ^ s&0xff) * literalHashPrime
-			if s < 0x100 {
-				break
-			}
-		}
-		for j := 0; j < len(key); j++ {
-			h = (h ^ uint64(key[j])) * literalHashPrime
-		}
 	}
-	if h == 0 {
-		h = 1
-	}
+	h := bytecode.HashLiteralKeys(keys[:len(n.Props)])
 	c.fn.LiteralKeys = append(c.fn.LiteralKeys, bytecode.LiteralKeys{Site: c.fn.PropSites, Keys: h})
 }
 

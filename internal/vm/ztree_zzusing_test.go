@@ -13,7 +13,7 @@ import "testing"
 // return, with a ticker of promise jobs showing the turns each await takes.
 // Each case leaves a value, or a promise of one, in p.
 func TestTreeUsing(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct{ name, src, want string }{
 		{"order", `var log = []; function r(n) { return { [Symbol.dispose]() { log.push('d' + n) } } } function f() { let s = 0; for (let i = 0; i < 3; i++) { using a = r('a' + i), b = r('b' + i); s += i; log.push('body' + i) } return s } var p = f() + ' ' + log.join(',')`, "3 body0,db0,da0,body1,db1,da1,body2,db2,da2"},
 		{"nullish", `var log = []; function f() { for (let i = 0; i < 2; i++) { using a = null, b = undefined; log.push(i) } return log.join(',') } var p = f()`, "0,1"},
@@ -35,10 +35,9 @@ func TestTreeUsing(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				src := "var out = 'pending'; " + tt.src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 				fn := compileForTest(t, src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err == nil {
 					if err = r.runMicrotasks(); err == nil {

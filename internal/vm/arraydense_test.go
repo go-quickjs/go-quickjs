@@ -8,6 +8,7 @@ import "testing"
 // constructor). A longer one, or one lengthened past twice its elements,
 // is sparse as before.
 func TestArraysStayDense(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	for _, c := range []struct {

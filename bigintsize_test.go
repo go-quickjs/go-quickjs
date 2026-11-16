@@ -8,6 +8,7 @@ import "testing"
 // product past the limit was worked out at length (KI-16). A shift the old
 // limit refused, well within V8's, works.
 func TestBigIntSizeLimit(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const t = (f) => { try { const v = f(); return typeof v === "bigint" ? "bits:" + (v < 0n ? -v : v).toString(16).length : String(v) } catch (e) { return e.name + ": " + e.message } };
 		[t(() => 1n << (2n ** 25n)), t(() => 1n << (2n ** 30n)), t(() => BigInt.asUintN(2 ** 53 - 1, 5n)),
 		 t(() => BigInt.asUintN(2 ** 53 - 1, -1n)), t(() => BigInt.asIntN(2 ** 53 - 1, -5n)), t(() => 2n ** (2n ** 31n)),
@@ -24,6 +25,7 @@ func TestBigIntSizeLimit(t *testing.T) {
 // quotes is cut at 1,000 code units, as V8 cuts it: refusing one of 2^28
 // characters wrote all of them out again.
 func TestBigIntSizeLimitOfText(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const t = (f) => { try { return String(f()) } catch (e) { return e.name + (e.name === "SyntaxError" && e.message.startsWith("Max") ? ": " + e.message : "") } };
 		const m = (s) => { try { BigInt(s) } catch (e) { return e.message } };
 		const over = "0x1" + "0".repeat(2 ** 28), face = String.fromCodePoint(0x1F600);

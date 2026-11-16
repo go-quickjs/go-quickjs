@@ -8,6 +8,7 @@ import "testing"
 // is still answered without a frame. Richards's markAsSuspended, called from
 // suspendCurrent, lost its frameless calls everywhere when it was.
 func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -35,6 +36,7 @@ func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
 // miss of the body that made that call -- which is the one that can never
 // be answered without a frame, and so the one that should stop trying.
 func TestPureRefusalIsTheCallersMiss(t *testing.T) {
+	t.Parallel()
 	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

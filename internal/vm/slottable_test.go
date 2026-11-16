@@ -10,6 +10,7 @@ import (
 // and the growth they cause; and a key read as an object's property is
 // found, deleted and found again by the index.
 func TestSlotTable(t *testing.T) {
+	t.Parallel()
 	var s slotTable
 	s.init(2)
 	want := map[Atom]int32{}

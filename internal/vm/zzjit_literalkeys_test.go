@@ -12,6 +12,7 @@ import (
 // guards hold. Each request's own layouts had made the read polymorphic, then
 // megamorphic, in its first few.
 func TestJITKeptCodeReadsNewCodesLiterals(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -48,6 +49,7 @@ func TestJITKeptCodeReadsNewCodesLiterals(t *testing.T) {
 
 // Native code is as right as the rest with two lists of keys on one root.
 func TestJITLiteralKeysCollision(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

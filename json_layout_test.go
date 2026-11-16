@@ -50,6 +50,7 @@ func jsonRepeated(t *testing.T, cases []struct{ src, want string }) {
 // The text of a key is compared with the name a layout expects, which must
 // not be taken for more than it is.
 func TestJSONParseExpectedKeys(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		// A name ending in a backslash, and text that starts the same but
 		// whose backslash escapes the quotation mark after it.
@@ -86,6 +87,7 @@ func TestJSONParseExpectedKeys(t *testing.T) {
 
 // A key given twice is the last, where the first left it.
 func TestJSONParseDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	long := `{"k0":0,"k1":1,"k2":2,"k3":3,"k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,"k10":10}`
 	jsonRepeated(t, []struct{ src, want string }{
 		{`JSON.stringify(JSON.parse('{"a":1,"b":2,"a":3}'))`, `{"a":3,"b":2}`},
@@ -104,6 +106,7 @@ func TestJSONParseDuplicateKeys(t *testing.T) {
 // An object is made in the size it has, which is no limit on it, and shares a
 // layout with objects it must not disturb.
 func TestJSONParsedObjectsGrow(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var out = [];
 		  for (var n = 1; n <= 12; n++) {
@@ -134,6 +137,7 @@ func TestJSONParsedObjectsGrow(t *testing.T) {
 }
 
 func TestJSONParseNumbers(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`[Object.is(JSON.parse("-0"), -0), Object.is(JSON.parse("-0.0"), -0), Object.is(JSON.parse("0"), 0),
 		   Object.is(JSON.parse("-0e5"), -0), Object.is(JSON.parse("[-0]")[0], -0), Object.is(JSON.parse("-1e-400"), -0)].join()`,
@@ -153,6 +157,7 @@ func TestJSONParseNumbers(t *testing.T) {
 
 // Each of these is at every place a word of text can put it.
 func TestJSONStringsAtEveryOffset(t *testing.T) {
+	t.Parallel()
 	const reference = `
 	function ref(s) {
 		var out = '"';
@@ -205,6 +210,7 @@ func TestJSONStringsAtEveryOffset(t *testing.T) {
 // A string with an escape says what it is as it is built: what its bytes
 // are decides how it is indexed, and an escape may be what makes it wide.
 func TestJSONEscapedStrings(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var u = String.fromCharCode(92) + "u", q = String.fromCharCode(34);
 		  function p(t) { return JSON.parse(q + t + q); }
@@ -242,6 +248,7 @@ func TestJSONEscapedStrings(t *testing.T) {
 // A string long enough to be read by the fastest way there is, ending at each
 // place in a read and among the last bytes of the document.
 func TestJSONLongStrings(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var bad = [], wide = String.fromCharCode(0x4E2D), q = String.fromCharCode(34), bs = String.fromCharCode(92);
 		for (var n = 30; n < 140; n++) {
 			for (var tail of ["", "x", "xy", "xyzw"]) {
@@ -263,6 +270,7 @@ func TestJSONLongStrings(t *testing.T) {
 // What stringify writes it knows the length of, without reading it, and
 // strings go on to index it.
 func TestJSONStringifyLengths(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var e = String.fromCharCode(0xE9), h = String.fromCharCode(0xD83D), l = String.fromCharCode(0xDE00);
 		  var t = JSON.stringify({a: e, b: [e + e, h + l, h, l + h]});
@@ -284,6 +292,7 @@ func TestJSONStringifyLengths(t *testing.T) {
 // A value is read when the walk reaches its key, from an object it may by
 // then have changed: the keys are the ones it started with.
 func TestJSONLayoutOfAChangingObject(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		// A getter deletes a key still to come, which is then undefined.
 		{`function mk() { return {get a() { delete this.b; return 1; }, b: 2, c: 3}; }
@@ -338,6 +347,7 @@ func TestJSONLayoutOfAChangingObject(t *testing.T) {
 
 // What was found on an object's chain holds until the chain changes.
 func TestJSONToJSONFoundAnew(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var o = {a: 1}, a = JSON.stringify(o) + JSON.stringify(o);
 		  Object.prototype.toJSON = function () { return "up"; };
@@ -378,6 +388,7 @@ func TestJSONToJSONFoundAnew(t *testing.T) {
 // A namespace answers for its exports, none of which is in a table, so that
 // one on an object's chain is asked as a proxy is.
 func TestJSONToJSONOnANamespace(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
@@ -401,6 +412,7 @@ func TestJSONToJSONOnANamespace(t *testing.T) {
 // toJSON and the replacer get their arguments from a buffer a walk uses
 // again, which nothing may be left holding.
 func TestJSONCallbacksKeepTheirArguments(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var kept = [];
 		  JSON.stringify({a: 1, b: 2}, function (k, v) { kept.push(arguments); return v; });
@@ -427,6 +439,7 @@ func TestJSONCallbacksKeepTheirArguments(t *testing.T) {
 
 // A cycle is an object being written, however far down.
 func TestJSONCycles(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var a = {}; a.self = a; try { JSON.stringify(a); } catch (e) { e.name; }`, "TypeError"},
 		{`var o = {}, x = o; for (var i = 0; i < 200; i++) x = x.n = {};
@@ -446,6 +459,7 @@ func TestJSONCycles(t *testing.T) {
 
 // A failed walk leaves what the next one needs.
 func TestJSONAfterAnError(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var ok = 0, s = {a: 1}, deep = [], x = deep;
 		for (var i = 0; i < 300; i++) { var n = []; x.push(n); x = n; }
 		x.push({toJSON() { throw new Error("no"); }});
@@ -462,6 +476,7 @@ func TestJSONAfterAnError(t *testing.T) {
 
 // A buffer is used again, and the text that was made in it stays as it was.
 func TestJSONBuffersAreNotShared(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var a = "x".repeat(200000), b = "y".repeat(200000);
 		  var s = JSON.stringify(a), t = JSON.stringify(b), u = JSON.stringify("short");
@@ -482,6 +497,7 @@ func TestJSONBuffersAreNotShared(t *testing.T) {
 
 // A number of few places is written as the digits it was given.
 func TestJSONStringifyNumbers(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`JSON.stringify([0, -0, 1, -1, 9, 10, 99, 100, 101, 999, 1000, 12345, 1234567, 99999999, 100000000, 4294967296])`,
 			"[0,0,1,-1,9,10,99,100,101,999,1000,12345,1234567,99999999,100000000,4294967296]"},
@@ -498,6 +514,7 @@ func TestJSONStringifyNumbers(t *testing.T) {
 
 // What a reviver is given, and what it leaves.
 func TestJSONReviverKeys(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		{`var seen = []; JSON.parse('{"a":[10,{"b":20}],"c":30}', function (k, v, c) {
 		    seen.push(typeof k + ":" + k + ":" + (c.source === undefined ? "-" : c.source)); return v; });
@@ -526,6 +543,7 @@ func TestJSONReviverKeys(t *testing.T) {
 // toJSON one realm's prototypes gain is found on its objects alone. Each is
 // written often enough to have a record, on either side of the change.
 func TestJSONAcrossRealms(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		// A function runs in its realm, and parses into it.
 		{`var a = JSON.parse('{"a":1,"b":{"c":2}}'), b = other.JSON.parse('{"a":1,"b":{"c":2}}'), c = JSON.parse('{"a":1,"b":{"c":2}}');
@@ -562,6 +580,7 @@ func TestJSONAcrossRealms(t *testing.T) {
 // what it writes is the same, and a record of each layout of a chain would
 // hold the square of what the object does.
 func TestJSONLongLayouts(t *testing.T) {
+	t.Parallel()
 	jsonRepeated(t, []struct{ src, want string }{
 		// Past the most keys, over a chain of layouts each written twice.
 		{`var text = "", n = 0;

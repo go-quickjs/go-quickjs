@@ -16,6 +16,11 @@ import (
 
 // regBinImm is bin_imm's slow path.
 func (r *Runtime) regBinImm(op bytecode.Op, a Value, imm int32) (Value, error) {
+	if op != bytecode.OpAdd && a.IsString() {
+		// A string's number, which converting it throws nothing for, as
+		// the number it is: s | 0, s * 1.
+		a = Float(jsnum.ToNumber(a.String().Go()))
+	}
 	if a.IsNumber() {
 		x, y := a.Number(), imm
 		switch op {

@@ -12,6 +12,7 @@ import "testing"
 // left native code at every element. Each answer is the interpreter's;
 // warm, the site leaves native code no more.
 func TestJITMegamorphicReadOfPrimitive(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -50,6 +51,7 @@ func TestJITMegamorphicReadOfPrimitive(t *testing.T) {
 // called with the primitive as this: itself in strict code, a wrapper in
 // sloppy code (OrdinaryCallBindThis). The answers are Node's.
 func TestJITMegamorphicReadOfPrimitiveThis(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -111,8 +111,7 @@ const regexpLeafTestWant = `null,1,false,1 null,0,false,0 null,0,false,0 null,1,
 // interpreter, and the check passes exactly where it says.
 func TestRegExpLeaves(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, regexpLeafTestSrc))
 		r.Close()
 		if err != nil {
@@ -122,7 +121,6 @@ func TestRegExpLeaves(t *testing.T) {
 			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, regexpLeafTestWant)
 		}
 	}
-	SetTreeTier(true)
 	r := New(Config{})
 	defer r.Close()
 	if fd := r.regexpExecFn.fn(); fd.elemOp != elemRegExpExec || leafChecks[elemRegExpExec] == nil {
@@ -311,12 +309,12 @@ func TestRegExpLeaves(t *testing.T) {
 // tier and in the interpreter, where a RegExp neither global nor sticky
 // takes it.
 func TestRegExpLeafComplexity(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		tree bool
 		call string
 	}{{true, "exec"}, {false, "test"}} {
-		SetTreeTier(c.tree)
-		r := New(Config{})
+		r := newTreeTierForTest(c.tree, Config{})
 		v, err := r.Run(compileForTest(t, `function f(re) { let _k = 0; try { return String(re.`+c.call+`('a'.repeat(40))) } catch (e) { return e.name + ': ' + e.message } }
 f(/(a+)+b/)`))
 		r.Close()
@@ -327,7 +325,6 @@ f(/(a+)+b/)`))
 			t.Errorf("tree tier %v, %s: %s, want %s", c.tree, c.call, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A leaf's call of exec or test whose match fails -- spends the step
@@ -348,8 +345,7 @@ for (var how of ['exec', 'test']) {
 out.join('|')`
 	want := "SyntaxError,regular expression is too complex,,0|SyntaxError,regular expression is too complex,,0"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -359,7 +355,6 @@ out.join('|')`
 			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 
 	// The leaf's call itself, without a frame: an error that is no
 	// exception, and the match remembered for the call made again.
@@ -395,14 +390,16 @@ out.join('|')`
 	if _, err := r.Run(compileForTest(t, `function g(re, s) { try { re.exec(s) } catch (e) {} }`)); err != nil {
 		t.Fatal(err)
 	}
+	// In the process's CPU time, which the machine's other processes --
+	// go test's other packages -- do not move as they do the clock.
 	best := func(src string) time.Duration {
 		b := time.Duration(1 << 62)
 		for range 3 {
-			start := time.Now()
+			start := processCPUForTest()
 			if _, err := r.Run(compileForTest(t, src)); err != nil {
 				t.Fatal(err)
 			}
-			b = min(b, time.Since(start))
+			b = min(b, processCPUForTest()-start)
 		}
 		return b
 	}
@@ -416,6 +413,7 @@ out.join('|')`
 // A deadline stops a leaf's call of exec on a match that would run for
 // ever, and the runtime runs on.
 func TestRegExpLeafDeadline(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { return re.exec(s) }`)); err != nil {
@@ -447,8 +445,7 @@ func TestRegExpLeafSpentOnceNested(t *testing.T) {
 		t.Skip("spends the step budget")
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		src := `function f0(re, s) { return re.exec(s) }
 function f1(re, s) { return f0(re, s) }
 function f2(re, s) { return f1(re, s) }
@@ -458,10 +455,11 @@ warm(); warm()`
 		if _, err := r.Run(compileForTest(t, src)); err != nil {
 			t.Fatal(err)
 		}
+		// In the process's CPU time, as TestRegExpLeafFailsAgainWithFrame.
 		best := func(src string) time.Duration {
 			b := time.Duration(1 << 62)
 			for range 2 {
-				start := time.Now()
+				start := processCPUForTest()
 				v, err := r.Run(compileForTest(t, src))
 				if err != nil {
 					t.Fatal(err)
@@ -469,7 +467,7 @@ warm(); warm()`
 				if got := v.String().Go(); got != "SyntaxError: regular expression is too complex" {
 					t.Fatalf("tree tier %v: %s = %s", tree, src, got)
 				}
-				b = min(b, time.Since(start))
+				b = min(b, processCPUForTest()-start)
 			}
 			return b
 		}
@@ -481,5 +479,4 @@ warm(); warm()`
 				tree, leaf, framed, float64(leaf)/float64(framed))
 		}
 	}
-	SetTreeTier(true)
 }

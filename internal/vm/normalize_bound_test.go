@@ -13,6 +13,7 @@ import (
 // what lets normalizedTooLong leave a string shorter than maxStringLength/18
 // unwalked.
 func TestNormalizeExpansionBound(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("normalizes every code point")
 	}
@@ -48,6 +49,7 @@ func TestNormalizeExpansionBound(t *testing.T) {
 // U+FDFA, eighteen characters by compatibility and itself canonically, is
 // too long in NFKD and NFKC and fits in NFC and NFD at thirty million.
 func TestNormalizedTooLong(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("walks a string of thirty million characters")
 	}

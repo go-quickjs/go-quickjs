@@ -519,6 +519,7 @@ generic receiver map: threw TypeError`
 // The callback methods of typed arrays answer what Node's do, in a runtime
 // made twice.
 func TestTypedArrayCallbacksAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	for round := range 2 {
 		r := New(Config{})
 		v, err := r.Run(compileForTest(t, typedCallbackScript))

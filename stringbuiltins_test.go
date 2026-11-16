@@ -253,6 +253,7 @@ var stringBuiltinCases = []struct{ src, want string }{
 // TestStringBuiltinsMatchNode pins String's methods to Node's answers,
 // each called three times, which the tree tier takes over by.
 func TestStringBuiltinsMatchNode(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	evalString(t, rt, showJS)

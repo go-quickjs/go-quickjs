@@ -112,3 +112,55 @@ func TestRegNativeInDroppedRealm(t *testing.T) {
 		nativeRunInRealm(t, r, r.NewRealm(), fn)
 	}
 }
+
+// A frame's end clears the states the run gave frames above it, and only
+// those: a recursion that exits to Go at each depth grows the context's
+// stack and makes a state at each, which its end clears, whether Go or
+// the exit stub gave it its frame, and the count of states used goes back
+// to none, so that the next run's end -- a
+// callback's, most often -- clears what it used rather than every state
+// the stack was ever grown to.
+func TestRegNativeLeaveClearsUsed(t *testing.T) {
+	fn := nativeRealmFn(t, `
+	function deep(n) { var a = [n]; return n === 0 ? a[0] : 1 + deep(n - 1) }
+	deep(100)`)
+	r := New(Config{})
+	defer r.Close()
+	// Twice: the second run's states are the first's, which the exit stub
+	// gives frames itself (makeTop).
+	for range 2 {
+		v, err := r.RunIn(r.Realm, fn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Number() != 100 {
+			t.Fatalf("got %v, want 100", v)
+		}
+	}
+	grown := false
+	for st := r.regFree; st != nil; st = st.next {
+		ctx := st.native
+		if ctx == nil {
+			continue
+		}
+		if ctx.used != 0 {
+			t.Errorf("a context left with %d states used", ctx.used)
+		}
+		made := 0
+		for _, s := range ctx.states {
+			if s == nil {
+				continue
+			}
+			made++
+			if s.f != nil || s.c != nil || s.cl != nil || s.err != nil {
+				t.Error("a state above the base frame kept its frame's")
+			}
+		}
+		if made > 8 {
+			grown = true
+		}
+	}
+	if !grown {
+		t.Error("no context grew past its first 8 states")
+	}
+}

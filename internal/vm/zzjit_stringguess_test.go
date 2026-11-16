@@ -27,6 +27,7 @@ const stringGuessSetup = `
 // where it had, 64 times or more, until it was judged slow and left to the
 // existing tiers. Each answer is the interpreter's.
 func TestJITObjectMethodNamedLikeAString(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

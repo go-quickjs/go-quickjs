@@ -35,6 +35,7 @@ const decidedSetup = `
 // compiled again, which inline it with them where they now may; and every
 // answer is the interpreter's.
 func TestJITCallersInlineDecidedCallee(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

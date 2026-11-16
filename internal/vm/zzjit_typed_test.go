@@ -85,6 +85,7 @@ func TestJITTypedArrays(t *testing.T) {
 // was a call of Go: Octane's zlib, whose heap is typed arrays, ran several
 // times slower with the JIT than without it.
 func TestJITTypedArraysNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

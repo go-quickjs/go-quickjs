@@ -15,6 +15,7 @@ import (
 // a call, a getter, a constructor -- is an *Error, as one from Eval is, and
 // that a Go function passing it on rethrows the very exception.
 func TestCallReturnsError(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	obj, err := rt.Eval(`({
@@ -55,6 +56,7 @@ func TestCallReturnsError(t *testing.T) {
 // deadline a Go function reports, one of its own requests', is an error the
 // script can catch, as it was before that (KI-19).
 func TestHostCancellationIsUncatchable(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -85,6 +87,7 @@ func TestHostCancellationIsUncatchable(t *testing.T) {
 // message and nothing of the first runtime's: it used to be rethrown as it
 // was, handing the second runtime the first's objects (KI-09).
 func TestErrorStaysInItsRuntime(t *testing.T) {
+	t.Parallel()
 	a, b := quickjs.New(), quickjs.New()
 	defer a.Close()
 	defer b.Close()
@@ -114,6 +117,7 @@ func (e *errWrapped) Error() string { return fmt.Sprintf("code %d", e.code) }
 // well. An exception the script made itself, or a new one it threw in place
 // of the Go function's, unwraps to nothing.
 func TestErrorUnwrapsToTheGoError(t *testing.T) {
+	t.Parallel()
 	errMine := errors.New("mine")
 	rt := quickjs.New()
 	defer rt.Close()

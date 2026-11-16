@@ -57,7 +57,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +80,19 @@ jobs:
 
       - name: Run tests
         run: go test -count=1 ./...
+
+      # The VM's tests with the JIT made to compile on the first call and
+      # in the background, each compile installed at the third check after
+      # it was handed over (QJS_JIT_STRESS's background). It runs here
+      # rather than beside the JIT's test262, whose job it made the
+      # longest of the run: the jobs are as many as before, each shorter.
+      - name: Run the VM's tests, compiling in the background
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          QUICKJS_REQUIRE_JIT: "1"
+          QJS_JIT_STRESS: threshold,budget=3,deopt=7,background=3
+        run: go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm .
 
   newest:
     # The module builds with the Go go.mod names, which the jobs above test;
@@ -162,15 +175,17 @@ jobs:
 
       # Native execution; the compiler's cross-checks -- liveness against
       # its reference, the origins and stores' checks it keeps against
-      # those made afresh -- and native pointer lifetimes, at once: run one
-      # after another they made this job 20 minutes on Go 1.27.
+      # those made afresh -- and native pointer lifetimes, one after
+      # another: the vm package's tests run in parallel, each command's
+      # taking the runner's CPUs, which two at once would fight over. The
+      # first line is a subshell so that bash -e stops at a failure of any
+      # of its commands, not only of its last.
       - name: Exercise native execution, cross-check the compiler and native pointer lifetimes
         shell: bash
         run: |
-          bash .github/together.sh \
-            "Exercise native execution" "go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native'" \
-            "Check the compiler against its references" "go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'" \
-            "Check native pointer lifetimes" "go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'"
+          (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native')
+          go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'
+          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
 
       # Both emitters' code, for every target, against golang.org/x/arch's
       # disassemblers: a module of its own, so go-quickjs never depends on it.
@@ -223,16 +238,11 @@ jobs:
 
       # The VM's own tests under the same stress: those that count native
       # calls, exits and compiles take the JIT's own thresholds
-      # (jitRuntimeForTest, jitDefaultsForTest); the rest run stressed. And
-      # beside them compiling in the background, each compile installed at
-      # the third check after it was handed over (QJS_JIT_STRESS's
-      # background): one after the other they made this job 24 minutes.
-      - name: Run the VM's tests, and compiling in the background
+      # (jitRuntimeForTest, jitDefaultsForTest); the rest run stressed. The
+      # same tests compiling in the background run in the Test job.
+      - name: Run the VM's tests
         shell: bash
-        run: |
-          bash .github/together.sh \
-            "Run the VM's tests" "go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm" \
-            "Run the VM's tests, compiling in the background" "QJS_JIT_STRESS=threshold,budget=3,deopt=7,background=3 go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm ."
+        run: go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm
 
   # The JIT's kernels and the tree tier's, on arm64 (macOS and Linux)
   # and amd64 (Linux). A shared

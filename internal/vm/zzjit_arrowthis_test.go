@@ -79,6 +79,7 @@ func arrowThisRounds(exits bool) []string {
 // made; every answer is the interpreter's, whatever leaves native code
 // inside it, under budgets of polls and of finished invocations or not.
 func TestJITArrowThisInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

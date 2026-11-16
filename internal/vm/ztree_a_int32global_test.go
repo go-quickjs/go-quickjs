@@ -45,11 +45,9 @@ func TestInt32GlobalElements(t *testing.T) {
 		`let heap32 = new Int32Array(64); heap32[2] = 5; out.push(round(), sum(2)); out.join(' | ')`,
 	}
 	var want []string
-	defer SetTreeTier(true)
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
 		globals = 0
-		r := newOldTiersForTest(Config{})
+		r := newOldTiersTreeForTest(tree, Config{})
 		var got []string
 		for _, src := range scripts {
 			v, err := r.Run(compileForTest(t, src))

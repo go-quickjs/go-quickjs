@@ -6,6 +6,7 @@ import "testing"
 // strings and the other primitives each in their own, and SameValueZero across
 // them -- NaN one key, +0 and -0 one key, 1 and "1" and true and 1n four.
 func TestMapKeyKinds(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var m = new Map([[NaN, "nan"], [0, "zero"], [1, "num"], ["1", "str"], [true, "bool"], [1n, "big"],
 		                  [null, "null"], [undefined, "undef"], ["", "empty"]])

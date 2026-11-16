@@ -10,6 +10,7 @@ import "testing"
 // to an exit, whose interpreter converts it, so this takes a runtime without
 // one. The answer is Node's.
 func TestJITTemplateOfAnAddition(t *testing.T) {
+	t.Parallel()
 	src := `
 function f(a, b) { return ` + "`${a + b}`" + ` }
 var last

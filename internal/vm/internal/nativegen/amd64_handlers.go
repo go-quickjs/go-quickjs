@@ -18,7 +18,11 @@ import (
 func nativeEmit(v *variant) (*block, error) {
 	g := &nativeGen{a: &Asm{}, v: v}
 	a := g.a
-	g.exit, g.exitRet = a.NewLabel(), a.NewLabel()
+	g.exit, g.exitRet, g.exitAfter = a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.genRet, g.genObj = g.exit, g.exit
+	if v.has(bytecode.RYield) {
+		g.genRet, g.genObj = a.NewLabel(), a.NewLabel()
+	}
 	labels := map[bytecode.ROp]Label{}
 	var order []bytecode.ROp
 	h := func(op bytecode.ROp, body func()) {
@@ -367,7 +371,7 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Bind(ne)
 		g.next()
 	})
-	// -x, +x and ~x of a number; anything else, and !x, Go's.
+	// -x, +x, ~x and ToNumeric of a number; anything else, and !x, Go's.
 	h(bytecode.RUnary, func() {
 		pos, not := a.NewLabel(), a.NewLabel()
 		g.decB(RSI)
@@ -376,6 +380,8 @@ func nativeEmit(v *variant) (*block, error) {
 		a.ShiftImm(Shr, R8, 8, true)
 		a.MovZX8(R8, R8)
 		a.OpImm(Cmp, R8, int32(bytecode.OpPos), false)
+		a.Jcc(CondE, pos)
+		a.OpImm(Cmp, R8, int32(bytecode.OpToNumeric), false)
 		a.Jcc(CondE, pos)
 		a.OpImm(Cmp, R8, int32(bytecode.OpBitNot), false)
 		a.Jcc(CondE, not)
@@ -637,13 +643,21 @@ func nativeEmit(v *variant) (*block, error) {
 		g.typedBigRead()
 	}
 	h(bytecode.RGetIndex, func() {
-		miss := a.NewLabel()
+		// A key string a for-in handed out names its index (keyIndex).
+		miss, str, have := a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.decB(RSI)
 		g.object(RSI, RSI)
 		g.decC(R8)
-		g.num(0, R8)
+		g.numOr(0, R8, str)
 		g.element(RCX, RSI, 0, objMappedArguments, miss)
+		a.Bind(have)
 		getElem(miss)
+		g.late = append(g.late, func() {
+			a.Bind(str)
+			g.keyIndex(R8)
+			g.dense(RCX, RSI, objMappedArguments, g.exit)
+			a.Jmp(have)
+		})
 	})
 	h(bytecode.RGetIndexI, func() {
 		miss := a.NewLabel()
@@ -743,51 +757,8 @@ func nativeEmit(v *variant) (*block, error) {
 		// typeof's string, the runtime's (typeofStrs) where it has made
 		// it: of a number, a primitive, an object but a proxy and
 		// document.all's kind.
-		idx, obj, num, big, notFn := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.decB(RSI)
-		a.LoadIdx(R9, R12, RSI, 1, 0)
-		a.Op(Cmp, R9, R10, true)
-		a.Jcc(CondB, num)
-		a.MovImm(R8, heapBigBits)
-		a.Op(Cmp, R9, R8, true)
-		a.Jcc(CondAE, big)
-		a.MovZX8(RCX, R9)
-		a.OpImm(Cmp, RCX, int32(KindObject), false)
-		a.Jcc(CondE, obj)
-		a.OpImm(Cmp, RCX, int32(KindUndefined), false)
-		a.Jcc(CondB, g.exit)
-		a.OpImm(Cmp, RCX, int32(KindBigInt), false)
-		a.Jcc(CondA, g.exit)
-		// undefined, null and a boolean one before their kind; a string,
-		// a symbol and a BigInt at it.
-		a.OpImm(Cmp, RCX, int32(KindString), false)
-		a.Jcc(CondAE, idx)
-		a.OpImm(Sub, RCX, 1, false)
-		a.Jmp(idx)
-		a.Bind(num)
-		a.MovImm(RCX, 3)
-		a.Jmp(idx)
-		a.Bind(big)
-		a.MovImm(RCX, 6)
-		a.Jmp(idx)
-		a.Bind(obj)
-		a.LoadIdx(R8, R12, RSI, 1, 8)
-		a.LoadU16(RDX, R8, offObjFlags)
-		a.MovImm(RCX, 1)
-		a.MovRR(R9, RDX)
-		a.OpImm(And, R9, int32(objHTMLDDA), false)
-		a.Jcc(CondNE, g.exit)
-		a.OpImm(And, RDX, int32(objHasData), false)
-		a.Jcc(CondE, idx)
-		a.Load(R9, R8, sizeObj+offExtData)
-		a.CmpMem(R9, RDI, ncFuncT, true)
-		a.Jcc(CondNE, notFn)
-		a.MovImm(RCX, 7)
-		a.Jmp(idx)
-		a.Bind(notFn)
-		a.CmpMem(R9, RDI, ncProxyT, true)
-		a.Jcc(CondE, g.exit)
-		a.Bind(idx)
+		g.typeIndex(RSI)
 		a.Load(R8, RDI, ncTypeofs)
 		a.LoadIdx(R8, R8, RCX, 8, 0)
 		a.Op(Test, R8, R8, true)
@@ -801,11 +772,13 @@ func nativeEmit(v *variant) (*block, error) {
 		// R[A] = R[B] in R[C]: a string key's answer the realm's in
 		// cache remembers of an object's layout and chain (hasCached);
 		// anything else Go's, which fills the cache.
-		found := a.NewLabel()
+		found, index := a.NewLabel(), a.NewLabel()
 		g.decC(RSI)
 		g.object(RSI, RSI)
 		g.decB(RDX)
 		a.LoadIdx(R9, R12, RDX, 1, 0)
+		a.Op(Cmp, R9, R10, true)
+		a.Jcc(CondB, index)
 		a.MovRR(RCX, R9)
 		a.Op(Xor, RCX, R10, true)
 		a.ShiftImm(Shr, RCX, 16, true)
@@ -871,6 +844,56 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Load(RAX, RBX, 0)
 		a.MovQToX(0, R9)
 		g.storeA(0)
+		// A number key, an index an atom holds: its element of an array or
+		// an ordinary object, or of one up their chain, as hasIndexQuick
+		// finds it, an object of other kinds or of index keys exiting.
+		yes, no, loop, noElems := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+		a.Bind(index)
+		a.MovQToX(0, R9)
+		a.Cvttsd2si(RCX, 0)
+		a.Op(Test, RCX, RCX, true)
+		a.Jcc(CondS, g.exit)
+		a.MovImm(RDX, uint64(atomIndexTag))
+		a.Op(Cmp, RCX, RDX, true)
+		a.Jcc(CondAE, g.exit)
+		a.Cvtsi2sd(1, RCX, true)
+		a.SSEOp(UcomiSD, 0, 1)
+		a.Jcc(CondNE, g.exit)
+		a.Jcc(CondP, g.exit)
+		a.MovRR(R8, RSI)
+		a.Bind(loop)
+		a.LoadU8(RDX, R8, offObjClass)
+		a.OpImm(Cmp, RDX, int32(ClassArray), false)
+		a.Jcc(CondA, g.exit)
+		a.LoadU16(RDX, R8, offObjFlags)
+		a.MovRR(R9, RDX)
+		a.OpImm(And, R9, int32(objPolyProto), false)
+		a.Jcc(CondNE, g.exit)
+		a.OpImm(And, RDX, int32(objHasExt), false)
+		a.Jcc(CondE, noElems)
+		a.CmpMem(RCX, R8, sizeObj+8, true)
+		a.Jcc(CondAE, noElems)
+		a.MovRR(R9, RCX)
+		a.ShiftImm(Shl, R9, 4, true)
+		a.AddMem(R9, R8, sizeObj)
+		a.Load(R9, R9, 0)
+		a.CmpMem(R9, RDI, ncHole, true)
+		a.Jcc(CondNE, yes)
+		a.Bind(noElems)
+		g.noIndexKeys(R8)
+		a.Load(R8, R8, offObjShape)
+		a.Op(Test, R8, R8, true)
+		a.Jcc(CondE, no)
+		a.Load(R8, R8, offShapeProto)
+		a.Op(Test, R8, R8, true)
+		a.Jcc(CondE, no)
+		a.Jmp(loop)
+		a.Bind(yes)
+		a.MovImm(RDX, 1)
+		a.Jmp(found)
+		a.Bind(no)
+		a.Op(Xor, RDX, RDX, false)
+		a.Jmp(found)
 	})
 	h(bytecode.RGetLength, func() {
 		// An array's length but a sparse one's, a string's.
@@ -913,10 +936,12 @@ func nativeEmit(v *variant) (*block, error) {
 	extra()
 	// What came later goes last, so that it moves none of the above.
 	h(bytecode.RPostDec, func() { g.postStep(SubSD) })
+	genStep := a.NewLabel()
 	h(bytecode.RIterNext, func() {
 		// A for-of's step over a dense array by the intrinsic iterator
 		// (iterState.arr): its next element but a hole, the cursor's
-		// index stepped. Anything else is Go's.
+		// index stepped; over a generator, genStep's (amd64_gen.go).
+		// Anything else is Go's.
 		g.decB(RSI)
 		g.object(RSI, RSI)
 		a.LoadU8(RCX, RSI, offObjClass)
@@ -927,7 +952,7 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Jcc(CondNE, g.exit)
 		a.Load(R8, RSI, offItArr)
 		a.Op(Test, R8, R8, true)
-		a.Jcc(CondE, g.exit)
+		a.Jcc(CondE, genStep)
 		a.Load(RCX, RSI, offItIdx)
 		// Past the end of an array of no sparse elements, its length:
 		// the cursor done and the loop left, as iterNext leaves it.
@@ -951,15 +976,22 @@ func nativeEmit(v *variant) (*block, error) {
 		g.taken(RCX)
 	})
 	// A call in tail position while the stack is shallow is call_w's or
-	// call_method_w's (rhCallWT); deeper, Go's, which gives the frame to
-	// the callee in place.
-	for _, op := range []bytecode.ROp{bytecode.RCallWT, bytecode.RCallMWT} {
+	// call_method_w's (rhCallWT); deeper, the frame given to the callee in
+	// place (tailTo), or Go's.
+	tailIn := a.NewLabel()
+	for i, op := range []bytecode.ROp{bytecode.RCallWT, bytecode.RCallMWT} {
 		h(op, func() {
 			a.Load(R9, RDI, ncRT)
 			a.Load(RCX, R9, offRtFrameDepth)
 			a.OpImm(Cmp, RCX, tailCallDepth, true)
-			a.Jcc(CondGE, g.exit)
+			a.Jcc(CondGE, tailIn)
 			a.Jmp(label(bytecode.RCallW))
+			if i == 0 {
+				g.late = append(g.late, func() {
+					a.Bind(tailIn)
+					g.tailTo()
+				})
+			}
 		})
 	}
 	h(bytecode.RCharCodeAt, func() {
@@ -1040,7 +1072,221 @@ func nativeEmit(v *variant) (*block, error) {
 		a.LoadSD(0, RDI, ncNaN)
 		g.storeA(0)
 	})
+	// o[k] += v, a statement's update of a dense array's element that
+	// holds a number, by a number: its word alone written, as
+	// rhAddIndexK writes it. The object in RSI, the value in X1, the key
+	// in X0 or RCX; anything else exits.
+	elemAdd := func() {
+		a.Load(R9, RCX, 0)
+		a.Op(Cmp, R9, R10, true)
+		a.Jcc(CondAE, g.exit)
+		a.MovQToX(0, R9)
+		a.SSEOp(AddSD, 0, 1)
+		g.canon(0)
+		a.StoreSD(RCX, 0, 0)
+		g.next()
+	}
+	elemMask := objMappedArguments | objSharedElems
+	h(bytecode.RAddIndex, func() {
+		g.decA(RDX)
+		g.object(RSI, RDX)
+		g.decC(RDX)
+		g.num(1, RDX)
+		g.decB(R8)
+		g.num(0, R8)
+		g.element(RCX, RSI, 0, elemMask, g.exit)
+		elemAdd()
+	})
+	h(bytecode.RAddIndexK, func() {
+		g.decA(RDX)
+		g.object(RSI, RDX)
+		g.decB(RDX)
+		g.num(1, RDX)
+		a.MovRR(RCX, RAX)
+		a.ShiftImm(Shr, RCX, 48, true)
+		g.dense(RCX, RSI, elemMask, g.exit)
+		elemAdd()
+	})
+	h(bytecode.RAddIndexI, func() {
+		g.decA(RDX)
+		g.object(RSI, RDX)
+		g.immSC(R9)
+		a.Cvtsi2sd(1, R9, true)
+		g.decB(R8)
+		g.num(0, R8)
+		g.element(RCX, RSI, 0, elemMask, g.exit)
+		elemAdd()
+	})
+	// A private member read or written by its cache site (Aux's high 16
+	// bits), as regGetPrivate and regSetPrivate read and write it: an
+	// object of the shape the site remembers, its key there the private
+	// name in R[C], a symbol interned in the runtime's atoms. privSlot
+	// puts the slot's address in RDX, the object in RSI; anything else
+	// exits.
+	privSlot := func() {
+		a.Load(R8, RDI, ncRC)
+		a.Load(R8, R8, offRCAux)
+		a.Op(Test, R8, R8, true)
+		a.Jcc(CondE, g.exit)
+		a.MovRR(RCX, RBX)
+		a.Load(R9, RDI, ncCodeBase)
+		a.Op(Sub, RCX, R9, true)
+		a.ShiftImm(Shr, RCX, 1, true)
+		a.Op(Add, R8, RCX, true)
+		a.LoadU32(RCX, R8, 0)
+		a.ShiftImm(Shr, RCX, 16, false)
+		a.Op(Test, RCX, RCX, false)
+		a.Jcc(CondE, g.exit)
+		a.MovImm(R8, uint64(size("propCache")))
+		a.Imul(RCX, R8)
+		a.Op(Add, RCX, R15, true)
+		g.ownSlot(RDX, RSI)
+		g.decC(R8)
+		a.LoadIdx(R9, R12, R8, 1, 0)
+		a.MovImm(RAX, tagBase|uint64(KindSymbol))
+		a.Op(Cmp, R9, RAX, true)
+		a.Jcc(CondNE, g.exit)
+		a.LoadIdx(R9, R12, R8, 1, 8)
+		a.Load(R8, R9, offSymAtoms)
+		a.Load(RAX, RDI, ncRT)
+		a.CmpMem(R8, RAX, offRtAtoms, true)
+		a.Jcc(CondNE, g.exit)
+		a.LoadU32(R8, R9, offSymAtom)
+		a.Load(R9, RSI, off("Object.shape"))
+		a.Load(R9, R9, off("shape.keys"))
+		a.LoadS32(RAX, RCX, off("propCache.idx"))
+		a.LeaIdx(R9, R9, RAX, uint8(size("propKey")), 0)
+		a.LoadU32(RAX, R9, off("propKey.key"))
+		a.Op(Cmp, R8, RAX, false)
+		a.Jcc(CondNE, g.exit)
+		a.Load(RAX, RBX, 0)
+	}
+	h(bytecode.RGetPrivate, func() {
+		g.decB(RSI)
+		g.object(RSI, RSI)
+		privSlot()
+		a.Load(R9, RDX, 0)
+		a.Load(R8, RDX, 8)
+		g.decA(RDX)
+		a.LeaIdx(RAX, R12, RDX, 1, 0)
+		g.storeValue()
+	})
+	h(bytecode.RSetPrivate, func() {
+		g.decA(RSI)
+		g.object(RSI, RSI)
+		privSlot()
+		g.decB(R8)
+		a.LoadIdx(R9, R12, R8, 1, 0)
+		a.LoadIdx(R8, R12, R8, 1, 8)
+		a.MovRR(RAX, RDX)
+		g.storeValue()
+	})
+	// A generator's yield in a frame iter_next entered, and that step,
+	// after it (amd64_gen.go).
+	h(bytecode.RYield, func() {
+		g.genYield()
+		a.Bind(genStep)
+		g.genStep()
+		a.Bind(g.genRet)
+		g.genReturn()
+	})
+	// Closures and the upvalues they capture (amd64_closure.go).
+	h(bytecode.RCloseRegs, g.closeRegs)
+	h(bytecode.RClosureW, g.closureW)
+	// A switch's case found by its table (amd64_switch.go).
+	h(bytecode.RSwitch, g.switchW)
+	// A division or a remainder of numbers (amd64_bin.go).
+	h(bytecode.RBin, g.bin)
+	// str_freeze: R[A], where it is a string an append owns (building),
+	// no longer grown in place, as rhStrFreeze freezes it: its flag, a
+	// byte of no pointer, cleared where it is set, which leaves a string
+	// another runtime may share unwritten. Anything else is left as it is.
+	h(bytecode.RNewObjectLit, g.litCall)
+	h(bytecode.RNewArrayE, g.litCall)
+	h(bytecode.RStrFreeze, func() {
+		done := a.NewLabel()
+		g.decA(RDX)
+		a.LoadIdx(R9, R12, RDX, 1, 0)
+		a.MovRR(RCX, R9)
+		a.Op(Xor, RCX, R10, true)
+		a.ShiftImm(Shr, RCX, 16, true)
+		a.Jcc(CondNE, done)
+		a.MovZX8(RCX, R9)
+		a.OpImm(Cmp, RCX, int32(KindString), false)
+		a.Jcc(CondNE, done)
+		a.LoadIdx(RSI, R12, RDX, 1, 8)
+		a.LoadU8(RCX, RSI, offStrBuilding)
+		a.Op(Test, RCX, RCX, false)
+		a.Jcc(CondE, done)
+		a.Op(Xor, RCX, RCX, false)
+		a.Store8(RSI, offStrBuilding, RCX)
+		a.Bind(done)
+		g.next()
+	})
+	// jtypeof: the jump taken where typeof R[A]'s type is, or is not as
+	// X's RCmpTrue says, the type of index X&^RCmpTrue, as rhJTypeof
+	// takes it (typeIndex); a proxy, document.all and anything else
+	// exits.
+	h(bytecode.RJTypeof, func() {
+		take, ne, eq := a.NewLabel(), a.NewLabel(), a.NewLabel()
+		g.decA(RSI)
+		g.typeIndex(RSI)
+		a.MovRR(R8, RAX)
+		a.ShiftImm(Shr, R8, 8, true)
+		a.MovZX8(R8, R8)
+		a.MovRR(R9, R8)
+		a.OpImm(And, R9, int32(^bytecode.RCmpTrue&0xFF), false)
+		a.OpImm(And, R8, int32(bytecode.RCmpTrue), false)
+		a.Op(Cmp, RCX, R9, true)
+		a.Jcc(CondE, eq)
+		a.Op(Test, R8, R8, false)
+		a.Jcc(CondE, take)
+		a.Jmp(ne)
+		a.Bind(eq)
+		a.Op(Test, R8, R8, false)
+		a.Jcc(CondE, ne)
+		a.Bind(take)
+		g.immSC(RCX)
+		g.taken(RCX)
+		a.Bind(ne)
+		g.next()
+	})
+	// str_part: a part of a template that is a string or a number goes
+	// on as it is, as rhStrPart lets it; anything else exits, for its
+	// conversion.
+	h(bytecode.RStrPart, func() {
+		done := a.NewLabel()
+		g.decA(RDX)
+		a.LoadIdx(R9, R12, RDX, 1, 0)
+		a.Op(Cmp, R9, R10, true)
+		a.Jcc(CondB, done)
+		a.MovRR(RCX, R9)
+		a.Op(Xor, RCX, R10, true)
+		a.ShiftImm(Shr, RCX, 16, true)
+		a.Jcc(CondNE, g.exit)
+		a.MovZX8(RCX, R9)
+		a.OpImm(Cmp, RCX, int32(KindString), false)
+		a.Jcc(CondNE, g.exit)
+		a.Bind(done)
+		g.next()
+	})
+	// gen_entry of a frame's first run: nothing to do, as regGenEntry
+	// does nothing then; a throw injected (savedSP negative) is Go's.
+	h(bytecode.RGenEntry, func() {
+		zero := a.NewLabel()
+		a.Load(RSI, RDI, ncNF)
+		a.Load(RCX, RSI, offFSavedSP)
+		a.Op(Test, RCX, RCX, true)
+		a.Jcc(CondS, g.exit)
+		a.Jcc(CondE, zero)
+		a.StoreImm(RSI, offFSavedSP, 0)
+		a.Bind(zero)
+		g.next()
+	})
 
+	for i := 0; i < len(g.late); i++ {
+		g.late[i]()
+	}
 	for n, l := range g.exits {
 		if n == 0 {
 			continue

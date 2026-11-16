@@ -70,6 +70,7 @@ func TestJITCapturedCalleeSeeded(t *testing.T) {
 // function later: the call checks the function it calls, and calls the
 // one the binding holds. Each answer is the interpreter's.
 func TestJITCapturedCalleeReassigned(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

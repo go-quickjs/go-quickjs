@@ -6,6 +6,7 @@ import "testing"
 // layout the first one had, a template, until one changes its own; a pattern with more names
 // than a table scans has none to share, and makes each object as the first.
 func TestGroupsLayoutShared(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `

@@ -5,6 +5,7 @@ import "testing"
 // growElems keeps what an array has and its length, gives it the room asked
 // for, and from 16,384 elements half as much again. What it adds is clear.
 func TestGrowElems(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ n, more, least int }{
 		{0, 1, 1}, {1, 1, 2}, {15, 1, 16}, {255, 1, 256}, {256, 1, 257}, {1024, 5000, 6024},
 		{16383, 1, 16384}, {16384, 1, 24592}, {16384, 50000, 66384}, {100000, 1, 150016},
@@ -70,10 +71,10 @@ const arrayGrowthTestWant = "100|4950|300|5250|100|4950|100|4950|257|32896|771|3
 // Arrays grown past where their growth changes answer in the tree tier as in
 // the interpreter, as Node answers.
 func TestArrayGrowth(t *testing.T) {
+	t.Parallel()
 	var answers [2]string
 	for i, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, arrayGrowthTestSrc))
 		r.Close()
 		if err != nil {
@@ -81,7 +82,6 @@ func TestArrayGrowth(t *testing.T) {
 		}
 		answers[i] = v.String().Go()
 	}
-	SetTreeTier(true)
 	if answers[0] != answers[1] {
 		t.Errorf("tree tier:\n%s\ninterpreter:\n%s", answers[0], answers[1])
 	}
@@ -94,6 +94,7 @@ func TestArrayGrowth(t *testing.T) {
 // operation: 30,000 elements end past Go's capacity of 37,376 by half and 16
 // from 18,432's.
 func TestArrayGrowthRoom(t *testing.T) {
+	t.Parallel()
 	for _, src := range []string{
 		`var a = []; for (var i = 0; i < 30000; i++) a.push(i); a`,
 		`var a = []; for (var i = 0; i < 30000; i++) a[a.length] = i; a`,

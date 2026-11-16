@@ -11,6 +11,7 @@ import (
 // the property and writing it back have to address the same place even if the
 // read changed what is there.
 func TestCompoundAssignmentEvaluatesOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0; var p = {toString() { n++; return "x" }}; var b = {x: 2};
 		  b[p] *= 3; [b.x, n].join(",")`, "6,1"},
@@ -60,6 +61,7 @@ func TestCompoundAssignmentEvaluatesOnce(t *testing.T) {
 // the variable it is assigned to, which a parenthesised target does not do:
 // parentheses stop it being an identifier reference.
 func TestParenthesizedTargetHasNoName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var fn; (fn) = function () {}; JSON.stringify(fn.name)`, `""`},
 		{`var fn; (fn) = () => {}; JSON.stringify(fn.name)`, `""`},
@@ -78,6 +80,7 @@ func TestParenthesizedTargetHasNoName(t *testing.T) {
 // would silently win -- but not in a destructuring pattern, where each is
 // simply a place to assign to.
 func TestDuplicateProtoInPattern(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { eval("({__proto__: 1, __proto__: 2})") } catch (e) { e.constructor.name }`,
 			"SyntaxError"},
@@ -102,6 +105,7 @@ func TestDuplicateProtoInPattern(t *testing.T) {
 // assignment needs come after all of them: the key becomes a property key and
 // the base is checked only once there is a value to store.
 func TestAssignmentToComputedMemberOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		// The key expression runs before the right-hand side.
 		{"key before value", `var log = []
@@ -142,6 +146,7 @@ func TestAssignmentToComputedMemberOrder(t *testing.T) {
 // is an error only when the assignment actually happens -- after the key and
 // the right-hand side have been evaluated.
 func TestSuperAssignmentWithoutPrototype(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"named", `var count = 0
 		  class C { static m() { super.x = count += 1 } }
@@ -177,6 +182,7 @@ func TestSuperAssignmentWithoutPrototype(t *testing.T) {
 // A computed key of an object pattern with a rest is evaluated once: the
 // rest leaves out the key it converted to, as Node has it.
 func TestObjectRestEvaluatesComputedKeysOnce(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var log = []; function key(k) { log.push("key " + k); return k }
 		var { [key("a")]: x, ...rest } = { a: 1, b: 2 };
 		log.join() + " " + JSON.stringify(rest) + " " + x`, `key a {"b":2} 1`)

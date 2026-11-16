@@ -13,6 +13,7 @@ import (
 // what Node's do, round after round; and a hot loop's keyed writes to
 // fresh objects, run natively, fill them as the interpreter does.
 func TestJITPropertyCreationAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

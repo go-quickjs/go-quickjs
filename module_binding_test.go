@@ -12,6 +12,7 @@ import (
 // script or a function -- not skipped as the module's own top-level functions
 // are, which linking made already (issue #4).
 func TestModuleBlockFunctions(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, src, want string }{
 		{"try block", `try { function f() { return 7; } result = f(); } catch (e) { result = String(e); }`, "7"},
 		{"shadowing", `function f() { return 99; }
@@ -45,6 +46,7 @@ func TestModuleBlockFunctions(t *testing.T) {
 // specifier, or whose export's name, holds a colon: the module asked for is the
 // one named, whole (issue #5).
 func TestReExportColonSpecifier(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, barrel, entry, want string }{
 		{"no colon", `export { f } from "demo-dep";`, `import { f } from "barrel"; result = f();`, "7"},
 		{"colon", `export { f } from "demo:dep";`, `import { f } from "barrel"; result = f();`, "7"},
@@ -91,6 +93,7 @@ func TestReExportColonSpecifier(t *testing.T) {
 // setters see as this, and an assignment changes the global rather than
 // creating a binding of the module's own that hides it.
 func TestModuleGlobalAccess(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, src, want string }{
 		{"assignment", `v = 5;`, "5"},
 		{"compound assignment", `v += 4;`, "5"},

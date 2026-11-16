@@ -13,6 +13,7 @@ import (
 // string's at the same site, and a dictionary's. Both tiers against Node's
 // answer.
 func TestMegamorphicOwnTable(t *testing.T) {
+	t.Parallel()
 	src := `
 		var out = [];
 		function read(o) { return o.k; }

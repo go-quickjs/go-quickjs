@@ -21,6 +21,7 @@ func siteEntry(r *Runtime, fn string) *propCache {
 // cell, and the read finds what is there now; a change of the property's
 // value does not, the value being read where it is.
 func TestProtoCellDeepReads(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	run := func(src string) string {
@@ -63,6 +64,7 @@ func TestProtoCellDeepReads(t *testing.T) {
 // something on the chain has it -- Object.prototype included, a receiver
 // with no prototype's chain the empty one.
 func TestProtoCellAbsentReads(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -99,6 +101,7 @@ func TestProtoCellAbsentReads(t *testing.T) {
 // would otherwise trade them at each, as V8's polymorphic one would keep
 // both. One whose receivers' layout is the same, its chain changed, does.
 func TestProtoCellAbsentKeepsPresent(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `

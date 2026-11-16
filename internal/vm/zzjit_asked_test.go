@@ -140,6 +140,7 @@ func TestJITAskedInventory(t *testing.T) {
 // The workloads, run with no proxy of the test's own: what the snapshot's
 // oracle (QJS_JIT_SNAPCHECK) checks of them.
 func TestJITWorkloads(t *testing.T) {
+	t.Parallel()
 	for name, src := range jitWorkloadsForTest(t) {
 		t.Run(name, func(t *testing.T) {
 			r := New(Config{JIT: true})

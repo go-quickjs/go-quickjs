@@ -14,6 +14,7 @@ import "testing"
 // library's pow, not Arm's, and rounds a few in a thousand arguments near
 // a midpoint the other way; none of these.)
 func TestMathMatchesV8(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `[Math.log(5e-324), Math.log(1e-310), Math.log10(5e-324), Math.cosh(710), Math.sinh(-710),
 		Math.cosh(710.4758600739439), 10 ** 308 === 1e308, 10 ** -307, 1.1 ** 1000, Math.pow(10, 308),
 		Math.sumPrecise([1e308, 5e-324, -1e308]), Math.sumPrecise([0.1, 0.2, -0.3]),

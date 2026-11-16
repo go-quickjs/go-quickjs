@@ -10,6 +10,7 @@ import "testing"
 // TestDiscardedUpdates covers ++ and -- where the value is thrown away, which
 // is compiled as the prefix form.
 func TestDiscardedUpdates(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var i = 0; i++; i`, "1"},
 		{`var i = 0; i--; i`, "-1"},
@@ -71,6 +72,7 @@ func TestDiscardedUpdates(t *testing.T) {
 // top-level var is a property of the global object rather than a slot, so each
 // of these is inside a function.
 func TestDiscardedLocalUpdates(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`(function () { var i = 0; i++; return i })()`, "1"},
 		{`(function () { var i = 0; i--; return i })()`, "-1"},
@@ -132,6 +134,7 @@ func TestDiscardedLocalUpdates(t *testing.T) {
 // places where it may not: a short-circuiting assignment reaches the end of the
 // statement without having stored anything.
 func TestDiscardedAssignments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var x = 0; x = 5; x`, "5"},
 		{`var x = 1; x += 2; x`, "3"},
@@ -192,6 +195,7 @@ func TestDiscardedAssignments(t *testing.T) {
 // TestDiscardedMemberStores covers a property assignment whose value is thrown
 // away, which is compiled without the copy that would have carried it out.
 func TestDiscardedMemberStores(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {}; o.x = 1; o.x`, "1"},
 		{`var o = {}; o["y"] = 2; o.y`, "2"},
@@ -255,6 +259,7 @@ func TestDiscardedMemberStores(t *testing.T) {
 // result is thrown away, which is the other place the value was copied out for
 // something to drop.
 func TestDiscardedMemberUpdates(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {x: 1}; o.x += 2; o.x`, "3"},
 		{`var o = {x: 1}; o.x -= 2; o.x`, "-1"},
@@ -331,6 +336,7 @@ func TestDiscardedMemberUpdates(t *testing.T) {
 // value of the last statement that produced one -- and so is exactly the value
 // the discarding rewrites must not be applied to.
 func TestCompletionValuesSurviveDiscard(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`eval("var i = 0; i++")`, "0"},
 		{`eval("var i = 0; ++i")`, "1"},

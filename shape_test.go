@@ -10,6 +10,7 @@ import (
 // notice: each case runs a site until its cache has filled, then changes
 // something the cached answer depended on, and the site must see the change.
 func TestPropertyCaches(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A read of an own property, and of one up the chain, sees a new
 		// value, a property added in between, and one deleted.
@@ -166,6 +167,7 @@ func TestPropertyCaches(t *testing.T) {
 // TestLiteralSizes covers object literals of every size that carries its
 // table in its own allocation, grown past it and changed afterwards.
 func TestLiteralSizes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var r = []
 		  for (var n = 0; n <= 10; n++) {
@@ -190,6 +192,7 @@ func TestLiteralSizes(t *testing.T) {
 // Symbol.hasInstance is cached: a site must notice the method defined on the
 // constructor, a replaced prototype, and constructors of other kinds.
 func TestInstanceOfCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function test(o, C) { return o instanceof C }
 		  function C() {} var r = []
@@ -231,6 +234,7 @@ func TestInstanceOfCache(t *testing.T) {
 // the getter is called with the object read as this, and the site must see
 // the getter redefined, removed, turned into a data property or thrown from.
 func TestGetterCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class P { constructor(x) { this.x = x } get double() { return this.x * 2 } }
 		  class Q extends P {}
@@ -262,6 +266,7 @@ func TestGetterCache(t *testing.T) {
 // turned into a getter, moved by the table's reordering, and shadowed by a
 // script's let or a direct eval's var.
 func TestGlobalReadCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`globalThis.g1 = "a"; function read() { try { return g1 } catch (e) { return e.name } }
 		  var r = [read(), read()]
@@ -287,6 +292,7 @@ func TestGlobalReadCache(t *testing.T) {
 // deleted and made again, made read-only, turned into a setter, and shadowed
 // by a direct eval's var.
 func TestGlobalWriteCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`globalThis.w1 = 0; function put(v) { w1 = v }
 		  var r = []; put(1); put(2); r.push(w1)
@@ -313,6 +319,7 @@ func TestGlobalWriteCache(t *testing.T) {
 // later script declares a let of the same name: the write must go to the
 // let, not to where the property was.
 func TestGlobalWriteCacheShadowed(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	evalString(t, rt, `globalThis.w4 = "prop"; function put(v) { w4 = v }; put("a"); put("b")`)
@@ -326,6 +333,7 @@ func TestGlobalWriteCacheShadowed(t *testing.T) {
 // script declares a let of the same name, which is looked for before the
 // global object: the read must find the let, not where the property was.
 func TestGlobalReadCacheShadowed(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	evalString(t, rt, `globalThis.g2 = "prop"; function read() { return g2 }; read(); read()`)
@@ -343,6 +351,7 @@ func TestGlobalReadCacheShadowed(t *testing.T) {
 // own property shadowing it, and that property deleted, as a plain object's
 // does.
 func TestPropertyCachesOtherClasses(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function get(o) { return o.get }
 		  var w = new WeakMap(), orig = WeakMap.prototype.get, r = []
@@ -384,6 +393,7 @@ func TestPropertyCachesOtherClasses(t *testing.T) {
 // deleted, made an accessor, shadowed by one added to the prototype after a
 // miss, and the prototype's own prototype changed, must all be seen.
 func TestPrimitivePropertyCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f(s) { return s.slice(1) } var slice = String.prototype.slice, r = []
 		  r.push(f("abc"), f("xyz"))
@@ -414,6 +424,7 @@ func TestPrimitivePropertyCache(t *testing.T) {
 // until its cache has filled, and must then see the delete, the property
 // added, or the attribute changed that follows. The answers are Node's.
 func TestUniqueShapeChangedInPlace(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.Eval(`var out = [];

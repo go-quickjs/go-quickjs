@@ -15,6 +15,7 @@ import (
 // tree tier, the target given its tree's call (planTreeCall), which r.call
 // never gave it.
 func TestApplyArgumentsCallsDirectly(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
 		var Point = Class.create();
@@ -34,8 +35,7 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		try { fwdThrow() } catch (e) { out.push(/thrower/.test(e.stack), /fwdThrow/.test(e.stack)) }
 		[out.join(), Point.prototype.initialize]`
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
@@ -49,7 +49,6 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		}
 		r.Close()
 	}
-	SetTreeTier(true)
 }
 
 // TestForwarderMethodsByShape pins what leafForward answers once its

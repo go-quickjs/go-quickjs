@@ -67,6 +67,7 @@ func TestJITCatchCallees(t *testing.T) {
 // code was not compiled for -- under the stress settings, at every poll
 // and deoptimization too -- and each answer is the interpreter's.
 func TestJITCatchCalleesAgree(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

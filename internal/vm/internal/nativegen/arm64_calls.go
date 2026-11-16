@@ -1,6 +1,7 @@
 package nativegen
 
 import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	. "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 )
 
@@ -188,6 +189,8 @@ func (g *armGen) ptrTo() {
 func (g *armGen) call() {
 	a := g.a
 	ok, noThis, noTop, loop, loopEnd, skip, high := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	start, tmpl, builtin, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(start)
 
 	// e := &calls[C].
 	a.ShiftImm(Lsr, rC, rW, 48, true)
@@ -204,15 +207,19 @@ func (g *armGen) call() {
 	a.BCond(NE, g.ex(2))
 	a.Load(r9, rS, 8)
 	g.cmpMem(r9, rC, offECallee)
-	a.BCond(NE, g.ex(3))
-	// A leaf that returns a parameter or a constant first thing: its
-	// answer read from the window or the code, with no frame.
+	a.BCond(NE, tmpl)
+	// A leaf that returns a parameter, a constant or an upvalue first
+	// thing: its answer read from the window, the code or the closure,
+	// with no frame.
 	notLeaf, leafStore := a.NewLabel(), a.NewLabel()
 	a.LoadU8(r9, rC, offEKind)
 	a.TstImm(r9, uint64(regCallLeaf), false)
 	a.BCond(EQ, notLeaf)
 	a.Load(r8, rC, offERC)
 	a.LoadU8(r9, r8, offRCLeaf)
+	upLeaf := a.NewLabel()
+	a.CmpImm(r9, int64(regLeafCode), false)
+	a.BCond(EQ, upLeaf)
 	a.CmpImm(r9, int64(regLeafArg), false)
 	a.BCond(LO, notLeaf)
 	a.Load(rD, r8, offRCLeafVal+8)
@@ -233,6 +240,20 @@ func (g *armGen) call() {
 	a.MovRR(r8, rD)
 	g.regB(rW)
 	g.storeValue()
+	// A regLeafCode body that returns an upvalue first thing (leafUp).
+	a.Bind(upLeaf)
+	a.Load(r9, rC, offECl)
+	a.LoadS32(rD, r8, offRCLeafUp)
+	a.SubsImm(rD, rD, 1, true)
+	a.BCond(MI, notLeaf)
+	g.cmpMem(rD, r9, offClUpvals+8)
+	a.BCond(HS, notLeaf)
+	a.Load(r9, r9, offClUpvals)
+	a.LoadIdx(r9, r9, rD, true)
+	a.Load(r9, r9, offUpSlot)
+	a.Load(rC, r9, 0)
+	a.Load(rD, r9, 8)
+	a.B(leafStore)
 	a.Bind(notLeaf)
 	// A callee rhCallW leaves to regCallMiss (regCallOut) that keeps its
 	// arguments, entered as regEnterW enters it (sEnt), and a leaf Go
@@ -255,7 +276,7 @@ func (g *armGen) call() {
 	a.CmpImm(r9, int64(regCallThis), false)
 	a.BCond(EQ, ok)
 	a.CmpImm(r9, int64(regCallObjThis), false)
-	a.BCond(NE, g.ex(4))
+	a.BCond(NE, builtin)
 	a.Load(r8, rS, 16)
 	g.cmpMem(r8, rCtx, ncObjBits)
 	a.BCond(NE, g.ex(5))
@@ -464,6 +485,147 @@ func (g *armGen) call() {
 	// Run it, counted (made).
 	g.incMem(rCtx, ncMade, 1)
 	g.dispatch()
+
+	// Another closure of the cached callee's template, as amd64's: the
+	// cache made the new callee's and the call made again.
+	a.Bind(tmpl)
+	a.LoadU8(r8, rC, offEKind)
+	a.AndImm(r8, r8, uint64(^(regCallOut|regCallLeaf)&0xff), false)
+	a.CmpImm(r8, int64(regCallEnter), false)
+	a.BCond(LO, miss)
+	a.CmpImm(r8, int64(regCallObjThis), false)
+	a.BCond(HI, miss)
+	a.LoadU16(rD, r9, offObjFlags)
+	a.TstImm(rD, uint64(objHasData), false)
+	a.BCond(EQ, miss)
+	a.Load(rD, r9, sizeObj+offExtData)
+	g.cmpMem(rD, rCtx, ncFuncT)
+	a.BCond(NE, miss)
+	a.Load(rD, r9, sizeObj+offExtData+8)
+	a.LoadU8(r8, rD, offFDBound)
+	a.Cbnz(r8, miss, false)
+	a.LoadU8(r8, rD, off("funcData.arrow"))
+	a.Cbnz(r8, miss, false)
+	a.Load(r8, rD, off("funcData.extra"))
+	a.Cbnz(r8, miss, true)
+	a.Load(rD, rD, off("funcData.closure"))
+	a.Cbz(rD, miss, true)
+	a.Load(r8, rC, offECl)
+	a.Cbz(r8, miss, true)
+	a.Load(rJ, rD, offClCode)
+	g.cmpMem(rJ, r8, offClCode)
+	a.BCond(NE, miss)
+	a.Load(rJ, rD, off("closure.realm"))
+	g.cmpMem(rJ, r8, off("closure.realm"))
+	a.BCond(NE, miss)
+	a.Load(rJ, rD, offClCode)
+	g.addMem(rJ, rCtx, ncCCBase)
+	a.Load(rJ, rJ, offCCReg)
+	a.Cbz(rJ, miss, true)
+	g.cmpMem(rJ, rC, offERC)
+	a.BCond(NE, miss)
+	a.Store(rCtx, scr(sE), rC)
+	a.Store(rCtx, scr(sV0), rD)
+	a.AddImm(rW, rC, int64(offECallee), true)
+	a.MovRR(rC, r9)
+	g.ptrTo()
+	a.Load(rW, rCtx, scr(sE))
+	a.AddImm(rW, rW, int64(offECl), true)
+	a.Load(rC, rCtx, scr(sV0))
+	g.ptrTo()
+	a.Load(rW, rIP, 0)
+	a.B(start)
+
+	// A built-in the site cached (regCallNative), as amd64's: push of one
+	// argument is the code's own, any other called with no exit.
+	light := a.NewLabel()
+	a.Bind(builtin)
+	a.CmpImm(r9, int64(regCallNative), false)
+	a.BCond(NE, g.ex(4))
+	notPush := a.NewLabel()
+	g.push(notPush)
+	a.Bind(notPush)
+	g.genNext(light)
+	a.Bind(light)
+	g.light(ncBuiltinFn)
+	// Another callee than the cache's, of another template: the exit to
+	// nativeCallMiss, as amd64's.
+	a.Bind(miss)
+	g.storeImm(rCtx, ncMiss, 1)
+	a.B(g.exit)
+}
+
+// light is amd64's (amd64_calls.go): nativeBuiltin called through callH
+// with the exit's protocol, returning to the exit stub's code after its
+// call, its func value in R26.
+func (g *armGen) light(fn int32) {
+	a := g.a
+	a.Load(rT, rCtx, ncTopOK)
+	a.Cbz(rT, g.exit, true)
+	g.exitState()
+	a.Load(rD, rCtx, ncRT)
+	a.Store(rD, offRtBackEdges, rBud)
+	a.Adr(r8, g.exitAfter)
+	a.Store(rCtx, ncAfter, r8)
+	// nativeBuiltin(st.regs, w, pc, st): w in R1, pc in R2.
+	a.MovRR(rD, rC)
+	a.MovRR(rC, rW)
+	a.Load(rFn, rCtx, fn)
+	a.Load(rS, rCtx, ncTop)
+	a.Load(rW, rS, offStRegs)
+	a.Load(rJ, rCtx, ncCallH)
+	a.Br(rJ)
+}
+
+// push is amd64's (amd64_calls.go): call_method_w of push, of one
+// argument, appended to an array with room for it. rC is the site's
+// cache entry, rS the window, rW the instruction.
+func (g *armGen) push(light Label) {
+	a := g.a
+	a.Ubfx(rD, rW, 0, 8)
+	a.CmpImm(rD, int64(bytecode.RCallMW), false)
+	a.BCond(NE, light)
+	a.Ubfx(rD, rW, 8, 8)
+	a.CmpImm(rD, 1, false)
+	a.BCond(NE, light)
+	// The callee: push itself, not bound.
+	a.Load(r9, rC, offECallee)
+	a.LoadU16(rD, r9, offObjFlags)
+	a.TstImm(rD, uint64(objHasData), false)
+	a.BCond(EQ, light)
+	a.Load(rD, r9, sizeObj+offExtData)
+	g.cmpMem(rD, rCtx, ncFuncT)
+	a.BCond(NE, light)
+	a.Load(r9, r9, sizeObj+offExtData+8)
+	a.LoadU8(rD, r9, offFDElemOp)
+	a.CmpImm(rD, int64(elemPush), false)
+	a.BCond(NE, light)
+	a.LoadU8(rD, r9, offFDBound)
+	a.Cbnz(rD, light, false)
+	// The receiver, an array with room.
+	a.Load(r9, rS, 16)
+	g.cmpMem(r9, rCtx, ncObjBits)
+	a.BCond(NE, light)
+	a.Store(rCtx, scr(sWin), rS)
+	a.Load(rS, rS, 24)
+	g.appendRoom(rS, rC, light, light, true)
+	// The argument at elems[len], then the length past it.
+	a.AddImm(r9, rC, 1, true)
+	a.Store(rCtx, scr(sI), r9)
+	a.Load(rW, rS, sizeObj)
+	a.AddLsl(rW, rW, rC, 4)
+	a.Store(rS, sizeObj+8, r9)
+	a.Load(rD, rCtx, scr(sWin))
+	a.Load(r9, rD, 32)
+	a.Store(rW, 0, r9)
+	a.Load(rC, rD, 40)
+	a.AddImm(rW, rW, 8, true)
+	g.ptrStore()
+	// R[B], the new length.
+	a.Load(rW, rIP, 0)
+	a.Load(rC, rCtx, scr(sI))
+	a.Scvtf(0, rC, true)
+	g.storeB(0)
 }
 
 // ret is ret and ret_undef of a frame the code entered itself, as
@@ -472,15 +634,29 @@ func (g *armGen) call() {
 // frame's with upvalues to close.
 func (g *armGen) ret(undef bool) {
 	a := g.a
-	noCap, base := a.NewLabel(), a.NewLabel()
+	noCap, base, open := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.cmpMemImm(rCtx, ncDepth, 0)
 	a.BCond(EQ, base)
+	// A generator's step ends by genReturn.
+	a.Load(rS, rCtx, ncNF)
+	a.LoadU8(r8, rS, offFRegKind)
+	a.CmpImm(r8, int64(regFrameGenStep), false)
+	a.BCond(EQ, g.genRet)
+	// Upvalues open on the frame are closed here, as amd64's.
 	a.Load(rC, rCtx, ncRC)
 	a.LoadS32(r8, rC, offRCNcap)
-	a.Cbz(r8, noCap, false)
-	a.Load(rS, rCtx, ncNF)
+	a.Cbnz(r8, open, false)
+	a.LoadU8(r8, rS, offFRegKind)
+	a.CmpImm(r8, int64(regFrameEnter), false)
+	a.BCond(NE, noCap)
+	a.Bind(open)
 	g.cmpMemImm(rS, offFOpenUp+8, 0)
-	a.BCond(NE, g.exit)
+	a.BCond(EQ, noCap)
+	a.Store(rCtx, scr(sV0), ZR)
+	a.MovImm(rC, ^uint64(0))
+	a.Store(rCtx, scr(sV1), rC)
+	g.closeUps()
+	a.Load(rW, rIP, 0)
 	a.Bind(noCap)
 	// The value.
 	value := func() {
@@ -552,4 +728,191 @@ func (g *armGen) ret(undef bool) {
 	value()
 	g.storeImm(rCtx, ncRetDone, 1)
 	a.B(g.exitRet)
+}
+
+// tailTo is tail_call_w's and tail_call_method_w's call once the stack is
+// deep, as amd64's: the frame the code entered by call_w given to the
+// callee its site's cache knows in place, as regTailTo gives it; anything
+// else exits before anything is written.
+func (g *armGen) tailTo() {
+	a := g.a
+	thisOK, loop, loopEnd, undef, undefEnd, skip, noTop, argc := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.cmpMemImm(rCtx, ncDepth, 0)
+	a.BCond(EQ, g.exit)
+	a.Load(rS, rCtx, ncNF)
+	a.LoadU8(r8, rS, offFRegKind)
+	a.CmpImm(r8, int64(regFrameCall), false)
+	a.BCond(NE, g.exit)
+	a.Load(r8, rS, offFThisRef)
+	for _, o := range []int32{offFArgs, offFWith, offFEvalVars, offFOpenUp + 8} {
+		a.Load(r9, rS, o)
+		a.Op(Orr, r8, r8, r9, true)
+	}
+	a.Cbnz(r8, g.exit, true)
+	// e := &calls[C], its callee the window's.
+	a.ShiftImm(Lsr, rC, rW, 48, true)
+	a.Load(r9, rCtx, ncCC)
+	g.cmpMem(rC, r9, offCCRegCalls+8)
+	a.BCond(HS, g.exit)
+	a.MovImm(r8, uint64(sizeE))
+	a.Mul(rC, rC, r8)
+	g.addMem(rC, r9, offCCRegCalls)
+	g.regA(rS)
+	a.Load(r9, rS, 0)
+	g.cmpMem(r9, rCtx, ncObjBits)
+	a.BCond(NE, g.exit)
+	a.Load(r9, rS, 8)
+	g.cmpMem(r9, rC, offECallee)
+	a.BCond(NE, g.exit)
+	// The this: the receiver as it is, or the cache's.
+	a.Load(r8, rS, 16)
+	a.Load(r9, rS, 24)
+	a.LoadU8(rD, rC, offEKind)
+	a.CmpImm(rD, int64(regCallEnter), false)
+	a.BCond(EQ, thisOK)
+	a.CmpImm(rD, int64(regCallThis), false)
+	a.BCond(NE, g.exit)
+	a.Load(r8, rC, offEThis)
+	a.Load(r9, rC, offEThis+8)
+	a.Bind(thisOK)
+	// Its code, taking the frame in place, and the stack's room for it.
+	a.Load(rD, rC, offERC)
+	a.LoadU8(rT, rD, offRCTailTo)
+	a.Cbz(rT, g.exit, false)
+	a.Store(rCtx, scr(sE), rC)
+	a.Store(rCtx, scr(sWin), rS)
+	a.Store(rCtx, scr(sRC), rD)
+	a.Store(rCtx, scr(sV0), r8)
+	a.Store(rCtx, scr(sV1), r9)
+	a.Load(rS, rCtx, ncNF)
+	a.Load(rC, rS, offFBase)
+	a.LoadS32(r9, rD, offRCNumRegs)
+	a.Op(Add, r9, r9, rC, true)
+	a.Load(rC, rCtx, ncRT)
+	g.cmpMem(r9, rC, offRtStack+8)
+	a.BCond(HI, g.exit)
+	a.Store(rCtx, scr(sTop), r9)
+	g.cmpMemImm(rC, offRtInterrupt, 1)
+	a.BCond(LE, g.exit)
+	// The arguments the parameters take: min(argc, params).
+	a.Ubfx(r8, rW, 8, 8)
+	a.LoadS32(r9, rD, offRCParams)
+	a.Cmp(r8, r9, true)
+	a.BCond(LE, argc)
+	a.MovRR(r8, r9)
+	a.Bind(argc)
+	a.Store(rCtx, scr(sArgc), r8)
+
+	// Nothing is written before here. The arguments moved down to the
+	// parameters, in order, as amd64's.
+	a.MovImm(rC, 0)
+	a.Bind(loop)
+	g.cmpMem(rC, rCtx, scr(sArgc))
+	a.BCond(GE, loopEnd)
+	a.Store(rCtx, scr(sI), rC)
+	a.ShiftImm(Lsl, rC, rC, 4, true)
+	a.Load(rS, rCtx, scr(sWin))
+	a.Op(Add, rS, rS, rC, true)
+	a.Op(Add, rW, rRegs, rC, true)
+	a.Load(r8, rS, 32)
+	a.Store(rW, 32, r8)
+	a.Load(rC, rS, 40)
+	a.AddImm(rW, rW, 40, true)
+	g.ptrTo()
+	a.Load(rC, rCtx, scr(sI))
+	a.AddImm(rC, rC, 1, true)
+	a.B(loop)
+	a.Bind(loopEnd)
+	// Register 0 the callee, 1 the this.
+	a.Load(r8, rCtx, ncObjBits)
+	a.Store(rRegs, 0, r8)
+	a.Load(rC, rCtx, scr(sE))
+	a.Load(rC, rC, offECallee)
+	a.AddImm(rW, rRegs, 8, true)
+	g.ptrTo()
+	a.Load(r8, rCtx, scr(sV0))
+	a.Store(rRegs, 16, r8)
+	a.Load(rC, rCtx, scr(sV1))
+	a.AddImm(rW, rRegs, 24, true)
+	g.ptrTo()
+	// Parameters no argument was given for, and the bindings past them:
+	// undefined, from min(argc, params) to params+inits.
+	a.Load(rC, rCtx, scr(sArgc))
+	a.Load(r8, rCtx, scr(sRC))
+	a.LoadS32(r9, r8, offRCParams)
+	a.LoadS32(rS, r8, offRCInits)
+	a.Op(Add, r9, r9, rS, true)
+	a.Bind(undef)
+	a.Cmp(rC, r9, true)
+	a.BCond(GE, undefEnd)
+	a.AddLsl(rW, rRegs, rC, 4)
+	a.Load(r8, rCtx, ncUndef)
+	a.Store(rW, 32, r8)
+	a.Load(rT, rW, 40)
+	a.Cbz(rT, skip, true)
+	a.Store(rCtx, scr(sI), rC)
+	a.Store(rCtx, scr(sEnd), r9)
+	a.AddImm(rW, rW, 40, true)
+	a.MovImm(rC, 0)
+	g.ptrStore()
+	a.Load(rC, rCtx, scr(sI))
+	a.Load(r9, rCtx, scr(sEnd))
+	a.Bind(skip)
+	a.AddImm(rC, rC, 1, true)
+	a.B(undef)
+	a.Bind(undefEnd)
+	// The stack's top, the interrupt budget.
+	a.Load(r9, rCtx, ncRT)
+	g.incMem(r9, offRtInterrupt, -1)
+	a.Load(rD, rCtx, scr(sTop))
+	g.cmpMem(rD, r9, offRtStackTop)
+	a.BCond(LE, noTop)
+	a.Store(r9, offRtStackTop, rD)
+	g.cmpMem(rD, r9, offRtStackHigh)
+	a.BCond(LE, noTop)
+	a.Store(r9, offRtStackHigh, rD)
+	a.Bind(noTop)
+	// The frame record the callee's: pc 0, its this, closure and callee.
+	a.Load(rS, rCtx, ncNF)
+	a.Store32(rS, offFPC, ZR)
+	a.Load(r8, rCtx, scr(sV0))
+	a.Store(rS, offFThis, r8)
+	a.Load(rC, rCtx, scr(sV1))
+	a.AddImm(rW, rS, int64(offFThis+8), true)
+	g.ptrTo()
+	for _, f := range [][2]int32{{offECl, offFCl}, {offECallee, offFCallee}} {
+		a.Load(rC, rCtx, scr(sE))
+		a.Load(rC, rC, f[0])
+		a.Load(rS, rCtx, ncNF)
+		a.AddImm(rW, rS, int64(f[1]), true)
+		g.ptrTo()
+	}
+	// new.target undefined, where the callee reads it, as call_w's.
+	nt := a.NewLabel()
+	a.Load(r8, rCtx, scr(sRC))
+	a.LoadU8(rC, r8, offRCNewTarget)
+	a.Cbz(rC, nt, false)
+	a.Load(rS, rCtx, ncNF)
+	a.Load(r8, rCtx, ncUndef)
+	a.Store(rS, offFNewTgt, r8)
+	a.MovImm(rC, 0)
+	a.AddImm(rW, rS, int64(offFNewTgt+8), true)
+	g.ptrTo()
+	a.Bind(nt)
+	// The callee's code, caches and constants the top frame's; Go makes
+	// the frame's state again at its next exit (topOK).
+	a.Load(rC, rCtx, scr(sE))
+	a.Load(r8, rC, offECl)
+	a.Load(r8, r8, offClCode)
+	g.addMem(r8, rCtx, ncCCBase)
+	a.Store(rCtx, ncCC, r8)
+	a.Load(rIC, r8, offCCIC)
+	a.Store(rCtx, ncIC, rIC)
+	a.Load(r8, rCtx, scr(sRC))
+	a.Store(rCtx, ncRC, r8)
+	a.Load(rIP, r8, offRCCode)
+	a.Store(rCtx, ncCodeBase, rIP)
+	g.storeImm(rCtx, ncFV, 0)
+	g.storeImm(rCtx, ncTopOK, 0)
+	g.dispatch()
 }

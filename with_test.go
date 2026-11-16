@@ -11,6 +11,7 @@ import (
 // receiver, as one without a spread does; a name the object does not
 // have is called with none.
 func TestWithSpreadCallReceiver(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var o = { v: 7, f(a, b) { return this.v + a + b } }
 	  function g() { return this === globalThis }
 	  var r = []
@@ -28,6 +29,7 @@ func TestWithSpreadCallReceiver(t *testing.T) {
 // holds at the moment the name is evaluated. Nothing else in the language works
 // that way, which is why it is forbidden in strict mode.
 func TestWithStatement(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The object shadows an outer binding, and only while it has the name.
 		{`var o = {x: 1}; var x = 2; with (o) { var r = x } String(r)`, "1"},
@@ -112,6 +114,7 @@ func TestWithStatement(t *testing.T) {
 // A `with` object shadows the bindings outside it and not those inside it: a
 // variable declared in the body, or anywhere in a function written there, wins.
 func TestWithShadowing(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A var hoists out of the body, so its initializer is an ordinary
 		// assignment and goes to the object.
@@ -158,6 +161,7 @@ func TestWithShadowing(t *testing.T) {
 // else -- and until it was, resuming past the end of the body underflowed the
 // chain and took the host down.
 func TestWithSurvivesSuspension(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* g() { var x = 1; yield x; with ({x: 2}) { yield x } yield x }
 		  var it = g();
@@ -192,6 +196,7 @@ func TestWithSurvivesSuspension(t *testing.T) {
 // The same for an async function, whose awaits are suspensions of the same
 // machinery.
 func TestWithSurvivesAwait(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -222,6 +227,7 @@ func TestWithSurvivesAwait(t *testing.T) {
 // inside a `with` body. The name is resolved once, and the write goes back to
 // whatever the read found -- even if the read removed it.
 func TestWithReferenceResolvedOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The getter deletes the property, so a second resolution would find
 		// the function's own binding instead of the object.
@@ -305,6 +311,7 @@ func TestWithReferenceResolvedOnce(t *testing.T) {
 // body. The name is resolved before the value is evaluated, so a value that
 // removes the property still writes to the object the name named.
 func TestWithAssignmentResolvesFirst(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function t() {
 		    var x = 0
@@ -348,6 +355,7 @@ func TestWithAssignmentResolvesFirst(t *testing.T) {
 // left it behind would push whatever the enclosing loop was holding off its
 // own operands.
 func TestWithVarStoreLeavesTheStackAlone(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"assigns the object", `var o = {value: "v"}
 		  with (o) { var value = "assigned" }
@@ -378,6 +386,7 @@ func TestWithVarStoreLeavesTheStackAlone(t *testing.T) {
 // unscopables getter, or a proxy's traps -- so the read or write that follows
 // asks again whether the binding is still there.
 func TestWithRechecksTheBinding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"the order of a read", `var log = []
 		  var env = {Object: 1}
@@ -425,6 +434,7 @@ func TestWithRechecksTheBinding(t *testing.T) {
 // value, so an initializer that removes the property still writes to the object
 // the name named. A var's initializer is an assignment like any other.
 func TestWithResolvesBeforeEvaluating(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var obj = {test262id: 1}
 		  with (obj) { var test262id = delete obj.test262id }
@@ -455,6 +465,7 @@ func TestWithResolvesBeforeEvaluating(t *testing.T) {
 // A primitive has nowhere of its own to put a property, but a setter on the
 // chain its wrapper inherits runs, with the primitive itself as the receiver.
 func TestAssigningThroughAPrimitive(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0
 		  Object.defineProperty(Number.prototype, "p", {set: function () { n++ }})
@@ -493,6 +504,7 @@ func TestAssigningThroughAPrimitive(t *testing.T) {
 // A destructuring target is resolved before the value it receives is read,
 // which nothing can see unless a `with` object is asked about the name.
 func TestDestructuringResolvesTargetsFirst(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = []
 		  var sourceKey = {toString: function () { log.push("sourceKey"); return "p" }}
@@ -533,6 +545,7 @@ func TestDestructuringResolvesTargetsFirst(t *testing.T) {
 // with objects are asked about the name once, as for any other read, and
 // the binding is read past the probe without asking them again.
 func TestWithTypeofAsksOnce(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var log = []
 	  var p = new Proxy({}, { has(t, k) { log.push(String(k)); return false } })
 	  function f() { var x = 1; with (p) { return typeof x } }

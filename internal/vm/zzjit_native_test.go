@@ -36,6 +36,7 @@ import (
 const jitSumSource = `function sum(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s } sum(10000)`
 
 func TestJITPropertyABI(t *testing.T) {
+	t.Parallel()
 	var p Property
 	var cell ir.PropertyCell
 	if unsafe.Sizeof(p) != unsafe.Sizeof(cell) || unsafe.Offsetof(p.key) != unsafe.Offsetof(cell.Key) || unsafe.Offsetof(p.flags) != unsafe.Offsetof(cell.Flags) || unsafe.Offsetof(p.value) != unsafe.Offsetof(cell.Bits) || unsafe.Offsetof(p.value)+unsafe.Offsetof(p.value.ref) != unsafe.Offsetof(cell.Reference) {
@@ -51,6 +52,7 @@ func TestJITPropertyABI(t *testing.T) {
 // checks, which feed the sites' caches) and is compiled again for them;
 // called again, it never leaves.
 func TestJITNumericProperties(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0;o.x=o.x+1}return s}let o={a:7,x:3};f(o,1000)===502500&&o.x===1003&&o.a===7`))
 	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.entries == 0 || jitOtherHosts(r) != 0 || jitOtherGuards(r) != 0 || r.jit.shapeDeopts > 3 {
@@ -64,6 +66,7 @@ func TestJITNumericProperties(t *testing.T) {
 }
 
 func TestJITThisSnapshot(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`function f(a){'use strict';let n=this;for(let i=0;i<4;i++)a[i]=n*2;return a[3]}f.call(3,[0,0,0,0])===6`,
 		`function f(a){a[0]+=1;return this}let o={x:3};f.call(o,[0])===o`,
@@ -84,6 +87,7 @@ func TestJITThisSnapshot(t *testing.T) {
 }
 
 func TestJITPropertyFallbacks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, source string }{
 		{"reference", `function f(o,a){let v=o.x;a[0]+=1;return v}let x={};f({x},[0])===x`},
 		{"negative zero", `function f(o,a,v){o.x=v;a[0]+=1;return o.x}let o={x:2};Object.is(f(o,[0],-0),-0)&&Object.is(o.x,-0)`},
@@ -112,6 +116,7 @@ func TestJITPropertyFallbacks(t *testing.T) {
 }
 
 func TestJITPropertyViewNotArray(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(o,a){return o.length+a[0]}f({length:7},[3])===10`))
 	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.guards != 1 {
@@ -137,6 +142,7 @@ func TestJITPropertyCallbackRelease(t *testing.T) {
 }
 
 func TestJITRemainderBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ left, right, check string }{
 		{`13`, `5`, `v===3`}, {`-12`, `3`, `Object.is(v,-0)`},
 		{`-0`, `2`, `Object.is(v,-0)`}, {`13.5`, `2.5`, `v===1`},
@@ -186,6 +192,7 @@ func TestJITRemainderCoercionRelease(t *testing.T) {
 }
 
 func TestJITGlobalReads(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: enabled})
 		calls := 0
@@ -213,6 +220,7 @@ func TestJITGlobalReads(t *testing.T) {
 }
 
 func TestJITNumericGlobalLoop(t *testing.T) {
+	t.Parallel()
 	for _, keyword := range []string{"var", "let", "const"} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		v, err := r.Run(compileForTest(t, keyword+` scale=3,offset=7;function f(a,n){for(let i=0;i<n;i++)a[i]=i*scale+offset;return a[n-1]}let a=[];for(let i=0;i<512;i++)a[i]=0;f(a,512)===1540&&a[0]===7`))
@@ -223,6 +231,7 @@ func TestJITNumericGlobalLoop(t *testing.T) {
 }
 
 func TestJITNumericGlobalMutation(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`var g=1;function f(o,a,n){for(let i=0;i<n;i++){a[i]=g;o.g=g+1}return g+a[n-1]}let a=[];for(let i=0;i<128;i++)a[i]=0;f(globalThis,a,128)===257&&g===129&&a[0]===1`,
 		`let g=3;function f(a,cb){a[0]+=g;cb();return g+a[0]}f([1],()=>{g=7})===11`,
@@ -251,6 +260,7 @@ func TestJITNumericGlobalMutation(t *testing.T) {
 // store adds x by learned -- as a function's is (learning): it had been
 // refused, and each construction was a call of Go.
 func TestJITLexicalGlobals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		source   string
 		native   bool
@@ -338,6 +348,7 @@ func testJITSSARegExpLiterals(t *testing.T) {
 }
 
 func TestJITGlobalCacheOwner(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `globalThis.g=3;function f(a){return g+a[0]}f([1])`)); err != nil {
 		t.Fatal(err)
@@ -362,6 +373,7 @@ func TestJITGlobalCacheOwner(t *testing.T) {
 }
 
 func TestJITCallbackTierSelection(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function cb(){};function f(a,n,cb){for(let i=0;i<n;i++){a[0]+=1;cb()}return a[0]}f([0],64,cb)`)); err != nil {
 		t.Fatal(err)
@@ -387,6 +399,7 @@ func TestJITCallbackTierSelection(t *testing.T) {
 // its code in turn, and one that misses the first goes on to the next with
 // the callee it was given: each's calls stay native, none left to Go.
 func TestJITCallByCodeSecondCandidate(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	setup := `function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
 		function run(k) { const f = k % 3 == 0 ? (x => x + k) : k % 3 == 1 ? (x => x * k) : (x => x - k); return each([1, 2, 3, 4], f) }
@@ -409,6 +422,7 @@ func TestJITCallByCodeSecondCandidate(t *testing.T) {
 // before the code was compiled and a function called through a site that
 // knows its code.
 func TestJITWeakMapKeyArray(t *testing.T) {
+	t.Parallel()
 	setup := `function sum(a, m, n) { let s = 0; for (let i = 0; i < n; i++) { s += a[i % a.length]; if (i == 50) m.set(a, i); if (i == 70) a.push(i) } return s }
 		function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
 		const keyed = [5, 6, 7], m = new WeakMap(), g = x => x * 3
@@ -423,6 +437,7 @@ func TestJITWeakMapKeyArray(t *testing.T) {
 }
 
 func TestJITBoundaryDensityBudget(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(a,n){let s=0;for(let i=0;i<n;i++){s+=a[0]%3;a[0]+=3}return s}let a=[2];f(a,20000)===40000&&a[0]===60002`))
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
@@ -434,6 +449,7 @@ func TestJITBoundaryDensityBudget(t *testing.T) {
 }
 
 func TestJITClosureCacheRelease(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function f(a){return a[0]+1}`)); err != nil {
 		t.Fatal(err)
@@ -454,6 +470,7 @@ func TestJITClosureCacheRelease(t *testing.T) {
 }
 
 func TestJITArrayGrowth(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, source string }{
 		{"descending", `function f(a){for(let i=31;i>=0;i--)a[i]=i;return a[0]+a[31]+a.length}f([])===63`},
 		{"aliases", `function f(a,b){let s=0;for(let i=0;i<300;i++){a[i]=i;s+=b[i]+b.length}return s}let a=[];f(a,a)===90000`},
@@ -488,6 +505,7 @@ func TestJITArrayGrowth(t *testing.T) {
 }
 
 func TestJITArrayHolePermissionCallbacks(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`let hits=0;function cb(){Object.defineProperty(Array.prototype,'1',{set(v){hits+=v}})}function f(a,cb){a[0]=2;cb();a[1]=3;return a.length}let a=new Array(2);f(a,cb)===2&&hits===3&&!Object.hasOwn(a,'1')&&a[0]===2`,
 		`function cb(a){Object.defineProperty(a,'length',{writable:false});Object.preventExtensions(a)}function f(a,cb){a[0]=2;cb(a);a[1]=3;return a.length}let a=new Array(2);f(a,cb)===2&&!Object.hasOwn(a,'1')&&a[0]===2`,
@@ -663,6 +681,7 @@ func TestJITSSAReferences(t *testing.T) {
 // left to Go or to the interpreter. Each function must answer as the
 // interpreter does, under polls at every back-edge, and run natively.
 func TestJITSSAArrays(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -712,6 +731,7 @@ func TestJITSSAArrays(t *testing.T) {
 // reference that leaves through a record, and one still in its temporal
 // dead zone.
 func TestJITSSACaptured(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -757,6 +777,7 @@ func TestJITSSACaptured(t *testing.T) {
 // under polls at every back-edge, with objects of the cached shape and
 // others: another layout, an accessor, a value that is not a number.
 func TestJITSSAProperties(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -830,6 +851,7 @@ func TestJITSSAProperties(t *testing.T) {
 // bindings -- one of them shadowing a global property, which reads must
 // then see past -- and assign the globals new values.
 func TestJITSSAGlobals(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -887,6 +909,7 @@ func TestJITSSAGlobals(t *testing.T) {
 // object has it; deleting and defining it again moves it, which the cell's
 // key check sees.
 func TestJITSSACallExits(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -951,6 +974,7 @@ func TestJITSSACallExits(t *testing.T) {
 // longer says is where it was, and a read that meets an array, leave for
 // Go, which reads it. Every answer is the interpreter's.
 func TestJITSSAStringMethods(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		source string
 		native bool
@@ -985,6 +1009,7 @@ func TestJITSSAStringMethods(t *testing.T) {
 }
 
 func TestJITSSAStrings(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1147,6 +1172,7 @@ func TestJITObjectLayout(t *testing.T) {
 }
 
 func TestJITEqualityBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		left, op, right string
 		want            bool
@@ -1184,6 +1210,7 @@ func TestJITEqualityBoundaries(t *testing.T) {
 }
 
 func TestJITEqualityBranchBudget(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{`null`, `{}`} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		v, err := r.Run(compileForTest(t, `function f(a,x){let n=0;for(let i=0;i<20000;i++){if(x!=null)n+=a[0]}return n}f([2],`+value+`)`))
@@ -1274,6 +1301,7 @@ func TestJITBitwiseAndReceiver(t *testing.T) {
 }
 
 func TestJITReceiverCallbacks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		source, want string
 		guard        bool
@@ -1363,6 +1391,7 @@ func TestJITDataProperties(t *testing.T) {
 }
 
 func TestJITDataPropertyRootLimit(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	// Repeated reads reuse a rooted handle rather than filling the root table.
 	v, err := r.Run(compileForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){let a=o.array;for(let j=0;j<16;j++)s+=a[0]}return s}f({array:[1]},2000)`))
@@ -1375,6 +1404,7 @@ func TestJITDataPropertyRootLimit(t *testing.T) {
 }
 
 func TestJITReferenceFields(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`function f(o,n){let s=0;for(let i=0;i<n;i++)s+=o.array[0];return s}f({array:[3]},1000)===3000`,
 		`function f(o,n){let s=0;for(let i=0;i<n;i++)s+=o.m.array[0];return s}f({m:{array:[3]}},1000)===3000`,
@@ -1398,6 +1428,7 @@ func TestJITReferenceFields(t *testing.T) {
 }
 
 func TestJITReferenceFieldFallbacks(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`let hits=0;function f(o,n){let s=0;for(let i=0;i<n;i++)s+=o.array[0];return s}let o={get array(){hits++;return [3]}};f(o,10)===30&&hits===10`,
 		`let hits=0;function f(o,n){let s=0;for(let i=0;i<n;i++)s+=o.array[0];return s}let o=new Proxy({array:[3]},{get(t,k){hits++;return t[k]}});f(o,10)===30&&hits===10`,
@@ -1449,6 +1480,7 @@ func TestJITReferenceCancellation(t *testing.T) {
 }
 
 func TestJITReferenceMemoryRefusal(t *testing.T) {
+	t.Parallel()
 	for _, limit := range []int64{256 << 10, 32 << 20} {
 		r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: limit})
 		v, err := r.Run(compileForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++)s+=o.array[0];return s}f({array:[3]},1000)`))
@@ -1466,6 +1498,7 @@ func TestJITReferenceMemoryRefusal(t *testing.T) {
 }
 
 func TestJITCryptoCorpus(t *testing.T) {
+	t.Parallel()
 	dir := os.Getenv("QUICKJS_JIT_V8_DIR")
 	if dir == "" {
 		t.Skip("set QUICKJS_JIT_V8_DIR to the external V8 v7 suite")
@@ -1587,6 +1620,7 @@ func TestJITPropertyReleaseAndGC(t *testing.T) {
 }
 
 func TestJITHostErrors(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{
 		`function f(a,cb){for(let i=0;i<a.length;i++)a[i]=cb();return 1} f([1],()=>{throw new RangeError('callback')})`,
 		`function f(a){return missing+a[0]} f([1])`,
@@ -1664,6 +1698,7 @@ func jitOtherHosts(r *Runtime) uint64  { return r.jit.hosts - r.jit.shapeHosts }
 // that: Richards' list walks failed a guard on every call. Each answer must
 // be the interpreter's, with no guard failing.
 func TestJITSSANullish(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1726,6 +1761,7 @@ func TestJITSSANullish(t *testing.T) {
 // their length than the context has slots, though far fewer at once, and
 // were refused.
 func TestJITSSAManySpills(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1781,6 +1817,7 @@ func TestJITSSAManySpills(t *testing.T) {
 // native, and so does one doing real work around calls Go makes from
 // native code (ssa.GoCall), each of which costs what an exit would.
 func TestJITSSAProfitability(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1901,6 +1938,7 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 // loose comparisons of values of different kinds, go to Go. Each answer is
 // the interpreter's, and the list walk never leaves native code.
 func TestJITSSAEquality(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1947,6 +1985,7 @@ func TestJITSSAEquality(t *testing.T) {
 // the operands for numbers, which sent `o.next != null` to Go at every
 // iteration where next holds an object.
 func TestJITSSACompareReferences(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1987,6 +2026,7 @@ func TestJITSSACompareReferences(t *testing.T) {
 // every element for a number and failed a guard at each object. A hole,
 // an index past the end and an object that is not an array go to Go.
 func TestJITSSAElementReferences(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -2032,6 +2072,7 @@ func TestJITSSAElementReferences(t *testing.T) {
 // A runtime's compiled functions share a few mappings, its arena's chunks,
 // rather than taking one each; closing the runtime releases every one.
 func TestJITArenaMappings(t *testing.T) {
+	t.Parallel()
 	for _, ssa := range []bool{true} {
 		r := New(Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
@@ -2067,6 +2108,7 @@ func TestJITArenaMappings(t *testing.T) {
 }
 
 func TestJITRuntimeOptIn(t *testing.T) {
+	t.Parallel()
 	p := compileForTest(t, jitSumSource)
 	for _, enabled := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: enabled})
@@ -2093,6 +2135,7 @@ func TestJITRuntimeOptIn(t *testing.T) {
 }
 
 func TestJITCachedTreeCall(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{})
 	if _, err := r.Run(compileForTest(t, `function sum(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s } sum(10000); sum(10); sum(20)`)); err != nil {
 		t.Fatal(err)
@@ -2113,6 +2156,7 @@ func TestJITCachedTreeCall(t *testing.T) {
 }
 
 func TestJITNestedTreeOSR(t *testing.T) {
+	t.Parallel()
 	for _, tail := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 100, 100
@@ -2142,6 +2186,7 @@ func TestJITNestedTreeOSR(t *testing.T) {
 }
 
 func TestJITDebuggerFallback(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true, Debug: true})
 	// Hidden host scripts need not contain debugger instructions. The runtime
 	// still has debugger callbacks at interrupt checks, so it cannot borrow views.
@@ -2155,6 +2200,7 @@ func TestJITDebuggerFallback(t *testing.T) {
 }
 
 func TestJITNestedTreeOSRThrow(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitCallThreshold, r.jitICThreshold = 100, 100
 	v, err := r.Run(compileForTest(t, `
@@ -2178,6 +2224,7 @@ func TestJITNestedTreeOSRThrow(t *testing.T) {
 }
 
 func TestJITRuntimeGuardReentry(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `
 		function sum(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s }
@@ -2224,6 +2271,7 @@ func TestJITPropertyLoopCancellation(t *testing.T) {
 }
 
 func TestJITRuntimeCloseAfterGuard(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	called := false
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), r.NewFunction("closeNow", 0,
@@ -2253,6 +2301,7 @@ func TestJITRuntimeCloseAfterGuard(t *testing.T) {
 // native loop must stop where the interpreter does, whether the host exit is
 // an ordinary call (the call coordinator) or an accessor (the plain loop).
 func TestJITHaltAfterHostExit(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, source string }{
 		{"call", `var arr = [0,0,0,0,0,0,0,0,0,0];
 			function f(a) { for (let i = 0; i < a.length; i++) { a[i] = 1; stop(i) } return 0 }
@@ -2299,6 +2348,7 @@ func TestJITHaltAfterHostExit(t *testing.T) {
 }
 
 func TestJITMemoryRefusal(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 256 << 10})
 	v, err := r.Run(compileForTest(t, jitSumSource))
 	if err != nil || v.Number() != 49995000 {
@@ -3233,6 +3283,7 @@ func TestJITRefusesRoomOnlyWhenNothingIsOld(t *testing.T) {
 }
 
 func TestJITSharedTemplateRuntimes(t *testing.T) {
+	t.Parallel()
 	p := compileForTest(t, jitSumSource)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -3283,6 +3334,7 @@ func TestJITBudgetAllocations(t *testing.T) {
 }
 
 func TestJITClosureRemembersRefusal(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) with({}) s+=i; return s } f(3); f`))
 	if err != nil {
@@ -3308,6 +3360,7 @@ func TestJITClosureRemembersRefusal(t *testing.T) {
 // tiers up to Maglev: not before. Its caches' feedback, filled at its
 // first call, does not change after, and delays nothing.
 func TestJITCallPromotion(t *testing.T) {
+	t.Parallel()
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3356,6 +3409,7 @@ func TestJITCallPromotion(t *testing.T) {
 // again, given native state after another jitInvocationsForFeedback calls,
 // and is compiled once its budget is spent again.
 func TestJITPromotionRetriesMemoryRefusal(t *testing.T) {
+	t.Parallel()
 	r := New(Config{JIT: true, MemoryLimit: 256 << 10})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
@@ -3387,6 +3441,7 @@ func TestJITPromotionRetriesMemoryRefusal(t *testing.T) {
 }
 
 func TestJITPromotionRuntimeIsolation(t *testing.T) {
+	t.Parallel()
 	p := compileForTest(t, `function sum(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s } sum`)
 	var cold *Runtime
 	for _, calls := range []int{1, jitInvocationsForMaglev} {
@@ -3414,6 +3469,7 @@ func TestJITPromotionRuntimeIsolation(t *testing.T) {
 }
 
 func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
+	t.Parallel()
 	r := New(Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
@@ -3465,6 +3521,7 @@ func TestJITLoopPromotionFirstCall(t *testing.T) {
 }
 
 func TestJITLoopPromotionAtEntryPC(t *testing.T) {
+	t.Parallel()
 	r := New(Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
@@ -3478,6 +3535,7 @@ func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 }
 
 func TestJITLoopPromotionLiveOperands(t *testing.T) {
+	t.Parallel()
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3517,6 +3575,7 @@ func TestJITLoopPromotionLiveOperands(t *testing.T) {
 }
 
 func TestJITLoopGuardSuppressesReentry(t *testing.T) {
+	t.Parallel()
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3578,6 +3637,7 @@ func TestJITLoopPromotionCancellation(t *testing.T) {
 }
 
 func TestJITLoopGuardErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, source, message string }{
 		{"bigint", `function f(n,a) { var s=0; for(var i=0;i<n;i++) { s+=i; if(i===2000) s+=a } return s } f(10000,1n)`,
 			"TypeError: cannot mix BigInt and other types"},
@@ -4366,6 +4426,7 @@ func BenchmarkJITKernelPromotion(b *testing.B) {
 // promote to native code (see jitTreeRecovery): otherwise enabling the JIT
 // would undo runTreeNested for every function it never runs.
 func TestJITTreeRecoveryNarrow(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	fn := jitFunctionForTest(t, `function f(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s }`)
 	compiled := r.jitForFunction(fn, nil)
@@ -4407,6 +4468,7 @@ func TestJITTreeRecoveryNarrow(t *testing.T) {
 // so the old hint misses rather than aliasing -- a tag had wrapped. A slot
 // holding the function's own entry is the hint's.
 func TestJITHintReuse(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	source := `function f(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s }`
 	first := jitFunctionForTest(t, source)
@@ -4500,6 +4562,7 @@ var jitStressCorpus = []string{
 // exit after a handful of instructions, and fallback from wherever native
 // code had got to.
 func TestJITStressDifferential(t *testing.T) {
+	t.Parallel()
 	configs := []jitStressConfig{
 		{threshold: true},
 		{threshold: true, budget: 1},
@@ -4660,6 +4723,7 @@ func BenchmarkJITHostRoundTrip(b *testing.B) {
 // (jitMaxDeopts). Each answer, and each valueOf call, is the
 // interpreter's.
 func TestJITSSAReoptimize(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -4727,6 +4791,7 @@ func TestJITSSAReoptimize(t *testing.T) {
 // shape after run was compiled for the one it had, so run deoptimizes and
 // is compiled again for the new one (jitPropertyDeopt).
 func TestJITSSAPrototypeMethods(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -4795,6 +4860,7 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 // leaving native code. A rope, which Go flattens, and a string longer than
 // abi.MaxEqualUnits go to Go. Each answer is the interpreter's.
 func TestJITSSAStringEquality(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -5102,6 +5168,7 @@ func jitMarkingForTest(t *testing.T) *uint8 {
 // longer inlined but made natively, to either function, as V8's feedback
 // goes polymorphic (jitInlinedCalls). Each answer is the interpreter's.
 func TestJITSSAInline(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -5781,6 +5848,7 @@ func TestJITSSANativeAppend(t *testing.T) {
 // the length or past it -- in each function inlined into a loop, where
 // both reads are of the one array the call was given.
 func TestJITSSALengthAfterAppend(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -5826,6 +5894,7 @@ func TestJITSSALengthAfterAppend(t *testing.T) {
 // asks it: neither is made natively, whose checks compare the prototype's
 // shape, which had been taken with the setter in it.
 func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6159,6 +6228,7 @@ func TestJITSSAStoreOverLiveCell(t *testing.T) {
 // and what followed took the value its slot held before: a wrong sum, or
 // a method of the wrong object.
 func TestJITSSAKeepCellsRunOut(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		"c+=[N][0];\n",
 		"c+=[N][0];c+=String(c).length;\n",
@@ -6772,6 +6842,7 @@ func TestJITSSALearnsSeenCallTargets(t *testing.T) {
 // ChildrenWalkers.walkNone had, and was called through Go at each call
 // from then on: a hundred thousand a run.
 func TestJITGenericCallsCompileTheirCallees(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6824,6 +6895,7 @@ func TestJITGenericCallsCompileTheirCallees(t *testing.T) {
 // construction from then on. Typescript's AST called ASTSpan so, and its
 // subclasses theirs, through Go, 160,000 times a run.
 func TestJITCallsThroughCapturedParents(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6883,6 +6955,7 @@ func TestJITCallsThroughCapturedParents(t *testing.T) {
 // is first compiled (jitSeedBuiltin), Leaf's, of a parent its read does
 // not say, at the call's exits (jitCallSeen).
 func TestJITCallsThroughParentsWithoutCode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7169,6 +7242,7 @@ func TestJITSSASeedsWhenCompiledAgain(t *testing.T) {
 // otherwise compile the other, again and again, the first not yet known
 // to have code.
 func TestJITSSASeedsMutualRecursion(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7447,6 +7521,7 @@ func TestJITSSAResumesEveryLevel(t *testing.T) {
 // the end of outer's code, which reading the context after the call took
 // for outer's PC.
 func TestJITSSANestedExits(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -8314,6 +8389,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 // jitNativeCallee): the refusal is kept (calleeRefused), as LowerSSA's is
 // by its entry.
 func TestJITSSANativeCalleeRefusalKept(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9299,6 +9375,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 // which an inlined callee may not have, keeps it a call: its throw alone,
 // on a path seldom taken, would have it inlined (ssa.InlineExitFeedback).
 func TestJITSSAGoCallsLeaveFrameSlots(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9331,6 +9408,7 @@ func TestJITSSAGoCallsLeaveFrameSlots(t *testing.T) {
 // compile to make again: a hot function's code stays through 400 scripts
 // that call it, each alive, each an entry, compiled once.
 func TestJITCacheKeepsCodeOverRefusals(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9369,6 +9447,7 @@ func TestJITCacheKeepsCodeOverRefusals(t *testing.T) {
 // old pipeline for "more than 256 spill slots" -- compiles. Each answer is
 // the interpreter's.
 func TestJITSSACallSavesReuseSlots(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9416,6 +9495,7 @@ func TestJITSSACallSavesReuseSlots(t *testing.T) {
 // its own (jitCalleeAt; every construction of DeltaBlue's had cost one).
 // Each answer is the interpreter's.
 func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9473,6 +9553,7 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 // they have all run -- not at each such site's first exit in turn, before
 // the others have (feedReopt). Each answer is the interpreter's.
 func TestJITSSAUnfedSitesCompiledAtNextCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9589,6 +9670,7 @@ func churnRegisters(n int) float64 {
 // the VM's, bit for bit: bases from -40 to 40 and some fractions, -0, NaN
 // and the infinities, to powers from -3 to 70, halves among them.
 func TestJITExactPowIsVMs(t *testing.T) {
+	t.Parallel()
 	xs := []float64{math.Copysign(0, -1), 0.5, 0.3, 2.5, -1.5, math.NaN(), math.Inf(1), math.Inf(-1), 1 << 52, -(1 << 53)}
 	for x := -40; x <= 40; x++ {
 		xs = append(xs, float64(x))
@@ -9616,6 +9698,7 @@ func TestJITExactPowIsVMs(t *testing.T) {
 // them, and ssa folds them (ssa.Round, ssa.Sign, ssa.Extremum), are the
 // VM's, to the bit.
 func TestJITMathFoldsAreVMs(t *testing.T) {
+	t.Parallel()
 	xs := []float64{0, math.Copysign(0, -1), 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 0.49999999999999994, -0.49999999999999994,
 		1<<52 - 0.5, -(1<<52 - 0.5), 1 << 52, 1<<53 + 2, 5e-324, -5e-324, math.MaxFloat64, -math.MaxFloat64,
 		math.Inf(1), math.Inf(-1), math.NaN(), 0.7, -0.7, 0.99999999999999989, -0.99999999999999989}
@@ -9792,6 +9875,7 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 // function kept both programs as long as its code lived: RegExp's run
 // blocks, 1.4 MB of them, and the lowering at each compile.
 func TestJITSSACompileLowersOnce(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -10883,6 +10967,7 @@ func TestJITSSAAbsentElementsAreUndefined(t *testing.T) {
 // intrinsic went on being called after a callback replaced it. Each answer
 // is the interpreter's.
 func TestJITSSACharCodeAtReplacedWhileNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -11617,6 +11702,7 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 // caller is compiled, as RayTrace's are: compiled knowing nothing, the
 // read left native code at every construction.
 func TestJITForwardPropertyEmptyPool(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
 		var Ray=Class.create();Ray.prototype={initialize:function(pos,dir){this.position=pos;this.direction=dir}}`
@@ -11717,6 +11803,7 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 // decided -- had been made notNative at once, with a backoff that kept it
 // so for the rest of the run.
 func TestJITSSAUnwoundCompilesAgainFirst(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function g(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}g(300);g(300)`)); err != nil {
 		t.Fatal(err)
@@ -11885,6 +11972,7 @@ func TestJITSSATypeOf(t *testing.T) {
 // entered at its start and its loop's header alone. Each answer is the
 // interpreter's.
 func TestJITSSAGoesOnNatively(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -11997,6 +12085,7 @@ func jitLoopHeadersOf(fn *bytecode.Function) []int {
 // after the code leaves, in the order the interpreter runs them. Each
 // answer is the interpreter's.
 func TestJITSSAConcatCallsGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -12050,6 +12139,7 @@ func TestJITSSAConcatCallsGo(t *testing.T) {
 // which == never finds equal to itself: the loop had gone on with it as
 // its next value, and a call of it threw "uninitialized is not a function".
 func TestJITCallResultStepDone(t *testing.T) {
+	t.Parallel()
 	fn := jitFunctionForTest(t, `function f(a) { let s = 0; for (const x of a) s += x; return s }`)
 	pc := slices.IndexFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpIterNextOrJump })
 	if pc < 0 {
@@ -12070,6 +12160,7 @@ func TestJITCallResultStepDone(t *testing.T) {
 // which stays for the pattern's close (jitCallResult): it had replaced the
 // cursor, and the frame went on an operand short.
 func TestJITCallResultRest(t *testing.T) {
+	t.Parallel()
 	fn := jitFunctionForTest(t, `function f(a) { const [x, ...q] = a; return q }`)
 	pc := slices.IndexFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpIterRest })
 	if pc < 0 {

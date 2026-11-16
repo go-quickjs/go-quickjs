@@ -89,6 +89,7 @@ func TestAsyncModuleLoaderGraph(t *testing.T) {
 // is fetched, and the import settles once the graph is in -- or with the
 // loader's error.
 func TestAsyncModuleLoaderImport(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	release := make(chan struct{})
@@ -170,6 +171,7 @@ func TestAsyncModuleLoaderImport(t *testing.T) {
 // than waiting forever for a slot the background fetch cannot give back
 // while the runtime waits.
 func TestAsyncModuleLoaderSharesTheLimit(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithModuleFetchLimit(1))
 	defer rt.Close()
 	f := &fetchCounter{
@@ -201,6 +203,7 @@ func TestAsyncModuleLoaderSharesTheLimit(t *testing.T) {
 // TestAsyncModuleLoaderClose pins that a runtime closed with a fetch out is
 // not troubled by the answer arriving later.
 func TestAsyncModuleLoaderClose(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	answered := make(chan struct{})
 	var done func(quickjs.LoadedModule, error)

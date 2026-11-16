@@ -12,6 +12,7 @@ import (
 // references and cycles kept, a transferred buffer's bytes moved, and a
 // SharedArrayBuffer's memory shared.
 func TestStructuredCloneAcrossRuntimes(t *testing.T) {
+	t.Parallel()
 	a, b := quickjs.New(), quickjs.New()
 	defer a.Close()
 	defer b.Close()
@@ -74,6 +75,7 @@ func TestStructuredCloneAcrossRuntimes(t *testing.T) {
 // DataCloneError with V8's message for what cannot be cloned, and the
 // exception itself for one a getter throws.
 func TestStructuredCloneErrors(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	for src, want := range map[string]string{
@@ -140,6 +142,7 @@ func TestStructuredCloneErrors(t *testing.T) {
 // TestStructuredCloneDepth pins that a value nested too deeply to walk is a
 // RangeError rather than the end of the goroutine's stack.
 func TestStructuredCloneDepth(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.Eval(`let deep = []; for (let i = 0; i < 20000; i++) deep = [deep]; deep`)

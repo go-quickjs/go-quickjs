@@ -7,6 +7,7 @@ import "testing"
 // Past their bounds -- a larger integer, a fraction, a string with a character
 // outside ASCII -- the general way must still give the same answers.
 func TestNumberAndCaseFastPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[0, -0, 7, -7, 42, 2**31, -(2**31) - 1, 2**53 - 1, -(2**53 - 1), 2**53, -(2**53), 2**53 + 2,
 		   2**60, 1e20, 1e21, 123456789012345680000, 0.1, -1.5, 1e-7, 2**-1074]
@@ -30,6 +31,7 @@ func TestNumberAndCaseFastPaths(t *testing.T) {
 // to convert, one missing, a replaced method -- still makes the call, with
 // its conversions in order and its frame in a stack trace.
 func TestMathCallFastPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[Math.floor(-1.5), Math.ceil(-0.5), Math.round(-2.5), Math.round(2.5), Math.sign(-0), Math.abs(-0),
 		   Math.sqrt(-1), Math.trunc(-0.9), Math.fround(5.5), Math.floor(), Math.floor(NaN), Math.cbrt(27)]
@@ -54,6 +56,7 @@ func TestMathCallFastPaths(t *testing.T) {
 // arguments, call applied to itself and to built-ins, and what is not a
 // function.
 func TestCallThrough(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function who() { return this === globalThis ? "global" : String(this) }
 		  function strictWho() { "use strict"; return String(this) }

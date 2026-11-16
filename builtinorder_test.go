@@ -6,6 +6,7 @@ import "testing"
 // looks at any of it, so an argument whose valueOf counts its calls is called
 // even when an earlier argument has already settled the answer.
 func TestMathConvertsEveryArgument(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0
 		  Math.max(NaN, {valueOf: function () { n++; return 1 }})
@@ -31,6 +32,7 @@ func TestMathConvertsEveryArgument(t *testing.T) {
 // Math.round rounds halves towards positive infinity, so the sign of a zero
 // result follows the argument rather than the rounding.
 func TestMathRoundKeepsTheSignOfZero(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(1 / Math.round(-0.5))`, "-Infinity"},
 		{`String(1 / Math.round(-0.2))`, "-Infinity"},
@@ -56,6 +58,7 @@ func TestMathRoundKeepsTheSignOfZero(t *testing.T) {
 // are, including unknown ones -- so an infinity beats a NaN here, unlike
 // everywhere else in Math.
 func TestHypotPrefersInfinityOverNaN(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Math.hypot(NaN, Infinity))`, "Infinity"},
 		{`String(Math.hypot(Infinity, NaN))`, "Infinity"},
@@ -77,6 +80,7 @@ func TestHypotPrefersInfinityOverNaN(t *testing.T) {
 // The sum of no numbers is -0, and so is the sum of nothing but -0s. Anything
 // else that cancels to zero sums to +0.
 func TestSumPreciseZeroSign(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(1 / Math.sumPrecise([]))`, "-Infinity"},
 		{`String(1 / Math.sumPrecise([-0]))`, "-Infinity"},
@@ -94,6 +98,7 @@ func TestSumPreciseZeroSign(t *testing.T) {
 // revoked proxy no longer has: the question cannot be answered at all, so it is
 // refused rather than guessed.
 func TestIsArrayRefusesARevokedProxy(t *testing.T) {
+	t.Parallel()
 	const revoked = `var h = Proxy.revocable([], {}); h.revoke(); `
 	cases := []struct{ src, want string }{
 		{revoked + `try { Array.isArray(h.proxy) } catch (e) { e.constructor.name }`, "TypeError"},
@@ -113,6 +118,7 @@ func TestIsArrayRefusesARevokedProxy(t *testing.T) {
 // computes one may throw -- which it does through the caller rather than being
 // swallowed and reported as an ordinary object.
 func TestObjectToStringTag(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {}
 		  Object.defineProperty(o, Symbol.toStringTag,
@@ -142,6 +148,7 @@ func TestObjectToStringTag(t *testing.T) {
 // An array method called on a primitive works through a wrapper, and the ones
 // that return their receiver return that wrapper rather than the primitive.
 func TestArrayMethodsReturnTheCoercedReceiver(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Array.prototype.reverse.call(true) instanceof Boolean)`, "true"},
 		{`String(Array.prototype.sort.call(true) instanceof Boolean)`, "true"},
@@ -160,6 +167,7 @@ func TestArrayMethodsReturnTheCoercedReceiver(t *testing.T) {
 // A search over nothing converts nothing: with no elements to compare against,
 // the starting point cannot matter, so its valueOf is never called.
 func TestEmptySearchConvertsNoStartingPoint(t *testing.T) {
+	t.Parallel()
 	const counter = `var n = 0; var from = {valueOf: function () { n++; return 0 }}; `
 	cases := []struct{ src, want string }{
 		{counter + `[].includes(1, from) + "," + n`, "false,0"},
@@ -178,6 +186,7 @@ func TestEmptySearchConvertsNoStartingPoint(t *testing.T) {
 // An argument list is read as an array-like, which a primitive is not: a string
 // has indices and a length and would otherwise pass for one.
 func TestArgumentListMustBeAnObject(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { (function () {}).apply(null, "1,2") } catch (e) { e.constructor.name }`,
 			"TypeError"},
@@ -203,6 +212,7 @@ func TestArgumentListMustBeAnObject(t *testing.T) {
 // a prototype would put something above everything in the realm at once. It is
 // refused however extensible the object is.
 func TestObjectPrototypeKeepsItsPrototype(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { Object.setPrototypeOf(Object.prototype, {}) } catch (e) { e.constructor.name }`,
 			"TypeError"},
@@ -226,6 +236,7 @@ func TestObjectPrototypeKeepsItsPrototype(t *testing.T) {
 // An entry is a pair, and only an object can be one: a string has a [0] and a
 // [1] and would otherwise be taken apart as though it were.
 func TestFromEntriesRequiresObjects(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { Object.fromEntries(["ab"]) } catch (e) { e.constructor.name }`, "TypeError"},
 		{`try { Object.fromEntries([1]) } catch (e) { e.constructor.name }`, "TypeError"},
@@ -252,6 +263,7 @@ func TestFromEntriesRequiresObjects(t *testing.T) {
 // string key like any other, so an index added past the end of the string comes
 // before it.
 func TestStringObjectKeyOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var s = new String("abc"); s[5] = 1
 		  Object.getOwnPropertyNames(s).join(",")`, "0,1,2,5,length"},
@@ -269,6 +281,7 @@ func TestStringObjectKeyOrder(t *testing.T) {
 // than in dense storage. Redefining it as an ordinary element has to replace it
 // there, not write a second answer into the dense slot.
 func TestArrayElementDefinedTwice(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Array(0)
 		  Object.defineProperty(a, 0, {value: 0, writable: false, configurable: true})
@@ -321,6 +334,7 @@ func TestArrayElementDefinedTwice(t *testing.T) {
 // formatting, and the punctuation that may sit inside a word, a full stop among
 // it.
 func TestFinalSigmaLooksPastPunctuation(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`"A.\u03A3".toLowerCase()`, "a.\u03c2"},
 		{`"A'\u03A3".toLowerCase()`, "a'\u03c2"},
@@ -342,6 +356,7 @@ func TestFinalSigmaLooksPastPunctuation(t *testing.T) {
 // decides what to return, so the side effects of both are visible even when the
 // answer is an empty array.
 func TestSplitConversionOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String("undefined is not a function".split(undefined, 0).length)`, "0"},
 		{`"a,b".split(",", 0).length + "," + "a,b".split(",", 1).join("")`, "0,a"},
@@ -364,6 +379,7 @@ func TestSplitConversionOrder(t *testing.T) {
 // Object called with a new.target that is not Object itself builds an instance
 // of that constructor and ignores its argument.
 func TestObjectSubclassIgnoresItsArgument(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class O extends Object {}
 		  var o = new O({a: 1});
@@ -386,6 +402,7 @@ func TestObjectSubclassIgnoresItsArgument(t *testing.T) {
 // target would have done -- including refusing, which is reported rather than
 // thrown, and including the checks the target's own operation would run.
 func TestProxyForwardsWithoutATrap(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The target refuses; Reflect reports it, and Object.defineProperty is
 		// what turns that into a throw.
@@ -426,6 +443,7 @@ func TestProxyForwardsWithoutATrap(t *testing.T) {
 // Reflect.defineProperty answers false for a refusal, but a descriptor it
 // cannot even read is an error of the caller's.
 func TestReflectDefinePropertyReportsAndThrows(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { Reflect.defineProperty({}, "a",
 		    Object.defineProperty({}, "enumerable",
@@ -443,6 +461,7 @@ func TestReflectDefinePropertyReportsAndThrows(t *testing.T) {
 // The two String methods that are not generic: they hand back the string their
 // receiver is or holds, and refuse a receiver that is neither.
 func TestStringToStringIsNotGeneric(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { String.prototype.toString.call(1) } catch (e) { e.constructor.name }`, "TypeError"},
 		{`try { String.prototype.valueOf.call(1) } catch (e) { e.constructor.name }`, "TypeError"},
@@ -464,6 +483,7 @@ func TestStringToStringIsNotGeneric(t *testing.T) {
 // asks about the function it was bound from -- afresh, so that a
 // Symbol.hasInstance there is honoured.
 func TestBoundFunctionInstanceOf(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function F() {}; var b = F.bind(); var o = new F();
 		  [o instanceof b, b[Symbol.hasInstance](o)].join(",")`, "true,true"},
@@ -482,6 +502,7 @@ func TestBoundFunctionInstanceOf(t *testing.T) {
 // The Function constructor converts its parameters before its body, in the
 // order they were written.
 func TestFunctionConstructorConversionOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var seen = []
 		  var p = {toString: function () { seen.push("p"); return "a" }}
@@ -506,6 +527,7 @@ func TestFunctionConstructorConversionOrder(t *testing.T) {
 // leaves no room for the head of a for-in to be mistaken for one. The second
 // branch inherits, since nothing separates its end from what encloses it.
 func TestConditionalBranchAllowsIn(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0, m = 0
 		  for (true ? "" in (n++, {}) : m++; false; ) ;
@@ -525,6 +547,7 @@ func TestConditionalBranchAllowsIn(t *testing.T) {
 // untouched, a lone surrogate included: that is not a malformed URI, it is a
 // character decodeURI has nothing to say about.
 func TestDecodeURIPassesCharactersThrough(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(decodeURI("\uD800") === "\uD800")`, "true"},
 		{`String(decodeURIComponent("\uDFFF\uD800") === "\uDFFF\uD800")`, "true"},
@@ -554,6 +577,7 @@ func TestDecodeURIPassesCharactersThrough(t *testing.T) {
 // nothing octal. And the conversion the operations use refuses a number, unlike
 // the one the constructor uses.
 func TestBigIntFromStrings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[String(BigInt("0x10")), String(BigInt("0b101")), String(BigInt("0o17")),
 		   String(BigInt("017")), String(BigInt(" 12 ")), String(BigInt("")),
@@ -585,6 +609,7 @@ func TestBigIntFromStrings(t *testing.T) {
 // Some built-in functions are not merely equivalent to another but the very
 // same function object, which a script can check.
 func TestSharedBuiltinFunctions(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`(function () { return arguments[Symbol.iterator] === Array.prototype.values })()`,
 			"true"},
@@ -608,6 +633,7 @@ func TestSharedBuiltinFunctions(t *testing.T) {
 // function's synthesized length and name among them, before anything the
 // function was given afterwards.
 func TestFunctionOwnKeyOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C { static [1]() {} static [2]() {} static a() {} static c() {} }
 		  Object.getOwnPropertyNames(C).join(",")`, "1,2,length,name,prototype,a,c"},
@@ -627,6 +653,7 @@ func TestFunctionOwnKeyOrder(t *testing.T) {
 // the next. A test that passed by the luck of a run's map order would
 // have 15! to 1 against it.
 func TestSymbolPropertyOrder(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `Object.getOwnPropertyNames(Symbol).join()`,
 		"length,name,prototype,for,keyFor,asyncIterator,hasInstance,isConcatSpreadable,iterator,"+
 			"match,matchAll,replace,search,species,split,toPrimitive,toStringTag,unscopables,dispose,asyncDispose")

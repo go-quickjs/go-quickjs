@@ -174,6 +174,7 @@ func TestJITTypedKinds(t *testing.T) {
 // The values TestJITTypedKinds' rounds convert, each type's, are Node's
 // (v26.12.1): a check of the interpreter that the comparison stands on.
 func TestJITTypedKindsWant(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(t, typedKindSetup)); err != nil {
@@ -201,6 +202,7 @@ func TestJITTypedKindsWant(t *testing.T) {
 // Replaced by a view of another type, the binding's sites tell it apart,
 // every answer the interpreter's.
 func TestJITTypedUpvalues(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

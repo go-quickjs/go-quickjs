@@ -1674,6 +1674,10 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			backwards := kind == tcFindLast || kind == tcFindLastIndex
 			var argv [3]Value
+			ready := rt.regCallbackOf(cb, thisArg)
+			if ready != nil {
+				defer ready.end()
+			}
 			for k := 0; k < n; k++ {
 				i := k
 				if backwards {
@@ -1681,7 +1685,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				}
 				el := t.getElem(i)
 				argv[0], argv[1], argv[2] = el, Int(i), this
-				res, err := rt.callDirect(cb, thisArg, argv[:])
+				var res Value
+				var err error
+				if ready != nil {
+					res, err = ready.call(argv[:])
+				} else {
+					res, err = rt.callDirect(cb, thisArg, argv[:])
+				}
 				if err != nil {
 					return Undefined, err
 				}
@@ -1764,13 +1774,21 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				acc, k = t.getElem(i), 1
 			}
 			var argv [4]Value
+			ready := rt.regCallbackOf(cb, Undefined)
+			if ready != nil {
+				defer ready.end()
+			}
 			for ; k < n; k++ {
 				i := k
 				if reversed {
 					i = n - 1 - k
 				}
 				argv[0], argv[1], argv[2], argv[3] = acc, t.getElem(i), Int(i), this
-				acc, err = rt.callDirect(cb, Undefined, argv[:])
+				if ready != nil {
+					acc, err = ready.call(argv[:])
+				} else {
+					acc, err = rt.callDirect(cb, Undefined, argv[:])
+				}
 				if err != nil {
 					return Undefined, err
 				}
@@ -1785,6 +1803,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	// and a hole put in it reached places no hole may.
 	sortValues := func(rt *Runtime, vals []Value, cmp Value) error {
 		var argv [2]Value
+		// A comparator of register code is called kept ready
+		// (regCallback).
+		cb := rt.regCallbackOf(cmp, Undefined)
+		if cb != nil {
+			defer cb.end()
+		}
 		return stableSort(vals, func(x, y Value) (bool, error) {
 			if cmp.IsUndefined() {
 				// A typed array sorts numerically by default, where an
@@ -1792,7 +1816,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				return compareNumeric(x, y) < 0, nil
 			}
 			argv[0], argv[1] = x, y
-			res, err := rt.callDirect(cmp, Undefined, argv[:])
+			var res Value
+			var err error
+			if cb != nil {
+				res, err = cb.call(argv[:])
+			} else {
+				res, err = rt.callDirect(cmp, Undefined, argv[:])
+			}
 			if err != nil {
 				return false, err
 			}

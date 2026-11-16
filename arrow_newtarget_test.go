@@ -6,6 +6,7 @@ import "testing"
 // or in an arrow of its own, still captures its maker's: the evaluated
 // code may name it however it is written (the VM's TestArrowNewTarget).
 func TestArrowNewTargetEval(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function F() { this.e = () => eval('new.target'); this.n = () => () => eval('new.target') }
 		var f = new F(); [f.e() === F, f.n()() === F].join()`, "true,true")
 }

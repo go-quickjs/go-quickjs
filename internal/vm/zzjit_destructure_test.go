@@ -43,6 +43,7 @@ function objs(n, last) { const xs = []; for (let i = 0; i < n; i++) xs.push({ a:
 // tree tier. Each answer is Node's (v26.10.0), but the TypeError's
 // message, which is the interpreter's, and the loops run natively.
 func TestJITDestructures(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

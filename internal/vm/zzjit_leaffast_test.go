@@ -183,6 +183,7 @@ function odd(n) { calls = 0; return chain([1, 2, 3, 4, { valueOf() { calls++; re
 // for its own state: the answers are Node's (v26.10.0), as the frames the
 // refusals make are.
 func TestJITLeafColdSaves(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -233,6 +234,7 @@ function wrapped(n) { return codes(new String('abc'), [0, 1, 2]) + ats(new Strin
 // code says nothing of the call: every answer is Node's (v26.10.0), and a
 // loop of in-range calls on a string of ASCII's bytes makes no call of Go.
 func TestJITLeafNativeForms(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -304,6 +306,7 @@ function oddRuns(n) { conv = 0; return mixed(['a', 'q', { valueOf() { conv++; re
 // comparison Go refuses leaves for the interpreter, which converts the
 // object.
 func TestJITGoFast(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -347,6 +350,7 @@ function withSymbol(n) { try { return mixedAdd([1, 'x', Symbol('s')], n) } catch
 // for calls of Go (jitGoDirect) to jitGoAdd, past jitHostCall's dispatch:
 // each answer is Node's (v26.10.0), and the loops' calls are made so.
 func TestJITGoAddDirect(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -451,6 +455,7 @@ function swapped(n) { const save = Number.isInteger; Number.isInteger = x => tru
 // Node's (v26.10.0), and the loop with the function replaced fails the
 // check, the interpreter calling the replacement.
 func TestJITNumberPredicates(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

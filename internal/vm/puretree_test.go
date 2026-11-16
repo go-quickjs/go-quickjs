@@ -12,6 +12,7 @@ import (
 // calls, or a short one, stays frameless (pureCall), as does every call
 // from inside another pure body. Each answers the same in both tiers.
 func TestPureByTree(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var HELD = 4, RUN = 2;
 		function T() { this.state = 0; this.v = 1 }
@@ -28,8 +29,7 @@ func TestPureByTree(t *testing.T) {
 		}
 		[n, T.prototype.held, T.prototype.mark, T.prototype.one, T.prototype.viaHeld]`
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := newOldTiersForTest(Config{})
+		r := newOldTiersTreeForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
@@ -53,5 +53,4 @@ func TestPureByTree(t *testing.T) {
 		}
 		r.Close()
 	}
-	SetTreeTier(true)
 }

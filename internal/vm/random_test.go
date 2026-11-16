@@ -36,6 +36,7 @@ func seedRandomForTest(r *Runtime, s0, s1 uint64) {
 // double in [1, 2), less one. So from a state, a run of calls gives each
 // cache's numbers last made first.
 func TestMathRandomSequence(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	const s0, s1 = 0x9e3779b97f4a7c15, 0xbf58476d1ce4e5b9
@@ -63,6 +64,7 @@ func TestMathRandomSequence(t *testing.T) {
 // draws where nothing can miss after (last's, scaled's) draws without a
 // frame. Each call takes the next number, its body run pure or not.
 func TestMathRandomFramelessOnce(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	const s0, s1 = 0x452821e638d01377, 0xbe5466cf34e90c6c
@@ -105,6 +107,7 @@ func parseFloatForTest(t *testing.T, s string) float64 {
 // source; and building a runtime makes no state for it, which its first
 // call does.
 func TestMathRandomRange(t *testing.T) {
+	t.Parallel()
 	r, other := New(Config{}), New(Config{})
 	defer r.Close()
 	defer other.Close()

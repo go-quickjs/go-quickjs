@@ -383,26 +383,47 @@ func strFuzzRun(t *testing.T, r *Runtime, src string, debug bool) string {
 }
 
 func TestStrAppendRandom(t *testing.T) {
-	t.Cleanup(func() { SetTreeTier(true) })
+	t.Parallel()
 	count := 400
 	if testing.Short() {
 		count = 40
 	}
 	first, count := strFuzzRange(t, count)
+	// The seeds run in parallel, and each seed's reference and its runs
+	// with the tree tier off and on, each on a runtime of its own, beside
+	// one another: the answers are compared once all three are in.
 	for seed := first; seed < first+count; seed++ {
-		src := strFuzzSource(seed)
-		ref := New(Config{Debug: true})
-		want := strFuzzRun(t, ref, src, true)
-		ref.Close()
-		for _, tree := range []bool{false, true} {
-			SetTreeTier(tree)
-			r := New(Config{})
-			got := strFuzzRun(t, r, src, false)
-			r.Close()
-			if got != want {
-				t.Fatalf("seed %d, tree tier %v: %s\n%s", seed, tree, firstLogDifference(got, want), src)
+		t.Run(strconv.Itoa(seed), func(t *testing.T) {
+			t.Parallel()
+			src := strFuzzSource(seed)
+			var want string
+			var got [2]string
+			t.Run("ref", func(t *testing.T) {
+				t.Parallel()
+				ref := New(Config{Debug: true})
+				want = strFuzzRun(t, ref, src, true)
+				ref.Close()
+			})
+			for i, tree := range []bool{false, true} {
+				t.Run(fmt.Sprintf("tree=%v", tree), func(t *testing.T) {
+					t.Parallel()
+					r := newTreeTierForTest(tree, Config{})
+					got[i] = strFuzzRun(t, r, src, false)
+					r.Close()
+				})
 			}
-		}
+			t.Cleanup(func() {
+				if t.Failed() {
+					return
+				}
+				for i, tree := range []bool{false, true} {
+					if got[i] != want {
+						t.Errorf("seed %d, tree tier %v: %s\n%s", seed, tree, firstLogDifference(got[i], want), src)
+						return
+					}
+				}
+			})
+		})
 	}
 }
 

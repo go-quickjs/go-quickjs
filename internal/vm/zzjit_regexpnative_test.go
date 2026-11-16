@@ -48,6 +48,7 @@ function budget() { return /(a+)+b/.test("a".repeat(40) + "cb") }
 // have been matched twice, and gets what the interpreter gets; the code is
 // counted in the JIT's budget. One without the JIT makes none.
 func TestJITRegExpNative(t *testing.T) {
+	t.Parallel()
 	r := jitAgreesForTest(t, regexpNativeSetup, `run(1)`, `run(1)`, `run(3)`, `run(3)`)
 	native := 0
 	for _, re := range r.regexpCache {
@@ -87,6 +88,7 @@ func TestJITRegExpNative(t *testing.T) {
 // A match native code runs out of steps in throws what the interpreter's
 // does.
 func TestJITRegExpNativeBudget(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("spends the step budget")
 	}

@@ -15,6 +15,7 @@ import (
 // missing argument, an error whose stack must show the frame -- which the
 // function's body proper has to answer instead. Each answer is Node's.
 func TestLeafFunctions(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function C(){ this.x = 1 } C.prototype.get = function () { return this.x };
 			var o = new C, s = 0; for (var i = 0; i < 5; i++) s += o.get();
@@ -94,6 +95,7 @@ func TestLeafFunctions(t *testing.T) {
 // an object with an apply of its own. The answers are the ones the
 // constructor's body gave when it was run.
 func TestLeafForward(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
    var V = Class.create(); V.prototype = { initialize: function (x, y) { this.x = x; this.y = y; return {other: 1} } };
@@ -156,6 +158,7 @@ func TestLeafForward(t *testing.T) {
 // global in its dead zone, undeclared or an accessor, a primitive this for
 // a sloppy function, an exception and its stack. Each answer is Node's.
 func TestPureLeaves(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var FWD = 1; function input() { return this.dir == FWD ? this.a : this.b }
 			var r = []; for (var i = 0; i < 4; i++) r.push(input.call({ dir: i % 2, a: "A", b: "B" })); r.join()`,
@@ -214,6 +217,7 @@ func TestPureLeaves(t *testing.T) {
 // method, a getter for the method, an operand that is an object, and an
 // exception from a callee with its stack. Each answer is Node's.
 func TestPureLeafCalls(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function Coll() { this.elms = [1, 2, 3] } Coll.prototype.size = function () { return this.elms.length };
 			Coll.prototype.at = function (i) { return this.elms[i] };
@@ -250,6 +254,7 @@ func TestPureLeafCalls(t *testing.T) {
 // and last, where nothing after the store can give the frameless evaluation
 // up, so that a store is never made twice or seen half done.
 func TestPureLeafStores(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var HELD = 4; function T(s) { this.state = s } T.prototype.mark = function () { this.state = this.state | HELD };
 			var a = new T(1), b = { other: 1, state: 2 }; for (var i = 0; i < 100; i++) { a.mark(); T.prototype.mark.call(b); a.state++ }
@@ -291,6 +296,7 @@ func TestPureLeafStores(t *testing.T) {
 // on this, which the body proper answers, and a primitive this. Each answer is
 // Node's.
 func TestPureLeafCompareAndThisReads(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function T(s) { this.s = s } T.prototype.held = function () { return (this.s & 4) != 0 || this.s == 2 };
 		T.prototype.eq = function (v) { return this.s === v }; T.prototype.le = function (v) { return this.s <= v };
 		function sv() { "use strict"; return this.length }
@@ -309,6 +315,7 @@ func TestPureLeafCompareAndThisReads(t *testing.T) {
 // up after, which must not be made twice; a binding in its dead zone, and a
 // constant. Each answer is Node's.
 func TestPureLeafUpvalueStores(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var out = [];
 		out.push((function () { var n = 0; function f() { n++ } function g() { return ++n } function h() { return n-- } var r = []; for (var i = 0; i < 100; i++) { f(); r.push(g(), h()) } return n + ":" + r.slice(-2).join() })());
 		out.push((function () { var n = "5"; function f() { n++ } for (var i = 0; i < 100; i++) f(); return typeof n + n })());
@@ -329,6 +336,7 @@ func TestPureLeafUpvalueStores(t *testing.T) {
 // object, a class's fields, a setter up the chain, and a proxy and a
 // non-constructor, which are left to construct as before.
 func TestPureLeafConstructs(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function P(a, b) { this.a = a; this.b = b } function cons(a, b) { return new P(a, b) }
 			var r = []; for (var i = 0; i < 100; i++) { var p = cons(i, i + 1); r.push(p.a + p.b) }
@@ -362,6 +370,7 @@ func TestPureLeafConstructs(t *testing.T) {
 // call as before, and a push that a caller could still give up after is not
 // made twice.
 func TestPureLeafPushPop(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function C() { this.elms = [] } C.prototype.add = function (x) { this.elms.push(x) }; C.prototype.removeFirst = function () { return this.elms.pop() };
 			var c = new C(), r = []; for (var i = 0; i < 100; i++) c.add(i); for (var i = 0; i < 3; i++) r.push(c.removeFirst()); r.join() + " " + c.elms.length`,

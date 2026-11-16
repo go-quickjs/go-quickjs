@@ -188,6 +188,7 @@ func jitAgreesForwardForTest(t *testing.T, stress jitStressConfig, setup string,
 // forwards, make no call of Go; and a forwarder given more arguments than
 // a context holds has Go make its forwards, from the frame's.
 func TestJITForwardingCallsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -12,6 +12,7 @@ import "testing"
 // handler stack at the jump, and dropping it is the jump's job -- a handler
 // left behind catches a throw that belongs to somebody else.
 func TestBreakOutOfTryCatch(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The classic: the handler is finished with, and a later throw must
 		// reach the caller rather than the catch clause it left.
@@ -53,6 +54,7 @@ func TestBreakOutOfTryCatch(t *testing.T) {
 // TestBreakInsideTryFinally covers the other half: a finally clause runs when
 // the try block is left, and not when a jump stays inside it.
 func TestBreakInsideTryFinally(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The loop is inside the try, so the break does not leave the try at
 		// all: the clause runs once, when the block ends normally.
@@ -123,6 +125,7 @@ func TestBreakInsideTryFinally(t *testing.T) {
 // TestUnwindInAsyncFunctions covers the same jumps where the frame can be
 // suspended, since a corrupted stack there shows up only when it resumes.
 func TestUnwindInAsyncFunctions(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = []
 		  async function f() {
@@ -159,6 +162,7 @@ func TestUnwindInAsyncFunctions(t *testing.T) {
 // TestUnwindWithIterators covers a jump that leaves both a for-of and a try,
 // where the iterator has to be closed and the handler dropped.
 func TestUnwindWithIterators(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var closed = false
 		  var iterable = {[Symbol.iterator]() {

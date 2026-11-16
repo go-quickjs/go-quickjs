@@ -246,6 +246,50 @@ func regReuseAt(c *regCode, pc int) *execReuseSite {
 	return nil
 }
 
+// regCallKind is how a call site of register code enters fd's closure, a
+// method's call or not: of the form's own layout, not suspending, of this
+// realm, neither a class's constructor nor with a direct eval (enter),
+// the kind its cache gives it and the this that kind writes -- 0 where
+// its this is not one a cache can give, an arrow's of a derived
+// constructor, say.
+func (r *Runtime) regCallKind(fd *funcData, method bool) (cl *closure, rc *regCode, kind uint8, this Value, enter bool) {
+	cl = fd.closure
+	if rc = cl.reg; rc == nil {
+		rc = r.regOf(cl)
+	}
+	if rc == nil || !rc.wide || rc.suspends || cl.realm != r.Realm || isClassConstructorKind(cl.fn.Kind) || cl.fn.HasDirectEval {
+		return cl, rc, 0, Undefined, false
+	}
+	if x := fd.extra; x == nil {
+		switch {
+		case !method:
+			kind, this = regCallThis, Undefined
+			if rc.coerceThis {
+				this = r.globalThis
+			}
+		case rc.coerceThis:
+			kind = regCallObjThis
+		default:
+			kind = regCallEnter
+		}
+	} else if fd.arrow && x.lexThisRef == nil && x.rare == nil {
+		kind, this = regCallThis, x.lexThis
+	}
+	return cl, rc, kind, this, true
+}
+
+// regCacheCallee makes site e's cache callee o's, of closure cl and code
+// rc, entered as kind with this, marked where rhCallW leaves it to
+// regCallMiss: a leaf, or a frame that keeps its arguments.
+func regCacheCallee(e *regCallCache, o *Object, cl *closure, rc *regCode, this Value, kind uint8) {
+	e.callee, e.cl, e.rc, e.this, e.kind = o, cl, rc, this, kind
+	if rc.leaf != regLeafNone {
+		e.kind |= regCallOut | regCallLeaf
+	} else if rc.args {
+		e.kind |= regCallOut
+	}
+}
+
 func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc int) (Value, error) {
 	argc := int(w.X())
 	method := w.Op().MethodCall()
@@ -282,27 +326,9 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 			// A callee the site knows, whose call is not rhCallW's alone.
 			cl, rc, kind, this = e.cl, e.rc, e.kind&^(regCallOut|regCallLeaf), e.this
 		} else if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
-			cl = fd.closure
-			if rc = cl.reg; rc == nil {
-				rc = r.regOf(cl)
-			}
-			if rc != nil && rc.wide && !rc.suspends && cl.realm == r.Realm && !isClassConstructorKind(cl.fn.Kind) && !cl.fn.HasDirectEval {
-				if x := fd.extra; x == nil {
-					switch {
-					case !method:
-						kind, this = regCallThis, Undefined
-						if rc.coerceThis {
-							this = r.globalThis
-						}
-					case rc.coerceThis:
-						kind = regCallObjThis
-					default:
-						kind = regCallEnter
-					}
-				} else if fd.arrow && x.lexThisRef == nil && x.rare == nil {
-					kind, this = regCallThis, x.lexThis
-				}
-			} else if fn := cl.fn; e != nil && fn.Generator != fn.Async && fd.extra == nil && cl.realm == r.Realm {
+			var enter bool
+			cl, rc, kind, this, enter = r.regCallKind(fd, method)
+			if fn := cl.fn; !enter && e != nil && fn.Generator != fn.Async && fd.extra == nil && cl.realm == r.Realm {
 				// A generator or an async function of this realm: the site
 				// makes its object as callClosure makes one (regCallGen),
 				// without the generic call's search.
@@ -310,12 +336,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 				return r.regGenCall(o, cl, method, base, argc)
 			}
 			if kind != 0 && e != nil {
-				e.callee, e.cl, e.rc, e.this, e.kind = o, cl, rc, this, kind
-				if rc.leaf != regLeafNone {
-					e.kind |= regCallOut | regCallLeaf
-				} else if rc.args {
-					e.kind |= regCallOut
-				}
+				regCacheCallee(e, o, cl, rc, this, kind)
 			}
 		}
 		switch kind {
@@ -1274,12 +1295,17 @@ const (
 	// job from the job queue, its this and new.target the frame's
 	// (regColdGen).
 	regFrameAwaitJob
+	// regFrameGenStep is a generator's, a for-of's step the native code
+	// entered itself (the iter_next handler), its this and new.target the
+	// frame's: a yield, a return or a throw ends the step
+	// (nativeGenEnd), not its caller's call.
+	regFrameGenStep
 )
 
 // regFrameThis is the this and new.target of register frame f, for a stack
 // trace.
 func (r *Runtime) regFrameThis(f *frame) (this, newTarget Value) {
-	if f.regKind == regFrameAwaitJob {
+	if f.regKind == regFrameAwaitJob || f.regKind == regFrameGenStep {
 		return f.this, f.newTarget
 	}
 	this = r.stack[f.base+1]

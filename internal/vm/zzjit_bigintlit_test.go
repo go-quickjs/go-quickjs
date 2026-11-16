@@ -36,6 +36,7 @@ const bigIntLitSetup = `
 `
 
 func TestJITBigIntLiterals(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

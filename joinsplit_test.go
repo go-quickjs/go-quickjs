@@ -7,6 +7,7 @@ import "testing"
 // buffer from the elements, and split, which collects its pieces in a buffer
 // the runtime keeps between calls.
 func TestJoinAndSplit(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var r = []
 		  r.push(["\uD83D", "\uDE00"].join("") === "😀", ["\uD83D", "\uDE00"].join() === "\uD83D,\uDE00",

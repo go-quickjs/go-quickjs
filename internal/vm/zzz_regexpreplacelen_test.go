@@ -93,8 +93,7 @@ func TestRegExpReplaceLen(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := newOldTiersForTest(Config{})
+			r := newOldTiersTreeForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpReplaceLenTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -109,7 +108,6 @@ func TestRegExpReplaceLen(t *testing.T) {
 	// The table's replaces of templates without a $, measured, make no
 	// strings: 'xd1yd1zd1'.replace(/d1/g, '-'), a thousand times, made as
 	// many before.
-	SetTreeTier(true)
 	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	src := strings.TrimSpace(regexpReplaceLenTestSrc)
@@ -148,6 +146,7 @@ func TestRegExpReplaceLen(t *testing.T) {
 // is made again with its frames. Where RegExp.prototype is no longer as
 // the realm made it, the replace is the script's.
 func TestRegExpReplaceLenFails(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	src := `var gets = 0, limit = Error.stackTraceLimit;

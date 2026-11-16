@@ -12,6 +12,7 @@ import (
 // than it allows, however it gets there, and that the script cannot catch it
 // and carry on (KI-02).
 func TestMemoryLimit(t *testing.T) {
+	t.Parallel()
 	const limit = 16 << 20
 	for name, src := range map[string]string{
 		"many strings":    `let a = []; for (let i = 0; i < 200; i++) a.push("x".repeat(1 << 20) + i); a.length`,
@@ -48,6 +49,7 @@ func TestMemoryLimit(t *testing.T) {
 // enough that one which is not stops at a few hundred megabytes, not at the
 // machine's memory.
 func TestMemoryLimitDoubling(t *testing.T) {
+	t.Parallel()
 	const limit = 16 << 20
 	loop := func(init, step, out string) string {
 		return fmt.Sprintf(`function f() { %s; for (var i = 0; i < 22; i++) { %s } return %s } f().length`, init, step, out)
@@ -85,6 +87,7 @@ func TestMemoryLimitDoubling(t *testing.T) {
 // sort returns, a string returned unchanged -- nor what it lets go of: a
 // script using about half its limit, over and over, runs to its end.
 func TestMemoryLimitResultsCountedOnce(t *testing.T) {
+	t.Parallel()
 	// About 6 MB held, and at most about 3 MB more made at once.
 	const src = `
 		let a = new Array(2e5).fill(1), s = "x".repeat(3e6), n = 0;
@@ -112,6 +115,7 @@ func TestMemoryLimitResultsCountedOnce(t *testing.T) {
 // and a script that allocates far more than its limit over its life, a
 // little at a time, runs to its end.
 func TestMemoryLimitCountsWhatIsHeld(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithMemoryLimit(16 << 20))
 	defer rt.Close()
 	v, err := rt.Eval(`
@@ -138,6 +142,7 @@ func TestMemoryLimitCountsWhatIsHeld(t *testing.T) {
 
 // TestNoMemoryLimit pins that a runtime without a limit is not measured.
 func TestNoMemoryLimit(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if v, err := rt.Eval(`new ArrayBuffer(64 << 20).byteLength`); err != nil || v.Int() != 64<<20 {

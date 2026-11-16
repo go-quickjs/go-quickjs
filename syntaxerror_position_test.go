@@ -15,6 +15,7 @@ import (
 // sees it too. The parser's positions ignored WithOffset, so a host's module
 // wrapper put every error a line down, and no SyntaxError named its file.
 func TestSyntaxErrorPosition(t *testing.T) {
+	t.Parallel()
 	position := func(err error) (string, int, int, string) {
 		t.Helper()
 		var se *quickjs.SyntaxError

@@ -3,6 +3,7 @@ package quickjs_test
 import "testing"
 
 func TestImmutableArrayBuffer(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// transferToImmutable detaches the source and copies to the new length.
 		{`var a = new Uint8Array([1, 2, 3]).buffer; var b = a.transferToImmutable(4);
@@ -64,6 +65,7 @@ func TestImmutableArrayBuffer(t *testing.T) {
 // TestTypedArrayFromArrayLikeOrder pins that an array-like source's elements
 // are read only after the result is constructed, one at a time.
 func TestTypedArrayFromArrayLikeOrder(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var log = []; var src = { get length() { log.push("length"); return 2 },
 		    get 0() { log.push("0"); return 1 }, get 1() { log.push("1"); return 2 } };

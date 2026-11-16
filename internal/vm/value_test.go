@@ -7,6 +7,7 @@ import (
 )
 
 func TestValueKinds(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		v    Value
 		want Kind
@@ -39,6 +40,7 @@ func TestValueKinds(t *testing.T) {
 // tag space, so if Float failed to normalize it, a number would be
 // misidentified as some other kind.
 func TestNaNNeverCollidesWithATag(t *testing.T) {
+	t.Parallel()
 	candidates := []float64{
 		math.NaN(),
 		-math.NaN(),
@@ -65,6 +67,7 @@ func TestNaNNeverCollidesWithATag(t *testing.T) {
 }
 
 func TestEveryNonNumberTagIsDistinct(t *testing.T) {
+	t.Parallel()
 	// Each tagged kind must decode to itself, or values of different types
 	// would be confused for one another.
 	seen := map[Kind]bool{}
@@ -82,6 +85,7 @@ func TestEveryNonNumberTagIsDistinct(t *testing.T) {
 }
 
 func TestValueSizeIsAPayloadAndAPointer(t *testing.T) {
+	t.Parallel()
 	// The representation is chosen for size; if it grows, the operand stack and
 	// every property slot grow with it.
 	const want = 8 + unsafe.Sizeof(uintptr(0))
@@ -91,6 +95,7 @@ func TestValueSizeIsAPayloadAndAPointer(t *testing.T) {
 }
 
 func TestBoolPayload(t *testing.T) {
+	t.Parallel()
 	if !True.BoolValue() {
 		t.Error("True.BoolValue() = false")
 	}
@@ -103,6 +108,7 @@ func TestBoolPayload(t *testing.T) {
 }
 
 func TestTruthy(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		v    Value
 		want bool
@@ -129,6 +135,7 @@ func TestTruthy(t *testing.T) {
 }
 
 func TestTypeOf(t *testing.T) {
+	t.Parallel()
 	fn := newObject(nil, ClassFunction)
 	fn.setData(&funcData{})
 
@@ -154,6 +161,7 @@ func TestTypeOf(t *testing.T) {
 }
 
 func TestStrictEquals(t *testing.T) {
+	t.Parallel()
 	o := newObject(nil, ClassObject)
 	s := NewSymbol("s", true)
 
@@ -192,6 +200,7 @@ func TestStrictEquals(t *testing.T) {
 }
 
 func TestSameValueAndSameValueZero(t *testing.T) {
+	t.Parallel()
 	nan, zero, negZero := Float(math.NaN()), Float(0), Float(math.Copysign(0, -1))
 
 	// SameValueZero: NaN equals itself, +0 equals -0.

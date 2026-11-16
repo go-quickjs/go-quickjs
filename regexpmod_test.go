@@ -11,6 +11,7 @@ import (
 // one place without being so everywhere, which otherwise takes two patterns or
 // a hand-expanded character class.
 func TestRegExpModifiers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// i applies only inside the group.
 		{`String(/(?i:a)b/.test("Ab"))`, "true"},
@@ -62,6 +63,7 @@ func TestRegExpModifiers(t *testing.T) {
 }
 
 func TestRegExpModifierErrors(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		// A flag may appear once across both halves.
 		`new RegExp("(?ii:a)")`,
@@ -90,6 +92,7 @@ func TestRegExpModifierErrors(t *testing.T) {
 // A property escape may name its property and value in any spelling Unicode
 // publishes, so all of these describe the same class.
 func TestRegExpPropertyEscapes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(/\p{Script=Latin}/u.test("a"))`, "true"},
 		{`String(/\p{Script=Latn}/u.test("a"))`, "true"},
@@ -142,6 +145,7 @@ func TestRegExpPropertyEscapes(t *testing.T) {
 // method, which is what lets a RegExp subclass -- or any object at all -- define
 // how it matches.
 func TestRegExpSymbolMethods(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`typeof RegExp.prototype[Symbol.match]`, "function"},
 		{`typeof RegExp.prototype[Symbol.matchAll]`, "function"},
@@ -201,6 +205,7 @@ func TestRegExpSymbolMethods(t *testing.T) {
 // [\p{Letter}--[aeiou]] says what it means instead of enumerating the
 // difference by hand.
 func TestRegExpClassSets(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(/[[a-z][0-9]]/v.test("5"))`, "true"},
 		{`String(/[[a-z][0-9]]/v.test("!"))`, "false"},
@@ -272,6 +277,7 @@ func TestRegExpClassSets(t *testing.T) {
 // escape is needed, and \0 is the null character rather than the start of an
 // octal escape.
 func TestUnicodeEscapesAreRestricted(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A syntax character may be escaped; anything else may not.
 		{`/\$/u.test("$")`, "true"},
@@ -306,6 +312,7 @@ func TestUnicodeEscapesAreRestricted(t *testing.T) {
 // a required iteration has no empty check: `x+` where x matches nothing still
 // matches, once.
 func TestRequiredRepetitionMayMatchNothing(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(/(a*)b\1+/.exec("baaaac"))`, "b,"},
 		{`String(/(a*)b\1+/.exec("baaaac").index)`, "0"},
@@ -323,6 +330,7 @@ func TestRequiredRepetitionMayMatchNothing(t *testing.T) {
 // `\k` names a group only in a pattern that has one, or under the u flag.
 // Elsewhere it is the letter k, and what follows it is whatever it looks like.
 func TestNamedBackreferenceNeedsAName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String("x".split(/\k<x>/))`, "x"},
 		{`String(/\k<x>/.test("k<x>"))`, "true"},
@@ -345,6 +353,7 @@ func TestNamedBackreferenceNeedsAName(t *testing.T) {
 // it, each an atom of its own -- so a quantifier after one repeats only the
 // second half.
 func TestAstralLiteralsInPatterns(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(/𠮷/.test("𠮷"))`, "true"},
 		{`String(/𠮷/u.test("𠮷"))`, "true"},
@@ -377,6 +386,7 @@ func TestAstralLiteralsInPatterns(t *testing.T) {
 // foldings; without it the comparison is built on the simple uppercase mapping
 // and deliberately keeps a character outside ASCII apart from one inside it.
 func TestIgnoreCaseComparisons(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The Kelvin sign and the long s fold to k and s, but only with u.
 		{`[/\u212a/i.test("k"), /\u212a/i.test("K"), /\u212a/u.test("k"),
@@ -417,6 +427,7 @@ func TestIgnoreCaseComparisons(t *testing.T) {
 // Symbol.search puts lastIndex back when it is done, and leaves it alone when
 // the match threw: the search never finished, so there was nothing to restore.
 func TestSearchRestoresLastIndex(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var re = /b/g; re.lastIndex = 86; var i = "abc".search(re)
 		  i + "," + re.lastIndex`, "1,86"},

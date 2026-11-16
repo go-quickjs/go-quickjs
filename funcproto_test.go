@@ -10,6 +10,7 @@ import "testing"
 // property, writable but neither enumerable nor configurable, holding an object
 // that points back at the function.
 func TestFunctionPrototypeIsOrdinary(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f() {}; typeof f.prototype`, "object"},
 		{`function f() {}; f.prototype.constructor === f`, "true"},
@@ -59,6 +60,7 @@ func TestFunctionPrototypeIsOrdinary(t *testing.T) {
 // an ownKeys walk reports: after length and name, and before anything a script
 // added to the function since.
 func TestFunctionPrototypeOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f() {}; Object.getOwnPropertyNames(f).join()`, "length,name,prototype"},
 		{`function f() {}; f.prototype; Object.getOwnPropertyNames(f).join()`,
@@ -95,6 +97,7 @@ func TestFunctionPrototypeOrder(t *testing.T) {
 // TestFunctionPrototypeWrites covers the operations that change the property
 // rather than read it, each of which has to find it already there.
 func TestFunctionPrototypeWrites(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Assignment overwrites the property rather than creating a fresh,
 		// enumerable one beside it.
@@ -156,6 +159,7 @@ func TestFunctionPrototypeWrites(t *testing.T) {
 // to `this`, which the compiler counts. The count is a hint: what the object
 // ends up with, and in what order, may not depend on it.
 func TestConstructedObjectShape(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class P { constructor(x, y) { this.x = x; this.y = y } }
 		  Object.keys(new P(1, 2)).join()`, "x,y"},
@@ -219,6 +223,7 @@ func TestConstructedObjectShape(t *testing.T) {
 // constructed, a stack through one, and call, apply and Reflect.apply of
 // one. The answers are Node's.
 func TestBoundCallsFromLoop(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [];
 		function f(a, b, c) { return [this === undefined ? "u" : this.n, a, b, c, arguments.length].join() }
 		var o = { n: "o" };

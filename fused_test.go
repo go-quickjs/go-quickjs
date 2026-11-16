@@ -23,6 +23,7 @@ var fusedInstruction = regexp.MustCompile(`\(([^()]+\.go):(\d+)\)\s+(FN?M(?:ADD|
 // instruction a line does not ask for by calling math.FMA, so that a machine
 // that never fuses still catches one.
 func TestNoFusedArithmetic(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("compiles the module for arm64")
 	}

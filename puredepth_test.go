@@ -10,6 +10,7 @@ import "testing"
 // with frames once, and runaway recursion, which still ends in a
 // RangeError. Each runs often enough for the evaluator to be tried.
 func TestPureRecursionDepth(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function depth(n) { return n == 0 ? 0 : 1 + depth(n - 1) }
 		  function factorial(n) { return n <= 1 ? 1 : n * factorial(n - 1) }

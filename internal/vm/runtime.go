@@ -299,8 +299,13 @@ type Runtime struct {
 	// arguments out of its frame's window, for a callee that reads them
 	// only as it starts (tailArgsOf).
 	tailArgs []Value
-	// The room of the realm's randomFn, which was the runtime's.
-	_ uintptr
+	// noTree keeps the tree tier off for the code this runtime loads, as
+	// SetTreeTier(false) does for the process: each function it prepares is
+	// given no tree unless one has run it already (noTreeFor). Tests set it,
+	// to compare the tiers in runtimes side by side. It and its padding take
+	// the word the realm's randomFn had, which was the runtime's.
+	noTree bool
+	_      [7]byte
 	// bigFree is the BigInts the tree tier has given back, for bigInPlace
 	// to make results in (bigRelease); nil until one is.
 	bigFree *bigFreeList

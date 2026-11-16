@@ -48,6 +48,7 @@ func TestIntlNumericStringExtremes(t *testing.T) {
 // full, as ToIntlMathematicalValue takes one and V8 writes it -- it was ∞ --
 // while a numeric string that large is still ∞, as ECMA-402 has it (KI-53).
 func TestIntlHugeBigInt(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	got := evalString(t, rt, `const nf = new Intl.NumberFormat("en");

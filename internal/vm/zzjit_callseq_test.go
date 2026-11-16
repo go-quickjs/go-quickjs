@@ -144,6 +144,7 @@ func TestJITCallsUnderCollector(t *testing.T) {
 // leave native code, which, every back edge an exit, g does at each call,
 // and the caller goes on natively after it: b is saved instead.
 func TestJITCallsReadBackFromFrame(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -201,6 +202,7 @@ func TestJITCallsReadBackFromFrame(t *testing.T) {
 // until the OS ended it (darwin/arm64). Each callee throws at the last
 // iteration, which Go unwinds through the caller's frame it makes.
 func TestJITCallStateFindsBoxesSaved(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

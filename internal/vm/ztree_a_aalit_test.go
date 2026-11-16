@@ -14,6 +14,7 @@ import (
 // undefined and === is neither. Each function has a local of its own, so
 // that it is run on its tree rather than by pureCall.
 func TestEqualityWithLiterals(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const vals = [null, undefined, true, false, 0, -0, 1, NaN, '', 'null', 0n, {}, [], dda]
 		const o = { p: null }
@@ -55,8 +56,7 @@ func TestEqualityWithLiterals(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
@@ -69,7 +69,6 @@ func TestEqualityWithLiterals(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A strict equality branch with a string constant, either way round
@@ -79,6 +78,7 @@ func TestEqualityWithLiterals(t *testing.T) {
 // is no string, a number that reads as it, null, undefined, a symbol and
 // another string; of a local, of a property read and of a switch's cases.
 func TestEqualityWithStrings(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const o = { d: 'forward' }
 		const part = 'for'
@@ -110,8 +110,7 @@ func TestEqualityWithStrings(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -121,7 +120,6 @@ func TestEqualityWithStrings(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // An equality branch of a property of a local or of this, read in place,
@@ -131,6 +129,7 @@ func TestEqualityWithStrings(t *testing.T) {
 // null's, which throws a TypeError. Each function has a local of its own,
 // so that it is run on its tree rather than by pureCall.
 func TestEqualityWithProps(t *testing.T) {
+	t.Parallel()
 	const src = `
 		class N { constructor(p) { this.p = p }
 		  t() { let _k = 0; if (this.p === null) return 'a'; if (this.p === undefined) return 'b'; if (this.p == null) return 'c'; if (this.p === 'go') return 'd'; return 'e' } }
@@ -151,8 +150,7 @@ func TestEqualityWithProps(t *testing.T) {
 		out`
 	const want = "a,b,d,d,e,e,c,fm,im,gm,im,fm,gm,gm,hk,TypeError | true"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
@@ -165,5 +163,4 @@ func TestEqualityWithProps(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }

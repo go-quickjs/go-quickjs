@@ -10,6 +10,7 @@ import "testing"
 // (-0).toExponential() has no sign (KI-42). The hash is of the 22415 answers
 // node 26 gives to the same seeded strings.
 func TestNumberParsingMatchesV8(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `[(-0).toExponential(), parseInt("0x"), parseInt("-0x"), parseInt("0x", 16),
 		Number("0x1000000000000081"), Number("0x10000000000000800001"),
 		Number("0b1" + "0".repeat(52) + "11"), parseInt("123456789012345678901234567890")].join()`,

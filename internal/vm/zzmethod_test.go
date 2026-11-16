@@ -23,6 +23,7 @@ import "testing"
 //     callee called after its own expression and before its arguments, a
 //     construction, and methods of a property and of an element.
 func TestTreeMethodCalls(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		class P {

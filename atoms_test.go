@@ -12,6 +12,7 @@ import (
 // made after the first shares with it, names of its own, symbols, indices
 // and names that look like them. Each must give what one runtime alone does.
 func TestAtomsSharedAcrossRuntimes(t *testing.T) {
+	t.Parallel()
 	const source = `
 		var o = { length: 1, prototype: 2, zzOwnName: 3, 4: "four", "04": "lead", 4294967295: "big" };
 		var s = Symbol("mine"), t = Symbol.for("shared"); o[s] = "sym"; o[t] = "for"; o[Symbol.iterator] = "it";

@@ -219,6 +219,7 @@ func strCutChain(t *testing.T, r *Runtime, s *String, step func(*String) int) (c
 // of the root's size falls. On each start that rounding can make a difference
 // for: a power of two, one less, one more.
 func TestStringCutBound(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	for _, n := range []int{2, 3, 4, 5, 7, 8, 9, 100, 1023, 1024, 1025, 4095, 4096, 4097, 65536, 65537, 1<<20 - 1, 1 << 20, 1<<20 + 1} {
@@ -244,6 +245,7 @@ func TestStringCutBound(t *testing.T) {
 // s = s.slice(1) in a script: the same, end to end, on the string's last
 // character, in linear time. Quadratic, it would not end in a test's life.
 func TestStringCutLoopStaysLinear(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 256 << 20})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -283,6 +285,7 @@ func TestStringCutsOfKI77(t *testing.T) {
 // A Program run again keeps to the rule, on strings of its constants too: its
 // constants are the Program's, and a runtime never writes to them.
 func TestStringCutsOfAProgramRunAgain(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 16 << 20})
 	defer r.Close()
 	big := strings.Repeat("x", 1<<20)
@@ -309,6 +312,7 @@ func TestStringCutsOfAProgramRunAgain(t *testing.T) {
 // no limit, where the cut may have gone, and the count a string of strAppend's
 // has left is no size in one with a limit.
 func TestStringCutMarkIsNoAppendCount(t *testing.T) {
+	t.Parallel()
 	metered, plain := New(Config{MemoryLimit: 1 << 30}), New(Config{})
 	defer metered.Close()
 	defer plain.Close()
@@ -345,6 +349,7 @@ func TestStringCutMarkIsNoAppendCount(t *testing.T) {
 // A cut in a runtime with a limit leaves the room it was cut into and leaves it
 // empty, and in a runtime with none it stays.
 func TestStringCutLeavesItsRoom(t *testing.T) {
+	t.Parallel()
 	metered, plain := New(Config{MemoryLimit: 1 << 30}), New(Config{})
 	defer metered.Close()
 	defer plain.Close()
@@ -364,6 +369,7 @@ func TestStringCutLeavesItsRoom(t *testing.T) {
 // The field stays where it was: native code reads a String's others at fixed
 // offsets, and the struct's size is its size class's.
 func TestStringCutMarkHasNoFieldOfItsOwn(t *testing.T) {
+	t.Parallel()
 	if is64Bit != 1 {
 		return
 	}
@@ -378,6 +384,7 @@ func TestStringCutMarkHasNoFieldOfItsOwn(t *testing.T) {
 // What the walk last saw is not kept alive by the meter, which would hold it
 // past the script's letting go, at no count.
 func TestMemoryWalkKeepsNothing(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `var keep = [{a: new Map([[1, "x".repeat(99)]])}]`)); err != nil {

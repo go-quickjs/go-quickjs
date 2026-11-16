@@ -83,6 +83,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 // the leaf's call errs with nothing made, the code leaves the call to Go,
 // which makes it with a frame and throws the interpreter's SyntaxError.
 func TestJITRegExpLeafMatcher(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

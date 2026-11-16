@@ -9,6 +9,7 @@ import (
 )
 
 func TestCompileManyLocals(t *testing.T) {
+	t.Parallel()
 	var padding strings.Builder
 	for i := 0; i < 128; i++ {
 		fmt.Fprintf(&padding, "var padding%d = %d;", i, i)

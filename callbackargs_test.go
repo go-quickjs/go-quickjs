@@ -7,6 +7,7 @@ import "testing"
 // the same rule the interpreter's own stack relies on. These pin it: every
 // callback has to see the arguments of its own call, whatever it does with them.
 func TestCallbackArgumentsAreNotShared(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// An arguments object outlives the call that made it.
 		{`var kept = []
@@ -89,6 +90,7 @@ func TestCallbackArgumentsAreNotShared(t *testing.T) {
 // The same for the callbacks that are not per element of an array: a
 // replacement function is called once per match, and a mapper once per item.
 func TestPerMatchCallbackArguments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// String.prototype.replace with a function, which is called per match.
 		{`var kept = []

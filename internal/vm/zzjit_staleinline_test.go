@@ -44,6 +44,7 @@ const staleInlineSetup = `
 // entered the run's function again, and that entry compiled it again
 // (jitRecompileLearned).
 func TestJITInlinedByCodeReplaced(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

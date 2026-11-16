@@ -11,6 +11,7 @@ import (
 // comparison that throws must still throw.
 
 func TestFusedComparisonBranches(t *testing.T) {
+	t.Parallel()
 	// Each case is evaluated in an if, a while, a for and a conditional, since
 	// those are the four places a condition is compiled into its branch.
 	cases := []struct{ cond, want string }{
@@ -89,6 +90,7 @@ func TestFusedComparisonBranches(t *testing.T) {
 // A comparison runs its operands' coercions in order, and reports what they
 // throw, whether or not the branch that tests it is fused into it.
 func TestFusedComparisonSideEffects(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = []
 		  var a = {valueOf() { log.push("a"); return 1 }}

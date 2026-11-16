@@ -9,6 +9,7 @@ import "testing"
 // front of the one that had it, and one is deleted -- in the interpreter
 // and the trees alike.
 func TestSharedCacheMegamorphic(t *testing.T) {
+	t.Parallel()
 	src := `
 		function Base() {} Base.prototype.kind = function () { return "base"; };
 		var classes = [];
@@ -35,11 +36,9 @@ func TestSharedCacheMegamorphic(t *testing.T) {
 		var h = 0;
 		for (var j = 0; j < out.length; j++) for (var k = 0; k < out[j].length; k++) h = (h * 31 + out[j].charCodeAt(k)) | 0;
 		[out[0].slice(0, 40), out[1].slice(0, 40), out[2].slice(0, 60), out[3].slice(0, 80), h].join("|")`
-	defer SetTreeTier(true)
 	var answers []string
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {

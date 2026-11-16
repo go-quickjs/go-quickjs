@@ -14,6 +14,7 @@ import (
 // another constructor, or the constructor given a Symbol.hasInstance of
 // its own, or another prototype.
 func TestJITInstanceOfCaptured(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

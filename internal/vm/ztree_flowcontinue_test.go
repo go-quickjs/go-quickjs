@@ -11,7 +11,7 @@ import "testing"
 // for loop's continue goes to its update, not to its head, and had none of
 // this. Each answer is Node's.
 func TestLoopContinueBeforeALaterTest(t *testing.T) {
-	t.Cleanup(func() { SetTreeTier(true) })
+	t.Parallel()
 	const src = `
 const out = []
 function forIn(o) {
@@ -102,8 +102,7 @@ out.join()
 	const one = "done,done,rc,rc,done,done,done,rc,rc,done,done,done,r0,done,done,r1,done,done,r0,done,done,rd,undefined,rc,23e23e,bcebce,23e23e,23e23e,abceabce"
 	want := one + "," + one + "," + one
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)

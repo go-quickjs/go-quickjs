@@ -10,6 +10,7 @@ import "testing"
 // been sorted in the square of their number (zzz_sortindexed.go), seconds
 // for these.
 func TestSortIndexedKeys(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

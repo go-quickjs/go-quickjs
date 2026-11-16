@@ -32,6 +32,7 @@ var o1 = mk()
 // where nothing changes, then given what changes its object's shape at
 // once; each answer is Node's (v26.10.0) and the interpreter's.
 func TestJITShapesKnown(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

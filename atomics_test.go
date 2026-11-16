@@ -9,6 +9,7 @@ import (
 )
 
 func TestSharedArrayBuffer(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var b = new SharedArrayBuffer(4); [b.byteLength, b.growable, b.maxByteLength,
 		   Object.prototype.toString.call(b), b.slice(1).byteLength, b.slice(1) instanceof SharedArrayBuffer].join()`,
@@ -37,6 +38,7 @@ func TestSharedArrayBuffer(t *testing.T) {
 }
 
 func TestAtomics(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var ta = new Int32Array(new SharedArrayBuffer(8));
 		  [Atomics.store(ta, 0, 5), Atomics.add(ta, 0, 2), Atomics.sub(ta, 0, 1), Atomics.and(ta, 0, 3),

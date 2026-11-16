@@ -61,6 +61,7 @@ const substringSetup = `
 // and inRange's calls make no call of Go: Json's read had made 2.3
 // million a run.
 func TestJITSubstringChars(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -126,6 +127,7 @@ const onceSetup = `
 // of its function, and is Go's once the call is generic: mimic's answer is
 // the interpreter's, with a few exits, not one at each call.
 func TestJITSubstringOnce(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -176,6 +178,7 @@ const longerSetup = `
 // with one, slower than the tree tier's call of the leaf. A receiver the
 // leaf refuses, a number, leaves for Go. Each answer is the interpreter's.
 func TestJITSubstringLonger(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

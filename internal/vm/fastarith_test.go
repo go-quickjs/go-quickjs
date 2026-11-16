@@ -8,7 +8,7 @@ import "testing"
 // Values on every operator, a result past the int64 range, a division by
 // zero, a negative power, and a BigInt mixed with a number.
 func TestFastAddAndShortBigInts(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	const src = `function f(a, b) { var r = []; r.push(a + b, a - b, a * b);
 	try { r.push(a / b) } catch (e) { r.push(e.name) }
 	try { r.push(a % b) } catch (e) { r.push(e.name) }
@@ -23,9 +23,8 @@ function g(a, b) { return a + b }
 		"-9223372036854775809,-9223372036854775807,9223372036854775808,9223372036854775808,0,RangeError;" +
 		"abcd;;x1;1x;nnull;TypeError"
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
 		fn := compileForTest(t, src)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		v, err := r.Run(fn)
 		if err != nil {
 			r.Close()

@@ -50,6 +50,8 @@ func TestLayoutLock(t *testing.T) {
 			t.Skip("no go command")
 		}
 	}
+	// The builds run beside the package's other parallel tests.
+	t.Parallel()
 	// The tool's own builds run the go command the test does.
 	env := append(os.Environ(), "PATH="+filepath.Dir(gotool)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	tool := filepath.Join(t.TempDir(), "layoutpad.exe")

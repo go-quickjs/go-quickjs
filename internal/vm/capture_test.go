@@ -7,7 +7,7 @@ import "testing"
 // other closure over it, and a binding made afresh -- a loop's let -- is a
 // new one, on both tiers.
 func TestCaptureRoom(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 	}{
@@ -19,8 +19,7 @@ func TestCaptureRoom(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(compileForTest(t, tt.src))
 				if err != nil {
 					r.Close()
@@ -41,10 +40,8 @@ func TestCaptureRoom(t *testing.T) {
 // three bindings.
 func TestCaptureRoomAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	defer SetTreeTier(true)
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		v, err := r.Run(compileForTest(t, `function f(a, b, c) { return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
 		if err != nil {
 			t.Fatal(err)
@@ -65,7 +62,7 @@ func TestCaptureRoomAllocs(t *testing.T) {
 // in its own allocation: what it holds and how it grows past them, mapped
 // and not, on both tiers.
 func TestArgumentsRoom(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 	}{
@@ -82,8 +79,7 @@ func TestArgumentsRoom(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(compileForTest(t, tt.src))
 				if err != nil {
 					r.Close()
@@ -105,7 +101,6 @@ func TestArgumentsRoom(t *testing.T) {
 // of the parameters' names.
 func TestArgumentsRoomAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	defer SetTreeTier(true)
 	for _, tt := range []struct {
 		src  string
 		want float64
@@ -114,8 +109,7 @@ func TestArgumentsRoomAllocs(t *testing.T) {
 		{`function f(a, b, c) { return arguments }`, 4},
 	} {
 		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			r := New(Config{})
+			r := newTreeTierForTest(on, Config{})
 			v, err := r.Run(compileForTest(t, tt.src+`; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
 			if err != nil {
 				t.Fatal(err)
@@ -138,6 +132,7 @@ func TestArgumentsRoomAllocs(t *testing.T) {
 // arguments object and copies the rest from its layout: the layout is the
 // runtime's, shared by its realms, and the function is the realm's.
 func TestArgumentsCalleePerRealm(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	src := `(function () { "use strict"; return Object.getOwnPropertyDescriptor(arguments, "callee").get })()`

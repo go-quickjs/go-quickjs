@@ -5,6 +5,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // strAppendTestSrc appends to captured bindings every way that could show a
@@ -700,9 +703,9 @@ const strAppendTestWant = "76:-1591915514,103:239840560,130:-1972117050,157:1162
 
 // Appends answer as Node does, in the tree tier as in the interpreter.
 func TestStrAppend(t *testing.T) {
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, strAppendTestSrc))
 		r.Close()
 		if err != nil {
@@ -712,7 +715,6 @@ func TestStrAppend(t *testing.T) {
 			t.Errorf("tree tier %v:\n%s", tree, firstDifference(got, strAppendTestWant))
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A declaration captures the binding just as a function expression does.
@@ -731,10 +733,9 @@ result
 `
 
 func TestStrAppendDeclaration(t *testing.T) {
-	t.Cleanup(func() { SetTreeTier(true) })
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, strAppendDeclarationSrc))
 		r.Close()
 		if err != nil {
@@ -784,6 +785,53 @@ func TestStrAppendAllocations(t *testing.T) {
 	}
 }
 
+// Register code's appends to an upvalue grow the string as the tree's do
+// (the add marked bytecode.RAddAppend): a run of them makes one string
+// and its right side, not a node each, natively and by the Go table, and
+// the reads between them see what they read.
+func TestRegStrAppendUpvalue(t *testing.T) {
+	compiler.SetRegisterForm(true)
+	SetRegTier(true)
+	t.Cleanup(func() { compiler.SetRegisterForm(bytecode.RegDefault()); SetRegTier(bytecode.RegDefault()) })
+	for _, native := range []bool{false, true} {
+		was := SetRegNative(native)
+		r := New(Config{})
+		if _, err := r.Run(compileForTest(t, `
+			function appends(n) {
+				var s = ""
+				var sink = { push(x) { s += x } }
+				for (var i = 0; i < n; i++) sink.push("<x>")
+				return s.length
+			}
+			function reads(n) {
+				var s = "", kept = []
+				var sink = { push(x) { s += x }, get() { return s } }
+				for (var i = 0; i < n; i++) { sink.push(i); if (i % 3 == 0) kept.push(sink.get()) }
+				return kept.join("|") + "/" + s
+			}
+			appends(100)`)); err != nil {
+			t.Fatal(err)
+		}
+		var a, b runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&a)
+		v, err := r.Run(compileForTest(t, `appends(10000)`))
+		runtime.ReadMemStats(&b)
+		if err != nil || v.Number() != 30000 {
+			t.Fatalf("native %v: = %v, %v", native, v, err)
+		}
+		if n := b.Mallocs - a.Mallocs; n > 1000 && allocsOrdinary() {
+			t.Errorf("native %v: 10,000 appends made %d allocations", native, n)
+		}
+		v, err = r.Run(compileForTest(t, `reads(10)`))
+		if want := "0|0123|0123456|0123456789/0123456789"; err != nil || v.String().Go() != want {
+			t.Errorf("native %v: reads = %v, %v, want %s", native, v, err, want)
+		}
+		r.Close()
+		SetRegNative(was)
+	}
+}
+
 func TestStrAppendTailGrowth(t *testing.T) {
 	for _, chunk := range []string{"x", strings.Repeat("\u00e9", 100), strings.Repeat("z", strTailLongest)} {
 		r := New(Config{})
@@ -826,6 +874,7 @@ func TestStrAppendTailGrowth(t *testing.T) {
 // saves, with room for four times it, and a rope need not be written out for
 // an append. The short ones after it go on to a tail, of their own bytes.
 func TestStrAppendLongRightSide(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	long := NewString(strings.Repeat("z", strTailLongest+1))
@@ -879,6 +928,7 @@ func TestStrAppendLongRightSide(t *testing.T) {
 // A marked string's fields say what an append has made of it, and a read's
 // str_freeze ends it. The string is an ordinary one all the while.
 func TestStrAppendStates(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	long := NewString(strings.Repeat("x", 100))
@@ -938,6 +988,7 @@ func TestStrAppendStates(t *testing.T) {
 // A rope's flags are its sides', each from the right side, and a tail's are
 // kept as it grows, on the string and on the tail alike.
 func TestStrAppendFlags(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	long := strings.Repeat("x", 100)
@@ -983,6 +1034,7 @@ func TestStrAppendFlags(t *testing.T) {
 // A meter counts what a concatenation takes, so a metered runtime's strings
 // are made as ever.
 func TestStrAppendMetered(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	long := NewString(strings.Repeat("x", 100))

@@ -10,6 +10,7 @@ import (
 // says "undefined", it is falsy, and it is == to null and undefined -- and
 // nothing else treats it as anything but an object.
 func TestNewHTMLDDA(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -77,6 +78,7 @@ func TestNewHTMLDDA(t *testing.T) {
 }
 
 func TestValueIsString(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.Eval(`["", "a", 1, null, new String("s"), Symbol()]`)

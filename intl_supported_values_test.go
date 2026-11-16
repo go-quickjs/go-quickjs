@@ -3,6 +3,7 @@ package quickjs_test
 import "testing"
 
 func TestIntlSupportedValuesOf(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Intl.supportedValuesOf("calendar").join(",")`,
 			"buddhist,chinese,coptic,dangi,ethioaa,ethiopic,gregory,hebrew,indian," +

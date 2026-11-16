@@ -10,6 +10,7 @@ import (
 // A Serialized is deserialized once, since deserializing moves its buffers'
 // bytes, and a Copy is another, deserialized on its own.
 func TestSerializedOnceAndCopy(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.Eval(`({bytes: new Uint8Array([1, 2, 3])})`)
@@ -51,6 +52,7 @@ func TestSerializedOnceAndCopy(t *testing.T) {
 // unsupported not at all, transfer-only only when transferred, and a host
 // object through the codec, which revives it on the other side.
 func TestCloneBrands(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	branded := func(b quickjs.CloneBrand) quickjs.Value {
@@ -112,6 +114,7 @@ func TestCloneBrands(t *testing.T) {
 // A value is serialized only in its own runtime, and a closed runtime
 // serializes nothing.
 func TestSerializeRefuses(t *testing.T) {
+	t.Parallel()
 	a, b := quickjs.New(), quickjs.New()
 	defer a.Close()
 	v, _ := b.Eval(`({x: 1})`)

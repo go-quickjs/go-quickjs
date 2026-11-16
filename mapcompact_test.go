@@ -8,6 +8,7 @@ import "testing"
 // once or several times, and whether it is an iterator, forEach, or a Set
 // method that calls back into the script.
 func TestMapCompaction(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"iterator", `var m = new Map(); for (var i = 0; i < 100; i++) m.set(i, i)
 		  var it = m.keys(), seen = []

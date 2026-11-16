@@ -21,6 +21,7 @@ import (
 // by constants, and where the doubles' result is not exact -- a product
 // or a sum past 2**53, which stays the doubles' -- or not an integer.
 func TestJITTruncatedIntArithmetic(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -181,6 +182,7 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 // back edges at 3, so that its loops leave at their headers' polls, each
 // writing the frame's numbers of its int32 phis.
 func TestJITInt32Phis(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

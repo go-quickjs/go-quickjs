@@ -189,6 +189,7 @@ func TestJITBooleansAsNumbers(t *testing.T) {
 // run natively: the operator's operands, booleans, are taken as numbers
 // in its code, not by Go at an exit (TestJITBooleansAsNumbers' answers).
 func TestJITBooleansAsNumbersNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -278,6 +279,7 @@ func TestJITTypedReferenceReads(t *testing.T) {
 
 // The reads run natively once learned: Go reads none of a typed array's.
 func TestJITTypedReferenceReadsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -385,6 +387,7 @@ func TestJITTypedGlobals(t *testing.T) {
 // instead, it had been compiled again once for each branch, as Mandreel's
 // sorts were, a dozen times each -- 40% of its time.
 func TestJITTypedGlobalsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

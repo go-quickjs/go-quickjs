@@ -8,6 +8,7 @@ import (
 )
 
 func TestDisposableStack(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// Resources are disposed of last-first, and use hands back its value.
 		{`var log = []; var s = new DisposableStack();
@@ -38,6 +39,7 @@ func TestDisposableStack(t *testing.T) {
 }
 
 func TestAsyncDisposableStack(t *testing.T) {
+	t.Parallel()
 	// An async disposer is awaited before the next one runs, and a sync one
 	// on an async stack is wrapped to return a promise.
 	checkAsync(t, `var log = []; var r = ""; var s = new AsyncDisposableStack();
@@ -57,6 +59,7 @@ func TestAsyncDisposableStack(t *testing.T) {
 }
 
 func TestUsingDeclarations(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// Disposed of last-first when the block is left, however it is left.
 		{`var log = []; var res = n => ({[Symbol.dispose]() { log.push(n) }});
@@ -98,6 +101,7 @@ func TestUsingDeclarations(t *testing.T) {
 }
 
 func TestAwaitUsingDeclarations(t *testing.T) {
+	t.Parallel()
 	// An async disposer is awaited, and a scope that never reached its
 	// `await using` does not await at all.
 	checkAsync(t, `var r = ""; var log = [];

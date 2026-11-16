@@ -14,6 +14,7 @@ import (
 // counter's bit. A meter sends that call to an exit, which reads the cell, so
 // that this takes a runtime without one.
 func TestJITBoxOperandAtGoCall(t *testing.T) {
+	t.Parallel()
 	const src = `
 const keep = []
 function f() {

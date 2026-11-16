@@ -148,6 +148,7 @@ func TestJITWorkspacesPooled(t *testing.T) {
 // of the pool's no other compile uses meanwhile: their code computes what
 // the interpreter does.
 func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
+	t.Parallel()
 	const src = `
 		function f(n, k) { let s = 0; for (let i = 0; i < n; i++) s = (s + (i * k) % 13) | 0; return s }
 		function g(n, k) { const o = {a: k}; let s = 0; for (let i = 0; i < n; i++) s = (s + o.a * i) % 1000003; return s }
@@ -204,6 +205,7 @@ func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
 // entry and running it could drop it, and its code ran though nothing held
 // what it calls through.
 func TestJITRunsNoDroppedEntry(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `
 		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += i % 7; return s }
@@ -230,6 +232,7 @@ func TestJITRunsNoDroppedEntry(t *testing.T) {
 // and Go reads its frame by the code it left. Before, only Go's own runs of
 // the code counted.
 func TestJITKeepsCodeANativeCallIsIn(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `
 		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += i % 7; return s }

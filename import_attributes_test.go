@@ -11,6 +11,7 @@ import (
 // that a module of a type is a different module from the same source without
 // one, and that the attributes are checked.
 func TestImportAttributes(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{
 		"data.json": `{"a": [1, 2]}`,
 		"note.txt":  "hello",
@@ -61,6 +62,7 @@ func TestImportAttributes(t *testing.T) {
 }
 
 func TestDynamicImportAttributes(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {

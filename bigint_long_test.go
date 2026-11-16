@@ -81,6 +81,7 @@ func TestLongBigIntOperationsAreInterruptible(t *testing.T) {
 // operation of a runtime with a memory limit, and no deadline, runs to its
 // end: the check it makes at intervals finds the limit not reached.
 func TestLongBigIntOperationsUnderAMemoryLimit(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithMemoryLimit(256 << 20))
 	defer rt.Close()
 	v, err := rt.Eval(`const x = (1n << 100000n) / 3n;
@@ -96,6 +97,7 @@ func TestLongBigIntOperationsUnderAMemoryLimit(t *testing.T) {
 // from decimal, hexadecimal, octal and binary literals' strings: Node's
 // digits.
 func TestLongBigIntConversions(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const x = 3n ** 300000n + 12345n;
 const r = [];
 for (const v of [x, -x, x * x, -(x << 1000n)]) {

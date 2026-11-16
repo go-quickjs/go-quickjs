@@ -92,12 +92,11 @@ const matchResultTestWant = "2661856178 3081 1410175481 853667658"
 func TestRegExpMatchResults(t *testing.T) {
 	for _, tree := range []bool{true, false} {
 		for _, idle := range []bool{true, false} {
-			SetTreeTier(tree)
 			gc := debug.SetGCPercent(-1)
 			if !idle {
 				debug.SetGCPercent(1)
 			}
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, matchResultTestSrc))
 			r.Close()
 			debug.SetGCPercent(gc)
@@ -109,5 +108,4 @@ func TestRegExpMatchResults(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }

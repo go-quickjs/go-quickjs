@@ -5,6 +5,7 @@ import "testing"
 // Rounding is what a person would do with a pencil, which is not what the
 // arithmetic would do on its own.
 func TestDecimalRounding(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in    float64
 		place int
@@ -46,6 +47,7 @@ func TestDecimalRounding(t *testing.T) {
 // Rounding to a number of significant digits, which is a different question
 // from rounding to a number of decimal places.
 func TestDecimalSignificant(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in   float64
 		n    int
@@ -67,6 +69,7 @@ func TestDecimalSignificant(t *testing.T) {
 // Rounding to a step that is not ten: a price to the nearest five cents, or a
 // measurement to the nearest quarter.
 func TestDecimalIncrement(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		in        float64
 		place     int

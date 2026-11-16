@@ -280,6 +280,7 @@ var inOperatorCases = []struct{ src, want string }{
 // each case three times, by the interpreter at the top level and by the
 // tree tier in each function's loop, as Node answers it.
 func TestInOperator(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, inOperatorSetup)); err != nil {
@@ -321,6 +322,7 @@ func TestInOperator(t *testing.T) {
 // it to inOperator, so that its answer is remembered in hasCache too, where
 // the two do not share a place.
 func TestInOperatorKeysSharingASlot(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, `var o = { aa: 1 };

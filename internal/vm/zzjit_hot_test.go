@@ -40,6 +40,7 @@ func TestJITHotCalls(t *testing.T) {
 // of calls and no loop -- and AWFY's Towers, run after Sieve, ran its
 // recursion in the tree tier, four times as long as run alone.
 func TestJITHotCallsAnyOrder(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -145,6 +146,7 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 // A call of itself, or of one native callers call or that has no code yet,
 // would be native.
 func TestJITHotCallsOfGoOnly(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

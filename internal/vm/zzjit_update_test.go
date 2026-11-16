@@ -16,6 +16,7 @@ import (
 // failed, was compiled again with the same guard -- Octane's Box2D, whose
 // minified code walks its arrays so, deoptimized ten thousand times.
 func TestJITElementUpdateReadsCells(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

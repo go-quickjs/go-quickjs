@@ -13,6 +13,7 @@ import (
 // changed, a key added past a sibling's -- must reach no other object, and
 // each must go on reading its keys where its values are.
 func TestShapeKeysShared(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -56,6 +57,7 @@ func TestShapeKeysShared(t *testing.T) {
 // layout branching off the chain -- its keys a copy -- an index of its
 // own, which leaves the chain's as it was.
 func TestShapeChainsPastSixtyFour(t *testing.T) {
+	t.Parallel()
 	var src strings.Builder
 	src.WriteString("function C(stop, alt) {\n")
 	for i := 0; i < 215; i++ {

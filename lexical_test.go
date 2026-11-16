@@ -11,6 +11,7 @@ import (
 // arguments all come from where it was written. That is the whole reason to
 // reach for one instead of an ordinary function, so it is pinned here.
 func TestArrowIsLexical(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {m() { return (() => this)() === o; }}; String(o.m())`, "true"},
 		{`var o = {m() { var f = () => this; return f() === o; }}; String(o.m())`, "true"},
@@ -55,6 +56,7 @@ func TestArrowIsLexical(t *testing.T) {
 // TestSuperHomeObject pins where super looks, which is the object a method was
 // defined on rather than anything about the call.
 func TestSuperHomeObject(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A shorthand method in an object literal may use super; the literal's
 		// prototype is what it reaches.
@@ -98,6 +100,7 @@ func TestSuperHomeObject(t *testing.T) {
 // TestGeneratorParametersBindAtCall pins that a generator evaluates its
 // parameters when it is created rather than on the first next().
 func TestGeneratorParametersBindAtCall(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var iter = {};
 		  iter[Symbol.iterator] = function () { throw new TypeError("boom"); };
@@ -137,6 +140,7 @@ func TestGeneratorParametersBindAtCall(t *testing.T) {
 // TestYieldStarForwards pins that delegation passes values in both directions
 // and evaluates to what the delegate returned.
 func TestYieldStarForwards(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* inner() { yield 1; yield 2; return 3; }
 		  function* outer() { var r = yield* inner(); yield r; }
@@ -170,6 +174,7 @@ func TestYieldStarForwards(t *testing.T) {
 // TestTopLevelAwait pins that a module may await at its top level, which is
 // what lets it finish loading something before its importers run.
 func TestTopLevelAwait(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`export var v = await 9;`, "9"},
 		{`var p = Promise.resolve(42); export var v = await p;`, "42"},
@@ -223,6 +228,7 @@ func TestTopLevelAwait(t *testing.T) {
 // Object.prototype.toString names it and a generator's .prototype inherits
 // next, return and throw.
 func TestGeneratorFunctionIntrinsics(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* g() {} Object.prototype.toString.call(g)`, "[object GeneratorFunction]"},
 		{`async function a() {} Object.prototype.toString.call(a)`, "[object AsyncFunction]"},
@@ -271,6 +277,7 @@ func TestGeneratorFunctionIntrinsics(t *testing.T) {
 // Strict mode leaves both exactly as passed, which is the difference that lets
 // it detect a missing receiver at all.
 func TestSloppyThisCoercion(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f() { return this === globalThis; } String(f())`, "true"},
 		{`function f() { this.x = 1; return this.x; } String(f())`, "1"},
@@ -308,6 +315,7 @@ func TestSloppyThisCoercion(t *testing.T) {
 // other error. It was not, which made every test262 case that asserts the
 // throw fail even though the throw itself was right.
 func TestDeadZoneIsCatchable(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A read and a write, at the top level and inside a function.
 		{`var r; try { x } catch (e) { r = e.constructor.name } let x; r`,
@@ -368,6 +376,7 @@ func TestDeadZoneIsCatchable(t *testing.T) {
 // one at a time, in order. Each takes the slot the interpreter fills
 // positionally, and a name that has not been bound yet may not be read.
 func TestParametersBindInOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A parameter after a pattern still gets its own argument. The pattern's
 		// names used to take the slots the parameters after it were filled
@@ -444,6 +453,7 @@ func TestParametersBindInOrder(t *testing.T) {
 // class. They are not properties of the global object, but they outlive the
 // script that declared them: the next script sees them, and so does eval.
 func TestGlobalLexicalEnvironment(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	steps := []struct{ src, want string }{
@@ -476,6 +486,7 @@ func TestGlobalLexicalEnvironment(t *testing.T) {
 // share the global environment, so the collision is only visible at the point
 // the second script runs.
 func TestGlobalLexicalCollisions(t *testing.T) {
+	t.Parallel()
 	bad := [][2]string{
 		{`let a = 1`, `var a = 2`},
 		{`var b = 1`, `let b = 2`},
@@ -536,6 +547,7 @@ func TestGlobalLexicalCollisions(t *testing.T) {
 // TestGlobalLexicalDeadZone covers a script-level lexical binding read before
 // its declaration runs.
 func TestGlobalLexicalDeadZone(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { x } catch (e) { e.constructor.name } finally {} ; let x = 1`, "ReferenceError"},
 		{`function f() { return x } 
@@ -559,6 +571,7 @@ func TestGlobalLexicalDeadZone(t *testing.T) {
 // which is in scope -- and in its dead zone -- while the expression beside it
 // is evaluated.
 func TestForHeadLexicalScope(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { (function () { let x = 1; for (let x of [x]) {} })() }
 		  catch (e) { e.constructor.name }`, "ReferenceError"},
@@ -586,6 +599,7 @@ func TestForHeadLexicalScope(t *testing.T) {
 // no exception: a closure made in the init clause keeps what the init left
 // there rather than following what the loop goes on to do.
 func TestForHeadPerIterationBindings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var probeBefore, probeTest, probeIncr, probeBody, run = true
 		  for (
@@ -616,6 +630,7 @@ func TestForHeadPerIterationBindings(t *testing.T) {
 // end: each run of the block still makes bindings of its own, which the
 // closures of the runs before keep.
 func TestJumpsOutOfBlocksCloseCapturedBindings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, body, want string }{
 		{"continue", `for (var i = 0; i < 3; i++) { let x = i; k.push(() => x); if (i == 1) continue }`, "0,1,2"},
 		{"continue before the capture", `for (var i = 0; i < 3; i++) { let x = i; if (i == 1) continue; k.push(() => x) }`, "0,2"},
@@ -650,6 +665,7 @@ func TestJumpsOutOfBlocksCloseCapturedBindings(t *testing.T) {
 // before the first case expression is evaluated, so a selector closes over the
 // block's binding rather than over whatever the name means outside.
 func TestSwitchCaseBlockScope(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`let x = "outside"
 		  var probeExpr, probeSelector, probeStmt
@@ -680,6 +696,7 @@ func TestSwitchCaseBlockScope(t *testing.T) {
 // A function created inside a `with` body keeps the object it was created
 // under, not whichever object a later `with` in the same function pushes.
 func TestWithScopesAreCapturedPerClosure(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = 1
 		  var f
@@ -705,6 +722,7 @@ func TestWithScopesAreCapturedPerClosure(t *testing.T) {
 // An array whose length cannot change cannot grow, so defining an index at or
 // past the end is refused. An index below it is a property like any other.
 func TestDefineIndexPastAFixedLength(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = [1, 2, 3]
 		  Object.defineProperty(a, "length", {writable: false})
@@ -732,6 +750,7 @@ func TestDefineIndexPastAFixedLength(t *testing.T) {
 // The cause option is asked whether it is there before it is asked for it, and
 // an object that refuses to answer refuses the construction.
 func TestErrorCauseIsAskedFor(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var e = new Error("x", {cause: 1}); String(e.cause)`, "1"},
 		{`var e = new Error("x", {}); String("cause" in e)`, "false"},
@@ -755,6 +774,7 @@ func TestErrorCauseIsAskedFor(t *testing.T) {
 // the clause itself produced, and undefined when it produced nothing, rather
 // than what the try block produced.
 func TestFinallyCompletionValues(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`eval('99; do { -99; try { 39 } catch (e) { -1 } finally { 42; break; -2 }; } while (false);')`,
 			"42"},
@@ -785,6 +805,7 @@ func TestFinallyCompletionValues(t *testing.T) {
 // the outer clauses as they were for the jump around it: the clause with
 // the try statement ran only that try statement's clause.
 func TestFinallyCopiesKeepOuterClauses(t *testing.T) {
+	t.Parallel()
 	src := `var log = [];
 	  function f(c) {
 	    for (var i = 0; i < 1; i++) {
@@ -816,6 +837,7 @@ func TestFinallyCopiesKeepOuterClauses(t *testing.T) {
 // name resolves to is settled before the value is evaluated and reported after
 // it.
 func TestStrictAssignmentToAnUnresolvableName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A value that creates the global does not excuse the assignment.
 		{`"use strict"
@@ -850,6 +872,7 @@ func TestStrictAssignmentToAnUnresolvableName(t *testing.T) {
 // nested in other closures, in loops, and through eval. The answers are
 // Node's.
 func TestCapturedBindingDeadZone(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [];
 		function t(name, f) { try { r.push(name + "=" + f()) } catch (e) { r.push(name + ":" + e.constructor.name) } }
 		t("before", () => { var f = () => k; var v; try { v = f() } catch (e) { v = e.constructor.name } const k = 1; return v + "," + f() });

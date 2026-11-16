@@ -93,6 +93,7 @@ const forEachSetup = `
 // builtin continuation frames do. Each answer is the interpreter's, and
 // sums, whose loop meets none of it, neither leaves its code nor calls Go.
 func TestJITForEachLoop(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -209,6 +210,7 @@ const afterCallbackSetup = `
 // callback called once for each element: each answer is the
 // interpreter's.
 func TestJITForEachAfterCallback(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -273,6 +275,7 @@ const stackSetup = `
 // goes on with after a hole (holeStack), its caller's frame at the call,
 // past it, as the interpreter's is during one.
 func TestJITForEachStackTrace(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -337,6 +340,7 @@ const reduceSetup = `
 // Each answer is the interpreter's, and sumInit's loop neither leaves its
 // code nor calls Go.
 func TestJITReduceLoop(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

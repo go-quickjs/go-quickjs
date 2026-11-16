@@ -21,6 +21,7 @@ import (
 // corrects an upstream engine divergence. The count is checked too, so that a
 // change which fixes one of them or breaks something else is noticed.
 func TestIntlMatchesICU(t *testing.T) {
+	t.Parallel()
 	file, err := os.Open("testdata/intl_golden.txt")
 	if err != nil {
 		t.Skip("no golden file: run node testdata/intl_golden.js > testdata/intl_golden.txt")
@@ -112,6 +113,7 @@ func TestIntlMatchesICU(t *testing.T) {
 // What Intl does is data, and this is the reading of it: a handful of cases
 // whose answers are worth seeing written down.
 func TestIntlFormats(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The separators, the grouping, and the digits are the language's.
 		{`new Intl.NumberFormat("en").format(1234567.891)`, "1,234,567.891"},
@@ -576,6 +578,7 @@ func TestIntlFormats(t *testing.T) {
 }
 
 func TestIntlNodeQuirks(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 
@@ -627,6 +630,7 @@ func TestIntlNodeQuirks(t *testing.T) {
 // Intl is built the first time it is looked at, which nothing but the property
 // descriptor can tell.
 func TestIntlIsBuiltWhenAskedFor(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`typeof Intl`, "object"},
 		{`Intl.NumberFormat === Intl.NumberFormat`, "true"},
@@ -641,6 +645,7 @@ func TestIntlIsBuiltWhenAskedFor(t *testing.T) {
 }
 
 func TestIntlLocale(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`new Intl.Locale("EN-us").toString()`, "en-US"},
 		{`["kb", "kc", "kh", "kk", "kn", "rg", "sd", "aa"].map(key =>
@@ -678,6 +683,7 @@ func TestIntlLocale(t *testing.T) {
 // The language a script means when it does not say which, which is the
 // machine's unless the host says otherwise.
 func TestDefaultLocale(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithLocale("de-DE"))
 	defer rt.Close()
 
@@ -720,6 +726,7 @@ func TestDefaultLocale(t *testing.T) {
 // language the runtime formats in -- which is what V8 does, and the only part
 // of Date.prototype.toString that is not fixed by the specification.
 func TestDateStringsNameTheZone(t *testing.T) {
+	t.Parallel()
 	when := float64(1704412800000) // 2024-01-05T00:00:00Z
 	summer := float64(1720137600000)
 
@@ -803,6 +810,7 @@ func TestDateStringsNameTheZone(t *testing.T) {
 }
 
 func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		locale string
 		zone   string
@@ -872,6 +880,7 @@ func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
 // resolvedOptions/basic.js checks; a Linux host's /etc/localtime names
 // Etc/UTC. Another zone's link keeps its name, as in Node.
 func TestLocalZoneNameOfUTCLinks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ zone, want string }{
 		{"Etc/UTC", "UTC"},
 		{"Etc/GMT", "UTC"},
@@ -903,6 +912,7 @@ func TestLocalZoneNameOfUTCLinks(t *testing.T) {
 }
 
 func TestDateStringsUseBundledRulesForNamedTimeZone(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithLocale("en-US"))
 	defer rt.Close()
 
@@ -923,6 +933,7 @@ func TestDateStringsUseBundledRulesForNamedTimeZone(t *testing.T) {
 // it, and this runs the same script here. No go-intl error, "intl: ...",
 // reaches a script.
 func TestIntlErrorsMatchNode(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	matchNodeScript(t, rt, "testdata/intl_errors_node")
@@ -934,6 +945,7 @@ func TestIntlErrorsMatchNode(t *testing.T) {
 // standards mode differs only where a divergence says, which
 // TestIntlLocaleStandard holds.
 func TestIntlLocaleMatchesNode(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	matchNodeScript(t, rt, "testdata/intl_locale_node")
@@ -951,6 +963,7 @@ func TestIntlLocaleMatchesNode(t *testing.T) {
 // (SubdivisionHourCycles); and the variants getter and option, which Node
 // 26 has not implemented. WithNodeQuirks answers as Node does.
 func TestIntlLocaleStandard(t *testing.T) {
+	t.Parallel()
 	const keywords = `[...["ca", "co", "hc", "nu"].map(k => new Intl.Locale("en-u-" + k)).map(l =>
 		[l.calendar, l.collation, l.hourCycle, l.numberingSystem].filter(v => v !== undefined)[0]),
 		new Intl.Locale("en-u-ca-true").getCalendars(), new Intl.Locale("en-u-co").getCollations(),
@@ -1022,6 +1035,7 @@ func matchNodeScript(t *testing.T, rt *quickjs.Runtime, name string) {
 // on first use; they must agree with one runtime alone. Run under -race,
 // as CI does, this is the check that the sharing is safe.
 func TestIntlConcurrentRuntimes(t *testing.T) {
+	t.Parallel()
 	const source = `[
 		new Intl.NumberFormat("de", {style: "currency", currency: "EUR"}).format(1234.5),
 		new Intl.DateTimeFormat("ja", {dateStyle: "full", timeStyle: "long", timeZone: "Asia/Tokyo"}).format(0),
@@ -1070,6 +1084,7 @@ func TestIntlConcurrentRuntimes(t *testing.T) {
 // the significant digits alone under Node's quirks (go-intl's
 // PluralRulesDigits), as Node does.
 func TestIntlResolvedDigits(t *testing.T) {
+	t.Parallel()
 	const source = `[
 		new Intl.NumberFormat("en", {notation: "compact"}).resolvedOptions().roundingPriority,
 		(r => [r.minimumFractionDigits, r.maximumFractionDigits, r.minimumSignificantDigits,
@@ -1098,6 +1113,7 @@ func TestIntlResolvedDigits(t *testing.T) {
 // V8's. formatToParts unwrapped too, and so did an object that merely held
 // the symbol (KI-54). The answers are node's.
 func TestLegacyFormatterUnwrap(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const t = (f) => { try { return f() } catch (e) { return e.constructor.name + ": " + e.message } };
 		const out = [];
 		for (const C of [Intl.NumberFormat, Intl.DateTimeFormat]) {
@@ -1131,6 +1147,7 @@ func TestLegacyFormatterUnwrap(t *testing.T) {
 // the standard and test262 have it, and "true" under WithNodeQuirks, as V8
 // has it.
 func TestIntlSmallDetails(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const t = (f) => { try { return f() } catch (e) { return e.constructor.name + ": " + e.message } };
 		const out = [];
 		{ const log = []; const d = new Proxy({}, {get(o, k) { if (typeof k === "string") log.push(k); }});
@@ -1163,6 +1180,7 @@ func TestIntlSmallDetails(t *testing.T) {
 // it. Under WithNodeQuirks, as ICU does, a locale naming all three maximizes
 // to itself.
 func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
+	t.Parallel()
 	const fields = `["en", "de", "ja"].map(l => { const d = new Intl.DisplayNames(l, {type: "dateTimeField"});
 		return [d.of("weekOfYear"), d.of("dayPeriod"), d.of("timeZoneName")].join() }).join("|")`
 	checkEval(t, fields, "week,AM/PM,time zone|Woche,Tageshälfte,Zeitzone|週,午前/午後,タイムゾーン")
@@ -1187,6 +1205,7 @@ func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
 // on both sides. HostAbbreviations, the host's zone where nothing names it,
 // depends on the machine, and go-intl's own tests pin it.
 func TestIntlNodeDivergencesV040(t *testing.T) {
+	t.Parallel()
 	const inc = `{minimumFractionDigits: 2, maximumFractionDigits: 2, roundingIncrement: 2}`
 	for _, c := range []struct {
 		name, src, standard, node string
@@ -1246,6 +1265,7 @@ func TestIntlNodeDivergencesV040(t *testing.T) {
 // never equals a double, and a hexadecimal string below 2^53 - 1 is a
 // Number, as V8 makes it. Node v26.10's are the answers.
 func TestIntlDoubleRangeIdentity(t *testing.T) {
+	t.Parallel()
 	const src = `(r => [
 		r({maximumFractionDigits: 20}, "0.1", "0.10000000000000000001"),
 		r({maximumFractionDigits: 20}, 0.1, "0.10000000000000000001"),
@@ -1286,6 +1306,7 @@ func TestIntlDoubleRangeIdentity(t *testing.T) {
 // counts a local mean time's seconds, Abidjan's 16 minutes and 8 seconds in
 // 1900 (WholeMinuteOffset). WithNodeQuirks answers as Node 26 does.
 func TestIntlLaterDivergences(t *testing.T) {
+	t.Parallel()
 	const year = `String(new Intl.DateTimeFormat("te", {calendar: "buddhist", year: "numeric", month: "long", timeZone: "UTC"}).resolvedOptions().year)`
 	const offset = `String(new Date(-2208988800000).getTimezoneOffset())`
 	const annotated = `(function() { try { return String(Temporal.Instant.from("2020-06-15T12:00Z[a=b]")) } catch (e) { return e.name } })()`
@@ -1324,6 +1345,7 @@ func TestIntlLaterDivergences(t *testing.T) {
 // data for Akan, so the collations Intl.Locale lists for it are the
 // default locale's, Korean's among them "searchjl".
 func TestIntlLocaleIsTheDefault(t *testing.T) {
+	t.Parallel()
 	const listed = `String(new Intl.Locale("ak").getCollations().includes("searchjl"))`
 	for _, c := range []struct{ locale, want string }{
 		{"ko-KR", "true"},

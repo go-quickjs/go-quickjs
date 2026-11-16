@@ -204,6 +204,7 @@ func TestStringSearchIsLinear(t *testing.T) {
 // nothing could catch (KI-18). One that queues itself forever is stopped by
 // the host's deadline, as a loop is.
 func TestLongJobQueue(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var n = 0; (async () => { for (let i = 0; i < 1.1e6; i++) await null; n = 1 })(); 0`, "0")
 	rt := quickjs.New()
 	defer rt.Close()

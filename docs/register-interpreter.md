@@ -485,6 +485,25 @@ tries the operation's conversions: register allocation reuses
 temporaries across kinds, and with the slow functions converting every
 such store Box2D was 20%, zlib 13% and `bigint64_search` 33% slower.
 
+**The fast paths native code has.** What the native handlers answer
+with no exit, the Go table answers in its handlers too where the work is
+Go's to do as well: bin's division and int32 remainder (`rhBin`); a
+typed array's element written at a constant index -- a number, a
+Uint8ClampedArray's clamped, a BigInt held in its Value
+(`rsSetIndexITyped`); private members by their sites' own entries
+(`rhGetPrivateSite`, `rhSetPrivateSite`); `in` by the realm's in cache
+and by an array's elements (`rhIn`); a string's or a number's method from
+the realm's cache of their prototypes' properties (`rsGetMethodWPrim`);
+and an array's length written (`rsSetPropLength`). They are in a file of
+their own, which sorts after the handlers (`zzreg_zztable.go`) and whose
+init replaces the table's entries, so that no handler of
+`zzreg_table.go` moves: a branch added to `rhCallW` had moved every
+handler after it and cost the fallback 7 to 10%. Where a native handler
+answers all a fast path does, its exit calls the slow function at once
+(`nativeSlowOnMiss`). The typed arrays' writes were 13 to 62% faster
+(`typed_i64_write` 20.2 to 7.8 ns), `private_field` 17%, `prop_in` 17%,
+`array_length_decr` 31%, the number formats 5 to 16%.
+
 **Errors and positions.** A handler or slow function that can throw or
 run code keeps the pc past its instruction in `st.kept` first, by
 `st.at(pc)`, which also sets the frame's pc to the stack form's
@@ -586,7 +605,9 @@ same instructions and the same frames; the Go table is what they leave
 work to, and every other architecture's interpreter. arm64's are amd64's
 handler for handler, in its instructions (nativegen's `arm64*.go`);
 what follows says amd64's registers, and arm64's where they differ.
-`runReg` hands its frame to `nativeRun` before its loop; `QJS_NONATIVE` set in the
+`runReg` hands its frame to `nativeRun` before its loop, whose
+`nativeLoop` enters the code and is what the code returns to (here
+`nativeRun` for short); `QJS_NONATIVE` set in the
 environment (read once, `regNativeOn`) keeps the frames in the Go table's
 loop, to compare the two and as an escape hatch.
 
@@ -606,7 +627,7 @@ to `R25` in that order, `R0` the instruction word, `R1` to `R7`, `R16`, `R17` an
 uses `R26` only for the func value of an exit's call and `R27` only as
 the encoder's temporary, and never touches `R18` (the platform's), `R28`
 (the goroutine), `R29` (the frame pointer) or `R30`, which holds
-`nativeEnter`'s return to `nativeRun` throughout, so that a profile taken
+`nativeEnter`'s return to `nativeLoop` throughout, so that a profile taken
 in the code, and the trampolines' frames, unwind to it.
 
 **What is native.** The numbers' arithmetic, increments, `-x`, `+x`,
@@ -623,7 +644,11 @@ and globals read and written by their site; property reads and writes by
 the site's cache, its own entry or the entries of the shapes it met
 before (`propPoly`), and a property added by the transition it
 remembers; `o.n +=` of an own number; `in` by the
-realm's in cache, `typeof`, the length of an array or a string, the
+realm's in cache, and of an index by the elements of an array or an
+ordinary object and its chain, as `hasIndexQuick` finds it; `typeof`, and
+its compare-and-branch (`jtypeof`, `typeIndex`); a template's part that
+is a string or a number (`str_part`); `ToNumeric` of a number (`unary`);
+the length of an array or a string, the
 elements of dense arrays (read, `x[++i]`, `x[i++]`, written over any
 element) and typed arrays (every kind but Float16 and BigInt64); short
 BigInts' add, sub and mul; and calls and returns:
@@ -640,7 +665,9 @@ the frame, and gives an entered frame's arguments back. Later additions:
 `x--` as `x++`; a string's or a number's method (`get_method_w`), from
 the realm's cache of their prototypes' data properties (`primProps`), as
 `regGetMethod` reads it; for-of's step over a dense array by the
-intrinsic iterator, its end included; `s.charCodeAt(i)`
+intrinsic iterator, its end included, and over a generator of
+register code suspended at a yield (below, "Generators and async
+functions"); `yield` in a frame that step entered; `s.charCodeAt(i)`
 (`char_code_at`) of a flat string, the built-in read from the same cache;
 BigInt64Array's and BigUint64Array's elements read and written, a BigInt
 held in its Value; Uint8ClampedArray's writes, clamped and rounded to
@@ -649,11 +676,47 @@ an element written at the length of an array with room for it, as
 `appendElem` appends it, the array's and its prototype chain's index
 keys and elements checked;
 and a call in tail position while the stack is shallower than
-`tailCallDepth`, which is `call_w`'s. Deeper, Go gives the frame to the
-callee in place (`regTailTo`); where it is the base frame, `nativeRun`
-goes on with the callee's code in the same code entry
-(`nativeRestart`), rather than ending it for `regRestartRun` to run each
-callee in an entry of its own. A fast path that misses jumps to
+`tailCallDepth`, which is `call_w`'s. Deeper, in a frame the code
+entered by `call_w`, the frame is given to the callee its site's cache
+knows in place (`tailTo`), as `regTailTo` gives it -- the arguments
+moved to the parameters, the bindings past them undefined, the frame
+record the callee's -- where the callee's code may take a frame so
+(`regCode.tailTo`: strict, keeping no arguments, not suspending); the
+caller's state stays on the native frame stack, so that the callee's
+return goes to the frame's caller (`tail_self` 24.4 to 11.0 ns, the
+tree 21.2). Otherwise Go gives the frame to the callee in place
+(`regTailTo`); where it is the base frame, `nativeRun` goes on with the
+callee's code in the same code entry (`nativeRestart`), and where it is
+a frame the code entered, `nativeEnd` does (`nativeRestartDeep`) --
+once an interrupt's count fell due at a tail call, every later call of
+the chain had run in a code entry of its own -- rather than ending it
+for `regRestartRun` to run each callee in an entry of its own. A `switch` finds its case by its table
+(`switchW`), as `regSwitchTable.lookup` does: a number of a dense
+table, a flat string by its cases' constants and then by their texts,
+eight bytes at a time up to 1,024; a table of few or scattered numbers,
+a rope or a longer text is Go's. `bin`'s division of two numbers, and its remainder
+of two int32s, the first above zero and the second not zero, as `jsMod`
+takes them (`bin`); any other remainder is Go's (`math.Mod`).
+`str_freeze` clears a string's mark of an append's, where it has it, as
+`rhStrFreeze` does. `Array.prototype.push` of one argument, its site's
+cached built-in, appends to an array with room for it as an element
+written at an array's length is appended (`appendRoom`), R[B] the new
+length (`push`). A for-in's step (`forInStep`): an array's index
+keys, walked by index while its element is in its dense storage and the
+runtime keeps the index's string (`intStrings`), handed out as
+`keyString` hands them out -- remembered in `keyAtoms` -- and an
+object's snapshot of keys while it keeps the shape they came from; and
+`get_index` by a key string that is an index's canonical form, a flat
+ASCII string of up to nine digits, read by its text (`keyIndex`) -- never
+by `keyAtoms`, which is by the string's address, so that what exits does
+not depend on where strings were allocated or when the collector ran (`array_for_in` 24.1 to 6.4
+ns, the tree 20.2). The arithmetic and bitwise operations load an
+operand into a float register from memory (`numMem`), not through a
+general register: a chain of operations through one register waits on
+the store's forwarding alone, a move between the register files a link
+fewer (`try_finally` 12.9 to 10.2 ns, and as fast with no try
+statement: the jump over its handler's copy was never the cost).
+A fast path that misses jumps to
 the exit; nothing is written before it does. arm64 answers one case more:
 NaN made an integer -- ToInt32's 0, an integer typed array's element 0
 -- where FCVTZS gives 0 and CVTTSD2SI no integer; what has no int64 is
@@ -684,14 +747,47 @@ goroutine in `R14`, `X15` zero, and the arguments' spill room in the
 caller's frame; on arm64 the arguments in `R0` to `R3`, the func value
 in `R26`, the result in `R0`, the goroutine in `R28`, the spill room at
 `8(RSP)` to `40(RSP)`, and the word below the stack pointer `nativeCallH`
-is entered with left alone: it holds `nativeRun`'s caller's frame
+is entered with left alone: it holds `nativeLoop`'s caller's frame
 pointer, which Go's arm64 frames save at `-8(RSP)`. Go does not promise
 the convention across releases;
 `TestRegNativeCallHConvention` calls a Go handler through `nativeCallH`
 and fails, saying which part differs, where the toolchain's convention
 is not this one, and CI runs it under Go 1.24 and Go 1.27. The call made
 `array_push_args3_single`, whose pushes exit, 19% faster than the return
-and the entry (199 to 162 ns an operation), and `string_indexOf` 13%. There is no second interpreter: what the Go table does, an exit does. A frame the code entered itself that ends in Go
+and the entry (199 to 162 ns an operation), and `string_indexOf` 13%. There is no second interpreter: what the Go table does, an exit does.
+
+**Call sites of several callees.** A call site's cache holds one
+callee. Where `call_w` or `call_method_w` meets another, of another
+template, the handler exits with the context's `miss` set, and the exit
+stub calls `nativeCallMiss` rather than the instruction's Go handler,
+which makes the cache the new callee's and makes the call again, which the code then enters itself, rather than Go entering it in
+a code entry of its own -- where the handler would enter it with a
+frame: a leaf, which the miss answers without one, and a frame that
+keeps its arguments stay Go's, each cheaper there than the exit the call
+would come back to (with them, `func_closure_call` was twice as slow
+and the forwarders 20 to 35%). The cache is the same as `regCallMiss`
+would leave it: the last callee. `literal_sites_branch` went from 79.4
+to 68.2 ns (the tree 65.0). Every other exit of the two operations
+is `rhCallW`'s, with nothing between.
+
+**Calls of Go with no exit.** What Go does that throws nothing and runs
+no code is called through `nativeCallH` with none of an exit's work:
+`closure_w`'s closure (`nativeClosure`), `new_object_lit`'s and
+`new_array_e`'s literal (`nativeLit`), the instruction and the budget
+kept in the context and the pinned registers put back after. A call of
+the built-in a site cached (`regCallNative`) is made the same way
+(`light`): `nativeBuiltin`, a function of a handler's form, makes
+`rhCallW`'s call of it, `regNative`, and returns to the exit stub's code
+after its call (`exitAfter`), which goes on at the pc it gives or ends
+the frame, so that a built-in that throws or calls back is the exit's
+case; what it saves is the exit's work before the call -- no state to
+make, no count, no handler to look up, no search of the cache again --
+and a frame whose state Go has not made yet exits. `array_push` went
+from 18.7 to 9.5 ns, `array_push_args3_single` from 68.2 to 25.7,
+`object_literal_fixed` from 46.2 to 42.2, and calls of built-ins 2 to 8%
+faster (`math_imul` 15.2 to 14.1, `string_trim` 29.9 to 28.2).
+
+A frame the code entered itself that ends in Go
 -- a throw, a return that closes captured upvalues -- ends there as
 `rhCallW` ends a callee after `runReg` (`nativeEnd`), and its caller goes
 on or meets the throw. Its state is made for it from its frame record
@@ -736,6 +832,15 @@ patched, with no runtime's constant in it -- every address it needs is
 the context's, and the Runtime's and a closureCode's fields, whose
 offsets the JIT's tag changes, are read relative to a base the context
 gives (`rtBase`, `ccBase`), which the test checks under each tag.
+
+**Rarer paths out of line.** The handlers lie in one block in
+`handlerOps`' order, and what one handler's code grows by moves every
+handler after it: a path an early handler takes rarely -- `get_index`
+by a key string, a call in tail position past `tailCallDepth`, a call
+of a generator's next, a for-in's step -- is laid after the last handler
+(amd64's `nativeGen.late`), reached by a jump. Laid in place, those four
+moved `set_index_i`'s handler and its neighbours, and `typed_u8_write`
+and `typed_i8_write` were 8 to 11% slower at every placement.
 
 **Dispatchers: architectures and variants.** The generator makes several
 native dispatchers, on two axes. The first is the architecture: amd64
@@ -829,6 +934,24 @@ arguments, which are a Go slice, are copied into a window at the top of
 the stack, and `regEnter` runs the callee, with no tree, no `defer` and no
 `recover`. A register function calling a built-in passes it the window's
 arguments as its slice, without copying.
+
+A callback a built-in calls many times over -- a sort's comparator, the
+callback of forEach, map, filter, some, every, find, reduce and theirs of
+typed arrays -- is kept ready from one call to the next where it is a
+frame's (`regCallback`): its window reserved at the stack's top once,
+and natively its code entry's state and context kept too, so that each
+call writes the window's registers and the frame record and runs the
+code (`nativeLoop`), with none of `callDirect`'s, `regDirect`'s and
+`regEnterW`'s work or a code entry made anew. The frame record is pushed
+for the call alone: what Go runs between two calls -- a comparator's
+result converted by its `valueOf` -- finds no frame of it. A leaf, which
+`regDirect` answers without a frame, is called as before, but for one
+whose frameless run has given up (`pureMiss`), which `regDirect` enters
+with a frame: a sum of BigInts (`typed_i64_reduce` 26.4 to 17.1 ns, the
+tree 24.3; `typed_u64_forEach` 54.3 to 44.8, the tree 48.3).
+`typed_i64_sort`, whose comparator of BigInts is no leaf, went from 199.7
+to 142.3 ns natively (the tree 153.7) and from 206 to 167 by the Go
+table; `array_reduce_upvalue` from 23.5 to 18.1.
 
 Stage 1 keeps the heap frame for what reads it today -- stack traces, the
 debugger, closures' `this`, errors' positions -- and writes only the fields
@@ -1009,6 +1132,35 @@ the allocation of 4 rather than 8 (the tree's keeps its 2 locals), and
   past `end_params`. A call site of a generator function or an async
   function makes its object without the generic call's search
   (`regGenCall`), an async function's first step at once.
+  Natively, the step, the yield and the return are the code's own
+  (nativegen's `genStep`, `genYield` and `genReturn`): iter_next over a
+  generator of this realm suspended at a yield or at `end_params` (its
+  first step), with no captures kept, no arguments and nothing rare,
+  pushes next's frame record and the generator's as `regGenStep` and
+  `regGenRun` write them, copies its window to the stack's top, the
+  caller's state on the native frame stack with the generator
+  (`nativeRec.gen`), and goes on where the resumption goes on, the frame
+  of kind `regFrameGenStep`; the yield copies the window back, pops both
+  frames and goes on past iter_next with the value; a return pops them,
+  the generator done, and leaves the loop, the cursor done. Anything
+  else is Go's: a throw, a yield with captures open on the window or
+  inside a with, a return with captures open, `yield*`; a frame of that
+  kind Go ends, `nativeGenEnd` ends as `regGenRun`, `regGenNext` and
+  `regGenStep` end a step. The two exits a step took (iter_next, then
+  the yield, each in a code entry of its own) and Go's bookkeeping were
+  the step's cost: `generator_for_of` went from 42.7 to 27.6 ns, and
+  `generator_create`, a short generator's first and last steps, from
+  213 to 151. A call of the realm's next with no argument steps the
+  generator the same way (`genNext`), the call's register where the
+  value goes, and the yield and the return make next's result object of
+  it by a call of Go with no exit (`nativeIterRes`), as next makes it;
+  where Go ends that step, `nativeGenEnd` makes it, or throws at the
+  call (`generator_next` 65.8 to 48.7 ns, the tree 59.8). A yield in a
+  generator's body Go resumed (`regGenRun`), the code entry's base
+  frame, leaves the code with its value (`retDone` 2), and `nativeRun`
+  suspends the frame as `rhYield` would, with no exit; and `gen_entry`
+  of a frame's first run, which does nothing, is native, a throw
+  injected Go's.
 - **An await's job continues in place.** An async function its await's
   job resumes from the job queue (`generator.awaitJob`, a frame of kind
   `regFrameAwaitJob`) goes on in place at an await of a value that is not
@@ -1028,6 +1180,22 @@ parameter no one assigns -- is copied into the closure as now. The `closure`
 instruction carries, for each of the new function's upvalues taken from its
 maker, the register of the binding, so that the function's template needs
 nothing of the maker's layout.
+
+Natively (nativegen's `closeUps`, `closeRegs` and `closureW`),
+`close_regs` and a return close the upvalues open on the frame as
+`regCloseRegs` and `nativeEnd` close them -- each one's value copied in,
+its slot pointed at it, the others kept in order -- with no exit, and
+`closure_w`'s closure is made by Go's `regClosure` through a call of
+`nativeClosure` by `nativeCallH`, as an exit calls a Go handler but with
+no exit's state: the instruction and the budget kept in the context, the
+pinned registers put back after, the closure stored in R[A]. A call of a
+`regLeafCode` body that returns an upvalue first thing, a getter of a
+binding it captures, is answered from the callee's closure with no frame
+(`regCode.leafUp`), as `regLeafRun` answers it. A loop that made a
+closure each turn exited twice a turn (`close_regs`, `closure_w`):
+`closure_make` went from 105 to 89 ns, `closure_counter` from 14.8 to
+7.3. The allocation itself is Go's, as the tree's is: the closure, its
+function data and the upvalues it opens are what main allocates.
 
 ## Inline caches
 
@@ -1113,18 +1281,56 @@ design. The tree tier is
 the floor to beat and the place to port mechanisms from, never a place to
 send code.
 
-### The plan now (2026-11-13)
+### The plan now (2026-11-14)
 
 **Where it stands.**
 - The register interpreter is the default on amd64 and arm64 for runtimes
   without the JIT, on native threaded handlers that `internal/vm/internal/nativegen`
   generates ("Native handlers"). Stages 1 and 2 are done: no function is
   refused.
+- The interpreter's optimization (step 3) is in its sixth round. Against
+  main's old tiers on the micro-benchmarks, at four placements, the
+  native interpreter's geometric mean is 0.82 with 44 tests still slower,
+  and the Go handler table's (the portable fallback) 0.995 with 99; the
+  suites are level or faster. Both interpreters are optimized and
+  measured: a mechanism goes into the shared Go path and both emitters.
+- The front end is faster (compile time -25% on Octane's code,
+  allocations -33%) and folds what V8's parser and bytecode generator
+  fold: unary operators and arithmetic on literals, string-literal
+  concatenation, constant conditions, dead branches and code after a
+  jump. `compilediff` compares register code too.
 - The JIT reads register code behind `QJS_JITREG=1`
   (`vm.SetJITRegTier`): native code made from register code, tier-up by
-  sampling, OSR, exits and deoptimization into register frames, and native
-  calls between register functions. JIT runtimes still run the stack form
-  by default. Stage 3 below says what was built and what is left.
+  sampling, OSR, exits and deoptimization into register frames, native
+  calls between register functions, inlining of calls, methods,
+  constructions and accessors, generators, async functions and top-level
+  code, call frequencies from the feedback dispatch table, and background
+  compiles. Feedback parity is reproducible and mostly closed. But its
+  code is still far slower than the stack-form JIT's (micro geometric
+  mean 1.71 against it; V8 +172%, AWFY +440%): most of the gap is
+  native loops whose calls still run in the interpreter -- callbacks of
+  built-ins, refused forwarders and strict `arguments`, closures, private
+  members, escape analysis's feedback -- and tail calls that finish in
+  the interpreter. Those are being closed as one batch. JIT runtimes
+  still run the stack form by default.
+- The JIT builds on linux/arm64 as well as darwin/arm64, linux/amd64 and
+  windows/amd64.
+- The test suites run in parallel: package vm's tests take a third of the
+  time they did. regdiff's peak memory is being bounded.
+
+**How the work is run** (the owner's rules).
+- Optimizations work in batches: several items implemented, then timed
+  once, targeted at two placements; a regression found in a batch is
+  traced to its part and fixed or dropped. History need not be clean:
+  everything is squashed before it lands.
+- Profiles before hypotheses; the register interpreter is compared with
+  the old tier that ran each test (the tree tier or the stack
+  interpreter), never bisected against main's history.
+- No frameless mini-evaluators, no new refusal kinds, no caps or
+  thresholds in place of root causes.
+- CI runs at milestones, not per commit, and no agent waits for it.
+- No timing beyond what decides a change; no measurement for its own
+  sake.
 
 **The order from here.** Steps 1 and 2 run alongside each other; each
 later step starts when those before it are done. From 2026-11-13 the
@@ -1133,27 +1339,46 @@ register code lands in `mir`'s amd64 and arm64 backends in the same
 commit, tested on CI's Linux and macOS arm64 jobs and under qemu (the
 JIT builds on linux/arm64 too), so that the switch-over finds no arm64
 backlog.
-1. **The JIT on register code (Stage 3).** The remaining feedback-parity
-   gaps (RegExp literals, call frequencies, inlined callees' feedback);
-   inlining register callees; top-level code, generators and async
-   functions; the feedback snapshot for background compiles. Then a
-   profiling and optimization round of the register JIT against the
-   stack-form JIT in the same build, as the interpreter's rounds were.
-   Then the switch-over: JIT runtimes run the register tier, and the
-   JIT's stack-form path is removed.
+1. **The JIT on register code (Stage 3).** Parity, inlining, coverage,
+   call frequencies and background compiles are done. Left: the
+   optimization rounds against the stack-form JIT in the same build --
+   the large structural gaps first, as one batch, then the rest -- and
+   the feedback register code does not answer yet. Then the switch-over:
+   JIT runtimes run the register tier, and the JIT's stack-form path is
+   removed. The gate: parity with every difference explained, test262 in
+   every mode, and one V8 timing with the JIT against the stack-form JIT
+   at two placements; the owner decides when.
 2. **The arm64 native port** (done, but its timing). An arm64 emitter
    in nativegen, the same handlers and tables as amd64's, and `regArch`
    on for arm64; checked under qemu and on CI's Linux and macOS arm64
    runners. One timing on arm64 hardware is left.
 3. **Optimization.** The benchmark gaps left against the old tiers and
-   against the comparison engine: re-entering register code from Go
-   (callbacks, generator resumptions, call-cache misses), CodeLoad's
-   second compile (gone with step 4's removal of the stack compiler's
-   output), Havlak, RegExp, and what the old tiers did that register code
-   does not yet (strings appended in place, literal layouts by keys).
+   against the comparison engine. Done in rounds 1 to 5: callbacks,
+   generators' steps and yields, closures, `switch`, private members,
+   `for-in`, tail calls in place, operands loaded from memory, appends in
+   place, literals and built-ins by light calls, and the Go table's own
+   fast paths. Left: sorts' comparators, call sites of several callees,
+   empty array literals, objects on fresh prototypes, `JSON.stringify`,
+   string-to-number, async chains, small BigInts (accepted for now), and
+   CodeLoad's second compile (gone with step 4's removal of the stack
+   compiler's output).
+   Gaps that need new instructions -- the loop kernels' fused
+   increment-and-branch, int32 arithmetic, multiplication by an
+   immediate -- wait until the JIT's register work is merged, so that each
+   new instruction lands with its native handlers on both architectures,
+   its Go handler and its JIT lowering in both backends at once.
 4. **The old tiers removed (Stage 4).** The stack interpreter, the tree
    tier, `QJS_REG=0`, `hotdiff` and their layout-lock anchors; the `zz`
    file-name prefixes that kept their layout; AGENTS.md's rules for them.
+   The regdiff tests that use the old tiers as their reference
+   (`TestRegDiff*`) are not dropped with them. Before the removal, the
+   corpus is run once on the old tiers and every program's output is
+   recorded as a golden file, and those tests become checks of the
+   register tier against the recorded answers. `TestJITFeedbackParity`
+   ends earlier, with the JIT's stack-form path at the switch-over. The
+   tests that compare register-tier paths with each other
+   (`TestRegNativeCall`, `TestRegLowerEvaluate`, `TestRegNativeCaches`,
+   `TestRegTailCallsStop`) stay, moved into package vm when regdiff goes.
 5. **The portable fallback's dispatcher.** A generated switch over the Go
    handlers, letting Go's inliner choose, against the handler table. The
    fallback is never layout-tuned: a platform that needs a fast

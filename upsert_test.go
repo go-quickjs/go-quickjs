@@ -7,6 +7,7 @@ import (
 )
 
 func TestMapUpsert(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var m = new Map([[1, "a"]]); [m.getOrInsert(1, "b"), m.getOrInsert(2, "c"), [...m].join(";")].join("|")`,
 			"a|c|1,a;2,c"},

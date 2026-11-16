@@ -34,6 +34,7 @@ func realmCases(t *testing.T, cases []struct{ src, want string }) {
 // TestRealmIntrinsics pins that a second realm has its own intrinsics and
 // global object, and shares the symbols.
 func TestRealmIntrinsics(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`[other.Array === Array, other.Object.prototype === Object.prototype, other.globalThis === other, other === globalThis].join()`,
 			"false,false,true,false"},
@@ -49,6 +50,7 @@ func TestRealmIntrinsics(t *testing.T) {
 // whoever calls it: what it makes, what it throws, and the global object a
 // sloppy function falls back to are its realm's.
 func TestRealmOfFunctions(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`Object.getPrototypeOf(other.Array(3)) === other.Array.prototype`, "true"},
 		{`var f = other.eval("(function () { return [{}, [], this] })"); var r = f();
@@ -65,6 +67,7 @@ func TestRealmOfFunctions(t *testing.T) {
 // TestRealmNewTargetPrototype pins GetPrototypeFromConstructor: a new.target
 // that names no prototype gives the object its own realm's intrinsic.
 func TestRealmNewTargetPrototype(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`var nt = new other.Function(); nt.prototype = null;
 [Object.getPrototypeOf(Reflect.construct(Map, [], nt)) === other.Map.prototype,
@@ -88,6 +91,7 @@ r.join()`, "TypeError,TypeError,TypeError,TypeError"},
 // TestRealmArraySpecies pins that another realm's Array makes this realm's
 // arrays when a method asks an array for its species.
 func TestRealmArraySpecies(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`var a = new other.Array(1, 2); var m = Array.prototype.map.call(a, x => x);
 [Object.getPrototypeOf(m) === Array.prototype, Object.getPrototypeOf(a.map(x => x)) === other.Array.prototype].join()`, "true,true"},
@@ -98,6 +102,7 @@ func TestRealmArraySpecies(t *testing.T) {
 // that never calls super() fails the construction with the caller's
 // ReferenceError, which the constructor's own body cannot catch.
 func TestRealmDerivedConstructorWithoutSuper(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`var C = other.eval("(class extends Object { constructor() {} })");
 try { new C() } catch (e) { [e instanceof ReferenceError, e instanceof other.ReferenceError].join() }`, "true,false"},
@@ -110,6 +115,7 @@ try { new B() } catch (e) { e.constructor.name + "," + caught }`, "ReferenceErro
 // TestRealmRegExpCompile pins that RegExp.prototype.compile refuses another
 // realm's RegExp.
 func TestRealmRegExpCompile(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`var r = []; try { RegExp.prototype.compile.call(new other.RegExp("")) } catch (e) { r.push(e instanceof TypeError) }
 try { other.RegExp.prototype.compile.call(/x/) } catch (e) { r.push(e instanceof other.TypeError) }
@@ -121,6 +127,7 @@ var o = new other.RegExp("a"); r.push(o.compile("b") === o); r.join()`, "true,tr
 // function set on it throws its errors, and a script run in it has the name
 // it was given and stops when its context is done.
 func TestRealmAPI(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	re, err := rt.NewRealm()
@@ -162,6 +169,7 @@ func TestRealmAPI(t *testing.T) {
 // would: it ran in the caller's, where its own realm's top-level let bindings
 // are not (KI-30).
 func TestGeneratorRunsInItsRealm(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	re, err := rt.NewRealm()
@@ -188,6 +196,7 @@ func TestGeneratorRunsInItsRealm(t *testing.T) {
 // other realm and by this realm's next: a resumption of it made in one
 // place still switches to its realm.
 func TestGeneratorTreeRunsInItsRealm(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	re, err := rt.NewRealm()
@@ -216,6 +225,7 @@ func TestGeneratorTreeRunsInItsRealm(t *testing.T) {
 // not an object, gives the object the prototype of new.target's realm, as
 // GetPrototypeFromConstructor has it; it took the running realm's (KI-52).
 func TestTemporalProtoFromConstructorRealm(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	re, err := rt.NewRealm()
@@ -259,6 +269,7 @@ func TestTemporalProtoFromConstructorRealm(t *testing.T) {
 // An unmapped arguments object made in a second realm had had the first
 // realm's Array.prototype.values.
 func TestRealmArgumentsOfOwnRealm(t *testing.T) {
+	t.Parallel()
 	p, err := quickjs.Compile("args.js", `function strict() { 'use strict'; return arguments }
 function sloppy(a) { return arguments }
 var ok = 0

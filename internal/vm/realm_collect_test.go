@@ -246,6 +246,7 @@ func TestRealmKeptByAnotherRealm(t *testing.T) {
 // first's. Math's functions had been the last realm's, for the JIT to know,
 // and the runtime's list of leaves had had every realm's.
 func TestRealmIntrinsicsAreItsOwn(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	math := func(name string) *Object {
@@ -273,6 +274,7 @@ func TestRealmIntrinsicsAreItsOwn(t *testing.T) {
 // layout it could not use had kept another's: a regular expression's result
 // in any realm but the first's was made the long way.
 func TestRealmCachesAreItsOwn(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, `

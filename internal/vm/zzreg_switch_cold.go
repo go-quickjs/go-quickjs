@@ -68,6 +68,18 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 	cl := f.cl
 	n := int(w.X())
 	ic := &cl.ic[w.C()]
+	if s := ic.shape; s != nil && s.next == nil {
+		// A site that has made no object along its root yet starts from
+		// the realm's root for literals of its keys, as the tree's
+		// literal node does (literalRoot): literals of the same keys in
+		// other functions, and the closures of each made anew, make
+		// objects of one layout, which what reads them has met.
+		if hs := c.rc.ObjKeysHash; int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {
+			if h := hs[c.rc.Aux[pc]]; h != 0 {
+				keyedRoot[struct{}](r, h, ic)
+			}
+		}
+	}
 	root := r.shapes.siteRoot(ic, r.proto.object)
 	m := n
 	if root != nil && int(root.slack) > m {

@@ -12,6 +12,7 @@ import (
 // goes with its layout when the layout is given a new identity, its cell
 // still invalidated as its chain changes.
 func TestShapeSide(t *testing.T) {
+	t.Parallel()
 	size, want := unsafe.Sizeof(shape{}), uintptr(112)
 	if unsafe.Sizeof(uintptr(0)) == 4 {
 		want = 80
@@ -81,6 +82,7 @@ func TestShapeSide(t *testing.T) {
 // keys, and one of them grown further, each have their own keys, and only
 // the first child shares its parent's array.
 func TestShapeChildKeys(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -121,6 +123,7 @@ func TestShapeChildKeys(t *testing.T) {
 // the prototype's last key leaves a tombstone rather than going back to a
 // parent, and its objects made after it still start from that root.
 func TestShapeProtoRootInParent(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

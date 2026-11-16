@@ -333,14 +333,40 @@ const nativeFastSrc = `
 			leafer.konst(), leafer.none(i), leafer.arg("s" + i));
 		out.push(ls.join(","));
 	}
+	// o[k] += v, o[3] += v, o[k] += 2 and o[k]++ over dense numbers and
+	// what they are not: a hole, a string, an object, a sloppy function's
+	// arguments, a frozen array, a typed array, a plain object with index
+	// keys, a string, and keys past the end, negative, fractional, NaN,
+	// -0 and a string.
+	function updates(o, k, v) {
+		o[k] += v; o[3] += v; o[k] += 2; o[k]++;
+		return o;
+	}
+	function mapped(a, b, c, d) { updates(arguments, 1, 5); return [a, b, c, d].join(" ") }
+	var keys = [0, 1, 3, 9, -1, 1.5, NaN, -0, "1", 2 ** 32];
+	for (var round = 0; round < 3; round++) {
+		var u = [];
+		for (var i = 0; i < keys.length; i++) {
+			var k = keys[i];
+			u.push(updates([1, 2, 3, 4, 5], k, 10).join(" "), updates([1, , 3, 4], k, 0.5).join(" "),
+				updates(["a", "b", 3, 4], k, 1).join(" "), updates([{}, [], 3, 4], k, 1).length,
+				updates(Object.freeze([1, 2, 3, 4]), k, 1).join(" "), updates(new Int8Array([1, 2, 3, 120]), k, 7).join(" "),
+				JSON.stringify(updates({ 0: 1, 1: 2, 3: 4 }, k, 3)), updates([1, 2, 3, 4], k, "x").join(" "),
+				updates([1.5, 2.5, 3.5, 4.5], k, NaN).join(" "));
+		}
+		u.push(mapped(1, 2, 3, 4));
+		out.push(u.join("/"));
+	}
 	out.join(String.fromCharCode(10))`
 
 // nativeCallCases are calls each of which rhCallW answers one way: the
-// frame-entry path the native call handler takes itself (native), or a
-// path of Go's -- a built-in, a generator, a frame that keeps its
-// arguments or reads new.target, a bound function -- which it must leave
-// to Go. Each runs 64 times in a loop; the first call of a site, which
-// fills its cache, is Go's in any case.
+// frame-entry path the native call handler takes itself, or a built-in
+// the site cached, which it calls in Go with no exit (nativegen's light)
+// -- returning, throwing to a handler of the frame's, calling back
+// (native) -- or a path of Go's -- a generator, a frame that reads
+// new.target, a bound function -- which it must leave to Go. Each runs 64
+// times in a loop; the first call of a site, which fills its cache, is
+// Go's in any case.
 var nativeCallCases = []struct {
 	name, src string
 	native    bool
@@ -350,7 +376,10 @@ var nativeCallCases = []struct {
 	{"method", `var o = { k: 3, m(x) { var t = this.k; return t + x } }; function run(n) { var s = 0; for (var i = 0; i < n; i++) s += o.m(i); return s }`, true},
 	{"leafArg", `var o = { id(x) { return x } }; function run(n) { var s = 0; for (var i = 0; i < n; i++) s += o.id(i); return s }`, true},
 	{"leafConst", `function k() { return 7 } function run(n) { var s = 0; for (var i = 0; i < n; i++) s += k(); return s }`, true},
-	{"builtin", `function run(n) { var s = 0; for (var i = 0; i < n; i++) s += Math.max(i, 3); return s }`, false},
+	{"builtin", `function run(n) { var s = 0; for (var i = 0; i < n; i++) s += Math.max(i, 3); return s }`, true},
+	{"builtinThrows", `function run(n) { var s = 0; for (var i = 0; i < n; i++) { try { s += JSON.parse(i & 1 ? "1" : "x") } catch (e) { s += e.constructor.name.length } } return s }`, true},
+	{"builtinCallback", `function inc(x) { return x + 1 } function run(n) { var s = 0, a = [0]; for (var i = 0; i < n; i++) { a[0] = i; s += a.map(inc)[0] } return s }`, true},
+	{"builtinStack", `function depth(x) { return new Error("e").stack.split("\n").length + x } function run(n) { var s = 0, a = [0]; for (var i = 0; i < n; i++) s += a.map(depth)[0]; return s }`, true},
 	{"generator", `function* g() { yield 1 } function run(n) { var s = 0; for (var i = 0; i < n; i++) s += g().next().value; return s }`, false},
 	{"arguments", `function f() { return arguments.length } function run(n) { var s = 0; for (var i = 0; i < n; i++) s += f(i, i); return s }`, true},
 	{"argumentsMethod", `var o = { k: 2, m() { var t = 0; for (var j = 0; j < arguments.length; j++) t += arguments[j]; return t + this.k } }; function run(n) { var s = 0; for (var i = 0; i < n; i++) s += o.m(i, 1, 2); return s }`, true},
@@ -885,6 +914,191 @@ func TestRegNativeMore5(t *testing.T) {
 		nativeMarking(t, marking)
 		if got := nativeRunSrc(t, nativeMore5Src, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
+		}
+	}
+}
+
+// A sloppy callee that keeps its arguments maps its arguments object onto
+// its parameters' registers, which its return closes, as the miss's
+// regEnterW closes them: the native code's return of a frame it entered
+// so left them open on registers the next frames overwrote, and an
+// arguments object kept past the call read what they held -- the
+// arguments object itself, Array -- by a call or a call in tail position
+// the site's cache answered.
+func TestRegNativeKeptArgumentsClosed(t *testing.T) {
+	src := `
+	var kept = [];
+	var s1 = function s(n, a) { kept.push(arguments); return arguments.length + ":" + Array.prototype.join.call(arguments, ","); };
+	function viaTail(n, a) { return n === 0 ? s1(n, a, "x") : viaTail(n - 1, a + 1); }
+	function viaCall(n, a) { var v = s1(n, a, "x"); return v; }
+	var out = [];
+	for (var i = 0; i < 3; i++) out.push(viaTail(3, 0));
+	for (var i = 0; i < 3; i++) out.push(viaCall(0, 3));
+	out.push(kept.map(function (a) { return Array.prototype.join.call(a, ","); }).join(" "));
+	out.join(" | ")`
+	want := "3:0,3,x | 3:0,3,x | 3:0,3,x | 3:0,3,x | 3:0,3,x | 3:0,3,x | 0,3,x 0,3,x 0,3,x 0,3,x 0,3,x 0,3,x"
+	for _, native := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			nativeMarking(t, marking)
+			if got := nativeRunSrc(t, src, native); got != want {
+				t.Errorf("native %v (marking %v): %s, want %s", native, marking, got, want)
+			}
+		}
+	}
+}
+
+// nativeTemplateSrc calls, at each of its sites, a closure made anew each
+// time its maker runs: plain functions sloppy and strict, a method, and
+// arrows each with a this of its own, and a bound function and a function
+// with a property among them, which the site's cache answers as the
+// closure of its template it met before or leaves to the miss.
+const nativeTemplateSrc = `
+	function plain(k) { var f = function () { return this === globalThis ? k : -1 }; return f() }
+	function strict(k) { "use strict"; var f = function () { return this === undefined ? k : -1 }; return f() }
+	function method(k) { var o = { k: k }; o.m = function () { return this.k }; return o.m() }
+	function arrow(k) { var o = { k: k, a: function () { var f = () => this.k; return f() } }; return o.a() }
+	function mixed(k) {
+		var f = function (x) { return x + (this && this.b || 0) };
+		if (k % 3 === 1) f = f.bind({ b: 100 });
+		if (k % 3 === 2) f.p = 1;
+		return f(k);
+	}
+	var s = [];
+	for (var k = 0; k < 6; k++) s.push(plain(k), strict(k), method(k), arrow(k), mixed(k));
+	s.join()`
+
+// A site whose callee is a closure made anew each time its maker runs
+// answers it as the closure of its template it met before: the cache is
+// made the new closure's and the call entered as a hit (regSameTemplate),
+// each closure's own this kept.
+func TestRegCallSameTemplate(t *testing.T) {
+	want := "0,0,0,0,0,1,1,1,1,101,2,2,2,2,2,3,3,3,3,3,4,4,4,4,104,5,5,5,5,5"
+	for _, native := range []bool{false, true} {
+		if got := nativeRunSrc(t, nativeTemplateSrc, native); got != want {
+			t.Errorf("native %v: %s, want %s", native, got, want)
+		}
+	}
+	// The closure is entered by the native code, once the exit that met
+	// it has made the cache its own, not by Go from the miss, which runs
+	// it in a code entry of its own: an entry for each call of outer, not
+	// two.
+	nativeCounting(t)
+	enters, calls := atomic.LoadInt64(&nativeEnters), atomic.LoadInt64(&nativeCalls)
+	nativeRunSrc(t, `
+		function outer(k) { var f = function () { var a = [k]; return a[0] }; return f() }
+		var s = 0;
+		for (var k = 0; k < 200; k++) s += outer(k);
+		String(s)`, true)
+	enters, calls = atomic.LoadInt64(&nativeEnters)-enters, atomic.LoadInt64(&nativeCalls)-calls
+	if enters > 210 || calls < 199 {
+		t.Errorf("%d entries of the code and %d calls it made itself, want 210 entries at most and 199 calls or more", enters, calls)
+	}
+	// The native call answers the new closure itself, the cache made
+	// its own, with no exit to Go (call's template check).
+	before := nativeExitOps()[bytecode.RCallW]
+	nativeRunSrc(t, `
+		function maker(k) { var j = k, f = function () { var a = [j]; return a[0] }; return f() }
+		function outer() { var s = 0; for (var k = 0; k < 200; k++) s += maker(k); return s }
+		String(outer())`, true)
+	if n := nativeExitOps()[bytecode.RCallW] - before; n > 10 {
+		t.Errorf("calls of a closure made anew exited to Go %d times in 200, want 10 at most", n)
+	}
+}
+
+// An element's update of a dense array's number, o[k] += v in each of its
+// forms, is the native code's own: none exits to Go but the first store
+// to the literal's shared elements.
+func TestRegNativeAddIndex(t *testing.T) {
+	nativeCounting(t)
+	before := nativeExitOps()
+	got := nativeRunSrc(t, `
+		function run() {
+			var tab = [1, 2, 3, 4];
+			for (var j = 0; j < 1000; j++) {
+				tab[0] += j; tab[1] += 0.5;
+				var k = j & 3;
+				tab[k] += j; tab[k] += 3; tab[k]++; tab[k]--;
+			}
+			return tab.join(" ");
+		}
+		run()`, true)
+	if want := nativeRunSrc(t, `
+		function run() {
+			var tab = [1, 2, 3, 4];
+			for (var j = 0; j < 1000; j++) {
+				tab[0] += j; tab[1] += 0.5;
+				var k = j & 3;
+				tab[k] += j; tab[k] += 3; tab[k]++; tab[k]--;
+			}
+			return tab.join(" ");
+		}
+		run()`, false); got != want {
+		t.Fatalf("native %s, want %s", got, want)
+	}
+	after := nativeExitOps()
+	for _, op := range []bytecode.ROp{bytecode.RAddIndex, bytecode.RAddIndexK, bytecode.RAddIndexI} {
+		// The literal's elements are shared until the first store copies
+		// them, which Go makes.
+		if n := after[op] - before[op]; n > 1 {
+			t.Errorf("%v exited to Go %d times, want 1 at most", op, n)
+		}
+	}
+}
+
+// nativePrivateSrc reads and writes private members every way their
+// native handlers meet them: fields of one class read and written in a
+// loop, of instances of two classes with members of one name, of
+// subclasses, static members, private methods and accessors, which no
+// site caches, a read of a member the object does not have and of a
+// non-object, a write of a method, and a field read before it is
+// defined.
+const nativePrivateSrc = `
+	var out = [];
+	class A { #n = 0; #m = "a"; add(k) { for (var i = 0; i < k; i++) this.#n = (this.#n + i) | 0; return this.#n + this.#m }
+		static read(o) { return o.#n } }
+	class B { #n = 5; add(k) { for (var i = 0; i < k; i++) this.#n += 2; return this.#n } }
+	class C extends A { #c = 1; get() { return this.#c + A.read(this) } }
+	class S { static #s = 3; static bump() { S.#s++; return S.#s } }
+	class M { #m() { return 7 } get #g() { return this.#x * 2 } set #g(v) { this.#x = v } #x = 1;
+		run() { this.#g = this.#m(); return this.#g } }
+	class E { #e = 1; static read(o) { return o.#e } static write(o) { o.#e = 2 } static meth(o) { o.#k = 1 } #k() {} }
+	class T { #a = this.#b; #b = 1; }
+	for (var round = 0; round < 3; round++) {
+		var s = [];
+		var a = new A(), b = new B(), c = new C();
+		s.push(a.add(50), b.add(30), c.add(10), c.get(), S.bump(), new M().run());
+		for (var i = 0; i < 4; i++) s.push(A.read(i & 1 ? a : c));
+		try { E.read({}) } catch (e) { s.push(e.constructor.name) }
+		try { E.read(1) } catch (e) { s.push(e.constructor.name) }
+		try { E.write(Object.freeze(new E())); s.push("frozen ok") } catch (e) { s.push(e.constructor.name) }
+		try { E.meth(new E()) } catch (e) { s.push(e.constructor.name) }
+		try { new T() } catch (e) { s.push(e.constructor.name) }
+		out.push(s.join(","));
+	}
+	out.join("|")`
+
+// Private members are the native code's own where a site's cache answers
+// them: the table's answers, marking and not, and a loop of a field's
+// reads and writes that exits to Go only to fill the caches.
+func TestRegNativePrivate(t *testing.T) {
+	want := nativeRunSrc(t, nativePrivateSrc, false)
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		if got := nativeRunSrc(t, nativePrivateSrc, true); got != want {
+			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
+		}
+	}
+	nativeCounting(t)
+	before := nativeExitOps()
+	if got := nativeRunSrc(t, `
+		class P { #n = 0; add(k) { for (var i = 0; i < k; i++) this.#n = (this.#n + i) | 0; return this.#n } }
+		String(new P().add(1000))`, true); got != "499500" {
+		t.Fatalf("got %s, want 499500", got)
+	}
+	after := nativeExitOps()
+	for _, op := range []bytecode.ROp{bytecode.RGetPrivate, bytecode.RSetPrivate} {
+		if n := after[op] - before[op]; n > 2 {
+			t.Errorf("%v exited to Go %d times in 1,000 turns, want 2 at most", op, n)
 		}
 	}
 }

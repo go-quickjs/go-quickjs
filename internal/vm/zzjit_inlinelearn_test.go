@@ -29,6 +29,7 @@ const inlineLearnSetup = `
 // each call the interpreter's, until the inlining is given up
 // (jitInlineLeft) and rd called natively.
 func TestJITInlinedCalleeLearns(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

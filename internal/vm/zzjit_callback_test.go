@@ -124,6 +124,7 @@ func callbackDrivers() string {
 // after it by Go, the callback's frame made by Go, and the closure the
 // caller's code did not make made in its place.
 func TestJITCallbackInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -193,6 +194,7 @@ func TestJITCallbackInlined(t *testing.T) {
 // the loop after the callback's index (runSSA). Each answer is the
 // interpreter's.
 func TestJITCallbackEnteredByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -330,6 +332,7 @@ func TestJITCallbackNotMade(t *testing.T) {
 // natively after a few (jitInlineExits), not inlined, its code compiled
 // again for that: each answer the interpreter's.
 func TestJITCallbackLeavesOften(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

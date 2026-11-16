@@ -84,6 +84,7 @@ func TestJITLoopEntriesSpendTheBudget(t *testing.T) {
 // compiled again. Here a run of g that Go goes on with, from its start,
 // counts an invocation's worth.
 func TestJITGoOnRunsSpendTheBudget(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

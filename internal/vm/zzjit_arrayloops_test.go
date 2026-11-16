@@ -57,6 +57,7 @@ const arrayLoopsSetup = `
 // filterEven's, someAt's and findIndexAt's loops neither leave their
 // code nor call Go but to make the array.
 func TestJITArrayLoops(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -153,6 +154,7 @@ func TestJITMapAppends(t *testing.T) {
 // (ssa.StoreFresh): a setter at an index there is not called, and the
 // loops go on natively past it. Each answer is the interpreter's.
 func TestJITMapDefinesPastSetters(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

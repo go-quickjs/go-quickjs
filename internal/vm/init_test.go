@@ -11,6 +11,7 @@ import (
 // A Linux run with no locale set resolved Intl.DurationFormat("lkt") to
 // "en-US-u-va-posix", where Node says "en-US".
 func TestDefaultLocale(t *testing.T) {
+	t.Parallel()
 	for tag, want := range map[string]string{
 		"en-US-u-va-posix": "en-US",
 		"de-DE":            "de-DE",

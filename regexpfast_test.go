@@ -7,6 +7,7 @@ import "testing"
 // an ASCII class, and the surrogates it leaves to the general read, with and
 // without the unicode flag, forwards and in a lookbehind.
 func TestRegExpUnitReads(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var s = "a\u{1F600}b\uD83Dc\uDE00d"
 		  JSON.stringify([
@@ -32,6 +33,7 @@ func TestRegExpUnitReads(t *testing.T) {
 // whose match needs a large matcher, and their lastIndex and compile, which
 // stay each object's own.
 func TestRegExpSharedMatcher(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function mk() { return /(\w)(\d)?/g }
 		  var outer = mk()
@@ -58,6 +60,7 @@ func TestRegExpSharedMatcher(t *testing.T) {
 // groups, named ones, the d flag's, each grown past its room by elements
 // and properties, a property deleted and the length cut, as Node has them.
 func TestRegExpResultRoom(t *testing.T) {
+	t.Parallel()
 	src := `var out = []
 	  var pats = [/b/, /(b)/, /(b)(c)?/, /(b)(c)?(d)/, /(b)(x)?(d)(e)/, /(b)(c)?(d)(e)(f)/, /(?<p>b)(c)?/, /(b)(c)?/d]
 	  for (var p of pats) {
@@ -85,6 +88,7 @@ func TestRegExpResultRoom(t *testing.T) {
 // a subclass's instance lacks: RegExp.$1 after its match, and compile on
 // it, throw TypeErrors (Node, which has no such features, throws neither).
 func TestRegExpSourceAndLegacy(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = []
 	  function mk() { return /a\/b/g }
 	  var a = mk(), b = mk()
@@ -108,6 +112,7 @@ func TestRegExpSourceAndLegacy(t *testing.T) {
 // pairs of surrogates and halves of them; and a piece kept after its array
 // is dropped. Each answer is Node's.
 func TestRegExpPiecesTogether(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = []
 	  function show(m) { return m === null ? "null" : JSON.stringify(m) + ":" + m.map(function (x) { return x === undefined ? "u" : x.length }).join(",") }
 	  r.push(show(/(a)(b)(c)/.exec("abc")), show(/((a)(b))(x)?()(c)/.exec("zabcz")), show(/(.*)(.*)/.exec("whole")))
@@ -129,6 +134,7 @@ func TestRegExpPiecesTogether(t *testing.T) {
 // argument, a generator's literal. Each function runs four times, in a
 // tree after the first. Each answer is Node's.
 func TestRegExpLiteralReuse(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var out = [];
 function f1(s) { var r = []; for (var i = 0; i < 4; i++) r.push(/a/g.exec(s).index + "/" + /a/y.test(s)); return r.join() }
 out.push(f1("aaa"));
@@ -184,6 +190,7 @@ once`, "0/true,0/true,0/true,0/true;true,true,0;6,6,true;truetruetrue,3,3,false,
 // is passed, or called. Each function runs
 // four times, in a tree after the first. Each answer is Node's.
 func TestRegExpLiteralArgReuse(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function g1(s) { var r = []; for (var i = 0; i < 4; i++) r.push(s.replace(/a(b)?/g, "[$1]"), s.split(/b/).length, s.match(/a/g).length, s.match(/(a)(b)/).index, s.replace(/a/y, "Y")); return r.join() }
 function g2() { var leaked = [], orig = RegExp.prototype[Symbol.replace];
   RegExp.prototype[Symbol.replace] = function (s, t) { leaked.push(this); return orig.call(this, s, t) };

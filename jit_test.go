@@ -18,6 +18,7 @@ import (
 // The opt-in is valid in ordinary builds too, where it falls back. Pin its
 // independence from code-generation policy and Node compatibility options.
 func TestJITOption(t *testing.T) {
+	t.Parallel()
 	for _, node := range []bool{false, true} {
 		opts := []quickjs.Option{quickjs.WithJIT(), quickjs.WithoutCodeGeneration()}
 		if node {
@@ -65,6 +66,7 @@ func jitHotFunctions(n int) string {
 // ErrMemoryLimit is the same with the JIT on and off. A runtime without the
 // JIT, or a build without it, takes the option and does nothing with it.
 func TestJITMemoryLimitOption(t *testing.T) {
+	t.Parallel()
 	src := jitHotFunctions(300)
 	plain := quickjs.New()
 	defer plain.Close()
@@ -125,6 +127,7 @@ func TestJITMemoryLimitOption(t *testing.T) {
 // those of a runtime that waits for its compiles. QJS_JIT_STRESS's
 // background has every JIT runtime compile so.
 func TestJITBackgroundOption(t *testing.T) {
+	t.Parallel()
 	src := jitHotFunctions(50)
 	plain := quickjs.New()
 	defer plain.Close()
@@ -157,6 +160,7 @@ func TestJITBackgroundOption(t *testing.T) {
 // toString throws rejecting rather than throwing, and the module's
 // import.meta read in a loop.
 func TestJITImport(t *testing.T) {
+	t.Parallel()
 	run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 		rt := quickjs.New(opts...)
 		// A few calls warm a function up, as these tests run it.
@@ -223,6 +227,7 @@ func TestJITImport(t *testing.T) {
 // converted -- not 0, "", false or NaN, and no object -- keeping it on
 // either path.
 func TestJITNullish(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"??", `function f(a) { let s = ""; for (let i = 0; i < a.length; i++) s += (a[i] ?? "d") + ","; return s }
 			const a = [null, undefined, 0, "", false, NaN, "x", {}, [], 7]; let r = ""; for (let k = 0; k < 300; k++) r = f(a); r`},
@@ -262,6 +267,7 @@ func TestJITNullish(t *testing.T) {
 // closing the iterator natively where there is nothing to close, by Go
 // where its return method must be called.
 func TestJITDestructuring(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"arrays", `function f(a) { let s = 0; for (let i = 0; i < a.length; i++) { const [x, y] = a[i]; s += x + y } return s }
 			const a = []; for (let i = 0; i < 500; i++) a.push([i, i * 2]); let r = 0; for (let k = 0; k < 50; k++) r += f(a); r`},
@@ -312,6 +318,7 @@ func TestJITDestructuring(t *testing.T) {
 // #x in o is true natively where the read would find the member. Go makes
 // the rest: a class's members, accessors, a key in a local.
 func TestJITPrivateMembers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"fields and methods", `class C { #x = 1; #y = 0.5; #m() { return this.#x * 2 } run(n) { let s = 0; for (let i = 0; i < n; i++) { this.#x = i; this.#y += 1; s += this.#m() + (#x in this ? 1 : 0) } return s + this.#y } }
 			const c = new C(); let r = 0; for (let k = 0; k < 50; k++) r += c.run(2000); r`},
@@ -362,6 +369,7 @@ func TestJITPrivateMembers(t *testing.T) {
 // too, is the interpreter's, and deep recursion in tail position runs in
 // constant space.
 func TestJITTailCalls(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"self", `function loop(n, acc) { if (n === 0) return acc; return loop(n - 1, acc + n) }
 			let r = 0; for (let k = 0; k < 20; k++) r += loop(100000, k); r`},
@@ -427,6 +435,7 @@ func TestJITTailCalls(t *testing.T) {
 // there (Are We Fast Yet's Richards, whose task handlers are arrows a task
 // calls as its method, failed with the JIT).
 func TestJITArrowThis(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"as a method, in tail position", `class Owner { constructor() { this.tag = "owner"; this.task = new Task(() => this.tag) } }
 			class Task { constructor(f) { this.f = f; this.tag = "task" } run() { return this.f() } }
@@ -480,6 +489,7 @@ func TestJITArrowThis(t *testing.T) {
 // go on natively; a direct eval's code, which reads its caller's scopes,
 // stays in the interpreter.
 func TestJITTopLevel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		scripts []string
@@ -574,6 +584,7 @@ func TestJITTopLevel(t *testing.T) {
 // it again after each step, as the interpreter does, rather than the value
 // it had before.
 func TestJITUpvalueAfterIteratorStep(t *testing.T) {
+	t.Parallel()
 	src := `(function () {
 		let x = 0;
 		function make(n) {
@@ -612,6 +623,7 @@ func TestJITUpvalueAfterIteratorStep(t *testing.T) {
 // have run a closure -- a call, an iterator's step. Each case's function
 // loops, so that the JIT compiles it.
 func TestJITCapturedLocals(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"per-iteration bindings", `function f(n) { const fs = []; for (let i = 0; i < n; i++) { fs.push(() => i * 2) } let s = 0; for (const g of fs) s += g(); return s }
 			let r = 0; for (let k = 0; k < 60; k++) r += f(k); r`},
@@ -731,6 +743,7 @@ func TestJITCapturedLocals(t *testing.T) {
 // new.target: super threw a TypeError, and new.target was undefined at the
 // calls Go made. The answers are Node's, with the JIT and without.
 func TestJITArrowKeepsItsMakersContext(t *testing.T) {
+	t.Parallel()
 	const src = `class P { m() { return 1 } }
 class H extends P {
 	viaEval() { let s = 0; for (let i = 0; i < 2000; i++) s += (() => eval("super.m()"))(); return s }

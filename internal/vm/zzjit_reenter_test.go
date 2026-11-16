@@ -51,6 +51,7 @@ func jitLongRunForTest(t *testing.T, setup, warm, src string) (string, JITStats)
 // failing again at every back edge the interpreter offered it, each
 // failure one run deeper.
 func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -79,6 +80,7 @@ func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
 // loop, compiled at its back edge, and tokenizes it in the next, which
 // the code was compiled for before it ran.
 func TestJITStringReadLearnedAtDeopt(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -111,6 +113,7 @@ func TestJITStringReadLearnedAtDeopt(t *testing.T) {
 // exits, however long the string, about what a guard's failure and the compile
 // it asks for cost.
 func TestJITStringReadLearnedAtHostExit(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -141,6 +144,7 @@ func TestJITStringReadLearnedAtHostExit(t *testing.T) {
 // at every call, compiled again for nothing -- s[i] | 0 of a string's
 // character, after the read was learned as a string's.
 func TestJITUnaryGenericOnceFailed(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -172,6 +176,7 @@ func TestJITUnaryGenericOnceFailed(t *testing.T) {
 // before its last site -- PDF.js's btoa -- which then left native code at
 // every call.
 func TestJITStringTableReadsSettle(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -256,6 +261,7 @@ func TestJITGenericOperatorsAnswers(t *testing.T) {
 // meanwhile. Counted, a run of PDF.js's font parsers had blocked their
 // compiles again for the rest of each call.
 func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

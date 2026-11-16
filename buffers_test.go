@@ -13,6 +13,7 @@ import (
 // or transfer. Shared memory can be detached by the script, which leaves the
 // slice alone, but not transferred to another agent.
 func TestNewArrayBuffer(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	check, err := rt.Eval(`(buf) => {
@@ -92,6 +93,7 @@ type celsius float64
 // contents, and that shared elements are the slice's -- written by the
 // script, read by the host -- where copied ones are not.
 func TestNewTypedArray(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	describe, err := rt.Eval(`(a) => {

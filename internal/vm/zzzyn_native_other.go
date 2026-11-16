@@ -14,3 +14,12 @@ func SetRegNative(on bool) bool { return false }
 func (r *Runtime) nativeRun(f *frame, c *regCode, start int) (Value, error) {
 	panic("vm: no native handlers on this architecture")
 }
+
+// A callback has no native code entry here (regCallback).
+func (r *Runtime) nativeCallback(c *regCode) (*regState, *nativeCtx) { return nil, nil }
+
+func (r *Runtime) nativeLoop(st *regState, ctx *nativeCtx, f *frame, c *regCode, start int) (Value, error) {
+	panic("vm: no native handlers on this architecture")
+}
+
+func nativeReset(ctx *nativeCtx) {}

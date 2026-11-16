@@ -12,6 +12,7 @@ import (
 // to index 0, and into limits and offsets that became 0 (KI-28). Run it with
 // GOARCH=386 too.
 func TestLengthsPastAnInt32(t *testing.T) {
+	t.Parallel()
 	stop := `(e) => e === "stop" ? "stopped" : e.name + ": " + e.message`
 	for src, want := range map[string]string{
 		`[1,2,3][2**31]`:                         "undefined",

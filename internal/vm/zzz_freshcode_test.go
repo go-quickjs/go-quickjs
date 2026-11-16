@@ -116,6 +116,7 @@ func TestTemplateObjectsLastAsLongAsTheirCode(t *testing.T) {
 // Each realm has its own template object for a site, and keeps it over the
 // other's.
 func TestTemplateObjectsByRealm(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, "(s => s)`in a realm`")

@@ -33,6 +33,7 @@ import (
 //	  -run '^TestTemporalMatchesNodeAcrossLocalesAndTimeZones$' \
 //	  -count=1 -timeout=60m -v
 func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("QUICKJS_COMPARE_NODE_TEMPORAL") == "" {
 		t.Skip("set QUICKJS_COMPARE_NODE_TEMPORAL=1 to compare the complete matrix")
 	}

@@ -14,6 +14,7 @@ import (
 // and a String object's, a key made at run time, and an inherited property
 // made a getter after the reads. Against Node's answer.
 func TestStringKeyRead(t *testing.T) {
+	t.Parallel()
 	src := `
 		var out = [];
 		function read(o, k) { return o[k]; }

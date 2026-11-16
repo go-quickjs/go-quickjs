@@ -10,6 +10,7 @@ import "testing"
 // script can see directly. Each is made three times, as the interpreter and
 // the tree tier make it.
 func TestBuiltStringsKnowThemselves(t *testing.T) {
+	t.Parallel()
 	exprs := []string{
 		`" abc ".trim()`, `"\u00a0abc\u00a0".trim()`, `"\u3000\u00e9\u3000".trimStart()`,
 		`" \ud83d\u3000".trimEnd()`, `"\u2028\ude00x ".trim()`, `" \ud83d\ude00\u00e9\u3000".trim()`,

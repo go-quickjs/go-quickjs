@@ -157,6 +157,7 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 // the first once a cache finds a property past it. Objects of other classes
 // start from the prototype's root from the first.
 func TestShapeFirstObjectOfPrototype(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -215,6 +216,7 @@ func TestShapeFirstObjectOfPrototype(t *testing.T) {
 // prototype had had a loose layout, which no cache remembers, and each read
 // of it was a lookup in its table.
 func TestShapeSingletonOnOwnPrototype(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -246,6 +248,7 @@ func TestShapeSingletonOnOwnPrototype(t *testing.T) {
 // each had had a layout of its own made as it was given its prototype.
 // Static inheritance reads through it as through any.
 func TestShapeSubclassesShareLayout(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

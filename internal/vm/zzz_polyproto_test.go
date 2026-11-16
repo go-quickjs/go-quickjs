@@ -137,10 +137,9 @@ out.join("|");
 const polyProtoWant = `true|1|20|5||y,sv|y,sv|y,sv|{"y":2,"sv":5}|{"y":2,"sv":5}|{"y":2,"sv":5}|y,2;sv,5|2,5|{"y":{"value":2,"writable":true,"enumerable":true,"configurable":true},"sv":{"value":5,"writable":true,"enumerable":true,"configurable":true}}|false|true|true|true|true|true|y,sv,x,g,s|3|4||false|true|1||20|||false|undefined|true||true|false|true|b|b,c|1|true|true|1|false|2|TypeError|true|false|false|true|true|true|lit+base|hi,n|1|5|7|0|5|true|true|k5|8||2|3|31803|90|10|5|false|4175|3|3|true|1710|50|42|true|3|function|true|[object Tag]|ts|[{},{}]||{"own":2,"acc":3}|1|own,acc`
 
 func TestPolyProtoSemantics(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, polyProtoSemantics))
 		if err != nil {
 			t.Fatal(err)
@@ -163,6 +162,7 @@ func TestPolyProtoSemantics(t *testing.T) {
 // prototype of its own, read in a loop, makes: the site then remembers its
 // layout as any object's.
 func TestPolyProtoLayout(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -255,6 +255,7 @@ func TestPolyProtoLayout(t *testing.T) {
 // subclass of one base made by each call -- make no shape after the first
 // of each loop: what they need is the runtime's layouts of such objects.
 func TestPolyProtoNoShapes(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`var o = Object.create({x: i}); o.y = 1`,
 		`var o = {__proto__: {z: i}, w: 1}`,
@@ -287,6 +288,7 @@ func TestPolyProtoNoShapes(t *testing.T) {
 // not the prototype in its table. A factory's classes each make one
 // object, and the code keeps making first objects so.
 func TestPolyProtoSharedClasses(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	src := `var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } }

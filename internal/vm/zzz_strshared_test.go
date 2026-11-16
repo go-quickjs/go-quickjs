@@ -10,6 +10,7 @@ import (
 // them is on the bytecode.Function they share, or on the strings the
 // runtimes share, as the empty string is. go test -race says the rest.
 func TestAppendsAndRoomsOnManyRuntimes(t *testing.T) {
+	t.Parallel()
 	const src = `
 function render(n) {
   var out = '', rows = []

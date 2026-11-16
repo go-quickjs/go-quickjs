@@ -25,6 +25,7 @@ import (
 // constructs a DictIdEntry, a DictEntry's subclass, for each entry of its
 // dictionaries: each had been a call of Go.
 func TestJITDerivedDefaultConstruct(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -268,6 +269,7 @@ func TestJITDerivedNativeErrors(t *testing.T) {
 // super() gives the parent; bound after, the this the rest of its body
 // writes. Each answer is the interpreter's.
 func TestJITDerivedNativeUnwind(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -466,6 +468,7 @@ func TestJITDerivedNativeSuperTwice(t *testing.T) {
 // Go enters a callee so where a call of Go cannot make the call: one of
 // more operands than a call of Go takes (abi.MaxGoArgs).
 func TestJITDerivedParentCodeEntered(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -536,6 +539,7 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 // interpreter; in the warm rounds the subclass's code leaves native code
 // at no super().
 func TestJITDerivedSuperNotInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

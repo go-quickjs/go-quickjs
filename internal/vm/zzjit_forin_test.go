@@ -43,6 +43,7 @@ func forInRounds() []string {
 // interpreter's, for every kind of cursor, the ones native code leaves to
 // Go among them.
 func TestJITForIn(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

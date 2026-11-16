@@ -92,6 +92,7 @@ func jitRealmCheck(t *testing.T, r *Runtime, re *Realm, fn *bytecode.Function, n
 // is no other realm's either: it was the second realm's objects, literals
 // and arrays alike, that had the first's prototypes.
 func TestJITRealmsHaveTheirOwnCode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -144,6 +145,7 @@ func jitRealmSay(c jitStressConfig, round, i int) string {
 // callers too: a function's realm is its closure's, and a caller's code
 // leaves for Go to switch it.
 func TestJITCallsAcrossRealms(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -192,6 +194,7 @@ globalThis.make = make; globalThis.drive = drive;`)
 // JIT's budget, as any other code does, the realms' entries going as old
 // entries do.
 func TestJITRealmsWithinTheBudget(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

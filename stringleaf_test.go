@@ -53,6 +53,7 @@ function sweep() {
 // as Node does, in the interpreter and the tree tier, which a sweep run
 // three times takes to; the JIT's is internal/vm's TestJITStringLeaves.
 func TestStringLeaves(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if got := evalString(t, rt, stringLeafSweep+`; var r; for (var t = 0; t < 3; t++) r = sweep(); r`); got != "47520:244910520:3840" {

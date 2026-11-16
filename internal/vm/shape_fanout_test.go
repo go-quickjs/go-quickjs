@@ -9,6 +9,7 @@ import (
 // past what a shape further along keeps: objects that begin alike and go on
 // each their own way are a table of keys, whose shapes are kept for nothing.
 func TestShapeFanout(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	parsed := func(text string) *Object {

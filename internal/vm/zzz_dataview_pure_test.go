@@ -168,9 +168,9 @@ const dataViewPureWant = "Int8:15,15 Uint8:15,15 Int16:15,15 Uint16:15,15 Int32:
 // it is evaluated again with a frame, which had written again. Each answer
 // is Node's, in the tree tier and in the interpreter.
 func TestDataViewSetterInPureBody(t *testing.T) {
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		if _, err := r.Run(compileForTest(t, dataViewPureSrc)); err != nil {
 			t.Fatal(err)
 		}
@@ -185,5 +185,4 @@ func TestDataViewSetterInPureBody(t *testing.T) {
 		}
 		r.Close()
 	}
-	SetTreeTier(true)
 }

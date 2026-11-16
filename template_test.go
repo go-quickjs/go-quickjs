@@ -10,6 +10,7 @@ import (
 // A tag is called with the site's strings and the substitutions separately,
 // which is what lets it see the text the substitutions were written between.
 func TestTaggedTemplates(t *testing.T) {
+	t.Parallel()
 	const tag = `function t(s, ...v) { return JSON.stringify([[...s], s.raw, v]); }
 	`
 	cases := []struct{ src, want string }{
@@ -90,6 +91,7 @@ func TestTaggedTemplates(t *testing.T) {
 // A modifier group turns a flag on or off for part of a pattern, which is the
 // only way to vary one within a single regular expression.
 func TestRegExpModifierGroups(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(new RegExp("(?i:a)b").test("Ab"))`, "true"},
 		{`String(new RegExp("(?i:a)b").test("AB"))`, "false"},

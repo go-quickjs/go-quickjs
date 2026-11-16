@@ -39,6 +39,7 @@ var polyWriteEmpty = []string{`writes(5000, 2)`, `writes(5000, 2)`}
 // polyfill's top level faulted so under the JIT every time, and every page
 // of a React bundle that loaded it. Each answer is the interpreter's.
 func TestJITPolyWriteNoShape(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

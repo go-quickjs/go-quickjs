@@ -14,6 +14,7 @@ import "testing"
 // after such a call -- on the trees and in the interpreter, three rounds
 // alike.
 func TestTailCallArguments(t *testing.T) {
+	t.Parallel()
 	const src = `
 		"use strict"
 		const r = []
@@ -43,8 +44,7 @@ func TestTailCallArguments(t *testing.T) {
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "12502500 200:3:extra1 1/2 6000,1830 odd even 307 4,5,1,2,3 aundefined 100:100 | true"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -54,5 +54,4 @@ func TestTailCallArguments(t *testing.T) {
 			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }

@@ -88,6 +88,7 @@ const typeofTestWant = "uOF?/10101010/n/p--/0/undefined:false,oFU?/01101010/on/p
 // Each function has a local of its own, so that it is run on its tree
 // rather than by pureCall.
 func TestTypeofTests(t *testing.T) {
+	t.Parallel()
 	for _, c := range compileForTest(t, typeofTestSrc).Constants {
 		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
 			continue
@@ -99,8 +100,7 @@ func TestTypeofTests(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
@@ -113,5 +113,4 @@ func TestTypeofTests(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, typeofTestWant)
 		}
 	}
-	SetTreeTier(true)
 }

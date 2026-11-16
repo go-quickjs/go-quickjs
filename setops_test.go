@@ -10,6 +10,7 @@ import (
 )
 
 func TestSetOperations(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[...new Set([1,2,3]).union(new Set([3,4]))].join(",")`, "1,2,3,4"},
 		{`[...new Set([1,2,3]).intersection(new Set([2,3,4]))].join(",")`, "2,3"},
@@ -59,6 +60,7 @@ func TestSetOperations(t *testing.T) {
 }
 
 func TestSetOperationErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// An array is not set-like: it has no size, has or keys in the right
 		// shape.
@@ -86,6 +88,7 @@ func TestSetOperationErrors(t *testing.T) {
 }
 
 func TestWeakRefAndFinalizationRegistry(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A reference whose target is still reachable always derefs to it.
 		{`var o = {a: 1}; String(new WeakRef(o).deref().a)`, "1"},
@@ -140,6 +143,7 @@ func TestWeakRefAndFinalizationRegistry(t *testing.T) {
 }
 
 func TestRecentBuiltins(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Promise.try runs its function now, unlike Promise.resolve().then.
 		{`var order = []; Promise.try(() => order.push("sync"));
@@ -210,6 +214,7 @@ func TestRecentBuiltins(t *testing.T) {
 // Every collection constructor takes its contents from an iterable, and
 // undefined means an empty one.
 func TestCollectionConstructorSources(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var k = {}; String(new WeakMap([[k, 1]]).get(k))`, "1"},
 		{`var s = Symbol(); String(new WeakMap([[s, 1]]).get(s))`, "1"},
@@ -346,6 +351,7 @@ func TestFinalizationRegistryIsCalled(t *testing.T) {
 // fill themselves from an iterable: through the method the object itself has,
 // so that a subclass overriding it sees every entry go by.
 func TestCollectionConstructorUsesAdder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = []
 		  class M extends Map { set(k, v) { log.push(k); return super.set(k, v) } }
@@ -390,6 +396,7 @@ func TestCollectionConstructorUsesAdder(t *testing.T) {
 // TestIteratorMethodIdentity covers the methods a collection shares between two
 // names, which a script can compare.
 func TestIteratorMethodIdentity(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Map.prototype[Symbol.iterator] === Map.prototype.entries)`, "true"},
 		{`String(Set.prototype[Symbol.iterator] === Set.prototype.values)`, "true"},
@@ -422,6 +429,7 @@ func TestIteratorMethodIdentity(t *testing.T) {
 // collection while the operation runs, and the specification says what each one
 // sees.
 func TestSetOperationsWalkStepByStep(t *testing.T) {
+	t.Parallel()
 	const setLike = `
 		function observable(values, log) {
 			var index = 0

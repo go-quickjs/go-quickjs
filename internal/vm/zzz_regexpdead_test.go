@@ -121,9 +121,8 @@ func regexpExecLeafForTest(r *Runtime) *regexpLeaf[struct{}] {
 // tier and in the interpreter, with the collector idle.
 func TestRegExpDeadExec(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		gc := debug.SetGCPercent(-1)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, regexpDeadTestSrc))
 		dummy := regexpExecLeafForTest(r).dummy
 		r.Close()
@@ -140,7 +139,6 @@ func TestRegExpDeadExec(t *testing.T) {
 			t.Errorf("tree tier %v: exec's dummy made: %v", tree, dummy != nil)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // regexpDeadKindsSrc has a function for each way the tree tier builds a
@@ -188,8 +186,7 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 		{"kTernary('ab', /b/) + ',' + kTernary('ab', /c/)", "6,3"},
 	} {
 		for _, tree := range []bool{true, false} {
-			SetTreeTier(tree)
-			r := newOldTiersForTest(Config{})
+			r := newOldTiersTreeForTest(tree, Config{})
 			if _, err := r.Run(compileForTest(t, regexpDeadKindsSrc)); err != nil {
 				t.Fatal(err)
 			}
@@ -207,7 +204,6 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 	skipUnlessAllocsOrdinary(t)
 
 	// What a loop of them makes: nothing for each call, where an array
@@ -239,6 +235,7 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 // lastIndex as it was, global or not, in the tree tier and in the
 // interpreter. (Each match spends the budget: half a second.)
 func TestRegExpDeadExecComplexity(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("spends the step budget")
 	}
@@ -257,8 +254,7 @@ for (var re of RES) {
 out.join('|')`
 	fail := "SyntaxError,regular expression is too complex,,0,0"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		// The interpreter, which makes these calls as before, of one.
 		res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", fail+"|"+fail
 		if !tree {
@@ -273,13 +269,13 @@ out.join('|')`
 			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A deadline stops a call of exec whose result nothing reads on a match
 // that would run for ever, and the runtime runs on, its calls made as
 // before.
 func TestRegExpDeadExecDeadline(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { for (var i = 0; i < 2; i++) re.exec(s) }`)); err != nil {
@@ -415,9 +411,8 @@ function rTpl(s, re, n) { for (var i = 0; i < n; i++) s.replace(re, '[$1]') }
 // interpreter, with the collector idle.
 func TestRegExpDeadReplace(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		gc := debug.SetGCPercent(-1)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, regexpDeadReplaceTestSrc))
 		r.Close()
 		debug.SetGCPercent(gc)
@@ -428,7 +423,6 @@ func TestRegExpDeadReplace(t *testing.T) {
 			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, regexpDeadReplaceTestWant)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // regexpDeadReplaceKinds are calls of regexpDeadReplaceKindsSrc's
@@ -451,8 +445,7 @@ var regexpDeadReplaceKinds = []struct{ call, want, many string }{
 func TestRegExpDeadReplaceKinds(t *testing.T) {
 	for _, c := range regexpDeadReplaceKinds {
 		for _, tree := range []bool{true, false} {
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			if _, err := r.Run(compileForTest(t, regexpDeadReplaceKindsSrc)); err != nil {
 				t.Fatal(err)
 			}
@@ -471,7 +464,6 @@ func TestRegExpDeadReplaceKinds(t *testing.T) {
 			r.Close()
 		}
 	}
-	SetTreeTier(true)
 }
 
 // regexpDeadMallocs is how many more objects r makes running call, a
@@ -503,6 +495,7 @@ func regexpDeadMallocs(t *testing.T, r *Runtime, call string, count int) uint64 
 // lastIndex, global or not, in the tree tier and in the interpreter.
 // (Each match spends the budget: half a second.)
 func TestRegExpDeadReplaceComplexity(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("spends the step budget")
 	}
@@ -520,8 +513,7 @@ for (var re of RES) {
 }
 out.join('|')`
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,3|SyntaxError,regular expression is too complex,,0,0"
 		if !tree {
 			res, want = "var RES = [/(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,0"
@@ -535,13 +527,13 @@ out.join('|')`
 			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A deadline stops a replace whose result nothing reads on a match that
 // would run for ever, and the runtime runs on, its replaces made as
 // before.
 func TestRegExpDeadReplaceDeadline(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { for (var i = 0; i < 2; i++) s.replace(re, '') }`)); err != nil {
@@ -566,6 +558,7 @@ func TestRegExpDeadReplaceDeadline(t *testing.T) {
 // string could be too long to be one -- which the replace that makes it
 // throws for -- and makes the matches otherwise.
 func TestRegExpDeadReplaceTooLong(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	rx, err := r.Run(compileForTest(t, `var re = /b/g; re.lastIndex = 7; re`))
@@ -639,9 +632,8 @@ var regexpDeadTruth = []struct{ call, want string }{
 // string, and 'a'.replace(/a/g, "") been true.
 func TestRegExpDeadReplaceTruth(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		gc := debug.SetGCPercent(-1)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
 			t.Fatal(err)
 		}
@@ -659,5 +651,4 @@ func TestRegExpDeadReplaceTruth(t *testing.T) {
 		r.Close()
 		debug.SetGCPercent(gc)
 	}
-	SetTreeTier(true)
 }

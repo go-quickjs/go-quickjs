@@ -16,6 +16,7 @@ import "testing"
 // runs in its frame. Node, which makes no tail call, is asked 5,000 deep.
 // On the trees and in the interpreter, three rounds alike.
 func TestSelfTailCalls(t *testing.T) {
+	t.Parallel()
 	const src = `
 		"use strict"
 		const r = []
@@ -41,8 +42,7 @@ func TestSelfTailCalls(t *testing.T) {
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "101 10100 a/undefined 100 1275 100,99,98,97,96,95,94,93,92,91,90,89,88,87,86,85,84,83,82,81,80,79,78,77,76,75,74,73,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1 100,99,98,97,96,95,94,93,92,91,90,89,88,87,86,85,84,83,82,81,80,79,78,77,76,75,74,73,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1 100 50 done 2000 | true"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -52,7 +52,6 @@ func TestSelfTailCalls(t *testing.T) {
 			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // TestSelfTailRestarts counts the starts again selfRestart makes: a
@@ -87,10 +86,9 @@ func TestSelfTailRestarts(t *testing.T) {
 		{`function sloppy(n) { let _k = 0; if (n === 0) return 0; return sloppy(n - 1) }; sloppy(1000)`, 0},
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		for _, tc := range cases {
 			n = 0
-			r := newOldTiersForTest(Config{})
+			r := newOldTiersTreeForTest(tree, Config{})
 			_, err := r.Run(compileForTest(t, tc.src))
 			r.Close()
 			if err != nil {
@@ -106,5 +104,4 @@ func TestSelfTailRestarts(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }

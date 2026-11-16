@@ -133,6 +133,14 @@ func init() { treeTier.Store(os.Getenv("QJS_NOTREE") == "") }
 // for tests that compare the two.
 func SetTreeTier(on bool) { treeTier.Store(on) }
 
+// noTreeFor settles that fn, which a runtime with noTree loads, has no tree,
+// as firstTree settles it with the tier off, unless a call has settled it
+// already: what SetTreeTier(false) does for the functions first run after
+// it, done for one runtime's.
+func noTreeFor(fn *bytecode.Function) {
+	atomic.CompareAndSwapPointer(&fn.VMCode, nil, unsafe.Pointer(noTree))
+}
+
 // TreesBuilt is how many functions the tree tier has built, for tests that
 // check it ran.
 func TreesBuilt() int64 { return treesBuilt.Load() }

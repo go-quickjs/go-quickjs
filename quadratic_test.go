@@ -15,6 +15,7 @@ import (
 // "bound bound ..." name in full, a list was folded an item at a time, and
 // each of Thai's words was searched for from the first (KI-27).
 func TestLinearBuilds(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ src, want string }{
 		"surrogate halves": {`
 			let s = "";
@@ -55,6 +56,7 @@ func TestLinearBuilds(t *testing.T) {
 // standard and V8 have it, rather than starting a match at the second half
 // (KI-39).
 func TestUnicodeLastIndexInAPair(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		{ const r = /\udc00/uy; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00"))); }
 		{ const r = /\udc00/ug; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00")) + " " + r.lastIndex); }
@@ -71,6 +73,7 @@ func TestUnicodeLastIndexInAPair(t *testing.T) {
 // that meet into the one spelling a character has (KI-44). The answers are
 // node's.
 func TestCodeUnitCounts(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const e = (f) => { try { return f() } catch (x) { return x.name + ": " + x.message } };
 		[e(() => new Uint8Array(4).setFromHex("a\u00e9")), e(() => new Uint8Array(4).setFromHex("ab\u00e9")),
 		 "x".padStart(5, "\uD83D").length, "x".padEnd(4, "\uDE00").length, "x".padStart(6, "\u{1F600}").length,
@@ -85,6 +88,7 @@ func TestCodeUnitCounts(t *testing.T) {
 // ends a word as U+03C2: those three lowercased one character at a time and
 // always wrote U+03C3 (KI-46). The answers are node's.
 func TestLocaleFinalSigma(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const cps = (s) => [...s].map(c => c.codePointAt(0).toString(16)).join(" ");
 		["tr", "az", "lt", "en"].map(l => cps("ΟΔΟΣ".toLocaleLowerCase(l)) + "/" + cps("IİΣ".toLocaleLowerCase(l))).join(" | ")`,
 		"3bf 3b4 3bf 3c2/131 69 3c2 | 3bf 3b4 3bf 3c2/131 69 3c2 | 3bf 3b4 3bf 3c2/69 69 307 3c2 | 3bf 3b4 3bf 3c2/69 69 307 3c2")

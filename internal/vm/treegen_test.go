@@ -11,6 +11,7 @@ import (
 // TestTreeOperandsGenerated fails while tree_operand.go is not what its
 // generator writes.
 func TestTreeOperandsGenerated(t *testing.T) {
+	t.Parallel()
 	want, err := treegen.Generate()
 	if err != nil {
 		t.Fatal(err)

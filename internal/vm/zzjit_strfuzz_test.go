@@ -19,6 +19,7 @@ var strFuzzSettings = []jitStressConfig{
 // strFuzz's programs in native code, compiled at once and through every
 // exit stress can make, the collector idle and marking.
 func TestJITStrAppendRandom(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -111,6 +112,7 @@ func TestJITArrayRoomRandom(t *testing.T) {
 // and what the binding held stays as it was. The right side is a rope of a
 // quarter of a gigabyte, which an append keeps as it is.
 func TestJITStrAppendPastTheLongest(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -164,6 +164,7 @@ func jitInlinedHas(inlined []uintptr, cl uintptr) bool {
 // its guards failing as they meet each new shape, under the stress
 // settings' polls and deoptimizations too.
 func TestJITPrologueCalleesAgree(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

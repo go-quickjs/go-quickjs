@@ -10,6 +10,7 @@ import (
 // for a method is the whole method definition -- the name, and any async, star
 // or accessor keyword -- and not merely the parameters and body.
 func TestFunctionToString(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f(a, b) {} f.toString()`, "function f(a, b) {}"},
 		{`(function () {}).toString()`, "function () {}"},
@@ -67,6 +68,7 @@ func TestFunctionToString(t *testing.T) {
 // pattern: a primitive would find one on its own prototype, which is not
 // something the caller supplied.
 func TestStringPatternOnlyAsksObjects(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.defineProperty(String.prototype, Symbol.match,
 		    {get: function () { throw new Error("asked") }});
@@ -112,6 +114,7 @@ func TestStringPatternOnlyAsksObjects(t *testing.T) {
 // byte offsets into the encoded form: `$'` and "$`" name the text around the
 // match as a script counts it.
 func TestStringReplaceCountsCodeUnits(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"following text", `"áXbXc".replaceAll("X", "[$']")`, "á[bXc]b[c]c"},
 		{"preceding text", "\"áXbXc\".replaceAll(\"X\", \"[$`]\")", "á[á]b[áXb]c"},
@@ -134,6 +137,7 @@ func TestStringReplaceCountsCodeUnits(t *testing.T) {
 // A string given to a method that wants a pattern is a pattern, not text to
 // find: only replace and split with a string argument search for a literal.
 func TestStringPatternArgumentsArePatterns(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String("ab3c".search("\\d"))`, "2"},
 		{`String("a.c".search("."))`, "0"},
@@ -157,6 +161,7 @@ func TestStringPatternArgumentsArePatterns(t *testing.T) {
 // a toString that counts its calls sees exactly one, however many matches there
 // turn out to be -- including none at all.
 func TestStringReplaceConvertsTheReplacementOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"no match", `var n = 0
 		  var r = {toString: function () { n++; return "b" }}
@@ -183,6 +188,7 @@ func TestStringReplaceConvertsTheReplacementOnce(t *testing.T) {
 // is more than one character expands, and a sigma that ends a word lowercases
 // differently from one that does not.
 func TestFullCaseMappings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"sharp s", `"ß".toUpperCase()`, "SS"},
 		{"ligature", `"ﬁ".toUpperCase()`, "FI"},
@@ -211,6 +217,7 @@ func TestFullCaseMappings(t *testing.T) {
 // String.prototype.normalize reads its argument as a form name and refuses one
 // it does not know.
 func TestNormalizeIsAccepted(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`typeof "".normalize`, "function"},
 		{`String.prototype.normalize.length + ""`, "0"},
@@ -231,6 +238,7 @@ func TestNormalizeIsAccepted(t *testing.T) {
 // given to one is a mistake rather than a pattern -- and what counts as one is
 // what Symbol.match says.
 func TestSearchMethodsRefuseARegExp(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"includes", `try { "".includes(/a/); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
 		{"startsWith", `try { "".startsWith(/a/); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
@@ -259,6 +267,7 @@ func TestSearchMethodsRefuseARegExp(t *testing.T) {
 // from it backwards: what it finds is the last occurrence starting at or before
 // that index.
 func TestLastIndexOfPosition(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String("canal".lastIndexOf("a"))`, "3"},
 		{`String("canal".lastIndexOf("a", 2))`, "1"},
@@ -286,6 +295,7 @@ func TestLastIndexOfPosition(t *testing.T) {
 // A property a class synthesizes rather than stores cannot be deleted: it is
 // there for as long as the object is.
 func TestDeleteSynthesizedProperties(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Reflect.deleteProperty(new String("str"), "length"))`, "false"},
 		{`String(Reflect.deleteProperty(new String("str"), "0"))`, "false"},
@@ -311,6 +321,7 @@ func TestDeleteSynthesizedProperties(t *testing.T) {
 // marks are in. The K forms additionally replace a character by what it stands
 // for, which loses the distinction rather than respelling it.
 func TestNormalizeForms(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Composed and decomposed spellings of the same text.
 		{`"Å".normalize("NFD") === "Å" ? "yes" : "no"`, "yes"},
@@ -378,6 +389,7 @@ func TestNormalizeForms(t *testing.T) {
 // what concatenating them one at a time did -- including where the join falls
 // between the halves of a surrogate pair.
 func TestTemplateJoining(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{"`a${1}b`", "a1b"},
 		{"`${1}${2}${3}`", "123"},

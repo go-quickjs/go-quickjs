@@ -83,7 +83,12 @@ type armGen struct {
 	v       *variant
 	exit    Label
 	exitRet Label
-	exits   []Label
+	// exitAfter is amd64's.
+	exitAfter Label
+	exits     []Label
+	genRet    Label
+	// genObj is amd64's.
+	genObj Label
 }
 
 func (g *armGen) ex(n int) Label {
@@ -187,6 +192,17 @@ func (g *armGen) numOr(x FReg, addr Reg, miss Label) {
 	a.Cmp(r9, rTag, true)
 	a.BCond(HS, miss)
 	a.FMovToF(x, r9)
+}
+
+// numMem is numOr for an operand of arithmetic, as amd64's: x is loaded
+// from memory rather than moved from r9, so that a chain of operations
+// through a register waits on the store's forwarding alone.
+func (g *armGen) numMem(x FReg, addr Reg, miss Label) {
+	a := g.a
+	a.Load(r9, addr, 0)
+	a.Cmp(r9, rTag, true)
+	a.BCond(HS, miss)
+	a.LoadF(x, addr, 0)
 }
 
 // noInt64 exits where r, FCVTZS's answer, is either limit: a number of
@@ -368,6 +384,21 @@ func (g *armGen) storeA(x FReg) {
 	g.next()
 }
 
+// storeB is storeA's of register B.
+func (g *armGen) storeB(x FReg) {
+	a := g.a
+	done := a.NewLabel()
+	g.regB(rD)
+	a.StoreF(rD, 0, x)
+	a.Load(rT, rD, 8)
+	a.Cbz(rT, done, true)
+	a.AddImm(rW, rD, 8, true)
+	a.MovImm(rC, 0)
+	g.ptrStore()
+	a.Bind(done)
+	g.next()
+}
+
 // storeValue stores the Value whose words are r9 (num) and r8 (ref) at
 // the address in rW and goes on, as amd64's: the pointer word by
 // ptrStore's routine while the collector marks.
@@ -493,11 +524,11 @@ func (g *armGen) arith(op FOp, operand int) {
 		big = a.NewLabel()
 	}
 	g.regB(rS)
-	g.numOr(0, rS, big)
+	g.numMem(0, rS, big)
 	switch operand {
 	case 0:
 		g.regC(r8)
-		g.numOr(1, r8, big)
+		g.numMem(1, r8, big)
 	case 1:
 		g.immSC(rC)
 		a.Scvtf(1, rC, true)
@@ -519,7 +550,7 @@ func (g *armGen) arith(op FOp, operand int) {
 // the code goes on at the pc they give, or returns to nativeRun.
 func (g *armGen) exitStub() {
 	a := g.a
-	slow, after, afterSlow, back, end, noCount, count := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	slow, afterSlow, back, end, noCount, count := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(g.exit)
 	g.exitState()
 	ready := a.NewLabel()
@@ -543,7 +574,7 @@ func (g *armGen) exitStub() {
 	a.Bind(noCount)
 	a.Load(rD, rCtx, ncRT)
 	a.Store(rD, offRtBackEdges, rBud)
-	a.Adr(r8, after)
+	a.Adr(r8, g.exitAfter)
 	a.Store(rCtx, ncAfter, r8)
 	// handler(st.regs, w, pc, st): w in R1, pc in R2, the func value in
 	// R26.
@@ -552,11 +583,18 @@ func (g *armGen) exitStub() {
 	a.Ubfx(r8, rW, 0, 8)
 	a.Load(r9, rCtx, ncGoTable)
 	a.LoadIdx(rFn, r9, r8, true)
+	// nativeCallMiss where the call handler asks for it (ncMiss).
+	have := a.NewLabel()
+	a.Load(rT, rCtx, ncMiss)
+	a.Cbz(rT, have, true)
+	a.Store(rCtx, ncMiss, ZR)
+	a.Load(rFn, rCtx, ncCallMissFn)
+	a.Bind(have)
 	a.Load(rS, rCtx, ncTop)
 	a.Load(rW, rS, offStRegs)
 	a.Load(rJ, rCtx, ncCallH)
 	a.Br(rJ)
-	a.Bind(after)
+	a.Bind(g.exitAfter)
 	a.CmpImm(rW, 0, true)
 	a.BCond(GE, back)
 	a.MovImm(rC, uint64(1)<<63)
@@ -697,6 +735,14 @@ func (g *armGen) makeTop(slow Label) {
 	a.B(fill)
 	a.Bind(filled)
 	a.Store(rCtx, ncFilled, r8)
+	// The depth among those the run has used (used), which its end
+	// clears.
+	used := a.NewLabel()
+	a.Load(rC, rCtx, ncUsed)
+	a.Cmp(r8, rC, true)
+	a.BCond(LE, used)
+	a.Store(rCtx, ncUsed, r8)
+	a.Bind(used)
 	// Its frame, code, closure and window, each where it differs, and its
 	// window's base.
 	a.Store(rCtx, scr(sV0), rS)
@@ -892,7 +938,7 @@ func (g *armGen) bigStoreA() {
 // bitImm is R[A] = int32 R[B] op SC, the count of a shift in rC.
 func (g *armGen) bitImm(emit func(), unsigned ...bool) {
 	g.regB(rS)
-	g.num(0, rS)
+	g.numMem(0, rS, g.exit)
 	g.toInt32(r9, 0)
 	g.immSC(rC)
 	emit()
@@ -903,9 +949,9 @@ func (g *armGen) bitImm(emit func(), unsigned ...bool) {
 // bitReg is R[A] = int32 R[B] op int32 R[C], R[C] in rC.
 func (g *armGen) bitReg(emit func(), unsigned ...bool) {
 	g.regB(rS)
-	g.num(0, rS)
+	g.numMem(0, rS, g.exit)
 	g.regC(r8)
-	g.num(1, r8)
+	g.numMem(1, r8, g.exit)
 	g.toInt32(rC, 1)
 	g.toInt32(r9, 0)
 	emit()
@@ -1239,6 +1285,24 @@ func (g *armGen) typedWrite(obj, idx Reg) {
 // anything else exits.
 func (g *armGen) arrayAppend(obj, idx Reg, notArray Label) {
 	a := g.a
+	g.appendRoom(obj, idx, notArray, g.exit, false)
+	// The value at elems[len], then the length past it.
+	a.ShiftImm(Lsl, rW, idx, 4, true)
+	g.addMem(rW, obj, sizeObj)
+	a.AddImm(r9, idx, 1, true)
+	a.Store(obj, sizeObj+8, r9)
+	a.Load(rC, rIP, 0)
+	a.ShiftImm(Lsr, rC, rC, 48, true)
+	a.AddLsl(rC, rRegs, rC, 4)
+	g.loadValue(rC)
+	g.storeValue()
+}
+
+// appendRoom is amd64's (amd64.go): the checks of an element appended at
+// idx, the array's length, which it loads where atLen is set. rD and r8
+// are its scratch.
+func (g *armGen) appendRoom(obj, idx Reg, notArray, miss Label, atLen bool) {
+	a := g.a
 	loop, done := a.NewLabel(), a.NewLabel()
 	a.LoadU8(rD, obj, offObjClass)
 	a.CmpImm(rD, int64(ClassArray), false)
@@ -1247,11 +1311,15 @@ func (g *armGen) arrayAppend(obj, idx Reg, notArray Label) {
 	a.LoadU16(rD, obj, offObjFlags)
 	a.AndImm(rD, rD, uint64(want|objHasSparseElements|objMappedArguments|objSharedElems|objPolyProto), false)
 	a.CmpImm(rD, int64(want), false)
-	a.BCond(NE, g.exit)
-	g.cmpMem(idx, obj, sizeObj+8)
-	a.BCond(NE, g.exit)
+	a.BCond(NE, miss)
+	if atLen {
+		a.Load(idx, obj, sizeObj+8)
+	} else {
+		g.cmpMem(idx, obj, sizeObj+8)
+		a.BCond(NE, miss)
+	}
 	g.cmpMem(idx, obj, sizeObj+16)
-	a.BCond(HS, g.exit)
+	a.BCond(HS, miss)
 	g.noIndexKeys(obj)
 	// The chain: ordinary objects and arrays of no elements, no index
 	// keys, no prototype of their own word.
@@ -1266,30 +1334,20 @@ func (g *armGen) arrayAppend(obj, idx Reg, notArray Label) {
 	a.CmpImm(rD, int64(ClassObject), false)
 	a.BCond(EQ, ok)
 	a.CmpImm(rD, int64(ClassArray), false)
-	a.BCond(NE, g.exit)
+	a.BCond(NE, miss)
 	a.Bind(ok)
 	a.LoadU16(rD, r8, offObjFlags)
 	a.TstImm(rD, uint64(objPolyProto), false)
-	a.BCond(NE, g.exit)
+	a.BCond(NE, miss)
 	noElems := a.NewLabel()
 	a.TstImm(rD, uint64(objHasExt), false)
 	a.BCond(EQ, noElems)
 	g.cmpMemImm(r8, sizeObj+8, 0)
-	a.BCond(NE, g.exit)
+	a.BCond(NE, miss)
 	a.Bind(noElems)
 	g.noIndexKeys(r8)
 	a.B(loop)
 	a.Bind(done)
-	// The value at elems[len], then the length past it.
-	a.ShiftImm(Lsl, rW, idx, 4, true)
-	g.addMem(rW, obj, sizeObj)
-	a.AddImm(r9, idx, 1, true)
-	a.Store(obj, sizeObj+8, r9)
-	a.Load(rC, rIP, 0)
-	a.ShiftImm(Lsr, rC, rC, 48, true)
-	a.AddLsl(rC, rRegs, rC, 4)
-	g.loadValue(rC)
-	g.storeValue()
 }
 
 // noIndexKeys exits unless the object in obj has no key that is an array
@@ -1418,4 +1476,53 @@ func (g *armGen) reload() {
 // tableAddrARM64 is arm64's func name() uintptr returning sym's address.
 func tableAddrARM64(name, sym string) string {
 	return fmt.Sprintf("TEXT ·%s(SB), NOSPLIT, $0-8\n\tMOVD $·%s(SB), R0\n\tMOVD R0, ret+0(FP)\n\tRET\n", name, sym)
+}
+
+// typeIndex is amd64's: the index of typeof's type in rC, of the Value at
+// the address in addr. r8, r9 and rD are its scratch.
+func (g *armGen) typeIndex(addr Reg) {
+	a := g.a
+	idx, obj, num, big, notFn := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Load(r9, addr, 0)
+	a.Cmp(r9, rTag, true)
+	a.BCond(LO, num)
+	a.MovImm(r8, heapBigBits)
+	a.Cmp(r9, r8, true)
+	a.BCond(HS, big)
+	a.Ubfx(rC, r9, 0, 8)
+	a.CmpImm(rC, int64(KindObject), false)
+	a.BCond(EQ, obj)
+	a.CmpImm(rC, int64(KindUndefined), false)
+	a.BCond(LO, g.exit)
+	a.CmpImm(rC, int64(KindBigInt), false)
+	a.BCond(HI, g.exit)
+	// undefined, null and a boolean one before their kind; a string,
+	// a symbol and a BigInt at it.
+	a.CmpImm(rC, int64(KindString), false)
+	a.BCond(HS, idx)
+	a.AddImm(rC, rC, -1, false)
+	a.B(idx)
+	a.Bind(num)
+	a.MovImm(rC, 3)
+	a.B(idx)
+	a.Bind(big)
+	a.MovImm(rC, 6)
+	a.B(idx)
+	a.Bind(obj)
+	a.Load(r8, addr, 8)
+	a.LoadU16(rD, r8, offObjFlags)
+	a.MovImm(rC, 1)
+	a.TstImm(rD, uint64(objHTMLDDA), false)
+	a.BCond(NE, g.exit)
+	a.TstImm(rD, uint64(objHasData), false)
+	a.BCond(EQ, idx)
+	a.Load(r9, r8, sizeObj+offExtData)
+	g.cmpMem(r9, rCtx, ncFuncT)
+	a.BCond(NE, notFn)
+	a.MovImm(rC, 7)
+	a.B(idx)
+	a.Bind(notFn)
+	g.cmpMem(r9, rCtx, ncProxyT)
+	a.BCond(EQ, g.exit)
+	a.Bind(idx)
 }

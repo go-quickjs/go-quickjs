@@ -10,6 +10,7 @@ import "testing"
 // a key used to read some other object, and an array Object.keys returned
 // that the script then changes.
 func TestForInKeyCache(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function keys(o) { var r = []; for (var k in o) r.push(k + "=" + o[k]); return r.join(",") }
 		  var a = { x: 1, y: 2 }, b = { x: 3, y: 4 }, r = [keys(a), keys(b)]
@@ -50,6 +51,7 @@ func TestForInKeyCache(t *testing.T) {
 // sparse arrays, getters and non-enumerable elements walked as before; and
 // the keys reading the array and another array.
 func TestForInArrayElements(t *testing.T) {
+	t.Parallel()
 	const src = `var r = [];
 	  function keys(a, body) { var ks = ""; for (var k in a) { ks += k + ":" + typeof k + ","; if (body) body(a, k) } return ks }
 	  r.push(keys([1, 2, 3]), keys([]), keys([1, , 3]));

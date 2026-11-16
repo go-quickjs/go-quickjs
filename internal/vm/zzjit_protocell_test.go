@@ -12,6 +12,7 @@ import "testing"
 // nor deoptimizes there, from its first compile on. Each answer is the
 // interpreter's.
 func TestJITChainCellReadsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

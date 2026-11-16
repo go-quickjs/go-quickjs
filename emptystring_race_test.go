@@ -11,6 +11,7 @@ import (
 // share the empty string without writing to it: matching against it used to
 // cache its code units in it, which the race detector reports (KI-12).
 func TestEmptyStringIsNotWritten(t *testing.T) {
+	t.Parallel()
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)

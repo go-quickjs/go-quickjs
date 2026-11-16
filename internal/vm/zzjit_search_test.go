@@ -9,6 +9,7 @@ import "testing"
 // of the searches (ssa.GoIndexOf) and of Go with frames answer as the
 // interpreter does, and as Node does.
 func TestJITArraySearches(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

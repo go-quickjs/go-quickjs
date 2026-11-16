@@ -44,6 +44,7 @@ func jitCallForTest(t *testing.T, r *Runtime, src string, want float64) {
 // call of it is one (tryJITAt), and so is its loop's in a tree
 // (tryJITLoop) -- and natively from then on.
 func TestJITBackgroundFirstCompile(t *testing.T) {
+	t.Parallel()
 	const k = 3
 	r := jitBackgroundForTest(t, k)
 	cl := jitGlobalClosureForTest(r, "sum")
@@ -108,6 +109,7 @@ func jitPendingRecompileForTest(t *testing.T, r *Runtime) (*jitEntry, *closure) 
 // Code compiled again in the background runs on, valid, until its
 // replacement is installed, which replaces it then.
 func TestJITBackgroundRecompileRunsOldCode(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 2)
 	e, _ := jitPendingRecompileForTest(t, r)
 	old := e.ssa
@@ -126,6 +128,7 @@ func TestJITBackgroundRecompileRunsOldCode(t *testing.T) {
 // away at its install, the code it would replace kept: built from what
 // failed, it would fail the same guard again.
 func TestJITBackgroundDiscardsAfterDeopt(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 1)
 	e, _ := jitPendingRecompileForTest(t, r)
 	old := e.ssa
@@ -262,6 +265,7 @@ func TestJITBackgroundInstallAtNestedLoop(t *testing.T) {
 // through its link, which leaves for Go to run it, until the code, its
 // native callers' alone (ssaCallee), is installed.
 func TestJITBackgroundCalleeCompile(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 1)
 	// No loop, and a call: its own program, for Go to enter, is refused
 	// (jitcompile.HostOnly), its native callers' is not.
@@ -290,6 +294,7 @@ func TestJITBackgroundCalleeCompile(t *testing.T) {
 // meanwhile, for hints it did not have (relower), is thrown away at its
 // install, and the function lowered again from the hints it has now.
 func TestJITBackgroundStaleLowering(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 2)
 	cl := jitGlobalClosureForTest(r, "sum")
 	jitCallForTest(t, r, `sum(10)`, 45)
@@ -344,6 +349,7 @@ func TestJITBackgroundSettingsAtPrepare(t *testing.T) {
 // asked ahead (jitSnapshot): prepared, it holds the snapshot and no
 // function yet; installed, its code runs, nothing missed.
 func TestJITBackgroundBuildsFromSnapshot(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 100)
 	e, _ := jitPendingRecompileForTest(t, r)
 	j := e.pending
@@ -504,6 +510,7 @@ func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
 // enter the code once it is installed. Refused for the compile's being under
 // way, Go never asked again, and the recursion stayed in the tree tier.
 func TestJITBackgroundHotCodeIsEntered(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -537,6 +544,7 @@ func TestJITBackgroundHotCodeIsEntered(t *testing.T) {
 // natively in its place, nothing would ever teach the code to, no call of
 // such a callee leaving native code. carried_short gains nothing without it.
 func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -572,6 +580,7 @@ func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
 // behind, whose callee the loop does not need; it does for one the frame comes
 // back to.
 func TestJITBackgroundHoldsNotForACallLeftBehind(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -613,6 +622,7 @@ func TestJITBackgroundHoldsNotForACallLeftBehind(t *testing.T) {
 // runtime's compiles held when it lets go of its JIT leave their entries as
 // it found them.
 func TestJITBackgroundHoldsEnd(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

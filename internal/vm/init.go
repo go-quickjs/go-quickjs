@@ -85,6 +85,19 @@ func New(cfg Config) *Runtime {
 // read. A nil clock means the process clock.
 func (r *Runtime) SetClock(fn func() time.Time) { r.clock, r.dates = fn, nil }
 
+// SetOldTiers has the runtime run its code on the stack interpreter and
+// the tree tier, as a runtime with the JIT does, and its host compile that
+// code with no register form (RegTier): what SetRegTier(false) does for the
+// process, done for one runtime, for tests that compare the tiers in
+// runtimes side by side. It is set before the runtime runs anything.
+func (r *Runtime) SetOldTiers() { r.oldTiers = true }
+
+// SetNoTree turns the tree tier off for the code the runtime loads (noTree),
+// as SetTreeTier(false) does for the process, for tests that compare the
+// tiers in runtimes side by side. It is set before the runtime runs
+// anything.
+func (r *Runtime) SetNoTree() { r.noTree = true }
+
 // SetTimeZone installs the zone local time is expressed in. A nil zone, or
 // time.Local, means the host's, as ICU finds it. A zone is go-intl's by the
 // location's name, so that its offsets and its names come from the same data

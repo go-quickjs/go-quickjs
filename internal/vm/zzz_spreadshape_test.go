@@ -134,10 +134,9 @@ log: get b,get b,get b,get b,get b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKe
 // what the definitions made: Node's answer, in the tree tier and in the
 // interpreter.
 func TestSpreadByLayout(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		if _, err := r.Run(compileForTest(t, spreadShapeSrc+";run(1)")); err != nil {
 			t.Fatal(err)
 		}
@@ -160,10 +159,9 @@ func TestSpreadByLayout(t *testing.T) {
 // such a source into a literal with a property first, or of a source of
 // another realm's prototype, is made by the definitions.
 func TestSpreadAdoptsLayout(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, `
 		var src = {a: 1, b: 2, c: 3}
 		var hid = {a: 1, b: 2, c: 3}; Object.defineProperty(hid, 'a', {enumerable: false})

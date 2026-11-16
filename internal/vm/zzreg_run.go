@@ -74,9 +74,18 @@ type regCode struct {
 	// calls nothing, or one that only reads or writes its this's
 	// properties; read here rather than in the function, a line away.
 	leaf uint8
+	// tailTo says a call in tail position may give its frame to this code
+	// in place once the stack is deep (regTailTo's facts of the callee:
+	// strict, of the form's own layout, keeping no arguments, not
+	// suspending, not a class's constructor), which the native handler
+	// reads; it fills the padding after leaf.
+	tailTo bool
 	// leafArg is the parameter a regLeafArg body returns, and leafVal the
 	// value a regLeafConst body does.
 	leafArg int32
+	// leafUp is one past the upvalue a regLeafCode body returns first
+	// thing, which the native call handler reads, or 0.
+	leafUp  int32
 	leafVal Value
 	// leafOps is a regLeafCode body's code as regLeafRun runs it.
 	leafOps []regLeafOp
@@ -93,6 +102,10 @@ type regCode struct {
 	// (LocalReg), which a resumption makes again from the generator; 0
 	// otherwise.
 	genFrom int32
+	// aux is the first of rc.Aux, read with no bounds check where the
+	// native code reads an instruction's Aux (get_private's cache site),
+	// or nil where the code has none.
+	aux unsafe.Pointer
 }
 
 // runReg runs frame f as register code c, from instruction start, and

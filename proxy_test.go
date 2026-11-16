@@ -11,6 +11,7 @@ import (
 // observed and relied on. Enforcing that is most of what separates a proxy from
 // an object with clever getters.
 func TestProxyInvariants(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src string }{
 		{"duplicate own key", `Object.keys(new Proxy({}, {ownKeys: () => ["a", "a"]}))`},
 		{"non-key own key", `Object.keys(new Proxy({}, {ownKeys: () => [1]}))`},
@@ -76,6 +77,7 @@ func TestProxyInvariants(t *testing.T) {
 // TestProxyTraps pins the ordinary behaviour the invariants above sit on top
 // of: a trap that answers consistently is simply believed.
 func TestProxyTraps(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Object.getPrototypeOf(new Proxy({}, {getPrototypeOf: () => null})))`, "null"},
 		{`var q = {}; String(Object.getPrototypeOf(new Proxy({}, {getPrototypeOf: () => q})) === q)`,
@@ -114,6 +116,7 @@ func TestProxyTraps(t *testing.T) {
 // A subclass's methods have to produce instances of the subclass, which is what
 // Symbol.species decides.
 func TestSpecies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[Promise, Array, RegExp, Map, Set, ArrayBuffer]
 		    .map(c => c[Symbol.species] === c).join(",")`, "true,true,true,true,true,true"},
@@ -155,6 +158,7 @@ func TestSpecies(t *testing.T) {
 // TestDefinePropertyValidation pins the checks a script relies on when it
 // freezes an object and hands it out.
 func TestDefinePropertyValidation(t *testing.T) {
+	t.Parallel()
 	bad := []struct{ name, src string }{
 		{"redefining a non-configurable property",
 			`var o = {}; Object.defineProperty(o, "a", {value: 1});
@@ -230,6 +234,7 @@ func TestDefinePropertyValidation(t *testing.T) {
 // A combinator resolves every element through the constructor's own resolve,
 // which is what lets a subclass see each value go past.
 func TestPromiseCombinatorUsesReceiver(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var calls = 0;
 		  class P extends Promise { static resolve(v) { calls++; return super.resolve(v); } }
@@ -269,6 +274,7 @@ func TestPromiseCombinatorUsesReceiver(t *testing.T) {
 // everywhere the target could have been, including as somebody's prototype and
 // as another proxy's target.
 func TestProxyStandsInEverywhere(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Every operation that lists keys goes through the trap.
 		{`var p = new Proxy({attr: 1}, {});
@@ -336,6 +342,7 @@ func TestProxyStandsInEverywhere(t *testing.T) {
 // A prototype chain is walked by asking each object for its prototype, so a
 // proxy in it answers through its trap rather than being read around.
 func TestPrototypeChainWalksThroughProxies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"isPrototypeOf", `var p = {}
 		  var o = new Proxy(Object.create(p), {})

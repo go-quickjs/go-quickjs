@@ -20,7 +20,7 @@ import (
 // clauses; closures made in a catch clause; and the frames a throwing
 // nested tree leaves, which the handler's frame must not keep.
 func TestTreeExceptionCompletions(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 	}{
@@ -77,9 +77,8 @@ func TestTreeExceptionCompletions(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				fn := compileForTest(t, tt.src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err != nil {
 					r.Close()
@@ -156,10 +155,9 @@ func TestTreeExceptionLoopStructures(t *testing.T) {
 // TestTreeExceptionInterrupt pins that an interrupt is not an exception a
 // tree's handler catches: neither the catch nor the finally clause runs.
 func TestTreeExceptionInterrupt(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		ctx, cancel := context.WithCancel(context.Background())
 		r.global.setOwnRaw(r.atoms.intern("cancelTree"), Obj(r.newNativeFunc("cancelTree", 0,
 			func(*Runtime, Value, []Value) (Value, error) {
@@ -216,10 +214,9 @@ func TestTreeExceptionSharedAcrossRuntimes(t *testing.T) {
 // RangeError from inside nested trees, is caught by the handler that encloses
 // it, leaving no frames and no stack behind.
 func TestTreeExceptionStackLimit(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{MaxCallDepth: 24})
+		r := newTreeTierForTest(on, Config{MaxCallDepth: 24})
 		fn := compileForTest(t, `function g(n) { return g(n + 1) } function f() { var s = 0; for (var i = 0; i < 20; i++) { try { g(0) } catch (e) { if (e.constructor.name === 'RangeError') s++ } } return s } f()`)
 		v, err := r.Run(fn)
 		if err != nil || v.Number() != 20 || r.frameDepth != 0 || r.stackTop != 0 {

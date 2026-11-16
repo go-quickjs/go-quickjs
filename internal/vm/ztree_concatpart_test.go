@@ -13,6 +13,7 @@ import (
 // join copied: every kind of part answers as the additions did, in the
 // order they converted them, and a number part allocates nothing.
 func TestTreeConcatPartsAnswers(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

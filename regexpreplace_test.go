@@ -9,6 +9,7 @@ import "testing"
 // be written still throws; and what the result is, lastIndex after, and
 // RegExp.$1 are as before.
 func TestRegExpReplaceDirect(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var s = "the quick brown fox", r = []
 		  r.push(s.replace(/o/g, "0"), s.replace(/o/, "0"), s.replace(/x$/, ""), s.replace(/zz/g, "!"), s.replace(/o/g, "é"),
@@ -40,6 +41,7 @@ func TestRegExpReplaceDirect(t *testing.T) {
 // runtime keeps, and those after it; and split's pieces, gathered in room of
 // their own, past it. Each answer is Node's.
 func TestRegExpMatchesRoom(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = []
 	  r.push("2024-01-15, 2025-12-31 and 1999-07-04 or 1970-01-01, 2000-02-29".replace(/(\d+)-(\d+)-(\d+)/g, "$3/$2/$1"))
 	  r.push("a1b2c3".replace(/(\w)(\d)/g, function (m, x, d) { return "[" + "..x9..y8z7w6".replace(/(\w)(\d)/g, "$2$1") + "".concat("q1q2".match(/q\d/g)) + x + d + "]" }))
@@ -60,6 +62,7 @@ func TestRegExpMatchesRoom(t *testing.T) {
 // groups off, text past ASCII, an array grown after, and the legacy
 // statics of the last separator. Each answer is Node's.
 func TestRegExpSplitPieces(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [];
 function show(a) { return JSON.stringify(a) + ":" + a.map(function (x) { return x === undefined ? "u" : x.length }).join(",") }
 r.push(show("a,b,,c".split(/,/)), show("a1b22c".split(/(\d)(\d)?/)), show("a1b22c".split(/(\d)(\d)?/, 3)), show("abc".split(/(?:)/)));

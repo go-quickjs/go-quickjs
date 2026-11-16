@@ -11,6 +11,7 @@ import (
 // has been closed -- whose stack another runtime may now be using -- fails
 // rather than running on that stack, and leaves the other runtime as it was.
 func TestClosedRuntimeKeepsNoStack(t *testing.T) {
+	t.Parallel()
 	old := quickjs.New()
 	fn, err := old.Eval(`(function f(n) { return n ? f(n - 1) + 1 : 0 })`)
 	if err != nil {

@@ -29,6 +29,7 @@ const parseIntSetup = `
 // call. Each answer is the interpreter's, -0 included, and ints's calls
 // of integers neither call Go nor leave its code.
 func TestJITParseIntOfNumbers(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

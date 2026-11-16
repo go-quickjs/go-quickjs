@@ -55,6 +55,7 @@ const (
 // be the interpreter's, and each runtime must have compiled in the
 // background. CI runs it under -race.
 func TestJITBackgroundRuntimes(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

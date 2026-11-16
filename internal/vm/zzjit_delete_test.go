@@ -29,6 +29,7 @@ import (
 // proxy's, an object key's and a primitive's leaving it for Go there, the
 // TypeError caught by its caller's handler.
 func TestJITDelete(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

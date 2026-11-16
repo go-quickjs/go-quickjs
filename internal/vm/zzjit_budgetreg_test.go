@@ -17,6 +17,7 @@ import (
 // of Go (a remainder of floats, Go's) inside it or not, and under a
 // budget of a few back edges, every poll an exit.
 func TestJITBudgetInRegisterCounted(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -83,6 +84,7 @@ func TestJITBudgetInRegisterCounted(t *testing.T) {
 // later loop of the runtime run in the tree tier, never compiled, never
 // interrupted.
 func TestJITBudgetAcrossManyFunctions(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

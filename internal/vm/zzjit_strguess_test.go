@@ -16,6 +16,7 @@ import (
 // every read from then on, which a loop doing enough besides kept from
 // being judged slow.
 func TestJITStringGuessFilledLater(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

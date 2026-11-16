@@ -35,6 +35,7 @@ func regDiffAll(t *testing.T, src string, calls []string) {
 // Annex B's for (var a = init in o); and a let's own initializer
 // assigning it in its dead zone.
 func TestRegDiffCallTargets(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") };
 var log = [];
@@ -69,6 +70,7 @@ function run(fn) { log = []; try { return fn() + "|" + log.join() } catch (e) { 
 // continue, a throw and the normal end, closures made inside keeping
 // their own, catch clauses inside, at top level and in functions.
 func TestRegDiffFinallyCopies(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var kept = [];
 function f1(n) {
@@ -128,6 +130,7 @@ function show(a) { return a.map(function (x) { return typeof x == "function" ? x
 // literals past one instruction's elements, and functions with more
 // cache sites than 16 bits number, their sites shared.
 func TestRegDiffWideForms(t *testing.T) {
+	regDiffParallel(t)
 	var args, holes, consts strings.Builder
 	for i := 0; i < 300; i++ {
 		if i > 0 {
@@ -203,6 +206,7 @@ function w16(o) { with (o) { return m(...[1]) } }
 // instanceof, object literals and an array literal of constants, read
 // polymorphically, and a throw's position past them all.
 func TestRegDiffStackSitesPast16Bits(t *testing.T) {
+	regDiffParallel(t)
 	var sloppy, strict strings.Builder
 	for i := 0; i < 36000; i++ {
 		fmt.Fprintf(&sloppy, "s += o.p%d; o.q%d = s;\n", i%5, i%3)
@@ -245,6 +249,7 @@ return gs;
 // of its own, the completion value of top-level code, a generator's yields
 // inside them and its return, and a throw's position.
 func TestRegDiffFinallyDeep(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function deep(mode, n) {
@@ -322,6 +327,7 @@ var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.s
 // the completion value, closures over the eval's bindings, and a throw's
 // stack trace.
 func TestRegDiffEvalCode(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") };
 function f1() { var a = 1; eval("var b = a + 1; function g() { return b * 10 }"); return b + g() }
@@ -375,6 +381,7 @@ function f22() { "use strict"; eval("function st() {\n  throw new Error('e22') }
 // of one, a logical operator and a conditional around one, a switch, and a
 // throw's position past them.
 func TestRegDiffFarJumps(t *testing.T) {
+	regDiffParallel(t)
 	body := strings.Repeat("a = a + 1 | 0; ", 20000)
 	src := `
 var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") };

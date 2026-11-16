@@ -13,6 +13,7 @@ import (
 // string, an object -- is still Go's, and against null or undefined
 // unequal; each answer is the interpreter's, as a value and as a branch.
 func TestJITLooseBooleans(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

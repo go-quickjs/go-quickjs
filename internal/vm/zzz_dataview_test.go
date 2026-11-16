@@ -91,8 +91,7 @@ const dataViewTestWant = `255.254.18.52.52.18.251.255.255.255.63.192.0.0.3.0 255
 // buffer's setters still throw.
 func TestDataViewLeaves(t *testing.T) {
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, dataViewTestSrc))
 		if err != nil {
 			t.Fatal(err)
@@ -109,7 +108,6 @@ func TestDataViewLeaves(t *testing.T) {
 			t.Errorf("tree tier %v: immutable buffer: got %s, want %s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 	// Every accessor is declared the leaf of its width.
 	r := New(Config{})
 	defer r.Close()

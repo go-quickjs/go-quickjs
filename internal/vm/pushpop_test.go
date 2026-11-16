@@ -9,6 +9,7 @@ import "testing"
 // array-like, a setter on the prototype chain -- is the built-in's own
 // work, with its errors. The output is Node's.
 func TestPushPopWithoutFrame(t *testing.T) {
+	t.Parallel()
 	const src = `var out = [];
 function run() {
 	var a = [];
@@ -43,10 +44,8 @@ for (var k = 0; k < 3; k++) run();
 JSON.stringify(out);
 `
 	const want = `[2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1,2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1,2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1]`
-	defer SetTreeTier(true)
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
@@ -62,6 +61,7 @@ JSON.stringify(out);
 // held past its new length, one element at a time as a whole run at once,
 // so that nothing it held stays reachable through its storage.
 func TestTruncateClearsSlot(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `var a = [{}, {}, {}, {}, {}, {}]; a.length = 5; a.length = 4; a.length = 1; a`))

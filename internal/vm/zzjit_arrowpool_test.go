@@ -35,6 +35,7 @@ const arrowPoolSetup = `
 // (jitEntry's lexThis). Each answer is the interpreter's, and the pools
 // grow, as only native code's taking makes them.
 func TestJITPooledArrowsWithoutCells(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

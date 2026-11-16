@@ -11,7 +11,7 @@ import "testing"
 // caught in the loop, outside it or not at all; and a return method that
 // throws or answers what is not an object.
 func TestTreeForOf(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	// log is an iterable that says, in s, what was asked of it: n values,
 	// and whether it was closed. ret, where set, is its return method.
 	const log = `var s = ''; function it(n, ret) { var i = 0; var o = { next() { return i < n ? { value: i++, done: false } : { value: undefined, done: true } } }; o.return = ret || function () { s += 'R'; return {} }; return { [Symbol.iterator]() { return o } } } `
@@ -53,9 +53,8 @@ func TestTreeForOf(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				fn := compileForTest(t, tt.src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err != nil {
 					r.Close()
@@ -86,14 +85,13 @@ func TestTreeForOf(t *testing.T) {
 // before its loop goes back, where the interrupt check may sweep the slots
 // above its stack itself.
 func TestTreeForOfStaleCursor(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	const src = `var s = ''; function* gen(n) { try { for (var i = 0; i < n; i++) yield i } finally { s += 'F' } }
 function f() { for (const y of [0]) throw 'f'; return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] }
 var g = gen(5); g.next(); plant(g, f) + s + g.next().value + s`
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
 		fn := compileForTest(t, src)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		plant := r.newNativeFunc("plant", 2, func(rt *Runtime, _ Value, args []Value) (Value, error) {
 			cur, err := rt.startForOf(args[0])
 			if err != nil {

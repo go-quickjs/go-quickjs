@@ -3,6 +3,7 @@ package quickjs_test
 import "testing"
 
 func TestResizableArrayBuffer(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var b = new ArrayBuffer(2, {maxByteLength: 8}); var r = [b.resizable, b.maxByteLength, b.byteLength];
 		  b.resize(6); r.push(b.byteLength); b.resize(1); r.push(b.byteLength); r.join()`, "true,8,2,6,1"},
@@ -69,6 +70,7 @@ func TestResizableArrayBuffer(t *testing.T) {
 // TestArrayAtIsGeneric pins that Array.prototype.at reads through the length
 // property and ordinary gets, rather than an array's dense storage.
 func TestArrayAtIsGeneric(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`[Object.freeze([1, 2]).at(0), Array.prototype.at.call({length: 1, 0: 5}, 0), [, 7].at(1),
 		   Array.prototype.at.call("ab", -1), Array.prototype.at.call(new Uint8Array([1, 2, 3]), -1),

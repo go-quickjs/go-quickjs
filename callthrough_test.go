@@ -13,6 +13,7 @@ import (
 // and one past the stack's limit, a native target, and call replaced on
 // Function.prototype. Against Node's answer.
 func TestCallThroughTree(t *testing.T) {
+	t.Parallel()
 	src := `
 		var out = [];
 		function Base(x) { this.x = x; }

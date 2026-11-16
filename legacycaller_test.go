@@ -56,6 +56,7 @@ var legacyCallerCases = []struct{ src, want string }{
 // has it, with %ThrowTypeError%; and that a function that has neither throws
 // V8's TypeError under WithNodeQuirks.
 func TestLegacyCaller(t *testing.T) {
+	t.Parallel()
 	for _, c := range legacyCallerCases {
 		rt := quickjs.New(quickjs.WithNodeQuirks())
 		v, err := rt.Eval(c.src)
@@ -87,6 +88,7 @@ func TestLegacyCaller(t *testing.T) {
 // V8's accessors, and never on a function itself, whose own keys are every
 // engine's.
 func TestLegacyCallerOwnProperties(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const tte = Object.getOwnPropertyDescriptor(function () { "use strict"; return arguments }(), "callee").get;
 		const proto = Object.getOwnPropertyDescriptor(Function.prototype, "caller");

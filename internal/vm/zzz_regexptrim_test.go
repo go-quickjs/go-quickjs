@@ -46,8 +46,7 @@ func TestRegExpTrimReplace(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpTrimTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -59,5 +58,4 @@ func TestRegExpTrimReplace(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }

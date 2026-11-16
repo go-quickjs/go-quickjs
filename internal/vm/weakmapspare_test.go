@@ -228,6 +228,7 @@ func TestWeakMapCompactKeepsRoom(t *testing.T) {
 // key and found in none, members of a set deleted and added again. Node
 // v26.10.0's answers.
 func TestWeakCollectionsAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

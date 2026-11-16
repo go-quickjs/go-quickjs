@@ -20,6 +20,9 @@ func (r *Runtime) prepare(fn *bytecode.Function) *closure {
 		r.debugLoad(fn)
 	}
 	r.regKeepOld(fn)
+	if r.noTree {
+		noTreeFor(fn)
+	}
 	cl := &closure{fn: fn, realm: r.Realm, closureCode: &closureCode{}}
 
 	cl.names = make([]Atom, len(fn.Names))

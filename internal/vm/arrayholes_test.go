@@ -56,6 +56,7 @@ var arrayHolesCases = []struct{ src, want string }{
 // array's storage holds for one, as Node makes them: each case three
 // times, by the interpreter and by the tree tier.
 func TestArrayLiteralHoles(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, arrayHolesSetup)); err != nil {

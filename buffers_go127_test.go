@@ -11,6 +11,7 @@ import (
 // TestNewTypedArrayMethod pins the method form Go 1.27 allows: the same typed
 // array as the function's, over the same memory.
 func TestNewTypedArrayMethod(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	s := []float32{0.5, 1}

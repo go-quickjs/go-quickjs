@@ -106,24 +106,29 @@ func TestIntendedInlining(t *testing.T) {
 		}
 	}
 	can := regexp.MustCompile(`: can inline (\S+)`)
+	// The two builds run at once, beside the package's other parallel tests.
+	t.Parallel()
 	for _, tags := range []string{"", "quickjs_jit"} {
-		args := []string{"build", "-gcflags=github.com/go-quickjs/go-quickjs/internal/vm=-m"}
-		if tags != "" {
-			args = append(args, "-tags", tags)
-		}
-		cmd := exec.Command(gotool, append(args, ".")...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, out)
-		}
-		inlinable := map[string]bool{}
-		for _, m := range can.FindAllStringSubmatch(string(out), -1) {
-			inlinable[m[1]] = true
-		}
-		for _, fn := range intendedInlining {
-			if !inlinable[fn] {
-				t.Errorf("%s is no longer inlinable (tags %q): it has grown past the inliner's budget, or calls what has", fn, tags)
+		t.Run("tags="+tags, func(t *testing.T) {
+			t.Parallel()
+			args := []string{"build", "-gcflags=github.com/go-quickjs/go-quickjs/internal/vm=-m"}
+			if tags != "" {
+				args = append(args, "-tags", tags)
 			}
-		}
+			cmd := exec.Command(gotool, append(args, ".")...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, out)
+			}
+			inlinable := map[string]bool{}
+			for _, m := range can.FindAllStringSubmatch(string(out), -1) {
+				inlinable[m[1]] = true
+			}
+			for _, fn := range intendedInlining {
+				if !inlinable[fn] {
+					t.Errorf("%s is no longer inlinable (tags %q): it has grown past the inliner's budget, or calls what has", fn, tags)
+				}
+			}
+		})
 	}
 }

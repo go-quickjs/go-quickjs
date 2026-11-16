@@ -6,6 +6,7 @@ import "testing"
 // one -- is matched by its bytes and is not given code units, which would be
 // twice its bytes for as long as it lived; one that is not ASCII is.
 func TestRegExpASCIISubjectKeepsNoUnits(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `

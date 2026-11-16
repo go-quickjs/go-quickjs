@@ -14,7 +14,7 @@ import "testing"
 // leaves its promise in p, and out is what that settles to: its value, or
 // E and what it threw.
 func TestTreeGenerators(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 		// async says the script settles out once its jobs have run.
@@ -51,13 +51,12 @@ func TestTreeGenerators(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				src := tt.src
 				if tt.async {
 					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 				}
 				fn := compileForTest(t, src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err == nil && tt.async {
 					if err = r.runMicrotasks(); err == nil {
@@ -132,7 +131,7 @@ func TestTreeResumedLoopStructured(t *testing.T) {
 // do-while, with labelled break and continue, in a try inside a loop, and
 // an await in a loop of a loop.
 func TestTreeResumedLoops(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 		async           bool
@@ -148,13 +147,12 @@ func TestTreeResumedLoops(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				src := tt.src
 				if tt.async {
 					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 				}
 				fn := compileForTest(t, src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err == nil && tt.async {
 					if err = r.runMicrotasks(); err == nil {

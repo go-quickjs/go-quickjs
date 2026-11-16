@@ -10,6 +10,7 @@ import "testing"
 // with array_push, and holeLoop, which makes one and asks in of it at each
 // turn, runs natively, answering as the interpreter and Node do.
 func TestJITArrayLiteralHoles(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -12,6 +12,7 @@ import (
 // Value's own methods say of it. String, Float, Decode and Equal used to call
 // it invalid, closed or NaN while script was given 0.
 func TestZeroValueIsZero(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	var zero quickjs.Value

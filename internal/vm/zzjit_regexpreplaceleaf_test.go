@@ -114,6 +114,7 @@ func TestJITRegExpReplaceLeaf(t *testing.T) {
 // interpreter's SyntaxError, lastIndex where that call left it; the
 // matches before, and after, are leaves' calls.
 func TestJITRegExpReplaceLeafComplexity(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -136,6 +137,7 @@ func TestJITRegExpReplaceLeafComplexity(t *testing.T) {
 // (jitReplaceLeafGuess), never a call of Go to learn it at; its answers
 // the interpreter's and Node's.
 func TestJITRegExpReplaceLeafGuess(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

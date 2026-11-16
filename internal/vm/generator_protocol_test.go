@@ -310,11 +310,10 @@ func runGeneratorCases(t *testing.T, mk func() *Runtime, rounds int) {
 // TestGeneratorProtocol runs generatorCases in the interpreter and in the
 // tree tier.
 func TestGeneratorProtocol(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
 		t.Run(map[bool]string{false: "interpreter", true: "tree"}[on], func(t *testing.T) {
-			runGeneratorCases(t, func() *Runtime { return New(Config{}) }, 3)
+			runGeneratorCases(t, func() *Runtime { return newTreeTierForTest(on, Config{}) }, 3)
 		})
 	}
 }
@@ -325,6 +324,7 @@ func TestGeneratorProtocol(t *testing.T) {
 // stored its fields one by one and read them back whole, a load the
 // stores could not be forwarded to.
 func TestResumeResultInRegisters(t *testing.T) {
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("the limit is a 64-bit platform's: a Value is three words of four bytes")
 	}
@@ -416,6 +416,7 @@ func TestGeneratorCloseAllocates(t *testing.T) {
 // locals as its frame's end would: a closure that outlives it holds the
 // binding, not the generator's values.
 func TestGeneratorReturnClosesCaptures(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function* g() { var x = 1; yield () => x++ } var it = g(); var f = it.next().value; it.return(); f`))

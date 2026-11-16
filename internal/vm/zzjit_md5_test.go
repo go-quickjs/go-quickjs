@@ -20,6 +20,7 @@ var jitMD5Source string
 const jitMD5Setup = `var input='a'.repeat(1024);function hashes(){return md5(input)}`
 
 func TestJITStringPacking(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function pack(s,a){for(let i=0;i<64;i+=4)a[i>>2]=s.charCodeAt(i)+(s.charCodeAt(i+1)<<8)+(s.charCodeAt(i+2)<<16)+(s.charCodeAt(i+3)<<24);return a[0]}let a=new Array(16).fill(0);pack('a'.repeat(64),a)`))
 	if err != nil || !v.IsNumber() || v.Number() != 1633771873 || r.jit == nil || r.jit.hosts != 0 {
@@ -33,6 +34,7 @@ func TestJITStringPacking(t *testing.T) {
 // Writes past an array's length grow it in Go, at a host exit; callbacks
 // between them see every committed element and none beyond.
 func TestJITStringArrayGrowth(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function pack(s){let a=[];for(let i=0;i<64;i++)a[i]=s.charCodeAt(i);return a}let a=pack('A'.repeat(64));a.length===64&&a.every(n=>n===65)`))
 	if err != nil || !v.IsBool() || !v.Truthy() || r.JITStats().SSAEntries == 0 {
@@ -78,6 +80,7 @@ func TestJITArrayGrowthCancellation(t *testing.T) {
 }
 
 func TestJITStringBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, setup, body, check string }{
 		{"utf16", `let s='A\u1234\ud83d\ude00\ud800\udc00';s.charCodeAt(0);`, `a[i]=s.charCodeAt(i);`, `a.join(',')==='65,4660,55357,56832,55296,56320'`},
 		{"rope", `let s='A'+'\u1234'+'\ud83d'+'\ude00'+'\ud800'+'\udc00';`, `a[i]=s.charCodeAt(i);`, `a.join(',')==='65,4660,55357,56832,55296,56320'`},
@@ -105,6 +108,7 @@ func TestJITStringBoundaries(t *testing.T) {
 }
 
 func TestJITArrayLiteralBoundary(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: enabled})
 		v, err := r.Run(compileForTest(t, `let original={x:7};function f(o){let a=[o,1,2];for(let i=1;i<3;i++)a[i]+=1;return a}let a=f(original);a[0]===original&&a[1]===2&&a[2]===3&&a.length===3`))
@@ -115,6 +119,7 @@ func TestJITArrayLiteralBoundary(t *testing.T) {
 }
 
 func TestJITStringCalleePermissions(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function pack(s,a,method){for(let i=0;i<64;i++)a[i]=s.charCodeAt(i);return a[0]}function outer(s,a,method){let sum=0;for(let j=0;j<4;j++)sum+=pack(s,a,method);return sum}let a=new Array(64).fill(0);outer('a'.repeat(64),a,String.prototype.charCodeAt)===388`))
 	if err != nil || !v.IsBool() || !v.Truthy() || r.JITStats().SSAEntries == 0 {
@@ -123,6 +128,7 @@ func TestJITStringCalleePermissions(t *testing.T) {
 }
 
 func TestJITStringRealms(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	other := r.NewRealm()
 	setup := compileForTest(t, `function pack(s,a){for(let i=0;i<6;i++)a[i]=s.charCodeAt(i);return a[0]}var a=new Array(6).fill(0);true`)

@@ -23,6 +23,7 @@ var jsonDifferentialScript string
 // starts with none of that. The cases are few enough for CI's run under
 // checkptr: this is a test of what a fast path loses, not a fuzzer.
 func TestJSONDifferential(t *testing.T) {
+	t.Parallel()
 	count := 600
 	if testing.Short() {
 		count = 100

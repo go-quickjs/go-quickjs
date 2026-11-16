@@ -24,6 +24,7 @@ import (
 // Bounce left native code 150,000 times a run. Each answer is the
 // interpreter's.
 func TestJITForOfArrayNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -66,6 +67,7 @@ func TestJITForOfArrayNative(t *testing.T) {
 // is gone again the code closes natively with no exit, Go's close having
 // found the chain without one again.
 func TestJITWalkedArrayClose(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -111,6 +113,7 @@ func TestJITWalkedArrayClose(t *testing.T) {
 // that is no canonical index -- "01", "-0", "4294967295" -- is a property's
 // as before. Each answer is the interpreter's.
 func TestJITKeyedReadIndexName(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -149,6 +152,7 @@ func TestJITKeyedReadIndexName(t *testing.T) {
 // it, inlining it or calling it, never leave). Each answer is the
 // interpreter's.
 func TestJITInlinedTypedRead(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -206,6 +210,7 @@ func TestJITInlinedTypedRead(t *testing.T) {
 // AWFY CD's Vector.forEach, given (e) => this.state.remove(e) and others,
 // 45,000 exits a run. Each answer is the interpreter's.
 func TestJITArrowThisCallee(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -250,6 +255,7 @@ func TestJITArrowThisCallee(t *testing.T) {
 // before. A relational comparison of strings is not converted (Go
 // compares it, GoCompare). Each answer is the interpreter's.
 func TestJITGoNumber(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -285,6 +291,7 @@ func TestJITGoNumber(t *testing.T) {
 // run its valueOf, leaves for Go as before. Each answer is the
 // interpreter's.
 func TestJITGoEqual(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -324,6 +331,7 @@ func TestJITGoEqual(t *testing.T) {
 // Symbol.hasInstance runs there, and its throw is the operation's. Each
 // answer is the interpreter's.
 func TestJITGoTypeOfInstanceOf(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -440,6 +448,7 @@ func TestJITDerivedConstructor(t *testing.T) {
 // A proxy up the chain, or a getter there, is read as before. Each answer
 // is the interpreter's.
 func TestJITKeyedReadAbsent(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -496,6 +505,7 @@ func TestJITKeyedReadAbsent(t *testing.T) {
 // chain, a proxy there, a negative or fractional key, are read as before,
 // and each answer is the interpreter's.
 func TestJITKeyedReadTableIndex(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -568,6 +578,7 @@ func TestJITKeyedReadTableIndex(t *testing.T) {
 // made, and a loop's let each closure gets its own, answer as the
 // interpreter's.
 func TestJITCapturedLocalCallees(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -660,6 +671,7 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 // more, which only native code's taking makes; a loop's per-iteration let
 // in a native callee; every answer the interpreter's.
 func TestJITClosuresFromPools(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

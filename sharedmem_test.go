@@ -79,6 +79,7 @@ func TestSharedMemoryWaitNotify(t *testing.T) {
 // once lose nothing, for every width -- a byte or a half-word is updated
 // within the word it is part of.
 func TestSharedMemoryAtomicity(t *testing.T) {
+	t.Parallel()
 	a, b := sharedPair(t, "new SharedArrayBuffer(32)")
 	src := `
 		const i8 = new Int8Array(sab, 0, 4), i16 = new Int16Array(sab, 4, 2);
@@ -115,6 +116,7 @@ func TestSharedMemoryAtomicity(t *testing.T) {
 // TestSharedMemoryGrowth pins that a growable buffer shared between agents
 // grows in place, and that the growth one agent makes the other sees.
 func TestSharedMemoryGrowth(t *testing.T) {
+	t.Parallel()
 	a, b := sharedPair(t, "new SharedArrayBuffer(4, { maxByteLength: 64 })")
 	if _, err := a.Eval("Atomics.store(new Int32Array(sab), 0, 7); sab.grow(32); Atomics.store(new Int32Array(sab), 7, 9)"); err != nil {
 		t.Fatal(err)
@@ -193,6 +195,7 @@ func TestWaitAsync(t *testing.T) {
 // memory at the length it had when shared, and panicked past it, which
 // closed the runtime (KI-11).
 func TestWaitPastSharedLength(t *testing.T) {
+	t.Parallel()
 	a, _ := sharedPair(t, "new SharedArrayBuffer(4, { maxByteLength: 64 })")
 	v, err := a.Eval(`sab.grow(16);
 		const i = new Int32Array(sab);
@@ -293,6 +296,7 @@ func TestWaitForAges(t *testing.T) {
 // so a length-tracking view stayed short and a view past the old end was a
 // RangeError (KI-37).
 func TestViewsSeeSharedGrowth(t *testing.T) {
+	t.Parallel()
 	a, b := sharedPair(t, "new SharedArrayBuffer(8, { maxByteLength: 64 })")
 	if _, err := b.Eval(`var tracking = new Int32Array(sab), dv = new DataView(sab), fixed = new Int32Array(sab, 0, 2)`); err != nil {
 		t.Fatal(err)
@@ -316,6 +320,7 @@ func TestViewsSeeSharedGrowth(t *testing.T) {
 // to succeed doing nothing (KI-38); TestSharedMemoryGrowRefusesShrink in the
 // vm package pins that part, which no script can time.
 func TestSharedGrowCannotShrink(t *testing.T) {
+	t.Parallel()
 	a, b := sharedPair(t, "new SharedArrayBuffer(8, { maxByteLength: 64 })")
 	if _, err := a.Eval(`sab.grow(32)`); err != nil {
 		t.Fatal(err)

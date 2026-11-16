@@ -10,6 +10,7 @@ import "testing"
 // which reads the holder or calls the accessor -- in either tier, and from a
 // pure body, which reads through own too.
 func TestOwnCacheOnlyForPlainOwnData(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var log = [];
 		function P() {}
@@ -38,8 +39,7 @@ func TestOwnCacheOnlyForPlainOwnData(t *testing.T) {
 	const want = "proto,own getter 0,pget,1,proto,proto,own getter 1,pget,1,proto|" +
 		"proto,own getter 39,pget,1,proto,own,own,own|80|pset 39,own setter 39|39"
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
@@ -49,5 +49,4 @@ func TestOwnCacheOnlyForPlainOwnData(t *testing.T) {
 		}
 		r.Close()
 	}
-	SetTreeTier(true)
 }

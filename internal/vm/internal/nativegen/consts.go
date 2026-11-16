@@ -22,7 +22,7 @@ var (
 
 // Objects' classes and flags, and typed arrays' element types.
 var (
-	ClassObject, ClassArray, ClassTypedArray, ClassCursor Class
+	ClassObject, ClassArray, ClassTypedArray, ClassCursor, ClassGenerator Class
 
 	objExtensible, objHasExt, objHasData, objHasSparseElements, objSharedElems,
 	objPolyProto, objMappedArguments, objArrayLengthWritable, objHTMLDDA objFlags
@@ -34,14 +34,24 @@ var (
 // Calls, leaves and caches; and the bases of the Runtime's and a
 // closureCode's fields the code reads relative to the context's rt and cc.
 var (
-	elemStrCharCodeAt int32
+	elemStrCharCodeAt, elemPush int32
 
 	regCallEnter, regCallThis, regCallObjThis, regCallOut, regCallLeaf, regLeafArg int32
-	regFrameCall, regFrameEnter                                                    int32
+	regCallNative                                                                  int32
+	regLeafCode                                                                    int32
+	regFrameCall, regFrameEnter, regFrameGenStep                                   int32
+
+	// A generator's states.
+	genSuspendedYield, genExecuting, genCompleted int32
 
 	tailCallDepth, linearScanLimit int32
-	hasCacheBits                   uint8
-	hasCacheMul                    uint64
+	// atomIndexTag bounds an index an atom holds (hasIndexQuick's).
+	atomIndexTag int32
+	hasCacheBits uint8
+	hasCacheMul  uint64
+	// keySlotMul is keySlot's multiplier, and intStringsLen how many
+	// integers' strings the runtime keeps (intStrings).
+	keySlotMul, intStringsLen uint64
 
 	rtBase, ccBase uint64
 )
@@ -64,7 +74,8 @@ func loadConsts() {
 	for _, c := range []struct {
 		p    *Class
 		name string
-	}{{&ClassObject, "ClassObject"}, {&ClassArray, "ClassArray"}, {&ClassTypedArray, "ClassTypedArray"}, {&ClassCursor, "ClassCursor"}} {
+	}{{&ClassObject, "ClassObject"}, {&ClassArray, "ClassArray"}, {&ClassTypedArray, "ClassTypedArray"}, {&ClassCursor, "ClassCursor"},
+		{&ClassGenerator, "ClassGenerator"}} {
 		*c.p = Class(k(c.name))
 	}
 	for _, c := range []struct {
@@ -88,14 +99,18 @@ func loadConsts() {
 	for _, c := range []struct {
 		p    *int32
 		name string
-	}{{&elemStrCharCodeAt, "elemStrCharCodeAt"},
+	}{{&elemStrCharCodeAt, "elemStrCharCodeAt"}, {&elemPush, "elemPush"}, {&regCallNative, "regCallNative"},
 		{&regCallEnter, "regCallEnter"}, {&regCallThis, "regCallThis"}, {&regCallObjThis, "regCallObjThis"},
-		{&regCallOut, "regCallOut"}, {&regCallLeaf, "regCallLeaf"}, {&regLeafArg, "regLeafArg"},
-		{&regFrameCall, "regFrameCall"}, {&regFrameEnter, "regFrameEnter"},
-		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"}} {
+		{&regCallOut, "regCallOut"}, {&regCallLeaf, "regCallLeaf"}, {&regLeafArg, "regLeafArg"}, {&regLeafCode, "regLeafCode"},
+		{&regFrameCall, "regFrameCall"}, {&regFrameEnter, "regFrameEnter"}, {&regFrameGenStep, "regFrameGenStep"},
+		{&genSuspendedYield, "genSuspendedYield"}, {&genExecuting, "genExecuting"},
+		{&genCompleted, "genCompleted"},
+		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"},
+		{&atomIndexTag, "atomIndexTag"}} {
 		*c.p = int32(k(c.name))
 	}
 	hasCacheBits, hasCacheMul = uint8(k("hasCacheBits")), k("hasCacheMul")
+	keySlotMul, intStringsLen = k("keySlotMul"), k("intStringsLen")
 	rtBase, ccBase = k("rtBase"), k("ccBase")
 	for _, c := range []struct {
 		p    *int

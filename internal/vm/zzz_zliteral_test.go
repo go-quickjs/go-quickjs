@@ -71,6 +71,7 @@ const literalTestWant = "a=0,b=1,c=key,d=true,e=null,f=0,g=false,h=end | x=x0,y=
 // define_fields made, field for field, in the same order, with the same
 // side effects, in the tree tier as in the interpreter, as Node does.
 func TestTreeObjectLiterals(t *testing.T) {
+	t.Parallel()
 	for _, c := range compileForTest(t, literalTestSrc).Constants {
 		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
 			continue
@@ -83,8 +84,7 @@ func TestTreeObjectLiterals(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := newOldTiersForTest(Config{})
+		r := newOldTiersTreeForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, literalTestSrc))
 		r.Close()
 		if err != nil {
@@ -94,7 +94,6 @@ func TestTreeObjectLiterals(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, literalTestWant)
 		}
 	}
-	SetTreeTier(true)
 	// Past the first two objects, the site knows the shape the fields lead
 	// to, which its objects are made with.
 	r := newOldTiersForTest(Config{})

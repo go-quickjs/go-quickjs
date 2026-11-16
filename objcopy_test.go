@@ -9,6 +9,7 @@ import "testing"
 // keys only, symbols and accessors the long way, a key the target has
 // already, and a setter on the target that changes the source mid-way.
 func TestObjectCopies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function show(o) { return Object.keys(o).map(function (k) { return k + "=" + o[k] }).join(",") }
 		  var o = { a: 1, b: 2 }, r = []

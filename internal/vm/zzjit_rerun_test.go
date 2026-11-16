@@ -20,6 +20,7 @@ const rerunJITSource = `
 // making its objects of while each run's other tiers made another's, and in
 // this program's first ten runs it was compiled again 8 times, not 3.
 func TestJITProgramRerunsKeepLayouts(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

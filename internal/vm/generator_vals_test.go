@@ -13,7 +13,7 @@ import (
 // derived constructor's this, and an async generator's queue. A direct
 // eval's vars, the rest of it, are TestGeneratorEvalVars's.
 func TestGeneratorValues(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 		async           bool
@@ -36,12 +36,11 @@ func TestGeneratorValues(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				src := tt.src
 				if tt.async {
 					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 				}
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(compileForTest(t, src))
 				if err == nil && tt.async {
 					if err = r.runMicrotasks(); err == nil {
@@ -147,7 +146,7 @@ func TestGeneratorLoopRoom(t *testing.T) {
 // generator that finishes lets it go. Each resumption runs as its tree
 // and in the interpreter, which make the same saved part.
 func TestGeneratorSavedPart(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("sizes of a 64-bit build")
 	}
@@ -176,8 +175,7 @@ func TestGeneratorSavedPart(t *testing.T) {
 		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}, []int{0}},
 	} {
 		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			r := New(Config{})
+			r := newTreeTierForTest(on, Config{})
 			fn, err := r.Run(compileForTest(t, tt.src))
 			if err != nil {
 				t.Fatal(err)
@@ -228,7 +226,7 @@ func TestGeneratorSavedPart(t *testing.T) {
 // after -- arguments, a rest parameter, a default, a pattern, an eval --
 // they are kept.
 func TestGeneratorArgsKept(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		decl, call, want string
 		nargs            uint32
@@ -244,8 +242,7 @@ func TestGeneratorArgsKept(t *testing.T) {
 		{`function* f([a, b]) { yield a + b }`, `f([1, 2])`, "3", 1, 4},
 	} {
 		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			r := New(Config{})
+			r := newTreeTierForTest(on, Config{})
 			v, err := r.Run(compileForTest(t, tt.decl+"; "+tt.call))
 			if err != nil {
 				t.Fatalf("%s: %v", tt.decl, err)

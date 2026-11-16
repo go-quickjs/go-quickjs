@@ -37,6 +37,24 @@ type RInstr uint64
 // ROp is a register operation.
 type ROp uint8
 
+// RAddAppend is an RAdd's X where the addition is an append to an upvalue
+// (RAdd).
+const RAddAppend uint8 = 1
+
+// RArithFreshB and RArithFreshC mark, in X of an RAdd, RSub or RMul, an
+// operand register that holds a result of arithmetic nothing else has,
+// made just before (regcomp's fresh): an operator of two BigInts may give
+// its block back once it has made its own result. A tier that ignores the
+// marks leaves the block to the collector, which is always right.
+const (
+	RArithFreshB uint8 = 2
+	RArithFreshC uint8 = 4
+	// RArithOwnA marks register A as a local that holds its values alone
+	// (SoleLocals): the BigInt it held may be given back once the
+	// operator has made its result, which the local holds alone after.
+	RArithOwnA uint8 = 8
+)
+
 // MakeR builds an instruction from its fields.
 func MakeR(op ROp, x uint8, a, b, c uint16) RInstr {
 	return RInstr(uint64(op) | uint64(x)<<8 | uint64(a)<<16 | uint64(b)<<32 | uint64(c)<<48)
@@ -143,7 +161,11 @@ const (
 	// where it has none: a for-of or for-in loop's step, at the head of
 	// each turn.
 	RIterNext
-	// RAdd, RSub, RMul: R[A] = R[B] op R[C].
+	// RAdd, RSub, RMul: R[A] = R[B] op R[C]. An RAdd whose X is
+	// RAddAppend is an append to an upvalue the stack compiler made one
+	// (AddOwned's mark on its set_upvalue): R[B] the binding's string,
+	// which the VM may grow in place (its strAppend); a tier that ignores
+	// the mark adds, which is always right.
 	RAdd
 	RSub
 	RMul
@@ -807,8 +829,12 @@ type RegCode struct {
 	// (RNewArrayK), each a constant or one of the values no constant is.
 	Literals [][]LitElem
 	// ObjKeys are the keys of the code's object literals made at once
-	// (RNewObjectLit), each an index of the function's names.
-	ObjKeys [][]uint32
+	// (RNewObjectLit), each an index of the function's names, and
+	// ObjKeysHash each one's hash (HashLiteralKeys), 0 for more than
+	// MaxLiteralKeys: what the VM finds the realm's root for literals of
+	// those keys by, as the stack form's LiteralKeys.
+	ObjKeys     [][]uint32
+	ObjKeysHash []uint64
 	// FarNames is, for an instruction whose name operand is RNameFar,
 	// the name's index in Names, by its pc -- for check_ref, whose B is
 	// a slot, the slot's index in Locals; nil where none is.

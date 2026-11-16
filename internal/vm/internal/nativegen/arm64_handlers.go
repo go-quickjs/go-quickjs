@@ -17,7 +17,11 @@ import (
 func armEmit(v *variant) (*block, error) {
 	g := &armGen{a: &Asm{}, v: v}
 	a := g.a
-	g.exit, g.exitRet = a.NewLabel(), a.NewLabel()
+	g.exit, g.exitRet, g.exitAfter = a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.genRet, g.genObj = g.exit, g.exit
+	if v.has(bytecode.RYield) {
+		g.genRet, g.genObj = a.NewLabel(), a.NewLabel()
+	}
 	labels := map[bytecode.ROp]Label{}
 	var order []bytecode.ROp
 	h := func(op bytecode.ROp, body func()) {
@@ -316,6 +320,8 @@ func armEmit(v *variant) (*block, error) {
 		a.Ubfx(r8, rW, 8, 8)
 		a.CmpImm(r8, int64(bytecode.OpPos), false)
 		a.BCond(EQ, pos)
+		a.CmpImm(r8, int64(bytecode.OpToNumeric), false)
+		a.BCond(EQ, pos)
 		a.CmpImm(r8, int64(bytecode.OpBitNot), false)
 		a.BCond(EQ, not)
 		a.CmpImm(r8, int64(bytecode.OpNeg), false)
@@ -549,13 +555,19 @@ func armEmit(v *variant) (*block, error) {
 		g.typedBigRead()
 	}
 	h(bytecode.RGetIndex, func() {
-		miss := a.NewLabel()
+		// A key string a for-in handed out names its index (keyIndex).
+		miss, str, have := a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.regB(rS)
 		g.object(rS, rS)
 		g.regC(r8)
-		g.num(0, r8)
+		g.numOr(0, r8, str)
 		g.element(rC, rS, 0, objMappedArguments, miss)
+		a.Bind(have)
 		getElem(miss)
+		a.Bind(str)
+		g.keyIndex(r8)
+		g.dense(rC, rS, objMappedArguments, g.exit)
+		a.B(have)
 	})
 	h(bytecode.RGetIndexI, func() {
 		miss := a.NewLabel()
@@ -646,50 +658,8 @@ func armEmit(v *variant) (*block, error) {
 		// typeof's string, the runtime's (typeofStrs) where it has made
 		// it: of a number, a primitive, an object but a proxy and
 		// document.all's kind.
-		idx, obj, num, big, notFn := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.regB(rS)
-		a.Load(r9, rS, 0)
-		a.Cmp(r9, rTag, true)
-		a.BCond(LO, num)
-		a.MovImm(r8, heapBigBits)
-		a.Cmp(r9, r8, true)
-		a.BCond(HS, big)
-		a.Ubfx(rC, r9, 0, 8)
-		a.CmpImm(rC, int64(KindObject), false)
-		a.BCond(EQ, obj)
-		a.CmpImm(rC, int64(KindUndefined), false)
-		a.BCond(LO, g.exit)
-		a.CmpImm(rC, int64(KindBigInt), false)
-		a.BCond(HI, g.exit)
-		// undefined, null and a boolean one before their kind; a string,
-		// a symbol and a BigInt at it.
-		a.CmpImm(rC, int64(KindString), false)
-		a.BCond(HS, idx)
-		a.AddImm(rC, rC, -1, false)
-		a.B(idx)
-		a.Bind(num)
-		a.MovImm(rC, 3)
-		a.B(idx)
-		a.Bind(big)
-		a.MovImm(rC, 6)
-		a.B(idx)
-		a.Bind(obj)
-		a.Load(r8, rS, 8)
-		a.LoadU16(rD, r8, offObjFlags)
-		a.MovImm(rC, 1)
-		a.TstImm(rD, uint64(objHTMLDDA), false)
-		a.BCond(NE, g.exit)
-		a.TstImm(rD, uint64(objHasData), false)
-		a.BCond(EQ, idx)
-		a.Load(r9, r8, sizeObj+offExtData)
-		g.cmpMem(r9, rCtx, ncFuncT)
-		a.BCond(NE, notFn)
-		a.MovImm(rC, 7)
-		a.B(idx)
-		a.Bind(notFn)
-		g.cmpMem(r9, rCtx, ncProxyT)
-		a.BCond(EQ, g.exit)
-		a.Bind(idx)
+		g.typeIndex(rS)
 		a.Load(r8, rCtx, ncTypeofs)
 		a.LoadIdx(r8, r8, rC, true)
 		a.Cbz(r8, g.exit, true)
@@ -701,11 +671,13 @@ func armEmit(v *variant) (*block, error) {
 		// R[A] = R[B] in R[C]: a string key's answer the realm's in
 		// cache remembers of an object's layout and chain (hasCached);
 		// anything else Go's, which fills the cache.
-		found := a.NewLabel()
+		found, index := a.NewLabel(), a.NewLabel()
 		g.regC(rS)
 		g.object(rS, rS)
 		g.regB(rD)
 		a.Load(r9, rD, 0)
+		a.Cmp(r9, rTag, true)
+		a.BCond(LO, index)
 		g.kindIs(r9, KindString)
 		a.Load(r8, rD, 8)
 		a.LoadU16(rC, rS, offObjFlags)
@@ -757,6 +729,49 @@ func armEmit(v *variant) (*block, error) {
 		a.Bind(store)
 		a.Load(rW, rIP, 0)
 		g.storeA(0)
+		// A number key, an index an atom holds, as amd64's.
+		yes, no, loop, noElems := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+		a.Bind(index)
+		a.FMovToF(0, r9)
+		a.Fcvtzs(rC, 0)
+		a.CmpImm(rC, 0, true)
+		a.BCond(LT, g.exit)
+		a.MovImm(rD, uint64(atomIndexTag))
+		a.Cmp(rC, rD, true)
+		a.BCond(HS, g.exit)
+		a.Scvtf(1, rC, true)
+		a.FCmp(0, 1)
+		a.BCond(NE, g.exit)
+		a.MovRR(r8, rS)
+		a.Bind(loop)
+		a.LoadU8(rD, r8, offObjClass)
+		a.CmpImm(rD, int64(ClassArray), false)
+		a.BCond(HI, g.exit)
+		a.LoadU16(rD, r8, offObjFlags)
+		a.TstImm(rD, uint64(objPolyProto), false)
+		a.BCond(NE, g.exit)
+		a.TstImm(rD, uint64(objHasExt), false)
+		a.BCond(EQ, noElems)
+		g.cmpMem(rC, r8, sizeObj+8)
+		a.BCond(HS, noElems)
+		a.Load(r9, r8, sizeObj)
+		a.AddLsl(r9, r9, rC, 4)
+		a.Load(r9, r9, 0)
+		g.cmpMem(r9, rCtx, ncHole)
+		a.BCond(NE, yes)
+		a.Bind(noElems)
+		g.noIndexKeys(r8)
+		a.Load(r8, r8, offObjShape)
+		a.Cbz(r8, no, true)
+		a.Load(r8, r8, offShapeProto)
+		a.Cbz(r8, no, true)
+		a.B(loop)
+		a.Bind(yes)
+		a.MovImm(rD, 1)
+		a.B(found)
+		a.Bind(no)
+		a.MovImm(rD, 0)
+		a.B(found)
 	})
 	h(bytecode.RGetLength, func() {
 		// An array's length but a sparse one's, a string's.
@@ -793,10 +808,12 @@ func armEmit(v *variant) (*block, error) {
 	extra()
 	// What came later goes last, as on amd64.
 	h(bytecode.RPostDec, func() { g.postStep(FSub) })
+	genStep := a.NewLabel()
 	h(bytecode.RIterNext, func() {
 		// A for-of's step over a dense array by the intrinsic iterator
 		// (iterState.arr): its next element but a hole, the cursor's
-		// index stepped. Anything else is Go's.
+		// index stepped; over a generator, genStep's (arm64_gen.go).
+		// Anything else is Go's.
 		g.regB(rS)
 		g.object(rS, rS)
 		a.LoadU8(rC, rS, offObjClass)
@@ -805,7 +822,7 @@ func armEmit(v *variant) (*block, error) {
 		a.LoadU8(rC, rS, offItDone)
 		a.Cbnz(rC, g.exit, false)
 		a.Load(r8, rS, offItArr)
-		a.Cbz(r8, g.exit, true)
+		a.Cbz(r8, genStep, true)
 		a.Load(rC, rS, offItIdx)
 		// Past the end of an array of no sparse elements, its length: the
 		// cursor done and the loop left, as iterNext leaves it.
@@ -828,15 +845,20 @@ func armEmit(v *variant) (*block, error) {
 		g.taken(rC)
 	})
 	// A call in tail position while the stack is shallow is call_w's or
-	// call_method_w's (rhCallWT); deeper, Go's, which gives the frame to
-	// the callee in place.
-	for _, op := range []bytecode.ROp{bytecode.RCallWT, bytecode.RCallMWT} {
+	// call_method_w's (rhCallWT); deeper, the frame given to the callee in
+	// place (tailTo), or Go's.
+	tailIn := a.NewLabel()
+	for i, op := range []bytecode.ROp{bytecode.RCallWT, bytecode.RCallMWT} {
 		h(op, func() {
 			a.Load(r9, rCtx, ncRT)
 			a.Load(rC, r9, offRtFrameDepth)
 			a.CmpImm(rC, int64(tailCallDepth), true)
-			a.BCond(GE, g.exit)
+			a.BCond(GE, tailIn)
 			a.B(label(bytecode.RCallW))
+			if i == 0 {
+				a.Bind(tailIn)
+				g.tailTo()
+			}
 		})
 	}
 	h(bytecode.RCharCodeAt, func() {
@@ -903,6 +925,185 @@ func armEmit(v *variant) (*block, error) {
 		a.Bind(nan)
 		a.LoadF(0, rCtx, ncNaN)
 		g.storeA(0)
+	})
+	// o[k] += v of a dense array's number element, as amd64's: the object
+	// in rS, the value in D1, the key in D0 or rC.
+	elemAdd := func() {
+		a.Load(r9, rC, 0)
+		a.Cmp(r9, rTag, true)
+		a.BCond(HS, g.exit)
+		a.FMovToF(0, r9)
+		a.FArith(FAdd, 0, 0, 1)
+		g.canon(0)
+		a.StoreF(rC, 0, 0)
+		g.next()
+	}
+	elemMask := objMappedArguments | objSharedElems
+	h(bytecode.RAddIndex, func() {
+		g.regA(rD)
+		g.object(rS, rD)
+		g.regC(rD)
+		g.num(1, rD)
+		g.regB(r8)
+		g.num(0, r8)
+		g.element(rC, rS, 0, elemMask, g.exit)
+		elemAdd()
+	})
+	h(bytecode.RAddIndexK, func() {
+		g.regA(rD)
+		g.object(rS, rD)
+		g.regB(rD)
+		g.num(1, rD)
+		a.ShiftImm(Lsr, rC, rW, 48, true)
+		g.dense(rC, rS, elemMask, g.exit)
+		elemAdd()
+	})
+	h(bytecode.RAddIndexI, func() {
+		g.regA(rD)
+		g.object(rS, rD)
+		g.immSC(r9)
+		a.Scvtf(1, r9, true)
+		g.regB(r8)
+		g.num(0, r8)
+		g.element(rC, rS, 0, elemMask, g.exit)
+		elemAdd()
+	})
+	// A private member by its cache site, as amd64's: privSlot puts the
+	// slot's address in rD, the object in rS; anything else exits.
+	privSlot := func() {
+		a.Load(r8, rCtx, ncRC)
+		a.Load(r8, r8, offRCAux)
+		a.Cbz(r8, g.exit, true)
+		a.Load(r9, rCtx, ncCodeBase)
+		a.Op(Sub, rC, rIP, r9, true)
+		a.ShiftImm(Lsr, rC, rC, 1, true)
+		a.Op(Add, r8, r8, rC, true)
+		a.LoadU32(rC, r8, 0)
+		a.ShiftImm(Lsr, rC, rC, 16, false)
+		a.Cbz(rC, g.exit, false)
+		a.MovImm(rT, uint64(size("propCache")))
+		a.Mul(rC, rC, rT)
+		a.Op(Add, rC, rC, rIC, true)
+		g.ownSlot(rD, rS)
+		g.regC(r8)
+		a.Load(r9, r8, 0)
+		a.MovImm(rT, tagBase|uint64(KindSymbol))
+		a.Cmp(r9, rT, true)
+		a.BCond(NE, g.exit)
+		a.Load(r9, r8, 8)
+		a.Load(r8, r9, offSymAtoms)
+		a.Load(rJ, rCtx, ncRT)
+		g.cmpMem(r8, rJ, offRtAtoms)
+		a.BCond(NE, g.exit)
+		a.LoadU32(r8, r9, offSymAtom)
+		a.Load(r9, rS, off("Object.shape"))
+		a.Load(r9, r9, off("shape.keys"))
+		a.LoadS32(rT, rC, off("propCache.idx"))
+		a.MovImm(rJ, uint64(size("propKey")))
+		a.Mul(rT, rT, rJ)
+		a.Op(Add, r9, r9, rT, true)
+		a.LoadU32(rT, r9, off("propKey.key"))
+		a.Cmp(r8, rT, false)
+		a.BCond(NE, g.exit)
+	}
+	h(bytecode.RGetPrivate, func() {
+		g.regB(rD)
+		g.object(rS, rD)
+		privSlot()
+		a.Load(r9, rD, 0)
+		a.Load(r8, rD, 8)
+		g.regA(rW)
+		g.storeValue()
+	})
+	h(bytecode.RSetPrivate, func() {
+		g.regA(rD)
+		g.object(rS, rD)
+		privSlot()
+		g.regB(r8)
+		a.Load(r9, r8, 0)
+		a.Load(r8, r8, 8)
+		a.MovRR(rW, rD)
+		g.storeValue()
+	})
+	// A generator's yield in a frame iter_next entered, and that step,
+	// after it (arm64_gen.go).
+	h(bytecode.RYield, func() {
+		g.genYield()
+		a.Bind(genStep)
+		g.genStep()
+		a.Bind(g.genRet)
+		g.genReturn()
+	})
+	// Closures and the upvalues they capture (arm64_closure.go).
+	h(bytecode.RCloseRegs, g.closeRegs)
+	h(bytecode.RClosureW, g.closureW)
+	// A switch's case found by its table (arm64_switch.go).
+	h(bytecode.RSwitch, g.switchW)
+	// A division or a remainder of numbers (arm64_bin.go).
+	h(bytecode.RBin, g.bin)
+	// str_freeze, as amd64's.
+	h(bytecode.RNewObjectLit, g.litCall)
+	h(bytecode.RNewArrayE, g.litCall)
+	h(bytecode.RStrFreeze, func() {
+		done := a.NewLabel()
+		g.regA(rD)
+		a.Load(r9, rD, 0)
+		a.Op(Eor, rC, r9, rTag, true)
+		a.ShiftImm(Lsr, rC, rC, 16, true)
+		a.Cbnz(rC, done, true)
+		a.Ubfx(rC, r9, 0, 8)
+		a.CmpImm(rC, int64(KindString), false)
+		a.BCond(NE, done)
+		a.Load(rS, rD, 8)
+		a.LoadU8(rC, rS, offStrBuilding)
+		a.Cbz(rC, done, false)
+		a.Store8(rS, offStrBuilding, ZR)
+		a.Bind(done)
+		g.next()
+	})
+	// jtypeof and str_part, as amd64's.
+	h(bytecode.RJTypeof, func() {
+		take, ne, eq := a.NewLabel(), a.NewLabel(), a.NewLabel()
+		g.regA(rS)
+		g.typeIndex(rS)
+		a.Ubfx(r8, rW, 8, 8)
+		a.AndImm(r9, r8, uint64(^bytecode.RCmpTrue&0xFF), false)
+		a.AndImm(r8, r8, uint64(bytecode.RCmpTrue), false)
+		a.Cmp(rC, r9, true)
+		a.BCond(EQ, eq)
+		a.Cbz(r8, take, false)
+		a.B(ne)
+		a.Bind(eq)
+		a.Cbz(r8, ne, false)
+		a.Bind(take)
+		g.immSC(rC)
+		g.taken(rC)
+		a.Bind(ne)
+		g.next()
+	})
+	h(bytecode.RStrPart, func() {
+		done := a.NewLabel()
+		g.regA(rD)
+		a.Load(r9, rD, 0)
+		a.Cmp(r9, rTag, true)
+		a.BCond(LO, done)
+		a.Op(Eor, rC, r9, rTag, true)
+		a.ShiftImm(Lsr, rC, rC, 16, true)
+		a.Cbnz(rC, g.exit, true)
+		a.Ubfx(rC, r9, 0, 8)
+		a.CmpImm(rC, int64(KindString), false)
+		a.BCond(NE, g.exit)
+		a.Bind(done)
+		g.next()
+	})
+	// gen_entry of a frame's first run, as amd64's.
+	h(bytecode.RGenEntry, func() {
+		a.Load(rS, rCtx, ncNF)
+		a.Load(rC, rS, offFSavedSP)
+		a.CmpImm(rC, 0, true)
+		a.BCond(LT, g.exit)
+		a.Store(rS, offFSavedSP, ZR)
+		g.next()
 	})
 
 	for n, l := range g.exits {

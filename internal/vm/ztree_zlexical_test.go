@@ -10,7 +10,7 @@ import "testing"
 // directly and from a closure; and parameter lists with defaults, which
 // start in the dead zone and are bound one at a time.
 func TestTreeDeadZone(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 		// inner names a closure of f's that is to run as a tree too.
@@ -35,9 +35,8 @@ func TestTreeDeadZone(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				fn := compileForTest(t, tt.src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err != nil {
 					r.Close()

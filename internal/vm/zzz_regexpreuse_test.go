@@ -160,8 +160,7 @@ func TestRegExpReuse(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpReuseTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -173,7 +172,6 @@ func TestRegExpReuse(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }
 
 // regexpReuseSiteOf is the site execReuseOf finds for the first call of
@@ -209,6 +207,7 @@ func regexpReuseSiteOf(t *testing.T, fn *bytecode.Function, name string) *execRe
 // Exec's again, as many as the patterns' numbers of elements, the same
 // arrays on another run.
 func TestRegExpReuseSites(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, regexpReuseTestSrc)
 	cases := []struct {
 		name       string
@@ -239,7 +238,6 @@ func TestRegExpReuseSites(t *testing.T) {
 			t.Errorf("%s: site %+v, want strs %v and a local of the pieces %v", c.name, site, c.strs, c.kept)
 		}
 	}
-	SetTreeTier(true)
 	r := New(Config{})
 	defer r.Close()
 	src := strings.TrimSpace(regexpReuseTestSrc)

@@ -10,6 +10,7 @@ import "testing"
 // The functions with loops and no calls run as trees; the rest is the
 // interpreter.
 func TestShortBigInt(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[0n, 1n, -1n, 2n**49n, -(2n**49n), 2n**50n - 1n, 2n**50n, -(2n**50n), -(2n**50n) - 1n,
 		   2n**63n - 1n, -(2n**63n), 2n**63n, -(2n**63n) - 1n, 2n**64n].map(String).join()`, "0,1,-1,562949953421312,-562949953421312,1125899906842623,1125899906842624,-1125899906842624,-1125899906842625,9223372036854775807,-9223372036854775808,9223372036854775808,-9223372036854775809,18446744073709551616"},

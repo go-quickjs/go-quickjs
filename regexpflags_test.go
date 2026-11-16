@@ -3,6 +3,7 @@ package quickjs_test
 import "testing"
 
 func TestRegExpFlagsAreReadAsTheScriptLeftThem(t *testing.T) {
+	t.Parallel()
 	// An untouched RegExp's flags are taken from its pattern; any change a
 	// script makes to how they are read is still what the methods see.
 	checkEval(t, `(function () {
@@ -29,6 +30,7 @@ func TestRegExpFlagsAreReadAsTheScriptLeftThem(t *testing.T) {
 }
 
 func TestReplaceWithTheBuiltInExec(t *testing.T) {
+	t.Parallel()
 	// replace with an untouched RegExp keeps its matches as indices rather
 	// than as exec's arrays; everything a script can see of the matching is
 	// what it was.
@@ -53,6 +55,7 @@ func TestReplaceWithTheBuiltInExec(t *testing.T) {
 }
 
 func TestGlobalReplaceLeavesWhatItsExecsWould(t *testing.T) {
+	t.Parallel()
 	// The matches of a global replace are found in one go; lastIndex and the
 	// legacy statics end as the last of its calls to exec left them.
 	checkEval(t, `(function () {
@@ -64,6 +67,7 @@ func TestGlobalReplaceLeavesWhatItsExecsWould(t *testing.T) {
 }
 
 func TestSplitWithTheBuiltInExec(t *testing.T) {
+	t.Parallel()
 	// split with an untouched RegExp searches for each separator rather than
 	// trying one at every position; the pieces, the captures, the limits and
 	// the legacy statics are what they were.

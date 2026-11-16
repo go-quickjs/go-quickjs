@@ -6,6 +6,7 @@ import "testing"
 // unicode mode: a reference to a group the pattern does not have, and a \c
 // followed by anything but a letter.
 func TestRegExpAnnexBEscapes(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// \2 with one group is the octal escape \x02, and \8 the digit.
 		{`String(/\b(\w+) \2\b/.test("the the"))`, "false"},
@@ -26,6 +27,7 @@ func TestRegExpAnnexBEscapes(t *testing.T) {
 // nothing stops repeating once an iteration past the minimum matches nothing,
 // as * does, rather than going round until the step budget runs out.
 func TestRegExpUnboundedCountOfEmpty(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`[/.(?=Z){2,}/.exec("a bZ cZZ")[0], /.(?=Z){2,}?/.exec("a bZ")[0], /.(?!Z){3,}/.exec("aZ b")[0]].join()`, "b,b,Z"},
 		{`JSON.stringify([/(a|){2,}b/.exec("aab"), /(a|){3,}b/.exec("ab"), /(){2,}x/.exec("x")])`,

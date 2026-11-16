@@ -133,6 +133,7 @@ func TestJITOSRCodeApart(t *testing.T) {
 // entered ran in the code kept for its loop: that has a link of its own,
 // no native code's.
 func TestJITOSRNotCalledNatively(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -166,6 +167,7 @@ func TestJITOSRNotCalledNatively(t *testing.T) {
 // thrown away: microbench's own loops, each a function called once, paid
 // that, and carried_fresh 1.29x what it took with no escape analysis.
 func TestJITFrameKeepsItsLoop(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -187,6 +189,7 @@ func TestJITFrameKeepsItsLoop(t *testing.T) {
 // from then on; and it does at once where a native caller links it, whose
 // calls Go does not see.
 func TestJITKeptEntryGoes(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -217,6 +220,7 @@ func TestJITKeptEntryGoes(t *testing.T) {
 // frame: they gain nothing from its objects' staying unmade, and would ask
 // for it back. carried_exit_3000 made two compiles more than main for that.
 func TestJITKeptEntryStaysForCallsThatLeave(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -248,6 +252,7 @@ func TestJITKeptEntryStaysForCallsThatLeave(t *testing.T) {
 // were what it was judged by, and code a moment from running natively, a
 // tree ran instead.
 func TestJITKeptGoneKeepsItsRecord(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -271,6 +276,7 @@ func TestJITKeptGoneKeepsItsRecord(t *testing.T) {
 // function's next, in that code, which needs no entry there, and keeps that
 // loop's objects unmade: only the loop a frame stayed in costs them.
 func TestJITOSRNextLoopUnmade(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -301,6 +307,7 @@ func TestJITOSRNextLoopUnmade(t *testing.T) {
 // entry there: asked, the frame would begin a run within the interpreter
 // at each exit, one inside the other.
 func TestJITOSRGoesOnInItsRun(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -332,6 +339,7 @@ func TestJITOSRGoesOnInItsRun(t *testing.T) {
 // is the interpreter's; what it learned reaches the function's code, whose
 // next compile is for it.
 func TestJITOSRDeoptimizes(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -356,6 +364,7 @@ func TestJITOSRDeoptimizes(t *testing.T) {
 // each exit having the next check due at once: every call interpreted the
 // rest of its loop, three times as slow as with an entry.
 func TestJITOSRShortLoopsLearn(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -403,6 +412,7 @@ func TestJITOSRShortLoopsLearn(t *testing.T) {
 // not, whatever the calls' turns or loops: a call that leaves again goes on
 // in that run.
 func TestJITFramesLeave(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -464,6 +474,7 @@ func TestJITFramesLeave(t *testing.T) {
 // exit: the new code's once no run of the code it replaced is left, however
 // that ends.
 func TestJITHomesComeDown(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -492,6 +503,7 @@ func TestJITHomesComeDown(t *testing.T) {
 // a frame in a function hardly called yet: the frame goes on in the code it
 // asks for, at the loop's entry the compile keeps, with no code of its own.
 func TestJITCompileInARunKeepsItsLoop(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -527,6 +539,7 @@ func TestJITCompileInARunKeepsItsLoop(t *testing.T) {
 // entries like every other: not asked, it has none, and the frame stays in
 // the existing tiers.
 func TestJITOSRInTheBackground(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -558,6 +571,7 @@ func TestJITOSRInTheBackground(t *testing.T) {
 // (jitDeoptSeen): the site, of two shapes, stays polymorphic. Each code's
 // serial its own, its second miss made it megamorphic.
 func TestJITOSRSiteNotMegamorphic(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -590,6 +604,7 @@ func TestJITOSRSiteNotMegamorphic(t *testing.T) {
 // and its learning the loop's entry does not: that would have the code it
 // was compiled apart from compiled again, which lets it go.
 func TestJITOSRTellsBeforeItsCompile(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -613,6 +628,7 @@ func TestJITOSRTellsBeforeItsCompile(t *testing.T) {
 // A long frame in the code kept for its loop uses the function: its
 // entries there count, and the cache does not flush it as unused.
 func TestJITOSRUsesTheFunction(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -632,6 +648,7 @@ func TestJITOSRUsesTheFunction(t *testing.T) {
 // spent: told its reasons, the function's code gets no more compiles than
 // its budgets give it.
 func TestJITOSRSpendsTheFunctionsBudgets(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -652,6 +669,7 @@ func TestJITOSRSpendsTheFunctionsBudgets(t *testing.T) {
 // is told, which would otherwise find the site known already, and be
 // compiled for it at no exit of its own.
 func TestJITOSRTellsTheFunction(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -674,6 +692,7 @@ func TestJITOSRTellsTheFunction(t *testing.T) {
 // back. A frame that stays in a loop then learns it afresh. Not while a
 // run is in it, which goes on there and lets it go when it ends.
 func TestJITOSRGoesWithTheCode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -719,6 +738,7 @@ func TestJITOSRGoesWithTheCode(t *testing.T) {
 // The code kept for a loop counts in its function's entry, and goes with
 // it: the cache holds what it counts, no less, and nothing of it past it.
 func TestJITOSRCounted(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

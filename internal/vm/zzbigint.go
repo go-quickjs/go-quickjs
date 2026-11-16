@@ -174,6 +174,13 @@ func (r *Runtime) bigRelease(v, a, b, old Value, flags int) {
 	}
 }
 
+// bigGiveable reports whether b's room is one of the list's, which
+// bigGive keeps.
+func bigGiveable(b *BigInt) bool {
+	c := int(uint32(b.hdr>>bigCapShift) & bigLenMask)
+	return c >= bigBlockFrom && c <= bigFreeTop
+}
+
 // bigGive keeps the block b for bigInPlace, if it has room for a list's.
 func (r *Runtime) bigGive(b *BigInt) {
 	c := int(uint32(b.hdr>>bigCapShift) & bigLenMask)

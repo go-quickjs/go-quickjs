@@ -34,6 +34,7 @@ function hot(n) { let s = 0, t = 0; for (let i = 0; i < n; i++) { s = Math.imul(
 // interpreter and the tree tier, which the sweep's rounds take it to; the
 // JIT's is internal/vm's TestJITMathFamily.
 func TestMathLeaves(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if got := evalString(t, rt, mathLeafSweep+`; var r; for (var t = 0; t < 3; t++) r = sweep() + " " + hot(5000); r`); got != "2328:818518462:193 1433262336:12696087.58781071" {

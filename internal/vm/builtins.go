@@ -1577,6 +1577,10 @@ func (r *Runtime) initArrayBuiltins() {
 		// made once rather than per element: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
+		ready := rt.regCallbackOf(cb, thisArg)
+		if ready != nil {
+			defer ready.end()
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1586,7 +1590,12 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			if _, err := rt.callDirect(cb, thisArg, argv[:]); err != nil {
+			if ready != nil {
+				_, err = ready.call(argv[:])
+			} else {
+				_, err = rt.callDirect(cb, thisArg, argv[:])
+			}
+			if err != nil {
 				return Undefined, err
 			}
 		}
@@ -1602,6 +1611,10 @@ func (r *Runtime) initArrayBuiltins() {
 		// made once rather than per element: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
+		ready := rt.regCallbackOf(cb, thisArg)
+		if ready != nil {
+			defer ready.end()
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1615,7 +1628,12 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			v, err := rt.callDirect(cb, thisArg, argv[:])
+			var v Value
+			if ready != nil {
+				v, err = ready.call(argv[:])
+			} else {
+				v, err = rt.callDirect(cb, thisArg, argv[:])
+			}
 			if err != nil {
 				return Undefined, err
 			}
@@ -1635,6 +1653,10 @@ func (r *Runtime) initArrayBuiltins() {
 		// made once rather than per element: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
+		ready := rt.regCallbackOf(cb, thisArg)
+		if ready != nil {
+			defer ready.end()
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1644,7 +1666,12 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			keep, err := rt.callDirect(cb, thisArg, argv[:])
+			var keep Value
+			if ready != nil {
+				keep, err = ready.call(argv[:])
+			} else {
+				keep, err = rt.callDirect(cb, thisArg, argv[:])
+			}
 			if err != nil {
 				return Undefined, err
 			}
@@ -1682,6 +1709,10 @@ func (r *Runtime) initArrayBuiltins() {
 		// made once rather than per element: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
+		ready := rt.regCallbackOf(cb, thisArg)
+		if ready != nil {
+			defer ready.end()
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1691,7 +1722,12 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.callDirect(cb, thisArg, argv[:])
+			var res Value
+			if ready != nil {
+				res, err = ready.call(argv[:])
+			} else {
+				res, err = rt.callDirect(cb, thisArg, argv[:])
+			}
 			if err != nil {
 				return Undefined, err
 			}
@@ -1707,6 +1743,10 @@ func (r *Runtime) initArrayBuiltins() {
 		// made once rather than per element: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
+		ready := rt.regCallbackOf(cb, thisArg)
+		if ready != nil {
+			defer ready.end()
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1716,7 +1756,12 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.callDirect(cb, thisArg, argv[:])
+			var res Value
+			if ready != nil {
+				res, err = ready.call(argv[:])
+			} else {
+				res, err = rt.callDirect(cb, thisArg, argv[:])
+			}
 			if err != nil {
 				return Undefined, err
 			}
@@ -1799,6 +1844,10 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 	// made once rather than per element: a callee may not keep it, any
 	// more than it may keep the interpreter's own stack.
 	var argv [3]Value
+	ready := r.regCallbackOf(cb, thisArg)
+	if ready != nil {
+		defer ready.end()
+	}
 	for k := int64(0); k < a.n; k++ {
 		i := k
 		if backwards {
@@ -1809,7 +1858,12 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 			return Undefined, -1, err
 		}
 		argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-		ok, err := r.callDirect(cb, thisArg, argv[:])
+		var ok Value
+		if ready != nil {
+			ok, err = ready.call(argv[:])
+		} else {
+			ok, err = r.callDirect(cb, thisArg, argv[:])
+		}
 		if err != nil {
 			return Undefined, -1, err
 		}
@@ -1866,6 +1920,10 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 	// made once rather than per element: a callee may not keep it, any
 	// more than it may keep the interpreter's own stack.
 	var argv [4]Value
+	ready := r.regCallbackOf(cb, Undefined)
+	if ready != nil {
+		defer ready.end()
+	}
 	for ; k < a.n; k++ {
 		i := k
 		if backwards {
@@ -1879,7 +1937,11 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 			continue
 		}
 		argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), Obj(a.o)
-		acc, err = r.callDirect(cb, Undefined, argv[:])
+		if ready != nil {
+			acc, err = ready.call(argv[:])
+		} else {
+			acc, err = r.callDirect(cb, Undefined, argv[:])
+		}
 		if err != nil {
 			return Undefined, err
 		}
@@ -3131,8 +3193,13 @@ func (r *Runtime) sortValues(items []Value, cmp Value) error {
 	// so the list they go in is made once for the whole sort. A comparator that
 	// sorts something else of its own gets its own, being another call to this.
 	var argv [2]Value
+	// A comparator of register code is called kept ready (regCallback).
+	cb := r.regCallbackOf(cmp, Undefined)
+	if cb != nil {
+		defer cb.end()
+	}
 	return stableSort(items, func(x, y Value) (bool, error) {
-		return r.compareForSort(x, y, cmp, &argv)
+		return r.compareForSort(x, y, cmp, &argv, cb)
 	})
 }
 
@@ -3350,8 +3417,9 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 	return start, nil
 }
 
-// compareForSort reports whether x sorts before y.
-func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) {
+// compareForSort reports whether x sorts before y, the comparator called
+// kept ready where cb is not nil.
+func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value, cb *regCallback) (bool, error) {
 	// undefined sorts after everything, and the comparator is not consulted
 	// about it -- which is what lets a comparator assume its arguments are
 	// values it put there.
@@ -3363,7 +3431,13 @@ func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) 
 	}
 	if isCallable(cmp) {
 		argv[0], argv[1] = x, y
-		res, err := r.callDirect(cmp, Undefined, argv[:])
+		var res Value
+		var err error
+		if cb != nil {
+			res, err = cb.call(argv[:])
+		} else {
+			res, err = r.callDirect(cmp, Undefined, argv[:])
+		}
 		if err != nil {
 			return false, err
 		}

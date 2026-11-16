@@ -8,6 +8,7 @@ import "testing"
 // accessor with a writable property, unfreezing the global (KI-13). The
 // answers are node's.
 func TestLazyGlobalsFreeze(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `"use strict";
 		const out = [];
 		Object.freeze(globalThis);
@@ -25,6 +26,7 @@ func TestLazyGlobalsFreeze(t *testing.T) {
 // the global object, and that assigning through an object inheriting from
 // the global defines the name there, as for any writable global.
 func TestLazyGlobalsBuildOnce(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		const g = Object.getOwnPropertyDescriptor(globalThis, "Intl").get;
 		const first = g(), second = g();

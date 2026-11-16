@@ -21,6 +21,7 @@ import (
 // returned before the clause changes what it was read from. On the trees
 // and in the interpreter.
 func TestFinallyInline(t *testing.T) {
+	t.Parallel()
 	src := `
 		var log = []
 		function a(x) { try { log.push('t' + x) } finally { log.push('f' + x) } return 'a' }
@@ -45,8 +46,7 @@ func TestFinallyInline(t *testing.T) {
 		s`
 	const want = `a|r|try|fin|504|0001101120|f|g|1k1k2|0,0,1,10,2,20|orig|e1|TypeErrorfrom finally|123|{"value":3,"done":false}|{"value":9,"done":true}|{"done":true}|t1,f1,fb,in,f1,f2,f3,f4,g,fb,g,hf,hf`
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -56,13 +56,13 @@ func TestFinallyInline(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A try statement's value is its try block's, whichever copy of the clause
 // runs, unless the clause breaks out, when it is what the clause produced:
 // as Node's eval gives them.
 func TestFinallyInlineCompletion(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ src, want string }{
 		{"try { 1 } finally { 2 }", "1"},
 		{"do { try { 3 } finally { break } } while (0)", "undefined"},
@@ -73,8 +73,7 @@ func TestFinallyInlineCompletion(t *testing.T) {
 		{"try { } finally { 9 }", "undefined"},
 	} {
 		for _, tree := range []bool{true, false} {
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, tc.src))
 			if err != nil {
 				t.Fatal(err)
@@ -89,7 +88,6 @@ func TestFinallyInlineCompletion(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }
 
 // The normal completion of a try with a finally runs no completion record
@@ -97,6 +95,7 @@ func TestFinallyInlineCompletion(t *testing.T) {
 // push_undef. A clause inside a clause, and code compiled for a debugger,
 // have their clause once.
 func TestFinallyInlineCode(t *testing.T) {
+	t.Parallel()
 	fnOf := func(src string, debug bool) *bytecode.Function {
 		t.Helper()
 		prog, err := parser.Parse(src, parser.Options{})

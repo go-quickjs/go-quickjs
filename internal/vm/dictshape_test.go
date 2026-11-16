@@ -13,6 +13,7 @@ func globalObject(r *Runtime, name string) *Object {
 // the layout it had before, as V8 rolls a map back along its transition;
 // deleting another makes it a dictionary.
 func TestShapeDeleteLastRollsBack(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -37,6 +38,7 @@ func TestShapeDeleteLastRollsBack(t *testing.T) {
 // transitions past the descriptor it reconfigures; each had been given a
 // layout of its own.
 func TestShapeReconfigureShared(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -67,6 +69,7 @@ func TestShapeReconfigureShared(t *testing.T) {
 // dictionary (Map's TooManyFastProperties); named stores do not, nor keyed
 // ones within it.
 func TestShapeKeyedStoresPastSoftLimit(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -98,6 +101,7 @@ func TestShapeKeyedStoresPastSoftLimit(t *testing.T) {
 // stores past the soft limit, keys of their own. Each answer is the
 // uncached lookup's.
 func TestShapeDictionarySites(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -152,6 +156,7 @@ func TestShapeDictionarySites(t *testing.T) {
 // here is the second made on its prototype: the first has a layout of its
 // own (firstRoot).
 func TestShapeDictionaryPrototypeNoTree(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

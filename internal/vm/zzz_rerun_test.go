@@ -217,6 +217,7 @@ func runProgramForTest(t testing.TB, r *Runtime, fn *bytecode.Function) Value {
 // first run's had. Each run had made its literals' shapes anew, and what any
 // cache or native code knew of them was of one run.
 func TestProgramRerunsMakeNoShapes(t *testing.T) {
+	t.Parallel()
 	for _, s := range rerunScripts[:5] {
 		t.Run(s.name, func(t *testing.T) {
 			r := newOldTiersForTest(Config{})
@@ -249,6 +250,7 @@ func TestProgramRerunsMakeNoShapes(t *testing.T) {
 
 // What a run learned of a literal's objects' room, the next starts with.
 func TestProgramRerunsKeepRoom(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, `var o = {a: 1}; o.b = 2; o.c = 3; o.d = 4; o.e = 5`)
@@ -267,6 +269,7 @@ func TestProgramRerunsKeepRoom(t *testing.T) {
 // each run's objects are its own, what it does to them is not seen by the
 // next, and a run that keeps one sees it unchanged.
 func TestProgramRerunsAnswers(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, `
@@ -291,6 +294,7 @@ func TestProgramRerunsAnswers(t *testing.T) {
 // Each realm has roots of its own for a program, of its own Object.prototype:
 // a realm's objects never have another's layouts.
 func TestProgramRerunsRealmsApart(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, `var o = {a: 1}; o instanceof Object && Object.getPrototypeOf(o) === Object.prototype`)
@@ -409,6 +413,7 @@ func TestProgramRerunsMakingUpKeys(t *testing.T) {
 // the root, the shapes of an object of a thousand properties had walked half
 // a million parents, and each new shape of any kind paid for its own.
 func TestShapeChargedFromItsParent(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	var b strings.Builder
 	b.WriteString("var o = {")

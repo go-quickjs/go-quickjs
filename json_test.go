@@ -9,6 +9,7 @@ import (
 // The replacer and the reviver are the two hooks that make JSON.stringify and
 // JSON.parse worth using over a hand-written walk.
 func TestJSONReplacerAndReviver(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The array form fixes which properties appear, and in what order.
 		{`JSON.stringify({a: 1, b: 2}, ["a"])`, `{"a":1}`},
@@ -74,6 +75,7 @@ func TestJSONReplacerAndReviver(t *testing.T) {
 
 // TestJSONStringifySpace covers the space argument, which names an indent.
 func TestJSONStringifySpace(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A Number or String object stands for the primitive it wraps.
 		{`JSON.stringify({a: 1}, null, new Number(3)) === JSON.stringify({a: 1}, null, 3)`,
@@ -97,6 +99,7 @@ func TestJSONStringifySpace(t *testing.T) {
 // TestJSONKeysAreStrings covers the key a replacer or a reviver is given for an
 // array element, which is the property name rather than the index.
 func TestJSONKeysAreStrings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify([1, 2], function (k, v) { return typeof k === "string" ? v : "BAD" })`,
 			"[1,2]"},
@@ -112,6 +115,7 @@ func TestJSONKeysAreStrings(t *testing.T) {
 }
 
 func TestJSONStringifyKeySnapshots(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// toJSON sees the root, property and array index as strings. The
 		// replacer sees that same key after toJSON returns.
@@ -143,6 +147,7 @@ func TestJSONStringifyKeySnapshots(t *testing.T) {
 // walking. The keys are settled before the walk starts, a refusal to write back
 // is ignored, and a trap that throws is not.
 func TestJSONReviverWalk(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A property the reviver deletes is still visited, and then read
 		// through the prototype chain.
@@ -186,6 +191,7 @@ func TestJSONReviverWalk(t *testing.T) {
 // TestJSONBigInt covers a BigInt, which has no JSON form of its own but may be
 // given one.
 func TestJSONBigInt(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { JSON.stringify(0n) } catch (e) { e.constructor.name }`, "TypeError"},
 		{`try { JSON.stringify(Object(0n)) } catch (e) { e.constructor.name }`, "TypeError"},
@@ -206,6 +212,7 @@ func TestJSONBigInt(t *testing.T) {
 // though a String object, an object, still finds one. Strings were asked:
 // JSON.stringify("s") gave what String.prototype.toJSON returned.
 func TestJSONPrimitivesHaveNoToJSON(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String.prototype.toJSON = () => "X"
 		  var out = [JSON.stringify("s"), JSON.stringify({a: "s"}), JSON.stringify(["s"]), JSON.stringify(new String("s"))].join(" ")
@@ -227,6 +234,7 @@ func TestJSONPrimitivesHaveNoToJSON(t *testing.T) {
 // up to Number.MAX_VALUE: the test for infinity once took 1.7e308 as its
 // bound, and wrote the largest doubles as null (test262's value-number).
 func TestJSONStringifyFinite(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify(Number.MAX_VALUE)`, "1.7976931348623157e+308"},
 		{`JSON.stringify([Number.MAX_VALUE, -Number.MAX_VALUE, 1.75e308, 5e-324, -0])`,
@@ -244,6 +252,7 @@ func TestJSONStringifyFinite(t *testing.T) {
 // out to have no JSON form is omitted along with its key and the separator
 // written in front of it.
 func TestJSONStringifyShapes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The dropped property is the first, the last, and the only one.
 		{`JSON.stringify({a: undefined, b: 1})`, `{"b":1}`},
@@ -298,6 +307,7 @@ func TestJSONStringifyShapes(t *testing.T) {
 // the source text for a string with no escape in it, and the built path it
 // falls into at the first escape.
 func TestJSONParseStrings(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.parse('"plain"')`, "plain"},
 		{`JSON.parse('""')`, ""},
@@ -327,6 +337,7 @@ func TestJSONParseStrings(t *testing.T) {
 // TestJSONLoneSurrogateRoundTrip keeps the escaping of a surrogate that has no
 // partner, which has no UTF-8 form and so must survive as an escape.
 func TestJSONLoneSurrogateRoundTrip(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify("\uD800")`, `"\ud800"`},
 		{`JSON.stringify("a\uDC00b")`, `"a\udc00b"`},
@@ -346,6 +357,7 @@ func TestJSONLoneSurrogateRoundTrip(t *testing.T) {
 // document would exhaust cannot be grown for ever -- nor can its exhaustion be
 // caught, which would take the host down rather than the script.
 func TestJSONNestingIsBounded(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Ordinary depth is unaffected.
 		{`JSON.parse("[".repeat(100) + "]".repeat(100)).length`, "1"},
@@ -375,6 +387,7 @@ func TestJSONNestingIsBounded(t *testing.T) {
 }
 
 func TestJSONRawAndSource(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify({n: JSON.rawJSON("12345678901234567890"), s: JSON.rawJSON('"x"')})`,
 			`{"n":12345678901234567890,"s":"x"}`},
@@ -406,6 +419,7 @@ func TestJSONRawAndSource(t *testing.T) {
 // program whose documents began with sixty-five different keys had a layout
 // for each object of every kind it met after that.
 func TestJSONManyFirstKeys(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var o;
 		for (var i = 0; i < 1000; i++) o = JSON.parse('{"first' + i + '":1}');
 		var a = JSON.parse('{"late":1,"more":2}'), b = JSON.parse('{"late":3,"more":4}');
@@ -420,6 +434,7 @@ func TestJSONManyFirstKeys(t *testing.T) {
 // characters of three bytes each (KI-75) -- a string with the code units of
 // the pair that compared unequal to it, and a key no read found.
 func TestJSONParseJoinsSurrogatePairs(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	for _, tc := range []struct{ src, want string }{
@@ -450,6 +465,7 @@ func TestJSONParseJoinsSurrogatePairs(t *testing.T) {
 // The replacer is read before the space is: each can run the script
 // (KI-76).
 func TestJSONStringifyReadsReplacerFirst(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.Eval(`var log = [];

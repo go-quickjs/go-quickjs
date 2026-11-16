@@ -18,6 +18,7 @@ import (
 // frames in a stack trace; a call site whose callee changes; a strict tail
 // call, which is never planned; and runaway recursion.
 func TestCallTree(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function who() { var x = this; return x === globalThis }
 		  function strictWho() { "use strict"; var x = this; return x }
@@ -54,6 +55,7 @@ func TestCallTree(t *testing.T) {
 // frame depth WithMaxCallDepth sets, and the interrupt a context's end
 // makes, in a loop that does nothing but such calls.
 func TestCallTreeLimits(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithMaxCallDepth(100))
 	defer rt.Close()
 	if _, err := rt.Eval(`function d(n) { var m = n; return m == 0 ? 0 : 1 + d(m - 1) }

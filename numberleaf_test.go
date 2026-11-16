@@ -47,6 +47,7 @@ function sweep() {
 // three times takes to; the JIT's frameless calls of them are internal/vm's
 // TestJITPlainGoCalls.
 func TestNumberLeaves(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if got := evalString(t, rt, numberLeafSweep+`; var r; for (var t = 0; t < 3; t++) r = sweep(); r`); got != "14415:143771872:328" {

@@ -14,6 +14,7 @@ import (
 // loop's test. Each function has a local of its own, so that it is run on
 // its tree rather than by pureCall.
 func TestTruthJump(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const vals = [{}, [], function () {}, dda, null, undefined, 0, -0, NaN, 1, '', 'a', true, false, 0n, 1n, Symbol('s')]
 		function a(x) { let _k = 0; if (x) return 'a'; return 'b' }
@@ -41,8 +42,7 @@ func TestTruthJump(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
@@ -55,5 +55,4 @@ func TestTruthJump(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }

@@ -12,6 +12,7 @@ import (
 // the names each way of exporting gives, wherever it is nested, and what is
 // handed on whole, without running anything.
 func TestCommonJSExports(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		src                string
 		exports, reexports string
@@ -48,6 +49,7 @@ func TestCommonJSExports(t *testing.T) {
 // is imported before it, before its importer -- once however many import it,
 // and its failures are the import's.
 func TestSyntheticModule(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Eval(`globalThis.order = []`)
@@ -118,6 +120,7 @@ func TestSyntheticModule(t *testing.T) {
 // running meanwhile; it refuses a graph that awaits at the top level and a
 // module whose evaluation led to it; and what the module throws is the error.
 func TestRequireModule(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	sources := map[string]string{

@@ -24,6 +24,7 @@ func evalCases(t *testing.T, cases []struct{ src, want string }) {
 }
 
 func TestIteratorIncludes(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`[[1, 2, 3].values().includes(2), [1, 2, 3].values().includes(4)].join()`, "true,false"},
 		// SameValueZero: NaN is found, and the zeros are one value.
@@ -49,6 +50,7 @@ func TestIteratorIncludes(t *testing.T) {
 }
 
 func TestIteratorJoin(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`[1, null, undefined, "a", true].values().join()`, "1,,,a,true"},
 		{`[1, 2].values().join("") + [1, 2].values().join(undefined) + [].values().join("-")`, "121,2"},
@@ -68,6 +70,7 @@ func TestIteratorJoin(t *testing.T) {
 }
 
 func TestIteratorChunksAndWindows(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify([1, 2, 3, 4, 5].values().chunks(2).toArray())`, "[[1,2],[3,4],[5]]"},
 		{`JSON.stringify([1, 2, 3, 4].values().chunks(2).toArray())`, "[[1,2],[3,4]]"},
@@ -105,6 +108,7 @@ func TestIteratorChunksAndWindows(t *testing.T) {
 // calls back into the helper being closed: before the helper's first step the
 // helper is simply finished, and after it the helper is still running.
 func TestIteratorHelperReturnWhileSuspended(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var h, seen; var it = { next() { return {value: 1, done: false} },
 		    return() { seen = JSON.stringify(h.next()); return {} }, __proto__: Iterator.prototype };
@@ -117,6 +121,7 @@ func TestIteratorHelperReturnWhileSuspended(t *testing.T) {
 }
 
 func TestIteratorConcat(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`Iterator.concat([1, 2], new Set([3]), "".split("")).toArray().join()`, "1,2,3"},
 		{`Iterator.concat().next().done`, "true"},
@@ -141,6 +146,7 @@ func TestIteratorConcat(t *testing.T) {
 }
 
 func TestIteratorZip(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify(Iterator.zip([[1, 2, 3], ["a", "b"]]).toArray())`, `[[1,"a"],[2,"b"]]`},
 		// The default padding is undefined, not whatever a zero value is.

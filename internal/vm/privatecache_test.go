@@ -239,10 +239,9 @@ throw 2: 3 true`
 // Reads and writes of private members answer what Node's do, in a runtime
 // made twice, the tree tier on and off.
 func TestPrivateMembersAgreeWithNode(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for round := range 4 {
-		SetTreeTier(round < 2)
-		r := New(Config{})
+		r := newTreeTierForTest(round < 2, Config{})
 		v, err := r.Run(compileForTest(t, privateMemberScript))
 		if err != nil {
 			t.Fatal(err)

@@ -37,6 +37,7 @@ func (n *naturals) seq() iter.Seq[int] {
 // return, a destructuring or a helper that takes fewer -- as a Go range over
 // it would stop it.
 func TestGoSequences(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	var nat *naturals
@@ -107,6 +108,7 @@ func TestGoSequences(t *testing.T) {
 // cannot ask the same iterator for a value while it is producing one, as a
 // generator refuses to be resumed while it runs.
 func TestGoSequenceReentered(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Set("calling", func(f quickjs.Value) iter.Seq[string] {
@@ -243,6 +245,7 @@ func TestGoAsyncFunctions(t *testing.T) {
 // can settle; a context that ends; and a call made while script runs, which
 // is refused.
 func TestAwait(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := quickjs.New()
 	defer rt.Close()

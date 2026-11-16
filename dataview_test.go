@@ -8,6 +8,7 @@ import (
 )
 
 func TestDataView(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Big-endian is the default, which is what makes the byte order
 		// observable through a single-byte read.
@@ -66,6 +67,7 @@ func TestDataView(t *testing.T) {
 }
 
 func TestDataViewErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`new DataView(new ArrayBuffer(4)).getInt32(1)`, "RangeError"},
 		{`new DataView(new ArrayBuffer(4)).getInt32(-1)`, "RangeError"},
@@ -98,6 +100,7 @@ func TestDataViewErrors(t *testing.T) {
 // there is only ever one owner, so nothing is copied and nothing can be read
 // through a stale view.
 func TestArrayBufferTransfer(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var b = new ArrayBuffer(8); var c = b.transfer();
 		  [b.detached, c.detached, c.byteLength].join(",")`, "true,false,8"},
@@ -140,6 +143,7 @@ func TestArrayBufferTransfer(t *testing.T) {
 // are for -- image and audio samples, and model weights -- at half the space of
 // a Float32Array.
 func TestFloat16(t *testing.T) {
+	t.Parallel()
 	const d = `var d = new DataView(new ArrayBuffer(8)); `
 	cases := []struct{ src, want string }{
 		{d + `d.setFloat16(0, 1.5); String(d.getFloat16(0))`, "1.5"},
@@ -211,6 +215,7 @@ func TestFloat16(t *testing.T) {
 // view over a buffer that has gone reports an out-of-range index as one rather
 // than as a detached buffer -- and a conversion that detaches it is seen.
 func TestDataViewCheckOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
 		  try { d.getInt16(Infinity) } catch (e) { e.constructor.name }`, "RangeError"},

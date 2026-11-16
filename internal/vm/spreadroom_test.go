@@ -7,10 +7,9 @@ import "testing"
 // than growing its table at every doubling; and that the keys are where a
 // spread puts them, the literal's own before and after included.
 func TestSpreadReservesRoom(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, `
 		var src = {};
 		for (var n = 0; n < 20; n++) src["k" + n] = n;

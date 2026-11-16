@@ -11,6 +11,7 @@ import (
 // filled, its raised length written past, and an arguments object gained
 // keys (KI-31, KI-32). The answers are node's.
 func TestFixedArraysStayFixed(t *testing.T) {
+	t.Parallel()
 	src := `const out = [];
 		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
 		const ro = (a) => Object.defineProperty(a, "length", {writable: false});
@@ -51,6 +52,7 @@ func TestFixedArraysStayFixed(t *testing.T) {
 // listed where its index puts it, by Reflect.ownKeys, for-in and
 // Object.assign: it came after the rest (KI-35). The answers are node's.
 func TestIndexOrderWithAttributes(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		const a = [0, 1, 2, 3]; Object.defineProperty(a, 1, {get() { return 9 }, enumerable: true});
 		out.push(Reflect.ownKeys(a).join());
@@ -70,6 +72,7 @@ func TestIndexOrderWithAttributes(t *testing.T) {
 // loop; and a replaced %ArrayIteratorPrototype%.next is called, where it
 // was ignored (KI-36). The answers are node's.
 func TestForOfArrayFastPath(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		{ const a = [1, 2, 3]; const r = []; for (const v of a) { r.push(v); if (v === 1) Object.freeze(a); } out.push("freeze " + r.join()); }
 		{ const a = [1, 2]; const r = []; for (const v of a) { r.push(v); if (v === 1) a[5000] = 9; if (r.length > 10) break; } out.push("sparse " + r.length + " " + r[r.length - 1]); }
@@ -94,6 +97,7 @@ func TestForOfArrayFastPath(t *testing.T) {
 // dense after -- or in part, one with an element in its table, and one
 // longer than an atom's indices. The answers are node's.
 func TestArrayFillFastPath(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
 		const show = (a) => Array.from({length: a.length}, (_, i) => (i in a) ? String(a[i]) : "_").join(",") + " len " + a.length;
@@ -133,6 +137,7 @@ func TestArrayFillFastPath(t *testing.T) {
 // of 70000, of 2**32-1, a length more than doubled -- as well. The answers
 // are node's.
 func TestArrayHolesInDenseStorage(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
 		t("ctor", () => { const a = new Array(5000); return a.length + " " + (0 in a) + " " + Object.keys(a).length + " " + a.indexOf(undefined) + " " + a.includes(undefined) });

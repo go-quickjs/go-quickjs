@@ -18,6 +18,7 @@ const frames = `function frames(e) { return e.stack.split("\n").slice(1).map(s =
 // naming the function as a method, a constructor or on its own, with where it
 // is to the column.
 func TestStackTraceFormat(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// The constructor's own frame is left out; top-level code has no name.
 		{frames + `function f() { return new Error("x") }
@@ -81,6 +82,7 @@ const trace = `function top(f) { try { f() } catch (e) { return e.stack.split("\
 // or bodies. A path is written without the receiver's type, and the name
 // property stays the language's.
 func TestStackTraceInferredNames(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// dot
 		{trace + "var a = {}; a.b = function () { throw new Error() }; top(() => a.b())", "at a.b (<eval>:2:39)"},
@@ -185,6 +187,7 @@ func TestStackTraceInferredNames(t *testing.T) {
 // and that the header is its name and message as they are when the stack is
 // first read.
 func TestStackTraceSubclass(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{frames + `class AppError extends Error { constructor(m) { super(m); this.name = "AppError" } }
 class Deeper extends AppError {}
@@ -201,6 +204,7 @@ var e = make(); e.stack.split("\n")[0] + " | " + frames(e)`, "AppError: m | at m
 // without it, at its name, and a binding read in its dead zone, at the name,
 // each the first thing its function does.
 func TestStackTraceThrowPositions(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{frames + `class G extends Object { constructor() { this.x = 1; super() } }
 try { new G() } catch (e) { frames(e) }`, "at new G (<eval>:2:42) | at <eval>:3:7"},
@@ -217,6 +221,7 @@ try { c11() } catch (e) { frames(e) }`, "at c11 (<eval>:2:22) | at <eval>:4:7"},
 // TestStackTraceAccessor pins the standard's inherited accessor and V8's own
 // accessor under WithNodeQuirks.
 func TestStackTraceAccessor(t *testing.T) {
+	t.Parallel()
 	nodeCases := []struct{ src, want string }{
 		{`var a = Object.getOwnPropertyDescriptor(new Error(), "stack"), b = Object.getOwnPropertyDescriptor(new TypeError(), "stack");
 [typeof a.get, typeof a.set, a.get === b.get, a.set === b.set, a.enumerable, a.configurable, a.get.name, a.get.length, a.set.length,
@@ -297,6 +302,7 @@ var get = Object.getOwnPropertyDescriptor(Error.prototype, "stack").get;
 // none for zero or less or a non-number. V8 returns undefined for a non-number;
 // the standard getter still returns a string.
 func TestStackTraceLimit(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify(Object.getOwnPropertyDescriptor(Error, "stackTraceLimit"))`,
 			`{"value":10,"writable":true,"enumerable":true,"configurable":true}`},
@@ -318,6 +324,7 @@ func TestStackTraceLimit(t *testing.T) {
 }
 
 func TestStackTraceAccessorRealms(t *testing.T) {
+	t.Parallel()
 	realmCases(t, []struct{ src, want string }{
 		{`var a = Object.getOwnPropertyDescriptor(Error.prototype, "stack"),
 b = Object.getOwnPropertyDescriptor(other.Error.prototype, "stack");
@@ -336,6 +343,7 @@ r.join()`, "true,false,true,false"},
 // TestPrepareStackTrace pins Error.prepareStackTrace: asked for the stack when
 // it is first read, with the error and its frames, and its answer kept.
 func TestPrepareStackTrace(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var args, self; Error.prepareStackTrace = function (e, cs) { args = [e, cs]; self = this; return { n: cs.length } };
 var e = new Error(); var s = e.stack;
@@ -354,6 +362,7 @@ try { e.stack } catch (x) { r.push(x.name) } Error.prepareStackTrace = undefined
 
 // TestCallSite pins what a CallSite says about its frame.
 func TestCallSite(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`Error.prepareStackTrace = (e, cs) => cs;
 function Bar() { this.s = new Error().stack[0] }
@@ -387,6 +396,7 @@ r.join()`, "0,CallSite,undefined,CallSite method getLineNumber expects CallSite 
 
 // TestCaptureStackTrace pins Error.captureStackTrace.
 func TestCaptureStackTrace(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{frames + `function f() { var o = {}; Error.captureStackTrace(o); return o }
 var o = f(); [o.stack.split("\n")[0], frames(o), typeof Object.getOwnPropertyDescriptor(o, "stack").get].join(" / ")`,
@@ -419,6 +429,7 @@ r.join(" | ")`, "invalid_argument | invalid_argument | Cannot define property st
 // TestThrownValueStackHasColumns pins the trace a Go host gets for a thrown
 // value that is not an error, which the engine records itself.
 func TestThrownValueStackHasColumns(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	_, err := rt.EvalFile("main.js", "function f() {\n  throw 'plain'\n}\nf()")
@@ -436,6 +447,7 @@ func TestThrownValueStackHasColumns(t *testing.T) {
 // a line only when the trace is asked for: the callback's, the built-in's,
 // its caller's and the script's.
 func TestThrownValueStackThroughNative(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	_, err := rt.EvalFile("main.js", "function g() {\n  [1].forEach(function h() {\n    throw 7\n  })\n}\ng()")
@@ -452,6 +464,7 @@ func TestThrownValueStackThroughNative(t *testing.T) {
 // TestEvalFileContext pins that a script run with a name is called that in
 // its stack, and still stops when its context is done.
 func TestEvalFileContext(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	v, err := rt.EvalFileContext(context.Background(), "app.js", "function f() { return new Error() }\nf().stack")
@@ -471,6 +484,7 @@ func TestEvalFileContext(t *testing.T) {
 // An error's own keys follow the standard's construction order. WithNodeQuirks
 // adds V8's own stack accessor before the message and the rest.
 func TestErrorOwnKeysOrder(t *testing.T) {
+	t.Parallel()
 	for _, node := range []bool{false, true} {
 		var opts []quickjs.Option
 		if node {
@@ -505,6 +519,7 @@ func TestErrorOwnKeysOrder(t *testing.T) {
 // as V8 does: an update at the member, a computed key's conversion at the
 // key. Unplaced, each had the position of whatever was compiled before it.
 func TestStackPositionOfANullishMember(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function o() { return { toString() { return "k" } } }
 function upd(t) { t.x++ }
 function updLoop(t) { for (var i = 0; i < 2; i++) t.x++ }
@@ -521,6 +536,7 @@ r.filter((s, i) => i % 3 == 2).join(" | ")`,
 // o.n?.() where o is null -- at the property, as outside a chain. Unplaced,
 // each had the position of whatever was compiled before it, or none.
 func TestStackPositionInAnOptionalChain(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function get(o) { return o?.a.b }
 function call(o) { return o.n?.() }
 function idx(o) { return o?.a[0] }
@@ -536,6 +552,7 @@ r.join(" | ")`,
 // as a read's. Unplaced, it had the position of whatever was compiled
 // before it -- a call, another case's return -- or none.
 func TestStackPositionOfADeadZoneStore(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function first() { x = 5; let x }
 function sw(v) { switch (v) { case 1: let x = 10; return x; case 2: x = 5; return x } }
 function bl() { { f(); x = 5 } let x; function f() {} }

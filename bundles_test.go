@@ -8,6 +8,7 @@ import (
 )
 
 func TestOpenSourceBundles(t *testing.T) {
+	t.Parallel()
 	for _, bundle := range bundletest.All {
 		t.Run(bundle.Name, func(t *testing.T) {
 			src := bundletest.Read(t, bundle)

@@ -15,6 +15,7 @@ import (
 // the script that called it runs on, as node:vm's timeout leaves the code
 // that set it running. It used to stop the outer script too.
 func TestNestedDeadlineStopsOnlyTheCall(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	spin, err := rt.Eval(`(function () { for (;;) {} })`)
@@ -62,6 +63,7 @@ func TestNestedDeadlineStopsOnlyTheCall(t *testing.T) {
 // A realm made WithSandbox has the sandbox's properties for global names, and
 // what its scripts declare globally lands on the sandbox.
 func TestRealmWithSandbox(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	sandbox, err := rt.Eval(`({a: 1})`)
@@ -94,6 +96,7 @@ func TestRealmWithSandbox(t *testing.T) {
 // WithOffset places source within a larger file: its stack traces count the
 // lines before it.
 func TestCompileWithOffset(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	p, err := quickjs.Compile("page.html", "\n\nthrow new Error('x')", quickjs.WithOffset(10, 4))
@@ -114,6 +117,7 @@ func TestCompileWithOffset(t *testing.T) {
 // V8 accepts and the standard does not. The program it makes is refused by a
 // standard runtime when it runs, as the package's Compile refuses it at once.
 func TestRuntimeCompileQuirks(t *testing.T) {
+	t.Parallel()
 	const src = `"use strict"; function f() {} if (false) f() = 1; "compiled"`
 	quirks := quickjs.New(quickjs.WithNodeQuirks())
 	defer quirks.Close()

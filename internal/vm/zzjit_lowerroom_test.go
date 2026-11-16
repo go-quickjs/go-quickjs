@@ -31,6 +31,7 @@ func jitHotProgram(n int) string {
 // every budget the JIT holds no more than it, compiling in the background
 // or not.
 func TestJITLoweringsOnlyInRoom(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

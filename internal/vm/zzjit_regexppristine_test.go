@@ -43,6 +43,7 @@ func TestJITRegExpPristine(t *testing.T) {
 // of for a write (abi.MaxScan), which no cache's entry answers and so no
 // write of Go's sees.
 func TestJITRegExpPristineScan(t *testing.T) {
+	t.Parallel()
 	if pristineMinProps < abi.MaxScan {
 		t.Errorf("pristineMinProps is %d, abi.MaxScan %d", pristineMinProps, abi.MaxScan)
 	}

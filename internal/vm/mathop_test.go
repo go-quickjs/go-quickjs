@@ -6,6 +6,7 @@ import "testing"
 // below the two-number functions mathCall applies (hypot, atan2, pow,
 // imul), BigInt's, and max and min.
 func TestMathOpNumbers(t *testing.T) {
+	t.Parallel()
 	if len(unaryMath) > int(mathHypot) {
 		t.Fatalf("%d unary Math functions reach mathHypot (%d)", len(unaryMath), mathHypot)
 	}

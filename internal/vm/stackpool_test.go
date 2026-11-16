@@ -37,11 +37,31 @@ func newOldTiersForTest(cfg Config) *Runtime {
 	return r
 }
 
+// newTreeTierForTest is New(cfg) with the tree tier on or off for the code
+// the runtime loads, as SetTreeTier sets it for the code the process runs
+// next, so that tests comparing the tiers need not switch the process's
+// and can run in parallel. On, it is the process's setting, which only
+// QJS_NOTREE turns off.
+func newTreeTierForTest(tree bool, cfg Config) *Runtime {
+	r := New(cfg)
+	r.noTree = !tree
+	return r
+}
+
+// newOldTiersTreeForTest is newOldTiersForTest(cfg) with the tree tier on
+// or off for its code, as newTreeTierForTest.
+func newOldTiersTreeForTest(tree bool, cfg Config) *Runtime {
+	r := newOldTiersForTest(cfg)
+	r.noTree = !tree
+	return r
+}
+
 // TestReleasedStacksAreClear pins that a stack a closed runtime gives back
 // holds nothing of what ran on it -- the frames of functions, generators and
 // all -- so that the next runtime to take it keeps nothing of the last one
 // alive.
 func TestReleasedStacksAreClear(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	if _, err := r.Run(compileForTest(t, `
 		function deep(n, o) { return n ? deep(n - 1, {o}) : o }
@@ -67,6 +87,7 @@ func TestReleasedStacksAreClear(t *testing.T) {
 // TestReleaseStackWhileRunning pins that a runtime closed from inside its own
 // script keeps its stack, which the script is still running on.
 func TestReleaseStackWhileRunning(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	released := false
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), Obj(r.newNativeFunc("closeNow", 0,
@@ -90,8 +111,6 @@ func TestReleaseStackWhileRunning(t *testing.T) {
 // returns: the closure it ran, its locals and the value it returned would
 // otherwise stay reachable until the frame was used again.
 func TestReturnedTreeFramesAreCleared(t *testing.T) {
-	defer SetTreeTier(true)
-	SetTreeTier(true)
 	r := New(Config{})
 	defer r.Close()
 	before := TreesBuilt()

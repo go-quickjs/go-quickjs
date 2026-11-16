@@ -64,8 +64,8 @@ type nativeCtx struct {
 	// topOK says states[depth-1] is the top frame's, made by nativeTop
 	// since the last call or return.
 	topOK int64
-	// retDone says the base frame has returned, its value in the
-	// scratch's sV0 and sV1.
+	// retDone says the base frame has returned (1) or yielded (2), its
+	// value in the scratch's sV0 and sV1.
 	retDone int64
 	// strBits is a string's tag word; typeofs the runtime's strings typeof
 	// answers (typeofStrs), nil where it has not made one yet; funcType,
@@ -126,6 +126,25 @@ type nativeCtx struct {
 	protoStr  uintptr
 	protoNum  uintptr
 	primProps uintptr
+	// closureFn is the func value of nativeClosure, which closure_w's
+	// handler calls through callH with no exit.
+	closureFn uintptr
+	// litFn is the func value of nativeLit, which new_object_lit's and
+	// new_array_e's handler calls through callH with no exit.
+	litFn uintptr
+	// builtinFn is the func value of nativeBuiltin, which the call
+	// handler calls through callH for a built-in its site cached.
+	builtinFn uintptr
+	// iterResFn is the func value of nativeIterRes, which a generator's
+	// step that next() entered calls for its result object.
+	iterResFn uintptr
+	// callMissFn is the func value of nativeCallMiss, which the call
+	// handler calls for a callee other than its site cached.
+	callMissFn uintptr
+	// miss asks the exit stub for nativeCallMiss rather than the
+	// instruction's Go handler: the call handler's callee other than its
+	// site cached.
+	miss uintptr
 	// fv is the top frame's feedback vector, a slot a site into which a
 	// handler ORs the kinds of value it met (the JIT's next step, as
 	// Ignition's): none yet, its room kept here and in the frame record,
@@ -144,6 +163,12 @@ type nativeCtx struct {
 	top *regState
 	// disp is the dispatcher whose table is table (nativeDispatch).
 	disp *nativeTable
+	// used is how many of states the run has given a frame, the deepest
+	// depth nativeTop or the exit stub (makeTop) has made a state for:
+	// what nativeLeave clears, so
+	// that a context whose stack a deep recursion grew costs a callback's
+	// entry no more than one never grown.
+	used int64
 }
 
 // nativeMaxDepth is how deep the native frame stack goes.
@@ -151,7 +176,9 @@ const nativeMaxDepth = 128
 
 // nativeRec is a native frame's record of its caller: the call's
 // instruction, the caller's top-frame state, the stack top to give back
-// and where the value goes (B times 16).
+// and where the value goes (B times 16, or a for-of's step's A); and for a
+// generator's step the code entered (regFrameGenStep), the generator,
+// which the caller's cursor keeps alive.
 type nativeRec struct {
 	retIP    uintptr
 	regs     uintptr
@@ -163,6 +190,7 @@ type nativeRec struct {
 	saved    int64
 	bOff     int64
 	fv       uintptr
+	gen      uintptr
 }
 
 // The Runtime's and a closureCode's fields the code reads are at offsets

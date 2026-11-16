@@ -50,6 +50,7 @@ const indexOfSetup = `
 // interpreter's, and decode's and decodeArr's lookups neither call a
 // function of Go's nor leave their code.
 func TestJITSearches(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

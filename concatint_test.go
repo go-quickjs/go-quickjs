@@ -9,6 +9,7 @@ import "testing"
 // outer end must still pair with one joined to it later, which the result has
 // to remember.
 func TestConcatInteger(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`["ab" + 12345, 12345 + "ab", "x" + -42, -42 + "x", "z" + -0, "" + 7, 1024 + ""].join()`,
 			"ab12345,12345ab,x-42,-42x,z0,7,1024"},

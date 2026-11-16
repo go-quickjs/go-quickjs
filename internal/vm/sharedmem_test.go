@@ -11,6 +11,7 @@ import (
 // race to a larger one checked the length before taking the lock, and
 // succeeded doing nothing (KI-38).
 func TestSharedMemoryGrowRefusesShrink(t *testing.T) {
+	t.Parallel()
 	m := newSharedMemory(8, 64)
 	if err := m.pin(); err != nil {
 		t.Fatal(err)
@@ -63,6 +64,7 @@ func TestNotifyDeliversUnlocked(t *testing.T) {
 // wait for the runtime to run them: running them leaves no signal behind
 // (KI-60).
 func TestHostJobsReadyAfterRun(t *testing.T) {
+	t.Parallel()
 	signalled := func(r *Runtime) bool {
 		select {
 		case <-r.HostJobsReady():

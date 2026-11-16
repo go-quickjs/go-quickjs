@@ -94,6 +94,7 @@ func TestJITElemStoreAppends(t *testing.T) {
 // their values: each answer is the interpreter's. In the warm round
 // params leaves native code at no store.
 func TestJITCheckedStoresAppend(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -8,6 +8,7 @@ import "testing"
 // that are not two numbers -- fewer, more, or an object whose valueOf must
 // run, in order -- and a Math.max that is not the built-in any more.
 func TestMathMinMaxCalls(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f(a, b) { return [Math.max(a, b), Math.min(a, b)] } var r = []
 		  for (var p of [[1, 2], [2, 1], [-1, -2], [NaN, 1], [1, NaN], [Infinity, -Infinity], [0.5, 0.25]]) r.push(f(p[0], p[1]).join("/"))

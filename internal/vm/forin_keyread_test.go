@@ -55,10 +55,9 @@ const forInKeyReadWant = "10,20,30 | 7,8,undefined | x,y | 0:1,2:3 | 0:1 | 0:1,1
 // TestForInKeyRead is forInKeyReadSetup on the trees and in the
 // interpreter, each loop run often enough to be a tree's.
 func TestForInKeyRead(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, forInKeyReadSetup+"; var res; for (var i = 0; i < 30; i++) res = run(); res"))
 		r.Close()
 		if err != nil {

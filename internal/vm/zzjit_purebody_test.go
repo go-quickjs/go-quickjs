@@ -13,6 +13,7 @@ import (
 // pureByTree gives its tree, as long as pureTreeCode instructions and
 // calling nothing, is marked as any function is and is none.
 func TestJITPureBodyOnlyWithoutTree(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		src    string
 		byTree bool

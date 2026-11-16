@@ -11,6 +11,7 @@ import (
 // moves. The JIT's fields sit second to last, after every other field (an
 // empty last field would add padding).
 func TestJITFieldLayout(t *testing.T) {
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) == 8 {
 		if size := unsafe.Sizeof(closure{}); size <= 48 || size > 64 {
 			t.Errorf("closure is %d bytes, want 49 to 64 (the size class of 64)", size)

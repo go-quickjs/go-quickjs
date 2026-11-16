@@ -11,6 +11,7 @@ import (
 // the receiver what kind of array that should be. A subclass gets back an
 // instance of itself.
 func TestArraySpecies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class A extends Array {} String(new A(1, 2).slice(0) instanceof A)`, "true"},
 		{`class A extends Array {} String(new A(1, 2).map(x => x) instanceof A)`, "true"},
@@ -93,6 +94,7 @@ func TestArraySpecies(t *testing.T) {
 // dense element slice, so they apply to an array-like, to a sparse array and to
 // one whose elements have moved out of dense storage.
 func TestSpliceAndCopyWithin(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = [1, 2, 3, 4]; var r = a.splice(1, 2, "x");
 		  a.join(",") + "|" + r.join(",")`, "1,x,4|2,3"},
@@ -138,6 +140,7 @@ func TestSpliceAndCopyWithin(t *testing.T) {
 // it beyond the highest index does not materialize anything, and it cannot be
 // derived back from the keys.
 func TestSparseArrayLength(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = []; a.length = 4294967295; String(a.length)`, "4294967295"},
 		{`String(new Array(4294967295).length)`, "4294967295"},
@@ -169,6 +172,7 @@ func TestSparseArrayLength(t *testing.T) {
 // iterable first, because a resolve that throws has to stop the iteration --
 // an iterator that never finishes on its own would otherwise be walked forever.
 func TestPromiseCombinatorStopsOnError(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -195,6 +199,7 @@ func TestPromiseCombinatorStopsOnError(t *testing.T) {
 // push, pop, shift and unshift work through the property protocol, so they
 // apply to an array-like and honour a frozen array's refusal to be written.
 func TestArrayMutatorsOnArrayLikes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {length: 0}; Array.prototype.push.call(o, "x");
 		  [o.length, o[0]].join(",")`, "1,x"},
@@ -242,6 +247,7 @@ func TestArrayMutatorsOnArrayLikes(t *testing.T) {
 // -- deliberately plain, since a species that did something else would defeat
 // the point of them.
 func TestArrayChangeByCopy(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[1, 2, 3].toReversed().join(",")`, "3,2,1"},
 		{`[3, 1, 2].toSorted().join(",")`, "1,2,3"},
@@ -298,6 +304,7 @@ func TestArrayChangeByCopy(t *testing.T) {
 // A descriptor that says nothing about the value defines one holding undefined,
 // which is not the same as holding zero.
 func TestDefinePropertyValueDefault(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {}; Object.defineProperty(o, "p", {writable: true});
 		  [o.hasOwnProperty("p"), typeof o.p].join(",")`, "true,undefined"},
@@ -332,6 +339,7 @@ func TestDefinePropertyValueDefault(t *testing.T) {
 // comparator is arbitrary code: it may shorten the array, replace its elements
 // or throw, and none of that may corrupt what is being sorted.
 func TestArraySort(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[3, 1, 2].sort().join(",")`, "1,2,3"},
 		{`[3, 1, 2].sort((x, y) => x - y).join(",")`, "1,2,3"},
@@ -397,6 +405,7 @@ func TestArraySort(t *testing.T) {
 // flat and flatMap read through the view and answer through the species, like
 // every other array method that builds a new array.
 func TestFlatAndFlatMap(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[1, [2, [3, [4]]]].flat(Infinity).join(",")`, "1,2,3,4"},
 		{`[1, [2, [3]]].flat().join(",")`, "1,2,3"},
@@ -443,6 +452,7 @@ func TestFlatAndFlatMap(t *testing.T) {
 // literally is: a proxy of an array is an array, and a proxy of a function is
 // callable.
 func TestObjectToStringTags(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.prototype.toString.call(new Proxy([], {}))`, "[object Array]"},
 		{`Object.prototype.toString.call(new Proxy(function () {}, {}))`, "[object Function]"},
@@ -482,6 +492,7 @@ func TestObjectToStringTags(t *testing.T) {
 // the only difference from join -- and the whole point, since what a number or
 // a date looks like is a per-element question.
 func TestArrayToLocaleString(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0; Number.prototype.toLocaleString = function () { n++; return "N" };
 		  [1, 2].toLocaleString() + "," + n`, "N,N,2"},

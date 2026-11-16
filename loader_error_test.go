@@ -17,6 +17,7 @@ import (
 // module, through which the loader's error is found. Every error was that
 // TypeError, its message all that was left of a thrown one.
 func TestLoaderErrors(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	thrower, err := rt.Eval(`() => { throw Object.assign(new Error("from script"), { code: "E_SCRIPT" }) }`)

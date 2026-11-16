@@ -156,6 +156,7 @@ function addLoop(n) { let h = 0, a = '', b = '', c = '', d = '', e = ''; for (le
 // answer is Node's (v26.10.0) and the interpreter's, and the loop's code
 // makes its +'s by calls of Go.
 func TestJITConcatAdd(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -159,6 +159,7 @@ set2:20;setq:7;op12:12`
 // intercepts are refused or intercepted, run as a script whose functions
 // warm into the tree tier, and run again.
 func TestPropertyCreationAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	for round := range 2 {
 		r := New(Config{})
 		v, err := r.Run(compileForTest(t, propCreateScript))
@@ -193,6 +194,7 @@ func TestPropertyCreationAgreesWithNode(t *testing.T) {
 // limit -- teach their site nothing, nor do objects with no site teach
 // their class's root.
 func TestObjectRoomLearnedFromGrowth(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `
@@ -258,6 +260,7 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 // by a delete of its last key, one given a key's tombstone and the key
 // again.
 func TestFindOwnPastTheTable(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

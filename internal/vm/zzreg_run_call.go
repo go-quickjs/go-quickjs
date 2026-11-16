@@ -167,10 +167,69 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 				regWindow(r.stack, wb)[w.B()] = v
 				return pc + 1
 			}
+		} else if regIsObject(&win[0]) && regSameTemplate(e, (*Object)(win[0].ref)) {
+			// Another closure of the callee's template, which the cache is
+			// now made: the call made again, which the cache answers.
+			return pc
 		}
 	}
 	f.pc = regSrc(c, pc) + 1
 	return st.done(r.regCallMiss(f, c, w, wb, pc))
+}
+
+// regSameTemplate reports whether o is a closure of the template of the
+// callee site e entered last, which the site's cache answers as it
+// answers that callee, and makes it the cache's: its kind and this are
+// the template's -- a plain function's, entered by a call as the cached
+// one was, of the cached one's realm -- and a closure made anew each time
+// its maker runs, `var f = function () {...}; f()`, would otherwise miss
+// at every call, and be entered by Go from the miss, in a code entry of
+// its own. An arrow's this is the new arrow's, as the miss would cache
+// it; a bound function, a function with more of its own (extra) and
+// other realms are left to the miss.
+//
+// The call is made again rather than entered here: the native code
+// enters what its cache answers itself, and rhCallW's hit path stays as
+// it is, which a branch into it from here made 37% slower in the table's
+// loop (func_closure_call).
+//
+//go:noinline
+func regSameTemplate(e *regCallCache, o *Object) bool {
+	switch e.kind &^ (regCallOut | regCallLeaf) {
+	case regCallEnter, regCallThis, regCallObjThis:
+	default:
+		return false
+	}
+	if e.kind&(regCallOut|regCallLeaf) == regCallOut && !regNativeOn {
+		// A frame that keeps its arguments, which the table's loop
+		// enters from the miss whatever the cache holds; native code
+		// enters it itself.
+		return false
+	}
+	ecl := e.cl
+	if ecl == nil || e.rc == nil {
+		return false
+	}
+	fd := o.fn()
+	if fd == nil || fd.bound {
+		return false
+	}
+	this := e.this
+	if x := fd.extra; x != nil {
+		// An arrow's this is its own, as the miss caches it.
+		if !fd.arrow || x.lexThisRef != nil || x.rare != nil || e.kind&^(regCallOut|regCallLeaf) != regCallThis {
+			return false
+		}
+		this = x.lexThis
+	} else if fd.arrow {
+		return false
+	}
+	cl := fd.closure
+	if cl == nil || cl.closureCode != ecl.closureCode || cl.reg != e.rc || cl.realm != ecl.realm {
+		return false
+	}
+	e.callee, e.cl, e.this = o, cl, this
+	return true
 }
 
 // regEnterW runs a register function of the form's own layout in the

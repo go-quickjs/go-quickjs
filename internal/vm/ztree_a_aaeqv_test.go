@@ -13,6 +13,7 @@ import (
 // this and of a local, and a tree. Each function has a local of its own, so
 // that it is run on its tree rather than by pureCall.
 func TestEqualityValues(t *testing.T) {
+	t.Parallel()
 	const src = `
 		let log = ''
 		const vals = [0, -0, 1, NaN, '0', '1', '', 'go', true, false, null, undefined, 0n, 1n, dda,
@@ -45,8 +46,7 @@ func TestEqualityValues(t *testing.T) {
 		out[0] + ' | ' + (out[0] === out[1] && out[1] === out[2])`
 	const want = "0101001111100110,001010,01011,0100,0001,0101001111100110,001010,01011,0100,0001,0101001000000100,001100,01000,0101,1100,0101001010100100,001000,01001,0100,0000,0101001110100110,001000,01011,0100,0011,0101001000100100,001100,01001,0100,1110,0101001110100110,001000,01011,0100,0011,0101001010101000,001001,01101,0110,0010,0101011000100100,001100,01001,0100,1100,0101000110100110,001000,01011,0100,0001,1011101010100101,100000,10001,1000,0001,1000101010100100,111000,11001,0000,0000,0101001110100110,001000,01011,0100,TypeError,0101001000100100,001100,01001,0100,TypeError,1001101010100100,101000,11001,0000,0000,0101001000100100,001100,01001,0100,1100,RangeError,RangeError,RangeError,0100,RangeError vvvvvvvvv | true"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
@@ -59,5 +59,4 @@ func TestEqualityValues(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }

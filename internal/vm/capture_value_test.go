@@ -18,7 +18,7 @@ import (
 // dead zone, as a hoisted function or a switch's other case sees it, or a
 // parameter list's later parameter. Each on both tiers.
 func TestCaptureByValue(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 	}{
@@ -49,8 +49,7 @@ func TestCaptureByValue(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(compileForTest(t, tt.src))
 				if err != nil {
 					r.Close()
@@ -73,7 +72,6 @@ func TestCaptureByValue(t *testing.T) {
 // as when it shared both.
 func TestCaptureByValueAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	defer SetTreeTier(true)
 	for _, tt := range []struct {
 		name, src string
 		want      float64
@@ -82,8 +80,7 @@ func TestCaptureByValueAllocs(t *testing.T) {
 		{name: "mixed", src: `'use strict'; function f(a, b, c) { b++; return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 2},
 	} {
 		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			r := New(Config{})
+			r := newTreeTierForTest(on, Config{})
 			v, err := r.Run(compileForTest(t, tt.src))
 			if err != nil {
 				t.Fatal(err)
@@ -273,11 +270,10 @@ func runCaptureCase(t *testing.T, r *Runtime, c captureCase, rounds int) string 
 // TestCaptureByValueCases runs captureCases on both tiers, three calls of
 // each case's function in a runtime of its own.
 func TestCaptureByValueCases(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, c := range captureCases {
 		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			r := New(Config{})
+			r := newTreeTierForTest(on, Config{})
 			r.SetEvaluator(captureEvaluator)
 			if got := runCaptureCase(t, r, c, 3); got != c.want {
 				t.Errorf("%s, tree %v: got %s, want %s", c.name, on, got, c.want)
@@ -294,6 +290,7 @@ func TestCaptureByValueCases(t *testing.T) {
 // parameters nothing assigns; none where the maker assigns one, nor in
 // code compiled for a debugger.
 func TestCaptureByValueMarks(t *testing.T) {
+	t.Parallel()
 	kinds := `'use strict'; function mk(a, b) { const c = 3; return [() => a + b + c, function f() { return a }, function* g() { yield a }, async function h() { return a }, async function* ag() { yield a }, class C { m() { return a + c } }, class D extends Object { constructor() { super(); this.v = b } }, { m() { return a }, get k() { return b } }] }`
 	for _, tt := range []struct {
 		name, src     string

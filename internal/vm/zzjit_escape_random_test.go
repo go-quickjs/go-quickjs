@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -233,27 +234,49 @@ func TestJITEscapeRandom(t *testing.T) {
 		programs, _ = strconv.ParseUint(s, 10, 64)
 	}
 	rounds := escapeRandomRounds()
+	var mu sync.Mutex
 	virtuals, materialized, learned := 0, uint64(0), uint64(0)
-	for seed := first; seed < first+programs; seed++ {
-		prog := escapeProgram(seed)
-		ok := t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
-			for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
-				r := jitAgreesForTestWith(t, c, escapeRandomSetup+prog, rounds...)
-				if e := jitCallbackEntry(r, "f"); e != nil && e.ssa != nil {
-					virtuals += e.ssaVirtuals
-				}
-				materialized += r.jit.materialized
-				learned += r.jit.osrLearned
+	// The programs run in parallel, in two passes: the collector's
+	// write-barrier flag that jitMarkingForTest sets is the process's, so
+	// the first pass runs every program with it as the collector leaves it,
+	// and the second, with it set, every program while it marks.
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				// Native code does the same work while the collector
+				// marks, and compiled in the background.
+				jitMarkingForTest(t)
 			}
-			// Native code does the same work while the collector marks,
-			// and compiled in the background.
-			jitMarkingForTest(t)
-			jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 3, deopt: 7}, escapeRandomSetup+prog, rounds...)
-			jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 3, background: true, checks: 3}, escapeRandomSetup+prog, rounds...)
+			for seed := first; seed < first+programs; seed++ {
+				prog := escapeProgram(seed)
+				t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
+					t.Parallel()
+					defer func() {
+						if t.Failed() {
+							t.Errorf("seed %d:\n%s", seed, prog)
+						}
+					}()
+					if marking {
+						jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 3, deopt: 7}, escapeRandomSetup+prog, rounds...)
+						jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 3, background: true, checks: 3}, escapeRandomSetup+prog, rounds...)
+						return
+					}
+					for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
+						r := jitAgreesForTestWith(t, c, escapeRandomSetup+prog, rounds...)
+						mu.Lock()
+						if e := jitCallbackEntry(r, "f"); e != nil && e.ssa != nil {
+							virtuals += e.ssaVirtuals
+						}
+						materialized += r.jit.materialized
+						learned += r.jit.osrLearned
+						mu.Unlock()
+					}
+				})
+			}
 		})
-		if !ok {
-			t.Fatalf("seed %d:\n%s", seed, prog)
-		}
+	}
+	if t.Failed() {
+		return
 	}
 	t.Logf("%d objects left unmade, %d made by Go, %d loops' entries compiled apart", virtuals, materialized, learned)
 	if programs >= 60 && (virtuals == 0 || materialized == 0 || learned == 0) {
@@ -268,6 +291,7 @@ func TestJITEscapeRandom(t *testing.T) {
 // property, which merging it round a loop has escape while its other
 // properties are merged. x0's and the other names' reads throw on purpose.
 func TestJITEscapeReducedPrograms(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -334,6 +358,7 @@ func TestJITEscapeReducedPrograms(t *testing.T) {
 // one is seen through the other, where Go makes both at an exit no code was
 // compiled for, which is the one object still.
 func TestJITEscapeHeldMerged(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -390,6 +415,7 @@ func TestJITEscapeHeldMerged(t *testing.T) {
 // construction's own object is not made, its operands need nothing made:
 // its constructor's code holds them.
 func TestJITEscapeTakeOperand(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -436,6 +462,7 @@ func TestJITEscapeTakeOperand(t *testing.T) {
 // the next classification, which gave it a role it could not hold, had
 // never ended.
 func TestJITEscapeMergedReads(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -479,6 +506,7 @@ func TestJITEscapeMergedReads(t *testing.T) {
 // changes between the two, and the pool is empty, in a call of Go from
 // which native code goes on.
 func TestJITEscapeProtoAtMaking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -86,6 +86,7 @@ func jitReadSite(t *testing.T, r *Runtime, name, key string) (siteMega bool, c *
 // too, each answer the interpreter's. (TestJITShapesMixedDeoptimizeOnce
 // mixes them from the first call.)
 func TestJITShapeMissesDeoptimize(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -113,6 +114,7 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 // more (jitTierUp), as V8's NotifyICChanged does; compiled again, it reads
 // both natively and never leaves.
 func TestJITShapesMixedDeoptimizeOnce(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -140,6 +142,7 @@ func TestJITShapesMixedDeoptimizeOnce(t *testing.T) {
 // for Go what neither has (a host exit), never deoptimizing: so each
 // function is compiled again a bounded number of times, then never.
 func TestJITShapeMissesSettleMegamorphic(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

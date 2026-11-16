@@ -66,6 +66,7 @@ func jitNativeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 // and finally clauses run on every completion -- normal, a return, a
 // throw, a break -- with the value each leaves.
 func TestJITExceptionHandlers(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -200,6 +201,7 @@ func TestJITExceptionHandlers(t *testing.T) {
 // frame: at an exit inside a try, the frame has the try's handlers, and
 // outside it none.
 func TestJITHandlersAtExits(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -237,6 +239,7 @@ func TestJITHandlersAtExits(t *testing.T) {
 // interpreter's does, and what a resumption injects -- a throw, a return
 // -- is unwound to the body's handlers.
 func TestJITGenerators(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -291,6 +294,7 @@ func TestJITGenerators(t *testing.T) {
 // way out of the scope, last resource first, an error from a disposer
 // folded into the exception in flight (SuppressedError).
 func TestJITUsing(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -358,6 +362,7 @@ func TestJITUsing(t *testing.T) {
 // iterator is closed however the loop is left -- break, return, a throw
 // caught in the function or leaving it -- as the interpreter closes it.
 func TestJITForOf(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -405,6 +410,7 @@ func TestJITForOf(t *testing.T) {
 // the outer generator is sent, thrown or asked to return goes to the
 // delegate, and the delegate's return value is yield*'s.
 func TestJITYieldStar(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -439,6 +445,7 @@ func TestJITYieldStar(t *testing.T) {
 // as any await -- or none is left, when native code goes on where the
 // disposal ends.
 func TestJITAwaitUsing(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

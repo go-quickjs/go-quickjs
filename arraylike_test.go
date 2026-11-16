@@ -14,6 +14,7 @@ import (
 // Array.prototype.map.call(arguments, f) work, and it is most of what test262
 // exercises.
 func TestArrayMethodsAreGeneric(t *testing.T) {
+	t.Parallel()
 	const obj = `var o = {length: 3, 0: "a", 1: "b", 2: "c"}; `
 	const nums = `var o = {length: 3, 0: 1, 1: 2, 2: 3}; `
 
@@ -64,6 +65,7 @@ func TestArrayMethodsAreGeneric(t *testing.T) {
 // holding undefined, which decides whether the iteration methods visit it and
 // whether the prototype shows through.
 func TestArrayHoles(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(1 in [1, , 3])`, "false"},
 		{`String(0 in [1, , 3])`, "true"},
@@ -106,6 +108,7 @@ func TestArrayHoles(t *testing.T) {
 // elements as the prototype, no prototype, a sparse array, an accessor
 // element, arguments, and holes past the elements.
 func TestArrayHolesThroughTheChain(t *testing.T) {
+	t.Parallel()
 	const src = `var r = [];
 	  function show(a) { return JSON.stringify(a) + ":" + a.length + ":" + Object.keys(a).join(",") }
 	  var h = [1, , 3, , 5];
@@ -136,6 +139,7 @@ func TestArrayHolesThroughTheChain(t *testing.T) {
 // actually called. Dense storage cannot express one, so defining it has to
 // vacate the slot.
 func TestArrayIndexAccessor(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = [0, 1]; Object.defineProperty(a, 0, {get() { return 5; }});
 		  String(a[0])`, "5"},
@@ -193,6 +197,7 @@ func TestHugeArrayLikeIsInterruptible(t *testing.T) {
 // TestFunctionNameAndLength pins that a function's name and length behave like
 // the own properties they are, even though they are synthesized on demand.
 func TestFunctionNameAndLength(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var f = function foo(a, b) {}; f.name + "," + f.length`, "foo,2"},
 		{`JSON.stringify(Object.getOwnPropertyDescriptor(function foo() {}, "name"))`,
@@ -234,6 +239,7 @@ func TestFunctionNameAndLength(t *testing.T) {
 // promise of an array, which is almost never what the caller wanted.
 // Array.fromAsync awaits each value and resolves once.
 func TestArrayFromAsync(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Array.fromAsync([1, 2, 3]).then(a => r = a.join(","))`, "1,2,3"},
 		{`Array.fromAsync([Promise.resolve(1), 2]).then(a => r = a.join(","))`, "1,2"},
@@ -272,6 +278,7 @@ func TestArrayFromAsync(t *testing.T) {
 // that order, and nothing else is decided until both conversions have run --
 // which matters because a conversion can change the array.
 func TestArrayLengthCoercionOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		// ToUint32 first, then ToNumber; a value that survives neither is not
 		// a length, and that is a RangeError rather than a TypeError.
@@ -334,6 +341,7 @@ func TestArrayLengthCoercionOrder(t *testing.T) {
 // same: they extend the length, they sort with the other indices, and
 // shortening the array removes them.
 func TestLargeArrayIndices(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"extends the length", `var a = []; a[4294967294] = 2; String(a.length)`, "4294967295"},
 		{"reads back", `var a = []; a[4294967294] = 2; String(a[4294967294])`, "2"},
@@ -363,6 +371,7 @@ func TestLargeArrayIndices(t *testing.T) {
 // lastIndexOf reads the length before converting where to start from, and a
 // starting point at or beyond the end means the whole array.
 func TestLastIndexOfArguments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"empty answers first", `var fi = {valueOf: function () { throw new Error("read") }}
 		  String([].lastIndexOf(2, fi))`, "-1"},
@@ -381,6 +390,7 @@ func TestLastIndexOfArguments(t *testing.T) {
 // Reversing swaps what is there: two holes swapped are two holes, so neither
 // end is written and neither is deleted.
 func TestReverseLeavesHolesAlone(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = []
 		  var o = {length: 4, 0: "a", 3: "d"}
@@ -418,6 +428,7 @@ func TestReverseLeavesHolesAlone(t *testing.T) {
 // The separator is written before the join begins, so a separator that joins
 // the array is not a cycle, and a join that threw has ended.
 func TestJoinCycle(t *testing.T) {
+	t.Parallel()
 	for src, want := range map[string]string{
 		`var a = [1]; a.push(a); a.join()`:           "1,",
 		`var a = [1]; a.push(a); String([a, 2])`:     "1,,2",

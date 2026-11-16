@@ -9,6 +9,7 @@ import "testing"
 // share out between them never fills, never gives up, and calls Go at
 // every read of the shapes its code lacks, for as long as it runs.
 func TestJITGoReadFillsTheMegamorphicCache(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -10,6 +10,7 @@ import (
 // it. None of this is a good idea in new code, but a host running existing code
 // needs it to exist.
 func TestAnnexB(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// escape predates encodeURIComponent and writes %uXXXX above Latin-1,
 		// a form nothing else understands.
@@ -84,6 +85,7 @@ func TestAnnexB(t *testing.T) {
 // the global var of the same name, and the copy the assignment consumes is not
 // the one the block's own binding needs.
 func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"called in the block", `{ function ref(x) { return x + 1 } var r = ref(1) } String(r)`, "2"},
 		{"called after the block", `{ function ref(x) { return x + 1 } } String(ref(1))`, "2"},
@@ -104,6 +106,7 @@ func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
 // which declares f as the unlabelled declaration would: hoisted with the list
 // it is in, a script's, a function's or a block's, as in Node.
 func TestLabelledFunctionDeclarations(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`(function () { L: function f() { return 1 } return f() })()`, "1"},
 		{`L: function gl() { return "gl" } gl()`, "gl"},
@@ -118,6 +121,7 @@ func TestLabelledFunctionDeclarations(t *testing.T) {
 // its var: as the declaration is evaluated, with what the block's binding
 // holds then, not as the block is entered, as in Node.
 func TestAnnexBAliasAtTheDeclaration(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`(function () { { f = 1; function f() {} } return typeof f })()`, "number"},
 		{`(function () { var h = () => typeof g, x; { x = h(); function g() {} } return x + "," + typeof g })()`, "undefined,function"},
@@ -133,6 +137,7 @@ func TestAnnexBAliasAtTheDeclaration(t *testing.T) {
 // in a block to a var of the same name: exactly where replacing the
 // declaration with `var f` would be legal and f is not a parameter.
 func TestAnnexBBlockFunctionHoisting(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// A let at the function's top level is in the way.
 		{`(function () { let f = 1; { function f() {} } return f; })()`, "1"},
@@ -170,6 +175,7 @@ func TestAnnexBBlockFunctionHoisting(t *testing.T) {
 // standard in the language itself, each case with the answer standards mode
 // gives beside Node's.
 func TestNodeQuirksLanguage(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, standard, node string }{
 		// Strict code may assign to a call: the call is made, and then the
 		// assignment is a ReferenceError.
@@ -263,6 +269,7 @@ Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v
 
 // TestAnnexBBuiltins pins the web-compat built-ins Annex B describes.
 func TestAnnexBBuiltins(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// A class escape as a range's upper end makes the range three
 		// alternatives: the lower end, the hyphen, and the class.
@@ -279,6 +286,7 @@ func TestAnnexBBuiltins(t *testing.T) {
 // them from old browsers: <!-- anywhere, and --> where only whitespace and
 // comments precede it on its line.
 func TestAnnexBHTMLComments(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{"var x = 1; <!-- x = 2\n x", "1"},
 		{"var y = 1;\n--> y = 2\ny", "1"},
@@ -299,6 +307,7 @@ func TestAnnexBHTMLComments(t *testing.T) {
 // initializer, assigned once before the object is evaluated, and that nothing
 // else may.
 func TestAnnexBForInInitializer(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var log = []; for (var a = (log.push("init"), 0) in (log.push("obj"), {k: 1})) log.push(a); log.join() + " " + a`, "init,obj,k k"},
 		{`for (var b = 7 in {}) ; b`, "7"},
@@ -316,6 +325,7 @@ func TestAnnexBForInInitializer(t *testing.T) {
 // evaluating the value. Strict code, logical assignment and super() and
 // import() calls keep the SyntaxError.
 func TestAnnexBCallAssignmentTarget(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var r, out = [];
 		function f() { r.push("f"); return {}; }
@@ -341,6 +351,7 @@ func TestAnnexBCallAssignmentTarget(t *testing.T) {
 // plain date whose midnight, or a plain date-time, past the instants a Date
 // can hold (KI-55).
 func TestNodeQuirksTemporalRange(t *testing.T) {
+	t.Parallel()
 	src := `const t = (f) => { try { return f() } catch (e) { return e.name + ": " + e.message } };
 		const dtf = new Intl.DateTimeFormat("en", {timeZone: "UTC"});
 		[new Temporal.PlainDate(-271821, 4, 19), new Temporal.PlainDate(-271821, 4, 20),

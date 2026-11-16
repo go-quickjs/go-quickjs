@@ -11,6 +11,7 @@ import (
 // target's traps -- not to its property table, which those are not in, so a
 // trap could deny them (KI-33). The answers are node's.
 func TestProxyInvariantsAskTheTarget(t *testing.T) {
+	t.Parallel()
 	src := `const out = [];
 		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
 		t("has array length", () => "length" in new Proxy([], {has() { return false }}));
@@ -50,6 +51,7 @@ func TestProxyInvariantsAskTheTarget(t *testing.T) {
 // and that what its trap throws is thrown: an undeclared name was a
 // ReferenceError and its typeof undefined whatever the trap threw (KI-34).
 func TestGlobalProxyTrapErrors(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const log = [];
 		Object.setPrototypeOf(globalThis, new Proxy(Object.getPrototypeOf(globalThis), {
 			has(t, k) { if (k === "boom") throw "boom"; if (k.startsWith?.("q")) log.push("has " + k); return k === "qfound" || Reflect.has(t, k) },

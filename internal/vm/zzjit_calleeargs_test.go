@@ -145,6 +145,7 @@ func TestJITCalleeArgumentsStress(t *testing.T) {
 // parameters: Go makes such a call, whose callee's frame its context's
 // arguments would not outlive. Each answer is the interpreter's.
 func TestJITCalleeArgumentsTailCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

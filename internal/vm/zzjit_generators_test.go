@@ -9,6 +9,7 @@ import "testing"
 // resumptions and the helpers' callbacks run natively from the second
 // round on, where the JIT takes them: each round's answer is Node's.
 func TestJITGeneratorProtocol(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

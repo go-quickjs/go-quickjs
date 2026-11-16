@@ -23,10 +23,9 @@ func sharedElemsForTest(v Value) (bool, unsafe.Pointer) {
 // and that the interpreter, whose case of new_array is unchanged, makes each
 // its own. A literal with anything but constants, or none, has no site.
 func TestSharedArrayLiteral(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, `
 		function lit() { return [1, 2.5, 'x', true, null, undefined, '', -3]; }
 		function notConst(x) { return [1, x]; }
@@ -67,7 +66,7 @@ func TestSharedArrayLiteral(t *testing.T) {
 // interpreter, and the two must agree. Each has a literal of its own, which
 // gives sharing up after a few copies.
 func TestSharedArrayLiteralWrites(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	writes := []string{
 		`a[0] = 9`,
 		`a[1] += 1`,
@@ -189,8 +188,7 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 				run = `(function () { ` + w + `; if (a.length < 0) eval(''); })();`
 			}
 			for k, tree := range []bool{true, false} {
-				SetTreeTier(tree)
-				r := New(Config{})
+				r := newTreeTierForTest(tree, Config{})
 				v, err := r.Run(compileForTest(t, `
 			var lit = function () { return [1, 2.5, 'x', true, null, undefined, 'z']; };
 			var a = lit();
@@ -232,6 +230,7 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 // which a call does not apply as this realm's leaves (the built-in's own
 // fast path then), copy a shared literal's elements before writing them.
 func TestSharedArrayLiteralOtherRealm(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	other := r.NewRealm()
@@ -263,6 +262,7 @@ func TestSharedArrayLiteralOtherRealm(t *testing.T) {
 // TestSharedArrayLiteralGivesUp pins that a literal whose arrays keep being
 // written stops sharing, and makes each array of its own, as before.
 func TestSharedArrayLiteralGivesUp(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -304,6 +304,7 @@ func TestSharedArrayLiteralGivesUp(t *testing.T) {
 // caches, and every array over it share it, so each array kept adds its
 // header alone. The site's array had been counted apart, the storage twice.
 func TestSharedArrayLiteralMetered(t *testing.T) {
+	t.Parallel()
 	r := New(Config{MemoryLimit: 1 << 40})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -348,7 +349,7 @@ func (r *Runtime) runOrFatalForTest(t *testing.T, src string) Value {
 // literal of constants is one of its own. Each answer is the same with the
 // tree tier, which shares, and without, in the interpreter.
 func TestSharedArrayLiteralConstants(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	long := strings.Repeat("long", 300)
 	src := `
 		function nums() { return [0, 1e300, 5e-324, 2147483647, 2147483648, 4294967296, 1.5, 0x10, 1_000]; }
@@ -373,8 +374,7 @@ func TestSharedArrayLiteralConstants(t *testing.T) {
 		`1200:long,0:,2:é漢,7:tab	 | number:1,hole,number:3 | bigint:1,number:2 | [1:w,number:2],[number:3] | [number:1,number:2],[number:3] | [number:1,number:2],[number:3]`
 	sites := `[nums(), strs(), holes(), bigs(), nested(), nested()[0], negs()]`
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
@@ -405,6 +405,7 @@ func TestSharedArrayLiteralConstants(t *testing.T) {
 // until the site gives sharing up, and run again, each runtime's arrays
 // what its own writes made them. Run it with -race.
 func TestSharedArrayLiteralRuntimes(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, `
 		function lit() { return [1, 2, 3, 4]; }
 		var out = [];

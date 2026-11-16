@@ -11,6 +11,7 @@ import "testing"
 // ones that cannot be: through a finally, out of a try or a for-of. The
 // order operands are evaluated in, and each answer, are Node's.
 func TestBranchConditions(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var log = []; function f(v) { log.push(v); return v }
 			if (f(0) && f(1)) log.push("then"); if (f(1) && f(0)) log.push("then"); if (f(1) && f(2)) log.push("then");
@@ -70,6 +71,7 @@ func TestBranchConditions(t *testing.T) {
 // and in the body, and a const still refuses assignment. Each answer is
 // Node's.
 func TestLetLoopBindings(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var s = 0; for (let i = 0; i < 5; i++) s += i; var t = 0; for (const x of [1, 2, 3]) t += x; s + " " + t`,
 			"10 6"},
@@ -114,6 +116,7 @@ func TestLetLoopBindings(t *testing.T) {
 // one there is a ReferenceError, wherever the read is written, and not the
 // value of the dead zone's mark. Each answer is Node's.
 func TestSwitchDeadZone(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var r; switch (1) { case 0: let y = 1; break; case 1: try { y } catch (e) { r = e.constructor.name } } r`, "ReferenceError"},
 		{`try { (() => { switch (2) { case 1: let a = 5; case 2: return typeof a } })() } catch (e) { e.constructor.name }`, "ReferenceError"},
@@ -140,6 +143,7 @@ func TestSwitchDeadZone(t *testing.T) {
 // initializer is still undefined each time it is reached. Each answer is
 // Node's.
 func TestDeadZoneMarks(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var r; { try { f() } catch (e) { r = e.constructor.name } function f() { return y } let y = 1 } r`,
 			"ReferenceError"},
@@ -183,6 +187,7 @@ func TestDeadZoneMarks(t *testing.T) {
 // a generator's or an async function's. A call made just before leaves its
 // values in the slots the next frame takes. Each answer is Node's.
 func TestHoistedVarsStartUndefined(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function dirty() { var a = {}, b = 7, c = "x", d = [1]; return a + b + c + d } function f() { var r = [typeof v, typeof w]; var v = 1; if (false) { var w = 2 } return r.join() } dirty(); f()`,
 			"undefined,undefined"},

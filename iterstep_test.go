@@ -15,6 +15,7 @@ import (
 // generator's next keeps its frame in a stack trace, and errors and
 // re-entrance behave as through the call.
 func TestBuiltinIteratorSteps(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"map and set", `var m = new Map([[1, "a"], [2, "b"]]), s = new Set(["x", "y"]), r = []
 		  for (var [k, v] of m) r.push(k + v)
@@ -94,6 +95,7 @@ func TestBuiltinIteratorSteps(t *testing.T) {
 // had been given the position of an instruction's index, a line of
 // another function's.
 func TestForAwaitCloseLine(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	evalString(t, rt, `var line

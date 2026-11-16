@@ -263,6 +263,7 @@ func TestJITBigWords(t *testing.T) {
 // String.prototype (ssa.OpStringProp of a holder), its call Go's: and
 // leaving where BigInt.prototype changed.
 func TestJITBigIntMethods(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -484,6 +485,7 @@ const bigTruthSetup = `
 `
 
 func TestJITBigIntTruth(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

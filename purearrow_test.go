@@ -9,6 +9,7 @@ import "testing"
 // method is given; and what a callback throws, after its frameless try has
 // given up, shows its frame in the trace.
 func TestPureArrows(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var r = []
 		  r.push([3, 1, 2].sort((x, y) => x - y).join(""), [1, 2, 3].map(x => x * 2).join(""),

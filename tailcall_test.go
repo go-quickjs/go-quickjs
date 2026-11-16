@@ -11,6 +11,7 @@ import (
 // keep its frame: a chain of them far deeper than the call stack allows runs
 // to the end.
 func TestTailCalls(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`"use strict"; function f(n) { return n === 0 ? "done" : f(n - 1) } f(100000)`, "done"},
 		{`"use strict"; function even(n) { return n === 0 || odd(n - 1) } function odd(n) { return n !== 0 && even(n - 1) } String(even(100001))`, "false"},

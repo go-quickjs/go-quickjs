@@ -13,6 +13,7 @@ import (
 // the feedback and not to them would have the snapshot miss it, or answer
 // it wrongly.
 func TestSnapshotGenerated(t *testing.T) {
+	t.Parallel()
 	snapshot, asked, err := snapgen.Generate(".")
 	if err != nil {
 		t.Fatal(err)

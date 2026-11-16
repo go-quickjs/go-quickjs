@@ -34,6 +34,7 @@ var out;
 // more than once on one -- where, as for Eval, a top-level class or const
 // declared again is a SyntaxError.
 func TestProgramRunsOnManyRuntimes(t *testing.T) {
+	t.Parallel()
 	p, err := quickjs.Compile("shared.js", programSrc)
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +77,7 @@ func TestProgramRunsOnManyRuntimes(t *testing.T) {
 // what stack traces call the script, and RunProgramContext stops a program
 // whose context ends.
 func TestCompile(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -137,6 +139,7 @@ func TestCompile(t *testing.T) {
 // it would compile the source itself: Annex B hoists a block-level function
 // named arguments over the arguments object there, and not in standards mode.
 func TestProgramNodeQuirks(t *testing.T) {
+	t.Parallel()
 	p, err := quickjs.Compile("quirk.js",
 		`(function (x) { var a = typeof arguments; { function arguments() {} } return a + "," + typeof arguments; })(1)`)
 	if err != nil {

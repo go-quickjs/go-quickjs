@@ -13,6 +13,7 @@ import (
 // object converted by valueOf, an array, a symbol, and a valueOf that
 // throws, whose error the loose comparison passes on.
 func TestEqualityWithNumbers(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const vals = [0, -0, 1, NaN, '0', '', '1', null, undefined, true, false, 0n, 1n, { valueOf() { return 1 } }, [0], Symbol.iterator]
 		const o = { p: 1 }
@@ -53,8 +54,7 @@ func TestEqualityWithNumbers(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -64,5 +64,4 @@ func TestEqualityWithNumbers(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }

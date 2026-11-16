@@ -74,8 +74,7 @@ func TestRegExpLeafMisses(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpMissTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -87,5 +86,4 @@ func TestRegExpLeafMisses(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }

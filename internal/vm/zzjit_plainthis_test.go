@@ -28,6 +28,7 @@ const plainThisSetup = `
 // where Go had made every one: each answer is the interpreter's, and no
 // caller leaves its code at each of its calls.
 func TestJITPlainCallsOfThisReaders(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

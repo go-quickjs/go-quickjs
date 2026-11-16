@@ -16,6 +16,7 @@ import (
 // and a result's pieces from that result's own index, length and numbered
 // properties. That is what lets a subclass override any of them.
 func TestRegExpSymbolMethodProtocol(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A custom exec drives replace, match and split.
 		{`var rx = /x/; rx.exec = () => null; "abc".replace(rx, "-")`, "abc"},
@@ -113,6 +114,7 @@ func TestRegExpSymbolMethodProtocol(t *testing.T) {
 // source, flags and toString read through the receiver rather than the compiled
 // pattern, so that overriding one is reflected in the others.
 func TestRegExpAccessors(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`/ab/gi.flags`, "gi"},
 		{`/ab/dgimsuy.flags`, "dgimsuy"},
@@ -177,6 +179,7 @@ func TestRegExpAccessors(t *testing.T) {
 // same match never terminates -- which the protocol permits, and which is why
 // the loop that collects matches has to be interruptible.
 func TestRegExpSymbolReplaceIsInterruptible(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -200,6 +203,7 @@ func TestRegExpSymbolReplaceIsInterruptible(t *testing.T) {
 // doing anything themselves, which is what lets anything act as a pattern. Who
 // gets asked, and in what order, is observable.
 func TestStringPatternDispatch(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Only an object is asked. A primitive cannot carry the method itself,
 		// and reaching through to its wrapper prototype would let a change
@@ -280,6 +284,7 @@ func TestStringPatternDispatch(t *testing.T) {
 // what Symbol.match is for: a plain object that defines it truthily can stand
 // in for one, and its source and flags are read rather than its string form.
 func TestRegExpConstructorFromRegExpLike(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {source: "abc", flags: "g"}; o[Symbol.match] = true;
 		  String(new RegExp(o))`, "/abc/g"},
@@ -322,6 +327,7 @@ func TestRegExpConstructorFromRegExpLike(t *testing.T) {
 // TestMatchIndices covers the d flag, which asks a match to report where each
 // group matched as well as what it matched.
 func TestMatchIndices(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify(/a(b)/d.exec("xab").indices)`, "[[1,3],[2,3]]"},
 		{`String(/a(b)/.exec("xab").indices)`, "undefined"},
@@ -348,6 +354,7 @@ func TestMatchIndices(t *testing.T) {
 
 // TestRegExpLiteralEarlyErrors covers two shapes a pattern may not take.
 func TestRegExpLiteralEarlyErrors(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		// The flags are a token of their own, not an identifier, so an escape
 		// there is not a flag.
@@ -379,6 +386,7 @@ func TestRegExpLiteralEarlyErrors(t *testing.T) {
 // escape, which is allowed whatever the flags say: the name is an identifier,
 // and an identifier written in a pattern has the escapes one in source does.
 func TestRegExpGroupNames(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.keys(new RegExp("(?<\\u{1d4d1}rown>x)", "u").exec("x").groups).join()`,
 			"\U0001d4d1rown"},
@@ -398,6 +406,7 @@ func TestRegExpGroupNames(t *testing.T) {
 // TestRegExpExecLastIndex covers lastIndex, which exec reads whatever the flags
 // say and writes back only for a global or sticky pattern.
 func TestRegExpExecLastIndex(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var gets = 0
 		  var counter = {valueOf() { gets++; return 0 }}
@@ -422,6 +431,7 @@ func TestRegExpExecLastIndex(t *testing.T) {
 // positive one that matched contributes its captures; one that did not, and a
 // negative one that did, contribute nothing.
 func TestRegExpLookaroundCaptures(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify(/(?=(abc))a/.exec("abc"))`, `["a","abc"]`},
 		// The one iteration of `?` matched nothing, so it is not an iteration
@@ -451,6 +461,7 @@ func TestRegExpLookaroundCaptures(t *testing.T) {
 // it stands: its terms run last-first, so a quantifier's last iteration is the
 // leftmost one and that is what its group keeps.
 func TestRegExpLookbehind(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`JSON.stringify("abcdef".match(/(?<=(c))def/))`, `["def","c"]`},
 		{`JSON.stringify("abcdef".match(/(?<=(\w{2}))def/))`, `["def","bc"]`},
@@ -480,6 +491,7 @@ func TestRegExpLookbehind(t *testing.T) {
 // may spend over its life: the matcher is lent back for every match, and a
 // pattern that had once given up would otherwise refuse everything after.
 func TestRegExpBudgetIsPerMatch(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -502,6 +514,7 @@ func TestRegExpBudgetIsPerMatch(t *testing.T) {
 // The same for a pattern used over and over, which is what a program does with
 // one: the work of the matches already done may not count against the next.
 func TestRegExpRepeatedUseKeepsWorking(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -525,6 +538,7 @@ func TestRegExpRepeatedUseKeepsWorking(t *testing.T) {
 // match falls on half of a surrogate pair, which is legal and not the same
 // string as the pair.
 func TestMatchPiecesComeFromTheSubject(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`/(\w+)@(\w+)/.exec("a-someone@example-b").slice(0, 3).join("|")`,
 			"someone@example|someone|example"},
@@ -562,6 +576,7 @@ func TestMatchPiecesComeFromTheSubject(t *testing.T) {
 // may share a name, and that everything reading a group by name reads the one
 // that took part.
 func TestRegExpDuplicateNamedGroups(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify(/(?<x>a)|(?<x>b)/.exec("b").groups)`, `{"x":"b"}`},
 		{`/(?<x>a)|(?<x>b)/.exec("a").length`, "3"},
@@ -584,6 +599,7 @@ func TestRegExpDuplicateNamedGroups(t *testing.T) {
 // TestRegExpLegacyStatics pins RegExp.$1 and the rest: what the last match of
 // a RegExp of the intrinsic constructor left, read through RegExp itself.
 func TestRegExpLegacyStatics(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`[RegExp.$1, RegExp.lastMatch, RegExp.input].join("|")`, "||"},
 		{`/(a)(b)?(c)/.exec("xacz"); [RegExp.$1, RegExp.$2, RegExp.$3, RegExp.$4, RegExp.lastMatch, RegExp["$&"],
@@ -648,6 +664,7 @@ func TestRegExpLegacyStatics(t *testing.T) {
 // written, an exec, flags getter, species, constructor or Symbol.match a
 // script replaced, a limit whose conversion runs a script.
 func TestRegExpBuiltinShortcuts(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		// lastIndex is converted, written and refused as an ordinary property.
 		{`var n = 0, r = /a/g; r.lastIndex = {valueOf() { n++; return 2 }};

@@ -57,6 +57,7 @@ const typedLoopsSetup = `
 // included ("at Int32Array.forEach"), and eachSum's, reduceInit's,
 // someAt's and findIndexOf's loops neither leave their code nor call Go.
 func TestJITTypedArrayLoops(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

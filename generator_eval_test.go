@@ -13,6 +13,7 @@ import (
 // object; and with a with body around a yield, which resolves names in
 // the object, then in the eval's vars. The answers are Node v26.10.0's.
 func TestGeneratorEvalVars(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	for _, c := range []struct{ src, want string }{

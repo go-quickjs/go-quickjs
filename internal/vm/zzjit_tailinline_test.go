@@ -34,6 +34,7 @@ const tailInlineSetup = `
 // -- has Go make its frames; every answer, the stack traces of throws at
 // every depth from 20 to 44 included, is the interpreter's.
 func TestJITTailCallsInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

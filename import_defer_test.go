@@ -20,6 +20,7 @@ func deferRuntime(files map[string]string) *quickjs.Runtime {
 }
 
 func TestImportDefer(t *testing.T) {
+	t.Parallel()
 	rt := deferRuntime(map[string]string{
 		"setup.js": `globalThis.log = [];`,
 		"dep.js":   `globalThis.log.push("dep"); export const x = 1, then = 2;`,
@@ -52,6 +53,7 @@ func TestImportDefer(t *testing.T) {
 }
 
 func TestImportDeferErrors(t *testing.T) {
+	t.Parallel()
 	rt := deferRuntime(map[string]string{
 		"throws.js": `throw new RangeError("boom")`,
 		"defer.js":  `import defer * as ns from "./throws.js"; export { ns };`,
@@ -80,6 +82,7 @@ func TestImportDeferErrors(t *testing.T) {
 }
 
 func TestImportDeferCall(t *testing.T) {
+	t.Parallel()
 	rt := deferRuntime(map[string]string{
 		"dep.js": `globalThis.log.push("dep"); export const x = 1;`,
 	})
@@ -112,6 +115,7 @@ func TestImportDeferCall(t *testing.T) {
 }
 
 func TestImportSource(t *testing.T) {
+	t.Parallel()
 	files := map[string]string{
 		"dep.js":  `export default "the default";`,
 		"link.js": `import { missing } from "./link.js";`,
@@ -180,6 +184,7 @@ func TestImportSource(t *testing.T) {
 // of the global object, and neither a global assigned under their names nor a
 // with object holding one stands in for them.
 func TestImportIsNoBinding(t *testing.T) {
+	t.Parallel()
 	rt := deferRuntime(map[string]string{
 		"dep.js": `export const x = 1;`,
 	})

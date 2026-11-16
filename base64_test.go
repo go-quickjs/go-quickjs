@@ -8,6 +8,7 @@ import (
 )
 
 func TestUint8ArrayBase64AndHex(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`new Uint8Array([72,101,108,108,111]).toBase64()`, "SGVsbG8="},
 		{`new Uint8Array([72,101,108,108,111]).toHex()`, "48656c6c6f"},
@@ -64,6 +65,7 @@ func TestUint8ArrayBase64AndHex(t *testing.T) {
 }
 
 func TestUint8ArrayBase64Errors(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Uint8Array.fromBase64("!!!")`, "SyntaxError"},
 		// A group of one is never valid: a single 6-bit value cannot carry a
@@ -102,6 +104,7 @@ func TestUint8ArrayBase64Errors(t *testing.T) {
 // TestUint8ArrayBase64RoundTrip checks that every byte survives both encodings,
 // which the table above cannot cover exhaustively.
 func TestUint8ArrayBase64RoundTrip(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 

@@ -12,6 +12,7 @@ import (
 // B's constructor, but the object is a D. Reflect.construct exposes the same
 // split directly.
 func TestConstructNewTarget(t *testing.T) {
+	t.Parallel()
 	const isCtor = `function isConstructor(f) {
 	  try { Reflect.construct(function () {}, [], f); } catch (e) { return false; }
 	  return true;
@@ -86,6 +87,7 @@ func TestConstructNewTarget(t *testing.T) {
 // freezing moves the elements out of the dense slice so that they can be marked
 // read-only.
 func TestIteratingNonDenseArrays(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = [1, 2]; Object.freeze(a); [...a].join(",")`, "1,2"},
 		{`var a = [1, 2]; Object.freeze(a); Array.from(a).join(",")`, "1,2"},
@@ -134,6 +136,7 @@ func TestIteratingNonDenseArrays(t *testing.T) {
 // is no way to ask an object for one you were not written alongside, and so no
 // way to discover one by probing.
 func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C { #x = 1; m() { return this.#x; } } String(new C().m())`, "1"},
 		{`class C { #m() { return 1; } m() { return this.#m(); } } String(new C().m())`, "1"},
@@ -215,6 +218,7 @@ func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
 // the object exists but is unreachable, which is what stops a subclass from
 // touching what the base class has not finished building.
 func TestThisIsBoundBySuper(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class B {} class D extends B { constructor() { this.x; super(); } }
 		  try { new D() } catch (e) { e.constructor.name }`, "ReferenceError"},
@@ -255,6 +259,7 @@ func TestThisIsBoundBySuper(t *testing.T) {
 // setter the prototype happens to have for the same name is not called, and a
 // private field is added rather than requiring one to be there already.
 func TestClassFieldsAreDefined(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C { x = 1; } String(new C().x)`, "1"},
 		{`class C { x = 1 } var d = Object.getOwnPropertyDescriptor(new C(), "x");
@@ -311,6 +316,7 @@ func TestClassFieldsAreDefined(t *testing.T) {
 // -- including the case where the iterator has been deleted, which makes
 // destructuring an array a TypeError that a fast path would quietly succeed at.
 func TestArrayIterationRespectsTheProtocol(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Array.prototype.values === Array.prototype[Symbol.iterator])`, "true"},
 		{`Array.prototype[Symbol.iterator] = function* () { yield 9; };
@@ -353,6 +359,7 @@ func TestArrayIterationRespectsTheProtocol(t *testing.T) {
 // something properties can be read from -- and that is checked before any of
 // them are, which is the only thing an empty pattern does.
 func TestObjectPatternRequiresCoercible(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`var {} = null`,
 		`var {} = undefined`,
@@ -403,6 +410,7 @@ func TestObjectPatternRequiresCoercible(t *testing.T) {
 // own properties: indexed, enumerable, read-only and not configurable. Its
 // length is one too, and is not enumerable.
 func TestStringObjectIndices(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.keys("ab").join(",")`, "0,1"},
 		{`Object.getOwnPropertyNames("ab").join(",")`, "0,1,length"},
@@ -452,6 +460,7 @@ func TestStringObjectIndices(t *testing.T) {
 // many it has room for: it counts the parameters before the first one with a
 // default or a rest element.
 func TestFunctionLength(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function f() {} String(f.length)`, "0"},
 		{`function f(a, b) {} String(f.length)`, "2"},
@@ -491,6 +500,7 @@ func TestFunctionLength(t *testing.T) {
 // parent class rather than its prototype, because the home object there is the
 // class itself.
 func TestSuperInStaticInitializers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class A { static m() { return 1 } } class B extends A { static x = super.m(); }
 		  String(B.x)`, "1"},
@@ -532,6 +542,7 @@ func TestSuperInStaticInitializers(t *testing.T) {
 // is what a program asking for the conversion explicitly has written, rather
 // than one mixing the two kinds by accident.
 func TestNumberOfBigInt(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Number(1n))`, "1"},
 		{`String(Number(-2n))`, "-2"},
@@ -572,6 +583,7 @@ func TestNumberOfBigInt(t *testing.T) {
 // nothing, in which case the object super() built is. Anything else would
 // silently discard that object, so it is a TypeError.
 func TestDerivedConstructorReturn(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class B {} class D extends B { constructor() { super(); return {tag: 1} } }
 		  String(new D().tag)`, "1"},
@@ -626,6 +638,7 @@ func TestDerivedConstructorReturn(t *testing.T) {
 // key is minted when the class is evaluated, and lives in a binding the body
 // closes over.
 func TestPrivateNamesAreUniquePerClassEvaluation(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Two evaluations of one class expression.
 		{`function make() { return class { #x = 1; static read(o) { return o.#x } } }
@@ -733,6 +746,7 @@ func TestPrivateNamesAreUniquePerClassEvaluation(t *testing.T) {
 // called super() fails before anything the key might do, and a class with no
 // prototype to read from fails whatever the key would have been.
 func TestSuperProperties(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Writing through a super reference lands on the instance, unless the
 		// prototype has a setter, which runs with the instance as its `this`.
@@ -804,6 +818,7 @@ func TestSuperProperties(t *testing.T) {
 // TestClassMemberAttributes covers what a class member's property descriptor
 // says, which differs from an object literal's in every case.
 func TestClassMemberAttributes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A class member is never enumerable, however it is written.
 		{`class C { m() {} get g() {} set s(v) {} }
@@ -835,6 +850,7 @@ func TestClassMemberAttributes(t *testing.T) {
 // TestClassPrototypeIsFixed covers a class's prototype property, which unlike a
 // function's cannot be replaced -- so a static member named after it fails.
 func TestClassPrototypeIsFixed(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var d = Object.getOwnPropertyDescriptor(class {}, "prototype");
 		  [d.writable, d.enumerable, d.configurable].join(",")`, "false,false,false"},
@@ -863,6 +879,7 @@ func TestClassPrototypeIsFixed(t *testing.T) {
 // among its own keys. They are synthesized on demand, and a member named after
 // one must land where it would have been rather than at the end.
 func TestFunctionLengthAndNameOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.getOwnPropertyNames(function (a, b) {}).join(",")`, "length,name,prototype"},
 		{`function f() {} f.x = 1; Object.getOwnPropertyNames(f).join(",")`,
@@ -888,6 +905,7 @@ func TestFunctionLengthAndNameOrder(t *testing.T) {
 // TestClassConstructorRequiresNew covers calling a class constructor as a
 // function, which is a TypeError however it is reached.
 func TestClassConstructorRequiresNew(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C {} try { C() } catch (e) { e.constructor.name }`, "TypeError"},
 		{`class C extends Object {} try { C() } catch (e) { e.constructor.name }`, "TypeError"},
@@ -914,6 +932,7 @@ func TestClassConstructorRequiresNew(t *testing.T) {
 // TestPrivateInOptionalChain covers a private member reached through `?.`,
 // which the grammar allows and which is not a property lookup.
 func TestPrivateInOptionalChain(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C { #f = "T"; m(o) { return o?.c.#f } }
 		  var c = new C(); c.m({c: c}) + "," + c.m(null)`, "T,undefined"},
@@ -935,6 +954,7 @@ func TestPrivateInOptionalChain(t *testing.T) {
 // TestPrivateAddedOnlyOnce covers giving an object the same private member
 // twice, which a constructor returning an object it has already built does.
 func TestPrivateAddedOnlyOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class B { constructor(o) { return o } }
 		  class C extends B { #f = 1 }
@@ -970,6 +990,7 @@ func TestPrivateAddedOnlyOnce(t *testing.T) {
 // It runs in a function of its own rather than in the constructor, so
 // `arguments` has no meaning there and new.target is undefined.
 func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C { x = new.target } String(new C().x)`, "undefined"},
 		{`class C { x = (() => new.target)() } String(new C().x)`, "undefined"},
@@ -1013,6 +1034,7 @@ func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
 // a derived one does it inside super(), wherever that call is written and only
 // for the call that binds `this`.
 func TestInstanceElementsRunWhenThisAppears(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A base class has its fields before the body runs.
 		{`class C { f = 1; constructor() { this.g = this.f + 1 } } String(new C().g)`, "2"},
@@ -1107,6 +1129,7 @@ func TestInstanceElementsRunWhenThisAppears(t *testing.T) {
 // from. The base is resolved before the key is computed, so a key that changes
 // the home object's prototype does not move the reference.
 func TestSuperReferenceOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var proto = {p: "ok"}, proto2 = {p: "bad"}
 		  var obj = {__proto__: proto, m() { return super[key] }}
@@ -1137,6 +1160,7 @@ func TestSuperReferenceOrder(t *testing.T) {
 // TestSuperConstructorIsRead covers what super() calls, which is the running
 // class's prototype now rather than what the class was written to extend.
 func TestSuperConstructorIsRead(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The value of a super call is the object it bound.
 		{`var custom = {}
@@ -1179,6 +1203,7 @@ func TestSuperConstructorIsRead(t *testing.T) {
 // immutable binding, in scope from the heritage clause onwards, that shadows
 // whatever the name means outside.
 func TestClassInnerNameBinding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"method assignment", `class C { m() { C = 42 } }
 		  try { new C().m(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
@@ -1214,6 +1239,7 @@ func TestClassInnerNameBinding(t *testing.T) {
 // -- so a try inside the constructor cannot catch it, though a finally still
 // runs on the way out.
 func TestDerivedConstructorReturnValue(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"plain", `class C extends class {} { constructor() { super(); return 0 } }
 		  try { new C(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
@@ -1249,6 +1275,7 @@ func TestDerivedConstructorReturnValue(t *testing.T) {
 // the name of the accessor, and a generator's star is not. And a heritage
 // clause is a left-hand-side expression, which an arrow function is not.
 func TestClassMemberGrammarEdges(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"get then a generator", `class A { get
 		  *a() {} }
@@ -1287,6 +1314,7 @@ func TestClassMemberGrammarEdges(t *testing.T) {
 // written: a static field and a static block are the same kind of thing there,
 // and a block between two fields runs between them.
 func TestStaticElementOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var seq = []
 		  class C {
@@ -1330,6 +1358,7 @@ func TestStaticElementOrder(t *testing.T) {
 // A private member is a member like any other: an object closed to new
 // properties takes none, and a private method is not a place to store anything.
 func TestPrivateMembersAreMembers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A base constructor that seals `this` refuses the subclass's field.
 		{`class B { constructor(seal) { if (seal) Object.preventExtensions(this) } }

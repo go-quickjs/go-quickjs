@@ -10,6 +10,7 @@ import (
 )
 
 func TestStringLengthIsInCodeUnits(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		s    string
 		want int
@@ -29,6 +30,7 @@ func TestStringLengthIsInCodeUnits(t *testing.T) {
 }
 
 func TestStringASCIIDetection(t *testing.T) {
+	t.Parallel()
 	if !NewString("plain ascii").ascii {
 		t.Error("an ASCII string should take the fast path")
 	}
@@ -38,6 +40,7 @@ func TestStringASCIIDetection(t *testing.T) {
 }
 
 func TestCharCodeAt(t *testing.T) {
+	t.Parallel()
 	s := NewString("abc")
 	for i, want := range []int{'a', 'b', 'c'} {
 		if got := s.CharCodeAt(i); got != want {
@@ -63,6 +66,7 @@ func TestCharCodeAt(t *testing.T) {
 }
 
 func TestSubstring(t *testing.T) {
+	t.Parallel()
 	s := NewString("hello world")
 	tests := []struct {
 		start, end int
@@ -83,6 +87,7 @@ func TestSubstring(t *testing.T) {
 }
 
 func TestSubstringSplittingASurrogatePair(t *testing.T) {
+	t.Parallel()
 	// Slicing between the halves of a pair is legal and yields a lone
 	// surrogate, which must survive rather than becoming U+FFFD.
 	s := NewString("a\U0001F600b")
@@ -96,6 +101,7 @@ func TestSubstringSplittingASurrogatePair(t *testing.T) {
 }
 
 func TestConcat(t *testing.T) {
+	t.Parallel()
 	a, b := NewString("foo"), NewString("bar")
 	if got := a.Concat(b).Go(); got != "foobar" {
 		t.Errorf("Concat = %q, want %q", got, "foobar")
@@ -110,6 +116,7 @@ func TestConcat(t *testing.T) {
 }
 
 func TestConcatBuildsARope(t *testing.T) {
+	t.Parallel()
 	// Long concatenations must defer the copy, or repeated appends are
 	// quadratic. The result is still correct once flattened.
 	long := NewString(strings.Repeat("x", 100))
@@ -131,6 +138,7 @@ func TestConcatBuildsARope(t *testing.T) {
 }
 
 func TestDeepRopeFlattensWithoutStackOverflow(t *testing.T) {
+	t.Parallel()
 	// A loop of `s += x` builds a left-leaning chain as deep as the iteration
 	// count. Flattening must not recurse over it.
 	s := NewString(strings.Repeat("a", 64))
@@ -151,6 +159,7 @@ func TestDeepRopeFlattensWithoutStackOverflow(t *testing.T) {
 }
 
 func TestEquals(t *testing.T) {
+	t.Parallel()
 	if !NewString("abc").Equals(NewString("abc")) {
 		t.Error("equal strings should compare equal")
 	}
@@ -169,6 +178,7 @@ func TestEquals(t *testing.T) {
 }
 
 func TestCompare(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		a, b string
 		want int
@@ -192,6 +202,7 @@ func TestCompare(t *testing.T) {
 }
 
 func TestIndexOf(t *testing.T) {
+	t.Parallel()
 	s := NewString("hello world hello")
 	tests := []struct {
 		needle string
@@ -219,6 +230,7 @@ func TestIndexOf(t *testing.T) {
 }
 
 func TestArrayIndexRecognition(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		idx  uint32
@@ -276,6 +288,7 @@ func newStringFromUnits(units ...uint16) *String { return fromUnits(units) }
 // JavaScript strings are not required to be well formed, so these are ordinary
 // values a script can produce and must keep working with.
 func TestLoneSurrogateStringOperations(t *testing.T) {
+	t.Parallel()
 	const hi, lo = 0xD83D, 0xDE00
 
 	t.Run("length counts one unit", func(t *testing.T) {
@@ -379,6 +392,7 @@ func TestLoneSurrogateStringOperations(t *testing.T) {
 // TestLoneSurrogateRoundTripsThroughGoString checks the boundary where a
 // JavaScript string is handed to Go code and back.
 func TestLoneSurrogateRoundTripsThroughGoString(t *testing.T) {
+	t.Parallel()
 	const hi = 0xD83D
 	original := newStringFromUnits('a', hi, 'b')
 
@@ -398,6 +412,7 @@ func TestLoneSurrogateRoundTripsThroughGoString(t *testing.T) {
 // TestLoneSurrogateSurvivesRopeFlattening checks that the deferred-copy path
 // preserves surrogates too, on both sides of a rope boundary.
 func TestLoneSurrogateSurvivesRopeFlattening(t *testing.T) {
+	t.Parallel()
 	const hi, lo = 0xD83D, 0xDE00
 	pad := NewString(strings.Repeat("x", 100))
 
@@ -444,6 +459,7 @@ func TestLoneSurrogateSurvivesRopeFlattening(t *testing.T) {
 // quadratic ones, on random strings over a small alphabet where near misses
 // are everywhere.
 func TestSearchUnitsMatchesNaive(t *testing.T) {
+	t.Parallel()
 	naive := func(a, b []uint16, from int) int {
 		for i := from; i+len(b) <= len(a); i++ {
 			if slices.Equal(a[i:i+len(b)], b) {
@@ -488,6 +504,7 @@ func TestSearchUnitsMatchesNaive(t *testing.T) {
 // pieces laid end to end, in the one WTF-8 spelling those units have,
 // whatever shape of rope either side is.
 func TestConcatAcrossSurrogatesAgreesWithUnits(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(3))
 	pieces := [][]uint16{
 		{0xD83D}, {0xDE00}, {'a'}, {0xD83D, 'x', 0xDE00}, {0xDE00, 'b', 0xD83D},
@@ -526,6 +543,7 @@ func TestConcatAcrossSurrogatesAgreesWithUnits(t *testing.T) {
 // TestPrefixCutsWhereACharacterBegins pins what a bound function's name
 // shows of a long one.
 func TestPrefixCutsWhereACharacterBegins(t *testing.T) {
+	t.Parallel()
 	s := NewString(strings.Repeat("é", 40)).Concat(NewString(strings.Repeat("x", 40)))
 	for max, want := range map[int]string{
 		5: "éé", 6: "ééé", 200: strings.Repeat("é", 40) + strings.Repeat("x", 40),
@@ -541,6 +559,7 @@ func TestPrefixCutsWhereACharacterBegins(t *testing.T) {
 // the end), by prepends, by joining ropes, and by appending ropes, with
 // non-ASCII pieces and surrogate halves that the joins make code points of.
 func TestRopesOfEveryShapeFlatten(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(7))
 	units := func(s string) []uint16 { return utf16.Encode([]rune(s)) }
 	pieces := [][]uint16{units("a"), units("bc"), units(strings.Repeat("d", 70)), units("é"), units("𝄞"),
@@ -612,6 +631,7 @@ func TestAppendedRopeFlattensInOneAllocation(t *testing.T) {
 // ASCII one is (latin1CharString): String.fromCharCode, indexing and charAt
 // make none, and each answer is the character.
 func TestLatin1CharactersShared(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if a, b := r.latin1CharString(0xe9), r.latin1CharString(0xe9); a != b || a.Len() != 1 || a.CharCodeAt(0) != 0xe9 || a.Go() != "é" {
@@ -633,6 +653,7 @@ func TestLatin1CharactersShared(t *testing.T) {
 // a rope has no units, and a flat string no right side. A rope of non-ASCII
 // pieces answers its units only once flat, its right side gone.
 func TestStringSharesItsLastWord(t *testing.T) {
+	t.Parallel()
 	if is64Bit == 1 && unsafe.Sizeof(String{}) != 48 {
 		t.Errorf("a String is %d bytes, want 48", unsafe.Sizeof(String{}))
 	}

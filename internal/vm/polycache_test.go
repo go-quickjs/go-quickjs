@@ -7,6 +7,7 @@ import "testing"
 // fills once a shape, not at each change of shape, which had counted
 // against its fills until it gave its cache up (maxCacheFills).
 func TestPolymorphicSites(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

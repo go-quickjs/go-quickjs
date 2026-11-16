@@ -9,17 +9,20 @@ import (
 )
 
 // TestRegThrowsKeepPC checks that every handler and slow function of the
-// register interpreter (zzreg_table*.go) that goes to the fail tail --
-// st.fail, or st.done and st.put, which go there with an error -- has
-// kept the pc past its instruction first, by st.at or st.kept.pc =: the
-// tail finds the handler of the instruction at st.kept.pc-1, and a pc left
-// from an instruction before would find another's or none. A call that
-// reads the kept pc (rhCallW, regElemMiss) is given it the same way.
+// register interpreter (zzreg_table*.go, zzreg_zztable.go) that goes to
+// the fail tail -- st.fail, or st.done and st.put, which go there with an
+// error -- has kept the pc past its instruction first, by st.at or
+// st.kept.pc =: the tail finds the handler of the instruction at
+// st.kept.pc-1, and a pc left from an instruction before would find
+// another's or none. A call that reads the kept pc (rhCallW, regElemMiss)
+// is given it the same way.
 func TestRegThrowsKeepPC(t *testing.T) {
 	files, err := filepath.Glob("zzreg_table*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no handler files: %v", err)
 	}
+	// The fast paths that sort after the others (zzreg_zztable.go).
+	files = append(files, "zzreg_zztable.go")
 	fs := token.NewFileSet()
 	fails := 0
 	isSt := func(e ast.Expr, name string) bool {

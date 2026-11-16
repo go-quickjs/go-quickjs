@@ -13,6 +13,7 @@ import (
 // must be seen at once -- its value, its dead zone, and a const's refusal --
 // whether the function runs as a tree or in the interpreter.
 func TestGlobalLexicalShadowing(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	evalString(t, rt, `let unrelated = 1; const other = 2;

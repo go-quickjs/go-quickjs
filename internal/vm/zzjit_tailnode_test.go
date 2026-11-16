@@ -7,6 +7,7 @@ import "testing"
 // deepTailScript's recursions through calls in tail position, from code
 // the JIT compiles round after round, answer as the interpreter's do.
 func TestJITDeepTailCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

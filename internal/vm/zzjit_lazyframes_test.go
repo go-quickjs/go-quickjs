@@ -50,6 +50,7 @@ func lazyFramesRounds() []string {
 // code invalidated while the levels are in it is returned into, closed
 // only once they have left. Each answer is the interpreter's.
 func TestJITLazyFrames(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

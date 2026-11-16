@@ -14,6 +14,7 @@ import (
 // does from then on (jitRetrySlow): a loop that runs long stays native.
 // Judged once, for good, it had stayed in the tree tier.
 func TestJITSlowCodeJudgedAgain(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -59,6 +60,7 @@ func TestJITSlowCodeJudgedAgain(t *testing.T) {
 // again when the code is compiled again (jitSeedCalls), from what the
 // caches know then: the plain function it calls now, called natively.
 func TestJITCallLeftToGoDecidedAgain(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -199,6 +201,7 @@ func TestJITCallsOfNotNativeCalleesAreGos(t *testing.T) {
 // memory limit: under jitDifferential's, the JIT's budget refuses the
 // script's top level (jitCompiles), and nothing is inlined into its loops.
 func TestJITInlinedConcat(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

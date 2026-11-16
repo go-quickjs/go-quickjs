@@ -82,6 +82,7 @@ func jitTierRuntimeWithForTest(t *testing.T, threshold uint16, setup string, ins
 // compiled again at the fourth, for both, never deoptimizing again. Each
 // answer is the interpreter's.
 func TestJITDeoptInvalidates(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -122,6 +123,7 @@ func TestJITDeoptInvalidates(t *testing.T) {
 // all three shapes. The caches filled again with what they held -- the
 // same entries, in another order -- delay nothing (jitFeedbackMark).
 func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -169,6 +171,7 @@ func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
 // deoptimizes once more, and the tree tier runs it from then on, however
 // many budgets it spends.
 func TestJITDeoptLimit(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -198,6 +201,7 @@ func TestJITDeoptLimit(t *testing.T) {
 // receivers change at its thousandth iteration, and the rest of its
 // twenty thousand run natively again, in the same invocation.
 func TestJITDeoptTiersUpByOSR(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -282,6 +286,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 // it, and is compiled again, inc inlined, only once a budget of its
 // invocations has passed, Go making no call of inc after.
 func TestJITLearnedCodeRunsOn(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -352,6 +357,7 @@ func v8TierRuntimeForTest(t *testing.T, setup string) (*Runtime, func(src string
 // spent at its 400th, not before. Neither has a loop, whose back edges
 // would spend their budget too (jitTierWork).
 func TestJITV8Budgets(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -404,6 +410,7 @@ func TestJITV8Budgets(t *testing.T) {
 // entered at its loop in its second run, a long one, its first call
 // spending next to none of it.
 func TestJITV8LoopTierUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -440,6 +447,7 @@ func TestJITV8LoopTierUp(t *testing.T) {
 // the mean, which k's long loop makes many times as long, the budget would
 // have been spent several times over; run for twice it, it is.
 func TestJITLoopSpendsItsOwnLength(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -476,6 +484,7 @@ func TestJITLoopSpendsItsOwnLength(t *testing.T) {
 // run in the interpreter. With the runtime's default budget, long is past
 // what a compile may take of it, and is not tried.
 func TestJITCompilesLongFunctions(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -515,6 +524,7 @@ func jitTierWorkForTest(r *Runtime, cl *closure) int64 {
 // been tried. So AWFY's Richards' runTask, compiled first, had made every
 // call of its tasks' functions by Go, at three and a half times the time.
 func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -554,6 +564,7 @@ func jitRareCallForTest(call string) string {
 // and is called natively by h from then on. Meanwhile h's call waits for
 // it, decided no more at each of g's calls (jitCallWaiting).
 func TestJITLongCalleeWarmsUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -609,6 +620,7 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 // HandlerTask.run, called 0.37 times a call of its caller, in the tree
 // tier for 750 calls.
 func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -679,6 +691,7 @@ func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
 // a frame (jitInvokedFrameless) as well, and the call is decided once it
 // is compiled, not settled as Go's while it warms up.
 func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -725,6 +738,7 @@ func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 // DeltaBlue's forEach, judged slow on its many short calls, had run its
 // plan's, thousands of constraints long, in the tree tier.
 func TestJITSlowCodeEnteredByOSR(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -749,6 +763,7 @@ func TestJITSlowCodeEnteredByOSR(t *testing.T) {
 // analyses took for no call, gave a wrong string, and crashed. Each answer
 // is the interpreter's.
 func TestJITMegamorphicWriteKeeps(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -803,6 +818,7 @@ func TestJITMegamorphicWriteKeeps(t *testing.T) {
 // rest of the invocation in the interpreter: RayTrace's testIntersection,
 // of best.hitCount, at a call in eleven.
 func TestJITMegamorphicWritesByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -853,6 +869,7 @@ func jitSetPropPC(t *testing.T, fn *bytecode.Function) int {
 // interpreter: Typescript's at typescript-compiler.js:1607, nearly four
 // thousand times in five runs.
 func TestJITMegamorphicReadsByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -900,6 +917,7 @@ func jitGetPropPC(t *testing.T, fn *bytecode.Function) int {
 // getter's pair, an object no call could make: Intl's format, a getter of
 // the bound function, read and called by test262's NumberFormat tests.
 func TestJITMegamorphicMethodReadsByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

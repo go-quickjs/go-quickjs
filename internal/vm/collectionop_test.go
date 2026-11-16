@@ -10,6 +10,7 @@ import "testing"
 // subclass's instance, and the TypeError another receiver gets from the
 // built-in. The output is Node's.
 func TestCollectionOpWithoutFrame(t *testing.T) {
+	t.Parallel()
 	const src = `var out = [];
 function has(m, k) { return m.has(k) }
 function get(m, k) { return m.get(k) }
@@ -41,10 +42,8 @@ for (var k = 0; k < 3; k++) run();
 JSON.stringify(out);
 `
 	const want = `[6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]",6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]",6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]"]`
-	defer SetTreeTier(true)
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)

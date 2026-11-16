@@ -55,6 +55,7 @@ const handlerSetup = `
 // Every answer is the interpreter's, under every stress setting: the
 // handlers' locals as the code left them at each exit.
 func TestJITHandlerLiveness(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

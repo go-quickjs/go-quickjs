@@ -21,6 +21,7 @@ import (
 // Color.addScalar, called natively from rayTrace. Here a word inside the
 // frame is made of the frame's home; one past its limit is left as it is.
 func TestJITMaterializeStopsAtCalleeFrame(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

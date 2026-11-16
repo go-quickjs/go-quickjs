@@ -79,6 +79,7 @@ const cellsCloseSetup = `
 // leaves it (jitReopenRunCells). Each answer is the interpreter's, and
 // loops' pool grew, as only native code's taking makes it.
 func TestJITCellsClosed(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

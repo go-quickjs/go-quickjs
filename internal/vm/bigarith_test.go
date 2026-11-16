@@ -14,6 +14,7 @@ import (
 // as BigInts of their own (heapOf), which no result of a value in the int64
 // range is.
 func TestBigArithKeepsSmallResultsApart(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	vals := []int64{0, 1, -1, 7, -7, 1 << 31, -(1 << 31), math.MaxInt64, math.MinInt64}
 	ops := []bytecode.Op{bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod}

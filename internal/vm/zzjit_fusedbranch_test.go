@@ -21,6 +21,7 @@ import (
 // the comparison, values emitted after it -- its block's end loads a
 // captured binding for the join -- which must not take its register.
 func TestJITFusedBranches(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -15,6 +15,7 @@ import "testing"
 // a valueOf in a chain calling functions of their own. On the trees and in
 // the interpreter.
 func TestTailSwapCalls(t *testing.T) {
+	t.Parallel()
 	src := `
 		var t1
 		function sloppyF(n) { return n === 0 ? 'sloppy' : t1(n - 1) }
@@ -79,8 +80,7 @@ func TestTailSwapCalls(t *testing.T) {
 		s`
 	const want = "true,true,false,0:1:2254500,0:1:2254508,101,1100,100,1078,98,1056,96,4,22,2,0,p1,qundefinedundefined,p1,done,sloppy,tb,bound,tn,5,ta,arrowholder,7,1,td1,te,tr2,ts,tu2,tv,TypeError,deep,true,deep,true,deep,true,fin,true,true,1"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -90,7 +90,6 @@ func TestTailSwapCalls(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // TestTailSwapChains counts what tailSwap does: a chain of calls in tail
@@ -122,9 +121,8 @@ func TestTailSwapChains(t *testing.T) {
 		function sloppy2(n) { return n === 0 ? 't' : sloppy(n - 1) }
 		r + sloppy(1000)`
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
 		calls, deepest = 0, 0
-		r := newOldTiersForTest(Config{})
+		r := newOldTiersTreeForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -145,5 +143,4 @@ func TestTailSwapChains(t *testing.T) {
 			t.Errorf("tree tier %v: tailSwap called %d times, %d deep; want %d, %d deep", tree, calls, deepest, want, wantDeep)
 		}
 	}
-	SetTreeTier(true)
 }

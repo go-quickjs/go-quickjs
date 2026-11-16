@@ -7,6 +7,7 @@ import "testing"
 // kept as it is: the key was kept as given, so keys(), forEach and entries
 // handed back -0 (KI-40). The answers are node's.
 func TestMapSetKeepPlusZero(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const z = (v) => Object.is(v, -0) ? "-0" : String(v);
 		[z([...new Map().set(-0, 1).keys()][0]), z([...new Map([[-0, 1]]).keys()][0]),
 		 z([...new Set().add(-0)][0]), z([...new Set([-0])][0]),
@@ -22,6 +23,7 @@ func TestMapSetKeepPlusZero(t *testing.T) {
 // that what the argument's has or keys change during the call is seen: it
 // worked on a snapshot of each (KI-41). The answers are node's.
 func TestIntersectionSeesChanges(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const out = [];
 		{ const s = new Set([1, 2, 3]); const other = { size: 10, has(v) { if (v === 1) { s.delete(2); s.add(4); } return true; }, keys() { return [][Symbol.iterator](); } };
 		  out.push([...s.intersection(other)].join()); }

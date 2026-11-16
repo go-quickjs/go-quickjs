@@ -84,6 +84,7 @@ var calledUnmade = []string{"squares", "turns", "bumps", "throws"}
 // Each answer is the interpreter's, under every stress setting, and Go
 // makes the closures native code left unmade where it leaves inside one.
 func TestJITCalledClosures(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

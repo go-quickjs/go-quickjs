@@ -285,6 +285,34 @@ type LiteralKeys struct {
 	Keys uint64
 }
 
+// HashLiteralKeys is LiteralKeys' Keys of a literal whose keys are keys,
+// in their order: FNV-1a, 64 bits, which takes no seed, so that a
+// function shared by runtimes says its literals of the same keys alike.
+// Each key's length goes into the hash, so that ab then c is not a then
+// bc. It is never 0.
+func HashLiteralKeys(keys []string) uint64 {
+	const (
+		start = 14695981039346656037
+		prime = 1099511628211
+	)
+	h := uint64(start)
+	for _, key := range keys {
+		for s := uint64(len(key)); ; s >>= 8 {
+			h = (h ^ s&0xff) * prime
+			if s < 0x100 {
+				break
+			}
+		}
+		for j := 0; j < len(key); j++ {
+			h = (h ^ uint64(key[j])) * prime
+		}
+	}
+	if h == 0 {
+		h = 1
+	}
+	return h
+}
+
 type Function struct {
 	// ParamEnd is the pc just past the parameter prologue, which is where a
 	// generator's body proper begins. A generator binds its parameters when it

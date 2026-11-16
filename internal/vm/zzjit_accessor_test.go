@@ -133,6 +133,7 @@ func TestJITAccessors(t *testing.T) {
 // interpreter: its error, and its stack, the getter's frame on top of the
 // caller's.
 func TestJITAccessorThrows(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -173,6 +174,7 @@ func TestJITAccessorThrows(t *testing.T) {
 // small getter and setter are inlined, no call of Go made; a built-in's
 // getter is called by Go from native code, which goes on after it.
 func TestJITAccessorsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

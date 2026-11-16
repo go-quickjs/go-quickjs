@@ -11,6 +11,7 @@ import (
 // the depth it ran at. The frame it ran in is reused by those calls, and used
 // to share its handler and upvalue arrays with them (KI-01).
 func TestSuspendedFrameState(t *testing.T) {
+	t.Parallel()
 	// An async function awaiting inside try, while a function with a try of
 	// its own runs where it did.
 	checkAsync(t, `
@@ -58,6 +59,7 @@ func TestSuspendedFrameState(t *testing.T) {
 // constructor, the constructor's `this` binding and new.target, which the
 // arrow lost at its first await (KI-29). The answers are node's.
 func TestResumedFramesAreSetUp(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if _, err := rt.Eval(`
@@ -107,6 +109,7 @@ func TestResumedFramesAreSetUp(t *testing.T) {
 // receiver, the arguments, and a closure over the loop's binding, from
 // resumption to resumption. The answers are Node's.
 func TestResumedLoopFramesAreSetUp(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		var out = [];
 		function* e() { for (let i = 0; i < 2; i++) { eval("var x" + i + " = i"); yield typeof x0 + typeof x1; } }
@@ -126,6 +129,7 @@ func TestResumedLoopFramesAreSetUp(t *testing.T) {
 // and a getter there ran at every call. An async generator function's is
 // still what its objects inherit from.
 func TestAsyncFunctionPrototypeNotRead(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		var n = 0, m = 0;
 		async function af() {}
@@ -145,6 +149,7 @@ func TestAsyncFunctionPrototypeNotRead(t *testing.T) {
 // and a promise with a constructor of its own is adopted. The answers are
 // Node's.
 func TestAwaitReadsConstructor(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var log = [];
 		var C = Promise.prototype.constructor;
@@ -164,6 +169,7 @@ func TestAwaitReadsConstructor(t *testing.T) {
 // generator suspending inside another's resumption, yield*, and an await
 // in an async generator's body must not upset. The answers are Node's.
 func TestGeneratorsSuspendingInTurn(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `function* inner(k) { var x = yield k + "a"; yield k + "b" + x; return k + "r" }
 		function* outer() { var it = inner("i"); var r1 = it.next(); var y = yield r1.value; var r2 = it.next(y); yield r2.value + "|" + JSON.stringify(it.next()); var d = yield* inner("d"); yield d }
 		var out = [], g = outer(), r, n = 0;

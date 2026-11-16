@@ -126,6 +126,7 @@ func TestJITFillDiscardsNothing(t *testing.T) {
 // instruction dispatch, given one at each PC Go had gone on at, ran
 // natively 40% longer with 46. Each answer is the interpreter's.
 func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -189,6 +190,7 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 // before it -- obj's shape -- it goes on using. The answers are the
 // interpreter's.
 func TestJITOneMissNoEntry(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -363,6 +365,7 @@ func TestJITRoomForHintGrowth(t *testing.T) {
 // first compile asking for less room than its entry then took -- the budget
 // filled by such compiles took the last one, and threw it away.
 func TestJITPerInstrReachesWhatEntriesHold(t *testing.T) {
+	t.Parallel()
 	s := &jitState{}
 	s.learn(10, 1000)
 	for range 16 {

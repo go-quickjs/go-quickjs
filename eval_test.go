@@ -13,6 +13,7 @@ import (
 // runs the code in global scope, which is what makes `(0, eval)(src)` the way
 // to ask for a sandbox.
 func TestDirectEval(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The caller's bindings, read and written.
 		{`function f() { var x = 1; return eval("x") } String(f())`, "1"},
@@ -102,6 +103,7 @@ func TestDirectEval(t *testing.T) {
 // it is the same capability reached a different way. With it off there is no
 // eval to reach at all, so naming it is a ReferenceError.
 func TestDirectEvalRespectsCodeGenerationOff(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithoutCodeGeneration())
 	defer rt.Close()
 
@@ -128,6 +130,7 @@ func TestDirectEvalRespectsCodeGenerationOff(t *testing.T) {
 // there and `super()` is not: there is only one constructor, and it is not
 // this.
 func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class A { m() { return 1 } } class B extends A { x = eval("super.m()") }
 		  String(new B().x)`, "1"},
@@ -193,6 +196,7 @@ func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
 // shadowed by that binding and never reachable -- which the specification makes
 // an error rather than a surprise.
 func TestEvalInAParameterDefault(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`function f(p = eval("var arguments")) {} f()`,
 		`function f(p = eval("var arguments")) { let arguments; } f()`,
@@ -244,6 +248,7 @@ func TestEvalInAParameterDefault(t *testing.T) {
 // enclosing function's. At the top level there is none to take, so a direct
 // eval written in an arrow there may not mention it.
 func TestDirectEvalNewTargetScope(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"arrow at top level", `var f = () => eval("new.target")
 		  try { f(); "no error" } catch (e) { e.constructor.name }`, "SyntaxError"},
@@ -267,6 +272,7 @@ func TestDirectEvalNewTargetScope(t *testing.T) {
 // attributes of a property it cannot redefine: a non-configurable global is
 // assigned to rather than replaced.
 func TestEvalFunctionKeepsNonConfigurableAttributes(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		Object.defineProperty(globalThis, "f", {
 			value: 1, writable: true, enumerable: true, configurable: false,
@@ -280,6 +286,7 @@ func TestEvalFunctionKeepsNonConfigurableAttributes(t *testing.T) {
 // A spread element in the arguments does not make a direct eval indirect: what
 // decides is that the callee was written as the name `eval`.
 func TestDirectEvalWithSpreadArguments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"spread source", `var x = "global";
 		  (function () { var x = "local"; eval(...["x = 0;"]); return String(x) })()`, "0"},
@@ -309,6 +316,7 @@ func TestDirectEvalWithSpreadArguments(t *testing.T) {
 // not to the global object: it is visible there and in anything created
 // inside, it goes when the call does, and it can be deleted again.
 func TestDirectEvalVarBelongsToTheCaller(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"visible in the caller", `function f() { eval("var q = 7"); return q }
 		  f() + "," + typeof globalThis.q`, "7,undefined"},
@@ -352,6 +360,7 @@ func TestDirectEvalVarBelongsToTheCaller(t *testing.T) {
 // then still names what it named. That is what tells `x *= (eval("var x = 2"),
 // 4)` apart from an assignment written after the eval.
 func TestDirectEvalVarShadowsAnOuterBinding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"compound assignment", `function t() {
 		    var x = 3
@@ -396,6 +405,7 @@ func TestDirectEvalVarShadowsAnOuterBinding(t *testing.T) {
 // assigns to that binding rather than making one of its own, which is what lets
 // the evaluated code replace a var the caller declared.
 func TestEvalFunctionReplacesACallerBinding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var initial
 		  ;(function () { var f = 88; eval("initial = f; function f() { return 33 }") })();
@@ -427,6 +437,7 @@ func TestEvalFunctionReplacesACallerBinding(t *testing.T) {
 // before it is reached is not visited, while one added after the walk began is
 // not picked up.
 func TestForInSeesDeletions(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {a1: 1, b1: 2, c1: 3}
 		  var out = ""
@@ -462,6 +473,7 @@ func TestForInSeesDeletions(t *testing.T) {
 // surrounding code does. Unless the object supplies an eval of its own, which
 // is an ordinary call with the object as its receiver.
 func TestDirectEvalInsideWith(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var out = ""
 		  function f() { var o = {x: "own"}; var x = "outer"; with (o) { out = eval("x") } }

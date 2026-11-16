@@ -11,6 +11,7 @@ import (
 // nullish one is no return at all. Every answer is what Node and Chrome 158
 // give.
 func TestIteratorClose(t *testing.T) {
+	t.Parallel()
 	const setup = `
 		function mk(r) { return {next() { return {done: false, value: 1} }, return: r, __proto__: Iterator.prototype} }
 		function iterable(r) { return {[Symbol.iterator]() { return mk(r) }} }
@@ -46,6 +47,7 @@ func TestIteratorClose(t *testing.T) {
 // A helper is finished once closing what is beneath it failed, whether or
 // not the close threw.
 func TestIteratorConcatFinishedAfterFailedClose(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	const code = `(function() {
@@ -63,6 +65,7 @@ func TestIteratorConcatFinishedAfterFailedClose(t *testing.T) {
 // When stepping flatMap's inner iterator throws, that iterator is finished:
 // only the one beneath is closed.
 func TestFlatMapInnerThrowClosesOnlyTheOuter(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	const code = `(function() {
@@ -83,6 +86,7 @@ func TestFlatMapInnerThrowClosesOnlyTheOuter(t *testing.T) {
 // its buffer, where V8 throws a TypeError, as its other methods do on both
 // sides.
 func TestDataViewOutOfBoundsGetters(t *testing.T) {
+	t.Parallel()
 	const fixed = `(function() {
 		const b = new ArrayBuffer(8, {maxByteLength: 16});
 		const d = new DataView(b, 2, 4);

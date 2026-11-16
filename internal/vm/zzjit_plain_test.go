@@ -104,6 +104,7 @@ var plainRounds = [][2]string{
 // make none of Go's that count (ssaStats' goCalls) and never leave their
 // code.
 func TestJITPlainGoCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -152,6 +153,7 @@ func TestJITPlainGoCalls(t *testing.T) {
 // replaced, or a receiver of the wrong kind, goes through the frame, which
 // calls the replacement or throws as the built-in does.
 func TestJITPlainGoCallsReplaced(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -182,6 +184,7 @@ func TestJITPlainGoCallsReplaced(t *testing.T) {
 // table of them had taken 32, and left String's last two, by a map's order,
 // to calls with frames.
 func TestJITPlainSetHoldsEveryLeaf(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

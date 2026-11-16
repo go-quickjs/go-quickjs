@@ -13,6 +13,7 @@ import (
 // script has to import. These cover what a host can build with.
 
 func TestSetModule(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -70,6 +71,7 @@ func TestSetModule(t *testing.T) {
 // A host module is reached by its own name even when a loader is installed,
 // and a script importing something else still goes to the loader.
 func TestSetModuleBeatsTheLoader(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -102,6 +104,7 @@ func TestSetModuleBeatsTheLoader(t *testing.T) {
 // A runtime with no loader at all can still import what the host registered,
 // and still refuses everything else.
 func TestSetModuleWithoutALoader(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -123,6 +126,7 @@ func TestSetModuleWithoutALoader(t *testing.T) {
 // A dynamic import reaches a host module too, since that is how a script asks
 // for one it may not have.
 func TestSetModuleThroughDynamicImport(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -152,6 +156,7 @@ func TestSetModuleThroughDynamicImport(t *testing.T) {
 // A promise the host settles is an ordinary promise: script may await it, and
 // its reactions run when the queue is drained rather than at once.
 func TestHostPromise(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -186,6 +191,7 @@ func TestHostPromise(t *testing.T) {
 }
 
 func TestHostPromiseRejection(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -214,6 +220,7 @@ func TestHostPromiseRejection(t *testing.T) {
 // error's message that unwraps to it -- a cancellation included, which rejects
 // and stops nothing.
 func TestHostPromiseRejectErrorKinds(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -266,6 +273,7 @@ func TestHostPromiseRejectErrorKinds(t *testing.T) {
 // An async function may await what the host settles, which is the shape every
 // asynchronous host API takes.
 func TestHostPromiseAwaited(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -293,6 +301,7 @@ func TestHostPromiseAwaited(t *testing.T) {
 
 // The pieces a host assembles a value out of.
 func TestHostValueConstruction(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -323,6 +332,7 @@ func TestHostValueConstruction(t *testing.T) {
 // A host function that has to throw something other than a plain Error can say
 // which, and a script sees an ordinary exception either way.
 func TestHostThrow(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -349,6 +359,7 @@ func TestHostThrow(t *testing.T) {
 // formatted, which a script catches as the kind it is, with a stack that
 // shows the script's frame that made the call.
 func TestHostThrowKinds(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -399,6 +410,7 @@ func TestHostThrowKinds(t *testing.T) {
 // A Go function may hand back a promise directly, which is the shape of every
 // host API that finishes later.
 func TestHostFunctionReturningPromise(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -427,6 +439,7 @@ func TestHostFunctionReturningPromise(t *testing.T) {
 
 // A module may export values the host built rather than Go functions.
 func TestSetModuleValues(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -456,6 +469,7 @@ func TestSetModuleValues(t *testing.T) {
 // A promise rejected with nothing waiting for it is reported at the end of the
 // turn -- and one that something takes later in the same turn is not.
 func TestUnhandledRejection(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Promise.reject(new Error("nobody wants me"))`, "nobody wants me"},
 		{`new Promise((_, reject) => reject(new Error("from an executor")))`, "from an executor"},
@@ -495,6 +509,7 @@ func TestUnhandledRejection(t *testing.T) {
 // A handler attached in a later turn is too late, and the rejection has
 // already been reported -- once.
 func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	n := 0
@@ -519,6 +534,7 @@ func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
 // What a module is told about itself is the host's to decide, and it is told
 // once, the first time it asks.
 func TestImportMetaFromTheHost(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -553,6 +569,7 @@ func TestImportMetaFromTheHost(t *testing.T) {
 // Without a host to fill it in, import.meta is an empty object rather than an
 // error: the specification puts nothing there.
 func TestImportMetaIsEmptyWithoutAHost(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	ns, err := rt.EvalModule("main.js", `export const keys = Object.keys(import.meta).length`)

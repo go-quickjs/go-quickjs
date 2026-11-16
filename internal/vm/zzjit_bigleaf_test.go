@@ -347,6 +347,7 @@ func TestJITBigLeaf(t *testing.T) {
 // local holds alone (bigSoleBit), no operand of the call; for any other,
 // in a new block, the value left untouched.
 func TestJITBigLeafOwn(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -433,6 +434,7 @@ func TestJITBigLeafOwn(t *testing.T) {
 // which the host can stop, where the host can stop the script; where it
 // cannot, the leaf makes it as before.
 func TestJITBigLeafLeavesLongOperations(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

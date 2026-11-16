@@ -15,8 +15,7 @@ import (
 // whose objects outgrew it, and outgrown: an object of twenty properties
 // built as a tree held a third more than the interpreter's.
 func TestSlackOutgrown(t *testing.T) {
-	defer SetTreeTier(true)
-	SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src string
 		room      int
@@ -50,6 +49,7 @@ func TestSlackOutgrown(t *testing.T) {
 // slackTracking used, as V8's slack tracking shrinks a map's instance
 // size.
 func TestSlackTracking(t *testing.T) {
+	t.Parallel()
 	var big strings.Builder
 	big.WriteString("function Big() {")
 	for i := 0; i < 215; i++ {

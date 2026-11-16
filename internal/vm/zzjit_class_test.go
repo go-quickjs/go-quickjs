@@ -66,6 +66,7 @@ func TestJITClassConstructors(t *testing.T) {
 // returns its this (push_this, return), where a function's constructor
 // returns nothing (ssa's returnsThis).
 func TestJITClassConstructorsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

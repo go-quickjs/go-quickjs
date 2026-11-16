@@ -90,7 +90,8 @@ type Record struct {
 	// makes only the first time (the compiler's reusedClosures).
 	Reused map[*ast.FuncLit]bool
 	// Appends are the additions the stack compiler made appends to a
-	// local (localAppend), and Freezes the reads it followed by a
+	// local (localAppend) or to an upvalue (ownedAppend), and Freezes the
+	// reads it followed by a
 	// str_freeze, of a binding an append grows: what reads one and may
 	// keep it must not see it grow after.
 	Appends map[*ast.Assign]bool
@@ -369,7 +370,7 @@ func (r *Record) NoteTop(op TopOp) {
 	}
 }
 
-// NoteAppend records that n is an append to a local.
+// NoteAppend records that n is an append to a local or an upvalue.
 func (r *Record) NoteAppend(n *ast.Assign) {
 	if r == nil || r.quiet > 0 {
 		return

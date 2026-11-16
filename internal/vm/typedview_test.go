@@ -18,6 +18,7 @@ import (
 // copy its buffer gives; every view's copy is then made anew for the next
 // step to test.
 func TestTypedViewCache(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	run := func(src string) Value {

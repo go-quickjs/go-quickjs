@@ -14,6 +14,7 @@ import (
 // directions are pinned here.
 
 func TestEarlyErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		src  string
@@ -74,6 +75,7 @@ func TestEarlyErrors(t *testing.T) {
 // early error but are legal, and which a check written too broadly would
 // reject.
 func TestEarlyErrorsDoNotOverreach(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		src  string
@@ -114,6 +116,7 @@ func TestEarlyErrorsDoNotOverreach(t *testing.T) {
 // the grammar: the arity is checked when the program is parsed, and there is
 // nothing for new to construct.
 func TestDynamicImportSyntax(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`throw 0; import();`,
 		`throw 0; import("a", "b", "c");`,
@@ -152,6 +155,7 @@ func TestDynamicImportSyntax(t *testing.T) {
 // the parameter list, where a rest element may sit, and where a declaration may
 // be the body of another statement.
 func TestFunctionShapeEarlyErrors(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		// A "use strict" directive is what a non-simple parameter list
 		// forbids, whatever mode the surrounding code is in -- so a class
@@ -230,6 +234,7 @@ func TestFunctionShapeEarlyErrors(t *testing.T) {
 // keyword either. It is one rule: \u0069f is an identifier, and so
 // \u0067et is a property name rather than the start of an accessor.
 func TestEscapedKeywordsAreNames(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`throw 0; ({ \u0067et m() {} });`,
 		`throw 0; ({ \u0073et m(v) {} });`,
@@ -297,6 +302,7 @@ func TestEscapedKeywordsAreNames(t *testing.T) {
 // assignment may sit in a function that is never called, and a program that
 // never calls it is perfectly good.
 func TestAssignToConst(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`const c = 1; try { c = 2 } catch (e) { e.constructor.name }`, "TypeError"},
 		{`const c = 1; try { c++ } catch (e) { e.constructor.name }`, "TypeError"},
@@ -336,6 +342,7 @@ func TestAssignToConst(t *testing.T) {
 // gets no such allowance: they were introduced after the mistake was
 // recognized, so there is nothing to be compatible with.
 func TestBlockFunctionDeclarationKinds(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`throw 0; { var f; async function f() {} }`,
 		`throw 0; { var f; function* f() {} }`,
@@ -393,6 +400,7 @@ func TestBlockFunctionDeclarationKinds(t *testing.T) {
 // keyword, and these are reserved by their position rather than by being
 // keywords.
 func TestAwaitAndYieldAreReservedWhereTheyOperate(t *testing.T) {
+	t.Parallel()
 	esc := func(w string) string {
 		return `\u00` + map[byte]string{'a': "61", 'y': "79"}[w[0]] + w[1:]
 	}
@@ -431,6 +439,7 @@ func TestAwaitAndYieldAreReservedWhereTheyOperate(t *testing.T) {
 // pattern. Parenthesize one and it is an expression again, and an expression
 // that is not a reference cannot be assigned to.
 func TestAssignmentTargetMustBeAReference(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`throw 0; var a, b, c; (a = b) = c;`,
 		`throw 0; var a, b, c; ((a = b)) = c;`,
@@ -486,6 +495,7 @@ func jsQuote(s string) string {
 // parameters are bound as part of the call, before the body can suspend, so
 // neither is allowed there even in a generator or an async function.
 func TestNoSuspendInParameters(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`function* g(a = yield 1) {}`,
 		`function* g(a = yield) {}`,
@@ -518,6 +528,7 @@ func TestNoSuspendInParameters(t *testing.T) {
 // TestPrivateNameNeedsAClass covers a private name written as a key outside a
 // class body, where there is no class evaluation to hold it.
 func TestPrivateNameNeedsAClass(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`var o = {#m() {}}`,
 		`var o = {* #m() {}}`,
@@ -550,6 +561,7 @@ func TestPrivateNameNeedsAClass(t *testing.T) {
 // the octal escapes and literals, and the numeric separator's one placement
 // that never meant anything.
 func TestLegacySyntaxUnderStrict(t *testing.T) {
+	t.Parallel()
 	// A leading zero is a literal all by itself, so there is nothing for a
 	// separator to sit between.
 	bad := []string{`0_0`, `0_1`, `0_7`, `0_8`, `0_9`, `0_0n`}
@@ -592,6 +604,7 @@ func TestLegacySyntaxUnderStrict(t *testing.T) {
 // name: a getter paired with a setter. The two halves are one member, so they
 // have to agree about being on the instances or on the class.
 func TestPrivateAccessorPairIsOneMember(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`class C { get #x() {} static set #x(v) {} }`,
 		`class C { static get #x() {} set #x(v) {} }`,
@@ -620,6 +633,7 @@ func TestPrivateAccessorPairIsOneMember(t *testing.T) {
 // statements, but the rule stops at a function written inside one -- an arrow
 // included, since an arrow's body is not an await context either.
 func TestAwaitBindingInsideAClassBody(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"arrow in a static block",
 			`class C { static { (() => { try {} catch (await) {} }) } }; "ok"`, "ok"},
@@ -652,6 +666,7 @@ func TestAwaitBindingInsideAClassBody(t *testing.T) {
 // be callable only when it is called: a pattern abandoned before it steps the
 // iterator closes it without ever needing one.
 func TestIteratorNextIsCheckedWhenCalled(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"closed before stepping", `
 		  var iterable = {}
@@ -675,6 +690,7 @@ func TestIteratorNextIsCheckedWhenCalled(t *testing.T) {
 // literal, and which that is comes from parsing rather than from looking at the
 // next token: a semicolon is inserted only where the text cannot continue.
 func TestDirectivePrologueEndsWhereTheExpressionDoes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		// `in` continues the expression across the line break, so the string is
 		// not a directive and the whole thing is one comparison.
@@ -701,6 +717,7 @@ func TestDirectivePrologueEndsWhereTheExpressionDoes(t *testing.T) {
 // A function whose body turns on strict mode is bound by strict mode's rules
 // about its own name, not only its parameters.
 func TestStrictBodyConstrainsTheFunctionName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function eval() { "use strict" }`, "SyntaxError"},
 		{`function arguments() { "use strict" }`, "SyntaxError"},
@@ -719,6 +736,7 @@ func TestStrictBodyConstrainsTheFunctionName(t *testing.T) {
 // an operand may: the parentheses of `(a, b)` are a cover grammar, and what
 // they cover depends on where they are.
 func TestArrowIsNotAnOperand(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`1 + () => {}`, "SyntaxError"},
 		{`typeof () => {}`, "SyntaxError"},
@@ -743,6 +761,7 @@ func TestArrowIsNotAnOperand(t *testing.T) {
 // expression, which is narrower than it looks: the private name may only stand
 // where a relational expression may, and what follows `in` may not be one.
 func TestPrivateInGrammar(t *testing.T) {
+	t.Parallel()
 	const cls = `class C { #f; static t(o) { return `
 	cases := []struct{ src, want string }{
 		{cls + `#f in o } }; String(C.t(new C()))`, "true"},
@@ -770,6 +789,7 @@ func TestPrivateInGrammar(t *testing.T) {
 // expression's own name is the new function's rather than the enclosing class
 // body's.
 func TestMethodPrefixesAndFunctionNames(t *testing.T) {
+	t.Parallel()
 	bad := []string{
 		`({async async})`,
 		`({* foo})`,

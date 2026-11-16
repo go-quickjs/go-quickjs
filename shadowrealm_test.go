@@ -9,6 +9,7 @@ import (
 // TestShadowRealmEvaluate pins what crosses a ShadowRealm's boundary:
 // primitives as they are, functions as wrappers, and nothing else.
 func TestShadowRealmEvaluate(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var r = new ShadowRealm(); [r.evaluate("1 + 1"), r.evaluate("'s'"), typeof r.evaluate("Symbol()"), r.evaluate("undefined")].join()`, "2,s,symbol,"},
 		// Its globals are its own.
@@ -28,6 +29,7 @@ func TestShadowRealmEvaluate(t *testing.T) {
 // a function of the receiving realm that wraps its arguments on the way in
 // and its result on the way out, and turns an exception into a TypeError.
 func TestShadowRealmWrappedFunctions(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var r = new ShadowRealm(); var f = r.evaluate("(function add(a, b) { return a + b })");
 [f(1, 2), f.name, f.length, Object.getPrototypeOf(f) === Function.prototype, typeof f.prototype].join()`, "3,add,2,true,undefined"},
@@ -49,6 +51,7 @@ func TestShadowRealmWrappedFunctions(t *testing.T) {
 // realm -- an instance of the module of its own -- and hands back the export,
 // wrapped, or a TypeError.
 func TestShadowRealmImportValue(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
@@ -94,6 +97,7 @@ var errNotFound error = notFound{}
 // from the other: code inside the realm used to get the outer realm's
 // objects from one, and could use them (KI-08).
 func TestShadowRealmCallSitesStayOnTheirSide(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		var sr = new ShadowRealm();
 		var probe = sr.evaluate(`+"`"+`

@@ -44,6 +44,7 @@ func builderDifferential(t *testing.T, src string) {
 // string the loop has built and gone on from, one it stored or used
 // otherwise, one it left with for Go, keeps what it had.
 func TestJITStringBuilderAnswers(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -231,6 +232,7 @@ func TestJITStringBuilderAnswers(t *testing.T) {
 // character: each character after the first is appended in place, to a
 // buffer that doubles as it grows.
 func TestJITStringBuilderAppendsInPlace(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

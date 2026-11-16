@@ -10,6 +10,7 @@ import (
 // a RangeError, as V8's does, rather than growing the goroutine's stack past
 // Go's limit, which ends the process with nothing to recover (KI-04).
 func TestGoRecursionIsBounded(t *testing.T) {
+	t.Parallel()
 	const rangeError = "RangeError: maximum call stack size exceeded"
 	catch := func(src string) string {
 		return `try { ` + src + `; "finished" } catch (e) { e.name + ": " + e.message }`
@@ -54,6 +55,7 @@ func TestGoRecursionIsBounded(t *testing.T) {
 // generator that then ends is served in a loop, rather than a recursion as
 // deep as the queue is long (KI-04).
 func TestLongAsyncGeneratorQueue(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var settled = 0, release;
 		async function* g() { await new Promise(r => release = r); }

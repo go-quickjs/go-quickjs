@@ -44,6 +44,7 @@ var (
 	ncCCBase    int32
 	ncMade      int32
 	ncFilled    int32
+	ncUsed      int32
 	ncTopOK     int32
 	ncRetDone   int32
 	ncStrBits   int32
@@ -105,6 +106,7 @@ var (
 	offStrLeft      int32
 	offStrAux       int32
 	offStrASCII     int32
+	offStrBuilding  int32
 	offFDElemOp     int32
 	offFDBound      int32
 	offStF          int32
@@ -151,6 +153,11 @@ var (
 
 	offRCCode      int32
 	offRCSrc       int32
+	offRCAux       int32
+	offCCReg       int32
+	offSymAtom     int32
+	offSymAtoms    int32
+	offRtAtoms     int32
 	offRCNumRegs   int32
 	offRCParams    int32
 	offRCInits     int32
@@ -172,6 +179,72 @@ var (
 	recRetIP int32
 	recSaved int32
 	recBOff  int32
+	recGen   int32
+
+	// A generator's step (genStep, genYield): the cursor's, the
+	// generator's and its frame's fields.
+	offItIter    int32
+	offItNext    int32
+	offItForIn   int32
+	offGen       int32
+	offGCl       int32
+	offGThis     int32
+	offGCallee   int32
+	offGVals     int32
+	offGPC       int32
+	offGNargs    int32
+	offGSaved    int32
+	offGRare     int32
+	offGState    int32
+	offGDeleg    int32
+	offGStarted  int32
+	offGReg      int32
+	offGAwaitJob int32
+	offClRealm   int32
+	offRCGenFrom int32
+	offRealmNext int32
+	offFDName    int32
+	offFHandlers int32
+	offFSavedSP  int32
+	offFParams   int32
+	offFThis     int32
+
+	// Closures and upvalues (closeUps, closure_w).
+	ncClosureFn  int32
+	ncLitFn      int32
+	ncBuiltinFn  int32
+	ncIterResFn  int32
+	ncCallMissFn int32
+	ncMiss       int32
+	offUpSlot    int32
+	offUpClosed  int32
+	offRCLeafUp  int32
+	offRCTailTo  int32
+
+	offFiKeys      int32
+	offFiObj       int32
+	offFiShape     int32
+	offFiIndexKeys int32
+	offRtKeyAtoms  int32
+	offRtIntStrs   int32
+	offKAS         int32
+	offKAAtom      int32
+	offKANone      int32
+	sizeKA         int32
+
+	// Switches (switchW).
+	offRCSwitches int32
+	offSwDense    int32
+	offSwLo       int32
+	offSwHi       int32
+	offSwByLen    int32
+	offSwFlat     int32
+	offSCK        int32
+	offSCTo       int32
+	offSCStr      int32
+	offSwFew      int32
+	offSwNums     int32
+	offSwOther    int32
 )
 
 // nativeTopFields are the record's fields that the top frame's state is
@@ -220,6 +293,7 @@ func loadOffsets() {
 	ncCCBase = off("nativeCtx.ccBase")
 	ncMade = off("nativeCtx.made")
 	ncFilled = off("nativeCtx.filled")
+	ncUsed = off("nativeCtx.used")
 	ncTopOK = off("nativeCtx.topOK")
 	ncRetDone = off("nativeCtx.retDone")
 	ncStrBits = off("nativeCtx.strBits")
@@ -281,6 +355,7 @@ func loadOffsets() {
 	offStrLeft = off("String.left")
 	offStrAux = off("String.aux")
 	offStrASCII = off("String.ascii")
+	offStrBuilding = off("String.building")
 	offFDElemOp = off("funcData.elemOp")
 	offFDBound = off("funcData.bound")
 	offStF = off("regState.f")
@@ -324,9 +399,14 @@ func loadOffsets() {
 	offCCConsts = ccRel(off("closureCode.consts"))
 	offCCRegEpochs = ccRel(off("closureCode.regEpochs"))
 	offCCRegCalls = ccRel(off("closureCode.regCalls"))
+	offCCReg = ccRel(off("closureCode.reg"))
 
 	offRCCode = off("regCode.code")
 	offRCSrc = off("regCode.src")
+	offRCAux = off("regCode.aux")
+	offSymAtom = off("Symbol.atom")
+	offSymAtoms = off("Symbol.atoms")
+	offRtAtoms = rtRel(off("Runtime.atoms"))
 	offRCNumRegs = off("regCode.numRegs")
 	offRCParams = off("regCode.params")
 	offRCInits = off("regCode.inits")
@@ -348,6 +428,65 @@ func loadOffsets() {
 	recRetIP = off("nativeRec.retIP")
 	recSaved = off("nativeRec.saved")
 	recBOff = off("nativeRec.bOff")
+	recGen = off("nativeRec.gen")
+
+	offItIter = off("iterObject.st") + off("iterState.iter")
+	offItNext = off("iterObject.st") + off("iterState.next")
+	offItForIn = off("iterObject.st") + off("iterState.forIn")
+	offGen = off("generatorObject.g")
+	offGCl = off("generator.cl")
+	offGThis = off("generator.this")
+	offGCallee = off("generator.callee")
+	offGVals = off("generator.vals")
+	offGPC = off("generator.pc")
+	offGNargs = off("generator.nargs")
+	offGSaved = off("generator.saved")
+	offGRare = off("generator.rare")
+	offGState = off("generator.state")
+	offGDeleg = off("generator.delegating")
+	offGStarted = off("generator.started")
+	offGReg = off("generator.reg")
+	offGAwaitJob = off("generator.awaitJob")
+	offClRealm = off("closure.realm")
+	offRCGenFrom = off("regCode.genFrom")
+	offRealmNext = off("Realm.genNextFn")
+	offFDName = off("funcData.name")
+	offFHandlers = off("frame.handlers")
+	offFSavedSP = off("frame.savedSP")
+	offFParams = off("frame.paramsOnly")
+	offFThis = off("frame.this")
+	ncClosureFn = off("nativeCtx.closureFn")
+	ncLitFn = off("nativeCtx.litFn")
+	ncBuiltinFn = off("nativeCtx.builtinFn")
+	ncIterResFn = off("nativeCtx.iterResFn")
+	ncCallMissFn = off("nativeCtx.callMissFn")
+	ncMiss = off("nativeCtx.miss")
+	offUpSlot = off("upvalue.slot")
+	offUpClosed = off("upvalue.closed")
+	offRCLeafUp = off("regCode.leafUp")
+	offRCTailTo = off("regCode.tailTo")
+	offFiKeys = off("forInObject.in") + off("forInState.keys")
+	offFiObj = off("forInObject.in") + off("forInState.obj")
+	offFiShape = off("forInObject.in") + off("forInState.shape")
+	offFiIndexKeys = off("forInObject.in") + off("forInState.indexKeys")
+	offRtKeyAtoms = rtRel(off("Runtime.keyAtoms"))
+	offRtIntStrs = rtRel(off("Runtime.intStrings"))
+	offKAS = off("keyAtom.s")
+	offKAAtom = off("keyAtom.atom")
+	offKANone = off("keyAtom.none")
+	sizeKA = size("keyAtom")
+	offRCSwitches = off("regCode.switches")
+	offSwDense = off("regSwitchTable.dense")
+	offSwLo = off("regSwitchTable.lo")
+	offSwHi = off("regSwitchTable.hi")
+	offSwByLen = off("regSwitchTable.byLen")
+	offSwFlat = off("regSwitchTable.flat")
+	offSCK = off("SwitchCase.K")
+	offSCTo = off("SwitchCase.To")
+	offSCStr = off("SwitchCase.Str")
+	offSwFew = off("regSwitchTable.few")
+	offSwNums = off("regSwitchTable.nums")
+	offSwOther = off("regSwitchTable.other")
 
 	nativeTopFields = [][2]int32{
 		{off("nativeRec.regs"), ncRegs},

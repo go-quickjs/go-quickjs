@@ -32,6 +32,7 @@ function threw(f) { try { f() } catch (e) { return e.constructor.name } return '
 // own code -- had been refused whole. Each answer is Node's (v26.10.0)
 // and the interpreter's, and the functions' loops run natively.
 func TestJITParameterPrologues(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

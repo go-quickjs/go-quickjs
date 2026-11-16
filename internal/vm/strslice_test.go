@@ -11,6 +11,7 @@ import "testing"
 // literal or a slice -- as String.Equals compares two flat ones in place.
 // Each answer is Node's, three rounds alike.
 func TestOneCharSlices(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		const s = 'a"\\\né€😀z'

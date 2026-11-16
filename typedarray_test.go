@@ -8,6 +8,7 @@ import (
 )
 
 func TestTypedArrayMethods(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// %TypedArray% is the prototype of all nine concrete constructors, and
 		// is where the shared methods and statics live.
@@ -71,6 +72,7 @@ func TestTypedArrayMethods(t *testing.T) {
 }
 
 func TestBigIntBuiltins(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`typeof BigInt`, "function"},
 		{`String(BigInt(1))`, "1"},
@@ -126,6 +128,7 @@ func TestBigIntBuiltins(t *testing.T) {
 // standing in for it would be observable, which is what several hundred
 // conformance tests check.
 func TestTypedArrayCallbackReceivesView(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var seen; new Uint8Array([7]).forEach(function (v, i, a) { seen = a; });
 		  String(seen instanceof Uint8Array)`, "true"},
@@ -167,6 +170,7 @@ func TestTypedArrayCallbackReceivesView(t *testing.T) {
 // TestTypedArrayConstructorSources pins the three shapes the constructor
 // accepts, in the order Array.from uses.
 func TestTypedArrayConstructorSources(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`new Uint8Array([1, 2]).join(",")`, "1,2"},
 		{`new Uint8Array(new Set([1, 2])).join(",")`, "1,2"},
@@ -200,6 +204,7 @@ func TestTypedArrayConstructorSources(t *testing.T) {
 // length was arrived at. Allocating first and failing afterwards means there is
 // nothing left to fail with.
 func TestTypedArrayLengthLimits(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`try { new Uint8Array(4294967296) } catch (e) { e.constructor.name }`, "RangeError"},
 		{`try { new Uint8Array(-1) } catch (e) { e.constructor.name }`, "RangeError"},
@@ -237,6 +242,7 @@ func TestTypedArrayLengthLimits(t *testing.T) {
 // is the count of what it has produced -- which means the refusal arrives only
 // after a great many elements, and has to arrive rather than not.
 func TestTypedArrayFromEndlessIterable(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("the refusal only arrives after the element limit is reached")
 	}
@@ -259,6 +265,7 @@ func TestTypedArrayFromEndlessIterable(t *testing.T) {
 // checked afterwards as well: a species may return any object at all, and
 // writing elements into one that is not a view would be writing into nothing.
 func TestTypedArraySpecies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class A extends Uint8Array {} String(new A([1, 2]).slice(0) instanceof A)`, "true"},
 		{`class A extends Uint8Array {} String(new A([1, 2]).map(x => x) instanceof A)`, "true"},
@@ -322,6 +329,7 @@ func TestTypedArraySpecies(t *testing.T) {
 // deleted, cannot be turned into an accessor or made read-only, and a write
 // past the end is dropped rather than added.
 func TestTypedArrayIndicesAreNotProperties(t *testing.T) {
+	t.Parallel()
 	const a = `var a = new Uint8Array([1, 2]); `
 	cases := []struct{ src, want string }{
 		// Defining an index writes the element rather than adding a property.
@@ -400,6 +408,7 @@ func TestTypedArrayIndicesAreNotProperties(t *testing.T) {
 // a method is running is enough -- so every read and write is measured against
 // what is there now rather than against what was there when the view was made.
 func TestTypedArrayDetachDuringUse(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A view over a buffer that has gone is empty, not broken.
 		{`var a = new Uint8Array(8); a.buffer.transfer();
@@ -465,6 +474,7 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 // one: redefining that property as an accessor left no default at all, and
 // constructing nothing took the host down.
 func TestTypedArraySpeciesDefaultIsIntrinsic(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Uint8Array([1, 2, 3]);
 		  var calls = 0;
@@ -499,6 +509,7 @@ func TestTypedArraySpeciesDefaultIsIntrinsic(t *testing.T) {
 // once, which a valueOf that counts its calls can see -- and converts it the
 // way the element type asks: a BigInt for the 64-bit integer kinds.
 func TestTypedArrayValueConversion(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 1, t = new Float64Array(2);
 		  t.fill({valueOf: function () { return n++ }});
@@ -548,6 +559,7 @@ func TestTypedArrayValueConversion(t *testing.T) {
 // view as it goes rather than copying it -- a view over a buffer that does not
 // see writes would be beside the point.
 func TestTypedArrayIterationIsLive(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Int8Array([3, 2, 4, 1])
 		  var out = []
@@ -583,6 +595,7 @@ func TestTypedArrayIterationIsLive(t *testing.T) {
 // TestTypedArraySetOrder covers %TypedArray%.prototype.set, which reads one
 // element of the source and writes it before reading the next.
 func TestTypedArraySetOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Int8Array(5)
 		  var log = []
@@ -631,6 +644,7 @@ func TestTypedArraySetOrder(t *testing.T) {
 // nearest even -- including in the subnormal range, where going through a
 // float32 first would lose the bits the rounding depends on.
 func TestFloat16Rounding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A hair above half the smallest subnormal rounds up to it; exactly
 		// half rounds to even, which is zero.
@@ -661,6 +675,7 @@ func TestFloat16Rounding(t *testing.T) {
 // whether or not it has an element there, so one it has no element for is
 // dropped rather than shadowed.
 func TestTypedArrayIndexThroughReceiver(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var env = Object.create(new Int32Array(10))
 		  env[99] = 1
@@ -688,6 +703,7 @@ func TestTypedArrayIndexThroughReceiver(t *testing.T) {
 // TestArrayBufferSliceSpecies covers ArrayBuffer.prototype.slice, which asks
 // the object what constructor to build the copy with and checks what it gets.
 func TestArrayBufferSliceSpecies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var b = new ArrayBuffer(8)
 		  new Uint8Array(b).set([1, 2, 3])
@@ -727,6 +743,7 @@ func TestArrayBufferSliceSpecies(t *testing.T) {
 // decoder gets wrong: which alphabet, and what to do with a trailing chunk that
 // is not a whole group.
 func TestBase64Decoding(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Array.from(Uint8Array.fromBase64("ZXhhZg==")).join()`, "101,120,97,102"},
 		{`Array.from(Uint8Array.fromBase64("ZXhhZg")).join()`, "101,120,97,102"},
@@ -792,6 +809,7 @@ func TestBase64Decoding(t *testing.T) {
 // TestTypedArraySliceSpecies covers what slice does once the species has built
 // the result: it looks at the source again, because building it ran user code.
 func TestTypedArraySliceSpecies(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Nothing to copy, so the source is never looked at again.
 		{`var sample, other, counter = 0
@@ -838,6 +856,7 @@ func TestTypedArraySliceSpecies(t *testing.T) {
 // differently because one asks whether an index is there and the other reads
 // it.
 func TestTypedArraySearchesAfterCoercion(t *testing.T) {
+	t.Parallel()
 	const setup = `var ta = new Int8Array(1)
 		var detaching = {valueOf: function () { ta.buffer.transfer(); return 0 }}
 		`
@@ -871,6 +890,7 @@ func TestTypedArraySearchesAfterCoercion(t *testing.T) {
 // copyWithin works out what it would copy before looking at the buffer, and
 // the iterator a typed array offers is its own values method.
 func TestTypedArrayCopyWithinAndIterator(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"copies", `String(new Int8Array([1,2,3,4,5]).copyWithin(0, 3))`, "4,5,3,4,5"},
 		{"bounded", `String(new Int8Array([1,2,3,4,5]).copyWithin(0, 3, 4))`, "4,2,3,4,5"},
@@ -891,6 +911,7 @@ func TestTypedArrayCopyWithinAndIterator(t *testing.T) {
 // `sort` refuses a comparator it cannot call, and an element cannot be
 // deleted.
 func TestTypedArrayWithSortAndDelete(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"value first", `var a = new Int8Array([0,1,2])
 		  var v = {valueOf: function () { a[0] = 3; return 4 }}
@@ -929,6 +950,7 @@ func TestTypedArrayWithSortAndDelete(t *testing.T) {
 // to that result is visible: a mapping that detaches the buffer leaves the
 // writes with nowhere to go rather than failing.
 func TestTypedArrayFromMapsIntoTheResult(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"maps", `String(Int8Array.from([1, 2, 3], function (v) { return v * 2 }))`, "2,4,6"},
 		{"index and receiver", `var seen = []
@@ -955,6 +977,7 @@ func TestTypedArrayFromMapsIntoTheResult(t *testing.T) {
 // that has gone is empty rather than broken, and what refuses is building a new
 // view over it.
 func TestSubarrayConvertsBeforeChecking(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"conversions still run", `var begin = false, end = false
 		  var o1 = {valueOf: function () { begin = true; return 0 }}
@@ -977,6 +1000,7 @@ func TestSubarrayConvertsBeforeChecking(t *testing.T) {
 // describe one is refused rather than applied. The refusal is reported like any
 // other: Object.defineProperty throws and Reflect.defineProperty answers false.
 func TestTypedArrayDefineRefusals(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Int8Array(2);
 		  [Reflect.defineProperty(a, "0", {value: 1, writable: false}),
@@ -1019,6 +1043,7 @@ func TestTypedArrayDefineRefusals(t *testing.T) {
 // separator is what joins, the species is consulted where the specification
 // consults it, and the sort tells the two zeros apart.
 func TestTypedArrayMethodDetails(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// join reads each element as it comes, and an element that is not
 		// there contributes nothing rather than the word "undefined".
@@ -1076,6 +1101,7 @@ func TestTypedArrayMethodDetails(t *testing.T) {
 // A typed array made over a buffer needs whole elements, and one made from an
 // object needs an iterator it can call.
 func TestTypedArrayConstructorChecks(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var b = new ArrayBuffer(1)
 		  try { new Int32Array(b) } catch (e) { e.constructor.name }`, "RangeError"},
@@ -1125,6 +1151,7 @@ func TestTypedArrayConstructorChecks(t *testing.T) {
 // ordinary read -- while the methods that are specified to use the view's own
 // length go on using it.
 func TestTypedArrayLengthIsNotAnOwnProperty(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var a = new Int8Array(1)
 		  Object.defineProperty(a, "length", {value: 4})
@@ -1166,6 +1193,7 @@ func TestTypedArrayLengthIsNotAnOwnProperty(t *testing.T) {
 // replacement the engine's working array, and a hole it put there recursed
 // until the process died (KI-05).
 func TestTypedArraySortOwnsItsValues(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		Array.prototype.sort = function () { delete this[0]; return this };
 		Array.prototype.reverse = () => "x";
@@ -1186,6 +1214,7 @@ func TestTypedArraySortOwnsItsValues(t *testing.T) {
 // A number key goes straight to a typed array's buffer, in a loop as much as
 // once, and means what its string would.
 func TestTypedArrayNumberKeys(t *testing.T) {
+	t.Parallel()
 	const a = `var a = new Int32Array([1, 2]); `
 	cases := []struct{ src, want string }{
 		{a + `for (var i = 0; i < 4; i++) a[i] = i * 10; [a[0], a[1], a[2], a[3]].join(",")`,

@@ -8,6 +8,7 @@ import (
 )
 
 func TestIteratorHelpers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`[1,2,3].values().map(x => x * 2).toArray().join(",")`, "2,4,6"},
 		{`[1,2,3,4].values().filter(x => x % 2 === 0).toArray().join(",")`, "2,4"},
@@ -76,6 +77,7 @@ func TestIteratorHelpers(t *testing.T) {
 }
 
 func TestIteratorHelperErrors(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`new Iterator()`, "TypeError"},
 		{`[1].values().take(-1)`, "RangeError"},
@@ -107,6 +109,7 @@ func TestIteratorHelperErrors(t *testing.T) {
 // so, which is what lets a generator run its finally blocks and release
 // whatever it was holding.
 func TestIteratorClosing(t *testing.T) {
+	t.Parallel()
 	const gen = `var closed = false;
 	  function* g() { try { yield 1; yield 2; } finally { closed = true; } }
 	  `
@@ -142,6 +145,7 @@ func TestIteratorClosing(t *testing.T) {
 // return statement ran at the suspension point, rather than simply marking the
 // generator finished.
 func TestGeneratorReturnRunsFinally(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* g() { try { yield 1; } finally {} }
 		  var it = g(); it.next(); JSON.stringify(it.return(9))`, `{"value":9,"done":true}`},
@@ -185,6 +189,7 @@ func TestGeneratorReturnRunsFinally(t *testing.T) {
 // iterator protocol rather than by index, which is the difference between
 // destructuring a Set working and silently producing undefined.
 func TestDestructuringUsesIterator(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var [a] = new Set([1,2]); String(a)`, "1"},
 		{`var [a, b] = "xy"; a + b`, "xy"},
@@ -218,6 +223,7 @@ func TestDestructuringUsesIterator(t *testing.T) {
 // stack, an Array needs array storage -- so a derived class that ignored the
 // result got an inert plain object.
 func TestSubclassingBuiltins(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class E extends Error { constructor(m) { super(m); } }
 		  var e = new E("boom");
@@ -273,6 +279,7 @@ func TestSubclassingBuiltins(t *testing.T) {
 // best-effort: when nothing else is in flight, a failure to close is the
 // result rather than something to swallow.
 func TestIteratorHelperClosing(t *testing.T) {
+	t.Parallel()
 	const thrower = `
 	  var closed = false;
 	  function source() {
@@ -328,6 +335,7 @@ func TestIteratorHelperClosing(t *testing.T) {
 
 // TestIteratorHelperLimits pins the range a take or drop count must be in.
 func TestIteratorHelperLimits(t *testing.T) {
+	t.Parallel()
 	for _, src := range []string{
 		`[1].values().drop()`,
 		`[1].values().drop(undefined)`,
@@ -376,6 +384,7 @@ func TestIteratorHelperLimits(t *testing.T) {
 // the yield can catch it, and an uncaught one finishes the generator instead of
 // leaving it suspended.
 func TestAsyncGeneratorYieldRejection(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = [];
 		  async function* gen() { yield Promise.reject(new Error("e")); yield "unreachable"; }
@@ -420,6 +429,7 @@ func TestAsyncGeneratorYieldRejection(t *testing.T) {
 // rejects ends the iteration -- so the iterator is closed there, before the
 // rejection is delivered, rather than when the loop finally unwinds.
 func TestForAwaitOverSyncIterator(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = [];
 		  function* g() { try { yield Promise.reject("r"); } finally { log.push("finally"); } }
@@ -468,6 +478,7 @@ func TestForAwaitOverSyncIterator(t *testing.T) {
 // so and reads it itself, and its cursor, never having seen it, closed the
 // iterator as if the loop had been left early.
 func TestForAwaitExhaustedIsNotClosed(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = [];
 		  var it = { [Symbol.asyncIterator]() { var i = 0; return {
@@ -509,6 +520,7 @@ func TestForAwaitExhaustedIsNotClosed(t *testing.T) {
 // or a labelled jump. Every iterator between the jump and its target is closed,
 // innermost first, and what the close reports is the result.
 func TestLoopExitClosesIterators(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A labelled jump out of a nested loop closes both iterators.
 		{`var log = []
@@ -575,6 +587,7 @@ func TestLoopExitClosesIterators(t *testing.T) {
 // is told, and what its return method reports is the result: unlike a throw, a
 // return carries nothing that outranks it.
 func TestReturnClosesThroughDestructuring(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var closed = 0
 		  var it = {next() { return {done: false, value: undefined} },
@@ -640,6 +653,7 @@ func TestReturnClosesThroughDestructuring(t *testing.T) {
 // untouched; a synchronous one's result is a plain object whose value is what
 // gets awaited. `yield*` is where the difference shows.
 func TestAsyncDelegationAwaitsTheResultNotTheValue(t *testing.T) {
+	t.Parallel()
 	// A promise an async iterator puts in its result is yielded as itself:
 	// `yield*` passes on what the delegate produced without awaiting it again.
 	checkAsync(t, `var r = "";
@@ -695,6 +709,7 @@ func TestAsyncDelegationAwaitsTheResultNotTheValue(t *testing.T) {
 // value from it throws, the iteration is over and the iterator is not asked to
 // return. It was not the loop that gave up.
 func TestIteratorResultErrorsDoNotClose(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var returnCount = 0, iterationCount = 0
 		  var iterable = {}
@@ -750,6 +765,7 @@ func TestIteratorResultErrorsDoNotClose(t *testing.T) {
 // object; anything else is a TypeError, which reaches the caller as a rejection
 // rather than a throw.
 func TestAsyncDelegationRequiresResultObjects(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var obj = {}
 		obj[Symbol.iterator] = function () {
@@ -803,6 +819,7 @@ func TestAsyncDelegationRequiresResultObjects(t *testing.T) {
 // result that is not an object, or a result whose done throws. Only a throw
 // the delegate has no method for closes it.
 func TestDelegationFailureDoesNotClose(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var out = [];
 		function probe(inner, act) {

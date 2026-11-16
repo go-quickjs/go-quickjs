@@ -20,6 +20,7 @@ import (
 // fields (arrayExt). A field added to any of them that moves a
 // closure into the next class fails here.
 func TestClosureSizes(t *testing.T) {
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("the sizes are a 64-bit platform's")
 	}
@@ -47,6 +48,7 @@ func TestClosureSizes(t *testing.T) {
 // An arrow made inside a method shares the method's class part, which
 // says its super, rather than making one at each (funcData's classPart).
 func TestArrowSharesClassPart(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `class A { m() { return () => super.toString === Object.prototype.toString } }
@@ -70,6 +72,7 @@ func TestArrowSharesClassPart(t *testing.T) {
 // were 312, 344 and 408 bytes, the 320-, 352- and 416-byte classes,
 // before the with scopes went into genRare.
 func TestGeneratorSizes(t *testing.T) {
+	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("the sizes are a 64-bit platform's")
 	}

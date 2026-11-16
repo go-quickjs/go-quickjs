@@ -2,7 +2,11 @@
 
 package vm
 
-import "reflect"
+import (
+	"reflect"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // NativeLayout is what the native handlers' generator
 // (internal/vm/internal/nativegen) reads of the package's private layout,
@@ -45,6 +49,17 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		reflect.TypeFor[typedArrayData](),
 		reflect.TypeFor[iterObject](),
 		reflect.TypeFor[iterState](),
+		reflect.TypeFor[forInObject](),
+		reflect.TypeFor[forInState](),
+		reflect.TypeFor[keyAtom](),
+		reflect.TypeFor[Symbol](),
+		reflect.TypeFor[propKey](),
+		reflect.TypeFor[generatorObject](),
+		reflect.TypeFor[generator](),
+		reflect.TypeFor[Realm](),
+		reflect.TypeFor[upvalue](),
+		reflect.TypeFor[regSwitchTable](),
+		reflect.TypeFor[bytecode.SwitchCase](),
 	} {
 		sizes[t.Name()] = t.Size()
 		depth := map[string]int{}
@@ -96,6 +111,12 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"ClassArray":      uint64(ClassArray),
 		"ClassTypedArray": uint64(ClassTypedArray),
 		"ClassCursor":     uint64(ClassCursor),
+		"ClassGenerator":  uint64(ClassGenerator),
+
+		"genSuspendedYield": uint64(genSuspendedYield),
+		"genExecuting":      uint64(genExecuting),
+		"genCompleted":      uint64(genCompleted),
+		"regFrameGenStep":   uint64(regFrameGenStep),
 
 		"objExtensible":          uint64(objExtensible),
 		"objHasExt":              uint64(objHasExt),
@@ -120,20 +141,26 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"elemBigUint64":    uint64(elemBigUint64),
 
 		"elemStrCharCodeAt": uint64(elemStrCharCodeAt),
+		"elemPush":          uint64(elemPush),
 
 		"regCallEnter":   uint64(regCallEnter),
 		"regCallThis":    uint64(regCallThis),
 		"regCallObjThis": uint64(regCallObjThis),
+		"regCallNative":  uint64(regCallNative),
 		"regCallOut":     uint64(regCallOut),
 		"regCallLeaf":    uint64(regCallLeaf),
 		"regLeafArg":     uint64(regLeafArg),
+		"regLeafCode":    uint64(regLeafCode),
 		"regFrameCall":   uint64(regFrameCall),
 		"regFrameEnter":  uint64(regFrameEnter),
 
 		"tailCallDepth":   uint64(tailCallDepth),
 		"linearScanLimit": uint64(linearScanLimit),
+		"atomIndexTag":    uint64(atomIndexTag),
 		"hasCacheBits":    uint64(hasCacheBits),
 		"hasCacheMul":     uint64(hasCacheMul),
+		"keySlotMul":      keySlotMul,
+		"intStringsLen":   uint64(len(Runtime{}.intStrings)),
 
 		"sE":     sE,
 		"sWin":   sWin,

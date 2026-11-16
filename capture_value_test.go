@@ -13,6 +13,7 @@ import (
 // function or in a closure of it, keeps the closure sharing the binding
 // rather than taking its value (bytecode.UpvalueDesc's ByValue).
 func TestCaptureByValueEval(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `'use strict'; function f(x) { const g = () => x; eval("x = 6"); return g() } f(1)`, "6")
 	checkEval(t, `'use strict'; function f(x) { const g = () => x; (() => eval("x = 7"))(); return g() } f(1)`, "7")
 	checkEval(t, `'use strict'; function f(x) { const g = () => x; (function () { eval("x = 8") })(); return g() } f(1)`, "8")
@@ -27,6 +28,7 @@ func TestCaptureByValueEval(t *testing.T) {
 // hoisted function's closure, made by an importer before the const is
 // initialized, reads after. Each as Node gives it, with the JIT too.
 func TestCaptureByValueTopLevel(t *testing.T) {
+	t.Parallel()
 	modules := map[string]string{
 		"a.js": `import { h, early } from './b.js'
 			export function mk() { return () => K }

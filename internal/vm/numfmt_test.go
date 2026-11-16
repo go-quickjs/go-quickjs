@@ -3,6 +3,7 @@ package vm
 import (
 	"math"
 	"math/rand"
+	"strconv"
 	"testing"
 )
 
@@ -10,6 +11,7 @@ import (
 // even, and only a tie from all of a number's digits, which breaks it upward.
 // Both must give what all the digits do, ties included.
 func TestNumberFormattingMatchesExactDigits(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(1))
 	var xs []float64
 	for i := 0; i < 3000; i++ {
@@ -36,22 +38,30 @@ func TestNumberFormattingMatchesExactDigits(t *testing.T) {
 	xs = append(xs, 0.5, 1.5, 2.5, 1.25, 1.005, 1e-7, 5e-324, math.MaxFloat64,
 		1<<63, 1<<63-1024, 1e21-65536, 0.000001, 123.456)
 
-	for _, x := range xs {
-		for n := 1; n <= 101; n++ {
-			got, ge := significantDigits(x, n)
-			want, we := significantDigitsExact(x, n)
-			if got != want || ge != we {
-				t.Fatalf("significantDigits(%v, %d) = %s e%d, want %s e%d", x, n, got, ge, want, we)
+	// The values are checked in parallel, a slice of them in each subtest.
+	const chunk = 256
+	for at := 0; at < len(xs); at += chunk {
+		part := xs[at:min(at+chunk, len(xs))]
+		t.Run(strconv.Itoa(at), func(t *testing.T) {
+			t.Parallel()
+			for _, x := range part {
+				for n := 1; n <= 101; n++ {
+					got, ge := significantDigits(x, n)
+					want, we := significantDigitsExact(x, n)
+					if got != want || ge != we {
+						t.Fatalf("significantDigits(%v, %d) = %s e%d, want %s e%d", x, n, got, ge, want, we)
+					}
+				}
+				if x >= 1e21 {
+					continue
+				}
+				for d := 0; d <= 100; d++ {
+					if got, want := formatFixed(x, d), formatFixedExact(x, d); got != want {
+						t.Fatalf("formatFixed(%v, %d) = %s, want %s", x, d, got, want)
+					}
+				}
 			}
-		}
-		if x >= 1e21 {
-			continue
-		}
-		for d := 0; d <= 100; d++ {
-			if got, want := formatFixed(x, d), formatFixedExact(x, d); got != want {
-				t.Fatalf("formatFixed(%v, %d) = %s, want %s", x, d, got, want)
-			}
-		}
+		})
 	}
 }
 
@@ -59,6 +69,7 @@ func TestNumberFormattingMatchesExactDigits(t *testing.T) {
 // does at the edges: ties taken upward, values that are not quite the decimal
 // they print as, integers past 2**64, and digits past what a double holds.
 func TestFormatFixedIntegerPath(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		x    float64
 		d    int
@@ -96,6 +107,7 @@ func TestFormatFixedIntegerPath(t *testing.T) {
 // decade (9.995 to one digit, 0.9999999999999999), and values either side of
 // 1 that the scaling reaches by division and by multiplication.
 func TestSignificantIntegerPath(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		x         float64
 		d         int

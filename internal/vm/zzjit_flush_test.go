@@ -214,6 +214,7 @@ func TestJITDroppedCallerLeavesCallees(t *testing.T) {
 // run has ended: their closures and receivers had kept a benchmark's graph
 // alive after it ended, through the closure of the callee that called Go.
 func TestJITLevelsClearedAtRunEnd(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

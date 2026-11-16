@@ -32,6 +32,7 @@ func checkEval(t *testing.T, src, want string) {
 }
 
 func TestArithmetic(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"1 + 2", "3"},
 		{"10 - 3", "7"},
@@ -57,6 +58,7 @@ func TestArithmetic(t *testing.T) {
 // remainder everywhere else: a zero keeps the dividend's sign, and a divisor
 // of zero, a fraction or a number past int32 is no integer case.
 func TestModuloOfRuntimeValues(t *testing.T) {
+	t.Parallel()
 	const src = `function m(a, b) { var r = a % b; return r === 0 && 1 / r < 0 ? "-0" : String(r); }
 	  var pairs = [[7, 3], [7, -3], [-7, 3], [-7, -3], [6, 3], [-6, 3], [0, 5], [-0, 5], [5, 0],
 	    [-5, 0], [2147483647, 2], [-2147483648, -1], [-2147483648, 3], [2147483648, 3],
@@ -66,6 +68,7 @@ func TestModuloOfRuntimeValues(t *testing.T) {
 }
 
 func TestStringConcatenationAndCoercion(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`"a" + "b"`, "ab"},
 		{`"n: " + 1`, "n: 1"},
@@ -84,6 +87,7 @@ func TestStringConcatenationAndCoercion(t *testing.T) {
 }
 
 func TestComparison(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"1 < 2", "true"},
 		{"2 <= 2", "true"},
@@ -106,6 +110,7 @@ func TestComparison(t *testing.T) {
 }
 
 func TestLogicalOperators(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"true && false", "false"},
 		{"1 && 2", "2"}, // yields the operand, not a boolean
@@ -121,6 +126,7 @@ func TestLogicalOperators(t *testing.T) {
 }
 
 func TestVariablesAndScoping(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "var a = 1; a", "1")
 	checkEval(t, "let a = 1; a", "1")
 	checkEval(t, "const a = 1; a", "1")
@@ -131,6 +137,7 @@ func TestVariablesAndScoping(t *testing.T) {
 }
 
 func TestTemporalDeadZone(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// Reading a let binding before its declaration is a ReferenceError, not
@@ -145,6 +152,7 @@ func TestTemporalDeadZone(t *testing.T) {
 }
 
 func TestConstCannotBeReassigned(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if _, err := rt.Eval(`const a = 1; a = 2;`); err == nil {
@@ -153,6 +161,7 @@ func TestConstCannotBeReassigned(t *testing.T) {
 }
 
 func TestControlFlow(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"if (true) 1; else 2;", "1"},
 		{"if (false) 1; else 2;", "2"},
@@ -170,6 +179,7 @@ func TestControlFlow(t *testing.T) {
 }
 
 func TestLabeledBreakAndContinue(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		let count = 0;
 		outer: for (let i = 0; i < 3; i++) {
@@ -212,6 +222,7 @@ func TestLabeledBreakAndContinue(t *testing.T) {
 // a continue or a break naming any of them targets, as in Node; a block's
 // labels are no continue's.
 func TestLoopLabelSets(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		var n = 0;
 		a: b: for (var i = 0; i < 3; i++) { for (;;) { n++; continue a; } }
@@ -224,6 +235,7 @@ func TestLoopLabelSets(t *testing.T) {
 }
 
 func TestFunctions(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"function f(n) { return n * 2; } f(21)", "42"},
 		{"const f = function(n) { return n + 1; }; f(1)", "2"},
@@ -246,6 +258,7 @@ func TestFunctions(t *testing.T) {
 }
 
 func TestRecursion(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		function fib(n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
 		fib(20)`, "6765")
@@ -256,6 +269,7 @@ func TestRecursion(t *testing.T) {
 }
 
 func TestNamedFunctionExpressionCanCallItself(t *testing.T) {
+	t.Parallel()
 	// The name of a function expression is in scope inside its own body, even
 	// though it is not visible outside.
 	checkEval(t, `
@@ -265,6 +279,7 @@ func TestNamedFunctionExpressionCanCallItself(t *testing.T) {
 }
 
 func TestClosures(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		function counter() {
 			let n = 0;
@@ -292,6 +307,7 @@ func TestClosures(t *testing.T) {
 }
 
 func TestClosureCapturesPerIteration(t *testing.T) {
+	t.Parallel()
 	// A let binding in a for head is fresh each iteration, so the closures
 	// capture distinct values. This is the classic difference from var.
 	checkEval(t, `
@@ -301,6 +317,7 @@ func TestClosureCapturesPerIteration(t *testing.T) {
 }
 
 func TestObjects(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"const o = {a: 1}; o.a", "1"},
 		{"const o = {a: 1}; o.b = 2; o.b", "2"},
@@ -323,6 +340,7 @@ func TestObjects(t *testing.T) {
 // A computed key is a complete expression, so `in` is the operator there even
 // in a for head, where `in` otherwise separates the binding from the subject.
 func TestComputedKeyAllowsIn(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`const o = {["a" in {a: 1}]: 7}; o.true`, "7"},
 		{`class C { ["x" in {x: 0}]() { return 5 } } new C().true()`, "5"},
@@ -339,6 +357,7 @@ func TestComputedKeyAllowsIn(t *testing.T) {
 }
 
 func TestArrays(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"[1,2,3].length", "3"},
 		{"[1,2,3][1]", "2"},
@@ -372,11 +391,13 @@ func TestArrays(t *testing.T) {
 }
 
 func TestForOfIteration(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "let t = 0; for (const x of [1,2,3]) t += x; t", "6")
 	checkEval(t, "let s = ''; for (const c of 'abc') s += c + '.'; s", "a.b.c.")
 }
 
 func TestForInIteration(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "let s = ''; for (const k in {a:1, b:2}) s += k; s", "ab")
 }
 
@@ -384,6 +405,7 @@ func TestForInIteration(t *testing.T) {
 // what it skips must be what could add nothing: these pin the keys through
 // chains where something up them does, or might.
 func TestForInPrototypeChains(t *testing.T) {
+	t.Parallel()
 	const keys = `function keys(o) { var s = []; for (var k in o) s.push(typeof k + ":" + k); return s.join(","); } `
 	cases := []struct{ src, want string }{
 		{keys + `keys([5, 6])`, "string:0,string:1"},
@@ -418,6 +440,7 @@ func TestForInPrototypeChains(t *testing.T) {
 }
 
 func TestDestructuring(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"const [a, b] = [1, 2]; a + ',' + b", "1,2"},
 		{"const {x, y} = {x: 1, y: 2}; x + ',' + y", "1,2"},
@@ -434,6 +457,7 @@ func TestDestructuring(t *testing.T) {
 }
 
 func TestTemplateLiterals(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "`hello`", "hello")
 	checkEval(t, "const n = 'world'; `hello ${n}`", "hello world")
 	checkEval(t, "`${1 + 2}`", "3")
@@ -441,6 +465,7 @@ func TestTemplateLiterals(t *testing.T) {
 }
 
 func TestExceptions(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "try { throw 1; } catch (e) { e }", "1")
 	checkEval(t, "try { throw new Error('boom'); } catch (e) { e.message }", "boom")
 	checkEval(t, "try { null.x; } catch (e) { 'caught' }", "caught")
@@ -450,6 +475,7 @@ func TestExceptions(t *testing.T) {
 }
 
 func TestUncaughtErrorReachesGo(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -475,6 +501,7 @@ func TestUncaughtErrorReachesGo(t *testing.T) {
 }
 
 func TestThrownValueKeepsItsIdentity(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// A thrown plain object must arrive intact rather than being stringified.
@@ -493,6 +520,7 @@ func TestThrownValueKeepsItsIdentity(t *testing.T) {
 }
 
 func TestMath(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"Math.abs(-5)", "5"},
 		{"Math.floor(1.7)", "1"},
@@ -514,6 +542,7 @@ func TestMath(t *testing.T) {
 }
 
 func TestJSON(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`JSON.stringify(1)`, "1"},
 		{`JSON.stringify("a")`, `"a"`},
@@ -534,6 +563,7 @@ func TestJSON(t *testing.T) {
 }
 
 func TestJSONRejectsCycles(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	_, err := rt.Eval(`const a = {}; a.self = a; JSON.stringify(a)`)
@@ -546,6 +576,7 @@ func TestJSONRejectsCycles(t *testing.T) {
 }
 
 func TestTypeOf(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"typeof 1", "number"},
 		{"typeof 'a'", "string"},
@@ -566,6 +597,7 @@ func TestTypeOf(t *testing.T) {
 }
 
 func TestBigInt(t *testing.T) {
+	t.Parallel()
 	checkEval(t, "1n + 2n", "3")
 	checkEval(t, "2n ** 64n", "18446744073709551616")
 	checkEval(t, "10n / 3n", "3") // truncates toward zero
@@ -576,6 +608,7 @@ func TestBigInt(t *testing.T) {
 }
 
 func TestOptionalChaining(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{"const o = {a: {b: 1}}; o?.a?.b", "1"},
 		{"const o = null; String(o?.a)", "undefined"},
@@ -595,6 +628,7 @@ func TestOptionalChaining(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSetGoFunction(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -611,6 +645,7 @@ func TestSetGoFunction(t *testing.T) {
 }
 
 func TestGoFunctionWithStrings(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Set("greet", func(name string) string { return "hello " + name })
@@ -620,6 +655,7 @@ func TestGoFunctionWithStrings(t *testing.T) {
 }
 
 func TestGoFunctionReturningError(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Set("fail", func() (int, error) { return 0, errors.New("go failure") })
@@ -632,6 +668,7 @@ func TestGoFunctionReturningError(t *testing.T) {
 }
 
 func TestGoFunctionReceivingSliceAndMap(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Set("sum", func(ns []int) int {
@@ -652,6 +689,7 @@ func TestGoFunctionReceivingSliceAndMap(t *testing.T) {
 }
 
 func TestSetGoValues(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -677,6 +715,7 @@ func TestSetGoValues(t *testing.T) {
 }
 
 func TestSetStruct(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -697,6 +736,7 @@ func TestSetStruct(t *testing.T) {
 }
 
 func TestDecodeIntoStruct(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -721,6 +761,7 @@ func TestDecodeIntoStruct(t *testing.T) {
 }
 
 func TestDecodeIntoNativeTypes(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -762,6 +803,7 @@ func TestDecodeIntoNativeTypes(t *testing.T) {
 }
 
 func TestDecodeIntoAny(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -798,6 +840,7 @@ type cyclicNode struct {
 // element, decoded into any or into a struct, overflowed the Go stack,
 // which ends the process. A value nested a few hundred deep converts.
 func TestConvertingValuesThatReferToThemselves(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	refuses := func(what string, err error) {
@@ -859,6 +902,7 @@ func TestConvertingValuesThatReferToThemselves(t *testing.T) {
 }
 
 func TestCallJavaScriptFunctionFromGo(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -882,6 +926,7 @@ func TestCallJavaScriptFunctionFromGo(t *testing.T) {
 }
 
 func TestRoundTripThroughGoAndBack(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -979,6 +1024,7 @@ func TestContextCancellationInterruptsRunawayCalls(t *testing.T) {
 }
 
 func TestStackOverflowIsAnErrorNotACrash(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithMaxCallDepth(256))
 	defer rt.Close()
 
@@ -994,6 +1040,7 @@ func TestStackOverflowIsAnErrorNotACrash(t *testing.T) {
 }
 
 func TestStackOverflowIsCatchableFromScript(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithMaxCallDepth(256))
 	defer rt.Close()
 	got := evalString(t, rt, `
@@ -1005,6 +1052,7 @@ func TestStackOverflowIsCatchableFromScript(t *testing.T) {
 }
 
 func TestNoAmbientIO(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// A fresh runtime must expose nothing that reaches outside the engine. It
@@ -1027,6 +1075,7 @@ func TestNoAmbientIO(t *testing.T) {
 }
 
 func TestCodeGenerationCanBeDisabled(t *testing.T) {
+	t.Parallel()
 	// eval and Function are available by default, because a conformant engine
 	// has them and they grant nothing new. A host that audits source before
 	// running it can take them away.
@@ -1051,6 +1100,7 @@ func TestCodeGenerationCanBeDisabled(t *testing.T) {
 }
 
 func TestEvalRunsInGlobalScope(t *testing.T) {
+	t.Parallel()
 	// Only indirect-eval semantics are implemented: evaluated code sees the
 	// globals but not the calling function's locals.
 	rt := quickjs.New()
@@ -1065,6 +1115,7 @@ func TestEvalRunsInGlobalScope(t *testing.T) {
 }
 
 func TestRuntimesAreIsolated(t *testing.T) {
+	t.Parallel()
 	a := quickjs.New()
 	defer a.Close()
 	b := quickjs.New()
@@ -1079,6 +1130,7 @@ func TestRuntimesAreIsolated(t *testing.T) {
 }
 
 func TestClosedRuntimeReportsErrClosed(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	rt.Close()
 	if _, err := rt.Eval("1"); !errors.Is(err, quickjs.ErrClosed) {
@@ -1087,6 +1139,7 @@ func TestClosedRuntimeReportsErrClosed(t *testing.T) {
 }
 
 func TestSyntaxErrorIsReported(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	_, err := rt.Eval(`function ( {`)
@@ -1104,6 +1157,7 @@ func TestSyntaxErrorIsReported(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoneSurrogatesThroughTheEngine(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -1143,6 +1197,7 @@ func TestLoneSurrogatesThroughTheEngine(t *testing.T) {
 // unit there, as in any other past its end. The tree tier's and the register
 // interpreter's call of the built-in gave -1 from the second call on.
 func TestCharCodeAtBelowZeroOfEmpty(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	src := `function f(s, x) { return s.charCodeAt(x) }
@@ -1159,6 +1214,7 @@ func TestCharCodeAtBelowZeroOfEmpty(t *testing.T) {
 // the same string however they were built: the halves of a pair that meet at a
 // join are the character the pair spells, and one character has one spelling.
 func TestSurrogateHalvesMeetingAtAJoin(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -1212,6 +1268,7 @@ func TestSurrogateHalvesMeetingAtAJoin(t *testing.T) {
 }
 
 func TestLoneSurrogateSurvivesGoRoundTrip(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -1234,6 +1291,7 @@ func TestLoneSurrogateSurvivesGoRoundTrip(t *testing.T) {
 }
 
 func TestJSONEscapesLoneSurrogates(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// A lone surrogate has no valid UTF-8 form, so it must be escaped rather
@@ -1312,6 +1370,7 @@ func BenchmarkCallGoFunction(b *testing.B) {
 }
 
 func TestClasses(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`class A { constructor(x) { this.x = x; } } new A(5).x`, "5"},
 		{`class A { m() { return 3; } } new A().m()`, "3"},
@@ -1332,6 +1391,7 @@ func TestClasses(t *testing.T) {
 }
 
 func TestConstructorReturningObjectOverridesThis(t *testing.T) {
+	t.Parallel()
 	// A constructor that returns an object replaces the newly created one;
 	// returning anything else is ignored.
 	checkEval(t, `function F() { this.a = 1; return {a: 2}; } new F().a`, "2")
@@ -1339,6 +1399,7 @@ func TestConstructorReturningObjectOverridesThis(t *testing.T) {
 }
 
 func TestPrototypeChain(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		function Base() {}
 		Base.prototype.greet = function() { return "hi"; };
@@ -1348,6 +1409,7 @@ func TestPrototypeChain(t *testing.T) {
 }
 
 func TestRestParameters(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function f(...a) { return a.length; } f(1,2,3)`, "3"},
 		{`function f(a, ...rest) { return rest.join(","); } f(1,2,3)`, "2,3"},
@@ -1363,6 +1425,7 @@ func TestRestParameters(t *testing.T) {
 }
 
 func TestSpreadArguments(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`Math.max(...[1,5,2])`, "5"},
 		{`function f(a,b,c) { return a+b+c; } f(...[1,2,3])`, "6"},
@@ -1380,6 +1443,7 @@ func TestSpreadArguments(t *testing.T) {
 }
 
 func TestDestructuringRest(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`const [a, ...r] = [1,2,3]; r.join(",")`, "2,3"},
 		{`const [a, ...r] = [1]; r.length`, "0"},
@@ -1394,6 +1458,7 @@ func TestDestructuringRest(t *testing.T) {
 }
 
 func TestArgumentsObject(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`(function() { return arguments.length; })(1,2,3)`, "3"},
 		{`(function() { return arguments[1]; })(1,2,3)`, "2"},
@@ -1408,6 +1473,7 @@ func TestArgumentsObject(t *testing.T) {
 }
 
 func TestTryFinally(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`let x = 0; try { x = 1; } finally { x = 2; } x`, "2"},
 		// The try block's value is the statement's; a finally clause runs for
@@ -1429,6 +1495,7 @@ func TestTryFinally(t *testing.T) {
 }
 
 func TestTryFinallyRethrows(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// An exception must survive the finally clause.
@@ -1447,6 +1514,7 @@ func TestTryFinallyRethrows(t *testing.T) {
 }
 
 func TestHoistedFunctionSeesLaterLet(t *testing.T) {
+	t.Parallel()
 	// All bindings of a scope exist before any code runs, so a hoisted
 	// function that refers to a later let must resolve to that binding rather
 	// than to a global.
@@ -1457,6 +1525,7 @@ func TestHoistedFunctionSeesLaterLet(t *testing.T) {
 }
 
 func TestClassInheritance(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`class A { m() { return 1; } } class B extends A {} new B().m()`, "1"},
 		{`class A { constructor(x) { this.x = x; } }
@@ -1478,6 +1547,7 @@ func TestClassInheritance(t *testing.T) {
 }
 
 func TestSuper(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`class A { m() { return "a"; } }
 		  class B extends A { m() { return super.m() + "b"; } }
@@ -1499,6 +1569,7 @@ func TestSuper(t *testing.T) {
 }
 
 func TestClassFields(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`class A { x = 1; } new A().x`, "1"},
 		{`class A { x; } String(new A().x)`, "undefined"},
@@ -1520,6 +1591,7 @@ func TestClassFields(t *testing.T) {
 }
 
 func TestPrivateClassMembers(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`class A { #p = 5; get() { return this.#p; } } new A().get()`, "5"},
 		{`class A { #m() { return 4; } call() { return this.#m(); } } new A().call()`, "4"},
@@ -1536,6 +1608,7 @@ func TestPrivateClassMembers(t *testing.T) {
 }
 
 func TestPrivateMemberOnWrongObjectThrows(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	// Reaching for a private field on an object that does not have one is an
@@ -1552,6 +1625,7 @@ func TestPrivateMemberOnWrongObjectThrows(t *testing.T) {
 }
 
 func TestMap(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`new Map().set(1,2).get(1)`, "2"},
 		{`new Map([[1,"a"],[2,"b"]]).size`, "2"},
@@ -1577,6 +1651,7 @@ func TestMap(t *testing.T) {
 }
 
 func TestSet(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`new Set([1,2,2,3]).size`, "3"},
 		{`[...new Set([3,1,3,2])].join(",")`, "3,1,2"},
@@ -1592,6 +1667,7 @@ func TestSet(t *testing.T) {
 }
 
 func TestWeakCollections(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `const wm = new WeakMap(); const k = {}; wm.set(k, 5); wm.get(k)`, "5")
 	checkEval(t, `const ws = new WeakSet(); const k = {}; ws.add(k); ws.has(k)`, "true")
 	// A primitive key is rejected, which is what distinguishes the weak forms.
@@ -1599,6 +1675,7 @@ func TestWeakCollections(t *testing.T) {
 }
 
 func TestDate(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`new Date(0).getTime()`, "0"},
 		{`new Date(0).toISOString()`, "1970-01-01T00:00:00.000Z"},
@@ -1626,6 +1703,7 @@ func TestDate(t *testing.T) {
 }
 
 func TestDateUsesTheHostClock(t *testing.T) {
+	t.Parallel()
 	// A sandboxed runtime should not read the wall clock unless the host lets
 	// it, so the clock is injectable.
 	rt := quickjs.New()
@@ -1644,6 +1722,7 @@ func TestDateUsesTheHostClock(t *testing.T) {
 // loop the tree tier runs, and with the JIT, natively, in builds that have
 // it.
 func TestDateNowLeafUsesTheHostClock(t *testing.T) {
+	t.Parallel()
 	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithJIT()}} {
 		rt := quickjs.New(opts...)
 		rt.SetClock(func() time.Time { return time.Unix(1700000000, 0) })
@@ -1657,6 +1736,7 @@ func TestDateNowLeafUsesTheHostClock(t *testing.T) {
 }
 
 func TestRegExp(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`/ab/.test("xaby")`, "true"},
 		{`/ab/.test("xyz")`, "false"},
@@ -1685,6 +1765,7 @@ func TestRegExp(t *testing.T) {
 }
 
 func TestStringRegExpMethods(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`"2024-03-15".match(/(\d+)-(\d+)-(\d+)/).slice(1).join("/")`, "2024/03/15"},
 		{`"a1b2c3".match(/\d/g).join("")`, "123"},
@@ -1717,6 +1798,7 @@ func TestStringRegExpMethods(t *testing.T) {
 // own values, one changed or extended leaves the next alone, and a result
 // with indices is made as before. Node gives the same answers.
 func TestRegExpMatchResults(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], a = /b(c)?/.exec("abd"), b = /(?<x>ᶠ)(ᵒ)/.exec("zᶠᵒ"), c = /q/d.exec("pq"), d = /b/.exec("cb");
 		a.index = 9; delete a.input; a.extra = 1;
 		r.push(JSON.stringify(a), a.index, Object.keys(a).join(), b.index, b.input, b.groups.x, Object.keys(b).join(), JSON.stringify(c.indices), Object.keys(c).join());
@@ -1733,6 +1815,7 @@ func TestRegExpMatchResults(t *testing.T) {
 // number of the same value, which is another key. Node gives the same
 // answers.
 func TestMapBigIntKeys(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var m = new Map(), keys = [0n, 1n, -1n, 2n ** 53n, 2n ** 53n + 1n, -(2n ** 53n), -(2n ** 53n) - 1n, 2n ** 64n, -(2n ** 64n), 2n ** 200n];
 		keys.forEach((k, i) => m.set(k, i));
 		var r = [m.size, m.get(BigInt(1)), m.get(2n ** 53n), m.get(9007199254740993n), m.get(-9007199254740992n), m.get(-9007199254740993n), m.get(18446744073709551616n), m.get(2n ** 200n), m.has(1), m.has("1"), m.get(BigInt("0"))];
@@ -1749,6 +1832,7 @@ func TestMapBigIntKeys(t *testing.T) {
 // built-in through the receiver: a script that replaces that one changed
 // them, and their errors named it and showed a frame of it.
 func TestBuiltinsDoNotForward(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`try { Date.prototype.getYear() } catch (e) { e.constructor.name + ": " + e.message + " " + e.stack.includes("getFullYear") }`,
 			"TypeError: Date.prototype.getYear called on an incompatible receiver false"},
@@ -1775,6 +1859,7 @@ func TestBuiltinsDoNotForward(t *testing.T) {
 }
 
 func TestRegExpTestUsesExec(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`var re = /a/; re.exec = () => null; re.test("a")`, "false"},
 		{`var n = 0, re = /a/; re.exec = function (s) { n++; return RegExp.prototype.exec.call(this, s) }; re.test("xa") + " " + n`, "true 1"},
@@ -1794,6 +1879,7 @@ func TestRegExpTestUsesExec(t *testing.T) {
 // arguments on the runtime's argument stack. typeof's strings, which a
 // runtime makes once each, are here too. Each answer is Node's.
 func TestRegExpReplaceShortcuts(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`"a-b-c".replace(/-/g, "+")`, "a+b+c"},
 		{`"abc".replace(/x*/g, "_")`, "_a_b_c_"},
@@ -1820,6 +1906,7 @@ func TestRegExpReplaceShortcuts(t *testing.T) {
 // buffer and the rope threshold, ASCII or not, and a surrogate pair joined
 // across the boundary, compared with what join makes of the same parts.
 func TestShortConcatenations(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var bad = [];
 		for (var n = 1; n < 80; n++) for (var k = 0; k <= n; k += 7) {
 			var a = "x".repeat(k), b = "y".repeat(n - k), s = a + b;
@@ -1839,6 +1926,7 @@ func TestShortConcatenations(t *testing.T) {
 // given room for in its own allocation, and past it, grown beyond that
 // room, truncated and shifted.
 func TestSmallArrayStorage(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var bad = [];
 		for (var n = 0; n <= 20; n++) {
 			var src = [];
@@ -1859,6 +1947,7 @@ func TestSmallArrayStorage(t *testing.T) {
 // object, a prototype replaced, set to a primitive or to null, and one a
 // proxy for new.target supplies. Each answer is Node's.
 func TestInstanceOfAndNewPrototype(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function F() {} var r = [];
 			for (const v of [1, "s", null, undefined, true, Symbol(), 1n, {}, new F, Object.create(F.prototype)]) r.push(v instanceof F);
@@ -1895,6 +1984,7 @@ func TestInstanceOfAndNewPrototype(t *testing.T) {
 }
 
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }
 
@@ -1935,6 +2025,7 @@ func checkAsync(t *testing.T, setup, read, want string) {
 }
 
 func TestGenerators(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`function* g() { yield 1; yield 2; } [...g()].join(",")`, "1,2"},
 		{`function* g() { yield 1; return 9; } const it = g(); it.next().value + "," + it.next().value`, "1,9"},
@@ -1955,6 +2046,7 @@ func TestGenerators(t *testing.T) {
 }
 
 func TestGeneratorThrowAndReturn(t *testing.T) {
+	t.Parallel()
 	// throw() raises at the suspension point, so a try inside the body catches
 	// it.
 	checkEval(t, `
@@ -1971,6 +2063,7 @@ func TestGeneratorThrowAndReturn(t *testing.T) {
 }
 
 func TestGeneratorDelegation(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		function* inner() { yield 1; yield 2; }
 		function* outer() { yield* inner(); yield 3; }
@@ -1980,6 +2073,7 @@ func TestGeneratorDelegation(t *testing.T) {
 }
 
 func TestPromise(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `var out = ""; Promise.resolve(1).then(v => out = "got" + v)`, `out`, "got1")
 	checkAsync(t, `var r = ""; Promise.reject("x").catch(e => r = "c" + e)`, `r`, "cx")
 	checkAsync(t, `var r = []; Promise.resolve().then(() => r.push(1)).then(() => r.push(2))`,
@@ -1998,6 +2092,7 @@ func TestPromise(t *testing.T) {
 }
 
 func TestPromiseOrderingIsAlwaysAsynchronous(t *testing.T) {
+	t.Parallel()
 	// A then callback must never run before the code that registered it has
 	// finished. This is the guarantee the whole design exists for.
 	checkAsync(t,
@@ -2006,6 +2101,7 @@ func TestPromiseOrderingIsAlwaysAsynchronous(t *testing.T) {
 }
 
 func TestPromiseCombinators(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `var r = ""; Promise.all([1, Promise.resolve(2)]).then(v => r = v.join(","))`,
 		`r`, "1,2")
 	checkAsync(t, `var r = ""; Promise.all([Promise.reject("e"), 1]).catch(e => r = "c" + e)`,
@@ -2021,6 +2117,7 @@ func TestPromiseCombinators(t *testing.T) {
 }
 
 func TestPromiseKeyedCombinators(t *testing.T) {
+	t.Parallel()
 	// The result has the argument's own enumerable keys in their order, on a
 	// null-prototype object, and an undefined value is an element like any
 	// other.
@@ -2044,6 +2141,7 @@ func TestPromiseKeyedCombinators(t *testing.T) {
 }
 
 func TestAsyncFunctions(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `async function f() { return 1; } typeof f().then`, "function")
 	checkAsync(t, `var r = ""; async function f() { r = await Promise.resolve("v"); } f()`, `r`, "v")
 	// Awaiting a plain value works too.
@@ -2065,6 +2163,7 @@ func TestAsyncFunctions(t *testing.T) {
 }
 
 func TestProxy(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`new Proxy({a:1}, {}).a`, "1"},
 		{`new Proxy({}, {get: (t,k) => "got:" + k}).x`, "got:x"},
@@ -2083,6 +2182,7 @@ func TestProxy(t *testing.T) {
 }
 
 func TestProxyRevocable(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		const {proxy, revoke} = Proxy.revocable({a:1}, {});
 		const before = proxy.a;
@@ -2091,6 +2191,7 @@ func TestProxyRevocable(t *testing.T) {
 }
 
 func TestReflect(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`Reflect.has({a:1}, "a")`, "true"},
 		{`Reflect.get({a:5}, "a")`, "5"},
@@ -2109,6 +2210,7 @@ func TestReflect(t *testing.T) {
 }
 
 func TestTypedArrays(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ src, want string }{
 		{`new Int8Array(3).length`, "3"},
 		{`const a = new Int32Array(3); a[0] = 42; a[0]`, "42"},
@@ -2135,6 +2237,7 @@ func TestTypedArrays(t *testing.T) {
 }
 
 func TestArrayBufferViewsAlias(t *testing.T) {
+	t.Parallel()
 	// Two views over the same buffer share storage; that aliasing is the whole
 	// reason typed arrays exist.
 	checkEval(t, `
@@ -2152,6 +2255,7 @@ func TestArrayBufferViewsAlias(t *testing.T) {
 }
 
 func TestModules(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -2193,6 +2297,7 @@ func TestModules(t *testing.T) {
 }
 
 func TestModuleBindingsAreLive(t *testing.T) {
+	t.Parallel()
 	// An importer reads through to the exporter's current value rather than a
 	// copy taken at link time.
 	rt := quickjs.New()
@@ -2220,6 +2325,7 @@ func TestModuleBindingsAreLive(t *testing.T) {
 // have anywhere else: the property exists from the start, holding a marker
 // until the declaration runs.
 func TestModuleLexicalDeadZone(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"let", `try { x; out = "no error" } catch (e) { out = e.name } let x = 1;`,
 			"ReferenceError"},
@@ -2275,6 +2381,7 @@ func TestModuleLexicalDeadZone(t *testing.T) {
 // the declaration is the same ReferenceError, which a cycle makes reachable.
 // Describing the property reads it, so even asking about it throws.
 func TestModuleNamespaceDeadZone(t *testing.T) {
+	t.Parallel()
 	src := `
 		import * as ns from "entry";
 		function probe(f) { try { f(); return "no error" } catch (e) { return e.name } }
@@ -2316,6 +2423,7 @@ func TestModuleNamespaceDeadZone(t *testing.T) {
 // with a name is exported through that binding, which keeps the export live;
 // anything else is bound under a name no identifier can spell.
 func TestDefaultExportForms(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ dep, want string }{
 		// The function reassigns its own binding, which the namespace sees
 		// because the export is that binding rather than a copy of it.
@@ -2356,6 +2464,7 @@ func TestDefaultExportForms(t *testing.T) {
 }
 
 func TestModuleNamespaceIsReturned(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	ns, err := rt.EvalModule("entry", `export const a = 1; export const b = 2;`)
@@ -2372,6 +2481,7 @@ func TestModuleNamespaceIsReturned(t *testing.T) {
 }
 
 func TestImportWithoutALoaderIsRejected(t *testing.T) {
+	t.Parallel()
 	// A runtime with no loader has no filesystem access, which is the default.
 	rt := quickjs.New()
 	defer rt.Close()
@@ -2385,6 +2495,7 @@ func TestImportWithoutALoaderIsRejected(t *testing.T) {
 }
 
 func TestImportIsRejectedInAScript(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	if _, err := rt.Eval(`import {x} from "m";`); err == nil {
@@ -2393,6 +2504,7 @@ func TestImportIsRejectedInAScript(t *testing.T) {
 }
 
 func TestDeepRecursionDoesNotCorruptFrames(t *testing.T) {
+	t.Parallel()
 	// The interpreter holds a pointer to its frame across nested calls, so the
 	// frame stack must never be reallocated underneath it. A recursion deeper
 	// than any plausible initial capacity is what would expose that.
@@ -2411,6 +2523,7 @@ func TestDeepRecursionDoesNotCorruptFrames(t *testing.T) {
 }
 
 func TestDeepRecursionUnwindsCorrectly(t *testing.T) {
+	t.Parallel()
 	// Each frame must resume at the right instruction after the one above it
 	// returns, which a stale frame pointer would break.
 	rt := quickjs.New(quickjs.WithMaxCallDepth(4000))
@@ -2427,6 +2540,7 @@ func TestDeepRecursionUnwindsCorrectly(t *testing.T) {
 }
 
 func TestAsyncGenerators(t *testing.T) {
+	t.Parallel()
 	// An async generator's next returns a promise, and its body may suspend on
 	// await as well as on yield.
 	checkAsync(t, `var r = ""; async function* g() { yield 1; yield 2 }
@@ -2450,6 +2564,7 @@ func TestAsyncGenerators(t *testing.T) {
 }
 
 func TestForAwaitOf(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `var r = ""; async function* g() { yield 1; yield 2 }
 		(async () => { for await (const v of g()) r += v })()`, `r`, "12")
 	checkAsync(t, `var r = ""; async function* g() { yield* [1,2,3] }
@@ -2460,6 +2575,7 @@ func TestForAwaitOf(t *testing.T) {
 }
 
 func TestWrapperConstructors(t *testing.T) {
+	t.Parallel()
 	// Called as a function a wrapper constructor produces a primitive; called
 	// with new it produces an object. Nothing else distinguishes the two, and
 	// the difference is observable.
@@ -2490,6 +2606,7 @@ func TestWrapperConstructors(t *testing.T) {
 }
 
 func TestDynamicImport(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
@@ -2525,6 +2642,7 @@ func TestDynamicImport(t *testing.T) {
 }
 
 func TestStaticImportDefaultIsNamedInNamespace(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	ns, err := rt.EvalModule("entry", `export default 7;`)
@@ -2548,6 +2666,7 @@ func TestStaticImportDefaultIsNamedInNamespace(t *testing.T) {
 // modules work, so the storage is an accessor while the object reports a data
 // property -- the one place the two have to disagree.
 func TestModuleNamespaceObject(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -2649,6 +2768,7 @@ func TestModuleNamespaceObject(t *testing.T) {
 // expression it looks like and takes its name from the export. Compiling it as
 // a declaration read a name that was not there.
 func TestExportDefaultAnonymousClass(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -2689,6 +2809,7 @@ func TestExportDefaultAnonymousClass(t *testing.T) {
 // module and the same one every time. It is not a property access, so it
 // cannot be assigned to.
 func TestImportMeta(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 
@@ -2734,6 +2855,7 @@ func TestImportMeta(t *testing.T) {
 // function declaration there is a lexical binding rather than a var, and so is
 // every imported name. Its exports have rules of their own.
 func TestModuleDeclarationErrors(t *testing.T) {
+	t.Parallel()
 	bad := []struct{ name, src string }{
 		{"duplicate export", `export var x = 1; export var x = 2;`},
 		{"duplicate export name", `var x = 1, y = 2; export {x, y as x};`},
@@ -2789,6 +2911,7 @@ func TestModuleDeclarationErrors(t *testing.T) {
 // A module that will not load, parse or link fails the way a static import of
 // it would: as an error the script can catch and inspect.
 func TestDynamicImportRejectsWithAJavaScriptError(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
@@ -2818,6 +2941,7 @@ func TestDynamicImportRejectsWithAJavaScriptError(t *testing.T) {
 // dense array cheap. It is still an own property, and everything that looks at
 // the property table rather than reading through a getter has to see one.
 func TestArrayLengthIsAnOwnProperty(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// It is listed, after the indices and before any other string key.
 		{`Object.getOwnPropertyNames([1, 2]).join(",")`, "0,1,length"},
@@ -2871,6 +2995,7 @@ func TestArrayLengthIsAnOwnProperty(t *testing.T) {
 // visible through the other. Strict mode, and anything more elaborate than
 // plain parameters, get the snapshot instead.
 func TestMappedArguments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`(function (a) { arguments[0] = 9; return a })(1)`, "9"},
 		{`(function (a) { a = 9; return arguments[0] })(1)`, "9"},
@@ -2960,6 +3085,7 @@ func TestMappedArguments(t *testing.T) {
 // on before it converts the key. A key whose toString throws must not run at
 // all when the base is null.
 func TestComputedKeyOrdering(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var b = null, p = {toString: function () { throw new Error("key") }};
 		  try { b[p] } catch (e) { e.constructor.name }`, "TypeError"},
@@ -2995,6 +3121,7 @@ func TestComputedKeyOrdering(t *testing.T) {
 // that stops short of the end tells it so, with nothing else in flight to
 // swallow what the return method says.
 func TestDestructuringOrder(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// The target's reference comes before the source is read.
 		{`var log = [];
@@ -3067,6 +3194,7 @@ func TestDestructuringOrder(t *testing.T) {
 // Answering where a name comes from means walking the graph, and two of the
 // answers are errors -- at the point somebody asks, not where it was written.
 func TestModuleExportResolution(t *testing.T) {
+	t.Parallel()
 	run := func(t *testing.T, entry string, mods map[string]string) (string, error) {
 		t.Helper()
 		rt := quickjs.New()
@@ -3174,6 +3302,7 @@ func TestModuleExportResolution(t *testing.T) {
 // each iterator, which a script can check -- and which is what makes the
 // prototype worth having at all.
 func TestIteratorPrototypes(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var p = Object.getPrototypeOf([].values());
 		  [typeof p.next, p === Object.getPrototypeOf([].keys()),
@@ -3223,6 +3352,7 @@ func TestIteratorPrototypes(t *testing.T) {
 // NaN without writing anything, so a valueOf that revived the date is not
 // undone.
 func TestDateSetters(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var log = [], d = new Date(NaN);
 		  d.setHours({valueOf: function () { log.push("h"); return 1 }},
@@ -3272,6 +3402,7 @@ func TestDateSetters(t *testing.T) {
 // called on, and define each element through the object's own machinery -- so
 // a result that refuses an element says so rather than quietly dropping it.
 func TestArrayFromAndOf(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Array.from([1, 2]).join(",")`, "1,2"},
 		{`Array.from({length: 2, 0: "a", 1: "b"}).join(",")`, "a,b"},
@@ -3324,6 +3455,7 @@ func TestArrayFromAndOf(t *testing.T) {
 // capability's own function -- the same object every time, which a script can
 // check. Promise.any collects the reasons it was given.
 func TestPromiseCombinatorProtocol(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var r = "none";
 		  Promise.any([Promise.reject(1), Promise.reject(2)]).catch(function (e) {
@@ -3394,6 +3526,7 @@ func TestPromiseCombinatorProtocol(t *testing.T) {
 // be resumed: a value sent in goes to the delegate's next, an exception
 // injected at the yield goes to its throw, and a forced return to its return.
 func TestYieldStarForwardsEveryResumption(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* inner() { yield 1; yield 2 }
 		  function* g() { yield* inner(); yield 3 }
@@ -3461,6 +3594,7 @@ func TestYieldStarForwardsEveryResumption(t *testing.T) {
 // inherits in turn from the shared one -- so what a script puts on
 // `g.prototype` every generator g makes has.
 func TestGeneratorInstancePrototype(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var f = function* () {}; f.prototype.x = 1; String(f().x)`, "1"},
 		{`var f = function* () {}; String(Object.getPrototypeOf(f()) === f.prototype)`,
@@ -3492,6 +3626,7 @@ func TestGeneratorInstancePrototype(t *testing.T) {
 // property table: a proxy has none, and an object that refuses to make a
 // property permanent has to say so.
 func TestIntegrityLevels(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = Object.seal({a: 1});
 		  [Object.isSealed(o), Object.isFrozen(o), Object.isExtensible(o)].join(",")`,
@@ -3540,6 +3675,7 @@ func TestIntegrityLevels(t *testing.T) {
 // one declared after it. Both bindings exist before either body runs, so the
 // call resolves to the binding rather than to a global that would shadow it.
 func TestHoistedFunctionsSeeEachOther(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`(function () {
 		    function a() { return b() }
@@ -3575,6 +3711,7 @@ func TestHoistedFunctionsSeeEachOther(t *testing.T) {
 // TestSymbolToPrimitive covers Symbol.prototype[Symbol.toPrimitive], which is
 // what lets a symbol wrapper compare equal to the symbol it wraps.
 func TestSymbolToPrimitive(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var s = Symbol("a"); String(Object(s) == s)`, "true"},
 		{`var s = Symbol("a"); String(Symbol.prototype[Symbol.toPrimitive].call(s) === s)`,
@@ -3602,6 +3739,7 @@ func TestSymbolToPrimitive(t *testing.T) {
 // Nothing constructs either, so it is undefined -- which has to be said rather
 // than left to a zero value.
 func TestGeneratorNewTarget(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`function* g() { yield new.target } String(g().next().value)`, "undefined"},
 		{`function* g() { yield typeof new.target } g().next().value`, "undefined"},
@@ -3627,6 +3765,7 @@ func TestGeneratorNewTarget(t *testing.T) {
 // TestArrayFromAsyncProtocol covers how Array.fromAsync reads its source and
 // what it builds the result with.
 func TestArrayFromAsyncProtocol(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `Array.fromAsync([1, Promise.resolve(2), 3]).then(a => { r = a.join() })`,
 		"r", "1,2,3")
 	// A synchronous source's values are awaited; an asynchronous one's are
@@ -3700,6 +3839,7 @@ func TestArrayFromAsyncProtocol(t *testing.T) {
 // there is one body, and letting a second call re-enter it while the first is
 // suspended at an await would scramble both.
 func TestAsyncGeneratorQueue(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var log = []
 		var it = (async function* () { yield await "a" })()
@@ -3763,6 +3903,7 @@ func TestAsyncGeneratorQueue(t *testing.T) {
 // replaced; one that cannot must already look like what the declaration would
 // create.
 func TestGlobalDeclarationConflicts(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// An ordinary name is fine, and so is one inside a function. A
 		// lexical binding eval declares is its own and collides with nothing.
@@ -3823,6 +3964,7 @@ func TestGlobalDeclarationConflicts(t *testing.T) {
 // Each rounds to the larger value on a tie, which is what the specification
 // asks for and not what formatting a float would do.
 func TestNumberFormatting(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// toPrecision keeps the trailing zeros of the mantissa.
 		{`(100).toPrecision(2)`, "1.0e+2"},
@@ -3889,6 +4031,7 @@ func TestNumberFormatting(t *testing.T) {
 // TestHashbangAndCommentTerminators covers two pieces of source that are not
 // code: the hashbang a shell reads, and a line terminator inside a comment.
 func TestHashbangAndCommentTerminators(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{"String(eval('#!/usr/bin/env node\\n1'))", "1"},
 		{"String(eval('#!only'))", "undefined"},
@@ -3910,6 +4053,7 @@ func TestHashbangAndCommentTerminators(t *testing.T) {
 // TestOptionalChainEdges covers two shapes an optional chain may and may not
 // take: a super reference at its head, and a tagged template anywhere in it.
 func TestOptionalChainEdges(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class B { m() { return 1 } }
 		  class C extends B { go() { return super.m?.() } }
@@ -3945,6 +4089,7 @@ func TestOptionalChainEdges(t *testing.T) {
 // which removes it where no link short-circuited and is true where one
 // did, as in Node.
 func TestDeleteOptionalChain(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {b: 1}; [delete o?.b, "b" in o].join()`, "true,false"},
 		{`var o = {b: {c: 1}}; [delete o?.b.c, "c" in o.b].join()`, "true,false"},
@@ -3965,6 +4110,7 @@ func TestDeleteOptionalChain(t *testing.T) {
 // The clause is not pending while its own body runs, so such a jump leaves
 // through the clauses outside it rather than through itself again.
 func TestFinallyOverridesCompletion(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var c = 0, fin = 0
 		  do {
@@ -4001,6 +4147,7 @@ func TestFinallyOverridesCompletion(t *testing.T) {
 // Which object comes back is settled where the constructor actually returns,
 // because a finally clause may still call super() after the return statement.
 func TestDerivedConstructorResult(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class C extends class {} {
 		    constructor() { try { throw null } catch (e) { return } finally { super() } }
@@ -4034,6 +4181,7 @@ func TestDerivedConstructorResult(t *testing.T) {
 // TestDateParsing covers Date.parse, which has to read back what the Date
 // methods write, and the extended year form an out-of-range date needs.
 func TestDateParsing(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Every form a Date writes round-trips, including the zone name
 		// toString puts in parentheses after the offset.
@@ -4094,6 +4242,7 @@ func TestDateParsing(t *testing.T) {
 // after letting one through from script: it is the same value again, not a new
 // Error wrapping its text.
 func TestGoCallbackRethrowsJavaScriptErrors(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.Set("runScript", func(r *quickjs.Runtime, src string) (quickjs.Value, error) {
@@ -4122,6 +4271,7 @@ func TestGoCallbackRethrowsJavaScriptErrors(t *testing.T) {
 // TestSymbolAndErrorShape covers a few pieces of the built-in objects that a
 // script can see but nothing else depends on.
 func TestSymbolAndErrorShape(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// Symbol.prototype has valueOf and a toStringTag of its own.
 		{`var s = Symbol("a"); String(Symbol.prototype.valueOf.call(s) === s)`, "true"},
@@ -4163,6 +4313,7 @@ func TestSymbolAndErrorShape(t *testing.T) {
 // itself: a binding of a scope around its body, immutable, and visible to
 // everything written inside it.
 func TestFunctionExpressionName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		// A nested function sees it, which only a real binding can manage.
 		{`var f = function g() { return typeof (() => g)() }; f()`, "function"},
@@ -4206,6 +4357,7 @@ func TestFunctionExpressionName(t *testing.T) {
 // 128 bits, of values about each, negative and on the heap, and their
 // conversions: the answers' count, length and hash are Node's.
 func TestBigIntAsN(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `
 		var vals = [0n, 1n, -1n, 2n, -2n, 255n, -256n, 2n**31n, -(2n**31n), 2n**53n+1n, 2n**63n-1n, -(2n**63n), 2n**63n,
 			-(2n**63n)-1n, 2n**64n-1n, 2n**64n, -(2n**64n), 2n**64n+5n, -(2n**64n)-5n, 2n**100n+12345n, -(2n**100n)-12345n,
@@ -4240,6 +4392,7 @@ func TestBigIntAsN(t *testing.T) {
 // Number and Boolean. The answers' count, length, hash and start are
 // Node's.
 func TestBigInt65(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
   var M = 1n << 63n, N = 1n << 64n, out = [];
   var vals = [M - 1n, M, M + 1n, -M, -M - 1n, -M + 1n, N - 1n, N, N + 1n, -N + 1n, -N, -N - 1n, 0n, 1n, -1n];
@@ -4267,6 +4420,7 @@ func TestBigInt65(t *testing.T) {
 // TestBigIntBitwise covers the bitwise operators on BigInts, which have no
 // width: the result is whatever the arithmetic says, not a wrapped 32 bits.
 func TestBigIntBitwise(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(12n & 10n)`, "8"},
 		{`String(12n | 10n)`, "14"},
@@ -4300,6 +4454,7 @@ func TestBigIntBitwise(t *testing.T) {
 // TestBigIntPropertyKey covers a BigInt literal used as a property name, which
 // names the property its digits spell.
 func TestBigIntPropertyKey(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`Object.keys({999999999999999999n: 1}).join()`, "999999999999999999"},
 		{`Object.keys({1n: "a", 0x10n: "b"}).join()`, "1,16"},
@@ -4315,6 +4470,7 @@ func TestBigIntPropertyKey(t *testing.T) {
 // TestPromiseWithResolvers covers Promise.withResolvers, which builds its
 // promise with the constructor it was reached through.
 func TestPromiseWithResolvers(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`class S extends Promise {}
 		  String(S.withResolvers().promise.constructor === S)`, "true"},
@@ -4338,6 +4494,7 @@ func TestPromiseWithResolvers(t *testing.T) {
 // identifier properties take back out: they are letters by category but are
 // reserved for syntax.
 func TestIdentifierExclusions(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{"try { eval('var aⸯ = 1'); \"no throw\" } catch (e) { e.constructor.name }",
 			"SyntaxError"},
@@ -4357,6 +4514,7 @@ func TestIdentifierExclusions(t *testing.T) {
 // A catch clause's parameter is a binding like a let: it is initialized when
 // the clause is entered, and the body may assign to it.
 func TestCatchParameterIsMutable(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"assigned", `try { throw 1 } catch (e) { e = 2; String(e) }`, "2"},
 		{"in a function", `(function () {
@@ -4387,6 +4545,7 @@ func TestCatchParameterIsMutable(t *testing.T) {
 // clause was running for, and the two operands that record it: what it jumps to
 // is not expecting values it never pushed.
 func TestJumpOutOfFinally(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"continue from a finally", `var cars = {a: 1, b: 2, c: 3}, c = 0, fin = 0
 		  for (var x in cars) {
@@ -4427,6 +4586,7 @@ func TestJumpOutOfFinally(t *testing.T) {
 // object it read from is what a call after it binds `this` to. A chain also
 // carries spread arguments and a super call like any other expression.
 func TestOptionalChainCalls(t *testing.T) {
+	t.Parallel()
 	const setup = `var a = {b: function () { return this._b }, _b: {c: 42}};`
 	cases := []struct{ name, src, want string }{
 		{"method in a chain", setup + `String(a?.b().c)`, "42"},
@@ -4467,6 +4627,7 @@ func TestOptionalChainCalls(t *testing.T) {
 // than as a number: a string that is not an integer literal compares with
 // nothing, and every relational operator on it is false.
 func TestBigIntStringComparison(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`"1" < 2n`, "true"},
 		{`"3" > 2n`, "true"},
@@ -4500,6 +4661,7 @@ func TestBigIntStringComparison(t *testing.T) {
 // the clause's own included: a clause still protected by itself would run a
 // second time when the completion it was carrying reached the end.
 func TestFinallyRunsOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"return from a try with a catch", `var n = 0
 		  var f = function () {
@@ -4541,6 +4703,7 @@ func TestFinallyRunsOnce(t *testing.T) {
 // parameter list, so a default may refer to it -- and it is immutable, and
 // shadowed by anything the function binds under the same name.
 func TestFunctionExpressionSelfName(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, src, want string }{
 		{"from a parameter default", `var probe
 		  var func = function f(_ = (probe = function () { return f })) {}
@@ -4575,6 +4738,7 @@ func TestFunctionExpressionSelfName(t *testing.T) {
 // A computed property key keeps whichever kind it turned out to be: an object
 // whose Symbol.toPrimitive returns a symbol names a symbol-keyed property.
 func TestComputedKeyKeepsASymbol(t *testing.T) {
+	t.Parallel()
 	const setup = `var s = Symbol("k")
 		var o = {}
 		o[Symbol.toPrimitive] = function () { return s }
@@ -4601,6 +4765,7 @@ func TestComputedKeyKeepsASymbol(t *testing.T) {
 // `async` on its own cannot be the left-hand side of a for-of: the grammar
 // refuses it so that `for (async of => {};;)` is not ambiguous with it.
 func TestForOfAsyncHead(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `try { eval("for (async of [1]) {}"); "ok" } catch (e) { e.constructor.name }`,
 		"SyntaxError")
 	for _, src := range []string{
@@ -4619,6 +4784,7 @@ func TestForOfAsyncHead(t *testing.T) {
 // before they convert the key, so a key whose toString counts its calls sees
 // none.
 func TestDefineAccessorChecksTheFunctionFirst(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var n = 0; var k = {toString: function () { n++; return "x" }}
 		  var caught = ""
@@ -4643,6 +4809,7 @@ func TestDefineAccessorChecksTheFunctionFirst(t *testing.T) {
 // spoken for. Whichever function is called first settles it and the other does
 // nothing -- including the reject a throw after the resolve would reach for.
 func TestResolvingFunctionsShareOneFlag(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var r = ""
 		var thenable = {then: function (res) { res("adopted") }}
@@ -4683,6 +4850,7 @@ func TestResolvingFunctionsShareOneFlag(t *testing.T) {
 // called on, and that constructor's resolve is a function like any other: a
 // throw from it rejects the result rather than escaping.
 func TestCombinatorResolveThatThrows(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		var r = ""
 		var thrown = new Error("from resolve")
@@ -4730,6 +4898,7 @@ func TestCombinatorResolveThatThrows(t *testing.T) {
 // and so is a star re-export, which is a line among the others rather than an
 // afterthought.
 func TestModuleDependencyOrder(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	mods := map[string]string{
@@ -4771,6 +4940,7 @@ func TestModuleDependencyOrder(t *testing.T) {
 // entry to the namespace, which is built from the export map rather than from
 // the module's scope.
 func TestIndirectExportBindsNothingLocally(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	const entry = `
@@ -4806,6 +4976,7 @@ func TestIndirectExportBindsNothingLocally(t *testing.T) {
 // an error, and where the sum lands depends on the order the terms were added
 // in and on each product being rounded before the next is added.
 func TestDateComponentArithmetic(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`String(Date.UTC(1970, 0, 1, 80063993375, 29, 1, -288230376151711740))`, "29312"},
 		{`String(Date.UTC(1970, 0, 213503982336, 0, 0, 0, -18446744073709552000))`, "34447360"},
@@ -4837,6 +5008,7 @@ func TestDateComponentArithmetic(t *testing.T) {
 // Making room for no arguments moves nothing, however long the receiver claims
 // to be: the length is written back and that is all.
 func TestUnshiftWithNoArguments(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`var o = {length: Math.pow(2, 53) - 1}
 		  Array.prototype.unshift.call(o)
@@ -4856,6 +5028,7 @@ func TestUnshiftWithNoArguments(t *testing.T) {
 // evaluated, so a module of a cycle can call a function another declares before
 // that one's body has run. That is what makes a cycle work at all.
 func TestModuleFunctionsAreCallableBeforeEvaluation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	const entry = `
@@ -4885,6 +5058,7 @@ func TestModuleFunctionsAreCallableBeforeEvaluation(t *testing.T) {
 // suspends and the modules beside it in the graph are evaluated, which is what
 // lets two independent subgraphs make progress at once.
 func TestTopLevelAwaitDoesNotBlockSiblings(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
@@ -4914,6 +5088,7 @@ func TestTopLevelAwaitDoesNotBlockSiblings(t *testing.T) {
 // that asked for it runs to the end of its turn first: an import written inside
 // a module's body cannot preempt the evaluation it is part of.
 func TestDynamicImportDoesNotPreempt(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
@@ -4945,6 +5120,7 @@ func TestDynamicImportDoesNotPreempt(t *testing.T) {
 // undefined` and `return` differ by exactly that turn, and a program watching
 // the queue can tell.
 func TestAsyncGeneratorReturnAwaits(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		globalThis.order = []
 		async function* noReturn() {}
@@ -4989,6 +5165,7 @@ func TestAsyncGeneratorReturnAwaits(t *testing.T) {
 // be the same: the depth it restores is counted from the frame rather than
 // from the bottom of the stack.
 func TestGeneratorResumesIntoItsHandlers(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `
 		globalThis.out = []
 		var error = new Error("boop")
@@ -5018,6 +5195,7 @@ func TestGeneratorResumesIntoItsHandlers(t *testing.T) {
 // rather than saturates, which used to send a search past the end back to the
 // start: "aaaa".indexOf("aa", Infinity) answered 0 rather than -1.
 func TestStringIndexOfClampsPosition(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ src, want string }{
 		{`"aaaa".indexOf("aa", Infinity)`, "-1"},
 		{`"aaaa".indexOf("aa", "Infinity")`, "-1"},
@@ -5053,6 +5231,7 @@ func TestStringIndexOfClampsPosition(t *testing.T) {
 // refuse an argument list too long to pass as soon as its length is known,
 // rather than reading element after element into memory first.
 func TestApplyRefusesAnImpossibleArgumentList(t *testing.T) {
+	t.Parallel()
 	evalCases(t, []struct{ src, want string }{
 		{`var r = [];
 for (var n of [2 ** 24, 2 ** 32 - 1, 2 ** 53 - 1]) {
@@ -5071,6 +5250,7 @@ r.join(" | ")`, "RangeError: maximum call stack size exceeded | RangeError: Inva
 // runtime compiles, and that a SyntaxError it returns reads as the parser's
 // message, as eval's does.
 func TestGoFunctionGetsTheHostRuntime(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	var got *quickjs.Runtime
@@ -5102,6 +5282,7 @@ func TestGoFunctionGetsTheHostRuntime(t *testing.T) {
 // that resolves to nothing is a ReferenceError, and a value in its dead
 // zone is reported first.
 func TestStrictGlobalWrite(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `"use strict"; var log = [], g1 = 0, base = Object.getPrototypeOf(globalThis); base.pg1 = 1; base.pg2 = 2;
 		Object.setPrototypeOf(globalThis, new Proxy(base, {
 		  has(t, k) { if (typeof k == "string" && k[0] == "p") log.push("has " + k); return Reflect.has(t, k) },
@@ -5148,6 +5329,7 @@ func TestStrictGlobalWrite(t *testing.T) {
 // RangeErrors, frozen and read-only lengths in both modes, a sparse array,
 // a subclass, and the largest length. Each answer is Node's.
 func TestArrayLengthAssignment(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [];
 		var a = [1, 2, 3, 4, 5]; a.length = 2; r.push(a.join(), a.length);
 		a.length = 4; r.push(a.length, 2 in a, a[3]);
@@ -5173,6 +5355,7 @@ func TestArrayLengthAssignment(t *testing.T) {
 // generator directly, with no functions or promise between, must keep. The
 // order is Node's.
 func TestAwaitOrdering(t *testing.T) {
+	t.Parallel()
 	checkAsync(t, `var log = [];
 		async function a1() { log.push("a1 start"); await null; log.push("a1 after 1"); await Promise.resolve(); log.push("a1 after 2"); return "a1" }
 		async function a2() { log.push("a2 start"); try { await Promise.reject(new Error("boom")) } catch (e) { log.push("a2 caught " + e.message) } return "a2" }
@@ -5199,6 +5382,7 @@ func TestAwaitOrdering(t *testing.T) {
 // and past them, shifts by -65 to 65. The answers' count, length and hash
 // are Node's.
 func TestBigIntShortOperators(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
   var M = 1n << 63n, N = 1n << 64n;
   var xs = [0n, 1n, -1n, 2n, -2n, 7n, -7n, 1n << 31n, (1n << 53n) + 1n, 1n << 62n, -(1n << 62n), M - 1n, -M + 1n, -M,
@@ -5233,6 +5417,7 @@ func TestBigIntShortOperators(t *testing.T) {
 // undefined, BigInts, objects, a symbol, no argument and new. Node's
 // answers.
 func TestBigIntCall(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
   var args = [0, -0, 1, -1, 2 ** 31, 2 ** 53, -(2 ** 53), 2 ** 62, 2 ** 63, -(2 ** 63), 2 ** 64, -(2 ** 70), 1e21, 0.5, -1.5,
     NaN, Infinity, -Infinity, "12", " 0x1f ", "", "1.5", true, false, null, undefined, 5n, -(2n ** 64n), 2n ** 64n,
@@ -5263,6 +5448,7 @@ func TestBigIntCall(t *testing.T) {
 // the order the width and the operands are read in; a xorshift generator's
 // and the FNV-1a hash's values. The answers' lengths and hashes are Node's.
 func TestBigIntWrapCall(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
 var vals = [0n, 1n, -1n, 2n, 7n, 13n, 63n, 64n, 65n, -64n, -63n, 100n,
   (1n << 31n) - 1n, 1n << 31n, -(1n << 31n), 1n << 53n, (1n << 63n) - 1n, 1n << 63n, -(1n << 63n),
@@ -5344,6 +5530,7 @@ return all.join("|");
 // hundreds of bits that change size as they go. The answers' count,
 // length and hash are Node's.
 func TestBigIntGivenBack(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `(function () {
   var out = [];
   function g(v) { out.push(String(v)); return v; }
@@ -5390,6 +5577,7 @@ func TestBigIntGivenBack(t *testing.T) {
 // store, its block was made the next remainder in before the product read
 // it. The hash is Node's.
 func TestBigIntSoleLocalPending(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var h = 0n;
 function f(n) {
   var s = (1n << 300n) + 12345n, m = (1n << 400n) + 7n, q = (1n << 450n) + 99n, t = 0n;
@@ -5405,6 +5593,7 @@ String(h);`, "190683611")
 }
 
 func TestBigIntSoleLocals(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var out = [], keep = [], saved = [], gk;
 var B = 1n << 200n;
   BigInt.prototype.save = function () { "use strict"; saved.push(this); return 0n; };
@@ -5516,6 +5705,7 @@ out.length + " " + s.length + " " + h;`, "13 23551 110140091")
 // the filler's toString ran nor the empty filler's string came back. Node's
 // answers.
 func TestStringPadOrder(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	src := `var c = 0, o = { toString() { c++; return "z" } }, out = [];

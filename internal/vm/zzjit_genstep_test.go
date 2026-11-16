@@ -294,6 +294,7 @@ func TestJITGenStepCollects(t *testing.T) {
 // the interpreter, which a failed speculation leaves the resumption to
 // (jitGenFrame).
 func TestJITGenStepStack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -204,6 +204,7 @@ func TestWeakMapReleasedWhenClosed(t *testing.T) {
 // and finds its WeakMaps as they were until then: ReleaseClosed waits for it
 // to stop.
 func TestWeakMapKeptWhileClosingScriptRuns(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), Obj(r.newNativeFunc("closeNow", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -487,6 +488,7 @@ func TestWeakSetAddressReuse(t *testing.T) {
 // name, whatever its kind: an array's side fields have no room for them
 // (arrayExt), and an ordinary object may have none. Each goes on as it was.
 func TestWeakMapKeySideFields(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `

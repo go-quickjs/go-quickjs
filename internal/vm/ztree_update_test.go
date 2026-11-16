@@ -14,6 +14,7 @@ import (
 // tree built by none -- Crypto's RSAGenerate, whose property swap panicked
 // the update matcher, was found that way.
 func TestBuildTreesUncalled(t *testing.T) {
+	t.Parallel()
 	const src = `
 		function swap() { var t = this.p; this.p = this.q; this.q = t; }
 		function swapIf() { if (this.p <= 9) { var t = this.p; this.p = this.q; this.q = t; } }

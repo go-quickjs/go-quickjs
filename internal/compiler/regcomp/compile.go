@@ -318,6 +318,11 @@ type gen struct {
 	auxes    map[int]uint32
 	literals [][]bytecode.LitElem
 	objKeys  [][]uint32
+	// sole is the locals bytecode.SoleLocals finds, once soleDone.
+	sole     uint64
+	soleDone bool
+	// objKeysHash is each one's hash (RegCode's ObjKeysHash).
+	objKeysHash []uint64
 	// farNames is the index of each name past 16 bits an instruction
 	// names, by its pc (RNameFar).
 	farNames map[int]uint32
@@ -2491,8 +2496,12 @@ func (g *gen) binary(n *ast.Binary, dst int) int {
 // been evaluated already (a compound assignment's target), or -1.
 func (g *gen) operate(text string, op bytecode.Op, left, right ast.Expr, a, dst, pos int) int {
 	mark := g.top
+	var x uint8
 	if a < 0 {
 		a = g.guard(g.expr(left, -1), right)
+		if g.fresh(left, a) {
+			x |= bytecode.RArithFreshB
+		}
 	}
 	if imm, ok := imm16(right); ok {
 		if rop, ok := immOps[text]; ok {
@@ -2503,14 +2512,76 @@ func (g *gen) operate(text string, op bytecode.Op, left, right ast.Expr, a, dst,
 		}
 	}
 	b := g.expr(right, -1)
+	if g.fresh(right, b) {
+		x |= bytecode.RArithFreshC
+	}
 	d := g.result(mark, dst)
 	g.at(pos)
 	if rop, ok := regOps[text]; ok {
-		g.emit(bytecode.MakeR(rop, 0, r16(d), r16(a), r16(b)))
+		if g.soleReg(d) {
+			x |= bytecode.RArithOwnA
+		}
+		g.emit(bytecode.MakeR(rop, x, r16(d), r16(a), r16(b)))
 	} else {
 		g.emit(bytecode.MakeR(bytecode.RBin, uint8(op), r16(d), r16(a), r16(b)))
 	}
 	return d
+}
+
+// soleReg reports whether r is the register of a local that holds its
+// values alone (bytecode.SoleLocals): an operator whose result it takes
+// may give back the BigInt it held (RArithOwnA), as the tree's store of
+// an operator's result to such a local does.
+func (g *gen) soleReg(r int) bool {
+	if !g.isBinding(r) {
+		return false
+	}
+	if !g.soleDone {
+		g.sole, g.soleDone = bytecode.SoleLocals(g.fn), true
+	}
+	if g.sole == 0 {
+		return false
+	}
+	k := g.slotOf(r)
+	return k >= 0 && k < 64 && g.sole&(1<<uint(k)) != 0
+}
+
+// fresh reports whether r, the register e was just evaluated into, holds
+// a result of arithmetic nothing else has: e is an arithmetic or bitwise
+// operator of two operands, or a negation, compiled straight into r, a
+// temporary, by the instruction emitted last. An operator of a BigInt
+// may give the block of such an operand back once it has made its own
+// result (the VM's bigRelease), as the tree's nodes give back what their
+// operand nodes made (treeFreshA). A conditional or anything else whose
+// last instruction is an arithmetic one may leave another value in r.
+func (g *gen) fresh(e ast.Expr, r int) bool {
+	switch n := e.(type) {
+	case *ast.Binary:
+		switch n.Op {
+		case "+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>":
+		default:
+			return false
+		}
+	case *ast.Unary:
+		if n.Op != "-" && n.Op != "~" {
+			return false
+		}
+	default:
+		return false
+	}
+	if g.isBinding(r) || r < regParams || len(g.code) == 0 {
+		return false
+	}
+	w := g.code[len(g.code)-1]
+	if int(w.A()) != r {
+		return false
+	}
+	switch w.Op() {
+	case bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
+		bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr, bytecode.RUnary:
+		return true
+	}
+	return false
 }
 
 func (g *gen) logical(n *ast.Logical, dst int) int {
@@ -3099,6 +3170,15 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 		}
 		old := g.guard(g.readForWrite(t, -1), n.Value)
 		v := g.operate(text, op, nil, n.Value, old, -1, int(n.Start))
+		if res.Kind == ResUpval && !keep && dst < 0 && n.Op == "+=" && g.rec.Appends[n] {
+			// An append to an upvalue the stack compiler made one
+			// (ownedAppend): the add marked, which grows the string the
+			// binding alone holds in place, as the tree's upvalueAdd does.
+			if last := len(g.code) - 1; g.code[last].Op() == bytecode.RAdd && g.code[last].A() == uint16(v) {
+				w := g.code[last]
+				g.code[last] = bytecode.MakeR(bytecode.RAdd, bytecode.RAddAppend, w.A(), w.B(), w.C())
+			}
+		}
 		g.storeValue(t, v)
 		return g.place(v, dst)
 	case *ast.Member:
@@ -4267,6 +4347,7 @@ func (g *gen) objectAtOnce(n *ast.ObjectLit, dst int) int {
 	}
 	base := g.allocN(len(n.Props))
 	mark := g.top
+	strs := make([]string, 0, len(n.Props))
 	for i, p := range n.Props {
 		var key string
 		switch k := p.Key.(type) {
@@ -4276,10 +4357,18 @@ func (g *gen) objectAtOnce(n *ast.ObjectLit, dst int) int {
 			key = k.Value
 		}
 		keys = append(keys, g.nameIdx(key))
+		strs = append(strs, key)
 		g.into(p.Value, base+i)
 		g.top = mark
 	}
 	g.objKeys = append(g.objKeys, keys)
+	// The hash the realm's root for literals of these keys is found by,
+	// as the stack form's LiteralKeys says it.
+	var h uint64
+	if len(strs) <= bytecode.MaxLiteralKeys {
+		h = bytecode.HashLiteralKeys(strs)
+	}
+	g.objKeysHash = append(g.objKeysHash, h)
 	d := g.dest(dst)
 	g.at(n.Start)
 	at := g.emit(bytecode.MakeR(bytecode.RNewObjectLit, uint8(len(n.Props)), r16(d), r16(base), g.site16(siteKey{kind: "object_lit", keys: fmt.Sprint(keys)})))
@@ -4490,7 +4579,7 @@ func (g *gen) finish() *bytecode.RegCode {
 		}
 	}
 	rc := &bytecode.RegCode{
-		Aux: aux, FarNames: farNames, Marks: marks, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
+		Aux: aux, FarNames: farNames, Marks: marks, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, ObjKeysHash: g.objKeysHash, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
 		ForwardsArguments: g.fn.ForwardsArguments,
 		Code:              slices.Clone(g.code), NumRegs: g.max + 1 + g.nfar, SrcPC: src, SiteName: g.siteName, This: -1,
 		LocalReg: g.localReg(),

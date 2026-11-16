@@ -226,7 +226,9 @@ func (r *Runtime) regTailInPlace(f *frame, c *regCode, w bytecode.RInstr, wb int
 // regTailTo is regTailInPlace's frame given to o, of closure cl and
 // register code rc, called with this, which its caller has found.
 func (r *Runtime) regTailTo(f *frame, w bytecode.RInstr, wb int, o *Object, cl *closure, rc *regCode, this Value) bool {
-	if f.regKind != regFrameCall && f.regKind != regFrameEnter || !f.newTarget.IsUndefined() ||
+	// A call's frame (rhCallW's) has no new.target, whatever its record
+	// holds: rhCallW writes it only for a callee that reads it.
+	if f.regKind != regFrameCall && (f.regKind != regFrameEnter || !f.newTarget.IsUndefined()) ||
 		f.thisRef != nil || f.args != nil || f.withScopes != nil || f.evalVars != nil ||
 		!rc.wide || rc.suspends || rc.args || rc.locals != 0 || !cl.fn.Strict {
 		// A sloppy callee is given a frame of its own: its f.arguments
@@ -256,6 +258,9 @@ func (r *Runtime) regTailTo(f *frame, w bytecode.RInstr, wb int, o *Object, cl *
 		}
 	}
 	f.cl, f.callee, f.this, f.pc = cl, o, this, 0
+	if rc.newTarget {
+		f.newTarget = Undefined
+	}
 	r.regRestart = rc
 	return true
 }

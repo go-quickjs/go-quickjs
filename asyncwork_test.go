@@ -92,6 +92,7 @@ func TestAsyncWorkTimer(t *testing.T) {
 // goroutine, in order, and keeps the runtime busy until it is done and they
 // have run.
 func TestAsyncWorkStream(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	var got []int
@@ -131,6 +132,7 @@ func TestAsyncWorkStream(t *testing.T) {
 // Close calls what is waiting with ErrClosed, before it returns, and what is
 // posted afterwards with ErrClosed at once.
 func TestAsyncWorkClose(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	var calls []string
 	w := rt.StartAsyncWork()
@@ -159,6 +161,7 @@ func TestAsyncWorkClose(t *testing.T) {
 // Closing from inside a posted function stops it, and what waits behind it is
 // called with ErrClosed.
 func TestAsyncWorkCloseFromInside(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	var calls []string
 	w := rt.StartAsyncWork()
@@ -175,6 +178,7 @@ func TestAsyncWorkCloseFromInside(t *testing.T) {
 // A posted function that panics closes the runtime, as any engine panic does,
 // and those behind it are called with ErrClosed rather than lost.
 func TestAsyncWorkPanic(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	var calls []string
 	w := rt.StartAsyncWork()
@@ -190,6 +194,7 @@ func TestAsyncWorkPanic(t *testing.T) {
 
 // Unreferenced work does not keep the runtime busy, but what it posts runs.
 func TestAsyncWorkUnref(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	w := rt.StartAsyncWork()
@@ -220,6 +225,7 @@ func TestAsyncWorkUnref(t *testing.T) {
 
 // An interrupted run leaves what is still waiting queued for the next.
 func TestAsyncWorkInterruption(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	spin, err := rt.Eval(`(function () { for (;;) {} })`)
@@ -252,6 +258,7 @@ func TestAsyncWorkInterruption(t *testing.T) {
 // Posting from many goroutines while the runtime closes calls every function
 // exactly once. Run with -race.
 func TestAsyncWorkExactlyOnce(t *testing.T) {
+	t.Parallel()
 	for round := 0; round < 20; round++ {
 		rt := quickjs.New()
 		w := rt.StartAsyncWork()

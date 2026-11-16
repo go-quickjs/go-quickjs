@@ -16,7 +16,7 @@ import "testing"
 // loop. An async case leaves its promise in p, and out is what that settles
 // to: its value, or E and what it threw. The answers are Node's.
 func TestTreeDelegation(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct {
 		name, src, want string
 		// async says the script settles out once its jobs have run.
@@ -77,13 +77,12 @@ func TestTreeDelegation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				src := tt.src
 				if tt.async {
 					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 				}
 				fn := compileForTest(t, src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err == nil && tt.async {
 					if err = r.runMicrotasks(); err == nil {
@@ -120,7 +119,7 @@ func TestTreeDelegation(t *testing.T) {
 // the frames a stack trace in the delegate sees; a delegate already
 // running; and return and throw after steps made directly.
 func TestTreeDelegateToGenerator(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tt := range []struct{ name, src, want string }{
 		{name: "results", src: `function* inner() { yield 1; return 2 } function* f() { var r = yield* inner(); yield r }
 var g = f(), a = g.next(), b = g.next(), c = g.next(); [Object.keys(a).join(), Object.getPrototypeOf(a) === Object.prototype, a.value, a.done, a === b, b.value, b.done, c.value, c.done].join()`, want: "value,done,true,1,false,false,2,false,,true"},
@@ -139,9 +138,8 @@ var g = f(3), out = [], r = g.next(); for (var k = 10; !r.done; k += 10) { out.p
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				fn := compileForTest(t, tt.src)
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err != nil {
 					r.Close()
@@ -165,10 +163,9 @@ var g = f(3), out = [], r = g.next(); for (var k = 10; !r.done; k += 10) { out.p
 // delegate's next makes is of the delegate's next's realm, and one made for
 // a value yield* stepped a generator to (see delegateNext) is of the same.
 func TestTreeDelegateToGeneratorRealm(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		other := r.NewRealm()
 		next, err := r.RunIn(other, compileForTest(t, `Object.getPrototypeOf(function* () {}).prototype.next`))
 		if err != nil {

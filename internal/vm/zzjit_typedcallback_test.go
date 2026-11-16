@@ -8,6 +8,7 @@ import "testing"
 // after round, answer what Node's do; and a hot loop of a typed array's
 // forEach, map and reduce answers what the interpreter's does.
 func TestJITTypedArrayCallbacksAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

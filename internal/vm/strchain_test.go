@@ -12,7 +12,7 @@ import (
 // has made the additions concatenations: the conversions it makes, and
 // when, are each addition's, on both tiers.
 func TestStringChain(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	const obj = `var log = []; var o = { valueOf() { log.push('v'); return 7 }, toString() { log.push('s'); return 'S' } }; function g() { log.push('g'); return 'G' }; `
 	for _, tt := range []struct {
 		name, src, want string
@@ -35,12 +35,11 @@ func TestStringChain(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, on := range []bool{false, true} {
-				SetTreeTier(on)
 				fn := compileForTest(t, tt.src)
 				if got := hasOp(fn, "f", bytecode.OpConcat); got != tt.concat {
 					t.Errorf("f joins with concat: %v, want %v", got, tt.concat)
 				}
-				r := New(Config{})
+				r := newTreeTierForTest(on, Config{})
 				v, err := r.Run(fn)
 				if err != nil {
 					r.Close()
@@ -64,10 +63,8 @@ func TestStringChain(t *testing.T) {
 // before, which the runtime's memo of short joins hands back (concatMemo).
 func TestStringChainAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	defer SetTreeTier(true)
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		v, err := r.Run(compileForTest(t, `function f(a, b) { return 'key ' + a + ' and ' + b + ' end' }; for (let i = 0; i < 10; i++) f('x', 'y'); f`))
 		if err != nil {
 			t.Fatal(err)

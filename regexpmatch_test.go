@@ -11,6 +11,7 @@ import "testing"
 // and a global search the first units of the pattern pass over text for.
 // The answers are Node v26's.
 func TestRegExpCaseFoldingAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var K = String.fromCharCode(0x212A)
 	JSON.stringify([
 	  "Ärger ÜBER Öl".match(/über/iu)?.index, "Ärger ÜBER Öl".match(/über/i)?.index,
@@ -35,6 +36,7 @@ func TestRegExpCaseFoldingAgreesWithNode(t *testing.T) {
 // alone backs into, that begin between the halves of a pair, and runs with
 // groups, splits and global searches. The answers are Node v26's.
 func TestRegExpUnicodeRunsAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `JSON.stringify([
 	  "a😀b😀c".match(/.*😀/u)[0], "a😀b😀c".match(/.+?😀/u)[0], "😀😀x".match(/\p{Emoji_Presentation}+/u)[0],
 	  "a😀b".match(/.*\uDE00/u), "a😀b".match(/.*\uDE00/)[0].length, "日本語テキスト abc".match(/\p{L}+/gu),
@@ -55,6 +57,7 @@ func TestRegExpUnicodeRunsAgreeWithNode(t *testing.T) {
 // redefined, frozen -- with the next one unchanged, and replace with $<name>
 // and with a function. The answers are Node v26's.
 func TestRegExpNamedGroupsAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `function d(s) { return /(?<year>\d{4})-(?<month>\d{2})(?:-(?<day>\d{2}))?/.exec(s) }
 	d("0000-00-00")
 	var a = d("2024-01-15"), b = d("1999-12"), r = []
@@ -92,6 +95,7 @@ func TestRegExpNamedGroupsAgreeWithNode(t *testing.T) {
 // ASCII whose groups split a pair of surrogates and join one again. The
 // answers are Node v26's.
 func TestRegExpReplaceTemplateAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], s = "2024-01-15, 2025-12-31", bt = String.fromCharCode(96)
 	r.push(s.replace(/(\d+)-(\d+)-(\d+)/g, "$3/$2/$1"), s.replace(/(\d+)-(\d+)-(\d+)/, "[$&|$" + bt + "|$'|$$|$]"))
 	r.push(s.replace(/(\d+)-(\d+)/g, "$0;$00;$01;$02;$03;$10;$21;$9$"), "12345678901x".replace(/(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)/g, "$11$10$1;$12;$1a"))
@@ -115,6 +119,7 @@ func TestRegExpReplaceTemplateAgreesWithNode(t *testing.T) {
 // lastIndex that cannot be written, and a flag a RegExp has of its own. The
 // answers are Node v26's.
 func TestRegExpProtocolAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var log = [], r = []
 	var o = /b/; o.exec = function (s) { log.push("own exec " + s); return null }
 	r.push(o.test("b"), "b".replace(o, "c"))
@@ -159,6 +164,7 @@ func TestRegExpProtocolAgreesWithNode(t *testing.T) {
 // from another, and the same patterns on text that is not ASCII. The
 // answers are Node v26's.
 func TestRegExpASCIISubjectsAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], words = "alpha beta  gamma", joined = "x=1;" + "y=22;" + String(333), cut = "[[abc,de,,f]]".slice(2, -2)
 	r.push(JSON.stringify(/(\w+) +(\w+)/.exec(words)), /^\w+$/.test(words), words.match(/\w+/g).join(), words.search(/ g/))
 	r.push([...joined.matchAll(/(\w)=(\d+)/g)].map(m => m.index + ":" + m[2]).join(), joined.split(/[=;]/).join("|"), joined.split(/[=;]/, 3).join("|"))
@@ -184,6 +190,7 @@ func TestRegExpASCIISubjectsAgreeWithNode(t *testing.T) {
 // the u and i flags, strings as patterns, and the legacy statics a search
 // leaves. The answers are Node v26's.
 func TestRegExpSearchAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], log = []
 	var g = /o/g; g.lastIndex = 3
 	r.push("foo".search(g), g.lastIndex)
@@ -211,6 +218,7 @@ func TestRegExpSearchAgreesWithNode(t *testing.T) {
 // split, whose pieces take in the groups; match with the g flag; a sticky
 // and a single replace. The answers are Node v26's.
 func TestRegExpNamedReplaceAgreesWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], d = /(?<y>\d{4})-(?<m>\d\d)(?:-(?<d>\d\d))?/g, s = "2024-01-15 and 1999-12"
 	r.push(s.replace(d, "$<d>.$<m>.$<y>"), s.replace(d, "[$<nope>|$<y|$<>|$<m>$1$&]"), s.replace(d, "$<"))
 	r.push("ab".replace(/(?<n>a)|(?<n>b)/g, "<$<n>>"), "a-b".replace(/(?<x>a)(?<z>z)?/, "$<z>|$<x>|$2|$1"))
@@ -232,6 +240,7 @@ func TestRegExpNamedReplaceAgreesWithNode(t *testing.T) {
 // where a character may be a pair of surrogates. The answers are Node
 // v26's.
 func TestRegExpLazyRunsAgreeWithNode(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `var r = [], html = "<p>one</p><b>two</b> <i></i>"
 	r.push(html.match(/<(.+?)>/g).join(), html.replace(/<[^>]*?>/g, ""), JSON.stringify(/<(\w+?)>(.*?)<\/\1>/.exec(html)))
 	r.push('say "hi" and "bye"'.match(/"(.*?)"/g).join("|"), "aaa".match(/a+?/)[0], "aaa".match(/a*?/)[0].length, "aaab".match(/a*?b/)[0])

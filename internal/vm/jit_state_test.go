@@ -102,6 +102,7 @@ func jitEvaluatorForTest(t *testing.T, p *ir.Program) func([]ir.Value, int, uint
 // and hands real locals and operand slots to executeAt. This detects replayed
 // writes, wrong branch depths, and confusion between fetched and resume PCs.
 func TestJITStateEveryBoundary(t *testing.T) {
+	t.Parallel()
 	minusZero := Float(math.Copysign(0, -1))
 	for _, tc := range []struct {
 		name, source string
@@ -172,6 +173,7 @@ func TestJITStateEveryBoundary(t *testing.T) {
 }
 
 func TestJITGuardPreservesEffects(t *testing.T) {
+	t.Parallel()
 	fn := jitFunctionForTest(t, `function f(a) { let s=0; for(let i=0;i<3;i++) { s++; s+=a } return s }`)
 	p, err := jitcompile.Lower(fn)
 	if err != nil {
@@ -243,6 +245,7 @@ func TestJITGuardErrors(t *testing.T) {
 }
 
 func TestJITFusedInstructionExits(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source string
 		arg, want    Value
@@ -284,6 +287,7 @@ func TestJITFusedInstructionExits(t *testing.T) {
 }
 
 func TestJITIEEEOperators(t *testing.T) {
+	t.Parallel()
 	values := []float64{
 		math.Inf(-1), -math.MaxFloat64, -1, -math.SmallestNonzeroFloat64,
 		math.Copysign(0, -1), 0, math.SmallestNonzeroFloat64, 1, math.MaxFloat64,

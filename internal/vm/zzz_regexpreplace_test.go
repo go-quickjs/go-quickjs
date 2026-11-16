@@ -79,12 +79,11 @@ const replaceFlatTestWant = "2637138712 3380 TypeError TypeError3 aa sub:aab bbb
 func TestRegExpReplaceFlat(t *testing.T) {
 	for _, tree := range []bool{true, false} {
 		for _, idle := range []bool{true, false} {
-			SetTreeTier(tree)
 			gc := debug.SetGCPercent(-1)
 			if !idle {
 				debug.SetGCPercent(1)
 			}
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, replaceFlatTestSrc))
 			r.Close()
 			debug.SetGCPercent(gc)
@@ -96,13 +95,13 @@ func TestRegExpReplaceFlat(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }
 
 // A replace in one pass stops where an interrupt stops it as replace's
 // own way does (regExpReplace), at each of the ticks it is made at:
 // lastIndex and the legacy statics are those of the last match it made.
 func TestRegExpReplaceFlatInterrupt(t *testing.T) {
+	t.Parallel()
 	stopped := make(chan struct{})
 	close(stopped)
 	for _, re := range []string{"/b/g", "/b(a)?/g", "/b/", "/b/y"} {
@@ -152,6 +151,7 @@ func TestRegExpReplaceFlatInterrupt(t *testing.T) {
 // error, lastIndex and the legacy statics, with an interrupt at each of
 // the first ticks and where a match spends the step budget.
 func TestRegExpMatchAllASCII(t *testing.T) {
+	t.Parallel()
 	stopped := make(chan struct{})
 	close(stopped)
 	subject := strings.Repeat("ab", 6) + strings.Repeat("c", 40) + "ab"

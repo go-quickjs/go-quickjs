@@ -11,6 +11,7 @@ import "testing"
 // Object.prototype, which is asked instead. Each answer is Node's, three
 // rounds alike, on the trees and in the interpreter.
 func TestFillHoles(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		function fill(a, order) { for (const i of order) a[i] = i * 10; return a }
@@ -46,8 +47,7 @@ func TestFillHoles(t *testing.T) {
 		out[0] + '\n' + (out[0] === out[1] && out[1] === out[2])`
 	const want = "0,10,20,30 | ,10,,30/1,3 | 3:0:TypeError | ,,:TypeError | ,:TypeError | 0,,20:3:ok:TypeError | 0,,20 | 0,10,,30:A20 | 0,,20:A20O10 | ro,10:TypeError | 0,10,20\ntrue"
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -57,7 +57,6 @@ func TestFillHoles(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // new Array(n) is n holes, in storage made for n -- the object's own up to
@@ -65,6 +64,7 @@ func TestFillHoles(t *testing.T) {
 // run of holes and past the length dense storage is made for, filled and
 // grown as any array is.
 func TestNewArrayLengths(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		for (const n of [0, 1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 1024, 1025, 65536, 65537]) {

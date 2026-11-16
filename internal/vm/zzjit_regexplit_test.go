@@ -98,6 +98,7 @@ function execs(n) { var c = 0, w = 0, k; for (var i = 0; i < n; i++) { c += /(a+
 // argument whose conversion runs it -- and each answer is the
 // interpreter's.
 func TestJITRegExpLiteralGivenBack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

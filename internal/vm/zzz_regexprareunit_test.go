@@ -43,8 +43,7 @@ func TestRegExpRareUnit(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpRareUnitTestSrc+"run() + ' # ' + run()"))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -56,5 +55,4 @@ func TestRegExpRareUnit(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }

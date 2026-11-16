@@ -11,6 +11,7 @@ import "testing"
 // during the loop is not visited. The answers are the spec's order, which
 // Node gives.
 func TestForInDictionary(t *testing.T) {
+	t.Parallel()
 	src := `
 		function keys(o) { var s = []; for (var k in o) s.push(k); return s.join(',') }
 		var d = { z: 0, a: 1, b: 2 }; delete d.z;
@@ -26,10 +27,8 @@ func TestForInDictionary(t *testing.T) {
 		for (var i = 0; i < 3; i++) out.push(keys(d));
 		out.join(' | ')`
 	const want = "a,b | a,b,c | 7,4294967294,y | w | mine,inherited | a,b,c | a,b,c | a,b,c"
-	defer SetTreeTier(true)
 	for _, tree := range []bool{false, true} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {

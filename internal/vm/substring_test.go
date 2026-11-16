@@ -9,6 +9,7 @@ import (
 // can be, and must be the string its code units would make: the same bytes,
 // the same flags, and no cut between the halves of a pair.
 func TestSubstringOfNonASCIIMatchesUnits(t *testing.T) {
+	t.Parallel()
 	rng := rand.New(rand.NewSource(2))
 	pool := []uint16{'a', 'z', 0x7F, 0x80, 0x7FF, 0x800, 0x1D60, 0xFFFF, 0xD800, 0xDBFF, 0xDC00, 0xDFFF, 0xD83D, 0xDE00}
 	for it := 0; it < 20000; it++ {

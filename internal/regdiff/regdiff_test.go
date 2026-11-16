@@ -3,8 +3,10 @@ package regdiff
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
@@ -23,6 +26,27 @@ import (
 // register code's correctness rests on its verifier for memory and on these
 // for meaning: what a raw int32 register holds must be what the Value the
 // stack form keeps would be, at every overflow, -0, NaN and shift.
+
+// regDiffMemoryLimit is the soft limit on the test binary's memory
+// (debug.SetMemoryLimit) where GOMEMLIMIT sets none. The package's tests
+// run many cases at once, each in runtimes of its own, and the collector
+// would otherwise let the heap grow to twice what they hold live before
+// it collects; at the limit it collects sooner, and the binary's memory
+// stays near what is live. It is a soft limit: where more than it is
+// live, the collector runs more often, and the tests go on.
+const regDiffMemoryLimit = 2 << 30
+
+// TestMain runs the package's tests at regDiffMemoryLimit, and puts back
+// the limit there was after.
+func TestMain(m *testing.M) {
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		debug.SetMemoryLimit(regDiffMemoryLimit)
+	}
+	code := m.Run()
+	debug.SetMemoryLimit(limit)
+	os.Exit(code)
+}
 
 // withRegTier runs f with the register backend and tier set to on, and puts
 // back what the environment says after.
@@ -38,13 +62,19 @@ func withRegTier(on bool, f func()) {
 }
 
 // regDiffRun evaluates src in a new runtime and then each of calls, and
-// returns each call's result as a string, or its error's.
-func regDiffRun(t *testing.T, src string, calls []string) []string {
-	t.Helper()
+// returns each call's result as a string, or its error's, or src's error.
+// With old, the runtime has the register tier off for itself
+// (vm.Runtime.SetOldTiers): its host compiles no register form, and it
+// runs the stack interpreter and the tree tier, as every runtime does with
+// the process's switch off.
+func regDiffRun(src string, calls []string, old bool) ([]string, error) {
 	rt := quickjs.New()
 	defer rt.Close()
+	if old {
+		hostaccess.VM(rt).SetOldTiers()
+	}
 	if _, err := rt.Eval(src); err != nil {
-		t.Fatalf("eval: %v", err)
+		return nil, err
 	}
 	out := make([]string, len(calls))
 	for i, c := range calls {
@@ -55,7 +85,7 @@ func regDiffRun(t *testing.T, src string, calls []string) []string {
 		}
 		out[i] = v.String()
 	}
-	return out
+	return out, nil
 }
 
 // regDiff runs src and calls with the register tier off, twice, and on, and
@@ -69,11 +99,69 @@ func regDiff(t *testing.T, src string, calls []string) int64 {
 	return regDiffLocked(t, src, calls)
 }
 
+// regDiffParallel has a comparison run beside the others, unless a test
+// that reads the corpus another way (regDiffHook) runs it as one of its
+// own cases: those run as that test has them run.
+func regDiffParallel(t *testing.T) {
+	if regDiffHook == nil {
+		t.Parallel()
+	}
+}
+
+// regDiffOn is held by a comparison's run with the register tier on,
+// whose counts of register code and fallbacks are the process's: the
+// runs with it off, in runtimes of old tiers, count neither.
+var regDiffOn sync.Mutex
+
 // regDiffAlone is held by regDiffAll alone, which sets regcomp.OnRefuse
 // for the process, and shared by every other comparison: where those run
 // at once (TestRegLowerEvaluate's subtests), no other program compiles
 // while a refusal is taken for regDiffAll's.
 var regDiffAlone sync.RWMutex
+
+// heavySlots bounds how many heavy tests run at once: those whose
+// program is a corpus's whole -- the micro-benchmarks, the V8 suite,
+// Int32's generated functions -- each runtime of which holds the corpus
+// compiled in every form and the benchmarks' heaps, and a test that runs
+// the corpora in runtimes of the JIT with the collector held off. Each
+// holds a slot (heavy); the small cases run beside them, as many at once
+// as -parallel lets.
+var heavySlots = make(chan struct{}, heavyLimit())
+
+// heavyLimit is how many heavy tests run at once:
+// QUICKJS_REGDIFF_HEAVY's number, or 2.
+func heavyLimit() int {
+	var n int
+	if _, err := fmt.Sscanf(os.Getenv("QUICKJS_REGDIFF_HEAVY"), "%d", &n); err == nil && n > 0 {
+		return n
+	}
+	return 2
+}
+
+// heavyHeld are the tests that hold a slot of heavySlots.
+var heavyHeld sync.Map
+
+// heavy has t, a test that runs a corpus's whole program, wait for a slot
+// of heavySlots and hold it until t and its cleanups are done. A
+// comparison of t's runs its three runtimes one after another
+// (regDiffLocked). A test calls it after t.Parallel and before it takes
+// regDiffAlone, and holds a slot itself rather than for subtests of its
+// own, so that no test waits for a slot that one waiting for it holds.
+func heavy(t *testing.T) {
+	t.Helper()
+	heavySlots <- struct{}{}
+	heavyHeld.Store(t, true)
+	t.Cleanup(func() {
+		heavyHeld.Delete(t)
+		<-heavySlots
+	})
+}
+
+// heavyHolds reports whether t holds a slot of heavySlots.
+func heavyHolds(t *testing.T) bool {
+	_, ok := heavyHeld.Load(t)
+	return ok
+}
 
 // regDiffLocked is regDiff, its caller holding regDiffAlone.
 func regDiffLocked(t *testing.T, src string, calls []string) int64 {
@@ -83,17 +171,54 @@ func regDiffLocked(t *testing.T, src string, calls []string) int64 {
 		regDiffHook(t, src, calls)
 		return 1 << 20
 	}
+	// The three runs, each in a runtime of its own: the two with the tier
+	// off in runtimes of the old tiers, the one with it on counting the
+	// process's register code and fallbacks, which the others do not
+	// touch, one comparison's at a time (regDiffOn). A small program's
+	// are made at once; a heavy comparison's (heavy) one after another,
+	// each runtime closed before the next is made, so that it holds one
+	// runtime of its corpus at a time and not three.
 	var off, again, on []string
-	withRegTier(false, func() { off = regDiffRun(t, src, calls) })
-	withRegTier(false, func() { again = regDiffRun(t, src, calls) })
-	before := vm.RegsBuilt()
-	vm.ResetRegFallbacks()
-	withRegTier(true, func() { on = regDiffRun(t, src, calls) })
-	built := vm.RegsBuilt() - before
+	var errs [3]error
+	var built, n int64
+	var by string
+	runs := [3]func(){
+		func() { off, errs[0] = regDiffRun(src, calls, true) },
+		func() { again, errs[1] = regDiffRun(src, calls, true) },
+		func() {
+			regDiffOn.Lock()
+			defer regDiffOn.Unlock()
+			before := vm.RegsBuilt()
+			vm.ResetRegFallbacks()
+			withRegTier(true, func() { on, errs[2] = regDiffRun(src, calls, false) })
+			built = vm.RegsBuilt() - before
+			n, by = vm.RegFallbacks()
+		},
+	}
+	if heavyHolds(t) {
+		for _, run := range runs {
+			run()
+		}
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(len(runs))
+		for _, run := range runs {
+			go func() {
+				defer wg.Done()
+				run()
+			}()
+		}
+		wg.Wait()
+	}
+	for _, err := range errs {
+		if err != nil {
+			t.Fatalf("eval: %v", err)
+		}
+	}
 	// Register mode runs everything as register code, entered as its own:
 	// nothing in the stack interpreter or the tree tier, nothing entered
 	// through their frames (docs/register-interpreter.md, item 13).
-	if n, by := vm.RegFallbacks(); n != 0 {
+	if n != 0 {
 		t.Errorf("%d fallbacks to the other tiers (QJS_REGFALLTRACE names them):\n%s", n, by)
 	}
 	bad, skipped := 0, 0
@@ -157,9 +282,11 @@ var global_res;
 }
 
 func TestRegDiffMicrobenchmarks(t *testing.T) {
+	regDiffParallel(t)
 	if testing.Short() {
 		t.Skip("runs every micro-benchmark three times")
 	}
+	heavy(t)
 	src, calls := regDiffMicro(t)
 	if built := regDiff(t, src, calls); built < 100 {
 		t.Errorf("only %d functions ran as register code", built)
@@ -167,6 +294,7 @@ func TestRegDiffMicrobenchmarks(t *testing.T) {
 }
 
 func TestRegDiffV8Suite(t *testing.T) {
+	regDiffParallel(t)
 	if testing.Short() {
 		t.Skip("runs the V8 suite three times")
 	}
@@ -178,6 +306,7 @@ func TestRegDiffV8Suite(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
+	heavy(t)
 	var src strings.Builder
 	src.WriteString(files)
 	// Each benchmark run three times, its own checks of its answers on --
@@ -215,6 +344,8 @@ var global_res;
 // and sums, differences and products that leave them -- past 2^31, to -0,
 // to NaN -- with shifts by 32 and more, >>> 0, and doubles mixed in.
 func TestRegDiffInt32(t *testing.T) {
+	regDiffParallel(t)
+	heavy(t)
 	rnd := rand.New(rand.NewSource(1))
 	consts := []string{"0", "1", "-1", "2", "7", "31", "32", "33", "64", "255", "0x3fff", "0xfffffff",
 		"0x7fffffff", "-0x80000000", "0x80000000", "0xffffffff", "4294967296", "-0", "0.5", "-1.5",
@@ -283,6 +414,7 @@ func TestRegDiffInt32(t *testing.T) {
 // and the names a function's body resolves: its own name shadowed in a
 // block, the arguments object an apply other than the built-in is given.
 func TestRegDiffStacksAndNames(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function frames(e) { return e.stack.split("\n").slice(1).map(function (s) { return s.trim() }).join(" | ") }
 function thrower() { return null.x }
@@ -317,6 +449,7 @@ function stackOf(f) { try { var v = f(); return v && v.stack ? frames(v) : Strin
 // that throw, chains past maxChainParts -- and closures made once in a
 // loop or taking what they capture by value.
 func TestRegDiffChainsAndClosures(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function o(n) { return { toString: function () { log.push("s" + n); return "<" + n + ">" }, valueOf: function () { log.push("v" + n); return n } } }
@@ -370,6 +503,7 @@ function caught(f, a) { try { f(a) } catch (x) { return x.message + " " + x.stac
 // the call's value must go to a temporary, never over the binding
 // (f25d1df4 sent it there, and (o = /d/).test("d") left o true).
 func TestRegDiffReceiverBindings(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function P(n) { this.n = n }
 P.prototype.m = function (x) { return this.n + ":" + x };
@@ -397,6 +531,7 @@ function looped(n) { var o, s = ""; for (var i = 0; i < n; i++) { s += (o = new 
 // path of their own after the stage's first measurements, each with its
 // slow paths.
 func TestRegDiffSites(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function grow(n, m) { var out = []; for (var j = 0; j < m; j++) { var a = []; for (var i = 0; i < n; i++) a.push(i, " "); out.push(a.length, a[0], a[a.length - 1]); if (j == 2) a.x = 1; } return out.join() }
 function fresh() { var a = [], b = []; a.push(1); return [a === b, a.length, b.length, Array.isArray(b), Object.getPrototypeOf(b) === Array.prototype].join() }
@@ -455,6 +590,7 @@ function kept(n) { var all = []; for (var j = 0; j < n; j++) { var a = []; for (
 // (regTypedGet, regTypedSet), with the tree's, and updates that write a
 // number's word alone.
 func TestRegDiffTyped(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var kinds = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array];
 var vals = [0, -0, 1, -1, 1.5, -1.5, 127, 128, 255, 256, -129, 65535, 65536, 2147483647, 2147483648, -2147483649, 4294967296, NaN, Infinity, -Infinity, 0.1, 1e300, "7", "x", true, null, undefined, { valueOf: function () { return 3 } }];
@@ -491,6 +627,7 @@ function words() { var a = [1, -0, 0.5, 2], o = { x: 1, y: -0 }; var z = -0; a[0
 // element up the chain, sparse arrays, an arguments object and keys that
 // are no index.
 func TestRegDiffElemWrites(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function show(a) { return JSON.stringify(a) + a.length + Object.keys(a).join("/") }
 function app(n) { var a = []; for (var i = 0; i < n; i++) a[i] = i; var b = []; for (var i = 0; i < n; i++) b[b.length] = "s" + i; return show(a) + show(b) }
@@ -517,6 +654,7 @@ function proxied() { var log = [], a = [1], p = new Proxy(a, { set: function (o,
 // built and cut, with surrogates, and what is no string or array -- a
 // String object, a function, an object with a getter, null.
 func TestRegDiffLength(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function lens() { var s = "", r = []; for (var i = 0; i < 20; i++) { s += "a\ud83d\ude00"; r.push(s.length) } var c = s.slice(3, 11), e = ""; r.push(c.length, e.length, "x".length, (s + c).length); var xs = [new String("abc"), function (a, b) {}, { get length() { return "g" } }, { length: -1 }, [1, , 3], 5, true]; for (var i = 0; i < xs.length; i++) { var x = xs[i]; r.push(x.length) } try { var n = null; r.push(n.length) } catch (e) { r.push(e.name) } return r.join() }
 `
@@ -534,6 +672,7 @@ function lens() { var s = "", r = []; for (var i = 0; i < 20; i++) { s += "a\ud8
 // conversion runs code or throws, symbols, and a local that holds no
 // string; strings long enough to be grown in place many times over.
 func TestRegDiffAppends(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var held;
 function keepAll(n) { var out = "", keep = []; for (var i = 0; i < n; i++) { out += "ab"; if (i % 3 == 0) keep.push(out) } return keep.map(function (s) { return s.length }).join() + out.length }
@@ -566,6 +705,7 @@ function cut(n) { var out = "", parts = []; for (var i = 0; i < n; i++) { out +=
 // upvalue after the operation that gave up, too few arguments, errors and
 // their stack lines.
 func TestRegDiffLeafRun(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function show(v) { return Object.is(v, -0) ? "-0" : typeof v === "symbol" ? "sym" : String(v) }
 function counter(n) { var c = 0; function inc() { c++ } function dec(a) { c-- } function add(a) { c += a } function sub(a, b) { c = c - a * b } for (var i = 0; i < n; i++) { inc(); add(i); sub(i, 2); dec() } return show(c) }
@@ -599,6 +739,7 @@ function held(xs) { var calls = 0, last = 0, both = 0; var r = xs.reduce((acc, x
 // sites whose objects grow afterwards, and literals the form leaves to
 // define_field.
 func TestRegDiffObjectLiterals(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function desc(o) { return JSON.stringify(Object.getOwnPropertyNames(o).map(function (k) { var d = Object.getOwnPropertyDescriptor(o, k); return [k, typeof d.value === "number" && Object.is(d.value, -0) ? "-0" : d.value, d.writable, d.enumerable, d.configurable] })) + Object.isExtensible(o) + (Object.getPrototypeOf(o) === Object.prototype) }
 function lits(j) { var a = { x: j, y: j + 1, s: "k", t: true, n: null, u: undefined, z: -0 }; var b = { "1": j, "0": 2, b: 3, "01": 4, "-0": 5, "4294967295": 6, "4294967294": 7, a: 8 }; var c = { get: 1, set: 2, "__proto_": 3, constructor: 4, toString: 5 }; return desc(a) + desc(b) + desc(c) }
@@ -629,6 +770,7 @@ function wide() { var src = "return {"; for (var i = 0; i < 300; i++) src += "p"
 // built-in replaced by a function and by a getter, and put back; and the
 // stacks and messages of what throws, placed at the read or the call.
 func TestRegDiffCharCodeAt(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function codes(s) { var r = [], i; for (i = -2; i < s.length + 2; i++) r.push(s.charCodeAt(i)); var xs = [0.5, -0.5, -0, NaN, Infinity, -Infinity, 1.99, 2147483648]; for (var k = 0; k < xs.length; k++) { i = xs[k]; r.push(s.charCodeAt(i)) } return r.join() }
 function args(s) { var r = [], xs = [undefined, "1", null, true, { valueOf: function () { r.push("v"); return 2 } }, [1]], i; for (var k = 0; k < xs.length; k++) { i = xs[k]; r.push(s.charCodeAt(i)) } return r.join() }
@@ -651,6 +793,7 @@ function scan(s) { var h = 0, i; for (i = 0; i < s.length; i++) h = (h * 31 + s.
 // literal given to replace, split, match and test, whose RegExp the tree
 // may have back; flags; and a literal's object kept and compared.
 func TestRegDiffRegExpLiterals(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function esc(s) { return s.indexOf("<") < 0 ? s : s.replace(/</g, "&lt;") }
 function lits() { var r = [], k = [], i; for (i = 0; i < 4; i++) { var x = /a(b)?/g; k.push(x); r.push(x.lastIndex, x.exec("xabab") + "", x.lastIndex) } r.push(k[0] === k[1], k[0].source, k[0].flags, /x/imsu.flags, /\u{1F600}/u.test("\ud83d\ude00")); return r.join() }
@@ -672,6 +815,7 @@ function uses(s) { return [esc(s), s.split(/,\s*/).length, (s.match(/\d+/g) || [
 // them, a replacer function, a split's limit, errors thrown by the call and
 // by its arguments, and the RegExp kept by the method it calls.
 func TestRegDiffRegExpLiteralCalls(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var kept = [];
 function loop(a) { var c = 0, s = ""; for (var j = 0; j < 8; j++) { if (/^a.c$/.test(a[j & 3])) c++; var m = /(\d+)-(\d+)/.exec("x" + j + "-" + (j * 3)); s += m[1] + m[2] + /a/y.test("ba") + /a/g.exec("aa").index } return c + s }
@@ -738,6 +882,7 @@ function errs() { var out = []; try { /a/.test({ toString: function () { throw n
 // throw, nested, overriding the completion or not; rethrows from catch and
 // finally; and a stack overflow.
 func TestRegDiffTry(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function thrower(k) { if (k === 1) throw new TypeError("t" + k); if (k === 2) return null.x; if (k === 3) throw k; return k }
@@ -874,6 +1019,7 @@ function stackOfCaught() { function a() { throw new Error("here") } try { a() } 
 // array changed while it is walked; for-in over objects, arrays, strings,
 // prototypes, keys deleted and added; labels; and the loops nested.
 func TestRegDiffForOfIn(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var glob, gl = [];
 function iter(n, log, opts) {
@@ -992,6 +1138,7 @@ function headClosure() { var f; try { for (const x of (f = function () { return 
 // (regGenCall: a method's this, a sloppy body's this coerced, a parameter
 // default that throws, a generator method of a class or a literal).
 func TestRegDiffSteps(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function Range(n, mode) { this.i = 0; this.n = n; this.mode = mode }
 Range.prototype.next = function () {
@@ -1052,6 +1199,7 @@ function gens() {
 // and lit_exec cannot name in their words: the calls are made through the
 // literal's own instruction and call_method_w's Aux, all 32 bits of it.
 func TestRegDiffRegExpWideConstants(t *testing.T) {
+	regDiffParallel(t)
 	var b strings.Builder
 	b.WriteString("function wide(s) {\n\tvar x, out = [];\n")
 	for i := 0; i < 70000; i++ {
@@ -1074,6 +1222,7 @@ func TestRegDiffRegExpWideConstants(t *testing.T) {
 // assignment target's errors -- and in scripts and indirect eval code that
 // declare 65,600 vars first, top-level declarations.
 func TestRegDiffFarNames(t *testing.T) {
+	regDiffParallel(t)
 	if testing.Short() {
 		t.Skip("compiles a dozen programs of 65,600 statements three times")
 	}
@@ -1157,6 +1306,7 @@ function n4(o) {
 // named function expression's own name; and a function whose bindings fit
 // but leave its temporaries too few registers.
 func TestRegDiffFarRegisters(t *testing.T) {
+	regDiffParallel(t)
 	if testing.Short() {
 		t.Skip("compiles functions of 65,600 bindings three times")
 	}
@@ -1212,6 +1362,7 @@ var named = function self(p) {
 // tail call, which keeps its frame; callees that are built-ins, functions
 // the backend refuses, and that throw at depth; and a stack trace.
 func TestRegDiffTailCalls(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 "use strict";
 function even(n) { return n === 0 ? true : odd(n - 1) }
@@ -1322,6 +1473,7 @@ func TestRegTailCallsStop(t *testing.T) {
 // its completion value through loops, switches, try statements and finally
 // clauses, breaks and continues, and throws.
 func TestRegDiffTopLevel(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var v1 = 1, v2;
 let l1 = 2, l2;
@@ -1398,6 +1550,7 @@ Object.defineProperty(globalThis, "fixed", { value: 1, configurable: false, writ
 // the errors -- destructuring null, a non-iterable, a parameter read before
 // its turn -- with their stack traces.
 func TestRegDiffPatterns(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
@@ -1458,6 +1611,7 @@ function c2() { try { try { throw null } catch ({ m }) { return "no" } } catch (
 // assignment to names, properties and elements, and assignment to a
 // constant, with their errors.
 func TestRegDiffLiterals(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
@@ -1503,6 +1657,7 @@ function m1(a) { var args = arguments; var o = { f(x) { x[0] = 100; return 1 } }
 // a lexical one and a global object's accessor take the store, with the
 // errors' stack traces.
 func TestRegDiffStrictGlobalStores(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
 function mk(name, v) { globalThis[name] = 0; return v }
@@ -1533,6 +1688,7 @@ function s7() { "use strict"; try { sgNew3 = mk("x", 1) } catch (e) { return fra
 // private member missing, a derived constructor returning a primitive --
 // with their stack traces.
 func TestRegDiffClasses(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
@@ -1594,6 +1750,7 @@ function c13() { var r = []; class N { #x = 1; static t(o) { try { return o.#x }
 // frozen object's field written, a member missing and a primitive, with
 // their stack traces.
 func TestRegDiffPrivateSites(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
 function make() {
@@ -1622,6 +1779,7 @@ function p4() { var a = new A(), b = new B(), s = 0; for (var i = 0; i < 30; i++
 // short forms: an int64's and past it, division by zero, a Number beside a
 // BigInt, >>>, and the loops of the micro-benchmarks.
 func TestRegDiffBigIntArith(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var B = BigInt;
 function ops(a, b) {
@@ -1669,6 +1827,7 @@ function tw(x, y) { "use strict"; return BigInt.asIntN(64, x * y) }
 // eval or inside a with, new.target an arrow captures, and the stack
 // traces of errors thrown in them.
 func TestRegDiffConstructions(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") }
 var seen = [];
@@ -1716,6 +1875,7 @@ var out6; c6().then(function (v) { out6 = v })
 // order, the creation's binding of parameters, captures across
 // suspensions, and the errors' positions.
 func TestRegDiffGenerators(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 var out = [];
@@ -1786,6 +1946,7 @@ function runAsync() { out = []; log = []; settle("a1", a1(3)); settle("a2", a2()
 // through it, a delegate that hands a result over as it is, a delegate
 // running, finishing or throwing, and the frames a stack trace sees.
 func TestRegDiffGeneratorSteps(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function frames(e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1, 4).map(function (s) { return s.trim() }).join(" | ") }
@@ -1837,6 +1998,7 @@ function s15() { var r = [[...member()].join(), [...member2()].join()]; try { no
 // for-of and for-in heads, blocks of a loop's body, catch clauses, and a
 // head's expression's closure of the binding in its dead zone.
 func TestRegDiffLoopBindings(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function t1() { var fs = []; for (let i = 0; i < 3; i++) { fs.push(() => i); } return fs.map(f => f()).join() }
 function t2() { var fs = []; for (let i = 0, g = () => i; i < 3; i++) { fs.push(() => i + "/" + g()); if (i == 1) continue; } return fs.map(f => f()).join() }
@@ -1866,6 +2028,7 @@ function t14() { let y = 'out'; var pb = () => y, pe, pd; for (const [y, z = pd 
 // for-in loops that store to a global var, a global let, a checked
 // binding or a constant, with the errors' positions.
 func TestRegDiffNames(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function e(f) { try { return String(f()) } catch (x) { return x.name + ": " + x.message + " | " + x.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") } }
 function a1() { var f = () => x; var r = e(f); let x = 1; return r + "," + f() }
@@ -1892,6 +2055,7 @@ function a10() { for (gv of [1, 2]) {} for (gl in {a: 1}) {} return gv + gl }
 // and class declarations, and delete of a name and of an optional chain,
 // with the errors' positions.
 func TestRegDiffLabelsSwitchDelete(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function e(f) { try { return String(f()) } catch (x) { return x.name + ": " + x.message + " | " + x.stack.split("\n").slice(1, 3).map(function (s) { return s.trim() }).join(" | ") } }
 function l1() { var r = []; a: { r.push(1); if (r.length) break a; r.push(2) } return r.join() }
@@ -1939,6 +2103,7 @@ function d7() { var o = Object.freeze({b: 1}); return [delete o?.b, "b" in o].jo
 // the block is entered, Annex B's var assigned as the declaration is
 // evaluated, in loops, async ones, and a thrower's stack.
 func TestRegDiffBlockFunctions(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function b1() { "use strict"; var r = []; { r.push(f()); function f() { return 1 } } return r.join() + typeof f }
 function b2() { var r = [typeof f]; { r.push(typeof f); function f() { return 2 } } r.push(typeof f); return r.join() }
@@ -1964,6 +2129,7 @@ function b14() { "use strict"; var fs = []; for (let i = 0; i < 2; i++) { functi
 // TestRegDiffRestArguments compares a rest parameter nothing reads beside
 // the arguments object, whose register the rest's array was made in.
 func TestRegDiffRestArguments(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function r1(..._) { return arguments.toString() + arguments.length }
 function r2(x, ...r) { return arguments.length + ":" + x }
@@ -1978,6 +2144,7 @@ function r4(...r) { var k = 1; return arguments.length + k }
 // in place past the tail-call depth, read after -- and of functions that
 // name eval without calling it.
 func TestRegDiffArgumentsForms(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 function t1(n) { "use strict"; if (n === 0) return arguments.length; return t1(n - 1, 1, 2) }
 function t2(n, acc) { "use strict"; var a = arguments; if (n === 0) return acc + ":" + a.length; return t2(n - 1, acc + a[0]) }
@@ -1997,6 +2164,7 @@ function e3() { "use strict"; return eval }
 // import.defer() calls: their arguments' order, the promise, and what it
 // settles to with no loader, read once the jobs have run.
 func TestRegDiffImportCalls(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [], settled = [];
 function i1() { var p = import((log.push(1), "./a.js"), (log.push(2), { with: {} })); p.catch(() => 0); return [p instanceof Promise, log.join()].join() }
@@ -2015,6 +2183,7 @@ function run() { for (var f of [() => i2("./a.js"), () => i3("./a.js"), () => i4
 // return, with disposers that throw (SuppressedError), null values and a
 // value with no disposer.
 func TestRegDiffUsing(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var log = [];
 function res(n, fail) { return { [Symbol.dispose]() { log.push("d" + n); if (fail) throw new Error("e" + n) } } }
@@ -2055,6 +2224,7 @@ function runAsync() { (async () => { for (var f of [v1, v2, v3, v4, v5]) aout.pu
 // that is no string, a callee that is not the realm's eval, and the errors
 // with their stack traces.
 func TestRegDiffEval(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1).map(function (s) { return s.trim() }).join(" | ") };
 function s1(a) { 'use strict'; var x = 1; let y = 2; const z = 3; eval("x = x + a; y++"); return x + y + z }
@@ -2126,6 +2296,7 @@ var own = { toString() { return "own" } };
 // every way out, closures and generators made inside, a getter's throw
 // with its stack trace, and an eval's var, function and let.
 func TestRegDiffWith(t *testing.T) {
+	regDiffParallel(t)
 	src := `
 var frames = function (e) { return e.name + ": " + e.message + " | " + e.stack.split("\n").slice(1).map(function (s) { return s.trim() }).join(" | ") };
 function w1(o) { var x = 1, r = []; with (o) { r.push(x); x = 5; r.push(x); x += 2; x++; r.push(typeof y, typeof x) } return r.join() + "/" + x + "/" + JSON.stringify(o) }

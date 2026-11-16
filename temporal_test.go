@@ -7,6 +7,7 @@ import (
 )
 
 func TestTemporalInstantConstruction(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct {
@@ -56,6 +57,7 @@ func TestTemporalInstantConstruction(t *testing.T) {
 }
 
 func TestTemporalInstantErrors(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct {
@@ -84,6 +86,7 @@ func TestTemporalInstantErrors(t *testing.T) {
 }
 
 func TestTemporalIntlDateTimeFormat(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -148,6 +151,7 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 }
 
 func TestTemporalIntlNodeQuirks(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -178,6 +182,7 @@ func TestTemporalIntlNodeQuirks(t *testing.T) {
 // RepeatedMidnight); standards mode answers P1M and rounds the Casey
 // instant (TestTemporalZonedDateTimeFoundation, TestTemporalDurationRound).
 func TestTemporalNodeQuirks(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -194,6 +199,7 @@ func TestTemporalNodeQuirks(t *testing.T) {
 }
 
 func TestTemporalZonedDateTimeFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct {
@@ -280,6 +286,7 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 }
 
 func TestTemporalDurationFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -320,6 +327,7 @@ func TestTemporalDurationFoundation(t *testing.T) {
 }
 
 func TestTemporalDurationIntlFormatting(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct {
@@ -360,6 +368,7 @@ func TestTemporalDurationIntlFormatting(t *testing.T) {
 }
 
 func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -378,6 +387,7 @@ func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
 }
 
 func TestTemporalDurationAddSubtract(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -402,6 +412,7 @@ func TestTemporalDurationAddSubtract(t *testing.T) {
 }
 
 func TestTemporalDurationRound(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -454,6 +465,7 @@ func TestTemporalDurationRound(t *testing.T) {
 }
 
 func TestTemporalDurationCompare(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -475,6 +487,7 @@ func TestTemporalDurationCompare(t *testing.T) {
 }
 
 func TestTemporalDurationTotal(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -501,6 +514,7 @@ func TestTemporalDurationTotal(t *testing.T) {
 }
 
 func TestTemporalPlainDateFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -562,6 +576,7 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 }
 
 func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -629,6 +644,7 @@ func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
 }
 
 func TestTemporalPlainMonthDayNonISOCalendars(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -677,6 +693,7 @@ func TestTemporalPlainMonthDayNonISOCalendars(t *testing.T) {
 }
 
 func TestTemporalPlainDateTimeFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -741,6 +758,7 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 }
 
 func TestTemporalPlainTimeFoundation(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
@@ -783,6 +801,7 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 }
 
 func TestTemporalIsLazy(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	got := evalString(t, rt, `{
@@ -798,6 +817,7 @@ func TestTemporalIsLazy(t *testing.T) {
 }
 
 func TestTemporalNowFoundation(t *testing.T) {
+	t.Parallel()
 	checkEval(t, `[
         Object.prototype.toString.call(Temporal.Now),
         Temporal.Now.instant() instanceof Temporal.Instant,
@@ -812,6 +832,7 @@ func TestTemporalNowFoundation(t *testing.T) {
 // The strings, epochs and days the engine's own Temporal core was tested
 // with before Temporal moved onto go-intl, now through the API.
 func TestTemporalStringsAndRange(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	check := func(src, want string) {

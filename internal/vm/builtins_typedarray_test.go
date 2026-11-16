@@ -7,6 +7,7 @@ import "testing"
 // and setElem tells a BigInt type by its kind's place after elemBigInt64.
 // An element type added to one table and not the others fails here.
 func TestElemTablesAgree(t *testing.T) {
+	t.Parallel()
 	for k, info := range elemInfos {
 		if info.name == "" {
 			continue

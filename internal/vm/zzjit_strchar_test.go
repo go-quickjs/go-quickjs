@@ -48,6 +48,7 @@ func TestJITStringElements(t *testing.T) {
 // The reads run natively once learned: Go reads none of an ASCII string's
 // characters.
 func TestJITStringElementsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -157,6 +158,7 @@ func TestJITCallsLinkedBeforeCode(t *testing.T) {
 // to pay. Once compiled, wrap runs natively at every call, and leaves it
 // far less often than once a character.
 func TestJITCallsBesideCharCodeAt(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -443,6 +445,7 @@ func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {
 // native code. Once compiled, 20 calls over 50 fresh subarrays each leave
 // native code at most twice.
 func TestJITFreshViewLengthsNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

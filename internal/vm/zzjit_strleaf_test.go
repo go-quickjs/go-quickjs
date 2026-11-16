@@ -9,6 +9,7 @@ import "testing"
 // called natively, each answer and the calls of its object's conversions
 // Node's, and the interpreter's.
 func TestJITStringLeaves(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

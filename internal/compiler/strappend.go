@@ -258,6 +258,7 @@ func (c *compiler) compileOwnedAppend(n *ast.Assign) {
 	idx, _ := c.resolveUpvalue(n.Target.(*ast.Ident).Name)
 	c.reg.NoteRead(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 	c.reg.NoteWrite(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
+	c.reg.NoteAppend(n)
 	c.emit(bytecode.OpGetUpvalue, idx, 0)
 	c.compileExpr(n.Value)
 	c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)

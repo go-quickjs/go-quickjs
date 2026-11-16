@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"math/bits"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -580,17 +581,17 @@ func regTypedRead(r *Runtime, o *Object, k float64) (float64, bool) {
 // the key's index, and the read as the stack form makes it otherwise.
 func rsGetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.kept.pc = pc + 1
-	if regElemMiss(st.c, &st.kept, regs) {
-		return pc + 1
-	}
 	r := st.r
-	st.at(pc)
 	if o, key := regs[w.B()], regs[w.C()]; o.IsObject() && key.IsString() {
+		// A string key is no miss path's: it is looked for first.
 		if x, ok := r.stringKeyRead(o.Object(), key.String()); ok {
 			regs[w.A()] = x
 			return pc + 1
 		}
+	} else if regElemMiss(st.c, &st.kept, regs) {
+		return pc + 1
 	}
+	st.at(pc)
 	v, err := r.getIndexed(regs[w.B()], regs[w.C()])
 	return st.put(regs, w, v, err)
 }
@@ -756,13 +757,76 @@ func rhAdd(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	return ^pc
 }
 
+// regBigMarks are the marks of an add, a sub or a mul whose BigInt result
+// may let a block go back for the next result to be made in.
+const regBigMarks = bytecode.RArithFreshB | bytecode.RArithFreshC | bytecode.RArithOwnA
+
+// regBigGives reports whether regBigRelease may give anything back for
+// v, an operator's BigInt result of a room the list keeps: a marked
+// operand that is a BigInt on the heap, or a register A that holds its
+// values alone. A result a sum of fresh numbers too small for the heap
+// made, or of a local that does not hold its values alone, costs only
+// this.
+func regBigGives(regs *[1 << 16]Value, w bytecode.RInstr, v Value) bool {
+	x := w.X()
+	return bigGiveable((*BigInt)(v.ref)) && (x&bytecode.RArithOwnA != 0 ||
+		x&bytecode.RArithFreshB != 0 && regs[w.B()].isHeapBig() || x&bytecode.RArithFreshC != 0 && regs[w.C()].isHeapBig())
+}
+
+// regBigRelease gives back what of an arithmetic operator's operands,
+// in registers B and C, and of the value its register A held, its marks say nothing
+// else has (regcomp's fresh and RArithOwnA), now that it has made v, a
+// BigInt on the heap, as the tree's operator nodes give theirs back
+// (bigRelease): `sum += a * a` and `a += 1n` in a loop make their results
+// in the blocks of the ones before, which nothing else saw. It is
+// bigRelease's work, with a block too small or too large for the list's
+// rooms (bigGiveable) not given at all; and the operators call it only
+// for a result of such a room, which the next result of its size is made
+// in: a BigInt of a few words, made anew whatever is given back, pays
+// only the operator's check of its room.
+//
+//go:noinline
+func (r *Runtime) regBigRelease(regs *[1 << 16]Value, w bytecode.RInstr, v Value) {
+	if bits.UintSize != 64 {
+		return
+	}
+	// The operands are in their registers still, and A holds what it
+	// held: the operator stores its result after this.
+	a, b, x := regs[w.B()], regs[w.C()], w.X()
+	if x&bytecode.RArithFreshB != 0 && a.isHeapBig() && a.ref != v.ref && bigGiveable((*BigInt)(a.ref)) {
+		r.bigGive((*BigInt)(a.ref))
+	}
+	if x&bytecode.RArithFreshC != 0 && b.isHeapBig() && b.ref != v.ref && b.ref != a.ref && bigGiveable((*BigInt)(b.ref)) {
+		r.bigGive((*BigInt)(b.ref))
+	}
+	if x&bytecode.RArithOwnA != 0 {
+		old := regs[w.A()]
+		if old.isHeapBig() && old.ref != v.ref && (*BigInt)(old.ref).hdr&bigSoleBit != 0 &&
+			(x&bytecode.RArithFreshB == 0 || old.ref != a.ref) && (x&bytecode.RArithFreshC == 0 || old.ref != b.ref) &&
+			bigGiveable((*BigInt)(old.ref)) {
+			r.bigGive((*BigInt)(old.ref))
+		}
+		(*BigInt)(v.ref).hdr |= bigSoleBit
+	}
+}
+
 func rsAdd(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	if a, b := regs[w.B()], regs[w.C()]; a.IsNumber() && b.IsNumber() {
 		regs[w.A()] = regNum(a.Number() + b.Number())
 		return pc + 1
 	}
 	st.at(pc)
+	if w.X()&bytecode.RAddAppend != 0 {
+		// An append to an upvalue: R[B] the string the binding alone
+		// holds, grown in place where it can be, as the tree's upvalueAdd
+		// grows it (strAppend).
+		v, err := strAppendOp[struct{}](st.r, regs[w.B()], regs[w.C()])
+		return st.put(regs, w, v, err)
+	}
 	v, err := st.r.add(regs[w.B()], regs[w.C()])
+	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
+		st.r.regBigRelease(regs, w, v)
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -783,6 +847,9 @@ func rsSub(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpSub, regs[w.B()], regs[w.C()])
+	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
+		st.r.regBigRelease(regs, w, v)
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -803,6 +870,9 @@ func rsMul(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpMul, regs[w.B()], regs[w.C()])
+	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
+		st.r.regBigRelease(regs, w, v)
+	}
 	return st.put(regs, w, v, err)
 }
 

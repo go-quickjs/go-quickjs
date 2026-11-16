@@ -83,10 +83,8 @@ func runInt32Script(t *testing.T, name string, check func(tree bool)) {
 	// A checkout that converts line endings, as Windows's does by default,
 	// gives Node's output CRLFs the script's lines do not have.
 	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
-	defer SetTreeTier(true)
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := newOldTiersForTest(Config{})
+		r := newOldTiersTreeForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, string(src)))
 		r.Close()
 		if err != nil {

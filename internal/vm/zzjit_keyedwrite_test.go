@@ -69,6 +69,7 @@ var keyedWriteRounds = [][2]string{
 // interpreter's, and fill, whose stores Go makes so, never leaves its
 // code.
 func TestJITKeyedWrites(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

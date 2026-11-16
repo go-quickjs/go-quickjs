@@ -9,6 +9,7 @@ import "testing"
 // and clear, which marked each of them again, made a Set cleared after every
 // few additions quadratic.
 func TestMapStorageBounded(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 
 	queue := newJSMap()

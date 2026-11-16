@@ -14,6 +14,7 @@ import (
 // Pool objects have the interpreter's allocation layout, including its
 // inline-property capacities and growth into separate property storage.
 func TestJITObjectPoolLayouts(t *testing.T) {
+	t.Parallel()
 	proto := newObject(nil, ClassObject)
 	root := &shape{proto: proto}
 	for n := 0; n <= 16; n++ {

@@ -16,6 +16,7 @@ import (
 // import.source. It was always empty, so a loader resolving "./x" against
 // the referrer resolved it against the working directory instead.
 func TestDynamicImportReferrer(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	defer rt.Close()
 	files := map[string]string{

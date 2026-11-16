@@ -8,7 +8,7 @@ import "testing"
 // Reflect.construct, coercion, an invalid date, and the function called
 // rather than constructed. The answers are Node's, in any time zone.
 func TestDateObjects(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	const src = `function f() {
   var out = [];
   var a = new Date(0), b = new Date(a), c = new Date("1970-01-02T00:00:00Z"), d = new Date(Date.UTC(2020, 1, 29, 12)), e = new Date(NaN);
@@ -25,9 +25,8 @@ func TestDateObjects(t *testing.T) {
 f()`
 	const want = `0|0|86400000|2020-02-29T12:00:00.000Z|NaN|Invalid Date|0|2001-01-01T00:00:00.000Z|[object Date]|true|2020|0|10|400|D4|true|true|5|NaN|1|true|7|string|0|{"a":"1970-01-01T00:00:00.000Z"}`
 	for _, on := range []bool{false, true} {
-		SetTreeTier(on)
 		fn := compileForTest(t, src)
-		r := New(Config{})
+		r := newTreeTierForTest(on, Config{})
 		v, err := r.Run(fn)
 		if err != nil {
 			r.Close()

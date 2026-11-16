@@ -98,10 +98,9 @@ true2000`
 // A sparse array made dense again answers as it did: Node's answers, in the
 // tree tier and in the interpreter.
 func TestDensify(t *testing.T) {
-	defer SetTreeTier(true)
+	t.Parallel()
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		if _, err := r.Run(compileForTest(t, densifySrc)); err != nil {
 			t.Fatal(err)
 		}
@@ -122,6 +121,7 @@ func TestDensify(t *testing.T) {
 // in the table, not sparse -- and keep their named properties; one whose
 // table keeps an index of other attributes, or a prototype, stays sparse.
 func TestDensifyMakesDense(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, densifySrc+`;

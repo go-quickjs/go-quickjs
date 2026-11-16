@@ -165,6 +165,7 @@ out.length + " " + s.length + " " + h;`, "13 23551 110140091"},
 }
 
 func TestJITBigIntGivenBack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

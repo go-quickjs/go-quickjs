@@ -9,6 +9,7 @@ import (
 // an array's allocation as, has its side fields right after the Object,
 // where embedArrayExt puts them.
 func TestArrayExtOverlay(t *testing.T) {
+	t.Parallel()
 	if off, size := unsafe.Offsetof(arrayExtObject{}.side), unsafe.Sizeof(Object{}); off != size {
 		t.Fatalf("arrayExtObject's side fields at %d, not right after the Object (%d)", off, size)
 	}
@@ -50,6 +51,7 @@ func arrayExtHoistGrow(i int) int {
 // sum before the loop, and the nil array leaves 0x20 in a pointer slot:
 // "invalid pointer found on stack" on the first run.
 func TestArrayExtNotHoisted(t *testing.T) {
+	t.Parallel()
 	arr := newObject(nil, ClassArray)
 	for k := 0; k < 200; k++ {
 		done := make(chan int)

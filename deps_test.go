@@ -10,6 +10,7 @@ import (
 // benchmark runner that compares the two is a module of its own, and a
 // dependency of this one would be in its go.mod or its go.sum.
 func TestNoGojaDependency(t *testing.T) {
+	t.Parallel()
 	for _, f := range []string{"go.mod", "go.sum"} {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -28,6 +29,7 @@ func TestNoGojaDependency(t *testing.T) {
 // disassemblers check the JIT's encodings from internal/jit/verify, a module
 // of its own.
 func TestNoDisassemblerDependency(t *testing.T) {
+	t.Parallel()
 	for _, f := range []string{"go.mod", "go.sum"} {
 		b, err := os.ReadFile(f)
 		if err != nil {

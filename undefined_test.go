@@ -12,6 +12,7 @@ import (
 // pushes it); and the binding's, the object's or the eval's value where one
 // does. Against Node's answer.
 func TestUndefinedRead(t *testing.T) {
+	t.Parallel()
 	src := `
 		var out = [];
 		function a(x) { return x === undefined; }

@@ -68,8 +68,7 @@ func TestRegExpExecDirect(t *testing.T) {
 				runtime.GC()
 				debug.SetGCPercent(-1)
 			}
-			SetTreeTier(tree)
-			r := New(Config{})
+			r := newTreeTierForTest(tree, Config{})
 			v, err := r.Run(compileForTest(t, regexpExecDirectTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -81,7 +80,6 @@ func TestRegExpExecDirect(t *testing.T) {
 			}
 		}
 	}
-	SetTreeTier(true)
 }
 
 // The call of a global pattern's exec is made without a frame, as a
@@ -91,7 +89,7 @@ func TestRegExpExecDirect(t *testing.T) {
 // match that spends the step budget throws what the call with a frame
 // throws, its stack and Error.stackTraceLimit's getter run as often.
 func TestRegExpExecDirectFrameless(t *testing.T) {
-	SetTreeTier(true)
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, regexpExecDirectTestSrc+`; var rg = /(\d*)(\D*)/g, rp = /(\d*)(\D*)/`)); err != nil {

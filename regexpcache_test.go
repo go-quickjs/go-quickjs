@@ -10,6 +10,7 @@ import "testing"
 // instanceof, whose default Symbol.hasInstance is called with an argument
 // list the runtime keeps, answers through a chain of bound functions.
 func TestRegExpsShareCompiledPatterns(t *testing.T) {
+	t.Parallel()
 	for src, want := range map[string]string{
 		`var a = /a/g, b = /a/g; a.lastIndex = 1; b.test("aa"); JSON.stringify([a.lastIndex, b.lastIndex])`:                    "[1,1]",
 		`var c = /x/, d = /x/; c.compile("y"); JSON.stringify([c.source, d.source, d.test("x"), c.test("x")])`:                 `["y","x",true,false]`,

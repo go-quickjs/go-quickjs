@@ -13,6 +13,7 @@ import (
 // process.exit ends a node worker: nothing after it runs -- not the next
 // statement, not a catch, not a finally.
 func TestCloseFromInsideRunsNothingMore(t *testing.T) {
+	t.Parallel()
 	rt := quickjs.New()
 	mem := rt.NewBytes(make([]byte, 4))
 	b, _ := mem.Bytes()
@@ -35,6 +36,7 @@ func TestCloseFromInsideRunsNothingMore(t *testing.T) {
 // after the runtime's context has ended and pending work has been told --
 // from inside the script as from outside -- and a removed hook not at all.
 func TestOnClose(t *testing.T) {
+	t.Parallel()
 	for _, inside := range []bool{false, true} {
 		rt := quickjs.New()
 		var order []string

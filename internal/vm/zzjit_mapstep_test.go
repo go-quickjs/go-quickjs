@@ -108,6 +108,7 @@ func TestJITMapStep(t *testing.T) {
 // A Map's iterator whose next is replaced is stepped by calling it, as the
 // interpreter does: the native step checks the iterator's next.
 func TestJITMapStepNextReplaced(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

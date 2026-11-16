@@ -7,6 +7,7 @@ import "testing"
 // null prototype -- keeps its loose one, or every key added to it would make
 // a new layout.
 func TestProtoShapeOnlyForPrototypes(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	key := r.atoms.intern("k")
 	dict := newObject(nil, ClassObject)

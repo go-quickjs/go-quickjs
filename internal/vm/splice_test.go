@@ -11,6 +11,7 @@ import "testing"
 // sealed or unextensible array, a length not writable, indices inherited,
 // and arguments whose conversion runs code.
 func TestSpliceDenseMatchesSpec(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
@@ -113,6 +114,7 @@ func TestSpliceDenseMatchesSpec(t *testing.T) {
 // count, and declines every receiver and argument the spec's steps could
 // tell apart from a move of its elements.
 func TestSpliceDenseTakes(t *testing.T) {
+	t.Parallel()
 	r := New(Config{})
 	defer r.Close()
 	for _, c := range []struct {

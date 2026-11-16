@@ -16,6 +16,7 @@ import (
 // and one that throws only where it is taken. A branch that calls stays
 // blocks; every other function is one node and a return.
 func TestTernaryExpressions(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const r = []
 		let log = ''
@@ -55,8 +56,7 @@ func TestTernaryExpressions(t *testing.T) {
 		}
 	}
 	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
+		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -66,7 +66,6 @@ func TestTernaryExpressions(t *testing.T) {
 			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
 		}
 	}
-	SetTreeTier(true)
 }
 
 // logicalJumps finds an && or || and a ternary from their instructions,
@@ -74,6 +73,7 @@ func TestTernaryExpressions(t *testing.T) {
 // y, or a, or b, or end another jump goes to -- which a compiled script
 // seldom has, so the code is written out here.
 func TestLogicalJumpsFound(t *testing.T) {
+	t.Parallel()
 	var (
 		local = func(k uint32) bytecode.Instr { return bytecode.Instr{Op: bytecode.OpGetLocal, A: k} }
 		op    = func(o bytecode.Op, a uint32) bytecode.Instr { return bytecode.Instr{Op: o, A: a} }

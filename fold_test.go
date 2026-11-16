@@ -101,6 +101,7 @@ func runFoldModes(t *testing.T, src, want string, wantStrict ...string) {
 // what folds, BigInts among them, against the operators at run time, and
 // that what can be rebound is not folded.
 func TestUnaryFolds(t *testing.T) {
+	t.Parallel()
 	pairs := [][2]string{
 		{"!0", "!id(0)"}, {"!1", "!id(1)"}, {"!-0", "!id(-0)"}, {"!0.5", "!id(0.5)"},
 		{`!""`, `!id("")`}, {`!"a"`, `!id("a")`}, {"!null", "!id(null)"},
@@ -141,6 +142,7 @@ chk("tests", s, "aefilnopqt");
 // the runtime's, at the edges: zeros of either sign, NaN, the infinities,
 // the int32 and uint32 bounds, ** and % where C and JavaScript differ.
 func TestNumericFolds(t *testing.T) {
+	t.Parallel()
 	values := []string{"0", "-0", "1", "-1", "2", "3", "0.5", "-0.5", "1.5", "2.5", "31", "32", "33", "-33",
 		"7", "-7", "0.1", "1e21", "2147483647", "2147483648", "-2147483649", "4294967295", "4294967296",
 		"1e308", "5e-324", "1/0", "-1/0", "0/0"}
@@ -176,6 +178,7 @@ func TestNumericFolds(t *testing.T) {
 // lexical binding outside its block, its early errors, labels and jumps
 // around it, finally clauses, and completion values.
 func TestDeadCode(t *testing.T) {
+	t.Parallel()
 	src := `var out = [];
 function t1() { if (false) { var v = 1; } return typeof v + ":" + v; }
 function t2() { if (false) { function g() {} } try { return typeof g + ":" + String(g); } catch (e) { return e.name; } }
@@ -223,6 +226,7 @@ out.push([se("if (false) { break; }"), se("return; break;"), se("if (false) { co
 // resolved where the code goes on, and stepping through the function stops
 // at the statements that are left and nowhere else.
 func TestDeadCodeDebugger(t *testing.T) {
+	t.Parallel()
 	const src = `function f(x) {
   if (false) {
     x = x + 1;
@@ -274,6 +278,7 @@ f(1);
 // as a pair; numbers and strings, which are not joined, are checked too;
 // and a joined literal that starts a function is not its prologue's.
 func TestStringFolds(t *testing.T) {
+	t.Parallel()
 	pairs := [][2]string{
 		{`"a" + "b"`, `id("a") + "b"`},
 		{`"a" + "b" + "c"`, `id("a") + "b" + id("c")`},
