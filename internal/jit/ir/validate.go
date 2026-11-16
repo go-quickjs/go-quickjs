@@ -83,6 +83,11 @@ func (p *Program) Validate() error {
 			switch {
 			case in.Op == Insert2 || in.Op == Insert3 || in.Op == Call:
 				return fmt.Errorf("jit IR: pc %d: a stack operation in register code", pc)
+			case in.Op == Host && !alone && p.windowLast(pc):
+				// A call ending an expansion that wrote only scratch slots,
+				// a property's read among them, which the builder makes
+				// committing nothing or not at all (regexp_lit's call).
+				continue
 			case in.Op == Host && !alone:
 				// Go runs the whole register instruction.
 				return fmt.Errorf("jit IR: pc %d: a host operation in an expansion", pc)

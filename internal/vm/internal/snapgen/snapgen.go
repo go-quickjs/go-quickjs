@@ -6,7 +6,10 @@
 // (zzjit_asked_test.go). A method added to jitFeedback is then a method of
 // both, which the build may ask either of: written by hand, the two would
 // drift from the feedback, the snapshot answering a question it was never
-// asked.
+// asked. And the same of register code's feedback, jitRegFeedback's
+// methods: the register snapshot's (jitRegSnapshot, zzjit_zregsnap.go),
+// which has those methods alone, as the build finds what a feedback
+// answers by the methods it has, and its askers.
 package snapgen
 
 import (
@@ -31,12 +34,15 @@ type method struct {
 	results       []string
 }
 
-// atPC reports whether the method's argument is a PC.
-func (m method) atPC() bool { return len(m.pnames) == 1 && m.pnames[0] == "pc" && m.ptype[0] == "int" }
+// atPC reports whether the method's argument is a PC: a program's, or, a
+// register feedback's rpc, its register code's.
+func (m method) atPC() bool {
+	return len(m.pnames) == 1 && (m.pnames[0] == "pc" || m.pnames[0] == "rpc") && m.ptype[0] == "int"
+}
 
-// methods are jitFeedback's exported methods in dir's zzjit_*.go files, by
-// file name and then by position.
-func methods(dir string) ([]method, error) {
+// methods are recv's exported methods in dir's zzjit_*.go files, by file
+// name and then by position.
+func methods(dir, recv string) ([]method, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "zzjit_*.go"))
 	if err != nil {
 		return nil, err
@@ -54,7 +60,7 @@ func methods(dir string) ([]method, error) {
 		}
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Recv == nil || !fd.Name.IsExported() || !receiverIs(fd, "jitFeedback") {
+			if !ok || fd.Recv == nil || !fd.Name.IsExported() || !receiverIs(fd, recv) {
 				continue
 			}
 			m := method{name: fd.Name.Name}
@@ -117,7 +123,11 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 // Generate is zzjit_snapshot_gen.go and zzjit_asked_gen_test.go for the
 // package in dir.
 func Generate(dir string) (snapshot, asked []byte, err error) {
-	ms, err := methods(dir)
+	ms, err := methods(dir, "jitFeedback")
+	if err != nil {
+		return nil, nil, err
+	}
+	regs, err := methods(dir, "jitRegFeedback")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -202,6 +212,9 @@ func Generate(dir string) (snapshot, asked []byte, err error) {
 		}
 	}
 	b.WriteString("\t}\n}\n")
+	if err := registerSnapshot(&b, ms, regs); err != nil {
+		return nil, nil, err
+	}
 	snapshot, err = format.Source(b.Bytes())
 	if err != nil {
 		return nil, nil, fmt.Errorf("zzjit_snapshot_gen.go: %w", err)
@@ -235,6 +248,86 @@ func Generate(dir string) (snapshot, asked []byte, err error) {
 		return nil, nil, fmt.Errorf("zzjit_asked_gen_test.go: %w", err)
 	}
 	return snapshot, asked, nil
+}
+
+// registerSnapshot writes the register snapshot's answers, numbered as
+// jitFeedback's methods of the same names, and its askers, of regs,
+// jitRegFeedback's methods: each a method of jitFeedback's, which the
+// build asks of either form's feedback alike.
+func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
+	known := map[string]bool{}
+	for _, m := range ms {
+		known[m.name] = true
+	}
+	b.WriteString("\n// The register snapshot's answers: jitRegFeedback's methods, numbered as\n" +
+		"// jitFeedback's of the same names.\n\n")
+	for _, m := range regs {
+		if !known[m.name] {
+			return fmt.Errorf("jitRegFeedback's %s is no method of jitFeedback's", m.name)
+		}
+		key := "0"
+		if len(m.pnames) > 0 {
+			key = "int64(" + m.pnames[0] + ")"
+		}
+		var named []string
+		for i, t := range m.results {
+			named = append(named, fmt.Sprintf("r%d %s", i, t))
+		}
+		fmt.Fprintf(b, "func (q *jitRegSnapshot) %s(%s) (%s) {\n", m.name, m.params, strings.Join(named, ", "))
+		fmt.Fprintf(b, "\ta := q.get(snap%s, %s)\n\tif a == nil {\n\t\treturn\n\t}\n", m.name, key)
+		var rs []string
+		for i, t := range m.results {
+			fmt.Fprintf(b, "\tr%d, _ = a[%d].(%s)\n", i, i, t)
+			if strings.HasPrefix(t, "[]") {
+				fmt.Fprintf(b, "\tr%d = jitSnapCopy(r%d)\n", i, i)
+			}
+			rs = append(rs, fmt.Sprintf("r%d", i))
+		}
+		fmt.Fprintf(b, "\treturn %s\n}\n\n", strings.Join(rs, ", "))
+	}
+	b.WriteString("// askOnceReg asks fb the questions of no argument.\nfunc (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {\n")
+	for _, m := range regs {
+		if len(m.pnames) != 0 {
+			continue
+		}
+		rs := results(m)
+		fmt.Fprintf(b, "\t{\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\ts.end(fb.fb, before, snap%s, 0)\n\t\ts.put(snap%s, 0, %s)\n\t}\n", rs, m.name, m.name, m.name, rs)
+	}
+	b.WriteString("}\n\n// The askers of the register feedback's methods of a PC, as\n" +
+		"// jitSnapAskers's, the callees of the inline sites it names asked in turn\n" +
+		"// (nestReg).\n")
+	for _, m := range regs {
+		if !m.atPC() {
+			continue
+		}
+		rs := results(m)
+		fmt.Fprintf(b, "func jitRegSnapAsk%s(s *jitSnapshot, fb *jitRegFeedback, pc int) {\n\tbefore := s.begin(fb.fb)\n\t%s := fb.%s(pc)\n\ts.end(fb.fb, before, snap%s, int64(pc))\n", m.name, rs, m.name, m.name)
+		for i, t := range m.results {
+			switch t {
+			case "ssa.InlineSite":
+				fmt.Fprintf(b, "\tr%d = s.nestReg(r%d)\n", i, i)
+			case "ssa.AccessorSite", "ssa.ForEachSite":
+				fmt.Fprintf(b, "\tif r%d.Inline != nil {\n\t\tnested := s.nestReg(*r%d.Inline)\n\t\tr%d.Inline = &nested\n\t}\n", i, i, i)
+			}
+		}
+		fmt.Fprintf(b, "\tif jitSnapAnswered(r%d) {\n\t\ts.put(snap%s, int64(pc), %s)\n\t}\n}\n\n", len(m.results)-1, m.name, rs)
+	}
+	b.WriteString("// jitRegSnapAskers are the register askers by method, nil for one the\n" +
+		"// register feedback has not or of another argument.\n" +
+		"var jitRegSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback, pc int)\n\n" +
+		"// jitRegSnapMethods are the methods the register feedback has, a bit\n// for each.\nconst jitRegSnapMethods uint64 = 0")
+	for _, m := range regs {
+		fmt.Fprintf(b, " |\n\t1<<snap%s", m.name)
+	}
+	b.WriteString("\n\n// The register askers are set at init, as jitSnapAskers are.\nfunc init() {\n" +
+		"\tjitRegSnapAskers = [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback, pc int){\n")
+	for _, m := range regs {
+		if m.atPC() {
+			fmt.Fprintf(b, "\t\tsnap%s: jitRegSnapAsk%s,\n", m.name, m.name)
+		}
+	}
+	b.WriteString("\t}\n}\n")
+	return nil
 }
 
 // results are m's results' names, r0, r1, ...

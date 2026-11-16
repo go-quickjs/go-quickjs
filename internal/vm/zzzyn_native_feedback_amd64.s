@@ -4,10 +4,39 @@
 
 #include "textflag.h"
 
+// regNativeFeedbackHandlers is the feedback dispatcher's own handlers, 251 bytes of
+// position-independent machine code made by nativeEmit, which reach the
+// handlers' block through the dispatcher's table. Its handlers, in order:
+//
+//	    0  call_w
+//	   48  call_method_w
+//	   96  ret
+//	  128  ret_undef
+//	  160  tail_call_w
+//	  208  tail_call_method_w
+TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x48; BYTE $0x89; BYTE $0xc1; BYTE $0x48; BYTE $0xc1; BYTE $0xe9; BYTE $0x30; BYTE $0x48; BYTE $0x83
+	BYTE $0xc1; BYTE $0x01; BYTE $0x49; BYTE $0x3b; BYTE $0x49; BYTE $0xd8; BYTE $0x73; BYTE $0x0c; BYTE $0x4d; BYTE $0x8b; BYTE $0x41; BYTE $0xd0; BYTE $0x4d; BYTE $0x8d; BYTE $0x04; BYTE $0xc8
+	BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x10; BYTE $0x08; BYTE $0x00; BYTE $0x00; BYTE $0x0f; BYTE $0x1f; BYTE $0x44; BYTE $0x00; BYTE $0x00
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x48; BYTE $0x89; BYTE $0xc1; BYTE $0x48; BYTE $0xc1; BYTE $0xe9; BYTE $0x30; BYTE $0x48; BYTE $0x83
+	BYTE $0xc1; BYTE $0x01; BYTE $0x49; BYTE $0x3b; BYTE $0x49; BYTE $0xd8; BYTE $0x73; BYTE $0x0c; BYTE $0x4d; BYTE $0x8b; BYTE $0x41; BYTE $0xd0; BYTE $0x4d; BYTE $0x8d; BYTE $0x04; BYTE $0xc8
+	BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x18; BYTE $0x08; BYTE $0x00; BYTE $0x00; BYTE $0x0f; BYTE $0x1f; BYTE $0x44; BYTE $0x00; BYTE $0x00
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x49; BYTE $0x83; BYTE $0x79; BYTE $0xd8; BYTE $0x00; BYTE $0x74; BYTE $0x08; BYTE $0x4d; BYTE $0x8b
+	BYTE $0x41; BYTE $0xd0; BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x20; BYTE $0x08; BYTE $0x00; BYTE $0x00; BYTE $0x0f; BYTE $0x1f; BYTE $0x00
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x49; BYTE $0x83; BYTE $0x79; BYTE $0xd8; BYTE $0x00; BYTE $0x74; BYTE $0x08; BYTE $0x4d; BYTE $0x8b
+	BYTE $0x41; BYTE $0xd0; BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x28; BYTE $0x08; BYTE $0x00; BYTE $0x00; BYTE $0x0f; BYTE $0x1f; BYTE $0x00
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x48; BYTE $0x89; BYTE $0xc1; BYTE $0x48; BYTE $0xc1; BYTE $0xe9; BYTE $0x30; BYTE $0x48; BYTE $0x83
+	BYTE $0xc1; BYTE $0x01; BYTE $0x49; BYTE $0x3b; BYTE $0x49; BYTE $0xd8; BYTE $0x73; BYTE $0x0c; BYTE $0x4d; BYTE $0x8b; BYTE $0x41; BYTE $0xd0; BYTE $0x4d; BYTE $0x8d; BYTE $0x04; BYTE $0xc8
+	BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x30; BYTE $0x08; BYTE $0x00; BYTE $0x00; BYTE $0x0f; BYTE $0x1f; BYTE $0x44; BYTE $0x00; BYTE $0x00
+	BYTE $0x4c; BYTE $0x8b; BYTE $0x8f; BYTE $0xb0; BYTE $0x00; BYTE $0x00; BYTE $0x00; BYTE $0x48; BYTE $0x89; BYTE $0xc1; BYTE $0x48; BYTE $0xc1; BYTE $0xe9; BYTE $0x30; BYTE $0x48; BYTE $0x83
+	BYTE $0xc1; BYTE $0x01; BYTE $0x49; BYTE $0x3b; BYTE $0x49; BYTE $0xd8; BYTE $0x73; BYTE $0x0c; BYTE $0x4d; BYTE $0x8b; BYTE $0x41; BYTE $0xd0; BYTE $0x4d; BYTE $0x8d; BYTE $0x04; BYTE $0xc8
+	BYTE $0x49; BYTE $0xff; BYTE $0x40; BYTE $0x00; BYTE $0x41; BYTE $0xff; BYTE $0xa5; BYTE $0x38; BYTE $0x08; BYTE $0x00; BYTE $0x00
+
 // regNativeFeedbackTable is the feedback dispatcher's table: each operation's
 // handler's address, its own or the handlers' block's, the exit stub's
 // where it has none; and after the operations', the exit stub's and the
-// exit to nativeRun's, which its own handlers jump through.
+// exit to nativeRun's, which its own handlers jump through, and plain's
+// handler of each operation it has its own of (slotPlain).
 DATA ·regNativeFeedbackTable+0(SB)/8, $·regNativeHandlers+1104(SB)
 DATA ·regNativeFeedbackTable+8(SB)/8, $·regNativeHandlers+1120(SB)
 DATA ·regNativeFeedbackTable+16(SB)/8, $·regNativeHandlers+1664(SB)
@@ -44,10 +73,10 @@ DATA ·regNativeFeedbackTable+256(SB)/8, $·regNativeHandlers+12928(SB)
 DATA ·regNativeFeedbackTable+264(SB)/8, $·regNativeHandlers+9072(SB)
 DATA ·regNativeFeedbackTable+272(SB)/8, $·regNativeHandlers+12368(SB)
 DATA ·regNativeFeedbackTable+280(SB)/8, $·regNativeHandlers+12592(SB)
-DATA ·regNativeFeedbackTable+288(SB)/8, $·regNativeHandlers+35872(SB)
-DATA ·regNativeFeedbackTable+296(SB)/8, $·regNativeHandlers+35904(SB)
-DATA ·regNativeFeedbackTable+304(SB)/8, $·regNativeHandlers+30352(SB)
-DATA ·regNativeFeedbackTable+312(SB)/8, $·regNativeHandlers+31440(SB)
+DATA ·regNativeFeedbackTable+288(SB)/8, $·regNativeFeedbackHandlers+160(SB)
+DATA ·regNativeFeedbackTable+296(SB)/8, $·regNativeFeedbackHandlers+208(SB)
+DATA ·regNativeFeedbackTable+304(SB)/8, $·regNativeFeedbackHandlers+96(SB)
+DATA ·regNativeFeedbackTable+312(SB)/8, $·regNativeFeedbackHandlers+128(SB)
 DATA ·regNativeFeedbackTable+320(SB)/8, $·regNativeHandlers+37216(SB)
 DATA ·regNativeFeedbackTable+328(SB)/8, $·regNativeHandlers+37584(SB)
 DATA ·regNativeFeedbackTable+336(SB)/8, $·regNativeHandlers+37952(SB)
@@ -63,7 +92,7 @@ DATA ·regNativeFeedbackTable+408(SB)/8, $·regNativeHandlers+33696(SB)
 DATA ·regNativeFeedbackTable+416(SB)/8, $·regNativeHandlers+8448(SB)
 DATA ·regNativeFeedbackTable+424(SB)/8, $·regNativeHandlers+8640(SB)
 DATA ·regNativeFeedbackTable+432(SB)/8, $·regNativeHandlers+33888(SB)
-DATA ·regNativeFeedbackTable+440(SB)/8, $·regNativeHandlers+23440(SB)
+DATA ·regNativeFeedbackTable+440(SB)/8, $·regNativeFeedbackHandlers+0(SB)
 DATA ·regNativeFeedbackTable+448(SB)/8, $·regNativeHandlers+7248(SB)
 DATA ·regNativeFeedbackTable+456(SB)/8, $·regNativeHandlers+7424(SB)
 DATA ·regNativeFeedbackTable+464(SB)/8, $·regNativeHandlers+9120(SB)
@@ -88,7 +117,7 @@ DATA ·regNativeFeedbackTable+608(SB)/8, $·regNativeHandlers+14512(SB)
 DATA ·regNativeFeedbackTable+616(SB)/8, $·regNativeHandlers+15584(SB)
 DATA ·regNativeFeedbackTable+624(SB)/8, $·regNativeHandlers+18080(SB)
 DATA ·regNativeFeedbackTable+632(SB)/8, $·regNativeHandlers+20928(SB)
-DATA ·regNativeFeedbackTable+640(SB)/8, $·regNativeHandlers+26896(SB)
+DATA ·regNativeFeedbackTable+640(SB)/8, $·regNativeFeedbackHandlers+48(SB)
 DATA ·regNativeFeedbackTable+648(SB)/8, $·regNativeHandlers+48(SB)
 DATA ·regNativeFeedbackTable+656(SB)/8, $·regNativeHandlers+43392(SB)
 DATA ·regNativeFeedbackTable+664(SB)/8, $·regNativeHandlers+7952(SB)
@@ -266,7 +295,13 @@ DATA ·regNativeFeedbackTable+2032(SB)/8, $·regNativeHandlers+48(SB)
 DATA ·regNativeFeedbackTable+2040(SB)/8, $·regNativeHandlers+48(SB)
 DATA ·regNativeFeedbackTable+2048(SB)/8, $·regNativeHandlers+48(SB)
 DATA ·regNativeFeedbackTable+2056(SB)/8, $·regNativeHandlers+1056(SB)
-GLOBL ·regNativeFeedbackTable(SB), RODATA, $2064
+DATA ·regNativeFeedbackTable+2064(SB)/8, $·regNativeHandlers+23440(SB)
+DATA ·regNativeFeedbackTable+2072(SB)/8, $·regNativeHandlers+26896(SB)
+DATA ·regNativeFeedbackTable+2080(SB)/8, $·regNativeHandlers+30352(SB)
+DATA ·regNativeFeedbackTable+2088(SB)/8, $·regNativeHandlers+31440(SB)
+DATA ·regNativeFeedbackTable+2096(SB)/8, $·regNativeHandlers+35872(SB)
+DATA ·regNativeFeedbackTable+2104(SB)/8, $·regNativeHandlers+35904(SB)
+GLOBL ·regNativeFeedbackTable(SB), RODATA, $2112
 
 // nativeFeedbackTableAddr is the table's address.
 TEXT ·nativeFeedbackTableAddr(SB), NOSPLIT, $0-8

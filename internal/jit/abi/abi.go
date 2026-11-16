@@ -1528,7 +1528,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // the argument count's operands, the top of the stack, which its result
 // replaces; or apply_arguments (GoCallForward), f.apply(x, arguments), of
 // its three operands, f, apply and x, called with the arguments the frame
-// was given (ssa.CallSite's Forward).
+// was given (ssa.CallSite's Forward); or register code's instruction at the
+// call's PC run whole on the register frame (GoCallWhole, ssa.CallSite's
+// Whole), of the registers it reads, its result the one it writes.
 // GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
 // code takes it from a pool, the pool's address the first operand's
 // pointer word: Go makes it, as it makes any, and fills the pool again if
@@ -1560,6 +1562,7 @@ const (
 	GoCallOp         = 12
 	GoCallForIn      = 13
 	GoCallForward    = 14
+	GoCallWhole      = 15
 	GoClosurePool    = 1
 )
 

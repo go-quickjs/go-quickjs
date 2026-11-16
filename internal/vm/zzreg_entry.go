@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"os"
 	"sync/atomic"
 	"unsafe"
 
@@ -21,14 +22,30 @@ func SetRegTier(on bool) { regTier.Store(on) }
 func RegTierOn() bool { return regTier.Load() }
 
 // RegTier reports whether r runs register code: the register interpreter
-// is on, and r has no JIT, which reads the stack form alone, so that a
-// runtime with it runs the stack interpreter and the tree tier as before.
-// Its host compiles its code with no register form where it does not
-// (compiler.Options.NoRegister).
+// is on, and r has no JIT -- or the JIT compiles register code
+// (SetJITRegTier, QJS_JITREG), which it does not by default yet: a
+// runtime with the JIT runs the stack interpreter and the tree tier, and
+// its JIT reads the stack form. Its host compiles its code with no
+// register form where it does not (compiler.Options.NoRegister).
 func (r *Runtime) RegTier() bool { return r.regOn() }
 
 // regOn is RegTier: oldTiers keeps a test's runtime off register code too.
-func (r *Runtime) regOn() bool { return regTier.Load() && !r.oldTiers && !r.jitOn() }
+func (r *Runtime) regOn() bool {
+	return regTier.Load() && !r.oldTiers && (!r.jitOn() || jitRegTier.Load())
+}
+
+// jitRegTier has runtimes with the JIT run register code too, the JIT
+// compiling it (zzjit_zregtier.go), while the register form's JIT is
+// brought to the stack form's: QJS_JITREG set in the environment, or
+// SetJITRegTier.
+var jitRegTier atomic.Bool
+
+func init() { jitRegTier.Store(os.Getenv("QJS_JITREG") != "") }
+
+// SetJITRegTier has runtimes with the JIT run register code, where the
+// register interpreter is on, or not (jitRegTier), and reports what it
+// was: a test's switch, as QJS_JITREG is the environment's.
+func SetJITRegTier(on bool) bool { return jitRegTier.Swap(on) }
 
 // regKeepOld marks fn, which r loads, as code the tree the runtimes share
 // runs on the old tiers, where r does not run register code and fn has a

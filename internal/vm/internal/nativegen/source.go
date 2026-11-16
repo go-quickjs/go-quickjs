@@ -32,7 +32,11 @@ func (ar *arch) source(v *variant, p, b *block) []byte {
 			s.WriteString("\n")
 		}
 		fmt.Fprintf(&s, "// regNative%sTable is the %s dispatcher's table: each operation's\n", v.sym, v.name)
-		s.WriteString("// handler's address, its own or the handlers' block's, the exit stub's\n// where it has none; and after the operations', the exit stub's and the\n// exit to nativeRun's, which its own handlers jump through.\n")
+		s.WriteString("// handler's address, its own or the handlers' block's, the exit stub's\n// where it has none; and after the operations', the exit stub's and the\n// exit to nativeRun's, which its own handlers jump through")
+		if len(v.overrides) > 0 {
+			s.WriteString(", and plain's\n// handler of each operation it has its own of (slotPlain)")
+		}
+		s.WriteString(".\n")
 	}
 	table := "regNative" + v.sym + "Table"
 	for i, e := range v.table(p, b) {

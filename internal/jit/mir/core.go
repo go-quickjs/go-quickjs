@@ -721,7 +721,9 @@ type stubKey struct {
 // every frame state then holds its value from entry there (in whatever
 // representation the optimizer chose), and exits leave those slots alone.
 func capturedUnchanged(f *ssa.Func) error {
-	for i := f.FrameLocals; i < f.Locals; i++ {
+	// A register program's scratch slots (ssa.Func's Scratch), written
+	// inside one register instruction, are values, in no frame state.
+	for i := f.FrameLocals; i < f.Locals-f.Scratch; i++ {
 		if f.Written(i) {
 			return fmt.Errorf("%w: captured slot %d is written", ErrUnsupported, i)
 		}
@@ -1321,8 +1323,19 @@ func (c *core) allocate() error {
 			}
 			spend(v, bw)
 			again = callsAgain(v)
+			// A call whose pool Go fills is made again from its start, its
+			// operands read again after Go had the registers: they live
+			// across it, saved and restored (saves). Its state names them
+			// where they are its frame's slots, as the stack form's
+			// operands are; a register program's literal's elements are in
+			// scratch slots no state names, and a string element's words,
+			// in registers, had been what Go's call left there.
+			pa := p
+			if !fused && ssa.RefillsPools(v) {
+				pa = p + 1
+			}
 			for _, a := range v.Args {
-				use(a, p)
+				use(a, pa)
 				spend(a, bw)
 				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
 					// An operation may make a box again of its operand
@@ -1330,12 +1343,12 @@ func (c *core) allocate() error {
 					// the box keeps the operand too, but a captured local's
 					// value is in no state, and its register had gone to
 					// another's: a Go call's argument was what that held.
-					use(a.Args[0], p)
+					use(a.Args[0], pa)
 					spend(a.Args[0], bw)
 					if x := i32Boxed(a); x != nil {
 						// A box of an int32's conversion is made of the
 						// int32 (materialize).
-						use(x, p)
+						use(x, pa)
 						spend(x, bw)
 					}
 				}
@@ -1346,7 +1359,7 @@ func (c *core) allocate() error {
 					// state names keeps its shadow alive there too, but a
 					// captured local's is in no state (its slot is its
 					// cell), and the slot IR reads a local as an operand.
-					use(a.Shadow, p)
+					use(a.Shadow, pa)
 					spend(a.Shadow, bw)
 				}
 			}
@@ -2671,14 +2684,17 @@ func exitKind(aux int) uint64 {
 // slots (ssa.Func's LoopsEnd), past which the frames of the callees its
 // loops call start.
 func (c *core) frameSize() int {
-	n := c.f.FrameLocals + c.f.StackSize
+	// Past the locals, a register program's scratch slots (ssa.Func's
+	// Scratch), where the operands, the loops' slots and the homes start.
+	at := c.f.FrameLocals + c.f.Scratch
+	n := at + c.f.StackSize
 	if c.f.Loops {
-		n = max(n, c.f.FrameLocals+c.f.LoopsEnd-c.f.Locals)
+		n = max(n, at+c.f.LoopsEnd-c.f.Locals)
 	}
 	if c.f.HomesEnd != 0 {
 		// The homes of the objects it does not make, which its exits write
 		// there (ssa's escape.go).
-		n = max(n, c.f.FrameLocals+c.f.HomesEnd-c.f.Locals)
+		n = max(n, at+c.f.HomesEnd-c.f.Locals)
 	}
 	return n
 }
@@ -3388,6 +3404,13 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 			st.Inline, st.InlinePC = in.Closure, in.PC
 		}
 	}
+	if v != nil && v.State != nil && (ssa.GoOp(op&0xff) == ssa.GoClosure || ssa.GoOp(op&0xff) == ssa.GoClose) {
+		// A closure's or a scope's end: the instruction at the PC, which
+		// Go makes on a register frame whose captured registers are its
+		// slots as the interpreter makes it there (the VM's
+		// jitRegFrameWhole).
+		st.SetsPC, st.PC, st.Depth = true, uint32(v.State.PC), uint32(v.State.Depth)
+	}
 	if v != nil && ssa.GoOp(op&0xff) == ssa.GoLeaf && len(v.Calls()) == 1 {
 		// The leaf the call checked it calls, which Go takes from here,
 		// and whether anything reads its result.
@@ -3760,6 +3783,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallSuper << abi.GoOpKindShift
 		case site.Forward:
 			op |= abi.GoCallForward << abi.GoOpKindShift
+		case site.Whole:
+			op |= abi.GoCallWhole << abi.GoOpKindShift
 		case site.Instr != 0:
 			op |= abi.GoCallOp<<abi.GoOpKindShift | uint64(site.Instr)<<abi.GoOpIndexShift
 		case site.Accessor == ssa.AccessorGet:

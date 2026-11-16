@@ -82,7 +82,10 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 		return nil, errors.New("JIT benchmarking requires a supported build with -tags quickjs_jit")
 	}
 	var opts []quickjs.Option
-	if *jitFlag {
+	if *jitFlag && os.Getenv("V8BENCH_NOJIT") == "" {
+		// V8BENCH_NOJIT turns -jit off for one label of a placements
+		// compare (NAME@V8BENCH_NOJIT=1): the JIT's build running its
+		// interpreter alone, against the same build with the JIT.
 		opts = append(opts, quickjs.WithJIT())
 		if *jitBgFlag {
 			opts = append(opts, quickjs.WithJITBackground())

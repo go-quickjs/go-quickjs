@@ -499,7 +499,7 @@ func rhCloseRegs(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) 
 // rhWrap is wrap.
 func rhWrap(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
-	return st.done(st.r.regColdWrap(st.c, &st.kept, w, regs))
+	return st.done(st.r.regColdWrap(st.cl, st.c, &st.kept, w, regs))
 }
 
 // rhGenEntry is gen_entry.

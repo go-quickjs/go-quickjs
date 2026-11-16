@@ -8,6 +8,9 @@ import "github.com/go-quickjs/go-quickjs/internal/regexp"
 // interpreter's code is what it is without the JIT.
 const jitBuilt = false
 
+// regCallJITMark is regCallJIT where the JIT is built in: 0, none.
+const regCallJITMark = 0
+
 type jitFields struct{}
 type jitCodeFields struct{}
 type jitRealmFields struct{}
@@ -31,6 +34,17 @@ func (*Runtime) recordJITStringIntrinsic(*Object) {}
 func (*Runtime) recordJITSubstrings()             {}
 
 func (*Runtime) jitOn() bool { return false }
+
+// The register tier's hooks (zzjit_zregtier.go), which jitBuilt's false
+// compiles out.
+func (*Runtime) jitRegSample(*closure, *regCode) {}
+func (*Runtime) jitRegCallSample(*regCallCache)  {}
+func (*Runtime) jitRegHas(*closure) bool         { return false }
+func (*Runtime) jitRegEnter(*frame, *closure, *regCode, int, int) (Value, error) {
+	return Undefined, nil
+}
+func (*Runtime) jitRegLoop(st *regState, target int) int { return target }
+func (*Runtime) jitRegCountsMake(*closureCode, int)      {}
 
 func (*Runtime) jitRegExpNative(*regexp.Regexp) {}
 

@@ -208,10 +208,7 @@ func regJump(st *regState, pc int, off int32) int {
 func regJumpSlow(st *regState, pc int, off int32) int {
 	if off < 0 {
 		if r := st.r; r.backEdges <= 1 {
-			st.kept.pc = pc + 1
-			if err := r.regBackEdge(st.f, st.c, &st.kept); err != nil {
-				return st.fail(err)
-			}
+			return r.regBackEdge(st, pc, pc+1+int(off))
 		} else {
 			r.backEdges--
 		}

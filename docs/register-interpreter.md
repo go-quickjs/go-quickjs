@@ -3439,6 +3439,38 @@ runReg's loop, and runReg itself is not edited.
    timing of the V8 suite with the JIT at two placements. Only then does
    the stack path go.
 
+#### Step B as built (2026-11-13)
+
+Tier-up from the register tier is built differently from B1 to B3 above,
+so that no handler of either dispatcher, Go's or the native handlers', and
+no fast path does any work for the JIT (`zzjit_zregtier.go`; the JIT's
+README, "Tier-up from the register tier"):
+- **Sampled hotness, not counted.** There is no `rc.hot`. A call that
+  spends the interrupt budget (`rhCallW`'s and `regEnterW`'s check, which
+  the native call handler leaves to `rhCallW`) credits its callee; a back
+  edge that spends the back-edge budget (`regBackEdge`) credits its frame's
+  function. The function compiles at its second sample, and every call is
+  a sample where the runtime compiles at a first call.
+- **Calls.** A site sampled calling a function with code is marked
+  `regCallJIT`, which neither `rhCallW`'s fast path nor the native call
+  handler enters; its calls go to `regCallSlow` and `regEnterW`, which
+  enters the code (`jitRegEnter`). `regEnterW`'s test of the template's
+  code (`jitRegHas`) is the one test a call pays in a JIT build, outside
+  the handlers.
+- **Loops and going on.** `regBackEdge` takes the dispatcher's state and
+  returns the pc to go on at, so `jitRegLoop` enters the code at the loop's
+  header from inside whichever dispatcher runs the frame, and that
+  dispatcher goes on where the code leaves the frame: no `errRegGoOn`, no
+  `regCatch` sentinel. A frame the code returned from goes on at a
+  `ret_undef` of its own code, or at a `ret` whose register no closure
+  captures, given the value; regcomp appends no `ret`.
+- **Feedback.** None is recorded by the interpreter yet: what a guard
+  failed at, the function's next compile builds generic (`regFailed`), as
+  the stack form's code learns at its exits. The feedback vector waits
+  for an answer the JIT cannot get otherwise; the feedback-parity test
+  (`TestJITFeedbackParity`, internal/regdiff) lists what the register
+  form's feedback answers unlike the stack form's.
+
 ### Stage 4: one pipeline
 
 The stack compiler stops emitting code; scope resolution stays as the

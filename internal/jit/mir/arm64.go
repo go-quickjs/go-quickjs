@@ -358,12 +358,15 @@ func (c *a64Compiler) slotAddr(slot int, ref bool, scratch arm64.Reg) (arm64.Reg
 		return a64Locals, int32(slot)*c.enc.ValueSize + off
 	case slot == c.f.ThisSlot:
 		return a64Ctx, abi.OffThis + off
-	case slot < c.f.Locals:
+	case slot < c.f.Locals-c.f.Scratch:
 		c.a.Load(scratch, a64Ctx, abi.OffUpvalues)
 		c.a.Load(scratch, scratch, int32(slot-c.f.FrameLocals)*8)
 		c.a.Load(scratch, scratch, c.enc.UpvalueSlot)
 		return scratch, off
 	}
+	// An operand's, or, below Locals, a register program's scratch slot
+	// (ssa.Func's Scratch): the context's Stack is past those, which are
+	// past the window.
 	return a64Stack, int32(slot-c.f.Locals)*c.enc.ValueSize + off
 }
 
@@ -1226,7 +1229,7 @@ func (c *a64Compiler) callEntry() {
 	c.a.Load(at, a64Ctx, abi.OffStackBase)
 	c.a.AddLsl(base, at, base, 4)
 	c.a.Store(a64Ctx, abi.OffLocals, base)
-	c.a.AddImm(a64Stack, base, int64(c.f.FrameLocals)*int64(vs), true)
+	c.a.AddImm(a64Stack, base, int64(c.f.FrameLocals+c.f.Scratch)*int64(vs), true)
 	c.a.Store(a64Ctx, abi.OffStack, a64Stack)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
@@ -3809,6 +3812,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		ops--
 	}
 	direct = direct && c.operandsLive(s, ops)
+	// As amd64's: register code's call (ssa.CallSite's Window) writes its
+	// own operands to the callee's window, whatever function the checks
+	// find; one Go would make where it does not make it natively leaves.
+	win := site.Window != 0
+	if win {
+		if !generic || gen {
+			c.a.B(stub)
+			return
+		}
+		direct = false
+	}
 	// As amd64's: such a call's room check leaves the VM's stack's top in
 	// D, where nothing after it reads the callee.
 	keepTop := direct && site.Parent == 0 && site.Pool == 0
@@ -3890,7 +3904,23 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 				guard.jump(arm64.NE)
 			}
 		}
-		if keepTop {
+		if win {
+			// As amd64's: the callee's window and what its code takes past
+			// it, its link's (abi.Encoding's LinkFrame), and the arguments
+			// the call writes, which may be more than its registers. C
+			// keeps the callee, which a construction's checks read.
+			c.a.Load(a64B, a64Ctx, abi.OffStackTop)
+			c.a.Load(a64B, a64B, 0)
+			c.a.AddImm(a64B, a64B, int64(2+site.Argc), true)
+			c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
+			c.a.Cmp(a64B, a64A, true)
+			guard.jump(arm64.HI)
+			c.a.Load(a64B, a64Ctx, abi.OffStackTop)
+			c.a.Load(a64B, a64B, 0)
+			c.movImm(a64A, uint64(t.Entry)-uint64(c.enc.LinkEntry))
+			c.a.Load(a64A, a64A, c.enc.LinkFrame)
+			c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+		} else if keepTop {
 			c.a.Load(a64D, a64Ctx, abi.OffStackTop)
 			c.a.Load(a64D, a64D, 0)
 			c.a.AddImm(a64B, a64D, int64(t.LocalCount+t.MaxStack), true)
@@ -3946,7 +3976,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	// As amd64's: the state, described (callState), the call writing only
 	// what the caller's code keeps nowhere else.
 	operands := -1
-	if !direct {
+	if !direct && !win {
 		operands = calleeSlot - 1
 	}
 	if site.Forward {
@@ -3969,6 +3999,26 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
+	if win {
+		// As amd64's: the callee's window past the VM's stack's top, in D,
+		// which pointerWord does not use, given the call's operands
+		// straight from where the code has them -- the function in its
+		// register 0, a method call's receiver in 1, the arguments from 2
+		// -- and, in setup, what each callee's own window needs besides.
+		c.a.Load(a64D, a64Ctx, abi.OffStackTop)
+		c.a.Load(a64D, a64D, 0)
+		c.a.Load(a64B, a64Ctx, abi.OffStackBase)
+		c.a.AddLsl(a64D, a64B, a64D, 4)
+		m := 0
+		if site.Method {
+			m = 1
+			c.directOperand(v, v.Args[0], a64D, vs)
+		}
+		c.directOperand(v, v.Args[m], a64D, 0)
+		for i := range site.Argc {
+			c.directOperand(v, v.Args[m+1+i], a64D, int32(2+i)*vs)
+		}
+	}
 	if direct {
 		// The callee's frame's address, in D, which pointerWord does not
 		// use: made of the stack's top the room check left there, if no
@@ -4035,6 +4085,38 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	}
 	// setup is amd64's: it keeps a64CallLink and a64D, the callee's entry.
 	setup := func(t *ssa.CallSite) {
+		if win {
+			frame()
+			c.windowSetup(t, locals, top, high2)
+			if t.Pool != 0 {
+				// As amd64's: a construction's receiver, the pool's last
+				// object, its cell cleared, in the window's register 1 and
+				// the callee's context's This, its new.target there.
+				c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
+				c.movImm(tmp, uint64(t.Pool))
+				c.a.Load(top, tmp, abi.OffPoolCount)
+				c.a.AddImm(top, top, -1, true)
+				c.a.Store(tmp, abi.OffPoolCount, top)
+				c.a.ShiftImm(arm64.Lsl, top, top, 3, true)
+				c.a.Op(arm64.Add, top, top, tmp, true)
+				c.a.Load(high2, top, abi.OffPoolObjects)
+				c.a.Store(top, abi.OffPoolObjects, arm64.ZR)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
+				c.movImm(tmp, c.enc.Object)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+				c.a.Store(locals, vs+c.enc.RefOffset, high2)
+				c.a.Store(locals, vs+c.enc.NumOffset, tmp)
+				c.movImm(top, uint64(t.Callee))
+				c.a.Store(calleeCtx, abi.OffNewTarget, top)
+			}
+			if t.ByCode != 0 {
+				c.a.Load(a64CallClosure, a64Ctx, abi.OffCallClosure)
+			} else {
+				c.movImm(a64CallClosure, uint64(t.Closure))
+			}
+			c.a.Adr(a64CallRet, back)
+			return
+		}
 		framed := false
 		argc, first := t.Argc, sp-t.Argc
 		if t.Via != 0 {
@@ -4787,6 +4869,42 @@ func (c *a64Compiler) directOperand(v, x *ssa.Value, base arm64.Reg, disp int32)
 	}
 	c.pointerWord(x, w)
 	c.a.Store(base, disp+c.enc.RefOffset, a64B)
+}
+
+// windowSetup is amd64's: what register code's native call of t
+// (ssa.CallSite's Window) gives its callee's window, at locals, besides
+// the operands the call wrote there -- undefined in its parameters past
+// the arguments, and a plain call's receiver: an arrow's captured this,
+// the global object or undefined. It uses a and b.
+func (c *a64Compiler) windowSetup(t *ssa.CallSite, locals, a, b arm64.Reg) {
+	vs := int32(c.enc.ValueSize)
+	if 2+t.Argc < t.Params && 2+t.Argc < t.LocalCount {
+		c.movImm(a, c.enc.Undefined)
+	}
+	for i := 2 + t.Argc; i < t.Params && i < t.LocalCount; i++ {
+		c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, a)
+		c.a.Store(locals, int32(i)*vs+c.enc.RefOffset, arm64.ZR)
+	}
+	switch {
+	case t.Pool != 0:
+		// A construction's, from its pool (call's setup).
+	case t.ArrowThis:
+		c.a.Load(b, a64Ctx, abi.OffCallThis)
+		c.a.Load(a, b, c.enc.NumOffset)
+		c.a.Store(locals, vs+c.enc.NumOffset, a)
+		c.a.Load(a, b, c.enc.RefOffset)
+		c.a.Store(locals, vs+c.enc.RefOffset, a)
+	case t.Method:
+	case t.Global != 0:
+		c.movImm(a, c.enc.Object)
+		c.a.Store(locals, vs+c.enc.NumOffset, a)
+		c.movImm(a, uint64(t.Global))
+		c.a.Store(locals, vs+c.enc.RefOffset, a)
+	default:
+		c.movImm(a, c.enc.Undefined)
+		c.a.Store(locals, vs+c.enc.NumOffset, a)
+		c.a.Store(locals, vs+c.enc.RefOffset, arm64.ZR)
+	}
 }
 
 // pointerWord leaves in B the pointer word of a value whose number word is
@@ -7019,6 +7137,30 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard a64Guard) {
 	c.a.B(stub)
 }
 
+// entryPoll is register code's poll at its start (ssa.OpPoll), as
+// amd64's.
+func (c *a64Compiler) entryPoll(v *ssa.Value) {
+	poll, polled := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(a64B, a64Ctx, abi.OffBackEdges)
+	c.a.Load(a64A, a64B, 0)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.Store(a64B, 0, a64A)
+	c.a.CmpImm(a64A, 0, true)
+	c.a.BCond(arm64.LE, poll)
+	state := v.State
+	c.cold = append(c.cold, func() {
+		c.a.Bind(poll)
+		if c.enc.CallGo != 0 {
+			stub := c.stubLabel(state, abi.ExitPoll)
+			c.goSaving(uint64(ssa.GoPoll), &stub)
+			c.a.B(polled)
+			return
+		}
+		c.exitTo(state, abi.ExitPoll)
+	})
+	c.a.Bind(polled)
+}
+
 // tailJump is tailSelf's call of t, as amd64's.
 func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard a64Guard) {
 	vs, size := int32(c.enc.ValueSize), int32(unsafe.Sizeof(abi.GoArg{}))
@@ -9053,6 +9195,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.Cmp(a64C, a64B, true)
 			guard.jump(arm64.NE)
 		}
+	case ssa.OpPoll:
+		c.entryPoll(v)
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		if v.Index != 0 {

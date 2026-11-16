@@ -112,6 +112,12 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 					if err := r.checkInterruptNow(); err != nil {
 						return st.done(err)
 					}
+					if jitBuilt {
+						// The interrupt budget's end, a sample of the
+						// calls: the callee's hotness, and the site sent
+						// to regCallMiss once it has native code.
+						r.jitRegCallSample(e)
+					}
 				}
 				saved := r.stackTop
 				if top > saved {
@@ -250,6 +256,11 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 		if err := r.checkInterruptNow(); err != nil {
 			return Undefined, err
 		}
+		if jitBuilt {
+			// The interrupt budget's end, a sample of the calls: the
+			// callee's hotness (jitRegSample).
+			r.jitRegSample(cl, rc)
+		}
 	}
 	saved := r.stackTop
 	if top > saved {
@@ -300,7 +311,14 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 		p := int(rc.params)
 		f.locals = r.stack[base+2 : base+2+p : base+2+p]
 	}
-	v, err := r.runReg(f, rc, 0)
+	var v Value
+	var err error
+	if jitBuilt && r.jitRegHas(cl) {
+		// Native code made from its register code (jitRegEnter).
+		v, err = r.jitRegEnter(f, cl, rc, base, 0)
+	} else {
+		v, err = r.runReg(f, rc, 0)
+	}
 	f.regKind = 0
 	if len(f.openUpvalues) != 0 {
 		regCloseUpvalues(f)

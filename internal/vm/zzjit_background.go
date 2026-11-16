@@ -75,12 +75,14 @@ func (s *jitState) jitPending(fn *bytecode.Function) bool {
 
 // jobsFull reports whether the runtime has as many compiles in the
 // background as it may.
-func (s *jitState) jobsFull() bool { return len(s.jobs)+len(s.lowerings) >= jitJobsMax }
+func (s *jitState) jobsFull() bool {
+	return len(s.jobs)+len(s.lowerings)+len(s.regJobs) >= jitJobsMax
+}
 
 // inFlight reports whether the runtime has compiles or lowerings in the
 // background, which a check installs (jitDrain).
 func (s *jitState) inFlight() bool {
-	return len(s.jobs) != 0 || len(s.lowerings) != 0 || len(s.heldJobs) != 0
+	return len(s.jobs) != 0 || len(s.lowerings) != 0 || len(s.heldJobs) != 0 || len(s.regJobs) != 0
 }
 
 // jitSubmit hands j, e's compile prepared, to the process's workers. e is
@@ -318,6 +320,7 @@ func (r *Runtime) jitDrain() {
 		x := slices.Index(s.jobs, j)
 		s.jobs = slices.Delete(s.jobs, x, x+1)
 	}
+	r.jitRegDrainJobs(stress, k)
 	// Those held for them, whose compiles begin here: one that had others
 	// wait for it, they wait for it as they would for any compile.
 	for i := 0; i < len(s.heldJobs); {
@@ -366,6 +369,7 @@ func (s *jitState) abandonJobs() {
 		t.state.Store(jitJobAbandoned)
 	}
 	s.lowerings = nil
+	s.jitRegAbandonJobs()
 }
 
 // jitWorkers are the process's compile workers, shared by its runtimes:

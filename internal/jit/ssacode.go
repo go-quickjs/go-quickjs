@@ -254,8 +254,22 @@ func enterSSA(code *byte, ctx *abi.Context)
 func callGo()
 func callGoAddr() uintptr
 
+// framePointer is its caller's frame pointer (entry_*.s), which a test
+// checks native code's calls of Go leave as they found it.
+func framePointer() uintptr
+
 // CallGo is where native code jumps to call Go (abi.Encoding's CallGo).
 func CallGo() uint64 { return uint64(callGoAddr()) }
+
+// callGoClobber is callGo, every register native code may keep given junk
+// first, and callGoClobberAddr its address.
+func callGoClobber()
+func callGoClobberAddr() uintptr
+
+// CallGoClobber is CallGo for tests: what native code jumps to there fills
+// every register it may keep with junk before Go is called, so that code
+// that did not save one it reads after the call goes wrong.
+func CallGoClobber() uint64 { return uint64(callGoClobberAddr()) }
 
 // storeRef is where native code stores a pointer word while the collector
 // marks (entry_*.s), and storeRefAddr its address: V8's code's call of its

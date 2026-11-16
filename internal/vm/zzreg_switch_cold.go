@@ -68,18 +68,7 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 	cl := f.cl
 	n := int(w.X())
 	ic := &cl.ic[w.C()]
-	if s := ic.shape; s != nil && s.next == nil {
-		// A site that has made no object along its root yet starts from
-		// the realm's root for literals of its keys, as the tree's
-		// literal node does (literalRoot): literals of the same keys in
-		// other functions, and the closures of each made anew, make
-		// objects of one layout, which what reads them has met.
-		if hs := c.rc.ObjKeysHash; int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {
-			if h := hs[c.rc.Aux[pc]]; h != 0 {
-				keyedRoot[struct{}](r, h, ic)
-			}
-		}
-	}
+	r.regLiteralKeyedRoot(c, pc, ic)
 	root := r.shapes.siteRoot(ic, r.proto.object)
 	m := n
 	if root != nil && int(root.slack) > m {
@@ -271,7 +260,7 @@ func (r *Runtime) regStepNext(st *iterState) (Value, bool, error) {
 // made at once, x op y of the call's width, as the tree's wrapCall makes
 // it (wrapShort), and the call passed over -- a built-in that has nothing
 // else to do; anything else the operator's value as ever, for the call.
-func (r *Runtime) regColdWrap(c *regCode, k *regKept, w bytecode.RInstr, regs *[1 << 16]Value) error {
+func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RInstr, regs *[1 << 16]Value) error {
 	op := regStackOp[bytecode.ROp(regAuxAt(c, k.pc-1))&127]
 	a, b := regs[w.B()], regs[w.C()]
 	if a.isShortBig() && b.isShortBig() {
@@ -282,6 +271,13 @@ func (r *Runtime) regColdWrap(c *regCode, k *regKept, w bytecode.RInstr, regs *[
 					regs[w.A()] = v
 					regs[cw.B()] = v
 					k.pc++
+					if r.jitOn() {
+						// The call it passed over, its site's cache filled
+						// as the call would fill it, for the JIT, which
+						// makes the call natively (jitRegFeedback's
+						// Intrinsic).
+						regCallSiteNative(cl, cw, fv.Object(), fd, r.Realm)
+					}
 					return nil
 				}
 			}
@@ -324,4 +320,32 @@ func regGenCursor(st *iterState) *generator {
 // (the verifier checks each far register an instruction names).
 func regFar(regs *[1 << 16]Value, i uint32) *Value {
 	return (*Value)(unsafe.Add(unsafe.Pointer(regs), uintptr(i)*unsafe.Sizeof(Value{})))
+}
+
+// regCallSiteNative fills the cache of call w's site, of cl, with o, fd its
+// function data, a built-in of realm, as the call path fills it
+// (regCallSlow), where it holds nothing.
+func regCallSiteNative(cl *closure, w bytecode.RInstr, o *Object, fd *funcData, realm *Realm) {
+	calls := cl.regCalls
+	if uint(w.C()) >= uint(len(calls)) || calls[w.C()].callee != nil || fd.native == nil || fd.bound || fd.realm != nil && fd.realm != realm {
+		return
+	}
+	calls[w.C()] = regCallCache{callee: o, kind: regCallNative}
+}
+
+// regLiteralKeyedRoot has new_object_lit's site at pc of c, whose cache is
+// ic, start from the realm's root for literals of its keys where it has
+// made no object along its root yet, as the tree's literal node does
+// (literalRoot): literals of the same keys in other functions, and the
+// closures of each made anew, make objects of one layout, which what reads
+// them has met. The JIT's literal takes its root so too (jitRegFeedback's
+// literalAt), whichever makes the site's first object.
+func (r *Runtime) regLiteralKeyedRoot(c *regCode, pc int, ic *propCache) {
+	if s := ic.shape; s != nil && s.next == nil {
+		if hs := c.rc.ObjKeysHash; pc < len(c.rc.Aux) && int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {
+			if h := hs[c.rc.Aux[pc]]; h != 0 {
+				keyedRoot[struct{}](r, h, ic)
+			}
+		}
+	}
 }

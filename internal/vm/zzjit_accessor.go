@@ -160,12 +160,47 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	if in.Op != bytecode.OpGetProp && !write || int(in.A) >= len(fb.cl.names) || int(in.B) >= len(fb.cl.ic) {
 		return ssa.AccessorSite{}, false
 	}
-	c := &fb.cl.ic[in.B]
+	a, callee, cl, ok := fb.accessorOf(pc, &fb.cl.ic[in.B], fb.cl.names[in.A], write)
+	if !ok || cl == nil {
+		return a, ok
+	}
+	k := fb.keep()
+	if site, ok := fb.accessorCall(cl, callee, write); ok {
+		a.Call = &site
+	}
+	if cl.fn == fb.fn || !fb.r.jitInlinesAt(cl, callee, bytecode.Instr{Op: bytecode.OpCallMethod}) {
+		return a, true
+	}
+	p, err := fb.r.jitLower(cl.fn, jitLowerInline)
+	if err != nil {
+		return a, true
+	}
+	this := -1
+	if p.This {
+		this = cl.fn.LocalCount + len(cl.fn.Upvalues)
+	}
+	a.Inline = &ssa.InlineSite{
+		Program: p, Feedback: &jitFeedback{r: fb.r, fn: cl.fn, cl: cl, root: k},
+		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
+		Argc: jitB2i(write), Method: true, Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis,
+		// Its captured bindings in their cells, the closure's: the
+		// accessor's check fixes it.
+		Upvalues: jitUpvalueCells(cl),
+	}
+	k.inlined = append(k.inlined, cl)
+	return a, true
+}
+
+// accessorOf is Accessor's site, of either form's code: the accessor the
+// property site at pc, its cache c, of key, a read or a write, calls, by
+// its cases, its function, and the closure the code may call it as, of the
+// realm's and called with the receiver as its this; nil where Go calls it.
+func (fb *jitFeedback) accessorOf(pc int, c *propCache, key Atom, write bool) (ssa.AccessorSite, *Object, *closure, bool) {
 	if _, ok := jitCacheAccessor(c, write); !ok && fb.dataSeen(pc, c) {
 		// Data its cache holds now, or the code met at its exits: a read
 		// or a write of data first, whose accessors' receivers leave for
 		// Go, as before.
-		return ssa.AccessorSite{}, false
+		return ssa.AccessorSite{}, nil, nil, false
 	}
 	var cases []jitAccessorCase
 	add := func(a jitAccessorCase) {
@@ -194,7 +229,7 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 		}
 	}
 	if len(cases) == 0 {
-		return ssa.AccessorSite{}, false
+		return ssa.AccessorSite{}, nil, nil, false
 	}
 	k := fb.keep()
 	holders := func(a *jitAccessorCase) ([2]ssa.Holder, []ssa.Holder) {
@@ -212,7 +247,7 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 		}
 		return hs, more
 	}
-	site := ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Shape: uintptr(unsafe.Pointer(cases[0].shape)), Index: cases[0].idx}
+	site := ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(cases[0].shape)), Index: cases[0].idx}
 	site.Holders, site.More = holders(&cases[0])
 	for i := range cases[1:] {
 		a := &cases[1+i]
@@ -225,38 +260,15 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	a := ssa.AccessorSite{Property: site, Function: uintptr(unsafe.Pointer(callee)), Setter: write}
 	fd := callee.fn()
 	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != fb.r.Realm {
-		return a, true
+		return a, callee, nil, true
 	}
 	cl := fd.closure
 	if cl.fn.Kind == bytecode.KindArrow || isGeneratorTemplate(cl.fn) || isClassConstructorKind(cl.fn.Kind) {
 		// An arrow's this is the one it captured; a generator's call
 		// makes its object.
-		return a, true
+		return a, callee, nil, true
 	}
-	if site, ok := fb.accessorCall(cl, callee, write); ok {
-		a.Call = &site
-	}
-	if cl.fn == fb.fn || !fb.r.jitInlinesAt(cl, callee, bytecode.Instr{Op: bytecode.OpCallMethod}) {
-		return a, true
-	}
-	p, err := fb.r.jitLower(cl.fn, jitLowerInline)
-	if err != nil {
-		return a, true
-	}
-	this := -1
-	if p.This {
-		this = cl.fn.LocalCount + len(cl.fn.Upvalues)
-	}
-	a.Inline = &ssa.InlineSite{
-		Program: p, Feedback: &jitFeedback{r: fb.r, fn: cl.fn, cl: cl, root: k},
-		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
-		Argc: jitB2i(write), Method: true, Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis,
-		// Its captured bindings in their cells, the closure's: the
-		// accessor's check fixes it.
-		Upvalues: jitUpvalueCells(cl),
-	}
-	k.inlined = append(k.inlined, cl)
-	return a, true
+	return a, callee, cl, true
 }
 
 // megamorphic reports whether the property site at pc, compiled for site,
@@ -271,10 +283,21 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 // checks do, and the code is compiled again for what the cache learned. An
 // inlined callee's site is as the callee's own code has found it.
 func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
+	var c *propCache
+	in := fb.fn.Code[pc]
+	if int(in.B) < len(fb.cl.ic) {
+		c = &fb.cl.ic[in.B]
+	}
+	return fb.megamorphicOf(pc, c, in.Op == bytecode.OpSetProp, site)
+}
+
+// megamorphicOf is megamorphic's, of either form's code: the site at pc,
+// its cache c (nil for none), a write's or a read's.
+func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.PropertySite) bool {
 	if len(site.Cases)+len(site.Adds) >= jitPropertyCases {
 		return true
 	}
-	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills >= maxCacheFills {
+	if c != nil && c.fills >= maxCacheFills {
 		// An inlined callee's write whose cache gave up for additions
 		// along chains deeper than it holds, which it noted, is compiled
 		// for them (seenAdds) -- an initializer a class and its subclasses
@@ -287,8 +310,8 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 		// at each.
 		return true
 	}
-	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) {
-		if c := &fb.cl.ic[in.B]; in.Op == bytecode.OpSetProp && (c.shape == nil || c.shape == noShape) && c.fills != 0 && len(site.Cases)+len(site.Adds) == 0 {
+	if c != nil {
+		if write && (c.shape == nil || c.shape == noShape) && c.fills != 0 && len(site.Cases)+len(site.Adds) == 0 {
 			// A write its cache counted and remembered nothing of: an
 			// addition to an object that keeps its prototype in its table,
 			// whose layout says none (fillStoreCache refuses it), as
@@ -301,7 +324,7 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 			// did for the fresh prototypes' layouts such writes then met.
 			return true
 		}
-		if c := &fb.cl.ic[in.B]; c.shape == dictShape || c.cell != nil {
+		if c.shape == dictShape || c.cell != nil {
 			// A cache of dictionary objects (dictShape), or of a chain's
 			// cell (protoCell) -- a property up a long chain, or one
 			// nothing has: native code reads the receiver's own table and

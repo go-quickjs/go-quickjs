@@ -460,6 +460,18 @@ type jitCodeFields struct {
 	// function's frames of the template's closures, which they have since
 	// one of its invocations they counted (jitCountRun, jitCountCallAt).
 	jitCounting bool
+	// jitRegHot counts the samples of the function's runs the register
+	// tier took (jitRegSample), jitRegDeopts its code's deoptimizations,
+	// and jitRegRefused says it is not compiled from its register code;
+	// jitReg is its code, nil until compiled (zzjit_zregtier.go).
+	jitRegHot, jitRegDeopts uint8
+	jitRegRefused           bool
+	jitReg                  *jitRegEntry
+	// jitRegCounts are what the feedback dispatcher counted of the
+	// function's register code (zzjit_zregfreq.go): its runs, then the
+	// calls made at each of its call sites; nil until its call sites'
+	// caches are made, and in a runtime that runs no JIT.
+	jitRegCounts []uint64
 }
 
 // hint is the hint of the code of cl's function, its template's closures'
@@ -993,6 +1005,32 @@ type jitState struct {
 	rt      *Runtime
 	skipped map[weak.Pointer[bytecode.Function]]string
 	cache   map[jitKey]*jitEntry
+	// regCache is the code compiled from functions' register code, by the
+	// same keys (zzjit_zregnative.go): the cache's other form.
+	regCache map[jitKey]*jitRegEntry
+	// regLinks are the links native callers call functions' register code
+	// through, by the same keys (zzjit_zregcall.go).
+	regLinks map[jitKey]*jitLink
+	// regLearned is what the code made from a function's register code
+	// learned at its exits, by the function's key, kept across its
+	// compiles: an entry holding only what it learned (jitLearned), by
+	// register pc -- the pcs whose guards failed, which its next compiles
+	// build generic (jitRegFeedback's Generic), and the property sites'
+	// cases, primitives and megamorphic marks (jitRegPropertySeen) -- as
+	// the stack form's entries learn by stack pc. regSerial numbers the
+	// register code's compiles (jitRegEntry's serial).
+	regLearned map[jitKey]*jitEntry
+	regSerial  uint32
+	// regHostOps counts register code's host exits by the register
+	// instruction Go ran whole, for tests (RegNativeStats' HostOps).
+	regHostOps map[string]uint64
+	// wholeLeft counts the instructions Go ran whole for native code that
+	// did not go on natively (jitRegWhole), for tests (RegNativeStats').
+	wholeLeft uint64
+	// regGoOps counts register code's calls of Go that may run script by
+	// what they made (jitRegGoCallKey), while the JIT reports
+	// (RegNativeStats' GoCallOps).
+	regGoOps map[jitRegGoKey]uint64
 	// byFn is cache by its functions' addresses (entryFor).
 	byFn map[jitFnAddr]jitFnEntry
 	// links are the functions' links (jitLink), by the same keys.
@@ -1233,8 +1271,25 @@ type jitState struct {
 	goPinned    []*jit.SSACode
 	retired     []jitRetired
 	goPending   jitGoPending
-	ssaEntries  uint64
-	ssaRecords  uint64
+	// regRuns are the register frames native code made from register
+	// code runs on, by context (jitRegStretch), which its calls of Go
+	// make theirs on (jitRegGoCall); regPending is a call of Go one made
+	// that its exit finishes, as goPending is the stack form's.
+	regRuns    []jitRegRun
+	regPending jitGoPending
+	// regJobs are the register compiles in the background, in the order
+	// they were handed over, and regPendingJobs each by its function's
+	// key (zzjit_zregbg.go).
+	regJobs        []*jitRegJob
+	regPendingJobs map[jitKey]*jitRegJob
+	// regSnapMisses counts the register compiles in the background whose
+	// build asked what their snapshot was not asked, built at the install.
+	regSnapMisses uint64
+	// regResumes counts the suspended frames of register code entered in
+	// their native code where they resumed (jitRegEnter from regGenRun).
+	regResumes uint64
+	ssaEntries uint64
+	ssaRecords uint64
 	// backendPanics counts the compiles a backend refused for panicking.
 	backendPanics uint64
 	// inlined counts the callees the code placed inlines, and inlinedCode
@@ -1334,6 +1389,8 @@ func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {
 	r.jitStress = jitStressDefault
 	if r.jitStress.threshold {
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
+		// Every call a sample of the register tier's (jitRegStressSample).
+		r.interruptCounter = 1
 	}
 }
 
@@ -2394,9 +2451,10 @@ func (r *Runtime) releaseJIT() {
 	for key, e := range r.jit.cache {
 		r.jit.dropEntry(key, e)
 	}
+	r.jit.dropRegCode()
 	// Not while a native run is under way, suspended in a call of Go that
 	// released it: it goes on with the state its contexts and pins are in.
-	if len(r.jit.cache) == 0 && r.jit.ctxTop == 0 {
+	if len(r.jit.cache) == 0 && len(r.jit.regCache) == 0 && r.jit.ctxTop == 0 {
 		r.jit = nil
 	}
 }

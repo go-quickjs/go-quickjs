@@ -209,16 +209,22 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 				p = end[b.ID]
 			}
 			again := callsAgain(v)
+			// A call whose pool Go fills reads its operands again after
+			// Go's call (allocate's uses).
+			pa := p
+			if !fused && ssa.RefillsPools(v) {
+				pa = p + 1
+			}
 			for _, a := range v.Args {
-				uses = append(uses, use{v: a, pos: p, again: again})
+				uses = append(uses, use{v: a, pos: pa, again: again})
 				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
-					uses = append(uses, use{v: a.Args[0], pos: p, again: again})
+					uses = append(uses, use{v: a.Args[0], pos: pa, again: again})
 					if x := i32Boxed(a); x != nil {
-						uses = append(uses, use{v: x, pos: p, again: again})
+						uses = append(uses, use{v: x, pos: pa, again: again})
 					}
 				}
 				if a.Shadow != nil {
-					uses = append(uses, use{v: a.Shadow, pos: p, again: again})
+					uses = append(uses, use{v: a.Shadow, pos: pa, again: again})
 				}
 			}
 			at := p

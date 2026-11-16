@@ -758,7 +758,10 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		// miss answers without one (pureCall, leafCall), and a frame that
 		// keeps its arguments is entered by regEnterW, each cheaper than
 		// the exit the call would come back to.
-		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) {
+		// Nor one with native code, which regCallSlow's fill marks for
+		// regEnterW to enter it (regCallJIT).
+		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) &&
+			!(jitBuilt && r.jitRegHas(cl)) {
 			regCacheCallee(e, o, cl, rc, this, kind)
 			return pc
 		}

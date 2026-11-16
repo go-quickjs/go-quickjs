@@ -45,8 +45,13 @@ func testVariantOverrides(t *testing.T, l *Layout, ar *arch) {
 		t.Fatalf("the variant's block has %v, want add and tail_call_w", b.order)
 	}
 	tab := v.table(p, b)
-	if len(tab) != variantSlots {
-		t.Fatalf("%d slots, want %d", len(tab), variantSlots)
+	if len(tab) != variantSlots+len(v.overrides) {
+		t.Fatalf("%d slots, want %d", len(tab), variantSlots+len(v.overrides))
+	}
+	for _, op := range v.overrides {
+		if want := (Slot{Off: p.entry(op)}); tab[v.slotPlain(op)] != want {
+			t.Errorf("plain's %s's slot is %+v, want %+v", op, tab[v.slotPlain(op)], want)
+		}
 	}
 	for op := range 256 {
 		want := Slot{Off: p.entry(bytecode.ROp(op))}
@@ -79,7 +84,7 @@ func testVariantOverrides(t *testing.T, l *Layout, ar *arch) {
 		}
 	}
 	src := ar.source(v, p, b)
-	for _, want := range []string{"//go:build ignore\n", "TEXT ·regNativeTestHandlers(SB)", "$·regNativeTestHandlers+", "GLOBL ·regNativeTestTable(SB), RODATA, $2064\n", "TEXT ·nativeTestTableAddr(SB)"} {
+	for _, want := range []string{"//go:build ignore\n", "TEXT ·regNativeTestHandlers(SB)", "$·regNativeTestHandlers+", "GLOBL ·regNativeTestTable(SB), RODATA, $2080\n", "TEXT ·nativeTestTableAddr(SB)"} {
 		if !bytes.Contains(src, []byte(want)) {
 			t.Errorf("the variant's file has no %q", want)
 		}

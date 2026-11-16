@@ -363,7 +363,15 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 		g.awaitJob = false
 		f.regKind = regFrameAwaitJob
 	}
-	v, err := r.runReg(f, c, start)
+	var v Value
+	var err error
+	if jitBuilt && start > 0 && r.jitRegHas(g.cl) {
+		// Native code made from its register code, entered where the
+		// frame resumes (jitRegEnter).
+		v, err = r.jitRegEnter(f, g.cl, c, base, start)
+	} else {
+		v, err = r.runReg(f, c, start)
+	}
 	var sig *suspendSignal
 	if s, ok := err.(*suspendSignal); ok {
 		sig, err = s, nil

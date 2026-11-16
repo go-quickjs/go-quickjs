@@ -22,9 +22,14 @@ TEXT ·enterRaw(SB), NOSPLIT|NOFRAME, $0-16
 // here, its context in R0, SP and the link register as the Go function that
 // entered it left them -- native code touches neither -- so that, to the Go
 // runtime, this is a function that one called, its return address saved
-// where a frame's is.
+// where a frame's is. Its frame's top word, just below the SP it is entered
+// with, it leaves alone: there the Go function that entered the code keeps
+// its caller's frame pointer (arm64's frame layout, the frame pointer saved
+// at -8 from the SP of the function that saves it), which it restores as it
+// returns -- written there, its caller had gone on with the context's
+// address for a frame pointer.
 TEXT ·callGo(SB), NOSPLIT|NOFRAME, $0-0
-	SUB $32, RSP
+	SUB $48, RSP
 	NO_LOCAL_POINTERS
 	MOVD R30, 0(RSP)
 	MOVD R0, 24(RSP)
@@ -33,7 +38,7 @@ TEXT ·callGo(SB), NOSPLIT|NOFRAME, $0-0
 	MOVD 16(RSP), R16
 	MOVD 24(RSP), R0
 	MOVD 0(RSP), R30
-	ADD $32, RSP
+	ADD $48, RSP
 	JMP (R16)
 
 // storeRef is amd64's: the word's address in R15, the pointer in R17,
@@ -124,8 +129,78 @@ TEXT ·storeRefClobberAddr(SB), NOSPLIT, $0-8
 	MOVD R0, ret+0(FP)
 	RET
 
+// framePointer is its caller's frame pointer, R29: a frameless function's
+// is its caller's.
+TEXT ·framePointer(SB), NOSPLIT|NOFRAME, $0-8
+	MOVD R29, ret+0(FP)
+	RET
+
 // callGoAddr is callGo's address (abi.Encoding's CallGo).
 TEXT ·callGoAddr(SB), NOSPLIT, $0-8
 	MOVD $·callGo(SB), R0
+	MOVD R0, ret+0(FP)
+	RET
+
+// callGoClobber is amd64's: junk in every register native code may keep but
+// R0 and the link register, then callGo.
+TEXT ·callGoClobber(SB), NOSPLIT|NOFRAME, $0-0
+	MOVD $0x7ff5a5a5a5a5a5a5, R1
+	MOVD R1, R2
+	MOVD R1, R3
+	MOVD R1, R4
+	MOVD R1, R5
+	MOVD R1, R6
+	MOVD R1, R7
+	MOVD R1, R8
+	MOVD R1, R9
+	MOVD R1, R10
+	MOVD R1, R11
+	MOVD R1, R12
+	MOVD R1, R13
+	MOVD R1, R14
+	MOVD R1, R19
+	MOVD R1, R20
+	MOVD R1, R21
+	MOVD R1, R22
+	MOVD R1, R23
+	MOVD R1, R24
+	MOVD R1, R25
+	FMOVD R1, F0
+	FMOVD R1, F1
+	FMOVD R1, F2
+	FMOVD R1, F3
+	FMOVD R1, F4
+	FMOVD R1, F5
+	FMOVD R1, F6
+	FMOVD R1, F7
+	FMOVD R1, F8
+	FMOVD R1, F9
+	FMOVD R1, F10
+	FMOVD R1, F11
+	FMOVD R1, F12
+	FMOVD R1, F13
+	FMOVD R1, F14
+	FMOVD R1, F15
+	FMOVD R1, F16
+	FMOVD R1, F17
+	FMOVD R1, F18
+	FMOVD R1, F19
+	FMOVD R1, F20
+	FMOVD R1, F21
+	FMOVD R1, F22
+	FMOVD R1, F23
+	FMOVD R1, F24
+	FMOVD R1, F25
+	FMOVD R1, F26
+	FMOVD R1, F27
+	FMOVD R1, F28
+	FMOVD R1, F29
+	FMOVD R1, F30
+	FMOVD R1, F31
+	JMP ·callGo(SB)
+
+// callGoClobberAddr is callGoClobber's address.
+TEXT ·callGoClobberAddr(SB), NOSPLIT, $0-8
+	MOVD $·callGoClobber(SB), R0
 	MOVD R0, ret+0(FP)
 	RET

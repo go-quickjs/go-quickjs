@@ -10,6 +10,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // jitMarkingWork is what one run of a test of the micro-benchmarks did that
@@ -39,8 +42,17 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 	src, names := jitMarkingCorpus(t)
 	plain := jitMarkingRun(t, src, names, false)
 	marking := jitMarkingRun(t, src, names, true)
-	differ := 0
+	// And each run by native code made from its register code
+	// (jitRegRun), named "reg:" and the test's name.
+	regPlain := jitMarkingRegRun(t, src, names, false)
+	regMarking := jitMarkingRegRun(t, src, names, true)
+	all := names
 	for _, name := range names {
+		all = append(all, "reg:"+name)
+		plain["reg:"+name], marking["reg:"+name] = regPlain[name], regMarking[name]
+	}
+	differ := 0
+	for _, name := range all {
 		p, m := plain[name], marking[name]
 		why, known := jitMarkingBreaches[name]
 		switch {
@@ -55,7 +67,7 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 			t.Errorf("%s does the same work while marking now: take it out of jitMarkingBreaches", name)
 		}
 	}
-	t.Logf("%d tests of the micro-benchmarks, %d differ while marking, %d of them known", len(names), differ, len(jitMarkingBreaches))
+	t.Logf("%d tests of the micro-benchmarks, in both forms, %d differ while marking, %d of them known", len(names), differ, len(jitMarkingBreaches))
 }
 
 // jitMarkingBreaches are the tests of the micro-benchmarks whose paths still
@@ -144,6 +156,59 @@ func jitMarkingRun(t *testing.T, src string, names []string, marking bool) map[s
 	runtime.ReadMemStats(&after)
 	if n := after.TotalAlloc - before.TotalAlloc; n > jitMarkingAllocLimit {
 		t.Errorf("the micro-benchmarks allocated %d MB with the collector off: a test's n should be small work", n>>20)
+	}
+	return work
+}
+
+// jitMarkingRegRun is jitMarkingRun for native code made from register
+// code: the corpus compiled in register form, each test's function called
+// natively (RegNativeCall) three times from its first call, from its start,
+// and then once more counted.
+func jitMarkingRegRun(t *testing.T, src string, names []string, marking bool) map[string]jitMarkingWork {
+	t.Helper()
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	if marking {
+		jitMarkingForTest(t)
+	}
+	compiler.SetRegisterForm(true)
+	prog := compileForTest(t, src)
+	compiler.SetRegisterForm(false)
+	SetRegTier(true)
+	defer SetRegTier(bytecode.RegDefault())
+	defer SetJITRegTier(SetJITRegTier(true))
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(prog); err != nil {
+		t.Fatal(err)
+	}
+	calls := uint64(0)
+	jitGoCallWork = func() { calls++ }
+	defer func() { jitGoCallWork = nil }()
+	work := map[string]jitMarkingWork{}
+	for _, name := range names {
+		fn, err := r.GetProp(Obj(r.Global()), r.Intern(name))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		// Less work than the stack form's runs: both forms' runs, marking
+		// and not, under checkptr take CI's job past its time.
+		for range 2 {
+			if res := r.RegNativeCall(fn, []Value{Float(32)}, false); res.Err != nil {
+				t.Fatalf("%s: %v", name, res.Err)
+			}
+		}
+		calls0, st0 := calls, r.RegNativeStats()
+		if res := r.RegNativeCall(fn, []Value{Float(96)}, false); res.Err != nil {
+			t.Fatalf("%s: %v", name, res.Err)
+		}
+		st := r.RegNativeStats()
+		work[name] = jitMarkingWork{calls: calls - calls0, hosts: st.Hosts - st0.Hosts + st.Guards - st0.Guards,
+			interpreted: st.Interpreted - st0.Interpreted, records: st.Records - st0.Records}
+	}
+	if st := r.RegNativeStats(); st.Entries == 0 {
+		t.Error("no test ran natively from its register code")
+	} else {
+		t.Logf("register code, marking %v: %d entries, %d host exits, %d deoptimizations, %d polls", marking, st.Entries, st.Hosts, st.Guards, st.Polls)
 	}
 	return work
 }

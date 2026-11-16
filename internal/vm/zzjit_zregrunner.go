@@ -106,33 +106,75 @@ func (x *regRunner) Run(p *ir.Program, pc int, in *ir.Instruction, slots []ir.Va
 			return 0, false, nil
 		}
 	}
-	r, f, c := x.r, x.f, x.c
-	w := regAt(c.code, rpc)
-	switch w.Op() {
-	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield, bytecode.RCallWT, bytecode.RCallMWT:
+	if !regWholeRuns(regAt(x.c.code, rpc)) {
 		return 0, false, nil
 	}
 	x.store(slots)
-	// The instruction's handler, and its slow function where the handler
-	// leaves it that, as runReg runs them.
-	st := r.regEnter(f, c)
-	next := regTable[w.Op()](st.regs, w, rpc, st)
-	if next < 0 && next != regDone {
-		next = regSlowTable[w.Op()](st.regs, w, ^next, st)
+	next, ok, err := x.r.regWhole(x.f, x.c, x.wb, rpc)
+	if !ok {
+		return 0, false, nil
 	}
-	thrown := st.err
-	r.regLeave(st)
 	x.steps++
-	if next == regDone {
-		x.thrown = thrown
+	if err != nil {
+		x.thrown = err
 		return 0, false, errRegThrown
 	}
 	x.load(slots)
-	at := p.At(uint32(next))
-	if at < 0 {
+	n := p.At(uint32(next))
+	if n < 0 {
 		return 0, false, nil
 	}
-	return at, true, nil
+	return n, true, nil
+}
+
+// regWholeRuns reports whether regWhole may run w: not a return, a
+// suspension or a call in tail position, which runReg's loop alone makes.
+func regWholeRuns(w bytecode.RInstr) bool {
+	switch w.Op() {
+	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield, bytecode.RCallWT, bytecode.RCallMWT,
+		bytecode.RAwait, bytecode.RYieldStar, bytecode.REndParams, bytecode.RGenEntry, bytecode.RIterResume:
+		// RAwait, RYieldStar, REndParams and RIterResume may suspend the
+		// frame, which only the interpreter does, and RGenEntry reads
+		// how it resumed.
+		return false
+	}
+	return true
+}
+
+// regWhole runs the register instruction at rpc whole on f's registers, a
+// window at wb, as runReg runs it: its handler from regTable, and its slow
+// function from regSlowTable where the handler leaves it that -- on amd64
+// too, as the native handlers' exit stub runs an instruction it leaves
+// to Go. It reports the register pc the frame goes on at: the next
+// instruction's, a jump's target, or the handler that took what the
+// instruction threw. ok is false where it does not run it -- a return, a
+// suspension, a call in tail position -- and then it has changed nothing.
+// err is what the instruction threw that no handler of the frame's took.
+// It is a host exit's VM side: the evaluator's (regRunner), and native
+// code's (jitRegRun).
+func (r *Runtime) regWhole(f *frame, c *regCode, wb, rpc int) (next int, ok bool, err error) {
+	w := regAt(c.code, rpc)
+	if !regWholeRuns(w) {
+		return 0, false, nil
+	}
+	st := r.regEnter(f, c)
+	if st.wb != wb {
+		panic("vm: register frame's window moved")
+	}
+	next = regTable[w.Op()](st.regs, w, rpc, st)
+	if next < 0 && next != regDone {
+		next = regSlowTable[w.Op()](st.regs, w, ^next, st)
+	}
+	err = st.err
+	r.regLeave(st)
+	if next < 0 {
+		if err == nil {
+			// No return reaches here (regWholeRuns).
+			panic("vm: register instruction ended its frame without an error")
+		}
+		return 0, true, err
+	}
+	return next, true, nil
 }
 
 // regLowerEnter is regEnterW, the frame of a call of o made, but run by
@@ -231,8 +273,10 @@ func (r *Runtime) RegLowerCall(fnv Value, args []Value, budget uint64) RegLowerR
 		fd = o.fn()
 	}
 	var c *regCode
-	if fd != nil && fd.closure != nil && !fd.bound && fd.extra == nil && fd.treeCall != nil && fd.closure.realm == r.Realm {
-		c = fd.treeCall.reg
+	if fd != nil && fd.closure != nil && !fd.bound && fd.extra == nil && fd.closure.realm == r.Realm {
+		if c = fd.closure.reg; c == nil {
+			c = r.regOf(fd.closure)
+		}
 	}
 	plain := func(why string) RegLowerResult {
 		v, err := r.Call(fnv, Undefined, args)

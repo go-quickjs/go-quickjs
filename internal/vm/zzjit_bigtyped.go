@@ -2,6 +2,8 @@
 
 package vm
 
+import "encoding/binary"
+
 // BigInt64Arrays and BigUint64Arrays read natively: an element read that
 // has met one (jitIndexSeen), and the loops of their forEach, reduce,
 // filter, some, every, find and findIndex, read the element as a BigInt
@@ -58,4 +60,24 @@ func (fb *jitFeedback) TypedBigRead(pc int) (unsigned, ok bool) {
 	}
 	m := jitBigReadAt(e.typedReads, pc)
 	return m&jitBigReadUnsigned != 0, m != 0
+}
+
+// jitStoreBigElem stores BigInt v in element i of o, a BigInt64Array or a
+// BigUint64Array of a fixed length inside its buffer, as setElem stores
+// it -- its low 64 bits -- for native code's store of any value
+// (ssa.GoElemStore), which runs nothing; false for any other array or
+// index, which Go stores after an exit. Each such store had left native
+// code: a BigInt64Array filled in a loop took 65 times as long with the
+// JIT as without.
+func jitStoreBigElem(o *Object, i uint32, v Value) bool {
+	t, ok := o.dataOf().(*typedArrayData)
+	if !ok || t.kind != elemBigInt64 && t.kind != elemBigUint64 || t.tracking || uint(i) >= uint(t.fixedLength) {
+		return false
+	}
+	st, _ := t.buffer.dataOf().(*arrayBufferData)
+	if st == nil || st.immutable || t.byteOffset+t.fixedLength<<3 > len(st.bytes) {
+		return false
+	}
+	binary.LittleEndian.PutUint64(st.bytes[t.byteOffset+int(i)<<3:], bigLow64(v))
+	return true
 }

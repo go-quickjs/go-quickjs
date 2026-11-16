@@ -1018,6 +1018,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// The model's stack has room for an inlined callee's frame.
 			case OpTailRoom, OpTailSelf:
 				// The model's stack is shallow: the call is made.
+			case OpPoll:
+				// The model has no budget to spend.
 			case OpSameSymbol:
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
 			case OpIterClosed:

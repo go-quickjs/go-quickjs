@@ -162,6 +162,19 @@ func (b *builder) accessorInline(blk *Block, fr *frame, recv, value *Value, stat
 		fr.args = b.f.refsOf(1)
 		fr.args[0] = value
 	}
+	if site.Window {
+		// A register callee's window (InlineSite's Window): its function,
+		// from its cell, the receiver, a setter's value.
+		cell := b.f.newValue(blk, OpConstCell, Source)
+		cell.Const = ir.Value{Bits: uint64(site.FunctionCell)}
+		fn := b.f.newValue(blk, OpLoadCell, Tagged, cell)
+		fn.Shadow = cell
+		fr.init[0], fr.init[1] = fn, recv
+		if value != nil && site.Params > 2 {
+			fr.init[2] = value
+		}
+		return
+	}
 	for i := 0; i < site.Params && i < len(fr.args); i++ {
 		fr.init[i] = fr.args[i]
 	}

@@ -439,6 +439,19 @@ type Instruction struct {
 	// native code there (ssa's GoHost), its Extra operands popped and its
 	// result, unless Dest is -1, at Dest.
 	Frame bool
+	// Window marks a Host of register code that is a call (call_w,
+	// call_method_w, new_w): its window's first register, the function's,
+	// at Left -- the receiver past it, then the Extra arguments -- and its
+	// result's register at Dest, which the new pipeline makes as the stack
+	// form's call (ssa's CallSite), its operands read from the registers;
+	// or a typeof, its operand at Left and no Extra; or an instanceof, its
+	// object at Left, its constructor at Right and Extra 1.
+	Window bool
+	// Whole marks a Host of register code that Go runs whole on the
+	// register frame, called from native code (ssa's GoCall, Whole), which
+	// goes on after it: the registers it reads, Extra of them, at Left,
+	// Right and Third in order, and the one it writes at Dest, or -1.
+	Whole bool
 	// Generic marks a component of a register instruction's expansion
 	// (Program's Origin) that follows one that may have committed: it never
 	// leaves at its own state, which would run the instruction again from
@@ -532,11 +545,65 @@ func (in *Instruction) Writes() (int, int) {
 	case Insert3:
 		return in.Dest, in.Dest + 3
 	case Host:
-		if in.Frame {
+		if in.Frame || in.Whole {
 			return in.Dest, -1
 		}
 	}
 	return -1, -1
+}
+
+// WholeOperands is, for register code's instruction in, the only one of
+// its origin, which Go may run whole on the register frame (ssa's
+// CallSite Whole), the registers it reads, n of them, in order, and the
+// one it writes, or -1: a whole Host's (Whole), or those of an operation
+// whose operands are its register instruction's own -- a field's
+// definition, a destructuring's step, an element's or a property's read
+// or write, a private member's with its key's register last, in, delete --
+// a literal operand being the instruction's immediate; ok is false for any other, or for a slot past the regs
+// registers.
+func (in *Instruction) WholeOperands(regs int) (reads [3]int, n int, dest int, ok bool) {
+	// The operands' slots, -1 for a literal: no Operand copied, as Go asks
+	// at each such call.
+	slots := [3]int{in.Left.Slot, in.Right.Slot, in.Third.Slot}
+	dest = -1
+	switch {
+	case in.Op == Host && in.Whole:
+		if in.Extra > 3 {
+			return reads, 0, -1, false
+		}
+		n, dest = in.Extra, in.Dest
+	case in.Op == FieldDefine, in.Op == PropertyWrite && !in.Private:
+		n = 2
+	case (in.Op == PropertyRead || in.Op == ReferenceRead) && in.Private && !in.When:
+		// A private member's read: its object and its key's register.
+		slots, n, dest = [3]int{in.Left.Slot, in.Third.Slot}, 2, in.Dest
+	case in.Op == PropertyWrite && in.Private:
+		n = 3
+	case in.Op == ArrayWrite:
+		n = 3
+	case in.Op == IterStep && in.When, in.Op == PropertyRead && !in.Private, in.Op == ReferenceRead && !in.Private:
+		n, dest = 1, in.Dest
+	case in.Op == ArrayRead && !in.Reference, in.Op == HasProperty, in.Op == DeleteProperty:
+		n, dest = 2, in.Dest
+	default:
+		return reads, 0, -1, false
+	}
+	if dest >= regs {
+		return reads, 0, -1, false
+	}
+	k := 0
+	for _, slot := range slots[:n] {
+		if slot < 0 {
+			// The instruction's immediate.
+			continue
+		}
+		if slot >= regs {
+			return reads, 0, -1, false
+		}
+		reads[k] = slot
+		k++
+	}
+	return reads, k, dest, true
 }
 
 // genericOp reports whether an instruction of op may be Generic: one whose
@@ -779,6 +846,32 @@ func (p *Program) At(pc uint32) int {
 // starts reports whether instruction i is the first of its origin's.
 func (p *Program) starts(i int) bool {
 	return p.Origin == nil || i <= 0 || i >= len(p.Origin) || p.Origin[i] != p.Origin[i-1]
+}
+
+// windowLast reports whether register code's instruction pc is a call (a
+// Window Host) that ends its origin, of a window of scratch slots, every
+// instruction before it in the origin writing only scratch slots -- a
+// literal from its pool, a property's read, a copy -- as regexp_lit's
+// call is lowered: what it writes before the call nothing outside the
+// origin sees, and the builder makes its read commit nothing (its
+// atomicity rule), so that an exit at the call runs the instruction whole
+// again.
+func (p *Program) windowLast(pc int) bool {
+	in := &p.Code[pc]
+	if p.Origin == nil || in.Op != Host || !in.Window || in.Left.Slot < p.Regs || p.starts(pc) || !p.starts(pc+1) {
+		return false
+	}
+	for q := pc - 1; q >= 0 && p.Origin[q] == p.Origin[pc]; q-- {
+		switch c := &p.Code[q]; c.Op {
+		case ObjectLiteral, ReferenceRead, PropertyRead, Copy:
+			if c.Dest < p.Regs || c.Generic {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ExitKind identifies a completed return or a resumable exit.

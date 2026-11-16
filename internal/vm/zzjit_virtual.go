@@ -56,6 +56,14 @@ func (fb *jitFeedback) VirtualRoot(pool uintptr) (uintptr, uintptr, bool) {
 	return uintptr(unsafe.Pointer(root)), uintptr(unsafe.Pointer(proto)), true
 }
 
+// VirtualRoot is ssa.VirtualFeedback's for register code: as the stack
+// form's (jitFeedback's), the pools' sources being the same -- an object
+// literal's, a construction's receiver's -- and the answers held, then
+// kept with the code, by the root's feedback (jitRegPlace).
+func (f *jitRegFeedback) VirtualRoot(pool uintptr) (uintptr, uintptr, bool) {
+	return f.fb.VirtualRoot(pool)
+}
+
 // jitVirtualRoot is VirtualRoot's answer for a pool, which holds them alive
 // until the compile keeps them (keepVirtuals).
 type jitVirtualRoot struct {

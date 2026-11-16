@@ -106,3 +106,44 @@ func enterNative(code *byte, ctx *abi.Context) {
 	enterSSA(code, ctx)
 	runtime.KeepAlive(ctx)
 }
+
+// TestNativeCallsGoKeepsFramePointer: a Go function whose callee entered
+// native code that called Go finds its frame pointer as it was before the
+// call. arm64's Go keeps a function's caller's frame pointer just below the
+// function's stack pointer, where callGo's frame, made below it, had
+// written the context's address: the function restored that as it
+// returned, and its caller went on with it for a frame pointer, which
+// frame-pointer unwinding -- the execution tracer's, a profiler's -- then
+// follows.
+func TestNativeCallsGoKeepsFramePointer(t *testing.T) {
+	code, err := callGoProgram(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewArena()
+	placed, err := a.place(code)
+	if err != nil {
+		t.Skip(err)
+	}
+	defer a.release(placed)
+	old := HostCall
+	defer func() { HostCall = old }()
+	HostCall = func(ctx *abi.Context) bool { return true }
+	ctx := new(abi.Context)
+	ctx.SetConsts(&testEncoding)
+	before, after := enterKeepingFramePointer(&placed[0], ctx)
+	if before == 0 || before != after {
+		t.Fatalf("frame pointer %#x before the call, %#x after", before, after)
+	}
+}
+
+// enterKeepingFramePointer calls enterNative, which enters code with ctx,
+// and returns its own frame pointer before and after.
+//
+//go:noinline
+func enterKeepingFramePointer(code *byte, ctx *abi.Context) (before, after uintptr) {
+	before = framePointer()
+	enterNative(code, ctx)
+	after = framePointer()
+	return before, after
+}

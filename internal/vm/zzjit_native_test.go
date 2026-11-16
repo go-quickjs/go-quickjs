@@ -5149,6 +5149,16 @@ func jitClobberStoresForTest(t *testing.T) {
 	t.Cleanup(func() { jitEncoding.StoreRef = old })
 }
 
+// jitClobberCallsForTest has native code's calls of Go fill every register
+// it may keep with junk first (jit.CallGoClobber): code that reads one
+// after the call that it did not save goes wrong at once, not only where
+// Go's code happened to use it.
+func jitClobberCallsForTest(t *testing.T) {
+	old := jitEncoding.CallGo
+	jitEncoding.CallGo = jit.CallGoClobber()
+	t.Cleanup(func() { jitEncoding.CallGo = old })
+}
+
 func jitMarkingForTest(t *testing.T) *uint8 {
 	marking := new(uint8)
 	*marking = 1

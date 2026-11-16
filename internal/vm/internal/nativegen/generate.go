@@ -81,7 +81,11 @@ func (ar *arch) emitFrom(l *Layout, v *variant) (*block, error) {
 	if err := lay.err(); err != nil {
 		return nil, err
 	}
-	b, err := ar.emit(v)
+	emit := ar.emit
+	if own := v.own[ar.goarch]; own != nil {
+		emit = own
+	}
+	b, err := emit(v)
 	if err != nil {
 		return nil, fmt.Errorf("nativegen: %s: %v", ar.goarch, err)
 	}

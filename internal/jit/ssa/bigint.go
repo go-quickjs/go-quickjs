@@ -349,8 +349,19 @@ func (b *builder) wrapsAt(pc int) bool {
 		return false
 	}
 	d := in.Dest
-	if d != p.Locals+p.Maps[pc+1].Depth-1 {
+	// Register code's operator writes a register -- one no closure
+	// captures, which the stack form's operand stack's top stands for --
+	// that what takes it is the last to read (below); the stack form's,
+	// its stack's top, which an instruction after it writes only above.
+	reg := p.Origin != nil
+	if reg && (d < 0 || d >= p.Regs || p.IsCaptured(d)) || !reg && d != p.Locals+p.Maps[pc+1].Depth-1 {
 		return false
+	}
+	over := func(dest int) bool {
+		if reg {
+			return dest == d
+		}
+		return dest <= d
 	}
 	for k := pc + 1; k < len(p.Code); k++ {
 		if !reachable(p, k) || b.blockAt[k] != nil {
@@ -358,28 +369,32 @@ func (b *builder) wrapsAt(pc int) bool {
 		}
 		c := p.Code[k]
 		if b.wrapReads(k, d) {
+			if reg && c.Dest != d && p.LiveAt(k+1, d) {
+				// Read after what takes it, which a word is not.
+				return false
+			}
 			return b.wrapTakes(k, d)
 		}
 		switch c.Op {
 		case ir.Nop:
 		case ir.Copy:
-			if c.Check || c.Dest <= d || !b.wrapLocal(c.Left) {
+			if c.Check || over(c.Dest) || !b.wrapLocal(c.Left) {
 				return false
 			}
 		case ir.CopyPair:
-			if c.Dest <= d || !b.wrapLocal(c.Left) || !b.wrapLocal(c.Right) {
+			if over(c.Dest) || reg && c.Dest+1 == d || !b.wrapLocal(c.Left) || !b.wrapLocal(c.Right) {
 				return false
 			}
 		case ir.BigIntConst:
 			cf, ok := b.fb.(BigIntConstFeedback)
-			if !ok || c.Dest <= d {
+			if !ok || over(c.Dest) {
 				return false
 			}
 			if cell, _, _, ok := cf.BigIntCell(k); !ok || cell == 0 {
 				return false
 			}
 		case ir.Binary:
-			if c.Dest <= d || !b.wraps(k) {
+			if over(c.Dest) || !b.wraps(k) {
 				return false
 			}
 		default:
@@ -401,8 +416,11 @@ func (b *builder) wrapLocal(o ir.Operand) bool {
 // wrapped operator made: an operand of an operator, or of a call.
 func (b *builder) wrapReads(k, d int) bool {
 	c := b.p.Code[k]
-	switch c.Op {
-	case ir.Host, ir.Call:
+	switch {
+	case c.Op == ir.Host && c.Window:
+		// Register code's call: its window's registers.
+		return d >= c.Left.Slot && d < c.Left.Slot+2+c.Extra
+	case c.Op == ir.Host, c.Op == ir.Call:
 		return d >= b.p.Locals && d < b.p.Locals+b.p.Maps[k].Depth
 	}
 	return c.Left.Slot == d || c.Right.Slot == d || c.Third.Slot == d
@@ -422,7 +440,12 @@ func (b *builder) wrapTakes(k, d int) bool {
 		return b.wraps(k)
 	case ir.Host:
 		_, ok := b.asN(k)
-		return ok && d == b.p.Locals+b.p.Maps[k].Depth-1 && b.f.Keeps < b.f.keepLimit()
+		last := b.p.Locals + b.p.Maps[k].Depth - 1
+		if c.Window {
+			// The window's last argument.
+			last = c.Left.Slot + 1 + c.Extra
+		}
+		return ok && d == last && b.f.Keeps < b.f.keepLimit()
 	}
 	return false
 }
@@ -507,8 +530,8 @@ func (b *builder) wrapOp(blk *Block, pc int, in ir.Instruction, guard func(Op, T
 // boxed. It ends a region of wrapped operators (wraps).
 func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	f := b.f
-	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
-	x := b.read(sp-1, blk)
+	cs, _ := b.callSlotsOf(pc, 2, true)
+	x := b.read(cs.arg+1, blk)
 	w := b.words[x]
 	kind := ir.HostExit
 	if w != nil {
@@ -517,7 +540,7 @@ func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, 
 		// the function it calls now.
 		kind = ir.GuardExit
 	}
-	object := guard(OpObjectOf, Ptr, kind, b.read(sp-3, blk))
+	object := guard(OpObjectOf, Ptr, kind, b.read(cs.fn, blk))
 	same := guard(OpSameObject, None, kind, object)
 	same.Const = ir.Value{Bits: uint64(k.Callee)}
 	if w == nil {
@@ -535,20 +558,20 @@ func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, 
 		r = f.newValue(blk, OpSextW, Int64, w)
 		r.Index = k.Fn
 	}
-	b.assign(b.cur.base+b.p.Locals+b.p.Maps[pc+1].Depth-1, blk, b.bigBoxed(blk, r))
+	b.assign(cs.dest, blk, b.bigBoxed(blk, r))
 }
 
 // bigOfCall makes BigInt(x), the call at pc, of a number, as V8 reduces
 // it: checked to call the function, x checked to be an integer in the
 // int64 range (OpBigOfF64), boxed; any other x is Go's call.
 func (b *builder) bigOfCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
+	cs, _ := b.callSlotsOf(pc, 1, false)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(cs.fn, blk))
 	same := guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(k.Callee)}
-	x := guard(OpUnboxF64, Float64, ir.HostExit, b.read(sp-1, blk))
+	x := guard(OpUnboxF64, Float64, ir.HostExit, b.read(cs.arg, blk))
 	r := guard(OpBigOfF64, Int64, ir.HostExit, x)
-	b.assign(b.cur.base+b.p.Locals+b.p.Maps[pc+1].Depth-1, blk, b.bigBoxed(blk, r))
+	b.assign(cs.dest, blk, b.bigBoxed(blk, r))
 }
 
 // BigInt blocks a call of Go that makes a BigInt's operator may give back
@@ -646,6 +669,9 @@ func bigArith(op ir.Operator) bool {
 // to the slots past it, by the stack's depths.
 func (b *builder) bigFresh(pc, slot int) bool {
 	p := b.p
+	if p.Origin != nil {
+		return b.regBigFresh(pc, slot)
+	}
 	d := slot - p.Locals
 	if d < 0 {
 		return false
@@ -678,12 +704,70 @@ func (b *builder) bigFresh(pc, slot int) bool {
 	return false
 }
 
+// regBigFresh is bigFresh in a register program, whose operators write
+// registers, not a stack: slot, an operand of the instruction at pc, is a
+// register an operator (bigArith), its register instruction's whole
+// lowering, wrote earlier in the block, which no instruction since has
+// read or written -- each an operator or a copy of other slots -- and which
+// nothing reads after pc before writing it (ir.Program's Live). Not one
+// the instruction at pc writes: its old value is the register's, which
+// the register's own giving back takes (bigOwner's ReleaseOld) -- both
+// would give the block back twice. Nor one of the registers that hold
+// their values alone (BigIntSole), whose values are given back where an
+// operator writes the register next, the block then long reused.
+func (b *builder) regBigFresh(pc, slot int) bool {
+	p := b.p
+	if slot < 0 || slot >= p.Regs || p.IsCaptured(slot) || !regWhole(p, pc) || pc+1 >= len(p.Code) ||
+		p.Code[pc].Dest == slot || p.LiveAt(pc+1, slot) || slot < 64 && b.sole&(1<<uint(slot)) != 0 {
+		return false
+	}
+	touches := func(c ir.Instruction) bool {
+		return c.Left.Slot == slot || c.Right.Slot == slot || c.Third.Slot == slot || c.Dest == slot || c.Check && c.CheckSlot == slot
+	}
+	for k := pc - 1; k >= 0; k-- {
+		if b.blockAt[k+1] != nil || !reachable(p, k) {
+			return false
+		}
+		c := p.Code[k]
+		if c.Op == ir.Binary && c.Dest == slot {
+			return bigArith(c.Operator) && regWhole(p, k)
+		}
+		switch c.Op {
+		case ir.Binary, ir.Unary, ir.Copy, ir.Nop:
+			if touches(c) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// regWhole reports whether the instruction at pc of a register program is
+// the whole lowering of its register instruction (ir.Program's Origin).
+func regWhole(p *ir.Program, pc int) bool {
+	o := p.Origin
+	return pc >= 0 && pc < len(o) && (pc == 0 || o[pc-1] != o[pc]) && (pc+1 == len(o) || o[pc+1] != o[pc])
+}
+
 // bigOwner is the local the instruction right after pc stores in's result
 // to, taking it off the stack, as the tree tier's ownedStore takes it: one
 // that checks nothing, whose guard's state would still have the value the
 // local held, given back.
 func (b *builder) bigOwner(pc int, in ir.Instruction) (int, bool) {
 	p := b.p
+	if p.Origin != nil {
+		// A register program's operator writes its register itself -- s =
+		// s * x is one mul into s's -- its value given back once the
+		// result is made, the operator its register instruction's whole
+		// lowering, which an exit after it does not make again.
+		k := in.Dest
+		if !regWhole(p, pc) || k < 0 || k >= p.Regs || p.IsCaptured(k) {
+			return 0, false
+		}
+		return k, true
+	}
 	k := pc + 1
 	if k+1 >= len(p.Maps) || b.blockAt[k] != nil || !reachable(p, k) {
 		return 0, false

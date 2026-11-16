@@ -311,19 +311,28 @@ func (r *Runtime) regSetMiss(c *regCode, k *regKept, regs *[1 << 16]Value) bool 
 	return regElemMiss(c, k, regs)
 }
 
-// regBackEdge is a backward jump's interrupt check, when the budget is
-// spent.
-func (r *Runtime) regBackEdge(f *frame, c *regCode, k *regKept) error {
+// regBackEdge is the backward jump at pc's interrupt check, when the
+// budget is spent, and the pc the frame goes on at: the jump's target, or,
+// with the JIT, where native code entered there left it (jitRegLoop); the
+// fail tail's where the check or the code threw.
+func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
+	f, c := st.f, st.c
+	st.kept.pc = pc + 1
 	r.backEdges = backEdgeCheckInterval
-	f.pc = c.src[k.pc-1] + 1
+	f.pc = c.src[pc] + 1
 	if err := r.checkInterruptNow(); err != nil {
-		return err
+		return st.fail(err)
 	}
 	// The temporaries past what the loop's head has live are stale: a
 	// value a call's window was given stays there until the window is
 	// used again.
-	r.sweepStaleSlots(f.base - int(c.locals) + c.rc.LiveAt(k.pc-1))
-	return nil
+	r.sweepStaleSlots(f.base - int(c.locals) + c.rc.LiveAt(pc))
+	if jitBuilt && r.jitOn() {
+		// A sample of the back edges: the loop's function's hotness, and
+		// its native code entered at the loop's header (jitRegLoop).
+		return r.jitRegLoop(st, target)
+	}
+	return target
 }
 
 // regAppend is append, a case of runReg's: an append to a local, its

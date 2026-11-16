@@ -49,6 +49,9 @@ type jitSnapshot struct {
 	effects map[jitSnapKey]*jitSnapEffect
 	uses    []jitSnapUse
 	bad     bool
+	// reg is the snapshot as register code's feedback answers, where it
+	// was asked of that (zzjit_zregsnap.go).
+	reg *jitRegSnapshot
 }
 
 // jitSnapLists are what a question may append to of a feedback's: what the

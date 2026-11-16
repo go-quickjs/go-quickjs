@@ -16,6 +16,9 @@ import (
 // so that what one learns at its exits, the next compile of either is
 // compiled for.
 type jitLearned struct {
+	// reg marks what a function's register code's native code learned
+	// (jitState's regLearned), whose pcs are register pcs throughout.
+	reg bool
 	// failed and failedEntries are the sites, by slot IR PC, and the
 	// entries, by PC, whose speculation failed in the code (jitDeoptimized).
 	failed        []int32
@@ -33,6 +36,10 @@ type jitLearned struct {
 	// literals are the object literals the code makes natively, each with
 	// its pool, kept across compiles (jitFeedback.Literal).
 	literals []jitLiteral
+	// regLitReads are, for register code, the caches of regexp_lit's
+	// reads of its method, by register pc (jitRegFeedback's
+	// regLitProperty).
+	regLitReads map[int32]*propCache
 	// regexpLitCalls says, of each call of Go the code has made that
 	// jitRegExpLitPool has asked about, the pc of the RegExp literal it
 	// calls exec or test of, or -1.
