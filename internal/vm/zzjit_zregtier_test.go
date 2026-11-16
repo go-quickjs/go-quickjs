@@ -76,3 +76,57 @@ function drive() { return [props({}), props({x:1}), props({x:1, y:2}), props({x:
 		t.Errorf("no native code entered")
 	}
 }
+
+// TestJITRegLoopTierCounted runs a loop whose turns call a function with
+// a loop of its own, in register code at the JIT's own thresholds, from
+// several phases of the varied interrupt budget (budgetSeed), and checks
+// the outer loop's function is compiled at the same call at each: its
+// back edges count its budget, each its distance (jitRegEdges), as V8's
+// JumpLoop spends it, wherever the interrupt budget ends: at its 16th.
+// Sampled, only where the budget ended at its own back edge -- one in 65
+// of the back edges -- it was compiled at its 2nd, 15th, 10th or 35th
+// call, or not in 60, at these five phases, as Crypto's bnModPow was.
+func TestJITRegLoopTierCounted(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+function inner(a) { var s = 0; for (var k = 0; k < 64; k++) s = (s + a[k & 7]) | 0; return s }
+function outer(n, a) { var s = 0; for (var i = 0; i < n; i++) s = (s + inner(a) + i) | 0; return s }
+var data = [1, 2, 3, 4, 5, 6, 7, 8];
+`
+	first := map[uint32]int{}
+	for _, seed := range []uint32{1, 0x1234, 0xbeef, 77777, 0x9e3779b9} {
+		rts := regNativeRuntimes(t, src)
+		r := rts[0]
+		r.jitState().budgetSeed = seed
+		at := -1
+		for call := 1; call <= 60; call++ {
+			var got [2]string
+			for i, rt := range rts {
+				fn, _ := rt.GetProp(Obj(rt.Global()), rt.Intern("outer"))
+				data, _ := rt.GetProp(Obj(rt.Global()), rt.Intern("data"))
+				v, err := rt.Call(fn, Undefined, []Value{Float(40), data})
+				got[i] = regNativeShow(rt, v, err)
+			}
+			if got[0] != got[1] || got[0] != "12300" {
+				t.Fatalf("seed %#x, call %d: with the JIT %q, without %q, want 12300", seed, call, got[0], got[1])
+			}
+			fv, _ := r.GetProp(Obj(r.Global()), r.Intern("outer"))
+			if e := fv.Object().fn().closure.closureCode.jitReg; at < 0 && e != nil && e.code != nil {
+				at = call
+			}
+		}
+		if at < 0 {
+			t.Fatalf("seed %#x: outer never compiled in 60 calls", seed)
+		}
+		first[seed] = at
+	}
+	t.Logf("compiled at call %v", first)
+	for _, at := range first {
+		if at != first[1] {
+			t.Errorf("outer compiled at different calls as the interrupt budget's phase varies: %v", first)
+			break
+		}
+	}
+}

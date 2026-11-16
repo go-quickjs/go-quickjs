@@ -75,6 +75,13 @@ func TestJITGenericCallsNative(t *testing.T) {
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
+	if r.regOn() {
+		// The register JIT compiles round, which calls f1 to f7
+		// natively, and they inline forEach, its callback with it: no
+		// generic call is left. Without inlining, forEach's own code makes
+		// them, as the stack form's does.
+		regNoInline(t)
+	}
 	const setup = `
 		function forEach(a, f) { for (let i = 0; i < a.length; i++) f(a[i]) }
 		const a = []
@@ -97,12 +104,13 @@ func TestJITGenericCallsNative(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "forEach")
-	entries, goCalls, hosts := e.ssaStats.entries, e.ssaStats.goCalls, e.ssaStats.hosts
+	uses, goCalls, hosts := jitNativeUsesForTest(r, "forEach"), e.ssaStats.goCalls, e.ssaStats.hosts
 	if _, err := r.Run(compileForTest(t, `for (let k = 0; k < 20; k++) round()`)); err != nil {
 		t.Fatal(err)
 	}
-	// 20 rounds of seven forEach calls of 100 elements each, natively.
-	if n := e.ssaStats.entries - entries; n < 140 {
+	// 20 rounds of seven forEach calls of 100 elements each, natively:
+	// entered by Go, or called by its callers' native code.
+	if n := jitNativeUsesForTest(r, "forEach") - uses; n < 140 {
 		t.Fatalf("forEach ran natively %d times of 140", n)
 	}
 	if n := e.ssaStats.goCalls - goCalls + e.ssaStats.hosts - hosts; n > 140 {
@@ -143,8 +151,8 @@ func TestJITArrowCallsNative(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := r.jitEntryOf(r.global.getOwn(r.atoms.intern("runTask")).value().Object().fn().closure)
-	if e == nil || e.ssa == nil {
+	e := jitCodeForTest(r, "runTask")
+	if e == nil {
 		t.Fatalf("runTask has no code: %+v", e)
 	}
 	goCalls, hosts := e.ssaStats.goCalls, e.ssaStats.hosts

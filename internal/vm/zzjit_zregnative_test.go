@@ -44,6 +44,10 @@ function instThrows(n) { var s = 0; try { for (var i = 0; i < n; i++) if (i inst
 
 // regNativeRuntimes are two runtimes that have run regNativeSrc in register
 // form: the first runs the calls natively, the second as ordinary calls.
+// The test's end puts the register form, tier and JIT tier back as the
+// process began: a form left off had every later test's code compiled
+// without one -- under QJS_JITREG=1 the parallel tests, which run after
+// the rest, ran the stack form's JIT in its place.
 func regNativeRuntimes(t *testing.T, src string) [2]*Runtime {
 	t.Helper()
 	compiler.SetRegisterForm(true)
@@ -51,7 +55,11 @@ func regNativeRuntimes(t *testing.T, src string) [2]*Runtime {
 	compiler.SetRegisterForm(false)
 	SetRegTier(true)
 	was := SetJITRegTier(true)
-	t.Cleanup(func() { SetRegTier(bytecode.RegDefault()); SetJITRegTier(was) })
+	t.Cleanup(func() {
+		compiler.SetRegisterForm(bytecode.RegDefault())
+		SetRegTier(bytecode.RegDefault())
+		SetJITRegTier(was)
+	})
 	var rts [2]*Runtime
 	for i := range rts {
 		rts[i] = New(Config{JIT: i == 0})

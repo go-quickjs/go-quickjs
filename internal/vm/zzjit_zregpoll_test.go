@@ -47,7 +47,11 @@ func TestJITRegNativeHonoursLimits(t *testing.T) {
 			compiler.SetRegisterForm(false)
 			SetRegTier(true)
 			was := SetJITRegTier(true)
-			t.Cleanup(func() { SetRegTier(bytecode.RegDefault()); SetJITRegTier(was) })
+			t.Cleanup(func() {
+				compiler.SetRegisterForm(bytecode.RegDefault())
+				SetRegTier(bytecode.RegDefault())
+				SetJITRegTier(was)
+			})
 			r := New(Config{JIT: true, MemoryLimit: 16 << 20})
 			t.Cleanup(r.Close)
 			r.jitStress = jitStressConfig{}

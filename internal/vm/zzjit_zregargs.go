@@ -220,6 +220,53 @@ func (f *jitRegFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 	}, true
 }
 
+// forwardProperty is the property site of the read at register pc rpc of
+// key, of a forwarding constructor's frame (bytecode.LeafForward,
+// this.k.apply(this, arguments)) inlined in its construction (f.fwd),
+// known from its receiver as the stack form's forwardProperty has it:
+// this.k, the first read, as an object of the construction's pool finds
+// it -- the next its filling makes -- and k's apply, the second, as k
+// does (jitRegForwardTarget). Compiled for what the forwarder's own cache
+// met -- the classes of every construction it made, a library's -- the
+// inlined read left native code at each class it had not met, and the
+// construction, once it had left often enough, was made by a native call
+// of the forwarder, whose apply_args calls up to jitCallTargets methods
+// natively and the rest by Go: RayTrace's IntersectionInfo's initialize,
+// by Go at every construction from then on, in some runs.
+func (f *jitRegFeedback) forwardProperty(rpc int, key Atom) (ssa.PropertySite, bool) {
+	fb := f.fb
+	r, cl, rc := fb.r, fb.cl, f.rc
+	if cl == nil || cl.fn.Leaf != bytecode.LeafForward || len(rc.Code) < 4 || rpc > 1 {
+		return ssa.PropertySite{}, false
+	}
+	get, apply := rc.Code[0], rc.Code[1]
+	if get.Op() != bytecode.RGetProp || get.B() != 1 || apply.Op() != bytecode.RGetProp || apply.B() != get.A() {
+		return ssa.PropertySite{}, false
+	}
+	call := -1
+	for i, w := range rc.Code {
+		if w.Op() == bytecode.RApplyArgs {
+			call = i
+			break
+		}
+	}
+	if call < 0 || rc.Code[call].B() != get.A() || rc.Code[call].B()+1 != apply.A() {
+		return ssa.PropertySite{}, false
+	}
+	var recv *Object
+	if rpc == 0 {
+		recv = r.jitPoolObject(f.fwd.ctor)
+	} else {
+		recv = r.jitRegForwardTarget(cl, f.fwd.ctor, call, f.fwd.argc)
+	}
+	if recv == nil {
+		return ssa.PropertySite{}, false
+	}
+	var c propCache
+	r.fillPropCache(&c, recv, key, false)
+	return fb.siteOf(key, false, &c)
+}
+
 // jitRegInlineArgs is the arguments of the frame Go makes of an inlined
 // callee's level that keeps them (regCode's args), whose caller's code c,
 // its window at cwb, made the call at register pc at: those of the call's

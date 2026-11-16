@@ -111,8 +111,7 @@ func TestJITBudgetAcrossManyFunctions(t *testing.T) {
 				t.Fatalf("after %s: %d back edges to go, past any budget Go gives", name, r.backEdges)
 			}
 		}
-		e := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)]
-		if e == nil || e.ssa == nil {
+		if jitCodeForTest(r, name) == nil {
 			t.Errorf("%s was never compiled", name)
 		}
 	}

@@ -133,6 +133,11 @@ func TestJITBackgroundRuntimes(t *testing.T) {
 					for _, l := range s.lowerings {
 						<-l.done
 					}
+					// The register form's, where the runtime runs register
+					// code.
+					for _, j := range s.regJobs {
+						<-j.done
+					}
 				}
 			}
 			if s := r.jit; s != nil {

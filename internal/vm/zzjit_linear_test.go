@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -85,21 +86,28 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 		return ms.TotalAlloc
 	}
 	// The least of three lowerings: what the lowering keeps for the next
-	// one (its scratch's pool) is there or not as collections run.
+	// one (its scratch's pool) is there or not as collections run. So no
+	// collection runs while they do: one that ran during each of the three,
+	// on a slow runner, had each make its scratch anew, 110 MB for the
+	// 8,000 values' 77.
 	var c linearCompile
 	var p *ir.Program
+	runtime.GC()
 	start := time.Now()
-	for k := range 3 {
-		a0 := alloc()
-		q, err := jitcompile.LowerReg(cl.reg.rc, cl.fn)
-		if err != nil {
-			t.Fatal(err)
+	func() {
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		for k := range 3 {
+			a0 := alloc()
+			q, err := jitcompile.LowerReg(cl.reg.rc, cl.fn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a := alloc() - a0; k == 0 || a < c.lower {
+				c.lower = a
+			}
+			p = q
 		}
-		if a := alloc() - a0; k == 0 || a < c.lower {
-			c.lower = a
-		}
-		p = q
-	}
+	}()
 	a1 := alloc()
 	f, err := ssa.BuildWith(e.p, r.jitRegFeedbackFor(cl, e.p))
 	if err != nil {

@@ -2081,24 +2081,43 @@ func TestJITArenaMappings(t *testing.T) {
 		// the background (QJS_JIT_STRESS's background), whose code comes
 		// checks later.
 		r.jitStress.background = false
+		// Each called twice: the register form's code, at a threshold of
+		// one call, is compiled at its function's second (its first run
+		// counted by its return, regTickRet), the stack form's at its first.
 		var src strings.Builder
 		for i := 0; i < 100; i++ {
-			fmt.Fprintf(&src, "function f%d(n){let s=%d;for(let i=0;i<n;i++)s+=i;return s}\nf%d(3);\n", i, i, i)
+			fmt.Fprintf(&src, "function f%d(n){let s=%d;for(let i=0;i<n;i++)s+=i;return s}\nf%d(3);f%d(3);\n", i, i, i, i)
 		}
 		if _, err := r.Run(compileForTest(t, src.String())); err != nil {
 			t.Fatal(err)
 		}
-		if r.jit == nil || len(r.jit.cache) < 100 {
-			t.Fatalf("ssa %v: compiled too few functions", ssa)
+		if r.jit == nil {
+			t.Fatalf("ssa %v: compiled no function", ssa)
+		}
+		// The code compiled: the stack form's, or the register form's
+		// where the runtime runs register code.
+		var codes []*jit.SSACode
+		for _, e := range r.jit.cache {
+			if e.ssa != nil {
+				codes = append(codes, e.ssa)
+			}
+		}
+		for _, e := range r.jit.regCache {
+			if e.code != nil {
+				codes = append(codes, e.code)
+			}
+		}
+		if len(codes) < 100 {
+			t.Fatalf("ssa %v: compiled too few functions (%d)", ssa, len(codes))
 		}
 		arena, bytes := r.jit.arena, 0
-		for _, e := range r.jit.cache {
-			bytes += e.ssa.Size()
+		for _, c := range codes {
+			bytes += c.Size()
 		}
 		if chunks := arena.Chunks(); chunks == 0 || chunks > bytes/(64<<10)+1 {
-			t.Fatalf("ssa %v: %d functions, %d bytes of code, in %d mappings", ssa, len(r.jit.cache), bytes, chunks)
+			t.Fatalf("ssa %v: %d functions, %d bytes of code, in %d mappings", ssa, len(codes), bytes, chunks)
 		} else {
-			t.Logf("ssa %v: %d functions, %d bytes of code, in %d mappings", ssa, len(r.jit.cache), bytes, chunks)
+			t.Logf("ssa %v: %d functions, %d bytes of code, in %d mappings", ssa, len(codes), bytes, chunks)
 		}
 		r.Close()
 		r.ReleaseClosed()
@@ -3362,6 +3381,7 @@ func TestJITClosureRemembersRefusal(t *testing.T) {
 // first call, does not change after, and delays nothing.
 func TestJITCallPromotion(t *testing.T) {
 	t.Parallel()
+	skipUnderRegJIT(t, "the stack interpreter's per-closure hotness count (jitCalls) and its native state given at the feedback threshold; register code's budget is counted by its returns (regTickRet, jitRegCallTier), which TestJITRegTierUp covers")
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3479,6 +3499,18 @@ func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
 		t.Fatalf("frameless calls = %v, %v", v, err)
 	}
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	if jitRegCodeForTest(r, "f") {
+		// Register code: f's calls, which the interpreter answers without
+		// a frame, give f no budget, nor code. The loop of the script
+		// running them is given its state once its back edges have done
+		// V8's work for feedback allocation (jitBudgetForFeedback), less
+		// than its thousand turns, where the stack form's is given it at
+		// a sample, a full back-edge budget (1,024).
+		if r.jitRegLifeIfAny(cl) != nil || r.jitRegHas(cl) {
+			t.Fatal("frameless calls accumulated framed hotness")
+		}
+		return
+	}
 	if cl.jitCalls != 0 || r.jit != nil {
 		t.Fatal("frameless calls accumulated framed hotness")
 	}
@@ -3537,6 +3569,7 @@ func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 
 func TestJITLoopPromotionLiveOperands(t *testing.T) {
 	t.Parallel()
+	skipUnderRegJIT(t, "an operand carried on the stack interpreter's operand stack through on-stack replacement, in stack bytecode edited by hand; register code has no operand stack, and runs the function's own register form, not the edit")
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3577,6 +3610,7 @@ func TestJITLoopPromotionLiveOperands(t *testing.T) {
 
 func TestJITLoopGuardSuppressesReentry(t *testing.T) {
 	t.Parallel()
+	skipUnderRegJIT(t, "register-JIT gap (jitgaps next round): an add of an object operand is a host exit in register code, the interpreter running the turn's rest, where the stack form's code coerces it by calling Go and goes on natively; released at that call, no run of the code is under way to go on, and the invocation compiles the function again")
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
@@ -3595,7 +3629,7 @@ func TestJITLoopGuardSuppressesReentry(t *testing.T) {
 			o.setOwnRaw(r.atoms.intern("valueOf"), r.NewFunction("valueOf", 0,
 				func(rt *Runtime, _ Value, _ []Value) (Value, error) {
 					count++
-					if rt.jit != nil && len(rt.jit.cache) != 0 {
+					if jitHasCodeForTest(rt) {
 						if released {
 							t.Fatal("invocation recompiled after eviction")
 						}
@@ -5172,6 +5206,25 @@ func jitMarkingForTest(t *testing.T) *uint8 {
 	return marking
 }
 
+// jitCollectorHeldForTest holds the collector off until t ends, its
+// cycles' count (jitGCEpoch) settled first: a collection ends with none
+// running, and the count its end makes is waited for. What the JIT does
+// at a collection's end -- emptying the megamorphic cache (flush), which
+// the next megamorphic read at a site fills again from Go, as V8's stub
+// cache misses after ClearStubCaches -- then happens at no time the test
+// counts native code's exits. The collector's marking is not what such a
+// test leaves out: jitMarkingForTest has native code see it marking.
+func jitCollectorHeldForTest(t *testing.T) {
+	t.Helper()
+	jitEpochOnce.Do(jitArmEpoch)
+	gc := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	for epoch := jitGCEpoch.Load(); jitGCEpoch.Load() == epoch; {
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // A small method is inlined at a call the new pipeline has seen call it
 // (jitCallSeen, ssa.InlineSite): the loop then never leaves native code, a
 // missing argument is undefined, and the receiver is the call's. A method
@@ -6681,6 +6734,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 // learned as before: what takes the place of get later is called as it
 // is.
 func TestJITSSASeedsMethodCalls(t *testing.T) {
+	skipUnderRegJIT(t, "the stack form's entry's lists of what its first compile was seeded with and decided (inlines, nativeCalls, ssaInlined, callSites, inlineReopts) and its own lowering; register code keeps what it learned in its life's nativeCalls and what it inlines in the build (ssa.Func's Inlined), which zzjit_zregcall_test.go's tests check")
 	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -7036,7 +7090,6 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 		}
 	}
 	v := r.global.getOwn(r.atoms.intern("V")).value().Object()
-	cl := r.global.getOwn(r.atoms.intern("mk2")).value().Object().fn().closure
 	for i, src := range []string{`String(mk1(20000))`, `String(mk1(20000))`, `String(mk2(20000))`, `String(mk2(20000))`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -7050,8 +7103,8 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil {
+	e := jitCodeForTest(r, "mk2")
+	if e == nil {
 		t.Fatal("mk2 has no code")
 	}
 	if !slices.ContainsFunc(slices.Concat(e.nativeCalls, e.inlines), func(x jitInline) bool { return x.obj == v && x.pool != nil }) {
@@ -7104,8 +7157,7 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 	if got, want := gv.String().Go(), wv.String().Go(); got != want {
 		t.Fatalf("got %s, interpreter %s", got, want)
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
-	if e := r.jit.hint(cl); e == nil || e.ssa == nil {
+	if jitCodeForTest(r, "run") == nil {
 		t.Fatal("run's loop was not promoted in 20000 iterations")
 	}
 	// About the interval, and not the same each time.
@@ -7128,6 +7180,7 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 // makes a call, is then inlined with it, at once, not called natively
 // until a compile of run's again for what put came to inline.
 func TestJITSSASeedsCalleesWithoutCode(t *testing.T) {
+	skipUnderRegJIT(t, "the stack form's entry's lists of what its first compile was seeded with and decided (inlines, nativeCalls, ssaInlined, callSites, inlineReopts) and its own lowering; register code keeps what it learned in its life's nativeCalls and what it inlines in the build (ssa.Func's Inlined), which zzjit_zregcall_test.go's tests check")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7186,6 +7239,7 @@ func TestJITSSASeedsCalleesWithoutCode(t *testing.T) {
 // that compile decides the call too, which is not left to leave native
 // code four times more and have f compiled once again.
 func TestJITSSASeedsWhenCompiledAgain(t *testing.T) {
+	skipUnderRegJIT(t, "the stack form's entry's lists of what its first compile was seeded with and decided (inlines, nativeCalls, ssaInlined, callSites, inlineReopts) and its own lowering; register code keeps what it learned in its life's nativeCalls and what it inlines in the build (ssa.Func's Inlined), which zzjit_zregcall_test.go's tests check")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

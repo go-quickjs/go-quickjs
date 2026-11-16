@@ -3849,22 +3849,27 @@ type FrequencyFeedback interface {
 	Frequency(pc int) (float64, bool)
 }
 
-// minInliningFrequency is V8's min_inlining_frequency: a call made less
-// often than this for each invocation of the function being compiled is
-// not inlined, but a small callee (smallCallee).
-const minInliningFrequency = 0.15
+// minInliningFrequency is V8's min_inlining_frequency as V8 runs: a call
+// made less often than this for each invocation of the function being
+// compiled is not inlined, but a small callee (smallCallee). The flag's
+// default is 0.15, but V8 lowers it to 0.05 wherever Maglev is on, as it
+// is by default (flag-definitions.h's
+// DEFINE_WEAK_VALUE_IMPLICATION(maglev, min_inlining_frequency, 0.05)):
+// Node prints --min-inlining-frequency=0.05 among its flags' values, and
+// its optimizing compiler inlines all twelve of AWFY CD's recurse's
+// calls of Vector2D's plus and minus, each made in an eighth of
+// recurse's runs.
+const minInliningFrequency = 0.05
 
 // smallCallee reports whether p is a callee small enough to be inlined
 // however seldom its call is made: maxInlineSmall instructions or fewer,
 // counted as inlining's bounds count them (inlineSize), V8's
-// max_inlined_bytecode_size_small, 27 bytes, which V8 inlines whatever the
-// call site's frequency, its code about the call's it replaces -- 8
-// instructions of register code's program, 10 of the stack form's. A
-// cold call's inlining stays within that, its callee's own callees
-// counted in (inlineFrame). AWFY CD's Vector2D plus and minus, 10
-// register instructions (12 counted) with their constructor's 4 more,
-// are past it, and stay native calls at recurse's calls, made in an
-// eighth of its runs.
+// max_inlined_bytecode_size_small, 27 bytes -- 8 instructions of register
+// code's program, 10 of the stack form's -- its code about the call's it
+// replaces. V8's Maglev-built optimizing compiler, Turbolev, inlines such
+// a callee whatever the call site's frequency (CanInlineCall); Turbofan's
+// heuristic asks the frequency first. A cold call's inlining stays
+// within that, its callee's own callees counted in (inlineFrame).
 func smallCallee(p *ir.Program) bool {
 	return p != nil && inlineSize(p) <= maxInlineSmall
 }
@@ -8235,7 +8240,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 		kind := ir.GuardExit
 		if b.fb != nil && b.fb.Generic(pc) {
 			kind = ir.HostExit
-			if b.cur == b.root && b.goCalls() {
+			if b.p.Origin != nil && b.whole(blk, pc, in, guard) {
+				// Register code's: get_length run whole on the register
+				// frame (CallSite's Whole), as the stack form's GoHost
+				// below runs it on the stack form's frame, which register
+				// code has none of -- an arguments object's, EarleyBoyer's
+				// sc_list's, had left native code at every call.
+				break
+			}
+			if b.cur == b.root && b.goCalls() && b.p.Origin == nil {
 				// Go reads it from native code, on the frame (GoHost), as
 				// the interpreter does: an arguments object's, EarleyBoyer's
 				// sc_list's, had left native code at every call.
@@ -8749,9 +8762,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 				args, argc = args[1:], 1
 			} else {
 				// The parameters a mapped object aliases, as they are, for
-				// a key that is one's alias (ir.Program's ArgumentParams).
+				// a key that is one's alias (ir.Program's ArgumentParams),
+				// from the frame's first parameter's slot (ParamBase):
+				// register code's registers 0 and 1 are its function and
+				// its this.
 				for i := range b.p.ArgumentParams {
-					args = append(args, b.read(i, blk))
+					args = append(args, b.read(b.p.ParamBase+i, blk))
 				}
 				argc += b.p.ArgumentParams
 			}

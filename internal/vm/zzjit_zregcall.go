@@ -53,8 +53,21 @@ func (s *jitState) regLinkOf(cl *closure, c *regCode) *jitLink {
 		l.regSet(s, e)
 	}
 	s.regLinks[key] = l
+	if life := s.regLearned[key]; life != nil {
+		life.regLink = l
+	}
 	s.regHint(cl, l)
 	return l
+}
+
+// regLinkFor is the link native callers call e's function's code through,
+// nil where none has asked for one (regLinkOf), as regLinks has it by e's
+// key.
+func (s *jitState) regLinkFor(e *jitRegEntry) *jitLink {
+	if e.life != nil {
+		return e.life.regLink
+	}
+	return s.regLinks[e.key]
 }
 
 // jitRegLinkFlags are the flags of the link of cl's function, whose
@@ -90,9 +103,27 @@ func (r *Runtime) jitRegLinkFlags(cl *closure, c *regCode) uint64 {
 // regHint gives cl's template a slot of the hint table holding l, its
 // function's link, as the stack form's entries have one (remember): what
 // a generic call finds a function's link by (mir's genericCheck). A link
-// keeps its slot until its function is gone (regBytes, regUnhint).
+// keeps its slot until its function is gone (regBytes, regUnhint). A
+// table full is grown once room is made for its growth (hintGrowth), as
+// the stack form's entry is made only in the room for it and its slot
+// (jitWarmFor, jitCompileForIn's hintRoom); where there is none, the
+// link has no slot for now, and a generic call of the function is Go's
+// until a later one finds the room. Grown with no room asked, the table,
+// doubled at a link a compile's callee was given, left the JIT holding
+// past its budget whatever the compiles made room for: 262,148 bytes of
+// 262,144 once a realm's run was done.
 func (s *jitState) regHint(cl *closure, l *jitLink) {
 	if l.hint == 0 {
+		if g := s.hintGrowth(); g != 0 {
+			// The room made may free a slot (regUnhint), taken below.
+			s.budget = s.rt.jitBudget()
+			if !s.makeRoom(g) {
+				if cl.hint() != 0 {
+					cl.setHint(0)
+				}
+				return
+			}
+		}
 		var i uint32
 		if n := len(s.hintFree); n != 0 {
 			i, s.hintFree = s.hintFree[n-1], s.hintFree[:n-1]
@@ -225,7 +256,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 	l := f.fb.e
 	rpc := int32(f.p.Origin[pc])
 	newW := w.Op() == bytecode.RNewW
-	if calls := f.fb.cl.regCalls; !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) < uint(len(calls)) {
+	if calls := f.fb.r.regCallsRestored(f.fb.cl, int(w.C())); !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) < uint(len(calls)) {
 		if e := &calls[w.C()]; jitRegCallKind(e) {
 			f.regAddTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, false, false)
 			if t.n != 0 && l != nil && !jitRegCallKnown(l, rpc, e.callee) {
@@ -447,7 +478,7 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 	var cl *closure
 	switch w.Op() {
 	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
-		calls := f.cl.regCalls
+		calls := r.regCallsRestored(f.cl, int(w.C()))
 		if uint(w.C()) >= uint(len(calls)) {
 			return false
 		}
@@ -482,6 +513,10 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 			// new Array() or new Array(n): made from a pool (jitRegAllocSeen).
 			return r.jitRegAllocSeen(f, c, e, rpc, w, o)
 		}
+		// The pool the code takes its objects from, run out or made for
+		// another prototype, filled again, as at the stack form's exits at
+		// a construction (jitRefillPools).
+		r.jitRefillPoolsOf(r.jitRegLearnedFor(f, e), rpc, o)
 		var ok bool
 		if cl, parent, ok = r.jitRegConstructTarget(o, int(w.X())); !ok {
 			return false
@@ -604,7 +639,7 @@ func (r *Runtime) jitRegCallRepeats(f *frame, c *regCode, e *jitRegEntry, rpc in
 	var cl *closure
 	switch w := regAt(c.code, rpc); w.Op() {
 	case bytecode.RCallW, bytecode.RCallMW:
-		calls := f.cl.regCalls
+		calls := r.regCallsRestored(f.cl, int(w.C()))
 		if uint(w.C()) >= uint(len(calls)) {
 			return false
 		}
@@ -708,11 +743,21 @@ func (f *jitRegFeedback) regConstructorNow(rpc, reg int) *Object {
 // know that its construction at register pc rpc, of argc arguments,
 // constructs with o, its objects from a pool, as a call of Go there would
 // teach it (jitRegCallSeen) and as the stack form's compiles seed a
-// construction (jitSeedCalls): not new Array(), whose arrays native code
-// makes (jitRegAllocSeen), nor a function native code does not construct
-// with (jitRegConstructTarget).
+// construction (jitSeedCalls): not a function native code does not
+// construct with (jitRegConstructTarget). new Array() is the arrays native
+// code makes from a pool (regAllocSite), as the stack form's compiles seed
+// it (jitSeedBuiltin) and a call of Go would teach it (jitRegAllocSeen):
+// learned only at calls of Go, code compiled in a loop's run made each of
+// its arrays by Go for the rest of that run, until compiled again for
+// them -- 3,694 of the first call's 6,000 in TestJITRegArrayAlloc where
+// the compile came early in the loop. new Array(n)
+// is learned at a call of Go alone, which gives its pool the room of the
+// length it met, or none past what a pool holds (jitRegAllocLength).
 func (r *Runtime) jitRegSeedConstruct(l *jitEntry, rpc int32, o *Object, argc int) {
 	if o == r.proto.arrayCtor {
+		if argc == 0 {
+			l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, obj: o, pool: r.jitNewPool(o)})
+		}
 		return
 	}
 	cl, parent, ok := r.jitRegConstructTarget(o, argc)
@@ -1096,7 +1141,14 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		return ssa.CallSite{}, false
 	}
 	if pool != nil {
-		if tc, tp, ok := r.jitRegConstructTarget(o, argc); !ok || tc != cl || tp != parent || rc != cl.reg || pool.Count == 0 {
+		// Its pool empty or not: run out, the code has Go fill it again
+		// (ssa's GoRefill), as the stack form's construction site is
+		// given its pool whatever it holds. Refused a site for a pool its
+		// callers had just run out, a construction was compiled as a call
+		// of Go, which fills no pool, for good: RayTrace's
+		// IntersectionInfo's, by the hundred thousand in a run, at random
+		// runs.
+		if tc, tp, ok := r.jitRegConstructTarget(o, argc); !ok || tc != cl || tp != parent || rc != cl.reg {
 			return ssa.CallSite{}, false
 		}
 	}
@@ -1957,7 +2009,7 @@ func (r *Runtime) jitRegUnwound(e *jitRegEntry) {
 	if life == nil || e.invalid {
 		return
 	}
-	l := r.jit.regLinks[e.key]
+	l := r.jit.regLinkFor(e)
 	if l == nil {
 		return
 	}
@@ -1986,7 +2038,7 @@ func (r *Runtime) jitRegRetryNative(e *jitRegEntry) {
 	}
 	life.notNative, life.nativeOut = false, 0
 	life.ssaStats.calleeGoCalls, life.ssaStats.calleeWork = 0, 0
-	if l := r.jit.regLinks[e.key]; l != nil {
+	if l := r.jit.regLinkFor(e); l != nil {
 		l.in = 0
 		if r.jit.regCache[e.key] == e && e.code != nil && !e.invalid {
 			l.regSet(r.jit, e)
@@ -2135,7 +2187,7 @@ func (r *Runtime) jitRegUnwind(idx int) (_ Value, _ error, gen bool) {
 			// compiled here, as the stack form's code is once its run has
 			// left (jitRecompileInRun). The levels of it Go is finishing,
 			// a recursion's, go on in the code they hold.
-			r.jitRegReoptimize(l.cl, l.c, l.e)
+			r.jitRegReoptimize(l.cl, l.c, l.e, -1)
 		}
 		if err == errTailCall {
 			// Ended in a call in tail position, its frame given up: the
@@ -2249,6 +2301,9 @@ func (r *Runtime) jitRegBuild(w *jit.Workspace, cl *closure, c *regCode, p *ir.P
 	jitRegLap(mir.PhaseBuild)
 	ssa.Optimize(f)
 	jitRegLap(mir.PhaseOptimize)
+	if jitSSAOptimized != nil {
+		jitSSAOptimized(cl.fn, f)
+	}
 	mc, err := mir.CompileWith(&w.MIR, f, jitEncoding, mir.Settings())
 	return rf, f, looped, mc, err
 }

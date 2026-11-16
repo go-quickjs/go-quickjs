@@ -431,6 +431,30 @@ func (l *regLowering) regexpLit(pc int, w bytecode.RInstr) bool {
 	return true
 }
 
+// litArgCall lowers call_method_w w, which makes its first argument a
+// RegExp literal (RMarkLitArg), R[A+2], that the register compiler left
+// for the call to make, as regexpLit lowers regexp_lit's call: the
+// literal's RegExp from its pool (ObjectLiteral), as new_regexp's -- the
+// stack form's literal before its call (LowerSSA's new_regexp) -- the
+// window copied past it into scratch slots, the RegExp its first
+// argument, and the call in that window (a Window Host), its value to
+// R[B]: nothing committed before the call, so that an exit anywhere runs
+// the instruction whole again, which makes the literal itself.
+func (l *regLowering) litArgCall(w bytecode.RInstr) {
+	a, n := int(w.A()), 2+int(w.X())
+	win := make([]int, n)
+	for i := range win {
+		win[i] = l.temp()
+	}
+	l.emit(ir.Instruction{Op: ir.ObjectLiteral, Dest: win[2]}, false)
+	for i, t := range win {
+		if i != 2 {
+			l.emit(ir.Instruction{Op: ir.Copy, Dest: t, Left: ir.Slot(a + i)}, false)
+		}
+	}
+	l.emit(ir.Instruction{Op: ir.Host, Extra: int(w.X()), When: true, Window: true, Left: ir.Slot(win[0]), Dest: int(w.B())}, false)
+}
+
 // litsLive are the register pcs of l's regexpLit calls whose window's
 // registers -- R[A] and R[A+1], but the one the value goes to -- are live
 // past them in p, whose instructions of register pc q start at start[q].
@@ -1382,6 +1406,10 @@ func (l *regLowering) lower(pc int) {
 		// Not marked Tail: the new pipeline reads a tail call's operands
 		// from the operand stack's top, which register code has none of;
 		// the register form's tail calls are Stage 3a-3's.
+		if op == bytecode.RCallMW && w.X() >= 1 && pc < len(rc.Marks) && rc.Marks[pc]&bytecode.RMarkLitArg != 0 {
+			l.litArgCall(w)
+			break
+		}
 		l.emit(ir.Instruction{Op: ir.Host, Extra: int(w.X()), When: op == bytecode.RCallMW, Window: true, Left: reg(a), Dest: int(b)}, false)
 	case bytecode.RClosureW:
 		l.emit(ir.Instruction{Op: ir.Closure, Dest: int(a), Key: w.BC()}, false)
@@ -1813,13 +1841,30 @@ func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
 			ops = append(ops, ir.LiveOp{Slot: int32(r)})
 		}
 	}
+	// The parameters a mapped arguments object aliases where the code, or
+	// a closure, assigns them (ArgumentParams), live at each read of the
+	// arguments as at liveLocals' in the stack form: Go's read of
+	// arguments[k] is given them, and the object the interpreter makes at
+	// an exit -- for a key past the arguments -- reads their registers.
+	aliased := func(op bytecode.ROp) {
+		switch op {
+		case bytecode.RArgsIndex, bytecode.RArgsLen, bytecode.RArguments, bytecode.RApplyArgs:
+			for k := range p.ArgumentParams {
+				gen(p.ParamBase + k)
+			}
+		}
+	}
 	// The instructions' successors but the next one -- a jump's, and the
 	// handler in force -- and whether each goes on to the next.
 	falls := make([]bool, m)
 	far := make([]int32, 2*m)
+	// stepped is the register a loop's step writes where it goes on, the
+	// next instruction, by the step's index; -1 elsewhere.
+	stepped := make([]int32, m)
 	for i := range m {
 		opAt[i] = int32(len(ops))
 		far[2*i], far[2*i+1] = -1, -1
+		stepped[i] = -1
 		if !reach(i) {
 			continue
 		}
@@ -1857,17 +1902,29 @@ func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
 			for _, r := range reads {
 				gen(r)
 			}
+			aliased(rc.Code[p.Origin[i]].Op())
 		} else {
 			a, b := ins.Writes()
 			if ins.Op == ir.IterStep && !ins.When {
 				// A loop's step writes its value only where it goes on:
-				// at the loop's end the register is what it was.
+				// at the loop's end the register is what it was. Its
+				// register is taken out of what the next instruction's
+				// set has alone (transfer), as the stack form's put_loc
+				// after its step writes the local on the way in only: a
+				// register no code past the loop reads is not live at the
+				// step, nor kept alive across it for a state there.
+				if a >= 0 && a < n && !captured(a) {
+					stepped[i] = int32(a)
+				}
 				a = -1
 			}
 			kill(a)
 			kill(b)
 			for _, r := range irReads(ins) {
 				gen(r)
+			}
+			if ins.Op == ir.ArgumentRead {
+				aliased(rc.Code[p.Origin[i]].Op())
 			}
 			if ins.Check {
 				if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RDerivedRet {
@@ -1981,7 +2038,11 @@ func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
 			case i == e-1:
 				cur = always
 				if falls[i] {
-					cur = lb.Union(at(int32(i+1)), cur)
+					next := at(int32(i + 1))
+					if r := stepped[i]; r >= 0 && lb.Has(next, int(r)) {
+						next = lb.Apply(next, []ir.LiveOp{{Slot: r, Clear: true}})
+					}
+					cur = lb.Union(next, cur)
 				}
 				cur = lb.Union(cur, at(far[2*i]))
 			case !reach(i + 1):

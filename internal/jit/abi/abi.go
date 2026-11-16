@@ -1371,15 +1371,11 @@ type Encoding struct {
 	GenObject                             int32
 	ClassGenerator                        uint8
 	GenClosure, GenThis, GenVals, GenArgs int32
-	// GenCallee is where a generator keeps the function object it was
-	// called as, a pointer, nil for none: a register generator's register
-	// 0 where its values do not keep it (ssa.Func's GenFrom).
-	GenCallee                            int32
-	GenPC, GenRare, GenSaved             int32
-	SavedStack, SavedHandlers            int32
-	GenState, GenStarted, GenDelegating  int32
-	GenSuspendedStart, GenSuspendedYield uint8
-	GenExecuting, GenCompleted           uint8
+	GenPC, GenRare, GenSaved              int32
+	SavedStack, SavedHandlers             int32
+	GenState, GenStarted, GenDelegating   int32
+	GenSuspendedStart, GenSuspendedYield  uint8
+	GenExecuting, GenCompleted            uint8
 	// A generator made with room for the cursor of the first loop over it
 	// (the VM's generatorLoop) has the byte at GenRoom set until a loop
 	// takes it, the cursor's object GenRoomCursor bytes past the

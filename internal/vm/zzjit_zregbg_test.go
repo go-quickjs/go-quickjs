@@ -42,7 +42,11 @@ func TestJITRegBackground(t *testing.T) {
 			compiler.SetRegisterForm(false)
 			SetRegTier(true)
 			was := SetJITRegTier(true)
-			t.Cleanup(func() { SetRegTier(bytecode.RegDefault()); SetJITRegTier(was) })
+			t.Cleanup(func() {
+				compiler.SetRegisterForm(bytecode.RegDefault())
+				SetRegTier(bytecode.RegDefault())
+				SetJITRegTier(was)
+			})
 			var got [2]string
 			var rts [2]*Runtime
 			for i := range rts {

@@ -11,13 +11,16 @@ import (
 // realmsAlive collects until no more of refs go, a turn of the runtime's
 // between collections, as a host that runs on has, and says how many are
 // left: what is queued for a finalization callback holds a realm until the
-// turn after the cleanup has run, on a goroutine of its own.
+// turn after the cleanup has run, on a goroutine of its own. That goroutine
+// is given twice the time at each round, a quarter of a second in all: a
+// millisecond each, eight rounds had not been enough for it on a loaded
+// Windows runner, twice (TestJITDroppedRealmsAreCollected/finalization).
 func realmsAlive(r *Runtime, refs []weak.Pointer[Realm]) int {
 	left := len(refs)
-	for range 8 {
+	for i := range 8 {
 		runtime.GC()
 		runtime.GC()
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond << i)
 		r.DrainJobs()
 		left = 0
 		for _, w := range refs {

@@ -192,9 +192,13 @@ func rhInvalid(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 }
 
 // regJump is a jump from pc by off, taken: one back counts the interrupt
-// budget, whose end leaves the instruction to its slow function.
+// budget, whose end leaves the instruction to its slow function, and, with
+// the JIT, its function's budget (regEdgeTick).
 func regJump(st *regState, pc int, off int32) int {
 	if off < 0 {
+		if jitBuilt {
+			regEdgeTick(st, off)
+		}
 		r := st.r
 		if r.backEdges--; r.backEdges <= 0 {
 			return ^pc
@@ -207,6 +211,11 @@ func regJump(st *regState, pc int, off int32) int {
 // interrupt check where the budget is spent.
 func regJumpSlow(st *regState, pc int, off int32) int {
 	if off < 0 {
+		if jitBuilt && st.r.backEdges > 0 {
+			// Counted unless regJump has, whose end of the budget left
+			// the jump here.
+			regEdgeTick(st, off)
+		}
 		if r := st.r; r.backEdges <= 1 {
 			return r.regBackEdge(st, pc, pc+1+int(off))
 		} else {

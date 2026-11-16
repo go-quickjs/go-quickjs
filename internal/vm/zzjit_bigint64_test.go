@@ -125,17 +125,28 @@ func TestJITBigInt64(t *testing.T) {
 	// Native BigInt sites that held: some of each function's are learned
 	// and none failed since.
 	for _, name := range []string{"squares", "down", "stores"} {
-		fn := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
-		e := r.jit.entryFor(fn)
-		if e == nil || e.ssa == nil {
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+		e := jitCodeForTest(r, name)
+		if e == nil {
 			t.Fatalf("%s has no code", name)
 		}
-		// Learned at a guard that failed, or from the tree tier.
-		fb := &jitFeedback{r: r, fn: fn, e: e}
+		// Learned at a guard that failed, or from the tree tier -- or,
+		// of register code, from the register interpreter's marks.
 		held := 0
-		for pc := range e.ssaProg.Code {
-			if fb.BigInt(pc) && !fb.Generic(pc) {
-				held++
+		if jitRegCodeForTest(r, name) {
+			re := r.jit.regCache[r.jitRegKeyOf(cl)]
+			rf := r.jitRegFeedbackFor(cl, re.p)
+			for pc := range re.p.Code {
+				if rf.BigInt(pc) && !rf.Generic(pc) {
+					held++
+				}
+			}
+		} else {
+			fb := &jitFeedback{r: r, fn: cl.fn, e: e}
+			for pc := range e.ssaProg.Code {
+				if fb.BigInt(pc) && !fb.Generic(pc) {
+					held++
+				}
 			}
 		}
 		if held == 0 {

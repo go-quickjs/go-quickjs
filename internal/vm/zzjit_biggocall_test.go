@@ -56,8 +56,8 @@ func TestJITBigIntGoCalls(t *testing.T) {
 		srcs = append(srcs, `all(500, `+k+`)`)
 	}
 	r := jitDefaultRuns(t, bigGoCallSetup, srcs...)
-	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("heap")).value().Object().fn().closure.fn)
-	if e == nil || e.ssa == nil || e.invalid {
+	e := jitCodeForTest(r, "heap")
+	if e == nil || e.invalid {
 		if e != nil {
 			t.Fatalf("heap has no code: invalid %v, refusal %q, deferred %v, deopts %d, learned %v, generic %v", e.invalid, e.refusal, e.deferred, e.deopts, e.bigints, e.failed)
 		}

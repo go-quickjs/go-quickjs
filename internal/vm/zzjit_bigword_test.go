@@ -229,8 +229,8 @@ func TestJITBigWords(t *testing.T) {
 		}
 		// Warm, each runs natively: no exit, no guard failing.
 		for _, name := range []string{"squares", "xorshift", "fnv", "lcg", "digits", "unsigned", "shifts", "ofs"} {
-			e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
-			if e == nil || e.ssa == nil || e.invalid {
+			e := jitCodeForTest(r, name)
+			if e == nil || e.invalid {
 				t.Fatalf("%s has no code", name)
 			}
 			hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
@@ -302,8 +302,8 @@ func TestJITBigIntMethods(t *testing.T) {
 			t.Fatalf("round %d: %s = %s, want %s", i, c.src, g, c.want)
 		}
 	}
-	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("str")).value().Object().fn().closure.fn)
-	if e == nil || e.ssa == nil || e.invalid {
+	e := jitCodeForTest(r, "str")
+	if e == nil || e.invalid {
 		t.Fatal("str has no code")
 	}
 	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
@@ -435,8 +435,8 @@ func TestJITPow(t *testing.T) {
 		if !made[name][op] {
 			t.Errorf("%s's compiles made %v, no %s", name, made[name], op)
 		}
-		e := w.jit.entryFor(w.global.getOwn(w.atoms.intern(name)).value().Object().fn().closure.fn)
-		if e == nil || e.ssa == nil || e.invalid {
+		e := jitCodeForTest(w, name)
+		if e == nil || e.invalid {
 			t.Errorf("%s has no code: %+v", name, e)
 			continue
 		}
@@ -516,8 +516,8 @@ func TestJITBigIntTruth(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"truths", "popcount"} {
-		e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
-		if e == nil || e.ssa == nil || e.invalid {
+		e := jitCodeForTest(r, name)
+		if e == nil || e.invalid {
 			t.Fatalf("%s has no code", name)
 		}
 		hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
@@ -624,8 +624,8 @@ func TestJITBigIntToString(t *testing.T) {
 	if !own["strings"] {
 		t.Errorf("strings' toString is Go's general call")
 	}
-	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("strings")).value().Object().fn().closure.fn)
-	if e == nil || e.ssa == nil || e.invalid {
+	e := jitCodeForTest(r, "strings")
+	if e == nil || e.invalid {
 		t.Fatal("strings has no code")
 	}
 	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards

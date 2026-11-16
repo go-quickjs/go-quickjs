@@ -83,7 +83,8 @@ func regBothMarkingNative(t *testing.T, f func(t *testing.T)) {
 // checks it is compiled once its runs have spent its budget, counted: not
 // before jitCallThreshold runs, and at the call after the run that spent
 // it, as the stack form's invocations each spend its budget (jitTierWork)
-// -- the first call begins it (jitRegHot's warming), the feedback
+// -- the second call begins it with the first run counted (jitRegHot's
+// warming spends what its first sample counted), the feedback
 // dispatcher's returns count the rest down (jitRegArm), and the call after
 // the last goes to Go (jitRegCallTier). Before, a sample of the interrupt
 // budget stood for 4,096 calls, and a function called less often than
@@ -114,8 +115,8 @@ function g() { return f(o) }
 				at = k
 			}
 		}
-		if at != calls+2 {
-			t.Fatalf("compiled at call %d, want %d: its first call begins the budget of %d runs", at, calls+2, calls)
+		if at != calls+1 {
+			t.Fatalf("compiled at call %d, want %d: the call after the %d runs of its budget", at, calls+1, calls)
 		}
 		if e := cc.jitReg; e.life.starts == 0 {
 			t.Errorf("never entered: %+v", e.life)

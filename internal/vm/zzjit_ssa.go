@@ -146,7 +146,6 @@ var jitEncoding = abi.Encoding{
 	ClassGenerator:     uint8(ClassGenerator),
 	GenClosure:         int32(unsafe.Offsetof(generator{}.cl)),
 	GenThis:            int32(unsafe.Offsetof(generator{}.this)),
-	GenCallee:          int32(unsafe.Offsetof(generator{}.callee)),
 	GenVals:            int32(unsafe.Offsetof(generator{}.vals)),
 	GenArgs:            int32(unsafe.Offsetof(generator{}.nargs)),
 	GenPC:              int32(unsafe.Offsetof(generator{}.pc)),
@@ -5061,7 +5060,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 				// A native callee's of register code (zzjit_zregcall.go):
 				// an operation that runs nothing made without the levels'
 				// frames (jitRegPlainWhole).
-				if cl := (*closure)(ctx.Closure); cl != nil && r.jitRegPlainWhole(ctx, cl.reg) {
+				if cl := (*closure)(ctx.Closure); cl != nil && r.jitRegPlainWhole(ctx, cl, cl.reg) {
 					return true
 				}
 				return r.jitRegGoCallNested(ctx, idx, root)
@@ -10254,7 +10253,12 @@ func (r *Runtime) jitRefillPools(f *frame, e *jitEntry, pc, sp int, in bytecode.
 	if !c.IsObject() {
 		return false
 	}
-	o := c.Object()
+	return r.jitRefillPoolsOf(e, pc, c.Object())
+}
+
+// jitRefillPoolsOf is jitRefillPools of the construction at pc of e's code
+// -- its register pc, in register code -- with o.
+func (r *Runtime) jitRefillPoolsOf(e *jitEntry, pc int, o *Object) (refilled bool) {
 	// Both lists, without making one of them: this runs at every exit at
 	// a construction.
 	for _, x := range jitTargets(e) {
@@ -10278,8 +10282,8 @@ func (r *Runtime) jitRefillPools(f *frame, e *jitEntry, pc, sp int, in bytecode.
 // jitInliningFrequency is, in hundredths, how many calls of a callee too
 // long to inline each invocation of the caller deciding its call must have
 // made for it to be compiled for that caller at once (jitCalledOften):
-// V8's min_inlining_frequency, 0.15.
-const jitInliningFrequency = 15
+// V8's min_inlining_frequency as V8 runs, 0.05 (ssa.MinInliningFrequency).
+const jitInliningFrequency = 5
 
 // jitLongWarming reports whether cl's function is warming up, its budget
 // not spent (jitWarmFor): an entry warming, or none yet where it would be

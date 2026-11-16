@@ -285,10 +285,13 @@ func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RI
 						// which makes the call natively (jitRegFeedback's
 						// Intrinsic).
 						if cl.regCalls == nil && c.rc.CallSites > 0 {
-							cl.regCalls = make([]regCallCache, c.rc.CallSites)
+							cl.regCalls = r.newRegCalls(cl.closureCode, c.rc.CallSites)
 							if jitBuilt {
 								r.jitRegCountsMake(cl.closureCode, c.rc.CallSites)
 							}
+						}
+						if !cl.regCallsHeld {
+							r.regCallsHold(cl.closureCode)
 						}
 						regCallSiteNative(cl, cw, fv.Object(), fd, r.Realm)
 						if regBigOf != nil && !isBitwise(op) {

@@ -100,7 +100,8 @@ type regCode struct {
 	// vals keep (newRegGenerator): 2 where nothing captures the callee's
 	// register or this's and nothing reads a local by its register
 	// (LocalReg), which a resumption makes again from the generator; 0
-	// otherwise.
+	// otherwise, and for a generator a loop's step may resume natively
+	// (regGenNative), whose values are its native code's registers.
 	genFrom int32
 	// aux is the first of rc.Aux, read with no bounds check where the
 	// native code reads an instruction's Aux (get_private's cache site),

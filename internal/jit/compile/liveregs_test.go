@@ -60,6 +60,12 @@ func denseLiveRegs(p *ir.Program, rc *bytecode.RegCode) (live []uint64, words in
 			case ir.Return:
 			case ir.Branch, ir.IterStep:
 				succ(i + 1)
+				if ins.Op == ir.IterStep && !ins.When {
+					// The step's register, written on the way in alone.
+					if a, _ := ins.Writes(); a < 0 || a >= len(p.Captured) || !p.Captured[a] {
+						kill(in, a)
+					}
+				}
 				if ins.Op == ir.Branch || !ins.When {
 					succ(ins.Target)
 				}

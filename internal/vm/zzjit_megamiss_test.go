@@ -39,8 +39,8 @@ func TestJITGoReadFillsTheMegamorphicCache(t *testing.T) {
 	// At the JIT's own thresholds: compiled at once, the code holds other
 	// shapes than the cache comes to.
 	r := jitDefaultRuns(t, setup, rounds...)
-	e := jitCallbackEntry(r, "run")
-	if e == nil || e.ssa == nil {
+	e := jitCodeForTest(r, "run")
+	if e == nil {
 		t.Fatalf("run was not compiled: %+v", e)
 	}
 	calls := e.ssaStats.goCalls

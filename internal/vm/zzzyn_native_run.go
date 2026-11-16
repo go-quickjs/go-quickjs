@@ -783,6 +783,9 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		// the exit the call would come back to. One with native code the
 		// handler has Go enter (nativeJITCall), as rhCallW's hit does.
 		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) {
+			if !f.cl.regCallsHeld {
+				r.regCallsHold(f.cl.closureCode)
+			}
 			regCacheCallee(e, o, cl, rc, this, kind)
 			return pc
 		}

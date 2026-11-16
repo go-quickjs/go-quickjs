@@ -5,6 +5,10 @@ package vm
 import (
 	"slices"
 	"testing"
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // A base class's constructor is compiled, and constructed with natively
@@ -66,12 +70,27 @@ func TestJITClassConstructors(t *testing.T) {
 // returns its this (push_this, return), where a function's constructor
 // returns nothing (ssa's returnsThis).
 func TestJITClassConstructorsNative(t *testing.T) {
-	t.Parallel()
+	if !regJITForTest() {
+		// Under the register JIT it sets the process's SSA hook.
+		t.Parallel()
+	}
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	// The closures chain's last compile inlined (ssa.Func's Inlined),
+	// which register code's entry does not keep as the stack form's
+	// does (ssaInlined).
+	var inlined []uintptr
+	if r.regOn() {
+		jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if fn.Name == "chain" {
+				inlined = slices.Clone(f.Inlined)
+			}
+		}
+		t.Cleanup(func() { jitSSAOptimized = nil })
+	}
 	const setup = `
 		var Node = class { constructor(id) { this.id = id; this.next = null; this.mark = 0 } }
 		function chain(n) { let head = null; for (let i = 0; i < n; i++) { const x = new Node(i); x.next = head; head = x } let s = 0; for (let x = head; x; x = x.next) s += x.id; return s }`
@@ -85,6 +104,12 @@ func TestJITClassConstructorsNative(t *testing.T) {
 	}
 	e := jitNativeForTest(t, r, "chain")
 	node := r.global.getOwn(r.atoms.intern("Node")).value().Object().fn().closure
+	if jitRegCodeForTest(r, "chain") {
+		if !slices.Contains(inlined, uintptr(unsafe.Pointer(node))) {
+			t.Errorf("chain inlines %#x, not Node's constructor %p", inlined, node)
+		}
+		return
+	}
 	if !slices.Contains(e.ssaInlined, node) {
 		t.Errorf("chain inlines %v, not Node's constructor %p", e.ssaInlined, node)
 	}

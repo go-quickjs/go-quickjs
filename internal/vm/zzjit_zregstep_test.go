@@ -4,7 +4,10 @@ package vm
 
 import (
 	"fmt"
+	"slices"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // regStepJITSrc's loops end in step-and-branches -- an update, a += and
@@ -86,5 +89,51 @@ func TestJITRegStepLeaves(t *testing.T) {
 				t.Errorf("not run natively: %d calls, %+v", natives, st)
 			}
 		})
+	}
+}
+
+// TestJITRegStepLoopTiersUp runs a loop that ends in a step-and-branch
+// (step_jlt) once, long enough for its function's budget, in the
+// native dispatcher and in the Go table, the collector idle and marking:
+// its back edges count the budget as the unfused jump's do (nativegen's
+// feedbackSCJumps, regStepTaken), and the loop is compiled while the call
+// runs, by on-stack replacement. Before, a step-and-branch's jump counted
+// the interrupt budget alone: the loop never compiled, and a function
+// whose loops all ended so was never compiled at its loops.
+func TestJITRegStepLoopTiersUp(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `function count(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + i) | 0; return s }`
+	for _, native := range []bool{true, false} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
+				was := regNativeOn
+				regNativeOn = native
+				t.Cleanup(func() { regNativeOn = was })
+				if marking {
+					jitMarkingForTest(t)
+				}
+				rts := regNativeRuntimes(t, src)
+				r := rts[0]
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("count"))
+				cl := fn.Object().fn().closure
+				v, err := r.Call(fn, Undefined, []Value{Float(1 << 20)})
+				// Node: count(1 << 20).
+				if got := regNativeShow(r, v, err); got != "-524288" {
+					t.Fatalf("count(1 << 20) = %s, want -524288", got)
+				}
+				// Its register code, made at its first call.
+				if cl.reg == nil || !slices.ContainsFunc(cl.reg.rc.Code, func(w bytecode.RInstr) bool { _, ok := w.Op().StepPartner(); return ok }) {
+					t.Fatalf("count's loop does not end in a step-and-branch")
+				}
+				if e := cl.closureCode.jitReg; e == nil || e.code == nil {
+					t.Fatalf("count's loop not compiled in a run of 1 << 20 turns: %+v", e)
+				}
+				if st := r.RegNativeStats(); st.Entries == 0 {
+					t.Errorf("no native code entered: %+v", st)
+				}
+			})
+		}
 	}
 }

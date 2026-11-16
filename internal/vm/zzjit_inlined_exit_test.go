@@ -47,8 +47,8 @@ func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 		t.Fatalf("the top disk is %s, want 0", got)
 	}
 	// Compiled for its native callers alone (jitNativeCallee).
-	e := r.jitEntryOf(r.global.getOwn(r.atoms.intern("move")).value().Object().fn().closure)
-	if e == nil || e.ssa == nil {
+	e := jitCodeForTest(r, "move")
+	if e == nil {
 		t.Fatalf("move has no code: %+v", e)
 	}
 	// 200 calls of rec(10), each moving 1023 disks; without the compile,

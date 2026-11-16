@@ -48,9 +48,17 @@ func jitAgreesForTest(t *testing.T, setup string, rounds ...string) *Runtime {
 }
 
 // jitNativeForTest fails unless the global function name has native code
-// that was entered.
+// that was entered: where r runs register code, its register code's state
+// (jitRegLifeForTest), whose counts its runs keep.
 func jitNativeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 	t.Helper()
+	if jitRegCodeForTest(r, name) {
+		e := jitRegLifeForTest(r, name)
+		if e == nil || e.ssaStats.entries == 0 {
+			t.Fatalf("%s never ran natively: %+v", name, e)
+		}
+		return e
+	}
 	cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	e := r.jit.hint(cl)
 	if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {

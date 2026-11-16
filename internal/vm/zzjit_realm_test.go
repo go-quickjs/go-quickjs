@@ -7,6 +7,7 @@ import (
 	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // jitRealmProgram makes each kind of value native code makes from a pool or
@@ -401,5 +402,52 @@ func TestJITFlushKeepsTheRunningRealm(t *testing.T) {
 	// The other realm lives, and warms up again.
 	if _, err := r.RunIn(re, fn); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestJITRegRealmsWithinTheBudgetClocked is TestJITRealmsWithinTheBudget
+// in register form, its cache's clocks (jitEpochNow, jitFlushNow) run by
+// the calls that read them, a step each, at several steps: what code is
+// young, and what the cache may let go of to make room, as a test's
+// collector and time under the load of parallel tests make them -- the
+// load the test failed under one run in three, its clocks the machine's.
+// Each realm's run leaves the JIT holding no more than its budget: the
+// register form's hint table, doubled at a link a compile's callee was
+// given with no room asked for it (regHint), had left it past its
+// 256 KB: 264,052 bytes at the third step's 24th realm.
+func TestJITRegRealmsWithinTheBudgetClocked(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	compiler.SetRegisterForm(true)
+	fn := compileForTest(t, jitHotProgram(40))
+	compiler.SetRegisterForm(bytecode.RegDefault())
+	SetRegTier(true)
+	was := SetJITRegTier(true)
+	epoch, flush := jitEpochNow, jitFlushNow
+	t.Cleanup(func() {
+		jitEpochNow, jitFlushNow = epoch, flush
+		SetRegTier(bytecode.RegDefault())
+		SetJITRegTier(was)
+	})
+	for _, step := range []uint64{0, 1, 2, 3} {
+		for _, limit := range []int64{96 << 10, 256 << 10} {
+			tick := uint64(1000)
+			jitEpochNow = func() uint64 { tick += step; return tick }
+			jitFlushNow = func() uint64 { return tick / 4 }
+			r := New(Config{JIT: true, JITMemoryLimit: limit})
+			r.SetJITWarmUp(8, 8)
+			for i := range 30 {
+				if _, err := r.RunIn(r.NewRealm(), fn); err != nil {
+					t.Fatal(err)
+				}
+				if s := r.jit; s != nil && s.held() > s.budget {
+					t.Fatalf("step %d, limit %d KB, realm %d: held %d of %d: register code %d, programs %d, shared %d, entries %d",
+						step, limit>>10, i, s.held(), s.budget, s.regHeld, s.lowerBytes, s.sharedBytes(), s.entryBytes)
+				}
+			}
+			r.Close()
+			r.ReleaseClosed()
+		}
 	}
 }

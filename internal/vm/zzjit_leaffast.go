@@ -215,8 +215,14 @@ func jitLeafGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) (uintptr, ui
 		}
 		if ok {
 			if form.give != nil {
-				// A RegExp literal's call: its RegExp back to its pool.
-				r.jitRegExpLeafGive(form.give, form.test, this, args)
+				// A RegExp literal's call: its RegExp back to its pool --
+				// the receiver of exec or test, or the first argument of a
+				// replace (giveArg).
+				if form.giveArg {
+					r.jitRegExpPoolGive(form.give, args[0])
+				} else {
+					r.jitRegExpLeafGive(form.give, form.test, this, args)
+				}
 			}
 			*(*Value)(unsafe.Pointer(&ctx.Keep[form.keep])) = v
 			ctx.GoStatus = 0
@@ -249,9 +255,12 @@ type jitLeafForm struct {
 	method bool
 	// give is the pool of the RegExp literal whose RegExp a call of exec
 	// or test is made on, which nothing else reaches (abi.GoCallState's
-	// Give): the leaf gives it back (jitRegExpLeafGive).
-	give *abi.ObjectPool
-	test bool
+	// Give): the leaf gives it back (jitRegExpLeafGive). giveArg says the
+	// RegExp is the first argument, a replace's the call made
+	// (RMarkLitArg), given back as such (jitRegExpPoolGive).
+	give    *abi.ObjectPool
+	test    bool
+	giveArg bool
 }
 
 // jitLeafFormOf makes the form of the leaf's call st describes, keeping it

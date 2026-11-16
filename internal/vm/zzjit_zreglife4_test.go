@@ -252,8 +252,13 @@ func TestJITRegIteratorStepMade(t *testing.T) {
 		}
 		ops := r.RegNativeStats().GoCallOps
 		t.Logf("steps %d, whole %d", ops["iter_next"], ops["whole iter_next"])
-		if ops["iter_next"] < 1000 {
-			t.Errorf("native code made %d steps of Go; want each step of the loops", ops["iter_next"])
+		// Steps of Go until the loops' code is compiled again for what
+		// they learned, which calls the iterators' next natively: 1,944
+		// where a native run's work toward that compile counted only at
+		// its polls, 679 now that each call of Go counts it
+		// (jitRegRunWork), of the some 270,000 steps the loops make.
+		if ops["iter_next"] == 0 {
+			t.Errorf("native code made no steps of Go")
 		}
 		if n := ops["whole iter_next"]; n != 0 {
 			t.Errorf("%d steps run whole on the frame", n)

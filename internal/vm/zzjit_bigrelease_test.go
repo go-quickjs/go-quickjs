@@ -217,8 +217,8 @@ func TestJITBigIntGivenBackAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("arith")).value().Object().fn().closure.fn)
-	if e == nil || e.ssa == nil || e.invalid {
+	e := jitCodeForTest(r, "arith")
+	if e == nil || e.invalid {
 		t.Fatal("arith has no code")
 	}
 	var before, after runtime.MemStats

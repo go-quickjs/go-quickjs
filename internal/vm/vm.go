@@ -4945,4 +4945,9 @@ func (r *Runtime) endTurn() {
 	r.clearReturnedFrames()
 	r.releaseKeptValues()
 	r.releaseDeadWeakMaps()
+	if r.frameDepth == 0 {
+		// Nothing runs that read a call cache's entry: the caches let go
+		// of the functions their sites called last (releaseRegCalls).
+		r.releaseRegCalls()
+	}
 }

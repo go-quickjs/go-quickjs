@@ -4,28 +4,78 @@
 
 #include "textflag.h"
 
-// regNativeFeedbackHandlers is the feedback dispatcher's own handlers, 1956 bytes of
+// regNativeFeedbackHandlers is the feedback dispatcher's own handlers, 3812 bytes of
 // position-independent machine code made by armEmit, which reach the
 // handlers' block through the dispatcher's table. Its handlers, in order:
 //
-//	    0  add
-//	  148  sub
-//	  296  mul
-//	  444  jlt
-//	  592  jnlt
-//	  740  jngt
-//	  888  jge
-//	 1036  jnge
-//	 1184  call_w
-//	 1236  call_method_w
-//	 1288  ret
-//	 1348  ret_undef
-//	 1408  jle
-//	 1556  jnle
-//	 1704  jgt
-//	 1852  tail_call_w
-//	 1904  tail_call_method_w
+//	    0  jlt_upval
+//	   48  jnlt_upval
+//	   96  jle_upval
+//	  144  jnle_upval
+//	  192  jeq
+//	  240  jne
+//	  288  add
+//	  436  sub
+//	  584  mul
+//	  732  jmp
+//	  780  jlt
+//	  968  jnlt
+//	 1156  jngt
+//	 1344  jge
+//	 1532  jnge
+//	 1720  jlt_imm
+//	 1768  jnlt_imm
+//	 1816  jle_imm
+//	 1864  jnle_imm
+//	 1912  jgt_imm
+//	 1960  jngt_imm
+//	 2008  jge_imm
+//	 2056  jnge_imm
+//	 2104  jne_imm
+//	 2152  jmp_false
+//	 2200  jmp_true
+//	 2248  jeq_imm
+//	 2296  jnull
+//	 2344  jnotnull
+//	 2392  jseq_imm
+//	 2440  jseq
+//	 2488  jsne
+//	 2536  jsne_imm
+//	 2584  call_w
+//	 2636  call_method_w
+//	 2688  ret
+//	 2748  ret_undef
+//	 2808  jle
+//	 2996  jnle
+//	 3184  jgt
+//	 3372  tail_call_w
+//	 3424  tail_call_method_w
+//	 3476  jtypeof
+//	 3524  step_jlt
+//	 3572  step_jle
+//	 3620  step_jlt_imm
+//	 3668  step_jgt_imm
+//	 3716  step_jge_imm
+//	 3764  step_jle_upval
 TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf9448ab0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf9448eb0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf94492b0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf94496b0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf9445ab0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xf9445eb0; WORD $0xd61f0200
 	WORD $0xd2ffff81; WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064
 	WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd370fc03; WORD $0x8b031283
 	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25
@@ -53,16 +103,24 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
 	WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
 	WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0
-	WORD $0xd61f0200; WORD $0xf94412b0; WORD $0xd61f0200; WORD $0xd2ffff81
-	WORD $0xd3507c03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
-	WORD $0x540003c3; WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064
-	WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5
-	WORD $0xb4000285; WORD $0xf9404b22; WORD $0xcb020261; WORD $0xd343fc21
-	WORD $0xd345fc23; WORD $0x92401021; WORD $0xf94000a4; WORD $0x8b030884
-	WORD $0xb9400084; WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042
-	WORD $0xaa020084; WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042
-	WORD $0xaa020084; WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061
-	WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf94416b0; WORD $0xd61f0200
+	WORD $0xd61f0200; WORD $0xf94412b0; WORD $0xd61f0200; WORD $0x9360fc01
+	WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4
+	WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c
+	WORD $0xd2800037; WORD $0xf9444eb0; WORD $0xd61f0200; WORD $0x9370fc01
+	WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4
+	WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c
+	WORD $0xd2800037; WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283
+	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03
+	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323
+	WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285; WORD $0xf9404b22
+	WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23; WORD $0x92401021
+	WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084; WORD $0xf9400ca2
+	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2
+	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484
+	WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200
+	WORD $0xf94416b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
 	WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283; WORD $0xf9400064
 	WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03; WORD $0x8b031283
 	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25
@@ -72,25 +130,9 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2; WORD $0x8b030842
 	WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484; WORD $0xf240009f
 	WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf9441ab0
-	WORD $0xd61f0200; WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283
-	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03
-	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323
-	WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285; WORD $0xf9404b22
-	WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23; WORD $0x92401021
-	WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084; WORD $0xf9400ca2
-	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2
-	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484
-	WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200
-	WORD $0xf9441eb0; WORD $0xd61f0200; WORD $0xd2ffff81; WORD $0xd3507c03
-	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3
-	WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
-	WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285
-	WORD $0xf9404b22; WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23
-	WORD $0x92401021; WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084
-	WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
-	WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
-	WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0
-	WORD $0xd61f0200; WORD $0xf94422b0; WORD $0xd61f0200; WORD $0xd2ffff81
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xd2ffff81
 	WORD $0xd3507c03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
 	WORD $0x540003c3; WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064
 	WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5
@@ -99,21 +141,101 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xb9400084; WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042
 	WORD $0xaa020084; WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042
 	WORD $0xaa020084; WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061
-	WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf94426b0; WORD $0xd61f0200
-	WORD $0xf9405b25; WORD $0xf85c80a2; WORD $0xf85c00a4; WORD $0xd370fc01
-	WORD $0x91000421; WORD $0xeb02003f; WORD $0x540000a2; WORD $0x8b010c84
-	WORD $0xf9400083; WORD $0x91000463; WORD $0xf9000083; WORD $0xf9442ab0
-	WORD $0xd61f0200; WORD $0xf9405b25; WORD $0xf85c80a2; WORD $0xf85c00a4
-	WORD $0xd370fc01; WORD $0x91000421; WORD $0xeb02003f; WORD $0x540000a2
-	WORD $0x8b010c84; WORD $0xf9400083; WORD $0x91000463; WORD $0xf9000083
-	WORD $0xf9442eb0; WORD $0xd61f0200; WORD $0xf9405b25; WORD $0xf85c80a2
-	WORD $0xf85c00a4; WORD $0xb4000082; WORD $0xf9400083; WORD $0x91000463
-	WORD $0xf9000083; WORD $0xf85d80a3; WORD $0xf1000463; WORD $0xf81d80a3
-	WORD $0x5400006c; WORD $0xd2800022; WORD $0x3900d0a2; WORD $0xf94432b0
-	WORD $0xd61f0200; WORD $0xf9405b25; WORD $0xf85c80a2; WORD $0xf85c00a4
-	WORD $0xb4000082; WORD $0xf9400083; WORD $0x91000463; WORD $0xf9000083
-	WORD $0xf85d80a3; WORD $0xf1000463; WORD $0xf81d80a3; WORD $0x5400006c
-	WORD $0xd2800022; WORD $0x3900d0a2; WORD $0xf94436b0; WORD $0xd61f0200
+	WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf9441eb0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xd2ffff81; WORD $0xd3507c03
+	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3
+	WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
+	WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285
+	WORD $0xf9404b22; WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23
+	WORD $0x92401021; WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084
+	WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
+	WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
+	WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0
+	WORD $0xd61f0200; WORD $0xf94422b0; WORD $0xd61f0200; WORD $0x9370fc01
+	WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4
+	WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c
+	WORD $0xd2800037; WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283
+	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03
+	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323
+	WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285; WORD $0xf9404b22
+	WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23; WORD $0x92401021
+	WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084; WORD $0xf9400ca2
+	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2
+	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484
+	WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200
+	WORD $0xf94426b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94462b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94466b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9446ab0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9446eb0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94472b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94476b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9447ab0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9447eb0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94486b0; WORD $0xd61f0200; WORD $0x9360fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94452b0; WORD $0xd61f0200; WORD $0x9360fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94456b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf94482b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9449ab0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf9449eb0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf944aab0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf944a2b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf944a6b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
+	WORD $0xf944aeb0; WORD $0xd61f0200; WORD $0xf9405b25; WORD $0xf85b80a2
+	WORD $0xf85b00a4; WORD $0xd370fc01; WORD $0x91000421; WORD $0xeb02003f
+	WORD $0x540000a2; WORD $0x8b010c84; WORD $0xf9400083; WORD $0x91000463
+	WORD $0xf9000083; WORD $0xf9442ab0; WORD $0xd61f0200; WORD $0xf9405b25
+	WORD $0xf85b80a2; WORD $0xf85b00a4; WORD $0xd370fc01; WORD $0x91000421
+	WORD $0xeb02003f; WORD $0x540000a2; WORD $0x8b010c84; WORD $0xf9400083
+	WORD $0x91000463; WORD $0xf9000083; WORD $0xf9442eb0; WORD $0xd61f0200
+	WORD $0xf9405b25; WORD $0xf85b80a2; WORD $0xf85b00a4; WORD $0xb4000082
+	WORD $0xf9400083; WORD $0x91000463; WORD $0xf9000083; WORD $0xf85c80a3
+	WORD $0xf1000463; WORD $0xf81c80a3; WORD $0x5400006c; WORD $0xd2800022
+	WORD $0x3900d0a2; WORD $0xf94432b0; WORD $0xd61f0200; WORD $0xf9405b25
+	WORD $0xf85b80a2; WORD $0xf85b00a4; WORD $0xb4000082; WORD $0xf9400083
+	WORD $0x91000463; WORD $0xf9000083; WORD $0xf85c80a3; WORD $0xf1000463
+	WORD $0xf81c80a3; WORD $0x5400006c; WORD $0xd2800022; WORD $0x3900d0a2
+	WORD $0xf94436b0; WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f
+	WORD $0x5400010a; WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084
+	WORD $0xf81d80a4; WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037
 	WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283; WORD $0xf9400064
 	WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03; WORD $0x8b031283
 	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25
@@ -123,16 +245,21 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2; WORD $0x8b030842
 	WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484; WORD $0xf240009f
 	WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf9443ab0
-	WORD $0xd61f0200; WORD $0xd2ffff81; WORD $0xd3507c03; WORD $0x8b031283
-	WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3; WORD $0xd360bc03
-	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x54000323
-	WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285; WORD $0xf9404b22
-	WORD $0xcb020261; WORD $0xd343fc21; WORD $0xd345fc23; WORD $0x92401021
-	WORD $0xf94000a4; WORD $0x8b030884; WORD $0xb9400084; WORD $0xf9400ca2
-	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0xf94018a2
-	WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084; WORD $0x9ac12484
-	WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0; WORD $0xd61f0200
-	WORD $0xf9443eb0; WORD $0xd61f0200; WORD $0xd2ffff81; WORD $0xd3507c03
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xd2ffff81
+	WORD $0xd3507c03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
+	WORD $0x540003c3; WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064
+	WORD $0xeb01009f; WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5
+	WORD $0xb4000285; WORD $0xf9404b22; WORD $0xcb020261; WORD $0xd343fc21
+	WORD $0xd345fc23; WORD $0x92401021; WORD $0xf94000a4; WORD $0x8b030884
+	WORD $0xb9400084; WORD $0xf9400ca2; WORD $0x8b030842; WORD $0xb9400042
+	WORD $0xaa020084; WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042
+	WORD $0xaa020084; WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061
+	WORD $0xf94402b0; WORD $0xd61f0200; WORD $0xf9443eb0; WORD $0xd61f0200
+	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
+	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
+	WORD $0x5400004c; WORD $0xd2800037; WORD $0xd2ffff81; WORD $0xd3507c03
 	WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f; WORD $0x540003c3
 	WORD $0xd360bc03; WORD $0x8b031283; WORD $0xf9400064; WORD $0xeb01009f
 	WORD $0x54000323; WORD $0xf9404f25; WORD $0xf9406ca5; WORD $0xb4000285
@@ -142,12 +269,33 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xf94018a2; WORD $0x8b030842; WORD $0xb9400042; WORD $0xaa020084
 	WORD $0x9ac12484; WORD $0xf240009f; WORD $0x54000061; WORD $0xf94402b0
 	WORD $0xd61f0200; WORD $0xf94442b0; WORD $0xd61f0200; WORD $0xf9405b25
-	WORD $0xf85c80a2; WORD $0xf85c00a4; WORD $0xd370fc01; WORD $0x91000421
+	WORD $0xf85b80a2; WORD $0xf85b00a4; WORD $0xd370fc01; WORD $0x91000421
 	WORD $0xeb02003f; WORD $0x540000a2; WORD $0x8b010c84; WORD $0xf9400083
 	WORD $0x91000463; WORD $0xf9000083; WORD $0xf94446b0; WORD $0xd61f0200
-	WORD $0xf9405b25; WORD $0xf85c80a2; WORD $0xf85c00a4; WORD $0xd370fc01
+	WORD $0xf9405b25; WORD $0xf85b80a2; WORD $0xf85b00a4; WORD $0xd370fc01
 	WORD $0x91000421; WORD $0xeb02003f; WORD $0x540000a2; WORD $0x8b010c84
 	WORD $0xf9400083; WORD $0x91000463; WORD $0xf9000083; WORD $0xf9444ab0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944b2b0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944b6b0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944bab0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944beb0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944c2b0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944c6b0
+	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
+	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
+	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944cab0
 	WORD $0xd61f0200
 
 // regNativeFeedbackTable is the feedback dispatcher's table: each operation's
@@ -180,21 +328,21 @@ DATA ·regNativeFeedbackTable+168(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+176(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+184(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+192(SB)/8, $·regNativeHandlers+33000(SB)
-DATA ·regNativeFeedbackTable+200(SB)/8, $·regNativeFeedbackHandlers+0(SB)
-DATA ·regNativeFeedbackTable+208(SB)/8, $·regNativeFeedbackHandlers+148(SB)
-DATA ·regNativeFeedbackTable+216(SB)/8, $·regNativeFeedbackHandlers+296(SB)
+DATA ·regNativeFeedbackTable+200(SB)/8, $·regNativeFeedbackHandlers+288(SB)
+DATA ·regNativeFeedbackTable+208(SB)/8, $·regNativeFeedbackHandlers+436(SB)
+DATA ·regNativeFeedbackTable+216(SB)/8, $·regNativeFeedbackHandlers+584(SB)
 DATA ·regNativeFeedbackTable+224(SB)/8, $·regNativeHandlers+42888(SB)
 DATA ·regNativeFeedbackTable+232(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+240(SB)/8, $·regNativeHandlers+6844(SB)
 DATA ·regNativeFeedbackTable+248(SB)/8, $·regNativeHandlers+7000(SB)
 DATA ·regNativeFeedbackTable+256(SB)/8, $·regNativeHandlers+11620(SB)
-DATA ·regNativeFeedbackTable+264(SB)/8, $·regNativeHandlers+8124(SB)
-DATA ·regNativeFeedbackTable+272(SB)/8, $·regNativeHandlers+11024(SB)
-DATA ·regNativeFeedbackTable+280(SB)/8, $·regNativeHandlers+11268(SB)
-DATA ·regNativeFeedbackTable+288(SB)/8, $·regNativeFeedbackHandlers+1852(SB)
-DATA ·regNativeFeedbackTable+296(SB)/8, $·regNativeFeedbackHandlers+1904(SB)
-DATA ·regNativeFeedbackTable+304(SB)/8, $·regNativeFeedbackHandlers+1288(SB)
-DATA ·regNativeFeedbackTable+312(SB)/8, $·regNativeFeedbackHandlers+1348(SB)
+DATA ·regNativeFeedbackTable+264(SB)/8, $·regNativeFeedbackHandlers+732(SB)
+DATA ·regNativeFeedbackTable+272(SB)/8, $·regNativeFeedbackHandlers+2152(SB)
+DATA ·regNativeFeedbackTable+280(SB)/8, $·regNativeFeedbackHandlers+2200(SB)
+DATA ·regNativeFeedbackTable+288(SB)/8, $·regNativeFeedbackHandlers+3372(SB)
+DATA ·regNativeFeedbackTable+296(SB)/8, $·regNativeFeedbackHandlers+3424(SB)
+DATA ·regNativeFeedbackTable+304(SB)/8, $·regNativeFeedbackHandlers+2688(SB)
+DATA ·regNativeFeedbackTable+312(SB)/8, $·regNativeFeedbackHandlers+2748(SB)
 DATA ·regNativeFeedbackTable+320(SB)/8, $·regNativeHandlers+35836(SB)
 DATA ·regNativeFeedbackTable+328(SB)/8, $·regNativeHandlers+36168(SB)
 DATA ·regNativeFeedbackTable+336(SB)/8, $·regNativeHandlers+36504(SB)
@@ -210,43 +358,43 @@ DATA ·regNativeFeedbackTable+408(SB)/8, $·regNativeHandlers+31448(SB)
 DATA ·regNativeFeedbackTable+416(SB)/8, $·regNativeHandlers+7580(SB)
 DATA ·regNativeFeedbackTable+424(SB)/8, $·regNativeHandlers+7748(SB)
 DATA ·regNativeFeedbackTable+432(SB)/8, $·regNativeHandlers+31616(SB)
-DATA ·regNativeFeedbackTable+440(SB)/8, $·regNativeFeedbackHandlers+1184(SB)
+DATA ·regNativeFeedbackTable+440(SB)/8, $·regNativeFeedbackHandlers+2584(SB)
 DATA ·regNativeFeedbackTable+448(SB)/8, $·regNativeHandlers+6524(SB)
 DATA ·regNativeFeedbackTable+456(SB)/8, $·regNativeHandlers+6684(SB)
-DATA ·regNativeFeedbackTable+464(SB)/8, $·regNativeFeedbackHandlers+444(SB)
-DATA ·regNativeFeedbackTable+472(SB)/8, $·regNativeFeedbackHandlers+592(SB)
-DATA ·regNativeFeedbackTable+480(SB)/8, $·regNativeFeedbackHandlers+1408(SB)
-DATA ·regNativeFeedbackTable+488(SB)/8, $·regNativeFeedbackHandlers+1556(SB)
-DATA ·regNativeFeedbackTable+496(SB)/8, $·regNativeFeedbackHandlers+1704(SB)
-DATA ·regNativeFeedbackTable+504(SB)/8, $·regNativeFeedbackHandlers+740(SB)
-DATA ·regNativeFeedbackTable+512(SB)/8, $·regNativeFeedbackHandlers+888(SB)
-DATA ·regNativeFeedbackTable+520(SB)/8, $·regNativeFeedbackHandlers+1036(SB)
-DATA ·regNativeFeedbackTable+528(SB)/8, $·regNativeHandlers+10052(SB)
-DATA ·regNativeFeedbackTable+536(SB)/8, $·regNativeHandlers+10160(SB)
-DATA ·regNativeFeedbackTable+544(SB)/8, $·regNativeHandlers+10268(SB)
-DATA ·regNativeFeedbackTable+552(SB)/8, $·regNativeHandlers+10376(SB)
-DATA ·regNativeFeedbackTable+560(SB)/8, $·regNativeHandlers+10484(SB)
-DATA ·regNativeFeedbackTable+568(SB)/8, $·regNativeHandlers+10592(SB)
-DATA ·regNativeFeedbackTable+576(SB)/8, $·regNativeHandlers+10700(SB)
-DATA ·regNativeFeedbackTable+584(SB)/8, $·regNativeHandlers+10808(SB)
-DATA ·regNativeFeedbackTable+592(SB)/8, $·regNativeHandlers+13228(SB)
-DATA ·regNativeFeedbackTable+600(SB)/8, $·regNativeHandlers+13700(SB)
-DATA ·regNativeFeedbackTable+608(SB)/8, $·regNativeHandlers+13120(SB)
-DATA ·regNativeFeedbackTable+616(SB)/8, $·regNativeHandlers+14172(SB)
+DATA ·regNativeFeedbackTable+464(SB)/8, $·regNativeFeedbackHandlers+780(SB)
+DATA ·regNativeFeedbackTable+472(SB)/8, $·regNativeFeedbackHandlers+968(SB)
+DATA ·regNativeFeedbackTable+480(SB)/8, $·regNativeFeedbackHandlers+2808(SB)
+DATA ·regNativeFeedbackTable+488(SB)/8, $·regNativeFeedbackHandlers+2996(SB)
+DATA ·regNativeFeedbackTable+496(SB)/8, $·regNativeFeedbackHandlers+3184(SB)
+DATA ·regNativeFeedbackTable+504(SB)/8, $·regNativeFeedbackHandlers+1156(SB)
+DATA ·regNativeFeedbackTable+512(SB)/8, $·regNativeFeedbackHandlers+1344(SB)
+DATA ·regNativeFeedbackTable+520(SB)/8, $·regNativeFeedbackHandlers+1532(SB)
+DATA ·regNativeFeedbackTable+528(SB)/8, $·regNativeFeedbackHandlers+1720(SB)
+DATA ·regNativeFeedbackTable+536(SB)/8, $·regNativeFeedbackHandlers+1768(SB)
+DATA ·regNativeFeedbackTable+544(SB)/8, $·regNativeFeedbackHandlers+1816(SB)
+DATA ·regNativeFeedbackTable+552(SB)/8, $·regNativeFeedbackHandlers+1864(SB)
+DATA ·regNativeFeedbackTable+560(SB)/8, $·regNativeFeedbackHandlers+1912(SB)
+DATA ·regNativeFeedbackTable+568(SB)/8, $·regNativeFeedbackHandlers+1960(SB)
+DATA ·regNativeFeedbackTable+576(SB)/8, $·regNativeFeedbackHandlers+2008(SB)
+DATA ·regNativeFeedbackTable+584(SB)/8, $·regNativeFeedbackHandlers+2056(SB)
+DATA ·regNativeFeedbackTable+592(SB)/8, $·regNativeFeedbackHandlers+2440(SB)
+DATA ·regNativeFeedbackTable+600(SB)/8, $·regNativeFeedbackHandlers+2488(SB)
+DATA ·regNativeFeedbackTable+608(SB)/8, $·regNativeFeedbackHandlers+2392(SB)
+DATA ·regNativeFeedbackTable+616(SB)/8, $·regNativeFeedbackHandlers+2536(SB)
 DATA ·regNativeFeedbackTable+624(SB)/8, $·regNativeHandlers+16808(SB)
 DATA ·regNativeFeedbackTable+632(SB)/8, $·regNativeHandlers+19428(SB)
-DATA ·regNativeFeedbackTable+640(SB)/8, $·regNativeFeedbackHandlers+1236(SB)
+DATA ·regNativeFeedbackTable+640(SB)/8, $·regNativeFeedbackHandlers+2636(SB)
 DATA ·regNativeFeedbackTable+648(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+656(SB)/8, $·regNativeHandlers+42104(SB)
 DATA ·regNativeFeedbackTable+664(SB)/8, $·regNativeHandlers+7156(SB)
 DATA ·regNativeFeedbackTable+672(SB)/8, $·regNativeHandlers+32912(SB)
 DATA ·regNativeFeedbackTable+680(SB)/8, $·regNativeHandlers+21540(SB)
-DATA ·regNativeFeedbackTable+688(SB)/8, $·regNativeHandlers+3836(SB)
-DATA ·regNativeFeedbackTable+696(SB)/8, $·regNativeHandlers+4232(SB)
-DATA ·regNativeFeedbackTable+704(SB)/8, $·regNativeHandlers+11512(SB)
-DATA ·regNativeFeedbackTable+712(SB)/8, $·regNativeHandlers+10916(SB)
-DATA ·regNativeFeedbackTable+720(SB)/8, $·regNativeHandlers+11948(SB)
-DATA ·regNativeFeedbackTable+728(SB)/8, $·regNativeHandlers+12096(SB)
+DATA ·regNativeFeedbackTable+688(SB)/8, $·regNativeFeedbackHandlers+192(SB)
+DATA ·regNativeFeedbackTable+696(SB)/8, $·regNativeFeedbackHandlers+240(SB)
+DATA ·regNativeFeedbackTable+704(SB)/8, $·regNativeFeedbackHandlers+2248(SB)
+DATA ·regNativeFeedbackTable+712(SB)/8, $·regNativeFeedbackHandlers+2104(SB)
+DATA ·regNativeFeedbackTable+720(SB)/8, $·regNativeFeedbackHandlers+2296(SB)
+DATA ·regNativeFeedbackTable+728(SB)/8, $·regNativeFeedbackHandlers+2344(SB)
 DATA ·regNativeFeedbackTable+736(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+744(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+752(SB)/8, $·regNativeHandlers+20932(SB)
@@ -257,10 +405,10 @@ DATA ·regNativeFeedbackTable+784(SB)/8, $·regNativeHandlers+3084(SB)
 DATA ·regNativeFeedbackTable+792(SB)/8, $·regNativeHandlers+3240(SB)
 DATA ·regNativeFeedbackTable+800(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+808(SB)/8, $·regNativeHandlers+17756(SB)
-DATA ·regNativeFeedbackTable+816(SB)/8, $·regNativeHandlers+2696(SB)
-DATA ·regNativeFeedbackTable+824(SB)/8, $·regNativeHandlers+3380(SB)
-DATA ·regNativeFeedbackTable+832(SB)/8, $·regNativeHandlers+3532(SB)
-DATA ·regNativeFeedbackTable+840(SB)/8, $·regNativeHandlers+3684(SB)
+DATA ·regNativeFeedbackTable+816(SB)/8, $·regNativeFeedbackHandlers+0(SB)
+DATA ·regNativeFeedbackTable+824(SB)/8, $·regNativeFeedbackHandlers+48(SB)
+DATA ·regNativeFeedbackTable+832(SB)/8, $·regNativeFeedbackHandlers+96(SB)
+DATA ·regNativeFeedbackTable+840(SB)/8, $·regNativeFeedbackHandlers+144(SB)
 DATA ·regNativeFeedbackTable+848(SB)/8, $·regNativeHandlers+12244(SB)
 DATA ·regNativeFeedbackTable+856(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+864(SB)/8, $·regNativeHandlers+40(SB)
@@ -273,7 +421,7 @@ DATA ·regNativeFeedbackTable+912(SB)/8, $·regNativeHandlers+35248(SB)
 DATA ·regNativeFeedbackTable+920(SB)/8, $·regNativeHandlers+35464(SB)
 DATA ·regNativeFeedbackTable+928(SB)/8, $·regNativeHandlers+35636(SB)
 DATA ·regNativeFeedbackTable+936(SB)/8, $·regNativeHandlers+42312(SB)
-DATA ·regNativeFeedbackTable+944(SB)/8, $·regNativeHandlers+43588(SB)
+DATA ·regNativeFeedbackTable+944(SB)/8, $·regNativeFeedbackHandlers+3476(SB)
 DATA ·regNativeFeedbackTable+952(SB)/8, $·regNativeHandlers+20640(SB)
 DATA ·regNativeFeedbackTable+960(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+968(SB)/8, $·regNativeHandlers+43324(SB)
@@ -386,12 +534,12 @@ DATA ·regNativeFeedbackTable+1816(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+1824(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+1832(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+1840(SB)/8, $·regNativeHandlers+40(SB)
-DATA ·regNativeFeedbackTable+1848(SB)/8, $·regNativeHandlers+43948(SB)
-DATA ·regNativeFeedbackTable+1856(SB)/8, $·regNativeHandlers+44128(SB)
-DATA ·regNativeFeedbackTable+1864(SB)/8, $·regNativeHandlers+44308(SB)
-DATA ·regNativeFeedbackTable+1872(SB)/8, $·regNativeHandlers+44472(SB)
-DATA ·regNativeFeedbackTable+1880(SB)/8, $·regNativeHandlers+44636(SB)
-DATA ·regNativeFeedbackTable+1888(SB)/8, $·regNativeHandlers+44800(SB)
+DATA ·regNativeFeedbackTable+1848(SB)/8, $·regNativeFeedbackHandlers+3524(SB)
+DATA ·regNativeFeedbackTable+1856(SB)/8, $·regNativeFeedbackHandlers+3572(SB)
+DATA ·regNativeFeedbackTable+1864(SB)/8, $·regNativeFeedbackHandlers+3620(SB)
+DATA ·regNativeFeedbackTable+1872(SB)/8, $·regNativeFeedbackHandlers+3668(SB)
+DATA ·regNativeFeedbackTable+1880(SB)/8, $·regNativeFeedbackHandlers+3716(SB)
+DATA ·regNativeFeedbackTable+1888(SB)/8, $·regNativeFeedbackHandlers+3764(SB)
 DATA ·regNativeFeedbackTable+1896(SB)/8, $·regNativeHandlers+45008(SB)
 DATA ·regNativeFeedbackTable+1904(SB)/8, $·regNativeHandlers+45168(SB)
 DATA ·regNativeFeedbackTable+1912(SB)/8, $·regNativeHandlers+45356(SB)
@@ -430,7 +578,39 @@ DATA ·regNativeFeedbackTable+2168(SB)/8, $·regNativeHandlers+32160(SB)
 DATA ·regNativeFeedbackTable+2176(SB)/8, $·regNativeHandlers+32536(SB)
 DATA ·regNativeFeedbackTable+2184(SB)/8, $·regNativeHandlers+33344(SB)
 DATA ·regNativeFeedbackTable+2192(SB)/8, $·regNativeHandlers+34636(SB)
-GLOBL ·regNativeFeedbackTable(SB), RODATA, $2200
+DATA ·regNativeFeedbackTable+2200(SB)/8, $·regNativeHandlers+8124(SB)
+DATA ·regNativeFeedbackTable+2208(SB)/8, $·regNativeHandlers+11024(SB)
+DATA ·regNativeFeedbackTable+2216(SB)/8, $·regNativeHandlers+11268(SB)
+DATA ·regNativeFeedbackTable+2224(SB)/8, $·regNativeHandlers+3836(SB)
+DATA ·regNativeFeedbackTable+2232(SB)/8, $·regNativeHandlers+4232(SB)
+DATA ·regNativeFeedbackTable+2240(SB)/8, $·regNativeHandlers+10052(SB)
+DATA ·regNativeFeedbackTable+2248(SB)/8, $·regNativeHandlers+10160(SB)
+DATA ·regNativeFeedbackTable+2256(SB)/8, $·regNativeHandlers+10268(SB)
+DATA ·regNativeFeedbackTable+2264(SB)/8, $·regNativeHandlers+10376(SB)
+DATA ·regNativeFeedbackTable+2272(SB)/8, $·regNativeHandlers+10484(SB)
+DATA ·regNativeFeedbackTable+2280(SB)/8, $·regNativeHandlers+10592(SB)
+DATA ·regNativeFeedbackTable+2288(SB)/8, $·regNativeHandlers+10700(SB)
+DATA ·regNativeFeedbackTable+2296(SB)/8, $·regNativeHandlers+10808(SB)
+DATA ·regNativeFeedbackTable+2304(SB)/8, $·regNativeHandlers+11512(SB)
+DATA ·regNativeFeedbackTable+2312(SB)/8, $·regNativeHandlers+10916(SB)
+DATA ·regNativeFeedbackTable+2320(SB)/8, $·regNativeHandlers+2696(SB)
+DATA ·regNativeFeedbackTable+2328(SB)/8, $·regNativeHandlers+3380(SB)
+DATA ·regNativeFeedbackTable+2336(SB)/8, $·regNativeHandlers+3532(SB)
+DATA ·regNativeFeedbackTable+2344(SB)/8, $·regNativeHandlers+3684(SB)
+DATA ·regNativeFeedbackTable+2352(SB)/8, $·regNativeHandlers+11948(SB)
+DATA ·regNativeFeedbackTable+2360(SB)/8, $·regNativeHandlers+12096(SB)
+DATA ·regNativeFeedbackTable+2368(SB)/8, $·regNativeHandlers+13228(SB)
+DATA ·regNativeFeedbackTable+2376(SB)/8, $·regNativeHandlers+13700(SB)
+DATA ·regNativeFeedbackTable+2384(SB)/8, $·regNativeHandlers+13120(SB)
+DATA ·regNativeFeedbackTable+2392(SB)/8, $·regNativeHandlers+14172(SB)
+DATA ·regNativeFeedbackTable+2400(SB)/8, $·regNativeHandlers+43588(SB)
+DATA ·regNativeFeedbackTable+2408(SB)/8, $·regNativeHandlers+43948(SB)
+DATA ·regNativeFeedbackTable+2416(SB)/8, $·regNativeHandlers+44128(SB)
+DATA ·regNativeFeedbackTable+2424(SB)/8, $·regNativeHandlers+44308(SB)
+DATA ·regNativeFeedbackTable+2432(SB)/8, $·regNativeHandlers+44472(SB)
+DATA ·regNativeFeedbackTable+2440(SB)/8, $·regNativeHandlers+44636(SB)
+DATA ·regNativeFeedbackTable+2448(SB)/8, $·regNativeHandlers+44800(SB)
+GLOBL ·regNativeFeedbackTable(SB), RODATA, $2456
 
 // nativeFeedbackTableAddr is the table's address.
 TEXT ·nativeFeedbackTableAddr(SB), NOSPLIT, $0-8

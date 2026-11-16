@@ -354,7 +354,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
-		} else if !r.jitRegPlace(e, j.c, j.rf, j.f, j.mc, j.looped) {
+		} else if !r.jitRegPlace(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, 0)) {
 			// No room: asked again at a later sample.
 			s.bgDiscarded++
 			return

@@ -202,7 +202,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 	if rc.LocalReg != nil {
 		c.reuse = regReuseSites(fn, rc)
 	}
-	if c.suspends && rc.LocalReg == nil && !regCapsFrame(rc) {
+	if c.suspends && rc.LocalReg == nil && !regCapsFrame(rc) && !regGenNative(fn, c) {
 		c.genFrom = 2
 	}
 	if fn.Kind == bytecode.KindDerivedConstructor {

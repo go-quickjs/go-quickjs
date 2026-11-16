@@ -232,5 +232,6 @@ func regBigCompile(t *testing.T, src string) *bytecode.Function {
 	t.Helper()
 	compilerpkg.SetRegisterForm(true)
 	defer compilerpkg.SetRegisterForm(false)
+	t.Cleanup(func() { compilerpkg.SetRegisterForm(bytecode.RegDefault()) })
 	return compileForTest(t, src)
 }

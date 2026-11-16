@@ -166,7 +166,7 @@ func TestJITRegGenLearnedJudgedAfresh(t *testing.T) {
 	if !e.life.genLearned || !e.life.reopt {
 		t.Fatal("the step learned asked for no compile again")
 	}
-	ne := r.jitRegReoptimize(cl, cl.reg, e)
+	ne := r.jitRegReoptimize(cl, cl.reg, e, -1)
 	if ne == nil || ne.code == nil {
 		t.Fatal("not compiled again")
 	}
@@ -465,15 +465,16 @@ func TestJITRegMadeAnewCallsSettle(t *testing.T) {
 	}
 }
 
-// regWarmSmallSrc calls a tiny callee and a larger one at calls made in an
-// eighth of a function's runs, past an early return, as AWFY CD's recurse
-// makes its calls; and the larger one at a call made at every run.
+// regWarmSmallSrc calls a tiny callee and a larger one at calls made in one
+// of thirty-two of a function's runs, past an early return, below V8's
+// minimum frequency as it runs (0.05); and the larger one at a call made at
+// every run.
 const regWarmSmallSrc = `
 function Pt(x, y) { this.x = x; this.y = y }
 function tiny(o) { return o.a }
 function big(o) { return new Pt(o.a + o.b, o.a - o.b) }
 function rare(o, k) {
-	if (k & 7) return 0;
+	if (k & 31) return 0;
 	var t = tiny(o);
 	return t + big(o).x;
 }
@@ -488,8 +489,8 @@ function drive(n) {
 // TestJITRegSmallCalleeAtColdCall checks the inliner's small-callee
 // exemption from the call frequency rule (ssa's smallCallee), as V8
 // inlines a callee of max_inlined_bytecode_size_small bytes however
-// seldom its call is made: at a call made in an eighth of its function's
-// runs, below minInliningFrequency, a callee within the small bound in
+// seldom its call is made: at a call made in one of thirty-two of its
+// function's runs, below minInliningFrequency, a callee within the small bound in
 // register code's units is inlined, a larger one is not -- though the
 // larger one is inlined where its call is made at every run. Exact
 // answers with the JIT and without, the collector idle and marking.
@@ -508,8 +509,8 @@ func TestJITRegSmallCalleeAtColdCall(t *testing.T) {
 				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("drive"))
 				for k := range 6 {
 					v, err := r.Call(fn, Undefined, []Value{Float(4000)})
-					if got := regNativeShow(r, v, err); got != "7996000" {
-						t.Fatalf("runtime %d, call %d: %s, want 7996000", i, k, got)
+					if got := regNativeShow(r, v, err); got != "7994500" {
+						t.Fatalf("runtime %d, call %d: %s, want 7994500", i, k, got)
 					}
 				}
 			}

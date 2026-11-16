@@ -111,3 +111,48 @@ func TestJITRegStepCall(t *testing.T) {
 		})
 	}
 }
+
+// regStepDeadSrc's loops step arrays and a Map, their bindings read after
+// the loop (after, mapAfter) -- what the step leaves at the loop's end --
+// or not (dead), some leaving native code in the body for a string.
+const regStepDeadSrc = `
+function after(a) { var x = "none", s = 0; for (x of a) s += x; return s + ":" + x }
+function dead(a) { var s = 0, n = 0; for (var j = 0; j < 3; j++) { for (var x of a) { s += x; n++ } } return s + ":" + n }
+function mapAfter(m) { var x = -1, s = 0; for (x of m.values()) s += x; return s + ":" + x }
+function round() {
+	var nums = [];
+	for (var i = 0; i < 50; i++) nums.push(i);
+	return [after(nums), after([]), after([1, 2, "z"]), dead(nums), dead([5, "q"]), mapAfter(new Map([[1, 2], [3, 4]]))].join(";");
+}`
+
+// A loop step's register is live at the step only where code past the
+// loop reads it (liveRegs): written on the way into the body alone, as the
+// stack form's put_loc after its step, it is not kept alive across the
+// step for its state where the loop's end does not read it. Live there,
+// the binding keeps what it held at the loop's end.
+func TestJITRegStepDeadRegister(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			rts := regNativeRuntimes(t, regStepDeadSrc)
+			const want = "1225:49;0:none;3z:z;3675:150;5q5q5q:6;6:4"
+			for k, r := range rts {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("round"))
+				for i := range 40 {
+					v, err := r.Call(fn, Undefined, nil)
+					if got := regNativeShow(r, v, err); got != want {
+						t.Fatalf("runtime %d, round %d: %q, want %q", k, i, got, want)
+					}
+				}
+			}
+			if rts[0].JITStats().Compiled == 0 {
+				t.Error("nothing compiled")
+			}
+		})
+	}
+}

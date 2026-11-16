@@ -298,12 +298,12 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "count")
-	entries, in, hosts := e.ssaStats.entries, e.link.in, e.ssaStats.hosts
+	uses, hosts := jitNativeUsesForTest(r, "count"), e.ssaStats.hosts
 	if _, err := r.Run(compileForTest(t, `for (let k = 0; k < 20; k++) count(1000)`)); err != nil {
 		t.Fatal(err)
 	}
 	// Entered by Go, or called by the loop's own native code.
-	if n := e.ssaStats.entries - entries + e.link.in - in; n < 20 {
+	if n := jitNativeUsesForTest(r, "count") - uses; n < 20 {
 		t.Fatalf("count ran natively %d times of 20", n)
 	}
 	if n := e.ssaStats.hosts - hosts; n > 2 {

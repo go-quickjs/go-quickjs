@@ -1133,13 +1133,13 @@ type Func struct {
 	GenEntry   bool
 	GenResumes []GenResume
 	// GenWindow marks register code's generator entry and yields (mir's
-	// windowGenEntry, windowYieldExit): the frame is a window of
-	// FrameLocals registers made in the VM's stack, as a call entry makes
-	// one, from the generator's values, which keep the window's registers
-	// from GenFrom -- the callee's and this's, below it, made from the
-	// generator's callee and receiver -- and a yield writes them back.
+	// windowGenEntry, windowYieldExit): the frame's FrameLocals registers
+	// are the generator's values, which keep the whole register file, as
+	// the stack form's frame's locals are the generator's; what the code
+	// keeps past them is past the VM's stack's top, as a call entry makes
+	// it. Where Go made a window of them in the VM's stack, the code
+	// having left native code, a yield writes the window back.
 	GenWindow bool
-	GenFrom   int
 	// Loops says the code makes loops of built-ins' calls (OpLoopMark), whose
 	// word it clears at its entries; LoopsEnd is the slot past their slots,
 	// which the frame holds while they run: their callbacks' frames start

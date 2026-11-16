@@ -1552,13 +1552,17 @@ func (c *compiler) windowGenEntry() {
 }
 
 // windowGenFrame is windowGenEntry's for the resumption gr, at blk, the
-// entry for its place: the generator's window made past the VM's stack's
-// top, as callEntry makes a callee's -- its registers from GenFrom the
-// generator's values, the callee's and this's below that its callee and
-// receiver, the value sent in to the yield's register -- the context made,
-// the generator running, and on at blk, whose entry loads the window's
-// registers it reads. The next context, the generator and the call's
-// registers are windowGenEntry's.
+// entry for its place: the generator's frame made as genFrame makes the
+// stack form's -- its registers the generator's values, which keep the
+// whole register file, the callee's and this's included (the VM's
+// regCode's genFrom of a synchronous generator, 0), nothing copied -- room
+// past the VM's stack's top for what the code keeps past its registers,
+// its scratch slots and its calls' windows, as callEntry makes it, and
+// for the window Go makes of the values where the code leaves native code
+// (the VM's jitRegGenLevel); the value sent in written to the yield's
+// register; the context made, the generator running, and on at blk, whose
+// entry loads the registers it reads. The next context, the generator and
+// the call's registers are windowGenEntry's.
 func (c *compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	vs := int32(c.enc.ValueSize)
 	const next, g, t, u = amd64.R12, amd64.R13, amd64.RBX, amd64.R8
@@ -1567,8 +1571,8 @@ func (c *compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Load(t, callClosure, c.enc.ClosureUpvalues)
 	c.a.Store(next, abi.OffUpvalues, t)
 	c.a.IncMem(callLink, c.enc.LinkIn)
-	// The window past the VM's stack's top, which moves past it and what
-	// the code keeps past it, its high water with it.
+	// The room past the VM's stack's top, which moves past it, its high
+	// water with it.
 	c.a.Load(u, regCtx, abi.OffStackTop)
 	c.a.Load(t, u, 0)
 	c.a.Store(next, abi.OffBase, t)
@@ -1582,49 +1586,43 @@ func (c *compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Bind(same)
 	c.a.ShiftImm(amd64.Shl, t, 4, true)
 	c.a.AddMem(t, regCtx, abi.OffStackBase)
-	c.a.Store(next, abi.OffLocals, t)
 	c.a.Lea(scratchA, t, int32(c.f.FrameLocals+c.f.Scratch)*vs)
 	c.a.Store(next, abi.OffStack, scratchA)
+	// Its registers, the generator's values.
+	c.a.Load(u, g, c.enc.GenVals)
+	c.a.Store(next, abi.OffLocals, u)
 	c.a.StoreImm(next, abi.OffOpen, 0)
 	c.a.StoreImm(next, abi.OffCells, 0)
 	if c.f.Loops {
 		c.storeImm(next, abi.OffLoop, 0, scratchA)
 	}
 	c.a.StoreImm(next, abi.OffLive, abi.LiveCall)
-	// Its registers from GenFrom, the generator's values. No barrier: the
-	// window outlives none of them (a native call's frame), and a yield
-	// writes them back through it while the collector marks.
-	from := int32(c.f.GenFrom)
-	c.a.Load(u, g, c.enc.GenVals)
-	c.copyValues(t, from*vs, u, 0, int32(c.f.FrameLocals)-from)
-	if from != 0 {
-		// The callee's register, the generator's function object or
-		// undefined, and this's, its receiver.
-		for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-			c.a.Load(scratchA, g, c.enc.GenThis+w)
-			c.a.Store(t, vs+w, scratchA)
-		}
-		c.a.Load(scratchA, g, c.enc.GenCallee)
-		c.a.Store(t, c.enc.RefOffset, scratchA)
-		c.movImm(scratchB, c.enc.Undefined)
-		none := c.a.NewLabel()
-		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		c.a.Jcc(amd64.CondE, none)
-		c.movImm(scratchB, c.enc.Object)
-		c.a.Bind(none)
-		c.a.Store(t, c.enc.NumOffset, scratchB)
-	}
-	if gr.Sent >= 0 {
-		// The value sent in, which the step or the call wrote to the
-		// context (abi.Context's GenSent): the yield's result.
-		for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-			c.a.Load(scratchA, next, abi.OffGenSent+w)
-			c.a.Store(t, int32(gr.Sent)*vs+w, scratchA)
-		}
-	}
 	c.a.MovImm(scratchA, uint64(c.enc.GenExecuting))
 	c.a.Store8(g, c.enc.GenState, scratchA)
 	c.a.MovRR(regCtx, next)
+	if gr.Sent >= 0 {
+		// The value sent in, which the step or the call wrote to the
+		// context (abi.Context's GenSent), the yield's result: its
+		// pointer word, stored in the generator, with Go's write barrier
+		// while the collector marks (refStore), which keeps the context's
+		// register alone -- the generator's values read again from it.
+		at := int32(gr.Sent) * vs
+		c.a.Load(scratchA, regCtx, abi.OffGenSent+c.enc.NumOffset)
+		c.a.Store(u, at+c.enc.NumOffset, scratchA)
+		marked, stored := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(scratchC, c.enc.WriteBarrier)
+		c.a.TestMem8(scratchC, 0, 0xFF)
+		c.a.Jcc(amd64.CondNE, marked)
+		c.a.Load(scratchA, regCtx, abi.OffGenSent+c.enc.RefOffset)
+		c.a.Store(u, at+c.enc.RefOffset, scratchA)
+		c.a.Jmp(stored)
+		c.a.Bind(marked)
+		c.a.Load(scratchA, regCtx, abi.OffLocals)
+		c.a.Lea(scratchA, scratchA, at+c.enc.RefOffset)
+		c.a.Load(scratchC, regCtx, abi.OffGenSent+c.enc.RefOffset)
+		c.refStore()
+		c.a.Bind(stored)
+	}
 	c.a.Jmp(c.labels[blk.ID])
 }
 
@@ -1661,9 +1659,11 @@ func (c *compiler) copyValues(dst amd64.Reg, doff int32, src amd64.Reg, soff int
 
 // windowYieldExit is yieldExit for register code (ssa.Func's GenWindow):
 // in code a loop's step or a call of next resumed natively, the frame
-// written, as an exit writes it, the window's registers from GenFrom
-// written back to the generator's values -- their pointer words with Go's
-// write barrier while the collector marks -- and the generator suspended
+// written, as an exit writes it -- into the generator's values, which are
+// its registers (windowGenFrame), or, where Go made a window of them when
+// the code left native code, into the window, which is written back to
+// them, their pointer words with Go's write barrier while the collector
+// marks -- and the generator suspended
 // past the yield, as regGenRun suspends it; and the value, in the yield's
 // register (ssa.Block's YieldSlot), returned to the step. The code's
 // handlers are by register pc: nothing of them is saved. Where Go entered
@@ -1677,9 +1677,17 @@ func (c *compiler) windowYieldExit(b *ssa.Block) {
 	then := c.a.NewLabel()
 	c.exitThen(s, abi.ExitHost, &then)
 	c.a.Bind(then)
-	from, n := int32(c.f.GenFrom), int32(c.f.FrameLocals-c.f.GenFrom)
-	if n > 0 {
-		c.windowWriteBack(from, n)
+	if n := int32(c.f.FrameLocals); n > 0 {
+		// Registers in a window Go made of them (the VM's
+		// jitRegGenLevel), written back; none where they are the
+		// generator's values themselves (windowGenFrame).
+		own := c.a.NewLabel()
+		c.a.Load(scratchB, regCtx, abi.OffGenObject)
+		c.a.Load(scratchB, scratchB, c.enc.GenVals)
+		c.a.Op(amd64.Cmp, scratchB, regLocals, true)
+		c.a.Jcc(amd64.CondE, own)
+		c.windowWriteBack(0, n)
+		c.a.Bind(own)
 	}
 	c.a.Load(scratchB, regCtx, abi.OffGenObject)
 	c.a.MovImm(scratchA, uint64(s.PC)+1)
@@ -1696,8 +1704,9 @@ func (c *compiler) windowYieldExit(b *ssa.Block) {
 }
 
 // windowWriteBack writes the window's n registers from from back to the
-// generator's values, for windowYieldExit: their pointer words with Go's
-// write barrier while the collector marks.
+// generator's values, for windowYieldExit, where Go made the window of
+// them: their pointer words with Go's write barrier while the collector
+// marks.
 func (c *compiler) windowWriteBack(from, n int32) {
 	vs := int32(c.enc.ValueSize)
 	marked, copied := c.a.NewLabel(), c.a.NewLabel()

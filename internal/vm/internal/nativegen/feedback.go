@@ -16,7 +16,8 @@ import (
 // it.
 //
 // A return also counts down the runs left of its function's budget
-// (feedbackTick).
+// (feedbackTick), and a backward jump the work left of it for back edges
+// (feedbackEdges), as V8's JumpLoop spends its function's budget.
 //
 // The counts are the function's closure's code's jitRegCounts (package
 // vm, zzjit_zregfreq.go), which the top frame's cc reaches: slot 0 its
@@ -31,12 +32,72 @@ import (
 // call_w, call_method_w and those in tail position -- and the returns;
 // and the operators plain's handlers make of two BigInts held in their
 // Values (feedbackBigOps), in handlerOps' order.
-var feedbackOps = []bytecode.ROp{
+var feedbackOps = append([]bytecode.ROp{
 	bytecode.RAdd, bytecode.RSub, bytecode.RMul,
 	bytecode.RJLt, bytecode.RJNLt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 	bytecode.RCallW, bytecode.RCallMW, bytecode.RRet, bytecode.RRetUndef,
 	bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt,
 	bytecode.RCallWT, bytecode.RCallMWT,
+}, feedbackOtherJumps...)
+
+// The back edges. Each of feedbackBCJumps and feedbackSCJumps -- every
+// operation that jumps, by int32(BC) or by SC -- counts a backward jump's
+// distance of the work its function's budget has left for back edges
+// (package vm's closureCode's jitRegEdges), before plain's handler makes
+// it, taken or not: the count is the function's, which a loop's turns
+// spend, and its end -- the work left none -- ends the interrupt budget
+// (R11 on amd64), so that plain's handler, the jump taken, leaves it to
+// Go's check (regBackEdge), which spends the work counted toward the
+// function's compile (jitRegLoop) and has it counted again. V8's
+// interpreter spends a function's budget so at each JumpLoop; the
+// interrupt budget alone, which ends wherever a program's loops have run
+// it out, had a loop's work sampled.
+var (
+	feedbackBCJumps = []bytecode.ROp{bytecode.RJmp, bytecode.RJmpF, bytecode.RJmpT}
+	feedbackSCJumps = []bytecode.ROp{
+		bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe,
+		bytecode.RJGt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
+		bytecode.RJEq, bytecode.RJNe,
+		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI,
+		bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
+		bytecode.RJEqI, bytecode.RJNeI,
+		bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU,
+		bytecode.RJNull, bytecode.RJNotNull,
+		bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI,
+		bytecode.RJTypeof,
+		// The step-and-branches jump by SC as their partners do, from
+		// the step's own handler where the partner's comparison holds:
+		// their backward jumps are the loops' back edges as the partners'
+		// are where they are not fused.
+		bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI,
+		bytecode.RStepJGeI, bytecode.RStepJLeU,
+	}
+	// feedbackOtherJumps are the jumps feedbackOps has for nothing else.
+	feedbackOtherJumps = func() []bytecode.ROp {
+		var ops []bytecode.ROp
+		for _, op := range append(slices.Clone(feedbackBCJumps), feedbackSCJumps...) {
+			if !slices.Contains(feedbackBigOps, op) {
+				ops = append(ops, op)
+			}
+		}
+		return ops
+	}()
+)
+
+// feedbackJumps reports whether op's handler counts a back edge, and
+// whether its offset is int32(BC) rather than SC.
+func feedbackJumps(op bytecode.ROp) (jumps, bc bool) {
+	if slices.Contains(feedbackBCJumps, op) {
+		return true, true
+	}
+	return slices.Contains(feedbackSCJumps, op), false
+}
+
+// feedbackEdges is the offset of the work left of the function's budget
+// for back edges from the context's cc (closureCode's jitRegEdges), which
+// a backward jump counts down.
+func feedbackEdges() int32 {
+	return ccRel(off("closureCode.jitRegEdges"))
 }
 
 // The BigInt marks. plain's handlers add, subtract, multiply and compare

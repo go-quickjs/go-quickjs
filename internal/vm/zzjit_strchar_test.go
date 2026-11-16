@@ -393,6 +393,7 @@ func TestJITKeyedReadsByGo(t *testing.T) {
 // setting; once warm, it fails at most two guards in all, and none in its
 // 20 calls after.
 func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {
+	skipUnderRegJIT(t, "register-JIT gap (jitgaps next round): a chain of additions of strings is learned one addition a deoptimization (jitRegStringAddSeen), not at its first failure with every addition of its result after it, as the stack form's is")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

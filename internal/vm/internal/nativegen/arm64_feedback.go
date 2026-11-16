@@ -25,8 +25,16 @@ func feedbackARM64(v *variant) (*block, error) {
 		l := a.NewLabel()
 		a.Bind(l)
 		labels[op] = l
+		if jumps, bc := feedbackJumps(op); jumps {
+			feedbackEdgeARM64(a, bc)
+		}
 		if big, ab := feedbackMarksBig(op); big {
 			feedbackBigARM64(a, v, op, ab)
+			continue
+		}
+		if jumps, _ := feedbackJumps(op); jumps {
+			a.Load(rJ, rTab, 8*int32(v.slotPlain(op)))
+			a.Br(rJ)
 			continue
 		}
 		skip := a.NewLabel()
@@ -71,6 +79,30 @@ func feedbackARM64(v *variant) (*block, error) {
 		at[op] = a.Offset(l)
 	}
 	return feedbackBlock(v, code, at), nil
+}
+
+// feedbackEdgeARM64 counts a backward jump, as amd64's feedbackEdgeAMD64:
+// its offset int32(BC) where bc, else SC, of the work its function's
+// budget has left for back edges, and, where none is left, the interrupt
+// budget, rBud, ended. It uses rC, r8 and r9, which plain's handlers set
+// before they read them.
+func feedbackEdgeARM64(a *Asm, bc bool) {
+	fwd := a.NewLabel()
+	if bc {
+		a.Sbfx(rC, rW, 32, 32)
+	} else {
+		a.Sbfx(rC, rW, 48, 16)
+	}
+	a.CmpImm(rC, 0, true)
+	a.BCond(GE, fwd)
+	a.Load(r9, rCtx, ncCC)
+	a.Load(r8, r9, feedbackEdges())
+	a.Op(Add, r8, r8, rC, true)
+	a.Store(r9, feedbackEdges(), r8)
+	a.CmpImm(r8, 0, true)
+	a.BCond(GT, fwd)
+	a.MovImm(rBud, 1)
+	a.Bind(fwd)
 }
 
 // feedbackBigARM64 is feedbackBigAMD64's handler on arm64: where op's two

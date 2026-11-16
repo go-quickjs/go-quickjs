@@ -33,11 +33,15 @@ func init() {
 }
 
 // regStepTaken is a step-and-branch's jump, its comparison holding: to
-// pc+1+off, where its partner jumps; a backward one counts the interrupt
-// budget, and where it is spent goes on at the partner, pc+1, whose slow
-// path makes the interrupt check (regJumpSlow) as it does unfused.
+// pc+1+off, where its partner jumps; a backward one counts, with the JIT,
+// its function's budget (regEdgeTick), as regJump does, and the interrupt
+// budget, and where that is spent goes on at the partner, pc+1, whose
+// slow path makes the interrupt check (regJumpSlow) as it does unfused.
 func regStepTaken(st *regState, pc int, off int32) int {
 	if off < 0 {
+		if jitBuilt {
+			regEdgeTick(st, off)
+		}
 		r := st.r
 		if r.backEdges <= 1 {
 			return pc + 1

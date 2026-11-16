@@ -11,7 +11,7 @@ func (p *Program) Validate() error {
 	if p.Locals < 0 || p.StackSize < 0 || len(p.Globals) > p.Locals || p.This && p.Locals <= len(p.Globals) {
 		return fmt.Errorf("jit IR: invalid slot layout")
 	}
-	if p.ArgumentParams < 0 || p.ArgumentParams > p.Locals {
+	if p.ArgumentParams < 0 || p.ParamBase+p.ArgumentParams > p.Locals {
 		return fmt.Errorf("jit IR: invalid aliased parameters")
 	}
 	reg := p.Origin != nil

@@ -547,10 +547,10 @@ func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	}
 }
 
-// jitRareCallForTest has h make call, of i, once in ten of its calls: less
-// often than jitInliningFrequency.
+// jitRareCallForTest has h make call, of i, once in twenty-five of its
+// calls: less often than jitInliningFrequency.
 func jitRareCallForTest(call string) string {
-	return `var q=0;function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k&&(++q%10===0))t=(t+` + call + `)|0}return t}`
+	return `var q=0;function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k&&(++q%25===0))t=(t+` + call + `)|0}return t}`
 }
 
 // A callee too long to inline (ssa.MaxInline) that its native caller calls
@@ -559,7 +559,7 @@ func jitRareCallForTest(call string) string {
 // that caller is compiled: it would not be inlined in V8 either
 // (jitCalledOften), and Mandreel's per-frame functions, __udivmoddi4's
 // 1,233 instructions among them, had been compiled so. g, called by h's
-// code once in ten of h's calls, is compiled at about its own 400th call,
+// code once in twenty-five of h's calls, is compiled at about its own 400th call,
 // and is called natively by h from then on. Meanwhile h's call waits for
 // it, decided no more at each of g's calls (jitCallWaiting).
 func TestJITLongCalleeWarmsUp(t *testing.T) {
@@ -580,10 +580,10 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 		t.Fatal("h has no code")
 	}
 	decided := r.jit.callsDecided
-	for i := range 10 * (jitInvocationsForMaglev - 8) {
+	for i := range 25 * (jitInvocationsForMaglev - 8) {
 		run(`h(1,1)`)
 		if e := r.jit.entryFor(g.fn); e != nil && e.ssa != nil {
-			t.Fatalf("g compiled at its %d. call", (i+1)/10)
+			t.Fatalf("g compiled at its %d. call", (i+1)/25)
 		}
 	}
 	// h's call waits for g (jitCallWaiting): decided once, not at each of
@@ -591,7 +591,7 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 	if n := r.jit.callsDecided - decided; n > 4 {
 		t.Fatalf("h's call of g decided %d times while g warmed", n)
 	}
-	for range 10 * jitInvocationsForMaglev {
+	for range 25 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}
 	e := r.jit.entryFor(g.fn)
@@ -599,7 +599,7 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 		t.Fatalf("g not compiled once warm: %+v", e)
 	}
 	in := e.link.in
-	run(`h(100,1)`)
+	run(`h(250,1)`)
 	if e.link.in-in < 10 {
 		t.Fatalf("h's code called g natively %d times of 10", e.link.in-in)
 	}
@@ -708,15 +708,15 @@ func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 	if he == nil || he.ssa == nil {
 		t.Fatal("h has no code")
 	}
-	for i := range 10 * (jitInvocationsForMaglev - 8) {
+	for i := range 25 * (jitInvocationsForMaglev - 8) {
 		run(`h(1,1)`)
 		if e := r.jit.entryFor(f.fn); e != nil && e.ssa != nil {
-			t.Fatalf("f compiled at its %d. call", (i+1)/10)
+			t.Fatalf("f compiled at its %d. call", (i+1)/25)
 		}
 	}
 	// Its caches' feedback changes in its first calls, which raises what
 	// is left of its budget (jitWarmUp).
-	for range 20 * jitInvocationsForMaglev {
+	for range 50 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}
 	e := r.jit.entryFor(f.fn)

@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -47,17 +48,27 @@ func jitRegGenCallable(cl *closure) bool {
 	return c != nil && c.wide && c.suspends && !c.args && c.rc == cl.fn.RegCode() && jitcompile.GeneratorResumable(cl.fn)
 }
 
+// regGenNative reports whether a generator of fn, of register code c, is
+// one a loop's step may resume natively (jitRegGenCallable): its values
+// then keep its whole register file (regCode's genFrom 0), which its
+// native code runs on as its registers (mir's windowGenFrame), as the
+// stack form's frame's locals are its generator's.
+func regGenNative(fn *bytecode.Function, c *regCode) bool {
+	return !c.args && jitcompile.GeneratorResumable(fn)
+}
+
 // jitRegGenShape gives f, built from p of cl's register code c, its
 // generator entry where a loop's step may resume its generators natively
 // (jitRegGenCallable): the places it resumes them at (jitRegGenResumes),
-// its window's registers the generator keeps from genFrom.
+// its registers the generator's values, which keep them all (genFrom 0,
+// a synchronous generator's).
 func jitRegGenShape(f *ssa.Func, p *ir.Program, cl *closure, c *regCode) {
-	if cl == nil || c == nil || !jitRegGenCallable(cl) || p.Cells || jitEncoding.GenCallee == 0 {
+	if cl == nil || c == nil || !jitRegGenCallable(cl) || p.Cells || c.genFrom != 0 {
 		return
 	}
 	f.GenResumes = jitRegGenResumes(c.rc, p, f)
 	f.GenEntry = len(f.GenResumes) != 0
-	f.GenWindow, f.GenFrom = true, int(c.genFrom)
+	f.GenWindow = true
 }
 
 // jitRegGenResumes are the places a step resumes a generator of register
@@ -269,11 +280,32 @@ func (r *Runtime) jitRegSuspend(f *frame, c *regCode, wb, rpc int) *suspendSigna
 
 // jitRegGenLevel marks l, a level of register code, the resumption of a
 // generator a loop's step or a call of next made natively (jitGenLevel):
-// its generator, and the step's cursor, nil for a call of next's.
+// its generator, and the step's cursor, nil for a call of next's. Its
+// registers, the generator's values while native code runs it (mir's
+// windowGenFrame), are given the window the code made room for at its
+// base, the level's, which Go reads and writes as any level's: copied
+// there the first time Go finds the level, its context's Locals the
+// window's from then on -- where native code going on reads them, and
+// from which a yield writes them back (mir's windowYieldExit) -- and an
+// exit's description written there (jit.RebaseExitLocals).
 func (r *Runtime) jitRegGenLevel(l *jitRegLevel, c *abi.Context) {
-	if g := jitGenLevel(c, l.cl, abi.ExitHost); g != nil && g.reg {
-		l.gen, l.cursor = g, jitGenCursor(c)
+	g := jitGenLevel(c, l.cl, abi.ExitHost)
+	if g == nil || !g.reg {
+		return
 	}
+	l.gen, l.cursor = g, jitGenCursor(c)
+	n := int(l.c.numRegs)
+	if l.c.genFrom != 0 || len(g.vals) < n || n == 0 {
+		return
+	}
+	vals := unsafe.Pointer(&g.vals[0])
+	if c.Locals != vals {
+		return
+	}
+	w := r.stack[l.wb : l.wb+n : l.wb+n]
+	copy(w, g.vals[:n])
+	c.Locals = unsafe.Pointer(&w[0])
+	jit.RebaseExitLocals(c, vals, c.Locals)
 }
 
 // jitRegGenFill fills f, the frame of l, a generator's level, as regGenRun
@@ -342,27 +374,40 @@ func (r *Runtime) jitRegGenDone(f *frame, l *jitRegLevel, v Value, err error) (V
 // its length spent of its budget (jitRegHot, jitTierWork). Code refused
 // for host operations alone is asked again once its resumptions have done
 // jitHotWork of it, as the stack form's jitHotEntry counts such code's
-// calls (jitEntry's coldWork). A generator of no loop has no back edge to
-// be sampled at, and its resumptions, made by Go from native code whose
-// polls rearm the interrupt budget, spend none of it. Every resumption
-// counted at jitHotWork, an async function whose loop awaits at every
-// turn -- each turn a resumption, too few back edges in all for a sample
-// -- was never compiled.
+// calls (jitEntry's coldWork), the count kept on the closure's template
+// (jitRegColdWork), as the stack form's entry is found by the closure's
+// hint: looked up in the cache at each resumption, an async chain's
+// functions -- each await a resumption -- spent a twentieth of their
+// time on it. A generator of no loop has no back edge to be sampled at,
+// and its resumptions, made by Go from native code whose polls rearm the
+// interrupt budget, spend none of it. Every resumption counted at
+// jitHotWork, an async function whose loop awaits at every turn -- each
+// turn a resumption, too few back edges in all for a sample -- was never
+// compiled.
 func (r *Runtime) jitRegResumed(cl *closure, c *regCode) {
 	cc := cl.closureCode
 	if !r.jitEnabled || cc == nil || cc.jitRegRefused {
 		return
 	}
-	s := r.jitState()
-	key := r.jitRegKeyOf(cl)
-	work := int64(max(len(c.rc.Code), 1))
-	if e := s.regCache[key]; e != nil && e.hostOnly {
-		l := s.regLearnedOf(key)
-		if l.coldWork += uint64(work); l.coldWork < jitHotWork {
+	work := max(len(c.rc.Code), 1)
+	if !cc.jitRegHostOnly {
+		e := r.jitState().regCache[r.jitRegKeyOf(cl)]
+		if e == nil || !e.hostOnly {
+			r.jitRegHot(cl, c, int64(work))
 			return
 		}
-		work = int64(l.coldWork)
-		l.coldWork = 0
+		cc.jitRegHostOnly, cc.jitRegColdWork = true, 0
 	}
-	r.jitRegHot(cl, c, work)
+	cold := int(cc.jitRegColdWork) + min(work, jitHotWork)
+	if cold < jitHotWork {
+		cc.jitRegColdWork = uint16(cold)
+		return
+	}
+	// Asked again, as the cache holds it now: refused so still, with the
+	// work its resumptions did.
+	cc.jitRegHostOnly, cc.jitRegColdWork = false, 0
+	if e := r.jitState().regCache[r.jitRegKeyOf(cl)]; e != nil && e.hostOnly {
+		work = cold
+	}
+	r.jitRegHot(cl, c, int64(work))
 }

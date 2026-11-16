@@ -344,6 +344,11 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 		// its native code entered at the loop's header (jitRegLoop).
 		return r.jitRegLoop(st, target)
 	}
+	if jitBuilt {
+		// No JIT runs: the Go table's jumps count its function's budget
+		// no more (regEdgeTick).
+		regEdgesOff(f.cl)
+	}
 	return target
 }
 

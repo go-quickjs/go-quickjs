@@ -34,11 +34,12 @@ func jitInlinesForTest(t *testing.T, r *Runtime, inlined map[string][]uintptr, n
 	return n
 }
 
-// A call made less often than V8's min_inlining_frequency (0.15) for each
-// invocation of the function compiled, as the existing tiers counted it
-// while the function warmed, is not inlined, whatever its size, and one
-// made more often is: pick calls hot at each of its invocations and cold,
-// as long, once in a hundred; little, of four instructions, once in ten.
+// A call made less often than V8's min_inlining_frequency (0.05, as V8
+// runs) for each invocation of the function compiled, as the existing
+// tiers counted it while the function warmed, is not inlined, whatever its
+// size, and one made more often is: pick calls hot at each of its
+// invocations and cold, as long, once in a hundred; little, of four
+// instructions, once in twenty-five.
 // Each answer is the interpreter's.
 func TestJITInlinesFrequentCalls(t *testing.T) {
 	if !jitSSABackend {
@@ -52,7 +53,7 @@ func TestJITInlinesFrequentCalls(t *testing.T) {
 		function pick(o, i) {
 			let s = hot(o)
 			if (i % 100 === 99) s += cold(o)
-			if (i % 10 === 9) s += little(o)
+			if (i % 25 === 24) s += little(o)
 			return s
 		}
 		function drive(n, o) { let s = 0; for (let i = 0; i < n; i++) s = (s + pick(o, i)) | 0; return s }
@@ -104,9 +105,9 @@ func TestJITInlinesByFrequency(t *testing.T) {
 // call a call, which an inlined frame here does not make, and not
 // inlining the callee for it would leave a call made more often. mid,
 // whose calls the existing tiers counted over its own budget, calls leaf
-// at four in ten of its invocations: pick, calling mid at three in ten,
-// inlines mid with leaf, made 0.12 times one of pick's, below V8's
-// minimum; calling it at one in ten, it inlines neither. pick has a loop,
+// at one in fifty of its invocations: pick, calling mid at three in ten,
+// inlines mid with leaf, made 0.006 times one of pick's, below V8's
+// minimum; calling it at one in twenty-five, it inlines neither. pick has a loop,
 // so that Go enters its code. Each answer is the interpreter's.
 func TestJITInlinesCalleesColdCalls(t *testing.T) {
 	if !jitSSABackend {
@@ -116,7 +117,7 @@ func TestJITInlinesCalleesColdCalls(t *testing.T) {
 	setup := func(often string) string {
 		return `
 		function leaf(o) { let t = (o.x * 3 + o.y) | 0; return t }
-		function mid(o, i) { let s = o.x + 1; if (i % 10 < 4) s += leaf(o); return s }
+		function mid(o, i) { let s = o.x + 1; if (i % 50 === 0) s += leaf(o); return s }
 		function pick(o, i) { let s = o.y; for (let j = 0; j < 2; j++) s = (s * 3 + j) | 0; if (` + often + `) s += mid(o, i); return s }
 		function drive(n, o) { with (o) {} let s = 0; for (let i = 0; i < n; i++) s = (s + pick(o, i)) | 0; return s }
 		function warm(n, o) { with (o) {} let s = 0; for (let i = 0; i < n; i++) s = (s + mid(o, i)) | 0; return s }
@@ -125,7 +126,7 @@ func TestJITInlinesCalleesColdCalls(t *testing.T) {
 	for _, c := range []struct {
 		often string
 		want  int
-	}{{`i % 10 >= 7`, 1}, {`i % 10 === 9`, 0}} {
+	}{{`i % 10 >= 7`, 1}, {`i % 25 === 24`, 0}} {
 		both := jitFreqBothForTest(t, setup(c.often))
 		// mid's own budget spent in warm, and pick's in drive, which the
 		// JIT does not compile (with): their calls counted, neither

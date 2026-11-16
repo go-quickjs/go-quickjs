@@ -97,6 +97,7 @@ func TestJITRegPatternSteps(t *testing.T) {
 				return got[0]
 			}
 			for _, name := range []string{"arrays", "others", "custom", "exhausted", "thrown"} {
+				st0 := r.RegNativeStats()
 				for range 6 {
 					run(name, 200)
 				}
@@ -124,7 +125,12 @@ func TestJITRegPatternSteps(t *testing.T) {
 				if n := st2.WholeLeft - st.WholeLeft; n != 0 {
 					t.Errorf("%s: %d runs whole left native code", name, n)
 				}
-				if st2.Entries == st.Entries {
+				// Native code ran in this call; exhausted's, whose rest
+				// element Go makes at each turn (jitRegIterMade), in the
+				// warm-up's calls or this one's: it is judged not to pay
+				// (jitRegStretchWork) and left to the interpreter, in this
+				// call or before, as its compile comes later or earlier.
+				if from := map[bool]RegNativeStats{false: st, true: st0}[name == "exhausted"]; st2.Entries == from.Entries {
 					t.Errorf("%s: no native code ran", name)
 				}
 			}

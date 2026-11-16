@@ -11,7 +11,7 @@ import (
 )
 
 // regLongSrc's callers call long functions natively, once a call: past
-// what a callee inlined may have (ssa.MaxInline), wide, once in twenty of its
+// what a callee inlined may have (ssa.MaxInline), wide, once in twenty-five of its
 // caller's calls; past it, narrow, at each; and past what a function
 // inlines in all (ssa.MaxInlineTotal), huge, at each.
 func regLongSrc() string {
@@ -26,7 +26,7 @@ func regLongSrc() string {
 function wide(a) { var s = 1; %s return s }
 function narrow(a) { var s = 2; %s return s }
 function huge(a) { var s = 3; %s return s }
-function seldom(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return n %% 20 == 0 ? t + wide(n) : t }
+function seldom(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return n %% 25 == 0 ? t + wide(n) : t }
 function often(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + narrow(n) }
 function always(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + huge(n) }
 `, body(20), body(20), body(120))
@@ -100,7 +100,7 @@ func TestJITRegLongCalleeWarms(t *testing.T) {
 		// seldom has called wide 4 times, always huge 80 times: each
 		// natively once compiled, its budget spent.
 		if code("wide") {
-			t.Errorf("wide, called once in twenty of seldom's calls, compiled before its budget was spent")
+			t.Errorf("wide, called once in twenty-five of seldom's calls, compiled before its budget was spent")
 		}
 		run("seldom", 2*budget, 60*budget)
 		run("always", 2*budget, 4*budget)

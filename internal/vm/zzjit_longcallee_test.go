@@ -33,7 +33,7 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
 			return s
 		}
-		function caller(i) { return i % 10 === 0 ? long(i) : (i * 7) | 0 }
+		function caller(i) { return i % 25 === 0 ? long(i) : (i * 7) | 0 }
 		function run(n) { let t = 0; for (let i = 0; i < n; i++) t = (t + caller(i)) | 0; return t }`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()

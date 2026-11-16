@@ -776,6 +776,10 @@ type closureCode struct {
 	// callee's code and install what is done (tryJITAt). Never set in a
 	// build without the JIT.
 	jitEnters bool
+	// regCallsHeld says regCalls holds what a call made in the running
+	// turn filled, and the template is on the list of those whose caches
+	// the turn's end lets go (regCallsHold, releaseRegCalls).
+	regCallsHeld bool
 	// arrays are this template's empty array literals' sites, in this
 	// realm, by the tree builder's count of them (arrayEmptyNode); nil
 	// where one has not run.
@@ -796,6 +800,10 @@ type closureCode struct {
 	// shape (fwdCache), nil until its site gives up. Last, so that no
 	// field before it moves.
 	fwd *[fwdWays]propCache
+	// regSeen is what regCalls held as a turn's end let it go, each callee
+	// held weakly (regCallSeen), until regCallsRestored makes the entries
+	// again from it; nil when there is none.
+	regSeen []regCallSeen
 }
 
 // closure is a function template paired with the upvalues it captured.

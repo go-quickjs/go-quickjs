@@ -74,6 +74,7 @@ const treeGoOnSetup = `
 // interpreter has them; and the tree takes frames over. At the default
 // thresholds, the functions run in their trees before they are compiled.
 func TestJITTreeGoesOn(t *testing.T) {
+	skipUnderRegJIT(t, "a frame going on in its tree after native code left it (treeGoneOn), the tree tier's; register code goes on in the register interpreter, as TestJITRegGoesOnAtBackEdge checks")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

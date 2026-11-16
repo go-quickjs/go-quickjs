@@ -447,9 +447,10 @@ func TestJITRegKinds(t *testing.T) {
 // regReplaceSrc replaces by RegExps held in bindings, as the V8 suite's
 // RegExp does: a captured binding's global RegExp and a global's, a string
 // template and an empty one, one call's result unused -- leaves, as the
-// stack form's code calls them (jitReplaceLeafSeen) -- and a literal's,
-// which the call makes and gives back, and a function's replacement, which
-// the leaf's check refuses each call of, both left calls of Go.
+// stack form's code calls them (jitReplaceLeafSeen) -- a literal's, which
+// the call makes natively from the literal's pool and the leaf gives back
+// (RMarkLitArg, jitLeafForm's giveArg), and a function's replacement, which
+// the leaf's check refuses each call of, Go then making it.
 const regReplaceSrc = `
 var g = /[aeiou]/;
 var replaces = (function () {
@@ -502,11 +503,11 @@ func TestJITRegReplaceLeaf(t *testing.T) {
 					leaves++
 				}
 			}
-			// The two replaces by bindings' RegExps with string templates
-			// and the one by a function's -- whose leaf's check refuses it,
-			// Go then making the call -- but not the literal's.
-			if leaves != 3 {
-				t.Errorf("%d calls of replace's leaf, want 3", leaves)
+			// The two replaces by bindings' RegExps with string templates,
+			// the literal's, and the one by a function's -- whose leaf's
+			// check refuses it, Go then making the call.
+			if leaves != 4 {
+				t.Errorf("%d calls of replace's leaf, want 4", leaves)
 			}
 		})
 	}

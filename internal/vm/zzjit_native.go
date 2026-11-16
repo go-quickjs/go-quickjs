@@ -473,7 +473,15 @@ type jitCodeFields struct {
 	// jitReg is its code, nil until compiled (zzjit_zregtier.go).
 	jitRegHot, jitRegDeopts uint8
 	jitRegRefused           bool
-	jitReg                  *jitRegEntry
+	// jitRegHostOnly says the cache held the function's code refused for
+	// host operations alone at the last resumption Go made of it, and
+	// jitRegColdWork is the work its resumptions have done since, which
+	// asks again at jitHotWork (jitRegResumed), as the stack form's entry
+	// counts its coldWork, found by the closure's hint (jitResume,
+	// jitHotEntry): no lookup of the cache at each resumption.
+	jitRegHostOnly bool
+	jitRegColdWork uint16
+	jitReg         *jitRegEntry
 	// jitRegKey is the template's function's key in the realm its closures
 	// run in (jitRegKeyOf), made at its first use.
 	jitRegKey jitKey
@@ -487,6 +495,16 @@ type jitCodeFields struct {
 	// dispatcher's returns count (jitRegArm): at 0 they mark its calls
 	// for Go (jitEnters), which spends their runs (jitRegCallTier).
 	jitRegTick, jitRegTickSet int64
+	// jitRegEdges counts down the work of the function's budget left for
+	// its frames' back edges in the interpreter, from jitRegEdgesSet: each
+	// backward jump its distance, which the feedback dispatcher's jumps
+	// (nativegen's feedback.go) and the Go table's (regEdgeTick) subtract,
+	// as V8's JumpLoop spends its function's budget. At 0 or less they end
+	// the budget of back edges, so that the jump's check (regBackEdge)
+	// spends the work counted (jitRegLoop) and counts again
+	// (jitRegArmEdges). 0, the template's at first, has its first back
+	// edge's check begin it.
+	jitRegEdges, jitRegEdgesSet int64
 }
 
 // hint is the hint of the code of cl's function, its template's closures'
@@ -758,6 +776,10 @@ type jitEntry struct {
 	// (jitWarmFor), which holds its budget, tierBudget, and its caches'
 	// mark, tierMark, while the existing tiers spend it (jitWarmUp).
 	warming bool
+	// regFed says the back edges of a register function's frames have
+	// spent the work its caches are given before its budget begins
+	// (jitRegLoop's jitRegFeedbackWork).
+	regFed bool
 	// tierSpends counts the invocations jitTierUp was given, which tells a
 	// call Go makes whether the call's frame counted its invocation
 	// (jitInvokedFrameless).
@@ -767,6 +789,10 @@ type jitEntry struct {
 	// tierBase, with tierMark unchanged (jitLearnedDue).
 	learning bool
 	tierBase int64
+	// tierLearned is what a register function's code had learned
+	// (jitLearnedCount) when its budget for it last began, which a call
+	// of Go its native run makes compares (jitRegLearnedDueWith).
+	tierLearned int
 	// starts counts Go's entries at a function's start, not into a loop;
 	// goOns the runs of it the interpreter went on with where its code
 	// left them (jitGoOn).
@@ -1065,10 +1091,17 @@ type jitState struct {
 	// (jitRegGoOnAt, jitRegLoop), as goOn and forcedCheck are the stack
 	// form's; regGoOnFrom is the code whose run left it, which a frame
 	// that goes on in it again went on in already (jitRegLoopCode), as
-	// goOnEntry is the stack form's.
+	// goOnEntry is the stack form's. regGoOnOSR says whether that run was
+	// begun at a loop's header, by on-stack replacement (jitRegStretch's
+	// osr), and regGoOnRun hands it to the run that goes on with the
+	// frame (jitRegGoOnAt): 1 for a run begun at the function's start, 2
+	// for one begun at a loop, 0 for a run of its own -- the stack form's
+	// frame goes on in its run itself (jitGoOn), judged as that run.
 	regGoOn     *frame
 	regGoOnFrom *jitRegEntry
 	regForced   bool
+	regGoOnOSR  bool
+	regGoOnRun  uint8
 	// regKeptSeeding marks the compiles of register callees that give up
 	// the entries kept for a frame (jitRegCalleesKeptNoEntries), which ask
 	// for no more of them, as seeding is the stack form's.
@@ -1093,8 +1126,11 @@ type jitState struct {
 	// (regFlush).
 	regLowerLook uint64
 	// regHostOps counts register code's host exits by the register
-	// instruction Go ran whole, for tests (RegNativeStats' HostOps).
-	regHostOps map[string]uint64
+	// instruction Go ran whole, by its operation, for tests
+	// (RegNativeStats' HostOps): an array, not a map of the operation's
+	// name, whose hashing and string had cost each exit more than the
+	// rest of counting it.
+	regHostOps [bytecode.ROpCount]uint64
 	// regEnded counts the runs of register code that ended in the
 	// interpreter (interpreted) by why they did, the instruction they
 	// left at and its function, while the JIT reports (RegNativeStats'
@@ -1119,6 +1155,9 @@ type jitState struct {
 	// themselves to their contexts' RecordRef (jit.SSACode's CallRefs),
 	// which a run's end clears (jitRunDone).
 	callRefs uint64
+	// megaGC is the collector's cycle (jitGCEpoch) the megamorphic cache
+	// was last emptied at (flush).
+	megaGC uint64
 	// resumed counts native calls whose callee Go finished, after which
 	// their callers' code went on natively (runSSA); resumedLevels those
 	// whose caller was itself a level Go was finishing (jitUnwindNative).
@@ -2119,6 +2158,20 @@ func (s *jitState) flushNow() uint64 {
 // (rememberFlushed), and the function is compiled again once it is hot
 // again. It looks at a back-edge check (backEdgeBudget) and before a compile (age).
 func (s *jitState) flush() {
+	if g := jitGCEpoch.Load(); g != s.megaGC {
+		// A collection ended since the last look: the megamorphic cache
+		// (abi.MegaCache) is emptied, as V8 clears its stub caches after
+		// every full collection (heap.cc's ClearStubCaches). An entry
+		// holds its shape, which holds its prototype, and so the
+		// prototype's methods and every binding they capture: kept until
+		// another shape took its place, a finished program's shapes had
+		// kept its whole heap alive -- AWFY DeltaBlue's, 17 MB, through
+		// Havlak, every collection of which marked it again.
+		s.megaGC = g
+		if s.mega != nil {
+			clear(s.mega[:])
+		}
+	}
 	tick := s.flushNow()
 	if tick < s.flushedAt+jitFlushAge {
 		return

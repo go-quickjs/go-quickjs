@@ -13,7 +13,7 @@ import (
 // regRelinkSrc's drivers call callees of host operations alone natively,
 // none inlined: short, at each turn of its loop, which is compiled for it
 // at its first call of it (LowerRegInline); and long, past what a callee
-// inlined may have (ssa.MaxInline), in one of twenty of its calls, too
+// inlined may have (ssa.MaxInline), in one of twenty-five of its calls, too
 // seldom to be compiled for it before it has warmed up
 // (jitRegCalledOften).
 func regRelinkSrc() string {
@@ -25,7 +25,7 @@ func regRelinkSrc() string {
 	b.WriteString(" return s % 1000003 }\n")
 	b.WriteString("var O = { k: 5, j: 2 };\n")
 	b.WriteString("function driveShort(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + short(O) + i) | 0; return s }\n")
-	b.WriteString("function driveLong(n) { var t = 0; for (var i = 0; i < 30; i++) t = (t + i * n) | 0; return n % 20 == 0 ? t + long(O) : t }\n")
+	b.WriteString("function driveLong(n) { var t = 0; for (var i = 0; i < 30; i++) t = (t + i * n) | 0; return n % 25 == 0 ? t + long(O) : t }\n")
 	return b.String()
 }
 
@@ -115,6 +115,15 @@ func TestJITRegReleasedCalleeRelinked(t *testing.T) {
 		}
 		t.Logf("calls of Go after it was let go of: %d", regCallsOfGo(r)-calls)
 		l := s.regLinks[key]
+		if k := s.regLinkFor(ne); k != l {
+			// The link stays what the function learned (regForget), read
+			// without its key at host exits and spends (regLinkFor).
+			t.Errorf("short's code compiled again reads link %p, its key's is %p", k, l)
+		}
+		if k := s.regLinkFor(&jitRegEntry{key: key}); k != l {
+			// An entry with no life reads the link by its key.
+			t.Errorf("an entry with no life reads link %p, its key's is %p", k, l)
+		}
 		in, calls := l.in, regCallsOfGo(r)
 		for range 3 {
 			call("driveShort", 200, want)
@@ -187,7 +196,7 @@ func TestJITRegReleasedLongCallee(t *testing.T) {
 					}
 				}
 				// driveLong's next call of it.
-				for n%20 != 0 {
+				for n%25 != 0 {
 					n++
 				}
 				calls := regCallsOfGo(r)

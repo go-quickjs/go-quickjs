@@ -183,6 +183,29 @@ function cursors(n) {
 	}
 	return s;
 }
+function* mixedBody(n) {
+	let s = 0, t = '';
+	for (let i = 0; i < n; i++) {
+		s += i;
+		if (i % 50 === 49) t = t + String.fromCharCode(97 + i % 26) + JSON.stringify({ i });
+		if (i === n - 3) s = 'x' + s;
+		const sent = yield s + ':' + t.length;
+		if (sent !== undefined) s += sent;
+	}
+	return t.length;
+}
+function bodies(n) {
+	let out = '';
+	for (let k = 0; k < 3; k++) {
+		const g = mixedBody(n);
+		let c = 0, last, r;
+		for (r = g.next(); !r.done; r = g.next(k)) { c++; last = r.value; }
+		let f = 0;
+		for (const v of mixedBody(n)) f += typeof v === 'string' ? v.length : 0;
+		out += c + '|' + last + '|' + r.value + '|' + f + ';';
+	}
+	return out;
+}
 function* pair(a, b) { yield a; yield b; }
 function pairs(n) {
 	let s = 0;
@@ -216,6 +239,10 @@ func TestJITRegGenSteps(t *testing.T) {
 		{"pairs", 3000, "4501500"},
 		{"returned", 3000, "4498500,5999,5,true"},
 		{"cursors", 300, "134610"},
+		// Its body leaves native code -- calls of Go, a deoptimization --
+		// where Go makes a window of the generator's values, which native
+		// code going on runs on and a yield writes back (jitRegGenLevel).
+		{"bodies", 200, "200|x1950301980199:38|38|1309;200|x1970011981199:38|38|1309;200|x1989721982199:38|38|1309;"},
 	}
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {

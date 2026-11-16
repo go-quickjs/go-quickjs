@@ -70,7 +70,7 @@ func frequencyCounts(t *testing.T, r *Runtime, name string) (uint32, []uint32) {
 // frame, 43, at the call of call. A call in tail position, not deep in the
 // stack, is counted as any call is: caller's of tail 43, tail's of g 43 of
 // its own 43 runs. Their counts over the runs (jitCallCount) are 3, 1, 0
-// and 1, known from 19 runs on (jitCountsEnough).
+// and 1, known from 59 runs on (jitCountsEnough).
 func TestJITCountsCallsBySite(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -101,7 +101,7 @@ func TestJITCountsCallsBySite(t *testing.T) {
 				if f, ok := jitCallCount(e, pc, 1); ok != (want >= 0) || ok && f != want {
 					t.Errorf("caller's call at %d: frequency %v, %v; want %v", pc, f, ok, want)
 				}
-				if _, ok := jitCallCount(e, pc, 44); ok || jitCountsEnough != 19 {
+				if _, ok := jitCallCount(e, pc, 44); ok || jitCountsEnough != 59 {
 					t.Errorf("caller's call at %d: frequency known of 43 runs, 44 enough (jitCountsEnough %d)", pc, jitCountsEnough)
 				}
 			}

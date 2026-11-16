@@ -18,8 +18,13 @@ import (
 // compiled for.
 type jitLearned struct {
 	// reg marks what a function's register code's native code learned
-	// (jitState's regLearned), whose pcs are register pcs throughout.
-	reg bool
+	// (jitState's regLearned), whose pcs are register pcs throughout;
+	// regLink is the link native callers call its code through
+	// (jitState's regLinks, regLinkOf), nil until a caller asks for one,
+	// read without a key made, as the stack form's code reads its entry's
+	// link.
+	reg     bool
+	regLink *jitLink
 	// failed and failedEntries are the sites, by slot IR PC, and the
 	// entries, by PC, whose speculation failed in the code (jitDeoptimized).
 	failed        []int32

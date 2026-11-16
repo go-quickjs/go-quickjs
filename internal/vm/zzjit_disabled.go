@@ -2,7 +2,10 @@
 
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/regexp"
+import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
+)
 
 // jitBuilt is false: the hooks it guards are compiled out, so the
 // interpreter's code is what it is without the JIT.
@@ -41,6 +44,8 @@ func (*Runtime) jitRegEnter(*frame, *closure, *regCode, int, int) (Value, error)
 }
 func (*Runtime) jitRegLoop(st *regState, target int) int { return target }
 func (*Runtime) jitRegCountsMake(*closureCode, int)      {}
+
+func regGenNative(*bytecode.Function, *regCode) bool { return false }
 
 func (*Runtime) jitRegExpNative(*regexp.Regexp) {}
 
@@ -83,3 +88,9 @@ func (r *Runtime) pureCallCounted(fd *funcData, this Value, args []Value) (Value
 
 // regTickRet counts nothing: there is no budget.
 func regTickRet(*closureCode) {}
+
+// regEdgeTick counts nothing: there is no budget.
+func regEdgeTick(*regState, int32) {}
+
+// regEdgesOff counts nothing: there is no budget.
+func regEdgesOff(*closure) {}

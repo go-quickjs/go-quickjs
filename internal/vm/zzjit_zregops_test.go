@@ -236,6 +236,14 @@ func TestJITRegArrayAlloc(t *testing.T) {
 			}
 			st := rts[0].RegNativeStats()
 			t.Logf("calls of Go %v", st.GoCallOps)
+			// Go makes lists' constructions until its code, which learned
+			// the pools at its first calls of Go, is compiled again: once
+			// it has spent a budget since (jitRegLearnedDueWith), which its
+			// native run counts at each call of Go (jitRegRunWork), raised
+			// from where it learned its second (tierLearned) -- 2,056 of
+			// the 126,000 Go would make for want of them. Counted only at
+			// its polls, as the varied interrupt budget ended, it was 730
+			// at one sequence of budgets and 4,237 at another.
 			if n := st.GoCallOps["new_w->Array"]; n > 3000 {
 				t.Errorf("%d constructions of Array made by Go", n)
 			}
@@ -772,6 +780,127 @@ func TestJITRegGenMake(t *testing.T) {
 			for range 3 {
 				call("main")
 			}
+		})
+	}
+}
+
+// regClassDefsSrc defines classes, methods and object spreads in loops that
+// run natively: a method's home object, a method, a class's field
+// initializer made without the frame (jitRegFrameless), a class linked
+// to its parent and a spread that runs a getter made on the operands
+// (jitRegOpMade), each throwing where the interpreter throws: a parent
+// that is no constructor, a getter that throws.
+const regClassDefsSrc = `
+function classes(n) {
+	var s = 0;
+	for (var j = 0; j < n; j++) {
+		var B = class { constructor(a) { this.a = a } get() { return this.a } static name() { return "B" } };
+		var C = class extends B { f = j & 3; get() { return super.get() + this.f } };
+		var o = new C(j);
+		s += o.get() + B.name().length;
+		try {
+			var P = j % 97 == 5 ? 1 : B;
+			var D = class extends P {};
+			s += new D(1).a;
+		} catch (e) { s += e instanceof TypeError ? 1000 : -1 }
+	}
+	return s;
+}
+function spreads(n) {
+	var ref = { a: 1, get b() { if (this.a > 400) throw new RangeError("b " + this.a); return this.a + 1 }, c: 3 }, s = 0;
+	for (var j = 0; j < n; j++) {
+		ref.a = j;
+		try {
+			var o = { ...ref, k: j, m() { return super.toString === Object.prototype.toString } };
+			s += o.b + o.k + (o.m() ? 1 : 0);
+		} catch (e) { s += e instanceof RangeError ? 7 : -1 }
+	}
+	return s;
+}
+function main(n) { return classes(n) + ":" + spreads(n) }
+`
+
+// TestJITRegClassDefinitions runs regClassDefsSrc's main natively and in a runtime
+// without the JIT, the collector idle and marking.
+func TestJITRegClassDefinitions(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			rts := regNativeRuntimes(t, regClassDefsSrc)
+			rts[0].SetJITReport(true)
+			for i, r := range rts {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("main"))
+				for range 10 {
+					v, err := r.Call(fn, Undefined, []Value{Float(500)})
+					if got := regNativeShow(r, v, err); got != "132494:161895" {
+						t.Fatalf("runtime %d: %q, want 132494:161895", i, got)
+					}
+				}
+			}
+			t.Logf("calls of Go %v", rts[0].RegNativeStats().GoCallOps)
+		})
+	}
+}
+
+// regLitArgSrc gives replace, split and match RegExp literals the calls
+// make (RMarkLitArg), which native code takes from the literals' pools:
+// replace's leaf, a dead replace's, a replace by a function and split's
+// and match's calls of Go give them back; then a RegExp.prototype whose
+// Symbol.split keeps the RegExps it is given, each of which must be one
+// of its own -- none given back while kept.
+const regLitArgSrc = `
+function lits(s, n) {
+	var k = 0, last = "";
+	for (var i = 0; i < n; i++) {
+		last = s.replace(/[aeiou]/g, "_");
+		s.replace(/x/, "y");
+		k += s.replace(/\s/g, function (m) { return "[" + m + "]" }).length;
+		k += s.split(/\s+/).length + (s.match(/[a-z]/g) || []).length;
+	}
+	return last + ":" + k;
+}
+function kept(s, n) {
+	var seen = [], split = RegExp.prototype[Symbol.split];
+	RegExp.prototype[Symbol.split] = function (str, lim) { seen.push(this); return split.call(this, str, lim) };
+	try {
+		for (var i = 0; i < n; i++) s.split(/\s/);
+	} finally {
+		RegExp.prototype[Symbol.split] = split;
+	}
+	return new Set(seen).size;
+}
+function main(n) { return lits("the quick brown fox", n) + ":" + kept("a b", n) }
+`
+
+// TestJITRegLitArg runs regLitArgSrc's main natively and in a runtime
+// without the JIT, the collector idle and marking.
+func TestJITRegLitArg(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			rts := regNativeRuntimes(t, regLitArgSrc)
+			rts[0].SetJITReport(true)
+			for i, r := range rts {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("main"))
+				for range 6 {
+					v, err := r.Call(fn, Undefined, []Value{Float(1000)})
+					if got := regNativeShow(r, v, err); got != "th_ q__ck br_wn f_x:45000:1000" {
+						t.Fatalf("runtime %d: %q", i, got)
+					}
+				}
+			}
+			st := rts[0].RegNativeStats()
+			t.Logf("entries %d hosts %v calls of Go %v leaves %d", st.Entries, st.HostOps, st.GoCallOps, rts[0].jit.leafFast)
 		})
 	}
 }

@@ -242,14 +242,14 @@ func TestJITLongCodeBudget(t *testing.T) {
 	e := &jitRegEntry{key: key, p: p, life: s.regLearnedOf(key)}
 	// A budget short of the footprint alone, whatever the cache lets go.
 	r.jitMemoryLimit = int64(need - 1)
-	if r.jitRegPlace(e, cl.reg, rf, f, mc, looped) || e.code != nil || e.refusal != "" || !e.life.deferred || e.life.generation != s.generation {
+	if r.jitRegPlace(e, cl.reg, rf, f, mc, looped, nil) || e.code != nil || e.refusal != "" || !e.life.deferred || e.life.generation != s.generation {
 		t.Fatalf("no room: placed %v, refusal %q, deferred %v", e.code != nil, e.refusal, e.life.deferred)
 	}
 	if now, _ := s.arena.Mapped(); now != mapped || s.unavailable {
 		t.Fatalf("no room: %d bytes mapped, %d before; unavailable %v", now, mapped, s.unavailable)
 	}
 	r.jitMemoryLimit = int64(s.held() + need)
-	if !r.jitRegPlace(e, cl.reg, rf, f, mc, looped) || e.code == nil || e.refusal != "" || e.life.deferred {
+	if !r.jitRegPlace(e, cl.reg, rf, f, mc, looped, nil) || e.code == nil || e.refusal != "" || e.life.deferred {
 		t.Fatalf("room: placed %v, refusal %q, deferred %v", e.code != nil, e.refusal, e.life.deferred)
 	}
 	defer e.code.Close()

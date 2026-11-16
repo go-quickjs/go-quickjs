@@ -24,6 +24,22 @@ func ApplyExit(ctx *abi.Context) (refs int) {
 	return s.Apply(ctx)
 }
 
+// RebaseExitLocals has an exit that left its frame to Go (abi.ExitTable),
+// whose code's frame was at from, write it at to instead: the locals'
+// register it saved, if it is from, made to. Go moves a frame so where
+// native code ran on memory of the VM's own (a register generator's
+// values) and Go reads the frame where it reads any frame's. Any other
+// exit it leaves alone.
+func RebaseExitLocals(ctx *abi.Context, from, to unsafe.Pointer) {
+	if ctx.ExitKind != abi.ExitTable {
+		return
+	}
+	d := (*abi.ExitDescriptor)(asPointer((*uint64)(unsafe.Pointer(&ctx.ExitDesc))))
+	if at := &ctx.Regs[d.LocalsReg]; asPointer(at) == from {
+		*at = uint64(uintptr(to))
+	}
+}
+
 // ExitScratch is the memory ApplyExit reads an exit's values into before
 // it writes them, kept from exit to exit: an array on the stack, cleared at
 // each exit as Go clears any memory that holds pointers, cost more than the

@@ -282,3 +282,39 @@ func TestJITRegKeptEntryStaysForCallsThatLeave(t *testing.T) {
 		t.Fatalf("calls that ran their loop through kept the entry: %+v", e)
 	}
 }
+
+// TestJITRegGoOnJudgedAsRun has every call of a short loop leave native
+// code at its sixth turn of seven, the call begun at the function's start:
+// the turn after it goes on natively at the loop's header in a run judged
+// as the run that left (jitRegLeaveTo's osr, regGoOnRun), begun at the
+// start, as the stack form's frame goes on in its run itself (jitGoOn).
+// Judged as begun at the loop, by on-stack replacement, each one-turn
+// stretch had the code found slow for its loop (loopSlow) at once: the
+// rest of every call ran in the interpreter, and the loop's entry was
+// never learned back for the frames that leave (jitRegFramesLeave).
+func TestJITRegGoOnJudgedAsRun(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			rts := regNativeRuntimes(t, regCarriedExitSrc)
+			rts[0].jitStress = jitStressConfig{}
+			for range 3 {
+				regCarriedCall(t, rts, "140000", "calls", 20000, 7, 5)
+			}
+			e := regCodeNamed(t, rts[0], "early")
+			if e == nil || e.code == nil {
+				t.Fatalf("early has no register code: %+v", e)
+			}
+			t.Logf("early: loops %v unentered %v loopSlow %v entrySlow %v starts %d entries %d work %d loopMean %d", e.loops, e.unentered,
+				e.life.loopSlow, e.life.entrySlow, e.life.starts, e.life.ssaStats.entries, e.life.ssaStats.work, e.loopMean)
+			if e.life.loopSlow || len(e.loops) == 0 {
+				t.Errorf("the frames that leave do not go on natively at the loop: loopSlow %v, loops %v", e.life.loopSlow, e.loops)
+			}
+		})
+	}
+}

@@ -67,23 +67,22 @@ func TestJITHotCallsAnyOrder(t *testing.T) {
 	// Until moves is compiled once hot: within a few runs, later where the
 	// collector runs often, its code for native callers made again
 	// meanwhile.
-	cl := r.global.getOwn(r.atoms.intern("moves")).value().Object().fn().closure
 	var e *jitEntry
-	for i := 0; i < 20 && (e == nil || !e.hot); i++ {
+	for i := 0; i < 20 && e == nil; i++ {
 		if _, err := r.Run(compileForTest(t, `run(second)`)); err != nil {
 			t.Fatal(err)
 		}
-		e = r.jit.hint(cl)
+		e = jitHotForTest(r, "moves")
 	}
-	if e == nil || !e.hot || e.ssa == nil {
+	if e == nil {
 		t.Fatalf("moves not compiled once hot in 20 runs: %+v", e)
 	}
-	entries, in := e.ssaStats.entries, e.link.in
+	uses := jitNativeUsesForTest(r, "moves")
 	if _, err := r.Run(compileForTest(t, `run(second)`)); err != nil {
 		t.Fatal(err)
 	}
 	// 4 * (2**13 - 1) calls of moves in all.
-	if n := e.ssaStats.entries - entries + e.link.in - in; n < 4*8000 {
+	if n := jitNativeUsesForTest(r, "moves") - uses; n < 4*8000 {
 		t.Errorf("moves ran natively %d times of %d: slow %v notNative %v stats %+v", n, 4*(1<<13-1), e.entrySlow, e.notNative, e.ssaStats)
 	}
 }
@@ -113,15 +112,14 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("moves")).value().Object().fn().closure
 	var e *jitEntry
-	for i := 0; i < 20 && (e == nil || !e.hot || e.reoptPending() || len(e.nativeCalls) == 0); i++ {
+	for i := 0; i < 20 && (e == nil || e.reoptPending() || len(e.nativeCalls) == 0); i++ {
 		if _, err := r.Run(compileForTest(t, `run()`)); err != nil {
 			t.Fatal(err)
 		}
-		e = r.jit.hint(cl)
+		e = jitHotForTest(r, "moves")
 	}
-	if e == nil || !e.hot || e.ssa == nil || e.entrySlow || len(e.nativeCalls) == 0 {
+	if e == nil || e.entrySlow || len(e.nativeCalls) == 0 {
 		t.Fatalf("moves not compiled once hot to call itself natively: %+v", e)
 	}
 	*marking = 1
@@ -132,10 +130,25 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 			t.Fatalf("run() = %v, %v", v, err)
 		}
 	}
-	if r.jit.goCalls != made || e.entrySlow || r.jit.hint(cl) != e {
+	if now := jitHotForTest(r, "moves"); r.jit.goCalls != made || e.entrySlow || now != e {
 		t.Errorf("moves, its calls made by Go while the collector marked (%d), judged slow %v (current %v): %+v",
-			r.jit.goCalls-made, e.entrySlow, r.jit.hint(cl) == e, e.ssaStats)
+			r.jit.goCalls-made, e.entrySlow, now == e, e.ssaStats)
 	}
+}
+
+// jitHotForTest is the entry of the global function name's code compiled
+// once hot (LowerSSAHot), nil where it has none: or, where r runs register
+// code, its register code's state, the code compiled as the register
+// form's compiles a function of calls and no loop (LowerRegHot).
+func jitHotForTest(r *Runtime, name string) *jitEntry {
+	if jitRegCodeForTest(r, name) {
+		return jitRegLifeForTest(r, name)
+	}
+	e := r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure)
+	if e == nil || !e.hot || e.ssa == nil {
+		return nil
+	}
+	return e
 }
 
 // A function of calls and no loop is not compiled hot where each of its
@@ -167,25 +180,41 @@ func TestJITHotCallsOfGoOnly(t *testing.T) {
 	closure := func(name string) *closure {
 		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
-	re := r.jit.entryFor(closure("read").fn)
-	if re == nil || re.ssa == nil {
+	// Asked of the register form's code where the runtime runs it
+	// (jitRegCallsNatively), as of the stack form's.
+	callsNatively := func(name string) bool {
+		cl := closure(name)
+		if jitRegCodeForTest(r, name) {
+			if cl.reg == nil {
+				t.Fatalf("%s has no register code", name)
+			}
+			return r.jitRegCallsNatively(cl, cl.reg)
+		}
+		return r.jitCallsNatively(cl)
+	}
+	re := jitCodeForTest(r, "read")
+	if re == nil {
 		t.Fatalf("read has no code: %+v", re)
 	}
 	re.notNative = true
-	if r.jitCallsNatively(closure("readChar")) {
+	if callsNatively("readChar") {
 		t.Error("readChar's call of read, which native callers do not call, taken for a native one")
 	}
 	re.notNative = false
-	if !r.jitCallsNatively(closure("readChar")) {
+	if !callsNatively("readChar") {
 		t.Error("readChar's call of read, which native callers call, not taken for a native one")
 	}
-	if !r.jitCallsNatively(closure("self")) {
+	if !callsNatively("self") {
 		t.Error("a recursion not taken for a native call")
 	}
-	if e := r.jit.entryFor(closure("later").fn); e != nil {
+	if jitRegCodeForTest(r, "fresh") {
+		if l := r.jit.regLearned[r.jitRegKeyOf(closure("later"))]; r.jitRegHas(closure("later")) || l != nil && (l.warming || l.invalid) {
+			t.Skipf("later was compiled, or is warming: %+v", l)
+		}
+	} else if e := r.jit.entryFor(closure("later").fn); e != nil {
 		t.Skipf("later was compiled: %+v", e)
 	}
-	if !r.jitCallsNatively(closure("fresh")) {
+	if !callsNatively("fresh") {
 		t.Error("a call of a function with no code yet not taken for a native one")
 	}
 }

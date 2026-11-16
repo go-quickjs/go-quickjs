@@ -291,7 +291,8 @@ func (r *Runtime) jitCallFrequency(e *jitEntry, pc int) (float64, bool) {
 // jitCountsEnough is how many of a function's invocations the existing
 // tiers count before its frequencies are known (jitCallFrequency): the
 // fewest in which a call made at V8's minimum frequency
-// (ssa.MinInliningFrequency, 0.15) is made at least once 19 times in 20,
+// (ssa.MinInliningFrequency, 0.05) is made at least once 19 times in 20,
+// 59 invocations,
 // so that a call counted none of the times is cold. A function compiled
 // after fewer -- by on-stack replacement at a long loop, its first
 // invocations, or for a native caller -- has its calls ordered as before

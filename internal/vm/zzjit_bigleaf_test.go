@@ -328,12 +328,12 @@ func TestJITBigLeaf(t *testing.T) {
 	// What the leaf gave up: strmix's sum, which meets strings, and none of
 	// squares' or huge's, past any block given back, made in new ones.
 	for name, want := range map[string]bool{"strmix": true, "huge": false, "squares": false} {
-		e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
-		if e == nil || e.ssa == nil {
+		code := jitSSACodeForTest(r, name)
+		if code == nil {
 			t.Fatalf("%s has no code", name)
 		}
 		off := false
-		for _, st := range e.ssa.GoCallStates() {
+		for _, st := range code.GoCallStates() {
 			off = off || st.BigOff
 		}
 		if off != want {

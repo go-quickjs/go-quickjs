@@ -286,6 +286,12 @@ func TestJITForwardersInlined(t *testing.T) {
 				if marking {
 					jitMarkingForTest(t)
 				}
+				if stress == (jitStressConfig{}) {
+					// Its count of plain's exits, which a collection
+					// ended during the rounds before adds one to, at
+					// plain's megamorphic read of this.k.
+					jitCollectorHeldForTest(t)
+				}
 				both := jitBothForTest(t, forwardInlineSetup)
 				r := both.jit
 				r.jitStress = stress

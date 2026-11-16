@@ -1784,6 +1784,8 @@ handler before them, and `runReg`, `nativeLoop`, the dispatch and
   path, which goes on at pc+1; a bound that is not a number, or a
   backward jump with the interrupt budget spent, commits the step and goes
   on at the partner, whose slow path compares and checks the interrupt.
+  With the JIT, its backward jump also spends its function's budget, as
+  the partner's does (internal/jit/README.md, the back edges' count).
   The step's throws are placed at its SrcPC, the comparison's at the
   partner's. The JIT lowers it as its step alone, falling to the partner.
   regcomp's `finish` fuses each adjacent pair (`fuseSteps`), loops or not,

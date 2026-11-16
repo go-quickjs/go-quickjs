@@ -4,6 +4,7 @@ package vm
 
 import (
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -115,6 +116,25 @@ func (x *regRunner) Run(p *ir.Program, pc int, in *ir.Instruction, slots []ir.Va
 		return 0, false, nil
 	}
 	x.steps++
+	for err == nil && next >= 0 && next < len(x.c.rc.Code) && regLoweredAway(p, regAt(x.c.code, next), next) {
+		// The program does nothing at next because an instruction before
+		// it did next's work: a comparison's value, boolBranch's Binary,
+		// stands for the compare-and-branch and the load the branch goes
+		// to, the load and the jump past the other one Nops. Run whole,
+		// the compare-and-branch wrote no register, so the interpreter
+		// goes on with the load, and the jump, as runReg would, to where
+		// the program does its own instruction's work: the Nops had gone
+		// on past them with the register as it was -- lits()'s k[0] ===
+		// k[1] the lastIndex the register held before, tof's typeof x ===
+		// t the typeof that register held.
+		at := next
+		var ok bool
+		next, ok, err = x.r.regWhole(x.f, x.c, x.wb, at)
+		if !ok {
+			return 0, false, fmt.Errorf("vm: register pc %d, lowered away, not run whole", at)
+		}
+		x.steps++
+	}
 	if err != nil {
 		x.thrown = err
 		return 0, false, errRegThrown
@@ -125,6 +145,17 @@ func (x *regRunner) Run(p *ir.Program, pc int, in *ir.Instruction, slots []ir.Va
 		return 0, false, nil
 	}
 	return n, true, nil
+}
+
+// regLoweredAway reports whether p's lowering of w, register code's
+// instruction at rpc, is a lone Nop, w no nop: what it does, an
+// instruction before it did (compile's boolBranch).
+func regLoweredAway(p *ir.Program, w bytecode.RInstr, rpc int) bool {
+	if w.Op() == bytecode.RNop || rpc+1 >= len(p.Starts) {
+		return false
+	}
+	s := int(p.Starts[rpc])
+	return int(p.Starts[rpc+1]) == s+1 && s < len(p.Code) && p.Code[s].Op == ir.Nop
 }
 
 // regWholeRuns reports whether regWhole may run w: not a return, a

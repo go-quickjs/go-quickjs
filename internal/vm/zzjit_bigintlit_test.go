@@ -46,8 +46,8 @@ func TestJITBigIntLiterals(t *testing.T) {
 	}
 	r := jitDefaultRuns(t, bigIntLitSetup, srcs...)
 	for _, name := range []string{"digits", "text"} {
-		e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
-		if e == nil || e.ssa == nil || e.invalid {
+		e := jitCodeForTest(r, name)
+		if e == nil || e.invalid {
 			if e != nil {
 				t.Fatalf("%s has no code: invalid %v, refusal %q", name, e.invalid, e.refusal)
 			}

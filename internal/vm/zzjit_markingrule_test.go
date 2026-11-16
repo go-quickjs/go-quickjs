@@ -174,6 +174,7 @@ func jitMarkingRegRun(t *testing.T, src string, names []string, marking bool) ma
 	compiler.SetRegisterForm(true)
 	prog := compileForTest(t, src)
 	compiler.SetRegisterForm(false)
+	defer compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
 	defer SetRegTier(bytecode.RegDefault())
 	defer SetJITRegTier(SetJITRegTier(true))

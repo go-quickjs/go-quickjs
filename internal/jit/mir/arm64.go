@@ -3753,10 +3753,12 @@ func (c *a64Compiler) windowGenEntry() {
 	c.a.Br(arm64.Reg(10))
 }
 
-// windowGenFrame is amd64's: the generator's window made past the VM's
-// stack's top from its values, its callee and its receiver, the value sent
-// in to the yield's register, the context made, the generator running,
-// and on at blk.
+// windowGenFrame is amd64's: the generator's frame its values, which keep
+// its whole register file, nothing copied; room past the VM's stack's top
+// for what the code keeps past its registers and for the window Go makes
+// of them where the code leaves native code; the value sent in written to
+// the yield's register, its pointer word through storeRef while the
+// collector marks; the context made, the generator running, and on at blk.
 func (c *a64Compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	vs := int32(c.enc.ValueSize)
 	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
@@ -3767,8 +3769,8 @@ func (c *a64Compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Load(a64A, a64CallLink, c.enc.LinkIn)
 	c.a.AddImm(a64A, a64A, 1, true)
 	c.a.Store(a64CallLink, c.enc.LinkIn, a64A)
-	// The window past the VM's stack's top, which moves past it and what
-	// the code keeps past it, its high water with it.
+	// The room past the VM's stack's top, which moves past it, its high
+	// water with it.
 	c.a.Load(u, a64Ctx, abi.OffStackTop)
 	c.a.Load(t, u, 0)
 	c.a.Store(next, abi.OffBase, t)
@@ -3783,9 +3785,11 @@ func (c *a64Compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Bind(same)
 	c.a.Load(u, a64Ctx, abi.OffStackBase)
 	c.a.AddLsl(t, u, t, 4)
-	c.a.Store(next, abi.OffLocals, t)
 	c.a.AddImm(a64A, t, int64(c.f.FrameLocals+c.f.Scratch)*int64(vs), true)
 	c.a.Store(next, abi.OffStack, a64A)
+	// Its registers, the generator's values.
+	c.a.Load(u, g, c.enc.GenVals)
+	c.a.Store(next, abi.OffLocals, u)
 	c.a.Store(next, abi.OffOpen, arm64.ZR)
 	c.a.Store(next, abi.OffCells, arm64.ZR)
 	if c.f.Loops {
@@ -3793,37 +3797,29 @@ func (c *a64Compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
 	}
 	c.a.MovImm(a64A, abi.LiveCall)
 	c.a.Store(next, abi.OffLive, a64A)
-	// As amd64's: its registers from GenFrom, the generator's values, with
-	// no barrier.
-	from := int32(c.f.GenFrom)
-	c.a.Load(u, g, c.enc.GenVals)
-	c.copyValues(t, from*vs, u, 0, int32(c.f.FrameLocals)-from)
-	if from != 0 {
-		// The callee's register, the generator's function object or
-		// undefined, and this's, its receiver.
-		for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-			c.a.Load(a64A, g, c.enc.GenThis+w)
-			c.a.Store(t, vs+w, a64A)
-		}
-		c.a.Load(a64A, g, c.enc.GenCallee)
-		c.a.Store(t, c.enc.RefOffset, a64A)
-		c.movImm(a64B, c.enc.Undefined)
-		none := c.a.NewLabel()
-		c.a.Cbz(a64A, none, true)
-		c.movImm(a64B, c.enc.Object)
-		c.a.Bind(none)
-		c.a.Store(t, c.enc.NumOffset, a64B)
-	}
-	if gr.Sent >= 0 {
-		// The value sent in, the context's (abi.Context's GenSent).
-		for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-			c.a.Load(a64A, next, abi.OffGenSent+w)
-			c.a.Store(t, int32(gr.Sent)*vs+w, a64A)
-		}
-	}
 	c.a.MovImm(a64A, uint64(c.enc.GenExecuting))
 	c.a.Store8(g, c.enc.GenState, a64A)
 	c.a.MovRR(a64Ctx, next)
+	if gr.Sent >= 0 {
+		// The value sent in, the context's (abi.Context's GenSent), stored
+		// in the generator as amd64's.
+		at := int32(gr.Sent) * vs
+		c.a.Load(a64A, a64Ctx, abi.OffGenSent+c.enc.NumOffset)
+		c.a.Store(u, at+c.enc.NumOffset, a64A)
+		marked, stored := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(a64C, c.enc.WriteBarrier)
+		c.a.LoadU8(a64C, a64C, 0)
+		c.a.Cbnz(a64C, marked, false)
+		c.a.Load(a64A, a64Ctx, abi.OffGenSent+c.enc.RefOffset)
+		c.a.Store(u, at+c.enc.RefOffset, a64A)
+		c.a.B(stored)
+		c.a.Bind(marked)
+		c.a.Load(a64A, a64Ctx, abi.OffLocals)
+		c.a.AddImm(a64A, a64A, int64(at+c.enc.RefOffset), true)
+		c.a.Load(a64C, a64Ctx, abi.OffGenSent+c.enc.RefOffset)
+		c.refStore()
+		c.a.Bind(stored)
+	}
 	c.a.B(c.labels[blk.ID])
 }
 
@@ -3859,8 +3855,8 @@ func (c *a64Compiler) copyValues(dst arm64.Reg, doff int32, src arm64.Reg, soff 
 }
 
 // windowYieldExit is amd64's: register code's yield, suspended natively in
-// code a loop's step or a call of next resumed natively, the window's
-// registers written back to the generator's values, the value in the
+// code a loop's step or a call of next resumed natively, a window Go made
+// of the generator's values written back to them, the value in the
 // yield's register returned to the step; the exit otherwise.
 func (c *a64Compiler) windowYieldExit(b *ssa.Block) {
 	s := b.State
@@ -3870,9 +3866,15 @@ func (c *a64Compiler) windowYieldExit(b *ssa.Block) {
 	then := c.a.NewLabel()
 	c.exitThen(s, abi.ExitHost, &then)
 	c.a.Bind(then)
-	from, n := int32(c.f.GenFrom), int32(c.f.FrameLocals-c.f.GenFrom)
-	if n > 0 {
-		c.windowWriteBack(from, n)
+	if n := int32(c.f.FrameLocals); n > 0 {
+		// As amd64's: written back from a window Go made of them alone.
+		own := c.a.NewLabel()
+		c.a.Load(a64B, a64Ctx, abi.OffGenObject)
+		c.a.Load(a64B, a64B, c.enc.GenVals)
+		c.a.Cmp(a64B, a64Locals, true)
+		c.a.BCond(arm64.EQ, own)
+		c.windowWriteBack(0, n)
+		c.a.Bind(own)
 	}
 	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
 	c.a.MovImm(a64A, uint64(s.PC)+1)

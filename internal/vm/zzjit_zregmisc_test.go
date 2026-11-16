@@ -299,12 +299,17 @@ func TestJITRegLoopsLeaving(t *testing.T) {
 				}
 			}
 			// 20 calls of 2 fills of 4096 stores, those to a sparse array
-			// Go's: a run's worth of them, 64, left at before the loop is
-			// judged not to pay, which the run then leaves (Ended's slow
-			// loop), and as many again each time a loop's checks of the code
-			// retry it (jitRegRetrySlow, counting them as calls, as the
-			// stack form's tryJITAt does): 2624, against 3072 where the run
-			// went on natively after each.
+			// Go's: a run's worth of them, 64, left at for each probe before
+			// the loop is judged not to pay -- the work the code did
+			// natively before, in the fills' other loops, wears off at 12 a
+			// store -- which the run then leaves (Ended's slow loop), and as
+			// many again each time a loop's checks of the code retry it
+			// (jitRegRetrySlow, counting them as calls, as the stack form's
+			// tryJITAt does): 2624 with the loop compiled at a sample, 3072
+			// compiled where its count of back edges spent its budget
+			// (jitRegEdges), which then ran natively longer before; less
+			// than a fill's stores, against 108,863 where the run went on
+			// natively after each, never judged.
 			slow := uint64(0)
 			for k, n := range st.Ended {
 				if strings.HasPrefix(k, "slow loop at ") && strings.HasSuffix(k, " in fillDown") {
@@ -314,7 +319,7 @@ func TestJITRegLoopsLeaving(t *testing.T) {
 			if slow == 0 {
 				t.Errorf("fillDown's loop never left for the interpreter once judged slow: %v", st.Ended)
 			}
-			if n := st.HostOps["set_index"]; n >= 3072 {
+			if n := st.HostOps["set_index"]; n >= 4096 {
 				t.Errorf("set_index left to Go %d times, the loop going on natively after each", n)
 			}
 		})
