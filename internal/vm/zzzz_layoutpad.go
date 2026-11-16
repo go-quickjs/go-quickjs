@@ -403,6 +403,9 @@ func init() {
 		if layoutPadNCZ >= 0 {
 			layoutPadCZ[struct{}]()
 		}
+		if layoutPadNH >= 0 {
+			layoutPadH()
+		}
 		layoutPadPtrs[0] = unsafe.Pointer(&layoutPadDH0)
 		layoutPadPtrs[1] = unsafe.Pointer(&layoutPadDH1)
 		layoutPadPtrs[2] = unsafe.Pointer(&layoutPadDH2)

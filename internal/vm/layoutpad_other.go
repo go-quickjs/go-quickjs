@@ -44,7 +44,11 @@ const (
 	layoutPadNGZ = -1
 	layoutPadNMZ = -1
 	layoutPadNCZ = -1
+	layoutPadNH  = -1
 	layoutPadNDH = 0
 	layoutPadNDW = 0
 	layoutPadNDG = 0
 )
+
+// layoutPadH stands for the assembly pad, which this platform has not.
+func layoutPadH() {}

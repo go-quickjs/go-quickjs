@@ -6746,8 +6746,13 @@ func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
 				e.notInline = append(e.notInline, x.pc)
 				if e.callSites != nil {
 					e.callSites[pc] = jitCallDone
-					if r.jitNativeCallee(x.cl) != nil {
-						// A construction's with its pool.
+					if x.obj != nil && r.jitNativeCallee(x.cl) != nil {
+						// A construction's with its pool. A callee inlined
+						// by its closure alone, as register code's inlined
+						// levels are learned, has no object to be called
+						// natively by: its call is the generic one, which
+						// regCallTargets had met as a native call of no
+						// object and crashed on.
 						e.nativeCalls = append(e.nativeCalls, jitInline{pc: x.pc, cl: x.cl, obj: x.obj, pool: x.pool})
 						e.callSites[pc] = jitCallNative
 					}

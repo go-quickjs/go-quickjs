@@ -47,9 +47,10 @@ func (r *Runtime) initJSONBuiltins() {
 		}
 		reviver := arg(args, 1)
 		// A reviver is told the source text of each primitive it is handed,
-		// so the parse keeps a record of it; without one there is nothing to
-		// keep.
-		v, rec, err := parseJSONOf[struct{}](rt, s, isCallable(reviver))
+		// so the parse keeps a record of it; without one, or with one that
+		// cannot see the context it is told it in, there is nothing to keep.
+		context := isCallable(reviver) && rt.seesThirdArg(reviver)
+		v, rec, err := parseJSONOf[struct{}](rt, s, context)
 		if err != nil || !isCallable(reviver) {
 			return v, err
 		}
@@ -57,7 +58,14 @@ func (r *Runtime) initJSONBuiltins() {
 		// revived by the time its parent sees it.
 		root := newObject(rt.proto.object, ClassObject)
 		root.setOwnRaw(rt.atoms.intern(""), v, propDefault)
-		return rt.reviveJSON(root, Str(emptyString), reviver, rec)
+		rv := &jsonReviver{fn: reviver, context: context}
+		if !context {
+			rv.cb = rt.regCallbackOf(reviver, Obj(root))
+			if rv.cb != nil {
+				defer rv.cb.end()
+			}
+		}
+		return rt.reviveJSON(root, Str(emptyString), rv, rec)
 	})
 
 	// JSON.rawJSON makes a value stringify emits as the text it was given,
@@ -423,13 +431,43 @@ func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
 // a primitive the parse produced. A value the reviver has replaced by then --
 // by changing a property it has yet to reach -- has no source, since the text
 // is not the text of that value.
-func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value, rec *jsonRecord) (Value, error) {
+func (r *Runtime) reviveJSON(holder *Object, key Value, reviver *jsonReviver, rec *jsonRecord) (Value, error) {
 	return r.reviveJSONAt(holder, atomEmpty, key, reviver, rec, 0)
+}
+
+// jsonReviver is a reviver as JSON.parse calls it: context says it is
+// given the context object, which a reviver that cannot see a third
+// argument is not (seesThirdArg), nor has the parse kept records for; cb
+// is such a reviver kept ready for its calls (regCallback), or nil; argv
+// the list its arguments go in, made once, as the array methods' are.
+type jsonReviver struct {
+	fn      Value
+	context bool
+	cb      *regCallback
+	argv    [3]Value
+}
+
+// seesThirdArg reports whether fn, called with three arguments, may see
+// the third: anything but a function of this realm's code that declares
+// fewer than three parameters, none of them a rest parameter, and reads
+// no arguments object, in a runtime with no debugger, where f.arguments
+// reads nothing (Node's quirks), no frame of it is inspected, and nothing
+// else reads what a call was passed.
+func (r *Runtime) seesThirdArg(fn Value) bool {
+	if !fn.IsObject() || r.nodeQuirks || r.debug != nil {
+		return true
+	}
+	fd := fn.Object().fn()
+	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm {
+		return true
+	}
+	b := fd.closure.fn
+	return b == nil || b.ParamCount >= 3 || b.HasRest || b.UsesArguments || b.ForwardsArguments || b.HasDirectEval
 }
 
 // reviveJSONAt is reviveJSON with the depth it has reached, which is bounded
 // for the same reason the parser's is, and with k, the atom of key.
-func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver Value, rec *jsonRecord, depth int) (Value, error) {
+func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver *jsonReviver, rec *jsonRecord, depth int) (Value, error) {
 	if depth >= jsonMaxDepth {
 		return Undefined, r.throwRangeError(
 			"a structure nested this deeply cannot be revived")
@@ -444,7 +482,10 @@ func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver Value,
 	if err != nil {
 		return Undefined, err
 	}
-	context := newObject(r.proto.object, ClassObject)
+	var context *Object
+	if reviver.context {
+		context = newObject(r.proto.object, ClassObject)
+	}
 	if rec == nil || !rec.value.SameValue(val) {
 		rec = nil
 	} else if !val.IsObject() {
@@ -512,7 +553,16 @@ func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver Value,
 			}
 		}
 	}
-	return r.callDirect(reviver, Obj(holder), []Value{key, val, Obj(context)})
+	if !reviver.context {
+		// A reviver that cannot see the context is given none.
+		argv := reviver.argv[:2]
+		argv[0], argv[1] = key, val
+		if cb := reviver.cb; cb != nil {
+			return cb.callWith(Obj(holder), argv)
+		}
+		return r.callDirect(reviver.fn, Obj(holder), argv)
+	}
+	return r.callDirect(reviver.fn, Obj(holder), []Value{key, val, Obj(context)})
 }
 
 // reviveWrite puts back what the reviver returned, or removes the property

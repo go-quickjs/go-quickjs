@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -156,11 +155,6 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		for _, k := range excluded {
 			if k.IsObject() {
 				return Undefined, false
-			}
-		}
-		if src.IsObject() {
-			if out, ok := r.jitRestFast(src.Object(), excluded); ok {
-				return Obj(out), true
 			}
 		}
 		v, err := r.objectRest(src, excluded)
@@ -430,37 +424,6 @@ func (r *Runtime) jitCopyLearn(t, o *Object, from *shape, n int) {
 		r.jit.copies = new([jitCopyEntries]jitCopyEntry)
 	}
 	r.jit.copies[jitCopySlot(o.shape, from)] = jitCopyEntry{src: o.shape, from: from, to: to, slots: c.slots}
-}
-
-// jitRestFast is objectRest of o, a plain object of a shared layout whose
-// enumerable own keys are all data under string keys (shapeKeys), less the
-// keys excluded, strings: its values read where the layout has them, in
-// its keys' order, each appended to the rest object, with no key looked up
-// on o -- or false, for objectRest to make.
-func (r *Runtime) jitRestFast(o *Object, excluded []Value) (*Object, bool) {
-	c := r.shapeKeys(o)
-	if c == nil || !c.copyable || len(excluded) > 8 {
-		return nil, false
-	}
-	var skip [8]Atom
-	for i, k := range excluded {
-		if !k.IsString() {
-			return nil, false
-		}
-		skip[i] = r.atoms.intern(k.String().Go())
-	}
-	out := newObject(r.proto.object, ClassObject)
-	if len(c.atoms) > len(excluded) {
-		out.reserveProps(len(c.atoms) - len(excluded))
-	}
-	for i, k := range c.atoms {
-		if slices.Contains(skip[:len(excluded)], k) {
-			continue
-		}
-		// A key of its own, none before it the same.
-		out.appendProp(Property{key: k, flags: propDefault, value: o.vals()[c.slots[i]]})
-	}
-	return out, true
 }
 
 // jitLeafApply applies fd, a leaf's function of this realm (jitLeafOp),

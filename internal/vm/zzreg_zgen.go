@@ -687,3 +687,123 @@ func (r *Runtime) regGenNext(g *generator) (resumeResult, error) {
 	g.state = genCompleted
 	return resumeResult{value: v, how: resumeDone}, err
 }
+
+// regAsyncRun is regGenCall's call of o, an async function of register
+// code c with closure cl, whose window is at base with its argc arguments:
+// its first run made in the window, as a call runs a callee, and its
+// generator made only where it suspends -- at its first await -- from the
+// window as it is then, the promise of its result given to it. A call
+// that returns or throws before it awaits makes no generator, no copy of
+// its window and no second frame: the promise settled with what it
+// returned or threw, as stepAsync settles it. What runs, and in what
+// order, is runAsync's: the body's first run at the call, the await's
+// job queued as awaitValue queues it, the promise settled after the run.
+//
+// The function keeps no arguments (regCode.args), has no direct eval and
+// nothing of its surroundings (funcData.extra): no with objects, eval
+// variables, lexical this or new.target to keep.
+func (r *Runtime) regAsyncRun(o *Object, cl *closure, c *regCode, this Value, base, argc int) Value {
+	p := r.newPromise()
+	n := int(c.numRegs)
+	top := base + n
+	if r.frameDepth >= r.maxFrames || top > len(r.stack) {
+		r.rejectPromise(p, thrownValue(r.throwRangeError("maximum call stack size exceeded")))
+		return Obj(p)
+	}
+	if jitBuilt && !r.jitRegHas(cl) {
+		// A run Go makes of code that has none native, as regGenRun's.
+		r.jitRegResumed(cl, c)
+	}
+	saved := r.stackTop
+	if top > saved {
+		r.stackTop = top
+		if top > r.stackHigh {
+			r.stackHigh = top
+		}
+	}
+	w := r.stack[base:top:top]
+	w[0], w[1] = Obj(o), this
+	params := int(c.params)
+	for i := 2 + min(argc, params); i < 2+params+int(c.inits); i++ {
+		w[i] = Undefined
+	}
+	f := r.pushFrame()
+	f.cl = cl
+	f.locals = nil
+	f.base = base
+	f.pc = 0
+	f.this = this
+	f.callee = o
+	f.args = nil
+	if len(f.handlers) != 0 {
+		f.handlers = f.handlers[:0]
+	}
+	if len(f.openUpvalues) != 0 {
+		f.openUpvalues = f.openUpvalues[:0]
+	}
+	f.newTarget, f.thisRef, f.evalVars, f.withScopes = Undefined, nil, nil, nil
+	f.native = ""
+	f.savedSP = 0
+	f.paramsOnly = false
+	f.regKind = 0
+	var v Value
+	var err error
+	if jitBuilt && r.jitRegHas(cl) && regAt(c.code, 0).Op() == bytecode.RGenEntry {
+		// Native code made from its register code, entered past
+		// gen_entry, as regGenRun enters a first run.
+		v, err = r.jitRegEnter(f, cl, c, base, 1)
+	} else {
+		v, err = r.runReg(f, c, 0)
+	}
+	if s, ok := err.(*suspendSignal); ok {
+		// The generator, made as newRegGenerator makes it, its window
+		// the frame's from genFrom and its captures moved there, as
+		// regGenRun suspends one.
+		from := int(c.genFrom)
+		gobj, vals := genAlloc(n-from, genAsyncKind)
+		gobj.Object = Object{class: ClassGenerator, flags: objExtensible}
+		g := &gobj.g
+		*g = generator{
+			cl:     cl,
+			this:   this,
+			callee: o,
+			vals:   vals,
+			async:  true,
+			room:   g.room,
+			reg:    true,
+		}
+		gobj.setProto(r.proto.asyncGenerator)
+		*g.promiseOf() = p
+		g.pc = uint32(f.savedSP)
+		g.saveWith(f.withScopes)
+		kept := w[from:]
+		copy(vals, kept)
+		if ups := f.openUpvalues; len(ups) != 0 {
+			regMoveUps(ups, kept, vals[:n-from])
+			g.keep(nil, nil, ups)
+		}
+		g.state = genSuspendedYield
+		g.started = true
+		g.delegating = s.delegate
+		sent := s.value
+		s.value = Undefined
+		f.savedSP = 0
+		f.detachSuspended()
+		r.frameDepth--
+		r.stackTop = saved
+		r.awaitValue(sent, g, awaitAsync)
+		return Obj(p)
+	}
+	if len(f.openUpvalues) != 0 {
+		regCloseUpvalues(f)
+	}
+	f.savedSP = 0
+	r.frameDepth--
+	r.stackTop = saved
+	if err != nil {
+		r.rejectPromise(p, thrownValue(err))
+	} else {
+		r.resolvePromise(p, v)
+	}
+	return Obj(p)
+}

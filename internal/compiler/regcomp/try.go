@@ -34,6 +34,11 @@ type prot struct {
 	// async marks a for await's cursor, closed as AsyncIteratorClose
 	// closes it: its return method's result awaited (asyncClose).
 	async bool
+	// forIn marks a for-in loop's cursor, which is no handler: it has no
+	// ranges, a throw passes it by, and an exit that leaves the loop
+	// marks the cursor done (iter_close), so that the next loop takes it
+	// (newForInObject) rather than making one.
+	forIn bool
 	// loops is how many loops were around the statement: a break or a
 	// continue to one of them leaves the handler.
 	loops int
@@ -47,6 +52,9 @@ type prot struct {
 // protect puts p in force from here.
 func (g *gen) protect(p *prot) {
 	p.open = len(g.code)
+	if p.forIn {
+		p.open = -1
+	}
 	p.loops = len(g.loops)
 	g.prots = append(g.prots, p)
 }
@@ -69,7 +77,11 @@ func (g *gen) suspend(p *prot) {
 	p.open = -1
 }
 
-func (g *gen) resume(p *prot) { p.open = len(g.code) }
+func (g *gen) resume(p *prot) {
+	if !p.forIn {
+		p.open = len(g.code)
+	}
+}
 
 // finallyDepth is how deep finally clauses' copies nest: each clause is
 // compiled once for each way out of it, so that a clause inside one is
@@ -102,9 +114,12 @@ func (g *gen) leave(from int, last func()) {
 		}
 		if p.cursor >= 0 {
 			// A loop left closes its iterator, which may throw.
-			if p.async {
+			switch {
+			case p.async:
 				g.asyncClose(p.cursor)
-			} else {
+			case p.forIn:
+				g.emit(bytecode.MakeR(bytecode.RIterClose, bytecode.RIterCloseForIn, 0, r16(p.cursor), 0))
+			default:
 				g.emit(bytecode.MakeR(bytecode.RIterClose, 0, 0, r16(p.cursor), 0))
 			}
 			continue
@@ -477,8 +492,19 @@ func (g *gen) handlerTable() []bytecode.RHandler {
 	return hs
 }
 
-// finallyAround reports whether a finally clause, or a for-of loop's
-// iterator, is around the code: what a return runs on its way out.
+// innerHandler is the innermost handler in force, which a throw goes to,
+// or nil: a for-in loop's cursor is none.
+func (g *gen) innerHandler() *prot {
+	for i := len(g.prots) - 1; i >= 0; i-- {
+		if p := g.prots[i]; !p.forIn {
+			return p
+		}
+	}
+	return nil
+}
+
+// finallyAround reports whether a finally clause, or a for-of or a for-in
+// loop's cursor, is around the code: what a return runs on its way out.
 func (g *gen) finallyAround() bool {
 	for _, p := range g.prots {
 		if p.finally != nil || p.cursor >= 0 || p.with {
@@ -494,7 +520,10 @@ func (g *gen) finallyAround() bool {
 // it has no value. A for-of loop's body is in the ranges of a handler of
 // its own, which closes the iterator for a throw and throws again; a
 // break, continue or return that leaves the loop closes it on its way out
-// (leave). A for-in loop's cursor needs no closing.
+// (leave). A for-in loop's cursor needs no closing, but a break, continue
+// or return that leaves the loop marks it done all the same (iter_close),
+// so that the next loop takes it rather than making one; a throw leaves
+// it as it is.
 func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in bool, label labelSet, pos int) {
 	var target ast.Expr
 	lexical := false
@@ -585,6 +614,9 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 	if !in {
 		p = &prot{to: g.newMark(), reg: g.alloc(), cursor: cursor, iterOf: l, async: await}
 		g.protect(p)
+	} else {
+		p = &prot{reg: -1, cursor: cursor, iterOf: l, forIn: true}
+		g.protect(p)
 	}
 	defer g.hold()()
 	if using != 0 {
@@ -611,8 +643,8 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 		g.stmt(body)
 	}
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.cont, false)
-	if p != nil {
-		g.unprotect(p)
+	g.unprotect(p)
+	if !p.forIn {
 		g.bind(p.to)
 		g.closeThrow(p)
 	}
@@ -650,6 +682,9 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 	if !in {
 		p = &prot{to: g.newMark(), reg: g.alloc(), cursor: cursor, iterOf: l, async: await}
 		g.protect(p)
+	} else {
+		p = &prot{reg: -1, cursor: cursor, iterOf: l, forIn: true}
+		g.protect(p)
 	}
 	defer g.hold()()
 	mark := g.top
@@ -657,8 +692,8 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 	g.top = mark
 	g.stmt(body)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.cont, false)
-	if p != nil {
-		g.unprotect(p)
+	g.unprotect(p)
+	if !p.forIn {
 		g.bind(p.to)
 		g.closeThrow(p)
 	}

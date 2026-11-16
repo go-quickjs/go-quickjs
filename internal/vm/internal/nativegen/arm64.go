@@ -237,16 +237,18 @@ func (g *armGen) upval(dst, idx Reg) {
 }
 
 // cmpU is a compare-and-branch of A with upvalue B, as cmp's swapped
-// form: the jump taken on cond.
+// form: the jump taken on cond. Two BigInts held in their Values are
+// compared as integers, as cmp compares two registers' (bigCmpU).
 func (g *armGen) cmpU(cond cc) {
 	a := g.a
+	big := a.NewLabel()
 	g.regA(rD)
-	g.num(0, rD)
+	g.numOr(0, rD, big)
 	a.Ubfx(rC, rW, 32, 16)
 	g.upval(rS, rC)
 	a.Load(r9, rS, 0)
 	a.Cmp(r9, rTag, true)
-	a.BCond(HS, g.exit)
+	a.BCond(HS, big)
 	a.FMovToF(1, r9)
 	a.FCmp(1, 0)
 	tk := a.NewLabel()
@@ -255,6 +257,35 @@ func (g *armGen) cmpU(cond cc) {
 	a.Bind(tk)
 	g.immSC(rC)
 	g.taken(rC)
+	a.Bind(big)
+	g.bigCmpU()
+	a.BCond(cond.i(), tk)
+	g.next()
+}
+
+// bigCmpU sets the flags as an unsigned compare of upvalue B with A would
+// (cmpU's order) for two BigInts held in their Values, as bigCmp does for
+// two registers'; anything else exits. rW is read again after.
+func (g *armGen) bigCmpU() {
+	a := g.a
+	hiSame, done := a.NewLabel(), a.NewLabel()
+	g.regA(r9)
+	g.bigShort(r9, r8, r9, true)
+	a.Ubfx(rC, rW, 32, 16)
+	g.upval(rS, rC)
+	g.bigShort(rS, rW, rS, true)
+	x0, x1, y0, y1 := rS, rW, r9, r8
+	a.Cmp(x1, y1, true)
+	a.BCond(EQ, hiSame)
+	a.MovImm(rC, 1<<63)
+	a.Op(Eor, x1, x1, rC, true)
+	a.Op(Eor, y1, y1, rC, true)
+	a.Cmp(x1, y1, true)
+	a.B(done)
+	a.Bind(hiSame)
+	a.Cmp(x0, y0, true)
+	a.Bind(done)
+	a.Load(rW, rIP, 0)
 }
 
 // nullish goes to yes if the word in x is undefined's or null's. rC is

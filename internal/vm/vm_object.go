@@ -522,6 +522,21 @@ func newObject(proto *Object, class Class) *Object {
 	return newObjectExt(proto, class, flags)
 }
 
+// newCreated is the object Object.create makes of a prototype, made as
+// newObject makes one, with room for the properties the objects made on
+// it before came to have (outgrowProps), up to maxSlack: an object made
+// on a shared prototype and then given its properties one by one had
+// grown its table at each of them, as V8 sizes them by the map's slack
+// while Object.create carries no count of its own.
+func newCreated(proto *Object) *Object {
+	if proto != nil && !polyable[struct{}](proto) {
+		if root := rootFor(ClassObject, proto); root != nil && root.slack != 0 {
+			return newShapedLiteral(root, ClassObject, min(int(root.slack), maxSlack))
+		}
+	}
+	return newObject(proto, ClassObject)
+}
+
 // newObjectExt returns a bare object with side fields (ext), which every
 // class but ClassObject has and an ordinary object only when it will carry
 // internal slots.
@@ -1477,15 +1492,22 @@ func (o *Object) outgrowProps() {
 		return
 	}
 	root := s.root()
+	limit := maxRoom
 	if root.generic {
-		return
+		// A class's root for a prototype sizes only the objects
+		// Object.create makes (newCreated), which no site tells apart:
+		// up to the room an object carries in its own allocation.
+		if root.rootClass != ClassObject {
+			return
+		}
+		limit = maxSlack
 	}
 	n := int(o.valn) + 1
-	for c := s.next; c != nil && n < maxRoom; c = c.next {
+	for c := s.next; c != nil && n < limit; c = c.next {
 		n = int(c.n)
 	}
 	if n > int(root.slack) {
-		root.slack = uint8(min(n, maxRoom))
+		root.slack = uint8(min(n, limit))
 	}
 }
 

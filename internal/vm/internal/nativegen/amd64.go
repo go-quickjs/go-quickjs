@@ -113,17 +113,20 @@ func (g *nativeGen) upval(dst, idx Reg) {
 }
 
 // cmpU is a compare-and-branch of A with upvalue B, as cmp's swapped
-// form: the jump taken on cond.
+// form: the jump taken on cond. Two BigInts held in their Values are
+// compared as integers, as cmp compares two registers' (bigCmpU), out of
+// line.
 func (g *nativeGen) cmpU(cond Cond) {
 	a := g.a
+	big := a.NewLabel()
 	g.decA(RDX)
-	g.num(0, RDX)
+	g.numOr(0, RDX, big)
 	g.decB(RCX)
 	a.ShiftImm(Shr, RCX, 4, true)
 	g.upval(RSI, RCX)
 	a.Load(R9, RSI, 0)
 	a.Op(Cmp, R9, R10, true)
-	a.Jcc(CondAE, g.exit)
+	a.Jcc(CondAE, big)
 	a.MovQToX(1, R9)
 	a.SSEOp(UcomiSD, 1, 0)
 	tk := a.NewLabel()
@@ -132,6 +135,38 @@ func (g *nativeGen) cmpU(cond Cond) {
 	a.Bind(tk)
 	g.immSC(RCX)
 	g.taken(RCX)
+	g.late = append(g.late, func() {
+		a.Bind(big)
+		g.bigCmpU()
+		a.Jcc(cond, tk)
+		g.next()
+	})
+}
+
+// bigCmpU sets the flags as an unsigned compare of upvalue B with A would
+// (cmpU's order) for two BigInts held in their Values, as bigCmp does for
+// two registers'; anything else exits. RAX is read again after.
+func (g *nativeGen) bigCmpU() {
+	a := g.a
+	hiSame, done := a.NewLabel(), a.NewLabel()
+	g.decA(R9)
+	g.bigShort(R9, R8, R9, true)
+	g.decB(RCX)
+	a.ShiftImm(Shr, RCX, 4, true)
+	g.upval(RSI, RCX)
+	g.bigShortAt(RSI, RAX, RSI, true)
+	x0, x1, y0, y1 := RSI, RAX, R9, R8
+	a.Op(Cmp, x1, y1, true)
+	a.Jcc(CondE, hiSame)
+	a.MovImm(RCX, 1<<63)
+	a.Op(Xor, x1, RCX, true)
+	a.Op(Xor, y1, RCX, true)
+	a.Op(Cmp, x1, y1, true)
+	a.Jmp(done)
+	a.Bind(hiSame)
+	a.Op(Cmp, x0, y0, true)
+	a.Bind(done)
+	a.Load(RAX, RBX, 0)
 }
 
 // nullish goes to yes if the word in x is undefined's or null's. RCX is
@@ -791,9 +826,25 @@ func (g *nativeGen) numMem(x XReg, off Reg, miss Label) {
 // lo.
 func (g *nativeGen) bigShort(lo, hi, off Reg, wide bool) {
 	a := g.a
-	notInt, done := a.NewLabel(), a.NewLabel()
 	a.LoadIdx(RDX, R12, off, 1, 8)
 	a.LoadIdx(lo, R12, off, 1, 0)
+	g.bigWords(lo, hi, wide)
+}
+
+// bigShortAt is bigShort of the Value at the address in addr, which may
+// be lo.
+func (g *nativeGen) bigShortAt(lo, hi, addr Reg, wide bool) {
+	a := g.a
+	a.Load(RDX, addr, 8)
+	a.Load(lo, addr, 0)
+	g.bigWords(lo, hi, wide)
+}
+
+// bigWords is bigShort of the Value whose num is in lo and whose ref is
+// in RDX.
+func (g *nativeGen) bigWords(lo, hi Reg, wide bool) {
+	a := g.a
+	notInt, done := a.NewLabel(), a.NewLabel()
 	a.MovImm(RCX, shortIntBase)
 	a.Op(Cmp, lo, RCX, true)
 	a.Jcc(CondB, notInt)

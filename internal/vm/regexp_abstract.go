@@ -223,7 +223,14 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 	// them, without the arrays exec would make of them for this to read
 	// element 0 of.
 	if builtin && r.builtinExecOf(rx) {
-		spans, err := r.execMatchAll(rx, s, fullUnicode, r.takeSpans())
+		// An ASCII subject's matches are collected as replace collects
+		// them, the matcher borrowed once for them all.
+		var spans []int
+		if s.ascii {
+			spans, err = execMatchAllASCII[struct{}](r, rx, s, r.takeSpans())
+		} else {
+			spans, err = r.execMatchAll(rx, s, fullUnicode, r.takeSpans())
+		}
 		// Nothing below runs a script, which could match: the room is
 		// given back at once, and read until the array is made.
 		r.giveSpans(spans)
@@ -678,6 +685,13 @@ func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direc
 			return Undefined, err
 		}
 	}
+	// A function called for each match kept ready for its calls.
+	var ready *regCallback
+	if functional {
+		if ready = r.regCallbackOf(replValue, Undefined); ready != nil {
+			defer ready.end()
+		}
+	}
 	for k := 0; k < count; k++ {
 		if err := sb.check(); err != nil {
 			return Undefined, err
@@ -763,7 +777,13 @@ func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direc
 			if !named.IsUndefined() {
 				callArgs = append(callArgs, named)
 			}
-			res, err := r.callDirect(replValue, Undefined, callArgs)
+			var res Value
+			var err error
+			if ready != nil {
+				res, err = ready.call(callArgs)
+			} else {
+				res, err = r.callDirect(replValue, Undefined, callArgs)
+			}
 			if err != nil {
 				return Undefined, err
 			}

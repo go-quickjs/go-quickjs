@@ -212,6 +212,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 | CZ | a closure in a generic the last file calls | the closures of generics | `strAppendNode.func1` and the generic tree nodes' closures |
 | DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
 | X | `layoutPadX`, a function in `internal/regexp/aa_layoutpad.go`, its constant in that package's own configuration files | every function of package regexp, and what follows it up to vm, whose levers absorb it | the matcher, `(*matcherASCII).run`, and with it its `search` and the searches for a unit (`indexUnit`, `skipUnitsASCII`) |
+| H | `layoutPadH`, an assembly function of whole 32-byte slots of int3 bytes in `zzzyn_native_a_layoutpad_*.s`, one file a configuration, sorted after the JIT's assembly and before `zzzyn_native_<arch>.s` | the native handlers' block, and vm's `init` and the closures of generics after it, which CZ absorbs | `regNativeHandlers`, and with it `nativeEnter`, `nativeCallH` and, in a build with the JIT, the feedback handlers before it |
 
 What each lever cannot move:
 
@@ -258,6 +259,18 @@ What each lever cannot move:
   compiler -- are not pinned, and in another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
+- **Assembly** is laid out after the closures of the named functions and
+  before vm's `init` and the generics' closures, in file order. The
+  register interpreter's native handlers are one assembly block
+  (`zzzyn_native_handlers_<arch>.s`, nativegen's), so that any closure
+  added or grown anywhere in the package moved all of them: one round's
+  closures moved the block 672 bytes (608 in one of its branches, which
+  made Octane's RegExp and the generator tests slower). H pins
+  `regNativeHandlers`; between it and its pad are only `nativeEnter`,
+  `nativeCallH` and, with the JIT, the feedback handlers, whose size
+  nativegen's changes move. The pad is a whole number of slots, at least
+  one, so a target the block is already at costs 4 KB of pad. It is
+  written for amd64 alone, as the targets are.
 - **Native code**, which the JIT lays out at run time, is not affected; its
   placements are the JIT's own (`V8BENCH_JITPAD`, `V8BENCH_JITLINE`).
 - **Another toolchain or platform** lays the runtime out anew: the targets

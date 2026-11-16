@@ -206,7 +206,7 @@ func (g *nativeGen) ptrTo() {
 // anything is written.
 func (g *nativeGen) call() {
 	a := g.a
-	ok, noThis, noTop, loop, loopEnd, skip, high := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	ok := a.NewLabel()
 	start, tmpl, builtin, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 
@@ -309,10 +309,194 @@ func (g *nativeGen) call() {
 	a.CmpMem(R8, RDI, ncObjBits, true)
 	a.Jcc(CondNE, g.ex(5))
 	a.Bind(ok)
+	jitCall := a.NewLabel()
+	g.enter(enterCall, jitCall)
+
+	// Another closure of the template of the callee the site cached, as
+	// rhCallW's regSameTemplate finds it: a function of the cached one's
+	// closureCode, register code and realm, neither bound nor an arrow
+	// nor with more of its own (extra), at a site whose kind is the
+	// template's. The cache is made the new callee's, the closure stored
+	// with the barrier's routine while the collector marks, and the call
+	// made again, which the cache now answers; anything else exits, before
+	// anything is written. A closure made anew each time its maker runs
+	// is called with no exit.
+	a.Bind(tmpl)
+	a.LoadU8(R8, RCX, offEKind)
+	a.OpImm(And, R8, int32(^(regCallOut|regCallLeaf)&0xff), false)
+	a.OpImm(Cmp, R8, regCallEnter, false)
+	a.Jcc(CondB, miss)
+	a.OpImm(Cmp, R8, regCallObjThis, false)
+	a.Jcc(CondA, miss)
+	a.LoadU16(RDX, R9, offObjFlags)
+	a.OpImm(And, RDX, int32(objHasData), false)
+	a.Jcc(CondE, miss)
+	a.Load(RDX, R9, sizeObj+offExtData)
+	a.CmpMem(RDX, RDI, ncFuncT, true)
+	a.Jcc(CondNE, miss)
+	a.Load(RDX, R9, sizeObj+offExtData+8)
+	a.LoadU8(R8, RDX, offFDBound)
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondNE, miss)
+	a.LoadU8(R8, RDX, off("funcData.arrow"))
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondNE, miss)
+	a.Load(R8, RDX, off("funcData.extra"))
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondNE, miss)
+	a.Load(RDX, RDX, off("funcData.closure"))
+	a.Op(Test, RDX, RDX, true)
+	a.Jcc(CondE, miss)
+	a.Load(R8, RCX, offECl)
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, miss)
+	a.Load(RAX, RDX, offClCode)
+	a.CmpMem(RAX, R8, offClCode, true)
+	a.Jcc(CondNE, miss)
+	a.Load(RAX, RDX, off("closure.realm"))
+	a.CmpMem(RAX, R8, off("closure.realm"), true)
+	a.Jcc(CondNE, miss)
+	// Its register code, its closureCode's, the cached one.
+	a.Load(RAX, RDX, offClCode)
+	a.AddMem(RAX, RDI, ncCCBase)
+	a.Load(RAX, RAX, offCCReg)
+	a.Op(Test, RAX, RAX, true)
+	a.Jcc(CondE, miss)
+	a.CmpMem(RAX, RCX, offERC, true)
+	a.Jcc(CondNE, miss)
+	a.Store(RDI, scr(sE), RCX)
+	a.Store(RDI, scr(sV0), RDX)
+	a.Lea(RAX, RCX, offECallee)
+	a.MovRR(RCX, R9)
+	g.ptrTo()
+	a.Load(RAX, RDI, scr(sE))
+	a.Lea(RAX, RAX, offECl)
+	a.Load(RCX, RDI, scr(sV0))
+	g.ptrTo()
+	a.Load(RAX, RBX, 0)
+	a.Jmp(start)
+
+	// A built-in the site cached (regCallNative): Array.prototype.push of
+	// one argument is the code's own (push); any other is called in Go
+	// with no exit (light).
+	light := a.NewLabel()
+	a.Bind(builtin)
+	a.OpImm(Cmp, R9, regCallNative, false)
+	a.Jcc(CondNE, g.ex(4))
+	notPush := a.NewLabel()
+	g.push(notPush)
+	a.Bind(light)
+	g.light(ncBuiltinFn)
+	// Another callee than the cache's, of another template: the exit, its
+	// Go function nativeCallMiss (ncMiss), which makes the cache the
+	// callee's where the code enters it with a frame and has the call made
+	// again.
+	// A call of Function.prototype.call whose callee the cache holds
+	// (through) goes first. The store after the jump is never run: it
+	// keeps the handler the size it was, so that no handler after it
+	// moves.
+	through := a.NewLabel()
+	a.Bind(miss)
+	a.Jmp(through)
+	a.StoreImm(RDI, ncMiss, 1)
+	g.late = append(g.late, func() {
+		reflect := a.NewLabel()
+		a.Bind(notPush)
+		g.genNext(reflect)
+		a.Bind(reflect)
+		g.reflect(light)
+		a.Bind(jitCall)
+		g.light(ncJITCallFn)
+		a.Bind(through)
+		g.through()
+	})
+}
+
+// through is call_method_w of the realm's Function.prototype.call,
+// f.call(t, ...), of f the site's cache holds marked regCallThrough: f
+// entered in the window one register on, as call_w enters the callee its
+// cache holds -- f its callee, t its this, the arguments after -- with no
+// frame of call's, as regCallThrough enters it. RCX is the site's cache
+// entry and RSI the window. No this given, a callee the cache does not
+// hold, or anything else: the exit to nativeCallMiss, as any other callee
+// the cache does not hold.
+func (g *nativeGen) through() {
+	a := g.a
+	miss, ok := a.NewLabel(), a.NewLabel()
+	a.LoadU8(R8, RCX, offEKind)
+	a.MovRR(R9, R8)
+	a.OpImm(And, R9, regCallThrough, false)
+	a.Jcc(CondE, miss)
+	// The realm running now's call, at the offset the context gives.
+	a.Load(RDX, RDI, ncRT)
+	a.Load(RDX, RDX, rtRel(0))
+	a.AddMem(RDX, RDI, ncCallFn)
+	a.Load(RDX, RDX, 0)
+	a.CmpMem(RDX, RSI, 8, true)
+	a.Jcc(CondNE, miss)
+	a.Load(R9, RSI, 16)
+	a.CmpMem(R9, RDI, ncObjBits, true)
+	a.Jcc(CondNE, miss)
+	a.Load(R9, RSI, 24)
+	a.CmpMem(R9, RCX, offECallee, true)
+	a.Jcc(CondNE, miss)
+	a.Load(RAX, RBX, 0)
+	a.MovRR(RDX, RAX)
+	a.ShiftImm(Shr, RDX, 8, true)
+	a.MovZX8(RDX, RDX)
+	a.OpImm(Sub, RDX, 1, true)
+	a.Jcc(CondL, miss)
+	a.Store(RDI, scr(sArgc), RDX)
+	// Its kind, the marks none: entered as it is, with an object this, or
+	// with the cache's; a built-in called as the site would call it, the
+	// instruction one register on and of one argument fewer (nativeBuiltin).
+	a.MovRR(R9, R8)
+	a.OpImm(And, R9, ^regCallThrough&0xff, false)
+	notNative := a.NewLabel()
+	a.OpImm(Cmp, R9, regCallNative, false)
+	a.Jcc(CondNE, notNative)
+	a.OpImm(Add, RAX, 0x10000-0x100, true)
+	g.lightW(ncBuiltinFn, true)
+	a.Bind(notNative)
+	a.OpImm(Cmp, R9, regCallEnter, false)
+	a.Jcc(CondE, ok)
+	a.OpImm(Cmp, R9, regCallThis, false)
+	a.Jcc(CondE, ok)
+	a.OpImm(Cmp, R9, regCallObjThis, false)
+	a.Jcc(CondNE, miss)
+	a.Load(R8, RSI, 32)
+	a.CmpMem(R8, RDI, ncObjBits, true)
+	a.Jcc(CondNE, miss)
+	// A callee that keeps its arguments, entered as regEnterW enters it.
+	a.Bind(ok)
+	a.Load(R8, RCX, offERC)
+	a.LoadU8(RDX, R8, offRCArgs)
+	a.Store(RDI, scr(sEnt), RDX)
+	a.Lea(RSI, RSI, 16)
+	g.enter(enterThrough, g.exit)
+	a.Bind(miss)
+	a.StoreImm(RDI, ncMiss, 1)
+	a.Jmp(g.exit)
+}
+
+// enter is the call handler's entry of the callee its site's cache knows,
+// RCX the cache's entry, RSI the window, R9 the kind it is entered as and
+// the scratch's sEnt whether it keeps its arguments: its frame made as
+// regCallW makes it, the caller's state pushed on the native frame stack,
+// and its code run. A callee whose calls go to the JIT goes to jitCall.
+// A construction's (new_w's, enterNew) is regEnterW's frame of a
+// construction: regFrameConstruct, whose return ret makes the
+// construction's, its new.target the callee; a super()'s (enterSuper)
+// regFrameSuper, its argument count in the scratch's sArgc and its
+// new.target in sV1, both nativeSuper's. Either's frame is given the this
+// binding in the scratch's sV0 where it is a derived class's, and the
+// window's this as the frame's.
+func (g *nativeGen) enter(mode int, jitCall Label) {
+	a := g.a
+	noThis, noTop, loop, loopEnd, skip, high := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	// A callee whose calls go to the JIT (closureCode's jitEnters): one
 	// with native code, or whose runs spent what was left of its budget,
 	// entered by nativeJITCall, called with no exit (light).
-	jitCall := a.NewLabel()
 	a.Load(R8, RCX, offECl)
 	a.Load(R8, R8, offClCode)
 	a.AddMem(R8, RDI, ncCCBase)
@@ -326,10 +510,14 @@ func (g *nativeGen) call() {
 	a.Store(RDI, scr(sRC), R8)
 	// The arguments where they lie: none past the parameters it keeps,
 	// and no new.target.
-	a.MovRR(RDX, RAX)
-	a.ShiftImm(Shr, RDX, 8, true)
-	a.MovZX8(RDX, RDX)
-	a.Store(RDI, scr(sArgc), RDX)
+	if mode == enterSuper || mode == enterThrough || mode == enterApply || mode == enterReflect {
+		a.Load(RDX, RDI, scr(sArgc))
+	} else {
+		a.MovRR(RDX, RAX)
+		a.ShiftImm(Shr, RDX, 8, true)
+		a.MovZX8(RDX, RDX)
+		a.Store(RDI, scr(sArgc), RDX)
+	}
 	kept := a.NewLabel()
 	a.CmpMemImm8(RDI, scr(sEnt), 0)
 	a.Jcc(CondNE, kept)
@@ -337,9 +525,11 @@ func (g *nativeGen) call() {
 	a.Op(Cmp, RDX, R9, true)
 	a.Jcc(CondA, g.ex(6))
 	a.Bind(kept)
-	a.LoadU8(R9, R8, offRCNewTarget)
-	a.Op(Test, R9, R9, false)
-	a.Jcc(CondNE, g.ex(7))
+	if mode == enterCall || mode == enterThrough || mode == enterApply {
+		a.LoadU8(R9, R8, offRCNewTarget)
+		a.Op(Test, R9, R9, false)
+		a.Jcc(CondNE, g.ex(7))
+	}
 	// The window's base, and the frame's top, in the stack.
 	a.Load(R9, RDI, ncRT)
 	a.MovRR(RDX, RSI)
@@ -482,6 +672,43 @@ func (g *nativeGen) call() {
 	a.MovImm(RCX, uint64(regFrameCall))
 	a.Store8(RSI, offFRegKind, RCX)
 	g.frameArgs()
+	if mode == enterNew || mode == enterSuper || mode == enterReflect {
+		// A construction's or a super()'s: its kind, its new.target the
+		// callee or super()'s, and a derived class's this binding, with
+		// the frame's this.
+		kind := regFrameConstruct
+		if mode == enterSuper {
+			kind = regFrameSuper
+		}
+		a.Load(RSI, RDI, scr(sNF))
+		a.MovImm(RCX, uint64(kind))
+		a.Store8(RSI, offFRegKind, RCX)
+		a.Load(R8, RDI, ncObjBits)
+		a.Store(RSI, offFNewTgt, R8)
+		if mode == enterSuper || mode == enterReflect {
+			a.Load(RCX, RDI, scr(sV1))
+		} else {
+			a.Load(RCX, RDI, scr(sE))
+			a.Load(RCX, RCX, offECallee)
+		}
+		a.Lea(RAX, RSI, offFNewTgt+8)
+		g.ptrTo()
+		noRef := a.NewLabel()
+		a.CmpMemImm8(RDI, scr(sV0), 0)
+		a.Jcc(CondE, noRef)
+		a.Load(RSI, RDI, scr(sNF))
+		a.Load(RCX, RDI, scr(sV0))
+		a.Lea(RAX, RSI, offFThisRef)
+		g.ptrStore()
+		a.Load(RSI, RDI, scr(sNF))
+		a.Load(RDX, RDI, scr(sWin))
+		a.Load(R8, RDX, 16)
+		a.Store(RSI, offFThis, R8)
+		a.Load(RCX, RDX, 24)
+		a.Lea(RAX, RSI, offFThis+8)
+		g.ptrTo()
+		a.Bind(noRef)
+	}
 	for _, f := range [][2]int32{{offECl, offFCl}, {offECallee, offFCallee}} {
 		same := a.NewLabel()
 		a.Load(RCX, RDI, scr(sE))
@@ -508,7 +735,13 @@ func (g *nativeGen) call() {
 	a.Load(RCX, RDI, scr(sSaved))
 	a.Store(RSI, recSaved, RCX)
 	a.Load(RAX, RBX, 0)
-	g.decB(RCX)
+	if mode == enterSuper || mode == enterApply {
+		// super()'s R[A], which its return writes (superRet), and
+		// apply_args's.
+		g.decA(RCX)
+	} else {
+		g.decB(RCX)
+	}
 	a.Store(RSI, recBOff, RCX)
 	a.IncMem(RDI, ncDepth)
 	a.StoreImm(RDI, ncTopOK, 0)
@@ -534,95 +767,246 @@ func (g *nativeGen) call() {
 	// Run it, counted (made).
 	a.IncMem(RDI, ncMade)
 	g.dispatch()
+}
 
-	// Another closure of the template of the callee the site cached, as
-	// rhCallW's regSameTemplate finds it: a function of the cached one's
-	// closureCode, register code and realm, neither bound nor an arrow
-	// nor with more of its own (extra), at a site whose kind is the
-	// template's. The cache is made the new callee's, the closure stored
-	// with the barrier's routine while the collector marks, and the call
-	// made again, which the cache now answers; anything else exits, before
-	// anything is written. A closure made anew each time its maker runs
-	// is called with no exit.
-	a.Bind(tmpl)
-	a.LoadU8(R8, RCX, offEKind)
-	a.OpImm(And, R8, int32(^(regCallOut|regCallLeaf)&0xff), false)
-	a.OpImm(Cmp, R8, regCallEnter, false)
-	a.Jcc(CondB, miss)
-	a.OpImm(Cmp, R8, regCallObjThis, false)
-	a.Jcc(CondA, miss)
-	a.LoadU16(RDX, R9, offObjFlags)
-	a.OpImm(And, RDX, int32(objHasData), false)
-	a.Jcc(CondE, miss)
-	a.Load(RDX, R9, sizeObj+offExtData)
-	a.CmpMem(RDX, RDI, ncFuncT, true)
-	a.Jcc(CondNE, miss)
-	a.Load(RDX, R9, sizeObj+offExtData+8)
-	a.LoadU8(R8, RDX, offFDBound)
-	a.Op(Test, R8, R8, false)
-	a.Jcc(CondNE, miss)
-	a.LoadU8(R8, RDX, off("funcData.arrow"))
-	a.Op(Test, R8, R8, false)
-	a.Jcc(CondNE, miss)
-	a.Load(R8, RDX, off("funcData.extra"))
-	a.Op(Test, R8, R8, true)
-	a.Jcc(CondNE, miss)
-	a.Load(RDX, RDX, off("funcData.closure"))
-	a.Op(Test, RDX, RDX, true)
-	a.Jcc(CondE, miss)
+// newW is new_w of the constructor its site's cache holds
+// (regCallConstruct): its object made by nativeNew, called through callH
+// with no exit as closure_w calls nativeClosure, in R[A+1], and the
+// constructor entered as call_w enters a callee (enter), its frame a
+// construction's. A constructor whose calls go to the JIT, another
+// callee, an object nativeNew leaves to Go: Go's (rsNewW), by an exit
+// before anything is written but R[A+1], a register of the window.
+func (g *nativeGen) newW() {
+	a := g.a
+	after, done := a.NewLabel(), a.NewLabel()
+	g.newSite()
+	a.LoadU8(R9, RCX, offEKind)
+	a.OpImm(Cmp, R9, regCallConstruct, false)
+	a.Jcc(CondNE, g.exit)
 	a.Load(R8, RCX, offECl)
-	a.Op(Test, R8, R8, true)
-	a.Jcc(CondE, miss)
-	a.Load(RAX, RDX, offClCode)
-	a.CmpMem(RAX, R8, offClCode, true)
-	a.Jcc(CondNE, miss)
-	a.Load(RAX, RDX, off("closure.realm"))
-	a.CmpMem(RAX, R8, off("closure.realm"), true)
-	a.Jcc(CondNE, miss)
-	// Its register code, its closureCode's, the cached one.
-	a.Load(RAX, RDX, offClCode)
-	a.AddMem(RAX, RDI, ncCCBase)
-	a.Load(RAX, RAX, offCCReg)
+	a.Load(R8, R8, offClCode)
+	a.AddMem(R8, RDI, ncCCBase)
+	a.LoadU8(RDX, R8, offCCJITEnters)
+	a.Op(Test, RDX, RDX, false)
+	a.Jcc(CondNE, g.exit)
+	// nativeNew(regs, w, pc, ctx): the func value in DX.
+	a.Store(RDI, ncIP, RBX)
+	a.Store(RDI, ncBudget, R11)
+	a.LeaLabel(R8, after)
+	a.Store(RDI, ncAfter, R8)
+	a.MovRR(RBX, RAX)
+	a.Load(RCX, RDI, ncIP)
+	a.Load(RDX, RDI, ncCodeBase)
+	a.Op(Sub, RCX, RDX, true)
+	a.ShiftImm(Shr, RCX, 3, true)
+	a.MovRR(RSI, RDI)
+	a.MovRR(RAX, R12)
+	a.Load(RDX, RDI, ncNewFn)
+	a.JmpMem(RDI, ncCallH)
+	a.Bind(after)
+	g.reload()
+	// 0: Go's; 2: done, a body leafCall answered; 1: entered.
 	a.Op(Test, RAX, RAX, true)
-	a.Jcc(CondE, miss)
-	a.CmpMem(RAX, RCX, offERC, true)
-	a.Jcc(CondNE, miss)
-	a.Store(RDI, scr(sE), RCX)
-	a.Store(RDI, scr(sV0), RDX)
-	a.Lea(RAX, RCX, offECallee)
-	a.MovRR(RCX, R9)
-	g.ptrTo()
-	a.Load(RAX, RDI, scr(sE))
-	a.Lea(RAX, RAX, offECl)
-	a.Load(RCX, RDI, scr(sV0))
-	g.ptrTo()
+	a.Jcc(CondE, g.exit)
+	a.OpImm(Cmp, RAX, 2, true)
+	a.Jcc(CondE, done)
 	a.Load(RAX, RBX, 0)
-	a.Jmp(start)
+	g.newSite()
+	plain := a.NewLabel()
+	a.StoreImm(RDI, scr(sEnt), 0)
+	a.Load(R8, RCX, offERC)
+	a.LoadU8(RDX, R8, offRCArgs)
+	a.Op(Test, RDX, RDX, false)
+	a.Jcc(CondE, plain)
+	a.StoreImm(RDI, scr(sEnt), 1)
+	a.Bind(plain)
+	a.MovImm(R9, uint64(regCallEnter))
+	g.enter(enterNew, g.exit)
+	a.Bind(done)
+	g.next()
+}
 
-	// A built-in the site cached (regCallNative): Array.prototype.push of
-	// one argument is the code's own (push); any other is called in Go
-	// with no exit (light).
-	light := a.NewLabel()
-	a.Bind(builtin)
-	a.OpImm(Cmp, R9, regCallNative, false)
-	a.Jcc(CondNE, g.ex(4))
-	notPush := a.NewLabel()
-	g.push(notPush)
-	a.Bind(light)
-	g.light(ncBuiltinFn)
-	// Another callee than the cache's, of another template: the exit, its
-	// Go function nativeCallMiss (ncMiss), which makes the cache the
-	// callee's where the code enters it with a frame and has the call made
-	// again.
-	a.Bind(miss)
-	a.StoreImm(RDI, ncMiss, 1)
-	a.Jmp(g.exit)
-	g.late = append(g.late, func() {
-		a.Bind(notPush)
-		g.genNext(light)
-		a.Bind(jitCall)
-		g.light(ncJITCallFn)
-	})
+// The entries enter makes.
+const (
+	enterCall = iota
+	enterNew
+	enterSuper
+	// enterThrough is a call's of Function.prototype.call's callee
+	// (through), its argument count in the scratch's sArgc.
+	enterThrough
+	// enterApply is apply_args's of its target (applyW), its argument
+	// count in the scratch's sArgc, its value R[A].
+	enterApply
+	// enterReflect is a construction's Reflect.construct makes (reflect),
+	// its argument count in the scratch's sArgc and its new.target in
+	// sV1, nativeReflect's.
+	enterReflect
+)
+
+// reflect is call_w's and call_method_w's call of the realm's
+// Reflect.construct, the built-in its site cached: nativeReflect, called
+// through callH with no exit, makes the construction's object and its
+// window at the stack's top, and the constructor is entered as new_w
+// enters one (enter), its new.target the one given. Another built-in, and
+// a construction nativeReflect leaves to Go: the built-in's call (light).
+func (g *nativeGen) reflect(light Label) {
+	a := g.a
+	after, done := a.NewLabel(), a.NewLabel()
+	a.MovRR(RCX, RAX)
+	a.ShiftImm(Shr, RCX, 48, true)
+	a.Load(R9, RDI, ncCC)
+	a.MovImm(R8, uint64(sizeE))
+	a.Imul(RCX, R8)
+	a.AddMem(RCX, R9, offCCRegCalls)
+	a.Load(R8, RCX, offECallee)
+	a.Load(RDX, RDI, ncRT)
+	a.Load(RDX, RDX, rtRel(0))
+	a.AddMem(RDX, RDI, ncReflect)
+	a.CmpMem(R8, RDX, 0, true)
+	a.Jcc(CondNE, light)
+	a.Store(RDI, ncIP, RBX)
+	a.Store(RDI, ncBudget, R11)
+	a.LeaLabel(R8, after)
+	a.Store(RDI, ncAfter, R8)
+	a.MovRR(RBX, RAX)
+	a.Load(RCX, RDI, ncIP)
+	a.Load(RDX, RDI, ncCodeBase)
+	a.Op(Sub, RCX, RDX, true)
+	a.ShiftImm(Shr, RCX, 3, true)
+	a.MovRR(RSI, RDI)
+	a.MovRR(RAX, R12)
+	a.Load(RDX, RDI, ncReflectFn)
+	a.JmpMem(RDI, ncCallH)
+	a.Bind(after)
+	g.reload()
+	a.MovRR(RCX, RAX)
+	a.Load(RAX, RBX, 0)
+	a.Op(Test, RCX, RCX, true)
+	a.Jcc(CondE, light)
+	a.OpImm(Cmp, RCX, 2, true)
+	a.Jcc(CondE, done)
+	a.Load(RCX, RDI, scr(sE))
+	a.Load(RSI, RDI, scr(sWin))
+	a.Load(R8, RCX, offERC)
+	a.LoadU8(RDX, R8, offRCArgs)
+	a.Store(RDI, scr(sEnt), RDX)
+	a.MovImm(R9, uint64(regCallEnter))
+	g.enter(enterReflect, g.exit)
+	a.Bind(done)
+	g.next()
+}
+
+// applyW is apply_args, f.apply(this, arguments) by the realm's
+// Function.prototype.apply: nativeApply, called through callH with no
+// exit, makes f's window at the stack's top and its entry, which is
+// entered as call_w enters a callee (enter), its value R[A]. Anything
+// nativeApply leaves to Go, and a callee whose calls go to the JIT:
+// rsApplyArgs's, by an exit before anything is written but the stack past
+// the frame's top.
+func (g *nativeGen) applyW() {
+	a := g.a
+	after := a.NewLabel()
+	// A target of no closure -- a built-in, a bound function -- exits at
+	// once, nativeApply's to refuse.
+	g.decB(RDX)
+	g.object(RSI, RDX)
+	a.LoadU16(RDX, RSI, offObjFlags)
+	a.OpImm(And, RDX, int32(objHasData), false)
+	a.Jcc(CondE, g.exit)
+	a.Load(RDX, RSI, sizeObj+offExtData)
+	a.CmpMem(RDX, RDI, ncFuncT, true)
+	a.Jcc(CondNE, g.exit)
+	a.Load(RDX, RSI, sizeObj+offExtData+8)
+	a.CmpMemImm8(RDX, off("funcData.closure"), 0)
+	a.Jcc(CondE, g.exit)
+	a.Store(RDI, ncIP, RBX)
+	a.Store(RDI, ncBudget, R11)
+	a.LeaLabel(R8, after)
+	a.Store(RDI, ncAfter, R8)
+	a.MovRR(RBX, RAX)
+	a.Load(RCX, RDI, ncIP)
+	a.Load(RDX, RDI, ncCodeBase)
+	a.Op(Sub, RCX, RDX, true)
+	a.ShiftImm(Shr, RCX, 3, true)
+	a.MovRR(RSI, RDI)
+	a.MovRR(RAX, R12)
+	a.Load(RDX, RDI, ncApplyFn)
+	a.JmpMem(RDI, ncCallH)
+	a.Bind(after)
+	g.reload()
+	a.Op(Test, RAX, RAX, true)
+	a.Jcc(CondE, g.exit)
+	a.Load(RAX, RBX, 0)
+	a.Load(RCX, RDI, scr(sE))
+	a.Load(RSI, RDI, scr(sWin))
+	a.Load(R8, RCX, offERC)
+	a.LoadU8(RDX, R8, offRCArgs)
+	a.Store(RDI, scr(sEnt), RDX)
+	a.MovImm(R9, uint64(regCallEnter))
+	g.enter(enterApply, g.exit)
+}
+
+// superW is super_call and super_forward of a derived class's
+// constructor: nativeSuper, called through callH with no exit, makes the
+// parent constructor's window at the stack's top and its entry, which is
+// entered as call_w enters a callee (enter), its frame a super()'s, whose
+// return Go ends, binding this (nativeEnd). Anything nativeSuper leaves to
+// Go, and a parent whose calls go to the JIT: rhSuperCall's, by an exit
+// before anything is written but the stack past the frame's top.
+func (g *nativeGen) superW() {
+	a := g.a
+	after, plain := a.NewLabel(), a.NewLabel()
+	a.Store(RDI, ncIP, RBX)
+	a.Store(RDI, ncBudget, R11)
+	a.LeaLabel(R8, after)
+	a.Store(RDI, ncAfter, R8)
+	a.MovRR(RBX, RAX)
+	a.Load(RCX, RDI, ncIP)
+	a.Load(RDX, RDI, ncCodeBase)
+	a.Op(Sub, RCX, RDX, true)
+	a.ShiftImm(Shr, RCX, 3, true)
+	a.MovRR(RSI, RDI)
+	a.MovRR(RAX, R12)
+	a.Load(RDX, RDI, ncSuperFn)
+	a.JmpMem(RDI, ncCallH)
+	a.Bind(after)
+	g.reload()
+	a.Op(Test, RAX, RAX, true)
+	a.Jcc(CondE, g.exit)
+	a.Load(RAX, RBX, 0)
+	a.Load(RCX, RDI, scr(sE))
+	a.Load(RSI, RDI, scr(sWin))
+	a.StoreImm(RDI, scr(sEnt), 0)
+	a.Load(R8, RCX, offERC)
+	a.LoadU8(RDX, R8, offRCArgs)
+	a.Op(Test, RDX, RDX, false)
+	a.Jcc(CondE, plain)
+	a.StoreImm(RDI, scr(sEnt), 1)
+	a.Bind(plain)
+	a.MovImm(R9, uint64(regCallEnter))
+	g.enter(enterSuper, g.exit)
+}
+
+// newSite puts in RCX new_w's site's cache entry and in RSI its window,
+// whose callee is the entry's, or exits.
+func (g *nativeGen) newSite() {
+	a := g.a
+	a.MovRR(RCX, RAX)
+	a.ShiftImm(Shr, RCX, 48, true)
+	a.Load(R9, RDI, ncCC)
+	a.CmpMem(RCX, R9, offCCRegCalls+8, true)
+	a.Jcc(CondAE, g.exit)
+	a.MovImm(R8, uint64(sizeE))
+	a.Imul(RCX, R8)
+	a.AddMem(RCX, R9, offCCRegCalls)
+	g.decA(RDX)
+	a.LeaIdx(RSI, R12, RDX, 1, 0)
+	a.Load(R9, RSI, 0)
+	a.CmpMem(R9, RDI, ncObjBits, true)
+	a.Jcc(CondNE, g.exit)
+	a.Load(R9, RSI, 8)
+	a.CmpMem(R9, RCX, offECallee, true)
+	a.Jcc(CondNE, g.exit)
 }
 
 // light is call_w's and call_method_w's call of the built-in its site
@@ -633,14 +1017,23 @@ func (g *nativeGen) call() {
 // before the call -- no state to make, no count, no handler to look up,
 // and no search of the site's cache again in rhCallW. A frame whose
 // state Go has not made yet (topOK) exits.
-func (g *nativeGen) light(fn int32) {
+func (g *nativeGen) light(fn int32) { g.lightW(fn, false) }
+
+// lightW is light, the instruction its Go function is given RAX where
+// given, not the one at RBX: through's of a built-in, one register on.
+func (g *nativeGen) lightW(fn int32, given bool) {
 	a := g.a
 	a.CmpMemImm8(RDI, ncTopOK, 0)
 	a.Jcc(CondE, g.exit)
 	a.Store(RDI, ncIP, RBX)
 	a.Store(RDI, ncBudget, R11)
-	a.Load(RAX, RBX, 0)
-	a.Store(RDI, ncW, RAX)
+	if given {
+		a.Load(R8, RBX, 0)
+		a.Store(RDI, ncW, R8)
+	} else {
+		a.Load(RAX, RBX, 0)
+		a.Store(RDI, ncW, RAX)
+	}
 	a.MovRR(RCX, RBX)
 	a.Load(RDX, RDI, ncCodeBase)
 	a.Op(Sub, RCX, RDX, true)
@@ -727,11 +1120,13 @@ func (g *nativeGen) ret(undef bool) {
 	noCap, base, open := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.CmpMemImm8(RDI, ncDepth, 0)
 	a.Jcc(CondE, base)
-	// A generator's step ends by genReturn.
+	// A generator's step ends by genReturn, and a construction's frame
+	// as constructed (ctorRet): kinds past the others.
+	ctor := a.NewLabel()
 	a.Load(RSI, RDI, ncNF)
 	a.LoadU8(R8, RSI, offFRegKind)
 	a.OpImm(Cmp, R8, regFrameGenStep, false)
-	a.Jcc(CondE, g.genRet)
+	a.Jcc(CondAE, ctor)
 	// Upvalues open on the frame are closed here, as nativeEnd closes
 	// them: a frame of captured registers, or an entered one's, whose
 	// arguments object a sloppy body maps onto its parameters.
@@ -761,6 +1156,41 @@ func (g *nativeGen) ret(undef bool) {
 	}
 	a.Store(RDI, scr(sV0), R8)
 	a.Store(RDI, scr(sV1), R9)
+	valued := a.NewLabel()
+	a.Bind(valued)
+	g.retPop(nil)
+	// The base frame's return: its value in the scratch, retDone set, and
+	// nativeRun returns it, as runReg would.
+	a.Bind(base)
+	if undef {
+		a.Load(R8, RDI, ncUndef)
+		a.Op(Xor, R9, R9, false)
+	} else {
+		g.decA(RDX)
+		a.LoadIdx(R8, R12, RDX, 1, 0)
+		a.LoadIdx(R9, R12, RDX, 1, 8)
+	}
+	a.Store(RDI, scr(sV0), R8)
+	a.Store(RDI, scr(sV1), R9)
+	a.StoreImm(RDI, ncRetDone, 1)
+	a.Jmp(g.exitRet)
+	g.late = append(g.late, func() {
+		superRet := a.NewLabel()
+		a.Bind(ctor)
+		a.Jcc(CondE, g.genRet)
+		g.ctorRet(undef, valued, superRet)
+		a.Bind(superRet)
+		g.superRet(undef)
+	})
+}
+
+// retPop is ret's end of a frame the code entered, its value in the
+// scratch's sV0 and sV1: the frame closed -- an entered one's arguments
+// given back to the argument stack, as regEnterW gives them -- its caller's
+// state off the native frame stack, the value in the caller's register
+// its record says, and post's code, if any, before the caller goes on.
+func (g *nativeGen) retPop(post func()) {
+	a := g.a
 	// The frame closed; an entered frame's arguments given back to the
 	// argument stack, as regEnterW gives them.
 	a.Load(RSI, RDI, ncNF)
@@ -811,10 +1241,124 @@ func (g *nativeGen) ret(undef bool) {
 	a.Bind(same)
 	a.Load(R12, RDI, ncRegs)
 	a.Load(R15, RDI, ncIC)
+	if post != nil {
+		post()
+	}
 	g.next()
-	// The base frame's return: its value in the scratch, retDone set, and
-	// nativeRun returns it, as runReg would.
-	a.Bind(base)
+}
+
+// ctorRet is ret's of a construction's frame (regFrameConstruct), RSI its
+// frame record: the upvalues open on it closed, its value what it returns
+// where that is an object, its this, register 1, where not, as
+// constructWithTarget makes it, and the frame closed as an entered one
+// from valued on.
+func (g *nativeGen) ctorRet(undef bool, valued, superRet Label) {
+	a := g.a
+	noCap, this, have, plain := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.OpImm(Cmp, R8, regFrameSuper, false)
+	a.Jcc(CondE, superRet)
+	// A derived class's, with its this binding: what it returns an
+	// object, which its derived_ret has made sure of; anything else Go's
+	// to throw for (nativeEnd), before anything is written.
+	a.CmpMemImm8(RSI, offFThisRef, 0)
+	a.Jcc(CondE, plain)
+	if undef {
+		a.Jmp(g.exit)
+	} else {
+		g.decA(RDX)
+		a.LoadIdx(R8, R12, RDX, 1, 0)
+		a.CmpMem(R8, RDI, ncObjBits, true)
+		a.Jcc(CondNE, g.exit)
+	}
+	a.Bind(plain)
+	a.CmpMemImm8(RSI, offFOpenUp+8, 0)
+	a.Jcc(CondE, noCap)
+	a.StoreImm(RDI, scr(sV0), 0)
+	a.StoreImm(RDI, scr(sV1), -1)
+	g.closeUps()
+	a.Load(RAX, RBX, 0)
+	a.Bind(noCap)
+	g.endThisRef()
+	if !undef {
+		g.decA(RDX)
+		a.LoadIdx(R8, R12, RDX, 1, 0)
+		a.LoadIdx(R9, R12, RDX, 1, 8)
+		a.CmpMem(R8, RDI, ncObjBits, true)
+		a.Jcc(CondE, have)
+	}
+	a.Bind(this)
+	a.Load(R8, R12, 16)
+	a.Load(R9, R12, 24)
+	a.Bind(have)
+	a.Store(RDI, scr(sV0), R8)
+	a.Store(RDI, scr(sV1), R9)
+	a.Load(RSI, RDI, ncNF)
+	a.MovImm(RCX, uint64(regFrameEnter))
+	a.Store8(RSI, offFRegKind, RCX)
+	a.Jmp(valued)
+}
+
+// endThisRef lets go of the top frame's this binding, a derived class's
+// constructor's, where it has one, as regEndThisRef does: the runtime's
+// cell's object where it is the runtime's cell (cellThis), and the
+// frame's binding. RAX is the instruction after it.
+func (g *nativeGen) endThisRef() {
+	a := g.a
+	none, noCell := a.NewLabel(), a.NewLabel()
+	a.Load(RSI, RDI, ncNF)
+	a.CmpMemImm8(RSI, offFThisRef, 0)
+	a.Jcc(CondE, none)
+	a.Load(R8, RDI, ncRC)
+	a.LoadU8(R9, R8, off("regCode.cellThis"))
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondE, noCell)
+	a.Load(RAX, RSI, offFThisRef)
+	a.Load(R8, RDI, ncUndef)
+	a.Store(RAX, off("thisBinding.value"), R8)
+	a.Lea(RAX, RAX, off("thisBinding.value")+8)
+	a.Op(Xor, RCX, RCX, true)
+	g.ptrTo()
+	a.Bind(noCell)
+	a.Load(RSI, RDI, ncNF)
+	a.Lea(RAX, RSI, offFThisRef)
+	a.Op(Xor, RCX, RCX, true)
+	g.ptrStore()
+	a.Load(RAX, RBX, 0)
+	a.Bind(none)
+}
+
+// superRet is ret's of a super()'s frame (regFrameSuper), RSI its frame
+// record: the parent's construction ended as a construction's -- its
+// upvalues closed, its this binding let go of where it is a derived
+// class's -- and the caller's this bound as superBind binds it, to what
+// the parent returned where that is an object other than the this it
+// was given: its binding's value, its frame record's this, initialized,
+// and super_call's R[A] and the caller's register 1 the this
+// (regSuperBound). A caller whose this binding is bound already throws:
+// Go's, by an exit before anything is written.
+func (g *nativeGen) superRet(undef bool) {
+	a := g.a
+	noCap, keep := a.NewLabel(), a.NewLabel()
+	a.Load(R8, RDI, ncDepth)
+	a.OpImm(Sub, R8, 1, true)
+	a.MovImm(RCX, uint64(recSize))
+	a.Imul(R8, RCX)
+	a.AddMem(R8, RDI, ncFrames)
+	a.Load(R8, R8, recNFOff)
+	a.Load(R8, R8, offFThisRef)
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, g.exit)
+	a.LoadU8(R9, R8, off("thisBinding.init"))
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondNE, g.exit)
+	a.CmpMemImm8(RSI, offFOpenUp+8, 0)
+	a.Jcc(CondE, noCap)
+	a.StoreImm(RDI, scr(sV0), 0)
+	a.StoreImm(RDI, scr(sV1), -1)
+	g.closeUps()
+	a.Load(RAX, RBX, 0)
+	a.Bind(noCap)
+	g.endThisRef()
 	if undef {
 		a.Load(R8, RDI, ncUndef)
 		a.Op(Xor, R9, R9, false)
@@ -825,8 +1369,51 @@ func (g *nativeGen) ret(undef bool) {
 	}
 	a.Store(RDI, scr(sV0), R8)
 	a.Store(RDI, scr(sV1), R9)
-	a.StoreImm(RDI, ncRetDone, 1)
-	a.Jmp(g.exitRet)
+	a.Load(RSI, RDI, ncNF)
+	a.MovImm(RCX, uint64(regFrameEnter))
+	a.Store8(RSI, offFRegKind, RCX)
+	g.retPop(func() {
+		// The caller's this: what the parent returned, an object other
+		// than the this it was given.
+		a.Load(RSI, RDI, ncNF)
+		a.Load(R8, RDI, scr(sV0))
+		a.CmpMem(R8, RDI, ncObjBits, true)
+		a.Jcc(CondNE, keep)
+		a.Load(RCX, RDI, scr(sV1))
+		a.CmpMem(RCX, RSI, offFThis+8, true)
+		a.Jcc(CondE, keep)
+		a.Store(RSI, offFThis, R8)
+		a.Lea(RAX, RSI, offFThis+8)
+		g.ptrStore()
+		a.Bind(keep)
+		// Its binding's value and initialized.
+		a.Load(RSI, RDI, ncNF)
+		a.Load(RAX, RSI, offFThisRef)
+		a.Load(R8, RSI, offFThis)
+		a.Store(RAX, off("thisBinding.value"), R8)
+		a.Load(RCX, RSI, offFThis+8)
+		a.Lea(RAX, RAX, off("thisBinding.value")+8)
+		g.ptrTo()
+		a.Load(RSI, RDI, ncNF)
+		a.Load(RAX, RSI, offFThisRef)
+		a.MovImm(RCX, 1)
+		a.Store8(RAX, off("thisBinding.init"), RCX)
+		// R[A] and register 1 the this.
+		for _, dst := range []bool{true, false} {
+			a.Load(RAX, RBX, 0)
+			if dst {
+				g.decA(RDX)
+			} else {
+				a.MovImm(RDX, 16)
+			}
+			a.Load(RSI, RDI, ncNF)
+			a.Load(R8, RSI, offFThis)
+			a.StoreIdx(R12, RDX, 1, 0, R8)
+			a.Load(RCX, RSI, offFThis+8)
+			a.LeaIdx(RAX, R12, RDX, 1, 8)
+			g.ptrTo()
+		}
+	})
 }
 
 // tailTo is tail_call_w's and tail_call_method_w's call once the stack is

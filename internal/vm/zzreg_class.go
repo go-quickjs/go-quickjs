@@ -202,13 +202,20 @@ func (r *Runtime) regSuperCallOf(f *frame, c *regCode, pc int, w bytecode.RInstr
 	if err := r.superCall(f, args); err != nil {
 		return err
 	}
+	regSuperBound(f, w, regs)
+	return nil
+}
+
+// regSuperBound is super_call's, super_forward's and super_spread's end
+// once super() has bound this: R[A] the this, and, in the constructor's
+// own frame, its register 1.
+func regSuperBound(f *frame, w bytecode.RInstr, regs *[1 << 16]Value) {
 	regs[w.A()] = f.this
 	if f.cl.fn.Kind == bytecode.KindDerivedConstructor {
 		// The constructor's own call: this, bound for good, is its
 		// register 1 from here (RegCode.ThisRef's thisBound).
 		regs[1] = f.this
 	}
-	return nil
 }
 
 // regSuperGet is super_get.

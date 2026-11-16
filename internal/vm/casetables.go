@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"hash/maphash"
 	"strings"
 	"unicode"
 
@@ -156,6 +157,89 @@ func asciiCase(s *String, upper bool) *String {
 	out.setBytes(b)
 	out.length, out.ascii = s.length, true
 	return out
+}
+
+// caseMemoMax is the longest text the case conversions remember.
+const caseMemoMax = 32
+
+// caseMemoWays is how many results a set of a caseMemo holds.
+const caseMemoWays = 4
+
+// caseMemo is a runtime's memo of the case conversions of short ASCII
+// strings, by their text (asciiCaseMemo): a render or a replacement that
+// converts the same short strings over and over -- a word's first letter,
+// a tag's or a style property's name -- had allocated each conversion
+// anew. It holds results alone, 64 sets of caseMemoWays, a text's set
+// chosen by a seeded hash of it and the case, so that no input picks the
+// sets of its strings; a result is the conversion of a text where each of
+// its bytes is that byte converted (isCaseOf).
+type caseMemo struct {
+	sets [64][caseMemoWays]*String
+	// next is the way the next result put in takes, in turn.
+	next uint8
+}
+
+// caseSeed seeds caseMemo's hash.
+var caseSeed = maphash.MakeSeed()
+
+// asciiCaseMemo is asciiCase of s, an ASCII string: a single character's
+// result the runtime's string of it, and that of a text of up to
+// caseMemoMax bytes remembered, in a memo made at the first conversion,
+// so that the same text converted again is the same string, which a
+// string's immutability allows.
+func (r *Runtime) asciiCaseMemo(s *String, upper bool) *String {
+	g := s.Go()
+	if len(g) > caseMemoMax || len(g) == 0 {
+		return asciiCase(s, upper)
+	}
+	if len(g) == 1 {
+		c := g[0]
+		if upper && c >= 'a' && c <= 'z' || !upper && c >= 'A' && c <= 'Z' {
+			return r.asciiCharString(c ^ 0x20)
+		}
+		return s
+	}
+	m := r.caseMemo
+	if m == nil {
+		m = new(caseMemo)
+		r.caseMemo = m
+	}
+	h := maphash.String(caseSeed, g) >> 58
+	if upper {
+		// A text's two conversions are in two sets.
+		h ^= 1
+	}
+	set := &m.sets[h]
+	for _, out := range set {
+		if out != nil && len(out.s) == len(g) && isCaseOf(out.s, g, upper) {
+			return out
+		}
+	}
+	out := asciiCase(s, upper)
+	if out != s {
+		set[m.next%caseMemoWays] = out
+		m.next++
+	}
+	return out
+}
+
+// isCaseOf reports whether out, an ASCII text as long as a, is a converted
+// to upper case or to lower case, byte by byte.
+func isCaseOf(out, a string, upper bool) bool {
+	lo, hi := byte('A'), byte('Z')
+	if upper {
+		lo, hi = 'a', 'z'
+	}
+	for i := 0; i < len(a); i++ {
+		c := a[i]
+		if c >= lo && c <= hi {
+			c ^= 0x20
+		}
+		if out[i] != c {
+			return false
+		}
+	}
+	return true
 }
 
 // caseConvert maps a string to upper or lower case, character by character.

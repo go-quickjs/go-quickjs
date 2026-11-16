@@ -50,3 +50,50 @@ func TestRegGlobalEpoch(t *testing.T) {
 		t.Errorf("only %d functions ran as register code", built)
 	}
 }
+
+// TestRegGlobalLex pins the global sites of a script-level lexical
+// binding, which read and write it in globalLex once it is initialized
+// (regNoteGlobalLex): a read in its dead zone throws and one after reads
+// it, a let written and read back, a const's write throwing every time, a
+// class read by a loop, a later script's let of another name, and a
+// global property a later script's let shadows, natively and by the Go
+// table alike.
+func TestRegGlobalLex(t *testing.T) {
+	steps := []struct{ src, want string }{
+		{`function readA() { var s = 0; for (var j = 0; j < 3; j++) s += a; return s }
+		  function writeB(v) { for (var j = 0; j < 3; j++) b = v + j; return b }
+		  function writeC() { var n = 0; for (var j = 0; j < 3; j++) try { c = j } catch (e) { n++ } return n + ":" + c }
+		  function useK() { var s = 0; for (var j = 0; j < 4; j++) s += new K(j).v + (K.prototype.m() ? 1 : 0); return s }
+		  function readG() { var s = 0; for (var j = 0; j < 3; j++) s += g; return s }
+		  globalThis.g = 2
+		  var tdz; try { readA() } catch (e) { tdz = e.name }
+		  let a = 5, b = 1; const c = 9
+		  class K { constructor(v) { this.v = v } m() { return true } }
+		  [tdz, readA(), readA(), writeB(10), writeB(20), b, writeC(), writeC(), useK(), useK(), readG(), readG()].join()`,
+			"ReferenceError,15,15,12,22,22,3:9,3:9,10,10,6,6"},
+		{`let g = 7; let z = 1; a = 100; [readG(), readG(), readA(), writeB(1), b].join()`, "21,21,300,3,3"},
+	}
+	for _, native := range []bool{false, true} {
+		compiler.SetRegisterForm(true)
+		fns := make([]*bytecode.Function, len(steps))
+		for i, s := range steps {
+			fns[i] = compileForTest(t, s.src)
+		}
+		compiler.SetRegisterForm(bytecode.RegDefault())
+		SetRegTier(true)
+		was := SetRegNative(native)
+		r := New(Config{})
+		for i, s := range steps {
+			v, err := r.Run(fns[i])
+			if err != nil {
+				t.Fatalf("native %v step %d: %v", native, i, err)
+			}
+			if got := v.String().Go(); got != s.want {
+				t.Errorf("native %v step %d: got %s, want %s", native, i, got, s.want)
+			}
+		}
+		r.Close()
+		SetRegNative(was)
+		SetRegTier(bytecode.RegDefault())
+	}
+}

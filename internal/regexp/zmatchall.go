@@ -88,6 +88,10 @@ func MatchAllASCIIInto[_ any](re *Regexp, spans []int, s string, check, tick fun
 			if at := indexUnitsASCII(b, prog.litOnly, pos); at >= 0 {
 				caps = append(buf[:0], at, at+len(prog.litOnly.units))
 			}
+		case prog.foldLit != nil && !sticky:
+			if at := indexFoldASCII(b, prog.foldLit, pos); at >= 0 {
+				caps = append(buf[:0], at, at+len(prog.foldLit.units))
+			}
 		case nativeBuilt && re.native != nil:
 			if caps, err = re.execASCIILent(buf, b, pos, check, stk); err != nil {
 				if a != nil {

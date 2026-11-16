@@ -4637,6 +4637,13 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	if err != nil {
 		return err
 	}
+	return r.superBind(f, parent, res)
+}
+
+// superBind is superCall's after the parent's construction gave res: this
+// bound to it, and the fields of the class whose constructor is running
+// put on the instance.
+func (r *Runtime) superBind(f *frame, parent *Object, res Value) error {
 	// `this` is bound once, and the second super() finds it already bound. The
 	// parent still ran: the check comes after the construction, not before it,
 	// so a second call has the parent's side effects and none of its own.

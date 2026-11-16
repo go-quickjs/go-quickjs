@@ -79,7 +79,7 @@ func strAppend[_ any](r *Runtime, a, b *String) (*String, error) {
 	if long || !a.building || a.left == nil || !a.tailed && a.ropes < strAppendRopes-1 {
 		// A short string is copied, and has nothing to grow.
 		if a.byteLenShallow()+b.byteLenShallow() < ropeThreshold {
-			return a.Concat(b), nil
+			return r.concatShort(a, b), nil
 		}
 		// Concat's rope, made here for what the checks above have said of
 		// the operands: a read after each append spends its time on this

@@ -1068,7 +1068,7 @@ func (r *Runtime) initReflectBuiltins() {
 		return rt.call(arg(args, 0), arg(args, 1), callArgs)
 	})
 
-	r.defMethod(rf, "construct", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.reflectConstructFn = r.defMethod(rf, "construct", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		target := arg(args, 0)
 		if !isConstructor(target) {
 			return Undefined, rt.throwTypeError("Reflect.construct requires a constructor")

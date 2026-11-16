@@ -151,7 +151,7 @@ func (r *Runtime) legacyArguments(o *Object) Value {
 	f := r.frameAt(i)
 	fn := f.cl.fn
 	args := append([]Value(nil), f.args...)
-	if f.args == nil && (f.regKind == regFrameCall || f.regKind == regFrameEnter) {
+	if f.args == nil && (f.regKind == regFrameCall || f.regKind == regFrameEnter || f.regKind == regFrameConstruct || f.regKind == regFrameSuper) {
 		// A register frame, whose arguments are its window's and its
 		// caller's instruction's (regLegacyArgs).
 		if a, ok := r.regLegacyArgs(i, f); ok {

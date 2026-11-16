@@ -616,8 +616,9 @@ work to, and every other architecture's interpreter. arm64's are amd64's
 handler for handler, in its instructions (nativegen's `arm64*.go`);
 what follows says amd64's registers, and arm64's where they differ.
 `runReg` hands its frame to `nativeRun` before its loop, whose
-`nativeLoop` enters the code and is what the code returns to (here
-`nativeRun` for short); `QJS_NONATIVE` set in the
+`nativeLoop` enters the code, by its loop `nativeDrive`, which is what
+the code returns to (here `nativeRun` for short; a built-in's callback
+kept ready enters it by `nativeCallbackRun`, below); `QJS_NONATIVE` set in the
 environment (read once, `regNativeOn`) keeps the frames in the Go table's
 loop, to compare the two and as an escape hatch.
 
@@ -685,7 +686,11 @@ functions"); `yield` in a frame that step entered; `s.charCodeAt(i)`
 (`char_code_at`) of a flat string, the built-in read from the same cache;
 BigInt64Array's and BigUint64Array's elements read and written, a BigInt
 held in its Value; Uint8ClampedArray's writes, clamped and rounded to
-even; the compare-and-branches of two such BigInts, as 128-bit integers;
+even; the compare-and-branches of two such BigInts, as 128-bit integers,
+of two registers and of a register and an upvalue (`jlt_upval` and its
+kin, out of line), and `===` and `!==` of two, equal only if both their
+words are (a BigInt the Value holds is held one way: a callback of a
+BigInt64Array's `every` or `find` had exited at each compare);
 an element written at the length of an array with room for it, as
 `appendElem` appends it, the array's and its prototype chain's index
 keys and elements checked;
@@ -730,11 +735,49 @@ general register: a chain of operations through one register waits on
 the store's forwarding alone, a move between the register files a link
 fewer (`try_finally` 12.9 to 10.2 ns, and as fast with no try
 statement: the jump over its handler's copy was never the cost).
+A destructuring's step over an array by the intrinsic iterator
+(`iter_step`), as `iter_next` steps one, undefined once it is done; and a
+cursor's close (`iter_close`): a for-in's marked done, an array's
+released (below, "for-of and for-in loops"), either where nothing is to
+be called -- the cursor done, or nothing up %ArrayIteratorPrototype%'s
+chain with a return method, the realm's `arrayIterCell` valid -- and
+any other done cursor left as it is; laid after the rarer paths, so that
+they move none of them (`local_destruct` 26.9 to 17.9 ns locally).
 A fast path that misses jumps to
 the exit; nothing is written before it does. arm64 answers one case more:
 NaN made an integer -- ToInt32's 0, an integer typed array's element 0
 -- where FCVTZS gives 0 and CVTTSD2SI no integer; what has no int64 is
 told by the limits FCVTZS saturates to, and exits as on amd64.
+
+**Constructions and the calls built-ins pass on.** `new_w` has a call
+site of its own, whose cache holds a constructor the handler enters as
+`call_w` enters a callee (`regCallConstruct`): a function's or a base
+class's once its objects' room is settled (its root tracked), a derived
+class's, and a forwarder's (`LeafForward`), none with fields of its own.
+Its object is made by Go with no exit (`nativeNew`, as `nativeLit` is
+called), of the constructor's prototype and root as
+`constructWithTarget` makes it -- a body that only stores its parameters
+answered by `leafCall` there -- and the frame is `regFrameConstruct`,
+its new.target the constructor, a derived class's with its this binding
+(`regThisBinding`); `ret` gives the frame's this where the body returns
+no object, and lets go of the binding. `super_call` and `super_forward`
+in a derived class's constructor enter the parent constructor
+(`nativeSuper` makes its window at the stack's top), `regFrameSuper`,
+whose `ret` binds the caller's this as `superBind` does, `derived_ret`
+answered in place. `instanceof` is `ordinaryHasInstance`'s case natively:
+Symbol.hasInstance the realm's as the site's cache finds it, the
+constructor's own data prototype found in its table, the value's chain
+walked. A call of the realm's `Function.prototype.call` whose callee the
+site's cache holds (`regCallThrough`, filled by Go) enters it in the
+window one register on, and `apply_args` its target in a window made at
+the stack's top (`nativeApply`), neither with the built-in's frame, which
+stack traces and `f.caller` pass over, as V8 has none. `args_index`
+reads an index past the parameters from the frame's kept arguments. A
+script-level `let`, `const` or `class` is read and written by its global
+site in `globalLex` (`regNoteGlobalLex`), at the global epoch as a global
+object's slot is. A register leaf's frameless run (`regLeafRun`) gives up
+while an interrupt is due, which its frame then counts: counting none, it
+had left every call of the leaf after the first due interrupt to Go.
 
 **The exit stub.** An operation of no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the
@@ -790,8 +833,12 @@ no code is called through `nativeCallH` with none of an exit's work:
 `new_array_e`'s literal (`nativeLit`), the instruction and the budget
 kept in the context and the pinned registers put back after. A call of
 the built-in a site cached (`regCallNative`) is made the same way
-(`light`): `nativeBuiltin`, a function of a handler's form, makes
-`rhCallW`'s call of it, `regNative`, and returns to the exit stub's code
+(`light`): `nativeBuiltin`, a function of a handler's form, applies
+one that needs no frame -- Math's functions, push and pop, a native leaf
+whose check passes -- first, with none of an exit's state (the frame's
+pc, the kept pc), since it throws nothing and runs no code (`string_at`
+61.0 to 52.0 ns on a Ryzen 5 3600, `date_now` 42.0 to 38.0), and makes
+anything else as `rhCallW` would, by `regNative`, and returns to the exit stub's code
 after its call (`exitAfter`), which goes on at the pc it gives or ends
 the frame, so that a built-in that throws or calls back is the exit's
 case; what it saves is the exit's work before the call -- no state to
@@ -951,21 +998,39 @@ arguments as its slice, without copying.
 
 A callback a built-in calls many times over -- a sort's comparator, the
 callback of forEach, map, filter, some, every, find, reduce and theirs of
-typed arrays -- is kept ready from one call to the next where it is a
-frame's (`regCallback`): its window reserved at the stack's top once,
-and natively its code entry's state and context kept too, so that each
-call writes the window's registers and the frame record and runs the
-code (`nativeLoop`), with none of `callDirect`'s, `regDirect`'s and
-`regEnterW`'s work or a code entry made anew. The frame record is pushed
-for the call alone: what Go runs between two calls -- a comparator's
-result converted by its `valueOf` -- finds no frame of it. A leaf, which
-`regDirect` answers without a frame, is called as before, but for one
-whose frameless run has given up (`pureMiss`), which `regDirect` enters
-with a frame: a sum of BigInts (`typed_i64_reduce` 26.4 to 17.1 ns, the
-tree 24.3; `typed_u64_forEach` 54.3 to 44.8, the tree 48.3).
-`typed_i64_sort`, whose comparator of BigInts is no leaf, went from 199.7
-to 142.3 ns natively (the tree 153.7) and from 206 to 167 by the Go
-table; `array_reduce_upvalue` from 23.5 to 18.1.
+typed arrays, a replacement function of `replace`, `JSON.parse`'s reviver
+-- is kept ready from one call to the next where it is a frame's
+(`regCallback`): its window reserved at the stack's top once, and
+natively its code entry's state and context kept too. Each call writes
+the window's registers and the frame record and enters the code
+(`nativeCallbackRun`): where the last call returned with no exit, the
+state and the context's top frame are still the frame's, and only the
+first instruction and the budget are given before the entry; a return
+read from the context with nothing else to undo. Anything else -- an
+exit, a throw, a frame given to a callee in place -- goes on as
+`nativeLoop` does (`nativeDrive`), and the next call makes the state
+and the top frame again. The frame record is pushed for the call alone:
+what Go runs between two calls -- a comparator's result converted by its
+`valueOf` -- finds no frame of it. A leaf is entered so with a frame too
+-- `x => x === k`, a body of the stack form's frameless evaluator
+(`pureCallAt`), is cheaper entered natively (`array_some` 50.9 to 42.5
+ns, `typed_find` 52.7 to 44.7) -- but a short straight body of numbers
+and upvalues (`regLeafCode`), `acc + x` or `a - b`, which `regLeafRun`
+runs in the window faster than any entry, and one that returns a
+parameter or a constant, which `callDirect` answers from its arguments.
+A runtime that runs the JIT keeps its leaves on `callDirect`, which
+counts them, and so does the Go table (`QJS_NONATIVE`), whose loop,
+entered for each call, is slower than the frameless evaluators. `array_reduce_upvalue` went from 43.6 to 33.6 ns,
+`array_forEach_this` from 39.4 to 29.4, `typed_sort`, whose comparator
+is `regLeafRun`'s, from 226 to 205 (the Ryzen 5 3600). A dense array's
+element is read in the methods' loops at once (`arrayLike.dense`), with
+no count of a step, which the callback's call makes.
+
+A reviver that cannot see a third argument -- fewer than three
+parameters, none a rest parameter, no arguments object and no direct
+eval, in a runtime with no debugger and not of Node's quirks -- is not
+given the context object, and the parse keeps no records of the source
+text for it (`seesThirdArg`): `json_parse_reviver` 4,667 to 1,524 ns.
 
 Stage 1 keeps the heap frame for what reads it today -- stack traces, the
 debugger, closures' `this`, errors' positions -- and writes only the fields
@@ -1063,7 +1128,33 @@ are.
   leaves the loop closes it on the way out as it runs a finally clause
   (`iter_close`, its error thrown), and `iter_next` is outside the
   ranges, so that an iterator whose `next` threw is not closed. A for-in
-  cursor needs no closing. A pattern or a member as the target, a
+  cursor needs no closing, but a break, a continue of an outer loop or a
+  return that leaves the loop marks it done all the same (`iter_close`,
+  a prot of the loop's with no ranges, which a throw passes by), so that
+  the next loop takes it (`newForInObject`) rather than making one: a loop
+  left by a break had made a 160-byte cursor each time (`for_in_break`
+  104 to 44 ns locally). An array's cursor that `iter_close` or
+  `iter_close_throw` closes -- a pattern's end, a for-of left by a break --
+  is released (`iterState.released`), its register read no more, and the
+  next cursor over an array takes it (`arrCursor`): every destructuring
+  of an array had made one. Whether nothing up an object's prototype chain
+  has an enumerable key, which every for-in asks, is kept in the realm by
+  the chain's first object while the chain's validity cell holds
+  (`protosNoEnum`), its prototypes' elements, which the cell does not see,
+  looked at each time: each loop had walked Object.prototype's keys.
+  A dictionary's keys -- a plain object whose layout is its own -- are
+  made once for its layout and kept, the last dictionary's
+  (`dictForIn`), the layout remembered as a cache remembers one, so that
+  a key added, deleted or redefined gives it a new identity: while the
+  object keeps it, its keys are these, and the loop's steps hand them out
+  natively, as a shared layout's, rather than each looked up again by Go
+  (`dict_for_in` 71 to 11 ns locally). A pattern's rest element over an
+  array whose rest is all in its dense storage is copied at once
+  (`regIterRest`), each step having read an element there, running
+  nothing. A step of an iterator of script reads its result's `done` and
+  `value` where they are its own data properties, as Get reads them,
+  without the generic read's walk (`regStepOf`).
+  A pattern or a member as the target, a
   captured lexical binding (each turn's is a new one) and `for await`
   stay the stack form's.
 
@@ -1182,6 +1273,18 @@ the allocation of 4 rather than 8 (the tree's keeps its 2 locals), and
   where no job is waiting: the job the await would queue would be the
   queue's next, and the frame would be resumed with that value. The first
   run of an async function, which its caller's code follows, never does.
+- **An async function's first run is a call.** A call site of an async
+  function that keeps no arguments, has no direct eval and nothing of its
+  surroundings (`funcData.extra`) runs its body in the call's window as a
+  call runs a callee (`regAsyncRun`), with no generator: one that returns
+  or throws before it awaits settles its promise and is done, and one that
+  awaits makes its generator then, from the window as it is -- its
+  registers from `genFrom` copied, its captures moved there -- and the
+  await's job queued as `runAsync`'s first step queues it. What runs, and
+  in what order, is the same (`TestAsyncFirstRunOrder`, Node's order);
+  what is saved is the generator, the copies of the window in and out and
+  a frame for a call that never awaits, and the copy in for one that does
+  (`async_call` 318 to 192 ns locally, `async_chain` 1,691 to 1,425).
 
 ## Closures and upvalues
 

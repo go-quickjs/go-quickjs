@@ -83,3 +83,28 @@ func TestIsModule(t *testing.T) {
 		}
 	}
 }
+
+// The assembly pad is whole 32-byte slots of int3 bytes, none where the
+// lever is left out, and amd64's alone.
+func TestAsmSource(t *testing.T) {
+	c := &config{goos: "linux", goarch: "amd64", jit: true}
+	src, err := asmSource(c, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(src, "QUAD $0xcccccccccccccccc"); got != 3*slot/8 {
+		t.Fatalf("%d quads, want %d", got, 3*slot/8)
+	}
+	if !strings.Contains(src, "//go:build quickjs_jit\n") || !strings.Contains(src, "TEXT ·layoutPadH(SB), NOSPLIT|NOFRAME, $0-0\n") {
+		t.Fatalf("source\n%s", src)
+	}
+	if src, err := asmSource(c, -1); err != nil || strings.Contains(src, "TEXT") {
+		t.Fatalf("left out: %v\n%s", err, src)
+	}
+	if _, err := asmSource(&config{goos: "linux", goarch: "arm64"}, 1); err == nil {
+		t.Fatal("arm64 pad written")
+	}
+	if got := filepath.Base(asmFile(c)); got >= "zzzyn_native_amd64.s" || got <= "zzjit_leaffast_amd64.s" {
+		t.Fatalf("%s does not sort between the JIT's assembly and the native handlers'", got)
+	}
+}

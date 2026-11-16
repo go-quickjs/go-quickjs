@@ -225,7 +225,7 @@ func (r *Runtime) initObjectBuiltins() {
 		default:
 			return Undefined, rt.throwTypeError("Object.create requires an object or null")
 		}
-		o := newObject(proto, ClassObject)
+		o := newCreated(proto)
 		if props := arg(args, 1); !props.IsUndefined() {
 			if err := rt.defineProperties(o, props); err != nil {
 				return Undefined, err
@@ -1238,6 +1238,9 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if v, ok := rt.sliceDense(this, args); ok {
+			return v, nil
+		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
@@ -1582,9 +1585,14 @@ func (r *Runtime) initArrayBuiltins() {
 			defer ready.end()
 		}
 		for i := int64(0); i < a.n; i++ {
-			el, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
+			// An element of the dense storage read at once, the step
+			// counted by the callback's call.
+			el, present := a.dense(i)
+			var err error
+			if !present {
+				if el, present, err = a.at(rt, i); err != nil {
+					return Undefined, err
+				}
 			}
 			if !present {
 				continue
@@ -1616,9 +1624,14 @@ func (r *Runtime) initArrayBuiltins() {
 			defer ready.end()
 		}
 		for i := int64(0); i < a.n; i++ {
-			el, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
+			// An element of the dense storage read at once, the step
+			// counted by the callback's call.
+			el, present := a.dense(i)
+			var err error
+			if !present {
+				if el, present, err = a.at(rt, i); err != nil {
+					return Undefined, err
+				}
 			}
 			if !present {
 				// A hole in the source stays a hole in the result.
@@ -1658,9 +1671,14 @@ func (r *Runtime) initArrayBuiltins() {
 			defer ready.end()
 		}
 		for i := int64(0); i < a.n; i++ {
-			el, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
+			// An element of the dense storage read at once, the step
+			// counted by the callback's call.
+			el, present := a.dense(i)
+			var err error
+			if !present {
+				if el, present, err = a.at(rt, i); err != nil {
+					return Undefined, err
+				}
 			}
 			if !present {
 				continue
@@ -1714,9 +1732,14 @@ func (r *Runtime) initArrayBuiltins() {
 			defer ready.end()
 		}
 		for i := int64(0); i < a.n; i++ {
-			el, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
+			// An element of the dense storage read at once, the step
+			// counted by the callback's call.
+			el, present := a.dense(i)
+			var err error
+			if !present {
+				if el, present, err = a.at(rt, i); err != nil {
+					return Undefined, err
+				}
 			}
 			if !present {
 				continue
@@ -1748,9 +1771,14 @@ func (r *Runtime) initArrayBuiltins() {
 			defer ready.end()
 		}
 		for i := int64(0); i < a.n; i++ {
-			el, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
+			// An element of the dense storage read at once, the step
+			// counted by the callback's call.
+			el, present := a.dense(i)
+			var err error
+			if !present {
+				if el, present, err = a.at(rt, i); err != nil {
+					return Undefined, err
+				}
 			}
 			if !present {
 				continue
@@ -1853,9 +1881,14 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 		if backwards {
 			i = a.n - 1 - k
 		}
-		el, err := a.get(r, i)
-		if err != nil {
-			return Undefined, -1, err
+		// An element of the dense storage read at once, the step counted
+		// by the callback's call.
+		el, present := a.dense(i)
+		var err error
+		if !present {
+			if el, err = a.get(r, i); err != nil {
+				return Undefined, -1, err
+			}
 		}
 		argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
 		var ok Value
@@ -1903,9 +1936,14 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 		if backwards {
 			i = a.n - 1 - k
 		}
-		el, present, err := a.at(r, i)
-		if err != nil {
-			return Undefined, err
+		// An element of the dense storage read at once, the step
+		// counted by the callback's call.
+		el, present := a.dense(i)
+		var err error
+		if !present {
+			if el, present, err = a.at(r, i); err != nil {
+				return Undefined, err
+			}
 		}
 		k++
 		if present {
@@ -1929,9 +1967,14 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 		if backwards {
 			i = a.n - 1 - k
 		}
-		el, present, err := a.at(r, i)
-		if err != nil {
-			return Undefined, err
+		// An element of the dense storage read at once, the step
+		// counted by the callback's call.
+		el, present := a.dense(i)
+		var err error
+		if !present {
+			if el, present, err = a.at(r, i); err != nil {
+				return Undefined, err
+			}
 		}
 		if !present {
 			continue

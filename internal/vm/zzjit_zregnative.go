@@ -2475,7 +2475,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 	var v Value
 	var err error
 	if op == bytecode.RNewW {
-		v, err = r.regConstruct(r.stack[top], top, argc)
+		v, err = r.regConstruct(nil, 0, r.stack[top], top, argc)
 	} else if op == bytecode.RLit {
 		// As regLit calls it: the RegExp given back where the built-in
 		// called keeps nothing of it (RMarkLitRecv).

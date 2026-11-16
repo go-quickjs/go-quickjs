@@ -274,7 +274,7 @@ const (
 	// RCallMW is RCallW with this R[A+1]: a method call, its window
 	// R[A] the method and R[A+1] the receiver get_method wrote.
 	RCallMW
-	// RNewW: R[B] = new R[A](R[A+2] ... R[A+1+X]).
+	// RNewW: R[B] = new R[A](R[A+2] ... R[A+1+X]), its call site C.
 	RNewW
 	// RClosureW: R[A] = a closure of Constants[BC], each upvalue it takes
 	// from its maker the register RegCode.Caps[BC] names.
@@ -419,7 +419,9 @@ const (
 	// RIterClose closes cursor R[B] as a break, a continue or a
 	// return that leaves its loop does: an error of its return method's is
 	// thrown. RIterCloseThrow closes it as a throw that leaves the loop
-	// does: an error of its return method's is dropped.
+	// does: an error of its return method's is dropped. RIterClose with
+	// X RIterCloseForIn closes a for-in loop's cursor, which runs nothing:
+	// it marks the cursor done, so that the next loop may take it.
 	RIterClose
 	RIterCloseThrow
 	// Top-level code's declarations, each what the stack form's instruction
@@ -1323,6 +1325,9 @@ func (rc *RegCode) Format(pc int) string {
 	case RNewRegExp:
 		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
 	case RIterClose, RIterCloseThrow:
+		if w.X() == RIterCloseForIn {
+			return fmt.Sprintf("%s %s (for-in)", op, r(w.B()))
+		}
 		return fmt.Sprintf("%s %s", op, r(w.B()))
 	case RStepJLt, RStepJLe:
 		return fmt.Sprintf("%s %s += %d (%s), %s %s", op, r(w.A()), StepK(w.X()), stepForm(w.X()), r(w.B()), target(w.SC()))
@@ -1364,3 +1369,6 @@ func (rc *RegCode) String() string {
 	}
 	return sb.String()
 }
+
+// RIterCloseForIn is iter_close's X for a for-in loop's cursor (RIterClose).
+const RIterCloseForIn = 1

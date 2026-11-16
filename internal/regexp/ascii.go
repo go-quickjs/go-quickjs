@@ -81,6 +81,12 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 		}
 		return nil, nil
 	}
+	if lit := re.prog.foldLit; lit != nil && !sticky {
+		if at := indexFoldASCII(b, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit.units)), nil
+		}
+		return nil, nil
+	}
 	if nativeBuilt && re.native != nil {
 		if caps, done, err := re.execASCIINative(dst, b, start, check, sticky); done {
 			return caps, err
@@ -126,6 +132,12 @@ func (re *Regexp) giveBackASCII(m *matcher, a *matcherASCII, lent bool) {
 func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
 	if lit := re.prog.litOnly; lit != nil && !sticky {
 		if at := indexUnitsASCII(b, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit.units)), nil
+		}
+		return nil, nil
+	}
+	if lit := re.prog.foldLit; lit != nil && !sticky {
+		if at := indexFoldASCII(b, lit, start); at >= 0 {
 			return append(dst[:0], at, at+len(lit.units)), nil
 		}
 		return nil, nil

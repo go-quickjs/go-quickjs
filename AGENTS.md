@@ -87,8 +87,11 @@ concurrently.
   builder and slow paths, `executeAt`, the call path, `runTree`,
   `callTree`, the JIT's leaf calls, the tree's closures and its generic
   nodes, the DataView leaves, the method values, the regular expression
-  matcher (a pad of its own in internal/regexp), and the Go runtime's
-  `mheap_`, `writeBarrier` and `gcController` -- at fixed offsets modulo
+  matcher (a pad of its own in internal/regexp), the register
+  interpreter's native handlers' block (`regNativeHandlers`, by an
+  assembly pad sorted before it: package vm's assembly is laid out after
+  its closures, so that any closure's growth had moved it), and the Go
+  runtime's `mheap_`, `writeBarrier` and `gcController` -- at fixed offsets modulo
   4 KB and 64 bytes in a `v8bench` build. After a change to package
   vm, run `go generate ./internal/vm` (or `go run ./internal/cmd/layoutpad`)
   and commit the pads; `TestLayoutLock` (internal/vm/layoutlock_test.go,
@@ -198,6 +201,7 @@ Do not manually edit generated files or their binary companions:
   fails while a file is out of date; on a host with no JIT (darwin amd64,
   say), it checks every file but the feedback dispatchers'.
 - `internal/vm/*_layoutpad.go`, `internal/vm/layoutpad_*.go`,
+  `internal/vm/zzzyn_native_a_layoutpad_*.s`,
   `internal/regexp/aa_layoutpad.go` and `internal/regexp/layoutpad_*.go`,
   the layout lock's pads and the constants that size them for each
   configuration,

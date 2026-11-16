@@ -29,3 +29,43 @@ func TestPropertyNameAtoms(t *testing.T) {
 		t.Errorf("got %s, want %s", got, want)
 	}
 }
+
+// Two key strings that share a slot of keyAtoms, converted in turn, each
+// find their atom remembered: the one a conversion moved out of the slot
+// is kept in its second way (keyRemember) and found there (keyVictim),
+// where each had evicted the other and been looked up anew every time.
+// The strings are found by their addresses, which keySlot hashes.
+func TestPropertyNameSharedSlot(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	first := map[uint64]*String{}
+	var a, b *String
+	for i := 0; a == nil; i++ {
+		s := NewString("key" + string(rune('a'+i%26)) + string(rune('a'+i/26%26)) + string(rune('a'+i/676%26)))
+		if p, ok := first[keySlot(s)]; ok && p.Go() != s.Go() {
+			a, b = p, s
+		} else {
+			first[keySlot(s)] = s
+		}
+	}
+	atomA, atomB := r.atoms.intern(a.Go()), r.atoms.intern(b.Go())
+	for i := 0; i < 4; i++ {
+		for _, c := range []struct {
+			s    *String
+			atom Atom
+		}{{a, atomA}, {b, atomB}} {
+			pn, err := r.toPropertyName(Str(c.s))
+			if err != nil || !pn.hasAtom || pn.atom != c.atom {
+				t.Fatalf("round %d: %q converts to %+v, %v, want atom %v", i, c.s.Go(), pn, err, c.atom)
+			}
+			if i > 0 && r.keyAtoms[keySlot(c.s)].s != c.s {
+				t.Fatalf("round %d: %q is not in its slot after its conversion", i, c.s.Go())
+			}
+		}
+		if i > 0 {
+			if v := r.keyVictims; v == nil || v[keySlot(a)].s != a {
+				t.Fatalf("round %d: %q, evicted, is not in the slot's second way", i, a.Go())
+			}
+		}
+	}
+}

@@ -91,12 +91,12 @@ func (re *Regexp) classMatch(dst []int, units []uint16, start int, sticky bool) 
 // where ascii is set, is a search the matcher never makes: one that spends
 // no step of the budget and asks no check, and so reports neither
 // ErrComplexity nor a check's error, whatever the subject. A pattern of
-// nothing but characters is one (litOnly), but for a sticky one, which the
+// nothing but characters is one (litOnly, foldLit), but for a sticky one, which the
 // matcher tries at its one position; a pattern of one class is one, but
 // where it reads code points over a subject past ASCII.
 func (re *Regexp) NeverFails(ascii bool) bool {
 	p := re.prog
-	if p.litOnly != nil && re.flags&FlagSticky == 0 {
+	if (p.litOnly != nil || p.foldLit != nil) && re.flags&FlagSticky == 0 {
 		return true
 	}
 	return p.classOnly && (ascii || re.flags&(FlagUnicode|FlagUnicodeSets) == 0)

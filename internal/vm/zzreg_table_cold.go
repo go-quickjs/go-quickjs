@@ -138,10 +138,22 @@ func rhForInStart(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState)
 	return st.put(regs, w, v, err)
 }
 
-// rhIterClose is iter_close.
+// rhIterClose is iter_close: a for...in's cursor marked done, so that the
+// next loop takes it (newForInObject); an array's released once closed,
+// so that the next cursor over an array does (arrCursor).
 func rhIterClose(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
-	return st.done(st.r.iterCloseNormal(regs[w.B()]))
+	cur := cursorOf(regs[w.B()])
+	if cur != nil && cur.forIn {
+		cur.done = true
+		return pc + 1
+	}
+	arr := cur != nil && cur.arr != nil
+	err := st.r.iterCloseNormal(regs[w.B()])
+	if arr && err == nil {
+		cur.released = true
+	}
+	return st.done(err)
 }
 
 // rhIterCloseThrow is iter_close_throw.
@@ -151,11 +163,18 @@ func rhIterCloseThrow(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regSt
 	r := st.r
 	st.at(pc)
 	cur := cursorOf(regs[w.B()])
-	if cur == nil || cur.forIn || cur.done || cur.delegation || cur.arr != nil && !r.unwalkToClose(cur) {
+	if cur == nil {
 		return pc + 1
 	}
-	cur.done = true
-	r.closeIterator(cur.iter)
+	arr := cur.arr != nil
+	if !cur.forIn && !cur.done && !cur.delegation && (!arr || r.unwalkToClose(cur)) {
+		cur.done = true
+		r.closeIterator(cur.iter)
+	}
+	if arr {
+		// Its pattern or loop reads it no more (arrCursor).
+		cur.released = true
+	}
 	return pc + 1
 }
 

@@ -173,6 +173,37 @@ type nativeCtx struct {
 	// that a context whose stack a deep recursion grew costs a callback's
 	// entry no more than one never grown.
 	used int64
+
+	// newFn is the func value of nativeNew, which new_w's handler calls
+	// through callH with no exit for the object it constructs: past the
+	// words the code read before it, which it moves none of.
+	newFn uintptr
+	// hasInst is where a Realm has its Function.prototype[Symbol.hasInstance]
+	// (hasInstanceFn): an offset from the realm running now, as has is.
+	hasInst uintptr
+	// superFn is the func value of nativeSuper, which super_call's and
+	// super_forward's handler calls through callH with no exit, and super
+	// the call cache entry it makes the parent constructor's, which the
+	// handler enters as call_w enters its site's (nativeReset clears it).
+	superFn uintptr
+	super   regCallCache
+	// thisRef is the this binding nativeNew or nativeSuper made last, which
+	// the handler gives the frame it enters by the scratch's word: held
+	// here too, so that it is made on the heap, as only a pointer the
+	// collector sees can make it, and lives until the frame has it.
+	thisRef *thisBinding
+	// callFn is where a Realm has its Function.prototype.call (callFn): an
+	// offset from the realm running now, as has is.
+	callFn uintptr
+	// applyFn is the func value of nativeApply, which apply_args's
+	// handler calls through callH with no exit.
+	applyFn uintptr
+	// reflectFn is the func value of nativeReflect, which the call
+	// handler calls through callH with no exit for a call of the site's
+	// built-in Reflect.construct, and reflect where a Realm has it
+	// (reflectConstructFn), an offset from the realm running now.
+	reflectFn uintptr
+	reflect   uintptr
 }
 
 // nativeMaxDepth is how deep the native frame stack goes.
@@ -227,6 +258,15 @@ const (
 	// arguments, which start at sKa on the argument stack.
 	sEnt
 	sKa
+)
+
+// A construction's and a super()'s entry (nativeNew, nativeSuper) are
+// given to the call handler's entry in two of its words it does not use:
+// the this binding of a derived class's frame, or 0, and super()'s
+// new.target, an object.
+const (
+	sThisRef = sV0
+	sNewTgt  = sV1
 )
 
 // nativeTable is a native dispatcher (internal/vm/internal/nativegen,

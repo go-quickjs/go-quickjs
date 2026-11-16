@@ -1665,6 +1665,13 @@ func (l *regLowering) lowerCold(pc int, w bytecode.RInstr) {
 		// literal's (LowerSSA's new_regexp).
 		l.emit(ir.Instruction{Op: ir.ObjectLiteral, Dest: int(a)}, false)
 	case bytecode.RIterClose:
+		if w.X() == bytecode.RIterCloseForIn {
+			// A for-in's cursor, which closing marks done for the
+			// interpreter's next loop to take, and nothing else: native
+			// code leaves it as it is.
+			l.emit(ir.Instruction{Op: ir.Nop}, false)
+			break
+		}
 		l.emit(ir.Instruction{Op: ir.IterClose, Left: reg(b)}, false)
 	case bytecode.RGetGlobalOpt:
 		l.emit(ir.Instruction{Op: ir.BindingRead, Left: ir.Literal(ir.Value{Kind: ir.Undefined}), Dest: int(a), Key: l.name(b)}, false)

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"strings"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -44,7 +45,7 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 	case bytecode.ConstNumber:
 		return Float(c.Num)
 	case bytecode.ConstString:
-		return Str(NewString(c.Str))
+		return Str(r.constString(c.Str))
 	case bytecode.ConstBigInt:
 		if b, ok := ParseBigInt(c.Str); ok {
 			return Big(b)
@@ -392,4 +393,39 @@ func (r *Runtime) wrapEvalError(err error) error {
 
 func joinComma(parts []string) string {
 	return strings.Join(parts, ",")
+}
+
+// constString is the string of a string constant of text s: the one the
+// runtime made for another constant of that text while it lives, so that
+// two literals of one text are one string, which === finds equal by
+// identity (the native jseq's first test) rather than by their text. The
+// strings are held weakly, the dead swept out as the table doubles. Each
+// is the table's own allocation, which the weak pointer is to: never
+// static data nor part of another object, which Go 1.24's weak.Make
+// refuses ("getWeakHandle on invalid pointer"). The empty string is the
+// runtime's one (emptyString), identical already and never held.
+func (r *Runtime) constString(s string) *String {
+	if s == "" {
+		return emptyString
+	}
+	if p, ok := r.strConsts[s]; ok {
+		if v := p.Value(); v != nil {
+			return v
+		}
+	}
+	v := new(String)
+	*v = *NewString(s)
+	if r.strConsts == nil {
+		r.strConsts = map[string]weak.Pointer[String]{}
+	}
+	if len(r.strConsts) >= r.strConstsSweep {
+		for k, p := range r.strConsts {
+			if p.Value() == nil {
+				delete(r.strConsts, k)
+			}
+		}
+		r.strConstsSweep = 2*len(r.strConsts) + 256
+	}
+	r.strConsts[s] = weak.Make(v)
+	return v
 }

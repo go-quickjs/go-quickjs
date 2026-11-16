@@ -23,3 +23,7 @@ func (r *Runtime) nativeLoop(st *regState, ctx *nativeCtx, f *frame, c *regCode,
 }
 
 func nativeReset(ctx *nativeCtx) {}
+
+func (r *Runtime) nativeCallbackRun(cb *regCallback, f *frame, regs *[1 << 16]Value) (Value, error) {
+	panic("vm: no native handlers on this architecture")
+}

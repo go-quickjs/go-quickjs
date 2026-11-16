@@ -279,6 +279,9 @@ func (r *Runtime) concat(a, b *String) (*String, error) {
 			return nil, err
 		}
 	}
+	if a.byteLenShallow()+b.byteLenShallow() < ropeThreshold {
+		return r.concatShort(a, b), nil
+	}
 	return a.Concat(b), nil
 }
 

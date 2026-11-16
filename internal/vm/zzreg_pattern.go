@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"slices"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Destructuring and parameter lists in the register form
 // (docs/register-interpreter.md, "Stage 2: zero refusals"): the cold
@@ -19,8 +23,19 @@ func (r *Runtime) regIterStep(f *frame, c *regCode, pc int, w bytecode.RInstr, r
 	return nil
 }
 
-// regIterRest is iter_rest.
+// regIterRest is iter_rest. What is left of an array by the intrinsic
+// iterator, all of it in its dense storage, is copied at once: each step
+// would read an element there, running nothing, and the walk ends at its
+// length, done, as iterRest's steps leave it.
 func (r *Runtime) regIterRest(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	if st := cursorOf(regs[w.B()]); st != nil && !st.done && st.arr != nil && st.arr.flags&objHasSparseElements == 0 {
+		el := st.arr.elemsOf()
+		if n := len(el); int64(n) == int64(st.arr.arrayLength()) && st.idx <= n && !slices.ContainsFunc(el[st.idx:], isHole) {
+			regs[w.A()] = Obj(r.newArrayFrom(el[st.idx:]))
+			st.idx, st.done = n, true
+			return nil
+		}
+	}
 	var v Value
 	var err error
 	v, err = r.iterRest(regs[w.B()])

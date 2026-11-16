@@ -219,6 +219,12 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		}
 		return nil, nil
 	}
+	if lit := re.prog.foldLit; lit != nil && !sticky {
+		if at := indexFoldUnits(units, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit.units)), nil
+		}
+		return nil, nil
+	}
 	if nativeBuilt && re.native != nil {
 		// A pattern with native code for UTF-16 has it search, with no
 		// more of the matcher than the code uses.

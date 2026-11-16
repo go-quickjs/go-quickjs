@@ -147,6 +147,21 @@ func TestToNumber(t *testing.T) {
 		{"999999999999999", 999999999999999},
 		{"9007199254740993", 9007199254740992},
 		{"-12345678901234567890", -12345678901234567890},
+		// Decimals as JSON writes them are read in one pass (ParseShort);
+		// the forms JSON has not still take the general path.
+		{"12345.6", 12345.6},
+		{" -12345.6	", -12345.6},
+		{"0.1", 0.1},
+		{"1.7976931348623157e308", math.MaxFloat64},
+		{"5e-324", 5e-324},
+		{"1e400", math.Inf(1)},
+		{"-1e400", math.Inf(-1)},
+		{"1e-400", 0},
+		{"1E+2", 100},
+		{"01.5", 1.5},
+		{"+1.5", 1.5},
+		{"1.5e00002", 150},
+		{"123456789012345678901.5", 123456789012345678901.5},
 	}
 	for _, tt := range tests {
 		if got := ToNumber(tt.in); got != tt.want {
@@ -157,7 +172,7 @@ func TestToNumber(t *testing.T) {
 	if got := ToNumber("-0"); got != 0 || !math.Signbit(got) {
 		t.Errorf("ToNumber(%q) = %v, want -0", "-0", got)
 	}
-	for _, s := range []string{"abc", "42abc", "1_000", "0x", "inf", "nan", "1p3", "--1", "0x1p2", "-", "1-", "-1a", "12 3"} {
+	for _, s := range []string{"abc", "42abc", "1_000", "0x", "inf", "nan", "1p3", "--1", "0x1p2", "-", "1-", "-1a", "12 3", "1.5.", "1e", "1e+", "-.", "1.5e5x", "1.5_0", "-0x10"} {
 		if got := ToNumber(s); !math.IsNaN(got) {
 			t.Errorf("ToNumber(%q) = %v, want NaN", s, got)
 		}

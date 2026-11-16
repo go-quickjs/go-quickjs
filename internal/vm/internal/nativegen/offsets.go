@@ -184,31 +184,36 @@ var (
 
 	// A generator's step (genStep, genYield): the cursor's, the
 	// generator's and its frame's fields.
-	offItIter    int32
-	offItNext    int32
-	offItForIn   int32
-	offGen       int32
-	offGCl       int32
-	offGThis     int32
-	offGCallee   int32
-	offGVals     int32
-	offGPC       int32
-	offGNargs    int32
-	offGSaved    int32
-	offGRare     int32
-	offGState    int32
-	offGDeleg    int32
-	offGStarted  int32
-	offGReg      int32
-	offGAwaitJob int32
-	offClRealm   int32
-	offRCGenFrom int32
-	offRealmNext int32
-	offFDName    int32
-	offFHandlers int32
-	offFSavedSP  int32
-	offFParams   int32
-	offFThis     int32
+	offItIter  int32
+	offItNext  int32
+	offItForIn int32
+	// A cursor's close (iter_close): its mark of an array's cursor
+	// closed, and the realm's cell of %ArrayIteratorPrototype%'s
+	// chain with no return method (arrayIterNoReturn).
+	offItReleased       int32
+	offRealmArrIterCell int32
+	offGen              int32
+	offGCl              int32
+	offGThis            int32
+	offGCallee          int32
+	offGVals            int32
+	offGPC              int32
+	offGNargs           int32
+	offGSaved           int32
+	offGRare            int32
+	offGState           int32
+	offGDeleg           int32
+	offGStarted         int32
+	offGReg             int32
+	offGAwaitJob        int32
+	offClRealm          int32
+	offRCGenFrom        int32
+	offRealmNext        int32
+	offFDName           int32
+	offFHandlers        int32
+	offFSavedSP         int32
+	offFParams          int32
+	offFThis            int32
 
 	// Closures and upvalues (closeUps, closure_w).
 	ncClosureFn  int32
@@ -217,6 +222,13 @@ var (
 	ncIterResFn  int32
 	ncCallMissFn int32
 	ncJITCallFn  int32
+	ncNewFn      int32
+	ncHasInst    int32
+	ncSuperFn    int32
+	ncCallFn     int32
+	ncApplyFn    int32
+	ncReflectFn  int32
+	ncReflect    int32
 	ncMiss       int32
 	offUpSlot    int32
 	offUpClosed  int32
@@ -436,6 +448,8 @@ func loadOffsets() {
 	offItIter = off("iterObject.st") + off("iterState.iter")
 	offItNext = off("iterObject.st") + off("iterState.next")
 	offItForIn = off("iterObject.st") + off("iterState.forIn")
+	offItReleased = off("iterObject.st") + off("iterState.released")
+	offRealmArrIterCell = off("Realm.arrayIterCell")
 	offGen = off("generatorObject.g")
 	offGCl = off("generator.cl")
 	offGThis = off("generator.this")
@@ -464,6 +478,13 @@ func loadOffsets() {
 	ncIterResFn = off("nativeCtx.iterResFn")
 	ncCallMissFn = off("nativeCtx.callMissFn")
 	ncJITCallFn = off("nativeCtx.jitCallFn")
+	ncNewFn = off("nativeCtx.newFn")
+	ncHasInst = off("nativeCtx.hasInst")
+	ncSuperFn = off("nativeCtx.superFn")
+	ncCallFn = off("nativeCtx.callFn")
+	ncApplyFn = off("nativeCtx.applyFn")
+	ncReflectFn = off("nativeCtx.reflectFn")
+	ncReflect = off("nativeCtx.reflect")
 	ncMiss = off("nativeCtx.miss")
 	offUpSlot = off("upvalue.slot")
 	offUpClosed = off("upvalue.closed")

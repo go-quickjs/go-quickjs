@@ -208,8 +208,48 @@ func (r *Runtime) keyString(k Atom) *String {
 			r.keyStrings[k] = s
 		}
 	}
+	// Put in its slot as it is, the entry there forgotten: the keys
+	// handed out -- each index of an array JSON.stringify walks -- would
+	// otherwise each move another into the second way (keyRemember),
+	// work for keys no conversion asks for again.
 	r.keyAtoms[keySlot(s)] = keyAtom{s: s, atom: k}
 	return s
+}
+
+// keyRemember puts k in e, an entry of keyAtoms, as a conversion that
+// looked its atom up remembers it (toPropertyName), the entry it takes
+// the slot from moved to the slot's second way (keyVictims), from which
+// keyVictim takes it back: by address, two strings share a slot one time
+// in 256, and two keys a loop converts in turn, o.hasOwnProperty(k) of
+// four keys, had each found the other's there at every conversion and
+// looked its atom up anew. Native code and the JIT's read and write the
+// first way alone, and so does keyString.
+func (r *Runtime) keyRemember(e *keyAtom, k keyAtom) {
+	if old := e.s; old != nil && old != k.s {
+		v := r.keyVictims
+		if v == nil {
+			v = new([256]keyAtom)
+			r.keyVictims = v
+		}
+		v[keySlot(old)] = *e
+	}
+	*e = k
+}
+
+// keyVictim is the entry of string s in the second way of keyAtoms
+// (keyRemember), swapped back into e, its slot's first, or nil where it
+// has none.
+func (r *Runtime) keyVictim(e *keyAtom, s *String) *keyAtom {
+	v := r.keyVictims
+	if v == nil {
+		return nil
+	}
+	w := &v[keySlot(s)]
+	if w.s != s {
+		return nil
+	}
+	*e, *w = *w, *e
+	return e
 }
 
 // keyAtom is a string a runtime handed out as a key, and the atom it names.
@@ -397,7 +437,7 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 	case KindString:
 		s := v.String()
 		e := &r.keyAtoms[keySlot(s)]
-		if e.s == s {
+		if e.s == s || r.keyVictim(e, s) != nil {
 			if !e.none {
 				return propertyName{atom: e.atom, hasAtom: true}, nil
 			}
@@ -412,10 +452,10 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		// no atom: k in o, o[k], of keys no object has.
 		name := s.Go()
 		if a, ok := r.atoms.lookup(name); ok {
-			*e = keyAtom{s: s, atom: a}
+			r.keyRemember(e, keyAtom{s: s, atom: a})
 			return propertyName{atom: a, hasAtom: true}, nil
 		}
-		*e = keyAtom{s: s, atom: r.atoms.next(), none: true}
+		r.keyRemember(e, keyAtom{s: s, atom: r.atoms.next(), none: true})
 		return propertyName{name: name, noAtom: true}, nil
 	case KindSymbol:
 		return propertyName{sym: v.Symbol()}, nil

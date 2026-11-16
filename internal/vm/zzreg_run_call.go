@@ -456,7 +456,11 @@ func (r *Runtime) regNative(o *Object, w bytecode.RInstr, wb int) error {
 // of a pure body (pureCallAt) for the register form, whose instructions
 // are fewer, dispatched by a switch of their own (regLeafOp).
 func (r *Runtime) regLeafRun(cl *closure, c *regCode, base, argc int) (Value, bool) {
-	if cl.pureMiss >= pureMissLimit {
+	if cl.pureMiss >= pureMissLimit || r.interruptCounter <= 1 {
+		// An interrupt due is a frame's to count, which checks it: a run
+		// with no frame counts none, and the call handler, which leaves a
+		// call to Go while one is due, had left every call to it from
+		// then on.
 		return Undefined, false
 	}
 	top := base + int(c.numRegs)

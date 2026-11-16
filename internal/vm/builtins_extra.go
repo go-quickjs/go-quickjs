@@ -1580,3 +1580,40 @@ func (r *Runtime) spliceDense(this Value, args []Value) (Value, bool) {
 	o.extOf().elems = slices.Replace(elems, int(start), int(start+remove), inserted...)
 	return Obj(out), true
 }
+
+// sliceDense is slice where it is a copy of a dense array's elements: an
+// array of the realm's (plainArray) whose prototypes have no element
+// (noInheritedIndices) and whose species makes a plain array
+// (plainSpecies), with a start and an end that are numbers or absent,
+// which converting runs nothing. Each index of the range is then either an
+// element or a hole that nothing inherited fills, which the result keeps
+// as a hole, so the range is copied at once rather than asked HasProperty
+// and Get of index by index and pushed one at a time. It reports false for
+// any other, which the protocol makes.
+func (r *Runtime) sliceDense(this Value, args []Value) (Value, bool) {
+	o := r.plainArray(this)
+	if o == nil || !numberOrAbsent(args, 0) || !numberOrAbsent(args, 1) ||
+		!r.noInheritedIndices(o) || !r.plainSpecies(o) {
+		return Undefined, false
+	}
+	elems := o.elemsOf()
+	n := int64(len(elems))
+	start, err := r.relativeIndex64(arg(args, 0), n, 0)
+	if err != nil {
+		return Undefined, false
+	}
+	end, err := r.relativeIndex64(arg(args, 1), n, n)
+	if err != nil {
+		return Undefined, false
+	}
+	if end < start {
+		end = start
+	}
+	return Obj(r.newArrayFrom(elems[start:end])), true
+}
+
+// numberOrAbsent reports whether args' i'th argument is a number or not
+// there, which ToIntegerOrInfinity converts without running anything.
+func numberOrAbsent(args []Value, i int) bool {
+	return i >= len(args) || args[i].IsNumber() || args[i].IsUndefined()
+}

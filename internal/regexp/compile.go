@@ -104,6 +104,12 @@ type program struct {
 	// no group, no class, no case folding, no unicode flag -- so that a match
 	// is where they are found, which a search answers without the matcher.
 	litOnly *literal
+	// foldLit is, for a pattern of the i flag and not the unicode flag
+	// that is nothing but ASCII characters, each matching only itself and
+	// its other case in ASCII, those characters in lower case: a match is
+	// where they are found, their case aside, which a search answers
+	// without the matcher (indexFoldASCII, indexFoldUnits).
+	foldLit *literal
 	// classOnly is set where the pattern is one character class and
 	// nothing else, classes[0], so that a match is the first unit the
 	// class takes in, which a search answers without the matcher (see
@@ -182,6 +188,11 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 		if !utf8 && flags&FlagIgnoreCase == 0 {
 			if units := literalOnly(n); units != nil {
 				c.prog.litOnly = newLiteral(units)
+			}
+		}
+		if !utf8 && flags&FlagIgnoreCase != 0 {
+			if units := literalOnly(n); units != nil {
+				c.prog.foldLit = foldLiteralOf(units)
 			}
 		}
 	}

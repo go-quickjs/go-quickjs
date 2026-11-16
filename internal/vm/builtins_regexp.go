@@ -1180,6 +1180,10 @@ func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
 		return Undefined, r.throwTypeError("String.prototype method called on %s", this.Kind())
 	}
 	pattern := arg(args, 0)
+	if sym == r.wellKnown.match && r.matchIntrinsic(pattern) {
+		// The method is the realm's, found running nothing: called as it is.
+		return r.regExpSymbolMatch(pattern, []Value{this})
+	}
 	// Only an object is asked for its symbol method. A primitive would find
 	// one on its own prototype, which is not a pattern the caller supplied.
 	if pattern.IsObject() {
@@ -1210,6 +1214,22 @@ func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
 		return Undefined, r.throwTypeError("the pattern has no matching method")
 	}
 	return r.call(method, reVal, append([]Value{Str(s)}, extra...))
+}
+
+// matchIntrinsic reports whether pattern's Symbol.match is
+// RegExp.prototype[Symbol.match] as the realm made it, found running
+// nothing: a RegExp of the realm's prototype with no property of its own
+// but its lastIndex, a number, and the prototype's method as it was made.
+// String.prototype.match then calls the method itself, rather than through
+// the property read and a call of a function value.
+func (r *Runtime) matchIntrinsic(pattern Value) bool {
+	if !pattern.IsObject() {
+		return false
+	}
+	o := pattern.Object()
+	return o.class == ClassRegExp && o.proto() == r.proto.regexp && int(o.valn) == 1 &&
+		o.shape.keys[0].key == atomLastIndex && o.vals()[0].IsNumber() &&
+		propsIntact(r.proto.regexp, r.regexpSymMatchProps)
 }
 
 // initRegExpSymbolMethods defines the five symbol methods that carry the actual

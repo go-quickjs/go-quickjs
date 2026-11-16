@@ -169,6 +169,15 @@ func (r *Runtime) regGenCall(o *Object, cl *closure, method bool, base, argc int
 		}
 	}
 	async := cl.fn.Async
+	if async && !cl.fn.Generator && !cl.fn.HasDirectEval {
+		// Its first run made as a call, the generator made only where it
+		// suspends (regAsyncRun).
+		if c := r.regGenOf(cl, o); c != nil && !c.args {
+			if fd := o.fn(); fd != nil && fd.extra == nil {
+				return r.regAsyncRun(o, cl, c, this, base, argc), nil
+			}
+		}
+	}
 	gen, err := r.newGenerator(cl, this, r.stack[base+2:base+2+argc], o, async, Undefined)
 	if err != nil {
 		if async {
@@ -297,10 +306,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 	if callee.IsObject() {
 		o := callee.Object()
 		if f.cl.regCalls == nil && c.rc.CallSites > 0 {
-			f.cl.regCalls = r.newRegCalls(f.cl.closureCode, c.rc.CallSites)
-			if jitBuilt {
-				r.jitRegCountsMake(f.cl.closureCode, c.rc.CallSites)
-			}
+			r.regCallsMake(f.cl, c)
 		}
 		var e *regCallCache
 		if calls := f.cl.regCalls; uint(w.C()) < uint(len(calls)) {
@@ -391,6 +397,9 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 		// f.call(t, ...): f called with this t in call's frame, as the
 		// tree's call of it does (callThroughTree), without the generic
 		// call's search for call and then for f.
+		if v, err, ok := r.regCallThrough(f, c, w, base, argc); ok {
+			return v, err
+		}
 		return r.callThrough(r.callFn, r.stack[base+1], r.stack[base+2:base+2+argc])
 	}
 	if calls := f.cl.regCalls; callee.IsObject() && uint(w.C()) < uint(len(calls)) {
@@ -409,6 +418,89 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 		this = r.stack[base+1]
 	}
 	return r.regCall(callee, this, r.stack[base+2:base+2+argc])
+}
+
+// regCallsMake makes the call caches of cl's register code c, at its
+// first call or construction.
+//
+//go:noinline
+func (r *Runtime) regCallsMake(cl *closure, c *regCode) {
+	cl.regCalls = r.newRegCalls(cl.closureCode, c.rc.CallSites)
+	if jitBuilt {
+		r.jitRegCountsMake(cl.closureCode, c.rc.CallSites)
+	}
+}
+
+// regCallThrough is call_method_w's call of the realm's
+// Function.prototype.call, f.call(t, ...), its window at base: f, a
+// function the site's cache holds marked regCallThrough, entered in the
+// window one register on -- f its callee, t its this, the arguments after
+// -- as call_w enters the callee its cache holds (regEnterW), without
+// call's frame, which a stack trace and a caller passes over (V8 has
+// none); and the cache made f's where f is one the call handler enters
+// so, the native handler's to enter from then on -- a leaf with a frame,
+// as the handler enters one Go answers frameless otherwise, and one that
+// keeps its arguments as regEnterW enters it. A built-in of this realm is
+// called as the site would call it (regNative), one register on. ok is
+// false where the call is callThrough's: no this given, a callee of
+// another kind, a this to coerce.
+func (r *Runtime) regCallThrough(f *frame, c *regCode, w bytecode.RInstr, base, argc int) (Value, error, bool) {
+	calls := f.cl.regCalls
+	if argc < 1 || uint(w.C()) >= uint(len(calls)) || !regIsObject(&r.stack[base+1]) {
+		return Undefined, nil, false
+	}
+	e, o := &calls[w.C()], (*Object)(r.stack[base+1].ref)
+	if e.callee != o || e.kind&regCallThrough == 0 {
+		fd := o.fn()
+		switch {
+		case fd == nil || fd.bound:
+			return Undefined, nil, false
+		case fd.native != nil:
+			// A built-in of this realm: called as the site would call it
+			// (regNative), one register on.
+			if fd.realm != nil && fd.realm != r.Realm || o == r.callFn {
+				return Undefined, nil, false
+			}
+			*e = regCallCache{callee: o, kind: regCallNative | regCallThrough}
+		case fd.closure == nil || r.nodeQuirks:
+			// With Node's quirks, f.arguments reads the arguments as call
+			// passed them (regDirectLegacy): callThrough's.
+			return Undefined, nil, false
+		default:
+			cl, rc, kind, this, enter := r.regCallKind(fd, true)
+			if !enter || kind == 0 {
+				return Undefined, nil, false
+			}
+			e.callee, e.cl, e.rc, e.this, e.kind = o, cl, rc, this, kind|regCallThrough
+		}
+	}
+	if e.kind == regCallNative|regCallThrough {
+		// The built-in's call of the instruction one register on, the
+		// arguments one fewer (regNative), its value R[B].
+		wb := base - int(w.A())
+		ws := bytecode.MakeR(w.Op(), w.X()-1, w.A()+1, w.B(), w.C())
+		if err := r.regNative(o, ws, wb); err != nil {
+			return Undefined, err, true
+		}
+		return r.stack[wb+int(w.B())], nil, true
+	}
+	nb := base + 1
+	switch e.kind &^ regCallThrough {
+	case regCallThis:
+		r.stack[nb+1] = e.this
+	case regCallObjThis:
+		if !r.stack[nb+1].IsObject() {
+			return Undefined, nil, false
+		}
+	}
+	n := argc - 1
+	if n > int(e.rc.keep) {
+		// The arguments past the parameters, which the bindings
+		// overwrite: f.arguments reads them.
+		r.regKeepWindow(nb, int(e.rc.keep), n)
+	}
+	v, err := r.regEnterW(o, e.cl, e.rc, nb, n, r.stack[nb+2:nb+2+n], Undefined)
+	return v, err, true
 }
 
 // regCallCache is a call site's cache: the function it called last, its
@@ -445,11 +537,23 @@ const (
 	// whose Aux marks its value dead or reused, which regMarkedCall
 	// calls: the mark costs the site's other callees nothing.
 	regCallMarked = 6
+	// regCallConstruct is new_w's: a base constructor of this realm with
+	// register code, whose objects' room is settled, and that gives its
+	// objects nothing but what its body stores (regConstruct), its object
+	// made as regCtorThis makes it.
+	regCallConstruct = 7
 
 	regCallOut = 8
 	// regCallLeaf marks a callee whose body rhCallW may answer without a
 	// frame (leafCall, pureCall).
 	regCallLeaf = 16
+	// regCallThrough marks the cache of a call of the realm's
+	// Function.prototype.call, f.call(t, ...), whose callee, closure, code
+	// and kind are f's, entered in the window one register on
+	// (regCallThrough): no kind's, so that neither rhCallW nor the call
+	// handler's hit takes it for a call of f, nor the JIT's feedback, and
+	// none a turn's end restores (regCallsRestored).
+	regCallThrough = 32
 )
 
 // regCallMarks are the marks of a call cache's kind that say how a call
@@ -967,26 +1071,59 @@ var regJumpCmp = [256]struct {
 }
 
 // regConstruct is new_w: new callee with the argc arguments of the window
-// at base. A constructor of this realm with register code of the form's own
-// layout, a base function's, runs in the window as a register frame, its
-// object made as constructWithTarget makes it -- its prototype, its room,
-// the root its objects start from -- and the room it came to need noted.
-// Anything else is constructed as construct constructs it.
-func (r *Runtime) regConstruct(callee Value, base, argc int) (Value, error) {
+// at base, whose site's cache is calls[site] (none where the site is past
+// calls). A base constructor of this realm with register code of the
+// form's own layout -- a function's or a class's -- runs in the window as
+// a register frame, its object made as constructWithTarget makes it -- its
+// prototype, its room, the root its objects start from -- and the room it
+// came to need noted. Once its objects' room is settled (the root
+// tracked), the site's cache is made the constructor's
+// (regCallConstruct), which the native handler enters itself, its object
+// made by Go with no exit (nativeNew). Anything else is constructed as
+// construct constructs it.
+func (r *Runtime) regConstruct(calls []regCallCache, site uint16, callee Value, base, argc int) (Value, error) {
 	args := r.stack[base+2 : base+2+argc : base+2+argc]
 	if !callee.IsObject() {
 		return r.construct(callee, args)
 	}
 	o := callee.Object()
 	fd := o.fn()
-	if fd == nil || fd.closure == nil || fd.bound || fd.extra != nil || fd.ctorKind != ctorBase ||
-		fd.closure.realm != r.Realm || proxyOf(o) != nil {
+	// Whether the site's cache holds this constructor already, from an
+	// earlier construction: then none of the work below that fills it
+	// is done again, as none was before the native handler had a cache.
+	noted := false
+	if uint(site) < uint(len(calls)) {
+		e := &calls[site]
+		noted = e.callee == o && e.kind == regCallConstruct && fd != nil && fd.closure != nil && e.rc == fd.closure.reg
+	}
+	// regCtorBase, in line: asked at every construction of the Go table's.
+	if fd == nil || fd.closure == nil || fd.bound || fd.ctorKind != ctorBase || fd.closure.realm != r.Realm ||
+		proxyOf(o) != nil || fd.extra != nil && !regCtorScopesOK(fd) {
+		if !noted && fd != nil && fd.ctorKind == ctorDerived && uint(site) < uint(len(calls)) {
+			if cl, rc, ok := r.regCtorEntered(o, fd); ok {
+				// A derived class's, which the native handler enters with
+				// its this binding (nativeNew); its construction here is
+				// construct's, as before.
+				regCtorNote(&calls[site], o, cl, rc)
+			}
+		}
 		return r.construct(callee, args)
 	}
 	cl := fd.closure
 	if cl.fn.Leaf == bytecode.LeafForward {
 		// What hands its arguments on, the construction answers without a
-		// frame.
+		// frame (leafForward); the native handler enters it with one,
+		// whose apply_args it makes too, once its objects' room is
+		// settled.
+		if !noted && uint(site) < uint(len(calls)) && fd.fieldInit() == nil {
+			if p := o.getOwnVisible(atomPrototype); p.ok() && p.flags()&propAccessor == 0 && p.value().IsObject() {
+				if root := r.shapes.ctorRoot(fd, p.value().Object()); root == nil || root.tracked() {
+					if ecl, rc, ok := r.regCtorEntered(o, fd); ok {
+						regCtorNote(&calls[site], o, ecl, rc)
+					}
+				}
+			}
+		}
 		return r.construct(callee, args)
 	}
 	rc := cl.reg
@@ -1010,6 +1147,11 @@ func (r *Runtime) regConstruct(callee Value, base, argc int) (Value, error) {
 		return Undefined, err
 	}
 	root := r.shapes.ctorRoot(fd, proto)
+	if !noted && uint(site) < uint(len(calls)) && (root == nil || root.tracked()) && fd.fieldInit() == nil {
+		// Its objects' room settled and nothing to give them but what its
+		// body stores: the site's to construct with from now on.
+		regCtorNote(&calls[site], o, cl, rc)
+	}
 	obj := newOrdinary[struct{}](fd, root, proto, root.roomFor(int(cl.fn.ThisProps)))
 	this := Obj(obj)
 	if err := r.initInstanceElements(o, this); err != nil {
@@ -1033,6 +1175,118 @@ func (r *Runtime) regConstruct(callee Value, base, argc int) (Value, error) {
 		return res, nil
 	}
 	return this, nil
+}
+
+// regCtorNote makes e, a new_w site's cache, the construction's with o, of
+// closure cl and register code rc (regCallConstruct), written only where
+// it holds something else: a construction the native handler leaves to Go
+// passes here each time, and the three pointers' stores, barriers and all,
+// had been made at every one.
+func regCtorNote(e *regCallCache, o *Object, cl *closure, rc *regCode) {
+	if e.callee != o || e.cl != cl || e.rc != rc || e.kind != regCallConstruct {
+		*e = regCallCache{callee: o, cl: cl, rc: rc, kind: regCallConstruct}
+	}
+}
+
+// regCtorBase reports whether o, of funcData fd with a closure, is a base
+// constructor regConstruct runs as a register frame: a function's or a
+// base class's of this realm, neither bound nor a proxy's target, with no
+// with or eval scope of its surroundings to establish, which runFD's frames
+// would have. regConstruct, which the Go table's loop calls for every
+// construction, spells the same test out in line.
+func (r *Runtime) regCtorBase(o *Object, fd *funcData) bool {
+	return !fd.bound && fd.ctorKind == ctorBase && fd.closure.realm == r.Realm && proxyOf(o) == nil &&
+		(fd.extra == nil || regCtorScopesOK(fd))
+}
+
+// regCtorScopesOK reports whether fd's side fields leave a constructor of
+// it nothing to establish but its this (regCtorBase): no arrow's this, no
+// with or eval scope of its surroundings.
+func regCtorScopesOK(fd *funcData) bool {
+	x := fd.extra
+	return !fd.arrow && x.lexThisRef == nil && len(x.with()) == 0 && x.evalVars() == nil
+}
+
+// regCtorEntered is the closure and register code of o, of funcData fd,
+// where a construction with it, or a super() calling it, is entered as a
+// register frame with nothing to establish but its this, its this binding
+// for a derived class's, and its new.target: a constructor of this realm,
+// a base one (regCtorBase) or a derived class's, with no with or eval
+// scope, of the form's own layout, neither suspending nor with a direct
+// eval, that gives its objects no fields of its own (no instance
+// initializer to run). ok is false for anything else.
+func (r *Runtime) regCtorEntered(o *Object, fd *funcData) (cl *closure, rc *regCode, ok bool) {
+	if fd.closure == nil || fd.fieldInit() != nil {
+		return nil, nil, false
+	}
+	switch fd.ctorKind {
+	case ctorBase:
+		if !r.regCtorBase(o, fd) {
+			return nil, nil, false
+		}
+	case ctorDerived:
+		if fd.bound || fd.closure.realm != r.Realm || proxyOf(o) != nil || fd.extra != nil {
+			return nil, nil, false
+		}
+	default:
+		return nil, nil, false
+	}
+	cl = fd.closure
+	if rc = cl.reg; rc == nil {
+		rc = r.regOf(cl)
+	}
+	if rc == nil || !rc.wide || rc.suspends || cl.fn.HasDirectEval {
+		return nil, nil, false
+	}
+	return cl, rc, true
+}
+
+// regCtorThis is the object a construction with o, of funcData fd, a
+// constructor its site's cache holds (regCallConstruct), is made: of o's
+// prototype, its own data property holding an object, and of its root,
+// whose room is settled (tracked) where it is a base constructor's, as
+// regConstruct and constructWithTarget make it; or nil, the construction
+// then regConstruct's, which reads the prototype however it is and notes
+// the room an object came to need.
+func (r *Runtime) regCtorThis(o *Object, fd *funcData) *Object {
+	p := o.getOwnVisible(atomPrototype)
+	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() {
+		return nil
+	}
+	proto := p.value().Object()
+	root := r.shapes.ctorRoot(fd, proto)
+	if root != nil && !root.tracked() && fd.ctorKind != ctorDerived {
+		return nil
+	}
+	return newOrdinary[struct{}](fd, root, proto, root.roomFor(int(fd.closure.fn.ThisProps)))
+}
+
+// regThisBinding is the this binding of a derived constructor's frame,
+// cl's with register code rc, that a construction or a super() enters at
+// the runtime's depth now, holding this, as regRunFD makes it: the
+// runtime's cell for the depth where nothing keeps it past the frame
+// (cellThis), which the frame's end clears (regEndThisRef).
+func (r *Runtime) regThisBinding(rc *regCode, this Value) *thisBinding {
+	if !rc.cellThis {
+		return &thisBinding{value: this}
+	}
+	d := r.frameDepth
+	if d >= len(r.thisCells) {
+		r.thisCells = make([]thisBinding, d+d/2+16)
+	}
+	b := &r.thisCells[d]
+	*b = thisBinding{value: this}
+	return b
+}
+
+// regEndThisRef ends the this binding of nf, a derived constructor's frame
+// of register code rc the native code entered, as regRunFD ends one: the
+// runtime's cell lets go of the object, and the frame of the binding.
+func regEndThisRef(nf *frame, rc *regCode) {
+	if rc.cellThis {
+		nf.thisRef.value = Undefined
+	}
+	nf.thisRef = nil
 }
 
 // regAddProp is add_prop's slow path: the property read as get_prop
@@ -1169,7 +1423,11 @@ func (r *Runtime) regGetGlobal(f *frame, cl *closure, c *regCode, pc int, w byte
 	in := bytecode.Instr{Op: bytecode.OpGetGlobal, A: regNameIdx(c, pc, w.B()), B: uint32(w.C())}
 	v, err := r.getGlobalAt(regTctx(r, f, cl), in, int(f.pc-1))
 	if err == nil {
-		r.regNoteGlobal(cl, w.C(), cl.names[in.A], false)
+		if name := cl.names[in.A]; r.lexShadows(name) {
+			r.regNoteGlobalLex(f, cl, w.C(), name, false)
+		} else {
+			r.regNoteGlobal(cl, w.C(), name, false)
+		}
 	}
 	return v, err
 }
@@ -1185,9 +1443,49 @@ func (r *Runtime) regSetGlobal(f *frame, cl *closure, c *regCode, pc int, w byte
 		err = r.setGlobalIn(f, cl, in, v)
 	}
 	if err == nil {
-		r.regNoteGlobal(cl, w.C(), cl.names[in.A], true)
+		if name := cl.names[in.A]; r.lexShadows(name) {
+			r.regNoteGlobalLex(f, cl, w.C(), name, true)
+		} else {
+			r.regNoteGlobal(cl, w.C(), name, true)
+		}
 	}
 	return err
+}
+
+// regNoteGlobalLex is regNoteGlobal's of a name a script-level lexical
+// binding has (lexShadows), which getGlobalAt reads in globalLex: the
+// site's slot the binding's, at the global epoch, where it is
+// initialized -- out of its dead zone for good -- and, for a write, not a
+// constant, in a frame whose scope is the realm's global one with no
+// variables of a direct eval in front of it. globalLex's table is only
+// appended to, and a binding declared bumps the epoch, so that while the
+// epoch is what it was the slot is the binding's, as for the global
+// object's (rhGetGlobal reads either); otherwise the site stays Go's.
+func (r *Runtime) regNoteGlobalLex(f *frame, cl *closure, site uint16, name Atom, write bool) {
+	if cl.regEpochs == nil {
+		cl.regEpochs = make([]uint64, len(cl.ic))
+	}
+	cl.regEpochs[site] = 0
+	lex := r.globalLex
+	if f.evalVars != nil || !r.isGlobalScope(cl.scope()) || lex.shape == nil {
+		return
+	}
+	i := lex.findOwn(name)
+	if i < 0 {
+		return
+	}
+	mask := propAccessor | propPrivate | propDeleted | propUninit
+	want := propFlags(0)
+	if write {
+		mask |= propWritable
+		want = propWritable
+	}
+	if lex.shape.keys[i].flags&mask != want || lex.vals()[i].IsUninitialized() {
+		return
+	}
+	s := &cl.ic[site]
+	s.p1, s.idx = lex, i
+	cl.regEpochs[site] = r.shapes.globalEpoch + 1
 }
 
 // regNoteGlobal remembers, at global site site of cl's code, the global
@@ -1330,6 +1628,17 @@ const (
 	// frame's: a yield, a return or a throw ends the step
 	// (nativeGenEnd), not its caller's call.
 	regFrameGenStep
+	// regFrameConstruct is a construction's the native code entered
+	// itself (new_w's handler): regEnterW's frame, its new.target the
+	// frame's, whose return gives its this, register 1, where it returns
+	// what is not an object; a derived class's has its this binding too,
+	// which its end lets go of.
+	regFrameConstruct
+	// regFrameSuper is a super()'s call of the parent constructor the
+	// native code entered itself (super_call's handler): a construction's
+	// of the derived constructor's object and new.target, whose return
+	// binds the caller's this (superBind), which Go makes.
+	regFrameSuper
 )
 
 // regFrameThis is the this and new.target of register frame f, for a stack
@@ -1340,7 +1649,7 @@ func (r *Runtime) regFrameThis(f *frame) (this, newTarget Value) {
 	}
 	this = r.stack[f.base+1]
 	newTarget = Undefined
-	if f.regKind == regFrameEnter {
+	if f.regKind == regFrameEnter || f.regKind == regFrameConstruct || f.regKind == regFrameSuper {
 		newTarget = f.newTarget
 	}
 	return this, newTarget

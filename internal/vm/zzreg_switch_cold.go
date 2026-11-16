@@ -244,6 +244,25 @@ func (r *Runtime) regStepOf(st *iterState, res Value, err error) (Value, bool, e
 		st.done = true
 		return Undefined, false, err
 	}
+	if o := res.Object(); o.class == ClassObject {
+		// An ordinary result's own data properties, read where they are,
+		// as Get reads them.
+		if d := o.getOwn(atomDone); d.ok() && d.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+			if d.value().Truthy() {
+				st.done = true
+				return Undefined, false, nil
+			}
+			if v := o.getOwn(atomValue); v.ok() && v.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+				return v.value(), true, nil
+			}
+			v, err := r.getValueProp(res, atomValue)
+			if err != nil {
+				st.done = true
+				return Undefined, false, err
+			}
+			return v, true, nil
+		}
+	}
 	done, err := r.getValueProp(res, atomDone)
 	if err != nil {
 		st.done = true

@@ -4799,3 +4799,57 @@ function forward_array(n)
     global_res = a;
     return n;
 }
+
+/* constructions of classes declared at a script's top level, as class
+   libraries and the AWFY suite make their objects: a base class's, a
+   subclass's calling super(), and one two deep, with instanceof asked of
+   each */
+class ExtraShape { constructor(x, y) { this.x = x; this.y = y; } }
+class ExtraBox extends ExtraShape { constructor(x, y, w) { super(x, y); this.w = w; } }
+class ExtraSquare extends ExtraBox { constructor(x, s) { super(x, x, s); this.s = s; } }
+
+function class_new(n)
+{
+    var j, o, s = 0;
+    for (j = 0; j < n; j++) {
+        o = new ExtraShape(j, 1);
+        s += o.x + o.y;
+    }
+    global_res = s;
+    return n;
+}
+
+function subclass_new(n)
+{
+    var j, o, s = 0;
+    for (j = 0; j < n; j++) {
+        o = new ExtraBox(j, 1, 2);
+        s += o.x + o.w;
+    }
+    global_res = s;
+    return n;
+}
+
+function subclass_new2(n)
+{
+    var j, o, s = 0;
+    for (j = 0; j < n; j++) {
+        o = new ExtraSquare(j, 3);
+        s += o.y + o.s;
+    }
+    global_res = s;
+    return n;
+}
+
+function instanceof_class(n)
+{
+    var j, s = 0, objs = [new ExtraShape(1, 2), new ExtraBox(1, 2, 3), new ExtraSquare(1, 2), {}];
+    for (j = 0; j < n; j++) {
+        if (objs[j & 3] instanceof ExtraShape)
+            s++;
+        if (objs[j & 3] instanceof ExtraBox)
+            s++;
+    }
+    global_res = s;
+    return n;
+}

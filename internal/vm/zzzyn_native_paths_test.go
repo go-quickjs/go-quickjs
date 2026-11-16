@@ -421,10 +421,11 @@ func TestRegNativeCallHConvention(t *testing.T) {
 		for {
 			f, more := frames.Next()
 			if afterCallH {
-				// nativeCallH's caller, to the unwinder: nativeLoop, which
-				// entered the code.
-				if !strings.HasSuffix(f.Function, ".nativeLoop") {
-					bad = append(bad, "nativeCallH's caller is "+f.Function+", not nativeLoop")
+				// nativeCallH's caller, to the unwinder: the function that
+				// entered the code, nativeLoop's nativeDrive or a
+				// callback's nativeCallbackRun.
+				if !strings.HasSuffix(f.Function, ".nativeDrive") && !strings.HasSuffix(f.Function, ".nativeCallbackRun") {
+					bad = append(bad, "nativeCallH's caller is "+f.Function+", not nativeDrive")
 				}
 				afterCallH = false
 			}

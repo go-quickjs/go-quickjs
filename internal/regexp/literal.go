@@ -291,3 +291,125 @@ func indexUnits(s []uint16, l *literal, from int) int {
 	}
 	return -1
 }
+
+// foldLiteralOf is the literal of a pattern of the i flag, not the unicode
+// flag, whose units are a literal's (literalOnly): the units in lower case,
+// where each is ASCII and matches, case folded, only itself and its other
+// case in ASCII, as every ASCII character does without the unicode flag,
+// whose folding keeps a character past ASCII from matching one in it --
+// the Kelvin sign is no k -- or nil.
+func foldLiteralOf(units []uint16) *literal {
+	lower := make([]uint16, len(units))
+	for i, u := range units {
+		if u >= 0x80 {
+			return nil
+		}
+		set, ok := foldSetOf(rune(u), false)
+		if !ok {
+			return nil
+		}
+		l := lowerASCII(byte(u))
+		for _, f := range set {
+			if f >= 0x80 || lowerASCII(byte(f)) != l {
+				return nil
+			}
+		}
+		lower[i] = uint16(l)
+	}
+	return newLiteral(lower)
+}
+
+// lowerASCII is c in lower case, if it is an ASCII capital.
+func lowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
+// foldPair is a fold literal's unit at i and its other case, the same
+// unit where it has none.
+func (l *literal) foldPair(i int) (lo, up byte) {
+	lo = l.ascii[i]
+	up = lo
+	if 'a' <= lo && lo <= 'z' {
+		up = lo - ('a' - 'A')
+	}
+	return lo, up
+}
+
+// indexFoldASCII is the first position at or after from where the fold
+// literal l (foldLiteralOf) is in s, an ASCII subject, case aside, or -1:
+// either case of its rare unit is looked for with bytes.IndexByte where it
+// would be in an occurrence from each position on, the two kept apart, as
+// indexPairFrom keeps them, so that the text is read past once however
+// often one case is found, and the literal compared where one is.
+func indexFoldASCII(s []byte, l *literal, from int) int {
+	lit := l.ascii
+	k, last := l.rare, len(s)-len(lit)
+	lo, up := l.foldPair(k)
+	next := [2]int{-1, -1}
+	if lo == up {
+		next[1] = len(s)
+	}
+	for i := from; i <= last; {
+		pos := i + k
+		if next[0] < pos {
+			next[0] = indexByteFrom(s, pos, lo)
+		}
+		if next[1] < pos {
+			next[1] = indexByteFrom(s, pos, up)
+		}
+		p := min(next[0], next[1]) - k
+		if p > last {
+			return -1
+		}
+		if equalFoldASCII(s[p:p+len(lit)], lit) {
+			return p
+		}
+		i = p + 1
+	}
+	return -1
+}
+
+// equalFoldASCII reports whether b is lower, a fold literal's text, case
+// aside.
+func equalFoldASCII(b []byte, lower string) bool {
+	for i := range len(lower) {
+		if c, l := b[i], lower[i]; c != l && (l < 'a' || l > 'z' || c != l-('a'-'A')) {
+			return false
+		}
+	}
+	return true
+}
+
+// indexFoldUnits is indexFoldASCII over code units: a unit past ASCII is
+// none of the literal's, nor either of their cases.
+func indexFoldUnits(s []uint16, l *literal, from int) int {
+	lit := l.ascii
+	k, last := l.rare, len(s)-len(lit)
+	lo, up := l.foldPair(k)
+	for i := from; i <= last; {
+		p := indexUnit(s, i+k, uint16(lo))
+		if up != lo {
+			p = min(p, indexUnit(s[:p], i+k, uint16(up)))
+		}
+		p -= k
+		if p > last {
+			return -1
+		}
+		j := 0
+		for j < len(lit) {
+			c, l := s[p+j], lit[j]
+			if c != uint16(l) && (l < 'a' || l > 'z' || c != uint16(l-('a'-'A'))) {
+				break
+			}
+			j++
+		}
+		if j == len(lit) {
+			return p
+		}
+		i = p + 1
+	}
+	return -1
+}

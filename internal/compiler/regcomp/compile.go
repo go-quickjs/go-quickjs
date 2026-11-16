@@ -1696,11 +1696,10 @@ func (g *gen) stmt(s ast.Stmt) {
 	case *ast.ThrowStmt:
 		r := g.expr(n.Arg, -1)
 		g.at(n.Start)
-		if len(g.prots) > 0 {
+		if p := g.innerHandler(); p != nil {
 			// The handler the table would find, entered as it would be:
 			// nothing is made of the value that the handler would not
 			// take straight back out, as the tree's throwToHandler does.
-			p := g.prots[len(g.prots)-1]
 			g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(p.reg), r16(r), 0))
 			g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), p.to, false)
 			return
@@ -4453,7 +4452,7 @@ func (g *gen) newExpr(n *ast.New, dst int) int {
 		d = w
 	}
 	g.at(n.Start)
-	g.emit(bytecode.MakeR(bytecode.RNewW, uint8(argc), r16(w), r16(d), 0))
+	g.emit(bytecode.MakeR(bytecode.RNewW, uint8(argc), r16(w), r16(d), g.callSite(bytecode.RNewW)))
 	return d
 }
 

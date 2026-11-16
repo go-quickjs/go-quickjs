@@ -43,6 +43,9 @@ func (p *program) footprint() int {
 	if p.litOnly != nil {
 		n += int(unsafe.Sizeof(*p.litOnly)) + cap(p.litOnly.units)*2 + len(p.litOnly.ascii)
 	}
+	if p.foldLit != nil {
+		n += int(unsafe.Sizeof(*p.foldLit)) + cap(p.foldLit.units)*2 + len(p.foldLit.ascii)
+	}
 	n += cap(p.firsts) * int(unsafe.Sizeof(firstUnits{}))
 	n += cap(p.runs) * word
 	for _, l := range p.runs {

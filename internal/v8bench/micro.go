@@ -199,6 +199,7 @@ var microWork = []struct {
 	{"forward_call0", 1048576}, {"forward_call2", 524288}, {"forward_call6", 524288},
 	{"forward_poly", 524288}, {"forward_loop", 131072}, {"forward_construct", 524288},
 	{"forward_array", 524288},
+	{"class_new", 1048576}, {"subclass_new", 524288}, {"subclass_new2", 524288}, {"instanceof_class", 2097152},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

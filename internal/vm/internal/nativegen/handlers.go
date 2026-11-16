@@ -54,6 +54,21 @@ var handlerOps = []bytecode.ROp{
 	// A product by an immediate and the int32 results, (x op y) | 0
 	// (docs/register-interpreter.md, "Loop-kernel instructions").
 	bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
+	// Constructions entered as calls are (new_w).
+	bytecode.RNewW,
+	// instanceof by ordinaryHasInstance (instanceOf).
+	bytecode.RInstanceOf,
+	// super() entering the parent constructor as call_w enters a
+	// callee (superW).
+	bytecode.RSuperCall, bytecode.RSuperForward,
+	// A derived class's constructor's return value (derivedRet).
+	bytecode.RDerivedRet,
+	// f.apply(this, arguments) entering f (applyW).
+	bytecode.RApplyArgs,
+	// arguments[i] of the frame's kept arguments (argsIndex).
+	bytecode.RArgsIndex,
+	// A cursor's close and a destructuring's step.
+	bytecode.RIterClose, bytecode.RIterStep,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

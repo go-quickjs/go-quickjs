@@ -438,6 +438,13 @@ func ToNumber(s string) float64 {
 	if t == "" {
 		return 0
 	}
+	// A number as JSON writes one -- what nearly every string converted
+	// is -- is a decimal literal of the same value, which ParseShort reads
+	// in the one pass that checks it, where what follows looks the string
+	// over for what strconv must not be given before strconv reads it.
+	if f, end, ok := ParseShort(t, 0); ok && end == len(t) {
+		return f
+	}
 	// Non-decimal integer literals are accepted here but not by parseFloat.
 	if len(t) > 2 && t[0] == '0' {
 		switch t[1] {

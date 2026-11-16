@@ -391,7 +391,7 @@ func (r *Runtime) initStringBuiltins() {
 			return Undefined, err
 		}
 		if s.ascii {
-			return Str(asciiCase(s, true)), nil
+			return Str(rt.asciiCaseMemo(s, true)), nil
 		}
 		return Str(NewString(caseConvert(s.Go(), true))), nil
 	})
@@ -401,7 +401,7 @@ func (r *Runtime) initStringBuiltins() {
 			return Undefined, err
 		}
 		if s.ascii {
-			return Str(asciiCase(s, false)), nil
+			return Str(rt.asciiCaseMemo(s, false)), nil
 		}
 		return Str(NewString(caseConvert(s.Go(), false))), nil
 	})

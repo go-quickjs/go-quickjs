@@ -22,6 +22,7 @@ package vm
 import (
 	"hash/maphash"
 	"math"
+	"math/bits"
 	"sort"
 )
 
@@ -101,7 +102,7 @@ func mixHash(x uint64) uint32 {
 func keyHash(k Value) uint32 {
 	bits := math.Float64bits(k.num)
 	if bits&tagMask == tagBase && Kind(bits&0xFF) == KindString {
-		return uint32(maphash.String(mapSeed, k.String().Go()))
+		return strKeyHash(k.String().Go())
 	}
 	if bits == heapBigBits {
 		// One held in its Value is hashed by its bits, below, which are its
@@ -117,6 +118,51 @@ func keyHash(k Value) uint32 {
 		return mixHash(h)
 	}
 	return mixHash(bits ^ uint64(uintptr(k.ref))*0x9e3779b97f4a7c15)
+}
+
+// strKeyHash is the hash of a string key's text, WTF-8, which spells a
+// string one way. Up to 16 bytes -- most keys -- it is the hash Go's
+// runtime gives them where it has no AES (memhashFallback, from wyhash):
+// the bytes as two words that together hold them all, each keyed and
+// multiplied 64 by 64 bits into 128 whose halves are combined, then again
+// with the length, keyed by mapSeed (mapSalt); past that maphash's. maphash.String's
+// call through the runtime's hash had cost a short key more than hashing
+// it: a seventh of map_delete's time.
+func strKeyHash(s string) uint32 {
+	n := len(s)
+	var a, b uint64
+	switch {
+	case n == 0:
+	case n < 4:
+		a = uint64(s[0]) | uint64(s[n>>1])<<8 | uint64(s[n-1])<<16
+	case n <= 8:
+		a, b = load32(s), load32(s[n-4:])
+	case n <= 16:
+		a, b = load64(s), load64(s[n-8:])
+	default:
+		return uint32(maphash.String(mapSeed, s))
+	}
+	// The keys are wyhash's, each salted with mapSalt, mapSeed's.
+	h := mulMix(mapSalt^0x8bb84b93962eacc9^uint64(n), mulMix(a^mapSalt^0x4b33a62ed433d4a3, b^mapSalt^0xa0761d6478bd642f))
+	return uint32(h ^ h>>32)
+}
+
+// mulMix is a times b, 64 by 64 bits into 128, its halves combined.
+func mulMix(a, b uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	return hi ^ lo
+}
+
+// load32 and load64 are the first 4 or 8 bytes of s, little-endian.
+func load32(s string) uint64 {
+	_ = s[3]
+	return uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24
+}
+
+func load64(s string) uint64 {
+	_ = s[7]
+	return uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24 |
+		uint64(s[4])<<32 | uint64(s[5])<<40 | uint64(s[6])<<48 | uint64(s[7])<<56
 }
 
 // sameKey is SameValueZero for an entry's key and a key canonicalKey has made,
@@ -213,13 +259,28 @@ func (m *jsMap) add(k, v Value, h uint32) {
 // It runs when the index is half full, or the entries are half deleted, so
 // its cost is a constant per entry added or deleted however large the
 // collection grows.
+//
+// An index that only grows has a slot for every entry, with its hash,
+// which the larger one is made from: hashing every key again had been half
+// the hashing a Map filled from empty did.
 func (m *jsMap) rebuild() {
-	if m.size != len(m.entries) {
+	old := m.index
+	compacted := m.size != len(m.entries)
+	if compacted {
 		m.compact()
 	}
 	n := 8
 	for n < 3*(m.size+1) {
 		n <<= 1
+	}
+	if !compacted && n != len(old) && len(old) != 0 {
+		m.index = make([]mapSlot, n)
+		for _, s := range old {
+			if s.at != 0 {
+				m.place(s.hash, int(s.at-1))
+			}
+		}
+		return
 	}
 	if n == len(m.index) {
 		clear(m.index)

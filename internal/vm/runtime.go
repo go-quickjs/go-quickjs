@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"weak"
 
 	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-intl/date"
@@ -352,10 +353,38 @@ type Runtime struct {
 	// regFree is the register frames' states not in use, a list by their
 	// next (regEnter): a frame's handlers are given its state.
 	regFree *regState
+	// ofLast is the last cursor over an array made, which the next takes
+	// once its loop or pattern has closed it (arrCursor), and
+	// clearReturnedFrames lets go.
+	ofLast *iterObject
+	// dictKeys is the keys of the last dictionary a for...in walked, by
+	// its layout (dictForIn), which clearReturnedFrames lets go.
+	dictKeys dictKeys
 	// oldTiers runs the runtime's code on the stack interpreter and the
 	// tree tier, as a runtime with the JIT runs it (regOn), for tests of
 	// those tiers.
 	oldTiers bool
+	// strConsts are the strings the program's string constants were made,
+	// by their text, held weakly (constString), and strConstsSweep the
+	// count past which the dead are swept out.
+	strConsts      map[string]weak.Pointer[String]
+	strConstsSweep int
+	// keyVictims is keyAtoms' second way, Go's alone: the entry a key
+	// string took a slot from, where two hot keys whose strings share a
+	// slot would otherwise each evict the other at every conversion
+	// (keyRemember). Made at the first eviction. After everything the
+	// interpreter reads, so that none of it moves.
+	keyVictims *[256]keyAtom
+	// caseMemo remembers the case conversions of short ASCII strings by
+	// their text (asciiCaseMemo); made at the first.
+	caseMemo *caseMemo
+	// cbFree is the built-ins' callbacks not in use, a list by their next
+	// (regCallbackOf).
+	cbFree *regCallback
+	// concats is the memo of short concatenations (zzz_concatpair.go),
+	// made once concatCount of them have been made without it.
+	concats     *pairMemo
+	concatCount uint32
 	// concatMemo is the short strings joins made, which a join making the
 	// same text returns (joinShort), made by the first join.
 	concatMemo *concatMemo
@@ -489,6 +518,9 @@ type Realm struct {
 	// callFn is Function.prototype.call, whose calls callDirect makes
 	// itself; see callThrough.
 	callFn *Object
+	// reflectConstructFn is Reflect.construct, whose calls the call
+	// handler makes constructions it enters itself (nativeReflect).
+	reflectConstructFn *Object
 	// regexpFlagProps is RegExp.prototype's flags getter and the getters it
 	// reads, as the realm made them: see builtinFlags.
 	regexpFlagProps []builtinProp
@@ -657,6 +689,10 @@ type Realm struct {
 	finalizingAt int
 	// jsonHints is what JSON.parse has seen of the realm's documents.
 	jsonHints *jsonHints
+	// forInChains is what for...in loops found of the prototype chains
+	// above the objects they walked: chains with no enumerable key, by
+	// their first prototype and their validity cell (protosNoEnum).
+	forInChains [2]forInChain
 	jitRealmFields
 	// primProps remembers where methods of primitives were found on their
 	// prototypes; see primProp. Last, being kilobytes long, and after the
