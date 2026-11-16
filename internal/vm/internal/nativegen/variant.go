@@ -35,7 +35,7 @@ type variant struct {
 }
 
 // jitBuild is the JIT's build constraint (internal/vm's zzjit_*.go).
-const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))"
+const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || ((darwin || linux) && arm64))"
 
 // variants are the dispatchers, plain first.
 //
@@ -107,4 +107,10 @@ func (v *variant) table(p, b *block) []Slot {
 	t[slotExit] = Slot{Off: p.exit}
 	t[slotExitRet] = Slot{Off: p.exitRet}
 	return t
+}
+
+// HasJIT reports whether a build for goos and goarch with the quickjs_jit
+// tag has the JIT, and so the feedback dispatcher.
+func HasJIT(goos, goarch string) bool {
+	return holds(jitBuild, goarch, goos, []string{"quickjs_jit"})
 }

@@ -44,6 +44,11 @@ type arch struct {
 	// tableAddr is the assembly of a Go function, func name() uintptr,
 	// that returns the address of symbol sym.
 	tableAddr func(name, sym string) string
+	// emitter and ctxReg name the emitter and the register the context is
+	// in, for the files' comments; words says the assembler takes the
+	// machine code as 32-bit words (WORD), not bytes.
+	emitter, ctxReg string
+	words           bool
 }
 
 // file is the name of v's file for ar: the handlers' file for plain.
@@ -56,7 +61,8 @@ func (ar *arch) file(v *variant) string {
 
 // arches are the architectures whose handlers are generated.
 var arches = []*arch{
-	{goarch: "amd64", emit: nativeEmit, tableAddr: tableAddrAMD64},
+	{goarch: "amd64", emit: nativeEmit, tableAddr: tableAddrAMD64, emitter: "nativeEmit", ctxReg: "DI"},
+	{goarch: "arm64", emit: armEmit, tableAddr: tableAddrARM64, emitter: "armEmit", ctxReg: "R25", words: true},
 }
 
 // genMu holds lay while an emitter runs.
@@ -117,16 +123,26 @@ func lookup(goarch string) (*arch, error) {
 // Build generates goarch's dispatchers that a build for goarch on this
 // host's GOOS with the tags tags has -- plain, and each variant whose
 // file's constraint holds there -- from that build's layout (ReadLayout).
+// A build none of whose variants needs the JIT has its layout read as it
+// is, with the quickjs_jit tag or not: darwin's on amd64 has no JIT
+// whatever its tags.
 func Build(goarch string, tags ...string) (*Output, error) {
 	ar, err := lookup(goarch)
 	if err != nil {
 		return nil, err
 	}
-	l, err := ReadLayout(goarch, tags...)
+	want := func(v *variant) bool { return v.in(goarch, tags) }
+	needJIT := false
+	for _, v := range variants {
+		if v != plain && want(v) && slices.Contains(v.tags, "quickjs_jit") {
+			needJIT = true
+		}
+	}
+	l, err := readLayout(goarch, needJIT, tags)
 	if err != nil {
 		return nil, err
 	}
-	return ar.build(l, func(v *variant) bool { return v.in(goarch, tags) })
+	return ar.build(l, want)
 }
 
 // build makes the variants that want says, plain always, from layout l.
@@ -156,37 +172,62 @@ func (v *variant) in(goarch string, tags []string) bool {
 	if v.build == "" {
 		return true
 	}
-	expr, err := constraint.Parse("//go:build " + v.build)
+	return holds(v.build, goarch, runtime.GOOS, tags)
+}
+
+// holds reports whether the build constraint expr holds in a build for
+// goos and goarch with the tags tags.
+func holds(expr, goarch, goos string, tags []string) bool {
+	e, err := constraint.Parse("//go:build " + expr)
 	if err != nil {
-		panic(fmt.Sprintf("nativegen: %s's constraint: %v", v.name, err))
+		panic(fmt.Sprintf("nativegen: constraint %q: %v", expr, err))
 	}
-	return expr.Eval(func(tag string) bool {
-		return tag == goarch || tag == runtime.GOOS || slices.Contains(tags, tag)
+	return e.Eval(func(tag string) bool {
+		return tag == goarch || tag == goos || slices.Contains(tags, tag)
 	})
 }
 
 // Generate makes every architecture's files, on any host that runs its
-// programs: plain's from the layout of a build without tags, each other
-// variant's from the layout of a build with its tags. plain's file, which
-// every build has, must be what each variant's build makes of it too.
+// programs and whose own build has the JIT: plain's from the layout of a
+// build without tags, each other variant's from the layout of a build
+// with its tags. plain's file, which every build has, must be what each
+// variant's build makes of it too.
 func Generate() ([]File, error) {
-	var files []File
+	files, unread, err := GenerateReadable()
+	if err == nil && len(unread) > 0 {
+		err = fmt.Errorf("nativegen: %s/%s cannot read the layouts of %s, whose builds have the JIT: generate on linux or windows amd64, or darwin or linux arm64", runtime.GOOS, runtime.GOARCH, strings.Join(unread, ", "))
+	}
+	return files, err
+}
+
+// GenerateReadable is Generate on a host that may not read every
+// variant's layout -- one whose own build has no JIT, darwin's on amd64,
+// cannot read a layout with the JIT's fields (ReadLayout) -- making
+// every file it can and naming those it leaves out.
+func GenerateReadable() (files []File, unread []string, err error) {
+	layouts := map[string]*Layout{}
 	for _, ar := range arches {
-		layouts := map[string]*Layout{}
 		var base *Output
 		for _, v := range variants {
-			key := strings.Join(v.tags, ",")
+			needJIT := slices.Contains(v.tags, "quickjs_jit") && jitTarget[ar.goarch]
+			if needJIT && !hostJIT(ar.goarch) {
+				unread = append(unread, ar.file(v))
+				continue
+			}
+			// The helper is built for the host where it can be, whose
+			// layout serves every target of its word size: one read serves
+			// them all.
+			key := helperArch(ar.goarch) + "|" + strings.Join(v.tags, ",")
 			l := layouts[key]
 			if l == nil {
-				var err error
-				if l, err = ReadLayout(ar.goarch, v.tags...); err != nil {
-					return nil, err
+				if l, err = readLayout(ar.goarch, needJIT, v.tags); err != nil {
+					return nil, nil, err
 				}
 				layouts[key] = l
 			}
 			out, err := ar.build(l, func(w *variant) bool { return w == v })
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if v == plain {
 				base = out
@@ -194,10 +235,10 @@ func Generate() ([]File, error) {
 				continue
 			}
 			if !bytes.Equal(out.Files[0].Data, base.Files[0].Data) {
-				return nil, fmt.Errorf("nativegen: %s: a build with tags %q makes another %s than a build without", ar.goarch, v.tags, base.Files[0].Name)
+				return nil, nil, fmt.Errorf("nativegen: %s: a build with tags %q makes another %s than a build without", ar.goarch, v.tags, base.Files[0].Name)
 			}
 			files = append(files, out.Files[1])
 		}
 	}
-	return files, nil
+	return files, unread, nil
 }

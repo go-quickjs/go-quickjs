@@ -1,8 +1,11 @@
+//go:build amd64 || arm64
+
 package vm
 
 import (
 	"bytes"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -48,7 +51,7 @@ func nativeBuild(t *testing.T, tags ...string) *nativegen.Output {
 	if out := nativeBuilds.m[key]; out != nil {
 		return out
 	}
-	out, err := nativegen.Build("amd64", tags...)
+	out, err := nativegen.Build(runtime.GOARCH, tags...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +61,7 @@ func nativeBuild(t *testing.T, tags ...string) *nativegen.Output {
 
 // nativeTestTables are the dispatchers' tables this binary has, by the
 // generator's names: plain's, and the feedback dispatcher's in a build
-// with the JIT (zzzyn_native_feedback_amd64_test.go).
+// with the JIT (zzzyn_native_feedback_test.go).
 var nativeTestTables = map[string]uintptr{"plain": nativePlain.addr}
 
 // TestRegNativeGenerated checks that every generated file -- the
@@ -66,14 +69,19 @@ var nativeTestTables = map[string]uintptr{"plain": nativePlain.addr}
 // build with other tags has -- is what the generator makes now
 // (nativegen.Generate). A change to the emitter or to the layouts its
 // offsets come from fails it until the files are written again (go
-// generate ./internal/vm).
+// generate ./internal/vm). A host whose own build has no JIT (darwin's
+// on amd64) cannot read the layouts of the builds with it: it checks every
+// other file, and the hosts with the JIT check those.
 func TestRegNativeGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the package to read its layout")
 	}
-	files, err := nativegen.Generate()
+	files, unread, err := nativegen.GenerateReadable()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(unread) > 0 {
+		t.Logf("%s/%s has no JIT: %s not checked here", runtime.GOOS, runtime.GOARCH, strings.Join(unread, ", "))
 	}
 	for _, f := range files {
 		old, err := os.ReadFile(f.Name)
@@ -137,9 +145,17 @@ func TestRegNativeLinked(t *testing.T) {
 // TestRegNativePlainSameWithJIT checks that the plain dispatcher a build
 // with the JIT makes -- the handlers' block, its table and their file --
 // is the one a build without it makes: one file serves both, and the
-// feedback dispatcher only adds to it.
+// feedback dispatcher only adds to it. Where a build with the JIT's tag
+// has no JIT (darwin on amd64), it is the build without, and has no
+// feedback dispatcher.
 func TestRegNativePlainSameWithJIT(t *testing.T) {
 	without, with := nativeBuild(t), nativeBuild(t, "quickjs_jit")
+	if !nativegen.HasJIT(runtime.GOOS, runtime.GOARCH) {
+		if !bytes.Equal(without.Files[0].Data, with.Files[0].Data) || len(with.Dispatchers) != 1 {
+			t.Fatalf("%s/%s, which has no JIT, makes another plain dispatcher or more with the JIT's tag", runtime.GOOS, runtime.GOARCH)
+		}
+		return
+	}
 	if without.Dispatchers[0].Name != "plain" || with.Dispatchers[0].Name != "plain" {
 		t.Fatal("plain is not the first dispatcher")
 	}

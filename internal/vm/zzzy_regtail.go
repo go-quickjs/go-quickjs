@@ -239,6 +239,7 @@ func (r *Runtime) regTailTo(f *frame, w bytecode.RInstr, wb int, o *Object, cl *
 	}
 	if len(f.openUpvalues) != 0 {
 		regCloseUpvalues(f)
+		f.openUpvalues = f.openUpvalues[:0]
 	}
 	argc := min(int(w.X()), int(rc.params))
 	src := wb + int(w.A()) + 2

@@ -16,12 +16,12 @@ forms went badly and the reasons decide most of what follows.
 
 ## Status
 
-The register interpreter is the default on amd64, where its handlers are
-native (`internal/vm/zzzyn_native_*`): every function is compiled to
-register code and run as it, none falling back to the old tiers. Other
-architectures, arm64 included, keep the stack interpreter and the tree
-tier by default, and move over as their native handlers land; their
-register code runs on the Go handler table (`zzreg_table*.go`), which is
+The register interpreter is the default on amd64 and arm64, where its
+handlers are native (`internal/vm/zzzyn_native_*`): every function is
+compiled to register code and run as it, none falling back to the old
+tiers. Other architectures keep the stack interpreter and the tree tier
+by default, and move over as their native handlers land; their register
+code runs on the Go handler table (`zzreg_table*.go`), which is
 slower than the tiers it would replace. The default is one constant an
 architecture, `regArch` in `internal/bytecode/regdefault_*.go`, read
 through `bytecode.RegDefault`.
@@ -36,8 +36,9 @@ is shared between the two. This stays until the JIT reads register code
 `QJS_REG` in the environment overrides the default: `QJS_REG=0` runs the
 old tiers everywhere, `QJS_REG=1` the register interpreter everywhere. The
 first is temporary, for comparing with the tiers being replaced, and goes
-with them; the second is how arm64 is tested until it is the default there.
-`QJS_NONATIVE=1` runs register code on the Go handlers on amd64 too.
+with them; the second is how an architecture without native handlers is
+tested. `QJS_NONATIVE=1` runs register code on the Go handlers on amd64
+and arm64 too.
 
 ## The measure
 
@@ -578,11 +579,13 @@ in registers, so the state's fields are loads.
 
 ## Native handlers
 
-On amd64 a register frame runs by native threaded handlers
-(`zzzyn_native_amd64.go`), machine code for the hot operations over the
+On amd64 and arm64 a register frame runs by native threaded handlers
+(`zzzyn_native_run.go`), machine code for the hot operations over the
 same instructions and the same frames; the Go table is what they leave
-work to, and every other architecture's interpreter. `runReg` hands its
-frame to `nativeRun` before its loop; `QJS_NONATIVE` set in the
+work to, and every other architecture's interpreter. arm64's are amd64's
+handler for handler, in its instructions (nativegen's `arm64*.go`);
+what follows says amd64's registers, and arm64's where they differ.
+`runReg` hands its frame to `nativeRun` before its loop; `QJS_NONATIVE` set in the
 environment (read once, `regNativeOn`) keeps the frames in the Go table's
 loop, to compare the two and as an escape hatch.
 
@@ -594,7 +597,16 @@ handler needs: `RBX` the instruction's address, `R12` the frame's
 registers, `R13` the native table, `R15` the closure's caches, `R11` the
 back-edge budget, `R10` the least tag, `RDI` the context; `RAX` holds the
 instruction word, and `RCX`, `RDX`, `RSI`, `R8`, `R9` and three SSE
-registers are a handler's scratch.
+registers are a handler's scratch. On arm64 the dispatch is four
+instructions too -- the word loaded, its operation extracted, the entry
+loaded by a scaled index, the jump -- and the pinned registers are `R19`
+to `R25` in that order, `R0` the instruction word, `R1` to `R7`, `R16`, `R17` and
+`D0` to `D3` the scratch; `R15` is kept free as amd64's `R14` is. The code
+uses `R26` only for the func value of an exit's call and `R27` only as
+the encoder's temporary, and never touches `R18` (the platform's), `R28`
+(the goroutine), `R29` (the frame pointer) or `R30`, which holds
+`nativeEnter`'s return to `nativeRun` throughout, so that a profile taken
+in the code, and the trampolines' frames, unwind to it.
 
 **What is native.** The numbers' arithmetic, increments, `-x`, `+x`,
 the bitwise operators of any number (by ToInt32) and the
@@ -641,7 +653,10 @@ callee in place (`regTailTo`); where it is the base frame, `nativeRun`
 goes on with the callee's code in the same code entry
 (`nativeRestart`), rather than ending it for `regRestartRun` to run each
 callee in an entry of its own. A fast path that misses jumps to
-the exit; nothing is written before it does.
+the exit; nothing is written before it does. arm64 answers one case more:
+NaN made an integer -- ToInt32's 0, an integer typed array's element 0
+-- where FCVTZS gives 0 and CVTTSD2SI no integer; what has no int64 is
+told by the limits FCVTZS saturates to, and exits as on amd64.
 
 **The exit stub.** An operation of no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the
@@ -665,7 +680,12 @@ Go's internal register convention (ABIInternal) on amd64, which the
 exit stub and the trampoline write by hand: the four arguments in `AX`,
 `BX`, `CX` and `DI`, the func value in `DX`, the result in `AX`, the
 goroutine in `R14`, `X15` zero, and the arguments' spill room in the
-caller's frame. Go does not promise it across releases;
+caller's frame; on arm64 the arguments in `R0` to `R3`, the func value
+in `R26`, the result in `R0`, the goroutine in `R28`, the spill room at
+`8(RSP)` to `40(RSP)`, and the word below the stack pointer `nativeCallH`
+is entered with left alone: it holds `nativeRun`'s caller's frame
+pointer, which Go's arm64 frames save at `-8(RSP)`. Go does not promise
+the convention across releases;
 `TestRegNativeCallHConvention` calls a Go handler through `nativeCallH`
 and fails, saying which part differs, where the toolchain's convention
 is not this one, and CI runs it under Go 1.24 and Go 1.27. The call made
@@ -696,10 +716,12 @@ was read once a host had dropped that realm and it was collected
 
 **Generation and the shared-code rules.** The handlers are written with
 the JIT's assembler by a generator, `internal/vm/internal/nativegen`, and
-assembled into the binary as one TEXT symbol of bytes and the table as
-GLOBL/DATA (`zzzyn_native_handlers_amd64.s`, `go generate
-./internal/vm`); `TestRegNativeGenerated` fails while the file is not
-what the generator makes. The generator does not import package vm: it
+assembled into the binary as one TEXT symbol of machine code -- BYTE
+directives on amd64, WORD directives on arm64, whose assembler takes
+nothing else -- and the table as GLOBL/DATA
+(`zzzyn_native_handlers_<arch>.s`, `go generate ./internal/vm`);
+`TestRegNativeGenerated` fails while a file is not what the generator
+makes. The generator does not import package vm: it
 reads vm's private layout -- the context's, the frame records', the
 Runtime's and the other types' offsets, the constants the handlers test
 against -- as plain numbers, which vm's `NativeLayout` gives in a build
@@ -716,24 +738,30 @@ gives (`rtBase`, `ccBase`), which the test checks under each tag.
 
 **Dispatchers: architectures and variants.** The generator makes several
 native dispatchers, on two axes. The first is the architecture: amd64
-now, arm64 next, others later, each with its emitter and its files. The
+and arm64 now, others later, each with its emitter and its files.
+arm64's reuses the JIT's arm64 encoder (`internal/jit/asm/arm64`) and is
+not layout-tuned: the layout lock and its pads are amd64's alone. The
 second is the variant, within an architecture: a dispatch table over the
 handlers, which a runtime picks through its contexts' table pointer
-(`ctx.table`, `R13` in the code; `nativeDispatch`). `plain` is the only
-one in builds without the JIT, and the one a runtime that does not run
-the JIT uses in builds with it. `feedback` is a runtime's that runs the
+(`ctx.table`, `R13` in the code, `R21` on arm64; `nativeDispatch`).
+`plain` is the only one in builds without the JIT, and the one a runtime
+that does not run the JIT uses in builds with it. `feedback` is a runtime's that runs the
 JIT, in builds with it alone: its handlers that record the JIT's
 feedback OR the kinds of value they met into the function's feedback
 slot (below), every other handler plain's; none records yet. Mode
 tables, such as the debugger's, are to be variants too. A handler is
 generated once: plain's block holds the entry, the exit stub and every
 handler, and a variant only the handlers it overrides, in a block of its
-own beside its table (`zzzyn_native_feedback_amd64.s`, built with the
-JIT alone), whose entries point at those and at plain's handlers for
+own beside its table (`zzzyn_native_feedback_<arch>.s`, built with
+the JIT alone), whose entries point at those and at plain's handlers for
 every other operation. Its own handlers reach plain's code through the
 table: the exits through two slots after the operations', another
-handler through its operation's entry. `TestRegNativeGenerated` checks
-every file, each from the layout of its variant's build;
+handler through its operation's entry -- on arm64, which has no jump
+through memory, by a load of the entry into `R16` and a jump through
+it. `TestRegNativeGenerated` checks every file, each from the layout of
+its variant's build (on a host whose build has no JIT, darwin amd64
+say, every file but the feedback dispatchers', which the hosts with the
+JIT check);
 `TestRegNativePlainSameWithJIT` that plain's is the same in a build with
 the JIT and without; `TestRegNativeLinked` that a binary links what the
 generator makes for its build; `TestRegNativeFeedbackSelected` that a
@@ -752,15 +780,14 @@ different answer or a different count of exits;
 `TestRegNativeCallExits` checks the call handler against `rhCallW` case
 by case, and `TestRegNativeConcurrent` two runtimes at once.
 
-**Room for feedback.** The JIT's next step gives each function a
-feedback vector, as Ignition does: a slot a site, into which every
-handler, native and Go, ORs the kinds of value it met (a small integer,
-a double, a string, anything else; elements' kinds; a site of several
-shapes), the hotness of calls and back edges coming from the budget the
-code already keeps. The context has its pointer (`fv`, none yet), which
-the frame record keeps and a call switches as it switches the closure's
-caches; and no handler uses `R14`, which is kept for it to be pinned in,
-so that a handler's note is one OR to memory and spills nothing.
+**Room for feedback.** What the JIT needs that no cache holds is
+recorded by the feedback table's handlers alone (Stage 3, "Feedback"), so
+a runtime without the JIT runs handlers that record nothing. Should a
+record need a vector of its own -- a slot a site, as Ignition has -- the
+context has room for its pointer (`fv`, none yet), which the frame record
+would keep and a call switch as it switches the closure's caches; and no
+handler uses `R14` (`R15` on arm64), which is kept for it to be pinned
+in, so that a handler's note is one OR to memory and spills nothing.
 `TestRegNativeCaches` (internal/regdiff) runs the register interpreter's
 corpus natively and by the Go table and checks that the caches the JIT
 reads -- the property sites, the global sites' epochs, the call sites'
@@ -1072,10 +1099,10 @@ debugger's code (item 10).
 
 ## Stages
 
-Each stage lands on its own, is measured against the one before by the
-placements, plain and with the JIT, and keeps test262 at 100,247 passed and
-none failed in every mode -- plain, with the JIT, with every runtime made
-`WithDebugger`, and in the register tier. What a stage does not cover runs
+Each stage keeps test262 at 100,247 passed and none failed in every mode
+-- plain, with the JIT, with every runtime made `WithDebugger`, and in the
+register tier -- and is timed as "The plan now" below says. What a stage
+does not cover runs
 on the old pipeline -- until the end state, in which the stack interpreter
 and the tree tier are removed. So no new feature is left to them, not for
 a form, not for a while, not because the tree is faster: what is added
@@ -1084,6 +1111,72 @@ refusals (the inventory below) -- are a list to burn down, not a
 design. The tree tier is
 the floor to beat and the place to port mechanisms from, never a place to
 send code.
+
+### The plan now (2026-11-13)
+
+**Where it stands.**
+- The register interpreter is the default on amd64 and arm64 for runtimes
+  without the JIT, on native threaded handlers that `internal/vm/internal/nativegen`
+  generates ("Native handlers"). Stages 1 and 2 are done: no function is
+  refused.
+- The JIT reads register code behind `QJS_JITREG=1`
+  (`vm.SetJITRegTier`): native code made from register code, tier-up by
+  sampling, OSR, exits and deoptimization into register frames, and native
+  calls between register functions. JIT runtimes still run the stack form
+  by default. Stage 3 below says what was built and what is left.
+
+**The order from here.** Steps 1 and 2 run alongside each other; each
+later step starts when those before it are done. From 2026-11-13 the
+JIT's two backends move together: every change to how the JIT compiles
+register code lands in `mir`'s amd64 and arm64 backends in the same
+commit, tested on CI's Linux and macOS arm64 jobs and under qemu (the
+JIT builds on linux/arm64 too), so that the switch-over finds no arm64
+backlog.
+1. **The JIT on register code (Stage 3).** The remaining feedback-parity
+   gaps (RegExp literals, call frequencies, inlined callees' feedback);
+   inlining register callees; top-level code, generators and async
+   functions; the feedback snapshot for background compiles. Then the
+   switch-over: JIT runtimes run the register tier, and the JIT's
+   stack-form path is removed.
+2. **The arm64 native port** (done, but its timing). An arm64 emitter
+   in nativegen, the same handlers and tables as amd64's, and `regArch`
+   on for arm64; checked under qemu and on CI's Linux and macOS arm64
+   runners. One timing on arm64 hardware is left.
+3. **Optimization.** The benchmark gaps left against the old tiers and
+   against the comparison engine: re-entering register code from Go
+   (callbacks, generator resumptions, call-cache misses), CodeLoad's
+   second compile (gone with step 4's removal of the stack compiler's
+   output), Havlak, RegExp, and what the old tiers did that register code
+   does not yet (strings appended in place, literal layouts by keys).
+4. **The old tiers removed (Stage 4).** The stack interpreter, the tree
+   tier, `QJS_REG=0`, `hotdiff` and their layout-lock anchors; the `zz`
+   file-name prefixes that kept their layout; AGENTS.md's rules for them.
+5. **The portable fallback's dispatcher.** A generated switch over the Go
+   handlers, letting Go's inliner choose, against the handler table. The
+   fallback is never layout-tuned: a platform that needs a fast
+   interpreter gets native handlers.
+
+**Landing.** Nothing of this lands on main until the arm64 port is ready
+and the benchmark gaps are closed. It then lands as a squashed series,
+with the owner's approval.
+
+**Gates and timing.**
+- Every step: test262 in every mode as above, the full suite with and
+  without `quickjs_jit`, `TestJITSameWorkWhileMarking` with its breach
+  list unchanged (native paths tested under `jitMarkingForTest` too), and
+  generated files regenerated (`go generate ./internal/vm`).
+- JIT work: no new refusal kinds, neither regcomp's nor the JIT's where
+  the stack form compiles; feedback parity (`TestJITFeedbackParity`) is
+  the performance gate. If register code's feedback answers what the stack
+  form's does, the JIT's code is the same.
+- Correctness work is not timed. An optimization times only the tests it
+  is for, at two placements, four if the result is marginal. The JIT's
+  switch-over gets one check: the V8 suite with the JIT against the
+  stack-form JIT, at two placements. Whole-suite tables come only at the
+  milestones that are about speed -- the arm64 port and the landing -- at
+  four placements.
+- `hotdiff` guards only the old tiers while they remain; native handlers
+  are pinned by their generated files' staleness tests.
 
 ### Stage 0: the evidence (done)
 
@@ -2348,148 +2441,54 @@ Where this section infers rather than reads, it says so.
   - `arrays`, for empty array literals.
   - `instanceof`'s site, in `Aux`.
 
-#### 1. The feedback vector
+#### 1. Feedback
 
-**Principle: the fast path is the feedback.** In V8 each Ignition handler
-writes its feedback slot (`BinaryOperationHint`, `CompareOperationHint`,
-CallIC counts). runReg cannot afford that:
-- a word has no field left for a slot index;
-- each write is a load of the vector and a read-modify-write in a case;
-- each case added to the loop costs nodes against Go's 5,000-node limit
-  (4,875 used, "The loop").
+**As built.** No interpreter handler records anything for the JIT. Register
+code's feedback (`jitRegFeedback`, keyed by register pc) answers from:
+- the caches the handlers already fill: property sites (`propCache`: own
+  shape and index, holder, getter, polymorphic shapes, seen shapes),
+  global sites, call sites (`regCallCache`: target, closure, code and
+  kind), literal sites;
+- what native code learns at its own exits, kept per function by register
+  pc (`jitState.regLearned`): property cases, megamorphic marks,
+  primitive receivers, accessors, call targets seen at calls of Go and
+  host exits, literal pools, where Go went on after a call
+  (`Resumed`). Learning marks the code stale; it runs on and is compiled
+  again at the next ask, without a deoptimization.
 
-The rule instead: what a case's fast path answers is the expected kind, and
-anything else is recorded where the case already left the loop, on its slow
-path, keyed by the pc the slow path already has (`kept.pc - 1`). The
-optimizing JIT then speculates the fast path's kind wherever the site has no
-"seen other" mark. This is the model the stack form's JIT already follows
-for what native code meets: `Generic(pc)`, `jitIndexSeen`. It only moves the
-first lesson earlier, from the JIT's first exit to the interpreter's first
-miss.
+The stack form learned most of the same at its exits, so the two answer
+alike: `TestJITFeedbackParity` (internal/regdiff) asks both forms every
+question the builder asks of the V8 suite, Octane, Are We Fast Yet and the
+micro-benchmarks, and lists where they differ.
 
-**What each kind of site holds:**
+**Recording in the interpreter, where it is needed.** Native dispatch has
+two tables ("Native handlers"): plain, and, in `quickjs_jit` builds only,
+feedback, which a runtime running the JIT is given. A feedback handler
+overrides a plain one only where the JIT needs what no cache holds; the
+plain handlers stay what a jitless build runs, and a JIT build's runtime
+with the JIT off runs exactly them. Call frequencies (`Frequency`) are the
+first such record. The table's list of overriding handlers is empty
+today.
 
-| Site (register op) | Held today | Added | Where it is recorded |
-|---|---|---|---|
-| property read/method/store (`get_prop`, `get_method[_w]`, `set_prop`, `add_prop*`, `define_field`) | `propCache` by C: own shape and index, holder (`p1`/`s1`, `cell`), getter, up to four shapes polymorphic (`poly`), seen shapes with the JIT on (`refill`, `jitNoteSeen`), fills | none | the slow path, as today (`regGetProp`, `regSetProp`) |
-| global (`get_global`, `set_global`) | `propCache` slot and env, plus `regEpochs[C]` | none | `regNoteGlobal` |
-| element (`get_index*`, `set_index*`, `add_index*`, `get_length`) | nothing | a seen byte by pc: hole, out of range or append, typed array kind (reusing `TypedKind`'s codes), string receiver, string or symbol key, mapped arguments, other | `regElemMiss`, `regSetMiss`, the `typed:` and `slow:` tails' callees |
-| arithmetic and bitwise (`add`, `sub`, `mul`, `bin`, `*_imm`, `inc`, `dec`, `unary`) | nothing | a seen byte by pc: string operand, BigInt, other non-number | `regBinary`, `regBinImm`, `regStep`, `regUnary` |
-| compare-and-branch (`jlt`... `jseq`, `jeq`, `*_upval`) | nothing | a seen byte by pc: strings, mixed, objects | `regCompare` on `cmpSlow` |
-| call (`call_w`, `call_method_w`, `new_w`, tail forms) | `regCallCache` by C: monomorphic target, closure, regCode and kind (enter, this, native, generator, marked, leaf) | a call count; a polymorphic mark when a miss replaces a different target | the count in `regCallW` (outside runReg); the mark in `regCallSlow` |
-| literal (`new_object_lit`, `new_array_empty`, `new_array_k`, `regexp_lit`) | `propCache.next`/`s1` (the shape the keys led to), `arrays` (room) | none in the interpreter. The JIT's pools stay the JIT's (`jitLiteralAt`), keyed by register pc | as today |
-| `instanceof`, `in` | site in Aux, cache by layout (`362e755e`); `in` through the realm's cache | none | as today |
-| iteration (`iter_next`, `for_in_start`, `for_of_start`) | nothing | a seen byte by pc: array, generator, Map or Set, other | `regIterNext`, the starts in `regColdSub` |
+This replaces the design this section had: a seen byte per register pc
+(`regSeen`) and call counts recorded on runReg's slow paths, and a
+counter in `regEnterW`. Native handlers made runReg's node budget moot,
+and the per-runtime table makes recording free where the JIT is off.
 
-Arithmetic kinds are not split into int32 and float in the interpreter. The
-JIT already proves int32 by truncation (`ssa/ints.go`, `truncInts`) and by
-entry checks (`OpCheckI32`). It does not speculate a Smi add with an
-overflow check, as V8's `SpeculativeSafeIntegerAdd` does. If it ever wants
-to, the speculation learns from its own exit, as `Generic(pc)` does today.
-Recording int32 on the fast path would cost a branch and a store in every
-arithmetic case, which the loop's budget and its layout cannot pay.
+#### 2. Tier-up
 
-**Layout.** The vector lives where the caches already live, in
-`closureCode`, per template per runtime, the analogue of V8's feedback
-vector per closure template per native context:
-
-```
-closureCode
-  ic       []propCache      by site (an op's C, or Aux): property, global, literal, instanceof
-  regEpochs []uint64        parallel to ic, global sites only
-  regCalls []regCallCache   by call site (an op's C), + count uint32, + poly bit in kind
-  arrays   []*arrayRoom     empty literals
-  regSeen  []uint8          by register pc, made at the first record, nil until then
-  reg      *regCode         + hot int32: the tier-up counter (section 2)
-```
-
-- **Indexing by pc.** The JIT reaches a site by register pc: pc to
-  instruction word, then C (or `Aux[pc]`) to the entry. That is today's
-  `in.B` with another decoder.
-- **`regSeen`** costs one byte per instruction, about an eighth of the code,
-  and only for a function that ever missed.
-- **Numbering in Stage 4.** Once the stack form goes, regcomp numbers sites
-  from 1 with no stack-form offset. The leaf sharing in `propSite` ends with
-  the frameless stack evaluators. `RegCode` then gains a table of sites
-  (kind and pc) so that the verifier can check that each site is named
-  once.
-
-**Cost on the hot path:**
-- runReg's cases are unchanged, and so is its node count.
-- Every new record is in a function the case already calls.
-- The one addition outside slow paths is the call count, an increment on
-  the `regCallCache` line that `regCallW` has already loaded. It goes behind
-  `if jitBuilt`, so an untagged build compiles it out and `hotdiff` sees no
-  change.
-
-#### 2. Tier-up from runReg
-
-**Back edges: no new counter.** The stack form's tier-up for loops is
-already sampling: the runtime-wide budget runs out (`r.backEdges`, randomized
-by `backEdgeBudget` so that it does not alias with a loop's period), and the
-frame where it ran out is credited (`fullBudget`, `jitTierWork`). runReg
-spends the same budget at the same place, its `jump` tail, which already
-stores `kept.pc` and calls `regBackEdge`. Changes:
-
-- `regBackEdge` (out of line) gains a JIT branch behind `jitBuilt`:
-  - it calls `r.jit.backEdgeBudget()` instead of resetting to
-    `backEdgeCheckInterval`;
-  - it computes the loop header from the jump at `kept.pc-1` (`kept.pc +
-    regJumpOff(w)`);
-  - it calls a register form of `tryJITLoop`. Nothing in runReg changes.
-- **Coming back from native code.** Native code that finishes the frame or
-  exits at another pc has to bring runReg there.
-  - `regCatch` (out of line, `zzreg_switch.go`) learns a sentinel error.
-    `regBackEdge` returns `errRegGoOn` with the pc to resume at in `kept.pc`,
-    and `regCatch` returns that pc before it looks at handlers. runReg's
-    `fail:` tail already continues at whatever `regCatch` returns.
-  - A frame native code finished resumes at a `ret r0` that regcomp appends
-    to every function, with the result written to r0. The function is r0's
-    value only until the frame ends.
-  - So OSR in either direction adds no instruction to runReg (inferred
-    design, not built).
-
-**Calls: one counter outside the loop.** The counter goes in `regEnterW`,
-which every framed register call goes through, on the `regCode` whose
-`numRegs`, `args`, `params` and `inits` it reads anyway:
-
-```
-if jitBuilt {
-    if rc.hot--; rc.hot < 0 { return r.regEnterHot(o, cl, rc, base, argc, args, newTarget) }
-}
-```
-
-- **One branch, two uses.** `regEnterHot` counts invocations toward the
-  stack form's `jitInvocationsForFeedback` and toward `jitHotWork` (adding
-  the function's length, as `jitHotEntry` adds `len(Code)`). It resets the
-  counter, and it decides.
-  - Once a function has native code, `hot` is held negative. Every call
-    takes the same branch into the native entry, the way V8 swaps a
-    function's code pointer.
-  - No call site has to be found or patched, and no case of `regCallW`
-    tests a new kind.
-- **`regDirect` takes the same check.** That is the callbacks' entry.
-- **Leaves need no count.** Bodies answered without a frame (`regLeafArg`,
-  `regLeafConst`, `regLeafCode`, `pureCallAt`) are not compile candidates.
-  The optimizing JIT inlines them from the call site's cache.
-- **Cost by build.** Untagged: nothing, since `jitBuilt` is a constant
-  false. Tagged, JIT on or off: a decrement on a loaded line and a branch
-  never taken. That is `tryJITFrame`'s `r.jitOn()` test today, now off the
-  tree's path, and it must be shown level with `placements -micro`.
-- **The fallback.** If the placements show the counter, credit the callee
-  when `r.interruptCounter` runs out instead. That is the same decrement
-  regEnterW makes today, sampled one call in 4,096. It costs nothing, but a
-  function is chosen statistically rather than counted.
-
-**Against the stack form's counters:**
-
-| | Stack form | Register form |
-|---|---|---|
-| Loop | the runtime budget runs out in `executeAt`'s `interrupted` block, then `jitBackEdge` and `tryJITLoop` at the stack pc | the same budget runs out in runReg's `jump` tail, then `regBackEdge` and `tryJITLoop` at the register header; no change to runReg |
-| Call | `tryJITFrame` on every framed call behind `jitOn()`: `jitCalls` up to 8, then entries and `coldWork` | `rc.hot` in `regEnterW` and `regDirect`, behind `jitBuilt`, out of line once it runs out |
-| Call-site frequency | counted at the callee's entry against the caller's top frame while the caller warms (`jitCountCallAt`) | `regCallCache.count` at the site; frequency is the count over the function's invocations |
-| Native entry from interpreted callers | `tryJITFrame` on every call | `rc.hot` held negative: the one counter branch |
-| pc live across the dispatch | no | no: every hook is in a function runReg already calls with `kept` |
+**As built: sampling, with no counter.**
+- **Calls.** When the runtime's interrupt budget runs out at a call, the
+  callee is credited; a function is compiled from its register code
+  after it has been sampled twice. Call sites whose callee has native
+  code are marked (`regCallJIT`) and enter it through `regCallSlow`, so
+  no handler tests for native code.
+- **Loops.** When the back-edge budget runs out, `regBackEdge` calls
+  `jitRegLoop`, which enters the loop header's native code (OSR) and, on
+  its return, gives runReg the pc to go on at (`jitRegGoOn`).
+- **Cost.** A runtime with the JIT off pays the sample hook at the
+  budget's expiry and one load in `regEnterW`; untagged builds pay
+  nothing.
 
 #### 3. The optimizing JIT's front end from register code
 
@@ -2535,8 +2534,10 @@ its scopes.
    - `NativeCalls`, `Inline` and `CallShape` read `regCalls[C]`. That is a
      monomorphic target from the first compile, where the stack form's JIT
      first learns targets from its own exits;
-   - `Frequency` reads `regCalls[C].count`;
-   - element, compare and arithmetic hints read `regSeen[pc]`;
+   - `Frequency` will read what the feedback table's handlers count
+     (section 1);
+   - element, compare and arithmetic hints come from what native code
+     meets at its exits, as the stack form's do;
    - `TypedKind`, `KeyedRead` and the like keep the JIT's own learned
      tables on `jitEntry` (`typedReads`, `keyedReads`, `callSites`,
      literals), now keyed by register pc.
@@ -2607,7 +2608,7 @@ methods. It is the largest and riskiest piece of the stage.
 **What it would be.** Register code becomes machine code one instruction at
 a time, from templates, with no IR, as V8's Sparkplug does.
 - **runReg's frame.** The window is in `r.stack` and the frame record is
-  `regEnterW`'s. The feedback vector is the same `closureCode` caches.
+  `regEnterW`'s. Its feedback would be the same `closureCode` caches.
 - **runReg's slow paths.** They are the functions runReg's cases call:
   `regSlow`, `regCallW`, `regElemMiss`, `regSetMiss`, `regAppend`,
   `regIterNext`, `regColdSub`.
@@ -3023,11 +3024,11 @@ Stop at the first that fails.
 **Recommendation: the front-end port (3a), and neither option 4 nor option
 5 as a commitment.**
 
-- **3a is required.** The stack form goes. It brings sections 1 to 3: the
-  feedback vector, recorded off runReg's fast paths; tier-up from
-  `regBackEdge` and `regEnterW` with nothing added to the loop; and the
-  optimizing JIT's lowering from register code, with exits and OSR into
-  register frames.
+- **3a is required.** The stack form goes. It brings sections 1 to 3:
+  feedback from the caches and from native code's exits, recorded in the
+  interpreter only by the feedback table's handlers; tier-up by sampling,
+  with nothing added to a handler; and the optimizing JIT's lowering from
+  register code, with exits and OSR into register frames.
 - **Option 4, the baseline: not now.** The evidence above does not show it
   paying in a JIT build that has the optimizer and D8.
   - It may be reopened only through the kill gate in section 4, after 3a
@@ -3044,42 +3045,24 @@ Stop at the first that fails.
     `loop_locals`' ops, at least 20% faster than runReg on them at every
     placement, before anything else of it is written.
 
-**Stages of 3a and their gates.** Every gate includes:
-- test262 at 100,247 passed, none failed, in every mode: plain,
-  `-conformance.jit`, `-conformance.debugger`, register mode;
-- `TestJITSameWorkWhileMarking` with its breach list unchanged, and every
-  native path also tested under `jitMarkingForTest`;
-- the full suite with and without the tag;
-- `TestRegLoopCallsNoHelper` and `TestRegDispatchKeepsNoPC` passing;
-- untagged builds unchanged by `hotdiff`.
+**Stages of 3a and their gates.** Every gate includes the gates of "The
+plan now": test262 in every mode, `-conformance.jit` also under
+`QJS_JIT_STRESS`; `TestJITSameWorkWhileMarking` unchanged; the full suite
+with and without the tag; no new refusal kinds; the JIT's README updated
+in the same commit as a change to its design.
 
-1. **3a-1, feedback.**
-   - Work: `regSeen`, `regCallCache.count`, the polymorphic call bit,
-     `rc.hot`, all out of runReg.
-   - Gate: `placements compare -parallel -k 4 -micro`, untagged and tagged
-     with the JIT off, with no test 3% slower at every placement; the V8
-     suite level at `-k 8`. If `rc.hot` shows, use the fallback of section
-     2, sampling at `interruptCounter`'s expiry.
-2. **3a-2, the register lowering.**
-   - Work: `LowerReg` into `ir.Program` with `Origin` and the atomicity
-     rule for fused operations, checked by `ir.Validate`; `ir.Evaluate`
-     against runReg on the corpus tests; the feedback methods re-keyed;
-     `compilediff native` reporting register pcs.
-   - Gate: refusals no more than the stack lowering's on the V8 suite,
-     Octane and the bundles.
-3. **3a-3, exits, OSR and tier-up from runReg.**
-   - Work: `runReg(f, c, pc)`, the `regCatch` sentinel, the appended `ret`,
-     inlined frames at `wb + A`, generators.
-   - Gate:
-     - the JIT's placements (`-jit -k 4`, with JITPAD, JITSEED and JITLINE
-       varied) on V8, Octane, AWFY, `ssr`, `fresh` and the micro-benchmarks
-       against the stack-form JIT, both foreground and with
-       `-jitbackground`;
-     - totals level or better, no benchmark slower at every placement, and
-       `-jitcompile` phase times no worse;
-     - `QJS_JIT_STRESS` clean;
-     - the JIT's README updated in the same commit.
-   - Only then is the stack form's JIT path removed.
+1. **3a-1, feedback** (done, as section 1 says). The parity tool is its
+   gate; correctness steps are not timed.
+2. **3a-2, the register lowering** (done). `LowerReg` into `ir.Program`
+   with `Origin` and the atomicity rule for fused operations, checked by
+   `ir.Validate`; `ir.Evaluate` against runReg on the corpus tests; the
+   feedback methods re-keyed. Refusals no more than the stack lowering's
+   on the V8 suite, Octane and the bundles.
+3. **3a-3, exits, OSR, tier-up and calls** (under way; the working plan
+   below). Gate for the switch-over: feedback parity with every remaining
+   difference explained, then one timing of the V8 suite with the JIT
+   against the stack-form JIT, at two placements. Only then is the stack
+   form's JIT path removed.
 
 **Biggest risks.**
 - **The port of the optimizer's front end.** About 3,000 lines of lowering
@@ -3096,6 +3079,22 @@ Stop at the first that fails.
   JIT's placement knobs.
 
 #### 3a-3's working plan (2026-11-12)
+
+**Status (2026-11-13).**
+- Done: A1, A3 and A6 (native code from register code, exits into
+  register frames, OSR); B1 to B3 as sampling (section 2) rather than the
+  counter below; A5 (native calls between register functions, with
+  calls of Go made on the register frame). test262 with the JIT under
+  `QJS_JIT_STRESS`: language/ and built-ins/ with no failures.
+- Left, in order: the RegExp literal's feedback gap, A2 (inlining),
+  top-level code, generators and async functions, call frequencies from
+  the feedback table's handlers, A4, then the switch-over and the stack
+  path's removal.
+- arm64 makes native code's calls of register functions calls of Go
+  until the arm64 port.
+
+The plan as written on 2026-11-12 follows; where it differs from the
+status, the status holds.
 
 **Where 3a-2 left it.** On reg-cov, behind tests only:
 - `compile.LowerReg` lowers every register operation into the slot IR,
@@ -3208,11 +3207,9 @@ runReg's loop, and runReg itself is not edited.
    - Gate: test262 `-conformance.jit` in register mode, 0 failures and
      0 fallbacks; `QJS_JIT_STRESS` clean; hotdiff of runReg the same,
      and of `regEnterW` in untagged builds.
-4. A4, then 3a-3's timing gate: the JIT's placements (`-jit -k 4`,
-   JITPAD, JITSEED and JITLINE varied) on V8, Octane, AWFY, `ssr`,
-   `fresh` and the micro-benchmarks against the stack-form JIT,
-   foreground and with `-jitbackground`. Only then does the stack path
-   go.
+4. A4, then the switch-over's gate (3a-3 above): feedback parity, and one
+   timing of the V8 suite with the JIT at two placements. Only then does
+   the stack path go.
 
 ### Stage 4: one pipeline
 

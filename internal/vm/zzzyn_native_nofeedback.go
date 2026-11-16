@@ -1,4 +1,4 @@
-//go:build !quickjs_jit || android || ios || !((linux && amd64) || (windows && amd64) || (darwin && arm64)) || quickjs_nativelayout
+//go:build (amd64 || arm64) && (!quickjs_jit || android || ios || !((linux && amd64) || (windows && amd64) || ((darwin || linux) && arm64)) || quickjs_nativelayout)
 
 package vm
 

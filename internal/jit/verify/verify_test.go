@@ -1,4 +1,4 @@
-//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))
+//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || ((darwin || linux) && arm64))
 
 // Package verify checks the JIT's emitters against independent
 // disassemblers, golang.org/x/arch's. It is a module of its own, so that

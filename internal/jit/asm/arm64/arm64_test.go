@@ -226,3 +226,111 @@ func trunc(v uint64, bits uint) uint64 {
 	}
 	return v
 }
+
+// decodeLogical is the immediate a logical operation's N:immr:imms field
+// encodes, by the architecture's DecodeBitMasks, of the width; ok is
+// false for a reserved field.
+func decodeLogical(f uint32, wide bool) (uint64, bool) {
+	n, immr, imms := f>>12&1, f>>6&0x3F, f&0x3F
+	if !wide && n == 1 {
+		return 0, false
+	}
+	l := 6
+	for ; l >= 0; l-- {
+		if (n<<6|^imms&0x3F)>>uint(l)&1 == 1 {
+			break
+		}
+	}
+	if l < 1 {
+		return 0, false
+	}
+	size := uint(1) << uint(l)
+	s, r := uint(imms)&(size-1), uint(immr)&(size-1)
+	if s == size-1 {
+		return 0, false
+	}
+	mask := ^uint64(0)
+	if size < 64 {
+		mask = uint64(1)<<size - 1
+	}
+	e := uint64(1)<<(s+1) - 1
+	if r > 0 {
+		e = (e>>r | e<<(size-r)) & mask
+	}
+	v := uint64(0)
+	for i := uint(0); i < 64; i += size {
+		v |= e << i
+	}
+	if !wide {
+		v = uint64(uint32(v))
+	}
+	return v, true
+}
+
+// LogicalImm finds an encoding for every immediate that has one, which
+// decodes to it, and none for any other: every field of each width
+// decoded, and values near them that are no pattern.
+func TestLogicalImm(t *testing.T) {
+	for _, wide := range []bool{false, true} {
+		valid := map[uint64]bool{}
+		for f := uint32(0); f < 1<<13; f++ {
+			v, ok := decodeLogical(f, wide)
+			if !ok {
+				continue
+			}
+			valid[v] = true
+			got, ok := LogicalImm(v, wide)
+			if !ok {
+				t.Fatalf("LogicalImm(%#x, wide %v): none, want one (%#x)", v, wide, f)
+			}
+			if back, _ := decodeLogical(got, wide); back != v {
+				t.Fatalf("LogicalImm(%#x, wide %v) = %#x, which is %#x", v, wide, got, back)
+			}
+		}
+		for v := range valid {
+			for _, w := range []uint64{v + 1, v - 1, v ^ 0x10000, v ^ 1<<40} {
+				if !wide {
+					w = uint64(uint32(w))
+				}
+				if _, ok := LogicalImm(w, wide); ok != valid[w] {
+					t.Fatalf("LogicalImm(%#x, wide %v) reports %v", w, wide, ok)
+				}
+			}
+		}
+	}
+}
+
+// The encodings of the bit fields, the register-offset load, the
+// exclusive pair and the logical immediates, against the architecture's:
+// ubfx x1, x2, #16, #16; sbfx x3, x4, #32, #16; ldr x1, [x21, x1, lsl #3];
+// ldr x1, [x21, x1]; ldxr x16, [x2]; stxr w17, x16, [x2]; and x1, x2,
+// #0xff; tst w3, #0x8000; and x1, x2 of tmp's 0x12345.
+func TestFieldsAndLoads(t *testing.T) {
+	for _, tc := range []struct {
+		f    func(a *Asm)
+		want []uint32
+	}{
+		{func(a *Asm) { a.Ubfx(1, 2, 16, 16) }, []uint32{0xD3507C41}},
+		{func(a *Asm) { a.Sbfx(3, 4, 32, 16) }, []uint32{0x9360BC83}},
+		{func(a *Asm) { a.LoadIdx(1, 21, 1, true) }, []uint32{0xF8617AA1}},
+		{func(a *Asm) { a.LoadIdx(1, 21, 1, false) }, []uint32{0xF8616AA1}},
+		{func(a *Asm) { a.Ldxr(16, 2) }, []uint32{0xC85F7C50}},
+		{func(a *Asm) { a.Stxr(17, 16, 2) }, []uint32{0xC8117C50}},
+		{func(a *Asm) { a.AndImm(1, 2, 0xFF, true) }, []uint32{0x92401C41}},
+		{func(a *Asm) { a.TstImm(3, 0x8000, false) }, []uint32{0x7211007F}},
+		{func(a *Asm) { a.AndImm(1, 2, 0x12345, true) }, []uint32{0xD28468BB, 0xF2A0003B, 0x8A1B0041}},
+	} {
+		var a Asm
+		tc.f(&a)
+		if len(a.buf) != len(tc.want) {
+			t.Errorf("%#08x, want %#08x", a.buf, tc.want)
+			continue
+		}
+		for i := range a.buf {
+			if a.buf[i] != tc.want[i] {
+				t.Errorf("%#08x, want %#08x", a.buf, tc.want)
+				break
+			}
+		}
+	}
+}

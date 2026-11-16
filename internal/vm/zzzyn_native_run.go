@@ -1,3 +1,5 @@
+//go:build amd64 || arm64
+
 package vm
 
 import (
@@ -15,7 +17,7 @@ import (
 //
 //go:generate go run ./internal/nativegen/cmd
 
-// The register interpreter's native threaded handlers on amd64
+// The register interpreter's native threaded handlers on amd64 and arm64
 // (docs/register-interpreter.md, "Native handlers"): machine code for the
 // hot operations, each handler ending in its own indirect jump through
 // the native table, as V8's Ignition's do. What a handler's fast path
@@ -27,11 +29,13 @@ import (
 //
 // The code is made offline by internal/vm/internal/nativegen, from the
 // package's layout (zzzyn_native_layout.go), and assembled into the
-// binary (zzzyn_native_handlers_amd64.s, go generate): one block for
-// every runtime and every build tag, never patched, every address it
-// needs given by the context in DI.
+// binary (zzzyn_native_handlers_<arch>.s, go generate): one block for
+// every runtime and every build tag of an architecture, never patched,
+// every address it needs given by the context. The trampolines that enter
+// it and that it calls Go by are each architecture's own
+// (zzzyn_native_<arch>.s).
 //
-// The machine registers, kept across the dispatch:
+// The machine registers on amd64, kept across the dispatch:
 //
 //	RBX  the instruction's address        R12  the frame's registers
 //	R13  the native table                 R15  the closure's caches (ic)
@@ -39,7 +43,16 @@ import (
 //	RDI  the context (nativeCtx)
 //
 // and, in a handler, RAX the instruction word, RCX, RDX, RSI, R8, R9,
-// X0, X1 and X3 its scratch. A pointer word is stored plainly while the
+// X0, X1 and X3 its scratch. On arm64 (nativegen's arm64.go):
+//
+//	R19  the instruction's address        R20  the frame's registers
+//	R21  the native table                 R22  the closure's caches (ic)
+//	R23  the back-edge budget             R24  tagBase, the tags' least
+//	R25  the context (nativeCtx)
+//
+// and R0 the instruction word, R1 to R7, R16, R17 and D0 to D3 a
+// handler's scratch; R30 holds the return to nativeRun throughout. A
+// pointer word is stored plainly while the
 // collector does not mark and by the barrier's routine (nativeStoreRef)
 // while it does: the same work marking or not but the barrier's, and no
 // call of Go for the marking's sake (the JIT's marking rule).
@@ -481,7 +494,7 @@ var nativeExitAddr = func() uintptr {
 // nativePlain is the plain dispatcher, the only one in builds without
 // the JIT; nativeFeedback, in builds with it, a runtime's that runs the
 // JIT, whose handlers record the JIT's feedback
-// (zzzyn_native_feedback_amd64.go), and plain in builds without.
+// (zzzyn_native_feedback.go), and plain in builds without.
 var nativePlain = newNativeTable(nativeTableAddr())
 
 // nativeDispatch is the dispatcher r's contexts give the code.
@@ -493,8 +506,10 @@ func (r *Runtime) nativeDispatch() *nativeTable {
 }
 
 // nativeStoreRef is jumped to by native code to store a pointer while the
-// collector marks: the slot in AX, the pointer in CX, where to go on in
-// R11, the context in DI, which alone it keeps.
+// collector marks: on amd64 the slot in AX, the pointer in CX, where to go
+// on in R11, the context in DI, which alone it keeps; on arm64 the slot in
+// R0, the pointer in R1, where to go on in R16, the context in R25, which
+// it keeps with the link register.
 func nativeStoreRef()
 
 func nativeStoreRefAddr() uintptr
@@ -507,22 +522,24 @@ func nativeStoreRefAddr() uintptr
 func nativeStoreRefGo(slot *unsafe.Pointer, p unsafe.Pointer) { *slot = p }
 
 // nativeCallH is where an exit calls the Go handler of its instruction:
-// its func value in DX, its arguments in AX, BX, CX and SI (the state),
-// the context in DI. It is a function the Go function that entered the
-// code called, as the JIT's callGo is, and goes on at the context's after
-// with the handler's result in AX and the context in DI.
+// on amd64 its func value in DX, its arguments in AX, BX, CX and SI (the
+// state), the context in DI; on arm64 its func value in R26, its arguments
+// in R0 to R3, the context in R25. It is a function the Go function that
+// entered the code called, as the JIT's callGo is, and goes on at the
+// context's after with the handler's result in AX (R0) and the context
+// in DI (R25).
 func nativeCallH()
 
 func nativeCallHAddr() uintptr
 
-// nativeEnter jumps to code with the context in DI; the code returns to
-// nativeEnter's caller.
+// nativeEnter jumps to code with the context in DI (R25 on arm64); the
+// code returns to nativeEnter's caller.
 //
 //go:noescape
 func nativeEnter(code uintptr, ctx unsafe.Pointer)
 
 // regNativeHandlers is the assembled block of the handlers
-// (zzzyn_native_handlers_amd64.s); nativeHandlersAddr is its address and
+// (zzzyn_native_handlers_<arch>.s); nativeHandlersAddr is its address and
 // nativeTableAddr its table's, each operation's handler's address, the
 // exit stub's where it has none.
 func regNativeHandlers()

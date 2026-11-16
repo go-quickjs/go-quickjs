@@ -44,6 +44,7 @@ var wordSize = map[string]int64{"amd64": 8, "arm64": 8}
 
 // jitTarget says where a build with the quickjs_jit tag has the JIT, for
 // a target architecture: amd64's on linux and windows, arm64's on darwin
+// and linux
 // (vm's zzjit_*.go). Its layout has the JIT's fields.
 var jitTarget = map[string]bool{"amd64": true, "arm64": true}
 
@@ -59,11 +60,34 @@ var jitTarget = map[string]bool{"amd64": true, "arm64": true}
 //
 // The one thing a host cannot give is a build's that its own GOOS and
 // GOARCH leave files out of: the JIT's, built for linux and windows on
-// amd64 and darwin on arm64, whose fields the Runtime has only there.
+// amd64 and darwin and linux on arm64, whose fields the Runtime has only
+// there.
 // Asked for a layout with the quickjs_jit tag, a host whose own build
-// has no JIT -- linux on arm64, say -- fails, saying so, rather than give
+// has no JIT -- darwin on amd64, say -- fails, saying so, rather than give
 // a layout without the JIT's fields.
 func ReadLayout(goarch string, tags ...string) (*Layout, error) {
+	return readLayout(goarch, slices.Contains(tags, "quickjs_jit") && jitTarget[goarch], tags)
+}
+
+// helperArch is the architecture the helper that reads goarch's layout is
+// built for: the host's where its words are goarch's.
+func helperArch(goarch string) string {
+	if int64(unsafe.Sizeof(uintptr(0))) == wordSize[goarch] {
+		return runtime.GOARCH
+	}
+	return goarch
+}
+
+// hostJIT reports whether the helper that reads goarch's layout, built on
+// this host's GOOS, has the JIT with the quickjs_jit tag: whether this
+// host can read a layout with the JIT's fields.
+func hostJIT(goarch string) bool {
+	return holds(jitBuild, helperArch(goarch), runtime.GOOS, []string{"quickjs_jit"})
+}
+
+// readLayout is ReadLayout, failing where needJIT and the build read has
+// no JIT.
+func readLayout(goarch string, needJIT bool, tags []string) (*Layout, error) {
 	size, ok := wordSize[goarch]
 	if !ok {
 		return nil, fmt.Errorf("nativegen: no layout for %s", goarch)
@@ -72,10 +96,7 @@ func ReadLayout(goarch string, tags ...string) (*Layout, error) {
 	if err != nil {
 		return nil, err
 	}
-	build := goarch
-	if hostSize := int64(unsafe.Sizeof(uintptr(0))); hostSize == size {
-		build = runtime.GOARCH
-	}
+	build := helperArch(goarch)
 	cmd := exec.Command(gotool, "run", "-tags", strings.Join(append([]string{layoutTag}, tags...), ","), helper)
 	cmd.Env = append(os.Environ(), "GOARCH="+build)
 	var stderr bytes.Buffer
@@ -93,8 +114,8 @@ func ReadLayout(goarch string, tags ...string) (*Layout, error) {
 	if l.PtrSize != size {
 		return nil, fmt.Errorf("nativegen: vm's %s layout read by a build for %s, whose words are %d bytes, not %d", goarch, l.GOARCH, l.PtrSize, size)
 	}
-	if slices.Contains(tags, "quickjs_jit") && jitTarget[goarch] && !l.JITBuilt {
-		return nil, fmt.Errorf("nativegen: vm's %s layout with the JIT cannot be read on %s/%s, whose build has no JIT: read it on linux or windows amd64, or darwin arm64", goarch, runtime.GOOS, l.GOARCH)
+	if needJIT && !l.JITBuilt {
+		return nil, fmt.Errorf("nativegen: vm's %s layout with the JIT cannot be read on %s/%s, whose build has no JIT: read it on linux or windows amd64, or darwin or linux arm64", goarch, runtime.GOOS, l.GOARCH)
 	}
 	return l, nil
 }

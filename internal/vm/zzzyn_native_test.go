@@ -1,3 +1,5 @@
+//go:build amd64 || arm64
+
 package vm
 
 import (
@@ -13,7 +15,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
-// The native handlers' tests (zzzyn_native_amd64.go): each runs code by
+// The native handlers' tests (zzzyn_native_run.go): each runs code by
 // the Go table's loop and by the native handlers, with the collector idle
 // and as while it marks, and checks the answers are the same, and that
 // the native code did the work it is for -- the same exits to Go marking

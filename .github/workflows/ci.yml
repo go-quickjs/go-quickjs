@@ -130,7 +130,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-latest, windows-latest, macos-15, ubuntu-24.04-arm]
         go: ["1.24", "1.27"]
     env:
       CGO_ENABLED: "0"
@@ -189,7 +189,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-latest, windows-latest, macos-15, ubuntu-24.04-arm]
     env:
       CGO_ENABLED: "0"
       QUICKJS_REQUIRE_JIT: "1"
@@ -216,7 +216,7 @@ jobs:
           go-version: "1.27"
           cache: true
 
-      # amd64 on Linux and Windows, arm64 on macOS.
+      # amd64 on Linux and Windows, arm64 on macOS and Linux.
       - name: Run test262
         shell: bash
         run: TEST262_DIR="$GITHUB_WORKSPACE/test262" go test -tags quickjs_jit ./conformance -run TestConformance -count=1 -timeout 35m -v -args -conformance.jit 2>&1 | tee test262.log | grep -E "test262:|native code ran|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
@@ -234,8 +234,8 @@ jobs:
             "Run the VM's tests" "go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm" \
             "Run the VM's tests, compiling in the background" "QJS_JIT_STRESS=threshold,budget=3,deopt=7,background=3 go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm ."
 
-  # The JIT's kernels and the tree tier's, on arm64 (macOS) and amd64
-  # (Linux). A shared
+  # The JIT's kernels and the tree tier's, on arm64 (macOS and Linux)
+  # and amd64 (Linux). A shared
   # runner's times are noisy, so the summary compares the tiers within one
   # run: medians, and the JIT's time over the tree tier's.
   jit-bench:
@@ -246,7 +246,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
+        os: [ubuntu-latest, macos-15, ubuntu-24.04-arm]
     env:
       CGO_ENABLED: "0"
       QUICKJS_REQUIRE_JIT: "1"

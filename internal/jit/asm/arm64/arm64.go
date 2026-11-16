@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"unsafe"
 )
@@ -306,6 +307,26 @@ func (a *Asm) Store32(base Reg, disp int32, src Reg) {
 	a.mem(0xB9000000, 0xB8000000, b32, src, base, disp)
 }
 
+// LoadIdx is dst = [base + idx<<3] where scaled, else [base + idx], 64
+// bits (LDR, register offset): an entry of a table of words.
+func (a *Asm) LoadIdx(dst, base, idx Reg, scaled bool) {
+	s := uint32(0)
+	if scaled {
+		s = 1 << 12
+	}
+	a.emit(0xF8606800 | uint32(idx)<<16 | s | uint32(base)<<5 | uint32(dst))
+}
+
+// Ldxr is dst = [base], 64 bits, its address marked for an exclusive
+// store (LDXR); Stxr is [base] = src where the mark holds, status 0, else
+// status 1 and nothing stored (STXR): an atomic update is a loop of the
+// two.
+func (a *Asm) Ldxr(dst, base Reg) { a.emit(0xC85F7C00 | uint32(base)<<5 | uint32(dst)) }
+
+func (a *Asm) Stxr(status, src, base Reg) {
+	a.emit(0xC8007C00 | uint32(status)<<16 | uint32(base)<<5 | uint32(src))
+}
+
 // LoadS and StoreS are dst = the float at [base + disp], and [base + disp]
 // = the float in src (the S views).
 func (a *Asm) LoadS(dst FReg, base Reg, disp int32) {
@@ -450,6 +471,89 @@ func (a *Asm) ShiftImm(op Shift, dst, n Reg, count uint8, wide bool) {
 		immr, imms = s, bits-1
 	}
 	a.emit(base | immr<<16 | imms<<10 | uint32(n)<<5 | uint32(dst))
+}
+
+// Ubfx is dst = n's width bits from bit lsb, zero-extended, 64 bits
+// (UBFM); Sbfx is the same sign-extended (SBFM). lsb+width is at most 64.
+func (a *Asm) Ubfx(dst, n Reg, lsb, width uint8) { a.bfx(0xD3400000, dst, n, lsb, width) }
+
+func (a *Asm) Sbfx(dst, n Reg, lsb, width uint8) { a.bfx(0x93400000, dst, n, lsb, width) }
+
+func (a *Asm) bfx(op uint32, dst, n Reg, lsb, width uint8) {
+	if width == 0 || int(lsb)+int(width) > 64 {
+		panic("arm64: a bit field past the register")
+	}
+	a.emit(op | uint32(lsb)<<16 | uint32(lsb+width-1)<<10 | uint32(n)<<5 | uint32(dst))
+}
+
+// LogicalImm is the N:immr:imms field that encodes v as a logical
+// operation's immediate of the width, if it has one: a run of ones,
+// rotated, repeated in elements of 2 to 64 bits. Zero and all ones have
+// none.
+func LogicalImm(v uint64, wide bool) (uint32, bool) {
+	if !wide {
+		v = uint64(uint32(v)) | v<<32
+	}
+	if v == 0 || v == ^uint64(0) {
+		return 0, false
+	}
+	size := uint(64)
+	for size > 2 {
+		half := size / 2
+		mask := uint64(1)<<half - 1
+		if v&mask != v>>half&mask {
+			break
+		}
+		size = half
+	}
+	mask := ^uint64(0)
+	if size < 64 {
+		mask = uint64(1)<<size - 1
+	}
+	e := v & mask
+	ones := uint(bits.OnesCount64(e))
+	run := uint64(1)<<ones - 1
+	for r := uint(0); r < size; r++ {
+		rot := e
+		if r > 0 {
+			rot = (e>>r | e<<(size-r)) & mask
+		}
+		if rot != run {
+			continue
+		}
+		n := uint32(0)
+		if size == 64 {
+			n = 1
+		}
+		immr := uint32((size - r) % size)
+		imms := uint32((^(size-1)<<1 | (ones - 1)) & 0x3F)
+		return n<<12 | immr<<6 | imms, true
+	}
+	return 0, false
+}
+
+// AndImm is dst = n & imm, and TstImm sets the flags for n & imm (ANDS),
+// for any imm: the immediate form where imm has one (LogicalImm), tmp
+// otherwise.
+func (a *Asm) AndImm(dst, n Reg, imm uint64, wide bool) {
+	a.logicalImm(0x12000000, And, dst, n, imm, wide)
+}
+
+func (a *Asm) TstImm(n Reg, imm uint64, wide bool) { a.logicalImm(0x72000000, Ands, ZR, n, imm, wide) }
+
+func (a *Asm) logicalImm(op uint32, reg ALU, dst, n Reg, imm uint64, wide bool) {
+	if !wide {
+		imm = uint64(uint32(imm))
+	}
+	if f, ok := LogicalImm(imm, wide); ok {
+		a.emit(op | sf(wide) | f<<10 | uint32(n)<<5 | uint32(dst))
+		return
+	}
+	if n == tmp {
+		panic("arm64: an immediate operation of the temporary")
+	}
+	a.MovImm(tmp, imm)
+	a.Op(reg, dst, n, tmp, wide)
 }
 
 // Mvn is dst = ^n.

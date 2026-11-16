@@ -221,3 +221,20 @@ func TestARM64IndirectJumps(t *testing.T) {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }
+
+// The bit fields, the register-offset load, the exclusive pair and the
+// logical immediates the register interpreter's native handlers use
+// (internal/vm/internal/nativegen).
+func TestARM64FieldsAndLoads(t *testing.T) {
+	expectA64(t, "ubfx x1, x2, #16, #16", func(a *arm64.Asm) { a.Ubfx(1, 2, 16, 16) })
+	expectA64(t, "sbfx x3, x4, #32, #16", func(a *arm64.Asm) { a.Sbfx(3, 4, 32, 16) })
+	expectA64(t, "ldr x1, [x21,x1,lsl #3]", func(a *arm64.Asm) { a.LoadIdx(1, 21, 1, true) })
+	expectA64(t, "ldr x1, [x21,x1]", func(a *arm64.Asm) { a.LoadIdx(1, 21, 1, false) })
+	expectA64(t, "ldxr x16, [x2]", func(a *arm64.Asm) { a.Ldxr(16, 2) })
+	expectA64(t, "stxr w17, x16, [x2]", func(a *arm64.Asm) { a.Stxr(17, 16, 2) })
+	expectA64(t, "and x1, x2, #0xff", func(a *arm64.Asm) { a.AndImm(1, 2, 0xFF, true) })
+	expectA64(t, "and w1, w2, #0xfffe0", func(a *arm64.Asm) { a.AndImm(1, 2, 0xFFFE0, false) })
+	expectA64(t, "tst w3, #0x8000", func(a *arm64.Asm) { a.TstImm(3, 0x8000, false) })
+	expectA64(t, "tst x3, #0xaaaaaaaaaaaaaaaa", func(a *arm64.Asm) { a.TstImm(3, 0xAAAAAAAAAAAAAAAA, true) })
+	expectA64(t, "mov x27, #0x2345; movk x27, #0x1, lsl #16; and x1, x2, x27", func(a *arm64.Asm) { a.AndImm(1, 2, 0x12345, true) })
+}

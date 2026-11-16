@@ -1,4 +1,4 @@
-//go:build quickjs_jit && !android && !ios && darwin && arm64
+//go:build quickjs_jit && !android && !ios && (darwin || linux) && arm64
 
 package jit
 

@@ -5,8 +5,8 @@ lives in `internal/vm/zzjit_*.go`.
 
 The tier is **experimental and opt-in**, and it needs two things:
 
-1. a build with `-tags quickjs_jit` on `linux/amd64`, `windows/amd64` or
-   `darwin/arm64`;
+1. a build with `-tags quickjs_jit` on `linux/amd64`, `windows/amd64`,
+   `darwin/arm64` or `linux/arm64`;
 2. a runtime made with `quickjs.WithJIT()` (or `qjs --jit`,
    `-conformance.jit`, `v8bench -jit`).
 
@@ -29,7 +29,7 @@ This file states the design and the contracts the code keeps.
 | `barrier.go` | The runtime's write-barrier flag, which native code tests, and the Go side of its stores through the barrier (`storeRef`). |
 | `verify` | A module of its own that checks the code `mir` makes for both targets against `golang.org/x/arch`'s disassemblers. |
 | `entry_*.s` | Entry from Go (`enterSSA`), and the calls of Go native code makes (`callGo`). |
-| `memory_*.go`, `cache_*.go`, `policy_darwin.go`, `jit_disabled.go` | Executable memory, the instruction cache, and the stubs for targets without the tier. |
+| `memory_*.go`, `cache_*.go`, `flush_*_arm64.s`, `policy_*.go`, `jit_disabled.go` | Executable memory, the instruction cache, each OS's policy, and the stubs for targets without the tier. |
 | `internal/vm/zzjit_native.go` | The VM's side: selection, the code cache, budgets, host exits. |
 | `internal/vm/zzjit_ssa.go` | Feedback for the builder, entering and resuming code, the calls of Go, native calls and their frames. |
 | `internal/vm/zzjit_disabled.go` | The stubs for builds without the tier. |
@@ -1500,7 +1500,21 @@ protectors do, and every way of changing a watched property clears.
 - A chunk is unmapped when the last function in it is released. The arena
   locks, since a finalizer can release code on another goroutine.
 - Windows flushes the instruction cache with `FlushInstructionCache`.
-- Darwin uses `ic ivau` with barriers.
+- Darwin uses `ic ivau` with barriers, over 64-byte lines: Apple's data
+  caches are coherent with instruction fetch, and reading `CTR_EL0` traps
+  there (`flush_darwin_arm64.s`).
+- Linux on arm64 does what libgcc's `__clear_cache` does
+  (`flush_linux_arm64.s`): `CTR_EL0`, which Linux lets user space read,
+  gives the smallest data and instruction lines and whether either step
+  is needed (IDC, DIC); each data line is cleaned to the point of
+  unification (`dc cvau`), a barrier, each instruction line invalidated
+  (`ic ivau`), a barrier, and an `isb`. Code is mapped read/write and
+  sealed read/execute by `mmap` and `mprotect` as on linux/amd64
+  (`memory_unix.go`); the arena reads the page size from the OS, and its
+  64 KB chunks are whole pages on 4, 16 and 64 KB kernels alike.
+  `TestRewrittenCodeRuns` rewrites a function in place thousands of times
+  and runs each, which a missing or short flush fails on hardware (an
+  emulator such as qemu sees writes to code without one).
 
 **Darwin policy.** Darwin refuses executable memory to hardened or
 code-signing-enforced processes (`ErrUnavailable`). There is no `MAP_JIT`

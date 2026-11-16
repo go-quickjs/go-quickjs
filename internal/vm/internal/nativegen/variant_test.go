@@ -8,7 +8,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// TestVariantOverrides emits a variant that overrides two handlers, one
+// TestVariantOverrides emits, by each architecture's emitter, a variant
+// that overrides two handlers, one
 // of which jumps to a handler it does not override (tail_call_w to
 // call_w), and checks the mechanism: the overrides alone in its own
 // block, their table entries its own and every other plain's, its exits
@@ -22,10 +23,12 @@ func TestVariantOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ar, err := lookup("amd64")
-	if err != nil {
-		t.Fatal(err)
+	for _, ar := range arches {
+		t.Run(ar.goarch, func(t *testing.T) { testVariantOverrides(t, l, ar) })
 	}
+}
+
+func testVariantOverrides(t *testing.T, l *Layout, ar *arch) {
 	v := &variant{name: "test", sym: "Test", build: "ignore", overrides: []bytecode.ROp{bytecode.RAdd, bytecode.RCallWT}}
 	p, err := ar.emitFrom(l, plain)
 	if err != nil {
@@ -57,8 +60,14 @@ func TestVariantOverrides(t *testing.T) {
 	if tab[slotExit] != (Slot{Off: p.exit}) || tab[slotExitRet] != (Slot{Off: p.exitRet}) {
 		t.Errorf("the exits' slots are %+v and %+v, want plain's exits %d and %d", tab[slotExit], tab[slotExitRet], p.exit, p.exitRet)
 	}
-	// jmp [r13+disp]: the exit's, the exit to nativeRun's, call_w's entry.
+	// The jumps through the table: the exit's, the exit to nativeRun's,
+	// call_w's entry. amd64's is jmp [r13+disp]; arm64's ldr x16,
+	// [x21, #disp] and br x16.
 	jmp := func(disp int) []byte {
+		if ar.goarch == "arm64" {
+			w := binary.LittleEndian.AppendUint32(nil, 0xF9400000|uint32(disp/8)<<10|21<<5|16)
+			return binary.LittleEndian.AppendUint32(w, 0xD61F0000|16<<5)
+		}
 		if disp < 128 {
 			return []byte{0x41, 0xff, 0x65, byte(disp)}
 		}

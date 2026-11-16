@@ -6,8 +6,8 @@ import "unsafe"
 // fields they read relative to it, the call handler's scratch words and
 // a dispatcher's type: the layout the handlers' generator reads
 // (internal/vm/internal/nativegen, NativeLayout), in every build, so that
-// its helper runs on any host. The handlers themselves are amd64's
-// (zzzyn_native_amd64.go); every other architecture keeps a regState's
+// its helper runs on any host. The handlers themselves are amd64's and
+// arm64's (zzzyn_native_run.go); every other architecture keeps a regState's
 // context nil.
 
 // nativeCtx is what the code reads and writes: ip in, where to start, and

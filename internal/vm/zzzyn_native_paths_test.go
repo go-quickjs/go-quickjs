@@ -1,3 +1,5 @@
+//go:build amd64 || arm64
+
 package vm
 
 import (
@@ -324,7 +326,8 @@ func nativeGoid() string {
 }
 
 // nativeDeep recurses n deep with a frame of some size, which grows the
-// goroutine's stack: what a wrong g (R14) at a Go handler would crash.
+// goroutine's stack: what a wrong g (R14, R28) at a Go handler would
+// crash.
 //
 //go:noinline
 func nativeDeep(n int) int {
@@ -337,7 +340,7 @@ func nativeDeep(n int) int {
 }
 
 // nativeZeroed reports whether a fresh array of n words is all zero: Go
-// zeroes it by X15, which its internal convention keeps zero.
+// zeroes it on amd64 by X15, which its internal convention keeps zero.
 //
 //go:noinline
 func nativeZeroed(n int) bool {
@@ -352,15 +355,17 @@ func nativeZeroed(n int) bool {
 
 // TestRegNativeCallHConvention checks the convention nativeCallH calls Go
 // handlers by, Go's internal one (ABIInternal) that the exit stub and the
-// trampoline write by hand: the handler's four arguments in AX, BX, CX
-// and DI, the func value in DX (the handler here is a closure, which
-// reads its captures through it), its result in AX, the goroutine in R14
-// and X15 zero. A Go handler called through it gets the arguments the Go
-// table's loop would give it, runs on the test's goroutine, grows the
-// stack, zeroes memory, and what it returns is where the code goes on. A
-// toolchain
-// whose convention differs fails it, and the native handlers then need
-// their trampoline changed.
+// trampoline write by hand: on amd64 the handler's four arguments in AX,
+// BX, CX and DI, the func value in DX (the handler here is a closure,
+// which reads its captures through it), its result in AX, the goroutine
+// in R14 and X15 zero; on arm64 the arguments in R0 to R3, the func value
+// in R26, the result in R0 and the goroutine in R28 (nativeCallRegs). A
+// Go handler called through it gets the arguments the Go table's loop
+// would give it, runs on the test's goroutine, grows the stack, zeroes
+// memory, and what it returns is where the code goes on; its stack walks
+// through nativeCallH to nativeRun, and a collection while it runs scans
+// that stack. A toolchain whose convention differs fails it, and the
+// native handlers then need their trampoline changed.
 func TestRegNativeCallHConvention(t *testing.T) {
 	op := bytecode.RNewObjectLit
 	if nativePlain.has[op] {
@@ -375,10 +380,19 @@ func TestRegNativeCallHConvention(t *testing.T) {
 		calls++
 		pcs := make([]uintptr, 16)
 		frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+		afterCallH := false
 		for {
 			f, more := frames.Next()
+			if afterCallH {
+				// nativeCallH's caller, to the unwinder: nativeRun.
+				if !strings.HasSuffix(f.Function, ".nativeRun") {
+					bad = append(bad, "nativeCallH's caller is "+f.Function+", not nativeRun")
+				}
+				afterCallH = false
+			}
 			if strings.HasSuffix(f.Function, ".nativeCallH") {
 				viaCallH++
+				afterCallH = true
 			}
 			if !more {
 				break
@@ -386,22 +400,26 @@ func TestRegNativeCallHConvention(t *testing.T) {
 		}
 		switch {
 		case st == nil || st.c == nil:
-			bad = append(bad, "no state (DI)")
+			bad = append(bad, "no state ("+nativeCallRegs[3]+")")
 		case regs != st.regs:
-			bad = append(bad, "the registers (AX) are not the state's")
+			bad = append(bad, "the registers ("+nativeCallRegs[0]+") are not the state's")
 		case pc < 0 || pc >= len(st.c.src):
-			bad = append(bad, fmt.Sprintf("pc (CX) %d out of the code", pc))
+			bad = append(bad, fmt.Sprintf("pc (%s) %d out of the code", nativeCallRegs[2], pc))
 		case regAt(st.c.code, pc) != w || w.Op() != op:
-			bad = append(bad, fmt.Sprintf("the instruction (BX) %#x is not the code's at pc %d", uint64(w), pc))
+			bad = append(bad, fmt.Sprintf("the instruction (%s) %#x is not the code's at pc %d", nativeCallRegs[1], uint64(w), pc))
 		}
 		if g := nativeGoid(); g != want {
-			bad = append(bad, fmt.Sprintf("goroutine (R14) %q, want %q", g, want))
+			bad = append(bad, fmt.Sprintf("goroutine (%s) %q, want %q", nativeCallRegs[4], g, want))
 		}
 		if nativeDeep(2000) != 2000*2001/2 {
 			bad = append(bad, "the deep recursion's sum")
 		}
 		if !nativeZeroed(16) {
-			bad = append(bad, "a fresh array not zero (X15)")
+			bad = append(bad, "a fresh array not zero (X15 on amd64)")
+		}
+		if calls%50 == 1 {
+			// A collection scans the stack through nativeCallH's frame.
+			runtime.GC()
 		}
 		return orig(regs, w, pc, st)
 	}
@@ -417,3 +435,11 @@ func TestRegNativeCallHConvention(t *testing.T) {
 		t.Fatalf("nativeCallH's convention does not hold on this toolchain (%d of %d calls): %s", len(bad), calls, strings.Join(bad, "; "))
 	}
 }
+
+// nativeCallRegs names the registers nativeCallH gives a Go handler its
+// arguments in -- the registers, the instruction, its pc, the state --
+// and the goroutine, by the architecture's convention.
+var nativeCallRegs = map[string][5]string{
+	"amd64": {"AX", "BX", "CX", "DI", "R14"},
+	"arm64": {"R0", "R1", "R2", "R3", "R28"},
+}[runtime.GOARCH]
