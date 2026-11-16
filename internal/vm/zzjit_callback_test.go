@@ -169,7 +169,8 @@ func TestJITCallbackInlined(t *testing.T) {
 		// between the closure and the call: not inlined.
 		{"sloppyThis", 0, 0}, {"globalThisArg", 0, 0},
 	} {
-		e := jitCallbackEntry(r, c.name)
+		code := jitCallbackCodeForTest(r, c.name)
+		e := code.e
 		if c.name == "throwsIn" && e != nil && slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return x.forEach && x.cbLeft }) {
 			// Called natively by catches, a native callee with a handler,
 			// its callback threw at every call of the last rounds, each an
@@ -177,12 +178,12 @@ func TestJITCallbackInlined(t *testing.T) {
 			// jitInlineExits times, by design (jitInlineLeft).
 			c.inlined, c.unmade = 0, 0
 		}
-		if e == nil || e.ssa == nil || e.ssaCallbacks != c.inlined || e.ssaUnmade != c.unmade {
+		if e == nil || !code.code || code.callbacks != c.inlined || code.unmade != c.unmade {
 			if e == nil {
 				t.Errorf("%s: no entry", c.name)
 				continue
 			}
-			t.Errorf("%s inlines %d callbacks, %d of them not made; want %d, %d", c.name, e.ssaCallbacks, e.ssaUnmade, c.inlined, c.unmade)
+			t.Errorf("%s inlines %d callbacks, %d of them not made; want %d, %d", c.name, code.callbacks, code.unmade, c.inlined, c.unmade)
 		}
 	}
 }
@@ -227,8 +228,8 @@ func TestJITCallbackEnteredByGo(t *testing.T) {
 		`(() => { try { atShape = 3; goStack() } catch (e) { return e.stack } })()`)
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"goShapes", "goReduce", "goNested", "goMap", "goSome", "goHoles", "goWith", "goKnown"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaCallbacks == 0 || e.ssaStats.entries == 0 {
-			t.Errorf("%s inlines no callback, or Go entered it not: %+v", name, e)
+		if c := jitCallbackCodeForTest(r, name); c.e == nil || !c.code || c.callbacks == 0 || c.e.ssaStats.entries == 0 {
+			t.Errorf("%s inlines no callback, or Go entered it not: %+v", name, c.e)
 		}
 	}
 	if r.jit.materialized == 0 || r.jit.loopsFinished == 0 {
@@ -291,22 +292,14 @@ func TestJITCallbackNotMade(t *testing.T) {
 	made := perCall(called)
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"eachArrow", "someArrow", "reduceArrow", "eachFunction", "eachKnown"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || !e.loops || len(e.ssaInlined) == 0 {
-			t.Fatalf("%s inlines no loop's callback: %+v", name, e)
+		if c := jitCallbackCodeForTest(r, name); !c.code || !c.loops || c.inlined == 0 {
+			t.Fatalf("%s inlines no loop's callback: %+v", name, c.e)
 		}
-		if e := jitCallbackEntry(called, name); e == nil || e.ssa == nil || !e.loops || len(e.ssaInlined) != 0 {
-			t.Fatalf("%s inlines its loop's callback where it may not: %+v", name, e)
+		if c := jitCallbackCodeForTest(called, name); !c.code || !c.loops || c.inlined != 0 {
+			t.Fatalf("%s inlines its loop's callback where it may not: %+v", name, c.e)
 		}
 	}
-	callees := func() uint64 {
-		n := uint64(0)
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && (fn.Name == "" || fn.Name == "addTotal") && x.link != nil {
-				n += x.link.in
-			}
-		}
-		return n
-	}
+	callees := func() uint64 { return jitLinkInNamedForTest(r, "", "addTotal") }
 	natives := callees()
 	hosts, goCalls, materialized := r.jit.hosts, r.jit.goCalls, r.jit.materialized
 	inlined := perCall(r)
@@ -358,16 +351,17 @@ func TestJITCallbackLeavesOften(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"leavesKnown", "leaves"} {
-		e := jitCallbackEntry(r, name)
-		if e == nil || e.ssa == nil || !e.loops {
+		c := jitCallbackCodeForTest(r, name)
+		e := c.e
+		if e == nil || !c.code || !c.loops {
 			t.Fatalf("%s makes no loop: %+v", name, e)
 		}
 		left := false
 		for _, x := range e.nativeCalls {
 			left = left || x.forEach && x.cbLeft
 		}
-		if !left || e.ssaCallbacks != 0 {
-			t.Errorf("%s's callback, which leaves at every call, is inlined still: %d", name, e.ssaCallbacks)
+		if !left || c.callbacks != 0 {
+			t.Errorf("%s's callback, which leaves at every call, is inlined still: %d", name, c.callbacks)
 		}
 	}
 }

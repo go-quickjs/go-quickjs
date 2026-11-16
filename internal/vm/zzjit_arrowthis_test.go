@@ -79,7 +79,7 @@ func arrowThisRounds(exits bool) []string {
 // made; every answer is the interpreter's, whatever leaves native code
 // inside it, under budgets of polls and of finished invocations or not.
 func TestJITArrowThisInlined(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -95,13 +95,13 @@ func TestJITArrowThisInlined(t *testing.T) {
 		// Called by its maker, twice.
 		{"directOf", 0, 1},
 	} {
-		e := jitCallbackEntry(r, c.name)
-		if e == nil || e.ssa == nil {
+		inlined, called, ok := jitInlinedAtForTest(r, built, c.name)
+		if !ok {
 			t.Errorf("%s was not compiled", c.name)
 			continue
 		}
-		if len(e.ssaInlinedAt) != c.inlined || e.ssaCalled != c.unmade {
-			t.Errorf("%s inlines %d calls, %d closures not made; want %d, %d", c.name, len(e.ssaInlinedAt), e.ssaCalled, c.inlined, c.unmade)
+		if inlined != c.inlined || called != c.unmade {
+			t.Errorf("%s inlines %d calls, %d closures not made; want %d, %d", c.name, inlined, called, c.inlined, c.unmade)
 		}
 	}
 	r = jitAgreesForTestWith(t, jitStressConfig{}, arrowThisSetup, arrowThisRounds(true)...)

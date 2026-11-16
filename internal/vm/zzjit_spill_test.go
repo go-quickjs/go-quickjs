@@ -171,7 +171,11 @@ func TestJITSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 					t.Errorf("%s's loop's values spilled: %v\n%s\n%s", name, s, listings[name], locations[name])
 				}
 			}
-			if !strings.Contains(locations["sums"], "spill") {
+			// Register code reads its parameters from its window where it
+			// uses them (lazy), so that sums's eight take no register
+			// across its loop, and nothing vies for them: what the stack
+			// form's code had to spill, the register form's need not.
+			if !regJITForTest() && !strings.Contains(locations["sums"], "spill") {
 				t.Errorf("sums spilled nothing, the test asks for too few registers: %s", locations["sums"])
 			}
 		})

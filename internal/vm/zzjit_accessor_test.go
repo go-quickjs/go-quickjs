@@ -206,17 +206,19 @@ func TestJITAccessorsNative(t *testing.T) {
 			}
 		}
 		cl := r.global.getOwn(r.atoms.intern(c.name)).value().Object().fn().closure
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
-			t.Fatalf("%s was not compiled: %+v", c.run, e)
+		v, ok := jitViewForTest(r, cl)
+		if !ok {
+			t.Fatalf("%s was not compiled: %+v", c.run, v.e)
 		}
+		e := v.e
 		before := e.ssaStats
 		if _, err := r.Run(compileForTest(t, c.run)); err != nil {
 			t.Fatal(err)
 		}
 		st := e.ssaStats
-		if r.jit.hint(cl) != e || st.work-before.work < 1000 {
-			t.Fatalf("%s did not run natively: %+v, before %+v", c.run, st, before)
+		if !v.same(r, cl) || st.work-before.work < 1000 {
+			t.Errorf("%s did not run natively: %+v, before %+v", c.run, st, before)
+			continue
 		}
 		if left := st.hosts - before.hosts; left != 0 {
 			t.Errorf("%s left native code %d times", c.run, left)

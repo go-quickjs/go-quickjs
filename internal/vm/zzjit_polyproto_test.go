@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // Native code reads the prototype of an object that keeps it in its table
@@ -93,16 +94,17 @@ func TestJITPolyProto(t *testing.T) {
 		}
 	}
 	fn := r.global.getOwn(r.atoms.intern("isF")).value().Object().fn().closure
-	e := r.jit.hint(fn)
-	if e == nil || e.ssa == nil {
-		t.Fatalf("isF was not compiled: %+v", e)
+	cv, ok := jitViewForTest(r, fn)
+	if !ok {
+		t.Fatalf("isF was not compiled: %+v", cv.e)
 	}
+	e := cv.e
 	before := e.ssaStats
 	if v, err := r.Run(compileForTest(t, `isF(xs, 6400)`)); err != nil || v.Number() != 3200 {
 		t.Fatal(v, err)
 	}
 	st := e.ssaStats
-	if r.jit.hint(fn) != e || st.work-before.work < 6400 {
+	if !cv.same(r, fn) || st.work-before.work < 6400 {
 		t.Fatalf("isF(xs, 6400) did not run natively: %+v, before %+v", st, before)
 	}
 	if left := st.hosts - before.hosts; left != 0 {
@@ -157,19 +159,35 @@ func TestJITPolyProtoIn(t *testing.T) {
 	// the interpreter -- but megamorphic ones (jitFeedback.megamorphic),
 	// which Go makes from native code.
 	fn := r.global.getOwn(r.atoms.intern("probe")).value().Object().fn().closure
-	e := r.jit.hint(fn)
-	if e == nil || e.ssa == nil {
-		t.Fatalf("probe was not compiled: %+v", e)
+	cv, ok := jitViewForTest(r, fn)
+	if !ok {
+		t.Fatalf("probe was not compiled: %+v", cv.e)
 	}
-	fb := &jitFeedback{r: r, fn: fn.fn, cl: fn, e: e}
 	writes := 0
-	for pc, in := range fn.fn.Code {
-		if in.Op != bytecode.OpSetProp {
-			continue
+	if cv.reg != nil {
+		// The register form's sites are its program's, by register pc,
+		// answered by its feedback (jitRegFeedbackFor).
+		p := cv.reg.p
+		fb := r.jitRegFeedbackFor(fn, p)
+		for pc, in := range p.Code {
+			if in.Op != ir.PropertyWrite {
+				continue
+			}
+			writes++
+			if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
+				t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
+			}
 		}
-		writes++
-		if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
-			t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
+	} else {
+		fb := &jitFeedback{r: r, fn: fn.fn, cl: fn, e: cv.e}
+		for pc, in := range fn.fn.Code {
+			if in.Op != bytecode.OpSetProp {
+				continue
+			}
+			writes++
+			if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
+				t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
+			}
 		}
 	}
 	if writes != 3 {
@@ -213,7 +231,7 @@ func TestJITHolderLayoutSaysPrototype(t *testing.T) {
 		}
 	}
 	fn := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
-	if e := r.jit.hint(fn); e == nil || e.ssa == nil {
-		t.Fatalf("sum was not compiled: %+v", e)
+	if cv, ok := jitViewForTest(r, fn); !ok {
+		t.Fatalf("sum was not compiled: %+v", cv.e)
 	}
 }

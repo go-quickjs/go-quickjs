@@ -60,8 +60,8 @@ func TestJITInlinesFrequentCalls(t *testing.T) {
 		var p = {x: 5, y: 9}`)
 	both.agree(t, `drive(2000, p)`, `drive(500, p)`)
 	r := both.jit
-	if e := jitCallbackEntry(r, "pick"); e == nil || e.ssa == nil || e.calls == nil || e.calls.runs < 100 {
-		t.Fatalf("pick has no code compiled from its counts: %+v", e)
+	if ok, runs := jitCountedForTest(r, "pick"); !ok || runs < 100 {
+		t.Fatalf("pick has no code compiled from its counts: code %v, %d runs counted", ok, runs)
 	}
 	if got := jitInlinesForTest(t, r, inlined, "pick", `hot`, `cold`, `little`); got[0] != 1 || got[1] != 0 || got[2] != 0 {
 		t.Errorf("pick inlines hot, cold and little %v times, want 1, 0, 0", got)
@@ -79,6 +79,12 @@ func TestJITInlinesByFrequency(t *testing.T) {
 	}
 	inlined := jitInlinedForTest(t)
 	body := `return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c)`
+	if regJITForTest() {
+		// The register form's program of the same body counts 35 of the
+		// budget's instructions (ssa's inlineSize), five of which it holds:
+		// one of 45, as long as the stack form's 44 is to its budget.
+		body = `return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) + (o.b ^ o.c) - (o.a & o.b)`
+	}
 	both := jitFreqBothForTest(t, `
 		function b0(o) { `+body+` }
 		function b1(o) { `+body+` }
@@ -133,9 +139,10 @@ func TestJITInlinesCalleesColdCalls(t *testing.T) {
 		// compiled for a native caller before.
 		both.agree(t, `warm(1000, p)`, `drive(3000, p)`, `drive(500, p)`)
 		r := both.jit
-		e, me := jitCallbackEntry(r, "pick"), jitCallbackEntry(r, "mid")
-		if e == nil || e.ssa == nil || me == nil || me.calls == nil || me.calls.runs < jitCountsEnough {
-			t.Fatalf("%s: pick has no code, or mid too few counts: %+v, %+v", c.often, e, me)
+		ok, _ := jitCountedForTest(r, "pick")
+		_, midRuns := jitCountedForTest(r, "mid")
+		if !ok || midRuns < uint64(jitCountsEnough) {
+			t.Fatalf("%s: pick has no code, or mid too few counts: code %v, %d runs of mid counted", c.often, ok, midRuns)
 		}
 		if got := jitInlinesForTest(t, r, inlined, "pick", `mid`, `leaf`); got[0] != c.want || got[1] != c.want {
 			t.Errorf("%s: pick inlines mid and leaf %v times, want %d", c.often, got, c.want)

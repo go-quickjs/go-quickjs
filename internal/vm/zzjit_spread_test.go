@@ -206,7 +206,7 @@ func TestJITSpreadOperations(t *testing.T) {
 		jitNativeForTest(t, r, name)
 	}
 	for _, name := range []string{"keyed", "spreadIn", "restIn", "arrIn", "protoIn"} {
-		if e := r.jit.entryFor(jitGlobalClosureForTest(r, name).fn); e == nil || e.ssa == nil {
+		if _, ok := jitViewByFnForTest(r, jitGlobalClosureForTest(r, name)); !ok {
 			t.Errorf("%s was not compiled for its native callers", name)
 		}
 	}

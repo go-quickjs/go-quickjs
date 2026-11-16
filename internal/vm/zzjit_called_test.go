@@ -91,8 +91,8 @@ func TestJITCalledClosures(t *testing.T) {
 	rounds := calledRounds()
 	r := jitAgreesForTestWith(t, jitStressConfig{}, calledSetup, rounds[:5*6]...)
 	for _, name := range calledUnmade {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaCalled == 0 {
-			t.Errorf("%s makes the closure it calls: %+v", name, e)
+		if called, _, _, ok := jitCalledForTest(r, name); !ok || called == 0 {
+			t.Errorf("%s makes the closure it calls: %+v", name, jitCodeEntryNamedForTest(r, name))
 		}
 	}
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {

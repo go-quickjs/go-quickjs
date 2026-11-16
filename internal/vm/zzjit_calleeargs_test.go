@@ -70,6 +70,7 @@ func TestJITCalleeArguments(t *testing.T) {
 		}
 		rounds = append(rounds, `runLate(100)`, `runMany(50)`)
 	}
+	inlined := jitRegInlinedForTest(t)
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -101,20 +102,31 @@ func TestJITCalleeArguments(t *testing.T) {
 		{"runArgs", "count", 200}, {"runArgs", "made", 200},
 		{"runVia", "sum", 200},
 	} {
-		m, e := jitEntryForTest(t, r, c.loop), jitEntryForTest(t, r, c.callee)
-		in, goCalls := e.link.in, m.ssaStats.goCalls
+		m := jitCodeNamedForTest(t, r, c.loop).e
+		// The register form inlines a callee that reads its arguments
+		// past its parameters (its inlined frame's arguments are the
+		// call's), as V8 does, where the stack form calls it natively:
+		// there each of the calls runs inlined, none a native call.
+		calls := c.calls
+		inlines := jitRegInlinesForTest(t, r, inlined, c.loop, c.callee)
+		if inlines {
+			calls = 0
+		}
+		_, l := jitLinkedForTest(t, r, c.callee)
+		in, goCalls := l.in, m.ssaStats.goCalls
+		before := m.ssaStats
 		if _, err := r.Run(compileForTest(t, c.loop+`(100)`)); err != nil {
 			t.Fatal(err)
 		}
-		if d := e.link.in - in; d != c.calls {
-			t.Errorf("%s: %s was called natively %d times, want %d", c.loop, c.callee, d, c.calls)
+		if d := l.in - in; d != calls {
+			t.Errorf("%s: %s was called natively %d times, want %d (inlined %v): loop %+v, before %+v", c.loop, c.callee, d, calls, inlines, m.ssaStats, before)
 		}
 		if d := m.ssaStats.goCalls - goCalls; d != 0 {
 			t.Errorf("%s made %d calls of Go, want none", c.loop, d)
 		}
 	}
 	for _, loop := range []string{"runSuper"} {
-		m := jitEntryForTest(t, r, loop)
+		m := jitCodeNamedForTest(t, r, loop).e
 		goCalls, hosts := m.ssaStats.goCalls, m.ssaStats.hosts
 		if _, err := r.Run(compileForTest(t, loop+`(100)`)); err != nil {
 			t.Fatal(err)
@@ -123,8 +135,7 @@ func TestJITCalleeArguments(t *testing.T) {
 			t.Errorf("%s made %d calls of Go and left native code %d times, want none", loop, d, h)
 		}
 	}
-	d := jitDerivedForTest(t, r, "D")
-	if in := jitDerivedCalls(d); in == 0 {
+	if l := jitDerivedLinkForTest(t, r, "D"); l == nil || l.in == 0 {
 		t.Errorf("D's code was never called natively")
 	}
 }
@@ -172,11 +183,11 @@ func TestJITCalleeMappedArguments(t *testing.T) {
 		function list() { const a = arguments; let r = a.callee === list ? 1000 : 0; for (let i = 0; i < a.length; i++) r += a[i]; return r }
 		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += list(i, 1, 2) + list(); return s }`
 	r := jitAgreesForTest(t, setup, `run(200)`, `run(200)`, `run(200)`, `run(200)`)
-	e := jitEntryForTest(t, r, "list")
-	if e.ssa == nil || e.ssa.CallEntry() == 0 || e.link == nil {
-		t.Fatalf("list has no code native callers call: %+v", e)
+	v, l := jitLinkedForTest(t, r, "list")
+	if v.code == nil || v.code.CallEntry() == 0 || l == nil {
+		t.Fatalf("list has no code native callers call: %+v", v.e)
 	}
-	if e.link.in == 0 {
+	if l.in == 0 {
 		t.Errorf("list was never called natively")
 	}
 	jitDifferential(t, setup+`; [run(50), run(20)].join()`)

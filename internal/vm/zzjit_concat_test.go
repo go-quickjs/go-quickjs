@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -87,11 +88,19 @@ func TestJITLongConcats(t *testing.T) {
 	r := jitAgreesForTest(t, concatSetup, srcs...)
 	for _, c := range [][2]string{{"chainLoop", "chains(30)"}, {"templateLoop", "templates(30)"}, {"primLoop", "primLoop(30)"}, {"partOrder", "partOrder(1, 2, 30)"}} {
 		e := jitNativeForTest(t, r, c[0])
-		calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
+		// Under the register JIT a loop its caller calls natively runs
+		// natively by its link too (jitNativeUsesForTest).
+		uses := func() uint64 {
+			if jitRegCodeForTest(r, c[0]) {
+				return jitNativeUsesForTest(r, c[0])
+			}
+			return e.ssaStats.entries
+		}
+		calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, uses()
 		if _, err := r.Run(compileForTest(t, c[1])); err != nil {
 			t.Fatal(err)
 		}
-		calls, hosts, entries = e.ssaStats.goCalls-calls, e.ssaStats.hosts-hosts, e.ssaStats.entries-entries
+		calls, hosts, entries = e.ssaStats.goCalls-calls, e.ssaStats.hosts-hosts, uses()-entries
 		if entries == 0 || calls > 1 || hosts != 0 {
 			t.Errorf("%s ran natively %d times, made %d calls of Go with frames and left its code %d times", c[0], entries, calls, hosts)
 		}
@@ -106,20 +115,23 @@ func TestJITLongConcats(t *testing.T) {
 		calls int
 	}{{"templateLoop", 4}, {"chainLoop", 2}, {"primLoop", 2}} {
 		concats, others := 0, 0
-		for _, st := range jitNativeForTest(t, r, c.name).ssa.GoCallStates() {
+		var otherOps []string
+		for _, st := range jitNativeCodeForTest(t, r, c.name).code.GoCallStates() {
 			switch ssa.GoOp(st.Op & 0xff) {
 			case ssa.GoConcat:
 				if st.Op>>abi.GoOpArgcShift&0xff < 2 {
 					others++
+					otherOps = append(otherOps, fmt.Sprintf("concat of %d", st.Op>>abi.GoOpArgcShift&0xff))
 				} else {
 					concats++
 				}
 			case ssa.GoAdd:
 				others++
+				otherOps = append(otherOps, "add")
 			}
 		}
 		if concats != c.calls || others != 0 {
-			t.Errorf("%s's code joins with %d concats' calls, want %d, and makes %d conversions of parts", c.name, concats, c.calls, others)
+			t.Errorf("%s's code joins with %d concats' calls, want %d, and makes %d conversions of parts %v", c.name, concats, c.calls, others, otherOps)
 		}
 	}
 	want := New(Config{})
@@ -165,9 +177,8 @@ func TestJITConcatAdd(t *testing.T) {
 		rounds = append(rounds, "addLoop(300)", "addLoop(301)", "addLoop(17)")
 	}
 	r := jitAgreesForTest(t, addSetup, rounds...)
-	e := jitNativeForTest(t, r, "addLoop")
 	adds := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range jitNativeCodeForTest(t, r, "addLoop").code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoAdd {
 			adds++
 		}

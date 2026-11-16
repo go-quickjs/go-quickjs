@@ -49,8 +49,8 @@ func TestJITLooseBooleans(t *testing.T) {
 	}
 	// A loop of booleans compared loosely runs natively throughout.
 	cl := r.global.getOwn(r.atoms.intern("count")).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil {
+	e, _ := jitStatsOfForTest(r, cl)
+	if e == nil {
 		t.Fatalf("count was not compiled: %+v", e)
 	}
 	before := e.ssaStats

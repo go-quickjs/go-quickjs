@@ -25,6 +25,7 @@ func TestJITMaterializeStopsAtCalleeFrame(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the stack form's jitMaterializeBelow of a stack frame's locals and operands (jitUnwindNative), which register code's levels do not use: their objects are made by jitRegMaterialize")
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function h(a, b) { return a }`)); err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // jitShapeRunForTest runs setup in an interpreter and in a runtime that
@@ -42,8 +43,7 @@ func jitShapeRunForTest(t *testing.T, setup, name string, rounds ...string) (*Ru
 		if got, w := gv.String().Go(), wv.String().Go(); got != w {
 			t.Fatalf("round %d, %s: got %s, interpreter %s", i, src, got, w)
 		}
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
+		if _, ok := jitViewForTest(r, cl); !ok {
 			t.Fatalf("round %d, %s: %s has no code", i, src, name)
 		}
 		out = append(out, jitShapeRound{r.jit.shapeDeopts - deopts, r.jit.hosts - hosts, r.jit.reoptimized - reopts})
@@ -58,6 +58,25 @@ type jitShapeRound struct{ deopts, hosts, compiles uint64 }
 func jitReadSite(t *testing.T, r *Runtime, name, key string) (siteMega bool, c *propCache) {
 	t.Helper()
 	cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+	if cv, ok := jitViewForTest(r, cl); ok && cv.reg != nil {
+		// The register form's read, by its program's pc, its cache the
+		// one its register instruction reads (jitRegFeedback's
+		// propertyAt).
+		fb := r.jitRegFeedbackFor(cl, cv.reg.p)
+		for pc, in := range cv.reg.p.Code {
+			if in.Op != ir.PropertyRead {
+				continue
+			}
+			if _, k, c, write, _, _, ok := fb.propertyAt(pc); ok && !write && k == r.atoms.intern(key) && c != nil {
+				site, ok := fb.Property(pc)
+				if !ok {
+					t.Fatalf("%s's read of %s has no site", name, key)
+				}
+				return site.Megamorphic, c
+			}
+		}
+		t.Fatalf("%s reads no %s", name, key)
+	}
 	e := r.jit.hint(cl)
 	for pc, in := range cl.fn.Code {
 		if (in.Op == bytecode.OpGetProp || in.Op == bytecode.OpGetPropThis) && int(in.A) < len(cl.names) && cl.names[in.A] == r.atoms.intern(key) {
@@ -94,7 +113,17 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 		var as=[new A(),new A()], bs=[new B(),new B()], mixed=[new A(),new B()];
 		function sum(os,n){let s=0;for(let i=0;i<n;i++)s=(s+os[i&1].x)|0;return s}`
 	r, rounds := jitShapeRunForTest(t, setup, "sum", `sum(as,100)`, `sum(as,100)`, `sum(bs,100)`, `sum(bs,100)`, `sum(mixed,100)`, `sum(mixed,100)`)
-	for i, want := range []jitShapeRound{{1, 0, 0}, {0, 0, 1}, {1, 0, 0}, {0, 0, 1}, {0, 0, 0}, {0, 0, 0}} {
+	wants := []jitShapeRound{{1, 0, 0}, {0, 0, 1}, {1, 0, 0}, {0, 0, 1}, {0, 0, 0}, {0, 0, 0}}
+	if jitRegCodeForTest(r, "sum") {
+		// Register code is compiled once its first run has returned, a
+		// budget of one (regTickRet, jitRegCallTier), its read's cache
+		// knowing A's shape by then: no deoptimization at the first runs.
+		// B's deoptimizes once, and the interpreter's finishing that run
+		// spends the fresh budget, compiling the code again in the same
+		// round (jitRegTierUp).
+		wants = []jitShapeRound{{0, 0, 0}, {0, 0, 0}, {1, 0, 1}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}}
+	}
+	for i, want := range wants {
 		if got := rounds[i]; got != want {
 			t.Errorf("round %d: %d map checks deoptimized, %d exits left to Go and %d compiles, want %+v", i, got.deopts, got.hosts, got.compiles, want)
 		}
@@ -122,7 +151,15 @@ func TestJITShapesMixedDeoptimizeOnce(t *testing.T) {
 		var mixed=[new A(),new B()];
 		function sum(os,n){let s=0;for(let i=0;i<n;i++)s=(s+os[i&1].x)|0;return s}`
 	r, rounds := jitShapeRunForTest(t, setup, "sum", `sum(mixed,100)`, `sum(mixed,100)`, `sum(mixed,100)`, `sum(mixed,100)`)
-	for i, want := range []jitShapeRound{{1, 0, 0}, {0, 0, 0}, {0, 0, 1}, {0, 0, 0}} {
+	wants := []jitShapeRound{{1, 0, 0}, {0, 0, 0}, {0, 0, 1}, {0, 0, 0}}
+	if jitRegCodeForTest(r, "sum") {
+		// Register code is compiled once its first run has returned
+		// (regTickRet, jitRegCallTier), its read's cache holding both
+		// shapes by then: it reads both natively from its first compile,
+		// and never leaves nor is compiled again.
+		wants = []jitShapeRound{{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}}
+	}
+	for i, want := range wants {
 		if got := rounds[i]; got != want {
 			t.Errorf("round %d: %d map checks deoptimized, %d exits left to Go and %d compiles, want %+v", i, got.deopts, got.hosts, got.compiles, want)
 		}

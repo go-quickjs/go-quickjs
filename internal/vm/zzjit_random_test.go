@@ -61,8 +61,8 @@ func TestJITMathRandom(t *testing.T) {
 		// leaves: its cache's refills are calls of Go of an operation, as
 		// a Math function's are, which goCalls does not count.
 		cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
+		e, code := jitStatsOfForTest(r, cl)
+		if e == nil {
 			t.Fatalf("marking %v: sum was not compiled: %+v", marking, e)
 		}
 		before := e.ssaStats
@@ -70,7 +70,7 @@ func TestJITMathRandom(t *testing.T) {
 			t.Fatal(v, err)
 		}
 		st := e.ssaStats
-		if r.jit.hint(cl) != e || st.entries == before.entries || st.work-before.work < 6400 {
+		if _, now := jitStatsOfForTest(r, cl); now != code || st.entries == before.entries || st.work-before.work < 6400 {
 			t.Fatalf("marking %v: sum(6400) did not run natively: %+v, before %+v", marking, st, before)
 		}
 		if made := st.goCalls - before.goCalls; made != 0 {

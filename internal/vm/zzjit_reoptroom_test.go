@@ -30,10 +30,11 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil {
-		t.Fatalf("g was not compiled: %+v", e)
+	cv, ok := jitViewForTest(r, cl)
+	if !ok {
+		t.Fatalf("g was not compiled: %+v", cv.e)
 	}
+	e := cv.e
 	var keep []*bytecode.Function
 	defer runtime.KeepAlive(&keep)
 	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`), &keep)
@@ -42,8 +43,41 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 			t.Fatal("the budget never filled")
 		}
 	}
-	if r.jit.evicted != 0 || r.jit.hint(cl) != e {
+	if r.jit.evicted != 0 || !cv.same(r, cl) {
 		t.Fatalf("filling dropped code: %d evicted", r.jit.evicted)
+	}
+	if cv.reg != nil {
+		// The register form's compile again (jitRegCompileFor) places its
+		// code or, with no room, keeps the old and notes the room it was
+		// short of (reoptRoom, jitRegPlace), its budget the runtime's
+		// (jitBudget), which each compile reads: every byte held young, a
+		// limit below what the cache holds leaves no room to make.
+		key := r.jitRegKeyOf(cl)
+		limit := r.jitMemoryLimit
+		r.jitMemoryLimit = int64(r.jit.held() - 1)
+		reopts := r.jit.reoptimized
+		for i := 0; i < 4; i++ {
+			if ne := r.jitRegCompileFor(cl, cl.reg, key, false); ne != nil && ne.code != nil || e.reoptRoom <= 0 || r.jit.reoptimized != reopts || !cv.same(r, cl) {
+				t.Fatalf("compiled again with no room: room %d, %d reoptimized of %d, code kept %v", e.reoptRoom, r.jit.reoptimized, reopts, cv.same(r, cl))
+			}
+		}
+		// With the room -- the limit back, and the cache having let code go
+		// (its generation, which a deferred compile waits for), as filling
+		// it on lets the oldest go -- compiled again and kept; the code
+		// still answers.
+		r.jitMemoryLimit = limit
+		for k, x := range r.jit.cache {
+			if x.ssa != nil && r.jit.dropEntry(k, x) {
+				break
+			}
+		}
+		if ne := r.jitRegCompileFor(cl, cl.reg, key, false); ne == nil || ne.code == nil || r.jit.reoptimized != reopts+1 || e.reoptRoom != 0 || r.jit.regCache[key] != ne {
+			t.Fatalf("not compiled again once there was room: %d reoptimized of %d, room %d", r.jit.reoptimized, reopts, e.reoptRoom)
+		}
+		if v, err := r.Run(compileForTest(t, `g(1000)`)); err != nil || v.Number() != 999000 {
+			t.Fatal(v, err)
+		}
+		return
 	}
 	// Every byte held young: a budget below what the cache holds leaves
 	// no room to make.
@@ -144,6 +178,7 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("many")).value().Object().fn().closure
+	r.jitState()
 	checked := 0
 	for round := 0; round < 8; round++ {
 		wv, err := want.Run(compileForTest(t, `many(500)`))
@@ -153,21 +188,28 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 		wentOn := r.jit.wentOn
 		var serial uint32
 		valid := false
-		if e := r.jit.hint(cl); e != nil {
+		if jitRegClosureForTest(r, cl) {
+			// The register form's compiles are counted in its life
+			// (ssaSerial), its validity its cache entry's.
+			if cv, ok := jitViewForTest(r, cl); ok {
+				serial, valid = cv.e.ssaSerial, !cv.invalid()
+			}
+		} else if e := r.jit.hint(cl); e != nil {
 			serial, valid = e.ssaSerial, e.ssa != nil && !e.invalid
 		}
 		gv, err := r.Run(compileForTest(t, `many(500)`))
 		if err != nil || gv.Number() != wv.Number() {
 			t.Fatalf("round %d: got %v, %v; interpreter %v", round, gv, err, wv)
 		}
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil || e.entrySlow {
-			t.Fatalf("round %d: many is not native: %+v", round, e)
+		cv, ok := jitViewForTest(r, cl)
+		if !ok || cv.e.entrySlow {
+			t.Fatalf("round %d: many is not native: %+v", round, cv.e)
 		}
-		if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
+		e := cv.e
+		if pcs, want := jitEntryPCsOfForTest(cv, cl); !slices.Equal(pcs, want) {
 			t.Fatalf("round %d: entries at %v; want its start and loop header, %v", round, pcs, want)
 		}
-		if !valid || e.ssaSerial != serial || e.invalid {
+		if !valid || e.ssaSerial != serial || cv.invalid() {
 			// The read's first primitive deoptimized, invalidating the
 			// code, and made it megamorphic; or the code was compiled
 			// again for it during the round.
@@ -205,6 +247,7 @@ func TestJITOneMissNoEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	r.jitState()
 	for round, src := range []string{`rare(500)`, `rare(500)`, `flip=250; rare(500)`, `flip=-1; rare(500)`, `rare(500)`, `rare(500)`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -220,11 +263,11 @@ func TestJITOneMissNoEntry(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("rare")).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil || e.entrySlow {
-		t.Fatalf("rare did not stay native: %+v", e)
+	cv, ok := jitViewForTest(r, cl)
+	if !ok || cv.e.entrySlow {
+		t.Fatalf("rare did not stay native: %+v", cv.e)
 	}
-	if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
+	if pcs, want := jitEntryPCsOfForTest(cv, cl); !slices.Equal(pcs, want) {
 		t.Fatalf("entries at %v; want its start and loop header, %v", pcs, want)
 	}
 }

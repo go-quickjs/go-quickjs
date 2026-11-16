@@ -247,6 +247,12 @@ func TestJITEscapeRandom(t *testing.T) {
 				// marks, and compiled in the background.
 				jitMarkingForTest(t)
 			}
+			// What the code compiled last leaves unmade, in the first pass,
+			// whose compiles are none in the background.
+			virtualsOf := func(*Runtime, string) (bool, int) { return false, 0 }
+			if !marking {
+				virtualsOf, _ = jitVirtualsForTest(t)
+			}
 			for seed := first; seed < first+programs; seed++ {
 				prog := escapeProgram(seed)
 				t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
@@ -264,8 +270,8 @@ func TestJITEscapeRandom(t *testing.T) {
 					for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
 						r := jitAgreesForTestWith(t, c, escapeRandomSetup+prog, rounds...)
 						mu.Lock()
-						if e := jitCallbackEntry(r, "f"); e != nil && e.ssa != nil {
-							virtuals += e.ssaVirtuals
+						if code, n := virtualsOf(r, "f"); code {
+							virtuals += n
 						}
 						materialized += r.jit.materialized
 						learned += r.jit.osrLearned
@@ -445,14 +451,27 @@ func TestJITEscapeTakeOperand(t *testing.T) {
 		rounds = append(rounds, `loop(made, 40)`, `loop(escapes, 40)`, `held(40)`)
 	}
 	for _, c := range []jitStressConfig{{}, {background: true}} {
+		// The register form's compiles are watched where none is in the
+		// background (regVirtualsForTest).
+		virtuals, stop := jitVirtualsForTest(t)
+		if c.background {
+			stop()
+		}
 		r := jitAgreesForTestWith(t, c, setup, rounds...)
+		stop()
 		for _, name := range []string{"made", "escapes", "held"} {
-			if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil {
+			if !jitCallbackCodeForTest(r, name).code {
 				t.Errorf("%+v: %s was not compiled", c, name)
 			}
 		}
-		if e := jitCallbackEntry(r, "held"); e != nil && e.ssaVirtuals != 2 {
-			t.Errorf("%+v: held leaves %d objects unmade", c, e.ssaVirtuals)
+		code, n := virtuals(r, "held")
+		if c.background && regJITForTest() {
+			// Compiled in the background, which no compile's hook sees:
+			// built again as it was.
+			code, n = regRebuiltVirtualsForTest(t, r, "held")
+		}
+		if code && n != 2 {
+			t.Errorf("%+v: held leaves %d objects unmade", c, n)
 		}
 	}
 }
@@ -492,7 +511,7 @@ func TestJITEscapeMergedReads(t *testing.T) {
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}} {
 		r := jitAgreesForTestWith(t, c, setup, rounds...)
 		for _, name := range []string{"same", "two"} {
-			if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil {
+			if !jitCallbackCodeForTest(r, name).code {
 				t.Errorf("%+v: %s was not compiled", c, name)
 			}
 		}
@@ -527,7 +546,7 @@ func TestJITEscapeProtoAtMaking(t *testing.T) {
 			return Undefined, nil
 		}
 		run("E.prototype = other")
-		if e := jitCallbackEntry(r, "mk"); e != nil {
+		if e := jitEntryNamedForTest(r, "mk"); e != nil {
 			for _, x := range jitTargets(e) {
 				if x.obj == global("E").Object() && x.pool != nil {
 					x.pool.Count = 0

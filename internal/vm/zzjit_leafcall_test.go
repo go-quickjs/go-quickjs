@@ -40,9 +40,12 @@ func TestJITLeafCalls(t *testing.T) {
 		rounds = append(rounds, "leaves(30)")
 	}
 	r := jitAgreesForTest(t, leafCallSetup, rounds...)
-	e := jitNativeForTest(t, r, "leafLoop")
+	// The code that runs leafLoop's loop, whose counts are asserted: its
+	// own, or leaves's where leaves's register code inlines it, the
+	// leaves' calls its own code's.
+	e := jitNativeForTest(t, r, jitRunnerForTest(r, "leafLoop", "leaves"))
 	leaves := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range jitSSACodeForTest(r, "leafLoop").GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf {
 			leaves++
 		}

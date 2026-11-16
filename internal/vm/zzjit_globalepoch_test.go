@@ -53,8 +53,8 @@ func TestJITGlobalEpoch(t *testing.T) {
 				both.agree(t, `hot(300)`)
 			}
 			r := both.jit
-			e := r.jit.hint(r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure)
-			if e == nil || e.ssa == nil {
+			e := jitHintForTest(r, r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure)
+			if !jitEntryCodeForTest(r, e) {
 				t.Fatalf("hot is not native: %+v", e)
 			}
 			both.agree(t, rounds...)
@@ -65,7 +65,7 @@ func TestJITGlobalEpoch(t *testing.T) {
 			for range 3 {
 				lex.agree(t, `hot(300)`)
 			}
-			if e := lex.jit.jit.hint(lex.jit.global.getOwn(lex.jit.atoms.intern("hot")).value().Object().fn().closure); e == nil || e.ssa == nil || e.entrySlow {
+			if e := jitHintForTest(lex.jit, lex.jit.global.getOwn(lex.jit.atoms.intern("hot")).value().Object().fn().closure); !jitEntryCodeForTest(lex.jit, e) || e.entrySlow {
 				t.Fatalf("hot is not entered natively: %+v", e)
 			}
 			lex.script(t, `let k = 11;`)
@@ -136,7 +136,7 @@ func TestJITGlobalEpochPaths(t *testing.T) {
 					both.agree(t, `hot(300)`)
 				}
 				r := both.jit
-				if e := r.jit.hint(r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); e == nil || e.ssa == nil {
+				if e := jitHintForTest(r, r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); !jitEntryCodeForTest(r, e) {
 					t.Fatalf("hot is not native: %+v", e)
 				}
 			}
@@ -175,7 +175,7 @@ func TestJITGlobalEpochWhole(t *testing.T) {
 		both.agree(t, `hot(300)`)
 	}
 	r := both.jit
-	if e := r.jit.hint(r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); e == nil || e.ssa == nil {
+	if e := jitHintForTest(r, r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); !jitEntryCodeForTest(r, e) {
 		t.Fatalf("hot is not native: %+v", e)
 	}
 	compiled := r.shapes.globalEpoch
@@ -241,7 +241,7 @@ func TestJITGlobalEpochRealms(t *testing.T) {
 			agree(true, `hot(300)`)
 		}
 		for _, g := range []*Object{r.global, realms[1].global} {
-			if e := r.jit.hint(g.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); e == nil || e.ssa == nil {
+			if e := jitHintForTest(r, g.getOwn(r.atoms.intern("hot")).value().Object().fn().closure); !jitEntryCodeForTest(r, e) {
 				t.Fatalf("hot is not native: %+v", e)
 			}
 		}

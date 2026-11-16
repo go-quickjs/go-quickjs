@@ -36,7 +36,10 @@ func TestJITLazyLevelConstructs(t *testing.T) {
 			}
 			r := jitAgreesForTest(t, src, "run(300)", "run(300)", "run(3)", "run(300)")
 			for _, name := range []string{"thrower", "C"} {
-				jitNativeOrCalleeForTest(t, r, name)
+				// Code of either form, for Go or for native callers alone.
+				if e := jitCodeForTest(r, name); e == nil {
+					t.Fatalf("%s has no code: %+v", name, e)
+				}
 			}
 		})
 	}

@@ -75,6 +75,7 @@ func TestJITCountsCallsBySite(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
 	for _, trees := range []bool{true, false} {
 		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
 			r := frequencyRuntime(t, trees)
@@ -121,6 +122,7 @@ func TestJITCountsEveryCallForm(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
 	for _, trees := range []bool{true, false} {
 		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
 			r := frequencyRuntime(t, trees)
@@ -185,6 +187,35 @@ func TestJITCountsNotNative(t *testing.T) {
 	for range 10 {
 		both.agree(t, `drive(100)`)
 	}
+	if regJITForTest() {
+		// Register code's counts are its closures' (jitRegCounts), which
+		// the feedback dispatcher counts and native code does not: the
+		// counts the stack tiers make by site are theirs alone (their
+		// frequencies TestJITRegFrequency's).
+		var counts [][]uint64
+		for _, name := range []string{"caller", "c2"} {
+			e := regEntryNamedForTest(r, name)
+			if e == nil || e.invalid {
+				t.Fatalf("%s has no code: %+v", name, e)
+			}
+			c := jitGlobalClosure(r, name).jitRegCounts
+			if c == nil || regNativeOn && c[0] == 0 {
+				t.Fatalf("%s counts nothing: %v", name, c)
+			}
+			counts = append(counts, slices.Clone(c))
+		}
+		goCalls := r.jit.goCalls
+		both.agree(t, `drive(1000)`)
+		if r.jit.goCalls-goCalls < 1000 {
+			t.Errorf("c2's code made %d calls of Go in 1,000 runs", r.jit.goCalls-goCalls)
+		}
+		for i, name := range []string{"caller", "c2"} {
+			if got := jitGlobalClosure(r, name).jitRegCounts; !slices.Equal(got, counts[i]) {
+				t.Errorf("%s's code counted: %v, after %v", name, got, counts[i])
+			}
+		}
+		return
+	}
 	for _, name := range []string{"caller", "c2"} {
 		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.invalid || e.calls == nil {
 			t.Fatalf("%s has no code: %+v", name, e)
@@ -229,6 +260,30 @@ func TestJITCountsOutliveCode(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 700; i++) caller(o, i)`)); err != nil {
 		t.Fatal(err)
 	}
+	if regJITForTest() {
+		// Register code's counts are its closure's (jitRegCounts), which
+		// outlive its code: the code flushed, they go on counting.
+		e, code := jitCachedForTest(r, "caller")
+		c := jitGlobalClosure(r, "caller").jitRegCounts
+		if !code || c == nil {
+			t.Fatalf("caller has no code: %+v", e)
+		}
+		runs := c[0]
+		setEpoch(1000 + jitFlushAge)
+		r.jit.flush()
+		setEpoch(1000 + 2*jitFlushAge)
+		r.jit.flush()
+		if e, _ := jitCachedForTest(r, "caller"); e != nil {
+			t.Fatalf("caller's unused code was not flushed: %+v", e)
+		}
+		if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 20; i++) caller(o, i)`)); err != nil {
+			t.Fatal(err)
+		}
+		if now := jitGlobalClosure(r, "caller").jitRegCounts; len(now) == 0 || &now[0] != &c[0] || now[0] < runs {
+			t.Fatalf("caller counts %v, not %v from %d runs", now, c, runs)
+		}
+		return
+	}
 	e := jitCallbackEntry(r, "caller")
 	if e == nil || e.ssa == nil || e.calls == nil {
 		t.Fatalf("caller has no code: %+v", e)
@@ -268,6 +323,7 @@ func TestJITCountsNoBuiltinCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
 	for _, trees := range []bool{true, false} {
 		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
 			r := frequencyRuntime(t, trees)

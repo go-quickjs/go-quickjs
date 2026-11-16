@@ -37,8 +37,19 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, "f([1, 2], 0)")); err != nil {
 		t.Fatal(err)
 	}
-	e := r.jit.entryFor(cl.fn)
-	if e == nil || e.ssa == nil {
+	if regJITForTest() {
+		// Register code's first call begins its budget, which its next
+		// call, its threshold's invocation spent, compiles at (jitRegCallTier):
+		// that one too reads nothing.
+		if _, err := r.Run(compileForTest(t, "f([1, 2], 0)")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Its code's state: the stack form's entry, or the register code's
+	// state that outlives its compiles, whose entrySlow and loopSlow keep
+	// Go from entering it.
+	e, _, _ := jitCodeOfForTest(r, cl)
+	if e == nil {
 		t.Fatalf("f has no code: %+v", e)
 	}
 	// The interpreter reads it, its code not entered.
@@ -47,7 +58,13 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.entrySlow, e.loopSlow = false, false
-	if c := &cl.ic[cl.fn.Code[jitPCOf(t, cl.fn, "get_prop_this")].B]; c.fills == 0 {
+	site := cl.fn.Code[jitPCOf(t, cl.fn, "get_prop_this")].B
+	if jitRegCodeOfForTest(r, cl) {
+		// The register code's method read, get_method's or get_method_w's,
+		// whose cache is its C.
+		site = jitRegMethodSiteForTest(t, cl.fn)
+	}
+	if c := &cl.ic[site]; c.fills == 0 {
 		t.Fatal("the interpreter did not fill the read's cache")
 	}
 	for range 40 {
@@ -73,8 +90,8 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 		t.Fatalf("f = %s, interpreter %s", got, want)
 	}
 	// Run natively, not given up on as slow for its exits.
-	if e := r.jit.entryFor(cl.fn); e == nil || e.ssa == nil || e.entrySlow || r.jit.entries == entries {
-		t.Fatalf("f did not run natively: slow %v loopSlow %v entries %d invalid %v deopts %d", e.entrySlow, e.loopSlow, r.jit.entries-entries, e.invalid, e.deopts)
+	if e, _, invalid := jitCodeOfForTest(r, cl); e == nil || e.entrySlow || r.jit.entries == entries {
+		t.Fatalf("f did not run natively: %+v, entries %d invalid %v", e, r.jit.entries-entries, invalid)
 	}
 	if n := r.jit.hosts - hosts; n != 0 {
 		t.Errorf("f left native code %d times in 1,000 reads", n)

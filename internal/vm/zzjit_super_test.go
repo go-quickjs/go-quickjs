@@ -67,11 +67,12 @@ func TestJITSuperReferences(t *testing.T) {
 		if v, err := r.Run(compileForTest(t, src)); err == nil && v.IsObject() && v.Object().fn() != nil {
 			cl = v.Object().fn().closure
 		}
-		e := r.jit.entryFor(cl.fn)
-		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 && (e.link == nil || e.link.in == 0) {
+		cv, ok := jitViewByFnForTest(r, cl)
+		e := cv.e
+		if !ok || e.ssaStats.entries == 0 && jitLinkInForTest(r, cl) == 0 {
 			t.Fatalf("%s never ran natively: %+v", src, e)
 		}
-		if e.ssa.CallEntry() == 0 {
+		if cv.code.CallEntry() == 0 {
 			t.Errorf("%s has no call entry", src)
 		}
 		if e.ssaStats.hosts > 8 {
@@ -136,17 +137,32 @@ func TestJITDefinitionCallees(t *testing.T) {
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	jitNoInlineForTest(t, "point")
+	inlined := jitRegInlinedForTest(t)
 	both := jitBothForTest(t, definitionSetup)
 	for range 6 {
 		both.agree(t, `run(100)`, `runLit(200)`, `runCls(200)`, `runExt(100)`)
 	}
 	r := both.jit
 	for _, name := range []string{"point", "cls", "ext"} {
-		e := jitEntryForTest(t, r, name)
-		in := e.link.in
+		caller := map[string]string{"point": "runLit", "cls": "runCls", "ext": "runExt"}[name]
+		if jitRegInlinesForTest(t, r, inlined, caller, name) {
+			// The register form inlines a callee whose definitions are Go's
+			// from native code, which the stack form calls natively: each
+			// of its calls runs inlined, none a native call.
+			_, link := jitLinkedForTest(t, r, name)
+			in := link.in
+			both.agree(t, `runLit(200)`, `runCls(200)`, `runExt(200)`)
+			if link.in != in {
+				t.Errorf("%s, inlined in %s, was called natively %d times", name, caller, link.in-in)
+			}
+			continue
+		}
+		_, link := jitLinkedForTest(t, r, name)
+		in := link.in
 		both.agree(t, `runLit(200)`, `runCls(200)`, `runExt(200)`)
-		if e.link.in-in < 150 {
-			t.Errorf("%s was called natively %d times of 200", name, e.link.in-in)
+		if link.in-in < 150 {
+			cv, _ := jitViewNamedForTest(r, caller)
+			t.Errorf("%s was called natively %d times of 200 (%s: %+v)", name, link.in-in, caller, cv.e.ssaStats)
 		}
 	}
 	jitAgreesForTest(t, definitionSetup, `run(10)`, `run(30)`, `run(10)`, `runExt(30)`, `runLit(30)`, `runCls(30)`)
@@ -181,28 +197,31 @@ func TestJITSuperReferencesCalledNatively(t *testing.T) {
 	m := jitNativeForTest(t, r, "loop")
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	var callees []*jitEntry
+	// Each callee's link, the register form's where it runs register
+	// code (regLinks).
+	var callees []*jitLink
 	for _, src := range []string{`B.prototype.m`, `B.st`, `lit.f`, `B.prototype.n`} {
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil || !v.IsObject() || v.Object().fn() == nil {
 			t.Fatalf("%s: %v, %v", src, v, err)
 		}
-		e := r.jit.entryFor(v.Object().fn().closure.fn)
-		if e == nil || e.ssa == nil || e.ssa.CallEntry() == 0 || e.link == nil {
-			t.Fatalf("%s has no code native callers call: %+v", src, e)
+		cl := v.Object().fn().closure
+		cv, ok := jitViewByFnForTest(r, cl)
+		if !ok || cv.code.CallEntry() == 0 || cv.link(r, cl) == nil {
+			t.Fatalf("%s has no code native callers call: %+v", src, cv.e)
 		}
-		callees = append(callees, e)
+		callees = append(callees, cv.link(r, cl))
 	}
 	ins := make([]uint64, len(callees))
 	for i, e := range callees {
-		ins[i] = e.link.in
+		ins[i] = e.in
 	}
 	goCalls := m.ssaStats.goCalls
 	if v, err := r.Run(compileForTest(t, `''+loop(100)`)); err != nil || v.String().Go() != "195753851" {
 		t.Fatalf("loop(100) = %s, %v; want 195753851", v.String().Go(), err)
 	}
 	for i, e := range callees {
-		if d := e.link.in - ins[i]; d != 100 {
+		if d := e.in - ins[i]; d != 100 {
 			t.Errorf("callee %d was called natively %d times, want 100", i, d)
 		}
 	}

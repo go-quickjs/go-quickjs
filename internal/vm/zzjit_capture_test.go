@@ -48,8 +48,8 @@ func TestJITStrictEvalAssigns(t *testing.T) {
 					t.Fatalf("got %v, %v; want 64,64", v, err)
 				}
 			}
-			if e := both.jit.jit.hint(both.jit.global.getOwn(both.jit.atoms.intern("f")).value().Object().fn().closure); e == nil || e.ssa == nil {
-				t.Fatalf("f is not native: %+v", e)
+			if v, ok := jitViewNamedForTest(both.jit, "f"); !ok {
+				t.Fatalf("f is not native: %+v", v.e)
 			}
 		})
 	}
@@ -80,11 +80,8 @@ func TestJITCaptureByValue(t *testing.T) {
 				if got := runCaptureCase(t, r, c, 30); got != c.want {
 					t.Errorf("%s: got %s, want %s", c.name, got, c.want)
 				}
-				for _, e := range r.jit.cache {
-					if e.ssa != nil {
-						native++
-						break
-					}
+				if jitHasCodeForTest(r) {
+					native++
 				}
 			}
 			// Nearly every case's maker or closures run natively.

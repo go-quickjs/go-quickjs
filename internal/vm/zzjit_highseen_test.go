@@ -35,7 +35,12 @@ func TestJITCallEntryHighWater(t *testing.T) {
 				t.Fatal(err)
 			}
 			cl := r.global.getOwn(r.atoms.intern("rec")).value().Object().fn().closure
-			if e := r.jit.hint(cl); e == nil || e.ssa == nil || e.link == nil || e.link.in == 0 {
+			if regJITForTest() {
+				// Its register code, called through its register link.
+				if e := jitRegEntryOfForTest(r, cl); e == nil || r.jit.regLinks[e.key] == nil || r.jit.regLinks[e.key].in == 0 {
+					t.Fatalf("rec does not call itself natively: %+v", e)
+				}
+			} else if e := r.jit.hint(cl); e == nil || e.ssa == nil || e.link == nil || e.link.in == 0 {
 				t.Fatalf("rec does not call itself natively: %+v", e)
 			}
 			for turn := range 4 {

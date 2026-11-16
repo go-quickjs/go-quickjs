@@ -60,8 +60,11 @@ func TestJITInstanceOfCaptured(t *testing.T) {
 		}
 	}
 	test := r.global.getOwn(r.atoms.intern("m")).value().Object().getOwnVisible(r.atoms.intern("test")).value().Object().fn().closure
-	e := r.jit.hint(test)
-	if e == nil || e.ssa == nil {
+	// The code that runs test's loop: its own, or run's where run's
+	// register code inlines it.
+	test = jitRunnerOfForTest(r, test, jitGlobalClosureForTest(r, "run"))
+	e, code := jitStatsOfForTest(r, test)
+	if e == nil {
 		t.Fatalf("test was not compiled: %+v", e)
 	}
 	before := e.ssaStats
@@ -69,7 +72,7 @@ func TestJITInstanceOfCaptured(t *testing.T) {
 		t.Fatal(v, err)
 	}
 	st := e.ssaStats
-	if r.jit.hint(test) != e || st.work-before.work < 900 {
+	if _, now := jitStatsOfForTest(r, test); now != code || st.work-before.work < 900 {
 		t.Fatalf("run(900) did not run natively: %+v, before %+v", st, before)
 	}
 	if left := st.hosts - before.hosts; left != 0 {

@@ -53,12 +53,21 @@ func TestJITCatchCallees(t *testing.T) {
 	}
 	r := both.jit
 	jitNativeForTest(t, r, "run")
+	// The calls native callers made of name's code through its link: the
+	// register form's (regLinks) where r runs register code.
+	inOf := func(name string) uint64 {
+		if !jitRegCodeForTest(r, name) {
+			return jitNativeOrCalleeForTest(t, r, name).link.in
+		}
+		_, l := jitLinkedForTest(t, r, name)
+		return l.in
+	}
 	for _, name := range []string{"parse", "safe", "guarded", "fin", "nested", "rethrow"} {
-		e := jitNativeOrCalleeForTest(t, r, name)
-		in := e.link.in
+		in := inOf(name)
+		before := jitNativeCodeForTest(t, r, "run").e.ssaStats
 		both.agree(t, `run(200)`)
-		if e := jitNativeOrCalleeForTest(t, r, name); e.link.in-in < 100 {
-			t.Errorf("%s was called natively %d times of 200", name, e.link.in-in)
+		if d := inOf(name) - in; d < 100 {
+			t.Errorf("%s was called natively %d times of 200: run %+v, before %+v", name, d, jitNativeCodeForTest(t, r, "run").e.ssaStats, before)
 		}
 	}
 }
@@ -98,9 +107,13 @@ func TestJITReturnThroughFinally(t *testing.T) {
 	for range 3 {
 		both.agree(t, `run(300)`, `runOther(30)`)
 	}
-	e := jitEntryForTest(t, both.jit, "find")
-	if e.deopts > 2 || e.invalid || e.link.in < 500 {
-		t.Errorf("find deoptimized %d times, invalid %v, called natively %d times", e.deopts, e.invalid, e.link.in)
+	v, l := jitLinkedForTest(t, both.jit, "find")
+	e, invalid := v.e, v.e.invalid
+	if v.reg != nil {
+		invalid = v.reg.invalid
+	}
+	if e.deopts > 2 || invalid || l.in < 500 {
+		t.Errorf("find deoptimized %d times, invalid %v, called natively %d times", e.deopts, invalid, l.in)
 	}
 }
 

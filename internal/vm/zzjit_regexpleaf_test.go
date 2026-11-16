@@ -40,9 +40,9 @@ func TestJITRegExpLeaves(t *testing.T) {
 			name        string
 			execs, test int
 		}{{"loop", 1, 2}, {"esc", 1, 0}} {
-			e := jitNativeForTest(t, r, c.name)
+			e := jitNativeCodeForTest(t, r, c.name)
 			execs, tests := 0, 0
-			for _, st := range e.ssa.GoCallStates() {
+			for _, st := range e.code.GoCallStates() {
 				if ssa.GoOp(st.Op&0xff) != ssa.GoLeaf {
 					continue
 				}
@@ -98,7 +98,7 @@ function booms(n) { var out = []; for (var i = 0; i < n; i++) out.push(boom(i ==
 	r := jitAgreesForTest(t, setup, rounds...)
 	exec := uintptr(unsafe.Pointer(r.regexpExecFn))
 	leaves := 0
-	for _, st := range jitNativeForTest(t, r, "find").ssa.GoCallStates() {
+	for _, st := range jitNativeCodeForTest(t, r, "find").code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == exec {
 			leaves++
 		}
@@ -123,7 +123,7 @@ function booms(n) { var out = []; for (var i = 0; i < n; i++) out.push(boom(i ==
 	// compiled again for.
 	r = jitAgreesForTest(t, setup, "find(200)", "find(200)", "find(200)")
 	leaves = 0
-	for _, st := range jitNativeForTest(t, r, "find").ssa.GoCallStates() {
+	for _, st := range jitNativeCodeForTest(t, r, "find").code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == uintptr(unsafe.Pointer(r.regexpExecFn)) {
 			leaves++
 		}

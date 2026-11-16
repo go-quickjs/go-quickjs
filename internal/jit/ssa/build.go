@@ -7465,10 +7465,15 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site})
 		// The callee's locals live there, as the caller's below.
 		sf := stateFrame{p: b.p, base: fr.base, n: b.p.Locals + depth, forced: -1}
-		if fr.site.Window && fr.site.Construct {
-			// A register construction's receiver, its window's register 1,
-			// live or not: Go makes the construction's result of it where
-			// the callee returns no object.
+		if fr.site.Window {
+			// A register callee's receiver, its window's register 1, live
+			// or not, as the stack form's state names an inlined frame's
+			// receiver (InlineState's ThisSlot): Go makes a construction's
+			// result of it where the callee returns no object, and the
+			// frame it makes of the level has it as its this, which a
+			// stack trace names the frame by -- left out where the callee
+			// did not read it, the frame had whatever the window held
+			// ("Number.leaf" for "Leaf.leaf").
 			sf.forced = 1
 		}
 		b.stateSlots(s, blk, pc, &sf, call)

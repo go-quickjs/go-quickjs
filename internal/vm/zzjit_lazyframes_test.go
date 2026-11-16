@@ -69,6 +69,15 @@ func jitLazyFramesAgree(t *testing.T) *Runtime {
 					return Int(0), nil
 				}
 				cl := rt.global.getOwn(rt.atoms.intern("helper")).value().Object().fn().closure
+				if jitRegClosureForTest(rt, cl) {
+					// The register cache lets go of helper's code, which is
+					// compiled again at its next calls: closed once no frame
+					// put off is in it (regClose, closeSSA).
+					if e := rt.jit.regCache[rt.jitRegKeyOf(cl)]; e != nil && e.code != nil {
+						rt.jit.dropReg(e.key, e)
+					}
+					return Int(0), nil
+				}
 				if e := rt.jit.cache[rt.jitKeyOf(cl.fn)]; e != nil && e.ssa != nil {
 					e.reopt = true
 					rt.jitReoptimize(cl, e)

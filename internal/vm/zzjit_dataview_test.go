@@ -34,7 +34,7 @@ func TestJITDataViewLeaves(t *testing.T) {
 		r := jitAgreesForTest(t, dataViewTestSrc, rounds...)
 		e := jitNativeForTest(t, r, "mix")
 		leaves := 0
-		for _, st := range e.ssa.GoCallStates() {
+		for _, st := range jitSSACodeForTest(r, "mix").GoCallStates() {
 			if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf != 0 {
 				leaves++
 			}

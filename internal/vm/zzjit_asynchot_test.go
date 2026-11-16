@@ -105,7 +105,7 @@ func TestJITAsyncHotResumptions(t *testing.T) {
 	r := jitAsyncAgreesForTest(t, setup, `drive(1500).then(v => out = v + ':' + pump(1500))`, 3)
 	for _, name := range []string{"step", "guarded", "rejects", "arrow", "plain", "pair", "steps"} {
 		e := jitNativeForTest(t, r, name)
-		if !e.hot {
+		if !jitCompiledHotForTest(t, r, name) {
 			t.Errorf("%s compiled, but not once hot (LowerSSAHot): %+v", name, e)
 		}
 	}

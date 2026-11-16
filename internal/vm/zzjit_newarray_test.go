@@ -62,10 +62,11 @@ func TestJITNewArrayLength(t *testing.T) {
 		want.Close()
 		want.ReleaseClosed()
 		cl := r.global.getOwn(r.atoms.intern("sizes")).value().Object().fn().closure
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
-			t.Fatalf("marking %v: sizes was not compiled: %+v", marking, e)
+		cv, ok := jitViewForTest(r, cl)
+		if !ok {
+			t.Fatalf("marking %v: sizes was not compiled: %+v", marking, cv.e)
 		}
+		e := cv.e
 		var pool *abi.ObjectPool
 		for _, x := range jitTargets(e) {
 			if x.obj == r.proto.arrayCtor && x.pool != nil {
@@ -81,10 +82,10 @@ func TestJITNewArrayLength(t *testing.T) {
 		// Lengths up to the room, made without Go: fill's calls of Go are
 		// the pool's refills.
 		cl = r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
-		e = r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
-			t.Fatalf("marking %v: fill was not compiled: %+v", marking, e)
+		if cv, ok = jitViewForTest(r, cl); !ok {
+			t.Fatalf("marking %v: fill was not compiled: %+v", marking, cv.e)
 		}
+		e = cv.e
 		before := e.ssaStats.goCalls
 		v, err := r.Run(compileForTest(t, `fill(1000, 17)`))
 		if err != nil || v.Number() != 7979 {
@@ -97,10 +98,10 @@ func TestJITNewArrayLength(t *testing.T) {
 		// pool too, where it had been the Array constructor's, made by Go
 		// at every construction: its calls of Go are the pool's refills.
 		cl = r.global.getOwn(r.atoms.intern("big")).value().Object().fn().closure
-		e = r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
-			t.Fatalf("marking %v: big was not compiled: %+v", marking, e)
+		if cv, ok = jitViewForTest(r, cl); !ok {
+			t.Fatalf("marking %v: big was not compiled: %+v", marking, cv.e)
 		}
+		e = cv.e
 		hosts, before := e.ssaStats.hosts, e.ssaStats.goCalls
 		if v, err := r.Run(compileForTest(t, `big(300)`)); err != nil || v.Number() != 30300 {
 			t.Fatal(v, err)
@@ -133,15 +134,16 @@ func TestJITNewArrayPastPoolRoom(t *testing.T) {
 		function bad(n) { try { return new Array(n).length } catch (e) { return e.constructor.name } }
 		function runBad(k) { let r = ''; for (let i = 0; i < k; i++) r += bad(i % 3 === 0 ? -1 : i % 3 === 1 ? 2 ** 32 : 20); return r }`
 	r := jitAgreesForTest(t, setup, `run(200)`, `run(200)`, `run(200)`, `runBad(30)`, `runBad(30)`)
-	m, e := jitEntryForTest(t, r, "run"), jitEntryForTest(t, r, "mk")
-	hosts, unwound, in := r.jit.hosts, r.jit.unwound, e.link.in
+	m := jitCodeNamedForTest(t, r, "run")
+	_, mkLink := jitLinkedForTest(t, r, "mk")
+	hosts, unwound, in := r.jit.hosts, r.jit.unwound, mkLink.in
 	if v, err := r.Run(compileForTest(t, `''+run(200)`)); err != nil || v.String().Go() != "10073600" {
 		t.Fatalf("run(200) = %s, %v; want 10073600", v.String().Go(), err)
 	}
 	if n, u := r.jit.hosts-hosts, r.jit.unwound-unwound; n != 0 || u != 0 {
 		t.Errorf("run left native code %d times, Go finished %d levels", n, u)
 	}
-	if d := e.link.in - in; m.ssa == nil || d != 600 {
+	if d := mkLink.in - in; m.code == nil || d != 600 {
 		t.Errorf("mk was called natively %d times, want 600", d)
 	}
 	jitDifferential(t, setup+`; [run(50), runBad(20), run(20)].join()`)

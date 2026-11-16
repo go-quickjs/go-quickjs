@@ -54,23 +54,18 @@ func TestJITElemStoreAppends(t *testing.T) {
 	rounds = append(rounds, `(Object.defineProperty(Array.prototype, 3, { set(v) { hits++ }, configurable: true }), drive_setter(30, 8))`,
 		`(delete Array.prototype[3], drive_setter(30, 8) + ':' + drive_fillSum(30, 64))`)
 	r := jitAgreesForTest(t, elemAppendSetup+drivers, rounds[:len(rounds)-2]...)
-	var e *jitEntry
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == "fill" {
-			e = x
-		}
+	v, link, ok := jitViewOfFnNamedForTest(r, "fill")
+	if !ok || link == nil {
+		t.Fatalf("fill has no native code: %+v, link %+v", v.e, link)
 	}
-	if e == nil || e.ssa == nil {
-		t.Fatalf("fill has no native code: %+v", e)
-	}
-	in, calls := e.link.in, 0
+	in, calls := link.in, 0
 	jitGoCallWork = func() { calls++ }
 	defer func() { jitGoCallWork = nil }()
 	if _, err := r.Run(compileForTest(t, `fillSum(256)`)); err != nil {
 		t.Fatal(err)
 	}
 	jitGoCallWork = nil
-	if e.link.in == in {
+	if link.in == in {
 		t.Fatal("fill was not called natively")
 	}
 	// 256 stores, Go growing the storage from none: 1, 2, 4 ... 256.
@@ -126,7 +121,7 @@ func TestJITCheckedStoresAppend(t *testing.T) {
 		rounds = append(rounds, `all(100)`, `cuts(50)`, `grows(50)`, `owns(20)`)
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	e := jitNativeOrCalleeForTest(t, r, "params")
+	e := jitNativeOrCalleeCodeForTest(t, r, "params").e
 	hosts := e.ssaStats.hosts
 	if _, err := r.Run(compileForTest(t, `all(100)`)); err != nil {
 		t.Fatal(err)

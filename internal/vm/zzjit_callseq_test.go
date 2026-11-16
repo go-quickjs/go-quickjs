@@ -97,9 +97,9 @@ func jitCallsCheck(t *testing.T, r *Runtime, rounds int) {
 		if err != nil || !class.IsObject() {
 			t.Fatalf("%s.%s: %v, %v", m.class, m.method, class, err)
 		}
-		fn := class.Object().fn().closure.fn
-		if e := r.jit.cache[r.jitKeyOf(fn)]; e == nil || e.ssa == nil || e.link.in == 0 {
-			t.Fatalf("%s.%s is not called natively: %+v", m.class, m.method, e)
+		cl := class.Object().fn().closure
+		if v, ok := jitViewByFnForTest(r, cl); !ok || v.link(r, cl) == nil || v.link(r, cl).in == 0 {
+			t.Fatalf("%s.%s is not called natively: %+v", m.class, m.method, v.e)
 		}
 	}
 }
@@ -184,8 +184,8 @@ func TestJITCallsReadBackFromFrame(t *testing.T) {
 			if err != nil || !class.IsObject() {
 				t.Fatal(class, err)
 			}
-			if e := r.jit.cache[r.jitKeyOf(class.Object().fn().closure.fn)]; e == nil || e.ssa == nil {
-				t.Fatalf("C.prototype.h has no native code: %+v", e)
+			if v, ok := jitViewByFnForTest(r, class.Object().fn().closure); !ok {
+				t.Fatalf("C.prototype.h has no native code: %+v", v.e)
 			}
 		})
 	}

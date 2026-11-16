@@ -2577,8 +2577,13 @@ cell (`InlineSite`'s `FunctionCell`), the receiver and a setter's value, a
 getter's result the read's register. A construction's receiver is taken from
 the pool of the objects its code learned it makes, kept in a cell, in
 register 1, which is the result: the callee returns nothing or it
-(`returnsWindowReceiver`), and every state inside it holds register 1, live
-or not, for Go to make the result of where it finishes the callee. The
+(`returnsWindowReceiver`). Every state inside an inlined register callee
+holds its register 1, live or not, as the stack form's names an inlined
+frame's receiver (`InlineState`'s `ThisSlot`): Go makes a construction's
+result of it where it finishes the callee, and the frame it makes of the
+level has it as its this, which a stack trace names the frame by -- the
+function the frame has is the object the code inlined it for, from its
+context (`abi.Context`'s `InlineCallee`). The
 atomicity rule holds in it as in the root: an exit inside it runs its
 register instruction whole again (`atomicInstruction`, each frame's
 `readCalls`). Its own calls are asked the same way, of its own caches and

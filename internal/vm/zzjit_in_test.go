@@ -86,15 +86,15 @@ func TestJITIn(t *testing.T) {
 		jitNativeForTest(t, r, name)
 	}
 	{
-		e := jitNativeForTest(t, r, "viaCallee")
+		v := jitNativeCodeForTest(t, r, "viaCallee")
 		// Its in is hasKey's, inlined.
-		if !slices.Contains(e.ssaInlined, jitGlobalClosureForTest(r, "hasKey")) {
-			t.Errorf("viaCallee does not inline hasKey: %v", e.ssaInlined)
+		if !slices.Contains(v.inlined(), jitGlobalClosureForTest(r, "hasKey")) {
+			t.Errorf("viaCallee does not inline hasKey: %v", v.inlined())
 		}
 	}
 	p := r.global.getOwn(r.atoms.intern("P")).value().Object().getOwnVisible(r.atoms.intern("has")).value().Object().fn().closure
-	if e := r.jit.hint(p); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
-		t.Fatalf("P.has never ran natively: %+v", e)
+	if v, ok := jitViewForTest(r, p); !ok || v.e.ssaStats.entries == 0 {
+		t.Fatalf("P.has never ran natively: %+v", v.e)
 	}
 }
 
@@ -124,7 +124,8 @@ func TestJITInGoCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := jitNativeForTest(t, r, "count")
+	code := jitNativeCodeForTest(t, r, "count")
+	e := code.e
 	calls := 0
 	jitGoCallWork = func() { calls++ }
 	defer func() { jitGoCallWork = nil }()
@@ -133,7 +134,7 @@ func TestJITInGoCalls(t *testing.T) {
 	if err != nil || v.Number() != 4+2+4 {
 		t.Fatal(v, err)
 	}
-	if left := e.ssaStats.hosts - before.hosts; left != 0 || r.jit.hint(jitGlobalClosureForTest(r, "count")) != e {
+	if left := e.ssaStats.hosts - before.hosts; left != 0 || !code.same(r, jitGlobalClosureForTest(r, "count")) {
 		t.Errorf("count left native code %d times", left)
 	}
 	// arr's four number keys, 3, 0, 1 and 2, answered natively: two of

@@ -102,14 +102,14 @@ func TestJITPrologueCallees(t *testing.T) {
 	// tdz's every tenth call throws, which has its native callers call it
 	// through Go for a while (notNative).
 	for _, name := range []string{"wide", "hasCall"} {
-		e := jitNativeOrCalleeForTest(t, r, name)
-		if e.ssa.CallEntry() == 0 {
+		_, link, code := jitCalleeCodeForTest(t, r, name)
+		if code.CallEntry() == 0 {
 			t.Fatalf("%s has no call entry", name)
 		}
-		in := e.link.in
+		in := link.in
 		both.agree(t, `wides(300, { x: 2 })`, `calls(120)`, `tdzs(100)`)
-		if e.link.in-in < 200 {
-			t.Errorf("%s was called natively %d times", name, e.link.in-in)
+		if link.in-in < 200 {
+			t.Errorf("%s was called natively %d times", name, link.in-in)
 		}
 	}
 	narrow := uintptr(unsafe.Pointer(jitGlobalClosureForTest(r, "narrow")))
@@ -138,11 +138,23 @@ func TestJITPrologueEnter(t *testing.T) {
 	both := jitBothForTest(t, prologueCallSetup)
 	both.agree(t, `wides17(300, { x: 2 })`, `wides17(300, { x: 2 })`)
 	r := both.jit
-	e := jitNativeOrCalleeForTest(t, r, "wide17")
-	if in := e.link.in; in < 300 {
+	e, link, _ := jitCalleeCodeForTest(t, r, "wide17")
+	if in := link.in; in < 300 {
 		t.Fatalf("wide17 was called natively %d times", in)
 	}
-	e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
+	e.notNative, link.entry, link.body, e.nativeRetry = true, 0, 0, 0
+	if regJITForTest() {
+		// The register form's native callers leave a call of code they may
+		// not call to Go, a call of Go (jitLink's clearCode) -- here of
+		// more operands than abi.MaxGoArgs -- which enters the code at its
+		// start: the stack form's ExitEnter (jitEnterCallee) it has none of.
+		entries := e.ssaStats.entries
+		both.agree(t, `wides17(300, { x: 2 })`, `wides17(30, getter)`)
+		if e.ssaStats.entries == entries {
+			t.Fatal("Go never ran wide17 from its start")
+		}
+		return
+	}
 	entered := r.jit.entered
 	both.agree(t, `wides17(300, { x: 2 })`, `wides17(30, getter)`)
 	if r.jit.entered == entered {
@@ -201,8 +213,8 @@ func TestJITPrologueArgsFromState(t *testing.T) {
 	both := jitBothForTest(t, setup)
 	both.agree(t, `picks(200, { x: 1 }, 1)`, `picks(200, { x: 1 }, 2)`)
 	jitNativeForTest(t, both.jit, "picks")
-	if e := jitNativeOrCalleeForTest(t, both.jit, "pick"); e.link.in < 300 {
-		t.Errorf("pick was called natively %d times", e.link.in)
+	if _, link, _ := jitCalleeCodeForTest(t, both.jit, "pick"); link.in < 300 {
+		t.Errorf("pick was called natively %d times", link.in)
 	}
 	// A string, which b's default, a * 2, was compiled to take only
 	// numbers for: an exit at the multiplication, the arguments past the
@@ -250,7 +262,7 @@ func TestJITPrologueGenericCalls(t *testing.T) {
 	}
 	native := 0
 	for _, f := range v.Object().elemsOf() {
-		if e := r.jit.hint(f.Object().fn().closure); e != nil && e.link != nil && e.link.in != 0 {
+		if l := jitEntryLinkForTest(jitHintForTest(r, f.Object().fn().closure)); l != nil && l.in != 0 {
 			native++
 		}
 	}

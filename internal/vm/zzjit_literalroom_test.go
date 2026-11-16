@@ -88,6 +88,7 @@ func TestJITLiteralArrayRoom(t *testing.T) {
 }
 
 func TestJITLiteralArrayRoomNative(t *testing.T) {
+	skipUnderRegJIT(t, "the tree tier's learning of an empty literal's room (closureCode.arrays, arraySiteNew), which native literals inherit and register code has no counterpart of")
 	jitNoInlineForTest(t, "fill")
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprint(marking), func(t *testing.T) {
@@ -184,6 +185,7 @@ func TestJITLiteralArrayRoomNative(t *testing.T) {
 
 func TestJITLiteralArrayRoomInlined(t *testing.T) {
 	t.Parallel()
+	skipUnderRegJIT(t, "the tree tier's learning of an empty literal's room across a callee's turns (closureCode.arrays' acrossTurns), which an inlined literal inherits and register code has no counterpart of")
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
 	if _, err := r.Run(compileForTest(t, `

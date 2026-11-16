@@ -62,8 +62,12 @@ func TestJITCallRepeatsInvalidate(t *testing.T) {
 		}
 		hosts = append(hosts, h)
 	}
-	e := r.jit.cache[r.jitKeyOf(runCl.fn)]
-	if e == nil || e.ssa == nil || e.invalid {
+	if regJITForTest() {
+		// Its register code, valid.
+		if e := jitRegEntryOfForTest(r, runCl); e == nil || e.invalid {
+			t.Fatalf("run has no code: %+v", e)
+		}
+	} else if e := r.jit.cache[r.jitKeyOf(runCl.fn)]; e == nil || e.ssa == nil || e.invalid {
 		t.Fatalf("run has no code: %+v", e)
 	}
 	// B's first round: the call meets B, learned at its first exits, and

@@ -205,8 +205,8 @@ func TestJITTypedLayout(t *testing.T) {
 			for _, name := range typedLayoutNames {
 				for _, f := range []string{"rd_", "sum_", "wr_", "wrl_", "rdx_", "wrx_", "rdr_", "sumr_"} {
 					cl := r.global.getOwn(r.atoms.intern(f + name)).value().Object().fn().closure
-					if e := r.jit.hint(cl); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
-						t.Errorf("%s never ran natively %+v", f+name, e)
+					if cv, ok := jitViewForTest(r, cl); !ok || cv.e.ssaStats.entries == 0 {
+						t.Errorf("%s never ran natively %+v", f+name, cv.e)
 					}
 				}
 			}
@@ -365,8 +365,8 @@ func TestJITTypedChangedByCallee(t *testing.T) {
 					both.agree(t, fmt.Sprintf("run(%s, %s, 60)", f, k))
 				}
 				r := both.jit
-				if e := r.jit.hint(r.global.getOwn(r.atoms.intern(f)).value().Object().fn().closure); e == nil || e.ssa == nil {
-					t.Fatalf("%s is not native: %+v", f, e)
+				if cv, ok := jitViewNamedForTest(r, f); !ok {
+					t.Fatalf("%s is not native: %+v", f, cv.e)
 				}
 			}
 			for range 40 {
@@ -424,8 +424,8 @@ func TestJITTypedSharedGrownConcurrently(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if e := r.jit.hint(r.global.getOwn(r.atoms.intern("check")).value().Object().fn().closure); e == nil || e.ssa == nil {
-		t.Fatalf("check is not native: %+v", e)
+	if cv, ok := jitViewNamedForTest(r, "check"); !ok {
+		t.Fatalf("check is not native: %+v", cv.e)
 	}
 	other := New(Config{})
 	t.Cleanup(func() { other.Close(); other.ReleaseClosed() })

@@ -72,7 +72,7 @@ func TestJITMathFamily(t *testing.T) {
 		e := jitNativeForTest(t, r, name)
 		if name == "clzLoop" || name == "constLoop" || name == "clzEach" {
 			// Their only Math function of one number is clz32.
-			for _, st := range e.ssa.GoCallStates() {
+			for _, st := range jitSSACodeForTest(r, name).GoCallStates() {
 				if ssa.GoOp(st.Op&0xff) == ssa.GoMath {
 					t.Errorf("%s's code calls Go for Math.clz32 (GoMath)", name)
 					break

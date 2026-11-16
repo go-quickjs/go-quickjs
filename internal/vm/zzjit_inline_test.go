@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -220,7 +221,7 @@ func TestJITInlinedCalleeKeepsItsFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e := r.jit.entryFor(takeV.Object().fn().closure.fn); e == nil || len(e.failed) == 0 {
+	if e := jitHintForTest(r, takeV.Object().fn().closure); e == nil || len(e.failed) == 0 {
 		t.Fatalf("take's own code learned no failure: %+v", e)
 	}
 	both.agree(t, `cycle(q, 100)`, `cycle(q, 100)`)
@@ -399,7 +400,7 @@ func TestJITClosuresWithKeepsLimited(t *testing.T) {
 		if err != nil || !v.IsObject() || v.Object().fn() == nil {
 			t.Fatalf("P.prototype.parse: %v %v", v, err)
 		}
-		if e := r.jit.hint(v.Object().fn().closure); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+		if e := jitHintForTest(r, v.Object().fn().closure); !jitEntryCodeForTest(r, e) || e.ssaStats.entries == 0 {
 			t.Fatalf("keep cells %d: parse never ran natively: %+v", limit, e)
 		}
 	}
@@ -485,7 +486,12 @@ func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
 	// The default budgets, which code waits to be compiled again for what
 	// it learned (jitLearnedDue).
 	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
-	hosts := r.jit.hosts
+	// A runtime running register code makes its JIT's state at its first
+	// use.
+	hosts := uint64(0)
+	if r.jit != nil {
+		hosts = r.jit.hosts
+	}
 	both.agree(t, `drive(3000)`, `drive(3000)`)
 	if n := r.jit.hosts - hosts; n > 10 {
 		t.Errorf("drive left native code %d times in two rounds of 3000", n)
@@ -615,12 +621,20 @@ func TestJITInlinesSmallPastBudget(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	inlined := jitInlinedForTest(t)
+	// Register programs are smaller, by inlineSize big 35, mid 13, tiny 5,
+	// wrap2 11 with its tinies past it: five bigs and the first mid, 188,
+	// take the budget there, tiny inlined past it, the second mid not, nor
+	// wrap2.
+	bigs := 4
+	if regJITForTest() {
+		bigs = 5
+	}
 	both := jitBothForTest(t, `
 		function big(o) { return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) }
 		function mid(o) { return (o.a + o.b) * (o.c - o.a) + o.b }
 		function tiny(o) { return o.a + 1 }
 		function wrap2(o) { return tiny(o) + tiny(o) }
-		function spend(o) { return big(o) + big(o) + big(o) + big(o) + mid(o) + tiny(o) + mid(o) + wrap2(o) }
+		function spend(o) { return `+strings.Repeat(`big(o) + `, bigs)+`mid(o) + tiny(o) + mid(o) + wrap2(o) }
 		function drive(k) { let s = 0; for (let i = 0; i < k; i++) s = (s + spend({a: i, b: 2, c: 7})) | 0; return s }`)
 	for range 6 {
 		both.agree(t, `drive(300)`)
@@ -630,7 +644,7 @@ func TestJITInlinesSmallPastBudget(t *testing.T) {
 	for _, c := range []struct {
 		src  string
 		want int
-	}{{`big`, 4}, {`mid`, 1}, {`tiny`, 1}, {`wrap2`, 0}} {
+	}{{`big`, bigs}, {`mid`, 1}, {`tiny`, 1}, {`wrap2`, 0}} {
 		if n := jitCountForTest(got, jitClosureForTest(t, r, c.src)); n != c.want {
 			t.Errorf("spend inlines %s %d times, want %d (%x)", c.src, n, c.want, got)
 		}
@@ -647,10 +661,17 @@ func TestJITInlinesLoopsFirst(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	inlined := jitInlinedForTest(t)
+	// Register programs are smaller, by inlineSize big 35 and mid2 25:
+	// five bigs before the loop there, of which mid2 leaves room for four,
+	// and in the order of their PCs mid2 none.
+	bigs := 4
+	if regJITForTest() {
+		bigs = 5
+	}
 	both := jitBothForTest(t, `
 		function big(o) { return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) }
 		function mid2(o) { return (o.a + o.b) * (o.c - o.a) + o.b * (o.a - o.c) + (o.b ^ o.c) - o.a }
-		function loopy(o, n) { let s = big(o) + big(o) + big(o) + big(o); for (let i = 0; i < n; i++) s = (s + mid2(o)) | 0; return s }
+		function loopy(o, n) { let s = `+strings.Repeat(`big(o) + `, bigs-1)+`big(o); for (let i = 0; i < n; i++) s = (s + mid2(o)) | 0; return s }
 		function drive(k) { let s = 0; for (let i = 0; i < k; i++) s = (s + loopy({a: i, b: 2, c: 7}, 20)) | 0; return s }`)
 	for range 6 {
 		both.agree(t, `drive(300)`)
@@ -660,7 +681,7 @@ func TestJITInlinesLoopsFirst(t *testing.T) {
 	for _, c := range []struct {
 		src  string
 		want int
-	}{{`mid2`, 1}, {`big`, 3}} {
+	}{{`mid2`, 1}, {`big`, bigs - 1}} {
 		if n := jitCountForTest(got, jitClosureForTest(t, r, c.src)); n != c.want {
 			t.Errorf("loopy inlines %s %d times, want %d (%x)", c.src, n, c.want, got)
 		}

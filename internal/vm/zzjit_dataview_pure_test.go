@@ -33,7 +33,7 @@ func TestJITDataViewSetterInPureBody(t *testing.T) {
 				t.Errorf("marking %v: %s = %s, want Node's %s", marking, src, got, want)
 			}
 		}
-		if e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("kUint8")).value().Object().fn().closure.fn); e == nil || e.ssa == nil {
+		if jitSSACodeForTest(r, "kUint8") == nil {
 			t.Errorf("marking %v: kUint8 was not compiled", marking)
 		}
 		debug.SetGCPercent(gc)

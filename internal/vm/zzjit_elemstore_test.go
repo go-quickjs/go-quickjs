@@ -143,18 +143,20 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 		function fill(n) { for (let i = 0; i < n; i++) { put(h, i & 63, i * 3); put(u, i & 63, i); put(d, i & 63, i / 4) } return h[5] + u[7] + d[9] }`,
 		`fill(1000)`, `fill(1000)`, `fill(1000)`, `[h[1], u[2], d[3], h.length].join()`)
 	cl := r.global.getOwn(r.atoms.intern("put")).value().Object().fn().closure
-	e := r.jitEntryOf(cl)
-	if e == nil || e.ssa == nil {
-		t.Fatalf("put has no code: %+v", e)
+	if !regJITForTest() {
+		if e := r.jitEntryOf(cl); e == nil || e.ssa == nil {
+			t.Fatalf("put has no code: %+v", e)
+		}
 	}
-	in, calls := e.link.in, 0
+	_, link, _ := jitLinkedOfForTest(t, r, cl, "put")
+	in, calls := link.in, 0
 	jitGoCallWork = func() { calls++ }
 	defer func() { jitGoCallWork = nil }()
 	if _, err := r.Run(compileForTest(t, `fill(1000)`)); err != nil {
 		t.Fatal(err)
 	}
-	if e.link.in-in < 3000 {
-		t.Fatalf("put was called natively %d times of 3000", e.link.in-in)
+	if link.in-in < 3000 {
+		t.Fatalf("put was called natively %d times of 3000", link.in-in)
 	}
 	if calls > 4 {
 		t.Errorf("Go was called %d times for 3000 stores", calls)

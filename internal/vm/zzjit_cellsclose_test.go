@@ -5,7 +5,9 @@ package vm
 import (
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // cellsCloseSetup's loops make closures capturing their iteration's
@@ -115,13 +117,25 @@ func cellsCloseRounds() []string {
 func jitCellsClosedFor(t *testing.T, r *Runtime) {
 	t.Helper()
 	for _, name := range []string{"loops", "callee", "exits", "links"} {
+		// The register form's code is the register cache's, its program
+		// its entry's (jitRegEntry's p), its pools its life's.
 		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
+		var prog *ir.Program
+		var code *jit.SSACode
+		if regJITForTest() {
+			for k, x := range r.jit.regCache {
+				if fn := k.Value(); fn != nil && fn.Name == name {
+					e, prog, code = x.life, x.p, x.code
+				}
+			}
+		} else {
+			for k, x := range r.jit.cache {
+				if fn := k.Value(); fn != nil && fn.Name == name {
+					e, prog, code = x, x.ssaProg, x.ssa
+				}
 			}
 		}
-		if e == nil || e.ssa == nil || e.ssaProg == nil || !e.ssaProg.Cells {
+		if e == nil || code == nil || prog == nil || !prog.Cells {
 			t.Errorf("%s has no code with cells of its own", name)
 			continue
 		}

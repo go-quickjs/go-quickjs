@@ -60,7 +60,7 @@ func TestJITMathPlainCall(t *testing.T) {
 	}
 	for _, name := range []string{"capLoop", "globalLoop"} {
 		e := jitNativeForTest(t, r, name)
-		for _, st := range e.ssa.GoCallStates() {
+		for _, st := range jitSSACodeForTest(r, name).GoCallStates() {
 			if ssa.GoOp(st.Op&0xff) == ssa.GoMath {
 				t.Errorf("%s's code calls Go for a Math function (GoMath)", name)
 				break
@@ -76,7 +76,7 @@ func TestJITMathPlainCall(t *testing.T) {
 		}
 	}
 	treeId := r.global.getOwn(r.atoms.intern("treeId")).value().Object().fn().closure
-	if e := r.jit.entryFor(treeId.fn); e == nil || e.link == nil {
+	if e, link := jitEntryLinkOfForTest(r, treeId); e == nil || link == nil {
 		t.Error("treeId has no code native callers call")
 	} else {
 		for range 20 {
@@ -84,11 +84,11 @@ func TestJITMathPlainCall(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		in, slow := e.link.in, e.slowCalls
+		in, slow := link.in, e.slowCalls
 		if _, err := r.Run(compileForTest(t, "idLoop(300)")); err != nil {
 			t.Fatal(err)
 		}
-		if in, slow = e.link.in-in, e.slowCalls-slow; in < 300 || slow != 0 {
+		if in, slow = link.in-in, e.slowCalls-slow; in < 300 || slow != 0 {
 			t.Errorf("idLoop's 300 calls of treeId, warm: %d native, %d through Go", in, slow)
 		}
 	}

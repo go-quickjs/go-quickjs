@@ -57,9 +57,10 @@ func TestJITLeafFast(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitLeafFastForTest(t)
-	e := jitNativeForTest(t, r, "leafTurns")
+	code := jitNativeCodeForTest(t, r, "leafTurns")
+	e := code.e
 	leaves := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range code.code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf {
 			if st.Leaf == 0 {
 				t.Errorf("a leaf's call names no leaf: %+v", st)
@@ -86,7 +87,7 @@ func TestJITLeafFast(t *testing.T) {
 	// Each call's form made once, at its first call, and kept in its
 	// description (jitLeafForm).
 	forms := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range code.code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.LeafForm != nil {
 			if (*jitLeafForm)(st.LeafForm).keep != st.Keep {
 				t.Errorf("a leaf's call made with another's form: %+v", st)
@@ -207,7 +208,7 @@ func TestJITLeafColdSaves(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("chain3")).value().Object().fn().closure
-	if e := r.jit.hint(cl); e == nil || e.ssa == nil || r.jit.leafFast-fast < 3*8*90-48 {
+	if _, ok := jitViewForTest(r, cl); !ok || r.jit.leafFast-fast < 3*8*90-48 {
 		t.Errorf("chain3's leaves' calls through the routine: %d, want 3 a call but the refused", r.jit.leafFast-fast)
 	}
 }

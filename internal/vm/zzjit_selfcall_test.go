@@ -74,14 +74,14 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 		}
 		compiles = append(compiles, c)
 	}
-	e := r.jit.cache[r.jitKeyOf(trace.fn)]
-	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
+	e, link, invalid := jitCodeOfForTest(r, trace)
+	if e == nil || e.entrySlow || invalid {
 		t.Fatalf("walk did not run natively: %+v", e)
 	}
 	if r.jit.reoptimized != 0 {
 		t.Fatalf("compiled again %v times by round", compiles)
 	}
-	if e.link == nil || e.link.in == 0 {
+	if link == nil || link.in == 0 {
 		t.Fatal("walk's calls of itself were not made natively")
 	}
 }

@@ -132,7 +132,7 @@ func TestJITForwardingCalls(t *testing.T) {
 				r := jitAgreesForwardForTest(t, stress, forwardSetup, rounds...)
 				if stress == (jitStressConfig{}) {
 					for _, name := range []string{"f2", "fArgs", "f6", "fThrow", "fStack", "fVar", "fTwice"} {
-						jitNativeOrCalleeForTest(t, r, name)
+						jitNativeOrCalleeCodeForTest(t, r, name)
 					}
 				}
 			})
@@ -212,7 +212,7 @@ func TestJITForwardingCallsNative(t *testing.T) {
 	names := []string{"f2", "own", "loop"}
 	before := make([]uint64, len(names))
 	for i, name := range names {
-		before[i] = uint64(jitNativeOrCalleeForTest(t, r, name).ssaStats.goCalls)
+		before[i] = uint64(jitNativeOrCalleeCodeForTest(t, r, name).e.ssaStats.goCalls)
 	}
 	v, err := r.Run(compileForTest(t, "''+loop(1000)"))
 	if err != nil {
@@ -222,7 +222,7 @@ func TestJITForwardingCallsNative(t *testing.T) {
 		t.Fatalf("loop(1000) = %s, want %s", got, want)
 	}
 	for i, name := range names {
-		if n := uint64(jitNativeOrCalleeForTest(t, r, name).ssaStats.goCalls) - before[i]; n != 0 {
+		if n := uint64(jitNativeOrCalleeCodeForTest(t, r, name).e.ssaStats.goCalls) - before[i]; n != 0 {
 			t.Errorf("%s: %d calls of Go for loop(1000)'s forwards, want 0", name, n)
 		}
 	}

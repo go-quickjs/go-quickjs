@@ -107,8 +107,8 @@ func TestJITMegamorphicPrototypes(t *testing.T) {
 		}
 		for _, name := range []string{"walk", "kinds", "leaves"} {
 			cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-			e := r.jit.hint(cl)
-			if e == nil || e.ssa == nil {
+			e, code := jitStatsOfForTest(r, cl)
+			if e == nil {
 				t.Fatalf("marking %v: %s was not compiled: %+v", marking, name, e)
 			}
 			before := e.ssaStats
@@ -116,7 +116,7 @@ func TestJITMegamorphicPrototypes(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := e.ssaStats
-			if r.jit.hint(cl) != e || st.work-before.work < 4500 {
+			if _, now := jitStatsOfForTest(r, cl); now != code || st.work-before.work < 4500 {
 				t.Fatalf("marking %v: %s(50) did not run natively: %+v, before %+v", marking, name, st, before)
 			}
 			if left := st.hosts - before.hosts; left != 0 {

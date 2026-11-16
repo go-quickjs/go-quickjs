@@ -30,12 +30,15 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 	for range 20 {
 		both.agree(t, `f(50)`)
 	}
-	e := jitNativeForTest(t, both.jit, "f")
-	if len(e.ssaUnresumed) != 1 {
-		t.Fatalf("f's code has no entries left out after its calls: %v", e.ssaUnresumed)
+	// Under the register JIT the pcs are register code's, the code the
+	// register cache's (jitNativeCodeForTest).
+	cv := jitNativeCodeForTest(t, both.jit, "f")
+	e := cv.e
+	if len(cv.unresumed()) != 1 {
+		t.Fatalf("f's code has no entries left out after its calls: %v", cv.unresumed())
 	}
-	pc := int(e.ssaUnresumed[0])
-	if e.ssa.HasEntry(pc) || len(e.resumed) != 0 {
+	pc := cv.unresumed()[0]
+	if cv.hasEntry(pc) || len(e.resumed) != 0 {
 		t.Fatalf("f's code has an entry after its call at %d before Go went on there: %v", pc-1, e.resumed)
 	}
 	// Another callee: the call leaves, Go makes it and goes on after it --
@@ -50,11 +53,19 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 	if !slices.Contains(e.resumed, uint32(pc)) {
 		t.Fatalf("Go's going on after the call at %d was not learned: %v", pc-1, e.resumed)
 	}
-	if e = jitNativeForTest(t, both.jit, "f"); !e.ssa.HasEntry(pc) || slices.Contains(e.ssaUnresumed, int32(pc)) {
-		t.Fatalf("f was not compiled again with an entry after its call at %d: %v", pc-1, e.ssaUnresumed)
+	if cv = jitNativeCodeForTest(t, both.jit, "f"); !cv.hasEntry(pc) || slices.Contains(cv.unresumed(), pc) {
+		t.Fatalf("f was not compiled again with an entry after its call at %d: %v", pc-1, cv.unresumed())
 	}
-	if n := e.goOns - goOns; n != 1 || e.entrySlow {
-		t.Fatalf("the interpreter went on with f %d times after the call at %d, f judged slow %v; once, where the entry was learned", n, pc-1, e.entrySlow)
+	e = cv.e
+	// The stack form's frame goes on in the interpreter there once, where
+	// the entry is learned (jitGoOn); the register form's goes on in the
+	// code compiled again at once, from the call on (jitRegResumeSeen).
+	want := uint64(1)
+	if cv.reg != nil {
+		want = 0
+	}
+	if n := e.goOns - goOns; n != want || e.entrySlow {
+		t.Fatalf("the interpreter went on with f %d times after the call at %d, f judged slow %v; want %d", n, pc-1, e.entrySlow, want)
 	}
 	for range 40 {
 		both.agree(t, `f(50)`)
@@ -62,7 +73,8 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 	for range 20 {
 		both.agree(t, `fact(12)`)
 	}
-	fe := jitNativeForTest(t, both.jit, "fact")
+	fcv := jitNativeCodeForTest(t, both.jit, "fact")
+	fe := fcv.e
 	fn := both.jit.global.getOwn(both.jit.atoms.intern("fact")).value().Object().fn().closure.fn
 	self := -1
 	for _, x := range jitTargets(fe) {
@@ -73,8 +85,8 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 	if self < 0 {
 		t.Fatal("fact does not call itself natively")
 	}
-	if !fe.ssa.HasEntry(self+1) || slices.Contains(fe.ssaUnresumed, int32(self+1)) {
-		t.Fatalf("fact's code has no entry after its call of itself at %d: %v", self, fe.ssaUnresumed)
+	if !fcv.hasEntry(self+1) || slices.Contains(fcv.unresumed(), self+1) {
+		t.Fatalf("fact's code has no entry after its call of itself at %d: %v", self, fcv.unresumed())
 	}
 }
 
@@ -111,12 +123,25 @@ func TestJITEntriesAfterInlinedCalls(t *testing.T) {
 	}
 	r := both.jit
 	cl := r.global.getOwn(r.atoms.intern("Q")).value().Object().getOwn(r.atoms.intern("prototype")).value().Object().getOwn(r.atoms.intern("place")).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil || len(e.ssaInlinedAt) == 0 {
-		t.Fatalf("place inlines none of its calls: %+v", e)
+	// The calls the code inlines: the stack form's entry's (ssaInlinedAt),
+	// or, by register pc, those its register code's compiles inlined,
+	// which its life notes where their exits are counted (inlines).
+	cv, ok := jitViewForTest(r, cl)
+	var at []int
+	if ok && cv.reg != nil {
+		for _, x := range cv.e.inlines {
+			at = append(at, int(x.pc))
+		}
+	} else if ok {
+		for _, pc := range cv.e.ssaInlinedAt {
+			at = append(at, int(pc))
+		}
 	}
-	for _, pc := range e.ssaInlinedAt {
-		if !e.ssa.HasEntry(int(pc)+1) || slices.Contains(e.ssaUnresumed, pc+1) {
+	if !ok || len(at) == 0 {
+		t.Fatalf("place inlines none of its calls: %+v", cv.e)
+	}
+	for _, pc := range at {
+		if !cv.hasEntry(pc+1) || slices.Contains(cv.unresumed(), pc+1) {
 			t.Errorf("place's code has no entry after its inlined call at %d", pc)
 		}
 	}

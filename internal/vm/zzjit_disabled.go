@@ -18,6 +18,7 @@ type jitRealmFields struct{}
 // The memory meter names these types; builds without the JIT have none.
 type jitState struct{}
 type jitEntry struct{}
+type jitRegEntry struct{}
 
 // jitCacheSeen is nothing: a cache keeps no shapes for a JIT there is not
 // (propCache.seen).

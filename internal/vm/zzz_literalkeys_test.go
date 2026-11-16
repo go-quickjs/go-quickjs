@@ -295,15 +295,32 @@ func TestLiteralKeysCollision(t *testing.T) {
 
 func testLiteralKeysCollision(t *testing.T, r *Runtime) {
 	const collide = 0x1234
+	// Register code's literals have their keys' hashes of their own
+	// (RegCode's ObjKeysHash), which a runtime running it starts them
+	// from (regLiteralKeyedRoot): those collide too.
+	regKeys := func(fn *bytecode.Function) {
+		if !r.regOn() {
+			return
+		}
+		if rc := fn.RegCode(); rc != nil {
+			for i, h := range rc.ObjKeysHash {
+				if h != 0 {
+					rc.ObjKeysHash[i] = collide
+				}
+			}
+		}
+	}
 	force := func(fn *bytecode.Function) *bytecode.Function {
 		for i := range fn.LiteralKeys {
 			fn.LiteralKeys[i].Keys = collide
 		}
+		regKeys(fn)
 		for i := range fn.Constants {
 			if c := &fn.Constants[i]; c.Fn != nil {
 				for j := range c.Fn.LiteralKeys {
 					c.Fn.LiteralKeys[j].Keys = collide
 				}
+				regKeys(c.Fn)
 			}
 		}
 		return fn

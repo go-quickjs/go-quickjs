@@ -55,8 +55,8 @@ func TestJITDerivedDefaultConstruct(t *testing.T) {
 			// The constructions so far, made natively: chain's calls of
 			// Go are none but its method calls' and Object.keys's.
 			cl := r.global.getOwn(r.atoms.intern("chain")).value().Object().fn().closure
-			e := r.jit.hint(cl)
-			if e == nil || e.ssa == nil {
+			e := jitHintForTest(r, cl)
+			if !jitEntryCodeForTest(r, e) {
 				t.Fatalf("chain was not compiled: %+v", e)
 			}
 			found := false
@@ -73,7 +73,7 @@ func TestJITDerivedDefaultConstruct(t *testing.T) {
 				t.Fatal(err)
 			}
 			// A compile meanwhile counts afresh.
-			after := r.jit.hint(cl).ssaStats.goCalls
+			after := jitHintForTest(r, cl).ssaStats.goCalls
 			calls := after - before
 			if after < before {
 				calls = after
@@ -98,9 +98,18 @@ func TestJITDerivedDefaultConstruct(t *testing.T) {
 
 // jitDerivedForTest is the entry of the derived class name's constructor:
 // a class is a lexical binding, not the global object's, so it is found
-// by its function's name.
+// by its function's name. Where runtimes run register code, it is the
+// state its register code's compiles share (regLearned).
 func jitDerivedForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 	t.Helper()
+	if regJITForTest() {
+		for k, x := range r.jit.regLearned {
+			if fn := k.Value(); fn != nil && fn.Name == name && fn.Kind == bytecode.KindDerivedConstructor {
+				return x
+			}
+		}
+		t.Fatalf("%s has no entry", name)
+	}
 	for k, x := range r.jit.cache {
 		if fn := k.Value(); fn != nil && fn.Name == name && fn.Kind == bytecode.KindDerivedConstructor {
 			return x
@@ -110,12 +119,14 @@ func jitDerivedForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 	return nil
 }
 
-// jitDerivedCalls is how many times native callers called e's code.
+// jitDerivedCalls is how many times native callers called e's code, in
+// either form (jitEntryLinkForTest).
 func jitDerivedCalls(e *jitEntry) uint64 {
-	if e.link == nil {
+	l := jitEntryLinkForTest(e)
+	if l == nil {
 		return 0
 	}
-	return e.link.in
+	return l.in
 }
 
 // A derived class's construction from native code is a native call of its
@@ -317,8 +328,8 @@ func TestJITDerivedNativeMarking(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"B", "C"} {
-		if e := jitDerivedForTest(t, r, name); e.ssa == nil || jitDerivedCalls(e) == 0 {
-			t.Errorf("%s was not constructed natively while the collector marked: code %v, slow %v, callee %v, %+v", name, e.ssa != nil, e.entrySlow, e.ssaCallee, e.ssaStats)
+		if e := jitDerivedForTest(t, r, name); !jitEntryCodeForTest(r, e) || jitDerivedCalls(e) == 0 {
+			t.Errorf("%s was not constructed natively while the collector marked: code %v, slow %v, callee %v, %+v", name, jitEntryCodeForTest(r, e), e.entrySlow, e.ssaCallee, e.ssaStats)
 		}
 	}
 }
@@ -360,7 +371,7 @@ func TestJITDerivedNativeSuper(t *testing.T) {
 		rounds = append(rounds, `chain(300)`)
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	abs := r.jit.hint(jitClassForTest(t, r, "Abs"))
+	abs := jitHintForTest(r, jitClassForTest(t, r, "Abs"))
 	bin, eq, un := jitDerivedForTest(t, r, "Bin"), jitDerivedForTest(t, r, "Eq"), jitDerivedForTest(t, r, "Un")
 	if abs == nil {
 		t.Fatal("Abs has no entry")
@@ -512,12 +523,25 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 				agree()
 			}
 			mid := jitDerivedForTest(t, r, "Mid")
-			if mid.ssa == nil || mid.link == nil || mid.link.in == 0 {
+			link := jitEntryLinkForTest(mid)
+			if !jitEntryCodeForTest(r, mid) || link == nil || link.in == 0 {
 				t.Fatalf("Mid's code is not called natively: %+v", mid)
 			}
 			// Mid's code no native caller may call: Go runs it from its
 			// start.
-			mid.notNative, mid.link.entry, mid.link.body, mid.nativeRetry = true, 0, 0, 0
+			mid.notNative, link.entry, link.body, mid.nativeRetry = true, 0, 0, 0
+			if regJITForTest() {
+				// The register form's native callers leave a call of code
+				// they may not call to Go, a call of Go (jitLink's
+				// clearCode), which enters the code at its start: the
+				// stack form's ExitEnter (jitEnterCallee) it has none of.
+				entries := mid.ssaStats.entries
+				agree()
+				if mid.ssaStats.entries == entries {
+					t.Errorf("Go never ran Mid's code from its start")
+				}
+				return
+			}
 			entered := r.jit.entered
 			agree()
 			if r.jit.entered == entered {
@@ -560,23 +584,41 @@ func TestJITDerivedSuperNotInlined(t *testing.T) {
 	r := jitAgreesForTest(t, setup, rounds...)
 	un := jitDerivedForTest(t, r, "Un")
 	var fn *bytecode.Function
-	for k, x := range r.jit.cache {
-		if x == un {
+	if regJITForTest() {
+		// Its life's pcs are register pcs (jitLearned's reg).
+		if k, ok := jitRegKeyOfLifeForTest(r, un); ok {
 			fn = k.Value()
 		}
-	}
-	for _, x := range un.inlines {
-		if fn != nil && int(x.pc) < len(fn.Code) && fn.Code[x.pc].Op == bytecode.OpSuperCall {
-			t.Errorf("Un's code inlines its super() at %d", x.pc)
+		for _, x := range un.inlines {
+			if rc := fn.RegCode(); rc != nil && int(x.pc) < len(rc.Code) {
+				if op := rc.Code[x.pc].Op(); op == bytecode.RSuperCall || op == bytecode.RSuperForward || op == bytecode.RSuperSpread {
+					t.Errorf("Un's code inlines its super() at %d", x.pc)
+				}
+			}
+		}
+	} else {
+		for k, x := range r.jit.cache {
+			if x == un {
+				fn = k.Value()
+			}
+		}
+		for _, x := range un.inlines {
+			if fn != nil && int(x.pc) < len(fn.Code) && fn.Code[x.pc].Op == bytecode.OpSuperCall {
+				t.Errorf("Un's code inlines its super() at %d", x.pc)
+			}
 		}
 	}
-	hosts, in := un.ssaStats.hosts, un.link.in
+	link := jitEntryLinkForTest(un)
+	if link == nil {
+		t.Fatalf("Un's code has no link: %+v", un)
+	}
+	hosts, in := un.ssaStats.hosts, link.in
 	if _, err := r.Run(compileForTest(t, `make(300)`)); err != nil {
 		t.Fatal(err)
 	}
 	// Called natively at each construction, Un's and Stay's, which runs
 	// Un's code, and leaving at none.
-	if d := un.link.in - in; d < 600 {
+	if d := link.in - in; d < 600 {
 		t.Errorf("Un's code was called natively %d times in a round of 600 constructions", d)
 	}
 	if d := un.ssaStats.hosts - hosts; d != 0 {
@@ -636,7 +678,7 @@ func TestJITDerivedNativeConstructArrows(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"W", "P"} {
-		if w := jitDerivedForTest(t, r, name); w.ssa == nil || w.ssaStats.entries == 0 {
+		if w := jitDerivedForTest(t, r, name); !jitEntryCodeForTest(r, w) || w.ssaStats.entries == 0 {
 			t.Errorf("%s's own code never entered by Go: %+v", name, w)
 		}
 	}

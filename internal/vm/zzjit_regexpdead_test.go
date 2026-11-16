@@ -58,7 +58,7 @@ func TestJITRegExpDeadExec(t *testing.T) {
 		for _, c := range cases {
 			e := jitNativeForTest(t, r, c.name)
 			unused := 0
-			for _, st := range e.ssa.GoCallStates() {
+			for _, st := range jitSSACodeForTest(r, c.name).GoCallStates() {
 				if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == exec && st.Unused {
 					unused++
 				}

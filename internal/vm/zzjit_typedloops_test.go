@@ -57,7 +57,7 @@ const typedLoopsSetup = `
 // included ("at Int32Array.forEach"), and eachSum's, reduceInit's,
 // someAt's and findIndexOf's loops neither leave their code nor call Go.
 func TestJITTypedArrayLoops(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -88,14 +88,7 @@ func TestJITTypedArrayLoops(t *testing.T) {
 	// function fails, and the call is Go's.
 	jitAgreesForTest(t, typedLoopsSetup+drivers, append(rounds, `(Int32Array.prototype.forEach = function (f) { f(100) }, drive_eachSum(30, i32))`)...)
 	r := jitAgreesForTest(t, typedLoopsSetup+drivers, rounds...)
-	entry := func(name string) *jitEntry {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				return x
-			}
-		}
-		return nil
-	}
+	entry := func(name string) jitNamedStateForTest { return jitNamedOfForTest(r, built, name) }
 	if r.jit.loopsFinished == 0 {
 		t.Error("Go went on with no loop")
 	}
@@ -106,8 +99,9 @@ func TestJITTypedArrayLoops(t *testing.T) {
 		{"eachSum", "eachCb", "drive_eachSum(10, i32)"}, {"reduceInit", "reduceCb", "drive_reduceInit(10, i32)"},
 		{"someAt", "someCb", "drive_someAt(10, i32, 99)"}, {"findIndexOf", "findCb", "drive_findIndexOf(10, i32, 99)"},
 	} {
-		e, cb := entry(c.fn), entry(c.cb)
-		if e == nil || e.ssa == nil || !e.loops || cb == nil || cb.link == nil {
+		n, cb := entry(c.fn), entry(c.cb)
+		e := n.e
+		if e == nil || !n.code || !n.loops || cb.link == nil {
 			t.Errorf("%s makes no loop of its call: %+v", c.fn, e)
 			continue
 		}
@@ -115,16 +109,16 @@ func TestJITTypedArrayLoops(t *testing.T) {
 		if _, err := r.Run(compileForTest(t, c.run)); err != nil {
 			t.Fatal(err)
 		}
-		if n := cb.link.in - in; n != 0 || len(e.ssaInlined) == 0 {
-			t.Errorf("%s's callback called natively %d times of 80, not inlined", c.fn, n)
+		if k := cb.link.in - in; k != 0 || len(entry(c.fn).inlined) == 0 {
+			t.Errorf("%s's callback called natively %d times of 80, not inlined", c.fn, k)
 		}
 		if n := e.ssaStats.hosts - hosts; n != 0 {
 			t.Errorf("%s left its code %d times", c.fn, n)
 		}
 	}
 	for _, name := range []string{"throwsAt", "undefinedAt", "shrink", "eachOrFake"} {
-		if e := entry(name); e == nil || e.ssa == nil || !e.loops {
-			t.Errorf("%s makes no loop of its call: %+v", name, e)
+		if n := entry(name); n.e == nil || !n.code || !n.loops {
+			t.Errorf("%s makes no loop of its call: %+v", name, n.e)
 		}
 	}
 }

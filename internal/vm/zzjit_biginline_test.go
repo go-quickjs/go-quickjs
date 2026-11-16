@@ -40,7 +40,7 @@ func TestJITBigIntInlined(t *testing.T) {
 		}
 		r := jitAgreesForTest(t, bigInlineSetup, rounds...)
 		e := jitNativeForTest(t, r, "run")
-		ended, calls, inlined := e.ssaStats.ended, e.ssaStats.goCalls, len(e.ssaInlined)
+		ended, calls, inlined := e.ssaStats.ended, e.ssaStats.goCalls, len(jitInlinedOfForTest(r, jitGlobalClosureForTest(r, "run")))
 		v, err := r.Run(compileForTest(t, "run(300) + ' ' + odd(300)"))
 		if err != nil {
 			t.Fatal(err)

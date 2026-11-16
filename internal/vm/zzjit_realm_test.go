@@ -124,9 +124,16 @@ func TestJITRealmsHaveTheirOwnCode(t *testing.T) {
 		if object == nil {
 			t.Fatal("no function object")
 		}
-		seen := map[*jitEntry]bool{}
+		seen := map[any]bool{}
 		for _, re := range realms {
 			r.InRealm(re, func() {
+				if regJITForTest() {
+					// The register code of the realm's key (jitKey).
+					if e := r.jit.regCache[r.jitKeyOf(object)]; e != nil && e.code != nil && e.life.ssaStats.entries != 0 {
+						seen[e] = true
+					}
+					return
+				}
 				if e := r.jit.entryFor(object); e != nil && e.ssa != nil && e.ssaStats.entries != 0 {
 					seen[e] = true
 				}
@@ -239,6 +246,12 @@ func jitRealmFlushed(t *testing.T, r *Runtime, setEpoch func(uint64), keep map[w
 				left++
 			}
 		}
+		// The register form's code, by the same keys.
+		for key := range r.jit.regCache {
+			if key.realm != cur && !keep[key.realm] {
+				left++
+			}
+		}
 		if left == 0 && i >= 2 {
 			break
 		}
@@ -281,6 +294,11 @@ func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
 				native++
 			}
 		}
+		for key, e := range s.regCache {
+			if key.realm.Value() != nil && e.code != nil && e.life != nil && e.life.ssaStats.entries != 0 {
+				native++
+			}
+		}
 		if native == 0 {
 			t.Fatalf("%+v: no realm ran native code", c)
 		}
@@ -293,8 +311,14 @@ func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
 		if err := jitEntriesFound(s); err != nil {
 			t.Error(err)
 		}
+		if err := regLinksHeldForTest(s); err != nil {
+			t.Error(err)
+		}
+		if err := regEntriesFoundForTest(s); err != nil {
+			t.Error(err)
+		}
 		if n := realmsAlive(r, refs); n != 0 {
-			t.Errorf("%+v: %d of %d realms alive with %d entries in the cache", c, n, len(refs), len(s.cache))
+			t.Errorf("%+v: %d of %d realms alive with %d entries in the cache", c, n, len(refs), len(s.cache)+len(s.regCache))
 		}
 		for round := range 3 {
 			jitRealmCheck(t, r, quiet, fn, 1000, jitRealmSay(c, round, 9))
@@ -372,6 +396,21 @@ func TestJITFlushKeepsTheRunningRealm(t *testing.T) {
 	s := r.jit
 	count := func() (own, other, warming int) {
 		cur := r.jitRealmKey()
+		if regJITForTest() {
+			// The register form's entries are its functions' lives
+			// (regLearned), with code in the cache or warming without.
+			for key := range s.regLearned {
+				if key.realm == cur {
+					own++
+					if e := s.regCache[key]; e == nil || e.code == nil {
+						warming++
+					}
+				} else {
+					other++
+				}
+			}
+			return
+		}
 		for key, e := range s.cache {
 			if key.realm == cur {
 				own++

@@ -57,16 +57,23 @@ func TestJITPoolsWhileMarking(t *testing.T) {
 	jitNativeForTest(t, r, "pools")
 	for _, name := range []string{"mk", "bump", "hold"} {
 		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
+		if regJITForTest() {
+			// Its register code's state that outlives its compiles, which
+			// holds the pool (jitRegFeedback's CellsPool).
+			e = jitCodeEntryNamedForTest(r, name)
+		} else {
+			for k, x := range r.jit.cache {
+				if fn := k.Value(); fn != nil && fn.Name == name {
+					e = x
+				}
 			}
 		}
 		if name == "bump" {
 			// Its arrow is inlined and never made, so its cells go back to
 			// their pool as each call returns, the collector marking too
 			// (mir's cellsBackMarking): the pool as full as it was.
-			if e == nil || e.ssaCalled == 0 || e.cellsPool == nil || e.cellsPool.Count != e.cellsPool.Size {
+			called, _, _, _ := jitCalledForTest(r, name)
+			if e == nil || called == 0 || e.cellsPool == nil || e.cellsPool.Count != e.cellsPool.Size {
 				t.Errorf("%s's cells did not go back to their pool while the collector marked: %+v", name, e)
 			}
 			continue

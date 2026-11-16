@@ -34,7 +34,7 @@ const tailInlineSetup = `
 // -- has Go make its frames; every answer, the stack traces of throws at
 // every depth from 20 to 44 included, is the interpreter's.
 func TestJITTailCallsInlined(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -50,8 +50,8 @@ func TestJITTailCallsInlined(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, tailInlineSetup, shallow...)
 	for _, name := range []string{"sum", "down"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || len(e.ssaInlinedAt) == 0 {
-			t.Errorf("%s inlines no call ending in a call in tail position: %+v", name, e)
+		if inlinedAt, _, ok := jitInlinedAtForTest(r, built, name); !ok || inlinedAt == 0 {
+			t.Errorf("%s inlines no call ending in a call in tail position: %+v", name, jitCodeEntryNamedForTest(r, name))
 		}
 	}
 	// Then deeper, past tailCallDepth, where the inlined calls in tail

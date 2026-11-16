@@ -63,14 +63,15 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
 	}
-	ce, le := r.jit.cache[r.jitKeyOf(caller.fn)], r.jit.cache[r.jitKeyOf(long.fn)]
-	if ce == nil || ce.ssa == nil || le == nil || le.ssa == nil || le.link == nil {
+	ce, _, _ := jitCodeOfForTest(r, caller)
+	le, link, _ := jitCodeOfForTest(r, long)
+	if ce == nil || le == nil || link == nil {
 		t.Fatalf("caller or long has no code: %v, %v", ce, le)
 	}
 	if ce.reopts+ce.inlineReopts+ce.upgradeReopts+ce.polyReopts != 0 {
 		t.Fatalf("caller compiled again: %d for what failed, %d for its calls, %d for its callees, %d for shapes", ce.reopts, ce.inlineReopts, ce.upgradeReopts, ce.polyReopts)
 	}
-	if le.link.in == 0 {
+	if link.in == 0 {
 		t.Fatal("long's calls were never made natively")
 	}
 	// While long warmed up, Go made its calls from native code: none left

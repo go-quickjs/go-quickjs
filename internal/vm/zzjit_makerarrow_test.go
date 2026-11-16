@@ -62,7 +62,7 @@ func TestJITArrowSuperOfNativeCallee(t *testing.T) {
 					t.Fatalf("call %d: %s, want %s (all: %s)", i, g, want, strings.Join(got, " | "))
 				}
 			}
-			if e := r.jit.hint(r.global.getOwn(r.atoms.intern("all")).value().Object().fn().closure); e == nil || e.ssa == nil {
+			if e := jitCodeForTest(r, "all"); e == nil {
 				t.Fatal(fmt.Sprintf("all is not native: %+v", e))
 			}
 		})

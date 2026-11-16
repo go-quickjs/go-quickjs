@@ -35,14 +35,14 @@ const decidedSetup = `
 // compiled again, which inline it with them where they now may; and every
 // answer is the interpreter's.
 func TestJITCallersInlineDecidedCallee(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	rounds := []string{`drive(50, set)`, `drive(50, set)`, `drive(50, set)`, `drive(500, set)`, `drive(500, set)`}
 	r := jitAgreesForTest(t, decidedSetup, rounds...)
-	if e := jitCallbackEntry(r, "contains"); e == nil || e.ssa == nil || len(e.ssaInlinedAt) != 1 || e.ssaCalled != 1 {
-		t.Fatalf("contains does not inline Set.hasSome with the closure it gives it: %+v", e)
+	if inlined, called, ok := jitInlinedAtForTest(r, built, "contains"); !ok || inlined != 1 || called != 1 {
+		t.Fatalf("contains does not inline Set.hasSome with the closure it gives it: %+v", jitCodeEntryNamedForTest(r, "contains"))
 	}
 	rounds = append(rounds, `drive(500, other)`, `drive(500, set)`, `drive(500, other)`)
 	jitAgreesForTest(t, decidedSetup, rounds...)

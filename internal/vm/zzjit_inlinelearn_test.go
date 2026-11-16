@@ -29,7 +29,7 @@ const inlineLearnSetup = `
 // each call the interpreter's, until the inlining is given up
 // (jitInlineLeft) and rd called natively.
 func TestJITInlinedCalleeLearns(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -42,12 +42,13 @@ func TestJITInlinedCalleeLearns(t *testing.T) {
 		rounds = append(rounds, `drive(200)`)
 	}
 	r := jitAgreesForTest(t, inlineLearnSetup, rounds...)
-	rd, drive := jitCallbackEntry(r, "rd"), jitCallbackEntry(r, "drive")
+	rd, drive := jitLearnedForTest(r, "rd"), jitLearnedForTest(r, "drive")
 	if rd == nil || drive == nil {
 		t.Fatalf("no entries: rd %v drive %v", rd, drive)
 	}
-	if drive.ssa == nil || len(drive.ssaInlinedAt) == 0 || len(drive.notInline) != 0 {
-		t.Fatalf("drive does not inline op, rd with it: inlined at %v, given up at %v", drive.ssaInlinedAt, drive.notInline)
+	inlinedAt, _, ok := jitInlinedAtForTest(r, built, "drive")
+	if !ok || inlinedAt == 0 || len(drive.notInline) != 0 {
+		t.Fatalf("drive does not inline op, rd with it: inlined at %v, given up at %v", inlinedAt, drive.notInline)
 	}
 	if len(rd.typedReads) == 0 {
 		t.Fatalf("rd did not learn its typed array's read: %+v", rd)

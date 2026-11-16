@@ -57,8 +57,8 @@ func TestJITCapturedCalleeSeeded(t *testing.T) {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
 	}
-	e := r.jit.cache[r.jitKeyOf(cl.fn)]
-	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
+	e, _, invalid := jitCodeOfForTest(r, cl)
+	if e == nil || e.entrySlow || invalid {
 		t.Fatalf("run did not run natively: %+v", e)
 	}
 	if r.jit.reoptimized != 0 || e.ssaStats.goCalls != 0 || len(e.inlines) != 3 {

@@ -311,8 +311,13 @@ var (
 	runtimePtrType = reflect.TypeOf((*Runtime)(nil))
 	meterPtrType   = reflect.TypeOf((*memoryMeter)(nil))
 	// The JIT's state and cache are not the script's memory: see jitBudget.
+	// A function's register code's entry is reached from its closure's
+	// code (closureCode's jitReg), past which the walk had counted the
+	// code's learned state, the script's measured memory then depending
+	// on whether the JIT compiled it.
 	jitStatePtrType     = reflect.TypeOf((*jitState)(nil))
 	jitEntryPtrType     = reflect.TypeOf((*jitEntry)(nil))
+	jitRegEntryPtrType  = reflect.TypeOf((*jitRegEntry)(nil))
 	bigIntPtrType       = reflect.TypeOf((*BigInt)(nil))
 	sharedMemoryPtrType = reflect.TypeOf((*SharedMemory)(nil))
 	regexpPtrType       = reflect.TypeOf((*regexp.Regexp)(nil))
@@ -531,7 +536,7 @@ func (m *memoryMeter) generic(v reflect.Value) {
 		case stringPtrType:
 			m.addString((*String)(v.UnsafePointer()))
 			return
-		case runtimePtrType, meterPtrType, jitStatePtrType, jitEntryPtrType:
+		case runtimePtrType, meterPtrType, jitStatePtrType, jitEntryPtrType, jitRegEntryPtrType:
 			return
 		case bigIntPtrType:
 			b := (*BigInt)(v.UnsafePointer())

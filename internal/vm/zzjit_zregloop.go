@@ -254,14 +254,20 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 // operands -- or, one made anew at each call of its maker (byCode), no
 // object, for the builder to inline where the caller makes it just before
 // the call (madeCallback, ssa's madeAt), as the stack form's -- not an
-// arrow that reads its this, which may come from any frame, nor one whose
-// inlining at the call left native code too often (jitInlineLeft's
-// notInline), called natively since.
+// arrow that reads its this, which may come from any frame, nor a sloppy
+// function that reads its this, which the loop's call coerces -- the
+// global object for the undefined a loop without a thisArg gives it --
+// as the stack form's loop refuses a callback whose site coerces a this
+// it reads (ssa's Coerce with a ThisSlot): inlined, its this was the
+// loop's undefined, this === globalThis false. Nor one whose inlining at
+// the call left native code too often (jitInlineLeft's notInline),
+// called natively since.
 func (f *jitRegFeedback) callbackInline(x jitInline, site ssa.CallSite, argc int) (ssa.InlineSite, bool) {
 	cl, o := x.cb, x.cbObj
 	l := f.fb.e
 	byCode := x.byCode || site.ByCode != 0
 	if site.ArrowThis || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || jitNoInline != nil && jitNoInline(cl.fn) ||
+		cl.fn.CoerceThis && cl.fn.UsesThis && cl.fn.Kind != bytecode.KindArrow ||
 		l != nil && slices.Contains(l.notInline, x.pc) {
 		return ssa.InlineSite{}, false
 	}
@@ -415,4 +421,32 @@ func (r *Runtime) jitRegLoopFinish(f *frame, c *regCode, e *jitRegEntry, wb, rpc
 func jitRegSlotIndex(p *ir.Program, wb, i int) int {
 	scratch := p.Locals - jitRegScratchBase(p)
 	return wb + p.Regs + scratch + i - p.Locals
+}
+
+// jitRegPushLoopFrame pushes the frame of the built-in whose call register
+// code makes a loop of (abi.Context's Loop, loop), its callback's caller,
+// as Go's forEach has a frame while its callback runs (nativeFrame) and
+// the stack form's unwinding makes one (jitPushLoopFrame), for the frames
+// Go makes of a callback inlined in the loop, which a stack trace shows:
+// "at Array.forEach". Its receiver is arr, the loop's array, or, where
+// the slot holds none, the prototype of the loop's kind, which the trace
+// names the frame by all the same.
+func (r *Runtime) jitRegPushLoopFrame(loop uint64, arr Value) {
+	kind := int(loop >> 32)
+	fe := r.jitLoopFn(kind)
+	this := Obj(r.proto.array)
+	if t := kind >> abi.LoopTypedShift; kind&abi.LoopTyped != 0 && t < len(r.typedArrayProtos) && r.typedArrayProtos[t] != nil {
+		this = Obj(r.typedArrayProtos[t])
+	}
+	if arr.IsObject() {
+		this = arr
+	}
+	nf := r.pushFrame()
+	nf.cl, nf.native, nf.this, nf.newTarget, nf.callee, nf.args = nil, fe.fn().name, this, Undefined, fe, nil
+	if len(nf.handlers) != 0 {
+		nf.handlers = nf.handlers[:0]
+	}
+	if len(nf.openUpvalues) != 0 {
+		nf.openUpvalues = nf.openUpvalues[:0]
+	}
 }

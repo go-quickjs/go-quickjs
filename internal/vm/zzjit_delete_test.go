@@ -102,11 +102,11 @@ func TestJITDelete(t *testing.T) {
 		`own(3)+churn(5)+arr([1,2,3],[0,2])+keyed()`,
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	e := jitNativeForTest(t, r, "viaCallee")
+	v := jitNativeCodeForTest(t, r, "viaCallee")
 	// Its deletes are dropKey's and sdropKey's, inlined.
 	for _, callee := range []string{"dropKey", "sdropKey"} {
-		if !slices.Contains(e.ssaInlined, jitGlobalClosureForTest(r, callee)) {
-			t.Errorf("viaCallee does not inline %s: %v", callee, e.ssaInlined)
+		if !slices.Contains(v.inlined(), jitGlobalClosureForTest(r, callee)) {
+			t.Errorf("viaCallee does not inline %s: %v", callee, v.inlined())
 		}
 	}
 	// Eight times over: code compiled at a function's first call
@@ -164,7 +164,8 @@ func TestJITDeleteGoCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		e := jitNativeForTest(t, r, c.name)
+		code := jitNativeCodeForTest(t, r, c.name)
+		e := code.e
 		calls := 0
 		jitGoCallWork = func() { calls++ }
 		before := e.ssaStats
@@ -173,7 +174,7 @@ func TestJITDeleteGoCalls(t *testing.T) {
 		if err != nil || v.Number() != c.want {
 			t.Fatal(c.name, v, err)
 		}
-		if left := e.ssaStats.hosts - before.hosts; left != 0 || r.jit.hint(jitGlobalClosureForTest(r, c.name)) != e {
+		if left := e.ssaStats.hosts - before.hosts; left != 0 || !code.same(r, jitGlobalClosureForTest(r, c.name)) {
 			t.Errorf("%s left native code %d times", c.name, left)
 		}
 		if calls != c.deletes {

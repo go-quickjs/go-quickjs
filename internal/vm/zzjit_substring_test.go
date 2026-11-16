@@ -70,15 +70,11 @@ func TestJITSubstringChars(t *testing.T) {
 		rounds = append(rounds, `counts(text, 300)`, `counts(wide, 300)`, `inRange(text, 300)`, `mixed(text, 80)`, `mixed(wide, 80)`, `mixed(text + wide, 40)`)
 	}
 	r := jitAgreesForTest(t, substringSetup, rounds...)
-	var e *jitEntry
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == "inRange" {
-			e = x
-		}
-	}
-	if e == nil || e.ssa == nil {
+	cv, _, ok := jitViewOfFnNamedForTest(r, "inRange")
+	if !ok {
 		t.Fatal("inRange has no code")
 	}
+	e := cv.e
 	// Two more rounds, compiled: 2,400 calls, none of them Go's.
 	before := e.ssaStats.goCalls
 	for range 2 {
@@ -133,15 +129,11 @@ func TestJITSubstringOnce(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, onceSetup, `decode(data)`, `mimic(fake, 4000)`)
 	for _, name := range []string{"decode", "mimic"} {
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil {
+		cv, _, ok := jitViewOfFnNamedForTest(r, name)
+		if !ok {
 			t.Fatalf("%s has no code", name)
 		}
+		e := cv.e
 		t.Logf("%s %+v", name, e.ssaStats)
 		if name == "decode" && e.ssaStats.goCalls > 10 {
 			t.Errorf("decode called Go %d times", e.ssaStats.goCalls)
@@ -187,9 +179,10 @@ func TestJITSubstringLonger(t *testing.T) {
 		rounds = append(rounds, `lengths(text, 300)`, `words(text, 40)`, `onNumbers(['ab', 12345, 'cde', 6.5], 40)`)
 	}
 	r := jitAgreesForTest(t, longerSetup, rounds...)
-	e := jitNativeForTest(t, r, "lengths")
+	cv := jitNativeCodeForTest(t, r, "lengths")
+	e := cv.e
 	leaves := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range cv.code.GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf {
 			leaves++
 		}

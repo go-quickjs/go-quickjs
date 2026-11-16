@@ -56,9 +56,15 @@ func TestJITCellsFromPools(t *testing.T) {
 	}
 	for _, name := range []string{"mk", "bump"} {
 		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
+		if regJITForTest() {
+			// Its register code's state that outlives its compiles, which
+			// holds the pool (jitRegFeedback's CellsPool).
+			e = jitCodeEntryNamedForTest(r, name)
+		} else {
+			for k, x := range r.jit.cache {
+				if fn := k.Value(); fn != nil && fn.Name == name {
+					e = x
+				}
 			}
 		}
 		if e == nil || e.cellsPool == nil || e.cellsPool.Size <= 8 {

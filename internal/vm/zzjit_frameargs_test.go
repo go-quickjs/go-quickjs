@@ -60,11 +60,11 @@ func TestJITFrameArguments(t *testing.T) {
 	}
 	r := both.jit
 	for _, name := range []string{"sum", "rest", "count", "strictArgs", "mapped", "noParams"} {
-		e := jitEntryForTest(t, r, name)
-		if e.ssa.CallEntry() == 0 {
+		v := jitCodeNamedForTest(t, r, name)
+		if v.code.CallEntry() == 0 {
 			t.Errorf("%s has no call entry", name)
 		}
-		if e.link == nil || e.link.in == 0 {
+		if l := v.link(r, jitGlobalClosureForTest(r, name)); l == nil || l.in == 0 {
 			t.Errorf("%s was never called natively", name)
 		}
 	}
@@ -73,10 +73,10 @@ func TestJITFrameArguments(t *testing.T) {
 		both.agree(t, `(() => { let s = 0; for (let i = 0; i < 300; i++) s += lengthSet(i, 1, 2) + written(i, 1) + indexSet(i, 2); return s })()`)
 	}
 	// count's reads of its arguments leave native code nowhere.
-	e := jitEntryForTest(t, r, "count")
+	e := jitCodeNamedForTest(t, r, "count").e
 	hosts := e.ssaStats.hosts
 	both.agree(t, `(() => { let s = 0; for (let i = 0; i < 200; i++) s += count(i, 1, 2, 3, 4, 5); return s })()`)
-	if e := jitEntryForTest(t, r, "count"); e.ssaStats.hosts-hosts > 2 {
+	if e := jitCodeNamedForTest(t, r, "count").e; e.ssaStats.hosts-hosts > 2 {
 		t.Errorf("count left native code %d times", e.ssaStats.hosts-hosts)
 	}
 	jitAgreesForTest(t, frameArgsSetup, `run(20)`, `run(40)`)
@@ -99,13 +99,14 @@ func TestJITFrameArgumentsAliased(t *testing.T) {
 	for range 3 {
 		both.agree(t, `run(300)`)
 	}
-	entry := func(name string) *jitEntry {
-		return both.jit.jit.entryFor(both.jit.global.getOwn(both.jit.atoms.intern(name)).value().Object().fn().closure.fn)
+	compiled := func(name string) bool {
+		_, ok := jitViewByFnForTest(both.jit, jitGlobalClosureForTest(both.jit, name))
+		return ok
 	}
-	if e := entry("assigns"); e == nil || e.ssa == nil {
+	if !compiled("assigns") {
 		t.Error("assigns was not compiled")
 	}
-	if e := entry("escapes"); e != nil && e.ssa != nil {
+	if compiled("escapes") {
 		t.Error("escapes was compiled")
 	}
 }
@@ -156,7 +157,13 @@ func TestJITGeneratorParameters(t *testing.T) {
 			return s
 		}`, `run(20)`, `out.join()`, `run(60)`, `out.length + ':' + out.slice(-6).join()`)
 	for _, name := range []string{"range", "rest", "sum"} {
-		if e := jitEntryForTest(t, r, name); e.ssaStats.entries == 0 {
+		// Under the register JIT a native step resumes a generator
+		// through its link (jitGenInForTest).
+		n := jitCodeNamedForTest(t, r, name).e.ssaStats.entries
+		if jitRegCodeForTest(r, name) {
+			n += jitGenInForTest(r, name)
+		}
+		if n == 0 {
 			t.Errorf("%s was never entered", name)
 		}
 	}

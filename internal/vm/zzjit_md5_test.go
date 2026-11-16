@@ -100,7 +100,7 @@ func TestJITStringBoundaries(t *testing.T) {
 				source := tc.setup + `let a=new Array(6).fill(0),good=false;function f(s,a){for(let i=0;i<6;i++){` + tc.body + `}return a[0]}try{f(s,a)}catch(e){good=e instanceof TypeError&&e.message==='stop'};` + tc.check
 				v, err := r.Run(compileForTest(t, source))
 				if err != nil || !v.IsBool() || !v.Truthy() || enabled && r.JITStats().SSAEntries == 0 {
-					t.Fatalf("JIT %v: %v, %v", enabled, v, err)
+					t.Fatalf("JIT %v: %v (true %v), %v; %d entries of native code", enabled, v.IsBool(), v.Truthy(), err, r.JITStats().SSAEntries)
 				}
 			}
 		})
@@ -111,9 +111,16 @@ func TestJITArrayLiteralBoundary(t *testing.T) {
 	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: enabled})
-		v, err := r.Run(compileForTest(t, `let original={x:7};function f(o){let a=[o,1,2];for(let i=1;i<3;i++)a[i]+=1;return a}let a=f(original);a[0]===original&&a[1]===2&&a[2]===3&&a.length===3`))
+		// Register code is compiled once its first run has returned
+		// (regTickRet, jitRegCallTier): f runs once before, for its second
+		// run to be native code's.
+		first := ""
+		if enabled && regJITForTest() {
+			first = "f(original);"
+		}
+		v, err := r.Run(compileForTest(t, `let original={x:7};function f(o){let a=[o,1,2];for(let i=1;i<3;i++)a[i]+=1;return a}`+first+`let a=f(original);a[0]===original&&a[1]===2&&a[2]===3&&a.length===3`))
 		if err != nil || !v.IsBool() || !v.Truthy() || enabled && r.JITStats().SSAEntries == 0 {
-			t.Fatalf("array literal JIT %v: %v, %v", enabled, v, err)
+			t.Fatalf("array literal JIT %v: %v (true %v), %v; %d entries of native code", enabled, v.IsBool(), v.Truthy(), err, r.JITStats().SSAEntries)
 		}
 	}
 }

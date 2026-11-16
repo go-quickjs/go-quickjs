@@ -83,9 +83,9 @@ func TestJITRegExpReplaceLeaf(t *testing.T) {
 					break
 				}
 			}
-			e := jitNativeForTest(t, r, name)
+			e := jitNativeCodeForTest(t, r, name)
 			leaves := 0
-			for _, st := range e.ssa.GoCallStates() {
+			for _, st := range e.code.GoCallStates() {
 				if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == uintptr(unsafe.Pointer(r.strReplaceFn)) {
 					leaves++
 				}
@@ -156,17 +156,17 @@ var up = (function () { var U = /b+/; return function (ss, n) { var k = 0; for (
 		if got := v.String().Go(); got != c.want {
 			t.Errorf("%s = %s, want Node's %s", c.call, got, c.want)
 		}
-		e := jitNativeForTest(t, r, c.name)
+		e := jitNativeCodeForTest(t, r, c.name)
 		leaves := 0
-		for _, st := range e.ssa.GoCallStates() {
+		for _, st := range e.code.GoCallStates() {
 			if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == uintptr(unsafe.Pointer(r.strReplaceFn)) {
 				leaves++
 			}
 		}
 		// A call of Go of replace would have been asked whether it was
 		// given a literal's RegExp (jitRegExpLitPool).
-		if leaves != 1 || len(e.regexpLitCalls) != 0 {
-			t.Errorf("%s's code has %d leaves' calls of replace, and made %d calls of Go of it; want 1 and none", c.name, leaves, len(e.regexpLitCalls))
+		if leaves != 1 || len(e.e.regexpLitCalls) != 0 {
+			t.Errorf("%s's code has %d leaves' calls of replace, and made %d calls of Go of it; want 1 and none", c.name, leaves, len(e.e.regexpLitCalls))
 		}
 	}
 }

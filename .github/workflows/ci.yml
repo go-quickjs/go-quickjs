@@ -175,17 +175,35 @@ jobs:
 
       # Native execution; the compiler's cross-checks -- liveness against
       # its reference, the origins and stores' checks it keeps against
-      # those made afresh -- and native pointer lifetimes, one after
-      # another: the vm package's tests run in parallel, each command's
-      # taking the runner's CPUs, which two at once would fight over. The
-      # first line is a subshell so that bash -e stops at a failure of any
-      # of its commands, not only of its last.
+      # those made afresh -- and native pointer lifetimes, in two lanes at
+      # once: native pointer lifetimes (checkptr), the longest, beside
+      # native execution and then the cross-checks, about as long
+      # together. The vm package's tests run mostly one at a time -- its
+      # heavy tests are serial -- so that one command used little more
+      # than one of the runner's CPUs, and the three one after another had
+      # taken slow runners past the job's 30 minutes. A lane stops at its
+      # first failing command, as bash -e had the step stop; each lane's
+      # output goes to a file, printed in full once both are done, so that
+      # a failure reads as it did.
       - name: Exercise native execution, cross-check the compiler and native pointer lifetimes
         shell: bash
         run: |
-          (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native')
-          go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'
-          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
+          native=running lifetimes=running
+          show() {
+            echo "=== Native execution, then the compiler's cross-checks: exit $native"
+            cat "$RUNNER_TEMP/native.log"
+            echo "=== Native pointer lifetimes: exit $lifetimes"
+            cat "$RUNNER_TEMP/checkptr.log"
+          }
+          # Cancelled at the job's timeout, the lanes' output so far.
+          trap 'show; exit 1' INT TERM
+          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower' > "$RUNNER_TEMP/checkptr.log" 2>&1 &
+          checkptr=$!
+          if { (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native') && go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'; } > "$RUNNER_TEMP/native.log" 2>&1; then native=0; else native=$?; fi
+          if wait $checkptr; then lifetimes=0; else lifetimes=$?; fi
+          trap - INT TERM
+          show
+          test $native -eq 0 && test $lifetimes -eq 0
 
       # Both emitters' code, for every target, against golang.org/x/arch's
       # disassemblers: a module of its own, so go-quickjs never depends on it.

@@ -161,7 +161,11 @@ func TestJITExceptionHandlers(t *testing.T) {
 	}
 	// Called natively, a native callee with handlers of its own, whose
 	// return through its finally clause returns natively.
-	if e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("returnThrough")).value().Object().fn().closure.fn); e == nil || e.ssa == nil || e.link == nil || e.link.in == 0 {
+	if cl := jitGlobalClosureForTest(r, "returnThrough"); jitRegClosureForTest(r, cl) {
+		if v, ok := jitViewByFnForTest(r, cl); !ok || v.link(r, cl) == nil || v.link(r, cl).in == 0 {
+			t.Fatalf("returnThrough was never called natively: %+v", v.e)
+		}
+	} else if e := r.jit.entryFor(cl.fn); e == nil || e.ssa == nil || e.link == nil || e.link.in == 0 {
 		t.Fatalf("returnThrough was never called natively: %+v", e)
 	}
 	// A throw caught in the function goes on natively at its handler: a
@@ -191,16 +195,17 @@ func TestJITExceptionHandlers(t *testing.T) {
 	}{{`operation({}, 100)`, 1}, {`throwsOwn(100)`, 0}} {
 		interpreted := r.jit.interpreted
 		cl := r.global.getOwn(r.atoms.intern(c.src[:strings.IndexByte(c.src, '(')])).value().Object().fn().closure
-		e := r.jit.hint(cl)
-		if e == nil || e.ssa == nil {
+		v, ok := jitViewForTest(r, cl)
+		if !ok {
 			t.Fatalf("%s is not compiled", c.src)
 		}
+		e := v.e
 		entries := e.ssaStats.entries
 		if _, err := r.Run(compileForTest(t, c.src)); err != nil {
 			t.Fatal(err)
 		}
-		if n := r.jit.interpreted - interpreted; n > c.interpreted || r.jit.hint(cl) != e || e.ssaStats.entries == entries {
-			t.Fatalf("%s finished in the interpreter %d times, entered %d times", c.src, n, e.ssaStats.entries-entries)
+		if n := r.jit.interpreted - interpreted; n > c.interpreted || !v.same(r, cl) || e.ssaStats.entries == entries {
+			t.Fatalf("%s finished in the interpreter %d times, entered %d times (code kept %v): %+v", c.src, n, e.ssaStats.entries-entries, v.same(r, cl), e.ssaStats)
 		}
 	}
 }
@@ -286,9 +291,15 @@ func TestJITGenerators(t *testing.T) {
 		`(fails(30).then(v => out = v), 0)`, `out`, `(fails(30).then(v => out = v), 0)`, `out`,
 	)
 	for _, name := range []string{"evens", "echo", "catches", "adds", "fails"} {
-		// Entered at each resumption, not once.
-		if e := jitNativeForTest(t, r, name); e.ssaStats.entries < 30 {
-			t.Fatalf("%s entered natively %d times", name, e.ssaStats.entries)
+		// Entered at each resumption, not once: under the register JIT
+		// by Go, or by a native step through its link (jitGenInForTest).
+		e := jitNativeForTest(t, r, name)
+		n := e.ssaStats.entries
+		if jitRegCodeForTest(r, name) {
+			n += jitGenInForTest(r, name)
+		}
+		if n < 30 {
+			t.Fatalf("%s entered natively %d times", name, n)
 		}
 	}
 	if r.frameDepth != 0 {

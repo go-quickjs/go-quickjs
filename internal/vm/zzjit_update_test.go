@@ -5,6 +5,7 @@ package vm
 import (
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
@@ -29,9 +30,26 @@ func TestJITElementUpdateReadsCells(t *testing.T) {
 		`walk(objs, 64) + back(objs, 64) + past(objs, 64)`)
 	for _, name := range []string{"walk", "back"} {
 		e := jitNativeForTest(t, r, name)
+		// Each read with its key updated: the stack form's program's
+		// ArrayUpdate, by its PC; register code's get_index_post or
+		// get_index_pre (x[i++], x[--i]), by its register pc, the sites
+		// its code's failed guards name.
+		var update func(site int32) bool
+		var sites int
+		if jitRegCodeForTest(r, name) {
+			rc := jitGlobalClosureForTest(r, name).fn.RegCode()
+			update = func(rpc int32) bool {
+				op := rc.Code[rpc].Op()
+				return op == bytecode.RGetIndexPost || op == bytecode.RGetIndexPre
+			}
+			sites = len(rc.Code)
+		} else {
+			update = func(pc int32) bool { return e.ssaProg.Code[pc].Op == ir.ArrayUpdate }
+			sites = len(e.ssaProg.Code)
+		}
 		updates := 0
-		for _, in := range e.ssaProg.Code {
-			if in.Op == ir.ArrayUpdate {
+		for site := range sites {
+			if update(int32(site)) {
 				updates++
 			}
 		}
@@ -39,9 +57,24 @@ func TestJITElementUpdateReadsCells(t *testing.T) {
 			t.Fatalf("%s reads no element with its key updated", name)
 		}
 		for _, site := range e.failed {
-			if e.ssaProg.Code[site].Op == ir.ArrayUpdate {
+			if update(site) {
 				t.Errorf("%s: the update's read failed its guard", name)
 			}
+		}
+		if jitRegCodeForTest(r, name) {
+			// Register code's counts outlive its compiles: its last code's
+			// are those of a run of it now, in which it fails no guard and
+			// is not replaced.
+			code, guards := jitRegEntryForTest(r, name), e.ssaStats.guards
+			v, err := r.Run(compileForTest(t, name+"(objs, 64)"))
+			want := map[string]string{"walk": "2016k6364", "back": "-726101408,0"}[name]
+			if err != nil || v.String().Go() != want {
+				t.Fatalf("%s(objs, 64) = %v, %v; want %s", name, v, err, want)
+			}
+			if n := e.ssaStats.guards - guards; n != 0 || jitRegEntryForTest(r, name) != code {
+				t.Errorf("%s: %d guards failed in its last code", name, n)
+			}
+			continue
 		}
 		if e.ssaStats.guards != 0 {
 			t.Errorf("%s: %d guards failed in its last code", name, e.ssaStats.guards)

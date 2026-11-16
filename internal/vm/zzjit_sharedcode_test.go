@@ -10,14 +10,40 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
+// jitArrowForTest is an arrow's entry in r's JIT: whether it has code, the
+// link native callers call it through, and the entry -- the stack form's,
+// or the register code's state that outlives its compiles.
+type jitArrowForTest struct {
+	code bool
+	link *jitLink
+	e    *jitEntry
+}
+
+// calls is how often native callers called the arrow's code.
+func (a jitArrowForTest) calls() uint64 {
+	if a.link == nil {
+		return 0
+	}
+	return a.link.in
+}
+
 // jitArrowsForTest is the entries of the arrows r's JIT holds: an arrow
-// has no name of its own.
-func jitArrowsForTest(t *testing.T, r *Runtime) []*jitEntry {
+// has no name of its own. Where r runs register code, its register
+// cache's, with their register links (jitState's regLinks).
+func jitArrowsForTest(t *testing.T, r *Runtime) []jitArrowForTest {
 	t.Helper()
-	var es []*jitEntry
+	var es []jitArrowForTest
+	if regJITForTest() {
+		for k, x := range r.jit.regCache {
+			if fn := k.Value(); fn != nil && fn.Kind == bytecode.KindArrow {
+				es = append(es, jitArrowForTest{code: x.code != nil, link: r.jit.regLinks[k], e: x.life})
+			}
+		}
+		return es
+	}
 	for k, x := range r.jit.cache {
 		if fn := k.Value(); fn != nil && fn.Kind == bytecode.KindArrow {
-			es = append(es, x)
+			es = append(es, jitArrowForTest{code: x.ssa != nil, link: x.link, e: x})
 		}
 	}
 	return es
@@ -63,20 +89,20 @@ func TestJITClosuresShareCode(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	each := jitNativeForTest(t, r, "each")
 	before := make([]uint64, len(arrows))
-	for i, e := range arrows {
-		before[i] = jitDerivedCalls(e)
+	for i, a := range arrows {
+		before[i] = a.calls()
 	}
 	goCalls := each.ssaStats.goCalls
 	if _, err := r.Run(compileForTest(t, `run(600)`)); err != nil {
 		t.Fatal(err)
 	}
 	// Each arrow's closures, a hundred of them, called twice each.
-	for i, e := range arrows {
-		if e.ssa == nil {
-			t.Errorf("an arrow has no code: %+v", e)
+	for i, a := range arrows {
+		if !a.code {
+			t.Errorf("an arrow has no code: %+v", a.e)
 			continue
 		}
-		if d := jitDerivedCalls(e) - before[i]; d != 200 {
+		if d := a.calls() - before[i]; d != 200 {
 			t.Errorf("an arrow's code was called natively %d times in a round, want 200", d)
 		}
 	}

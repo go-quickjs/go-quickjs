@@ -13,6 +13,7 @@ func TestJITArrayLiteralRoom(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the tree tier's array literals' room (closureCode.arrays, arrayEmptyNode), which register code neither learns nor reads")
 	jitNoInlineForTest(t, "fill")
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprint(marking), func(t *testing.T) {

@@ -96,8 +96,8 @@ func TestJITInlinesSmallLoopBesideGiven(t *testing.T) {
 			t.Errorf("caller's code does not inline %s: %x", callee, inlined["caller"])
 		}
 	}
-	if e := r.jit.hint(jitGlobalClosureForTest(r, "caller")); e == nil || e.ssaCalled != 1 || len(e.ssaInlinedAt) != 2 {
-		t.Fatalf("caller's code does not inline both calls, its closure not made: %+v", e)
+	if cv, ok := jitViewForTest(r, jitGlobalClosureForTest(r, "caller")); !ok || cv.called() != 1 || len(cv.inlinedAt()) != 2 {
+		t.Fatalf("caller's code does not inline both calls, its closure not made: %+v, called %d, inlined at %v", cv.e, cv.called(), cv.inlinedAt())
 	}
 	hosts := r.jit.hosts
 	both.agree(t, `caller(arr, list, 300)`, `caller([4], new N(5, list), 50)`)
@@ -273,6 +273,7 @@ func TestJITInlinedSmallLoopPolls(t *testing.T) {
 			want := New(Config{})
 			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 			r := jitRuntimeForTest(t, Config{JIT: true})
+			r.jitState()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var at float64

@@ -156,6 +156,14 @@ func TestJITManySlotsCompileTime(t *testing.T) {
 			t.Fatal(err)
 		}
 		call := compileForTest(t, name+"(1, 1)")
+		if regJITForTest() {
+			// Register code's first call begins its budget, which its next
+			// call, its threshold's invocation spent, compiles at
+			// (jitRegCallTier): that one is the call that compiles.
+			if _, err := r.Run(call); err != nil {
+				t.Fatal(err)
+			}
+		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		start := time.Now()
@@ -165,7 +173,14 @@ func TestJITManySlotsCompileTime(t *testing.T) {
 		took := time.Since(start)
 		runtime.ReadMemStats(&after)
 		e := jitNativeForTest(t, r, name)
-		t.Logf("%d locals: %d instructions, first call %v, %d MB allocated, estimate %d MB, compiled %d bytes", n, len(e.ssaProg.Code), took,
-			(after.TotalAlloc-before.TotalAlloc)>>20, jitCompileBytes(jitFnForTest(t, r, name))>>20, e.compiledBytes())
+		prog, compiled := e.ssaProg, 0
+		if re := jitRegEntryForTest(r, name); jitRegCodeForTest(r, name) && re != nil {
+			// Its register code's program, and what its feedback holds.
+			prog, compiled = re.p, re.keep.compiledBytes()
+		} else {
+			compiled = e.compiledBytes()
+		}
+		t.Logf("%d locals: %d instructions, first call %v, %d MB allocated, estimate %d MB, compiled %d bytes", n, len(prog.Code), took,
+			(after.TotalAlloc-before.TotalAlloc)>>20, jitCompileBytes(jitFnForTest(t, r, name))>>20, compiled)
 	}
 }

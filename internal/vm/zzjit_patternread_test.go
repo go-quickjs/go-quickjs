@@ -30,11 +30,23 @@ func TestJITPatternReadsAbsent(t *testing.T) {
 		var inherits = Object.create(proto); inherits.x = 1
 		var proxy = new Proxy({ x: 3 }, { get(t, k) { return k === 'z' ? 'zz' : t[k] } })
 		var getter = { get x() { return 5 }, get y() { return 6 } }`
+	inlined := jitRegInlinedForTest(t)
 	both := jitBothForTest(t, setup)
 	both.agree(t, `run(300, { x: 1 })`, `run(300, { x: 1 })`)
-	e := jitNativeOrCalleeForTest(t, both.jit, "opts")
-	if e.deopts > 2 || e.invalid || e.link.in+e.ssaStats.entries < 300 {
-		t.Errorf("opts deoptimized %d times, invalid %v, called natively %d times, entered %d", e.deopts, e.invalid, e.link.in, e.ssaStats.entries)
+	if jitRegInlinesForTest(t, both.jit, inlined, "run", "opts") {
+		// The register form inlines opts in run, whose native code runs
+		// its 300 calls: opts' own code is never compiled, and its
+		// learning, its deoptimizations among it, is its life's.
+		jitNativeForTest(t, both.jit, "run")
+		if l := both.jit.jitRegLifeIfAny(jitGlobalClosureForTest(both.jit, "opts")); l != nil && l.deopts > 2 {
+			t.Errorf("opts deoptimized %d times", l.deopts)
+		}
+	} else {
+		v := jitNativeOrCalleeCodeForTest(t, both.jit, "opts")
+		e, in := v.e, jitLinkInForTest(both.jit, jitGlobalClosureForTest(both.jit, "opts"))
+		if e.deopts > 2 || v.invalid() || in+e.ssaStats.entries < 300 {
+			t.Errorf("opts deoptimized %d times, invalid %v, called natively %d times, entered %d", e.deopts, v.invalid(), in, e.ssaStats.entries)
+		}
 	}
 	for _, src := range []string{`{ x: 1, y: 3 }`, `inherits`, `proxy`, `getter`, `{ x: 2, z: 'abc' }`, `{ x: 1 }`} {
 		both.agree(t, `run(100, `+src+`)`)
@@ -89,16 +101,24 @@ func TestJITPatternReadsLearnTheirMisses(t *testing.T) {
 		name string
 		mega bool
 	}{{"hits", false}, {"misses", true}} {
-		e := jitEntryForTest(t, r, c.name)
+		e := jitCodeNamedForTest(t, r, c.name).e
 		fn := r.global.getOwn(r.atoms.intern(c.name)).value().Object().fn().closure.fn
 		mega := false
-		for pc, in := range fn.Code {
-			if in.Op == bytecode.OpGetPropUnder && jitPolyMega(e, pc) {
-				mega = true
+		if jitRegCodeForTest(r, c.name) {
+			// The register form's sites are by register pc: the pattern's
+			// reads are the only property reads of hits and misses.
+			for i := range e.poly {
+				mega = mega || e.poly[i].mega
+			}
+		} else {
+			for pc, in := range fn.Code {
+				if in.Op == bytecode.OpGetPropUnder && jitPolyMega(e, pc) {
+					mega = true
+				}
 			}
 		}
 		if mega != c.mega || e.deopts > 2 {
-			t.Errorf("%s: a pattern read megamorphic %v, want %v; %d deoptimizations", c.name, mega, c.mega, e.deopts)
+			t.Errorf("%s: a pattern read megamorphic %v, want %v; %d deoptimizations (run inlines %v; sites %+v)", c.name, mega, c.mega, e.deopts, jitInlinedNamesForTest(r, "run"), e.poly)
 		}
 	}
 }

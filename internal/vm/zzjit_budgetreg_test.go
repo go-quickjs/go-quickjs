@@ -56,16 +56,16 @@ func TestJITBudgetInRegisterCounted(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				e := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern(tc.name)).value().Object().fn().closure.fn)]
-				if e == nil || e.ssa == nil {
+				e, loop := jitWorkForTest(r, tc.name)
+				if e == nil {
 					t.Fatalf("%s has no native code", tc.name)
 				}
 				before := e.ssaStats.work
 				if _, err := r.Run(compileForTest(t, tc.run)); err != nil {
 					t.Fatal(err)
 				}
-				if work, want := e.ssaStats.work-before, tc.edges*uint64(e.ssaLoop)*9/10; work < want {
-					t.Errorf("%s: Go counted %d of native work for %d back edges of a loop of %d, want %d or more", tc.name, work, tc.edges, e.ssaLoop, want)
+				if work, want := e.ssaStats.work-before, tc.edges*loop*9/10; work < want {
+					t.Errorf("%s: Go counted %d of native work for %d back edges of a loop of %d, want %d or more", tc.name, work, tc.edges, loop, want)
 				}
 			}
 		})

@@ -102,7 +102,11 @@ func TestJITMappedArgumentsAssigned(t *testing.T) {
 				r := jitAgreesStressForTest(t, stress, mappedArgsSetup, rounds...)
 				if stress == (jitStressConfig{}) {
 					for _, name := range []string{"loop", "twice", "dyn", "dup", "closed", "kinds"} {
-						jitNativeOrCalleeForTest(t, r, name)
+						// Code of either form, for Go or for native
+						// callers alone.
+						if e := jitCodeForTest(r, name); e == nil {
+							t.Fatalf("%s has no code: %+v", name, e)
+						}
 					}
 				}
 			})

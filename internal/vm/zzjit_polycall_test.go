@@ -19,7 +19,7 @@ const polySetup = `
 // as V8's feedback has it: made natively to each, not inlined for the one
 // it met last, which would leave native code at every call of the other.
 func TestJITPolymorphicCallNotInlined(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -28,12 +28,13 @@ func TestJITPolymorphicCallNotInlined(t *testing.T) {
 		rounds = append(rounds, `poly(100)`)
 	}
 	r := jitAgreesForTest(t, polySetup, rounds...)
-	e := jitCallbackEntry(r, "poly")
-	if e == nil || e.ssa == nil {
+	e := jitCodeEntryNamedForTest(r, "poly")
+	inlinedAt, _, ok := jitInlinedAtForTest(r, built, "poly")
+	if e == nil || !ok {
 		t.Fatalf("poly is not compiled: %+v", e)
 	}
-	if len(e.inlines) != 0 || len(e.ssaInlinedAt) != 0 {
-		t.Errorf("poly inlines its polymorphic call: inlines %d, inlined at %v", len(e.inlines), e.ssaInlinedAt)
+	if len(e.inlines) != 0 || inlinedAt != 0 {
+		t.Errorf("poly inlines its polymorphic call: inlines %d, inlined at %v", len(e.inlines), inlinedAt)
 	}
 	targets := 0
 	for _, x := range e.nativeCalls {

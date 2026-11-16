@@ -123,17 +123,22 @@ var escapeUnmade = []string{"dots", "literal", "nested", "branches", "readsOther
 // at once, a budget of three back edges, and the interpreter finishing
 // every few exits' invocations.
 func TestJITEscapeAnalysis(t *testing.T) {
-	t.Parallel()
+	if !regJITForTest() {
+		// The register form's compiles are watched (regVirtualsForTest).
+		t.Parallel()
+	}
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	rounds := escapeRounds()
 	// Its warm rounds alone: each function's code makes none of its
 	// loop's objects.
+	virtuals, stop := jitVirtualsForTest(t)
 	r := jitAgreesForTestWith(t, jitStressConfig{}, escapeSetup, rounds[:5*14]...)
+	stop()
 	for _, name := range escapeUnmade {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaVirtuals == 0 {
-			t.Errorf("%s makes every object it makes: %+v", name, e)
+		if code, n := virtuals(r, name); !code || n == 0 {
+			t.Errorf("%s makes every object it makes: code %v, %d unmade", name, code, n)
 		}
 	}
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
@@ -292,7 +297,10 @@ const mergeSetup = `
 // for the object it carries (ssa.Entry's OSR), has code compiled with the
 // entry, and goes on natively there.
 func TestJITEscapeMerges(t *testing.T) {
-	t.Parallel()
+	if !regJITForTest() {
+		// The register form's compiles are watched (regVirtualsForTest).
+		t.Parallel()
+	}
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -301,10 +309,12 @@ func TestJITEscapeMerges(t *testing.T) {
 		at := []string{"-1", "17"}[i/5]
 		rounds = append(rounds, `joins(40, `+at+`)`, `aliased(40)`, `carried(40, `+at+`)`, `cycle(40, `+at+`)`, `nestedLoops(20)`, `longLoop(40)`)
 	}
+	virtuals, stop := jitVirtualsForTest(t)
 	r := jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, rounds[:5*6]...)
+	stop()
 	for _, name := range []string{"joins", "carried", "cycle", "nestedLoops", "longLoop"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaVirtuals == 0 {
-			t.Errorf("%s makes every object it makes: %+v", name, e)
+		if code, n := virtuals(r, name); !code || n == 0 {
+			t.Errorf("%s makes every object it makes: code %v, %d unmade", name, code, n)
 		}
 	}
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
@@ -317,8 +327,8 @@ func TestJITEscapeMerges(t *testing.T) {
 	// One long run, whose compile was asked for at its loop: the frame
 	// goes on natively, by the entry kept for it (TestJITFrameKeepsItsLoop).
 	r = jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, `longLoop(3000000)`)
-	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.ssa == nil || r.jit.ssaEntries == 0 {
-		t.Errorf("longLoop did not go on natively: %+v", e)
+	if c := jitCallbackCodeForTest(r, "longLoop"); !c.code || r.jit.ssaEntries == 0 {
+		t.Errorf("longLoop did not go on natively: %+v", c.e)
 	}
 }
 
@@ -326,7 +336,10 @@ func TestJITEscapeMerges(t *testing.T) {
 // taken: left unmade it saves nothing, and its loop keeps the entry a
 // loop-carried object's would have dropped (ssa.Entry's OSR).
 func TestJITEscapeMadeAnyway(t *testing.T) {
-	t.Parallel()
+	if !regJITForTest() {
+		// The register form's compiles are watched (regVirtualsForTest).
+		t.Parallel()
+	}
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -344,7 +357,20 @@ func TestJITEscapeMadeAnyway(t *testing.T) {
 	for range 8 {
 		rounds = append(rounds, `run(40)`)
 	}
+	virtuals, stop := jitVirtualsForTest(t)
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, rounds...)
+	stop()
+	if regJITForTest() {
+		// The register code's entries dropped: its own, by register pc.
+		e := regEntryNamedForTest(r, "madeAnyway")
+		if e == nil {
+			t.Fatalf("madeAnyway was not compiled: %+v", regLifeNamedForTest(r, "madeAnyway"))
+		}
+		if _, n := virtuals(r, "madeAnyway"); n != 0 || len(e.unresumed) != 0 || len(e.unentered) != 0 {
+			t.Errorf("%d objects unmade, entries dropped at %v and %v", n, e.unresumed, e.unentered)
+		}
+		return
+	}
 	e := jitCallbackEntry(r, "madeAnyway")
 	if e == nil || e.ssa == nil {
 		t.Fatalf("madeAnyway was not compiled: %+v", e)

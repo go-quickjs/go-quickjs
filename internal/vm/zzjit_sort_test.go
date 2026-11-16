@@ -128,26 +128,25 @@ func TestJITSortNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	var built *jitBuiltForTest
+	if regJITForTest() {
+		// Whether register code makes loops of built-ins' calls, which its
+		// compiles' SSA says (ssa.Func's Loops).
+		built = jitRecordBuiltForTest(t)
+	}
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			testJITSortNative(t)
+			testJITSortNative(t, built)
 		})
 	}
 }
 
-func testJITSortNative(t *testing.T) {
+func testJITSortNative(t *testing.T, built *jitBuiltForTest) {
 	r, drive := jitSortsForTest(t, jitStressConfig{})
-	entry := func(name string) *jitEntry {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				return x
-			}
-		}
-		return nil
-	}
+	entry := func(name string) jitNamedStateForTest { return jitNamedOfForTest(r, built, name) }
 	for _, c := range []struct{ fn, src string }{
 		{"up_i32", "up_i32(i32, c_i32)"}, {"down_i32", "down_i32(i32, c_i32)"},
 		{"up_f64", "up_f64(f64, c_f64)"}, {"down_f64", "down_f64(f64, c_f64)"},
@@ -169,8 +168,9 @@ func testJITSortNative(t *testing.T) {
 		{"sortLong", "sortLong(long, c_long)"}, {"sortLongTies", "sortLongTies(long, c_long)"},
 		{"sortLongArr", "sortLongArr(longArr)"}, {"sortMethod", "sortMethod(i32, c_i32)"},
 	} {
-		e := entry(c.fn)
-		if e == nil || e.ssa == nil || !e.loops || len(e.ssaInlined) == 0 {
+		n := entry(c.fn)
+		e := n.e
+		if e == nil || !n.code || !n.loops || len(n.inlined) == 0 {
 			t.Errorf("%s makes no sort of its own: %+v", c.fn, e)
 			continue
 		}
@@ -190,7 +190,7 @@ func testJITSortNative(t *testing.T) {
 	}
 	// A comparator that is not a body to call again at will: Go's sort.
 	for _, name := range []string{"sortString", "sortClass", "sortNaNGlobal", "sortCaptured", "sortProp", "sortCall", "sortLogs", "sortBig"} {
-		if e := entry(name); e != nil && e.loops {
+		if n := entry(name); n.e != nil && n.loops {
 			t.Errorf("%s sorts natively", name)
 		}
 	}

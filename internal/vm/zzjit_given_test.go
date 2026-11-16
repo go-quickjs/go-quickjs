@@ -105,7 +105,7 @@ func sprintf2(format, a, b string) string {
 // interpreter's, whatever leaves native code inside the loop or the
 // closure, under budgets of polls and of finished invocations or not.
 func TestJITGivenClosures(t *testing.T) {
-	t.Parallel()
+	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -129,13 +129,13 @@ func TestJITGivenClosures(t *testing.T) {
 		// (get_local2), its closure made in the caller's loop.
 		{"sloppy", 1, 1},
 	} {
-		e := jitCallbackEntry(r, c.name)
-		if e == nil || e.ssa == nil {
+		inlined, called, ok := jitInlinedAtForTest(r, built, c.name)
+		if !ok {
 			t.Errorf("%s was not compiled", c.name)
 			continue
 		}
-		if len(e.ssaInlinedAt) != c.inlined || e.ssaCalled != c.unmade {
-			t.Errorf("%s inlines %d calls, %d closures not made; want %d, %d", c.name, len(e.ssaInlinedAt), e.ssaCalled, c.inlined, c.unmade)
+		if inlined != c.inlined || called != c.unmade {
+			t.Errorf("%s inlines %d calls, %d closures not made; want %d, %d", c.name, inlined, called, c.inlined, c.unmade)
 		}
 	}
 	r = jitAgreesForTestWith(t, jitStressConfig{}, givenSetup, givenRounds(true)...)

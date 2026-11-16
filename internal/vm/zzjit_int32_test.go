@@ -165,8 +165,8 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 			}
 		}
 		cl := r.global.getOwn(r.atoms.intern(fn)).value().Object().fn().closure
-		if e := r.jit.cache[r.jitKeyOf(cl.fn)]; e == nil || e.ssa == nil {
-			t.Fatalf("%s did not run natively: %+v", fn, e)
+		if v, ok := jitViewByFnForTest(r, cl); !ok {
+			t.Fatalf("%s did not run natively: %+v", fn, v.e)
 		}
 	}
 }
@@ -263,8 +263,8 @@ func TestJITInt32Phis(t *testing.T) {
 				}
 			}
 			cl := r.global.getOwn(r.atoms.intern(fn)).value().Object().fn().closure
-			if e := r.jit.cache[r.jitKeyOf(cl.fn)]; e == nil || e.ssa == nil {
-				t.Fatalf("budget %d: %s did not run natively: %+v", budget, fn, e)
+			if v, ok := jitViewByFnForTest(r, cl); !ok {
+				t.Fatalf("budget %d: %s did not run natively: %+v", budget, fn, v.e)
 			}
 		}
 		want.Close()

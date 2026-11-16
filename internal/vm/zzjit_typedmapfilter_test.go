@@ -67,17 +67,23 @@ func TestJITTypedArrayMapFilter(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	var built *jitBuiltForTest
+	if regJITForTest() {
+		// Whether register code makes loops of built-ins' calls, which its
+		// compiles' SSA says (ssa.Func's Loops).
+		built = jitRecordBuiltForTest(t)
+	}
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			testJITTypedArrayMapFilter(t)
+			testJITTypedArrayMapFilter(t, built)
 		})
 	}
 }
 
-func testJITTypedArrayMapFilter(t *testing.T) {
+func testJITTypedArrayMapFilter(t *testing.T, built *jitBuiltForTest) {
 	names := []string{"mapTwice", "mapClamp", "mapRound", "mapOther", "mapType", "filterOdd", "filterType", "filterNone",
 		"shrinkMap", "shrinkFilter", "mapEither", "filterEither", "ownCtor", "bigMap", "throwsMap", "badResult"}
 	drivers := ""
@@ -119,22 +125,16 @@ func testJITTypedArrayMapFilter(t *testing.T) {
 			t.Errorf("%s = %s, want %s", c.src, got, c.want)
 		}
 	}
-	entry := func(name string) *jitEntry {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				return x
-			}
-		}
-		return nil
-	}
+	entry := func(name string) jitNamedStateForTest { return jitNamedOfForTest(r, built, name) }
 	if r.jit.loopsFinished == 0 {
 		t.Error("Go went on with no loop")
 	}
 	for _, c := range []struct{ fn, cb, run string }{
 		{"mapTwice", "mapCb", "drive_mapTwice(10, i32)"}, {"filterOdd", "filterCb", "drive_filterOdd(10, i32)"},
 	} {
-		e, cb := entry(c.fn), entry(c.cb)
-		if e == nil || e.ssa == nil || !e.loops || cb == nil || cb.link == nil {
+		n, cb := entry(c.fn), entry(c.cb)
+		e := n.e
+		if e == nil || !n.code || !n.loops || cb.link == nil {
 			t.Errorf("%s makes no loop of its call: %+v", c.fn, e)
 			continue
 		}
@@ -142,8 +142,8 @@ func testJITTypedArrayMapFilter(t *testing.T) {
 		if _, err := r.Run(compileForTest(t, c.run)); err != nil {
 			t.Fatal(err)
 		}
-		if n := cb.link.in - in; n != 0 || len(e.ssaInlined) == 0 {
-			t.Errorf("%s's callback called natively %d times, not inlined", c.fn, n)
+		if k := cb.link.in - in; k != 0 || len(entry(c.fn).inlined) == 0 {
+			t.Errorf("%s's callback called natively %d times, not inlined", c.fn, k)
 		}
 		if n := e.ssaStats.hosts - hosts; n != 0 {
 			t.Errorf("%s left its code %d times", c.fn, n)
@@ -153,8 +153,8 @@ func testJITTypedArrayMapFilter(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"mapOther", "shrinkMap", "shrinkFilter", "throwsMap", "badResult"} {
-		if e := entry(name); e == nil || e.ssa == nil || !e.loops {
-			t.Errorf("%s makes no loop of its call: %+v", name, e)
+		if n := entry(name); n.e == nil || !n.code || !n.loops {
+			t.Errorf("%s makes no loop of its call: %+v", name, n.e)
 		}
 	}
 }

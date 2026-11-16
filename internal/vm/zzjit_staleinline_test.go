@@ -48,6 +48,7 @@ func TestJITInlinedByCodeReplaced(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "the stack form's one entry for a function, whose lists of what its code inlines a compile replaces under a run (jitGoRun's inlined): each compile of register code is an entry of its own, whose lists (jitRegEntry's keep) the run keeps (jitRegInlined's owner)")
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})

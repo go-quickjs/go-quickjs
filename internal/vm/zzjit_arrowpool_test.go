@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // arrowPoolSetup's functions make closures that capture none of their
@@ -46,12 +47,25 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 	r := jitAgreesForTest(t, arrowPoolSetup, rounds...)
 	for _, name := range []string{"find", "inner", "sloppy", "strict"} {
 		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
+		var prog *ir.Program
+		if regJITForTest() {
+			// Its register code's: the program it was compiled from, and
+			// the closures' pools, which its state that outlives its
+			// compiles holds (jitRegClosureLiteral).
+			if re := jitRegEntryNamedForTest(r, name); re != nil {
+				e, prog = re.life, re.p
+			}
+		} else {
+			for k, x := range r.jit.cache {
+				if fn := k.Value(); fn != nil && fn.Name == name {
+					e = x
+				}
+			}
+			if e != nil && e.ssa != nil {
+				prog = e.ssaProg
 			}
 		}
-		if e == nil || e.ssa == nil || e.ssaProg == nil || e.ssaProg.Cells {
+		if e == nil || prog == nil || prog.Cells {
 			t.Errorf("%s has no code with its captured locals in its frame: %+v", name, e)
 			continue
 		}
@@ -60,7 +74,7 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 			// and does not make (ssa's called.go) -- sloppy's reading its
 			// this, the function's own, the global object (ssa.InlineSite's
 			// LexThis).
-			if e.ssaCalled == 0 {
+			if called, _, _, _ := jitCalledForTest(r, name); called == 0 {
 				t.Errorf("%s makes the arrow it only calls", name)
 			}
 			continue

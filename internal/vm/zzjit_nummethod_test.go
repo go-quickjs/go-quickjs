@@ -66,9 +66,9 @@ func TestJITNumberMethods(t *testing.T) {
 		rounds = append(rounds, warm...)
 	}
 	r := jitAgreesForTest(t, numMethodSetup, rounds...)
-	e := jitNativeForTest(t, r, "numLoop")
+	jitNativeForTest(t, r, "numLoop")
 	leaves := 0
-	for _, st := range e.ssa.GoCallStates() {
+	for _, st := range jitSSACodeForTest(r, "numLoop").GoCallStates() {
 		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf {
 			leaves++
 		}
@@ -82,7 +82,9 @@ func TestJITNumberMethods(t *testing.T) {
 		{"boolLoop", "bools(6)"},
 		{"mixLoop", "mixLoop([1.5, -0, 3], 6)"},
 	} {
-		e := jitNativeForTest(t, r, c.fn)
+		// The code that runs the loop: its own, or its caller's where the
+		// caller's register code inlines it.
+		e := jitNativeForTest(t, r, jitRunnerForTest(r, c.fn, "nums", "bools"))
 		calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
 		if _, err := r.Run(compileForTest(t, c.src)); err != nil {
 			t.Fatal(err)

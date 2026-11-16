@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
@@ -86,17 +87,35 @@ func TestJITForwardingConstructors(t *testing.T) {
 	// Steady, native code makes the constructions itself.
 	r := jitAgreesForTest(t, forwardingSetup, steady...)
 	var e *jitEntry
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == "build" {
-			e = x
+	if regJITForTest() {
+		// Its register code's state that outlives its compiles, which
+		// holds what it inlines and what its runs did.
+		e = jitCodeEntryNamedForTest(r, "build")
+	} else {
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && fn.Name == "build" {
+				e = x
+			}
 		}
 	}
-	if e == nil || e.ssa == nil {
+	if e == nil || !regJITForTest() && e.ssa == nil {
 		t.Fatalf("build has no native code: %+v", e)
+	}
+	// A construction of a forwarding constructor inlined: the stack form's
+	// with a pool to make its object from; register code's a new_w whose
+	// constructor its code inlines (jitRegEntry's keep), which makes the
+	// object itself.
+	construction := func(x jitInline) bool { return x.pool != nil }
+	if regJITForTest() {
+		build := jitGlobalClosureForTest(r, "build")
+		rc, done := build.fn.RegCode(), jitInlinedOfForTest(r, build)
+		construction = func(x jitInline) bool {
+			return int(x.pc) < len(rc.Code) && rc.Code[x.pc].Op() == bytecode.RNewW && slices.Contains(done, x.cl)
+		}
 	}
 	inlined := 0
 	for _, x := range e.inlines {
-		if x.pool != nil && x.cl != nil && x.cl.fn.ForwardsArguments {
+		if x.cl != nil && x.cl.fn.ForwardsArguments && construction(x) {
 			inlined++
 		}
 	}

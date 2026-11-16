@@ -72,17 +72,35 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 		{"String(run16(300))", "f16", true},
 	} {
 		fn := fnOf(tc.callee)
-		e := r.jit.cache[r.jitKeyOf(fn)]
-		if e == nil || e.ssa == nil || e.link.in == 0 {
-			t.Fatalf("%s is not called natively: %+v", tc.callee, e)
+		// Under the register JIT the code and its link are the register
+		// cache's (regCache, regLinks), and Go's runs of the callee from its
+		// start are its code's entries (its life's ssaStats), which a native
+		// caller's call makes of a callee it calls natively no more
+		// (notNative).
+		cl := jitGlobalClosureForTest(r, tc.callee)
+		v, ok := jitViewByFnForTest(r, cl)
+		var link *jitLink
+		if ok {
+			link = v.link(r, cl)
 		}
-		if e.ssa.CallEntry() == 0 || jitcompile.StartOnly(fn) {
-			t.Fatalf("%s: call entry %#x, start only %v", tc.callee, e.ssa.CallEntry(), jitcompile.StartOnly(fn))
+		if !ok || link == nil || link.in == 0 {
+			rv, _ := jitViewByFnForTest(r, jitGlobalClosureForTest(r, "run16"))
+			t.Fatalf("%s is not called natively: %+v, link %+v; run16 inlines %v, %+v", tc.callee, v.e, link, jitInlinedNamesForTest(r, "run16"), rv.e)
+		}
+		e := v.e
+		if v.code.CallEntry() == 0 || jitcompile.StartOnly(fn) {
+			t.Fatalf("%s: call entry %#x, start only %v", tc.callee, v.code.CallEntry(), jitcompile.StartOnly(fn))
 		}
 		if tc.enter {
-			e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
+			e.notNative, link.entry, link.body, e.nativeRetry = true, 0, 0, 0
 		}
-		in, entered := e.link.in, r.jit.entered
+		entries := func() uint64 {
+			if v.reg != nil {
+				return e.ssaStats.entries
+			}
+			return r.jit.entered
+		}
+		in, entered := link.in, entries()
 		wv, err := want.Run(compileForTest(t, tc.run))
 		if err != nil {
 			t.Fatal(err)
@@ -95,10 +113,10 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 			t.Fatalf("%s = %s; interpreter %s", tc.run, gv.String().Go(), wv.String().Go())
 		}
 		switch {
-		case tc.enter && r.jit.entered == entered:
+		case tc.enter && entries() == entered:
 			t.Fatalf("%s: Go never ran %s from its start", tc.run, tc.callee)
-		case !tc.enter && e.link.in-in < 300:
-			t.Fatalf("%s: %s was called natively %d times of 300", tc.run, tc.callee, e.link.in-in)
+		case !tc.enter && link.in-in < 300:
+			t.Fatalf("%s: %s was called natively %d times of 300", tc.run, tc.callee, link.in-in)
 		}
 	}
 }
@@ -145,14 +163,16 @@ func TestJITCallStateRebuildsTheFrame(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fnOf := func(name string) *bytecode.Function {
-		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
+	ce, cok := jitViewByFnForTest(r, jitGlobalClosureForTest(r, "caller"))
+	te, tok := jitViewByFnForTest(r, jitGlobalClosureForTest(r, "thrower"))
+	if !cok || !tok {
+		t.Fatalf("not compiled: caller %+v, thrower %+v", ce.e, te.e)
 	}
-	ce, te := r.jit.cache[r.jitKeyOf(fnOf("caller"))], r.jit.cache[r.jitKeyOf(fnOf("thrower"))]
-	if ce == nil || ce.ssa == nil || te == nil || te.ssa == nil {
-		t.Fatalf("not compiled: caller %+v, thrower %+v", ce, te)
+	tl := te.link(r, jitGlobalClosureForTest(r, "thrower"))
+	if tl == nil {
+		t.Fatalf("thrower has no link")
 	}
-	in, records := te.link.in, r.jit.ssaRecords
+	in, records := tl.in, r.jit.ssaRecords
 	for range 3 {
 		wv, err := want.Run(compileForTest(t, `caller(holder, 400, other)`))
 		if err != nil {
@@ -166,7 +186,7 @@ func TestJITCallStateRebuildsTheFrame(t *testing.T) {
 			t.Fatalf("caller = %.300s...; interpreter %.300s...", gv.String().Go(), wv.String().Go())
 		}
 	}
-	if te.link.in == in || r.jit.ssaRecords == records {
-		t.Fatalf("thrower called natively %d times, %d records applied", te.link.in-in, r.jit.ssaRecords-records)
+	if tl.in == in || r.jit.ssaRecords == records {
+		t.Fatalf("thrower called natively %d times, %d records applied", tl.in-in, r.jit.ssaRecords-records)
 	}
 }

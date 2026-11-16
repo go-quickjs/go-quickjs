@@ -30,14 +30,17 @@ func TestJITChainCellReadsNative(t *testing.T) {
 	}
 	for _, name := range []string{"absent", "deep"} {
 		src := name + `(2000)`
-		reoptimized := r.jit.reoptimized
+		var reoptimized uint64
+		if r.jit != nil {
+			reoptimized = r.jit.reoptimized
+		}
 		var stats jitSSAStats
 		for round := 0; round < 6; round++ {
 			wv, err := want.Run(compileForTest(t, src))
 			if err != nil {
 				t.Fatal(err)
 			}
-			e := r.jit.hint(globalObject(r, name).fn().closure)
+			e, code := jitStatsOfForTest(r, globalObject(r, name).fn().closure)
 			if e != nil {
 				stats = e.ssaStats
 			}
@@ -45,17 +48,17 @@ func TestJITChainCellReadsNative(t *testing.T) {
 			if err != nil || gv.Number() != wv.Number() {
 				t.Fatalf("%s round %d: got %v, %v; interpreter %v", name, round, gv, err, wv)
 			}
-			if e == nil || e.ssa == nil || round < 3 {
+			if e == nil || round < 3 {
 				continue
 			}
-			if e != r.jit.hint(globalObject(r, name).fn().closure) || e.ssaStats.hosts != stats.hosts || e.ssaStats.guards != stats.guards {
+			if _, now := jitStatsOfForTest(r, globalObject(r, name).fn().closure); now != code || e.ssaStats.hosts != stats.hosts || e.ssaStats.guards != stats.guards {
 				t.Fatalf("%s round %d: left native code: %d exits, %d guards failed", name, round, e.ssaStats.hosts-stats.hosts, e.ssaStats.guards-stats.guards)
 			}
 		}
 		// Once compiled, compiled again at most once, for the loop's own
 		// speculations: not for what the read meets.
-		e := r.jit.hint(globalObject(r, name).fn().closure)
-		if e == nil || e.ssa == nil {
+		e, _ := jitStatsOfForTest(r, globalObject(r, name).fn().closure)
+		if e == nil {
 			t.Fatalf("%s was not compiled", name)
 		}
 		if n := r.jit.reoptimized - reoptimized; e.deopts > 1 || n > 1 {

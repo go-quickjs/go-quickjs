@@ -308,13 +308,19 @@ func (f *jitRegFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 // accessorInline is the getter or setter callee, cl's function object, of
 // a register read or write, to inline (AccessorSite's Inline), as a
 // method's call of it is (Inline): register code native callers may call,
-// not the compiled function's, nor an arrow; its window the function, from
-// a cell (InlineSite's FunctionCell), the receiver, a setter's value.
+// not the compiled function's, nor an arrow, nor one that keeps its
+// arguments (regCode's args), as the stack form inlines no accessor that
+// reads them (jitInlinesAt): the builder leaves such a callee's
+// arguments.length and arguments[k] to an exit, whose frame of the
+// inlined level is given the arguments of a call's window alone
+// (jitRegInlineArgs) -- a setter's, inlined, counted none. Its window the
+// function, from a cell (InlineSite's FunctionCell), the receiver, a
+// setter's value.
 func (f *jitRegFeedback) accessorInline(callee *Object, cl *closure, write bool) (ssa.InlineSite, bool) {
 	r := f.fb.r
 	argc := jitB2i(write)
 	if cl.reg == nil || !r.jitRegCallable(callee, cl, cl.reg, argc) || callee.fn().arrow || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn ||
-		jitNoInline != nil && jitNoInline(cl.fn) {
+		jitNoInline != nil && jitNoInline(cl.fn) || cl.reg.args {
 		return ssa.InlineSite{}, false
 	}
 	p, err := f.fb.r.jitRegLower(cl, cl.reg.rc, jitLowerInline)
@@ -811,6 +817,16 @@ func (f *jitRegFeedback) inline(pc int) (ssa.InlineSite, bool) {
 	}
 	site, o, cl := t.sites[0], t.objs[0], t.cls[0]
 	if cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || jitNoInline != nil && jitNoInline(cl.fn) {
+		return ssa.InlineSite{}, false
+	}
+	if site.Parent != 0 {
+		// A construction with a class that has no constructor of its own,
+		// run with its parent's code while the class's prototype is still
+		// that parent, which the native call checks (ssa.CallSite's
+		// Parent, mir's constructGuards) and an inlined frame does not:
+		// inlined, a class given another parent by Object.setPrototypeOf
+		// went on constructing with the old one's code, its objects given
+		// h for q.
 		return ssa.InlineSite{}, false
 	}
 	kind, reads, forwards := jitLowerInline, false, false

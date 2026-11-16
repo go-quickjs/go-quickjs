@@ -67,8 +67,8 @@ func TestJITSSAReadsKeepLiveAncestorShapes(t *testing.T) {
 		}
 		deopts, compiles = append(deopts, r.jit.shapeDeopts-d), append(compiles, r.jit.reoptimized-c)
 	}
-	e := r.jit.cache[r.jitKeyOf(cl.fn)]
-	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
+	e, _, invalid := jitCodeOfForTest(r, cl)
+	if e == nil || e.entrySlow || invalid {
 		t.Fatalf("f did not run natively: %+v", e)
 	}
 	if e.ssaStats.entries == 0 {

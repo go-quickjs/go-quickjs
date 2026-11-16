@@ -55,7 +55,10 @@ func TestJITCallsOfGoAtLoops(t *testing.T) {
 	back := r.jit.backToTree
 	want(`integers(200000)`, "300000")
 	e := jitNativeForTest(t, r, "integers")
-	if !e.loopSlow || r.jit.backToTree == back {
+	// Register code's frame goes back to the register interpreter, which
+	// runs every frame code leaves: no tree takes it back (backToTree).
+	tree := !jitRegCodeForTest(r, "integers")
+	if !e.loopSlow || tree && r.jit.backToTree == back {
 		t.Fatalf("integers' calls of Go judged to pay (loopSlow %v), or its frame not given back to its tree (%d)", e.loopSlow, r.jit.backToTree-back)
 	}
 	if e.ssaStats.runGoCalls > 2*jitSSAProbe {
@@ -101,7 +104,9 @@ func TestJITLoopExitsAtEachTurn(t *testing.T) {
 	if !e.loopSlow {
 		t.Fatalf("viaUsing's loop, leaving at each turn, judged to pay: %d stretches entered at the loop, %d work", e.ssaStats.osrStretches, e.ssaStats.osrWork)
 	}
-	if r.jit.backToTree == back {
+	if !jitRegCodeForTest(r, "viaUsing") && r.jit.backToTree == back {
+		// Register code's frame goes back to the register interpreter,
+		// which runs every frame code leaves: no tree takes it back.
 		t.Fatal("viaUsing's frame did not go back to its tree")
 	}
 	if n := r.jit.interpreted - interpreted; n > 2*jitSSAProbe {
@@ -114,7 +119,7 @@ func TestJITLoopExitsAtEachTurn(t *testing.T) {
 	}
 	back = r.jit.backToTree
 	want(`viaGen(30000)`, "-1225511480")
-	if e := jitNativeForTest(t, r, "viaGen"); !e.loopSlow || r.jit.backToTree == back {
+	if e := jitNativeForTest(t, r, "viaGen"); !e.loopSlow || !jitRegCodeForTest(r, "viaGen") && r.jit.backToTree == back {
 		t.Fatalf("viaGen's steps judged to pay (loopSlow %v), or its frame not given back to its tree (%d)", e.loopSlow, r.jit.backToTree-back)
 	}
 	want(`viaGen(20000)`, "409615408")
@@ -135,6 +140,7 @@ func TestJITHandlerTreeGoesOn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	skipUnderRegJIT(t, "a frame native code left going on in its tree from the next loop header (runTreeFrom, handledTree, treeGoneOn): the register interpreter runs every frame register code leaves")
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r, want := jitAnswersForTest(t, `
