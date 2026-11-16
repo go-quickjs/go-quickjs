@@ -167,11 +167,11 @@ func (g *gen) storeLeaf(id *ast.Ident, v int, declaring bool) {
 func (g *gen) arrayPattern(pat *ast.ArrayPattern, v int, declaring bool) {
 	cur := g.alloc()
 	g.at(pat.Start)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdForOfStart), r16(cur), r16(v), 0))
+	g.emit(bytecode.MakeR(bytecode.RForOfStart, 0, r16(cur), r16(v), 0))
 	p := &prot{to: g.newMark(), reg: g.alloc(), cursor: cur}
 	release := g.hold()
 	g.protect(p)
-	step := func(sub bytecode.RColdOp, el ast.Expr) {
+	step := func(sub bytecode.ROp, el ast.Expr) {
 		mark := g.top
 		var l leaf
 		if el != nil {
@@ -179,7 +179,7 @@ func (g *gen) arrayPattern(pat *ast.ArrayPattern, v int, declaring bool) {
 		}
 		val := g.alloc()
 		g.at(pat.Start)
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(val), r16(cur), 0))
+		g.emit(bytecode.MakeR(sub, 0, r16(val), r16(cur), 0))
 		if el != nil {
 			g.storeRef(l, val, declaring)
 		}
@@ -189,24 +189,24 @@ func (g *gen) arrayPattern(pat *ast.ArrayPattern, v int, declaring bool) {
 		if g.err != "" {
 			break
 		}
-		step(bytecode.RColdIterStep, el)
+		step(bytecode.RIterStep, el)
 	}
 	if pat.Rest != nil {
-		step(bytecode.RColdIterRest, pat.Rest)
+		step(bytecode.RIterRest, pat.Rest)
 	}
 	g.unprotect(p)
 	release()
 	// The pattern has what it needs, so an iterator it stopped short of is
 	// told so; unlike a close for a throw, its failure is the result.
 	g.at(pat.Start)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdIterClose), 0, r16(cur), 0))
+	g.emit(bytecode.MakeR(bytecode.RIterClose, 0, 0, r16(cur), 0))
 	if len(p.ranges) == 0 {
 		return
 	}
 	end := g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	g.bind(p.to)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdIterCloseThrow), 0, r16(cur), 0))
+	g.emit(bytecode.MakeR(bytecode.RIterCloseThrow, 0, 0, r16(cur), 0))
 	g.emit(bytecode.MakeR(bytecode.RThrow, 0, r16(p.reg), 0, 0))
 	g.bind(end)
 }
@@ -217,7 +217,7 @@ func (g *gen) arrayPattern(pat *ast.ArrayPattern, v int, declaring bool) {
 // properties the pattern did not name.
 func (g *gen) objectPattern(pat *ast.ObjectPattern, v int, declaring bool) {
 	g.at(pat.Start)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCheckCoercible), r16(v), 0, 0))
+	g.emit(bytecode.MakeR(bytecode.RCheckCoercible, 0, r16(v), 0, 0))
 	keys := -1
 	if pat.Rest != nil {
 		// The keys the rest leaves out, each as the property read it.
@@ -251,7 +251,7 @@ func (g *gen) objectPattern(pat *ast.ObjectPattern, v int, declaring bool) {
 			}
 			g.into(p.Key, key)
 			g.at(p.Key.Pos())
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdToPropertyKey), r16(key), 0, 0))
+			g.emit(bytecode.MakeR(bytecode.RToPropertyKey, 0, r16(key), 0, 0))
 		} else if keys >= 0 {
 			g.emit(bytecode.MakeRBC(bytecode.RLoadConst, 0, r16(keys+i), g.constIdx(bytecode.Constant{Kind: bytecode.ConstString, Str: name})))
 		}
@@ -273,7 +273,7 @@ func (g *gen) objectPattern(pat *ast.ObjectPattern, v int, declaring bool) {
 	l := g.prepareLeaf(pat.Rest, declaring)
 	rest := g.alloc()
 	g.at(pat.Start)
-	at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdObjectRest), r16(rest), r16(v), r16(keys)))
+	at := g.emit(bytecode.MakeR(bytecode.RObjectRest, 0, r16(rest), r16(v), r16(keys)))
 	g.aux(at, uint32(len(pat.Props)))
 	g.storeRef(l, rest, declaring)
 	g.top = mark
@@ -370,7 +370,7 @@ func (g *gen) params(args []int) {
 			}
 		case *ast.RestElement:
 			g.at(t.Start)
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdRestParam), r16(reg), uint16(i), 0))
+			g.emit(bytecode.MakeR(bytecode.RRestParam, 0, r16(reg), uint16(i), 0))
 			if _, ok := t.Arg.(*ast.Ident); !ok {
 				g.pattern(t.Arg, reg, true)
 			}
@@ -410,7 +410,7 @@ func (g *gen) patternBindings(target ast.Expr) {
 		}
 		slot := int(res.Index)
 		if g.fn.Locals[slot].Captured && g.inLoop() {
-			g.cold(bytecode.RColdCloseRegs, int(g.slotReg[slot]), 1, 0)
+			g.cold(bytecode.RCloseRegs, int(g.slotReg[slot]), 1, 0)
 		}
 		if g.tdz[slot] || g.fn.Locals[slot].Captured {
 			g.emit(bytecode.MakeR(bytecode.RLoadUninit, 0, r16(int(g.slotReg[slot])), 0, 0))

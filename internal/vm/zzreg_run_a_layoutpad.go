@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadW is the layout lock's pad W, after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls and slow path after its loop, regCallW first.
+// layoutPadW is the layout lock's pad W, after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls after its loop, rhCallW first.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

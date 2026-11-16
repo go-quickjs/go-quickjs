@@ -10,8 +10,8 @@ import (
 // compileClass and its member compilers make them: cold operations of the
 // stack form's instructions' names, in the same order.
 
-func (g *gen) cold(sub bytecode.RColdOp, a, b, c int) int {
-	return g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(a), r16(b), r16(c)))
+func (g *gen) cold(sub bytecode.ROp, a, b, c int) int {
+	return g.emit(bytecode.MakeR(sub, 0, r16(a), r16(b), r16(c)))
 }
 
 // thisExpr compiles this: register 1, or, where this is a derived
@@ -22,7 +22,7 @@ func (g *gen) thisExpr(n *ast.This, dst int) int {
 	}
 	d := g.dest(dst)
 	g.at(n.Start)
-	g.cold(bytecode.RColdThis, d, 0, 0)
+	g.cold(bytecode.RThis, d, 0, 0)
 	return d
 }
 
@@ -33,14 +33,14 @@ func (g *gen) thisInto(d, pos int) {
 		return
 	}
 	g.at(pos)
-	g.cold(bytecode.RColdThis, d, 0, 0)
+	g.cold(bytecode.RThis, d, 0, 0)
 }
 
 // retReg returns register r, through derived_ret in a derived constructor.
 func (g *gen) retReg(r int) {
 	if g.fn.Kind == bytecode.KindDerivedConstructor {
 		t := g.alloc()
-		g.cold(bytecode.RColdDerivedRet, g.place(r, t), 0, 0)
+		g.cold(bytecode.RDerivedRet, g.place(r, t), 0, 0)
 		r = t
 	}
 	g.emit(bytecode.MakeR(bytecode.RRet, 0, r16(r), 0, 0))
@@ -95,12 +95,12 @@ func (g *gen) specialRef(m *ast.Member, convert bool) sref {
 		if m.Computed {
 			s.obj = g.alloc()
 			g.at(int(m.Start))
-			g.cold(bytecode.RColdSuperBase, s.obj, 0, 0)
+			g.cold(bytecode.RSuperBase, s.obj, 0, 0)
 			s.key = g.alloc()
 			g.into(m.Property, s.key)
 			if convert {
 				g.at(m.Property.Pos())
-				g.cold(bytecode.RColdToPropertyKey, s.key, 0, 0)
+				g.cold(bytecode.RToPropertyKey, s.key, 0, 0)
 			}
 			return s
 		}
@@ -145,13 +145,13 @@ func (g *gen) specialGet(s sref, dst int) int {
 	switch {
 	case s.super && m.Computed:
 		g.at(int(m.Start))
-		g.cold(bytecode.RColdSuperGetIndex, d, s.obj, s.key)
+		g.cold(bytecode.RSuperGetIndex, d, s.obj, s.key)
 	case s.super:
 		g.at(int(m.Start))
-		g.far(g.cold(bytecode.RColdSuperGet, d, int(g.name16(s.name)), 0), s.name)
+		g.far(g.cold(bytecode.RSuperGet, d, int(g.name16(s.name)), 0), s.name)
 	default:
 		g.at(s.pos)
-		g.privateAux(g.emit(bytecode.MakeR(bytecode.RGetPrivate, bytecode.RPrivateX, r16(d), r16(s.obj), r16(s.key))), s)
+		g.privateAux(g.emit(bytecode.MakeR(bytecode.RGetPrivate, 0, r16(d), r16(s.obj), r16(s.key))), s)
 	}
 	return d
 }
@@ -162,11 +162,11 @@ func (g *gen) specialSet(s sref, v, pos int) {
 	g.at(pos)
 	switch {
 	case s.super && m.Computed:
-		g.cold(bytecode.RColdSuperSetIndex, s.obj, s.key, v)
+		g.cold(bytecode.RSuperSetIndex, s.obj, s.key, v)
 	case s.super:
-		g.far(g.cold(bytecode.RColdSuperSet, v, int(g.name16(s.name)), 0), s.name)
+		g.far(g.cold(bytecode.RSuperSet, v, int(g.name16(s.name)), 0), s.name)
 	default:
-		g.privateAux(g.emit(bytecode.MakeR(bytecode.RSetPrivate, bytecode.RPrivateX, r16(s.obj), r16(v), r16(s.key))), s)
+		g.privateAux(g.emit(bytecode.MakeR(bytecode.RSetPrivate, 0, r16(s.obj), r16(v), r16(s.key))), s)
 	}
 }
 
@@ -233,18 +233,18 @@ func (g *gen) superCall(n *ast.Call, dst int) int {
 	switch {
 	case n.Forward:
 		g.at(n.TracePos())
-		g.cold(bytecode.RColdSuperForward, d, 0, 0)
+		g.cold(bytecode.RSuperForward, d, 0, 0)
 		g.forwardsArgs = true
 	case wideArgs(n.Args):
 		a := g.alloc()
 		g.spreadArray(n.Args, a)
 		g.at(n.TracePos())
-		g.cold(bytecode.RColdSuperSpread, d, a, 0)
+		g.cold(bytecode.RSuperSpread, d, a, 0)
 	default:
 		w := g.allocN(len(n.Args))
 		g.args(n.Args, w)
 		g.at(n.TracePos())
-		g.cold(bytecode.RColdSuperCall, d, len(n.Args), w)
+		g.cold(bytecode.RSuperCall, d, len(n.Args), w)
 	}
 	return d
 }
@@ -253,11 +253,11 @@ func (g *gen) superCall(n *ast.Call, dst int) int {
 // once the reference is made: this checked, then the key evaluated.
 func (g *gen) deleteSuper(n *ast.Unary, m *ast.Member) {
 	if m.Computed {
-		g.cold(bytecode.RColdCheckThis, 0, 0, 0)
+		g.cold(bytecode.RCheckThis, 0, 0, 0)
 		g.discard(m.Property)
 	}
 	g.at(n.Start)
-	g.cold(bytecode.RColdDeleteSuper, 0, 0, 0)
+	g.cold(bytecode.RDeleteSuper, 0, 0, 0)
 }
 
 // privateIn compiles #x in o.
@@ -266,7 +266,7 @@ func (g *gen) privateIn(pn *ast.PrivateName, obj ast.Expr, pos, dst int) int {
 	k := g.privateKey(pn)
 	d := g.dest(dst)
 	g.at(pos)
-	g.cold(bytecode.RColdPrivateIn, d, o, k)
+	g.cold(bytecode.RPrivateIn, d, o, k)
 	return d
 }
 
@@ -301,13 +301,13 @@ func (g *gen) class(cls *ast.ClassLit, dst int) int {
 		r := g.classSlot(int32(p.Slot))
 		scope = append(scope, r)
 		g.at(cls.Start)
-		g.far(g.cold(bytecode.RColdPrivateName, r, int(g.name16(p.Name)), 0), p.Name)
+		g.far(g.cold(bytecode.RPrivateName, r, int(g.name16(p.Name)), 0), p.Name)
 	}
 	install := -1
 	if cr.Install >= 0 {
 		install = g.classSlot(cr.Install)
 		scope = append(scope, install)
-		g.cold(bytecode.RColdNewPrivateMethods, install, 0, 0)
+		g.cold(bytecode.RNewPrivateMethods, install, 0, 0)
 	}
 	for i, f := range cls.Fields {
 		if i >= len(cr.Keys) || cr.Keys[i] < 0 {
@@ -318,14 +318,14 @@ func (g *gen) class(cls *ast.ClassLit, dst int) int {
 		t := g.alloc()
 		g.into(f.Key, t)
 		g.at(f.Key.Pos())
-		g.cold(bytecode.RColdToPropertyKey, t, 0, 0)
+		g.cold(bytecode.RToPropertyKey, t, 0, 0)
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(r), r16(t), 0))
 	}
 	ctor := g.alloc()
 	g.closureConst(int(cr.Ctor), ctor)
 	if parent >= 0 {
 		g.at(cls.Start)
-		g.cold(bytecode.RColdNewClass, ctor, parent, 0)
+		g.cold(bytecode.RNewClass, ctor, parent, 0)
 	}
 	if cr.Self >= 0 {
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(g.classSlot(cr.Self)), r16(ctor), 0))
@@ -340,8 +340,8 @@ func (g *gen) class(cls *ast.ClassLit, dst int) int {
 		proto = prototype()
 		fn := g.alloc()
 		g.closureConst(int(cr.Init), fn)
-		g.cold(bytecode.RColdSetHomeObject, fn, proto, 0)
-		g.cold(bytecode.RColdSetFieldInit, ctor, fn, 0)
+		g.cold(bytecode.RSetHomeObject, fn, proto, 0)
+		g.cold(bytecode.RSetFieldInit, ctor, fn, 0)
 	}
 	for i, m := range cls.Members {
 		if g.err != "" {
@@ -358,7 +358,7 @@ func (g *gen) class(cls *ast.ClassLit, dst int) int {
 		}
 		w := g.allocN(2)
 		g.closureConst(int(st.Const), w)
-		g.cold(bytecode.RColdSetHomeObject, w, ctor, 0)
+		g.cold(bytecode.RSetHomeObject, w, ctor, 0)
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(w+1), r16(ctor), 0))
 		pos := cls.Start
 		if st.Field >= 0 && int(st.Field) < len(cls.Fields) {
@@ -371,7 +371,7 @@ func (g *gen) class(cls *ast.ClassLit, dst int) int {
 	// evaluation of the class makes new ones.
 	for _, r := range scope {
 		if g.capturedReg(r) {
-			g.cold(bytecode.RColdCloseRegs, r, 1, 0)
+			g.cold(bytecode.RCloseRegs, r, 1, 0)
 		}
 	}
 	return g.place(ctor, dst)
@@ -406,13 +406,13 @@ func (g *gen) classMember(m ast.Property, k, ctor, install int, prototype func()
 		proto := prototype()
 		fn := g.alloc()
 		g.closureConst(k, fn)
-		g.cold(bytecode.RColdSetHomeObject, fn, proto, 0)
-		sub := bytecode.RColdAddPrivateMethod
+		g.cold(bytecode.RSetHomeObject, fn, proto, 0)
+		sub := bytecode.RAddPrivateMethod
 		switch m.Kind {
 		case ast.PropGet:
-			sub = bytecode.RColdAddPrivateGetter
+			sub = bytecode.RAddPrivateGetter
 		case ast.PropSet:
-			sub = bytecode.RColdAddPrivateSetter
+			sub = bytecode.RAddPrivateSetter
 		}
 		g.cold(sub, install, fn, g.privateKey(pn))
 		return
@@ -425,41 +425,41 @@ func (g *gen) classMember(m ast.Property, k, ctor, install int, prototype func()
 		kr := g.alloc()
 		g.into(m.Key, kr)
 		g.at(m.Key.Pos())
-		g.cold(bytecode.RColdToPropertyKey, kr, 0, 0)
+		g.cold(bytecode.RToPropertyKey, kr, 0, 0)
 		fn := g.alloc()
 		g.closureConst(k, fn)
-		g.cold(bytecode.RColdSetFuncName, fn, kr, nameKind)
-		g.cold(bytecode.RColdSetHomeObject, fn, target, 0)
-		sub := bytecode.RColdClassIndex
+		g.cold(bytecode.RSetFuncName, fn, kr, nameKind)
+		g.cold(bytecode.RSetHomeObject, fn, target, 0)
+		sub := bytecode.RClassIndex
 		switch m.Kind {
 		case ast.PropGet:
-			sub = bytecode.RColdClassGetterIndex
+			sub = bytecode.RClassGetterIndex
 		case ast.PropSet:
-			sub = bytecode.RColdClassSetterIndex
+			sub = bytecode.RClassSetterIndex
 		}
 		g.cold(sub, target, kr, fn)
 		return
 	}
 	fn := g.alloc()
 	g.closureConst(k, fn)
-	g.cold(bytecode.RColdSetHomeObject, fn, target, 0)
+	g.cold(bytecode.RSetHomeObject, fn, target, 0)
 	if pn, private := m.Key.(*ast.PrivateName); private {
-		sub := bytecode.RColdDefinePrivateMethod
+		sub := bytecode.RDefinePrivateMethod
 		switch m.Kind {
 		case ast.PropGet:
-			sub = bytecode.RColdDefinePrivateGetter
+			sub = bytecode.RDefinePrivateGetter
 		case ast.PropSet:
-			sub = bytecode.RColdDefinePrivateSetter
+			sub = bytecode.RDefinePrivateSetter
 		}
 		g.cold(sub, target, fn, g.privateKey(pn))
 		return
 	}
-	sub := bytecode.RColdDefineMethod
+	sub := bytecode.RDefineMethod
 	switch m.Kind {
 	case ast.PropGet:
-		sub = bytecode.RColdClassGetter
+		sub = bytecode.RClassGetter
 	case ast.PropSet:
-		sub = bytecode.RColdClassSetter
+		sub = bytecode.RClassSetter
 	}
 	g.far(g.cold(sub, target, fn, int(g.name16(key))), key)
 }
@@ -489,7 +489,7 @@ func (g *gen) fieldInit(n *ast.FieldInit) {
 		v := g.expr(n.Value, -1)
 		k := g.privateKey(pn)
 		g.at(n.Start)
-		g.cold(bytecode.RColdDefinePrivate, this, v, k)
+		g.cold(bytecode.RDefinePrivate, this, v, k)
 		return
 	}
 	k := g.alloc()
@@ -497,21 +497,21 @@ func (g *gen) fieldInit(n *ast.FieldInit) {
 		g.expr(&ast.StringLit{Value: keyName(n.Key)}, k)
 		v := g.expr(n.Value, -1)
 		g.at(n.Start)
-		g.cold(bytecode.RColdDefineIndex, this, k, v)
+		g.cold(bytecode.RDefineIndex, this, k, v)
 		return
 	}
 	g.into(n.Key, k)
 	g.at(n.Key.Pos())
-	g.cold(bytecode.RColdToPropertyKey, k, 0, 0)
+	g.cold(bytecode.RToPropertyKey, k, 0, 0)
 	v := g.expr(n.Value, -1)
 	if anonymousFn(n.Value) {
 		if g.isBinding(v) {
 			v = g.place(v, g.alloc())
 		}
-		g.cold(bytecode.RColdSetFuncName, v, k, 0)
+		g.cold(bytecode.RSetFuncName, v, k, 0)
 	}
 	g.at(n.Start)
-	g.cold(bytecode.RColdDefineIndex, this, k, v)
+	g.cold(bytecode.RDefineIndex, this, k, v)
 }
 
 // installPrivate compiles the installation of the class's private methods
@@ -519,12 +519,12 @@ func (g *gen) fieldInit(n *ast.FieldInit) {
 func (g *gen) installPrivate(n *ast.InstallPrivateMethods) {
 	l := g.expr(n.Binding, -1)
 	g.at(n.Start)
-	g.cold(bytecode.RColdInstallPrivateMethods, l, 0, 0)
+	g.cold(bytecode.RInstallPrivateMethods, l, 0, 0)
 }
 
 // newTarget compiles new.target.
 func (g *gen) newTarget(dst int) int {
 	d := g.dest(dst)
-	g.cold(bytecode.RColdNewTarget, d, 0, 0)
+	g.cold(bytecode.RNewTarget, d, 0, 0)
 	return d
 }

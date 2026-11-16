@@ -343,6 +343,35 @@ function caught(f, a) { try { f(a) } catch (x) { return x.message + " " + x.stac
 	regDiff(t, src, calls)
 }
 
+// TestRegDiffReceiverBindings compares calls whose receiver an
+// expression leaves in a binding's register -- an assignment, a comma, ??=
+// and the logical assignments -- each followed by a read of the binding:
+// the call's value must go to a temporary, never over the binding
+// (f25d1df4 sent it there, and (o = /d/).test("d") left o true).
+func TestRegDiffReceiverBindings(t *testing.T) {
+	src := `
+function P(n) { this.n = n }
+P.prototype.m = function (x) { return this.n + ":" + x };
+P.prototype.self = function () { return this };
+function show(v) { return v instanceof P ? "P" + v.n : v instanceof RegExp ? "re" + v.source : typeof v + String(v) }
+function assign() { var o, r = []; r.push((o = new P(1)).m("a"), show(o)); (o = new P(2)).m("b"); r.push(show(o)); var v = (o = "str").toUpperCase(); r.push(v, show(o)); return r.join() }
+function comma() { var o = new P(3), q, r = []; r.push((q = 1, o).m("c"), show(o)); (0, o).m("d"); r.push(show(o)); (q = new P(4), q).m("e"); r.push(show(q)); return r.join() }
+function nullish() { var o = null, r = []; r.push((o ??= new P(5)).m("f"), show(o)); (o ??= new P(6)).m("g"); r.push(show(o)); return r.join() }
+function logical() { var a = 0, b = new P(7), c = new P(8), r = []; r.push((a ||= new P(9)).m("h"), show(a)); r.push((b &&= c).m("i"), show(b)); (a ||= 1).m("j"); r.push(show(a)); return r.join() }
+function regexps() { var o, keep = []; for (var i = 0; i < 3; i++) { (o = /d/g).test("d"); keep.push(o, show(o), o.lastIndex) } return keep.length + "," + new Set(keep.filter(function (k) { return k instanceof RegExp })).size + "," + keep.filter(function (k) { return typeof k !== "object" }).join() }
+function chained() { var o, r = []; var v = (o = new P(10)).self().self().m("k"); r.push(v, show(o)); (o = new P(11)).self().m("l"); r.push(show(o)); return r.join() }
+function lets() { let o; const r = []; r.push((o = new P(12)).m("m"), show(o)); { let o2; (o2 = new P(13)).m("n"); r.push(show(o2)) } return r.join() }
+function param(o) { var r = []; r.push((o = new P(14)).m("o"), show(o)); (o ??= new P(15)).m("p"); r.push(show(o)); return r.join() }
+function captured() { var o, f = function () { return show(o) }, r = []; r.push((o = new P(16)).m("q"), f()); (o = new P(17)).m("r"); r.push(f()); return r.join() }
+function looped(n) { var o, s = ""; for (var i = 0; i < n; i++) { s += (o = new P(i)).m(i); s += show(o) } return s }
+`
+	calls := []string{`assign()`, `comma()`, `nullish()`, `logical()`, `regexps()`, `chained()`, `lets()`, `param()`, `param(new P(0))`, `captured()`, `looped(4)`}
+	for i := range calls {
+		calls[i] = fmt.Sprintf("(function () { var r; for (var k = 0; k < 4; k++) r = %s; return r })()", calls[i])
+	}
+	regDiff(t, src, calls)
+}
+
 // TestRegDiffSites compares the register operations given a site or a fast
 // path of their own after the stage's first measurements, each with its
 // slow paths.

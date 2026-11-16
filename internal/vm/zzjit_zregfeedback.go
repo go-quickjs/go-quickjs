@@ -123,16 +123,11 @@ func (f *jitRegFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	case bytecode.RGetGlobal:
 	case bytecode.RSetGlobal:
 		write = true
-	case bytecode.RCold:
-		switch bytecode.RColdOp(w.X()) {
-		case bytecode.RColdGetGlobalOpt:
-			// typeof's read, which has no site of its own.
-			site = -1
-		case bytecode.RColdCheckGlobalRef:
-			check = true
-		default:
-			return ssa.GlobalSite{}, false
-		}
+	case bytecode.RGetGlobalOpt:
+		// typeof's read, which has no site of its own.
+		site = -1
+	case bytecode.RCheckGlobalRef:
+		check = true
 	default:
 		return ssa.GlobalSite{}, false
 	}

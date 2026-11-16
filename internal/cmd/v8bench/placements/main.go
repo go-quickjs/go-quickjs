@@ -179,7 +179,9 @@ const (
 	// case, times its number.
 	inner = 3
 	// regGo is the register interpreter's loop; regNop its first case,
-	// which regInner fills, and regLast its last, which regTail fills.
+	// which regInner fills, and regLast its last, which regTail fills,
+	// where it is a switch: a loop over a table of handlers has no cases,
+	// and nothing of it is filled.
 	regGo   = "internal/vm/zzreg_run.go"
 	regNop  = "\t\tcase bytecode.RNop:\n"
 	regLast = "\t\tcase 127:\n"
@@ -309,9 +311,6 @@ func buildCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if bytes.Count(regSrc, []byte(regNop)) != 1 || bytes.Count(regSrc, []byte(regLast)) != 1 {
-		return fmt.Errorf("%s has no first or no last case to put the tests in", regGo)
-	}
 	for _, p := range pads {
 		if _, err := os.Stat(p); err == nil {
 			return fmt.Errorf("%s exists: a build was interrupted? remove it", p)
@@ -401,7 +400,7 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 		if len(f) != 3 || f[1] != "T" {
 			continue
 		}
-		if strings.HasSuffix(f[2], "/internal/vm.padRegInner") && (regInner(n) > 0 || regTail(n) > 0) {
+		if strings.HasSuffix(f[2], "/internal/vm.padRegInner") && regFills(regSrc) && (regInner(n) > 0 || regTail(n) > 0) {
 			// Inlined at every call, it is no function of the build: one
 			// is a call in runReg's cases, which spills across them.
 			return addrs, fmt.Errorf("padRegInner is not inlined into runReg: it costs past what Go inlines into a big function")
@@ -427,6 +426,9 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 // regFill is the loop's source with first calls of padRegInner in its
 // nop case and last in its last case, each on keys of its own.
 func regFill(regSrc []byte, first, last int) string {
+	if !regFills(regSrc) {
+		return string(regSrc)
+	}
 	var head, tail strings.Builder
 	for j := range first {
 		fmt.Fprintf(&head, "\t\t\tpadRegInner(uint32(w.A()), %d)\n", 3*j)
@@ -436,6 +438,12 @@ func regFill(regSrc []byte, first, last int) string {
 	}
 	s := strings.Replace(string(regSrc), regNop, regNop+head.String(), 1)
 	return strings.Replace(s, regLast, regLast+tail.String(), 1)
+}
+
+// regFills reports whether the loop's source is a switch with the first
+// and last cases regFill fills.
+func regFills(regSrc []byte) bool {
+	return bytes.Count(regSrc, []byte(regNop)) == 1 && bytes.Count(regSrc, []byte(regLast)) == 1
 }
 
 // padFile is pad p with m functions. The first holds the one init, which

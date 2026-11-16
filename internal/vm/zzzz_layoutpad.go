@@ -397,12 +397,6 @@ func init() {
 		if layoutPadNW >= 0 {
 			layoutPadW()
 		}
-		if layoutPadNP >= 0 {
-			layoutPadP()
-		}
-		if layoutPadNK >= 0 {
-			layoutPadK()
-		}
 		if layoutPadNZ >= 0 {
 			layoutPadZ()
 		}

@@ -141,7 +141,7 @@ const (
 	RNewArray
 	// RIterNext: R[A] = the next value of cursor R[B], or a jump by SC
 	// where it has none: a for-of or for-in loop's step, at the head of
-	// each turn (value 24, out of the free list).
+	// each turn.
 	RIterNext
 	// RAdd, RSub, RMul: R[A] = R[B] op R[C].
 	RAdd
@@ -152,9 +152,9 @@ const (
 	// shift, an equality or a relational comparison.
 	RBin
 	// RLit is a RegExp literal's exec or test, a per-turn step of the
-	// loops that match (value 29, out of the free list): R[A+1] = the
-	// literal of Constants[C], made or given back, and R[A] its method,
-	// exec or test (RLitTest), not read where it is the realm's built-in,
+	// loops that match: R[A+1] = the literal of Constants[C], made or
+	// given back, and R[A] its method, exec or test (RLitTest), not read
+	// where it is the realm's built-in,
 	// which reading runs nothing to find, and read otherwise -- at the
 	// instruction's position, or with RLitCall at the stack form's
 	// instruction Aux. With RLitCall the method is then called with the
@@ -176,9 +176,8 @@ const (
 	RJmpF
 	RJmpT
 	// RCallWT and RCallMWT are RCallW and RCallMW in tail position, as the
-	// stack form makes tail_call (values 36 and 37, out of the free list):
-	// once the stack is deep, the frame is given to the callee in place or
-	// given up. Ops of their own, so that the ordinary call checks nothing
+	// stack form makes tail_call: once the stack is deep, the frame is
+	// given to the callee in place or given up. Ops of their own, so that the ordinary call checks nothing
 	// of it.
 	RCallWT
 	RCallMWT
@@ -186,14 +185,13 @@ const (
 	RRet
 	RRetUndef
 	// RGetPrivate: R[A] = R[B].#R[C], a read of a private member, a
-	// per-turn step of a class's methods (value 40, out of the free list):
+	// per-turn step of a class's methods:
 	// Aux is its cache site in the high 16 bits, 0 for none, and its name,
-	// with its #, for the errors in the low. X is RPrivateX.
+	// with its #, for the errors in the low.
 	RGetPrivate
-	// RSetPrivate: R[A].#R[C] = R[B], a write of a private member (value
-	// 41, out of the free list), its Aux and X as RGetPrivate's.
+	// RSetPrivate: R[A].#R[C] = R[B], a write of a private member, its
+	// Aux as RGetPrivate's.
 	RSetPrivate
-	_ // free: 42, the translation reference's new, removed
 	// RYield suspends a generator's frame with R[B], and on its
 	// resumption R[A] = the value sent in, the next instruction a jump past
 	// the return path a return resumes at: the step of a loop over a
@@ -385,190 +383,170 @@ const (
 	// is the stack instruction of the read, where the read's errors are
 	// placed.
 	RCharCodeAt
-	// RCold is an operation that does not run per turn of a hot loop, its
-	// sub-operation (RColdOp) in X: one opcode value for all of them,
-	// dispatched a second time out of the loop.
-	RCold
-
-	// RInvalid is the last operation there can be, which no code holds:
-	// the interpreter's switch has a case for it so that its jump table
-	// spans every value of an ROp and needs no range check.
-	RInvalid ROp = 255
-)
-
-// RCmpTrue is the bit of a compare-and-branch's X (jtypeof's, a fused
-// set_upval's) that says it jumps when the comparison holds, rather than
-// when it does not.
-const RCmpTrue = 0x80
-
-// RColdOp is cold's sub-operation, in its X.
-type RColdOp uint8
-
-// RPrivateX is the X of get_private and set_private, which the loop's
-// slow path passes, as cold's, to regColdSub: no sub-operation, so that
-// its switch passes them on.
-const RPrivateX = 0xff
-
-const (
-	// RColdNewRegExp: R[A] = the RegExp literal of Constants[BC].
-	RColdNewRegExp RColdOp = iota
-	// RColdForOfStart and RColdForInStart: R[A] = a cursor over R[B], a
+	// The operations that run per turn of no hot loop the suites have:
+	// declarations, classes, destructuring, generators, with, eval. Each is
+	// an operation of its own, as every other is, its handler reached in
+	// one dispatch (docs/register-interpreter.md, "The loop").
+	//
+	// RNewRegExp: R[A] = the RegExp literal of Constants[BC].
+	RNewRegExp
+	// RForOfStart and RForInStart: R[A] = a cursor over R[B], a
 	// for-of loop's or a for-in loop's (startForOf, startForIn).
-	RColdForOfStart
-	RColdForInStart
-	// RColdIterClose closes cursor R[B] as a break, a continue or a
+	RForOfStart
+	RForInStart
+	// RIterClose closes cursor R[B] as a break, a continue or a
 	// return that leaves its loop does: an error of its return method's is
-	// thrown. RColdIterCloseThrow closes it as a throw that leaves the loop
+	// thrown. RIterCloseThrow closes it as a throw that leaves the loop
 	// does: an error of its return method's is dropped.
-	RColdIterClose
-	RColdIterCloseThrow
+	RIterClose
+	RIterCloseThrow
 	// Top-level code's declarations, each what the stack form's instruction
 	// of the same name does, of the name Names[B] and the flag C:
 	// check_global_lex, check_global_var, define_global_var,
 	// declare_global_lex, and define_global_func of the function R[A].
-	// RColdInitGlobalLex initializes the script's lexical binding Names[B]
+	// RInitGlobalLex initializes the script's lexical binding Names[B]
 	// to R[A] (init_global_lex).
-	RColdCheckGlobalLex
-	RColdCheckGlobalVar
-	RColdDefineGlobalVar
-	RColdDeclareGlobalLex
-	RColdDefineGlobalFunc
-	RColdInitGlobalLex
-	// RColdGetGlobalOpt: R[A] = the global Names[B], or undefined where
+	RCheckGlobalLex
+	RCheckGlobalVar
+	RDefineGlobalVar
+	RDeclareGlobalLex
+	RDefineGlobalFunc
+	RInitGlobalLex
+	// RGetGlobalOpt: R[A] = the global Names[B], or undefined where
 	// there is none (get_global_opt, typeof's operand).
-	RColdGetGlobalOpt
-	// RColdDeclareModuleLex declares the module's lexical binding Names[B],
+	RGetGlobalOpt
+	// RDeclareModuleLex declares the module's lexical binding Names[B],
 	// mutable where C is not 0, in its dead zone (declare_module_lex), and
-	// RColdInitModuleLex initializes it to R[A] (init_module_lex).
-	RColdDeclareModuleLex
-	RColdInitModuleLex
-	// Destructuring's: RColdIterStep, R[A] = the next value of cursor R[B],
-	// undefined past its end (iter_step); RColdIterRest, R[A] = an array of
-	// the values cursor R[B] has left (iter_rest); RColdCheckCoercible
+	// RInitModuleLex initializes it to R[A] (init_module_lex).
+	RDeclareModuleLex
+	RInitModuleLex
+	// Destructuring's: RIterStep, R[A] = the next value of cursor R[B],
+	// undefined past its end (iter_step); RIterRest, R[A] = an array of
+	// the values cursor R[B] has left (iter_rest); RCheckCoercible
 	// throws where R[A] is undefined or null (check_coercible);
-	// RColdToPropertyKey, R[A] = R[A] as a property key (to_property_key);
-	// RColdObjectRest, R[A] = an object of R[B]'s own enumerable properties
+	// RToPropertyKey, R[A] = R[A] as a property key (to_property_key);
+	// RObjectRest, R[A] = an object of R[B]'s own enumerable properties
 	// but the Aux keys in the registers from C (object_rest).
-	RColdIterStep
-	RColdIterRest
-	RColdCheckCoercible
-	RColdToPropertyKey
-	RColdObjectRest
-	// RColdRestParam: R[A] = an array of the arguments from the B-th
+	RIterStep
+	RIterRest
+	RCheckCoercible
+	RToPropertyKey
+	RObjectRest
+	// RRestParam: R[A] = an array of the arguments from the B-th
 	// (rest_param).
-	RColdRestParam
-	// RColdToString: R[A] = ToString(R[A]), a template's substitution
+	RRestParam
+	// RToString: R[A] = ToString(R[A]), a template's substitution
 	// converted before what follows it runs (to_string).
-	RColdToString
-	// RColdTemplateObject: R[A] = the template object of the function's
+	RToString
+	// RTemplateObject: R[A] = the template object of the function's
 	// Templates[BC], one for each site (template_object).
-	RColdTemplateObject
-	// An object literal's: RColdCopyDataProps copies R[B]'s own enumerable
-	// properties to R[A] (copy_data_props, a spread); RColdDefineGetter and
-	// RColdDefineSetter define accessor R[B] of R[A] named Names[C];
-	// RColdDefineGetterIndex and RColdDefineSetterIndex define accessor
-	// R[C] of R[A] keyed R[B]; RColdDefineIndex defines R[A][R[B]] = R[C]
-	// (define_index); RColdSetFuncName names function R[A] after key R[B],
+	RTemplateObject
+	// An object literal's: RCopyDataProps copies R[B]'s own enumerable
+	// properties to R[A] (copy_data_props, a spread); RDefineGetter and
+	// RDefineSetter define accessor R[B] of R[A] named Names[C];
+	// RDefineGetterIndex and RDefineSetterIndex define accessor
+	// R[C] of R[A] keyed R[B]; RDefineIndex defines R[A][R[B]] = R[C]
+	// (define_index); RSetFuncName names function R[A] after key R[B],
 	// with "get " or "set " for C 1 or 2 (set_func_name);
-	// RColdSetHomeObject makes R[B] function R[A]'s home object;
-	// RColdSetProtoOf sets R[A]'s prototype to R[B] where it is an object
+	// RSetHomeObject makes R[B] function R[A]'s home object;
+	// RSetProtoOf sets R[A]'s prototype to R[B] where it is an object
 	// or null (__proto__: v).
-	RColdCopyDataProps
-	RColdDefineGetter
-	RColdDefineSetter
-	RColdDefineGetterIndex
-	RColdDefineSetterIndex
-	RColdDefineIndex
-	RColdSetFuncName
-	RColdSetHomeObject
-	RColdSetProtoOf
-	// Spreads: RColdArrayPush appends R[B] to array R[A], a hole where it
-	// is the uninitialized marker (array_push); RColdArraySpread appends
-	// what iterating R[B] gives (array_spread); RColdCallSpread calls R[A]
+	RCopyDataProps
+	RDefineGetter
+	RDefineSetter
+	RDefineGetterIndex
+	RDefineSetterIndex
+	RDefineIndex
+	RSetFuncName
+	RSetHomeObject
+	RSetProtoOf
+	// Spreads: RArrayPush appends R[B] to array R[A], a hole where it
+	// is the uninitialized marker (array_push); RArraySpread appends
+	// what iterating R[B] gives (array_spread); RCallSpread calls R[A]
 	// with this R[A+1] and the elements of array R[A+2] as its arguments,
 	// or constructs it where C is 1, into R[B] (call_spread, new_spread).
-	RColdArrayPush
-	RColdArraySpread
-	RColdCallSpread
-	// RColdAssignConst throws the TypeError of an assignment to the
+	RArrayPush
+	RArraySpread
+	RCallSpread
+	// RAssignConst throws the TypeError of an assignment to the
 	// constant Names[B] (assign_const).
-	RColdAssignConst
+	RAssignConst
 	// A strict assignment to a global whose value runs code: R[A] = whether
 	// the global Names[B] resolves, asked before the value is made, through
-	// cache site C (check_global_ref); RColdAssertResolved throws the
+	// cache site C (check_global_ref); RAssertResolved throws the
 	// ReferenceError of Names[B] where R[A] says it did not (assert_resolved).
-	RColdCheckGlobalRef
-	RColdAssertResolved
+	RCheckGlobalRef
+	RAssertResolved
 	// Classes' (each what the stack form's instruction of the same name
-	// does): RColdNewClass makes R[A] the constructor of a class extending
-	// R[B] (new_class); RColdSetFieldInit gives constructor R[A] the
-	// instances' field initializer R[B] (set_field_init); RColdDefineMethod
+	// does): RNewClass makes R[A] the constructor of a class extending
+	// R[B] (new_class); RSetFieldInit gives constructor R[A] the
+	// instances' field initializer R[B] (set_field_init); RDefineMethod
 	// defines R[A]'s method Names[C] = R[B], not enumerable (define_method);
-	// RColdClassGetter and RColdClassSetter define accessor R[B] of R[A]
-	// named Names[C], and RColdClassGetterIndex, RColdClassSetterIndex and
-	// RColdClassIndex accessor or method R[C] of R[A] keyed R[B], each not
+	// RClassGetter and RClassSetter define accessor R[B] of R[A]
+	// named Names[C], and RClassGetterIndex, RClassSetterIndex and
+	// RClassIndex accessor or method R[C] of R[A] keyed R[B], each not
 	// enumerable, as a class's members are.
-	RColdNewClass
-	RColdSetFieldInit
-	RColdDefineMethod
-	RColdClassGetter
-	RColdClassSetter
-	RColdClassGetterIndex
-	RColdClassSetterIndex
-	RColdClassIndex
-	// Private names': RColdPrivateName, R[A] = a new key of the private
-	// name Names[B] (private_name); RColdNewPrivateMethods, R[A] = a new
-	// list of private methods (new_private_methods); RColdAddPrivateMethod,
-	// RColdAddPrivateGetter and RColdAddPrivateSetter add function R[B] to
-	// list R[A] under key R[C]; RColdInstallPrivateMethods gives this the
-	// methods of list R[A]; RColdDefinePrivate, RColdDefinePrivateMethod,
-	// RColdDefinePrivateGetter and RColdDefinePrivateSetter add field,
-	// method or accessor R[B] to R[A] under key R[C]; RColdPrivateIn, R[A] = whether R[B] has the private member keyed
+	RNewClass
+	RSetFieldInit
+	RDefineMethod
+	RClassGetter
+	RClassSetter
+	RClassGetterIndex
+	RClassSetterIndex
+	RClassIndex
+	// Private names': RPrivateName, R[A] = a new key of the private
+	// name Names[B] (private_name); RNewPrivateMethods, R[A] = a new
+	// list of private methods (new_private_methods); RAddPrivateMethod,
+	// RAddPrivateGetter and RAddPrivateSetter add function R[B] to
+	// list R[A] under key R[C]; RInstallPrivateMethods gives this the
+	// methods of list R[A]; RDefinePrivate, RDefinePrivateMethod,
+	// RDefinePrivateGetter and RDefinePrivateSetter add field,
+	// method or accessor R[B] to R[A] under key R[C]; RPrivateIn, R[A] = whether R[B] has the private member keyed
 	// R[C] (#x in o).
-	RColdPrivateName
-	RColdNewPrivateMethods
-	RColdAddPrivateMethod
-	RColdAddPrivateGetter
-	RColdAddPrivateSetter
-	RColdInstallPrivateMethods
-	RColdDefinePrivate
-	RColdDefinePrivateMethod
-	RColdDefinePrivateGetter
-	RColdDefinePrivateSetter
-	RColdPrivateIn
-	// super's and this's: RColdSuperCall, R[A] = this, bound by a call of
+	RPrivateName
+	RNewPrivateMethods
+	RAddPrivateMethod
+	RAddPrivateGetter
+	RAddPrivateSetter
+	RInstallPrivateMethods
+	RDefinePrivate
+	RDefinePrivateMethod
+	RDefinePrivateGetter
+	RDefinePrivateSetter
+	RPrivateIn
+	// super's and this's: RSuperCall, R[A] = this, bound by a call of
 	// the parent constructor with the B arguments in the registers from C
-	// (super_call); RColdSuperForward with the frame's arguments, as a
+	// (super_call); RSuperForward with the frame's arguments, as a
 	// derived class's constructor it was not given makes it;
-	// RColdSuperSpread with the elements of array R[B]; RColdSuperGet, R[A]
-	// = super[Names[B]]; RColdSuperSet, super[Names[B]] = R[A];
-	// RColdSuperBase, R[A] = what super reads from, or null
-	// (super_base); RColdSuperGetIndex, R[A] = R[B][R[C]] read with this as
-	// the receiver; RColdSuperSetIndex, R[A][R[B]] = R[C] written with this
-	// as the receiver; RColdThis, R[A] = this, which a derived
-	// constructor's super() binds (this_bound); RColdCheckThis throws
-	// where it is not bound yet (check_this_init); RColdNewTarget, R[A] =
-	// new.target; RColdDerivedRet, R[A] = what a derived constructor
-	// returning R[A] hands back (derived_ret); RColdDeleteSuper throws the
+	// RSuperSpread with the elements of array R[B]; RSuperGet, R[A]
+	// = super[Names[B]]; RSuperSet, super[Names[B]] = R[A];
+	// RSuperBase, R[A] = what super reads from, or null
+	// (super_base); RSuperGetIndex, R[A] = R[B][R[C]] read with this as
+	// the receiver; RSuperSetIndex, R[A][R[B]] = R[C] written with this
+	// as the receiver; RThis, R[A] = this, which a derived
+	// constructor's super() binds (this_bound); RCheckThis throws
+	// where it is not bound yet (check_this_init); RNewTarget, R[A] =
+	// new.target; RDerivedRet, R[A] = what a derived constructor
+	// returning R[A] hands back (derived_ret); RDeleteSuper throws the
 	// ReferenceError of a super reference deleted.
-	RColdSuperCall
-	RColdSuperForward
-	RColdSuperSpread
-	RColdSuperGet
-	RColdSuperSet
-	RColdSuperBase
-	RColdSuperGetIndex
-	RColdSuperSetIndex
-	RColdThis
-	RColdCheckThis
-	RColdNewTarget
-	RColdDerivedRet
-	RColdDeleteSuper
-	// RColdCloseRegs closes the upvalues closures keep open on the B
+	RSuperCall
+	RSuperForward
+	RSuperSpread
+	RSuperGet
+	RSuperSet
+	RSuperBase
+	RSuperGetIndex
+	RSuperSetIndex
+	RThis
+	RCheckThis
+	RNewTarget
+	RDerivedRet
+	RDeleteSuper
+	// RCloseRegs closes the upvalues closures keep open on the B
 	// registers from R[A], whose bindings a scope's end leaves: the next
 	// entry of the scope makes new ones (close_regs).
-	RColdCloseRegs
-	// RColdWrap is R[A] = R[B] op R[C], op the operator Aux names -- add,
+	RCloseRegs
+	// RWrap is R[A] = R[B] op R[C], op the operator Aux names -- add,
 	// sub, mul or a bitwise one but >>> -- whose value is the second
 	// argument of the two of the call of a method named asUintN or asIntN
 	// right after it, X.asUintN(w, x op y): where the callee is
@@ -576,70 +554,70 @@ const (
 	// it makes the call's value, x op y of width w, at once (wrapShort)
 	// and passes the call over -- never a BigInt past 64 bits, which the
 	// call would cut down again -- as the tree's wrapCall does (wrap).
-	RColdWrap
-	// A generator's and an async function's (zzreg_zgen.go): RColdGenEntry,
+	RWrap
+	// A generator's and an async function's (zzreg_zgen.go): RGenEntry,
 	// the code's first instruction, run by its first run and by a
 	// resumption that throws, which it throws at the suspension; a
-	// resumption that goes on starts at its pc. RColdEndParams suspends a
+	// resumption that goes on starts at its pc. REndParams suspends a
 	// generator its creation ran once its parameters are bound (RYield is
-	// a yield's); RColdAwait suspends it to
+	// a yield's); RAwait suspends it to
 	// await R[B], and on its resumption R[A] = what that settled to;
-	// RColdYieldStar suspends a yield* with R[B], and on any resumption R[A]
+	// RYieldStar suspends a yield* with R[B], and on any resumption R[A]
 	// = the value sent in and R[A+1] how, a ResumeNext, ResumeThrow or
-	// ResumeReturn. RColdIterResume, R[A] = what cursor R[B]'s next, throw
+	// ResumeReturn. RIterResume, R[A] = what cursor R[B]'s next, throw
 	// or return, by the kind in R[C+1], gives for R[C] -- the result, or, a
 	// return or a throw it has no method for ending the delegation, the
 	// value to end it with, the next instruction a jump taken then;
-	// RColdIterUnpackDelegate, R[A] = result R[B] where it is not done -- its
+	// RIterUnpackDelegate, R[A] = result R[B] where it is not done -- its
 	// value in an async generator -- and its value where it is, cursor R[C]
 	// marked done and the next instruction, a jump, taken.
-	// RColdForAwaitOfStart, R[A] = a cursor over R[B] for a for await or an
+	// RForAwaitOfStart, R[A] = a cursor over R[B] for a for await or an
 	// async generator's yield* (startForAwaitOf). A for await's:
-	// RColdAsyncIterNext, R[A] = what cursor R[B]'s next returns;
-	// RColdIterResult, R[A] = result R[B]'s value, or where it is done, the
-	// next instruction, a jump, taken; RColdAsyncIterClose, R[A] = what
+	// RAsyncIterNext, R[A] = what cursor R[B]'s next returns;
+	// RIterResult, R[A] = result R[B]'s value, or where it is done, the
+	// next instruction, a jump, taken; RAsyncIterClose, R[A] = what
 	// cursor R[B]'s return method returns, the cursor done, or where it has
-	// none, the next instruction, a jump, taken; RColdAsyncIterCheck throws
+	// none, the next instruction, a jump, taken; RAsyncIterCheck throws
 	// where R[A], what a return method's result settled to, is not an
 	// object.
-	RColdGenEntry
-	RColdEndParams
-	RColdAwait
-	RColdYieldStar
-	RColdIterResume
-	RColdIterUnpackDelegate
-	RColdForAwaitOfStart
-	RColdAsyncIterNext
-	RColdIterResult
-	RColdAsyncIterClose
-	RColdAsyncIterCheck
-	// RColdGetUpvalCheck, R[A] = upvalue BC, and RColdSetUpvalCheck,
+	RGenEntry
+	REndParams
+	RAwait
+	RYieldStar
+	RIterResume
+	RIterUnpackDelegate
+	RForAwaitOfStart
+	RAsyncIterNext
+	RIterResult
+	RAsyncIterClose
+	RAsyncIterCheck
+	// RGetUpvalCheck, R[A] = upvalue BC, and RSetUpvalCheck,
 	// upvalue BC = R[A], throw where the binding is in its dead zone, and
 	// the store where it is a constant (zzreg_znames.go).
-	RColdGetUpvalCheck
-	RColdSetUpvalCheck
-	// RColdDeleteVar: R[A] = delete of the global Names[B] (delete_var).
-	RColdDeleteVar
-	// RColdImport: R[A] = import(R[B]), import.defer or import.source by
+	RGetUpvalCheck
+	RSetUpvalCheck
+	// RDeleteVar: R[A] = delete of the global Names[B] (delete_var).
+	RDeleteVar
+	// RImport: R[A] = import(R[B]), import.defer or import.source by
 	// the phase C>>2 (an Import constant), with the options R[B+1] where C&3
-	// is 2 (the stack form's import). RColdImportMeta: R[A] = import.meta.
-	RColdImport
-	RColdImportMeta
+	// is 2 (the stack form's import). RImportMeta: R[A] = import.meta.
+	RImport
+	RImportMeta
 	// A scope with using declarations (the stack form's
 	// new_dispose_capability, add_disposable and dispose):
-	// RColdNewDispose: R[A] = a new stack of resources; RColdAddDisposable
+	// RNewDispose: R[A] = a new stack of resources; RAddDisposable
 	// adds R[B] to R[A]'s, an await using's where C is 1;
-	// RColdDispose disposes of R[A]'s, a throw of R[B] leaving the scope
-	// where C is 1; RColdDisposeStep is a step of an await using scope's
+	// RDispose disposes of R[A]'s, a throw of R[B] leaving the scope
+	// where C is 1; RDisposeStep is a step of an await using scope's
 	// disposal, of R[B]'s resources, the mode in C (bytecode.DisposeStart,
 	// DisposeRecord, DisposeFail, DisposeFinish): R[A] is what a throw
 	// leaving or an await failing threw, and is then what to await, and
 	// R[A+1] whether there is one.
-	RColdNewDispose
-	RColdAddDisposable
-	RColdDispose
-	RColdDisposeStep
-	// RColdDirectEval is a call written eval(...) (the stack form's
+	RNewDispose
+	RAddDisposable
+	RDispose
+	RDisposeStep
+	// RDirectEval is a call written eval(...) (the stack form's
 	// direct_eval): the callee R[A], its receiver R[A+1] and C arguments
 	// from R[A+2], or, where Aux has RDirectEvalSpread, an array of them
 	// in R[A+2]; R[B] = what it gives. Where the callee is the realm's
@@ -647,47 +625,57 @@ const (
 	// caller's scope, the function's EvalScopes[Aux&^RDirectEvalSpread];
 	// otherwise it is an ordinary call, a tail call where marked
 	// RMarkTail.
-	RColdDirectEval
+	RDirectEval
 	// The probes of a name a with object or an eval's variable may
 	// answer (regcomp's with.go), each of the name Names[B] in the
 	// innermost C of the frame's with objects and eval's variables, R[Aux]
-	// = whether one has it: RColdWithGet, R[A] = its value there;
-	// RColdWithGetThis, R[A] = its value and R[A+1] the object, a callee
-	// and its receiver; RColdWithDelete, R[A] = delete of it there;
-	// RColdWithSet stores R[A] there; RColdWithResolve, R[A] = the object,
-	// or undefined. RColdWithRead, R[A] = Names[C] of the object R[B], and
-	// RColdWithWrite stores R[A] there: a reference's read and store past
-	// its with_resolve. RColdWithPush puts the object of R[A] on the
-	// frame's with objects (ToObject), and RColdWithPop takes it off.
-	RColdWithGet
-	RColdWithGetThis
-	RColdWithDelete
-	RColdWithSet
-	RColdWithResolve
-	RColdWithRead
-	RColdWithWrite
-	RColdWithPush
-	RColdWithPop
-	// RColdThrowRef throws a ReferenceError of message Names[B]
+	// = whether one has it: RWithGet, R[A] = its value there;
+	// RWithGetThis, R[A] = its value and R[A+1] the object, a callee
+	// and its receiver; RWithDelete, R[A] = delete of it there;
+	// RWithSet stores R[A] there; RWithResolve, R[A] = the object,
+	// or undefined. RWithRead, R[A] = Names[C] of the object R[B], and
+	// RWithWrite stores R[A] there: a reference's read and store past
+	// its with_resolve. RWithPush puts the object of R[A] on the
+	// frame's with objects (ToObject), and RWithPop takes it off.
+	RWithGet
+	RWithGetThis
+	RWithDelete
+	RWithSet
+	RWithResolve
+	RWithRead
+	RWithWrite
+	RWithPush
+	RWithPop
+	// RThrowRef throws a ReferenceError of message Names[B]
 	// (throw_reference_error): sloppy code's assignment to a call, made
 	// once the call has been.
-	RColdThrowRef
-	// RColdDebug is a place code compiled for a debugger can stop (the
+	RThrowRef
+	// RDebug is a place code compiled for a debugger can stop (the
 	// stack form's debug_stmt): its index in the function's
 	// Debug.Statements in Aux, and B 1 for a debugger statement. It does
 	// nothing unless a debugger has asked to stop somewhere, or B is 1
 	// and one is listening.
-	RColdDebug
-	// RColdMovFar copies far register BC to register A (mov_far): a
+	RDebug
+	// RMovFar copies far register BC to register A (mov_far): a
 	// binding past the 65,536 registers a 16-bit operand reaches, which
 	// a function whose bindings do not fit them has (far registers, past
-	// NumRegs' near ones). RColdMovToFar copies register A to far register
-	// BC (mov_to_far), and RColdFarInit makes the Aux far registers from
+	// NumRegs' near ones). RMovToFar copies register A to far register
+	// BC (mov_to_far), and RFarInit makes the Aux far registers from
 	// BC undefined (far_init), as the function starts.
-	RColdMovFar
-	RColdMovToFar
-	RColdFarInit
+	RMovFar
+	RMovToFar
+	RFarInit
+
+	// ROpCount is how many operations there are, each below it: the
+	// interpreter's table has an entry for every value an ROp can hold,
+	// those from ROpCount on a handler that panics.
+	ROpCount
 )
+
+// RCmpTrue is the bit of a compare-and-branch's X (jtypeof's, a fused
+// set_upval's) that says it jumps when the comparison holds, rather than
+// when it does not.
+const RCmpTrue = 0x80
 
 // RDirectEvalSpread is the bit of direct_eval's Aux that says its
 // arguments are an array.
@@ -737,60 +725,6 @@ const (
 	RMarkTail
 )
 
-var rColdNames = [...]string{
-	RColdNewRegExp: "new_regexp", RColdForOfStart: "for_of_start", RColdForInStart: "for_in_start",
-	RColdIterClose: "iter_close", RColdIterCloseThrow: "iter_close_throw",
-	RColdCheckGlobalLex: "check_global_lex", RColdCheckGlobalVar: "check_global_var",
-	RColdDefineGlobalVar: "define_global_var", RColdDeclareGlobalLex: "declare_global_lex",
-	RColdDefineGlobalFunc: "define_global_func", RColdInitGlobalLex: "init_global_lex",
-	RColdGetGlobalOpt: "get_global_opt", RColdDeclareModuleLex: "declare_module_lex",
-	RColdInitModuleLex: "init_module_lex", RColdIterStep: "iter_step", RColdIterRest: "iter_rest",
-	RColdCheckCoercible: "check_coercible", RColdToPropertyKey: "to_property_key",
-	RColdObjectRest: "object_rest", RColdRestParam: "rest_param", RColdToString: "to_string",
-	RColdTemplateObject: "template_object", RColdCopyDataProps: "copy_data_props",
-	RColdDefineGetter: "define_getter", RColdDefineSetter: "define_setter",
-	RColdDefineGetterIndex: "define_getter_index", RColdDefineSetterIndex: "define_setter_index",
-	RColdDefineIndex: "define_index", RColdSetFuncName: "set_func_name",
-	RColdSetHomeObject: "set_home_object", RColdSetProtoOf: "set_proto_of",
-	RColdArrayPush: "array_push", RColdArraySpread: "array_spread", RColdCallSpread: "call_spread",
-	RColdAssignConst: "assign_const", RColdCheckGlobalRef: "check_global_ref",
-	RColdAssertResolved: "assert_resolved", RColdWrap: "wrap",
-	RColdNewClass: "new_class", RColdSetFieldInit: "set_field_init", RColdDefineMethod: "define_method",
-	RColdClassGetter: "class_getter", RColdClassSetter: "class_setter",
-	RColdClassGetterIndex: "class_getter_index", RColdClassSetterIndex: "class_setter_index",
-	RColdClassIndex: "class_index", RColdPrivateName: "private_name",
-	RColdNewPrivateMethods: "new_private_methods", RColdAddPrivateMethod: "add_private_method",
-	RColdAddPrivateGetter: "add_private_getter", RColdAddPrivateSetter: "add_private_setter",
-	RColdInstallPrivateMethods: "install_private_methods", RColdDefinePrivate: "define_private",
-	RColdDefinePrivateMethod: "define_private_method", RColdDefinePrivateGetter: "define_private_getter",
-	RColdDefinePrivateSetter: "define_private_setter", RColdPrivateIn: "private_in", RColdSuperCall: "super_call",
-	RColdSuperForward: "super_forward", RColdSuperSpread: "super_spread", RColdSuperGet: "super_get",
-	RColdSuperSet: "super_set", RColdSuperBase: "super_base", RColdSuperGetIndex: "super_get_index",
-	RColdSuperSetIndex: "super_set_index", RColdThis: "this_bound", RColdCheckThis: "check_this_init",
-	RColdNewTarget: "new_target", RColdDerivedRet: "derived_ret", RColdDeleteSuper: "delete_super",
-	RColdCloseRegs: "close_regs", RColdGenEntry: "gen_entry", RColdEndParams: "end_params",
-	RColdAwait: "await", RColdYieldStar: "yield_star", RColdIterResume: "iter_resume",
-	RColdIterUnpackDelegate: "iter_unpack_delegate", RColdForAwaitOfStart: "for_await_of_start",
-	RColdAsyncIterNext: "async_iter_next", RColdIterResult: "iter_result",
-	RColdAsyncIterClose: "async_iter_close", RColdAsyncIterCheck: "async_iter_check",
-	RColdGetUpvalCheck: "get_upval_check", RColdSetUpvalCheck: "set_upval_check",
-	RColdDeleteVar: "delete_var", RColdImport: "import", RColdImportMeta: "import_meta",
-	RColdNewDispose: "new_dispose_capability", RColdAddDisposable: "add_disposable", RColdDispose: "dispose",
-	RColdDisposeStep: "dispose_step", RColdDirectEval: "direct_eval",
-	RColdWithGet: "with_get", RColdWithGetThis: "with_get_this", RColdWithDelete: "with_delete",
-	RColdWithSet: "with_set", RColdWithResolve: "with_resolve", RColdWithRead: "with_read",
-	RColdWithWrite: "with_write", RColdWithPush: "with_push", RColdWithPop: "with_pop",
-	RColdThrowRef: "throw_reference_error", RColdDebug: "debug",
-	RColdMovFar: "mov_far", RColdMovToFar: "mov_to_far", RColdFarInit: "far_init",
-}
-
-func (op RColdOp) String() string {
-	if int(op) < len(rColdNames) && rColdNames[op] != "" {
-		return rColdNames[op]
-	}
-	return fmt.Sprintf("cold(%d)", uint8(op))
-}
-
 // LitElem is an element of a literal of constants: Constants[K], or, by
 // Kind, true, false, null or undefined.
 type LitElem struct {
@@ -833,7 +767,7 @@ type RegCode struct {
 	// NumRegs is how many registers a frame of the code uses: the
 	// function's locals, its temporaries, and the register form's own;
 	// and, where its bindings do not fit 16 bits, its far registers after
-	// them all, which only RColdMovFar, RColdMovToFar and RColdFarInit
+	// them all, which only RMovFar, RMovToFar and RFarInit
 	// reach.
 	NumRegs int
 	// SrcPC is, for each instruction, the stack form's instruction it was
@@ -1047,8 +981,56 @@ var rOpNames = [...]string{
 	RPostInc: "post_inc", RPostDec: "post_dec", RGetLength: "get_length",
 	RJEq: "jeq", RJNe: "jne", RJEqI: "jeq_imm", RJNeI: "jne_imm", RJNull: "jnull", RJNotNull: "jnotnull",
 	RThrow: "throw", RInstanceOf: "instanceof", RIn: "in", RDelete: "delete", RArguments: "arguments", RNewArrayK: "new_array_k", RAddProp: "add_prop", RAddPropI: "add_prop_imm", RApplyArgs: "apply_args",
-	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RIterNext: "iter_next", RYield: "yield", RLit: "regexp_lit", RGetPrivate: "get_private", RSetPrivate: "set_private", RCold: "cold", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
+	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RIterNext: "iter_next", RYield: "yield", RLit: "regexp_lit", RGetPrivate: "get_private", RSetPrivate: "set_private", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
+	RNewRegExp: "new_regexp", RForOfStart: "for_of_start", RForInStart: "for_in_start",
+	RIterClose: "iter_close", RIterCloseThrow: "iter_close_throw",
+	RCheckGlobalLex: "check_global_lex", RCheckGlobalVar: "check_global_var",
+	RDefineGlobalVar: "define_global_var", RDeclareGlobalLex: "declare_global_lex",
+	RDefineGlobalFunc: "define_global_func", RInitGlobalLex: "init_global_lex",
+	RGetGlobalOpt: "get_global_opt", RDeclareModuleLex: "declare_module_lex",
+	RInitModuleLex: "init_module_lex", RIterStep: "iter_step", RIterRest: "iter_rest",
+	RCheckCoercible: "check_coercible", RToPropertyKey: "to_property_key",
+	RObjectRest: "object_rest", RRestParam: "rest_param", RToString: "to_string",
+	RTemplateObject: "template_object", RCopyDataProps: "copy_data_props",
+	RDefineGetter: "define_getter", RDefineSetter: "define_setter",
+	RDefineGetterIndex: "define_getter_index", RDefineSetterIndex: "define_setter_index",
+	RDefineIndex: "define_index", RSetFuncName: "set_func_name",
+	RSetHomeObject: "set_home_object", RSetProtoOf: "set_proto_of",
+	RArrayPush: "array_push", RArraySpread: "array_spread", RCallSpread: "call_spread",
+	RAssignConst: "assign_const", RCheckGlobalRef: "check_global_ref",
+	RAssertResolved: "assert_resolved", RWrap: "wrap",
+	RNewClass: "new_class", RSetFieldInit: "set_field_init", RDefineMethod: "define_method",
+	RClassGetter: "class_getter", RClassSetter: "class_setter",
+	RClassGetterIndex: "class_getter_index", RClassSetterIndex: "class_setter_index",
+	RClassIndex: "class_index", RPrivateName: "private_name",
+	RNewPrivateMethods: "new_private_methods", RAddPrivateMethod: "add_private_method",
+	RAddPrivateGetter: "add_private_getter", RAddPrivateSetter: "add_private_setter",
+	RInstallPrivateMethods: "install_private_methods", RDefinePrivate: "define_private",
+	RDefinePrivateMethod: "define_private_method", RDefinePrivateGetter: "define_private_getter",
+	RDefinePrivateSetter: "define_private_setter", RPrivateIn: "private_in", RSuperCall: "super_call",
+	RSuperForward: "super_forward", RSuperSpread: "super_spread", RSuperGet: "super_get",
+	RSuperSet: "super_set", RSuperBase: "super_base", RSuperGetIndex: "super_get_index",
+	RSuperSetIndex: "super_set_index", RThis: "this_bound", RCheckThis: "check_this_init",
+	RNewTarget: "new_target", RDerivedRet: "derived_ret", RDeleteSuper: "delete_super",
+	RCloseRegs: "close_regs", RGenEntry: "gen_entry", REndParams: "end_params",
+	RAwait: "await", RYieldStar: "yield_star", RIterResume: "iter_resume",
+	RIterUnpackDelegate: "iter_unpack_delegate", RForAwaitOfStart: "for_await_of_start",
+	RAsyncIterNext: "async_iter_next", RIterResult: "iter_result",
+	RAsyncIterClose: "async_iter_close", RAsyncIterCheck: "async_iter_check",
+	RGetUpvalCheck: "get_upval_check", RSetUpvalCheck: "set_upval_check",
+	RDeleteVar: "delete_var", RImport: "import", RImportMeta: "import_meta",
+	RNewDispose: "new_dispose_capability", RAddDisposable: "add_disposable", RDispose: "dispose",
+	RDisposeStep: "dispose_step", RDirectEval: "direct_eval",
+	RWithGet: "with_get", RWithGetThis: "with_get_this", RWithDelete: "with_delete",
+	RWithSet: "with_set", RWithResolve: "with_resolve", RWithRead: "with_read",
+	RWithWrite: "with_write", RWithPush: "with_push", RWithPop: "with_pop",
+	RThrowRef: "throw_reference_error", RDebug: "debug",
+	RMovFar: "mov_far", RMovToFar: "mov_to_far", RFarInit: "far_init",
 }
+
+// Cold reports whether op is one of the operations of no hot loop,
+// RNewRegExp to RFarInit, which native code leaves to Go but for a few.
+func (op ROp) Cold() bool { return op >= RNewRegExp && op < ROpCount }
 
 // MethodCall reports whether op is call_method_w or its tail form, whose
 // this is R[A+1].
@@ -1186,17 +1168,16 @@ func (rc *RegCode) Format(pc int) string {
 			return fmt.Sprintf("%s %s = k%d.%s(%s)", op, r(w.B()), w.C(), m, r(w.A()+2))
 		}
 		return fmt.Sprintf("%s %s = k%d.%s", op, r(w.A()), w.C(), m)
-	case RCold:
-		switch sub := RColdOp(w.X()); sub {
-		case RColdNewRegExp:
-			return fmt.Sprintf("%s.%s %s, k%d", op, sub, r(w.A()), w.BC())
-		case RColdIterClose, RColdIterCloseThrow:
-			return fmt.Sprintf("%s.%s %s", op, sub, r(w.B()))
-		}
-		return fmt.Sprintf("%s.%s %s, %s, %s", op, RColdOp(w.X()), r(w.A()), r(w.B()), r(w.C()))
-	default:
-		return op.String()
+	case RNewRegExp:
+		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
+	case RIterClose, RIterCloseThrow:
+		return fmt.Sprintf("%s %s", op, r(w.B()))
 	}
+	if op := w.Op(); op >= RNewRegExp && op < ROpCount {
+		// The operations of no hot loop: their operands as they lie.
+		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
+	}
+	return w.Op().String()
 }
 
 // String renders the whole code, one instruction a line.

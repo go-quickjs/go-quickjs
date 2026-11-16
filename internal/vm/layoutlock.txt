@@ -7,10 +7,9 @@
 #
 # puts SYMBOL at TARGET modulo 4,096 (code) or 64 (data, the levers DH, DW
 # and DG) by the lever's pad. The targets are the layout at db306c0e, before
-# the slowdowns of the rounds after it; W's, regCallW, and K's,
-# regDeadCall, the layout at 679d54b3, before runReg was made big and
-# 512 bytes shorter and cold's sub-operations grew by registers past
-# 65,535.
+# the slowdowns of the rounds after it; W's, regCallW's, now rhCallW,, the layout at
+# 679d54b3. Q anchors the register interpreter's loop, runReg, and W the
+# call path after it; its handlers follow (zzreg_table*.go).
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -24,9 +23,7 @@ anchor S  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTre
 anchor T  0x00120 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
 anchor Q  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCallW
-anchor P  0x004a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor K  0x004e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regDeadCall
+anchor W  0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor Z  0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x007a0 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -48,9 +45,7 @@ anchor S  0x00220 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTre
 anchor T  0x00560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x009e0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
 anchor Q  0x00300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00200 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCallW
-anchor P  0x00820 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor K  0x00860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regDeadCall
+anchor W  0x00200 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor Z  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00f60 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -72,9 +67,7 @@ anchor S  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTre
 anchor T  0x00360 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
 anchor Q  0x001e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCallW
-anchor P  0x006e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor K  0x00720 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regDeadCall
+anchor W  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor Z  0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -96,9 +89,7 @@ anchor S  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTre
 anchor T  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
 anchor Q  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x000c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCallW
-anchor P  0x006e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor K  0x00720 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regDeadCall
+anchor W  0x000c0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor Z  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]

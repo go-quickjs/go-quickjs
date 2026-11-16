@@ -4,86 +4,80 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"testing"
 )
 
-// TestRegThrowsKeepPC checks that every way runReg's loop leaves for its
-// fail tail has stored the pc in kept first, in the same case or tail:
-// the tail finds the handler of the instruction at kept.pc-1, and a pc
-// left from an instruction before would find another's or none. It checks
-// too that the loop returns an error nowhere but from the tail, which is
-// where a handler is looked for.
+// TestRegThrowsKeepPC checks that every handler and slow function of the
+// register interpreter (zzreg_table*.go) that goes to the fail tail --
+// st.fail, or st.done and st.put, which go there with an error -- has
+// kept the pc past its instruction first, by st.at or st.kept.pc =: the
+// tail finds the handler of the instruction at st.kept.pc-1, and a pc left
+// from an instruction before would find another's or none. A call that
+// reads the kept pc (rhCallW, regElemMiss) is given it the same way.
 func TestRegThrowsKeepPC(t *testing.T) {
+	files, err := filepath.Glob("zzreg_table*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no handler files: %v", err)
+	}
 	fs := token.NewFileSet()
-	file, err := parser.ParseFile(fs, "zzreg_run.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var loop *ast.FuncDecl
-	for _, d := range file.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "runReg" {
-			loop = fd
-		}
-	}
-	if loop == nil {
-		t.Fatal("no runReg")
-	}
-	var forBody *ast.BlockStmt
-	for _, s := range loop.Body.List {
-		if fs, ok := s.(*ast.ForStmt); ok {
-			forBody = fs.Body
-		}
-	}
-	if forBody == nil {
-		t.Fatal("runReg has no loop")
-	}
-	failAt := token.NoPos
-	for _, s := range forBody.List {
-		if l, ok := s.(*ast.LabeledStmt); ok && l.Label.Name == "fail" {
-			failAt = l.Pos()
-		}
-	}
-	if failAt == token.NoPos {
-		t.Fatal("runReg's loop has no fail tail")
-	}
-	stored, gotos := false, 0
-	isKeptPC := func(e ast.Expr) bool {
+	fails := 0
+	isSt := func(e ast.Expr, name string) bool {
 		sel, ok := e.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "pc" {
+		if !ok || sel.Sel.Name != name {
 			return false
 		}
 		id, ok := sel.X.(*ast.Ident)
-		return ok && id.Name == "kept"
+		return ok && id.Name == "st"
 	}
-	ast.Inspect(forBody, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.CaseClause:
-			stored = false
-		case *ast.LabeledStmt:
-			stored = false
-		case *ast.AssignStmt:
-			if len(n.Lhs) == 1 && isKeptPC(n.Lhs[0]) {
-				if id, ok := n.Rhs[0].(*ast.Ident); ok && id.Name == "pc" {
-					stored = true
-				}
-			}
-		case *ast.BranchStmt:
-			if n.Tok == token.GOTO && n.Label.Name == "fail" {
-				gotos++
-				if !stored {
-					t.Errorf("%v: goto fail with no kept.pc = pc before it", fs.Position(n.Pos()))
-				}
-			}
-		case *ast.ReturnStmt:
-			if len(n.Results) == 2 && n.Pos() < failAt {
-				if id, ok := n.Results[1].(*ast.Ident); !ok || id.Name != "nil" {
-					t.Errorf("%v: an error returned past the handlers", fs.Position(n.Pos()))
-				}
-			}
+	for _, name := range files {
+		file, err := parser.ParseFile(fs, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return true
-	})
-	if gotos == 0 {
-		t.Error("no goto fail found")
+		for _, d := range file.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Recv != nil {
+				continue
+			}
+			// The position of the first keep of the pc in the function,
+			// and every use of the tail or of the kept pc after it.
+			kept := token.NoPos
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.AssignStmt:
+					if sel, ok := n.Lhs[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "pc" && isSt(sel.X, "kept") && kept == token.NoPos {
+						kept = n.Pos()
+					}
+				case *ast.CallExpr:
+					if isSt(n.Fun, "at") && kept == token.NoPos {
+						kept = n.Pos()
+					}
+					uses := isSt(n.Fun, "fail") || isSt(n.Fun, "done") || isSt(n.Fun, "put")
+					for _, a := range n.Args {
+						if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND && isSt(u.X, "kept") {
+							uses = true
+						}
+					}
+					if uses {
+						fails++
+						// st.done(r.f(st.at(pc), ...)) keeps it in an argument.
+						ast.Inspect(n, func(m ast.Node) bool {
+							if c, ok := m.(*ast.CallExpr); ok && isSt(c.Fun, "at") && kept == token.NoPos {
+								kept = c.Pos()
+							}
+							return true
+						})
+						if kept == token.NoPos || kept > n.End() {
+							t.Errorf("%v: %s goes to the fail tail, or reads the kept pc, before it keeps the pc", fs.Position(n.Pos()), fd.Name.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	if fails < 100 {
+		t.Fatalf("only %d uses of the fail tail found: the test is not reading the handlers", fails)
 	}
 }

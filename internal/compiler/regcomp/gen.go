@@ -72,7 +72,7 @@ func (g *gen) awaitExpr(n *ast.Await, dst int) int {
 func (g *gen) awaitReg(v, pos int) int {
 	t := g.alloc()
 	g.at(pos)
-	g.cold(bytecode.RColdAwait, t, v, 0)
+	g.cold(bytecode.RAwait, t, v, 0)
 	return t
 }
 
@@ -92,9 +92,9 @@ func (g *gen) yieldStar(n *ast.Yield, dst int) int {
 	at := int(g.cur)
 	cur := g.alloc()
 	g.at(at)
-	start := bytecode.RColdForOfStart
+	start := bytecode.RForOfStart
 	if async {
-		start = bytecode.RColdForAwaitOfStart
+		start = bytecode.RForAwaitOfStart
 	}
 	g.cold(start, cur, src, 0)
 	// The value sent in and how, a pair yield_star's resumption writes.
@@ -109,17 +109,17 @@ func (g *gen) yieldStar(n *ast.Yield, dst int) int {
 	loop := g.newMark()
 	g.bind(loop)
 	g.at(at)
-	g.cold(bytecode.RColdIterResume, v, cur, sent)
+	g.cold(bytecode.RIterResume, v, cur, sent)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	if async {
 		g.at(n.Start)
-		g.cold(bytecode.RColdAwait, v, v, 0)
+		g.cold(bytecode.RAwait, v, v, 0)
 	}
 	g.at(at)
-	g.cold(bytecode.RColdIterUnpackDelegate, v, v, cur)
+	g.cold(bytecode.RIterUnpackDelegate, v, v, cur)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	g.at(at)
-	g.cold(bytecode.RColdYieldStar, sent, v, 0)
+	g.cold(bytecode.RYieldStar, sent, v, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), loop, false)
 	g.bind(end)
 	release()

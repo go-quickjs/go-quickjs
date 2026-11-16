@@ -10,10 +10,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
 
-// The register interpreter's hot block after regSlow (zzreg_run_call.go):
-// its operators, the miss paths and what an iteration runs out of line.
-// The layout lock's pad P, between the two files, puts this part at a
-// fixed address modulo 4 KB, so that a case regSlow takes moves none of it
+// What the register interpreter's handlers call out of line: the
+// operators' slow paths, the miss paths and what an iteration runs
 // (docs/register-interpreter.md, "The loop").
 
 // regBinImm is bin_imm's slow path.
@@ -177,11 +175,8 @@ func (r *Runtime) regUnary(op bytecode.Op, a Value) (Value, error) {
 // hole read, a value a typed array converts with code, a getter, a proxy
 // -- to the slow path. None of it can throw or run code.
 //
-// It is the one call of a label get_index and the immediate forms share,
-// so that the loop grows by a jump each, and set_index's before its slow
-// path, which keeps the code after that case where it was: with the case
-// shorter, crypto_am3 was 5.5% slower at every placement. It switches on
-// the operation again, as regSlow does, out of the loop.
+// The slow functions of get_index, set_index and their immediate forms
+// call it first; it tells the operations apart by the instruction.
 //
 //go:noinline
 func regElemMiss(c *regCode, k *regKept, regs *[1 << 16]Value) bool {
@@ -618,7 +613,7 @@ const (
 	// frame, at the call site.
 	regLeafCode
 	// regLeafArg returns its parameter leafArg, and regLeafConst the
-	// constant leafVal, undefined for nothing: regCallW answers them from
+	// constant leafVal, undefined for nothing: rhCallW answers them from
 	// the window and the code.
 	regLeafArg
 	regLeafConst

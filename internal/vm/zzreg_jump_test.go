@@ -46,6 +46,20 @@ func TestRegMethodReceiver(t *testing.T) {
 	regRunBoth(t, src, want, 6)
 }
 
+// TestRegCallReceiverBinding pins a call whose receiver an assignment
+// left in a binding's register -- (o = x).f() -- whose value goes to a
+// temporary rather than over the binding, as a computed receiver's goes
+// to its own register: the binding keeps what was assigned.
+func TestRegCallReceiverBinding(t *testing.T) {
+	const src = `
+		function lit() { var o, keep = []; for (var i = 0; i < 3; i++) { (o = /d/).test("d"); keep.push(o) } return keep.map(function (r) { return r instanceof RegExp }).join() + new Set(keep).size }
+		function obj() { var o; var v = (o = { f: function () { return 7 } }).f(); return typeof o + v }
+		function chain() { var a, b; var v = (a = "x").concat((b = "y").toUpperCase()); return a + b + v }
+		[lit(), obj(), chain()].join(" ")`
+	const want = "true,true,true3 object7 xyxY"
+	regRunBoth(t, src, want, 4)
+}
+
 // TestRegLeafGivenUp pins a call site of a pure body the frameless
 // evaluator has given up on: the site leaves the leaf's way, and the body
 // is entered as a frame with the same answers.

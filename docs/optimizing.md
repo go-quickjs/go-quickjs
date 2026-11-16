@@ -206,7 +206,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
 | A D R V B S T J Z | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `descriptorObject` (`define.go` to the tree's builder), `buildTreeSkipping` (the tree's builder and slow paths, `arithSlow`), `executeAt`, `callObject`, `runTree`, `callTree`, `logicalJumps` or with the JIT `jitLeafGo`, and the closures at `binaryNode.func1` |
-| Q W P K | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's block: `runReg` (Q), the calls after it from `regCallW` (W), `regSlow`'s operators from `regBinImm` (P), and what runs out of line after cold's dispatch from `regDeadCall` (K), so that the loop's size and cold's sub-operations, which each coverage form adds to, move none of it |
+| Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the calls after it from `regCallW` (W), its handlers after them |
 | GV | a generic `layoutPadV` calls | the generics plain functions meet first, from `vm.go` back | `rmwStmtHook` and the tree's generic nodes after it: `strAppend`, `upvalueAdd`, `litNodeOf`, switch, typeof, the regexp leaves |
 | MA MV MS | a generic that a method at the position calls | the generics methods meet first, from that file back | the method values (`upvalueAdd.node-fm` ...), `dataViewLeaves` and the DataView leaves, `polyReread` and object creation's |
 | CZ | a closure in a generic the last file calls | the closures of generics | `strAppendNode.func1` and the generic tree nodes' closures |
@@ -257,19 +257,13 @@ What each lever cannot move:
   recorded with `layoutpad -record -targets FILE` at the base chosen as the
   measured-best layout, the tool built beforehand.
 
-The register interpreter's hot cases are held by order and a golden
-file, not by a lever: Q pins `runReg`'s start, so a case's address modulo
-4 KB is decided by the code before it in the loop, and the cases are laid
-out in the switch's source order. The hot cases (by dispatch counts over
-the suites and the micro-benchmarks) come first and every other case after
-them; `internal/vm/layoutcases.txt` holds each hot case's offset in
-`runReg`, which `layoutpad` reads from the build's dispatch table and
-`TestLayoutLock` checks. A new register operation is a cold sub-operation
-or a case after the hot ones; an edit to a hot case rewrites the golden
-file with `go generate ./internal/vm` and is timed. Levers inside the
-loop were designed and not built: a case starts at any byte, and holding
-it exactly would take some 1,000 stores of filler per lever in the loop
-itself (docs/register-interpreter.md, "The loop").
+The register interpreter is a small loop over a table of handlers, a
+function an operation (docs/register-interpreter.md, "The loop"): Q pins
+the loop, `runReg`, and W the call path after it, `regCallW`. A handler
+is a function of its own, so an edit to one moves no other's code but
+those after it in its file; there is no switch whose cases a lock would
+hold. The golden file of the switch's hot cases and the levers P and K,
+inside the old loop's block, are gone with the switch.
 
 The pads are never called and their variables never read: one init calls
 them behind a variable that is never true, which keeps the linker from

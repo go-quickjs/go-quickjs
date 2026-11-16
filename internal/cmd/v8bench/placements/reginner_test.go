@@ -52,11 +52,15 @@ func TestRegFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(src), regNop) != 1 {
-		t.Fatalf("%s has no single case for register nop", regGo)
-	}
 	if got := regFill(src, 0, 0); got != string(src) {
 		t.Error("regFill with no calls changed the loop")
+	}
+	if !regFills(src) {
+		// A loop over a table of handlers: nothing is filled.
+		if got := regFill(src, 3, 2); got != string(src) {
+			t.Error("regFill changed a loop of no cases")
+		}
+		src = []byte("package vm\n\nfunc f() {\n\tswitch {\n" + regNop + "\t\tdefault:\n" + regLast + "\t\t}\n}\n")
 	}
 	got := regFill(src, 3, 2)
 	for _, call := range []string{"padRegInner(uint32(w.A()), 0)", "padRegInner(uint32(w.A()), 3)", "padRegInner(uint32(w.A()), 6)"} {

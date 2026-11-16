@@ -7,195 +7,325 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // stack form's instruction of the same name does, with the runtime
 // functions the stack interpreter calls.
 
-// regColdClass runs cold operation w, at pc of c, in frame f.
-//
-//go:noinline
-func (r *Runtime) regColdClass(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
-	a, b, x := regs[w.A()], regs[w.B()], regs[w.C()]
-	switch op := bytecode.RColdOp(w.X()); op {
-	case bytecode.RColdNewClass:
-		return r.linkClass(a, b)
-	case bytecode.RColdSetFieldInit:
-		if a.IsObject() && b.IsObject() {
-			if fd := a.Object().fn(); fd != nil {
-				fd.setFieldInit(b.Object())
-			}
+// regNewClass is new_class.
+func (r *Runtime) regNewClass(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	return r.linkClass(a, b)
+}
+
+// regSetFieldInit is set_field_init.
+func (r *Runtime) regSetFieldInit(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	if a.IsObject() && b.IsObject() {
+		if fd := a.Object().fn(); fd != nil {
+			fd.setFieldInit(b.Object())
 		}
-	case bytecode.RColdDefineMethod:
-		if a.IsObject() {
-			key := regName(f.cl, c, pc, w.C())
-			// A static member named after a function's synthesized length
-			// or name replaces it in place, so it has to exist first.
-			r.materializeFunctionProp(a.Object(), key)
-			a.Object().setOwnRaw(key, b, propWritable|propConfigurable)
-		}
-	case bytecode.RColdClassGetter, bytecode.RColdClassSetter:
-		if a.IsObject() && b.IsObject() {
-			r.defineHalfAccessor(a.Object(), regName(f.cl, c, pc, w.C()), b.Object(), op == bytecode.RColdClassGetter, memberFlags(1))
-		}
-	case bytecode.RColdClassGetterIndex, bytecode.RColdClassSetterIndex:
-		k, err := r.toPropertyKey(b)
-		if err != nil {
-			return err
-		}
-		if a.IsObject() && x.IsObject() {
-			return r.defineHalfAccessorChecked(a.Object(), k, x.Object(), op == bytecode.RColdClassGetterIndex, memberFlags(1))
-		}
-	case bytecode.RColdClassIndex:
-		k, err := r.toPropertyKey(b)
-		if err != nil {
-			return err
-		}
-		if a.IsObject() {
-			return r.createDataProperty(a.Object(), k, x, memberFlags(1))
-		}
-	case bytecode.RColdPrivateName:
-		regs[w.A()] = r.newPrivateName(regName(f.cl, c, pc, w.B()))
-	case bytecode.RColdNewPrivateMethods:
-		regs[w.A()] = r.newPrivateMethods()
-	case bytecode.RColdAddPrivateMethod:
-		r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateMethod)
-	case bytecode.RColdAddPrivateGetter:
-		r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateGetter)
-	case bytecode.RColdAddPrivateSetter:
-		r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateSetter)
-	case bytecode.RColdInstallPrivateMethods:
-		this, bound := regThisValue(f, regs)
-		if !bound {
-			return r.throwError(errReference, "\"this\" is not bound until super() has been called")
-		}
-		return r.installPrivateMethods(this, a)
-	case bytecode.RColdDefinePrivate, bytecode.RColdDefinePrivateMethod:
-		if a.IsObject() {
-			key := regPrivateKey(f, x)
-			// A private field can only be added once. A constructor that
-			// returns an object it has already built would otherwise give
-			// it the same field twice.
-			if a.Object().getOwn(key).ok() {
-				return r.throwTypeError("%s is already present on this object", r.atoms.name(key))
-			}
-			if !a.Object().IsExtensible() {
-				return r.throwTypeError("cannot add %s to a non-extensible object", r.atoms.name(key))
-			}
-			flags := propFlags(propWritable | propPrivate)
-			if op == bytecode.RColdDefinePrivateMethod {
-				flags = propPrivate
-			}
-			a.Object().setOwnRaw(key, b, flags)
-		}
-	case bytecode.RColdDefinePrivateGetter, bytecode.RColdDefinePrivateSetter:
-		if a.IsObject() && b.IsObject() {
-			r.definePrivateAccessor(a.Object(), regPrivateKey(f, x), b.Object(), op == bytecode.RColdDefinePrivateGetter)
-		}
-	case bytecode.RColdPrivateIn:
-		if !b.IsObject() {
-			return r.throwTypeError("the right operand of \"in\" must be an object, not %s", r.describe(b))
-		}
-		regs[w.A()] = Bool(b.Object().getOwn(regPrivateKey(f, x)).ok())
-	case bytecode.RColdSuperCall, bytecode.RColdSuperForward, bytecode.RColdSuperSpread:
-		var args []Value
-		switch op {
-		case bytecode.RColdSuperForward:
-			args = f.args
-		case bytecode.RColdSuperSpread:
-			if b.IsObject() {
-				args = b.Object().elemsOf()
-			}
-		default:
-			// The arguments in their registers, as a call passes them: the
-			// parent's frame is made above this one's window, and no callee
-			// keeps the slice it is given.
-			lo := int(w.C())
-			args = regs[lo : lo+int(w.B()) : lo+int(w.B())]
-		}
-		if err := r.superCall(f, args); err != nil {
-			return err
-		}
-		regs[w.A()] = f.this
-		if f.cl.fn.Kind == bytecode.KindDerivedConstructor {
-			// The constructor's own call: this, bound for good, is its
-			// register 1 from here (RegCode.ThisRef's thisBound).
-			regs[1] = f.this
-		}
-	case bytecode.RColdSuperGet:
-		regSyncThis(f, regs)
-		v, err := r.superGet(f, regName(f.cl, c, pc, w.B()))
-		if err != nil {
-			return err
-		}
-		regs[w.A()] = v
-	case bytecode.RColdSuperSet:
-		regSyncThis(f, regs)
-		return r.superSet(f, regName(f.cl, c, pc, w.B()), a, f.cl.fn.Strict)
-	case bytecode.RColdSuperBase:
-		regSyncThis(f, regs)
-		base, _, err := r.superRef(f)
-		if err != nil {
-			return err
-		}
-		if base == nil {
-			// No prototype to reach: the reference has a null base, which the
-			// read or the write reports once it gets there.
-			regs[w.A()] = Null
-			return nil
-		}
-		regs[w.A()] = Obj(base)
-	case bytecode.RColdSuperGetIndex:
-		if !b.IsObject() {
-			return r.throwTypeError("\"super\" has no prototype to read from")
-		}
-		key, err := r.toPropertyKey(x)
-		if err != nil {
-			return err
-		}
-		this, _ := regThisValue(f, regs)
-		v, err := r.getProp(b.Object(), key, this)
-		if err != nil {
-			return err
-		}
-		regs[w.A()] = v
-	case bytecode.RColdSuperSetIndex:
-		if !a.IsObject() {
-			return r.throwTypeError("\"super\" has no prototype to assign to")
-		}
-		key, err := r.toPropertyKey(b)
-		if err != nil {
-			return err
-		}
-		regSyncThis(f, regs)
-		return r.superSetFrom(f, a, key, x, f.cl.fn.Strict)
-	case bytecode.RColdThis:
-		v, bound := regThisValue(f, regs)
-		if !bound {
-			return r.throwError(errReference, "\"this\" is not bound until super() has been called")
-		}
-		regs[w.A()] = v
-	case bytecode.RColdCheckThis:
-		if _, bound := regThisValue(f, regs); !bound {
-			return r.throwError(errReference, "\"this\" is not bound until super() has been called")
-		}
-	case bytecode.RColdNewTarget:
-		regs[w.A()] = f.newTarget
-	case bytecode.RColdDerivedRet:
-		v, err := r.derivedResult(f, f.cl, a)
-		if err != nil {
-			return err
-		}
-		regs[w.A()] = v
-	case bytecode.RColdDeleteSuper:
-		return r.throwError(errReference, "a super reference cannot be deleted")
-	case bytecode.RColdCloseRegs:
-		regCloseRegs(f, regs, int(w.A()), int(w.B()))
 	}
 	return nil
 }
 
-// regPrivate is get_private or set_private, which regColdSub passes on.
-func (r *Runtime) regPrivate(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
-	if regAt(c.code, k.pc-1).Op() == bytecode.RGetPrivate {
-		return r.regGetPrivate(f, c, k, regs)
+// regDefineMethod is define_method.
+func (r *Runtime) regDefineMethod(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	if a.IsObject() {
+		key := regName(f.cl, c, pc, w.C())
+		// A static member named after a function's synthesized length
+		// or name replaces it in place, so it has to exist first.
+		r.materializeFunctionProp(a.Object(), key)
+		a.Object().setOwnRaw(key, b, propWritable|propConfigurable)
 	}
-	return r.regSetPrivate(f, c, k, regs)
+	return nil
+}
+
+// regClassAccessor is class_getter, class_setter.
+func (r *Runtime) regClassAccessor(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	op := w.Op()
+	if a.IsObject() && b.IsObject() {
+		r.defineHalfAccessor(a.Object(), regName(f.cl, c, pc, w.C()), b.Object(), op == bytecode.RClassGetter, memberFlags(1))
+	}
+	return nil
+}
+
+// regClassAccessorIndex is class_getter_index, class_setter_index.
+func (r *Runtime) regClassAccessorIndex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	op := w.Op()
+	k, err := r.toPropertyKey(b)
+	if err != nil {
+		return err
+	}
+	if a.IsObject() && x.IsObject() {
+		return r.defineHalfAccessorChecked(a.Object(), k, x.Object(), op == bytecode.RClassGetterIndex, memberFlags(1))
+	}
+	return nil
+}
+
+// regClassIndex is class_index.
+func (r *Runtime) regClassIndex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	k, err := r.toPropertyKey(b)
+	if err != nil {
+		return err
+	}
+	if a.IsObject() {
+		return r.createDataProperty(a.Object(), k, x, memberFlags(1))
+	}
+	return nil
+}
+
+// regPrivateName is private_name.
+func (r *Runtime) regPrivateName(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regs[w.A()] = r.newPrivateName(regName(f.cl, c, pc, w.B()))
+	return nil
+}
+
+// regNewPrivateMethods is new_private_methods.
+func (r *Runtime) regNewPrivateMethods(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regs[w.A()] = r.newPrivateMethods()
+	return nil
+}
+
+// regAddPrivateMethod is add_private_method.
+func (r *Runtime) regAddPrivateMethod(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateMethod)
+	return nil
+}
+
+// regAddPrivateGetter is add_private_getter.
+func (r *Runtime) regAddPrivateGetter(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateGetter)
+	return nil
+}
+
+// regAddPrivateSetter is add_private_setter.
+func (r *Runtime) regAddPrivateSetter(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	r.addPrivateMethod(a, regPrivateKey(f, x), b, bytecode.OpAddPrivateSetter)
+	return nil
+}
+
+// regInstallPrivateMethods is install_private_methods.
+func (r *Runtime) regInstallPrivateMethods(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	this, bound := regThisValue(f, regs)
+	if !bound {
+		return r.throwError(errReference, "\"this\" is not bound until super() has been called")
+	}
+	return r.installPrivateMethods(this, a)
+}
+
+// regDefinePrivateField is define_private, define_private_method.
+func (r *Runtime) regDefinePrivateField(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	op := w.Op()
+	if a.IsObject() {
+		key := regPrivateKey(f, x)
+		// A private field can only be added once. A constructor that
+		// returns an object it has already built would otherwise give
+		// it the same field twice.
+		if a.Object().getOwn(key).ok() {
+			return r.throwTypeError("%s is already present on this object", r.atoms.name(key))
+		}
+		if !a.Object().IsExtensible() {
+			return r.throwTypeError("cannot add %s to a non-extensible object", r.atoms.name(key))
+		}
+		flags := propFlags(propWritable | propPrivate)
+		if op == bytecode.RDefinePrivateMethod {
+			flags = propPrivate
+		}
+		a.Object().setOwnRaw(key, b, flags)
+	}
+	return nil
+}
+
+// regDefinePrivateAccessor is define_private_getter, define_private_setter.
+func (r *Runtime) regDefinePrivateAccessor(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	op := w.Op()
+	if a.IsObject() && b.IsObject() {
+		r.definePrivateAccessor(a.Object(), regPrivateKey(f, x), b.Object(), op == bytecode.RDefinePrivateGetter)
+	}
+	return nil
+}
+
+// regPrivateIn is private_in.
+func (r *Runtime) regPrivateIn(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	b := regs[w.B()]
+	x := regs[w.C()]
+	if !b.IsObject() {
+		return r.throwTypeError("the right operand of \"in\" must be an object, not %s", r.describe(b))
+	}
+	regs[w.A()] = Bool(b.Object().getOwn(regPrivateKey(f, x)).ok())
+	return nil
+}
+
+// regSuperCallOf is super_call, super_forward, super_spread.
+func (r *Runtime) regSuperCallOf(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	b := regs[w.B()]
+	op := w.Op()
+	var args []Value
+	switch op {
+	case bytecode.RSuperForward:
+		args = f.args
+	case bytecode.RSuperSpread:
+		if b.IsObject() {
+			args = b.Object().elemsOf()
+		}
+	default:
+		// The arguments in their registers, as a call passes them: the
+		// parent's frame is made above this one's window, and no callee
+		// keeps the slice it is given.
+		lo := int(w.C())
+		args = regs[lo : lo+int(w.B()) : lo+int(w.B())]
+	}
+	if err := r.superCall(f, args); err != nil {
+		return err
+	}
+	regs[w.A()] = f.this
+	if f.cl.fn.Kind == bytecode.KindDerivedConstructor {
+		// The constructor's own call: this, bound for good, is its
+		// register 1 from here (RegCode.ThisRef's thisBound).
+		regs[1] = f.this
+	}
+	return nil
+}
+
+// regSuperGet is super_get.
+func (r *Runtime) regSuperGet(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regSyncThis(f, regs)
+	v, err := r.superGet(f, regName(f.cl, c, pc, w.B()))
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = v
+	return nil
+}
+
+// regSuperSet is super_set.
+func (r *Runtime) regSuperSet(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	regSyncThis(f, regs)
+	return r.superSet(f, regName(f.cl, c, pc, w.B()), a, f.cl.fn.Strict)
+}
+
+// regSuperBase is super_base.
+func (r *Runtime) regSuperBase(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regSyncThis(f, regs)
+	base, _, err := r.superRef(f)
+	if err != nil {
+		return err
+	}
+	if base == nil {
+		// No prototype to reach: the reference has a null base, which the
+		// read or the write reports once it gets there.
+		regs[w.A()] = Null
+		return nil
+	}
+	regs[w.A()] = Obj(base)
+	return nil
+}
+
+// regSuperGetIndex is super_get_index.
+func (r *Runtime) regSuperGetIndex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	b := regs[w.B()]
+	x := regs[w.C()]
+	if !b.IsObject() {
+		return r.throwTypeError("\"super\" has no prototype to read from")
+	}
+	key, err := r.toPropertyKey(x)
+	if err != nil {
+		return err
+	}
+	this, _ := regThisValue(f, regs)
+	v, err := r.getProp(b.Object(), key, this)
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = v
+	return nil
+}
+
+// regSuperSetIndex is super_set_index.
+func (r *Runtime) regSuperSetIndex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	b := regs[w.B()]
+	x := regs[w.C()]
+	if !a.IsObject() {
+		return r.throwTypeError("\"super\" has no prototype to assign to")
+	}
+	key, err := r.toPropertyKey(b)
+	if err != nil {
+		return err
+	}
+	regSyncThis(f, regs)
+	return r.superSetFrom(f, a, key, x, f.cl.fn.Strict)
+}
+
+// regThis is this_bound.
+func (r *Runtime) regThis(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	v, bound := regThisValue(f, regs)
+	if !bound {
+		return r.throwError(errReference, "\"this\" is not bound until super() has been called")
+	}
+	regs[w.A()] = v
+	return nil
+}
+
+// regCheckThis is check_this_init.
+func (r *Runtime) regCheckThis(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	if _, bound := regThisValue(f, regs); !bound {
+		return r.throwError(errReference, "\"this\" is not bound until super() has been called")
+	}
+	return nil
+}
+
+// regNewTarget is new_target.
+func (r *Runtime) regNewTarget(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regs[w.A()] = f.newTarget
+	return nil
+}
+
+// regDerivedRet is derived_ret.
+func (r *Runtime) regDerivedRet(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	a := regs[w.A()]
+	v, err := r.derivedResult(f, f.cl, a)
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = v
+	return nil
+}
+
+// regDeleteSuper is delete_super.
+func (r *Runtime) regDeleteSuper(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	return r.throwError(errReference, "a super reference cannot be deleted")
+}
+
+// regCloseRegsOp is close_regs.
+func (r *Runtime) regCloseRegsOp(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	regCloseRegs(f, regs, int(w.A()), int(w.B()))
+	return nil
 }
 
 // regGetPrivate is get_private, a slow path of runReg's, R[A] = R[B].#R[C]:

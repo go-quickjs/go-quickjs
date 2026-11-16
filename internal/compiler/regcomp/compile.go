@@ -626,12 +626,12 @@ func (g *gen) checkRef(r int, slot uint32) {
 
 // movFar copies the k-th far binding to register d (mov_far).
 func (g *gen) movFar(d, k int) {
-	g.farPCs = append(g.farPCs, g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdMovFar), r16(d), uint32(k))))
+	g.farPCs = append(g.farPCs, g.emit(bytecode.MakeRBC(bytecode.RMovFar, 0, r16(d), uint32(k))))
 }
 
 // movToFar copies register v to the k-th far binding (mov_to_far).
 func (g *gen) movToFar(k, v int) {
-	g.farPCs = append(g.farPCs, g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdMovToFar), r16(v), uint32(k))))
+	g.farPCs = append(g.farPCs, g.emit(bytecode.MakeRBC(bytecode.RMovToFar, 0, r16(v), uint32(k))))
 }
 
 func (g *gen) alloc() int {
@@ -924,12 +924,12 @@ func (g *gen) body() {
 	lexical := !g.fn.HasSimpleParams || g.fn.HasRest
 	if suspends(g.fn) {
 		// A resumption goes on from here where the frame was suspended.
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdGenEntry), 0, 0, 0))
+		g.emit(bytecode.MakeR(bytecode.RGenEntry, 0, 0, 0, 0))
 	}
 	if g.nfar > 0 {
 		// The far bindings start undefined, as the near ones the call
 		// makes (Inits).
-		at := g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdFarInit), 0, 0))
+		at := g.emit(bytecode.MakeRBC(bytecode.RFarInit, 0, 0, 0))
 		g.farPCs = append(g.farPCs, at)
 		g.aux(at, uint32(g.nfar))
 	}
@@ -999,7 +999,7 @@ func (g *gen) body() {
 	g.top = g.topAfterBindings()
 	if g.fn.Generator {
 		// A generator's creation binds its parameters and stops here.
-		g.cold(bytecode.RColdEndParams, 0, 0, 0)
+		g.cold(bytecode.REndParams, 0, 0, 0)
 	}
 	// Hoisted function declarations of the body; a block's are made as the
 	// block is entered (enterBlock).
@@ -1370,7 +1370,7 @@ func (g *gen) enterBlock(list []ast.Stmt) {
 			if g.inLoop() && g.fn.Locals[slot].Captured {
 				// Each turn's binding is a new one a closure keeps: the
 				// closures of the turns before keep theirs, closed.
-				g.cold(bytecode.RColdCloseRegs, int(g.slotReg[slot]), 1, 0)
+				g.cold(bytecode.RCloseRegs, int(g.slotReg[slot]), 1, 0)
 			}
 			if g.tdz[slot] || g.fn.Locals[slot].Captured && !(g.fn.Debug != nil && g.rec.Unmarked[uint32(slot)]) {
 				// A closure may read it before its declaration runs. In a
@@ -1401,7 +1401,7 @@ func (g *gen) enterBlock(list []ast.Stmt) {
 			return
 		}
 		if g.inLoop() && g.fn.Locals[slot].Captured {
-			g.cold(bytecode.RColdCloseRegs, int(g.slotReg[slot]), 1, 0)
+			g.cold(bytecode.RCloseRegs, int(g.slotReg[slot]), 1, 0)
 		}
 		funcs = append(funcs, fd)
 	}
@@ -2041,7 +2041,7 @@ func (g *gen) expr(e ast.Expr, dst int) int {
 	case *ast.RegexpLit:
 		d := g.dest(dst)
 		g.at(n.Start)
-		g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdNewRegExp), r16(d), g.regexpConst(n)))
+		g.emit(bytecode.MakeRBC(bytecode.RNewRegExp, 0, r16(d), g.regexpConst(n)))
 		return d
 	case *ast.BoolLit:
 		d := g.dest(dst)
@@ -2122,7 +2122,7 @@ func (g *gen) expr(e ast.Expr, dst int) int {
 		return g.place(n.reg, dst)
 	case *ast.ImportMeta:
 		d := g.dest(dst)
-		g.cold(bytecode.RColdImportMeta, d, 0, 0)
+		g.cold(bytecode.RImportMeta, d, 0, 0)
 		return d
 	}
 	g.fail(fmt.Sprintf("an expression the backend does not compile (%T)", e))
@@ -2218,7 +2218,7 @@ func (g *gen) ident(n *ast.Ident, dst int) int {
 	case ResUpvalCheck:
 		d := g.dest(dst)
 		g.at(int(n.Start))
-		g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdGetUpvalCheck), r16(d), res.Index))
+		g.emit(bytecode.MakeRBC(bytecode.RGetUpvalCheck, 0, r16(d), res.Index))
 		return d
 	case ResGlobal:
 		d := g.dest(dst)
@@ -2250,7 +2250,7 @@ func (g *gen) typeofOperand(e ast.Expr) int {
 	if g.withs[id] != nil {
 		g.probeOp(id, bytecode.OpWithTypeof)
 		d := g.alloc()
-		g.probed(id, bytecode.RColdWithGet, d, func() { g.place(g.typeofOperand(id), d) })
+		g.probed(id, bytecode.RWithGet, d, func() { g.place(g.typeofOperand(id), d) })
 		return d
 	}
 	if _, ok := g.rec.Read[id]; ok {
@@ -2258,7 +2258,7 @@ func (g *gen) typeofOperand(e ast.Expr) int {
 	}
 	d := g.alloc()
 	g.at(int(id.Start))
-	g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdGetGlobalOpt), r16(d), g.name16(id.Name), 0)), id.Name)
+	g.far(g.emit(bytecode.MakeR(bytecode.RGetGlobalOpt, 0, r16(d), g.name16(id.Name), 0)), id.Name)
 	return d
 }
 
@@ -2462,7 +2462,7 @@ func (g *gen) importCall(n *ast.Call, phase, dst int) int {
 	}
 	d := g.dest(dst)
 	g.at(n.TracePos())
-	g.cold(bytecode.RColdImport, d, w, phase<<2|argc)
+	g.cold(bytecode.RImport, d, w, phase<<2|argc)
 	return d
 }
 
@@ -2533,12 +2533,12 @@ func (g *gen) deleteName(n *ast.Unary, id *ast.Ident, dst int) int {
 	switch res.Kind {
 	case ResWith:
 		g.probeOp(id, bytecode.OpWithDelete)
-		g.probed(id, bytecode.RColdWithDelete, d, func() { g.deleteName(n, id, d) })
+		g.probed(id, bytecode.RWithDelete, d, func() { g.deleteName(n, id, d) })
 	case ResLocal, ResUpval:
 		g.emit(bytecode.MakeR(bytecode.RLoadFalse, 0, r16(d), 0, 0))
 	case ResGlobal:
 		g.at(n.Start)
-		g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdDeleteVar), r16(d), g.name16(id.Name), 0)), id.Name)
+		g.far(g.emit(bytecode.MakeR(bytecode.RDeleteVar, 0, r16(d), g.name16(id.Name), 0)), id.Name)
 	default:
 		panic("regcomp: delete of a name resolved as " + fmt.Sprint(res.Kind))
 	}
@@ -2772,10 +2772,10 @@ func (g *gen) storeIdent(id *ast.Ident, value ast.Expr, init bool) int {
 				ok := g.alloc()
 				g.at(int(id.Start))
 				name := g.name16(id.Name)
-				g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCheckGlobalRef), r16(ok), name, g.globalSite("check_global_ref", id.Name))), id.Name)
+				g.far(g.emit(bytecode.MakeR(bytecode.RCheckGlobalRef, 0, r16(ok), name, g.globalSite("check_global_ref", id.Name))), id.Name)
 				v := g.expr(value, -1)
 				g.at(int(id.Start))
-				g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdAssertResolved), r16(ok), name, 0)), id.Name)
+				g.far(g.emit(bytecode.MakeR(bytecode.RAssertResolved, 0, r16(ok), name, 0)), id.Name)
 				g.far(g.emit(bytecode.MakeR(bytecode.RSetGlobal, 0, r16(v), name, g.globalSite("RSetGlobal", id.Name))), id.Name)
 				return v
 			}
@@ -2955,7 +2955,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 func (g *gen) callTarget(call *ast.Call, pos int) int {
 	r := g.expr(call, -1)
 	g.at(pos)
-	g.far(g.cold(bytecode.RColdThrowRef, 0, int(g.name16("invalid assignment target")), 0), "invalid assignment target")
+	g.far(g.cold(bytecode.RThrowRef, 0, int(g.name16("invalid assignment target")), 0), "invalid assignment target")
 	return r
 }
 
@@ -3090,7 +3090,7 @@ func (g *gen) readForWrite(id *ast.Ident, dst int) int {
 		g.emit(bytecode.MakeRBC(bytecode.RGetUpval, 0, r16(d), res.Index))
 	case ResUpvalCheck:
 		g.at(int(id.Start))
-		g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdGetUpvalCheck), r16(d), res.Index))
+		g.emit(bytecode.MakeRBC(bytecode.RGetUpvalCheck, 0, r16(d), res.Index))
 	case ResGlobal:
 		g.at(int(id.Start))
 		g.far(g.emit(bytecode.MakeR(bytecode.RGetGlobal, 0, r16(d), g.name16(id.Name), g.globalSite("RGetGlobal", id.Name))), id.Name)
@@ -3119,7 +3119,7 @@ func (g *gen) storeValue(id *ast.Ident, v int) {
 		if !g.fn.Locals[res.Index].Mutable {
 			// A constant past its dead zone, as set_local_check finds it:
 			// a switch case's, which the dead zone marks.
-			g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdAssignConst), 0, g.name16(id.Name), 0)), id.Name)
+			g.far(g.emit(bytecode.MakeR(bytecode.RAssignConst, 0, 0, g.name16(id.Name), 0)), id.Name)
 			return
 		}
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(r), r16(v), 0))
@@ -3127,7 +3127,7 @@ func (g *gen) storeValue(id *ast.Ident, v int) {
 		g.emit(bytecode.MakeRBC(bytecode.RSetUpval, 0, r16(v), res.Index))
 	case ResUpvalCheck:
 		g.at(int(id.Start))
-		g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdSetUpvalCheck), r16(v), res.Index))
+		g.emit(bytecode.MakeRBC(bytecode.RSetUpvalCheck, 0, r16(v), res.Index))
 	case ResGlobalVar:
 		// A var's store: set_global whatever the code's strictness.
 		g.at(int(id.Start))
@@ -3155,7 +3155,7 @@ func (g *gen) storeValue(id *ast.Ident, v int) {
 // assignConst throws as an assignment to the constant id does.
 func (g *gen) assignConst(id *ast.Ident) {
 	g.at(int(id.Start))
-	g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdAssignConst), 0, g.name16(id.Name), 0)), id.Name)
+	g.far(g.emit(bytecode.MakeR(bytecode.RAssignConst, 0, 0, g.name16(id.Name), 0)), id.Name)
 }
 
 func (g *gen) update(n *ast.Update, keep bool, dst int) int {
@@ -3368,7 +3368,7 @@ func (g *gen) directEval(n *ast.Call, idx uint32, dst int) int {
 	if id, ok := n.Callee.(*ast.Ident); ok && g.withs[id] != nil {
 		// A with object's own eval is called with it as the receiver.
 		g.probeOp(id, bytecode.OpWithGetThis)
-		g.probed(id, bytecode.RColdWithGetThis, w, static)
+		g.probed(id, bytecode.RWithGetThis, w, static)
 	} else {
 		static()
 	}
@@ -3380,7 +3380,7 @@ func (g *gen) directEval(n *ast.Call, idx uint32, dst int) int {
 	}
 	d := g.dest(dst)
 	g.at(int(n.Start))
-	at := g.cold(bytecode.RColdDirectEval, w, d, argc)
+	at := g.cold(bytecode.RDirectEval, w, d, argc)
 	g.aux(at, idx)
 	if g.rec.Tails[n] {
 		g.mark(at, bytecode.RMarkTail)
@@ -3437,9 +3437,14 @@ func (g *gen) call(n *ast.Call, dst int) int {
 	// is taken, so that what computing it takes is given back first
 	// (freeAbove) and the windows of a chain are not one above another:
 	// get_method_w puts it in the window.
-	recv := -1
+	recv, recvTemp := -1, false
 	if c, ok := n.Callee.(*ast.Member); ok && !c.Optional && !special(c) && !c.Computed && !g.inPlace(c.Object) {
+		m := g.top
 		recv = g.expr(c.Object, -1)
+		// A temporary of its own, or a binding's register that an
+		// assignment left it in -- (o = x).f() -- which the call's value
+		// must not take.
+		recvTemp = recv >= m
 	}
 	w := g.allocN(2 + argc)
 	op := bytecode.RCallW
@@ -3481,7 +3486,7 @@ func (g *gen) call(n *ast.Call, dst int) int {
 		if g.withs[c] != nil && g.withs[c].probe.Op == bytecode.OpWithGetThis {
 			// Through the object that has the name, which is the call's
 			// receiver, as the stack form's with_get_this.
-			g.probed(c, bytecode.RColdWithGetThis, w, func() {
+			g.probed(c, bytecode.RWithGetThis, w, func() {
 				g.into(c, w)
 				g.emit(bytecode.MakeR(bytecode.RLoadUndef, 0, r16(w+1), 0, 0))
 			})
@@ -3501,16 +3506,16 @@ func (g *gen) call(n *ast.Call, dst int) int {
 	}
 	if op == bytecode.RCallMW && argc == 2 && (mname == "asUintN" || mname == "asIntN") && len(g.code) > 0 {
 		// X.asUintN(w, x op y): the operator, the arguments' last
-		// instruction, may make the call's value at once (RColdWrap).
+		// instruction, may make the call's value at once (RWrap).
 		if l := g.code[len(g.code)-1]; int(l.A()) == w+3 && wrapsOp(l.Op()) {
-			g.code[len(g.code)-1] = bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdWrap), l.A(), l.B(), l.C())
+			g.code[len(g.code)-1] = bytecode.MakeR(bytecode.RWrap, 0, l.A(), l.B(), l.C())
 			g.aux(len(g.code)-1, uint32(l.Op()))
 		}
 	}
 	d := dst
 	if d < 0 {
 		d = w
-		if recv >= 0 {
+		if recvTemp {
 			// The receiver's register, below the window, which the window
 			// has its copy of: a chain's calls then each leave their value
 			// where the one before left its.
@@ -3668,7 +3673,7 @@ func (g *gen) regexpLitCall(n *ast.Call, dst int, dead bool) (int, bool) {
 	return d, true
 }
 
-// wrapsOp reports whether op is an operator RColdWrap may make: one the
+// wrapsOp reports whether op is an operator RWrap may make: one the
 // tree's wrapCall makes BigInt.asUintN's and asIntN's of from its
 // operands (wrapsOperator).
 func wrapsOp(op bytecode.ROp) bool {
@@ -3967,7 +3972,7 @@ func (g *gen) debugMark(pos int) {
 	if m.Debugger {
 		b = 1
 	}
-	g.aux(g.cold(bytecode.RColdDebug, 0, b, 0), m.Index)
+	g.aux(g.cold(bytecode.RDebug, 0, b, 0), m.Index)
 }
 
 func (g *gen) aux(pc int, v uint32) {
@@ -4011,7 +4016,7 @@ func (g *gen) newExpr(n *ast.New, dst int) int {
 		g.spreadArray(n.Args, w+2)
 		d := g.dest(dst)
 		g.at(n.Start)
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallSpread), r16(w), r16(d), 1))
+		g.emit(bytecode.MakeR(bytecode.RCallSpread, 0, r16(w), r16(d), 1))
 		return d
 	}
 	argc := len(n.Args)
@@ -4346,6 +4351,6 @@ func (g *gen) capturedRegs(d *ast.VarDecl) []int {
 // made opens new ones.
 func (g *gen) closeRegs(regs []int) {
 	for _, r := range regs {
-		g.cold(bytecode.RColdCloseRegs, r, 1, 0)
+		g.cold(bytecode.RCloseRegs, r, 1, 0)
 	}
 }

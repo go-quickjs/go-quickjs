@@ -6,10 +6,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// What the register interpreter runs out of line that is not cold's own
-// dispatch (zzreg_switch.go): the layout lock's pad K
-// (zzreg_switch_a_layoutpad.go) keeps it where it was whatever regColdSub's
-// sub-operations add (docs/optimizing.md, "The layout lock").
+// What the register interpreter's handlers run out of line: calls whose
+// value only its truth is read, literals, the fail tail's search for a
+// handler, iterators' steps.
 
 // regDeadCall is a call of o on recv with args whose value nothing reads
 // but its truth: of the realm's exec or replace, the function told so, as
@@ -109,31 +108,6 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 		ic.next, ic.s1 = s, root
 	}
 	regs[w.A()] = Obj(o)
-}
-
-// regSwitch is switch: k's pc, past the instruction, made the body's
-// where v equals a case.
-func regSwitch(c *regCode, k *regKept, v Value, consts []Value) {
-	w := regAt(c.code, k.pc-1)
-	if to := c.switches[w.BC()].lookup(v, consts); to >= 0 {
-		k.pc = int(to)
-	}
-}
-
-// regSwitchTypeof is switch_typeof: k's pc made the body of v's type's
-// name, where a case has it.
-func regSwitchTypeof(c *regCode, k *regKept, v Value) {
-	w := regAt(c.code, k.pc-1)
-	if to := c.switches[w.BC()].typeTo[typeofKind[struct{}](v)]; to >= 0 {
-		k.pc = int(to)
-	}
-}
-
-// regTypeof is typeof: the type's name the runtime keeps, as
-// typeofString answers it.
-func (r *Runtime) regTypeof(c *regCode, k *regKept, regs *[1 << 16]Value) {
-	w := regAt(c.code, k.pc-1)
-	regs[w.A()] = Str(r.typeofString(regs[w.B()]))
 }
 
 // regNewArrayE is new_array_empty: the tree's node for the literal, made

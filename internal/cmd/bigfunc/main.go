@@ -4,11 +4,11 @@
 // Go's inliner calls a function of 5,000 or more IR nodes big
 // (inlineBigFunctionNodes in cmd/compile/internal/inline) and inlines into
 // it only callees of cost 20 or less: past it, every helper above that cost
-// becomes a call in the whole function. The register interpreter's loop,
-// runReg, is kept below it (docs/register-interpreter.md, "The loop"), and
-// TestRegLoopCallsNoHelper says whether it calls what it should not; this
-// says by how much it is below. -m=2, which prints the verdict and not the
-// size, runs out of memory on package vm.
+// becomes a call in the whole function; this says by how much a function
+// is below it. -m=2, which prints the verdict and not the size, runs out
+// of memory on package vm. With BIGFUNC_ALL in the environment it reports
+// functions of any size: the register interpreter's loop, runReg, and its
+// handlers (docs/register-interpreter.md, "The loop").
 //
 // It builds the toolchain's own compiler with inl.go given through
 // -overlay, so that IsBigFunc prints the count it makes of each function of
@@ -110,7 +110,7 @@ func reportBigFunc(fn *ir.Func) {
 		size++
 		return false
 	})
-	if size < 2500 {
+	if size < 2500 && os.Getenv("BIGFUNC_ALL") == "" {
 		return
 	}
 	fmt.Printf("%v: bigfunc %v %d\n", ir.Line(fn), fn, size)

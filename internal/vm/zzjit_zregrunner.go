@@ -16,8 +16,8 @@ import (
 // evaluator does not make -- a host operation, a guard that failed, a
 // Generic instruction's slow path -- the VM makes, the whole register
 // instruction run on the frame's real registers by the interpreter's own
-// slow paths (regSlow, regCallW, regCold and the rest), as a host exit of
-// Stage 3a-3's native code is to; and where the evaluator leaves for good,
+// handlers (regTable), as a host exit of Stage 3a-3's native code is to;
+// and where the evaluator leaves for good,
 // runReg goes on with the frame from that register pc, as a deoptimization
 // does. Only tests run it (TestRegLowerEvaluate, by RegLowerDiff).
 
@@ -109,121 +109,30 @@ func (x *regRunner) Run(p *ir.Program, pc int, in *ir.Instruction, slots []ir.Va
 	r, f, c := x.r, x.f, x.c
 	w := regAt(c.code, rpc)
 	switch w.Op() {
-	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield:
+	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield, bytecode.RCallWT, bytecode.RCallMWT:
 		return 0, false, nil
 	}
 	x.store(slots)
-	regs := regWindow(r.stack, x.wb)
-	k := regKept{pc: rpc + 1}
-	var err error
-	switch op := w.Op(); op {
-	case bytecode.RCallW, bytecode.RCallMW:
-		err = r.regCallW(f, c, &k, x.wb)
-	case bytecode.RNewArrayE, bytecode.RSwitch, bytecode.RSwitchTypeof, bytecode.RTypeof, bytecode.RNewObjectLit:
-		r.regCold(f, c, &k, regs)
-	case bytecode.RThrow:
-		err = r.regThrow(f, c, rpc+1, regs)
-	case bytecode.RCheckRef:
-		if regs[w.A()].IsUninitialized() {
-			err = r.regThrowDeadZone(f, c, rpc+1)
-		}
-	case bytecode.RAppend:
-		err = r.regAppend(f, c, &k, regs)
-	case bytecode.RStrFreeze:
-		if v := regs[w.A()]; v.IsString() {
-			if s := v.String(); s.building {
-				s.building = false
-			}
-		}
-	case bytecode.RCharCodeAt:
-		err = r.regCharCodeAt(f, c, &k, regs)
-	case bytecode.RIterNext:
-		err = r.regIterNext(f, c, &k, regs)
-	case bytecode.RLit:
-		err = r.regLit(f, c, &k, regs)
-	case bytecode.RMove:
-		regs[w.A()] = regs[w.B()]
-	case bytecode.RNop:
-	case bytecode.RLoadInt:
-		regs[w.A()] = Int32(int32(w.BC()))
-	case bytecode.RLoadConst:
-		regs[w.A()] = f.cl.consts[w.BC()]
-	case bytecode.RLoadUndef:
-		regs[w.A()] = Undefined
-	case bytecode.RLoadNull:
-		regs[w.A()] = Null
-	case bytecode.RLoadTrue:
-		regs[w.A()] = True
-	case bytecode.RLoadFalse:
-		regs[w.A()] = False
-	case bytecode.RLoadEmpty:
-		regs[w.A()] = Str(emptyString)
-	case bytecode.RLoadUninit:
-		regs[w.A()] = uninitialized
-	case bytecode.RLoadThis:
-		regs[w.A()] = f.this
-	case bytecode.RGetUpval:
-		regs[w.A()] = f.cl.upvalues[w.BC()].get()
-	case bytecode.RSetUpval:
-		f.cl.upvalues[w.BC()].set(regs[w.A()])
-	case bytecode.RJmp:
-		k.pc += int(regJumpOff(w))
-	default:
-		var t Value
-		var ok bool
-		if t, err, ok = x.slow(&k, regs); !ok {
-			// No slow path of the interpreter's runs it whole: runReg's
-			// case alone does, which the frame resumes at (regLowerRun).
-			return 0, false, nil
-		}
-		if err == nil && regJumps(op) && t.sameBits(True) {
-			k.pc += int(regJumpOff(w))
-		}
+	// The instruction's handler, and its slow function where the handler
+	// leaves it that, as runReg runs them.
+	st := r.regEnter(f, c)
+	next := regTable[w.Op()](st.regs, w, rpc, st)
+	if next < 0 && next != regDone {
+		next = regSlowTable[w.Op()](st.regs, w, ^next, st)
 	}
+	thrown := st.err
+	r.regLeave(st)
 	x.steps++
-	if err != nil {
-		h := r.regCatch(f, c, &k, regs, err)
-		if h < 0 {
-			x.thrown = err
-			return 0, false, errRegThrown
-		}
-		k.pc = h
+	if next == regDone {
+		x.thrown = thrown
+		return 0, false, errRegThrown
 	}
 	x.load(slots)
-	next := p.At(uint32(k.pc))
-	if next < 0 {
+	at := p.At(uint32(next))
+	if at < 0 {
 		return 0, false, nil
 	}
-	return next, true, nil
-}
-
-// slow is regSlow of the instruction before k.pc, ok false where it has
-// no slow path for it, which it says before it does anything.
-func (x *regRunner) slow(k *regKept, regs *[1 << 16]Value) (t Value, err error, ok bool) {
-	defer func() {
-		if v := recover(); v != nil {
-			if s, isString := v.(string); !isString || len(s) < 31 || s[:31] != "register code: no slow path for" {
-				panic(v)
-			}
-			ok = false
-		}
-	}()
-	t, err = x.r.regSlow(x.f, x.c, k, regs)
-	return t, err, true
-}
-
-// regJumps reports whether op is a conditional jump the slow path decides,
-// its answer true where the jump is taken.
-func regJumps(op bytecode.ROp) bool {
-	switch op {
-	case bytecode.RJmpF, bytecode.RJmpT, bytecode.RJTypeof, bytecode.RJNull, bytecode.RJNotNull,
-		bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
-		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
-		bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJEq, bytecode.RJNe, bytecode.RJEqI, bytecode.RJNeI,
-		bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU:
-		return true
-	}
-	return false
+	return at, true, nil
 }
 
 // regLowerEnter is regEnterW, the frame of a call of o made, but run by
@@ -368,9 +277,6 @@ func (r *Runtime) RegLowerCall(fnv Value, args []Value, budget uint64) RegLowerR
 		// Left for good: the frame as the state has it, runReg from its pc.
 		w := regAt(c.code, int(exit.State.PC))
 		res.Resumed = w.Op().String()
-		if w.Op() == bytecode.RCold {
-			res.Resumed = bytecode.RColdOp(w.X()).String()
-		}
 		if exit.Kind == ir.BudgetExit {
 			res.Resumed = "budget"
 		}

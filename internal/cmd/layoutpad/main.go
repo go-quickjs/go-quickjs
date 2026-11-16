@@ -127,10 +127,8 @@ var positions = []position{
 	{"S", "vm_sz_layoutpad.go", "after vm_shape.go, before vm_tree.go: runTree, backEdgeCheck"},
 	{"T", "zcall_tl_layoutpad.go", "after zcall_tail.go, before zcall_tree.go: callTree, runTreeNested"},
 	{"J", "zzj_layoutpad.go", "after zzbigown.go, before the JIT's zzjit files"},
-	{"Q", "zzreg_ru_layoutpad.go", "after zzreg_report.go, before zzreg_run.go: the register interpreter's hot block, runReg first"},
-	{"W", "zzreg_run_a_layoutpad.go", "after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls and slow path after its loop, regCallW first"},
-	{"P", "zzreg_run_layoutpad.go", "after zzreg_run_call.go, before zzreg_runs.go: the register interpreter's hot block after regSlow, regBinImm first"},
-	{"K", "zzreg_switch_a_layoutpad.go", "after zzreg_switch.go, before zzreg_switch_cold.go: what the register interpreter runs out of line after cold's dispatch, regDeadCall first"},
+	{"Q", "zzreg_ru_layoutpad.go", "after zzreg_report.go, before zzreg_run.go: the register interpreter's loop, runReg"},
+	{"W", "zzreg_run_a_layoutpad.go", "after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},
 	{"Z", "zzzz_layoutpad.go", "after every file: the closures, and the generics the last files call"},
 }
 
@@ -240,10 +238,6 @@ func main() {
 		}
 		fatal(errors.New("no configuration picked"))
 	}
-	cf, err := readCaseFile()
-	if err != nil {
-		fatal(err)
-	}
 	switch {
 	case *check:
 		drift := false
@@ -252,12 +246,12 @@ func main() {
 			if err != nil {
 				fatal(err)
 			}
-			lines := append(compare(c, syms), cf.compareCases(c, syms)...)
+			lines := compare(c, syms)
 			for _, line := range lines {
 				fmt.Printf("%s: %s\n", c, line)
 			}
 			if len(lines) == 0 {
-				fmt.Printf("%s: every anchor at its target, every hot case where it was\n", c)
+				fmt.Printf("%s: every anchor at its target\n", c)
 			}
 			drift = drift || len(lines) > 0
 		}
@@ -311,14 +305,9 @@ func main() {
 			fatal(err)
 		}
 		for _, c := range picked {
-			syms, err := solve(c, *verbose)
-			if err != nil {
+			if _, err := solve(c, *verbose); err != nil {
 				fatal(err)
 			}
-			cf.record(c, syms)
-		}
-		if err := cf.write(t.configs); err != nil {
-			fatal(err)
 		}
 	}
 }
@@ -466,9 +455,6 @@ type symbol struct {
 type symtab struct {
 	list   []symbol // by address
 	byName map[string]symbol
-	// cases is each opcode's case in runReg, an offset from its start
-	// (readCases).
-	cases [128]uint64
 }
 
 // build builds v8bench for c as its targets are measured and reads its
@@ -494,11 +480,7 @@ func build(c *config) (*symtab, error) {
 	if err != nil {
 		return nil, fmt.Errorf("go tool nm: %w", err)
 	}
-	syms := parseNM(out)
-	if syms.cases, err = readCases(exe, syms, c.goos); err != nil {
-		return nil, fmt.Errorf("%s: %w", c, err)
-	}
-	return syms, nil
+	return parseNM(out), nil
 }
 
 func parseNM(out []byte) *symtab {

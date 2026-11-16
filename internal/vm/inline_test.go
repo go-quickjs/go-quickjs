@@ -77,6 +77,15 @@ var intendedInlining = []string{
 	// live across it.
 	"regTypedAt",
 	"regTypedStore",
+	// The register interpreter's handlers' jump and truthiness, which
+	// keep a compare-and-branch's handler a leaf, and the state a frame
+	// takes, keeps its pc in and gives back.
+	"regJump",
+	"regTruth",
+	"(*regState).at",
+	"(*regState).done",
+	"(*Runtime).regEnter",
+	"(*Runtime).regLeave",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with

@@ -167,11 +167,8 @@ func regBranch(op bytecode.ROp) (ir.Operator, bool, bool) {
 // form's iter_resume, iter_unpack_delegate, iter_result and
 // async_iter_close): native code has an entry there as at the jump.
 func regGoBranches(w bytecode.RInstr) bool {
-	if w.Op() != bytecode.RCold {
-		return false
-	}
-	switch bytecode.RColdOp(w.X()) {
-	case bytecode.RColdIterResume, bytecode.RColdIterUnpackDelegate, bytecode.RColdIterResult, bytecode.RColdAsyncIterClose:
+	switch w.Op() {
+	case bytecode.RIterResume, bytecode.RIterUnpackDelegate, bytecode.RIterResult, bytecode.RAsyncIterClose:
 		return true
 	}
 	return false
@@ -182,13 +179,13 @@ func regGoBranches(w bytecode.RInstr) bool {
 // leaves to Go (as lowerFunction's isDefinition and isPrivate): of those,
 // what reads only its operands and the frame (frameDefinition), and the
 // operations Go makes from native code (GoOperation), a callee keeps.
-func regDefinition(op bytecode.RColdOp) bool {
+func regDefinition(op bytecode.ROp) bool {
 	switch op {
-	case bytecode.RColdDefineGetterIndex, bytecode.RColdDefineSetterIndex, bytecode.RColdClassGetterIndex,
-		bytecode.RColdClassSetterIndex,
-		bytecode.RColdAddPrivateMethod, bytecode.RColdAddPrivateGetter, bytecode.RColdAddPrivateSetter,
-		bytecode.RColdDefinePrivate, bytecode.RColdDefinePrivateMethod, bytecode.RColdDefinePrivateGetter,
-		bytecode.RColdDefinePrivateSetter:
+	case bytecode.RDefineGetterIndex, bytecode.RDefineSetterIndex, bytecode.RClassGetterIndex,
+		bytecode.RClassSetterIndex,
+		bytecode.RAddPrivateMethod, bytecode.RAddPrivateGetter, bytecode.RAddPrivateSetter,
+		bytecode.RDefinePrivate, bytecode.RDefinePrivateMethod, bytecode.RDefinePrivateGetter,
+		bytecode.RDefinePrivateSetter:
 		// A key in a register, a computed name's or a private name's: the
 		// frame Go makes from native code does not show the registers.
 		return true
@@ -199,7 +196,8 @@ func regDefinition(op bytecode.RColdOp) bool {
 // regRefusal is the reason the instruction at pc is not lowered, or "".
 func regRefusal(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, pc int) string {
 	w := rc.Code[pc]
-	switch op := w.Op(); op {
+	op := w.Op()
+	switch op {
 	case bytecode.RBin:
 		raw := uint32(w.X())
 		if _, ok := operator(raw); !ok && raw != uint32(bytecode.OpMod) && raw != uint32(bytecode.OpPow) {
@@ -222,24 +220,20 @@ func regRefusal(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, pc int)
 				return "switch case of no constant"
 			}
 		}
-	case bytecode.RCold:
-		sub := bytecode.RColdOp(w.X())
-		switch sub {
-		case bytecode.RColdDirectEval:
-			return "direct eval"
-		case bytecode.RColdWithGet, bytecode.RColdWithGetThis, bytecode.RColdWithDelete, bytecode.RColdWithSet,
-			bytecode.RColdWithResolve, bytecode.RColdWithRead, bytecode.RColdWithWrite, bytecode.RColdWithPush, bytecode.RColdWithPop,
-			bytecode.RColdDebug:
-			// The stack form's with and debug_stmt, which lowerFunction
-			// refuses (describe).
-			return "unsupported opcode " + sub.String()
-		case bytecode.RColdMovFar, bytecode.RColdMovToFar, bytecode.RColdFarInit:
-			// Registers past 16 bits, past what native code's records name.
-			return "slot budget"
-		}
-		if m.callee && regDefinition(sub) {
-			return "unsupported opcode " + sub.String()
-		}
+	case bytecode.RDirectEval:
+		return "direct eval"
+	case bytecode.RWithGet, bytecode.RWithGetThis, bytecode.RWithDelete, bytecode.RWithSet,
+		bytecode.RWithResolve, bytecode.RWithRead, bytecode.RWithWrite, bytecode.RWithPush, bytecode.RWithPop,
+		bytecode.RDebug:
+		// The stack form's with and debug_stmt, which lowerFunction
+		// refuses (describe).
+		return "unsupported opcode " + op.String()
+	case bytecode.RMovFar, bytecode.RMovToFar, bytecode.RFarInit:
+		// Registers past 16 bits, past what native code's records name.
+		return "slot budget"
+	}
+	if m.callee && regDefinition(op) {
+		return "unsupported opcode " + op.String()
 	}
 	return ""
 }
@@ -333,7 +327,7 @@ func lowerReg(rc *bytecode.RegCode, fn *bytecode.Function, m lowering) (*ir.Prog
 			to = append(to, regTarget(pc, w.SC()))
 		case regGoBranches(w):
 			to = append(to, pc+1, pc+2)
-		case w.Op() == bytecode.RCold && bytecode.RColdOp(w.X()) == bytecode.RColdEndParams && (fn.Async || fn.Generator):
+		case w.Op() == bytecode.REndParams && (fn.Async || fn.Generator):
 			// The first resumption enters past the parameters.
 			to = append(to, pc+1)
 		}
@@ -946,44 +940,45 @@ func (l *regLowering) lower(pc int) {
 		// As the stack form's yield: a synchronous generator's, which code
 		// a loop's step resumed natively makes itself (Suspend).
 		l.emit(ir.Instruction{Op: ir.Host, Suspend: fn.Generator && !fn.Async}, false)
-	case bytecode.RCold:
-		l.lowerCold(pc, w)
 	default:
-		panic(fmt.Sprintf("jit: no register lowering for %v", op))
+		if !op.Cold() {
+			panic(fmt.Sprintf("jit: no register lowering for %v", op))
+		}
+		l.lowerCold(pc, w)
 	}
 }
 
-// lowerCold appends the IR of cold operation w at pc: the few the stack
+// lowerCold appends the IR of operation w at pc, one of no hot loop: the few the stack
 // form lowers natively, as LowerSSA lowers them, and Go's the rest.
 func (l *regLowering) lowerCold(pc int, w bytecode.RInstr) {
 	a, b := w.A(), w.B()
-	switch sub := bytecode.RColdOp(w.X()); sub {
-	case bytecode.RColdNewRegExp:
+	switch sub := w.Op(); sub {
+	case bytecode.RNewRegExp:
 		// From a pool the VM fills with its pattern's, as an object
 		// literal's (LowerSSA's new_regexp).
 		l.emit(ir.Instruction{Op: ir.ObjectLiteral, Dest: int(a)}, false)
-	case bytecode.RColdIterClose:
+	case bytecode.RIterClose:
 		l.emit(ir.Instruction{Op: ir.IterClose, Left: reg(b)}, false)
-	case bytecode.RColdGetGlobalOpt:
+	case bytecode.RGetGlobalOpt:
 		l.emit(ir.Instruction{Op: ir.BindingRead, Left: ir.Literal(ir.Value{Kind: ir.Undefined}), Dest: int(a), Key: l.name(b)}, false)
-	case bytecode.RColdIterStep, bytecode.RColdIterRest:
-		l.emit(ir.Instruction{Op: ir.IterStep, Left: reg(b), Dest: int(a), When: true, Rest: sub == bytecode.RColdIterRest}, false)
-	case bytecode.RColdCheckCoercible:
+	case bytecode.RIterStep, bytecode.RIterRest:
+		l.emit(ir.Instruction{Op: ir.IterStep, Left: reg(b), Dest: int(a), When: true, Rest: sub == bytecode.RIterRest}, false)
+	case bytecode.RCheckCoercible:
 		l.emit(ir.Instruction{Op: ir.Coercible, Left: reg(a)}, false)
-	case bytecode.RColdToString:
+	case bytecode.RToString:
 		l.emit(ir.Instruction{Op: ir.StringConcat, Dest: int(a), Extra: 1}, false)
-	case bytecode.RColdCheckGlobalRef:
+	case bytecode.RCheckGlobalRef:
 		l.emit(ir.Instruction{Op: ir.BindingCheck, Dest: int(a), Key: l.name(b)}, false)
-	case bytecode.RColdGetUpvalCheck:
+	case bytecode.RGetUpvalCheck:
 		l.emit(ir.Instruction{Op: ir.UpvalueRead, Dest: int(a), Key: w.BC(), Check: true}, false)
-	case bytecode.RColdSetUpvalCheck:
+	case bytecode.RSetUpvalCheck:
 		if k := w.BC(); int(k) < len(l.fn.Upvalues) && l.fn.Upvalues[k].Mutable {
 			l.emit(ir.Instruction{Op: ir.UpvalueWrite, Left: reg(a), Key: k, Check: true}, false)
 			break
 		}
 		// A constant's assignment, which throws.
 		l.emit(ir.Instruction{Op: ir.Host}, false)
-	case bytecode.RColdRestParam, bytecode.RColdNewTarget:
+	case bytecode.RRestParam, bytecode.RNewTarget:
 		// Go's, from the frame (ir's Frame).
 		l.emit(ir.Instruction{Op: ir.Host, Frame: true, Dest: int(a)}, false)
 	default:
@@ -1173,21 +1168,18 @@ func regAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return nil, []int{a, a + 1}, false
 	case bytecode.RLoadConst:
 		return nil, []int{a}, false
-	case bytecode.RCold:
-		switch bytecode.RColdOp(w.X()) {
-		case bytecode.RColdForOfStart, bytecode.RColdForInStart:
-			return []int{b}, []int{a}, false
-		case bytecode.RColdIterCloseThrow:
-			return []int{b}, nil, false
-		case bytecode.RColdRestParam, bytecode.RColdNewTarget, bytecode.RColdTemplateObject, bytecode.RColdThis:
-			return nil, []int{a}, false
-		case bytecode.RColdToPropertyKey:
-			return []int{a}, []int{a}, false
-		case bytecode.RColdAssignConst, bytecode.RColdThrowRef, bytecode.RColdCheckThis, bytecode.RColdDeleteSuper:
-			return nil, nil, false
-		case bytecode.RColdSetUpvalCheck:
-			return []int{a}, nil, false
-		}
+	case bytecode.RForOfStart, bytecode.RForInStart:
+		return []int{b}, []int{a}, false
+	case bytecode.RIterCloseThrow:
+		return []int{b}, nil, false
+	case bytecode.RRestParam, bytecode.RNewTarget, bytecode.RTemplateObject, bytecode.RThis:
+		return nil, []int{a}, false
+	case bytecode.RToPropertyKey:
+		return []int{a}, []int{a}, false
+	case bytecode.RAssignConst, bytecode.RThrowRef, bytecode.RCheckThis, bytecode.RDeleteSuper:
+		return nil, nil, false
+	case bytecode.RSetUpvalCheck:
+		return []int{a}, nil, false
 	}
 	return nil, nil, true
 }

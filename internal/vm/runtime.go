@@ -344,6 +344,9 @@ type Runtime struct {
 	// regRestart is the register code a register frame was given in place
 	// by a tail call (regTailInPlace), which runReg continues with.
 	regRestart *regCode
+	// regFree is the register frames' states not in use, a list by their
+	// next (regEnter): a frame's handlers are given its state.
+	regFree *regState
 	// concatMemo is the short strings joins made, which a join making the
 	// same text returns (joinShort), made by the first join.
 	concatMemo *concatMemo
@@ -763,7 +766,7 @@ type closureCode struct {
 	// reg is the template's register code, once a call has found it has
 	// some, for the register interpreter's calls (see zzreg_call.go).
 	reg *regCode
-	// regCalls are the register code's call caches (regCallW), made at its
+	// regCalls are the register code's call caches (rhCallW), made at its
 	// first call.
 	regCalls []regCallCache
 	// regEpochs is the global epoch each global site of the register code

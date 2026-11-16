@@ -13,7 +13,7 @@ import (
 // what only a tail call runs moves none of the call path's code. regPlan,
 // which refuses a treeCall to a function with a tail call, is here too:
 // with the call path grown by the tail calls' checks of its errors, 192
-// bytes, its 192 bytes leave regSlow, regIn, regNative and runReg where
+// bytes, its 192 bytes leave the slow path, regIn, regNative and runReg where
 // they were before tail calls (weak_map_set, has_own_method_hit and
 // array_in 5 to 9% slower at every placement there).
 
@@ -88,22 +88,19 @@ func (r *Runtime) regTailRest() (Value, error) {
 // the stack is tailCallDepth deep, the frame f, an ordinary call's, is
 // given to the callee in place (regTailInPlace, errRegRestart) or given up
 // (regTail, errTailCall), as the tree's restarts and tailCallNode's frame
-// are; otherwise, or where neither can be, the call is regCallW's.
+// are, the error the frame ends with; otherwise, or where neither can be,
+// the call is call_w's (rhCallW), and it reports false.
 //
 //go:noinline
-func (r *Runtime) regTailCallW(f *frame, c *regCode, k *regKept, wb int) error {
-	if r.frameDepth >= tailCallDepth {
-		pc := k.pc - 1
-		w := regAt(c.code, pc)
-		f.pc = regSrc(c, pc) + 1
-		if r.regTailInPlace(f, c, w, wb) {
-			return errRegRestart
-		}
-		if r.regTail(f, w, wb) {
-			return errTailCall
-		}
+func (r *Runtime) regTailCallW(f *frame, c *regCode, pc int, w bytecode.RInstr, wb int) (error, bool) {
+	f.pc = regSrc(c, pc) + 1
+	if r.regTailInPlace(f, c, w, wb) {
+		return errRegRestart, true
 	}
-	return r.regCallW(f, c, k, wb)
+	if r.regTail(f, w, wb) {
+		return errTailCall, true
+	}
+	return nil, false
 }
 
 // regCallWEnd is regCallW's end of a frame nf, of kind kind, that ended

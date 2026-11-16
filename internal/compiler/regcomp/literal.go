@@ -53,7 +53,7 @@ func (g *gen) template(n *ast.TemplateLit, dst int) int {
 		d := g.dest(dst)
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(d), r16(v), 0))
 		g.at(parts[0].expr.Pos())
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdToString), r16(d), 0, 0))
+		g.emit(bytecode.MakeR(bytecode.RToString, 0, r16(d), 0, 0))
 		return d
 	}
 	// What runs code after each part: a conversion is observable only
@@ -72,7 +72,7 @@ func (g *gen) template(n *ast.TemplateLit, dst int) int {
 		g.into(p.expr, w+i)
 		if later[i] {
 			g.at(p.expr.Pos())
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdToString), r16(w+i), 0, 0))
+			g.emit(bytecode.MakeR(bytecode.RToString, 0, r16(w+i), 0, 0))
 		}
 	}
 	d := g.dest(dst)
@@ -115,7 +115,7 @@ func (g *gen) taggedTemplate(n *ast.TaggedTemplate, dst int) int {
 	} else {
 		g.into(n.Tag, w)
 	}
-	g.emit(bytecode.MakeRBC(bytecode.RCold, uint8(bytecode.RColdTemplateObject), r16(w+2), idx))
+	g.emit(bytecode.MakeRBC(bytecode.RTemplateObject, 0, r16(w+2), idx))
 	d := dst
 	if d < 0 {
 		d = w
@@ -123,7 +123,7 @@ func (g *gen) taggedTemplate(n *ast.TaggedTemplate, dst int) int {
 	if wide {
 		g.arrayFrom(w+2, n.Quasi.Exprs, w+2)
 		g.at(n.Start)
-		g.cold(bytecode.RColdCallSpread, w, d, 0)
+		g.cold(bytecode.RCallSpread, w, d, 0)
 		return d
 	}
 	g.args(n.Quasi.Exprs, w+3)
@@ -141,8 +141,8 @@ func (g *gen) taggedTemplate(n *ast.TaggedTemplate, dst int) int {
 // before its value is made, a function named after its key, and a method
 // given the literal as its home object.
 func (g *gen) property(d int, p ast.Property) {
-	cold := func(sub bytecode.RColdOp, a, b, c int) {
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(a), r16(b), r16(c)))
+	cold := func(sub bytecode.ROp, a, b, c int) {
+		g.emit(bytecode.MakeR(sub, 0, r16(a), r16(b), r16(c)))
 	}
 	at := p.Start
 	if at == 0 {
@@ -151,7 +151,7 @@ func (g *gen) property(d int, p ast.Property) {
 	if p.Kind == ast.PropSpread {
 		v := g.expr(p.Value, -1)
 		g.at(at)
-		cold(bytecode.RColdCopyDataProps, d, v, 0)
+		cold(bytecode.RCopyDataProps, d, v, 0)
 		return
 	}
 	var name string
@@ -172,7 +172,7 @@ func (g *gen) property(d int, p ast.Property) {
 	if !p.Computed && !numKey && !p.Shorthand && !p.Method && p.Kind == ast.PropInit && name == "__proto__" {
 		v := g.expr(p.Value, -1)
 		g.at(at)
-		cold(bytecode.RColdSetProtoOf, d, v, 0)
+		cold(bytecode.RSetProtoOf, d, v, 0)
 		return
 	}
 	if p.Computed || numKey {
@@ -181,7 +181,7 @@ func (g *gen) property(d int, p ast.Property) {
 		k := g.alloc()
 		g.into(p.Key, k)
 		g.at(p.Key.Pos())
-		cold(bytecode.RColdToPropertyKey, k, 0, 0)
+		cold(bytecode.RToPropertyKey, k, 0, 0)
 		v := g.expr(p.Value, -1)
 		if g.isBinding(v) {
 			v = g.place(v, g.alloc())
@@ -194,39 +194,39 @@ func (g *gen) property(d int, p ast.Property) {
 			if p.Kind == ast.PropSet {
 				kind = 2
 			}
-			cold(bytecode.RColdSetFuncName, v, k, kind)
-			cold(bytecode.RColdSetHomeObject, v, d, 0)
-			sub := bytecode.RColdDefineGetterIndex
+			cold(bytecode.RSetFuncName, v, k, kind)
+			cold(bytecode.RSetHomeObject, v, d, 0)
+			sub := bytecode.RDefineGetterIndex
 			if p.Kind == ast.PropSet {
-				sub = bytecode.RColdDefineSetterIndex
+				sub = bytecode.RDefineSetterIndex
 			}
 			cold(sub, d, k, v)
 			return
 		case p.Method || anonymousFn(p.Value):
 			if !numKey || p.Method {
-				cold(bytecode.RColdSetFuncName, v, k, 0)
+				cold(bytecode.RSetFuncName, v, k, 0)
 			}
 		}
 		if p.Method {
-			cold(bytecode.RColdSetHomeObject, v, d, 0)
+			cold(bytecode.RSetHomeObject, v, d, 0)
 		}
-		cold(bytecode.RColdDefineIndex, d, k, v)
+		cold(bytecode.RDefineIndex, d, k, v)
 		return
 	}
 	v := g.expr(p.Value, -1)
 	g.at(at)
 	switch p.Kind {
 	case ast.PropGet, ast.PropSet:
-		cold(bytecode.RColdSetHomeObject, v, d, 0)
-		sub := bytecode.RColdDefineGetter
+		cold(bytecode.RSetHomeObject, v, d, 0)
+		sub := bytecode.RDefineGetter
 		if p.Kind == ast.PropSet {
-			sub = bytecode.RColdDefineSetter
+			sub = bytecode.RDefineSetter
 		}
-		g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(d), r16(v), g.name16(name))), name)
+		g.far(g.emit(bytecode.MakeR(sub, 0, r16(d), r16(v), g.name16(name))), name)
 		return
 	}
 	if p.Method {
-		cold(bytecode.RColdSetHomeObject, v, d, 0)
+		cold(bytecode.RSetHomeObject, v, d, 0)
 	}
 	g.far(g.emit(bytecode.MakeR(bytecode.RDefineField, 0, r16(d), r16(v), g.name16(name))), name)
 }
@@ -310,13 +310,13 @@ func (g *gen) arrayFrom(pre int, els []ast.Expr, dst int) int {
 		case nil:
 			t := g.alloc()
 			g.emit(bytecode.MakeR(bytecode.RLoadUninit, 0, r16(t), 0, 0))
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdArrayPush), r16(d), r16(t), 0))
+			g.emit(bytecode.MakeR(bytecode.RArrayPush, 0, r16(d), r16(t), 0))
 		case *ast.Spread:
 			v := g.expr(x.Arg, -1)
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdArraySpread), r16(d), r16(v), 0))
+			g.emit(bytecode.MakeR(bytecode.RArraySpread, 0, r16(d), r16(v), 0))
 		default:
 			v := g.expr(x, -1)
-			g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdArrayPush), r16(d), r16(v), 0))
+			g.emit(bytecode.MakeR(bytecode.RArrayPush, 0, r16(d), r16(v), 0))
 		}
 		g.top = mark
 	}
@@ -353,7 +353,7 @@ func (g *gen) spreadCall(n *ast.Call, dst int) int {
 		// Through a with object, which is the receiver where it has the
 		// name (with_get_this), as a call's without a spread.
 		g.probeOp(id, bytecode.OpWithGetThis)
-		g.probed(id, bytecode.RColdWithGetThis, w, func() {
+		g.probed(id, bytecode.RWithGetThis, w, func() {
 			g.emit(bytecode.MakeR(bytecode.RLoadUndef, 0, r16(w+1), 0, 0))
 			g.into(n.Callee, w)
 		})
@@ -370,7 +370,7 @@ func (g *gen) spreadCall(n *ast.Call, dst int) int {
 	g.spreadArray(n.Args, w+2)
 	d := g.dest(dst)
 	g.at(n.TracePos())
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallSpread), r16(w), r16(d), 0))
+	g.emit(bytecode.MakeR(bytecode.RCallSpread, 0, r16(w), r16(d), 0))
 	return d
 }
 
@@ -539,7 +539,7 @@ func (g *gen) chainCall(n *ast.Call, dst int) int {
 	if wide {
 		g.spreadArray(n.Args, w+2)
 		g.at(n.TracePos())
-		g.cold(bytecode.RColdCallSpread, w, d, 0)
+		g.cold(bytecode.RCallSpread, w, d, 0)
 		return d
 	}
 	g.args(n.Args, w+2)

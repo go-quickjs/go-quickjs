@@ -42,21 +42,21 @@ func (g *gen) topBody() {
 		g.at(int(t.Pos))
 		name := g.name16(t.Name)
 		flag := uint16(t.Flag)
-		var sub bytecode.RColdOp
+		var sub bytecode.ROp
 		a := 0
 		switch t.Op {
 		case bytecode.OpCheckGlobalLex:
-			sub = bytecode.RColdCheckGlobalLex
+			sub = bytecode.RCheckGlobalLex
 		case bytecode.OpCheckGlobalVar:
-			sub = bytecode.RColdCheckGlobalVar
+			sub = bytecode.RCheckGlobalVar
 		case bytecode.OpDefineGlobalVar:
-			sub = bytecode.RColdDefineGlobalVar
+			sub = bytecode.RDefineGlobalVar
 		case bytecode.OpDeclareGlobalLex:
-			sub = bytecode.RColdDeclareGlobalLex
+			sub = bytecode.RDeclareGlobalLex
 		case bytecode.OpDeclareModuleLex:
-			sub = bytecode.RColdDeclareModuleLex
+			sub = bytecode.RDeclareModuleLex
 		case bytecode.OpDefineGlobalFunc:
-			sub = bytecode.RColdDefineGlobalFunc
+			sub = bytecode.RDefineGlobalFunc
 			a = g.alloc()
 			g.closure(t.Fn, a)
 		case bytecode.OpSetUpvalue:
@@ -71,7 +71,7 @@ func (g *gen) topBody() {
 			// not a form to refuse.
 			panic("regcomp: top-level code's record holds " + t.Op.String())
 		}
-		g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(a), name, flag)), t.Name)
+		g.far(g.emit(bytecode.MakeR(sub, 0, r16(a), name, flag)), t.Name)
 		g.top = g.topAfterBindings()
 	}
 }
@@ -100,12 +100,12 @@ func (g *gen) exprStmt(e ast.Expr) {
 // lexInit initializes a script's or a module's top-level lexical binding,
 // name, to v, as the stack form's init_global_lex or init_module_lex.
 func (g *gen) lexInit(kind ResKind, name string, v, pos int) {
-	sub := bytecode.RColdInitGlobalLex
+	sub := bytecode.RInitGlobalLex
 	if kind == ResModuleLexInit {
-		sub = bytecode.RColdInitModuleLex
+		sub = bytecode.RInitModuleLex
 	}
 	g.at(pos)
-	g.far(g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(v), g.name16(name), 0)), name)
+	g.far(g.emit(bytecode.MakeR(sub, 0, r16(v), g.name16(name), 0)), name)
 }
 
 // exportDecl compiles a module's export declaration: the declaration it

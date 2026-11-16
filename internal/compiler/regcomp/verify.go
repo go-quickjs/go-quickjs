@@ -98,7 +98,7 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			}
 		case bytecode.RGetPrivate, bytecode.RSetPrivate:
 			// Aux: the cache site, or 0, and the name for the errors.
-			ok = reg(a) && reg(b) && reg(c) && w.X() == bytecode.RPrivateX && pc < len(rc.Aux) &&
+			ok = reg(a) && reg(b) && reg(c) && w.X() == 0 && pc < len(rc.Aux) &&
 				site(uint16(rc.Aux[pc]>>16)) && int(rc.Aux[pc]&0xffff) < len(fn.Names)
 		case bytecode.RTypeof, bytecode.RAppend:
 			ok = reg(a) && reg(b)
@@ -179,13 +179,13 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			}
 		case bytecode.RInstanceOf:
 			ok = reg(a) && reg(b) && reg(c) && pc < len(rc.Aux) && rc.Aux[pc] != 0 && int(rc.Aux[pc]) <= int(fn.PropSites)
-		case bytecode.RCold:
-			ok = coldOK(rc, fn, pc, w, reg, site)
 		case bytecode.RApplyArgs:
 			ok = reg(a) && int(b)+3 <= n && reg(c) && rc.ForwardsArguments
 		case bytecode.RRetUndef:
 		default:
-			ok = false
+			// The operations of no hot loop, whose X is 0.
+			ok = w.Op() >= bytecode.RNewRegExp && w.Op() < bytecode.ROpCount && w.X() == 0 &&
+				coldOK(rc, fn, pc, w, reg, site)
 		}
 		if !ok {
 			return "instruction " + rc.Format(pc) + " is out of range"
@@ -238,27 +238,27 @@ func auxAt(rc *bytecode.RegCode, pc int) uint32 {
 	return 0
 }
 
-// coldOK checks cold's operands, by its sub-operation.
+// coldOK checks the operands of an operation of no hot loop.
 func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RInstr, reg func(uint16) bool, site func(uint16) bool) bool {
 	a, b := w.A(), w.B()
 	regexpK := func(k uint32) bool { return int(k) < len(fn.Constants) && fn.Constants[k].Kind == bytecode.ConstRegExp }
-	switch bytecode.RColdOp(w.X()) {
-	case bytecode.RColdNewRegExp:
+	switch w.Op() {
+	case bytecode.RNewRegExp:
 		return reg(a) && regexpK(w.BC())
-	case bytecode.RColdForOfStart, bytecode.RColdForInStart:
+	case bytecode.RForOfStart, bytecode.RForInStart:
 		return reg(a) && reg(b)
-	case bytecode.RColdIterClose, bytecode.RColdIterCloseThrow:
+	case bytecode.RIterClose, bytecode.RIterCloseThrow:
 		return reg(b)
-	case bytecode.RColdCheckGlobalLex, bytecode.RColdCheckGlobalVar, bytecode.RColdDefineGlobalVar,
-		bytecode.RColdDeclareGlobalLex, bytecode.RColdDefineGlobalFunc, bytecode.RColdInitGlobalLex,
-		bytecode.RColdDeclareModuleLex, bytecode.RColdInitModuleLex:
+	case bytecode.RCheckGlobalLex, bytecode.RCheckGlobalVar, bytecode.RDefineGlobalVar,
+		bytecode.RDeclareGlobalLex, bytecode.RDefineGlobalFunc, bytecode.RInitGlobalLex,
+		bytecode.RDeclareModuleLex, bytecode.RInitModuleLex:
 		return reg(a) && nameOK(rc, fn, pc, b) && fn.TopLevel
-	case bytecode.RColdGetGlobalOpt, bytecode.RColdDeleteVar:
+	case bytecode.RGetGlobalOpt, bytecode.RDeleteVar:
 		return reg(a) && nameOK(rc, fn, pc, b)
-	case bytecode.RColdImport:
+	case bytecode.RImport:
 		k := int(w.C()) & 3
 		return reg(a) && (k == 1 || k == 2) && int(b)+k <= rc.NumRegs
-	case bytecode.RColdDirectEval:
+	case bytecode.RDirectEval:
 		k := auxAt(rc, pc) &^ bytecode.RDirectEvalSpread
 		argc := int(w.C())
 		if auxAt(rc, pc)&bytecode.RDirectEvalSpread != 0 {
@@ -274,27 +274,27 @@ func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RIns
 			}
 		}
 		return true
-	case bytecode.RColdWithGet, bytecode.RColdWithDelete, bytecode.RColdWithSet, bytecode.RColdWithResolve:
+	case bytecode.RWithGet, bytecode.RWithDelete, bytecode.RWithSet, bytecode.RWithResolve:
 		return reg(a) && nameOK(rc, fn, pc, b) && pc < len(rc.Aux) && rc.Aux[pc] < uint32(rc.NumRegs)
-	case bytecode.RColdWithGetThis:
+	case bytecode.RWithGetThis:
 		return reg(a) && int(a)+1 < rc.NumRegs && nameOK(rc, fn, pc, b) && pc < len(rc.Aux) && rc.Aux[pc] < uint32(rc.NumRegs)
-	case bytecode.RColdWithRead, bytecode.RColdWithWrite:
+	case bytecode.RWithRead, bytecode.RWithWrite:
 		return reg(a) && reg(b) && nameOK(rc, fn, pc, w.C())
-	case bytecode.RColdWithPush:
+	case bytecode.RWithPush:
 		return reg(a)
-	case bytecode.RColdWithPop:
+	case bytecode.RWithPop:
 		return true
-	case bytecode.RColdImportMeta, bytecode.RColdNewDispose:
+	case bytecode.RImportMeta, bytecode.RNewDispose:
 		return reg(a)
-	case bytecode.RColdAddDisposable, bytecode.RColdDispose:
+	case bytecode.RAddDisposable, bytecode.RDispose:
 		return reg(a) && reg(b) && w.C() <= 1
-	case bytecode.RColdDisposeStep:
+	case bytecode.RDisposeStep:
 		return int(a)+1 < rc.NumRegs && reg(b)
-	case bytecode.RColdIterStep, bytecode.RColdIterRest:
+	case bytecode.RIterStep, bytecode.RIterRest:
 		return reg(a) && reg(b)
-	case bytecode.RColdCheckCoercible, bytecode.RColdToPropertyKey:
+	case bytecode.RCheckCoercible, bytecode.RToPropertyKey:
 		return reg(a)
-	case bytecode.RColdWrap:
+	case bytecode.RWrap:
 		// The operator Aux names, whose value is the second argument of
 		// the two-argument method call right after it.
 		if !reg(a) || !reg(b) || !reg(w.C()) || pc+1 >= len(rc.Code) || !wrapsOp(bytecode.ROp(auxAt(rc, pc))) {
@@ -302,61 +302,61 @@ func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RIns
 		}
 		cw := rc.Code[pc+1]
 		return (cw.Op() == bytecode.RCallMW || cw.Op() == bytecode.RCallMWT) && cw.X() == 2 && int(cw.A())+3 == int(a)
-	case bytecode.RColdObjectRest:
+	case bytecode.RObjectRest:
 		return reg(a) && reg(b) && pc < len(rc.Aux) && int(w.C())+int(rc.Aux[pc]) <= rc.NumRegs
-	case bytecode.RColdRestParam:
+	case bytecode.RRestParam:
 		return reg(a) && rc.KeepsArgs
-	case bytecode.RColdToString:
+	case bytecode.RToString:
 		return reg(a)
-	case bytecode.RColdCopyDataProps, bytecode.RColdSetHomeObject, bytecode.RColdSetProtoOf:
+	case bytecode.RCopyDataProps, bytecode.RSetHomeObject, bytecode.RSetProtoOf:
 		return reg(a) && reg(b)
-	case bytecode.RColdDefineGetter, bytecode.RColdDefineSetter:
+	case bytecode.RDefineGetter, bytecode.RDefineSetter:
 		return reg(a) && reg(b) && nameOK(rc, fn, pc, w.C())
-	case bytecode.RColdDefineGetterIndex, bytecode.RColdDefineSetterIndex, bytecode.RColdDefineIndex:
+	case bytecode.RDefineGetterIndex, bytecode.RDefineSetterIndex, bytecode.RDefineIndex:
 		return reg(a) && reg(b) && reg(w.C())
-	case bytecode.RColdAssignConst, bytecode.RColdThrowRef:
+	case bytecode.RAssignConst, bytecode.RThrowRef:
 		return nameOK(rc, fn, pc, b)
-	case bytecode.RColdDebug:
+	case bytecode.RDebug:
 		return b <= 1 && fn.Debug != nil && pc < len(rc.Aux) && int(rc.Aux[pc]) < len(fn.Debug.Statements)
-	case bytecode.RColdCheckGlobalRef:
+	case bytecode.RCheckGlobalRef:
 		return reg(a) && nameOK(rc, fn, pc, b) && site(w.C())
-	case bytecode.RColdAssertResolved:
+	case bytecode.RAssertResolved:
 		return reg(a) && nameOK(rc, fn, pc, b)
-	case bytecode.RColdArrayPush, bytecode.RColdArraySpread:
+	case bytecode.RArrayPush, bytecode.RArraySpread:
 		return reg(a) && reg(b)
-	case bytecode.RColdCallSpread:
+	case bytecode.RCallSpread:
 		return int(a)+2 < rc.NumRegs && reg(b) && w.C() <= 1
-	case bytecode.RColdSetFuncName:
+	case bytecode.RSetFuncName:
 		return reg(a) && reg(b) && w.C() <= 2
-	case bytecode.RColdTemplateObject:
+	case bytecode.RTemplateObject:
 		return reg(a) && int(w.BC()) < len(fn.Templates)
-	case bytecode.RColdNewClass, bytecode.RColdSetFieldInit, bytecode.RColdSuperSpread:
+	case bytecode.RNewClass, bytecode.RSetFieldInit, bytecode.RSuperSpread:
 		return reg(a) && reg(b)
-	case bytecode.RColdDefineMethod, bytecode.RColdClassGetter, bytecode.RColdClassSetter:
+	case bytecode.RDefineMethod, bytecode.RClassGetter, bytecode.RClassSetter:
 		return reg(a) && reg(b) && nameOK(rc, fn, pc, w.C())
-	case bytecode.RColdClassGetterIndex, bytecode.RColdClassSetterIndex, bytecode.RColdClassIndex,
-		bytecode.RColdAddPrivateMethod, bytecode.RColdAddPrivateGetter, bytecode.RColdAddPrivateSetter,
-		bytecode.RColdDefinePrivate, bytecode.RColdDefinePrivateMethod, bytecode.RColdDefinePrivateGetter,
-		bytecode.RColdDefinePrivateSetter, bytecode.RColdPrivateIn, bytecode.RColdSuperGetIndex, bytecode.RColdSuperSetIndex:
+	case bytecode.RClassGetterIndex, bytecode.RClassSetterIndex, bytecode.RClassIndex,
+		bytecode.RAddPrivateMethod, bytecode.RAddPrivateGetter, bytecode.RAddPrivateSetter,
+		bytecode.RDefinePrivate, bytecode.RDefinePrivateMethod, bytecode.RDefinePrivateGetter,
+		bytecode.RDefinePrivateSetter, bytecode.RPrivateIn, bytecode.RSuperGetIndex, bytecode.RSuperSetIndex:
 		return reg(a) && reg(b) && reg(w.C())
-	case bytecode.RColdPrivateName, bytecode.RColdSuperGet, bytecode.RColdSuperSet:
+	case bytecode.RPrivateName, bytecode.RSuperGet, bytecode.RSuperSet:
 		return reg(a) && nameOK(rc, fn, pc, b)
-	case bytecode.RColdNewPrivateMethods, bytecode.RColdInstallPrivateMethods, bytecode.RColdSuperBase,
-		bytecode.RColdThis, bytecode.RColdNewTarget, bytecode.RColdDerivedRet, bytecode.RColdSuperForward:
+	case bytecode.RNewPrivateMethods, bytecode.RInstallPrivateMethods, bytecode.RSuperBase,
+		bytecode.RThis, bytecode.RNewTarget, bytecode.RDerivedRet, bytecode.RSuperForward:
 		return reg(a)
-	case bytecode.RColdSuperCall:
+	case bytecode.RSuperCall:
 		return reg(a) && int(w.C())+int(b) <= rc.NumRegs
-	case bytecode.RColdCheckThis, bytecode.RColdDeleteSuper:
+	case bytecode.RCheckThis, bytecode.RDeleteSuper:
 		return true
-	case bytecode.RColdCloseRegs:
+	case bytecode.RCloseRegs:
 		return int(a)+int(b) <= rc.NumRegs
-	case bytecode.RColdMovFar, bytecode.RColdMovToFar:
+	case bytecode.RMovFar, bytecode.RMovToFar:
 		// Far registers are reached past the 16 bits regs' type covers,
 		// within the window NumRegs makes.
 		return reg(a) && int64(w.BC()) < int64(rc.NumRegs)
-	case bytecode.RColdFarInit:
+	case bytecode.RFarInit:
 		return pc < len(rc.Aux) && int64(w.BC())+int64(rc.Aux[pc]) <= int64(rc.NumRegs)
-	case bytecode.RColdGetUpvalCheck, bytecode.RColdSetUpvalCheck:
+	case bytecode.RGetUpvalCheck, bytecode.RSetUpvalCheck:
 		return reg(a) && int(w.BC()) < len(fn.Upvalues)
 	}
 	return suspendOK(rc, fn, pc, w, reg)
@@ -374,28 +374,27 @@ func suspendOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.R
 		return pc+2 < len(rc.Code) && rc.Code[pc+1].Op() == bytecode.RJmp
 	}
 	a, b := w.A(), w.B()
-	switch bytecode.RColdOp(w.X()) {
-	case bytecode.RColdGenEntry:
+	switch w.Op() {
+	case bytecode.RGenEntry:
 		return pc == 0
-	case bytecode.RColdEndParams:
+	case bytecode.REndParams:
 		return fn.Generator
-	case bytecode.RColdAwait:
+	case bytecode.RAwait:
 		return fn.Async && reg(a) && reg(b)
-	case bytecode.RColdYieldStar:
+	case bytecode.RYieldStar:
 		return fn.Generator && int(a)+1 < rc.NumRegs && reg(b)
-	case bytecode.RColdIterResume:
+	case bytecode.RIterResume:
 		// A synchronous generator's delegation may suspend at the
 		// yield_star four instructions on (the VM's regDelegateNext).
 		return reg(a) && reg(b) && int(w.C())+1 < rc.NumRegs && jumpNext() &&
-			(fn.Async || pc+5 < len(rc.Code) && rc.Code[pc+4].Op() == bytecode.RCold &&
-				bytecode.RColdOp(rc.Code[pc+4].X()) == bytecode.RColdYieldStar)
-	case bytecode.RColdIterUnpackDelegate:
+			(fn.Async || pc+5 < len(rc.Code) && rc.Code[pc+4].Op() == bytecode.RYieldStar)
+	case bytecode.RIterUnpackDelegate:
 		return reg(a) && reg(b) && reg(w.C()) && jumpNext()
-	case bytecode.RColdForAwaitOfStart, bytecode.RColdAsyncIterNext:
+	case bytecode.RForAwaitOfStart, bytecode.RAsyncIterNext:
 		return fn.Async && reg(a) && reg(b)
-	case bytecode.RColdIterResult, bytecode.RColdAsyncIterClose:
+	case bytecode.RIterResult, bytecode.RAsyncIterClose:
 		return fn.Async && reg(a) && reg(b) && jumpNext()
-	case bytecode.RColdAsyncIterCheck:
+	case bytecode.RAsyncIterCheck:
 		return fn.Async && reg(a)
 	}
 	return false

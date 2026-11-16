@@ -126,72 +126,110 @@ func (r *Runtime) evalLinked(caller *frame, cl *closure) (Value, error) {
 	return r.run(cl, caller.this, caller.args, caller.newTarget, callee)
 }
 
-// regColdWith is the with statement's operations and the probes of a
-// name a with object or an eval's variable may answer, as the stack
-// form's with_push, with_pop, with_get, with_get_this, with_delete,
-// with_set, with_resolve, with_get_under and with_put_under do them.
-func (r *Runtime) regColdWith(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
-	strict := f.cl.fn.Strict
-	op := bytecode.RColdOp(w.X())
-	switch op {
-	case bytecode.RColdWithPush:
-		o, err := r.withObject(regs[w.A()])
-		if err != nil {
-			return err
-		}
-		// Capped, so that the append copies rather than writing into an
-		// array a closure made under an earlier with keeps (with_push).
-		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], o)
-		return nil
-	case bytecode.RColdWithPop:
-		f.withScopes = f.withScopes[:len(f.withScopes)-1]
-		return nil
-	case bytecode.RColdWithRead:
-		v, err := r.withRead(regs[w.B()].Object(), regName(f.cl, c, pc, w.C()), strict)
-		if err != nil {
-			return err
-		}
-		regs[w.A()] = v
-		return nil
-	case bytecode.RColdWithWrite:
-		return r.withWrite(regs[w.B()].Object(), regName(f.cl, c, pc, w.C()), regs[w.A()], strict)
-	}
-	name := regName(f.cl, c, pc, w.B())
-	o, found, err := r.withFound(f.withScopes, name, int(w.C()))
+// The with statement's operations and the probes of a name a with
+// object or an eval's variable may answer, as the stack form's with_push,
+// with_pop, with_get, with_get_this, with_delete, with_set, with_resolve,
+// with_get_under and with_put_under do them.
+
+// regWithPush is with_push.
+func (r *Runtime) regWithPush(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	o, err := r.withObject(regs[w.A()])
 	if err != nil {
 		return err
 	}
-	regs[regAuxAt(c, pc)] = Bool(found)
-	if !found {
-		if op == bytecode.RColdWithResolve {
-			regs[w.A()] = Undefined
-		}
-		return nil
+	// Capped, so that the append copies rather than writing into an
+	// array a closure made under an earlier with keeps (with_push).
+	f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], o)
+	return nil
+}
+
+// regWithPop is with_pop.
+func (r *Runtime) regWithPop(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	f.withScopes = f.withScopes[:len(f.withScopes)-1]
+	return nil
+}
+
+// regWithRead is with_read.
+func (r *Runtime) regWithRead(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	v, err := r.withRead(regs[w.B()].Object(), regName(f.cl, c, pc, w.C()), f.cl.fn.Strict)
+	if err != nil {
+		return err
 	}
-	switch op {
-	case bytecode.RColdWithGet, bytecode.RColdWithGetThis:
-		v, err := r.withRead(o, name, strict)
-		if err != nil {
-			return err
+	regs[w.A()] = v
+	return nil
+}
+
+// regWithWrite is with_write.
+func (r *Runtime) regWithWrite(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	return r.withWrite(regs[w.B()].Object(), regName(f.cl, c, pc, w.C()), regs[w.A()], f.cl.fn.Strict)
+}
+
+// regWithFind is the probe with_get, with_get_this, with_delete, with_set
+// and with_resolve make of the name Names[B]: the with object that has it,
+// found or not in the register Aux.
+func (r *Runtime) regWithFind(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) (*Object, Atom, bool, error) {
+	name := regName(f.cl, c, pc, w.B())
+	o, found, err := r.withFound(f.withScopes, name, int(w.C()))
+	if err != nil {
+		return nil, name, false, err
+	}
+	regs[regAuxAt(c, pc)] = Bool(found)
+	return o, name, found, nil
+}
+
+// regWithGet is with_get and with_get_this.
+func (r *Runtime) regWithGet(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	o, name, found, err := r.regWithFind(f, c, pc, w, regs)
+	if err != nil || !found {
+		return err
+	}
+	v, err := r.withRead(o, name, f.cl.fn.Strict)
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = v
+	if w.Op() == bytecode.RWithGetThis {
+		// The bindings a direct eval declared are no object a script
+		// sees: a call through one has no receiver.
+		regs[w.A()+1] = Obj(o)
+		if o.flags&objEvalVars != 0 {
+			regs[w.A()+1] = Undefined
 		}
-		regs[w.A()] = v
-		if op == bytecode.RColdWithGetThis {
-			// The bindings a direct eval declared are no object a script
-			// sees: a call through one has no receiver.
-			regs[w.A()+1] = Obj(o)
-			if o.flags&objEvalVars != 0 {
-				regs[w.A()+1] = Undefined
-			}
-		}
-	case bytecode.RColdWithDelete:
-		ok, err := r.deleteProp(o, name, strict)
-		if err != nil {
-			return err
-		}
-		regs[w.A()] = Bool(ok)
-	case bytecode.RColdWithSet:
-		return r.withWrite(o, name, regs[w.A()], strict)
-	case bytecode.RColdWithResolve:
+	}
+	return nil
+}
+
+// regWithDelete is with_delete.
+func (r *Runtime) regWithDelete(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	o, name, found, err := r.regWithFind(f, c, pc, w, regs)
+	if err != nil || !found {
+		return err
+	}
+	ok, err := r.deleteProp(o, name, f.cl.fn.Strict)
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = Bool(ok)
+	return nil
+}
+
+// regWithSet is with_set.
+func (r *Runtime) regWithSet(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	o, name, found, err := r.regWithFind(f, c, pc, w, regs)
+	if err != nil || !found {
+		return err
+	}
+	return r.withWrite(o, name, regs[w.A()], f.cl.fn.Strict)
+}
+
+// regWithResolve is with_resolve.
+func (r *Runtime) regWithResolve(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	o, _, found, err := r.regWithFind(f, c, pc, w, regs)
+	if err != nil {
+		return err
+	}
+	regs[w.A()] = Undefined
+	if found {
 		regs[w.A()] = Obj(o)
 	}
 	return nil

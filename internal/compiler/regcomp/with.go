@@ -85,7 +85,7 @@ func (g *gen) probeOp(id *ast.Ident, ops ...bytecode.Op) bytecode.Op {
 
 // probe emits id's probe sub, of operand a and B and C the name and the
 // limit, its found flag in a new register, which it returns.
-func (g *gen) probe(id *ast.Ident, sub bytecode.RColdOp, a int) int {
+func (g *gen) probe(id *ast.Ident, sub bytecode.ROp, a int) int {
 	flag := g.alloc()
 	g.at(int(id.Start))
 	at := g.far(g.cold(sub, a, int(g.name16(id.Name)), int(g.withs[id].probe.Limit)), id.Name)
@@ -95,7 +95,7 @@ func (g *gen) probe(id *ast.Ident, sub bytecode.RColdOp, a int) int {
 
 // probed compiles id's probe sub of operand a and, where it finds
 // nothing, static with the name's static resolution.
-func (g *gen) probed(id *ast.Ident, sub bytecode.RColdOp, a int, static func()) {
+func (g *gen) probed(id *ast.Ident, sub bytecode.ROp, a int, static func()) {
 	flag := g.probe(id, sub, a)
 	end := g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmpT, 0, r16(flag), 0, 0), end, false)
@@ -110,7 +110,7 @@ func (g *gen) withIdent(id *ast.Ident, dst int) int {
 	}
 	g.probeOp(id, bytecode.OpWithGet)
 	d := g.dest(dst)
-	g.probed(id, bytecode.RColdWithGet, d, func() { g.ident(id, d) })
+	g.probed(id, bytecode.RWithGet, d, func() { g.ident(id, d) })
 	return d
 }
 
@@ -118,7 +118,7 @@ func (g *gen) withIdent(id *ast.Ident, dst int) int {
 // (with_resolve), for the read and the write that follow (withRefs).
 func (g *gen) withResolve(id *ast.Ident) withRef {
 	base := g.alloc()
-	ref := withRef{base: base, flag: g.probe(id, bytecode.RColdWithResolve, base)}
+	ref := withRef{base: base, flag: g.probe(id, bytecode.RWithResolve, base)}
 	if g.withRefs == nil {
 		g.withRefs = map[*ast.Ident]withRef{}
 	}
@@ -133,7 +133,7 @@ func (g *gen) refRead(id *ast.Ident, ref withRef, dst int) int {
 	static, end := g.newMark(), g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmpF, 0, r16(ref.flag), 0, 0), static, false)
 	g.at(int(id.Start))
-	g.far(g.cold(bytecode.RColdWithRead, d, ref.base, int(g.name16(id.Name))), id.Name)
+	g.far(g.cold(bytecode.RWithRead, d, ref.base, int(g.name16(id.Name))), id.Name)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	g.bind(static)
 	g.withStatic(id, func() { g.readForWrite(id, d) })
@@ -148,13 +148,13 @@ func (g *gen) withStore(id *ast.Ident, v int) {
 	ref, ok := g.withRefs[id]
 	if !ok {
 		g.probeOp(id, bytecode.OpWithSet)
-		g.probed(id, bytecode.RColdWithSet, v, func() { g.storeValue(id, v) })
+		g.probed(id, bytecode.RWithSet, v, func() { g.storeValue(id, v) })
 		return
 	}
 	static, end := g.newMark(), g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmpF, 0, r16(ref.flag), 0, 0), static, false)
 	g.at(int(id.Start))
-	g.far(g.cold(bytecode.RColdWithWrite, v, ref.base, int(g.name16(id.Name))), id.Name)
+	g.far(g.cold(bytecode.RWithWrite, v, ref.base, int(g.name16(id.Name))), id.Name)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	g.bind(static)
 	g.withStatic(id, func() { g.storeValue(id, v) })
@@ -188,7 +188,7 @@ func (g *gen) withRefFor(id *ast.Ident) {
 func (g *gen) withStmt(n *ast.WithStmt) {
 	o := g.expr(n.Object, -1)
 	g.at(n.Start)
-	g.cold(bytecode.RColdWithPush, o, 0, 0)
+	g.cold(bytecode.RWithPush, o, 0, 0)
 	// A body that produces no value leaves the statement's undefined.
 	g.resetCompletion()
 	p := &prot{to: g.newMark(), reg: g.alloc(), cursor: -1, with: true}
@@ -199,14 +199,14 @@ func (g *gen) withStmt(n *ast.WithStmt) {
 	if g.err != "" {
 		return
 	}
-	g.cold(bytecode.RColdWithPop, 0, 0, 0)
+	g.cold(bytecode.RWithPop, 0, 0, 0)
 	if len(p.ranges) == 0 {
 		return
 	}
 	end := g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), end, false)
 	g.bind(p.to)
-	g.cold(bytecode.RColdWithPop, 0, 0, 0)
+	g.cold(bytecode.RWithPop, 0, 0, 0)
 	g.emit(bytecode.MakeR(bytecode.RThrow, 0, r16(p.reg), 0, 0))
 	g.bind(end)
 }

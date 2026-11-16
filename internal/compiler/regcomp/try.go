@@ -97,7 +97,7 @@ func (g *gen) leave(from int, last func()) {
 		p := crossed[i]
 		g.suspend(p)
 		if p.with {
-			g.cold(bytecode.RColdWithPop, 0, 0, 0)
+			g.cold(bytecode.RWithPop, 0, 0, 0)
 			continue
 		}
 		if p.cursor >= 0 {
@@ -105,7 +105,7 @@ func (g *gen) leave(from int, last func()) {
 			if p.async {
 				g.asyncClose(p.cursor)
 			} else {
-				g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdIterClose), 0, r16(p.cursor), 0))
+				g.emit(bytecode.MakeR(bytecode.RIterClose, 0, 0, r16(p.cursor), 0))
 			}
 			continue
 		}
@@ -339,7 +339,7 @@ func usingKind(body []ast.Stmt) (has, async bool) {
 func (g *gen) usingScope(pos int, async bool, body func()) {
 	c := g.alloc()
 	g.at(pos)
-	g.cold(bytecode.RColdNewDispose, c, 0, 0)
+	g.cold(bytecode.RNewDispose, c, 0, 0)
 	ds := &ast.DisposeStmt{Async: async, Start: pos}
 	if g.disposeCaps == nil {
 		g.disposeCaps = map[*ast.DisposeStmt]int{}
@@ -384,7 +384,7 @@ func (g *gen) usingDecl(n *ast.VarDecl) {
 		}
 		v := g.expr(d.Init, -1)
 		g.at(id.Pos())
-		g.cold(bytecode.RColdAddDisposable, c, v, async)
+		g.cold(bytecode.RAddDisposable, c, v, async)
 		g.storeIdent(id, &regExpr{Ident: id, reg: v}, true)
 		g.top = g.stmtTop()
 	}
@@ -403,9 +403,9 @@ func (g *gen) disposeOut(ds *ast.DisposeStmt, thrown int) {
 	if !ds.Async {
 		g.at(ds.Start)
 		if thrown >= 0 {
-			g.cold(bytecode.RColdDispose, c, thrown, 1)
+			g.cold(bytecode.RDispose, c, thrown, 1)
 		} else {
-			g.cold(bytecode.RColdDispose, c, c, 0)
+			g.cold(bytecode.RDispose, c, c, 0)
 		}
 		return
 	}
@@ -420,7 +420,7 @@ func (g *gen) disposeOut(ds *ast.DisposeStmt, thrown int) {
 	}
 	check, done := g.newMark(), g.newMark()
 	g.at(ds.Start)
-	g.cold(bytecode.RColdDisposeStep, t, c, mode)
+	g.cold(bytecode.RDisposeStep, t, c, mode)
 	g.bind(check)
 	g.jump(bytecode.MakeR(bytecode.RJmpF, 0, r16(t+1), 0, 0), done, false)
 	p := &prot{to: g.newMark(), reg: t, cursor: -1}
@@ -428,15 +428,15 @@ func (g *gen) disposeOut(ds *ast.DisposeStmt, thrown int) {
 	g.awaitReg(t, ds.Start)
 	g.unprotect(p)
 	g.at(ds.Start)
-	g.cold(bytecode.RColdDisposeStep, t, c, 0)
+	g.cold(bytecode.RDisposeStep, t, c, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), check, false)
 	g.bind(p.to)
 	g.at(ds.Start)
-	g.cold(bytecode.RColdDisposeStep, t, c, bytecode.DisposeFail)
+	g.cold(bytecode.RDisposeStep, t, c, bytecode.DisposeFail)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), check, false)
 	g.bind(done)
 	g.at(ds.Start)
-	g.cold(bytecode.RColdDisposeStep, t, c, bytecode.DisposeFinish)
+	g.cold(bytecode.RDisposeStep, t, c, bytecode.DisposeFinish)
 }
 
 // catchReg is the register a catch clause's value goes to: its binding's,
@@ -563,7 +563,7 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 	src := g.expr(right, -1)
 	cursor := g.alloc()
 	g.at(pos)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(cursorStart(await, in)), r16(cursor), r16(src), 0))
+	g.emit(bytecode.MakeR(cursorStart(await, in), 0, r16(cursor), r16(src), 0))
 	l := g.pushLoop(label)
 	g.bind(l.cont)
 	if fresh >= 0 {
@@ -593,7 +593,7 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 				async = 1
 			}
 			g.at(int(id.Pos()))
-			g.cold(bytecode.RColdAddDisposable, g.usingCaps[len(g.usingCaps)-1], val, async)
+			g.cold(bytecode.RAddDisposable, g.usingCaps[len(g.usingCaps)-1], val, async)
 			if dst >= 0 {
 				g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(dst), r16(val), 0))
 			} else {
@@ -631,7 +631,7 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 	src := g.expr(right, -1)
 	cursor := g.alloc()
 	g.at(pos)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(cursorStart(await, in)), r16(cursor), r16(src), 0))
+	g.emit(bytecode.MakeR(cursorStart(await, in), 0, r16(cursor), r16(src), 0))
 	l := g.pushLoop(label)
 	g.bind(l.cont)
 	if lexical {
@@ -664,14 +664,14 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 }
 
 // cursorStart is the operation that makes a loop's cursor.
-func cursorStart(await, in bool) bytecode.RColdOp {
+func cursorStart(await, in bool) bytecode.ROp {
 	switch {
 	case await:
-		return bytecode.RColdForAwaitOfStart
+		return bytecode.RForAwaitOfStart
 	case in:
-		return bytecode.RColdForInStart
+		return bytecode.RForInStart
 	}
-	return bytecode.RColdForOfStart
+	return bytecode.RForOfStart
 }
 
 // iterStep steps a loop's cursor into val, jumping to brk where it has no
@@ -684,9 +684,9 @@ func (g *gen) iterStep(val, cursor int, brk *mark, await bool) {
 		return
 	}
 	t := g.alloc()
-	g.cold(bytecode.RColdAsyncIterNext, t, cursor, 0)
-	g.cold(bytecode.RColdAwait, t, t, 0)
-	g.cold(bytecode.RColdIterResult, val, t, 0)
+	g.cold(bytecode.RAsyncIterNext, t, cursor, 0)
+	g.cold(bytecode.RAwait, t, t, 0)
+	g.cold(bytecode.RIterResult, val, t, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), brk, false)
 	g.top = t
 }
@@ -697,16 +697,16 @@ func (g *gen) iterStep(val, cursor int, brk *mark, await bool) {
 // method's result is awaited, as AsyncIteratorClose awaits it.
 func (g *gen) closeThrow(p *prot) {
 	if !p.async {
-		g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdIterCloseThrow), 0, r16(p.cursor), 0))
+		g.emit(bytecode.MakeR(bytecode.RIterCloseThrow, 0, 0, r16(p.cursor), 0))
 		g.emit(bytecode.MakeR(bytecode.RThrow, 0, r16(p.reg), 0, 0))
 		return
 	}
 	q := &prot{to: g.newMark(), reg: g.alloc(), cursor: -1}
 	g.protect(q)
 	v := g.alloc()
-	g.cold(bytecode.RColdAsyncIterClose, v, p.cursor, 0)
+	g.cold(bytecode.RAsyncIterClose, v, p.cursor, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), q.to, false)
-	g.cold(bytecode.RColdAwait, v, v, 0)
+	g.cold(bytecode.RAwait, v, v, 0)
 	g.unprotect(q)
 	g.bind(q.to)
 	g.emit(bytecode.MakeR(bytecode.RThrow, 0, r16(p.reg), 0, 0))
@@ -718,10 +718,10 @@ func (g *gen) closeThrow(p *prot) {
 func (g *gen) asyncClose(cursor int) {
 	v := g.alloc()
 	skip := g.newMark()
-	g.cold(bytecode.RColdAsyncIterClose, v, cursor, 0)
+	g.cold(bytecode.RAsyncIterClose, v, cursor, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), skip, false)
-	g.cold(bytecode.RColdAwait, v, v, 0)
-	g.cold(bytecode.RColdAsyncIterCheck, v, 0, 0)
+	g.cold(bytecode.RAwait, v, v, 0)
+	g.cold(bytecode.RAsyncIterCheck, v, 0, 0)
 	g.bind(skip)
 }
 

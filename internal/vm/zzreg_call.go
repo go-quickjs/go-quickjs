@@ -129,7 +129,7 @@ func regSrc(c *regCode, pc int) uint32 {
 	return *(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(c.src)), uintptr(pc)*4))
 }
 
-// regCallMiss is a call regCallW's cache does not answer: a site's first
+// regCallMiss is a call rhCallW's cache does not answer: a site's first
 // call or a new callee, a body answered without a frame, a frame that keeps
 // its arguments, a this to coerce, or a callee of no register code.
 //
@@ -199,7 +199,7 @@ func (r *Runtime) regMarkedRest(o *Object, recv Value, args []Value) (Value, err
 // argument; of the realm's exec or test on a literal; of its exec or
 // replace whose value is dead, or exec's reused at a site execReuseOf has
 // (regReuseSites). What regMarkedCall does otherwise is the call
-// regNative or regCallW makes, slower.
+// regNative or rhCallW makes, slower.
 func (r *Runtime) regMarked(c *regCode, o *Object, pc int, m uint8) bool {
 	switch {
 	case m&bytecode.RMarkLitArg != 0:
@@ -279,7 +279,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 			}
 		}
 		if e != nil && e.callee == o && e.kind != 0 && e.kind != regCallNative {
-			// A callee the site knows, whose call is not regCallW's alone.
+			// A callee the site knows, whose call is not rhCallW's alone.
 			cl, rc, kind, this = e.cl, e.rc, e.kind&^(regCallOut|regCallLeaf), e.this
 		} else if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
 			cl = fd.closure
@@ -396,7 +396,7 @@ type regCallCache struct {
 }
 
 // The kinds of regCallCache: what entering the callee takes of its this.
-// regCallOut marks one regCallW leaves to regCallMiss: a body answered
+// regCallOut marks one rhCallW leaves to regCallMiss: a body answered
 // without a frame, or a frame that keeps its arguments.
 const (
 	// regCallEnter is a method's call of a function whose this is the
@@ -420,7 +420,7 @@ const (
 	regCallMarked = 6
 
 	regCallOut = 8
-	// regCallLeaf marks a callee whose body regCallW may answer without a
+	// regCallLeaf marks a callee whose body rhCallW may answer without a
 	// frame (leafCall, pureCall).
 	regCallLeaf = 16
 )
@@ -885,7 +885,7 @@ func regTctx(r *Runtime, f *frame, cl *closure) *tctx {
 
 // regStackOp is the stack form's operator of each specialised operation,
 // whose slow path is the stack form's.
-var regStackOp = [128]bytecode.Op{
+var regStackOp = [256]bytecode.Op{
 	bytecode.RAndI: bytecode.OpBitAnd, bytecode.ROrI: bytecode.OpBitOr, bytecode.RXorI: bytecode.OpBitXor,
 	bytecode.RShlI: bytecode.OpShl, bytecode.RShrI: bytecode.OpShr, bytecode.RUShrI: bytecode.OpUShr,
 	bytecode.RBitAnd: bytecode.OpBitAnd, bytecode.RBitOr: bytecode.OpBitOr, bytecode.RBitXor: bytecode.OpBitXor,
@@ -896,7 +896,7 @@ var regStackOp = [128]bytecode.Op{
 // regJumpCmp is each compare-and-branch operation's comparison: its stack
 // form operator, whether it jumps when the comparison does not hold, and
 // whether its right operand is a register.
-var regJumpCmp = [128]struct {
+var regJumpCmp = [256]struct {
 	op              bytecode.Op
 	not, reg, upval bool
 }{
@@ -1264,7 +1264,7 @@ func (r *Runtime) regNewObject(cl *closure, w bytecode.RInstr) *Object {
 // A register frame's regKind: what a stack trace reads of it where the heap
 // frame's this and newTarget are not written.
 const (
-	// regFrameCall is regCallW's frame: its this is its window's second
+	// regFrameCall is rhCallW's frame: its this is its window's second
 	// register, and it is no construct.
 	regFrameCall = 1 + iota
 	// regFrameEnter is regEnterW's: its this is its window's, its

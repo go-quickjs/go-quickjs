@@ -137,11 +137,7 @@ func ssaBuilt(fn *bytecode.Function, reg bool) string {
 			// Which register operation, by its name.
 			if pc, _ := strconv.Atoi(m[1]); pc < len(fn.RegCode().Code) {
 				w := fn.RegCode().Code[pc]
-				name := w.Op().String()
-				if w.Op() == bytecode.RCold {
-					name = bytecode.RColdOp(w.X()).String()
-				}
-				why += " (" + name + ")"
+				why += " (" + w.Op().String() + ")"
 			}
 		}
 		return why
