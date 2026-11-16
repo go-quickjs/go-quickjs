@@ -259,6 +259,10 @@ func TestTailCallsBuiltAsNodes(t *testing.T) {
 		if tr == nil || tr == noTree {
 			t.Fatalf("%s: no tree", name)
 		}
+		if tr.reg != nil && regTier.Load() {
+			// Register code's one node: the tree's shape is the tree tier's.
+			continue
+		}
 		stmts := 0
 		for _, b := range tr.blocks {
 			stmts += len(b.body)

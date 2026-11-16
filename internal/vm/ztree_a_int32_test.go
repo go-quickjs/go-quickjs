@@ -33,7 +33,8 @@ func TestInt32Trees(t *testing.T) {
 	i32Elem = func(obj, key tentry, s *i32Site) ti32 { elems++; return elem(obj, key, s) }
 	i32GetNode = func(obj, key tentry, pc int) tval { gets++; return get(obj, key, pc) }
 	runInt32Script(t, "ops", func(tree bool) {
-		if tree && (ofs < 50 || elems < 10 || gets < 5) {
+		// Register code builds no trees for what it covers.
+		if tree && !regTier.Load() && (ofs < 50 || elems < 10 || gets < 5) {
 			t.Errorf("tree tier: %d int32 trees, %d element reads under an operator, %d int32-keyed reads built", ofs, elems, gets)
 		}
 		ofs, elems, gets = 0, 0, 0

@@ -72,7 +72,8 @@ func TestMethodCallNodesByCount(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 	}
-	if built < 20 {
+	// Register code builds no trees for what it covers.
+	if built < 20 && !regTier.Load() {
 		t.Errorf("%d nodes built by count, want the run's and viaThis's", built)
 	}
 }
@@ -206,7 +207,10 @@ func TestRestCallFromNodes(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 	}
-	if made < 20 {
+	// The tree's accounting: in the register tier the functions are
+	// register code, their tail calls register code's (the answers are
+	// compared above all the same).
+	if made < 20 && !regTier.Load() {
 		t.Errorf("%d calls made by restCall", made)
 	}
 }

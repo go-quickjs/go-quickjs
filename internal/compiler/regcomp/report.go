@@ -15,10 +15,17 @@ var reportOn = os.Getenv("QJS_REGREPORT") != ""
 
 var refused sync.Map // *bytecode.Function -> string
 
+// OnRefuse, where set, is told each refusal as it is made: the refusal
+// inventory's (internal/cmd/regrefusals). Set it before compiling.
+var OnRefuse func(fn *bytecode.Function, why string)
+
 // Refuse records why fn has no register code, for the report.
 func Refuse(fn *bytecode.Function, why string) {
 	if trace {
 		println("regcomp: not", fn.Name, why)
+	}
+	if OnRefuse != nil {
+		OnRefuse(fn, why)
 	}
 	if reportOn {
 		refused.Store(fn, why)
@@ -55,8 +62,6 @@ func why(fn *bytecode.Function) string {
 		return "getter, setter, field initializer or static block"
 	case fn.PrivateSites != 0:
 		return "private members"
-	case fn.HasTailCall:
-		return "tail call"
 	}
 	return ""
 }

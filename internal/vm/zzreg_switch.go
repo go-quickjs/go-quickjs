@@ -202,12 +202,14 @@ func (r *Runtime) regCold(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value
 // regColdSub is cold's operations, by the sub-operation in X: one opcode
 // value for every operation that does not run per turn of a hot loop, and
 // may throw. The loop runs cold through the slow path's case, regSlow,
-// whose error it returns: an error check in regCold's case of its own made
-// empty_loop 7.5% and string_build1 6.4% slower at every placement, the
-// loop's blocks laid out otherwise.
+// whose error it returns: an error check in regCold's case made empty_loop
+// 7.5% and string_build1 6.4% slower at every placement, and a case of
+// cold's own, before the free values', empty_loop 7.6% and loop_sum 4.4%,
+// the loop's blocks laid out otherwise.
 // Every one of them may throw: the frame's pc is the instruction's first.
-func (r *Runtime) regColdSub(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value, w bytecode.RInstr) error {
+func (r *Runtime) regColdSub(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
 	pc := k.pc - 1
+	w := regAt(c.code, pc)
 	f.pc = c.src[pc] + 1
 	switch bytecode.RColdOp(w.X()) {
 	case bytecode.RColdNewRegExp:
@@ -217,115 +219,61 @@ func (r *Runtime) regColdSub(f *frame, c *regCode, k *regKept, regs *[1 << 16]Va
 		}
 		regs[w.A()] = v
 		return nil
-	case bytecode.RColdLitExec, bytecode.RColdLitTest:
-		return r.regLitMethod(f, c, w, regs)
-	case bytecode.RColdCallLit, bytecode.RColdCallArgLit, bytecode.RColdCallDead, bytecode.RColdCallReuse:
-		return r.regRegExpCall(f, c, w, pc, regs)
+	case bytecode.RColdForOfStart, bytecode.RColdForInStart:
+		start := (*Runtime).startForOf
+		if bytecode.RColdOp(w.X()) == bytecode.RColdForInStart {
+			start = (*Runtime).startForIn
+		}
+		v, err := start(r, regs[w.B()])
+		if err != nil {
+			return err
+		}
+		regs[w.A()] = v
+		return nil
+	case bytecode.RColdIterClose:
+		return r.iterCloseNormal(regs[w.B()])
+	case bytecode.RColdIterCloseThrow:
+		// As closeIteratorsIn closes a cursor an exception leaves: what
+		// its return method throws is dropped.
+		st := cursorOf(regs[w.B()])
+		if st == nil || st.forIn || st.done || st.delegation || st.arr != nil && !r.unwalkToClose(st) {
+			return nil
+		}
+		st.done = true
+		r.closeIterator(st.iter)
+		return nil
 	}
 	panic("register code: no cold operation " + bytecode.RColdOp(w.X()).String())
 }
 
-// regLitMethod is lit_exec and lit_test: the literal's RegExp, made or
-// given back (newRegExpLiteral), in the window's receiver, and its method
-// in the callee's register -- the built-in, unread, where reading it would
-// find it running nothing (regexpLitMethod), as the tree's literal call
-// does, and read as get_method reads it otherwise.
-func (r *Runtime) regLitMethod(f *frame, c *regCode, w bytecode.RInstr, regs *[1 << 16]Value) error {
-	a := w.A()
-	lit, err := r.newRegExpLiteral(&f.cl.fn.Constants[w.B()])
-	if err != nil {
-		return err
-	}
-	regs[a+1] = lit
-	if m := r.regexpLitMethod(bytecode.RColdOp(w.X()) == bytecode.RColdLitTest); m != nil {
-		regs[a] = Obj(m)
-		return nil
-	}
-	v, err := r.regGetMethod(f.cl, c, bytecode.MakeR(bytecode.RGetMethod, 0, a, a+1, w.C()), lit)
-	if err != nil {
-		return err
-	}
-	regs[a] = v
-	return nil
-}
-
-// regRegExpCall is call_lit, call_arg_lit, call_dead and call_reuse: the
-// call of the window's callee, as call_method_w makes it, and what the
-// tree's nodes of those calls do around it. A literal's RegExp is given
-// back where the call keeps nothing of it and runs nothing of the
-// script's (regexpLiteralDone): exec or test, the realm's own, given a
-// primitive, of the literal's RegExp; replace, split or match searching
-// with it directly (regexpArgCall). A call of the realm's exec or replace
-// whose value nothing reads but its truth tells the function so, as
-// deadExec's node does (deadCallRest); one of exec whose value goes to a
-// local that keeps it only as execReuseOf says, the site's
-// (reuseCallRest).
-func (r *Runtime) regRegExpCall(f *frame, c *regCode, w bytecode.RInstr, pc int, regs *[1 << 16]Value) error {
-	wb := f.base - int(c.locals)
-	b := wb + int(w.A())
-	n := int(w.C())
-	fv, recv := r.stack[b], r.stack[b+1]
-	args := r.stack[b+2 : b+2+n]
-	if !fv.IsObject() {
-		v, err := r.regCall(fv, recv, args)
-		if err == nil {
-			regs[w.B()] = v
-		}
-		return err
-	}
-	o := fv.Object()
-	aux := c.rc.Aux[pc]
-	sub := bytecode.RColdOp(w.X())
-	var rx *Object
-	switch sub {
-	case bytecode.RColdCallArgLit:
-		if args[0].IsObject() && r.regexpArgCall(o, recv, args) {
-			rx = args[0].Object()
-		}
-	case bytecode.RColdCallLit:
-		if recv.IsObject() && (n == 0 || !args[0].IsObject()) {
-			if exec := r.regexpLitMethod(false); exec != nil && (o == exec || o == r.regexpLitMethod(true)) {
-				rx = recv.Object()
-			}
-		}
-	}
-	var v Value
-	var err error
-	switch {
-	case aux&bytecode.RColdDead != 0 && sub != bytecode.RColdCallReuse && o == r.regexpExecFn:
+// regDeadCall is a call of o on recv with args whose value nothing reads
+// but its truth: of the realm's exec or replace, the function told so, as
+// deadExec's node tells it (deadCallRest); of anything else, the call.
+func (r *Runtime) regDeadCall(o *Object, recv Value, args []Value) (Value, error) {
+	switch o {
+	case r.regexpExecFn:
 		var mark *Object
 		if recv.IsObject() {
 			mark = recv.Object()
 		}
-		v, err = deadCallRest[struct{}](r, r.regexpExecDead, mark, o, o.fn(), recv, args)
-	case aux&bytecode.RColdDead != 0 && sub != bytecode.RColdCallReuse && o == r.strReplaceFn:
+		return deadCallRest[struct{}](r, r.regexpExecDead, mark, o, o.fn(), recv, args)
+	case r.strReplaceFn:
 		var mark *Object
-		if n > 0 && args[0].IsObject() {
+		if len(args) > 0 && args[0].IsObject() {
 			mark = args[0].Object()
 		}
-		v, err = deadCallRest[struct{}](r, r.strReplaceDead, mark, o, o.fn(), recv, args)
-	case sub == bytecode.RColdCallReuse && o == r.regexpExecFn && c.reuse[int32(pc)] != nil:
-		v, err = reuseCallRest[struct{}](r, c.reuse[int32(pc)], r.stack[wb:wb+int(c.numRegs)], o, o.fn(), recv, args)
-	default:
-		v, err = r.regCall(fv, recv, args)
+		return deadCallRest[struct{}](r, r.strReplaceDead, mark, o, o.fn(), recv, args)
 	}
-	if err != nil {
-		return err
-	}
-	if rx != nil {
-		r.regexpLiteralDone(&f.cl.fn.Constants[aux&^bytecode.RColdDead], rx)
-	}
-	regs[w.B()] = v
-	return nil
+	return r.callRest(o, o.fn(), recv, args)
 }
 
-// regReuseSites is the sites of rc's call_reuse instructions, by pc, whose
-// arrays execReuseOf says may be made again: its answer, of the stack
-// form's call and locals, put in the frame's registers.
-func regReuseSites(fn *bytecode.Function, rc *bytecode.RegCode) map[int32]*execReuseSite {
-	var out map[int32]*execReuseSite
+// regReuseSites is the sites of rc's calls of exec marked RMarkReuse, by
+// call site, whose arrays execReuseOf says may be made again: its answer,
+// of the stack form's call and locals, put in the frame's registers.
+func regReuseSites(fn *bytecode.Function, rc *bytecode.RegCode) []*execReuseSite {
+	var out []*execReuseSite
 	for pc, w := range rc.Code {
-		if w.Op() != bytecode.RCold || bytecode.RColdOp(w.X()) != bytecode.RColdCallReuse {
+		if !w.Op().MethodCall() || pc >= len(rc.Marks) || rc.Marks[pc]&bytecode.RMarkReuse == 0 {
 			continue
 		}
 		spc := int(rc.Aux[pc])
@@ -338,9 +286,9 @@ func regReuseSites(fn *bytecode.Function, rc *bytecode.RegCode) map[int32]*execR
 			rs.s = int(rc.LocalReg[site.s])
 		}
 		if out == nil {
-			out = map[int32]*execReuseSite{}
+			out = make([]*execReuseSite, rc.CallSites)
 		}
-		out[int32(pc)] = rs
+		out[w.C()] = rs
 	}
 	return out
 }
@@ -434,62 +382,6 @@ func (r *Runtime) regNewArrayE(f *frame, c *regCode, k *regKept, regs *[1 << 16]
 	regs[w.A()] = n.make(regTctx(r, f, f.cl))
 }
 
-// regAppend is append, a case of runReg's: an append to a local, its
-// string grown in place where it alone holds it, as the tree's
-// strAppendNode grows it. The case keeps nothing of the instruction across
-// the call; this reads it back.
-//
-//go:noinline
-func (r *Runtime) regAppend(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
-	pc := k.pc - 1
-	w := regAt(c.code, pc)
-	f.pc = c.src[pc] + 1
-	v, err := strAppendOp[struct{}](r, regs[w.A()], regs[w.B()])
-	if err == nil {
-		regs[w.A()] = v
-	}
-	return err
-}
-
-// regCharCodeAt is char_code_at, a case of runReg's: s.charCodeAt(i) of a
-// string, its method the built-in read from the cache primProp fills and
-// its argument a number, read here as the tree's charCodeAtCall reads it,
-// without the method's read on the slow path, the call's site and the
-// built-in's conversions; anything else is regCharCodeAtSlow's. The case
-// keeps nothing of the instruction across the call; this reads it back.
-//
-//go:noinline
-func (r *Runtime) regCharCodeAt(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
-	pc := k.pc - 1
-	w := regAt(c.code, pc)
-	if o := regs[w.B()]; o.IsString() {
-		key := f.cl.names[c.siteName[w.C()]]
-		p := r.proto.str
-		if e := &r.primProps[key&63]; e.key == key && e.proto == p && e.shape == p.shape {
-			if m := p.vals()[e.idx]; m.IsObject() {
-				if fd := m.Object().fn(); fd != nil && fd.elemOp == elemStrCharCodeAt && !fd.bound {
-					if a := regs[w.X()]; a.IsNumber() {
-						x := a.Number()
-						if x != x {
-							x = 0
-						}
-						// ToIntegerOrInfinity truncates toward zero, so any
-						// position above -1 and below the length is a code
-						// unit's.
-						v := Float(math.NaN())
-						if s := o.String(); x > -1 && x < float64(s.Len()) {
-							v = Int(s.CharCodeAt(int(x)))
-						}
-						regs[w.A()] = v
-						return nil
-					}
-				}
-			}
-		}
-	}
-	return r.regCharCodeAtSlow(f, c, pc, regs)
-}
-
 // regCharCodeAtSlow is char_code_at as get_method_w and call_method_w make
 // it: the method read, with the read's position (Aux), then the argument
 // read, and the call, with the call's.
@@ -509,4 +401,111 @@ func (r *Runtime) regCharCodeAtSlow(f *frame, c *regCode, pc int, regs *[1 << 16
 	}
 	regs[w.A()] = v
 	return nil
+}
+
+// regCatch is where a register frame goes on after the instruction at
+// k.pc-1 threw err: the pc of its handler, the innermost whose ranges hold
+// the instruction, with the exception's value in the handler's register;
+// or -1 where none does, or err is no JavaScript exception -- an interrupt,
+// a memory limit -- which no handler catches, as in the interpreter
+// (unwindToHandler). A call that threw has left the stack and the frames
+// as they were before it.
+//
+//go:noinline
+func (r *Runtime) regCatch(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value, err error) int {
+	if len(c.rc.Handlers) == 0 {
+		return -1
+	}
+	th, ok := err.(*Thrown)
+	if !ok {
+		return -1
+	}
+	h := c.rc.HandlerAt(k.pc - 1)
+	if h == nil {
+		return -1
+	}
+	regs[h.Reg] = th.Value
+	return int(h.To)
+}
+
+// regIterNextTree is iter_next of a generator's cursor, stepped as the
+// tree steps one (iterNextTree): a generator of tree code resumed in
+// place (stepGenTree), not through its next's call. Its body throws as the
+// tree throws, with a panic, which a function of the tree with a for-of
+// loop catches under its own recover; register code has none, so the
+// step has one, and leaves the frames and the stack as runTreeHandlers
+// does. The frame's tctx is the step's: the tree reads only its runtime.
+func (r *Runtime) regIterNextTree(f *frame, cur Value) (v Value, more bool, err error) {
+	depth, top := r.frameDepth, r.stackTop
+	defer func() {
+		if p := recover(); p != nil {
+			th, ok := p.(treeThrow)
+			if !ok {
+				panic(p)
+			}
+			r.unwindTreeFrames(depth)
+			r.stackTop = top
+			v, more, err = Undefined, false, th.err
+		}
+	}()
+	tc := &f.tc
+	tc.r, tc.f = r, f
+	return iterNextTree(tc, cur)
+}
+
+// regStepNext is iter_next of a cursor neither of an array, a for-in nor
+// a generator, as iterNext steps it (stepIter): a next of script called as
+// register code calls (regCall), its register code entered directly rather
+// than through the frames a call from Go makes, and its result's done and
+// value read; a Map's or a Set's iterator of this realm stepped as the
+// tree's iterNextTree steps it; anything else by stepIter. The cursor is
+// done once it is, or once a step fails.
+func (r *Runtime) regStepNext(st *iterState) (Value, bool, error) {
+	var fd *funcData
+	if st.next.IsObject() {
+		fd = st.next.Object().fn()
+	}
+	if fd == nil || fd.closure == nil || fd.native != nil {
+		if fd != nil && fd.iterNext == iterNextMap && (fd.realm == nil || fd.realm == r.Realm) && st.iter.IsObject() {
+			if d, ok := st.iter.Object().dataOf().(*mapIterData); ok {
+				if err := r.tick(); err != nil {
+					st.done = true
+					return Undefined, false, err
+				}
+				v, ok := r.mapIterStep(d)
+				if !ok {
+					st.done = true
+				}
+				return v, ok, nil
+			}
+		}
+		v, ok, err := r.stepIter(st.iter, st.next)
+		if !ok {
+			st.done = true
+		}
+		return v, ok, err
+	}
+	res, err := r.regCall(st.next, st.iter, nil)
+	if err == nil && !res.IsObject() {
+		err = r.throwTypeError("an iterator result must be an object")
+	}
+	if err != nil {
+		st.done = true
+		return Undefined, false, err
+	}
+	done, err := r.getValueProp(res, atomDone)
+	if err != nil {
+		st.done = true
+		return Undefined, false, err
+	}
+	if done.Truthy() {
+		st.done = true
+		return Undefined, false, nil
+	}
+	v, err := r.getValueProp(res, atomValue)
+	if err != nil {
+		st.done = true
+		return Undefined, false, err
+	}
+	return v, true, nil
 }

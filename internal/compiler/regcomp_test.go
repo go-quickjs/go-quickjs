@@ -108,11 +108,13 @@ func TestRegisterBackendCode(t *testing.T) {
 }
 
 // TestRegisterBackendFallsBack pins what the backend leaves to the stack
-// form, each function as a whole: a try statement, an optional chain, a
-// generator, a strict global store of a value that runs code.
+// form, each function as a whole: a catch clause's pattern, an optional
+// chain, a generator, a strict global store of a value that runs code. A
+// try statement is register code, with a handler table.
 func TestRegisterBackendFallsBack(t *testing.T) {
 	fns := regFunctions(t, `
-		function tried() { try { return 1 } catch (e) { return 2 } }
+		function tried() { try { return 1 } catch ({ e }) { return 2 } }
+		function handled(x) { try { return x.y } catch (e) { return e } finally { x = 0 } }
 		function opt(o) { return o?.x }
 		function* gen() { yield 1 }
 		function strictStore() { 'use strict'; g = plain(1) }
@@ -121,6 +123,9 @@ func TestRegisterBackendFallsBack(t *testing.T) {
 		if f := fns[name]; f == nil || f.Reg != nil {
 			t.Errorf("%s: register code %v, want none", name, f != nil && f.Reg != nil)
 		}
+	}
+	if f := fns["handled"]; f == nil || f.Reg == nil || len(f.Reg.Handlers) != 2 {
+		t.Errorf("handled: want register code with two handlers")
 	}
 	if f := fns["plain"]; f == nil || f.Reg == nil {
 		t.Errorf("plain has no register code")

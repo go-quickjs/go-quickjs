@@ -137,7 +137,9 @@ func TestTailSwapChains(t *testing.T) {
 		// around the chains, and the chain's -- are tailCallDepth deep, in
 		// each chain: one call of it, and one more for each call under it.
 		want, wantDeep := 1000+1000000+2-2*(tailCallDepth-2), 2
-		if !tree {
+		if !tree || regTier.Load() {
+			// The tree's accounting: register code's tail calls are its
+			// own (the answer is compared above all the same).
 			want, wantDeep = 0, 0
 		}
 		if calls != want || deepest != wantDeep {

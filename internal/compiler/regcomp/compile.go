@@ -62,6 +62,8 @@ type gen struct {
 	// dead is the call whose value the expression being compiled leaves
 	// unused but for its truth: a statement's, a condition's.
 	dead *ast.Call
+	// marks is the calls' marks, by pc (RegCode.Marks).
+	marks map[int]uint8
 	// reuses says the code has a call_reuse, whose frame's locals the
 	// runtime finds by LocalReg.
 	reuses bool
@@ -97,6 +99,13 @@ type gen struct {
 	// switches is each switch instruction's table, its cases' bodies by
 	// their marks, bound by the end.
 	switches [][]switchEntry
+	// prots are the handlers in force where code is compiled, outermost
+	// first; handlers the finished ones, innermost first; copies how deep
+	// the finally clauses' copies being compiled nest (try.go).
+	prots    []*prot
+	handlers []*prot
+	copies   int
+	held     int
 	err      string
 }
 
@@ -788,6 +797,24 @@ func (g *gen) stmt(s ast.Stmt) {
 			g.fail("a function declaration in a block")
 		}
 	case *ast.ReturnStmt:
+		if g.finallyAround() {
+			// The value is taken before the finally clauses run, which
+			// may assign what it was read from.
+			v := -1
+			if n.Arg != nil {
+				v = g.alloc()
+				g.into(n.Arg, v)
+			}
+			defer g.hold()()
+			g.leave(0, func() {
+				if v < 0 {
+					g.emit(bytecode.MakeR(bytecode.RRetUndef, 0, 0, 0, 0))
+				} else {
+					g.emit(bytecode.MakeR(bytecode.RRet, 0, r16(v), 0, 0))
+				}
+			})
+			return
+		}
 		if n.Arg == nil {
 			g.emit(bytecode.MakeR(bytecode.RRetUndef, 0, 0, 0, 0))
 			return
@@ -835,23 +862,38 @@ func (g *gen) stmt(s ast.Stmt) {
 			g.fail("a break without its target")
 			return
 		}
-		g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.brk, false)
+		g.leave(g.protsOutside(l, false), func() { g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.brk, false) })
 	case *ast.ContinueStmt:
 		l := g.findLoop(n.Label, true)
 		if l == nil {
 			g.fail("a continue without its loop")
 			return
 		}
-		g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.cont, false)
+		g.leave(g.protsOutside(l, true), func() { g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), l.cont, false) })
 	case *ast.ThrowStmt:
 		r := g.expr(n.Arg, -1)
 		g.at(n.Start)
+		if len(g.prots) > 0 {
+			// The handler the table would find, entered as it would be:
+			// nothing is made of the value that the handler would not
+			// take straight back out, as the tree's throwToHandler does.
+			p := g.prots[len(g.prots)-1]
+			g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(p.reg), r16(r), 0))
+			g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), p.to, false)
+			return
+		}
 		g.emit(bytecode.MakeR(bytecode.RThrow, 0, r16(r), 0, 0))
 	case *ast.SwitchStmt:
 		g.switchStmt(n, label)
+	case *ast.TryStmt:
+		g.tryStmt(n)
+	case *ast.ForOfStmt:
+		g.forOfStmt(n.Left, n.Right, n.Body, n.Await, false, label, n.Start)
+	case *ast.ForInStmt:
+		g.forOfStmt(n.Left, n.Right, n.Body, false, true, label, n.Start)
 	case *ast.LabeledStmt:
 		switch n.Body.(type) {
-		case *ast.ForStmt, *ast.WhileStmt, *ast.DoWhileStmt:
+		case *ast.ForStmt, *ast.WhileStmt, *ast.DoWhileStmt, *ast.ForOfStmt, *ast.ForInStmt:
 			g.label = n.Label
 			g.stmt(n.Body)
 		default:
@@ -928,7 +970,7 @@ func (g *gen) forStmt(n *ast.ForStmt, label string) {
 			g.fail("a for loop's head")
 		}
 	}
-	g.top = g.topAfterBindings()
+	g.top = g.stmtTop()
 	test := g.newMark()
 	body := g.newMark()
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), test, false)
@@ -954,6 +996,21 @@ func (g *gen) forStmt(n *ast.ForStmt, label string) {
 
 // topAfterBindings is the first temporary register.
 func (g *gen) topAfterBindings() int { return regParams + g.fn.ParamCount + g.inits }
+
+// stmtTop is the first register a statement's temporaries may take: the
+// first after the bindings and after the registers a statement around it
+// holds for as long as it runs (hold) -- a for-of loop's cursor, a
+// finally clause's exception, a return's value on its way through
+// finally clauses.
+func (g *gen) stmtTop() int { return max(g.topAfterBindings(), g.held) }
+
+// hold keeps the registers below g.top from the temporaries of the
+// statements compiled until the release it returns is called.
+func (g *gen) hold() func() {
+	saved := g.held
+	g.held = g.top
+	return func() { g.held = saved }
+}
 
 func (g *gen) varDecl(n *ast.VarDecl) {
 	if n.Kind != ast.DeclVar && n.Kind != ast.DeclLet && n.Kind != ast.DeclConst {
@@ -987,13 +1044,13 @@ func (g *gen) varDecl(n *ast.VarDecl) {
 				skip := g.newMark()
 				g.jump(bytecode.MakeR(bytecode.RJmpT, 0, r16(int(g.slotReg[res.Index])), 0, 0), skip, false)
 				g.storeIdent(id, d.Init, true)
-				g.top = g.topAfterBindings()
+				g.top = g.stmtTop()
 				g.bind(skip)
 				continue
 			}
 		}
 		g.storeIdent(id, d.Init, true)
-		g.top = g.topAfterBindings()
+		g.top = g.stmtTop()
 	}
 }
 
@@ -2346,44 +2403,59 @@ func (g *gen) call(n *ast.Call, dst int) int {
 	default:
 		g.into(n.Callee, w)
 	}
-	g.args(n.Args, w+2)
+	if argLit {
+		// The literal is made by call_arg_lit: nothing can see it made
+		// after the arguments that follow it.
+		g.args(n.Args[1:], w+3)
+	} else {
+		g.args(n.Args, w+2)
+	}
 	d := dst
 	if d < 0 {
 		d = w
 	}
 	g.at(n.TracePos())
 	dead = dead && (mname == "exec" || mname == "replace")
+	if g.rec.Tails[n] && !argLit {
+		// A call in tail position, whose frame is given up once the
+		// stack is deep, as the stack form's tail_call gives it up.
+		op = tailOp(op)
+	}
+	at := g.emit(bytecode.MakeR(op, uint8(argc), r16(w), r16(d), g.callSite()))
 	if argLit {
-		// A RegExp literal given to replace, split or match, which may
-		// have its RegExp back once the call is done with it.
-		at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallArgLit), r16(w), r16(d), uint16(argc)))
-		g.aux(at, g.regexpConst(n.Args[0].(*ast.RegexpLit))|deadBit(dead))
-		return d
-	}
-	if dead {
-		at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallDead), r16(w), r16(d), uint16(argc)))
-		g.aux(at, deadBit(true))
-		return d
-	}
-	if mname == "exec" && dst >= 0 {
+		// A RegExp literal given to replace, split or match, made by the
+		// call, which may have its RegExp back once it is done with it.
+		g.aux(at, g.regexpConst(n.Args[0].(*ast.RegexpLit)))
+		g.mark(at, bytecode.RMarkLitArg|deadMark(dead))
+	} else if dead {
+		// A call of exec or replace whose value nothing reads but its
+		// truth: a mark the call of the built-in reads.
+		g.mark(at, bytecode.RMarkDead)
+	} else if mname == "exec" && dst >= 0 {
 		if spc, ok := g.reuseCall(n, dst); ok {
-			at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallReuse), r16(w), r16(d), uint16(argc)))
 			g.aux(at, spc)
+			g.mark(at, bytecode.RMarkReuse)
 			g.reuses = true
-			return d
 		}
 	}
-	g.emit(bytecode.MakeR(op, uint8(argc), r16(w), r16(d), g.callSite()))
 	return d
 }
 
-// deadBit is the bit of a regexp call's Aux that says nothing reads its
-// value but its truth.
-func deadBit(dead bool) uint32 {
+// deadMark is the mark of a regexp call that says nothing reads its value
+// but its truth.
+func deadMark(dead bool) uint8 {
 	if dead {
-		return bytecode.RColdDead
+		return bytecode.RMarkDead
 	}
 	return 0
+}
+
+// mark gives the call at pc marks m (RegCode.Marks).
+func (g *gen) mark(pc int, m uint8) {
+	if g.marks == nil {
+		g.marks = map[int]uint8{}
+	}
+	g.marks[pc] |= m
 }
 
 // reuseCall finds the stack form's call of exec n compiles to, whose value
@@ -2455,23 +2527,74 @@ func (g *gen) regexpLitCall(n *ast.Call, dst int, dead bool) (int, bool) {
 	if k >= limit16 {
 		return 0, false
 	}
-	sub := bytecode.RColdLitExec
-	if name == "test" {
-		sub = bytecode.RColdLitTest
+	if len(n.Args) == 1 && g.unchanging(n.Args[0]) {
+		// One argument that the method's read cannot change, put in the
+		// window first: the literal made, its method read and called by
+		// one operation.
+		w := g.allocN(3)
+		g.into(n.Args[0], w+2)
+		d := dst
+		if d < 0 {
+			d = w
+		}
+		x := uint8(bytecode.RLitCall) | litTest(name)
+		if dead && name == "exec" {
+			x |= bytecode.RLitDead
+		}
+		g.at(n.TracePos())
+		at := g.emit(bytecode.MakeR(bytecode.RLit, x, r16(w), r16(d), uint16(k)))
+		if g.stores == nil {
+			g.stores = map[int]int32{}
+		}
+		g.stores[at] = int32(lit.Start)
+		return d, true
 	}
 	argc := len(n.Args)
 	w := g.allocN(2 + argc)
 	g.at(lit.Start)
-	g.emit(bytecode.MakeR(bytecode.RCold, uint8(sub), r16(w), uint16(k), g.propSite(bytecode.OpGetPropThis, g.nameIdx(name))))
+	g.emit(bytecode.MakeR(bytecode.RLit, litTest(name), r16(w), 0, uint16(k)))
 	g.args(n.Args, w+2)
 	d := dst
 	if d < 0 {
 		d = w
 	}
 	g.at(n.TracePos())
-	at := g.emit(bytecode.MakeR(bytecode.RCold, uint8(bytecode.RColdCallLit), r16(w), r16(d), uint16(argc)))
-	g.aux(at, k|deadBit(dead && name == "exec"))
+	at := g.emit(bytecode.MakeR(bytecode.RCallMW, uint8(argc), r16(w), r16(d), g.callSite()))
+	g.aux(at, k)
+	g.mark(at, bytecode.RMarkLitRecv|deadMark(dead && name == "exec"))
 	return d, true
+}
+
+// tailOp is call op's form in tail position.
+func tailOp(op bytecode.ROp) bytecode.ROp {
+	if op == bytecode.RCallMW {
+		return bytecode.RCallMWT
+	}
+	return bytecode.RCallWT
+}
+
+// litTest is regexp_lit's flag of a literal's test, for name test.
+func litTest(name string) uint8 {
+	if name == "test" {
+		return bytecode.RLitTest
+	}
+	return 0
+}
+
+// unchanging reports whether e's value, read before a method's read, is
+// what it would be read after it: a constant, or a local of the function's
+// own that nothing captures, in a function with no arguments object to
+// write it through, and that needs no check of its initialization -- which
+// the read, a getter, could neither write nor see uninitialized.
+func (g *gen) unchanging(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit:
+		return true
+	case *ast.Ident:
+		res, ok := g.rec.Read[n]
+		return ok && res.Kind == ResLocal && !g.fn.Locals[res.Index].Captured && !g.fn.UsesArguments
+	}
+	return false
 }
 
 // charCodeAt compiles recv.charCodeAt(i), a receiver in a binding and its
@@ -2991,6 +3114,13 @@ func (g *gen) finish() *bytecode.RegCode {
 	for len(g.siteName) <= int(g.fn.PropSites) {
 		g.siteName = append(g.siteName, 0)
 	}
+	var marks []uint8
+	if len(g.marks) > 0 {
+		marks = make([]uint8, len(g.code))
+		for pc, m := range g.marks {
+			marks[pc] = m
+		}
+	}
 	var aux []uint32
 	if len(g.auxes) > 0 {
 		aux = make([]uint32, len(g.code))
@@ -2999,11 +3129,12 @@ func (g *gen) finish() *bytecode.RegCode {
 		}
 	}
 	rc := &bytecode.RegCode{
-		Aux: aux, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
+		Aux: aux, Marks: marks, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
 		ForwardsArguments: g.fn.ForwardsArguments,
 		Code:              g.code, NumRegs: g.max + 1, SrcPC: src, SiteName: g.siteName, This: -1,
 		LocalReg: g.localReg(),
 		Wide:     true, Params: g.fn.ParamCount, Inits: g.inits, Caps: g.caps, CallSites: g.calls,
+		Handlers: g.handlerTable(),
 	}
 	if why := Verify(rc, g.fn); why != "" {
 		Refuse(g.fn, why)

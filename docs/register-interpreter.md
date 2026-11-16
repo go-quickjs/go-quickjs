@@ -408,6 +408,34 @@ the ones Go allows:
   - At d931057d the loop was at 4,981, 19 below the limit; with the
     shared taken tail and `append` and `str_freeze` as cases of their own
     it is at 4,875, 125 below.
+- **The hot code is one block.** `zzreg_run.go` holds, declared first
+  and in this order, `runReg`; the call and its return, `regCallW` and
+  `regEnterW`; what a call runs out of line, `regDirect` (a built-in's
+  callback), `regNative`, `regLeafRun`, `regCloseUpvalues`; and what an
+  iteration runs out of line, `regSlow` and its operators, `regElemMiss`,
+  `regSetMiss`, `regBackEdge`, `regAppend`, `regCharCodeAt`,
+  `regIterNext`, `regLit`, `regMarkedCall`. Go lays a package's functions
+  out in file order, so the distances between them -- which decide what
+  shares the op cache's sets -- depend on their own sizes alone, and the
+  layout lock's lever Q (`zzreg_ru_layoutpad.go`, the anchor `runReg`)
+  puts the block at a fixed address modulo 4 KB whatever changes before
+  it; the placements' pad before it (`zzreg_ru_pad.go`) moves it whole.
+  It stays where the register files were, after the JIT's, not first in
+  the package: there it moves none of the old tiers' code, whose anchors
+  all come before it, and only the A pad would change to take the
+  built-ins back behind 80 KB of it -- and the files after it (`zzz_*`)
+  are pinned by nothing either way.
+  Before, the block was spread over `zzreg_call.go`, `zzreg_run.go` and
+  `zzreg_switch.go`, with the cold `zzreg_report.go` between: a change to
+  a miss path moved `regSlow`, `regIn` and `regNative` against `runReg`,
+  and the tail calls' 4.8 KB in `zzreg_call.go` made `forward_loop` 11%
+  slower at every placement with no instruction of its path changed. New
+  hot code -- what a call, a return or a loop's turn runs -- goes into
+  the block, after what is there; cold code -- miss paths, `regCold`,
+  set-up, the report, the tail calls (`zzzy_regtail.go`) -- never does.
+  The set-up and the entries from a tree are in `zzreg_entry.go`. An
+  unrelated function added before the block, with the pads regenerated,
+  leaves every function of the block where it was.
 - **No constants in registers.** What Go's loop-invariant pass would take
   out of the loop is read from a variable (above).
 - **The loop holds only the hot operations.** Every case added moves the
@@ -434,8 +462,9 @@ the ones Go allows:
   level (the loop's blocks laid out otherwise, every instruction of those
   loops the same). A value freed goes to the end of the free
   list, and no hot operation is renumbered: its case's code would move.
-  At the removal of the translation reference the free values are 24,
-  29, 36, 37, 40, 41, 42 and 43, and 127 is `invalid`'s.
+  At the removal of the translation reference the free values were 24,
+  29, 36, 37, 40, 41, 42 and 43, and 127 is `invalid`'s; `iter_next`
+  took 24, `regexp_lit` 29, and the tail calls 36 and 37.
 
 What remains is Go's: a register store of a `Value` is a write-barrier
 check, the loop's instruction word is still saved at the dispatch where a
@@ -483,14 +512,97 @@ those read. Moving every reader to the lean record is stage 2.
 
 An exception is an error value returned, never a panic: a Go `panic` and
 `recover` cost microseconds where a returned error costs a compare. A
-function with handlers has a table of them, each a range of pcs, the
-handler's pc and the register its completion goes to. When a case returns an
-error, the loop looks the pc up in the table: a handler in this frame
-resumes there; none returns the error to the caller's case, which does the
-same. `finally` is a handler that runs with the completion -- normal,
-return, break, throw -- in two registers and dispatches on it at its end,
-as the stack form's does. Iterators a loop holds open are closed by the
-unwinding as now.
+function with handlers has a table of them (`RegCode.Handlers`, innermost
+first), each a list of ranges of pcs, the handler's pc and the register
+the exception's value goes to. Nothing runs as a try block is entered or
+left: no push and no pop, as the stack form's `push_catch` and `pop_catch`
+are.
+
+- **Every way out of the loop with an error goes through one tail,**
+  `fail`, after the switch. A case that can throw stores `kept.pc` before
+  it calls out, as every case with a call already did, and on an error
+  sets `failed` and jumps to the tail; the tail calls `regCatch`, which
+  looks the instruction at `kept.pc-1` up in the table and returns the
+  handler's pc, its value written to the handler's register, or -1, and
+  the loop returns the error to the caller's case, which does the same.
+  `TestRegThrowsKeepPC` reads `runReg`'s source and fails where a `goto
+  fail` has no `kept.pc = pc` before it in its case or tail, or where the
+  loop returns an error anywhere but from the tail. The tail and the
+  stores cost the loop 44 nodes (4,726 to 4,770); the pc is still never
+  live across a call. Each case calling `regCatch` itself instead, with
+  no tail, cost 177 nodes more (53 below the limit) and was level over
+  the placements: nothing 3% or more slower at every placement either
+  way, the geometric mean 0.8% faster, `crypto_am3` -4.3% and
+  `empty_loop` -5.7% (each slower at one placement of four),
+  `global_write` -1.2%. The shared tail stays, for the budget. Against
+  s2, before the tail, `global_write` and `global_write_strict` are 4.4%
+  slower at every placement with either form: not the tail's.
+- **What a handler catches is what the interpreter's catches**
+  (`unwindToHandler`): a JavaScript exception (`*Thrown`), whatever threw
+  it -- a throw statement, an operator, a getter or a setter, a built-in,
+  a call of either tier, a stack overflow's RangeError. An interrupt or a
+  memory limit goes on past every handler. A call that threw has left
+  the stack and the frame records as they were before it (`popFrameOf`),
+  so the handler needs no unwinding of its own.
+- **A finally clause is compiled once for each way out of what it
+  protects** (regcomp's `try.go`): in place after the block's normal
+  completion; before each break, continue or return that leaves it, the
+  return's value taken first into a register of its own; and as the
+  handler for a throw, which throws the value again at its end. There is
+  no completion record and no dispatch on one: each copy goes on as its
+  exit does. A copy before an exit is outside the ranges of the handlers
+  the exit leaves and inside those of the handlers around them, so that a
+  throw from a finally clause run by a break is caught by the try around
+  the loop and not by its own catch. Copies nest at most four deep (a
+  clause inside a clause is compiled for each copy of the outer); deeper,
+  the function stays the stack form's.
+- **The catch binding** is its slot's register, which the stack compiler
+  records for the clause (`Record.Catches`), or a temporary where nothing
+  reads it. A catch clause's pattern, a binding a closure captures in a
+  loop (each turn's is a new one) and a using declaration's scope stay
+  the stack form's.
+- **A throw statement with a handler around it in its function** is a
+  move of its value into the handler's register and a jump to it, with
+  no `Thrown` made, as the tree's `throwToHandler` does: through the
+  table, `try_throw` was 33 to 128 ns (the frames captured for nothing).
+- **for-of and for-in loops** keep their cursor in a register of their
+  own: `for_of_start` or `for_in_start` makes it (`startForOf`,
+  `startForIn`, with their fast paths for an array and a generator) and
+  `iter_next` steps it at the head of each turn, jumping out where it has
+  no value. The two starts are cold operations; `iter_next` is the one
+  direct value stage 2 has taken (24): through `cold`, `regSlow` and
+  `regColdSub` were 16% of `generator_for_of`, and as a case (a call
+  with the pc kept, 30 nodes) `array_for_of` went from 17.3 to 13.2 ns
+  and `generator_for_of` from 93 to 83 in one build. `regIterNext`
+  reads an array's element in its dense storage as the tree's
+  `iterNextTree` does, and steps a generator's cursor as the tree does
+  (`stepGenTree`, resumed in place) under a recover of its own
+  (`regIterNextTree`), since a generator's body throws as the tree
+  throws, with a panic. Any other iterator's `next`, where it is a
+  function of script, is called as register code calls (`regStepNext`,
+  through `regCall`): through `iterNext`'s `stepIter` it was called from
+  Go, `callObject`, `runFD` and `runTree` making the frame and the
+  register function's one tree node entering it, and `iterator_for_of`
+  was 257 ns against the tree's 196 (208 so). A Map's or a Set's
+  iterator is stepped as the tree's `iterNextTree` steps it
+  (`mapIterStep`). A call of a generator function from register code is
+  made at its site (`regCallGen`, `regGenCall`: `newGenerator`, the
+  receiver coerced as `callClosure` coerces it), not through `regCall`
+  and `callDirect`: `generator_create` 480 to 404 ns, the tree 430. The
+  step's recover goes when a generator's body is register code (stage
+  2, item 3): without it `generator_create` was 383. A key string a for-in handed out is read by
+  `get_index`'s slow path as the tree reads it (`stringKeyRead`), and
+  `f.call(t, ...)` goes to `callThrough` without the generic call's
+  search (`has_own_call_for_in`). A for-of loop's body is in the
+  ranges of a handler of its own, the cursor's, which closes the iterator
+  as a throw does (`iter_close_throw`, its return method's error dropped)
+  and throws again; a break, a continue of an outer loop or a return that
+  leaves the loop closes it on the way out as it runs a finally clause
+  (`iter_close`, its error thrown), and `iter_next` is outside the
+  ranges, so that an iterator whose `next` threw is not closed. A for-in
+  cursor needs no closing. A pattern or a member as the target, a
+  captured lexical binding (each turn's is a new one) and `for await`
+  stay the stack form's.
 
 ## Generators and async functions
 
@@ -589,7 +701,14 @@ Each stage lands on its own, is measured against the one before by the
 placements, plain and with the JIT, and keeps test262 at 100,247 passed and
 none failed in every mode -- plain, with the JIT, with every runtime made
 `WithDebugger`, and in the register tier. What a stage does not cover runs
-on the old pipeline.
+on the old pipeline -- until the end state, in which the stack interpreter
+and the tree tier are removed. So no new feature is left to them, not for
+a form, not for a while, not because the tree is faster: what is added
+runs entirely as register code. The fallbacks there are -- regcomp's
+refusals (the inventory below) -- are a list to burn down, not a
+design. The tree tier is
+the floor to beat and the place to port mechanisms from, never a place to
+send code.
 
 ### Stage 0: the evidence (done)
 
@@ -882,18 +1001,41 @@ primitive, does without. The tree's
   to 1,813 ns (the tree 1,924, the comparison engine 1,878),
   `html_escape_mixed` 800 to 636, `int_toString` 81.5 to 77.1 (the tree
   70, the comparison engine 82); the V8 suite level.
-- **A RegExp literal stays the tree's for now.** As a `new_regexp` through
-  the slow path it made `template_list` 304 to 228 ns (the tree 253:
-  `extra_esc` and its caller no longer crossed), but every function with a
-  literal lost the tree's mechanisms around it: the literal's RegExp given
-  back after `/x/.exec(s)` and `test` (`regexpLitMethod`, the spares), a
-  literal handed to `replace`, `split` or `match` searched without its
-  object (`regexpArgCall`), and an exec's array made again in the memory
-  of the last (`reuseExecCall`) or not at all where nothing reads it.
-  `regexp_sticky` was 255 to 377 ns, `regexp_ascii` 217 to 294, eleven
-  regexp tests 6 to 48% slower at every placement. Those mechanisms are
-  owed to register code before the literal is: they are what the tree
-  wins by.
+- **A RegExp literal is register code** (`QJS_REGEXPLIT` and
+  `QJS_REGCALLS` removed). As a `new_regexp` through the slow path it made
+  `template_list` 304 to 228 ns, but every function with a literal lost
+  the tree's mechanisms around it: the literal's RegExp given back after
+  `/x/.exec(s)` and `test` (`regexpLitMethod`, the spares), a literal
+  handed to `replace`, `split` or `match` searched without its object
+  (`regexpArgCall`), and an exec's array made again in the memory of the
+  last (`reuseExecCall`) or not at all where nothing reads it
+  (`regexp_sticky` 255 to 377 ns, eleven regexp tests 6 to 48% slower).
+  As cold operations (`lit_exec`, `call_lit`, `call_arg_lit`,
+  `call_dead`, `call_reuse`), two second dispatches a call, `regexp_replace`
+  was still 25% and `html_escape_plain` 8.3% slower.
+
+  Now the call is always the hot `call_method_w`, and what the tree's
+  nodes do around it is a **mark** of the call (`RegCode.Marks`:
+  `RMarkDead`, `RMarkReuse`, `RMarkLitRecv`, `RMarkLitArg`, their operand
+  in `Aux`, all 32 bits), which changes nothing of the dispatch: the site's
+  discovery (`regCallSlow`) caches a callee as `regCallMarked` only where
+  the mark is its -- the realm's exec, test or replace, any callee for a
+  literal argument, a reuse only where `execReuseOf` has a site -- and
+  `regCallW` sends those to `regMarkedCall`; every other callee keeps its
+  kind. Marked where no reuse site existed, the call went through
+  `callRest` with a frame where `regNative` had none, 10% slower: a mark
+  applies only where it does something. A literal argument is made by the
+  call itself (`RMarkLitArg`): nothing can see it made after the
+  arguments that follow. The literal's method is `regexp_lit`, a direct
+  operation (value 29): the literal made or given back and its method
+  chosen; with `RLitCall`, for one argument that is a constant or a local
+  nothing captures in a function with no arguments object -- which the
+  method's read, a getter, could neither write nor see uninitialized --
+  the call made at once, the built-in called without the window. Any
+  other argument is evaluated between `regexp_lit` and the marked call:
+  the method must be read before it. A constant past 16 bits keeps the
+  general form (`new_regexp` and the call), never a refusal.
+
 - **The opcode space was full but for two values.** The dispatch masks the
   operation to 7 bits so that its jump table needs no range check, and
   with `char_code_at` 126 of the 128 values were taken. Widening the mask
@@ -981,29 +1123,175 @@ loop counter may be live across a back edge; the literal rule, no raw
 register live across anything that can call out, would forbid every raw
 counter.
 
-### Stage 2: frames
+### Stage 2: zero refusals
 
-The lean frame record everywhere a frame is read: stack traces, the
-debugger's frames, errors' positions, generators. Exceptions with handler
-tables, `try`, `catch` and `finally`; `arguments` and rest parameters;
-destructuring; classes and `super`; `for-in` and `for-of`; templates;
-spreads; optional chains; tail calls. Built-ins' callbacks all enter
-directly.
+The register tier is the baseline interpreter: it refuses nothing V8's
+Ignition compiles, which in practice is everything. No form stays in the
+old tiers, not generators, not eval, not the debugger's code; each is
+compiled as register code, and the old tiers go when the last refusal
+does. The refusals are counted by `internal/cmd/regrefusals`, which
+compiles every file of the directories it is given with the register
+form on and counts the functions regcomp compiled and those it refused,
+by the first reason each met (a function refused for one reason may meet
+another once it is gone):
 
-### Stage 3: generators, async, eval, with, the debugger
+```sh
+go run ./internal/cmd/regrefusals D:/Data/v8-v7 D:/Data/octane D:/Data/bundles /path/to/test262/test
+```
 
-Generators and async functions as copied windows, with the settled-await
-fast path; direct eval through binding descriptors; `with`; the debugger's
-statement markers and binding tables. At its end every function has
-register code and the stack interpreter runs nothing.
+At 8474d6d0 (RegExp literals compiled; test262's negative tests, 4,728
+files, do not compile and are not counted):
 
-### Stage 4: the JIT and the tree tier
+| | files | functions | register code | refused |
+|---|---|---|---|---|
+| V8 suite | 10 | 820 | 808 (98.5%) | 12 |
+| Octane | 21 | 6,976 | 6,801 (97.5%) | 175 |
+| bundles (Babel, Three.js) | 2 | 9,829 | 6,234 (63.4%) | 3,595 |
+| test262 | 54,084 | 162,893 | 63,090 (38.7%) | 99,803 |
+| all | 54,117 | 180,518 | 76,933 (42.6%) | 103,585 |
 
-The JIT's front end reads register code and its deoptimization rebuilds
-register frames. The tree tier is measured against the register interpreter
-suite by suite and retired where it no longer wins.
+Every reason, all four together (V8, Octane and bundles where they have
+it):
 
-### Stage 5: one pipeline
+| functions | reason | V8 / Octane / bundles |
+|---|---|---|
+| 49,389 | top-level code | 10 / 21 / 2 |
+| 12,737 | generator or async | 0 / 0 / 11 |
+| 9,844 | class constructor | 0 / 0 / 128 |
+| 7,154 | getter, setter, field initializer or static block | 0 / 39 / 141 |
+| 5,382 | private members | |
+| 3,899 | parameter patterns, defaults or rest | 0 / 0 / 176 |
+| 2,981 | a field's initializer (`ast.FieldInit`) | |
+| 2,819 | tail call | 0 / 83 / 2,566 |
+| 1,912 | a BigInt literal | |
+| 1,449 | private methods' installation (`ast.InstallPrivateMethods`) | |
+| 1,426 | an object literal's property (accessors, methods, spreads, computed) | 0 / 12 / 5 |
+| 757 | direct eval | 1 / 1 / 0 |
+| 655 | a template literal | 0 / 0 / 7 |
+| 527 | a with, an eval's variables or an Annex B function | 0 / 3 / 1 |
+| 434 | a name the backend does not read | 0 / 0 / 335 |
+| 206 | a destructuring declaration | 0 / 0 / 4 |
+| 201 | an arguments binding the record does not name | 0 / 1 / 0 |
+| 197 | a for-of or for-in loop's pattern or member | |
+| 189 | a spread element | |
+| 153 | arguments | 0 / 1 / 52 |
+| 146 | super | 0 / 0 / 119 |
+| 98 | an assignment target (patterns) | |
+| 96 | a class declaration inside | 0 / 0 / 1 |
+| 96 | a strict global store of a value that runs code | 0 / 2 / 0 |
+| 92 | a name the record does not resolve | |
+| 83 | typeof of a global | 1 / 9 / 12 |
+| 71 | a class expression inside | |
+| 69 | a spread argument | 0 / 0 / 1 |
+| 67 | `super` as an expression | |
+| 59 | a logical assignment | |
+| 47 | a store the backend does not compile | 0 / 0 / 19 |
+| 45 | `new.target` | |
+| 41 | a using declaration | |
+| 39 | an object literal's key | 0 / 1 / 0 |
+| 35 | an optional chain | |
+| 27 | a catch clause's pattern | |
+| 19 | a hole | |
+| 17 | an object literal's `__proto__` or a key twice | 0 / 0 / 4 |
+| 15 | a function declaration in a block | |
+| 13 | delete of a super property | |
+| 12 | `super()` | |
+| 11 | a labelled statement that is not a loop | 0 / 0 / 1 |
+| 9 | an optional call or too many arguments (a cap: 255) | 0 / 0 / 9 |
+| 8 | a private name | |
+| 8 | delete of a name or an optional chain | 0 / 1 / 0 |
+| 7 | a captured lexical binding in a loop | |
+| 6 | a declaration in a switch | |
+| 6 | a with statement | |
+| 6 | a tagged template | |
+| 5 | a call of eval | |
+| 5 | a for-of or for-in head's declaration | |
+| 4 | `??` | |
+| 4 | an update target | |
+| 3 | `import.meta` | |
+| 2 | a compound assignment target | |
+| 2 | a lexical declaration in a switch | 0 / 0 / 1 |
+| 1 | a site past 16 bits (a cap) | 0 / 1 / 0 |
+
+Not in the corpora, and refused as well: code compiled for a debugger
+(`WithDebugger`), `for await`, a finally clause nested more than four
+copies deep, and the caps -- more than 65,536 registers, a jump past 16
+bits, a name past 16 bits, more than 255 arguments, properties or
+elements in one instruction. A cap goes as a wide form, never a refusal.
+
+The plan to zero, in the order of what each costs real code first -- the
+V8 suite, Octane and the bundles -- and then test262, each form with its
+regdiff cases and test262 in register mode on its directories:
+
+1. **Tail calls** (2,819; 2,566 of the bundles', strict code's `return
+   f()`) -- done. The stack compiler records the calls it makes tail calls
+   (`Record.Tails`), and regcomp makes them `tail_call_w` and
+   `tail_call_method_w`, call_w and call_method_w in tail position with
+   direct values of their own (36 and 37), so that `regCallW` checks
+   nothing of them: a mark read in `regCallW`'s depth check, its frame's
+   end checked for a restart and a tail call after every call, made
+   `call_fib` 12%, `call_mutual` 14% and the typed arrays' callbacks 6 to
+   16% slower at every placement. `regTailCallW` makes the call
+   `regCallW`'s until the stack is `tailCallDepth` deep; what only a tail
+   call runs is in `zzzy_regtail.go`, after every other file, since in
+   `zzreg_call.go` it moved the call path's functions against `applyCall`
+   and `nativeFrame` and made `forward_loop` 11% and
+   `string_switch_miss` 8% slower at every placement. There, a
+   callee of register code of the form's own layout that keeps no
+   arguments takes the frame over in place (`regTailInPlace`): the
+   frame's captured bindings closed, the arguments moved to the
+   parameters, the frame run again from the callee's first instruction
+   by its caller (`errRegRestart`, checked only once the call has ended
+   in an error: `regCallWEnd`, `regRerun`), as the tree's `selfRestart` and
+   `tailSwap` do -- unwinding to the caller each time made `tail_self`
+   3.7 and `tail_mutual` 2.5 times the tree's. Any other frame that is no
+   construct's and shares no derived constructor's this is given up as
+   the stack form's `tail_call` gives it up: the call pending
+   (`r.pendingTail`) and the loop leaving with `errTailCall`, which its
+   caller makes: `regCallW` and `regCallMiss` through `regCall`, whose loop makes every later call of a chain in place (a
+   bound function resolved to its target there, as `tailTarget` does), and
+   a frame the tree or run made through `treeTail`, as after
+   `tailCallNode`. A function with a tail call is not given a `treeCall`
+   (`regPlan`), whose callers expect none: `planTreeCall`'s `treeRest`.
+   After it: Octane 98.7% register code, the bundles 89.0% (63.4%), all
+   44.1%.
+2. **Top-level code** (49,389, most of test262; every script and module):
+   a script's and a module's body as a function of registers, its
+   bindings the global object's and the global lexical environment's.
+3. **Generators, async functions, `for await`** (12,737): the frame's
+   window copied into the generator on a suspension ("Generators and async functions"
+   above), the settled-await fast path; the step's recover goes
+   with them.
+4. **Classes** (about 27,000 together: constructors, accessors, fields,
+   static blocks, private members and methods, `super`, `new.target`,
+   class expressions inside functions).
+5. **Parameter patterns, defaults and rest; destructuring everywhere**
+   (declarations, assignment targets, catch clauses, for-of and for-in
+   heads; about 4,500).
+6. **BigInt literals** (1,912), **templates and tagged templates** (661),
+   **object literals of every property kind** (1,482).
+7. **The arguments object in every form** (354), **spreads** (258),
+   **names the backend does not read** (434, 335 of the bundles'), names
+   the record does not resolve (92), `typeof` of a global (83), strict
+   global stores (96), logical assignment (59), optional chains (44),
+   `??` in the forms left (4).
+8. **eval and `with`** (757 direct evals, 527 functions beside an eval's
+   variables, a with or an Annex B function, 11 more): binding
+   descriptors for what an eval can reach.
+9. **`using`** (41), labelled blocks (11), declarations in switches (8),
+   function declarations in blocks (15), captured loop bindings (7), the
+   finally depth (completion dispatch, no cap), the debugger's code
+   (statement markers in register code), and the caps.
+
+### Stage 3: the JIT and the tree tier
+
+The JIT's front end reads register code, or the AST, and its
+deoptimization rebuilds register frames: with the stack interpreter and
+the tree tier removed, the stack form is no input it can keep. The tree
+tier is measured against the register interpreter suite by suite, its
+mechanisms ported, and removed.
+
+### Stage 4: one pipeline
 
 The stack compiler stops emitting code; scope resolution stays as the
 front end both backends shared. `executeAt` and the stack form's

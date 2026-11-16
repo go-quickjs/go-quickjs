@@ -66,6 +66,12 @@ type Record struct {
 	// keep it must not see it grow after.
 	Appends map[*ast.Assign]bool
 	Freezes map[*ast.Ident]bool
+	// Catches is the stack slot of each catch clause's binding, where it
+	// is an identifier.
+	Catches map[*ast.CatchClause]uint32
+	// Tails is each call the stack form compiled as a tail call
+	// (tail_call, tail_call_method, tail_direct_eval).
+	Tails map[ast.Expr]bool
 	// Bail says the function has something whose resolution the record
 	// cannot express -- a with, an eval's variables, an Annex B function --
 	// and is left to the stack form.
@@ -86,6 +92,28 @@ func (r *Record) NoteAppend(n *ast.Assign) {
 		r.Appends = map[*ast.Assign]bool{}
 	}
 	r.Appends[n] = true
+}
+
+// NoteTail records that the stack form compiled call n as a tail call.
+func (r *Record) NoteTail(n ast.Expr) {
+	if r == nil {
+		return
+	}
+	if r.Tails == nil {
+		r.Tails = map[ast.Expr]bool{}
+	}
+	r.Tails[n] = true
+}
+
+// NoteCatch records that the binding of catch clause c is in slot.
+func (r *Record) NoteCatch(c *ast.CatchClause, slot uint32) {
+	if r == nil {
+		return
+	}
+	if r.Catches == nil {
+		r.Catches = map[*ast.CatchClause]uint32{}
+	}
+	r.Catches[c] = slot
 }
 
 // NoteFreeze records that the read id is followed by a str_freeze.

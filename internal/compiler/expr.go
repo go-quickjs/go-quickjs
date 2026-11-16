@@ -751,6 +751,7 @@ func (c *compiler) callOp(n ast.Expr, op bytecode.Op) bytecode.Op {
 		return op
 	}
 	c.fn.HasTailCall = true
+	c.reg.NoteTail(n)
 	return op
 }
 

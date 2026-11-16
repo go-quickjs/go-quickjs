@@ -137,7 +137,10 @@ const (
 	RNewObject
 	// RNewArray: R[A] = an array of the C values from R[B].
 	RNewArray
-	_ // free: 24, the translation reference's closure, removed
+	// RIterNext: R[A] = the next value of cursor R[B], or a jump by SC
+	// where it has none: a for-of or for-in loop's step, at the head of
+	// each turn (value 24, out of the free list).
+	RIterNext
 	// RAdd, RSub, RMul: R[A] = R[B] op R[C].
 	RAdd
 	RSub
@@ -146,7 +149,19 @@ const (
 	// operator: a division, a remainder, a power, a bitwise operator or a
 	// shift, an equality or a relational comparison.
 	RBin
-	_ // free: 29, the translation reference's bin_imm, removed
+	// RLit is a RegExp literal's exec or test, a per-turn step of the
+	// loops that match (value 29, out of the free list): R[A+1] = the
+	// literal of Constants[C], made or given back, and R[A] its method,
+	// exec or test (RLitTest), not read where it is the realm's built-in,
+	// which reading runs nothing to find, and read otherwise -- at the
+	// instruction's position, or with RLitCall at the stack form's
+	// instruction Aux. With RLitCall the method is then called with the
+	// window's one argument, R[A+2], which nothing can change by the read,
+	// R[B] = its value, the literal given back as RMarkLitRecv's call
+	// gives it; RLitDead says nothing reads the value but its truth.
+	// Without RLitCall a call_method_w marked RMarkLitRecv follows, after
+	// the arguments.
+	RLit
 	// RInc and RDec: R[A] = ToNumeric(R[B]) + 1 or - 1.
 	RInc
 	RDec
@@ -158,8 +173,13 @@ const (
 	// RJmpF and RJmpT: jump by int32(BC) if R[A] is falsy or truthy.
 	RJmpF
 	RJmpT
-	_ // free: 36, the translation reference's jmp_cmp, removed
-	_ // free: 37, the translation reference's jmp_cmp_imm, removed
+	// RCallWT and RCallMWT are RCallW and RCallMW in tail position, as the
+	// stack form makes tail_call (values 36 and 37, out of the free list):
+	// once the stack is deep, the frame is given to the callee in place or
+	// given up. Ops of their own, so that the ordinary call checks nothing
+	// of it.
+	RCallWT
+	RCallMWT
 	// RRet returns R[A]; RRetUndef returns undefined.
 	RRet
 	RRetUndef
@@ -375,40 +395,55 @@ type RColdOp uint8
 const (
 	// RColdNewRegExp: R[A] = the RegExp literal of Constants[BC].
 	RColdNewRegExp RColdOp = iota
-	// RColdLitExec and RColdLitTest: R[A+1] = the RegExp literal of
-	// Constants[B], and R[A] its exec or test, read at site C -- not read
-	// where it is the realm's built-in, which reading runs nothing to find
-	// (a call's window: the callee, the receiver, the arguments).
-	RColdLitExec
-	RColdLitTest
-	// RColdCallLit: R[B] = R[A](R[A+2] ... R[A+1+C]) with this R[A+1], the
-	// RegExp of a literal of Constants[Aux] that lit_exec or lit_test made:
-	// given back to the literal where the call was the built-in's, given a
-	// primitive, which keeps nothing of it.
-	RColdCallLit
-	// RColdCallArgLit is call_lit with the RegExp of the literal its first
-	// argument, R[A+2]: given back where the call was String.prototype's
-	// replace, split or match searching with it directly (regexpArgCall).
-	RColdCallArgLit
-	// RColdCallDead is call_method_w of exec or replace whose value
-	// nothing reads but its truth: the function told so, as the tree's
-	// deadExec tells it, to make no array or string.
-	RColdCallDead
-	// RColdCallReuse is call_method_w of exec whose value goes to the
-	// local of register B, Aux the stack form's call (execReuseOf): the
-	// array of a match may be made again in the memory of the last.
-	RColdCallReuse
+	// RColdForOfStart and RColdForInStart: R[A] = a cursor over R[B], a
+	// for-of loop's or a for-in loop's (startForOf, startForIn).
+	RColdForOfStart
+	RColdForInStart
+	// RColdIterClose closes cursor R[B] as a break, a continue or a
+	// return that leaves its loop does: an error of its return method's is
+	// thrown. RColdIterCloseThrow closes it as a throw that leaves the loop
+	// does: an error of its return method's is dropped.
+	RColdIterClose
+	RColdIterCloseThrow
 )
 
-// RColdDead is the bit of call_lit's, call_arg_lit's and call_dead's Aux
-// that says nothing reads the call's value but its truth; the rest is the
-// literal's constant.
-const RColdDead = 1 << 31
+// The flags of regexp_lit's X.
+const (
+	RLitTest = 1 << iota
+	RLitCall
+	RLitDead
+)
+
+// The marks of a call (RegCode.Marks), by its pc: what the call of a
+// built-in at a call_method_w does around it, which changes nothing of
+// the instruction's dispatch -- the site's call of a built-in reads them --
+// and what lit_exec_call and lit_test_call do. Their operand, a constant
+// or a pc, is the instruction's Aux, all 32 bits of it.
+const (
+	// RMarkDead says nothing reads the call's value but its truth: a call
+	// of exec or replace is told so, as the tree's deadExec tells it, to
+	// make no array or string.
+	RMarkDead = 1 << iota
+	// RMarkReuse marks a call of exec whose value goes to the local of
+	// register B, its Aux the stack form's call (execReuseOf): the array
+	// of a match may be made again in the memory of the last.
+	RMarkReuse
+	// RMarkLitRecv: the receiver is the RegExp lit_exec or lit_test made
+	// of the literal of constant Aux, given back to the literal where the
+	// call was the realm's exec or test given a primitive, which keeps
+	// nothing of it.
+	RMarkLitRecv
+	// RMarkLitArg: the call makes its first argument, R[A+2], the literal
+	// of constant Aux, itself -- nothing can see it made after the
+	// arguments that follow -- and gives it back where the call was
+	// String.prototype's replace, split or match searching with it
+	// directly (regexpArgCall).
+	RMarkLitArg
+)
 
 var rColdNames = [...]string{
-	RColdNewRegExp: "new_regexp", RColdLitExec: "lit_exec", RColdLitTest: "lit_test",
-	RColdCallLit: "call_lit", RColdCallArgLit: "call_arg_lit", RColdCallDead: "call_dead",
-	RColdCallReuse: "call_reuse",
+	RColdNewRegExp: "new_regexp", RColdForOfStart: "for_of_start", RColdForInStart: "for_in_start",
+	RColdIterClose: "iter_close", RColdIterCloseThrow: "iter_close_throw",
 }
 
 func (op RColdOp) String() string {
@@ -488,6 +523,9 @@ type RegCode struct {
 	// instruction needs one; for add_index, the stack instruction of its
 	// store, where the store's errors are placed.
 	Aux []uint32
+	// Marks is each call's marks (RMarkDead, ...), by its pc; nil where no
+	// call has any.
+	Marks []uint8
 	// Switches is each RSwitch's table, in its cases' order.
 	Switches [][]SwitchCase
 	// Literals are the elements of the code's literals of constants
@@ -506,6 +544,36 @@ type RegCode struct {
 	// ForwardsArguments says a frame keeps its arguments as passed for
 	// RApplyArgs, with no arguments object made.
 	ForwardsArguments bool
+	// Handlers are the code's exception handlers, innermost first.
+	Handlers []RHandler
+}
+
+// RHandler is an exception handler of register code: an exception the
+// instruction at a pc in one of its ranges throws goes on at To, its value
+// in register Reg (docs/register-interpreter.md, "Exceptions"). A handler
+// is a catch clause, or a finally clause's copy that runs for a throw and
+// throws the value again at its end; the copies a normal completion, a
+// break, a continue or a return run are compiled in their place, outside
+// the ranges.
+type RHandler struct {
+	// Ranges are the [start, end) pairs of pcs the handler covers.
+	Ranges []uint32
+	To     uint32
+	Reg    uint16
+}
+
+// HandlerAt is the handler of the instruction at pc, the innermost whose
+// ranges hold it, or nil.
+func (rc *RegCode) HandlerAt(pc int) *RHandler {
+	for i := range rc.Handlers {
+		h := &rc.Handlers[i]
+		for j := 0; j+1 < len(h.Ranges); j += 2 {
+			if uint32(pc) >= h.Ranges[j] && uint32(pc) < h.Ranges[j+1] {
+				return h
+			}
+		}
+	}
+	return nil
 }
 
 var rOpNames = [...]string{
@@ -520,7 +588,7 @@ var rOpNames = [...]string{
 	RNewObject: "new_object", RNewArray: "new_array",
 	RAdd: "add", RSub: "sub", RMul: "mul", RBin: "bin",
 	RInc: "inc", RDec: "dec", RUnary: "unary",
-	RJmp: "jmp", RJmpF: "jmp_false", RJmpT: "jmp_true", RRet: "ret", RRetUndef: "ret_undef",
+	RJmp: "jmp", RJmpF: "jmp_false", RJmpT: "jmp_true", RCallWT: "tail_call_w", RCallMWT: "tail_call_method_w", RRet: "ret", RRetUndef: "ret_undef",
 	RBitAnd: "bit_and", RBitOr: "bit_or", RBitXor: "bit_xor", RShl: "shl", RShr: "shr", RUShr: "ushr",
 	RAndI: "and_imm", ROrI: "or_imm", RXorI: "xor_imm", RShlI: "shl_imm", RShrI: "shr_imm", RUShrI: "ushr_imm",
 	RCallW: "call_w", RAddI: "add_imm", RSubI: "sub_imm",
@@ -531,8 +599,12 @@ var rOpNames = [...]string{
 	RPostInc: "post_inc", RPostDec: "post_dec", RGetLength: "get_length",
 	RJEq: "jeq", RJNe: "jne", RJEqI: "jeq_imm", RJNeI: "jne_imm", RJNull: "jnull", RJNotNull: "jnotnull",
 	RThrow: "throw", RInstanceOf: "instanceof", RIn: "in", RDelete: "delete", RArguments: "arguments", RNewArrayK: "new_array_k", RAddProp: "add_prop", RAddPropI: "add_prop_imm", RApplyArgs: "apply_args",
-	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RCold: "cold", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
+	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RIterNext: "iter_next", RLit: "regexp_lit", RCold: "cold", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
 }
+
+// MethodCall reports whether op is call_method_w or its tail form, whose
+// this is R[A+1].
+func (op ROp) MethodCall() bool { return op == RCallMW || op == RCallMWT }
 
 func (op ROp) String() string {
 	if int(op) < len(rOpNames) && rOpNames[op] != "" {
@@ -589,6 +661,8 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s", op, r(w.A()))
 	case RAppend:
 		return fmt.Sprintf("%s %s, %s", op, r(w.A()), r(w.B()))
+	case RIterNext:
+		return fmt.Sprintf("%s %s, %s, done -> %d", op, r(w.A()), r(w.B()), pc+1+int(w.SC()))
 	case RCharCodeAt:
 		return fmt.Sprintf("%s %s = %s.charCodeAt(%s) @%d", op, r(w.A()), r(w.B()), r(uint16(w.X())), w.C())
 	case RGetIndex, RAdd, RSub, RMul, RBitAnd, RBitOr, RBitXor, RShl, RShr, RUShr:
@@ -649,16 +723,23 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s[%d], %s", op, r(w.A()), w.B(), r(w.C()))
 	case RClosureW:
 		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
-	case RCallW, RCallMW, RNewW:
+	case RCallW, RCallMW, RCallWT, RCallMWT, RNewW:
 		return fmt.Sprintf("%s %s = %s(%d)", op, r(w.B()), r(w.A()), w.X())
+	case RLit:
+		m := "exec"
+		if w.X()&RLitTest != 0 {
+			m = "test"
+		}
+		if w.X()&RLitCall != 0 {
+			return fmt.Sprintf("%s %s = k%d.%s(%s)", op, r(w.B()), w.C(), m, r(w.A()+2))
+		}
+		return fmt.Sprintf("%s %s = k%d.%s", op, r(w.A()), w.C(), m)
 	case RCold:
 		switch sub := RColdOp(w.X()); sub {
 		case RColdNewRegExp:
 			return fmt.Sprintf("%s.%s %s, k%d", op, sub, r(w.A()), w.BC())
-		case RColdLitExec, RColdLitTest:
-			return fmt.Sprintf("%s.%s %s, k%d @%d", op, sub, r(w.A()), w.B(), w.C())
-		case RColdCallLit, RColdCallArgLit, RColdCallDead, RColdCallReuse:
-			return fmt.Sprintf("%s.%s %s = %s(%d)", op, sub, r(w.B()), r(w.A()), w.C())
+		case RColdIterClose, RColdIterCloseThrow:
+			return fmt.Sprintf("%s.%s %s", op, sub, r(w.B()))
 		}
 		return fmt.Sprintf("%s.%s %s, %s, %s", op, RColdOp(w.X()), r(w.A()), r(w.B()), r(w.C()))
 	default:
@@ -671,6 +752,9 @@ func (rc *RegCode) String() string {
 	var sb strings.Builder
 	for pc := range rc.Code {
 		fmt.Fprintf(&sb, "%4d  %s\n", pc, rc.Format(pc))
+	}
+	for _, h := range rc.Handlers {
+		fmt.Fprintf(&sb, "      handler %v -> %d, r%d\n", h.Ranges, h.To, h.Reg)
 	}
 	return sb.String()
 }

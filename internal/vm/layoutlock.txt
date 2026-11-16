@@ -20,6 +20,7 @@ anchor F  0x00f80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00120 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
+anchor Q  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor Z  0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x007a0 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -40,6 +41,7 @@ anchor F  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00220 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x009e0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor Q  0x00300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor Z  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00f60 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -60,6 +62,7 @@ anchor F  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00360 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
+anchor Q  0x001e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor Z  0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
@@ -80,6 +83,7 @@ anchor F  0x00e80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor Q  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor Z  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
 anchor CZ 0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
 anchor GV 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]

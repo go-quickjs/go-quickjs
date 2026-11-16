@@ -616,11 +616,460 @@ function patched() {
 	Object.defineProperty(p, "test", { value: t, writable: true, configurable: true });
 	return [r1, r2, r3, r4, r5, r6, r7, log.join(), kept.length, kept[0] === kept[1]].join(";")
 }
+function fused(a) {
+	var p = RegExp.prototype, t = p.test, e = p.exec, log = [], s = "xq", n = 5, u = "uq", out = [];
+	for (var j = 0; j < 4; j++) { out.push(/q/.test(s), /\d/.test(n), /q/.exec(s).index, /z/.exec("z")[0], /a/g.test(s)); if (/q/.exec(s)) out.push("dead") }
+	Object.defineProperty(p, "test", { get: function () { log.push("get:" + s); s = "changed"; return t }, configurable: true });
+	out.push(/q/.test(s), /q/.test("q"), /q/.test(u), /k/.test(null));
+	Object.defineProperty(p, "test", { get: function () { throw new EvalError("getter") }, configurable: true });
+	try { /q/.test(u) } catch (x) { out.push(x.name, String(x.stack).split(String.fromCharCode(10))[1]) }
+	Object.defineProperty(p, "test", { value: t, writable: true, configurable: true });
+	p.exec = function (x) { log.push("exec:" + x); return e.call(this, x) };
+	out.push(/q/.test(s), /h/.exec(s)[0], /q/.exec(u)[0]);
+	if (/c/.exec(s)) out.push("deadPatched");
+	p.exec = e;
+	return out.join() + ";" + log.join();
+}
+var gre = /(\w)(\d)?/g, gre2 = /b/;
+function marked(a) {
+	var m, out = [], c = 0;
+	for (var j = 0; j < 6; j++) {
+		gre.lastIndex = 0;
+		m = gre.exec(a[j & 3]);
+		if (m) out.push(m[0] + m.index + (m[2] === undefined ? "u" : m[2]));
+		if (gre2.exec(a[j & 3])) c++;
+		if (a[j & 3].replace(gre2, "B")) c++;
+	}
+	var keep = []; for (j = 0; j < 3; j++) { m = gre2.exec("abc"); keep.push(m) } out.push(keep[0] === keep[1], keep[0][0]);
+	return out.join() + c;
+}
+function argLit() {
+	var log = [], out = [];
+	try { "abc".replace(/b/g, (log.push("arg2"), "B")); out.push("x".replace(/x/, (function () { throw new SyntaxError("second") })())) } catch (x) { out.push(x.name) }
+	out.push("a-b".split(/-/).join("+"), "a1b2".match(/\d/g).join(""), "zz".replace(/z/g, "$&$&"));
+	return out.join() + ";" + log.join();
+}
 function errs() { var out = []; try { /a/.test({ toString: function () { throw new RangeError("r") } }) } catch (x) { out.push(x.name) } try { "s".replace(/s/, function () { throw new TypeError("t") }) } catch (x) { out.push(x.name) } try { /a/.exec(Symbol()) } catch (x) { out.push(x.name) } return out.join() }
 `
-	calls := []string{`loop(["abc", "axc", "ab", "abcd"])`, `objs()`, `patched()`, `errs()`}
+	calls := []string{`loop(["abc", "axc", "ab", "abcd"])`, `objs()`, `patched()`, `errs()`, `fused()`, `marked(["a1", "b", "", "c2d"])`, `argLit()`}
 	for i := range calls {
 		calls[i] = fmt.Sprintf("(function () { var r; for (var k = 0; k < 4; k++) r = %s; return r })()", calls[i])
 	}
 	regDiff(t, src, calls)
+}
+
+// TestRegDiffTry compares try statements in register code: exceptions of
+// throw statements, operators, getters, setters, built-ins and calls of
+// both tiers caught; catch bindings read, written, captured and shadowing;
+// finally clauses run for a normal completion, break, continue, return and
+// throw, nested, overriding the completion or not; rethrows from catch and
+// finally; and a stack overflow.
+func TestRegDiffTry(t *testing.T) {
+	src := `
+var log = [];
+function thrower(k) { if (k === 1) throw new TypeError("t" + k); if (k === 2) return null.x; if (k === 3) throw k; return k }
+function accessors() { return { get g() { throw new RangeError("g") }, set s(v) { throw new SyntaxError("s" + v) } } }
+function kinds() {
+	var out = [], o = accessors();
+	try { throw new Error("a") } catch (e) { out.push(e.message) }
+	try { null.x } catch (e) { out.push(e.name) }
+	try { undefined() } catch (e) { out.push(e.name) }
+	try { o.g } catch (e) { out.push(e.name + e.message) }
+	try { o.s = 4 } catch (e) { out.push(e.name + e.message) }
+	try { JSON.parse("{") } catch (e) { out.push(e.name) }
+	try { thrower(1) } catch (e) { out.push(e.message) }
+	try { thrower(2) } catch (e) { out.push(e.name) }
+	try { thrower(3) } catch (e) { out.push(e) }
+	try { [1, 2].map(function (x) { if (x === 2) throw "m" + x; return x }) } catch (e) { out.push(e) }
+	try { x1 } catch (e) { out.push(e.name) }
+	try { let q = q + 1 } catch (e) { out.push(e.name) }
+	try { new (function () { this.a = 1; throw "ctor" })() } catch (e) { out.push(e) }
+	try { ({}).toString.call(null).x.y } catch (e) { out.push(e.name) }
+	try { thrower(4) } catch { out.push("none") }
+	out.push(thrower(4));
+	return out.join()
+}
+function bindings(v) {
+	var e = "outer", fs = [], r;
+	try { throw v } catch (e) { e = e + "!"; r = e; fs.push(function () { return e }) }
+	try { throw v } catch (x) { var y = x }
+	return [e, r, fs[0](), y].join()
+}
+function fin(k) {
+	var log = [];
+	function f(k) {
+		var x = "x";
+		try {
+			log.push("try");
+			if (k === 0) return x;
+			if (k === 1) throw "t";
+			if (k === 2) return log.length;
+		} catch (e) {
+			log.push("catch " + e);
+			if (k === 1) return "c";
+		} finally {
+			log.push("finally");
+			x = "changed";
+			if (k === 3) return "f";
+		}
+		return "end " + x;
+	}
+	var r;
+	try { r = f(k) } catch (e) { r = "threw " + e }
+	return r + ":" + log.join("|");
+}
+function loops() {
+	var log = [];
+	outer: for (var i = 0; i < 4; i++) {
+		for (var j = 0; j < 4; j++) {
+			try {
+				try {
+					if (j === 1) continue;
+					if (j === 2 && i === 1) continue outer;
+					if (j === 2) break;
+					if (i === 3) break outer;
+					log.push(i + "" + j);
+				} finally {
+					log.push("in" + j);
+				}
+			} finally {
+				log.push("out" + j);
+			}
+		}
+		log.push("end" + i);
+	}
+	var w = 0;
+	while (true) { try { if (++w > 3) break } finally { log.push("w" + w) } }
+	do { try { continue } finally { log.push("dw") } } while (false);
+	switch (w) { case 4: try { break } finally { log.push("sw") } default: log.push("no") }
+	return log.join();
+}
+function nested() {
+	var log = [];
+	function f() {
+		try {
+			try { return "inner" } finally { log.push("f1") }
+		} finally { log.push("f2") }
+	}
+	function g() {
+		try {
+			try { throw "a" } finally { log.push("g1"); throw "b" }
+		} catch (e) { log.push("caught " + e); try { throw "c" } catch (e) { log.push("again " + e) } finally { log.push("g2") } }
+		finally { log.push("g3") }
+		return "g";
+	}
+	function h() {
+		try { try { throw "x" } catch (e) { throw e + "y" } } catch (e) { return e }
+	}
+	function k() {
+		for (var i = 0; i < 3; i++) { try { try { break } finally { throw "fromfinally" + i } } catch (e) { log.push(e) } }
+		try { return "r" } finally { try { throw "q" } catch (e) { log.push("q") } }
+	}
+	function m() { try { throw "m" } finally { log.push("m") } }
+	var r = [f(), g(), h(), k()];
+	try { m() } catch (e) { r.push(e) }
+	return r.join() + ":" + log.join();
+}
+function deep(n) { return n === 0 ? 0 : deep(n - 1) + 1 }
+function overflow() { var c = 0; for (var i = 0; i < 3; i++) { try { deep(1e7) } catch (e) { c++; log.push(e.name) } } return c + ":" + deep(100) }
+function hot(n) { var s = 0; for (var i = 0; i < n; i++) { try { if (i % 7 === 3) throw i; s += i } catch (e) { s -= e } finally { s++ } } return s }
+function heldFinally() {
+	var log = [];
+	function f() { try { return log.length + 10 } finally { for (var i = 0; i < 3; i++) log.push(i); var z = "z"; log.push(z) } }
+	function g() { try { throw "e" } finally { for (var i = 0; i < 2; i++) log.push("g" + i); var y = 1 } }
+	var r = f();
+	try { g() } catch (e) { r += e }
+	try { throw "c" } catch (e) { for (var k = 0; k < 2; k++) log.push(k); log.push(e) }
+	return r + ":" + log.join();
+}
+function stackOfCaught() { function a() { throw new Error("here") } try { a() } catch (e) { return e.stack.split("\n").length + " " + e.message } }
+`
+	calls := []string{`kinds()`, `bindings(1)`, `bindings("v")`, `fin(0)`, `fin(1)`, `fin(2)`, `fin(3)`, `fin(4)`,
+		`loops()`, `nested()`, `overflow()`, `hot(1000)`, `heldFinally()`, `stackOfCaught()`, `log.join()`}
+	for i := range calls {
+		calls[i] = fmt.Sprintf("(function () { var r; for (var k = 0; k < 4; k++) r = %s; return r })()", calls[i])
+	}
+	regDiff(t, src, calls)
+}
+
+// TestRegDiffForOfIn compares for-of and for-in loops in register code:
+// arrays, strings, Maps, Sets, generators and iterators of user code as
+// the iterated objects; targets var, let, const, an upvalue and a global;
+// the iterator closed, in the spec's order, by break, continue of an outer
+// loop, return and throw, and not by its end or by a throw of its own
+// next; return methods that throw, return a primitive or are missing; an
+// array changed while it is walked; for-in over objects, arrays, strings,
+// prototypes, keys deleted and added; labels; and the loops nested.
+func TestRegDiffForOfIn(t *testing.T) {
+	src := `
+var glob, gl = [];
+function iter(n, log, opts) {
+	opts = opts || {};
+	var i = 0;
+	var it = {
+		next: function () { log.push("next" + i); if (opts.nextThrows === i) throw "nextErr"; return i < n ? { value: i++, done: false } : { value: undefined, done: true } }
+	};
+	if (opts.ret !== "none") it["return"] = function () { log.push("return"); if (opts.ret === "throws") throw "retErr"; if (opts.ret === "prim") return 1; return {} };
+	var o = {};
+	o[Symbol.iterator] = function () { log.push("iter"); return it };
+	return o;
+}
+function holey(a, b) { return [a, , b] }
+function* bad(log) { try { yield 1; null.x } finally { log.push("badFinally") } }
+function* gen(log) { try { yield 1; yield 2; yield 3 } finally { log.push("genFinally") } }
+function sums() {
+	var s = 0, t = "", m = new Map([[1, "a"], [2, "b"]]), out = [];
+	for (var x of [1, 2, 3]) s += x;
+	for (let c of "héllo") t += c.toUpperCase();
+	for (const kv of m) out.push(kv[0] + kv[1]);
+	for (const e of new Set([4, 5])) s += e;
+	for (glob of [7, 8]) s += glob;
+	var up = 0;
+	(function () { for (up of [9, 10]) s += up })();
+	var arr = [1, 2, 3];
+	for (var a of arr) { if (a === 1) arr.push(4); if (a === 2) arr.length = 3; s += a }
+	var holes = holey(1, 3);
+	for (var h of holes) out.push(h);
+	return [s, t, out.join(), x, glob, up].join(";");
+}
+function closes(kind) {
+	var log = [];
+	function f() {
+		outer: for (var j = 0; j < 2; j++) {
+			for (var v of iter(5, log, { ret: kind === 4 ? "throws" : kind === 5 ? "prim" : kind === 6 ? "none" : "ok", nextThrows: kind === 7 ? 1 : -1 })) {
+				log.push("v" + v);
+				if (v === 1) {
+					if (kind === 0 || kind >= 4 && kind <= 6) break;
+					if (kind === 1) continue outer;
+					if (kind === 2) return "ret";
+					if (kind === 3) throw "body";
+				}
+			}
+			log.push("after" + j);
+		}
+		return "end";
+	}
+	var r;
+	try { r = f() } catch (e) { r = "threw " + e }
+	return r + ":" + log.join("|");
+}
+function gens() {
+	var log = [], s = 0;
+	for (var v of gen(log)) { s += v; if (v === 2) break }
+	for (var w of gen(log)) s += w;
+	try { for (var u of gen(log)) throw "x" } catch (e) { log.push(e) }
+	try { for (var b of bad(log)) log.push("b" + b) } catch (e) { log.push("caught " + e) }
+	var g = gen(log);
+	for (var x of g) { s += x; if (x === 1) break }
+	for (var y of g) s += 100;
+	return s + ":" + log.join("|");
+}
+function inFinally() {
+	var log = [];
+	for (var v of iter(3, log)) { try { if (v === 1) break } finally { log.push("fin" + v) } }
+	try { for (var w of iter(3, log)) { if (w === 0) continue; return log.join("|") } } finally { log.push("outerFin") }
+}
+function keys() {
+	function P() { this.a = 1; this.b = 2 }
+	P.prototype.c = 3;
+	var o = new P(), out = [], k;
+	for (k in o) out.push(k);
+	for (var i in holey(5, 8)) out.push(i);
+	for (let s in "ab") out.push(s);
+	for (k in { x: 1, y: 2, z: 3 }) { out.push(k); }
+	var d = { p: 1, q: 2, r: 3 };
+	for (k in d) { out.push(k); delete d.q; d.added = 1 }
+	for (k in null) out.push("no");
+	for (k in undefined) out.push("no");
+	for (k in 5) out.push("no");
+	lab: for (k in { m: 1, n: 2 }) { for (var z in { y: 1 }) { if (k === "m") continue lab; break lab } }
+	out.push(k);
+	return out.join();
+}
+function nestedLoops() {
+	var s = 0;
+	for (var a of [[1, 2], [3, 4]]) for (var b of a) for (var c in a) s += b * c;
+	return s;
+}
+function dead() { try { for (let x of [x]) {} } catch (e) { return e.name } }
+function notIterable() { var out = []; try { for (var x of 5) {} } catch (e) { out.push(e.name) } try { for (var y of {}) {} } catch (e) { out.push(e.name) } return out.join() }
+function hot(n) { var a = []; for (var i = 0; i < n; i++) a.push(i); var s = 0; for (var k = 0; k < 10; k++) for (var v of a) s += v; return s }
+function held() {
+	var a = [1, 2, 3], s = [];
+	for (var k in a) { if (k === "0") for (var i = 0; i < 3; i++) a.push(i); var t = k + "!"; s.push(t) }
+	for (var v of a) { for (var j = 0; j < 2; j++) s.push(j); var u = v * 2; s.push(u) }
+	return s.join();
+}
+function headClosure() { var f; try { for (const x of (f = function () { return x }, [1])) {} return String(f()) } catch (e) { return e.name } }
+`
+	calls := []string{`held()`, `headClosure()`, `sums()`, `gens()`, `inFinally()`, `keys()`, `nestedLoops()`, `dead()`, `notIterable()`, `hot(500)`}
+	for k := 0; k <= 7; k++ {
+		calls = append(calls, fmt.Sprintf("closes(%d)", k))
+	}
+	for i := range calls {
+		calls[i] = fmt.Sprintf("(function () { var r; for (var k = 0; k < 4; k++) r = %s; return r })()", calls[i])
+	}
+	regDiff(t, src, calls)
+}
+
+// TestRegDiffSteps covers iter_next's steps of an iterator whose next is a
+// function of script (regStepNext: a result not an object, getters of done
+// and value, a next throwing, an object of its own as the result), of a Map's
+// and a Set's iterators, and calls of generator functions from register code
+// (regGenCall: a method's this, a sloppy body's this coerced, a parameter
+// default that throws, a generator method of a class or a literal).
+func TestRegDiffSteps(t *testing.T) {
+	src := `
+function Range(n, mode) { this.i = 0; this.n = n; this.mode = mode }
+Range.prototype.next = function () {
+	if (this.mode === "prim" && this.i === 2) return 5;
+	if (this.mode === "throw" && this.i === 2) throw new RangeError("step");
+	if (this.mode === "getters" && this.i < this.n) { var self = this; return { get done() { return self.i >= self.n }, get value() { return self.i++ * 10 } } }
+	if (this.mode === "badValue" && this.i === 1) return { done: false, get value() { throw "val" } };
+	if (this.i < this.n) return { value: this.i++, done: 0 };
+	return { value: "end", done: "yes" };
+};
+Range.prototype[Symbol.iterator] = function () { return this };
+function walk(n, mode) {
+	var out = [];
+	try { for (var v of new Range(n, mode)) out.push(v) } catch (e) { out.push(typeof e === "object" ? e.name + ":" + e.message : e) }
+	return out.join();
+}
+function maps() {
+	var m = new Map([[1, "a"], [2, "b"], [3, "c"]]), s = new Set(["x", "y"]), out = [];
+	for (var v of m.values()) { out.push(v); if (v === "a") m.delete(2), m.set(4, "d") }
+	for (var k of m.keys()) out.push(k);
+	for (var e of s) { out.push(e); if (e === "x") s.add("z") }
+	for (var p of s.entries()) out.push(p.join(":"));
+	return out.join();
+}
+function* g1(a, b) { yield a; yield b }
+function* gThis() { yield typeof this; yield this === globalThis }
+function* gStrict() { "use strict"; yield typeof this }
+function* gDef(a = (() => { throw new TypeError("def") })()) { yield a }
+var holder = { *m(x) { yield this.tag + x }, tag: "h", g: gThis };
+class K { constructor() { this.v = 7 } *each() { yield this.v; yield this.v + 1 } }
+function gens() {
+	var out = [];
+	for (var v of g1(1, 2)) out.push(v);
+	for (v of gThis()) out.push(v);
+	for (v of holder.g()) out.push(v);
+	for (v of gThis.call(5)) out.push(v);
+	for (v of gStrict.call(5)) out.push(v);
+	for (v of holder.m("!")) out.push(v);
+	for (v of new K().each()) out.push(v);
+	try { gDef() } catch (e) { out.push(e.name + ":" + e.message) }
+	for (v of gDef(3)) out.push(v);
+	var it = g1(8, 9); out.push(it.next().value, [...it].join("+"));
+	return out.join();
+}
+`
+	calls := []string{`maps()`, `gens()`}
+	for _, m := range []string{"plain", "prim", "throw", "getters", "badValue"} {
+		calls = append(calls, fmt.Sprintf("walk(4, %q)", m))
+	}
+	for i := range calls {
+		calls[i] = fmt.Sprintf("(function () { var r; for (var k = 0; k < 4; k++) r = %s; return r })()", calls[i])
+	}
+	regDiff(t, src, calls)
+}
+
+// TestRegDiffRegExpWideConstants compares RegExp literals' calls in a
+// function whose literals' constants are past 16 bits, which lit_exec_call
+// and lit_exec cannot name in their words: the calls are made through the
+// literal's own instruction and call_method_w's Aux, all 32 bits of it.
+func TestRegDiffRegExpWideConstants(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("function wide(s) {\n\tvar x, out = [];\n")
+	for i := 0; i < 70000; i++ {
+		fmt.Fprintf(&b, "\tx = \"c%d\";\n", i)
+	}
+	b.WriteString("\tfor (var j = 0; j < 3; j++) out.push(/q/.test(s), /(q)/.exec(s)[1], s.replace(/q/g, x), s.split(/u/).length, /a/.exec(\"za\").index);\n\treturn out.join();\n}\n")
+	built := regDiff(t, b.String(), []string{`wide("uqu")`, `wide("q")`})
+	if built == 0 {
+		t.Errorf("wide is not register code")
+	}
+}
+
+// TestRegDiffTailCalls compares calls in tail position in strict code
+// (tail_call_w): chains deep past tailCallDepth in constant space, mutual and
+// through methods, conditionals, logical and comma forms; a construct's
+// tail call, which keeps its frame; callees that are built-ins, functions
+// the backend refuses, and that throw at depth; and a stack trace.
+func TestRegDiffTailCalls(t *testing.T) {
+	src := `
+"use strict";
+function even(n) { return n === 0 ? true : odd(n - 1) }
+function odd(n) { return n === 0 ? false : even(n - 1) }
+var o = { k: 0, down(n) { return n === 0 ? this.k : (this.k++, this.down(n - 1)) } };
+function sum(n, acc) { if (n === 0) return acc; return sum(n - 1, acc + n) }
+function cond(n) { return n > 0 && (n % 2 ? cond(n - 1) : (0, cond(n - 1))) || n }
+function nat(n) { return Math.max(n, 3) }
+function* gen() { yield 1 }
+function viaGen() { return gen().next().value }
+function args() { return arguments.length }
+function viaArgs(n) { return args(n, n) }
+function thrower(n) { if (n === 0) throw new RangeError("deep " + n); return thrower(n - 1) }
+function C(n) { this.n = n; return mk(n) }
+function mk(n) { return { made: n } }
+function deep(n) { return n === 0 ? new C(2).made : deep(n - 1) }
+function trace(n) { if (n === 0) return new Error("x").stack.split(String.fromCharCode(10)).length; return trace(n - 1) }
+function deepTry(n) { try { return thrower(n) } catch (e) { return e.message } }
+`
+	calls := []string{`even(100001)`, `odd(77777)`, `o.k = 0, o.down(50000)`, `sum(200000, 0)`, `cond(1001)`, `nat(5)`,
+		`viaGen()`, `viaArgs(4)`, `deepTry(50000)`, `deep(100)`, `trace(5)`, `trace(10)`}
+	regDiff(t, src, calls)
+}
+
+// TestRegDiffLegacyArguments compares a sloppy function's f.arguments
+// (WithNodeQuirks) in frames register code makes: the count, which the
+// caller's call instruction holds, and the arguments past the parameters,
+// which the callee's bindings overwrite in its window -- through a site's
+// first call, its cached callee, a method call, a tail call, a callback
+// and a forwarder.
+func TestRegDiffLegacyArguments(t *testing.T) {
+	src := `
+function f(a) { var x = 7, y = 8; return f.arguments.length + ":" + [...f.arguments].join() + ":" + (x + y) }
+function f2(a, b) { var t = a * 2; return [...f2.arguments].join() + "|" + t }
+function none() { var q = 1, w = 2; return none.arguments.length + q + w }
+function g() { var r = []; for (var i = 0; i < 3; i++) r.push(f(1, 2, 3), f(4), f()); return r.join(" ") }
+function h() { var o = { m: f2 }, r = []; for (var i = 0; i < 3; i++) r.push(o.m(5, 6, 7, 8), f2(9)); return r.join(" ") }
+function k() { var s = 0; for (var i = 0; i < 3; i++) s += none(1, 2, 3, 4) * 10 + none(); return s }
+function tl() { "use strict"; return f(i9, 10, 11) }
+var i9 = 9;
+function deep(n) { return n === 0 ? tl() : deep(n - 1) + "" }
+function viaCall() { var r = []; for (var i = 0; i < 3; i++) r.push(f.call(null, 1, 2, 3), f.apply(null, [4, 5]), Reflect.apply(f, null, [6, 7, 8, 9]), f.bind(null, 1)(2, 3)); return r.join(" ") }
+function fw() { return f.apply(null, arguments) }
+function viaFw() { return fw(1, 2, 3, 4) + " " + fw() }
+`
+	calls := []string{"none(1, 2, 3, 4)", "(function () { return none(1, 2, 3, 4) })()", "(function () { var s = 0; for (var i = 0; i < 3; i++) s += none(1, 2, 3, 4); return s })()", "g()", "h()", "k()", "tl()", "deep(40)", "viaCall()", "viaFw()", "g() + h()"}
+	run := func() []string {
+		rt := quickjs.New(quickjs.WithNodeQuirks())
+		defer rt.Close()
+		if _, err := rt.Eval(src); err != nil {
+			t.Fatalf("eval: %v", err)
+		}
+		out := make([]string, len(calls))
+		for i, c := range calls {
+			v, err := rt.Eval(c)
+			if err != nil {
+				out[i] = "error: " + err.Error()
+			} else {
+				out[i] = v.String()
+			}
+		}
+		return out
+	}
+	var off, on []string
+	withRegTier(false, func() { off = run() })
+	before := vm.RegsBuilt()
+	withRegTier(true, func() { on = run() })
+	if vm.RegsBuilt() == before {
+		t.Error("no function was register code")
+	}
+	for i, c := range calls {
+		if off[i] != on[i] {
+			t.Errorf("%s: %q, register code %q", c, off[i], on[i])
+		}
+	}
 }

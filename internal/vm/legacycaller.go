@@ -151,7 +151,13 @@ func (r *Runtime) legacyArguments(o *Object) Value {
 	f := r.frameAt(i)
 	fn := f.cl.fn
 	args := append([]Value(nil), f.args...)
-	if fn.HasSimpleParams && !fn.UsesArguments && !fn.HasDirectEval {
+	if f.args == nil && (f.regKind == regFrameCall || f.regKind == regFrameEnter) {
+		// A register frame, whose arguments are its window's and its
+		// caller's instruction's (regLegacyArgs).
+		if a, ok := r.regLegacyArgs(i, f); ok {
+			args = a
+		}
+	} else if fn.HasSimpleParams && !fn.UsesArguments && !fn.HasDirectEval {
 		for k := 0; k < fn.ParamCount && k < len(args) && k < len(f.locals); k++ {
 			if k < len(fn.Locals) && fn.Locals[k].Captured {
 				continue

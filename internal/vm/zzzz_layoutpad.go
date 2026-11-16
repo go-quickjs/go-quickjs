@@ -391,6 +391,9 @@ func init() {
 		if layoutPadNJ >= 0 {
 			layoutPadJ()
 		}
+		if layoutPadNQ >= 0 {
+			layoutPadQ()
+		}
 		if layoutPadNZ >= 0 {
 			layoutPadZ()
 		}

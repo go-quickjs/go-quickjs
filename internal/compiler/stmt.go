@@ -1329,7 +1329,7 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 	c.beginScope()
 	if n.Catch.Param != nil {
 		// The thrown value is on the stack when the handler runs.
-		c.bindCatchParam(n.Catch.Param)
+		c.bindCatchParam(n.Catch, n.Catch.Param)
 	} else {
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
@@ -1339,9 +1339,10 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 }
 
 // bindCatchParam binds the caught value to the catch clause's parameter.
-func (c *compiler) bindCatchParam(param ast.Expr) {
+func (c *compiler) bindCatchParam(clause *ast.CatchClause, param ast.Expr) {
 	if id, ok := param.(*ast.Ident); ok {
 		slot := c.declare(id.Name, bindCatch, int(id.Start))
+		c.reg.NoteCatch(clause, slot)
 		c.emit(bytecode.OpSetLocal, slot, 0)
 		// The store is what binds it, so the clause's body assigns to an
 		// ordinary mutable binding rather than one still in a dead zone.

@@ -127,6 +127,7 @@ var positions = []position{
 	{"S", "vm_sz_layoutpad.go", "after vm_shape.go, before vm_tree.go: runTree, backEdgeCheck"},
 	{"T", "zcall_tl_layoutpad.go", "after zcall_tail.go, before zcall_tree.go: callTree, runTreeNested"},
 	{"J", "zzj_layoutpad.go", "after zzbigown.go, before the JIT's zzjit files"},
+	{"Q", "zzreg_ru_layoutpad.go", "after zzreg_report.go, before zzreg_run.go: the register interpreter's hot block, runReg first"},
 	{"Z", "zzzz_layoutpad.go", "after every file: the closures, and the generics the last files call"},
 }
 

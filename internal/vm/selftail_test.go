@@ -97,7 +97,9 @@ func TestSelfTailRestarts(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := tc.want
-			if !tree {
+			if !tree || regTier.Load() {
+				// The tree's restarts; register code's tail calls are its
+				// own (the answers are compared all the same).
 				want = 0
 			}
 			if n != want {

@@ -17,7 +17,7 @@
 //	aaa_pad.go     before everything in the package    executeAt
 //	vm_b_pad.go    after vm.go, before vm_call.go      callDirect
 //	vm_sz_pad.go   after vm_shape.go, before vm_tree.go runTree
-//	zzreg_r_pad.go before zzreg_run.go                 runReg
+//	zzreg_ru_pad.go before zzreg_run.go                runReg
 //	zzz_pad.go     after every file, before the closures binaryNode.func1
 //
 // A pad moves what follows it by exactly 32*m bytes. For each placement a
@@ -164,7 +164,7 @@ func exePath(out, label string, n int) string {
 // the targets, as go tool nm names them after the package's path.
 var (
 	pads = [nPads]string{"internal/vm/aaa_pad.go", "internal/vm/vm_b_pad.go", "internal/vm/vm_sz_pad.go",
-		"internal/vm/zzreg_r_pad.go", "internal/vm/zzz_pad.go"}
+		"internal/vm/zzreg_ru_pad.go", "internal/vm/zzz_pad.go"}
 	targets = [nPads]string{"(*Runtime).executeAt", "(*Runtime).callDirect", "(*Runtime).runTree",
 		"(*Runtime).runReg", "binaryNode.func1"}
 )
