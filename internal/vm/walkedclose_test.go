@@ -12,7 +12,7 @@ import (
 // and the method called with an Array Iterator where the walk had got to;
 // a yield* of an array looks its throw and return up as any delegate's.
 // Before, a walked array closed nothing, which V8 and the specification's
-// IteratorClose do not. Each answer is Node's, on both tiers.
+// IteratorClose do not. Each answer is Node's.
 func TestWalkedArrayClose(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -63,16 +63,14 @@ func TestWalkedArrayClose(t *testing.T) {
 		"own: own",
 		"deleted: ",
 	}, "\n")
-	for _, on := range []bool{false, true} {
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", on, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got\n%s\nwant\n%s", on, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	r.Close()
 }

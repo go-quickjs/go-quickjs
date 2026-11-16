@@ -37,7 +37,7 @@ func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
 // be answered without a frame, and so the one that should stop trying.
 func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 	t.Parallel()
-	r := newOldTiersForTest(Config{})
+	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function T() { this.state = 0; this.list = [] }
@@ -60,9 +60,5 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 		if n := fns[i].Object().fn().closure.pureMiss; n > 2 {
 			t.Errorf("%s missed %d times; a refusal is not its miss", name, n)
 		}
-	}
-	// A tree's call of both tries it frameless until it has missed enough.
-	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit {
-		t.Errorf("both missed %d times; its calls are what cannot store", n)
 	}
 }

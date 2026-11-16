@@ -49,58 +49,54 @@ function halves() {
 `
 
 func TestConcatMemo(t *testing.T) {
-	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
-		if _, err := r.Run(compileForTest(t, concatMemoSrc)); err != nil {
-			t.Fatal(err)
-		}
-		v, err := r.Run(compileForTest(t, `leaves(['1234.5678', 'abc', '1234.5678'], 40)`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		elems := v.Object().elemsOf()
-		distinct := map[*String]bool{}
-		for i, e := range elems {
-			tag := []string{"1234.5678", "abc", "1234.5678"}[i/40]
-			if got, want := e.String().Go(), "String for key "+tag+" in leaf node"; got != want {
-				t.Fatalf("tree %v: leaf %d is %q, want %q", tree, i, got, want)
-			}
-			distinct[e.String()] = true
-		}
-		// One string for each text: the memo made each once.
-		if len(distinct) != 2 && memoSlotsApart("String for key 1234.5678 in leaf node", "String for key abc in leaf node") {
-			t.Errorf("tree %v: %d distinct strings for 2 texts", tree, len(distinct))
-		}
-		v, err = r.Run(compileForTest(t, `numbers(40)`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		distinct = map[*String]bool{}
-		for i, e := range v.Object().elemsOf() {
-			if got, want := e.String().Go(), fmt.Sprintf("key-%d", i%4); got != want {
-				t.Fatalf("tree %v: key %d is %q, want %q", tree, i, got, want)
-			}
-			distinct[e.String()] = true
-		}
-		if len(distinct) != 4 && memoSlotsApart("key-0", "key-1", "key-2", "key-3") {
-			t.Errorf("tree %v: %d distinct strings for 4 texts", tree, len(distinct))
-		}
-		v, err = r.Run(compileForTest(t, `halves().join(' ')`))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		const once = "3:3:55357:a%3F- 3:2:128512:a%3F%3F 3:3:56832:-%3Fb 3:2:56832:%3F%3F- 2:1:56832:%3F%3F 2:2:55357:x%3F 2:2:120:%3Fx"
-		want := once
-		for range 3 {
-			want += " " + once
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: halves\n got %s\nwant %s", tree, got, want)
-		}
+	r := New(Config{})
+	if _, err := r.Run(compileForTest(t, concatMemoSrc)); err != nil {
+		t.Fatal(err)
 	}
-	SetTreeTier(true)
+	v, err := r.Run(compileForTest(t, `leaves(['1234.5678', 'abc', '1234.5678'], 40)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	elems := v.Object().elemsOf()
+	distinct := map[*String]bool{}
+	for i, e := range elems {
+		tag := []string{"1234.5678", "abc", "1234.5678"}[i/40]
+		if got, want := e.String().Go(), "String for key "+tag+" in leaf node"; got != want {
+			t.Fatalf("leaf %d is %q, want %q", i, got, want)
+		}
+		distinct[e.String()] = true
+	}
+	// One string for each text: the memo made each once.
+	if len(distinct) != 2 && memoSlotsApart("String for key 1234.5678 in leaf node", "String for key abc in leaf node") {
+		t.Errorf("%d distinct strings for 2 texts", len(distinct))
+	}
+	v, err = r.Run(compileForTest(t, `numbers(40)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	distinct = map[*String]bool{}
+	for i, e := range v.Object().elemsOf() {
+		if got, want := e.String().Go(), fmt.Sprintf("key-%d", i%4); got != want {
+			t.Fatalf("key %d is %q, want %q", i, got, want)
+		}
+		distinct[e.String()] = true
+	}
+	if len(distinct) != 4 && memoSlotsApart("key-0", "key-1", "key-2", "key-3") {
+		t.Errorf("%d distinct strings for 4 texts", len(distinct))
+	}
+	v, err = r.Run(compileForTest(t, `halves().join(' ')`))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const once = "3:3:55357:a%3F- 3:2:128512:a%3F%3F 3:3:56832:-%3Fb 3:2:56832:%3F%3F- 2:1:56832:%3F%3F 2:2:55357:x%3F 2:2:120:%3Fx"
+	want := once
+	for range 3 {
+		want += " " + once
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("halves\n got %s\nwant %s", got, want)
+	}
 }
 
 // A runtime whose joins never repeat turns its memo off, its strings

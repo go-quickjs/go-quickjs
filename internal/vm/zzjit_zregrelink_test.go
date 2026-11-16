@@ -66,17 +66,15 @@ func regCallsOfGo(r *Runtime) uint64 {
 	return n
 }
 
-// TestJITRegReleasedCalleeRelinked compiles a callee for its native
-// caller, has the cache let go of it while a run still holds its code
-// (regClose's retired), and has the caller call it again: it is compiled
-// for it again at its next call of Go and called natively from then on, as
-// the stack form's native callee is (jitNativeCallee, its template's hint
-// naming no entry once dropped), the answers the interpreter's, the
-// collector idle and marking. Before, the template held the code the cache
-// had let go of (jitReg), which Go entered, and the caller's calls of Go
-// never compiled it again (jitRegNativeCalleeN): AWFY's Havlak made 4.2
-// million calls of som.js's hashFn through Go, let go of during CD, each
-// putting off the levels of the recursion below it.
+// TestJITRegReleasedCalleeRelinked compiles a callee for its native caller,
+// has the cache let go of it while a run still holds its code (regClose's
+// retired), and has the caller call it again: it is compiled for it again
+// at its next call of Go and called natively from then on, the answers the
+// interpreter's, the collector idle and marking. Before, the template held
+// the code the cache had let go of (jitReg), which Go entered, and the
+// caller's calls of Go never compiled it again (jitRegNativeCalleeN):
+// AWFY's Havlak made 4.2 million calls of som.js's hashFn through Go, let
+// go of during CD, each putting off the levels of the recursion below it.
 func TestJITRegReleasedCalleeRelinked(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -144,11 +142,9 @@ func TestJITRegReleasedCalleeRelinked(t *testing.T) {
 
 // TestJITRegReleasedLongCallee has the cache let go of a long callee its
 // native caller calls seldom, compiled for it once warmed up, and checks it
-// is compiled for it again at its next call of Go, as the stack form's is
-// (jitLongWarming: called more often than its budget asks, it is not
-// warming), rather than warmed up anew; and so where its budget, spent by
-// Go's calls of it, ended in a refusal for host operations alone and began
-// again, as the stack form's entry refused so is not warming. Before,
+// is compiled for it again at its next call of Go, rather than warmed up
+// anew; and so where its budget, spent by Go's calls of it, ended in a
+// refusal for host operations alone and began again. Before,
 // either was taken for one warming up, its native caller's calls left to
 // Go: AWFY's CD's isInVoxel, 3.2 million of them.
 func TestJITRegReleasedLongCallee(t *testing.T) {

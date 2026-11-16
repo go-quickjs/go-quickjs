@@ -1,11 +1,11 @@
 package vm
 
-// Array.isArray as a native leaf (leafChecks): every tier calls it without
-// a frame where its argument is no proxy, as V8 reduces the call to a
-// check of the receiver's map. A module keeps it in a binding of its own
-// -- React's ba = Array.isArray, asked of each child it renders -- which
-// native code had called with a frame (jitGoCallNested). Of a proxy,
-// IsArray asks the proxy's target, and a revoked proxy throws: the
+// Array.isArray as a native leaf (leafChecks): the interpreter and native
+// code call it without a frame where its argument is no proxy, as V8 reduces
+// the call to a check of the receiver's map. A module keeps it in a binding
+// of its own -- React's ba = Array.isArray, asked of each child it renders
+// -- which native code had called with a frame (jitRegGoCallNested). Of a
+// proxy, IsArray asks the proxy's target, and a revoked proxy throws: the
 // built-in's own call.
 //
 // As hasOwnProperty's leaf, the functions are generic, instantiated with

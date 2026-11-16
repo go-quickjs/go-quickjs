@@ -27,15 +27,13 @@ func TestForInDictionary(t *testing.T) {
 		for (var i = 0; i < 3; i++) out.push(keys(d));
 		out.join(' | ')`
 	const want = "a,b | a,b,c | 7,4294967294,y | w | mine,inherited | a,b,c | a,b,c | a,b,c"
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got %q, want %q", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

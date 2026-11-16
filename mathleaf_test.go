@@ -28,11 +28,10 @@ function sweep() {
 function hot(n) { let s = 0, t = 0; for (let i = 0; i < n; i++) { s = Math.imul(s ^ i, 0x9e3779b1) | 0; t += Math.clz32(i) + Math.pow(i & 7, 2) + Math.atan2(i, 3) + Math.hypot(i, 4) } return s + ':' + t }
 `
 
-// TestMathLeaves pins Math's functions every tier but the JIT applies
-// without a frame (funcData.mathOp) -- imul, pow, atan2 and hypot of two
-// numbers, clz32 of one -- to the ordinary call's answers and Node's, in the
-// interpreter and the tree tier, which the sweep's rounds take it to; the
-// JIT's is internal/vm's TestJITMathFamily.
+// TestMathLeaves pins Math's functions the interpreter applies without a
+// frame (funcData.mathOp) -- imul, pow, atan2 and hypot of two numbers,
+// clz32 of one -- to the ordinary call's answers and Node's; the JIT's is
+// internal/vm's TestJITMathFamily.
 func TestMathLeaves(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()

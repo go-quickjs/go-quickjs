@@ -31,13 +31,17 @@ func TestInlineCallsGiven(t *testing.T) {
 		{`function swap(fn, g) { for (let i = 0; i < 3; i++) { fn(i); fn = g } }`, true, 1},
 	} {
 		fn := compiledFunctionForTest(t, c.src)
-		p, err := jitcompile.LowerSSAInline(fn)
+		p, err := jitcompile.LowerRegInline(fn.RegCode(), fn)
 		if err != nil {
 			t.Fatalf("%s: %v", c.src, err)
 		}
+		// A plain call's count, from the register instruction the
+		// program's instruction comes from, as the VM's feedback answers
+		// (CallShape); not a method's.
+		rc := fn.RegCode()
 		_, given, ok := InlineCallsGiven(p, func(pc int) (int, bool) {
-			if in := fn.Code[pc]; in.Op == bytecode.OpCall {
-				return int(in.A), true
+			if w := rc.Code[p.Origin[pc]]; w.Op() == bytecode.RCallW {
+				return int(w.X()), true
 			}
 			return 0, false
 		})
@@ -67,7 +71,7 @@ func TestInlineCallsSmallLoop(t *testing.T) {
 		{`function big(a) { var s = 0; for (var i = 0; i < a.length; i++) { s += a[i] * 3 + (a[i] >> 2) - (a[i] & 7) + (a[i] | 1) + (a[i] ^ 5) + (a[i] << 1) + (a[i] % 9); } return s; }`, false},
 	} {
 		fn := compiledFunctionForTest(t, c.src)
-		p, err := jitcompile.LowerSSAInline(fn)
+		p, err := jitcompile.LowerRegInline(fn.RegCode(), fn)
 		if err != nil {
 			t.Fatalf("%s: %v", c.src, err)
 		}

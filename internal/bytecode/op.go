@@ -602,11 +602,9 @@ const (
 // so if it is a string, appends stop growing it. It leaves the value where it
 // is, as an OpArgumentsIndex replaces the top of the stack.
 //
-// It is not an opcode of its own so that the interpreter's switch is as it
-// was (AGENTS.md: executeAt's code stays as it is): a new case moved what
-// follows it by 448 bytes, and a new label on an old case still reordered that
-// case's registers. OpArgumentsIndex's case calls a function out of line with
-// A, and no function has that many locals. Instr.StrFreeze says which it is.
+// It is not an opcode of its own: an OpArgumentsIndex's A is never that
+// large, since no function has that many locals. Instr.StrFreeze says which
+// it is.
 const StrFreezeA = ^uint32(0)
 
 // AddOwned is an OpAdd's B where the addition is to a string a local alone

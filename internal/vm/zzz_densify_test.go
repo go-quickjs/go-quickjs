@@ -95,23 +95,20 @@ sparseGaps70000=70000/23334/46666/816678333/0,3,6..69990,69993,69996,69999/23335
 6890
 true2000`
 
-// A sparse array made dense again answers as it did: Node's answers, in the
-// tree tier and in the interpreter.
+// A sparse array made dense again answers as it did: Node's answers.
 func TestDensify(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		if _, err := r.Run(compileForTest(t, densifySrc)); err != nil {
-			t.Fatal(err)
-		}
-		v, err := r.Run(compileForTest(t, "main()"))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != densifyWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, densifyWant)
-		}
+	r := New(Config{})
+	if _, err := r.Run(compileForTest(t, densifySrc)); err != nil {
+		t.Fatal(err)
+	}
+	v, err := r.Run(compileForTest(t, "main()"))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != densifyWant {
+		t.Errorf("\ngot  %s\nwant %s", got, densifyWant)
 	}
 }
 

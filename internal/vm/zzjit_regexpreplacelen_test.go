@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// Replaces whose results are only measured (zzz_regexpreplacelen.go) answer
-// the same natively, where native code makes them as before, and in the
-// tree tier of a runtime running the JIT, before the functions are
+// Replaces whose results are only measured answer the same natively and in
+// the interpreter of a runtime running the JIT, before the functions are
 // compiled: each answer is the interpreter's and Node's, with the collector
 // idle and while it marks.
 func TestJITRegExpReplaceLen(t *testing.T) {

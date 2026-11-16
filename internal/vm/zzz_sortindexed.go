@@ -11,8 +11,7 @@ package vm
 //
 // It is a heapsort of its own rather than slices.SortFunc, whose pdqsort's
 // instantiations for the key type are 6 KB laid out among the package's
-// generics, ahead of the tree tier's literal node (litNodeOf.make):
-// escape_rare was 16% slower at every placement with them there.
+// generics: escape_rare was 16% slower at every placement with them there.
 //
 // Its functions are generic, instantiated with struct{} alone: Go lays a
 // generic function's instantiations out after every function and closure of

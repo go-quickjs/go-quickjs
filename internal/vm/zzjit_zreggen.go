@@ -18,18 +18,17 @@ import (
 //
 // A for...of's step, or a call of the realm's next, over a generator of
 // register code is a native call of the generator's code (ssa.CallSite's
-// Gens), as the stack form's is: the step checks the generator and jumps
-// to its code's generator entry (mir's windowGenEntry), which makes the
-// generator's frame -- a window of registers past the VM's stack's top, as
-// a native callee's, from the generator's values (genFrom on) and its
-// callee and receiver below them, the value sent in to the yield's
-// register -- and goes on at the entry for the generator's place. A yield
-// there writes the window back to the generator's values and returns the
-// value to the step (mir's windowYieldExit); a return finishes it. The
-// window is made and written back where the stack form's frame is the
-// generator's own: register code keeps a generator's registers in its
-// values only between its runs (regGenRun), its frame a window in the
-// VM's stack while it runs, which register code's native code addresses.
+// Gens): the step checks the generator and jumps to its code's generator
+// entry (mir's windowGenEntry), which makes the generator's frame -- a
+// window of registers past the VM's stack's top, as a native callee's, from
+// the generator's values (genFrom on) and its callee and receiver below
+// them, the value sent in to the yield's register -- and goes on at the
+// entry for the generator's place. A yield there writes the window back to
+// the generator's values and returns the value to the step (mir's
+// windowYieldExit); a return finishes it. The window is made and written
+// back because register code keeps a generator's registers in its values
+// only between its runs (regGenRun), its frame a window in the VM's stack
+// while it runs, which register code's native code addresses.
 //
 // Anything else leaves native code as a native callee does, and Go
 // finishes the level as regGenRun finishes a resumption (jitRegGenDone):
@@ -37,12 +36,11 @@ import (
 // or its done.
 
 // jitRegGenCallable reports whether a loop's step or a call of next may
-// resume a generator of cl's natively, as jitGenCallable asks of the
-// stack form's: register code's synchronous generator with no yield*, no
-// call in tail position, no local a closure captures -- no capture open on
-// its window's registers, which the generator would keep (regMoveUps) --
-// and no arguments kept, whose mapped object aliases the parameters'
-// registers by captures too.
+// resume a generator of cl's natively: register code's synchronous
+// generator with no yield*, no call in tail position, no local a closure
+// captures -- no capture open on its window's registers, which the
+// generator would keep (regMoveUps) -- and no arguments kept, whose mapped
+// object aliases the parameters' registers by captures too.
 func jitRegGenCallable(cl *closure) bool {
 	c := cl.reg
 	return c != nil && c.wide && c.suspends && !c.args && c.rc == cl.fn.RegCode() && jitcompile.GeneratorResumable(cl.fn)
@@ -50,9 +48,8 @@ func jitRegGenCallable(cl *closure) bool {
 
 // regGenNative reports whether a generator of fn, of register code c, is
 // one a loop's step may resume natively (jitRegGenCallable): its values
-// then keep its whole register file (regCode's genFrom 0), which its
-// native code runs on as its registers (mir's windowGenFrame), as the
-// stack form's frame's locals are its generator's.
+// then keep its whole register file (regCode's genFrom 0), which its native
+// code runs on as its registers (mir's windowGenFrame).
 func regGenNative(fn *bytecode.Function, c *regCode) bool {
 	return !c.args && jitcompile.GeneratorResumable(fn)
 }
@@ -143,9 +140,9 @@ func (f *jitRegFeedback) regGenSteps(rpc int) []ssa.GenStep {
 }
 
 // regGenNextSite gives site, the call of Go of call_method_w at register pc
-// rpc, of no argument or one, the generators it learned it resumes with
-// the realm's next (jitRegGenCallSeen), as the stack form's NativeCalls
-// does: made natively, its result objects from a pool.
+// rpc, of no argument or one, the generators it learned it resumes with the
+// realm's next (jitRegGenCallSeen): made natively, its result objects from
+// a pool.
 func (f *jitRegFeedback) regGenNextSite(rpc int, site *ssa.CallSite) {
 	if !site.Method || site.New || site.Argc > 1 {
 		return
@@ -163,7 +160,7 @@ func (f *jitRegFeedback) regGenNextSite(rpc int, site *ssa.CallSite) {
 
 // jitRegGenStepSeen notes a loop's step at register pc rpc of f's code e,
 // which Go made from native code, of cursor: one over a generator a step
-// may resume natively, as jitGenStepSeen learns the stack form's.
+// may resume natively.
 func (r *Runtime) jitRegGenStepSeen(f *frame, e *jitRegEntry, rpc int, cursor Value) {
 	st := cursorOf(cursor)
 	if st == nil || st.done || st.arr != nil || st.forIn || !st.iter.IsObject() || r.genNextFn == nil ||
@@ -176,7 +173,7 @@ func (r *Runtime) jitRegGenStepSeen(f *frame, e *jitRegEntry, rpc int, cursor Va
 // jitRegGenCallSeen notes a method call at register pc rpc of f's code e,
 // which Go made from native code, of callee on this with argc arguments:
 // the realm's generators' next, of no argument or one, on a generator a
-// call may resume natively, as jitGenCallSeen learns the stack form's.
+// call may resume natively.
 func (r *Runtime) jitRegGenCallSeen(f *frame, e *jitRegEntry, rpc int, this, callee Value, argc int) {
 	if argc > 1 || r.genNextFn == nil || callee.ref != unsafe.Pointer(r.genNextFn) || !this.IsObject() {
 		return
@@ -186,8 +183,8 @@ func (r *Runtime) jitRegGenCallSeen(f *frame, e *jitRegEntry, rpc int, this, cal
 
 // jitRegGenSeen is jitRegGenStepSeen's and jitRegGenCallSeen's: it, a
 // generator of register code a native step may resume, of f's environment
-// and realm, learned at rpc, which the code resumes natively once
-// compiled again (jitRegReopt), as jitGenSeen learns the stack form's.
+// and realm, learned at rpc, which the code resumes natively once compiled
+// again (jitRegReopt).
 func (r *Runtime) jitRegGenSeen(f *frame, e *jitRegEntry, rpc int, it *Object) {
 	cl := f.cl
 	if it.class != ClassGenerator || cl == nil || e == nil || e.invalid {
@@ -222,9 +219,8 @@ func (r *Runtime) jitRegGenSeen(f *frame, e *jitRegEntry, rpc int, it *Object) {
 
 // jitRegGenLearned asks for e, cl's code, to be compiled again for a
 // generator's step or making it learned (jitRegReopt), marked so that the
-// loops it was judged slow for, whose steps had each been a call of Go,
-// are judged afresh once it is (jitRegCached), as the stack form's
-// genLearned has jitReplaceCode judge them.
+// loops it was judged slow for, whose steps had each been a call of Go, are
+// judged afresh once it is (jitRegCached).
 func (r *Runtime) jitRegGenLearned(cl *closure, e *jitRegEntry) {
 	if e.life != nil {
 		e.life.genLearned = true
@@ -320,16 +316,15 @@ func (r *Runtime) jitRegGenFill(f *frame, l *jitRegLevel) {
 	f.regKind = 0
 }
 
-// jitRegGenDone ends f, the frame of l, a generator's level, which
-// returned v or ended in err, as regGenRun and regGenResume end a
-// resumption, and jitGenDone the stack form's: suspended, its window
-// written back to the generator's values and its place saved, the step's
-// result the value; finished, the generator done and the step's cursor
-// too -- the step's result the uninitialized value, its done, or the
-// throw. A call of next's result is its object, { value, done }, which
-// the context's generator, 1, tells its native caller (abi.Context's
-// GenSent). The frame is popped after, with its next's below it
-// (jitRegPopLevel).
+// jitRegGenDone ends f, the frame of l, a generator's level, which returned
+// v or ended in err, as regGenRun and regGenResume end a resumption:
+// suspended, its window written back to the generator's values and its
+// place saved, the step's result the value; finished, the generator done
+// and the step's cursor too -- the step's result the uninitialized value,
+// its done, or the throw. A call of next's result is its object, { value,
+// done }, which the context's generator, 1, tells its native caller
+// (abi.Context's GenSent). The frame is popped after, with its next's below
+// it (jitRegPopLevel).
 func (r *Runtime) jitRegGenDone(f *frame, l *jitRegLevel, v Value, err error) (Value, error) {
 	g, c := l.gen, l.c
 	defer func() {
@@ -370,17 +365,14 @@ func (r *Runtime) jitRegGenDone(f *frame, l *jitRegLevel, v Value, err error) (V
 
 // jitRegResumed counts a resumption Go makes of a generator's or an async
 // function's register code c, cl's, which has no native code, as an
-// invocation, as the stack form's resumption is one (jitResume, tryJITAt):
-// its length spent of its budget (jitRegHot, jitTierWork). Code refused
-// for host operations alone is asked again once its resumptions have done
-// jitHotWork of it, as the stack form's jitHotEntry counts such code's
-// calls (jitEntry's coldWork), the count kept on the closure's template
-// (jitRegColdWork), as the stack form's entry is found by the closure's
-// hint: looked up in the cache at each resumption, an async chain's
-// functions -- each await a resumption -- spent a twentieth of their
-// time on it. A generator of no loop has no back edge to be sampled at,
-// and its resumptions, made by Go from native code whose polls rearm the
-// interrupt budget, spend none of it. Every resumption counted at
+// invocation: its length spent of its budget (jitRegHot). Code refused for
+// host operations alone is asked again once its resumptions have done
+// jitHotWork of it, the count kept on the closure's template
+// (jitRegColdWork): looked up in the cache at each resumption, an async
+// chain's functions -- each await a resumption -- spent a twentieth of
+// their time on it. A generator of no loop has no back edge to be sampled
+// at, and its resumptions, made by Go from native code whose polls rearm
+// the interrupt budget, spend none of it. Every resumption counted at
 // jitHotWork, an async function whose loop awaits at every turn -- each
 // turn a resumption, too few back edges in all for a sample -- was never
 // compiled.

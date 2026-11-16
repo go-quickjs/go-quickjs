@@ -5,7 +5,6 @@ import (
 	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // TestRegCallCachesReleasedAtTurnEnd: a call site's cache in a template
@@ -23,14 +22,10 @@ func TestRegCallCachesReleasedAtTurnEnd(t *testing.T) {
 		 keep`,
 		`keep = undefined; 0`,
 	}
-	compiler.SetRegisterForm(true)
 	fns := make([]*bytecode.Function, len(steps))
 	for i, s := range steps {
 		fns[i] = compileForTest(t, s)
 	}
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	before := RegsBuilt()
 	r := New(Config{})
 	defer r.Close()
@@ -89,14 +84,10 @@ func TestRegCallFeedbackOutlivesTurn(t *testing.T) {
 		 f`,
 		`h = undefined; 0`,
 	}
-	compiler.SetRegisterForm(true)
 	fns := make([]*bytecode.Function, len(steps))
 	for i, s := range steps {
 		fns[i] = compileForTest(t, s)
 	}
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fns[0])
@@ -152,16 +143,12 @@ func TestRegCallFeedbackOutlivesTurn(t *testing.T) {
 // thousand scripts one a turn spent three quarters of its time there,
 // each turn's end longer than the last until the collector came.
 func TestRegCallsReleaseTheTurnsOwn(t *testing.T) {
-	compiler.SetRegisterForm(true)
 	setup := compileForTest(t, `function f() { return 1; }`)
 	scripts := make([]*bytecode.Function, 1000)
 	for i := range scripts {
 		scripts[i] = compileForTest(t, `f() + f()`)
 	}
 	last := compileForTest(t, `f() + held()`)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("held"), r.NewFunction("held", 0, func(r *Runtime, _ Value, _ []Value) (Value, error) {

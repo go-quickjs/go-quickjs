@@ -312,8 +312,8 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 }
 
 // jitLeafOf is the result of the leaf call op (abi.Context's GoOp, of a
-// GoLeaf) of fn, of the receiver and the arguments in ctx's GoArgs past
-// the function's, read in place, as every tier applies the leaf without a
+// GoLeaf) of fn, of the receiver and the arguments in ctx's GoArgs past the
+// function's, read in place, as the interpreter applies the leaf without a
 // frame (jitLeafApply), the memory meter allowing it: false where it does
 // not make it. jitLeafCall, callGo's path, makes it so.
 func (r *Runtime) jitLeafOf(ctx *abi.Context, op uint64, fn *Object) (Value, bool) {

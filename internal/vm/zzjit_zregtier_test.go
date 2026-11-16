@@ -14,8 +14,8 @@ const regTierDrive = `
 function drive(f, n, k) { var r; for (var j = 0; j < k; j++) { try { r = f(n + j % 3) } catch (e) { r = "threw " + e.message } } return r }
 `
 
-// TestJITRegTierUp is tier-up from the register interpreter (step B of
-// 3a-3, zzjit_zregtier.go): regNativeSrc's functions, in register form,
+// TestJITRegTierUp is tier-up from the register interpreter
+// (zzjit_zregtier.go): regNativeSrc's functions, in register form,
 // called often and looping long in a runtime that runs the JIT, compiled
 // from their register code once sampled hot and entered at their calls
 // and by on-stack replacement at their loops, each answer compared with a

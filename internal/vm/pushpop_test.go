@@ -44,17 +44,15 @@ for (var k = 0; k < 3; k++) run();
 JSON.stringify(out);
 `
 	const want = `[2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1,2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1,2,4,6,8,10,110,null,0,"proto",1,true,2,true,2,7,true,2,2,"y",1,true,3,null,"set s",1]`
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v:\n got %s\nwant %s", tree, got, want)
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+	r.Close()
 }
 
 // TestTruncateClearsSlot pins that shortening an array releases what it

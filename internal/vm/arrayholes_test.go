@@ -54,7 +54,7 @@ var arrayHolesCases = []struct{ src, want string }{
 // TestArrayLiteralHoles pins array literals with holes, which are made by
 // one new_array of their elements, a hole the uninitialized value an
 // array's storage holds for one, as Node makes them: each case three
-// times, by the interpreter and by the tree tier.
+// times.
 func TestArrayLiteralHoles(t *testing.T) {
 	t.Parallel()
 	r := New(Config{})

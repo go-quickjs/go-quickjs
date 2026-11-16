@@ -14,9 +14,8 @@ import (
 // chain, Object.prototype included, a prototype replaced, or a receiver
 // that is not extensible each takes the write the long way, and the cache
 // takes it again once the chain is as before. A constructor's additions
-// to its subclasses' instances are made the same way. Node's answers, on
-// the trees and in the interpreter; the site's entry is the cell's, and it
-// has not given up.
+// to its subclasses' instances are made the same way. Node's answers; the
+// site's entry is the cell's, and it has not given up.
 func TestChainStoreFollowsTheCell(t *testing.T) {
 	const src = `'use strict'
 		class A {} class B extends A {} class C extends B {} class D extends C {}
@@ -60,27 +59,23 @@ func TestChainStoreFollowsTheCell(t *testing.T) {
 		out.push(rs.join(','))
 		out.join(', ')`
 	const want = "plain:own0/own1/own2/own3/own4, again:own0/own1/own2/own3/own4, setter:none, calls 5, gone:own0/own1/own2/own3/own4, read-only:TypeError, read-only gone:own0/own1/own2/own3/own4, chain replaced:none, calls 10, chain back:own0/own1/own2/own3/own4, top setter:none, calls 15, top gone:own0/own1/own2/own3/own4, non-extensible:TypeError, abc567,abc567,abc567,abc567"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		treeTier.Store(previous)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
-		}
-		cl := r.global.getOwn(r.atoms.intern("add")).value().Object().fn().closure
-		for _, in := range cl.fn.Code {
-			if in.Op != bytecode.OpSetProp {
-				continue
-			}
-			if c := &cl.ic[in.B]; c.cell == nil || c.next == nil || c.fills >= maxCacheFills {
-				t.Errorf("tree %v: the site's entry has cell %v, next %v, fills %d", tree, c.cell != nil, c.next != nil, c.fills)
-			}
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	cl := r.global.getOwn(r.atoms.intern("add")).value().Object().fn().closure
+	for _, in := range cl.fn.Code {
+		if in.Op != bytecode.OpSetProp {
+			continue
+		}
+		if c := &cl.ic[in.B]; c.cell == nil || c.next == nil || c.fills >= maxCacheFills {
+			t.Errorf("the site's entry has cell %v, next %v, fills %d", c.cell != nil, c.next != nil, c.fills)
+		}
+	}
+	r.Close()
 }

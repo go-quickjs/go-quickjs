@@ -31,6 +31,7 @@ func TestMirAnnotated(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			f.CallEntry = true
 			ssa.Optimize(f)
 			mir.Annotate = false

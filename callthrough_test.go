@@ -6,8 +6,8 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
-// f.call(this, ...args) from a tree's call node is f called nested, under
-// call's frame (callThroughTree): a base constructor's, an exception thrown
+// f.call(this, ...args) is f called nested, under call's frame
+// (callThrough): a base constructor's, an exception thrown
 // through it and caught by the caller and its stack, a sloppy and a strict
 // body's this of a primitive, null and undefined, a recursion through call
 // and one past the stack's limit, a native target, and call replaced on

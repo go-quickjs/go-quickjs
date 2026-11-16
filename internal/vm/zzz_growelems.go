@@ -16,7 +16,8 @@ package vm
 // barrier while the collector marks, where Go's growth takes the one for a
 // new slice, so the room is asked of append.
 //
-// Its code is generic, instantiated with struct{}, as zzz_zliteral.go's.
+// Its code is generic, instantiated with struct{}, laid out after every
+// function and closure of the package.
 
 // growElemsAt is the capacity from which an array grows by half.
 const growElemsAt = 16384

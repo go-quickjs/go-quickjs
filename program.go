@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // Program is a script compiled once, which any number of runtimes may then
@@ -24,11 +22,9 @@ type Program struct {
 	line, column int
 	// forms is the script as each kind of runtime compiles it, by
 	// programForm: as the standard has it, made by Compile, or as a
-	// runtime WithNodeQuirks compiles it, each with its register form or
-	// without, for a runtime that runs no register code (one with the
-	// JIT). Each is made the first time a runtime of its kind runs the
-	// program, if Compile did not make it.
-	forms [4]programCode
+	// runtime WithNodeQuirks compiles it. Each is made the first time a
+	// runtime of its kind runs the program, if Compile did not make it.
+	forms [2]programCode
 }
 
 // programCode is one of a Program's forms.
@@ -39,16 +35,12 @@ type programCode struct {
 }
 
 // programForm is the index in Program.forms of the form compiled with node
-// quirks or not, and with no register form or with one.
-func programForm(quirks, noReg bool) int {
-	i := 0
+// quirks or not.
+func programForm(quirks bool) int {
 	if quirks {
-		i += 2
+		return 1
 	}
-	if noReg {
-		i++
-	}
-	return i
+	return 0
 }
 
 // CompileOption configures Compile, as an Option configures New.
@@ -81,15 +73,12 @@ func Compile(name, src string, opts ...CompileOption) (*Program, error) {
 	for _, o := range opts {
 		o(&c)
 	}
-	// The form a runtime without the JIT runs, where the process runs
-	// register code (vm.RegTierOn); any other is made when it is needed.
-	noReg := !vm.RegTierOn()
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, false, false, noReg)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, false, false)
 	if err != nil {
 		return nil, err
 	}
 	p := &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column}
-	p.forms[programForm(false, noReg)].set(fn)
+	p.forms[programForm(false)].set(fn)
 	return p, nil
 }
 
@@ -101,20 +90,19 @@ func (c *programCode) set(fn *bytecodeFunc) { c.once.Do(func() { c.fn = fn }) }
 // WithNodeQuirks: what Eval would accept, a program from here accepts. The
 // program may still be run by any runtime.
 func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, error) {
-	noReg := !r.rt.RegTier()
-	if !r.nodeQuirks && noReg == !vm.RegTierOn() {
+	if !r.nodeQuirks {
 		return Compile(name, src, opts...)
 	}
 	var c compileConfig
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, r.nodeQuirks, false, noReg)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, r.nodeQuirks, false)
 	if err != nil {
 		return nil, err
 	}
 	p := &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column}
-	p.forms[programForm(r.nodeQuirks, noReg)].set(fn)
+	p.forms[programForm(r.nodeQuirks)].set(fn)
 	return p, nil
 }
 
@@ -125,20 +113,17 @@ func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, er
 func (r *Runtime) CodeGenerationAllowed() bool { return !r.noCodeGeneration }
 
 // code is the program as the runtime compiles source: WithNodeQuirks parses
-// and compiles some code as V8 does, and a runtime with the JIT runs no
-// register code, which the program is then compiled for too, once, however
-// many runtimes run it. Runtimes of different kinds never share code: the
-// tree a function runs as is the same in every runtime that runs it.
+// and compiles some code as V8 does, which the program is then compiled for
+// too, once, however many runtimes run it.
 func (p *Program) code(r *Runtime) (*bytecodeFunc, error) {
-	noReg := !r.rt.RegTier()
 	if r.debug {
 		// Code compiled for a debugger is the runtime's own, so the
 		// program is compiled for it each time it runs.
-		return compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, true, noReg)
+		return compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, true)
 	}
-	c := &p.forms[programForm(r.nodeQuirks, noReg)]
+	c := &p.forms[programForm(r.nodeQuirks)]
 	c.once.Do(func() {
-		c.fn, c.err = compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, false, noReg)
+		c.fn, c.err = compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, false)
 	})
 	return c.fn, c.err
 }

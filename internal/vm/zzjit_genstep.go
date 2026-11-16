@@ -5,11 +5,7 @@ package vm
 import (
 	"unsafe"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // A loop's step over a generator, natively.
@@ -29,7 +25,7 @@ import (
 // finishes the generator and returns the step's done. So a
 // loop over a generator steps it with neither an exit nor a call of Go,
 // where each step had been a call of Go from native code, which resumed
-// the generator's tree, or its code from Go.
+// the generator's code from Go.
 //
 // Anything else leaves native code as a native callee does, and Go makes
 // the generator's frame from its context, as the step's resumption would
@@ -56,141 +52,9 @@ const jitGenTargets = 2
 // after its yields, each a check at every resumption.
 const jitGenResumesMax = 16
 
-// jitGenCallable reports whether a loop's step may resume a generator of
-// fn natively (ssa.Func's GenEntry, jitcompile.GeneratorResumable): a
-// synchronous generator whose body has no yield*, whose locals no closure
-// captures -- its frame's locals are then the generator's alone, which no
-// cell holds -- and no call in tail position, which a generator's frame
-// does not give up.
-func jitGenCallable(fn *bytecode.Function) bool { return jitcompile.GeneratorResumable(fn) }
-
-// jitGenResumes are the places a step resumes a generator of fn natively at
-// (ssa.Func's GenResumes): past its parameters, where it starts, and after
-// each yield, where code compiled from p, built as f, has an entry.
-func jitGenResumes(fn *bytecode.Function, p *ir.Program, f *ssa.Func) []ssa.GenResume {
-	has := func(pc int) bool {
-		for _, e := range f.Entries {
-			if e.PC == pc {
-				return true
-			}
-		}
-		return false
-	}
-	var out []ssa.GenResume
-	for pc, in := range fn.Code {
-		if pc+1 >= len(fn.Code) || pc+1 >= len(p.Maps) || p.Maps[pc+1].Depth < 0 || !has(pc+1) {
-			continue
-		}
-		switch d := p.Maps[pc+1].Depth; in.Op {
-		case bytecode.OpEndParams:
-			out = append(out, ssa.GenResume{PC: pc + 1, Saved: d})
-		case bytecode.OpYield:
-			if d >= 1 {
-				out = append(out, ssa.GenResume{PC: pc + 1, Saved: d - 1, Started: true})
-			}
-		}
-		if len(out) == jitGenResumesMax {
-			break
-		}
-	}
-	return out
-}
-
-// GenSteps is ssa.GenStepFeedback's: the generators the step at pc has met
-// (jitGenStepSeen), each of the code's environment and realm, called
-// through its function's link, which the code holds.
-func (fb *jitFeedback) GenSteps(pc int) []ssa.GenStep {
-	e := fb.ownEntry()
-	if e == nil || fb.root != nil || fb.cl == nil {
-		return nil
-	}
-	for _, st := range e.genSteps {
-		if int(st.pc) != pc {
-			continue
-		}
-		var out []ssa.GenStep
-		for _, cl := range st.cls {
-			if cl.env != fb.cl.env || cl.realm != fb.cl.realm {
-				continue
-			}
-			link := fb.r.jit.linkOf(cl.fn)
-			fb.links = append(fb.links, link)
-			out = append(out, ssa.GenStep{
-				Fn: uintptr(unsafe.Pointer(cl.fn)), Env: uintptr(unsafe.Pointer(cl.env)), Realm: uintptr(unsafe.Pointer(cl.realm)),
-				Entry: uintptr(unsafe.Pointer(&link.gen)), Count: uintptr(unsafe.Pointer(&link.in)),
-			})
-		}
-		return out
-	}
-	return nil
-}
-
 // GenNext is ssa.GenStepFeedback's: the realm's %GeneratorPrototype%.next,
 // an object as long-lived as the realm.
 func (fb *jitFeedback) GenNext() uintptr { return uintptr(unsafe.Pointer(fb.r.genNextFn)) }
-
-// jitGenStepSeen notes a loop's step at pc of e's code, cl's, which Go made
-// from native code, of cursor: one over a generator native code may resume
-// (jitGenCallable), of cl's environment and realm, stepped by the realm's
-// next, which the code resumes natively once compiled again (ssa.CallSite's
-// Gens), as a call learns its target.
-func (r *Runtime) jitGenStepSeen(e *jitEntry, cl *closure, pc int, cursor Value) {
-	st := cursorOf(cursor)
-	if st == nil || st.done || st.arr != nil || st.forIn || !st.iter.IsObject() || r.genNextFn == nil ||
-		st.next.ref != unsafe.Pointer(r.genNextFn) {
-		return
-	}
-	r.jitGenSeen(e, cl, pc, st.iter.Object())
-}
-
-// jitGenCallSeen notes a method call at pc of e's code, cl's, which Go
-// made from native code, of ops, its receiver, its function and its
-// arguments: the realm's generators' next, of no argument or one, on a
-// generator native code may resume, of cl's environment and realm, which
-// the code calls natively once compiled again (ssa.CallSite's Gens on a
-// call), as a loop's step learns its generators (jitGenStepSeen).
-func (r *Runtime) jitGenCallSeen(e *jitEntry, cl *closure, pc int, ops []Value) {
-	if len(ops) < 2 || len(ops) > 3 || r.genNextFn == nil || ops[1].ref != unsafe.Pointer(r.genNextFn) || !ops[0].IsObject() {
-		return
-	}
-	r.jitGenSeen(e, cl, pc, ops[0].Object())
-}
-
-// jitGenSeen is jitGenStepSeen's and jitGenCallSeen's: it, a generator
-// the step or the call at pc resumed, learned there.
-func (r *Runtime) jitGenSeen(e *jitEntry, cl *closure, pc int, it *Object) {
-	if it.class != ClassGenerator || cl == nil {
-		return
-	}
-	g := genOf(it)
-	if g.reg {
-		// Its body is register code, its vals a window (zzreg_zgen.go).
-		return
-	}
-	if g.cl == nil || g.cl.env != cl.env || g.cl.realm != cl.realm || g.cl.realm != nil && g.cl.realm != r.Realm ||
-		!jitGenCallable(g.cl.fn) {
-		return
-	}
-	for i := range e.genSteps {
-		gs := &e.genSteps[i]
-		if int(gs.pc) != pc {
-			continue
-		}
-		for _, c := range gs.cls {
-			if c.fn == g.cl.fn {
-				return
-			}
-		}
-		if len(gs.cls) >= jitGenTargets {
-			return
-		}
-		gs.cls = append(gs.cls, g.cl)
-		e.genLearned, e.reopt = true, true
-		return
-	}
-	e.genSteps = append(e.genSteps, jitGenStep{pc: int32(pc), cls: []*closure{g.cl}})
-	e.genLearned, e.reopt = true, true
-}
 
 // jitGenLevel is the generator a native call's context c, a level of
 // closure cl that left as kind says, runs, where it is a loop's step's
@@ -233,101 +97,6 @@ func (r *Runtime) jitPushGenNext(g *generator) {
 	f.thisRef, f.withScopes, f.evalVars, f.savedSP = nil, nil, nil, 0
 }
 
-// jitGenFrame makes the frame of l, a level of a generator a step resumed
-// natively (jitGenLevel), which left native code, as the step's resumption
-// would have made it (resumeTree), its next's frame below it: its locals
-// the generator's, its operands at the level's base, its handlers those in
-// force at its exit, or, past, after its call, which a stack trace shows.
-// The records of a native call it was making (jit.ExpandCall) are written
-// to it.
-func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *frame {
-	s := r.jit
-	g, fn := l.gen, l.cl.fn
-	l.top = l.base
-	r.jitPushGenNext(g)
-	f := r.pushFrame()
-	f.cl = g.cl
-	f.locals = g.vals[g.nargs:]
-	f.base = l.base
-	f.pc = uint32(l.pc)
-	if past {
-		f.pc++
-	}
-	f.this, f.callee, f.args = g.this, g.callee, g.vals[:g.nargs:g.nargs]
-	f.handlers, f.openUpvalues = g.savedHandlers(), g.savedUpvalues()
-	g.frameRare(f)
-	f.native, f.savedSP, f.paramsOnly = "", 0, false
-	tc := &f.tc
-	tc.r, tc.f, tc.cl, tc.locals = r, f, g.cl, f.locals
-	tc.closureCode = g.cl.closureCode
-	tc.stack = r.stack[l.base : l.base+fn.MaxStack]
-	e := r.jitEntryOf(l.cl)
-	if e != nil && c.Records != 0 {
-		saved := s.ssaCtx
-		s.ssaCtx = c
-		r.jitKeepSlots(l, f, e.this, c)
-		r.jitApplyRecords(f, e.this, c)
-		s.ssaCtx = saved
-	}
-	r.jitMaterialize(f, e)
-	if e != nil {
-		jitHandlers(f, e.ssaProg, int(l.pc))
-	}
-	return f
-}
-
-// jitGenDone ends the frame of l, a generator's level (jitGenFrame), which
-// returned v or ended in err, as finishResume ends a resumption: suspended,
-// what the next resumption needs saved, and its value the step's result;
-// finished, by a return or a throw, the generator done and the step's
-// cursor too -- the step's result its done, the uninitialized value, or for
-// a destructuring's step undefined, or the throw. A call of next's result
-// is its object, { value, done }, as the realm's next makes it, which the
-// context's generator, 1, tells its native caller (abi.Context's GenSent).
-// The frame is then popped, with its next's below it.
-func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (Value, error) {
-	g := l.gen
-	defer func() {
-		f.detachSuspended()
-		r.frameDepth -= 2
-		r.stackTop = l.top
-	}()
-	if s, ok := err.(*suspendSignal); ok {
-		g.pc = f.pc
-		g.keep(r.stack[f.base:max(f.savedSP, f.base)], f.handlers, f.openUpvalues)
-		g.saveWith(f.withScopes)
-		g.delegating, g.state, g.started = s.delegate, genSuspendedYield, true
-		// A yield's: the generator has no yield* (jitGenCallable), whose
-		// suspension hands out a result object.
-		v = s.value
-		s.value = Undefined
-		if l.cursor == nil {
-			r.jit.ssaCtxs[l.ctx].GenObject = 1
-			v = Obj(r.iterResult(v, false))
-		}
-		return v, nil
-	}
-	for _, u := range f.openUpvalues {
-		u.close()
-	}
-	g.state, g.saved = genCompleted, nil
-	switch {
-	case err != nil:
-		if l.cursor != nil {
-			l.cursor.done = true
-		}
-		return Undefined, err
-	case l.cursor == nil:
-		r.jit.ssaCtxs[l.ctx].GenObject = 1
-		return Obj(r.iterResult(v, true)), nil
-	}
-	l.cursor.done = true
-	if l.fill {
-		return Undefined, nil
-	}
-	return uninitialized, nil
-}
-
 // jitGenMake is a call of a generator function at pc of an entry's code
 // that native code makes the generator of (ssa.CallSite's GenMake): the
 // function's object and the pool of its generators, made as a call of it
@@ -336,79 +105,6 @@ type jitGenMake struct {
 	pc   int32
 	obj  *Object
 	pool *abi.ObjectPool
-}
-
-// jitGenMakes bounds the generator functions a call makes the generators
-// of natively: one, as most calls of one call no other.
-const jitGenMakes = 1
-
-// jitGenMakeable reports whether native code of cl's may make the
-// generators of o, a function a call at pc met (jitGenMakeSeen), as a call
-// of it makes them: a synchronous generator function of the script's, of
-// cl's realm and scope, unbound, whose generator and object are one
-// allocation (genAlloc) with its locals only -- no arguments object, no
-// direct eval, a prologue of end_params alone or none, at most eight
-// locals -- and no rare part: no with or eval scope around it, nothing
-// the receiver of a plain call is coerced to that its body reads; its
-// prototype its own data property holding an object.
-func (r *Runtime) jitGenMakeable(o *Object, cl *closure) bool {
-	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.arrow || fd.closure == nil || fd.closure.realm != r.Realm || cl == nil ||
-		fd.closure.scope() != cl.scope() || r.debug != nil {
-		return false
-	}
-	if c := fd.closure.reg; c != nil && c.suspends {
-		// Its generators are register code's (zzreg_zgen.go).
-		return false
-	}
-	fn := fd.closure.fn
-	if !fn.Generator || fn.Async || fn.UsesArguments || fn.HasDirectEval || fn.LocalCount > 8 || fn.UsesThis && fn.CoerceThis ||
-		!(fn.ParamEnd == 0 || fn.ParamEnd == 1 && fn.Code[0].Op == bytecode.OpEndParams) {
-		return false
-	}
-	if x := fd.extra; x != nil && (len(x.with()) != 0 || x.lexThisRef != nil || x.evalVars() != nil) {
-		return false
-	}
-	p := o.getOwn(atomPrototype)
-	return p.ok() && p.flags()&(propAccessor|propPrivate|propDeleted) == 0 && p.value().IsObject()
-}
-
-// jitGenMakeSeen notes a call at pc of e's code, cl's, which Go made from
-// native code, of callee: a generator function native code may make the
-// generators of (jitGenMakeable), which, compiled again, the code makes
-// natively from the call's pool (ssa.CallSite's GenMake), as a call learns
-// its target; or one it makes so already, whose pool has run out, which
-// it fills again.
-func (r *Runtime) jitGenMakeSeen(e *jitEntry, cl *closure, pc int, callee Value) {
-	if !callee.IsObject() {
-		return
-	}
-	o := callee.Object()
-	if fd := o.fn(); fd == nil || fd.closure == nil || !fd.closure.fn.Generator {
-		// No generator function's, which every call of Go of any other
-		// had asked, its scope compared, before anything else.
-		return
-	}
-	for _, x := range e.genMakes {
-		if int(x.pc) == pc && x.obj == o {
-			if x.pool != nil && x.pool.Count == 0 {
-				// Its pool run out, which native code takes its generators
-				// from: filled again, with more.
-				r.jitRefillPool(x.pool)
-			}
-			return
-		}
-	}
-	n := 0
-	for _, x := range e.genMakes {
-		if int(x.pc) == pc {
-			n++
-		}
-	}
-	if n < jitGenMakes && r.jitGenMakeable(o, cl) {
-		e.genMakes = append(e.genMakes, jitGenMake{pc: int32(pc), obj: o})
-		e.genLearned, e.reopt = true, true
-	}
 }
 
 // jitGenMakePool is the pool of e's call at pc of the generator function

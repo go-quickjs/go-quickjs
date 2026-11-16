@@ -36,7 +36,7 @@ func BenchmarkCompileARM64(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			p, err := jitcompile.LowerSSA(fn.Constants[0].Fn)
+			p, err := jitcompile.LowerReg(fn.Constants[0].Fn.RegCode(), fn.Constants[0].Fn)
 			if err != nil {
 				b.Fatal(err)
 			}

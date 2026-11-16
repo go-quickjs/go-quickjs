@@ -21,12 +21,11 @@ import (
 // instance and on the intrinsics; with scopes and direct evals across
 // suspensions; and for-in, whose snapshot a cursor keeps.
 var generatorCases = []struct{ name, want, src string }{
-	// A tree's loop steps a generator whose body has no handler and no
-	// loop's cursor with no recover of the resumption's own: an exception
-	// the body throws, or a call in it, goes to the loop's handler, the
-	// cursor is not closed, the generator's captures are closed, and the
-	// generator is done for every later resumption; one running is still
-	// running for a call in its body.
+	// A loop steps a generator whose body has no handler and no loop's
+	// cursor: an exception the body throws, or a call in it, goes to the
+	// loop's handler, the cursor is not closed, the generator's captures
+	// are closed, and the generator is done for every later resumption; one
+	// running is still running for a call in its body.
 	{"treeStepThrowCaught", `1TypeError{"done":true}{"value":4,"done":true}`,
 		`function* g() { yield 1; null.x } var it = g(), s = ''; try { for (var v of it) s += v } catch (e) { s += e.name } s + JSON.stringify(it.next()) + JSON.stringify(it.return(4))`},
 	{"treeStepThrowDeep", `RangeError`,
@@ -41,10 +40,9 @@ var generatorCases = []struct{ name, want, src string }{
 		`function* g(n) { for (var i = 0; i < n; i++) { if (i == 3) return 'r'; yield i } } var s = []; for (var v of g(10)) s.push(v); var it = g(2); s.push(JSON.stringify([...it]), JSON.stringify(it.next())); s.join()`},
 	{"treeStepBreakCloses", `1,ret`,
 		`var log = []; function* g() { yield 1; yield 2 } var it = g(); it.return = function () { log.push('ret'); return {} }; for (var v of it) { log.push(v); if (v == 1) break } log.join()`},
-	// A yield* in a body the tree's step resumes with no recover: its
-	// cursor a delegation's, which nothing closes; the kind of resumption
-	// pushed at its resumption; a delegate's own result, read as a loop
-	// reads one.
+	// A yield* in a body a loop's step resumes: its cursor a delegation's,
+	// which nothing closes; the kind of resumption pushed at its
+	// resumption; a delegate's own result, read as a loop reads one.
 	{"treeStepDelegates", `01201`,
 		`function* inner(n) { for (let i = 0; i < n; i++) yield i } function* outer(n) { yield* inner(n); yield* inner(2) } var s = ''; for (const v of outer(3)) s += v; s`},
 	{"treeStepDelegatesIterables", `12ab3`,
@@ -307,15 +305,12 @@ func runGeneratorCases(t *testing.T, mk func() *Runtime, rounds int) {
 	}
 }
 
-// TestGeneratorProtocol runs generatorCases in the interpreter and in the
-// tree tier.
+// TestGeneratorProtocol runs generatorCases.
 func TestGeneratorProtocol(t *testing.T) {
 	t.Parallel()
-	for _, on := range []bool{false, true} {
-		t.Run(map[bool]string{false: "interpreter", true: "tree"}[on], func(t *testing.T) {
-			runGeneratorCases(t, func() *Runtime { return newTreeTierForTest(on, Config{}) }, 3)
-		})
-	}
+	t.Run("tree", func(t *testing.T) {
+		runGeneratorCases(t, func() *Runtime { return New(Config{}) }, 3)
+	})
 }
 
 // TestResumeResultInRegisters pins that a resumption's result is a struct

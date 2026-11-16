@@ -47,16 +47,15 @@ function walks() {
 `
 
 // TestJITRegRecursiveRecompiled runs a recursive walk whose levels are
-// native calls of its own code, which learns at its exits the visitors
-// each new walker brings, and checks that the walk is compiled again for
-// them while its outer levels are in its code, as the stack form's code is
-// (otherwiseInUse): its exits stop once it has learned them. Go finishes
-// those levels, each in the code it holds; only a native call of it that
-// has not returned, whose code Go would find by its function's, keeps it
-// from being compiled (regCalled). Counted as levels instead, every level
-// of the recursion Go was finishing kept it from being compiled again, and
-// it left at each new visitor's call for good: Octane Typescript's
-// AstWalker.walk, 285,000 times a run.
+// native calls of its own code, which learns at its exits the visitors each
+// new walker brings, and checks that the walk is compiled again for them
+// while its outer levels are in its code: its exits stop once it has
+// learned them. Go finishes those levels, each in the code it holds; only a
+// native call of it that has not returned, whose code Go would find by its
+// function's, keeps it from being compiled (regCalled). Counted as levels
+// instead, every level of the recursion Go was finishing kept it from being
+// compiled again, and it left at each new visitor's call for good: Octane
+// Typescript's AstWalker.walk, 285,000 times a run.
 func TestJITRegRecursiveRecompiled(t *testing.T) {
 	regBothMarking(t, func(t *testing.T) {
 		regNoInline(t)
@@ -220,11 +219,11 @@ function throws(n) {
 `
 
 // TestJITRegIteratorStepMade runs for...of loops over iterators of script
-// natively, and checks that each step is the stack form's call of Go
-// (jitRegStepMade, jitCallMade's): the step itself, which calls the
-// iterator's next, not the interpreter's instruction run whole on the
-// frame (jitRegWhole) -- and that a break closes the iterator, and what
-// next throws, or a result that is no object, goes to the loop's handler.
+// natively, and checks that each step is a call of Go (jitRegStepMade): the
+// step itself, which calls the iterator's next, not the interpreter's
+// instruction run whole on the frame (jitRegWhole) -- and that a break
+// closes the iterator, and what next throws, or a result that is no object,
+// goes to the loop's handler.
 func TestJITRegIteratorStepMade(t *testing.T) {
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regRangeSrc)
@@ -277,14 +276,13 @@ function Q(x, y) { this.x = -x; this.y = 2 * y }
 function swap() { P = Q }
 `
 
-// TestJITRegInlinedConstructionLearned runs a loop whose callee, inlined
-// in it, constructs with a global's function, and checks that no
-// construction is made by Go: the construction is seeded from the
-// function the global holds when the loop is compiled, in the callee
-// inlined (regConstructorNow, jitRegSeedConstruct), as the stack form's
-// compiles seed one (jitSeedCalls). Before, the construction was learned
-// only at a call of Go from code of the callee's, or of the code inlining
-// it, which then had to be compiled again for it.
+// TestJITRegInlinedConstructionLearned runs a loop whose callee, inlined in
+// it, constructs with a global's function, and checks that no construction
+// is made by Go: the construction is seeded from the function the global
+// holds when the loop is compiled, in the callee inlined
+// (regConstructorNow, jitRegSeedConstruct). Before, the construction was
+// learned only at a call of Go from code of the callee's, or of the code
+// inlining it, which then had to be compiled again for it.
 func TestJITRegInlinedConstructionLearned(t *testing.T) {
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regInlinedCtorSrc)

@@ -11,24 +11,23 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// Register callees that keep their arguments (regCode's args), inlined
-// with their call's arguments, as the stack form inlines them (jitFeedback's
-// Inline, forwardInline): one that reads them by index and counts them
-// alone (jitRegReadsArguments) reads the call's (ssa.InlineSite's
-// ReadsArguments), and one that hands them on, f.apply(x, arguments)
-// (jitRegForwards), is inlined with them (Arguments), its apply_args the
-// call of f with them, f inlined in its turn (Forward). The frame Go makes
-// of such a callee's level at an exit inside it is given the arguments
-// from its caller's call's window, or from the frame that forwarded them
-// (jitRegInlineArgs).
+// Register callees that keep their arguments (regCode's args), inlined with
+// their call's arguments (jitRegFeedback's Inline, forwardInline): one that
+// reads them by index and counts them alone (jitRegReadsArguments) reads
+// the call's (ssa.InlineSite's ReadsArguments), and one that hands them on,
+// f.apply(x, arguments) (jitRegForwards), is inlined with them (Arguments),
+// its apply_args the call of f with them, f inlined in its turn (Forward).
+// The frame Go makes of such a callee's level at an exit inside it is given
+// the arguments from its caller's call's window, or from the frame that
+// forwarded them (jitRegInlineArgs).
 
 // jitRegReadsArguments reports whether cl's register code keeps its
 // arguments only to read them by index and count them (args_index,
 // args_len): no arguments object made (arguments), none handed on
 // (apply_args), no rest parameter, and no parameter a sloppy function's
-// object would alias -- as the stack form's jitReadsArguments. A closure
-// no call ran yet, a template of one its maker makes (madeInline), is
-// asked by its function's register code, which its first call gets.
+// object would alias. A closure no call ran yet, a template of one its
+// maker makes (madeInline), is asked by its function's register code, which
+// its first call gets.
 func jitRegReadsArguments(cl *closure) bool {
 	rc := cl.fn.RegCode()
 	if cl.reg != nil {
@@ -50,7 +49,7 @@ func jitRegReadsArguments(cl *closure) bool {
 // f.apply(x, arguments) (apply_args), as they were given (compile's
 // ForwardsNatively), and makes no arguments object: what reads them besides
 // reads them by index and counts them, of no parameter an object would
-// alias -- the stack form's jitForwardsCall.
+// alias.
 func jitRegForwards(cl *closure) bool {
 	c := cl.reg
 	if c == nil || !c.args || c.rc.KeepsArgs || !jitcompile.ForwardsNatively(cl.fn) {
@@ -70,20 +69,17 @@ func jitRegForwards(cl *closure) bool {
 	return forwards && !(reads && cl.fn.MappedArguments && cl.fn.ParamCount > 0)
 }
 
-// jitRegForwardTarget is the function the apply_args at register pc rpc
-// of cl's code hands its arguments to, inlined where cl is with argc of
-// them: for a construction of ctor, k of this.k.apply(this, arguments), a
-// data property of ctor's prototype, as the stack form's
-// jitForwardSiteTarget finds it; else the one function cl's own code
-// learned it calls there, its forwards settled (jitRegForwardSeen), as
-// jitForwardLearned; else, for a construction, f as the read of it finds
-// it now (jitRegForwardGuess), as jitForwardSiteTarget's jitChainValue. A
-// plain call is never inlined for a guess, as the stack form's is not:
-// the forwarder's closures a call meets each hand their arguments to a
-// function of their own -- forward_poly's four -- and inlined for the f
-// of the one the call's cache held, the call left native code at three
-// turns in four. A function native callers may call, of cl's realm and
-// scope; or nil.
+// jitRegForwardTarget is the function the apply_args at register pc rpc of
+// cl's code hands its arguments to, inlined where cl is with argc of them:
+// for a construction of ctor, k of this.k.apply(this, arguments), a data
+// property of ctor's prototype; else the one function cl's own code learned
+// it calls there, its forwards settled (jitRegForwardSeen); else, for a
+// construction, f as the read of it finds it now (jitRegForwardGuess). A
+// plain call is never inlined for a guess: the forwarder's closures a call
+// meets each hand their arguments to a function of their own --
+// forward_poly's four -- and inlined for the f of the one the call's cache
+// held, the call left native code at three turns in four. A function native
+// callers may call, of cl's realm and scope; or nil.
 func (r *Runtime) jitRegForwardTarget(cl *closure, ctor *Object, rpc, argc int) *Object {
 	c := cl.reg
 	if c == nil || rpc >= len(c.rc.Code) || c.rc.Code[rpc].Op() != bytecode.RApplyArgs || r.applyFn == nil {
@@ -169,10 +165,9 @@ func jitRegSiteName(cl *closure, rc *bytecode.RegCode, n int) (Atom, bool) {
 
 // forwardInline is the call apply_args at the program's instruction pc of
 // an inlined forwarding callee (f.fwd) makes: of the function it hands its
-// arguments on to (jitRegForwardTarget), inlined with the arguments its
-// own call gave it (ssa.InlineSite's Forward), as the stack form's
-// forwardInline -- one that reads them, so (ReadsArguments), one that
-// forwards them in turn, so too (Arguments).
+// arguments on to (jitRegForwardTarget), inlined with the arguments its own
+// call gave it (ssa.InlineSite's Forward) -- one that reads them, so
+// (ReadsArguments), one that forwards them in turn, so too (Arguments).
 func (f *jitRegFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 	fb := f.fb
 	r := fb.r
@@ -222,17 +217,16 @@ func (f *jitRegFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 
 // forwardProperty is the property site of the read at register pc rpc of
 // key, of a forwarding constructor's frame (bytecode.LeafForward,
-// this.k.apply(this, arguments)) inlined in its construction (f.fwd),
-// known from its receiver as the stack form's forwardProperty has it:
-// this.k, the first read, as an object of the construction's pool finds
-// it -- the next its filling makes -- and k's apply, the second, as k
-// does (jitRegForwardTarget). Compiled for what the forwarder's own cache
-// met -- the classes of every construction it made, a library's -- the
-// inlined read left native code at each class it had not met, and the
-// construction, once it had left often enough, was made by a native call
-// of the forwarder, whose apply_args calls up to jitCallTargets methods
-// natively and the rest by Go: RayTrace's IntersectionInfo's initialize,
-// by Go at every construction from then on, in some runs.
+// this.k.apply(this, arguments)) inlined in its construction (f.fwd), known
+// from its receiver: this.k, the first read, as an object of the
+// construction's pool finds it -- the next its filling makes -- and k's
+// apply, the second, as k does (jitRegForwardTarget). Compiled for what the
+// forwarder's own cache met -- the classes of every construction it made, a
+// library's -- the inlined read left native code at each class it had not
+// met, and the construction, once it had left often enough, was made by a
+// native call of the forwarder, whose apply_args calls up to jitCallTargets
+// methods natively and the rest by Go: RayTrace's IntersectionInfo's
+// initialize, by Go at every construction from then on, in some runs.
 func (f *jitRegFeedback) forwardProperty(rpc int, key Atom) (ssa.PropertySite, bool) {
 	fb := f.fb
 	r, cl, rc := fb.r, fb.cl, f.rc
@@ -287,11 +281,10 @@ func (r *Runtime) jitRegInlineArgs(c *regCode, cwb, at int, args []Value) []Valu
 }
 
 // jitRegForwardGuess is f of the apply_args at register pc rpc of cl's
-// code, f.apply(x, arguments), as the read of f just before it finds it
-// now -- a global's, a captured binding's -- as the stack form guesses a
-// forwarding constructor's (jitForwardSiteTarget's jitChainValue): what a
-// forwarding construction inlined hands its arguments to, its call
-// inlined, which checks it is. Or nil.
+// code, f.apply(x, arguments), as the read of f just before it finds it now
+// -- a global's, a captured binding's: what a forwarding construction
+// inlined hands its arguments to, its call inlined, which checks it is. Or
+// nil.
 func (r *Runtime) jitRegForwardGuess(cl *closure, rpc int) *Object {
 	rc := cl.reg.rc
 	if rpc < 3 {
@@ -337,10 +330,9 @@ func (r *Runtime) jitRegForwardGuess(cl *closure, rpc int) *Object {
 // rpc of run's frame, f.apply(x, arguments) of the realm's apply, which the
 // code checked, f, apply and x its call's operands (ssa.CallSite's Forward
 // of Go): f called with x and the frame's arguments, from the context its
-// call or its entry wrote them to (jitForwardEntry), as the stack form's
-// call of Go makes it (jitForwardMade) -- or the frame's own past what a
-// context holds. What it calls the code learns, to call natively once
-// compiled again (jitRegCallSeen).
+// call or its entry wrote them to (jitForwardEntry) -- or the frame's own
+// past what a context holds. What it calls the code learns, to call
+// natively once compiled again (jitRegCallSeen).
 func (r *Runtime) jitRegForwardMade(ctx *abi.Context, idx int, run jitRegRun, rpc int) bool {
 	s := r.jit
 	f, c := run.f, run.c
@@ -361,15 +353,12 @@ func (r *Runtime) jitRegForwardMade(ctx *abi.Context, idx int, run jitRegRun, rp
 	r.noteRegGoCall(regAt(c.code, rpc), false, target)
 	f.pc = regSrc(c, rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
-	goCallDepth := s.goCallDepth
-	s.goCallDepth = r.frameDepth + 1
 	// A copy: a native call's next call writes the context over.
 	i, n := len(r.argStack), len(args)
 	r.argStack = append(r.argStack, args...)
 	v, err := r.applyCall(target, this, r.argStack[i:i+n:i+n])
 	clear(r.argStack[i:])
 	r.argStack = r.argStack[:i]
-	s.goCallDepth = goCallDepth
 	s.ssaCtx = last
 	if s.ssaSharedGen != shared {
 		r.jitShareContexts(idx, f)

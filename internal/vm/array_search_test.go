@@ -121,9 +121,8 @@ var arraySearchCases = []struct{ src, want string }{
 // TestArraySearches pins Array.prototype's indexOf, lastIndexOf and
 // includes, which compare an array's elements where they are when they are
 // all there is to its indices (searchElems), and are called without a frame
-// then (elemArrIndexOf): each search is made three times, by the
-// interpreter at the top level and by the tree tier in each function's
-// loop, against Node's answers.
+// then (elemArrIndexOf): each search is made three times, at the top
+// level and in each function's loop, against Node's answers.
 func TestArraySearches(t *testing.T) {
 	t.Parallel()
 	r := New(Config{})

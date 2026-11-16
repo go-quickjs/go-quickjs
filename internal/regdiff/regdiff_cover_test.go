@@ -26,8 +26,9 @@ func regDiffAll(t *testing.T, src string, calls []string) {
 	}
 }
 
-// The last refusals' forms (docs/register-interpreter.md, "Stage 2: zero
-// refusals"), compared with the register tier off and on.
+// The forms the backend refused last, before it compiled every function
+// (docs/register-interpreter.md, "Where it runs"), compared with the
+// recorded answers.
 
 // TestRegDiffCallTargets compares sloppy code's assignments to a call --
 // =, a compound assignment, an update and a for-in or for-of head -- each

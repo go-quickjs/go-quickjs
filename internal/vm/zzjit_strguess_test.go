@@ -4,8 +4,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // A method read compiled before its cache knew a receiver, which the code
@@ -37,13 +35,11 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, "f([1, 2], 0)")); err != nil {
 		t.Fatal(err)
 	}
-	if regJITForTest() {
-		// Register code's first call begins its budget, which its next
-		// call, its threshold's invocation spent, compiles at (jitRegCallTier):
-		// that one too reads nothing.
-		if _, err := r.Run(compileForTest(t, "f([1, 2], 0)")); err != nil {
-			t.Fatal(err)
-		}
+	// Register code's first call begins its budget, which its next
+	// call, its threshold's invocation spent, compiles at (jitRegCallTier):
+	// that one too reads nothing.
+	if _, err := r.Run(compileForTest(t, "f([1, 2], 0)")); err != nil {
+		t.Fatal(err)
 	}
 	// Its code's state: the stack form's entry, or the register code's
 	// state that outlives its compiles, whose entrySlow and loopSlow keep
@@ -58,12 +54,9 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.entrySlow, e.loopSlow = false, false
-	site := cl.fn.Code[jitPCOf(t, cl.fn, "get_prop_this")].B
-	if jitRegCodeOfForTest(r, cl) {
-		// The register code's method read, get_method's or get_method_w's,
-		// whose cache is its C.
-		site = jitRegMethodSiteForTest(t, cl.fn)
-	}
+	// The register code's method read, get_method's or get_method_w's,
+	// whose cache is its C.
+	site := jitRegMethodSiteForTest(t, cl.fn)
 	if c := &cl.ic[site]; c.fills == 0 {
 		t.Fatal("the interpreter did not fill the read's cache")
 	}
@@ -96,16 +89,4 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 	if n := r.jit.hosts - hosts; n != 0 {
 		t.Errorf("f left native code %d times in 1,000 reads", n)
 	}
-}
-
-// jitPCOf is the PC of fn's first instruction of the opcode named op.
-func jitPCOf(t *testing.T, fn *bytecode.Function, op string) int {
-	t.Helper()
-	for pc, in := range fn.Code {
-		if in.Op.String() == op {
-			return pc
-		}
-	}
-	t.Fatalf("no %s in %s", op, fn.Name)
-	return 0
 }

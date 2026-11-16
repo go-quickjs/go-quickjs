@@ -1353,8 +1353,7 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 // handler's, which a throw and the returns routed through the clause enter
 // with their completion record beneath it, and its rethrow carries on. A
 // loop whose body is a try statement then runs no record and no rethrow at
-// each turn, as it does none for a try with only a catch, and the tree
-// tier runs it as such a loop. Code compiled for a debugger has the clause
+// each turn, as it does none for a try with only a catch. Code compiled for a debugger has the clause
 // once, so that a breakpoint in it is one statement; and a clause inside a
 // clause has it once, so that nested ones are not copied again for each
 // copy of the one outside.

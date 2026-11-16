@@ -7,8 +7,6 @@ import "testing"
 // does not: the 50-bit split of the held form, results that cross between
 // the two forms in both directions, the edges of the int64 range in every
 // operator, and the places a BigInt is a key, a stored element or text.
-// The functions with loops and no calls run as trees; the rest is the
-// interpreter.
 func TestShortBigInt(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ src, want string }{

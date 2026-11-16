@@ -2,11 +2,11 @@ package vm
 
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
-// Top-level code in the register form (docs/register-interpreter.md, "Stage
-// 2: zero refusals"): the declarations a script makes before its first
+// Top-level code in the register form (docs/register-interpreter.md, "From
+// the AST"): the declarations a script makes before its first
 // statement, and the initializations of its lexical bindings, each a cold
 // operation that does what the stack form's instruction of the same name
-// does (executeAt's case, the tree's globalOp).
+// stands for.
 
 // regCheckGlobalLex is check_global_lex.
 func (r *Runtime) regCheckGlobalLex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
@@ -241,7 +241,7 @@ func (r *Runtime) regGlobalOpt(f *frame, name Atom) (Value, error) {
 
 // regCheckGlobalRef is check_global_ref: whether the global name resolves,
 // settled where a strict assignment's reference is evaluated, before its
-// value, through cache site site, as executeAt's case settles it.
+// value, through cache site site.
 func (r *Runtime) regCheckGlobalRef(f *frame, name Atom, site int) (bool, error) {
 	cl := f.cl
 	env := cl.scope()

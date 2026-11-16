@@ -2,18 +2,13 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // TestApplyArgumentsCallsDirectly pins f.apply(this, arguments) -- and a
 // constructor that is only this.initialize.apply(this, arguments), which
 // leafForward answers -- calling the target as a call from the loop does:
 // the result, this, the arguments, a primitive this boxed for a sloppy
-// target, a class constructor refused, an exception's stack, and, in the
-// tree tier, the target given its tree's call (planTreeCall), which r.call
-// never gave it.
+// target, a class constructor refused, and an exception's stack.
 func TestApplyArgumentsCallsDirectly(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -34,21 +29,19 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		try { fwdClass() } catch (e) { out.push(e instanceof TypeError) }
 		try { fwdThrow() } catch (e) { out.push(/thrower/.test(e.stack), /fwdThrow/.test(e.stack)) }
 		[out.join(), Point.prototype.initialize]`
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatalf("tree=%v: %v", tree, err)
-		}
-		res := v.Object().elemsOf()
-		if got, want := res[0].String().Go(), "601,302,object,true,true,true,true"; got != want {
-			t.Errorf("tree=%v: got %s, want %s", tree, got, want)
-		}
-		if fd := res[1].Object().fn(); tree && fd.treeCall == nil {
-			t.Errorf("initialize, called by apply, was not given its tree's call")
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	res := v.Object().elemsOf()
+	if got, want := res[0].String().Go(), "601,302,object,true,true,true,true"; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if fd := res[1].Object().fn(); fd.regCall == nil {
+		t.Errorf("initialize, called by apply, was not given its tree's call")
+	}
+	r.Close()
 }
 
 // TestForwarderMethodsByShape pins what leafForward answers once its
@@ -58,8 +51,7 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 // on the prototype, an own method, Function.prototype.apply patched and
 // restored, a method with an apply of its own, a bound method, a proxy as
 // the prototype, the prototype replaced, and a throw's stack through the
-// forwarder. The answers are Node's; the stack interpreter, the tree tier
-// and register code each give them.
+// forwarder. The answers are Node's.
 func TestForwarderMethodsByShape(t *testing.T) {
 	const src = `
 		var Class = { create: function() { return function() { this.initialize.apply(this, arguments); }; } };
@@ -97,15 +89,9 @@ func TestForwarderMethodsByShape(t *testing.T) {
 		r.join("; ")`
 	const want = "440000; 1; 20; proto3; 1:40; undefined:50; own6; undefined; 8; one1; two2; Error: boom | at Object.initialize | at new <anonymous>"
 	for _, mode := range []string{"stack", "tree", "reg"} {
-		compiler.SetRegisterForm(mode == "reg")
 		fn := compileForTest(t, src)
-		compiler.SetRegisterForm(bytecode.RegDefault())
-		SetTreeTier(mode != "stack")
-		SetRegTier(mode == "reg")
 		r := New(Config{})
 		v, err := r.Run(fn)
-		SetRegTier(bytecode.RegDefault())
-		SetTreeTier(true)
 		if err != nil {
 			t.Fatalf("%s: %v", mode, err)
 		}

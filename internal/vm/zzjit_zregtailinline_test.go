@@ -11,15 +11,14 @@ import (
 
 // regTailInlineSrc's callers call register functions whose calls are in
 // tail position (tail_call_w, tail_call_method_w), which register code
-// inlines as the stack form's does, a call in tail position as the
-// ordinary call: a method returning one of two methods' results, as
-// Richards' tasks return their scheduler's, and an arrow's, which reads
-// the this it captured; a recursion whose calls of inc in tail position
-// are inlined, made deep in the stack too, where the interpreter gives
-// the frame up to the call; a strict pair calling each other in tail
-// position, run deeper than any stack of frames would go; and calls whose
-// results go to registers a closure captures, a construction's and a
-// call's.
+// inlines, a call in tail position as the ordinary call: a method returning
+// one of two methods' results, as Richards' tasks return their scheduler's,
+// and an arrow's, which reads the this it captured; a recursion whose calls
+// of inc in tail position are inlined, made deep in the stack too, where
+// the interpreter gives the frame up to the call; a strict pair calling
+// each other in tail position, run deeper than any stack of frames would
+// go; and calls whose results go to registers a closure captures, a
+// construction's and a call's.
 const regTailInlineSrc = `
 class Task {
 	constructor(n) { this.n = n; this.held = false }
@@ -78,8 +77,7 @@ func TestJITRegTailInline(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			RecordJITCompiles(true)
-			defer RecordJITCompiles(false)
+			recordJITCompilesForTest(t)
 			rts := regNativeRuntimes(t, regTailInlineSrc)
 			rts[0].SetJITWarmUp(1, 1)
 			for _, c := range []struct {

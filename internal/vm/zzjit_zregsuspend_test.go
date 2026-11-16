@@ -5,9 +5,6 @@ package vm
 import (
 	"fmt"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regSuspendSrc has a generator, an async function and top-level code,
@@ -60,16 +57,7 @@ func TestJITRegSuspendedAndTopLevel(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			compiler.SetRegisterForm(true)
 			prog := compileForTest(t, regSuspendSrc)
-			compiler.SetRegisterForm(false)
-			SetRegTier(true)
-			was := SetJITRegTier(true)
-			t.Cleanup(func() {
-				compiler.SetRegisterForm(bytecode.RegDefault())
-				SetRegTier(bytecode.RegDefault())
-				SetJITRegTier(was)
-			})
 			var got [2]string
 			var rts [2]*Runtime
 			for i := range rts {

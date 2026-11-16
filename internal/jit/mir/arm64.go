@@ -7315,14 +7315,14 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 		c.a.Op(arm64.Eor, a64A, a64A, a64D, true)
 		c.movImm(a64D, abi.HasCacheMul)
 		c.a.Mul(a64A, a64A, a64D)
-		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 64-abi.HasCacheBits+1, true)
-		c.a.ShiftImm(arm64.Lsl, a64A, a64A, hasEntryShift+1, true)
+		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 64-abi.HasCacheBits+abi.HasCacheWaysLog, true)
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, hasEntryShift+abi.HasCacheWaysLog, true)
 		c.movImm(a64D, uint64(c.f.HasCache))
 		c.a.Op(arm64.Add, a64A, a64A, a64D, true)
 		hit := c.a.NewLabel()
-		for way := range 2 {
+		for way := range abi.HasCacheWays {
 			next := slow
-			if way == 0 {
+			if way < abi.HasCacheWays-1 {
 				next = c.a.NewLabel()
 			}
 			c.a.Load(a64D, a64A, abi.HasEntryKey)
@@ -7337,7 +7337,7 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 			c.a.Load(a64D, a64A, abi.HasEntryProto)
 			c.a.Cmp(a64B, a64D, true)
 			c.a.BCond(arm64.NE, next)
-			if way == 0 {
+			if way < abi.HasCacheWays-1 {
 				c.a.B(hit)
 				c.a.Bind(next)
 				c.a.AddImm(a64A, a64A, abi.HasEntrySize, true)

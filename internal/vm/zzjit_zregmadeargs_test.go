@@ -80,8 +80,7 @@ func TestJITRegMadeClosuresReadArguments(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			RecordJITCompiles(true)
-			defer RecordJITCompiles(false)
+			recordJITCompilesForTest(t)
 			rts := regNativeRuntimes(t, regMadeArgsSrc)
 			r := rts[0]
 			r.SetJITWarmUp(1, 1)

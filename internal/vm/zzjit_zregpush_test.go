@@ -39,12 +39,11 @@ function frozen(n, k) {
 `
 
 // TestJITRegPushLeaf: register code's push of other than one value is a
-// leaf, a call of Go of its own (ssa.GoLeaf), as the stack form's code
-// learns it at its calls of Go (jitPlainCall's push of several), where
-// the register form had made it a generic call of Go; a push of one
-// value native code appends itself. Each answer is the interpreter's,
-// with the collector idle and marking: a frozen array's TypeError, the
-// count before it, the array as it was.
+// leaf, a call of Go of its own (ssa.GoLeaf), where the register form had
+// made it a generic call of Go; a push of one value native code appends
+// itself. Each answer is the interpreter's, with the collector idle and
+// marking: a frozen array's TypeError, the count before it, the array as it
+// was.
 func TestJITRegPushLeaf(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

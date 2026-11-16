@@ -31,7 +31,7 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		reflect.TypeFor[Runtime](),
 		reflect.TypeFor[regState](),
 		reflect.TypeFor[regCode](),
-		reflect.TypeFor[treeBigSeen](),
+		reflect.TypeFor[bigSeenMarks](),
 		reflect.TypeFor[regCallCache](),
 		reflect.TypeFor[frame](),
 		reflect.TypeFor[thisBinding](),
@@ -168,6 +168,7 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"ClassProxy":      uint64(ClassProxy),
 		"hasCacheBits":    uint64(hasCacheBits),
 		"hasCacheMul":     uint64(hasCacheMul),
+		"hasCacheWaysLog": uint64(hasCacheWaysLog),
 		"keySlotMul":      keySlotMul,
 		"intStringsLen":   uint64(len(Runtime{}.intStrings)),
 

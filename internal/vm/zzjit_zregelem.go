@@ -12,29 +12,27 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// Elements' kinds learned at register code's exits, as the stack form's
-// code learns them (jitIndexSeen, jitKeyedWriteSeen, jitStringAddSeen):
-// an element read that met a typed array, a BigInt typed array, a string
-// or an object read by a name, an element write to an object native code
-// does not store to, an addition that met a string -- kept by register pc
-// in what the function's register code learned (jitState's regLearned),
-// its lists the stack form's entry's (typedReads, stringReads, keyedReads,
+// Elements' kinds learned at register code's exits (jitRegElemSeen,
+// jitRegStringAddSeen): an element read that met a typed array, a BigInt
+// typed array, a string or an object read by a name, an element write to an
+// object native code does not store to, an addition that met a string --
+// kept by register pc in what the function's register code learned
+// (jitState's regLearned), its lists (typedReads, stringReads, keyedReads,
 // keyedWrites), and the lowering's hints (jitLearned's regHints), with
 // which every lowering of its register code is made (jitRegLower).
 
 // jitRegLower is cl's register code rc lowered as kind says -- for an entry
 // (jitLowerSSA), hot (jitLowerHot), or for native callers and inlining
 // (jitLowerInline) -- with the hints its code learned at its exits, from
-// the runtime's programs (regLowered), as jitLower is the stack form's:
-// each kind is lowered once for the hints as they are, and again once its
-// code has learned more (jitRegLowering). A compile asks for its
-// function's program and for each callee's it inlines, and a function is
-// compiled again as it learns and inlined into each of its callers:
-// lowered anew at every ask, Octane's Typescript lowered some 0.6 GB of
-// programs a run, half its compiles' time. A program is checked
-// (ir.Program's Validate) once, as it is lowered, its error the
-// lowering's: checked at every ask, the checks of the callees inlined
-// were a sixth of the build's time.
+// the runtime's programs (regLowered): each kind is lowered once for the
+// hints as they are, and again once its code has learned more
+// (regLowering). A compile asks for its function's program and for each
+// callee's it inlines, and a function is compiled again as it learns and
+// inlined into each of its callers: lowered anew at every ask, Octane's
+// Typescript lowered some 0.6 GB of programs a run, half its compiles'
+// time. A program is checked (ir.Program's Validate) once, as it is
+// lowered, its error the lowering's: checked at every ask, the checks of
+// the callees inlined were a sixth of the build's time.
 func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKind) (*ir.Program, error) {
 	s := r.jit
 	if s == nil || rc == nil || rc != cl.fn.RegCompiled() {
@@ -83,7 +81,7 @@ func (s *jitState) regLowering(key jitKey) *jitLowering {
 }
 
 // dropRegLowering forgets the register lowering l of the function whose key
-// is key, as dropLowering forgets the stack form's.
+// is key.
 func (s *jitState) dropRegLowering(key jitKey, l *jitLowering) {
 	delete(s.regLowered, key)
 	s.lowerBytes -= l.bytes
@@ -180,15 +178,15 @@ func (r *Runtime) jitRegElemWrite(c *regCode, wb, rpc int) (o, k, v Value, ok bo
 
 // jitRegElemSeen learns, in l, what the register code's element access at
 // register pc rpc of c met, on the frame whose window is at wb, before Go
-// runs it: at a host exit (reference), what a read made by its cell met
-// -- a string's, a typed array's or a BigInt typed array's element, or an
+// runs it: at a host exit (reference), what a read made by its cell met --
+// a string's, a typed array's or a BigInt typed array's element, or an
 // object's property by its name, which the next compile reads as such, or
 // Go from native code (ssa's StringRead, TypedRead, TypedBigRead,
 // KeyedRead) -- and a write to an object native code does not store to,
 // which Go stores from native code (KeyedWrite); at a deoptimization, a
-// read made as a number that met what is none, read as it is from the
-// next lowering on (Hints' ElementReads, StringReads), as the stack form's
-// code learns it (jitIndexSeen). It reports whether it learned anything.
+// read made as a number that met what is none, read as it is from the next
+// lowering on (Hints' ElementReads, StringReads). It reports whether it
+// learned anything.
 func (r *Runtime) jitRegElemSeen(l *jitEntry, c *regCode, wb, rpc int, reference bool) bool {
 	learned := false
 	if o, k, ok := r.jitRegElemRead(c, wb, rpc); ok {
@@ -205,8 +203,8 @@ func (r *Runtime) jitRegElemSeen(l *jitEntry, c *regCode, wb, rpc int, reference
 	return learned
 }
 
-// jitRegIndexSeen is jitIndexSeen for register code: the element read at
-// register pc rpc, of receiver o at key k, learned in l.
+// jitRegIndexSeen learns the element read at register pc rpc, of receiver o
+// at key k, in l.
 func (r *Runtime) jitRegIndexSeen(l *jitEntry, rpc int, o, k Value, reference bool) bool {
 	pc := int32(rpc)
 	if slices.Contains(l.typedReads, pc) || jitBigReadAt(l.typedReads, rpc) != 0 || slices.Contains(l.stringReads, pc) || slices.Contains(l.keyedReads, pc) {
@@ -274,8 +272,7 @@ func (r *Runtime) jitRegIndexSeen(l *jitEntry, rpc int, o, k Value, reference bo
 // register pc rpc of c, whose frame's window at wb holds the state at the
 // instruction's start, an addition -- add's, add_imm's -- that met a
 // string, which every lowering from here makes Go's (Hints' StringAdds),
-// its operands read as they are, as the stack form's code learns it
-// (jitStringAddSeen). It reports whether it learned one.
+// its operands read as they are. It reports whether it learned one.
 func (r *Runtime) jitRegStringAddSeen(l *jitEntry, c *regCode, wb, rpc int) bool {
 	if rpc < 0 || rpc >= len(c.rc.Code) || slices.Contains(l.regHints.StringAdds, int32(rpc)) {
 		return false
@@ -350,8 +347,7 @@ func (f *jitRegFeedback) KeyedWrite(pc int) bool {
 
 // UpvalueTyped is ssa.UpvalueTypedFeedback's: whether the captured binding
 // the read at the program's instruction pc reads (ir.UpvalueRead's Key)
-// holds a typed array in the closure the code is compiled for, as the
-// stack form's (jitFeedback's UpvalueTyped).
+// holds a typed array in the closure the code is compiled for.
 func (f *jitRegFeedback) UpvalueTyped(pc int) (uint8, bool) {
 	cl := f.fb.cl
 	if cl == nil || pc < 0 || pc >= len(f.p.Code) || f.p.Code[pc].Op != ir.UpvalueRead {
@@ -368,10 +364,9 @@ func (f *jitRegFeedback) UpvalueTyped(pc int) (uint8, bool) {
 	return jitTypedKind(true, v), true
 }
 
-// jitRegCtxEntry is the register code a call of Go was made from, with
-// ctx, as jitRunEntry finds the stack form's: the run's at its own level,
-// or else, at a native callee's level, its closure's code; nil where ctx
-// runs no register code.
+// jitRegCtxEntry is the register code a call of Go was made from, with ctx:
+// the run's at its own level, or else, at a native callee's level, its
+// closure's code; nil where ctx runs no register code.
 func (r *Runtime) jitRegCtxEntry(ctx *abi.Context) *jitRegEntry {
 	s := r.jit
 	idx := int(ctx.Level)

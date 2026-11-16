@@ -11,12 +11,12 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
-// treeScripts are run with the tree tier and without it, and must give the
-// same answers: each value, each error and each stack trace. Between them
-// they run every instruction the tier builds, and the slow path behind each
-// fast one -- a valueOf, a getter, a proxy, a hole, a BigInt, a string, an
-// exception from inside an expression -- and values left on the stack across
-// blocks, by ?:, && and ||.
+// treeScripts are each run twice, in runtimes of their own, and must give
+// the same answers: each value, each error and each stack trace. Between
+// them they run the slow path behind each fast one -- a valueOf, a getter,
+// a proxy, a hole, a BigInt, a string, an exception from inside an
+// expression -- and values left on the stack across blocks, by ?:, && and
+// ||.
 var treeScripts = []string{
 	// Arithmetic, bitwise and comparison operators over numbers.
 	`function f(n) { var r = []; for (var i = -3; i < n; i++) { var x = i * 1.5, y = i - 2;
@@ -329,11 +329,10 @@ var treeScripts = []string{
 	   r.push(fs.map(function (f) { return f() }).join("/"), o.a(1));
 	   return r.join() }
 	 run()`,
-	// Control flow the tier rebuilds as structures (ztree_flow.go): each
-	// kind of loop, if and else in them, break and continue, labelled
-	// ones to an outer loop, a return from inside, a condition of && and
-	// ||, a switch with fallthrough, and loops whose body leaves by an
-	// exception or a call in tail position.
+	// Control flow: each kind of loop, if and else in them, break and
+	// continue, labelled ones to an outer loop, a return from inside, a
+	// condition of && and ||, a switch with fallthrough, and loops whose
+	// body leaves by an exception or a call in tail position.
 	`function a(n) { var r = []; for (var i = 0; i < n; i++) {} r.push(i);
 	   var j = 0; while (j < n) { r.push(j); j += 2 } var k = 0; do { k++ } while (k < n); r.push(k);
 	   do { k-- } while (false); r.push(k); var m = 0; while (true) { if (++m > n) break } r.push(m);
@@ -378,7 +377,7 @@ var treeScripts = []string{
 	// An arrow's this through eval code, which may be inside a derived
 	// constructor (ArrowThisValue): an arrow of eval code in a function and
 	// in a derived constructor, before super() and after, and one calling
-	// eval of this, each in a loop so that the tree is built.
+	// eval of this, each in a loop.
 	`class B { constructor() { this.n = 1 } }
 	 class D extends B { constructor(early) { let a = () => eval("(() => { let r = 0; for (let i = 0; i < 2; i++) r += this.n; return r })()");
 	   if (early) a(); super(); this.n = 4; this.out = a() + eval("(() => { let r = 0; for (let i = 0; i < 2; i++) r += this.n; return r })()") } }
@@ -401,33 +400,27 @@ func treeRun(t *testing.T, src string) string {
 	return v.String()
 }
 
-// TestTreeTierMatchesInterpreter runs each of treeScripts with every
-// function the tree tier can build built, and compares it with the
-// interpreter's run.
+// TestTreeTierMatchesInterpreter runs each of treeScripts twice and
+// compares the runs, and checks that register code was built.
 func TestTreeTierMatchesInterpreter(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	for _, src := range treeScripts {
-		vm.SetTreeTier(false)
 		want := treeRun(t, src)
-		vm.SetTreeTier(true)
-		before := vm.TreesBuilt()
+		before := vm.RegsBuilt()
 		got := treeRun(t, src)
 		if got != want {
 			t.Errorf("%s\n tree: %s\ninterp: %s", src, got, want)
 		}
-		if vm.TreesBuilt() == before {
+		if vm.RegsBuilt() == before {
 			t.Errorf("%s\nno function was built as a tree", src)
 		}
 	}
 }
 
-// TestGlobalWriteSites pins, in both tiers, writes to globals and strict
-// mode's check before one where the slot a site remembers stops being the
-// name's. The tiers share the sites' code, so comparing them is not enough.
-// A strict assignment whose value creates the global it names is still a
+// TestGlobalWriteSites pins writes to globals and strict mode's check
+// before one where the slot a site remembers stops being the name's. A
+// strict assignment whose value creates the global it names is still a
 // ReferenceError, as the specification says and C QuickJS no longer does.
 func TestGlobalWriteSites(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	var src string
 	for _, s := range treeScripts {
 		if strings.HasPrefix(s, "globalThis.g1 = 0;") {
@@ -437,21 +430,19 @@ func TestGlobalWriteSites(t *testing.T) {
 	const want = "2,3 1,1  ReferenceError: g1 is not defined ReferenceError: g1 is not defined 9 1,2 0,0 7,8 7,0 " +
 		"TypeError 7,0 1 set0,get,set1,get,get,set0,get,set0,get,set0,get"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }
 
-// TestArrayAppendThroughTheChain pins, in both tiers, assignments at an
+// TestArrayAppendThroughTheChain pins assignments at an
 // array's end, which skip the walk up the chain when nothing on it has an
 // element or an index -- and must take it whenever something does: a setter
 // or a read-only element on Array.prototype or Object.prototype, a proxy or
 // an object with indices as the prototype, an accessor on the array itself,
 // an array that may not grow, a sparse one. C QuickJS and Node agree.
 func TestArrayAppendThroughTheChain(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `function fill(a, n) { for (var i = 0; i < n; i++) a[i] = i; return a; }
 		function sfill(a, n) { "use strict"; for (var i = 0; i < n; i++) a[i] = i; return a; }
 		var log = [], r = [];
@@ -475,20 +466,18 @@ func TestArrayAppendThroughTheChain(t *testing.T) {
 	const want = "0,1,2 0,1,g,3|4 3 ro,1 TypeError 0 TypeError 0 TypeError 2 0,1 own,1 0,1,2,5001 3 true 2 0,1,2 " +
 		"A2,A2,O1,P0,P1,C0"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }
 
-// TestArgumentsReads pins, in both tiers, arguments[i] and arguments.length in
+// TestArgumentsReads pins arguments[i] and arguments.length in
 // functions that read the arguments themselves until something needs the
 // object: a mapped index naming a parameter, a key that names no argument, a
 // write, a delete, a call through it, apply. And that a function that
 // rebinds the name arguments does not. Node gives the same answers.
 func TestArgumentsReads(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	cases := []struct{ src, want string }{
 		{`var r = [];
 		function s1(a, b) { "use strict"; a = 9; var x = []; for (var i = 0; i < arguments.length + 1; i++) x.push(arguments[i]); return x.join("/") + ":" + arguments.length; }
@@ -529,7 +518,6 @@ func TestArgumentsReads(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for _, tier := range []bool{false, true} {
-			vm.SetTreeTier(tier)
 			if got := treeRun(t, tc.src); got != tc.want {
 				t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, tc.want)
 			}
@@ -537,12 +525,11 @@ func TestArgumentsReads(t *testing.T) {
 	}
 }
 
-// TestArrayPushThroughTheChain pins, in both tiers, push and the other array
-// methods that skip the walk up the chain when its prototypes have no index:
-// a setter on Array.prototype or Object.prototype, and a read-only element on
-// an Array.prototype large enough to be indexed. Node gives the same answers.
+// TestArrayPushThroughTheChain pins push and the other array methods that
+// skip the walk up the chain when its prototypes have no index: a setter on
+// Array.prototype or Object.prototype, and a read-only element on an
+// Array.prototype large enough to be indexed. Node gives the same answers.
 func TestArrayPushThroughTheChain(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `var log = "", r = [];
 		function fill(n) { var a = []; for (var i = 0; i < n; i++) a.push(i); return a; }
 		r.push(fill(3).join());
@@ -557,14 +544,13 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 		r.join(" | ")`
 	const want = "0,1,2 |  | 2 | TypeError | 0,1,2,3 | 1,2,3 | 1,2,3 | A1,A0,g,2,O0,"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }
 
-// TestElementKeysAndViews pins, in both tiers, element reads and writes
+// TestElementKeysAndViews pins element reads and writes
 // whose key is not an index -- -0, a fraction, a negative, NaN, 2**32, a
 // string, null, a boolean, undefined, a BigInt, a Symbol -- which the fast
 // paths refuse by the key's number alone, and typed arrays whose view is of
@@ -572,7 +558,6 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 // which the fast element paths answer without countIn. C QuickJS and Node
 // give the same answer.
 func TestElementKeysAndViews(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `function f() {
 		  var r = [], a = [10, , 30], s = Symbol("s"), ks = [0, -0, 1, 2, 1.5, -1, NaN, 2 ** 32, "0", null, true, undefined, 0n, s];
 		  a[s] = "sym"; a["null"] = "N"; a["true"] = "T"; a["undefined"] = "U"; a["1.5"] = "F"; a["-1"] = "M"; a["NaN"] = "nan"; a["4294967296"] = "big";
@@ -602,22 +587,18 @@ func TestElementKeysAndViews(t *testing.T) {
 	const want = "10,10,undefined,30,F,M,nan,big,10,N,T,U,10,sym,3:7undefined3,3:7undefined3,3:173,3:1undefined7,3:1undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3" +
 		" | 0,0,-24,false,-875902488,80,-55,false,,180,-54,true,,255,-53,true,,,,true,,0,0,,,0,80,,,0,180,,0,2,-24,51688,2,-55,,2,0,TypeError,TypeError,-3,-2,0.3333333432674408,1.3333333730697632,1.5,-Infinity,NaN,,v,9,v,9,v,,0,v,,0"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }
 
-// TestElementUpdates pins a[k] op= y and a[k]++ over a local array, which
-// the tree tier updates in place when the element is a number in the
-// array's dense storage, in both tiers: holes read through the prototype,
-// typed arrays, frozen arrays, null bases, an operand a getter changes
-// (read after the element), a valueOf that shrinks the array or reassigns
-// the local, keys that are not indices, arguments objects, BigInts,
-// strings, NaN and -0.
+// TestElementUpdates pins a[k] op= y and a[k]++ over a local array: holes
+// read through the prototype, typed arrays, frozen arrays, null bases, an
+// operand a getter changes (read after the element), a valueOf that shrinks
+// the array or reassigns the local, keys that are not indices, arguments
+// objects, BigInts, strings, NaN and -0.
 func TestElementUpdates(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `function f() {
 		  var r = [];
 		  function upd(a, i, x) { for (var j = 0; j < 2; j++) { a[i] += x; a[i]++; a[0]--; a[1] -= x; a[i] *= 2; a[2] += 0.5 } return a }
@@ -657,7 +638,6 @@ func TestElementUpdates(t *testing.T) {
 		" cannot read property of null cannot read property of null cannot read property of undefined cannot read property of undefined" +
 		" set105 50 [null,null,4] 2 7 0,2147483648,-1,1.5,4294967295 NaN NaN NaN 18 NaN 3 1,3 TypeError 7 true true NaN"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
@@ -665,27 +645,25 @@ func TestElementUpdates(t *testing.T) {
 }
 
 // TestPlaceUpdates runs every compound assignment and update over every
-// kind of place the tree builds as one node -- a property of a local, of
-// this, of an object read through another, of an upvalue; an element over
-// local, constant and computed keys and objects; a typed array's; a global;
-// an upvalue; an arguments object's -- with every operator, prefix and
-// postfix, the value used and not, a constant, local, tree or call operand,
-// or a getter that, while the operand is evaluated, gives the place an
-// object, moves the property to another slot, makes the array's storage
-// again or freezes the object or the array; and values that are numbers,
-// -0, NaN, strings, BigInts, BigInts mixed with numbers, undefined, null,
-// objects with valueOf, a valueOf that changes the place, the object, the
-// array's length and the key under way, and symbols; on plain objects,
-// accessors, frozen objects, prototype setters, read-only prototype
-// properties and in strict mode. Each runs four times, the first filling
-// the caches the others' fast paths read.
-// Node and C QuickJS give the same lines; the test pins their count and a
-// hash of them, in both tiers.
+// kind of place -- a property of a local, of this, of an object read
+// through another, of an upvalue; an element over local, constant and
+// computed keys and objects; a typed array's; a global; an upvalue; an
+// arguments object's -- with every operator, prefix and postfix, the value
+// used and not, a constant, local, tree or call operand, or a getter that,
+// while the operand is evaluated, gives the place an object, moves the
+// property to another slot, makes the array's storage again or freezes the
+// object or the array; and values that are numbers, -0, NaN, strings,
+// BigInts, BigInts mixed with numbers, undefined, null, objects with
+// valueOf, a valueOf that changes the place, the object, the array's length
+// and the key under way, and symbols; on plain objects, accessors, frozen
+// objects, prototype setters, read-only prototype properties and in strict
+// mode. Each runs four times, the first filling the caches the others' fast
+// paths read. Node and C QuickJS give the same lines; the test pins their
+// count and a hash of them.
 func TestPlaceUpdates(t *testing.T) {
 	if testing.Short() {
 		t.Skip("86,688 generated updates in both tiers; run without -short")
 	}
-	defer vm.SetTreeTier(true)
 	const src = `		// Every place an update can target x every operator x prefix/postfix x value
 		// used or not x operand kind x value kind, each run four times in a loop
 		// (the first run fills the caches the later ones' fast paths need).
@@ -861,7 +839,6 @@ func TestPlaceUpdates(t *testing.T) {
 		summary`
 	const want = "86688 ca250439"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v: got %s, want %s", tier, got, want)
 		}
@@ -879,7 +856,6 @@ func TestPlaceUpdates(t *testing.T) {
 // BigInts; this in an arrow and in a derived constructor, before and after
 // super(); typed arrays and holes; symbols. Node and C QuickJS agree.
 func TestPlaceUpdateCases(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `		var r = [];
 		function err(f) { try { return f() } catch (e) { return e.constructor.name } }
 		// A cache warmed on a writable property, then the object frozen, made
@@ -961,7 +937,6 @@ func TestPlaceUpdateCases(t *testing.T) {
 		r.join(" ")`
 	const want = "3 TypeError 3 g s6 g s6 g 3 33 34 0 1 4 x 4/6/4/6 0 2 11 2,2 10,21 3 7 3 7 9 1,5,3 7 6 7 7 TypeError 27 ReferenceError ReferenceError G3=8 G3=8 G3=8 G3=8 4 28 12 TypeError 2 -12 5/7/71/5/3/1/4/71/73/731/3/1/4/25 string 1,25 2/3/3/6/6/7/7/14 [object Object] ReferenceError 39 39 3,1 2.700000047683716 1,NaN,3 TypeError TypeError"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
@@ -972,7 +947,6 @@ func TestPlaceUpdateCases(t *testing.T) {
 // let shadows, that is in its dead zone, that is a constant, or that does
 // not exist in strict mode. Node gives the same.
 func TestPlaceUpdateGlobalLex(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	scripts := []string{
 		`globalThis.G4 = 1; function g4() { for (var j = 0; j < 2; j++) { G4 += 5; G4++ } return G4 } g4()`,
 		`let G4 = 100; g4() + "," + globalThis.G4`,
@@ -983,7 +957,6 @@ func TestPlaceUpdateGlobalLex(t *testing.T) {
 	}
 	want := []string{"13", "112,13", "undefined", "ReferenceError,12", "TypeError,1", "ReferenceError"}
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		rt := quickjs.New()
 		for i, src := range scripts {
 			v, err := rt.Eval(src)
@@ -1007,7 +980,6 @@ func TestPlaceUpdateGlobalLex(t *testing.T) {
 // constant, and an imported binding, which cannot be assigned to, read
 // again after its module changed it. Node and C QuickJS give the same.
 func TestPlaceUpdateModuleBindings(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const dep = `export let y = 1; export function bumpY() { y += 10 }`
 	const main = `import { y, bumpY } from "./dep.js";
 		var r = [];
@@ -1027,7 +999,6 @@ func TestPlaceUpdateModuleBindings(t *testing.T) {
 		export const out = r.join(" ")`
 	const want = "ReferenceError 9a0122 15a012012-1 60 TypeError TypeError 1 11 TypeError"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		rt := quickjs.New()
 		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
 			return dep, specifier, nil
@@ -1055,7 +1026,6 @@ func TestPlaceUpdateModuleBindings(t *testing.T) {
 // immutable one, shared ones (one that grows), values that are not numbers,
 // a valueOf that detaches, updates, a subclass and an index on the prototype.
 func TestTypedElementAccess(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `var r = [];
 		function rw(t, n, v) { var out = []; for (var i = -1; i <= n; i++) { t[i] = v + i; out.push(t[i]); } out.push(t[0], t[1], t[2]); return out.join("/"); }
 		function rw0(t, v) { for (var j = 0; j < 2; j++) { t[0] = v; t[1] = t[0] + 1; } return [t[0], t[1], t[2]].join("/"); }
@@ -1106,40 +1076,32 @@ func TestTypedElementAccess(t *testing.T) {
 		" | " + "6 | 0,1 | true | true | 4/54/9 | 253/54/9" +
 		" | " + "3.0999999046325684/5.400000095367432/6.300000190734863 | 5 | 6 |  | 0"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }
 
-// TestTreeTierInterrupted stops a loop running as a tree, as one running in
-// the interpreter is stopped.
+// TestTreeTierInterrupted stops a loop running as register code.
 func TestTreeTierInterrupted(t *testing.T) {
-	defer vm.SetTreeTier(true)
-	vm.SetTreeTier(true)
 	rt := quickjs.New()
 	defer rt.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	before := vm.TreesBuilt()
+	before := vm.RegsBuilt()
 	_, err := rt.EvalContext(ctx, `function spin() { var n = 0; for (;;) { n = n + 1 } } spin()`)
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "interrupt") {
 		t.Fatalf("got %v, want the deadline", err)
 	}
-	if vm.TreesBuilt() == before {
+	if vm.RegsBuilt() == before {
 		t.Fatal("spin was not built as a tree")
 	}
 }
 
-// TestTreeTierInterruptedStructures stops loops of every shape the tier
-// rebuilds as a Go loop (ztree_flow.go), which count their back edges as
-// the blocks they were made of did: a while, a do-while, a loop whose back
-// edge is a continue, one inside another whose inner loop never runs, and
-// one whose body calls a function.
+// TestTreeTierInterruptedStructures stops loops of every shape: a while, a
+// do-while, a loop whose back edge is a continue, one inside another whose
+// inner loop never runs, and one whose body calls a function.
 func TestTreeTierInterruptedStructures(t *testing.T) {
-	defer vm.SetTreeTier(true)
-	vm.SetTreeTier(true)
 	for _, src := range []string{
 		`function spin(n) { var i = 0; while (i < n) { i = i + 1; i = i - 1 } } spin(1)`,
 		`function spin(n) { var i = 0; do { i = (i + 1) % 7 } while (i < n); return i } spin(10)`,
@@ -1149,25 +1111,23 @@ func TestTreeTierInterruptedStructures(t *testing.T) {
 	} {
 		rt := quickjs.New()
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		before := vm.TreesBuilt()
+		before := vm.RegsBuilt()
 		_, err := rt.EvalContext(ctx, src)
 		cancel()
 		rt.Close()
 		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "interrupt") {
 			t.Errorf("%s: got %v, want the deadline", src, err)
 		}
-		if vm.TreesBuilt() == before {
+		if vm.RegsBuilt() == before {
 			t.Errorf("%s: spin was not built as a tree", src)
 		}
 	}
 }
 
 // TestTreeTierSharedAcrossRuntimes runs one compiled program in runtimes on
-// several goroutines at once. They share its functions, and so the trees
-// built for them, which the first to run each one builds.
+// several goroutines at once. They share its functions, and so the register
+// code compiled for them, which the first to run each one compiles.
 func TestTreeTierSharedAcrossRuntimes(t *testing.T) {
-	defer vm.SetTreeTier(true)
-	vm.SetTreeTier(true)
 	p, err := quickjs.Compile("shared.js", `function f(n) { var s = 0, a = []; for (var i = 0; i < n; i++) { a.push(i * 2); s += a[i] % 7 } return s } f(2000)`)
 	if err != nil {
 		t.Fatal(err)
@@ -1197,10 +1157,8 @@ func TestTreeTierSharedAcrossRuntimes(t *testing.T) {
 // runs, through the slot its site remembers, as the slot stops being the
 // name's: deleted, redefined as an accessor, shadowed by a script's let.
 func TestPureGlobalReads(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const want = "2,2,2,6,ReferenceError,8,get,11,11"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		rt := quickjs.New()
 		_, err := rt.Eval(`var r = []; globalThis.G = 1; globalThis.H = 5;
 			function rd() { return G + 1 } function rh() { return H + 1 }
@@ -1224,12 +1182,11 @@ func TestPureGlobalReads(t *testing.T) {
 }
 
 // TestPlaceUpdateNotAnUpdate pins reads that look like the start of an
-// update -- this.q, this pushed twice, with a store to q further on -- but are
-// not: building the tree once took an instruction after the read for the
-// update's operand and popped an empty stack. Each function is called twice,
-// in both tiers; Node and C QuickJS give the same.
+// update -- this.q, this pushed twice, with a store to q further on -- but
+// are not: building the tree tier's node once took an instruction after the
+// read for the update's operand and popped an empty stack. Each function is
+// called twice; Node and C QuickJS give the same.
 func TestPlaceUpdateNotAnUpdate(t *testing.T) {
-	defer vm.SetTreeTier(true)
 	const src = `var out = [];
 function swapThis() { var t = this.p; this.p = this.q; this.q = t; return this.p + "," + this.q; }
 function swapIf() { if (this.p <= 9) { var t = this.p; this.p = this.q; this.q = t; } return this.p + "," + this.q; }
@@ -1246,7 +1203,6 @@ for (var i = 0; i < fs.length; i++) {
 out.join(" ")`
 	const want = "2,1 1,2 2,1 1,2 4,5 5,6 7/7 8/8 2,1 1,2 2,1 1,2 3,1 4,3"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier)
 		rt := quickjs.New()
 		v, err := rt.Eval(src)
 		if err != nil {

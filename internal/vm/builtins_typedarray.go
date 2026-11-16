@@ -1628,8 +1628,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	// theirs, by callDirect, its arguments in one list made once rather than
 	// per element: a callee may not keep it, any more than it may keep the
 	// interpreter's own stack. Each element had been called through call,
-	// with a list of its own, and a callback planTreeCall had given its
-	// tree's call was run through callObject and runFD every time.
+	// with a list of its own.
 	const (
 		tcForEach = iota
 		tcMap

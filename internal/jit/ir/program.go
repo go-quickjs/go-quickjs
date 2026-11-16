@@ -260,7 +260,7 @@ const (
 	// ArgumentRead is arguments_index, arguments[Left] at Dest, in a
 	// function whose arguments object is made only on demand and never
 	// pushed (bytecode's ForwardsArguments), lowered for inlining
-	// (LowerSSAForward): an inlined call has the new pipeline read the
+	// (LowerRegForwardWith): an inlined call has the new pipeline read the
 	// call's own argument for a constant index below their count that names
 	// no aliased parameter, as V8 eliminates the arguments object, and
 	// leaves any other to Go, which makes the object. In a function's own
@@ -677,9 +677,7 @@ type Program struct {
 	// of itself in tail position, made a jump to its start (ssa's
 	// OpTailSelf), would give it the call's receiver in its place, so
 	// native code makes its calls in tail position as calls, and Go those
-	// deep in the stack, which give its frame up (OpTailRoom). It had been
-	// refused, and AWFY's Richards ran its task functions, all such arrows,
-	// in the tree tier.
+	// deep in the stack, which give its frame up (OpTailRoom).
 	ArrowThis bool
 	// ClassConstructor marks a class's constructor, which a call without
 	// new throws on: a call of itself in tail position is made as a call,
@@ -793,7 +791,7 @@ type Program struct {
 	// Forward), by Go from native code otherwise. An inlined frame has no
 	// context of its own: the inliner takes no such program (ssa's
 	// InlineCalls), a forwarding function's frame being inlined from its
-	// forwarding lowering (compile's LowerSSAForward), which has none.
+	// forwarding lowering (compile's LowerRegForwardWith), which has none.
 	Forwards bool
 	// Checked says Validate has accepted the program, which its maker
 	// changes no more: kept and compiled again and again, as the VM keeps
@@ -853,7 +851,7 @@ func (p *Program) LiveAt(pc, i int) bool {
 }
 
 // At is the first instruction of register pc's lowering (Origin), or, in
-// the stack form's program, pc itself; -1 where there is none.
+// a program without Origin, pc itself; -1 where there is none.
 func (p *Program) At(pc uint32) int {
 	if p.Origin == nil {
 		if int(pc) < len(p.Code) {

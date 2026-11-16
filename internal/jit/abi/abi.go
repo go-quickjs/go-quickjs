@@ -95,14 +95,13 @@ const (
 // Bounds are how deep a run's native calls go, which depends on how deep
 // the VM's frames were where Go entered the code, and which Go sets before
 // every entry, once for every context, all of which point here
-// (Context.Bounds): rewritten in each, as they were, an entry from code the
-// tree tier runs recursively, its depth another at each call, wrote the
-// fields of every context there was -- 96 after a deep recursion -- and
-// AWFY's Towers spent a third of its time doing it. LevelLimit is the level
-// past the last a native call may run in. TailLevel is the first level
-// whose code's calls in tail position give up its frame, as the
-// interpreter's do from tailCallDepth frames deep: native code makes them as
-// calls below it, and leaves for Go to make them at it and past
+// (Context.Bounds): rewritten in each, an entry from code the interpreter
+// runs recursively, its depth another at each call, would write the fields
+// of every context there is -- 96 after a deep recursion. LevelLimit is the
+// level past the last a native call may run in. TailLevel is the first
+// level whose code's calls in tail position give up its frame, as the
+// interpreter's do from tailCallDepth frames deep: native code makes them
+// as calls below it, and leaves for Go to make them at it and past
 // (ssa.OpTailRoom).
 type Bounds struct {
 	LevelLimit, TailLevel uint64
@@ -1733,22 +1732,27 @@ const (
 // The VM's cache of the in operator's answers (its hasCache), which native
 // code reads, never writes, before it calls Go for one (ssa.GoHas): at
 // ssa.Func's HasCache, 1<<HasCacheBits entries of HasEntrySize bytes, in
-// sets of two. A key string's, of pointer word k, in an object whose shape
-// -- the pointer at ObjectShape -- is s is one of set ((k>>4 ^ s>>4) *
-// HasCacheMul) >> (64 - HasCacheBits + 1), the entries 2*set and 2*set+1.
-// An entry answers where the pointer at HasEntryKey is k, the one at
+// sets of HasCacheWays, 1<<HasCacheWaysLog. A key string's, of pointer
+// word k, in an object whose shape -- the pointer at ObjectShape -- is s
+// is one of set ((k>>4 ^ s>>4) * HasCacheMul) >> (64 - HasCacheBits +
+// HasCacheWaysLog), the entries HasCacheWays*set on, the newest first:
+// slotted by address, as V8's stub caches are, and up to HasCacheWays
+// keys of one layout keep their entries whatever their addresses. An
+// entry answers where the pointer at HasEntryKey is k, the one at
 // HasEntryShape s and the one at HasEntryProto the object's prototype, and
 // the byte the pointer at HasEntryCell points to, its chain's validity
 // cell's flag, is set: the answer is the byte at HasEntryHas, 1 for true.
 const (
-	HasCacheBits  = 8
-	HasCacheMul   = 0x9E3779B97F4A7C15
-	HasEntrySize  = 64
-	HasEntryKey   = 0
-	HasEntryShape = 8
-	HasEntryProto = 16
-	HasEntryCell  = 24
-	HasEntryHas   = 32
+	HasCacheBits    = 8
+	HasCacheWaysLog = 2
+	HasCacheWays    = 1 << HasCacheWaysLog
+	HasCacheMul     = 0x9E3779B97F4A7C15
+	HasEntrySize    = 64
+	HasEntryKey     = 0
+	HasEntryShape   = 8
+	HasEntryProto   = 16
+	HasEntryCell    = 24
+	HasEntryHas     = 32
 )
 
 // The VM's table of the key strings it has handed out with their atoms

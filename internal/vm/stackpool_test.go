@@ -21,41 +21,6 @@ func compileForTest(t testing.TB, src string) *bytecode.Function {
 	return fn
 }
 
-// newOldTiersForTest is New(cfg) running its code on the stack interpreter
-// and the tree tier, register form or not, as a runtime with the JIT runs
-// it: for the tests of those tiers' own workings, which register code
-// does not have -- their nodes, plans and tail calls' accounting, and
-// what register code does not do yet: a literal's layout found by its
-// keys (zzz_literalkeys_test.go), a rerun program's literals of
-// functions compiled at their first call, a dead exec's dummy, a
-// replace's strings left unmade, a string appended to in place, and the
-// shapes a churning loop keeps (zzz_shapebudget_test.go), one more or
-// fewer in register code.
-func newOldTiersForTest(cfg Config) *Runtime {
-	r := New(cfg)
-	r.oldTiers = true
-	return r
-}
-
-// newTreeTierForTest is New(cfg) with the tree tier on or off for the code
-// the runtime loads, as SetTreeTier sets it for the code the process runs
-// next, so that tests comparing the tiers need not switch the process's
-// and can run in parallel. On, it is the process's setting, which only
-// QJS_NOTREE turns off.
-func newTreeTierForTest(tree bool, cfg Config) *Runtime {
-	r := New(cfg)
-	r.noTree = !tree
-	return r
-}
-
-// newOldTiersTreeForTest is newOldTiersForTest(cfg) with the tree tier on
-// or off for its code, as newTreeTierForTest.
-func newOldTiersTreeForTest(tree bool, cfg Config) *Runtime {
-	r := newOldTiersForTest(cfg)
-	r.noTree = !tree
-	return r
-}
-
 // TestReleasedStacksAreClear pins that a stack a closed runtime gives back
 // holds nothing of what ran on it -- the frames of functions, generators and
 // all -- so that the next runtime to take it keeps nothing of the last one
@@ -122,31 +87,5 @@ func TestStackEndInsideAllocation(t *testing.T) {
 		}
 		r.Close()
 		r.ReleaseClosed()
-	}
-}
-
-// TestReturnedTreeFramesAreCleared pins that the sweep of returned frames
-// clears the tree tier's context too, which a tree leaves set when it
-// returns: the closure it ran, its locals and the value it returned would
-// otherwise stay reachable until the frame was used again.
-func TestReturnedTreeFramesAreCleared(t *testing.T) {
-	r := New(Config{})
-	defer r.Close()
-	before := TreesBuilt()
-	if _, err := r.Run(compileForTest(t, `
-		function make(n) { var o = { list: [] }; for (var i = 0; i < n; i++) o.list.push(i); return o }
-		function outer() { return make(3).list.length }
-		outer()`)); err != nil {
-		t.Fatal(err)
-	}
-	if TreesBuilt() == before {
-		t.Fatal("nothing was built as a tree")
-	}
-	r.clearReturnedFrames()
-	for i := r.frameDepth; i < len(r.cur)+r.frameBase && i < 16; i++ {
-		f := r.frameAt(i)
-		if f.tc.cl != nil || f.tc.locals != nil || f.tc.stack != nil || f.tc.ret != (Value{}) {
-			t.Fatalf("frame %d still holds its tree's context", i)
-		}
 	}
 }

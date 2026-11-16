@@ -5,15 +5,13 @@ package vm
 import "testing"
 
 // jitAsyncAgreesForTest runs setup and then src, a script whose promise
-// jobs leave its answer in out, in the interpreter, the tree tier, and the
-// JIT under each stress setting the differential tests use, and fails
+// jobs leave its answer in out, in the interpreter and the JIT under each
+// stress setting the differential tests use, and fails
 // unless each answers as the interpreter does. It returns the JIT's
 // runtime at its default setting, src run there rounds times.
 func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime {
 	t.Helper()
-	run := func(r *Runtime, tree bool) string {
-		previous := treeTier.Swap(tree)
-		defer treeTier.Store(previous)
+	run := func(r *Runtime) string {
 		if _, err := r.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}
@@ -35,12 +33,7 @@ func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime
 	}
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
-	w := run(want, false)
-	tr := New(Config{})
-	t.Cleanup(func() { tr.Close(); tr.ReleaseClosed() })
-	if got := run(tr, true); got != w {
-		t.Fatalf("tree tier: %s\ninterpreter: %s", got, w)
-	}
+	w := run(want)
 	for _, c := range []jitStressConfig{
 		{threshold: true},
 		{threshold: true, budget: 1},
@@ -49,12 +42,12 @@ func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime
 	} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		r.jitStress = c
-		if got := run(r, true); got != w {
+		if got := run(r); got != w {
 			t.Fatalf("JIT %+v: %s\ninterpreter: %s", c, got, w)
 		}
 	}
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	if got := run(r, true); got != w {
+	if got := run(r); got != w {
 		t.Fatalf("JIT: %s\ninterpreter: %s", got, w)
 	}
 	return r
@@ -62,11 +55,10 @@ func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime
 
 // Async functions and generators of calls and no loop, compiled once their
 // resumptions have made them hot, as any function's calls make it
-// (LowerSSAHot): each resumption -- the first, past the parameters, and
-// each after an await or a yield -- enters native code at its pc. LowerSSA
-// refuses them for their want of a loop, and Go had marked them refused at
-// their first resumption, for good: npm's 521 async functions of calls,
-// which the tree tier ran. A guard that fails (an object of another
+// (LowerRegHot): each resumption -- the first, past the parameters, and
+// each after an await or a yield -- enters native code at its pc. Go had
+// marked them refused at their first resumption, for good: npm's 521
+// async functions of calls. A guard that fails (an object of another
 // shape), a throw from a call caught by the body's handler, a rejection
 // thrown at the await, a generator whose locals a closure captures, which
 // no loop's step resumes natively, one whose every resumption is a call

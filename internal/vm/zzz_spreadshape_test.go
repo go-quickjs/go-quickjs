@@ -131,23 +131,20 @@ bigafter: PE{p1=1:wec p2=2:wec p3=w:wec p4=4:wec p5=5:wec p6=6:wec p7=7:wec p8=8
 log: get b,get b,get b,get b,get b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKeys,gopd a,get a,gopd b,get b`
 
 // TestSpreadByLayout pins that an object spread made by its layout makes
-// what the definitions made: Node's answer, in the tree tier and in the
-// interpreter.
+// what the definitions made: Node's answer.
 func TestSpreadByLayout(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		if _, err := r.Run(compileForTest(t, spreadShapeSrc+";run(1)")); err != nil {
-			t.Fatal(err)
-		}
-		v, err := r.Run(compileForTest(t, "run(30)"))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != spreadShapeWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, spreadShapeWant)
-		}
+	r := New(Config{})
+	if _, err := r.Run(compileForTest(t, spreadShapeSrc+";run(1)")); err != nil {
+		t.Fatal(err)
+	}
+	v, err := r.Run(compileForTest(t, "run(30)"))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != spreadShapeWant {
+		t.Errorf("\ngot  %s\nwant %s", got, spreadShapeWant)
 	}
 }
 
@@ -160,45 +157,43 @@ func TestSpreadByLayout(t *testing.T) {
 // another realm's prototype, is made by the definitions.
 func TestSpreadAdoptsLayout(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, `
-		var src = {a: 1, b: 2, c: 3}
-		var hid = {a: 1, b: 2, c: 3}; Object.defineProperty(hid, 'a', {enumerable: false})
-		function one(o) { return {...o} }
-		function first(o) { return {z: 0, ...o} }
-		var x = one(src), y = one(src), h = one(hid), f = first(src)
-		;[x, y, h, f, src, hid]`))
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, `
+	var src = {a: 1, b: 2, c: 3}
+	var hid = {a: 1, b: 2, c: 3}; Object.defineProperty(hid, 'a', {enumerable: false})
+	function one(o) { return {...o} }
+	function first(o) { return {z: 0, ...o} }
+	var x = one(src), y = one(src), h = one(hid), f = first(src)
+	;[x, y, h, f, src, hid]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(i int) *Object {
+		e, err := r.getIndexed(v, Int(i))
 		if err != nil {
 			t.Fatal(err)
 		}
-		get := func(i int) *Object {
-			e, err := r.getIndexed(v, Int(i))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return e.Object()
-		}
-		x, y, h, f, src, hid := get(0), get(1), get(2), get(3), get(4), get(5)
-		if x.shape != y.shape || x.shape.unique || x.shape.loose || x.shape.n != 3 {
-			t.Fatalf("tree %v: spreads of one layout by one literal have layouts %p and %p", tree, x.shape, y.shape)
-		}
-		root := x.shape.ancestorAt(0)
-		if root.parent != nil || root.proto != r.proto.object {
-			t.Errorf("tree %v: the spread's layout is not grown from a root of Object.prototype", tree)
-		}
-		sp := src.shape.side.spread
-		if sp == nil || !sp.block || sp.to[0] != x.shape || sp.from[0] != root {
-			t.Errorf("tree %v: the source's layout keeps %+v", tree, sp)
-		}
-		if hs := hid.shape.side.spread; hs == nil || hs.block || h.shape.n != 2 {
-			t.Errorf("tree %v: a source with a key not enumerable keeps %+v, its spread has %d keys", tree, hs, h.shape.n)
-		}
-		if f.shape.n != 4 || f.shape.ancestorAt(1).key != r.atoms.intern("z") {
-			t.Errorf("tree %v: {z: 0, ...src} is not z then src's keys", tree)
-		}
-		r.Close()
+		return e.Object()
 	}
+	x, y, h, f, src, hid := get(0), get(1), get(2), get(3), get(4), get(5)
+	if x.shape != y.shape || x.shape.unique || x.shape.loose || x.shape.n != 3 {
+		t.Fatalf("spreads of one layout by one literal have layouts %p and %p", x.shape, y.shape)
+	}
+	root := x.shape.ancestorAt(0)
+	if root.parent != nil || root.proto != r.proto.object {
+		t.Errorf("the spread's layout is not grown from a root of Object.prototype")
+	}
+	sp := src.shape.side.spread
+	if sp == nil || !sp.block || sp.to[0] != x.shape || sp.from[0] != root {
+		t.Errorf("the source's layout keeps %+v", sp)
+	}
+	if hs := hid.shape.side.spread; hs == nil || hs.block || h.shape.n != 2 {
+		t.Errorf("a source with a key not enumerable keeps %+v, its spread has %d keys", hs, h.shape.n)
+	}
+	if f.shape.n != 4 || f.shape.ancestorAt(1).key != r.atoms.intern("z") {
+		t.Errorf("{z: 0, ...src} is not z then src's keys")
+	}
+	r.Close()
 }
 
 // A source spread in a realm of another prototype keeps none of that

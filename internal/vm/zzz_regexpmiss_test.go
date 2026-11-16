@@ -65,25 +65,23 @@ const regexpMissTestWant = `null,0,false,0,ba, 0:ba:1,0,true,0,ba, null,0,false,
 
 // A match a look at its ASCII subject says finds nothing is not made
 // (regexpLeaf's match, regexp's MissesASCII): exec's and test's answers,
-// lastIndex and the legacy statics are Node's, in the interpreter and the
-// tree tier, with the collector idle and running.
+// lastIndex and the legacy statics are Node's, with the collector idle and
+// running.
 func TestRegExpLeafMisses(t *testing.T) {
 	for _, idle := range []bool{true, false} {
-		for _, tree := range []bool{true, false} {
-			if idle {
-				runtime.GC()
-				debug.SetGCPercent(-1)
-			}
-			r := newTreeTierForTest(tree, Config{})
-			v, err := r.Run(compileForTest(t, regexpMissTestSrc))
-			r.Close()
-			debug.SetGCPercent(100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != regexpMissTestWant {
-				t.Errorf("tree tier %v, collector idle %v:\ngot  %s\nwant %s", tree, idle, got, regexpMissTestWant)
-			}
+		if idle {
+			runtime.GC()
+			debug.SetGCPercent(-1)
+		}
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, regexpMissTestSrc))
+		r.Close()
+		debug.SetGCPercent(100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != regexpMissTestWant {
+			t.Errorf("collector idle %v:\ngot  %s\nwant %s", idle, got, regexpMissTestWant)
 		}
 	}
 }

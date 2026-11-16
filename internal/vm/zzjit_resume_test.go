@@ -123,18 +123,14 @@ func TestJITEntriesAfterInlinedCalls(t *testing.T) {
 	}
 	r := both.jit
 	cl := r.global.getOwn(r.atoms.intern("Q")).value().Object().getOwn(r.atoms.intern("prototype")).value().Object().getOwn(r.atoms.intern("place")).value().Object().fn().closure
-	// The calls the code inlines: the stack form's entry's (ssaInlinedAt),
-	// or, by register pc, those its register code's compiles inlined,
-	// which its life notes where their exits are counted (inlines).
+	// The calls the code inlines, by register pc, those its register
+	// code's compiles inlined, which its life notes where their exits are
+	// counted (inlines).
 	cv, ok := jitViewForTest(r, cl)
 	var at []int
 	if ok && cv.reg != nil {
 		for _, x := range cv.e.inlines {
 			at = append(at, int(x.pc))
-		}
-	} else if ok {
-		for _, pc := range cv.e.ssaInlinedAt {
-			at = append(at, int(pc))
 		}
 	}
 	if !ok || len(at) == 0 {

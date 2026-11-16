@@ -11,7 +11,7 @@ import "testing"
 // which called next at each construction. The arguments reach the parent as
 // they were given -- none, an undefined, a null, through two implicit
 // constructors -- and so do those of a class extending Array and a
-// function. Each answer is Node's, on the trees and in the interpreter.
+// function. Each answer is Node's.
 func TestImplicitConstructorForwards(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -37,15 +37,13 @@ func TestImplicitConstructorForwards(t *testing.T) {
 		r.push(new G(2, 3).s, new G().s)
 		r.join(' | ')`
 	const want = "1,2,3 | 0 | 2 | 4,5 | 7 | 3 | 3 | 1,2 | true | 5 | NaN"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

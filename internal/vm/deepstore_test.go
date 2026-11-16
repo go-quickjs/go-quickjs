@@ -55,29 +55,25 @@ func TestDeepStoreFollowsTheChain(t *testing.T) {
 		out.join(', ')`
 	const want = "plain:own, plain again:own, setter:none, setter calls 40, setter gone:own, read-only:TypeError, " +
 		"read-only gone:own, chain replaced:none, setter calls 80, chain back:own, non-extensible:TypeError"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		var counts string
-		if err == nil && r.deep != nil {
-			n := 0
-			for _, e := range r.deep {
-				if e.n > 2 {
-					n++
-				}
-			}
-			if n == 0 {
-				counts = " (no deep addition remembered)"
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	var counts string
+	if err == nil && r.deep != nil {
+		n := 0
+		for _, e := range r.deep {
+			if e.n > 2 {
+				n++
 			}
 		}
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
+		if n == 0 {
+			counts = " (no deep addition remembered)"
 		}
-		if got := v.String().Go(); got != want || counts != "" {
-			t.Errorf("tree %v: %s%s\nwant %s", tree, got, counts, want)
-		}
+	}
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want || counts != "" {
+		t.Errorf("%s%s\nwant %s", got, counts, want)
 	}
 }

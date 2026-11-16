@@ -8,8 +8,7 @@ import "testing"
 // P, P returning {}, makes no R, and fields set after super() go on that
 // object. It had been given R's prototype, as a native constructor's
 // object is, Error's and Array's among them, which build their own and
-// are still instances of the class extending them. Each answer is Node's,
-// on the trees and in the interpreter.
+// are still instances of the class extending them. Each answer is Node's.
 func TestSuperReturnsOwnObject(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -31,15 +30,13 @@ func TestSuperReturnsOwnObject(t *testing.T) {
 		r.join(' ')`
 	const want = "true:true:true:0:false:true:true false:false:false:1:false:false:false false:false:false:2:true:false:false " +
 		"false:false:false:3:false:false:false false:1:2:true E:true:true A:true:true M:true:true D:true:true X:true:true"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }

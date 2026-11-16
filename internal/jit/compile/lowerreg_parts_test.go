@@ -9,7 +9,7 @@ import (
 // TestLowerRegStringParts checks a template's parts converted where they
 // are (to_string, str_part) are StringParts where only the concat reads
 // them (regStringParts), and stay conversions where the register is read
-// again past it: the stack form's stringParts.
+// again past it.
 func TestLowerRegStringParts(t *testing.T) {
 	fns := regCompiled(t, "function t(i) { return `a${i}b${i * 2}c${\"z\"}` }\n"+
 		"function kept(i) { var p = i ? \"q\" : i; var s = `x${p}y`; return s + p }\n")

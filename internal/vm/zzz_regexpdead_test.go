@@ -117,32 +117,29 @@ func regexpExecLeafForTest(r *Runtime) *regexpLeaf[struct{}] {
 }
 
 // A call of exec whose result nothing reads makes the match, the legacy
-// statics and lastIndex as any other: each answer is Node's, in the tree
-// tier and in the interpreter, with the collector idle.
+// statics and lastIndex as any other: each answer is Node's, with the
+// collector idle.
 func TestRegExpDeadExec(t *testing.T) {
-	for _, tree := range []bool{true, false} {
-		gc := debug.SetGCPercent(-1)
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, regexpDeadTestSrc))
-		dummy := regexpExecLeafForTest(r).dummy
-		r.Close()
-		debug.SetGCPercent(gc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != regexpDeadTestWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, regexpDeadTestWant)
-		}
-		// The tree tier's calls gave back the dummy; the interpreter's are
-		// made as before.
-		if (dummy != nil) != tree {
-			t.Errorf("tree tier %v: exec's dummy made: %v", tree, dummy != nil)
-		}
+	gc := debug.SetGCPercent(-1)
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, regexpDeadTestSrc))
+	dummy := regexpExecLeafForTest(r).dummy
+	r.Close()
+	debug.SetGCPercent(gc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != regexpDeadTestWant {
+		t.Errorf("\ngot  %s\nwant %s", got, regexpDeadTestWant)
+	}
+	// The calls gave back the dummy.
+	if dummy == nil {
+		t.Errorf("exec's dummy made: %v", dummy != nil)
 	}
 }
 
-// regexpDeadKindsSrc has a function for each way the tree tier builds a
-// call of exec whose result nothing reads: on a RegExp an upvalue holds,
+// regexpDeadKindsSrc has a function for each kind of call of exec whose
+// result nothing reads: on a RegExp an upvalue holds,
 // a global, a literal, global or not, a local, a property of a local and
 // of this, this itself, and the calls tested for truth -- an if, a while,
 // a not, an &&, a ternary.
@@ -163,77 +160,11 @@ function kAnd(s, re) { var n = 0; for (var i = 0; i < 3; i++) n += re.exec(s) &&
 function kTernary(s, re) { var n = 0; for (var i = 0; i < 3; i++) n += re.exec(s) ? 2 : 1; return n }
 function many(s, n) { for (var i = 0; i < n; i++) kgre.lastIndex = 0, kUp(s) }`
 
-// Each of the tree tier's ways gives back the dummy for the array, and the
-// statics and lastIndex are what the call made, as Node has them; in the
-// interpreter, which makes every call as before, the dummy is never made.
-// A loop of such calls makes nothing for each.
-func TestRegExpDeadExecKinds(t *testing.T) {
-	for _, c := range []struct{ call, want string }{
-		{"kUp('xab'), RegExp.lastMatch + RegExp.$2", "abb"},
-		{"kUpG('xbxb'), RegExp.lastMatch + RegExp.leftContext", "bxbx"},
-		{"kgre.lastIndex = 0, kGlobal('bxbb'), kgre.lastIndex + RegExp.leftContext", "4bxb"},
-		{"kLit('zab'), RegExp.$1 + RegExp.leftContext", "az"},
-		{"kLitG('zab'), RegExp.$2 + RegExp.rightContext", "b"},
-		{"kLocal('qab', /(q)(a)/), RegExp.$1 + RegExp.$2", "qa"},
-		{"y = /(a)/y, kLocal('aaa', y), y.lastIndex + RegExp.leftContext", "3aa"},
-		{"kProp('cab', { re: /(c)/ }), RegExp.$1", "c"},
-		{"kThisProp.call({ re: /(d)(.)/ }, 'xdz'), RegExp.$2", "z"},
-		{"h = /(e)/g, kThis.call(h, 'eeee'), h.lastIndex + RegExp.lastMatch", "3e"},
-		{"kIf('ab', /a/) + RegExp.lastMatch", "3a"},
-		{"kWhile('a1a2a3', /a(.)/g) + RegExp.$1", "33"},
-		{"kNot('ab', /b/) + ',' + kNot('ab', /c/)", "0,3"},
-		{"kAnd('ab', /b/) + ',' + kAnd('ab', /c/)", "3,0"},
-		{"kTernary('ab', /b/) + ',' + kTernary('ab', /c/)", "6,3"},
-	} {
-		for _, tree := range []bool{true, false} {
-			r := newOldTiersTreeForTest(tree, Config{})
-			if _, err := r.Run(compileForTest(t, regexpDeadKindsSrc)); err != nil {
-				t.Fatal(err)
-			}
-			v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
-			dummy := regexpExecLeafForTest(r).dummy
-			r.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != c.want {
-				t.Errorf("tree tier %v: %s = %s, want Node's %s", tree, c.call, got, c.want)
-			}
-			if (dummy != nil) != tree {
-				t.Errorf("tree tier %v: %s made exec's dummy: %v", tree, c.call, dummy != nil)
-			}
-		}
-	}
-	skipUnlessAllocsOrdinary(t)
-
-	// What a loop of them makes: nothing for each call, where an array
-	// and two strings had been made.
-	r := newOldTiersForTest(Config{})
-	defer r.Close()
-	if _, err := r.Run(compileForTest(t, regexpDeadKindsSrc)); err != nil {
-		t.Fatal(err)
-	}
-	none, lots := compileForTest(t, "many('xab', 0)"), compileForTest(t, "many('xab', 2000)")
-	mallocs := func(f *bytecode.Function) uint64 {
-		var a, b runtime.MemStats
-		runtime.ReadMemStats(&a)
-		if _, err := r.Run(f); err != nil {
-			t.Fatal(err)
-		}
-		runtime.ReadMemStats(&b)
-		return b.Mallocs - a.Mallocs
-	}
-	mallocs(lots)
-	if base, got := mallocs(none), mallocs(lots); got > base+600 {
-		t.Errorf("6000 calls whose results nothing reads made %d objects, %d more than none", got, got-base)
-	}
-}
-
 // Where the match fails -- spends the step budget -- a call whose result
 // nothing reads throws what a call whose result is read throws: the
 // SyntaxError, its stack, Error.stackTraceLimit's getter run as often, and
-// lastIndex as it was, global or not, in the tree tier and in the
-// interpreter. (Each match spends the budget: half a second.)
+// lastIndex as it was, global or not. (Each match spends the budget: half a
+// second.)
 func TestRegExpDeadExecComplexity(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -253,21 +184,17 @@ for (var re of RES) {
 }
 out.join('|')`
 	fail := "SyntaxError,regular expression is too complex,,0,0"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		// The interpreter, which makes these calls as before, of one.
-		res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", fail+"|"+fail
-		if !tree {
-			res, want = "var RES = [/(a+)+b/];", fail
-		}
-		v, err := r.Run(compileForTest(t, res+src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
-		}
+	r := New(Config{})
+	// The interpreter, which makes these calls as before, of one.
+	res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", fail+"|"+fail
+
+	v, err := r.Run(compileForTest(t, res+src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("\ngot  %s\nwant %s", got, want)
 	}
 }
 
@@ -388,11 +315,10 @@ all() + ' || ' + all() + ' || ' + all()
 
 const regexpDeadReplaceTestWant = `0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/b/9b/x/cab/6 0/9/b/9b/x/cab/6 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 | 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 1/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 | 0 0 0//////0 TypeError 0/a//a/x/b1c2/6 TypeError 0 30000 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a//bcdef9x/8 TypeError 0 30000 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/x9bc/b/6 TypeError 0 30000 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/xx/b/4 TypeError 0 30000 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 calls=57 seen=1136,2256,9968,9916,1135,1136,2256,9968,9916,1135 || 0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/b/9b/x/cab/6 0/9/b/9b/x/cab/6 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 | 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 1/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 | 0 0 0//////0 TypeError 0/a//a/x/b1c2/6 TypeError 0 30000 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a//bcdef9x/8 TypeError 0 30000 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/x9bc/b/6 TypeError 0 30000 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/xx/b/4 TypeError 0 30000 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 calls=114 seen=1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135 || 0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/a/b/ab/x/1c2/6 0/2//2/xab1c//6 0/2//2/xab1c//6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 0/b//b/xa/1c2/6 if false and x-1c2 0/2//2/xab1c//6 0///a/x/b1c2/6 0/2//2/xab1c//6 5 undefined 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/e/f/ef///2 0/e/f/ef///2 if false and ef 0/e/f/ef///2 0/e/f/ef///2 0/e/f/ef///2 5 undefined 0/a/b/ab//cdef9x/8 0/9//9/abcdef/x/8 0/9//9/abcdef/x/8 0/b/c/bc/a/def9x/8 0/b/c/bc/a/def9x/8 0/e/f/ef/abcd/9x/8 0/e/f/ef/abcd/9x/8 if false and -cdef9x 0/9//9/abcdef/x/8 0///a//bcdef9x/8 0/9//9/abcdef/x/8 5 undefined 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 true  or 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 5 undefined 0/a/b/ab/x9bc//6 0/9//9/x/bcab/6 0/9//9/x/bcab/6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 0/b//b/x9bca//6 if false and x9bc- 0/9//9/x/bcab/6 0///a/x9bc/b/6 0/9//9/x/bcab/6 5 undefined 0/a/b/ab/x9bc//6 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 0/o//o/foo1//5 0/o//o/foo1//5 0/o//o/foo1//5 if false and foo1o 0/1//1/foo/o/5 0/1//1/foo/o/5 0/1//1/foo/o/5 5 undefined 0/a/b/ab/xx//4 0/a/b/ab/xx//4 2/x//x/x/ab/4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 0/b//b/xxa//4 if false and xx- 0/a/b/ab/xx//4 0///a/xx/b/4 0///a/xx/b/4 5 undefined | 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/1/c/1c/xab/2/6 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/x/9x/abcdef//8 0/9/b/9b/x/cab/6 0/9/b/9b/x/cab/6 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 | 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 0/1/o/1o/foo//5 1/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 0/a//a//bcdef9x/8 | 0 0 0//////0 TypeError 0/a//a/x/b1c2/6 TypeError 0 30000 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0/a/b/ab/x/1c2/6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a//bcdef9x/8 TypeError 0 30000 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0/a/b/ab//cdef9x/8 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/x9bc/b/6 TypeError 0 30000 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0/a/b/ab/x9bc//6 0 0 0//////0 TypeError 0//////0 TypeError 0 30000 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0///b/#30000//30001 0 0 0//////0 TypeError 0/a//a/xx/b/4 TypeError 0 30000 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 0/a/b/ab/xx//4 calls=171 seen=1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135,1136,2256,9968,9916,1135`
 
-// regexpDeadReplaceKindsSrc has a function for each way the tree tier
-// builds a replace whose result nothing reads: of a RegExp an upvalue
-// holds, a global, a local, of a subject that is an element, a local and
-// a property, a RegExp literal given, a sticky RegExp, a template, and
-// one tested for truth.
+// regexpDeadReplaceKindsSrc has a function for each kind of replace whose
+// result nothing reads: of a RegExp an upvalue holds, a global, a local, of
+// a subject that is an element, a local and a property, a RegExp literal
+// given, a sticky RegExp, a template, and one tested for truth.
 const regexpDeadReplaceKindsSrc = `var rkg = /(b)/g, rs = /(a)/y
 function rOuter() { var up = /(a)(b)/g; return function (ss, n) { for (var i = 0; i < n; i++) ss[i % 2].replace(up, '') } }
 var rUp = rOuter()
@@ -407,21 +333,18 @@ function rTpl(s, re, n) { for (var i = 0; i < n; i++) s.replace(re, '[$1]') }
 
 // A replace whose result nothing reads makes the matches, the legacy
 // statics and lastIndex as any other, and calls a replacement function as
-// it would: each answer is Node's, in the tree tier and in the
-// interpreter, with the collector idle.
+// it would: each answer is Node's, with the collector idle.
 func TestRegExpDeadReplace(t *testing.T) {
-	for _, tree := range []bool{true, false} {
-		gc := debug.SetGCPercent(-1)
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, regexpDeadReplaceTestSrc))
-		r.Close()
-		debug.SetGCPercent(gc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != regexpDeadReplaceTestWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, regexpDeadReplaceTestWant)
-		}
+	gc := debug.SetGCPercent(-1)
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, regexpDeadReplaceTestSrc))
+	r.Close()
+	debug.SetGCPercent(gc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != regexpDeadReplaceTestWant {
+		t.Errorf("\ngot  %s\nwant %s", got, regexpDeadReplaceTestWant)
 	}
 }
 
@@ -439,30 +362,27 @@ var regexpDeadReplaceKinds = []struct{ call, want, many string }{
 	{"rTpl('a1b2', /([0-9])/g, 3), RegExp.$1 + RegExp.leftContext", "2a1b", "rTpl('a1b2', /([0-9])/g, n)"},
 }
 
-// Each of the tree tier's ways makes the replace's matches, statics and
-// lastIndex as Node has them, in the tree tier and in the interpreter; and
-// in the tree tier a loop of them makes no string for each.
+// Each kind makes the replace's matches, statics and lastIndex as Node has
+// them; and a loop of them makes no string for each.
 func TestRegExpDeadReplaceKinds(t *testing.T) {
 	for _, c := range regexpDeadReplaceKinds {
-		for _, tree := range []bool{true, false} {
-			r := newTreeTierForTest(tree, Config{})
-			if _, err := r.Run(compileForTest(t, regexpDeadReplaceKindsSrc)); err != nil {
-				t.Fatal(err)
-			}
-			v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != c.want {
-				t.Errorf("tree tier %v: %s = %s, want Node's %s", tree, c.call, got, c.want)
-			}
-			if tree && allocsOrdinary() {
-				if made := regexpDeadMallocs(t, r, c.many, 2000); made > 400 {
-					t.Errorf("%s: 2000 replaces whose results nothing reads made %d objects", c.many, made)
-				}
-			}
-			r.Close()
+		r := New(Config{})
+		if _, err := r.Run(compileForTest(t, regexpDeadReplaceKindsSrc)); err != nil {
+			t.Fatal(err)
 		}
+		v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != c.want {
+			t.Errorf("%s = %s, want Node's %s", c.call, got, c.want)
+		}
+		if allocsOrdinary() {
+			if made := regexpDeadMallocs(t, r, c.many, 2000); made > 400 {
+				t.Errorf("%s: 2000 replaces whose results nothing reads made %d objects", c.many, made)
+			}
+		}
+		r.Close()
 	}
 }
 
@@ -492,8 +412,7 @@ func regexpDeadMallocs(t *testing.T, r *Runtime, call string, count int) uint64 
 // Where the match fails -- spends the step budget -- a replace whose result
 // nothing reads throws what one whose result is read throws: the
 // SyntaxError, its stack, Error.stackTraceLimit's getter run as often, and
-// lastIndex, global or not, in the tree tier and in the interpreter.
-// (Each match spends the budget: half a second.)
+// lastIndex, global or not. (Each match spends the budget: half a second.)
 func TestRegExpDeadReplaceComplexity(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -512,20 +431,16 @@ for (var re of RES) {
   out.push(u === d ? u : u + ' != ' + d);
 }
 out.join('|')`
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,3|SyntaxError,regular expression is too complex,,0,0"
-		if !tree {
-			res, want = "var RES = [/(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,0"
-		}
-		v, err := r.Run(compileForTest(t, res+src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
-		}
+	r := New(Config{})
+	res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,3|SyntaxError,regular expression is too complex,,0,0"
+
+	v, err := r.Run(compileForTest(t, res+src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("\ngot  %s\nwant %s", got, want)
 	}
 }
 
@@ -627,28 +542,26 @@ var regexpDeadTruth = []struct{ call, want string }{
 }
 
 // A replace whose result is tested for truth alone is as truthy as the
-// string it would have made: in the tree tier and in the interpreter, with
-// the collector idle, each answer is Node's. The subject had stood for the
-// string, and 'a'.replace(/a/g, "") been true.
+// string it would have made: with the collector idle, each answer is
+// Node's. The subject had stood for the string, and 'a'.replace(/a/g, "")
+// been true.
 func TestRegExpDeadReplaceTruth(t *testing.T) {
-	for _, tree := range []bool{true, false} {
-		gc := debug.SetGCPercent(-1)
-		r := newTreeTierForTest(tree, Config{})
-		if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
-			t.Fatal(err)
-		}
-		for range 3 {
-			for _, c := range regexpDeadTruth {
-				v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if got := v.String().Go(); got != c.want {
-					t.Errorf("tree tier %v: %s = %s, want Node's %s", tree, c.call, got, c.want)
-				}
+	gc := debug.SetGCPercent(-1)
+	r := New(Config{})
+	if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		for _, c := range regexpDeadTruth {
+			v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := v.String().Go(); got != c.want {
+				t.Errorf("%s = %s, want Node's %s", c.call, got, c.want)
 			}
 		}
-		r.Close()
-		debug.SetGCPercent(gc)
 	}
+	r.Close()
+	debug.SetGCPercent(gc)
 }

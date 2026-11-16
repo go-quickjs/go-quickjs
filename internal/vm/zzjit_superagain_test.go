@@ -6,8 +6,9 @@ import "testing"
 
 // A second super() in code the JIT runs: native code's super() of a this
 // already bound is Go's (superGuards), which constructs the parent's own
-// object and then throws, as the interpreter and the trees do. The answers
-// are compared tier by tier under the stress settings, CI's among them.
+// object and then throws, as the interpreter does. The answers are
+// compared with the interpreter's under the stress settings, CI's among
+// them.
 func TestJITSecondSuperMakesItsOwnObject(t *testing.T) {
 	st := jitDifferential(t, superAgainSrc)
 	if st.Entries == 0 {

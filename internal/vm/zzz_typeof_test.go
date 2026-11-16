@@ -2,8 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // typeofTestSrc tests typeof's answer of every kind of value against each
@@ -85,32 +83,20 @@ const typeofTestWant = "uOF?/10101010/n/p--/0/undefined:false,oFU?/01101010/on/p
 // as Node does, for every kind of value, document.all among them; a test
 // against a name of no type is false with its operand still evaluated
 // (calls counts them); typeof of a name nothing declares throws nothing.
-// Each function has a local of its own, so that it is run on its tree
+// Each function has a local of its own, so that it is run as register code
 // rather than by pureCall.
 func TestTypeofTests(t *testing.T) {
 	t.Parallel()
-	for _, c := range compileForTest(t, typeofTestSrc).Constants {
-		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
-			continue
-		}
-		if name := c.Fn.Name; len(name) == 1 {
-			if buildTree(c.Fn) == nil {
-				t.Errorf("%s is not built as a tree", name)
-			}
-		}
+	r := New(Config{})
+	dda := r.NewObject()
+	dda.MarkHTMLDDA()
+	r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
+	v, err := r.Run(compileForTest(t, typeofTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		dda := r.NewObject()
-		dda.MarkHTMLDDA()
-		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
-		v, err := r.Run(compileForTest(t, typeofTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != typeofTestWant {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, typeofTestWant)
-		}
+	if got := v.String().Go(); got != typeofTestWant {
+		t.Errorf("got\n%s\nwant\n%s", got, typeofTestWant)
 	}
 }

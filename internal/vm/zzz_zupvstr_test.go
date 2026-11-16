@@ -2,16 +2,16 @@ package vm
 
 import "testing"
 
-// upvalueAddTestSrc adds to captured bindings, as values and as
-// statements, what the tree tier's upvalue addition (zzz_zupvstr.go) joins
-// or adds itself -- strings, from a local and a constant, an unpaired
-// surrogate's halves, numbers -- and what it leaves to rmwOp: a string and
-// a number either way round, objects with valueOf or toString, BigInts, a
-// BigInt and a string, undefined, a symbol, which throws; an operand that
-// assigns the binding before the addition; a string doubled past the
-// longest, which throws; a constant, which throws. Three rounds of fresh
-// bindings, each method with a local of its own, so that it is run on its
-// tree rather than by pureCall.
+// upvalueAddTestSrc adds to captured bindings, as values and as statements,
+// what an upvalue addition joins or adds itself -- strings, from a local
+// and a constant, an unpaired surrogate's halves, numbers -- and what it
+// leaves to the ordinary addition: a string and a number either way round,
+// objects with valueOf or toString, BigInts, a BigInt and a string,
+// undefined, a symbol, which throws; an operand that assigns the binding
+// before the addition; a string doubled past the longest, which throws; a
+// constant, which throws. Three rounds of fresh bindings, each method with
+// a local of its own, so that it is run as register code rather than by
+// pureCall.
 const upvalueAddTestSrc = `
 const out = []
 function maker() {
@@ -55,19 +55,16 @@ res
 // upvalueAddTestWant is Node's answer.
 const upvalueAddTestWant = "<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|RangeError|268435456|TypeError"
 
-// An addition to a captured binding answers in the tree tier as in the
-// interpreter, as Node answers.
+// An addition to a captured binding answers as Node answers.
 func TestTreeUpvalueAdd(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, upvalueAddTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != upvalueAddTestWant {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, upvalueAddTestWant)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, upvalueAddTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != upvalueAddTestWant {
+		t.Errorf("got\n%s\nwant\n%s", got, upvalueAddTestWant)
 	}
 }

@@ -85,8 +85,6 @@ func TestRegStepFused(t *testing.T) {
 
 	// Compiled for a debugger: a for loop's test has a debug_stmt of its
 	// own, after the update; a while's test is one expression.
-	SetRegisterForm(true)
-	defer SetRegisterForm(bytecode.RegDefault())
 	src := `function up(n) { var s = 0; for (let i = 0; i < n; i++) s += i; return s }
 		function whileDec(n) { var c = 0; while (--n >= 0) c++; return c }
 		function doDec(j) { var c = 0; do { c++ } while (--j > 0); return c }`

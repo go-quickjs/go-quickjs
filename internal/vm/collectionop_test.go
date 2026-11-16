@@ -42,15 +42,13 @@ for (var k = 0; k < 3; k++) run();
 JSON.stringify(out);
 `
 	const want = `[6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]",6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]",6,true,false,null,true,false,20,20,true,true,"zero","zero","nan",true,true,true,"rope",true,6,true,1,true,true,true,1,true,true,"obj",null,true,"[null,\"abcdcdcdcdcd\",\"p\"]","[\"k19\",0]"]`
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got %s, want %s", tree, got, want)
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	r.Close()
 }

@@ -1130,7 +1130,7 @@ func (o *Object) layoutChanged() {
 // last was, and p1, the environment itself once a fill has found it there
 // (see noteGlobalSlot): every closure that shares a site's caches shares its
 // environment, and a table position once given to a name holds that name or
-// a tombstone for good, so the tree tier reads the slot without asking the
+// a tombstone for good, so the interpreter reads the slot without asking the
 // closure for its scope or comparing the key.
 type propCache struct {
 	shape  *shape
@@ -1379,22 +1379,6 @@ func (c *propCache) own(o *Object) (Value, bool) {
 		return o.vals()[c.idx], true
 	}
 	return Undefined, false
-}
-
-// storeOwn writes v to the property a write site's cache says o has: o is of
-// the shape it remembers, and the write is to a property the shape already
-// has, writable. It is small enough to be inlined where a write is made; it
-// reports false for anything else, which setPropCached does -- a setter's
-// entry included, whose next is setterNext.
-func (c *propCache) storeOwn(o *Object, v Value) bool {
-	if o.shape == c.ownShape {
-		if verifyShapes {
-			checkShape(o)
-		}
-		o.vals()[c.idx] = v
-		return true
-	}
-	return false
 }
 
 // noteOwn remembers a plain own property a read found at index i of o's

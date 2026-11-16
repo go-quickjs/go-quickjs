@@ -68,8 +68,7 @@ import (
 // append (localAppend) asks that of the name, and that the right side's own
 // text does not mention it, and it is safe whatever the right side runs. It
 // is an add marked bytecode.AddOwned, which fuses with nothing before it, for
-// any right side to come before: the tree tier's updates and fused additions
-// know nothing of one. The interpreter reads no mark, and makes a rope.
+// any right side to come before.
 //
 // What a sum must not pay for: every read of a binding appended to has a
 // str_freeze, which would stand between its read and what fuses with it, and

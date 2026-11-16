@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // shapeOfNew is the layout of the object src, compiled for this run alone,
@@ -20,53 +19,11 @@ func shapeOfNew(t *testing.T, r *Runtime, src string) *shape {
 	return v.Object().shape
 }
 
-// A literal of the same keys in the same order has the same layout in any code
-// of a realm: a script compiled anew, a function's and a script's, and two
-// sites of one function.
-func TestLiteralKeysShareALayout(t *testing.T) {
-	t.Parallel()
-	r := newOldTiersForTest(Config{})
-	defer r.Close()
-	want := shapeOfNew(t, r, `({a: 1, b: 2})`)
-	if want == nil || want.unique || want.loose || want.n != 2 {
-		t.Fatalf("no shared layout: %+v", want)
-	}
-	for _, src := range []string{
-		`// again
-		({a: 3, b: 4})`,
-		`({"a": 1, 'b': "x"})`,
-		`(function () { return {a: 1, b: {c: 1}} })()`,
-		`(() => { let o; for (let i = 0; i < 50; i++) o = i & 1 ? {a: i, b: i} : {a: 0, b: 0}; return o })()`,
-		`({a: [1, 2], b() { return 1 }})`,
-		`({a: 1, b: (function () { try { throw 1 } catch (e) { return e } })()})`,
-	} {
-		if got := shapeOfNew(t, r, src); got != want {
-			t.Errorf("%s: a layout of its own", src)
-		}
-	}
-	for _, src := range []string{
-		`({b: 1, a: 2})`,
-		`({a: 1})`,
-		`({a: 1, b: 2, c: 3})`,
-		`({a: 1, get b() { return 1 }})`,
-		`({a: 1, ["b"]: 2})`,
-		`({a: 1, a: 2, b: 3})`,
-		`({a: 1, ...{b: 2}})`,
-	} {
-		if got := shapeOfNew(t, r, src); got == want {
-			t.Errorf("%s: the layout of {a, b}", src)
-		}
-	}
-}
-
 // Register code's literals made at once (new_object_lit) take the realm's
-// root for their keys as the tree's do: one layout for the same keys in
+// root for their keys: one layout for the same keys in
 // any function, a closure made anew or two of one function's sites, and
 // one of their own for other keys.
 func TestRegLiteralKeysShareALayout(t *testing.T) {
-	compiler.SetRegisterForm(true)
-	SetRegTier(true)
-	t.Cleanup(func() { compiler.SetRegisterForm(bytecode.RegDefault()); SetRegTier(bytecode.RegDefault()) })
 	for _, native := range []bool{false, true} {
 		was := SetRegNative(native)
 		r := New(Config{})
@@ -100,7 +57,7 @@ func TestRegLiteralKeysShareALayout(t *testing.T) {
 // Each realm has its own, of its own Object.prototype.
 func TestLiteralKeysByRealm(t *testing.T) {
 	t.Parallel()
-	r := newOldTiersForTest(Config{})
+	r := New(Config{})
 	defer r.Close()
 	fn := compileForTest(t, `({a: 1, b: 2})`)
 	run := func(re *Realm) *shape {
@@ -125,7 +82,7 @@ func TestLiteralKeysByRealm(t *testing.T) {
 // nothing a run keeps of it holds the code.
 func TestFreshCodeMakesNoLiteralShapes(t *testing.T) {
 	t.Parallel()
-	r := newOldTiersForTest(Config{})
+	r := New(Config{})
 	defer r.Close()
 	src := func(i int) string {
 		return fmt.Sprintf(`var o = {a: %d, b: {c: 1}}, f = function () { return {d: 1, e: [{f: 2}]} }; f().e[0].f + o.b.c`, i)
@@ -150,7 +107,7 @@ func TestFreshCodeMakesNoLiteralShapes(t *testing.T) {
 // others, however many they have.
 func TestLiteralKeysRoom(t *testing.T) {
 	t.Parallel()
-	r := newOldTiersForTest(Config{})
+	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function grown() { var o = {a: 1, b: 2}; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; return o }
@@ -174,7 +131,7 @@ func TestLiteralKeysRoom(t *testing.T) {
 // holds for as long as it lives: past literalShapes it starts again, and what
 // no code has goes, so that the tree has room for what comes after.
 func TestLiteralKeysMadeUp(t *testing.T) {
-	r := newOldTiersForTest(Config{})
+	r := New(Config{})
 	defer r.Close()
 	roots := func() *literalRoots { return r.proto.object.shape.side.programs.roots }
 	if _, err := r.Run(compileForTest(t, `({first: 1})`)); err != nil {
@@ -282,26 +239,13 @@ func TestLiteralKeysAcrossCompiles(t *testing.T) {
 	}
 }
 
-// Two lists of keys of one hash share a root, and it costs them no more than
-// the first transition: each literal's objects have their keys, in their
-// order, and what reads or adds to them finds them, in the interpreter, a tree
-// and, under the JIT's tests, native code.
-func TestLiteralKeysCollision(t *testing.T) {
-	t.Parallel()
-	r := newOldTiersForTest(Config{})
-	defer r.Close()
-	testLiteralKeysCollision(t, r)
-}
-
 func testLiteralKeysCollision(t *testing.T, r *Runtime) {
 	const collide = 0x1234
 	// Register code's literals have their keys' hashes of their own
 	// (RegCode's ObjKeysHash), which a runtime running it starts them
 	// from (regLiteralKeyedRoot): those collide too.
 	regKeys := func(fn *bytecode.Function) {
-		if !r.regOn() {
-			return
-		}
+
 		if rc := fn.RegCode(); rc != nil {
 			for i, h := range rc.ObjKeysHash {
 				if h != 0 {

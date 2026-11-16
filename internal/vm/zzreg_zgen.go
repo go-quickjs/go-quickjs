@@ -14,27 +14,23 @@ import (
 // was called with; its pc is the register pc it resumes at. A resumption
 // copies the window to the top of the stack, moves the captures open on
 // its registers there and runs the code, whose first instruction,
-// gen_entry, goes on at the pc (regColdGen); a suspension hands back the
+// gen_entry, goes on at the pc (rhGenEntry); a suspension hands back the
 // value and its pc, and the window and the captures go back to the
 // generator. What the resumption delivers -- the value sent in, a throw
 // injected, a return, how a yield* is resumed -- the generator writes to
 // the suspension's registers and pc before it runs (regGenResume): the
 // code has a return path after each yield, and yield* is a loop of the
-// code's own, as the stack form's is. The drivers above it -- next,
-// return and throw, the async functions' and the async generators' steps
-// -- are the stack form's, which resumeFrame hands such a generator's
-// resumption.
+// code's own. The drivers above it -- next, return and throw, the async
+// functions' and the async generators' steps -- are generator.go's, which
+// resumeFrame hands such a generator's resumption.
 
 // regGenOf is the register code a call of cl, callee's closure, runs as a
-// generator's or an async function's body, or nil: the register tier is on,
-// the function has register code, and nothing of its surroundings is what
+// generator's or an async function's body, or nil: the function has
+// register code, and nothing of its surroundings is what
 // that code cannot run in: a derived constructor's this the code does not
 // read through its binding. The with objects and the eval's variables
 // around it are the frame's (frameRare), kept across a suspension.
 func (r *Runtime) regGenOf(cl *closure, callee *Object) *regCode {
-	if !r.regOn() {
-		return nil
-	}
 	c := cl.reg
 	if c == nil {
 		c = r.regOf(cl)
@@ -226,8 +222,8 @@ func (r *Runtime) regGenResume(g *generator, sent Value, mode resumeMode) (resum
 // regGenStep is iter_next of a for-of's cursor over g, a generator of
 // register code stepped by its realm's next: next's frame, as stepIter
 // writes it out, and the body resumed from its suspension
-// (regGenResume), without the general resumption's search for a tree and
-// its answers for a generator running, finished or of another realm,
+// (regGenResume), without the general resumption's answers for a
+// generator running, finished or of another realm,
 // which stepIter steps. The cursor is done once it is, or once a step
 // fails.
 func (r *Runtime) regGenStep(st *iterState, g *generator) (Value, bool, error) {
@@ -374,8 +370,7 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 	if jitBuilt && start >= 0 && f.savedSP == 0 && r.jitRegHas(g.cl) && (start > 0 || regAt(c.code, 0).Op() == bytecode.RGenEntry) {
 		// Native code made from its register code, entered where the
 		// frame resumes (jitRegEnter); a first run past gen_entry, which
-		// does nothing there, as the stack form's resumption enters a
-		// first run after its parameters (jitResume).
+		// does nothing there.
 		v, err = r.jitRegEnter(f, g.cl, c, base, max(start, 1))
 	} else {
 		v, err = r.runReg(f, c, start)
@@ -429,7 +424,7 @@ func (r *Runtime) regYield(f *frame, v Value, pc int) error {
 
 // regDelegate is the generator a synchronous yield*'s cursor st steps by
 // its realm's intrinsic next, or nil: the delegation steps it directly
-// (regDelegateNext), as the tree's delegateNext does.
+// (regDelegateNext).
 func (r *Runtime) regDelegate(st *iterState) *generator {
 	if st.forIn || st.arr != nil || !st.iter.IsObject() || !st.next.IsObject() {
 		return nil

@@ -135,14 +135,11 @@ func TestJITBackEdgePhisNotSpilled(t *testing.T) {
 					// Inlined, until its exits made the call one native code
 					// makes (jitInlineExits).
 					run := jitGlobalClosureForTest(r, "run")
-					e := r.jit.hint(run)
-					if regJITForTest() {
-						// Its register code's learning, which outlives its
-						// compiles, and its code's.
-						e = nil
-						if jitRegEntryOfForTest(r, run) != nil {
-							e = r.jit.regLearnedOf(r.jitRegKeyOf(run))
-						}
+					// Its register code's learning, which outlives its
+					// compiles, and its code's.
+					var e *jitEntry
+					if jitRegEntryOfForTest(r, run) != nil {
+						e = r.jit.regLearnedOf(r.jitRegKeyOf(run))
 					}
 					if inlined && (e == nil || len(e.notInline) == 0 && !slices.Contains(jitInlinedOfForTest(r, run), jitGlobalClosureForTest(r, "isShorterThan"))) {
 						t.Fatal("run's code never inlined isShorterThan")

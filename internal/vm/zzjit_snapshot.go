@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"math/bits"
 	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -99,10 +98,9 @@ type jitSnapKey struct {
 // closure, its function, the forwarding frames it is inlined at, and the
 // feedback it keeps what it holds in.
 type jitSnapCallee struct {
-	cl           *closure
-	fn           any
-	fwd, fwdArgs *jitForwardFrame
-	root         *jitFeedback
+	cl   *closure
+	fn   any
+	root *jitFeedback
 }
 
 // jitSnapDepth is how deep in callees the snapshot asks: past ssa's
@@ -125,7 +123,7 @@ func (m jitSnapMiss) Error() string {
 
 // get is the answer to a question; nil for one of a PC, asked there, that
 // answered nothing, which its method answers with its results' zero
-// values; or a miss, which the worker's build recovers (jitJob.run): a
+// values; or a miss, which the worker's build recovers (jitRegJob.run): a
 // question of a PC whose op the method is not asked at (jitSnapOpMethods)
 // is a miss too.
 func (s *jitSnapshot) get(m jitSnapMethod, arg int64) []any {
@@ -281,119 +279,6 @@ func (s *jitSnapshot) replay() {
 // answers anew at each question, and a build may change what it is given.
 func jitSnapCopy[T any](s []T) []T { return slices.Clone(s) }
 
-// jitSnapshotOf is fb's snapshot for p, its function's program: every
-// question asked ahead.
-func jitSnapshotOf(fb *jitFeedback, p *ir.Program) *jitSnapshot {
-	s := &jitSnapshot{answers: map[jitSnapKey][]any{}, callees: map[jitSnapCallee]*jitSnapshot{}, fb: fb, effects: map[jitSnapKey]*jitSnapEffect{}}
-	s.root = s
-	s.ask(fb, p)
-	// The questions of other arguments, of what the answers name: the
-	// leaves whose kinds the build asks (LeafKind), and the pools whose
-	// objects escape analysis asks how Go makes (VirtualRoot), in the
-	// root's feedback, which the build asks them of.
-	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
-	for _, c := range append([]*jitSnapshot{s}, mapValues(s.callees)...) {
-		for k, a := range c.answers {
-			if k.method == snapLeaf {
-				if fn, ok := a[0].(uintptr); ok && fn != 0 {
-					fns[fn] = true
-				}
-			}
-			for _, x := range a {
-				jitSnapPools(x, pools)
-			}
-		}
-	}
-	for fn := range fns {
-		k := fb.LeafKind(fn)
-		s.put(snapLeafKind, int64(fn), k)
-		for _, c := range s.callees {
-			c.put(snapLeafKind, int64(fn), k)
-		}
-	}
-	for pool := range pools {
-		shape, proto, ok := fb.VirtualRoot(pool)
-		s.put(snapVirtualRoot, int64(pool), shape, proto, ok)
-	}
-	return s
-}
-
-// ask asks fb every question of p's: at each PC, the methods of its op.
-func (s *jitSnapshot) ask(fb *jitFeedback, p *ir.Program) {
-	s.codeLen = len(p.Code)
-	s.ops = make([]ir.Op, len(p.Code))
-	s.askOnce(fb)
-	for pc := range p.Code {
-		op := p.Code[pc].Op
-		s.ops[pc] = op
-		asks := jitSnapAsks[op] &^ jitSnapSparse
-		for m := jitSnapMethod(0); int(m) < len(jitSnapAskers); m++ {
-			if asks&(1<<m) != 0 {
-				jitSnapAskers[m](s, fb, pc)
-			}
-		}
-	}
-	s.askSparse(fb)
-}
-
-// jitSnapSparse are the methods asked at every PC (jitSnapAsks) whose
-// answer is false but at the few PCs a list of the function's entry, or
-// the tree tier's marks, name: Generic, EntryGeneric and Resumed. They are
-// asked at those alone (askSparse), each other PC answering its zero value
-// as a PC asked that answered nothing does. Asked at every PC, they were
-// half the questions a snapshot asked, three answering in 10,000 in the
-// SSR benchmark's first render.
-const jitSnapSparse = 1<<snapGeneric | 1<<snapEntryGeneric | 1<<snapResumed
-
-// askSparse asks fb the methods of jitSnapSparse at the PCs where they may
-// answer true: Generic where its own entry's guards failed (failed) or the
-// tree tier saw arithmetic meet a BigInt on the heap; EntryGeneric where
-// its entries failed; Resumed where Go has gone on (resumed), or after a
-// call of the function itself.
-func (s *jitSnapshot) askSparse(fb *jitFeedback) {
-	ask := func(m jitSnapMethod, pc int) {
-		if pc >= 0 && pc < s.codeLen && jitSnapAsks[s.ops[pc]]&(1<<m) != 0 {
-			if _, ok := s.answers[jitSnapKey{m, int64(pc)}]; !ok {
-				jitSnapAskers[m](s, fb, pc)
-			}
-		}
-	}
-	if own := fb.ownEntry(); own != nil {
-		for _, pc := range own.failed {
-			ask(snapGeneric, int(pc))
-		}
-	}
-	if t := jitTreeBigs(fb.fn, 0); t != nil {
-		for w := range t.heap {
-			for word := t.heap[w].Load(); word != 0; word &= word - 1 {
-				ask(snapGeneric, w<<5+bits.TrailingZeros32(word))
-			}
-		}
-	}
-	if fb.e != nil {
-		for _, pc := range fb.e.failedEntries {
-			ask(snapEntryGeneric, int(pc))
-		}
-	}
-	e := fb.e
-	if e == nil {
-		e = fb.r.jit.entryFor(fb.fn)
-	}
-	if e != nil {
-		for _, pc := range e.resumed {
-			ask(snapResumed, int(pc))
-		}
-		for _, pc := range e.osrLoops {
-			ask(snapResumed, int(pc))
-		}
-		for _, x := range jitTargets(e) {
-			if x.cl != nil && x.cl.fn == fb.fn {
-				ask(snapResumed, int(x.pc)+1)
-			}
-		}
-	}
-}
-
 // jitSnapOps are the ops the build asks each method of a PC at, as the
 // VM's tests and the ssr and V8 workloads have it ask them, plain and
 // under QJS_JIT_STRESS (QJS_JIT_SNAPOPS writes what a run asked): asked at
@@ -453,29 +338,6 @@ var jitSnapAsks = func() (t [ir.ParamDefault + 1]uint64) {
 	return t
 }()
 
-// nest is site with its callee's feedback a snapshot, asked ahead, once
-// for each callee's feedback the root has met; past jitSnapDepth, one that
-// answers nothing.
-func (s *jitSnapshot) nest(site ssa.InlineSite) ssa.InlineSite {
-	f, ok := site.Feedback.(*jitFeedback)
-	if !ok {
-		return site
-	}
-	root := s.root
-	key := jitSnapCallee{cl: f.cl, fn: f.fn, fwd: f.fwd, fwdArgs: f.fwdArgs, root: f.root}
-	if c := root.callees[key]; c != nil {
-		site.Feedback = c
-		return site
-	}
-	c := &jitSnapshot{answers: map[jitSnapKey][]any{}, root: root, depth: s.depth + 1, fb: f, effects: map[jitSnapKey]*jitSnapEffect{}}
-	root.callees[key] = c
-	if c.depth < jitSnapDepth && site.Program != nil {
-		c.ask(f, site.Program)
-	}
-	site.Feedback = c
-	return site
-}
-
 // jitSnapPools adds to pools every pool an answer names: a literal's, a
 // closure's, an inline site's, a call's -- an accessor's and a loop's
 // among them.
@@ -517,23 +379,4 @@ func mapValues[K comparable, V any](m map[K]V) []V {
 		out = append(out, v)
 	}
 	return out
-}
-
-// buildFromSnapshot is the worker's build of j from its snapshot: the
-// function, or the build's refusal (buildErr), or a miss (missed).
-func (j *jitJob) buildFromSnapshot() (f *ssa.Func, err error) {
-	defer func() {
-		if v := recover(); v != nil {
-			m, ok := v.(jitSnapMiss)
-			if !ok {
-				panic(v)
-			}
-			j.missed, f, err = true, nil, m
-		}
-	}()
-	f, err = jitBuildFrom(j.w, j.fn, j.p, j.fb, j.snap, j.timing)
-	if err != nil {
-		j.buildErr = err
-	}
-	return f, err
 }

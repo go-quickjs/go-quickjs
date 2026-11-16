@@ -9,35 +9,35 @@ import (
 
 // RegExp.prototype's exec and test as native leaves (leafChecks): a match
 // of a primitive, on a RegExp neither global nor sticky, is called without
-// a frame by every tier where nothing it does can run the script's code or
+// a frame by the interpreter and native code where nothing it does can run
+// the script's code or
 // throw -- as V8 runs a RegExp's exec on its fast path, the prototype as it
 // was, without a frame of JavaScript's. An escaper's test of its input for
 // anything to escape, /["'&<>]/.exec(s), had been an ordinary built-in's
-// call: in the tree tier a frame and a tick; in native code a call of Go
-// (jitGoCall, jitGoCallNested from a native callee) -- its frame, the
+// call: in the interpreter a frame and a tick; in native code a call of Go
+// (jitGoCall, jitRegGoCallNested from a native callee) -- its frame, the
 // frames of the levels it is called from, its operands copied and
 // cleared, its code pinned -- which made html_escape_plain slower with
 // the JIT than without.
 //
 // The check (regexpLeaf's) passes where the receiver is a RegExp, its
-// lastIndex a number, which ToLength converts without calling anything;
-// the pattern neither global nor sticky, so that the match leaves lastIndex
-// as it is; the argument, if any, a primitive ToString converts without
-// calling anything or throwing -- a string, a number, a boolean, undefined
-// or null, not a symbol. A match the matcher makes may fail -- run out of
-// its step budget, or meet the check's interrupt -- and its error, made
-// without a frame, would have run what making one may run
-// (Error.stackTraceLimit's getter): a string's match that fails, nothing
-// made yet, errs with nothing made (errRegExpLeafAgain), which every tier
-// takes for a leaf's call refused and makes again with a frame, which
-// throws -- the budget's failure remembered (regexpLeaf's spent), so that
-// the match is not made twice. Any other primitive's match is the
-// built-in's own, which throws where it fails, and so a leaf's only where
-// its pattern's match is a search that never fails (regexp's NeverFails).
-// test calls the RegExp's exec, which must be the built-in, read as
-// execIsBuiltin reads it. What the match
-// does besides -- the result, the legacy statics -- calls nothing, and is
-// the same done twice: a pure body applies a leaf wherever its check
+// lastIndex a number, which ToLength converts without calling anything; the
+// pattern neither global nor sticky, so that the match leaves lastIndex as
+// it is; the argument, if any, a primitive ToString converts without calling
+// anything or throwing -- a string, a number, a boolean, undefined or null,
+// not a symbol. A match the matcher makes may fail -- run out of its step
+// budget, or meet the check's interrupt -- and its error, made without a
+// frame, would have run what making one may run (Error.stackTraceLimit's
+// getter): a string's match that fails, nothing made yet, errs with nothing
+// made (errRegExpLeafAgain), which the interpreter and native code take for
+// a leaf's call refused and make again with a frame, which throws -- the
+// budget's failure remembered (regexpLeaf's spent), so that the match is not
+// made twice. Any other primitive's match is the built-in's own, which
+// throws where it fails, and so a leaf's only where its pattern's match is a
+// search that never fails (regexp's NeverFails). test calls the RegExp's
+// exec, which must be the built-in, read as execIsBuiltin reads it. What the
+// match does besides -- the result, the legacy statics -- calls nothing, and
+// is the same done twice: a pure body applies a leaf wherever its check
 // passes, and an evaluation refused after it is made again with a frame
 // (pureInvoke), where a global pattern's match, made twice, had begun the
 // second where the first had left lastIndex.
@@ -155,7 +155,8 @@ func (l *regexpLeaf[_]) spend(re *regexp.Regexp, s *String, start int) {
 // errRegExpLeafAgain is a leaf's call's error where its match failed: it
 // made nothing -- no error, which making may run the script's code
 // (Error.stackTraceLimit's getter) -- and is made again with a frame, as
-// every tier makes a leaf's call whose function errs, which throws.
+// the interpreter and native code make a leaf's call whose function errs,
+// which throws.
 var errRegExpLeafAgain = errors.New("regexp: a leaf's match made again with a frame")
 
 // match is exec's or test's function (funcData.native): the built-in's
@@ -171,8 +172,8 @@ var errRegExpLeafAgain = errors.New("regexp: a leaf's match made again with a fr
 // so is a write of lastIndex that cannot be: a leaf's call, its RegExp
 // neither global nor sticky, writes none, and where its match fails errs
 // with nothing made (errRegExpLeafAgain), its call made again with a frame
-// (framed). Every tier calls it, the leaf's check passed or not: the
-// interpreter, the tree tier and native code's leaf routine.
+// (framed). The interpreter and native code's leaf routine call it, the
+// leaf's check passed or not.
 func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, error) {
 	dead := l.dead
 	l.dead = nil

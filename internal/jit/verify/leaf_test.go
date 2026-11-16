@@ -39,20 +39,28 @@ type leaves struct {
 
 func (leaves) GoCalls() bool { return true }
 func (l leaves) NativeCalls(pc int) []ssa.CallSite {
-	if pc+1 >= len(l.p.Maps) {
+	// Register code's call, its arguments its instruction's (regCall).
+	argc, method, ok := regCall(l.p, pc)
+	if !ok || method == l.plain {
 		return nil
 	}
-	argc := l.p.Maps[pc].Depth - l.p.Maps[pc+1].Depth
-	if !l.plain {
-		argc--
-	}
-	if argc < 0 {
-		return nil
-	}
-	return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, Method: !l.plain, ThisSlot: -1}}
+	return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, Method: method, ThisSlot: -1}}
 }
-func (leaves) Leaf(pc int) (uintptr, bool) {
-	return 0x86000 + uintptr(pc)*16, true
+func (l leaves) Leaf(pc int) (uintptr, bool) {
+	// The kind of a leaf of codePointAt's, at's or isNaN's name its own,
+	// another's by its PC: the stack form's PCs had put each kind at a call
+	// that allows it, which register code's PCs, not counting a call's
+	// operands' pushes, do not.
+	kind := pc % 6
+	switch regCalleeName(l.p, pc) {
+	case "at":
+		kind = 0
+	case "codePointAt":
+		kind = 1
+	case "isNaN":
+		kind = 2
+	}
+	return 0x86000 + uintptr(6*pc+kind)*16, true
 }
 
 // LeafKind has the leaves by their PCs each of the kinds native code makes
@@ -91,6 +99,7 @@ func TestMirLeafCalls(t *testing.T) {
 				if err != nil {
 					continue
 				}
+				regShape(f, p)
 				f.CallEntry = true
 				ssa.Optimize(f)
 				for _, b := range f.Blocks {
@@ -152,13 +161,16 @@ type maths struct {
 
 func (maths) GoCalls() bool { return true }
 func (m maths) Intrinsic(pc int) (ssa.Intrinsic, bool) {
-	if pc+1 >= len(m.p.Maps) {
+	// Register code's method call, its arguments its instruction's
+	// (regCall).
+	argc, method, ok := regCall(m.p, pc)
+	if !ok || !method {
 		return ssa.Intrinsic{}, false
 	}
-	switch m.p.Maps[pc].Depth - m.p.Maps[pc+1].Depth {
-	case 2:
+	switch argc {
+	case 1:
 		return ssa.Intrinsic{Callee: 0x88000, Op: ssa.OpMathCall, Go: ssa.GoMath, Fn: 1}, true
-	case 3:
+	case 2:
 		g := ssa.GoAtan2
 		if pc%2 == 1 {
 			g = ssa.GoHypot
@@ -187,6 +199,7 @@ func TestMirMathCalls(t *testing.T) {
 				if err != nil {
 					continue
 				}
+				regShape(f, p)
 				f.CallEntry = true
 				ssa.Optimize(f)
 				for _, b := range f.Blocks {

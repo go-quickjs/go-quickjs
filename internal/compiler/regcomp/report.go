@@ -8,8 +8,8 @@ import (
 )
 
 // The backend's refusals, kept where QJS_REGREPORT asks for the register
-// tier's report (the VM's regReport): what each function the backend left
-// to the stack form has that it does not compile.
+// interpreter's report (the VM's regReportPrint): what each function the
+// backend refused has that it does not compile.
 
 var reportOn = os.Getenv("QJS_REGREPORT") != ""
 

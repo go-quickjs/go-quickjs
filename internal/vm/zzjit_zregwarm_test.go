@@ -60,13 +60,12 @@ function awaits(n) { waits(n).then(function (v) { out.push(v) }); return n }
 `
 
 // TestJITRegSuspendNative runs a generator and async functions whose
-// register code suspends at a yield, an await and its parameters' end,
-// with the JIT and without, the collector idle and marking: native code
-// suspends the frame there itself (jitRegSuspend), as the stack form's
-// jitSuspend does, where each suspension had been a run ended in the
-// interpreter, the frame handed to runReg only to suspend; and an async
-// function's every first run enters its code past gen_entry (regGenRun),
-// as the stack form's resumption enters a first run.
+// register code suspends at a yield, an await and its parameters' end, with
+// the JIT and without, the collector idle and marking: native code suspends
+// the frame there itself (jitRegSuspend), where each suspension had been a
+// run ended in the interpreter, the frame handed to runReg only to suspend;
+// and an async function's every first run enters its code past gen_entry
+// (regGenRun).
 func TestJITRegSuspendNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -137,11 +136,10 @@ func TestJITRegSuspendNative(t *testing.T) {
 
 // TestJITRegGenLearnedJudgedAfresh checks that code compiled again for a
 // generator's step it learned (jitRegGenSeen) has the loops it was judged
-// slow for judged afresh (jitRegCached), as the stack form's genLearned
-// has jitReplaceCode judge them: left slow, the consumer's loop, whose
-// steps had each been a call of Go, stayed with the interpreter until a
-// retry a thousand samples later, generator_next's first round twice
-// the stack form's.
+// slow for judged afresh (jitRegCached): left slow, the consumer's loop,
+// whose steps had each been a call of Go, stayed with the interpreter until
+// a retry a thousand samples later, generator_next's first round twice the
+// stack form's.
 func TestJITRegGenLearnedJudgedAfresh(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -209,10 +207,10 @@ function late(n) {
 // loop, with the JIT and without, the collector idle and marking: a call
 // that leaves at a host exit for a function an earlier exit there taught
 // its code, which the code was not compiled for, invalidates it
-// (jitRegCallRepeats), as the stack form's jitCallRepeats has it, the
-// interpreter running the function until it is compiled again with it.
-// Left valid, the code left at every other turn until its loop was judged
-// slow for it, and the interpreter ran the loop for a thousand samples.
+// (jitRegCallRepeats), the interpreter running the function until it is
+// compiled again with it. Left valid, the code left at every other turn
+// until its loop was judged slow for it, and the interpreter ran the loop
+// for a thousand samples.
 func TestJITRegCallRepeatsInvalidates(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -255,12 +253,11 @@ func TestJITRegCallRepeatsInvalidates(t *testing.T) {
 	}
 }
 
-// TestJITRegCallSettlesTogether checks that a call whose code knows none
-// of its functions decides those it meets in its first jitCallsToInline
-// calls of Go together (jitRegCallSettling), as the stack form's
-// jitCallSeen settles a call, the code compiled again once for them all:
-// learned one at a time, each compile again was put off by the next
-// function met.
+// TestJITRegCallSettlesTogether checks that a call whose code knows none of
+// its functions decides those it meets in its first jitCallsToInline calls
+// of Go together (jitRegCallSettling), the code compiled again once for
+// them all: learned one at a time, each compile again was put off by the
+// next function met.
 func TestJITRegCallSettlesTogether(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -362,8 +359,8 @@ function traces(n) {
 // TestJITRegBuiltinCalls runs calls of built-ins with frames of their own
 // that native code leaves to Go, with the JIT and without, the collector
 // idle and marking: Go calls such a built-in directly (jitRegBuiltin,
-// jitRegNativeMade), as the stack form's jitCallMade does, rather than
-// through regCallSlow's search of the site's cache and the generic call.
+// jitRegNativeMade), rather than through regCallSlow's search of the site's
+// cache and the generic call.
 func TestJITRegBuiltinCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

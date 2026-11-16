@@ -2237,7 +2237,14 @@ func (c *core) allocate() error {
 				if sp = sp && w < aCost[i]; sp {
 					ac = float64(w)
 				}
-				if d := float64(ac*vr) - float64(vc*ar); d < 0 || d == 0 && e > victim.end {
+				// Of those alike, a split first, whose register goes with
+				// nothing loaded back -- no use but frame states' is
+				// ahead of it -- then the one ending last: ending last,
+				// a value the turn still read twice had been spilled
+				// whole beside one only frame states read, at the same
+				// cost for the length each gave up (a BigInt's
+				// xorshift, register code's, its number unboxed).
+				if d := float64(ac*vr) - float64(vc*ar); d < 0 || d == 0 && (sp && !split || sp == split && e > victim.end) {
 					victim, vi, vc, vr, split = active[i], i, ac, ar, sp
 				}
 			}
@@ -3975,10 +3982,8 @@ func goCallWord(site *ssa.CallSite) uint64 {
 // writes them to the callee's window past the VM's stack's top -- the
 // function in its register 0, a method call's receiver in 1, the
 // arguments from 2 -- where Go reads them (the VM's jitRegGoCallOn),
-// as the window's layout is the frame Go makes for the call. The stack
-// form's call left native code at its checks instead, and Go ran a callee
-// with no code from its start (abi.ExitEnter); register code, whose window
-// holds the operands, makes such a call as it makes any other.
+// as the window's layout is the frame Go makes for the call. Register code,
+// whose window holds the operands, makes such a call as it makes any other.
 func windowGoCall(v *ssa.Value, site *ssa.CallSite) bool {
 	return len(v.Args) > abi.MaxGoArgs && site.Window != 0 && !site.Super && !site.Forward && site.Accessor == ssa.AccessorNone
 }

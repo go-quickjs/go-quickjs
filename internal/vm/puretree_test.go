@@ -6,11 +6,12 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// TestPureByTree pins which pure bodies a call from a tree runs as their
-// tree (pureByTree): one of pureTreeCode instructions or more that calls
-// nothing is given its tree's call after its first, framed, call; one that
-// calls, or a short one, stays frameless (pureCall), as does every call
-// from inside another pure body. Each answers the same in both tiers.
+// TestPureByTree pins which pure bodies are called as their register code:
+// a closure register code makes is given its code's call at once (regPlan),
+// a pure body's however short, as the register tier gave it before the old
+// tiers went -- the tree tier's choice (pureByTree), which left a short one
+// or one that calls frameless (pureCall), was the tree's alone. A call from
+// inside another pure body is still evaluated frameless (pureInvoke).
 func TestPureByTree(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -28,29 +29,25 @@ func TestPureByTree(t *testing.T) {
 			if (i == 150) t.mark();
 		}
 		[n, T.prototype.held, T.prototype.mark, T.prototype.one, T.prototype.viaHeld]`
-	for _, tree := range []bool{false, true} {
-		r := newOldTiersTreeForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatalf("tree=%v: %v", tree, err)
-		}
-		res := v.Object().elemsOf()
-		if got := res[0].Number(); got != 300+149*3 {
-			t.Errorf("tree=%v: n = %v, want %v", tree, got, 300+149*3)
-		}
-		// What a tree's call is given, where the functions are trees.
-		if tree {
-			for i, want := range []bool{true, true, false, false} {
-				fd := res[i+1].Object().fn()
-				name := []string{"held", "mark", "one", "viaHeld"}[i]
-				if fd.closure.fn.Leaf != bytecode.LeafPure {
-					t.Fatalf("%s is not a pure body", name)
-				}
-				if got := fd.treeCall != nil; got != want {
-					t.Errorf("%s: given its tree's call = %v, want %v", name, got, want)
-				}
-			}
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	res := v.Object().elemsOf()
+	if got := res[0].Number(); got != 300+149*3 {
+		t.Errorf("n = %v, want %v", got, 300+149*3)
+	}
+	// Which of them are given their register code's call.
+	for i, want := range []bool{true, true, true, true} {
+		fd := res[i+1].Object().fn()
+		name := []string{"held", "mark", "one", "viaHeld"}[i]
+		if fd.closure.fn.Leaf != bytecode.LeafPure {
+			t.Fatalf("%s is not a pure body", name)
+		}
+		if got := fd.regCall != nil; got != want {
+			t.Errorf("%s: given its register code's call = %v, want %v", name, got, want)
+		}
+	}
+	r.Close()
 }

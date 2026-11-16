@@ -49,7 +49,7 @@ func TestJITBigIntLiterals(t *testing.T) {
 		e := jitCodeForTest(r, name)
 		if e == nil || e.invalid {
 			if e != nil {
-				t.Fatalf("%s has no code: invalid %v, refusal %q", name, e.invalid, e.refusal)
+				t.Fatalf("%s has no code: invalid %v", name, e.invalid)
 			}
 			t.Fatalf("%s has no entry", name)
 		}

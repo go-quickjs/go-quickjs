@@ -8,7 +8,7 @@ import "testing"
 // path leaves to the built-in -- a frozen array, a length not writable,
 // an array not extensible, an index with a setter on Array.prototype --
 // and pops to empty and past it. Each function has a local of its own,
-// so that it is run on its tree rather than by pureCall.
+// so that it is run as register code rather than by pureCall.
 const pushTestSrc = `
 const out = []
 const O = { v: 1 }
@@ -46,19 +46,16 @@ res
 // pushTestWant is Node's answer.
 const pushTestWant = "300|300|s0,1,2,O,4,5,s6|296,O,298,299|30100:undefined|3,4,6,10|1,,3,1,2,3,O,x,null,undefined|10|TypeError|2|TypeError|2|TypeError|1|8|9||0|5000|4999|4999|4999|300|300|s0,1,2,O,4,5,s6|296,O,298,299|30100:undefined|3,4,6,10|1,,3,1,2,3,O,x,null,undefined|10|TypeError|2|TypeError|2|TypeError|1|8|9||0|5000|4999|4999|4999|300|300|s0,1,2,O,4,5,s6|296,O,298,299|30100:undefined|3,4,6,10|1,,3,1,2,3,O,x,null,undefined|10|TypeError|2|TypeError|2|TypeError|1|8|9||0|5000|4999|4999|4999|setter two|3|3|"
 
-// push and pop answer in the tree tier as in the interpreter, as Node
-// answers.
+// push and pop answer as Node answers.
 func TestPurePushPop(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, pushTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != pushTestWant {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, pushTestWant)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, pushTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != pushTestWant {
+		t.Errorf("got\n%s\nwant\n%s", got, pushTestWant)
 	}
 }

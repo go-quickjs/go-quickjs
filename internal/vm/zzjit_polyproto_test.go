@@ -5,7 +5,6 @@ package vm
 import (
 	"testing"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
@@ -164,30 +163,17 @@ func TestJITPolyProtoIn(t *testing.T) {
 		t.Fatalf("probe was not compiled: %+v", cv.e)
 	}
 	writes := 0
-	if cv.reg != nil {
-		// The register form's sites are its program's, by register pc,
-		// answered by its feedback (jitRegFeedbackFor).
-		p := cv.reg.p
-		fb := r.jitRegFeedbackFor(fn, p)
-		for pc, in := range p.Code {
-			if in.Op != ir.PropertyWrite {
-				continue
-			}
-			writes++
-			if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
-				t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
-			}
+	// The sites are its program's, by register pc, answered by its
+	// feedback (jitRegFeedbackFor).
+	p := cv.reg.p
+	fb := r.jitRegFeedbackFor(fn, p)
+	for pc, in := range p.Code {
+		if in.Op != ir.PropertyWrite {
+			continue
 		}
-	} else {
-		fb := &jitFeedback{r: r, fn: fn.fn, cl: fn, e: cv.e}
-		for pc, in := range fn.fn.Code {
-			if in.Op != bytecode.OpSetProp {
-				continue
-			}
-			writes++
-			if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
-				t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
-			}
+		writes++
+		if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
+			t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
 		}
 	}
 	if writes != 3 {

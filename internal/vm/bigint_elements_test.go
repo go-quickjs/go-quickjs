@@ -11,8 +11,7 @@ import "testing"
 // BigInt stores and BigInt.asIntN convert alike. A pure body adds,
 // subtracts, multiplies and orders BigInts an int64 holds itself
 // (pureBigArith), and leaves the rest -- a result past the range, a BigInt
-// beside a Number, which throws -- to its frame. Run on the tree and
-// without it.
+// beside a Number, which throws -- to its frame.
 func TestBigIntElements(t *testing.T) {
 	const src = `
 		var out = []
@@ -62,17 +61,13 @@ func TestBigIntElements(t *testing.T) {
 		"0,5,4,-9,-9 | -1 | 1 | -9223372036854775808 | " +
 		"9223372036854775810 | -9223372036854775810 | 3,-6,9,-4611686018427387904,-4611686018427387904 | " +
 		"true | true | 2 | true | 2 | TypeError | 18446744073709551616 | 18446744073709551614,2"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v:\n%s\nwant\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got:\n%s\nwant\n%s", got, want)
 	}
 }

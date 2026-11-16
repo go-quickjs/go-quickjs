@@ -52,7 +52,7 @@ const throwCatchSetup = `
 
 // A throw a catch clause of the same function catches, its value the one
 // operand above the handler's depth, is a jump to the handler in native
-// code, as the tree tier makes it: no exception made, no exit. Each answer
+// code, as the interpreter makes it: no exception made, no exit. Each answer
 // is the interpreter's -- primitives, strings, objects, an Error with its
 // stack, undefined; nested handlers, the inner rethrowing to the outer; a
 // catch with no binding; a finally clause between, which Go still throws

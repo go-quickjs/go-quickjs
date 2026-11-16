@@ -13,7 +13,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -34,26 +33,31 @@ var forwardCorpus = []string{
 // forwards is globals whose apply_arguments have each been seen to call
 // what variant says: one function of two parameters; one that reads its
 // arguments past them (FrameArgs) and coerces its receiver; two functions,
-// as many as the call calls natively (Generic); none, Go's.
+// as many as the call calls natively (Generic); none, Go's. Register
+// code's apply_arguments is a Window Host, its window at f, apply and x,
+// and its callees register code's, as the VM's regCallSite makes their
+// sites: their parameters past their function and this, which they read
+// from their window's register 1 (ThisSlot -1).
 type forwards struct {
 	globals
-	fn      *bytecode.Function
+	p       *ir.Program
 	variant int
 }
 
 func (forwards) GoCalls() bool { return true }
 func (f forwards) NativeCalls(pc int) []ssa.CallSite {
-	if f.fn.Code[pc].Op != bytecode.OpApplyArguments {
+	w, ok := regInstr(f.p, pc)
+	if !ok || w.Op() != bytecode.RApplyArgs || f.p.Code[pc].Op != ir.Host || !f.p.Code[pc].Window {
 		return nil
 	}
-	site := ssa.CallSite{Callee: 0x50000, Closure: 0x51000, Entry: 0x52000, Count: 0x53000, Argc: 2, Forward: true, Apply: 0x54000,
-		Params: 2, LocalCount: 3, MaxStack: 4, ThisSlot: -1}
+	site := regCallee(f.p, pc, 2, 2, 5, false)
+	site.Forward, site.Apply = true, 0x54000
 	switch f.variant {
 	case 1:
-		site.FrameArgs, site.Coerce, site.ThisSlot, site.Params, site.LocalCount = true, true, 3, 1, 3
+		site.FrameArgs, site.Coerce, site.Params, site.LocalCount = true, true, 2+1, 5
 	case 2:
 		other := site
-		other.Callee, other.Closure, other.Entry, other.Count, other.Params = 0x55000, 0x56000, 0x57000, 0x58000, 5
+		other.Callee, other.Closure, other.Entry, other.Count, other.Params, other.LocalCount = 0x55000, 0x56000, 0x57000, 0x58000, 2+5, 8
 		site.Generic = true
 		return []ssa.CallSite{site, other}
 	case 3:
@@ -86,7 +90,7 @@ func TestMirForwardingCalls(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){jitcompile.LowerSSA, jitcompile.LowerSSAInline} {
+			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){regLowerForTest, regLowerInlineForTest} {
 				p, err := lower(c.Fn)
 				if err != nil {
 					continue
@@ -95,10 +99,11 @@ func TestMirForwardingCalls(t *testing.T) {
 					t.Fatalf("%s: not lowered as a forwarding function", src)
 				}
 				for variant := range 4 {
-					f, err := ssa.BuildWith(p, forwards{fn: c.Fn, variant: variant})
+					f, err := ssa.BuildWith(p, forwards{p: p, variant: variant})
 					if err != nil {
 						t.Fatalf("%s (%d): %v", src, variant, err)
 					}
+					regShape(f, p)
 					f.CallEntry = true
 					ssa.Optimize(f)
 					native := false

@@ -8,8 +8,8 @@
 // cycle.
 //
 // The files named vm*.go hold the code a running script spends its time in:
-// the interpreter's loop and its calls, the frameless evaluator, the property
-// caches, objects' and properties' lookups, and the tree tier's run. The Go
+// the interpreter's calls, the frameless evaluator, the property caches, and
+// objects' and properties' lookups. The Go
 // linker lays out a package's functions file by file in the order of their
 // names, and on this kind of code the processor is several per cent faster or
 // slower for where hot functions sit against each other. Kept together, after

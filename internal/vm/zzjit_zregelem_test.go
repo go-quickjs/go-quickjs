@@ -95,10 +95,10 @@ var regTypedKindSrc = func() string {
 // TestJITRegTypedKinds runs, for each element type, register code reading
 // and writing typed arrays of that type, and compares its answers with a
 // runtime's without the JIT. What a site's typed array met native code
-// learns as it runs (jitTypedSeen) has the register code compiled again
-// for it, as the stack form's is (TestJITTypedKinds): learned in a cell the
-// code was compiled without, it had stayed the code that reads every
-// element through its cold path, a typed array an Array's read's miss.
+// learns as it runs (jitTypedSeen) has the register code compiled again for
+// it: learned in a cell the code was compiled without, it had stayed the
+// code that reads every element through its cold path, a typed array an
+// Array's read's miss.
 func TestJITRegTypedKinds(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

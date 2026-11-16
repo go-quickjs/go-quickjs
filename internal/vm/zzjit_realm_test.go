@@ -7,7 +7,6 @@ import (
 	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // jitRealmProgram makes each kind of value native code makes from a pool or
@@ -127,14 +126,8 @@ func TestJITRealmsHaveTheirOwnCode(t *testing.T) {
 		seen := map[any]bool{}
 		for _, re := range realms {
 			r.InRealm(re, func() {
-				if regJITForTest() {
-					// The register code of the realm's key (jitKey).
-					if e := r.jit.regCache[r.jitKeyOf(object)]; e != nil && e.code != nil && e.life.ssaStats.entries != 0 {
-						seen[e] = true
-					}
-					return
-				}
-				if e := r.jit.entryFor(object); e != nil && e.ssa != nil && e.ssaStats.entries != 0 {
+				// The register code of the realm's key (jitKey).
+				if e := r.jit.regCache[r.jitKeyOf(object)]; e != nil && e.code != nil && e.life.ssaStats.entries != 0 {
 					seen[e] = true
 				}
 			})
@@ -215,7 +208,7 @@ func TestJITRealmsWithinTheBudget(t *testing.T) {
 				t.Fatal(err)
 			}
 			if s := r.jit; s != nil && s.held() > s.budget {
-				t.Fatalf("limit %d KB, realm %d: held %d, %d entries", limit>>10, i, s.held(), len(s.cache))
+				t.Fatalf("limit %d KB, realm %d: held %d, %d entries", limit>>10, i, s.held(), len(s.regCache))
 			}
 		}
 		r.Close()
@@ -241,12 +234,6 @@ func jitRealmFlushed(t *testing.T, r *Runtime, setEpoch func(uint64), keep map[w
 		r.jitDrain()
 		r.jit.flush()
 		left = 0
-		for key := range r.jit.cache {
-			if key.realm != cur && !keep[key.realm] {
-				left++
-			}
-		}
-		// The register form's code, by the same keys.
 		for key := range r.jit.regCache {
 			if key.realm != cur && !keep[key.realm] {
 				left++
@@ -289,11 +276,6 @@ func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
 		}
 		s := r.jit
 		native := 0
-		for key, e := range s.cache {
-			if key.realm.Value() != nil && e.ssa != nil && e.ssaStats.entries != 0 {
-				native++
-			}
-		}
 		for key, e := range s.regCache {
 			if key.realm.Value() != nil && e.code != nil && e.life != nil && e.life.ssaStats.entries != 0 {
 				native++
@@ -305,12 +287,6 @@ func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
 		if n := jitRealmFlushed(t, r, setEpoch, nil); n != 0 {
 			t.Errorf("%+v: %d entries of dropped realms left", c, n)
 		}
-		if err := jitLinksHeld(s); err != nil {
-			t.Error(err)
-		}
-		if err := jitEntriesFound(s); err != nil {
-			t.Error(err)
-		}
 		if err := regLinksHeldForTest(s); err != nil {
 			t.Error(err)
 		}
@@ -318,7 +294,7 @@ func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
 			t.Error(err)
 		}
 		if n := realmsAlive(r, refs); n != 0 {
-			t.Errorf("%+v: %d of %d realms alive with %d entries in the cache", c, n, len(refs), len(s.cache)+len(s.regCache))
+			t.Errorf("%+v: %d of %d realms alive with %d entries in the cache", c, n, len(refs), len(s.regCache))
 		}
 		for round := range 3 {
 			jitRealmCheck(t, r, quiet, fn, 1000, jitRealmSay(c, round, 9))
@@ -396,25 +372,12 @@ func TestJITFlushKeepsTheRunningRealm(t *testing.T) {
 	s := r.jit
 	count := func() (own, other, warming int) {
 		cur := r.jitRealmKey()
-		if regJITForTest() {
-			// The register form's entries are its functions' lives
-			// (regLearned), with code in the cache or warming without.
-			for key := range s.regLearned {
-				if key.realm == cur {
-					own++
-					if e := s.regCache[key]; e == nil || e.code == nil {
-						warming++
-					}
-				} else {
-					other++
-				}
-			}
-			return
-		}
-		for key, e := range s.cache {
+		// The register form's entries are its functions' lives
+		// (regLearned), with code in the cache or warming without.
+		for key := range s.regLearned {
 			if key.realm == cur {
 				own++
-				if !e.holdsCode() {
+				if e := s.regCache[key]; e == nil || e.code == nil {
 					warming++
 				}
 			} else {
@@ -458,16 +421,10 @@ func TestJITRegRealmsWithinTheBudgetClocked(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, jitHotProgram(40))
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	was := SetJITRegTier(true)
 	epoch, flush := jitEpochNow, jitFlushNow
 	t.Cleanup(func() {
 		jitEpochNow, jitFlushNow = epoch, flush
-		SetRegTier(bytecode.RegDefault())
-		SetJITRegTier(was)
 	})
 	for _, step := range []uint64{0, 1, 2, 3} {
 		for _, limit := range []int64{96 << 10, 256 << 10} {
@@ -481,8 +438,8 @@ func TestJITRegRealmsWithinTheBudgetClocked(t *testing.T) {
 					t.Fatal(err)
 				}
 				if s := r.jit; s != nil && s.held() > s.budget {
-					t.Fatalf("step %d, limit %d KB, realm %d: held %d of %d: register code %d, programs %d, shared %d, entries %d",
-						step, limit>>10, i, s.held(), s.budget, s.regHeld, s.lowerBytes, s.sharedBytes(), s.entryBytes)
+					t.Fatalf("step %d, limit %d KB, realm %d: held %d of %d: register code %d, programs %d, shared %d",
+						step, limit>>10, i, s.held(), s.budget, s.regHeld, s.lowerBytes, s.sharedBytes())
 				}
 			}
 			r.Close()

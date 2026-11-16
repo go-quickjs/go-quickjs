@@ -24,16 +24,14 @@ func (r *Runtime) jitOpPlain(ctx *abi.Context) bool {
 	if n > abi.MaxGoArgs || n != jitcompile.GoOperands(in) {
 		return false
 	}
-	var f *frame
 	var cl *closure
-	switch in.Op {
-	case bytecode.OpTemplateObject, bytecode.OpPushCallee:
-		if f, cl = r.jitOpCode(ctx, in); cl == nil {
+	if in.Op == bytecode.OpTemplateObject {
+		if cl = r.jitOpCode(ctx, in); cl == nil {
 			return false
 		}
 	}
 	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[0])), n)
-	v, ok := r.jitOpFrameless(f, cl, in, args)
+	v, ok := r.jitOpFrameless(cl, in, args)
 	if !ok {
 		return false
 	}
@@ -41,50 +39,37 @@ func (r *Runtime) jitOpPlain(ctx *abi.Context) bool {
 	return true
 }
 
-// jitOpCode is the frame and the closure of the code that makes in, an
-// operation Go makes for native code in ctx (jitOpPlain): the run's frame
-// and its closure, or a native callee's closure, or an inlined callee's,
-// with no frame -- or nil where the instruction at the call's PC is not
-// in.
-func (r *Runtime) jitOpCode(ctx *abi.Context, in bytecode.Instr) (*frame, *closure) {
+// jitOpCode is the closure of the code that makes in, an operation Go
+// makes for native code in ctx (jitOpPlain): a native callee's closure --
+// or nil where the instruction at the call's PC is not in.
+func (r *Runtime) jitOpCode(ctx *abi.Context, in bytecode.Instr) *closure {
 	s, idx := r.jit, int(ctx.Level)
 	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || r.jitRegCodeIn(ctx, idx) {
 		// Register code's operations are Go's whole on its frame
 		// (jitRegWhole): its pcs are register pcs, not its stack code's.
-		return nil, nil
+		return nil
 	}
-	var cl *closure
-	var f *frame
-	switch ctx.Live {
-	case 0:
-		if idx >= len(s.goRuns) || s.goRuns[idx].f == nil {
-			return nil, nil
-		}
-		f = s.goRuns[idx].f
-		cl = f.cl
-	case abi.LiveCall:
-		cl = (*closure)(ctx.Closure)
+	if ctx.Live != abi.LiveCall || jitGoInline(ctx) {
+		// A run's own frame, or an inlined callee's: none kept.
+		return nil
 	}
+	cl := (*closure)(ctx.Closure)
 	pc := int(ctx.ExitPC)
-	if st := jitGoCallState(ctx); st != nil && st.Inline != 0 {
-		cl, pc, f = r.jitGoInlined(ctx, cl, st.Inline), int(st.InlinePC), nil
-	}
 	if cl == nil || pc >= len(cl.fn.Code) || cl.fn.Code[pc] != in {
-		return nil, nil
+		return nil
 	}
-	return f, cl
+	return cl
 }
 
 // jitOpFrameless is in's result, of its operands args, where making it
-// runs no script and throws nothing, as the interpreter makes it; f is the
-// frame of the code that makes it, nil for a native callee's: object
+// runs no script and throws nothing, as the interpreter makes it: object
 // spread and rest of what has no getter and is no proxy (jitCopyPlain), of
 // keys that are primitives; array spread of a dense array that iterates as
 // Array.prototype does; an element appended; a literal's __proto__; a key
 // that is a primitive, converted, or defined on an ordinary object; a
-// tagged template's strings; the frame's function. It reports false for
-// the rest, having changed nothing.
-func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args []Value) (Value, bool) {
+// tagged template's strings. It reports false for the rest, having
+// changed nothing.
+func (r *Runtime) jitOpFrameless(cl *closure, in bytecode.Instr, args []Value) (Value, bool) {
 	if r.meter != nil {
 		// What they allocate is charged to the memory limit, which may
 		// throw.
@@ -160,7 +145,7 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		v, err := r.objectRest(src, excluded)
 		return v, err == nil
 	case bytecode.OpCallSpread:
-		// A leaf's call, Math.max(...a): applied as every tier applies it
+		// A leaf's call, Math.max(...a): applied as the interpreter applies it
 		// without a frame (jitPlainCall), its arguments the array's
 		// elements, where its check passes; any other call is the
 		// frame's.
@@ -179,14 +164,6 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		return r.jitLeafApply(fd, this, a.elemsOf())
 	case bytecode.OpTemplateObject:
 		return Obj(r.templateObject(cl.fn, int(in.A))), true
-	case bytecode.OpPushCallee:
-		if f == nil {
-			return Undefined, false
-		}
-		if f.callee == nil {
-			return Undefined, true
-		}
-		return Obj(f.callee), true
 	case bytecode.OpDefineIndex:
 		obj, key, val := args[0], args[1], args[2]
 		if key.IsObject() {
@@ -463,116 +440,4 @@ func jitCopyPlain(o *Object) bool {
 		}
 	}
 	return true
-}
-
-// jitOpMade makes in, an operation Go makes for native code (abi.GoCallOp,
-// the lowering's GoOperation), with f's frame, of its operands args, as
-// the interpreter does: what it runs -- a getter, a proxy's trap, an
-// iterator's next, a key's toString, a spread call's callee -- may run
-// anything, and what it throws is the frame's.
-func (r *Runtime) jitOpMade(f *frame, in bytecode.Instr, args []Value) (Value, error) {
-	switch in.Op {
-	case bytecode.OpCopyDataProps:
-		target, src := args[0], args[1]
-		if target.IsObject() && !src.IsNullish() {
-			if err := r.copyDataProps(target.Object(), src); err != nil {
-				return Undefined, err
-			}
-		}
-		return target, nil
-	case bytecode.OpArraySpread:
-		target, src := args[0], args[1]
-		if target.IsObject() {
-			if err := r.spreadInto(target.Object(), src); err != nil {
-				return Undefined, err
-			}
-		}
-		return target, nil
-	case bytecode.OpSpreadIter:
-		target, src := args[0], args[1]
-		vals, err := r.spreadToStack(src)
-		if err != nil {
-			return Undefined, err
-		}
-		if target.IsObject() {
-			t := target.Object()
-			t.extOf().elems = append(t.elemsOf(), vals...)
-		}
-		return target, nil
-	case bytecode.OpObjectRest:
-		return r.objectRest(args[0], args[1:])
-	case bytecode.OpCallSpread, bytecode.OpNewSpread:
-		argsVal := args[len(args)-1]
-		var callArgs []Value
-		if argsVal.IsObject() {
-			callArgs = argsVal.Object().elemsOf()
-		}
-		if in.Op == bytecode.OpNewSpread {
-			return r.construct(args[0], callArgs)
-		}
-		// A spread call has a receiver beneath its callee, undefined for
-		// a plain call.
-		return r.call(args[1], args[0], callArgs)
-	case bytecode.OpDefineIndex:
-		obj, key, val := args[0], args[1], args[2]
-		k, err := r.toPropertyKey(key)
-		if err != nil {
-			return Undefined, err
-		}
-		if obj.IsObject() {
-			if err := r.createDataProperty(obj.Object(), k, val, memberFlags(in.A)); err != nil {
-				return Undefined, err
-			}
-		}
-		return obj, nil
-	case bytecode.OpToPropertyKey:
-		v := args[0]
-		if v.IsString() || v.IsSymbol() {
-			return v, nil
-		}
-		k, err := r.toPropertyKey(v)
-		if err != nil {
-			return Undefined, err
-		}
-		return r.keyToValue(k), nil
-	case bytecode.OpDefineField:
-		if obj := args[0]; obj.IsObject() {
-			if err := r.defineOwnProp(obj.Object(), f.cl.names[in.A], args[1], propDefault); err != nil {
-				return Undefined, err
-			}
-		}
-		return args[0], nil
-	}
-	if v, ok := r.jitOpFrameless(f, f.cl, in, args); ok {
-		return v, nil
-	}
-	// What the frameless path makes always, it refuses only with a
-	// memory limit: made here as it would be.
-	switch in.Op {
-	case bytecode.OpArrayPush:
-		if arr := args[0]; arr.IsObject() {
-			o := arr.Object()
-			o.extOf().elems = append(o.elemsOf(), args[1])
-		}
-		return args[0], nil
-	case bytecode.OpSetProtoOf:
-		obj, val := args[0], args[1]
-		if obj.IsObject() {
-			switch {
-			case val.IsObject():
-				obj.Object().setProto(val.Object())
-			case val.IsNull():
-				obj.Object().setProto(nil)
-			}
-		}
-		return obj, nil
-	case bytecode.OpTemplateObject:
-		return Obj(r.templateObject(f.cl.fn, int(in.A))), nil
-	case bytecode.OpPushCallee:
-		if f.callee == nil {
-			return Undefined, nil
-		}
-		return Obj(f.callee), nil
-	}
-	panic("jit: not an operation Go makes: " + in.Op.String())
 }

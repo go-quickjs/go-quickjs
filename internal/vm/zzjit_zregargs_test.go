@@ -80,6 +80,16 @@ function main(n) {
 }
 `
 
+// regTailMutualSrc's two functions call each other in tail position, a
+// million deep, from a loop that calls them natively: past tailCallDepth
+// each call is a jump to the other's code in the frame given up (mir's
+// windowTailJump), the stack no deeper than at a thousand.
+const regTailMutualSrc = `
+function ev(n, acc) { "use strict"; return n === 0 ? acc : od(n - 1, acc + 1) }
+function od(n, acc) { "use strict"; return n === 0 ? -acc : ev(n - 1, acc + 2) }
+function main(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + ev(1024 + (i & 1), 0)) | 0; return s + ":" + ev(1000000, 0) + ":" + od(1000001, 0) }
+`
+
 // TestJITRegArgumentsInlined runs regArgsInlineSrc's main natively and
 // in a runtime with no JIT and compares them: once warm, the callees that
 // read their arguments and those that hand them on are inlined, their
@@ -95,8 +105,7 @@ func TestJITRegArgumentsInlined(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			RecordJITCompiles(true)
-			defer RecordJITCompiles(false)
+			recordJITCompilesForTest(t)
 			rts := regNativeRuntimes(t, regArgsInlineSrc)
 			r := rts[0]
 			r.SetJITWarmUp(1, 1)
@@ -139,16 +148,6 @@ func TestJITRegArgumentsInlined(t *testing.T) {
 	}
 }
 
-// regTailMutualSrc's two functions call each other in tail position, a
-// million deep, from a loop that calls them natively: past tailCallDepth
-// each call is a jump to the other's code in the frame given up (mir's
-// windowTailJump), the stack no deeper than at a thousand.
-const regTailMutualSrc = `
-function ev(n, acc) { "use strict"; return n === 0 ? acc : od(n - 1, acc + 1) }
-function od(n, acc) { "use strict"; return n === 0 ? -acc : ev(n - 1, acc + 2) }
-function main(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + ev(1024 + (i & 1), 0)) | 0; return s + ":" + ev(1000000, 0) + ":" + od(1000001, 0) }
-`
-
 // TestJITRegTailMutual runs regTailMutualSrc's main natively and in a
 // runtime with no JIT and compares them: once warm, no call in tail
 // position leaves native code.
@@ -162,8 +161,7 @@ func TestJITRegTailMutual(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			RecordJITCompiles(true)
-			defer RecordJITCompiles(false)
+			recordJITCompilesForTest(t)
 			rts := regNativeRuntimes(t, regTailMutualSrc)
 			r := rts[0]
 			r.SetJITWarmUp(1, 1)

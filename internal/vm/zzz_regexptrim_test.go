@@ -36,26 +36,23 @@ const regexpTrimTestWant = `"","<>",2,0,0:0,0,[""] "","< ><>",4,0,0:1,0,[" ",""]
 
 // A global search of a trim's pattern finds its matches past the start
 // where the run that ends the subject begins (regexp's trimTail): each
-// replace's string, length and legacy statics, lastIndex and each match
-// are Node's, in the interpreter and the tree tier, with the collector idle
-// and running.
+// replace's string, length and legacy statics, lastIndex and each match are
+// Node's, with the collector idle and running.
 func TestRegExpTrimReplace(t *testing.T) {
 	for _, idle := range []bool{true, false} {
-		for _, tree := range []bool{true, false} {
-			if idle {
-				runtime.GC()
-				debug.SetGCPercent(-1)
-			}
-			r := newTreeTierForTest(tree, Config{})
-			v, err := r.Run(compileForTest(t, regexpTrimTestSrc))
-			r.Close()
-			debug.SetGCPercent(100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != regexpTrimTestWant {
-				t.Errorf("tree tier %v, collector idle %v:\ngot  %s\nwant %s", tree, idle, got, regexpTrimTestWant)
-			}
+		if idle {
+			runtime.GC()
+			debug.SetGCPercent(-1)
+		}
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, regexpTrimTestSrc))
+		r.Close()
+		debug.SetGCPercent(100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != regexpTrimTestWant {
+			t.Errorf("collector idle %v:\ngot  %s\nwant %s", idle, got, regexpTrimTestWant)
 		}
 	}
 }

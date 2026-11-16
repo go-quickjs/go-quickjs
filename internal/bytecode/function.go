@@ -444,7 +444,7 @@ type Function struct {
 	Leaf LeafKind
 	// PureCalls says a LeafPure body calls or constructs: the VM keeps such
 	// a body frameless where it can, since its calls are frameless with it,
-	// while one that calls nothing may be run as its tree.
+	// while one that calls nothing may be run as its register code.
 	PureCalls bool
 	// PureTail is, for a LeafPure body, where the code begins that has no
 	// instruction a frameless evaluation could give up at. A store is only
@@ -482,9 +482,8 @@ type Function struct {
 	// PrivateSites is how many reads and writes of private members --
 	// get_private and set_private -- the code has, each with a cache of its
 	// own past the PropSites ones, numbered from PropSites+1 in the order of
-	// the code. Their instructions have no room for the number, and the
-	// interpreter uses none of them; the tree tier numbers them as they come
-	// (see privateOp). It is beside Start, in what was padding on a 64-bit
+	// the code. Their instructions have no room for the number; the
+	// register compiler gives each its site. It is beside Start, in what was padding on a 64-bit
 	// machine, so that the fields a call reads stay where they were.
 	PrivateSites uint32
 	Lines        []SourceLoc
@@ -509,8 +508,8 @@ type Function struct {
 	// ArrowThisValue is set for an arrow whose this is a value from the
 	// start of its body, never a derived constructor's binding that super()
 	// has still to bind: one inside no derived constructor and in no eval
-	// code, whose call site may be inside one. The tree tier reads such an
-	// arrow's this in place, as a method's. After TraceName, so that the
+	// code, whose call site may be inside one. The register compiler reads
+	// such an arrow's this in place, as a method's. After TraceName, so that the
 	// fields a call reads stay where they were.
 	ArrowThisValue bool
 	// FrameCallee says a frame of the function must have its function

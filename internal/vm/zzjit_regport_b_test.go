@@ -16,17 +16,11 @@ import (
 // inlines, notNative, entrySlow) the register code's runs keep as the
 // stack form's entry keeps its own.
 
-// jitPortReg reports whether cl runs register code in r, which r's JIT
-// compiles (jitRegCodeForTest's test, by closure).
-func jitPortReg(r *Runtime, cl *closure) bool {
-	return r.regOn() && cl.reg != nil
-}
-
 // jitPortRegEntry is cl's register code entry in r's cache, with or
 // without code; nil where the cache holds none, or cl runs the stack
 // form's code.
 func jitPortRegEntry(r *Runtime, cl *closure) *jitRegEntry {
-	if r.jit == nil || !jitPortReg(r, cl) {
+	if r.jit == nil {
 		return nil
 	}
 	return r.jit.regCache[r.jitRegKeyOf(cl)]
@@ -39,18 +33,11 @@ func jitPortCode(r *Runtime, cl *closure) *jitEntry {
 	if r.jit == nil {
 		return nil
 	}
-	if jitPortReg(r, cl) {
-		e := r.jit.regCache[r.jitRegKeyOf(cl)]
-		if e == nil || e.code == nil {
-			return nil
-		}
-		return e.life
-	}
-	e := r.jit.cache[r.jitKeyOf(cl.fn)]
-	if e == nil || e.ssa == nil {
+	e := r.jit.regCache[r.jitRegKeyOf(cl)]
+	if e == nil || e.code == nil {
 		return nil
 	}
-	return e
+	return e.life
 }
 
 // jitPortLife is the entry of what cl's function's runs did and learned,
@@ -61,13 +48,10 @@ func jitPortLife(r *Runtime, cl *closure) *jitEntry {
 	if r.jit == nil {
 		return nil
 	}
-	if jitPortReg(r, cl) {
-		if e := cl.closureCode.jitReg; e != nil && e.life != nil {
-			return e.life
-		}
-		return r.jit.regLearned[r.jitRegKeyOf(cl)]
+	if e := cl.closureCode.jitReg; e != nil && e.life != nil {
+		return e.life
 	}
-	return r.jit.hint(cl)
+	return r.jit.regLearned[r.jitRegKeyOf(cl)]
 }
 
 // jitPortHas reports whether cl has native code in r.
@@ -80,13 +64,7 @@ func jitPortLink(r *Runtime, cl *closure) *jitLink {
 	if r.jit == nil {
 		return nil
 	}
-	if jitPortReg(r, cl) {
-		return r.jit.regLinks[r.jitRegKeyOf(cl)]
-	}
-	if e := r.jit.cache[r.jitKeyOf(cl.fn)]; e != nil {
-		return e.link
-	}
-	return nil
+	return r.jit.regLinks[r.jitRegKeyOf(cl)]
 }
 
 // jitPortLinkIn is how many calls native callers made of cl's function's
@@ -109,15 +87,6 @@ func jitPortRan(r *Runtime, cl *closure) uint64 {
 	return e.ssaStats.entries + jitPortLinkIn(r, cl)
 }
 
-// jitPortSerial is how many times cl's function's code was compiled:
-// the stack form's entry's ssaSerial, or the register form's life's.
-func jitPortSerial(r *Runtime, cl *closure) uint32 {
-	if e := jitPortLife(r, cl); e != nil {
-		return e.ssaSerial
-	}
-	return 0
-}
-
 // jitPortNamed is the closure the global name holds in r.
 func jitPortNamed(r *Runtime, name string) *closure {
 	return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
@@ -129,16 +98,8 @@ func jitPortNamed(r *Runtime, name string) *closure {
 // ones, by register pc.
 func jitPortCallPCs(r *Runtime, cl *closure) []int {
 	var pcs []int
-	if jitPortReg(r, cl) {
-		for pc, w := range cl.reg.rc.Code {
-			if w.Op() == bytecode.RCallMW {
-				pcs = append(pcs, pc)
-			}
-		}
-		return pcs
-	}
-	for pc, in := range cl.fn.Code {
-		if in.Op == bytecode.OpCallMethod {
+	for pc, w := range cl.reg.rc.Code {
+		if w.Op() == bytecode.RCallMW {
 			pcs = append(pcs, pc)
 		}
 	}
@@ -153,40 +114,27 @@ func jitPortDrop(r *Runtime, cl *closure) bool {
 	if s == nil {
 		return false
 	}
-	if jitPortReg(r, cl) {
-		key := r.jitRegKeyOf(cl)
-		e := s.regCache[key]
-		if e == nil || e.code == nil {
-			return false
-		}
-		s.regLetGo(key, e)
-		return true
+	key := r.jitRegKeyOf(cl)
+	e := s.regCache[key]
+	if e == nil || e.code == nil {
+		return false
 	}
-	e := s.entryFor(cl.fn)
-	return e != nil && e.ssa != nil && s.dropEntry(r.jitKeyOf(cl.fn), e)
+	s.regLetGo(key, e)
+	return true
 }
 
 // jitPortCodeLen is how many instructions the code cl runs has: its
 // register code's, or its stack bytecode's.
 func jitPortCodeLen(r *Runtime, cl *closure) int {
-	if jitPortReg(r, cl) {
-		return len(cl.reg.rc.Code)
-	}
-	return len(cl.fn.Code)
+	return len(cl.reg.rc.Code)
 }
 
 // jitPortLinks are the links cl's code calls its native callees through:
 // the stack form's entry's (ssaLinks), or what the register code keeps
 // (jitFeedback's links); nil where it has no code.
 func jitPortLinks(r *Runtime, cl *closure) []*jitLink {
-	if jitPortReg(r, cl) {
-		if e := jitPortRegEntry(r, cl); e != nil && e.code != nil && e.keep != nil {
-			return e.keep.links
-		}
-		return nil
-	}
-	if e := jitPortCode(r, cl); e != nil {
-		return e.ssaLinks
+	if e := jitPortRegEntry(r, cl); e != nil && e.code != nil && e.keep != nil {
+		return e.keep.links
 	}
 	return nil
 }
@@ -195,14 +143,8 @@ func jitPortLinks(r *Runtime, cl *closure) []*jitLink {
 // entry's (ssaInlined), or what the register code keeps (jitFeedback's
 // inlined); nil where it has no code.
 func jitPortInlined(r *Runtime, cl *closure) []*closure {
-	if jitPortReg(r, cl) {
-		if e := jitPortRegEntry(r, cl); e != nil && e.code != nil && e.keep != nil {
-			return e.keep.inlined
-		}
-		return nil
-	}
-	if e := jitPortCode(r, cl); e != nil {
-		return e.ssaInlined
+	if e := jitPortRegEntry(r, cl); e != nil && e.code != nil && e.keep != nil {
+		return e.keep.inlined
 	}
 	return nil
 }
@@ -218,9 +160,7 @@ func jitPortInlinesNew(r *Runtime, cl *closure, o *Object) bool {
 	if e == nil {
 		return false
 	}
-	if !jitPortReg(r, cl) {
-		return slices.ContainsFunc(e.inlines, func(x jitInline) bool { return x.obj == o && x.pool != nil })
-	}
+
 	return slices.ContainsFunc(e.inlines, func(x jitInline) bool { return x.obj == o }) &&
 		slices.ContainsFunc(slices.Concat(e.nativeCalls, e.inlines), func(x jitInline) bool { return x.obj == o && x.pool != nil })
 }
@@ -228,14 +168,8 @@ func jitPortInlinesNew(r *Runtime, cl *closure, o *Object) bool {
 // jitPortKeeps is how many keep cells cl's code uses: the stack form's
 // entry's (ssaKeeps), or the register code's (jitRegEntry's keeps).
 func jitPortKeeps(r *Runtime, cl *closure) int {
-	if jitPortReg(r, cl) {
-		if e := jitPortRegEntry(r, cl); e != nil && e.code != nil {
-			return e.keeps
-		}
-		return 0
-	}
-	if e := jitPortCode(r, cl); e != nil {
-		return e.ssaKeeps
+	if e := jitPortRegEntry(r, cl); e != nil && e.code != nil {
+		return e.keeps
 	}
 	return 0
 }
@@ -245,43 +179,31 @@ func jitPortKeeps(r *Runtime, cl *closure) int {
 // register code keeps (jitFeedback's cells, StringCell's) that hold a
 // string.
 func jitPortStringCells(r *Runtime, cl *closure) int {
-	if jitPortReg(r, cl) {
-		e := jitPortRegEntry(r, cl)
-		if e == nil || e.code == nil || e.keep == nil {
-			return 0
-		}
-		n := 0
-		for _, c := range e.keep.cells {
-			if c.IsString() {
-				n++
-			}
-		}
-		return n
+	e := jitPortRegEntry(r, cl)
+	if e == nil || e.code == nil || e.keep == nil {
+		return 0
 	}
-	if e := jitPortCode(r, cl); e != nil {
-		return len(e.ssaCells)
+	n := 0
+	for _, c := range e.keep.cells {
+		if c.IsString() {
+			n++
+		}
 	}
-	return 0
+	return n
 }
 
 // jitPortValid reports whether cl has native code that is valid: no
 // guard of it has failed since it was compiled.
 func jitPortValid(r *Runtime, cl *closure) bool {
-	if jitPortReg(r, cl) {
-		e := jitPortRegEntry(r, cl)
-		return e != nil && e.code != nil && !e.invalid
-	}
-	e := jitPortCode(r, cl)
-	return e != nil && !e.invalid
+	e := jitPortRegEntry(r, cl)
+	return e != nil && e.code != nil && !e.invalid
 }
 
 // jitPortEntryPCs is where cl's code may be entered: by its stack
 // bytecode's pcs (jitEntryPCs), or by its register code's, each one
 // whose lowering's first instruction the code has an entry at.
 func jitPortEntryPCs(r *Runtime, cl *closure) []int {
-	if !jitPortReg(r, cl) {
-		return jitEntryPCs(jitPortCode(r, cl), cl.fn)
-	}
+
 	e := jitPortRegEntry(r, cl)
 	var pcs []int
 	for rpc := range cl.reg.rc.Code {
@@ -297,9 +219,7 @@ func jitPortEntryPCs(r *Runtime, cl *closure) []int {
 // the headers of the loops its register code was compiled with entries
 // at (jitRegEntry's loops), by register pc.
 func jitPortLoopHeaders(r *Runtime, cl *closure) []int {
-	if !jitPortReg(r, cl) {
-		return jitLoopHeadersOf(cl.fn)
-	}
+
 	pcs := []int{0}
 	for _, pc := range jitPortRegEntry(r, cl).loops {
 		if !slices.Contains(pcs, int(pc)) {
@@ -317,13 +237,7 @@ func jitPortLoopHeaders(r *Runtime, cl *closure) []int {
 // compiles, whose pools its inlined literals are made from (the inlined
 // level's feedback being the callee's own, jitRegCalleeOf).
 func jitPortCalleeLiterals(r *Runtime, cl *closure) []jitLiteral {
-	if !jitPortReg(r, cl) {
-		e := jitPortCode(r, cl)
-		if e == nil {
-			return nil
-		}
-		return slices.DeleteFunc(slices.Clone(e.literals), func(l jitLiteral) bool { return l.fn == cl.fn })
-	}
+
 	var lits []jitLiteral
 	var seen []*closure
 	for _, c := range jitPortInlined(r, cl) {
@@ -350,10 +264,7 @@ func jitPortLevels(r *Runtime) int {
 	if r.jit == nil {
 		return 0
 	}
-	if r.regOn() {
-		return len(r.jit.regNestLevels) + len(r.jit.regLazyLevels)
-	}
-	return r.jit.levels.n
+	return len(r.jit.regNestLevels) + len(r.jit.regLazyLevels)
 }
 
 // jitPortLevelsAt is how many levels the frames of the calls of Go from
@@ -363,8 +274,5 @@ func jitPortLevelsAt(r *Runtime) int {
 	if r.jit == nil {
 		return 0
 	}
-	if r.regOn() {
-		return jitPortLevels(r)
-	}
-	return len(r.jit.levels.at)
+	return jitPortLevels(r)
 }

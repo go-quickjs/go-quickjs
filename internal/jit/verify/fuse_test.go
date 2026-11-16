@@ -28,6 +28,10 @@ var fuseCorpus = []string{
 	`function f(x,y,n){let s=0;for(let i=0;i<n;i++){if(x===y)s++;if(x!==y)s+=2;if(x==y)s+=3;if(x!=y)s+=4}return s}`,
 	`function f(x,n){let s=0;for(let i=0;i<n;i++){if(typeof x==="number")s++;if(typeof x!=="string")s+=2;if(typeof x==="boolean")s+=3;if(typeof x==="undefined")s+=4;if(typeof x==="function")s+=5}return s}`,
 	`function f(x,y,z,n){let s=0;for(let i=0;i<n;i++){if(x)s++;if(!y)s+=2;while(z&&s<n)s++}return s}`,
+	// A ! a branch alone tests, through a binding: register code's
+	// compiler folds !'s of the tests above into their jumps' sense
+	// (jmp_true for if(!y)), which leaves no not to branch on.
+	`function f(x,y,n){let s=0;for(let i=0;i<n;i++){const t=!y;if(t)s++;const u=!(x<y);if(u)s+=2}return s}`,
 }
 
 // fuseBigCorpus is BigInts compared by their branches, as bigs has them.
@@ -52,6 +56,7 @@ func TestMirFusedBranches(t *testing.T) {
 		if err != nil {
 			return nil
 		}
+		regShape(f, p)
 		f.CallEntry = true
 		ssa.Optimize(f)
 		for _, b := range f.Blocks {
@@ -137,6 +142,7 @@ func TestMirFusedBranches(t *testing.T) {
 		if err != nil {
 			continue
 		}
+		regShape(f, p)
 		ssa.Optimize(f)
 		mc, err := mir.CompileAMD64(f, enc)
 		if err != nil {

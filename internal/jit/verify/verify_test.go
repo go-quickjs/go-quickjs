@@ -29,7 +29,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -129,7 +128,7 @@ func lowered(t *testing.T, src string) []*ir.Program {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){jitcompile.Lower, jitcompile.LowerSSA, jitcompile.LowerSSAInline} {
+			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){regLowerForTest, regLowerInlineForTest} {
 				if p, err := lower(c.Fn); err == nil {
 					out = append(out, p)
 				}
@@ -219,12 +218,25 @@ var bigCorpus = []string{
 	`function f(n,x){let s=0n;for(let i=0;i<n;i++)s+=x**3n+BigInt(i)**BigInt(n);return s}`,
 	`function f(n,x){let s="";for(let i=0;i<n;i++)s=(x+BigInt(i)).toString();return s}`,
 	`function f(n,x){let s="";for(let i=0;i<n;i++)s=x.toFixed(2)+x.toString(16)+x.valueOf()+x.toPrecision(3);return s}`,
+	// Widths other than 64, the zero-extension's and the sign-extension's
+	// of 0 and 13 bits; and a phi of an Int64 and a Uint64, which stays a
+	// tagged BigInt, its low word read from its value by the operator
+	// after it that an asUintN takes (ssa's OpBigLow), as the stack form's
+	// PCs had made the widths of bigCorpus's first loop.
+	`function f(n,x,y){for(let i=0;i<n;i++){if(i&1)x=BigInt.asIntN(13,x*3n);else x=BigInt.asUintN(64,x+5n);y=BigInt.asUintN(0,x*7n)}return x+y}`,
 }
 
 // bigs is globals with every operator's site one that met BigInts held in
-// their values, as Uint64s at odd PCs, every BigInt constant one of 64 bits
-// or fewer, and every call of two arguments BigInt.asUintN's or asIntN's,
-// of one BigInt's.
+// their values, as Uint64s at odd PCs; every BigInt constant its own value,
+// in a cell, of 64 bits or fewer; and every call of BigInt.asUintN or
+// asIntN, of a width the program gives as a constant, and of BigInt, of one
+// argument and no receiver, made natively, as the VM's feedback finds them
+// in register code (its BigIntCell and Intrinsic). The stack form's fakes
+// had picked the constants and the widths by the PCs, which put a 64-bit
+// width and small shifts' counts where the stack form's PCs fell: register
+// code's, which do not count the operands' pushes, put a shift by 2^63 at
+// the first loop's x>>7n, a call, and a sign-extension of 13 bits at both
+// its calls.
 type bigs struct {
 	globals
 	p *ir.Program
@@ -245,24 +257,40 @@ func (bigs) StringProperty(pc int) (ssa.PropertySite, bool) {
 	kind := [3]ssa.Primitive{ssa.PrimitiveBigInt, ssa.PrimitiveNumber, ssa.PrimitiveBoolean}[pc%3]
 	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7), Holders: [2]ssa.Holder{{Object: 0x63000, Shape: 0x10000 + uintptr(pc)}}, Primitive: kind}, true
 }
-func (bigs) BigIntCell(pc int) (uintptr, uint64, int, bool) {
-	if pc%3 == 0 {
-		return 0x61000 + uintptr(pc)*16, 1<<63 + uint64(pc), ssa.BigConstUint64, true
+func (b bigs) BigIntCell(pc int) (uintptr, uint64, int, bool) {
+	x, ok := regBigConst(b.p, pc)
+	switch {
+	case !ok:
+		return 0, 0, ssa.BigConstHeap, false
+	case x.IsInt64():
+		return 0x61000 + uintptr(pc)*16, uint64(x.Int64()), ssa.BigConstInt64, true
+	case x.IsUint64():
+		return 0x61000 + uintptr(pc)*16, x.Uint64(), ssa.BigConstUint64, true
 	}
-	return 0x61000 + uintptr(pc)*16, uint64(pc % 40), ssa.BigConstInt64, true
+	return 0x61000 + uintptr(pc)*16, 0, ssa.BigConstHeap, true
 }
 func (b bigs) Intrinsic(pc int) (ssa.Intrinsic, bool) {
-	k := ssa.Intrinsic{Callee: 0x62000, Op: ssa.OpZextW, Fn: 64}
-	if pc+1 < len(b.p.Maps) && b.p.Maps[pc+1].Depth == b.p.Maps[pc].Depth-1 {
-		// A call of one argument and no receiver.
-		k.Op, k.Fn, k.Plain = ssa.OpBigOfF64, 0, true
-		return k, true
+	k := ssa.Intrinsic{Callee: 0x62000, Op: ssa.OpZextW}
+	// Register code's call, its arguments its instruction's (regCall).
+	argc, method, ok := regCall(b.p, pc)
+	if !ok {
+		return ssa.Intrinsic{}, false
 	}
-	switch pc % 3 {
-	case 1:
-		k.Op, k.Fn = ssa.OpSextW, 13
-	case 2:
-		k.Fn = 0
+	switch name := regCalleeName(b.p, pc); {
+	case name == "BigInt" && !method && argc == 1:
+		// A call of one argument and no receiver.
+		k.Op, k.Plain = ssa.OpBigOfF64, true
+	case (name == "asUintN" || name == "asIntN") && method && argc == 2:
+		width, ok := regConstOperand(b.p, pc, b.p.Code[pc].Left.Slot+2)
+		if !ok || width != math.Trunc(width) || width < 0 || width > 64 {
+			return ssa.Intrinsic{}, false
+		}
+		k.Fn = int(width)
+		if name == "asIntN" {
+			k.Op = ssa.OpSextW
+		}
+	default:
+		return ssa.Intrinsic{}, false
 	}
 	return k, true
 }
@@ -329,10 +357,18 @@ func (g genMakes) NativeCalls(int) []ssa.CallSite {
 
 // genForOfs is gens whose for...of loops' cursors native code takes from
 // the generators' room where they iterate as the intrinsics do.
-type genForOfs struct{ gens }
+type genForOfs struct {
+	gens
+	p *ir.Program
+}
 
-func (genForOfs) NativeCalls(int) []ssa.CallSite {
-	return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1, GenIter: 0x88000, GenIterFn: 0x89000, GenNext: 0x84000}}
+func (g genForOfs) NativeCalls(pc int) []ssa.CallSite {
+	// Register code's for_of_start, an instruction Go runs whole
+	// (regWhole), as the VM's regWholeSite makes its site.
+	if w, argc, ok := regWhole(g.p, pc); !ok || argc != 1 || w.Op() != bytecode.RForOfStart {
+		return nil
+	}
+	return []ssa.CallSite{{Go: ssa.GoCall, Whole: true, Argc: 1, ForOf: true, ThisSlot: -1, GenIter: 0x88000, GenIterFn: 0x89000, GenNext: 0x84000}}
 }
 
 // genCalls is gens whose method calls of argc arguments have met the
@@ -376,31 +412,34 @@ var spreadCorpus = []string{
 	`function f(o,p){return{a:1,...o,...p,b:2}}`,
 }
 
-// spreads is globals whose operations Go makes, by its bytecode, are the
-// VM's sites of them (ssa.CallSite's Instr), with what native code makes
-// them by: the table of object spreads by layout, the shapes' first
-// transitions, the arrays' iteration's methods, room to append into.
+// spreads is globals whose operations Go makes, register code's
+// instructions it runs whole (regWhole), are the VM's sites of them, as
+// its regWholeSite makes them, with what native code makes them by: the
+// table of object spreads by layout, the shapes' first transitions, the
+// arrays' iteration's methods, room to append into.
 type spreads struct {
 	globals
-	fn *bytecode.Function
+	p *ir.Program
 }
 
 func (spreads) GoCalls() bool { return true }
 func (s spreads) NativeCalls(pc int) []ssa.CallSite {
-	in := s.fn.Code[pc]
-	if !jitcompile.GoOperation(in.Op) {
+	w, argc, ok := regWhole(s.p, pc)
+	if !ok || argc != 2 {
 		return nil
 	}
-	site := ssa.CallSite{Go: ssa.GoCall, Instr: int(in.Op) | int(in.A)<<8, Argc: jitcompile.GoOperands(in), ThisSlot: -1}
-	switch in.Op {
-	case bytecode.OpCopyDataProps:
+	site := ssa.CallSite{Go: ssa.GoCall, Whole: true, Argc: argc, ThisSlot: -1}
+	switch w.Op() {
+	case bytecode.RCopyDataProps:
 		site.Copies = 0x90000
-	case bytecode.OpDefineField:
+	case bytecode.RDefineField:
 		site.DefineNext, site.Key = true, 77
-	case bytecode.OpArraySpread, bytecode.OpSpreadIter:
+	case bytecode.RArraySpread:
 		site.ArrayIter = 0x91000
-	case bytecode.OpArrayPush:
+	case bytecode.RArrayPush:
 		site.Append = true
+	default:
+		return nil
 	}
 	return []ssa.CallSite{site}
 }
@@ -457,8 +496,11 @@ func TestMirEmitted(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		// Its call entry, which native callers jump to, as the VM asks.
-		f.CallEntry = true
+		regShape(f, p)
+		// Its call entry, which native callers jump to, and register
+		// code's tail entry, which another's call in tail position jumps
+		// to, as the VM asks (its jitRegShape).
+		f.CallEntry, f.TailEntry = true, p.Origin != nil
 		ssa.Optimize(f)
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
@@ -535,16 +577,17 @@ func TestMirEmitted(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){jitcompile.LowerSSA, jitcompile.LowerSSAInline} {
+			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){regLowerForTest, regLowerInlineForTest} {
 				p, err := lower(c.Fn)
 				if err != nil {
 					continue
 				}
-				f, err := ssa.BuildWith(p, spreads{fn: c.Fn})
+				f, err := ssa.BuildWith(p, spreads{p: p})
 				if err != nil {
 					t.Fatalf("%s: %v", src, err)
 				}
-				f.CallEntry = true
+				regShape(f, p)
+				f.CallEntry, f.TailEntry = true, true
 				ssa.Optimize(f)
 				for _, b := range f.Blocks {
 					for _, v := range b.Values {
@@ -604,6 +647,7 @@ func TestMirEmitted(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			for _, in := range p.Code {
 				if in.Suspend {
 					f.GenEntry = true
@@ -652,6 +696,7 @@ func TestMirEmitted(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			for _, b := range f.Blocks {
 				for _, v := range b.Values {
@@ -688,6 +733,7 @@ func TestMirEmitted(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			for _, b := range f.Blocks {
 				for _, v := range b.Values {
@@ -720,10 +766,11 @@ func TestMirEmitted(t *testing.T) {
 	roomEnc.ShapeProto, roomEnc.GenRoom, roomEnc.GenRoomCursor = 24, 94, 152
 	roomEnc.GenIterFrom, roomEnc.GenIterCell, roomEnc.GenIterNextObj, roomEnc.GenIterNextIdx, roomEnc.GenIterIterObj, roomEnc.GenIterIterIdx = 0, 8, 16, 24, 32, 40
 	for i, p := range lowered(t, `function f(G,n){let s=0;for(let j=0;j<n;j++)for(const v of G(j))s+=v;return s}`) {
-		f, err := ssa.BuildWith(p, genForOfs{})
+		f, err := ssa.BuildWith(p, genForOfs{p: p})
 		if err != nil {
 			continue
 		}
+		regShape(f, p)
 		ssa.Optimize(f)
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {

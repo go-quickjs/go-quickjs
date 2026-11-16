@@ -9,14 +9,12 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
-// TestCallTree covers calls of functions planTreeCall has given a tree,
-// which are called on it without what callDirect and runFD ask of other
-// calls: each case calls its functions enough times to be planned, and
-// gives what a frame made the other way gives -- this, sloppy and strict,
-// of a plain call and of a primitive receiver; arguments past the
-// parameters and missing ones; closures over the frame's locals; the
-// frames in a stack trace; a call site whose callee changes; a strict tail
-// call, which is never planned; and runaway recursion.
+// TestCallTree covers functions called many times: each case calls its
+// functions repeatedly, and every call gives what the first gives -- this,
+// sloppy and strict, of a plain call and of a primitive receiver;
+// arguments past the parameters and missing ones; closures over the
+// frame's locals; the frames in a stack trace; a call site whose callee
+// changes; a strict tail call; and runaway recursion.
 func TestCallTree(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ src, want string }{
@@ -51,7 +49,7 @@ func TestCallTree(t *testing.T) {
 	}
 }
 
-// TestCallTreeLimits covers what a planned call checks at every call: the
+// TestCallTreeLimits covers what a repeated call checks at every call: the
 // frame depth WithMaxCallDepth sets, and the interrupt a context's end
 // makes, in a loop that does nothing but such calls.
 func TestCallTreeLimits(t *testing.T) {

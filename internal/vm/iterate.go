@@ -132,27 +132,6 @@ func cursorOf(v Value) *iterState {
 	return nil
 }
 
-// iterStateOf is a cursor's state where it is its object's data, which it
-// no longer is anywhere: it finds none. It is what the interpreter's
-// yield* cases mark a cursor done through, kept as it was so that
-// executeAt's code is -- the mark it returns has its done where the state
-// had it -- and a yield*'s cursor left unmarked is one nothing closes
-// anyway (iterState.delegation). Every reader of a cursor's state finds
-// it with cursorOf.
-func iterStateOf(v Value) *doneMark {
-	if !v.IsObject() {
-		return nil
-	}
-	st, _ := v.Object().dataOf().(*doneMark)
-	return st
-}
-
-// doneMark is what iterStateOf finds: nothing is one.
-type doneMark struct {
-	_    [59]byte
-	done bool
-}
-
 // startForIn snapshots the enumerable string keys of a value.
 //
 // The prototype chain is included, and a key shadowed by a nearer object is
@@ -528,15 +507,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 				if len(f.openUpvalues) != 0 {
 					f.openUpvalues = f.openUpvalues[:0]
 				}
-				var got resumeResult
-				var err error
-				ran := false
-				if t := g.nextTree(); t != nil {
-					got, ran, err = resumeTree(r, g, t, Undefined)
-				}
-				if !ran {
-					got, err = r.resumeFull(g, Undefined, resumeNext)
-				}
+				got, err := r.resumeFull(g, Undefined, resumeNext)
 				r.frameDepth--
 				if err != nil {
 					return Undefined, false, err
@@ -625,83 +596,6 @@ func (r *Runtime) closeIter(cursor Value) {
 	}
 	st.done = true
 	r.closeIterator(st.iter)
-}
-
-// closeIteratorsIn closes the for-of cursors sitting in a region of the operand
-// stack that is about to be discarded.
-//
-// A cursor lives on the operand stack for as long as its loop is running, so
-// the cursors in a discarded region are exactly the for-of loops being left
-// abruptly -- by a throw unwinding to a handler, or by a return leaving the
-// frame. Closing them there rather than at each exit point means every abrupt
-// exit is covered by one rule, including ones the compiler cannot see, and a
-// generator being iterated still gets to run its finally blocks.
-//
-// Closing runs user code, which may itself throw; that error is discarded,
-// because the completion that caused the unwind is the one that matters.
-func (r *Runtime) closeIteratorsIn(from, to int) {
-	for i := to - 1; i >= from; i-- {
-		st := cursorOf(r.stack[i])
-		if st == nil || st.forIn || st.done || st.delegation || st.arr != nil && !r.unwalkToClose(st) {
-			continue
-		}
-		st.done = true
-		r.closeIterator(st.iter)
-	}
-}
-
-// closeIteratorsReturning closes the for-of cursors in a region that a return
-// is leaving.
-//
-// Unlike a throw, a return carries no completion that outranks a failure in the
-// iterator's own return method, so the first such failure becomes the result.
-func (r *Runtime) closeIteratorsReturning(from, to int) error {
-	var first error
-	for i := to - 1; i >= from; i-- {
-		if st := cursorOf(r.stack[i]); st != nil && st.delegation {
-			continue
-		}
-		if err := r.iterCloseNormal(r.stack[i]); err != nil && first == nil {
-			first = err
-		}
-	}
-	return first
-}
-
-// iterToArray drains an array-destructuring source into a dense array.
-//
-// Only as many values as the pattern names are pulled, so destructuring an
-// infinite generator terminates; the iterator is then closed, because the
-// pattern is done with it. A pattern with a rest element asks for all of them,
-// and the iterator ends exhausted.
-func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
-	// A plain dense array with the standard iterator is copied directly. This
-	// is overwhelmingly the common case, and going through the protocol would
-	// allocate an iterator and a result object per element for no observable
-	// difference.
-	if src.IsObject() && src.Object().IsArray() && r.usesIntrinsicArrayIterator(src.Object()) {
-		return src, nil
-	}
-
-	cursor, err := r.startForOf(src)
-	if err != nil {
-		return Undefined, err
-	}
-	out := newObject(r.proto.array, ClassArray)
-	for want == bytecode.IterAll || uint32(len(out.elemsOf())) < want {
-		v, ok, err := r.iterNext(cursor)
-		if err != nil {
-			return Undefined, err
-		}
-		if !ok {
-			break
-		}
-		out.extOf().elems = append(out.elemsOf(), v)
-	}
-	// The pattern has what it needs, so anything still suspended upstream is
-	// told to stop.
-	r.closeIter(cursor)
-	return Obj(out), nil
 }
 
 // spreadInto appends the elements of an iterable to an array.
@@ -846,28 +740,6 @@ func (c *genIterationCache) holds(r *Runtime) bool {
 	n, i := c.next, c.iter
 	return uint32(n.i) < n.o.valn && uint32(i.i) < i.o.valn &&
 		n.o.valAt(int(n.i)).ref == unsafe.Pointer(r.genNextFn) && i.o.valAt(int(i.i)).ref == unsafe.Pointer(r.genIterFn)
-}
-
-// spreadToStack collects an iterable's elements for a call's argument list.
-func (r *Runtime) spreadToStack(src Value) ([]Value, error) {
-	var out []Value
-	if els, ok := r.plainDenseElems(src); ok {
-		out = append(out, els...)
-	} else if err := r.iterate(src, func(v Value) error {
-		out = append(out, v)
-		return nil
-	}); err != nil {
-		return out, err
-	}
-	// The values are charged to the memory limit as a builder's output is:
-	// a call spreading an array into a push onto it doubles it.
-	if r.meter != nil {
-		h := heldMeter{r: r}
-		if err := h.charge(cap(out) * int(valueSize)); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
 }
 
 // copyDataProps implements object spread, copying own enumerable properties.

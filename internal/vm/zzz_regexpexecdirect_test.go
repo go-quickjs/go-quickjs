@@ -56,28 +56,25 @@ run() + ' # ' + run()`
 
 const regexpExecDirectTestWant = "4:4,3,1, 4:2,1,1, 4:1,-,1, 7:-,-,-, 0:null 2:2,1,1, 0:null 3:1,1,-, 5:2,1,1, 0:null 0:null 1:1,-, 2:1,1, 3:1,-, 4:1,1, 2:2,1,1, 2:1,1,-, 5:3,2,1, 5:3,2,1, 5:2,2, 0:2,1,1, 3:1,1, 1:1, TypeError TypeError 0 3:2,1,1, 1 3 400"
 
-// A tree's call of exec whose array may be made again calls exec's leaf
+// A call of exec whose array may be made again calls exec's leaf
 // itself (reuseCallRest), on a global or a sticky RegExp too: each answer
-// is Node's, in the tree tier and the interpreter, with the collector idle
-// and running.
+// is Node's, with the collector idle and running.
 func TestRegExpExecDirect(t *testing.T) {
 	want := regexpExecDirectTestWant + " # " + regexpExecDirectTestWant
 	for _, idle := range []bool{true, false} {
-		for _, tree := range []bool{true, false} {
-			if idle {
-				runtime.GC()
-				debug.SetGCPercent(-1)
-			}
-			r := newTreeTierForTest(tree, Config{})
-			v, err := r.Run(compileForTest(t, regexpExecDirectTestSrc))
-			r.Close()
-			debug.SetGCPercent(100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != want {
-				t.Errorf("tree tier %v, collector idle %v:\ngot  %s\nwant %s", tree, idle, got, want)
-			}
+		if idle {
+			runtime.GC()
+			debug.SetGCPercent(-1)
+		}
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, regexpExecDirectTestSrc))
+		r.Close()
+		debug.SetGCPercent(100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("collector idle %v:\ngot  %s\nwant %s", idle, got, want)
 		}
 	}
 }

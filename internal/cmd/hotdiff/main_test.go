@@ -19,3 +19,16 @@ func TestNormalize(t *testing.T) {
 		t.Fatalf("normalized %q, want %q", got, want)
 	}
 }
+
+func TestFindABI0(t *testing.T) {
+	funcs := map[string]function{
+		"example.com/internal/vm.nativeEnter.abi0":     {"RET"},
+		"example.com/internal/vm.(*Runtime).nativeRun": {"NOP"},
+	}
+	if got := find(funcs, "internal/vm.nativeEnter"); !reflect.DeepEqual(got, function{"RET"}) {
+		t.Fatalf("assembly function found as %q", got)
+	}
+	if got := find(funcs, "internal/vm.nativeExit"); got != nil {
+		t.Fatalf("absent function found as %q", got)
+	}
+}

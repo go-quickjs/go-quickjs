@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"fmt"
 	"slices"
 	"testing"
 
@@ -34,133 +33,15 @@ const frequencySetup = `
 	var o = {n: 0}`
 
 // frequencyRuntime is a runtime running frequencySetup with the JIT's own
-// thresholds, the tree tier on or off for the functions it runs.
-func frequencyRuntime(t *testing.T, tree bool) *Runtime {
+// thresholds.
+func frequencyRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	was := treeTier.Load()
-	SetTreeTier(tree)
-	t.Cleanup(func() { SetTreeTier(was) })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	if _, err := r.Run(compileForTest(t, frequencySetup)); err != nil {
 		t.Fatal(err)
 	}
 	return r
-}
-
-// frequencyCounts is name's function's counts: its runs, and each call's
-// count, in the order of their PCs.
-func frequencyCounts(t *testing.T, r *Runtime, name string) (uint32, []uint32) {
-	t.Helper()
-	e := jitCallbackEntry(r, name)
-	if e == nil || e.calls == nil {
-		t.Fatalf("%s counts nothing: %+v", name, e)
-	}
-	return e.calls.runs, slices.Clone(e.calls.calls)
-}
-
-// The existing tiers count each call site's calls, and each function's
-// invocations, from the one that gives it an entry (the eighth,
-// jitInvocationsForFeedback) on, as V8's feedback counts them from its
-// vector's allocation: exactly, in the interpreter and in the tree tier
-// alike. caller, invoked 50 times, counts 43 runs; g's call in the loop
-// 129 calls, three for each, the method call and the construction 43, the
-// call never made none; the pure body's, answered without a frame, 43
-// (jitCountPure), and g's through Function.prototype.call, made in call's
-// frame, 43, at the call of call. A call in tail position, not deep in the
-// stack, is counted as any call is: caller's of tail 43, tail's of g 43 of
-// its own 43 runs. Their counts over the runs (jitCallCount) are 3, 1, 0
-// and 1, known from 59 runs on (jitCountsEnough).
-func TestJITCountsCallsBySite(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
-	for _, trees := range []bool{true, false} {
-		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
-			r := frequencyRuntime(t, trees)
-			if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 50; i++) caller(o, i)`)); err != nil {
-				t.Fatal(err)
-			}
-			if e := jitCallbackEntry(r, "caller"); e == nil || !e.warming {
-				t.Fatalf("caller's entry %+v, not warming: the test is of the existing tiers", e)
-			}
-			runs, calls := frequencyCounts(t, r, "caller")
-			if want := []uint32{129, 43, 0, 43, 43, 43, 43}; runs != 43 || !slices.Equal(calls, want) {
-				t.Errorf("caller counts %d runs, calls %v; want 43, %v", runs, calls, want)
-			}
-			runs, calls = frequencyCounts(t, r, "tail")
-			if want := []uint32{43}; runs != 43 || !slices.Equal(calls, want) {
-				t.Errorf("tail counts %d runs, calls %v; want 43, %v", runs, calls, want)
-			}
-			e, fn := jitCallbackEntry(r, "caller"), jitFnForTest(t, r, "caller")
-			if got := (*tree)(fn.VMCode) != noTree; got != trees {
-				t.Fatalf("caller runs as a tree: %v", got)
-			}
-			for i, want := range []float64{3, 1, 0, 1} {
-				pc := int(e.calls.pcs[i])
-				if f, ok := jitCallCount(e, pc, 1); ok != (want >= 0) || ok && f != want {
-					t.Errorf("caller's call at %d: frequency %v, %v; want %v", pc, f, ok, want)
-				}
-				if _, ok := jitCallCount(e, pc, 44); ok || jitCountsEnough != 59 {
-					t.Errorf("caller's call at %d: frequency known of 43 runs, 44 enough (jitCountsEnough %d)", pc, jitCountsEnough)
-				}
-			}
-		})
-	}
-}
-
-// Every form of a call the compiler makes -- of a global, a local, a
-// captured binding, a method by name, by key, on this, optional, a
-// construction, calls in another's arguments, and of 0 to 5 arguments, of
-// pure bodies and of a constructor forwarding its arguments, which the call
-// path answers without the callee's frame, and through
-// Function.prototype.call and apply, too -- is
-// counted at its own site, in the interpreter and in the tree tier: each
-// of forms' calls, made once at each invocation, counts its runs.
-func TestJITCountsEveryCallForm(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
-	for _, trees := range []bool{true, false} {
-		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
-			r := frequencyRuntime(t, trees)
-			src := `
-				function h(a, b, c, d, e) { let t = (a | 0) + 1; return t }
-				function K(a) { let t = a; this.a = t }
-				var box = { h, k: 'h', p: { q: { h } }, n: 3, pm(i) { return this.n + i } }
-				function W() { this.init.apply(this, arguments) }
-				W.prototype.init = function (a) { let t = a; this.a = t }
-				const p0 = () => 0, p1 = (x) => x * 2
-				function forms(o, i) {
-					const loc = h, up = (x) => { let z = x + 1; return z }
-					let s = h() + h(1) + h(1, 2) + h(1, 2, 3) + h(1, 2, 3, 4) + h(1, 2, 3, 4, 5)
-					s += loc(i) + box.h(i) + box[box.k](i) + box.p.q.h(i) + (box.h?.(i) ?? 0)
-					s += new K(i).a + h(h(i), h(i + 1))
-					s += o.self(i) + box.pm(i) + p0() + p1(i) + new W(i).a + h.call(null, i) + h.apply(null, [i])
-					function inner() { return loc(s) }
-					return s + inner() + up(i)
-				}
-				var self = { h, self(i) { return this.h(i) } }
-				for (let i = 0; i < 40; i++) forms(self, i)`
-			if _, err := r.Run(compileForTest(t, src)); err != nil {
-				t.Fatal(err)
-			}
-			runs, calls := frequencyCounts(t, r, "forms")
-			if runs != 33 || len(calls) == 0 {
-				t.Fatalf("forms counts %d runs, calls %v", runs, calls)
-			}
-			for i, n := range calls {
-				if n != runs {
-					t.Errorf("forms' call %d (pc %d) counts %d, want %d: %v", i, jitCallbackEntry(r, "forms").calls.pcs[i], n, runs, calls)
-				}
-			}
-			if runs, calls := frequencyCounts(t, r, "self"); runs != 33 || !slices.Equal(calls, []uint32{33}) {
-				t.Errorf("self counts %d runs, calls %v", runs, calls)
-			}
-		})
-	}
 }
 
 // Native code counts nothing, as V8's optimized code counts no feedback:
@@ -173,7 +54,7 @@ func TestJITCountsNotNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := frequencyRuntime(t, true)
+	r := frequencyRuntime(t)
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	if _, err := want.Run(compileForTest(t, frequencySetup)); err != nil {
@@ -187,63 +68,29 @@ func TestJITCountsNotNative(t *testing.T) {
 	for range 10 {
 		both.agree(t, `drive(100)`)
 	}
-	if regJITForTest() {
-		// Register code's counts are its closures' (jitRegCounts), which
-		// the feedback dispatcher counts and native code does not: the
-		// counts the stack tiers make by site are theirs alone (their
-		// frequencies TestJITRegFrequency's).
-		var counts [][]uint64
-		for _, name := range []string{"caller", "c2"} {
-			e := regEntryNamedForTest(r, name)
-			if e == nil || e.invalid {
-				t.Fatalf("%s has no code: %+v", name, e)
-			}
-			c := jitGlobalClosure(r, name).jitRegCounts
-			if c == nil || regNativeOn && c[0] == 0 {
-				t.Fatalf("%s counts nothing: %v", name, c)
-			}
-			counts = append(counts, slices.Clone(c))
-		}
-		goCalls := r.jit.goCalls
-		both.agree(t, `drive(1000)`)
-		if r.jit.goCalls-goCalls < 1000 {
-			t.Errorf("c2's code made %d calls of Go in 1,000 runs", r.jit.goCalls-goCalls)
-		}
-		for i, name := range []string{"caller", "c2"} {
-			if got := jitGlobalClosure(r, name).jitRegCounts; !slices.Equal(got, counts[i]) {
-				t.Errorf("%s's code counted: %v, after %v", name, got, counts[i])
-			}
-		}
-		return
-	}
+	// Register code's counts are its closures' (jitRegCounts), which
+	// the feedback dispatcher counts and native code does not (their
+	// frequencies TestJITRegFrequency's).
+	var counts [][]uint64
 	for _, name := range []string{"caller", "c2"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.invalid || e.calls == nil {
+		e := regEntryNamedForTest(r, name)
+		if e == nil || e.invalid {
 			t.Fatalf("%s has no code: %+v", name, e)
 		}
-	}
-	// The last run counted may have gone on in native code from its loop,
-	// by on-stack replacement, its calls after it uncounted.
-	runs, calls := frequencyCounts(t, r, "caller")
-	within := func(n, per uint32) bool { return n <= per*runs && n+per >= per*runs }
-	if runs < 43 || runs > 600 || !within(calls[0], 3) || !within(calls[1], 1) || calls[2] != 0 || !within(calls[3], 1) || !within(calls[6], 1) {
-		t.Fatalf("caller counts %d runs, calls %v", runs, calls)
-	}
-	runs2, calls2 := frequencyCounts(t, r, "c2")
-	if runs2 < 8 || runs2 > 600 || !slices.Equal(calls2, []uint32{runs2, runs2, 0}) {
-		t.Fatalf("c2 counts %d runs, calls %v", runs2, calls2)
+		c := jitGlobalClosure(r, name).jitRegCounts
+		if c == nil || regNativeOn && c[0] == 0 {
+			t.Fatalf("%s counts nothing: %v", name, c)
+		}
+		counts = append(counts, slices.Clone(c))
 	}
 	goCalls := r.jit.goCalls
 	both.agree(t, `drive(1000)`)
 	if r.jit.goCalls-goCalls < 1000 {
 		t.Errorf("c2's code made %d calls of Go in 1,000 runs", r.jit.goCalls-goCalls)
 	}
-	for _, c := range []struct {
-		name  string
-		runs  uint32
-		calls []uint32
-	}{{"caller", runs, calls}, {"c2", runs2, calls2}} {
-		if n, got := frequencyCounts(t, r, c.name); n != c.runs || !slices.Equal(got, c.calls) {
-			t.Errorf("%s's code counted: %d runs, %v, after %d, %v", c.name, n, got, c.runs, c.calls)
+	for i, name := range []string{"caller", "c2"} {
+		if got := jitGlobalClosure(r, name).jitRegCounts; !slices.Equal(got, counts[i]) {
+			t.Errorf("%s's code counted: %v, after %v", name, got, counts[i])
 		}
 	}
 }
@@ -256,52 +103,30 @@ func TestJITCountsOutliveCode(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	setEpoch := jitFlushForTest(t)
-	r := frequencyRuntime(t, true)
+	r := frequencyRuntime(t)
 	if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 700; i++) caller(o, i)`)); err != nil {
 		t.Fatal(err)
 	}
-	if regJITForTest() {
-		// Register code's counts are its closure's (jitRegCounts), which
-		// outlive its code: the code flushed, they go on counting.
-		e, code := jitCachedForTest(r, "caller")
-		c := jitGlobalClosure(r, "caller").jitRegCounts
-		if !code || c == nil {
-			t.Fatalf("caller has no code: %+v", e)
-		}
-		runs := c[0]
-		setEpoch(1000 + jitFlushAge)
-		r.jit.flush()
-		setEpoch(1000 + 2*jitFlushAge)
-		r.jit.flush()
-		if e, _ := jitCachedForTest(r, "caller"); e != nil {
-			t.Fatalf("caller's unused code was not flushed: %+v", e)
-		}
-		if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 20; i++) caller(o, i)`)); err != nil {
-			t.Fatal(err)
-		}
-		if now := jitGlobalClosure(r, "caller").jitRegCounts; len(now) == 0 || &now[0] != &c[0] || now[0] < runs {
-			t.Fatalf("caller counts %v, not %v from %d runs", now, c, runs)
-		}
-		return
-	}
-	e := jitCallbackEntry(r, "caller")
-	if e == nil || e.ssa == nil || e.calls == nil {
+	// Register code's counts are its closure's (jitRegCounts), which
+	// outlive its code: the code flushed, they go on counting.
+	e, code := jitCachedForTest(r, "caller")
+	c := jitGlobalClosure(r, "caller").jitRegCounts
+	if !code || c == nil {
 		t.Fatalf("caller has no code: %+v", e)
 	}
-	c, runs := e.calls, e.calls.runs
+	runs := c[0]
 	setEpoch(1000 + jitFlushAge)
 	r.jit.flush()
 	setEpoch(1000 + 2*jitFlushAge)
 	r.jit.flush()
-	if e := jitCallbackEntry(r, "caller"); e != nil {
+	if e, _ := jitCachedForTest(r, "caller"); e != nil {
 		t.Fatalf("caller's unused code was not flushed: %+v", e)
 	}
 	if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 20; i++) caller(o, i)`)); err != nil {
 		t.Fatal(err)
 	}
-	e = jitCallbackEntry(r, "caller")
-	if e == nil || e.calls != c || c.runs < runs {
-		t.Fatalf("caller's entry %+v counts %+v, not %+v from %d runs", e, e.calls, c, runs)
+	if now := jitGlobalClosure(r, "caller").jitRegCounts; len(now) == 0 || &now[0] != &c[0] || now[0] < runs {
+		t.Fatalf("caller counts %v, not %v from %d runs", now, c, runs)
 	}
 }
 
@@ -309,41 +134,4 @@ func TestJITCountsOutliveCode(t *testing.T) {
 func jitFnForTest(t *testing.T, r *Runtime, name string) *bytecode.Function {
 	t.Helper()
 	return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
-}
-
-// A built-in's calls -- the callbacks forEach, map, a typed array's sort
-// and the others make for each element -- are no call site native code
-// compiles, and are counted at none: each's calls of forEach, map, slice
-// and sort, built-ins called, count nothing, however many elements their
-// callbacks are called for -- pure bodies (pureCall's count),
-// bodies with a frame and a comparator alike -- while its call of g
-// through Function.prototype.call, whose frame is a built-in's too, still
-// counts one at every run, at the call of call (jitCountsCaller).
-func TestJITCountsNoBuiltinCalls(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	skipUnderRegJIT(t, "the stack tiers' counts of calls by site (jitEntry's calls, from the entry's jitInvocationsForFeedback-th invocation on, in the stack interpreter and the tree tier); register code's are its closures' (jitRegCounts), which the feedback dispatcher counts, tested by TestJITRegFrequency")
-	for _, trees := range []bool{true, false} {
-		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
-			r := frequencyRuntime(t, trees)
-			src := `
-				var arr = [3, 1, 2, 5, 4], ta = new Int32Array([9, 7, 8])
-				function each(a) {
-					let s = 0
-					a.forEach((x) => { s += x })
-					s += a.map(function (x) { let t = x; return t * 2 }).length
-					s += ta.slice().sort((x, y) => x - y)[0]
-					return s + g.call(null, o)
-				}
-				for (let i = 0; i < 40; i++) each(arr)`
-			if _, err := r.Run(compileForTest(t, src)); err != nil {
-				t.Fatal(err)
-			}
-			runs, calls := frequencyCounts(t, r, "each")
-			if want := []uint32{0, 0, 0, 0, 33}; runs != 33 || !slices.Equal(calls, want) {
-				t.Errorf("each counts %d runs, calls %v; want 33, %v", runs, calls, want)
-			}
-		})
-	}
 }

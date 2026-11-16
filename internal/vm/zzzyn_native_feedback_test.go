@@ -4,9 +4,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 func init() { nativeTestTables["feedback"] = nativeFeedback.addr }
@@ -45,13 +42,10 @@ func TestRegNativeFeedbackSelected(t *testing.T) {
 	src := `function f(n) { var s = 0, a = [1, 2, 3]; for (var i = 0; i < n; i++) { var o = {a: i, b: 1}; s += o.a + o.b + a[i % 3] } return s }
 		function g(n) { return n < 2 ? n : g(n - 1) + g(n - 2) }
 		String(f(300)) + " " + String(g(15))`
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
 	was := regNativeOn
 	regNativeOn = true
-	defer func() { SetRegTier(bytecode.RegDefault()); regNativeOn = was }()
+	defer func() { regNativeOn = was }()
 	run := func() string {
 		v, err := without.Run(fn)
 		if err != nil {

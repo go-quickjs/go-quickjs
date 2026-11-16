@@ -30,27 +30,6 @@ func (r *Runtime) newPrivateName(name Atom) Value {
 	return Sym(NewSymbol(r.atoms.name(name), true))
 }
 
-// privateKey reads the key a private instruction's operand points at.
-//
-// The binding holding it is an ordinary one, reached the way any other name is:
-// from a slot of this function when the low bit is clear, from one of its
-// upvalues when it is set.
-func privateKey(f *frame, cl *closure, ref uint32) Atom {
-	var v Value
-	if ref&1 == 0 {
-		v = f.locals[ref>>1]
-	} else {
-		v = cl.upvalues[ref>>1].get()
-	}
-	if !v.IsSymbol() {
-		// The compiler guarantees the binding holds a key; a zero atom is the
-		// empty name, which no object has, so a bug reports a miss rather than
-		// reaching for the wrong member.
-		return atomEmpty
-	}
-	return cl.realm.agent.atoms.internSymbol(v.Symbol())
-}
-
 // definePrivateAccessor adds a private getter or setter, joining it to the
 // other half if that is already there.
 func (r *Runtime) definePrivateAccessor(target *Object, key Atom, fn *Object, getter bool) {

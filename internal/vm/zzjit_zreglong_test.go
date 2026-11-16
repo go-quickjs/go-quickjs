@@ -33,15 +33,14 @@ function always(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + 
 }
 
 // TestJITRegLongCalleeWarms has native callers call functions too long to
-// inline (ssa.MaxInline) that have no code, as the stack form's
-// jitNativeCallee decides them (jitLongWarming, jitCalledOften): one its
-// caller calls seldom, and one past what a function inlines in all, are
-// compiled once their budgets are spent, not at their callers' first call;
-// one its caller calls at each call, at once. Before, every such callee
-// was compiled at its native callers' first call: Mandreel's set-up,
-// __mandreel_internal_init and BenchmarkDemo::initPhysics among it, each
-// run once an iteration, was compiled at every iteration after the first,
-// 4.8 MB of code for initPhysics alone.
+// inline (ssa.MaxInline) that have no code: one its caller calls seldom,
+// and one past what a function inlines in all, are compiled once their
+// budgets are spent, not at their callers' first call; one its caller calls
+// at each call, at once. Before, every such callee was compiled at its
+// native callers' first call: Mandreel's set-up, __mandreel_internal_init
+// and BenchmarkDemo::initPhysics among it, each run once an iteration, was
+// compiled at every iteration after the first, 4.8 MB of code for
+// initPhysics alone.
 func TestJITRegLongCalleeWarms(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -113,9 +112,8 @@ func TestJITRegLongCalleeWarms(t *testing.T) {
 			t.Errorf("huge's code was never called")
 		}
 	})
-	// With no native caller known, the call is not one made often, as the
-	// stack form's jitCalledOftenBy has it of no caller: a callee past
-	// ssa.MaxInline, within ssa.MaxInlineTotal or past it, warms up.
+	// With no native caller known, the call is not one made often: a callee
+	// past ssa.MaxInline, within ssa.MaxInlineTotal or past it, warms up.
 	t.Run("no caller", func(t *testing.T) {
 		var b strings.Builder
 		// long: past ssa.MaxInlineTotal; mid: past ssa.MaxInline, within it.

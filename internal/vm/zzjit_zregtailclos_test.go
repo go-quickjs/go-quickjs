@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regTailClosSetup's closures reach the loop that calls them through calls
@@ -110,9 +109,7 @@ func TestJITRegTailCalledClosures(t *testing.T) {
 			rounds := regTailClosRounds()
 			warm := 60
 			run := func(src string) {
-				compiler.SetRegisterForm(true)
 				prog := compileForTest(t, src)
-				compiler.SetRegisterForm(false)
 				var got [2]string
 				for k, r := range rts {
 					v, err := r.Run(prog)
@@ -154,9 +151,7 @@ func TestJITRegTailCalledClosures(t *testing.T) {
 				// inlined: none, what the script's own compile takes
 				// apart.
 				gc := debug.SetGCPercent(-1)
-				compiler.SetRegisterForm(true)
 				prog := compileForTest(t, loop1000("has(bag, i % 13)"))
-				compiler.SetRegisterForm(false)
 				var before, after runtime.MemStats
 				runtime.GC()
 				runtime.ReadMemStats(&before)
@@ -207,9 +202,7 @@ func TestJITRegTailCalledClosuresPolled(t *testing.T) {
 			r.SetJITWarmUp(1, 1)
 			r.jitStress = jitStressConfig{budget: 3, deopt: 7}
 			for _, round := range regTailClosRounds() {
-				compiler.SetRegisterForm(true)
 				prog := compileForTest(t, round)
-				compiler.SetRegisterForm(false)
 				var got [2]string
 				for k, r := range rts {
 					v, err := r.Run(prog)

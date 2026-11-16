@@ -88,6 +88,7 @@ func TestMirPhisCoalesced(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {
@@ -138,7 +139,17 @@ func TestMirPhisCoalesced(t *testing.T) {
 	// converted c to an int32 and back, five instructions and a branch
 	// (the entries' loads read for their unboxings alone, mir's findLazy,
 	// had taken the total to 156, 130 into headers): 159, 133, 9.
-	if total > 161 || loops > 133 || spills > 9 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 133, 9", total, loops, spills)
+	// Register code's programs (the compile package's LowerReg), two
+	// lowerings of each function where the stack form had three, and
+	// loops that test at their foot, their test copied before them: 106,
+	// 70, 12. The keep corpus spills its 8 as before; the loop of
+	// x=-0,y=NaN,z=Infinity none, where it had spilled 1; and
+	// array_for_of 2 in each lowering, where it had none: its inner loop
+	// is one register instruction at its header, iter_next's step, a call
+	// of Go, across which its values -- the array, the cursor, the
+	// cursor's call's cell and the constants' source among them, all
+	// phis there -- outlive the call, in more registers than are free.
+	if total > 108 || loops > 70 || spills > 12 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 108, 70, 12", total, loops, spills)
 	}
 }

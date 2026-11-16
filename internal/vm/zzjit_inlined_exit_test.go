@@ -15,7 +15,7 @@ import (
 // are its code's, ticking toward that compile, and Go compiles it before
 // it goes on in it: counted for pop's own code, which Go finishes them in,
 // move never came to be compiled again, and every call of it left native
-// code, 2.5 times slower than the tree tier with no JIT.
+// code, 2.5 times slower than the interpreter with no JIT.
 func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

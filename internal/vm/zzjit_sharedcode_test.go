@@ -33,17 +33,9 @@ func (a jitArrowForTest) calls() uint64 {
 func jitArrowsForTest(t *testing.T, r *Runtime) []jitArrowForTest {
 	t.Helper()
 	var es []jitArrowForTest
-	if regJITForTest() {
-		for k, x := range r.jit.regCache {
-			if fn := k.Value(); fn != nil && fn.Kind == bytecode.KindArrow {
-				es = append(es, jitArrowForTest{code: x.code != nil, link: r.jit.regLinks[k], e: x.life})
-			}
-		}
-		return es
-	}
-	for k, x := range r.jit.cache {
+	for k, x := range r.jit.regCache {
 		if fn := k.Value(); fn != nil && fn.Kind == bytecode.KindArrow {
-			es = append(es, jitArrowForTest{code: x.ssa != nil, link: x.link, e: x})
+			es = append(es, jitArrowForTest{code: x.code != nil, link: r.jit.regLinks[k], e: x.life})
 		}
 	}
 	return es
@@ -115,10 +107,10 @@ func TestJITClosuresShareCode(t *testing.T) {
 // taken back by on-stack replacement in a long invocation that left it
 // once -- here at a call of a function its call had not met, which leaves
 // for Go to learn it, its code compiled again for it -- as at any long
-// loop (tryJITAt): kept out of the
-// invocation the interpreter goes on with (jitDeoptBlocks), AWFY
-// DeltaBlue's forEach had run the rest of each of its long loops in the
-// existing tiers, a million calls of its callbacks a run.
+// loop: kept out of the invocation the interpreter goes on with
+// (jitDeoptBlocks), AWFY DeltaBlue's forEach had run the rest of each of
+// its long loops in the interpreter, a million calls of its callbacks a
+// run.
 func TestJITSlowLoopGoesBackNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -156,9 +148,8 @@ func TestJITSlowLoopGoesBackNative(t *testing.T) {
 	if r.jit.osrs == osrs {
 		t.Errorf("each's long loop, left once, was not taken back natively")
 	}
-	// Most of the loop's iterations native: its work, a loop's length for
-	// each back edge.
-	if n := (each.ssaStats.work - work) / uint64(max(each.ssaLoop, 1)); n < 25000 {
+	// Most of the loop's iterations native: its work.
+	if n := each.ssaStats.work - work; n < 25000 {
 		t.Errorf("each ran %d of its long loop's 50000 iterations natively, want most", n)
 	}
 }

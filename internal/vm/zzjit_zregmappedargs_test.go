@@ -14,7 +14,7 @@ import (
 // functions whose mapped arguments object aliases the parameter x they
 // assign while they read the rest by index, and one whose assigned
 // parameter is dead by name past the assignment, read only through
-// arguments[0] after host exits; then the stack form's mappedArgsSetup.
+// arguments[0] after host exits; then mappedArgsSetup.
 const regMappedArgsSrc = `
 function sc_greater(x, y) {
 	for (var i = 1; i < arguments.length; i++) { if (x <= arguments[i]) return false; x = arguments[i]; }

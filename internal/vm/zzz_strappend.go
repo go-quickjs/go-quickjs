@@ -6,9 +6,9 @@ import "unsafe"
 // and localAppend say which additions those are, and what makes them safe.
 //
 // The string in the binding is an ordinary one at every moment, a rope that
-// anything may read, so a tier that knows nothing of this is right: only the
-// additions the compiler marked, in the tree tier and native code, come here,
-// and the interpreter's are plain additions.
+// anything may read, so code that knows nothing of this is right: only the
+// additions the compiler marked, in the interpreter and native code, come
+// here, and any other is a plain addition.
 //
 // What is claimed. String.building says that nothing but the binding holds
 // the string, and strAppend sets it only on a rope it has just made and is
@@ -133,35 +133,6 @@ func strTailGrow[_ any](t *strTail, text string) {
 	}
 	t.buf = append(t.buf, text...)
 	t.s = unsafe.String(unsafe.SliceData(t.buf), len(t.buf))
-}
-
-// strFreezeNode is str_freeze in the tree tier: strFreeze in place, as this
-// follows a read of a binding, which a call would cost more than it does.
-func strFreezeNode[_ any](v tval) tval {
-	return func(c *tctx) Value {
-		x := v(c)
-		if x.IsString() {
-			if s := x.String(); s.building {
-				s.building = false
-			}
-		}
-		return x
-	}
-}
-
-// strAppendNode is an add marked bytecode.AddOwned in the tree tier, x its
-// local's value.
-func strAppendNode[_ any](x, y tval, pc int) tval {
-	return func(c *tctx) Value {
-		l := x(c)
-		r := y(c)
-		c.at(pc)
-		v, err := strAppendOp[struct{}](c.r, l, r)
-		if err != nil {
-			c.throw(err)
-		}
-		return v
-	}
 }
 
 // strAppendOp is an add marked bytecode.AddOwned: a + b, a a local's value. A

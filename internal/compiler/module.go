@@ -80,11 +80,9 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-	if registerForm.Load() && !opts.NoRegister && regScript(opts) {
-		// The module's code as register code too (regcomp.CompileTop).
-		c.reg = regcomp.NewRecord(prog.Idents)
-		c.reg.Completion = c.completionSlot
-	}
+	// The module's code as register code too (regcomp.CompileTop).
+	c.reg = regcomp.NewRecord(prog.Idents)
+	c.reg.Completion = c.completionSlot
 
 	c.collectModuleShape(prog.Body)
 	c.checkModuleDeclarations(prog.Body)
@@ -336,12 +334,10 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script
 	c.module = info
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++
-	if registerForm.Load() && !opts.NoRegister && regScript(opts) {
-		// Its declarations as register code too: its body is none of the
-		// module's statements (regcomp.CompileTop).
-		c.reg = regcomp.NewRecord(prog.Idents)
-		c.reg.Completion = c.completionSlot
-	}
+	// Its declarations as register code too: its body is none of the
+	// module's statements (regcomp.CompileTop).
+	c.reg = regcomp.NewRecord(prog.Idents)
+	c.reg.Completion = c.completionSlot
 	c.hoistModuleBindings(prog.Body)
 	c.hoistBlockDeclarations(prog.Body, true)
 	c.emit(bytecode.OpPushUndef, 0, 0)

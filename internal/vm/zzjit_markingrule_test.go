@@ -11,9 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // jitMarkingWork is what one run of a test of the micro-benchmarks did that
@@ -184,13 +181,7 @@ func jitMarkingRegRun(t *testing.T, src string, names []string, marking bool) (m
 	if marking {
 		jitMarkingForTest(t)
 	}
-	compiler.SetRegisterForm(true)
 	prog := compileForTest(t, src)
-	compiler.SetRegisterForm(false)
-	defer compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
-	defer SetJITRegTier(SetJITRegTier(true))
 	r := jitRuntimeForTest(t, Config{JIT: true, JITMemoryLimit: jitMarkingBudget})
 	if _, err := r.Run(prog); err != nil {
 		t.Fatal(err)
@@ -204,8 +195,8 @@ func jitMarkingRegRun(t *testing.T, src string, names []string, marking bool) (m
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		// Less work than the stack form's runs: both forms' runs, marking
-		// and not, under checkptr take CI's job past its time.
+		// Less work than the full runs: runs marking and not, under
+		// checkptr, take CI's job past its time.
 		for range 2 {
 			if res := r.RegNativeCall(fn, []Value{Float(32)}, false); res.Err != nil {
 				t.Fatalf("%s: %v", name, res.Err)

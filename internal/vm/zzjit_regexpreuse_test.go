@@ -12,7 +12,7 @@ import (
 // Where a runtime runs the JIT, exec's leaf is told nothing of the arrays it
 // may make again (zzz_regexpreuse.go): native code holds a frame's locals
 // where the slots cannot say. The calls that would have been told are made
-// natively and in the tree tier as before: each answer is the
+// natively and in the interpreter as before: each answer is the
 // interpreter's and Node's, with the collector idle and while it marks, and
 // no array was made again.
 func TestJITRegExpReuse(t *testing.T) {

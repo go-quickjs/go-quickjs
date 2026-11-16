@@ -6,16 +6,16 @@ import (
 	"github.com/go-quickjs/go-quickjs"
 )
 
-// numberLeafSweep calls Number's functions every tier calls without a frame
-// where they run no script -- Number(x) and Boolean(x), Number.isInteger,
-// isSafeInteger, isFinite and isNaN, the global isNaN, isFinite, parseInt
-// and parseFloat, Number.prototype's toString, valueOf, toFixed,
-// toExponential and toPrecision -- of every pair of 31 values of every kind,
-// each the receiver and the argument -- numbers about every edge and every
-// count's bounds, numeric strings, booleans, null, undefined, a BigInt, a
-// symbol, an object whose valueOf and toString count their calls -- and
-// digests each result or its error's type, and the calls: its sweep() is
-// Node's (v26.10.0) 14415:143771872:328.
+// numberLeafSweep calls Number's functions the interpreter and the JIT call
+// without a frame where they run no script -- Number(x) and Boolean(x),
+// Number.isInteger, isSafeInteger, isFinite and isNaN, the global isNaN,
+// isFinite, parseInt and parseFloat, Number.prototype's toString, valueOf,
+// toFixed, toExponential and toPrecision -- of every pair of 31 values of
+// every kind, each the receiver and the argument -- numbers about every
+// edge and every count's bounds, numeric strings, booleans, null,
+// undefined, a BigInt, a symbol, an object whose valueOf and toString count
+// their calls -- and digests each result or its error's type, and the
+// calls: its sweep() is Node's (v26.10.0) 14415:143771872:328.
 const numberLeafSweep = `
 var calls = 0;
 var obj = { valueOf() { calls++; return 7 }, toString() { calls++; return "9" } };
@@ -42,10 +42,9 @@ function sweep() {
 }
 `
 
-// TestNumberLeaves pins that Number's leaves answer as the ordinary call does
-// and as Node does, in the interpreter and the tree tier, which a sweep run
-// three times takes to; the JIT's frameless calls of them are internal/vm's
-// TestJITPlainGoCalls.
+// TestNumberLeaves pins that Number's leaves answer as the ordinary call
+// does and as Node does, in the interpreter; the JIT's frameless calls of
+// them are internal/vm's TestJITPlainGoCalls.
 func TestNumberLeaves(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()

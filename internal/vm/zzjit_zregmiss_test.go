@@ -29,16 +29,15 @@ function run() {
 }
 `
 
-// TestJITRegMissedInlined: a register compile in the background whose
-// build asked what its snapshot was not asked is built on the runtime's
-// goroutine from feedback asked anew (jitRegInstall's missed), as the
-// stack form's missed compile is. Built from the job's feedback, whose
-// questions' effects the snapshot had taken back -- the closures the code
-// inlines among them -- its keep named none of its inlined callees, and an
-// exit inside one panicked: "an inlined register callee's closure is not
-// its caller's" (jitRegInlined). Every compile is left a miss here
-// (QJS_JIT_STRESS's miss), and the answers are the interpreter's, with the
-// collector idle and marking.
+// TestJITRegMissedInlined: a register compile in the background whose build
+// asked what its snapshot was not asked is built on the runtime's goroutine
+// from feedback asked anew (jitRegInstall's missed). Built from the job's
+// feedback, whose questions' effects the snapshot had taken back -- the
+// closures the code inlines among them -- its keep named none of its
+// inlined callees, and an exit inside one panicked: "an inlined register
+// callee's closure is not its caller's" (jitRegInlined). Every compile is
+// left a miss here (QJS_JIT_STRESS's miss), and the answers are the
+// interpreter's, with the collector idle and marking.
 func TestJITRegMissedInlined(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

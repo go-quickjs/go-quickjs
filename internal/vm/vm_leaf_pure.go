@@ -22,30 +22,29 @@ func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool)
 }
 
 // pureTreeCode is the shortest pure body, in instructions, that is called
-// as its tree rather than evaluated here when it calls nothing.
+// as its register code rather than evaluated here when it calls nothing.
 const pureTreeCode = 7
 
-// pureByTree reports whether calls of a pure body go to its tree, as
-// planTreeCall gives them, rather than to pureCall: its first call is made
-// with a frame, after which planTreeCall gives it its tree's call (see
-// pureFirst). pureCallAt pays an
-// indirect jump of its one switch for every instruction, which is often
-// mispredicted, as the bodies it evaluates are all different; a tree pays
-// a frame once, and runs each node through a call of its own. A body that
-// calls nothing gains nothing else from being frameless, and from about
-// seven instructions on its tree is the cheaper; one that calls keeps its
-// calls frameless here, which a tree would make with frames. A call from
-// inside another pure body (pureInvoke) is still evaluated here.
+// pureByTree reports whether calls of a pure body go to its register code,
+// as planCall gives them (regPlan), rather than to pureCall: its first call
+// is made with a frame, after which planCall gives it its register code (see
+// pureFirst). pureCallAt pays an indirect jump of its one switch for every
+// instruction, which is often mispredicted, as the bodies it evaluates are
+// all different; its register code pays a frame once. A body that calls
+// nothing gains nothing else from being frameless, and from about seven
+// instructions on a frame is the cheaper; one that calls keeps its calls
+// frameless here, which its register code would make with frames. A call
+// from inside another pure body (pureInvoke) is still evaluated here.
 func pureByTree(fn *bytecode.Function) bool {
 	return !fn.PureCalls && len(fn.Code) >= pureTreeCode
 }
 
 // pureFirst reports whether a call of fd's pure body fn tries pureCall: the
-// body is not one pureByTree gives its tree, or planTreeCall has decided
+// body is not one pureByTree gives its register code, or planCall has decided
 // about it and found it none. A short body, the commonest, is answered by
 // the first test.
 func pureFirst(fd *funcData, fn *bytecode.Function) bool {
-	return len(fn.Code) < pureTreeCode || fn.PureCalls || fd.treePlanned
+	return len(fn.Code) < pureTreeCode || fn.PureCalls || fd.planned
 }
 
 // The cases of pureCallAt's switch, which pureCases numbers the
@@ -189,8 +188,9 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 	if fn.CoerceThis && !this.IsObject() {
 		// A sloppy body called without an object for this -- a plain
 		// call, f() -- whose this a frame makes: a miss, so that its calls
-		// are planned (planTreeCall), callTree making the global object
-		// its this, rather than each tried here and then made by runFD.
+		// are planned (planCall), the register code's entry making the
+		// global object its this, rather than each tried here and then made
+		// by runFD.
 		cl.pureMiss++
 		return Undefined, false
 	}
@@ -534,13 +534,13 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	return Obj(obj), true
 }
 
-// The built-ins every tier calls without a frame, as they call nothing and
-// cannot throw where they are applied (elemOp): the array methods a pure
-// body may call, the collections' lookups and additions (collectionOp), and
-// the leaves past elemRandom (leafOps) -- the collections' deletions, the
-// weak ones' operations, Date.now, String and Number of a primitive,
-// Boolean of any value. Each declares its
-// own where it is made (setElemOp).
+// The built-ins the interpreter and native code call without a frame, as
+// they call nothing and cannot throw where they are applied (elemOp): the
+// array methods a pure body may call, the collections' lookups and additions
+// (collectionOp), and the leaves past elemRandom (leafOps) -- the
+// collections' deletions, the weak ones' operations, Date.now, String and
+// Number of a primitive, Boolean of any value. Each declares its own where
+// it is made (setElemOp).
 const (
 	elemPush = iota + 1
 	elemPop
@@ -713,7 +713,7 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	site := &cl.ic[in.B]
-	// The environment the site found the name in, as the tree tier's read
+	// The environment the site found the name in, as the interpreter's read
 	// takes it (see propCache): no scope to ask for, no key to compare.
 	if env := site.p1; env != nil && (r.globalLex.valn == 0 || !r.lexShadows(cl.names[in.A])) {
 		if i := uint(site.idx); i < uint(int(env.valn)) {

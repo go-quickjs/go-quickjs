@@ -8,7 +8,7 @@ import (
 )
 
 // BigInts on the heap that Go makes from native code (ssa.GoArith, GoAdd)
-// given back for the next result, as the tree tier gives them back
+// given back for the next result, as the interpreter gives them back
 // (bigRelease): an operator's operand that is a fresh operator's result,
 // and the value of a local that holds its values alone, which the
 // result is stored over (ssa.CallSite's Release, the VM's soleLocals).
@@ -192,7 +192,7 @@ func TestJITBigIntGivenBack(t *testing.T) {
 
 // A loop of sums and products of BigInts of 256 bits, microbench.js's
 // bigint_arith, compiled: warm, its blocks are given back as it goes, as
-// the tree tier gives them back, rather than allocated anew at each turn.
+// the interpreter gives them back, rather than allocated anew at each turn.
 func TestJITBigIntGivenBackAllocs(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

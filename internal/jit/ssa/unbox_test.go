@@ -32,6 +32,11 @@ func compiledFunctionForTest(t *testing.T, src string) *bytecode.Function {
 	return nil
 }
 
+// paramSlot is the slot of a register program's first parameter: its
+// registers 0 and 1 are the function and its this (ir.Program's
+// ParamBase).
+const paramSlot = 2
+
 func lowerJS(t *testing.T, src string) *Func {
 	t.Helper()
 	prog, err := parser.Parse(src, parser.Options{})
@@ -44,7 +49,7 @@ func lowerJS(t *testing.T, src string) *Func {
 	}
 	for _, c := range top.Constants {
 		if c.Kind == bytecode.ConstFunction {
-			p, err := jitcompile.Lower(c.Fn)
+			p, err := jitcompile.LowerReg(c.Fn.RegCode(), c.Fn)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +97,7 @@ func TestOptimizeKeepsLoopsUnboxed(t *testing.T) {
 // What runs from each entry is still the slot IR's (TestBuildMatchesSlotIR).
 func TestEntriesLoadLiveLocals(t *testing.T) {
 	fn := compiledFunctionForTest(t, `function f(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;let b=s+1;return b}`)
-	p, err := jitcompile.LowerSSA(fn)
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,11 +108,17 @@ func TestEntriesLoadLiveLocals(t *testing.T) {
 	if err := Check(f); err != nil {
 		t.Fatal(err)
 	}
+	// b's register: the one the function returns (ret), as the register
+	// code keeps no map of its locals (RegCode's LocalReg) where nothing
+	// reads one by it.
 	b := -1
-	for i, l := range fn.Locals {
-		if l.Name == "b" {
-			b = i
+	for _, w := range fn.RegCode().Code {
+		if w.Op() == bytecode.RRet {
+			b = int(w.A())
 		}
+	}
+	if b < 0 {
+		t.Fatal("no return of b")
 	}
 	loops := 0
 	for _, e := range f.Entries {
@@ -145,7 +156,7 @@ func (sitesFeedback) NativeCalls(int) []CallSite        { return nil }
 // deoptimizations. A read left to Go whole has one.
 func TestEntriesAfterGuards(t *testing.T) {
 	fn := compiledFunctionForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0;g()}return s}`)
-	p, err := jitcompile.LowerSSA(fn)
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +218,7 @@ func (siteFeedback) NativeCalls(int) []CallSite          { return nil }
 // entry after it. None has an entry after it.
 func TestBuildPropertyMissesDeoptimize(t *testing.T) {
 	fn := compiledFunctionForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0}return s}`)
-	p, err := jitcompile.LowerSSA(fn)
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +231,9 @@ func TestBuildPropertyMissesDeoptimize(t *testing.T) {
 	if read < 0 {
 		t.Fatal("no read")
 	}
+	// A state's PC is the read's register pc (ir.Program's Origin), and
+	// what follows it starts the next register instruction's lowering.
+	readPC, after := int(p.Origin[read]), p.At(p.Origin[read]+1)
 	for _, c := range []struct {
 		site PropertySite
 		kind ir.ExitKind
@@ -250,7 +264,7 @@ func TestBuildPropertyMissesDeoptimize(t *testing.T) {
 					}
 				}
 			}
-			if b.Kind == BlockExit && b.State != nil && int(b.State.PC) == read {
+			if b.Kind == BlockExit && b.State != nil && int(b.State.PC) == readPC {
 				ended = true
 				if b.ExitKind != c.kind {
 					t.Errorf("%+v: the read's block exits as %v, want %v", c.site, b.ExitKind, c.kind)
@@ -261,7 +275,7 @@ func TestBuildPropertyMissesDeoptimize(t *testing.T) {
 			t.Errorf("%+v: read made natively %v, its block ended %v at %d:\n%s", c.site, made, ended, read, f)
 		}
 		for _, e := range f.Entries {
-			if e.PC == read+1 {
+			if e.PC == read+1 || e.PC == after {
 				t.Errorf("%+v: an entry after the read", c.site)
 			}
 		}
@@ -306,8 +320,11 @@ func TestShadowsMadeOnce(t *testing.T) {
 
 // Optimize unboxes phis at the start of a round, so that the boxes it
 // makes cancel in the same round's walk: a function is mostly done in two
-// rounds, the second finding nothing, not three. The corpus takes 25
-// rounds, 34 the other way.
+// rounds, the second finding nothing, not three. A loop of register code
+// tests at its foot, and the number it carries out meets the way around
+// it in a phi whose box the loop header's phi uses too: unboxed in the
+// same round as the header's (unboxPhis' merged). The corpus takes 24
+// rounds.
 func TestOptimizeRounds(t *testing.T) {
 	rounds := 0
 	for _, src := range jsCorpus {
@@ -361,7 +378,7 @@ func TestBuildLoadsCapturedBindingsWhereRead(t *testing.T) {
 			fn = c.Fn
 		}
 	}
-	p, err := jitcompile.LowerSSAInline(fn)
+	p, err := jitcompile.LowerRegInline(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +441,7 @@ func TestBuildEntriesLeaveCapturedBindingsInCells(t *testing.T) {
 			fn = c.Fn
 		}
 	}
-	p, err := jitcompile.LowerSSAInline(fn)
+	p, err := jitcompile.LowerRegInline(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +487,8 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 		src.WriteString("g[0]=0;")
 	}
 	src.WriteString("s=s+i}return s}")
-	p, err := jitcompile.LowerSSA(compiledFunctionForTest(t, src.String()))
+	fn := compiledFunctionForTest(t, src.String())
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +528,8 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 // as any other is.
 func TestBuildNoEntriesAfterCallsOfGo(t *testing.T) {
 	src := "function f(g,n){let s=0;for(let i=0;i<n;i++){g();g();g();g();s=s+i}return s}"
-	p, err := jitcompile.LowerSSA(compiledFunctionForTest(t, src))
+	fn := compiledFunctionForTest(t, src)
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,8 +16,6 @@ import (
 // its functions, each with its register code, by name.
 func regCompiled(t *testing.T, source string) map[string]*bytecode.Function {
 	t.Helper()
-	compiler.SetRegisterForm(true)
-	defer compiler.SetRegisterForm(bytecode.RegDefault())
 	prog, err := parser.Parse(source, parser.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -238,8 +236,8 @@ function codes(s) { let h = 0; for (let i = 0; i < s.length; i++) h = h * 31 + s
 }
 
 // TestLowerRegRefusals checks LowerReg's refusals by kind: a with
-// statement's probes and direct eval, as LowerSSA refuses them, and a
-// function that does nothing native code saves time on.
+// statement's probes and direct eval, and a function that does nothing
+// native code saves time on.
 func TestLowerRegRefusals(t *testing.T) {
 	fns := regCompiled(t, `
 function withs(o) { with (o) { return x } }

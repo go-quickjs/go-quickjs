@@ -127,8 +127,8 @@ func (r *Runtime) bigOfKept(neg bool, mag []uint) Value {
 
 // bigFreeList is the BigInts given back to a runtime, by their room in
 // words, from bigBlockFrom to bigFreeTop, up to bigFreeDepth of each:
-// the results of arithmetic in the tree tier that an operator of its
-// parent node took and nothing else saw, whose blocks C QuickJS would
+// the results of arithmetic that an operator took and nothing else saw
+// (regBigRelease, bigRelease), whose blocks C QuickJS would
 // free as it goes. A loop of arithmetic on numbers of hundreds of bits
 // makes results the size of the ones before, and in their blocks the
 // collector has a fraction of the bytes to collect -- and scans the
@@ -144,8 +144,8 @@ const (
 )
 
 // bigRelease gives back a's and b's blocks, those of a and b that flags
-// marks as fresh (treeFreshA, treeFreshB) -- each a result of the tree
-// tier's arithmetic that an operator of two BigInts has just taken, and
+// marks as fresh (treeFreshA, treeFreshB) -- each a result of arithmetic
+// that an operator of two BigInts has just taken, and
 // nothing else has seen -- and old's, the value of the local v is about
 // to be stored to, where flags says the local holds its values alone
 // (treeOwnRes) and old is one such a store kept (bigSoleBit), for
@@ -198,14 +198,13 @@ func (r *Runtime) bigGive(b *BigInt) {
 	}
 }
 
-// treeFreshA and treeFreshB mark, in the pc a tree's arithmetic or bitwise
-// node passes arithSlow or bitwiseSlow, its left and right operands as
-// fresh: trees of arithmetic of their own, whose results nothing else
-// takes, which a BigInt operator of the two may give back (bigRelease).
-// treeOwnRes marks the node as one whose result is stored to a local that
-// holds its values alone, the local treeOwnShift's bits number
-// (zzbigown.go). treePCMask is the pc itself. A function whose pc is past
-// it has no marks.
+// treeFreshA and treeFreshB mark, in the flags jitBigRelease passes
+// bigRelease for native code's operator, its left and right operands as
+// fresh: results of arithmetic of their own, which nothing else takes,
+// which a BigInt operator of the two may give back (bigRelease).
+// treeOwnRes marks the operator as one whose result is stored to a local
+// that holds its values alone (zzbigown.go). treeOwnShift and treePCMask
+// are read by nothing.
 const (
 	treePCMask   = 1<<20 - 1
 	treeOwnShift = 20
@@ -213,15 +212,6 @@ const (
 	treeFreshB   = 1 << 27
 	treeOwnRes   = 1 << 28
 )
-
-// treeOwned is the value of the local a pc that treeOwnRes marks names,
-// which the result is about to be stored over.
-func (c *tctx) treeOwned(pc int) Value {
-	if pc&treeOwnRes == 0 {
-		return Undefined
-	}
-	return c.locals[pc>>treeOwnShift&63]
-}
 
 // bigDone is a result made in bigInPlace's room as a value: held in its
 // Value in the int64 range, the BigInt, its length the result's, if one was
@@ -599,24 +589,6 @@ func shortOfTwos(h, l uint64) Value {
 	}
 }
 
-// shortOpOf is shortOp where a machine has it, a 64-bit one's: on another
-// it reports false, for bigOp.
-func shortOpOf(op bytecode.Op, a, b Value) (Value, bool) {
-	if bits.UintSize != 64 {
-		return Undefined, false
-	}
-	return shortOp(op, a, b)
-}
-
-// shortBitsOf is shortBits where a machine has it, a 64-bit one's, and
-// shortBitwise's int64s on another.
-func shortBitsOf(op bytecode.Op, a, b Value) (Value, bool) {
-	if bits.UintSize != 64 {
-		return shortBitwise(op, a, b)
-	}
-	return shortBits(op, a, b)
-}
-
 // bigTwoWords is the BigInt of sign neg and magnitude hi*2^64+lo, hi not
 // zero, on a 64-bit machine: two words on the heap.
 func bigTwoWords(neg bool, lo, hi uint64) Value {
@@ -716,21 +688,6 @@ func bigFloat(v Value) float64 {
 	return f
 }
 
-// wrapsOperator reports whether a is an operator wrapCall makes
-// BigInt.asUintN's and asIntN's of from its operands, over two that may be
-// BigInts: not a number constant.
-func wrapsOperator(a *arithOf) bool {
-	if a.imm || a.x.number || a.y.number {
-		return false
-	}
-	switch a.op {
-	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul,
-		bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr:
-		return true
-	}
-	return false
-}
-
 // wrapShort is asIntN, signed, or asUintN of the width w and a op b, two
 // BigInts held in their Values, made of the low 64 bits of their two's
 // complement (wrapLow), as bigAsNCall would make it of a op b. It reports
@@ -804,32 +761,4 @@ func asN64(u uint64, bits uint, signed bool) Value {
 		return shortBig(int64(u<<(64-bits)) >> (64 - bits))
 	}
 	return shortBigMag(false, u)
-}
-
-// wrapOperator is a op b for wrapCall where it is not made of the low bits:
-// the operator's node's, its fast path for two numbers too.
-func (c *tctx) wrapOperator(op bytecode.Op, a, b Value, pc int) Value {
-	bitwise := isBitwise(op)
-	if a.IsNumber() && b.IsNumber() {
-		if bitwise {
-			return int32Op(op, a.num, b.num)
-		}
-		return Float(numericOp(op, a.num, b.num))
-	}
-	if bitwise {
-		return c.bitwiseSlow(op, a, b, pc)
-	}
-	return c.arithSlow(op, a, b, pc)
-}
-
-// wrapSeen is the mark arithSlow would have made for the JIT of the
-// arithmetic a op b, two BigInts held in their Values, that wrapCall made
-// of their low bits instead: one on the heap, or made there, unless both
-// and the result are in the int64 range.
-func wrapSeen(c *tctx, op bytecode.Op, a, b Value, pc int) {
-	if isBitwise(op) {
-		return
-	}
-	_, ok := shortArith(op, a, b)
-	treeBigInt(c, pc&treePCMask, !ok)
 }

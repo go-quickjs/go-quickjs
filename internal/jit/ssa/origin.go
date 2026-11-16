@@ -34,8 +34,8 @@ import (
 // argument for it is the cell. This holds only while Go's heap does not
 // move and nothing changes the object graph while native code runs, which
 // is outside what unsafe.Pointer's rules promise: a deliberate choice
-// (internal/jit/README.md, "Reading the heap in place"), checked with each
-// new Go.
+// (internal/jit/README.md, "Native code on the register frame", its
+// "Reading the heap in place"), checked with each new Go.
 
 // Origins of a tagged value, besides a slot's index.
 const (

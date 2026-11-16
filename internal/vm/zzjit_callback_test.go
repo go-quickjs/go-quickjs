@@ -199,7 +199,7 @@ func TestJITCallbackEnteredByGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// Each reads an element, which has Go enter it (LowerSSA's hostOnly).
+	// Each reads an element, which has Go enter it (LowerReg's hostOnly).
 	setup := callbackSetup + `
 		function goShapes(at) { let s = nums[0] - 1; objs.forEach((o, i) => { s += (i === at ? odd : o).v }); return s }
 		function goReduce(at) { const z = nums[0] - 1; return objs.reduce((s, o, i) => s + (i === at ? odd : o).v, z) }
@@ -235,16 +235,6 @@ func TestJITCallbackEnteredByGo(t *testing.T) {
 	if r.jit.materialized == 0 || r.jit.loopsFinished == 0 {
 		t.Errorf("Go made %d closures, finished %d loops", r.jit.materialized, r.jit.loopsFinished)
 	}
-}
-
-// jitCallbackEntry is the entry of name's function in r.
-func jitCallbackEntry(r *Runtime, name string) *jitEntry {
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == name {
-			return x
-		}
-	}
-	return nil
 }
 
 // jitCallbackMallocs is how many allocations src makes in r, a run of it.

@@ -10,9 +10,8 @@ import (
 // TestJITRegReoptimizeResumes runs a loop whose call, never made when the
 // loop was compiled, learns its function at a call of Go from native code
 // -- one native code calls, not inlines -- and leaves after the call once
-// its compile again is due; and checks the function is compiled again
-// once for it, with the entry after the call where the frame goes on, as
-// the stack form's jitReoptimize compiles its runs' (resumed) and as V8's
+// its compile again is due; and checks the function is compiled again once
+// for it, with the entry after the call where the frame goes on, as V8's
 // compile for a frame is asked with its bytecode offset. Compiled without
 // it -- the call native in the new code, with no entry after it -- the
 // frame found none there and had the function compiled again at once
@@ -77,8 +76,7 @@ function loop(n, m) { var s = 0; for (var i = 0; i < n; i++) { s = s + 1; if (i 
 // in a budget with room for the new code only in place of the old, and
 // checks the new code is placed: the room a compile again asks for counts
 // what the code it replaces holds as given back, and that code is not let
-// go of meanwhile, as the stack form's roomFor makes room for an entry's
-// code compiled again. Asked for on top of the old code's, the room for
+// go of meanwhile. Asked for on top of the old code's, the room for
 // zlib's loop of ten thousand instructions, as large as a third of the
 // budget, was short at the placing, the finished compile thrown away, and
 // asked again at every turn of the loop until other code was let go.

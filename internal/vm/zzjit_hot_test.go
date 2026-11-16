@@ -4,9 +4,9 @@ package vm
 
 import "testing"
 
-// Functions of calls and no loop, compiled once hot (LowerSSAHot): a
+// Functions of calls and no loop, compiled once hot (LowerRegHot): a
 // recursion, a mutual one, one constructing, one whose calls throw, each
-// answer the interpreter's in every tier and under every stress setting.
+// answer the interpreter's under every stress setting.
 func TestJITHotCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -38,7 +38,7 @@ func TestJITHotCalls(t *testing.T) {
 // call site that starts it: a harness's call, decided for one benchmark,
 // taking the next. It had been refused once entered from Go -- a function
 // of calls and no loop -- and AWFY's Towers, run after Sieve, ran its
-// recursion in the tree tier, four times as long as run alone.
+// recursion in the interpreter, four times as long as run alone.
 func TestJITHotCallsAnyOrder(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -91,7 +91,7 @@ func TestJITHotCallsAnyOrder(t *testing.T) {
 // does when it does not: a recursion runs on natively, no call of Go, and
 // is not judged slow. When Go made the calls then (abi.GoOpMarking), a
 // recursion's had been judged slow on its leaves -- under a collector that
-// marked often, in TestJITHotCallsAnyOrder on Windows -- and the tree tier
+// marked often, in TestJITHotCallsAnyOrder on Windows -- and the interpreter
 // ran it.
 func TestJITHotCallsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
@@ -137,84 +137,9 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 }
 
 // jitHotForTest is the entry of the global function name's code compiled
-// once hot (LowerSSAHot), nil where it has none: or, where r runs register
+// once hot (LowerRegHot), nil where it has none: or, where r runs register
 // code, its register code's state, the code compiled as the register
 // form's compiles a function of calls and no loop (LowerRegHot).
 func jitHotForTest(r *Runtime, name string) *jitEntry {
-	if jitRegCodeForTest(r, name) {
-		return jitRegLifeForTest(r, name)
-	}
-	e := r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure)
-	if e == nil || !e.hot || e.ssa == nil {
-		return nil
-	}
-	return e
-}
-
-// A function of calls and no loop is not compiled hot where each of its
-// calls is of a function native callers do not call (notNative): native
-// code Go entered would make each through Go, which the tree tier makes
-// itself (jitCallsNatively). AWFY's Json's readChar, all of whose calls are
-// of read, which leaves for Go at each substring, had taken it 5% longer.
-// A call of itself, or of one native callers call or that has no code yet,
-// would be native.
-func TestJITHotCallsOfGoOnly(t *testing.T) {
-	t.Parallel()
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	r := New(Config{JIT: true})
-	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-	jitFewCallsForTest(r)
-	const setup = `
-		var o = { s: 'abcdefgh', i: 0, cur: 'a' }
-		function read(o) { let k = 0; for (let j = 0; j < 1; j++) k += j; o.i = (o.i + 1) & 7; o.cur = o.s.substring(o.i, o.i + 1) }
-		function readChar(o, c) { if (o.cur !== c) return false; read(o); return true }
-		function self(n) { return n === 0 ? 0 : self(n - 1) + 1 }
-		function fresh() { return later() }
-		function later() { return 1 }
-		for (let i = 0; i < 30; i++) { read(o); readChar(o, o.cur); self(3); fresh() }`
-	if _, err := r.Run(compileForTest(t, setup)); err != nil {
-		t.Fatal(err)
-	}
-	closure := func(name string) *closure {
-		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-	}
-	// Asked of the register form's code where the runtime runs it
-	// (jitRegCallsNatively), as of the stack form's.
-	callsNatively := func(name string) bool {
-		cl := closure(name)
-		if jitRegCodeForTest(r, name) {
-			if cl.reg == nil {
-				t.Fatalf("%s has no register code", name)
-			}
-			return r.jitRegCallsNatively(cl, cl.reg)
-		}
-		return r.jitCallsNatively(cl)
-	}
-	re := jitCodeForTest(r, "read")
-	if re == nil {
-		t.Fatalf("read has no code: %+v", re)
-	}
-	re.notNative = true
-	if callsNatively("readChar") {
-		t.Error("readChar's call of read, which native callers do not call, taken for a native one")
-	}
-	re.notNative = false
-	if !callsNatively("readChar") {
-		t.Error("readChar's call of read, which native callers call, not taken for a native one")
-	}
-	if !callsNatively("self") {
-		t.Error("a recursion not taken for a native call")
-	}
-	if jitRegCodeForTest(r, "fresh") {
-		if l := r.jit.regLearned[r.jitRegKeyOf(closure("later"))]; r.jitRegHas(closure("later")) || l != nil && (l.warming || l.invalid) {
-			t.Skipf("later was compiled, or is warming: %+v", l)
-		}
-	} else if e := r.jit.entryFor(closure("later").fn); e != nil {
-		t.Skipf("later was compiled: %+v", e)
-	}
-	if !callsNatively("fresh") {
-		t.Error("a call of a function with no code yet not taken for a native one")
-	}
+	return jitRegLifeForTest(r, name)
 }

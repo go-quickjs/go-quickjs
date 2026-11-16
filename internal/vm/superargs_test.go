@@ -10,7 +10,7 @@ import "testing"
 // arguments object, its rest array and a default computed by a call while
 // the constructor goes on computing in its slots; built-ins and a parent
 // whose argument is a construction of the same class get theirs as they
-// were given. Node's answers, on the trees and in the interpreter.
+// were given. Node's answers.
 func TestSuperArgumentsInPlace(t *testing.T) {
 	const src = `'use strict'
 		class Keep { constructor(a, b = a * 10, ...rest) { this.args = arguments; this.b = b; this.rest = rest; this.n = arguments.length } }
@@ -41,17 +41,13 @@ func TestSuperArgumentsInPlace(t *testing.T) {
 		}
 		out.slice(0, 5).join(' | ') + ' | same ' + out.slice(5).every((s, i) => s === out[i % 5])`
 	const want = "2,10,14,w;10;14,w;4;6,3,20,35,q,r | 2,3,5;3;12;true | v;1;3 | m!;m;15;true | 3,3,3;3 | same true"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got %s, want %s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

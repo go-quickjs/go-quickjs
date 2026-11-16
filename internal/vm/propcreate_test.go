@@ -6,14 +6,13 @@ import (
 )
 
 // propCreateScript adds properties to fresh objects every way the
-// interpreter, the tree tier and setIndexed's ordinary-object path
-// (setOrdinaryIndex) do: names and indices, on objects built alike past
-// their room and their shapes' lookup index, in order and not, deleted
-// and added again; with setters on the prototype chain, which must run,
-// read-only properties up it, frozen, sealed and non-extensible objects,
-// proxies as the object and up its chain, a site's objects used as a
-// table of names and of indices, and keys that look like indices and are
-// not.
+// interpreter and setIndexed's ordinary-object path (setOrdinaryIndex) do:
+// names and indices, on objects built alike past their room and their
+// shapes' lookup index, in order and not, deleted and added again; with
+// setters on the prototype chain, which must run, read-only properties up
+// it, frozen, sealed and non-extensible objects, proxies as the object and
+// up its chain, a site's objects used as a table of names and of indices,
+// and keys that look like indices and are not.
 const propCreateScript = `
 		var out = [];
 		function build(n, m) {
@@ -157,7 +156,7 @@ set2:20;setq:7;op12:12`
 // Properties added to fresh objects land where Node puts them, in the
 // order it lists them, and assignments the chain or the object refuses or
 // intercepts are refused or intercepted, run as a script whose functions
-// warm into the tree tier, and run again.
+// run many times, and run again.
 func TestPropertyCreationAgreesWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 2 {
@@ -188,8 +187,7 @@ func TestPropertyCreationAgreesWithNode(t *testing.T) {
 
 // A literal's objects outgrow the room they were made with once, not at
 // each doubling: its site's root notes the room they came to need
-// (outgrowProps), and the next objects, the tree tier's, are made with it,
-// from the third on.
+// (outgrowProps), and the next objects are made with it, from the third on.
 // A keyed store's objects -- a table of names, a dictionary past the soft
 // limit -- teach their site nothing, and objects with no site teach their
 // class's root no more than the room an object carries in its own

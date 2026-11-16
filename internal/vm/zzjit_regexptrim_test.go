@@ -10,7 +10,7 @@ import (
 )
 
 // Native code's replaces of trims' patterns, leaves' and calls of Go,
-// find their matches as the tree tier does (regexp's trimTail): each
+// find their matches as the interpreter does (regexp's trimTail): each
 // answer is the interpreter's and Node's, with the collector idle and while
 // it marks, the functions run natively.
 func TestJITRegExpTrimReplace(t *testing.T) {

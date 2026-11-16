@@ -8,10 +8,11 @@ import (
 )
 
 // The register interpreter's tail calls (tail_call_w and
-// tail_call_method_w; docs/register-interpreter.md, "Stage 2"), in a file
-// that sorts after the package's others but the layout lock's last pad:
-// what only a tail call runs moves none of the call path's code. regPlan,
-// which refuses a treeCall to a function with a tail call, is here too:
+// tail_call_method_w; docs/register-interpreter.md, "Frames and calls"),
+// in a file that sorts after the package's others but the layout lock's
+// last pad: what only a tail call runs moves none of the call path's code.
+// regPlan, which gives no regCall to a function with a tail call, is here
+// too:
 // with the call path grown by the tail calls' checks of its errors, 192
 // bytes, its 192 bytes leave the slow path, regIn, regNative and runReg where
 // they were before tail calls (weak_map_set, has_own_method_hit and
@@ -20,8 +21,8 @@ import (
 // regCallEnd is regCall's end in an error: where its frame ended in a tail
 // call (errTailCall), the chain the call starts made by regTailLoop,
 // unless the loop called it (tailLoopDepth). Only regCall's own frame can
-// end so: a function with a tail call has no treeCall (regPlan,
-// planTreeCall), so callDirect makes its tail calls itself.
+// end so: a function with a tail call has no regCall (regPlan), so
+// callDirect makes its tail calls itself.
 //
 //go:noinline
 func (r *Runtime) regCallEnd(v Value, err error) (Value, error) {
@@ -84,11 +85,10 @@ func (r *Runtime) regTailRest() (Value, error) {
 }
 
 // regTailCallW is tail_call_w and tail_call_method_w: call_w and
-// call_method_w in tail position, as the stack form makes tail_call. Once
-// the stack is tailCallDepth deep, the frame f, an ordinary call's, is
-// given to the callee in place (regTailInPlace, errRegRestart) or given up
-// (regTail, errTailCall), as the tree's restarts and tailCallNode's frame
-// are, the error the frame ends with; otherwise, or where neither can be,
+// call_method_w in tail position. Once the stack is tailCallDepth deep, the
+// frame f, an ordinary call's, is given to the callee in place
+// (regTailInPlace, errRegRestart) or given up (regTail, errTailCall), the
+// error the frame ends with; otherwise, or where neither can be,
 // the call is call_w's (rhCallW), and it reports false.
 //
 //go:noinline
@@ -191,8 +191,7 @@ var errRegRestart = errors.New("register frame restarted")
 // nothing of its surroundings: the frame f, regCallW's or regEnterW's, an
 // ordinary call's, its arguments kept nowhere, becomes the callee's -- its
 // captured bindings closed, the arguments moved to the parameters, the
-// rest of the bindings undefined -- as the tree's restarts and swaps of
-// frames do (selfRestart, tailSwap), with no unwinding and no frame made.
+// rest of the bindings undefined -- with no unwinding and no frame made.
 // It reports whether it did.
 func (r *Runtime) regTailInPlace(f *frame, c *regCode, w bytecode.RInstr, wb int) bool {
 	win := regWindow(r.stack, wb+int(w.A()))
@@ -272,20 +271,18 @@ func (r *Runtime) regTailTo(f *frame, w bytecode.RInstr, wb int, o *Object, cl *
 	return true
 }
 
-// regTail is call_w or call_method_w of a call in tail position, as the
-// stack form's tail_call makes it once the stack is tailCallDepth deep:
-// the frame f, an ordinary call's, is given up, its loop leaving with
-// errTailCall and the call pending (r.pendingTail), its arguments copied
-// out of the window the callee's frame may reuse. It reports false where
-// f is a construct's or shares a derived constructor's this, whose call
-// is made the ordinary way.
+// regTail is call_w or call_method_w of a call in tail position once the
+// stack is tailCallDepth deep: the frame f, an ordinary call's, is given up,
+// its loop leaving with errTailCall and the call pending (r.pendingTail),
+// its arguments copied out of the window the callee's frame may reuse. It
+// reports false where f is a construct's or shares a derived constructor's
+// this, whose call is made the ordinary way.
 func (r *Runtime) regTail(f *frame, w bytecode.RInstr, wb int) bool {
 	switch f.regKind {
 	case regFrameCall:
 	default:
-		// regEnterW's, regCall's, or a frame the tree or run made, whose
-		// runTree leaves with errTailCall (regStmt sets treeTail), as
-		// tailCallNode's frame does.
+		// regEnterW's, regCall's, or a frame runFD made, whose loop leaves
+		// with errTailCall.
 		if !f.newTarget.IsUndefined() || f.thisRef != nil {
 			return false
 		}
@@ -300,23 +297,22 @@ func (r *Runtime) regTail(f *frame, w bytecode.RInstr, wb int) bool {
 }
 
 // regPlan gives a closure of a template with register code of the form's
-// own layout the tree that runs it as its tree's call, where nothing of its
-// surroundings but an arrow's this is to establish, so that callDirect --
-// a built-in's callback, a tree's call -- enters the register code at once.
-// An arrow's this is the one it captured, which regEnterFrame and
-// regDirect give it.
+// own layout that code as its regCall, where nothing of its surroundings
+// but an arrow's this is to establish, so that callDirect -- a built-in's
+// callback, the interpreter's call -- enters the register code at once.
+// An arrow's this is the one it captured, which regCall and regDirect give
+// it.
 func regPlan(fd *funcData) {
-	if fd.treeCall != nil || fd.bound || fd.native != nil || fd.closure == nil {
+	if fd.regCall != nil || fd.bound || fd.native != nil || fd.closure == nil {
 		return
 	}
-	t := (*tree)(atomic.LoadPointer(&fd.closure.fn.VMCode))
-	if t == nil || t.reg == nil || !t.reg.wide || t.reg.suspends {
+	c := (*regCode)(atomic.LoadPointer(&fd.closure.fn.VMCode))
+	if c == nil || !c.wide || c.suspends {
 		return
 	}
 	if fd.closure.fn.HasTailCall {
 		// A frame that may end in a tail call, whose callers must make
-		// it: planTreeCall's treeRest, not a treeCall, whose callers
-		// expect none.
+		// it: no regCall, whose callers expect none.
 		return
 	}
 	if isClassConstructorKind(fd.closure.fn.Kind) {
@@ -332,8 +328,26 @@ func regPlan(fd *funcData) {
 	if x := fd.extra; x != nil && (!fd.arrow || x.lexThisRef != nil || x.rare != nil) {
 		return
 	}
-	regBindPlan(fd, t)
-	fd.treeCall = t
+	regBindPlan(fd, c)
+	fd.regCall = c
+}
+
+// planCall decides, once after a call that has built its function's
+// register code, whether calls of fd's function enter the code at once
+// (regPlan). A pure body is left undecided while pureCall may still
+// answer its calls, which it tries first, unless pureByTree says they go
+// to its code.
+func planCall(fd *funcData) {
+	cl := fd.closure
+	fn := cl.fn
+	if atomic.LoadPointer(&fn.VMCode) == nil {
+		return
+	}
+	if fn.Leaf == bytecode.LeafPure && cl.pureMiss < pureMissLimit && !pureByTree(fn) {
+		return
+	}
+	fd.planned = true
+	regPlan(fd)
 }
 
 // regKeepWindow keeps the arguments from parameter params (regCode.keep)

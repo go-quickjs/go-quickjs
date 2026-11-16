@@ -281,7 +281,7 @@ func TestJITRegCellsWhole(t *testing.T) {
 			st := r.RegNativeStats()
 			t.Logf("entries %d, hosts %v, calls of Go %d", st.Entries, st.HostOps, st.GoCalls)
 			// A literal's prototype, field, method and accessors are calls
-			// of Go, as the stack form's: none leaves native code.
+			// of Go: none leaves native code.
 			for _, op := range []string{"set_proto_of", "define_field", "define_method", "define_getter", "define_setter", "close_regs"} {
 				if n := st.HostOps[op]; n > 50 {
 					t.Errorf("%s left to Go at %d host exits", op, n)

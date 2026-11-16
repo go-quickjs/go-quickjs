@@ -49,13 +49,11 @@ func TestRegInt32Forms(t *testing.T) {
 		{"return (x >>> 0) | 0", []bytecode.ROp{bytecode.ROrI, bytecode.RUShrI}, 0, 0, nil},
 	} {
 		src := "function f(x, y) { " + c.body + " }"
-		SetRegisterForm(true)
 		prog, err := parser.Parse(src, parser.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		top, err := Compile(prog, Options{Text: src})
-		SetRegisterForm(bytecode.RegDefault())
 		if err != nil {
 			t.Fatal(err)
 		}

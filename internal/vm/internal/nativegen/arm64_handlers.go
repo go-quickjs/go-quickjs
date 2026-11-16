@@ -703,18 +703,19 @@ func armEmit(v *variant) (*block, error) {
 		g.addMem(rC, rCtx, ncHas)
 		a.Load(rC, rC, 0)
 		a.Cbz(rC, g.exit, true)
-		// The set: ((key>>4) ^ (layout>>4)) * hasCacheMul, its top bits;
-		// rW, the instruction, read again after.
+		// The set: ((key>>4) ^ (layout>>4)) * hasCacheMul, its top bits,
+		// of hasCacheWays entries, the newest first; rW, the instruction,
+		// read again after.
 		a.ShiftImm(Lsr, rD, r8, 4, true)
 		a.ShiftImm(Lsr, rW, r9, 4, true)
 		a.Op(Eor, rD, rD, rW, true)
 		a.MovImm(rW, hasCacheMul)
 		a.Mul(rD, rD, rW)
-		a.ShiftImm(Lsr, rD, rD, 64-hasCacheBits+1, true)
-		a.MovImm(rW, uint64(2*sizeH))
+		a.ShiftImm(Lsr, rD, rD, 64-hasCacheBits+hasCacheWaysLog, true)
+		a.MovImm(rW, uint64(hasCacheWays*sizeH))
 		a.Mul(rD, rD, rW)
 		a.Op(Add, rC, rC, rD, true)
-		for i := int32(0); i < 2; i++ {
+		for i := int32(0); i < hasCacheWays; i++ {
 			next := a.NewLabel()
 			e := i * sizeH
 			g.cmpMem(r8, rC, e+offHKey)

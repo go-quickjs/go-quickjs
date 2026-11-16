@@ -63,29 +63,11 @@ func (*Runtime) SetJITBackground(bool) {}
 // JITBackground is false: there is no JIT to compile in the background.
 func (*Runtime) JITBackground() bool { return false }
 
-func (*Runtime) initJIT(bool, int64)                                  {}
-func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
-func (*Runtime) jitCountPure()                                        {}
-func (*Runtime) jitCountsCaller(int) bool                             { return false }
-func (*Runtime) jitResume(*frame) (Value, error, bool)                { return Value{}, nil, false }
-func (*Runtime) jitBackEdge(*frame, uint32, int) (Value, error, bool) { return Value{}, nil, false }
-func (*Runtime) tryJITTreeLoop(*tctx, int, int, bool)                 {}
-func (*Runtime) jitTreeRecovery(*frame) bool                          { return false }
-func jitTreeResult(any) (Value, error, bool)                          { return Value{}, nil, false }
-func (*Runtime) jitCodeBytes() int64                                  { return 0 }
-func (*Runtime) releaseJIT()                                          {}
+func (*Runtime) initJIT(bool, int64) {}
+func (*Runtime) releaseJIT()         {}
 
 // jitFramesDue makes no frames: no native code puts one off.
 func (r *Runtime) jitFramesDue(i int) {}
-
-func (*Runtime) jitPureCounted() bool { return false }
-func (*Runtime) jitCountPureCall()    {}
-
-// pureCallCounted is pureCall: there is no JIT to count calls for.
-func (r *Runtime) pureCallCounted(fd *funcData, this Value, args []Value) (Value, bool) {
-	r.pureRefused = false
-	return r.pureCallAt(fd, this, args, 0, true)
-}
 
 // regTickRet counts nothing: there is no budget.
 func regTickRet(*closureCode) {}

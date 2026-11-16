@@ -251,8 +251,8 @@ func (r *Runtime) regDebug(f *frame, c *regCode, pc int, w bytecode.RInstr, regs
 }
 
 // regDebugFrame is the register code and window of frame f where it runs
-// as register code, for a debugger's look at its bindings: nil where it
-// runs as the stack form.
+// as register code, for a debugger's look at its bindings: nil where it has
+// none.
 func (r *Runtime) regDebugFrame(f *frame) (*regCode, *[1 << 16]Value) {
 	if f.cl == nil {
 		return nil, nil

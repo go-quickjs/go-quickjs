@@ -7,12 +7,11 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// Register code's feedback asked ahead, for its compiles in the
-// background, as the stack form's is (zzjit_snapshot.go): a jitRegSnapshot
-// answers what jitRegFeedback answers -- its methods alone, generated from
-// them (snapgen, zzjit_snapshot_gen.go) -- from a jitSnapshot asked of it
-// on the runtime's goroutine, numbered as jitFeedback's methods of the
-// same names. A question it was not asked ahead is a miss, which has the
+// Register code's feedback asked ahead, for its compiles in the background
+// (zzjit_snapshot.go): a jitRegSnapshot answers what jitRegFeedback answers
+// -- its methods alone, generated from them (snapgen,
+// zzjit_snapshot_gen.go) -- from a jitSnapshot asked of it on the runtime's
+// goroutine. A question it was not asked ahead is a miss, which has the
 // compile built on the runtime's goroutine at its install.
 type jitRegSnapshot struct {
 	s *jitSnapshot
@@ -22,8 +21,8 @@ type jitRegSnapshot struct {
 }
 
 // jitRegSnapStatePC are the methods the build asks by a state's PC, which
-// in a register program is a register pc, not an instruction's (the
-// parity tool's Resumed and EntryGeneric): asked at every register pc.
+// in a register program is a register pc, not an instruction's (Resumed and
+// EntryGeneric): asked at every register pc.
 const jitRegSnapStatePC = 1<<snapResumed | 1<<snapEntryGeneric
 
 // get is the answer to a question, as jitSnapshot's get has it: one asked
@@ -50,9 +49,9 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	s.root = s
 	s.reg = &jitRegSnapshot{s: s, regs: len(fb.rc.Code)}
 	s.askReg(fb, p)
-	// The questions of other arguments, of what the answers name, as the
-	// stack form's (jitSnapshotOf): the leaves' kinds, and how Go makes
-	// the pools' objects escape analysis may leave unmade.
+	// The questions of other arguments, of what the answers name: the
+	// leaves' kinds, and how Go makes the pools' objects escape analysis
+	// may leave unmade.
 	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
 	for _, c := range append([]*jitSnapshot{s}, mapValues(s.callees)...) {
 		for k, a := range c.answers {

@@ -87,11 +87,11 @@ func keptCut[_ any](s, v *String) *String {
 }
 
 // What follows is the part of the built-ins' closures that Go lays out
-// between the tree tier's closures and its appends' generics (strAppend):
-// what is added to those closures moves the one from the other, which no
-// placement varies, and string_build1's r += "x" ran 16% slower for 512 bytes
-// of it. So such a closure calls one of these, out of line, where it called
-// what they call, and keeps its size.
+// between the package's other closures and the appends' generics
+// (strAppend): what is added to those closures moves the one from the other,
+// which no placement varies, and string_build1's r += "x" ran 16% slower for
+// 512 bytes of it. So such a closure calls one of these, out of line, where
+// it called what they call, and keeps its size.
 
 // parseJSONOf is JSON.parse's parse of s, which is its document under a limit.
 //

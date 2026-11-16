@@ -2,7 +2,7 @@ package vm
 
 import "testing"
 
-// TestForAwaitClose pins how a for await is left, on both tiers, against
+// TestForAwaitClose pins how a for await is left, against
 // Node's answers: a break, a continue of an outer loop, a return and a
 // throw close its iterator as AsyncIteratorClose does -- its return method
 // called and what that returns awaited, which the ticker shows taking a
@@ -40,29 +40,25 @@ func TestForAwaitClose(t *testing.T) {
 		{"destructuringThrows", `var log = []; var it = { [Symbol.asyncIterator]() { return this }, next() { return Promise.resolve({ value: null, done: false }) }, return() { log.push('R'); return Promise.resolve({}) } }; async function f() { try { for await (const { a } of it); } catch (e) { return e.name + log.join('') } } var p = f()`, "TypeErrorR"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				src := "var out = 'pending'; " + tt.src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
-				fn := compileForTest(t, src)
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(fn)
-				if err == nil {
-					if err = r.runMicrotasks(); err == nil {
-						v, err = r.Run(compileForTest(t, "out"))
-					}
-				}
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
-				r.Close()
-				if on {
-					assertTreeIn(t, fn, "f")
+			src := "var out = 'pending'; " + tt.src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
+			fn := compileForTest(t, src)
+			r := New(Config{})
+			v, err := r.Run(fn)
+			if err == nil {
+				if err = r.runMicrotasks(); err == nil {
+					v, err = r.Run(compileForTest(t, "out"))
 				}
 			}
+			if err != nil {
+				r.Close()
+				t.Fatal(err)
+			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
+
 		})
 	}
 }

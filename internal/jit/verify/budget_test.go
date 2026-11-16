@@ -46,6 +46,7 @@ func TestMirBudgetInRegister(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {
@@ -152,6 +153,7 @@ func TestMirBudgetInRegister(t *testing.T) {
 		if err != nil {
 			continue
 		}
+		regShape(f, p)
 		ssa.Optimize(f)
 		mc, err := mir.CompileAMD64(f, enc)
 		if err != nil {
@@ -230,6 +232,7 @@ func TestMirLoopExitsOutOfLine(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {
@@ -259,6 +262,14 @@ func TestMirLoopExitsOutOfLine(t *testing.T) {
 					exits++
 				case strings.HasPrefix(m.Tag, "edge ") && (k == 0 || mc.Marks[k-1].Off != m.Off || !strings.HasPrefix(mc.Marks[k-1].Tag, "cold ")):
 					t.Errorf("%s (%d): %s, storing the budget back, is laid out in the loop's code", src, i, m.Tag)
+				case strings.HasPrefix(m.Tag, "edge "):
+					// A loop's way out to a join, laid out with the cold
+					// code, storing the budget back on the edge: register
+					// code's loops test at their foot, their test copied
+					// before the loop (the compile package's loopTest), so
+					// that the way out of the loop and the way past it join
+					// at the block after it, which neither has alone.
+					exits++
 				}
 			}
 		}
@@ -288,6 +299,7 @@ func TestMirLoopsAligned(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {

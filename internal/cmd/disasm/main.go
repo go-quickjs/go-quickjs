@@ -1,11 +1,12 @@
-// Command disasm prints the bytecode go-quickjs compiles a script or a module
-// to: each function's instructions, with the source line each comes from and,
-// with -tree, whether the tree tier builds the function and, if not, why.
-// With -jit it reports numeric JIT IR eligibility and interpreter exit maps;
-// this report neither emits native code nor enables native execution.
+// Command disasm prints the register code go-quickjs compiles a script or a
+// module to: each function's instructions, with the source line each comes
+// from. With -stack it prints the stack form the front end makes as well,
+// which the register backend reads; with -jit it reports whether the JIT
+// lowers each function and the state maps of its exits; this report
+// neither emits native code nor enables native execution.
 //
 //	go run ./internal/cmd/disasm file.js
-//	go run ./internal/cmd/disasm -tree -func global_read bench.js
+//	go run ./internal/cmd/disasm -func global_read bench.js
 //	go run ./internal/cmd/disasm -jit -func sum bench.js
 //	go run ./internal/cmd/disasm -e 'let s = 0; for (const x of a) s += x'
 //
@@ -30,7 +31,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
-	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 func main() {
@@ -40,10 +40,9 @@ func main() {
 		strict = flag.Bool("strict", false, "compile a script as strict code")
 		quirks = flag.Bool("node-quirks", false, "compile as WithNodeQuirks does")
 		only   = flag.String("func", "", "print only the functions of this name")
-		tree   = flag.Bool("tree", false, "say whether the tree tier builds each function, and why not")
-		jit    = flag.Bool("jit", false, "show numeric JIT IR eligibility and pre-instruction exit maps (no native compilation)")
+		jit    = flag.Bool("jit", false, "show JIT IR eligibility and exit maps (no native compilation)")
 		src    = flag.Bool("src", true, "show the source line before the instructions it compiles to")
-		reg    = flag.Bool("reg", false, "show each function's register code beside its stack code, with the instructions each has (docs/register-interpreter.md)")
+		stack  = flag.Bool("stack", false, "show the stack form the front end makes after each function's register code")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: disasm [flags] file.js | -e source\n")
@@ -60,15 +59,12 @@ func main() {
 	if strings.HasSuffix(name, ".mjs") {
 		*module = true
 	}
-	if *reg {
-		compiler.SetRegisterForm(true)
-	}
 	fn, err := compile(name, text, *module, *strict, *quirks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "disasm:", err)
 		os.Exit(1)
 	}
-	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, tree: *tree, jit: *jit, src: *src, reg: *reg}
+	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, jit: *jit, src: *src, stack: *stack}
 	p.function(fn, "")
 	if p.only != "" && p.printed == 0 {
 		fmt.Fprintf(os.Stderr, "disasm: no function is named %q\n", p.only)
@@ -120,10 +116,9 @@ type printer struct {
 	w       io.Writer
 	lines   []string
 	only    string
-	tree    bool
 	jit     bool
 	src     bool
-	reg     bool
+	stack   bool
 	printed int
 }
 
@@ -194,30 +189,23 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 			at = fmt.Sprintf(" at %d:%d", line, col)
 		}
 	}
-	fmt.Fprintf(p.w, "%sfunction %s%s (params=%d locals=%d stack=%d)", indent, fn, at, fn.ParamCount, fn.LocalCount, fn.MaxStack)
+	fmt.Fprintf(p.w, "%sfunction %s%s (params=%d locals=%d)", indent, fn, at, fn.ParamCount, fn.LocalCount)
 	if len(traits) > 0 {
 		fmt.Fprintf(p.w, " %s", strings.Join(traits, ", "))
 	}
 	fmt.Fprintln(p.w)
-	if p.tree {
-		if built, why := vm.TreeReport(fn); built {
-			fmt.Fprintf(p.w, "%s  tree: built\n", indent)
-		} else {
-			fmt.Fprintf(p.w, "%s  tree: not built: %s\n", indent, why)
-		}
-	}
-	if p.jit {
-		if ir, err := jitcompile.LowerSSA(fn); err == nil {
+	if rc := fn.RegCode(); p.jit && rc != nil {
+		if ir, err := jitcompile.LowerReg(rc, fn); err == nil {
 			fmt.Fprintf(p.w, "%s  jit IR: eligible (this tool does not compile or execute native code)\n", indent)
-			fmt.Fprintf(p.w, "%s  jit slots: %d locals + %d operands\n", indent, ir.Locals, ir.StackSize)
+			fmt.Fprintf(p.w, "%s  jit slots: %d\n", indent, ir.Locals)
 			for _, state := range ir.Maps {
 				if state.Depth >= 0 {
-					fmt.Fprintf(p.w, "%s  jit exit: pc=%d depth=%d\n", indent, state.PC, state.Depth)
+					fmt.Fprintf(p.w, "%s  jit exit: pc=%d\n", indent, state.PC)
 				}
 			}
 		} else {
 			fmt.Fprintf(p.w, "%s  jit IR: refused: %s\n", indent, err)
-			if _, err := jitcompile.LowerSSAInline(fn); err == nil {
+			if _, err := jitcompile.LowerRegInline(rc, fn); err == nil {
 				fmt.Fprintf(p.w, "%s  jit callee IR: eligible for native callers and inlining\n", indent)
 			}
 		}
@@ -243,19 +231,26 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 }
 
 func (p *printer) code(fn *bytecode.Function, indent string) {
-	if p.reg {
-		if rc := fn.RegCode(); rc == nil {
-			fmt.Fprintln(p.w, indent+"  register code: none (the stack form runs it; QJS_REGTRACE says why)")
-		} else {
-			fmt.Fprintf(p.w, "%s  register code: %d instructions, %d registers (stack form: %d instructions)%s",
-				indent, len(rc.Code), rc.NumRegs, len(fn.Code), "\n")
-			for pc := range rc.Code {
-				fmt.Fprintln(p.w, fmt.Sprintf("%s  %4d  %s", indent, pc, rc.Format(pc)))
+	last := int32(-1)
+	if rc := fn.RegCode(); rc == nil {
+		fmt.Fprintln(p.w, indent+"  register code: none (QJS_REGTRACE says why)")
+	} else {
+		fmt.Fprintf(p.w, "%s  register code: %d instructions, %d registers\n", indent, len(rc.Code), rc.NumRegs)
+		for pc := range rc.Code {
+			if p.src && pc < len(rc.SrcPC) {
+				if line := fn.LineAt(rc.SrcPC[pc]); line != last && line > 0 && int(line) <= len(p.lines) {
+					last = line
+					fmt.Fprintf(p.w, "%s        ; %d: %s\n", indent, line, strings.TrimSpace(p.lines[line-1]))
+				}
 			}
-			fmt.Fprintln(p.w, indent+"  stack code:")
+			fmt.Fprintf(p.w, "%s  %4d  %s\n", indent, pc, rc.Format(pc))
 		}
 	}
-	last := int32(-1)
+	if !p.stack {
+		return
+	}
+	fmt.Fprintln(p.w, indent+"  stack form:")
+	last = -1
 	for pc := range fn.Code {
 		if p.src {
 			if line := fn.LineAt(uint32(pc)); line != last && line > 0 && int(line) <= len(p.lines) {

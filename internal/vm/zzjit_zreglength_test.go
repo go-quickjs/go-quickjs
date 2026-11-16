@@ -10,14 +10,14 @@ import (
 // TestJITRegArgumentsLengthWhole has a function that keeps its arguments
 // object in a variable and reads its length, EarleyBoyer's sc_list, called
 // by a native caller deep in a recursion, and an object whose length is a
-// getter's, and checks that the length, which native code does not read
-// of either, Go reads from native code, run whole on the register frame
-// (ssa's CallSite Whole), as the stack form's GoHost reads it on its frame:
-// no exit at get_length, no run of list ended in the interpreter, and its
-// callers call it natively, not through Go. Before, the read left native
-// code at every call, the rest of the run the interpreter's, and the
-// callers, finding it left, called it through Go: 2.5 million calls of Go
-// of a function with code in a long EarleyBoyer run.
+// getter's, and checks that the length, which native code does not read of
+// either, Go reads from native code, run whole on the register frame (ssa's
+// CallSite Whole): no exit at get_length, no run of list ended in the
+// interpreter, and its callers call it natively, not through Go. Before,
+// the read left native code at every call, the rest of the run the
+// interpreter's, and the callers, finding it left, called it through Go:
+// 2.5 million calls of Go of a function with code in a long EarleyBoyer
+// run.
 func TestJITRegArgumentsLengthWhole(t *testing.T) {
 	const src = `
 function Pair(car, cdr) { this.car = car; this.cdr = cdr }

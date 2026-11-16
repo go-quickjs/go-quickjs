@@ -49,24 +49,18 @@ func TestCursorOneAllocation(t *testing.T) {
 		{`var [a, , b] = new Set([1, 2, 3]); a + b`, "4"},
 		{`function* g() { yield 1; yield 2 } [...g(), ...'ab'].join()`, "1,2,a,b"},
 	} {
-		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			v, err := r.Run(compileForTest(t, tt.src))
-			if err != nil {
-				t.Fatalf("%s: %v", tt.src, err)
-			}
-			if got, _ := r.ToString(v); got.Go() != tt.want {
-				t.Errorf("tree %v: %s = %s, want %s", on, tt.src, got.Go(), tt.want)
-			}
+		v, err := r.Run(compileForTest(t, tt.src))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if got, _ := r.ToString(v); got.Go() != tt.want {
+			t.Errorf("%s = %s, want %s", tt.src, got.Go(), tt.want)
 		}
 	}
-	SetTreeTier(true)
 }
 
-// A tree's for-in walks its keys in its loop's step itself
-// (ztree_a_gen.go's iterNextTree, a copy of iterNext's walk, so that the
-// step is no call deeper than iterNext's): each answer is the
-// interpreter's, in both tiers, and Node v26.10.0's -- an object's keys,
+// A for-in walks its keys in its loop's step (regIterNext, iterNext's
+// walk): each answer is Node v26.10.0's -- an object's keys,
 // an array's with holes and an index its prototype has, keys deleted and
 // added and an array shortened during the walk, a string's indices, an
 // inherited key, an array's index and named keys, twenty keys -- but for
@@ -89,24 +83,21 @@ func TestTreeForInAsInterpreter(t *testing.T) {
 		{"var o = {}; for (var i = 0; i < 20; i++) o['k' + i] = i; var s = 0; for (var k in o) s += o[k]; return s", "190"},
 		{"var a = []; a[5] = 5; a[2] = 2; a.x = 'x'; var s = ''; for (var k in a) s += k + ','; return s", "2,5,x,"},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
-			if err != nil {
-				t.Fatalf("tree %v: %s: %v", on, tc.src, err)
-			}
-			if got, _ := r.ToString(v); got.Go() != tc.want {
-				t.Errorf("tree %v: %s = %q, want %q", on, tc.src, got.Go(), tc.want)
-			}
-			r.Close()
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.src, err)
 		}
+		if got, _ := r.ToString(v); got.Go() != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got.Go(), tc.want)
+		}
+		r.Close()
 	}
 }
 
-// A tree's loop steps a Map's or a Set's iterator of its realm itself
-// (ztree_a_gen.go's iterNextTree, as stepIter's case steps one), its
-// generator test made once: each answer is the interpreter's, in both
-// tiers, and Node v26.10.0's -- a Map's values, keys and entries, a Set's,
+// A loop steps a Map's or a Set's iterator of its realm itself
+// (regStepNext, as stepIter's case steps one): each answer is Node
+// v26.10.0's -- a Map's values, keys and entries, a Set's,
 // entries deleted, added and cleared during the walk, the iterators'
 // next replaced on their prototype and on one iterator, which Go's step
 // calls, and a walk left by break and taken up again.
@@ -123,16 +114,14 @@ func TestTreeMapIterAsInterpreter(t *testing.T) {
 		{"var t = new Set(); for (var i = 0; i < 50; i++) t.add(i); var s = 0; for (var v of t) { s += v; if (v % 10 == 0) t.delete(v + 1) } return s", "1120"},
 		{"var m = new Map([[1, 'a'], [2, 'b'], [3, 'c']]), s = ''; var it = m.values(); for (var v of it) { s += v; break } for (var v of it) s += v; return s", "abc"},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
-			if err != nil {
-				t.Fatalf("tree %v: %s: %v", on, tc.src, err)
-			}
-			if got, _ := r.ToString(v); got.Go() != tc.want {
-				t.Errorf("tree %v: %s = %q, want %q", on, tc.src, got.Go(), tc.want)
-			}
-			r.Close()
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.src, err)
 		}
+		if got, _ := r.ToString(v); got.Go() != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got.Go(), tc.want)
+		}
+		r.Close()
 	}
 }

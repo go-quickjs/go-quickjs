@@ -3,9 +3,6 @@ package vm
 import (
 	"runtime"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // TestConstStringShared pins string constants of one text as one string
@@ -49,9 +46,7 @@ func TestConstStringEmpty(t *testing.T) {
 	if _, ok := r.strConsts[""]; ok {
 		t.Error("the empty string is held in the constants' table")
 	}
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, `var a = "", b = ""; function f() { return "" } [a === b, f() === a, typeof f(), ("" + "x").length].join()`)
-	compiler.SetRegisterForm(bytecode.RegDefault())
 	v, err := r.Run(fn)
 	if err != nil {
 		t.Fatal(err)

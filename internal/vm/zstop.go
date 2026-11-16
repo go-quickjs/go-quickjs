@@ -13,7 +13,7 @@ import "unsafe"
 //
 // It is V8's design: a stop request rides on a check every loop and call
 // makes already -- V8's stack limit's, here the counters' -- so it costs
-// the interpreter, the tree tier and native code nothing while nothing
+// the interpreter and native code nothing while nothing
 // stops them. The counted checks alone come every backEdgeCheckInterval
 // backward jumps and interruptCheckInterval calls, which a loop of a few
 // long turns -- converting a string of millions of digits to a number --
@@ -22,7 +22,7 @@ import "unsafe"
 // They are constants, not a function storing them, so that package vm's
 // code, and where its closures are laid out against its functions, stays
 // as it was (AGENTS.md): any function or function literal added here moves
-// the tree tier's closures.
+// the package's closures.
 const (
 	OffsetInterruptCounter = unsafe.Offsetof(Runtime{}.interruptCounter)
 	OffsetBackEdges        = unsafe.Offsetof(Runtime{}.backEdges)

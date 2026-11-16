@@ -122,17 +122,9 @@ func jitCellsClosedFor(t *testing.T, r *Runtime) {
 		var e *jitEntry
 		var prog *ir.Program
 		var code *jit.SSACode
-		if regJITForTest() {
-			for k, x := range r.jit.regCache {
-				if fn := k.Value(); fn != nil && fn.Name == name {
-					e, prog, code = x.life, x.p, x.code
-				}
-			}
-		} else {
-			for k, x := range r.jit.cache {
-				if fn := k.Value(); fn != nil && fn.Name == name {
-					e, prog, code = x, x.ssaProg, x.ssa
-				}
+		for k, x := range r.jit.regCache {
+			if fn := k.Value(); fn != nil && fn.Name == name {
+				e, prog, code = x.life, x.p, x.code
 			}
 		}
 		if e == nil || code == nil || prog == nil || !prog.Cells {

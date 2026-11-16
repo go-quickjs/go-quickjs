@@ -284,66 +284,6 @@ func TestJITRegGenSteps(t *testing.T) {
 	}
 }
 
-// TestJITRegGenStepsCompileForARM64 compiles again, with arm64's backend,
-// on any host, the register code regGenStepSrc's generators were compiled
-// to, their generator entries and native yields (mir's windowGenEntry,
-// windowYieldExit), and their callers' native steps, calls of next and
-// for...of cursors taken from a generator's room (mir's genForOf).
-func TestJITRegGenStepsCompileForARM64(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	RecordJITCompiles(true)
-	defer RecordJITCompiles(false)
-	rts := regNativeRuntimes(t, regGenStepSrc)
-	r := rts[0]
-	for _, name := range []string{"forOf", "nexts", "finallies", "pairs", "cursors"} {
-		fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
-		for range 12 {
-			r.Call(fn, Undefined, []Value{Float(500)})
-		}
-	}
-	fns, _, _ := regCompileARM64(t, r)
-	if fns == 0 {
-		t.Error("nothing compiled for arm64")
-	}
-	jitParityLog.Lock()
-	seen := jitParityLog.seen[r]
-	jitParityLog.Unlock()
-	gens, steps, cursors := 0, 0, 0
-	for _, cl := range seen {
-		e := r.jit.regCache[r.jitKeyOf(cl.fn)]
-		if e == nil || e.p == nil || e.code == nil {
-			continue
-		}
-		f, err := ssa.BuildWith(e.p, r.jitRegFeedbackFor(cl, e.p))
-		if err != nil {
-			continue
-		}
-		jitRegShape(f, e.p, cl, cl.reg)
-		ssa.Optimize(f)
-		if f.GenEntry && f.GenWindow {
-			gens++
-		}
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && len(v.Calls()[0].Gens) != 0 {
-					steps++
-				}
-				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].ForOf && v.Calls()[0].GenIter != 0 {
-					cursors++
-				}
-			}
-		}
-		if _, err := mir.CompileARM64(f, jitEncoding); err != nil {
-			t.Errorf("%s: %v", cl.fn.Name, err)
-		}
-	}
-	if gens < 3 || steps < 3 || cursors < 2 {
-		t.Errorf("%d generator entries, %d native steps, %d native cursors compiled for arm64", gens, steps, cursors)
-	}
-}
-
 // A for...of loop over a generator, the frames run by the Go handlers
 // (QJS_NONATIVE, the fallback dispatcher): the generator's code, leaving
 // native code at each yield, had made the next back edge's check due at
@@ -379,10 +319,9 @@ func TestJITRegGenConsumerSampled(t *testing.T) {
 // An async function whose loop awaits at every turn: each turn is a
 // resumption Go makes of its register code, and the loops' back edges in
 // all are too few for a sample. Its resumptions are its invocations, each
-// spending its length of its budget (jitRegResumed), as the stack form's
-// are (jitResume): counted only at every jitHotWork of them, as code
-// refused for host operations alone is, af was never compiled, and
-// nothing of the program ran natively.
+// spending its length of its budget (jitRegResumed): counted only at every
+// jitHotWork of them, as code refused for host operations alone is, af was
+// never compiled, and nothing of the program ran natively.
 func TestJITRegAsyncResumptionsCompile(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -425,5 +364,64 @@ async function main(m) { for (let k = 0; k < m; k++) out += await af(k) }`
 				t.Errorf("nothing ran natively: %+v", st)
 			}
 		})
+	}
+}
+
+// TestJITRegGenStepsCompileForARM64 compiles again, with arm64's backend,
+// on any host, the register code regGenStepSrc's generators were compiled
+// to, their generator entries and native yields (mir's windowGenEntry,
+// windowYieldExit), and their callers' native steps, calls of next and
+// for...of cursors taken from a generator's room (mir's genForOf).
+func TestJITRegGenStepsCompileForARM64(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	recordJITCompilesForTest(t)
+	rts := regNativeRuntimes(t, regGenStepSrc)
+	r := rts[0]
+	for _, name := range []string{"forOf", "nexts", "finallies", "pairs", "cursors"} {
+		fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
+		for range 12 {
+			r.Call(fn, Undefined, []Value{Float(500)})
+		}
+	}
+	fns, _, _ := regCompileARM64(t, r)
+	if fns == 0 {
+		t.Error("nothing compiled for arm64")
+	}
+	jitCompileLog.Lock()
+	seen := jitCompileLog.seen[r]
+	jitCompileLog.Unlock()
+	gens, steps, cursors := 0, 0, 0
+	for _, cl := range seen {
+		e := r.jit.regCache[r.jitKeyOf(cl.fn)]
+		if e == nil || e.p == nil || e.code == nil {
+			continue
+		}
+		f, err := ssa.BuildWith(e.p, r.jitRegFeedbackFor(cl, e.p))
+		if err != nil {
+			continue
+		}
+		jitRegShape(f, e.p, cl, cl.reg)
+		ssa.Optimize(f)
+		if f.GenEntry && f.GenWindow {
+			gens++
+		}
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && len(v.Calls()[0].Gens) != 0 {
+					steps++
+				}
+				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].ForOf && v.Calls()[0].GenIter != 0 {
+					cursors++
+				}
+			}
+		}
+		if _, err := mir.CompileARM64(f, jitEncoding); err != nil {
+			t.Errorf("%s: %v", cl.fn.Name, err)
+		}
+	}
+	if gens < 3 || steps < 3 || cursors < 2 {
+		t.Errorf("%d generator entries, %d native steps, %d native cursors compiled for arm64", gens, steps, cursors)
 	}
 }

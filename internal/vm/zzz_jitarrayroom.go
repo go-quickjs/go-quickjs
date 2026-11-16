@@ -3,37 +3,13 @@
 package vm
 
 import (
-	"weak"
-
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
-
-// jitLiteralArraySource is a pool's source for the literal at pc of cl's
-// function, with the capacity the tree tier confirmed at a turn's end before
-// the literal reached native code. Only that: a hint taken within a turn may
-// be an array a callback is still growing, and left several callbacks
-// 7 to 18% slower (docs/performance-plan.md, F3). The
-// pc, unlike the tree node's ordinal, also names a literal in an inlined
-// callee. The pool is kept weakly, so that this list keeps neither it nor
-// code that has been thrown away.
-func jitLiteralArraySource[_ any](r *Runtime, cl *closure, pool *abi.ObjectPool, pc, n int) *jitPoolSource {
-	s := &jitPoolSource{array: true, n: n}
-	for _, a := range cl.arrays {
-		if a != nil && a.acrossTurns && a.pc == int32(pc) && a.room >= arrayRoomLeast && a.room <= arrayRoomLimit {
-			s.room = a.room
-			if r.jit != nil {
-				r.jit.arrayRooms = append(r.jit.arrayRooms, weak.Make(pool))
-			}
-			break
-		}
-	}
-	return s
-}
 
 // jitLiteralArrayRoom is the capacity pool's next arrays are made with, the
 // literal's n elements at least. A pool with a large hint holds one array: a
 // batch would retain unused buffers and delay observing a changed length.
-// Native code may shrink a hint, but only the tree tier's two samples may
+// Native code may shrink a hint, but only the interpreter's two samples may
 // establish a large one. It is given its sample's length before the sample
 // goes: past the limit, or short, the room falls back to what a small literal
 // learns.

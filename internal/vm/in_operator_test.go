@@ -275,10 +275,10 @@ var inOperatorCases = []struct{ src, want string }{
 	{"mixed(40)", "1101100010111011000101110110001011101100"},
 }
 
-// TestInOperator pins the in operator, which the tree tier answers from
-// what plain objects and arrays hold (hasQuick) and inOperator otherwise:
-// each case three times, by the interpreter at the top level and by the
-// tree tier in each function's loop, as Node answers it.
+// TestInOperator pins the in operator, which register code answers from
+// what plain objects and arrays hold (hasQuick) and regIn otherwise: each
+// case three times, at the top level and in each function's loop, as Node
+// answers it.
 func TestInOperator(t *testing.T) {
 	t.Parallel()
 	r := New(Config{})

@@ -5165,15 +5165,15 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 		c.a.Op(amd64.Xor, scratchA, scratchB, true)
 		c.movImm(scratchB, abi.HasCacheMul)
 		c.a.Imul(scratchA, scratchB)
-		c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.HasCacheBits+1, true)
-		c.a.ShiftImm(amd64.Shl, scratchA, hasEntryShift+1, true)
+		c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.HasCacheBits+abi.HasCacheWaysLog, true)
+		c.a.ShiftImm(amd64.Shl, scratchA, hasEntryShift+abi.HasCacheWaysLog, true)
 		c.movImm(scratchB, uint64(c.f.HasCache))
 		c.a.Op(amd64.Add, scratchA, scratchB, true)
-		// The set's first entry, then its second.
+		// The set's entries, the newest first.
 		hit := c.a.NewLabel()
-		for way := range 2 {
+		for way := range abi.HasCacheWays {
 			next := slow
-			if way == 0 {
+			if way < abi.HasCacheWays-1 {
 				next = c.a.NewLabel()
 			}
 			c.a.MovQFromX(scratchB, xScratch2)
@@ -5188,7 +5188,7 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 			c.loadProtoPlain(scratchB, scratchB)
 			c.a.CmpMem(scratchB, scratchA, abi.HasEntryProto, true)
 			c.a.Jcc(amd64.CondNE, next)
-			if way == 0 {
+			if way < abi.HasCacheWays-1 {
 				c.a.Jmp(hit)
 				c.a.Bind(next)
 				c.a.OpImm(amd64.Add, scratchA, abi.HasEntrySize, true)

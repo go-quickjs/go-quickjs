@@ -138,19 +138,19 @@ type config struct {
 // match over a kind of subject. It requires a build with the quickjs_jit tag
 // on linux/amd64, windows/amd64, darwin/arm64 or linux/arm64.
 // Unsupported builds, denied executable memory, and unsupported functions
-// use the existing execution tiers. Native code is owned by this Runtime;
+// run in the interpreter. Native code is owned by this Runtime;
 // what the JIT holds is bounded by WithJITMemoryLimit, never by
 // WithMemoryLimit, so a script fails with ErrMemoryLimit the same with the
 // JIT on and off. Eligible functions may promote after repeated calls or
 // sustained looping; native execution and speedup are not guaranteed.
-// Runtimes made with WithDebugger use the existing execution tiers.
+// Runtimes made with WithDebugger run their code in the interpreter.
 // This is independent of WithoutCodeGeneration.
 func WithJIT() Option { return func(c *config) { c.jit = true } }
 
 // WithJITBackground has the JIT (WithJIT) compile on goroutines of the
 // process's, at most a quarter of GOMAXPROCS, which the process's runtimes
 // share, while the Runtime goes on running: a function due to be compiled
-// runs in the existing tiers until its code is done, and code compiled
+// runs in the interpreter until its code is done, and code compiled
 // again runs on until its replacement is, as V8 compiles concurrently.
 // Without it, the Runtime waits for each compile, the time the JIT spends
 // compiling spent on its goroutine. The results a script computes are the
@@ -184,8 +184,8 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 // When the JIT's memory is full, it drops the code that has gone longest
 // unused, once it is old -- not used within the last two collections or
 // 100 ms -- to make room, as V8 flushes old code; while all of it is in
-// use, a function newly hot is not compiled, and runs in the existing
-// tiers, until some is old.
+// use, a function newly hot is not compiled, and runs in the interpreter,
+// until some is old.
 //
 // A lower limit makes the JIT slower: with less room, hot code is dropped
 // and compiled again more often, or refused and interpreted, so a program
@@ -561,7 +561,7 @@ func (r *Runtime) evalInternal(name, src string) (result Value, err error) {
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	fn, err := compileScript(src, name, 0, 0, false, r.nodeQuirks, false, !r.rt.RegTier())
+	fn, err := compileScript(src, name, 0, 0, false, r.nodeQuirks, false)
 	if err != nil {
 		return Value{}, err
 	}
@@ -708,23 +708,21 @@ func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
 // compileAt is compile for source placed within a larger file, whose first
 // line is lineOffset lines down and columnOffset columns in.
 func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*bytecodeFunc, error) {
-	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks, r.debug, !r.rt.RegTier())
+	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks, r.debug)
 }
 
 // compileScript parses and compiles a script, strict throughout if strict is
 // set, and as V8 has it where it departs from the standard if nodeQuirks is.
 // It depends on no runtime: what it returns any runtime may run, but for
-// code compiled for a debugger, which only the runtime it is for may. With
-// noReg it has no register form, which a runtime that runs no register code
-// does not use (vm.Runtime.RegTier).
-func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks, debug, noReg bool) (*bytecodeFunc, error) {
+// code compiled for a debugger, which only the runtime it is for may.
+func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks, debug bool) (*bytecodeFunc, error) {
 	prog, err := parser.Parse(src, parser.Options{Strict: strict, NodeQuirks: nodeQuirks})
 	if err != nil {
 		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
 	}
 	fn, err := compiler.Compile(prog, compiler.Options{
 		Source: name, Text: src, NodeQuirks: nodeQuirks, Debug: debug,
-		LineOffset: lineOffset, ColumnOffset: columnOffset, NoRegister: noReg,
+		LineOffset: lineOffset, ColumnOffset: columnOffset,
 	})
 	if err != nil {
 		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
@@ -979,7 +977,6 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 	}
 	fn, info, err := compiler.CompileModule(prog, compiler.Options{
 		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
-		NoRegister: !r.rt.RegTier(),
 	})
 	if err != nil {
 		return nil, newSyntaxError(err, specifier, 0, 0)
@@ -1100,9 +1097,8 @@ func WithoutCodeGeneration() Option {
 // bindings in scope where a function stops are its own and those of the
 // enclosing functions it uses: one it does not use is not available there.
 //
-// It is for development. The runtime runs its code in the interpreter,
-// without the tier that turns a function's bytecode into closures, and a
-// statement costs a test even with no debugger attached; and a debugger can
+// It is for development. The runtime runs its code in the interpreter, and
+// a statement costs a test even with no debugger attached; and a debugger can
 // read and change anything the code can. A runtime made without it compiles
 // none of this, and pays nothing for it.
 func WithDebugger() Option {
@@ -1123,7 +1119,6 @@ func (r *Runtime) compileEval(source string, req vm.EvalRequest) (*bytecode.Func
 	popts := parser.Options{NodeQuirks: r.nodeQuirks}
 	copts := compiler.Options{
 		Source: "<eval>", Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
-		NoRegister: !r.rt.RegTier(),
 		// Whatever eval declares on the global object is configurable,
 		// unlike what a script declares: the evaluated code could have
 		// declared it anywhere, so nothing should be able to rely on it.

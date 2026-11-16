@@ -138,17 +138,15 @@ const polyProtoWant = `true|1|20|5||y,sv|y,sv|y,sv|{"y":2,"sv":5}|{"y":2,"sv":5}
 
 func TestPolyProtoSemantics(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, polyProtoSemantics))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != polyProtoWant {
-			t.Errorf("tree %v:\n got %s\nwant %s", tree, got, polyProtoWant)
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, polyProtoSemantics))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != polyProtoWant {
+		t.Errorf("\n got %s\nwant %s", got, polyProtoWant)
+	}
+	r.Close()
 }
 
 // The first object made on a prototype keeps it in its table, the slot a

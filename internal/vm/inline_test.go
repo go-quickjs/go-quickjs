@@ -10,18 +10,18 @@ import (
 	"testing"
 )
 
-// intendedInlining is the functions of package vm the interpreter's and the
-// tree tier's hot paths call that must stay small enough for Go's inliner
-// (a cost of 80): one that grows past it is a call where it was a few
-// instructions, which no test fails and a benchmark shows only as a few per
-// cent here and there. Each is inlinable in this package's builds with and
-// without the JIT, and on main as of 2026-11 where main has it. Several had been lost to
-// changes that grew them or what they call -- the prototype moved into the
-// shape made Object.proto bigger, and plainArray, chainHasProxy, protoValue
-// and ctorRoot, which call it, went over -- and were found only by diffing
-// -gcflags=-m's "can inline" lines between builds.
+// intendedInlining is the functions of package vm the interpreter's hot
+// paths call that must stay small enough for Go's inliner (a cost of 80):
+// one that grows past it is a call where it was a few instructions, which
+// no test fails and a benchmark shows only as a few per cent here and
+// there. Each is inlinable in this package's builds with and without the
+// JIT, and on main as of 2026-11 where main has it. Several had been lost
+// to changes that grew them or what they call -- the prototype moved into
+// the shape made Object.proto bigger, and plainArray, chainHasProxy,
+// protoValue and ctorRoot, which call it, went over -- and were found only
+// by diffing -gcflags=-m's "can inline" lines between builds.
 var intendedInlining = []string{
-	// What executeAt, runTree, callObject, runFD and the tree's nodes call
+	// What the register interpreter's handlers, callObject and runFD call
 	// for every property, element and call.
 	"(*Object).vals",
 	"(*Object).valAt",
@@ -43,10 +43,8 @@ var intendedInlining = []string{
 	"ownOf",
 	"megaSlot",
 	"(*propCache).own",
-	"(*propCache).storeOwn",
 	"(*propCache).holder",
 	"(*Runtime).tick",
-	"(*tctx).at",
 	"Value.IsObject",
 	"Value.Object",
 	"Obj",

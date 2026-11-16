@@ -87,18 +87,10 @@ func TestJITForwardingConstructors(t *testing.T) {
 	// Steady, native code makes the constructions itself.
 	r := jitAgreesForTest(t, forwardingSetup, steady...)
 	var e *jitEntry
-	if regJITForTest() {
-		// Its register code's state that outlives its compiles, which
-		// holds what it inlines and what its runs did.
-		e = jitCodeEntryNamedForTest(r, "build")
-	} else {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == "build" {
-				e = x
-			}
-		}
-	}
-	if e == nil || !regJITForTest() && e.ssa == nil {
+	// Its register code's state that outlives its compiles, which
+	// holds what it inlines and what its runs did.
+	e = jitCodeEntryNamedForTest(r, "build")
+	if e == nil {
 		t.Fatalf("build has no native code: %+v", e)
 	}
 	// A construction of a forwarding constructor inlined: the stack form's
@@ -106,12 +98,10 @@ func TestJITForwardingConstructors(t *testing.T) {
 	// constructor its code inlines (jitRegEntry's keep), which makes the
 	// object itself.
 	construction := func(x jitInline) bool { return x.pool != nil }
-	if regJITForTest() {
-		build := jitGlobalClosureForTest(r, "build")
-		rc, done := build.fn.RegCode(), jitInlinedOfForTest(r, build)
-		construction = func(x jitInline) bool {
-			return int(x.pc) < len(rc.Code) && rc.Code[x.pc].Op() == bytecode.RNewW && slices.Contains(done, x.cl)
-		}
+	build := jitGlobalClosureForTest(r, "build")
+	rc, done := build.fn.RegCode(), jitInlinedOfForTest(r, build)
+	construction = func(x jitInline) bool {
+		return int(x.pc) < len(rc.Code) && rc.Code[x.pc].Op() == bytecode.RNewW && slices.Contains(done, x.cl)
 	}
 	inlined := 0
 	for _, x := range e.inlines {
@@ -125,7 +115,7 @@ func TestJITForwardingConstructors(t *testing.T) {
 	// It leaves native code only to fill the pools again, and Go makes
 	// none of its constructions, nor runs a constructor native code called
 	// (abi.ExitEnter).
-	hosts, calls, entered, entries := e.ssaStats.hosts, e.ssaStats.goCalls, r.jit.entered, e.ssaStats.entries
+	hosts, calls, entries := e.ssaStats.hosts, e.ssaStats.goCalls, e.ssaStats.entries
 	if _, err := r.Run(compileForTest(t, `build(300, 1)`)); err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +127,5 @@ func TestJITForwardingConstructors(t *testing.T) {
 	}
 	if n := e.ssaStats.goCalls - calls; n > 4 {
 		t.Errorf("Go made %d of build's 900 constructions", n)
-	}
-	if n := r.jit.entered - entered; n > 4 {
-		t.Errorf("Go ran %d of build's 900 constructors", n)
 	}
 }

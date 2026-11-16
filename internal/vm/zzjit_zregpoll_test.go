@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"testing"
 	"time"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regPollSrc recurses natively with no loop: a tree of objects far past
@@ -42,16 +39,7 @@ func TestJITRegNativeHonoursLimits(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			compiler.SetRegisterForm(true)
 			prog := compileForTest(t, regPollSrc)
-			compiler.SetRegisterForm(false)
-			SetRegTier(true)
-			was := SetJITRegTier(true)
-			t.Cleanup(func() {
-				compiler.SetRegisterForm(bytecode.RegDefault())
-				SetRegTier(bytecode.RegDefault())
-				SetJITRegTier(was)
-			})
 			r := New(Config{JIT: true, MemoryLimit: 16 << 20})
 			t.Cleanup(r.Close)
 			r.jitStress = jitStressConfig{}

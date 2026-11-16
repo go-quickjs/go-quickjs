@@ -1,8 +1,12 @@
 package vm
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
-// The tree tier reads a typed array's element straight from its buffer
+// Register code reads a typed array's element straight from its buffer
 // (typedRead), and leaves the rest to getElem: every kind of element, keys
 // past the end, fractions and negatives, a detached buffer, a resizable one
 // shrunk under a view of a fixed length or tracked by one, answer as the
@@ -30,29 +34,21 @@ func TestTreeTypedArrayReads(t *testing.T) {
 		doomed.buffer.transfer()
 		each(doomed, [1])
 		out.join()`
-	var want string
-	for _, tree := range []bool{false, true} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		got := v.String().Go()
-		if !tree {
-			want = got
-			continue
-		}
-		if got != want {
-			t.Errorf("tree tier:\n%s\ninterpreter:\n%s", got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The answer the stack interpreter gave, 2642 bytes, by its SHA-256.
+	got := v.String().Go()
+	if sum := sha256.Sum256([]byte(got)); hex.EncodeToString(sum[:]) != "1e875621561ed9910819be07737dc8e6f8630d24aa721ebef59e64256d2436ce" || len(got) != 2642 {
+		t.Errorf("got\n%s", got)
 	}
 }
 
-// The tree tier appends an element at an array's length where setElem has
-// none to store (setIndexMiss, appendElem), and leaves the rest to the slow
+// Register code appends an element at an array's length where setElem has
+// none to store (regSetMiss, appendElem), and leaves the rest to the slow
 // path: an index a setter up the chain takes, a frozen array, a length made
 // read-only, a prototype with an element, a sparse array and a strict
 // function's refusals answer as the interpreter has them.
@@ -83,22 +79,18 @@ func TestTreeArrayAppends(t *testing.T) {
 		out.join(' | ')`
 	const want = "0,1,2,3,4,5 | 9,1,2,3 | 2 | TypeError | 1,2 | 2 | TypeError | 1,2 | 7 | 1,,,,,5,6 | " +
 		"2 | 1,2 | 0,1 | 3,3,x | 4 | 0,1,2,y"
-	for _, tree := range []bool{false, true} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want+" | "+want+" | "+want {
-			t.Errorf("tree %v:\n%s\nwant three of\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want+" | "+want+" | "+want {
+		t.Errorf("got:\n%s\nwant three of\n%s", got, want)
 	}
 }
 
-// The tree tier stores a number into a typed array's buffer as it finds
+// Register code stores a number into a typed array's buffer as it finds
 // one (setElem, typedWrite), and leaves the rest to the slow path: every
 // kind of element, keys past the end, fractions and NaN, values that are
 // not numbers and convert, a detached buffer, answer as the interpreter has
@@ -122,24 +114,16 @@ func TestTreeTypedArrayWrites(t *testing.T) {
 		doomed.buffer.transfer()
 		for (let r = 0; r < 3; r++) out.push(show(put(doomed, 1, 3)))
 		out.join()`
-	var want string
-	for _, tree := range []bool{false, true} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		got := v.String().Go()
-		if !tree {
-			want = got
-			continue
-		}
-		if got != want {
-			t.Errorf("tree tier:\n%s\ninterpreter:\n%s", got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The answer the stack interpreter gave, 18362 bytes, by its SHA-256.
+	got := v.String().Go()
+	if sum := sha256.Sum256([]byte(got)); hex.EncodeToString(sum[:]) != "bfd66702db916c993d5a91f06038f606ce062d4cc8a68bab1ef2581ea179b26e" || len(got) != 18362 {
+		t.Errorf("got\n%s", got)
 	}
 }
 
@@ -173,17 +157,13 @@ func TestArrayLengthGrowsWithHoles(t *testing.T) {
 		out.join(' | ')`
 	const want = "0,false,false,,0 | 1,false,false,,0 | 4,false,false,,0 | 10,false,false,,0 | 1000,false,false,,0 | 2000,false,false,,0 | " +
 		"7,false,true,1-2-3----x | 6,false,false,1--3---9 | 1000000,true,false,5 | 1"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v:\n%s\nwant\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got:\n%s\nwant\n%s", got, want)
 	}
 }

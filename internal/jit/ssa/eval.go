@@ -1017,7 +1017,14 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 			case OpTailRoom, OpTailSelf:
 				// The model's stack is shallow: the call is made.
 			case OpPoll:
-				// The model has no budget to spend.
+				// Register code's start spends the budget as a back edge
+				// does (mir's entryPoll), and, spent, exits at its state.
+				if pollEvery > 0 {
+					polls++
+					if polls%pollEvery == 0 {
+						return exit(v.State, ir.BudgetExit)
+					}
+				}
 			case OpSameSymbol:
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
 			case OpIterClosed:

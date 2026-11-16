@@ -22,7 +22,7 @@ func TestOptimizeMergesDominatedGuards(t *testing.T) {
 		n := 0
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
-				if v.Op == OpUnboxF64 && v.Args[0].Op == OpLoadSlot && v.Args[0].Aux == 0 {
+				if v.Op == OpUnboxF64 && v.Args[0].Op == OpLoadSlot && v.Args[0].Aux == paramSlot {
 					n++
 				}
 			}
@@ -53,7 +53,7 @@ func TestOptimizeDropsDominatedInitChecks(t *testing.T) {
 		n := 0
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
-				if v.Op == OpCheckInit && v.Args[0].Op == OpLoadSlot && v.Args[0].Aux == 0 {
+				if v.Op == OpCheckInit && v.Args[0].Op == OpLoadSlot && v.Args[0].Aux == paramSlot {
 					n++
 				}
 			}

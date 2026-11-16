@@ -103,7 +103,8 @@ func matchBlockOf[_ any](proto *Object, n, k int) (*Object, []String) {
 // fewer than matchBlockMax groups, once the first match has given the
 // realm the layout of its index, input and groups (matchLayout), which it
 // is made with as buildMatchResult makes it. exec's leaf (regexpLeaf's
-// match), which every tier calls, makes its arrays here.
+// match), which the interpreter and native code call, makes its arrays
+// here.
 func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *String) *Object {
 	n := len(caps) / 2
 	t := r.matchLayout

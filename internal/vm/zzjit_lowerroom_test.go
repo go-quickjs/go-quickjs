@@ -49,7 +49,7 @@ func TestJITLoweringsOnlyInRoom(t *testing.T) {
 				t.Fatal(err)
 			}
 			if s := r.jit; s != nil && s.held() > s.budget {
-				t.Errorf("%+v, limit %d KB: held %d, %d entries, %d lowerings, %d bytes of them", c, limit>>10, s.held(), len(s.cache), len(s.lowered), s.lowerBytes)
+				t.Errorf("%+v, limit %d KB: held %d, %d entries, %d lowerings, %d bytes of them", c, limit>>10, s.held(), len(s.regCache), len(s.lowered), s.lowerBytes)
 			}
 			r.Close()
 			r.ReleaseClosed()

@@ -1283,8 +1283,7 @@ func (g *gen) switchStmt(n *ast.SwitchStmt, label labelSet) {
 var typeNames = [8]string{"undefined", "object", "boolean", "number", "string", "symbol", "bigint", "function"}
 
 // typeofCompare is x and the type's index where n compares typeof x with a
-// string literal that names a type, by ===, ==, !== or !=, x not a global's
-// name, whose typeof the backend leaves to the stack form.
+// string literal that names a type, by ===, ==, !== or !=.
 func (g *gen) typeofCompare(n *ast.Binary) (ast.Expr, int, bool) {
 	switch n.Op {
 	case "===", "==", "!==", "!=":
@@ -1699,7 +1698,7 @@ func (g *gen) stmt(s ast.Stmt) {
 		if p := g.innerHandler(); p != nil {
 			// The handler the table would find, entered as it would be:
 			// nothing is made of the value that the handler would not
-			// take straight back out, as the tree's throwToHandler does.
+			// take straight back out.
 			g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(p.reg), r16(r), 0))
 			g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), p.to, false)
 			return
@@ -2688,8 +2687,7 @@ func (g *gen) operate(text string, op bytecode.Op, left, right ast.Expr, a, dst,
 
 // soleReg reports whether r is the register of a local that holds its
 // values alone (bytecode.SoleLocals): an operator whose result it takes
-// may give back the BigInt it held (RArithOwnA), as the tree's store of
-// an operator's result to such a local does.
+// may give back the BigInt it held (RArithOwnA).
 func (g *gen) soleReg(r int) bool {
 	if !g.isBinding(r) {
 		return false
@@ -2709,8 +2707,7 @@ func (g *gen) soleReg(r int) bool {
 // operator of two operands, or a negation, compiled straight into r, a
 // temporary, by the instruction emitted last. An operator of a BigInt
 // may give the block of such an operand back once it has made its own
-// result (the VM's bigRelease), as the tree's nodes give back what their
-// operand nodes made (treeFreshA). A conditional or anything else whose
+// result (the VM's bigRelease). A conditional or anything else whose
 // last instruction is an arithmetic one may leave another value in r.
 func (g *gen) fresh(e ast.Expr, r int) bool {
 	switch n := e.(type) {
@@ -3331,7 +3328,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 		if res.Kind == ResUpval && !keep && dst < 0 && n.Op == "+=" && g.rec.Appends[n] {
 			// An append to an upvalue the stack compiler made one
 			// (ownedAppend): the add marked, which grows the string the
-			// binding alone holds in place, as the tree's upvalueAdd does.
+			// binding alone holds in place.
 			if last := len(g.code) - 1; g.code[last].Op() == bytecode.RAdd && g.code[last].A() == uint16(v) {
 				w := g.code[last]
 				g.code[last] = bytecode.MakeR(bytecode.RAdd, bytecode.RAddAppend, w.A(), w.B(), w.C())
@@ -4097,9 +4094,8 @@ func (g *gen) regexpLitCall(n *ast.Call, dst int, dead bool) (int, bool) {
 	return d, true
 }
 
-// wrapsOp reports whether op is an operator RWrap may make: one the
-// tree's wrapCall makes BigInt.asUintN's and asIntN's of from its
-// operands (wrapsOperator).
+// wrapsOp reports whether op is an operator RWrap may make: one the VM's
+// wrapShort makes BigInt.asUintN's and asIntN's of from its operands.
 func wrapsOp(op bytecode.ROp) bool {
 	switch op {
 	case bytecode.RAdd, bytecode.RSub, bytecode.RMul,

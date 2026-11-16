@@ -85,19 +85,18 @@ table() + ' | ' + mix(mv, 50) + ' | ' + mix(mv, 200)
 
 const dataViewTestWant = `255.254.18.52.52.18.251.255.255.255.63.192.0.0.3.0 255,-2,65279,873660159,4294840884,NaN,NaN,NaN,-1387359462293761,18446201139177389055 254,-494,4862,875827966,4262605876,-4.858458537663523e+37,NaN,0.0008535385131835938,-5419372899586,18307752833475936255 255,-2,65279,873660159,4294840884,NaN,NaN,NaN,-1387359462293761,18446201139177389055 255,-2,65279,873660159,4294840884,NaN,NaN,NaN,-1387359462293761,18446201139177389055 255,-2,65279,873660159,4294840884,NaN,NaN,NaN,-1387359462293761,18446201139177389055 255,-2,65279,873660159,4294840884,NaN,NaN,NaN,-1387359462293761,18446201139177389055 52,13364,13364,-82693068,875827963,1.677071139738473e-7,1.9999999816384504,0.2626953125,4611686018344694836,3761652462302265151 3,768,3,RangeError,RangeError,RangeError,RangeError,1.7881393432617188e-7,RangeError,RangeError 0,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError,RangeError 18,4660,13330,305411090,305411090,5.6862166791309555e-28,NaN,0.25439453125,-21169425390,1311730647613571071 255,255 7,7,7,7,7,7,RangeError 0,0,0,NaN,NaN,NaN,RangeError 0,0,0,0,0,0,RangeError 0,0,1661992960,100000002004087730000,100000000000000000000,Infinity,RangeError 3,3,3,3.700000047683716,3.7,3.69921875,RangeError 255,-1,4294967295,-1.5,-1.5,-1.5,RangeError 1,1,65537,65537.8984375,65537.9,Infinity,RangeError 7,7,7,7,7,7,RangeError 1,1,1,1,1,1,RangeError 0,0,0,0,0,0,RangeError 0,0,0,NaN,NaN,NaN,RangeError 9,9,9,9,9,9,RangeError TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError 18446744073709551615,-1,RangeError 5,5,RangeError 3,3,RangeError 9223372036854775808,-9223372036854775808,RangeError TypeError,TypeError,TypeError 7,7,RangeError 1,1,RangeError 9,RangeError,0 0,RangeError,RangeError,0 TypeError,TypeError,TypeError 0,RangeError,0 TypeError,TypeError,TypeError TypeError,TypeError,TypeError -7,2.5,RangeError 192,RangeError,4660 TypeError,TypeError calls=17 | 4754.25RangeError | 83413RangeError`
 
-// DataView's accessors are native leaves (zzz_dataview.go), applied
-// without a frame where nothing they do runs script or throws: each answer
-// is Node's, in the tree tier and in the interpreter, and an immutable
-// buffer's setters still throw.
+// DataView's accessors are native leaves (zzz_dataview.go), applied without
+// a frame where nothing they do runs script or throws: each answer is
+// Node's, and an immutable buffer's setters still throw.
 func TestDataViewLeaves(t *testing.T) {
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
+	{
+		r := New(Config{})
 		v, err := r.Run(compileForTest(t, dataViewTestSrc))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got := v.String().Go(); got != dataViewTestWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, dataViewTestWant)
+			t.Errorf("\ngot  %s\nwant %s", got, dataViewTestWant)
 		}
 		v, err = r.Run(compileForTest(t, dataViewImmutableSrc))
 		r.Close()
@@ -105,7 +104,7 @@ func TestDataViewLeaves(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got, want := v.String().Go(), "5,TypeError,TypeError,5 5,TypeError,TypeError,5 5,TypeError,TypeError,5"; got != want {
-			t.Errorf("tree tier %v: immutable buffer: got %s, want %s", tree, got, want)
+			t.Errorf("immutable buffer: got %s, want %s", got, want)
 		}
 	}
 	// Every accessor is declared the leaf of its width.

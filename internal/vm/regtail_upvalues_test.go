@@ -2,9 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // A frame given to its callee in place by a call in tail position
@@ -30,11 +27,7 @@ func TestRegTailToClosesUpvalues(t *testing.T) {
 			return getF()(n - 1)
 		})(3000)
 		open + " " + fs.map(function (g) { return g() }).join()`
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("maxOpen"), r.NewFunction("maxOpen", 0, func(r *Runtime, _ Value, _ []Value) (Value, error) {

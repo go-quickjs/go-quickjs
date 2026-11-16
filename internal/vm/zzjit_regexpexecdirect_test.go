@@ -10,7 +10,7 @@ import (
 )
 
 // Where a runtime runs the JIT, exec's calls whose arrays may be made again
-// are made as before (reuseCallRest), natively and in the tree tier: each
+// are made as before (reuseCallRest), natively and in the interpreter: each
 // answer is the interpreter's and Node's, with the collector idle and while
 // it marks.
 func TestJITRegExpExecDirect(t *testing.T) {

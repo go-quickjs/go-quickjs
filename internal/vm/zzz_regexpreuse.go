@@ -20,8 +20,9 @@ import (
 //
 // some 15,000 times an iteration, each array garbage once it returns.
 //
-// The tree tier finds such a call where it builds it (reuseExecCall): a
-// call of a method named exec whose result is stored in a local, l, of a
+// Such a call is one the register compiler marks (bytecode.RMarkReuse)
+// and execReuseOf, reading the stack form, finds: a call of a method named
+// exec whose result is stored in a local, l, of a
 // function that is no generator, async function or sloppy one with a
 // direct eval, that no closure captures and is no parameter -- the
 // arguments object may alias one -- and that every instruction reads, if
@@ -50,7 +51,7 @@ import (
 //
 // The call is made as any other, through callRest, by the same path: the
 // leaf's check, the leaf's call without a frame, the frame and the tick
-// where it is refused. The node only tells exec's leaf, just before, of
+// where it is refused. The call only tells exec's leaf, just before, of
 // the call's local and the frame's locals (execReuseCall, as
 // zzz_regexpdead.go tells it of a result nothing reads), which the leaf
 // takes as it begins, and uses where it makes the array of a match of
@@ -61,13 +62,12 @@ import (
 //
 // The functions are generic, each instantiated with struct{} alone: Go
 // lays a generic function's instantiations out after every function and
-// closure of the package (see zzz_direct.go). The tree builder reaches
-// reuseExecCall through opHook (zzz_typeof.go).
+// closure of the package (see zzz_direct.go).
 
 // execReuseSite is a call of exec whose arrays may be made again: l is the
 // local its result is stored in; strs says its pieces' Strings may be made
 // again too, and s is the one other local they are stored in, or -1. It is
-// the tree's, and holds nothing of any runtime's.
+// the register code's (regReuseSites), and holds nothing of any runtime's.
 type execReuseSite struct {
 	l, s int
 	strs bool
@@ -183,8 +183,8 @@ func piecesIn[_ any](r *Runtime, p *Value, strs []String) bool {
 }
 
 // slotGone reports whether the slot p is of the stack at or above its top,
-// where no frame is: a frame's locals and operands are beneath the top
-// while it runs (callTree), and its slots are left as they were when it
+// where no frame is: a frame's registers are beneath the top while it
+// runs, and its slots are left as they were when it
 // returns, to be written by the frames after it.
 func slotGone[_ any](r *Runtime, p *Value) bool {
 	if len(r.stack) == 0 {
@@ -275,142 +275,6 @@ func matchResultReused[_ any](r *Runtime, tbp **execReuseTable, rc execReuseCall
 	arr.vals()[1] = Str(input)
 	arr.vals()[2] = groups
 	return arr
-}
-
-// reuseExec is a node of a call of exec whose arrays may be made again,
-// site's: deadExec's, the result read.
-type reuseExec[_ any] struct {
-	rv, f tval
-	args  []tval
-	p, pc int
-	k     uint32
-	site  *execReuseSite
-}
-
-// node is the call of the method f reads, on the receiver rv evaluates --
-// or, rv nil, the one in slot p-1: the realm's exec told of the site
-// (reuseCallRest), anything else called as callOperands's node calls a
-// method.
-func (d *reuseExec[_]) node(c *tctx) Value {
-	var recv Value
-	if d.rv != nil {
-		recv = d.rv(c)
-	}
-	fv := d.f(c)
-	p := d.p
-	for i, a := range d.args {
-		c.stack[p+1+i] = a(c)
-	}
-	c.at(d.pc)
-	if d.rv == nil {
-		recv = c.stack[p-1]
-	}
-	r := c.r
-	as := c.stack[p+1 : p+1+len(d.args)]
-	if !fv.IsObject() || fv.Object() != r.regexpExecFn {
-		return regexpCallMethod(c, fv, recv, as)
-	}
-	o := fv.Object()
-	v, err := reuseCallRest[struct{}](r, d.site, c.locals, o, o.fn(), recv, as)
-	if err != nil {
-		c.throw(err)
-	}
-	return v
-}
-
-// lit is the node of a RegExp literal's exec, of constant k, as
-// deadExec's lit, the site's arrays made again.
-func (d *reuseExec[_]) lit(c *tctx) Value {
-	r := c.r
-	builtin := r.regexpLitMethod(false)
-	var fv Value
-	if builtin != nil {
-		fv = Obj(builtin)
-	} else {
-		fv = d.f(c)
-	}
-	p, n := d.p, len(d.args)
-	for i, a := range d.args {
-		c.stack[p+1+i] = a(c)
-	}
-	c.at(d.pc)
-	recv, as := c.stack[p-1], c.stack[p+1:p+1+n]
-	done := builtin != nil && (n == 0 || !as[0].IsObject())
-	if fv.IsObject() {
-		o := fv.Object()
-		if fd := o.fn(); fd == nil || fd.treeCall == nil || fd.closure.realm != r.Realm {
-			var v Value
-			var err error
-			if o == r.regexpExecFn {
-				v, err = reuseCallRest[struct{}](r, d.site, c.locals, o, fd, recv, as)
-			} else {
-				v, err = r.callRest(o, fd, recv, as)
-			}
-			if err != nil {
-				c.throw(err)
-			}
-			if done && recv.IsObject() {
-				r.regexpLiteralDone(&c.cl.fn.Constants[d.k], recv.Object())
-			}
-			return v
-		}
-	}
-	return regexpCallMethod(c, fv, recv, as)
-}
-
-// reuseExecCall builds the call_method at pc, of exec's read, into
-// reuseExec's node where its result is stored in a local whose arrays may
-// be made again (execReuseOf), and reports whether it did.
-func reuseExecCall[_ any](b *tbuilder, pc int, code []bytecode.Instr) bool {
-	fn := b.fn
-	n := int(code[pc].A)
-	k := len(b.stack) - n - 1
-	if fn.Generator || fn.Async || fn.HasDirectEval || k < 1 || pc+1 >= len(code) {
-		return false
-	}
-	var l uint32
-	switch st := code[pc+1]; st.Op {
-	case bytecode.OpSetLocal, bytecode.OpPutLocal, bytecode.OpSetLocalGet, bytecode.OpInitLocal:
-		l = st.A
-	default:
-		return false
-	}
-	m, recv := b.stack[k], b.stack[k-1]
-	d := &reuseExec[struct{}]{p: k, pc: pc}
-	lit := false
-	switch {
-	case m.method != nil:
-		if int(m.method.in.A) >= len(fn.Names) || m.v == nil || fn.Names[m.method.in.A] != "exec" {
-			return false
-		}
-		if (recv.local || recv.this) && recv.v == nil && recv.slot < 0 {
-			d.rv = recv.tree()
-		} else if propIn(recv) != nil {
-			d.rv = recv.v
-		} else {
-			return false
-		}
-	case m.rare == execDeadRare && m.v != nil && m.slot < 0 && int(recv.slot) == k-1:
-	case m.rare != nil && m.rare.regexpCall != nil && !m.rare.regexpCall.test && int(m.slot) != k && int(recv.slot) == k-1:
-		lit, d.k = true, m.rare.regexpCall.k
-	default:
-		return false
-	}
-	if d.site = execReuseOf[struct{}](fn, pc+1, int(l)); d.site == nil {
-		return false
-	}
-	d.args = make([]tval, n)
-	for i := n - 1; i >= 0; i-- {
-		d.args[i] = b.pop().tree()
-	}
-	d.f = b.pop().tree()
-	b.pop()
-	if lit {
-		b.push(d.lit)
-	} else {
-		b.push(d.node)
-	}
-	return true
 }
 
 // execReuseMaxCode is the longest function whose code execReuseOf reads.

@@ -22,17 +22,17 @@ import (
 // (bytecode.Function.LiteralKeys): a root starts empty, and each key takes its
 // transition, so that the hash need only tell literals apart, and two lists of
 // one hash, sharing a root, have their right layouts and lose only the first
-// transition, as a root for each count did. A script's literals start from them as it
-// is prepared (prepareRun), a Program's as it first runs in the realm
-// (keyProgramSites), and a function's tree node as it first makes its object
-// (literalRoot), or native code as it is compiled for it (keySite). Code new
-// for each request then makes none of the
-// shapes its literals need, and what reads their objects, kept or not, has read
-// them before.
+// transition, as a root for each count did. A script's literals start from
+// them as it is prepared (prepareRun), a Program's as it first runs in the
+// realm (keyProgramSites), and a function's literal as it first makes its
+// object (regLiteralKeyedRoot), or native code as it is compiled for it
+// (keySite). Code new for each request then makes none of the shapes its
+// literals need, and what reads their objects, kept or not, has read them
+// before.
 //
-// A literal with a spread, an accessor, a computed key or __proto__, {}, and
-// one in a function that runs in the interpreter or that a direct eval or a
-// module's own code makes, have a root of their own, as before.
+// A literal with a spread, an accessor, a computed key or __proto__, {},
+// and one a direct eval or a module's own code makes, have a root of their
+// own, as before.
 //
 // A root and what grows from it is the realm's, for as long as it lives. So
 // they are counted against a budget of their own, and past a quarter of the
@@ -66,20 +66,9 @@ func keysOf[_ any](fn *bytecode.Function, site uint32) uint64 {
 	return ks[i].Keys
 }
 
-// literalRoot starts ic, the cache of lit's site, whose root has no transition
-// yet, from the realm's root for lit's keys, if the compiler said them and the
-// tree has room.
-//
-//go:noinline
-func literalRoot[_ any](c *tctx, lit *litOf, ic *propCache) {
-	if s := ic.shape; s == noShape || s.proto == c.r.proto.object {
-		keyedRoot[struct{}](c.r, lit.keys, ic)
-	}
-}
-
-// keySite is literalRoot for the site of cl's literal, for native code about to
-// make its objects, whose root is the site's for good: what a tree node then
-// asks for is that root.
+// keySite is regLiteralKeyedRoot for the site of cl's literal, for native
+// code about to make its objects, whose root is the site's for good: what
+// the interpreter then asks for is that root.
 func keySite[_ any](r *Runtime, cl *closure, site uint32) {
 	ic := &cl.ic[site]
 	if s := ic.shape; s != nil && s.next == nil && (s == noShape || s.proto == r.proto.object) {
@@ -89,10 +78,9 @@ func keySite[_ any](r *Runtime, cl *closure, site uint32) {
 	}
 }
 
-// prepareRun is prepare for fn, a script to run once, the caches of its literals
-// started from the realm's roots for their keys: a script's own code runs in
-// the interpreter most often, whose literals ask for no root. A function it
-// makes is run by the tree tier, whose node asks as it needs one (literalRoot).
+// prepareRun is prepare for fn, a script to run once, the caches of its
+// literals started from the realm's roots for their keys. A function it
+// makes asks for one as it needs it (regLiteralKeyedRoot).
 //
 //go:noinline
 func prepareRun[_ any](r *Runtime, fn *bytecode.Function) *closure {

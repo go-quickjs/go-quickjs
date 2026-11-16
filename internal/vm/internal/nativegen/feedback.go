@@ -136,14 +136,14 @@ func feedbackMarksBig(op bytecode.ROp) (marks, ab bool) {
 // feedbackBigSeen is the offset of the marks' pointer in the context's
 // register code (regCode's bigSeen, an atomic.Pointer whose word is at
 // its start), and feedbackBigKinds those of the three kinds' slices'
-// data in the marks (treeBigSeen's bigs, wide and heap), each a word of
+// data in the marks (bigSeenMarks's bigs, wide and heap), each a word of
 // 32 sites' bits.
 func feedbackBigSeen() int32 {
 	return off("regCode.bigSeen")
 }
 
 func feedbackBigKinds() [3]int32 {
-	return [3]int32{off("treeBigSeen.bigs"), off("treeBigSeen.wide"), off("treeBigSeen.heap")}
+	return [3]int32{off("bigSeenMarks.bigs"), off("bigSeenMarks.wide"), off("bigSeenMarks.heap")}
 }
 
 // feedbackCountsReturn reports whether op's handler counts a run of its
@@ -156,8 +156,7 @@ func feedbackCountsReturn(op bytecode.ROp) bool {
 // from the context's cc (closureCode's jitRegTick), which a return counts
 // down, and feedbackEnters its jitEnters, which a return sets once none
 // is left, so that the function's next call goes to the JIT's tier-up
-// (package vm's jitRegCallTier), as the stack form's invocations each
-// spend its budget (jitTierWork).
+// (package vm's jitRegCallTier).
 func feedbackTick() int32 {
 	return ccRel(off("closureCode.jitRegTick"))
 }

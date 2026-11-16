@@ -30,11 +30,11 @@ function main(n) {
 `
 
 // A register loop is built with its body's first instruction its one
-// header, its test copied before it (the compile package's loopTest), as
-// the stack form's loops are: the numbers it carries are not boxed inside
-// it -- a sum stored once it is done had been boxed at every turn, the
-// test's block no loop's header -- and every answer is the interpreter's,
-// with the collector idle and marking.
+// header, its test copied before it (the compile package's loopTest): the
+// numbers it carries are not boxed inside it -- a sum stored once it is
+// done had been boxed at every turn, the test's block no loop's header --
+// and every answer is the interpreter's, with the collector idle and
+// marking.
 func TestJITRegLoopsOneHeader(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

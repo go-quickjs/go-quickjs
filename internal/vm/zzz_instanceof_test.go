@@ -113,29 +113,25 @@ func TestInstanceOfKnown(t *testing.T) {
 	// The entries are forgotten each time the collector has run, which a
 	// collection during the run would do before they are counted.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	for _, tree := range []bool{true, false} {
-		SetTreeTier(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, instanceOfChangesSrc))
-		if err != nil {
-			r.Close()
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != instanceOfChangesWant {
-			t.Errorf("tree tier %v:\n%s", tree, firstDifference(got, instanceOfChangesWant))
-		}
-		known := 0
-		for _, e := range r.ctorsKnown {
-			if e.ctor != nil {
-				known++
-			}
-		}
-		if known == 0 {
-			t.Errorf("tree tier %v: no constructor remembered", tree)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, instanceOfChangesSrc))
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
-	SetTreeTier(true)
+	if got := v.String().Go(); got != instanceOfChangesWant {
+		t.Error(firstDifference(got, instanceOfChangesWant))
+	}
+	known := 0
+	for _, e := range r.ctorsKnown {
+		if e.ctor != nil {
+			known++
+		}
+	}
+	if known == 0 {
+		t.Errorf("no constructor remembered")
+	}
+	r.Close()
 }
 
 // A remembered constructor is answered from its entry: a test of one that

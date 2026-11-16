@@ -80,7 +80,8 @@ func TestSSRPage(t *testing.T) {
 }
 
 // With React's builds fetched into V8BENCH_SSR_DIR (v8bench -bench ssr
-// -fetch -dir), the page is the length the runs check, in every tier.
+// -fetch -dir), the page is the length the runs check, with the JIT and
+// without.
 func TestSSRReact(t *testing.T) {
 	dir := os.Getenv("V8BENCH_SSR_DIR")
 	if dir == "" {

@@ -6,8 +6,7 @@ import "testing"
 // cache (sharedProp), of entries in pairs: reads of own properties and of
 // prototypes' at one and two levels, across forty layouts, stay right as
 // a prototype's method is replaced, a property is added to a prototype in
-// front of the one that had it, and one is deleted -- in the interpreter
-// and the trees alike.
+// front of the one that had it, and one is deleted.
 func TestSharedCacheMegamorphic(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -37,8 +36,8 @@ func TestSharedCacheMegamorphic(t *testing.T) {
 		for (var j = 0; j < out.length; j++) for (var k = 0; k < out[j].length; k++) h = (h * 31 + out[j].charCodeAt(k)) | 0;
 		[out[0].slice(0, 40), out[1].slice(0, 40), out[2].slice(0, 60), out[3].slice(0, 80), h].join("|")`
 	var answers []string
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
+	for range 1 {
+		r := New(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -50,10 +49,7 @@ func TestSharedCacheMegamorphic(t *testing.T) {
 	const want = "0k0-;1base-;2base-;3base2;4base2;5k52;6b|0k0-;1B-;2B-;3B2;4B2;5k52;6B2;7B-;8B-;9B|0k0-;1B-;2B-;3three2;4B2;5k52;6B2;7B-;8B-;9B-;10k102;11B2;12|0k0-;1B-;2B-;3three2;4B2;5B2;6B2;7B-;8B-;9B-;10k102;11B2;12B2;13B2;14B-;15k15-;1|-1921851682"
 	for i, got := range answers {
 		if len(got) < len(want) || got[:len(want)] != want {
-			t.Errorf("tree tier %v: got %s", i == 1, got)
+			t.Errorf("run %d: got %s", i, got)
 		}
-	}
-	if answers[0] != answers[1] {
-		t.Errorf("the tiers differ:\n%s\n%s", answers[0], answers[1])
 	}
 }

@@ -26,8 +26,8 @@ func TestParseNM(t *testing.T) {
 func TestTargetsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "targets.txt")
 	src := "# comment\ntoolchain go1.27.3\n\nconfig windows/amd64 plain\n" +
-		"anchor V  0x00580 github.com/x/vm.(*Runtime).executeAt\n" +
-		"anchor CZ 0x00b60 github.com/x/vm.strAppendNode[go.shape.struct {}].func1\n" +
+		"anchor Q  0x00580 github.com/x/vm.(*Runtime).runReg\n" +
+		"anchor W  0x00b60 github.com/x/vm.listSites[go.shape.struct {}].func1\n" +
 		"anchor DW 0x020 runtime.writeBarrier\n"
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestTargetsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := tg.configs[0]
-	if c.goos != "windows" || c.jit || len(c.anchors) != 3 || c.anchors[1].symbol != "github.com/x/vm.strAppendNode[go.shape.struct {}].func1" {
+	if c.goos != "windows" || c.jit || len(c.anchors) != 3 || c.anchors[1].symbol != "github.com/x/vm.listSites[go.shape.struct {}].func1" {
 		t.Fatalf("read %+v", c)
 	}
 	c.anchors[0].target = 0x5c0

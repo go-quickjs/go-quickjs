@@ -36,7 +36,8 @@ func (r *Runtime) initStringBuiltins() {
 		o.setData(s)
 		return Obj(o), nil
 	})
-	// Called, of a primitive, applied without a frame, by every tier; a
+	// Called, of a primitive, applied without a frame, by the interpreter
+	// and by native code; a
 	// construction is never.
 	setElemOp(r, ctor, elemStringOf)
 

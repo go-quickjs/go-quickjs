@@ -1717,10 +1717,10 @@ func TestDateUsesTheHostClock(t *testing.T) {
 	}
 }
 
-// TestDateNowLeafUsesTheHostClock pins that Date.now, which every tier
-// calls without a frame (a leaf), reads the clock the host installed: in a
-// loop the tree tier runs, and with the JIT, natively, in builds that have
-// it.
+// TestDateNowLeafUsesTheHostClock pins that Date.now, which the
+// interpreter and the JIT call without a frame (a leaf), reads the clock
+// the host installed: in a loop the interpreter runs, and with the JIT,
+// natively, in builds that have it.
 func TestDateNowLeafUsesTheHostClock(t *testing.T) {
 	t.Parallel()
 	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithJIT()}} {
@@ -5376,8 +5376,8 @@ func TestAwaitOrdering(t *testing.T) {
 }
 
 // TestBigIntShortOperators pins the operators of two BigInts held in their
-// Values, which the tree tier makes itself where both are in the int64
-// range (arithSlow, bitwiseSlow, compareSlow): +, -, *, /, %, &, |, ^, the
+// Values, which the operators answer without a heap BigInt where both are
+// in the int64 range (shortArith): +, -, *, /, %, &, |, ^, the
 // comparisons and the shifts, about zero, the int64 range's edges, 2^64's
 // and past them, shifts by -65 to 65. The answers' count, length and hash
 // are Node's.
@@ -5440,8 +5440,8 @@ func TestBigIntCall(t *testing.T) {
 }
 
 // TestBigIntWrapCall pins BigInt.asUintN and asIntN of an operator, which
-// the tree tier makes of the operands' low 64 bits where both are BigInts
-// held in their Values (wrapCall): each operator it makes so, of both
+// register code makes of the operands' low 64 bits where both are BigInts
+// held in their Values (regColdWrap): each operator it makes so, of both
 // signs, about the int64 range's edges and 2^64's and past them, at widths
 // of 0 to 100 and ones that need converting; another method of the same
 // name, numbers and mixed operands, which the operator and the call make;
@@ -5521,8 +5521,8 @@ return all.join("|");
 })()`, "add:103695:24271061|sub:85450:-1579539025|mul:96870:2099516221|muls:77625:-425678477|and:51849:1872110749|or:73961:-965443836|xor:112117:37501782|shl:90832:-2099144689|shls:74840:-466410159|shr:83129:-182323294|shrs:58314:-1512613231|div:68171:1904182134|64,12|64,12|64,NaN|TypeError|TypeError|SyntaxError|1|8|xyw|1363160026601443621|17580284887202820368")
 }
 
-// TestBigIntGivenBack pins the BigInts the tree tier gives back for its
-// arithmetic to make results in (bigRelease): an operand that is a tree
+// TestBigIntGivenBack pins the BigInts register code gives back for its
+// arithmetic to make results in (regBigRelease): an operand that is a tree
 // of arithmetic of its own, which the operator alone takes, and nothing
 // else -- not a local's value, nor a sum pushed to an array, passed to a
 // function, joined to a string, nor one an operator throws on -- among
@@ -5562,20 +5562,19 @@ func TestBigIntGivenBack(t *testing.T) {
 })()`, "30 54386 -538156609")
 }
 
-// TestBigIntSoleLocals pins the BigInts a local holds alone, which the
-// tree tier gives back when the local is assigned the next (zzbigown.go):
-// sums, products, remainders and shifts of numbers of hundreds of bits
-// assigned to the locals they are made of, run twice; and locals whose
-// values something else keeps -- copied to another local, pushed, stored
-// to a global, a method's receiver that keeps it, past a conditional,
-// captured, beside an arguments object, returned -- whose values are
-// never given back, nor one a local holding its values alone was given by
-// another. The answers' count, length and hash are Node's.
-// TestBigIntSoleLocalPending pins a local whose value an operand still to
-// be taken holds when the local is assigned -- s = s * (s = ..., 5n) --
-// which is not one that holds its values alone: given back at the inner
-// store, its block was made the next remainder in before the product read
-// it. The hash is Node's.
+// TestBigIntSoleLocals pins the BigInts a local holds alone, which register
+// code gives back when the local is assigned the next (zzbigown.go): sums,
+// products, remainders and shifts of numbers of hundreds of bits assigned
+// to the locals they are made of, run twice; and locals whose values
+// something else keeps -- copied to another local, pushed, stored to a
+// global, a method's receiver that keeps it, past a conditional, captured,
+// beside an arguments object, returned -- whose values are never given
+// back, nor one a local holding its values alone was given by another. The
+// answers' count, length and hash are Node's. TestBigIntSoleLocalPending
+// pins a local whose value an operand still to be taken holds when the
+// local is assigned -- s = s * (s = ..., 5n) -- which is not one that holds
+// its values alone: given back at the inner store, its block was made the
+// next remainder in before the product read it. The hash is Node's.
 func TestBigIntSoleLocalPending(t *testing.T) {
 	t.Parallel()
 	checkEval(t, `var h = 0n;

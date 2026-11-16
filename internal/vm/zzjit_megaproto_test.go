@@ -98,7 +98,7 @@ func TestJITMegamorphicPrototypes(t *testing.T) {
 		// the code's cases no longer name: the reads find the chain as it
 		// is in the cache, filled at their first exits, and leave no more.
 		// (Twice: code a deoptimization invalidated meanwhile is compiled
-		// again once the tree tier has run it its budget, and its
+		// again once the interpreter has run it its budget, and its
 		// megamorphic reads' first exits fill the cache then.)
 		for _, c := range []string{`Base.prototype.Other=function(){};kinds(2)`, `walk(2)`, `leaves(2)`, `kinds(2)`, `walk(2)`, `leaves(2)`} {
 			if _, err := r.Run(compileForTest(t, c)); err != nil {

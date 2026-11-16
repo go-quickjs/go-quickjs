@@ -471,27 +471,26 @@ func unboxPhis(f *Func) bool {
 		upvalue := a.Op == OpLoadCell && (a.Args[0].Op == OpUpvalueCell || a.Args[0].Op == OpLocalCell)
 		return upvalue && a.State != nil || (a.Op == OpLoadSlot || upvalue) && a.Block.PC < 0 && !a.Block.Generic
 	}
+	// candBoxUses counts, of each box, the uses by the candidates left,
+	// found again at each pass of the filter below.
+	candBoxUses := f.ints(n)
 	// merged reports whether v merges numbers alone -- the boxes of
 	// float64s, numeric constants, entry slots a guard unboxes already, at
-	// least one box -- each box used by v
-	// alone: unboxed, v's box is made once where it is, in place of one
-	// on each way to it, which speculates on nothing. A loop of register
-	// code whose test is copied before it (the compile package's
-	// loopTest) ends where the copy's test ends too, and a number it
-	// carries past its end, a sum stored once the loop is done, was boxed
-	// at every turn for that phi.
+	// least one box -- each box used by candidates alone, v among them:
+	// unboxed, v's box is made once where it is, in place of one on each
+	// way to it, which speculates on nothing, and the box goes with the
+	// candidates, which take its number. A loop of register code whose
+	// test is copied before it (the compile package's loopTest) ends where
+	// the copy's test ends too, and a number it carries past its end, a
+	// sum stored once the loop is done, was boxed at every turn for that
+	// phi; the box is the loop header's phi's too, which unboxed first had
+	// left this one to the next round, a round more for every such loop.
 	merged := func(v *Value) bool {
 		box := false
 		for _, a := range v.Args {
 			switch {
 			case a.Op == OpBoxF64:
-				k := 0
-				for _, b := range v.Args {
-					if b == a {
-						k++
-					}
-				}
-				if a.ID >= n || boxUses[a.ID] != k {
+				if a.ID >= n || boxUses[a.ID] != candBoxUses[a.ID] {
 					return false
 				}
 				box = true
@@ -555,6 +554,14 @@ func unboxPhis(f *Func) bool {
 			}
 		}
 		live = live[:k]
+		clear(candBoxUses)
+		for _, v := range live {
+			for _, a := range v.Args {
+				if a.Op == OpBoxF64 && a.ID < n {
+					candBoxUses[a.ID]++
+				}
+			}
+		}
 		// boxed and anyBoxed are of candidates alone, which flow only
 		// through candidates; spec flows through each candidate's users as
 		// candUsers listed them, of every phi.

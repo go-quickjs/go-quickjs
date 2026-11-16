@@ -60,7 +60,7 @@ func TestMirBigTypedRead(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			p, err := jitcompile.LowerSSAWith(c.Fn, jitcompile.Hints{ElementReads: elementReads(c.Fn)})
+			p, err := regLowerWithForTest(c.Fn, jitcompile.Hints{ElementReads: regElementReads(c.Fn.RegCode())})
 			if err != nil {
 				t.Fatalf("%s: %v", src, err)
 			}
@@ -68,6 +68,7 @@ func TestMirBigTypedRead(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", src, err)
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			for _, b := range f.Blocks {
 				for _, v := range b.Values {
@@ -94,16 +95,4 @@ func TestMirBigTypedRead(t *testing.T) {
 	if reads[ssa.Int64] < 1 || reads[ssa.Uint64] < 2 {
 		t.Errorf("BigInt typed reads made natively: %v", reads)
 	}
-}
-
-// elementReads are fn's element reads, by PC, lowered as reads of what the
-// element holds (jitcompile.Hints' ElementReads).
-func elementReads(fn *bytecode.Function) []int32 {
-	var pcs []int32
-	for pc, in := range fn.Code {
-		if in.Op == bytecode.OpGetIndex {
-			pcs = append(pcs, int32(pc))
-		}
-	}
-	return pcs
 }

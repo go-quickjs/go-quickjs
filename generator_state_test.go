@@ -104,10 +104,9 @@ func TestResumedFramesAreSetUp(t *testing.T) {
 }
 
 // TestResumedLoopFramesAreSetUp is TestResumedFramesAreSetUp for bodies
-// with loops, which resume in one place where they run as trees, stepped by
-// for...of loops: a direct eval's vars, a with object's names, the
-// receiver, the arguments, and a closure over the loop's binding, from
-// resumption to resumption. The answers are Node's.
+// with loops, stepped by for...of loops: a direct eval's vars, a with
+// object's names, the receiver, the arguments, and a closure over the
+// loop's binding, from resumption to resumption. The answers are Node's.
 func TestResumedLoopFramesAreSetUp(t *testing.T) {
 	t.Parallel()
 	checkEval(t, `

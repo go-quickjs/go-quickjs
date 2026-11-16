@@ -98,7 +98,10 @@ func TestJITStringBoundaries(t *testing.T) {
 			for _, enabled := range []bool{false, true} {
 				r := jitRuntimeForTest(t, Config{JIT: enabled})
 				source := tc.setup + `let a=new Array(6).fill(0),good=false;function f(s,a){for(let i=0;i<6;i++){` + tc.body + `}return a[0]}try{f(s,a)}catch(e){good=e instanceof TypeError&&e.message==='stop'};` + tc.check
-				v, err := r.Run(compileForTest(t, source))
+				// f, called once, compiled at its first call (jitRunFirstForTest):
+				// the throw's loop turns too few times for its back edges to
+				// compile it.
+				v, err := jitRunFirstForTest(r, compileForTest(t, source))
 				if err != nil || !v.IsBool() || !v.Truthy() || enabled && r.JITStats().SSAEntries == 0 {
 					t.Fatalf("JIT %v: %v (true %v), %v; %d entries of native code", enabled, v.IsBool(), v.Truthy(), err, r.JITStats().SSAEntries)
 				}
@@ -115,7 +118,7 @@ func TestJITArrayLiteralBoundary(t *testing.T) {
 		// (regTickRet, jitRegCallTier): f runs once before, for its second
 		// run to be native code's.
 		first := ""
-		if enabled && regJITForTest() {
+		if enabled {
 			first = "f(original);"
 		}
 		v, err := r.Run(compileForTest(t, `let original={x:7};function f(o){let a=[o,1,2];for(let i=1;i<3;i++)a[i]+=1;return a}`+first+`let a=f(original);a[0]===original&&a[1]===2&&a[2]===3&&a.length===3`))
@@ -208,61 +211,6 @@ func BenchmarkJITMD5FirstUse(b *testing.B) {
 				}
 				r.Close()
 				r.ReleaseClosed()
-			}
-		})
-	}
-}
-
-func BenchmarkJITMD5(b *testing.B) {
-	setup := compileForTest(b, jitMD5Source+jitMD5Setup)
-	call := compileForTest(b, `hashes()`)
-	for _, mode := range []string{"interpreter", "existing", "native"} {
-		b.Run(mode, func(b *testing.B) {
-			previous := treeTier.Swap(mode != "interpreter")
-			defer treeTier.Store(previous)
-			r := New(Config{JIT: mode == "native"})
-			defer func() { r.Close(); r.ReleaseClosed() }()
-			if _, err := r.Run(setup); err != nil {
-				b.Fatal(err)
-			}
-			run := func() {
-				v, err := r.Run(call)
-				if err != nil || !v.IsString() || v.String().Go() != "c9a34cfc85d982698c6ac89f76071abd" {
-					b.Fatalf("MD5: %v, %v", v, err)
-				}
-			}
-			for range 100 {
-				run()
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				run()
-			}
-			b.StopTimer()
-			if mode == "native" {
-				packed := false
-				if r.jit != nil {
-					for key, entry := range r.jit.cache {
-						if fn := key.Value(); fn != nil && fn.Name == "md5blk" {
-							packed = entry.ssa != nil && !entry.entrySlow
-						}
-					}
-				}
-				if !packed {
-					b.Fatal("block packing did not retain native execution")
-				}
-			}
-			if r.jit != nil {
-				b.ReportMetric(float64(r.jitCodeBytes()), "code-B")
-				b.ReportMetric(float64(r.jit.hosts)/float64(b.N+100), "hosts/hash")
-				b.ReportMetric(float64(r.jit.guards)/float64(b.N+100), "guards/hash")
-				for key, entry := range r.jit.cache {
-					fn := key.Value()
-					if fn != nil {
-						b.Logf("%s: code=%v slow=%v hosts=%d guards=%d", fn.Name, entry.ssa != nil, entry.entrySlow, entry.ssaStats.hosts, entry.ssaStats.guards)
-					}
-				}
 			}
 		})
 	}

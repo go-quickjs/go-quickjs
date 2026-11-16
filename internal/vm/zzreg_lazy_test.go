@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regLazySrc has functions called and never called, names, a string, a
@@ -28,11 +27,9 @@ used({alpha: 1, beta: 2}) + [1, 2, 3].map(twice).join() + used({alpha: 3, beta: 
 // TestRegCompiledLazily pins that a function's register code is compiled
 // at its first call and only then: a function never called keeps none,
 // and the code a call compiles, with the names, constants and sites it adds
-// past its function's own, gives the answers the stack form gives.
+// past its function's own, gives the expected answers.
 func TestRegCompiledLazily(t *testing.T) {
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, regLazySrc)
-	compiler.SetRegisterForm(bytecode.RegDefault())
 	byName := map[string]*bytecode.Function{}
 	for _, c := range fn.Constants {
 		if c.Kind == bytecode.ConstFunction && c.Fn != nil {
@@ -44,8 +41,6 @@ func TestRegCompiledLazily(t *testing.T) {
 			t.Fatalf("%s: want register code to compile later, not yet compiled", name)
 		}
 	}
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
@@ -76,11 +71,7 @@ func TestRegCompiledLazily(t *testing.T) {
 // register code at once: under the race detector, the compile is made
 // once and adds nothing to the Function the runtimes share.
 func TestRegCompiledLazilyConcurrently(t *testing.T) {
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, regLazySrc)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	var wg sync.WaitGroup
 	errs := make([]string, 8)
 	for i := range errs {

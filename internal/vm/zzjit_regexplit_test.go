@@ -11,7 +11,7 @@ import (
 
 // regexpLitSetup's loops call a RegExp literal's exec and test, and a
 // string's replace, split and match of one, as the script semantics tests
-// of the tree tier's give-back have them (TestRegExpLiteralReuse,
+// of the interpreter's give-back have them (TestRegExpLiteralReuse,
 // TestRegExpLiteralArgReuse): what native code must still tell apart.
 const regexpLitSetup = `
 function f1(s) { var r = []; for (var i = 0; i < 4; i++) r.push(/a/g.exec(s).index + "/" + /a/y.test(s)); return r.join() }
@@ -134,7 +134,7 @@ func TestJITRegExpLiteralGivenBack(t *testing.T) {
 	// thousands of times, never empty them, which would have had the
 	// pools filled anew at twice their sizes (jitRefillPool). Native, the
 	// work beside each call what the profit check weighs Go's calls
-	// against: a loop of the calls alone is left to the tree tier, which
+	// against: a loop of the calls alone is left to the interpreter, which
 	// gives a literal its RegExp back its own way.
 	work := map[string]uint64{}
 	for name, e := range entries {

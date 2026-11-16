@@ -7,7 +7,6 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -137,60 +136,6 @@ func jitAccessorLive(a *jitAccessorCase, write bool) bool {
 	return pair.getter == a.fn
 }
 
-// Accessor is ssa.AccessorFeedback's: the getter a read found on the
-// prototypes of its receivers, or the setter a write found -- a class's
-// accessor, or one Object.defineProperty put on a prototype -- as V8's code
-// calls an accessor its feedback knows rather than leave its site. The
-// site's cache's (cachedGet, cachedSetter), those it held before
-// (propCache.seen) and those the code met at its exits (jitPolySeen,
-// jitPolyWriteSeen), each a receiver's shape with the prototypes it was
-// found on, are its cases, up to jitPropertyCases, all of one function:
-// the first's. The callee is inlined where it may be, as a method called
-// there would be (jitInlinesAt); one that is no closure the code may call
-// -- a built-in's, a bound function's -- Go calls, called from native code
-// to make the read or the write. An accessor the receivers have
-// themselves, each its own -- an object literal's get x() -- Go's at an
-// exit, as before.
-func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
-	if fb.cl == nil || fb.fwd != nil || pc >= len(fb.fn.Code) {
-		return ssa.AccessorSite{}, false
-	}
-	in := fb.fn.Code[pc]
-	write := in.Op == bytecode.OpSetProp
-	if in.Op != bytecode.OpGetProp && !write || int(in.A) >= len(fb.cl.names) || int(in.B) >= len(fb.cl.ic) {
-		return ssa.AccessorSite{}, false
-	}
-	a, callee, cl, ok := fb.accessorOf(pc, &fb.cl.ic[in.B], fb.cl.names[in.A], write)
-	if !ok || cl == nil {
-		return a, ok
-	}
-	k := fb.keep()
-	if site, ok := fb.accessorCall(cl, callee, write); ok {
-		a.Call = &site
-	}
-	if cl.fn == fb.fn || !fb.r.jitInlinesAt(cl, callee, bytecode.Instr{Op: bytecode.OpCallMethod}) {
-		return a, true
-	}
-	p, err := fb.r.jitLower(cl.fn, jitLowerInline)
-	if err != nil {
-		return a, true
-	}
-	this := -1
-	if p.This {
-		this = cl.fn.LocalCount + len(cl.fn.Upvalues)
-	}
-	a.Inline = &ssa.InlineSite{
-		Program: p, Feedback: &jitFeedback{r: fb.r, fn: cl.fn, cl: cl, root: k},
-		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
-		Argc: jitB2i(write), Method: true, Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis,
-		// Its captured bindings in their cells, the closure's: the
-		// accessor's check fixes it.
-		Upvalues: jitUpvalueCells(cl),
-	}
-	k.inlined = append(k.inlined, cl)
-	return a, true
-}
-
 // accessorOf is Accessor's site, of either form's code: the accessor the
 // property site at pc, its cache c, of key, a read or a write, calls, by
 // its cases, its function, and the closure the code may call it as, of the
@@ -271,26 +216,6 @@ func (fb *jitFeedback) accessorOf(pc int, c *propCache, key Atom, write bool) (s
 	return a, callee, cl, true
 }
 
-// megamorphic reports whether the property site at pc, compiled for site,
-// is megamorphic: it has met more than its cases hold -- as many shapes as
-// they hold, read or written, or so many its cache gave up (maxCacheFills,
-// after which the VM reads and writes through the realm's shared caches)
-// -- or what no case can hold (jitPolySite's mega), which the code's
-// deoptimizations there found (jitPropertyDeopt). Native code then looks
-// in the receiver's own table and the megamorphic cache for any other
-// receiver, and leaves for Go only what neither has (ssa.PropertySite's
-// Megamorphic); anywhere else such a receiver deoptimizes, as V8's map
-// checks do, and the code is compiled again for what the cache learned. An
-// inlined callee's site is as the callee's own code has found it.
-func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
-	var c *propCache
-	in := fb.fn.Code[pc]
-	if int(in.B) < len(fb.cl.ic) {
-		c = &fb.cl.ic[in.B]
-	}
-	return fb.megamorphicOf(pc, c, in.Op == bytecode.OpSetProp, site)
-}
-
 // megamorphicOf is megamorphic's, of either form's code: the site at pc,
 // its cache c (nil for none), a write's or a read's.
 func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.PropertySite) bool {
@@ -335,16 +260,11 @@ func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.
 	}
 	e := fb.e
 	if fb.root != nil && (e == nil || !e.reg) {
-		// An inlined callee's of the stack form, whose feedback holds no
-		// entry: what its own code learned. A register callee's holds
-		// what its code learned (regLearned), which a deoptimization of
-		// the code inlining it learns in too: asked of the stack form's
-		// cache, which holds nothing of it, a write it learned was
-		// megamorphic was compiled for its one shape again at every
-		// compile of its callers, each deoptimizing there --
-		// Typescript's returnResolutionData, rd.actuals.length = 0,
-		// twelve compiles of its caller.
-		e = fb.r.jit.entryFor(fb.fn)
+		// An inlined callee's whose feedback holds no register entry:
+		// nothing its own code learned. A register callee's holds what
+		// its code learned (regLearned), which a deoptimization of the
+		// code inlining it learns in too.
+		return false
 	}
 	if e != nil {
 		for i := range e.poly {
@@ -371,142 +291,6 @@ func (fb *jitFeedback) dataSeen(pc int, c *propCache) bool {
 		}
 	}
 	return false
-}
-
-// accessorCall is the native call of an accessor, callee, cl its closure,
-// a read or a write makes, through its function's link (jitLink), as a
-// call the code makes natively is (NativeCalls): the receiver its this, a
-// setter's value its argument. Only the function's own code calls one
-// natively; a callee with no code for native callers yet is compiled
-// after (wanted, linked), and called by Go until it has.
-func (fb *jitFeedback) accessorCall(cl *closure, callee *Object, write bool) (ssa.CallSite, bool) {
-	if fb.root != nil {
-		return ssa.CallSite{}, false
-	}
-	ce := fb.r.jit.entryFor(cl.fn)
-	var link *jitLink
-	switch {
-	case ce != nil && ce.ssa != nil:
-		link = ce.link
-	case ce != nil && (ce.calleeRefused || ce.ssaCallee), !fb.r.jitLinkable(cl):
-		if !slices.Contains(fb.wanted, cl) {
-			fb.wanted = append(fb.wanted, cl)
-		}
-		return ssa.CallSite{}, false
-	default:
-		link = fb.r.jit.linkOf(cl.fn)
-		if !slices.Contains(fb.linked, cl) {
-			fb.linked = append(fb.linked, cl)
-		}
-	}
-	fn := cl.fn
-	this := -1
-	if fn.UsesThis {
-		this = fn.LocalCount + len(fn.Upvalues)
-	}
-	fb.links = append(fb.links, link)
-	site := ssa.CallSite{
-		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
-		Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
-		Argc: jitB2i(write), Method: true,
-		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
-		// A setter's value its one argument, a getter none: written to its
-		// context where its code reads them (jitFrameArgs).
-		FrameArgs: jitFrameArgs(fn), Function: jitFrameCallee(fn),
-	}
-	if fn.HasTailCall {
-		// As a method call's: its calls in tail position may give its
-		// frame up.
-		site.Tail, site.TailFrame = true, true
-	}
-	if len(cl.upvalues) != 0 {
-		// Its captured bindings, the closure's of the one function object
-		// the guards found.
-		site.Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(cl.upvalues)))
-	}
-	site.StartOnly = jitcompile.StartOnly(fn)
-	return site, true
-}
-
-// jitLevelCallee is the function object a level native code made a frame
-// for at the call at pc of caller's code is running, where it is known: an
-// accessor's, a read's or a write's, whose getter or setter the receiver,
-// this, has, as a stack trace names it (methodName). Or nil.
-func (r *Runtime) jitLevelCallee(caller *bytecode.Function, pc int, this Value) *Object {
-	if caller == nil || pc < 0 || pc >= len(caller.Code) || !this.IsObject() {
-		return nil
-	}
-	in := caller.Code[pc]
-	if in.Op != bytecode.OpGetProp && in.Op != bytecode.OpSetProp || int(in.A) >= len(caller.Names) {
-		return nil
-	}
-	key := r.atoms.intern(caller.Names[in.A])
-	for o := this.Object(); o != nil; o = o.proto() {
-		i := o.findOwn(key)
-		if i < 0 {
-			continue
-		}
-		if int(i) >= int(o.valn) {
-			return nil
-		}
-		pair := o.vals()[i].accessorPair()
-		switch {
-		case pair == nil:
-			return nil
-		case in.Op == bytecode.OpSetProp:
-			return pair.setter
-		}
-		return pair.getter
-	}
-	return nil
-}
-
-// jitPropertyMade makes, for native code, the property read or write of
-// the instruction at pc of cl's code, its operands on the VM's stack up to
-// sp (abi.GoCallGet, GoCallSet), as the interpreter makes it, through the
-// site's cache: a getter or a setter is called, with the receiver as its
-// this. A write's result is undefined.
-func (r *Runtime) jitPropertyMade(cl *closure, pc, sp int) (Value, error) {
-	in := cl.fn.Code[pc]
-	key := cl.names[in.A]
-	if in.Op == bytecode.OpSetProp {
-		obj, val := r.stack[sp-2], r.stack[sp-1]
-		if obj.IsObject() && int(in.B) < len(cl.ic) {
-			return Undefined, r.setPropCached(&cl.ic[in.B], obj.Object(), key, val, cl.fn.Strict)
-		}
-		return Undefined, r.setValueProp(obj, key, val, cl.fn.Strict)
-	}
-	obj := r.stack[sp-1]
-	if in.Op == bytecode.OpGetPropUnder {
-		// An object pattern's, whose B is no cache: its source's own
-		// table, or the read.
-		if obj.IsObject() {
-			if v, ok := plainOwn(obj.Object(), key); ok {
-				return v, nil
-			}
-		}
-		return r.getValueProp(obj, key)
-	}
-	if obj.IsObject() && int(in.B) < len(cl.ic) {
-		o := obj.Object()
-		if in.Op == bytecode.OpGetPropThis {
-			// As the interpreter reads a method: through its cache, which
-			// holds no getter (cachedProp), where cachedGet's entry for one
-			// had been taken by the interpreter for the getter's pair as the
-			// property's value, the method an object no call could make.
-			if v, ok := r.cachedProp(&cl.ic[in.B], o, key); ok {
-				return v, nil
-			}
-			return r.getValueProp(obj, key)
-		}
-		if v, ok := plainOwn(o, key); ok {
-			return v, nil
-		}
-		if v, ok, err := r.cachedGet(&cl.ic[in.B], o, key); ok {
-			return v, err
-		}
-	}
-	return r.getValueProp(obj, key)
 }
 
 // jitB2i is 1 for true, 0 for false.

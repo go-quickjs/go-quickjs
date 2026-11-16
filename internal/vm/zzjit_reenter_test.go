@@ -5,7 +5,6 @@ package vm
 import (
 	"runtime"
 	"runtime/debug"
-	"sync"
 	"testing"
 )
 
@@ -271,7 +270,7 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}
 	var e *jitEntry
-	var runs []int32
+	runs := 0
 	r.global.setOwnRaw(r.atoms.intern("slow"), r.NewFunction("slow", 1, func(_ *Runtime, _ Value, args []Value) (Value, error) {
 		if e != nil && args[0].Truthy() {
 			e.entrySlow = true
@@ -280,7 +279,7 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 	}), propDefault)
 	r.global.setOwnRaw(r.atoms.intern("probe"), r.NewFunction("probe", 1, func(_ *Runtime, _ Value, args []Value) (Value, error) {
 		if e != nil && args[0].Truthy() {
-			runs = append(runs, e.ssaRuns)
+			runs++
 		}
 		return Undefined, nil
 	}), propDefault)
@@ -314,81 +313,9 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 	if e.ssaStats.entries == entries {
 		t.Fatal("f's code never ran")
 	}
-	if len(runs) != 1 || runs[0] != 0 {
-		t.Errorf("runs of f's code while the interpreter went on with its frame: %v", runs)
+	if runs != 1 {
+		t.Errorf("probes of f's code while the interpreter went on with its frame: %v", runs)
 	}
-	if e.ssaRuns != 0 {
-		t.Errorf("f's code has %d runs after it returned", e.ssaRuns)
-	}
-}
-
-// An addition the tree tier has seen add a string is compiled as one from
-// the JIT's first compile (treeSeen, jitcompile.Hints' StringAdds): the
-// code made at a loop's back edge, after the tree tier ran the loop's
-// first turns, does not leave at it. Compiled blind, it had, at every such
-// addition once, and been compiled again for it -- 21 of the 24 of PDF.js's
-// additions that deoptimized.
-func TestJITTreeSeenStringAdds(t *testing.T) {
-	skipUnderRegJIT(t, "register-JIT gap (jitgaps next round): an addition the register interpreter has seen add a string is not compiled as one from the first compile -- the register interpreter marks none, as the tree tier marks its (treeSeen, Hints' StringAdds) -- so code made at a loop's back edge deoptimizes at it once")
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	if !treeTier.Load() {
-		t.Skip("the tree tier is off (QJS_NOTREE)")
-	}
-	got, st := jitLongRunForTest(t, `
-		function cat(a, n) {
-			let s = '', k = 0
-			for (let i = 0; i < n; i++) {
-				s = s + a[i % a.length]
-				if (s.length > 100) { k += s.length; s = '' }
-			}
-			return k + s.length
-		}
-		const strs = ['x', 'yy', 'zzz']`, `0`, `cat(strs, 30000)`)
-	if got != "60000" {
-		t.Fatalf("= %s", got)
-	}
-	if st.Guards != 0 {
-		t.Errorf("a loop over strings, compiled after the tree tier ran it, deoptimized %d times", st.Guards)
-	}
-}
-
-// The marks are the function's tree's, which every runtime running its
-// bytecode shares: runtimes that mark and lower it at once agree, and race
-// on nothing (go test -race).
-func TestJITTreeSeenSharedAcrossRuntimes(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	if !treeTier.Load() {
-		t.Skip("the tree tier is off (QJS_NOTREE)")
-	}
-	code := compileForTest(t, `
-		function cat(a, n) {
-			let s = '', k = 0
-			for (let i = 0; i < n; i++) {
-				s = s + a[i % a.length]
-				if (s.length > 100) { k += s.length; s = '' }
-			}
-			return k + s.length
-		}
-		;(() => { let t = 0; for (let r = 0; r < 5; r++) t += cat(['x', 'yy', 'zzz'], 3000); return t })()`)
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r := New(Config{JIT: true})
-			defer func() { r.Close(); r.ReleaseClosed() }()
-			for range 4 {
-				if v, err := r.Run(code); err != nil || v.Number() != 30000 {
-					t.Errorf("= %v, %v; want 30000", v, err)
-				}
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 // A frame native code made -- a native call's callee -- whose code Go

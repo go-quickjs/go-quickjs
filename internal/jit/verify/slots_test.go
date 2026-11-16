@@ -10,7 +10,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -46,7 +45,7 @@ func loweredSSA(t *testing.T, src string) []*ir.Program {
 	var out []*ir.Program
 	for _, c := range top.Constants {
 		if c.Kind == bytecode.ConstFunction {
-			p, err := jitcompile.LowerSSA(c.Fn)
+			p, err := regLowerForTest(c.Fn)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,6 +73,7 @@ func TestMirManySlots(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%d locals (%d): %v", n, i, err)
 				}
+				regShape(f, p)
 				f.CallEntry = true
 				ssa.Optimize(f)
 				for _, arch := range arches {

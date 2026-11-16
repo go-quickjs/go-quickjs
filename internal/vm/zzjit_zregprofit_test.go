@@ -10,10 +10,10 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
-// The register form's judgements of whether a native callee's code pays,
-// against the stack form's: a small hot callee its native callers call
-// stays native, or is called natively again once its retry is due; a
-// callee that really costs more natively is declined.
+// The register form's judgements of whether a native callee's code pays: a
+// small hot callee its native callers call stays native, or is called
+// natively again once its retry is due; a callee that really costs more
+// natively is declined.
 
 // regProfitRun runs src on both of rts, calling fn with args times times,
 // and returns what the last call answered in each, which must be want.
@@ -47,10 +47,9 @@ func regProfitEntry(t *testing.T, r *Runtime, name string) (*closure, *jitRegEnt
 // TestJITRegNotNativeRetriedByNativeCallers has a callee its native caller
 // no longer calls natively (notNative), judged slow too, which Go does not
 // enter (entrySlow), and checks that the caller's calls of it, which Go
-// makes, count toward its being called natively again
-// (jitRegRetryNative), as the stack form's jitKnownTargetSeen counts
-// them: after jitNativeRetry of them the caller calls it natively. Counted
-// only at the calls Go entered it for, which it did not, it stayed in the
+// makes, count toward its being called natively again (jitRegRetryNative):
+// after jitNativeRetry of them the caller calls it natively. Counted only
+// at the calls Go entered it for, which it did not, it stayed in the
 // interpreter: AWFY's CD's Vector and append, 700,000 calls a run.
 func TestJITRegNotNativeRetriedByNativeCallers(t *testing.T) {
 	const src = `
@@ -91,8 +90,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
 // TestJITRegCalleeJudgedAfresh checks that a native callee's calls of Go
 // are counted afresh with its native callers' calls (its link's in) --
 // when it is compiled again (jitRegCached), and when native callers call
-// it again (jitRegRetryNative) -- as the stack form's are (its ssaStats
-// begun anew, jitRetryNative's reset): counted over its compiles against
+// it again (jitRegRetryNative): counted over its compiles against
 // calls counted only since, the callee was judged not to pay at its next
 // look. AWFY's Json's putIntoMap, compiled again, was judged so at once.
 func TestJITRegCalleeJudgedAfresh(t *testing.T) {
@@ -136,13 +134,12 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
 }
 
 // TestJITRegCalleeThatLosesDeclined checks the other side of the native
-// callee's judgement (jitRegCalleeProfit), as the stack form's
-// TestJITCalleeProfit does: heavy, called natively, makes ten calls of Go
-// a call with a few instructions between, which cost it more than its
-// native callers' calls save -- native callers call it through Go
-// (notNative) and Go does not enter it (entrySlow); light makes one a
-// call after a loop of forty turns, and its native callers keep calling
-// it.
+// callee's judgement (jitRegCalleeProfit): heavy, called natively, makes
+// ten calls of Go a call with a few instructions between, which cost it
+// more than its native callers' calls save -- native callers call it
+// through Go (notNative) and Go does not enter it (entrySlow); light makes
+// one a call after a loop of forty turns, and its native callers keep
+// calling it.
 func TestJITRegCalleeThatLosesDeclined(t *testing.T) {
 	const src = `
 function heavy(x) { var s = 0; for (var k = 0; k < 10; k++) s += JSON.stringify((x + k) & 7).length; return s }
@@ -182,8 +179,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + heavy(i) + lig
 // native code at every call, nor do its native callers stop calling it;
 // and that a host exit at the read, its site not megamorphic, is a shape
 // miss (jitRegShapeMiss), which has the caller compiled again for the new
-// shape, as the stack form's unwinding has it (jitFinishExit,
-// jitShapeMiss). AWFY's Dictionary.at, compiled while DeltaBlue's keys
+// shape. AWFY's Dictionary.at, compiled while DeltaBlue's keys
 // were hashed, left so at each of Havlak's two million calls.
 func TestJITRegInlinedShapeMissCompiledAgain(t *testing.T) {
 	const src = `
@@ -312,9 +308,8 @@ function run(n) { var t = 0; for (var i = 0; i < n; i++) t += mk(i & 7); return 
 // objects in the interpreter, then has a hot caller compile the function
 // making it, and checks that its first code calls each class's method
 // natively, the four seeded from what the method read's cache saw
-// (jitRegSeenCallees), as the stack form's first compile seeds them
-// (jitSeenCallees): not one, the site's call cache's, the others learned an
-// exit at a time, a budget waited for each compile -- V8's Richards'
+// (jitRegSeenCallees): not one, the site's call cache's, the others learned
+// an exit at a time, a budget waited for each compile -- V8's Richards'
 // TaskControlBlock.run left native code at 344 of its first run's calls.
 func TestJITRegPolymorphicCallSeeded(t *testing.T) {
 	const src = `

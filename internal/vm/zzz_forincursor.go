@@ -14,7 +14,7 @@ package vm
 // for...in's cursor alone, and a drop; after a leaving iter_close, the
 // jump out. So nothing reads the cursor again, whenever the next loop
 // takes it.
-// Every loop's start comes through here, from every tier, native code's by
+// Every loop's start comes through here, the interpreter's and native code's by
 // jitForInPlain, so native code needs no release of its own.
 //
 // What that rests on. No script reaches a cursor, so its loop is its only
@@ -35,10 +35,10 @@ package vm
 // each time the collector has run and when its turn ends
 // (clearReturnedFrames), as it does a stale slot's value.
 //
-// The code here is generic, instantiated with struct{}, as zzz_zliteral.go's,
-// and newForInObject checks the last in place: 32 bytes off it for the 32
-// clearReturnedFrames gains, so that the hot paths, past both, stay where
-// they were.
+// The code here is generic, instantiated with struct{}, laid out after
+// every function and closure of the package, and newForInObject checks
+// the last in place: 32 bytes off it for the 32 clearReturnedFrames gains,
+// so that the hot paths, past both, stay where they were.
 
 // forInCursor is newForInObject's new cursor over in, kept unless it is
 // made done.

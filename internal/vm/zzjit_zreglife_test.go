@@ -23,10 +23,9 @@ func regReportOf(r *Runtime, name string) (JITFunction, bool) {
 // has no entry -- after a loop of a built-in's call it makes natively, the
 // call given a Set's forEach every other turn, which Go makes -- and checks
 // that the frame goes on natively at the loop's next back edge
-// (jitRegLeaveTo, jitRegLoop's forced check), as the stack form's jitGoOn
-// has it, the interpreter running that turn's rest only: before, it ran
-// the rest of the invocation, and native code was entered again only at a
-// sample a back-edge budget later.
+// (jitRegLeaveTo, jitRegLoop's forced check), the interpreter running that
+// turn's rest only: before, it ran the rest of the invocation, and native
+// code was entered again only at a sample a back-edge budget later.
 func TestJITRegGoesOnAtBackEdge(t *testing.T) {
 	const src = `
 function loop(n) {
@@ -69,11 +68,10 @@ function loop(n) {
 
 // TestJITRegLearnedStaysValid has register code learn a call at a call of
 // Go -- a callee compiled after it -- and checks that it stays its
-// function's code, called by native callers and entered by Go, until it
-// has spent a budget since, then is compiled again for it (jitRegReopt,
-// jitRegLearnedDue), as the stack form's code is (jitLearnedDue). Before,
-// learning dropped it from its closure and its link at once, until two
-// more samples.
+// function's code, called by native callers and entered by Go, until it has
+// spent a budget since, then is compiled again for it (jitRegReopt,
+// jitRegLearnedDue). Before, learning dropped it from its closure and its
+// link at once, until two more samples.
 func TestJITRegLearnedStaysValid(t *testing.T) {
 	const src = `
 function add(a, b) { return a + b }
@@ -198,8 +196,8 @@ function drive(n) { var o = { a: 1 }, s = 0; for (var i = 0; i < n; i++) s += ge
 // TestJITRegInstallsAtCall compiles a function's register code in the
 // background and checks that a call of it from the interpreter -- at a
 // site the interpreter's caches answer, no sample -- installs the code
-// once done and enters it (jitEnters, jitRegEnter), as the stack form's
-// calls install theirs (tryJITAt): before, only a sample installed it.
+// once done and enters it (jitEnters, jitRegEnter): before, only a sample
+// installed it.
 func TestJITRegInstallsAtCall(t *testing.T) {
 	const src = `
 function f(x) { var s = 0; for (var i = 0; i < x; i++) s += i; return s }
@@ -238,16 +236,15 @@ function g(n) { return f(n) }
 
 // TestJITRegOSRAtDroppedEntry compiles a function whose loop carries an
 // object escape analysis leaves unmade, which drops the loop's entry
-// (ssa.Func's Unentered, register pcs both), and checks, as the stack
-// form's TestJITLearnsLoopEntry does: that a compile a frame waiting at the
-// loop asks for keeps the entry (jitRegFrameAt, the stack form's
-// jitFrameAt); and that a frame found twice at the loop's header with no
-// entry has the function compiled apart with it (jitRegLoopCode, as
-// jitLearnLoopEntry), the code it goes on in giving what the interpreter
-// gives. Before, the dropped headers were kept as instructions of the
-// program mapped through it as though they were (never matching), the
-// compile for the frame asked an instruction as FrameAt (dropping the
-// entry again), and no other compile asked one at all.
+// (ssa.Func's Unentered, register pcs both), and checks that a compile a
+// frame waiting at the loop asks for keeps the entry (jitRegFrameAt); and
+// that a frame found twice at the loop's header with no entry has the
+// function compiled apart with it (jitRegLoopCode), the code it goes on in
+// giving what the interpreter gives. Before, the dropped headers were kept
+// as instructions of the program mapped through it as though they were
+// (never matching), the compile for the frame asked an instruction as
+// FrameAt (dropping the entry again), and no other compile asked one at
+// all.
 func TestJITRegOSRAtDroppedEntry(t *testing.T) {
 	const src = `
 function sum(n) { var s = { v: n - n }, i = 0; do { s.v = s.v + i; i++ } while (i < n); return s.v }

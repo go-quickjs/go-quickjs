@@ -227,8 +227,8 @@ func regNativeAdd(sum, now, before vm.RegNativeStats) vm.RegNativeStats {
 }
 
 // TestRegNativeCall is the native code made from register code's
-// differential test (docs/register-interpreter.md, Stage 3, 3a-3's step
-// A): the register interpreter's corpus (the regDiff tests) compiled, and
+// differential test (docs/register-interpreter.md, "Tiering to the JIT"):
+// the register interpreter's corpus (the regDiff tests) compiled, and
 // its top-level functions run with numbers as their arguments by native
 // code compiled at their first call, from their start and by on-stack
 // replacement (vm.RegNativeCall), each answer compared with an ordinary

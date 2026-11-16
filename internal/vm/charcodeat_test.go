@@ -8,8 +8,8 @@ import "testing"
 // past either end, a lone surrogate -- and makes the call for anything else:
 // a position of another type, whose conversion runs script, a String
 // object, an object with a method of that name, and the built-in replaced
-// on String.prototype, which the same site then calls. The answers are the
-// interpreter's and the trees' alike, and Node's.
+// on String.prototype, which the same site then calls. The answers are
+// Node's.
 func TestCharCodeAtNode(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -32,15 +32,13 @@ func TestCharCodeAtNode(t *testing.T) {
 	// Node's answer.
 	const one = "97,98,97,97,55296,99,NaN,NaN,NaN,97,v,98,99,98,97,121,own7"
 	const want = one + "," + one + "," + one + ",patched1,98,true"
-	for _, tree := range []bool{false, true} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }

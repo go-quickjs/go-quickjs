@@ -15,8 +15,8 @@ import (
 // classes as the callback; a callback that throws; a buffer detached by
 // transfer, and a resizable one shrunk and grown, during the loop; map's
 // and filter's species; writes the callback makes. Each method runs on
-// each kind three times, so that its callbacks run as trees and as pure
-// bodies.
+// each kind three times, so that its callbacks run as register code and
+// as pure bodies.
 const typedCallbackScript = `(function () {
 	var out = [];
 	function show(v) {
@@ -554,7 +554,7 @@ func diffLinesForTest(t *testing.T, round int, got, want string) {
 // A typed array's callback methods allocate nothing for each element: the
 // arguments its callback is called with are a list made once for the loop,
 // as Array.prototype's methods make it, whether the callback is answered
-// as a pure body or run as its tree.
+// as a pure body or run as its register code.
 func TestTypedArrayCallbacksAllocateOncePerLoop(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()

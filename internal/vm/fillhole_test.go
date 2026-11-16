@@ -3,13 +3,13 @@ package vm
 import "testing"
 
 // An element stored where new Array(n) left a hole is stored in place
-// (fillHole), by the tree tier's set_index and by setIndexed, where the
+// (fillHole), by register code's set_index and by setIndexed, where the
 // store is a new element's: in order and out of order, on a subclass's
 // array and on one whose length is not writable; and not where it is not
 // -- a frozen, a sealed or a non-extensible array, which a strict store
 // throws on, a setter or a read-only element on Array.prototype or
 // Object.prototype, which is asked instead. Each answer is Node's, three
-// rounds alike, on the trees and in the interpreter.
+// rounds alike.
 func TestFillHoles(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -46,16 +46,14 @@ func TestFillHoles(t *testing.T) {
 		}
 		out[0] + '\n' + (out[0] === out[1] && out[1] === out[2])`
 	const want = "0,10,20,30 | ,10,,30/1,3 | 3:0:TypeError | ,,:TypeError | ,:TypeError | 0,,20:3:ok:TypeError | 0,,20 | 0,10,,30:A20 | 0,,20:A20O10 | ro,10:TypeError | 0,10,20\ntrue"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }
 

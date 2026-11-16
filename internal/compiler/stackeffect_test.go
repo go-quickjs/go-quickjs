@@ -11,8 +11,7 @@ import (
 // sized by. A RegExp literal, a tagged template's strings, a private name
 // and a using declaration's capability were once counted as pushing
 // nothing, so a function whose deepest point held one had a stack a slot
-// short: the interpreter wrote past its frame, into the next call's, and
-// the tree tier, which slices a frame to its size, failed outright.
+// short: the interpreter wrote past its frame, into the next call's.
 func TestStackEffectOfPushes(t *testing.T) {
 	for _, op := range []bytecode.Op{
 		bytecode.OpNewRegExp, bytecode.OpTemplateObject,

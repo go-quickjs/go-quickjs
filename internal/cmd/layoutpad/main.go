@@ -135,12 +135,7 @@ type position struct {
 var positions = []position{
 	{"A", "aa_layoutpad.go", "before every file of package vm: the built-ins"},
 	{"D", "defg_layoutpad.go", "after deferred.go, before define.go: the files after the built-ins"},
-	{"R", "tree_a_layoutpad.go", "after temporal_yearmonth.go, before tree_build.go: the tree's builder and slow paths"},
-	{"V", "vl_layoutpad.go", "after value.go, before vm.go: executeAt"},
-	{"B", "vm_b_layoutpad.go", "after vm_amath.go, before vm_call.go: callObject, callDirect"},
-	{"F", "vm_call_b_layoutpad.go", "after vm_call.go, before vm_call_run.go: runFD"},
-	{"S", "vm_sz_layoutpad.go", "after vm_shape.go, before vm_tree.go: runTree, backEdgeCheck"},
-	{"T", "zcall_tl_layoutpad.go", "after zcall_tail.go, before zcall_tree.go: callTree, runTreeNested"},
+	{"B", "vm_b_layoutpad.go", "after vm_amath.go, before vm_call.go: callObject, callDirect, runFD"},
 	{"J", "zzj_layoutpad.go", "after zzbigown.go, before the JIT's zzjit files"},
 	{"Q", "zzreg_ru_layoutpad.go", "after zzreg_report.go, before zzreg_run.go: the register interpreter's loop, runReg"},
 	{"W", "zzreg_run_a_layoutpad.go", "after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},

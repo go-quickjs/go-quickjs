@@ -7,9 +7,6 @@ package vm
 // through callObject again. The arguments are put together on the
 // runtime's argument stack, where a callee may not keep them, rather than
 // in a list made for the call.
-//
-// It is in the package's last file with the tail calls, and for the same
-// reason: see zcall_tail.go.
 func (r *Runtime) callBound(fd *funcData, args []Value) (Value, error) {
 	// Each bound function in a chain is a level of Go recursion with no
 	// frame of its own, so it is counted, or a long enough chain would take

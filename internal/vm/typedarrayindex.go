@@ -123,10 +123,9 @@ func typedStore(obj Value, key float64, v Value) bool {
 // there, or false where getElem has to -- a view that tracks its buffer's
 // length, one whose buffer has been detached or has shrunk past its end, a
 // key that is no index below its length, a BigInt or Float16 element --
-// or for any other value. Its every check is its own, so that the tree
-// tier's nodes, which ask it where elemAt has found no element, make one
-// call for it: the inliner gives a node of the tree builder's none of the
-// calls it would inline elsewhere.
+// or for any other value. Its every check is its own, so that the
+// interpreter's miss path, which asks it where elemAt has found no element
+// (regElemMiss), makes one call for it.
 // Through typedElemIndex and getElem, a read took two calls, two type
 // assertions and the buffer's storage looked up anew each time: Mandreel's
 // heap, and the Game Boy's memory, are read so at every turn.

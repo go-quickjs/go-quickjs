@@ -12,8 +12,6 @@ import (
 // functions by name.
 func regFunctions(t *testing.T, src string) map[string]*bytecode.Function {
 	t.Helper()
-	SetRegisterForm(true)
-	defer SetRegisterForm(bytecode.RegDefault())
 	prog, err := parser.Parse(src, parser.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -150,12 +148,5 @@ func TestRegisterBackendFallsBack(t *testing.T) {
 	}
 	if f := fns["plain"]; f == nil || f.RegCode() == nil {
 		t.Errorf("plain has no register code")
-	}
-	// The stack form is the same with the backend on as off.
-	prog, _ := parser.Parse(`function plain(x) { return x + 1 }`, parser.Options{})
-	off, _ := Compile(prog, Options{NoRegister: true})
-	on := regFunctions(t, `function plain(x) { return x + 1 }`)["plain"]
-	if a, b := off.Constants[0].Fn.Disassemble(), on.Disassemble(); a != b {
-		t.Errorf("the stack form differs with the backend on:\n%s\nwant:\n%s", b, a)
 	}
 }

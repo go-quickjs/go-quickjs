@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // An element read with its key updated, a[i++] or a[--i], whose value is
@@ -36,17 +35,12 @@ func TestJITElementUpdateReadsCells(t *testing.T) {
 		// its code's failed guards name.
 		var update func(site int32) bool
 		var sites int
-		if jitRegCodeForTest(r, name) {
-			rc := jitGlobalClosureForTest(r, name).fn.RegCode()
-			update = func(rpc int32) bool {
-				op := rc.Code[rpc].Op()
-				return op == bytecode.RGetIndexPost || op == bytecode.RGetIndexPre
-			}
-			sites = len(rc.Code)
-		} else {
-			update = func(pc int32) bool { return e.ssaProg.Code[pc].Op == ir.ArrayUpdate }
-			sites = len(e.ssaProg.Code)
+		rc := jitGlobalClosureForTest(r, name).fn.RegCode()
+		update = func(rpc int32) bool {
+			op := rc.Code[rpc].Op()
+			return op == bytecode.RGetIndexPost || op == bytecode.RGetIndexPre
 		}
+		sites = len(rc.Code)
 		updates := 0
 		for site := range sites {
 			if update(int32(site)) {
@@ -61,23 +55,17 @@ func TestJITElementUpdateReadsCells(t *testing.T) {
 				t.Errorf("%s: the update's read failed its guard", name)
 			}
 		}
-		if jitRegCodeForTest(r, name) {
-			// Register code's counts outlive its compiles: its last code's
-			// are those of a run of it now, in which it fails no guard and
-			// is not replaced.
-			code, guards := jitRegEntryForTest(r, name), e.ssaStats.guards
-			v, err := r.Run(compileForTest(t, name+"(objs, 64)"))
-			want := map[string]string{"walk": "2016k6364", "back": "-726101408,0"}[name]
-			if err != nil || v.String().Go() != want {
-				t.Fatalf("%s(objs, 64) = %v, %v; want %s", name, v, err, want)
-			}
-			if n := e.ssaStats.guards - guards; n != 0 || jitRegEntryForTest(r, name) != code {
-				t.Errorf("%s: %d guards failed in its last code", name, n)
-			}
-			continue
+		// Register code's counts outlive its compiles: its last code's
+		// are those of a run of it now, in which it fails no guard and
+		// is not replaced.
+		code, guards := jitRegEntryForTest(r, name), e.ssaStats.guards
+		v, err := r.Run(compileForTest(t, name+"(objs, 64)"))
+		want := map[string]string{"walk": "2016k6364", "back": "-726101408,0"}[name]
+		if err != nil || v.String().Go() != want {
+			t.Fatalf("%s(objs, 64) = %v, %v; want %s", name, v, err, want)
 		}
-		if e.ssaStats.guards != 0 {
-			t.Errorf("%s: %d guards failed in its last code", name, e.ssaStats.guards)
+		if n := e.ssaStats.guards - guards; n != 0 || jitRegEntryForTest(r, name) != code {
+			t.Errorf("%s: %d guards failed in its last code", name, n)
 		}
 	}
 }

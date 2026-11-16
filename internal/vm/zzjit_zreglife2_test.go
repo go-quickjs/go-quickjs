@@ -22,14 +22,13 @@ func regBothMarking(t *testing.T, f func(t *testing.T)) {
 }
 
 // TestJITRegNoContextDeclines runs a recursion of native calls deeper than
-// the JIT has contexts at first, whose deepest levels call a compiled
-// leaf, and checks that the contexts grow to its depth and Go never
-// enters code past the last context, as the stack form's runSSA declines
-// it: no run ends in the interpreter for want of one. Before, each such call entered its callee's code, found no context
-// for its run and finished in the interpreter, counted as an entry that did
-// no work: AWFY's Havlak, whose
-// depth-first search recurses past the contexts, finished 2.7 million
-// runs so, each judged against its code.
+// the JIT has contexts at first, whose deepest levels call a compiled leaf,
+// and checks that the contexts grow to its depth and Go never enters code
+// past the last context: no run ends in the interpreter for want of one.
+// Before, each such call entered its callee's code, found no context for
+// its run and finished in the interpreter, counted as an entry that did no
+// work: AWFY's Havlak, whose depth-first search recurses past the contexts,
+// finished 2.7 million runs so, each judged against its code.
 func TestJITRegNoContextDeclines(t *testing.T) {
 	const src = `
 function leaf(o) { return o.v + 1 }
@@ -82,8 +81,7 @@ func regBothMarkingNative(t *testing.T, f func(t *testing.T)) {
 // TestJITRegCountedTierUp calls a function from Go, one call at a time, and
 // checks it is compiled once its runs have spent its budget, counted: not
 // before jitCallThreshold runs, and at the call after the run that spent
-// it, as the stack form's invocations each spend its budget (jitTierWork)
-// -- the second call begins it with the first run counted (jitRegHot's
+// it -- the second call begins it with the first run counted (jitRegHot's
 // warming spends what its first sample counted), the feedback
 // dispatcher's returns count the rest down (jitRegArm), and the call after
 // the last goes to Go (jitRegCallTier). Before, a sample of the interrupt
@@ -126,13 +124,12 @@ function g() { return f(o) }
 
 // TestJITRegInterpretedCallsEnter compiles a function first, then has a
 // caller the interpreter runs -- the JIT refuses it -- call it in a loop,
-// and checks that every call goes to its code, from the native call
-// handler with no exit (nativeJITCall): the site's cache is filled with
-// the callee that has code (nativeCallMiss, regCallSlow), as with any
-// other, and its calls go to the JIT as the stack form's calls do
-// (tryJITFrame). Before, the site was marked for regCallSlow, every call
-// of it made by the generic call path, and the call handler left a callee
-// with code to rhCallW by an exit.
+// and checks that every call goes to its code, from the native call handler
+// with no exit (nativeJITCall): the site's cache is filled with the callee
+// that has code (nativeCallMiss, regCallSlow), as with any other, and its
+// calls go to the JIT. Before, the site was marked for regCallSlow, every
+// call of it made by the generic call path, and the call handler left a
+// callee with code to rhCallW by an exit.
 func TestJITRegInterpretedCallsEnter(t *testing.T) {
 	const src = `
 function f(o, i) { return o[0] + i }
@@ -172,13 +169,12 @@ function g(n) { var o = [1], s = 0; for (var i = 0; i < n; i++) s += f(o, i); re
 	})
 }
 
-// TestJITRegLoopOfGoCallsLeaves runs a loop entered by on-stack
-// replacement whose every turn is a call of Go and little else, and checks
-// that once its calls are judged not to pay (jitRegRunGoProfit) the run
-// leaves after the call it judged at, as the stack form's does
-// (jitRunGoProfit's result), and the interpreter runs the loop. Before,
-// the judgement was made and its result dropped: the loop ran its calls
-// of Go natively to its end.
+// TestJITRegLoopOfGoCallsLeaves runs a loop entered by on-stack replacement
+// whose every turn is a call of Go and little else, and checks that once
+// its calls are judged not to pay (jitRegRunGoProfit) the run leaves after
+// the call it judged at, and the interpreter runs the loop. Before, the
+// judgement was made and its result dropped: the loop ran its calls of Go
+// natively to its end.
 func TestJITRegLoopOfGoCallsLeaves(t *testing.T) {
 	const src = `
 function f(n) { var s = 0; for (var i = 0; i < n; i++) s += JSON.stringify(i & 7).length; return s }
@@ -213,10 +209,9 @@ function f(n) { var s = 0; for (var i = 0; i < n; i++) s += JSON.stringify(i & 7
 }
 
 // TestJITRegLoopMeanInProgramUnits checks that the loops' mean length a
-// stretch's back edges are counted by is in the program's instructions,
-// the units jitSSAMinWork is in, as the stack form's jitLoopLength is in
-// its own: the distance from each backward jump's target to it, as
-// lowered (irLoopMean).
+// stretch's back edges are counted by is in the program's instructions, the
+// units jitSSAMinWork is in: the distance from each backward jump's target
+// to it, as lowered (irLoopMean).
 func TestJITRegLoopMeanInProgramUnits(t *testing.T) {
 	const src = `
 function f(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * 2 + 1; return s }
@@ -244,14 +239,14 @@ function f(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * 2 + 1;
 	}
 }
 
-// TestJITRegSlowResumptionsSkip resumes, through a yield*, generators
-// whose code leaves at each resumption -- at the yield* it does not make
+// TestJITRegSlowResumptionsSkip resumes, through a yield*, generators whose
+// code leaves at each resumption -- at the yield* it does not make
 // natively, at a yield with a capture open -- and checks that once judged
 // slow their resumptions are no longer entered, the next jitSSAProbe of
-// them run in the interpreter without a look at the code
-// (jitResumeSkip), until retried, as the stack form's jitResume has it.
-// Before, every resumption entered the code, which left at once: AWFY-like
-// generator_delegate's 400,000 resumptions each an entry and an exit.
+// them run in the interpreter without a look at the code (jitResumeSkip),
+// until retried. Before, every resumption entered the code, which left at
+// once: AWFY-like generator_delegate's 400,000 resumptions each an entry
+// and an exit.
 func TestJITRegSlowResumptionsSkip(t *testing.T) {
 	const src = `
 function* count(n) { for (var i = 0; i < n; i++) yield i }

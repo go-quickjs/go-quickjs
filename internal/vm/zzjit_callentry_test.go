@@ -5,17 +5,14 @@ package vm
 import (
 	"runtime/debug"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 )
 
 // A callee's locals past its parameters are undefined when a native call
-// enters it, though its code's start, a loop's target, is no place to make
-// them so (compile.StartOnly): its call entry makes them undefined (mir's
-// callEntry), and Go, which runs a callee with no call entry from its
-// start (abi.ExitEnter), does (jitStartLocals) -- no call writes them
-// now. Each callee here reads such a local before it assigns it, in a
+// enters it, though register code's start is no place to make them so
+// (ssa.Func's StartOnly, false for register code): its call entry makes
+// them undefined (mir's callEntry), and Go, which runs a callee with no
+// call entry from its start (abi.ExitEnter), does (jitStartLocals) -- no
+// call writes them now. Each callee here reads such a local before it assigns it, in a
 // frame where the call before wrote its third argument, the same slot,
 // past the VM's stack's top: left as it was, it reads 777.
 func TestJITCallEntryClearsLocals(t *testing.T) {
@@ -57,9 +54,6 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, setup+`; run(300); run(300); run16(300); run16(300)`)); err != nil {
 		t.Fatal(err)
 	}
-	fnOf := func(name string) *bytecode.Function {
-		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
-	}
 	for _, tc := range []struct {
 		run, callee string
 		// enter has the callee have no code native callers may call, which
@@ -71,9 +65,8 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 		{"String(run16(300))", "f16", false},
 		{"String(run16(300))", "f16", true},
 	} {
-		fn := fnOf(tc.callee)
-		// Under the register JIT the code and its link are the register
-		// cache's (regCache, regLinks), and Go's runs of the callee from its
+		// The code and its link are the register cache's (regCache,
+		// regLinks), and Go's runs of the callee from its
 		// start are its code's entries (its life's ssaStats), which a native
 		// caller's call makes of a callee it calls natively no more
 		// (notNative).
@@ -88,18 +81,13 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 			t.Fatalf("%s is not called natively: %+v, link %+v; run16 inlines %v, %+v", tc.callee, v.e, link, jitInlinedNamesForTest(r, "run16"), rv.e)
 		}
 		e := v.e
-		if v.code.CallEntry() == 0 || jitcompile.StartOnly(fn) {
-			t.Fatalf("%s: call entry %#x, start only %v", tc.callee, v.code.CallEntry(), jitcompile.StartOnly(fn))
+		if v.code.CallEntry() == 0 {
+			t.Fatalf("%s: no call entry", tc.callee)
 		}
 		if tc.enter {
 			e.notNative, link.entry, link.body, e.nativeRetry = true, 0, 0, 0
 		}
-		entries := func() uint64 {
-			if v.reg != nil {
-				return e.ssaStats.entries
-			}
-			return r.jit.entered
-		}
+		entries := func() uint64 { return e.ssaStats.entries }
 		in, entered := link.in, entries()
 		wv, err := want.Run(compileForTest(t, tc.run))
 		if err != nil {

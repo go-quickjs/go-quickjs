@@ -8,10 +8,10 @@ import (
 
 // DataView.prototype's getters and setters as native leaves (leafChecks):
 // a read or a write of an index in the view, its buffer there, is called
-// without a frame by every tier, as String's methods are, and native
+// without a frame by the interpreter, as String's methods are, and native
 // code's call of one is a leaf's (ssa.GoLeaf), as V8's code reduces a
 // DataView's accessors rather than calling them. Each had been an
-// ordinary built-in's call: in the tree tier a frame and a tick, in native
+// ordinary built-in's call: in the interpreter a frame and a tick, in native
 // code a call of Go (jitGoCall) -- its frame, its operands copied and
 // cleared, its code pinned -- for an access of a few bytes, which made a
 // loop of them twice as slow with the JIT as without.
@@ -29,8 +29,8 @@ import (
 // The accessor itself is given a form that finds the bytes as the check
 // does, once (dataViewBytes), where the built-in's own asked for its
 // buffer four times over, and does as the built-in does for anything
-// else: a leaf's check and its call had otherwise cost the tree tier more
-// than the frame they spare.
+// else: a leaf's check and its call had otherwise cost the interpreter
+// more than the frame they spare.
 //
 // The functions are generic, each instantiated with struct{} alone: Go
 // lays a generic function's instantiations out after every function and

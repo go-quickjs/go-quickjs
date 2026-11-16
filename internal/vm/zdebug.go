@@ -15,8 +15,7 @@ import (
 //
 // A runtime made with Config.Debug runs code compiled for a debugger: every
 // statement it can stop at begins with an OpDebugStmt, and its function
-// records what is in scope there. Such code runs in the interpreter -- the
-// tree tier builds no function with an instruction it does not know -- and
+// records what is in scope there. Such code runs in the interpreter, and
 // a statement costs one test of debugState.armed until a debugger asks to
 // stop somewhere. A runtime made without it compiles no OpDebugStmt, and
 // runs exactly as it would were there no debugger at all.
@@ -231,7 +230,7 @@ type DebugFrame struct {
 	pc    uint32
 	// rc and regs are the register code and window of a frame that runs
 	// as register code, whose bindings are in registers
-	// (RegCode.LocalReg); nil for one that runs as the stack form.
+	// (RegCode.LocalReg); nil for a frame that has none.
 	rc   *regCode
 	regs *[1 << 16]Value
 }

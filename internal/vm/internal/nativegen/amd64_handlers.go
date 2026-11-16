@@ -813,8 +813,9 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Load(RCX, RCX, 0)
 		a.Op(Test, RCX, RCX, true)
 		a.Jcc(CondE, g.exit)
-		// The set: ((key>>4) ^ (layout>>4)) * hasCacheMul, its top bits;
-		// RAX, the instruction, read again after.
+		// The set: ((key>>4) ^ (layout>>4)) * hasCacheMul, its top bits,
+		// of hasCacheWays entries, the newest first; RAX, the instruction,
+		// read again after.
 		a.MovRR(RDX, R8)
 		a.ShiftImm(Shr, RDX, 4, true)
 		a.MovRR(RAX, R9)
@@ -822,11 +823,11 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Op(Xor, RDX, RAX, true)
 		a.MovImm(RAX, hasCacheMul)
 		a.Imul(RDX, RAX)
-		a.ShiftImm(Shr, RDX, 64-hasCacheBits+1, true)
-		a.MovImm(RAX, uint64(2*sizeH))
+		a.ShiftImm(Shr, RDX, 64-hasCacheBits+hasCacheWaysLog, true)
+		a.MovImm(RAX, uint64(hasCacheWays*sizeH))
 		a.Imul(RDX, RAX)
 		a.Op(Add, RCX, RDX, true)
-		for i := int32(0); i < 2; i++ {
+		for i := int32(0); i < hasCacheWays; i++ {
 			next := a.NewLabel()
 			e := i * sizeH
 			a.CmpMem(R8, RCX, e+offHKey, true)

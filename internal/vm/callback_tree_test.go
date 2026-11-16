@@ -2,15 +2,14 @@ package vm
 
 import "testing"
 
-// A callback a built-in calls for each element is called by callDirect, and
-// an arrow, or a function whose frame may end in a tail call, is run there
-// on its tree (treeRest), as a tree's call node runs one: what the arrow
+// A callback a built-in calls for each element is called by callDirect,
+// which enters its register code directly (regDirect): what an arrow
 // captured -- its this, its new.target, the bindings it writes -- what it
 // throws, and a recursion through tail calls under a built-in are as they
 // are when it is run by runFD. Each callback has a local of its own, so
-// that it is no pure body and is run on its tree, not by pureCall. Map's
-// and Set's forEach, Array.from's mapping, replace's function and JSON's
-// replacer and reviver call theirs as the array methods do.
+// that it is no pure body and is run as register code, not by pureCall.
+// Map's and Set's forEach, Array.from's mapping, replace's function and
+// JSON's replacer and reviver call theirs as the array methods do.
 func TestCallbackTreeRest(t *testing.T) {
 	const src = `
 		var out = [], last
@@ -67,28 +66,24 @@ func TestCallbackTreeRest(t *testing.T) {
 		"10 3 true 20 3,6,9,12 18 | a1b2 26 10,21,32 a+-b+-c {\"a\":101,\"b\":[102]} 6 | " +
 		"a1b2 26 10,21,32 a+-b+-c {\"a\":101,\"b\":[102]} 6 | 3.75 | function10,function20 | " +
 		"RangeError at 2 | RangeError at 2 | RangeError at 2 | bottom0,bottom0 | outer0,outer0"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		var planned bool
-		if err == nil {
-			g, gerr := r.Run(compileForTest(t, `last`))
-			if gerr != nil {
-				t.Fatal(gerr)
-			}
-			planned = g.Object().fn().treeRest
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	var planned bool
+	if err == nil {
+		g, gerr := r.Run(compileForTest(t, `last`))
+		if gerr != nil {
+			t.Fatal(gerr)
 		}
-		r.Close()
-		treeTier.Store(previous)
-		if err != nil {
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v:\n%s\nwant\n%s", tree, got, want)
-		}
-		if tree && !planned {
-			t.Errorf("the arrow a built-in called is not one callDirect runs on its tree (treeRest)")
-		}
+		planned = g.Object().fn().regCall != nil
+	}
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got:\n%s\nwant\n%s", got, want)
+	}
+	if !planned {
+		t.Errorf("the arrow a built-in called is not one callDirect runs on its tree (treeRest)")
 	}
 }

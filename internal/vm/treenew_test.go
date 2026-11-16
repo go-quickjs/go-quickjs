@@ -5,18 +5,16 @@ import (
 	"testing"
 )
 
-// Constructions of classes are made on their trees (constructTree), base
-// and derived, a derived one's super() calling its parent the same way,
-// with its this binding a cell of the runtime's where nothing can capture
-// it. What every construction does is what runFD's did: the binding
-// unbound until super() and bound once, the errors of this before super(),
-// of no super() and of a return neither an object nor undefined, the
-// parent's own object or a constructor's returned one, fields, a parent
-// that is a function, new.target, and constructions nested 300 deep before
-// and after super() -- the runtime's cells replaced while frames below
-// hold theirs. Each answer is the interpreter's and Node's (Node's
-// messages are its own), from the first construction, made by runFD,
-// through the later ones the plan sends to the trees.
+// Constructions of classes, base and derived, a derived one's super()
+// calling its parent the same way, with its this binding a cell of the
+// runtime's where nothing can capture it. What every construction does is
+// what runFD's did: the binding unbound until super() and bound once, the
+// errors of this before super(), of no super() and of a return neither an
+// object nor undefined, the parent's own object or a constructor's returned
+// one, fields, a parent that is a function, new.target, and constructions
+// nested 300 deep before and after super() -- the runtime's cells replaced
+// while frames below hold theirs. Each answer is the interpreter's and
+// Node's (Node's messages are its own).
 func TestClassConstructionsOnTrees(t *testing.T) {
 	const src = `'use strict'
 		class A { constructor(x) { this.x = x; if (x === 'throw') throw new RangeError('A ' + x) } }
@@ -77,43 +75,23 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 		"4,5,2 | 6 | true | true | 301 | 300 | 299 | 297 | 301 | 5 | 9 | Implicit | " +
 		`TypeError: class constructor C cannot be invoked without "new" | ` +
 		`TypeError: class constructor A cannot be invoked without "new" | same true`
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := newOldTiersForTest(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		treeTier.Store(previous)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
-		}
-		fd := func(name string) *funcData { return r.global.getOwn(r.atoms.intern(name)).value().Object().fn() }
-		// The tree tier's plans.
-		if tree {
-			for _, name := range []string{"A", "C", "Base", "Nest"} {
-				if !fd(name).treeNew {
-					t.Errorf("%s is not constructed on its tree", name)
-				}
-			}
-			// An arrow made in the body captures its this binding, and the
-			// tier builds no tree that reads new.target.
-			for _, name := range []string{"Arrow", "B"} {
-				if a := fd(name); !a.newPlanned || a.treeNew {
-					t.Errorf("%s: planned %v, on its tree %v; want planned, not on its tree", name, a.newPlanned, a.treeNew)
-				}
-			}
-			if len(r.thisCells) <= 300 {
-				t.Errorf("%d this cells after constructions 300 deep", len(r.thisCells))
-			}
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	if len(r.thisCells) <= 300 {
+		t.Errorf("%d this cells after constructions 300 deep", len(r.thisCells))
+	}
+	r.Close()
 }
 
-// A construction of a derived class on its tree allocates the object it
-// makes and nothing else: no this binding, which runFD's had been an
+// A construction of a derived class allocates the object it makes and
+// nothing else: no this binding, which runFD's had been an
 // allocation of its own, and no copy of the arguments super() passes on.
 func TestDerivedConstructionAllocations(t *testing.T) {
 	const src = `'use strict'

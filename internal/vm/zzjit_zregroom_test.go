@@ -33,8 +33,7 @@ function tails(n) { var s = 0; for (var i = 0; i < 20; i++) s = (s + tailA(n + (
 }
 
 // TestJITRegCallRoom: register code's native call checks the room for its
-// callee's window alone, a constant, as the stack form's call checks its
-// callee's locals and operands, and a call in tail position of another
+// callee's window alone, a constant, and a call in tail position of another
 // function's code the room for its window, the callee's tail entry making
 // what its frame takes past the window: the contexts' StackEnd is the
 // VM's stack's length less the most any register code compiled takes past

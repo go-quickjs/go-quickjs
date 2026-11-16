@@ -1,15 +1,15 @@
 package vm
 
-// Object.prototype.hasOwnProperty as a native leaf (leafChecks): every tier
-// calls it without a frame where nothing it does can run the script's code
-// or throw, as V8 calls its builtin with no frame of JavaScript's. React
-// asks it of each property an element is given, through a binding of its
-// own -- for (k in props) hasOwnProperty.call(props, k) -- and of its
-// reserved names, RESERVED.hasOwnProperty(k): ordinary calls of a
-// built-in, each a frame and a tick in the tree tier, and from native code
-// a call of Go with the frames of the levels it is called from
-// (jitGoCallNested), some 17,000 of them in each render of the SSR
-// benchmark's page.
+// Object.prototype.hasOwnProperty as a native leaf (leafChecks): the
+// interpreter and native code call it without a frame where nothing it does
+// can run the script's code or throw, as V8 calls its builtin with no frame
+// of JavaScript's. React asks it of each property an element is given,
+// through a binding of its own -- for (k in props)
+// hasOwnProperty.call(props, k) -- and of its reserved names,
+// RESERVED.hasOwnProperty(k): ordinary calls of a built-in, each a frame and
+// a tick in the interpreter, and from native code a call of Go with the
+// frames of the levels it is called from (jitRegGoCallNested), some 17,000
+// of them in each render of the SSR benchmark's page.
 //
 // The check passes where the receiver is an object, neither a proxy, whose
 // getOwnPropertyDescriptor trap would run, nor a module namespace, whose

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"unsafe"
-	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
@@ -18,43 +17,14 @@ import (
 // however it was let go, its key is never gone, and it has to be found
 // another way. The cache's flush (jitState.flush), as V8 flushes code unused
 // for long, drops code unused between two of its looks, a second of the
-// program's time apart, and so does it the entries with no code of a realm
-// none of whose entries has been used (jitFlushRealms), which it keeps for a
-// realm that runs. It may be a realm that lives and has only gone quiet: its
-// functions warm up again if it runs again.
+// program's time apart (regFlush). It may be a realm that lives and has only
+// gone quiet: its functions warm up again if it runs again.
 
-// jitFlushRealms is the end of a look of the cache's: it drops the entries
-// with no code of the realms none of whose entries are in used, the entries
-// used since the last look, or have been invoked since, which is what moves
-// for an entry warming, and lets go of what the JIT keeps of a realm rather
-// than for an entry (jitLetRealmsGo). The current realm runs, and the entries
-// of one that runs but compiled nothing, of functions the JIT refuses, may be
-// dropped, and refused again, only while another runs.
-func jitFlushRealms[_ any](s *jitState, used map[*jitEntry]bool) {
-	cur := s.rt.jitRealmKey()
-	live := map[weak.Pointer[Realm]]bool{cur: true}
-	for key, e := range s.cache {
-		if used[e] || e.invoked != e.flushInvoked {
-			live[key.realm] = true
-		}
-		e.flushInvoked = e.invoked
-		if key.realm != cur {
-			s.manyRealms = true
-		}
-	}
-	for key, e := range s.cache {
-		if live[key.realm] || e.holdsCode() || e.used+jitCodeAge > s.epoch() || s.inUse(e) || e.busy != 0 {
-			continue
-		}
-		if s.dropEntry(key, e) {
-			if l := s.lowered[key.Pointer]; l != nil {
-				if k := s.links[key]; k == nil || k.owner == nil {
-					s.dropLowering(key.Pointer, l)
-				}
-			}
-		}
-	}
-	if s.manyRealms || s.ssaShared.lexNames != unsafe.Pointer(&s.rt.lexNames) {
+// jitFlushRealms is the end of a look of the cache's: it lets go of what
+// the JIT keeps of a realm rather than for an entry (jitLetRealmsGo) once
+// the contexts share another realm's than the current one's.
+func jitFlushRealms[_ any](s *jitState) {
+	if s.ssaShared.lexNames != unsafe.Pointer(&s.rt.lexNames) {
 		jitLetRealmsGo[struct{}](s)
 	}
 }

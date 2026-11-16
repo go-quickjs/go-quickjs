@@ -7,8 +7,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// regSwitchTable is a switch instruction's table, as the tree tier's
-// switchLookup makes one of the same cases: a number by an array's index
+// regSwitchTable is a switch instruction's table: a number by an array's index
 // where the cases are integers of a small range, by a short list or a map
 // otherwise; a string by its code units, past the longest case's length
 // not even flattened; true, false and null by their kind. Each selector's
@@ -19,8 +18,7 @@ type regSwitchTable struct {
 	few    []float64
 	fewTo  []int32
 	nums   map[float64]int32
-	// byLen is where flat's strings of each length start, as the tree's
-	// switchLookup groups them.
+	// byLen is where flat's strings of each length start.
 	byLen []int32
 	flat  []bytecode.SwitchCase
 	other [3]int32
@@ -108,7 +106,7 @@ func newRegSwitchTable(cases []bytecode.SwitchCase) *regSwitchTable {
 }
 
 // lookup is the pc of the body v goes to, or -1: a string the constant a
-// case was made from first by its pointer, as the tree's lookup asks.
+// case was made from first by its pointer.
 func (t *regSwitchTable) lookup(v Value, consts []Value) int32 {
 	switch {
 	case v.IsNumber():

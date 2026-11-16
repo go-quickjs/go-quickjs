@@ -7,8 +7,7 @@ import "testing"
 // code units -- carry what NewString would find in their text: the length
 // in code units, whether every one is ASCII, and the unpaired surrogates at
 // either end, which indexing, comparison and the next join rely on but no
-// script can see directly. Each is made three times, as the interpreter and
-// the tree tier make it.
+// script can see directly. Each is made three times.
 func TestBuiltStringsKnowThemselves(t *testing.T) {
 	t.Parallel()
 	exprs := []string{

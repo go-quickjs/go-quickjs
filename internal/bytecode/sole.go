@@ -1,6 +1,6 @@
 package bytecode
 
-// The locals that hold their values alone: the tree tier and the JIT give
+// The locals that hold their values alone: the interpreter and the JIT give
 // back a BigInt such a local held when it is assigned the next result of
 // arithmetic (the VM's zzbigown.go), and the register backend marks the
 // operators whose results such a local takes (regcomp, RArithOwnA).

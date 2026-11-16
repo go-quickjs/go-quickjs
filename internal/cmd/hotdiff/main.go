@@ -1,18 +1,28 @@
-// Command hotdiff compares the interpreter's hot functions in two builds,
-// instruction by instruction. It is how a change shows that it leaves the
-// interpreter's code alone -- the JIT's hooks when the JIT is not built in,
-// say -- which a benchmark, at 5 to 10% layout noise, cannot.
+// Command hotdiff compares the register interpreter's hot functions in two
+// builds, instruction by instruction. It is how a change shows that it leaves
+// the interpreter's code alone -- the JIT's hooks when the JIT is not built
+// in, say -- which a benchmark, at 5 to 10% layout noise, cannot.
 //
 //	go build -o base.exe ./cmd/qjs    # at the base revision
 //	go build -o head.exe ./cmd/qjs    # at the change
 //	go run ./internal/cmd/hotdiff base.exe head.exe
 //
+// The hot set is the Go table's loop (runReg), its call handler and the
+// frames it enters (rhCallW, regEnterW, regCallSlow, regRunFD, callObject),
+// the native dispatcher's Go side (nativeRun, nativeLoop, its loop
+// nativeDrive, and nativeCallbackRun, a kept callback's entry) and its
+// assembly:
+// the entry, the exit's call of Go and the generated handler blocks, which
+// are position-independent and so compare as they are.
+//
 // Each function's instructions are compared with their addresses and the
 // layout around them taken out: padding (INT3), the NOPs the compiler leaves
 // as marks of calls it inlined to nothing, and data addresses, which move
 // with the binary. A jump's target becomes the index of the instruction it
-// reaches, so the comparison keeps the control flow. It exits 1 if any
-// function differs or is missing.
+// reaches, so the comparison keeps the control flow. A function neither
+// build has -- the native block on an architecture without it, or the
+// feedback handlers without the JIT -- is reported and skipped. It exits 1
+// if any function differs or only one build has it.
 package main
 
 import (
@@ -27,16 +37,24 @@ import (
 	"strings"
 )
 
-// hot is what the interpreter and the tree tier run for every instruction,
-// call and loop.
+// hot is what the register interpreter runs for every instruction, call
+// and loop.
 var hot = []string{
-	"internal/vm.(*Runtime).executeAt",
-	"internal/vm.(*Runtime).runTree",
-	"internal/vm.(*Runtime).runTreeNested",
+	"internal/vm.(*Runtime).runReg",
+	"internal/vm.rhCallW",
+	"internal/vm.(*Runtime).regEnterW",
+	"internal/vm.(*Runtime).regCallSlow",
+	"internal/vm.(*Runtime).regRunFD",
 	"internal/vm.(*Runtime).callObject",
-	"internal/vm.(*Runtime).callTree",
-	"internal/vm.(*Runtime).runFD",
-	"internal/vm.(*tctx).backEdgeCheck",
+	"internal/vm.(*Runtime).nativeRun",
+	"internal/vm.(*Runtime).nativeLoop",
+	"internal/vm.(*Runtime).nativeDrive",
+	"internal/vm.(*Runtime).nativeCallbackRun",
+	"internal/vm.nativeEnter",
+	"internal/vm.nativeCallH",
+	"internal/vm.nativeStoreRef",
+	"internal/vm.regNativeHandlers",
+	"internal/vm.regNativeFeedbackHandlers",
 }
 
 func main() {
@@ -68,6 +86,8 @@ func main() {
 	for _, name := range names {
 		b, h := find(base, name), find(head, name)
 		switch {
+		case b == nil && h == nil:
+			fmt.Printf("%-40s in neither build\n", name)
 		case b == nil || h == nil:
 			fmt.Printf("%-40s missing (base %v, head %v)\n", name, b != nil, h != nil)
 			failed = true
@@ -175,9 +195,11 @@ func normalize(lines []line) function {
 	return out
 }
 
+// find returns the function whose symbol ends with suffix, an assembly
+// function's ABI0 symbol included.
 func find(funcs map[string]function, suffix string) function {
 	for name, f := range funcs {
-		if strings.HasSuffix(name, suffix) {
+		if strings.HasSuffix(strings.TrimSuffix(name, ".abi0"), suffix) {
 			return f
 		}
 	}

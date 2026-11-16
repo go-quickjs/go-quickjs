@@ -3,12 +3,11 @@ package vm
 import "testing"
 
 // emptyAddTestSrc converts values of every kind to strings by "" + x of a
-// local (zzz_emptyadd.go): stored back to the local, to it and then read
-// (set_local_get), to a new binding (init_local) and to another local,
-// returned, and in a + chain and a template, whose join takes the
-// addition's operand as it is; strings flat, empty, past ASCII and a
-// rope, numbers, a boolean, undefined, null, a BigInt, objects whose
-// valueOf, toString and Symbol.toPrimitive are counted, an array, a
+// local: stored back to the local, to it and then read, to a new binding
+// and to another local, returned, and in a + chain and a template, whose
+// join takes the addition's operand as it is; strings flat, empty, past
+// ASCII and a rope, numbers, a boolean, undefined, null, a BigInt, objects
+// whose valueOf, toString and Symbol.toPrimitive are counted, an array, a
 // String object and a symbol, which throws. emptyAddTestWant is Node's
 // answer (v26.10.0).
 const emptyAddTestSrc = `var calls = 0
@@ -40,18 +39,16 @@ all() + ' | ' + loop(100)
 const emptyAddTestWant = `s,string:s,s/string,s,ss,asbs,[s|s] ,string:,/string,,,ab,[|] café,string:café,café/string,café,cafécafé,acafébcafé,[café|café] 42,string:42,42/string,42,4242,a42b42,[42|42] 0,string:0,0/string,0,00,a0b0,[0|0] 1.5,string:1.5,1.5/string,1.5,1.51.5,a1.5b1.5,[1.5|1.5] NaN,string:NaN,NaN/string,NaN,NaNNaN,aNaNbNaN,[NaN|NaN] true,string:true,true/string,true,truetrue,atruebtrue,[true|true] undefined,string:undefined,undefined/string,undefined,undefinedundefined,aundefinedbundefined,[undefined|undefined] null,string:null,null/string,null,nullnull,anullbnull,[null|null] 10,string:10,10/string,10,1010,a10b10,[10|10] 7,string:7,7/string,7,77,a7b7,[o|o] ts,string:ts,ts/string,ts,tsts,atsbts,[ts|ts] 1,2,string:1,2,1,2/string,1,2,1,21,2,a1,2b1,2,[1,2|1,2] w,string:w,w/string,w,ww,awbw,[w|w] default,string:default,default/string,default,defaultdefault,adefaultbdefault,[string|string] TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError 4 2 calls=30 | 17542`
 
 // "" + x of a local is x itself where it is a string, and the addition
-// otherwise, in the tree tier and in the interpreter, each answer Node's.
+// otherwise, each answer Node's.
 func TestEmptyStringAdd(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, emptyAddTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != emptyAddTestWant {
-			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, emptyAddTestWant)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, emptyAddTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != emptyAddTestWant {
+		t.Errorf("\ngot  %s\nwant %s", got, emptyAddTestWant)
 	}
 }

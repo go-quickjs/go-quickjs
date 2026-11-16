@@ -6,8 +6,7 @@ import "testing"
 // makes it: a string's length and its indices are the String object's own,
 // non-configurable -- false in sloppy code, a TypeError in strict code --
 // and anything else is absent from the wrapper -- true -- as Node answers.
-// Every property of a primitive had been deleted, true. In the interpreter
-// and on the trees, a loop of each enough for the tree tier to take it.
+// Every property of a primitive had been deleted, true. Each in a loop.
 func TestDeletePrimitiveProperty(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -27,15 +26,13 @@ func TestDeletePrimitiveProperty(t *testing.T) {
 		r.push(loop('ab'), loopStrict('ab'))
 		r.join()`
 	const want = "false,false,false,true,true,true,true,true,true,false,TypeError,TypeError,true,true,falsefalse,TypeError"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

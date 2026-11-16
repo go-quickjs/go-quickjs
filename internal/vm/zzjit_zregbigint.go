@@ -10,21 +10,19 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
-// Register code's BigInts, as the stack form's code learns and makes them
-// (jitBigIntSeen, ssa.BigIntFeedback): an operator whose guard failed, or
-// which is generic, on BigInts is learned at its register pc, and the code
-// compiled again makes it natively -- of BigInts in the int64 range, or
-// from 0 to 2^64-1 -- or calls Go for it (ssa.GoArith), its blocks given
-// back where an operand or a register holds its value alone
-// (BigIntSole). Without it every BigInt operator of register code left
-// native code for the interpreter.
+// Register code's BigInts (jitRegBigIntSeen, ssa.BigIntFeedback): an
+// operator whose guard failed, or which is generic, on BigInts is learned
+// at its register pc, and the code compiled again makes it natively -- of
+// BigInts in the int64 range, or from 0 to 2^64-1 -- or calls Go for it
+// (ssa.GoArith), its blocks given back where an operand or a register holds
+// its value alone (BigIntSole). Without it every BigInt operator of
+// register code left native code for the interpreter.
 //
-// The first compile knows them too, as the stack form's knows them from
-// the tree tier (jitTreeBig, jitTreeWide): the register interpreter's slow
-// paths, which make every operator on BigInts, mark its register pc as the
-// tree marks its sites (regBigOf, regCode's bigSeen) -- BigInts in the
-// int64 range, from 0 to 2^64-1, or others, on the heap -- and the
-// feedback answers from the marks as from what exits learned.
+// The first compile knows them too: the register interpreter's slow paths,
+// which make every operator on BigInts, mark its register pc (regBigOf,
+// regCode's bigSeen) -- BigInts in the int64 range, from 0 to 2^64-1, or
+// others, on the heap -- and the feedback answers from the marks as from
+// what exits learned.
 
 func init() {
 	regBigOf = func(r *Runtime, c *regCode, pc int, a, b, v Value) {
@@ -39,28 +37,28 @@ func init() {
 			neg, mag := v.shortBigParts()
 			return !neg || mag == 0
 		}
-		kind := func(s *treeBigSeen) []atomic.Uint32 { return s.heap }
+		kind := func(s *bigSeenMarks) []atomic.Uint32 { return s.heap }
 		switch {
 		case a.isInt64Big() && b.isInt64Big() && v.isInt64Big():
-			kind = func(s *treeBigSeen) []atomic.Uint32 { return s.bigs }
+			kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.bigs }
 		case unsigned(a) && unsigned(b) && unsigned(v):
-			kind = func(s *treeBigSeen) []atomic.Uint32 { return s.wide }
+			kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.wide }
 		}
 		regBigMark(c, pc, kind)
 	}
 }
 
-// regBigMark marks register pc of c in the marks kind picks of its
-// bigSeen, made if it has none: register code may be shared by runtimes,
-// as a tree is, which mark it alike.
-func regBigMark(c *regCode, pc int, kind func(*treeBigSeen) []atomic.Uint32) {
+// regBigMark marks register pc of c in the marks kind picks of its bigSeen,
+// made if it has none: register code may be shared by runtimes, which mark
+// it alike.
+func regBigMark(c *regCode, pc int, kind func(*bigSeenMarks) []atomic.Uint32) {
 	if pc < 0 || pc >= len(c.rc.Code) {
 		return
 	}
 	s := c.bigSeen.Load()
 	if s == nil {
 		n := (len(c.rc.Code) + 31) / 32
-		s = &treeBigSeen{bigs: make([]atomic.Uint32, n), wide: make([]atomic.Uint32, n), heap: make([]atomic.Uint32, n), recvs: make([]atomic.Uint32, n)}
+		s = &bigSeenMarks{bigs: make([]atomic.Uint32, n), wide: make([]atomic.Uint32, n), heap: make([]atomic.Uint32, n), recvs: make([]atomic.Uint32, n)}
 		if !c.bigSeen.CompareAndSwap(nil, s) {
 			s = c.bigSeen.Load()
 		}
@@ -78,9 +76,8 @@ func (f *jitRegFeedback) regBigSeenAt(rpc int) (big, wide, heap bool) {
 
 // regBigSeen reports what the register interpreter marked of the operator
 // at register pc rpc of cl's register code, rc (regBigOf): whether it met
-// BigInts, whether some from 0 to 2^64-1 past the int64 range, and
-// whether one on the heap, as jitTreeBig and jitTreeWide report the
-// tree's marks.
+// BigInts, whether some from 0 to 2^64-1 past the int64 range, and whether
+// one on the heap.
 func regBigSeen(cl *closure, rc *bytecode.RegCode, rpc int) (big, wide, heap bool) {
 	if cl == nil || cl.reg == nil || cl.reg.rc != rc || rpc < 0 {
 		return false, false, false
@@ -129,25 +126,24 @@ func (f *jitRegFeedback) BigIntFailed(pc int) bool {
 	return l != nil && pc >= 0 && pc < len(f.p.Origin) && slices.Contains(l.failed, int32(f.p.Origin[pc]))
 }
 
-// jitRegBigIntSeen is jitBigIntSeen for e's code, f's register code run in
-// the window at wb, at the instruction site of its program, whose guard
-// failed or which is generic: what its operands met, learned at its
-// register pc in what f's function's register code learned.
+// jitRegBigIntSeen learns, of e's code, f's register code run in the window
+// at wb, at the instruction site of its program, whose guard failed or
+// which is generic: what its operands met, learned at its register pc in
+// what f's function's register code learned.
 func (r *Runtime) jitRegBigIntSeen(f *frame, e *jitRegEntry, wb, site int) bool {
 	p := e.p
 	if site < 0 || p == nil || site >= len(p.Code) || site >= len(p.Origin) {
 		return false
 	}
 	l := r.jitRegLearnedFor(f, e)
-	// What the interpreter marked of it too, as the stack form's passes
-	// the tree's marks (jitBigIntSeen).
+	// What the interpreter marked of it too (regBigSeen).
 	big, wide, _ := regBigSeen(f.cl, e.rc, int(p.Origin[site]))
 	return jitBigIntNote(l, int32(p.Origin[site]), p.Code[site], func(o ir.Operand) Value { return r.jitRegOperand(p, wb, o) }, big, wide)
 }
 
-// jitRegBigIntExit is jitBigIntExit for e's code: at a host exit at site,
-// an operator with no native form for BigInts, generic, that met two. It
-// reports whether the site learned them, the code to be compiled again.
+// jitRegBigIntExit learns, of e's code, at a host exit at site, an operator
+// with no native form for BigInts, generic, that met two. It reports
+// whether the site learned them, the code to be compiled again.
 func (r *Runtime) jitRegBigIntExit(f *frame, e *jitRegEntry, wb, site int) bool {
 	p := e.p
 	if site < 0 || p == nil || site >= len(p.Code) || site >= len(p.Origin) {

@@ -20,7 +20,7 @@ func TestWorkspaceARM64GoFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := jitcompile.LowerSSA(fn.Constants[0].Fn)
+	p, err := jitcompile.LowerReg(fn.Constants[0].Fn.RegCode(), fn.Constants[0].Fn)
 	if err != nil {
 		t.Fatal(err)
 	}

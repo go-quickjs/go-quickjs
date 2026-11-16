@@ -81,15 +81,6 @@ func osrRounds(name, args string) []string {
 	return append(rounds, name+"(200000, "+args+"5)")
 }
 
-// osrHeader is the header of the only loop e's code has no entry at.
-func osrHeader(t *testing.T, e *jitEntry) int {
-	t.Helper()
-	if e == nil || e.ssa == nil || len(e.ssaUnentered) != 1 {
-		t.Fatalf("no one loop without an entry: %+v", e)
-	}
-	return int(e.ssaUnentered[0])
-}
-
 // A frame that stays in a loop the function's code has no entry at goes on
 // in code compiled for it, apart from the function's, which goes on keeping
 // the loop's objects unmade for every later invocation: a long first run
@@ -100,70 +91,38 @@ func TestJITOSRCodeApart(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		life, re := jitNamedForTest(r, "sum")
-		pc := osrRegHeader(t, re)
-		// Its objects unmade there: the loop's entry dropped (unentered),
-		// register code's escape analysis counting none (ssaVirtuals).
-		if re.isLoop(pc) {
-			t.Fatalf("the function's code took the loop's entry: %+v", re)
-		}
-		// The code kept for the loop, which the frame went on in -- the
-		// only code jitRegLoopCode compiles for a frame waiting at a loop
-		// (osrLearned) -- of the function's state: what it does is the
-		// function's (its life), which counts no entry of its own apart.
-		oe := re.osr
-		if oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned == 0 {
-			t.Fatalf("the frame did not go on in code of its own: %+v", oe)
-		}
-		if oe.osrOf != re || oe.life != life {
-			t.Fatalf("not the function's: %+v", oe)
-		}
-		if slices.Contains(life.resumed, uint32(pc)) {
-			t.Fatalf("the loop's entry is among what later compiles of the function's code have: %v", life.resumed)
-		}
-		// The objects unmade again at the calls after it, in the function's
-		// code, which Go enters.
-		starts, learned := life.starts, r.jit.osrLearned
-		defer debug.SetGCPercent(debug.SetGCPercent(-1))
-		runtime.GC()
-		jitCallbackMallocs(t, r, `sum(1000, -1)`)
-		if n := jitCallbackMallocs(t, r, `sum(20000, -1)`); n > 200 {
-			t.Errorf("sum(20000), after a long run: %d allocations", n)
-		}
-		if life.starts == starts || r.jit.osrLearned != learned || re.osr != oe {
-			t.Errorf("later calls entered the function's code %d times, compiled %d codes for the loop", life.starts-starts, r.jit.osrLearned-learned)
-		}
-		return
+	life, re := jitNamedForTest(r, "sum")
+	pc := osrRegHeader(t, re)
+	// Its objects unmade there: the loop's entry dropped (unentered),
+	// register code's escape analysis counting none (ssaVirtuals).
+	if re.isLoop(pc) {
+		t.Fatalf("the function's code took the loop's entry: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	pc := osrHeader(t, e)
-	if e.ssa.HasEntry(pc) {
-		t.Fatalf("the function's code took the loop's entry: %+v", e)
-	}
-	if e.ssaVirtuals == 0 {
-		t.Fatalf("the function's code makes the loop's objects")
-	}
-	oe := e.osr
-	if oe == nil || oe.ssa == nil || !oe.ssa.HasEntry(pc) || oe.ssaStats.entries == 0 {
+	// The code kept for the loop, which the frame went on in -- the
+	// only code jitRegLoopCode compiles for a frame waiting at a loop
+	// (osrLearned) -- of the function's state: what it does is the
+	// function's (its life), which counts no entry of its own apart.
+	oe := re.osr
+	if oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned == 0 {
 		t.Fatalf("the frame did not go on in code of its own: %+v", oe)
 	}
-	if oe.osrOf != e || oe.jitLearned != e.jitLearned || oe.hint != 0 {
+	if oe.osrOf != re || oe.life != life {
 		t.Fatalf("not the function's: %+v", oe)
 	}
-	if slices.Contains(e.resumed, uint32(pc)) {
-		t.Fatalf("the loop's entry is among what later compiles of the function's code have: %v", e.resumed)
+	if slices.Contains(life.resumed, uint32(pc)) {
+		t.Fatalf("the loop's entry is among what later compiles of the function's code have: %v", life.resumed)
 	}
-	// The objects unmade again at the calls after it, in the function's code.
-	entries, starts := oe.ssaStats.entries, e.starts
+	// The objects unmade again at the calls after it, in the function's
+	// code, which Go enters.
+	starts, learned := life.starts, r.jit.osrLearned
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	runtime.GC()
 	jitCallbackMallocs(t, r, `sum(1000, -1)`)
 	if n := jitCallbackMallocs(t, r, `sum(20000, -1)`); n > 200 {
 		t.Errorf("sum(20000), after a long run: %d allocations", n)
 	}
-	if oe.ssaStats.entries != entries || e.starts == starts {
-		t.Errorf("later calls ran %d times in the code kept for the loop, %d in the function's", oe.ssaStats.entries-entries, e.starts-starts)
+	if life.starts == starts || r.jit.osrLearned != learned || re.osr != oe {
+		t.Errorf("later calls entered the function's code %d times, compiled %d codes for the loop", life.starts-starts, r.jit.osrLearned-learned)
 	}
 }
 
@@ -183,18 +142,23 @@ func TestJITOSRNotCalledNatively(t *testing.T) {
 		}
 	`
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, append(osrRounds("sum", ""), `caller(20000)`, `caller(20000)`)...)
-	e := jitCallbackEntry(r, "sum")
+	_, e := jitNamedForTest(r, "sum")
 	if e == nil || e.osr == nil {
 		t.Skipf("the code was compiled again meanwhile: %+v", e)
 	}
-	if e.osr.link == e.link || r.jit.links[e.link.key] != e.link {
+	// The function's link, by its key (regLinkFor), calls the function's
+	// code; the code kept for the loop has no link, and no link calls it.
+	l := r.jit.regLinkFor(e)
+	if l == nil || r.jit.regLinks[e.key] != l {
 		t.Fatalf("the runtime's link is not the function's")
 	}
-	if e.link.entry == e.osr.link.entry {
-		t.Fatalf("native callers call the code kept for the loop")
+	if l.entry != 0 && !e.code.Contains(l.entry) {
+		t.Fatalf("native callers call code not the function's")
 	}
-	if e.osr.link.in != 0 {
-		t.Fatalf("%d native calls of the code kept for the loop", e.osr.link.in)
+	for k, x := range r.jit.regLinks {
+		if x.entry != 0 && e.osr.code.Contains(x.entry) {
+			t.Fatalf("%v's link calls the code kept for the loop", k.Value().Name)
+		}
 	}
 }
 
@@ -210,28 +174,15 @@ func TestJITFrameKeepsItsLoop(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `once(200000)`)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "once")
-		if re == nil || re.code == nil || r.jit.ssaEntries == 0 {
-			t.Fatalf("once never ran natively: %+v", re)
-		}
-		if r.jit.osrLearned != 0 || re.osr != nil {
-			t.Fatalf("a function called once learned %d loops", r.jit.osrLearned)
-		}
-		if len(re.kept) != 1 || !re.isLoop(re.kept[0]) || len(re.unentered) != 0 {
-			t.Fatalf("the frame's entry is not one kept: kept %v, unentered %v", re.kept, re.unentered)
-		}
-		return
+	_, re := jitNamedForTest(r, "once")
+	if re == nil || re.code == nil || r.jit.ssaEntries == 0 {
+		t.Fatalf("once never ran natively: %+v", re)
 	}
-	e := jitCallbackEntry(r, "once")
-	if e == nil || e.ssa == nil || r.jit.ssaEntries == 0 {
-		t.Fatalf("once never ran natively: %+v", e)
-	}
-	if r.jit.osrLearned != 0 || e.osr != nil {
+	if r.jit.osrLearned != 0 || re.osr != nil {
 		t.Fatalf("a function called once learned %d loops", r.jit.osrLearned)
 	}
-	if len(e.ssaKept) != 1 || !e.ssa.HasEntry(int(e.ssaKept[0])) || len(e.ssaUnentered) != 0 {
-		t.Fatalf("the frame's entry is not one kept: kept %v, unentered %v", e.ssaKept, e.ssaUnentered)
+	if len(re.kept) != 1 || !re.isLoop(re.kept[0]) || len(re.unentered) != 0 {
+		t.Fatalf("the frame's entry is not one kept: kept %v, unentered %v", re.kept, re.unentered)
 	}
 }
 
@@ -249,13 +200,9 @@ func TestJITKeptEntryGoes(t *testing.T) {
 		rounds = append(rounds, `once(50)`)
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, rounds...)
-	if r.regOn() {
-		// Its objects unmade: the loop's entry dropped (unentered).
-		if _, re := jitNamedForTest(r, "once"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) != 1 {
-			t.Fatalf("called again, once kept its entry: %+v", re)
-		}
-	} else if e := jitCallbackEntry(r, "once"); e == nil || len(e.ssaKept) != 0 || len(e.ssaUnentered) != 1 || e.ssaVirtuals == 0 {
-		t.Fatalf("called again, once kept its entry: %+v", e)
+	// Its objects unmade: the loop's entry dropped (unentered).
+	if _, re := jitNamedForTest(r, "once"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) != 1 {
+		t.Fatalf("called again, once kept its entry: %+v", re)
 	}
 	setup := osrSetup + `
 		function caller(n) {
@@ -265,15 +212,8 @@ func TestJITKeptEntryGoes(t *testing.T) {
 		}
 	`
 	r = jitAgreesForTestWith(t, jitStressConfig{}, setup, `once(200000)`, `caller(200000)`)
-	if r.regOn() {
-		if _, re := jitNamedForTest(r, "once"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) == 0 {
-			t.Fatalf("called natively, once kept its entry: %+v", re)
-		}
-		return
-	}
-	e := jitCallbackEntry(r, "once")
-	if e == nil || len(e.ssaKept) != 0 || e.ssaVirtuals == 0 {
-		t.Fatalf("called natively, once kept its entry: %+v", e)
+	if _, re := jitNamedForTest(r, "once"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) == 0 {
+		t.Fatalf("called natively, once kept its entry: %+v", re)
 	}
 }
 
@@ -290,22 +230,12 @@ func TestJITKeptEntryStaysForCallsThatLeave(t *testing.T) {
 		rounds = append(rounds, `sum(100, 5)`)
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, rounds...)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "sum")
-		if re == nil || re.code == nil {
-			t.Fatalf("sum was not compiled: %+v", re)
-		}
-		if len(re.kept) == 0 || re.osr != nil || r.jit.osrLearned != 0 {
-			t.Fatalf("calls that left gave up the entry: kept %v, code apart %v, %d learned", re.kept, re.osr != nil, r.jit.osrLearned)
-		}
-	} else {
-		e := jitCallbackEntry(r, "sum")
-		if e == nil || e.ssa == nil {
-			t.Fatalf("sum was not compiled: %+v", e)
-		}
-		if len(e.ssaKept) == 0 || e.osr != nil || r.jit.osrLearned != 0 {
-			t.Fatalf("calls that left gave up the entry: kept %v, code apart %v, %d learned", e.ssaKept, e.osr != nil, r.jit.osrLearned)
-		}
+	_, re := jitNamedForTest(r, "sum")
+	if re == nil || re.code == nil {
+		t.Fatalf("sum was not compiled: %+v", re)
+	}
+	if len(re.kept) == 0 || re.osr != nil || r.jit.osrLearned != 0 {
+		t.Fatalf("calls that left gave up the entry: kept %v, code apart %v, %d learned", re.kept, re.osr != nil, r.jit.osrLearned)
 	}
 	// And one in two leaving does.
 	rounds = []string{`sum(200000, -1)`}
@@ -313,13 +243,9 @@ func TestJITKeptEntryStaysForCallsThatLeave(t *testing.T) {
 		rounds = append(rounds, map[bool]string{true: `sum(100, 5)`, false: `sum(100, -1)`}[i%2 == 0])
 	}
 	r = jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, rounds...)
-	if r.regOn() {
-		// Its objects unmade: the loop's entry dropped (unentered).
-		if _, re := jitNamedForTest(r, "sum"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) == 0 {
-			t.Fatalf("calls that ran their loop through kept the entry: %+v", re)
-		}
-	} else if e := jitCallbackEntry(r, "sum"); e == nil || len(e.ssaKept) != 0 || e.ssaVirtuals == 0 {
-		t.Fatalf("calls that ran their loop through kept the entry: %+v", e)
+	// Its objects unmade: the loop's entry dropped (unentered).
+	if _, re := jitNamedForTest(r, "sum"); re == nil || re.code == nil || len(re.kept) != 0 || len(re.unentered) == 0 {
+		t.Fatalf("calls that ran their loop through kept the entry: %+v", re)
 	}
 }
 
@@ -333,37 +259,21 @@ func TestJITKeptGoneKeepsItsRecord(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `once(200000)`)
-	if r.regOn() {
-		life, re := jitNamedForTest(r, "once")
-		if re == nil || re.code == nil || len(re.kept) == 0 {
-			t.Fatalf("no entry kept: %+v", re)
-		}
-		// Judged by all it did: what its runs did kept, and its judging
-		// not begun afresh (jitRegCached's keptGone).
-		st := &life.ssaStats
-		work, base, judged := st.work, st.workBase, st.judged
-		if work == 0 {
-			t.Fatal("no work counted")
-		}
-		cl := jitGlobalClosure(r, "once")
-		ne := r.jitRegKeptGone(cl, r.regOf(cl), re)
-		if ne == nil || ne.code == nil || len(ne.kept) != 0 || st.work != work || st.workBase != base || st.judged != judged {
-			t.Fatalf("kept %v, work %d of %d, judged from %d of %d", ne, st.work, work, st.workBase, base)
-		}
-		return
+	life, re := jitNamedForTest(r, "once")
+	if re == nil || re.code == nil || len(re.kept) == 0 {
+		t.Fatalf("no entry kept: %+v", re)
 	}
-	e := jitCallbackEntry(r, "once")
-	if e == nil || len(e.ssaKept) == 0 {
-		t.Fatalf("no entry kept: %+v", e)
-	}
-	work := e.ssaStats.work
+	// Judged by all it did: what its runs did kept, and its judging
+	// not begun afresh (jitRegCached's keptGone).
+	st := &life.ssaStats
+	work, base, judged := st.work, st.workBase, st.judged
 	if work == 0 {
 		t.Fatal("no work counted")
 	}
-	cl := r.global.getOwn(r.atoms.intern("once")).value().Object().fn().closure
-	r.jitKeptGone(cl, e)
-	if len(e.ssaKept) != 0 || e.ssaStats.work != work {
-		t.Fatalf("kept %v, work %d of %d", e.ssaKept, e.ssaStats.work, work)
+	cl := jitGlobalClosure(r, "once")
+	ne := r.jitRegKeptGone(cl, r.regOf(cl), re)
+	if ne == nil || ne.code == nil || len(ne.kept) != 0 || st.work != work || st.workBase != base || st.judged != judged {
+		t.Fatalf("kept %v, work %d of %d, judged from %d of %d", ne, st.work, work, st.workBase, base)
 	}
 }
 
@@ -380,48 +290,31 @@ func TestJITOSRNextLoopUnmade(t *testing.T) {
 		rounds = append(rounds, map[bool]string{true: `twoLoops(20, 20, 3)`, false: `twoLoops(20, 20, -1)`}[i%2 == 0])
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, append(rounds, `twoLoops(200000, 200000, 5)`)...)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "twoLoops")
-		if re == nil || re.code == nil || len(re.unentered) != 2 {
-			t.Fatalf("not two loops without an entry: %+v", re)
-		}
-		oe := re.osr
-		if oe == nil || oe.code == nil {
-			t.Fatalf("the code kept for the loops: %+v", oe)
-		}
-		// The loop it was compiled for: the one of the function's code's
-		// without an entry that it has one at.
-		var loops []int
-		for _, pc := range re.unentered {
-			if oe.isLoop(pc) {
-				loops = append(loops, pc)
-			}
-		}
-		if len(loops) != 1 {
-			t.Fatalf("the code kept for the loops has entries at %v of %v", loops, re.unentered)
-		}
-		if pc := loops[0]; re.isLoop(pc) || !oe.isLoop(pc) {
-			t.Errorf("loop at %d: an entry in the function's code %v, in the code kept for it %v", pc, re.isLoop(pc), oe.isLoop(pc))
-		}
-		// The next loop's objects unmade: its entry dropped there too.
-		if len(oe.unentered) != 1 {
-			t.Errorf("the next loop's objects are made in the code kept for the first: no entry at %v", oe.unentered)
-		}
-		return
+	_, re := jitNamedForTest(r, "twoLoops")
+	if re == nil || re.code == nil || len(re.unentered) != 2 {
+		t.Fatalf("not two loops without an entry: %+v", re)
 	}
-	e := jitCallbackEntry(r, "twoLoops")
-	if e == nil || e.ssa == nil || len(e.ssaUnentered) != 2 {
-		t.Fatalf("not two loops without an entry: %+v", e)
-	}
-	oe := e.osr
-	if oe == nil || oe.ssa == nil || len(oe.osrLoops) != 1 {
+	oe := re.osr
+	if oe == nil || oe.code == nil {
 		t.Fatalf("the code kept for the loops: %+v", oe)
 	}
-	if pc := oe.osrLoops[0]; e.ssa.HasEntry(int(pc)) || !oe.ssa.HasEntry(int(pc)) {
-		t.Errorf("loop at %d: an entry in the function's code %v, in the code kept for it %v", pc, e.ssa.HasEntry(int(pc)), oe.ssa.HasEntry(int(pc)))
+	// The loop it was compiled for: the one of the function's code's
+	// without an entry that it has one at.
+	var loops []int
+	for _, pc := range re.unentered {
+		if oe.isLoop(pc) {
+			loops = append(loops, pc)
+		}
 	}
-	if len(oe.ssaUnentered) != 1 || oe.ssaVirtuals == 0 {
-		t.Errorf("the next loop's objects are made in the code kept for the first: %d unmade, no entry at %v", oe.ssaVirtuals, oe.ssaUnentered)
+	if len(loops) != 1 {
+		t.Fatalf("the code kept for the loops has entries at %v of %v", loops, re.unentered)
+	}
+	if pc := loops[0]; re.isLoop(pc) || !oe.isLoop(pc) {
+		t.Errorf("loop at %d: an entry in the function's code %v, in the code kept for it %v", pc, re.isLoop(pc), oe.isLoop(pc))
+	}
+	// The next loop's objects unmade: its entry dropped there too.
+	if len(oe.unentered) != 1 {
+		t.Errorf("the next loop's objects are made in the code kept for the first: no entry at %v", oe.unentered)
 	}
 }
 
@@ -449,36 +342,23 @@ func TestJITOSRGoesOnInItsRun(t *testing.T) {
 		}
 	`
 	rounds := []string{`exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(300000, 100)`}
-	if regJITForTest() {
-		// Register code counts a call at its return (regTickRet): a first
-		// call with no turn has the function compiled at its second call's
-		// start, as the stack form's is at its first, not at its loop for
-		// the frame waiting there, whose entry the code would keep
-		// (jitRegFrameAt).
-		rounds = append([]string{`exits(0, 3)`}, rounds...)
-	}
+	// Register code counts a call at its return (regTickRet): a first
+	// call with no turn has the function compiled at its second call's
+	// start, as the stack form's is at its first, not at its loop for
+	// the frame waiting there, whose entry the code would keep
+	// (jitRegFrameAt).
+	rounds = append([]string{`exits(0, 3)`}, rounds...)
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, rounds...)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "exits")
-		if re == nil || re.osr == nil || re.osr.code == nil {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		// The site known by now, the run leaves at each of them, and goes
-		// on, in the code kept for the loop, the function's having no
-		// entry there: register code counts no entries of its own apart
-		// from its function's.
-		if r.jit.wentOn < 1000 || re.isLoop(re.unentered[0]) {
-			t.Errorf("went on natively %d times; an entry at the loop in the function's code %v", r.jit.wentOn, re.isLoop(re.unentered[0]))
-		}
-		return
+	_, re := jitNamedForTest(r, "exits")
+	if re == nil || re.osr == nil || re.osr.code == nil {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "exits")
-	if e == nil || e.osr == nil || e.osr.ssa == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
-	}
-	// The site known by now, the run leaves at each of them, and goes on.
-	if oe := e.osr; r.jit.wentOn < 1000 || oe.ssaStats.entries < 1000 {
-		t.Errorf("went on natively %d times, entered the code kept for the loop %d times", r.jit.wentOn, oe.ssaStats.entries)
+	// The site known by now, the run leaves at each of them, and goes
+	// on, in the code kept for the loop, the function's having no
+	// entry there: register code counts no entries of its own apart
+	// from its function's.
+	if r.jit.wentOn < 1000 || re.isLoop(re.unentered[0]) {
+		t.Errorf("went on natively %d times; an entry at the loop in the function's code %v", r.jit.wentOn, re.isLoop(re.unentered[0]))
 	}
 }
 
@@ -534,40 +414,22 @@ func TestJITOSRShortLoopsLearn(t *testing.T) {
 		}
 	`
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `calls(6000)`, `calls(6000)`)
-	if r.regOn() {
-		life, re := jitNamedForTest(r, "early")
-		if re == nil || re.code == nil {
-			t.Fatalf("early was not compiled: %+v", re)
-		}
-		// Its objects unmade: the loop's entry dropped (unentered).
-		if len(re.unentered) == 0 {
-			t.Fatalf("the function's code does not keep the loop's objects unmade: %+v", re)
-		}
-		oe := re.osr
-		if oe == nil || oe.code == nil {
-			t.Fatalf("no code kept for the loop, after %d frames left native code: %+v", life.goOns, re)
-		}
-		// Whatever went before the code settled, the frames go on natively,
-		// at the loop's next back edge (wentOn).
-		if r.jit.wentOn < 2000 {
-			t.Errorf("%d of the frames that left the function's code went on in the code kept for the loop, of %d", r.jit.wentOn, life.goOns)
-		}
-		return
+	life, re := jitNamedForTest(r, "early")
+	if re == nil || re.code == nil {
+		t.Fatalf("early was not compiled: %+v", re)
 	}
-	e := jitCallbackEntry(r, "early")
-	if e == nil || e.ssa == nil {
-		t.Fatalf("early was not compiled: %+v", e)
+	// Its objects unmade: the loop's entry dropped (unentered).
+	if len(re.unentered) == 0 {
+		t.Fatalf("the function's code does not keep the loop's objects unmade: %+v", re)
 	}
-	if e.ssaVirtuals == 0 || len(e.ssaUnentered) == 0 {
-		t.Fatalf("the function's code does not keep the loop's objects unmade: %+v", e)
+	oe := re.osr
+	if oe == nil || oe.code == nil {
+		t.Fatalf("no code kept for the loop, after %d frames left native code: %+v", life.goOns, re)
 	}
-	oe := e.osr
-	if oe == nil || oe.ssa == nil {
-		t.Fatalf("no code kept for the loop, after %d frames left native code: %+v", e.goOns, e)
-	}
-	// Whatever went before the code settled, the frames go on natively.
-	if oe.ssaStats.entries < 2000 {
-		t.Errorf("%d of the frames that left the function's code went on in the code kept for the loop, of %d", oe.ssaStats.entries, e.goOns)
+	// Whatever went before the code settled, the frames go on natively,
+	// at the loop's next back edge (wentOn).
+	if r.jit.wentOn < 2000 {
+		t.Errorf("%d of the frames that left the function's code went on in the code kept for the loop, of %d", r.jit.wentOn, life.goOns)
 	}
 }
 
@@ -618,75 +480,25 @@ func TestJITFramesLeave(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			run := "calls(3000, " + c.args + ")"
 			r := jitAgreesForTestWith(t, jitStressConfig{}, setup, run, run)
-			if r.regOn() {
-				_, re := jitNamedForTest(r, "leaves")
-				if re == nil || re.code == nil {
-					t.Fatalf("leaves was not compiled: %+v", re)
-				}
-				// No object unmade at the loop: its entry kept (unentered),
-				// no code kept for it; and no homes past its frame for them
-				// (jitRegEntry's frame, its ssa.Func's HomesEnd).
-				if len(re.unentered) != 0 || re.osr != nil || !re.isLoop(regLoopHeaderForTest(r, "leaves")) {
-					t.Fatalf("every call left and the code goes on leaving its objects unmade: unentered %v, osr %v, loops %v", re.unentered, re.osr != nil, re.loops)
-				}
-				if re.frame != 0 {
-					t.Fatalf("code with no object unmade has exits look for them: %d slots of homes", re.frame)
-				}
-				return
+			_, re := jitNamedForTest(r, "leaves")
+			if re == nil || re.code == nil {
+				t.Fatalf("leaves was not compiled: %+v", re)
 			}
-			e := jitCallbackEntry(r, "leaves")
-			if e == nil || e.ssa == nil {
-				t.Fatalf("leaves was not compiled: %+v", e)
+			// No object unmade at the loop: its entry kept (unentered),
+			// no code kept for it; and no homes past its frame for them
+			// (jitRegEntry's frame, its ssa.Func's HomesEnd).
+			if len(re.unentered) != 0 || re.osr != nil || !re.isLoop(regLoopHeaderForTest(r, "leaves")) {
+				t.Fatalf("every call left and the code goes on leaving its objects unmade: unentered %v, osr %v, loops %v", re.unentered, re.osr != nil, re.loops)
 			}
-			if len(e.ssaUnentered) != 0 || e.osr != nil || e.ssaVirtuals != 0 {
-				t.Fatalf("every call left and the code goes on leaving its objects unmade: unentered %v, osr %v, virtuals %d", e.ssaUnentered, e.osr != nil, e.ssaVirtuals)
-			}
-			if e.ssaHomes != 0 {
-				t.Fatalf("code with no object unmade has exits look for them: %d homes", e.ssaHomes)
+			if re.frame != 0 {
+				t.Fatalf("code with no object unmade has exits look for them: %d slots of homes", re.frame)
 			}
 		})
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `some(6000)`, `some(6000)`)
-	if r.regOn() {
-		// Its objects unmade: the loops' entries dropped (unentered).
-		if _, re := jitNamedForTest(r, "several"); re == nil || re.code == nil || len(re.unentered) != 4 || re.osr == nil {
-			t.Fatalf("calls that run their loops through gave up what they gain: %+v", re)
-		}
-		return
-	}
-	e := jitCallbackEntry(r, "several")
-	if e == nil || e.ssaVirtuals == 0 || len(e.ssaUnentered) != 4 || e.osr == nil {
-		t.Fatalf("calls that run their loops through gave up what they gain: %+v", e)
-	}
-}
-
-// An exit looks for objects not made in the homes of the code that may still
-// exit: the new code's once no run of the code it replaced is left, however
-// that ends.
-func TestJITHomesComeDown(t *testing.T) {
-	t.Parallel()
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	skipUnderRegJIT(t, "the stack form's homes, which an entry keeps for the runs of every code it had (setHomes, jitRunDone); register code's are its own code's frame (jitRegEntry's frame)")
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `once(200000)`)
-	e, s := jitCallbackEntry(r, "once"), r.jit
-	if e == nil {
-		t.Fatal("once was not compiled")
-	}
-	e.setHomes(s, 40)
-	if e.ssaHomes != 40 {
-		t.Fatalf("no run of the code: its homes %d, not 40", e.ssaHomes)
-	}
-	e.ssaRuns++
-	s.runEntries = append(s.runEntries, e)
-	e.setHomes(s, 0)
-	if e.ssaHomes != 40 {
-		t.Fatalf("a run of the code it replaced lost its homes: %d", e.ssaHomes)
-	}
-	r.jitRunDone(e, 0, s.ctxTop)
-	if e.ssaHomes != 0 {
-		t.Fatalf("its last run ended, and it holds %d homes", e.ssaHomes)
+	// Its objects unmade: the loops' entries dropped (unentered).
+	if _, re := jitNamedForTest(r, "several"); re == nil || re.code == nil || len(re.unentered) != 4 || re.osr == nil {
+		t.Fatalf("calls that run their loops through gave up what they gain: %+v", re)
 	}
 }
 
@@ -718,21 +530,11 @@ func TestJITCompileInARunKeepsItsLoop(t *testing.T) {
 		run = `run(4000000)`
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, run)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "run")
-		if re == nil || re.code == nil || r.jit.ssaEntries == 0 {
-			t.Fatalf("run never ran natively: %+v", re)
-		}
-		if r.jit.osrLearned != 0 || re.osr != nil {
-			t.Fatalf("a frame in a function called once asked for %d loops' code of its own", r.jit.osrLearned)
-		}
-		return
+	_, re := jitNamedForTest(r, "run")
+	if re == nil || re.code == nil || r.jit.ssaEntries == 0 {
+		t.Fatalf("run never ran natively: %+v", re)
 	}
-	e := jitCallbackEntry(r, "run")
-	if e == nil || e.ssa == nil || r.jit.ssaEntries == 0 {
-		t.Fatalf("run never ran natively: %+v", e)
-	}
-	if r.jit.osrLearned != 0 || e.osr != nil {
+	if r.jit.osrLearned != 0 || re.osr != nil {
 		t.Fatalf("a frame in a function called once asked for %d loops' code of its own", r.jit.osrLearned)
 	}
 }
@@ -757,52 +559,40 @@ func TestJITOSRInTheBackground(t *testing.T) {
 			return c.v
 		}
 	`
-	if regJITForTest() {
-		// Register code compiles the code kept for a loop in the
-		// background too (jitRegCompile's osrAt): the frame waiting at the
-		// loop goes on in the interpreter until it is installed, at the
-		// second check after it was handed over, and in it from then on.
-		// The first long call that leaves is the frame (osrRounds' last).
-		rounds := osrRounds("carried", "")
-		r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, rounds[:len(rounds)-1]...)
-		_, re := jitNamedForTest(r, "carried")
-		pc := osrRegHeader(t, re)
-		if re.isLoop(pc) {
-			t.Fatalf("the function's code took the loop's entry")
-		}
-		if re.osr != nil || r.jit.osrLearned != 0 {
-			t.Fatalf("code for the loop before a frame waited there: %+v", re.osr)
-		}
-		submitted, entries := r.jit.bgSubmitted, r.JITStats().SSAEntries
-		jitCallForTest(t, r, rounds[len(rounds)-1], 200000)
-		oe := re.osr
-		if oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned != 1 || re.osrJob != nil {
-			t.Fatalf("the frame did not go on in code of its own: %+v, %d learned, pending %v", oe, r.jit.osrLearned, re.osrJob != nil)
-		}
-		if r.jit.bgSubmitted != submitted+1 || r.jit.bgDiscarded != 0 || r.JITStats().SSAEntries == entries {
-			t.Fatalf("submitted %d, discarded %d, entered %d: want the loop's code compiled in the background and entered",
-				r.jit.bgSubmitted-submitted, r.jit.bgDiscarded, r.JITStats().SSAEntries-entries)
-		}
-		for _, src := range rounds {
-			n, _, _ := strings.Cut(strings.TrimPrefix(src, "carried("), ",")
-			want, _ := strconv.Atoi(n)
-			jitCallForTest(t, r, src, float64(want))
-		}
-		if re.osr != oe || r.jit.osrLearned != 1 {
-			t.Fatalf("the loop's code compiled again: %+v, %d learned", re.osr, r.jit.osrLearned)
-		}
-		return
-	}
-	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, append(osrRounds("carried", ""), osrRounds("carried", "")...)...)
-	e := jitCallbackEntry(r, "carried")
-	pc := osrHeader(t, e)
-	if e.ssa.HasEntry(pc) {
+	// Register code compiles the code kept for a loop in the
+	// background too (jitRegCompile's osrAt): the frame waiting at the
+	// loop goes on in the interpreter until it is installed, at the
+	// second check after it was handed over, and in it from then on.
+	// The first long call that leaves is the frame (osrRounds' last).
+	rounds := osrRounds("carried", "")
+	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, rounds[:len(rounds)-1]...)
+	_, re := jitNamedForTest(r, "carried")
+	pc := osrRegHeader(t, re)
+	if re.isLoop(pc) {
 		t.Fatalf("the function's code took the loop's entry")
 	}
-	oe := e.osr
-	if oe == nil || oe.ssa == nil || !oe.ssa.HasEntry(pc) || oe.ssaStats.entries == 0 {
-		t.Fatalf("the frame did not go on in code of its own: %+v", oe)
+	if re.osr != nil || r.jit.osrLearned != 0 {
+		t.Fatalf("code for the loop before a frame waited there: %+v", re.osr)
 	}
+	submitted, entries := r.jit.bgSubmitted, r.JITStats().SSAEntries
+	jitCallForTest(t, r, rounds[len(rounds)-1], 200000)
+	oe := re.osr
+	if oe == nil || oe.code == nil || !oe.isLoop(pc) || r.jit.osrLearned != 1 || re.osrJob != nil {
+		t.Fatalf("the frame did not go on in code of its own: %+v, %d learned, pending %v", oe, r.jit.osrLearned, re.osrJob != nil)
+	}
+	if r.jit.bgSubmitted != submitted+1 || r.jit.bgDiscarded != 0 || r.JITStats().SSAEntries == entries {
+		t.Fatalf("submitted %d, discarded %d, entered %d: want the loop's code compiled in the background and entered",
+			r.jit.bgSubmitted-submitted, r.jit.bgDiscarded, r.JITStats().SSAEntries-entries)
+	}
+	for _, src := range rounds {
+		n, _, _ := strings.Cut(strings.TrimPrefix(src, "carried("), ",")
+		want, _ := strconv.Atoi(n)
+		jitCallForTest(t, r, src, float64(want))
+	}
+	if re.osr != oe || r.jit.osrLearned != 1 {
+		t.Fatalf("the loop's code compiled again: %+v, %d learned", re.osr, r.jit.osrLearned)
+	}
+
 }
 
 // A shape one code of a function missed, the other, compiled no later,
@@ -828,12 +618,8 @@ func TestJITOSRSiteNotMegamorphic(t *testing.T) {
 	`
 	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `run(a, 200000)`, `run(b, 200000)`)
 	e, re := jitNamedForTest(r, "run")
-	if r.regOn() {
-		if re == nil || re.code == nil {
-			t.Fatalf("run was not compiled: %+v", re)
-		}
-	} else if e == nil || e.ssa == nil {
-		t.Fatalf("run was not compiled: %+v", e)
+	if re == nil || re.code == nil {
+		t.Fatalf("run was not compiled: %+v", re)
 	}
 	for i := range e.poly {
 		if e.poly[i].mega {
@@ -852,35 +638,18 @@ func TestJITOSRTellsBeforeItsCompile(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		life, re := jitNamedForTest(r, "sum")
-		if re == nil || re.osr == nil || re.osr.code == nil {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		if life.reoptPending() {
-			t.Fatalf("learning the loop's entry has the function's code compiled again: %+v", life)
-		}
-		// What the code kept for the loop learns is its function's state
-		// (its life, the same): nothing to tell, before its compile or
-		// after, as the stack form's code apart tells its function's entry.
-		if re.osr.life != life {
-			t.Fatalf("the code kept for the loop learns apart from its function")
-		}
-		return
+	life, re := jitNamedForTest(r, "sum")
+	if re == nil || re.osr == nil || re.osr.code == nil {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.osr == nil || e.osr.ssa == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
+	if life.reoptPending() {
+		t.Fatalf("learning the loop's entry has the function's code compiled again: %+v", life)
 	}
-	if e.reoptPending() {
-		t.Fatalf("learning the loop's entry has the function's code compiled again: %+v", e)
-	}
-	oe := e.osr
-	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
-	oe.resumeReopt = true
-	r.jitReoptimize(cl, oe)
-	if oe.resumeReopt || !e.resumeReopt {
-		t.Fatalf("not told before its compile: told %v, still set %v", e.resumeReopt, oe.resumeReopt)
+	// What the code kept for the loop learns is its function's state
+	// (its life, the same): nothing to tell, before its compile or
+	// after, as the stack form's code apart tells its function's entry.
+	if re.osr.life != life {
+		t.Fatalf("the code kept for the loop learns apart from its function")
 	}
 }
 
@@ -892,51 +661,18 @@ func TestJITOSRUsesTheFunction(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		// Register code kept for a loop counts its entries in its
-		// function's state (its life), which the cache's uses of the
-		// function's code count (regUses).
-		life, re := jitNamedForTest(r, "sum")
-		if re == nil || re.osr == nil || re.osr.life != life {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		u := r.jit.regUses(re)
-		re.osr.life.ssaStats.entries++
-		if r.jit.regUses(re) != u+1 {
-			t.Fatalf("an entry of the code kept for the loop is no use of the function: %d, %d", u, r.jit.regUses(re))
-		}
-		return
+	// Register code kept for a loop counts its entries in its
+	// function's state (its life), which the cache's uses of the
+	// function's code count (regUses).
+	life, re := jitNamedForTest(r, "sum")
+	if re == nil || re.osr == nil || re.osr.life != life {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.osr == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
+	u := r.jit.regUses(re)
+	re.osr.life.ssaStats.entries++
+	if r.jit.regUses(re) != u+1 {
+		t.Fatalf("an entry of the code kept for the loop is no use of the function: %d, %d", u, r.jit.regUses(re))
 	}
-	u := e.uses()
-	e.osr.ssaStats.entries++
-	if e.uses() != u+1 {
-		t.Fatalf("an entry of the code kept for the loop is no use of the function: %d, %d", u, e.uses())
-	}
-}
-
-// The code kept for a loop starts from what its function's compiles have
-// spent: told its reasons, the function's code gets no more compiles than
-// its budgets give it.
-func TestJITOSRSpendsTheFunctionsBudgets(t *testing.T) {
-	t.Parallel()
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20, 3)`, `sum(20, 3)`)
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.ssa == nil {
-		t.Skipf("sum was not compiled: %+v", e)
-	}
-	e.inlineReopts, e.upgradeReopts, e.polyReopts = 2, 3, 4
-	oe := r.jit.osrEntry(e)
-	if oe.inlineReopts != 2 || oe.upgradeReopts != 3 || oe.polyReopts != 4 {
-		t.Fatalf("budgets afresh: %+v", oe)
-	}
-	r.jit.dropOSR(e)
 }
 
 // What the code kept for a loop learned at its exits, the function's code
@@ -948,32 +684,18 @@ func TestJITOSRTellsTheFunction(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		// What register code kept for a loop learns at its exits is its
-		// function's state (its life, the same), whose code is compiled
-		// for it.
-		life, re := jitNamedForTest(r, "sum")
-		if re == nil || re.osr == nil || re.osr.life != life {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		re.osr.life.polyReopt = true
-		if !life.polyReopt || !life.reoptPending() {
-			t.Fatalf("the function's state was not told: %+v", life)
-		}
-		life.polyReopt = false
-		return
+	// What register code kept for a loop learns at its exits is its
+	// function's state (its life, the same), whose code is compiled
+	// for it.
+	life, re := jitNamedForTest(r, "sum")
+	if re == nil || re.osr == nil || re.osr.life != life {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.osr == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
+	re.osr.life.polyReopt = true
+	if !life.polyReopt || !life.reoptPending() {
+		t.Fatalf("the function's state was not told: %+v", life)
 	}
-	oe := e.osr
-	oe.polyReopt = true
-	r.jit.osrRunDone(oe)
-	if !e.polyReopt || !e.reoptPending() {
-		t.Fatalf("the function's entry was not told: %+v", e)
-	}
-	oe.polyReopt = false
+	life.polyReopt = false
 }
 
 // The function's code compiled again, the code kept for its loops goes: it
@@ -986,75 +708,36 @@ func TestJITOSRGoesWithTheCode(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "sum")
-		if re == nil || re.osr == nil {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		oe, s := re.osr, r.jit
-		cl := jitGlobalClosure(r, "sum")
-		held := s.regHeld
-
-		// A run in it.
-		oe.runs++
-		ne := r.jitRegReoptimize(cl, r.regOf(cl), re, -1)
-		if ne == nil || ne == re || re.osr != nil || !oe.dropped || oe.code == nil {
-			t.Fatalf("compiled again: %v, kept for the loop %v, dropped %v, closed under its run %v", ne != nil, re.osr != nil, oe.dropped, oe.code == nil)
-		}
-		if want := held - re.bytes - oe.bytes + ne.bytes; s.regHeld != want {
-			t.Errorf("the cache holds %d bytes, %d of them its code's", s.regHeld, want)
-		}
-		oe.runs--
-		s.jitRegCloseRetired()
-		if oe.code != nil {
-			t.Fatalf("kept once its run ended: %+v", oe)
-		}
-
-		// A long call now begins in the function's code, and needs none.
-		v, err := r.Run(compileForTest(t, `sum(200000, -1)`))
-		if err != nil || v.Number() != 200000 {
-			t.Fatalf("got %v, %v", v, err)
-		}
-		if _, re = jitNamedForTest(r, "sum"); re.osr != nil {
-			t.Fatalf("a call begun in the function's code had code kept for its loop: %+v", re.osr)
-		}
-		return
+	_, re := jitNamedForTest(r, "sum")
+	if re == nil || re.osr == nil {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.osr == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
-	}
-	oe := e.osr
-	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
-	before := e.measure()
+	oe, s := re.osr, r.jit
+	cl := jitGlobalClosure(r, "sum")
+	held := s.regHeld
 
 	// A run in it.
-	oe.ssaRuns++
-	e.inlineReopt = true
-	r.jitReoptimize(cl, e)
-	if e.osr != oe || !oe.osrSpent {
-		t.Fatalf("let go under a run: %+v", e)
+	oe.runs++
+	ne := r.jitRegReoptimize(cl, r.regOf(cl), re, -1)
+	if ne == nil || ne == re || re.osr != nil || !oe.dropped || oe.code == nil {
+		t.Fatalf("compiled again: %v, kept for the loop %v, dropped %v, closed under its run %v", ne != nil, re.osr != nil, oe.dropped, oe.code == nil)
 	}
-	oe.ssaRuns--
-	r.jit.osrRunDone(oe)
-	if e.osr != nil {
-		t.Fatalf("kept once its run ended: %+v", e)
+	if want := held - re.bytes - oe.bytes + ne.bytes; s.regHeld != want {
+		t.Errorf("the cache holds %d bytes, %d of them its code's", s.regHeld, want)
 	}
-	if oe.owned() {
-		t.Fatalf("still its link's")
+	oe.runs--
+	s.jitRegCloseRetired()
+	if oe.code != nil {
+		t.Fatalf("kept once its run ended: %+v", oe)
 	}
-	if e.measure() >= before {
-		t.Errorf("the entry holds %d bytes for %d", e.measure(), before)
-	}
-	r.jit.account(e)
 
 	// A long call now begins in the function's code, and needs none.
 	v, err := r.Run(compileForTest(t, `sum(200000, -1)`))
 	if err != nil || v.Number() != 200000 {
 		t.Fatalf("got %v, %v", v, err)
 	}
-	if e.osr != nil {
-		t.Fatalf("a call begun in the function's code had code kept for its loop: %+v", e.osr)
+	if _, re = jitNamedForTest(r, "sum"); re.osr != nil {
+		t.Fatalf("a call begun in the function's code had code kept for its loop: %+v", re.osr)
 	}
 }
 
@@ -1066,94 +749,51 @@ func TestJITOSRCounted(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, osrRounds("sum", "")...)
-	if r.regOn() {
-		_, re := jitNamedForTest(r, "sum")
-		if re == nil || re.osr == nil {
-			t.Fatalf("no code kept for the loop: %+v", re)
-		}
-		oe, s := re.osr, r.jit
-		// Counted in what the cache holds (regHeld), no less than its code.
-		if oe.bytes < oe.code.Footprint() {
-			t.Fatalf("%d bytes counted for %d of code", oe.bytes, oe.code.Footprint())
-		}
-		// With what each function's state holds (regAccount).
-		held := 0
-		for _, x := range s.regCache {
-			held += x.bytes
-			if x.osr != nil {
-				held += x.osr.bytes
-			}
-		}
-		for _, l := range s.regLearned {
-			if l.regCounted {
-				held += l.bytes
-			}
-		}
-		if s.regHeld != held {
-			t.Fatalf("the cache counts %d bytes of %d", s.regHeld, held)
-		}
-		// In use while it is compiled again, or runs.
-		if !s.regInUse(oe) {
-			oe.busy++
-			if !s.regInUse(oe) {
-				t.Errorf("code kept for a loop being compiled is not in use")
-			}
-			oe.busy--
-			oe.runs++
-			if !s.regInUse(oe) {
-				t.Errorf("code kept for a loop that runs is not in use")
-			}
-			oe.runs--
-		}
-		before := s.regHeld
-		s.dropReg(re.key, re)
-		if re.osr != nil || !oe.dropped || oe.code != nil {
-			t.Fatalf("the code kept for the loop outlived its function's: %+v", oe)
-		}
-		if s.regHeld >= before {
-			t.Errorf("the cache holds %d bytes, %d before", s.regHeld, before)
-		}
-		// Compiled afresh, and right.
-		for range 3 {
-			if v, err := r.Run(compileForTest(t, `sum(100000, -1)`)); err != nil || v.Number() != 100000 {
-				t.Fatalf("got %v, %v", v, err)
-			}
-		}
-		return
+	_, re := jitNamedForTest(r, "sum")
+	if re == nil || re.osr == nil {
+		t.Fatalf("no code kept for the loop: %+v", re)
 	}
-	e := jitCallbackEntry(r, "sum")
-	if e == nil || e.osr == nil {
-		t.Fatalf("no code kept for the loop: %+v", e)
+	oe, s := re.osr, r.jit
+	// Counted in what the cache holds (regHeld), no less than its code.
+	if oe.bytes < oe.code.Footprint() {
+		t.Fatalf("%d bytes counted for %d of code", oe.bytes, oe.code.Footprint())
 	}
-	oe := e.osr
-	if n := e.osrBytes(); n < oe.ssa.Footprint() {
-		t.Fatalf("%d bytes counted for %d of code", n, oe.ssa.Footprint())
+	// With what each function's state holds (regAccount).
+	held := 0
+	for _, x := range s.regCache {
+		held += x.bytes
+		if x.osr != nil {
+			held += x.osr.bytes
+		}
 	}
-	if e.bytes != e.measure() {
-		t.Fatalf("the cache counts %d bytes of %d", e.bytes, e.measure())
+	for _, l := range s.regLearned {
+		if l.regCounted {
+			held += l.bytes
+		}
 	}
-	if !r.jit.inUse(e) {
+	if s.regHeld != held {
+		t.Fatalf("the cache counts %d bytes of %d", s.regHeld, held)
+	}
+	// In use while it is compiled again, or runs.
+	if !s.regInUse(oe) {
 		oe.busy++
-		if !r.jit.inUse(e) {
-			t.Errorf("an entry whose code for its loop is being compiled is not in use")
+		if !s.regInUse(oe) {
+			t.Errorf("code kept for a loop being compiled is not in use")
 		}
 		oe.busy--
-		oe.ssaRuns++
-		if !r.jit.inUse(e) {
-			t.Errorf("an entry whose code for its loop runs is not in use")
+		oe.runs++
+		if !s.regInUse(oe) {
+			t.Errorf("code kept for a loop that runs is not in use")
 		}
-		oe.ssaRuns--
+		oe.runs--
 	}
-	held := r.jit.entryBytes
-	key := r.jit.linkKeyForTest(e)
-	if !r.jit.dropEntry(key, e) {
-		t.Fatal("the entry was not dropped")
-	}
-	if e.osr != nil || oe.owned() {
+	before := s.regHeld
+	s.dropReg(re.key, re)
+	if re.osr != nil || !oe.dropped || oe.code != nil {
 		t.Fatalf("the code kept for the loop outlived its function's: %+v", oe)
 	}
-	if r.jit.entryBytes >= held {
-		t.Errorf("the cache holds %d bytes, %d before", r.jit.entryBytes, held)
+	if s.regHeld >= before {
+		t.Errorf("the cache holds %d bytes, %d before", s.regHeld, before)
 	}
 	// Compiled afresh, and right.
 	for range 3 {
@@ -1161,17 +801,5 @@ func TestJITOSRCounted(t *testing.T) {
 			t.Fatalf("got %v, %v", v, err)
 		}
 	}
-}
 
-// linkKeyForTest is the cache's key of e.
-func (s *jitState) linkKeyForTest(e *jitEntry) (key jitKeyForTest) {
-	for k, x := range s.cache {
-		if x == e {
-			return k
-		}
-	}
-	return key
 }
-
-// jitKeyForTest is the cache's key.
-type jitKeyForTest = jitKey

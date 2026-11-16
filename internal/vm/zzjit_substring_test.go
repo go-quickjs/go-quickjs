@@ -167,7 +167,7 @@ const longerSetup = `
 // OpSubstringChar leaves, is a call of the leaf without a frame (ssa.GoLeaf)
 // on its branch, the function checked: warm, lengths makes no call of Go
 // with a frame and never leaves its code -- each had been a call Go made
-// with one, slower than the tree tier's call of the leaf. A receiver the
+// with one, slower than the interpreter's call of the leaf. A receiver the
 // leaf refuses, a number, leaves for Go. Each answer is the interpreter's.
 func TestJITSubstringLonger(t *testing.T) {
 	t.Parallel()

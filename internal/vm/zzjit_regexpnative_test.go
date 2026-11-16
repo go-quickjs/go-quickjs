@@ -253,11 +253,9 @@ const regexpNativeSearchWant = "let x = 10 * ( y + 42 ) ;;;;bc;x1,y2;100;-1;n,N,
 // tier's, over bytes and UTF-16, with the collector idle and while it
 // marks.
 func TestJITRegExpNativeSearch(t *testing.T) {
-	SetTreeTier(false)
 	interp := New(Config{})
 	v, err := interp.Run(compileForTest(t, regexpNativeSearchSetup+"search(2)"))
 	interp.Close()
-	SetTreeTier(true)
 	if err != nil {
 		t.Fatal(err)
 	}

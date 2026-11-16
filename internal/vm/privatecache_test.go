@@ -237,11 +237,11 @@ operators 2: 3,4,3,40,41,1,41,0,,0
 throw 2: 3 true`
 
 // Reads and writes of private members answer what Node's do, in a runtime
-// made twice, the tree tier on and off.
+// made four times.
 func TestPrivateMembersAgreeWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 4 {
-		r := newTreeTierForTest(round < 2, Config{})
+		r := New(Config{})
 		v, err := r.Run(compileForTest(t, privateMemberScript))
 		if err != nil {
 			t.Fatal(err)
@@ -253,7 +253,7 @@ func TestPrivateMembersAgreeWithNode(t *testing.T) {
 	}
 }
 
-// The reads and writes of private fields, in a function the tree tier
+// The reads and writes of private fields, in a function register code
 // runs, are answered by their sites' caches: the caches past the
 // function's PropSites, one for each in the order of the code, remember
 // the object's shape and where in it each member is; a getter's member,
@@ -281,7 +281,7 @@ func TestPrivateSitesCached(t *testing.T) {
 		t.Fatalf("PrivateSites = %d, want 4", fn.PrivateSites)
 	}
 	want := int(fn.PropSites+fn.PrivateSites) + 1
-	if rc := fn.RegCompiled(); rc != nil && rc.Names != nil && regTier.Load() {
+	if rc := fn.RegCompiled(); rc != nil && rc.Names != nil {
 		// Register code compiled at the function's first call numbers its
 		// own sites past the private members' (bytecode.RegLater).
 		want = int(rc.PropSites) + 1
@@ -295,13 +295,13 @@ func TestPrivateSitesCached(t *testing.T) {
 		t.Fatalf("keys %v", keys)
 	}
 	// The code reads #n, writes it, reads #m and reads #g, in that order:
-	// the stack form's sites, or, as register code, the sites of its
-	// get_private and set_private (their Aux's high half).
+	// the sites of its get_private and set_private (their Aux's high
+	// half).
 	sites := make([]uint32, 4)
 	for i := range sites {
 		sites[i] = fn.PropSites + 1 + uint32(i)
 	}
-	if rc := fn.RegCode(); rc != nil && regTier.Load() {
+	if rc := fn.RegCode(); rc != nil {
 		sites = sites[:0]
 		for pc, w := range rc.Code {
 			if w.Op() == bytecode.RGetPrivate || w.Op() == bytecode.RSetPrivate {

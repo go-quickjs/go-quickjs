@@ -61,21 +61,16 @@ measurement and [Not implemented](docs/status.md#not-implemented) for what is mi
 
 ## Performance
 
-On amd64 and arm64, functions run in the register interpreter, whose
-handlers are native code generated for it ([its
-design](docs/register-interpreter.md)). On other architectures, and in a
-runtime with the JIT, they still run in the stack bytecode interpreter the
-engine started with, after QuickJS's, most of them as trees of Go
-closures built from their bytecode. Both move to the register interpreter
--- other architectures as their native handlers land, the JIT once it
-compiles from register code -- and the stack interpreter is then
-removed. The JIT, which is optional and experimental, compiles hot
-functions to native code on `linux/amd64`, `windows/amd64`,
-`darwin/arm64` and `linux/arm64`. It follows V8's optimizing compilers:
-it speculates on what the inline caches have seen, inlines calls, and falls
-back to the interpreter when a speculation fails. It needs both a build
-with `-tags quickjs_jit` and a runtime made with `quickjs.WithJIT()` (or
-`qjs --jit`); anything else runs exactly as before:
+Functions run in the register interpreter ([its
+design](docs/register-interpreter.md)), whose handlers are native code
+generated for it on amd64 and arm64, and a table of Go functions on other
+architectures. The JIT, which is optional and experimental, compiles hot
+functions from their register code to native code on `linux/amd64`,
+`windows/amd64`, `darwin/arm64` and `linux/arm64`. It follows V8's
+optimizing compilers: it speculates on what the inline caches have seen,
+inlines calls, and falls back to the interpreter when a speculation fails.
+It needs both a build with `-tags quickjs_jit` and a runtime made with
+`quickjs.WithJIT()` (or `qjs --jit`); anything else runs exactly as before:
 
 ```go
 // go build -tags quickjs_jit
@@ -98,7 +93,8 @@ workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.53
+Measured at `acffb1aa`, before the register interpreter was the default,
+on the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.53
 times QuickJS's time over the suite and has a 41% higher composite score,
 and with the experimental JIT 0.24 times its time and a composite score 5.2
 times as high. On the larger programs of Octane and Are We Fast Yet it

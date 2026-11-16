@@ -10,12 +10,12 @@ import (
 // The register form of a function's code: what the register interpreter
 // runs (docs/register-interpreter.md).
 //
-// A frame is a window of registers in the runtime's value stack. The first
-// LocalCount are the function's locals, in the slots the stack form gives
-// them, so that an upvalue, a stack trace and the debugger find a local
-// where they always did; the temporaries the stack form keeps on its operand
-// stack follow, one register for each depth that stack reaches, and then the
-// few registers the register form adds of its own.
+// A frame is a window of registers in the runtime's value stack: register
+// 0 is the function called, register 1 its this, and the parameters follow
+// from register 2, in order; then the function's bindings that live in
+// registers, and then the temporaries (docs/register-interpreter.md, "The
+// frame"). Where a reader needs a local by its stack-form slot -- a direct
+// eval, the debugger -- RegCode.LocalReg maps each local to its register.
 //
 // An instruction is one 64-bit word, read as a struct of an operation and
 // four operands:
@@ -27,9 +27,10 @@ import (
 //	bits 48-63  C   a register, an index or a small immediate
 //
 // B and C read together are BC, a 32-bit index or a signed jump offset. A
-// register is 16 bits, so a function has up to 65,536 of them without any
-// form of its own for more; a function that needs more registers runs in the
-// stack form until the far moves of the design's later stage exist.
+// register is 16 bits, so an operand reaches 65,536 of them; a function
+// whose bindings do not fit has the rest as far registers, past every near
+// one, reached only by RMovFar, RMovToFar and RFarInit
+// (docs/register-interpreter.md, "Nothing is capped").
 
 // RInstr is one register instruction.
 type RInstr uint64
@@ -357,8 +358,7 @@ const (
 	// x[i--] of a local i, the read's key the step's old value.
 	RGetIndexPost
 	// RNewArrayE: R[A] = [], an empty literal made with the room its arrays
-	// came to need: B is its site, which learns it (the tree's
-	// arrayEmptyNode's).
+	// came to need: B is its site, which learns it.
 	RNewArrayE
 	// RAddIndex: R[A][R[B]] += R[C]; RAddIndexK: R[A][C] += R[B], a key
 	// that is an index; RAddIndexI: R[A][R[B]] += SC. Each is a statement's
@@ -577,7 +577,7 @@ const (
 	// BigInt.asUintN or asIntN and x and y BigInts held in their Values,
 	// it makes the call's value, x op y of width w, at once (wrapShort)
 	// and passes the call over -- never a BigInt past 64 bits, which the
-	// call would cut down again -- as the tree's wrapCall does (wrap).
+	// call would cut down again.
 	RWrap
 	// A generator's and an async function's (zzreg_zgen.go): RGenEntry,
 	// the code's first instruction, run by its first run and by a
@@ -692,9 +692,9 @@ const (
 
 	// The loop kernels' and int32 results' operations, after every other
 	// so that no value before them changes (docs/register-interpreter.md,
-	// "Loop-kernel instructions"). Reserved: until each has its handlers
-	// and its lowering, nothing emits it and its table entry panics, as a
-	// value no operation has.
+	// "Loop-kernel instructions"). Each has its Go and native handlers
+	// and its lowering, and the register compiler emits it (regcomp's
+	// fuseSteps, immOps and orZero).
 	//
 	// The step-and-branch operations are a step and the compare-and-branch
 	// after it, its partner, in one dispatch: R[A] = R[A] + k, then a jump
@@ -816,8 +816,7 @@ const (
 // or a pc, is the instruction's Aux, all 32 bits of it.
 const (
 	// RMarkDead says nothing reads the call's value but its truth: a call
-	// of exec or replace is told so, as the tree's deadExec tells it, to
-	// make no array or string.
+	// of exec or replace is told so, to make no array or string.
 	RMarkDead = 1 << iota
 	// RMarkReuse marks a call of exec whose value goes to the local of
 	// register B, its Aux the stack form's call (execReuseOf): the array
@@ -983,37 +982,14 @@ type RegLater struct {
 	// make compiles the code, holding what the compiler recorded until
 	// then; it is dropped once it has run.
 	make func() *RegCode
-	// old says the function runs on the stack interpreter and the tree
-	// tier wherever it runs (Function.KeepOldTiers).
-	old atomic.Bool
 }
 
 // RegNone is a RegLater with no code: top-level code's that the register
-// backend refused, which a runtime running register code counts as a
-// fallback, where a function with no RegLater at all was compiled with no
-// register form.
+// backend refused, whose run a runtime reports as an internal error.
 func RegNone() *RegLater {
 	l := &RegLater{}
 	l.done.Store(true)
 	return l
-}
-
-// KeepOldTiers has f run on the stack interpreter and the tree tier, its
-// register form unused, in every runtime: a runtime that runs no register
-// code -- one with the JIT -- marks the code it loads so, where it was
-// compiled for one that does, since the tree a function is run as is the
-// same in every runtime. A host compiles a runtime's code for it, with no
-// register form for such a runtime, so this is for code handed to both.
-func (f *Function) KeepOldTiers() {
-	if l := f.Reg; l != nil && !l.old.Load() {
-		l.old.Store(true)
-	}
-}
-
-// OldTiers reports whether KeepOldTiers marked f.
-func (f *Function) OldTiers() bool {
-	l := f.Reg
-	return l != nil && l.old.Load()
 }
 
 // NewRegLater returns the register code that make compiles when first

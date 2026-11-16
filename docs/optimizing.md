@@ -81,10 +81,15 @@ about the code, the rest about where it and its data are.
   of `-gcflags=<pkg>=-m` between the two builds. Keep a growth path (the
   call that grows a table) out of an inlined fast path: split it into an
   out-of-line "make room" and an inlined store.
-- **The hot functions.** `hotdiff` and `go tool nm` on the seven of
-  AGENTS.md: their sizes and addresses must match the base. A
-  displacement that changes in an instruction of the same length is
-  fine. A call that appears where code was inlined is not: `runFD` called
+- **The hot functions.** `hotdiff` and `go tool nm` on the register
+  interpreter's hot set: the loop, `runReg`; the calls, `rhCallW`,
+  `regEnterW`, `regCallSlow`, `regRunFD` and `callObject`; the native
+  dispatcher's Go side, `nativeRun`, `nativeLoop`, `nativeDrive` and
+  `nativeCallbackRun`; and its assembly,
+  `nativeEnter`, `nativeCallH`, `nativeStoreRef` and the handler blocks
+  (`regNativeHandlers`, `regNativeFeedbackHandlers`). Their sizes and
+  addresses must match the base. A displacement that changes in an
+  instruction of the same length is fine. A call that appears where code was inlined is not: `runFD` called
   `newObject` once `newObject` stopped inlining, and every instruction
   after the call moved.
 - **Representation checks.** When a change moves a fact into the shape,
@@ -95,7 +100,7 @@ about the code, the rest about where it and its data are.
 - **The JIT's feedback.** A new kind of object meets every cache-fill
   path. One that counts a fill but remembers nothing makes the JIT treat
   the site as unfed and deoptimize at each run. A Go fallback from native
-  code that does less than the tree tier's fallback leaves the object
+  code that does less than the interpreter's slow path leaves the object
   where native code's probe never matches. A heuristic that guesses a
   usage pattern must recognize the opposite pattern early: one that
   treated each class's first object as a singleton reset RayTrace's
@@ -114,22 +119,21 @@ about the code, the rest about where it and its data are.
   because of what other closures did. `Math.clz32` was 1.22 to 1.31x
   main's for that reason; as a named function it is 0.92x. Hot code goes
   in named functions, where the placements vary it.
-- **Alignment within a placement group.** The placements shift groups of
-  functions by multiples of 32 bytes, so a function that a change moved
+- **Alignment within a placement group.** The placements shift six groups
+  of code by multiples of 32 bytes, starting at `callObject`, `jitLeafGo`,
+  `runReg`, `rhCallW`, `nativeDrive` and the assembly after the closures,
+  each at 0 and at 32 mod 64 in half of the eight (the placements tool's
+  package documentation has the design), so a function that a change moved
   by an odd multiple of 32 relative to its group has its 64-byte
   alignment flipped at every placement. Compare the test's hot functions'
   addresses mod 64 on both sides before calling it a cost.
-- **The interpreter loops' layout inside them.** A pad moves a loop
-  whole; a change to one case moves every case laid out after it
-  against the others and against the dispatch. The placements vary that
-  too: never-taken tests in the first case, executeAt's `OpNop` (three
-  times the placement's number) and runReg's `RNop` (`regInner`, 0 to 7
-  calls of a two-test filler, a permutation over the eight), and in
-  runReg's last case, after which its shared tails are laid out
-  (`regTail`, another permutation), written only into the placement
-  builds: the cases move against the dispatch and the tails against the
-  cases. A test slower at some of those inner layouts and level at others
-  is placement.
+- **The handlers' layout.** The register interpreter's loop has no
+  cases to move: its Go handlers are functions laid out one after
+  another, and the native handlers a block in `handlerOps`' order. The
+  placements move the block whole, after the closures, and do not vary
+  the layout inside it; a handler added moves those after it in its file
+  or the block, which is why new ones are appended
+  (docs/register-interpreter.md, "Code layout").
 - **Native code's layout inside a function.** Moving a whole native
   function by lines changes little; moving code within its lines, or
   changing distances inside it, does. The JIT's placements move code by
@@ -192,11 +196,16 @@ code at fixed addresses modulo 4 KB (the op cache's sets) and the Go
 runtime's hot variables at fixed offsets in their cache lines, whatever a
 change does around them. `internal/vm/layoutlock.txt` names each anchor
 and its target for each configuration -- windows/amd64 and linux/amd64,
-plain and with the JIT, for the toolchain the targets were measured with
+plain and with the JIT, for the toolchain the targets were recorded with
 -- and `internal/cmd/layoutpad`, which `go generate ./internal/vm` runs,
-builds `internal/cmd/v8bench` as the targets were measured and sizes the
+builds `internal/cmd/v8bench` as the targets were recorded and sizes the
 pads until every anchor is at its target. `TestLayoutLock` fails when one
 has drifted.
+
+The present targets were recorded from the tree as the stack interpreter
+and the tree tier were removed, where the code was then, not chosen by
+measurement: the timing of the register interpreter across placements
+decides them, and a target it shows to be a bad one is recorded anew.
 
 What it pins, and how. Each lever is a constant of
 `layoutpad_GOOS_GOARCH.go` or `layoutpad_jit_GOOS_GOARCH.go`; every pad is
@@ -205,11 +214,10 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
-| A D R V B S T J Z | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `descriptorObject` (`define.go` to the tree's builder), `buildTreeSkipping` (the tree's builder and slow paths, `arithSlow`), `executeAt`, `callObject`, `runTree`, `callTree`, `logicalJumps` or with the JIT `jitLeafGo`, and the closures at `binaryNode.func1` |
-| Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the calls after it from `regCallW` (W), its handlers after them |
-| GV | a generic `layoutPadV` calls | the generics plain functions meet first, from `vm.go` back | `rmwStmtHook` and the tree's generic nodes after it: `strAppend`, `upvalueAdd`, `litNodeOf`, switch, typeof, the regexp leaves |
-| MA MV MS | a generic that a method at the position calls | the generics methods meet first, from that file back | the method values (`upvalueAdd.node-fm` ...), `dataViewLeaves` and the DataView leaves, `polyReread` and object creation's |
-| CZ | a closure in a generic the last file calls | the closures of generics | `strAppendNode.func1` and the generic tree nodes' closures |
+| A D B J | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `descriptorObject` (`define.go` on), `callObject` (with `callDirect` and `runFD` after it), and `regCall` (the register calls' entries, `regCallSlow` and `regRunFD`) or with the JIT `jitLeafGo` |
+| Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the call path after it, `rhCallW` (W), its handlers after them |
+| Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
+| G*x* M*x* CZ | a generic a position's pad, or a method at it, calls; a closure in a generic the last file calls | the generics plain functions or methods meet first, from that file back; the closures of generics | nothing at present: no configuration anchors them |
 | DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
 | X | `layoutPadX`, a function in `internal/regexp/aa_layoutpad.go`, its constant in that package's own configuration files | every function of package regexp, and what follows it up to vm, whose levers absorb it | the matcher, `(*matcherASCII).run`, and with it its `search` and the searches for a unit (`indexUnit`, `skipUnitsASCII`) |
 | H | `layoutPadH`, an assembly function of whole 32-byte slots of int3 bytes in `zzzyn_native_a_layoutpad_*.s`, one file a configuration, sorted after the JIT's assembly and before `zzzyn_native_<arch>.s` | the native handlers' block, and vm's `init` and the closures of generics after it, which CZ absorbs | `regNativeHandlers`, and with it `nativeEnter`, `nativeCallH` and, in a build with the JIT, the feedback handlers before it |
@@ -225,9 +233,11 @@ What each lever cannot move:
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.
-  The Z pad moves the block whole, as the placements do; closures added
-  before `binaryNode.func1` are absorbed, but closures against each other
-  are not pinned.
+  No anchor holds them now (the Z pad, which moves the block whole, is left
+  out), and closures against each other are not pinned. The package's
+  assembly -- the native handlers' block, its entry and exit stubs, the
+  JIT's leaf stubs -- is laid out after the closures, so a closure added
+  moves it, and no lever pins it.
 - **Generics** come last, by when Go first instantiates them: it reads the
   bodies of a package's functions last first, then its methods', and
   instantiates a generic where a body first meets it, then what that
@@ -277,15 +287,17 @@ What each lever cannot move:
   are one Go release's, the tool refuses another (and the test skips), and
   other platforms build no pads (`layoutpad_other.go`). New targets are
   recorded with `layoutpad -record -targets FILE` at the base chosen as the
-  measured-best layout, the tool built beforehand.
+  layout to keep, the tool built beforehand.
 
 The register interpreter is a small loop over a table of handlers, a
 function an operation (docs/register-interpreter.md, "The loop"): Q pins
-the loop, `runReg`, and W the call path after it, `regCallW`. A handler
+the loop, `runReg`, and W the call path after it, `rhCallW`. A handler
 is a function of its own, so an edit to one moves no other's code but
 those after it in its file; there is no switch whose cases a lock would
-hold. The golden file of the switch's hot cases and the levers P and K,
-inside the old loop's block, are gone with the switch.
+hold, and so no golden file of case offsets and no lever inside the
+loop. The native handlers' block is not anchored: it is laid out in
+`handlerOps`' order, new handlers last, after the closures, and arm64's
+is not tuned at all.
 
 The pads are never called and their variables never read: one init calls
 them behind a variable that is never true, which keeps the linker from
@@ -293,8 +305,9 @@ dropping them, and every variable is the same size whatever the levers are
 but the data levers' own. They cost their size and only grow: an anchor a
 change moves back by 32 bytes takes a pad 4,064 bytes longer, and a pad's
 own function moves what follows it, so a position whose target is where its
-code was takes a pad of 4 KB. The lock as made, against `db306c0e`'s
-layout, is 49 KB of pads, 60 KB of binary.
+code was takes a pad of 4 KB. The lock as first made, against
+`db306c0e`'s layout and with the tree tier's anchors, was 49 KB of pads,
+60 KB of binary.
 
 The lock and the placements: a placement build adds its own pads to the
 locked tree and so varies what it varies around the locked layout, both

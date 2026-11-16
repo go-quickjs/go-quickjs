@@ -21,27 +21,23 @@ func TestPrivateNamesKeepTheirAtoms(t *testing.T) {
 		out.push(o[s], Object.getOwnPropertySymbols(o).length, a.get())
 		out.join()`
 	const want = "1,5,1,true,false,false,TypeError,s,1,1"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		treeTier.Store(previous)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: %s, want %s", tree, got, want)
-		}
-		// A symbol another table interns gets an atom of that table's,
-		// not the one the symbol remembers.
-		sym := NewSymbol("shared", true)
-		mine := r.atoms.internSymbol(sym)
-		other := newAtomTable()
-		theirs := other.internSymbol(sym)
-		if r.atoms.internSymbol(sym) != mine || other.internSymbol(sym) != theirs || other.entries[len(other.entries)-1].sym != sym {
-			t.Errorf("tree %v: a symbol interned in two tables: %d, %d", tree, mine, theirs)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("%s, want %s", got, want)
+	}
+	// A symbol another table interns gets an atom of that table's,
+	// not the one the symbol remembers.
+	sym := NewSymbol("shared", true)
+	mine := r.atoms.internSymbol(sym)
+	other := newAtomTable()
+	theirs := other.internSymbol(sym)
+	if r.atoms.internSymbol(sym) != mine || other.internSymbol(sym) != theirs || other.entries[len(other.entries)-1].sym != sym {
+		t.Errorf("a symbol interned in two tables: %d, %d", mine, theirs)
+	}
+	r.Close()
 }

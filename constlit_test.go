@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // A read of a const initialized with a literal, which the compiler makes
@@ -14,8 +13,7 @@ import (
 // and the value after; a switch's case block's binding read past its
 // declaration; a direct eval's var and a with object answering for the
 // name; a loop's const; an assignment, which throws a TypeError; each kind
-// of literal; and tests of a const false and true; on the tree tier and
-// in the interpreter.
+// of literal; and tests of a const false and true.
 func TestConstLiteralReads(t *testing.T) {
 	const src = `(function () {
   const r = [];
@@ -38,17 +36,13 @@ func TestConstLiteralReads(t *testing.T) {
 })()`
 	const want = "ReferenceError/1 ; ReferenceError/2 ; 3 ; ReferenceError ; 2,2 ; 1 ; 5,5 ; a0a1a2 ; TypeError7 ; " +
 		"true,true,false,0,1.5,str,true,1e+21,true,object,string,true ; |str|1.5 ; 33"
-	defer vm.SetTreeTier(true)
-	for _, tree := range []bool{true, false} {
-		vm.SetTreeTier(tree)
-		rt := quickjs.New()
-		v, err := rt.Eval(src)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String(); got != want {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
-		}
-		rt.Close()
+	rt := quickjs.New()
+	v, err := rt.Eval(src)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	rt.Close()
 }

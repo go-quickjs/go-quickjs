@@ -45,14 +45,14 @@ const jitHeldLimit = 3 << 30
 // jitReport is the report's state: what the JIT had done when the last
 // benchmark ended, the counters and each function's.
 var jitReport struct {
-	stats               vm.JITStats
-	flushed, recompiled uint64
-	funcs               map[string]vm.JITFunction
-	hostOps             map[string]uint64
-	goCallOps           map[string]uint64
-	nested, levels      uint64
-	levelsMade, putOff  uint64
-	ended               map[string]uint64
+	stats              vm.JITStats
+	flushed            uint64
+	funcs              map[string]vm.JITFunction
+	hostOps            map[string]uint64
+	goCallOps          map[string]uint64
+	nested, levels     uint64
+	levelsMade, putOff uint64
+	ended              map[string]uint64
 }
 
 // reportStart has the runtime's JIT note what it skips, for the report,
@@ -351,12 +351,12 @@ func (r runtimeOf) Report(name string) {
 	fmt.Printf("  jit: %d compiled, %d compiled again, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
 		st.Compiled-was.Compiled, st.Reoptimized-was.Reoptimized, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
 	fmt.Printf("  jit: %d callees inlined, %d instructions of them\n", st.Inlined-was.Inlined, st.InlinedCode-was.InlinedCode)
-	flushed, recompiled := v.JITCacheCounts()
-	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; %d flushed unused, %d compiles of code dropped; holds %.1f of %.1f MiB\n",
-		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, flushed-jitReport.flushed, recompiled-jitReport.recompiled,
+	flushed := v.JITCacheCounts()
+	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it; %d flushed unused; holds %.1f of %.1f MiB\n",
+		st.Evicted-was.Evicted, st.Refused-was.Refused, flushed-jitReport.flushed,
 		float64(st.Held)/(1<<20), float64(st.Budget)/(1<<20))
 	fmt.Printf("  jit: %d contexts, %d at most, given back %d times\n", st.Contexts, st.ContextsMost, st.ContextsShrunk-was.ContextsShrunk)
-	jitReport.stats, jitReport.flushed, jitReport.recompiled = st, flushed, recompiled
+	jitReport.stats, jitReport.flushed = st, flushed
 	// Register code's host exits by the register instruction Go ran
 	// whole, the most first.
 	rs := v.RegNativeStats()

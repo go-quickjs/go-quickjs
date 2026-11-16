@@ -85,7 +85,7 @@ func TestJITWritesSharedLiteral(t *testing.T) {
 	}
 }
 
-// Native code makes a literal of constants' arrays as the tree tier does,
+// Native code makes a literal of constants' arrays as the interpreter does,
 // over its shared storage, taking them whole from a pool (ssa's
 // LiteralSite.Shared): reads of an array that does not escape, its
 // length and elements, are what the literal holds; writes give the array
@@ -131,7 +131,7 @@ func TestJITMakesSharedLiteral(t *testing.T) {
 			t.Error("native code's array of a literal of constants does not share them")
 		}
 		var native bool
-		if cv, ok := jitViewForTest(r, jitGlobalClosureForTest(r, "reads")); ok && cv.reg != nil {
+		if cv, ok := jitViewForTest(r, jitGlobalClosureForTest(r, "reads")); ok {
 			// The register form's literals are the life's of the function
 			// whose instruction makes them (jitRegSharedLiteral): reads'
 			// own, and those of the callees its code inlines -- mk's.
@@ -142,13 +142,6 @@ func TestJITMakesSharedLiteral(t *testing.T) {
 			for _, l := range lives {
 				for i := 0; l != nil && i < len(l.literals); i++ {
 					native = native || l.literals[i].shared
-				}
-			}
-		}
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == "reads" && x.ssa != nil {
-				for _, l := range x.literals {
-					native = native || l.shared
 				}
 			}
 		}
@@ -193,26 +186,19 @@ func TestJITSortsSharedLiteral(t *testing.T) {
 	}
 	r := both.jit
 	native := false
-	if regJITForTest() {
-		// The register form's code makes a loop of the sort where its
-		// feedback answers the call's site with one (jitRegFeedback's
-		// ForEach), a comparator native code calls again at will.
-		for k, x := range r.jit.regCache {
-			fn := k.Value()
-			if fn == nil || fn.Name != "sortLit" && fn.Name != "drive" || x.code == nil || x.p == nil {
-				continue
-			}
-			fb := r.jitRegFeedbackFor(jitGlobalClosureForTest(r, fn.Name), x.p)
-			for pc := range x.p.Code {
-				if fe, ok := fb.ForEach(pc); ok && fe.Kind&abi.LoopKindMask == abi.LoopSort {
-					native = true
-				}
-			}
+	// The register form's code makes a loop of the sort where its
+	// feedback answers the call's site with one (jitRegFeedback's
+	// ForEach), a comparator native code calls again at will.
+	for k, x := range r.jit.regCache {
+		fn := k.Value()
+		if fn == nil || fn.Name != "sortLit" && fn.Name != "drive" || x.code == nil || x.p == nil {
+			continue
 		}
-	}
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && (fn.Name == "sortLit" || fn.Name == "drive") && x.ssa != nil && x.loops {
-			native = true
+		fb := r.jitRegFeedbackFor(jitGlobalClosureForTest(r, fn.Name), x.p)
+		for pc := range x.p.Code {
+			if fe, ok := fb.ForEach(pc); ok && fe.Kind&abi.LoopKindMask == abi.LoopSort {
+				native = true
+			}
 		}
 	}
 	if !native {

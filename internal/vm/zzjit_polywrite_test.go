@@ -90,18 +90,9 @@ func jitPolyWriteNoShapeReached(t *testing.T, r *Runtime) {
 	for i := range cl.ic {
 		dict = dict || cl.ic[i].shape == dictShape
 	}
-	var e *jitEntry
-	if jitRegClosureForTest(r, cl) {
-		// The register form's exits note the cases in its life
-		// (jitRegLifeOf), by register pc.
-		e = r.jitRegLifeIfAny(cl)
-	} else {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn == cl.fn {
-				e = x
-			}
-		}
-	}
+	// The register form's exits note the cases in its life
+	// (jitRegLifeOf), by register pc.
+	e := r.jitRegLifeIfAny(cl)
 	cases := 0
 	if e != nil {
 		for _, p := range e.poly {

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"runtime"
@@ -188,32 +187,25 @@ func TestJITInlinedTypedRead(t *testing.T) {
 	}
 	// The feedback rd is inlined with, a caller's (root), answers what its
 	// own code met.
-	if regJITForTest() {
-		// The register form's: the callee's feedback a compile asks
-		// (jitRegCalleeOf), of its program lowered for inlining, whose
-		// element read at the register pc its code met.
-		p, err := r.jitRegLower(rdCl, rdCl.reg.rc, jitLowerInline)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inlined := r.jitRegCalleeOf(&jitFeedback{r: r}, rdCl, p)
-		rpc, found := own.typedReads[0], false
-		for pc := range p.Code {
-			if p.Code[pc].Op == ir.ArrayRead && int32(p.Origin[pc]) == rpc {
-				found = true
-				if !inlined.TypedRead(pc) {
-					t.Errorf("rd inlined reads its element at %d as an array's, though its own code met a typed array there", rpc)
-				}
+	// The register form's: the callee's feedback a compile asks
+	// (jitRegCalleeOf), of its program lowered for inlining, whose
+	// element read at the register pc its code met.
+	p, err := r.jitRegLower(rdCl, rdCl.reg.rc, jitLowerInline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inlined := r.jitRegCalleeOf(&jitFeedback{r: r}, rdCl, p)
+	rpc, found := own.typedReads[0], false
+	for pc := range p.Code {
+		if p.Code[pc].Op == ir.ArrayRead && int32(p.Origin[pc]) == rpc {
+			found = true
+			if !inlined.TypedRead(pc) {
+				t.Errorf("rd inlined reads its element at %d as an array's, though its own code met a typed array there", rpc)
 			}
 		}
-		if !found {
-			t.Errorf("rd's program has no element read at %d", rpc)
-		}
-	} else {
-		inlined := &jitFeedback{r: r, fn: rdCl.fn, cl: rdCl, root: &jitFeedback{r: r}}
-		if pc := int(own.typedReads[0]); !inlined.TypedRead(pc) {
-			t.Errorf("rd inlined reads its element at %d as an array's, though its own code met a typed array there", pc)
-		}
+	}
+	if !found {
+		t.Errorf("rd's program has no element read at %d", rpc)
 	}
 	for _, name := range []string{"sum", "sum2"} {
 		e := jitNativeForTest(t, r, name)
@@ -434,56 +426,29 @@ func TestJITDerivedConstructor(t *testing.T) {
 		rounds = append(rounds, `err(Early)`, `err(Twice)`, `err(RetObj)`, `err(RetPrim)`)
 	}
 	r, want := jitAgreesPairForTest(t, setup, rounds...)
-	if regJITForTest() {
-		// The register code's counts (its life's) go on over its
-		// compiles, where the stack form's entry's begin afresh at each:
-		// what the code compiled last does is counted over a round more,
-		// its answer the interpreter's.
-		lives := map[string]*jitEntry{}
-		before := map[string]jitSSAStats{}
-		for _, name := range []string{"B", "C", "G"} {
-			e := jitDerivedForTest(t, r, name)
-			if !jitEntryCodeForTest(r, e) || e.ssaStats.entries == 0 {
-				t.Fatalf("%s never ran natively: %+v", name, e)
-			}
-			lives[name], before[name] = e, e.ssaStats
-		}
-		jitAgreeRoundsForTest(t, r, want, `make(500)`)
-		for _, name := range []string{"B", "C", "G"} {
-			st, b := lives[name].ssaStats, before[name]
-			if h, g := st.hosts-b.hosts, st.guards-b.guards; h+g != 0 {
-				t.Errorf("%s left native code %d times for Go and failed %d guards", name, h, g)
-			}
-		}
-		for k, x := range r.jit.regCache {
-			if fn := k.Value(); fn != nil && fn.Name == "Imp" && x.code != nil {
-				t.Errorf("Imp, an implicit constructor, was compiled: it left native code %d times", x.life.ssaStats.hosts)
-			}
-		}
-		return
-	}
+	// The register code's counts (its life's) go on over its
+	// compiles, where the stack form's entry's begin afresh at each:
+	// what the code compiled last does is counted over a round more,
+	// its answer the interpreter's.
+	lives := map[string]*jitEntry{}
+	before := map[string]jitSSAStats{}
 	for _, name := range []string{"B", "C", "G"} {
-		// A class is a lexical binding, not the global object's: its
-		// constructor's entry, by its name.
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name && fn.Kind == bytecode.KindDerivedConstructor {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+		e := jitDerivedForTest(t, r, name)
+		if !jitEntryCodeForTest(r, e) || e.ssaStats.entries == 0 {
 			t.Fatalf("%s never ran natively: %+v", name, e)
 		}
-		if e.ssaStats.hosts+e.ssaStats.guards != 0 {
-			t.Errorf("%s left native code %d times for Go and failed %d guards", name, e.ssaStats.hosts, e.ssaStats.guards)
+		lives[name], before[name] = e, e.ssaStats
+	}
+	jitAgreeRoundsForTest(t, r, want, `make(500)`)
+	for _, name := range []string{"B", "C", "G"} {
+		st, b := lives[name].ssaStats, before[name]
+		if h, g := st.hosts-b.hosts, st.guards-b.guards; h+g != 0 {
+			t.Errorf("%s left native code %d times for Go and failed %d guards", name, h, g)
 		}
 	}
-	// An implicit constructor, super(...arguments) alone, which native
-	// code would only leave for at its super(), is left to the tree tier
-	// as any function of host operations alone is (jitcompile's hostOnly).
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == "Imp" && x.ssa != nil {
-			t.Errorf("Imp, an implicit constructor, was compiled: it left native code %d times", x.ssaStats.hosts)
+	for k, x := range r.jit.regCache {
+		if fn := k.Value(); fn != nil && fn.Name == "Imp" && x.code != nil {
+			t.Errorf("Imp, an implicit constructor, was compiled: it left native code %d times", x.life.ssaStats.hosts)
 		}
 	}
 }
@@ -518,12 +483,7 @@ func TestJITKeyedReadAbsent(t *testing.T) {
 	}
 	rounds = append(rounds, `odd(viaProxy)`, `odd(getterProto)`, `odd(viaProxy)`, `odd(getterProto)`)
 	r := jitAgreesForTest(t, setup, rounds...)
-	var e *jitEntry
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && fn.Name == "lookup" {
-			e = x
-		}
-	}
+	e := jitCodeEntryNamedForTest(r, "lookup")
 	h := jitNativeForTest(t, r, "hits")
 	hosts, entries := h.ssaStats.hosts, h.ssaStats.entries
 	var lookupHosts uint64
@@ -657,35 +617,16 @@ func TestJITCapturedLocalCallees(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"inputsKnown", "counter", "maker", "exits", "blocks", "addr"} {
-		if regJITForTest() {
-			// Register code is one for Go and native callers alike, its
-			// captured locals in cells of their own wherever closures
-			// capture them (ir.Program's Cells): no lowering of its own
-			// for native callers alone (the stack form's ssaCallee).
-			e := regEntryNamedForTest(r, name)
-			if e == nil || e.life.calleeRefused || regLinkInForTest(r, e) == 0 {
-				t.Errorf("%s has no code for native callers: %+v", name, e)
-				continue
-			}
-			if e.p == nil || !e.p.Cells {
-				t.Errorf("%s's code has its captured locals in its frame", name)
-			}
-			continue
-		}
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil || e.calleeRefused {
+		// Register code is one for Go and native callers alike, its
+		// captured locals in cells of their own wherever closures
+		// capture them (ir.Program's Cells).
+		e := regEntryNamedForTest(r, name)
+		if e == nil || regLinkInForTest(r, e) == 0 {
 			t.Errorf("%s has no code for native callers: %+v", name, e)
 			continue
 		}
-		// Compiled for native callers alone, its captured locals in cells
-		// of their own (ir.Program's Cells), as V8 allocates a context.
-		if !e.ssaCallee || e.ssaProg == nil || !e.ssaProg.Cells {
-			t.Errorf("%s's code has its captured locals in its frame: callee %v", name, e.ssaCallee)
+		if e.p == nil || !e.p.Cells {
+			t.Errorf("%s's code has its captured locals in its frame", name)
 		}
 	}
 }
@@ -713,23 +654,11 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitAgreesForTest(t, setup, rounds...)
-	if regJITForTest() {
-		// Register code is one for Go and native callers alike (no
-		// ssaCallee): called natively, its captured locals in cells.
-		e := regEntryNamedForTest(r, "mid")
-		if e == nil || regLinkInForTest(r, e) == 0 || e.p == nil || !e.p.Cells {
-			t.Fatalf("mid has no code for native callers with cells of its own: %+v", e)
-		}
-	} else {
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == "mid" {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil || !e.ssaCallee || e.ssaProg == nil || !e.ssaProg.Cells {
-			t.Fatalf("mid has no code for native callers with cells of its own: %+v", e)
-		}
+	// Register code is one for Go and native callers alike (no
+	// ssaCallee): called natively, its captured locals in cells.
+	e := regEntryNamedForTest(r, "mid")
+	if e == nil || regLinkInForTest(r, e) == 0 || e.p == nil || !e.p.Cells {
+		t.Fatalf("mid has no code for native callers with cells of its own: %+v", e)
 	}
 	if r.jit.resumedLevels == 0 {
 		t.Errorf("no native callee went on natively after its callee left native code")
@@ -776,25 +705,13 @@ func TestJITClosuresFromPools(t *testing.T) {
 	// at the iteration's end (GoClose), which no frame has open.
 	for _, name := range []string{"maker", "addr", "mk", "arrow", "blocks", "lets"} {
 		var e *jitEntry
-		if regJITForTest() {
-			// The register code's literals are its life's.
-			re := regEntryNamedForTest(r, name)
-			if re == nil || re.p == nil || !re.p.Cells {
-				t.Errorf("%s has no code with cells of its own: %+v", name, re)
-				continue
-			}
-			e = re.life
-		} else {
-			for k, x := range r.jit.cache {
-				if fn := k.Value(); fn != nil && fn.Name == name {
-					e = x
-				}
-			}
-			if e == nil || e.ssa == nil || e.ssaProg == nil || !e.ssaProg.Cells {
-				t.Errorf("%s has no code with cells of its own: %+v", name, e)
-				continue
-			}
+		// The register code's literals are its life's.
+		re := regEntryNamedForTest(r, name)
+		if re == nil || re.p == nil || !re.p.Cells {
+			t.Errorf("%s has no code with cells of its own: %+v", name, re)
+			continue
 		}
+		e = re.life
 		pools := 0
 		for _, l := range e.literals {
 			if l.tmpl.template() == nil {

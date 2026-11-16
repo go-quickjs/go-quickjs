@@ -7,7 +7,7 @@ import (
 
 // TestGeneratorValues pins generators and async functions with each count
 // of arguments and locals around the sizes newGenerator makes in one
-// allocation with the object, in both tiers: what the parameters and the
+// allocation with the object: what the parameters and the
 // arguments object see, locals captured by closures across suspensions,
 // and what genRare keeps: an async arrow's new.target and its share of a
 // derived constructor's this, and an async generator's queue. A direct
@@ -35,28 +35,26 @@ func TestGeneratorValues(t *testing.T) {
 		{name: "asyncGeneratorQueue", async: true, src: `async function* f() { yield 1; yield 2 } var g = f(); var p = Promise.all([g.next(), g.next(), g.next(), g.return(9)]).then(r => JSON.stringify(r))`, want: `[{"value":1,"done":false},{"value":2,"done":false},{"done":true},{"value":9,"done":true}]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				src := tt.src
-				if tt.async {
-					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
-				}
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(compileForTest(t, src))
-				if err == nil && tt.async {
-					if err = r.runMicrotasks(); err == nil {
-						v, err = r.Run(compileForTest(t, "out"))
-					}
-				}
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
-				r.Close()
+			src := tt.src
+			if tt.async {
+				src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 			}
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, src))
+			if err == nil && tt.async {
+				if err = r.runMicrotasks(); err == nil {
+					v, err = r.Run(compileForTest(t, "out"))
+				}
+			}
+			if err != nil {
+				r.Close()
+				t.Fatal(err)
+			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
 		})
 	}
 }
@@ -97,7 +95,6 @@ func TestGeneratorOneAllocation(t *testing.T) {
 // begun again, spread, destructuring, Array.from, yield*, and generators
 // made before the function learned.
 func TestGeneratorLoopRoom(t *testing.T) {
-	defer SetTreeTier(true)
 	r := New(Config{})
 	defer r.Close()
 	fn, err := r.Run(compileForTest(t, `(function () { function* g(a, b) { yield a; yield b }
@@ -124,15 +121,12 @@ func TestGeneratorLoopRoom(t *testing.T) {
 		{`function* g() { yield 1; yield 2 } function* d() { yield* g(); yield* g() } for (var x of d()); [...d()].join()`, "1,2,1,2"},
 		{`function* g() { yield 1; yield 2 } for (var x of g()); var it = g(); it.next(); [...it].join() + '|' + JSON.stringify(it.next())`, `2|{"done":true}`},
 	} {
-		for _, on := range []bool{false, true} {
-			SetTreeTier(on)
-			v, err := r.Run(compileForTest(t, tt.src))
-			if err != nil {
-				t.Fatalf("%s: %v", tt.src, err)
-			}
-			if got, _ := r.ToString(v); got.Go() != tt.want {
-				t.Errorf("tree %v: %s = %s, want %s", on, tt.src, got.Go(), tt.want)
-			}
+		v, err := r.Run(compileForTest(t, tt.src))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.src, err)
+		}
+		if got, _ := r.ToString(v); got.Go() != tt.want {
+			t.Errorf("%s = %s, want %s", tt.src, got.Go(), tt.want)
 		}
 	}
 }
@@ -143,8 +137,7 @@ func TestGeneratorLoopRoom(t *testing.T) {
 // suspends with nothing beneath the value, in no try statement and with
 // nothing captured has no saved part however often it suspends, one
 // that leaves operands, handlers or captures makes it once, and a
-// generator that finishes lets it go. Each resumption runs as its tree
-// and in the interpreter, which make the same saved part.
+// generator that finishes lets it go.
 func TestGeneratorSavedPart(t *testing.T) {
 	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
@@ -174,45 +167,43 @@ func TestGeneratorSavedPart(t *testing.T) {
 		{`(function* () { for (const x of [1, 2]) yield x })`, []bool{true, true, false}, []int{1, 1}},
 		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}, []int{0}},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			fn, err := r.Run(compileForTest(t, tt.src))
-			if err != nil {
-				t.Fatal(err)
-			}
-			gv, err := r.call(fn, Undefined, []Value{Int(1)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			g := genOf(gv.Object())
-			var first *genSaved
-			for i, want := range tt.saved {
-				if _, _, err := r.resume(g, Int(i), resumeNext); err != nil {
-					t.Fatalf("%s: %v", tt.src, err)
-				}
-				// A generator of register code keeps its window in its
-				// vals, and a saved part only for captures.
-				if got := g.saved != nil; got != want && !g.reg {
-					t.Errorf("tree %v, %s, next %d: saved part %v, want %v", on, tt.src, i, got, want)
-					continue
-				}
-				if g.saved == nil {
-					continue
-				}
-				if first == nil {
-					first = g.saved
-				} else if g.saved != first {
-					t.Errorf("tree %v, %s, next %d: the saved part made again", on, tt.src, i)
-				}
-				if n := len(g.saved.stack); n != tt.stack[i] {
-					t.Errorf("tree %v, %s, next %d: %d operands saved, want %d", on, tt.src, i, n, tt.stack[i])
-				}
-			}
-			if g.state != genCompleted {
-				t.Errorf("tree %v, %s: not finished", on, tt.src)
-			}
-			r.Close()
+		r := New(Config{})
+		fn, err := r.Run(compileForTest(t, tt.src))
+		if err != nil {
+			t.Fatal(err)
 		}
+		gv, err := r.call(fn, Undefined, []Value{Int(1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := genOf(gv.Object())
+		var first *genSaved
+		for i, want := range tt.saved {
+			if _, _, err := r.resume(g, Int(i), resumeNext); err != nil {
+				t.Fatalf("%s: %v", tt.src, err)
+			}
+			// A generator of register code keeps its window in its
+			// vals, and a saved part only for captures.
+			if got := g.saved != nil; got != want && !g.reg {
+				t.Errorf("%s, next %d: saved part %v, want %v", tt.src, i, got, want)
+				continue
+			}
+			if g.saved == nil {
+				continue
+			}
+			if first == nil {
+				first = g.saved
+			} else if g.saved != first {
+				t.Errorf("%s, next %d: the saved part made again", tt.src, i)
+			}
+			if n := len(g.saved.stack); n != tt.stack[i] {
+				t.Errorf("%s, next %d: %d operands saved, want %d", tt.src, i, n, tt.stack[i])
+			}
+		}
+		if g.state != genCompleted {
+			t.Errorf("%s: not finished", tt.src)
+		}
+		r.Close()
 	}
 }
 
@@ -241,33 +232,31 @@ func TestGeneratorArgsKept(t *testing.T) {
 		{`function* f(a, b = a) { yield a + b }`, `f(2)`, "4", 1, 3},
 		{`function* f([a, b]) { yield a + b }`, `f([1, 2])`, "3", 1, 4},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			v, err := r.Run(compileForTest(t, tt.decl+"; "+tt.call))
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, tt.decl+"; "+tt.call))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.decl, err)
+		}
+		var res Value
+		if p, ok := v.Object().dataOf().(*promiseData); ok {
+			// An async function's generator is not seen: its result is.
+			res = p.value
+		} else {
+			g := genOf(v.Object())
+			// A generator of register code keeps its window, and the
+			// arguments where its code reads them, in its vals.
+			if (g.nargs != tt.nargs || len(g.vals) != tt.vals) && !g.reg {
+				t.Errorf("%s: %d arguments of %d values kept, want %d of %d", tt.decl, g.nargs, len(g.vals), tt.nargs, tt.vals)
+			}
+			res, err = r.Run(compileForTest(t, "var x = ("+tt.call+").next().value; typeof x === 'function' ? x() : x"))
 			if err != nil {
 				t.Fatalf("%s: %v", tt.decl, err)
 			}
-			var res Value
-			if p, ok := v.Object().dataOf().(*promiseData); ok {
-				// An async function's generator is not seen: its result is.
-				res = p.value
-			} else {
-				g := genOf(v.Object())
-				// A generator of register code keeps its window, and the
-				// arguments where its code reads them, in its vals.
-				if (g.nargs != tt.nargs || len(g.vals) != tt.vals) && !g.reg {
-					t.Errorf("%s: %d arguments of %d values kept, want %d of %d", tt.decl, g.nargs, len(g.vals), tt.nargs, tt.vals)
-				}
-				res, err = r.Run(compileForTest(t, "var x = ("+tt.call+").next().value; typeof x === 'function' ? x() : x"))
-				if err != nil {
-					t.Fatalf("%s: %v", tt.decl, err)
-				}
-			}
-			got, err := r.ToString(res)
-			if err != nil || got.Go() != tt.want {
-				t.Errorf("tree %v, %s: got %v, %v; want %s", on, tt.decl, got, err, tt.want)
-			}
-			r.Close()
 		}
+		got, err := r.ToString(res)
+		if err != nil || got.Go() != tt.want {
+			t.Errorf("%s: got %v, %v; want %s", tt.decl, got, err, tt.want)
+		}
+		r.Close()
 	}
 }

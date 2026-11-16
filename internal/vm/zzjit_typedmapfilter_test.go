@@ -68,11 +68,9 @@ func TestJITTypedArrayMapFilter(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	var built *jitBuiltForTest
-	if regJITForTest() {
-		// Whether register code makes loops of built-ins' calls, which its
-		// compiles' SSA says (ssa.Func's Loops).
-		built = jitRecordBuiltForTest(t)
-	}
+	// Whether register code makes loops of built-ins' calls, which its
+	// compiles' SSA says (ssa.Func's Loops).
+	built = jitRecordBuiltForTest(t)
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			if marking {

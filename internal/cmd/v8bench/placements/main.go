@@ -10,29 +10,40 @@
 // each side compares two placements as much as two versions of the code.
 //
 // build makes eight builds of internal/cmd/v8bench from the working tree,
-// each with the hot code placed differently. Five pads, of m functions
-// that each fill one 32-byte slot, go before the five pieces of hot code,
-// in files the linker places there:
+// each with the register tier's hot code placed differently. Six pads, of m
+// functions that each fill one 32-byte slot, go before the six pieces of
+// hot code, in files the linker places there:
 //
-//	aaa_pad.go     before everything in the package    executeAt
-//	vm_b_pad.go    after vm.go, before vm_call.go      callDirect
-//	vm_sz_pad.go   after vm_shape.go, before vm_tree.go runTree
-//	zzreg_ru_pad.go before zzreg_run.go                runReg
-//	zzz_pad.go     after every file, before the closures binaryNode.func1
+//	vm_b_pad.go           after vm.go, before vm_call.go     callObject
+//	zzjit_leaf_pad.go     before zzjit_leaffast.go           jitLeafGo
+//	zzreg_ru_pad.go       before zzreg_run.go                runReg
+//	zzreg_run_b_pad.go    after zzreg_run.go, before calls   rhCallW
+//	zzzyn_native_r_pad.go before zzzyn_native_run.go         nativeDrive
+//	zzzzz_pad.go          closures, after every other one    regNativeHandlers
+//
+// callObject is the calls of functions and built-ins; jitLeafGo the JIT's
+// calls of Go leaves (built with the JIT alone: a build without it has no
+// such target, and its pad moves what follows); runReg the Go table's loop;
+// rhCallW, with regEnterW after it, the register calls; nativeDrive the
+// native dispatcher's Go loop, after nativeLoop in its file; and the last
+// the assembly after the
+// closures -- the JIT's leaf stubs and the native dispatcher's entry, its
+// exit's call of Go and its handlers, regNativeHandlers. The assembly is
+// laid out after the package's closures, so its pad is closures, function
+// literals of the last file's, laid out after every other closure.
+// regRunFD and regCallSlow (zzreg_call.go) move with jitLeafGo's pad.
 //
 // A pad moves what follows it by exactly 32*m bytes. For each placement a
-// build with the pads empty says where the five are, and m is chosen so
-// that each lands at the phase -- its start mod 64, the one bit a
-// placement can vary -- that a 2^(5-2) design gives it: over the eight,
-// each is at 0 and at 32 mod 64 four times, each pair of them in each
-// combination twice, and each at a distance from the one before it that
-// varies by up to 2 KB. The register interpreter's loop, runReg, is a
-// factor of its own: without its pad it followed runTree's phase, and its
-// own alignment moves its small loops by up to a fifth. Placement n also puts 3n never-taken tests in
-// executeAt's case for nop, which the compiler lays out ahead of the
-// others, so that its cases move against its dispatch. Every build is
-// checked with go tool nm, and one whose phases are not the design's
-// fails. The pads and the tests are removed when it is done.
+// build with the pads empty says where the six are, and m is chosen so that
+// each lands at the phase -- its start mod 64, the one bit a placement can
+// vary -- that a 2^(6-3) design gives it: over the eight, each is at 0 and
+// at 32 mod 64 four times, each pair of them in each combination twice,
+// and each at a distance from the one before it that varies by up to 2 KB.
+// The data's phase (dataPhase) is the design's seventh column. Every build
+// is checked with go tool nm, and one whose phases are not the design's
+// fails. The pads are removed when it is done. What the placements do not
+// vary is the layout inside the native handlers' block, which nativegen
+// makes as it is.
 //
 // compare runs two labels' builds, placement by placement, for several
 // rounds: each placement of each label is taken at its fastest round,
@@ -54,10 +65,11 @@
 // time and no more, and a short one, the V8 suite's Richards, more than
 // the timer's grain.
 //
-// -k 4 takes placements 0, 3, 5 and 6 of the eight, over which the first
-// three targets are each at each phase twice (the closures' at one): a
-// comparison to screen a change with, in half the time, before the eight
-// confirm it.
+// -k 4 takes placements 0, 3, 5 and 6 of the eight, over which runReg,
+// rhCallW and the native block are each at each phase twice and each pair
+// of them in each combination once; callObject is at one phase, and the
+// rest each follows one of those three (design): a comparison to screen a
+// change with, in half the time, before the eight confirm it.
 //
 // -parallel runs both labels at once, each on a group of CPUs of its own,
 // the groups swapped from one placement and round to the next: by default
@@ -142,8 +154,8 @@ func usage() {
 // labelExe is placement n of a compared label's build and what its runs add
 // to their environment: a label NAME@VAR=VALUE[@VAR=VALUE] runs NAME's
 // build with those variables, so that one build can be compared with
-// itself under another setting, as QJS_REG=0 runs the old tiers in place of
-// the register tier.
+// itself under another setting, as QJS_NONATIVE=1 runs the Go table in
+// place of the native handlers.
 func labelExe(out, label string, n int) (string, []string) {
 	parts := strings.Split(label, "@")
 	return exePath(out, parts[0], n), parts[1:]
@@ -164,60 +176,25 @@ func exePath(out, label string, n int) string {
 // pads are the files the pads go in, each before its target; targets are
 // the targets, as go tool nm names them after the package's path.
 var (
-	pads = [nPads]string{"internal/vm/aaa_pad.go", "internal/vm/vm_b_pad.go", "internal/vm/vm_sz_pad.go",
-		"internal/vm/zzreg_ru_pad.go", "internal/vm/zzz_pad.go"}
-	targets = [nPads]string{"(*Runtime).executeAt", "(*Runtime).callDirect", "(*Runtime).runTree",
-		"(*Runtime).runReg", "binaryNode.func1"}
+	pads = [nPads]string{"internal/vm/vm_b_pad.go", "internal/vm/zzjit_leaf_pad.go", "internal/vm/zzreg_ru_pad.go",
+		"internal/vm/zzreg_run_b_pad.go", "internal/vm/zzzyn_native_r_pad.go", "internal/vm/zzzzz_pad.go"}
+	targets = [nPads]string{"(*Runtime).callObject", "jitLeafGo", "(*Runtime).runReg",
+		"rhCallW", "(*Runtime).nativeDrive", "regNativeHandlers.abi0"}
+	// optional are the targets a build may lack: the JIT's leaf calls,
+	// without the JIT, and the native handlers, on an architecture that
+	// has the Go table alone.
+	optional = [nPads]bool{1: true, 5: true}
 )
 
-// nPads is how many pads and targets there are.
-const nPads = 5
-
+// nPads is how many pads and targets there are; closurePad is the pad
+// made of closures (padFile).
 const (
-	vmGo = "internal/vm/vm.go"
-	nop  = "\t\tcase bytecode.OpNop:\n"
-	// inner is how many never-taken tests each placement adds to nop's
-	// case, times its number.
-	inner = 3
-	// regGo is the register interpreter's loop; regNop its first case,
-	// which regInner fills, and regLast its last, which regTail fills,
-	// where it is a switch: a loop over a table of handlers has no cases,
-	// and nothing of it is filled.
-	regGo   = "internal/vm/zzreg_run.go"
-	regNop  = "\t\tcase bytecode.RNop:\n"
-	regLast = "\t\tcase 127:\n"
-	// regInnerMax is one more than the most calls regInner or regTail
-	// gives a placement, and padKeysLen the keys the tests of the three
-	// fillers read: as many in every placement, so that the zeroed data
-	// after them is where it is whatever the placement.
-	regInnerMax = 8
-	padKeysLen  = 6 * regInnerMax
+	nPads      = 6
+	closurePad = 5
 )
-
-// regInner is how many calls of padRegInner placement n puts in runReg's
-// first case, nop's, which runs no hot code: each is inlined to two
-// never-taken tests, which move every case laid out after it within the
-// loop, as inner's tests move executeAt's. The pads move runReg as a
-// whole; this moves its cases against each other and against the
-// dispatch, which no pad does. A permutation of 0 to 7 over the eight, so
-// that it follows neither inner's count (3n) nor a bit of the design: -k
-// 4's placements 0, 3, 5 and 6 get 2, 1, 3 and 0. A call is a few of the
-// loop's IR nodes before inlining, which is what Go's big-function size
-// counts; the tests' bytes come after it.
-func regInner(n int) int { return (5*n + 2) % regInnerMax }
-
-// regTail is how many calls of padRegInner placement n puts in runReg's
-// last case, an invalid instruction's, after which the loop's shared tails
-// are laid out -- the slow path, the taken jump, the back edge -- so that
-// they move against the cases as regInner moves the cases against the
-// dispatch: a change that adds or removes code among the cases moves the
-// tails against every case, which regInner does not vary. Another
-// permutation, 7n mod 8: -k 4's placements 0, 3, 5 and 6 get 0, 5, 3 and
-// 2, so that the tails move against the dispatch by 2, 6, 6 and 2 calls.
-func regTail(n int) int { return 7 * n % regInnerMax }
 
 // placementsOf is the placements -k takes: placements 0, 3, 5 and 6 for
-// four, over which every target but the closures is at each phase twice;
+// four, the half of the design whose three bits' sum is even (design);
 // otherwise the first k.
 func placementsOf(k int) []int {
 	if k == 4 {
@@ -231,13 +208,16 @@ func placementsOf(k int) []int {
 }
 
 // design is the phase, in units of 32 bytes, that placement n gives each
-// target: a 2^(5-2) design, runReg's the parity of callDirect's and
-// runTree's, the closures' the parity of the first three. No two targets'
-// phases, nor the data's (dataPhase), are the same or opposite over the
-// eight, so each pair is in each combination twice.
+// target: a 2^(6-3) design over n's three bits b0, b1 and b2, saturated
+// with the data's phase (dataPhase), so that no two of the seven columns
+// are the same or opposite over the eight and each pair is in each
+// combination twice. runReg is b0, rhCallW b1 and the native block b2,
+// which -k 4's half, where b0^b1^b2 is 0, keeps apart; there callObject,
+// b0^b1^b2, is at one phase, jitLeafGo, b0^b1, follows the native block,
+// nativeDrive, b1^b2, runReg, and the data, b0^b2, rhCallW.
 func design(n int) [nPads]int {
 	b0, b1, b2 := n&1, (n>>1)&1, (n>>2)&1
-	return [nPads]int{b0, b1, b2, b1 ^ b2, b0 ^ b1 ^ b2}
+	return [nPads]int{b0 ^ b1 ^ b2, b0 ^ b1, b0, b1, b1 ^ b2, b2}
 }
 
 // padSlots is the most functions a pad has: 2*31 and one.
@@ -247,14 +227,14 @@ const padSlots = 64
 // which moves the zeroed data after it -- the Go runtime's hot variables
 // among it, runtime.writeBarrier and gcController -- within their cache
 // lines: 0 or 32, half the placements each, as the code's phases are
-// balanced. Builds of two revisions differ in their data as well as their
-// code -- a few package variables, the build's own information (a tree
-// with changes records it, 32 bytes more) -- which no placement had
-// varied: where a variable fell in its cache line had shown, for a
-// collector-bound benchmark, as a difference at every placement.
+// balanced, by the design's last column, b0^b2. Builds of two revisions
+// differ in their data as well as their code -- a few package variables,
+// the build's own information (a tree with changes records it, 32 bytes
+// more) -- which no placement had varied: where a variable fell in its
+// cache line had shown, for a collector-bound benchmark, as a difference
+// at every placement.
 func dataPhase(n int) int {
-	d := design(n)
-	return 32 * (d[0] ^ d[1])
+	return 32 * (n&1 ^ (n>>2)&1)
 }
 
 // padDataBase is padData's size at a phase of 0: big enough to be laid
@@ -266,14 +246,17 @@ const padDataBase = 64
 // target and everything after it, and the targets come in this order, so
 // each is chosen given the ones before; a pad is an even number of slots,
 // varying with n and the pad, plus the one that sets its target's phase.
+// A target the build lacks (0 in ref) takes the even part alone.
 func padCounts(ref [nPads]uint64, n int) [nPads]int {
 	want := design(n)
 	var counts [nPads]int
 	shift := 0
 	for i := range nPads {
-		base := 2 * ((n*37 + i*11) % 32)
-		phase := int((ref[i]/32 + uint64(shift)) % 2)
-		m := base + ((want[i]-phase)%2+2)%2
+		m := 2 * ((n*37 + i*11) % 32)
+		if ref[i] != 0 {
+			phase := int((ref[i]/32 + uint64(shift)) % 2)
+			m += ((want[i]-phase)%2 + 2) % 2
+		}
 		counts[i] = m
 		shift += m
 	}
@@ -289,11 +272,24 @@ func phases(addrs [nPads]uint64) [nPads]int {
 	return p
 }
 
+// phasesMatch reports whether the targets at addrs are at the design's
+// phases for placement n, each that the build has.
+func phasesMatch(addrs [nPads]uint64, n int) bool {
+	got, want := phases(addrs), design(n)
+	for i := range nPads {
+		if addrs[i] != 0 && got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func buildCmd(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	label := fs.String("label", "", "the name the builds are kept under")
 	k := fs.Int("k", 8, "how many placements")
 	out := fs.String("out", defaultOut(), "where the builds go")
+	tags := fs.String("tags", "", "build tags, as go build's -tags: quickjs_jit for the JIT (GOFLAGS' are taken too)")
 	fs.Parse(args)
 	if *label == "" {
 		return errors.New("-label is required")
@@ -301,16 +297,8 @@ func buildCmd(args []string) error {
 	if *k < 1 || *k > 8 {
 		return errors.New("-k is from 1 to 8, the design's placements")
 	}
-	src, err := os.ReadFile(vmGo)
-	if err != nil {
+	if _, err := os.Stat("internal/vm/vm_call.go"); err != nil {
 		return fmt.Errorf("%w: run from the repository's root", err)
-	}
-	if bytes.Count(src, []byte(nop)) != 1 {
-		return fmt.Errorf("%s has no case for nop to put the tests in", vmGo)
-	}
-	regSrc, err := os.ReadFile(regGo)
-	if err != nil {
-		return err
 	}
 	for _, p := range pads {
 		if _, err := os.Stat(p); err == nil {
@@ -321,11 +309,9 @@ func buildCmd(args []string) error {
 		return err
 	}
 
-	// Whatever happens, vm.go is put back and the pads go. An interrupt
-	// does the same before it ends the program.
+	// Whatever happens, the pads go. An interrupt does the same before it
+	// ends the program.
 	restore := func() {
-		os.WriteFile(vmGo, src, 0o644)
-		os.WriteFile(regGo, regSrc, 0o644)
 		for _, p := range pads {
 			os.Remove(p)
 		}
@@ -341,42 +327,43 @@ func buildCmd(args []string) error {
 
 	for _, n := range placementsOf(*k) {
 		exe := exePath(*out, *label, n)
-		ref, err := buildAt(src, regSrc, [nPads]int{}, inner*n, n, dataPhase(n), exe)
+		ref, err := buildAt([nPads]int{}, dataPhase(n), *tags, exe)
 		if err != nil {
 			return err
 		}
 		counts := padCounts(ref, n)
-		got, err := buildAt(src, regSrc, counts, inner*n, n, dataPhase(n), exe)
+		got, err := buildAt(counts, dataPhase(n), *tags, exe)
 		if err != nil {
 			return err
 		}
-		if p, want := phases(got), design(n); p != want {
-			return fmt.Errorf("placement %d: phases %v, want %v (pads %v)", n, p, want, counts)
+		if !phasesMatch(got, n) {
+			return fmt.Errorf("placement %d: phases %v, want %v (pads %v)", n, phases(got), design(n), counts)
 		}
-		fmt.Printf("%s-%d: pads %v, phases %v, runReg's fillers %d %d, distances %d %d %d %d\n", *label, n, counts,
-			phases(got), regInner(n), regTail(n), got[1]-got[0], got[2]-got[1], got[3]-got[2], got[4]-got[3])
+		fmt.Printf("%s-%d: pads %v, phases %v, at %s\n", *label, n, counts, phases(got), mod4K(got))
 	}
 	fmt.Printf("built %d placements of %s in %s\n", *k, *label, *out)
 	return nil
 }
 
-// buildAt writes the pads and the tests, builds v8bench to exe, and says
-// where the targets are in it.
-func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe string) ([nPads]uint64, error) {
+// mod4K is the targets' addresses mod 4,096, the offsets Zen 2's op cache
+// sets by, "-" for one the build lacks.
+func mod4K(addrs [nPads]uint64) string {
+	parts := make([]string, nPads)
+	for i, a := range addrs {
+		parts[i] = "-"
+		if a != 0 {
+			parts[i] = fmt.Sprintf("%#x", a%4096)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+// buildAt writes the pads, builds v8bench to exe, and says where the
+// targets are in it, 0 for one the build lacks.
+func buildAt(counts [nPads]int, data int, tags, exe string) ([nPads]uint64, error) {
 	var addrs [nPads]uint64
-	var body strings.Builder
-	for i := range tests {
-		fmt.Fprintf(&body, "\t\t\tif in.A == padKeys[%d] {\n\t\t\t\tpadSink += %d\n\t\t\t}\n", i, i+1)
-	}
-	patched := strings.Replace(string(src), nop, nop+body.String(), 1)
-	if err := os.WriteFile(vmGo, []byte(patched), 0o644); err != nil {
-		return addrs, err
-	}
-	if err := os.WriteFile(regGo, []byte(regFill(regSrc, regInner(n), regTail(n))), 0o644); err != nil {
-		return addrs, err
-	}
 	for p, m := range counts {
-		if err := os.WriteFile(pads[p], padFile(p, m, tests, data), 0o644); err != nil {
+		if err := os.WriteFile(pads[p], padFile(p, m, data), 0o644); err != nil {
 			return addrs, err
 		}
 	}
@@ -384,7 +371,11 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 	// (internal/cmd/layoutpad): without VCS stamping, whose build
 	// information is longer by a tree with changes -- the pads make one --
 	// and moves the data after it, and without cgo.
-	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", exe, "./internal/cmd/v8bench")
+	args := []string{"build", "-buildvcs=false"}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	cmd := exec.Command("go", append(args, "-o", exe, "./internal/cmd/v8bench")...)
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -394,17 +385,18 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 	if err != nil {
 		return addrs, fmt.Errorf("go tool nm: %w", err)
 	}
-	found := [nPads]bool{}
+	return targetAddrs(nm)
+}
+
+// targetAddrs is where go tool nm's output says the targets are, 0 for an
+// optional one the build lacks.
+func targetAddrs(nm []byte) ([nPads]uint64, error) {
+	var addrs [nPads]uint64
 	sc := bufio.NewScanner(bytes.NewReader(nm))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
 		if len(f) != 3 || f[1] != "T" {
 			continue
-		}
-		if strings.HasSuffix(f[2], "/internal/vm.padRegInner") && regFills(regSrc) && (regInner(n) > 0 || regTail(n) > 0) {
-			// Inlined at every call, it is no function of the build: one
-			// is a call in runReg's cases, which spills across them.
-			return addrs, fmt.Errorf("padRegInner is not inlined into runReg: it costs past what Go inlines into a big function")
 		}
 		for i, t := range targets {
 			if strings.HasSuffix(f[2], "/internal/vm."+t) {
@@ -412,64 +404,52 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 				if err != nil {
 					return addrs, err
 				}
-				addrs[i], found[i] = a, true
+				addrs[i] = a
 			}
 		}
 	}
-	for i, ok := range found {
-		if !ok {
+	for i, a := range addrs {
+		if a == 0 && !optional[i] {
 			return addrs, fmt.Errorf("%s is not in the build: has it been renamed?", targets[i])
 		}
 	}
 	return addrs, nil
 }
 
-// regFill is the loop's source with first calls of padRegInner in its
-// nop case and last in its last case, each on keys of its own.
-func regFill(regSrc []byte, first, last int) string {
-	if !regFills(regSrc) {
-		return string(regSrc)
-	}
-	var head, tail strings.Builder
-	for j := range first {
-		fmt.Fprintf(&head, "\t\t\tpadRegInner(uint32(w.A()), %d)\n", 3*j)
-	}
-	for j := range last {
-		fmt.Fprintf(&tail, "\t\t\tpadRegInner(uint32(w.A()), %d)\n", 3*(regInnerMax+j))
-	}
-	s := strings.Replace(string(regSrc), regNop, regNop+head.String(), 1)
-	return strings.Replace(s, regLast, regLast+tail.String(), 1)
-}
-
-// regFills reports whether the loop's source is a switch with the first
-// and last cases regFill fills.
-func regFills(regSrc []byte) bool {
-	return bytes.Count(regSrc, []byte(regNop)) == 1 && bytes.Count(regSrc, []byte(regLast)) == 1
-}
-
 // padFile is pad p with m functions. The first holds the one init, which
-// keeps every pad's functions reachable, and the tests' keys: it is before
-// the first target, where its size is the same in every placement.
-func padFile(p, m, tests, data int) []byte {
+// keeps every pad's functions reachable, and the data's pad: it is before
+// the first target, where its size is the same in every placement. The
+// closures' pad (closurePad) is m function literals, closures laid out
+// after every other closure of the package and before its assembly.
+func padFile(p, m, data int) []byte {
 	var b strings.Builder
 	b.WriteString("package vm\n\n")
 	if p == 0 {
-		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, padKeysLen))
-		// runReg's filler (regInner): two tests, inlined at each call
-		// with i a constant, so that no bound is checked. Two, of an
-		// inlining cost of 20, the most Go inlines into a function of
-		// 5,000 IR nodes or more, as runReg is: three cost 31, and in
-		// the big loop each filler was a call.
-		b.WriteString("func padRegInner(a uint32, i int) {\n" +
-			"\tif a == padKeys[i] {\n\t\tpadSink++\n\t}\n" +
-			"\tif a == padKeys[i+1] {\n\t\tpadSink += 2\n\t}\n}\n\n")
+		b.WriteString("var padSink int\n\n")
 		// The data's phase: the initialized data, which the zeroed data
 		// follows, data bytes more (dataPhase).
 		fmt.Fprintf(&b, "var padData = [%d]byte{1}\n\n", padDataBase+data)
-		b.WriteString("func init() {\n\tfor i := range padKeys {\n\t\tpadKeys[i] = ^uint32(i)\n\t}\n" +
-			"\tpadSink += int(padData[len(padData)-1])\n" +
-			"\tfor _, fs := range [][]func() int{padFuncs0[:], padFuncs1[:], padFuncs2[:], padFuncs3[:], padFuncs4[:]} {\n" +
-			"\t\tfor _, f := range fs {\n\t\t\tif f != nil {\n\t\t\t\tpadSink += f()\n\t\t\t}\n\t\t}\n\t}\n}\n\n")
+		var all []string
+		for q := range nPads {
+			all = append(all, fmt.Sprintf("padFuncs%d[:]", q))
+		}
+		fmt.Fprintf(&b, "func init() {\n\tpadSink += int(padData[len(padData)-1])\n"+
+			"\tfor _, fs := range [][]func() int{%s} {\n"+
+			"\t\tfor _, f := range fs {\n\t\t\tif f != nil {\n\t\t\t\tpadSink += f()\n\t\t\t}\n\t\t}\n\t}\n}\n\n",
+			strings.Join(all, ", "))
+	}
+	if p == closurePad {
+		// Function literals in the array's initializer, as below an array
+		// of padSlots whatever m is: data, which no init's code makes,
+		// so that what grows with m is the closures alone, laid out
+		// after every other closure. Assigned in an init, the init had
+		// grown with them, and moved the assembly by more than 32*m.
+		lits := make([]string, m)
+		for i := range m {
+			lits[i] = fmt.Sprintf("func() int { return padSink*3 + %d }", i+1)
+		}
+		fmt.Fprintf(&b, "var padFuncs%d = [%d]func() int{%s}\n", p, padSlots, strings.Join(lits, ", "))
+		return []byte(b.String())
 	}
 	names := make([]string, m)
 	for i := range m {

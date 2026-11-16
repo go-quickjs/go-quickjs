@@ -7,23 +7,20 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
-// Register code's sort of a typed array of a number type, or of an Array
-// of numbers, by a comparator native code may call again at will
+// Register code's sort of a typed array of a number type, or of an Array of
+// numbers, by a comparator native code may call again at will
 // (jitRegSortComparator over its register code), is the caller's native
-// code, as the stack form's is: a merge sort, the comparator inlined
-// (ssa's sortCall). The register form had left every sort to Go's
-// (jitRegForEachSeen's and ForEach's refusal of abi.LoopSort), each
-// comparison a call of the comparator from Go. Each of sortSetup's
-// answers is the interpreter's -- stable sorts, ties kept in order, a
-// comparator that throws leaving the array as it was, the TypeErrors of
-// a class and of no function -- with the collector idle and marking; the
-// sorts of numbers by such a comparator call no Go's sort, nor leave
-// their code, nor have Go finish or restart them, and those by any other
-// comparator, or of a BigInt64Array, are Go's.
+// code: a merge sort, the comparator inlined (ssa's sortCall). The register
+// form had left every sort to Go's (jitRegForEachSeen's and ForEach's
+// refusal of abi.LoopSort), each comparison a call of the comparator from
+// Go. Each of sortSetup's answers is the interpreter's -- stable sorts,
+// ties kept in order, a comparator that throws leaving the array as it was,
+// the TypeErrors of a class and of no function -- with the collector idle
+// and marking; the sorts of numbers by such a comparator call no Go's sort,
+// nor leave their code, nor have Go finish or restart them, and those by
+// any other comparator, or of a BigInt64Array, are Go's.
 func TestJITRegSortNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -94,9 +91,7 @@ func testJITRegSortNative(t *testing.T) {
 		return false
 	}
 	run := func(src string) string {
-		compiler.SetRegisterForm(true)
 		prog := compileForTest(t, src)
-		compiler.SetRegisterForm(false)
 		var got [2]string
 		for k, r := range rts {
 			v, err := r.Run(prog)
@@ -167,9 +162,7 @@ func TestJITRegSortRestarts(t *testing.T) {
 			rts := regNativeRuntimes(t, sortSetup+drivers())
 			regStressForTest(rts[0], jitStressConfig{budget: 2, deopt: 3})
 			for _, src := range rounds {
-				compiler.SetRegisterForm(true)
 				prog := compileForTest(t, src)
-				compiler.SetRegisterForm(false)
 				var got [2]string
 				for k, r := range rts {
 					v, err := r.Run(prog)

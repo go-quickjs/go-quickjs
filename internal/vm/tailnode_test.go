@@ -157,12 +157,12 @@ arguments 2: 3:0,40,x | 3 | 40/39/38/37/36/35/34/33/32/31/30/29/28/27/26/25/24/2
 rebound 2: second 1
 throw 2: TypeError bottom 0`
 
-// Calls in tail position answer what Node's do, made by the tree tier's
-// nodes (tailAll) and by the interpreter, in a runtime made twice.
+// Calls in tail position answer what Node's do, in a runtime made four
+// times.
 func TestTailCallsAgreeWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 4 {
-		r := newTreeTierForTest(round < 2, Config{})
+		r := New(Config{})
 		v, err := r.Run(compileForTest(t, tailCallScript))
 		if err != nil {
 			t.Fatal(err)
@@ -213,62 +213,19 @@ const deepTailScript = `(function () {
 })()`
 
 // Recursions through calls in tail position far deeper than the call
-// stack run in constant space, as strict code's tail calls must, on the
-// tree tier and in the interpreter alike.
+// stack run in constant space, as strict code's tail calls must.
 func TestDeepTailCalls(t *testing.T) {
 	t.Parallel()
 	const want = "705082704 100000 false false true true 150000 obj obj? c p super bound 2 arrow 100:100000:100000:100000 14285:200000 2:100000:undefined,3:75000:75001,3:50000:50001,3:25000:25001,3:0:1 RangeError deep true"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{MaxCallDepth: 400})
-		v, err := r.Run(compileForTest(t, deepTailScript))
-		if err != nil {
-			t.Fatalf("tree tier %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
-		}
-		r.Close()
-	}
-}
-
-// A call in tail position is one node, the value its return returns, its
-// operands evaluated by it, as a call's are (tailAll): its function's tree
-// has no statement -- no spill of the callee, the receiver or the
-// arguments to their slots -- and a conditional with such a call in it is
-// one node too, in the one block the code has besides return_undef's.
-func TestTailCallsBuiltAsNodes(t *testing.T) {
-	r := New(Config{})
-	defer r.Close()
-	_, err := r.Run(compileForTest(t, `
-		"use strict"
-		function tern(n, acc) { return n === 0 ? acc : tern(n - 1, acc + 1) }
-		function even(n) { return n === 0 || odd(n - 1) }
-		function odd(n) { return n !== 0 && even(n - 1) }
-		function plain(n) { return n === 0 ? 0 : plain(n - 1) }
-		const o = { m(n) { return n === 0 ? 0 : this.m(n - 1) } }
-		function method(p, n) { return p.m(n) }
-		for (let i = 0; i < 3; i++) { tern(50, 0); even(50); plain(50); method(o, 50) }`))
+	r := New(Config{MaxCallDepth: 400})
+	v, err := r.Run(compileForTest(t, deepTailScript))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"tern", "even", "odd", "plain", "method"} {
-		fn := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
-		tr := (*tree)(fn.VMCode)
-		if tr == nil || tr == noTree {
-			t.Fatalf("%s: no tree", name)
-		}
-		if tr.reg != nil && regTier.Load() {
-			// Register code's one node: the tree's shape is the tree tier's.
-			continue
-		}
-		stmts := 0
-		for _, b := range tr.blocks {
-			stmts += len(b.body)
-		}
-		if len(tr.blocks) != 2 || stmts != 0 {
-			t.Errorf("%s: %d blocks, %d statements; want 2 and 0", name, len(tr.blocks), stmts)
-		}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
+	r.Close()
 }
 
 // A parameter after a default, or after a pattern, is read from the
@@ -276,8 +233,8 @@ func TestTailCallsBuiltAsNodes(t *testing.T) {
 // make calls in tail position of its own. A call in tail position past
 // tailCallDepth to such a function gives it arguments of their own, not
 // tailArgs, which those calls copy theirs into: f's z had been "s3",
-// spin's. By a plain call (tailAll) and by a private method's
-// (tailCallNode), tree tier on and off: Node v26.10.0's answers.
+// spin's. By a plain call and by a private method's: Node v26.10.0's
+// answers.
 func TestTailCallArgumentsAfterDefaults(t *testing.T) {
 	t.Parallel()
 	const src = `(function () {
@@ -299,15 +256,13 @@ func TestTailCallArgumentsAfterDefaults(t *testing.T) {
 	return r.join(" ");
 })()`
 	const want = "x:z1 0:p1 x:w1 x:z1 0:p1 x:w1 x:z1 0:p1 x:w1"
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	r.Close()
 }

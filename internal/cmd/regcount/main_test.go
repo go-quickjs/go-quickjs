@@ -3,14 +3,11 @@ package main
 import (
 	"strings"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // count is the tally of one script.
 func count(t *testing.T, src string) *tally {
 	t.Helper()
-	compiler.SetRegisterForm(true)
 	c := newTally()
 	c.countSource("case.js", src, false)
 	if c.failed != 0 {

@@ -11,8 +11,8 @@ import "testing"
 // Uint8Clamped, rounded to a float for Float32. What it does not make --
 // an index the view does not have, a view out of its buffer, a detached
 // or an immutable one, a view of a resizable buffer's length -- does what
-// the interpreter does. Each answer is the interpreter's, in every tier
-// and under every stress setting.
+// the interpreter does. Each answer is the interpreter's, under every
+// stress setting.
 func TestJITTypedArrays(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

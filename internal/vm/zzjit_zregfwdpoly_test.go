@@ -21,12 +21,11 @@ function poly(n) { var s = 0; for (var j = 0; j < n; j++) s += fs[j & 3](j, 3); 
 
 // TestJITRegForwardPolySettles calls forwarders whose forwards meet four
 // functions: the forwarder's forward settles on all four together, which
-// its code calls natively (jitRegForwardSeen), and no call of it is
-// inlined for a guess at its f (jitRegForwardTarget), as the stack form's
-// jitForwardSeen and jitForwardLearned have it. Inlined for the f of the
-// closure the call's cache held, the call had left native code three
-// turns in four. Exact answers, idle and marking; once warm, no guard
-// fails and no forward is a call of Go.
+// its code calls natively (jitRegForwardSeen), and no call of it is inlined
+// for a guess at its f (jitRegForwardTarget). Inlined for the f of the
+// closure the call's cache held, the call had left native code three turns
+// in four. Exact answers, idle and marking; once warm, no guard fails and
+// no forward is a call of Go.
 func TestJITRegForwardPolySettles(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -83,12 +82,11 @@ function mono(n) { var s = 0; for (var j = 0; j < n; j++) s += fwd(j, 1); return
 `
 
 // TestJITRegForwardMonoInlined has a forwarder's forward settle on one
-// function after its caller was compiled to call it: the caller is
-// compiled again to inline it (jitRegCallersReopt), as the stack form's
-// native callers are (jitCallersReopt), and once warm no call of it, nor
+// function after its caller was compiled to call it: the caller is compiled
+// again to inline it (jitRegCallersReopt), and once warm no call of it, nor
 // its forward, leaves native code or is made by Go. Before its forward is
-// decided a plain call of it is not inlined (jitRegForwardTarget): left
-// at that, forward_call2 ran 4 times as long.
+// decided a plain call of it is not inlined (jitRegForwardTarget): left at
+// that, forward_call2 ran 4 times as long.
 func TestJITRegForwardMonoInlined(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

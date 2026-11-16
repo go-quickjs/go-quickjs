@@ -97,8 +97,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 		// The innermost level's state in the last context, which the
 		// contexts, not the frames the VM allows, limited: an inlined
 		// frame's room check (ssa.OpFrameRoom) left for want of contexts
-		// past it, as the stack form's unwinding finds it (jitUnwindNative)
-		// and has more made. Left so at every call, the code had been
+		// past it: more are made. Left so at every call, the code had been
 		// compiled again with the call not inlined, the closures it gives
 		// the callee made.
 		r.jitGrowContexts()
@@ -136,12 +135,11 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 		}
 		if o := levels[k].known; o != nil {
 			// The function object the code inlined the callee for, which
-			// its call's checks found, as the stack form's frame of the
-			// level has it (jitUnwindNative's InlineCallee): the window's
-			// register, which inlined code writes only where the callee
-			// reads it, held whatever was there -- a stack trace named
-			// the frame by the function a call made after the window's
-			// last use had there.
+			// its call's checks found (abi.Context's InlineCallee): the
+			// window's register, which inlined code writes only where the
+			// callee reads it, held whatever was there -- a stack trace
+			// named the frame by the function a call made after the
+			// window's last use had there.
 			called = Obj(o)
 			r.stack[levels[k].wb] = called
 		}
@@ -189,11 +187,10 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			// The loop's callback: its receiver the loop's thisArg, as
 			// Go's forEach calls it (jitRegForwardReceiver), an arrow's
 			// the one it captured (jitRegPlainReceiver); and the
-			// built-in's frame below it, as the stack form's unwinding
-			// makes it (jitPushLoopFrame), which a stack trace shows: "at
-			// Array.forEach". Neither had been made, the callback named
-			// "Number.throwAt" by what its window's register 1 held, and
-			// the built-in left out.
+			// built-in's frame below it (jitRegPushLoopFrame), which a
+			// stack trace shows: "at Array.forEach". Neither had been made,
+			// the callback named "Number.throwAt" by what its window's
+			// register 1 held, and the built-in left out.
 			if x.callee.IsObject() && x.callee.Object().fn() != nil && x.callee.Object().fn().arrow {
 				r.jitRegPlainReceiver(x.callee, x.cl, x.wb)
 			} else {
@@ -242,12 +239,10 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			l := s.regLearnedOf(r.jitRegKeyOf(cl))
 			switch {
 			case x.kind == abi.ExitDeopt || miss:
-				// A guard's failure: the owner's code invalid from here,
-				// as at one of its own (jitRegLeft), the stack form's
-				// code's at one inside a callee it inlined. So too a
-				// property site's shape the code was not compiled for,
-				// which the site's learning took (jitRegInlineLeft), as
-				// the stack form's (jitFinishExit).
+				// A guard's failure: the owner's code invalid from here, as
+				// at one of its own (jitRegLeft). So too a property site's
+				// shape the code was not compiled for, which the site's
+				// learning took (jitRegInlineLeft).
 				r.jitRegInvalidate(cl, owner)
 			case learned:
 				// The callee's feedback learned what the owner's code was
@@ -255,8 +250,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 				r.jitRegReopt(cl, owner)
 			case x.threw && !atSite && !owner.life.reopt && slices.ContainsFunc(l.nativeCalls, func(y jitInline) bool { return int(y.pc) == at && y.forEach && !y.cbLeft }):
 				// A loop's callback that threw, inlined in the loop: counted
-				// against its inlining there (jitInlineLeft's cbLeft), as the
-				// stack form's unwinding of the loop's callback counts it --
+				// against its inlining there (jitInlineLeft's cbLeft) --
 				// left inlined, a callback that throws at every call left
 				// native code at each.
 				r.jitInlineLeft(l, at)
@@ -267,23 +261,22 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			case atSite || x.threw || owner.life.reopt:
 				// Left at a site of the callee's -- or by code to be
 				// compiled again, which may be what it leaves for -- not
-				// for being inlined, as the stack form's unwinding counts
-				// none such; or left to throw, which the callee's own code,
-				// called natively, leaves native code for just the same: a
-				// read of null's property, at a site the callee's own code
-				// made megamorphic deoptimizing for it (jitDeoptSeenOp),
-				// had had constructs' Vs called natively after 16 throws.
+				// for being inlined; or left to throw, which the callee's
+				// own code, called natively, leaves native code for just
+				// the same: a read of null's property, at a site the
+				// callee's own code made megamorphic deoptimizing for it
+				// (jitDeoptSeenOp), had had constructs' Vs called natively
+				// after 16 throws.
 			default:
 				// Left with nothing to learn: counted against inlining the
-				// callee at the call, by the stack form's own rule
-				// (jitInlineLeft, jitInlineExits): past it the call is a
-				// native call in the code compiled next. A closure the
-				// owner makes, inlined where it calls it and not made
-				// (madeInline), is counted at that call as Inline's
-				// callees are: past the rule it is made and called, its
-				// call's shape no longer given (CallShape's notInline) --
-				// one whose reads of its arguments past the call's count
-				// are Go's had left native code at every call.
+				// callee at the call (jitInlineLeft, jitInlineExits): past
+				// it the call is a native call in the code compiled next. A
+				// closure the owner makes, inlined where it calls it and
+				// not made (madeInline), is counted at that call as
+				// Inline's callees are: past the rule it is made and
+				// called, its call's shape no longer given (CallShape's
+				// notInline) -- one whose reads of its arguments past the
+				// call's count are Go's had left native code at every call.
 				if k := owner.keep; k != nil && !slices.ContainsFunc(l.inlines, func(y jitInline) bool { return int(y.pc) == at }) &&
 					slices.ContainsFunc(k.made, func(t *closure) bool { return t.fn == levels[0].cl.fn }) {
 					l.inlines = append(l.inlines, jitInline{pc: int32(at), cl: levels[0].cl})
@@ -323,15 +316,14 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 	return v, err, true
 }
 
-// jitRegLeftAtSite reports whether the innermost inlined level x left,
-// at a host exit, for a site of its own rather than for being inlined, as
-// the stack form's unwinding tells (jitShapeMiss, jitPoolEmptied): a
+// jitRegLeftAtSite reports whether the innermost inlined level x left, at a
+// host exit, for a site of its own rather than for being inlined: a
 // property's read or write whose site is not megamorphic -- a shape its
-// cases lack, a receiver whose read throws -- or a construction whose
-// pool ran out, which Go fills again. Neither counts against inlining the
-// callee (jitInlineLeft): a callee reading a property of the null its
-// caller passes now and then, a TypeError the caller catches, had been
-// called natively after 16 of them.
+// cases lack, a receiver whose read throws -- or a construction whose pool
+// ran out, which Go fills again. Neither counts against inlining the callee
+// (jitInlineLeft): a callee reading a property of the null its caller
+// passes now and then, a TypeError the caller catches, had been called
+// natively after 16 of them.
 func (r *Runtime) jitRegLeftAtSite(x *jitRegInlineLevel) bool {
 	rc := x.cl.reg.rc
 	if x.kind != abi.ExitHost || x.pc < 0 || x.pc >= len(rc.Code) {
@@ -353,18 +345,17 @@ func (r *Runtime) jitRegLeftAtSite(x *jitRegInlineLevel) bool {
 }
 
 // jitRegShapeMiss reports whether the innermost inlined level x left at a
-// host exit at a property's read or write whose site is not megamorphic,
-// as the stack form's jitShapeMiss asks: a shape its cases lack, a site
-// that knew none, a receiver whose read throws. It is a map check's
-// failure, as a guard at a site of the code's own is (jitRegDeoptSeen),
-// which the stack form's unwinding learns as one, the code that inlined
-// the callee invalidated, compiled again with the site's cases once the
-// interpreter has spent a budget (jitFinishExit). Taken for the callee's
-// site alone, not the owner's code's, AWFY's Dictionary.at, compiled while
-// DeltaBlue ran with hashFn inlined for its keys' customHash, left at its
-// read for Havlak's keys at every call, never compiled again; its native
-// callers stopped calling it (jitRegUnwound), and the interpreter ran it,
-// two million calls a run.
+// host exit at a property's read or write whose site is not megamorphic: a
+// shape its cases lack, a site that knew none, a receiver whose read
+// throws. It is a map check's failure, as a guard at a site of the code's
+// own is (jitRegDeoptSeen), learned as one, the code that inlined the
+// callee invalidated, compiled again with the site's cases once the
+// interpreter has spent a budget. Taken for the callee's site alone, not
+// the owner's code's, AWFY's Dictionary.at, compiled while DeltaBlue ran
+// with hashFn inlined for its keys' customHash, left at its read for
+// Havlak's keys at every call, never compiled again; its native callers
+// stopped calling it (jitRegUnwound), and the interpreter ran it, two
+// million calls a run.
 func (r *Runtime) jitRegShapeMiss(x *jitRegInlineLevel) bool {
 	rc := x.cl.reg.rc
 	if x.kind != abi.ExitHost || x.pc < 0 || x.pc >= len(rc.Code) {
@@ -409,8 +400,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		}
 		learned = true
 	case abi.ExitHost:
-		// Counted once, where the run left (jitRegLeft), as the stack
-		// form counts an inlined callee's exit (runSSALoop): counted here
+		// Counted once, where the run left (jitRegLeft): counted here
 		// too, each such exit had been two.
 		f.pc = regSrc(c, pc) + 1
 		s.noteRegHost(c, pc)
@@ -423,11 +413,9 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		l := s.regLearnedOf(r.jitRegKeyOf(x.cl))
 		before, failed := l.polyReopt, len(l.failed)
 		// An addition that met a string, learned as at the callee's own
-		// host exit (jitRegStringAddSeen), as the stack form's unwinding
-		// of an inlined level learns it (jitStringAddSeen): Go's from the
-		// next lowering on. Not learned, a closure's s += x inlined had
-		// left native code at each call until the call was no longer
-		// inlined.
+		// host exit (jitRegStringAddSeen): Go's from the next lowering on.
+		// Not learned, a closure's s += x inlined had left native code at
+		// each call until the call was no longer inlined.
 		str := r.jitRegStringAddSeen(l, c, x.wb, pc)
 		seen := r.jitRegHostSeen(f, c, x.wb, pc)
 		next, ran, err := r.regWhole(f, c, x.wb, pc)

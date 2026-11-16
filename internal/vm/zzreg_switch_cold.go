@@ -11,8 +11,8 @@ import (
 // handler, iterators' steps.
 
 // regDeadCall is a call of o on recv with args whose value nothing reads
-// but its truth: of the realm's exec or replace, the function told so, as
-// deadExec's node tells it (deadCallRest); of anything else, the call.
+// but its truth: of the realm's exec or replace, the function told so
+// (deadCallRest); of anything else, the call.
 func (r *Runtime) regDeadCall(o *Object, recv Value, args []Value) (Value, error) {
 	switch o {
 	case r.regexpExecFn:
@@ -78,7 +78,7 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 	vals := regs[w.B() : int(w.B())+n]
 	if final := ic.next; final != nil && root != nil && ic.s1 == root && n <= int(o.valc) {
 		// The shape the keys led to from this root before, which the
-		// site keeps as the tree's literal node does: transitions are
+		// site keeps: transitions are
 		// never undone, so the values go in place.
 		dst := o.vals()[:n]
 		copy(dst, vals)
@@ -111,7 +111,7 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 	regs[w.A()] = Obj(o)
 }
 
-// regNewArrayE is new_array_empty: the tree's node for the literal, made
+// regNewArrayE is new_array_empty: the literal's arrayEmptyNode, made
 // here, its site in the closure's arrays, named to native code by the
 // stack form's pc. Making an array throws nothing, so the frame's pc is
 // left as it is.
@@ -119,7 +119,7 @@ func (r *Runtime) regNewArrayE(f *frame, c *regCode, k *regKept, regs *[1 << 16]
 	pc := k.pc - 1
 	w := regAt(c.code, pc)
 	n := arrayEmptyNode[struct{}]{site: int(w.B()), pc: int32(regSrc(c, pc))}
-	regs[w.A()] = n.make(regTctx(r, f, f.cl))
+	regs[w.A()] = n.make(r, f.cl.closureCode)
 }
 
 // regCharCodeAtSlow is char_code_at as get_method_w and call_method_w make
@@ -172,37 +172,12 @@ func (r *Runtime) regCatch(f *frame, c *regCode, k *regKept, regs *[1 << 16]Valu
 	return int(h.To)
 }
 
-// regIterNextTree is iter_next of a generator's cursor, stepped as the
-// tree steps one (iterNextTree): a generator of tree code resumed in
-// place (stepGenTree), not through its next's call. Its body throws as the
-// tree throws, with a panic, which a function of the tree with a for-of
-// loop catches under its own recover; register code has none, so the
-// step has one, and leaves the frames and the stack as runTreeHandlers
-// does. The frame's tctx is the step's: the tree reads only its runtime.
-func (r *Runtime) regIterNextTree(f *frame, cur Value) (v Value, more bool, err error) {
-	depth, top := r.frameDepth, r.stackTop
-	defer func() {
-		if p := recover(); p != nil {
-			th, ok := p.(treeThrow)
-			if !ok {
-				panic(p)
-			}
-			r.unwindTreeFrames(depth)
-			r.stackTop = top
-			v, more, err = Undefined, false, th.err
-		}
-	}()
-	tc := &f.tc
-	tc.r, tc.f = r, f
-	return iterNextTree(tc, cur)
-}
-
 // regStepNext is iter_next of a cursor neither of an array, a for-in nor
 // a generator, as iterNext steps it (stepIter): a next of script called as
 // register code calls (regCall), its register code entered directly rather
 // than through the frames a call from Go makes, and its result's done and
-// value read; a Map's or a Set's iterator of this realm stepped as the
-// tree's iterNextTree steps it; anything else by stepIter. The cursor is
+// value read; a Map's or a Set's iterator of this realm stepped directly;
+// anything else by stepIter. The cursor is
 // done once it is, or once a step fails.
 func (r *Runtime) regStepNext(st *iterState) (Value, bool, error) {
 	var fd *funcData
@@ -283,8 +258,8 @@ func (r *Runtime) regStepOf(st *iterState, res Value, err error) (Value, bool, e
 // regColdWrap is wrap, R[A] = R[B] op R[C] for X.asUintN(w, x op y) or
 // asIntN's, the call right after it: where the callee is BigInt.asUintN
 // or asIntN and x and y BigInts held in their Values, the call's value
-// made at once, x op y of the call's width, as the tree's wrapCall makes
-// it (wrapShort), and the call passed over -- a built-in that has nothing
+// made at once, x op y of the call's width (wrapShort), and the call
+// passed over -- a built-in that has nothing
 // else to do; anything else the operator's value as ever, for the call.
 func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RInstr, regs *[1 << 16]Value) error {
 	op := regStackOp[bytecode.ROp(regAuxAt(c, k.pc-1))&127]
@@ -314,8 +289,8 @@ func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RI
 						}
 						regCallSiteNative(cl, cw, fv.Object(), fd, r.Realm)
 						if regBigOf != nil && !isBitwise(op) {
-							// The operator's mark, as the tree's wrapSeen
-							// makes it: in the int64 range, or another.
+							// The operator's mark: in the int64 range, or
+							// another.
 							x, ok := shortArith(op, a, b)
 							if !ok {
 								x = Undefined
@@ -383,11 +358,11 @@ func regCallSiteNative(cl *closure, w bytecode.RInstr, o *Object, fd *funcData, 
 
 // regLiteralKeyedRoot has new_object_lit's site at pc of c, whose cache is
 // ic, start from the realm's root for literals of its keys where it has
-// made no object along its root yet, as the tree's literal node does
-// (literalRoot): literals of the same keys in other functions, and the
-// closures of each made anew, make objects of one layout, which what reads
-// them has met. The JIT's literal takes its root so too (jitRegFeedback's
-// literalAt), whichever makes the site's first object.
+// made no object along its root yet: literals of the same keys in other
+// functions, and the closures of each made anew, make objects of one
+// layout, which what reads them has met. The JIT's literal takes its root
+// so too (jitRegFeedback's literalAt), whichever makes the site's first
+// object.
 func (r *Runtime) regLiteralKeyedRoot(c *regCode, pc int, ic *propCache) {
 	if s := ic.shape; s != nil && s.next == nil {
 		if hs := c.rc.ObjKeysHash; pc < len(c.rc.Aux) && int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {

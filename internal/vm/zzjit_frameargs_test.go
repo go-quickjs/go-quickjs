@@ -160,9 +160,7 @@ func TestJITGeneratorParameters(t *testing.T) {
 		// Under the register JIT a native step resumes a generator
 		// through its link (jitGenInForTest).
 		n := jitCodeNamedForTest(t, r, name).e.ssaStats.entries
-		if jitRegCodeForTest(r, name) {
-			n += jitGenInForTest(r, name)
-		}
+		n += jitGenInForTest(r, name)
 		if n == 0 {
 			t.Errorf("%s was never entered", name)
 		}

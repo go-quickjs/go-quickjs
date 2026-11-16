@@ -1524,11 +1524,9 @@ func (c *compiler) runsNoCode(in bytecode.Instr) bool {
 //
 // An object that was a plain read of a local, an upvalue or this, which
 // cannot throw or run code, is read again rather than copied: the two reads
-// are adjacent, so they see the same value, and two reads are what the
-// tiers fold into the property access -- `o.x += 1` then compiles as
-// `o.x = o.x + 1` does -- where a copy makes the tree tier spill both to
-// the stack. Not where something jumps to just after the read, which arrives
-// there without having made it.
+// are adjacent, so they see the same value, and `o.x += 1` then compiles as
+// `o.x = o.x + 1` does. Not where something jumps to just after the read,
+// which arrives there without having made it.
 func (c *compiler) dupObject() {
 	if n := len(c.fn.Code); !c.isTarget(n) && c.rereadable(n-1) {
 		last := c.fn.Code[n-1]

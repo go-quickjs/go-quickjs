@@ -2,206 +2,21 @@ package vm
 
 import (
 	"errors"
-	"sync/atomic"
 )
 
 // runFD and the frames' helpers after it, apart from vm_call.go so that the
 // layout lock has a pad between callDirect and runFD; see
 // internal/cmd/layoutpad. Kept with the rest of the hot path.
 
-// runFD is run for a caller that has the callee's function data already,
-// which run would otherwise look up again: fd is callee's, or nil with no
-// callee.
+// runFD runs a call of cl -- the callee's function data fd, or nil with no
+// callee -- as register code entered as its own (regRunFD), which makes the
+// chain of tail calls the frame ends in.
 func (r *Runtime) runFD(cl *closure, this Value, args []Value, newTarget Value, callee *Object, fd *funcData) (Value, error) {
-start:
-	fn := cl.fn
-
-	// A sloppy-mode function's `this` is coerced: undefined and null become the
-	// global object, and a primitive becomes its wrapper. Strict mode leaves it
-	// exactly as passed, which is the difference that makes strict mode able to
-	// detect a missing receiver at all.
-	// The object case is tested first because it is the common one and costs a
-	// single mask: a method call already has an object receiver and needs no
-	// coercion at all.
-	if fn.CoerceThis && !this.IsObject() && newTarget.IsUndefined() {
-		if this.IsNullish() {
-			this = r.globalThis
-		} else {
-			o, err := r.toObject(this)
-			if err != nil {
-				return Undefined, err
-			}
-			this = Obj(o)
-		}
-	}
-
-	if r.frameDepth >= r.maxFrames {
-		return Undefined, r.throwRangeError("maximum call stack size exceeded")
-	}
-
-	// Carve a window out of the shared stack: locals first, then operands.
-	base := r.stackTop
-	need := fn.LocalCount + fn.MaxStack
-	if base+need > len(r.stack) {
-		return Undefined, r.throwRangeError("maximum call stack size exceeded")
-	}
-	r.stackTop = base + need
-
-	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
-	// The arguments go to the parameters' slots, positionally; anything
-	// beyond the simple positional case -- defaults, destructuring, a rest
-	// parameter -- is compiled into the function's prologue. Every other
-	// local starts as undefined, since the window was last used by an
-	// unrelated frame and a stale value could be read by a binding whose
-	// declaration was never reached: a parameter no argument was given for,
-	// and the slots past the parameters, in one loop. They are stored one at
-	// a time: clear would call memclr, with a bulk write barrier, which for a
-	// frame's few locals cost more than the call.
-	m := min(fn.ParamCount, len(locals), len(args))
-	for i, a := range args[:m] {
-		locals[i] = a
-	}
-	for i := m; i < len(locals); i++ {
-		locals[i] = Undefined
-	}
-
-	// The high-water mark is what endTurn clears back to, so that a value left
-	// behind by a returning frame does not stay reachable until its slot is
-	// reused.
-	if r.stackTop > r.stackHigh {
-		r.stackHigh = r.stackTop
-	}
-
-	f := r.pushFrame()
-	// The fields are assigned rather than the struct replaced, so that the
-	// handler and upvalue slices keep their backing arrays across calls. A
-	// frame is large enough that copying a fresh one, and reallocating those
-	// slices, showed up in the profile.
-	f.cl = cl
-	f.locals = locals
-	f.base = base + fn.LocalCount
-	f.pc = 0
-	f.this = this
-	// A derived constructor does not receive `this`; super() binds it. Until
-	// then the object the caller made is held but unreachable, so that a
-	// subclass cannot touch what the base class has not finished building.
-	// The kind alone does not say which constructors are derived: a derived
-	// class with no explicit constructor gets a synthesized one, and what makes
-	// it derived is the heritage clause the class object records.
-	f.newTarget = newTarget
-	f.callee = callee
-	f.args = args
-	if len(f.openUpvalues) != 0 {
-		f.openUpvalues = f.openUpvalues[:0]
-	}
-	// What almost no function has is reset only where the frame's last call
-	// left it set: reading a field is cheaper than writing a pointer to it.
-	if f.thisRef != nil {
-		f.thisRef = nil
-	}
-	// The chain is inherited whole, capped so that a push inside this call
-	// copies rather than writing into the creating frame's array.
-	if f.withScopes != nil {
-		f.withScopes = nil
-	}
-	if f.evalVars != nil {
-		f.evalVars = nil
-	}
-	// What follows is for a derived constructor, an arrow written inside
-	// one, and a function inside a with or after an eval, all of which have
-	// an extra or are derived; most functions are neither.
-	if fd != nil && (fd.extra != nil || fd.ctorKind == ctorDerived) {
-		switch {
-		case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
-			f.thisRef = &thisBinding{value: this}
-		case fd.arrow && fd.extra.lexThisRef != nil:
-			// An arrow written inside a derived constructor shares its
-			// binding, so calling one before super() is the same error.
-			f.thisRef = fd.extra.lexThisRef
-		}
-		if w := fd.extra.with(); len(w) > 0 {
-			f.withScopes = w[:len(w):len(w)]
-		}
-		// What an eval declared in an enclosing function is still in scope
-		// here, whether or not this one has anything of its own.
-		if ev := fd.extra.evalVars(); ev != nil {
-			f.evalVars = ev
-		}
-	}
-	if fn.HasDirectEval {
-		// The body contains a direct eval, so it needs somewhere for the vars
-		// that eval may declare. It goes on the scope chain, inside whatever
-		// the enclosing functions put there: a name the evaluated code
-		// declares is found the way a `with` object's properties are.
-		// An ordinary object of no prototype, newObject's, made here: a call
-		// of newObject, which no longer inlines, had grown runFD's code
-		// and moved what follows it.
-		f.evalVars = &Object{class: ClassObject, flags: objExtensible | objEvalVars}
-		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], f.evalVars)
-	}
-	if len(f.handlers) != 0 {
-		f.handlers = f.handlers[:0]
-	}
-	if f.native != "" {
-		f.native = ""
-	}
-	if f.savedSP != 0 {
-		f.savedSP = 0
-	}
-
-	// The tree the function runs as, if the tier built it one. Every call
-	// asks, so once the answer is known it is a load and two comparisons
-	// here; firstTree settles it the first time.
-	var v Value
-	var err error
-	var native bool
-	if r.jitOn() {
-		v, err, native = r.tryJITFrame(f)
-	}
-	if !native {
-		t := (*tree)(atomic.LoadPointer(&fn.VMCode))
-		if t == nil {
-			t = firstTree(fn)
-		}
-		if t != noTree {
-			v, err = r.runTree(f, t)
-		} else {
-			v, err = r.execute(f)
-		}
-	}
-	r.popFrameOf(f, base)
-	if err != errTailCall {
-		return v, err
-	}
-	// The frame ended in a tail call, and is gone: the callee's is made in
-	// its place, in this same call of run.
-	var ok bool
-	if cl, this, args, callee, ok, err = r.takeTailCall(); !ok {
-		return this, err
-	}
-	newTarget = Undefined
-	fd = nil
-	if callee != nil {
-		fd = callee.fn()
-	}
-	goto start
-}
-
-// takeTailCall resolves the call a frame ended in. It reports true with the
-// frame to make in its place, or false with the call's result, having made it
-// the ordinary way -- which a callee that is not a compiled function needs.
-func (r *Runtime) takeTailCall() (*closure, Value, []Value, *Object, bool, error) {
-	tc := r.pendingTail
-	r.pendingTail = tailCall{}
-	cl, this, args, callee, ok, err := r.tailTarget(tc)
-	if err != nil {
-		return nil, Undefined, nil, nil, false, err
-	}
+	v, err, ok := r.regRunFD(cl, this, args, newTarget, callee, fd)
 	if !ok {
-		v, err := r.callObject(tc.callee.Object(), tc.this, tc.args, Undefined)
-		return nil, v, nil, nil, false, err
+		return Undefined, errNoRegCode(cl.fn)
 	}
-	return cl, this, args, callee, true, nil
+	return v, err
 }
 
 // tailCall is a call a frame ended in, waiting for run to make it.
@@ -360,12 +175,4 @@ func (r *Runtime) popFrameOf(f *frame, base int) {
 	}
 	r.stackTop = base
 	r.frameDepth--
-}
-
-// pushAt stores v at sp and returns the next free slot. It takes and returns
-// sp rather than holding it, so that the interpreter's sp stays a variable the
-// compiler can keep in a register.
-func pushAt(stack []Value, sp int, v Value) int {
-	stack[sp] = v
-	return sp + 1
 }

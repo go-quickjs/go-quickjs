@@ -110,7 +110,6 @@ func TestConformance(t *testing.T) {
 		t.Fatalf("loading tests: %v", err)
 	}
 	t.Logf("loaded %d test variants from %s", len(tests), suite.Root)
-	vm.ResetRegFallbacks()
 	forcedFeatures := make(map[string]bool)
 	for _, feature := range strings.Split(*forceFeatures, ",") {
 		if feature = strings.TrimSpace(feature); feature != "" {
@@ -228,17 +227,6 @@ func TestConformance(t *testing.T) {
 	}
 	t.Logf("test262: %d passed, %d failed, %d skipped (%.2f%% of executed)",
 		pass, fail, skip, rate)
-	if vm.RegTierOn() && !*jitFlag {
-		// The register tier, where it is on, runs every test as register
-		// code alone (vm.RegFallbacks): nothing in the stack interpreter
-		// or the tree tier, nothing entered through their frames. A
-		// runtime with the JIT runs those tiers instead.
-		n, by := vm.RegFallbacks()
-		t.Logf("register mode: %d fallbacks to the other tiers", n)
-		if n != 0 {
-			t.Errorf("%d fallbacks to the other tiers (QJS_REGFALLTRACE names them):\n%s", n, by)
-		}
-	}
 
 	// A per-area breakdown makes it obvious where the remaining work is.
 	areas := make([]string, 0, len(byArea))

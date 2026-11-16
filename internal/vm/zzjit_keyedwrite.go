@@ -2,37 +2,6 @@
 
 package vm
 
-import (
-	"slices"
-
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
-)
-
-// KeyedWrite is ssa.KeyedWriteFeedback's (jitKeyedWriteSeen).
-func (fb *jitFeedback) KeyedWrite(pc int) bool {
-	e := fb.ownEntry()
-	return e != nil && slices.Contains(e.keyedWrites, int32(pc))
-}
-
-// jitKeyedWriteSeen notes a write of an element, set_index at pc, that left
-// e's code with its receiver, key and value on the VM's stack below sp: one
-// to an object native code does not store to that Go would store
-// (jitKeyedWrite), which Go stores from native code from then on
-// (ssa.GoKeyedWrite), its code compiled again on the existing tiers'
-// budget, as an element read by a name is (jitIndexSeen). An array's or a
-// typed array's element, which native code stores, is not.
-func (r *Runtime) jitKeyedWriteSeen(e *jitEntry, pc, sp int) {
-	if p := e.ssaProg; p == nil || pc >= len(p.Code) || p.Code[pc].Op != ir.ArrayWrite || slices.Contains(e.keyedWrites, int32(pc)) || sp < 3 || sp > len(r.stack) {
-		return
-	}
-	o := r.stack[sp-3]
-	if !o.IsObject() || o.Object().class == ClassArray || o.Object().class == ClassTypedArray || !r.jitKeyedWrite(o, r.stack[sp-2], r.stack[sp-1], false) {
-		return
-	}
-	e.keyedWrites = append(e.keyedWrites, int32(pc))
-	e.reopt = true
-}
-
 // jitKeyedWrite is o[k] = v where storing it runs nothing and throws
 // nothing (ssa.GoKeyedWrite), made if store is set, or only asked: an
 // array's or a typed array's element as native code's call of Go stores it

@@ -10,8 +10,7 @@ import (
 // whose sites remember the global object's slot, in a runtime whose scripts
 // declare lexical bindings: only a binding of the global's own name may
 // change where its reads and writes go, and one declared by a later script
-// must be seen at once -- its value, its dead zone, and a const's refusal --
-// whether the function runs as a tree or in the interpreter.
+// must be seen at once -- its value, its dead zone, and a const's refusal.
 func TestGlobalLexicalShadowing(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()

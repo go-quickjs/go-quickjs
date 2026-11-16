@@ -69,17 +69,13 @@ func TestJITHandlerLiveness(t *testing.T) {
 			// The object deadAfter makes in its try, which no handler reads,
 			// is not made: dead past the iteration's try, it is no loop
 			// header's.
-			if regJITForTest() {
-				// Its register code's last compile's (ssa.Func's Virtuals).
-				e := jitRegEntryNamedForTest(r, "deadAfter")
-				var x jitBuiltFacts
-				if e != nil {
-					x, _ = built.of(e.fnForTest())
-				}
-				if e == nil || x.virtuals == 0 {
-					t.Errorf("deadAfter makes its object: %+v", e)
-				}
-			} else if e := jitCallbackEntry(r, "deadAfter"); e == nil || e.ssa == nil || e.ssaVirtuals == 0 {
+			// Its register code's last compile's (ssa.Func's Virtuals).
+			e := jitRegEntryNamedForTest(r, "deadAfter")
+			var x jitBuiltFacts
+			if e != nil {
+				x, _ = built.of(e.fnForTest())
+			}
+			if e == nil || x.virtuals == 0 {
 				t.Errorf("deadAfter makes its object: %+v", e)
 			}
 		}

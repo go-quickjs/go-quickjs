@@ -48,22 +48,11 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 	for _, name := range []string{"find", "inner", "sloppy", "strict"} {
 		var e *jitEntry
 		var prog *ir.Program
-		if regJITForTest() {
-			// Its register code's: the program it was compiled from, and
-			// the closures' pools, which its state that outlives its
-			// compiles holds (jitRegClosureLiteral).
-			if re := jitRegEntryNamedForTest(r, name); re != nil {
-				e, prog = re.life, re.p
-			}
-		} else {
-			for k, x := range r.jit.cache {
-				if fn := k.Value(); fn != nil && fn.Name == name {
-					e = x
-				}
-			}
-			if e != nil && e.ssa != nil {
-				prog = e.ssaProg
-			}
+		// Its register code's: the program it was compiled from, and
+		// the closures' pools, which its state that outlives its
+		// compiles holds (jitRegClosureLiteral).
+		if re := jitRegEntryNamedForTest(r, name); re != nil {
+			e, prog = re.life, re.p
 		}
 		if e == nil || prog == nil || prog.Cells {
 			t.Errorf("%s has no code with its captured locals in its frame: %+v", name, e)

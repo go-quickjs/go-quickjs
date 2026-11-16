@@ -12,11 +12,7 @@ import (
 // process has, and returns its value as a string.
 func regI32Eval(t *testing.T, src string) string {
 	t.Helper()
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
@@ -36,9 +32,7 @@ func TestRegLeafMulImm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler.SetRegisterForm(true)
 	top, err := compiler.Compile(prog, compiler.Options{Text: src})
-	compiler.SetRegisterForm(bytecode.RegDefault())
 	if err != nil {
 		t.Fatal(err)
 	}

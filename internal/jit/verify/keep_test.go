@@ -93,6 +93,7 @@ func TestMirKeepsCheap(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {
@@ -209,6 +210,7 @@ func TestSSAKeptUsesTakeTheLastCopy(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			if err := ssa.Check(f); err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
@@ -278,6 +280,7 @@ func TestSSAKeepsReadTheirPointerWords(t *testing.T) {
 				if err != nil {
 					continue
 				}
+				regShape(f, p)
 				ssa.Optimize(f)
 				if err := ssa.Check(f); err != nil {
 					t.Fatalf("%s (%d): %v", src, i, err)

@@ -81,7 +81,7 @@ func TestJITBudgetInRegisterCounted(t *testing.T) {
 // then loaded into the register; its poll, Go's, had gone back to the
 // header, past the load, and the register a float the entry block had held
 // was stored as the budget: 4627167142139895302 back edges to go, every
-// later loop of the runtime run in the tree tier, never compiled, never
+// later loop of the runtime run in the interpreter, never compiled, never
 // interrupted.
 func TestJITBudgetAcrossManyFunctions(t *testing.T) {
 	t.Parallel()

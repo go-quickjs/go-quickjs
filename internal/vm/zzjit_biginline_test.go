@@ -28,6 +28,7 @@ func TestJITBigIntInlined(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitNativeCountsForTest(t)
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
 		gc := debug.SetGCPercent(-1)

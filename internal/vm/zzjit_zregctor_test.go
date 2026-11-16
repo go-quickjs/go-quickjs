@@ -20,14 +20,12 @@ function swap() { NS.Geo.P = function (x, y) { this.x = -x; this.y = y } }
 `
 
 // TestJITRegChainConstructionSeeded runs loops that construct with a
-// function read through a property chain, NS.Geo.P, and checks that each
-// is compiled once, its constructions native from that compile: the
+// function read through a property chain, NS.Geo.P, and checks that each is
+// compiled once, its constructions native from that compile: the
 // construction is seeded from the function the chain reads now
-// (regDefined's get_prop, as the stack form's jitCalleeObjectAt follows
-// jitChainValue), not learned at a call of Go and compiled again for it --
-// RayTrace's every construction had cost a compile more, 49 compiles at
-// -n 3 against the stack form's 24. The constructor replaced, the
-// construction checks it.
+// (regDefined's get_prop), not learned at a call of Go and compiled again
+// for it -- RayTrace's every construction had cost a compile more, 49
+// compiles at -n 3. The constructor replaced, the construction checks it.
 func TestJITRegChainConstructionSeeded(t *testing.T) {
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regChainCtorSrc)
@@ -95,8 +93,8 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += new P(i).x; return
 // TestJITRegConstructionEmptyPool compiles a loop's construction again
 // while the pool its objects come from is empty, as its callers had just
 // run it out, and checks that the construction stays native, the pool
-// filled again by the code (ssa's GoRefill), as the stack form's site is
-// compiled whatever its pool holds. A site refused for an empty pool was
+// filled again by the code (ssa's GoRefill), the site compiled whatever
+// its pool holds. A site refused for an empty pool was
 // compiled as a call of Go, which fills no pool, and every construction
 // was Go's from then on: RayTrace's IntersectionInfo's, hundreds of
 // thousands of times, in some runs.
@@ -170,16 +168,15 @@ function run(n) {
 }
 `
 
-// TestJITRegForwardingConstructionReads runs constructions of six
-// classes made by one forwarding constructor, each inlined with the
-// method it forwards to, and checks that none leaves native code: the
-// inlined forwarder's reads, this.initialize and its apply, are compiled
-// for the construction's object and the method its prototype holds
-// (forwardProperty), as the stack form's are. Compiled for what the
-// forwarder's own cache met, the read left at each class it had not, and
-// once a construction had left often enough it was made by a native call
-// of the forwarder, whose apply_args calls four methods natively and the
-// rest by Go.
+// TestJITRegForwardingConstructionReads runs constructions of six classes
+// made by one forwarding constructor, each inlined with the method it
+// forwards to, and checks that none leaves native code: the inlined
+// forwarder's reads, this.initialize and its apply, are compiled for the
+// construction's object and the method its prototype holds
+// (forwardProperty). Compiled for what the forwarder's own cache met, the
+// read left at each class it had not, and once a construction had left
+// often enough it was made by a native call of the forwarder, whose
+// apply_args calls four methods natively and the rest by Go.
 func TestJITRegForwardingConstructionReads(t *testing.T) {
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regForwardCtorSrc)

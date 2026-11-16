@@ -2,16 +2,10 @@
 
 package vm
 
-import (
-	"unsafe"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/jit"
-	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-)
+import ()
 
 // jitLazyLevels is a call of Go from a native callee whose levels below
-// the calling one have no frames yet (jitGoCallNested): those of contexts
+// the calling one have no frames yet (jitRegGoCallNested): those of contexts
 // root+1 to idx-1, at depth on, the calling level's frame past them. They
 // are made when a frame among them is read -- frameAt, which a stack trace,
 // a function's caller, a generator's search for its own run read through
@@ -24,12 +18,9 @@ import (
 // jitCloseRetired), so that what the levels return to stays.
 type jitLazyLevels struct {
 	root, idx, depth int
-	runF             *frame
 	made             bool
-	// reg marks a call of register code's (jitRegGoCallNested), whose
-	// levels are made in the realm the call was made in (jitRegMakeLazy),
-	// from on in regLazyLevels.
-	reg   bool
+	// realm is the realm the call was made in, which the levels are made
+	// in (jitRegMakeLazy), from from on in regLazyLevels.
 	realm *Realm
 	from  int
 }
@@ -43,20 +34,19 @@ func (r *Runtime) jitFramesDue(i int) {
 }
 
 // jitMakeLazyFrames makes the frames every call of Go under way put off,
-// as jitGoCallNested would have made them, where it left room for them.
+// as jitRegGoCallNested would have made them, where it left room for them
+// (jitRegMakeLazy).
 func (r *Runtime) jitMakeLazyFrames() {
 	s := r.jit
 	// Cleared, and each set marked made, before any frame is filled: a
 	// frame read while they are being filled would be handed back unfilled.
 	// None is: the filling pushes frames, which reads none, and reads the
-	// contexts, the stack and an accessor's property (jitLevelCallee,
-	// jitDerivedFrame), none of which reads a frame or meters memory. A
-	// change that has it read one -- a stack trace, the memory meter's walk
-	// -- must fill them first.
+	// contexts, the stack and an accessor's property, none of which reads a
+	// frame or meters memory. A change that has it read one -- a stack
+	// trace, the memory meter's walk -- must fill them first.
 	s.lazyTop = 0
 	s.lazyMade++
 	saved := r.frameDepth
-	ctxs := s.ssaCtxs
 	for j := range s.lazy {
 		lz := &s.lazy[j]
 		if lz.made {
@@ -64,26 +54,7 @@ func (r *Runtime) jitMakeLazyFrames() {
 		}
 		lz.made = true
 		r.frameDepth = lz.depth
-		if lz.reg {
-			r.jitRegMakeLazy(lz)
-			continue
-		}
-		callerFn := lz.runF.cl.fn
-		prevPC, _ := jit.CallPC(ctxs[lz.root])
-		for i := lz.root + 1; i < lz.idx; i++ {
-			c := ctxs[i]
-			lcl := (*closure)(c.Closure)
-			callPC, _ := jit.CallPC(c)
-			f := r.pushFrame()
-			if lcl == nil {
-				// None to make: the room a frame of no function's, which a
-				// stack trace passes over.
-				*f = frame{openUpvalues: f.openUpvalues[:0], handlers: f.handlers[:0]}
-				continue
-			}
-			r.jitLevelFrameFill(f, c, lcl, r.jitEntryOf(lcl), nil, callPC, prevPC, callerFn)
-			prevPC, callerFn = callPC, lcl.fn
-		}
+		r.jitRegMakeLazy(lz)
 	}
 	r.frameDepth = saved
 }
@@ -109,51 +80,5 @@ func (r *Runtime) jitLazyDone() {
 func (r *Runtime) jitFrameBlocks(depth int) {
 	for uint(depth)/frameBlockSize >= uint(len(r.frames)) {
 		r.frames = append(r.frames, make([]frame, frameBlockSize))
-	}
-}
-
-// jitLevelFrameFill fills f, the frame of the native level of context c,
-// running cl's code, of entry e, at callPC, which its caller, of callerFn,
-// called at prevPC; or a generator's, g, which a step resumed natively
-// (jitGenFrame).
-func (r *Runtime) jitLevelFrameFill(f *frame, c *abi.Context, lcl *closure, e *jitEntry, g *generator, callPC, prevPC uint64, callerFn *bytecode.Function) {
-	base := int(c.Base)
-	f.cl = lcl
-	f.pc = uint32(callPC) + 1
-	if g != nil {
-		// A generator's, its locals its own, its operands at the
-		// level's base (jitGenFrame).
-		f.locals, f.base = g.vals[g.nargs:], base
-		f.this, f.newTarget, f.callee, f.args = g.this, Undefined, g.callee, g.vals[:g.nargs:g.nargs]
-	} else {
-		f.locals = r.stack[base : base+lcl.fn.LocalCount : base+lcl.fn.LocalCount]
-		f.base = base + lcl.fn.LocalCount
-		f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
-	}
-	// Its function object, where the call it runs for says (an accessor's):
-	// the level's caller's, at its call. Asked only of a property's read or
-	// write: this runs for every call of Go a native callee makes, and each
-	// level's lookup had cost AWFY's Json 2%.
-	if pc := int(prevPC); pc < len(callerFn.Code) {
-		switch op := callerFn.Code[pc].Op; {
-		case op == bytecode.OpGetProp || op == bytecode.OpSetProp:
-			f.callee = r.jitLevelCallee(callerFn, pc, f.this)
-		case (op == bytecode.OpNew || op == bytecode.OpSuperCall && c.Function != 0) && c.NewTarget != 0 && g == nil:
-			// A construction's, or a super()'s parent's: its new.target,
-			// which the call wrote (abi.Context's NewTarget), as
-			// jitUnwindNative's levels have it -- a stack trace names the
-			// frame "new F" by it.
-			f.newTarget = Obj(*(**Object)(unsafe.Pointer(&c.NewTarget)))
-		}
-	}
-	if c.Function != 0 && lcl.fn.Kind != bytecode.KindDerivedConstructor && e != nil && e.ssaProg != nil && e.ssaProg.FrameCallee {
-		// The function object its code reads, which the call wrote
-		// (jitFrameCallee); a derived construction's is jitDerivedFrame's.
-		f.callee = *(**Object)(unsafe.Pointer(&c.Function))
-	}
-	f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
-	f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
-	if lcl.fn.Kind == bytecode.KindDerivedConstructor {
-		jitDerivedFrame(f, c)
 	}
 }

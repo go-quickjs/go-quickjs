@@ -7,8 +7,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// Literals and the expressions of stage 2's third item
-// (docs/register-interpreter.md, "Stage 2: zero refusals").
+// Literals -- BigInts, templates, object and array literals -- spread
+// arguments, optional chains, ?? and the logical assignments
+// (docs/register-interpreter.md, "From the AST").
 
 // bigInt loads a BigInt literal, a constant of the function's.
 func (g *gen) bigInt(n *ast.BigIntLit, dst int) int {

@@ -81,9 +81,8 @@ func TestRegLeafGivenUp(t *testing.T) {
 // code: a store of a value that runs no code asks whether the name resolves
 // at the store, a ReferenceError for a name that does not and a TypeError
 // for a binding that is not writable, on the site's first store and after
-// its fast path was filled; an update asks again after its read; a value
-// that runs code leaves the function to the stack form, where the
-// reference is resolved first.
+// its fast path was filled; an update asks again after its read; for a
+// value that runs code the reference is resolved first.
 func TestRegStrictGlobalStores(t *testing.T) {
 	const src = `
 		var sg = 0;
@@ -123,10 +122,10 @@ func TestRegLazyArguments(t *testing.T) {
 }
 
 // TestRegSteppedReads pins x[++i], x[i++] and their decrements: the key
-// stepped as the stack form steps it -- a string key made a number, an
-// object's valueOf called once -- the read of the key before or after the
-// step, a hole or a getter answered on the slow path, and a read of null
-// that throws after the step, out of a function with no handler.
+// stepped -- a string key made a number, an object's valueOf called once --
+// the read of the key before or after the step, a hole or a getter answered
+// on the slow path, and a read of null that throws after the step, out of a
+// function with no handler.
 func TestRegSteppedReads(t *testing.T) {
 	const src = `
 		function post(a) { var i = 0, s = ""; while (i < 4) s += a[i++] + "|"; return s + "@" + i }

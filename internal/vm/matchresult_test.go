@@ -48,27 +48,26 @@ true
 "ᵒˣ\ud83d"
 2
 55357`
-	for _, on := range []bool{false, true} {
-		fn := compileForTest(t, src)
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(fn)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", on, err)
-		}
-		got, err := r.ToString(v)
-		if err != nil || got.Go() != want {
-			t.Errorf("tree %v: got %v, %v; want %s", on, got, err, want)
-		}
+	fn := compileForTest(t, src)
+	r := New(Config{})
+	v, err := r.Run(fn)
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	got, err := r.ToString(v)
+	if err != nil || got.Go() != want {
+		t.Errorf("got %v, %v; want %s", got, err, want)
+	}
+	r.Close()
 }
 
-// TestReplaceShortResults pins replace and match of the built-in exec, whose
-// matches are kept in the caller's frame, and replace's short ASCII results,
-// written with their String in one allocation, on both tiers: results of 0,
-// 71, 72 and 73 bytes, a template with $, text that is not ASCII, empty
-// matches, and lastIndex and the legacy statics after. The answers are Node's.
+// TestReplaceShortResults pins replace and match of the built-in exec,
+// whose matches are kept in the caller's frame, and replace's short ASCII
+// results, written with their String in one allocation: results of 0, 71,
+// 72 and 73 bytes, a template with $, text that is not ASCII, empty
+// matches, and lastIndex and the legacy statics after. The answers are
+// Node's.
 func TestReplaceShortResults(t *testing.T) {
 	t.Parallel()
 	const src = `function f() {
@@ -85,18 +84,16 @@ func TestReplaceShortResults(t *testing.T) {
 }
 f()`
 	const want = `the quick -brown fox jumped -over the lazy dog|the quick brown fox jumped over the lazy dog|the quick -brown fox jumped abc over the lazy dog||-|-a-a-a-|the quick abc br0000000000wn f0000000000x jumped abc 0000000000ver the lazy d0000000000g|56|the quick [abc]brown fox jumped [abc]over the lazy dog|the quick ᵃbrown fox jumped ᵃover the lazy dog|abca|71|72|73|a/b/c|ow,ox,ov,og||aXcX|0|b|abc`
-	for _, on := range []bool{false, true} {
-		fn := compileForTest(t, src)
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(fn)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", on, err)
-		}
-		got, err := r.ToString(v)
-		if err != nil || got.Go() != want {
-			t.Errorf("tree %v: got %v, %v; want %s", on, got, err, want)
-		}
+	fn := compileForTest(t, src)
+	r := New(Config{})
+	v, err := r.Run(fn)
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	got, err := r.ToString(v)
+	if err != nil || got.Go() != want {
+		t.Errorf("got %v, %v; want %s", got, err, want)
+	}
+	r.Close()
 }

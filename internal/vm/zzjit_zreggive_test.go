@@ -57,8 +57,7 @@ function distinct() { return seen.length + ":" + new Set(seen).size }
 // refill doubles. Before, the leaf's call kept nothing of the RegExp but
 // gave it back to nothing, and the pool, run out every PoolSize turns, was
 // filled with new RegExps -- a RegExp made at each call, 1.3 GB of the
-// micro-benchmarks regexp_ascii and regexp_utf16, which the stack form's
-// tree tier gives its literal back.
+// micro-benchmarks regexp_ascii and regexp_utf16.
 func TestJITRegExpLiteralGivesBack(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

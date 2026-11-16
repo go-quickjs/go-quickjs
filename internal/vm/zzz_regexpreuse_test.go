@@ -148,28 +148,25 @@ const regexpReuseTestWant = `-384824464 -384824464 -384824464 85/28.23.7.4.16.1.
 
 // An array exec makes where only a local of its function can reach it is
 // made again in the memory of its site's last (zzz_regexpreuse.go): each
-// answer is Node's, in the interpreter and the tree tier, with the
-// collector idle and running -- the arrays a valueOf's call of the same
-// site made while the outer one was read, the pieces a loop read after the
-// next match, and the arrays and pieces kept, returned or handed to a
-// getter left as they were.
+// answer is Node's, with the collector idle and running -- the arrays a
+// valueOf's call of the same site made while the outer one was read, the
+// pieces a loop read after the next match, and the arrays and pieces kept,
+// returned or handed to a getter left as they were.
 func TestRegExpReuse(t *testing.T) {
 	for _, idle := range []bool{true, false} {
-		for _, tree := range []bool{true, false} {
-			if idle {
-				runtime.GC()
-				debug.SetGCPercent(-1)
-			}
-			r := newTreeTierForTest(tree, Config{})
-			v, err := r.Run(compileForTest(t, regexpReuseTestSrc))
-			r.Close()
-			debug.SetGCPercent(100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != regexpReuseTestWant {
-				t.Errorf("tree tier %v, collector idle %v:\ngot  %s\nwant %s", tree, idle, got, regexpReuseTestWant)
-			}
+		if idle {
+			runtime.GC()
+			debug.SetGCPercent(-1)
+		}
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, regexpReuseTestSrc))
+		r.Close()
+		debug.SetGCPercent(100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != regexpReuseTestWant {
+			t.Errorf("collector idle %v:\ngot  %s\nwant %s", idle, got, regexpReuseTestWant)
 		}
 	}
 }
@@ -203,7 +200,7 @@ func regexpReuseSiteOf(t *testing.T, fn *bytecode.Function, name string) *execRe
 }
 
 // Where a call's arrays may be made again, and its pieces' Strings too, is
-// what its function's code says it reads of them; and the tree tier makes
+// what its function's code says it reads of them; and register code makes
 // Exec's again, as many as the patterns' numbers of elements, the same
 // arrays on another run.
 func TestRegExpReuseSites(t *testing.T) {

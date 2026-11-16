@@ -2,10 +2,8 @@ package vm
 
 import "testing"
 
-// recv.name(args) on a local or this receiver is one node of the tree tier
-// (methodCall in zzmethod.go), which spills nothing beneath it, and calls
-// a leaf itself; and so are call and new (callOperands). It answers as the interpreter and Node
-// do, each case in a function whose loop gives it a tree, called three
+// recv.name(args) on a local or this receiver, and call and new, answer
+// as the interpreter and Node do, each case in a function called three
 // times:
 //   - a local a closure has captured and the call writes, and a parameter
 //     a sloppy arguments object passed to the call aliases, beneath it,

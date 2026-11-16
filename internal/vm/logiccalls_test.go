@@ -2,8 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // An && or || whose y calls, and x ?? y, are one node too, and answer as
@@ -63,31 +61,13 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "false,2,0,0,0,0,0,false,3,4,2,1,2,1,3,4,5,4,2,3,2,4,true,6,6,3,4,3,f1f2g2f1f2g2g3Lf1g1f2g2g3Lf1g1f2g3L,0,0,1,1,,,x,x,7,null,7,null,NaN,NaN,false,false,0,0,0,0,2,2,6,g1,3,0,,c,b,false,9,null,0,0,2,3,LL | true"
-	for _, c := range compileForTest(t, src).Constants {
-		if c.Kind != bytecode.ConstFunction || c.Fn == nil || c.Fn.Name == "" {
-			continue
-		}
-		tr := buildTree(c.Fn)
-		switch {
-		case tr == nil:
-			t.Errorf("%s is not built as a tree", c.Fn.Name)
-		case c.Fn.Name == "deepCall" || c.Fn.Name == "deepGetGlobal":
-			if len(tr.blocks) <= 2 {
-				t.Errorf("%s is one node, its y spilling", c.Fn.Name)
-			}
-		case len(tr.blocks) != 2:
-			t.Errorf("%s is %d blocks, not one node and a return", c.Fn.Name, len(tr.blocks))
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
-		}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }

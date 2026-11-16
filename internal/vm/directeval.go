@@ -31,22 +31,6 @@ type EvalRequest struct {
 // runs: linking the result to the calling frame is this package's business.
 type Evaluator func(source string, req EvalRequest) (*bytecode.Function, error)
 
-// evalDirect runs a direct eval's code in the caller's scope.
-func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string) (Value, error) {
-	if r.evaluator == nil {
-		return Undefined, r.throwTypeError("code generation from strings is disabled")
-	}
-	fn, err := r.evaluator(src, EvalRequest{Direct: true, Scope: scope})
-	if err != nil {
-		return Undefined, r.wrapEvalError(err)
-	}
-	if fn.Script != nil {
-		fn.Script.EvalOrigin = r.evalOrigin()
-		fn.Script.Referrer = r.activeReferrer()
-	}
-	return r.evalIn(caller, fn)
-}
-
 // evalIn runs a direct eval's compiled code in the caller's scope, as a
 // debugger runs code it evaluates in a frame.
 func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {

@@ -4,33 +4,23 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // A function whose compile is deferred for want of room, the JIT's memory
-// full of young code, warms up again before it is asked for again, as the
-// stack form's deferred entry does (tryJITAt): its loop's back edges ask
-// once a budget of work, not at each check. Its budget left spent, every
-// check of its loop had asked -- each a lookup of what it learned and the
-// cache's settling -- millions of times in a run of
+// full of young code, warms up again before it is asked for again: its
+// loop's back edges ask once a budget of work, not at each check. Its
+// budget left spent, every check of its loop had asked -- each a lookup of
+// what it learned and the cache's settling -- millions of times in a run of
 // TestJITRegRealmsWithinTheBudgetClocked, three quarters of its time.
 func TestJITRegDeferredWarmsUpAgain(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, jitHotProgram(40))
 	call := compileForTest(t, `f39(100000)`)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	was := SetJITRegTier(true)
 	epoch, flush := jitEpochNow, jitFlushNow
 	t.Cleanup(func() {
 		jitEpochNow, jitFlushNow = epoch, flush
-		SetRegTier(bytecode.RegDefault())
-		SetJITRegTier(was)
 	})
 	// Clocks that do not move: the code compiled first stays young, and
 	// what comes after it is deferred.

@@ -143,21 +143,13 @@ func TestJITPrologueEnter(t *testing.T) {
 		t.Fatalf("wide17 was called natively %d times", in)
 	}
 	e.notNative, link.entry, link.body, e.nativeRetry = true, 0, 0, 0
-	if regJITForTest() {
-		// The register form's native callers leave a call of code they may
-		// not call to Go, a call of Go (jitLink's clearCode) -- here of
-		// more operands than abi.MaxGoArgs -- which enters the code at its
-		// start: the stack form's ExitEnter (jitEnterCallee) it has none of.
-		entries := e.ssaStats.entries
-		both.agree(t, `wides17(300, { x: 2 })`, `wides17(30, getter)`)
-		if e.ssaStats.entries == entries {
-			t.Fatal("Go never ran wide17 from its start")
-		}
-		return
-	}
-	entered := r.jit.entered
+	// The register form's native callers leave a call of code they may
+	// not call to Go, a call of Go (jitLink's clearCode) -- here of
+	// more operands than abi.MaxGoArgs -- which enters the code at its
+	// start: the stack form's ExitEnter (jitEnterCallee) it has none of.
+	entries := e.ssaStats.entries
 	both.agree(t, `wides17(300, { x: 2 })`, `wides17(30, getter)`)
-	if r.jit.entered == entered {
+	if e.ssaStats.entries == entries {
 		t.Fatal("Go never ran wide17 from its start")
 	}
 }

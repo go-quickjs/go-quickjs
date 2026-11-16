@@ -8,27 +8,21 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// The register interpreter (docs/register-interpreter.md), stage 1: a
-// function the register form covers runs as its register code, every other
-// as before. It is on where bytecode.RegDefault says, in a runtime without
-// the JIT (Runtime.RegTier).
+// The register interpreter (docs/register-interpreter.md): every function
+// runs as its register code.
 //
-// A frame's registers are a window of the runtime's value stack laid out as
-// the stack form's frame is -- the locals, then the temporaries -- so that a
-// closure captures a local, a stack trace reads a pc and the frame is pushed
-// and popped as ever. The loop indexes the window with 16-bit register
+// A frame's registers are a window of the runtime's value stack -- the
+// function, this, the parameters, the bindings, then the temporaries
+// (bytecode's register form) -- so that a closure captures a register in
+// place and the frame is pushed and popped as ever. The loop indexes the window with 16-bit register
 // numbers through a pointer to an array of 65,536 values, which needs no
 // bounds check: the register backend's verifier (regcomp.Verify)
 // proves every register an instruction names is below the frame's count,
 // and a frame is given that many slots before it runs. The code is read the
 // same way, every jump proven to land in it.
 //
-// The files sort after every other of the package's, so that the functions
-// they add come after every function there was: the interpreter's hot
-// functions keep their addresses, and only the closures move.
-
-// regTier turns the register interpreter on for functions not yet run.
-var regTier atomic.Bool
+// The files sort after the JIT's (zzjit_*.go), so that the functions they
+// add move none of an earlier file's.
 
 // regsBuilt counts the functions given register code.
 var regsBuilt atomic.Int64
@@ -68,7 +62,7 @@ type regCode struct {
 	// cellThis marks a derived constructor whose this binding is the
 	// runtime's cell for its frame's depth (thisCells): its body makes no
 	// closure, no direct eval and no debugger's stop, the things that can
-	// keep a binding past its frame, as planTreeNew finds for a tree.
+	// keep a binding past its frame.
 	cellThis bool
 	// leaf is what a call may answer without a frame: a pure body that
 	// calls nothing, or one that only reads or writes its this's
@@ -108,9 +102,9 @@ type regCode struct {
 	// or nil where the code has none.
 	aux unsafe.Pointer
 	// bigSeen is the operators that met BigInts, by register pc, as the
-	// tree's (treeBigSeen), which the slow paths mark where the runtime
+	// code's (bigSeenMarks), which the slow paths mark where the runtime
 	// runs the JIT (regBigOf); nil until one has.
-	bigSeen atomic.Pointer[treeBigSeen]
+	bigSeen atomic.Pointer[bigSeenMarks]
 }
 
 // runReg runs frame f as register code c, from instruction start, and

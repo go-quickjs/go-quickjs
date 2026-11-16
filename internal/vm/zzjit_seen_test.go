@@ -5,7 +5,6 @@ package vm
 import (
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"testing"
 )
 
@@ -67,13 +66,8 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 		if e == nil || e.entrySlow {
 			t.Fatalf("round %d: deep did not run natively", i)
 		}
-		// The compiles again of top-level code, of either form.
+		// The compiles again of top-level code.
 		top := uint64(0)
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.TopLevel {
-				top += uint64(x.reopts) + uint64(x.inlineReopts) + uint64(x.upgradeReopts)
-			}
-		}
 		for k, x := range r.jit.regCache {
 			if fn := k.Value(); fn != nil && fn.TopLevel && x.life != nil {
 				top += uint64(x.life.reopts)
@@ -88,78 +82,6 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 	}
 }
 
-// The calls of built-ins native code makes itself -- a.push(v), a.pop(),
-// new Array(), and G.call(this, ...) -- are decided when a function's code
-// is first compiled, as a script function's call is (jitSeedBuiltin), and
-// a target compiled for native callers then decides its own calls in turn
-// (jitSeedCallee): work's first code constructs H natively, with H's call
-// of G decided. Before, each was learned at the exits of code compiled
-// without it, a compile each, and H's call of G at H's. Each answer is the
-// interpreter's.
-func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
-	skipUnderRegJIT(t, "the stack form's entry's lists of what its first compile was seeded with and decided (inlines, nativeCalls, ssaInlined, callSites, inlineReopts) and its own lowering; register code keeps what it learned in its life's nativeCalls and what it inlines in the build (ssa.Func's Inlined), which zzjit_zregcall_test.go's tests check")
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	// While the collector marks, Go makes native calls, which would count
-	// as calls leaving native code.
-	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	setup := `function G(x){this.x=x}
-		function H(x){G.call(this,x);this.y=x+1}
-		function work(n){const a=new Array();let t=0;for(let i=0;i<n;i++){a.push(i);if(a.length>8)t=(t+a.pop())|0;const h=new H(i);t=(t+h.x+h.y)|0}return t}`
-	want := New(Config{})
-	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
-	jitDefaultsForTest(r)
-	defer func() { r.Close(); r.ReleaseClosed() }()
-	for _, rt := range []*Runtime{want, r} {
-		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	work := r.global.getOwn(r.atoms.intern("work")).value().Object().fn().closure
-	h := r.global.getOwn(r.atoms.intern("H")).value().Object().fn().closure
-	for i, src := range []string{`String(work(20000))`, `String(work(20000))`} {
-		wv, err := want.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		gv, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := gv.String().Go(), wv.String().Go(); got != want {
-			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
-		}
-	}
-	e := r.jit.cache[r.jitKeyOf(work.fn)]
-	if e == nil || e.ssa == nil {
-		t.Fatal("work has no code")
-	}
-	calls := slices.Concat(e.nativeCalls, e.inlines)
-	for _, k := range []struct {
-		name string
-		is   func(jitInline) bool
-	}{
-		{"push", func(x jitInline) bool { return x.push }},
-		{"pop", func(x jitInline) bool { return x.pop }},
-		{"new Array", func(x jitInline) bool { return x.cl == nil && x.pool != nil }},
-		{"new H", func(x jitInline) bool { return x.cl == h && x.pool != nil }},
-	} {
-		if !slices.ContainsFunc(calls, k.is) {
-			t.Fatalf("work does not make %s natively", k.name)
-		}
-	}
-	he := r.jit.cache[r.jitKeyOf(h.fn)]
-	if he == nil || !slices.ContainsFunc(slices.Concat(he.nativeCalls, he.inlines), func(x jitInline) bool { return x.via }) {
-		t.Fatal("H's call of G is not decided")
-	}
-	if r.jit.reoptimized != 0 {
-		t.Fatalf("compiled %d times more", r.jit.reoptimized)
-	}
-}
-
 // Code called natively that leaves too often is compiled again only if its
 // exits taught it something (jitLearning): w's addition of an object, whose
 // conversion may run anything, is Go's
@@ -170,6 +92,7 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitNativeCountsForTest(t)
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()

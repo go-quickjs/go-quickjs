@@ -68,8 +68,8 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 	if ce == nil || le == nil || link == nil {
 		t.Fatalf("caller or long has no code: %v, %v", ce, le)
 	}
-	if ce.reopts+ce.inlineReopts+ce.upgradeReopts+ce.polyReopts != 0 {
-		t.Fatalf("caller compiled again: %d for what failed, %d for its calls, %d for its callees, %d for shapes", ce.reopts, ce.inlineReopts, ce.upgradeReopts, ce.polyReopts)
+	if ce.reopts+ce.upgradeReopts != 0 {
+		t.Fatalf("caller compiled again: %d for what failed, %d for its callees", ce.reopts, ce.upgradeReopts)
 	}
 	if link.in == 0 {
 		t.Fatal("long's calls were never made natively")

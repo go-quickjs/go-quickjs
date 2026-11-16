@@ -40,7 +40,7 @@ function objs(n, last) { const xs = []; for (let i = 0; i < n; i++) xs.push({ a:
 // searches the source's own small table, leaving for Go a property it
 // does not have there. A function that destructures had been refused
 // whole -- 747 of the 13,986 functions of npm's own code -- and run in the
-// tree tier. Each answer is Node's (v26.10.0), but the TypeError's
+// interpreter. Each answer is Node's (v26.10.0), but the TypeError's
 // message, which is the interpreter's, and the loops run natively.
 func TestJITDestructures(t *testing.T) {
 	t.Parallel()

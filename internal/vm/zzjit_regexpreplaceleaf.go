@@ -6,9 +6,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
@@ -47,10 +45,9 @@ import (
 // (abi.GoCallState's Unused), the leaf makes no string: one as truthy as
 // it would have been stands for it (deadReplaced).
 //
-// A RegExp literal's replace stays a call of Go in the stack form's code,
-// which gives the literal's pool its RegExp back (jitRegExpLitPool); in
-// register code, whose call makes the literal (RMarkLitArg), natively from
-// its pool, it is the leaf's, which gives it back (jitLeafForm's giveArg).
+// A RegExp literal's replace, whose call makes the literal (RMarkLitArg)
+// natively from its pool, is the leaf's, which gives it back (jitLeafForm's
+// giveArg).
 //
 // The functions are generic, each instantiated with struct{} alone, and
 // the leaf's check and function are methods of a generic type.
@@ -64,26 +61,6 @@ type jitReplaceLeaf[_ any] struct {
 // jitReplaceLeafs are the realm-independent leaves: a call's result read,
 // and one whose result nothing reads.
 var jitReplaceLeafs = [2]jitReplaceLeaf[struct{}]{{}, {dead: true}}
-
-// check is the leaf's check: this a string, the arguments a RegExp the
-// built-in replaces directly (replaceDirect) -- its lastIndex a number
-// where the RegExp is not global -- and a string whose replacements cannot
-// make a string too long to be one.
-func (l *jitReplaceLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
-	if !this.IsString() || len(args) < 2 || !args[0].IsObject() || !args[1].IsString() {
-		return false
-	}
-	fl, ok := r.replaceDirect(args[0])
-	if !ok || fl&regexp.FlagGlobal == 0 && !args[0].Object().vals()[0].IsNumber() {
-		return false
-	}
-	n, tv := int64(this.String().length), args[1].String()
-	per := int64(tv.length)
-	if per > 0 {
-		per += int64(strings.Count(tv.Go(), "$")) * n
-	}
-	return per <= maxStringLength && n+(n+1)*per <= maxStringLength
-}
 
 // native is the leaf's function, its check passed: the replace of this by
 // args[0] with the template args[1], as regExpReplace makes it, without a
@@ -274,33 +251,6 @@ func jitReplacedTemplate[_ any](r *Runtime, re *regexp.Regexp, s, tv *String, sp
 	return r.builtString(sb.String())
 }
 
-// jitReplaceLeafSeen notes, for e's next compile (jitFeedback.Leaf), the
-// call at pc of String.prototype.replace, of argc arguments, whose
-// operands are below the VM stack's top, where it is a leaf's: its check
-// passes on them.
-func jitReplaceLeafSeen[_ any](r *Runtime, e *jitEntry, pc, argc int) {
-	sp := r.stackTop
-	if r.meter != nil || argc < 2 || sp-argc-2 < 0 || sp > len(r.stack) {
-		return
-	}
-	callee, this := r.stack[sp-argc-1], r.stack[sp-argc-2]
-	if !callee.IsObject() || callee.Object() != r.strReplaceFn || callee.Object().fn() == nil {
-		return
-	}
-	if !jitReplaceLeafs[0].check(r, this, r.stack[sp-argc:sp]) {
-		return
-	}
-	for _, list := range [2][]jitInline{e.nativeCalls, e.inlines} {
-		for k := range list {
-			if int(list[k].pc) == pc && list[k].leaf {
-				return
-			}
-		}
-	}
-	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: r.strReplaceFn, leaf: true})
-	e.inlinePending = true
-}
-
 // jitReplaceLeafForm is jitLeafFormOf's form of the leaf's call st
 // describes, of String.prototype.replace, fd its function's data, its
 // operands from first, argc of them: replace's leaf -- the one that makes
@@ -320,46 +270,29 @@ func jitReplaceLeafForm[_ any](r *Runtime, st *abi.GoCallState, fd *funcData, fi
 	if st.Give != 0 {
 		// A RegExp literal the call made its first argument (RMarkLitArg),
 		// from its pool: given back once the leaf has replaced with it,
-		// which keeps nothing of it, as the stack form's call of Go gives
-		// a literal's back (jitRegExpLitDone).
+		// which keeps nothing of it.
 		form.give, form.giveArg = (*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))), true
 	}
 	st.LeafForm = unsafe.Pointer(form)
 	return form
 }
 
-// jitReplaceLeafGuess is jitRegExpLeafGuess's for the call at pc of cl's
-// code of the replace that the get_prop_this at q reads: String.prototype's
-// own, where the call's arguments are a read of a global or a captured
-// binding (jitChainValue) whose RegExp the leaf's check passes on now, and
-// a string constant -- s.replace(re, ""), a module's RegExp in a loop --
-// and nil otherwise.
-func jitReplaceLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc, q int) *Object {
-	fn := cl.fn
-	if fn.Code[pc].A != 2 || q+3 != pc || p.Maps[q+1].Depth != p.Maps[q].Depth+1 || p.Maps[q+2].Depth != p.Maps[q].Depth+2 {
-		return nil
+// check is the leaf's check: this a string, the arguments a RegExp the
+// built-in replaces directly (replaceDirect) -- its lastIndex a number
+// where the RegExp is not global -- and a string whose replacements cannot
+// make a string too long to be one.
+func (l *jitReplaceLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
+	if !this.IsString() || len(args) < 2 || !args[0].IsObject() || !args[1].IsString() {
+		return false
 	}
-	tv := emptyString
-	switch t := fn.Code[q+2]; t.Op {
-	case bytecode.OpPushEmptyString:
-	case bytecode.OpPushConst:
-		if int(t.A) >= len(fn.Constants) || fn.Constants[t.A].Kind != bytecode.ConstString {
-			return nil
-		}
-		tv = NewString(fn.Constants[t.A].Str)
-	default:
-		return nil
+	fl, ok := r.replaceDirect(args[0])
+	if !ok || fl&regexp.FlagGlobal == 0 && !args[0].Object().vals()[0].IsNumber() {
+		return false
 	}
-	switch fn.Code[q+1].Op {
-	case bytecode.OpGetGlobal, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck:
-	default:
-		return nil
+	n, tv := int64(this.String().length), args[1].String()
+	per := int64(tv.length)
+	if per > 0 {
+		per += int64(strings.Count(tv.Go(), "$")) * n
 	}
-	rx, ok := r.jitChainValue(cl, p, q+1, jitChainReads)
-	f := r.strReplaceFn
-	if !ok || f == nil || f.fn() == nil || f.fn().native == nil || !rx.IsObject() ||
-		!jitReplaceLeafs[0].check(r, Str(emptyString), []Value{rx, Str(tv)}) {
-		return nil
-	}
-	return f
+	return per <= maxStringLength && n+(n+1)*per <= maxStringLength
 }

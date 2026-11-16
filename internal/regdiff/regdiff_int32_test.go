@@ -8,7 +8,7 @@ import (
 // TestRegDiffMulImmInt32 compares mul_imm, x * k and k * x of a 16-bit k,
 // and the int32 forms, (x + y) | 0, (x - y) | 0, (x + k) | 0 and
 // (x - k) | 0, and the | 0 left out of a bitwise operator's int32 result,
-// with the register tier off and on: sums at 2^31 and past it, past 2^32,
+// with the recorded answers: sums at 2^31 and past it, past 2^32,
 // 2^53 and 2^63, of -2^31 - 1; NaN, the infinities and -0 operands;
 // strings ("12" + 3 is 123, "5" - 1 is 4 where "5" + -1 is "5-1"); valueOf's
 // calls, counted and in their order; the products' -0s and the NaN of

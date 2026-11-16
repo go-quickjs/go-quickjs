@@ -18,24 +18,23 @@ import (
 // comparator inlined (ssa's sortCall) -- that its code's calls of Go have
 // made on an array of the realm's, given a closure of the realm's as its
 // callback, is made a loop of the code's own by the builder
-// (ssa.ForEachSite), its callback called natively, as the stack form's is:
-// the call learned at its call of Go (jitRegForEachSeen), answered by
-// jitRegFeedback's ForEach, and a loop that leaves native code finished by
-// Go from its index (jitRegLoopLeft), then native code after the call.
+// (ssa.ForEachSite), its callback called natively: the call learned at its
+// call of Go (jitRegForEachSeen), answered by jitRegFeedback's ForEach, and
+// a loop that leaves native code finished by Go from its index
+// (jitRegLoopLeft), then native code after the call.
 
 // jitRegForEachSeen learns, after Go made the call at register pc rpc of
 // f's code e -- call_method_w of argc arguments, callee on recv -- that it
-// is a loop's built-in given cb, as the stack form's code learns it
-// (jitForEachSeen): the next compile makes it a loop of its own (ForEach),
-// to be compiled again for it (jitRegReopt), the callback compiled for native
-// callers (jitRegNativeCallee). One whose callback is another function's,
-// or whose built-in or typed arrays' prototype is another, the call is
-// Go's, as a call of too many targets is; one given a new closure of the
-// same function each time calls it by its code (ssa.CallSite's ByCode). A
-// sort, which native code makes only with its comparator inlined (ssa's
-// sortCall), is learned so only of a comparator it may call again at will
-// (jitRegSortComparator), and not of a BigInt typed array's, whose
-// elements its loop does not compare, as the stack form's (jitForEaches).
+// is a loop's built-in given cb: the next compile makes it a loop of its
+// own (ForEach), to be compiled again for it (jitRegReopt), the callback
+// compiled for native callers (jitRegNativeCallee). One whose callback is
+// another function's, or whose built-in or typed arrays' prototype is
+// another, the call is Go's, as a call of too many targets is; one given a
+// new closure of the same function each time calls it by its code
+// (ssa.CallSite's ByCode). A sort, which native code makes only with its
+// comparator inlined (ssa's sortCall), is learned so only of a comparator
+// it may call again at will (jitRegSortComparator), and not of a BigInt
+// typed array's, whose elements its loop does not compare.
 func (r *Runtime) jitRegForEachSeen(f *frame, e *jitRegEntry, rpc int, callee, recv, cb Value, argc int) {
 	if argc != 1 && argc != 2 || !callee.IsObject() || !cb.IsObject() || e.invalid {
 		return
@@ -72,8 +71,7 @@ func (r *Runtime) jitRegForEachSeen(f *frame, e *jitRegEntry, rpc int, callee, r
 	if cl.reg == nil && r.regOf(cl) == nil {
 		// A callback only the built-in has called, which made its frame
 		// without the register code a call of it would get -- a sort's
-		// comparator -- given it, as the stack form's needs its function
-		// alone (jitForEachSeen).
+		// comparator -- given it.
 		return
 	}
 	if sort && !jitRegSortComparator(cl.fn, cl.reg.rc) {
@@ -96,9 +94,9 @@ func (r *Runtime) jitRegForEachSeen(f *frame, e *jitRegEntry, rpc int, callee, r
 		return
 	}
 	l.nativeCalls = append(l.nativeCalls, jitInline{pc: int32(rpc), obj: o, forEach: true, cb: cl, cbObj: cb.Object(), proto: proto})
-	// Decided: a loop of its own, as the stack form's jitForEachSeen marks
-	// it (callSites) -- left undecided, its callback's unwinding had the
-	// code compiled again (jitRegUnwound) rather than stop calling it.
+	// Decided: a loop of its own, marked so in callSites -- left undecided,
+	// its callback's unwinding had the code compiled again (jitRegUnwound)
+	// rather than stop calling it.
 	if c := f.cl.reg; c != nil && rpc < len(c.rc.Code) {
 		if len(l.callSites) != len(c.rc.Code) {
 			l.callSites = make([]uint8, len(c.rc.Code))
@@ -170,17 +168,16 @@ func (f *jitRegFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 	return ssa.ForEachSite{}, false
 }
 
-// jitRegSortComparator is jitSortComparator over fn's register code rc:
-// whether fn, a sort's comparator, is a body native code may call again
-// at will (ssa's sortCall), given numbers -- a function, an arrow or a
-// method a call runs the body of, of the register form's own frame
-// layout, no binding of its own past its parameters, whose every
-// instruction reads its parameters, the temporaries it wrote, constants
-// that are numbers, computes with an operator, compares, branches
-// forward or returns: no read of its function or its this, no call, no
-// property, no global, no captured binding, no write but of a
-// temporary. Called with numbers, it makes only numbers, booleans,
-// undefined and null, runs nothing and changes nothing.
+// jitRegSortComparator reports, of fn's register code rc, whether fn, a
+// sort's comparator, is a body native code may call again at will (ssa's
+// sortCall), given numbers -- a function, an arrow or a method a call runs
+// the body of, of the register form's own frame layout, no binding of its
+// own past its parameters, whose every instruction reads its parameters,
+// the temporaries it wrote, constants that are numbers, computes with an
+// operator, compares, branches forward or returns: no read of its function
+// or its this, no call, no property, no global, no captured binding, no
+// write but of a temporary. Called with numbers, it makes only numbers,
+// booleans, undefined and null, runs nothing and changes nothing.
 func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 	if fn == nil || rc == nil || !rc.Wide || !fn.DirectCall || fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
 		fn.Generator || fn.Async || fn.HasRest || fn.HasDirectEval || !fn.HasSimpleParams || fn.ParamsAreLexical ||
@@ -269,17 +266,16 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 // which the loop checks it is given, its window the loop's call's
 // operands -- or, one made anew at each call of its maker (byCode), no
 // object, for the builder to inline where the caller makes it just before
-// the call (madeCallback, ssa's madeAt), as the stack form's -- not an
-// arrow that reads its this, which may come from any frame, nor a sloppy
-// function that reads its this, which the loop's call coerces -- the
-// global object for the undefined a loop without a thisArg gives it --
-// as the stack form's loop refuses a callback whose site coerces a this
-// it reads (ssa's Coerce with a ThisSlot): inlined, its this was the
-// loop's undefined, this === globalThis false. Nor one whose inlining in
-// the loop left native code too often (jitInlineLeft's cbLeft, counted on
-// the loop's own entry, as the stack form's), called natively since: kept
-// among the call's inlines, its leaving had made the loop's call a
-// native call of the callback, and the loop was built no more.
+// the call (madeCallback, ssa's madeAt) -- not an arrow that reads its
+// this, which may come from any frame, nor a sloppy function that reads its
+// this, which the loop's call coerces -- the global object for the
+// undefined a loop without a thisArg gives it (ssa's Coerce with a
+// ThisSlot): inlined, its this was the loop's undefined, this ===
+// globalThis false. Nor one whose inlining in the loop left native code too
+// often (jitInlineLeft's cbLeft, counted on the loop's own entry), called
+// natively since: kept among the call's inlines, its leaving had made the
+// loop's call a native call of the callback, and the loop was built no
+// more.
 func (f *jitRegFeedback) callbackInline(x jitInline, site ssa.CallSite, argc int) (ssa.InlineSite, bool) {
 	cl, o := x.cb, x.cbObj
 	byCode := x.byCode || site.ByCode != 0
@@ -316,11 +312,11 @@ func (f *jitRegFeedback) callbackInline(x jitInline, site ssa.CallSite, argc int
 // pc is given, if its code makes it just before the call -- a closure of
 // cl's function, closure_w writing the call's first argument's register,
 // one or two register instructions before it -- which native code inlining
-// the call need not make (ssa.MadeCallback), as the stack form's
-// (jitFeedback's madeCallback): its template, which the code keeps, as the
-// inlined frame's closure an exit names, and what it captures. Not an
-// arrow that reads its maker's new.target or super (jitNeedsMaker). Nothing
-// between its making and the call closes what it captures (ssa's madeAt).
+// the call need not make (ssa.MadeCallback): its template, which the code
+// keeps, as the inlined frame's closure an exit names, and what it
+// captures. Not an arrow that reads its maker's new.target or super
+// (jitNeedsMaker). Nothing between its making and the call closes what it
+// captures (ssa's madeAt).
 func (f *jitRegFeedback) madeCallback(pc int, cl *closure) *ssa.MadeCallback {
 	fb := f.fb
 	call := f.p.Code[pc]
@@ -418,7 +414,7 @@ func (r *Runtime) jitRegLoopLeft(f *frame, c *regCode, e *jitRegEntry, wb int, c
 	return next, 0, Undefined, false, nil, true
 }
 
-// jitRegLoopFinish is jitLoopFinish on f's register frame, its window at
+// jitRegLoopFinish is jitLoopFinishAt on f's register frame, its window at
 // wb, e's code having left at the loop's call, register pc rpc of c: the
 // loop's slots past the window and the scratch slots, where native code
 // keeps them (jitRegSlot), the frame's pc past the call meanwhile.
@@ -437,12 +433,11 @@ func jitRegSlotIndex(p *ir.Program, wb, i int) int {
 
 // jitRegPushLoopFrame pushes the frame of the built-in whose call register
 // code makes a loop of (abi.Context's Loop, loop), its callback's caller,
-// as Go's forEach has a frame while its callback runs (nativeFrame) and
-// the stack form's unwinding makes one (jitPushLoopFrame), for the frames
-// Go makes of a callback inlined in the loop, which a stack trace shows:
-// "at Array.forEach". Its receiver is arr, the loop's array, or, where
-// the slot holds none, the prototype of the loop's kind, which the trace
-// names the frame by all the same.
+// as Go's forEach has a frame while its callback runs (nativeFrame), for
+// the frames Go makes of a callback inlined in the loop, which a stack
+// trace shows: "at Array.forEach". Its receiver is arr, the loop's array,
+// or, where the slot holds none, the prototype of the loop's kind, which
+// the trace names the frame by all the same.
 func (r *Runtime) jitRegPushLoopFrame(loop uint64, arr Value) {
 	kind := int(loop >> 32)
 	fe := r.jitLoopFn(kind)

@@ -3,7 +3,7 @@ package vm
 import "testing"
 
 // TestDateObjects pins Date objects made with their date in the same
-// allocation, on both tiers: each form of the constructor, a copy that is
+// allocation: each form of the constructor, a copy that is
 // then changed apart from its original, a subclass, a prototype from
 // Reflect.construct, coercion, an invalid date, and the function called
 // rather than constructed. The answers are Node's, in any time zone.
@@ -24,18 +24,16 @@ func TestDateObjects(t *testing.T) {
 }
 f()`
 	const want = `0|0|86400000|2020-02-29T12:00:00.000Z|NaN|Invalid Date|0|2001-01-01T00:00:00.000Z|[object Date]|true|2020|0|10|400|D4|true|true|5|NaN|1|true|7|string|0|{"a":"1970-01-01T00:00:00.000Z"}`
-	for _, on := range []bool{false, true} {
-		fn := compileForTest(t, src)
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(fn)
-		if err != nil {
-			r.Close()
-			t.Fatalf("tree %v: %v", on, err)
-		}
-		got, err := r.ToString(v)
-		if err != nil || got.Go() != want {
-			t.Errorf("tree %v: got %v, %v; want %s", on, got, err, want)
-		}
+	fn := compileForTest(t, src)
+	r := New(Config{})
+	v, err := r.Run(fn)
+	if err != nil {
 		r.Close()
+		t.Fatal(err)
 	}
+	got, err := r.ToString(v)
+	if err != nil || got.Go() != want {
+		t.Errorf("got %v, %v; want %s", got, err, want)
+	}
+	r.Close()
 }

@@ -13,18 +13,16 @@ import (
 // The calls of Go native code made from register code makes on its frame
 // (ssa.GoHost, GoArgument, GoCells, GoClosure, GoClose), on the register
 // frame: the run's own, which Go entered the code with (jitState's
-// regRuns), or a native callee's, which has none of the VM's, its window
-// at its context's Base. Their stack form's (jitGoHost, jitArgument,
-// jitMakeCells, jitCellsClosure) read the stack form's frame, its locals
-// by local; these read the window, by register.
+// regRuns), or a native callee's, which has none of the VM's, its window at
+// its context's Base. They read the window, by register.
 //
 // The cells of code whose captured registers are in cells of their own
-// (ir.Program's Cells; the k-th captured register's the k-th cell, as
-// ssa's cellIndex counts them) are, as the stack form's: on the run's own
-// frame, open on the window's registers -- the upvalues the frame's
-// closures share, which the frame closes as it ends -- and for a native
-// callee, closed cells holding the registers' values, which Go opens on
-// its window if it makes the callee's frame (jitRegReopenCells).
+// (ir.Program's Cells; the k-th captured register's the k-th cell, as ssa's
+// cellIndex counts them) are: on the run's own frame, open on the window's
+// registers -- the upvalues the frame's closures share, which the frame
+// closes as it ends -- and for a native callee, closed cells holding the
+// registers' values, which Go opens on its window if it makes the callee's
+// frame (jitRegReopenCells).
 
 // jitRegFrameRun is the register frame a call of Go on the frame made by
 // the code running in ctx is made on: its frame, register code, code and
@@ -109,7 +107,7 @@ func (r *Runtime) jitRegFrameOp(ctx *abi.Context) bool {
 		case bytecode.RRestParam:
 			// The frame's arguments past the parameters -- a native
 			// callee's, those its call wrote to its context (ssa.CallSite's
-			// FrameArgs), as the stack form's (jitGoFrameOp) -- copied.
+			// FrameArgs) -- copied.
 			args, ok := jitRegFrameArgs(ctx, f, c, level)
 			if !ok {
 				return false
@@ -279,12 +277,12 @@ func (r *Runtime) jitRegMakeCells(ctx *abi.Context, f *frame, e *jitRegEntry, wb
 }
 
 // jitRegCellsClosure is GoClosure and GoClose for register code whose
-// captured registers are in cells of their own, as jitCellsClosure is the
-// stack form's: closure_w's closure of constant i, capturing the cells, as
-// regClosure makes it; or close_regs of its B registers from register i,
-// whose captured registers take fresh cells holding what they hold --
-// open on the window's registers on the run's own frame, the old ones
-// closed -- as mir's cellsClose takes them natively.
+// captured registers are in cells of their own: closure_w's closure of
+// constant i, capturing the cells, as regClosure makes it; or close_regs of
+// its B registers from register i, whose captured registers take fresh
+// cells holding what they hold -- open on the window's registers on the
+// run's own frame, the old ones closed -- as mir's cellsClose takes them
+// natively.
 func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *jitRegEntry, wb int, level bool, i int) bool {
 	regs := jitRegCapturedRegs(e.p.Captured)
 	cells := unsafe.Slice((**upvalue)(ctx.Cells), len(regs))
@@ -337,8 +335,7 @@ func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *
 	// constructor, whose stand-in frame has no binding to share, its
 	// context's This, which a super() bound, an arrow made before one, or
 	// one that reads what its maker's frame has of its own (new.target,
-	// super), left to the frame Go makes of the level at the exit, as the
-	// stack form's (jitCalleeMakes).
+	// super), left to the frame Go makes of the level at the exit.
 	f.this = r.stack[wb+1]
 	if level && f.cl.fn.Kind == bytecode.KindDerivedConstructor && t.fn.Kind == bytecode.KindArrow {
 		this := *(*Value)(unsafe.Pointer(&ctx.This))
@@ -354,19 +351,18 @@ func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *
 		return false
 	}
 	// The closure takes the context's cells, those its by-value captures'
-	// values are in too, as the stack form's (jitCellsClosure): what it
-	// takes by value is never assigned once it is made (bytecode's
-	// UpvalueDesc's ByValue), so the cell it shares holds its value as a
-	// copy would. The window's registers, which the code does not keep
-	// -- a cell native code took at a scope's end (mir's cellsClose) is
-	// open on none until the exit -- are not read: left to an exit, AWFY
-	// NBody's advance, a native callee, left native code at its forEach's
-	// arrow at every call. On the run's own frame, a closure made by value
-	// from them, its other captures given upvalues opened on the window's
-	// registers, had not shared the cells native code went on assigning,
-	// and an upvalue left open on a register a later entry took for the
-	// register's cell (jitRegMakeCells): two iterations' closures shared
-	// a let.
+	// values are in too: what it takes by value is never assigned once it
+	// is made (bytecode's UpvalueDesc's ByValue), so the cell it shares
+	// holds its value as a copy would. The window's registers, which the
+	// code does not keep -- a cell native code took at a scope's end (mir's
+	// cellsClose) is open on none until the exit -- are not read: left to
+	// an exit, AWFY NBody's advance, a native callee, left native code at
+	// its forEach's arrow at every call. On the run's own frame, a closure
+	// made by value from them, its other captures given upvalues opened on
+	// the window's registers, had not shared the cells native code went on
+	// assigning, and an upvalue left open on a register a later entry took
+	// for the register's cell (jitRegMakeCells): two iterations' closures
+	// shared a let.
 	byLocal := make([]*upvalue, max(int(c.ncap), 1))
 	for k, u := range t.fn.Upvalues {
 		if !u.FromParent || k >= len(caps) {
@@ -400,11 +396,11 @@ func keepClosure(ctx *abi.Context, v Value) {
 
 // jitRegReopenCells gives f, the frame of a register function whose
 // captured registers are in cells of their own (abi.Context's Cells), its
-// window at wb, those cells, as jitReopenCells gives the stack form's: each
-// register's value in the window, its cell open on it, the frame's to close
-// as it ends; and, the run's own frame's (run), the upvalues it kept open
-// that are no longer on its window's registers -- cells native code closed
-// at a scope's end -- the frame's no more.
+// window at wb, those cells: each register's value in the window, its cell
+// open on it, the frame's to close as it ends; and, the run's own frame's
+// (run), the upvalues it kept open that are no longer on its window's
+// registers -- cells native code closed at a scope's end -- the frame's no
+// more.
 func (r *Runtime) jitRegReopenCells(f *frame, e *jitRegEntry, wb int, ctx *abi.Context, run bool) {
 	if ctx.Cells == nil || e == nil || e.p == nil || wb+e.p.Regs > len(r.stack) {
 		return
@@ -463,10 +459,10 @@ func jitArgumentOf(ctx *abi.Context, args []Value, fn *bytecode.Function) (Value
 	}
 	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(args)) {
 		if n := int(ctx.GoOp>>abi.GoOpArgcShift&0xff) - 2; uint(i) < uint(n) && mapsArgument(fn, int(i)) {
-			// The parameter the mapped object would alias, as the code
-			// has it now (ir.Program's ArgumentParams): one it, or a
-			// closure, assigned. A parameter neither assigns is its
-			// argument as passed, as the stack form's (jitArgument).
+			// The parameter the mapped object would alias, as the code has
+			// it now (ir.Program's ArgumentParams): one it, or a closure,
+			// assigned. A parameter neither assigns is its argument as
+			// passed.
 			return jitGoArg(ctx, 2+int(i)), true
 		}
 		return args[i], true

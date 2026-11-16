@@ -5,17 +5,31 @@ import (
 	"testing"
 )
 
-// -k 4 takes placements over which the first three targets are each at
-// each phase twice.
+// -k 4 takes placements over which runReg, rhCallW and the native block
+// are each at each phase twice and each pair of them in each combination
+// once.
 func TestFourPlacementsBalance(t *testing.T) {
 	ns := placementsOf(4)
-	for target := range 3 {
+	key := []int{2, 3, 5}
+	for _, target := range key {
 		ones := 0
 		for _, n := range ns {
 			ones += design(n)[target]
 		}
 		if ones != 2 {
 			t.Errorf("target %d at phase 1 in %d of %v", target, ones, ns)
+		}
+	}
+	for i, a := range key {
+		for _, b := range key[i+1:] {
+			var combos [4]int
+			for _, n := range ns {
+				d := design(n)
+				combos[2*d[a]+d[b]]++
+			}
+			if combos != [4]int{1, 1, 1, 1} {
+				t.Errorf("targets %d and %d in combinations %v over %v", a, b, combos, ns)
+			}
 		}
 	}
 	if got := placementsOf(8); !slices.Equal(got, []int{0, 1, 2, 3, 4, 5, 6, 7}) {

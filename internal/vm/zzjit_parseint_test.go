@@ -62,14 +62,6 @@ func TestJITParseIntOfNumbers(t *testing.T) {
 	}
 	rounds = append(rounds, `drive_strs(30, '42px')`, `drive_strs(30, 0.000001)`, `drive_strs(30, -0.25)`, `drive_viaNumber(30, -7.5)`)
 	r := jitAgreesForTest(t, parseIntSetup+drivers, rounds...)
-	entry := func(name string) *jitEntry {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				return x
-			}
-		}
-		return nil
-	}
 	natives := []string{"ints"}
 	for i, v := range values {
 		if v.native {
@@ -77,12 +69,9 @@ func TestJITParseIntOfNumbers(t *testing.T) {
 		}
 	}
 	for _, name := range natives {
-		e := entry(name)
-		if regJITForTest() {
-			// Its register code's state that outlives its compiles.
-			e = jitCodeEntryNamedForTest(r, name)
-		}
-		if e == nil || !regJITForTest() && e.ssa == nil {
+		// Its register code's state that outlives its compiles.
+		e := jitCodeEntryNamedForTest(r, name)
+		if e == nil {
 			t.Errorf("%s has no native code: %+v", name, e)
 			continue
 		}

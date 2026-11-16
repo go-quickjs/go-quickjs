@@ -13,19 +13,15 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
-	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
-// The register tier's differential tests (docs/register-interpreter.md,
-// "Raw int32 registers"): the same programs run with the register tier off
-// and on, each in runtimes of their own, and every result compared. The
-// register code's correctness rests on its verifier for memory and on these
-// for meaning: what a raw int32 register holds must be what the Value the
-// stack form keeps would be, at every overflow, -0, NaN and shift.
+// The register interpreter's differential tests
+// (docs/register-interpreter.md, "Correctness"): programs run as register
+// code, each in runtimes of their own, and every result compared with the
+// recorded answers (testdata/golden.json). The register code's correctness
+// rests on its verifier for memory and on these for meaning.
 
 // regDiffMemoryLimit is the soft limit on the test binary's memory
 // (debug.SetMemoryLimit) where GOMEMLIMIT sets none. The package's tests
@@ -48,31 +44,11 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// withRegTier runs f with the register backend and tier set to on, and puts
-// back what the environment says after.
-func withRegTier(on bool, f func()) {
-	compiler.SetRegisterForm(on)
-	vm.SetRegTier(on)
-	defer func() {
-		env := bytecode.RegDefault()
-		compiler.SetRegisterForm(env)
-		vm.SetRegTier(env)
-	}()
-	f()
-}
-
 // regDiffRun evaluates src in a new runtime and then each of calls, and
 // returns each call's result as a string, or its error's, or src's error.
-// With old, the runtime has the register tier off for itself
-// (vm.Runtime.SetOldTiers): its host compiles no register form, and it
-// runs the stack interpreter and the tree tier, as every runtime does with
-// the process's switch off.
-func regDiffRun(src string, calls []string, old bool) ([]string, error) {
+func regDiffRun(src string, calls []string) ([]string, error) {
 	rt := quickjs.New()
 	defer rt.Close()
-	if old {
-		hostaccess.VM(rt).SetOldTiers()
-	}
 	if _, err := rt.Eval(src); err != nil {
 		return nil, err
 	}
@@ -88,10 +64,9 @@ func regDiffRun(src string, calls []string, old bool) ([]string, error) {
 	return out, nil
 }
 
-// regDiff runs src and calls with the register tier off, twice, and on, and
-// fails where the tier on answers otherwise. A call whose two answers with
-// the tier off differ -- a clock, Math.random -- is not compared. It
-// returns how many functions the tier gave register code.
+// regDiff runs src and calls and fails where an answer is not the one the
+// stack interpreter and the tree tier gave (testdata/golden.json). It
+// returns how many functions were given register code.
 func regDiff(t *testing.T, src string, calls []string) int64 {
 	t.Helper()
 	regDiffAlone.RLock()
@@ -108,9 +83,8 @@ func regDiffParallel(t *testing.T) {
 	}
 }
 
-// regDiffOn is held by a comparison's run with the register tier on,
-// whose counts of register code and fallbacks are the process's: the
-// runs with it off, in runtimes of old tiers, count neither.
+// regDiffOn is held by a comparison's run, whose count of register code
+// is the process's.
 var regDiffOn sync.Mutex
 
 // regDiffAlone is held by regDiffAll alone, which sets regcomp.OnRefuse
@@ -157,12 +131,6 @@ func heavy(t *testing.T) {
 	})
 }
 
-// heavyHolds reports whether t holds a slot of heavySlots.
-func heavyHolds(t *testing.T) bool {
-	_, ok := heavyHeld.Load(t)
-	return ok
-}
-
 // regDiffLocked is regDiff, its caller holding regDiffAlone.
 func regDiffLocked(t *testing.T, src string, calls []string) int64 {
 	t.Helper()
@@ -171,80 +139,23 @@ func regDiffLocked(t *testing.T, src string, calls []string) int64 {
 		regDiffHook(t, src, calls)
 		return 1 << 20
 	}
-	// The three runs, each in a runtime of its own: the two with the tier
-	// off in runtimes of the old tiers, the one with it on counting the
-	// process's register code and fallbacks, which the others do not
-	// touch, one comparison's at a time (regDiffOn). A small program's
-	// are made at once; a heavy comparison's (heavy) one after another,
-	// each runtime closed before the next is made, so that it holds one
-	// runtime of its corpus at a time and not three.
-	var off, again, on []string
-	var errs [3]error
-	var built, n int64
-	var by string
-	runs := [3]func(){
-		func() { off, errs[0] = regDiffRun(src, calls, true) },
-		func() { again, errs[1] = regDiffRun(src, calls, true) },
-		func() {
-			regDiffOn.Lock()
-			defer regDiffOn.Unlock()
-			before := vm.RegsBuilt()
-			vm.ResetRegFallbacks()
-			withRegTier(true, func() { on, errs[2] = regDiffRun(src, calls, false) })
-			built = vm.RegsBuilt() - before
-			n, by = vm.RegFallbacks()
-		},
+	regDiffOn.Lock()
+	before := vm.RegsBuilt()
+	on, err := regDiffRun(src, calls)
+	built := vm.RegsBuilt() - before
+	regDiffOn.Unlock()
+	if err != nil {
+		t.Fatalf("eval: %v", err)
 	}
-	if heavyHolds(t) {
-		for _, run := range runs {
-			run()
-		}
-	} else {
-		var wg sync.WaitGroup
-		wg.Add(len(runs))
-		for _, run := range runs {
-			go func() {
-				defer wg.Done()
-				run()
-			}()
-		}
-		wg.Wait()
-	}
-	for _, err := range errs {
-		if err != nil {
-			t.Fatalf("eval: %v", err)
-		}
-	}
-	// Register mode runs everything as register code, entered as its own:
-	// nothing in the stack interpreter or the tree tier, nothing entered
-	// through their frames (docs/register-interpreter.md, item 13).
-	if n != 0 {
-		t.Errorf("%d fallbacks to the other tiers (QJS_REGFALLTRACE names them):\n%s", n, by)
-	}
-	bad, skipped := 0, 0
-	defer func() {
-		t.Logf("%d calls compared, %d not (their answers vary), %d functions as register code",
-			len(calls)-skipped, skipped, built)
-	}()
-	for i := range calls {
-		if os.Getenv("QJS_REGDIFF_SHOW") != "" {
-			// Each answer, to see that a case tests what it says.
+	if os.Getenv("QJS_REGDIFF_SHOW") != "" {
+		// Each answer, to see that a case tests what it says.
+		for i := range calls {
 			t.Logf("%.100s => %.300s", calls[i], on[i])
 		}
-		if off[i] != again[i] {
-			skipped++
-			continue
-		}
-		if off[i] == on[i] {
-			continue
-		}
-		if bad++; bad <= 20 {
-			t.Errorf("%s:\n  register tier off: %.300s\n  register tier on:  %.300s", calls[i], off[i], on[i])
-		}
 	}
-	if bad > 20 {
-		t.Errorf("and %d more", bad-20)
-	}
+	skipped := goldenCheck(t, goldenKey(t), src, calls, on)
+	t.Logf("%d calls compared, %d not (their recorded answers varied), %d functions as register code",
+		len(calls)-skipped, skipped, built)
 	return built
 }
 
@@ -587,8 +498,8 @@ function kept(n) { var all = []; for (var j = 0; j < n; j++) { var a = []; for (
 
 // TestRegDiffTyped compares typed arrays' elements read and written by
 // get_index, set_index and their immediate forms, out of line
-// (regTypedGet, regTypedSet), with the tree's, and updates that write a
-// number's word alone.
+// (regTypedRead, regTypedStore), with the recorded answers, and updates
+// that write a number's word alone.
 func TestRegDiffTyped(t *testing.T) {
 	regDiffParallel(t)
 	src := `
@@ -621,8 +532,8 @@ function words() { var a = [1, -0, 0.5, 2], o = { x: 1, y: -0 }; var z = -0; a[0
 }
 
 // TestRegDiffElemWrites compares element writes on arrays that the fast
-// path does not answer (regSetMiss) with the tree's: appends at the
-// length, holes filled, a shared literal's element, a frozen or
+// path does not answer (regSetMiss) with the recorded answers: appends at
+// the length, holes filled, a shared literal's element, a frozen or
 // non-extensible array, a read-only length, a setter or a read-only
 // element up the chain, sparse arrays, an arguments object and keys that
 // are no index.
@@ -650,8 +561,8 @@ function proxied() { var log = [], a = [1], p = new Proxy(a, { set: function (o,
 	regDiff(t, src, calls)
 }
 
-// TestRegDiffLength compares get_length with the tree's: strings flat,
-// built and cut, with surrogates, and what is no string or array -- a
+// TestRegDiffLength compares get_length with the recorded answers: strings
+// flat, built and cut, with surrogates, and what is no string or array -- a
 // String object, a function, an object with a getter, null.
 func TestRegDiffLength(t *testing.T) {
 	regDiffParallel(t)
@@ -666,9 +577,9 @@ function lens() { var s = "", r = []; for (var i = 0; i < 20; i++) { s += "a\ud8
 }
 
 // TestRegDiffAppends compares appends to a local (append, str_freeze)
-// with the tree's: strings kept by an array, an object, a call, a return
-// or a global between appends, which must not see the appends after; a
-// read of the length, which keeps nothing; numbers, objects whose
+// with the recorded answers: strings kept by an array, an object, a call,
+// a return or a global between appends, which must not see the appends
+// after; a read of the length, which keeps nothing; numbers, objects whose
 // conversion runs code or throws, symbols, and a local that holds no
 // string; strings long enough to be grown in place many times over.
 func TestRegDiffAppends(t *testing.T) {
@@ -700,10 +611,10 @@ function cut(n) { var out = "", parts = []; for (var i = 0; i < n; i++) { out +=
 }
 
 // TestRegDiffLeafRun compares short bodies of numbers and upvalues that
-// register code runs without a frame (regLeafRun) with the tree's, where
-// they run and where they give up: what is no number, a store to an
-// upvalue after the operation that gave up, too few arguments, errors and
-// their stack lines.
+// register code runs without a frame (regLeafRun) with the recorded
+// answers, where they run and where they give up: what is no number, a
+// store to an upvalue after the operation that gave up, too few arguments,
+// errors and their stack lines.
 func TestRegDiffLeafRun(t *testing.T) {
 	regDiffParallel(t)
 	src := `
@@ -734,10 +645,10 @@ function held(xs) { var calls = 0, last = 0, both = 0; var r = xs.reduce((acc, x
 }
 
 // TestRegDiffObjectLiterals compares object literals made at once
-// (new_object_lit) with the tree's: key order with index-like keys,
-// values that throw or read the binding the literal goes to, many keys,
-// sites whose objects grow afterwards, and literals the form leaves to
-// define_field.
+// (new_object_lit) with the recorded answers: key order with index-like
+// keys, values that throw or read the binding the literal goes to, many
+// keys, sites whose objects grow afterwards, and literals the form leaves
+// to define_field.
 func TestRegDiffObjectLiterals(t *testing.T) {
 	regDiffParallel(t)
 	src := `
@@ -763,10 +674,10 @@ function wide() { var src = "return {"; for (var i = 0; i < 300; i++) src += "p"
 }
 
 // TestRegDiffCharCodeAt compares s.charCodeAt(i) (char_code_at) with the
-// tree's: positions inside, at and past the ends, fractions, NaN, -0 and
-// infinities; surrogate halves; arguments that are no number, whose
-// conversion runs code; receivers that are no string -- a String object,
-// a number, null, an object with a method of its own that throws; the
+// recorded answers: positions inside, at and past the ends, fractions, NaN,
+// -0 and infinities; surrogate halves; arguments that are no number, whose
+// conversion runs code; receivers that are no string -- a String object, a
+// number, null, an object with a method of its own that throws; the
 // built-in replaced by a function and by a getter, and put back; and the
 // stacks and messages of what throws, placed at the read or the call.
 func TestRegDiffCharCodeAt(t *testing.T) {
@@ -789,9 +700,10 @@ function scan(s) { var h = 0, i; for (i = 0; i < s.length; i++) h = (h * 31 + s.
 }
 
 // TestRegDiffRegExpLiterals compares RegExp literals (new_regexp) with the
-// tree's: a new object at each evaluation, with its own lastIndex; a
-// literal given to replace, split, match and test, whose RegExp the tree
-// may have back; flags; and a literal's object kept and compared.
+// recorded answers: a new object at each evaluation, with its own
+// lastIndex; a literal given to replace, split, match and test, whose
+// RegExp the call may give back; flags; and a literal's object kept and
+// compared.
 func TestRegDiffRegExpLiterals(t *testing.T) {
 	regDiffParallel(t)
 	src := `
@@ -808,12 +720,13 @@ function uses(s) { return [esc(s), s.split(/,\s*/).length, (s.match(/\d+/g) || [
 
 // TestRegDiffRegExpLiteralCalls compares a literal's exec and test
 // (lit_exec, lit_test, call_lit) and a literal given to replace, split and
-// match (call_arg_lit) with the tree's where the RegExp may be given back
-// and where it must not be: a sticky or global literal's lastIndex at each
-// evaluation, an object argument whose toString runs, the methods replaced
-// on the prototype and read through a getter in the order the call reads
-// them, a replacer function, a split's limit, errors thrown by the call and
-// by its arguments, and the RegExp kept by the method it calls.
+// match (call_arg_lit) with the recorded answers where the RegExp may be
+// given back and where it must not be: a sticky or global literal's
+// lastIndex at each evaluation, an object argument whose toString runs, the
+// methods replaced on the prototype and read through a getter in the order
+// the call reads them, a replacer function, a split's limit, errors thrown
+// by the call and by its arguments, and the RegExp kept by the method it
+// calls.
 func TestRegDiffRegExpLiteralCalls(t *testing.T) {
 	regDiffParallel(t)
 	src := `
@@ -876,8 +789,8 @@ function errs() { var out = []; try { /a/.test({ toString: function () { throw n
 }
 
 // TestRegDiffTry compares try statements in register code: exceptions of
-// throw statements, operators, getters, setters, built-ins and calls of
-// both tiers caught; catch bindings read, written, captured and shadowing;
+// throw statements, operators, getters, setters, built-ins and calls
+// caught; catch bindings read, written, captured and shadowing;
 // finally clauses run for a normal completion, break, continue, return and
 // throw, nested, overriding the completion or not; rethrows from catch and
 // finally; and a stack overflow.
@@ -1430,16 +1343,25 @@ function viaCap() { var r = []; for (var i = 0; i < 3; i++) r.push(cap(1), cap(1
 		}
 		return out
 	}
-	var off, on []string
-	withRegTier(false, func() { off = run() })
+	// The answers the stack interpreter and the tree tier gave.
+	want := []string{"7", "7", "21",
+		"3:1,2,3:15 1:4:15 0::15 3:1,2,3:15 1:4:15 0::15 3:1,2,3:15 1:4:15 0::15",
+		"5,6,7,8|10 9|18 5,6,7,8|10 9|18 5,6,7,8|10 9|18",
+		"219", "3:9,10,11:15", "3:9,10,11:15",
+		"3:1,2,3:15 2:4,5:15 4:6,7,8,9:15 3:1,2,3:15 3:1,2,3:15 2:4,5:15 4:6,7,8,9:15 3:1,2,3:15 3:1,2,3:15 2:4,5:15 4:6,7,8,9:15 3:1,2,3:15",
+		"4:1,2,3,4:15 0::15",
+		"1:11 1,2,3:11 4:11 8,0,8,9:11/9,1,8,9:11 1 1,2,3 4 1:11 1,2,3:11 4:11 8,0,8,9:11/9,1,8,9:11 1 1,2,3 4 1:11 1,2,3:11 4:11 8,0,8,9:11/9,1,8,9:11 1 1,2,3 4",
+		"1,2:11",
+		"3:1,2,3:15 1:4:15 0::15 3:1,2,3:15 1:4:15 0::15 3:1,2,3:15 1:4:15 0::155,6,7,8|10 9|18 5,6,7,8|10 9|18 5,6,7,8|10 9|18",
+	}
 	before := vm.RegsBuilt()
-	withRegTier(true, func() { on = run() })
+	on := run()
 	if vm.RegsBuilt() == before {
 		t.Error("no function was register code")
 	}
 	for i, c := range calls {
-		if off[i] != on[i] {
-			t.Errorf("%s: %q, register code %q", c, off[i], on[i])
+		if want[i] != on[i] {
+			t.Errorf("%s: %q, register code %q", c, want[i], on[i])
 		}
 	}
 }
@@ -1448,7 +1370,7 @@ function viaCap() { var r = []; for (var i = 0; i < 3; i++) r.push(cap(1), cap(1
 // position, each made in its frame's place (regRestartRun), polls as a
 // loop does: the host's context stops it.
 func TestRegTailCallsStop(t *testing.T) {
-	withRegTier(true, func() {
+	func() {
 		rt := quickjs.New()
 		defer rt.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -1461,7 +1383,7 @@ func TestRegTailCallsStop(t *testing.T) {
 				t.Errorf("%s: an endless loop of calls in tail position ended", src)
 			}
 		}
-	})
+	}()
 }
 
 // TestRegDiffTopLevel compares top-level code as register code: a script's

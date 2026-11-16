@@ -16,7 +16,7 @@ import (
 // is made, by its maker, by another closure or one a closure makes, by an
 // update, by an eval, through a mapped arguments object; one still in its
 // dead zone, as a hoisted function or a switch's other case sees it, or a
-// parameter list's later parameter. Each on both tiers.
+// parameter list's later parameter.
 func TestCaptureByValue(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
@@ -48,19 +48,17 @@ func TestCaptureByValue(t *testing.T) {
 		{name: "generator", src: `'use strict'; function* f(x) { const g = () => x; yield 1; yield g() } const it = f(3); it.next(); it.next().value`, want: "3"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(compileForTest(t, tt.src))
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, tt.src))
+			if err != nil {
 				r.Close()
+				t.Fatal(err)
 			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
 		})
 	}
 }
@@ -79,22 +77,20 @@ func TestCaptureByValueAllocs(t *testing.T) {
 		{name: "by value", src: `'use strict'; function f(a, b, c) { return () => a + b + c }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 1},
 		{name: "mixed", src: `'use strict'; function f(a, b, c) { b++; return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 2},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			v, err := r.Run(compileForTest(t, tt.src))
-			if err != nil {
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, tt.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := []Value{Int(1), Int(2), Int(3)}
+		if n := testing.AllocsPerRun(100, func() {
+			if _, err := r.Call(v, Undefined, args); err != nil {
 				t.Fatal(err)
 			}
-			args := []Value{Int(1), Int(2), Int(3)}
-			if n := testing.AllocsPerRun(100, func() {
-				if _, err := r.Call(v, Undefined, args); err != nil {
-					t.Fatal(err)
-				}
-			}); n != tt.want {
-				t.Errorf("%s, tree %v: %v allocations a call, want %v", tt.name, on, n, tt.want)
-			}
-			r.Close()
+		}); n != tt.want {
+			t.Errorf("%s: %v allocations a call, want %v", tt.name, n, tt.want)
 		}
+		r.Close()
 	}
 }
 
@@ -267,19 +263,17 @@ func runCaptureCase(t *testing.T, r *Runtime, c captureCase, rounds int) string 
 	return v.String().Go()
 }
 
-// TestCaptureByValueCases runs captureCases on both tiers, three calls of
-// each case's function in a runtime of its own.
+// TestCaptureByValueCases runs captureCases, three calls of each case's
+// function in a runtime of its own.
 func TestCaptureByValueCases(t *testing.T) {
 	t.Parallel()
 	for _, c := range captureCases {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			r.SetEvaluator(captureEvaluator)
-			if got := runCaptureCase(t, r, c, 3); got != c.want {
-				t.Errorf("%s, tree %v: got %s, want %s", c.name, on, got, c.want)
-			}
-			r.Close()
+		r := New(Config{})
+		r.SetEvaluator(captureEvaluator)
+		if got := runCaptureCase(t, r, c, 3); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
 		}
+		r.Close()
 	}
 }
 

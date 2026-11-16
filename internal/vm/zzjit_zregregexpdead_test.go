@@ -8,16 +8,12 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // regDeadCompile is src compiled to register code.
 func regDeadCompile(t *testing.T, src string) *bytecode.Function {
 	t.Helper()
-	compiler.SetRegisterForm(true)
-	defer compiler.SetRegisterForm(false)
-	t.Cleanup(func() { compiler.SetRegisterForm(bytecode.RegDefault()) })
 	return compileForTest(t, src)
 }
 

@@ -20,7 +20,7 @@ import (
 // a sum, a difference or a product of a few words itself, its result in a
 // block given back (bigFreeList), the value before's (jitLeafOwn), or a new
 // one, and the rest as bigOp does, then gives back what of its operands the
-// call says, as bigRelease does -- what the tree tier's operator does,
+// call says, as bigRelease does -- what the interpreter's operator does,
 // without the calls a call of Go from native code makes before it gets
 // there (callGo, goCall, ExpandGoCall, jit.HostCall, jitHostCall,
 // jitGoBig), which had cost more than the operator: as V8's code

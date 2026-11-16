@@ -10,7 +10,7 @@ import (
 
 // TestStringChain pins a + b + c joined in one concat once a string literal
 // has made the additions concatenations: the conversions it makes, and
-// when, are each addition's, on both tiers.
+// when, are each addition's.
 func TestStringChain(t *testing.T) {
 	t.Parallel()
 	const obj = `var log = []; var o = { valueOf() { log.push('v'); return 7 }, toString() { log.push('s'); return 'S' } }; function g() { log.push('g'); return 'G' }; `
@@ -34,26 +34,22 @@ func TestStringChain(t *testing.T) {
 		{name: "wrap", src: `function f() { var s = 'x'; for (var i = 0; i < 2000; i++) s = '(' + s + ')'; return s.length + s.slice(1998, 2003) } f()`, want: "4001((x))", concat: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				fn := compileForTest(t, tt.src)
-				if got := hasOp(fn, "f", bytecode.OpConcat); got != tt.concat {
-					t.Errorf("f joins with concat: %v, want %v", got, tt.concat)
-				}
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(fn)
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
-				r.Close()
-				if on {
-					assertTreeIn(t, fn, "f")
-				}
+			fn := compileForTest(t, tt.src)
+			if got := hasOp(fn, "f", bytecode.OpConcat); got != tt.concat {
+				t.Errorf("f joins with concat: %v, want %v", got, tt.concat)
 			}
+			r := New(Config{})
+			v, err := r.Run(fn)
+			if err != nil {
+				r.Close()
+				t.Fatal(err)
+			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
+
 		})
 	}
 }
@@ -63,35 +59,33 @@ func TestStringChain(t *testing.T) {
 // before, which the runtime's memo of short joins hands back (concatMemo).
 func TestStringChainAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	for _, on := range []bool{false, true} {
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(compileForTest(t, `function f(a, b) { return 'key ' + a + ' and ' + b + ' end' }; for (let i = 0; i < 10; i++) f('x', 'y'); f`))
-		if err != nil {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `function f(a, b) { return 'key ' + a + ' and ' + b + ' end' }; for (let i = 0; i < 10; i++) f('x', 'y'); f`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every run's text new: AllocsPerRun's runs and its warm-up one.
+	var fresh [][]Value
+	for i := range 101 {
+		fresh = append(fresh, []Value{Str(NewString(fmt.Sprint("x", i))), Str(NewString("y"))})
+	}
+	next := 0
+	if n := testing.AllocsPerRun(100, func() {
+		if _, err := r.Call(v, Undefined, fresh[next]); err != nil {
 			t.Fatal(err)
 		}
-		// Every run's text new: AllocsPerRun's runs and its warm-up one.
-		var fresh [][]Value
-		for i := range 101 {
-			fresh = append(fresh, []Value{Str(NewString(fmt.Sprint("x", i))), Str(NewString("y"))})
+		next++
+	}); n != 1 {
+		t.Errorf("%v allocations a call, want 1", n)
+	}
+	args := []Value{Str(NewString("x")), Str(NewString("y"))}
+	if n := testing.AllocsPerRun(100, func() {
+		if _, err := r.Call(v, Undefined, args); err != nil {
+			t.Fatal(err)
 		}
-		next := 0
-		if n := testing.AllocsPerRun(100, func() {
-			if _, err := r.Call(v, Undefined, fresh[next]); err != nil {
-				t.Fatal(err)
-			}
-			next++
-		}); n != 1 {
-			t.Errorf("tree %v: %v allocations a call, want 1", on, n)
-		}
-		args := []Value{Str(NewString("x")), Str(NewString("y"))}
-		if n := testing.AllocsPerRun(100, func() {
-			if _, err := r.Call(v, Undefined, args); err != nil {
-				t.Fatal(err)
-			}
-		}); n != 0 {
-			t.Errorf("tree %v: %v allocations a call of a text made before, want 0", on, n)
-		}
-		r.Close()
+	}); n != 0 {
+		t.Errorf("%v allocations a call of a text made before, want 0", n)
 	}
 }
 

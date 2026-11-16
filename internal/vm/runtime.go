@@ -233,12 +233,11 @@ type Runtime struct {
 
 	// pendingTail is the call a frame ended in, for run to make in its place.
 	pendingTail tailCall
-	// treeTail says a tree ended in such a call, which runTree then leaves
-	// with errTailCall: see tailCallNode.
+	// treeTail is read by nothing: it keeps the room of the removed closure
+	// trees' tail calls, so that no other field moves.
 	treeTail bool
-	// tailSwapDepth is the depth of the frame whose calls in tail position
-	// tailSwap is making in it, or 0 (see ztree_aaswap.go). It is in the
-	// room after treeTail, so that no other field moves.
+	// tailSwapDepth is read by nothing either. It is in the room after
+	// treeTail, so that no other field moves.
 	tailSwapDepth int32
 
 	// locale is the language a program means when it does not say which: the
@@ -288,27 +287,21 @@ type Runtime struct {
 	// sourceMaps maps stack traces through scripts' source maps, once a
 	// host gives a loader; see zsourcemap.go.
 	sourceMaps *sourceMaps
-	// treeSuspend is the suspension a generator's tree ended its run with,
-	// for runGenerator to hand on (see ztree_zyield.go).
+	// treeSuspend is read by nothing: it keeps the room of the removed
+	// closure trees' suspension, so that no other field moves.
 	treeSuspend *suspendSignal
-	// treeSig is the suspension treeSuspend points to. What a tree's yield
-	// or await hands out is read by the resumption it ends before anything
-	// can suspend again, so one serves them all, and a suspension allocates
+	// treeSig is the suspension a yield or an await hands out (regSuspend,
+	// jitRegSuspend), read by the resumption it ends before anything can
+	// suspend again, so one serves them all, and a suspension allocates
 	// nothing.
 	treeSig suspendSignal
-	// tailArgs is where a tree's call in tail position copies its
-	// arguments out of its frame's window, for a callee that reads them
-	// only as it starts (tailArgsOf).
+	// tailArgs is cleared at a turn's end (turnLeftovers) and written by
+	// nothing: it kept the arguments the removed closure trees' calls in
+	// tail position copied out of their frames' windows.
 	tailArgs []Value
-	// noTree keeps the tree tier off for the code this runtime loads, as
-	// SetTreeTier(false) does for the process: each function it prepares is
-	// given no tree unless one has run it already (noTreeFor). Tests set it,
-	// to compare the tiers in runtimes side by side. It and its padding take
-	// the word the realm's randomFn had, which was the runtime's.
-	noTree bool
-	_      [7]byte
-	// bigFree is the BigInts the tree tier has given back, for bigInPlace
-	// to make results in (bigRelease); nil until one is.
+	// bigFree is the BigInts the interpreter's operators have given back
+	// (bigGive), for bigInPlace to make results in (bigTake); nil until one
+	// is.
 	bigFree *bigFreeList
 	// arraySamples are the literal sites holding a sample, which a
 	// collection or the turn's end releases (zzz_arrayroom.go). They take the
@@ -317,7 +310,7 @@ type Runtime struct {
 	arraySamples []*arrayRoom
 	// thisCells hold the this bindings of derived constructors' frames
 	// that no closure or eval can capture, by the frame's depth
-	// (constructTree): each construction of such a class had allocated
+	// (regRunFD): each construction of such a class had allocated
 	// one. At the end, so that no field the interpreter reads moves.
 	thisCells []thisBinding
 	// keyStrings is the string keyString made for each atom that is no
@@ -360,10 +353,6 @@ type Runtime struct {
 	// dictKeys is the keys of the last dictionary a for...in walked, by
 	// its layout (dictForIn), which clearReturnedFrames lets go.
 	dictKeys dictKeys
-	// oldTiers runs the runtime's code on the stack interpreter and the
-	// tree tier, as a runtime with the JIT runs it (regOn), for tests of
-	// those tiers.
-	oldTiers bool
 	// strConsts are the strings the program's string constants were made,
 	// by their text, held weakly (constString), and strConstsSweep the
 	// count past which the dead are swept out.
@@ -677,7 +666,7 @@ type Realm struct {
 	// deep is the cache of the additions made at the sites that have given
 	// up their own (deepStore), made when one first is.
 	deep *deepAdds
-	// has is the cache of the in operator's answers (see ztree_ain.go),
+	// has is the cache of the in operator's answers (see zvreg_ain.go),
 	// made when one is first remembered.
 	has *hasCache
 	// finalizing are the FinalizationRegistry objects with this realm's
@@ -808,16 +797,14 @@ type closureCode struct {
 	// enters (the JIT's jitReg), or a compile in the background that its
 	// next call installs: rhCallW's hit and regEnterW, and the native call
 	// handler's, which leaves such a call to rhCallW, go to the JIT
-	// (jitRegEnter), as the stack interpreter's calls look for their
-	// callee's code and install what is done (tryJITAt). Never set in a
-	// build without the JIT.
+	// (jitRegEnter). Never set in a build without the JIT.
 	jitEnters bool
 	// regCallsHeld says regCalls holds what a call made in the running
 	// turn filled, and the template is on the list of those whose caches
 	// the turn's end lets go (regCallsHold, releaseRegCalls).
 	regCallsHeld bool
 	// arrays are this template's empty array literals' sites, in this
-	// realm, by the tree builder's count of them (arrayEmptyNode); nil
+	// realm, by the register compiler's count of them (regNewArrayE); nil
 	// where one has not run.
 	arrays []*arrayRoom
 	// reg is the template's register code, once a call has found it has
@@ -950,10 +937,6 @@ type frame struct {
 	// how a generator binds its parameters when it is called rather than on
 	// its first resumption.
 	paramsOnly bool
-
-	// tc is the tree tier's state for a frame running a tree, kept here so
-	// that a call allocates none.
-	tc tctx
 }
 
 // handler is a registered catch or finally target.
@@ -1360,7 +1343,7 @@ func (r *Runtime) ClearStop() {
 		// and in the frames they returned from goes (endTurn). Left, its
 		// registers outlived it, held for the collector and counted by the
 		// next call's memory limit wherever that call's frames covered the
-		// slots without writing them -- a tree stopped at the limit had
+		// slots without writing them -- a frame stopped at the limit had
 		// the next call, which allocated almost nothing, stopped there as
 		// well.
 		r.endTurn()

@@ -17,9 +17,7 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	trace := c.traceName
 	c.traceName = ""
 	sub := newCompiler(c, c.opts)
-	if registerForm.Load() && !c.opts.NoRegister {
-		sub.reg = regcomp.NewRecord(fn.Idents)
-	}
+	sub.reg = regcomp.NewRecord(fn.Idents)
 	sub.lit = fn
 	sub.fn.Strict = fn.Strict || c.fn.Strict
 	sub.fn.Async = fn.Async
@@ -45,7 +43,8 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	compiled := sub.release()
 	if rec != nil && !rec.Bail {
 		// Compiled at the function's first call: one never called is
-		// never compiled (docs/register-interpreter.md, "Compiled lazily").
+		// never compiled (docs/register-interpreter.md, "Compiled at the
+		// first call").
 		compiled.Reg = regcomp.Later(fn, compiled, rec)
 	} else if rec != nil {
 		regcomp.Refuse(compiled, "a name the record resolves two ways")

@@ -2,9 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regTableRunSrc runs src as register code, by the Go table's loop or,
@@ -12,12 +9,9 @@ import (
 // handlers, and returns its value as a string.
 func regTableRunSrc(t *testing.T, src string, native bool) string {
 	t.Helper()
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
 	was := SetRegNative(native)
-	defer func() { SetRegTier(bytecode.RegDefault()); SetRegNative(was) }()
+	defer func() { SetRegNative(was) }()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fn)

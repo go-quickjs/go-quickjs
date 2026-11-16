@@ -156,13 +156,11 @@ func TestJITManySlotsCompileTime(t *testing.T) {
 			t.Fatal(err)
 		}
 		call := compileForTest(t, name+"(1, 1)")
-		if regJITForTest() {
-			// Register code's first call begins its budget, which its next
-			// call, its threshold's invocation spent, compiles at
-			// (jitRegCallTier): that one is the call that compiles.
-			if _, err := r.Run(call); err != nil {
-				t.Fatal(err)
-			}
+		// Register code's first call begins its budget, which its next
+		// call, its threshold's invocation spent, compiles at
+		// (jitRegCallTier): that one is the call that compiles.
+		if _, err := r.Run(call); err != nil {
+			t.Fatal(err)
 		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -172,15 +170,14 @@ func TestJITManySlotsCompileTime(t *testing.T) {
 		}
 		took := time.Since(start)
 		runtime.ReadMemStats(&after)
-		e := jitNativeForTest(t, r, name)
-		prog, compiled := e.ssaProg, 0
-		if re := jitRegEntryForTest(r, name); jitRegCodeForTest(r, name) && re != nil {
-			// Its register code's program, and what its feedback holds.
-			prog, compiled = re.p, re.keep.compiledBytes()
-		} else {
-			compiled = e.compiledBytes()
+		jitNativeForTest(t, r, name)
+		// Its register code's program, and what the cache counts its
+		// entry as holding (jitRegEntry's bytes).
+		re := jitRegEntryForTest(r, name)
+		if re == nil {
+			t.Fatalf("%s has no register code", name)
 		}
-		t.Logf("%d locals: %d instructions, first call %v, %d MB allocated, estimate %d MB, compiled %d bytes", n, len(prog.Code), took,
-			(after.TotalAlloc-before.TotalAlloc)>>20, jitCompileBytes(jitFnForTest(t, r, name))>>20, compiled)
+		t.Logf("%d locals: %d instructions, first call %v, %d MB allocated, estimate %d MB, held %d bytes", n, len(re.p.Code), took,
+			(after.TotalAlloc-before.TotalAlloc)>>20, jitCompileBytes(jitFnForTest(t, r, name))>>20, re.bytes)
 	}
 }

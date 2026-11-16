@@ -5,7 +5,7 @@ import "testing"
 // TestCaptureRoom pins the bindings a closure is the first to capture being
 // made in one allocation: each is still its own binding, shared with every
 // other closure over it, and a binding made afresh -- a loop's let -- is a
-// new one, on both tiers.
+// new one.
 func TestCaptureRoom(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
@@ -18,19 +18,17 @@ func TestCaptureRoom(t *testing.T) {
 		{name: "duplicate", src: `function f(a) { var b = a; function g() { return a + b + (function () { return a * b })() } return g() } f(3)`, want: "15"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(compileForTest(t, tt.src))
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, tt.src))
+			if err != nil {
 				r.Close()
+				t.Fatal(err)
 			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
 		})
 	}
 }
@@ -40,27 +38,25 @@ func TestCaptureRoom(t *testing.T) {
 // three bindings.
 func TestCaptureRoomAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	for _, on := range []bool{false, true} {
-		r := newTreeTierForTest(on, Config{})
-		v, err := r.Run(compileForTest(t, `function f(a, b, c) { return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
-		if err != nil {
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, `function f(a, b, c) { return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []Value{Int(1), Int(2), Int(3)}
+	if n := testing.AllocsPerRun(100, func() {
+		if _, err := r.Call(v, Undefined, args); err != nil {
 			t.Fatal(err)
 		}
-		args := []Value{Int(1), Int(2), Int(3)}
-		if n := testing.AllocsPerRun(100, func() {
-			if _, err := r.Call(v, Undefined, args); err != nil {
-				t.Fatal(err)
-			}
-		}); n != 2 {
-			t.Errorf("tree %v: %v allocations a call, want 2", on, n)
-		}
-		r.Close()
+	}); n != 2 {
+		t.Errorf("%v allocations a call, want 2", n)
 	}
+	r.Close()
 }
 
 // TestArgumentsRoom pins an arguments object made with its first elements
 // in its own allocation: what it holds and how it grows past them, mapped
-// and not, on both tiers.
+// and not.
 func TestArgumentsRoom(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
@@ -78,19 +74,17 @@ func TestArgumentsRoom(t *testing.T) {
 		{name: "strictCallee", src: `function f() { 'use strict'; return arguments } function g() { var a = f(), b = f(); var d = Object.getOwnPropertyDescriptor(a, 'callee'); var r = (d.get === Object.getOwnPropertyDescriptor(b, 'callee').get) + ',' + d.configurable; try { a.callee } catch (e) { r += ',' + e.name } try { Object.defineProperty(a, 'callee', { get() {} }) } catch (e) { r += ',' + e.name } return r + ',' + (Object.getOwnPropertyDescriptor(b, 'callee').set === d.get) } g()`, want: "true,false,TypeError,TypeError,true"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, on := range []bool{false, true} {
-				r := newTreeTierForTest(on, Config{})
-				v, err := r.Run(compileForTest(t, tt.src))
-				if err != nil {
-					r.Close()
-					t.Fatalf("tree %v: %v", on, err)
-				}
-				got, err := r.ToString(v)
-				if err != nil || got.Go() != tt.want {
-					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
-				}
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, tt.src))
+			if err != nil {
 				r.Close()
+				t.Fatal(err)
 			}
+			got, err := r.ToString(v)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("got %v, %v; want %s", got, err, tt.want)
+			}
+			r.Close()
 		})
 	}
 }
@@ -108,22 +102,20 @@ func TestArgumentsRoomAllocs(t *testing.T) {
 		{`function f() { 'use strict'; return arguments }`, 1},
 		{`function f(a, b, c) { return arguments }`, 4},
 	} {
-		for _, on := range []bool{false, true} {
-			r := newTreeTierForTest(on, Config{})
-			v, err := r.Run(compileForTest(t, tt.src+`; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
-			if err != nil {
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, tt.src+`; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := []Value{Int(1), Int(2), Int(3)}
+		if n := testing.AllocsPerRun(100, func() {
+			if _, err := r.Call(v, Undefined, args); err != nil {
 				t.Fatal(err)
 			}
-			args := []Value{Int(1), Int(2), Int(3)}
-			if n := testing.AllocsPerRun(100, func() {
-				if _, err := r.Call(v, Undefined, args); err != nil {
-					t.Fatal(err)
-				}
-			}); n != tt.want {
-				t.Errorf("%s, tree %v: %v allocations a call, want %v", tt.src, on, n, tt.want)
-			}
-			r.Close()
+		}); n != tt.want {
+			t.Errorf("%s: %v allocations a call, want %v", tt.src, n, tt.want)
 		}
+		r.Close()
 	}
 }
 

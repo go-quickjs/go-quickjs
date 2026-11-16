@@ -12,7 +12,7 @@ import (
 // by a break, a return and a throw; with keys deleted and added as they go;
 // stopped in a generator while others run; with a proxy's traps running
 // loops at their start and in their steps, and throwing; and in recursion.
-// Three rounds, so that the tree tier and native code meet them too.
+// Three rounds, so that native code meets them too.
 const forInCursorTestSrc = `
 const out = []
 function keys(o) { const r = []; for (const k in o) r.push(k); return r.join() }
@@ -89,16 +89,14 @@ const forInCursorTestWant = "x,y,z|p,q|||x,y,z|0,1,2|0,1||xp xq yp yq zp zq xx x
 // Loops answer as Node does, whichever cursor they are given.
 func TestForInCursor(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, forInCursorTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != forInCursorTestWant {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, forInCursorTestWant)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, forInCursorTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != forInCursorTestWant {
+		t.Errorf("got\n%s\nwant\n%s", got, forInCursorTestWant)
 	}
 }
 

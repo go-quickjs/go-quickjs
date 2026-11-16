@@ -7,7 +7,6 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -46,12 +45,7 @@ function work(p, n) {
 var pt = new Point(1, 2);
 for (var k = 0; k < 20; k++) work(pt, 5);
 `
-	compiler.SetRegisterForm(true)
 	prog := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
-	defer SetRegTier(bytecode.RegDefault())
-	defer SetJITRegTier(SetJITRegTier(true))
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(prog); err != nil {

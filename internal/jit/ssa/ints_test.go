@@ -3,8 +3,6 @@ package ssa
 import (
 	"testing"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 )
 
@@ -113,8 +111,6 @@ func TestIntPhiBoxesSunk(t *testing.T) {
 // code, lowered and built.
 func lowerRegJS(t *testing.T, src string) *Func {
 	t.Helper()
-	compiler.SetRegisterForm(true)
-	defer compiler.SetRegisterForm(bytecode.RegDefault())
 	fn := compiledFunctionForTest(t, src)
 	if fn.Reg == nil {
 		t.Fatalf("%s: no register code", src)

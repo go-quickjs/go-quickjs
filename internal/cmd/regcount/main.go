@@ -106,7 +106,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: regcount dir...")
 		os.Exit(2)
 	}
-	compiler.SetRegisterForm(true)
 	all := newTally()
 	for _, dir := range flag.Args() {
 		t := newTally()

@@ -12,9 +12,8 @@ package vm
 // native call's state or an exit's description: references moved, and
 // primitives stored over references. Held is the memory the JIT holds, and
 // Budget the most it may (Config.JITMemoryLimit); Evicted counts the
-// functions whose code or refusal it dropped to make room, Refused the
-// compiles it found no room for, and Discarded those of them it found none
-// for only once it had compiled them. Inlined counts the callees the code
+// functions whose code or refusal it dropped to make room, and Refused the
+// compiles it found no room for. Inlined counts the callees the code
 // it placed inlines, every compile's, and InlinedCode their instructions.
 // Pooled is the process's, not the runtime's: what the workspaces compiles
 // are made in keep while no compile uses them, shared by every runtime,
@@ -25,7 +24,7 @@ package vm
 type JITStats struct {
 	Compiled, Entries, Guards, Hosts, Budgets, Interpreted, SSAEntries, SSARecords uint64
 	Held, Budget, Pooled                                                           int64
-	Evicted, Refused, Discarded                                                    uint64
+	Evicted, Refused                                                               uint64
 	Reoptimized                                                                    uint64
 	Inlined, InlinedCode                                                           uint64
 	Contexts, ContextsMost                                                         int

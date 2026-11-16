@@ -192,9 +192,9 @@ func TestGeneratorRunsInItsRealm(t *testing.T) {
 }
 
 // TestGeneratorTreeRunsInItsRealm is TestGeneratorRunsInItsRealm for a body
-// with a loop, which runs as a tree, resumed by a for...of loop of the
-// other realm and by this realm's next: a resumption of it made in one
-// place still switches to its realm.
+// with a loop, resumed by a for...of loop of the other realm and by this
+// realm's next: a resumption of it made in one place still switches to its
+// realm.
 func TestGeneratorTreeRunsInItsRealm(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()

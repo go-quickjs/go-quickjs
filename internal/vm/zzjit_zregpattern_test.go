@@ -49,15 +49,14 @@ function thrown(n) {
 }
 `
 
-// TestJITRegPatternSteps: register code's array pattern's step of a
-// cursor native code makes none of its own for (abi.GoCallFill) and its
-// rest element (abi.GoCallRest) are made by Go from native code, as the
-// stack form's (jitCallMade's iterStep and iterRest), their results to
-// the call's keep cell (jitRegIterMade). The step had left native code at
-// every turn, and the rest had run whole (jitRegWhole). Each answer is
-// the interpreter's, with the collector idle and marking -- the
-// iterators' next and return calls counted, a next's RangeError caught --
-// and once warm no destructuring leaves native code or runs whole.
+// TestJITRegPatternSteps: register code's array pattern's step of a cursor
+// native code makes none of its own for (abi.GoCallFill) and its rest
+// element (abi.GoCallRest) are made by Go from native code, their results
+// to the call's keep cell (jitRegIterMade). The step had left native code
+// at every turn, and the rest had run whole (jitRegWhole). Each answer is
+// the interpreter's, with the collector idle and marking -- the iterators'
+// next and return calls counted, a next's RangeError caught -- and once
+// warm no destructuring leaves native code or runs whole.
 func TestJITRegPatternSteps(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -70,9 +69,8 @@ func TestJITRegPatternSteps(t *testing.T) {
 		"thrown":    "4018000:2000",
 	}
 	// Those whose code goes on natively at every turn: custom's and
-	// thrown's close their cursors through Go (ir.IterClose's exit), as
-	// the stack form's code does, and their loops are left to the
-	// interpreter.
+	// thrown's close their cursors through Go (ir.IterClose's exit), and
+	// their loops are left to the interpreter.
 	counted := map[string]bool{"arrays": true, "others": true, "exhausted": true}
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {

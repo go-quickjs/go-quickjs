@@ -391,14 +391,14 @@ func TestStrAppendRandom(t *testing.T) {
 	first, count := strFuzzRange(t, count)
 	// The seeds run in parallel, each holding a heavy slot (heavy): a
 	// seed's strings may grow to gigabytes -- seeds 382's and 388's
-	// runtimes peak at 2.5 to 2.9 GB, most seeds' under 100 MB -- and
-	// each seed's reference and its runs with the tree tier off and on,
-	// each on a runtime of its own, run one after another, each runtime
-	// closed before the next is made, so that a seed holds one runtime's
-	// memory at a time. Run three at a time for each of -parallel's seeds,
-	// seeds 382 and 388 met with their six runtimes at once: the
-	// package's process peaked at 16 GB on a machine of 32 CPUs, and ran
-	// a runner of 16 GB out of memory beside the root package's tests.
+	// runtimes peak at 2.5 to 2.9 GB, most seeds' under 100 MB -- and each
+	// seed's reference and its runs, each on a runtime of its own, run one
+	// after another, each runtime closed before the next is made, so that a
+	// seed holds one runtime's memory at a time. Run three at a time for
+	// each of -parallel's seeds, seeds 382 and 388 met with their six
+	// runtimes at once: the package's process peaked at 16 GB on a machine
+	// of 32 CPUs, and ran a runner of 16 GB out of memory beside the root
+	// package's tests.
 	for seed := first; seed < first+count; seed++ {
 		t.Run(strconv.Itoa(seed), func(t *testing.T) {
 			t.Parallel()
@@ -412,16 +412,14 @@ func TestStrAppendRandom(t *testing.T) {
 			}) {
 				return
 			}
-			for _, tree := range []bool{false, true} {
-				t.Run(fmt.Sprintf("tree=%v", tree), func(t *testing.T) {
-					r := newTreeTierForTest(tree, Config{})
-					got := strFuzzRun(t, r, src, false)
-					r.Close()
-					if got != want && !t.Failed() {
-						t.Errorf("seed %d, tree tier %v: %s\n%s", seed, tree, firstLogDifference(got, want), src)
-					}
-				})
-			}
+			t.Run(fmt.Sprintf(""), func(t *testing.T) {
+				r := New(Config{})
+				got := strFuzzRun(t, r, src, false)
+				r.Close()
+				if got != want && !t.Failed() {
+					t.Errorf("seed %d: %s\n%s", seed, firstLogDifference(got, want), src)
+				}
+			})
 		})
 	}
 }

@@ -1,106 +1,48 @@
 package vm
 
 import (
-	"os"
+	"fmt"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// The register interpreter's set-up and its entries from the tree: what
-// runs once a function or a frame, out of the hot block (zzreg_run.go).
+//go:generate go run ./internal/snapgen/cmd
 
-func init() { regTier.Store(bytecode.RegDefault()) }
-
-// SetRegTier turns the register interpreter on or off for functions not yet
-// run, for tests that compare it with the other tiers.
-func SetRegTier(on bool) { regTier.Store(on) }
-
-// RegTierOn reports whether the register interpreter is on in the process
-// (SetRegTier), for runtimes without the JIT.
-func RegTierOn() bool { return regTier.Load() }
-
-// RegTier reports whether r runs register code: the register interpreter
-// is on, and r has no JIT -- or the JIT compiles register code
-// (SetJITRegTier, QJS_JITREG), which it does not by default yet: a
-// runtime with the JIT runs the stack interpreter and the tree tier, and
-// its JIT reads the stack form. Its host compiles its code with no
-// register form where it does not (compiler.Options.NoRegister).
-func (r *Runtime) RegTier() bool { return r.regOn() }
-
-// regOn is RegTier: oldTiers keeps a test's runtime off register code too.
-func (r *Runtime) regOn() bool {
-	return regTier.Load() && !r.oldTiers && (!r.jitOn() || jitRegTier.Load())
-}
-
-// jitRegTier has runtimes with the JIT run register code too, the JIT
-// compiling it (zzjit_zregtier.go), while the register form's JIT is
-// brought to the stack form's: QJS_JITREG set in the environment, or
-// SetJITRegTier.
-var jitRegTier atomic.Bool
-
-func init() { jitRegTier.Store(os.Getenv("QJS_JITREG") != "") }
-
-// SetJITRegTier has runtimes with the JIT run register code, where the
-// register interpreter is on, or not (jitRegTier), and reports what it
-// was: a test's switch, as QJS_JITREG is the environment's.
-func SetJITRegTier(on bool) bool { return jitRegTier.Swap(on) }
-
-// regKeepOld marks fn, which r loads, as code the tree the runtimes share
-// runs on the old tiers, where r does not run register code and fn has a
-// register form all the same: a host compiles a runtime's code for it, so
-// this is code compiled for another, which a test may hand a runtime of
-// either kind (bytecode.Function.OldTiers). Where a runtime that runs
-// register code has given fn its register code's tree, the tree is
-// dropped, for the next call to build the old tiers' one: what has kept
-// the register code -- a closure's, a plan's, a suspended generator's --
-// goes on running it, as register code and a tree run side by side.
-func (r *Runtime) regKeepOld(fn *bytecode.Function) {
-	if fn.Reg != nil && regTier.Load() && !r.regOn() {
-		fn.KeepOldTiers()
-		if t := (*tree)(atomic.LoadPointer(&fn.VMCode)); t != nil && t.reg != nil {
-			atomic.CompareAndSwapPointer(&fn.VMCode, unsafe.Pointer(t), nil)
-		}
-	}
-}
+// The register interpreter's set-up: what runs once a function or a
+// closure, out of the hot block (zzreg_run.go).
 
 // RegsBuilt is how many functions have been given register code, for tests
 // that check it ran.
 func RegsBuilt() int64 { return regsBuilt.Load() }
 
-// firstForm is what firstTree builds for a function: its register code,
-// run by a tree of one node, where the register interpreter is on and the
-// form covers it, and its tree otherwise. With the tree tier off there is
-// neither: the stack interpreter runs everything, as it does without the
-// register interpreter.
-//
-// A function compiled with no register form (compiler.Options.NoRegister),
-// for a runtime with the JIT, or marked as such a runtime's
-// (regKeepOld), is given its tree, with no fallback counted.
-func firstForm(fn *bytecode.Function) *tree {
-	if regTier.Load() && fn.Reg != nil && !fn.OldTiers() {
-		if treeTier.Load() {
-			if t := regTreeOf(fn); t != nil {
-				return t
-			}
-		}
-		regFallback(regFallNoCode, fn)
+// firstReg is fn's register code, built at its first call
+// (bytecode.RegLater) and kept in fn.VMCode for every runtime running it.
+// The backend compiles every function, so nil -- no register code -- is
+// an internal error, which the caller reports (errNoRegCode).
+func firstReg(fn *bytecode.Function) *regCode {
+	if c := (*regCode)(atomic.LoadPointer(&fn.VMCode)); c != nil {
+		return c
 	}
-	return buildTree(fn)
+	rc := fn.RegCode()
+	if rc == nil || !rc.Wide {
+		if regTrace {
+			println("reg: not", fn.Name, "(no register code)")
+		}
+		return nil
+	}
+	c := regBuild(fn, rc)
+	if !atomic.CompareAndSwapPointer(&fn.VMCode, nil, unsafe.Pointer(c)) {
+		return (*regCode)(atomic.LoadPointer(&fn.VMCode))
+	}
+	return c
 }
 
-// regTreeOf translates fn into register code and returns the tree that runs
-// it, or nil. A function's register code is compiled here, at its first
-// call (bytecode.RegLater).
-func regTreeOf(fn *bytecode.Function) *tree {
-	if rc := fn.RegCode(); rc != nil && rc.Wide {
-		return regTreeWide(fn, rc)
-	}
-	if regTrace {
-		println("reg: not", fn.Name, "(no register code)")
-	}
-	return nil
+// errNoRegCode is the error of a call of a function the register backend
+// gave no code: none is meant to have any.
+func errNoRegCode(fn *bytecode.Function) error {
+	return fmt.Errorf("internal error: %s has no register code", fn.Name)
 }
 
 // regExtend adds to cl's tables -- its names, constants and caches, which
@@ -140,12 +82,12 @@ func (r *Runtime) regExtend(cl *closure, c *regCode) {
 }
 
 // regBindPlan gives fd's closure its register code where a plan lets a
-// call enter it without asking (fd.treeCall): a built-in's callback
+// call enter it without asking (fd.regCall): a built-in's callback
 // (regDirect) reads the code from the plan, not from cl.reg.
-func regBindPlan(fd *funcData, t *tree) {
-	if cl := fd.closure; t.reg != nil && cl.reg == nil {
-		cl.realm.agent.regExtend(cl, t.reg)
-		cl.reg = t.reg
+func regBindPlan(fd *funcData, c *regCode) {
+	if cl := fd.closure; cl.reg == nil {
+		cl.realm.agent.regExtend(cl, c)
+		cl.reg = c
 	}
 }
 
@@ -162,9 +104,9 @@ func regConst(fn *bytecode.Function, c *regCode, k uint32) *bytecode.Constant {
 	return &regConsts(fn, c.rc)[k]
 }
 
-// regTreeWide is the tree that runs fn's register code rc, which the
-// register backend compiled from its AST.
-func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
+// regBuild is what runs fn's register code rc, which the register backend
+// compiled from its AST.
+func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 	regsBuilt.Add(1)
 	if regDump {
 		println("reg:", fn.Name)
@@ -222,7 +164,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 		c.leaf, c.leafOps = regLeafCode, regLeafOps(fn, rc)
 	case fn.Leaf == bytecode.LeafPure && !fn.PureCalls && !pureByTree(fn):
 		// A longer body runs faster as code than in the frameless
-		// evaluator, as the tree tier finds (pureByTree).
+		// evaluator (pureByTree).
 		c.leaf = regLeafPure
 	case fn.Leaf != bytecode.LeafNone && fn.Leaf != bytecode.LeafPure:
 		c.leaf = regLeafThis
@@ -259,9 +201,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 	for _, cases := range rc.Switches {
 		c.switches = append(c.switches, newRegSwitchTable(cases))
 	}
-	t := &tree{reg: c}
-	t.blocks = []tblock{{body: []tstmt{regStmt(c)}, next: regNext}}
-	return t
+	return c
 }
 
 // regConstOf is the value instruction w loads, where it loads a constant
@@ -285,124 +225,4 @@ func regConstOf(consts []bytecode.Constant, w bytecode.RInstr) (Value, bool) {
 		}
 	}
 	return Undefined, false
-}
-
-// regStmt is the one node of a register function's tree: it runs the frame
-// a call through runFD or callTree has made as register code, the with
-// objects and the eval's variables runFD gave it among what it keeps. A
-// derived constructor's frame, and an arrow's sharing its this, is run
-// where its code reads this from the binding (RegCode.ThisRef).
-func regStmt(c *regCode) tstmt {
-	return func(t *tctx) {
-		r, f := t.r, t.f
-		regFallback(regFallTree, c.fn)
-		if c.wide && (f.thisRef == nil || c.rc.ThisRef) {
-			if f.cl.reg == nil {
-				r.regExtend(f.cl, c)
-				f.cl.reg = c
-			}
-			if f.callee != nil {
-				if fd := f.callee.fn(); fd != nil {
-					regPlan(fd)
-				}
-			}
-			v, err := r.regEnterFrame(f, c)
-			if err == errTailCall {
-				// The frame ended in a tail call: runTree leaves with
-				// errTailCall, as after tailCallNode's.
-				r.treeTail = true
-				return
-			}
-			if err != nil {
-				t.throw(err)
-			}
-			t.ret = v
-			return
-		}
-		if c.wide || f.thisRef != nil || f.withScopes != nil || f.evalVars != nil {
-			regFallback(regFallStack, c.fn)
-			v, err := r.execute(f)
-			if err != nil {
-				t.throw(err)
-			}
-			t.ret = v
-			return
-		}
-		// The frame was made for the stack form's slots; the register form
-		// has a few more of its own.
-		base := f.base - int(c.locals)
-		if top := base + int(c.numRegs); top > r.stackTop {
-			if top > len(r.stack) {
-				t.throw(r.throwRangeError("maximum call stack size exceeded"))
-			}
-			r.stackTop = top
-			if top > r.stackHigh {
-				r.stackHigh = top
-			}
-		}
-		v, err := r.runReg(f, c, 0)
-		if err == errTailCall {
-			r.treeTail = true
-			return
-		}
-		if err != nil {
-			t.throw(err)
-		}
-		t.ret = v
-	}
-}
-
-func regNext(*tctx) int { return -1 }
-
-// regEnterFrame runs the frame f, which runFD or callTree made for the stack
-// form, as register code of the form's own layout: its window is made at the
-// top of the stack, the function, this and the arguments copied in.
-func (r *Runtime) regEnterFrame(f *frame, c *regCode) (Value, error) {
-	if regReportOn {
-		regNoteCross(regCrossEnter, c.fn, "")
-	}
-	base := r.stackTop
-	top := base + int(c.numRegs)
-	if top > len(r.stack) {
-		return Undefined, r.throwRangeError("maximum call stack size exceeded")
-	}
-	r.stackTop = top
-	if top > r.stackHigh {
-		r.stackHigh = top
-	}
-	w := r.stack[base:top:top]
-	w[0] = Undefined
-	w[1] = f.this
-	if f.callee != nil {
-		w[0] = Obj(f.callee)
-		// An arrow's this is the one it captured, whichever way it is
-		// called (regPlan).
-		if fd := f.callee.fn(); fd != nil && fd.arrow {
-			w[1] = fd.extra.lexThis
-		}
-	}
-	p := int(c.params)
-	m := min(p, len(f.args))
-	for i, a := range f.args[:m] {
-		w[2+i] = a
-	}
-	for i := 2 + m; i < 2+p+int(c.inits); i++ {
-		w[i] = Undefined
-	}
-	saved, savedLocals := f.base, f.locals
-	f.base = base
-	if c.args {
-		f.locals = w[2 : 2+p : 2+p]
-	}
-	var v Value
-	var err error
-	if jitBuilt && f.cl.jitEnters && f.cl.reg == c && f.thisRef == nil && f.withScopes == nil && f.evalVars == nil {
-		// Its function's calls go to the JIT, as every call's of the
-		// register tier's does (jitRegEnter): a host's call of it too.
-		v, err = r.jitRegEnter(f, f.cl, c, base, 0)
-	} else {
-		v, err = r.runReg(f, c, 0)
-	}
-	f.base, f.locals = saved, savedLocals
-	return v, err
 }

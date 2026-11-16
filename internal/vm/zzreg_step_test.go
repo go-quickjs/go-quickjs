@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regStepSrc runs the step-and-branches (zzreg_zztable_step.go) on their
@@ -69,13 +68,11 @@ out[0] === out[1] && out[1] === out[2] ? out[0] : out.join(" | ")
 
 const regStepWant = `0/0 0/1 1/2 45/10 0@0 1@1 4@4 5@5 0@0 1@63 4@252 0@0 1@-63 4@-56 0@-1 1@-1 5@-1 1@-1 1@0 5@0 0@0 1@1 4@4 6@6 0 4 11@9007199254740992 5@2147483650,4@-2147483650 3@3.5,2@2.25 1@0,1@1,1@-1 0@NaN,0,NaN 7@6,3@Infinity 6@6 5@5 0,02,022@"0222" "9",7,5,3,1 2,1,0@-1 0,"2",4n,5n@6n 11@3n0n-1n 5@3n0n TypeError@0n 2/2@3 [object Object],11,21,31/2 [object Object],13,6/2 RangeErrorv2@object2 TypeError1 0,1,2,0,21,3 3,3,3 44999850000,300000,100000 3600`
 
-// TestRegStepAndBranch runs regStepSrc on the old tiers and as register
-// code, by the Go table and natively: Node's answers, and every kind of
-// step-and-branch in the code.
+// TestRegStepAndBranch runs regStepSrc as register code, by the Go table
+// and natively: Node's answers, and every kind of step-and-branch in the
+// code.
 func TestRegStepAndBranch(t *testing.T) {
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, regStepSrc)
-	compiler.SetRegisterForm(bytecode.RegDefault())
 	kinds := map[bytecode.ROp]int{}
 	var walk func(f *bytecode.Function)
 	walk = func(f *bytecode.Function) {
@@ -109,7 +106,7 @@ func TestRegStepAndBranch(t *testing.T) {
 // TestRegStepThrowPosition pins where a step-and-branch's throws are
 // placed: a valueOf that throws in the step is the step's, i++, and a
 // comparison's throw is the partner's, the test i < n, each at its line
-// and column, as the old tiers place them.
+// and column.
 func TestRegStepThrowPosition(t *testing.T) {
 	const src = `
 function inStep() {
@@ -147,14 +144,11 @@ func TestRegStepInterrupt(t *testing.T) {
 	const finite = `(function () { var c = 0; for (var i = 0; i < 200000; i++) c++; var j = 200000; while (--j >= 0) c++;
 		var a = 199999; (function () { for (var u = 0; u <= a; u++) c++ })(); return String(c) })()`
 	for _, native := range []bool{false, true} {
-		compiler.SetRegisterForm(true)
 		var fns []*bytecode.Function
 		for _, src := range forever {
 			fns = append(fns, compileForTest(t, src))
 		}
 		fin := compileForTest(t, finite)
-		compiler.SetRegisterForm(bytecode.RegDefault())
-		SetRegTier(true)
 		was := SetRegNative(native)
 		r := New(Config{})
 		for i, fn := range fns {
@@ -176,7 +170,6 @@ func TestRegStepInterrupt(t *testing.T) {
 			}
 		}
 		r.Close()
-		SetRegTier(bytecode.RegDefault())
 		SetRegNative(was)
 	}
 }

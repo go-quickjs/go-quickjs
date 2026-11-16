@@ -12,27 +12,26 @@ import (
 // jitGoCallPlain makes a call of Go native code makes (ssa.GoCall), at its
 // level's code's exit PC, where making it runs no script and cannot throw,
 // without the frames, the pins and the operands on the VM's stack that
-// jitGoCall and jitGoCallNested give a call that may -- as the tree
-// tier makes these without a frame (callRest's pureElemOp, setProp's fast
-// paths), and as V8's code calls a builtin that cannot call back without a
-// frame of JavaScript's: a leaf's call (jitPlainCall) -- a Map's or a
-// Set's get, has, set, add or delete, a WeakMap's or a WeakSet's
+// jitGoCall and jitRegGoCallNested give a call that may -- as the
+// interpreter makes these without a frame (callRest's pureElemOp, setProp's
+// fast paths), and as V8's code calls a builtin that cannot call back
+// without a frame of JavaScript's: a leaf's call (jitPlainCall) -- a Map's
+// or a Set's get, has, set, add or delete, a WeakMap's or a WeakSet's
 // operations, Date.now, String(x) of a primitive; a write a site's cache
-// answers with a data property or an addition along its
-// transition, or an ordinary object's store it does not answer, or of an
-// array's length (jitPlainWrite); a for...in's cursor of an object no
-// proxy's (jitForInPlain). Each had cost a
-// call of Go its frame, its operands copied and cleared, its code pinned
-// and its learning asked, more than what the existing tiers spend on the
-// whole operation: microbench's map_set_int, map_set_string and
-// array_length_decr ran slower with the JIT than without. It writes the
-// result to the call's keep cell and reports whether it made the call;
-// what it does not make it leaves to them, untouched.
+// answers with a data property or an addition along its transition, or an
+// ordinary object's store it does not answer, or of an array's length
+// (jitPlainWrite); a for...in's cursor of an object no proxy's
+// (jitForInPlain). Each had cost a call of Go its frame, its operands copied
+// and cleared, its code pinned and its learning asked, more than what the
+// interpreter spends on the whole operation: microbench's map_set_int,
+// map_set_string and array_length_decr ran slower with the JIT than without.
+// It writes the result to the call's keep cell and reports whether it made
+// the call; what it does not make it leaves to them, untouched.
 //
 // It counts no call of Go (ssaStats' goCalls): what such a call costs is
 // a native operation's, which the code's profit (jitSSAProfit) counts as
 // its work. None of these calls is one the JIT learns a native form of at
-// its call of Go (jitCallSeen): push of one value and pop, Math.random and
+// its call of Go (jitRegCallSeen): push of one value and pop, Math.random and
 // the searches are not taken here.
 func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	// Asked first, of the operation's kind and its function's identity
@@ -87,20 +86,11 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 			v = Undefined
 			break
 		}
-		var cl *closure
-		switch ctx.Live {
-		case 0:
-			if idx >= len(s.goRuns) || s.goRuns[idx].f == nil {
-				return false
-			}
-			cl = s.goRuns[idx].f.cl
-		case abi.LiveCall:
-			cl = (*closure)(ctx.Closure)
+		if ctx.Live != abi.LiveCall || jitGoInline(ctx) {
+			// A run's own frame, or an inlined callee's: none kept.
+			return false
 		}
-		pc := int(ctx.ExitPC)
-		if st := jitGoCallState(ctx); st != nil && st.Inline != 0 {
-			cl, pc = r.jitGoInlined(ctx, cl, st.Inline), int(st.InlinePC)
-		}
+		cl, pc := (*closure)(ctx.Closure), int(ctx.ExitPC)
 		if cl == nil || !jitGoPropertyAt(cl.fn, pc, in) || !r.jitPlainWrite(cl, cl.fn.Code[pc], jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
 			return false
 		}
@@ -111,7 +101,7 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 			return false
 		}
 		if st := jitGoCallState(ctx); st == nil || st.Inline == 0 {
-			r.jitLeafSeen(ctx, in)
+			r.jitLeafSeen(ctx)
 		}
 	default:
 		return false
@@ -137,31 +127,10 @@ func jitGoInline(ctx *abi.Context) bool {
 	return st != nil && st.Inline != 0
 }
 
-// jitGoInlined is the closure at addr, an inlined callee's, among those
-// the code making the call of Go in ctx inlines: the run's code's, or, for
-// level's closure cl, a native callee's -- or nil.
-func (r *Runtime) jitGoInlined(ctx *abi.Context, cl *closure, addr uintptr) *closure {
-	var inlined []*closure
-	switch s, idx := r.jit, int(ctx.Level); {
-	case ctx.Live == 0 && idx < len(s.goRuns):
-		inlined = s.goRuns[idx].inlined
-	case ctx.Live == abi.LiveCall && cl != nil:
-		if e := r.jitEntryOf(cl); e != nil {
-			inlined = e.ssaInlined
-		}
-	}
-	for _, x := range inlined {
-		if uintptr(unsafe.Pointer(x)) == addr {
-			return x
-		}
-	}
-	return nil
-}
-
 // jitPlainCall is the result of the call of a built-in among its operands
 // (abi.GoCallMethod's receiver, the function, the arguments; a plain
 // call's the function and the arguments) where it runs nothing and throws
-// nothing: a leaf's (jitLeafOp), applied as every tier applies it without
+// nothing: a leaf's (jitLeafOp), applied as the interpreter applies it without
 // a frame (pureElemOp) -- a collection's lookup, addition or deletion on
 // its own kind of collection, a weak one's, Date.now, String(x) of a
 // primitive, hasOwnProperty, a push of other than one value, whose native
@@ -227,7 +196,7 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 // jitLeafOp reports whether native code's call of a built-in of frameless
 // application op (elemOp) is made without a frame (jitGoCallPlain): any
 // but those whose native forms the JIT learns at the calls of Go jitGoCall
-// makes (jitCallSeen) -- push and pop, Math.random, a string's charCodeAt,
+// makes (jitRegCallSeen) -- push and pop, Math.random, a string's charCodeAt,
 // its one character's substring, slice, substr and charAt, its searches,
 // String.fromCharCode, parseInt of a number, and an array's searches --
 // which, made without a frame, it would never learn -- and RegExp's exec
@@ -251,7 +220,7 @@ func jitLeafOp(op uint8) bool {
 // proxy, whose traps would run, or a module namespace, whose bindings may
 // be uninitialized. React copies each element's props in a for...in,
 // whose start, made with the frames of the levels native code called it
-// from (jitGoCallNested), was the commonest call of Go in rendering the
+// from (jitRegGoCallNested), was the commonest call of Go in rendering the
 // SSR benchmark's page. It writes the cursor to the call's keep cell and
 // reports whether it made it.
 func (r *Runtime) jitForInPlain(ctx *abi.Context) bool {
@@ -450,60 +419,13 @@ func (r *Runtime) jitLeafCall(ctx *abi.Context) bool {
 	return true
 }
 
-// jitLeafSeen notes, once a call (abi.GoCallState's LeafSeen), the call of
-// a leaf jitGoCallPlain has just made, at its function's PC, for its code's
-// next compile (jitFeedback.Leaf), which makes it a call of Go of its own
-// (ssa.GoLeaf): a call of the function the code runs, the run's frame's or
-// a native callee's, not one inlined in it.
-func (r *Runtime) jitLeafSeen(ctx *abi.Context, in bytecode.Instr) {
+// jitLeafSeen marks a call of a leaf jitGoCallPlain has just made seen
+// (abi.GoCallState's LeafSeen): register code learns its calls' leaves
+// from its sites' caches (jitRegFeedback's Leaf), not at its calls of Go.
+func (r *Runtime) jitLeafSeen(ctx *abi.Context) {
 	if ctx.GoLast == 0 {
 		return
 	}
 	st := (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast)))
-	if st.LeafSeen {
-		return
-	}
 	st.LeafSeen = true
-	s, idx := r.jit, int(ctx.Level)
-	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || r.jitRegCodeIn(ctx, idx) {
-		// Register code learns its calls' leaves from its sites' caches
-		// (jitRegFeedback's Leaf), not at its calls of Go by stack pc.
-		return
-	}
-	var cl *closure
-	switch ctx.Live {
-	case 0:
-		if idx >= len(s.goRuns) || s.goRuns[idx].f == nil {
-			return
-		}
-		cl = s.goRuns[idx].f.cl
-	case abi.LiveCall:
-		cl = (*closure)(ctx.Closure)
-	}
-	pc := int(ctx.ExitPC)
-	if cl == nil || pc >= len(cl.fn.Code) || cl.fn.Code[pc].Op != in.Op || cl.fn.Code[pc].A != in.A {
-		return
-	}
-	e := r.jit.entryFor(cl.fn)
-	first := 1
-	if in.Op == bytecode.OpCallMethod {
-		first = 2
-	}
-	callee := jitGoArg(ctx, first-1)
-	if e == nil || !callee.IsObject() {
-		return
-	}
-	o := callee.Object()
-	if o.fn() == nil || o.fn().elemOp == 0 {
-		// Function.prototype.call's of a leaf (jitPlainCall), which a
-		// leaf's call of Go of its own does not make.
-		return
-	}
-	for _, x := range jitTargets(e) {
-		if int(x.pc) == pc && x.leaf {
-			return
-		}
-	}
-	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, leaf: true})
-	e.inlinePending = true
 }

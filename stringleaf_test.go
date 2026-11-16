@@ -6,13 +6,14 @@ import (
 	"github.com/go-quickjs/go-quickjs"
 )
 
-// stringLeafSweep calls each of String's methods that every tier calls
-// without a frame where its check passes (a native leaf), and those it
-// leaves to the ordinary call, on receivers of every kind of string and
-// arguments of every kind of value -- numbers about every edge, strings,
-// booleans, undefined, null, a BigInt, a symbol, an object whose valueOf
-// and toString count their calls -- and digests each result or the error's
-// type, and the calls: its sweep() is Node's (v26.10.0) 47520:244910520:3840.
+// stringLeafSweep calls each of String's methods that the interpreter and
+// the JIT call without a frame where its check passes (a native leaf), and
+// those it leaves to the ordinary call, on receivers of every kind of
+// string and arguments of every kind of value -- numbers about every edge,
+// strings, booleans, undefined, null, a BigInt, a symbol, an object whose
+// valueOf and toString count their calls -- and digests each result or the
+// error's type, and the calls: its sweep() is Node's (v26.10.0)
+// 47520:244910520:3840.
 const stringLeafSweep = `
 var calls = 0;
 var obj = { valueOf() { calls++; return 2 }, toString() { calls++; return "o" } };
@@ -49,9 +50,9 @@ function sweep() {
 `
 
 // TestStringLeaves pins that String's methods, called without a frame where
-// they run no script (ztree_aleaf.go), answer as the ordinary call does and
-// as Node does, in the interpreter and the tree tier, which a sweep run
-// three times takes to; the JIT's is internal/vm's TestJITStringLeaves.
+// they run no script (zvreg_aleaf.go), answer as the ordinary call does and
+// as Node does, in the interpreter; the JIT's is internal/vm's
+// TestJITStringLeaves.
 func TestStringLeaves(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()

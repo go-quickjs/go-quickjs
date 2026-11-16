@@ -49,39 +49,20 @@ func jitRegEntryNamedForTest(r *Runtime, name string) *jitRegEntry {
 // runtimes run register code, its register code's state that outlives its
 // compiles (jitRegEntry's life). nil where it has none.
 func jitCodeEntryNamedForTest(r *Runtime, name string) *jitEntry {
-	if regJITForTest() {
-		if e := jitRegEntryNamedForTest(r, name); e != nil {
-			return e.life
-		}
-		return nil
+	if e := jitRegEntryNamedForTest(r, name); e != nil {
+		return e.life
 	}
-	e := jitCallbackEntry(r, name)
-	if e == nil || e.ssa == nil {
-		return nil
-	}
-	return e
+	return nil
 }
 
 // jitInlinedOfForTest are the closures of the callees cl's code inlines,
 // or that its compile asked to inline: its stack form's entry's
 // ssaInlined, its register code's feedback's inlined (jitRegPlace's keep).
 func jitInlinedOfForTest(r *Runtime, cl *closure) []*closure {
-	if jitRegCodeOfForTest(r, cl) {
-		if e := jitRegEntryOfForTest(r, cl); e != nil && e.keep != nil {
-			return e.keep.inlined
-		}
-		return nil
-	}
-	if e := r.jit.hint(cl); e != nil {
-		return e.ssaInlined
+	if e := jitRegEntryOfForTest(r, cl); e != nil && e.keep != nil {
+		return e.keep.inlined
 	}
 	return nil
-}
-
-// jitRegCodeOfForTest is jitRegCodeForTest of a closure: cl runs register
-// code, which r's JIT compiles.
-func jitRegCodeOfForTest(r *Runtime, cl *closure) bool {
-	return r.regOn() && cl != nil && cl.reg != nil
 }
 
 // jitCalledForTest is what the code of a function named name, any
@@ -91,18 +72,11 @@ func jitRegCodeOfForTest(r *Runtime, cl *closure) bool {
 // no code. Its stack form's entry keeps them, its register code's feedback
 // (jitRegPlace's keep).
 func jitCalledForTest(r *Runtime, name string) (called, callbacks, unmade int, ok bool) {
-	if regJITForTest() {
-		e := jitRegEntryNamedForTest(r, name)
-		if e == nil || e.keep == nil {
-			return 0, 0, 0, false
-		}
-		return e.keep.called, e.keep.callbacks, e.keep.unmade, true
-	}
-	e := jitCallbackEntry(r, name)
-	if e == nil || e.ssa == nil {
+	e := jitRegEntryNamedForTest(r, name)
+	if e == nil || e.keep == nil {
 		return 0, 0, 0, false
 	}
-	return e.ssaCalled, e.ssaCallbacks, e.ssaUnmade, true
+	return e.keep.called, e.keep.callbacks, e.keep.unmade, true
 }
 
 // jitBuiltFacts is what a function's last compile's SSA said (ssa.Func):
@@ -177,18 +151,15 @@ func jitRegLowerKindForTest(r *Runtime, e *jitRegEntry) (jitLowerKind, bool) {
 // or its register code compiled from its lowering for that (jitLowerHot).
 func jitCompiledHotForTest(t *testing.T, r *Runtime, name string) bool {
 	t.Helper()
-	if jitRegCodeForTest(r, name) {
-		e := jitRegEntryForTest(r, name)
-		if e == nil {
-			return false
-		}
-		k, ok := jitRegLowerKindForTest(r, e)
-		if !ok {
-			t.Logf("%s: the lowering its code was compiled from is gone", name)
-		}
-		return ok && k == jitLowerHot
+	e := jitRegEntryForTest(r, name)
+	if e == nil {
+		return false
 	}
-	return jitNativeForTest(t, r, name).hot
+	k, ok := jitRegLowerKindForTest(r, e)
+	if !ok {
+		t.Logf("%s: the lowering its code was compiled from is gone", name)
+	}
+	return ok && k == jitLowerHot
 }
 
 // jitWorkForTest is the entry whose ssaStats count the work of the global
@@ -197,18 +168,11 @@ func jitCompiledHotForTest(t *testing.T, r *Runtime, name string) bool {
 // and the mean length of its loops a back edge is counted as (the stack
 // form's ssaLoop, the register code's loopMean); nil where it has no code.
 func jitWorkForTest(r *Runtime, name string) (*jitEntry, uint64) {
-	if jitRegCodeForTest(r, name) {
-		e := jitRegEntryForTest(r, name)
-		if e == nil || e.life == nil {
-			return nil, 0
-		}
-		return e.life, uint64(e.loopMean)
-	}
-	e := r.jit.cache[r.jitKeyOf(jitGlobalClosureForTest(r, name).fn)]
-	if e == nil || e.ssa == nil {
+	e := jitRegEntryForTest(r, name)
+	if e == nil || e.life == nil {
 		return nil, 0
 	}
-	return e, uint64(e.ssaLoop)
+	return e.life, uint64(e.loopMean)
 }
 
 // jitNamedLinkForTest is the global function name's code's state and the link
@@ -226,22 +190,15 @@ func jitNamedLinkForTest(t *testing.T, r *Runtime, name string) (e *jitEntry, li
 // jitLinkedOfForTest is jitNamedLinkForTest of closure cl, which name names.
 func jitLinkedOfForTest(t *testing.T, r *Runtime, cl *closure, name string) (e *jitEntry, link *jitLink, callee bool) {
 	t.Helper()
-	if jitRegCodeOfForTest(r, cl) {
-		re := jitRegEntryOfForTest(r, cl)
-		if re == nil || re.life == nil {
-			t.Fatalf("%s has no code: %+v", name, re)
-		}
-		link = r.jit.regLinks[re.key]
-		if link == nil {
-			t.Fatalf("%s has no link: %+v", name, re)
-		}
-		return re.life, link, re.callee
+	re := jitRegEntryOfForTest(r, cl)
+	if re == nil || re.life == nil {
+		t.Fatalf("%s has no code: %+v", name, re)
 	}
-	e = r.jit.entryFor(cl.fn)
-	if e == nil || e.ssa == nil || e.link == nil {
-		t.Fatalf("%s has no code: %+v", name, e)
+	link = r.jit.regLinks[re.key]
+	if link == nil {
+		t.Fatalf("%s has no link: %+v", name, re)
 	}
-	return e, e.link, e.ssaCallee
+	return re.life, link, re.callee
 }
 
 // jitInlinedAtForTest is, of the code of a function named name, any
@@ -250,19 +207,12 @@ func jitLinkedOfForTest(t *testing.T, r *Runtime, cl *closure, name string) (e *
 // compile, which built recorded) and how many of the closures it makes it
 // only calls (jitCalledForTest); ok false where it has no code.
 func jitInlinedAtForTest(r *Runtime, built *jitBuiltForTest, name string) (inlinedAt, called int, ok bool) {
-	if regJITForTest() {
-		e := jitRegEntryNamedForTest(r, name)
-		if e == nil {
-			return 0, 0, false
-		}
-		x, ok := built.of(e.fnForTest())
-		return x.inlinedAt, e.keep.called, ok
-	}
-	e := jitCallbackEntry(r, name)
-	if e == nil || e.ssa == nil {
+	e := jitRegEntryNamedForTest(r, name)
+	if e == nil {
 		return 0, 0, false
 	}
-	return len(e.ssaInlinedAt), e.ssaCalled, true
+	x, ok := built.of(e.fnForTest())
+	return x.inlinedAt, e.keep.called, ok
 }
 
 // jitBuiltIfRegForTest records the compiles' SSA facts where runtimes run
@@ -272,11 +222,7 @@ func jitInlinedAtForTest(r *Runtime, built *jitBuiltForTest, name string) (inlin
 // parallel would share.
 func jitBuiltIfRegForTest(t *testing.T) *jitBuiltForTest {
 	t.Helper()
-	if regJITForTest() {
-		return jitRecordBuiltForTest(t)
-	}
-	t.Parallel()
-	return nil
+	return jitRecordBuiltForTest(t)
 }
 
 // jitLearnedForTest is what the global function name's code learned, nil
@@ -288,10 +234,7 @@ func jitLearnedForTest(r *Runtime, name string) *jitEntry {
 		return nil
 	}
 	cl := jitGlobalClosureForTest(r, name)
-	if jitRegCodeOfForTest(r, cl) {
-		return r.jit.regLearned[r.jitRegKeyOf(cl)]
-	}
-	return r.jit.entryFor(cl.fn)
+	return r.jit.regLearned[r.jitRegKeyOf(cl)]
 }
 
 // jitStatsOfForTest is the state whose ssaStats count what cl's code did
@@ -300,18 +243,11 @@ func jitLearnedForTest(r *Runtime, name string) *jitEntry {
 // the same while the cache keeps it: the stack form's entry, the register
 // cache's. nil, nil where cl has no code.
 func jitStatsOfForTest(r *Runtime, cl *closure) (*jitEntry, any) {
-	if jitRegCodeOfForTest(r, cl) {
-		e := jitRegEntryOfForTest(r, cl)
-		if e == nil || e.life == nil {
-			return nil, nil
-		}
-		return e.life, e
-	}
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil {
+	e := jitRegEntryOfForTest(r, cl)
+	if e == nil || e.life == nil {
 		return nil, nil
 	}
-	return e, e
+	return e.life, e
 }
 
 // jitEntryLinkOfForTest is what cl's code learned and the link native callers
@@ -322,15 +258,8 @@ func jitEntryLinkOfForTest(r *Runtime, cl *closure) (*jitEntry, *jitLink) {
 	if r.jit == nil {
 		return nil, nil
 	}
-	if jitRegCodeOfForTest(r, cl) {
-		key := r.jitRegKeyOf(cl)
-		return r.jit.regLearned[key], r.jit.regLinks[key]
-	}
-	e := r.jit.entryFor(cl.fn)
-	if e == nil {
-		return nil, nil
-	}
-	return e, e.link
+	key := r.jitRegKeyOf(cl)
+	return r.jit.regLearned[key], r.jit.regLinks[key]
 }
 
 // jitCodeOfForTest is cl's code's state, nil where cl has no code: its
@@ -338,18 +267,11 @@ func jitEntryLinkOfForTest(r *Runtime, cl *closure) (*jitEntry, *jitLink) {
 // register code's state that outlives its compiles, with the register link
 // (jitState's regLinks) and the register code's invalid.
 func jitCodeOfForTest(r *Runtime, cl *closure) (e *jitEntry, link *jitLink, invalid bool) {
-	if jitRegCodeOfForTest(r, cl) {
-		re := jitRegEntryOfForTest(r, cl)
-		if re == nil || re.life == nil {
-			return nil, nil, false
-		}
-		return re.life, r.jit.regLinks[re.key], re.invalid
-	}
-	e = r.jit.cache[r.jitKeyOf(cl.fn)]
-	if e == nil || e.ssa == nil {
+	re := jitRegEntryOfForTest(r, cl)
+	if re == nil || re.life == nil {
 		return nil, nil, false
 	}
-	return e, e.link, e.invalid
+	return re.life, r.jit.regLinks[re.key], re.invalid
 }
 
 // jitNamedStateForTest is a function's state in r's JIT, found by its name
@@ -380,14 +302,7 @@ func jitNamedOfForTest(r *Runtime, built *jitBuiltForTest, name string) jitNamed
 	if r.jit == nil {
 		return jitNamedStateForTest{}
 	}
-	if !regJITForTest() {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				return jitNamedStateForTest{e: x, link: x.link, code: x.ssa != nil, loops: x.loops, inlined: x.ssaInlined}
-			}
-		}
-		return jitNamedStateForTest{}
-	}
+
 	var key jitKey
 	found := false
 	named := func(k jitKey) bool {
@@ -449,9 +364,7 @@ func jitRegMethodSiteForTest(t *testing.T, fn *bytecode.Function) uint32 {
 // form's native call runs the callee's own code: what the callee's code
 // does -- its work, its exits, its calls of Go -- that caller's does.
 func jitRunnerOfForTest(r *Runtime, cl *closure, callers ...*closure) *closure {
-	if !jitRegCodeOfForTest(r, cl) {
-		return cl
-	}
+
 	for _, c := range callers {
 		if slices.Contains(jitInlinedOfForTest(r, c), cl) {
 			return c

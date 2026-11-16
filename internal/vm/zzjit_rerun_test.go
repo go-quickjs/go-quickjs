@@ -26,31 +26,34 @@ func TestJITProgramRerunsKeepLayouts(t *testing.T) {
 	}
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	fn := compileForTest(t, rerunJITSource)
+	compared := 0
 	for run := 1; run <= 6; run++ {
 		if got := runProgramForTest(t, r, fn).Number(); got != 4506000 {
 			t.Fatalf("run %d: got %v", run, got)
 		}
 		cl := globalObject(r, "make").fn().closure
 		found := 0
-		entries := r.jit.cache
-		if regJITForTest() {
-			// Register code's literals, which its functions' states that
-			// outlive their compiles hold (jitRegFeedback's literalAt), by
-			// register pc.
-			entries = r.jit.regLearned
-		}
-		for _, e := range entries {
+		// Register code's literals, which its functions' states that
+		// outlive their compiles hold (jitRegFeedback's literalAt), by
+		// register pc.
+		for _, e := range r.jit.regLearned {
 			for i := range e.literals {
 				l := &e.literals[i]
 				if l.root == nil || l.fn != cl.fn {
 					continue
 				}
 				found++
-				site := cl.fn.Code[l.pc].B
-				if regJITForTest() {
-					site = uint32(cl.fn.RegCode().Code[l.pc].C())
+				site := uint32(cl.fn.RegCode().Code[l.pc].C())
+				// A run whose objects of the literal native code made,
+				// every one, leaves the interpreter's site unmade
+				// (siteRoot), which it takes the realm's root for once
+				// it makes one.
+				root := cl.ic[site].shape
+				if root == noShape {
+					continue
 				}
-				if root := cl.ic[site].shape; root != l.root {
+				compared++
+				if root != l.root {
 					t.Fatalf("run %d: native code makes objects of root %p, the site's is %p", run, l.root, root)
 				}
 			}
@@ -58,6 +61,9 @@ func TestJITProgramRerunsKeepLayouts(t *testing.T) {
 		if found == 0 {
 			t.Fatalf("run %d: no native code makes make's literal", run)
 		}
+	}
+	if compared == 0 {
+		t.Fatal("no run's interpreter made make's literal")
 	}
 }
 

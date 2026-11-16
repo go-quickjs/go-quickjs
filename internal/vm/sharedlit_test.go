@@ -18,53 +18,49 @@ func sharedElemsForTest(v Value) (bool, unsafe.Pointer) {
 	return o.flags&objSharedElems != 0, unsafe.Pointer(unsafe.SliceData(o.elemsOf()))
 }
 
-// TestSharedArrayLiteral pins that the tree tier makes the arrays of a
-// literal of constants over one storage of the constants, marked shared,
-// and that the interpreter, whose case of new_array is unchanged, makes each
-// its own. A literal with anything but constants, or none, has no site.
+// TestSharedArrayLiteral pins that register code makes the arrays of a
+// literal of constants over one storage of the constants, marked shared. A
+// literal with anything but constants, or none, has no site.
 func TestSharedArrayLiteral(t *testing.T) {
 	t.Parallel()
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, `
-		function lit() { return [1, 2.5, 'x', true, null, undefined, '', -3]; }
-		function notConst(x) { return [1, x]; }
-		function empty() { return []; }
-		[lit(), lit(), notConst(1), empty(), JSON.stringify(lit())]`))
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, `
+	function lit() { return [1, 2.5, 'x', true, null, undefined, '', -3]; }
+	function notConst(x) { return [1, x]; }
+	function empty() { return []; }
+	[lit(), lit(), notConst(1), empty(), JSON.stringify(lit())]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(i int) Value {
+		e, err := r.getIndexed(v, Int(i))
 		if err != nil {
 			t.Fatal(err)
 		}
-		get := func(i int) Value {
-			e, err := r.getIndexed(v, Int(i))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return e
-		}
-		s1, p1 := sharedElemsForTest(get(0))
-		s2, p2 := sharedElemsForTest(get(1))
-		if s1 != tree || s2 != tree || (p1 == p2) != tree {
-			t.Errorf("tree %v: literal arrays shared %v %v, one storage %v", tree, s1, s2, p1 == p2)
-		}
-		if s, _ := sharedElemsForTest(get(2)); s {
-			t.Errorf("tree %v: a literal of a variable shares its elements", tree)
-		}
-		if s, _ := sharedElemsForTest(get(3)); s {
-			t.Errorf("tree %v: an empty literal shares its elements", tree)
-		}
-		if got := get(4).String().Go(); got != `[1,2.5,"x",true,null,null,"",-3]` {
-			t.Errorf("tree %v: got %s", tree, got)
-		}
-		r.Close()
+		return e
 	}
+	s1, p1 := sharedElemsForTest(get(0))
+	s2, p2 := sharedElemsForTest(get(1))
+	if !s1 || !s2 || p1 != p2 {
+		t.Errorf("literal arrays shared %v %v, one storage %v", s1, s2, p1 == p2)
+	}
+	if s, _ := sharedElemsForTest(get(2)); s {
+		t.Errorf("a literal of a variable shares its elements")
+	}
+	if s, _ := sharedElemsForTest(get(3)); s {
+		t.Errorf("an empty literal shares its elements")
+	}
+	if got := get(4).String().Go(); got != `[1,2.5,"x",true,null,null,"",-3]` {
+		t.Errorf("got %s", got)
+	}
+	r.Close()
 }
 
 // TestSharedArrayLiteralWrites pins that every way a script can write an
-// array leaves a shared literal's other arrays as they were, and does to the
-// array written what it does to an array of its own: each write is run on
-// a shared array, with the tree tier, and on one of its own, in the
-// interpreter, and the two must agree. Each has a literal of its own, which
-// gives sharing up after a few copies.
+// array leaves a shared literal's other arrays as they were, and does to
+// the array written what it does to an array of its own: each write is run
+// on a shared array, and the literal's next arrays must be as they were.
+// Each has a literal of its own, which gives sharing up after a few copies.
 func TestSharedArrayLiteralWrites(t *testing.T) {
 	t.Parallel()
 	writes := []string{
@@ -174,32 +170,27 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 	}
 	for _, form := range []string{"function", "script", "interpreter"} {
 		for _, w := range writes {
-			var got [2]string
-			// Inside a function, which the tree tier builds, or as the script's
-			// own code, which runs in the interpreter, where its store tests
-			// the flag in executeAt's case.
+			// Inside a function, or as the script's own code.
 			run := `(function () { ` + w + ` })();`
 			switch form {
 			case "script":
 				run = w + `;`
 			case "interpreter":
-				// A function with a direct eval, which the tree tier does not
-				// build: its stores are executeAt's OpSetIndex.
+				// A function with a direct eval.
 				run = `(function () { ` + w + `; if (a.length < 0) eval(''); })();`
 			}
-			for k, tree := range []bool{true, false} {
-				r := newTreeTierForTest(tree, Config{})
-				v, err := r.Run(compileForTest(t, `
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, `
 			var lit = function () { return [1, 2.5, 'x', true, null, undefined, 'z']; };
 			var a = lit();
 			a`))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if s, _ := sharedElemsForTest(v); s != tree {
-					t.Fatalf("tree %v: the array written is shared: %v", tree, s)
-				}
-				v, err = r.Run(compileForTest(t, `
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s, _ := sharedElemsForTest(v); !s {
+				t.Fatalf("the array written is not shared: %v", s)
+			}
+			v, err = r.Run(compileForTest(t, `
 			var thrown = '';
 			try { `+run+` } catch (e) { thrown = e.name; }
 			// A write after it, which finds the array's flag as the write left
@@ -209,18 +200,14 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 			var vals = [];
 			for (var i = 0; i < a.length; i++) vals.push(a[i] === a ? 'self' : typeof a[i] === 'object' && a[i] !== null ? 'obj' : String(a[i]));
 			[thrown, a.length, keys, vals.join(), Object.isFrozen(a), JSON.stringify(lit()), JSON.stringify(lit())].join(' | ')`))
-				if err != nil {
-					t.Fatalf("%s: %v", w, err)
-				}
-				got[k] = v.String().Go()
-				r.Close()
+			if err != nil {
+				t.Fatalf("%s: %v", w, err)
 			}
-			if got[0] != got[1] {
-				t.Errorf("%s, %s:\n shared: %s\n    own: %s", form, w, got[0], got[1])
-			}
+			got := v.String().Go()
+			r.Close()
 			const pristine = `[1,2.5,"x",true,null,null,"z"] | [1,2.5,"x",true,null,null,"z"]`
-			if len(got[0]) < len(pristine) || got[0][len(got[0])-len(pristine):] != pristine {
-				t.Errorf("%s, %s: the literal's next arrays changed: %s", form, w, got[0])
+			if len(got) < len(pristine) || got[len(got)-len(pristine):] != pristine {
+				t.Errorf("%s, %s: the literal's next arrays changed: %s", form, w, got)
 			}
 		}
 	}
@@ -346,8 +333,7 @@ func (r *Runtime) runOrFatalForTest(t *testing.T, src string) Value {
 // doubles, int32's bounds, long strings. Negations (-0 among them), NaN and
 // Infinity, which are not constants' pushes, holes, BigInts and nested
 // literals make no site of the literal holding them, while a nested
-// literal of constants is one of its own. Each answer is the same with the
-// tree tier, which shares, and without, in the interpreter.
+// literal of constants is one of its own.
 func TestSharedArrayLiteralConstants(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("long", 300)
@@ -373,30 +359,28 @@ func TestSharedArrayLiteralConstants(t *testing.T) {
 		`-0,number:NaN,number:Infinity,number:-1.5,number:-2147483648 | ` +
 		`1200:long,0:,2:é漢,7:tab	 | number:1,hole,number:3 | bigint:1,number:2 | [1:w,number:2],[number:3] | [number:1,number:2],[number:3] | [number:1,number:2],[number:3]`
 	sites := `[nums(), strs(), holes(), bigs(), nested(), nested()[0], negs()]`
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v:\n got %s\nwant %s", tree, got, want)
-		}
-		v, err = r.Run(compileForTest(t, sites))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, shared := range []bool{tree, tree, false, false, false, tree, false} {
-			e, err := r.getIndexed(v, Int(i))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if s, _ := sharedElemsForTest(e); s != shared {
-				t.Errorf("tree %v: site %d shared %v, want %v", tree, i, s, shared)
-			}
-		}
-		r.Close()
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+	v, err = r.Run(compileForTest(t, sites))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, shared := range []bool{true, true, false, false, false, true, false} {
+		e, err := r.getIndexed(v, Int(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s, _ := sharedElemsForTest(e); s != shared {
+			t.Errorf("site %d shared %v, want %v", i, s, shared)
+		}
+	}
+	r.Close()
 }
 
 // TestSharedArrayLiteralRuntimes pins that a literal's shared storage and

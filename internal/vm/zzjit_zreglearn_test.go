@@ -12,132 +12,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// regLearnSrc reads and writes properties of objects of two shapes: a
-// function compiled for the first deoptimizes at the second, and what its
-// code learned at its exits (jitRegDeoptSeen) has its next compile take
-// both, as the stack form's code does. Go calls the functions, so that
-// no caller's code inlines them.
-const regLearnSrc = `
-function A(x) { this.x = x; this.y = 1 }
-function B(x) { this.w = 0; this.x = x; this.y = 2 }
-function get(o, n) { var s = 0; for (var j = 0; j < n; j++) s += o.x + o.y; return s }
-function put(o, v, n) { for (var j = 0; j < n; j++) o.x = v + j; return o.x }
-var a = new A(1), b = new B(2)
-`
-
-// regLearnRun calls get and put of regLearnSrc in r: k times with a, then
-// k times with a and b in turn, twice.
-func regLearnRun(r *Runtime, k int) string {
-	global := func(name string) Value { v, _ := r.GetProp(Obj(r.Global()), r.Intern(name)); return v }
-	get, put, a, b := global("get"), global("put"), global("a"), global("b")
-	s := 0.0
-	for round := range 3 {
-		for i := range k {
-			o := a
-			if round > 0 && i%2 != 0 {
-				o = b
-			}
-			v, err := r.Call(get, Undefined, []Value{o, Float(3)})
-			if err != nil {
-				return regNativeShow(r, v, err)
-			}
-			w, err := r.Call(put, Undefined, []Value{o, Float(float64(i)), Float(3)})
-			if err != nil {
-				return regNativeShow(r, w, err)
-			}
-			s += v.Number() + w.Number()
-		}
-	}
-	return regNativeShow(r, Float(s), nil)
-}
-
-// jitRegLearnPlain has r tier up as it does with no QJS_JIT_STRESS, which
-// the learning TestJITRegPolymorphicLearned compares is written for: each
-// form's code compiled once its sites' caches know the first shape, then
-// left at the second's. Under the stress each form's first code is
-// compiled at its first call, a scan before any cache knew a shape, and
-// what each then learns depends on when its compiles happen -- in the
-// background or at once, at which check installed -- not on what its
-// exits teach it.
-func jitRegLearnPlain(r *Runtime) {
-	r.jitStress = jitStressConfig{}
-	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
-	r.interruptCounter = interruptCheckInterval
-}
-
-// regLearnSite is the Property answer for the first instruction of op in
-// the program the code of the global function name of r's was compiled
-// from: of its register code where reg says, of its stack code otherwise.
-func regLearnSite(t *testing.T, r *Runtime, name string, op ir.Op, reg bool) ssa.PropertySite {
-	t.Helper()
-	v, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
-	cl := v.Object().fn().closure
-	var p *ir.Program
-	var fb interface {
-		Property(int) (ssa.PropertySite, bool)
-	}
-	if reg {
-		e := r.jitRegFor(cl, cl.reg)
-		if e == nil || e.p == nil {
-			t.Fatalf("%s: not compiled: %+v", name, e)
-		}
-		p, fb = e.p, r.jitRegFeedbackFor(cl, e.p)
-	} else {
-		se := r.jit.cache[r.jitKeyOf(cl.fn)]
-		if se == nil || se.ssaProg == nil {
-			t.Fatalf("%s: not compiled", name)
-		}
-		p, fb = se.ssaProg, &jitFeedback{r: r, fn: cl.fn, cl: cl, e: se, prog: se.ssaProg}
-	}
-	for pc, in := range p.Code {
-		if in.Op == op {
-			site, _ := fb.Property(pc)
-			return site
-		}
-	}
-	t.Fatalf("%s: no instruction of op %d", name, op)
-	return ssa.PropertySite{}
-}
-
-// TestJITRegPolymorphicLearned: a read's and a write's sites of register
-// code compiled for one shape, deoptimized at a second, compiled again as
-// the stack form's code is, from what each learned at its exits.
-func TestJITRegPolymorphicLearned(t *testing.T) {
-	rts := regNativeRuntimes(t, regLearnSrc)
-	jitRegLearnPlain(rts[0])
-	var got [2]string
-	for i, r := range rts {
-		got[i] = regLearnRun(r, 3000)
-	}
-	if got[0] != got[1] {
-		t.Fatalf("with the JIT %q, without %q", got[0], got[1])
-	}
-	r := rts[0]
-	if st := r.RegNativeStats(); st.Entries == 0 {
-		t.Fatalf("no native code entered")
-	}
-	// The stack form's code, run alike.
-	SetRegTier(false)
-	SetJITRegTier(false)
-	sr := New(Config{JIT: true})
-	t.Cleanup(sr.Close)
-	jitRegLearnPlain(sr)
-	if _, err := sr.Run(compileForTest(t, regLearnSrc)); err != nil {
-		t.Fatal(err)
-	}
-	regLearnRun(sr, 3000)
-	for _, c := range []struct {
-		name string
-		op   ir.Op
-	}{{"get", ir.PropertyRead}, {"put", ir.PropertyWrite}} {
-		reg, stack := regLearnSite(t, r, c.name, c.op, true), regLearnSite(t, sr, c.name, c.op, false)
-		t.Logf("%s: register %+v, stack %+v", c.name, reg, stack)
-		if reg.Shape == 0 || len(reg.Cases) != len(stack.Cases) || reg.Megamorphic != stack.Megamorphic {
-			t.Errorf("%s: register %+v, stack %+v", c.name, reg, stack)
-		}
-	}
-}
-
 // regLeafSrc calls leaves -- built-ins native code calls without a frame
 // (jitLeafOp) -- from register code: those native code makes itself
 // (ssa.LeafKind), a string's codePointAt and at, Number.isNaN, and one Go
@@ -191,10 +65,10 @@ func TestJITRegLeaf(t *testing.T) {
 		name string
 		want int
 	}{{"leaves", 4}, {"rx", 2}} {
-		// rx's exec, its array kept in a local the interpreter may make
-		// it again in (RMarkReuse), and its test, marked dead -- only its
-		// truth is read -- both leaves, as the stack form's code calls
-		// them: the leaf makes the array anew, and the whole answer.
+		// rx's exec, its array kept in a local the interpreter may make it
+		// again in (RMarkReuse), and its test, marked dead -- only its
+		// truth is read -- both leaves: the leaf makes the array anew, and
+		// the whole answer.
 		v, _ := r.GetProp(Obj(r.Global()), r.Intern(c.name))
 		cl := v.Object().fn().closure
 		e := r.jitRegFor(cl, cl.reg)
@@ -446,11 +320,11 @@ func TestJITRegKinds(t *testing.T) {
 
 // regReplaceSrc replaces by RegExps held in bindings, as the V8 suite's
 // RegExp does: a captured binding's global RegExp and a global's, a string
-// template and an empty one, one call's result unused -- leaves, as the
-// stack form's code calls them (jitReplaceLeafSeen) -- a literal's, which
-// the call makes natively from the literal's pool and the leaf gives back
-// (RMarkLitArg, jitLeafForm's giveArg), and a function's replacement, which
-// the leaf's check refuses each call of, Go then making it.
+// template and an empty one, one call's result unused -- leaves -- a
+// literal's, which the call makes natively from the literal's pool and the
+// leaf gives back (RMarkLitArg, jitLeafForm's giveArg), and a function's
+// replacement, which the leaf's check refuses each call of, Go then making
+// it.
 const regReplaceSrc = `
 var g = /[aeiou]/;
 var replaces = (function () {
@@ -515,12 +389,12 @@ func TestJITRegReplaceLeaf(t *testing.T) {
 
 // regSharedSrc makes array literals of constants, whose arrays share them
 // until one is written (new_array_k): read, written, grown, and kept, in a
-// loop, as the stack form's code makes them natively from a pool of the
-// arrays Go makes (ssa's LiteralSite's Shared). Its calls of Go fill every
-// register native code may keep with junk (jitClobberCallsForTest): a
-// literal whose pool Go fills is made again from its start, and its
-// elements -- a string's words in registers -- had been read after the
-// call as Go's code left them, a crash where Go 1.24's had used them.
+// loop, made natively from a pool of the arrays Go makes (ssa's
+// LiteralSite's Shared). Its calls of Go fill every register native code
+// may keep with junk (jitClobberCallsForTest): a literal whose pool Go
+// fills is made again from its start, and its elements -- a string's words
+// in registers -- had been read after the call as Go's code left them, a
+// crash where Go 1.24's had used them.
 const regSharedSrc = `
 var kept = [];
 function shared(n) {
@@ -588,4 +462,110 @@ func TestJITRegSharedLiteral(t *testing.T) {
 			}
 		})
 	}
+}
+
+// regLearnSite is the Property answer for the first instruction of op in
+// the program the code of the global function name of r's was compiled
+// from: of its register code where reg says, of its stack code otherwise.
+func regLearnSite(t *testing.T, r *Runtime, name string, op ir.Op) ssa.PropertySite {
+	t.Helper()
+	v, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
+	cl := v.Object().fn().closure
+	e := r.jitRegFor(cl, cl.reg)
+	if e == nil || e.p == nil {
+		t.Fatalf("%s: not compiled: %+v", name, e)
+	}
+	p, fb := e.p, r.jitRegFeedbackFor(cl, e.p)
+	for pc, in := range p.Code {
+		if in.Op == op {
+			site, _ := fb.Property(pc)
+			return site
+		}
+	}
+	t.Fatalf("%s: no instruction of op %d", name, op)
+	return ssa.PropertySite{}
+}
+
+// TestJITRegPolymorphicLearned: a read's and a write's sites of register
+// code compiled for one shape, deoptimized at a second, compiled again as
+// the stack form's code is, from what each learned at its exits.
+func TestJITRegPolymorphicLearned(t *testing.T) {
+	rts := regNativeRuntimes(t, regLearnSrc)
+	jitRegLearnPlain(rts[0])
+	var got [2]string
+	for i, r := range rts {
+		got[i] = regLearnRun(r, 3000)
+	}
+	if got[0] != got[1] {
+		t.Fatalf("with the JIT %q, without %q", got[0], got[1])
+	}
+	r := rts[0]
+	if st := r.RegNativeStats(); st.Entries == 0 {
+		t.Fatalf("no native code entered")
+	}
+	// What the stack form's code learned of both sites, before it was
+	// removed: the second shape's case beside the first, each a slot of
+	// the object's own, and not megamorphic.
+	for _, c := range []struct {
+		name string
+		op   ir.Op
+	}{{"get", ir.PropertyRead}, {"put", ir.PropertyWrite}} {
+		reg := regLearnSite(t, r, c.name, c.op)
+		if reg.Shape == 0 || reg.Index != 1 || len(reg.Cases) != 1 || reg.Cases[0].Shape == 0 || reg.Cases[0].Index != 0 || reg.Megamorphic {
+			t.Errorf("%s: register %+v, want a shape at index 1, one more case at index 0, not megamorphic", c.name, reg)
+		}
+	}
+}
+
+// regLearnSrc reads and writes properties of objects of two shapes: a
+// function compiled for the first deoptimizes at the second, and what its
+// code learned at its exits (jitRegDeoptSeen) has its next compile take
+// both, as the stack form's code does. Go calls the functions, so that
+// no caller's code inlines them.
+const regLearnSrc = `
+function A(x) { this.x = x; this.y = 1 }
+function B(x) { this.w = 0; this.x = x; this.y = 2 }
+function get(o, n) { var s = 0; for (var j = 0; j < n; j++) s += o.x + o.y; return s }
+function put(o, v, n) { for (var j = 0; j < n; j++) o.x = v + j; return o.x }
+var a = new A(1), b = new B(2)
+`
+
+// regLearnRun calls get and put of regLearnSrc in r: k times with a, then
+// k times with a and b in turn, twice.
+func regLearnRun(r *Runtime, k int) string {
+	global := func(name string) Value { v, _ := r.GetProp(Obj(r.Global()), r.Intern(name)); return v }
+	get, put, a, b := global("get"), global("put"), global("a"), global("b")
+	s := 0.0
+	for round := range 3 {
+		for i := range k {
+			o := a
+			if round > 0 && i%2 != 0 {
+				o = b
+			}
+			v, err := r.Call(get, Undefined, []Value{o, Float(3)})
+			if err != nil {
+				return regNativeShow(r, v, err)
+			}
+			w, err := r.Call(put, Undefined, []Value{o, Float(float64(i)), Float(3)})
+			if err != nil {
+				return regNativeShow(r, w, err)
+			}
+			s += v.Number() + w.Number()
+		}
+	}
+	return regNativeShow(r, Float(s), nil)
+}
+
+// jitRegLearnPlain has r tier up as it does with no QJS_JIT_STRESS, which
+// the learning TestJITRegPolymorphicLearned compares is written for: each
+// form's code compiled once its sites' caches know the first shape, then
+// left at the second's. Under the stress each form's first code is
+// compiled at its first call, a scan before any cache knew a shape, and
+// what each then learns depends on when its compiles happen -- in the
+// background or at once, at which check installed -- not on what its
+// exits teach it.
+func jitRegLearnPlain(r *Runtime) {
+	r.jitStress = jitStressConfig{}
+	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
+	r.interruptCounter = interruptCheckInterval
 }

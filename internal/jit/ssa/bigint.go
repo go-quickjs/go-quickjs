@@ -17,7 +17,7 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ir"
 // met BigInts at all; BigIntWide one's that met some from 2^63 to 2^64-1,
 // and none below -2^63, which the code makes as Uint64s; BigIntFailed
 // one's whose speculation failed in code compiled before (Feedback's
-// Generic, but for what the tree tier saw of BigInts on the heap).
+// Generic, but for what the interpreter saw of BigInts on the heap).
 type BigIntFeedback interface {
 	BigInt(pc int) bool
 	BigIntWide(pc int) bool
@@ -34,9 +34,10 @@ const (
 )
 
 // PureBodyFeedback is Feedback that knows its function is a pure body the
-// call path evaluates without its tree (the VM's pureCall), so that none of
-// its sites has the tree tier's marks or can have them. A pure body the VM
-// gives its tree is none: its sites are marked as any function's are.
+// call path evaluates without its register code (the VM's pureCall), so
+// that none of its sites has the interpreter's marks or can have them. A
+// pure body the VM gives its register code is none: its sites are marked
+// as any function's are.
 type PureBodyFeedback interface {
 	PureBody() bool
 }
@@ -179,7 +180,7 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	f := b.f
 	x, y := operand(in.Left), operand(in.Right)
 	if !fb.BigInt(pc) && !(b.pureBody() && (boxedBig(x) != nil || boxedBig(y) != nil)) {
-		// No BigInt met. In a pure body, whose sites the tree tier never
+		// No BigInt met. In a pure body, whose sites the interpreter never
 		// runs and never marks (the VM's pureCall) -- a callback such as
 		// (x) => x <= last -- an operand native code has unboxed already,
 		// a BigInt typed array's element (OpBigElemRead), is a BigInt
@@ -575,7 +576,7 @@ func (b *builder) bigOfCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type
 }
 
 // BigInt blocks a call of Go that makes a BigInt's operator may give back
-// once it has made its result (CallSite's Release), as the tree tier gives
+// once it has made its result (CallSite's Release), as the interpreter gives
 // back those of its fresh operands and of a local holding its values alone
 // (the VM's bigRelease): the left operand, the right one -- each an
 // operator's result that only the call takes -- and the value of the local
@@ -599,7 +600,8 @@ type BigIntRecycleFeedback interface {
 // bigRelease is what the call of Go that makes in, a BigInt's operator at
 // pc of the root, may give back (CallSite's Release), and the local's value
 // it passes for it, or nil: of a site that met BigInts (BigIntFeedback),
-// as the tree tier marks its operators (its freshPC and ownedPC).
+// as the register compiler marks its operators (bytecode.RArithFreshB,
+// RArithFreshC and RArithOwnA).
 func (b *builder) bigRelease(blk *Block, pc int, in ir.Instruction) (uint8, *Value) {
 	rf, ok := b.fb.(BigIntRecycleFeedback)
 	fb := b.bigFeedback()
@@ -757,8 +759,7 @@ func regWhole(p *ir.Program, pc int) bool {
 }
 
 // bigOwner is the local the instruction right after pc stores in's result
-// to, taking it off the stack, as the tree tier's ownedStore takes it: one
-// that checks nothing, whose guard's state would still have the value the
+// to, taking it off the stack: one that checks nothing, whose guard's state would still have the value the
 // local held, given back.
 func (b *builder) bigOwner(pc int, in ir.Instruction) (int, bool) {
 	p := b.p

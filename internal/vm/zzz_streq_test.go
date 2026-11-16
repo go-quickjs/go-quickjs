@@ -2,8 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // strEqTestSrc branches on === and !== of a local, a tree, an upvalue and a
@@ -32,30 +30,18 @@ s[0] + ' | ' + (s[0] === s[1] && s[1] === s[2])
 
 const strEqTestWant = "ab/ab//3,ab/ab//3,b/b/f/3,b/b/f/3,b/b/f/3,bc/bc/f/3,b/b/f/3,b/b/f/3,bd/bd/f/3,//ef/3,b/b/f/0,//ef/3,b/b/f/3,b/b/f/3,b/b/f/3,b/b/f/3,b/b/f/3,b/b/f/3 | true"
 
-// A strict equality branch with a string constant (strEqJump) answers as
+// A strict equality branch with a string constant answers as
 // the interpreter does, and as Node does. Each function has a local of its
-// own, so that it is run on its tree rather than by pureCall.
+// own, so that it is run as register code rather than by pureCall.
 func TestStrictEqualityWithStrings(t *testing.T) {
 	t.Parallel()
-	for _, c := range compileForTest(t, strEqTestSrc).Constants {
-		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
-			continue
-		}
-		if name := c.Fn.Name; len(name) == 1 {
-			if buildTree(c.Fn) == nil {
-				t.Errorf("%s is not built as a tree", name)
-			}
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, strEqTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, strEqTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != strEqTestWant {
-			t.Errorf("tree tier %v: got %s, want %s", tree, got, strEqTestWant)
-		}
+	if got := v.String().Go(); got != strEqTestWant {
+		t.Errorf("got %s, want %s", got, strEqTestWant)
 	}
 }

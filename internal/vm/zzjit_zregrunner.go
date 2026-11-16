@@ -13,12 +13,11 @@ import (
 )
 
 // The VM side of register code's exits, as the slot IR's evaluator runs a
-// program LowerReg made (docs/register-interpreter.md, Stage 3): what the
-// evaluator does not make -- a host operation, a guard that failed, a
-// Generic instruction's slow path -- the VM makes, the whole register
-// instruction run on the frame's real registers by the interpreter's own
-// handlers (regTable), as a host exit of Stage 3a-3's native code is to;
-// and where the evaluator leaves for good,
+// program LowerReg made: what the evaluator does not make -- a host
+// operation, a guard that failed, a Generic instruction's slow path -- the
+// VM makes, the whole register instruction run on the frame's real
+// registers by the interpreter's own handlers (regTable), as a host exit of
+// native code is (regWhole); and where the evaluator leaves for good,
 // runReg goes on with the frame from that register pc, as a deoptimization
 // does. Only tests run it (TestRegLowerEvaluate, by RegLowerDiff).
 
@@ -99,7 +98,7 @@ func (x *regRunner) store(slots []ir.Value) {
 // instruction the interpreter would. Inside an expansion it does so only
 // where nothing of it has committed, so that the registers are what the
 // instruction starts from. A return, and what the frame suspends at, it
-// leaves to runReg (regLowerRun).
+// leaves to runReg (RegLowerCall).
 func (x *regRunner) Run(p *ir.Program, pc int, in *ir.Instruction, slots []ir.Value) (int, bool, error) {
 	rpc := int(p.Origin[pc])
 	for q := pc - 1; q >= 0 && p.Origin[q] == p.Origin[pc]; q-- {
@@ -174,18 +173,15 @@ func regWholeRuns(w bytecode.RInstr) bool {
 
 // regAwaitsInPlace reports whether w, at native code's host exit in f, its
 // window at wb, is an await the interpreter's await (regSuspend) goes on
-// from in place, which regWhole then runs, native code going on after it
-// at its next entry: the frame's resumption is its await's job, the
-// queue's last, and the value awaited settled, so that the queue's next
-// job would resume the frame with what it settled to. Any other await
-// suspends the frame, which only the interpreter does. Left to the
-// interpreter, a settled await had it run the rest of the frame from
-// there, a loop's every turn to its next await that suspends: an async
-// function's busy loop, awaiting a value each 256 turns, ran natively
-// in one resumption of four, as the stack form's suspends at each
-// (jitSuspend) and is entered again at the resumption. The interpreter
-// of register code goes on in place where the stack form's suspends, so
-// native code goes on in place too.
+// from in place, which regWhole then runs, native code going on after it at
+// its next entry: the frame's resumption is its await's job, the queue's
+// last, and the value awaited settled, so that the queue's next job would
+// resume the frame with what it settled to. Any other await suspends the
+// frame, which only the interpreter does. Left to the interpreter, a
+// settled await had it run the rest of the frame from there, a loop's every
+// turn to its next await that suspends: an async function's busy loop,
+// awaiting a value each 256 turns, ran natively in one resumption of four.
+// The interpreter goes on in place, so native code goes on in place too.
 func (r *Runtime) regAwaitsInPlace(f *frame, w bytecode.RInstr, wb int) bool {
 	if w.Op() != bytecode.RAwait || f.regKind != regFrameAwaitJob || r.HasPendingJobs() || wb+int(w.B()) >= len(r.stack) {
 		return false
@@ -194,17 +190,16 @@ func (r *Runtime) regAwaitsInPlace(f *frame, w bytecode.RInstr, wb int) bool {
 	return ok
 }
 
-// regWholeTail reports whether w is a call in tail position, which
-// regWhole runs for native code's host exit as the interpreter's
-// tail_call runs it (rhCallWT), as the stack form's exit there has Go make
-// the call: while the stack is shallow, the ordinary call, whose callee
+// regWholeTail reports whether w is a call in tail position, which regWhole
+// runs for native code's host exit as the interpreter's tail_call runs it
+// (rhCallWT): while the stack is shallow, the ordinary call, whose callee
 // the code learns (jitRegCallSeen) -- where the exit had left the rest of
 // the invocation to the interpreter, which learned nothing, a call that
-// missed missed at every call after it (AWFY's Richards, a task's
-// function made anew by each run, 6.5 million exits a run); deeper, the
-// frame given to the callee in place or given up (regTailCallW), the
-// frame ending in errRegRestart or errTailCall, which whatever runs it
-// makes the call of, as after runReg's own.
+// missed missed at every call after it (AWFY's Richards, a task's function
+// made anew by each run, 6.5 million exits a run); deeper, the frame given
+// to the callee in place or given up (regTailCallW), the frame ending in
+// errRegRestart or errTailCall, which whatever runs it makes the call of,
+// as after runReg's own.
 func regWholeTail(w bytecode.RInstr) bool {
 	op := w.Op()
 	return op == bytecode.RCallWT || op == bytecode.RCallMWT

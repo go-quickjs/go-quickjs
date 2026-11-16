@@ -15,11 +15,10 @@ import (
 // (docs/register-interpreter.md, "The loop").
 
 // regBigOf marks, where r runs the JIT, the operator at register pc of c
-// whose operands a and b met BigInts, and whose result was v, as the
-// tree's treeBigOf marks its sites (regCode's bigSeen), for the register
-// form's feedback (jitRegFeedback's BigInt): one in the int64 range, one
-// from 0 to 2^64-1, or another -- a v that is no BigInt, one on the heap;
-// nil without the JIT.
+// whose operands a and b met BigInts, and whose result was v (regCode's
+// bigSeen), for the register form's feedback (jitRegFeedback's BigInt): one
+// in the int64 range, one from 0 to 2^64-1, or another -- a v that is no
+// BigInt, one on the heap; nil without the JIT.
 var regBigOf func(r *Runtime, c *regCode, pc int, a, b, v Value)
 
 // regBinImm is bin_imm's slow path.
@@ -117,8 +116,7 @@ func (r *Runtime) regCompare(op bytecode.Op, a, b Value) (bool, error) {
 		return compareFloats(op, a.Number(), b.Number()), nil
 	}
 	if res, ok := pureBigCompare[struct{}](op, a, b); ok {
-		// Two BigInts an int64 holds, as the tree's compare nodes order
-		// them.
+		// Two BigInts an int64 holds.
 		return res, nil
 	}
 	c, err := r.compare(a, b)
@@ -180,8 +178,8 @@ func (r *Runtime) regUnary(op bytecode.Op, a Value) (Value, error) {
 }
 
 // regElemMiss is the element get_index, set_index and their immediate
-// forms read or write where their fast path has found no dense element, as
-// the tree's getIndexMiss and setIndexMiss do: a typed array's, from or to
+// forms read or write where their fast path has found no dense element: a
+// typed array's, from or to
 // its buffer as elemAt and setElem read and write it, typedRead and
 // typedStore the rest they can; an element appended at an array's length,
 // or a hole filled (appendElem, fillHole). False sends what is left -- a
@@ -287,19 +285,17 @@ func regElemMiss(c *regCode, k *regKept, regs *[1 << 16]Value) bool {
 		if setElem(obj, key, v) || typedStore(obj, key.num, v) {
 			return true
 		}
-		// An element appended at an array's length, or a hole filled,
-		// as the tree's setIndexMiss stores them.
+		// An element appended at an array's length, or a hole filled.
 		return obj.IsObject() && (appendElem(obj.object(), key.num, v) || fillHole(obj.object(), key.num, v))
 	}
 	return false
 }
 
 // regSetMiss is set_index's miss: on an array, an element appended at its
-// length or a hole filled, as the tree's setIndexMiss stores them, where
-// setElem would store nothing the loop's fast path has not; on anything
-// else, regElemMiss's typed array's element. False sends what is left --
-// a shared literal's element, a setter, a proxy -- to the slow path. None
-// of it can throw or run code.
+// length or a hole filled, where setElem would store nothing the loop's fast
+// path has not; on anything else, regElemMiss's typed array's element. False
+// sends what is left -- a shared literal's element, a setter, a proxy -- to
+// the slow path. None of it can throw or run code.
 //
 //go:noinline
 func (r *Runtime) regSetMiss(c *regCode, k *regKept, regs *[1 << 16]Value) bool {
@@ -352,10 +348,9 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 	return target
 }
 
-// regAppend is append, a case of runReg's: an append to a local, its
-// string grown in place where it alone holds it, as the tree's
-// strAppendNode grows it. The case keeps nothing of the instruction across
-// the call; this reads it back.
+// regAppend is append, a case of runReg's: an append to a local, its string
+// grown in place where it alone holds it (strAppend). The case keeps nothing
+// of the instruction across the call; this reads it back.
 //
 //go:noinline
 func (r *Runtime) regAppend(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
@@ -370,11 +365,11 @@ func (r *Runtime) regAppend(f *frame, c *regCode, k *regKept, regs *[1 << 16]Val
 }
 
 // regCharCodeAt is char_code_at, a case of runReg's: s.charCodeAt(i) of a
-// string, its method the built-in read from the cache primProp fills and
-// its argument a number, read here as the tree's charCodeAtCall reads it,
-// without the method's read on the slow path, the call's site and the
-// built-in's conversions; anything else is regCharCodeAtSlow's. The case
-// keeps nothing of the instruction across the call; this reads it back.
+// string, its method the built-in read from the cache primProp fills and its
+// argument a number, read here without the method's read on the slow path,
+// the call's site and the built-in's conversions; anything else is
+// regCharCodeAtSlow's. The case keeps nothing of the instruction across the
+// call; this reads it back.
 //
 //go:noinline
 func (r *Runtime) regCharCodeAt(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
@@ -411,8 +406,7 @@ func (r *Runtime) regCharCodeAt(f *frame, c *regCode, k *regKept, regs *[1 << 16
 // regIterNext is iter_next: R[A] = the next value of cursor R[B], or a
 // jump by SC where it has none, the step at the head of each turn of a
 // for-of or a for-in loop. An array's element in its dense storage is
-// read here, as the tree's iterNextTree reads it; a generator's cursor is
-// stepped as the tree steps it (regIterNextTree); anything else as
+// read here; a generator's cursor is stepped directly; anything else as
 // iterNext steps it.
 //
 //go:noinline
@@ -437,7 +431,7 @@ func (r *Runtime) regIterNext(f *frame, c *regCode, k *regKept, regs *[1 << 16]V
 			if g := regGenCursor(st); g != nil {
 				v, more, err = r.regGenStep(st, g)
 			} else {
-				v, more, err = r.regIterNextTree(f, cur)
+				v, more, err = r.regStepNext(st)
 			}
 			goto stepped
 		} else if !st.forIn {
@@ -463,7 +457,7 @@ stepped:
 // regLit is regexp_lit: the literal's RegExp made or given back in the
 // window's receiver and its method in the callee's register -- the
 // built-in, unread, where reading it would find it running nothing to
-// find it (regexpLitMethod), as the tree's literal call does, and read
+// find it (regexpLitMethod), and read
 // otherwise, at the instruction's position or, for one that calls, at the
 // stack form's instruction of the literal (Aux) -- and, with RLitCall,
 // the method called with the window's one argument as a call_method_w
@@ -530,8 +524,8 @@ func (r *Runtime) regLit(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value)
 // regCallSlow is the call of instruction w at pc, its window at base,
 // that its site's cache does not answer.
 // regMarkedCall is the call of call_method_w pc, its window at base, of
-// argc arguments, which its Aux, aux, marks, and what the tree's nodes of
-// such calls do around it, x its operand (Aux). RMarkLitArg makes the
+// argc arguments, which its Aux, aux, marks, and what is done around such
+// calls, x its operand (Aux). RMarkLitArg makes the
 // call's first argument,
 // the literal; a literal's RegExp is given back where the call keeps
 // nothing of it and runs nothing of the script's (regexpLiteralDone):

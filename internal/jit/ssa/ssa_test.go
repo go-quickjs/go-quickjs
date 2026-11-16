@@ -137,9 +137,17 @@ func compare(t *testing.T, p *ir.Program, f *Func, pc int, slots []ir.Value, pol
 		if err != nil {
 			t.Fatalf("ssa from pc %d: %v\n%s", entry, err, f)
 		}
-		if got.Kind == ir.GuardExit {
+		// Register code's start polls (OpPoll), whose exit leaves the call
+		// to the interpreter, as a guard's does: entered there again, it
+		// would poll again.
+		startPoll := got.Kind == ir.BudgetExit && p.Origin != nil && p.At(got.State.PC) == 0
+		// So does a host exit where the slot IR goes on: Go runs the
+		// instruction -- a remainder of numbers that are not integers
+		// (OpModF64) -- and the interpreter what follows.
+		host := got.Kind == ir.HostExit && !(want.Kind == ir.HostExit && want.State == got.State)
+		if got.Kind == ir.GuardExit || startPoll || host {
 			// The interpreter takes over, as in the VM: here, the slot IR.
-			got, err = p.EvaluateArrays(y, hy.views, int(got.State.PC), 20000)
+			got, err = p.EvaluateArrays(y, hy.views, p.At(got.State.PC), 20000)
 			if err != nil {
 				t.Fatalf("slot IR after a guard: %v", err)
 			}
@@ -154,13 +162,32 @@ func compare(t *testing.T, p *ir.Program, f *Func, pc int, slots []ir.Value, pol
 		if round > 30000 {
 			t.Fatalf("ssa polled forever where the slot IR finished\n%s", f)
 		}
-		entry = int(got.State.PC)
+		// A state's PC is register code's pc in a register program's
+		// (ir.Program's Origin); its entry is the first instruction of its
+		// lowering (At).
+		entry = p.At(got.State.PC)
 	}
 	same := func(a, b ir.Value) bool { return a == b }
 	bad := got.Kind != want.Kind || got.Kind == ir.Returned && !same(got.Value, want.Value) ||
 		got.Kind != ir.Returned && got.State != want.State
 	if !bad && got.Kind != ir.Returned {
+		// A register program's scratch slots, past its captured bindings
+		// and receiver, are in no state (ir.Program's Regs).
+		scratch := p.Locals
+		if p.Origin != nil {
+			scratch = p.UpvalueBase + p.Upvalues
+			if p.This {
+				scratch++
+			}
+		}
+		// Nor are the registers dead at the exit: a state names only the
+		// live ones, as V8's frame states leave out dead registers
+		// (ir.Program's Live).
+		at := p.At(want.State.PC)
 		for i := 0; i < p.Locals+want.State.Depth; i++ {
+			if i >= scratch && i < p.Locals || at >= 0 && !p.LiveAt(at, i) {
+				continue
+			}
 			if !same(x[i], y[i]) {
 				bad = true
 			}
@@ -289,7 +316,7 @@ func TestBuildMatchesSlotIRFromJavaScript(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			p, err := jitcompile.Lower(c.Fn)
+			p, err := jitcompile.LowerReg(c.Fn.RegCode(), c.Fn)
 			if err != nil {
 				continue
 			}

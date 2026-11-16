@@ -25,10 +25,11 @@ item are from the runs of its time unless it says otherwise.
   in every 4 KB in one set of eight: hot code that lands on the same sets is
   decoded again on every pass. A change is compared with its parent by
   `internal/cmd/v8bench/placements` (see AGENTS.md): eight builds of each
-  side, placing `executeAt`, the call path, `runTree` and the tree's
-  closures differently in a balanced design, and the package data after
-  the first pad by 0 or 32 bytes (`c3917728`), each placement's fastest
-  round taken, and the short benchmarks run 300 times a process.
+  side, placing the call path, the JIT's leaf calls, `runReg`, `rhCallW`,
+  the native dispatcher and its handlers' block differently in a balanced
+  design, and the package data by 0 or 32 bytes (`c3917728`), each
+  placement's fastest round taken, and the short benchmarks run 300 times
+  a process.
   `-parallel -k 4` screens a change in minutes; a batch is confirmed with
   all eight, over the V8 suite, Octane and Are We Fast Yet. `-micro`
   compares the micro-benchmarks over the placements the same way
@@ -36,9 +37,8 @@ item are from the runs of its time unless it says otherwise.
 - Before measuring, the interpreter's hot functions are checked to be
   unchanged (`internal/cmd/hotdiff`) and the sizes of package vm's closures
   compared (`go tool nm -size`): a closure that grows moves every closure
-  after it, and has cost Crypto and NavierStokes up to 11% on its own. Four
-  placements keep the closures' phase fixed, so a change to their sizes
-  needs all eight.
+  after it and the native handlers' block after them, and a closure's
+  growth once cost Crypto and NavierStokes up to 11% on its own.
 - A micro-benchmark is timed on the paths the change touches, against its
   parent, before the suite is.
 - Allocation counts are deterministic, and are compared exactly. A change
@@ -2918,6 +2918,11 @@ The rounds that followed, each measured as above. The commit says more.
 
 ### What is open
 
+Items that name the stack interpreter (`executeAt`), the tree tier or the
+JIT's lowering of stack code (`LowerSSA*`) were written when those ran;
+they have since been removed, and such items stand as the record of what
+was measured, not as work on them.
+
 - **Allocation, judged by CPU.** Over Are We Fast Yet go-quickjs is 1.07
   times QuickJS's wall time but 1.21 times its CPU time (2026-10-15):
   Havlak, DeltaBlue and Storage pay most for the collector. DeltaBlue, the
@@ -2969,10 +2974,9 @@ The rounds that followed, each measured as above. The commit says more.
     Node `--jitless`'s 302 (283 with the JIT). Each call of a leaf's exec
     pays that cost however little the match does.
 - **Found by the round of 2026-10-21** (`04e358b`..`e1f5608`), not done:
-  - `in`: a top-level `in` runs the interpreter's own case, which only a
-    change to `executeAt` would give the tree's answer; symbol keys and
-    canonical index strings ("0") are not cached; a new empty object, of
-    no shape yet, costs native code one call of Go before it is.
+  -  `in`: symbol keys and canonical index strings ("0") are not cached; a
+    new empty object, of no shape yet, costs native code one call of Go
+    before it is.
   - Typed arrays' `indexOf` and `includes` poll for no interrupt at all.
   - Generators: a step in the tree tier was about 100 ns against
     QuickJS's 57 -- `resumeTree` 28% of `generator_for_of`'s samples,
@@ -3052,8 +3056,6 @@ The rounds that followed, each measured as above. The commit says more.
     on the normal path).
   - An optional chain's call and a spread call in tail position are not
     tail calls yet, as the standard has them.
-  - The interpreter's own case for private members (`executeAt`'s) and
-    `#x in o` are not cached.
   - A private field added to an object that is not extensible is refused,
     as the stage-3 proposal has it; Node v26 adds it.
 - **String's methods** (after `9f801a2`..`3141a88`: every one the
@@ -3064,8 +3066,6 @@ The rounds that followed, each measured as above. The commit says more.
     call node and `callRest` 35%; `string_starts_with` is 92.9 ns against
     69 for that. Each method takes its receiver through a closure
     (`thisStr`), an indirect call a plain function would save, 2 to 4 ns.
-  - `toString` cannot take `toInteger`'s inlined path: `executeAt` calls
-    it.
   - padStart and padEnd of a filler past ASCII, and a repeat of a string
     that ends in a high surrogate and begins with a low one, take the old
     builder; the annex B HTML methods build Go strings and scan them
@@ -3563,35 +3563,8 @@ first, as the rest of the plan is.
 - Under `-race`, `TestWorkspaceCompileAllocations` fails: 64.2 against
   its limit of 62, main's 63.9 (2026-10-27).
 
-**The interpreter and the tree tier**
+**The interpreter**
 
-- A per-funcData flag letting the call node skip `callRest`'s tests, 20
-  to 30 instructions a call; Go's recursion replaced by a frame stack of
-  the tree tier's own, a redesign.
-- Tail calls with the callee recorded: `tail_mutual` -16.7%, the suites
-  +0.8 to +2.5% mostly at one placement, kept on a branch, not merged;
-  Richards' 12 million shallow tail calls a run on the slow path, which a
-  fix grows a function before `callTree` to serve.
-- The tree tier's generators: a `next` frame made lazily. (The operands,
-  handlers and captures a suspension leaves are in a saved part the first
-  suspension that leaves any makes since `d8fad845`.)
-- A "global" operand kind in treegen, a global read in place (the file
-  grows); the element nodes read their global in place since `9d03a001`.
-- int32 trees do not cover bitwise operators made by `op()` on two plain
-  trees (`c[i>>2] << c[j>>2]`, about 6M), comparisons pushed as values
-  (about 3M), an int32 written into an integer typed array (15.7M, boxed
-  and converted again); the fused read applies its operator through a
-  switch (2026-10-27). zlib's upvalues' heap reads.
-- In a switch, `dup; case; strict_eq; jump_if_true` as
-  `jump_if_cmp_false strict_ne`, a dispatch fewer a case, a local
-  discriminant read again with no `drop` (2026-10-04): the tree tier
-  makes a run of literal cases one lookup since `100eb7f3`; the compiler
-  still emits the chain, which `executeAt` and cases not literals run.
-- The interpreter's caches (2026-10-04, *unchecked*, `executeAt` being
-  kept as it is): `OpSetProp` calling `setPropCached` always, where an
-  inline `storeOwn` would save a call of six arguments; `leafCall` trying
-  `plainOwn` before `cl.ic[...].own`; propCache's hot fields first, or
-  64 bytes.
 - The for-of cursor as a kind of Value with no Object header (2026-10-12,
   when it was 160 bytes and the header 96): the cursor is 88 bytes since
   `d9173a40` and `323f9031`, in the size class of 96, the header it would
@@ -3633,30 +3606,18 @@ first, as the rest of the plan is.
   made lazily they would change what scripts see of the global's
   descriptors, a decision for the API; a lazy property index for large
   built-in objects, about 12 KB a runtime (2026-10-02).
-- Goroutine stack growth, about 3% with the interpreter's frame of 1.7 KB
-  (2026-09-30, *unchecked*).
 - Pure calls deeper than 32 fall back to frames entirely; switching at the
   limit alone needs the pure path to pass on an error such as a stack
   overflow (2026-10-05).
-- Structured control flow: structuring lazily, a loop once its back edges
-  prove it hot (eagerly cost V8 +1.5%); `&&` and else-if arms as
-  statements (Splay +2%, dropped); a loop whose branches need a structure
-  of their own runs block to block (2026-10-08).
 - The hot functions made insensitive to their alignment; the hot files'
   grouping cost `array_for` +43%, `array_update` +36%, `func_call` +26%,
   and a layout keeping both was not tried; `elemAt` sits outside what
   placements vary (Crypto +4 to +11% at 3 of 8 placements, 2026-10-25).
-- `a?.b` as one logical node, `a` held in a slot (2026-10-15).
 - BigInts in the interpreter: `bigint32_arith` level with QuickJS, not
   below (a closure, two failed number checks, `arithSlow`'s frame, the
   short BigInt's write barrier); `pidigits` 13% in the free list, 9% in
   `s += y` (2026-10-20).
-- The place updates' fallbacks: `arguments[k]`, TDZ upvalues, operands
-  with calls, `super`, private names and `with`, `G.x += 1` reading the
-  global twice (2026-10-08, *unchecked*).
-- A tree callee's locals over its caller's argument slots, which breaks
-  `arguments` unless restricted; a case byte for each function in
-  `pureCallAt` (2026-10-07).
+- A case byte for each function in `pureCallAt` (2026-10-07).
 - Arrays starting at a capacity of 8 at their first growth; a cache by
   site for `obj[i] = v` on plain objects (`setIndexed` 32% of
   `prop_create`'s profile), which wants a keyed store cache of several
@@ -3720,13 +3681,9 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
   data moved, `JITPAD`, seeds, `GOMAXPROCS` and `GOGC=off` move nothing;
   level in a script of its own. Untried: the frame-room loads, L1 way
   prediction, hardware counters.
-- `generator_objects` without the JIT, 1.02-1.17: `stepGenTree`, the same
-  5,440 bytes, takes 35% longer, at either 64-byte phase; the generator's
-  fields sit elsewhere now that the object is smaller (unproven).
 - `math_pow` without the JIT, 0.97-1.14: five pad variants a side barely
   overlap (main 72.9-80.9 ns, this 79.8-85.9).
-- `executeAt` is 1,376 bytes smaller, its cases reading the new layout;
-  `noneHas` and the allocation helpers no longer inline, each calling
+- `noneHas` and the allocation helpers no longer inline, each calling
   `rootFor` or `findOwn`, left so in `5c26cde5` (the rest restored by
   `872c2391` and `5c26cde5`, kept by `TestIntendedInlining`).
 - `class_factory` and `subclass_fresh` slower in a full micro run only:
@@ -3808,12 +3765,6 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
 - The 24-hour differential fuzz, never run; the longest stopped at 2 h 39
   min (run at milestones).
 - `TestAsyncWorkTimer` flaking under the full suite's load.
-- A test that tree closures call no tiny helpers (`IsNumber`, `Float`,
-  `IsObject`, `at`), after the inlining budget's finding of 2026-10-07:
-  `TestIntendedInlining` (`b97b3e46`) fails where one of the hot paths'
-  helpers is no longer inlinable (`Float`, `Value.IsObject`, `(*tctx).at`
-  among them, `IsNumber` not), not where a caller calls one it could
-  inline.
 - arm64: the JIT runs on darwin/arm64 and, since 2026-11-13, on
   linux/arm64 (its own instruction-cache flush), and was profiled for
   compilation on Typescript on an M5 Max: reusing the assembler's output

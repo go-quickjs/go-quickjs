@@ -3,7 +3,7 @@ package regdiff
 import "testing"
 
 // TestRegDiffStepAndBranch compares the step-and-branches (step_jlt and
-// its kin) with the old tiers: each of the six kinds and each kind of
+// its kin) with the recorded answers: each of the six kinds and each kind of
 // step on their fast paths and off them -- counters past 2^53 and across
 // the int32 range, -0, NaN, strings, BigInts, objects whose valueOf
 // counts its calls or throws, a Symbol, a bound that changes type, an

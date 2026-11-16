@@ -44,7 +44,7 @@ import (
 // dropped, Go going on in the interpreter there instead, to the next loop
 // header, as after a guard's exit -- and, where a frame runs a loop long,
 // on in code of its own compiled with the loop's entry (the VM's
-// jitLearnLoopEntry), this code keeping the object unmade for every other
+// jitRegLoopCode), this code keeping the object unmade for every other
 // invocation. An entry stays dropped only for objects left unmade in the
 // end (syncEntries).
 //

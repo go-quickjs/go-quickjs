@@ -7,7 +7,7 @@ import (
 )
 
 // Destructuring and parameter lists in the register form
-// (docs/register-interpreter.md, "Stage 2: zero refusals"): the cold
+// (docs/register-interpreter.md, "The operations"): the cold
 // operations of a pattern and of a rest parameter, each what the stack
 // form's instruction of the same name does.
 

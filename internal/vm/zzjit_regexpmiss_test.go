@@ -10,7 +10,7 @@ import (
 )
 
 // Native code's leaves' calls of exec and test (jitLeafGo) find the matches
-// a look at the subject says miss (regexp's MissesASCII) as the tree tier
+// a look at the subject says miss (regexp's MissesASCII) as the interpreter
 // does: each answer is the interpreter's and Node's, with the collector
 // idle and while it marks, the functions run natively and their calls of
 // exec made through the leaves' routine.

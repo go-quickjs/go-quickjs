@@ -377,9 +377,7 @@ func (o *Object) embedArrayExt(e *arrayExt) {
 // the slot it is spilled to then holds nil+32, or a pointer past o's
 // allocation, live across the loop's calls, and a stack's copy or a
 // collection throws (invalid pointer found on stack). extAt and dataExtAt
-// are still unsafe.Add, because their field's address, the same
-// instructions once compiled, schedules executeAt's and allocates its
-// registers otherwise; internal/cmd/hoistcheck finds each sum the pass
+// are still unsafe.Add; internal/cmd/hoistcheck finds each sum the pass
 // moves, theirs included, and fails for one it does not know to have its
 // object wherever the loop is entered.
 func (o *Object) arrayExt() *arrayExt {
@@ -1694,7 +1692,8 @@ var elemHole = uninitialized
 // whole of the value's bits with the hole's: the other uninitialized values
 // -- the markers of a Map's or a WeakMap's deleted entries -- are never
 // elements, and one comparison keeps elemAt and setElem, which ask it of
-// every element a tree reads or writes, small enough for Go to inline.
+// every element the interpreter reads or writes, small enough for Go to
+// inline.
 func isHole(v Value) bool { return math.Float64bits(v.num) == holeBits }
 
 // holeBits is elemHole's bits: an uninitialized value of payload 0.
@@ -1939,28 +1938,17 @@ type funcData struct {
 	arrow bool
 	// bound marks a function produced by Function.prototype.bind.
 	bound bool
-	// treePlanned records that planTreeCall has decided about the function.
-	treePlanned bool
-	// treeRest marks a function whose calls callRest makes on its tree
-	// (callTreeWith), which callTree does not: one that ends in a tail
-	// call, or an arrow; see planTreeCall.
-	treeRest bool
-	// treeNew marks a constructor whose constructions are made on its tree
-	// (constructTree), as treeCall's calls are: a class's, which a call
-	// refuses, and a pure body's, which pureCall answers calls of but no
-	// construction; see planTreeNew. It is in the padding after the flags.
-	treeNew bool
-	// newPlanned records that planTreeNew has decided about the function.
-	newPlanned bool
+	// planned records that planCall has decided about the function.
+	planned bool
 
 	// extra is what only some functions have -- an arrow's surroundings, a
 	// bound function's target, the scopes of one made inside a `with` body
 	// or beside a direct eval -- or nil. Every built-in and most closures have
 	// none, and are the smaller for it.
 	extra *funcExtra
-	// treeCall is the tree a call of the function goes straight to through
-	// callTree, or nil; see planTreeCall.
-	treeCall *tree
+	// regCall is the register code a call of the function enters at once
+	// (regDirect), or nil; see regPlan.
+	regCall *regCode
 }
 
 // funcClass is the part of a function only a method or a class has

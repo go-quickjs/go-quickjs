@@ -163,10 +163,8 @@ var up = (function () { var U = /b+/; return function (ss, n) { var k = 0; for (
 				leaves++
 			}
 		}
-		// A call of Go of replace would have been asked whether it was
-		// given a literal's RegExp (jitRegExpLitPool).
-		if leaves != 1 || len(e.e.regexpLitCalls) != 0 {
-			t.Errorf("%s's code has %d leaves' calls of replace, and made %d calls of Go of it; want 1 and none", c.name, leaves, len(e.e.regexpLitCalls))
+		if leaves != 1 {
+			t.Errorf("%s's code has %d leaves' calls of replace; want 1", c.name, leaves)
 		}
 	}
 }

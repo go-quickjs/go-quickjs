@@ -45,6 +45,7 @@ func TestJITInlinesFrequentCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitNativeCountsForTest(t)
 	inlined := jitInlinedForTest(t)
 	both := jitFreqBothForTest(t, `
 		function hot(o) { return (o.x + 3) * (o.y - 3) + (o.x ^ o.y) - (o.y | 3) * o.x }
@@ -77,14 +78,13 @@ func TestJITInlinesByFrequency(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitNativeCountsForTest(t)
 	inlined := jitInlinedForTest(t)
 	body := `return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c)`
-	if regJITForTest() {
-		// The register form's program of the same body counts 35 of the
-		// budget's instructions (ssa's inlineSize), five of which it holds:
-		// one of 45, as long as the stack form's 44 is to its budget.
-		body = `return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) + (o.b ^ o.c) - (o.a & o.b)`
-	}
+	// The register form's program of the same body counts 35 of the
+	// budget's instructions (ssa's inlineSize), five of which it holds:
+	// one of 45, as long as the stack form's 44 is to its budget.
+	body = `return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) + (o.b ^ o.c) - (o.a & o.b)`
 	both := jitFreqBothForTest(t, `
 		function b0(o) { `+body+` }
 		function b1(o) { `+body+` }
@@ -119,6 +119,7 @@ func TestJITInlinesCalleesColdCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitNativeCountsForTest(t)
 	inlined := jitInlinedForTest(t)
 	setup := func(often string) string {
 		return `

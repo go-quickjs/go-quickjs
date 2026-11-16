@@ -5,7 +5,7 @@ package vm
 import "testing"
 
 // privateMemberScript's reads and writes, in code the JIT compiles round
-// after round, its members' sites the tree tier's where the JIT leaves
+// after round, its members' sites the interpreter's where the JIT leaves
 // them to Go, answer what Node's do.
 func TestJITPrivateMembersAgreeWithNode(t *testing.T) {
 	t.Parallel()

@@ -133,20 +133,11 @@ func TestJITBigInt64(t *testing.T) {
 		// Learned at a guard that failed, or from the tree tier -- or,
 		// of register code, from the register interpreter's marks.
 		held := 0
-		if jitRegCodeForTest(r, name) {
-			re := r.jit.regCache[r.jitRegKeyOf(cl)]
-			rf := r.jitRegFeedbackFor(cl, re.p)
-			for pc := range re.p.Code {
-				if rf.BigInt(pc) && !rf.Generic(pc) {
-					held++
-				}
-			}
-		} else {
-			fb := &jitFeedback{r: r, fn: cl.fn, e: e}
-			for pc := range e.ssaProg.Code {
-				if fb.BigInt(pc) && !fb.Generic(pc) {
-					held++
-				}
+		re := r.jit.regCache[r.jitRegKeyOf(cl)]
+		rf := r.jitRegFeedbackFor(cl, re.p)
+		for pc := range re.p.Code {
+			if rf.BigInt(pc) && !rf.Generic(pc) {
+				held++
 			}
 		}
 		if held == 0 {

@@ -93,57 +93,34 @@ func TestJITArrayLoops(t *testing.T) {
 	// The rounds of Array.prototype's element last, after the counts.
 	protoRounds := rounds[len(rounds)-2:]
 	r, want := jitAgreesPairForTest(t, arrayLoopsSetup+drivers, rounds[:len(rounds)-2]...)
-	if regJITForTest() {
-		// The register code's counts (its life's) go on over its compiles,
-		// where the stack form's entry's begin afresh at each: what the
-		// code compiled last does is counted over a pass of the functions'
-		// rounds more, their answers the interpreter's, before
-		// Array.prototype has an element.
-		names := []string{"mapNums", "filterEven", "someAt", "findIndexAt", "everyBelow", "findObj"}
-		before := map[string]jitSSAStats{}
-		for _, name := range names {
-			e := regEntryNamedForTest(r, name)
-			if !regMakesLoopsForTest(r, e) {
-				t.Fatalf("%s makes no loop of its call: %+v", name, e)
-			}
-			before[name] = e.life.ssaStats
+	// The register code's counts (its life's) go on over its compiles:
+	// what the code compiled last does is counted over a pass of the
+	// functions' rounds more, their answers the interpreter's, before
+	// Array.prototype has an element.
+	counted := []string{"mapNums", "filterEven", "someAt", "findIndexAt", "everyBelow", "findObj"}
+	before := map[string]jitSSAStats{}
+	for _, name := range counted {
+		e := regEntryNamedForTest(r, name)
+		if !regMakesLoopsForTest(r, e) {
+			t.Fatalf("%s makes no loop of its call: %+v", name, e)
 		}
-		jitAgreeRoundsForTest(t, r, want, `drive_mapNums(30, 2)`, `drive_filterEven(30, 1)`, `drive_someAt(30, 5)`, `drive_someAt(30, 99)`,
-			`drive_findIndexAt(30, 6)`, `drive_findIndexAt(30, 99)`, `drive_everyBelow(30, 99)`, `drive_everyBelow(30, 4)`,
-			`drive_findObj(30, 3)`, `drive_findObj(30, 99)`)
-		for _, name := range names {
-			e := regEntryNamedForTest(r, name)
-			if !regMakesLoopsForTest(r, e) {
-				t.Errorf("%s makes no loop of its call: %+v", name, e)
-				continue
-			}
-			st, b := e.life.ssaStats, before[name]
-			if st.goCalls != b.goCalls || st.hosts != b.hosts {
-				t.Errorf("%s called Go %d times, left its code %d times", name, st.goCalls-b.goCalls, st.hosts-b.hosts)
-			}
-		}
-		jitAgreeRoundsForTest(t, r, want, protoRounds...)
-		if r.jit.loopsFinished == 0 {
-			t.Error("Go went on with no loop")
-		}
-		return
+		before[name] = e.life.ssaStats
 	}
-	jitAgreeRoundsForTest(t, r, want, protoRounds...)
-	for _, name := range []string{"mapNums", "filterEven", "someAt", "findIndexAt", "everyBelow", "findObj"} {
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == name {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil || !e.loops {
+	jitAgreeRoundsForTest(t, r, want, `drive_mapNums(30, 2)`, `drive_filterEven(30, 1)`, `drive_someAt(30, 5)`, `drive_someAt(30, 99)`,
+		`drive_findIndexAt(30, 6)`, `drive_findIndexAt(30, 99)`, `drive_everyBelow(30, 99)`, `drive_everyBelow(30, 4)`,
+		`drive_findObj(30, 3)`, `drive_findObj(30, 99)`)
+	for _, name := range counted {
+		e := regEntryNamedForTest(r, name)
+		if !regMakesLoopsForTest(r, e) {
 			t.Errorf("%s makes no loop of its call: %+v", name, e)
 			continue
 		}
-		if e.ssaStats.goCalls != 0 || e.ssaStats.hosts != 0 {
-			t.Errorf("%s called Go %d times, left its code %d times", name, e.ssaStats.goCalls, e.ssaStats.hosts)
+		st, b := e.life.ssaStats, before[name]
+		if st.goCalls != b.goCalls || st.hosts != b.hosts {
+			t.Errorf("%s called Go %d times, left its code %d times", name, st.goCalls-b.goCalls, st.hosts-b.hosts)
 		}
 	}
+	jitAgreeRoundsForTest(t, r, want, protoRounds...)
 	if r.jit.loopsFinished == 0 {
 		t.Error("Go went on with no loop")
 	}
@@ -162,24 +139,11 @@ func TestJITMapAppends(t *testing.T) {
 		function drive(n) { let r; for (let i = 0; i < n; i++) r = mapBig(); return r }`,
 		`drive(30)`, `drive(30)`, `drive(30)`)
 	linkIn := func() uint64 { return 0 }
-	if regJITForTest() {
-		e := regEntryNamedForTest(r, "mapBig")
-		if !regMakesLoopsForTest(r, e) {
-			t.Fatalf("mapBig makes no loops: %+v", e)
-		}
-		linkIn = func() uint64 { return regLinkInForTest(r, e) }
-	} else {
-		var e *jitEntry
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && fn.Name == "mapBig" {
-				e = x
-			}
-		}
-		if e == nil || e.ssa == nil || !e.loops {
-			t.Fatalf("mapBig makes no loops: %+v", e)
-		}
-		linkIn = func() uint64 { return e.link.in }
+	e := regEntryNamedForTest(r, "mapBig")
+	if !regMakesLoopsForTest(r, e) {
+		t.Fatalf("mapBig makes no loops: %+v", e)
 	}
+	linkIn = func() uint64 { return regLinkInForTest(r, e) }
 	in, calls := linkIn(), 0
 	jitGoCallWork = func() { calls++ }
 	defer func() { jitGoCallWork = nil }()
@@ -215,17 +179,9 @@ func TestJITMapDefinesPastSetters(t *testing.T) {
 	r := jitAgreesForTest(t, setup, `drive(30)`, `drive(30)`, `drive(30)`,
 		`(Object.defineProperty(Array.prototype, 2, { set(v) { hits++ }, get() { return 'p' }, configurable: true }), 'set')`)
 	loops := 0
-	if regJITForTest() {
-		for _, name := range []string{"mapped", "kept"} {
-			if regMakesLoopsForTest(r, regEntryNamedForTest(r, name)) {
-				loops++
-			}
-		}
-	} else {
-		for k, x := range r.jit.cache {
-			if fn := k.Value(); fn != nil && (fn.Name == "mapped" || fn.Name == "kept") && x.ssa != nil && x.loops {
-				loops++
-			}
+	for _, name := range []string{"mapped", "kept"} {
+		if regMakesLoopsForTest(r, regEntryNamedForTest(r, name)) {
+			loops++
 		}
 	}
 	if loops != 2 {

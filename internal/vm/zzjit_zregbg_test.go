@@ -5,9 +5,6 @@ package vm
 import (
 	"fmt"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regBackgroundSrc has calls, properties, a callee to inline and a loop:
@@ -27,7 +24,7 @@ function work(n) {
 
 // TestJITRegBackground compiles register code in the background: built
 // on a worker from its feedback asked ahead (jitRegSnapshotOf), installed
-// at a later check of the register tier's (jitDrain at jitRegHot). The
+// at a later check of the interpreter's (jitDrain at jitRegHot). The
 // answers are those of a runtime that compiles in the foreground, the
 // compiles were handed over and installed, and the code then runs
 // natively.
@@ -37,16 +34,7 @@ func TestJITRegBackground(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			compiler.SetRegisterForm(true)
 			prog := compileForTest(t, regBackgroundSrc)
-			compiler.SetRegisterForm(false)
-			SetRegTier(true)
-			was := SetJITRegTier(true)
-			t.Cleanup(func() {
-				compiler.SetRegisterForm(bytecode.RegDefault())
-				SetRegTier(bytecode.RegDefault())
-				SetJITRegTier(was)
-			})
 			var got [2]string
 			var rts [2]*Runtime
 			for i := range rts {

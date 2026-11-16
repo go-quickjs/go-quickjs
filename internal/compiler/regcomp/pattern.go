@@ -7,7 +7,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// Destructuring (docs/register-interpreter.md, "Stage 2: zero refusals"):
+// Destructuring (docs/register-interpreter.md, "From the AST"):
 // a pattern unpacks a value in a register into its leaves, as the stack
 // form's compileArrayPattern and compileObjectPattern do, in the same order.
 // An array pattern steps a cursor, which for_of_start makes, with iter_step,

@@ -122,7 +122,6 @@ type result struct {
 // of the register backend is kept, by function, until the function is
 // written.
 func init() {
-	compiler.SetRegisterForm(true)
 	regcomp.OnRefuse = func(fn *bytecode.Function, why string) {
 		if v, ok := refusals.Load(fn); ok {
 			why = v.(string) + "; " + why

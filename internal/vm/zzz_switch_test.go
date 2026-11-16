@@ -2,8 +2,6 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // switchTestSrc runs switches whose cases are literals, all or some, on
@@ -205,29 +203,17 @@ const switchTestWant = "A.d3.-.A.3.s.Acf.AB.b!.12.25.-.-.caught:boom,S.d3.-.-.36
 
 // A run of a switch's literal cases is one lookup (zzz_switch.go),
 // which answers as the interpreter's chain of comparisons does, and as
-// Node does. Each function has a local of its own, so that it is run on
-// its tree rather than by pureCall.
+// Node does. Each function has a local of its own, so that it is run as
+// register code rather than by pureCall.
 func TestSwitchLookups(t *testing.T) {
 	t.Parallel()
-	for _, c := range compileForTest(t, switchTestSrc).Constants {
-		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
-			continue
-		}
-		if name := c.Fn.Name; len(name) >= 2 && name[0] == 's' && name[1] != 'e' {
-			if buildTree(c.Fn) == nil {
-				t.Errorf("%s is not built as a tree", name)
-			}
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, switchTestSrc))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, switchTestSrc))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != switchTestWant {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, switchTestWant)
-		}
+	if got := v.String().Go(); got != switchTestWant {
+		t.Errorf("got\n%s\nwant\n%s", got, switchTestWant)
 	}
 }

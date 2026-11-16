@@ -147,10 +147,10 @@ func TestJITRegNativeCalls(t *testing.T) {
 }
 
 // regLitSrc calls RegExp literals' exec and test in loops, which register
-// code makes one instruction of (regexp_lit): lowered as the stack form's
-// code is (compile's regexpLit), the literal from its pool, its method
-// read, called; then RegExp.prototype.exec replaced, and a getter put in
-// its place, which the code was not compiled for.
+// code makes one instruction of (regexp_lit): lowered (compile's
+// regexpLit), the literal from its pool, its method read, called; then
+// RegExp.prototype.exec replaced, and a getter put in its place, which the
+// code was not compiled for.
 const regLitSrc = `
 function lits(n, s) {
 	var k = 0, m = "";
@@ -210,75 +210,6 @@ func TestJITRegExpLiteralCalls(t *testing.T) {
 			t.Logf("%+v", rts[0].RegNativeStats())
 		})
 	}
-}
-
-// TestJITRegCallsCompileForARM64 compiles again, with arm64's backend, the
-// register code regCallSrc's callers and callees were compiled to, on any
-// host: the native calls between register functions (ssa.CallSite's
-// Window), which arm64 makes as amd64 does, compile there. arm64 hosts
-// run them (TestJITRegNativeCalls).
-func TestJITRegCallsCompileForARM64(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	RecordJITCompiles(true)
-	defer RecordJITCompiles(false)
-	regNoInline(t)
-	rts := regNativeRuntimes(t, regCallSrc)
-	r := rts[0]
-	r.SetJITWarmUp(1, 1)
-	for _, name := range []string{"plain", "chain", "makes", "catches", "deep", "tails", "callsGo", "constructs", "closures", "frameOps"} {
-		fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
-		for range 8 {
-			r.Call(fn, Undefined, []Value{Float(300)})
-		}
-	}
-	fns, windows, _ := regCompileARM64(t, r)
-	t.Logf("%d functions compiled for arm64, %d native calls of register code", fns, windows)
-	if windows == 0 {
-		t.Error("no native call of register code compiled")
-	}
-}
-
-// regCompileARM64 compiles again with arm64's backend, on any host, the
-// register code r compiled since RecordJITCompiles, failing t where the
-// backend refuses one, and returns how many functions it compiled, how
-// many native calls of register code they make, and how many callees they
-// inline.
-func regCompileARM64(t *testing.T, r *Runtime) (fns, windows, inlined int) {
-	t.Helper()
-	jitParityLog.Lock()
-	seen := jitParityLog.seen[r]
-	jitParityLog.Unlock()
-	for _, cl := range seen {
-		e := r.jit.regCache[r.jitKeyOf(cl.fn)]
-		if e == nil || e.p == nil || e.code == nil {
-			continue
-		}
-		p := e.p
-		f, err := ssa.BuildWith(p, r.jitRegFeedbackFor(cl, p))
-		if err != nil {
-			continue
-		}
-		// As jitRegCompile lays the register frame out, a generator's
-		// entry among it.
-		jitRegShape(f, p, cl, cl.reg)
-		inlined += len(f.Inlined)
-		ssa.Optimize(f)
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Window != 0 && v.Calls()[0].Go == 0 {
-					windows++
-				}
-			}
-		}
-		if _, err := mir.CompileARM64(f, jitEncoding); err != nil {
-			t.Errorf("%s: %v", cl.fn.Name, err)
-			continue
-		}
-		fns++
-	}
-	return fns, windows, inlined
 }
 
 // regNoInline has no function inlined until the test ends (jitNoInline).
@@ -352,4 +283,72 @@ func TestJITRegExecReuseLeaf(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJITRegCallsCompileForARM64 compiles again, with arm64's backend, the
+// register code regCallSrc's callers and callees were compiled to, on any
+// host: the native calls between register functions (ssa.CallSite's
+// Window), which arm64 makes as amd64 does, compile there. arm64 hosts
+// run them (TestJITRegNativeCalls).
+func TestJITRegCallsCompileForARM64(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	recordJITCompilesForTest(t)
+	regNoInline(t)
+	rts := regNativeRuntimes(t, regCallSrc)
+	r := rts[0]
+	r.SetJITWarmUp(1, 1)
+	for _, name := range []string{"plain", "chain", "makes", "catches", "deep", "tails", "callsGo", "constructs", "closures", "frameOps"} {
+		fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
+		for range 8 {
+			r.Call(fn, Undefined, []Value{Float(300)})
+		}
+	}
+	fns, windows, _ := regCompileARM64(t, r)
+	t.Logf("%d functions compiled for arm64, %d native calls of register code", fns, windows)
+	if windows == 0 {
+		t.Error("no native call of register code compiled")
+	}
+}
+
+// regCompileARM64 compiles again with arm64's backend, on any host, the
+// register code r compiled since recordJITCompilesForTest, failing t where the
+// backend refuses one, and returns how many functions it compiled, how
+// many native calls of register code they make, and how many callees they
+// inline.
+func regCompileARM64(t *testing.T, r *Runtime) (fns, windows, inlined int) {
+	t.Helper()
+	jitCompileLog.Lock()
+	seen := jitCompileLog.seen[r]
+	jitCompileLog.Unlock()
+	for _, cl := range seen {
+		e := r.jit.regCache[r.jitKeyOf(cl.fn)]
+		if e == nil || e.p == nil || e.code == nil {
+			continue
+		}
+		p := e.p
+		f, err := ssa.BuildWith(p, r.jitRegFeedbackFor(cl, p))
+		if err != nil {
+			continue
+		}
+		// As jitRegCompile lays the register frame out, a generator's
+		// entry among it.
+		jitRegShape(f, p, cl, cl.reg)
+		inlined += len(f.Inlined)
+		ssa.Optimize(f)
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				if v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Window != 0 && v.Calls()[0].Go == 0 {
+					windows++
+				}
+			}
+		}
+		if _, err := mir.CompileARM64(f, jitEncoding); err != nil {
+			t.Errorf("%s: %v", cl.fn.Name, err)
+			continue
+		}
+		fns++
+	}
+	return fns, windows, inlined
 }

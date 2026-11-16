@@ -220,7 +220,7 @@ func TestProgramRerunsMakeNoShapes(t *testing.T) {
 	t.Parallel()
 	for _, s := range rerunScripts[:5] {
 		t.Run(s.name, func(t *testing.T) {
-			r := newOldTiersForTest(Config{})
+			r := New(Config{})
 			defer r.Close()
 			fn := compileForTest(t, s.src)
 			runProgramForTest(t, r, fn)

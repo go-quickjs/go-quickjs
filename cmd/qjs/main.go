@@ -119,7 +119,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if opts.jit && !jit.Supported() {
-		// The script still runs, in the interpreter and the tree tier.
+		// The script still runs, in the interpreter.
 		fmt.Fprintln(stderr, "qjs: --jit has no effect: this build has no native tier (build with -tags quickjs_jit on linux/amd64, windows/amd64, darwin/arm64 or linux/arm64)")
 	}
 

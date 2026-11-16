@@ -1,23 +1,15 @@
 package vm
 
-import (
-	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
-)
+import "testing"
 
 // regGoTableRuntime runs src as register code by the Go table's loop
 // (QJS_NONATIVE) or the native handlers, and returns the runtime and its
 // answer.
 func regGoTableRuntime(t *testing.T, src string, native bool) (*Runtime, string) {
 	t.Helper()
-	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(bytecode.RegDefault())
-	SetRegTier(true)
 	was := SetRegNative(native)
-	t.Cleanup(func() { SetRegTier(bytecode.RegDefault()); SetRegNative(was) })
+	t.Cleanup(func() { SetRegNative(was) })
 	r := New(Config{})
 	t.Cleanup(r.Close)
 	v, err := r.Run(fn)

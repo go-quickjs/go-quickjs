@@ -91,10 +91,7 @@ func TestJITLongConcats(t *testing.T) {
 		// Under the register JIT a loop its caller calls natively runs
 		// natively by its link too (jitNativeUsesForTest).
 		uses := func() uint64 {
-			if jitRegCodeForTest(r, c[0]) {
-				return jitNativeUsesForTest(r, c[0])
-			}
-			return e.ssaStats.entries
+			return jitNativeUsesForTest(r, c[0])
 		}
 		calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, uses()
 		if _, err := r.Run(compileForTest(t, c[1])); err != nil {

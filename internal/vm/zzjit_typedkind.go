@@ -6,15 +6,13 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // The element types of the typed arrays an element read or write of a
 // number has met, as V8's feedback keeps a keyed access's elements kind,
 // are learned as native code runs, which is where most such reads run: the
-// existing tiers keep nothing of a site's. Each site has a cell, its
+// interpreter keeps nothing of a site's. Each site has a cell, its
 // function's lowering's (jitLowering's typedCells), whose number word has
 // bit 1<<k for each element type k it met. Code compiled with the cell
 // reads it as it reads a typed array's element the site's code was not
@@ -28,53 +26,10 @@ import (
 // and its slot in the lowering's table.
 const jitTypedCellBytes = int(unsafe.Sizeof(Value{})) + jitMapSlot
 
-// TypedKind is ssa.TypedKindFeedback's: the element types the typed arrays
-// the element read or write at pc met, as its cell has them, the cell made
-// if the site has none, which the code keeps alive.
-func (fb *jitFeedback) TypedKind(pc int) (ssa.TypedSite, bool) {
-	s := fb.r.jit
-	if s == nil || pc < 0 || pc >= len(fb.fn.Code) {
-		return ssa.TypedSite{}, false
-	}
-	l := s.lowering(fb.fn)
-	cell := l.typedCells[int32(pc)]
-	if cell == nil {
-		if l.typedCells == nil {
-			l.typedCells = map[int32]*Value{}
-		}
-		cell = new(Value)
-		l.typedCells[int32(pc)] = cell
-		l.bytes += jitTypedCellBytes
-		s.lowerBytes += jitTypedCellBytes
-	}
-	k := fb.keep()
-	k.cells = append(k.cells, cell)
-	return ssa.TypedSite{Kinds: uint16(math.Float64bits(cell.num)), Cell: uintptr(unsafe.Pointer(cell))}, true
-}
-
-// UpvalueTyped is ssa.UpvalueTypedFeedback's: whether the captured binding
-// the instruction at pc reads holds a typed array, in fb's closure as the
-// code is compiled, and its element type plus one -- as a global's site
-// says of its binding (ssa.GlobalSite's Typed and TypedKind).
-func (fb *jitFeedback) UpvalueTyped(pc int) (uint8, bool) {
-	if fb.cl == nil || pc < 0 || pc >= len(fb.fn.Code) {
-		return 0, false
-	}
-	in := fb.fn.Code[pc]
-	if in.Op != bytecode.OpGetUpvalue && in.Op != bytecode.OpGetUpvalueCheck || int(in.A) >= len(fb.cl.upvalues) || fb.cl.upvalues[in.A] == nil {
-		return 0, false
-	}
-	v := fb.cl.upvalues[in.A].get()
-	if !jitTypedArray(v) {
-		return 0, false
-	}
-	return jitTypedKind(true, v), true
-}
-
 // jitTypedSeen is ssa.GoTypedSeen: the typed array in the first operand,
 // the site's cell in the second's pointer word. It sets the bit of the
 // array's element type in the cell, and marks the code the call was made
-// from to be compiled again (jitRunEntry). It refuses only what native
+// from to be compiled again (jitRegReopt). It refuses only what native
 // code never asks, which exits.
 func (r *Runtime) jitTypedSeen(ctx *abi.Context) bool {
 	o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
@@ -91,11 +46,8 @@ func (r *Runtime) jitTypedSeen(ctx *abi.Context) bool {
 		cell.num = math.Float64frombits(bits | bit)
 		if e := r.jitRegCtxEntry(ctx); e != nil {
 			// Register code's: compiled again as what its calls of Go
-			// learn has it (jitRegReopt), the stack form's entry not
-			// the code that runs.
+			// learn has it (jitRegReopt).
 			r.jitRegReopt(nil, e)
-		} else if e := r.jitRunEntry(ctx); e != nil && e.ssa != nil {
-			e.reopt = true
 		}
 	}
 	return true
@@ -126,17 +78,3 @@ func (r *Runtime) jitTypedView(ctx *abi.Context) bool {
 // jitTypedViewMade, if set, is called at each view's copy jitTypedView
 // makes: tests count them.
 var jitTypedViewMade func()
-
-// jitRunEntry is the entry of the code a call of Go was made from, with
-// ctx: the run's, at its own level, which may be a loop's (osrOf), or
-// else, at a native callee's level, its function's.
-func (r *Runtime) jitRunEntry(ctx *abi.Context) *jitEntry {
-	s := r.jit
-	if idx := int(ctx.Level); ctx.Live == 0 && idx < len(s.goRuns) && idx < len(s.ssaCtxs) && s.goRuns[idx].f != nil && s.ssaCtxs[idx] == ctx {
-		return s.goRuns[idx].e
-	}
-	if cl := (*closure)(ctx.Closure); cl != nil {
-		return s.entryFor(cl.fn)
-	}
-	return nil
-}

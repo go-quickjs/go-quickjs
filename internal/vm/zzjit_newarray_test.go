@@ -21,7 +21,7 @@ import (
 // the array then, and native code makes its length); and the lengths the
 // pool has room for are made without a call of Go. AWFY's Storage, whose
 // new Array(4) and new Array(1..10) had each been a call of Go, which
-// left its tree recursion slower than the tree tier's, had been judged
+// left its recursion slower than the interpreter's, had been judged
 // not to pay.
 func TestJITNewArrayLength(t *testing.T) {
 	if !jitSSABackend {

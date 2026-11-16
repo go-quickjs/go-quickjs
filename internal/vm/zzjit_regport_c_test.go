@@ -26,10 +26,7 @@ func jitEntryOfForTest(r *Runtime, cl *closure) *jitEntry {
 	if r.jit == nil {
 		return nil
 	}
-	if r.regOn() {
-		return r.jit.regLearned[r.jitRegKeyOf(cl)]
-	}
-	return r.jit.entryFor(cl.fn)
+	return r.jit.regLearned[r.jitRegKeyOf(cl)]
 }
 
 // jitRegOfForTest is the register code the cache holds for cl's function,
@@ -44,12 +41,8 @@ func jitRegOfForTest(r *Runtime, cl *closure) *jitRegEntry {
 // jitHasCodeOfForTest reports whether cl's function has native code, valid
 // or not: its stack form's entry's, or register code the cache holds.
 func jitHasCodeOfForTest(r *Runtime, cl *closure) bool {
-	if r.regOn() {
-		e := jitRegOfForTest(r, cl)
-		return e != nil && e.code != nil
-	}
-	e := jitEntryOfForTest(r, cl)
-	return e != nil && e.ssa != nil
+	e := jitRegOfForTest(r, cl)
+	return e != nil && e.code != nil
 }
 
 // jitLinkOfForTest is the link native callers call cl's function through:
@@ -57,13 +50,7 @@ func jitHasCodeOfForTest(r *Runtime, cl *closure) bool {
 // asked for as a native caller asks for it (regLinkOf) where none has been
 // yet -- the stack form's entry has one from its first compile on.
 func jitLinkOfForTest(r *Runtime, cl *closure) *jitLink {
-	if r.regOn() {
-		return r.jitState().regLinkOf(cl, r.regOf(cl))
-	}
-	if e := jitEntryOfForTest(r, cl); e != nil {
-		return e.link
-	}
-	return nil
+	return r.jitState().regLinkOf(cl, r.regOf(cl))
 }
 
 // jitRegLoopsForTest are the lengths of the loops of c, register code, in
@@ -89,14 +76,7 @@ func jitRegLoopsForTest(c *regCode) []int {
 // instruction's pc in its form.
 func jitSiteMegamorphicForTest(t *testing.T, r *Runtime, cl *closure, e *jitEntry, op bytecode.Op, regOps ...bytecode.ROp) bool {
 	t.Helper()
-	if !r.regOn() {
-		for pc, in := range cl.fn.Code {
-			if in.Op == op {
-				return r.jitSiteMegamorphic(cl, e, pc)
-			}
-		}
-		t.Fatalf("no %v", op)
-	}
+
 	c := r.regOf(cl)
 	for rpc, w := range c.rc.Code {
 		if !slices.Contains(regOps, w.Op()) {
@@ -123,14 +103,7 @@ func jitSiteMegamorphicForTest(t *testing.T, r *Runtime, cl *closure, e *jitEntr
 // register code's get_method's.
 func jitMethodSiteForTest(t *testing.T, r *Runtime, cl *closure) (int, Atom) {
 	t.Helper()
-	if !r.regOn() {
-		for pc := len(cl.fn.Code) - 1; pc >= 0; pc-- {
-			if in := cl.fn.Code[pc]; in.Op == bytecode.OpGetPropThis {
-				return int(in.B), cl.names[in.A]
-			}
-		}
-		t.Fatal("no get_prop_this")
-	}
+
 	c := r.regOf(cl)
 	for _, w := range c.rc.Code {
 		if op := w.Op(); op == bytecode.RGetMethod || op == bytecode.RGetMethodW {
@@ -146,10 +119,7 @@ func jitMethodSiteForTest(t *testing.T, r *Runtime, cl *closure) (int, Atom) {
 // inlining's bounds count (ssa.MaxInline): its stack form's, or its
 // register code's, converted (jitRegInlineSize).
 func jitInlineSizeForTest(r *Runtime, cl *closure) int {
-	if r.regOn() {
-		return jitRegInlineSize(r.regOf(cl))
-	}
-	return len(cl.fn.Code)
+	return jitRegInlineSize(r.regOf(cl))
 }
 
 // jitLongRepeatsForTest is how many times a test's body repeats a
@@ -158,10 +128,7 @@ func jitInlineSizeForTest(r *Runtime, cl *closure) int {
 // register code: a repeat of x=(x*3+1)|0 is four of the stack form's
 // instructions, and two and a half of register code's (jitRegInlineSize).
 func jitLongRepeatsForTest(n int) int {
-	if regJITForTest() {
-		return n * 3 / 2
-	}
-	return n
+	return n * 3 / 2
 }
 
 // osrRegHeader is the register pc of the header of the only loop e's
@@ -242,9 +209,7 @@ func jitRegPendingRecompileForTest(t *testing.T, r *Runtime) (*jitRegEntry, *jit
 // and its register code where the runtime runs register code: nil for
 // either it has none of.
 func jitNamedForTest(r *Runtime, name string) (*jitEntry, *jitRegEntry) {
-	if !r.regOn() {
-		return jitCallbackEntry(r, name), nil
-	}
+
 	if r.jit == nil {
 		return nil, nil
 	}

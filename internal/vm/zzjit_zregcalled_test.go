@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // regLexThisSetup's functions make arrows that read their this, the maker's
@@ -58,8 +56,8 @@ const regLexThisSetup = `
 // regCalledRounds are the rounds a register test of calledSetup, givenSetup
 // or regLexThisSetup runs: warm ones, then ones whose exits are inside the
 // inlined closures.
-// Their loops run ten times the stack form's tests' turns, which the
-// register tier's samples need to find them hot -- a driver's loop a
+// Their loops run ten times as many turns as calledSetup's tests did,
+// which the interpreter's samples need to find them hot -- a driver's loop a
 // hundred times, its back edges what samples it: the interpreter's back
 // edges are counted across the runtime, and those of loops native code
 // runs are not, so the more of the other rounds run natively the later a
@@ -90,6 +88,46 @@ func regCalledRounds(setup string) []string {
 	return rounds
 }
 
+// TestJITRegCalledClosuresPolled runs calledSetup's and regLexThisSetup's
+// rounds with loops polling every 3 back edges and every 7th poll finishing
+// the invocation in the interpreter (QJS_JIT_STRESS's budget and deopt), the
+// collector idle and marking: the frame the interpreter goes on with names
+// the closures the code only calls by their templates, which Go makes
+// before it does, as at any exit -- left unmade, squares threw "object is
+// not a function" at its call of sq.
+func TestJITRegCalledClosuresPolled(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, setup := range []struct{ name, src string }{{"called", calledSetup}, {"lexThis", regLexThisSetup}} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/marking=%v", setup.name, marking), func(t *testing.T) {
+				if marking {
+					jitMarkingForTest(t)
+				}
+				rts := regNativeRuntimes(t, setup.src)
+				r := rts[0]
+				r.SetJITWarmUp(1, 1)
+				r.jitStress = jitStressConfig{budget: 3, deopt: 7}
+				for _, round := range regCalledRounds(setup.src) {
+					prog := compileForTest(t, round)
+					var got [2]string
+					for k, r := range rts {
+						v, err := r.Run(prog)
+						got[k] = regNativeShow(r, v, err)
+					}
+					if got[0] != got[1] {
+						t.Fatalf("%s: with the JIT %q, without %q", round, got[0], got[1])
+					}
+				}
+				if r.jit.materialized == 0 {
+					t.Error("Go made no closure the code did not make")
+				}
+			})
+		}
+	}
+}
+
 // TestJITRegCalledClosures runs calledSetup's, givenSetup's and
 // regLexThisSetup's rounds in register code natively and with no JIT, the
 // collector idle and marking, and compares every answer: the closures the
@@ -114,17 +152,14 @@ func TestJITRegCalledClosures(t *testing.T) {
 				if marking {
 					jitMarkingForTest(t)
 				}
-				RecordJITCompiles(true)
-				defer RecordJITCompiles(false)
+				recordJITCompilesForTest(t)
 				rts := regNativeRuntimes(t, setup.src)
 				r := rts[0]
 				r.SetJITWarmUp(1, 1)
 				rounds := regCalledRounds(setup.src)
 				warm := len(rounds) * 5 / 8
 				for i, round := range rounds {
-					compiler.SetRegisterForm(true)
 					prog := compileForTest(t, round)
-					compiler.SetRegisterForm(false)
 					var got [2]string
 					for k, r := range rts {
 						v, err := r.Run(prog)
@@ -166,48 +201,6 @@ func TestJITRegCalledClosures(t *testing.T) {
 				}
 				if fns, _, inlined := regCompileARM64(t, r); fns == 0 || inlined == 0 {
 					t.Errorf("compiled for arm64: %d functions, %d inlined", fns, inlined)
-				}
-			})
-		}
-	}
-}
-
-// TestJITRegCalledClosuresPolled runs calledSetup's and regLexThisSetup's
-// rounds with loops polling every 3 back edges and every 7th poll finishing
-// the invocation in the interpreter (QJS_JIT_STRESS's budget and deopt), the
-// collector idle and marking: the frame the interpreter goes on with names
-// the closures the code only calls by their templates, which Go makes
-// before it does, as at any exit -- left unmade, squares threw "object is
-// not a function" at its call of sq.
-func TestJITRegCalledClosuresPolled(t *testing.T) {
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	for _, setup := range []struct{ name, src string }{{"called", calledSetup}, {"lexThis", regLexThisSetup}} {
-		for _, marking := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/marking=%v", setup.name, marking), func(t *testing.T) {
-				if marking {
-					jitMarkingForTest(t)
-				}
-				rts := regNativeRuntimes(t, setup.src)
-				r := rts[0]
-				r.SetJITWarmUp(1, 1)
-				r.jitStress = jitStressConfig{budget: 3, deopt: 7}
-				for _, round := range regCalledRounds(setup.src) {
-					compiler.SetRegisterForm(true)
-					prog := compileForTest(t, round)
-					compiler.SetRegisterForm(false)
-					var got [2]string
-					for k, r := range rts {
-						v, err := r.Run(prog)
-						got[k] = regNativeShow(r, v, err)
-					}
-					if got[0] != got[1] {
-						t.Fatalf("%s: with the JIT %q, without %q", round, got[0], got[1])
-					}
-				}
-				if r.jit.materialized == 0 {
-					t.Error("Go made no closure the code did not make")
 				}
 			})
 		}

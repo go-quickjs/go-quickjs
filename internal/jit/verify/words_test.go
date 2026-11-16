@@ -43,6 +43,7 @@ func TestMirWordsComparedOnce(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
 			if err != nil {

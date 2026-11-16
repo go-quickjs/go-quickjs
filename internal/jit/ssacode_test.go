@@ -1173,6 +1173,16 @@ func compileNative(p *ir.Program, l layout) (*compiled, error) {
 		return nil, err
 	}
 	f.FrameLocals, f.ThisSlot = l.frame, l.this
+	if p.Origin != nil {
+		// Register code's program: its frame is its registers, and the
+		// slots past its captured bindings and receiver are its
+		// expansions' scratch slots (the VM's jitRegShape).
+		base := p.UpvalueBase + p.Upvalues
+		if p.This {
+			base++
+		}
+		f.Scratch = p.Locals - base
+	}
 	ssa.Optimize(f)
 	mc, err := mir.Compile(f, testEncoding)
 	if errors.Is(err, mir.ErrUnsupported) && !strings.Contains(err.Error(), "runtime error") {
@@ -1206,11 +1216,14 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	ctx := &abi.Context{}
 	ctx.SetConsts(&testEncoding)
 	this := (*testValue)(unsafe.Pointer(&ctx.This))
-	captured := make([]testValue, f.Locals-f.FrameLocals)
+	// A register program's scratch slots, the last Scratch of its Locals,
+	// are below the context's Stack, in the frame as an operand is.
+	bound := f.Locals - f.Scratch
+	captured := make([]testValue, bound-f.FrameLocals)
 	cells := make([]*testUpvalue, len(captured))
 	for i, v := range slots {
 		frame[i] = nh.word(v)
-		if k := i - f.FrameLocals; k >= 0 && i < f.Locals {
+		if k := i - f.FrameLocals; k >= 0 && i < bound {
 			captured[k], frame[i] = frame[i], testPoison
 			cells[k] = &testUpvalue{slot: &captured[k]}
 			if i == f.ThisSlot {
@@ -1223,7 +1236,7 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 		if i == f.ThisSlot {
 			return this
 		}
-		if k := i - f.FrameLocals; k >= 0 && i < f.Locals {
+		if k := i - f.FrameLocals; k >= 0 && i < bound {
 			return &captured[k]
 		}
 		return &frame[i]
@@ -1305,12 +1318,18 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	if got.State != wantExit.State {
 		return report("exit state")
 	}
+	// A register program's scratch slots are live only inside one
+	// instruction, never in a state: what an exit leaves there is not
+	// compared.
 	for i := 0; i < f.Locals+wantExit.State.Depth; i++ {
+		if i >= bound && i < f.Locals {
+			continue
+		}
 		if w := nh.word(want[i]); *at(i) != w {
 			return report(fmt.Sprintf("slot %d", i))
 		}
 	}
-	for i := f.FrameLocals; i < f.Locals; i++ {
+	for i := f.FrameLocals; i < bound; i++ {
 		if frame[i] != testPoison {
 			return report(fmt.Sprintf("frame entry %d, a captured binding's number", i))
 		}
@@ -2015,11 +2034,11 @@ func TestSSANativeFromJavaScript(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			p, err := jitcompile.Lower(c.Fn)
+			p, err := jitcompile.LowerReg(c.Fn.RegCode(), c.Fn)
 			if err != nil {
 				continue
 			}
-			if checkNative(t, r, p, layout{c.Fn.LocalCount, -1, nil, nil, nil, nil, nil}) {
+			if checkNative(t, r, p, layout{p.Regs, -1, nil, nil, nil, nil, nil}) {
 				compiled++
 			}
 		}

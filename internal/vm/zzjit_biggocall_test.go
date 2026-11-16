@@ -59,7 +59,7 @@ func TestJITBigIntGoCalls(t *testing.T) {
 	e := jitCodeForTest(r, "heap")
 	if e == nil || e.invalid {
 		if e != nil {
-			t.Fatalf("heap has no code: invalid %v, refusal %q, deferred %v, deopts %d, learned %v, generic %v", e.invalid, e.refusal, e.deferred, e.deopts, e.bigints, e.failed)
+			t.Fatalf("heap has no code: invalid %v, deferred %v, deopts %d, learned %v, generic %v", e.invalid, e.deferred, e.deopts, e.bigints, e.failed)
 		}
 		t.Fatal("heap has no entry")
 	}

@@ -7,14 +7,13 @@ import (
 	"testing"
 )
 
-// The tree tier's object literals (zzz_zliteral.go), additions to
-// captured bindings (zzz_zupvstr.go), push and pop (pureElemOp, which
-// native code's growth of an array calls too), a for...in's cursors used
-// again (zzz_forincursor.go) and arrays grown past 16,384 elements
-// (zzz_growelems.go) answer as the interpreter
-// does with the JIT on, the tree tier warming code up and running what
-// native code leaves -- under every stress setting, with the collector
-// idle and while it marks -- and native code runs some of each.
+// Object literals, additions to captured bindings, push
+// and pop (pureElemOp, which native code's growth of an array calls too), a
+// for...in's cursors used again (zzz_forincursor.go) and arrays grown past
+// 16,384 elements (zzz_growelems.go) answer as the interpreter does with
+// the JIT on, the interpreter warming code up and running what native code
+// leaves -- under every stress setting, with the collector idle and while
+// it marks -- and native code runs some of each.
 func TestJITLiteralsUpvalueAddsPushes(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

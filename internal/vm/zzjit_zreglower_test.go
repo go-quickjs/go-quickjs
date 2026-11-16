@@ -10,13 +10,13 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
-// A function's register code is lowered once for each kind and kept, as
-// the stack form's programs are (jitLowering): asked again -- by each
-// caller that inlines it, by each compile of its own -- the program is
-// the one lowered first, checked once, until its code learns a hint, which
-// the next ask lowers it anew with. Lowered at every ask, Typescript's
-// compiles lowered some 0.6 GB of programs a run. What the lowerings hold
-// is the JIT's to count (lowerBytes).
+// A function's register code is lowered once for each kind and kept
+// (jitLowering): asked again -- by each caller that inlines it, by each
+// compile of its own -- the program is the one lowered first, checked once,
+// until its code learns a hint, which the next ask lowers it anew with.
+// Lowered at every ask, Typescript's compiles lowered some 0.6 GB of
+// programs a run. What the lowerings hold is the JIT's to count
+// (lowerBytes).
 func TestJITRegLowersOnce(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -85,7 +85,7 @@ func TestJITRegLowersOnce(t *testing.T) {
 // compiled again reads it there: a write met at more than one shape --
 // here an array's length, the arrays of two shapes -- is megamorphic in
 // the callee's next inlining, as in its own code (megamorphicOf). Looked
-// for in the stack form's cache, which holds nothing of register code, it
+// for in the stack form's cache, which held nothing of register code, it
 // was compiled for one shape at every compile of its caller, which
 // deoptimized there each time: Typescript's returnResolutionData,
 // rd.actuals.length = 0, inlined, had its caller compiled twelve times.
@@ -110,8 +110,7 @@ func TestJITRegInlinedMegamorphicWrite(t *testing.T) {
 		}
 	}
 	// Two writes, each deoptimizing at its second shape, then at the shape
-	// it met before once the code is compiled again (jitDeoptSeenOp), as
-	// the stack form's code does.
+	// it met before once the code is compiled again (jitDeoptSeenOp).
 	if n := r.jit.guards - guards; n > 4 {
 		t.Errorf("%d guards failed in 40 rounds: the inlined writes deoptimized at every compile", n)
 	}

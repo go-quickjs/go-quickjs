@@ -10,25 +10,21 @@ import (
 	"golang.org/x/arch/x86/x86asm"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// calls is props whose plain calls have each called one function natively,
-// of two parameters, which reads no receiver.
+// calls is props whose calls have each called one function natively, of
+// two parameters and five registers (its function, its this, the two and a
+// binding of its own), which reads no receiver.
 type calls struct{ props }
 
 func (f calls) NativeCalls(pc int) []ssa.CallSite {
-	if pc+1 >= len(f.p.Maps) || f.p.Code[pc].Op != ir.Call && f.p.Code[pc].Op != ir.Host {
+	argc, method, ok := regCall(f.p, pc)
+	if !ok {
 		return nil
 	}
-	operands := int(f.p.Maps[pc].Depth) - int(f.p.Maps[pc+1].Depth) + 1
-	if operands < 1 {
-		return nil
-	}
-	return []ssa.CallSite{{Callee: 0x50000, Closure: 0x51000, Entry: 0x52000, Count: 0x53000, Argc: operands - 1,
-		Params: 2, LocalCount: 3, MaxStack: 4, ThisSlot: -1}}
+	return []ssa.CallSite{regCallee(f.p, pc, argc, 2, 5, method)}
 }
 
 // callCorpus calls a function passed in natively: its result dropped and
@@ -84,7 +80,11 @@ func TestMirCallsLean(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
-		LinkEntry: 8, LinkIn: 16, ClosureUpvalues: 24}
+		LinkEntry: 8, LinkIn: 16, ClosureUpvalues: 24,
+		// Register code's call (ssa.CallSite's Window) is made natively
+		// only where Go makes the calls it does not (mir's call), as the
+		// VM's encoding always lets it: without CallGo, every call exits.
+		CallGo: 0x72000}
 	defer func() { mir.Annotate = false }()
 	mir.Annotate = true
 	dropped, used, boxes, entries, returns, frames := 0, 0, 0, 0, 0, 0
@@ -94,6 +94,7 @@ func TestMirCallsLean(t *testing.T) {
 			if err != nil {
 				continue
 			}
+			regShape(f, p)
 			f.CallEntry = true
 			ssa.Optimize(f)
 			mc, err := mir.CompileAMD64(f, enc)
@@ -246,6 +247,7 @@ func TestMirCallsOneGoFallback(t *testing.T) {
 				if err != nil {
 					continue
 				}
+				regShape(f, p)
 				f.CallEntry = true
 				ssa.Optimize(f)
 				mc, err := target.compile(f, enc)

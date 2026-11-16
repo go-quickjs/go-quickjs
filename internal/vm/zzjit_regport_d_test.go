@@ -125,25 +125,18 @@ type jitCallbackCode struct {
 // r, the stack form's entry's (jitCallbackEntry) or its register code's
 // (regEntryNamedForTest).
 func jitCallbackCodeForTest(r *Runtime, name string) jitCallbackCode {
-	if regJITForTest() {
-		e := regEntryNamedForTest(r, name)
-		if e == nil {
-			if l := regLifeNamedForTest(r, name); l != nil {
-				return jitCallbackCode{e: l}
-			}
-			return jitCallbackCode{}
-		}
-		c := jitCallbackCode{e: e.life, code: true, loops: regMakesLoopsForTest(r, e)}
-		if e.keep != nil {
-			c.callbacks, c.unmade, c.inlined = e.keep.callbacks, e.keep.unmade, len(e.keep.inlined)
-		}
-		return c
-	}
-	e := jitCallbackEntry(r, name)
+	e := regEntryNamedForTest(r, name)
 	if e == nil {
+		if l := regLifeNamedForTest(r, name); l != nil {
+			return jitCallbackCode{e: l}
+		}
 		return jitCallbackCode{}
 	}
-	return jitCallbackCode{e: e, code: e.ssa != nil, loops: e.loops, callbacks: e.ssaCallbacks, unmade: e.ssaUnmade, inlined: len(e.ssaInlined)}
+	c := jitCallbackCode{e: e.life, code: true, loops: regMakesLoopsForTest(r, e)}
+	if e.keep != nil {
+		c.callbacks, c.unmade, c.inlined = e.keep.callbacks, e.keep.unmade, len(e.keep.inlined)
+	}
+	return c
 }
 
 // regLifeNamedForTest is the state that outlives the register code of the
@@ -165,17 +158,9 @@ func regLifeNamedForTest(r *Runtime, name string) *jitEntry {
 // form's entries' links' in, or the register form's regLinks'.
 func jitLinkInNamedForTest(r *Runtime, names ...string) uint64 {
 	n := uint64(0)
-	if regJITForTest() {
-		for k, l := range r.jit.regLinks {
-			if fn := k.Value(); fn != nil && slices.Contains(names, fn.Name) && l != nil {
-				n += l.in
-			}
-		}
-		return n
-	}
-	for k, x := range r.jit.cache {
-		if fn := k.Value(); fn != nil && slices.Contains(names, fn.Name) && x.link != nil {
-			n += x.link.in
+	for k, l := range r.jit.regLinks {
+		if fn := k.Value(); fn != nil && slices.Contains(names, fn.Name) && l != nil {
+			n += l.in
 		}
 	}
 	return n
@@ -189,10 +174,7 @@ func jitHintForTest(r *Runtime, cl *closure) *jitEntry {
 	if r.jit == nil {
 		return nil
 	}
-	if regJITForTest() {
-		return r.jit.regLearned[jitRegKeyInRealmForTest(r, cl)]
-	}
-	return r.jit.hint(cl)
+	return r.jit.regLearned[jitRegKeyInRealmForTest(r, cl)]
 }
 
 // jitRegKeyInRealmForTest is the key of cl's register code in cl's own
@@ -220,20 +202,13 @@ func jitRegKeyOfLifeForTest(r *Runtime, e *jitEntry) (jitKey, bool) {
 }
 
 // jitEntryCodeForTest reports whether e, an entry jitHintForTest gives,
-// has code: the stack form's entry's own, or the register code in the
-// cache its life (e) belongs to.
+// has code: the register code in the cache its life (e) belongs to.
 func jitEntryCodeForTest(r *Runtime, e *jitEntry) bool {
-	if e == nil {
-		return false
-	}
-	if e.jitLearned != nil && e.reg {
-		return jitEntryRegCodeForTest(r, e) != nil
-	}
-	return e.ssa != nil
+	return jitEntryRegCodeForTest(r, e) != nil
 }
 
 // jitEntryRegCodeForTest is the register code whose life e is, nil where
-// the cache holds none with code or e is a stack form's entry.
+// the cache holds none with code.
 func jitEntryRegCodeForTest(r *Runtime, e *jitEntry) *jitRegEntry {
 	if e == nil || e.jitLearned == nil || !e.reg {
 		return nil
@@ -246,17 +221,13 @@ func jitEntryRegCodeForTest(r *Runtime, e *jitEntry) *jitRegEntry {
 	return nil
 }
 
-// jitEntryLinkForTest is the link native callers call e's code through,
-// in either form: the stack form's entry's, or the register code's
-// (jitLearned's regLink); nil for none.
+// jitEntryLinkForTest is the link native callers call e's code through:
+// the register code's (jitLearned's regLink); nil for none.
 func jitEntryLinkForTest(e *jitEntry) *jitLink {
-	if e == nil {
+	if e == nil || e.jitLearned == nil {
 		return nil
 	}
-	if e.jitLearned != nil && e.reg {
-		return e.regLink
-	}
-	return e.link
+	return e.regLink
 }
 
 // regVirtualsForTest has the register compiles made until stop is called
@@ -291,24 +262,15 @@ func regVirtualsForTest(t *testing.T) (virtuals func(fn *bytecode.Function) int,
 // (regVirtualsForTest), which a test that asks does not run in parallel
 // where runtimes run register code.
 func jitVirtualsForTest(t *testing.T) (virtuals func(r *Runtime, name string) (code bool, n int), stop func()) {
-	if regJITForTest() {
-		noted, stop := regVirtualsForTest(t)
-		return func(r *Runtime, name string) (bool, int) {
-			for k, e := range r.jit.regCache {
-				if fn := k.Value(); fn != nil && fn.Name == name && e != nil && e.code != nil {
-					return true, noted(fn)
-				}
-			}
-			return false, 0
-		}, stop
-	}
+	noted, stop := regVirtualsForTest(t)
 	return func(r *Runtime, name string) (bool, int) {
-		e := jitCallbackEntry(r, name)
-		if e == nil || e.ssa == nil {
-			return false, 0
+		for k, e := range r.jit.regCache {
+			if fn := k.Value(); fn != nil && fn.Name == name && e != nil && e.code != nil {
+				return true, noted(fn)
+			}
 		}
-		return true, e.ssaVirtuals
-	}, func() {}
+		return false, 0
+	}, stop
 }
 
 // regRebuiltVirtualsForTest is how many objects the register code of the
@@ -340,10 +302,7 @@ func regRebuiltVirtualsForTest(t *testing.T, r *Runtime, name string) (bool, int
 // register code's compiles share (regLifeNamedForTest), whose targets
 // (jitTargets) and counts are the stack form's entry's counterparts.
 func jitEntryNamedForTest(r *Runtime, name string) *jitEntry {
-	if regJITForTest() {
-		return regLifeNamedForTest(r, name)
-	}
-	return jitCallbackEntry(r, name)
+	return regLifeNamedForTest(r, name)
 }
 
 // jitCachedForTest is what r's JIT's cache holds for the global function
@@ -353,14 +312,8 @@ func jitEntryNamedForTest(r *Runtime, name string) *jitEntry {
 // same; code says whether it holds code.
 func jitCachedForTest(r *Runtime, name string) (held any, code bool) {
 	cl := jitGlobalClosure(r, name)
-	if regJITForTest() {
-		if e := r.jit.regCache[r.jitRegKeyOf(cl)]; e != nil {
-			return e, e.code != nil
-		}
-		return nil, false
-	}
-	if e := r.jit.cache[r.jitKeyOf(cl.fn)]; e != nil {
-		return e, e.ssa != nil
+	if e := r.jit.regCache[r.jitRegKeyOf(cl)]; e != nil {
+		return e, e.code != nil
 	}
 	return nil, false
 }
@@ -402,22 +355,15 @@ func regEntriesFoundForTest(s *jitState) error {
 // or no link.
 func jitCalleeCodeForTest(t *testing.T, r *Runtime, name string) (*jitEntry, *jitLink, *jit.SSACode) {
 	t.Helper()
-	if regJITForTest() {
-		cl := jitGlobalClosure(r, name)
-		key := r.jitRegKeyOf(cl)
-		e := r.jit.regCache[key]
-		if e == nil || e.code == nil || e.life == nil {
-			t.Fatalf("%s has no code: %+v", name, e)
-		}
-		l := r.jit.regLinks[key]
-		if l == nil {
-			t.Fatalf("%s has no link: %+v", name, e)
-		}
-		return e.life, l, e.code
+	cl := jitGlobalClosure(r, name)
+	key := r.jitRegKeyOf(cl)
+	e := r.jit.regCache[key]
+	if e == nil || e.code == nil || e.life == nil {
+		t.Fatalf("%s has no code: %+v", name, e)
 	}
-	e := jitNativeOrCalleeForTest(t, r, name)
-	if e.link == nil {
+	l := r.jit.regLinks[key]
+	if l == nil {
 		t.Fatalf("%s has no link: %+v", name, e)
 	}
-	return e, e.link, e.ssa
+	return e.life, l, e.code
 }

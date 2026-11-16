@@ -8,7 +8,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -32,10 +31,13 @@ var typeofCorpus = []string{
 
 // typeofs is globals whose typeofs Go makes from native code (a GoCall
 // site of TypeOf), and whose VM keeps a table of their names
-// (ssa.TypeofFeedback), which native code loads the answer from.
+// (ssa.TypeofFeedback), which native code loads the answer from. Register
+// code's typeof is a Window Host of its own instruction, and its string
+// constants StringConsts of load_const's, a switch's case's and
+// load_empty's, as the VM's NativeCalls and constant read them.
 type typeofs struct {
 	globals
-	fn *bytecode.Function
+	p *ir.Program
 }
 
 func (typeofs) GoCalls() bool                { return true }
@@ -49,18 +51,28 @@ func (t typeofs) StringCell(pc int) (uintptr, bool) {
 	return 0x95000 + uintptr(pc)*16, ok
 }
 func (t typeofs) StringContent(pc int) (string, bool) {
-	switch in := t.fn.Code[pc]; in.Op {
-	case bytecode.OpPushEmptyString:
+	w, ok := regInstr(t.p, pc)
+	if !ok || t.p.Code[pc].Op != ir.StringConst {
+		return "", false
+	}
+	if w.Op() == bytecode.RLoadEmpty {
 		return "", true
-	case bytecode.OpPushConst:
-		if k := t.fn.Constants[in.A]; k.Kind == bytecode.ConstString {
-			return k.Str, true
+	}
+	consts := regFns[t.p].Constants
+	if rc := regCodes[t.p]; rc.Constants != nil {
+		consts = rc.Constants
+	}
+	k := int(t.p.Code[pc].Key)
+	switch w.Op() {
+	case bytecode.RLoadConst, bytecode.RSwitch, bytecode.RNewArrayK:
+		if k < len(consts) && consts[k].Kind == bytecode.ConstString {
+			return consts[k].Str, true
 		}
 	}
 	return "", false
 }
 func (t typeofs) NativeCalls(pc int) []ssa.CallSite {
-	if t.fn.Code[pc].Op != bytecode.OpTypeOf {
+	if w, ok := regInstr(t.p, pc); !ok || w.Op() != bytecode.RTypeof || t.p.Code[pc].Op != ir.Host || !t.p.Code[pc].Window {
 		return nil
 	}
 	return []ssa.CallSite{{Go: ssa.GoCall, TypeOf: true, ThisSlot: -1}}
@@ -90,15 +102,16 @@ func TestMirTypeof(t *testing.T) {
 			if c.Kind != bytecode.ConstFunction {
 				continue
 			}
-			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){jitcompile.LowerSSA, jitcompile.LowerSSAInline} {
+			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){regLowerForTest, regLowerInlineForTest} {
 				p, err := lower(c.Fn)
 				if err != nil {
 					continue
 				}
-				f, err := ssa.BuildWith(p, typeofs{fn: c.Fn})
+				f, err := ssa.BuildWith(p, typeofs{p: p})
 				if err != nil {
 					t.Fatalf("%s: %v", src, err)
 				}
+				regShape(f, p)
 				f.CallEntry = true
 				ssa.Optimize(f)
 				for _, b := range f.Blocks {
@@ -131,7 +144,14 @@ func TestMirTypeof(t *testing.T) {
 			}
 		}
 	}
-	if cells == 0 || tests < 6 || strs < 8 {
-		t.Errorf("typeof's answers made natively %d, its tests %d, string constants known %d", cells, tests, strs)
+	if tests < 6 || strs < 8 {
+		t.Errorf("typeof's tests %d, string constants known %d", tests, strs)
+	}
+	if cells == 0 {
+		// Register code's typeof is a Window Host (the compile package's
+		// LowerReg), which ssa's typeofAt, asking the operand stack's
+		// depths of the stack form's typeof, never takes: the builder
+		// makes it a call of Go in every function (its window's TypeOf).
+		t.Errorf("typeof's answers made natively %d: register code's typeof is always Go's", cells)
 	}
 }

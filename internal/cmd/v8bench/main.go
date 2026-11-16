@@ -32,7 +32,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
-	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 func main() { v8bench.Main("go-quickjs", engine{}) }
@@ -58,7 +57,7 @@ func (engine) Compile(name, src string) error {
 	if err != nil {
 		return err
 	}
-	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src, NoRegister: !vm.RegTierOn()})
+	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src})
 	if err != nil {
 		return err
 	}

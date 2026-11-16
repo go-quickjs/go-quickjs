@@ -18,8 +18,7 @@ import (
 // a generator yielding in its clause, run to its end and returned from; a
 // for-of's iterator closed by a break before the clause runs; closures of
 // a block's bindings in the try and in the clause; and the try's value
-// returned before the clause changes what it was read from. On the trees
-// and in the interpreter.
+// returned before the clause changes what it was read from.
 func TestFinallyInline(t *testing.T) {
 	t.Parallel()
 	src := `
@@ -45,16 +44,14 @@ func TestFinallyInline(t *testing.T) {
 		var s = out.join('|')
 		s`
 	const want = `a|r|try|fin|504|0001101120|f|g|1k1k2|0,0,1,10,2,20|orig|e1|TypeErrorfrom finally|123|{"value":3,"done":false}|{"value":9,"done":true}|{"done":true}|t1,f1,fb,in,f1,f2,f3,f4,g,fb,g,hf,hf`
-	for _, tree := range []bool{true, false} {
-		r := newTreeTierForTest(tree, Config{})
-		v, err := r.Run(compileForTest(t, src))
-		r.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -72,20 +69,18 @@ func TestFinallyInlineCompletion(t *testing.T) {
 		{"try { throw 1 } catch (e) { 7 } finally { 8 }", "7"},
 		{"try { } finally { 9 }", "undefined"},
 	} {
-		for _, tree := range []bool{true, false} {
-			r := newTreeTierForTest(tree, Config{})
-			v, err := r.Run(compileForTest(t, tc.src))
-			if err != nil {
-				t.Fatal(err)
-			}
-			str, err := r.ToString(v)
-			r.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := str.Go(); got != tc.want {
-				t.Errorf("%s, tree tier %v: got %s, want %s", tc.src, tree, got, tc.want)
-			}
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, tc.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		str, err := r.ToString(v)
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := str.Go(); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.src, got, tc.want)
 		}
 	}
 }

@@ -469,8 +469,7 @@ func newResumeCopies(f *Func, p *ir.Program) *resumeCopies {
 // closure made of its template. Register code's call reads its callee in
 // a window register that a copy of the closure's register wrote (move
 // r5, r4; call_w r5 = r5(1)), live across a call before it whose inlined
-// callee may leave to Go, where the stack form's has the closure's local
-// alone (calledHome).
+// callee may leave to Go.
 func (c *resumeCopies) holds(a *Value, in map[*Value]bool) bool {
 	if a.Op != OpLoadSlot || c.at == nil {
 		return false

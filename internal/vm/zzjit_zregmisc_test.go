@@ -10,14 +10,13 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// regFramelessSrc runs operations register code has Go make without a
-// frame, as the stack form's (jitRegFrameless, jitForInPlain,
-// jitForOfPlain, jitStepPlain): an object pattern's rest, of a plain
-// object and of one whose getter the copy calls; computed keys of
-// strings, numbers, symbols and an object whose toString counts its
-// calls; a literal's __proto__; for...in over a plain object, a
-// dictionary and a proxy; for...of over a dense array, one with a hole
-// and one that grows while it is walked.
+// regFramelessSrc runs operations register code has Go make without a frame
+// (jitRegFrameless, jitForInPlain, jitForOfPlain, jitStepPlain): an object
+// pattern's rest, of a plain object and of one whose getter the copy calls;
+// computed keys of strings, numbers, symbols and an object whose toString
+// counts its calls; a literal's __proto__; for...in over a plain object, a
+// dictionary and a proxy; for...of over a dense array, one with a hole and
+// one that grows while it is walked.
 const regFramelessSrc = `
 var gets = 0, keys = 0, sym = Symbol("s");
 function rest(n) {
@@ -299,17 +298,16 @@ func TestJITRegLoopsLeaving(t *testing.T) {
 				}
 			}
 			// 20 calls of 2 fills of 4096 stores, those to a sparse array
-			// Go's: a run's worth of them, 64, left at for each probe before
-			// the loop is judged not to pay -- the work the code did
+			// Go's: a run's worth of them, 64, left at for each probe
+			// before the loop is judged not to pay -- the work the code did
 			// natively before, in the fills' other loops, wears off at 12 a
-			// store -- which the run then leaves (Ended's slow loop), and as
-			// many again each time a loop's checks of the code retry it
-			// (jitRegRetrySlow, counting them as calls, as the stack form's
-			// tryJITAt does): 2624 with the loop compiled at a sample, 3072
-			// compiled where its count of back edges spent its budget
-			// (jitRegEdges), which then ran natively longer before; less
-			// than a fill's stores, against 108,863 where the run went on
-			// natively after each, never judged.
+			// store -- which the run then leaves (Ended's slow loop), and
+			// as many again each time a loop's checks of the code retry it
+			// (jitRegRetrySlow, counting them as calls): 2624 with the loop
+			// compiled at a sample, 3072 compiled where its count of back
+			// edges spent its budget (jitRegEdges), which then ran natively
+			// longer before; less than a fill's stores, against 108,863
+			// where the run went on natively after each, never judged.
 			slow := uint64(0)
 			for k, n := range st.Ended {
 				if strings.HasPrefix(k, "slow loop at ") && strings.HasSuffix(k, " in fillDown") {

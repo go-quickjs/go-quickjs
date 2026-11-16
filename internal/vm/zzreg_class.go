@@ -3,9 +3,9 @@ package vm
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // The register form's classes, private names, super and this
-// (docs/register-interpreter.md, stage 2): cold operations, each what the
-// stack form's instruction of the same name does, with the runtime
-// functions the stack interpreter calls.
+// (docs/register-interpreter.md, "The operations"): cold operations, each
+// what the stack form's instruction of the same name stands for, made with
+// the runtime's shared functions.
 
 // regNewClass is new_class.
 func (r *Runtime) regNewClass(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
@@ -337,8 +337,8 @@ func (r *Runtime) regCloseRegsOp(f *frame, c *regCode, pc int, w bytecode.RInstr
 
 // regGetPrivate is get_private, a slow path of runReg's, R[A] = R[B].#R[C]:
 // the member where the site's cache (Aux's high 16 bits) remembers it for
-// the object's shape, or found and remembered, as the tree's privateRead
-// does, and getPrivate's answer otherwise. A function's caches are its
+// the object's shape, or found and remembered, and getPrivate's answer
+// otherwise. A function's caches are its
 // closures', which every evaluation of the class shares, each with names
 // of its own: the key at the remembered index is checked.
 //

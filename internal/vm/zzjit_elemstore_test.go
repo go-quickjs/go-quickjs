@@ -19,8 +19,7 @@ import (
 // index with a setter up the chain, a typed array's element converted from
 // an object, whose valueOf runs -- does what the interpreter does; a value
 // read from an element before a store to it is the value it read. Each
-// answer is the interpreter's, in every tier and under every stress
-// setting.
+// answer is the interpreter's, under every stress setting.
 func TestJITElementStores(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -90,16 +89,6 @@ func TestJITElementStoresNative(t *testing.T) {
 		}
 		function build(n) { for (let i = 0; i < 3; i++) piles[i] = null; for (let i = n; i > 0; i--) push(new Disk(i), 0); return n }`
 	r := jitAgreesForTest(t, setup, `build(50)`, `move(2000)`, `move(2000)`, `move(2000)`)
-	for _, name := range []string{"push", "pop"} {
-		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-		// Inlined in move, or called natively from it: never left to Go by
-		// its native callers. (Go's own calls of it, made while move's code
-		// was invalidated and the tree tier ran it, may have judged it slow
-		// for Go to enter, which is Go's alone: entrySlow.)
-		if e := r.jitEntryOf(cl); e != nil && e.notNative {
-			t.Fatalf("%s does not run natively: %+v", name, e)
-		}
-	}
 	e := jitNativeForTest(t, r, "move")
 	hosts := e.ssaStats.hosts
 	if _, err := r.Run(compileForTest(t, `move(2000)`)); err != nil {
@@ -143,11 +132,7 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 		function fill(n) { for (let i = 0; i < n; i++) { put(h, i & 63, i * 3); put(u, i & 63, i); put(d, i & 63, i / 4) } return h[5] + u[7] + d[9] }`,
 		`fill(1000)`, `fill(1000)`, `fill(1000)`, `[h[1], u[2], d[3], h.length].join()`)
 	cl := r.global.getOwn(r.atoms.intern("put")).value().Object().fn().closure
-	if !regJITForTest() {
-		if e := r.jitEntryOf(cl); e == nil || e.ssa == nil {
-			t.Fatalf("put has no code: %+v", e)
-		}
-	}
+
 	_, link, _ := jitLinkedOfForTest(t, r, cl, "put")
 	in, calls := link.in, 0
 	jitGoCallWork = func() { calls++ }
@@ -167,7 +152,7 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 // 0, natively (ssa.OpBoolToF64, OpBoolToI32): Emscripten's code combines
 // its comparisons with | and &, and Octane's zlib had left native code at
 // two such operators of every call of its hottest functions. Each answer
-// is the interpreter's, in every tier and under every stress setting.
+// is the interpreter's, under every stress setting.
 func TestJITBooleansAsNumbers(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -213,7 +198,7 @@ func TestJITBooleansAsNumbersNative(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Entered at each call: one that left at each was judged not to pay,
-	// and the tree tier ran it.
+	// and the interpreter ran it.
 	if n := e.ssaStats.entries - entries; n < 50 {
 		t.Fatalf("f ran natively %d times of 50", n)
 	}
@@ -223,12 +208,12 @@ func TestJITBooleansAsNumbersNative(t *testing.T) {
 }
 
 // A method called by its index, obj[i](...) -- Emscripten's calls through
-// its function table -- is compiled: the element read natively, the
-// object the call's receiver. A function with one had been refused, and
-// Mandreel's collision sorting ran in the tree tier. Each answer is the
-// interpreter's, in every tier and under every stress setting: the
-// callee's this the table, a hole, a function past the table's end, an
-// object with an index for a key, and a table of getters.
+// its function table -- is compiled: the element read natively, the object
+// the call's receiver. A function with one had been refused, and Mandreel's
+// collision sorting ran in the interpreter. Each answer is the
+// interpreter's, under every stress setting: the callee's this the table, a
+// hole, a function past the table's end, an object with an index for a key,
+// and a table of getters.
 func TestJITIndexedMethodCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -322,7 +307,7 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 // exit made a string with no pointer, which the interpreter's + met in
 // concat. FuzzJITDifferential found it in CI; it predated the stores'
 // checks (storeChecks), which this write had none of. Each answer is the
-// interpreter's, in every tier and under every stress setting.
+// interpreter's, under every stress setting.
 func TestJITNumberWriteOverReadString(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -349,8 +334,8 @@ func TestJITNumberWriteOverReadString(t *testing.T) {
 // read a typed array's number wherever the code compiled them, and Go's
 // read stands in once a binding holds something else: a plain array, an
 // array of holes and strings, a typed array of another type, a typed
-// array detached... Each answer is the interpreter's, in every tier and
-// under every stress setting.
+// array detached... Each answer is the interpreter's, under every stress
+// setting.
 func TestJITTypedGlobals(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -446,7 +431,7 @@ func TestJITTypedGlobalsNative(t *testing.T) {
 // properties each, the property at an index of each one's own, read and
 // written at one site, a read-only property, an accessor, one on a
 // prototype, one deleted, one frozen object. Each answer is the
-// interpreter's, in every tier and under every stress setting.
+// interpreter's, under every stress setting.
 func TestJITMegamorphicProperties(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

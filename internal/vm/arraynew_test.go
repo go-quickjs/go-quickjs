@@ -6,12 +6,12 @@ import (
 )
 
 // Array(...) and new Array(...), where new.target is Array itself, are a
-// native leaf every tier applies without a frame (elemArrayNew), where its
-// check passes: any arguments but one number that is not an array length,
-// which throws its RangeError the ordinary way, as does every construction
-// by another new.target or of a subclass. Node's answers, on the trees and
-// in the interpreter, from holes and lengths to elements, prototypes and
-// errors; and the check's own answers.
+// native leaf the interpreter applies without a frame (elemArrayNew), where
+// its check passes: any arguments but one number that is not an array
+// length, which throws its RangeError the ordinary way, as does every
+// construction by another new.target or of a subclass. Node's answers,
+// from holes and lengths to elements, prototypes and errors; and the
+// check's own answers.
 func TestArrayConstructionLeaf(t *testing.T) {
 	const src = `'use strict'
 		function show(a) { return Array.isArray(a) + ':' + a.length + ':' + Object.keys(a).join('.') + ':' + Array.from(a, (v) => v === undefined ? 'u' : String(v)).join('.') + ':' + (Object.getPrototypeOf(a) === Array.prototype) }
@@ -35,24 +35,19 @@ func TestArrayConstructionLeaf(t *testing.T) {
 		}
 		run()`
 	const want = "true:0:::true true:3::u.u.u:true true:0:::true true:17::u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u:true 70000 true:1:0:3:true true:2:0.1:1.2:true true:1:0:u:true true:3:0.1.2:null.x.3.5:true true:2::u.u:true true:1:0:a:true true:0:::true true:3:0.1.2:4.5.6:true true:2::u.u:true RangeError RangeError RangeError RangeError RangeError 4294967295 true:0:::true 2 sub true true 3 2 true:3:1:u.m.u:true false true true:0:::true true:3::u.u.u:true true:0:::true true:17::u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u:true 70000 true:1:0:3:true true:2:0.1:1.2:true true:1:0:u:true true:3:0.1.2:null.x.3.5:true true:2::u.u:true true:1:0:a:true true:0:::true true:3:0.1.2:4.5.6:true true:2::u.u:true RangeError RangeError RangeError RangeError RangeError 4294967295 true:0:::true 2 sub true true 3 2 true:3:1:u.m.u:true false true true:0:::true true:3::u.u.u:true true:0:::true true:17::u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u.u:true 70000 true:1:0:3:true true:2:0.1:1.2:true true:1:0:u:true true:3:0.1.2:null.x.3.5:true true:2::u.u:true true:1:0:a:true true:0:::true true:3:0.1.2:4.5.6:true true:2::u.u:true RangeError RangeError RangeError RangeError RangeError 4294967295 true:0:::true 2 sub true true 3 2 true:3:1:u.m.u:true false true"
-	for _, tree := range []bool{true, false} {
-		previous := treeTier.Swap(tree)
-		r := New(Config{})
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			r.Close()
-			treeTier.Store(previous)
-			t.Fatalf("tree %v: %v", tree, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
-		}
-		if op := r.proto.arrayCtor.fn().elemOp; op != elemArrayNew {
-			t.Errorf("Array's op is %d, want elemArrayNew", op)
-		}
+	r := New(Config{})
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
 		r.Close()
-		treeTier.Store(previous)
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	if op := r.proto.arrayCtor.fn().elemOp; op != elemArrayNew {
+		t.Errorf("Array's op is %d, want elemArrayNew", op)
+	}
+	r.Close()
 	check := leafChecks[elemArrayNew]
 	for _, tc := range []struct {
 		args []Value

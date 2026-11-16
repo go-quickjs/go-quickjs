@@ -582,8 +582,8 @@ func regTypedRead(r *Runtime, o *Object, k float64) (float64, bool) {
 }
 
 // rsGetIndex is get_index's slow path: a miss path's element (regElemMiss),
-// a key string the runtime handed out -- a for-in's -- read as the tree's
-// element read reads it (stringKeyRead), a[k] in for (k in a) an element by
+// a key string the runtime handed out -- a for-in's -- read by
+// stringKeyRead, a[k] in for (k in a) an element by
 // the key's index, and the read as the stack form makes it otherwise.
 func rsGetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.kept.pc = pc + 1
@@ -782,8 +782,7 @@ func regBigGives(regs *[1 << 16]Value, w bytecode.RInstr, v Value) bool {
 // regBigRelease gives back what of an arithmetic operator's operands,
 // in registers B and C, and of the value its register A held, its marks say nothing
 // else has (regcomp's fresh and RArithOwnA), now that it has made v, a
-// BigInt on the heap, as the tree's operator nodes give theirs back
-// (bigRelease): `sum += a * a` and `a += 1n` in a loop make their results
+// BigInt on the heap: `sum += a * a` and `a += 1n` in a loop make their results
 // in the blocks of the ones before, which nothing else saw. It is
 // bigRelease's work, with a block too small or too large for the list's
 // rooms (bigGiveable) not given at all; and the operators call it only
@@ -824,8 +823,7 @@ func rsAdd(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	if w.X()&bytecode.RAddAppend != 0 {
 		// An append to an upvalue: R[B] the string the binding alone
-		// holds, grown in place where it can be, as the tree's upvalueAdd
-		// grows it (strAppend).
+		// holds, grown in place where it can be (strAppend).
 		v, err := strAppendOp[struct{}](st.r, regs[w.B()], regs[w.C()])
 		return st.put(regs, w, v, err)
 	}
@@ -1792,8 +1790,7 @@ func rsCompare(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 		return st.fail(err)
 	}
 	if regBigOf != nil && b.IsBigInt() {
-		// A comparison's, of the operands, as the tree's compareOther
-		// marks one.
+		// A comparison's, of the operands.
 		regBigOf(st.r, st.c, pc, regs[w.A()], b, regs[w.A()])
 	}
 	if res != k.not {
@@ -2128,9 +2125,9 @@ func rsArguments(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) 
 	return pc + 1
 }
 
-// rsNewArrayK is new_array_k: the tree's shared literal
-// (ztree_a0shared.go), the site keeping the array of the constants, and
-// each array sharing its elements until one is written.
+// rsNewArrayK is new_array_k: the shared literal (zvreg_a0shared.go), the
+// site keeping the array of the constants, and each array sharing its
+// elements until one is written.
 func rsNewArrayK(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	r, c, cl := st.r, st.c, st.cl
 	st.at(pc)

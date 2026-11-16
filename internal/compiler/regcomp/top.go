@@ -6,7 +6,7 @@ import (
 )
 
 // Top-level code: a script's body as a function of registers
-// (docs/register-interpreter.md, "Stage 2: zero refusals"). Its var and
+// (docs/register-interpreter.md, "From the AST"). Its var and
 // function declarations are the global object's, its let, const and class
 // declarations the global lexical environment's, and what it binds is
 // declared before its first statement runs, in the order the stack form

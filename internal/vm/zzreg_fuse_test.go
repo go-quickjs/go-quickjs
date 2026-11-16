@@ -2,36 +2,26 @@ package vm
 
 import (
 	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
-// regRunBoth runs src with the register tier off and on, each from a
-// compile of its own, and checks both give want and that at least built
-// functions ran as register code.
+// regRunBoth runs src from a compile of its own, and checks it gives want
+// and that at least built functions ran as register code.
 func regRunBoth(t *testing.T, src, want string, built int64) {
 	t.Helper()
-	for _, reg := range []bool{false, true} {
-		compiler.SetRegisterForm(true)
-		fn := compileForTest(t, src)
-		compiler.SetRegisterForm(bytecode.RegDefault())
-		SetRegTier(reg)
-		before := RegsBuilt()
-		r := New(Config{})
-		v, err := r.Run(fn)
-		SetRegTier(bytecode.RegDefault())
-		if err != nil {
-			t.Fatalf("reg=%v: %v", reg, err)
-		}
-		if got := v.String().Go(); got != want {
-			t.Errorf("reg=%v: got %s, want %s", reg, got, want)
-		}
-		if n := RegsBuilt() - before; reg && n < built {
-			t.Errorf("only %d functions ran as register code, want %d", n, built)
-		}
-		r.Close()
+	fn := compileForTest(t, src)
+	before := RegsBuilt()
+	r := New(Config{})
+	v, err := r.Run(fn)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if n := RegsBuilt() - before; n < built {
+		t.Errorf("only %d functions ran as register code, want %d", n, built)
+	}
+	r.Close()
 }
 
 // TestRegFusedElements pins the register form's fused operations: x[++i]

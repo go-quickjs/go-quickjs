@@ -18,7 +18,7 @@ import (
 // method's call of it, through call and apply, a forwarding constructor's
 // apply of it, and at its own call of itself in tail position; a class
 // with fields, and a derived class, are constructed by Go. Each answer is
-// the interpreter's, in every tier and under every stress setting.
+// the interpreter's, under every stress setting.
 func TestJITClassConstructors(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -66,31 +66,25 @@ func TestJITClassConstructors(t *testing.T) {
 // The constructor of a class constructed in a loop runs natively, inlined
 // in the loop's own native code, as a function's constructor is: it had
 // been refused (a special function kind), and AWFY's Havlak and CD made
-// every object in the tree tier; then called natively, not inlined, as it
+// every object in the interpreter; then called natively, not inlined, as it
 // returns its this (push_this, return), where a function's constructor
 // returns nothing (ssa's returnsThis).
 func TestJITClassConstructorsNative(t *testing.T) {
-	if !regJITForTest() {
-		// Under the register JIT it sets the process's SSA hook.
-		t.Parallel()
-	}
+
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	// The closures chain's last compile inlined (ssa.Func's Inlined),
-	// which register code's entry does not keep as the stack form's
-	// does (ssaInlined).
+	// which register code's entry does not keep.
 	var inlined []uintptr
-	if r.regOn() {
-		jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-			if fn.Name == "chain" {
-				inlined = slices.Clone(f.Inlined)
-			}
+	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+		if fn.Name == "chain" {
+			inlined = slices.Clone(f.Inlined)
 		}
-		t.Cleanup(func() { jitSSAOptimized = nil })
 	}
+	t.Cleanup(func() { jitSSAOptimized = nil })
 	const setup = `
 		var Node = class { constructor(id) { this.id = id; this.next = null; this.mark = 0 } }
 		function chain(n) { let head = null; for (let i = 0; i < n; i++) { const x = new Node(i); x.next = head; head = x } let s = 0; for (let x = head; x; x = x.next) s += x.id; return s }`
@@ -102,27 +96,9 @@ func TestJITClassConstructorsNative(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := jitNativeForTest(t, r, "chain")
+	jitNativeForTest(t, r, "chain")
 	node := r.global.getOwn(r.atoms.intern("Node")).value().Object().fn().closure
-	if jitRegCodeForTest(r, "chain") {
-		if !slices.Contains(inlined, uintptr(unsafe.Pointer(node))) {
-			t.Errorf("chain inlines %#x, not Node's constructor %p", inlined, node)
-		}
-		return
+	if !slices.Contains(inlined, uintptr(unsafe.Pointer(node))) {
+		t.Errorf("chain inlines %#x, not Node's constructor %p", inlined, node)
 	}
-	if !slices.Contains(e.ssaInlined, node) {
-		t.Errorf("chain inlines %v, not Node's constructor %p", e.ssaInlined, node)
-	}
-}
-
-// jitNativeOrCalleeForTest is the entry of the global name's function,
-// with code, whether Go enters it or only native callers call it.
-func jitNativeOrCalleeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
-	t.Helper()
-	cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil {
-		t.Fatalf("%s has no code: %+v", name, e)
-	}
-	return e
 }

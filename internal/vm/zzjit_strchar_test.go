@@ -3,18 +3,17 @@
 package vm
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 )
 
-// A string's element, s[i], a string of one character: native code makes
-// an ASCII one from the runtime's strings of one character, once the read
-// has met a string (ssa.OpStringChar), and Go makes any other -- a code
-// unit past ASCII, an index past the end or not an integer, a string that
-// is not flat. Each answer is the interpreter's, in every tier and under
-// every stress setting: ASCII and not, past the end, negative and
-// fractional keys, a rope, and a site whose receivers are an array too.
+// A string's element, s[i], a string of one character: native code makes an
+// ASCII one from the runtime's strings of one character, once the read has
+// met a string (ssa.OpStringChar), and Go makes any other -- a code unit
+// past ASCII, an index past the end or not an integer, a string that is not
+// flat. Each answer is the interpreter's, under every stress setting: ASCII
+// and not, past the end, negative and fractional keys, a rope, and a site
+// whose receivers are an array too.
 func TestJITStringElements(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -87,7 +86,7 @@ func TestJITStringElementsNative(t *testing.T) {
 // last where its view is in its buffer -- and any other receiver's Go's,
 // which goes on after it once the guard has failed (ssa.OpLength), rather
 // than leave the rest of each invocation to the interpreter. Each answer is
-// the interpreter's, in every tier and under every stress setting: arrays,
+// the interpreter's, under every stress setting: arrays,
 // strings, typed arrays of each kind, a view on a detached buffer, a
 // subarray, and objects with a length of their own.
 func TestJITLengths(t *testing.T) {
@@ -121,8 +120,8 @@ func TestJITLengths(t *testing.T) {
 // compiled again. Not a callee whose frame is more than its arguments in
 // its parameters -- an arguments object, a rest parameter, defaults,
 // destructuring -- which that frame would lose: Go makes those calls. Each
-// answer is the interpreter's, in every tier and under every stress
-// setting, the loop compiled before any callee is called.
+// answer is the interpreter's, under every stress setting, the loop
+// compiled before any callee is called.
 func TestJITCallsLinkedBeforeCode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -205,13 +204,13 @@ func TestJITCallsBesideCharCodeAt(t *testing.T) {
 	}
 }
 
-// A call of String.prototype.charCodeAt is made natively by its target,
-// as V8 reduces one, whatever its method's name (ssa's CharCodeFeedback):
-// under another name, and in a callee inlined into the loop calling it. Once compiled, each runs natively at every call, and
-// neither leaves native code nor has Go make a call nearly once a
-// character; and each
-// answer is the interpreter's, in every tier and stress setting, a
-// replaced charCodeAt and receivers that are not strings included.
+// A call of String.prototype.charCodeAt is made natively by its target, as
+// V8 reduces one, whatever its method's name (ssa's CharCodeFeedback):
+// under another name, and in a callee inlined into the loop calling it.
+// Once compiled, each runs natively at every call, and neither leaves
+// native code nor has Go make a call nearly once a character; and each
+// answer is the interpreter's, under every stress setting, a replaced
+// charCodeAt and receivers that are not strings included.
 func TestJITCharCodeAtByTarget(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -383,62 +382,6 @@ func TestJITKeyedReadsByGo(t *testing.T) {
 	}
 }
 
-// An addition speculated to add numbers that deoptimizes on a string is
-// learned as one that met a string at a host exit (jitStringAddSeen), so
-// that the lowering makes it Go's with every addition of its result after
-// it: a chain, tag + s(a) + s(b) + s(c), is learned at its first failure,
-// not one failure, and one compile, an addition -- PDF.js's
-// createTableEntry had run out of compiles so and deoptimized at every
-// invocation. Its answers are the interpreter's in every tier and stress
-// setting; once warm, it fails at most two guards in all, and none in its
-// 20 calls after.
-func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {
-	skipUnderRegJIT(t, "register-JIT gap (jitgaps next round): a chain of additions of strings is learned one addition a deoptimization (jitRegStringAddSeen), not at its first failure with every addition of its result after it, as the stack form's is")
-	if !jitSSABackend {
-		t.Skip("no SSA backend on this architecture")
-	}
-	const setup = `
-		function s(n) { return String.fromCharCode(65 + (n & 15)) }
-		function entry(file, tag, a, b, c) {
-			let w = 0
-			for (let i = 0; i < 40; i++) w = (w * 31 + i) | 0
-			const e = tag + s(a) + s(b) + s(c)
-			file.text += e
-			return w
-		}`
-	jitDifferential(t, setup+`
-		const file = { text: '' }
-		for (let k = 0; k < 30; k++) entry(file, 'T' + k, k, k + 1, k + 2)
-		entry(file, 7, 1, 2, 3)
-		file.text`)
-	r := New(Config{JIT: true})
-	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-	jitFewCallsForTest(r)
-	if r.jitCallThreshold <= 1 {
-		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
-	}
-	if _, err := r.Run(compileForTest(t, setup+`; const file = { text: '' }`)); err != nil {
-		t.Fatal(err)
-	}
-	for k := range 40 {
-		if _, err := r.Run(compileForTest(t, fmt.Sprintf(`entry(file, 'T%d', %d, 2, 3)`, k, k))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	jitNativeForTest(t, r, "entry")
-	guards := r.JITStats().Guards
-	if guards > 2 {
-		t.Errorf("entry's chain failed %d guards, learned one addition at a time", guards)
-	}
-	v, err := r.Run(compileForTest(t, `(() => { for (let k = 0; k < 20; k++) entry(file, 'U', k, 1, 2); return file.text.length })()`))
-	if err != nil || v.Number() != 310 {
-		t.Fatalf("= %v, %v", v, err)
-	}
-	if n := r.JITStats().Guards - guards; n != 0 {
-		t.Errorf("%d guards failed in 20 calls once warm", n)
-	}
-}
-
 // A typed array's length is read natively from the view's first read, its
 // storage filled in when it is made (constructTypedArray,
 // allocTypedArray): before, only Go's first access to it filled it in, and
@@ -483,7 +426,7 @@ func TestJITFreshViewLengthsNative(t *testing.T) {
 // target (ssa.OpCodeChar, jitFeedback.FromCharCode): the runtime's own
 // string of the character, from the table s[i] reads too, now of 256, with
 // nothing made and no call of Go -- PDF.js's fonts build their strings so,
-// a character at a time. Each answer is the interpreter's in every tier and
+// a character at a time. Each answer is the interpreter's under every
 // stress setting: codes past 255, negative, fractional and NaN, a valueOf,
 // two arguments, and String.fromCharCode replaced, which Go makes. Once
 // compiled, 20 calls of 1,000 characters each make next to no calls of Go.

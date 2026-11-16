@@ -182,7 +182,7 @@ func TestShapeDictionaryPrototypeNoTree(t *testing.T) {
 	}
 	// sum: 3 rounds of four objects reading k3 of the prototype. hotSum:
 	// 2,000 rounds of 6 and k3, the store of a function run hot enough for
-	// the tree tier and for the JIT, which reach shapeAdded with no shape on
+	// the JIT, which reaches shapeAdded with no shape on
 	// the object, where a store through a cache does not. That is what made
 	// the JIT build fail on 18 of the 20 pages where the interpreter failed
 	// on 2.

@@ -330,10 +330,9 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 	return v, err
 }
 
-// regDirect is callDirect's call of a function whose tree runs register
-// code of the form's own layout: its window is made at the top of the stack
-// and run there, without callTree's frame, runTree's recover and the copy
-// regEnterFrame makes. callDirect has counted the call.
+// regDirect is callDirect's call of a function regPlan has given its
+// register code of the form's own layout: its window is made at the top of
+// the stack and run there. callDirect has counted the call.
 func (r *Runtime) regDirect(o *Object, fd *funcData, c *regCode, this Value, args []Value) (Value, error) {
 	if regReportOn {
 		regNoteCross(regCrossDirect, c.fn, "")
