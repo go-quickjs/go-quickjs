@@ -20,7 +20,7 @@ const (
 	layoutPadNV  = 560
 	layoutPadNGV = 575
 	layoutPadNMV = 324
-	layoutPadNB  = 571
+	layoutPadNB  = 562
 	layoutPadNGB = -1
 	layoutPadNMB = -1
 	layoutPadNF  = 525

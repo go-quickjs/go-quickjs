@@ -1,6 +1,9 @@
 package vm
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 // instanceOfChangesSrc tests constructors instanceof remembers
 // (instanceOfEntry) before and after each change that must be seen: the
@@ -107,6 +110,9 @@ after delete=true
 not callable=TypeError`
 
 func TestInstanceOfKnown(t *testing.T) {
+	// The entries are forgotten each time the collector has run, which a
+	// collection during the run would do before they are counted.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)
 		r := New(Config{})
@@ -135,6 +141,7 @@ func TestInstanceOfKnown(t *testing.T) {
 // A remembered constructor is answered from its entry: a test of one that
 // stops being ordinary is not.
 func TestInstanceOfKnownEntry(t *testing.T) {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function F() {}; const o = new F(); for (let i = 0; i < 3; i++) o instanceof F; F`))

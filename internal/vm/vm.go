@@ -4089,6 +4089,12 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 	}
 	c := ctor.Object()
 	if yes, ok := r.instanceOfKnown(c, obj); ok {
+		if ic != nil {
+			// The site's cache is kept as the lookup below keeps it: the
+			// register interpreter's native handler answers from it alone,
+			// and comes here each time it misses.
+			r.cachedProp(ic, c, r.hasInstanceAtom)
+		}
 		return yes, nil
 	}
 
