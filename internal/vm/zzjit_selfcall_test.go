@@ -26,7 +26,7 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 	src := `function Walker(k) { this.k = k; this.n = 0 }
 		Walker.prototype.walk = function (t, d) {
 			if (t === null) { this.n = (this.n + 1) | 0; return (d * this.k) | 0 }
-			let s = d, m = 0
+			let s = d ^ (t.kids.length << 5), m = 0
 			for (let i = 0; i < t.kids.length; i++) {
 				const c = t.kids[i]
 				if (c !== null && c.kids.length > m) m = c.kids.length
