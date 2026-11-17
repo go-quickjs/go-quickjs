@@ -10174,6 +10174,39 @@ func (c *compiler) freeze(v *ssa.Value) {
 	c.a.Bind(done)
 }
 
+// forInDone is ssa.OpForInDone: the done byte of the for...in cursor v's
+// operand is, if it is one, set, as the interpreter's iter_close sets it
+// for a loop left early; nothing else is touched. A byte, no pointer: no
+// barrier, whether the collector marks or not. It uses scratchA to
+// scratchC.
+func (c *compiler) forInDone(v *ssa.Value) {
+	if c.enc.IterState == 0 {
+		// An encoding with no cursors: the next loop makes its own.
+		return
+	}
+	x := v.Args[0]
+	var w amd64.Reg
+	if remat(x) {
+		c.materialize(x, scratchA)
+		w = scratchA
+	} else {
+		w = c.gpr(x, scratchA)
+	}
+	done := c.a.NewLabel()
+	c.cmpWord(w, c.enc.Object)
+	c.a.Jcc(amd64.CondNE, done)
+	c.pointerWord(x, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, done)
+	c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassCursor, c.enc.IterState, guardLabel(c, done))
+	c.a.LoadU8(scratchC, scratchB, c.enc.IterForIn)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.MovImm(scratchA, 1)
+	c.a.Store8(scratchB, c.enc.IterDone, scratchA)
+	c.a.Bind(done)
+}
+
 // charCell is the cell of the runtime's string of the code unit in
 // scratchA, below 256 (abi.Context.CharStrings), into v's register.
 func (c *compiler) charCell(v *ssa.Value, guard guardTo) {
@@ -11539,6 +11572,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.storeImm(regCtx, abi.OffLoop, v.Const.Bits, scratchA)
 	case ssa.OpFreeze:
 		c.freeze(v)
+	case ssa.OpForInDone:
+		c.forInDone(v)
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), scratchA), c.enc.NumOffset)

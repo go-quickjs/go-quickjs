@@ -237,7 +237,10 @@ const (
 	// IterClose is iter_close_normal, a for...of's or a destructuring's
 	// end: the cursor at Left closed, which the new pipeline does natively
 	// where there is nothing to close -- the cursor done, or an array's
-	// walked in place -- and leaves to Go otherwise.
+	// walked in place -- and leaves to Go otherwise. With When, a
+	// for...in's cursor, left by a break, a continue or a return: marked
+	// done, natively and always, for the runtime's next loop to take, as
+	// the interpreter's iter_close marks it.
 	IterClose
 	// HasProperty is in, Left in Right, as a boolean at Dest: whether the
 	// object Right, or one up its chain, has the property Left names, as

@@ -686,6 +686,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// The context's word, which the heap model has none of.
 			case OpFreeze:
 				// The evaluator's strings are values, with no building flag.
+			case OpForInDone:
+				// The evaluator has no cursors.
 			case OpLoadSlot:
 				vals[v.ID] = val{t: slots[v.Aux]}
 			case OpConst:

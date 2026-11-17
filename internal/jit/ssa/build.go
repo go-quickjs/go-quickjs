@@ -6497,7 +6497,7 @@ func (b *builder) plan() error {
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.StringPart, op == ir.ArrayWrite, op == ir.IterStep,
-			op == ir.IterClose, op == ir.HasProperty, op == ir.DeleteProperty, op == ir.ArgumentRead && b.cur == b.root,
+			op == ir.IterClose && !p.Code[pc].When, op == ir.HasProperty, op == ir.DeleteProperty, op == ir.ArgumentRead && b.cur == b.root,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
@@ -6586,8 +6586,11 @@ func (b *builder) plan() error {
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
 		case ir.IterClose:
-			// Go goes on after a closing it made.
-			entries[pc+1] = true
+			// Go goes on after a closing it made; a for...in's is never
+			// Go's.
+			if !in.When {
+				entries[pc+1] = true
+			}
 		case ir.Coercible:
 			// Go only throws at it.
 		case ir.ParamsDead, ir.ParamInit, ir.ParamDefault:
@@ -8683,6 +8686,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.f.newValue(blk, OpFreeze, None, x)
 		}
 	case ir.IterClose:
+		if in.When {
+			// A for...in's, left early: marked done (OpForInDone).
+			f.newValue(blk, OpForInDone, None, operand(in.Left))
+			break
+		}
 		// A cursor closed as a destructuring or a loop ends: nothing to do
 		// for one done, or for an array walked in place while nothing up
 		// its iterator's chain has a return method (WalkedCloseFeedback);

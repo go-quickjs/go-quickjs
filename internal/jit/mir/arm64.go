@@ -9004,6 +9004,33 @@ func (c *a64Compiler) oddball(v *ssa.Value, fail a64Guard) {
 	c.setF(v, d)
 }
 
+// forInDone is ssa.OpForInDone, as amd64's. It uses A to C.
+func (c *a64Compiler) forInDone(v *ssa.Value) {
+	if c.enc.IterState == 0 {
+		return
+	}
+	x := v.Args[0]
+	var w arm64.Reg
+	if remat(x) {
+		c.materialize(x, a64A)
+		w = a64A
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	done := c.a.NewLabel()
+	c.movImm(a64B, c.enc.Object)
+	c.a.Cmp(w, a64B, true)
+	c.a.BCond(arm64.NE, done)
+	c.pointerWord(x, w)
+	c.a.Cbz(a64B, done, true)
+	c.objectPart(a64B, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, a64GuardLabel(c, done))
+	c.a.LoadU8(a64C, a64B, c.enc.IterForIn)
+	c.a.Cbz(a64C, done, false)
+	c.movImm(a64A, 1)
+	c.a.Store8(a64B, c.enc.IterDone, a64A)
+	c.a.Bind(done)
+}
+
 // freeze is ssa.OpFreeze, as amd64's. It uses A to C.
 func (c *a64Compiler) freeze(v *ssa.Value) {
 	x := v.Args[0]
@@ -10270,6 +10297,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Store(a64Ctx, abi.OffLoop, a64A)
 	case ssa.OpFreeze:
 		c.freeze(v)
+	case ssa.OpForInDone:
+		c.forInDone(v)
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), a64A), c.enc.NumOffset)

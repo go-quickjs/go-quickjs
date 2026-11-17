@@ -1774,7 +1774,11 @@ place and Go's otherwise, as a loop's step is. Its end closes the iterator
 natively where there is nothing to close -- the cursor done, or an array's
 -- and by Go where a return method must be called (`ssa.OpIterClosed`); a
 for...of's break closes it so too. What is left, for a rest element, is
-Go's.
+Go's. A for...in loop left early -- a break, a continue of an outer loop, a
+return -- marks its cursor done natively (`ir.IterClose`'s `When`,
+`ssa.OpForInDone`), as the interpreter's `iter_close` does, so that the
+runtime's next loop takes that cursor rather than making one (the VM's
+`newForInObject`).
 
 ## The backend
 

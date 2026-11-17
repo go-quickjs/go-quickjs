@@ -1651,10 +1651,11 @@ func (l *regLowering) lowerCold(pc int, w bytecode.RInstr) {
 		l.emit(ir.Instruction{Op: ir.ObjectLiteral, Dest: int(a)}, false)
 	case bytecode.RIterClose:
 		if w.X() == bytecode.RIterCloseForIn {
-			// A for-in's cursor, which closing marks done for the
-			// interpreter's next loop to take, and nothing else: native
-			// code leaves it as it is.
-			l.emit(ir.Instruction{Op: ir.Nop}, false)
+			// A for-in's cursor, which closing marks done for the next
+			// loop to take, and nothing else: native code marks it so
+			// (ssa.OpForInDone). Left as it was, no loop native code
+			// left early gave its cursor back, and each made a new one.
+			l.emit(ir.Instruction{Op: ir.IterClose, Left: reg(b), When: true}, false)
 			break
 		}
 		l.emit(ir.Instruction{Op: ir.IterClose, Left: reg(b)}, false)
