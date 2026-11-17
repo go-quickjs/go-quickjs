@@ -199,6 +199,9 @@ func (r *Runtime) jitRegElemSeen(l *jitEntry, c *regCode, wb, rpc int, reference
 	if !reference {
 		return learned
 	}
+	if o, _, _, ok := r.jitRegElemWrite(c, wb, rpc); ok && r.jitTypedWriteSeen(c, rpc, o) {
+		learned = true
+	}
 	if o, k, v, ok := r.jitRegElemWrite(c, wb, rpc); ok && !slices.Contains(l.keyedWrites, int32(rpc)) &&
 		o.IsObject() && o.Object().class != ClassArray && o.Object().class != ClassTypedArray && r.jitKeyedWrite(o, k, v, false) {
 		l.keyedWrites = append(l.keyedWrites, int32(rpc))

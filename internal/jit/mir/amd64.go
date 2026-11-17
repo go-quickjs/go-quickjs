@@ -10646,6 +10646,10 @@ func (c *compiler) elemStore(v *ssa.Value) {
 		c.movImm(scratchB, 0)
 		c.a.Bind(have)
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.RefOffset, scratchB)
+		// The site's cell, or 0, which Go sets the bit of a BigInt typed
+		// array's element type in (ssa.GoElemStore).
+		c.movImm(scratchA, uint64(ssa.TypedCellOf(v)))
+		c.a.Store(regCtx, abi.OffGoArgs+3*size+c.enc.RefOffset, scratchA)
 		c.goSaving(uint64(ssa.GoElemStore)|uint64(v.Index&ssa.StoreFresh)<<abi.GoOpIndexShift, &stub)
 		c.a.Jmp(done)
 	})

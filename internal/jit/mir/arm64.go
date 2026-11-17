@@ -9445,6 +9445,8 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		words()
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.RefOffset, a64B)
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, a64A))
+		c.movImm(a64A, uint64(ssa.TypedCellOf(v)))
+		c.a.Store(a64Ctx, abi.OffGoArgs+3*size+c.enc.RefOffset, a64A)
 		c.goSaving(uint64(ssa.GoElemStore)|uint64(v.Index&ssa.StoreFresh)<<abi.GoOpIndexShift, &stub)
 		c.a.B(done)
 	})

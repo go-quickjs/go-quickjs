@@ -2,7 +2,13 @@
 
 package vm
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"math"
+	"weak"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+)
 
 // BigInt64Arrays and BigUint64Arrays read natively: an element read that
 // has met one (jitRegIndexSeen), and the loops of their forEach, reduce,
@@ -68,5 +74,57 @@ func jitStoreBigElem(o *Object, i uint32, v Value) bool {
 		return false
 	}
 	binary.LittleEndian.PutUint64(st.bytes[t.byteOffset+int(i)<<3:], bigLow64(v))
+	return true
+}
+
+// jitBigStoreSeen learns, at a store of a BigInt that native code had Go
+// make (ssa.GoElemStore) into o, the element type of o where it is a
+// BigInt64Array or a BigUint64Array: its bit set in cell, the site's (nil
+// for none), and the code compiled again to store it natively
+// (ssa.OpBigElemWrite) where the cell had no bit of it, as jitTypedSeen
+// learns a number's. Native code's store of any value finds no case of
+// those types: it stored each such element by a call of Go.
+func (r *Runtime) jitBigStoreSeen(ctx *abi.Context, o *Object, cell *Value) {
+	if cell == nil || jitBigTyped(Obj(o)) == 0 || !jitTypedCellSet(cell, o) {
+		return
+	}
+	if e := r.jitRegCtxEntry(ctx); e != nil {
+		r.jitRegReopt(nil, e)
+	}
+}
+
+// jitTypedWriteSeen learns, at a host exit of the element write at
+// register pc rpc of c, the element type of o where it is a typed array:
+// its bit set in the site's cell (jitRegFeedback's TypedKind), and true
+// where it had none, for the code to be compiled again with it. A write
+// compiled for BigInt64Arrays alone, or BigUint64Arrays alone
+// (ssa.OpBigElemWrite), reads no cell as it runs, as one of numbers does
+// (ssa.GoTypedSeen): its store of another type's element leaves for Go,
+// which learns the type here, rather than at every such store.
+func (r *Runtime) jitTypedWriteSeen(c *regCode, rpc int, o Value) bool {
+	if !o.IsObject() || o.Object().class != ClassTypedArray {
+		return false
+	}
+	l := r.jit.lowered[weak.Make(c.fn)]
+	if l == nil {
+		return false
+	}
+	cell := l.typedCells[-1-int32(rpc)]
+	return cell != nil && jitTypedCellSet(cell, o.Object())
+}
+
+// jitTypedCellSet sets the bit of o's element type in cell, a site's
+// (jitRegFeedback's TypedKind), and reports whether it had none.
+func jitTypedCellSet(cell *Value, o *Object) bool {
+	t, ok := o.dataOf().(*typedArrayData)
+	if !ok || t.kind > abi.ElemBigUint64 {
+		return false
+	}
+	bits := math.Float64bits(cell.num)
+	bit := uint64(1) << t.kind
+	if bits&bit != 0 {
+		return false
+	}
+	cell.num = math.Float64frombits(bits | bit)
 	return true
 }

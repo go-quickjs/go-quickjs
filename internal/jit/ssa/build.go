@@ -1688,6 +1688,30 @@ func (b *builder) typedSite(pc int, v *Value) {
 	}
 }
 
+// typedBigWrite reports whether the element write at pc is compiled to
+// store a BigInt's low 64 bits (OpBigElemWrite): its site has met typed
+// arrays of one element type, BigInt64Array's, or BigUint64Array's
+// (unsigned), as native code learned them (TypedKindFeedback). Native
+// code's store of any value (OpElemStore) stores none of their elements:
+// Go stored each, at a call from native code, which made a BigInt64Array
+// filled in a loop five times as slow with the JIT as without.
+func (b *builder) typedBigWrite(pc int) (unsigned, ok bool) {
+	f, ok := b.fb.(TypedKindFeedback)
+	if !ok {
+		return false, false
+	}
+	s, ok := f.TypedKind(pc)
+	switch {
+	case !ok:
+		return false, false
+	case s.Kinds == 1<<abi.ElemBigInt64:
+		return false, true
+	case s.Kinds == 1<<abi.ElemBigUint64:
+		return true, true
+	}
+	return false, false
+}
+
 // typedAny is a builder's typedArrays' mark of a typed array whose element
 // type the global read's site did not say.
 const typedAny = 0xFF
@@ -2246,9 +2270,13 @@ type GoOp uint8
 // one; such a write exits instead.
 //
 // GoElemStore is GoElemWrite for any value (OpElemStore): its third
-// operand is the value, both its words. One into an array a loop made
-// (StoreFresh, the operation's index 1) Go appends at the array's length
-// as CreateDataProperty defines it, whatever the prototypes hold.
+// operand is the value, both its words, and its fourth's pointer word the
+// site's cell (TypedCellOf), or 0, in which Go sets the bit of a BigInt
+// typed array's element type it stores in, as GoTypedSeen sets a number's,
+// for the code to be compiled again to store it natively
+// (OpBigElemWrite). One into an array a loop made (StoreFresh, the
+// operation's index 1) Go appends at the array's length as
+// CreateDataProperty defines it, whatever the prototypes hold.
 //
 // GoTypedRead is a typed array's element native code does not read
 // (OpElemRead): before Go has looked at the view, or of a type native code
@@ -8332,6 +8360,18 @@ func (b *builder) instruction(blk *Block, pc int) {
 		key := number(in.Right, ir.HostExit)
 		if o := in.Third; o.Slot < 0 && o.Literal.Kind == ir.Number {
 			b.typedSite(pc, guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit)))
+			break
+		}
+		if unsigned, ok := b.typedBigWrite(pc); ok {
+			// A site that has met BigInt64Arrays alone, or BigUint64Arrays
+			// alone: the value's low 64 bits, a BigInt held in its value
+			// (OpBigLow), stored as its type's word, as V8's keyed store
+			// stores a BigInt64Array's element as a machine word; anything
+			// else Go stores after the exit.
+			w := guard(OpBigElemWrite, None, ir.HostExit, array, key, guard(OpBigLow, Uint64, ir.HostExit, operand(in.Third)))
+			if unsigned {
+				w.Index = 1
+			}
 			break
 		}
 		b.typedSite(pc, guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third)))

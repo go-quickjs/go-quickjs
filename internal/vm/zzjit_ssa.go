@@ -1982,7 +1982,14 @@ func jitHostCall(ctx *abi.Context) bool {
 		if ctx.GoOp>>abi.GoOpIndexShift&ssa.StoreFresh != 0 {
 			return o != nil && jitAppendFresh(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
 		}
-		return o != nil && jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
+		v := jitGoArg(ctx, 2)
+		if o == nil || !jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), v) {
+			return false
+		}
+		if v.IsBigInt() {
+			r.jitBigStoreSeen(ctx, o, *(**Value)(unsafe.Pointer(&ctx.GoArgs[3].Ref)))
+		}
+		return true
 	case ssa.GoEqual:
 		// == or ===, what native code does not compare (OpEqTagged): no
 		// conversion equality makes runs code but an object's to a

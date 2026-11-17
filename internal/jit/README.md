@@ -1422,7 +1422,15 @@ module's bindings its functions capture, read at every branch, would
 otherwise teach a compile each. A store of any value native code does not
 make Go makes from native code where it runs nothing (`ssa.GoElemStore`),
 a BigInt's low 64 bits in a BigInt64Array's or a BigUint64Array's element
-among them (the VM's `jitStoreBigElem`).
+among them (the VM's `jitStoreBigElem`). That call is handed the site's
+cell too, and sets the bit of the BigInt type it stored in (the VM's
+`jitBigStoreSeen`), marking the code to be compiled again: a site that has
+met BigInt64Arrays alone, or BigUint64Arrays alone, stores a BigInt's low
+64 bits natively, as V8's keyed store stores a machine word
+(`ssa.OpBigElemWrite` of `OpBigLow`, which a BigInt the code made
+unboxed folds to its word); any other array or value leaves for Go, whose
+exit sets the other type's bit in the cell (`jitTypedWriteSeen`) for the
+code compiled again to tell them apart.
 
 ### Array loops
 

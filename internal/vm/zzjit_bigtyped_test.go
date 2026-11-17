@@ -108,3 +108,76 @@ func TestJITBigTypedArrays(t *testing.T) {
 		debug.SetGCPercent(gc)
 	}
 }
+
+// bigWriteSetup writes BigInts to BigInt64Arrays' and BigUint64Arrays'
+// elements in loops: past the int64 range and below 0, which their stores
+// wrap; at a site that meets both a BigInt64Array and a Float64Array; and a
+// number stored to a BigInt64Array, which throws. wr and wrU are the
+// stores alone, in range.
+const bigWriteSetup = `function fill(r, n, v) { for (var i = 0; i < n; i++) { v += 3n; r[i & 15] = v; r[(i + 7) & 15] = -v } return r[3] + ':' + r[12] + ':' + r[15] }
+function fillU(r, n, v) { for (var i = 0; i < n; i++) { v += 3n; r[i & 15] = v; r[(i + 7) & 15] = -v } return r[3] + ':' + r[12] + ':' + r[15] }
+var a = new BigInt64Array(16), u = new BigUint64Array(16), f = new Float64Array(8), b = new BigInt64Array(8)
+function mixedW(r, n) { for (var i = 0; i < n; i++) { r[i & 7] = r === f ? i * 1.5 : BigInt(i) * 7n } return String(r[5]) + ',' + r.length }
+function wrong(n) { var c = 0; for (var i = 0; i < n; i++) { try { b[i & 7] = i < n - 1 ? BigInt(i) : i } catch (e) { c += e instanceof TypeError } } return c + ',' + b[6] }
+function rounds() { return [fill(a, 300, 9223372036854775000n), fillU(u, 300, 18446744073709551000n), fill(a, 40, -5n), mixedW(b, 50), mixedW(f, 50), mixedW(b, 50), wrong(30), a[16] + ':' + u[-1]].join(' | ') }
+function wr(r, n) { var v = 1n; for (var i = 0; i < n; i++) { v += 3n; r[i & 15] = v; r[(i + 7) & 15] = -v } return r[3] }
+function wrU(r, n) { var v = 1n; for (var i = 0; i < n; i++) { v += 3n; r[i & 15] = v } return r[3] }
+`
+
+// bigWriteWant is rounds()'s answer, Node's (v26.10.0).
+const bigWriteWant = "-9223372036854775740:9223372036854775734:9223372036854775725 | 260:18446744073709551350:18446744073709551341 | 103:-109:91 | 315,8 | 67.5,8 | 315,8 | 1,22 | undefined:undefined"
+
+// A BigInt stored to an element of a site that has met BigInt64Arrays
+// alone, or BigUint64Arrays alone, is stored natively as its type's word
+// (ssa.OpBigElemWrite), its low 64 bits, where every such store had been a
+// call of Go from native code (jitStoreBigElem): typed_i64_write took five
+// times as long with the JIT as without. A site that meets another type
+// learns it at the store's exit (jitTypedWriteSeen) and is compiled again
+// for both. Every answer Node's and the interpreter's, with the collector
+// idle and while it marks, and the stores of wr and wrU make no call of Go
+// (jitCountGoCalls), the loops' polls aside, and leave native code
+// nowhere.
+func TestJITBigTypedWrites(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		runtime.GC()
+		gc := debug.SetGCPercent(-1)
+		t.Cleanup(func() { debug.SetGCPercent(gc) })
+		if marking {
+			jitMarkingForTest(t)
+		}
+		var rounds []string
+		for range 8 {
+			rounds = append(rounds, "rounds()", "wr(a, 200) + ':' + wrU(u, 200)")
+		}
+		r := jitAgreesForTest(t, bigWriteSetup, rounds...)
+		v, err := r.Run(compileForTest(t, "rounds()"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != bigWriteWant {
+			t.Errorf("marking %v: rounds() = %s, want Node's %s", marking, got, bigWriteWant)
+		}
+		for _, name := range []string{"wr", "wrU"} {
+			e := jitNativeForTest(t, r, name)
+			st := e.ssaStats
+			call := name + "(" + map[string]string{"wr": "a", "wrU": "u"}[name] + ", 5000)"
+			v, calls := jitCountGoCalls(t, r, "''+"+call)
+			if got, want := v.String().Go(), "14989"; got != want {
+				t.Errorf("marking %v: %s = %s, want %s", marking, call, got, want)
+			}
+			if e.ssaStats.entries == st.entries {
+				t.Errorf("marking %v: %s did not run natively", marking, name)
+			}
+			// A poll's call of Go each thousand turns or so, not a store's
+			// at every turn: 10,004 and 5,005 had been.
+			if calls > 10 || e.ssaStats.hosts != st.hosts || e.ssaStats.guards != st.guards || e.ssaStats.ended != st.ended {
+				t.Errorf("marking %v: %s made %d calls of Go, %d host exits, %d guard failures, ended %d times in the interpreter", marking, call,
+					calls, e.ssaStats.hosts-st.hosts, e.ssaStats.guards-st.guards, e.ssaStats.ended-st.ended)
+			}
+		}
+		debug.SetGCPercent(gc)
+	}
+}
