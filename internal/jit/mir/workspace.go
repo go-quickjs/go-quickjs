@@ -99,8 +99,10 @@ type Workspace struct {
 		goFails    []a64GoFail
 	}
 	// findBudgets' tables, kept from compile to compile: its walk's stack,
-	// the loops it finds and the values their registers are given.
+	// a loop's blocks, the loops it finds and the values their registers
+	// are given.
 	budgetStack []*ssa.Block
+	budgetBody  []*ssa.Block
 	budgets     []budget
 	budgetVals  []ssa.Value
 }

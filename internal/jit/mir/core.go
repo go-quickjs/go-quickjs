@@ -145,7 +145,6 @@ const noBudget = -2
 
 type budget struct {
 	header *ssa.Block
-	in     []bool // by block ID
 	v      *ssa.Value
 }
 
@@ -183,17 +182,31 @@ func (c *core) findBudgets() {
 		stack, c.budgets = c.ws.budgetStack[:0], c.ws.budgets[:0]
 		defer func() { c.ws.budgetStack, c.ws.budgets = stack[:0], c.budgets[:0] }()
 	}
+	// back and fwd mark, by block ID, the blocks of the loop of header h
+	// as its walks find them, with 1 plus h's ID: each walk's own marks,
+	// and its blocks listed (body), so that a loop costs its own blocks,
+	// not the function's -- a table of every block cleared for each loop,
+	// and every block looked at, had taken a function of n loops n²
+	// steps, 45 ms of a compile of 2,000 loops.
+	var back, fwd []int
+	var body []*ssa.Block
+	if c.ws != nil {
+		body = c.ws.budgetBody[:0]
+	}
 	var chains chainTables
 	for _, h := range f.Blocks {
 		if !h.LoopHeader {
 			continue
 		}
-		in := c.bools(nb)
-		in[h.ID] = true
+		if back == nil {
+			back, fwd = c.ints(nb), c.ints(nb)
+		}
+		mark := h.ID + 1
+		back[h.ID] = mark
 		stack = stack[:0]
 		for i, p := range h.Preds {
-			if h.Backedge[i] && !in[p.ID] {
-				in[p.ID] = true
+			if h.Backedge[i] && back[p.ID] != mark {
+				back[p.ID] = mark
 				stack = append(stack, p)
 			}
 		}
@@ -201,8 +214,8 @@ func (c *core) findBudgets() {
 			b := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			for _, p := range b.Preds {
-				if !in[p.ID] {
-					in[p.ID] = true
+				if back[p.ID] != mark {
+					back[p.ID] = mark
 					stack = append(stack, p)
 				}
 			}
@@ -211,25 +224,22 @@ func (c *core) findBudgets() {
 		// loop's body (an entry block, then the body's blocks after it)
 		// reaches a back edge without passing the header, but is no part
 		// of the loop, which the edge from it enters (edge's load).
-		fwd := c.bools(nb)
-		fwd[h.ID] = true
+		fwd[h.ID] = mark
+		body = append(body[:0], h)
 		stack = append(stack[:0], h)
 		for len(stack) > 0 {
 			b := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			for _, s := range b.Succs {
-				if in[s.ID] && !fwd[s.ID] {
-					fwd[s.ID] = true
+				if back[s.ID] == mark && fwd[s.ID] != mark {
+					fwd[s.ID] = mark
+					body = append(body, s)
 					stack = append(stack, s)
 				}
 			}
 		}
-		in = fwd
 		ok := true
-		for _, b := range f.Blocks {
-			if !in[b.ID] {
-				continue
-			}
+		for _, b := range body {
 			if b != h && b.LoopHeader || b.ID < len(c.budgetOf) && c.budgetOf[b.ID] != 0 {
 				ok = false
 				break
@@ -244,18 +254,19 @@ func (c *core) findBudgets() {
 				break
 			}
 		}
-		if !ok || c.turnChain(h, in, &chains) >= counterChain {
+		if !ok || c.turnChain(h, body, fwd, &chains) >= counterChain {
 			continue
 		}
 		if c.budgetOf == nil {
 			c.budgetOf = c.ints(nb)
 		}
-		c.budgets = append(c.budgets, budget{header: h, in: in})
-		for id, x := range in {
-			if x {
-				c.budgetOf[id] = len(c.budgets)
-			}
+		c.budgets = append(c.budgets, budget{header: h})
+		for _, b := range body {
+			c.budgetOf[b.ID] = len(c.budgets)
 		}
+	}
+	if c.ws != nil {
+		c.ws.budgetBody = body[:0]
 	}
 	// Each loop's register a value of its own, made once the loops are
 	// known, from the workspace's: no value made for each.
@@ -292,7 +303,7 @@ const counterChain = 6
 // budget in a register, whose isShorterThan walks two lists of a few
 // nodes a call (x = x.next: an object's check, its shape's, its field's
 // cell, the field, each a load the next waits on).
-func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
+func (c *core) turnChain(h *ssa.Block, body []*ssa.Block, in []int, t *chainTables) int {
 	nv := c.f.NumValues()
 	if t.at == nil {
 		t.at, t.memo, t.seen = c.ints(nv), c.ints(nv), c.ints(nv)
@@ -303,13 +314,11 @@ func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
 	// where none reaches it, -2 while it is being found (a cycle through a
 	// phi of a block in the loop).
 	t.loop++
-	for _, b := range c.f.Blocks {
-		if in[b.ID] {
-			for _, v := range b.Values {
-				t.at[v.ID] = t.loop
-				if b == h && v.Op == ssa.OpPhi {
-					t.at[v.ID] = -t.loop
-				}
+	for _, b := range body {
+		for _, v := range b.Values {
+			t.at[v.ID] = t.loop
+			if b == h && v.Op == ssa.OpPhi {
+				t.at[v.ID] = -t.loop
 			}
 		}
 	}
@@ -320,7 +329,7 @@ func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
 		}
 		t.phi++
 		for i, a := range p.Args {
-			if h.Backedge[i] && in[h.Preds[i].ID] {
+			if h.Backedge[i] && in[h.Preds[i].ID] == h.ID+1 {
 				chain = max(chain, t.path(a, p, nv))
 			}
 		}
@@ -1613,14 +1622,20 @@ func (c *core) allocate() error {
 	// Each budget loop's register, from its header's start to the end of
 	// the last of its blocks laid out.
 	for _, bu := range c.budgets {
-		it := &iv[bu.v.ID]
-		*it = interval{v: bu.v, start: start[bu.header.ID], end: start[bu.header.ID]}
+		iv[bu.v.ID] = interval{v: bu.v, start: start[bu.header.ID], end: start[bu.header.ID]}
+	}
+	if len(c.budgets) > 0 {
+		// One pass over the blocks for every loop, not one for each: n
+		// loops had taken n² steps.
 		for _, b := range c.order {
-			if bu.in[b.ID] {
+			if k := c.loopBudget(b); k >= 0 {
+				it := &iv[c.budgets[k].v.ID]
 				it.start, it.end = min(it.start, start[b.ID]), max(it.end, end[b.ID])
 			}
 		}
-		first[it.start+1]++
+	}
+	for _, bu := range c.budgets {
+		first[iv[bu.v.ID].start+1]++
 		n++
 	}
 	// By start, then value ID: a counting sort over the positions, the
