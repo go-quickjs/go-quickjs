@@ -135,3 +135,34 @@ func TestRegNativeGettersFallback(t *testing.T) {
 		})
 	}
 }
+
+// A this getter's index is the parameter its get_index reads, wherever it
+// is in the list: the descriptor holds the parameter's index, its register
+// less the two of the callee and this, and a call without it reads
+// undefined, which the frame answers.
+func TestRegNativeGetterIndexParameter(t *testing.T) {
+	nativeCounting(t)
+	const src = `
+function Box(v) { this.v = v }
+Box.prototype.third = function (a, b, i) { return this.v[i] };
+function run(n) {
+	var box = new Box([5, 6, 7]), s = 0;
+	for (var i = 0; i < n; i++) s += box.third(9, 9, i % 3);
+	return s + "," + box.third(0, 2) + "," + box.third(2);
+}
+run(1000)`
+	const want = "5999,undefined,undefined"
+	if got := nativeRunSrc(t, src, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		before := atomic.LoadInt64(&nativeCalls)
+		if got := nativeRunSrc(t, src, true); got != want {
+			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+		}
+		if n := atomic.LoadInt64(&nativeCalls) - before; n > 12 {
+			t.Fatalf("marking %v: the getter entered %d native frames", marking, n)
+		}
+	}
+}
