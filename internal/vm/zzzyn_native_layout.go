@@ -27,12 +27,14 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 	offsets, sizes = map[string]uintptr{}, map[string]uintptr{}
 	for _, t := range []reflect.Type{
 		reflect.TypeFor[nativeCtx](),
+		reflect.TypeFor[nativeTypedCtx](),
 		reflect.TypeFor[nativeRec](),
 		reflect.TypeFor[Runtime](),
 		reflect.TypeFor[regState](),
 		reflect.TypeFor[regCode](),
 		reflect.TypeFor[fwdArg](),
 		reflect.TypeFor[bigSeenMarks](),
+		reflect.TypeFor[regTypedCode](),
 		reflect.TypeFor[regCallCache](),
 		reflect.TypeFor[frame](),
 		reflect.TypeFor[thisBinding](),

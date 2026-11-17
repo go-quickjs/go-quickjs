@@ -92,8 +92,10 @@ func (ar *arch) emitFrom(l *Layout, v *variant) (*block, error) {
 	if err := lay.err(); err != nil {
 		return nil, err
 	}
-	if err := handlerOrder(ar.goarch, b.order); err != nil {
-		return nil, err
+	if !v.typedOps {
+		if err := handlerOrder(ar.goarch, b.order); err != nil {
+			return nil, err
+		}
 	}
 	return b, nil
 }

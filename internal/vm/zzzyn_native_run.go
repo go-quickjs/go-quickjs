@@ -436,8 +436,19 @@ func (r *Runtime) nativeFinish(st *regState, ctx *nativeCtx, v Value, restarted 
 
 // newNativeCtx makes st's context, its words that are the runtime's and
 // the build's set once.
+//
+// Not inlined, as it was not while it made the context itself: nativeRun
+// and nativeCallback call it as before.
+//
+//go:noinline
 func (r *Runtime) newNativeCtx(st *regState) *nativeCtx {
 	ctx := new(nativeCtx)
+	r.initNativeCtx(ctx, st)
+	return ctx
+}
+
+// initNativeCtx makes ctx st's context, as newNativeCtx makes one.
+func (r *Runtime) initNativeCtx(ctx *nativeCtx, st *regState) {
 	ctx.st = st
 	ctx.disp = r.nativeDispatch()
 	ctx.table = ctx.disp.addr
@@ -492,7 +503,6 @@ func (r *Runtime) newNativeCtx(st *regState) *nativeCtx {
 	ctx.applyAt = unsafe.Offsetof(Realm{}.applyFn)
 	ctx.grow()
 	st.native = ctx
-	return ctx
 }
 
 // grow gives the native frame stack twice the room, 8 records at first,
@@ -608,7 +618,9 @@ func (r *Runtime) nativeEnd(s *regState, ctx *nativeCtx, pc int, w bytecode.RIns
 	if pc != regDone {
 		pc = ^pc
 		w = regAt(s.c.code, pc)
-		pc = regSlowTable[w.Op()](s.regs, w, pc, s)
+		// The context's slow table: the typed table's in a code entry of
+		// typed code (nativeRunTyped).
+		pc = (*[256]regHandler)(nativePtr(&ctx.slowTable))[w.Op()](s.regs, w, pc, s)
 	}
 	for pc < 0 {
 		// The frame is done: what ret returns the instruction it ended at
@@ -937,11 +949,11 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		// keeps its arguments is entered by regEnterW, each cheaper than
 		// the exit the call would come back to. One with native code the
 		// handler has Go enter (nativeJITCall), as rhCallW's hit does.
-		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) {
+		if cl, rc, kind, this, enter := r.regCallKind(fd, method, c); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && !regTypedCross(rc, c) && (kind != regCallObjThis || win[1].IsObject()) {
 			if !f.cl.regCallsHeld {
 				r.regCallsHold(f.cl.closureCode)
 			}
-			regCacheCallee(e, o, cl, rc, this, kind)
+			regCacheCallee(e, o, cl, rc, this, kind, c)
 			return pc
 		}
 	}
@@ -1196,9 +1208,9 @@ func nativeApply(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx
 		// passed them (regDirectLegacy): Go's.
 		return 0
 	}
-	cl, rc, kind, ethis, enter := r.regCallKind(fd, true)
+	cl, rc, kind, ethis, enter := r.regCallKind(fd, true, ctx.st.c)
 	switch {
-	case !enter:
+	case !enter || regTypedCross(rc, ctx.st.c):
 		return 0
 	case kind == regCallThis:
 		this = ethis

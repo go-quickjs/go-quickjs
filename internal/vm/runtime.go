@@ -381,6 +381,16 @@ type Runtime struct {
 	// OrdinaryHasInstance does, and what proves it still would be
 	// (instanceOfEntry).
 	ctorsKnown [instanceOfEntries]instanceOfEntry
+	// regFreeTyped is regFree's list for typed code's frames, whose
+	// states keep native contexts of the typed table (regEnterTyped).
+	regFreeTyped *regState
+	// typedNative is the context of the typed code entry running
+	// natively, the innermost, nil where none is (nativeRunTyped).
+	typedNative *nativeCtx
+	// typedRuns are the code entries running typed code, innermost last,
+	// whose frames a stack trace finds the positions of in the typed
+	// code (typedFrame).
+	typedRuns []typedRun
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
@@ -803,10 +813,22 @@ type closureCode struct {
 	// turn filled, and the template is on the list of those whose caches
 	// the turn's end lets go (regCallsHold, releaseRegCalls).
 	regCallsHeld bool
+	// asmTried says the template's typed code has been linked, or tried
+	// (regTypedOf): only its first closure's link is tried. In the
+	// padding after jitEnters.
+	asmTried bool
 	// arrays are this template's empty array literals' sites, in this
 	// realm, by the register compiler's count of them (regNewArrayE); nil
-	// where one has not run.
-	arrays []*arrayRoom
+	// where one has not run. A pointer, and regTyped beside it, where the
+	// slice had been, so that closureCode stays its size and every field
+	// after them where it was.
+	arrays *[]*arrayRoom
+	// regTyped is the template's typed register code, where its function
+	// has some and the runtime runs no JIT: what a call site of typed code
+	// enters, and a crossing from ordinary code (regCallCross). reg stays
+	// the ordinary code, which every other entry runs.
+	regTyped *regCode
+	_        [8]byte
 	// reg is the template's register code, once a call has found it has
 	// some, for the register interpreter's calls (see zzreg_call.go).
 	reg *regCode
@@ -1152,12 +1174,8 @@ func (r *Runtime) captureFrames() []thrownFrame {
 		if f.cl == nil {
 			continue
 		}
-		pc := f.pc
-		if pc > 0 {
-			// The saved pc is past the instruction the frame is at.
-			pc--
-		}
-		out = append(out, thrownFrame{fn: f.cl.fn, pc: pc})
+		// The saved pc is past the instruction the frame is at.
+		out = append(out, thrownFrame{fn: f.cl.fn, pc: r.framePC(f, i)})
 	}
 	return out
 }

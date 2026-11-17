@@ -60,9 +60,9 @@ func nativeBuild(t *testing.T, tags ...string) *nativegen.Output {
 }
 
 // nativeTestTables are the dispatchers' tables this binary has, by the
-// generator's names: plain's, and the feedback dispatcher's in a build
-// with the JIT (zzzyn_native_feedback_test.go).
-var nativeTestTables = map[string]uintptr{"plain": nativePlain.addr}
+// generator's names: plain's, the typed dispatcher's, and the feedback
+// dispatcher's in a build with the JIT (zzzyn_native_feedback_test.go).
+var nativeTestTables = map[string]uintptr{"plain": nativePlain.addr, "typed": nativeTyped.addr}
 
 // TestRegNativeGenerated checks that every generated file -- the
 // handlers' and their plain table, and each other variant's, which a
@@ -151,7 +151,7 @@ func TestRegNativeLinked(t *testing.T) {
 func TestRegNativePlainSameWithJIT(t *testing.T) {
 	without, with := nativeBuild(t), nativeBuild(t, "quickjs_jit")
 	if !nativegen.HasJIT(runtime.GOOS, runtime.GOARCH) {
-		if !bytes.Equal(without.Files[0].Data, with.Files[0].Data) || len(with.Dispatchers) != 1 {
+		if !bytes.Equal(without.Files[0].Data, with.Files[0].Data) || len(with.Dispatchers) != len(without.Dispatchers) {
 			t.Fatalf("%s/%s, which has no JIT, makes another plain dispatcher or more with the JIT's tag", runtime.GOOS, runtime.GOARCH)
 		}
 		return
@@ -169,7 +169,7 @@ func TestRegNativePlainSameWithJIT(t *testing.T) {
 		t.Fatal("a build with the JIT makes no feedback dispatcher")
 	}
 	for _, d := range without.Dispatchers {
-		if d.Name != "plain" {
+		if d.Name != "plain" && d.Name != "typed" {
 			t.Fatalf("a build without the JIT makes the %s dispatcher", d.Name)
 		}
 	}

@@ -132,10 +132,8 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 		}
 		if f.cl != nil {
 			fr.fn = f.cl.fn
-			if f.pc > 0 {
-				// The saved pc is past the instruction the frame is at.
-				fr.pc = f.pc - 1
-			}
+			// The saved pc is past the instruction the frame is at.
+			fr.pc = r.framePC(f, i)
 			hidden = hidden || fr.fn.Strict
 		} else {
 			// A built-in is strict, and so hides its callers as one does.
@@ -719,10 +717,7 @@ func (r *Runtime) evalOrigin() string {
 		if f.cl == nil {
 			continue
 		}
-		fr := stackFrame{fn: f.cl.fn, callee: f.callee}
-		if f.pc > 0 {
-			fr.pc = f.pc - 1
-		}
+		fr := stackFrame{fn: f.cl.fn, callee: f.callee, pc: r.framePC(f, i)}
 		var b strings.Builder
 		b.WriteString("eval at ")
 		name := fr.functionName()

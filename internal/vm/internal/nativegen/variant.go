@@ -38,6 +38,13 @@ type variant struct {
 	// plain's handler of their operation, through the table's slot for it
 	// (slotPlain), so that plain's emitter knows nothing of them.
 	own map[string]func(v *variant) (*block, error)
+	// plainOps, where not nil, are the operations whose entries are
+	// plain's handlers where the variant has none of its own: every other
+	// entry is the exit stub. Nil: every operation's is plain's.
+	plainOps []bytecode.ROp
+	// typedOps says the variant's own handlers are typed operations,
+	// which plain's order (handlerOps) does not have: typedNativeOps'.
+	typedOps bool
 }
 
 // jitBuild is the JIT's build constraint (internal/vm's zzjit_*.go).
@@ -56,16 +63,23 @@ const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windo
 //     kinds into the feedback slot (ctx.fv) yet.
 //
 // A mode's table -- the debugger's -- would be one more.
+//   - typed is the dispatcher of typed register code (typed.go), in every
+//     build but the layout's: its own handlers are the raw operations',
+//     and its table has plain's handlers of the ordinary operations typed
+//     code holds, the exit stub for every other.
 var variants = []*variant{
 	{name: "plain"},
 	{name: "feedback", sym: "Feedback", build: jitBuild + " && !" + layoutTag, tags: []string{"quickjs_jit"},
 		overrides: feedbackOps},
+	{name: "typed", sym: "Typed", build: "(amd64 || arm64) && !" + layoutTag, plainOps: bytecode.TypedTableOps(),
+		overrides: typedNativeOps, typedOps: true},
 }
 
 func init() {
 	// Set here: the emitters read the variants (has), which their
 	// initializer would then depend on.
 	variants[1].own = map[string]func(*variant) (*block, error){"amd64": feedbackAMD64, "arm64": feedbackARM64}
+	variants[2].own = map[string]func(*variant) (*block, error){"amd64": typedAMD64, "arm64": typedARM64}
 }
 
 // plain is the base variant.
@@ -128,6 +142,8 @@ func (v *variant) table(p, b *block) []Slot {
 	for op := range 256 {
 		if o, ok := b.at[bytecode.ROp(op)]; ok {
 			t[op] = Slot{Own: true, Off: o}
+		} else if v.plainOps != nil && !slices.Contains(v.plainOps, bytecode.ROp(op)) {
+			t[op] = Slot{Off: p.exit}
 		} else {
 			t[op] = Slot{Off: p.entry(bytecode.ROp(op))}
 		}

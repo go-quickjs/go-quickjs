@@ -44,10 +44,10 @@ func TestArrayLiteralRoom(t *testing.T) {
 			t.Fatal("turn kept array samples")
 		}
 		fn := r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
-		if len(fn.arrays) != 1 {
-			t.Fatalf("%d literal sites, want 1", len(fn.arrays))
+		if len(fn.arraySites()) != 1 {
+			t.Fatalf("%d literal sites, want 1", len(fn.arraySites()))
 		}
-		s := fn.arrays[0]
+		s := fn.arraySites()[0]
 		if s.sample != nil || s.weak.Value() != nil || s.listed {
 			t.Fatal("literal kept its sample after the turn")
 		}
@@ -181,10 +181,10 @@ func TestArrayLiteralRoomRealms(t *testing.T) {
 			}
 		}
 		cl := re.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
-		if len(cl.arrays) != 2 || cl.arrays[0].room != n || cl.arrays[1].room != 0 {
-			t.Fatalf("realm's two literal sites did not learn separately: %v", cl.arrays)
+		if len(cl.arraySites()) != 2 || cl.arraySites()[0].room != n || cl.arraySites()[1].room != 0 {
+			t.Fatalf("realm's two literal sites did not learn separately: %v", cl.arraySites())
 		}
-		sites = append(sites, cl.arrays[0])
+		sites = append(sites, cl.arraySites()[0])
 	}
 	for i, s := range sites {
 		if s.room != 512<<i || s.sample != nil || s.weak.Value() != nil {
@@ -212,7 +212,7 @@ func TestArrayLiteralRoomMemoryLimit(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
-	if len(cl.arrays) != 0 || len(r.arraySamples) != 0 {
+	if len(cl.arraySites()) != 0 || len(r.arraySamples) != 0 {
 		t.Fatal("memory-limited runtime learned extra array room")
 	}
 }
@@ -241,7 +241,7 @@ func TestArrayLiteralRoomAfterSmall(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if cl.arrays[0].room != 4096 {
+	if cl.arraySites()[0].room != 4096 {
 		t.Fatal("site did not resume sampling after its arrays grew longer")
 	}
 	for i := range 1024 {
@@ -252,7 +252,7 @@ func TestArrayLiteralRoomAfterSmall(t *testing.T) {
 		if _, err := r.Run(call); err != nil {
 			t.Fatal(err)
 		}
-		if i > 2 && i&31 != 0 && cl.arrays[0].room != 0 {
+		if i > 2 && i&31 != 0 && cl.arraySites()[0].room != 0 {
 			t.Fatalf("short result %d learned room from nonconsecutive long samples", i)
 		}
 	}
@@ -278,7 +278,7 @@ func TestArrayLiteralRoomCallbackGrowth(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
-	if len(cl.arrays) != 1 || cl.arrays[0].room != 4096 {
+	if len(cl.arraySites()) != 1 || cl.arraySites()[0].room != 4096 {
 		t.Fatal("callback test did not learn its array's exact room")
 	}
 	v, err := r.Run(compileForTest(t, `function change(a) {

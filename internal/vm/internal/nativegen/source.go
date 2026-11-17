@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // header heads every file the generator writes.
@@ -21,14 +23,14 @@ func (ar *arch) source(v *variant, p, b *block) []byte {
 	if v == plain {
 		fmt.Fprintf(&s, "// regNativeHandlers is the register interpreter's native handlers, %d\n", len(p.code))
 		fmt.Fprintf(&s, "// bytes of position-independent machine code made by %s: every\n// address it needs is in the context it is given in %s. Its handlers, in\n// order:\n//\n", ar.emitter, ar.ctxReg)
-		ar.writeBlock(&s, "regNativeHandlers", p)
+		ar.writeBlock(&s, "regNativeHandlers", p, false)
 		s.WriteString("\n// regNativeTable is the native table: each operation's handler's address,\n// the exit stub's where it has none.\n")
 	} else {
 		own := "regNative" + v.sym + "Handlers"
 		if len(b.code) > 0 {
 			fmt.Fprintf(&s, "// %s is the %s dispatcher's own handlers, %d bytes of\n", own, v.name, len(b.code))
 			fmt.Fprintf(&s, "// position-independent machine code made by %s, which reach the\n// handlers' block through the dispatcher's table. Its handlers, in order:\n//\n", ar.emitter)
-			ar.writeBlock(&s, own, b)
+			ar.writeBlock(&s, own, b, v.typedOps)
 			s.WriteString("\n")
 		}
 		fmt.Fprintf(&s, "// regNative%sTable is the %s dispatcher's table: each operation's\n", v.sym, v.name)
@@ -57,10 +59,15 @@ func (ar *arch) source(v *variant, p, b *block) []byte {
 // writeBlock writes block b as the TEXT symbol sym, after the list of its
 // handlers' offsets that ends the comment above it: 16 bytes a line, as
 // BYTE directives, or as WORD directives where the architecture's
-// assembler takes its machine code in words (arm64's).
-func (ar *arch) writeBlock(s *strings.Builder, sym string, b *block) {
+// assembler takes its machine code in words (arm64's). A typed variant's
+// handlers are named by their typed operations.
+func (ar *arch) writeBlock(s *strings.Builder, sym string, b *block, typed bool) {
 	for _, op := range b.order {
-		fmt.Fprintf(s, "//\t%5d  %s\n", b.at[op], op)
+		name := op.String()
+		if typed {
+			name = bytecode.TypedName(op)
+		}
+		fmt.Fprintf(s, "//\t%5d  %s\n", b.at[op], name)
 	}
 	fmt.Fprintf(s, "TEXT ·%s(SB), NOSPLIT|NOFRAME, $0-0\n", sym)
 	for i := 0; i < len(b.code); i += 16 {

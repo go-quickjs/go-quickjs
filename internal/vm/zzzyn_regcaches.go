@@ -204,8 +204,8 @@ func (r *Runtime) regCallsRestored(cl *closure, i int) []regCallCache {
 			if fd == nil || fd.closure == nil || fd.bound {
 				continue
 			}
-			if ecl, rc, kind, this, enter := r.regCallKind(fd, x.kind != regCallThis); kind != 0 && enter {
-				regCacheCallee(&calls[j], o, ecl, rc, this, kind)
+			if ecl, rc, kind, this, enter := r.regCallKind(fd, x.kind != regCallThis, nil); kind != 0 && enter {
+				regCacheCallee(&calls[j], o, ecl, rc, this, kind, nil)
 			}
 		}
 	}

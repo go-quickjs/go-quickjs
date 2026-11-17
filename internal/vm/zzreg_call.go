@@ -254,8 +254,13 @@ func regReuseAt(c *regCode, pc int) *execReuseSite {
 // realm, neither a class's constructor nor with a direct eval (enter),
 // the kind its cache gives it and the this that kind writes -- 0 where
 // its this is not one a cache can give, an arrow's of a derived
-// constructor, say.
-func (r *Runtime) regCallKind(fd *funcData, method bool) (cl *closure, rc *regCode, kind uint8, this Value, enter bool) {
+// constructor, say. rc is the code a call enters: the closure's typed
+// code where it has some (regTypedOf), for a site of typed code or for
+// one of ordinary code where the callee is no leaf, answered without a
+// frame; its ordinary code otherwise. A site enters code of its own
+// code's kind and heap alone (regCacheCallee). caller is the site's code,
+// nil for none.
+func (r *Runtime) regCallKind(fd *funcData, method bool, caller *regCode) (cl *closure, rc *regCode, kind uint8, this Value, enter bool) {
 	cl = fd.closure
 	if rc = cl.reg; rc == nil {
 		rc = r.regOf(cl)
@@ -284,19 +289,48 @@ func (r *Runtime) regCallKind(fd *funcData, method bool) (cl *closure, rc *regCo
 	} else if fd.arrow && x.lexThisRef == nil && x.rare == nil {
 		kind, this = regCallThis, x.lexThis
 	}
+	if cl.regTyped != nil || !cl.asmTried {
+		if t := r.regTypedOf(cl); t != nil && (caller != nil && caller.typed || rc.leaf == regLeafNone) {
+			rc = t
+		}
+	}
 	return cl, rc, kind, this, true
 }
 
 // regCacheCallee makes site e's cache callee o's, of closure cl and code
 // rc, entered as kind with this, marked where rhCallW leaves it to
-// regCallMiss: a leaf, or a frame that keeps its arguments.
-func regCacheCallee(e *regCallCache, o *Object, cl *closure, rc *regCode, this Value, kind uint8) {
+// regCallMiss: a leaf, a frame that keeps its arguments, and code a code
+// entry of its own runs (regCallCross, regTypedCross). caller is the site's
+// code, nil for none.
+func regCacheCallee(e *regCallCache, o *Object, cl *closure, rc *regCode, this Value, kind uint8, caller *regCode) {
 	e.callee, e.cl, e.rc, e.this, e.kind = o, cl, rc, this, kind
 	if rc.leaf != regLeafNone {
 		e.kind |= regCallOut | regCallLeaf
 	} else if rc.args {
 		e.kind |= regCallOut
 	}
+	if regTypedCross(rc, caller) {
+		e.kind |= regCallCross
+	}
+}
+
+// regTypedCross reports whether code rc, called from code caller (nil for
+// none), is entered in a code entry of its own: code of another kind,
+// typed or ordinary, whose table the entry's context does not hold, or
+// typed code of another heap than the caller's, which the entry's context
+// does not hold either. A typed function with no heap is entered in its
+// caller's entry, whatever its heap; its own callees with one are then
+// entered in entries of their own.
+func regTypedCross(rc, caller *regCode) bool {
+	typed := caller != nil && caller.typed
+	if rc.typed != typed {
+		return true
+	}
+	if !typed {
+		return false
+	}
+	h := rc.typedExt().heap
+	return h != nil && h != caller.typedExt().heap
 }
 
 func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc int) (Value, error) {
@@ -339,7 +373,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 			cl, rc, kind, this = e.cl, e.rc, e.kind&^regCallMarks, e.this
 		} else if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
 			var enter bool
-			cl, rc, kind, this, enter = r.regCallKind(fd, method)
+			cl, rc, kind, this, enter = r.regCallKind(fd, method, c)
 			if fn := cl.fn; !enter && e != nil && fn.Generator != fn.Async && fd.extra == nil && cl.realm == r.Realm {
 				// A generator or an async function of this realm: the site
 				// makes its object as callClosure makes one (regCallGen),
@@ -348,7 +382,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 				return r.regGenCall(o, cl, method, base, argc)
 			}
 			if kind != 0 && e != nil {
-				regCacheCallee(e, o, cl, rc, this, kind)
+				regCacheCallee(e, o, cl, rc, this, kind, c)
 			}
 		}
 		switch kind {
@@ -390,6 +424,11 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 				// its arguments has them in f.args.
 				r.regKeepWindow(base, int(rc.keep), argc)
 			}
+			if rc.typed {
+				// Typed code, which the typed table runs: a site of typed
+				// code, or a crossing from ordinary code (regCallCross).
+				return r.regEnterWTyped(o, cl, rc, base, argc)
+			}
 			return r.regEnterW(o, cl, rc, base, argc, r.stack[base+2:base+2+argc], Undefined)
 		}
 	}
@@ -401,9 +440,11 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 		}
 		return r.callThrough(r.callFn, r.stack[base+1], r.stack[base+2:base+2+argc])
 	}
-	if calls := f.cl.regCalls; callee.IsObject() && uint(w.C()) < uint(len(calls)) {
+	if calls := f.cl.regCalls; callee.IsObject() && uint(w.C()) < uint(len(calls)) && !c.typed {
 		// A built-in of this realm: the site calls it as callDirect does,
-		// without the generic call's search (regNative).
+		// without the generic call's search (regNative). Not at a site of
+		// typed code, whose native code would call it with no exit, after
+		// which it would read its heap as it was before the call.
 		o := callee.Object()
 		if fd := o.fn(); fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) && o != r.callFn {
 			calls[w.C()] = regCallCache{callee: o, kind: regCallNative}
@@ -466,8 +507,8 @@ func (r *Runtime) regCallThrough(f *frame, c *regCode, w bytecode.RInstr, base, 
 			// passed them (regDirectLegacy): callThrough's.
 			return Undefined, nil, false
 		default:
-			cl, rc, kind, this, enter := r.regCallKind(fd, true)
-			if !enter || kind == 0 {
+			cl, rc, kind, this, enter := r.regCallKind(fd, true, c)
+			if !enter || kind == 0 || regTypedCross(rc, c) {
 				return Undefined, nil, false
 			}
 			e.callee, e.cl, e.rc, e.this, e.kind = o, cl, rc, this, kind|regCallThrough
@@ -555,11 +596,16 @@ const (
 	// handler's hit takes it for a call of f, nor the JIT's feedback, and
 	// none a turn's end restores (regCallsRestored).
 	regCallThrough = 32
+	// regCallCross marks a callee whose code is of another kind than the
+	// site's, typed or ordinary: entered in a code entry of its own, by
+	// the table of its kind, from the miss (regCallSlow), which none of
+	// the hit paths' compares of the kind lets through.
+	regCallCross = 64
 )
 
 // regCallMarks are the marks of a call cache's kind that say how a call
 // enters its callee, not what it gives it as this.
-const regCallMarks = regCallOut | regCallLeaf
+const regCallMarks = regCallOut | regCallLeaf | regCallCross
 
 // regIsObject reports whether *v is an object, its tag read as a word.
 func regIsObject(v *Value) bool {

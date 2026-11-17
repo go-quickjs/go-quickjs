@@ -214,6 +214,21 @@ type nativeCtx struct {
 	fwdArgs [2 * 8]uint64
 }
 
+// nativeTypedCtx is a typed code entry's context (zzzyn_native_typed.go):
+// a nativeCtx, and past it the entry's heap -- its base and its length in
+// bytes, which the typed handlers read, as of the runtime's typedEpoch,
+// and the heap they are of, the entry's code's, nil where it has none --
+// so that every other context stays the size it was.
+type nativeTypedCtx struct {
+	nativeCtx
+	heapBase uintptr
+	heapLen  uintptr
+	heap     *asmHeap
+}
+
+// typedCtx is ctx's nativeTypedCtx, ctx a typed entry's.
+func (ctx *nativeCtx) typedCtx() *nativeTypedCtx { return (*nativeTypedCtx)(unsafe.Pointer(ctx)) }
+
 // nativeMaxDepth is how deep the native frame stack goes.
 const nativeMaxDepth = 128
 

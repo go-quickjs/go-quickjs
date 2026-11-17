@@ -128,14 +128,27 @@ type arrayEmptyNode[_ any] struct {
 	pc   int32
 }
 
+// arraySites is cl's empty array literals' sites, nil where none has
+// run.
+func (cl *closureCode) arraySites() []*arrayRoom {
+	if cl.arrays == nil {
+		return nil
+	}
+	return *cl.arrays
+}
+
 // arraySiteNew makes cl's site, on the first execution of its literal, the
 // one that takes no sample.
 func arraySiteNew[_ any](cl *closureCode, site int, pc int32) *arrayRoom {
-	for len(cl.arrays) <= site {
-		cl.arrays = append(cl.arrays, nil)
+	if cl.arrays == nil {
+		cl.arrays = new([]*arrayRoom)
+	}
+	as := cl.arrays
+	for len(*as) <= site {
+		*as = append(*as, nil)
 	}
 	s := &arrayRoom{wait: 1, pc: pc}
-	cl.arrays[site] = s
+	(*as)[site] = s
 	return s
 }
 
@@ -146,8 +159,8 @@ func (n *arrayEmptyNode[_]) make(r *Runtime, cc *closureCode) Value {
 		return Obj(r.newArrayFrom(nil))
 	}
 	var s *arrayRoom
-	if n.site < len(cc.arrays) {
-		s = cc.arrays[n.site]
+	if as := cc.arrays; as != nil && n.site < len(*as) {
+		s = (*as)[n.site]
 	}
 	if s == nil {
 		s = arraySiteNew[struct{}](cc, n.site, n.pc)

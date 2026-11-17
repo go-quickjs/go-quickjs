@@ -73,6 +73,11 @@ type regCode struct {
 	// suspending, not a class's constructor), which the native handler
 	// reads; it fills the padding after leaf.
 	tailTo bool
+	// typed marks typed code (bytecode.RegCode.Typed), which the typed
+	// table runs (runRegTyped): a regTypedCode, what only typed code has
+	// past the regCode (typedExt). In the padding after tailTo, so that
+	// regCode keeps its size and no field the native code reads moves.
+	typed bool
 	// leafArg is the parameter a regLeafArg body returns, and leafVal the
 	// value a regLeafConst body does.
 	leafArg int32
