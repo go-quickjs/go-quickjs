@@ -618,6 +618,32 @@ const (
 	// It never exits: what is none Go steps (iterStep's split). The cells
 	// are the cursor's, which nothing writes once it is made.
 	OpCursorCell // tagged cursor -> source
+	// OpHeapLoad and OpHeapStore are typed code's heap accesses (ir's
+	// RawLoad, RawStore): the element of type Aux (abi's ElemInt8 ...) at
+	// the byte address Args[0] with its low bits cleared to the element's
+	// size, in the heap whose abi.HeapCell is at Const's address -- an
+	// int32 of an integer type's, sign- or zero-extended, a float64 of a
+	// float's -- where the address is below the heap's length; else 0, or
+	// NaN for a float, and a store does nothing. Neither exits; a store
+	// stores no pointer.
+	OpHeapLoad  // i32 -> i32 or f64
+	OpHeapStore // i32, i32 or f64 -> none
+	// OpDivI32, OpDivU32, OpRemI32 and OpRemU32 are typed code's integer
+	// division and remainder (ir's RawIDivS ...), asm.js's as V8's
+	// I32AsmjsDivS and its kin make them: signed or of uint32s, a zero
+	// divisor giving 0, MinInt32 / -1 MinInt32 and MinInt32 % -1 0 -- | 0
+	// of JavaScript's results -- never a fault. They never exit.
+	OpDivI32 // i32, i32 -> i32
+	OpDivU32 // i32, i32 -> i32
+	OpRemI32 // i32, i32 -> i32
+	OpRemU32 // i32, i32 -> i32
+	// OpCellNumLoad and OpCellNumStore are a module variable's number in
+	// its cell (ir's RawCellGetI ...), the cell Args[0] (OpUpvalueCell): its
+	// number word as a float64, and a number value's word (Args[1], a box)
+	// written to it, the pointer word as it is -- none, the cell holding
+	// a number throughout. Neither exits; the store writes no pointer.
+	OpCellNumLoad  // source -> f64
+	OpCellNumStore // source, tagged -> none
 )
 
 // OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
@@ -659,7 +685,9 @@ var opNames = [...]string{
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
 	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis", OpTypeofCell: "typeofcell",
-	OpCursorCell: "cursorcell",
+	OpCursorCell: "cursorcell", OpHeapLoad: "heapload", OpHeapStore: "heapstore",
+	OpDivI32: "divi", OpDivU32: "divu", OpRemI32: "remi", OpRemU32: "remu",
+	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore",
 }
 
 func (o Op) String() string {
@@ -1087,6 +1115,10 @@ type GenResume struct {
 
 // Func is a function in SSA form.
 type Func struct {
+	// Kinds is, for typed code, its slots' kinds (ir.Program's Kinds),
+	// which its exits write raw slots by (abi.ExitFrame's Kinds); nil
+	// otherwise.
+	Kinds []uint8
 	// Blocks are every block an entry reaches, in reverse post-order from
 	// the entries -- a block after its dominator, a loop's body after its
 	// header -- and numbered so (Build).

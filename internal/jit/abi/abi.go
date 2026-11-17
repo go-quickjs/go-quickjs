@@ -5,7 +5,10 @@
 // See internal/jit/README.md.
 package abi
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
 
 // SpillSlots is how many spill slots a context holds in itself
 // (Context.Spill): values the register allocator cannot keep in registers
@@ -865,9 +868,14 @@ func (f *ExitFrame) each(off uint32, fn func(*ExitSlot)) {
 type ExitFrame struct {
 	FrameLocals, ThisSlot, Locals int32
 	Enc                           *Encoding
-	Slots                         []ExitSlot
-	Tree                          []uint32
-	Words                         []uint64
+	// Kinds is, for typed code, its slots' kinds (ir's SlotValue,
+	// SlotI32, SlotF64): a raw slot is written raw -- an int32's bits in
+	// its number word's low half, a float64's bits -- its pointer word
+	// none (RawWord). Nil otherwise.
+	Kinds []uint8
+	Slots []ExitSlot
+	Tree  []uint32
+	Words []uint64
 	// Inlines are the inlined callees' frames the descriptions write, a
 	// run for each (ExitDescriptor's Inlines), which descriptions alike
 	// share. Left out of the frame's JSON, as a dump of the code's
@@ -1780,3 +1788,54 @@ const (
 	AtomIndexTag  = 0x80000000
 	IntStrings    = 1024
 )
+
+// HeapCell is where typed code's native heap accesses find their heap
+// (ssa's OpHeapLoad and OpHeapStore): the address of its first byte and
+// its length in bytes, which the VM keeps current as its buffer's bytes
+// move or go (a detached heap has a length of 0 and a base that is no
+// nil). Native code reads both at each access; the VM's heap begins with
+// one.
+type HeapCell struct {
+	Base, Len uintptr
+}
+
+// The offsets of HeapCell's fields.
+const (
+	OffHeapBase = int32(unsafe.Offsetof(HeapCell{}.Base))
+	OffHeapLen  = int32(unsafe.Offsetof(HeapCell{}.Len))
+)
+
+// ElemSize is the byte size of an element of type kind (ElemInt8 ...).
+func ElemSize(kind int) int {
+	switch kind {
+	case ElemInt16, ElemUint16, ElemFloat16:
+		return 2
+	case ElemInt32, ElemUint32, ElemFloat32:
+		return 4
+	case ElemFloat64, ElemBigInt64, ElemBigUint64:
+		return 8
+	}
+	return 1
+}
+
+// The slot kinds of typed code (ExitFrame's Kinds), as ir's.
+const (
+	SlotValue uint8 = iota
+	SlotI32
+	SlotF64
+)
+
+// RawWord is the number word a typed code's raw slot of kind k is written
+// with, of the value whose number word is num: an int32 slot the low 32
+// bits of the number's ToInt32 -- a number of a raw int32 is one already
+// -- a float64 slot the number's bits, a NaN canonical as a value's is.
+func RawWord(k uint8, num uint64) uint64 {
+	if k != SlotI32 {
+		return num
+	}
+	f := math.Float64frombits(num)
+	if f != f || f >= 1<<63 || f <= -(1<<63) {
+		return 0
+	}
+	return uint64(uint32(int64(f)))
+}

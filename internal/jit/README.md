@@ -46,6 +46,7 @@ This file states the design and the contracts the code keeps.
 - [The write barrier and the marking
   rule](#the-write-barrier-and-the-marking-rule)
 - [Regular expressions](#regular-expressions)
+- [Typed code](#typed-code)
 - [Zero cost when off](#zero-cost-when-off)
 - [Validation](#validation)
 
@@ -81,7 +82,7 @@ register interpreter --(samples)--> jitRegFor
 | Package or file | Role |
 |---|---|
 | `ir` | The slot IR: one or more instructions per register instruction, each with its register pc (`Origin`) and a state map. `Validate` checks a program, the atomicity rule included, and `Evaluate`, a Go interpreter of the IR, is the oracle the SSA tests and the VM's evaluator compare with. |
-| `compile` | Lowers register code into the IR (`LowerReg`; `LowerRegHot`, `LowerRegInline`), or refuses it (`Refusal`). It never imports the VM. |
+| `compile` | Lowers register code into the IR (`LowerReg`; `LowerRegHot`, `LowerRegInline`), and typed code (`LowerTyped`), or refuses it (`Refusal`). It never imports the VM. |
 | `ssa` | Builds SSA from a program and the VM's feedback (`Feedback` and its optional interfaces), and optimizes it. `eval.go` runs SSA over a heap model, for tests. |
 | `mir` | Selects instructions, allocates registers and encodes amd64 and arm64 machine code (`CompileAMD64`, `CompileARM64`, `CompileWith`), both on every target. |
 | `abi` | The contract between the code and the VM: the context block (`Context`), the exits, and the value encoding (`Encoding`), given as data. |
@@ -110,6 +111,7 @@ register interpreter --(samples)--> jitRegFor
 | `internal/vm/zzjit_zreggen.go` | A loop's step over a register generator, and calls of its `next`, natively. |
 | `internal/vm/zzjit_zregloop.go` | Built-ins' callback methods made loops of the code's own (see [Array loops](#array-loops)). |
 | `internal/vm/zzjit_zregops.go` | Other operations native code makes from what the feedback answers of them. |
+| `internal/vm/zzjit_zregtyped.go` | Typed code's twins, compiled at their module's link, and their feedback: the heap, Math (see [Typed code](#typed-code)). |
 | `internal/vm/zzjit_native.go`, `zzjit_ssa.go` | What the register pipeline's files build on -- the JIT's state, the code cache, budgets, links, contexts, calls of Go, the pools, and the feedback's sites and seen cases (`jitFeedback`'s state, which `jitRegFeedback` reads). |
 | `internal/vm/zzjit_leaffast*`, `zzjit_bigleaf*` | The VM's routines native code jumps to for leaves and BigInts' operators (`LeafFast`, `BigFast`). |
 | `internal/vm/zzjit_background.go`, `zzjit_snapshot*.go` | Compiling in the background, and the snapshot of the feedback that `jitRegSnapshot` answers from; `zzjit_snapshot_gen.go` is generated from `jitRegFeedback`'s methods. |
@@ -3190,6 +3192,118 @@ throws; the match already found past the budget is remembered
 whether `RegExp.prototype` and `RegExp` are as the realm made them
 (`propsIntact`), which a pristine layout answers at once, as V8's protectors
 do, and every way of changing a watched property clears.
+
+## Typed code
+
+A function of a validated asm.js module has typed code beside its register
+code (docs/register-interpreter.md, "Typed code"): each register of one kind
+for the whole function, a Value, a raw int32 or a raw float64, the kinds
+proven by the validator. The JIT compiles typed code as V8 compiled
+validated asm.js, at the module's link rather than through warm-up and
+feedback, and with no speculation on the kinds.
+
+**The twin.** The JIT compiles a closure's register code, keyed by its
+function, and a function of a module has two codes. A closure linked to its
+typed code in a runtime with the JIT therefore gets a twin (the VM's
+`asmTwin`): a closure of the same upvalues, realm and call caches, whose
+function is a copy of the closure's whose register code is the typed code
+(`bytecode.RegReady`), and whose template is its own -- its native code,
+its counts, its key in the cache. Typed call sites cache the twin
+(`regCallKind`), the typed interpreter runs its frames where it has no
+native code, and the JIT compiles it as any register code. A frame of the
+twin is the function's to everything that reads one -- its name, its
+script, its positions, which its own register code, the typed code, gives
+(`Function.PosAt`). A native call checks its callee's function object, the
+closure's, and enters the twin's code (`jitTypedTwinOf`).
+
+**Compiled at the link.** The link of a module's closure
+(`jitTypedLinked`) links the module's functions the closure calls, then
+asks for its twin's code as any compile asks (`jitRegFor`): in the
+foreground, or in the background where the runtime compiles there, the
+typed interpreter running the function until its code installs; the
+compile asks the cache for room as every compile does, and one with no room
+or refused leaves the function to the typed interpreter. Typed code's state
+is marked `typed`: no stretch, call of Go or exit judges it slow, as none
+of them is a speculation's cost.
+
+**The lowering** (`compile.LowerTyped`, beside `LowerReg`). A register is a
+slot, as `LowerReg` has it, and the ordinary operations typed code holds
+(`bytecode.TypedPlainOps`: moves, constants, an upvalue's read, jumps,
+`call_w`, the returns) are lowered by `LowerReg`'s code. The raw registers
+are raw slots (`ir.Program`'s `Kinds`: `SlotI32`, `SlotF64`, scratch slots
+of each kind as an expansion takes them), and the raw operations `ir.Raw`
+instructions on them (`ir`'s raw.go), a compare-and-branch an `ir.Branch`
+whose `Raw` names the compare (`RawBrI`, `RawBrU`, `RawBrF`). A
+function table's element is the table's read at the masked index; a heap
+access a `RawLoad` or `RawStore` of its element type, and a module
+variable a `RawCellGet` or `RawCellSet` of its cell. Only what has no
+lowering is refused, by the operation's name, and the function runs in the
+typed interpreter.
+
+**The build** (`ssa`'s raw.go). A raw slot holds what every slot holds in
+the builder, a value: the box of its float64, or of an int32's conversion.
+So unboxPhis, intPhis and truncInts take a raw slot's phis as they take a
+number's, and a read unboxes the box the instruction that wrote it made;
+no unbox of a raw slot is left to check. The operations are the SSA's
+own, with no guard: `OpAddI32`, `OpSubI32`, `OpMulI32` (imul), the
+bitwise ones and shifts, `OpCmpI32` signed and unsigned (`CmpUnsigned`),
+`OpClz32`, `OpToInt32`, `OpI32ToF64`, `OpU32ToF64`, the float arithmetic,
+compares, `OpFroundF64`, `OpSqrtF64` and the roundings, `OpMathCall` for
+the other Math functions (`RawMathFeedback`), `OpPowF64` and `OpModF64`,
+which Go makes where they are not exact. Integer division and remainder
+are instructions of their own (`OpDivI32`, `OpDivU32`, `OpRemI32`,
+`OpRemU32`), as V8's asm.js operations `I32AsmjsDivS` and its kin: the
+operands widened to 64 bits, sign- or zero-extended, and divided there --
+IDIV or DIV on amd64, SDIV or UDIV and MSUB on arm64 -- where no int32's
+quotient overflows, so MinInt32 / -1 wraps to MinInt32 and MinInt32 % -1
+is 0, and a zero divisor gives 0 without dividing: `| 0`'s results of
+JavaScript's, never a fault, on any CPU. A double's `%` is Go's
+(`OpModF64`), as V8 calls fmod. A conversion of a value (a parameter,
+an import's result) unboxes a number, converts an oddball natively, and
+leaves anything else to Go at a host exit, which runs the instruction --
+valueOf, which may throw -- and resumes after it. The heap's accesses are
+`OpHeapLoad` and `OpHeapStore` of the heap the feedback gives
+(`HeapFeedback`, an `abi.HeapCell`): the byte address, its low bits cleared
+to the element's size and sign-extended, compared unsigned with the heap's
+length -- a negative one is past any length -- and the element read or
+written at the heap's base; out of the heap a load gives 0 or NaN and a
+store does nothing. The VM keeps every heap native code reads current as
+its buffer's bytes move or go (`asmHeapKeep`, `bufferChanged`), so native
+code reads the cell with no check of an epoch: a detached heap has a
+length of 0. Neither op exits, and a store stores no pointer: the marking
+rule holds with nothing of the barrier's. A module variable is its cell's
+number word (`OpCellNumLoad`, `OpCellNumStore` of the cell
+`OpUpvalueCell` gives): validation keeps anything but a number from the
+cell, so a read is the word as a float64 and a write the word of the
+number's box, its NaN canonical, the pointer word left as it is, none --
+no barrier, no check.
+
+**Entries and exits.** Typed code is entered at its start, where no raw
+slot is live, at its loops' headers by on-stack replacement and after what
+Go ran: an entry loads a raw slot raw (`OpLoadSlot` of type Int32 or
+Float64, never lazily) into the box the build keeps. An exit writes a raw
+slot raw, an int32's bits in its number word's low half or a float64's
+bits, its pointer word none (`abi.ExitFrame`'s `Kinds`, `abi.RawWord`,
+`ApplyExit`; a native call's records, `jitRegApplyRecords`), so that every
+exit is exact for the typed interpreter, which the VM resumes at the
+exit's pc (`runRegFor`), and an instruction Go runs whole is run by the
+typed table (`regWholeTyped`).
+
+**Calls.** A call between the module's functions is `call_w` of a window of
+Values, made natively: the feedback answers the callee from the binding the
+call's register was read from, the callee's twin and typed code
+(`jitTypedCallee`). The callee converts its parameters as its code's
+prologue says, a number's natively. An import's call is Go's from native
+code. Typed code is never inlined (`ssa`'s `Program.Kinds` check): an exit
+inside an inlined callee writes the callee's frame, whose raw slots the
+caller's kinds do not name.
+
+**What is left.** A call between typed functions boxes its arguments into
+the window and the callee unboxes them; a raw calling convention, or
+inlining typed callees with their kinds in the frame states, would keep
+them in registers. A typed function the interpreter answers without a
+frame (a leaf, `regCallKind`) is never linked, and runs as the ordinary
+code's leaf.
 
 ## Zero cost when off
 

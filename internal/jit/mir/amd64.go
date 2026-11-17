@@ -11037,10 +11037,28 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	guard := c.guardFor(v)
 	switch v.Op {
 	case ssa.OpLoadSlot:
+		if isFloat(v) {
+			// Typed code's raw float64 slot, its number word's bits.
+			base, disp := c.slotAddr(v.Aux, false, scratchA)
+			c.a.LoadSD(xScratch0, base, disp)
+			c.setX(v, xScratch0)
+			break
+		}
 		d := c.gdst(v)
 		base, disp := c.slotAddr(v.Aux, false, d)
 		c.a.Load(d, base, disp)
 		c.setG(v, d)
+	case ssa.OpHeapLoad, ssa.OpHeapStore:
+		c.heapAccess(v)
+	case ssa.OpDivI32, ssa.OpDivU32, ssa.OpRemI32, ssa.OpRemU32:
+		c.divide32(v)
+	case ssa.OpCellNumLoad:
+		c.a.LoadSD(xScratch0, c.gpr(arg(0), scratchA), c.enc.NumOffset)
+		c.setX(v, xScratch0)
+	case ssa.OpCellNumStore:
+		// The number word alone: the pointer word is none, a number's.
+		w := c.gpr(arg(1), scratchB)
+		c.a.Store(c.gpr(arg(0), scratchA), c.enc.NumOffset, w)
 	case ssa.OpConst:
 		d := c.gdst(v)
 		c.movImm(d, c.constWord(v.Const))
@@ -12372,6 +12390,121 @@ func shiftOp(op ssa.Op) amd64.Shift {
 		return amd64.Sar
 	}
 	return amd64.Shr
+}
+
+// heapAccess is typed code's heap load or store (ssa's OpHeapLoad,
+// OpHeapStore): the byte address, its low bits cleared to the element's
+// size and sign-extended, compared unsigned with the length of the heap
+// whose abi.HeapCell is at the value's constant -- one negative is past
+// any length -- and the element read or written at the heap's base; out
+// of the heap a load gives 0 or NaN and a store does nothing. A store
+// writes no pointer: the marking rule is the interpreter's.
+func (c *compiler) heapAccess(v *ssa.Value) {
+	kind := v.Aux
+	size := int32(abi.ElemSize(kind))
+	float := kind == abi.ElemFloat32 || kind == abi.ElemFloat64
+	out, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovRR32(scratchA, c.gpr(v.Args[0], scratchA))
+	if size > 1 {
+		c.a.OpImm(amd64.And, scratchA, -size, false)
+	}
+	c.a.Movsxd(scratchA, scratchA)
+	c.movImm(scratchB, v.Const.Bits)
+	c.a.CmpMem(scratchA, scratchB, abi.OffHeapLen, true)
+	c.a.Jcc(amd64.CondAE, out)
+	c.a.Load(scratchB, scratchB, abi.OffHeapBase)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	if v.Op == ssa.OpHeapStore {
+		if float {
+			x := c.xmm(v.Args[1], xScratch0)
+			if kind == abi.ElemFloat64 {
+				c.a.StoreSD(scratchA, 0, x)
+			} else {
+				c.a.Cvtsd2ss(xScratch1, x)
+				c.a.MovQFromX(scratchB, xScratch1)
+				c.a.Store32(scratchA, 0, scratchB)
+			}
+		} else {
+			x := c.gpr(v.Args[1], scratchB)
+			switch size {
+			case 1:
+				c.a.Store8(scratchA, 0, x)
+			case 2:
+				c.a.Store16(scratchA, 0, x)
+			default:
+				c.a.Store32(scratchA, 0, x)
+			}
+		}
+		c.a.Bind(out)
+		c.a.Bind(done)
+		return
+	}
+	switch kind {
+	case abi.ElemInt8:
+		c.a.LoadS8(scratchA, scratchA, 0)
+	case abi.ElemUint8:
+		c.a.LoadU8(scratchA, scratchA, 0)
+	case abi.ElemInt16:
+		c.a.LoadS16(scratchA, scratchA, 0)
+	case abi.ElemUint16:
+		c.a.LoadU16(scratchA, scratchA, 0)
+	case abi.ElemFloat32:
+		c.a.LoadU32(scratchA, scratchA, 0)
+		c.a.MovQToX(xScratch0, scratchA)
+		c.a.Cvtss2sd(xScratch0, xScratch0)
+	case abi.ElemFloat64:
+		c.a.LoadSD(xScratch0, scratchA, 0)
+	default:
+		c.a.LoadS32(scratchA, scratchA, 0)
+	}
+	c.a.Jmp(done)
+	c.a.Bind(out)
+	if float {
+		c.movImm(scratchA, math.Float64bits(math.NaN()))
+		c.a.MovQToX(xScratch0, scratchA)
+	} else {
+		c.a.Op(amd64.Xor, scratchA, scratchA, false)
+	}
+	c.a.Bind(done)
+	if float {
+		c.setX(v, xScratch0)
+	} else {
+		c.setG(v, scratchA)
+	}
+}
+
+// divide32 is typed code's integer division or remainder (ssa's OpDivI32
+// ...): the operands widened to 64 bits, sign- or zero-extended, and
+// divided there, where no int32's quotient overflows -- MinInt32 / -1 is
+// 2^31, whose low half is MinInt32, and MinInt32 % -1 is 0 -- and a zero
+// divisor gives 0 without dividing. IDIV and DIV take RDX, the operands'
+// base, which is read again after them, as bigDivide's.
+func (c *compiler) divide32(v *ssa.Value) {
+	signed := v.Op == ssa.OpDivI32 || v.Op == ssa.OpRemI32
+	rem := v.Op == ssa.OpRemI32 || v.Op == ssa.OpRemU32
+	zero, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovRR32(scratchC, c.gpr(v.Args[1], scratchC))
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondE, zero)
+	c.a.MovRR32(scratchA, c.gpr(v.Args[0], scratchA))
+	if signed {
+		c.a.Movsxd(scratchA, scratchA)
+		c.a.Movsxd(scratchC, scratchC)
+		c.a.Cqo()
+		c.a.Idiv(scratchC)
+	} else {
+		c.a.Op(amd64.Xor, regStack, regStack, false)
+		c.a.Div(scratchC)
+	}
+	if rem {
+		c.a.MovRR(scratchA, regStack)
+	}
+	c.a.Load(regStack, regCtx, abi.OffStack)
+	c.a.Jmp(done)
+	c.a.Bind(zero)
+	c.a.Op(amd64.Xor, scratchA, scratchA, false)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
 }
 
 // roundSD rounds x to an integer in xScratch0, as mode says (RoundFloor,

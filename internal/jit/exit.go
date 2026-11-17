@@ -239,6 +239,10 @@ func (f *exitFrame) value(s *abi.ExitSlot) (at unsafe.Pointer, n uint64, r unsaf
 	}
 	w := f.word(s.Value)
 	n = w
+	if k := f.d.Kinds; int(s.Slot) < len(k) && s.Slot >= 0 && k[s.Slot] != abi.SlotValue {
+		// Typed code's raw slot: its word raw, no reference.
+		return at, abi.RawWord(k[s.Slot], w), nil, true
+	}
 	switch {
 	case s.Shadow.Kind != abi.ExitNone:
 		// Where the reference came from is known only now: the slot's

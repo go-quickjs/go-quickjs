@@ -2108,7 +2108,7 @@ func irReads(in *ir.Instruction) []int {
 		ir.StringFreeze, ir.StringMethod, ir.TypeTest, ir.BindingWrite, ir.StringPart, ir.UpvalueWrite,
 		ir.PropertyRead, ir.ReferenceRead, ir.BindingRead:
 		add(in.Left)
-	case ir.CopyPair, ir.StoreLoad, ir.Binary, ir.StringAdd, ir.ArrayRead, ir.ArrayKey, ir.ArrayUpdate, ir.Resolved,
+	case ir.CopyPair, ir.StoreLoad, ir.Binary, ir.Raw, ir.StringAdd, ir.ArrayRead, ir.ArrayKey, ir.ArrayUpdate, ir.Resolved,
 		ir.HasProperty, ir.DeleteProperty, ir.FieldDefine, ir.PropertyWrite:
 		add(in.Left)
 		add(in.Right)
@@ -2131,7 +2131,7 @@ func irReads(in *ir.Instruction) []int {
 			out = append(out, in.Dest+k)
 		}
 	}
-	if in.Private {
+	if in.Private || in.Op == ir.Raw && in.Raw == ir.RawStore {
 		add(in.Third)
 	}
 	return out

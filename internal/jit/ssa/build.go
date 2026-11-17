@@ -337,7 +337,7 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		}
 	}
 	calls, ok := b.inlineCallsOf(s.Program)
-	if !ok || !inlineFits(*total, inlineSize(s.Program)) {
+	if !ok || !inlineFits(*total, inlineSize(s.Program)) || s.Program.Kinds != nil {
 		return false
 	}
 	nslots, before, keeps, inlined := b.nslots, *total, b.f.Keeps, len(b.f.Inlined)
@@ -3138,8 +3138,21 @@ func BuildWith(p *ir.Program, fb Feedback) (*Func, error) { return build(nil, p,
 //
 // The build that stands is asked escape analysis's questions
 // (askVirtualRoots): what the optimization needs of the VM is asked here.
-func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
-	f, err := buildChosen(w, p, fb)
+func build(w *Workspace, p *ir.Program, fb Feedback) (f *Func, err error) {
+	if p.Kinds != nil {
+		// Typed code's raw instructions refuse what the feedback does not
+		// answer (raw.go).
+		defer func() {
+			if v := recover(); v != nil {
+				e, ok := v.(rawRefusal)
+				if !ok {
+					panic(v)
+				}
+				f, err = nil, e
+			}
+		}()
+	}
+	f, err = buildChosen(w, p, fb)
 	if err == nil {
 		askVirtualRoots(f, fb)
 	}
@@ -3197,7 +3210,7 @@ type calledPlan struct {
 // code to run. p is checked (ir.Program's Validate) by its caller.
 func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Func, calledPlan, bool, error) {
 	p = referenceReads(p, fb)
-	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w}
+	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w, Kinds: p.Kinds}
 	if kf, ok := fb.(KeepFeedback); ok {
 		f.KeepLimit = kf.KeepLimit()
 	}
@@ -4132,8 +4145,11 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	if ok {
 		calls, givenCalls, ok = b.inlineCalls(site, isAccessor)
 	}
-	if !ok || !inlineFits(*total, inlineSize(site.Program)) ||
+	if !ok || !inlineFits(*total, inlineSize(site.Program)) || site.Program.Kinds != nil ||
 		site.Argc < 0 || site.Params < 0 || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
+		// Nor typed code (ir.Program's Kinds), whose raw slots an exit
+		// inside would write as the callee's frame knows none of: called
+		// natively.
 		return nil, false
 	}
 	if site.Window && isAccessor {
@@ -6525,6 +6541,16 @@ func (b *builder) plan() error {
 				// converts it, as for a binary operator's, and resumes after.
 				entries[pc+1] = true
 			}
+		case ir.Raw:
+			// Typed code's: a conversion of what is no number, a float's
+			// remainder and a power Go makes at a host exit, which resumes
+			// after it (raw.go).
+			switch in.Raw {
+			case ir.RawConvI, ir.RawConvF, ir.RawFMod, ir.RawFMath:
+				if resumes(pc) {
+					entries[pc+1] = true
+				}
+			}
 		case ir.Nop, ir.Copy, ir.CopyPair, ir.StoreLoad, ir.Swap, ir.Insert2, ir.Insert3,
 			ir.Return, ir.ArrayKey, ir.StringFreeze:
 		case ir.UpvalueRead:
@@ -7027,8 +7053,7 @@ func (b *builder) readVar(slot int, blk *Block) *Value {
 	case len(blk.Preds) == 0 && blk.PC < 0 && slot < blk.Header.Len():
 		// A local an entry did not load, as the interpreter's liveness has
 		// it dead there (fill): the frame's, as an entry loads it.
-		v = b.f.newValue(blk, OpLoadSlot, Tagged)
-		v.Aux = slot
+		v = b.entryLoad(blk, slot)
 	case len(blk.Preds) == 0:
 		// A slot read where nothing defined it: an operand slot past an
 		// entry's depth. The slot IR never reads one; this keeps the form
@@ -7555,8 +7580,7 @@ func (b *builder) fill(blk *Block) {
 		f.openEdit()
 		for _, ix := range l {
 			i := int(ix)
-			v := f.newValue(blk, OpLoadSlot, Tagged)
-			v.Aux = i
+			v := b.entryLoad(blk, i)
 			b.write(i, blk, v)
 			f.setSlot(h, i, v)
 		}
@@ -7965,6 +7989,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 
 	if in.Check {
 		guard(OpCheckInit, None, b.thisCheckKind(in.CheckSlot), b.read(in.CheckSlot, blk))
+	}
+	if in.Raw != ir.RawNone {
+		// Typed code's (raw.go).
+		b.rawInstruction(blk, pc, in, operand, number, guard)
+		return
 	}
 	switch in.Op {
 	case ir.Nop, ir.Jump:

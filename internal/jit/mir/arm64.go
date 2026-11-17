@@ -9803,10 +9803,28 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	guard := c.guardFor(v)
 	switch v.Op {
 	case ssa.OpLoadSlot:
+		if isFloat(v) {
+			// Typed code's raw float64 slot, its number word's bits.
+			base, disp := c.slotAddr(v.Aux, false, a64A)
+			c.a.LoadF(a64F0, base, disp)
+			c.setF(v, a64F0)
+			break
+		}
 		d := c.gdst(v)
 		base, disp := c.slotAddr(v.Aux, false, d)
 		c.a.Load(d, base, disp)
 		c.setG(v, d)
+	case ssa.OpHeapLoad, ssa.OpHeapStore:
+		c.heapAccess(v)
+	case ssa.OpDivI32, ssa.OpDivU32, ssa.OpRemI32, ssa.OpRemU32:
+		c.divide32(v)
+	case ssa.OpCellNumLoad:
+		c.a.LoadF(a64F0, c.gpr(arg(0), a64A), c.enc.NumOffset)
+		c.setF(v, a64F0)
+	case ssa.OpCellNumStore:
+		// The number word alone: the pointer word is none, a number's.
+		w := c.gpr(arg(1), a64B)
+		c.a.Store(c.gpr(arg(0), a64A), c.enc.NumOffset, w)
 	case ssa.OpConst:
 		d := c.gdst(v)
 		c.movImm(d, c.constWord(v.Const))
@@ -10723,4 +10741,104 @@ func a64Shift(op ssa.Op) arm64.Shift {
 		return arm64.Asr
 	}
 	return arm64.Lsr
+}
+
+// heapAccess is amd64's heapAccess: typed code's heap load or store.
+func (c *a64Compiler) heapAccess(v *ssa.Value) {
+	kind := v.Aux
+	size := abi.ElemSize(kind)
+	float := kind == abi.ElemFloat32 || kind == abi.ElemFloat64
+	out, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovRR32(a64A, c.gpr(v.Args[0], a64A))
+	if size > 1 {
+		c.a.AndImm(a64A, a64A, uint64(uint32(-size)), false)
+	}
+	c.a.Sxtw(a64A, a64A)
+	c.movImm(a64B, v.Const.Bits)
+	c.a.Load(a64C, a64B, abi.OffHeapLen)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, out)
+	c.a.Load(a64B, a64B, abi.OffHeapBase)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	if v.Op == ssa.OpHeapStore {
+		if float {
+			x := c.fpr(v.Args[1], a64F0)
+			if kind == abi.ElemFloat64 {
+				c.a.StoreF(a64A, 0, x)
+			} else {
+				c.a.FCvtToSingle(a64F1, x)
+				c.a.StoreS(a64A, 0, a64F1)
+			}
+		} else {
+			x := c.gpr(v.Args[1], a64B)
+			switch size {
+			case 1:
+				c.a.Store8(a64A, 0, x)
+			case 2:
+				c.a.Store16(a64A, 0, x)
+			default:
+				c.a.Store32(a64A, 0, x)
+			}
+		}
+		c.a.Bind(out)
+		c.a.Bind(done)
+		return
+	}
+	switch kind {
+	case abi.ElemInt8:
+		c.a.LoadS8(a64A, a64A, 0)
+	case abi.ElemUint8:
+		c.a.LoadU8(a64A, a64A, 0)
+	case abi.ElemInt16:
+		c.a.LoadS16(a64A, a64A, 0)
+	case abi.ElemUint16:
+		c.a.LoadU16(a64A, a64A, 0)
+	case abi.ElemFloat32:
+		c.a.LoadS(a64F0, a64A, 0)
+		c.a.FCvtFromSingle(a64F0, a64F0)
+	case abi.ElemFloat64:
+		c.a.LoadF(a64F0, a64A, 0)
+	default:
+		c.a.LoadS32(a64A, a64A, 0)
+	}
+	c.a.B(done)
+	c.a.Bind(out)
+	if float {
+		c.movImm(a64A, math.Float64bits(math.NaN()))
+		c.a.FMovToF(a64F0, a64A)
+	} else {
+		c.movImm(a64A, 0)
+	}
+	c.a.Bind(done)
+	if float {
+		c.setF(v, a64F0)
+	} else {
+		c.setG(v, a64A)
+	}
+}
+
+// divide32 is amd64's divide32: the operands widened to 64 bits, sign- or
+// zero-extended, so that MinInt32 / -1 is 2^31, whose low half is
+// MinInt32, and MinInt32 % -1 0; SDIV and UDIV fault at nothing and give
+// 0 for a zero divisor, and a remainder of one is 0 too, not MSUB's x.
+func (c *a64Compiler) divide32(v *ssa.Value) {
+	signed := v.Op == ssa.OpDivI32 || v.Op == ssa.OpRemI32
+	rem := v.Op == ssa.OpRemI32 || v.Op == ssa.OpRemU32
+	x, y := c.gpr(v.Args[0], a64C), c.gpr(v.Args[1], a64B)
+	if signed {
+		c.a.Sxtw(a64C, x)
+		c.a.Sxtw(a64B, y)
+		c.a.Sdiv(a64A, a64C, a64B)
+	} else {
+		c.a.MovRR32(a64C, x)
+		c.a.MovRR32(a64B, y)
+		c.a.Udiv(a64A, a64C, a64B)
+	}
+	if rem {
+		done := c.a.NewLabel()
+		c.a.Cbz(a64B, done, true)
+		c.a.Msub(a64A, a64A, a64B, a64C)
+		c.a.Bind(done)
+	}
+	c.setG(v, a64A)
 }

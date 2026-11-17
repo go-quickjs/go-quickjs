@@ -875,7 +875,9 @@ func (c *core) findLazy() error {
 					c.lazy[v.ID] = true
 				}
 			case ssa.OpLoadSlot:
-				if !elsewhere[v.ID] {
+				// A typed code's raw slot's, loaded where it is, never
+				// lazily: materialize makes a word.
+				if !elsewhere[v.ID] && v.Type == ssa.Tagged {
 					c.lazy[v.ID] = true
 				}
 			case ssa.OpKept:
@@ -3466,7 +3468,7 @@ func (c *core) exitRehash(n int) {
 // at the first.
 func (c *core) exitLayout() *abi.ExitFrame {
 	if c.exitFrame == nil {
-		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: c.encoding()}
+		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: c.encoding(), Kinds: c.f.Kinds}
 		c.exitInlineLast = -1
 		if w := c.ws; w != nil {
 			// The workspace's, kept from compile to compile.

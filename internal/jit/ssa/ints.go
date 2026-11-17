@@ -387,13 +387,19 @@ func intPhis(f *Func) bool {
 	if !some() {
 		return false
 	}
-	if intPhiUses(f, phis, cand) {
+	// Typed code's (Func's Kinds): an int32 phi wherever its arguments
+	// are int32s, whatever its uses and its loop's registers -- each of
+	// its values is a raw int32 slot's, which every raw operation reads
+	// as an int32; a double's phi had had each use convert it back,
+	// checking the conversion's range, and zlib's largest function had
+	// most of its phis so.
+	if f.Kinds == nil && intPhiUses(f, phis, cand) {
 		filter()
 		if !some() {
 			return false
 		}
 	}
-	if intPhiBudgets(f, phis, cand) {
+	if f.Kinds == nil && intPhiBudgets(f, phis, cand) {
 		filter()
 	}
 	// In block order, so that value numbers do not vary from one compile to

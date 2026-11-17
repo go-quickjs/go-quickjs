@@ -233,12 +233,27 @@ func (p *Program) Validate() error {
 				return bad("invalid branch target")
 			}
 		case Branch:
+			if in.Raw != RawNone && (in.Raw < RawBrI || in.Raw >= RawOps || p.Kinds == nil || in.Operator < Lt || in.Operator > Ne) {
+				return bad("invalid raw compare")
+			}
 			left, right = true, in.Operator != Truth && in.Operator != Nullish
 			if !target(in.Target) || in.Operator != Truth && in.Operator != Nullish && (in.Operator < Lt || in.Operator > Ne) {
 				return bad("invalid conditional branch")
 			}
 		case Return, Rethrow:
 			left = true
+		case Raw:
+			// Typed code's: its operands raw slots or numbers, of the
+			// kinds its operation reads (raw.go), which the typed backend
+			// proved and the lowering keeps.
+			if in.Raw == RawNone || in.Raw >= RawBrI || p.Kinds == nil {
+				return bad("invalid raw operation")
+			}
+			left, right, third = true, true, in.Raw == RawStore
+			write = in.Raw != RawStore && in.Raw != RawCellSetI && in.Raw != RawCellSetF
+			if in.Raw >= RawCellGetI && in.Raw <= RawCellSetF && (int(in.Key) >= p.Upvalues || p.UpvalueBase+p.Upvalues > p.Locals) {
+				return bad("invalid captured binding")
+			}
 		case IterStep:
 			left, write = true, true
 			if !target(in.Target) {

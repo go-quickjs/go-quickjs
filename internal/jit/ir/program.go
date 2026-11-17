@@ -289,6 +289,9 @@ const (
 	ParamsDead
 	ParamInit
 	ParamDefault
+	// Raw is an operation of typed code on raw slots (Program's Kinds),
+	// which Instruction's Raw names (raw.go).
+	Raw
 )
 
 // RethrowNormal and RethrowReturn are the kinds a normal completion's
@@ -400,6 +403,9 @@ type Instruction struct {
 	// with | and &, and Octane's zlib had left native code at two such
 	// operators in every call of its hottest functions.
 	Bools uint8
+	// Raw is a Raw instruction's operation, or, on a Branch, a typed
+	// compare of raw slots (RawBrI, RawBrU, RawBrF); 0 elsewhere.
+	Raw RawOp
 	// Strict marks an Eq or Ne that is === or !==. On numbers the two
 	// agree; the new pipeline compares with null and undefined natively,
 	// where they do not. It marks a DeleteProperty in strict code, too.
@@ -479,6 +485,13 @@ func (in *Instruction) MayExit() bool {
 	switch in.Op {
 	case Nop, Copy, CopyPair, StoreLoad, Swap, Insert2, Insert3, Jump:
 		return false
+	case Raw:
+		// Typed code's leave only where Go converts or computes (raw.go).
+		switch in.Raw {
+		case RawConvI, RawConvF, RawFMod, RawFMath:
+			return true
+		}
+		return false
 	}
 	return true
 }
@@ -492,6 +505,9 @@ func (in *Instruction) MayExit() bool {
 // nothing do not commit.
 func (in *Instruction) Commits(regs int) bool {
 	if in.Generic {
+		return true
+	}
+	if in.Op == Raw && (in.Raw == RawStore || in.Raw == RawCellSetI || in.Raw == RawCellSetF) {
 		return true
 	}
 	switch in.Op {
@@ -552,6 +568,11 @@ func (in *Instruction) Writes() (int, int) {
 		if in.Frame || in.Whole {
 			return in.Dest, -1
 		}
+	case Raw:
+		if in.Raw == RawStore || in.Raw == RawCellSetI || in.Raw == RawCellSetF {
+			return -1, -1
+		}
+		return in.Dest, -1
 	}
 	return -1, -1
 }
@@ -774,6 +795,11 @@ type Program struct {
 	// call writes to its callee's context (abi.Context's Function), where
 	// Go finds it for the frames it makes of the callee's level.
 	FrameCallee bool
+	// Kinds is, for typed code, each of the first Regs slots' kind
+	// (SlotValue, SlotI32, SlotF64): a raw slot holds an int32 or a
+	// float64 in its number word, which an entry loads and an exit writes
+	// as such; nil for register code, every slot a value.
+	Kinds []uint8
 	// ArgumentParams, where not 0, is how many parameters a sloppy
 	// function's mapped arguments object aliases where the code assigns
 	// one, or a closure may, and never makes the object: a read of
