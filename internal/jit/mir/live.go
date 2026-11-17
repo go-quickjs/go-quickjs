@@ -109,12 +109,16 @@ func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, 
 	}
 	for changed := true; changed; {
 		changed = false
+		// A round looks at every block: as many rounds as the loops
+		// nest deep, not as there are loops.
+		c.steps += len(c.order)
 		for i := len(c.order) - 1; i >= 0; i-- {
 			b := c.order[i]
 			if !dirty[b.ID] {
 				continue
 			}
 			dirty[b.ID] = false
+			c.steps += int(opAt[b.ID+1]-opAt[b.ID]) + int(succAt[b.ID+1]-succAt[b.ID])
 			// The edit's nodes are this set's alone, which its
 			// operations change in place.
 			lb.Edit()

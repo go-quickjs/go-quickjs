@@ -125,6 +125,10 @@ type core struct {
 	// index of the one a block is in, or 0.
 	budgets  []budget
 	budgetOf []int
+	// steps counts the compile's steps in the loops whose length is not
+	// the item's own -- a block's predecessors, a loop's blocks -- for the
+	// test that the compile's work is linear (Times' Steps).
+	steps int
 	// masks are loopMasks's.
 	masks valueSet
 }
@@ -213,6 +217,7 @@ func (c *core) findBudgets() {
 		for len(stack) > 0 {
 			b := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
+			c.steps += len(b.Preds)
 			for _, p := range b.Preds {
 				if back[p.ID] != mark {
 					back[p.ID] = mark
@@ -230,6 +235,7 @@ func (c *core) findBudgets() {
 		for len(stack) > 0 {
 			b := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
+			c.steps += len(b.Succs)
 			for _, s := range b.Succs {
 				if back[s.ID] == mark && fwd[s.ID] != mark {
 					fwd[s.ID] = mark
@@ -244,6 +250,7 @@ func (c *core) findBudgets() {
 				ok = false
 				break
 			}
+			c.steps += len(b.Values)
 			for _, v := range b.Values {
 				if v.Op == ssa.OpCall || v.Op == ssa.OpTailSelf {
 					ok = false
@@ -315,6 +322,7 @@ func (c *core) turnChain(h *ssa.Block, body []*ssa.Block, in []int, t *chainTabl
 	// phi of a block in the loop).
 	t.loop++
 	for _, b := range body {
+		c.steps += len(b.Values)
 		for _, v := range b.Values {
 			t.at[v.ID] = t.loop
 			if b == h && v.Op == ssa.OpPhi {
@@ -1212,6 +1220,7 @@ func (c *core) allocate() error {
 			}
 		}
 		for _, v := range s.All() {
+			c.steps++
 			if moved == nil && rec[v.ID].slot == 0 {
 				// Neither a BigInt's box, nor made where needed, nor with
 				// a shadow: the value itself.
@@ -1321,6 +1330,7 @@ func (c *core) allocate() error {
 		later = later[:0]
 		c.slotWalker().Walk(c.f, roots, func(nd *ssa.SlotNode, h, base int) {
 			a := &asks[nd.ID()]
+			c.steps++
 			if h > 0 {
 				for _, kid := range nd.Kids() {
 					ask(kid.ID(), a.end, a.hot, a.own)
@@ -1627,6 +1637,7 @@ func (c *core) allocate() error {
 	if len(c.budgets) > 0 {
 		// One pass over the blocks for every loop, not one for each: n
 		// loops had taken n² steps.
+		c.steps += len(c.order)
 		for _, b := range c.order {
 			if k := c.loopBudget(b); k >= 0 {
 				it := &iv[c.budgets[k].v.ID]
@@ -1834,6 +1845,7 @@ func (c *core) allocate() error {
 		hw := -1 // the hint's weight, once a group asks for it
 		prev := -1
 		for w := wait[k][reg]; w != 0; {
+			c.steps++
 			r := int(w) - 1
 			nx := wnext[r]
 			if gm[r].room == 0 {
@@ -2211,6 +2223,7 @@ func (c *core) allocate() error {
 				return takeSlot(s), nil
 			}
 			for s := ftail; s != 0; s = fprev[s-1] {
+				c.steps++
 				if fend[s-1] < from {
 					return takeSlot(s - 1), nil
 				}
@@ -2219,6 +2232,7 @@ func (c *core) allocate() error {
 			// of slots taken, regapped, or whose group gave them up (into
 			// the list, where the walk above did not find them).
 			for !member && len(kept) > 0 {
+				c.steps++
 				e := kept[0]
 				s := int(uint32(e))
 				if !isFree[s] || !held[s] || gap[s] != int(e>>32) {
@@ -2305,6 +2319,7 @@ func (c *core) allocate() error {
 			if minEnd < it.start {
 				kept := 0
 				minEnd = math.MaxInt
+				c.steps += len(active)
 				for i, a := range active {
 					if e := aEnd[i]; e < it.start {
 						free = append(free, aReg[i])
@@ -2325,6 +2340,7 @@ func (c *core) allocate() error {
 				// In the order spilled: insertion, as few end at once.
 				done = append(done, k)
 				for i := len(done) - 1; i > 0 && done[i-1] > done[i]; i-- {
+					c.steps++
 					done[i-1], done[i] = done[i], done[i-1]
 				}
 			}
@@ -2359,6 +2375,7 @@ func (c *core) allocate() error {
 				// needed a register of its own, beside the phi's, which
 				// its back edge moved it into.
 				kept := 0
+				c.steps += len(active)
 				for i, a := range active {
 					if aEnd[i] == it.start && a.v.ID < nf && reads(it.v, a.v) {
 						free = append(free, aReg[i])
@@ -2461,6 +2478,7 @@ func (c *core) allocate() error {
 				victim, vi, split = it, -1, false
 			}
 			if budgets > 0 {
+				c.steps += len(active)
 				for i, a := range active {
 					if a.v.ID >= nf {
 						victim, vi, split = a, i, false
@@ -2549,6 +2567,7 @@ func (c *core) allocate() error {
 				}
 			}
 			kept := open[:0]
+			c.steps += len(open)
 			for _, it := range open {
 				if it.end > p {
 					kept = append(kept, it)
@@ -2558,6 +2577,7 @@ func (c *core) allocate() error {
 				}
 			}
 			open = kept
+			c.steps += len(open)
 			for _, it := range open {
 				l := c.locAt(it.v)
 				if l.reg < 0 || it.v.ID >= c.f.NumValues() {
@@ -3322,6 +3342,7 @@ func (c *core) phiSchedule(to *ssa.Block, idx int) []phiStep {
 	}
 	for len(moves) > 0 {
 		progress := false
+		c.steps += len(moves)
 		for i := 0; i < len(moves); i++ {
 			m := moves[i]
 			if k := c.locKey(m.dst); k >= 0 && readers[k] > 0 {
@@ -3332,6 +3353,7 @@ func (c *core) phiSchedule(to *ssa.Block, idx int) []phiStep {
 				readers[k]--
 			}
 			steps = append(steps, phiStep{dst: m.dst, src: m.src, parked: parked})
+			c.steps += len(moves) - i
 			moves = append(moves[:i], moves[i+1:]...)
 			i--
 			progress = true
@@ -3403,7 +3425,9 @@ func Settings() Options {
 func (c *core) lap(p Phase) {
 	if t := c.opts.Timing; t != nil {
 		t.Lap(p)
+		t.Steps[p] += int64(c.steps)
 	}
+	c.steps = 0
 }
 
 // TableExits has an exit that returns to Go leave its frame to Go to write

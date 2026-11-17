@@ -56,6 +56,10 @@ type Times struct {
 	// backend's compiles.
 	Ticks    [NumPhases]int64
 	Compiles int
+	// Steps are each phase's steps in the loops whose length is not the
+	// item's own (core's steps): work, where Ticks are time, for a test
+	// that the work is linear in the function's size.
+	Steps [NumPhases]int64
 	// Bytes and Objects are what the repeated compiles allocated on the
 	// heap, which the first compile of each, whose code is kept, is not
 	// part of: a compile's own garbage, apart from the program's.

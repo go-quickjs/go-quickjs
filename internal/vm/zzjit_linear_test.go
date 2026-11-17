@@ -38,6 +38,46 @@ func linearBlocksSource(name string, n int) string {
 	return b.String()
 }
 
+// linearLoopsSource is n loops one after another, each its own budget
+// loop: what is found for each loop must take the loop's own blocks, not
+// the function's.
+func linearLoopsSource(name string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "function %s(a, rounds) {\nvar s = 0;\n", name)
+	for i := range n {
+		fmt.Fprintf(&b, "for (var i%d = 0; i%d < rounds; i%d++) s = s + a * %d;\n", i, i, i, i)
+	}
+	b.WriteString("return s;\n}\n")
+	return b.String()
+}
+
+// linearGroupsSource is n variables a loop carries, each a phi group of
+// its header's phi and its new value, past every register: each turn reads
+// them all into n temporaries, live till the second half of the turn
+// gives each variable its new value. A temporary spilled finds the slots
+// of the groups whose phis have ended held for their new values, which
+// begin before it ends: none may hold it.
+func linearGroupsSource(name string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "function %s(a, rounds) {\n", name)
+	for i := range n {
+		fmt.Fprintf(&b, "var v%d = a + %d;\n", i, i)
+	}
+	b.WriteString("for (var r = 0; r < rounds; r++) {\n")
+	for i := range n {
+		fmt.Fprintf(&b, "var t%d = v%d * 0.5;\n", i, i)
+	}
+	for i := range n {
+		fmt.Fprintf(&b, "v%d = t%d + t%d;\n", i, i, (i*7+3)%n)
+	}
+	b.WriteString("}\nvar s = 0;\n")
+	for i := range n {
+		fmt.Fprintf(&b, "s = s + v%d;\n", i)
+	}
+	b.WriteString("return s;\n}\n")
+	return b.String()
+}
+
 // linearGuardsSource is n doubles live at once, each multiplied by an
 // element of an array whose read a guard checks: n exits that survive
 // Optimize, each naming the doubles still to be read.
@@ -65,6 +105,9 @@ type linearCompile struct {
 	lower, build, code uint64
 	took, backend      time.Duration
 	live, exits        int
+	// steps and bytes are each phase's of the compile for the host
+	// (mir.Times' Steps, and its Ticks read from the heap's allocation).
+	steps, bytes [mir.NumPhases]int64
 }
 
 func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value) linearCompile {
@@ -125,15 +168,33 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 	a3 := alloc()
 	c.took = time.Since(start)
 	c.build, c.code = a2-a1, a3-a2
-	for k := range 3 {
-		t0 := time.Now()
-		if _, err := mir.CompileWith(new(mir.Workspace), f, jitEncoding, opts); err != nil {
+	// The compiles for the host timed with no collection running either,
+	// as the lowerings are: a collection marks the whole heap, the
+	// program's n values' code among it, and the compile's allocation,
+	// n's too, sets collections off, so what they took grew as n² and
+	// was the collector's time, not the compiler's.
+	runtime.GC()
+	func() {
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		for k := range 3 {
+			t0 := time.Now()
+			if _, err := mir.CompileWith(new(mir.Workspace), f, jitEncoding, opts); err != nil {
+				t.Fatal(err)
+			}
+			if d := time.Since(t0); k == 0 || d < c.backend {
+				c.backend = d
+			}
+		}
+		// Its work: each phase's steps and what it allocated.
+		tm := &mir.Times{Clock: func() int64 { return int64(alloc()) }}
+		wopts := opts
+		wopts.Timing = tm
+		tm.Start()
+		if _, err := mir.CompileWith(new(mir.Workspace), f, jitEncoding, wopts); err != nil {
 			t.Fatal(err)
 		}
-		if d := time.Since(t0); k == 0 || d < c.backend {
-			c.backend = d
-		}
-	}
+		c.steps, c.bytes = tm.Steps, tm.Ticks
+	}()
 	c.live = p.Live.Size()
 	if len(mc.Exits) > 0 && mc.Exits[0].Frame != nil {
 		x := mc.Exits[0].Frame
@@ -156,16 +217,23 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 // twice that, where the shared sets' trees take a level more, for each
 // sixteen times the slots (ir.Liveness, ssa's slots.go).
 //
-// And the compile for the host of the blocks' shape takes some eight times
-// the time for eight times the values, not sixty-four: the allocator's
-// liveness of values over blocks had walked each value's blocks back from
-// its uses, as many steps as values are live in each block summed over the
+// And each phase of the compile for the host does some eight times the
+// work for eight times the values, not sixty-four: its steps in the loops
+// whose length is not the item's own (mir.Times' Steps) and what it
+// allocates, at most three and two times eight. The allocator's liveness
+// of values over blocks had walked each value's blocks back from its
+// uses, as many steps as values are live in each block summed over the
 // blocks -- n values live across 2n blocks 2n² steps, 40 s of a compile
 // of 16,000 -- where its sets now take what changes from block to block
-// (mir's blockLiveness). Measured at 2,000 and 16,000 values, the
-// allocation check off (mir.CheckAllocations), whose liveness computed
-// again is the dense sets' still, and time is noisier than memory: up to
-// three times eight.
+// (mir's blockLiveness); and n loops one after another (loops) had each
+// cleared a table of every block and looked at every block, to find its
+// own and to give its budget register an interval, n² steps (findBudgets).
+// The work, not the time: the work is linear, and its time is not where
+// the larger function leaves the caches -- a pass over every value of the
+// blocks' shape took 0.66 ns a value at 1,000 values and 4.78 at 8,000 --
+// nor where the machine is busy, where the ratio had been 29 to 39 times.
+// The allocation check is off (mir.CheckAllocations), whose liveness
+// computed again is the dense sets' still.
 func TestJITCompileLinear(t *testing.T) {
 	if !jitSSABackend || testing.Short() {
 		t.Skip("no SSA backend on this architecture, or short")
@@ -181,20 +249,9 @@ func TestJITCompileLinear(t *testing.T) {
 		{"spill", func(name string, n int) string { return spillMoreHelpers + spillMoreSource(name, n, 150) }, func(r *Runtime) []Value {
 			return []Value{Float(1.25), Float(0.5), Float(7), spillMoreObject(r, 0), Str(NewString("pp")), Float(2)}
 		}},
+		{"loops", linearLoopsSource, plain},
+		{"groups", linearGroupsSource, plain},
 	}
-	t.Run("time", func(t *testing.T) {
-		defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
-		mir.CheckAllocations = false
-		var cs [2]linearCompile
-		for k, n := range []int{2000, 16000} {
-			name := fmt.Sprintf("blocks%d", n)
-			cs[k] = linearCompileOf(t, linearBlocksSource(name, n), name, plain)
-			t.Logf("%d values: the compile for the host %v", n, cs[k].backend.Round(time.Millisecond))
-		}
-		if r := float64(cs[1].backend) / float64(cs[0].backend); r > 24 {
-			t.Errorf("the compile for the host: eight times the values took %.1f times the time", r)
-		}
-	})
 	const small, big = 1000, 8000
 	for _, sh := range shapes {
 		t.Run(sh.name, func(t *testing.T) {
@@ -206,6 +263,9 @@ func TestJITCompileLinear(t *testing.T) {
 			s, b := cs[0], cs[1]
 			t.Logf("%d values: lower %.1f MB, build %.1f MB, code %.1f MB, %v (backend %v), liveness %d bytes, exits %d bytes",
 				small, float64(s.lower)/(1<<20), float64(s.build)/(1<<20), float64(s.code)/(1<<20), s.took.Round(time.Millisecond), s.backend.Round(time.Millisecond), s.live, s.exits)
+			for p := mir.Phase(0); p < mir.NumPhases; p++ {
+				t.Logf("%-9s steps %9d -> %9d (%5.2fx), bytes %10d -> %10d (%5.2fx)", p, s.steps[p], b.steps[p], float64(b.steps[p])/float64(max(s.steps[p], 1)), s.bytes[p], b.bytes[p], float64(b.bytes[p])/float64(max(s.bytes[p], 1)))
+			}
 			t.Logf("%d values: lower %.1f MB, build %.1f MB, code %.1f MB, %v (backend %v), liveness %d bytes, exits %d bytes",
 				big, float64(b.lower)/(1<<20), float64(b.build)/(1<<20), float64(b.code)/(1<<20), b.took.Round(time.Millisecond), b.backend.Round(time.Millisecond), b.live, b.exits)
 			for _, c := range []struct {
@@ -220,6 +280,14 @@ func TestJITCompileLinear(t *testing.T) {
 			} {
 				if c.big > 16*c.small {
 					t.Errorf("%s: eight times the values took %.1f times the memory", c.what, float64(c.big)/float64(c.small))
+				}
+			}
+			for p := mir.Phase(0); p < mir.NumPhases; p++ {
+				if b.steps[p] > 24*max(s.steps[p], 1) {
+					t.Errorf("the compile's %s: eight times the values took %.1f times the steps", p, float64(b.steps[p])/float64(max(s.steps[p], 1)))
+				}
+				if b.bytes[p] > 16*max(s.bytes[p], 1<<10) {
+					t.Errorf("the compile's %s: eight times the values allocated %.1f times the bytes", p, float64(b.bytes[p])/float64(max(s.bytes[p], 1)))
 				}
 			}
 		})
