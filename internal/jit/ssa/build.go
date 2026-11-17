@@ -2750,6 +2750,16 @@ func smallLoop(p *ir.Program, n int) bool {
 	return n == 0 && inlineSize(p) <= maxInlineLoop
 }
 
+// NeverInlined reports whether no site inlines p, whatever any feedback
+// says: what InlineCalls and InlineCallsGiven refuse before either reads
+// anything of the callee's feedback -- too long, or of globals, captured
+// locals, a derived constructor's super() or exception handlers. The VM's
+// snapshot for a compile in the background asks nothing ahead of such a
+// callee's feedback, which the build never asks.
+func NeverInlined(p *ir.Program) bool {
+	return p == nil || inlineSize(p) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0
+}
+
 // InlineCalls reports whether a callee may be inlined if the operations it
 // leaves to Go, which it returns by PC, are calls inlined in it too: it is
 // Inlinable but for those. A callee with a loop is taken only if it is

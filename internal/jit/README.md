@@ -689,7 +689,9 @@ feedback ahead (`jitRegSnapshotOf`) -- every question the build may ask,
 at each instruction the methods the build asks of its op (`jitSnapOps`),
 those asked by a state's PC (`Resumed`, `EntryGeneric`) at each register
 pc, of the function and of the callees it may inline, each a snapshot of
-its own, to `jitSnapDepth` -- into a `jitRegSnapshot`, which has
+its own, to `jitSnapDepth`, nothing of a callee no site inlines whatever its
+feedback (`ssa.NeverInlined`: too long, or of what `InlineCalls` refuses
+before it reads the callee's feedback) -- into a `jitRegSnapshot`, which has
 `jitRegFeedback`'s methods alone, generated from them (`snapgen`,
 `zzjit_snapshot_gen.go`), so that the build finds the same optional
 interfaces it would; a worker builds, optimizes and compiles from it

@@ -122,7 +122,12 @@ func (s *jitSnapshot) nestReg(site ssa.InlineSite) ssa.InlineSite {
 	c := &jitSnapshot{answers: map[jitSnapKey][]any{}, root: root, depth: s.depth + 1, fb: f.fb, effects: map[jitSnapKey]*jitSnapEffect{}}
 	c.reg = &jitRegSnapshot{s: c, regs: len(f.rc.Code)}
 	root.callees[key] = c
-	if c.depth < jitSnapDepth && site.Program != nil {
+	if c.depth < jitSnapDepth && site.Program != nil && !ssa.NeverInlined(site.Program) {
+		// Not a callee no site inlines (ssa.NeverInlined), whose feedback
+		// the build never asks: every callee the root met had been asked
+		// every question, nested to jitSnapDepth, Typescript's compiles in
+		// the background taking 620 ms on the runtime's goroutine -- more
+		// than its compiles there took, 390 -- most of it so.
 		c.askReg(f, site.Program)
 	}
 	site.Feedback = c.reg
