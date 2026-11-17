@@ -2,21 +2,8 @@ package bytecode
 
 import (
 	"fmt"
-	"strings"
 	"unsafe"
 )
-
-// Instr is a single instruction. Op selects the operation; A and B carry
-// operands whose meaning depends on the opcode, documented alongside each in
-// op.go.
-type Instr struct {
-	Op Op
-	A  uint32
-	B  uint32
-}
-
-// StrFreeze reports whether in is str_freeze (StrFreezeA).
-func (in Instr) StrFreeze() bool { return in.Op == OpArgumentsIndex && in.A == StrFreezeA }
 
 // ConstKind tags the entries of a function's constant pool.
 //
@@ -40,7 +27,7 @@ type Constant struct {
 	Num  float64
 	Str  string
 	// Fn is set for ConstFunction: a nested function's compiled template,
-	// which OpClosure turns into a closure.
+	// which closure_w turns into a closure.
 	Fn *Function
 	// Flags carries a regular expression's flags for ConstRegExp.
 	Flags string
@@ -80,8 +67,8 @@ type UpvalueDesc struct {
 	ByValue bool
 	// Assigned says the closure, or one it makes, or one that closure
 	// makes in turn, may assign the binding: an instruction of the
-	// closure's stores to it (OpSetUpvalue, OpSetUpvalueCheck,
-	// OpInitUpvalue), a nested function's upvalue forwarding it is
+	// closure's stores to it (set_upval and its checked forms), a nested
+	// function's upvalue forwarding it is
 	// Assigned, or the closure has a direct eval, which may assign any, a
 	// strict one's too. The compiler records it as the closure's compile
 	// ends, its nested functions' before. In what was padding after
@@ -203,40 +190,42 @@ const (
 	KindStaticBlock
 )
 
-// LeafKind names the few bodies Function.Leaf marks: ones that only read or
+// LeafKind names the few bodies RegCode.Leaf marks: ones that only read or
 // write a property of their `this`, which a call can be answered for
-// without a frame, and a constructor's that only hands its arguments on to a
-// method of its `this`, which a construction can call directly.
+// without a frame; a constructor's that only hands its arguments on to a
+// method of its `this`, which a construction can call directly; and pure
+// bodies, which the VM evaluates without a frame.
 type LeafKind uint8
 
 const (
 	// LeafNone is any other body.
 	LeafNone LeafKind = iota
-	// LeafGetThis is `return this.k`: push_this, get_prop, return.
+	// LeafGetThis is `return this.k`: get_prop of r1, ret.
 	LeafGetThis
-	// LeafGetThisLength is `return this.k.length`: push_this, get_prop,
-	// get_length, return.
+	// LeafGetThisLength is `return this.k.length`: get_prop of r1,
+	// get_length, ret.
 	LeafGetThisLength
-	// LeafGetThisIndex is `return this.k[p]`, p a parameter: push_this,
-	// get_prop, get_local, get_index, return.
+	// LeafGetThisIndex is `return this.k[p]`, p a parameter: get_prop of
+	// r1, get_index by p's register, ret.
 	LeafGetThisIndex
 	// LeafSetThis is `this.k = p` for parameters p, once or more, and
-	// nothing else: a run of push_this, get_local and set_prop, then the
-	// return a function or a class constructor ends with.
+	// nothing else: a run of set_prop of r1 from a parameter's register,
+	// then the return a function or a class constructor ends with.
 	LeafSetThis
 	// LeafForward is `this.k.apply(this, arguments)` and nothing else, a
 	// constructor that hands its arguments on to a method of its object:
-	// push_this, get_prop, get_prop_this of apply, push_this,
-	// apply_arguments, drop, return_undef.
+	// get_prop of r1, get_prop of apply, move of r1, apply_args,
+	// ret_undef.
 	LeafForward
 	// LeafPure is a body that reads -- this, its parameters, constants,
 	// properties and globals -- and computes from what it read, with
 	// operators, comparisons, typeof, branches forward and calls, and
-	// returns: no loop and no local of its own, and at most one store, to a
-	// property, after which nothing it does can fail (see PureTail). The VM
-	// evaluates one without a frame where each read, operator and store
-	// takes its fast path and each call is of such a body too, and gives up,
-	// having changed nothing, where one would not.
+	// returns: no loop and no binding of its own, and at most one store, to
+	// a property or an upvalue, after which nothing it does can fail (see
+	// RegCode.PureTail). The VM evaluates one without a frame where each
+	// read, operator and store takes its fast path and each call is of
+	// such a body too, and gives up, having changed nothing, where one
+	// would not.
 	LeafPure
 )
 
@@ -250,10 +239,8 @@ type FunctionDebug struct {
 }
 
 // Statement is where a statement begins in code compiled for a debugger: a
-// place it can stop.
+// place it can stop, its register code's debug instruction of its index.
 type Statement struct {
-	// PC is the statement's OpDebugStmt.
-	PC uint32
 	// Pos is the byte offset in the script's text the statement starts at.
 	Pos int32
 	// Scope is the index in EvalScopes of what is in scope there, the
@@ -261,7 +248,8 @@ type Statement struct {
 	Scope uint32
 }
 
-// SourceLoc attributes instructions to a source position, for stack traces.
+// SourceLoc attributes register instructions to a source position, for
+// stack traces (RegCode.Lines).
 type SourceLoc struct {
 	// PC is the index of the first instruction covered by this entry.
 	PC uint32
@@ -273,23 +261,15 @@ type SourceLoc struct {
 //
 // A template is immutable once compiled and is shared by every closure created
 // from it; the per-call state lives in the virtual machine's frame.
-// MaxLiteralKeys is the most keys of a literal Function.LiteralKeys says.
+// MaxLiteralKeys is the most keys of a literal RegCode.ObjKeysHash says.
 const MaxLiteralKeys = 64
 
-// LiteralKeys says of the object literal of a site what keys it defines: Keys
-// is a hash of them and their order, never 0, which is the same for the same
-// keys in any function of any runtime. It only identifies them: two lists of
-// keys of one hash, as rare as they come, are only slower.
-type LiteralKeys struct {
-	Site uint32
-	Keys uint64
-}
-
-// HashLiteralKeys is LiteralKeys' Keys of a literal whose keys are keys,
-// in their order: FNV-1a, 64 bits, which takes no seed, so that a
-// function shared by runtimes says its literals of the same keys alike.
-// Each key's length goes into the hash, so that ab then c is not a then
-// bc. It is never 0.
+// HashLiteralKeys is RegCode.ObjKeysHash's hash of the keys of an object
+// literal, in their order: FNV-1a, 64 bits, which takes no seed, so that a
+// function shared by runtimes says its literals of the same keys alike, in
+// any function of any runtime. It only identifies them: two lists of keys
+// of one hash, as rare as they come, are only slower. Each key's length
+// goes into the hash, so that ab then c is not a then bc. It is never 0.
 func HashLiteralKeys(keys []string) uint64 {
 	const (
 		start = 14695981039346656037
@@ -314,12 +294,6 @@ func HashLiteralKeys(keys []string) uint64 {
 }
 
 type Function struct {
-	// ParamEnd is the pc just past the parameter prologue, which is where a
-	// generator's body proper begins. A generator binds its parameters when it
-	// is called and resumes from here, so that a destructuring error in a
-	// parameter throws at the call rather than at the first next().
-	ParamEnd uint32
-
 	Name string
 	// ParamCount is how many arguments the interpreter copies positionally into
 	// the frame's slots. It excludes a rest parameter, which is filled from the
@@ -333,12 +307,7 @@ type Function struct {
 	// LocalCount is the size of the frame's local slice, covering parameters,
 	// declared variables and compiler temporaries.
 	LocalCount int
-	// MaxStack is the deepest the operand stack gets, so a frame can be
-	// allocated once at the right size.
-	MaxStack int
-
-	Code      []Instr
-	Constants []Constant
+	Constants  []Constant
 	// Names holds the property and variable names referenced by instructions
 	// that take a name operand, kept separate from Constants so that the VM can
 	// pre-intern them all into atoms at load time.
@@ -419,9 +388,9 @@ type Function struct {
 	// own return does: a construction's result is its receiver whichever
 	// return it takes, as one that inlines it may take it.
 	ReturnsReceiver bool
-	// HasTailCall says the body has a call in tail position, OpTailCall,
-	// OpTailCallMethod or OpTailDirectEval, which can end its frame for the
-	// callee's.
+	// HasTailCall says the body has a call in tail position (RCallWT,
+	// RCallMWT, or a direct eval marked RMarkTail), which can end its frame
+	// for the callee's.
 	HasTailCall bool
 	// IsExprBody marks a concise arrow body, which affects nothing at runtime
 	// but is useful when printing a function's source.
@@ -438,19 +407,6 @@ type Function struct {
 	// var the evaluated code declares belongs to the function that called it,
 	// and there is no slot for a name nobody wrote down.
 	HasDirectEval bool
-	// Leaf is which of the few bodies LeafKind names this function's is, or
-	// LeafNone. The VM answers a call of one itself, without running the
-	// body, where nothing could see the difference.
-	Leaf LeafKind
-	// PureCalls says a LeafPure body calls or constructs: the VM keeps such
-	// a body frameless where it can, since its calls are frameless with it,
-	// while one that calls nothing may be run as its register code.
-	PureCalls bool
-	// PureTail is, for a LeafPure body, where the code begins that has no
-	// instruction a frameless evaluation could give up at. A store is only
-	// in it, so that nothing can give up after one, and so is a call of a
-	// body that stores.
-	PureTail int32
 	// VMCode is the VM's own form of the function, which it builds the first
 	// time the function runs and stores here once, atomically: it holds
 	// nothing of any one runtime's, so every runtime can share it.
@@ -467,26 +423,18 @@ type Function struct {
 	// FrameCallee is, as are the two below.
 	AssignsParams bool
 	// MakesArguments says the code makes the arguments object, or hands
-	// the call's arguments on to apply: an OpGetArguments, an
-	// OpLazyArguments or an OpApplyArguments. Reads by index and the count
-	// alone (OpArgumentsIndex, OpArgumentsLength) make none.
+	// the call's arguments on to apply: a read of the object, or its
+	// apply. Reads by index and the count alone make none.
 	MakesArguments bool
 	// SuperForwards says the code has a super(...) of the call's own
-	// arguments (OpSuperCall's SuperForward), as a derived class's default
-	// constructor has, which hands them on.
+	// arguments, as a derived class's default constructor has, which hands
+	// them on.
 	SuperForwards bool
 	// Script is the source text the function was compiled from, which its
-	// Lines are positions in, and Start is where in it the function begins.
+	// register code's Lines are positions in, and Start is where in it the
+	// function begins.
 	Script *Script
 	Start  int32
-	// PrivateSites is how many reads and writes of private members --
-	// get_private and set_private -- the code has, each with a cache of its
-	// own past the PropSites ones, numbered from PropSites+1 in the order of
-	// the code. Their instructions have no room for the number; the
-	// register compiler gives each its site. It is beside Start, in what was padding on a 64-bit
-	// machine, so that the fields a call reads stay where they were.
-	PrivateSites uint32
-	Lines        []SourceLoc
 	// Debug is what code compiled for a debugger has of its own, and nil
 	// for any other code, which pays one pointer for it. Such code is
 	// compiled for the one runtime that runs it, so it is not shared as
@@ -495,10 +443,6 @@ type Function struct {
 	// Text is the original source text of the function, which
 	// Function.prototype.toString returns.
 	Text string
-	// LiteralKeys says the keys of the function's object literals that have
-	// nothing else -- no spread, accessor, computed key or __proto__, no key
-	// twice, and no more than MaxLiteralKeys -- in the order of their sites.
-	LiteralKeys []LiteralKeys
 	// TraceName is what a stack trace calls a function the language leaves
 	// anonymous, as V8's name inferrer calls it: a.b for
 	// `a.b = function () {}` (see the compiler's traceJoin). Only traces read
@@ -532,7 +476,7 @@ type Function struct {
 	// reference or call, new.target, or a direct eval, which may read
 	// either (UsesNewTarget). False for any other function.
 	ReadsMaker bool
-	// HasYieldStar says the code has a yield* (OpYieldStar).
+	// HasYieldStar says the code has a yield*.
 	HasYieldStar bool
 	// Reg is the code's register code (docs/register-interpreter.md),
 	// read with RegCode: a function's, compiled when it is first asked
@@ -543,14 +487,15 @@ type Function struct {
 	Reg *RegLater
 }
 
-// LineAt returns the source line of the instruction at pc, or 0 if unknown.
+// LineAt returns the source line of the register code's instruction at
+// pc, or 0 if unknown.
 func (f *Function) LineAt(pc uint32) int32 {
 	line, _ := f.PositionAt(pc)
 	return line
 }
 
-// PositionAt returns the source line and column of the instruction at pc, or
-// zeros if unknown.
+// PositionAt returns the source line and column of the register code's
+// instruction at pc, or zeros if unknown.
 func (f *Function) PositionAt(pc uint32) (line, col int32) {
 	if pos, ok := f.PosAt(pc); ok {
 		return f.Script.Position(pos)
@@ -558,15 +503,12 @@ func (f *Function) PositionAt(pc uint32) (line, col int32) {
 	return 0, 0
 }
 
-// PosAt returns the byte offset in the script of the instruction at pc, and
-// whether it is known.
+// PosAt returns the byte offset in the script of the register code's
+// instruction at pc -- or of the error a pc past the code stands for
+// (RegCode.Lines) -- and whether it is known.
 func (f *Function) PosAt(pc uint32) (int32, bool) {
-	// Entries are sorted by PC, and functions are small, so a linear scan from
-	// the end beats a binary search in practice.
-	for i := len(f.Lines) - 1; i >= 0; i-- {
-		if f.Lines[i].PC <= pc {
-			return f.Lines[i].Pos, true
-		}
+	if rc := f.RegCompiled(); rc != nil {
+		return rc.PosAt(int(pc))
 	}
 	return 0, false
 }
@@ -577,134 +519,6 @@ func (f *Function) String() string {
 		return "<anonymous>"
 	}
 	return f.Name
-}
-
-// Disassemble renders a function's code in a readable form. It exists for
-// debugging the compiler and is not used at runtime.
-func (f *Function) Disassemble() string {
-	var sb strings.Builder
-	f.disassembleTo(&sb, "")
-	return sb.String()
-}
-
-func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
-	fmt.Fprintf(sb, "%sfunction %s (params=%d locals=%d stack=%d)\n",
-		indent, f, f.ParamCount, f.LocalCount, f.MaxStack)
-
-	for pc := range f.Code {
-		fmt.Fprintf(sb, "%s  %4d  %s\n", indent, pc, f.FormatInstr(pc))
-	}
-
-	// Nested functions follow their parent, indented.
-	for _, c := range f.Constants {
-		if c.Kind == ConstFunction && c.Fn != nil {
-			sb.WriteByte('\n')
-			c.Fn.disassembleTo(sb, indent+"    ")
-		}
-	}
-}
-
-// FormatInstr renders the instruction at pc as Disassemble does: its
-// operation, its operands, and what an operand names -- a constant, a name, a
-// local or an upvalue -- after a semicolon.
-func (f *Function) FormatInstr(pc int) string {
-	in := f.Code[pc]
-	if in.StrFreeze() {
-		return "str_freeze"
-	}
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%-20s", in.Op)
-	switch in.Op {
-	case OpPushConst, OpClosure, OpNewRegExp:
-		fmt.Fprintf(&sb, " %d", in.A)
-		if int(in.A) < len(f.Constants) {
-			fmt.Fprintf(&sb, " ; %s", f.Constants[in.A])
-		}
-	case OpGetProp, OpSetProp, OpGetPropThis, OpDefineField,
-		OpGetGlobal, OpGetGlobalOpt, OpSetGlobal, OpDefineGlobalVar,
-		OpDefineGlobalFunc, OpSetName, OpGetSuperProp, OpSetSuperProp,
-		OpCheckGlobalRef, OpAssertResolved,
-		OpGetPrivate, OpSetPrivate, OpDefinePrivate, OpPrivateIn,
-		OpDefinePrivateMethod,
-		OpGetPrivateMethod, OpDefineGetter, OpDefineSetter:
-		fmt.Fprintf(&sb, " %d", in.A)
-		if int(in.A) < len(f.Names) {
-			fmt.Fprintf(&sb, " ; %q", f.Names[in.A])
-		}
-	case OpGetLocal, OpSetLocal, OpPutLocal, OpGetLocalCheck,
-		OpSetLocalCheck, OpInitLocal, OpCloseUpvalues:
-		fmt.Fprintf(&sb, " %d", in.A)
-		if int(in.A) < len(f.Locals) {
-			fmt.Fprintf(&sb, " ; %q", f.Locals[in.A].Name)
-		}
-	case OpGetUpvalue, OpSetUpvalue, OpGetUpvalueCheck, OpSetUpvalueCheck,
-		OpInitUpvalue:
-		fmt.Fprintf(&sb, " %d", in.A)
-		if int(in.A) < len(f.Upvalues) {
-			fmt.Fprintf(&sb, " ; %q", f.Upvalues[in.A].Name)
-		}
-	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpJumpIfFalseKeep,
-		OpJumpIfTrueKeep, OpJumpIfNullish, OpJumpIfNotNullish,
-		OpPushCatch, OpPushFinally, OpIterNextOrJump:
-		fmt.Fprintf(&sb, " -> %d", in.A)
-	case OpAsyncIterClose:
-		switch in.B {
-		case 0:
-			fmt.Fprintf(&sb, " -> %d", in.A)
-		case 1:
-			sb.WriteString(" check")
-		default:
-			sb.WriteString(" done")
-		}
-	case OpJumpIfCmpFalse:
-		fmt.Fprintf(&sb, " %s -> %d", Op(in.B), in.A)
-	case OpPushInt:
-		fmt.Fprintf(&sb, " %d", int32(in.A))
-	case OpClearLocal, OpIncLocal, OpDecLocal, OpLazyArguments:
-		fmt.Fprintf(&sb, " %d ; %s", in.A, f.localName(in.A))
-	case OpGetLocal2, OpSetLocalGet, OpGetLocalIndex:
-		fmt.Fprintf(&sb, " %d %d ; %s %s", in.A, in.B, f.localName(in.A), f.localName(in.B))
-	case OpUpdateLocal:
-		fmt.Fprintf(&sb, " %d %s ; %s", in.A, updateString(in.B), f.localName(in.A))
-	case OpGetLocalIndexUpdate:
-		fmt.Fprintf(&sb, " %d %d %s ; %s %s", in.A, in.B>>2, updateString(in.B&3), f.localName(in.A), f.localName(in.B>>2))
-	case OpBinImm:
-		fmt.Fprintf(&sb, " %s %d", Op(in.B), int32(in.A))
-	case OpBinLocal:
-		fmt.Fprintf(&sb, " %s %d ; %s", Op(in.B), in.A, f.localName(in.A))
-	case OpLocalBinImm:
-		k := in.A & (1<<24 - 1)
-		fmt.Fprintf(&sb, " %d %s %d ; %s", k, Op(in.A>>24), int32(in.B), f.localName(k))
-	default:
-		if in.A != 0 || in.B != 0 {
-			fmt.Fprintf(&sb, " %d", in.A)
-			if in.B != 0 {
-				fmt.Fprintf(&sb, " %d", in.B)
-			}
-		}
-	}
-	return strings.TrimRight(sb.String(), " ")
-}
-
-// localName is local k's name, quoted, for a disassembly.
-func (f *Function) localName(k uint32) string {
-	if int(k) < len(f.Locals) {
-		return fmt.Sprintf("%q", f.Locals[k].Name)
-	}
-	return "?"
-}
-
-// updateString is an update_local's flags as the operator they make: ++x,
-// x++, --x or x--.
-func updateString(flags uint32) string {
-	op := "++"
-	if flags&UpdateDec != 0 {
-		op = "--"
-	}
-	if flags&UpdatePostfix != 0 {
-		return "x" + op
-	}
-	return op + "x"
 }
 
 func (c Constant) String() string {

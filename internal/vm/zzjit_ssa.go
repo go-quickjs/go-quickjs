@@ -1129,7 +1129,7 @@ const jitLiteralRoom = 64
 // code makes its objects from a pool of the shape its site's objects start
 // with (shapeTree.siteRoot).
 func (r *Runtime) jitObjectLiteral(e *jitEntry, cl *closure, pc int, site uint32, n int) *jitLiteral {
-	keySite[struct{}](r, cl, site)
+	keySite[struct{}](r, cl, pc, site)
 	root := r.shapes.siteRoot(&cl.ic[site], r.proto.object)
 	if root == nil {
 		return nil
@@ -1207,15 +1207,10 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 	src := (*jitPoolSource)(pool.Source)
 	if src != nil && src.sharedOf != nil {
 		// A literal of constants: its arrays as the interpreter makes them,
-		// each whole (sharedLiteralArray).
+		// each whole (sharedShare).
 		for i := range int(pool.Size) {
-			var a *Object
-			if src.sharedReg {
-				ic := &src.sharedOf.ic[src.sharedPC]
-				a = sharedShare(r, ic, ic.p1)
-			} else {
-				a = sharedLiteralArray(r, src.sharedOf, int(src.sharedPC))
-			}
+			ic := &src.sharedOf.ic[src.sharedPC]
+			a := sharedShare(r, ic, ic.p1)
 			r.ensureShape(a)
 			pool.Objects[i] = unsafe.Pointer(a)
 		}
@@ -2201,24 +2196,6 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	return false
 }
 
-// jitGoPropertyAt reports whether a call of Go, in, may be made at pc of
-// fn: a property's read or write only where fn's instruction there is one
-// (jitRegPropertyMade), which reads it; any other call anywhere.
-func jitGoPropertyAt(fn *bytecode.Function, pc int, in bytecode.Instr) bool {
-	switch in.Op {
-	case bytecode.OpSetProp:
-		return pc < len(fn.Code) && fn.Code[pc].Op == bytecode.OpSetProp
-	case bytecode.OpGetProp:
-		return pc < len(fn.Code) && (fn.Code[pc].Op == bytecode.OpGetProp || fn.Code[pc].Op == bytecode.OpGetPropThis || fn.Code[pc].Op == bytecode.OpGetPropUnder)
-	}
-	if jitcompile.GoOperation(in.Op) {
-		// An operation Go makes (abi.GoCallOp), as the instruction there
-		// says.
-		return pc < len(fn.Code) && fn.Code[pc].Op == in.Op
-	}
-	return true
-}
-
 // jitCalleeFrame is a frame for the native callee running in ctx, which
 // has none of the VM's, to make a closure on or close what closures
 // captured (ssa.GoClosure, GoClose): its closure, its locals where its
@@ -2870,13 +2847,21 @@ func (fb *jitFeedback) WalkedCloseCell() uintptr {
 // (WalkedCloseCell).
 var _ [0]struct{} = [unsafe.Offsetof(protoCell{}.valid)]struct{}{}
 
+// jitInstr is an operation a call of Go makes (jitGoCallInstr): an
+// opcode of the shared vocabulary and its operands, as op.go documents
+// them for the opcode.
+type jitInstr struct {
+	Op bytecode.Op
+	A  uint32
+	B  uint32
+}
+
 // jitGoCallInstr is the call a call of Go makes (abi.Context's GoOp, which
-// native code writes): its instruction, as the bytecode has it at the
-// call, and how many operands it takes from the stack. Read from the
-// bytecode, it was three loads, one after another, at every call.
-func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
+// native code writes): its operation, and how many operands it takes from
+// the stack.
+func jitGoCallInstr(op uint64) (jitInstr, int) {
 	argc := uint32(op>>abi.GoOpArgcShift) & 0xff
-	in := bytecode.Instr{Op: bytecode.OpCall, A: argc}
+	in := jitInstr{Op: bytecode.OpCall, A: argc}
 	n := int(argc) + 1
 	switch op >> abi.GoOpKindShift & 0xff {
 	case abi.GoCallMethod:
@@ -2886,41 +2871,41 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 		in.Op = bytecode.OpNew
 	case abi.GoCallStep:
 		// A loop's step, its cursor the one operand.
-		return bytecode.Instr{Op: bytecode.OpIterNextOrJump}, 1
+		return jitInstr{Op: bytecode.OpIterNextOrJump}, 1
 	case abi.GoCallFill:
 		// A destructuring's step, its cursor the one operand.
-		return bytecode.Instr{Op: bytecode.OpIterStep}, 1
+		return jitInstr{Op: bytecode.OpIterStep}, 1
 	case abi.GoCallForOf:
 		// A cursor made, of the iterable, the one operand.
-		return bytecode.Instr{Op: bytecode.OpForOfStart}, 1
+		return jitInstr{Op: bytecode.OpForOfStart}, 1
 	case abi.GoCallForIn:
 		// A for...in's cursor made, of the object, the one operand.
-		return bytecode.Instr{Op: bytecode.OpForInStart}, 1
+		return jitInstr{Op: bytecode.OpForInStart}, 1
 	case abi.GoCallRest:
 		// A destructuring's rest element, of the cursor, the one operand.
-		return bytecode.Instr{Op: bytecode.OpIterRest}, 1
+		return jitInstr{Op: bytecode.OpIterRest}, 1
 	case abi.GoCallGet:
 		// A property's read, of the object, which the instruction at the
 		// call's PC says (jitRegPropertyMade).
-		return bytecode.Instr{Op: bytecode.OpGetProp, A: uint32(op >> abi.GoOpIndexShift)}, 1
+		return jitInstr{Op: bytecode.OpGetProp, A: uint32(op >> abi.GoOpIndexShift)}, 1
 	case abi.GoCallSet:
 		// A property's write, of the object and the value.
-		return bytecode.Instr{Op: bytecode.OpSetProp, A: uint32(op >> abi.GoOpIndexShift)}, 2
+		return jitInstr{Op: bytecode.OpSetProp, A: uint32(op >> abi.GoOpIndexShift)}, 2
 	case abi.GoCallTypeOf:
-		return bytecode.Instr{Op: bytecode.OpTypeOf}, 1
+		return jitInstr{Op: bytecode.OpTypeOf}, 1
 	case abi.GoCallInstanceOf:
-		return bytecode.Instr{Op: bytecode.OpInstanceOf}, 2
+		return jitInstr{Op: bytecode.OpInstanceOf}, 2
 	case abi.GoCallSuper:
 		// The frame's this slot, then the arguments.
-		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc) + 1
+		return jitInstr{Op: bytecode.OpSuperCall, A: argc}, int(argc) + 1
 	case abi.GoCallForward:
 		// f.apply(x, arguments), of f, apply and x (ssa.CallSite's
 		// Forward): the frame's arguments are f's.
-		return bytecode.Instr{Op: bytecode.OpApplyArguments}, 3
+		return jitInstr{Op: bytecode.OpApplyArguments}, 3
 	case abi.GoCallOp:
 		// An operation's opcode and its A, of its operands: the
-		// instruction at the call's PC (jitGoPropertyAt).
-		return bytecode.Instr{Op: bytecode.Op(op >> abi.GoOpIndexShift), A: uint32(op >> (abi.GoOpIndexShift + 8))}, int(argc)
+		// instruction at the call's PC.
+		return jitInstr{Op: bytecode.Op(op >> abi.GoOpIndexShift), A: uint32(op >> (abi.GoOpIndexShift + 8))}, int(argc)
 	}
 	return in, n
 }
@@ -3964,16 +3949,14 @@ type jitPoolSource struct {
 	root *shape
 	n    int
 	// array marks an array literal's pool; results, a call of next's pool
-	// of result objects (jitFillResults); sharedPC, with sharedOf, an
-	// array literal of constants whose arrays share them, made whole
-	// (sharedLiteralArray) -- or, with sharedReg, register code's
-	// new_array_k's, sharedPC its site's index in sharedOf's caches
-	// (jitRegSharedLiteral). The four share a word.
-	array     bool
-	results   bool
-	sharedReg bool
-	sharedPC  int32
-	lit       *bytecode.Constant
+	// of result objects (jitFillResults); sharedPC, with sharedOf, register
+	// code's new_array_k of constants whose arrays share them, made whole,
+	// sharedPC its site's index in sharedOf's caches (jitRegSharedLiteral).
+	// The three share a word.
+	array    bool
+	results  bool
+	sharedPC int32
+	lit      *bytecode.Constant
 	// A closure's (jitFillClosures): its template, the function it is made
 	// in and that function's closures' environment.
 	tmpl Value

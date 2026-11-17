@@ -106,7 +106,7 @@ type lowering struct {
 // makes at an exit there -- for a key past the arguments -- the
 // interpreter reads at the exits after it, its frame written.
 func argumentsOwn(fn *bytecode.Function) bool {
-	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments && fn.MakesArguments {
+	if rc := fn.RegCompiled(); rc != nil && rc.Leaf == bytecode.LeafForward || fn.ForwardsArguments && fn.MakesArguments {
 		// A forwarding function's -- f.apply(x, arguments), its object
 		// made for nothing else (bytecode.Function's ForwardsArguments),
 		// which hands the arguments on (apply_arguments, which
@@ -437,14 +437,14 @@ func GoOperation(op bytecode.Op) bool {
 }
 
 // GoOperands is how many operands an operation Go makes (GoOperation)
-// takes from the top of the stack, whose one result replaces them.
-func GoOperands(in bytecode.Instr) int {
-	switch in.Op {
+// takes, op and its operand a, whose one result replaces them.
+func GoOperands(op bytecode.Op, a uint32) int {
+	switch op {
 	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
 		bytecode.OpNewSpread, bytecode.OpDefineField:
 		return 2
 	case bytecode.OpObjectRest:
-		return int(in.A) + 1
+		return int(a) + 1
 	case bytecode.OpCallSpread, bytecode.OpDefineIndex:
 		return 3
 	case bytecode.OpToPropertyKey:

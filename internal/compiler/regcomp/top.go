@@ -9,19 +9,19 @@ import (
 // (docs/register-interpreter.md, "From the AST"). Its var and
 // function declarations are the global object's, its let, const and class
 // declarations the global lexical environment's, and what it binds is
-// declared before its first statement runs, in the order the stack form
-// declares it (Record.Top): each declaration a cold operation that does what
-// the stack form's instruction does. Its value is its completion value, which
+// declared before its first statement runs, in the order the walk records it
+// (Record.Top): each declaration a cold operation that does what its Op
+// says. Its value is its completion value, which
 // each expression statement sets and each statement that may produce none
 // resets, in a register of its own.
 
-// CompileTop compiles body, a script's top-level code, whose stack form is
-// fn and whose identifiers' resolution is rec, into register code, or
-// returns nil where it has anything the backend does not compile yet.
+// CompileTop compiles body, a script's top-level code, whose tables the
+// walk made in fn and whose identifiers' resolution is rec, into register
+// code, or returns nil where it has anything the backend does not compile.
 func CompileTop(body []ast.Stmt, fn *bytecode.Function, rec *Record) *bytecode.RegCode {
 	sc := getScratch()
 	defer putScratch(sc)
-	g, ok := generate(fn, true, sc, func(g *gen) {
+	g, ok := generate(fn, sc, func(g *gen) {
 		*g = gen{lit: &ast.FuncLit{Body: body}, fn: fn, rec: rec, orig: fn, thisRef: rec.ThisRef}
 	})
 	if !ok {
@@ -68,7 +68,7 @@ func (g *gen) topBody() {
 			g.top = g.topAfterBindings()
 			continue
 		default:
-			// The stack compiler records only the seven above (regTop's
+			// The walk records only the seven above (regTop's
 			// callers and predeclareFunction's): any other is its bug,
 			// not a form to refuse.
 			panic("regcomp: top-level code's record holds " + t.Op.String())
@@ -100,7 +100,7 @@ func (g *gen) exprStmt(e ast.Expr) {
 }
 
 // lexInit initializes a script's or a module's top-level lexical binding,
-// name, to v, as the stack form's init_global_lex or init_module_lex.
+// name, to v (init_global_lex or init_module_lex).
 func (g *gen) lexInit(kind ResKind, name string, v, pos int) {
 	sub := bytecode.RInitGlobalLex
 	if kind == ResModuleLexInit {

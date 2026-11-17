@@ -25,6 +25,33 @@ import (
 var stackFields = map[string]bool{
 	"Code": true, "Lines": true, "MaxStack": true, "ParamEnd": true,
 	"PropSites": true, "PrivateSites": true, "Names": true, "Constants": true,
+	// The stack form's literals' keys, which the register code's
+	// ObjKeysHash says.
+	"LiteralKeys": true,
+	// The leaf, which regLeaf writes for both sides.
+	"Leaf": true, "PureCalls": true, "PureTail": true,
+}
+
+// regLeaf writes which leaf fn's body is: its stack form's, where the
+// function has one (Function.Leaf), or its register code's
+// (RegCode.Leaf), and whether a pure one calls; PureTail is a pc of
+// either form, and is left out.
+func (d *writer) regLeaf(fn *bytecode.Function) {
+	if noLeaf {
+		return
+	}
+	var leaf, calls reflect.Value
+	if v := reflect.ValueOf(fn).Elem(); v.FieldByName("Leaf").IsValid() {
+		leaf, calls = v.FieldByName("Leaf"), v.FieldByName("PureCalls")
+	} else if rc := fn.RegCompiled(); rc != nil {
+		v := reflect.ValueOf(rc).Elem()
+		leaf, calls = v.FieldByName("Leaf"), v.FieldByName("PureCalls")
+	}
+	if !leaf.IsValid() {
+		fmt.Fprintln(d.w, "leaf: -")
+		return
+	}
+	fmt.Fprintln(d.w, "leaf:", leaf.Uint(), calls.Bool())
 }
 
 // regFields writes fn's fields as -reg has them.
@@ -37,13 +64,8 @@ func (d *writer) regFields(path string, fn *bytecode.Function) {
 		case stackFields[f.Name]:
 			continue
 		case f.Name == "Reg":
+			d.regLeaf(fn)
 			d.regSymbolic(fn)
-			continue
-		case f.Name == "LiteralKeys":
-			// The keys alone: their sites are the stack form's numbers.
-			for _, lk := range fn.LiteralKeys {
-				fmt.Fprintf(d.w, "literal keys %q\n", lk.Keys)
-			}
 			continue
 		case f.Name == "Debug":
 			d.regDebug(v.Field(i))
@@ -90,6 +112,14 @@ func (d *writer) regDebug(v reflect.Value) {
 	fmt.Fprintln(d.w)
 }
 
+// noPos leaves the positions out of -reg's output (-nopos), so that a
+// comparison shows the code's other differences alone.
+var noPos bool
+
+// noLeaf leaves out which leaf a function's body is (-noleaf), which the
+// stack form and the register code decide each by its own instructions.
+var noLeaf bool
+
 // regTables are the names and constants an instruction's operands index:
 // the code's own where it was compiled at the function's first call
 // (RegCode.Names), the function's otherwise.
@@ -119,6 +149,20 @@ func (t *regTables) konst(k uint32) string {
 	return fmt.Sprintf("k{%d %x %q %q}", c.Kind, c.Num, c.Str, c.Flags)
 }
 
+// siteAnon is a cache site as the order of its first use, of a site that
+// answers for no name: a literal's, an instanceof's.
+func (t *regTables) siteAnon(s uint32) string {
+	if s == 0 {
+		return "@-"
+	}
+	n, ok := t.sites[s]
+	if !ok {
+		n = len(t.sites) + 1
+		t.sites[s] = n
+	}
+	return fmt.Sprintf("@%d", n)
+}
+
 // site is a cache site as the order of its first use, and its name.
 func (t *regTables) site(s uint32) string {
 	if s == 0 {
@@ -136,10 +180,28 @@ func (t *regTables) site(s uint32) string {
 	return fmt.Sprintf("@%d%s", n, name)
 }
 
+// auxPos is the position an instruction's Aux names for an error it places
+// apart from its own: the stack form's instruction's, where the code has
+// SrcPC, or that of the pc past the code its own table has.
+func auxPos(fn *bytecode.Function, rc *bytecode.RegCode, aux uint32) string {
+	if noPos {
+		return "err@-"
+	}
+	if m := reflect.ValueOf(rc).MethodByName("PosAt"); m.IsValid() {
+		out := m.Call([]reflect.Value{reflect.ValueOf(int(aux))})
+		return fmt.Sprint("err@", out[0].Interface(), out[1].Interface())
+	}
+	out := reflect.ValueOf(fn).MethodByName("PosAt").Call([]reflect.Value{reflect.ValueOf(aux)})
+	return fmt.Sprint("err@", out[0].Interface(), out[1].Interface())
+}
+
 // regPos is the source position of the instruction at pc: through the
 // stack form's instruction it was made from, where the code has SrcPC, or
 // the code's own table.
 func regPos(fn *bytecode.Function, rc *bytecode.RegCode, pc int) string {
+	if noPos {
+		return "-"
+	}
 	rv := reflect.ValueOf(rc)
 	if m := rv.MethodByName("PosAt"); m.IsValid() {
 		out := m.Call([]reflect.Value{reflect.ValueOf(pc)})
@@ -194,7 +256,8 @@ func (d *writer) regSymbolic(fn *bytecode.Function) {
 	for i := range v.NumField() {
 		f := regCodeType.Field(i)
 		switch f.Name {
-		case "Code", "SrcPC", "SiteName", "Names", "Constants", "PropSites", "Aux", "FarNames", "Lines":
+		case "Code", "SrcPC", "SiteName", "Names", "Constants", "PropSites", "Aux", "FarNames", "Lines",
+			"Leaf", "PureCalls", "PureTail":
 			continue
 		case "Caps":
 			for k, caps := range rc.Caps {
@@ -269,6 +332,10 @@ func regInstr(t *regTables, fn *bytecode.Function, rc *bytecode.RegCode, pc int,
 	// Aux, where it is not an operand written below, as it is.
 	auxRaw := hasAux
 	switch w.Op() {
+	case bytecode.RBin, bytecode.RUnary:
+		// X is an operator, by its name: the opcodes' numbers are not the
+		// code's.
+		op = fmt.Sprintf("%s.%s a%d b%d c%d", w.Op(), bytecode.Op(w.X()), a, b, c)
 	case bytecode.RGetGlobal, bytecode.RSetGlobal:
 		extra = append(extra, name(b), t.site(c))
 		op = fmt.Sprintf("%s a%d x%d", w.Op(), a, w.X())
@@ -281,16 +348,15 @@ func regInstr(t *regTables, fn *bytecode.Function, rc *bytecode.RegCode, pc int,
 	case bytecode.RTemplateObject:
 		// The function's Templates, which the walk numbers.
 	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp,
-		bytecode.RNewObject, bytecode.RAddProp, bytecode.RAddPropI, bytecode.RNewArrayK:
+		bytecode.RAddProp, bytecode.RAddPropI:
 		op = fmt.Sprintf("%s a%d b%d x%d", w.Op(), a, b, w.X())
 		extra = append(extra, t.site(c))
-	case bytecode.RNewObjectLit:
+	case bytecode.RNewObject, bytecode.RNewObjectLit, bytecode.RNewArrayK:
 		op = fmt.Sprintf("%s a%d b%d x%d", w.Op(), a, b, w.X())
-		extra = append(extra, t.site(c))
+		extra = append(extra, t.siteAnon(c))
 	case bytecode.RCharCodeAt:
 		op = fmt.Sprintf("%s a%d b%d x%d", w.Op(), a, b, w.X())
-		extra = append(extra, t.site(c))
-		// Aux: the stack form's instruction.
+		extra = append(extra, t.site(c), auxPos(fn, rc, aux))
 		auxRaw = false
 	case bytecode.RDefineField, bytecode.RWithRead, bytecode.RWithWrite, bytecode.RDefineGetter,
 		bytecode.RDefineSetter, bytecode.RDefineMethod, bytecode.RClassGetter, bytecode.RClassSetter:
@@ -308,15 +374,18 @@ func regInstr(t *regTables, fn *bytecode.Function, rc *bytecode.RegCode, pc int,
 		extra = append(extra, t.site(aux>>16), t.name(aux&0xffff))
 		auxRaw = false
 	case bytecode.RInstanceOf:
-		extra = append(extra, t.site(aux))
+		extra = append(extra, t.siteAnon(aux))
 		auxRaw = false
 	case bytecode.RLit:
 		op = fmt.Sprintf("%s a%d b%d x%d", w.Op(), a, b, w.X())
 		extra = append(extra, t.konst(c))
-		// Aux of a call: the stack form's instruction.
+		if hasAux && w.X()&bytecode.RLitCall != 0 {
+			extra = append(extra, auxPos(fn, rc, aux))
+		}
 		auxRaw = false
-	case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
-		// Aux: the stack form's instruction of the | 0.
+	case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32, bytecode.RAddIndex, bytecode.RAddIndexK, bytecode.RAddIndexI:
+		// Aux: where an error of the | 0 or the store is placed.
+		extra = append(extra, auxPos(fn, rc, aux))
 		auxRaw = false
 	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
 		switch {

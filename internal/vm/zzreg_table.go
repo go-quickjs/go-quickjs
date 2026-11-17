@@ -18,7 +18,7 @@ import (
 //     cache that missed, a store of a number into a register that holds a
 //     pointer, a back edge that spent the interrupt budget -- for runReg to
 //     run the operation's slow function, from regSlowTable, which does
-//     the whole instruction as the stack form does;
+//     the whole instruction;
 //   - regDone where the frame has returned, by ret or ret_undef, whose
 //     value runReg reads from the instruction, or has thrown what no
 //     handler of its own catches, with st.err.

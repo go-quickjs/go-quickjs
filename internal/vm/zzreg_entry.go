@@ -62,7 +62,10 @@ func (r *Runtime) regExtend(cl *closure, c *regCode) {
 		names := make([]Atom, n)
 		copy(names, cl.names)
 		for i := len(cl.names); i < n; i++ {
-			names[i] = r.atoms.intern(rc.Names[i])
+			// The compiler's names and strings are slices of the source,
+			// which under a limit a value made of them must not hold
+			// (ownEvaluator).
+			names[i] = r.atoms.intern(r.ownText(rc.Names[i]))
 		}
 		cl.names = names
 	}
@@ -70,7 +73,9 @@ func (r *Runtime) regExtend(cl *closure, c *regCode) {
 		consts := make([]Value, n)
 		copy(consts, cl.consts)
 		for i := len(cl.consts); i < n; i++ {
-			consts[i] = r.materialize(rc.Constants[i])
+			k := rc.Constants[i]
+			k.Str, k.Flags = r.ownText(k.Str), r.ownText(k.Flags)
+			consts[i] = r.materialize(k)
 		}
 		cl.consts = consts
 	}
@@ -119,7 +124,7 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 		}
 	}
 	c := &regCode{
-		code: unsafe.Pointer(unsafe.SliceData(rc.Code)), src: rc.SrcPC, siteName: rc.SiteName,
+		code: unsafe.Pointer(unsafe.SliceData(rc.Code)), siteName: rc.SiteName,
 		numRegs: int32(rc.NumRegs), params: int32(rc.Params), inits: int32(rc.Inits),
 		coerceThis: fn.CoerceThis, rc: rc, fn: fn, wide: true, ncap: int32(ncap), newTarget: fn.UsesNewTarget, args: rc.UsesArguments || rc.ForwardsArguments || rc.KeepsArgs,
 		suspends: fn.Generator || fn.Async,
@@ -142,31 +147,31 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 		}
 	}
 	if rc.LocalReg != nil {
-		c.reuse = regReuseSites(fn, rc)
+		c.reuse = regReuseSites(rc)
 	}
 	if c.suspends && rc.LocalReg == nil && !regCapsFrame(rc) && !regGenNative(fn, c) {
 		c.genFrom = 2
 	}
 	if fn.Kind == bytecode.KindDerivedConstructor {
 		c.cellThis = true
-		for _, in := range fn.Code {
-			switch in.Op {
-			case bytecode.OpClosure, bytecode.OpDirectEval, bytecode.OpTailDirectEval, bytecode.OpDebugStmt:
+		for _, w := range rc.Code {
+			switch w.Op() {
+			case bytecode.RClosureW, bytecode.RDirectEval, bytecode.RDebug:
 				c.cellThis = false
 			}
 		}
 	}
 	switch {
 	case c.suspends:
-	case fn.Leaf == bytecode.LeafPure && !fn.PureCalls && regLeafRunnable(rc) && regLeafOps(fn, rc) != nil:
+	case rc.Leaf == bytecode.LeafPure && !rc.PureCalls && regLeafRunnable(rc) && regLeafOps(fn, rc) != nil:
 		// A short straight body of numbers and upvalues is run as its
 		// register code without a frame (regLeafRun).
 		c.leaf, c.leafOps = regLeafCode, regLeafOps(fn, rc)
-	case fn.Leaf == bytecode.LeafPure && !fn.PureCalls && !pureByTree(fn):
+	case rc.Leaf == bytecode.LeafPure && !rc.PureCalls && !pureByTree(rc):
 		// A longer body runs faster as code than in the frameless
 		// evaluator (pureByTree).
 		c.leaf = regLeafPure
-	case fn.Leaf != bytecode.LeafNone && fn.Leaf != bytecode.LeafPure:
+	case rc.Leaf != bytecode.LeafNone && rc.Leaf != bytecode.LeafPure:
 		c.leaf = regLeafThis
 	}
 	if len(rc.Code) > 0 && !c.suspends {

@@ -1,7 +1,6 @@
 // Command disasm prints the register code go-quickjs compiles a script or a
 // module to: each function's instructions, with the source line each comes
-// from. With -stack it prints the stack form the front end makes as well,
-// which the register backend reads; with -jit it reports whether the JIT
+// from. With -jit it reports whether the JIT
 // lowers each function and the state maps of its exits; this report
 // neither emits native code nor enables native execution.
 //
@@ -13,10 +12,11 @@
 // A file ending in .mjs is compiled as a module, as -m compiles any other.
 // "-" reads the source from standard input.
 //
-// The source lines come from the table stack traces are made from, which
-// records a position only at an instruction that can throw: a line is shown
-// before the first of those it compiles to, so an instruction or two before
-// it, a local read say, may belong to it as well.
+// The source lines come from the table stack traces are made from (the
+// register code's Lines), which records a position only at an instruction
+// that can throw: a line is shown before the first of those it compiles to,
+// so an instruction or two before it, a local read say, may belong to it as
+// well.
 package main
 
 import (
@@ -42,7 +42,6 @@ func main() {
 		only   = flag.String("func", "", "print only the functions of this name")
 		jit    = flag.Bool("jit", false, "show JIT IR eligibility and exit maps (no native compilation)")
 		src    = flag.Bool("src", true, "show the source line before the instructions it compiles to")
-		stack  = flag.Bool("stack", false, "show the stack form the front end makes after each function's register code")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: disasm [flags] file.js | -e source\n")
@@ -64,7 +63,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "disasm:", err)
 		os.Exit(1)
 	}
-	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, jit: *jit, src: *src, stack: *stack}
+	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, jit: *jit, src: *src}
 	p.function(fn, "")
 	if p.only != "" && p.printed == 0 {
 		fmt.Fprintf(os.Stderr, "disasm: no function is named %q\n", p.only)
@@ -118,7 +117,6 @@ type printer struct {
 	only    string
 	jit     bool
 	src     bool
-	stack   bool
 	printed int
 }
 
@@ -180,8 +178,8 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 	if fn.ForwardsArguments {
 		traits = append(traits, "forwards arguments")
 	}
-	if l := leaves[fn.Leaf]; l != "" {
-		traits = append(traits, "leaf "+l)
+	if rc := fn.RegCode(); rc != nil && leaves[rc.Leaf] != "" {
+		traits = append(traits, "leaf "+leaves[rc.Leaf])
 	}
 	at := ""
 	if fn.Script != nil {
@@ -237,28 +235,14 @@ func (p *printer) code(fn *bytecode.Function, indent string) {
 	} else {
 		fmt.Fprintf(p.w, "%s  register code: %d instructions, %d registers\n", indent, len(rc.Code), rc.NumRegs)
 		for pc := range rc.Code {
-			if p.src && pc < len(rc.SrcPC) {
-				if line := fn.LineAt(rc.SrcPC[pc]); line != last && line > 0 && int(line) <= len(p.lines) {
+			if p.src {
+				if line := fn.LineAt(uint32(pc)); line != last && line > 0 && int(line) <= len(p.lines) {
 					last = line
 					fmt.Fprintf(p.w, "%s        ; %d: %s\n", indent, line, strings.TrimSpace(p.lines[line-1]))
 				}
 			}
 			fmt.Fprintf(p.w, "%s  %4d  %s\n", indent, pc, rc.Format(pc))
 		}
-	}
-	if !p.stack {
-		return
-	}
-	fmt.Fprintln(p.w, indent+"  stack form:")
-	last = -1
-	for pc := range fn.Code {
-		if p.src {
-			if line := fn.LineAt(uint32(pc)); line != last && line > 0 && int(line) <= len(p.lines) {
-				last = line
-				fmt.Fprintf(p.w, "%s        ; %d: %s\n", indent, line, strings.TrimSpace(p.lines[line-1]))
-			}
-		}
-		fmt.Fprintf(p.w, "%s  %4d  %s\n", indent, pc, fn.FormatInstr(pc))
 	}
 }
 

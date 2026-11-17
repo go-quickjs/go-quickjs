@@ -14,7 +14,6 @@ package compiler
 
 import (
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -92,8 +91,8 @@ type Options struct {
 	AllowSuperProp bool
 	AllowSuperCall bool
 	AllowNewTarget bool
-	// Debug compiles for a debugger: each statement begins with an
-	// OpDebugStmt, a place a debugger can stop, and the function records
+	// Debug compiles for a debugger: each statement begins with a debug
+	// instruction, a place a debugger can stop, and the function records
 	// what is in scope there, as a direct eval's call site does. The code is
 	// for one runtime: the scopes capture what a debugger may read.
 	Debug bool
@@ -194,7 +193,7 @@ func (l *localVar) lexical() bool {
 	return false
 }
 
-// loopCtx tracks the jumps a break or continue must patch.
+// loopCtx is a statement a break or a continue may target.
 type loopCtx struct {
 	// labels name the statement, none for an unlabelled loop: `a: b:
 	// while (...)` is the target of a break or a continue naming either.
@@ -206,10 +205,6 @@ type loopCtx struct {
 	// if, a switch's label -- which only a break naming it may target: a
 	// break without a label goes to the innermost loop or switch, past it.
 	labelOnly bool
-	// breaks and continues hold the program counters of jumps awaiting a
-	// target, since the target is not known until the loop is fully compiled.
-	breaks    []int
-	continues []int
 	// scopeDepth is the depth to unwind to when the jump is taken.
 	scopeDepth int
 	// firstSlot is the first slot of the bindings the statement declares:
@@ -257,9 +252,6 @@ type finallyCtx struct {
 	// is nil, emits the clause instead: a for await's close.
 	body []ast.Stmt
 	emit func()
-	// returns holds the program counters of returns routed through the clause,
-	// awaiting its start address.
-	returns []int
 	// handlers is how deep the handler stack was once this clause's own was
 	// pushed. A jump into the clause has to pop everything above that, and the
 	// clause's own handler with it -- the clause is not protected by itself.
@@ -269,14 +261,6 @@ type finallyCtx struct {
 	// them undoes before the clause runs.
 	exits int
 }
-
-// completionKind mirrors the runtime's encoding of how a protected block
-// finished. The values must match those in the vm package.
-const (
-	completionNormal = 0
-	completionThrow  = 1
-	completionReturn = 2
-)
 
 // compiler holds the state for one function.
 type compiler struct {
@@ -307,11 +291,6 @@ type compiler struct {
 	locals     []localVar
 	localIndex map[string]int
 	nextSlot   uint32
-	// capturedEnd is one past the highest slot a closure or an eval has
-	// captured so far, 0 for none: a jump or a throw that leaves a scope
-	// skips its end's close, and what it lands on closes the slots it
-	// left when one of them may be captured (capturedFrom).
-	capturedEnd uint32
 	// paramCaptures are the closures' captures of this function's
 	// parameters that may take the value (UpvalueDesc's ByValue), which
 	// finish settles once every store to them is compiled.
@@ -350,10 +329,9 @@ type compiler struct {
 	// runtime one, which is why it is tracked here and not in the runtime.
 	privateScopes [][]privateBinding
 
-	// nameIndex and constIndex deduplicate the tables, so that a name or
-	// constant used many times costs one entry.
-	nameIndex  map[string]uint32
-	constIndex map[constKey]uint32
+	// nameIndex deduplicates the names, so that a name used many times
+	// costs one entry.
+	nameIndex map[string]uint32
 
 	loops []loopCtx
 	// reused are the function expressions of the function's var declarations
@@ -362,7 +340,11 @@ type compiler struct {
 	// reg is the record of the function's resolution the register backend
 	// reads (regcomp), where it is on, and regIdent the declaration whose
 	// store storeVar is making, for the record.
-	reg      *regcomp.Record
+	reg *regcomp.Record
+	// facts is what the walk has noted of the function for recordFacts.
+	facts walkFacts
+	// probe is the with probe emitProbe made last (regWith).
+	probe    regcomp.WithProbe
 	regIdent *ast.Ident
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
@@ -447,15 +429,6 @@ type compiler struct {
 	// a loop.
 	completionSlot int32
 
-	// stackDepth tracks the operand stack so that MaxStack can be recorded and
-	// the frame sized exactly once per function.
-	stackDepth int
-	maxStack   int
-
-	// targets marks, by position, what something jumps to, which is what
-	// says whether the instruction last emitted is the end of one path.
-	targets []bool
-
 	// localsUsed is the most locals has held when a scope left it: what
 	// release clears.
 	localsUsed int
@@ -477,17 +450,6 @@ type compiler struct {
 
 	// script is the source being compiled, shared by every function in it.
 	script *bytecode.Script
-	// lastPos avoids emitting a duplicate position entry for every
-	// instruction.
-	lastPos int32
-}
-
-// constKey identifies a constant for deduplication. Functions are never
-// deduplicated, since each occurrence is a distinct template.
-type constKey struct {
-	kind bytecode.ConstKind
-	num  float64
-	str  string
 }
 
 // Compile compiles a parsed program into a top-level function.
@@ -522,8 +484,6 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	// produces no value.
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 	// A script's code as register code too (regcomp.CompileTop).
 	c.reg = regcomp.NewRecord(prog.Idents)
 	c.reg.Completion = c.completionSlot
@@ -543,8 +503,6 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.hoistGlobals(prog.Body)
 	c.compileStatements(prog.Body)
 
-	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
-	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
 	rec := c.reg
 	fn = c.done()
@@ -552,47 +510,26 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	return fn, nil
 }
 
-// scratch is what compiling one function grows as it goes: its code and
-// tables, before they are copied out at their size, and the maps and lists
-// that only the compiling needs. A script's functions are compiled one inside
+// scratch is what compiling one function grows as it goes: its tables,
+// before they are copied out at their size, and the maps and lists that
+// only the compiling needs. A script's functions are compiled one inside
 // another, so a few of these serve them all, in turn.
 type scratch struct {
 	state      compiler
-	code       []bytecode.Instr
-	lines      []bytecode.SourceLoc
 	names      []string
 	consts     []bytecode.Constant
 	upvalues   []bytecode.UpvalueDesc
 	locals     []localVar
 	pending    []bytecode.LocalDesc
-	targets    []bool
 	captures   []paramCapture
 	nameIndex  map[string]uint32
-	constIndex map[constKey]uint32
 	localIndex map[string]int
 }
 
-// scratchPool holds the scratch no function being compiled has, and the
-// lists of jumps no condition being compiled has.
+// scratchPool holds the scratch no function being compiled has.
 type scratchPool struct {
-	free  []*scratch
-	jumps [][]int
+	free []*scratch
 }
-
-// jumpList is an empty list for a condition's jumps (emitTestJumps), which
-// putJumps gives back. It cannot be kept on a caller's stack: the compiler's
-// functions all call one another, and the escape analysis takes what any
-// of them does with a result as what all of them do.
-func (p *scratchPool) jumpList() []int {
-	if n := len(p.jumps); n > 0 {
-		s := p.jumps[n-1]
-		p.jumps = p.jumps[:n-1]
-		return s
-	}
-	return make([]int, 0, 4)
-}
-
-func (p *scratchPool) putJumps(s []int) { p.jumps = append(p.jumps, s[:0]) }
 
 // scratchPools keep a compile's scratch for the next, so that each script
 // does not grow its buffers from nothing. A compile takes a pool of its own:
@@ -606,11 +543,7 @@ func (p *scratchPool) get() *scratch {
 		return s
 	}
 	return &scratch{
-		// Room for a small function's whole body, which saves growing the
-		// code from nothing a doubling at a time.
-		code:       make([]bytecode.Instr, 0, 32),
-		nameIndex:  make(map[string]uint32, 8),
-		constIndex: make(map[constKey]uint32, 8),
+		nameIndex: make(map[string]uint32, 8),
 	}
 }
 
@@ -626,21 +559,16 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 	*c = compiler{
 		fn: &bytecode.Function{
 			Source:    opts.Source,
-			Code:      s.code[:0],
-			Lines:     s.lines[:0],
 			Names:     s.names[:0],
 			Constants: s.consts[:0],
 			Upvalues:  s.upvalues[:0],
 		},
 		parent:        parent,
 		opts:          opts,
-		lastPos:       -1,
 		locals:        s.locals[:0],
 		pendingLocals: s.pending[:0],
-		targets:       s.targets[:0],
 		paramCaptures: s.captures[:0],
 		nameIndex:     s.nameIndex,
-		constIndex:    s.constIndex,
 		scratch:       s,
 		pool:          pool,
 		// A function has no completion value of its own; only the top-level
@@ -668,36 +596,10 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 	return c
 }
 
-// Source bytes a function takes for each instruction of its code, and for
-// each position it records, at the least the code a program has seen does.
-const (
-	bytesPerInstr = 4
-	bytesPerLine  = 8
-	// reserveMin is the source a function must span for its tables to be
-	// sized from it: a smaller one is served by the scratch as it is.
-	reserveMin = 1 << 10
-)
-
-// reserve gives the function's code and positions room for what n bytes of
-// its own source compile to, in the one step a large function would
-// otherwise grow to it in many, its whole code copied at each. A function
-// written inside it is no part of n: the wrapper of a bundle has the whole
-// bundle in its span and little code of its own.
-func (c *compiler) reserve(n int) {
-	if n < reserveMin {
-		return
-	}
-	c.fn.Code = slices.Grow(c.fn.Code, n/bytesPerInstr)
-	if c.script.HasText() {
-		c.fn.Lines = slices.Grow(c.fn.Lines, n/bytesPerLine)
-	}
-}
-
 // finish records the tables the interpreter needs, and what the JIT and
 // the VM's native calls ask of the code (recordFacts).
 func (c *compiler) finish() {
 	c.fn.LocalCount = int(c.nextSlot)
-	c.fn.MaxStack = c.maxStack + 4 // headroom for the interpreter's own pushes
 	c.fn.Locals = make([]bytecode.LocalDesc, c.nextSlot)
 	for _, l := range c.locals {
 		c.recordLocal(l)
@@ -712,133 +614,106 @@ func (c *compiler) finish() {
 	}
 }
 
-// codeFacts is what recordFacts found of a function's finished code that
-// settleParamCaptures asks: the slots of its first 64 locals an
-// instruction stores to (bytecode.WrittenLocals), those a closure it makes
-// may assign (UpvalueDesc's Assigned), and whether it has a direct eval.
+// codeFacts is what recordFacts found of a function that
+// settleParamCaptures asks: the slots of its first 64 locals the code
+// stores to, those a closure it makes may assign (UpvalueDesc's Assigned),
+// and whether it has a direct eval.
 type codeFacts struct {
 	written, closures uint64
 	eval              bool
 }
 
-// What recordFacts notes of an instruction, by its opcode (opFacts): one
-// of these, and, for an opcode whose instruction stores to a local
-// (bytecode.WrittenLocals), factStoresA, for a store to the slot in A
-// alone, or factStores.
-const (
-	factPrivate    = 1 + iota // a private member's read or write, which has a cache
-	factSuperRef              // a super reference, through the home object
-	factPushCallee            // the function object pushed
-	factSuperCall             // super(), which constructs with new.target
-	factNewTarget             // new.target
-	factSetUpvalue            // a store to an upvalue
-	factEval                  // a direct eval
-	factArguments             // the arguments object made, or handed to apply
-	factYieldStar             // a yield*
-
-	factStores  = 0x40
-	factStoresA = 0x80
-)
-
-// opFacts is what recordFacts notes of an instruction of each opcode, 0
-// for nothing, as most are, for which a load is all the walk costs: a
-// switch of each instruction's opcode, and WrittenLocals' of each, had
-// made compiling Three.js's and Babel's bundles 2.2% and 3.6% slower.
-var opFacts = [256]uint8{
-	bytecode.OpGetPrivate:      factPrivate,
-	bytecode.OpSetPrivate:      factPrivate,
-	bytecode.OpGetSuperProp:    factSuperRef,
-	bytecode.OpGetSuperIndex:   factSuperRef,
-	bytecode.OpSetSuperProp:    factSuperRef,
-	bytecode.OpSetSuperIndex:   factSuperRef,
-	bytecode.OpSuperBase:       factSuperRef,
-	bytecode.OpPushCallee:      factPushCallee,
-	bytecode.OpSuperCall:       factSuperCall,
-	bytecode.OpNewTarget:       factNewTarget,
-	bytecode.OpSetUpvalue:      factSetUpvalue,
-	bytecode.OpSetUpvalueCheck: factSetUpvalue,
-	bytecode.OpInitUpvalue:     factSetUpvalue,
-	bytecode.OpDirectEval:      factEval,
-	bytecode.OpTailDirectEval:  factEval,
-	bytecode.OpGetArguments:    factArguments,
-	bytecode.OpLazyArguments:   factArguments | factStoresA,
-	bytecode.OpApplyArguments:  factArguments | factStoresA,
-	bytecode.OpYieldStar:       factYieldStar,
-
-	bytecode.OpSetLocal:            factStoresA,
-	bytecode.OpPutLocal:            factStoresA,
-	bytecode.OpSetLocalCheck:       factStoresA,
-	bytecode.OpInitLocal:           factStoresA,
-	bytecode.OpClearLocal:          factStoresA,
-	bytecode.OpSetLocalGet:         factStoresA,
-	bytecode.OpIncLocal:            factStoresA,
-	bytecode.OpDecLocal:            factStoresA,
-	bytecode.OpUpdateLocal:         factStoresA,
-	bytecode.OpInitParam:           factStoresA,
-	bytecode.OpArgumentsIndex:      factStoresA,
-	bytecode.OpGetLocalIndexUpdate: factStores,
-	bytecode.OpParamsToDeadZone:    factStores,
+// walkFacts is what the walk notes of a function as it compiles it, for
+// recordFacts: the slots, of the first 64, its code stores to (written),
+// and the lowest of all it does (lowest, where stored); whether it reads its
+// function object (callee) -- its own name's binding, or a super
+// reference's home object -- and what a frame keeps for an arrow made in
+// it (reads): new.target, super(); whether it has a direct eval, makes
+// its arguments object or hands it on (makesArgs, argsEscape for a use
+// but apply's of a function whose object is made on demand), has a
+// yield*, or a super(...) of the call's own arguments.
+type walkFacts struct {
+	written               uint64
+	lowest                uint32
+	stored, callee, reads bool
+	eval, makesArgs       bool
+	argsEscape, yieldStar bool
+	superForwards         bool
+	// applyArgs is the arguments of the call of apply being compiled,
+	// f.apply(x, arguments), whose object is made for nothing else.
+	applyArgs *ast.Ident
 }
 
-// recordFacts records, in one walk of the function's finished code and
-// one of its closures', what the JIT and the VM's native calls ask of it
-// (bytecode.Function's FrameCallee, ReadsMaker, AssignsParams,
+// noteStore notes a store to local slot, a parameter's where it is below
+// the function's ParamCount, which the parameters' prologue settles last.
+func (c *compiler) noteStore(slot uint32) {
+	if slot < 64 {
+		c.facts.written |= 1 << slot
+	}
+	if slot < c.facts.lowest || !c.facts.stored {
+		c.facts.lowest, c.facts.stored = slot, true
+	}
+}
+
+// noteWrite records id's write, res, for the register form, and notes the
+// store it makes to a local or an upvalue (walkFacts, UpvalueDesc's
+// Assigned).
+func (c *compiler) noteWrite(id *ast.Ident, res regcomp.Res) {
+	c.reg.NoteWrite(id, res)
+	switch res.Kind {
+	case regcomp.ResLocal, regcomp.ResLocalCheck, regcomp.ResLocalInit:
+		c.noteStore(res.Index)
+	case regcomp.ResUpval, regcomp.ResUpvalCheck:
+		c.noteUpvalueStore(res.Index)
+	}
+}
+
+// noteUpvalueStore notes a store to upvalue idx.
+func (c *compiler) noteUpvalueStore(idx uint32) {
+	if int(idx) < len(c.fn.Upvalues) {
+		c.fn.Upvalues[idx].Assigned = true
+	}
+}
+
+// noteSuper notes a super reference, which reads the home object through
+// the function object.
+func (c *compiler) noteSuper() {
+	c.facts.callee, c.facts.reads = true, true
+}
+
+// noteLazyArguments notes a read of id, the arguments object made on
+// demand: made, and handed on but where it is apply's.
+func (c *compiler) noteLazyArguments(id *ast.Ident) {
+	c.facts.makesArgs = true
+	if id != c.facts.applyArgs {
+		c.facts.argsEscape = true
+	}
+}
+
+// recordFacts records what the JIT and the VM's native calls ask of the
+// function, from what the walk noted of it (walkFacts) and of its
+// closures: bytecode.Function's FrameCallee, ReadsMaker, AssignsParams,
 // MakesArguments, SuperForwards and HasYieldStar, and its upvalues'
-// Assigned), and counts its private members' caches: each read and write
-// of one has a cache of its own, as a property's has. Its closures' were
-// recorded as their compiles ended, before its own.
+// Assigned. Its closures' were recorded as their compiles ended, before
+// its own.
 func (c *compiler) recordFacts() (f codeFacts) {
 	fn := c.fn
+	w := &c.facts
 	arrow := fn.Kind == bytecode.KindArrow
-	callee := fn.MappedArguments || arrow && fn.UsesNewTarget
-	reads := fn.UsesNewTarget
-	// No parameter for a store to be to, and no closure's capture of one
-	// to settle: what the code stores to is not asked.
-	stores := fn.ParamCount != 0 || len(c.paramCaptures) != 0
-	params, written := uint32(fn.ParamCount), uint64(0)
-	assigns := false
-	for _, in := range fn.Code {
-		k := opFacts[in.Op]
-		if k == 0 {
-			continue
-		}
-		switch {
-		case !stores:
-		case k&factStoresA != 0:
-			assigns = assigns || in.A < params
-			written |= 1 << in.A // none for a slot past 63
-		case k&factStores != 0:
-			lo, hi := bytecode.WrittenLocals(in)
-			assigns = assigns || lo < hi && lo < fn.ParamCount
-			for s := lo; s < hi && s < 64; s++ {
-				written |= 1 << s
-			}
-		}
-		switch k &^ (factStores | factStoresA) {
-		case factPrivate:
-			fn.PrivateSites++
-		case factSuperRef:
-			callee, reads = true, true
-		case factPushCallee:
-			callee = true
-		case factSuperCall:
-			reads = true
-			fn.SuperForwards = fn.SuperForwards || in.B == bytecode.SuperForward
-		case factNewTarget:
-			reads = true
-		case factSetUpvalue:
-			if int(in.A) < len(fn.Upvalues) {
-				fn.Upvalues[in.A].Assigned = true
-			}
-		case factEval:
-			f.eval = true
-		case factArguments:
-			fn.MakesArguments = true
-		case factYieldStar:
-			fn.HasYieldStar = true
-		}
+	callee := fn.MappedArguments || arrow && fn.UsesNewTarget || w.callee
+	reads := fn.UsesNewTarget || w.reads
+	if w.makesArgs {
+		fn.MakesArguments = true
 	}
-	fn.AssignsParams, f.written = assigns, written
+	if w.yieldStar {
+		fn.HasYieldStar = true
+	}
+	if w.superForwards {
+		fn.SuperForwards = true
+	}
+	f.eval = w.eval
+	fn.AssignsParams = w.stored && int(w.lowest) < fn.ParamCount
+	f.written = w.written
 	if f.eval || fn.HasDirectEval {
 		// A direct eval may assign any binding in scope, a strict one's
 		// too, which declares nothing in it but assigns what is there.
@@ -922,8 +797,6 @@ func (c *compiler) release() *bytecode.Function {
 	s := c.scratch
 	fn := c.fn
 	pool := c.pool
-	s.code, fn.Code = fn.Code[:0], exact(fn.Code)
-	s.lines, fn.Lines = fn.Lines[:0], exact(fn.Lines)
 	// What points into the script -- a name is a slice of its text, and a
 	// constant may hold a nested function -- is cleared, so that a pool kept
 	// for the next compile does not keep this one's script alive: what this
@@ -934,10 +807,8 @@ func (c *compiler) release() *bytecode.Function {
 	s.names, s.consts, s.upvalues = clearUsed(names), clearUsed(consts), clearUsed(upvalues)
 	s.locals = clearUsed(c.locals[:max(c.localsUsed, len(c.locals))])
 	s.pending = clearUsed(c.pendingLocals)
-	s.targets = c.targets[:0]
 	s.captures = clearUsed(c.paramCaptures)
 	resetIndex(&s.nameIndex)
-	resetIndex(&s.constIndex)
 	resetIndex(&s.localIndex)
 	// The state is reused too; drop its source, enclosing compiler and all
 	// function-specific settings before making it available to a sibling.
@@ -983,191 +854,6 @@ func exact[T any](s []T) []T {
 	return append(make([]T, 0, len(s)), s...)
 }
 
-// isTarget reports whether something jumps to pc.
-func (c *compiler) isTarget(pc int) bool {
-	return pc < len(c.targets) && c.targets[pc]
-}
-
-// ---------------------------------------------------------------------------
-// Emitting
-// ---------------------------------------------------------------------------
-
-// emit appends an instruction and returns its program counter.
-func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
-	if (op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp ||
-		op == bytecode.OpNewObject || op == bytecode.OpInstanceOf || op == bytecode.OpGetGlobal ||
-		op == bytecode.OpSetGlobal || op == bytecode.OpCheckGlobalRef) && b == 0 {
-		// Each property read and write has a cache of its own, numbered
-		// here, and so does each object literal, which keeps the shape its
-		// objects start from in it, each instanceof, for its read of the
-		// constructor's Symbol.hasInstance, and each global read, write and
-		// strict mode's check before a write, for where in the global object
-		// its name was.
-		c.fn.PropSites++
-		b = c.fn.PropSites
-	}
-	if op == bytecode.OpGetLocal && c.lazyArguments && a == c.lazyArgumentsSlot {
-		// Every read of an arguments object made on demand makes it, but for
-		// the one a call of apply fuses with.
-		op = bytecode.OpLazyArguments
-	}
-	if fused, ok := c.fuse(op, a); ok {
-		c.adjustStack(op, a, b)
-		return fused
-	}
-	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: op, A: a, B: b})
-	c.adjustStack(op, a, b)
-	return len(c.fn.Code) - 1
-}
-
-// fuse makes the instruction about to be emitted part of the last one, where
-// the two are a pair a single instruction does, and reports whether it did.
-// The instruction each pair dispatches is the one a program runs most:
-// fewer of them is less of the loop's own cost.
-//
-// The position the second would have had must be one nothing jumps to. A
-// source position recorded for it is left where it is, for the instruction
-// emitted next, when the second cannot throw -- nothing would ever report
-// it -- and moved onto the pair when it can.
-func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
-	n := len(c.fn.Code)
-	if n == 0 || c.isTarget(n) {
-		return 0, false
-	}
-	last := &c.fn.Code[n-1]
-	if immediateOp(op) && last.Op == bytecode.OpPushConst {
-		// A negative int32 literal, which compileUnary folds into a
-		// constant, taken by an operator as an immediate as a positive one
-		// is: sp + -8, x & -4. Elsewhere -1 stays the constant it was.
-		if k := c.fn.Constants[last.A]; k.Kind == bytecode.ConstNumber {
-			if i := int32(k.Num); float64(i) == k.Num && !isNegZero(k.Num) {
-				last.Op, last.A = bytecode.OpPushInt, uint32(i)
-			}
-		}
-	}
-	switch {
-	case op == bytecode.OpGetLocal && last.Op == bytecode.OpGetLocal:
-		last.Op, last.B = bytecode.OpGetLocal2, a
-	case op == bytecode.OpGetLocal && last.Op == bytecode.OpSetLocal:
-		last.Op, last.B = bytecode.OpSetLocalGet, a
-	case op == bytecode.OpSetLocal && last.Op == bytecode.OpPushUndef:
-		last.Op, last.A = bytecode.OpClearLocal, a
-	case immediateOp(op) && last.Op == bytecode.OpPushInt && n >= 2 && !c.isTarget(n-1) &&
-		c.fn.Code[n-2].Op == bytecode.OpGetLocal && c.fn.Code[n-2].A < 1<<24:
-		// A local, an integer and the operator: `x & 0xff`.
-		first := &c.fn.Code[n-2]
-		first.Op, first.A, first.B = bytecode.OpLocalBinImm, first.A|uint32(op)<<24, last.A
-		c.fn.Code = c.fn.Code[:n-1]
-		c.collapsePositions(n - 2)
-		return n - 2, true
-	case immediateOp(op) && last.Op == bytecode.OpPushInt:
-		last.Op, last.B = bytecode.OpBinImm, uint32(op)
-		c.movePosition(n)
-	case (op == bytecode.OpAdd || op == bytecode.OpSub || op == bytecode.OpMul) && last.Op == bytecode.OpGetLocal:
-		last.Op, last.B = bytecode.OpBinLocal, uint32(op)
-		c.movePosition(n)
-	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
-		last.Op = bytecode.OpGetLocalIndex
-		c.movePosition(n)
-	case op == bytecode.OpInitLocal && last.Op == bytecode.OpSetLocal && last.A == a && n >= 2 &&
-		c.fn.Code[n-2].Op == bytecode.OpPushUninitialized && !c.isTarget(n-1):
-		// A binding marked uninitialized and initialized straight after, as
-		// a for-of's is each iteration: nothing can see the mark.
-		first := &c.fn.Code[n-2]
-		first.Op, first.A = bytecode.OpInitLocal, a
-		c.fn.Code = c.fn.Code[:n-1]
-		c.collapsePositions(n - 2)
-		return n - 2, true
-	case op == bytecode.OpCallMethod && a == 2 && last.Op == bytecode.OpLazyArguments:
-		// f.apply(x, arguments), with the arguments object never made.
-		last.Op = bytecode.OpApplyArguments
-		c.movePosition(n)
-	case op == bytecode.OpGetIndex && last.Op == bytecode.OpUpdateLocal && n >= 2 &&
-		c.fn.Code[n-2].Op == bytecode.OpGetLocal && !c.isTarget(n-1) && !c.hasPosition(n) &&
-		last.A < 1<<29:
-		// The update and the read can both throw, and report the same
-		// position, the update's; the read of the object before them cannot.
-		// So the three are one where nothing jumps between them, with the
-		// update's position.
-		first := &c.fn.Code[n-2]
-		first.Op, first.B = bytecode.OpGetLocalIndexUpdate, last.A<<2|last.B
-		c.fn.Code = c.fn.Code[:n-1]
-		c.movePosition(n - 1)
-		return n - 2, true
-	default:
-		return 0, false
-	}
-	return n - 1, true
-}
-
-// collapsePositions gives the instruction at n every source position recorded
-// past it, which instructions fused into it had: the last of them, which is
-// the one that can throw, is the one it keeps.
-func (c *compiler) collapsePositions(n int) {
-	for i := len(c.fn.Lines) - 1; i >= 0 && c.fn.Lines[i].PC > uint32(n); i-- {
-		c.fn.Lines[i].PC = uint32(n)
-	}
-}
-
-// hasPosition reports whether a source position has been recorded for the
-// instruction at n.
-func (c *compiler) hasPosition(n int) bool {
-	l := len(c.fn.Lines)
-	return l > 0 && c.fn.Lines[l-1].PC == uint32(n)
-}
-
-// movePosition gives the instruction before n the source position recorded
-// for n, which a pair fused from the two needs when it is the second of them
-// that can throw.
-func (c *compiler) movePosition(n int) {
-	if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
-		c.fn.Lines[l-1].PC = uint32(n - 1)
-	}
-}
-
-// immediateOp reports whether a binary operator has a form taking its right
-// operand as an immediate, OpBinImm.
-func immediateOp(op bytecode.Op) bool {
-	switch op {
-	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpBitAnd, bytecode.OpBitOr,
-		bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
-		return true
-	}
-	return false
-}
-
-// emitAt emits an instruction and records its source line.
-func (c *compiler) emitAt(pos int, op bytecode.Op, a, b uint32) int {
-	c.recordLine(pos)
-	return c.emit(op, a, b)
-}
-
-// recordLine attributes the next instruction emitted to a source position.
-func (c *compiler) recordLine(pos int) {
-	if !c.script.HasText() {
-		return
-	}
-	if p := int32(pos); p != c.lastPos {
-		c.fn.Lines = append(c.fn.Lines, bytecode.SourceLoc{
-			PC: uint32(len(c.fn.Code)), Pos: p,
-		})
-		c.lastPos = p
-	}
-}
-
-// adjustStack tracks the operand stack depth so the frame can be sized.
-func (c *compiler) adjustStack(op bytecode.Op, a, b uint32) {
-	c.stackDepth += stackEffect(op, a, b)
-	if c.stackDepth > c.maxStack {
-		c.maxStack = c.stackDepth
-	}
-	if c.stackDepth < 0 {
-		// A negative depth means the compiler emitted an unbalanced sequence,
-		// which is a bug here rather than in the input.
-		c.stackDepth = 0
-	}
-}
-
 // maxCompileDepth bounds recursion over the syntax tree. A goroutine stack
 // overflow cannot be caught, so deeply nested input is rejected instead.
 const maxCompileDepth = 1000
@@ -1181,48 +867,6 @@ func (c *compiler) enter(pos int) {
 }
 
 func (c *compiler) leave() { c.recursionDepth-- }
-
-// emitJump emits a jump with a placeholder target and returns its program
-// counter so that patchJump can fill it in.
-func (c *compiler) emitJump(op bytecode.Op) int {
-	return c.emit(op, 0xFFFFFFFF, 0)
-}
-
-// emitJumpB is emitJump for an instruction that carries a second operand.
-func (c *compiler) emitJumpB(op bytecode.Op, b uint32) int {
-	return c.emit(op, 0xFFFFFFFF, b)
-}
-
-// patchJump points a previously emitted jump at the current position.
-func (c *compiler) patchJump(pc int) {
-	c.markTarget(len(c.fn.Code))
-	c.fn.Code[pc].A = uint32(len(c.fn.Code))
-}
-
-// patchJumpTo points a jump at a specific position.
-func (c *compiler) patchJumpTo(pc, target int) {
-	c.markTarget(target)
-	c.fn.Code[pc].A = uint32(target)
-}
-
-// here returns the current program counter, for backward jumps.
-func (c *compiler) here() int {
-	c.markTarget(len(c.fn.Code))
-	return len(c.fn.Code)
-}
-
-// markTarget records that something jumps to a position.
-//
-// What this is for is deciding whether the last instruction emitted is the end
-// of one path or the meeting point of several, which is what says whether it
-// may be rewritten -- see compileExprForEffect. Marking a position that nothing
-// actually jumps to only gives up a rewrite, so the callers mark freely.
-func (c *compiler) markTarget(pc int) {
-	for len(c.targets) <= pc {
-		c.targets = append(c.targets, false)
-	}
-	c.targets[pc] = true
-}
 
 // errorf reports a compile error.
 func (c *compiler) errorf(pos int, format string, args ...any) {
@@ -1245,28 +889,6 @@ func (c *compiler) nameIdx(name string) uint32 {
 	return i
 }
 
-// numberConst returns the index of a numeric constant.
-func (c *compiler) numberConst(v float64) uint32 {
-	return c.constIdx(constKey{kind: bytecode.ConstNumber, num: v},
-		bytecode.Constant{Kind: bytecode.ConstNumber, Num: v})
-}
-
-// stringConst returns the index of a string constant.
-func (c *compiler) stringConst(s string) uint32 {
-	return c.constIdx(constKey{kind: bytecode.ConstString, str: s},
-		bytecode.Constant{Kind: bytecode.ConstString, Str: s})
-}
-
-func (c *compiler) constIdx(key constKey, val bytecode.Constant) uint32 {
-	if i, ok := c.constIndex[key]; ok {
-		return i
-	}
-	c.fn.Constants = append(c.fn.Constants, val)
-	i := uint32(len(c.fn.Constants) - 1)
-	c.constIndex[key] = i
-	return i
-}
-
 // addConst appends a constant without deduplication, for function templates
 // and regular expressions where each occurrence is distinct.
 func (c *compiler) addConst(val bytecode.Constant) uint32 {
@@ -1286,15 +908,8 @@ func (c *compiler) endScope() {
 	c.depth--
 	// Find the first local belonging to the scope being closed.
 	i := len(c.locals)
-	needsClose := false
 	for i > 0 && c.locals[i-1].depth > c.depth {
-		if c.locals[i-1].captured {
-			needsClose = true
-		}
 		i--
-	}
-	if needsClose {
-		c.emit(bytecode.OpCloseUpvalues, c.locals[i].slot, 0)
 	}
 	// What the interpreter needs to know about a binding is recorded before it
 	// goes out of scope, since the slot outlives the scope and an instruction
@@ -1396,13 +1011,7 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 // noteCaptured marks a binding of this function's as captured.
 func (c *compiler) noteCaptured(l *localVar) {
 	l.captured = true
-	c.capturedEnd = max(c.capturedEnd, l.slot+1)
 }
-
-// capturedFrom reports whether a binding at slot or above was captured.
-// Slots are never reused, so those of the bindings a statement declared
-// are the ones from where it began.
-func (c *compiler) capturedFrom(slot uint32) bool { return c.capturedEnd > slot }
 
 // markInitialized clears a lexical binding's dead zone.
 func (c *compiler) markInitialized(name string) {
@@ -1609,14 +1218,11 @@ func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
 				names = appendPatternNames(names, d.Target)
 			}
 			for _, name := range names {
-				c.emitAt(n.Start, bytecode.OpCheckGlobalLex, c.nameIdx(name), 0)
-				c.regTop(bytecode.OpCheckGlobalLex, c.nameIdx(name), 0, nil)
+				c.regTop(bytecode.OpCheckGlobalLex, name, 0, nil, n.Start)
 			}
 		case *ast.ClassDecl:
 			if n.Class.Name != nil {
-				c.emitAt(n.Start, bytecode.OpCheckGlobalLex,
-					c.nameIdx(n.Class.Name.Name), 0)
-				c.regTop(bytecode.OpCheckGlobalLex, c.nameIdx(n.Class.Name.Name), 0, nil)
+				c.regTop(bytecode.OpCheckGlobalLex, n.Class.Name.Name, 0, nil, n.Start)
 			}
 		}
 	}
@@ -1632,16 +1238,14 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 	for _, s := range body {
 		if _, name, ok := hoistableFunction(s); ok {
 			funcs[name] = true
-			c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1)
-			c.regTop(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1, nil)
+			c.regTop(bytecode.OpCheckGlobalVar, name, 1, nil, s.Pos())
 		}
 	}
 	for _, n := range c.varNames(body) {
 		if funcs[n] {
 			continue
 		}
-		c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(n), 0)
-		c.regTop(bytecode.OpCheckGlobalVar, c.nameIdx(n), 0, nil)
+		c.regTop(bytecode.OpCheckGlobalVar, n, 0, nil, -1)
 	}
 }
 
@@ -1709,8 +1313,7 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 		}
 		// A var declared by eval is configurable, unlike one a script declares,
 		// because the evaluated code could have declared it anywhere.
-		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable))
-		c.regTop(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable), nil)
+		c.regTop(bytecode.OpDefineGlobalVar, n, boolBit(c.opts.EvalConfigurable), nil, -1)
 	}
 }
 
@@ -2032,199 +1635,6 @@ func appendPatternNames(out []string, target ast.Expr) []string {
 		out = appendPatternNames(out, n.Arg)
 	}
 	return out
-}
-
-// stackEffect returns how much an opcode changes the operand stack depth.
-//
-// It exists so that MaxStack can be computed without simulating execution. An
-// overestimate merely wastes a few slots per frame; an underestimate would
-// corrupt the stack, so anything uncertain is rounded up.
-func stackEffect(op bytecode.Op, a, b uint32) int {
-	switch op {
-	case bytecode.OpGetLocal2:
-		return 2
-	case bytecode.OpGetLocalIndex:
-		return 1
-	case bytecode.OpSetLocalGet, bytecode.OpBinImm, bytecode.OpBinLocal:
-		return 0
-	case bytecode.OpLocalBinImm:
-		return 1
-	case bytecode.OpApplyArguments:
-		return -2
-	case bytecode.OpLazyArguments, bytecode.OpArgumentsLength:
-		return 1
-	case bytecode.OpArgumentsIndex:
-		return 0
-	case bytecode.OpClearLocal:
-		return 0
-	case bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate:
-		return 1
-	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
-		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushThis,
-		bytecode.OpPushInt, bytecode.OpPushEmptyString,
-		bytecode.OpPushUninitialized, bytecode.OpGetLocal,
-		bytecode.OpGetLocalCheck, bytecode.OpGetUpvalue,
-		bytecode.OpGetUpvalueCheck, bytecode.OpGetGlobal,
-		bytecode.OpGetGlobalOpt, bytecode.OpDup, bytecode.OpClosure,
-		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpImportMeta,
-		bytecode.OpPushCallee, bytecode.OpNewRegExp, bytecode.OpTemplateObject,
-		bytecode.OpPrivateName, bytecode.OpNewDisposeCapability,
-		bytecode.OpGetArguments, bytecode.OpRestParam, bytecode.OpDeleteVar,
-		bytecode.OpIterStep, bytecode.OpIterRest,
-		bytecode.OpGetPropUnder, bytecode.OpGetIndexUnder,
-		bytecode.OpGetSuperProp,
-		bytecode.OpGetPropThis,
-		bytecode.OpParamNeedsDefault,
-		bytecode.OpIsNullish:
-		return 1
-
-	case bytecode.OpCheckGlobalRef:
-		// Pushes what the reference resolved to, which the store consumes.
-		return 1
-	case bytecode.OpAssertResolved:
-		return -1
-
-	case bytecode.OpDup2:
-		return 2
-
-	case bytecode.OpIterCloseNormal,
-		bytecode.OpDrop, bytecode.OpSetLocal, bytecode.OpSetLocalCheck,
-		bytecode.OpInitLocal, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck,
-		bytecode.OpInitUpvalue, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpThrow,
-		bytecode.OpReturn, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue,
-		bytecode.OpDefineGlobalFunc, bytecode.OpArrayPush,
-		bytecode.OpDefineField, bytecode.OpDefineGetter,
-		bytecode.OpDefineSetter, bytecode.OpSetProtoOf,
-		bytecode.OpSetFieldInit,
-		bytecode.OpSetSuperProp,
-		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep,
-		bytecode.OpJumpIfNotNullish:
-		return -1
-
-	case bytecode.OpJumpIfCmpFalse:
-		// Pops both operands of the comparison it carries.
-		return -2
-
-	case bytecode.OpJumpIfNullish:
-		// Optional chaining keeps the tested value on both paths.
-		return 0
-
-	case bytecode.OpAsyncIterNext:
-		return 1
-	case bytecode.OpAsyncIterClose:
-		// Pops the cursor, and pushes what its return method returned where
-		// it goes on; pops the result it checks, or the cursor it marks.
-		if b == 0 {
-			return 0
-		}
-		return -1
-	case bytecode.OpIterResultOrJump:
-		// Pops the result and pushes the value when it continues.
-		return 0
-
-	case bytecode.OpIterNextOrJump:
-		// Pushes the next value when it continues and nothing when it stops;
-		// the larger figure is the one MaxStack needs.
-		return 1
-
-	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv,
-		bytecode.OpMod, bytecode.OpPow, bytecode.OpBitAnd, bytecode.OpBitOr,
-		bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr,
-		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
-		bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
-		bytecode.OpIn, bytecode.OpInstanceOf, bytecode.OpGetIndex,
-		bytecode.OpDeleteProp, bytecode.OpDefineIndex:
-		return -1
-
-	case bytecode.OpSetProp, bytecode.OpSetIndex:
-		// SetProp pops the object and the value; SetIndex also pops the key.
-		if op == bytecode.OpSetIndex {
-			return -3
-		}
-		return -2
-
-	case bytecode.OpGetIndexThis:
-		return 0
-
-	case bytecode.OpCall:
-		// Pops the callee and its arguments, pushes the result.
-		return -int(a)
-	case bytecode.OpImport:
-		return 1 - int(b)
-	case bytecode.OpCallMethod:
-		return -int(a) - 1
-	case bytecode.OpNew:
-		return -int(a)
-	case bytecode.OpNewArray, bytecode.OpConcat:
-		return -int(a) + 1
-
-	case bytecode.OpCallSpread:
-		// Pops the receiver, the callee and the argument array.
-		return -2
-	case bytecode.OpNewSpread:
-		return -1
-	case bytecode.OpSpreadIter:
-		return -1
-	case bytecode.OpObjectRest:
-		return -int(a)
-	case bytecode.OpSuperCall:
-		// Pops the arguments, or the argument array in the spread form, and
-		// pushes this; the forwarding form pops nothing.
-		switch b {
-		case bytecode.SuperSpread:
-			// It had been -1, which counted the array popped and not this
-			// pushed: one slot under, where an estimate is to be over.
-			return 0
-		case bytecode.SuperForward:
-			return 1
-		}
-		return -int(a) + 1
-	case bytecode.OpNewClass:
-		// Pops the parent, leaving the constructor.
-		return -1
-	case bytecode.OpYield, bytecode.OpAwait:
-		// Pops the operand and pushes the resumption value.
-		return 0
-
-	case bytecode.OpYieldStar:
-		// Pops the operand and pushes the resumption value and its kind.
-		return 1
-
-	case bytecode.OpIterUnpackDelegate:
-		// Pops the result and pushes either it or its value.
-		return 0
-
-	case bytecode.OpDefineMethod, bytecode.OpDefinePrivate,
-		bytecode.OpDefinePrivateMethod:
-		return -1
-	case bytecode.OpSetHomeObject, bytecode.OpSetFuncName:
-		// Both read the stack without changing it.
-		return 0
-	case bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
-		// Pops the key and the function, leaving the target.
-		return -2
-	case bytecode.OpSetPrivate:
-		return -2
-	case bytecode.OpGetPrivate:
-		return 0
-	case bytecode.OpSetSuperIndex:
-		// Pops the base, the key and the value.
-		return -3
-	case bytecode.OpGetSuperIndex:
-		// Pops the base and the key, leaving the value.
-		return -1
-	case bytecode.OpSuperBase:
-		return 1
-
-	case bytecode.OpRethrow:
-		// Pops the completion record.
-		return -2
-
-	case bytecode.OpInsert2, bytecode.OpInsert3, bytecode.OpInsert4:
-		return 1
-	}
-	// Everything else leaves the depth unchanged.
-	return 0
 }
 
 // checkEvalVarNames rejects a var the evaluated code cannot create.

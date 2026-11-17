@@ -58,7 +58,7 @@ func TestDebugScopesCaptureWhatIsUsed(t *testing.T) {
 			// Its own bindings first, innermost first, then what it
 			// captures.
 			if got, want := strings.Join(names, " "), "own a "+want; got != want && got != "a "+want {
-				t.Fatalf("%s at pc %d: scope %q, want %q", fn.Name, st.PC, got, want)
+				t.Fatalf("%s at %d: scope %q, want %q", fn.Name, st.Pos, got, want)
 			}
 		}
 	}

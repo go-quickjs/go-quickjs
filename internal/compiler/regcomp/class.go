@@ -6,9 +6,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
 
-// Classes, private names, super, this and new.target, as the stack form's
-// compileClass and its member compilers make them: cold operations of the
-// stack form's instructions' names, in the same order.
+// Classes, private names, super, this and new.target: cold operations, in
+// the order the walk lays out their bindings and functions (ClassRec).
 
 func (g *gen) cold(sub bytecode.ROp, a, b, c int) int {
 	return g.emit(bytecode.MakeR(sub, 0, r16(a), r16(b), r16(c)))
@@ -86,7 +85,7 @@ type sref struct {
 	pos int
 }
 
-// specialRef evaluates m's parts, as the stack form does: super[k]'s base,
+// specialRef evaluates m's parts: super[k]'s base,
 // then its key, converted where convert says (an update's); o.#x's object.
 func (g *gen) specialRef(m *ast.Member, convert bool) sref {
 	s := sref{m: m, pos: int(m.Start)}
@@ -120,7 +119,7 @@ func (g *gen) specialRef(m *ast.Member, convert bool) sref {
 
 // privateKey is the register holding private name pn's key.
 func (g *gen) privateKey(pn *ast.PrivateName) int {
-	// The stack compiler resolves every private name it compiles, as a
+	// The walk resolves every private name it walks, as a
 	// binding of the function's, which layout gives a register, or an
 	// upvalue; anything else is its bug.
 	res, ok := g.rec.Privates[pn]
@@ -283,7 +282,7 @@ func (g *gen) classSlot(slot int32) int {
 func (g *gen) class(cls *ast.ClassLit, dst int) int {
 	cr := g.rec.Classes[cls]
 	if cr == nil {
-		// The stack compiler records every class it compiles.
+		// The walk records every class it walks.
 		panic("regcomp: a class the record does not name")
 	}
 	var scope []int
@@ -465,7 +464,7 @@ func (g *gen) classMember(m ast.Property, k, ctor, install int, prototype func()
 }
 
 // keyName is the name a key that is not computed gives a class's member,
-// as the stack form's propKeyName gives it.
+// as the walk's propKeyName gives it.
 func keyName(key ast.Expr) string {
 	switch k := key.(type) {
 	case *ast.Ident:

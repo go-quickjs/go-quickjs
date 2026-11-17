@@ -1,11 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
-
-// getGlobalAt is get_global's slow path, in frame f of closure cl, whose
-// pc is the read's.
-func (r *Runtime) getGlobalAt(f *frame, cl *closure, in bytecode.Instr) (Value, error) {
-	name := cl.names[in.A]
+// getGlobalAt is get_global's slow path, of the name with index at in
+// cl's names and the cache site, in frame f of closure cl, whose pc is the
+// read's.
+func (r *Runtime) getGlobalAt(f *frame, cl *closure, at, siteAt uint32) (Value, error) {
+	name := cl.names[at]
 	env := cl.scope()
 	if f.evalVars != nil {
 		if p := evalVarProp(f.evalVars, name); p.ok() {
@@ -21,7 +20,7 @@ func (r *Runtime) getGlobalAt(f *frame, cl *closure, in bytecode.Instr) (Value, 
 			return p.value(), nil
 		}
 	}
-	site := &cl.ic[in.B]
+	site := &cl.ic[siteAt]
 	if i := uint(site.idx); i < uint(int(env.valn)) {
 		if p := env.shape.keys[i]; p.key == name &&
 			p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
@@ -76,10 +75,11 @@ func (r *Runtime) getGlobalAt(f *frame, cl *closure, in bytecode.Instr) (Value, 
 	return v, nil
 }
 
-// setGlobalIn stores v to the global name the set_global or
-// set_global_strict in names, in frame f of closure cl.
-func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value) error {
-	name := cl.names[in.A]
+// setGlobalIn stores v to the global set_global or set_global_strict
+// names, of the name with index at in cl's names and the cache site, in
+// frame f of closure cl.
+func (r *Runtime) setGlobalIn(f *frame, cl *closure, at, siteAt uint32, v Value) error {
+	name := cl.names[at]
 	env := cl.scope()
 	if f.evalVars != nil {
 		if p := evalVarProp(f.evalVars, name); p.ok() {
@@ -117,8 +117,8 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 			}
 		}
 	}
-	if i := globalSlot(env, &cl.ic[in.B], name); i >= 0 {
-		if s := &cl.ic[in.B]; s.p1 != env {
+	if i := globalSlot(env, &cl.ic[siteAt], name); i >= 0 {
+		if s := &cl.ic[siteAt]; s.p1 != env {
 			s.p1 = env
 		}
 		if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
@@ -164,14 +164,14 @@ func (r *Runtime) globalRefResolves(f *frame, cl *closure, site uint32, name Ato
 // setGlobalStrict is set_global_strict: check_global_ref, assert_resolved
 // and set_global for a value that ran no code, so asked one straight after
 // the other.
-func (r *Runtime) setGlobalStrict(f *frame, cl *closure, in bytecode.Instr, v Value) error {
-	name := cl.names[in.A]
-	found, err := r.globalRefResolves(f, cl, in.B, name)
+func (r *Runtime) setGlobalStrict(f *frame, cl *closure, at, siteAt uint32, v Value) error {
+	name := cl.names[at]
+	found, err := r.globalRefResolves(f, cl, siteAt, name)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return r.throwReferenceError("%s is not defined", r.atoms.name(name))
 	}
-	return r.setGlobalIn(f, cl, in, v)
+	return r.setGlobalIn(f, cl, at, siteAt, v)
 }

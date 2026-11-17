@@ -387,15 +387,8 @@ func TestJITGlobalCacheOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
-	// The global reads' sites: the stack bytecode's get_global's, or, where
-	// f runs register code, the register code's (its C).
+	// The global reads' sites: the register code's get_global's (its C).
 	var sites []int
-	for _, in := range cl.fn.Code {
-		if in.Op == bytecode.OpGetGlobal {
-			sites = append(sites, int(in.B))
-		}
-	}
-	sites = sites[:0]
 	for _, w := range cl.reg.rc.Code {
 		if w.Op() == bytecode.RGetGlobal {
 			sites = append(sites, int(w.C()))

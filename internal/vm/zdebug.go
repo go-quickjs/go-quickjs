@@ -14,10 +14,10 @@ import (
 // Debugging.
 //
 // A runtime made with Config.Debug runs code compiled for a debugger: every
-// statement it can stop at begins with an OpDebugStmt, and its function
+// statement it can stop at begins with a debug instruction, and its function
 // records what is in scope there. Such code runs in the interpreter, and
 // a statement costs one test of debugState.armed until a debugger asks to
-// stop somewhere. A runtime made without it compiles no OpDebugStmt, and
+// stop somewhere. A runtime made without it compiles no debug instruction, and
 // runs exactly as it would were there no debugger at all.
 //
 // What a debugger is told, and what it asks, happens on the runtime's
@@ -30,7 +30,7 @@ import (
 
 // debugState is a runtime's debugger.
 type debugState struct {
-	// armed says whether an OpDebugStmt has anything to ask: a breakpoint
+	// armed says whether a debug instruction has anything to ask: a breakpoint
 	// set, a step under way, or a pause asked for, with a handler to tell.
 	// With none, a statement costs the test of it.
 	armed bool
@@ -554,19 +554,20 @@ func (r *Runtime) debugInterrupt() {
 	}
 }
 
-// debugStatement is an OpDebugStmt the debugger has something to ask of:
-// whether the code stops there.
-func (r *Runtime) debugStatement(f *frame, in bytecode.Instr) error {
+// debugStatement is a debug instruction, of statement idx, a debugger
+// statement where debugger says so, that the debugger has something to
+// ask of: whether the code stops there.
+func (r *Runtime) debugStatement(f *frame, idx int, debugger bool) error {
 	d := r.debug
 	if d.paused || d.handler == nil {
 		return nil
 	}
-	if fd := debugOf(f.cl.fn); fd != nil && !fd.visible(int(in.A)) {
+	if fd := debugOf(f.cl.fn); fd != nil && !fd.visible(idx) {
 		return nil
 	}
 	reason := PauseReason(-1)
 	switch {
-	case in.B != 0:
+	case debugger:
 		reason = PauseDebuggerStatement
 	case d.pauseNext:
 		reason = PauseRequested
@@ -576,8 +577,8 @@ func (r *Runtime) debugStatement(f *frame, in bytecode.Instr) error {
 		reason = PauseStep
 	}
 	var hit []int
-	if fd := debugOf(f.cl.fn); fd != nil && !d.inactive && int(in.A) < len(fd.breaks) && fd.breaks[in.A] > 0 {
-		at := bpLocation{f.cl.fn, int(in.A)}
+	if fd := debugOf(f.cl.fn); fd != nil && !d.inactive && idx < len(fd.breaks) && fd.breaks[idx] > 0 {
+		at := bpLocation{f.cl.fn, idx}
 		for id, b := range d.breakpoints {
 			if slices.Contains(b.at, at) {
 				hit = append(hit, id)
@@ -711,12 +712,15 @@ func (df *DebugFrame) statement() *bytecode.Statement {
 	if df.fn.Debug == nil {
 		return nil
 	}
-	st := df.fn.Debug.Statements
-	i := sort.Search(len(st), func(i int) bool { return st[i].PC > df.pc })
-	if i == 0 {
+	if df.rc == nil {
 		return nil
 	}
-	return &st[i-1]
+	st := df.fn.Debug.Statements
+	i := regStatementAt(df.rc, int(df.pc))
+	if i < 0 || i >= len(st) {
+		return nil
+	}
+	return &st[i]
 }
 
 // Scopes are what the frame sees at the statement it is in, innermost

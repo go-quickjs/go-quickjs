@@ -230,7 +230,7 @@ func (f *jitRegFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 func (f *jitRegFeedback) forwardProperty(rpc int, key Atom) (ssa.PropertySite, bool) {
 	fb := f.fb
 	r, cl, rc := fb.r, fb.cl, f.rc
-	if cl == nil || cl.fn.Leaf != bytecode.LeafForward || len(rc.Code) < 4 || rpc > 1 {
+	if cl == nil || rc.Leaf != bytecode.LeafForward || len(rc.Code) < 4 || rpc > 1 {
 		return ssa.PropertySite{}, false
 	}
 	get, apply := rc.Code[0], rc.Code[1]
@@ -351,7 +351,7 @@ func (r *Runtime) jitRegForwardMade(ctx *abi.Context, idx int, run jitRegRun, rp
 	}
 	s.goCalls++
 	r.noteRegGoCall(regAt(c.code, rpc), false, target)
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	// A copy: a native call's next call writes the context over.
 	i, n := len(r.argStack), len(args)

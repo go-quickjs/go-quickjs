@@ -21,9 +21,15 @@ func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool)
 	return r.pureCallAt(fd, this, args, 0, true)
 }
 
-// pureTreeCode is the shortest pure body, in instructions, that is called
-// as its register code rather than evaluated here when it calls nothing.
-const pureTreeCode = 7
+// pureTreeCode is the shortest pure body, in register instructions, that
+// is called as its register code rather than evaluated here when it calls
+// nothing. A comparison's value is three instructions of register code
+// (its branch, the two loads) where the stack bytecode's had been one, so
+// that x => x <= last is six: at 6 the JIT ran BigInt64Array's every of it
+// at the interpreter's speed (typed_i64_every, 2.4 -> 46 ns), its calls
+// made with frames, where 9 keeps the bodies of seven stack instructions
+// or fewer evaluated here as they had been.
+const pureTreeCode = 9
 
 // pureByTree reports whether calls of a pure body go to its register code,
 // as planCall gives them (regPlan), rather than to pureCall: its first call
@@ -32,140 +38,20 @@ const pureTreeCode = 7
 // instruction, which is often mispredicted, as the bodies it evaluates are
 // all different; its register code pays a frame once. A body that calls
 // nothing gains nothing else from being frameless, and from about seven
-// instructions on a frame is the cheaper; one that calls keeps its calls
+// evaluated instructions on a frame is the cheaper; one that calls keeps its calls
 // frameless here, which its register code would make with frames. A call
 // from inside another pure body (pureInvoke) is still evaluated here.
-func pureByTree(fn *bytecode.Function) bool {
-	return !fn.PureCalls && len(fn.Code) >= pureTreeCode
+func pureByTree(rc *bytecode.RegCode) bool {
+	return !rc.PureCalls && len(rc.Code) >= pureTreeCode
 }
 
-// pureFirst reports whether a call of fd's pure body fn tries pureCall: the
-// body is not one pureByTree gives its register code, or planCall has decided
-// about it and found it none. A short body, the commonest, is answered by
-// the first test.
-func pureFirst(fd *funcData, fn *bytecode.Function) bool {
-	return len(fn.Code) < pureTreeCode || fn.PureCalls || fd.planned
+// pureFirst reports whether a call of fd's pure body, of code rc, tries
+// pureCall: the body is not one pureByTree gives its register code, or
+// planCall has decided about it and found it none. A short body, the
+// commonest, is answered by the first test.
+func pureFirst(fd *funcData, rc *bytecode.RegCode) bool {
+	return len(rc.Code) < pureTreeCode || rc.PureCalls || fd.planned
 }
-
-// The cases of pureCallAt's switch, which pureCases numbers the
-// instructions with.
-const (
-	pcNone = iota
-	pcPushThis
-	pcGetLocal
-	pcGetLocal2
-	pcPushInt
-	pcPushConst
-	pcPushNull
-	pcPushTrue
-	pcPushFalse
-	pcPushUndef
-	pcPushEmptyString
-	pcDup
-	pcDrop
-	pcGetProp
-	pcGetPropThis
-	pcCall
-	pcSetProp
-	pcNew
-	pcGetLength
-	pcGetGlobal
-	pcArith
-	pcBinImm
-	pcBinLocal
-	pcLocalBinImm
-	pcNeg
-	pcNot
-	pcTypeOf
-	pcCompare
-	pcJump
-	pcJumpIfFalse
-	pcJumpIfTrue
-	pcJumpIfCmpFalse
-	pcJumpIfFalseKeep
-	pcJumpIfTrueKeep
-	pcGetUpvalue
-	pcToNumeric
-	pcIncDec
-	pcSetUpvalue
-	pcReturn
-	pcReturnUndef
-	pcStrFreeze
-)
-
-// pureCases gives each instruction pureCallAt evaluates its case, and every
-// other instruction pcNone, its default. Switched on directly, the
-// opcodes it takes are too far apart for the compiler to make the switch a
-// jump table, and it becomes a search of a few comparisons for every
-// instruction; numbered densely, it is one indexed jump.
-var pureCases = func() (t [256]uint8) {
-	t[bytecode.OpPushThis] = pcPushThis
-	t[bytecode.OpGetLocal] = pcGetLocal
-	t[bytecode.OpGetLocal2] = pcGetLocal2
-	t[bytecode.OpPushInt] = pcPushInt
-	t[bytecode.OpPushConst] = pcPushConst
-	t[bytecode.OpPushNull] = pcPushNull
-	t[bytecode.OpPushTrue] = pcPushTrue
-	t[bytecode.OpPushFalse] = pcPushFalse
-	t[bytecode.OpPushUndef] = pcPushUndef
-	t[bytecode.OpPushEmptyString] = pcPushEmptyString
-	t[bytecode.OpDup] = pcDup
-	t[bytecode.OpDrop] = pcDrop
-	t[bytecode.OpGetProp] = pcGetProp
-	t[bytecode.OpGetPropThis] = pcGetPropThis
-	t[bytecode.OpCall] = pcCall
-	t[bytecode.OpCallMethod] = pcCall
-	// A tail call is a call here: a frameless body has no frame to give
-	// up, and how deep pure calls go is bounded. A method's is not taken,
-	// which pcCall would have to tell from call_method's.
-	t[bytecode.OpTailCall] = pcCall
-	t[bytecode.OpSetProp] = pcSetProp
-	t[bytecode.OpNew] = pcNew
-	t[bytecode.OpGetLength] = pcGetLength
-	t[bytecode.OpGetGlobal] = pcGetGlobal
-	t[bytecode.OpAdd] = pcArith
-	t[bytecode.OpSub] = pcArith
-	t[bytecode.OpMul] = pcArith
-	t[bytecode.OpDiv] = pcArith
-	t[bytecode.OpBitAnd] = pcArith
-	t[bytecode.OpBitOr] = pcArith
-	t[bytecode.OpBitXor] = pcArith
-	t[bytecode.OpShl] = pcArith
-	t[bytecode.OpShr] = pcArith
-	t[bytecode.OpUShr] = pcArith
-	t[bytecode.OpBinImm] = pcBinImm
-	t[bytecode.OpBinLocal] = pcBinLocal
-	t[bytecode.OpLocalBinImm] = pcLocalBinImm
-	t[bytecode.OpNeg] = pcNeg
-	t[bytecode.OpNot] = pcNot
-	t[bytecode.OpTypeOf] = pcTypeOf
-	t[bytecode.OpLt] = pcCompare
-	t[bytecode.OpLe] = pcCompare
-	t[bytecode.OpGt] = pcCompare
-	t[bytecode.OpGe] = pcCompare
-	t[bytecode.OpEq] = pcCompare
-	t[bytecode.OpNe] = pcCompare
-	t[bytecode.OpStrictEq] = pcCompare
-	t[bytecode.OpStrictNe] = pcCompare
-	t[bytecode.OpJump] = pcJump
-	t[bytecode.OpJumpIfFalse] = pcJumpIfFalse
-	t[bytecode.OpJumpIfTrue] = pcJumpIfTrue
-	t[bytecode.OpJumpIfCmpFalse] = pcJumpIfCmpFalse
-	t[bytecode.OpJumpIfFalseKeep] = pcJumpIfFalseKeep
-	t[bytecode.OpJumpIfTrueKeep] = pcJumpIfTrueKeep
-	t[bytecode.OpGetUpvalue] = pcGetUpvalue
-	t[bytecode.OpToNumeric] = pcToNumeric
-	t[bytecode.OpInc] = pcIncDec
-	t[bytecode.OpDec] = pcIncDec
-	t[bytecode.OpSetUpvalue] = pcSetUpvalue
-	t[bytecode.OpReturn] = pcReturn
-	t[bytecode.OpReturnUndef] = pcReturnUndef
-	t[bytecode.OpArgumentsIndex] = pcStrFreeze // the only one a pure body has
-	return
-}()
-
-// pureStackSize is the most operands a pure body has; see pureBody.
-const pureStackSize = 24
 
 // pureCallDepth is how deeply pure bodies are evaluated inside one another:
 // a recursive one would otherwise take the Go stack with it. A recursion
@@ -177,15 +63,19 @@ const pureCallDepth = 32
 
 // pureCallAt is pureCall of a body depth calls in, which may store only
 // where mayStore says that nothing that called it can give up afterwards.
+// It evaluates the body's register code (the register compiler's pureBody), its
+// registers a window of the runtime's stack above every frame's, each
+// depth of pure calls above the one that called it: register 1 the this,
+// the parameters' from 2, the arguments read where the caller has them.
 func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
 	cl := fd.closure
-	fn := cl.fn
+	c := cl.reg
 	// An arrow is marked pure by the compiler only where its body never
 	// reads this, so the this it is called with does not matter.
-	if cl.pureMiss >= pureMissLimit || len(fd.extra.with()) > 0 || fd.extra.evalVars() != nil {
+	if c == nil || c.rc.Leaf != bytecode.LeafPure || cl.pureMiss >= pureMissLimit || len(fd.extra.with()) > 0 || fd.extra.evalVars() != nil {
 		return Undefined, false
 	}
-	if fn.CoerceThis && !this.IsObject() {
+	if cl.fn.CoerceThis && !this.IsObject() {
 		// A sloppy body called without an object for this -- a plain
 		// call, f() -- whose this a frame makes: a miss, so that its calls
 		// are planned (planCall), the register code's entry making the
@@ -194,123 +84,87 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 		cl.pureMiss++
 		return Undefined, false
 	}
-	// The body's operands go in the runtime's stack above every frame's,
-	// each depth of pure calls above the one that called it: an array of
-	// its own would be cleared at every call.
-	base := r.stackTop + depth*pureStackSize
-	if base+pureStackSize > len(r.stack) {
+	rc := c.rc
+	base := r.stackTop + depth*bytecode.PureRegs
+	if base+bytecode.PureRegs > len(r.stack) {
 		return Undefined, false
 	}
-	if base+pureStackSize > r.stackHigh {
-		r.stackHigh = base + pureStackSize
+	if base+bytecode.PureRegs > r.stackHigh {
+		r.stackHigh = base + bytecode.PureRegs
 	}
-	stack := r.stack[base : base+pureStackSize : base+pureStackSize]
-	sp := 0
-	code := fn.Code
+	regs := r.stack[base : base+bytecode.PureRegs : base+bytecode.PureRegs]
+	regs[1] = this
+	for i := range cl.fn.ParamCount {
+		regs[2+i] = arg(args, i)
+	}
+	code := rc.Code
 	miss := func() (Value, bool) {
 		cl.pureMiss++
 		return Undefined, false
 	}
+	// A store, or a call of a body that may store, only where nothing
+	// after it can give up (PureTail).
+	tail := int(rc.PureTail)
 	for pc := 0; pc < len(code); pc++ {
-		in := code[pc]
-		switch pureCases[in.Op] {
-		case pcPushThis:
-			if pc+1 < len(code) && code[pc+1].Op == bytecode.OpGetProp {
-				// this.k, a method's commonest read, in one turn of the loop
-				// rather than two.
-				next := code[pc+1]
-				if !this.IsObject() {
-					return miss()
-				}
-				ob, ic := this.Object(), &cl.ic[next.B]
-				v, ok := ic.own(ob)
-				if !ok {
-					if v, ok = ownScan(ic, ob, cl.names[next.A]); !ok {
-						if v, ok = r.cachedData(ic, ob, cl.names[next.A]); !ok {
-							return miss()
-						}
-					}
-				}
-				stack[sp] = v
-				sp++
-				pc++
-				break
-			}
-			stack[sp] = this
-			sp++
-		case pcGetLocal:
-			stack[sp] = arg(args, int(in.A))
-			sp++
-		case pcGetLocal2:
-			stack[sp], stack[sp+1] = arg(args, int(in.A)), arg(args, int(in.B))
-			sp += 2
-		case pcPushInt:
-			stack[sp] = Int32(int32(in.A))
-			sp++
-		case pcPushConst:
-			stack[sp] = cl.consts[in.A]
-			sp++
-		case pcPushNull:
-			stack[sp] = Null
-			sp++
-		case pcPushTrue:
-			stack[sp] = True
-			sp++
-		case pcPushFalse:
-			stack[sp] = False
-			sp++
-		case pcPushUndef:
-			stack[sp] = Undefined
-			sp++
-		case pcPushEmptyString:
-			stack[sp] = Str(emptyString)
-			sp++
-		case pcDup:
-			stack[sp] = stack[sp-1]
-			sp++
-		case pcDrop:
-			sp--
-		case pcGetProp:
-			o := stack[sp-1]
+		w := code[pc]
+		switch op := w.Op(); op {
+		case bytecode.RMove:
+			regs[w.A()] = regs[w.B()]
+		case bytecode.RLoadInt:
+			regs[w.A()] = Int32(int32(w.BC()))
+		case bytecode.RLoadConst:
+			regs[w.A()] = cl.consts[w.BC()]
+		case bytecode.RLoadUndef:
+			regs[w.A()] = Undefined
+		case bytecode.RLoadNull:
+			regs[w.A()] = Null
+		case bytecode.RLoadTrue:
+			regs[w.A()] = True
+		case bytecode.RLoadFalse:
+			regs[w.A()] = False
+		case bytecode.RLoadEmpty:
+			regs[w.A()] = Str(emptyString)
+		case bytecode.RGetProp:
+			o := regs[w.B()]
 			if !o.IsObject() {
 				return miss()
 			}
-			ob, ic := o.Object(), &cl.ic[in.B]
+			ob, ic := o.Object(), &cl.ic[w.C()]
 			v, ok := ic.own(ob)
 			if !ok {
-				if v, ok = ownScan(ic, ob, cl.names[in.A]); !ok {
-					if v, ok = r.cachedData(ic, ob, cl.names[in.A]); !ok {
+				name := cl.names[c.siteName[w.C()]]
+				if v, ok = ownScan(ic, ob, name); !ok {
+					if v, ok = r.cachedData(ic, ob, name); !ok {
 						return miss()
 					}
 				}
 			}
-			stack[sp-1] = v
-		case pcGetPropThis:
-			// A method, read as get_prop reads, above its receiver.
-			o := stack[sp-1]
+			regs[w.A()] = v
+		case bytecode.RGetMethodW:
+			// A method, read above its receiver: mostly the prototype's,
+			// which the cache answers and a scan of the receiver's own
+			// table would not.
+			o := regs[w.B()]
 			if !o.IsObject() {
 				return miss()
 			}
-			// A method is mostly the prototype's, which the cache answers
-			// and a scan of the receiver's own table would not.
-			ob := o.Object()
-			v, ok := r.cachedData(&cl.ic[in.B], ob, cl.names[in.A])
+			ob, name := o.Object(), cl.names[c.siteName[w.C()]]
+			v, ok := r.cachedData(&cl.ic[w.C()], ob, name)
 			if !ok {
-				if v, ok = plainOwn(ob, cl.names[in.A]); !ok {
+				if v, ok = plainOwn(ob, name); !ok {
 					return miss()
 				}
 			}
-			stack[sp] = v
-			sp++
-		case pcCall:
-			n := int(in.A)
-			base := sp - n - 1
-			callee, recv := stack[base], Undefined
-			if in.Op == bytecode.OpCallMethod {
-				base--
-				recv = stack[base]
+			regs[w.A()], regs[w.A()+1] = v, o
+		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT:
+			a, n := int(w.A()), int(w.X())
+			recv := Undefined
+			if op == bytecode.RCallMW {
+				recv = regs[a+1]
 			}
-			v, ok := r.pureInvoke(callee, recv, stack[sp-n:sp], depth, mayStore && pc+1 >= int(fn.PureTail))
+			// A tail call is a call here: a frameless body has no frame to
+			// give up, and how deep pure calls go is bounded.
+			v, ok := r.pureInvoke(regs[a], recv, regs[a+2:a+2+n], depth, mayStore && pc+1 >= tail)
 			if !ok {
 				// A store refused below is the miss of the body that called
 				// where it could not store, not of a body that was itself
@@ -321,10 +175,15 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				r.pureRefused = false
 				return miss()
 			}
-			sp = base
-			stack[sp] = v
-			sp++
-		case pcSetProp:
+			regs[w.B()] = v
+		case bytecode.RNewW:
+			a, n := int(w.A()), int(w.X())
+			v, ok := r.pureConstruct(regs[a], regs[a+2:a+2+n])
+			if !ok {
+				return miss()
+			}
+			regs[w.B()] = v
+		case bytecode.RSetProp:
 			// A write the site's cache answers -- to a property the object
 			// has, or one it adds as objects of its shape did before -- is
 			// made, calling nothing; anything else gives up before writing.
@@ -334,167 +193,221 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				r.pureRefused = true
 				return Undefined, false
 			}
-			o := stack[sp-2]
+			o := regs[w.A()]
 			if !o.IsObject() {
 				return miss()
 			}
-			ob, c := o.Object(), &cl.ic[in.B]
+			ob, e := o.Object(), &cl.ic[w.C()]
 			// An entry for a setter calls it, which no pure body may.
-			if s := ob.shape; s == nil || s != c.shape || c.getter {
+			if s := ob.shape; s == nil || s != e.shape || e.getter {
 				return miss()
 			}
-			if c.next == nil {
+			if e.next == nil {
 				if verifyShapes {
 					checkShape(ob)
 				}
-				ob.vals()[c.idx] = stack[sp-1]
-			} else if c.adds(ob) {
+				ob.vals()[e.idx] = regs[w.B()]
+			} else if e.adds(ob) {
 				if verifyShapes {
-					r.verifyStoreCache(c, ob, cl.names[in.A])
+					r.verifyStoreCache(e, ob, cl.names[c.siteName[w.C()]])
 				}
-				ob.appendTransition(stack[sp-1], c.next)
+				ob.appendTransition(regs[w.B()], e.next)
 			} else {
 				return miss()
 			}
-			sp -= 2
-		case pcNew:
-			n := int(in.A)
-			base := sp - n - 1
-			v, ok := r.pureConstruct(stack[base], stack[sp-n:sp])
-			if !ok {
+		case bytecode.RAddProp, bytecode.RAddPropI:
+			// o.k += b and o.k++ of a number the object has, as their
+			// handlers' fast paths make them: a store, refused as set_prop
+			// refuses one.
+			if !mayStore {
+				r.pureRefused = true
+				return Undefined, false
+			}
+			b := Int32(w.SB())
+			if op == bytecode.RAddProp {
+				b = regs[w.B()]
+			}
+			o := regs[w.A()]
+			if !o.IsObject() || !b.IsNumber() {
 				return miss()
 			}
-			sp = base
-			stack[sp] = v
-			sp++
-		case pcGetLength:
-			switch v := stack[sp-1]; {
+			ob := o.Object()
+			e := &cl.ic[w.C()]
+			if ob.shape != e.ownShape {
+				return miss()
+			}
+			p := &ob.vals()[e.idx]
+			if !p.IsNumber() {
+				return miss()
+			}
+			p.num = regNum(p.Number() + b.Number()).num
+		case bytecode.RGetLength:
+			switch v := regs[w.B()]; {
 			case v.IsString():
-				stack[sp-1] = Int(v.String().Len())
+				regs[w.A()] = Int(v.String().Len())
 			case v.IsObject() && v.Object().class == ClassArray:
-				stack[sp-1] = Uint32(v.Object().arrayLength())
+				regs[w.A()] = Uint32(v.Object().arrayLength())
 			default:
 				return miss()
 			}
-		case pcGetGlobal:
-			v, ok := r.pureGlobal(cl, in)
+		case bytecode.RGetGlobal:
+			v, ok := r.pureGlobal(cl, uint32(w.C()), cl.names[regNameIdx(c, pc, w.B())])
 			if !ok {
 				return miss()
 			}
-			stack[sp] = v
-			sp++
-		case pcArith:
-			v, ok := pureArith(in.Op, stack[sp-2], stack[sp-1])
+			regs[w.A()] = v
+		case bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor,
+			bytecode.RShl, bytecode.RShr, bytecode.RUShr:
+			v, ok := pureArith(regStackOp[op], regs[w.B()], regs[w.C()])
 			if !ok {
 				return miss()
 			}
-			sp--
-			stack[sp-1] = v
-		case pcBinImm:
-			v, ok := pureArith(bytecode.Op(in.B), stack[sp-1], Int32(int32(in.A)))
+			regs[w.A()] = v
+		case bytecode.RBin:
+			v, ok := pureArith(bytecode.Op(w.X()), regs[w.B()], regs[w.C()])
 			if !ok {
 				return miss()
 			}
-			stack[sp-1] = v
-		case pcBinLocal:
-			v, ok := pureArith(bytecode.Op(in.B), stack[sp-1], arg(args, int(in.A)))
+			regs[w.A()] = v
+		case bytecode.RAddI, bytecode.RSubI, bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI,
+			bytecode.RShrI, bytecode.RUShrI, bytecode.RMulI:
+			o, k := regStackOp[op], w.SC()
+			switch op {
+			case bytecode.RAddI:
+				o = bytecode.OpAdd
+			case bytecode.RSubI:
+				o = bytecode.OpSub
+			}
+			v, ok := pureArith(o, regs[w.B()], Int32(k))
 			if !ok {
 				return miss()
 			}
-			stack[sp-1] = v
-		case pcLocalBinImm:
-			v, ok := pureArith(bytecode.Op(in.A>>24), arg(args, int(in.A&(1<<24-1))), Int32(int32(in.B)))
+			regs[w.A()] = v
+		case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
+			// (x + y) | 0, (x - y) | 0, (x + k) | 0: the operator, then
+			// the | 0, as the int32 forms' slow path makes them.
+			var v Value
+			var ok bool
+			switch {
+			case op == bytecode.RAddI32:
+				v, ok = pureArith(bytecode.OpAdd, regs[w.B()], regs[w.C()])
+			case op == bytecode.RSubI32:
+				v, ok = pureArith(bytecode.OpSub, regs[w.B()], regs[w.C()])
+			case w.X() == bytecode.RAddII32Sub:
+				v, ok = pureArith(bytecode.OpSub, regs[w.B()], Int32(-w.SC()))
+			default:
+				v, ok = pureArith(bytecode.OpAdd, regs[w.B()], Int32(w.SC()))
+			}
+			if ok {
+				v, ok = pureArith(bytecode.OpBitOr, v, Int32(0))
+			}
 			if !ok {
 				return miss()
 			}
-			stack[sp] = v
-			sp++
-		case pcNeg:
-			v := stack[sp-1]
+			regs[w.A()] = v
+		case bytecode.RInc, bytecode.RDec:
+			v := regs[w.B()]
 			if !v.IsNumber() {
 				return miss()
 			}
-			stack[sp-1] = Float(-v.num)
-		case pcNot:
-			stack[sp-1] = Bool(!truthy(stack[sp-1]))
-		case pcTypeOf:
-			stack[sp-1] = Str(r.typeofString(stack[sp-1]))
-		case pcCompare:
-			res, ok := r.pureCompare(in.Op, stack[sp-2], stack[sp-1])
-			if !ok {
-				return miss()
-			}
-			sp--
-			stack[sp-1] = Bool(res)
-		case pcJump:
-			pc = int(in.A) - 1
-		case pcJumpIfFalse:
-			sp--
-			if !truthy(stack[sp]) {
-				pc = int(in.A) - 1
-			}
-		case pcJumpIfTrue:
-			sp--
-			if truthy(stack[sp]) {
-				pc = int(in.A) - 1
-			}
-		case pcJumpIfCmpFalse:
-			res, ok := r.pureCompare(bytecode.Op(in.B), stack[sp-2], stack[sp-1])
-			if !ok {
-				return miss()
-			}
-			sp -= 2
-			if !res {
-				pc = int(in.A) - 1
-			}
-		case pcJumpIfFalseKeep:
-			if !truthy(stack[sp-1]) {
-				pc = int(in.A) - 1
+			if op == bytecode.RInc {
+				regs[w.A()] = Float(v.num + 1)
 			} else {
-				sp--
+				regs[w.A()] = Float(v.num - 1)
 			}
-		case pcJumpIfTrueKeep:
-			if truthy(stack[sp-1]) {
-				pc = int(in.A) - 1
-			} else {
-				sp--
-			}
-		case pcGetUpvalue:
-			stack[sp] = cl.upvalues[in.A].get()
-			sp++
-		case pcToNumeric:
-			if !stack[sp-1].IsNumber() {
+		case bytecode.RUnary:
+			v := regs[w.B()]
+			switch bytecode.Op(w.X()) {
+			case bytecode.OpNeg:
+				if !v.IsNumber() {
+					return miss()
+				}
+				regs[w.A()] = Float(-v.num)
+			case bytecode.OpNot:
+				regs[w.A()] = Bool(!truthy(v))
+			default:
 				return miss()
 			}
-		case pcIncDec:
-			v := stack[sp-1]
-			if !v.IsNumber() {
-				return miss()
-			}
-			if in.Op == bytecode.OpInc {
-				stack[sp-1] = Float(v.num + 1)
-			} else {
-				stack[sp-1] = Float(v.num - 1)
-			}
-		case pcSetUpvalue:
+		case bytecode.RTypeof:
+			regs[w.A()] = Str(r.typeofString(regs[w.B()]))
+		case bytecode.RGetUpval:
+			regs[w.A()] = cl.upvalues[w.BC()].get()
+		case bytecode.RSetUpval:
 			// Like a property's store, this is the body's last chance to give
 			// up, and is refused where the caller could still give up.
 			if !mayStore {
 				r.pureRefused = true
 				return Undefined, false
 			}
-			sp--
-			cl.upvalues[in.A].set(stack[sp])
-		case pcReturn:
-			return stack[sp-1], true
-		case pcReturnUndef:
-			return Undefined, true
-		case pcStrFreeze:
-			if v := stack[sp-1]; v.IsString() {
+			cl.upvalues[w.BC()].set(regs[w.A()])
+		case bytecode.RStrFreeze:
+			if v := regs[w.A()]; v.IsString() {
 				if s := v.String(); s.building {
 					s.building = false
 				}
 			}
+		case bytecode.RJmp:
+			pc += int(int32(w.BC()))
+		case bytecode.RJmpF:
+			if !truthy(regs[w.A()]) {
+				pc += int(int32(w.BC()))
+			}
+		case bytecode.RJmpT:
+			if truthy(regs[w.A()]) {
+				pc += int(int32(w.BC()))
+			}
+		case bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI:
+			b := Int32(int32(w.SB()))
+			if op == bytecode.RJSEq || op == bytecode.RJSNe {
+				b = regs[w.B()]
+			}
+			if regs[w.A()].StrictEquals(b) == (op == bytecode.RJSEq || op == bytecode.RJSEqI) {
+				pc += int(w.SC())
+			}
+		case bytecode.RJNull, bytecode.RJNotNull:
+			v := regs[w.A()]
+			if v.IsObject() && v.object().flags&objHTMLDDA != 0 {
+				return miss()
+			}
+			if (v.IsNull() || v.IsUndefined()) == (op == bytecode.RJNull) {
+				pc += int(w.SC())
+			}
+		case bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt,
+			bytecode.RJGe, bytecode.RJNGe, bytecode.RJEq, bytecode.RJNe, bytecode.RJLtI, bytecode.RJNLtI,
+			bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
+			bytecode.RJEqI, bytecode.RJNeI, bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU:
+			j := regJumpCmp[op]
+			b := Int32(int32(w.SB()))
+			switch {
+			case j.reg:
+				b = regs[w.B()]
+			case j.upval:
+				b = cl.upvalues[w.B()].get()
+			}
+			res, ok := r.pureCompare(j.op, regs[w.A()], b)
+			if !ok {
+				return miss()
+			}
+			if res != j.not {
+				pc += int(w.SC())
+			}
+		case bytecode.RSwitch:
+			if to := c.switches[w.BC()].lookup(regs[w.A()], cl.consts); to >= 0 {
+				pc = int(to) - 1
+			}
+		case bytecode.RSwitchTypeof:
+			if to := c.switches[w.BC()].typeTo[typeofKind[struct{}](regs[w.A()])]; to >= 0 {
+				pc = int(to) - 1
+			}
+		case bytecode.RJTypeof:
+			x := w.X()
+			if (typeofKind[struct{}](regs[w.A()]) == int(x&^bytecode.RCmpTrue)) == (x&bytecode.RCmpTrue != 0) {
+				pc += int(w.SC())
+			}
+		case bytecode.RRet:
+			return regs[w.A()], true
+		case bytecode.RRetUndef:
+			return Undefined, true
 		default:
 			return miss()
 		}
@@ -516,7 +429,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	o := callee.Object()
 	fd := o.fn()
 	if fd == nil || fd.ctorKind != ctorBase || fd.bound || fd.native != nil || fd.fieldInit() != nil ||
-		fd.closure == nil || fd.closure.realm != r.Realm || fd.closure.fn.Leaf != bytecode.LeafSetThis ||
+		fd.closure == nil || fd.closure.realm != r.Realm || leafKind(fd.closure) != bytecode.LeafSetThis ||
 		o.class != ClassFunction {
 		return Undefined, false
 	}
@@ -710,25 +623,24 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 // pureGlobal is get_global's fast paths: a script-level lexical binding
 // already initialized, or a plain data property of the global environment's
 // own table, which the site may already know the place of.
-func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
+func (r *Runtime) pureGlobal(cl *closure, at uint32, name Atom) (Value, bool) {
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
-	site := &cl.ic[in.B]
+	site := &cl.ic[at]
 	// The environment the site found the name in, as the interpreter's read
 	// takes it (see propCache): no scope to ask for, no key to compare.
-	if env := site.p1; env != nil && (r.globalLex.valn == 0 || !r.lexShadows(cl.names[in.A])) {
+	if env := site.p1; env != nil && (r.globalLex.valn == 0 || !r.lexShadows(name)) {
 		if i := uint(site.idx); i < uint(int(env.valn)) {
 			if p := env.shape.keys[i]; p.flags&plain == 0 {
 				return env.vals()[i], true
 			}
 		}
 	}
-	return r.pureGlobalSlow(cl, site, in)
+	return r.pureGlobalSlow(cl, site, name)
 }
 
 // pureGlobalSlow is pureGlobal where the site has not got the slot.
-func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, in bytecode.Instr) (Value, bool) {
+func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, name Atom) (Value, bool) {
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
-	name := cl.names[in.A]
 	env := cl.scope()
 	if r.globalLex.valn != 0 {
 		if p := r.globalLexProp(env, name); p.ok() {
@@ -858,7 +770,7 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 		!fd.closure.fn.DirectCall {
 		return Undefined, false
 	}
-	switch fd.closure.fn.Leaf {
+	switch leafKind(fd.closure) {
 	case bytecode.LeafPure:
 		if depth+1 >= pureCallDepth {
 			return Undefined, false

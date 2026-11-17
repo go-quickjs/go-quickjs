@@ -123,12 +123,6 @@ func (r *Runtime) regCall(callee, this Value, args []Value) (Value, error) {
 	return v, err
 }
 
-// regSrc is the stack form's instruction of register instruction pc, which
-// the verifier proves is in the code.
-func regSrc(c *regCode, pc int) uint32 {
-	return *(*uint32)(unsafe.Add(unsafe.Pointer(unsafe.SliceData(c.src)), uintptr(pc)*4))
-}
-
 // regCallMiss is a call rhCallW's cache does not answer: a site's first
 // call or a new callee, a body answered without a frame, a frame that keeps
 // its arguments, a this to coerce, or a callee of no register code.
@@ -265,6 +259,12 @@ func (r *Runtime) regCallKind(fd *funcData, method bool) (cl *closure, rc *regCo
 	cl = fd.closure
 	if rc = cl.reg; rc == nil {
 		rc = r.regOf(cl)
+		if rc != nil && rc.rc.Leaf != bytecode.LeafNone && !fd.planned {
+			// A leaf's code, compiled at its first call, is entered at
+			// once from then on (planCall), as any other closure's
+			// register code makes.
+			planCall(fd)
+		}
 	}
 	if rc == nil || !rc.wide || rc.suspends || cl.realm != r.Realm || isClassConstructorKind(cl.fn.Kind) || cl.fn.HasDirectEval {
 		return cl, rc, 0, Undefined, false
@@ -634,16 +634,9 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 // regMadeClosure is closure_w's closure o, its function's code planned
 // where it has been built, as makeClosure plans: a function's code is built
 // at its first call, which plans the closure called (planCall), so that one
-// never called is never compiled (bytecode.RegLater). A leaf's is built as
-// it is made: its calls are answered by the stack form's leaf evaluators
-// (pureCall, leafCall), which build nothing, until a plan sends them to its
-// register code (regPlan, regDirect, regLeafRun).
+// never called is never compiled (bytecode.RegLater).
 func regMadeClosure(o *Object) *Object {
 	if fd := o.fn(); fd != nil {
-		if fn := fd.closure.fn; fn.Leaf != bytecode.LeafNone && fn.Reg != nil &&
-			atomic.LoadPointer(&fn.VMCode) == nil {
-			firstReg(fn)
-		}
 		if atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
 			planCall(fd)
 			// A pure body's too, which planCall leaves undecided for
@@ -1020,8 +1013,8 @@ func (r *Runtime) regOf(cl *closure) *regCode {
 	return c
 }
 
-// regStackOp is the stack form's operator of each specialised operation,
-// whose slow path is the stack form's.
+// regStackOp is the operator of each specialised operation, whose slow
+// path is the operator's.
 var regStackOp = [256]bytecode.Op{
 	bytecode.RAndI: bytecode.OpBitAnd, bytecode.ROrI: bytecode.OpBitOr, bytecode.RXorI: bytecode.OpBitXor,
 	bytecode.RShlI: bytecode.OpShl, bytecode.RShrI: bytecode.OpShr, bytecode.RUShrI: bytecode.OpUShr,
@@ -1098,7 +1091,7 @@ func (r *Runtime) regConstruct(calls []regCallCache, site uint16, callee Value, 
 		return r.construct(callee, args)
 	}
 	cl := fd.closure
-	if cl.fn.Leaf == bytecode.LeafForward {
+	if leafKind(cl) == bytecode.LeafForward {
 		// What hands its arguments on, the construction answers without a
 		// frame (leafForward); the native handler enters it with one,
 		// whose apply_args it makes too, once its objects' room is
@@ -1145,7 +1138,7 @@ func (r *Runtime) regConstruct(calls []regCallCache, site uint16, callee Value, 
 	if err := r.initInstanceElements(o, this); err != nil {
 		return Undefined, err
 	}
-	if cl.fn.Leaf != bytecode.LeafNone && cl.fn.Leaf != bytecode.LeafPure {
+	if leaf := leafKind(cl); leaf != bytecode.LeafNone && leaf != bytecode.LeafPure {
 		// A body that only stores its parameters in this, without a frame
 		// where leafCall can.
 		if _, done := r.leafCall(cl, obj, args); done {
@@ -1222,6 +1215,12 @@ func (r *Runtime) regCtorEntered(o *Object, fd *funcData) (cl *closure, rc *regC
 	cl = fd.closure
 	if rc = cl.reg; rc == nil {
 		rc = r.regOf(cl)
+		if rc != nil && rc.rc.Leaf != bytecode.LeafNone && !fd.planned {
+			// A leaf's code, compiled at its first call, is entered at
+			// once from then on (planCall), as any other closure's
+			// register code makes.
+			planCall(fd)
+		}
 	}
 	if rc == nil || !rc.wide || rc.suspends || cl.fn.HasDirectEval {
 		return nil, nil, false
@@ -1340,7 +1339,7 @@ func (r *Runtime) regAddIndex(f *frame, store uint32, obj, key, b Value, update 
 // for it at every dispatch.
 func (r *Runtime) regThrow(f *frame, c *regCode, next int, regs *[1 << 16]Value) error {
 	pc := next - 1
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	return r.throw(regs[regAt(c.code, pc).A()])
 }
 
@@ -1400,7 +1399,7 @@ func (r *Runtime) regDelete(cl *closure, obj, key Value) (Value, error) {
 // next is the pc after the read's, as regThrow's is.
 func (r *Runtime) regThrowDeadZone(f *frame, c *regCode, next int) error {
 	pc := next - 1
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	return r.throwReferenceError("cannot access %q before initialization", f.cl.fn.Locals[regNameIdx(c, pc, regAt(c.code, pc).B())].Name)
 }
 
@@ -1408,10 +1407,10 @@ func (r *Runtime) regThrowDeadZone(f *frame, c *regCode, next int) error {
 // layout of the global object the site found the slot in noted,
 // for the loop's check.
 func (r *Runtime) regGetGlobal(f *frame, cl *closure, c *regCode, pc int, w bytecode.RInstr) (Value, error) {
-	in := bytecode.Instr{Op: bytecode.OpGetGlobal, A: regNameIdx(c, pc, w.B()), B: uint32(w.C())}
-	v, err := r.getGlobalAt(f, cl, in)
+	at := regNameIdx(c, pc, w.B())
+	v, err := r.getGlobalAt(f, cl, at, uint32(w.C()))
 	if err == nil {
-		if name := cl.names[in.A]; r.lexShadows(name) {
+		if name := cl.names[at]; r.lexShadows(name) {
 			r.regNoteGlobalLex(f, cl, w.C(), name, false)
 		} else {
 			r.regNoteGlobal(cl, w.C(), name, false)
@@ -1422,16 +1421,15 @@ func (r *Runtime) regGetGlobal(f *frame, cl *closure, c *regCode, pc int, w byte
 
 // regSetGlobal is set_global's, or set_global_strict's, slow path.
 func (r *Runtime) regSetGlobal(f *frame, cl *closure, c *regCode, pc int, w bytecode.RInstr, v Value) error {
-	in := bytecode.Instr{Op: bytecode.OpSetGlobal, A: regNameIdx(c, pc, w.B()), B: uint32(w.C())}
+	at := regNameIdx(c, pc, w.B())
 	var err error
 	if w.X() != 0 {
-		in.Op = bytecode.OpSetGlobalStrict
-		err = r.setGlobalStrict(f, cl, in, v)
+		err = r.setGlobalStrict(f, cl, at, uint32(w.C()), v)
 	} else {
-		err = r.setGlobalIn(f, cl, in, v)
+		err = r.setGlobalIn(f, cl, at, uint32(w.C()), v)
 	}
 	if err == nil {
-		if name := cl.names[in.A]; r.lexShadows(name) {
+		if name := cl.names[at]; r.lexShadows(name) {
 			r.regNoteGlobalLex(f, cl, w.C(), name, true)
 		} else {
 			r.regNoteGlobal(cl, w.C(), name, true)

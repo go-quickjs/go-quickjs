@@ -68,6 +68,9 @@ type programSites struct {
 	// keys (zzz_literalkeys.go), or one of the program's.
 	at    []uint32
 	roots []*shape
+	// keys is the hash of each literal's keys, 0 where it says none
+	// (keysOf).
+	keys []uint64
 	// from is the realm's roots they are of, nil for none: those the realm
 	// has let go, which would otherwise be kept, are not asked for again.
 	from *literalRoots
@@ -168,7 +171,7 @@ func keyProgramSites[_ any](r *Runtime, p *programSites, cl *closure, at, fn *in
 	f := p.fns[*fn]
 	*fn++
 	for range f.sites {
-		if keys := keysOf[struct{}](cl.fn, p.at[*at]); keys != 0 {
+		if keys := p.keys[*at]; keys != 0 {
 			p.roots[*at] = rootOfKeys[struct{}](r, keys)
 		}
 		*at++
@@ -183,16 +186,11 @@ func keyProgramSites[_ any](r *Runtime, p *programSites, cl *closure, at, fn *in
 // function with no literal in it or in them.
 func listSites[_ any](p *programSites, fn *bytecode.Function, constant int) bool {
 	at, self := len(p.at), len(p.fns)
-	for i := range fn.Code {
-		if in := &fn.Code[i]; in.Op == bytecode.OpNewObject {
-			p.at = append(p.at, in.B)
-		}
-	}
 	if rc := fn.RegCompiled(); rc != nil {
-		// The register code's literals have sites of their own.
-		for _, w := range rc.Code {
+		for pc, w := range rc.Code {
 			if op := w.Op(); op == bytecode.RNewObject || op == bytecode.RNewObjectLit {
 				p.at = append(p.at, uint32(w.C()))
+				p.keys = append(p.keys, keysOf[struct{}](rc, pc))
 			}
 		}
 	}

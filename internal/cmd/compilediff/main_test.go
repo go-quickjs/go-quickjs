@@ -66,11 +66,11 @@ func TestOutputIsWhole(t *testing.T) {
 	}
 	for _, want := range []string{
 		"=== root/a.js mode script variant 0\n", "=== root/a.js mode debug variant 0\n",
-		"function main/0 sum\n", "debug_stmt", " @", "const ", "lines 0:0 1:1 2:1 3:1 ",
+		"function main/0 sum\n", " debug r0", " @", "const ", "lines 0:0 1:1 2:1 3:1 ",
 		"Debug: & {",
 		// The register code of the arrow, compiled as its first call
 		// would, an instruction a line.
-		"\nReg: <nil>\nr    0 ", " get_upval ", "\nreg SrcPC: [",
+		"\nReg: <nil>\nr    0 ", " get_upval ", "\nreg Lines: [",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in\n%s", want, got)
@@ -122,9 +122,9 @@ func TestRegOutputIsWhole(t *testing.T) {
 			switch f.Kind() {
 			case reflect.Slice:
 				f.Set(reflect.Append(f, reflect.New(f.Type().Elem()).Elem()))
-			case reflect.Int:
+			case reflect.Int, reflect.Int32:
 				f.SetInt(f.Int() + 1)
-			case reflect.Uint32:
+			case reflect.Uint8, reflect.Uint32:
 				f.SetUint(f.Uint() + 1)
 			case reflect.Bool:
 				f.SetBool(!f.Bool())
@@ -139,9 +139,9 @@ func TestRegOutputIsWhole(t *testing.T) {
 		c[len(c)-1] ^= 1 << 32
 		f.Set(reflect.ValueOf(c))
 	})
-	plant("SrcPC", func(f reflect.Value) {
-		c := slices.Clone(rc.SrcPC)
-		c[0]++
+	plant("Lines", func(f reflect.Value) {
+		c := slices.Clone(rc.Lines)
+		c[0].Pos++
 		f.Set(reflect.ValueOf(c))
 	})
 	if write(res) != base {

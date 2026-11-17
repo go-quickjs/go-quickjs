@@ -246,8 +246,11 @@ func TestJITCompileEstimateLinear(t *testing.T) {
 		{"many3000", manySlotsHelpers + manySlotsSource("many3000", 3000), func(*Runtime) []Value { return []Value{Float(1), Float(1)} }},
 		{"blocks1000", linearBlocksSource("blocks1000", 1000), func(*Runtime) []Value { return []Value{Float(3), Float(2)} }},
 	}
+	// The old estimate, of a slot of each instruction's for each of the
+	// function's, at least 256.
 	old := func(fn *bytecode.Function) int64 {
-		return int64(len(fn.Code))*int64(max(fn.LocalCount+fn.MaxStack+len(fn.Upvalues), 256))*8 + 32<<10
+		rc := firstReg(fn).rc
+		return int64(len(rc.Code))*int64(max(rc.NumRegs+len(fn.Upvalues), 256))*8 + 32<<10
 	}
 	for _, sh := range shapes {
 		t.Run(sh.name, func(t *testing.T) {
@@ -260,7 +263,7 @@ func TestJITCompileEstimateLinear(t *testing.T) {
 			cl := fn.Object().fn().closure
 			est := jitCompileBytes(cl.fn)
 			if o := old(cl.fn); o <= int64(jitCacheBytes) {
-				t.Fatalf("%d instructions of %d slots: the old estimate, %d, compiled it already", len(cl.fn.Code), cl.fn.LocalCount, o)
+				t.Fatalf("%d instructions of %d slots: the old estimate, %d, compiled it already", len(firstReg(cl.fn).rc.Code), firstReg(cl.fn).rc.NumRegs, o)
 			}
 			res := r.RegNativeCall(fn, sh.args(r), false)
 			f1, _ := rts[1].GetProp(Obj(rts[1].Global()), rts[1].Intern(sh.name))
@@ -276,7 +279,7 @@ func TestJITCompileEstimateLinear(t *testing.T) {
 			if l := r.jit.regLowered[e.key]; l != nil {
 				held += int64(l.bytes)
 			}
-			t.Logf("%d instructions, %d slots: estimate %d KB, held %d KB; the old estimate %d KB", len(cl.fn.Code), cl.fn.LocalCount+cl.fn.MaxStack, est>>10, held>>10, old(cl.fn)>>10)
+			t.Logf("%d instructions, %d slots: estimate %d KB, held %d KB; the old estimate %d KB", len(firstReg(cl.fn).rc.Code), firstReg(cl.fn).rc.NumRegs, est>>10, held>>10, old(cl.fn)>>10)
 			if est < held || est > 8*held {
 				t.Errorf("estimate %d bytes for a compile that holds %d", est, held)
 			}

@@ -442,7 +442,7 @@ func TestRegNativeCallHConvention(t *testing.T) {
 			bad = append(bad, "no state ("+nativeCallRegs[3]+")")
 		case regs != st.regs:
 			bad = append(bad, "the registers ("+nativeCallRegs[0]+") are not the state's")
-		case pc < 0 || pc >= len(st.c.src):
+		case pc < 0 || pc >= len(st.c.rc.Code):
 			bad = append(bad, fmt.Sprintf("pc (%s) %d out of the code", nativeCallRegs[2], pc))
 		case regAt(st.c.code, pc) != w || w.Op() != op:
 			bad = append(bad, fmt.Sprintf("the instruction (%s) %#x is not the code's at pc %d", nativeCallRegs[1], uint64(w), pc))

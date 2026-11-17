@@ -266,9 +266,20 @@ func (d *writer) fields(path string, fn *bytecode.Function) {
 		f := functionType.Field(i)
 		switch f.Name {
 		case "Code":
-			for pc, in := range fn.Code {
-				pos, ok := fn.PosAt(uint32(pc))
-				fmt.Fprintf(d.w, "%6d %s %d %d @%d %v\n", pc, in.Op, in.A, in.B, pos, ok)
+			// By reflection, so that the tool builds over a revision
+			// whose functions have no stack form; each instruction's
+			// position from the stack form's Lines.
+			code, lines := v.Field(i), v.FieldByName("Lines")
+			for pc := range code.Len() {
+				in := code.Index(pc)
+				pos, ok := int64(0), false
+				for j := lines.Len() - 1; j >= 0; j-- {
+					if l := lines.Index(j); l.FieldByName("PC").Uint() <= uint64(pc) {
+						pos, ok = l.FieldByName("Pos").Int(), true
+						break
+					}
+				}
+				fmt.Fprintf(d.w, "%6d %v %d %d @%d %v\n", pc, in.Field(0).Interface(), in.Field(1).Uint(), in.Field(2).Uint(), pos, ok)
 			}
 			continue
 		case "Reg":

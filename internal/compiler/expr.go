@@ -11,24 +11,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/fold"
 )
 
-// compileExprForEffect emits code for an expression whose value is discarded:
-// a statement, or an operand of a comma expression that is not the last.
-//
-// What it saves is the instruction that discards the value, which in a loop
-// body is one per iteration. An assignment to a local stores the value and
-// leaves a copy for that instruction to drop, and storing and popping is a
-// single instruction; a postfix update keeps the value it had before, which is
-// a copy nothing reads.
-// takesItsValue reports whether a store pops the value it stores, so that a
-// copy of it made for a drop after it need not be.
-func takesItsValue(op bytecode.Op) bool {
-	switch op {
-	case bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck:
-		return true
-	}
-	return false
-}
-
+// compileExprForEffect compiles an expression whose value is discarded: a
+// statement, or an operand of a comma expression that is not the last. A
+// postfix update is compiled as the prefix one, whose value is not kept.
 func (c *compiler) compileExprForEffect(e ast.Expr) {
 	// What is evaluated for its effect alone hands no name on.
 	c.traceName, c.traceIn = "", ""
@@ -71,24 +56,12 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 		// append stores, and leaves nothing for a drop.
 		if n.Op != "??" && c.ownedAppend(n.Right) {
 			c.compileExpr(n.Left)
-			op := bytecode.OpJumpIfFalse
-			if n.Op == "||" {
-				op = bytecode.OpJumpIfTrue
-			}
-			skip := c.emitJump(op)
 			c.compileOwnedAppend(n.Right.(*ast.Assign))
-			c.patchJump(skip)
 			return
 		}
 		if n.Op != "??" && c.localAppend(n.Right) {
 			c.compileExpr(n.Left)
-			op := bytecode.OpJumpIfFalse
-			if n.Op == "||" {
-				op = bytecode.OpJumpIfTrue
-			}
-			skip := c.emitJump(op)
 			c.compileLocalAppend(n.Right.(*ast.Assign))
-			c.patchJump(skip)
 			return
 		}
 
@@ -122,157 +95,48 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 				// read rather than one it stored, so something still has to
 				// discard it.
 			default:
-				c.compileMemberUpdate(m, n.Op, func() {
+				c.compileMemberUpdate(m, func() {
 					c.compileExpr(n.Value)
-				}, int(n.Start), false)
+				})
 				return
 			}
 		}
 	}
 	c.compileExpr(e)
-
-	// The store may only become a store-and-pop if nothing jumps to where the
-	// drop would have been: a short-circuiting assignment reaches that point
-	// without having stored anything, with its value still on the stack.
-	if n := len(c.fn.Code); n > 0 && !c.isTarget(n) {
-		if last := &c.fn.Code[n-1]; last.Op == bytecode.OpPutLocal {
-			last.Op = bytecode.OpSetLocal
-			c.adjustStack(bytecode.OpDrop, 0, 0)
-			return
-		}
-		// A store to a global or an upvalue copies the value first, for the
-		// drop; the store takes the value itself instead. Neither the copy nor
-		// the drop can throw, so where a position is recorded changes nothing.
-		if n >= 2 && !c.isTarget(n-1) && takesItsValue(c.fn.Code[n-1].Op) &&
-			c.fn.Code[n-2].Op == bytecode.OpDup {
-			c.fn.Code[n-2] = c.fn.Code[n-1]
-			c.fn.Code = c.fn.Code[:n-1]
-			for i := len(c.fn.Lines) - 1; i >= 0 && c.fn.Lines[i].PC == uint32(n-1); i-- {
-				c.fn.Lines[i].PC = uint32(n - 2)
-			}
-			c.adjustStack(bytecode.OpDrop, 0, 0)
-			return
-		}
-	}
-	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// emitTestJumpIfFalse compiles a condition and emits the jumps taken when it
-// is false, returning them for patching: control falls through when it is
-// true.
-func (c *compiler) emitTestJumpIfFalse(test ast.Expr) []int {
-	return c.emitTestJumps(test, false, c.pool.jumpList())
-}
-
-// emitTestJumps compiles a condition for a branch, appending to jumps the
-// jumps taken when the condition is jumpIf, and returns them for patching:
-// control falls through otherwise. Only the condition's truth is wanted, not
-// its value, which is what lets it be compiled as branches:
-//
-//   - A comparison and the branch that reads it are one instruction rather
-//     than two, which in a loop is one fewer dispatch per iteration. An
-//     equality is negated by its opposite. An ordering is not, since both
-//     a < b and a >= b are false when either is NaN: to jump when it is
-//     true, it branches over an unconditional jump.
-//   - !x branches on x the other way, without the negation.
-//   - x && y and x || y branch on each operand in turn, straight to where
-//     the whole condition sends them, rather than producing a value for one
-//     more test to read.
-//   - A constant needs no test: the branch is always or never taken.
-func (c *compiler) emitTestJumps(test ast.Expr, jumpIf bool, jumps []int) []int {
+// compileTest compiles a condition for a branch, of which only the truth
+// is wanted: a constant -- a literal, or an operator that folds, !0
+// (fold.Test) -- is not compiled; the operand of !x, and both of x && y and
+// x || y, are compiled as tests; a comparison's as values.
+func (c *compiler) compileTest(test ast.Expr) {
 	c.enter(test.Pos())
 	defer c.leave()
-	// A constant -- a literal, or an operator that folds, !0 -- is true
-	// or false as the compile knows (fold.Test).
-	if truthy, ok := fold.Test(test); ok {
-		if truthy == jumpIf {
-			jumps = append(jumps, c.emitJump(bytecode.OpJump))
-		}
-		return jumps
+	if _, ok := fold.Test(test); ok {
+		return
 	}
 	switch n := test.(type) {
-	case *ast.BoolLit:
-		if n.Value == jumpIf {
-			jumps = append(jumps, c.emitJump(bytecode.OpJump))
-		}
-		return jumps
-	case *ast.NumberLit:
-		if truthy := n.Value != 0 && n.Value == n.Value; truthy == jumpIf {
-			jumps = append(jumps, c.emitJump(bytecode.OpJump))
-		}
-		return jumps
+	case *ast.BoolLit, *ast.NumberLit:
+		return
 	case *ast.Unary:
 		if n.Op == "!" {
-			return c.emitTestJumps(n.Operand, !jumpIf, jumps)
+			c.compileTest(n.Operand)
+			return
 		}
 	case *ast.Logical:
-		// x && y is false where either is, and x || y true where either is:
-		// both operands jump where the whole does. Otherwise the first
-		// operand decides only one way, and skips the second when it does.
-		if n.Op == "&&" && !jumpIf || n.Op == "||" && jumpIf {
-			jumps = c.emitTestJumps(n.Left, jumpIf, jumps)
-			return c.emitTestJumps(n.Right, jumpIf, jumps)
-		}
 		if n.Op == "&&" || n.Op == "||" {
-			skip := c.emitTestJumps(n.Left, !jumpIf, c.pool.jumpList())
-			jumps = c.emitTestJumps(n.Right, jumpIf, jumps)
-			c.patchTestJumps(skip)
-			return jumps
+			c.compileTest(n.Left)
+			c.compileTest(n.Right)
+			return
 		}
 	case *ast.Binary:
-		if op, fusable := comparisonOpcode(n.Op); fusable {
+		if _, fusable := comparisonOpcode(n.Op); fusable {
 			c.compileExpr(n.Left)
 			c.compileExpr(n.Right)
-			c.recordLine(n.Start)
-			if !jumpIf {
-				return append(jumps, c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op)))
-			}
-			if neg, ok := negatedEquality(op); ok {
-				return append(jumps, c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(neg)))
-			}
-			// An ordering branches over the jump: when it is false, which is
-			// most of the time for a loop's break, that is one dispatch.
-			skip := c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op))
-			jumps = append(jumps, c.emitJump(bytecode.OpJump))
-			c.patchJump(skip)
-			return jumps
+			return
 		}
 	}
 	c.compileExpr(test)
-	if jumpIf {
-		return append(jumps, c.emitJump(bytecode.OpJumpIfTrue))
-	}
-	return append(jumps, c.emitJump(bytecode.OpJumpIfFalse))
-}
-
-// negatedEquality is the comparison true exactly where an equality is false,
-// and whether op is an equality: an ordering has none.
-func negatedEquality(op bytecode.Op) (bytecode.Op, bool) {
-	switch op {
-	case bytecode.OpEq:
-		return bytecode.OpNe, true
-	case bytecode.OpNe:
-		return bytecode.OpEq, true
-	case bytecode.OpStrictEq:
-		return bytecode.OpStrictNe, true
-	case bytecode.OpStrictNe:
-		return bytecode.OpStrictEq, true
-	}
-	return op, false
-}
-
-// patchJumps points jumps emitted earlier at the current position.
-func (c *compiler) patchJumps(jumps []int) {
-	for _, j := range jumps {
-		c.patchJump(j)
-	}
-}
-
-// patchTestJumps is patchJumps of a condition's list, which it then gives
-// back (jumpList).
-func (c *compiler) patchTestJumps(jumps []int) {
-	c.patchJumps(jumps)
-	c.pool.putJumps(jumps)
 }
 
 // comparisonOpcode is the opcode of a comparison operator, and whether the
@@ -300,7 +164,7 @@ func comparisonOpcode(op string) (bytecode.Op, bool) {
 	return 0, false
 }
 
-// compileExpr emits code leaving the expression's value on the stack.
+// compileExpr walks an expression.
 func (c *compiler) compileExpr(e ast.Expr) {
 	c.compileExprNamed(e, "")
 }
@@ -316,55 +180,28 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 
 	switch n := e.(type) {
 	case *ast.NumberLit:
-		c.compileNumber(n.Value)
 
 	case *ast.StringLit:
-		if n.Value == "" {
-			c.emit(bytecode.OpPushEmptyString, 0, 0)
-		} else {
-			c.emit(bytecode.OpPushConst, c.stringConst(n.Value), 0)
-		}
 
 	case *ast.BoolLit:
-		if n.Value {
-			c.emit(bytecode.OpPushTrue, 0, 0)
-		} else {
-			c.emit(bytecode.OpPushFalse, 0, 0)
-		}
 
 	case *ast.NullLit:
-		c.emit(bytecode.OpPushNull, 0, 0)
 
 	case *ast.This:
-		if c.thisIsValue() {
-			c.emit(bytecode.OpPushThis, 0, 0)
-		} else {
-			// A derived constructor's this, which super() binds: a read
-			// before it throws, at the read.
-			c.emitAt(n.Start, bytecode.OpPushThis, 0, 0)
-		}
 
 	case *ast.NewTarget:
 		if c.inClassFieldInit() {
 			// A field initializer is a function of its own, and nothing
 			// constructs it.
-			c.emit(bytecode.OpPushUndef, 0, 0)
 			break
 		}
-		c.emit(bytecode.OpNewTarget, 0, 0)
+		c.facts.reads = true
 
 	case *ast.ImportMeta:
-		c.emit(bytecode.OpImportMeta, 0, 0)
 
 	case *ast.BigIntLit:
-		c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{
-			Kind: bytecode.ConstBigInt, Str: n.Raw,
-		}), 0)
 
 	case *ast.RegexpLit:
-		c.emit(bytecode.OpNewRegExp, c.addConst(bytecode.Constant{
-			Kind: bytecode.ConstRegExp, Str: n.Pattern, Flags: n.Flags,
-		}), 0)
 
 	case *ast.Ident:
 		c.compileIdentRead(n)
@@ -400,9 +237,8 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		// which is the only way to tell one of that class's instances from a
 		// lookalike without a try/catch around a private read.
 		if pn, ok := n.Left.(*ast.PrivateName); ok && n.Op == "in" {
-			name, ref := c.privateName(pn, n.Start)
+			c.privateName(pn, n.Start)
 			c.compileExpr(n.Right)
-			c.emitAt(n.Start, bytecode.OpPrivateIn, name, ref)
 			break
 		}
 		if n.Op == "+" && c.compileStringChain(n) {
@@ -410,7 +246,6 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		}
 		c.compileExpr(n.Left)
 		c.compileExpr(n.Right)
-		c.emitAt(n.Start, binaryOpcode(n.Op), 0, 0)
 
 	case *ast.Logical:
 		c.compileLogical(n)
@@ -442,7 +277,7 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		c.compileNew(n)
 
 	case *ast.OptionalChain:
-		c.compileOptionalChain(n)
+		c.compileChain(n, false)
 
 	case *ast.Yield:
 		c.compileYield(n)
@@ -462,44 +297,6 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	}
 }
 
-// compileNumber emits the cheapest push for a numeric literal.
-func (c *compiler) compileNumber(v float64) {
-	// Small integers are encoded in the instruction, avoiding a constant-pool
-	// entry and the indirection to read it.
-	if i := int32(v); float64(i) == v && !isNegZero(v) {
-		c.emit(bytecode.OpPushInt, uint32(i), 0)
-		return
-	}
-	c.emit(bytecode.OpPushConst, c.numberConst(v), 0)
-}
-
-// compileConst pushes v, a value the compile knows (fold), as the
-// literal of it would be.
-func (c *compiler) compileConst(v fold.Const) {
-	switch v.Kind {
-	case fold.Number:
-		c.compileNumber(v.Num)
-	case fold.String:
-		if v.Str == "" {
-			c.emit(bytecode.OpPushEmptyString, 0, 0)
-		} else {
-			c.emit(bytecode.OpPushConst, c.stringConst(v.Str), 0)
-		}
-	case fold.Bool:
-		if v.Bool {
-			c.emit(bytecode.OpPushTrue, 0, 0)
-		} else {
-			c.emit(bytecode.OpPushFalse, 0, 0)
-		}
-	case fold.Null:
-		c.emit(bytecode.OpPushNull, 0, 0)
-	case fold.BigInt:
-		c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{Kind: bytecode.ConstBigInt, Str: v.Str}), 0)
-	default:
-		c.emit(bytecode.OpPushUndef, 0, 0)
-	}
-}
-
 // foldsVoid reports whether void's operand e is a value the compile
 // knows, which runs nothing and need not be evaluated: a literal, as void
 // 0 always was, or an operator that folds (fold).
@@ -512,17 +309,12 @@ func foldsVoid(e ast.Expr) bool {
 	return ok
 }
 
-// isNegZero reports whether v is negative zero, which must not take the integer
-// path because it would be re-materialized as +0.
-func isNegZero(v float64) bool { return v == 0 && 1/v < 0 }
-
-// compileIdentRead emits a read of a variable.
+// compileIdentRead walks a read of a variable, recording its resolution.
 func (c *compiler) compileIdentRead(n *ast.Ident) {
 	// Inside a `with` body the object may answer instead of the binding.
 	probe := c.withProbe(bytecode.OpWithGet, n.Name)
 	c.regWith(n, probe)
 	c.compileIdentReadStatic(n)
-	c.patchWithProbe(probe)
 }
 
 // compileIdentReadStatic reads a name from the binding it resolves to, without
@@ -538,11 +330,12 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	if l, ok := c.resolveLocal(n.Name); ok {
 		if l.initialized {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
-			c.emit(bytecode.OpGetLocal, l.slot, 0)
+			if c.lazyArguments && l.slot == c.lazyArgumentsSlot {
+				c.noteLazyArguments(n)
+			}
 		} else {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
 			// A read in the dead zone throws at the name.
-			c.emitAt(int(n.Start), bytecode.OpGetLocalCheck, l.slot, 0)
 		}
 		c.compiledRead(l, n)
 		return
@@ -550,10 +343,8 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	if idx, ok := c.resolveUpvalue(n.Name); ok {
 		if c.fn.Upvalues[idx].TDZ {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResUpvalCheck, Index: idx})
-			c.emitAt(int(n.Start), bytecode.OpGetUpvalueCheck, idx, 0)
 		} else {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
-			c.emit(bytecode.OpGetUpvalue, idx, 0)
 		}
 		if l, _ := c.enclosingBinding(n.Name); l != nil {
 			c.compiledRead(l, n)
@@ -563,7 +354,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	// A named function expression's own name refers to the running closure.
 	if n.Name == c.selfName {
 		c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResCallee})
-		c.emit(bytecode.OpPushCallee, 0, 0)
+		c.facts.callee = true
 		return
 	}
 	if n.Name == "undefined" && c.withDepth == 0 && c.opts.EvalScope == nil && c.opts.EvalWithDepth == 0 &&
@@ -574,14 +365,12 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 		// eval can stand in front of it, it is undefined: pushed, rather
 		// than read from the global object at every x === undefined.
 		c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLiteral})
-		c.emit(bytecode.OpPushUndef, 0, 0)
 		return
 	}
 	// A function that uses `arguments` binds it to a slot in its prologue, so
 	// the searches above will have found it. Reaching here means the reference
 	// is in a position with no arguments object at all, such as the top level.
 	c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResGlobal})
-	c.emitAt(int(n.Start), bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
 }
 
 func (c *compiler) compileTemplate(n *ast.TemplateLit) {
@@ -597,27 +386,21 @@ func (c *compiler) compileTemplate(n *ast.TemplateLit) {
 			return
 		}
 		if q.Cooked != "" || (i == 0 && len(n.Quasis) == 1) {
-			c.emit(bytecode.OpPushConst, c.stringConst(q.Cooked), 0)
 			parts++
 		}
 		if i < len(n.Exprs) {
 			c.compileExpr(n.Exprs[i])
-			c.emit(bytecode.OpToString, 0, 0)
 			parts++
 		}
 	}
 	if parts == 0 {
-		c.emit(bytecode.OpPushEmptyString, 0, 0)
 		return
-	}
-	if parts > 1 {
-		c.emit(bytecode.OpConcat, uint32(parts), 0)
 	}
 }
 
 // maxChainParts is the most parts compileStringChain joins in one concat. A
 // longer chain is joined a run at a time, each run's string the first part
-// of the next, so that its operands never pile up on the stack.
+// of the next.
 const maxChainParts = 32
 
 // compileStringChain compiles a + b + c + ..., once a string literal among
@@ -696,20 +479,17 @@ func (c *compiler) compileStringChain(n *ast.Binary) bool {
 	part := func() {
 		parts++
 		if parts == maxChainParts {
-			c.emitAt(n.Start, bytecode.OpConcat, uint32(parts), 0)
 			parts = 1
 		}
 	}
 	if first > 0 {
 		// What comes before the literal, converted where the literal was
 		// added to it.
-		c.emit(bytecode.OpPushEmptyString, 0, 0)
 		if first == 1 {
 			c.compileExpr(operand(0))
 		} else {
 			c.compileExpr(adds[first-2])
 		}
-		c.emitAt(adds[first-1].Start, bytecode.OpAdd, 0, 0)
 		part()
 	}
 	for i := first; i <= len(adds); i++ {
@@ -722,14 +502,9 @@ func (c *compiler) compileStringChain(n *ast.Binary) bool {
 		case *ast.TemplateLit, *ast.NumberLit:
 			c.compileExpr(e)
 		default:
-			c.emit(bytecode.OpPushEmptyString, 0, 0)
 			c.compileExpr(e)
-			c.emitAt(adds[i-1].Start, bytecode.OpAdd, 0, 0)
 		}
 		part()
-	}
-	if parts > 1 {
-		c.emitAt(n.Start, bytecode.OpConcat, uint32(parts), 0)
 	}
 	return true
 }
@@ -757,60 +532,43 @@ func (c *compiler) compileTaggedTemplate(n *ast.TaggedTemplate) {
 	// so that String.raw`x` has String as its `this`.
 	if m, ok := n.Tag.(*ast.Member); ok && !m.Optional {
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
-			c.emit(bytecode.OpPushThis, 0, 0)
 			c.compileSuperMemberGet(m)
 		} else {
 			c.compileExpr(m.Object)
 			switch {
 			case m.Computed:
 				c.compileExpr(m.Property)
-				c.emit(bytecode.OpGetIndexThis, 0, 0)
 			default:
 				if pn, private := m.Property.(*ast.PrivateName); private {
-					// The receiver stays beneath the method, as
-					// OpGetPropThis leaves it.
-					name, ref := c.privateName(pn, int(m.Start))
-					c.emit(bytecode.OpDup, 0, 0)
-					c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
+					c.privateName(pn, int(m.Start))
 					break
 				}
-				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
 		}
-		argc := c.compileTemplateArguments(idx, n.Quasi)
-		c.emitAt(n.Start, c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
+		c.compileTemplateArguments(idx, n.Quasi)
+		c.noteTail(n)
 		return
 	}
 
 	c.compileExpr(n.Tag)
-	argc := c.compileTemplateArguments(idx, n.Quasi)
-	c.emitAt(n.Start, c.callOp(n, bytecode.OpCall), uint32(argc), 0)
+	c.compileTemplateArguments(idx, n.Quasi)
+	c.noteTail(n)
 }
 
-// callOp is the instruction a call emits: op itself, or its tail form when
-// the call is the one in tail position.
-func (c *compiler) callOp(n ast.Expr, op bytecode.Op) bytecode.Op {
+// noteTail notes n, a call, as a call in tail position where it is the
+// one compileTailExpr is compiling (tailCall): the function's frame is
+// given up for it once the stack is deep (bytecode.Function's HasTailCall,
+// regcomp.Record's Tails).
+func (c *compiler) noteTail(n ast.Expr) {
 	if c.tailCall != n {
-		return op
-	}
-	switch op {
-	case bytecode.OpCall:
-		op = bytecode.OpTailCall
-	case bytecode.OpCallMethod:
-		op = bytecode.OpTailCallMethod
-	case bytecode.OpDirectEval:
-		op = bytecode.OpTailDirectEval
-	default:
-		return op
+		return
 	}
 	c.fn.HasTailCall = true
 	c.reg.NoteTail(n)
-	return op
 }
 
-// compileTemplateArguments pushes the strings object and the substitutions.
+// compileTemplateArguments walks a tagged template's substitutions.
 func (c *compiler) compileTemplateArguments(idx uint32, q *ast.TemplateLit) int {
-	c.emit(bytecode.OpTemplateObject, idx, 0)
 	for _, e := range q.Exprs {
 		c.compileExpr(e)
 	}
@@ -839,38 +597,11 @@ func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
 	return idx
 }
 
-// constantElems reports whether the code from start is n instructions, each
-// the push of a constant an array literal's arrays may share: a number, a
-// string, true, false, null or undefined -- not a BigInt, nor a hole.
-func (c *compiler) constantElems(start, n int) bool {
-	code := c.fn.Code[start:]
-	if n == 0 || len(code) != n {
-		return false
-	}
-	for _, in := range code {
-		switch in.Op {
-		case bytecode.OpPushInt, bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushNull,
-			bytecode.OpPushUndef, bytecode.OpPushEmptyString:
-		case bytecode.OpPushConst:
-			if k := c.fn.Constants[in.A].Kind; k != bytecode.ConstNumber && k != bytecode.ConstString {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 	trace := c.traceIn
-	// Without spread the whole literal is built in one instruction from
-	// values already on the stack. A hole is the uninitialized value, which
-	// is what an array's storage holds for one: it advances the length
-	// without making a property, which is what makes `1 in [1,,3]` false
-	// and what the iteration methods skip. As one instruction a literal
-	// with holes is the JIT's to make too (ir.ArrayLiteral), where a push
-	// of each element was not.
+	// A literal without spread is made in one operation, a hole the
+	// uninitialized value, which advances the length without making a
+	// property: `1 in [1,,3]` is false, and the iteration methods skip it.
 	simple := true
 	for _, el := range n.Elements {
 		if _, isSpread := el.(*ast.Spread); isSpread {
@@ -879,45 +610,29 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 		}
 	}
 	if simple {
-		start := len(c.fn.Code)
 		for _, el := range n.Elements {
 			if el == nil {
-				c.emit(bytecode.OpPushUninitialized, 0, 0)
 				continue
 			}
 			c.traceName = trace
 			c.compileExpr(el)
 		}
-		// A literal of constants has a cache site, where the VM keeps the
-		// constants that its arrays share until one is written (the VM's
-		// objSharedElems).
-		var site uint32
-		if c.constantElems(start, len(n.Elements)) {
-			c.fn.PropSites++
-			site = c.fn.PropSites
-		}
-		c.emit(bytecode.OpNewArray, uint32(len(n.Elements)), site)
 		return
 	}
 
-	c.emit(bytecode.OpNewArray, 0, 0)
 	for _, el := range n.Elements {
 		switch el {
 		case nil:
 			// A hole advances the length without creating a property, which is
 			// what makes `1 in [1,,3]` false and what the iteration methods
 			// skip.
-			c.emit(bytecode.OpPushUninitialized, 0, 0)
-			c.emit(bytecode.OpArrayPush, 0, 0)
 		default:
 			if sp, ok := el.(*ast.Spread); ok {
 				c.compileExpr(sp.Arg)
-				c.emit(bytecode.OpArraySpread, 0, 0)
 				continue
 			}
 			c.traceName = trace
 			c.compileExpr(el)
-			c.emit(bytecode.OpArrayPush, 0, 0)
 		}
 	}
 }
@@ -940,42 +655,25 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			fields++
 		}
 	}
-	c.emit(bytecode.OpNewObject, uint32(fields), 0)
-	c.noteLiteralKeys(n)
 	for _, p := range n.Props {
 		switch p.Kind {
 		case ast.PropSpread:
 			c.compileExpr(p.Value)
-			c.emit(bytecode.OpCopyDataProps, 0, 0)
 			continue
 		case ast.PropGet, ast.PropSet:
 			// An accessor is named after its property with a "get " or "set "
 			// prefix, which is what distinguishes the two halves in a stack
 			// trace.
-			nameKind, prefix := uint32(1), "get "
+			prefix := "get "
 			if p.Kind == ast.PropSet {
-				nameKind, prefix = 2, "set "
+				prefix = "set "
 			}
 			if p.Computed {
-				op := bytecode.OpDefineGetterIndex
-				if p.Kind == ast.PropSet {
-					op = bytecode.OpDefineSetterIndex
-				}
 				c.compileExpr(p.Key)
-				c.emit(bytecode.OpToPropertyKey, 0, 0)
 				c.compileExpr(p.Value)
-				c.emit(bytecode.OpSetFuncName, nameKind, 0)
-				c.emit(bytecode.OpSetHomeObject, 2, 0)
-				c.emit(op, 0, 0)
 				continue
 			}
-			op := bytecode.OpDefineGetter
-			if p.Kind == ast.PropSet {
-				op = bytecode.OpDefineSetter
-			}
 			c.compileExprNamed(p.Value, prefix+propKeyName(p.Key))
-			c.emit(bytecode.OpSetHomeObject, 1, 0)
-			c.emit(op, c.nameIdx(propKeyName(p.Key)), 0)
 			continue
 		}
 
@@ -983,26 +681,12 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 		// property, unless it is a shorthand or a method.
 		if !p.Computed && !p.Shorthand && !p.Method && propKeyName(p.Key) == "__proto__" {
 			c.compileExpr(p.Value)
-			c.emit(bytecode.OpSetProtoOf, 0, 0)
 			continue
 		}
 
 		if p.Computed {
 			c.compileExpr(p.Key)
-			c.emit(bytecode.OpToPropertyKey, 0, 0)
 			c.compileExpr(p.Value)
-			// The name comes from the key, which is only known now. A value
-			// that is not an anonymous definition keeps whatever name it has:
-			// `{[k]: f}` must not rename f.
-			if p.Method || isAnonymousFnDef(p.Value) {
-				c.emit(bytecode.OpSetFuncName, 0, 0)
-			}
-			if p.Method {
-				// A shorthand method may use super, which resolves against the
-				// literal it is defined in.
-				c.emit(bytecode.OpSetHomeObject, 2, 0)
-			}
-			c.emit(bytecode.OpDefineIndex, 0, 0)
 			continue
 		}
 		key := propKeyName(p.Key)
@@ -1012,51 +696,7 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			}
 		}
 		c.compileExprNamed(p.Value, key)
-		if p.Method {
-			// A shorthand method may use super, which resolves against the
-			// literal it is defined in. A plain `k: function(){}` may not, and
-			// deliberately does not get a home object.
-			c.emit(bytecode.OpSetHomeObject, 1, 0)
-		}
-		c.emit(bytecode.OpDefineField, c.nameIdx(key), 0)
 	}
-}
-
-// noteLiteralKeys records the keys of n, the object literal whose site is the
-// last made, if it has nothing else (bytecode.Function.LiteralKeys), by their
-// hash (bytecode.HashLiteralKeys).
-func (c *compiler) noteLiteralKeys(n *ast.ObjectLit) {
-	if len(n.Props) == 0 || len(n.Props) > bytecode.MaxLiteralKeys {
-		return
-	}
-	var keys [bytecode.MaxLiteralKeys]string
-	for i, p := range n.Props {
-		if p.Computed || p.Kind == ast.PropSpread || p.Kind == ast.PropGet || p.Kind == ast.PropSet {
-			return
-		}
-		key := propKeyName(p.Key)
-		if key == "__proto__" || slices.Contains(keys[:i], key) {
-			return
-		}
-		keys[i] = key
-	}
-	h := bytecode.HashLiteralKeys(keys[:len(n.Props)])
-	c.fn.LiteralKeys = append(c.fn.LiteralKeys, bytecode.LiteralKeys{Site: c.fn.PropSites, Keys: h})
-}
-
-// isAnonymousFnDef reports whether an expression is an AnonymousFunctionDefinition,
-// which is what decides whether the surrounding syntax gets to name it.
-//
-// A named function keeps its own name, and an expression that merely evaluates
-// to a function is not a definition at all -- `{[k]: f}` leaves f alone.
-func isAnonymousFnDef(e ast.Expr) bool {
-	switch n := e.(type) {
-	case *ast.FuncLit:
-		return n.Name == nil
-	case *ast.ClassLit:
-		return n.Name == nil
-	}
-	return false
 }
 
 // propKeyName returns the string form of a non-computed property key.
@@ -1080,8 +720,7 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		// Of a value the compile knows -- typeof 1, !void 0; the parser
 		// has folded ! of a literal -- the literal of its value, as the
 		// register form compiles it too (fold.Value).
-		if v, ok := fold.Value(n); ok {
-			c.compileConst(v)
+		if _, ok := fold.Value(n); ok {
 			return
 		}
 	}
@@ -1097,9 +736,6 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 			// read the ordinary way.
 			if _, isLocal := c.resolveLocal(id.Name); !isLocal && id.Name != c.selfName {
 				if _, isUp := c.resolveUpvalue(id.Name); !isUp {
-					c.emit(bytecode.OpGetGlobalOpt, c.nameIdx(id.Name), 0)
-					c.emit(bytecode.OpTypeOf, 0, 0)
-					c.patchWithProbe(probe)
 					return
 				}
 			}
@@ -1107,13 +743,10 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 				// The binding past the probe, which has asked the with
 				// objects already: a second probe would ask them again.
 				c.compileIdentReadStatic(id)
-				c.emit(bytecode.OpTypeOf, 0, 0)
-				c.patchWithProbe(probe)
 				return
 			}
 		}
 		c.compileExpr(n.Operand)
-		c.emit(bytecode.OpTypeOf, 0, 0)
 
 	case "delete":
 		if ch, ok := n.Operand.(*ast.OptionalChain); ok {
@@ -1136,44 +769,34 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 				// built first, which means `this` and then the key expression
 				// -- but not the conversion of what that expression produced.
 				if m.Computed {
-					c.emit(bytecode.OpCheckThisInit, 0, 0)
 					c.compileExpr(m.Property)
-					c.emit(bytecode.OpDrop, 0, 0)
 				}
-				c.emitAt(n.Start, bytecode.OpThrowDeleteSuper, 0, 0)
 				return
 			}
 			c.compileExpr(m.Object)
 			c.compileMemberKey(m)
-			c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
 			return
 		}
 		if id, ok := n.Operand.(*ast.Ident); ok {
 			probe := c.withProbe(bytecode.OpWithDelete, id.Name)
 			c.regWith(id, probe)
-			defer c.patchWithProbe(probe)
 			// A local or captured binding cannot be deleted at all; a global
 			// can, but only if it is configurable, which a var declaration is
 			// not. The register form is told which: the binding's
 			// resolution, or a global.
 			if l, isLocal := c.resolveLocal(id.Name); isLocal {
 				c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
-				c.emit(bytecode.OpPushFalse, 0, 0)
 				return
 			}
 			if idx, isUpvalue := c.resolveUpvalue(id.Name); isUpvalue {
 				c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
-				c.emit(bytecode.OpPushFalse, 0, 0)
 				return
 			}
 			c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResGlobal})
-			c.emitAt(n.Start, bytecode.OpDeleteVar, c.nameIdx(id.Name), 0)
 			return
 		}
 		// Deleting anything else evaluates the operand and yields true.
 		c.compileExpr(n.Operand)
-		c.emit(bytecode.OpDrop, 0, 0)
-		c.emit(bytecode.OpPushTrue, 0, 0)
 
 	case "void":
 		if foldsVoid(n.Operand) {
@@ -1181,67 +804,51 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 			// that folds, evaluates to nothing that could be seen, so only
 			// the result is pushed, which an x === void 0 then compares as
 			// it does x === undefined.
-			c.emit(bytecode.OpPushUndef, 0, 0)
 			return
 		}
 		c.compileExpr(n.Operand)
-		c.emit(bytecode.OpDrop, 0, 0)
-		c.emit(bytecode.OpPushUndef, 0, 0)
 
 	case "!":
 		c.compileExpr(n.Operand)
-		c.emit(bytecode.OpNot, 0, 0)
 
 	case "-":
 		// A negative numeric literal is folded, which also gets -0 right.
-		if lit, ok := n.Operand.(*ast.NumberLit); ok {
-			c.emit(bytecode.OpPushConst, c.numberConst(-lit.Value), 0)
+		if _, ok := n.Operand.(*ast.NumberLit); ok {
 			return
 		}
 		// So is a BigInt literal, written in decimal: a constant, which a
 		// sign before a hexadecimal, octal or binary one's digits could not
 		// be (StringToBigInt takes none).
 		if lit, ok := n.Operand.(*ast.BigIntLit); ok {
-			if v, ok := new(big.Int).SetString(lit.Raw, 0); ok {
-				c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{
-					Kind: bytecode.ConstBigInt, Str: v.Neg(v).String(),
-				}), 0)
+			if _, ok := new(big.Int).SetString(lit.Raw, 0); ok {
 				return
 			}
 		}
 		c.compileExpr(n.Operand)
-		c.emitAt(n.Start, bytecode.OpNeg, 0, 0)
 
 	case "+":
 		c.compileExpr(n.Operand)
-		c.emitAt(n.Start, bytecode.OpPos, 0, 0)
 
 	case "~":
 		c.compileExpr(n.Operand)
-		c.emitAt(n.Start, bytecode.OpBitNot, 0, 0)
 
 	default:
 		c.errorf(n.Start, "unsupported unary operator %q", n.Op)
 	}
 }
 
-// compileLocalUpdate emits the whole of `i++` on a plain local as a single
-// instruction, and reports whether it could.
+// compileLocalUpdate walks `i++` on a plain local, and reports whether it is
+// one.
 //
 // It is what the counted loop is made of, and the four instructions it replaces
 // -- read, coerce, add, store -- are four dispatches around one addition.
 // Anything with more to it than that, a const, a name a `with` object may
 // answer for, a binding still in its dead zone, is left to the general path.
 func (c *compiler) compileLocalUpdate(n *ast.Update) bool {
-	l, ok := c.updatableLocal(n)
+	_, ok := c.updatableLocal(n)
 	if !ok {
 		return false
 	}
-	op := bytecode.OpIncLocal
-	if n.Op == "--" {
-		op = bytecode.OpDecLocal
-	}
-	c.emitAt(n.Start, op, l.slot, 0)
 	return true
 }
 
@@ -1258,7 +865,7 @@ func (c *compiler) updatableLocal(n *ast.Update) (*localVar, bool) {
 		return nil, false
 	}
 	c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
-	c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
+	c.noteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 	return l, true
 }
 
@@ -1272,92 +879,36 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 		c.compileCallTarget(call, n.Start)
 		return
 	}
-	op := bytecode.OpInc
-	if n.Op == "--" {
-		op = bytecode.OpDec
-	}
-	if l, ok := c.updatableLocal(n); ok {
+	if _, ok := c.updatableLocal(n); ok {
 		// An update of a local whose value is read is one instruction.
-		var flags uint32
-		if n.Op == "--" {
-			flags |= bytecode.UpdateDec
-		}
-		if !n.Prefix {
-			flags |= bytecode.UpdatePostfix
-		}
-		c.emitAt(n.Start, bytecode.OpUpdateLocal, l.slot, flags)
 		return
 	}
 
 	switch target := n.Operand.(type) {
 	case *ast.Ident:
 		// Inside a `with` body the name is resolved once, by the read, and
-		// written back to whatever that found. The base it leaves under the
-		// value is why the postfix copy goes beneath it rather than on top.
+		// written back to whatever that found.
 		withRef := c.withLimit(target.Name) > 0
 		if withRef {
 			c.beginWithRef(target)
 		} else {
 			c.compileIdentRead(target)
 		}
-		// The postfix form yields the operand coerced, so that `x = "1"; x++`
-		// leaves a number behind rather than the original string: to a
-		// numeric, not a number, since a BigInt increments as a BigInt. The
-		// prefix form yields the increment's result, and the increment
-		// converts its operand itself.
-		if !n.Prefix {
-			c.emit(bytecode.OpToNumeric, 0, 0)
-			if withRef {
-				c.emit(bytecode.OpInsert2, 0, 0)
-			} else {
-				c.emit(bytecode.OpDup, 0, 0)
-			}
-		}
-		c.emitAt(n.Start, op, 0, 0)
 		if withRef {
 			c.endWithRef(target)
 		} else {
 			c.assignTo(target, false)
 		}
-		if !n.Prefix {
-			// Discard the updated value, leaving the original as the result.
-			c.emit(bytecode.OpDrop, 0, 0)
-		}
 
 	case *ast.Member:
 		if _, isSuper := target.Object.(*ast.Super); isSuper {
-			// A super reference has no object on the stack: the read starts at
-			// the home object's prototype and the write lands on `this`.
-			// The key, when there is one, stays beneath the value for the
-			// store; without one there is nothing under it, so the copy that
-			// carries the expression's result is a plain duplicate.
-			keep := bytecode.OpDup
+			c.noteSuper()
+			// A super reference has no object: the read starts at the home
+			// object's prototype and the write lands on `this`.
 			if target.Computed {
-				c.emit(bytecode.OpSuperBase, 0, 0)
 				c.compileExpr(target.Property)
-				c.emit(bytecode.OpToPropertyKey, 0, 0)
-				c.emit(bytecode.OpDup2, 0, 0)
-				c.emit(bytecode.OpGetSuperIndex, 0, 0)
-				keep = bytecode.OpInsert3
 			} else {
 				c.compileSuperMemberGet(target)
-			}
-			// Postfix yields the old value, converted, so it is copied down
-			// before the increment; prefix yields the new one, so the copy
-			// comes after.
-			if !n.Prefix {
-				c.emit(bytecode.OpToNumeric, 0, 0)
-				c.emit(keep, 0, 0)
-				c.emitAt(n.Start, op, 0, 0)
-			} else {
-				c.emitAt(n.Start, op, 0, 0)
-				c.emit(keep, 0, 0)
-			}
-			if target.Computed {
-				c.emitAt(n.Start, bytecode.OpSetSuperIndex, 0, 0)
-			} else {
-				c.emitAt(n.Start, bytecode.OpSetSuperProp,
-					c.nameIdx(propKeyName(target.Property)), 0)
 			}
 			return
 		}
@@ -1365,220 +916,98 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 		if pn, private := target.Property.(*ast.PrivateName); private {
 			// A private member is reached through its own accessors, which do
 			// not consult the prototype chain the way a property does.
-			name, ref := c.privateName(pn, int(target.Start))
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(int(target.Start), bytecode.OpGetPrivate, name, ref)
-			if !n.Prefix {
-				c.emit(bytecode.OpToNumeric, 0, 0)
-				c.emit(bytecode.OpInsert2, 0, 0)
-				c.emitAt(n.Start, op, 0, 0)
-			} else {
-				c.emitAt(n.Start, op, 0, 0)
-				c.emit(bytecode.OpInsert2, 0, 0)
-			}
-			c.emit(bytecode.OpSetPrivate, name, ref)
+			c.privateName(pn, int(target.Start))
 			return
 		}
 		if target.Computed {
 			c.compileIndexForUpdate(target)
-			c.emitAt(int(target.Start), bytecode.OpGetIndex, 0, 0)
-			// Postfix yields the old value, converted, so it is copied down
-			// before the increment; prefix yields the new one, so the copy
-			// comes after; for effect there is no copy.
-			switch {
-			case !keep:
-				c.emitAt(n.Start, op, 0, 0)
-			case !n.Prefix:
-				c.emit(bytecode.OpToNumeric, 0, 0)
-				c.emit(bytecode.OpInsert3, 0, 0)
-				c.emitAt(n.Start, op, 0, 0)
-			default:
-				c.emitAt(n.Start, op, 0, 0)
-				c.emit(bytecode.OpInsert3, 0, 0)
-			}
-			c.emit(bytecode.OpSetIndex, 0, 0)
 			return
 		}
-		name := c.nameIdx(propKeyName(target.Property))
-		c.dupObject()
-		// Placed at the member, as the computed read is: a read of null's
-		// property had the position of whatever came before it.
-		c.emitAt(int(target.Start), bytecode.OpGetProp, name, 0)
-		switch {
-		case !keep:
-			// Only the store is wanted, and the increment converts.
-			c.emitAt(n.Start, op, 0, 0)
-		case !n.Prefix:
-			c.emit(bytecode.OpToNumeric, 0, 0)
-			c.emit(bytecode.OpInsert2, 0, 0)
-			c.emitAt(n.Start, op, 0, 0)
-		default:
-			c.emitAt(n.Start, op, 0, 0)
-			c.emit(bytecode.OpInsert2, 0, 0)
-		}
-		c.emit(bytecode.OpSetProp, name, 0)
 
 	default:
 		c.errorf(n.Start, "invalid update target")
 	}
 }
 
-// compileIndexForUpdate compiles the key of `obj[key] op= v` or `obj[key]++`,
-// with the object already on the stack, and leaves the object and the key
-// twice: once for the read, on top, and once for the write beneath it.
-//
-// A key is converted to a property key once, before the read, so that an
-// object's toString runs once -- and the object is asked first whether it is
-// null or undefined. A number literal needs no converting, and get_index
-// asks the same question with the same message at the same place, so its
-// key is pushed again rather than copied, and the object read again where
-// it can be.
+// compileIndexForUpdate compiles the key of `obj[key] op= v` or
+// `obj[key]++`.
 func (c *compiler) compileIndexForUpdate(m *ast.Member) {
-	if num, ok := m.Property.(*ast.NumberLit); ok {
-		at := len(c.fn.Code)
-		c.compileExpr(num)
-		key := c.fn.Code[len(c.fn.Code)-1]
-		if len(c.fn.Code) == at+1 && !c.isTarget(at) && c.rereadable(at-1) {
-			obj := c.fn.Code[at-1]
-			if obj.Op == bytecode.OpGetLocal2 {
-				obj = bytecode.Instr{Op: bytecode.OpGetLocal, A: obj.B}
-			}
-			c.emit(obj.Op, obj.A, 0)
-			c.emit(key.Op, key.A, key.B)
-			return
-		}
-		c.emit(bytecode.OpDup2, 0, 0)
-		return
-	}
 	c.compileExpr(m.Property)
-	// At the key, as V8 places a null object's error here: unplaced, it had
-	// the position of whatever came before it.
-	c.emitAt(m.Property.Pos(), bytecode.OpToPropertyKeyOfBase, 0, 0)
-	c.emit(bytecode.OpDup2, 0, 0)
 }
 
-// rereadable reports whether the instruction at pc reads a local, an upvalue
-// or this, which cannot throw or run code, so that reading it again where it
-// would be copied gives the same value.
-func (c *compiler) rereadable(pc int) bool {
-	if pc < 0 {
-		return false
-	}
-	switch c.fn.Code[pc].Op {
-	case bytecode.OpGetLocal, bytecode.OpGetLocal2, bytecode.OpGetUpvalue, bytecode.OpPushThis:
+// valueRunsNoCode reports whether a value, as the walk compiles it, can
+// neither throw nor run a script's code: a read of a local or an upvalue
+// without a dead zone, a literal, this where it is always bound, a
+// function made. A strict assignment of one to a global resolves the
+// reference at the store: nothing can happen between resolving it and
+// evaluating the value, so even a proxy on the global object's chain is
+// asked the same questions in the same order.
+func (c *compiler) valueRunsNoCode(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit, *ast.BigIntLit, *ast.FuncLit:
 		return true
-	}
-	return false
-}
-
-// foldGlobalCheck makes a strict assignment to a global, whose
-// check_global_ref is at check and whose value has just been compiled, one
-// set_global_strict where the value is one instruction that runs no code: a
-// local or an upvalue read without a dead zone, a literal, this where it is
-// always bound, a function made. Nothing can then happen between resolving
-// the reference and evaluating the value, so the reference can be resolved
-// at the store instead -- even a proxy on the global object's chain is
-// asked the same questions in the same order. The check's cache site is the
-// store's, and the store reports a name that resolves to nothing where
-// assert_resolved would have, at the name.
-func (c *compiler) foldGlobalCheck(check int, id *ast.Ident) bool {
-	code := c.fn.Code
-	if len(code) != check+2 || c.isTarget(check+1) || !c.runsNoCode(code[check+1]) {
-		return false
-	}
-	site := code[check].B
-	code[check] = code[check+1]
-	c.fn.Code = code[:check+1]
-	c.adjustStack(bytecode.OpDrop, 0, 0)
-	// The value cannot throw, so it needs no position; the store gets the
-	// name's, recorded afresh.
-	l := len(c.fn.Lines)
-	for l > 0 && c.fn.Lines[l-1].PC >= uint32(check) {
-		l--
-	}
-	c.fn.Lines = c.fn.Lines[:l]
-	c.lastPos = -1
-	c.emit(bytecode.OpDup, 0, 0)
-	c.emitAt(int(id.Start), bytecode.OpSetGlobalStrict, c.nameIdx(id.Name), site)
-	return true
-}
-
-// runsNoCode reports whether an instruction that pushes a value can neither
-// throw nor run a script's code.
-func (c *compiler) runsNoCode(in bytecode.Instr) bool {
-	switch in.Op {
-	case bytecode.OpGetLocal, bytecode.OpGetUpvalue, bytecode.OpPushInt, bytecode.OpPushConst,
-		bytecode.OpPushUndef, bytecode.OpPushNull, bytecode.OpPushTrue, bytecode.OpPushFalse,
-		bytecode.OpPushEmptyString, bytecode.OpClosure:
-		return true
-	case bytecode.OpPushThis:
+	case *ast.TemplateLit:
+		return len(n.Exprs) == 0 && len(n.Quasis) == 1 && n.Quasis[0].Valid
+	case *ast.This:
 		// A derived constructor's this, which an arrow may share, is unbound
 		// until super() binds it.
 		return c.fn.Kind != bytecode.KindDerivedConstructor && c.fn.Kind != bytecode.KindArrow
+	case *ast.Unary:
+		switch n.Op {
+		case "-":
+			if _, ok := n.Operand.(*ast.NumberLit); ok {
+				return true
+			}
+			if lit, ok := n.Operand.(*ast.BigIntLit); ok {
+				_, ok := new(big.Int).SetString(lit.Raw, 0)
+				return ok
+			}
+		case "!", "typeof":
+			_, ok := fold.Value(n)
+			return ok
+		}
+	case *ast.Ident:
+		if c.withLimit(n.Name) > 0 {
+			return false
+		}
+		if lit := c.constLiteral(n.Name); lit != nil {
+			return c.valueRunsNoCode(lit)
+		}
+		if l, ok := c.resolveLocal(n.Name); ok {
+			return l.initialized && !(c.lazyArguments && l.slot == c.lazyArgumentsSlot)
+		}
+		if idx, ok := c.resolveUpvalue(n.Name); ok {
+			return !c.fn.Upvalues[idx].TDZ
+		}
+		return n.Name != c.selfName && n.Name == "undefined" && c.withDepth == 0 && c.opts.EvalScope == nil &&
+			c.opts.EvalWithDepth == 0 && !c.opts.EvalOwnVarScope && !c.opts.EvalConfigurable
 	}
 	return false
-}
-
-// dupObject copies the object of a property's update, for the read, leaving
-// the original beneath it for the write.
-//
-// An object that was a plain read of a local, an upvalue or this, which
-// cannot throw or run code, is read again rather than copied: the two reads
-// are adjacent, so they see the same value, and `o.x += 1` then compiles as
-// `o.x = o.x + 1` does. Not where something jumps to just after the read,
-// which arrives there without having made it.
-func (c *compiler) dupObject() {
-	if n := len(c.fn.Code); !c.isTarget(n) && c.rereadable(n-1) {
-		last := c.fn.Code[n-1]
-		if last.Op == bytecode.OpGetLocal2 {
-			last = bytecode.Instr{Op: bytecode.OpGetLocal, A: last.B}
-		}
-		c.emit(last.Op, last.A, 0)
-		return
-	}
-	c.emit(bytecode.OpDup, 0, 0)
 }
 
 func (c *compiler) compileLogical(n *ast.Logical) {
 	trace := c.traceIn
 	c.traceName = trace
 	c.compileExpr(n.Left)
-	var jump int
-	switch n.Op {
-	case "&&":
-		jump = c.emitJump(bytecode.OpJumpIfFalseKeep)
-	case "||":
-		jump = c.emitJump(bytecode.OpJumpIfTrueKeep)
-	default: // "??"
-		jump = c.emitJump(bytecode.OpJumpIfNotNullish)
-	}
 	c.traceName = trace
 	c.compileExpr(n.Right)
-	c.patchJump(jump)
 }
 
 func (c *compiler) compileConditional(n *ast.Conditional) {
 	trace := c.traceIn
-	elseJumps := c.emitTestJumpIfFalse(n.Test)
+	c.compileTest(n.Test)
 	c.traceName = trace
 	c.compileExpr(n.Cons)
-	endJump := c.emitJump(bytecode.OpJump)
-	c.patchTestJumps(elseJumps)
-	// Both branches leave one value, so the depth tracked after the jump is
-	// one too high; correct it so MaxStack is not inflated.
-	c.stackDepth--
 	c.traceName = trace
 	c.compileExpr(n.Alt)
-	c.patchJump(endJump)
 }
 
-// compileMemberKey pushes a member expression's key.
+// compileMemberKey walks a member expression's key.
 func (c *compiler) compileMemberKey(m *ast.Member) {
 	if m.Computed {
 		c.compileExpr(m.Property)
 		return
 	}
-	c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(m.Property)), 0)
 }
 
 // isLazyArguments reports whether an expression is the name arguments meaning
@@ -1598,9 +1027,8 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		return
 	}
 	if pn, ok := n.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, int(n.Start))
+		c.privateName(pn, int(n.Start))
 		c.compileExpr(n.Object)
-		c.emitAt(int(n.Start), bytecode.OpGetPrivate, name, ref)
 		return
 	}
 	if c.lazyArguments && !n.Optional && c.isLazyArguments(n.Object) {
@@ -1611,11 +1039,10 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		}
 		if n.Computed {
 			c.compileExpr(n.Property)
-			c.emitAt(n.Property.Pos(), bytecode.OpArgumentsIndex, c.lazyArgumentsSlot, 0)
 			return
 		}
 		if propKeyName(n.Property) == "length" {
-			c.emitAt(n.Property.Pos(), bytecode.OpArgumentsLength, c.lazyArgumentsSlot, 0)
+			c.facts.argsEscape = true
 			return
 		}
 	}
@@ -1627,19 +1054,13 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 	// it: `a.b.c` on a line of its own says which link broke.
 	if n.Computed {
 		c.compileExpr(n.Property)
-		c.emitAt(n.Property.Pos(), bytecode.OpGetIndex, 0, 0)
 		return
 	}
 	name := propKeyName(n.Property)
 	if name == "length" {
-		c.emitAt(n.Property.Pos(), bytecode.OpGetLength, 0, 0)
 		return
 	}
-	c.emitAt(n.Property.Pos(), bytecode.OpGetProp, c.nameIdx(name), 0)
 }
-
-// callPos is where a call is in a stack trace (ast.Call.TracePos).
-func callPos(n *ast.Call) int { return n.TracePos() }
 
 func (c *compiler) compileCall(n *ast.Call) {
 	if phase, ok := importPhase(n); ok {
@@ -1652,46 +1073,40 @@ func (c *compiler) compileCall(n *ast.Call) {
 		c.compileChain(chain, true)
 		if hasSpread(n.Args) {
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
-		argc := c.compileArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
+		c.compileArguments(n.Args)
 		return
 	}
 	// super(...) invokes the parent constructor with the current `this`.
 	if _, isSuper := n.Callee.(*ast.Super); isSuper {
+		c.facts.reads = true
 		if n.Forward {
-			c.emitAt(callPos(n), bytecode.OpSuperCall, 0, bytecode.SuperForward)
+			c.facts.superForwards = true
 			return
 		}
 		if hasSpread(n.Args) {
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpSuperCall, 0, 1)
 			return
 		}
-		argc := c.compileArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpSuperCall, uint32(argc), 0)
+		c.compileArguments(n.Args)
 		return
 	}
 	// A private method call fetches through the private slot, keeping the
 	// receiver for `this`.
 	if m, ok := n.Callee.(*ast.Member); ok && !hasSpread(n.Args) {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-			name, ref := c.privateName(pn, int(m.Start))
+			c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(m.Property.Pos(), bytecode.OpGetPrivate, name, ref)
-			argc := c.compileArguments(n.Args)
+			c.compileArguments(n.Args)
 			// A call in tail position, as any method's is.
-			c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
+			c.noteTail(n)
 			return
 		}
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
-			c.emit(bytecode.OpPushThis, 0, 0)
 			c.compileSuperMemberGet(m)
-			argc := c.compileArguments(n.Args)
-			c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
+			c.compileArguments(n.Args)
+			c.noteTail(n)
 			return
 		}
 	}
@@ -1705,18 +1120,20 @@ func (c *compiler) compileCall(n *ast.Call) {
 		c.compileSpreadCall(n)
 		return
 	}
-	// A method call keeps the receiver on the stack so that `this` binds to it
-	// without evaluating the object expression twice.
+	// A method call binds `this` to the receiver without evaluating the
+	// object expression twice.
 	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
 		c.compileExpr(m.Object)
 		if m.Computed {
 			c.compileExpr(m.Property)
-			c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
-		} else {
-			c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 		}
-		argc := c.compileArguments(n.Args)
-		c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
+		saved := c.facts.applyArgs
+		if c.lazyArguments && c.withDepth == 0 && c.tailCall != n && isApplyOfArguments(n) {
+			c.facts.applyArgs = n.Args[1].(*ast.Ident)
+		}
+		c.compileArguments(n.Args)
+		c.facts.applyArgs = saved
+		c.noteTail(n)
 		return
 	}
 
@@ -1726,17 +1143,14 @@ func (c *compiler) compileCall(n *ast.Call) {
 	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
 		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
 		c.regWith(id, probe)
-		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileIdentReadStatic(id)
-		c.patchWithProbe(probe)
-		argc := c.compileArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
+		c.compileArguments(n.Args)
 		return
 	}
 
 	c.compileExpr(n.Callee)
-	argc := c.compileArguments(n.Args)
-	c.emitAt(callPos(n), c.callOp(n, bytecode.OpCall), uint32(argc), 0)
+	c.compileArguments(n.Args)
+	c.noteTail(n)
 }
 
 // importPhase reports whether n is `import(...)`, `import.defer(...)` or
@@ -1764,11 +1178,10 @@ func importPhase(n *ast.Call) (uint32, bool) {
 // object can stand in for it. The parser has seen to the arguments: one or
 // two, and no spread.
 func (c *compiler) compileImport(n *ast.Call, phase uint32) {
-	argc := c.compileArguments(n.Args)
-	c.emitAt(callPos(n), bytecode.OpImport, phase, uint32(argc))
+	c.compileArguments(n.Args)
 }
 
-// compileArguments pushes a call's arguments and returns how many there are.
+// compileArguments walks a call's arguments and returns how many there are.
 func (c *compiler) compileArguments(args []ast.Expr) int {
 	for _, a := range args {
 		c.compileExpr(a)
@@ -1790,15 +1203,12 @@ func hasSpread(args []ast.Expr) bool {
 // compileSpreadArguments builds an array holding a call's arguments, which is
 // how a call containing a spread element passes them.
 func (c *compiler) compileSpreadArguments(args []ast.Expr) {
-	c.emit(bytecode.OpNewArray, 0, 0)
 	for _, a := range args {
 		if sp, ok := a.(*ast.Spread); ok {
 			c.compileExpr(sp.Arg)
-			c.emit(bytecode.OpSpreadIter, 0, 0)
 			continue
 		}
 		c.compileExpr(a)
-		c.emit(bytecode.OpArrayPush, 0, 0)
 	}
 }
 
@@ -1806,12 +1216,10 @@ func (c *compiler) compileNew(n *ast.New) {
 	if hasSpread(n.Args) {
 		c.compileExpr(n.Callee)
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpNewSpread, 0, 0)
 		return
 	}
 	c.compileExpr(n.Callee)
-	argc := c.compileArguments(n.Args)
-	c.emitAt(n.Start, bytecode.OpNew, uint32(argc), 0)
+	c.compileArguments(n.Args)
 }
 
 // compileSpreadCall compiles a call whose arguments include a spread element.
@@ -1821,33 +1229,23 @@ func (c *compiler) compileNew(n *ast.New) {
 func (c *compiler) compileSpreadCall(n *ast.Call) {
 	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-			name, ref := c.privateName(pn, int(m.Start))
+			c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(m.Property.Pos(), bytecode.OpGetPrivate, name, ref)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
-			// A super reference has no object on the stack: the method comes
-			// from the home object's prototype and the receiver is `this`.
-			c.emit(bytecode.OpPushThis, 0, 0)
+			// A super reference has no object: the method comes from the
+			// home object's prototype and the receiver is `this`.
 			c.compileSuperMemberGet(m)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		c.compileExpr(m.Object)
-		c.emit(bytecode.OpDup, 0, 0)
 		if m.Computed {
 			c.compileExpr(m.Property)
-			c.emit(bytecode.OpGetIndex, 0, 0)
-		} else {
-			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(m.Property)), 0)
 		}
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
 	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
@@ -1855,88 +1253,31 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 		// the name is found on is the receiver.
 		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
 		c.regWith(id, probe)
-		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileIdentReadStatic(id)
-		c.patchWithProbe(probe)
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
 	// A plain call has no receiver, so undefined stands in for one.
-	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.compileExpr(n.Callee)
 	c.compileSpreadArguments(n.Args)
-	c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 }
 
-// emitChainCallArgs finishes a call inside an optional chain, whose receiver
-// and function are already on the stack.
-func (c *compiler) emitChainCallArgs(n *ast.Call) {
+// compileChainCallArgs compiles a call's arguments inside an optional chain.
+func (c *compiler) compileChainCallArgs(n *ast.Call) {
 	if hasSpread(n.Args) {
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
-	argc := c.compileArguments(n.Args)
-	c.emit(bytecode.OpCallMethod, uint32(argc), 0)
+	c.compileArguments(n.Args)
 }
 
-// chainJump is a pending short-circuit from an optional link.
-//
-// live records how many stack slots the link had built up when it tested, so
-// that the landing pad can clear exactly those. A property access has one (the
-// object); a method call has two (the receiver and the function).
-type chainJump struct {
-	pc   int
-	live int
-}
-
-// compileOptionalChain compiles a chain, wiring every `?.` link to jump past
-// the rest of the chain when its base is nullish.
-func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
-	c.compileChain(n, false)
-}
-
-// compileChain compiles a chain, optionally leaving the receiver beneath its
-// value.
-//
-// The receiver is what `(a?.b)()` calls the method on: parentheses do not undo
-// a reference, so the base the chain read from is still what `this` binds to.
-// A chain that short-circuited has no receiver and no method, and calling the
-// undefined it produced is the error it should be.
+// compileChain compiles a chain, where wantThis says what it read from is
+// the receiver of a call that follows: what `(a?.b)()` calls the method on.
 func (c *compiler) compileChain(n *ast.OptionalChain, wantThis bool) {
-	var jumps []chainJump
 	if wantThis {
-		c.compileChainLinkThis(n.Base, &jumps)
+		c.compileChainLinkThis(n.Base)
 	} else {
-		c.compileChainLink(n.Base, &jumps)
-	}
-	if len(jumps) == 0 {
-		return
-	}
-	done := c.emitJump(bytecode.OpJump)
-
-	// Each short circuit gets its own landing pad, because links differ in how
-	// much they left on the stack. Every pad produces undefined, which is the
-	// chain's value regardless of whether null or undefined triggered it.
-	var exits []int
-	for i, j := range jumps {
-		c.patchJumpTo(j.pc, c.here())
-		for range j.live {
-			c.emit(bytecode.OpDrop, 0, 0)
-		}
-		if wantThis {
-			c.emit(bytecode.OpPushUndef, 0, 0)
-		}
-		c.emit(bytecode.OpPushUndef, 0, 0)
-		// Every pad but the last has to jump over the ones that follow it.
-		if i < len(jumps)-1 {
-			exits = append(exits, c.emitJump(bytecode.OpJump))
-		}
-	}
-	c.patchJump(done)
-	for _, pc := range exits {
-		c.patchJump(pc)
+		c.compileChainLink(n.Base)
 	}
 }
 
@@ -1948,101 +1289,54 @@ func (c *compiler) compileDeleteChain(n *ast.Unary, m *ast.Member) {
 		c.errorf(n.Start, "a private name cannot be deleted: #%s", pn.Name)
 		return
 	}
-	var jumps []chainJump
-	c.compileChainLink(m.Object, &jumps)
-	if m.Optional {
-		jumps = append(jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
-	}
+	c.compileChainLink(m.Object)
 	c.compileMemberKey(m)
-	c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
-	done := c.emitJump(bytecode.OpJump)
-	var exits []int
-	for i, j := range jumps {
-		c.patchJumpTo(j.pc, c.here())
-		for range j.live {
-			c.emit(bytecode.OpDrop, 0, 0)
-		}
-		c.emit(bytecode.OpPushTrue, 0, 0)
-		if i < len(jumps)-1 {
-			exits = append(exits, c.emitJump(bytecode.OpJump))
-		}
-	}
-	c.patchJump(done)
-	for _, pc := range exits {
-		c.patchJump(pc)
-	}
 }
 
-// compileChainLinkThis compiles a chain's last link so that the object it read
-// from stays beneath the value.
-func (c *compiler) compileChainLinkThis(e ast.Expr, jumps *[]chainJump) {
+// compileChainLinkThis compiles a chain's last link, what it read from kept
+// as the receiver.
+func (c *compiler) compileChainLinkThis(e ast.Expr) {
 	m, ok := e.(*ast.Member)
 	if !ok {
-		// Nothing else carries a receiver, so undefined stands in for one.
-		c.emit(bytecode.OpPushUndef, 0, 0)
-		c.compileChainLink(e, jumps)
-		for i := range *jumps {
-			// The placeholder sits beneath everything the links built.
-			(*jumps)[i].live++
-		}
+		c.compileChainLink(e)
 		return
 	}
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
-		c.emit(bytecode.OpPushThis, 0, 0)
 		c.compileSuperMemberGet(m)
 		return
 	}
-	c.compileChainLink(m.Object, jumps)
-	if m.Optional {
-		*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
-	}
+	c.compileChainLink(m.Object)
 	switch {
 	case m.Computed:
 		c.compileExpr(m.Property)
-		c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
 	default:
 		if pn, private := m.Property.(*ast.PrivateName); private {
-			name, ref := c.privateName(pn, int(m.Start))
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
-			break
+			c.privateName(pn, int(m.Start))
 		}
-		c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 	}
 }
 
-// compileChainLink compiles one link of an optional chain, collecting the
-// short-circuit jumps so the caller can give each a landing pad.
-func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
+// compileChainLink compiles one link of an optional chain.
+func (c *compiler) compileChainLink(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Member:
 		if _, isSuper := n.Object.(*ast.Super); isSuper {
-			// A super reference has no object on the stack: the read starts at
-			// the home object's prototype. `super?.x` is not syntax, so there
-			// is never a short circuit to record here.
+			// `super?.x` is not syntax: the read starts at the home
+			// object's prototype.
 			c.compileSuperMemberGet(n)
 			return
 		}
-		c.compileChainLink(n.Object, jumps)
-		if n.Optional {
-			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
-		}
+		c.compileChainLink(n.Object)
 		switch {
 		case n.Computed:
 			c.compileExpr(n.Property)
-			c.emitAt(n.Property.Pos(), bytecode.OpGetIndex, 0, 0)
 		default:
 			if pn, private := n.Property.(*ast.PrivateName); private {
-				// A private name is not a property: it is reached through the
-				// class's own accessors, which do not walk the prototype
-				// chain. `a?.b.#c` is written this way and is what the
-				// grammar allows -- `a?.#c` too.
-				name, ref := c.privateName(pn, int(n.Start))
-				c.emitAt(int(n.Start), bytecode.OpGetPrivate, name, ref)
-				break
+				// A private name is reached through the class's own
+				// accessors, not the prototype chain: `a?.b.#c` and
+				// `a?.#c` are what the grammar allows.
+				c.privateName(pn, int(n.Start))
 			}
-			// Placed at the property, as a member read outside a chain is.
-			c.emitAt(n.Property.Pos(), bytecode.OpGetProp, c.nameIdx(propKeyName(n.Property)), 0)
 		}
 
 	case *ast.Call:
@@ -2061,68 +1355,35 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 			// `(a?.b)?.()`: the parenthesized chain is complete in itself, and
 			// what it read from is the receiver of the call that follows.
 			c.compileChain(chain, true)
-			if n.Optional {
-				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2})
-			}
-			c.emitChainCallArgs(n)
+			c.compileChainCallArgs(n)
 			return
 		}
 		if m, ok := n.Callee.(*ast.Member); ok {
 			if _, isSuper := m.Object.(*ast.Super); isSuper {
 				// The method comes from the home object's prototype and the
-				// receiver is `this`, which goes underneath it.
-				c.emit(bytecode.OpPushThis, 0, 0)
+				// receiver is `this`.
 				c.compileSuperMemberGet(m)
-				if n.Optional {
-					*jumps = append(*jumps, chainJump{
-						pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2,
-					})
-				}
-				c.emitChainCallArgs(n)
+				c.compileChainCallArgs(n)
 				return
 			}
-			c.compileChainLink(m.Object, jumps)
-			if m.Optional {
-				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
-			}
+			c.compileChainLink(m.Object)
 			switch {
 			case m.Computed:
 				c.compileExpr(m.Property)
-				c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
 			default:
 				if pn, private := m.Property.(*ast.PrivateName); private {
-					// The receiver stays beneath the method, as
-					// OpGetPropThis leaves it.
-					name, ref := c.privateName(pn, int(m.Start))
-					c.emit(bytecode.OpDup, 0, 0)
-					c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
-					break
+					c.privateName(pn, int(m.Start))
 				}
-				c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
-			if n.Optional {
-				// The receiver is beneath the function here, so a short
-				// circuit has two slots to clear.
-				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2})
-			}
-			c.emitChainCallArgs(n)
+			c.compileChainCallArgs(n)
 			return
 		}
-		c.compileChainLink(n.Callee, jumps)
-		if n.Optional {
-			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
-		}
+		c.compileChainLink(n.Callee)
 		if hasSpread(n.Args) {
-			// A spread call takes a receiver beneath the function, which a
-			// plain call has not got: undefined stands in for one.
-			c.emit(bytecode.OpPushUndef, 0, 0)
-			c.emit(bytecode.OpSwap, 0, 0)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(int(n.Start), bytecode.OpCallSpread, 0, 0)
 			return
 		}
-		argc := c.compileArguments(n.Args)
-		c.emit(bytecode.OpCall, uint32(argc), 0)
+		c.compileArguments(n.Args)
 
 	default:
 		c.compileExpr(e)
@@ -2177,15 +1438,13 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			// the value is evaluated and reported after it. A value that
 			// creates the global does not excuse the assignment, and a value
 			// that throws is what the assignment reports.
-			check := len(c.fn.Code) - 1
 			value(nameOf(n.Target))
-			if c.foldGlobalCheck(check, id) {
+			if c.valueRunsNoCode(n.Value) {
 				if c.reg != nil {
-					c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobal})
+					c.noteWrite(id, regcomp.Res{Kind: regcomp.ResGlobal})
 				}
 				return
 			}
-			c.emitAt(int(id.Start), bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
 			c.assignTo(n.Target, false)
 			return
 		}
@@ -2194,167 +1453,74 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 
 	case "&&=", "||=", "??=":
 		if m, ok := n.Target.(*ast.Member); ok {
-			c.compileMemberUpdate(m, n.Op, func() {
+			c.compileMemberUpdate(m, func() {
 				value(nameOf(n.Target))
-			}, int(n.Start), true)
+			})
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
 			// Inside a `with` body the name is resolved once, by the read, and
 			// written back to whatever that found.
 			c.beginWithRef(id)
-			c.finishUpdate(n.Op, func() {
-				value(id.Name)
-			}, int(n.Start), 1, func() { c.endWithRef(id) })
+			value(id.Name)
+			c.endWithRef(id)
 			return
 		}
 		// A logical assignment only stores when the short circuit does not
 		// take, so the read comes first and the store is inside the branch.
 		c.compileReadTarget(n.Target)
-		var jump int
-		switch n.Op {
-		case "&&=":
-			jump = c.emitJump(bytecode.OpJumpIfFalseKeep)
-		case "||=":
-			jump = c.emitJump(bytecode.OpJumpIfTrueKeep)
-		default:
-			jump = c.emitJump(bytecode.OpJumpIfNotNullish)
-		}
 		value(nameOf(n.Target))
 		c.assignTo(n.Target, false)
-		c.patchJump(jump)
 
 	default:
 		if m, ok := n.Target.(*ast.Member); ok {
-			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, int(n.Start), true)
+			c.compileMemberUpdate(m, func() { c.compileExpr(n.Value) })
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
 			c.beginWithRef(id)
 			c.compileExpr(n.Value)
-			c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)
 			c.endWithRef(id)
 			return
 		}
 		// A compound assignment reads, combines and writes back.
 		c.compileReadTarget(n.Target)
 		c.compileExpr(n.Value)
-		c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)
 		c.assignTo(n.Target, false)
 	}
 }
 
-// compileMemberUpdate compiles `obj.k op= value` and its logical relatives.
-//
-// The object and the key are evaluated once and kept on the stack, because they
-// are expressions: `base[prop] *= f()` must call prop.toString once, and
-// reading the property and writing it back have to address the same place even
-// if the read changed what is there.
-// compileMemberUpdate compiles a compound or logical assignment to a property.
-//
-// keep says whether the value has to be left behind as the expression's
-// result; in effect position it does not, and the copy that would carry it out
-// is one instruction and the drop that follows it another.
-func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(), pos int, keep bool) {
+// compileMemberUpdate walks `obj.k op= value` and its logical relatives:
+// the object and the key, evaluated once, then the value, which emitValue
+// walks.
+func (c *compiler) compileMemberUpdate(m *ast.Member, emitValue func()) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
-		// A super reference has no object on the stack: the read starts at the
-		// home object's prototype and the write lands on `this`.
+		c.noteSuper()
+		// The read starts at the home object's prototype and the write
+		// lands on `this`.
 		if m.Computed {
-			c.emit(bytecode.OpSuperBase, 0, 0)
 			c.compileExpr(m.Property)
-			c.emit(bytecode.OpToPropertyKey, 0, 0)
-			c.emit(bytecode.OpDup2, 0, 0)
-			c.emitAt(int(m.Start), bytecode.OpGetSuperIndex, 0, 0)
-			c.finishUpdate(op, emitValue, pos, 2, func() {
-				if keep {
-					c.emit(bytecode.OpInsert3, 0, 0)
-				}
-				c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
-			})
-			return
+		} else {
+			c.compileSuperMemberGet(m)
 		}
-		name := c.nameIdx(propKeyName(m.Property))
-		c.compileSuperMemberGet(m)
-		c.finishUpdate(op, emitValue, pos, 0, func() {
-			if keep {
-				c.emit(bytecode.OpDup, 0, 0)
-			}
-			c.emitAt(int(m.Start), bytecode.OpSetSuperProp, name, 0)
-		})
+		emitValue()
 		return
 	}
 	if pn, private := m.Property.(*ast.PrivateName); private {
-		// A private name is not an expression, so there is nothing to evaluate
-		// twice; only the object is kept.
-		name, ref := c.privateName(pn, int(m.Start))
+		// A private name is not an expression: only the object is kept.
+		c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
-		c.finishUpdate(op, emitValue, pos, 1, func() {
-			if keep {
-				c.emit(bytecode.OpInsert2, 0, 0)
-			}
-			c.emit(bytecode.OpSetPrivate, name, ref)
-		})
+		emitValue()
 		return
 	}
-
 	c.compileExpr(m.Object)
 	if m.Computed {
 		c.compileIndexForUpdate(m)
-		c.emitAt(int(m.Start), bytecode.OpGetIndex, 0, 0)
-		c.finishUpdate(op, emitValue, pos, 2, func() {
-			if keep {
-				c.emit(bytecode.OpInsert3, 0, 0)
-			}
-			c.emitAt(int(m.Start), bytecode.OpSetIndex, 0, 0)
-		})
-		return
 	}
-	name := c.nameIdx(propKeyName(m.Property))
-	c.dupObject()
-	c.emitAt(int(m.Start), bytecode.OpGetProp, name, 0)
-	c.finishUpdate(op, emitValue, pos, 1, func() {
-		if keep {
-			c.emit(bytecode.OpInsert2, 0, 0)
-		}
-		c.emitAt(int(m.Start), bytecode.OpSetProp, name, 0)
-	})
+	emitValue()
 }
 
-// finishUpdate combines the read value with the new one and stores it.
-//
-// A logical assignment stores only when the short circuit does not take, and
-// leaves the read value as the result when it does -- so the base and key
-// beneath it have to be dropped on that path.
-func (c *compiler) finishUpdate(op string, emitValue func(), pos, under int, store func()) {
-	switch op {
-	case "&&=", "||=", "??=":
-		var jump int
-		switch op {
-		case "&&=":
-			jump = c.emitJump(bytecode.OpJumpIfFalseKeep)
-		case "||=":
-			jump = c.emitJump(bytecode.OpJumpIfTrueKeep)
-		default:
-			jump = c.emitJump(bytecode.OpJumpIfNotNullish)
-		}
-		emitValue()
-		store()
-		done := c.emitJump(bytecode.OpJump)
-		c.patchJump(jump)
-		// The short circuit leaves the read value on top of the base and key,
-		// which have to go.
-		c.emit(bytecode.OpNipUnder, uint32(under), 0)
-		c.patchJump(done)
-	default:
-		emitValue()
-		c.emitAt(pos, compoundOpcode(op), 0, 0)
-		store()
-	}
-}
-
-// compileReadTarget pushes the current value of an assignment target.
+// compileReadTarget walks the read of an assignment target's current value.
 func (c *compiler) compileReadTarget(target ast.Expr) {
 	switch t := target.(type) {
 	case *ast.Ident:
@@ -2375,20 +1541,16 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			// assigning to it outside strict mode is quietly discarded rather
 			// than refused.
 			if c.fn.Strict {
-				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
+				c.noteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 			} else {
-				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
-			}
-			if c.fn.Strict {
-				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+				c.noteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
 			}
 			return
 		}
 		if !initializing && l.kind == bindConst && l.initialized {
 			// A runtime error rather than an early one: the assignment may
 			// sit in a function that is never called.
-			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
-			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			c.noteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 			return
 		}
 		if l.initialized || initializing {
@@ -2396,12 +1558,9 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			if initializing {
 				kind = regcomp.ResLocalInit
 			}
-			c.reg.NoteWrite(t, regcomp.Res{Kind: kind, Index: l.slot})
-			c.emit(bytecode.OpPutLocal, l.slot, 0)
+			c.noteWrite(t, regcomp.Res{Kind: kind, Index: l.slot})
 		} else {
-			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(int(t.Start), bytecode.OpSetLocalCheck, l.slot, 0)
+			c.noteWrite(t, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
 		}
 		return
 	}
@@ -2412,71 +1571,49 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 		if c.fn.Upvalues[idx].TDZ && !initializing {
 			// The dead zone outranks constness: writing to a binding that
 			// does not exist yet is a ReferenceError whichever it is.
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(int(t.Start), bytecode.OpSetUpvalueCheck, idx, 0)
 			return
 		}
 		if c.fn.Upvalues[idx].FuncSelf && !initializing {
-			if c.fn.Strict {
-				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
-			}
 			return
 		}
 		if !c.fn.Upvalues[idx].Mutable && !initializing {
-			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			return
 		}
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpSetUpvalue, idx, 0)
 		return
 	}
 	if !initializing && t.Name == c.selfName {
-		// The name has no slot, so nothing nested refers to it: the assignment
-		// still has to be refused in strict mode and discarded otherwise.
-		if c.fn.Strict {
-			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
-		}
 		return
 	}
 	if initializing && c.globalLex[t.Name] {
 		// The binding is the script-level lexical one, and this is what takes
 		// it out of its dead zone.
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpInitGlobalLex, c.nameIdx(t.Name), 0)
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
 		return
 	}
 	if initializing && c.isModuleLex(t.Name) {
 		// The same, for a module's top-level binding.
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResModuleLexInit})
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpInitModuleLex, c.nameIdx(t.Name), 0)
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResModuleLexInit})
 		return
 	}
 	if c.reg != nil && !initializing {
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResGlobal})
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResGlobal})
 	}
-	c.emit(bytecode.OpDup, 0, 0)
-	c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
 }
 
-// assignTo stores the value on top of the stack into a target, leaving the
-// value on the stack as the expression's result.
-// compileCallTarget compiles a call that sloppy code assigned to: the call is
+// compileCallTarget walks a call that sloppy code assigned to: the call is
 // made, and then the assignment is a ReferenceError. The call's value stands
 // for the expression's, on the path nothing reaches. Strict code gets here
 // only as V8 parses it, and V8 makes the call there too.
 func (c *compiler) compileCallTarget(call *ast.Call, pos int) {
 	c.compileExpr(call)
-	c.emitAt(pos, bytecode.OpThrowReferenceError, c.nameIdx("invalid assignment target"), 0)
 }
 
+// assignTo walks the store of a value into a target.
 func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 	switch t := target.(type) {
 	case *ast.Call:
 		// A for-in or for-of head that is a call.
 		c.compileCallTarget(t, int(t.Start))
-		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	case *ast.Ident:
 		// Inside a `with` body the object may be what is written to. An
@@ -2485,7 +1622,6 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		if !initializing {
 			probe := c.withProbe(bytecode.OpWithSet, t.Name)
 			c.regWith(t, probe)
-			defer c.patchWithProbe(probe)
 		}
 		c.assignToIdentStatic(t, initializing)
 
@@ -2502,16 +1638,14 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		//
 		// The pattern compilers consume the source, while assignTo leaves it
 		// for its caller, so it is duplicated first.
-		c.emit(bytecode.OpDup, 0, 0)
 		c.compileArrayPattern(t, ast.DeclVar, false)
 
 	case *ast.ObjectPattern:
-		c.emit(bytecode.OpDup, 0, 0)
 		c.compileObjectPattern(t, ast.DeclVar, false)
 
 	case *ast.AssignPattern:
 		// `[a = 1]` as an assignment target: the default applies to the value
-		// on the stack before it reaches the reference underneath.
+		// before it reaches the reference.
 		c.applyDefault(t.Default, nameOf(t.Target))
 		c.assignTo(t.Target, initializing)
 
@@ -2529,195 +1663,75 @@ func isPattern(e ast.Expr) bool {
 	return false
 }
 
-// binaryOpcode maps a binary operator to its instruction.
-func binaryOpcode(op string) bytecode.Op {
-	switch op {
-	case "+":
-		return bytecode.OpAdd
-	case "-":
-		return bytecode.OpSub
-	case "*":
-		return bytecode.OpMul
-	case "/":
-		return bytecode.OpDiv
-	case "%":
-		return bytecode.OpMod
-	case "**":
-		return bytecode.OpPow
-	case "&":
-		return bytecode.OpBitAnd
-	case "|":
-		return bytecode.OpBitOr
-	case "^":
-		return bytecode.OpBitXor
-	case "<<":
-		return bytecode.OpShl
-	case ">>":
-		return bytecode.OpShr
-	case ">>>":
-		return bytecode.OpUShr
-	case "==":
-		return bytecode.OpEq
-	case "!=":
-		return bytecode.OpNe
-	case "===":
-		return bytecode.OpStrictEq
-	case "!==":
-		return bytecode.OpStrictNe
-	case "<":
-		return bytecode.OpLt
-	case "<=":
-		return bytecode.OpLe
-	case ">":
-		return bytecode.OpGt
-	case ">=":
-		return bytecode.OpGe
-	case "in":
-		return bytecode.OpIn
-	case "instanceof":
-		return bytecode.OpInstanceOf
-	}
-	return bytecode.OpNop
-}
-
-// compoundOpcode maps a compound assignment operator to the binary instruction
-// that computes its value.
-func compoundOpcode(op string) bytecode.Op {
-	// Strip the trailing '=' and reuse the binary table.
-	return binaryOpcode(op[:len(op)-1])
-}
-
-// compileMemberStore compiles `obj.p = value` and `obj[k] = value`, evaluating
-// the object, then the key, then the value, and leaving the assigned value on
-// the stack as the expression's result.
-//
-// The order matters: each part may have side effects, and the specification
-// fixes the order in which they happen.
-// compileMemberStore assigns to a property, leaving the value as the
-// expression's result -- unless keep is false, which an assignment in effect
-// position asks for: the copy that carries the result out is an instruction,
-// and so is the drop that would discard it.
+// compileMemberStore walks `obj.p = value` and `obj[k] = value`: the object,
+// then the key, then the value, the order the specification fixes.
 func (c *compiler) compileMemberStore(m *ast.Member, emitValue func(), keep bool) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
-		// A super reference has no object on the stack: the lookup starts at
-		// the home object's prototype, and the receiver is `this`.
+		c.noteSuper()
+		// A super reference has no object: the lookup starts at the home
+		// object's prototype, and the receiver is `this`.
 		if m.Computed {
-			c.emit(bytecode.OpSuperBase, 0, 0)
 			c.compileExpr(m.Property)
 			emitValue()
-			// base key value -> value base key value, so the store consumes
-			// three and the result is left behind.
-			if keep {
-				c.emit(bytecode.OpInsert3, 0, 0)
-			}
-			c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
 		emitValue()
-		if keep {
-			c.emit(bytecode.OpDup, 0, 0)
-		}
-		c.emitAt(int(m.Start), bytecode.OpSetSuperProp,
-			c.nameIdx(propKeyName(m.Property)), 0)
 		return
 	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, int(m.Start))
+		c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		emitValue()
-		if keep {
-			c.emit(bytecode.OpInsert2, 0, 0)
-		}
-		c.emitAt(int(m.Start), bytecode.OpSetPrivate, name, ref)
 		return
 	}
 	c.compileExpr(m.Object)
 	if m.Computed {
 		// The key stays as it was written: `a[k] = v` converts it to a property
 		// key only when the assignment happens, which is after the right-hand
-		// side has run. OpSetIndex does that, and checks the base first.
+		// side has run.
 		c.compileExpr(m.Property)
 		emitValue()
-		// obj key value -> value obj key value, so the store consumes three
-		// and the result is left behind.
-		if keep {
-			c.emit(bytecode.OpInsert3, 0, 0)
-		}
-		c.emitAt(int(m.Start), bytecode.OpSetIndex, 0, 0)
 		return
 	}
 	emitValue()
-	// obj value -> value obj value
-	if keep {
-		c.emit(bytecode.OpInsert2, 0, 0)
-	}
-	c.emitAt(int(m.Start), bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
 }
 
-// compileMemberStoreFromValue stores a value that is already on the stack into
-// a member target, which is what a compound assignment needs after combining.
+// compileMemberStoreFromValue walks the store of a value made before the
+// member target's parts, which is what a pattern's leaf needs.
 func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
-		// The value is on top and the key, if computed, has to go under it.
+		c.noteSuper()
 		if m.Computed {
-			// The value is already on the stack, so the base and the key go
-			// above it and it is swapped back on top.
-			c.emit(bytecode.OpSuperBase, 0, 0)
-			c.emit(bytecode.OpSwap, 0, 0)
 			c.compileExpr(m.Property)
-			c.emit(bytecode.OpSwap, 0, 0)
-			c.emit(bytecode.OpInsert3, 0, 0)
-			c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
-			return
 		}
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emitAt(int(m.Start), bytecode.OpSetSuperProp,
-			c.nameIdx(propKeyName(m.Property)), 0)
 		return
 	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, int(m.Start))
+		c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
-		c.emit(bytecode.OpSwap, 0, 0)
-		c.emit(bytecode.OpInsert2, 0, 0)
-		c.emit(bytecode.OpSetPrivate, name, ref)
-		return
-	}
-	// The value is on top; the object and key have to go beneath it.
-	if m.Computed {
-		c.compileExpr(m.Object)
-		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
-		// value obj key -> obj key value
-		c.emit(bytecode.OpRot3, 0, 0)
-		c.emit(bytecode.OpInsert3, 0, 0)
-		c.emit(bytecode.OpSetIndex, 0, 0)
 		return
 	}
 	c.compileExpr(m.Object)
-	// value obj -> obj value
-	c.emit(bytecode.OpSwap, 0, 0)
-	c.emit(bytecode.OpInsert2, 0, 0)
-	c.emit(bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
+	if m.Computed {
+		c.compileExpr(m.Property)
+	}
 }
 
 // compileSuperMemberGet reads a property through super, which looks it up on
 // the home object's prototype rather than on the receiver.
 func (c *compiler) compileSuperMemberGet(m *ast.Member) {
+	c.noteSuper()
 	if m.Computed {
 		// The base is resolved before the key expression runs, so a derived
 		// constructor that has not called super() fails before anything the
 		// key might do -- and a key that changes the home object's prototype
 		// does not move the reference.
-		c.emit(bytecode.OpSuperBase, 0, 0)
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpGetSuperIndex, 0, 0)
 		return
 	}
-	c.emit(bytecode.OpGetSuperProp, c.nameIdx(propKeyName(m.Property)), 0)
 }
 
-// compileYield emits a yield expression.
+// compileYield walks a yield expression.
 //
 // `yield*` is compiled as a loop that drains the operand's iterator, forwarding
 // each value out and each sent value back in, which is what delegation means.
@@ -2725,10 +1739,7 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	if !n.Delegate {
 		if n.Arg != nil {
 			c.compileExpr(n.Arg)
-		} else {
-			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
-		c.emitAt(n.Start, bytecode.OpYield, 0, 0)
 		return
 	}
 
@@ -2747,73 +1758,32 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	// Symbol.iterator after an asyncIterator getter has thrown is observable.
 	async := c.fn.Async
 	c.compileExpr(n.Arg)
-	if async {
-		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
-	} else {
-		c.emit(bytecode.OpForOfStart, 0, 0)
-	}
 	// The first next receives undefined; after that it receives whatever the
 	// caller sent to the outer generator, and the kind says which of the three
 	// methods to send it to.
-	kindSlot := c.declare(fmt.Sprintf("%%ys%d", *c.hiddenCount), bindVar, n.Start)
+	c.declare(fmt.Sprintf("%%ys%d", *c.hiddenCount), bindVar, n.Start)
 	*c.hiddenCount++
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpPushInt, 0, 0)
 
-	start := c.here()
-	// stack: cursor sent kind. The kind is kept in a binding of its own so
-	// that it survives the await an async delegation performs, which is where
-	// a return has to be told apart from an exhausted delegate.
-	c.emit(bytecode.OpDup, 0, 0)
-	c.emit(bytecode.OpSetLocal, kindSlot, 0)
-	// The instruction jumps past the delegation when the delegate is finished
-	// with, which only the end of this knows the address of.
-	var resumeDone int
+	// The kind is kept in a binding of its own so that it survives the
+	// await an async delegation performs, which is where a return has to be
+	// told apart from an exhausted delegate.
 	if async {
-		resumeDone = c.emit(bytecode.OpIterResume, 1, 0)
 		c.emitAwait(n.Start)
-	} else {
-		resumeDone = c.emit(bytecode.OpIterResume, 0, 0)
 	}
-	raw := uint32(0)
-	if !async {
-		// A synchronous delegation yields the delegate's result object as it
-		// is, so nothing reads its value on the way past.
-		raw = 1
-	}
-	exit := c.emitJumpB(bytecode.OpIterUnpackDelegate, kindSlot<<1|raw)
-	c.emit(bytecode.OpYieldStar, raw, 0)
-	c.emit(bytecode.OpJump, uint32(start), 0)
+	c.facts.yieldStar = true
 
-	c.patchJump(exit)
-	c.fn.Code[resumeDone].B = uint32(c.here())
 	// The delegate has finished. Which is the end of the delegation and which
 	// is the end of the outer generator depends on how it was resumed: a
 	// return travels through the delegate and out of the generator that
 	// delegated to it, carrying the value the delegate finished with.
-	c.emit(bytecode.OpGetLocal, kindSlot, 0)
-	c.emit(bytecode.OpPushInt, uint32(bytecode.ResumeReturn), 0)
-	c.emit(bytecode.OpStrictEq, 0, 0)
-	notReturn := c.emitJump(bytecode.OpJumpIfFalse)
-	depth := c.stackDepth
-	// The cursor beneath the value goes; it is finished with, and closing it
-	// again is not owed.
-	c.emit(bytecode.OpNipUnder, 1, 0)
-	c.stackDepth--
 	if async {
 		// An async generator awaits what it returns, here as anywhere else.
 		c.emitAwait(n.Start)
 	}
 	c.emitReturnValue(n.Start)
-	c.stackDepth = depth
-	c.patchJump(notReturn)
-	// The delegate's return value is the value of the whole expression, so the
-	// cursor beneath it is removed rather than the value.
-	c.emit(bytecode.OpSwap, 0, 0)
-	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// emitAwait emits an await, marking a module's body asynchronous.
+// emitAwait walks an await, marking a module's body asynchronous.
 //
 // A top-level await makes the module an async function: the interpreter has to
 // suspend the body rather than let the await escape the frame as an error, and
@@ -2822,5 +1792,4 @@ func (c *compiler) emitAwait(pos int) {
 	if c.fn.IsModule {
 		c.fn.Async = true
 	}
-	c.emitAt(pos, bytecode.OpAwait, 0, 0)
 }

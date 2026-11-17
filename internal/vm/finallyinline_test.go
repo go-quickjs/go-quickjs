@@ -1,12 +1,6 @@
 package vm
 
-import (
-	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
-	"github.com/go-quickjs/go-quickjs/internal/parser"
-)
+import "testing"
 
 // A finally clause is compiled inline after its try's normal completion,
 // and again as the handler's, which a throw and a return routed through it
@@ -82,61 +76,5 @@ func TestFinallyInlineCompletion(t *testing.T) {
 		if got := str.Go(); got != tc.want {
 			t.Errorf("%s: got %s, want %s", tc.src, got, tc.want)
 		}
-	}
-}
-
-// The normal completion of a try with a finally runs no completion record
-// and no rethrow: after its pop_catch comes the clause, not a record's
-// push_undef. A clause inside a clause, and code compiled for a debugger,
-// have their clause once.
-func TestFinallyInlineCode(t *testing.T) {
-	t.Parallel()
-	fnOf := func(src string, debug bool) *bytecode.Function {
-		t.Helper()
-		prog, err := parser.Parse(src, parser.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		top, err := compiler.Compile(prog, compiler.Options{Source: "test", Text: src, Debug: debug})
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, c := range top.Constants {
-			if c.Kind == bytecode.ConstFunction && c.Fn != nil && c.Fn.Name == "t" {
-				return c.Fn
-			}
-		}
-		t.Fatal("no function t")
-		return nil
-	}
-	count := func(fn *bytecode.Function, op bytecode.Op) (n int, afterPop []bytecode.Op) {
-		for i, in := range fn.Code {
-			if in.Op == op {
-				n++
-			}
-			if in.Op == bytecode.OpPopCatch && i+1 < len(fn.Code) {
-				afterPop = append(afterPop, fn.Code[i+1].Op)
-			}
-		}
-		return n, afterPop
-	}
-	const one = `function t(s) { try { s++ } finally { s ^= 1 } return s }`
-	if n, after := count(fnOf(one, false), bytecode.OpRethrow); n != 1 || len(after) != 1 || after[0] == bytecode.OpPushUndef {
-		t.Errorf("inline: %d rethrows, after pop_catch %v; want 1 and the clause", n, after)
-	}
-	if _, after := count(fnOf(one, true), bytecode.OpRethrow); len(after) != 1 || after[0] != bytecode.OpPushUndef {
-		t.Errorf("for a debugger: after pop_catch %v; want push_undef", after)
-	}
-	// The outer clause twice, the inner one once in each, with its record.
-	const nested = `function t(s) { try { s++ } finally { try { s-- } finally { s ^= 1 } } return s }`
-	n, after := count(fnOf(nested, false), bytecode.OpRethrow)
-	records := 0
-	for _, op := range after {
-		if op == bytecode.OpPushUndef {
-			records++
-		}
-	}
-	if n != 3 || len(after) != 3 || records != 2 {
-		t.Errorf("nested: %d rethrows, after pop_catch %v; want 3, and a record after two", n, after)
 	}
 }

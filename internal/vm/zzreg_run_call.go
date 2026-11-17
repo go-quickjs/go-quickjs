@@ -53,7 +53,7 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 						// without a frame is entered with one from now on.
 						e.kind &^= regCallOut | regCallLeaf
 					}
-					f.pc = regSrc(c, pc) + 1
+					f.pc = uint32(pc) + 1
 					return st.done(r.regCallMiss(f, c, w, wb, pc))
 				}
 				// The this is given to the body, not written to the
@@ -80,10 +80,10 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 						return pc + 1
 					}
 				}
-				f.pc = regSrc(c, pc) + 1
+				f.pc = uint32(pc) + 1
 				return st.done(r.regCallMiss(f, c, w, wb, pc))
 			}
-			f.pc = regSrc(c, pc) + 1
+			f.pc = uint32(pc) + 1
 			if e.kind == regCallNative {
 				return st.done(r.regNative(e.callee, w, wb))
 			}
@@ -181,7 +181,7 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 			return pc
 		}
 	}
-	f.pc = regSrc(c, pc) + 1
+	f.pc = uint32(pc) + 1
 	return st.done(r.regCallMiss(f, c, w, wb, pc))
 }
 

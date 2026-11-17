@@ -21,44 +21,21 @@ func (r *Runtime) jitOpPlain(ctx *abi.Context) bool {
 	// (jitGoCallInstr): the code's closure and its bytecode, three loads
 	// one after another, are read only for what needs them.
 	in, n := jitGoCallInstr(ctx.GoOp)
-	if n > abi.MaxGoArgs || n != jitcompile.GoOperands(in) {
+	if n > abi.MaxGoArgs || n != jitcompile.GoOperands(in.Op, in.A) {
 		return false
 	}
-	var cl *closure
 	if in.Op == bytecode.OpTemplateObject {
-		if cl = r.jitOpCode(ctx, in); cl == nil {
-			return false
-		}
+		// Of the code's closure's templates, which register code's call
+		// does not name.
+		return false
 	}
 	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[0])), n)
-	v, ok := r.jitOpFrameless(cl, in, args)
+	v, ok := r.jitOpFrameless(nil, in, args)
 	if !ok {
 		return false
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
-}
-
-// jitOpCode is the closure of the code that makes in, an operation Go
-// makes for native code in ctx (jitOpPlain): a native callee's closure --
-// or nil where the instruction at the call's PC is not in.
-func (r *Runtime) jitOpCode(ctx *abi.Context, in bytecode.Instr) *closure {
-	s, idx := r.jit, int(ctx.Level)
-	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || r.jitRegCodeIn(ctx, idx) {
-		// Register code's operations are Go's whole on its frame
-		// (jitRegWhole): its pcs are register pcs, not its stack code's.
-		return nil
-	}
-	if ctx.Live != abi.LiveCall || jitGoInline(ctx) {
-		// A run's own frame, or an inlined callee's: none kept.
-		return nil
-	}
-	cl := (*closure)(ctx.Closure)
-	pc := int(ctx.ExitPC)
-	if cl == nil || pc >= len(cl.fn.Code) || cl.fn.Code[pc] != in {
-		return nil
-	}
-	return cl
 }
 
 // jitOpFrameless is in's result, of its operands args, where making it
@@ -69,7 +46,7 @@ func (r *Runtime) jitOpCode(ctx *abi.Context, in bytecode.Instr) *closure {
 // that is a primitive, converted, or defined on an ordinary object; a
 // tagged template's strings. It reports false for the rest, having
 // changed nothing.
-func (r *Runtime) jitOpFrameless(cl *closure, in bytecode.Instr, args []Value) (Value, bool) {
+func (r *Runtime) jitOpFrameless(cl *closure, in jitInstr, args []Value) (Value, bool) {
 	if r.meter != nil {
 		// What they allocate is charged to the memory limit, which may
 		// throw.

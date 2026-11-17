@@ -13,9 +13,9 @@ func (c *compiler) regNoteUpvalueWrite(t *ast.Ident, initializing bool) {
 	if !ok {
 		if !initializing && t.Name == c.selfName {
 			if c.fn.Strict {
-				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
+				c.noteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 			} else {
-				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
+				c.noteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
 			}
 		}
 		return
@@ -23,28 +23,28 @@ func (c *compiler) regNoteUpvalueWrite(t *ast.Ident, initializing bool) {
 	u := c.fn.Upvalues[idx]
 	switch {
 	case u.TDZ && !initializing:
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResUpvalCheck, Index: idx})
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResUpvalCheck, Index: idx})
 	case u.FuncSelf && !initializing:
 		if c.fn.Strict {
-			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
+			c.noteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 		} else {
-			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
+			c.noteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
 		}
 	case !u.Mutable && !initializing:
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 	default:
-		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
+		c.noteWrite(t, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 	}
 }
 
-// regTop records one of top-level code's declarations, op of the name with
-// index name and flag, as the stack form has just emitted it, for the
-// register form to make in the same order (regcomp.Record.Top).
-func (c *compiler) regTop(op bytecode.Op, name, flag uint32, fn *ast.FuncLit) {
+// regTop records one of top-level code's declarations, op of the name and
+// flag, at pos, -1 for none, for the register form to make in the order
+// the declaration instantiation makes them (regcomp.Record.Top).
+func (c *compiler) regTop(op bytecode.Op, name string, flag uint32, fn *ast.FuncLit, pos int) {
 	if c.reg == nil || c.parent != nil {
 		return
 	}
-	c.reg.NoteTop(regcomp.TopOp{Op: op, Name: c.fn.Names[name], Flag: flag, Pos: c.lastPos, Fn: fn})
+	c.reg.NoteTop(regcomp.TopOp{Op: op, Name: name, Flag: flag, Pos: int32(pos), Fn: fn})
 }
 
 // regTopCode gives fn, top-level code of statements body whose resolution
@@ -62,12 +62,12 @@ func regTopCode(body []ast.Stmt, fn *bytecode.Function, rec *regcomp.Record) {
 	}
 }
 
-// regWith records the probe at pc, if any, that the stack form compiled
-// for name id before its static access (regcomp.Record.Withs).
-func (c *compiler) regWith(id *ast.Ident, pc int) {
-	if pc < 0 || c.reg == nil {
+// regWith records the probe, if any -- where probe, withProbe's, is not
+// negative, the last emitProbe noted -- that name id has before its static
+// access (regcomp.Record.Withs).
+func (c *compiler) regWith(id *ast.Ident, probe int) {
+	if probe < 0 || c.reg == nil {
 		return
 	}
-	in := c.fn.Code[pc]
-	c.reg.NoteWith(id, regcomp.WithProbe{Op: in.Op, Limit: uint16(in.A >> bytecode.WithLimitShift)})
+	c.reg.NoteWith(id, c.probe)
 }

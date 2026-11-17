@@ -32,22 +32,21 @@ func (r *Runtime) regDeadCall(o *Object, recv Value, args []Value) (Value, error
 }
 
 // regReuseSites is the sites of rc's calls of exec marked RMarkReuse, by
-// call site, whose arrays execReuseOf says may be made again: its answer,
-// of the stack form's call and locals, put in the frame's registers.
-func regReuseSites(fn *bytecode.Function, rc *bytecode.RegCode) []*execReuseSite {
+// call site, whose arrays may be made again (the register compiler's reuseOf): the
+// bindings it names, put in the frame's registers.
+func regReuseSites(rc *bytecode.RegCode) []*execReuseSite {
 	var out []*execReuseSite
 	for pc, w := range rc.Code {
 		if !w.Op().MethodCall() || pc >= len(rc.Marks) || rc.Marks[pc]&bytecode.RMarkReuse == 0 {
 			continue
 		}
-		spc := int(rc.Aux[pc])
-		site := execReuseOf[struct{}](fn, spc+1, int(fn.Code[spc+1].A))
-		if site == nil || rc.LocalReg[site.l] < 0 || site.s >= 0 && rc.LocalReg[site.s] < 0 {
+		l, s, strs := bytecode.ReuseAux(rc.Aux[pc])
+		if rc.LocalReg[l] < 0 || s >= 0 && rc.LocalReg[s] < 0 {
 			continue
 		}
-		rs := &execReuseSite{l: int(rc.LocalReg[site.l]), s: -1, strs: site.strs}
-		if site.s >= 0 {
-			rs.s = int(rc.LocalReg[site.s])
+		rs := &execReuseSite{l: int(rc.LocalReg[l]), s: -1, strs: strs}
+		if s >= 0 {
+			rs.s = int(rc.LocalReg[s])
 		}
 		if out == nil {
 			out = make([]*execReuseSite, rc.CallSites)
@@ -112,13 +111,13 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 }
 
 // regNewArrayE is new_array_empty: the literal's arrayEmptyNode, made
-// here, its site in the closure's arrays, named to native code by the
-// stack form's pc. Making an array throws nothing, so the frame's pc is
+// here, its site in the closure's arrays, named to native code by its
+// pc. Making an array throws nothing, so the frame's pc is
 // left as it is.
 func (r *Runtime) regNewArrayE(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) {
 	pc := k.pc - 1
 	w := regAt(c.code, pc)
-	n := arrayEmptyNode[struct{}]{site: int(w.B()), pc: int32(regSrc(c, pc))}
+	n := arrayEmptyNode[struct{}]{site: int(w.B()), pc: int32(uint32(pc))}
 	regs[w.A()] = n.make(r, f.cl.closureCode)
 }
 
@@ -134,7 +133,7 @@ func (r *Runtime) regCharCodeAtSlow(f *frame, c *regCode, pc int, regs *[1 << 16
 		return err
 	}
 	a := regs[w.X()]
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	v, err := r.regCall(m, o, []Value{a})
 	if err != nil {
 		return err

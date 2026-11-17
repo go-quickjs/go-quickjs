@@ -78,10 +78,10 @@ design spends its effort on fewer dispatches and cheaper ones. See
 error value returned, never a Go panic, and a table of the function's
 handlers says where it resumes.
 
-The front end still compiles each function to a stack bytecode first, after
-QuickJS's: the register compiler reads it for positions, cache sites and
-facts about the function, and the evaluators of small leaf functions run
-it.
+The front end compiles each function to register code alone: a walk of the
+AST resolves its scopes and records them, and the register compiler
+compiles the AST with that record, a function at its first call, as V8
+compiles lazily.
 
 **An object is allocated the size it is about to be.** An object literal says
 how many properties it will be given, a constructor's body is walked for the

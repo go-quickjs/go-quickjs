@@ -10,9 +10,9 @@ import (
 // The patterns regcomp makes mul_imm and the int32 forms of, and those it
 // leaves alone: x * k and k * x of a 16-bit k, not a k past it;
 // (x + y) | 0, (x - y) | 0, (x + k) | 0 and (x - k) | 0, the last with X
-// RAddII32Sub and SC -k, and its Aux the stack instruction of the | 0,
-// at the position the + or the - has; not a + of a string, a | 1, a product's
-// | 0, nor x - -32768, whose -k is past 16 bits. A bitwise operator's
+// RAddII32Sub and SC -k, its Aux a pc past the code's with the | 0's
+// position, the instruction at the position the + or the - has; not a + of
+// a string, a | 1, a product's | 0, nor x - -32768, whose -k is past 16 bits. A bitwise operator's
 // | 0 is left out where an operand is a number literal or a >>>, never
 // of two unknown operands.
 func TestRegInt32Forms(t *testing.T) {
@@ -79,12 +79,14 @@ func TestRegInt32Forms(t *testing.T) {
 			}
 			switch w.Op() {
 			case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
-				// The | 0's stack instruction, by its position, which is
-				// the + or the -'s, the start of the expression they
-				// share: the stack code's bin_imm after the add, at the
-				// add's line entry.
-				if pc >= len(rc.Aux) || rc.Aux[pc] != rc.SrcPC[pc] {
-					t.Errorf("%s: %s placed at %d, its | 0 at %v", c.body, rc.Format(pc), rc.SrcPC[pc], rc.Aux)
+				// The | 0's position, the + or the -'s, the start of
+				// the expression they share, at the pc past the code
+				// its Aux names.
+				own, _ := rc.PosAt(pc)
+				if pc >= len(rc.Aux) || int(rc.Aux[pc]) < len(rc.Code) {
+					t.Errorf("%s: %s, its | 0 at %v", c.body, rc.Format(pc), rc.Aux)
+				} else if or0, _ := rc.PosAt(int(rc.Aux[pc])); or0 != own {
+					t.Errorf("%s: %s placed at %d, its | 0 at %d", c.body, rc.Format(pc), own, or0)
 				}
 			}
 		}

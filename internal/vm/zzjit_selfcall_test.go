@@ -48,8 +48,8 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 		}
 	}
 	trace := r.global.getOwn(r.atoms.intern("w")).value().Object().proto().getOwn(r.atoms.intern("walk")).value().Object().fn().closure
-	if len(trace.fn.Code) <= ssa.MaxInline {
-		t.Fatalf("walk is %d instructions, short enough to inline", len(trace.fn.Code))
+	if n := jitRegInlineSize(firstReg(trace.fn)); n <= ssa.MaxInline {
+		t.Fatalf("walk is %d instructions, short enough to inline", n)
 	}
 	rounds := []string{`w.walk(big, 0)`, `w.walk(big, 0)`, `w.walk(big, 0)`, `w.walk(big, 0)`}
 	var compiles []uint64

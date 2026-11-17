@@ -1553,13 +1553,13 @@ func (l *regLowering) lower(pc int) {
 		}
 	case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
 		// (x op y) | 0: the operator into a scratch slot and the ToInt32
-		// of the | 0, whose stack instruction Aux[pc] is, from it -- the
+		// of the | 0, whose position's pc past the code Aux[pc] is, from it -- the
 		// IR of the add, sub, add_imm or sub_imm and the or_imm 0 the
 		// instruction stands for, the sum in a scratch slot rather than a
 		// register. The operator commits nothing, as arithmetic is built
 		// (ssa's commitsBuilt), so the ToInt32 may leave as the or_imm's
 		// does, the instruction run again from its start.
-		if pc >= len(rc.Aux) || int64(rc.Aux[pc]) >= int64(len(fn.Code)) {
+		if pc >= len(rc.Aux) || int64(rc.Aux[pc]) < int64(len(rc.Code)) {
 			panic(fmt.Sprintf("jit: %v at %d without its | 0's position", op, pc))
 		}
 		o, right := ir.Add, reg(c)

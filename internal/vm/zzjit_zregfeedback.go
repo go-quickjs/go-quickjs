@@ -1666,7 +1666,7 @@ func (r *Runtime) jitRegSharedLiteral(e *jitEntry, cl *closure, rc *bytecode.Reg
 	n := len(ic.p1.extAt().elems)
 	e.literals = append(e.literals, jitLiteral{pc: int32(rpc), pool: new(abi.ObjectPool), array: true, n: n, fn: cl.fn, shared: true})
 	l := &e.literals[len(e.literals)-1]
-	l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: n, sharedOf: cl, sharedReg: true, sharedPC: int32(w.C())})
+	l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: n, sharedOf: cl, sharedPC: int32(w.C())})
 	r.jitFillLiteral(l)
 	return l
 }

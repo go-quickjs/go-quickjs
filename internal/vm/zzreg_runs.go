@@ -323,7 +323,7 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 	f, c := st.f, st.c
 	st.kept.pc = pc + 1
 	r.backEdges = backEdgeCheckInterval
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	// The calls' budget goes on as it was (checkInterruptPoll), which
 	// samples the calls (rhCallW, regEnterW): reset at each back edge's
 	// check, it had never run out in a frame of a loop of calls, nor were
@@ -356,7 +356,7 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 func (r *Runtime) regAppend(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
 	pc := k.pc - 1
 	w := regAt(c.code, pc)
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	v, err := strAppendOp[struct{}](r, regs[w.A()], regs[w.B()])
 	if err == nil {
 		regs[w.A()] = v
@@ -427,7 +427,7 @@ func (r *Runtime) regIterNext(f *frame, c *regCode, k *regKept, regs *[1 << 16]V
 				}
 			}
 		} else if !st.forIn && r.genNextFn != nil && st.next.ref == unsafe.Pointer(r.genNextFn) {
-			f.pc = c.src[pc] + 1
+			f.pc = uint32(pc) + 1
 			if g := regGenCursor(st); g != nil {
 				v, more, err = r.regGenStep(st, g)
 			} else {
@@ -435,12 +435,12 @@ func (r *Runtime) regIterNext(f *frame, c *regCode, k *regKept, regs *[1 << 16]V
 			}
 			goto stepped
 		} else if !st.forIn {
-			f.pc = c.src[pc] + 1
+			f.pc = uint32(pc) + 1
 			v, more, err = r.regStepNext(st)
 			goto stepped
 		}
 	}
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	v, more, err = r.iterNext(cur)
 stepped:
 	if err != nil {
@@ -459,7 +459,7 @@ stepped:
 // built-in, unread, where reading it would find it running nothing to
 // find it (regexpLitMethod), and read
 // otherwise, at the instruction's position or, for one that calls, at the
-// stack form's instruction of the literal (Aux) -- and, with RLitCall,
+// position of the pc Aux (Lines) -- and, with RLitCall,
 // the method called with the window's one argument as a call_method_w
 // marked RMarkLitRecv calls it.
 //
@@ -467,7 +467,7 @@ stepped:
 func (r *Runtime) regLit(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value) error {
 	pc := k.pc - 1
 	w := regAt(c.code, pc)
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	a, x, kc := w.A(), w.X(), uint32(w.C())
 	lit, err := r.newRegExpLiteral(regConst(f.cl.fn, c, kc))
 	if err != nil {
@@ -504,7 +504,7 @@ func (r *Runtime) regLit(f *frame, c *regCode, k *regKept, regs *[1 << 16]Value)
 			return err
 		}
 		regs[a] = v
-		f.pc = c.src[pc] + 1
+		f.pc = uint32(pc) + 1
 	}
 	if x&bytecode.RLitCall == 0 {
 		return nil

@@ -78,8 +78,6 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 	// The module's code as register code too (regcomp.CompileTop).
 	c.reg = regcomp.NewRecord(prog.Idents)
 	c.reg.Completion = c.completionSlot
@@ -95,8 +93,6 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.moduleBindingsDone = true
 	c.compileStatements(prog.Body)
 
-	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
-	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
 	rec := c.reg
 	fn = c.done()
@@ -217,11 +213,11 @@ func declaredNames(s ast.Stmt) []string {
 	return out
 }
 
-// compileImportDecl emits nothing: the bindings are installed by the linker
+// compileImportDecl walks nothing: the bindings are installed by the linker
 // before the body runs.
 func (c *compiler) compileImportDecl(n *ast.ImportDecl) {}
 
-// compileExportDecl emits the declaration an export wraps, if any.
+// compileExportDecl walks the declaration an export wraps, if any.
 func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 	switch {
 	case n.Default:
@@ -229,7 +225,6 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 			// `export default class {}` declares no binding of its own, so it
 			// is the expression it looks like, named after the export.
 			c.compileClass(cd.Class, "default")
-			c.emit(bytecode.OpInitModuleLex, c.nameIdx(defaultBindingName), 0)
 			return
 		}
 		if fd, ok := n.Decl.(*ast.FuncDecl); ok {
@@ -245,7 +240,6 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 			return
 		}
 		c.compileExprNamed(n.DefaultExpr, "default")
-		c.emit(bytecode.OpInitModuleLex, c.nameIdx(defaultBindingName), 0)
 
 	case n.Decl != nil:
 		// A function declaration was already emitted when the statement list
@@ -277,8 +271,7 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 	// Module code is strict, so Annex B's block-function alias does not apply.
 	collectVarNamesIn(body, &names, true)
 	for _, n := range names {
-		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
-		c.regTop(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0, nil)
+		c.regTop(bytecode.OpDefineGlobalVar, n, 0, nil, -1)
 	}
 
 	c.collectModuleLex(body)
@@ -287,8 +280,7 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 		if l.kind.IsConst() {
 			mutable = 0
 		}
-		c.emit(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable)
-		c.regTop(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable, nil)
+		c.regTop(bytecode.OpDeclareModuleLex, l.name, mutable, nil, -1)
 	}
 }
 
@@ -340,8 +332,6 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script
 	c.reg.Completion = c.completionSlot
 	c.hoistModuleBindings(prog.Body)
 	c.hoistBlockDeclarations(prog.Body, true)
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
 	rec := c.reg
 	fn := c.done()

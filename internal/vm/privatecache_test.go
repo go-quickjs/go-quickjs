@@ -254,8 +254,8 @@ func TestPrivateMembersAgreeWithNode(t *testing.T) {
 }
 
 // The reads and writes of private fields, in a function register code
-// runs, are answered by their sites' caches: the caches past the
-// function's PropSites, one for each in the order of the code, remember
+// runs, are answered by their sites' caches: a cache of its own for each,
+// in the order of the code, remembers
 // the object's shape and where in it each member is; a getter's member,
 // which is called, is remembered by none.
 func TestPrivateSitesCached(t *testing.T) {
@@ -277,17 +277,14 @@ func TestPrivateSitesCached(t *testing.T) {
 	c := r.global.getOwn(r.atoms.intern("c")).value().Object()
 	cl := r.global.getOwn(r.atoms.intern("add")).value().Object().fn().closure
 	fn := cl.fn
-	if fn.PrivateSites != 4 {
-		t.Fatalf("PrivateSites = %d, want 4", fn.PrivateSites)
-	}
-	want := int(fn.PropSites+fn.PrivateSites) + 1
+	want := int(fn.PropSites) + 1
 	if rc := fn.RegCompiled(); rc != nil && rc.Names != nil {
 		// Register code compiled at the function's first call numbers its
-		// own sites past the private members' (bytecode.RegLater).
+		// sites in its own table (bytecode.RegLater).
 		want = int(rc.PropSites) + 1
 	}
 	if len(cl.ic) != want {
-		t.Fatalf("%d caches for %d sites and %d private ones", len(cl.ic), fn.PropSites, fn.PrivateSites)
+		t.Fatalf("%d caches for %d sites", len(cl.ic), want-1)
 	}
 	// The getter is installed first, then the fields in their order.
 	keys := c.keys()

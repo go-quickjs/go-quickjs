@@ -2,6 +2,17 @@ package vm
 
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
+// leafKind is the leaf cl's register code is (bytecode.RegCode.Leaf), once
+// the code is the closure's (regOf, regBindPlan), whose tables then have
+// the code's names and cache sites; LeafNone before. A function's code is
+// compiled at its first call, which is made with a frame.
+func leafKind(cl *closure) bytecode.LeafKind {
+	if c := cl.reg; c != nil {
+		return c.rc.Leaf
+	}
+	return bytecode.LeafNone
+}
+
 // leafCall answers a call of a function whose body bytecode.LeafKind names,
 // with o as its `this`, without a frame. It does so only where nothing the
 // body does could call code or throw -- its reads are of plain data
@@ -11,23 +22,29 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // else it reports false, having changed nothing, and the body is run as
 // usual. A body that only writes answers undefined.
 func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
-	fn := cl.fn
-	switch fn.Leaf {
+	c := cl.reg
+	if c == nil {
+		return Undefined, false
+	}
+	switch c.rc.Leaf {
 	case bytecode.LeafSetThis:
 		return Undefined, r.leafStores(cl, o, args)
-	case bytecode.LeafForward, bytecode.LeafPure:
+	case bytecode.LeafNone, bytecode.LeafForward, bytecode.LeafPure:
 		// A construction is answered by leafForward, and a call of a pure
 		// body by pureCall.
 		return Undefined, false
 	}
-	in := fn.Code[1]
-	v, ok := plainOwn(o, cl.names[in.A])
+	// get_prop of this, the body's first instruction.
+	code := c.rc.Code
+	site := code[0].C()
+	name := cl.names[c.siteName[site]]
+	v, ok := plainOwn(o, name)
 	if !ok {
-		if v, ok = r.cachedData(&cl.ic[in.B], o, cl.names[in.A]); !ok {
+		if v, ok = r.cachedData(&cl.ic[site], o, name); !ok {
 			return Undefined, false
 		}
 	}
-	switch fn.Leaf {
+	switch c.rc.Leaf {
 	case bytecode.LeafGetThis:
 		return v, true
 	case bytecode.LeafGetThisLength:
@@ -40,7 +57,7 @@ func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
 	case bytecode.LeafGetThisIndex:
 		// As the interpreter's get_index reads an element first thing.
 		key := Undefined
-		if p := int(fn.Code[2].A); p < len(args) {
+		if p := int(code[1].C()) - 2; p < len(args) {
 			key = args[p]
 		}
 		if v.IsObject() && key.IsNumber() {
@@ -57,41 +74,46 @@ func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
 }
 
 // leafStores does the writes of a body LeafSetThis marks -- this.k = p, for
-// parameters p -- if the sites' caches answer every one of them, and reports
-// whether it did. Each is then a write to a plain writable property o has,
-// or the addition of one past a prototype chain that cannot intercept it:
-// nothing is called, and nothing throws. Every write is checked before any
-// is made, against the shape the ones before it leave o with.
+// parameters p, each a set_prop of register 1 from p's -- if the sites'
+// caches answer every one of them, and reports whether it did. Each is then
+// a write to a plain writable property o has, or the addition of one past a
+// prototype chain that cannot intercept it: nothing is called, and nothing
+// throws. Every write is checked before any is made, against the shape the
+// ones before it leave o with.
 func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
-	code := cl.fn.Code
+	c := cl.reg
+	if c == nil {
+		return false
+	}
+	code := c.rc.Code
 	s := o.shape
-	for i := 0; i+2 < len(code) && code[i+2].Op == bytecode.OpSetProp; i += 3 {
-		c := &cl.ic[code[i+2].B]
+	for i := 0; i < len(code) && code[i].Op() == bytecode.RSetProp; i++ {
+		e := &cl.ic[code[i].C()]
 		// An entry for a setter calls it, which is no write of a leaf's.
-		if c.shape != s || s == nil || c.getter {
+		if e.shape != s || s == nil || e.getter {
 			return false
 		}
-		if c.next != nil {
-			if !c.adds(o) {
+		if e.next != nil {
+			if !e.adds(o) {
 				return false
 			}
-			s = c.next
+			s = e.next
 		}
 	}
-	for i := 0; i+2 < len(code) && code[i+2].Op == bytecode.OpSetProp; i += 3 {
-		in := code[i+2]
-		c := &cl.ic[in.B]
+	for i := 0; i < len(code) && code[i].Op() == bytecode.RSetProp; i++ {
+		w := code[i]
+		e := &cl.ic[w.C()]
 		v := Undefined
-		if p := int(code[i+1].A); p < len(args) {
+		if p := int(w.B()) - 2; p < len(args) {
 			v = args[p]
 		}
 		if verifyShapes {
-			r.verifyStoreCache(c, o, cl.names[in.A])
+			r.verifyStoreCache(e, o, cl.names[c.siteName[w.C()]])
 		}
-		if c.next == nil {
-			o.vals()[c.idx] = v
+		if e.next == nil {
+			o.vals()[e.idx] = v
 		} else {
-			o.appendTransition(v, c.next)
+			o.appendTransition(v, e.next)
 		}
 	}
 	return true
@@ -106,17 +128,22 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 // answer, apply the built-in one, and k a function; it reports false for
 // anything else, having done nothing, and the body is run as usual.
 func (r *Runtime) leafForward(cl *closure, callee, o *Object, args []Value, newTarget Value) (bool, error) {
-	code := cl.fn.Code
-	in := code[1]
-	m, ok := plainOwn(o, cl.names[in.A])
+	c := cl.reg
+	if c == nil || c.rc.Leaf != bytecode.LeafForward {
+		return false, nil
+	}
+	code := c.rc.Code
+	site := code[0].C()
+	key := cl.names[c.siteName[site]]
+	m, ok := plainOwn(o, key)
 	if !ok {
-		m, ok = r.cachedData(r.fwdCache(cl, int(in.B), o, cl.names[in.A]), o, cl.names[in.A])
+		m, ok = r.cachedData(r.fwdCache(cl, int(site), o, key), o, key)
 	}
 	if !ok || !isCallable(m) {
 		return false, nil
 	}
-	in = code[2]
-	if ap, ok := r.cachedData(&cl.ic[in.B], m.Object(), cl.names[in.A]); !ok || !ap.IsObject() || ap.Object() != r.applyFn {
+	site = code[1].C()
+	if ap, ok := r.cachedData(&cl.ic[site], m.Object(), cl.names[c.siteName[site]]); !ok || !ap.IsObject() || ap.Object() != r.applyFn {
 		return false, nil
 	}
 	if r.frameDepth >= r.maxFrames {
@@ -127,8 +154,9 @@ func (r *Runtime) leafForward(cl *closure, callee, o *Object, args []Value, newT
 	f.cl = cl
 	f.locals = nil
 	f.base = r.stackTop
-	// The saved pc is past the instruction a frame is at: apply_arguments.
-	f.pc = 5
+	// The saved pc is past the instruction a frame is at: apply_args, the
+	// body's fourth.
+	f.pc = 4
 	f.this = Obj(o)
 	f.thisRef = nil
 	f.newTarget = newTarget

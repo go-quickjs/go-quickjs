@@ -206,8 +206,9 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 				}
 				// A body that only reads or writes a property of its this is
 				// answered here where it can be, without a frame.
-				if leaf := fn.Leaf; leaf == bytecode.LeafPure {
-					if pureFirst(fd, fn) {
+				if c := fd.closure.reg; c == nil {
+				} else if leaf := c.rc.Leaf; leaf == bytecode.LeafPure {
+					if pureFirst(fd, c.rc) {
 						if v, ok := r.pureCall(fd, this, args); ok {
 							return v, nil
 						}

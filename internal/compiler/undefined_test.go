@@ -8,7 +8,7 @@ import (
 )
 
 // TestUndefinedPushed pins a read of undefined that nothing can shadow, and
-// void of a literal, compiled as push_undef alone, and one that something may as the read of the
+// void of a literal, compiled as load_undef alone, and one that something may as the read of the
 // global it is: a parameter or a local of that name, a with body, a sloppy
 // function with a direct eval and a function inside one.
 func TestUndefinedPushed(t *testing.T) {
@@ -34,17 +34,20 @@ func TestUndefinedPushed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		globals, pushes, drops := 0, 0, 0
+		globals, pushes := 0, 0
 		var walk func(fn *bytecode.Function)
 		walk = func(fn *bytecode.Function) {
-			for _, in := range fn.Code {
+			rc := fn.RegCode()
+			names := rc.Names
+			if names == nil {
+				names = fn.Names
+			}
+			for _, w := range rc.Code {
 				switch {
-				case in.Op == bytecode.OpGetGlobal && fn.Names[in.A] == "undefined":
+				case w.Op() == bytecode.RGetGlobal && names[w.B()] == "undefined":
 					globals++
-				case in.Op == bytecode.OpPushUndef:
+				case w.Op() == bytecode.RLoadUndef:
 					pushes++
-				case in.Op == bytecode.OpDrop:
-					drops++
 				}
 			}
 			for _, k := range fn.Constants {
@@ -59,8 +62,8 @@ func TestUndefinedPushed(t *testing.T) {
 			}
 		}
 		switch {
-		case c.want == pushed && (globals != 0 || pushes == 0 || drops != 0):
-			t.Errorf("%s: %d reads of the global undefined, %d push_undef and %d drops, want it pushed", c.src, globals, pushes, drops)
+		case c.want == pushed && (globals != 0 || pushes == 0):
+			t.Errorf("%s: %d reads of the global undefined, %d load_undef, want it loaded", c.src, globals, pushes)
 		case c.want == local && globals != 0:
 			t.Errorf("%s: %d reads of the global undefined, want the binding's", c.src, globals)
 		case c.want == global && globals == 0:

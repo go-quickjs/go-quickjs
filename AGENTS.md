@@ -28,13 +28,13 @@ The main areas are:
   data, the calendars and the time zones. The register interpreter
   (docs/register-interpreter.md) runs every runtime's code: on native
   handlers on amd64 and arm64, and on the Go handler table elsewhere and
-  with `QJS_NONATIVE=1`; test with both. The JIT compiles register code.
-  The front end still makes each function's stack form, which the register
-  backend reads and the leaf evaluators (`pureCall`, `leafCall`) still run.
+  with `QJS_NONATIVE=1`; test with both. The JIT compiles register code,
+  the one form a function is compiled to.
 - `internal/compiler/regcomp`: the register backend, which compiles a
-  function's AST to register code over what the stack compiler records of
-  its scopes; `internal/vm/internal/nativegen` generates the register
-  interpreter's native handlers.
+  function's AST to register code over what `internal/compiler`'s walk,
+  which emits no code, records of its scopes;
+  `internal/vm/internal/nativegen` generates the register interpreter's
+  native handlers.
 - `internal/regdiff`: tests only, the register interpreter's differential
   tests, over cases of their own and the corpora `internal/v8bench` holds
   for the benchmark runners.
@@ -626,8 +626,8 @@ comparison with it.
 
 `internal/cmd/disasm` prints the bytecode a script or module compiles to,
 each function's register code under the source lines it comes from;
-`-func` picks functions by name, `-stack` adds the stack form the front end
-makes, and `-jit` says whether the JIT lowers each function. Look there
+`-func` picks functions by name, and `-jit` says whether the JIT lowers
+each function. Look there
 first when a micro-benchmark moves: it shows which instructions a loop
 runs as.
 
@@ -644,9 +644,13 @@ register backend's refusals by reason.
 `internal/cmd/compilediff` compares what the front end makes at two
 revisions, for every `.js` file of the directories it is given, as a script,
 strict, a module, for a debugger, with Node's quirks and as an eval's code:
-every field of every function, its constants, each instruction's position,
-the line table's answers, and a rejected program's exact error. `-mutants N`
-adds N mutations of each file. It prints the first difference by file, mode,
+every field of every function, its constants, its register code an
+instruction a line with each instruction's position, the line table's
+answers, and a rejected program's exact error. `-mutants N` adds N mutations
+of each file. `-reg` compares the register code alone, each operand as what
+it names -- a name, a constant, a site by its kind and name -- so that a
+change that numbers a function's tables anew compares by its code
+(`-nopos` without positions, `-noleaf` without leaf kinds). It prints the first difference by file, mode,
 function and line. The same output means a change to the lexer, the parser or
 the compiler changes nothing a program that compiles does, nor what the JIT is
 given, so it needs only what the comparison cannot see, not all of the above:

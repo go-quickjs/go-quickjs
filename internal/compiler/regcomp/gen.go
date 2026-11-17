@@ -76,7 +76,7 @@ func (g *gen) awaitReg(v, pos int) int {
 	return t
 }
 
-// yieldStar compiles yield*, as the stack form does: a loop that sends
+// yieldStar compiles yield*: a loop that sends
 // what the generator is resumed with to the delegate's next, throw or
 // return, by how it is resumed, and suspends the generator with each
 // result the delegate gives (an async generator awaits each first), until
@@ -86,8 +86,7 @@ func (g *gen) awaitReg(v, pos int) int {
 func (g *gen) yieldStar(n *ast.Yield, dst int) int {
 	async := g.fn.Async
 	src := g.expr(n.Arg, -1)
-	// The delegation's steps are placed where the stack form's are, at
-	// its operand's last position (a stack trace through the delegate
+	// The delegation's steps are placed at its operand's last position (a stack trace through the delegate
 	// names it); its awaits at the yield.
 	at := int(g.cur)
 	cur := g.alloc()

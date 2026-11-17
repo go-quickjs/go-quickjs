@@ -171,31 +171,28 @@ func TestRegExpReuse(t *testing.T) {
 	}
 }
 
-// regexpReuseSiteOf is the site execReuseOf finds for the first call of
-// exec in function name of fn, a script, or nil.
+// regexpReuseSiteOf is the site the register compiler marks for the
+// call of exec in function name of fn, a script, or nil: its bindings, by
+// their indices in the function's locals.
 func regexpReuseSiteOf(t *testing.T, fn *bytecode.Function, name string) *execReuseSite {
 	t.Helper()
 	for _, c := range fn.Constants {
 		if c.Kind != bytecode.ConstFunction || c.Fn == nil || c.Fn.Name != name {
 			continue
 		}
-		f := c.Fn
-		for pc, in := range f.Code {
-			if in.Op != bytecode.OpGetPropThis || f.Names[in.A] != "exec" {
-				continue
-			}
-			for q := pc + 1; q+1 < len(f.Code); q++ {
-				if f.Code[q].Op == bytecode.OpCallMethod {
-					switch st := f.Code[q+1]; st.Op {
-					case bytecode.OpSetLocal, bytecode.OpPutLocal, bytecode.OpSetLocalGet, bytecode.OpInitLocal:
-						return execReuseOf[struct{}](f, q+1, int(st.A))
-					}
-					return nil
-				}
+		rc := c.Fn.RegCode()
+		if rc == nil {
+			t.Fatalf("%s has no register code", name)
+		}
+		for pc, w := range rc.Code {
+			if w.Op().MethodCall() && pc < len(rc.Marks) && rc.Marks[pc]&bytecode.RMarkReuse != 0 {
+				l, s, strs := bytecode.ReuseAux(rc.Aux[pc])
+				return &execReuseSite{l: l, s: s, strs: strs}
 			}
 		}
+		return nil
 	}
-	t.Fatalf("no call of exec in %s", name)
+	t.Fatalf("no function %s", name)
 	return nil
 }
 

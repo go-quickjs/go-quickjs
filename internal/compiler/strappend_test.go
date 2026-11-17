@@ -8,44 +8,50 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
-// marked counts, over fn and what it nests, the stores marked as appends and
-// the str_freezes.
-func marked(fn *bytecode.Function) (stores, freezes int) {
-	for _, in := range fn.Code {
-		switch {
-		case in.Op == bytecode.OpSetUpvalue && in.B != 0:
-			stores++
-		case in.StrFreeze():
-			freezes++
+// regCount counts, over fn's register code and what it nests, the
+// instructions count says to.
+func regCount(fn *bytecode.Function, count func(bytecode.RInstr) (int, int)) (a, b int) {
+	if rc := fn.RegCode(); rc != nil {
+		for _, w := range rc.Code {
+			x, y := count(w)
+			a, b = a+x, b+y
 		}
 	}
 	for _, k := range fn.Constants {
 		if k.Kind == bytecode.ConstFunction && k.Fn != nil {
-			s, n := marked(k.Fn)
-			stores, freezes = stores+s, freezes+n
+			x, y := regCount(k.Fn, count)
+			a, b = a+x, b+y
 		}
 	}
-	return stores, freezes
+	return a, b
 }
 
-// appended counts, over fn and what it nests, the str_appends and the
-// str_freezes.
-func appended(fn *bytecode.Function) (appends, freezes int) {
-	for _, in := range fn.Code {
+// marked counts, over fn and what it nests, the appends to upvalues the
+// register code marks (RAddAppend) and the str_freezes.
+func marked(fn *bytecode.Function) (stores, freezes int) {
+	return regCount(fn, func(w bytecode.RInstr) (int, int) {
 		switch {
-		case in.Op == bytecode.OpAdd && in.B == bytecode.AddOwned:
-			appends++
-		case in.StrFreeze():
-			freezes++
+		case w.Op() == bytecode.RAdd && w.X()&bytecode.RAddAppend != 0:
+			return 1, 0
+		case w.Op() == bytecode.RStrFreeze:
+			return 0, 1
 		}
-	}
-	for _, k := range fn.Constants {
-		if k.Kind == bytecode.ConstFunction && k.Fn != nil {
-			s, n := appended(k.Fn)
-			appends, freezes = appends+s, freezes+n
+		return 0, 0
+	})
+}
+
+// appended counts, over fn and what it nests, the appends to locals
+// (append) and the str_freezes.
+func appended(fn *bytecode.Function) (appends, freezes int) {
+	return regCount(fn, func(w bytecode.RInstr) (int, int) {
+		switch w.Op() {
+		case bytecode.RAppend:
+			return 1, 0
+		case bytecode.RStrFreeze:
+			return 0, 1
 		}
-	}
-	return appends, freezes
+		return 0, 0
+	})
 }
 
 func compileStrict(t *testing.T, src string, opts Options) *bytecode.Function {
@@ -202,16 +208,6 @@ func TestLocalAppendFunctionDeclarations(t *testing.T) {
 	} {
 		if n, _ := appended(compileStrict(t, src, Options{})); n != 0 {
 			t.Errorf("%s: %d local appends to a captured binding", src, n)
-		}
-	}
-}
-
-// walkFunctions calls see on fn and every function in it.
-func walkFunctions(fn *bytecode.Function, see func(*bytecode.Function)) {
-	see(fn)
-	for _, k := range fn.Constants {
-		if k.Kind == bytecode.ConstFunction && k.Fn != nil {
-			walkFunctions(k.Fn, see)
 		}
 	}
 }

@@ -5,8 +5,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // Top-level code in the register form (docs/register-interpreter.md, "From
 // the AST"): the declarations a script makes before its first
 // statement, and the initializations of its lexical bindings, each a cold
-// operation that does what the stack form's instruction of the same name
-// stands for.
+// operation that does what its name says.
 
 // regCheckGlobalLex is check_global_lex.
 func (r *Runtime) regCheckGlobalLex(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
@@ -52,7 +51,7 @@ func (r *Runtime) regDefineGlobalVar(f *frame, c *regCode, pc int, w bytecode.RI
 	flag := w.C() != 0
 	if f.evalVars != nil {
 		// Eval code inside a function: what it declares is that
-		// function's, as the stack form's define_global_var has it.
+		// function's.
 		if !evalVarProp(f.evalVars, name).ok() {
 			f.evalVars.setOwnRaw(name, Undefined, propWritable|propConfigurable)
 		}
@@ -164,7 +163,7 @@ func (r *Runtime) regInitModuleLex(f *frame, c *regCode, pc int, w bytecode.RIns
 }
 
 // regNewDispose is new_dispose_capability: R[A] = a using scope's
-// capability, what the stack form's instruction of the same name makes.
+// capability.
 func (r *Runtime) regNewDispose(w bytecode.RInstr, regs *[1 << 16]Value) error {
 	o := newObjectExt(nil, ClassObject, objExtensible)
 	o.setData(&disposeCapability{})

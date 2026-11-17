@@ -227,7 +227,7 @@ xs.join();
 
 // TestDebuggerStatement pins that a debugger statement stops the code only
 // with a debugger attached, and only in a runtime made for one; a runtime
-// made without one compiles no OpDebugStmt at all.
+// made without one compiles no debug instruction at all.
 func TestDebuggerStatement(t *testing.T) {
 	t.Parallel()
 	const src = "let x = 1;\ndebugger;\nx + 1"
@@ -252,9 +252,11 @@ func TestDebuggerStatement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, in := range fn.Code {
-		if in.Op == bytecode.OpDebugStmt {
-			t.Fatal("a runtime made without WithDebugger compiled an OpDebugStmt")
+	if rc := fn.RegCode(); rc != nil {
+		for _, w := range rc.Code {
+			if w.Op() == bytecode.RDebug {
+				t.Fatal("a runtime made without WithDebugger compiled a debug instruction")
+			}
 		}
 	}
 	if fn.Debug != nil {

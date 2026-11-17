@@ -27,7 +27,7 @@ func (r *Runtime) prepare(fn *bytecode.Function) *closure {
 		cl.names[i] = r.atoms.intern(n)
 	}
 
-	cl.ic = newPropCaches(int(fn.PropSites) + int(fn.PrivateSites))
+	cl.ic = newPropCaches(int(fn.PropSites))
 	cl.consts = make([]Value, len(fn.Constants))
 	for i, c := range fn.Constants {
 		cl.consts[i] = r.materialize(c)
@@ -49,12 +49,12 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 		return shortBig(0)
 	case bytecode.ConstFunction:
 		// A nested template is prepared eagerly and stored as a closure with no
-		// upvalues bound; OpClosure copies it and binds them per instantiation.
+		// upvalues bound; closure_w copies it and binds them per instantiation.
 		tmpl := r.prepare(c.Fn)
 		return templateValue(tmpl)
 	case bytecode.ConstRegExp:
 		// A regexp literal is built fresh each time it is evaluated, so the
-		// pool entry stays unmaterialized and OpNewRegExp reads it directly.
+		// pool entry stays unmaterialized and new_regexp reads it directly.
 		return Undefined
 	}
 	return Undefined

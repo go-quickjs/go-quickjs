@@ -9,7 +9,7 @@ import (
 
 // Code compiled for a debugger.
 //
-// Each statement a debugger can stop at begins with an OpDebugStmt, and the
+// Each statement a debugger can stop at begins with a debug instruction, and the
 // function's Statements say where it is and what is in scope there: the
 // bindings a debugger shows, and evaluates code against as a direct eval at
 // that point would. Nothing else differs, but that an instruction between
@@ -62,14 +62,13 @@ func (c *compiler) debugAt(pos int) {
 	}
 }
 
-// debugMark emits an OpDebugStmt for a place at pos.
+// debugMark records a place at pos a debugger can stop, a statement the
+// register code has a debug instruction of.
 func (c *compiler) debugMark(pos int, debugger uint32) {
 	c.fn.Debug.Statements = append(c.fn.Debug.Statements, bytecode.Statement{
-		PC: uint32(len(c.fn.Code)), Pos: int32(pos), Scope: c.debugScope(),
+		Pos: int32(pos), Scope: c.debugScope(),
 	})
-	c.recordLine(pos)
 	c.reg.NoteDebug(int32(pos), uint32(len(c.fn.Debug.Statements)-1), debugger != 0)
-	c.emit(bytecode.OpDebugStmt, uint32(len(c.fn.Debug.Statements)-1), debugger)
 }
 
 // debugScope records what is in scope at the current position, and returns

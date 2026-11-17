@@ -14,8 +14,21 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 	// A window may be longer than 16 bits of registers reach: the far
 	// registers past them, which mov_far, mov_to_far and far_init name by
 	// a 32-bit BC, each checked below.
-	if len(code) == 0 || len(rc.SrcPC) != len(code) || n < regParams+rc.Params+rc.Inits {
+	if len(code) == 0 || n < regParams+rc.Params+rc.Inits {
 		return "no code"
+	}
+	// The line table: rising pcs from the code's first, and past the
+	// code's last, one for each error placed apart (virtual).
+	if len(rc.Lines) == 0 || rc.Lines[0].PC != 0 {
+		return "no positions"
+	}
+	for i := 1; i < len(rc.Lines); i++ {
+		if rc.Lines[i].PC <= rc.Lines[i-1].PC {
+			return "positions out of order"
+		}
+	}
+	virtual := func(v uint32) bool {
+		return int64(v) >= int64(len(code)) && v <= rc.Lines[len(rc.Lines)-1].PC
 	}
 	reg := func(r uint16) bool { return int(r) < n }
 	in := func(pc int, off int64) bool {
@@ -105,7 +118,7 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		case bytecode.RStrFreeze:
 			ok = reg(a)
 		case bytecode.RCharCodeAt:
-			ok = reg(a) && reg(b) && reg(uint16(w.X())) && site(c) && pc < len(rc.Aux) && int(rc.Aux[pc]) < len(fn.Code)
+			ok = reg(a) && reg(b) && reg(uint16(w.X())) && site(c) && pc < len(rc.Aux) && virtual(rc.Aux[pc])
 		case bytecode.RJTypeof:
 			ok = reg(a) && w.X()&^bytecode.RCmpTrue < 8 && in(pc, int64(w.SC()))
 		case bytecode.RSwitch, bytecode.RSwitchTypeof:
@@ -131,7 +144,8 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 				case !w.Op().MethodCall():
 					ok = false
 				case m&bytecode.RMarkReuse != 0:
-					ok = int64(aux)+1 < int64(len(fn.Code)) && len(rc.LocalReg) == len(fn.Locals)
+					l, s, _ := bytecode.ReuseAux(aux)
+					ok = l < len(fn.Locals) && s < len(fn.Locals) && len(rc.LocalReg) == len(fn.Locals)
 				case m&(bytecode.RMarkLitRecv|bytecode.RMarkLitArg) != 0:
 					ok = int64(aux) < int64(len(fn.Constants)) && fn.Constants[aux].Kind == bytecode.ConstRegExp &&
 						(m&bytecode.RMarkLitArg == 0 || w.X() > 0)
@@ -141,7 +155,7 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			k := int(c)
 			ok = reg(a) && reg(a+1) && k < len(fn.Constants) && fn.Constants[k].Kind == bytecode.ConstRegExp
 			if ok && w.X()&bytecode.RLitCall != 0 {
-				ok = reg(b) && int(a)+3 <= n && pc < len(rc.Aux) && int64(rc.Aux[pc]) < int64(len(fn.Code))
+				ok = reg(b) && int(a)+3 <= n && pc < len(rc.Aux) && virtual(rc.Aux[pc])
 			}
 		case bytecode.RNewW:
 			ok = reg(b) && int(a)+int(w.X())+2 <= n && int(c) < rc.CallSites
@@ -194,13 +208,13 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		case bytecode.RMulI:
 			ok = reg(a) && reg(b) && w.X() == 0
 		case bytecode.RAddI32, bytecode.RSubI32:
-			// Aux: the stack instruction of the | 0, where a BigInt
+			// Aux: the pc of the | 0's position, where a BigInt
 			// result's TypeError is placed.
-			ok = reg(a) && reg(b) && reg(c) && w.X() == 0 && pc < len(rc.Aux) && int64(rc.Aux[pc]) < int64(len(fn.Code))
+			ok = reg(a) && reg(b) && reg(c) && w.X() == 0 && pc < len(rc.Aux) && virtual(rc.Aux[pc])
 		case bytecode.RAddII32:
 			// From x - K, SC is -K, which a K of 16 bits keeps in them.
 			ok = reg(a) && reg(b) && (w.X() == 0 || w.X() == bytecode.RAddII32Sub && w.SC() != -1<<15) &&
-				pc < len(rc.Aux) && int64(rc.Aux[pc]) < int64(len(fn.Code))
+				pc < len(rc.Aux) && virtual(rc.Aux[pc])
 		case bytecode.RIterClose:
 			// X: RIterCloseForIn for a for-in loop's cursor.
 			ok = (w.X() == 0 || w.X() == bytecode.RIterCloseForIn) && coldOK(rc, fn, pc, w, reg, site)
@@ -210,9 +224,6 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		}
 		if !ok {
 			return "instruction " + rc.Format(pc) + " is out of range"
-		}
-		if int(rc.SrcPC[pc]) >= len(fn.Code) {
-			return "a position out of the code"
 		}
 	}
 	switch code[len(code)-1].Op() {

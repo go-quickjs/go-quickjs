@@ -171,7 +171,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			r.stackTop = top
 			r.stackHigh = max(r.stackHigh, top)
 		}
-		pc := regSrc(rc, x.pc)
+		pc := uint32(x.pc)
 		if k < n-1 {
 			// Past the call it makes, as the interpreter's frame is during
 			// one, which a stack trace shows.
@@ -402,7 +402,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 	case abi.ExitHost:
 		// Counted once, where the run left (jitRegLeft): counted here
 		// too, each such exit had been two.
-		f.pc = regSrc(c, pc) + 1
+		f.pc = uint32(pc) + 1
 		s.noteRegHost(c, pc)
 		if miss {
 			// Learned as a guard's failure at the site, before Go makes the

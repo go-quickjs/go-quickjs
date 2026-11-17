@@ -54,12 +54,12 @@ function with no register code is an internal error.
 too, to compare the two and as an escape hatch. [Tools and
 switches](#tools-and-switches) lists the rest.
 
-The front end still compiles every function to stack bytecode first, and
-the register backend reads it and what the front end records as its input
-(see [The compiler](#the-compiler)): positions, cache sites, facts about
-the function and which functions are leaves. Nothing interprets it but
-the evaluators of leaf functions (`pureCall`, `leafCall`), and `Program`
-keeps one compiled form for standard mode and one for `WithNodeQuirks`.
+Register code is the one form a function is compiled to: a walk of the
+AST resolves its names and records them, and the register backend compiles
+the AST with that record (see [The compiler](#the-compiler)). The
+evaluators of leaf functions (`pureCall`, `leafCall`) read register code
+too, and `Program` keeps one compiled form for standard mode and one for
+`WithNodeQuirks`.
 
 ## Why a register machine
 
@@ -348,22 +348,29 @@ every dispatch an instruction and break X's 8-bit users.
 
 The register code is compiled from the AST by its own backend,
 `internal/compiler/regcomp`, as V8's `BytecodeGenerator` compiles its AST.
-It shares with the stack compiler what is not code generation: parsing,
-early errors and scope resolution -- which name is a binding of this
-function, an upvalue and of which descriptor, a global; which bindings a
-closure captures; what a direct eval or a debugger can see. The stack
-compiler records its resolution of each identifier and declaration as it
-compiles a function (`regcomp.Record`, `internal/compiler/regrecord.go`),
-and the backend reads that record rather than resolving names again, so
-the two forms agree on every binding by construction. The record also
-carries the decisions the two must make alike: which additions are appends
-to a local's string (`Appends`, `Freezes`), which function expressions a
-loop makes once (`Reused`), each catch clause's slot.
+What is not code generation is the walk's, `internal/compiler`: early
+errors and scope resolution -- which name is a binding of this function,
+an upvalue and of which descriptor, a global; which bindings a closure
+captures; what a direct eval or a debugger can see -- and the function's
+tables and facts. The walk emits no code. It records its resolution of each
+identifier and declaration as it goes (`regcomp.Record`,
+`internal/compiler/regrecord.go`), and the backend reads that record
+rather than resolving names again. The record also carries the decisions
+made with the scopes: which additions are appends to a local's string
+(`Appends`, `Freezes`), which function expressions a loop makes once
+(`Reused`), each catch clause's slot, which calls are in tail position,
+top-level code's declarations.
 
-Each register instruction keeps the stack instruction it stands for
-(`RegCode.SrcPC`): a frame's pc is set to it where an instruction can throw
-or call out, and positions, stack traces and the debugger read the stack
-form's tables through it.
+**Positions.** `RegCode.Lines` is each instruction's source position, an
+entry where it changes, -1 for an instruction that has none, and
+`RegCode.PosAt` looks one up. A frame's pc is the register pc past the
+instruction where it can throw or call out, and a stack trace, an error's
+position and the debugger read `Lines` through it. An instruction that
+places an error apart from its own position -- a fused store's, a `| 0`'s,
+a read's before its call -- names in `Aux` a pc past the code's last, whose
+entry in `Lines` is that error's position, and the frame's pc holds it
+while it throws. Each position is the one V8 gives the error
+(`TestErrorPlacedAsV8`).
 
 Top-level code is compiled with the script or module (`CompileTop`); a
 function, at its first call ([below](#compiled-at-the-first-call)).
@@ -393,8 +400,9 @@ have them (`KeepsArgs`, `UsesArguments`).
 A binding a closure captures is a register too: the closure's upvalue
 points into the window while the frame lives and is closed when it ends,
 which works because the value stack never moves. Where a reader needs a
-local by its stack-form slot -- a direct eval, the debugger, an exec's
-reused array -- `RegCode.LocalReg` maps each local to its register.
+local by its slot in the function's `Locals` -- a direct eval, the
+debugger, an exec's reused array -- `RegCode.LocalReg` maps each local to
+its register.
 
 ### Register allocation
 
@@ -434,8 +442,9 @@ fused instruction saves a dispatch and its parts cannot be told apart:
 `char_code_at`, a receiver's method read straight into a call window
 `get_method_w`, a literal's keys `new_object_lit`, a counted loop's step
 and test `step_jlt` (by a peephole over the finished code, `fuseSteps`). A
-fused instruction keeps, in `RegCode.Aux` where it needs one, the stack
-instruction whose position its second part's errors take.
+fused instruction keeps, in `RegCode.Aux` where it needs one, the pc past
+the code's whose position its second part's errors take
+([Positions](#from-the-ast)).
 
 A negative literal is an immediate wherever a literal is, and a literal
 left operand of `*` is moved to the right (`3 * x` is `mul_imm`), which
@@ -444,8 +453,8 @@ left operand of `*` is moved to the right (`3 * x` is `mul_imm`), which
 ### Compiled at the first call
 
 A function's register code is compiled when it is first called, as V8
-compiles lazily: one never called is never compiled. The stack compiler
-keeps the record and the AST in a `bytecode.RegLater` until then, and
+compiles lazily: one never called is never compiled. The walk keeps the
+record and the AST in a `bytecode.RegLater` until then, and
 `Function.RegCode` compiles it once, under a lock, since a program's
 functions are shared by the runtimes running it. Script and module code,
 which runs at once, is compiled with them.
@@ -455,16 +464,15 @@ loaded the program has made a closure's tables from them, and another
 goroutine may be reading them. So code compiled late adds nothing to the
 Function: it compiles over a view whose slices are full to their capacity,
 and keeps the tables with its additions in the `RegCode` (`Names`,
-`Constants`, `PropSites`), its sites numbered past the stack form's. A
+`Constants`, `PropSites`), its sites numbered past the Function's. A
 runtime adds what is past a closure template's tables where the template
-is first given its register code (`regExtend`). A function whose stack
-form alone has half of 16 bits' worth of sites or more is compiled at
-once, while the compiler still owns it (`lazySites`), since its register
-form may need the stack form's sites renumbered.
+is first given its register code (`regExtend`), its names and strings
+copied out of the source under a memory limit, as an evaluator's are.
 
-A leaf's code (`Function.Leaf`) is compiled as its closure is made: its
-calls are answered without a frame ([Frames and calls](#frames-and-calls))
-and would never reach a first call of their own.
+Whether a function is a leaf (`RegCode.Leaf`), the backend decides on its
+register code, and so at its first call, which is made with a frame: the
+calls after it are answered without one where the leaf allows ([Frames and
+calls](#frames-and-calls)).
 
 ### The verifier
 
@@ -544,9 +552,9 @@ call function it was a frame more a call, and `call_mutual` and
 `method_call` were 17% slower.
 
 **Errors and positions.** A handler that can throw or run code first keeps
-the pc past its instruction (`st.at(pc)`, `st.kept`), which also sets the
-frame's pc to the stack form's instruction, what a stack trace and an
-error's position read. The fail tail, `st.fail`, finds the handler of the
+the pc past its instruction (`st.at(pc)`, `st.kept`), which is also the
+frame's pc, what a stack trace and an error's position read
+([Positions](#from-the-ast)). The fail tail, `st.fail`, finds the handler of the
 instruction at `kept.pc-1` (`regCatch`) and goes on there, or ends the
 frame. `TestRegThrowsKeepPC` reads the handlers' source and fails where
 one reaches the tail, or hands a call the kept pc, before it has kept it.
@@ -1118,7 +1126,7 @@ none opens a refusal; and their native handlers appended after every other.
   path is two numbers whose result is below 2^63 in magnitude, its
   truncation's low 32 bits; the slow path makes the operator as `add` or
   `sub` make it, then the `| 0` of its result, and a BigInt result throws
-  the `|`'s TypeError at the stack instruction `Aux[pc]`. X `RAddII32Sub`
+  the `|`'s TypeError at the position of the pc `Aux[pc]`. X `RAddII32Sub`
   says the source was `x - K`, since `"5" - 1` is not `"5" + -1`. The JIT
   lowers each as the pair it stands for. With them regcomp leaves out a
   `| 0` whose left is a bitwise operator with a number literal or a `>>>`
@@ -1135,8 +1143,8 @@ dispatches with them, 17 without.
 
 The verifier checks each: the step ±1, or k ≠ 0 with `RStepAdd`; at pc+1
 the partner's operation of the same A, B and target, and an instruction
-after it (`bytecode.StepPaired`); `mul_imm`'s X 0; the int32 forms' Aux in
-the stack code.
+after it (`bytecode.StepPaired`); `mul_imm`'s X 0; the int32 forms' Aux a
+pc past the code's that `Lines` has.
 
 ## Tiering to the JIT
 
@@ -1278,7 +1286,7 @@ generated files' staleness tests.
 | `QJS_REGREPORT` | at a runtime's close, the calls into and out of register code, by kind and by callee |
 | `QJS_REGTRACE` | print why a function has no register code |
 | `QJS_REGDUMP` | print each function's register code as it is made |
-| `disasm` | each function's register code; `-stack` adds the front end's stack form, `-jit` whether `LowerReg` lowers it, and its exit maps |
+| `disasm` | each function's register code; `-jit` whether `LowerReg` lowers it, and its exit maps |
 | `regrefusals` | compile directories of code and count the backend's refusals by reason |
 | `regcount` | static counts of the patterns fused and int32 instructions take, and of those they leave |
 | `compilediff` | the register code two revisions make, compared |
@@ -1287,12 +1295,12 @@ generated files' staleness tests.
 
 ## Known limits and open work
 
-- **The stack form.** The front end still compiles every function to stack
-  bytecode, and a program is compiled twice: the register backend reads
-  the stack form's positions (`SrcPC`), sites and facts, the leaf
-  evaluators interpret it, and the JIT's size estimates read its length.
-  It goes once the register backend has its own scope resolution, position
-  tables and facts, and the leaf evaluators read register code.
+- **The walk and the AST.** A function never called keeps its AST and
+  the walk's record until it is, and the walk resolves every function's
+  scopes as the program is compiled. A preparse that resolves a function
+  once it is first called, as V8 reparses a lazily compiled function, needs
+  a resolver that can start inside a function
+  ([performance-plan.md](performance-plan.md)).
 - **Other architectures** run the Go table, slower than the native
   handlers. The portable fallback's dispatch -- a generated switch over the
   Go handlers against the table -- is to be measured, and is never

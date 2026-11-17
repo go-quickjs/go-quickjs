@@ -1,10 +1,6 @@
 package vm
 
-import (
-	"sort"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-)
+import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // Literals with the same keys, in any code of a realm, have one root.
 //
@@ -19,7 +15,7 @@ import (
 // literals of its keys alone, whose objects take the one chain of transitions
 // out of it, and which share what room their objects came to need. A realm
 // keeps the roots by a hash of those keys, which the compiler says
-// (bytecode.Function.LiteralKeys): a root starts empty, and each key takes its
+// (bytecode.RegCode.ObjKeysHash): a root starts empty, and each key takes its
 // transition, so that the hash need only tell literals apart, and two lists of
 // one hash, sharing a root, have their right layouts and lose only the first
 // transition, as a root for each count did. A script's literals start from
@@ -48,31 +44,31 @@ const literalShapes = maxShapes / 4
 
 // literalRoots is the roots of a realm's literals.
 type literalRoots struct {
-	// byKeys is by the hash of the keys (LiteralKeys).
+	// byKeys is by the hash of the keys (RegCode.ObjKeysHash).
 	byKeys map[uint64]*shape
 	// budget is the slot of a budget of its own, which all the roots hold
 	// (chargeChild).
 	budget *budgetSlot
 }
 
-// keysOf is the hash of the keys of fn's object literal of site, 0 if it does
-// not say them.
-func keysOf[_ any](fn *bytecode.Function, site uint32) uint64 {
-	ks := fn.LiteralKeys
-	i := sort.Search(len(ks), func(i int) bool { return ks[i].Site >= site })
-	if i == len(ks) || ks[i].Site != site {
+// keysOf is the hash of the keys of rc's object literal at pc, a
+// new_object_lit's (bytecode.RegCode.ObjKeysHash), 0 if it does not say
+// them.
+func keysOf[_ any](rc *bytecode.RegCode, pc int) uint64 {
+	if rc == nil || pc < 0 || pc >= len(rc.Code) || rc.Code[pc].Op() != bytecode.RNewObjectLit ||
+		pc >= len(rc.Aux) || int(rc.Aux[pc]) >= len(rc.ObjKeysHash) {
 		return 0
 	}
-	return ks[i].Keys
+	return rc.ObjKeysHash[rc.Aux[pc]]
 }
 
-// keySite is regLiteralKeyedRoot for the site of cl's literal, for native
-// code about to make its objects, whose root is the site's for good: what
-// the interpreter then asks for is that root.
-func keySite[_ any](r *Runtime, cl *closure, site uint32) {
+// keySite is regLiteralKeyedRoot for the site of cl's literal at pc of its
+// register code, for native code about to make its objects, whose root is
+// the site's for good: what the interpreter then asks for is that root.
+func keySite[_ any](r *Runtime, cl *closure, pc int, site uint32) {
 	ic := &cl.ic[site]
 	if s := ic.shape; s != nil && s.next == nil && (s == noShape || s.proto == r.proto.object) {
-		if keys := keysOf[struct{}](cl.fn, site); keys != 0 {
+		if keys := keysOf[struct{}](cl.fn.RegCompiled(), pc); keys != 0 {
 			keyedRoot[struct{}](r, keys, ic)
 		}
 	}
@@ -85,9 +81,12 @@ func keySite[_ any](r *Runtime, cl *closure, site uint32) {
 //go:noinline
 func prepareRun[_ any](r *Runtime, fn *bytecode.Function) *closure {
 	cl := r.prepare(fn)
-	ks := fn.LiteralKeys
-	for i := range ks {
-		keyedRoot[struct{}](r, ks[i].Keys, &cl.ic[ks[i].Site])
+	if rc := fn.RegCompiled(); rc != nil {
+		for pc, w := range rc.Code {
+			if keys := keysOf[struct{}](rc, pc); keys != 0 && int(w.C()) < len(cl.ic) {
+				keyedRoot[struct{}](r, keys, &cl.ic[w.C()])
+			}
+		}
 	}
 	return cl
 }

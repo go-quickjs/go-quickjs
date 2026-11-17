@@ -77,21 +77,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
 			return false
 		}
-		if cl, rin, reg := r.jitRegPlainSet(ctx, idx); reg {
-			// Register code's: its set_prop's site and name, at its
-			// register pc, never the stack form's instruction there.
-			if cl == nil || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
-				return false
-			}
-			v = Undefined
-			break
-		}
-		if ctx.Live != abi.LiveCall || jitGoInline(ctx) {
-			// A run's own frame, or an inlined callee's: none kept.
-			return false
-		}
-		cl, pc := (*closure)(ctx.Closure), int(ctx.ExitPC)
-		if cl == nil || !jitGoPropertyAt(cl.fn, pc, in) || !r.jitPlainWrite(cl, cl.fn.Code[pc], jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
+		// Register code's: its set_prop's site and name, at its register pc.
+		cl, rin, reg := r.jitRegPlainSet(ctx, idx)
+		if !reg || cl == nil || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
 			return false
 		}
 		v = Undefined
@@ -140,7 +128,7 @@ func jitGoInline(ctx *abi.Context) bool {
 // one of jitPlainSet's (jitGoCallPlain has asked jitPlainFn), a built-in
 // of this realm. It reports false for any other call, which the built-in,
 // called with its frame, is left to make.
-func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Value, bool) {
+func (r *Runtime) jitPlainCall(ctx *abi.Context, in jitInstr, n int) (Value, bool) {
 	argc := int(in.A)
 	first := 1
 	this := Undefined
@@ -344,7 +332,7 @@ func (fb *jitFeedback) MapNexts() [2]uintptr {
 // ordinary object's store where nothing up its chain says anything of the
 // key (jitStoreProp). It reports false for any other, which it leaves as
 // it was.
-func (r *Runtime) jitPlainWrite(cl *closure, in bytecode.Instr, obj, val Value) bool {
+func (r *Runtime) jitPlainWrite(cl *closure, in jitInstr, obj, val Value) bool {
 	if !obj.IsObject() || int(in.A) >= len(cl.names) {
 		return false
 	}

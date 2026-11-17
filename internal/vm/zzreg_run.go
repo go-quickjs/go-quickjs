@@ -31,7 +31,6 @@ var regsBuilt atomic.Int64
 type regCode struct {
 	// code is the first instruction, read with no bounds check.
 	code unsafe.Pointer
-	src  []uint32
 	// siteName is each property site's name, by its cache's number.
 	siteName []uint32
 	// numRegs is how many registers a frame uses; locals and params are
@@ -208,13 +207,13 @@ func (r *Runtime) regLeave(st *regState) {
 	r.regFree = st
 }
 
-// at sets the frame's pc to the stack form's instruction of pc, which a
-// stack trace or an error's position reads, and keeps the pc past it, for
+// at sets the frame's pc past the instruction at pc, which a stack trace or
+// an error's position reads (RegCode.Lines), and keeps that pc, for
 // an instruction that may throw or run code; it returns the frame.
 func (st *regState) at(pc int) *frame {
 	st.kept.pc = pc + 1
 	f := st.f
-	f.pc = st.c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	return f
 }
 

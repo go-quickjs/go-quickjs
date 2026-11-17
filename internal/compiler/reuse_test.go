@@ -71,12 +71,17 @@ func TestReusedClosures(t *testing.T) {
 	}
 }
 
-// reusesClosure reports whether fn makes a closure only while a local holds
-// none: get_local, jump_if_true past the closure and its store.
+// reusesClosure reports whether fn's register code makes a closure only
+// while a binding holds none: jmp_true of its register past a closure_w
+// into it.
 func reusesClosure(fn *bytecode.Function) bool {
-	for pc := 0; pc+3 < len(fn.Code); pc++ {
-		c := fn.Code
-		if c[pc].Op == bytecode.OpGetLocal && c[pc+1].Op == bytecode.OpJumpIfTrue && c[pc+2].Op == bytecode.OpClosure && int(c[pc+1].A) == pc+4 {
+	rc := fn.RegCode()
+	if rc == nil {
+		return false
+	}
+	c := rc.Code
+	for pc := 0; pc+1 < len(c); pc++ {
+		if c[pc].Op() == bytecode.RJmpT && c[pc+1].Op() == bytecode.RClosureW && c[pc+1].A() == c[pc].A() {
 			return true
 		}
 	}

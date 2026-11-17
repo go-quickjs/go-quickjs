@@ -31,6 +31,8 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
 			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
 			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
+			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
+			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0
 			return s
 		}
 		function caller(i) { return i % 25 === 0 ? long(i) : (i * 7) | 0 }
@@ -46,8 +48,8 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 	}
 	fnOf := func(name string) *closure { return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure }
 	caller, long := fnOf("caller"), fnOf("long")
-	if len(long.fn.Code) <= ssa.MaxInline {
-		t.Fatalf("long is %d instructions, short enough to inline", len(long.fn.Code))
+	if n := jitRegInlineSize(firstReg(long.fn)); n <= ssa.MaxInline {
+		t.Fatalf("long is %d instructions, short enough to inline", n)
 	}
 	for i := range 6 {
 		call := `run(20000)`

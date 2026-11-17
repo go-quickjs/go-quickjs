@@ -1,12 +1,12 @@
-// Package bytecode defines the instruction set and the compiled function
-// representation that the compiler emits and the virtual machine executes.
+// Package bytecode defines the compiled function representation the
+// compiler makes and the virtual machine runs: a Function's tables, and its
+// register code (reg.go), 64-bit instructions over a frame's registers.
 //
-// Instructions are fixed-width structs rather than a packed byte stream. A byte
-// stream is more compact and is what the C implementation uses, but decoding
-// variable-length operands costs more in Go than the extra memory does: there
-// is no computed goto, so every instruction already pays for a bounds-checked
-// switch, and shrinking the operand fetch to a struct field access is the
-// larger win.
+// Op is the vocabulary those instructions and the runtime share for an
+// operation: an operator a register instruction carries in its X (RBin,
+// RUnary), what a call of Go from native code does (the JIT's GoOp), the
+// kind of a site or of a top-level declaration. It is no instruction set of
+// its own.
 package bytecode
 
 import (
@@ -14,183 +14,56 @@ import (
 	"strings"
 )
 
-// Op is an instruction opcode.
+// Op is an operation, of the vocabulary register code and the runtime share.
 type Op uint8
 
 const (
-	// --- Constants and simple pushes -------------------------------------
-	OpNop       Op = iota
-	OpPushConst    // push Constants[A]
-	OpPushUndef    // push undefined
-	OpPushNull     // push null
-	OpPushTrue     // push true
-	OpPushFalse    // push false
-	OpPushThis     // push the current this binding
-	OpPushInt      // push the int32 in A, sign-extended
-	OpPushEmptyString
-	// OpPushUninitialized stores the temporal-dead-zone marker, which a let or
-	// const binding holds until its declaration runs.
-	OpPushUninitialized
+	// OpNop is no operation.
+	OpNop Op = iota
 
-	// --- Stack shuffling --------------------------------------------------
-	OpDup  // duplicate the top
-	OpDup2 // duplicate the top two, preserving order
-	OpDrop // discard the top
-	OpSwap // exchange the top two
-	OpRot3 // move the third element to the top
-	OpRot4 // move the fourth element to the top
-	// OpInsert2 and OpInsert3 push a copy of the top down past 2 or 3 slots.
-	// Property assignment needs them to keep the assigned value available as
-	// the expression's result while the receiver and key are consumed.
-	OpInsert2
-	OpInsert3
-	OpNipUnder    // remove A values from beneath the top of the stack
-	OpAssignConst // throw: the name in Names[A] is a const binding
-	OpInsert4
-
-	// --- Local variables --------------------------------------------------
-	OpGetLocal // push Locals[A]
-	// OpGetLocal2 is two get_locals in one: push Locals[A], then Locals[B].
-	// Reading two locals in a row is a sixth of what a program does -- the
-	// operands of a binary operator, a call's receiver and argument -- and
-	// one instruction to dispatch is half the cost of two.
-	OpGetLocal2
-	// OpSetLocalGet is set_local A then get_local B: a statement storing to a
-	// local, and the next reading one.
-	OpSetLocalGet
-	// OpClearLocal is push_undef then set_local A: `let x;` in a loop.
-	OpClearLocal
-	// OpGetLocalIndex is get_local2 A B then get_index: `a[i]` where both
-	// are locals, which is most of what an array loop reads.
-	OpGetLocalIndex
-	// OpBinImm is push_int A then the binary operator B: `x & 0xff`,
-	// `x >> 16`, `i + 1`. A number on the left is worked out here; anything
-	// else has A pushed and B run as it would have been.
-	OpBinImm
-	OpSetLocal // pop into Locals[A]
-	OpPutLocal // store the top into Locals[A] without popping
-	// OpGetLocalCheck reports a ReferenceError if the local is still in its
-	// temporal dead zone, which let and const bindings require.
-	OpGetLocalCheck
-	OpSetLocalCheck // assignment to a const or a TDZ binding
-	OpInitLocal     // first store to a let/const, clearing the dead zone
-
-	// --- Closure variables ------------------------------------------------
-	OpGetUpvalue
+	// --- Declarations -----------------------------------------------------
+	// Top-level code's declarations, as the walk records them for the
+	// register compiler (regcomp's TopOp). OpSetUpvalue is eval code's
+	// function declaration of a name its caller binds as a var.
 	OpSetUpvalue
-	OpGetUpvalueCheck
-	OpSetUpvalueCheck
-	OpInitUpvalue
-	// OpCloseUpvalues converts every open upvalue at or above local A into a
-	// closed one, which happens when a block that captured bindings exits.
-	OpCloseUpvalues
-
-	// --- Global variables -------------------------------------------------
-	OpGetGlobal    // push global Names[A]; ReferenceError if absent
-	OpGetGlobalOpt // push global Names[A] or undefined; used by typeof
-	OpSetGlobal
-	OpDefineGlobalVar  // var/function declaration on the global object
+	OpDefineGlobalVar  // var or function declaration on the global object
 	OpDefineGlobalFunc // like the above but always overwrites
-	// OpCheckGlobalLex reports a top-level let, const or class whose name is
-	// already a property of the global object that cannot be removed.
+	// OpCheckGlobalLex is a top-level let, const or class, whose name may
+	// not be a property of the global object that cannot be removed.
 	OpCheckGlobalLex
-	// OpCheckGlobalVar reports a top-level var or function declaration whose
-	// name a lexical binding already has. B is 1 for a function, which has the
-	// extra requirement that the property it replaces be one it could create.
+	// OpCheckGlobalVar is a top-level var or function declaration, whose
+	// name a lexical binding may not have.
 	OpCheckGlobalVar
 	// OpDeclareGlobalLex creates a script-level lexical binding, in its dead
-	// zone. A is the name; B is 1 for a let or class, 0 for a const.
+	// zone.
 	OpDeclareGlobalLex
-	// OpInitGlobalLex gives one its first value, which is what takes it out of
-	// the dead zone.
-	OpInitGlobalLex
 	// OpDeclareModuleLex creates a module's top-level lexical binding in its
-	// dead zone. A is the name; B is 1 for a let or class, 0 for a const.
-	//
-	// It is a property of the module environment rather than a slot, because
-	// what a module exports has to be something the linker can forward to.
+	// dead zone: a property of the module environment rather than a slot,
+	// because what a module exports has to be something the linker can
+	// forward to.
 	OpDeclareModuleLex
-	// OpInitModuleLex pops a value and gives a binding its first one, taking
-	// it out of the dead zone.
-	OpInitModuleLex
 
 	// --- Properties -------------------------------------------------------
-	OpGetProp    // obj -> obj[Names[A]]
-	OpSetProp    // obj value -> ; assigns obj[Names[A]]
-	OpGetIndex   // obj key -> obj[key]
-	OpSetIndex   // obj key value ->
-	OpDeleteProp // obj key -> bool
-	// OpDeleteVar deletes a binding named by Names[A], which succeeds only for
-	// a configurable property of the global object.
-	OpDeleteVar
-	// OpGetPropThis and OpGetIndexThis leave the receiver beneath the fetched
-	// value, so that a method call can pass it as `this` without re-evaluating
-	// the object expression.
+	// A site's kind (regcomp's propSite) and a call of Go's operation.
+	OpGetProp // obj[name]
+	OpSetProp // obj[name] = value
+	// OpGetPropThis reads a method, for a call with the object its receiver.
 	OpGetPropThis
-	OpGetIndexThis
-	OpDefineField  // define an own data property, ignoring setters
-	OpDefineIndex  // as above with a computed key
-	OpDefineGetter // define an accessor's getter half
-	OpDefineSetter // define an accessor's setter half
-	// The computed-key forms of the accessor definitions, which take the key
-	// from the stack beneath the function.
-	OpDefineGetterIndex
-	OpDefineSetterIndex
-	// OpSetFuncName names the function on top of the stack after the property
-	// key beneath it, which is how a method with a computed key gets a name.
-	// A is 0 for a plain method, 1 for a getter and 2 for a setter.
-	OpSetFuncName
-	OpGetLength     // a fast path for the very common `.length`
+	OpDefineField   // define an own data property, ignoring setters
+	OpDefineIndex   // as above with a computed key
 	OpSetProtoOf    // set __proto__ from an object literal
 	OpCopyDataProps // object spread: copy own enumerable properties
 
 	// --- Private class members -------------------------------------------
-	// A private name's key is minted when its class is evaluated, so every
-	// instruction below takes it from a binding rather than from the name
-	// table. A is the name, which only an error message uses; B says where the
-	// key is: a slot of this function when its low bit is clear, one of its
-	// upvalues when it is set, and the index in the rest.
-	OpGetPrivate
-	OpSetPrivate
-	OpDefinePrivate
-	// OpDefinePrivateMethod adds a private method, which differs from a field
-	// in being read-only: a method is not a place to store anything, so
-	// assigning to one fails rather than replacing it.
-	OpDefinePrivateMethod
-	OpDefinePrivateGetter
-	OpDefinePrivateSetter
-	OpPrivateIn // `#x in obj`
-	OpGetPrivateMethod
-	// OpPrivateName mints the key for one private name of one class evaluation,
-	// which is what keeps two evaluations of the same class apart. A is the
-	// name, for the error messages an access through the key produces.
-	OpPrivateName
-	// OpNewPrivateMethods pushes the list of private methods and accessors an
-	// instance of a class carries, which OpAddPrivateMethod fills in as the
-	// class body is evaluated and OpInstallPrivateMethods copies onto each
-	// instance as it is made.
-	//
-	// They belong to the instance rather than to the prototype: an object that
-	// merely inherits from the prototype is not an instance, and asking it for
-	// a private member has to fail.
-	OpNewPrivateMethods
+	// A private method, getter or setter added to the list an instance of a
+	// class carries (the VM's addPrivateMethod).
 	OpAddPrivateMethod
 	OpAddPrivateGetter
 	OpAddPrivateSetter
-	OpInstallPrivateMethods
 
-	// --- Parameters and arguments -----------------------------------------
-	// OpRestParam gathers the arguments from index A onwards into an array,
-	// which is what a rest parameter binds.
-	OpRestParam
-	// OpGetArguments materializes the arguments object.
-	OpGetArguments
-	// OpArrayRest pushes the elements of the array on the stack from index A
-	// onwards, for the rest element of an array pattern.
-	OpArrayRest
 	// OpObjectRest builds an object holding the source's own enumerable
-	// properties except the A keys sitting above it on the stack, for the rest
-	// element of an object pattern.
+	// properties except the A keys given, for the rest element of an object
+	// pattern.
 	OpObjectRest
 
 	// --- Arithmetic -------------------------------------------------------
@@ -202,22 +75,6 @@ const (
 	OpPow
 	OpNeg
 	OpPos
-	OpInc
-	OpDec
-	// OpIncLocal and OpDecLocal are ++ and -- on a local whose value nothing
-	// reads: the whole of `i++` as a statement, coercion included, in one
-	// instruction rather than four.
-	OpIncLocal
-	OpDecLocal
-	// OpUpdateLocal is ++ or -- on a local whose value is read: B's
-	// UpdateDec bit says which, and UpdatePostfix whether the value pushed
-	// is the old one, coerced, or the new. `a[i++]` is then one instruction
-	// where it was five.
-	OpUpdateLocal
-	// OpGetLocalIndexUpdate is get_local A, update_local, get_index: `a[++i]`,
-	// `x[k++]`, where a and the key are locals. B is the key's slot shifted
-	// past the update's flags, which are its low two bits.
-	OpGetLocalIndexUpdate
 
 	// --- Bitwise ----------------------------------------------------------
 	OpBitAnd
@@ -237,577 +94,122 @@ const (
 	OpLe
 	OpGt
 	OpGe
-	OpIn
 	OpInstanceOf
 	OpNot
 	OpTypeOf
-	// OpIsNullish tests for null or undefined without popping, which ?. and ??
-	// both need.
-	OpIsNullish
-
-	// --- Control flow -----------------------------------------------------
-	OpJump            // unconditional, to A
-	OpJumpIfFalse     // pops
-	OpJumpIfTrue      // pops
-	OpJumpIfFalseKeep // peeks; used by && and ||
-	OpJumpIfTrueKeep
-	OpJumpIfNullish // peeks; used by ?? and ?.
-	OpJumpIfNotNullish
-	// OpJumpIfCmpFalse is a comparison and the branch that tests it, in one
-	// instruction: A is the target and B is the comparison's own opcode. It is
-	// what a loop's test compiles to, once an iteration.
-	OpJumpIfCmpFalse
 
 	// --- Calls ------------------------------------------------------------
-	OpCall // A = argument count; stack: callee args...
-	// OpDirectEval is a call whose callee may turn out to be the intrinsic
-	// eval, in which case the evaluated code shares the caller's scope. A is
-	// the index into EvalScopes and B the argument count, or DirectEvalSpread
-	// when the arguments are in an array on the stack instead.
-	OpDirectEval
-	OpCallMethod // A = argument count; stack: this callee args...
-	OpNew        // A = argument count
-	// OpCallSpread and OpNewSpread take their arguments from an array on the
-	// stack rather than from individual slots, which is how a call containing
-	// a spread element is compiled.
+	OpCall       // A arguments
+	OpCallMethod // A arguments, with a receiver
+	OpNew        // A arguments
+	// OpCallSpread and OpNewSpread take their arguments from an array, which
+	// is how a call containing a spread element is made.
 	OpCallSpread
 	OpNewSpread
-	// OpSuperCall is super(...), which pushes the this it binds: of the A
-	// arguments on the stack, or, as B says, of an argument array
-	// (SuperSpread) or of the arguments the constructor was called with
-	// (SuperForward).
+	// OpSuperCall is super(...), of A arguments.
 	OpSuperCall
-	OpReturn
-	OpReturnUndef
 
-	// --- Function and object construction ---------------------------------
-	OpClosure // build a closure from function template Constants[A]
-	OpNewObject
-	OpNewArray     // A = element count, taken from the stack; B, if not 0, the cache site of a literal of constants
-	OpNewArrayFrom // build from an iterator result already on the stack
-	OpArrayPush    // append to the array beneath the top
-	OpArraySpread  // spread an iterable into the array beneath
-	OpDefineMethod // attach a method to an object or class prototype
-	OpNewClass
-	OpNewRegExp
-	OpConcat         // string concatenation for templates, A = part count
-	OpTemplateObject // push the frozen strings array for Templates[A]
+	// --- Construction -----------------------------------------------------
+	OpArrayPush      // append to an array
+	OpArraySpread    // spread an iterable into an array
+	OpTemplateObject // the frozen strings array of Templates[A]
 
 	// --- Iteration --------------------------------------------------------
 	OpForInStart
 	OpForOfStart
-	OpForAwaitOfStart
-	OpIterNext // pushes value and a done flag
-	OpIterClose
-	OpIterNextOrJump // advances, or jumps to A when exhausted
-	// OpAsyncIterNext calls the async iterator's next method and pushes the
-	// promise it returns, which OpAwait then settles.
-	OpAsyncIterNext
-	// OpIterResultOrJump unpacks an iterator result object, pushing its value
-	// or jumping to A when it reports done.
-	OpIterResultOrJump
-	OpSpreadIter // spread an iterable onto the stack for a call
-	// OpIterResume drives a `yield*`: the cursor is beneath a value and the
-	// kind of resumption that produced it, and the kind decides which of the
-	// delegate's three methods is called. A is 1 for an async delegation,
-	// whose result is a promise to await.
-	//
-	// A delegate with no throw is closed and the delegation fails; one with no
-	// return simply ends, which is what lets `yield*` over a plain iterator
-	// work at all.
-	OpIterResume
-	// OpIterUnpackDelegate reads the result of one `yield*` step. A is where to
-	// jump when the delegation is over; B packs the local holding the kind of
-	// resumption that produced the result with a flag saying whether the
-	// result object is yielded as it is.
-	//
-	// A result that says done ends the delegation -- as a return of the outer
-	// generator when that is what was forwarded, and as the value of the
-	// yield* otherwise.
-	OpIterUnpackDelegate
-	// OpIterSend calls the cursor's next method with the value on top of the
-	// stack, which is how `yield*` forwards what its caller sent in. The cursor
-	// stays beneath, and the raw iterator result replaces the sent value.
-	OpIterSend
-	// OpIterSendAsync is OpIterSend for an async iterator, pushing the promise
-	// that OpAwait then settles.
-	OpIterSendAsync
-	// OpIterUnpack replaces an iterator result with its value, jumping to A
-	// when the result reports done. The value is pushed either way, since
-	// `yield*` evaluates to whatever the delegate returned.
-	OpIterUnpack
-	// OpEndParams marks the end of a generator's parameter prologue. It is a
-	// no-op except when the interpreter is running that prologue on its own,
-	// which is how a generator binds its parameters at call time rather than on
-	// its first resumption.
-	OpEndParams
-	// The three instructions a destructuring pattern drives its iterator with.
-	// The cursor stays on the operand stack for the whole pattern, so that an
-	// abrupt exit closes it the way it closes a for-of's; A is how far below
-	// the top it sits, since a target's reference may have been pushed above
-	// it.
-	//
-	// OpIterStep pushes the next value, or undefined once the iterator is
-	// exhausted -- a pattern with more names than the source has values leaves
-	// the rest undefined. OpIterRest pushes everything left as an array.
-	// OpIterCloseNormal pops the cursor and tells an iterator the pattern
-	// stopped short of, which unlike a close during an abrupt completion has
-	// nothing else in flight and so reports what went wrong.
+	OpIterNextOrJump // advance a for-of's iterator
+	OpSpreadIter     // spread an iterable for a call
+	// OpIterStep is a destructuring pattern's next value, or undefined once
+	// the iterator is exhausted, and OpIterRest everything left as an array.
 	OpIterStep
 	OpIterRest
-	OpIterCloseNormal
-	// OpGetPropUnder and OpGetIndexUnder read a property of an object that is
-	// not on top of the stack, which an object pattern needs: the target of
-	// each property is evaluated before the property is read, so by then the
-	// source sits underneath whatever the target's reference left behind.
-	//
-	// For OpGetPropUnder, A is the name and B how far down the source is. For
-	// OpGetIndexUnder, A is how far down the key is, with the source just
-	// below it. Neither consumes anything.
-	OpGetPropUnder
-	OpGetIndexUnder
-	// OpIterToArray replaces an array-destructuring source with a dense array of
-	// the values its iterator produces. A is how many to pull, or IterAll when
-	// the pattern has a rest element and needs every one.
-	OpIterToArray
-
-	// --- Exceptions -------------------------------------------------------
-	OpThrow
-	// OpPushCatch registers a handler at A; OpPopCatch unregisters the
-	// innermost one. Finally blocks are compiled as a handler plus an explicit
-	// re-throw, so the VM needs no separate notion of them.
-	OpPushCatch
-	OpPopCatch
-	OpPushFinally
-	OpRethrow
-	OpThrowTypeError // used for TDZ and const-assignment failures
-	// OpThrowReferenceError throws a ReferenceError with the message Names[A].
-	OpThrowReferenceError
-
-	// --- Tail calls ------------------------------------------------------------
-	// OpTailCall and OpTailCallMethod are OpCall and OpCallMethod in tail
-	// position, where the compiler knows a return follows: the frame may be
-	// given up for the callee's, so that a chain of tail calls runs in constant
-	// space. Where the frame cannot be given up they are ordinary calls, and
-	// the return that follows does the rest.
-	OpTailCall
-	OpTailCallMethod
-	// OpTailDirectEval is OpDirectEval in tail position: when the name eval
-	// turns out not to be the intrinsic, the call it makes instead is a tail
-	// call.
-	OpTailDirectEval
-
-	// --- Resource management ------------------------------------------------
-	// OpNewDisposeCapability pushes an empty stack of resources, for a scope's
-	// using declarations to add to.
-	OpNewDisposeCapability
-	// OpAddDisposable pops a capability and adds the value beneath it, which
-	// stays where it is, as a resource: A is 1 for `await using`.
-	OpAddDisposable
-	// OpDispose pops a capability and disposes of what it holds. With
-	// DisposeRecord in A it runs as a finally clause's first act, and reads
-	// the completion record beneath it to know whether an exception is in
-	// flight; an error from disposing is thrown, which replaces the record.
-	// With DisposeAsync it pushes a promise of the disposal instead, for the
-	// code that follows to await -- or undefined, when no `await using` was
-	// reached and the disposal has been done without awaiting.
-	OpDispose
-
-	// --- Generators and async ---------------------------------------------
-	OpYield
-	// OpYieldStar suspends inside a `yield*`, where the three ways a generator
-	// can be resumed all have to be forwarded to the inner iterator rather
-	// than acted on here. It pushes the value that came back and which of the
-	// three it was: 0 for next, 1 for throw, 2 for return.
-	OpYieldStar
-	OpAwait
-	OpInitialYield // suspends a generator before its first statement
-	OpAsyncReturn
 
 	// --- Miscellaneous ----------------------------------------------------
-	OpGetSuperProp
-	OpGetSuperIndex
-	OpSetSuperProp
-	OpSetSuperIndex
-	// OpSuperBase pushes the object a super reference reads from, which is
-	// settled before the key is computed: changing the home object's prototype
-	// while the key runs does not move the reference.
-	OpSuperBase
-	OpNewTarget
-	// OpImportMeta pushes the running module's import.meta object, creating it
-	// on first use.
-	OpImportMeta
-	// OpPushCallee pushes the function object currently executing, which is
-	// how a named function expression refers to itself.
+	// OpPushCallee is the function object running, which is how a named
+	// function expression refers to itself.
 	OpPushCallee
-	OpToObject
-	OpCheckCoercible // throw if the value on top is null or undefined
 	OpToPropertyKey
-	// OpToPropertyKeyOfBase is OpToPropertyKey where the object the key will be
-	// used on is beneath it, and is required to be coercible first.
-	OpToPropertyKeyOfBase
 	OpToNumber
 	// OpToNumeric is OpToNumber except that a BigInt stays one, which is what
 	// the update operators need: `1n++` is 2n, not an error.
 	OpToNumeric
-	OpToString
+
 	// --- `with` -----------------------------------------------------------
-	// Inside a `with` body every name compiles to one of the probes below
-	// followed by the instruction that would have been emitted anyway. A probe
-	// answers from the enclosing `with` objects and jumps to B, or falls
-	// through to the static instruction. A is the name.
-	OpWithPush // push the object on top onto the frame's `with` chain
-	OpWithPop
-	OpWithGet     // push the value and jump
-	OpWithGetThis // push the value and the object, for a call
-	OpWithSet     // store the value on top, leave it, and jump
-	OpWithDelete  // push whether the delete succeeded and jump
-	OpWithTypeof  // push the type of the value and jump
-	// OpWithGetUnder and OpWithPutUnder are the two halves of a reference that
-	// is read and then written back: a compound assignment, or an update. The
-	// name is resolved once, by the read, and the write goes to whatever the
-	// read found -- which a second probe would not necessarily find again,
-	// since a getter may have deleted the property in between.
-	OpWithGetUnder // replace the placeholder base with the object, push the value, jump
-	OpWithPutUnder // store into the base beneath the value, drop it, and jump
-	// OpWithResolve resolves a name against the `with` objects without reading
-	// it, which is what a plain assignment needs: the reference is settled
-	// before the value is evaluated, but nothing is read from it.
+	// The probes a name inside a `with` body is compiled with (regcomp's
+	// WithProbe): each answers from the enclosing `with` objects, or the
+	// static code runs.
+	OpWithGet     // read the value
+	OpWithGetThis // read the value and the object, for a call
+	OpWithSet     // store a value
+	OpWithDelete  // delete the binding
+	OpWithTypeof  // the type of the value
+	// OpWithGetUnder is the read of a reference that is read and then written
+	// back -- a compound assignment, an update: the name is resolved once, by
+	// the read, and the write goes to whatever the read found.
+	OpWithGetUnder
+	// OpWithResolve resolves a name against the `with` objects without
+	// reading it, which is what a plain assignment needs.
 	OpWithResolve
-	// OpCheckGlobalRef reports a name that is nowhere to be found, which strict
-	// mode refuses to assign to. It runs where the reference is evaluated,
-	// before the value is, so that a value which creates the global does not
-	// make the assignment legal after the fact.
-	OpCheckGlobalRef
-	// OpAssertResolved reports the name in Names[A] as unresolvable when the
-	// answer OpCheckGlobalRef left beneath the value says it was, and removes
-	// that answer either way.
-	OpAssertResolved
-	OpSetName // give an anonymous function the name in Names[A]
-	OpSetHomeObject
-	// OpSetFieldInit hands a class its instance initializer: the function that
-	// installs the private methods and runs the field initializers. It pops the
-	// function and leaves the class, which the definition goes on decorating.
-	OpSetFieldInit
-	OpCheckThisInit // a derived constructor must call super() before `this`
-	OpInitThis
-	// OpThrowDeleteSuper reports `delete super.x`, which parses and then fails:
-	// a super reference names a property of the home object's prototype, and
-	// there is no object it could be removed from.
-	OpThrowDeleteSuper
 
-	// --- Lexical parameters ------------------------------------------------
-	// A parameter list with a default, a pattern or a rest element binds its
-	// names one at a time, so one the prologue has not reached yet may not be
-	// read: `function f(a = b, b) {}` is a reference error, and so is
-	// `function f(a = a) {}`.
-	//
-	// OpParamsToDeadZone puts the first A parameter slots into the dead zone,
-	// which is where such a list starts. OpInitParam takes slot A back out by
-	// filling it from argument A, and OpParamNeedsDefault pushes whether
-	// argument A was undefined or absent, which is when its default runs.
-	OpParamsToDeadZone
-	OpInitParam
-	OpParamNeedsDefault
-
-	// --- Added last, so that no instruction before them is renumbered -----
-	// Go lays the interpreter's cases out in the order of their values, and
-	// renumbering moves them all.
 	// OpApplyArguments is f.apply(x, arguments) in a function whose arguments
-	// object is made only on demand, in Locals[A]: with f, apply and x on the
-	// stack, it calls f with the arguments themselves where apply is the
-	// built-in, and apply with the object, made now, where it is not.
+	// object is made only on demand: f is called with the arguments
+	// themselves where apply is the built-in.
 	OpApplyArguments
-	// OpLazyArguments pushes the arguments object kept in Locals[A], making it
-	// there first if it has not been made.
-	OpLazyArguments
-	// OpBinLocal is get_local A then the arithmetic operator B -- add, sub or
-	// mul -- with the local as its right operand: `a*b + c`, `s + x`.
-	OpBinLocal
-	// OpLocalBinImm is get_local then bin_imm: `x & 0xff`, `i + 1` with x and
-	// i locals. A's low 24 bits are the local's slot and its high 8 the
-	// operator, one of those OpBinImm takes; B is the integer.
-	OpLocalBinImm
-	// OpArgumentsIndex is arguments[key], with the key on the stack, in a
-	// function whose arguments object is made only on demand, in Locals[A]:
-	// while it has not been made, an index of the arguments that names no
-	// parameter is read from them, and anything else makes the object and
-	// reads it.
-	OpArgumentsIndex
-	// OpArgumentsLength is arguments.length in such a function: how many
-	// arguments there are while the object has not been made, and its length
-	// once it has.
-	OpArgumentsLength
-	// OpImport is `import(...)`, `import.defer(...)` or `import.source(...)`,
-	// which A says as one of the Import constants: it pops B arguments, the
-	// specifier and, if B is 2, the options, and pushes the promise of the
-	// module. It is not a call: there is no function a script could reach.
-	OpImport
-	// OpSetGlobalStrict is a strict assignment to the global name Names[A],
-	// with B its cache site, of a value that ran no code: check_global_ref,
-	// assert_resolved and set_global in one, the reference resolved just
-	// before the store rather than before the value, which nothing could
-	// tell apart. It pops the value.
-	OpSetGlobalStrict
-	// OpDebugStmt begins a statement in code compiled for a debugger, and is
-	// in no other code: A is the statement's index in the function's
-	// Statements, and B is 1 for a debugger statement. It does nothing unless
-	// a debugger has asked to stop -- at a breakpoint, a step, or anywhere --
-	// or the statement is a debugger statement and one is listening.
-	OpDebugStmt
-
-	// OpAsyncIterClose is a for await's AsyncIteratorClose, in two steps the
-	// await between them separates. With B 0 it pops the loop's cursor and
-	// calls its iterator's return method, pushing what that returns, or
-	// jumps to A where an asynchronous iterator has none; a synchronous one
-	// driven asynchronously always answers, as the spec's wrapper of it does.
-	// With B 1 it pops the awaited result, a TypeError where it is not an
-	// object. With B 2 it pops the cursor and marks it done, unclosed: a
-	// loop its iterator's next failed is not closed, by this or by anything
-	// unwinding past it.
-	OpAsyncIterClose
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
 )
 
-// The phases of an import OpImport's A operand names.
+// The phases of an import register code's import names.
 const (
 	ImportEvaluate = iota // import(): the module, evaluated
 	ImportDefer           // import.defer(): its deferred namespace
 	ImportSource          // import.source(): its source
 )
 
-// What OpSuperCall's B operand says the call's arguments are.
-const (
-	// SuperArgs is the A arguments on the stack.
-	SuperArgs = 0
-	// SuperSpread is an array of them on the stack, a spread's.
-	SuperSpread = 1
-	// SuperForward is the arguments the constructor was called with: the
-	// super call of a derived class's implicit constructor.
-	SuperForward = 2
-)
-
-// The flags OpUpdateLocal's B operand carries.
-const (
-	UpdateDec     = 1 << 0
-	UpdatePostfix = 1 << 1
-)
-
 // opNames gives each opcode a readable name for disassembly and panics.
-// StrFreezeA is, as an OpArgumentsIndex's A, str_freeze: the instruction that
-// follows a read of a binding appends may grow in place (compiler's
-// ownedAppend and localAppend). What is read is no longer the binding's alone,
-// so if it is a string, appends stop growing it. It leaves the value where it
-// is, as an OpArgumentsIndex replaces the top of the stack.
-//
-// It is not an opcode of its own: an OpArgumentsIndex's A is never that
-// large, since no function has that many locals. Instr.StrFreeze says which
-// it is.
-const StrFreezeA = ^uint32(0)
-
-// AddOwned is an OpAdd's B where the addition is to a string a local alone
-// holds, which may grow it in place (compiler's localAppend, the VM's
-// strAppend). The interpreter does not read it: a plain addition is always
-// right.
-const AddOwned uint32 = 1
-
 var opNames = [opCount]string{
-	OpNop: "nop", OpPushConst: "push_const", OpPushUndef: "push_undef",
-	OpPushNull: "push_null", OpPushTrue: "push_true", OpPushFalse: "push_false",
-	OpPushThis: "push_this", OpPushInt: "push_int",
-	OpPushEmptyString:   "push_empty_string",
-	OpPushUninitialized: "push_uninitialized", OpInitParam: "init_param",
-	OpParamNeedsDefault: "param_needs_default",
-	OpParamsToDeadZone:  "params_to_dead_zone",
-
-	OpDup: "dup", OpDup2: "dup2", OpDrop: "drop", OpSwap: "swap",
-	OpRot3: "rot3", OpRot4: "rot4",
-	OpInsert2: "insert2", OpInsert3: "insert3", OpInsert4: "insert4",
-
-	OpGetLocal: "get_local", OpGetLocal2: "get_local2", OpSetLocalGet: "set_local_get",
-	OpClearLocal: "clear_local", OpBinImm: "bin_imm", OpGetLocalIndex: "get_local_index", OpSetLocal: "set_local", OpPutLocal: "put_local",
-	OpGetLocalCheck: "get_local_check", OpSetLocalCheck: "set_local_check",
-	OpInitLocal: "init_local",
-
-	OpGetUpvalue: "get_upvalue", OpSetUpvalue: "set_upvalue",
-	OpGetUpvalueCheck: "get_upvalue_check", OpSetUpvalueCheck: "set_upvalue_check",
-	OpInitUpvalue: "init_upvalue", OpCloseUpvalues: "close_upvalues",
-
-	OpGetGlobal: "get_global", OpGetGlobalOpt: "get_global_opt",
-	OpSetGlobal: "set_global", OpDefineGlobalVar: "define_global_var",
-	OpDefineGlobalFunc: "define_global_func",
-	OpCheckGlobalLex:   "check_global_lex",
-	OpCheckGlobalVar:   "check_global_var",
-	OpDeclareGlobalLex: "declare_global_lex",
-	OpInitGlobalLex:    "init_global_lex",
-	OpDeclareModuleLex: "declare_module_lex",
-	OpInitModuleLex:    "init_module_lex",
-
-	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetIndex: "get_index",
-	OpSetIndex: "set_index", OpDeleteProp: "delete_prop",
-	OpDeleteVar:   "delete_var",
-	OpGetPropThis: "get_prop_this", OpGetIndexThis: "get_index_this",
+	OpNop: "nop", OpSetUpvalue: "set_upvalue",
+	OpDefineGlobalVar: "define_global_var", OpDefineGlobalFunc: "define_global_func",
+	OpCheckGlobalLex: "check_global_lex", OpCheckGlobalVar: "check_global_var",
+	OpDeclareGlobalLex: "declare_global_lex", OpDeclareModuleLex: "declare_module_lex",
+	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetPropThis: "get_prop_this",
 	OpDefineField: "define_field", OpDefineIndex: "define_index",
-	OpDefineGetter: "define_getter", OpDefineSetter: "define_setter",
-	OpDefineGetterIndex: "define_getter_index",
-	OpDefineSetterIndex: "define_setter_index",
-	OpSetFuncName:       "set_func_name",
-	OpGetLength:         "get_length", OpSetProtoOf: "set_proto_of",
-	OpCopyDataProps: "copy_data_props",
-
-	OpGetPrivate: "get_private", OpSetPrivate: "set_private",
-	OpDefinePrivate: "define_private", OpPrivateIn: "private_in",
-	OpDefinePrivateMethod:   "define_private_method",
-	OpDefinePrivateGetter:   "define_private_getter",
-	OpDefinePrivateSetter:   "define_private_setter",
-	OpGetPrivateMethod:      "get_private_method",
-	OpPrivateName:           "private_name",
-	OpNewPrivateMethods:     "new_private_methods",
-	OpAddPrivateMethod:      "add_private_method",
-	OpAddPrivateGetter:      "add_private_getter",
-	OpAddPrivateSetter:      "add_private_setter",
-	OpInstallPrivateMethods: "install_private_methods",
-	OpRestParam:             "rest_param",
-	OpGetArguments:          "get_arguments",
-	OpApplyArguments:        "apply_arguments",
-	OpLazyArguments:         "lazy_arguments",
-	OpBinLocal:              "bin_local",
-	OpLocalBinImm:           "local_bin_imm",
-	OpArgumentsIndex:        "arguments_index",
-	OpArgumentsLength:       "arguments_length",
-	OpImport:                "import",
-	OpSetGlobalStrict:       "set_global_strict",
-	OpDebugStmt:             "debug_stmt",
-	OpArrayRest:             "array_rest",
-	OpObjectRest:            "object_rest",
-
-	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
-	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",
-	OpIncLocal: "inc_local", OpDecLocal: "dec_local", OpUpdateLocal: "update_local", OpGetLocalIndexUpdate: "get_local_index_update",
-
-	OpBitAnd: "bit_and", OpBitOr: "bit_or", OpBitXor: "bit_xor",
-	OpBitNot: "bit_not", OpShl: "shl", OpShr: "shr", OpUShr: "ushr",
-
+	OpSetProtoOf: "set_proto_of", OpCopyDataProps: "copy_data_props",
+	OpAddPrivateMethod: "add_private_method", OpAddPrivateGetter: "add_private_getter",
+	OpAddPrivateSetter: "add_private_setter", OpObjectRest: "object_rest",
+	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod", OpPow: "pow",
+	OpNeg: "neg", OpPos: "pos",
+	OpBitAnd: "bit_and", OpBitOr: "bit_or", OpBitXor: "bit_xor", OpBitNot: "bit_not",
+	OpShl: "shl", OpShr: "shr", OpUShr: "ushr",
 	OpEq: "eq", OpNe: "ne", OpStrictEq: "strict_eq", OpStrictNe: "strict_ne",
-	OpLt: "lt", OpLe: "le", OpGt: "gt", OpGe: "ge", OpIn: "in",
+	OpLt: "lt", OpLe: "le", OpGt: "gt", OpGe: "ge",
 	OpInstanceOf: "instanceof", OpNot: "not", OpTypeOf: "typeof",
-	OpIsNullish: "is_nullish",
-
-	OpJump: "jump", OpJumpIfFalse: "jump_if_false", OpJumpIfTrue: "jump_if_true",
-	OpJumpIfFalseKeep: "jump_if_false_keep", OpJumpIfTrueKeep: "jump_if_true_keep",
-	OpJumpIfNullish: "jump_if_nullish", OpJumpIfNotNullish: "jump_if_not_nullish",
-	OpJumpIfCmpFalse: "jump_if_cmp_false",
-
-	OpCall: "call", OpDirectEval: "direct_eval", OpCallMethod: "call_method", OpNew: "new",
-	OpCallSpread: "call_spread", OpNewSpread: "new_spread",
-	OpSuperCall: "super_call", OpReturn: "return", OpReturnUndef: "return_undef",
-
-	OpClosure: "closure", OpNewObject: "new_object", OpNewArray: "new_array",
-	OpNewArrayFrom: "new_array_from", OpArrayPush: "array_push",
-	OpArraySpread: "array_spread", OpDefineMethod: "define_method",
-	OpNewClass: "new_class", OpNewRegExp: "new_regexp", OpConcat: "concat",
-	OpTemplateObject: "template_object",
-
+	OpCall: "call", OpCallMethod: "call_method", OpNew: "new",
+	OpCallSpread: "call_spread", OpNewSpread: "new_spread", OpSuperCall: "super_call",
+	OpArrayPush: "array_push", OpArraySpread: "array_spread", OpTemplateObject: "template_object",
 	OpForInStart: "for_in_start", OpForOfStart: "for_of_start",
-	OpForAwaitOfStart: "for_await_of_start", OpIterNext: "iter_next",
-	OpIterClose: "iter_close", OpIterNextOrJump: "iter_next_or_jump",
-	OpAsyncIterNext:      "async_iter_next",
-	OpIterResultOrJump:   "iter_result_or_jump",
-	OpSpreadIter:         "spread_iter",
-	OpIterSend:           "iter_send",
-	OpIterSendAsync:      "iter_send_async",
-	OpIterUnpack:         "iter_unpack",
-	OpEndParams:          "end_params",
-	OpIterResume:         "iter_resume",
-	OpIterUnpackDelegate: "iter_unpack_delegate",
-	OpIterToArray:        "iter_to_array",
-
-	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
-	OpPushFinally: "push_finally", OpRethrow: "rethrow",
-	OpThrowTypeError: "throw_type_error", OpThrowReferenceError: "throw_reference_error",
-
-	OpTailCall: "tail_call", OpTailCallMethod: "tail_call_method", OpTailDirectEval: "tail_direct_eval",
-
-	OpNewDisposeCapability: "new_dispose_capability", OpAddDisposable: "add_disposable",
-	OpDispose: "dispose",
-
-	OpYield: "yield", OpYieldStar: "yield_star", OpAwait: "await",
-	OpInitialYield: "initial_yield", OpAsyncReturn: "async_return",
-
-	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
-	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
-	OpSuperBase: "super_base",
-	OpNewTarget: "new_target", OpImportMeta: "import_meta",
-	OpPushCallee:          "push_callee",
-	OpToObject:            "to_object",
-	OpCheckCoercible:      "check_coercible",
-	OpToPropertyKey:       "to_property_key",
-	OpToPropertyKeyOfBase: "to_property_key_of_base", OpToNumber: "to_number",
-	OpToNumeric: "to_numeric",
-	OpToString:  "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
+	OpIterNextOrJump: "iter_next_or_jump", OpSpreadIter: "spread_iter",
+	OpIterStep: "iter_step", OpIterRest: "iter_rest",
+	OpPushCallee: "push_callee", OpToPropertyKey: "to_property_key",
+	OpToNumber: "to_number", OpToNumeric: "to_numeric",
 	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
-	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
-	OpWithResolve: "with_resolve",
-	OpSetName:     "set_name", OpSetHomeObject: "set_home_object",
-	OpCheckGlobalRef:   "check_global_ref",
-	OpAssertResolved:   "assert_resolved",
-	OpSetFieldInit:     "set_field_init",
-	OpCheckThisInit:    "check_this_init",
-	OpInitThis:         "init_this",
-	OpThrowDeleteSuper: "throw_delete_super",
-	OpAsyncIterClose:   "async_iter_close",
-	OpAssignConst:      "assign_const",
-	OpNipUnder:         "nip_under",
-	OpIterStep:         "iter_step",
-	OpIterRest:         "iter_rest",
-	OpIterCloseNormal:  "iter_close_normal",
-	OpGetPropUnder:     "get_prop_under",
-	OpGetIndexUnder:    "get_index_under",
+	OpWithGetUnder: "with_get_under", OpWithResolve: "with_resolve",
+	OpApplyArguments: "apply_arguments",
 }
 
 func (op Op) String() string {
 	if int(op) < len(opNames) && opNames[op] != "" {
 		return opNames[op]
 	}
-	return "op(" + itoa(int(op)) + ")"
+	return "op(" + strconv.Itoa(int(op)) + ")"
 }
 
-// itoa avoids importing strconv into this leaf package for the one place a
-// number must be formatted.
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	var buf [8]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	return string(buf[i:])
-}
-
-// IterAll is OpIterToArray's operand when the whole iterator must be drained,
-// which a pattern with a rest element requires.
-const IterAll = ^uint32(0)
-
-// DirectEvalSpread is the argument count OpDirectEval carries when its
-// arguments were gathered into an array, which a spread element forces.
-const DirectEvalSpread = ^uint32(0)
-
-// A `with` probe packs two things into its A operand: the name, in the low
-// bits, and how many of the innermost `with` objects to consult, in the high
-// ones. The count is needed because a binding declared between two `with`
-// statements is shadowed by the inner one and not by the outer.
-const (
-	WithLimitShift = 24
-	WithNameMask   = 1<<WithLimitShift - 1
-	WithLimitMax   = 1<<(32-WithLimitShift) - 1
-)
+// WithLimitMax is the most `with` scopes a probe consults (regcomp's
+// WithProbe Limit): a binding declared between two `with` statements is
+// shadowed by the inner one and not by the outer.
+const WithLimitMax = 1<<8 - 1
 
 // The ways a suspended generator can be resumed. A delegating yield keeps the
 // kind it was resumed with in a binding of its own, so that the code after the
@@ -819,7 +221,7 @@ const (
 	ResumeReturn
 )
 
-// The flags of OpDispose.
+// The flags of a disposal (RDispose, RDisposeStep).
 //
 // DisposeStep, in B, makes it one step of an await using scope's
 // disposal instead, the awaits between them the compiler's own: the

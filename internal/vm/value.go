@@ -110,7 +110,7 @@ func accessorValue(a *accessor) Value {
 	return Value{num: mkTag(KindObject, objAccessor), ref: unsafe.Pointer(a)}
 }
 
-// templateValue is a function constant: the template OpClosure copies.
+// templateValue is a function constant: the template closure_w copies.
 func templateValue(cl *closure) Value {
 	return Value{num: mkTag(KindObject, objTemplate), ref: unsafe.Pointer(cl)}
 }

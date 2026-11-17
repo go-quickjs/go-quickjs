@@ -18,7 +18,7 @@ func (g *gen) bigInt(n *ast.BigIntLit, dst int) int {
 	return d
 }
 
-// template compiles a template literal as the stack form does: its parts in
+// template compiles a template literal: its parts in
 // a window, concatenated by one concat, which converts each with ToString.
 // A substitution is converted as soon as it is made (to_string) where what
 // follows it may run code, which would see the conversion's order.
@@ -136,8 +136,7 @@ func (g *gen) taggedTemplate(n *ast.TaggedTemplate, dst int) int {
 	return d
 }
 
-// property defines object literal d's property p, as the stack form's
-// compileObjectLit does: a spread's properties copied, an accessor's half
+// property defines object literal d's property p: a spread's properties copied, an accessor's half
 // defined, __proto__: v setting the prototype, a computed key converted
 // before its value is made, a function named after its key, and a method
 // given the literal as its home object.
@@ -324,8 +323,8 @@ func (g *gen) arrayFrom(pre int, els []ast.Expr, dst int) int {
 	return g.place(d, dst)
 }
 
-// spreadCall compiles a call with a spread among its arguments, as the
-// stack form's call_spread: the function, its this -- a method's receiver,
+// spreadCall compiles a call with a spread among its arguments
+// (call_spread): the function, its this -- a method's receiver,
 // or undefined -- and an array of the arguments in a window.
 func (g *gen) spreadCall(n *ast.Call, dst int) int {
 	w := g.allocN(3)
@@ -347,7 +346,7 @@ func (g *gen) spreadCall(n *ast.Call, dst int) int {
 			g.emit(bytecode.MakeR(bytecode.RGetIndex, 0, r16(w), r16(w+1), r16(k)))
 		} else {
 			name := memberName(m)
-			// At the stack form's position: its get_prop has none of its own.
+			// At the call's position: the read has none of its own.
 			g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(w), r16(w+1), g.propSite(bytecode.OpGetProp, g.nameIdx(name))))
 		}
 	} else if id, ok := n.Callee.(*ast.Ident); ok && g.withs[id] != nil {

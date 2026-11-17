@@ -817,7 +817,7 @@ func (r *Runtime) nativeGenEnd(s *regState, ctx *nativeCtx, rec *nativeRec, v Va
 func nativeClosure(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) *Object {
 	f := (*frame)(nativePtr(&ctx.nf))
 	c := (*regCode)(nativePtr(&ctx.rc))
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	return ctx.st.r.regClosure(f, c, w, f.base-int(c.locals))
 }
 
@@ -889,7 +889,7 @@ func nativeBuiltin(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState
 		}
 	}
 	st.kept.pc = pc + 1
-	st.f.pc = regSrc(st.c, pc) + 1
+	st.f.pc = uint32(pc) + 1
 	return st.done(st.r.regNative(st.cl.regCalls[w.C()].callee, w, st.wb))
 }
 
@@ -960,13 +960,13 @@ var nativeCallMissFn func(*[1 << 16]Value, bytecode.RInstr, int, *regState) int
 // the code has searched. A callee rhCallW leaves to regCallMiss (a leaf, a
 // frame that keeps its arguments) is rhCallW's.
 func nativeJITCall(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
-	r, f, c, wb := st.r, st.f, st.c, st.wb
+	r, f, wb := st.r, st.f, st.wb
 	e := &f.cl.regCalls[w.C()]
 	if e.kind&(regCallOut|regCallLeaf) != 0 {
 		return rhCallW(regs, w, pc, st)
 	}
 	st.kept.pc = pc + 1
-	f.pc = regSrc(c, pc) + 1
+	f.pc = uint32(pc) + 1
 	base := wb + int(w.A())
 	win := regWindow(r.stack, base)
 	if e.kind == regCallThis {
@@ -1070,7 +1070,7 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 		ctx.scratch[sThisRef] = uint64(uintptr(unsafe.Pointer(ctx.thisRef)))
 		return 1
 	}
-	if leaf := e.cl.fn.Leaf; leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
+	if leaf := leafKind(e.cl); leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
 		if _, done := r.leafCall(e.cl, obj, regs[a+2:a+2+int(w.X())]); !done {
 			return 0
 		}
@@ -1295,7 +1295,7 @@ func nativeReflect(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeC
 		return 0
 	}
 	obj := newOrdinary[struct{}](fd, root, proto, root.roomFor(int(cl.fn.ThisProps)))
-	if leaf := cl.fn.Leaf; fd.ctorKind != ctorDerived && leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
+	if leaf := leafKind(cl); fd.ctorKind != ctorDerived && leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
 		if _, done := r.leafCall(cl, obj, args); done {
 			regs[w.B()] = Obj(obj)
 			return 2
@@ -1344,8 +1344,7 @@ func nativeFillPCs(ctx *nativeCtx) {
 	for d := ctx.filled; d < ctx.depth; d++ {
 		rec := &ctx.recs[d]
 		nf := (*frame)(nativePtr(&rec.nf))
-		rc := (*regCode)(nativePtr(&rec.rc))
-		nf.pc = regSrc(rc, int((rec.retIP-rec.codeBase)/8)) + 1
+		nf.pc = uint32((rec.retIP-rec.codeBase)/8) + 1
 	}
 	ctx.filled = ctx.depth
 }

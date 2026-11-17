@@ -24,7 +24,6 @@ func TestConstLiteralReads(t *testing.T) {
 		{`function f() { const X = 4; const g = function () { return () => X + 1 }; return g }`, "g", true},
 		{`function f() { const X = 'go'; class C { m() { return X } } return C }`, "m", true},
 		{`function f() { const X = true; for (;;) { const g = () => X; return g } }`, "g", true},
-		{`function f() { const X = 1.5; return X + X }`, "f", true},
 		{`function f() { const g = () => X; const X = 1; return g }`, "g", false},
 		{`function f() { const X = 1; function g() { return X } return g }`, "g", false},
 		{`function f(k) { switch (k) { case 0: const X = 1; case 1: const g = () => X; return g } }`, "g", false},
@@ -57,17 +56,24 @@ func TestConstLiteralReads(t *testing.T) {
 	}
 }
 
-// readsX reports whether fn reads a binding X: an upvalue of it, or, in a
-// function declaring it, a read of a local.
+// readsX reports whether fn reads a binding X: an upvalue of it, or a
+// global of that name, as its register code reads it.
 func readsX(fn *bytecode.Function) bool {
 	for _, u := range fn.Upvalues {
 		if u.Name == "X" {
 			return true
 		}
 	}
-	for _, in := range fn.Code {
-		switch in.Op {
-		case bytecode.OpGetLocal, bytecode.OpGetLocal2, bytecode.OpGetLocalCheck, bytecode.OpGetGlobal:
+	rc := fn.RegCode()
+	if rc == nil {
+		return true
+	}
+	names := rc.Names
+	if names == nil {
+		names = fn.Names
+	}
+	for _, w := range rc.Code {
+		if w.Op() == bytecode.RGetGlobal && int(w.B()) < len(names) && names[w.B()] == "X" {
 			return true
 		}
 	}

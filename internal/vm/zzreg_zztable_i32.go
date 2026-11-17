@@ -129,7 +129,7 @@ func rsAddII32(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 // regOrZero is v | 0, v the result of the operator of the int32 form at
 // pc, or err, that operator's: a Number's ToInt32; a string's number's,
 // whose conversion runs nothing; and a BigInt's TypeError, the |'s,
-// placed at its stack instruction, Aux[pc]. Its caller has kept the pc
+// placed at the position of the pc Aux[pc]. Its caller has kept the pc
 // (st.at) and stores what it gives (st.put), so that the throws-keep-pc
 // rule (TestRegThrowsKeepPC) sees both in each slow function.
 func regOrZero(st *regState, pc int, v Value, err error) (Value, error) {

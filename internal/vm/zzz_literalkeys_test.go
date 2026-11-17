@@ -183,47 +183,46 @@ func TestLiteralKeysTreeFull(t *testing.T) {
 	}
 }
 
-// The compiler says the keys of a literal that has nothing else, in the order
-// of the literals' sites, a literal inside another after it: alike for the same
-// keys, in order, however written, and for no others.
+// The register compiler says the keys of a literal that has nothing else
+// (RegCode.ObjKeysHash): alike for the same keys, in order, however
+// written, and for no others.
 func TestLiteralKeysTable(t *testing.T) {
 	t.Parallel()
-	fn := compileForTest(t, `
-		var k = "k", a = {x: 1, y: {z: 2}}, b = {...a}, c = {}, d = {q: 1, q: 2}, e = {[k]: 1},
-			f = {get g() { return 1 }}, h = {m() {}, "n-1": 2, 3: 4}, i = {__proto__: null}, j = {r: 1, ...a},
-			l = {"x": 3, y() {}}, m = {y: 1, x: 2}, n = {ab: 1, c: 2}, o = {a: 1, bc: 2}`)
-	var got []uint64
-	for _, in := range fn.Code {
-		if in.Op == bytecode.OpNewObject {
-			got = append(got, keysOf[struct{}](fn, in.B))
+	keys := func(src string) uint64 {
+		t.Helper()
+		f := compileForTest(t, src)
+		rc := f.RegCode()
+		// The last literal made, the outermost.
+		for pc := len(rc.Code) - 1; pc >= 0; pc-- {
+			if w := rc.Code[pc]; w.Op() == bytecode.RNewObject || w.Op() == bytecode.RNewObjectLit {
+				return keysOf[struct{}](rc, pc)
+			}
+		}
+		t.Fatalf("%s: no literal", src)
+		return 0
+	}
+	says := []string{`({x: 1, y: {z: 2}})`, `({"n-1": 2, n: 4})`, `({"x": 3, y: 4})`, `({y: 1, x: 2})`,
+		`({ab: 1, c: 2})`, `({a: 1, bc: 2})`, `({z: 2})`}
+	// A literal with a method is made a property at a time, the method
+	// given its home object: new_object_lit is of values alone.
+	none := []string{`var a = {}; ({...a})`, `({})`, `({q: 1, q: 2})`, `var k = "k"; ({[k]: 1})`,
+		`({get g() { return 1 }})`, `({__proto__: null})`, `var a = {}; ({r: 1, ...a})`, `({m() {}, n: 2})`}
+	got := map[string]uint64{}
+	for _, src := range says {
+		if got[src] = keys(src); got[src] == 0 {
+			t.Errorf("%s says no keys", src)
 		}
 	}
-	const xy, z, methods, again, yx, abc, abc2 = 0, 1, 7, 10, 11, 12, 13
-	if len(got) != 14 {
-		t.Fatalf("%d literals, want 14", len(got))
-	}
-	// A spread, {}, a key twice, a computed key, an accessor, __proto__ and
-	// a spread after a key.
-	for _, i := range []int{2, 3, 4, 5, 6, 8, 9} {
-		if got[i] != 0 {
-			t.Errorf("literal %d says its keys", i)
+	for _, src := range none {
+		if keys(src) != 0 {
+			t.Errorf("%s says its keys", src)
 		}
 	}
-	for _, i := range []int{xy, z, methods, again, yx, abc, abc2} {
-		if got[i] == 0 {
-			t.Errorf("literal %d says no keys", i)
-		}
+	if got[says[0]] != got[says[2]] {
+		t.Error("{x, y} and {\"x\", y} are told apart")
 	}
-	if got[xy] != got[again] {
-		t.Error("{x, y} and {\"x\", y() {}} are told apart")
-	}
-	if got[xy] == got[yx] || got[abc] == got[abc2] || got[xy] == got[z] {
+	if got[says[0]] == got[says[3]] || got[says[4]] == got[says[5]] || got[says[0]] == got[says[6]] {
 		t.Errorf("different keys told alike: %x", got)
-	}
-	for i := 1; i < len(fn.LiteralKeys); i++ {
-		if fn.LiteralKeys[i-1].Site >= fn.LiteralKeys[i].Site {
-			t.Fatalf("the table is not in the order of its sites: %+v", fn.LiteralKeys)
-		}
 	}
 }
 
@@ -231,19 +230,18 @@ func TestLiteralKeysTable(t *testing.T) {
 // compile to another, runtimes sharing what is compiled: nothing seeds it.
 func TestLiteralKeysAcrossCompiles(t *testing.T) {
 	t.Parallel()
-	a := compileForTest(t, `({one: 1, two: 2})`)
-	b := compileForTest(t, `function f() { return [{"one": {}, "two": 1}] }`)
-	inner := b.Constants[0].Fn
-	if a.LiteralKeys[0].Keys != inner.LiteralKeys[0].Keys {
-		t.Errorf("hashes %x and %x", a.LiteralKeys[0].Keys, inner.LiteralKeys[0].Keys)
+	a := compileForTest(t, `({one: 1, two: 2})`).RegCode()
+	b := compileForTest(t, `function f() { return [{"one": {}, "two": 1}] }`).Constants[0].Fn.RegCode()
+	if a.ObjKeysHash[0] != b.ObjKeysHash[0] {
+		t.Errorf("hashes %x and %x", a.ObjKeysHash[0], b.ObjKeysHash[0])
 	}
 }
 
 func testLiteralKeysCollision(t *testing.T, r *Runtime) {
 	const collide = 0x1234
-	// Register code's literals have their keys' hashes of their own
-	// (RegCode's ObjKeysHash), which a runtime running it starts them
-	// from (regLiteralKeyedRoot): those collide too.
+	// Register code's literals' keys' hashes (RegCode's ObjKeysHash),
+	// which a runtime running it starts them from (regLiteralKeyedRoot),
+	// made to collide.
 	regKeys := func(fn *bytecode.Function) {
 
 		if rc := fn.RegCode(); rc != nil {
@@ -255,15 +253,9 @@ func testLiteralKeysCollision(t *testing.T, r *Runtime) {
 		}
 	}
 	force := func(fn *bytecode.Function) *bytecode.Function {
-		for i := range fn.LiteralKeys {
-			fn.LiteralKeys[i].Keys = collide
-		}
 		regKeys(fn)
 		for i := range fn.Constants {
 			if c := &fn.Constants[i]; c.Fn != nil {
-				for j := range c.Fn.LiteralKeys {
-					c.Fn.LiteralKeys[j].Keys = collide
-				}
 				regKeys(c.Fn)
 			}
 		}

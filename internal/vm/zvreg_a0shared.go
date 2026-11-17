@@ -1,10 +1,6 @@
 package vm
 
-import (
-	"unsafe"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-)
+import "unsafe"
 
 // Array literals of constants whose arrays share their elements.
 //
@@ -36,7 +32,7 @@ import (
 // there.
 //
 // Native code takes such a literal's arrays from a pool Go fills with them
-// (sharedLiteralArray, ssa's LiteralSite.Shared), where the interpreter has
+// (sharedShare, ssa's LiteralSite.Shared), where the interpreter has
 // made the site's storage before the code was compiled; it writes none of
 // their elements.
 //
@@ -55,12 +51,6 @@ var sharedMark byte
 // unshareElems gives o, an array objSharedElems marks, a copy of its
 // elements of its own, counting the copy in the shared storage's count.
 var unshareElems func(o *Object)
-
-// sharedLiteralArray is an array of the literal at pc of cl's function, one
-// sharedLiteralSite reported shares its constants: over its storage, or, a
-// site that has given sharing up since, with a copy of its own -- whole
-// either way, as native code takes it.
-var sharedLiteralArray func(r *Runtime, cl *closure, pc int) *Object
 
 // ownElems makes o's elements its own if they are shared: what writes an
 // element in place, or changes the storage, calls it first.
@@ -85,10 +75,6 @@ var sharedMade func(r *Runtime, vals []Value) *Object
 // sharedShare is an array over t's storage, the site ic's, or one of its
 // own where the site has given sharing up.
 var sharedShare func(r *Runtime, ic *propCache, t *Object) *Object
-
-// sharedSite is the cache entry of the array literal at pc of cl's
-// function, if it is a literal of constants.
-var sharedSite func(cl *closure, pc int) *propCache
 
 func init() {
 	sharedCount = func(e []Value) *Value {
@@ -128,19 +114,5 @@ func init() {
 		o.flags |= objSharedElems
 		o.extAt().elems = e
 		return o
-	}
-	sharedSite = func(cl *closure, pc int) *propCache {
-		if pc < 0 || pc >= len(cl.fn.Code) {
-			return nil
-		}
-		in := cl.fn.Code[pc]
-		if in.Op != bytecode.OpNewArray || in.B == 0 || int(in.B) >= len(cl.ic) {
-			return nil
-		}
-		return &cl.ic[in.B]
-	}
-	sharedLiteralArray = func(r *Runtime, cl *closure, pc int) *Object {
-		ic := sharedSite(cl, pc)
-		return sharedShare(r, ic, ic.p1)
 	}
 }

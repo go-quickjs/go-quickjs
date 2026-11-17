@@ -93,7 +93,7 @@ func (r *Runtime) regTailRest() (Value, error) {
 //
 //go:noinline
 func (r *Runtime) regTailCallW(f *frame, c *regCode, pc int, w bytecode.RInstr, wb int) (error, bool) {
-	f.pc = regSrc(c, pc) + 1
+	f.pc = uint32(pc) + 1
 	if r.regTailInPlace(f, c, w, wb) {
 		return errRegRestart, true
 	}
@@ -334,16 +334,14 @@ func regPlan(fd *funcData) {
 
 // planCall decides, once after a call that has built its function's
 // register code, whether calls of fd's function enter the code at once
-// (regPlan). A pure body is left undecided while pureCall may still
-// answer its calls, which it tries first, unless pureByTree says they go
-// to its code.
+// (regPlan). A pure body's do too, as those of a closure register code
+// makes always had: a built-in calling it runs the code the JIT learns
+// from. A call from inside another pure body is still evaluated frameless
+// (pureInvoke).
 func planCall(fd *funcData) {
 	cl := fd.closure
 	fn := cl.fn
 	if atomic.LoadPointer(&fn.VMCode) == nil {
-		return
-	}
-	if fn.Leaf == bytecode.LeafPure && cl.pureMiss < pureMissLimit && !pureByTree(fn) {
 		return
 	}
 	fd.planned = true
@@ -450,8 +448,7 @@ func (r *Runtime) regExtrasLetGo() {
 // regLegacyArgs is the arguments f.arguments reads of register frame f, at
 // depth i, made by regCallW or regEnterW, which keep no slice of them: the
 // count from its caller's call instruction -- the one call of the caller's
-// register code at the stack form's instruction its pc names, which is
-// where a call sets it -- the parameters from the window, as they are now,
+// register code its pc is past, which is where a call sets it -- the parameters from the window, as they are now,
 // and the arguments past them from what regKeepWindow kept. A frame
 // regDirectLegacy entered has every argument kept, its parameters read
 // from the window as well. It reports false where the caller runs no
@@ -475,15 +472,9 @@ func (r *Runtime) regLegacyArgs(i int, f *frame) ([]Value, bool) {
 	}
 	cc := caller.cl.reg
 	argc := -1
-	for pc, s := range cc.src {
-		if s != caller.pc-1 {
-			continue
-		}
+	if pc := int(caller.pc - 1); pc < len(cc.rc.Code) {
 		switch w := regAt(cc.code, pc); w.Op() {
 		case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
-			if argc >= 0 {
-				return nil, false
-			}
 			argc = int(w.X())
 		}
 	}

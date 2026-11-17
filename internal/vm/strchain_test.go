@@ -35,7 +35,7 @@ func TestStringChain(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fn := compileForTest(t, tt.src)
-			if got := hasOp(fn, "f", bytecode.OpConcat); got != tt.concat {
+			if got := hasOp(fn, "f", bytecode.RConcat); got != tt.concat {
 				t.Errorf("f joins with concat: %v, want %v", got, tt.concat)
 			}
 			r := New(Config{})
@@ -89,12 +89,15 @@ func TestStringChainAllocs(t *testing.T) {
 	}
 }
 
-// hasOp reports whether the function name, somewhere in fn, has op.
-func hasOp(fn *bytecode.Function, name string, op bytecode.Op) bool {
+// hasOp reports whether the register code of the function name, somewhere
+// in fn, has op.
+func hasOp(fn *bytecode.Function, name string, op bytecode.ROp) bool {
 	if fn.Name == name {
-		for _, in := range fn.Code {
-			if in.Op == op {
-				return true
+		if rc := fn.RegCode(); rc != nil {
+			for _, w := range rc.Code {
+				if w.Op() == op {
+					return true
+				}
 			}
 		}
 		return false

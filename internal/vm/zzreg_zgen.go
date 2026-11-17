@@ -503,7 +503,7 @@ func (r *Runtime) regGenEntry(f *frame, c *regCode, k *regKept, w bytecode.RInst
 		// A throw injected at the suspension at -pc-1, its value in
 		// the suspension's register.
 		k.pc = -pc
-		f.pc = c.src[-pc-1] + 1
+		f.pc = uint32(-pc-1) + 1
 		return r.throw(regs[regAt(c.code, -pc-1).A()])
 	}
 	return nil

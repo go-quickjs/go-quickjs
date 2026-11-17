@@ -4,7 +4,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // The register form's classes, private names, super and this
 // (docs/register-interpreter.md, "The operations"): cold operations, each
-// what the stack form's instruction of the same name stands for, made with
+// what its name says, made with
 // the runtime's shared functions.
 
 // regNewClass is new_class.
@@ -348,7 +348,7 @@ func (r *Runtime) regGetPrivate(f *frame, c *regCode, k *regKept, regs *[1 << 16
 	w := regAt(c.code, pc)
 	b := regs[w.B()]
 	if !b.IsObject() {
-		f.pc = c.src[pc] + 1
+		f.pc = uint32(pc) + 1
 		return r.throwTypeError("cannot read a private member of %s", r.describe(b))
 	}
 	aux := c.rc.Aux[pc]
@@ -369,7 +369,7 @@ func (r *Runtime) regGetPrivate(f *frame, c *regCode, k *regKept, regs *[1 << 16
 			return nil
 		}
 	}
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	v, err := r.getPrivate(ob, key, regName(f.cl, c, pc, uint16(aux)))
 	if err != nil {
 		return err
@@ -387,7 +387,7 @@ func (r *Runtime) regSetPrivate(f *frame, c *regCode, k *regKept, regs *[1 << 16
 	w := regAt(c.code, pc)
 	a := regs[w.A()]
 	if !a.IsObject() {
-		f.pc = c.src[pc] + 1
+		f.pc = uint32(pc) + 1
 		return r.throwTypeError("cannot write a private member of %s", r.describe(a))
 	}
 	aux := c.rc.Aux[pc]
@@ -409,7 +409,7 @@ func (r *Runtime) regSetPrivate(f *frame, c *regCode, k *regKept, regs *[1 << 16
 			return nil
 		}
 	}
-	f.pc = c.src[pc] + 1
+	f.pc = uint32(pc) + 1
 	return r.setPrivate(ob, key, regName(f.cl, c, pc, uint16(aux)), v)
 }
 

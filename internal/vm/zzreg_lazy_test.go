@@ -10,8 +10,8 @@ import (
 // regLazySrc has functions called and never called, names, a string, a
 // regular expression and property sites the stack form has none of, and a
 // built-in's callback, which enters the code through a plan (regDirect).
-// None is a leaf (bytecode.Function.Leaf), whose code is compiled as its
-// closure is made (regMadeClosure).
+// Each has its code compiled at its first call, a leaf's too
+// (bytecode.RegCode.Leaf).
 const regLazySrc = `
 function never() { return "never".length + /q+/.exec("qq")[0].length }
 function used(o) {

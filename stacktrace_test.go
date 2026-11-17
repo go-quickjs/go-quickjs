@@ -14,6 +14,26 @@ import (
 const frames = `function frames(e) { return e.stack.split("\n").slice(1).map(s => s.trim()).join(" | ") }
 `
 
+// TestErrorPlacedAsV8 pins where an error the engine throws is placed in
+// its frame, as V8 places it: the read of a compound assignment or an
+// update of a keyed property at its key, or at the member where the key is
+// a literal, and a destructuring's check of its value at the pattern's
+// first key. Register code has positions of its own, where the stack
+// form's had placed the patterns' at the pattern, or nowhere.
+func TestErrorPlacedAsV8(t *testing.T) {
+	t.Parallel()
+	evalCases(t, []struct{ src, want string }{
+		{frames + "function u(t) { t[0] += 1 }\nvar e; try { u(null) } catch (x) { e = x }\nframes(e)", "at u (<eval>:2:17) | at <eval>:3:14"},
+		{frames + "function u(t, k) { t[k]++ }\nvar e; try { u(null, 0) } catch (x) { e = x }\nframes(e)", "at u (<eval>:2:22) | at <eval>:3:14"},
+		{frames + "function f(b) { var k = 2; b[k] += 1 }\nvar e; try { f(null) } catch (y) { e = y }\nframes(e)", "at f (<eval>:2:30) | at <eval>:3:14"},
+		{frames + "function f(b) { b[0]++ }\nvar e; try { f(null) } catch (y) { e = y }\nframes(e)", "at f (<eval>:2:17) | at <eval>:3:14"},
+		{frames + "function d(v) { var { a, b } = v }\nvar e; try { d(null) } catch (x) { e = x }\nframes(e)", "at d (<eval>:2:23) | at <eval>:3:14"},
+		{frames + "function p({ a }) { return a }\nvar e; try { p() } catch (x) { e = x }\nframes(e)", "at p (<eval>:2:14) | at <eval>:3:14"},
+		{frames + "function c() { try { throw null } catch ({ m }) {} }\nvar e; try { c() } catch (x) { e = x }\nframes(e)", "at c (<eval>:2:44) | at <eval>:3:14"},
+		{frames + "function n() { var { a: { b } } = {} }\nvar e; try { n() } catch (x) { e = x }\nframes(e)", "at n (<eval>:2:27) | at <eval>:3:14"},
+	})
+}
+
 // TestStackTraceFormat pins the stack V8 writes: a header, and a frame a line
 // naming the function as a method, a constructor or on its own, with where it
 // is to the column.

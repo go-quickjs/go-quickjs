@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -44,41 +43,18 @@ func (c *compiler) compileList(body []ast.Stmt) {
 // return, the branch a constant test never takes -- for what compiling it
 // does besides its code: its early errors, which the compiler reports as
 // it goes, and the bindings, captures and constants it makes, which are
-// the function's whatever runs. The code it emits is dropped, with its
-// positions, its places a debugger stops at and its scopes, and the jumps
-// out of it that the statements around it would have patched.
+// the function's whatever runs. Its eval scopes and the places a debugger
+// stops at are dropped, as the register form compiles none of it.
 func (c *compiler) compileDropped(f func()) {
-	n := len(c.fn.Code)
-	lines, lastPos, maxStack := len(c.fn.Lines), c.lastPos, c.maxStack
 	scopes := len(c.fn.EvalScopes)
 	stmts := 0
 	if c.fn.Debug != nil {
 		stmts = len(c.fn.Debug.Statements)
 	}
-	var tail []bool
-	if len(c.targets) > n {
-		tail = slices.Clone(c.targets[n:])
-	}
-	// Nothing of the dropped code is fused into the last instruction kept.
-	c.markTarget(n)
 	f()
-	c.fn.Code = c.fn.Code[:n]
-	c.fn.Lines = c.fn.Lines[:lines]
-	c.lastPos, c.maxStack = lastPos, maxStack
 	c.fn.EvalScopes = c.fn.EvalScopes[:scopes]
 	if c.fn.Debug != nil {
 		c.fn.Debug.Statements = c.fn.Debug.Statements[:stmts]
-	}
-	c.targets = append(c.targets[:n], tail...)
-	kept := func(pcs []int) []int {
-		return slices.DeleteFunc(pcs, func(pc int) bool { return pc >= n })
-	}
-	for i := range c.loops {
-		c.loops[i].breaks = kept(c.loops[i].breaks)
-		c.loops[i].continues = kept(c.loops[i].continues)
-	}
-	for i := range c.finallys {
-		c.finallys[i].returns = kept(c.finallys[i].returns)
 	}
 }
 
@@ -182,8 +158,8 @@ func (c *compiler) functionsAreGlobal() bool {
 	return c.parent == nil && c.depth == 0 && !c.evalVarsAreLocal()
 }
 
-// predeclareFunction emits a hoisted function declaration's definition into the
-// binding that was already created for it.
+// predeclareFunction walks a hoisted function declaration's definition into
+// the binding that was already created for it.
 func (c *compiler) predeclareFunction(h hoistedFunc) {
 	// `export default function () {}` is hoisted like any other function
 	// declaration, but the binding it creates has a name no identifier can
@@ -214,18 +190,16 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 			c.storeVar(h.name)
 			c.regIdent = saved
 			if c.reg != nil && c.parent == nil {
-				c.reg.NoteTop(regcomp.TopOp{Op: bytecode.OpSetUpvalue, Name: h.name, Pos: c.lastPos, Fn: h.fd.Fn, Id: id})
+				c.reg.NoteTop(regcomp.TopOp{Op: bytecode.OpSetUpvalue, Name: h.name, Pos: int32(h.fd.Start), Fn: h.fd.Fn, Id: id})
 			}
 			return
 		}
-		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
-			boolBit(c.opts.EvalConfigurable))
-		c.regTop(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name), boolBit(c.opts.EvalConfigurable), h.fd.Fn)
+		c.regTop(bytecode.OpDefineGlobalFunc, h.name, boolBit(c.opts.EvalConfigurable), h.fd.Fn, h.fd.Start)
 		return
 	}
 
 	c.reg.NoteFunc(h.fd, h.slot)
-	c.emit(bytecode.OpSetLocal, h.slot, 0)
+	c.noteStore(h.slot)
 }
 
 // emitAnnexBFunctionAlias copies a block-scoped function into the var binding
@@ -243,9 +217,7 @@ func (c *compiler) emitAnnexBFunctionAlias(id *ast.Ident) {
 		if l.name != name || l.depth >= c.depth || !l.varScoped() {
 			continue
 		}
-		c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpSetLocal, l.slot, 0)
+		c.noteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 		return
 	}
 	if c.parent != nil {
@@ -256,15 +228,12 @@ func (c *compiler) emitAnnexBFunctionAlias(id *ast.Ident) {
 	// consumes the copy, leaving the function for the binding it belongs to.
 	// Eval code's var is the calling function's: a binding it already had, or
 	// the one the eval made in its variable scope.
-	c.emit(bytecode.OpDup, 0, 0)
 	if b, known := c.callerBinding(name); known && b.VarScoped && !c.evalOwnVars[name] {
 		idx, _ := c.resolveUpvalue(name)
-		c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
-		c.emit(bytecode.OpSetUpvalue, idx, 0)
+		c.noteWrite(id, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 		return
 	}
-	c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalVar})
-	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
+	c.noteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalVar})
 }
 
 // predeclareLexical creates the bindings of a let or const declaration in
@@ -316,8 +285,7 @@ func (c *compiler) declareLexicalNameMarked(name string, kind bindKind, pos int,
 		if kind != bindConst {
 			mutable = 1
 		}
-		c.emitAt(pos, bytecode.OpDeclareGlobalLex, c.nameIdx(name), mutable)
-		c.regTop(bytecode.OpDeclareGlobalLex, c.nameIdx(name), mutable, nil)
+		c.regTop(bytecode.OpDeclareGlobalLex, name, mutable, nil, pos)
 		return
 	}
 	slot := c.declare(name, kind, pos)
@@ -325,8 +293,6 @@ func (c *compiler) declareLexicalNameMarked(name string, kind bindKind, pos int,
 	// test for. Frame locals are cleared on entry, and the zero Value is the
 	// number 0, so the marker has to be stored explicitly.
 	if mark {
-		c.emit(bytecode.OpPushUninitialized, 0, 0)
-		c.emit(bytecode.OpSetLocal, slot, 0)
 	} else {
 		c.reg.NoteUnmarked(slot)
 	}
@@ -380,20 +346,6 @@ func (c *compiler) markUninitialized(name string) {
 	}
 }
 
-// resetCompletion sets the program's completion value to undefined, which the
-// control-flow statements do before they run.
-//
-// They report undefined rather than nothing when their body produces no value,
-// which is what makes `1; if (false) {}` undefined rather than 1 -- unlike a
-// block or an empty statement, which produce nothing and leave the value alone.
-func (c *compiler) resetCompletion() {
-	if c.completionSlot < 0 {
-		return
-	}
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-}
-
 func (c *compiler) compileStatement(s ast.Stmt) {
 	c.enter(s.Pos())
 	defer c.leave()
@@ -410,7 +362,6 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 			// At the top level an expression statement's value is the
 			// program's completion value, which eval returns.
 			c.compileExpr(n.X)
-			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 		} else {
 			c.compileExprForEffect(n.X)
 		}
@@ -431,13 +382,11 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		if c.annexB[n] {
 			c.compileIdentReadStatic(n.Fn.Name)
 			c.emitAnnexBFunctionAlias(n.Fn.Name)
-			c.emit(bytecode.OpDrop, 0, 0)
 		}
 
 	case *ast.ClassDecl:
 		c.compileClass(n.Class, n.Class.Name.Name)
 		c.assignTo(n.Class.Name, true)
-		c.emit(bytecode.OpDrop, 0, 0)
 
 	case *ast.BlockStmt:
 		c.beginScope()
@@ -447,27 +396,21 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.EmptyStmt:
 
 	case *ast.IfStmt:
-		c.resetCompletion()
 		c.compileIf(n)
 
 	case *ast.WhileStmt:
-		c.resetCompletion()
 		c.compileWhile(n)
 
 	case *ast.DoWhileStmt:
-		c.resetCompletion()
 		c.compileDoWhile(n)
 
 	case *ast.ForStmt:
-		c.resetCompletion()
 		c.compileFor(n)
 
 	case *ast.ForInStmt:
-		c.resetCompletion()
 		c.compileForIn(n)
 
 	case *ast.ForOfStmt:
-		c.resetCompletion()
 		c.compileForOf(n)
 
 	case *ast.ReturnStmt:
@@ -480,14 +423,6 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 			} else {
 				c.compileExpr(n.Arg)
 			}
-			if c.fn.Async && c.fn.Generator {
-				// An async generator awaits what it returns, which takes a
-				// turn: `return undefined` and `return` differ by exactly that
-				// turn, and a program watching the queue can tell.
-				c.emitAt(n.Start, bytecode.OpAwait, 0, 0)
-			}
-		} else {
-			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
 		c.emitReturnValue(n.Start)
 
@@ -499,21 +434,18 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 
 	case *ast.ThrowStmt:
 		c.compileExpr(n.Arg)
-		c.emitAt(n.Start, bytecode.OpThrow, 0, 0)
 
 	case *ast.TryStmt:
-		c.resetCompletion()
 		c.compileTry(n)
 
 	case *ast.SwitchStmt:
-		c.resetCompletion()
 		c.compileSwitch(n)
 
 	case *ast.LabeledStmt:
 		c.compileLabeled(n)
 
 	case *ast.DebuggerStmt:
-		// Only code compiled for a debugger stops here, at the OpDebugStmt
+		// Only code compiled for a debugger stops here, at the debug instruction
 		// debugStatement gave it; anything else runs on.
 
 	case *ast.ImportDecl:
@@ -527,13 +459,11 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 
 	case *ast.InstallPrivateMethods:
 		c.compileIdentRead(n.Binding)
-		c.emitAt(n.Start, bytecode.OpInstallPrivateMethods, 0, 0)
 
 	case *ast.FieldInit:
 		c.compileFieldInit(n)
 
 	case *ast.WithStmt:
-		c.resetCompletion()
 		c.compileWith(n)
 
 	default:
@@ -553,7 +483,6 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			// `var x;` leaves an existing binding alone; a lexical binding
 			// without an initializer becomes undefined.
 			if n.Kind != ast.DeclVar {
-				c.emit(bytecode.OpPushUndef, 0, 0)
 				c.initBinding(d.Target, n.Kind)
 			}
 			continue
@@ -571,7 +500,6 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			}
 			c.compileExprNamed(d.Init, id.Name)
 			c.endWithRef(id)
-			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
 		if fn, ok := d.Init.(*ast.FuncLit); ok && c.reused[fn] && c.inLoop() {
@@ -579,13 +507,11 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			// made, which the var holds then: made the first time, and
 			// left after that (reusedClosures).
 			c.compileIdentRead(d.Target.(*ast.Ident))
-			skip := c.emitJump(bytecode.OpJumpIfTrue)
 			if handsName(d.Init) {
 				c.traceName = c.traceJoin("", nameOf(d.Target))
 			}
 			c.compileExprNamed(d.Init, nameOf(d.Target))
 			c.initBinding(d.Target, n.Kind)
-			c.patchJump(skip)
 			continue
 		}
 		if handsName(d.Init) {
@@ -627,7 +553,7 @@ func (c *compiler) inLoop() bool {
 	return false
 }
 
-// initBinding stores the value on the stack into a declaration's target.
+// initBinding walks the store of a value into a declaration's target.
 func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 	if id, ok := target.(*ast.Ident); ok {
 		if kind == ast.DeclVar {
@@ -639,31 +565,27 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 		// A lexical binding is initialized rather than assigned, which also
 		// clears its dead zone.
 		if l, ok := c.resolveLocal(id.Name); ok {
-			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
-			c.emit(bytecode.OpInitLocal, l.slot, 0)
+			c.noteWrite(id, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
 			c.markInitialized(id.Name)
 			return
 		}
 		// A block of its own would have declared a local, so reaching here
 		// means the binding is the top-level one.
 		if c.globalLex[id.Name] {
-			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
-			c.emit(bytecode.OpInitGlobalLex, c.nameIdx(id.Name), 0)
+			c.noteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
 			return
 		}
 		if c.isModuleLex(id.Name) {
-			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResModuleLexInit})
-			c.emit(bytecode.OpInitModuleLex, c.nameIdx(id.Name), 0)
+			c.noteWrite(id, regcomp.Res{Kind: regcomp.ResModuleLexInit})
 			return
 		}
-		c.emit(bytecode.OpSetGlobal, c.nameIdx(id.Name), 0)
 		return
 	}
 	c.compileDestructuring(target, kind)
 }
 
-// emitReturnValue returns the value on top of the stack from the function,
-// routing it through any finally clause that owes a run first.
+// emitReturnValue walks a return, routed through any finally clause that
+// owes a run first.
 func (c *compiler) emitReturnValue(pos int) {
 	if len(c.finallys) > 0 {
 		// The finally clause must run before the function actually returns, so
@@ -677,27 +599,16 @@ func (c *compiler) emitReturnValue(pos int) {
 			// What the statements inside the clause's try left in place is
 			// undone first, as they are left before the try is: a for...of
 			// there closes its iterator before the clause runs. The value
-			// waits in a hidden local meanwhile, the iterators being beneath
-			// it.
+			// waits in a hidden local meanwhile.
 			if c.returnSlot < 0 {
 				c.returnSlot = int32(c.declare(fmt.Sprintf("%%rv%d", *c.hiddenCount), bindVar, pos))
 				*c.hiddenCount++
 			}
-			c.emit(bytecode.OpSetLocal, uint32(c.returnSlot), 0)
 			c.unwindExits(len(c.exits), ctx.exits)
-			c.emit(bytecode.OpGetLocal, uint32(c.returnSlot), 0)
-		}
-		for d := c.handlerDepth; d >= ctx.handlers; d-- {
-			c.emit(bytecode.OpPopCatch, 0, 0)
 		}
 		c.handlerDepth = savedDepth
-		c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
-		c.emitAt(pos, bytecode.OpJump, 0, 0)
-		c.finallys[len(c.finallys)-1].returns = append(
-			c.finallys[len(c.finallys)-1].returns, c.here()-1)
 		return
 	}
-	c.emitAt(pos, bytecode.OpReturn, 0, 0)
 }
 
 // storeVar assigns to a var binding or a global.
@@ -705,11 +616,7 @@ func (c *compiler) storeVar(name string) {
 	// A var's initializer is an assignment rather than a binding
 	// initialization: the declaration hoists out of a `with` body, but the
 	// store happens inside it, where the object may be what is written to.
-	// The probe peeks at the value and jumps over the static store, while the
-	// store itself consumes it. A copy for the store and a drop after both
-	// paths is what leaves the stack the same either way -- and a store that
-	// quietly left its value behind would push the loop it sits in off its own
-	// operands.
+	// The probe answers, or the static store runs.
 	probe := c.withProbe(bytecode.OpWithSet, name)
 	switch {
 	case c.regIdent != nil:
@@ -720,18 +627,14 @@ func (c *compiler) storeVar(name string) {
 		c.reg.Bail = true
 	}
 	if probe >= 0 {
-		c.emit(bytecode.OpDup, 0, 0)
 		defer func() {
-			c.patchWithProbe(probe)
-			c.emit(bytecode.OpDrop, 0, 0)
 		}()
 	}
 
 	if l, ok := c.resolveLocal(name); ok {
 		if c.regIdent != nil {
-			c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
+			c.noteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
 		}
-		c.emit(bytecode.OpSetLocal, l.slot, 0)
 		return
 	}
 	if idx, ok := c.resolveUpvalue(name); ok {
@@ -740,19 +643,13 @@ func (c *compiler) storeVar(name string) {
 			if c.fn.Upvalues[idx].TDZ {
 				res = regcomp.Res{}
 			}
-			c.reg.NoteWrite(c.regIdent, res)
-		}
-		if c.fn.Upvalues[idx].TDZ {
-			c.emit(bytecode.OpSetUpvalueCheck, idx, 0)
-		} else {
-			c.emit(bytecode.OpSetUpvalue, idx, 0)
+			c.noteWrite(c.regIdent, res)
 		}
 		return
 	}
 	if c.regIdent != nil {
-		c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResGlobalVar})
+		c.noteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResGlobalVar})
 	}
-	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
 }
 
 func (c *compiler) compileIf(n *ast.IfStmt) {
@@ -781,32 +678,22 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 	// if (test) break; is the condition's own jumps, to where the break goes,
 	// when the break has nothing to undo on its way: so is a continue.
 	if n.Alt == nil {
-		if i, cont := c.bareJumpTarget(n.Cons); i >= 0 {
-			jumps := c.emitTestJumps(n.Test, true, c.pool.jumpList())
-			if cont {
-				c.loops[i].continues = append(c.loops[i].continues, jumps...)
-			} else {
-				c.loops[i].breaks = append(c.loops[i].breaks, jumps...)
-			}
-			c.pool.putJumps(jumps)
+		if i, _ := c.bareJumpTarget(n.Cons); i >= 0 {
+			c.compileTest(n.Test)
 			c.leaves = false
 			return
 		}
 	}
-	elseJumps := c.emitTestJumpIfFalse(n.Test)
+	c.compileTest(n.Test)
 	c.compileStatement(n.Cons)
 
 	if n.Alt == nil {
-		c.patchTestJumps(elseJumps)
 		c.leaves = false
 		return
 	}
 	// The if is always left where both branches are.
 	leaves := c.leaves
-	endJump := c.emitJump(bytecode.OpJump)
-	c.patchTestJumps(elseJumps)
 	c.compileStatement(n.Alt)
-	c.patchJump(endJump)
 	c.leaves = leaves && c.leaves
 }
 
@@ -827,46 +714,9 @@ func (c *compiler) pushLoop(labels []string, isLoop bool) *loopCtx {
 	return &c.loops[len(c.loops)-1]
 }
 
-// popLoop ends a loop context, patching its break jumps to the current
-// position and its continue jumps to continueTarget.
-//
-// A break leaves the scopes inside the statement without the close at their
-// ends, so that a binding a closure captured would stay open, and a scope
-// entered again -- the statement's next run, in a loop around it -- would
-// share it with that closure. Where one may be, the breaks land on a close
-// of the statement's bindings.
-func (c *compiler) popLoop(continueTarget int) {
-	l := c.loops[len(c.loops)-1]
+// popLoop ends a loop context.
+func (c *compiler) popLoop() {
 	c.loops = c.loops[:len(c.loops)-1]
-	if len(l.breaks) > 0 && c.capturedFrom(l.firstSlot) {
-		at := c.here()
-		c.emit(bytecode.OpCloseUpvalues, l.firstSlot, 0)
-		for _, pc := range l.breaks {
-			c.patchJumpTo(pc, at)
-		}
-	} else {
-		for _, pc := range l.breaks {
-			c.patchJump(pc)
-		}
-	}
-	for _, pc := range l.continues {
-		c.patchJumpTo(pc, continueTarget)
-	}
-}
-
-// continueAt is where the innermost loop's continues go, given where they
-// would: a continue leaves the body's scopes without the close at their
-// ends, so where a binding of the body may be captured, they go to a close
-// of the body's bindings emitted here, which the end of the body passes
-// through too.
-func (c *compiler) continueAt(target int) int {
-	l := &c.loops[len(c.loops)-1]
-	if len(l.continues) == 0 || !c.capturedFrom(l.firstSlot) {
-		return target
-	}
-	at := c.here()
-	c.emit(bytecode.OpCloseUpvalues, l.firstSlot, 0)
-	return at
 }
 
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
@@ -880,29 +730,19 @@ func (c *compiler) compileWhile(n *ast.WhileStmt) {
 
 // compileLoopWhile compiles a while loop.
 func (c *compiler) compileLoopWhile(n *ast.WhileStmt) {
-	start := c.here()
 	c.pushLoop(nil, true)
 	c.debugExpr(n.Test)
-	exits := c.emitTestJumpIfFalse(n.Test)
+	c.compileTest(n.Test)
 	c.compileStatement(n.Body)
-	cont := c.continueAt(start)
-	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchTestJumps(exits)
-	c.popLoop(cont)
+	c.popLoop()
 }
 
 func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
-	start := c.here()
 	c.pushLoop(nil, true)
 	c.compileStatement(n.Body)
-	testAt := c.continueAt(c.here())
 	c.debugExpr(n.Test)
-	back := c.emitTestJumps(n.Test, true, c.pool.jumpList())
-	for _, j := range back {
-		c.patchJumpTo(j, start)
-	}
-	c.pool.putJumps(back)
-	c.popLoop(testAt)
+	c.compileTest(n.Test)
+	c.popLoop()
 }
 
 func (c *compiler) compileFor(n *ast.ForStmt) {
@@ -948,7 +788,6 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 			c.compileVarDecl(init)
 		case *ast.ExprStmt:
 			c.compileExpr(init.X)
-			c.emit(bytecode.OpDrop, 0, 0)
 		}
 	}
 	if truthy, ok := fold.Dead(n.Test); ok && !truthy {
@@ -963,41 +802,20 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 
 // compileForLoop compiles a three-clause for once its init clause has run.
 func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration bool) {
-
-	if perIteration {
-		// The first iteration gets its own copy too, before the test runs: a
-		// closure made in the init clause keeps what the init left there,
-		// rather than following what the loop goes on to do with it.
-		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
-	}
-
-	start := c.here()
 	c.pushLoop(nil, true)
 
-	var exits []int
 	if n.Test != nil {
 		c.debugExpr(n.Test)
-		exits = c.emitTestJumpIfFalse(n.Test)
+		c.compileTest(n.Test)
 	}
 	c.compileStatement(n.Body)
 
-	updateAt := c.here()
-	if perIteration {
-		// Snapshot the loop variable into any closure that captured it, before
-		// the update clause changes it. This runs on the `continue` path too,
-		// because that is also the end of an iteration.
-		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
-	} else {
-		updateAt = c.continueAt(updateAt)
-	}
 	if n.Update != nil {
 		c.debugExpr(n.Update)
 		c.compileExprForEffect(n.Update)
 	}
-	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchTestJumps(exits)
 	// `continue` jumps to the update clause, not the test.
-	c.popLoop(updateAt)
+	c.popLoop()
 }
 
 func (c *compiler) compileForIn(n *ast.ForInStmt) {
@@ -1010,7 +828,6 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 		c.compileVarDecl(vd)
 	}
 	c.compileExpr(n.Right)
-	c.emit(bytecode.OpForInStart, 0, 0)
 	c.pushExit(exitCursor)
 	c.compileForBody(n.Left, n.Body)
 	c.popExit()
@@ -1049,19 +866,17 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 	}
 	c.compileExpr(n.Right)
 	if n.Await {
-		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
 		c.pushExit(exitCursor)
 		c.compileForAwaitBody(n.Left, n.Body, n.Right.Pos())
 		c.popExit()
 		return
 	}
-	c.emit(bytecode.OpForOfStart, 0, 0)
 	c.pushExit(exitCursor)
 	c.compileForBody(n.Left, n.Body)
 	c.popExit()
 }
 
-// compileForAwaitBody emits the loop of a `for await`, which differs from the
+// compileForAwaitBody walks the loop of a `for await`, which differs from the
 // synchronous form in that each step awaits the promise the iterator returns
 // before unpacking the result, and in how it is left.
 //
@@ -1075,8 +890,7 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 // as a finally clause is, and the handler a return, or a throw, is routed
 // to. A loop the iterator ends, or whose next, or the result it awaited,
 // fails, is not closed. The cursor is kept in a hidden local, where the
-// close finds it whatever is on the stack above it, and another says
-// whether the body is running.
+// close finds it, and another says whether the body is running.
 //
 // Each turn's await is at pos, the loop's expression's: a stack trace of
 // what throws after it -- the iterator's return method closing the loop --
@@ -1085,137 +899,62 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt, pos int) {
 	cur := c.declare(fmt.Sprintf("%%fa%d", *c.hiddenCount), bindVar, left.Pos())
 	busy := c.declare(fmt.Sprintf("%%fb%d", *c.hiddenCount), bindVar, left.Pos())
 	*c.hiddenCount++
-	// Kept without a copy above the stack: what an exception unwinds past
-	// is closed, and a copy left there would be closed too.
-	c.emit(bytecode.OpSetLocalGet, cur, cur)
-
-	handler := c.emitJump(bytecode.OpPushFinally)
 	c.handlerDepth++
 	c.finallys = append(c.finallys, finallyCtx{
 		emit:     func() { c.emitAsyncClose(cur, busy, false) },
 		handlers: c.handlerDepth, exits: len(c.exits),
 	})
 
-	start := c.here()
 	c.pushLoop(nil, true)
 	c.debugAt(left.Pos())
 
-	c.emit(bytecode.OpPushFalse, 0, 0)
-	c.emit(bytecode.OpSetLocal, busy, 0)
-	c.emit(bytecode.OpAsyncIterNext, 0, 0)
 	c.emitAwait(pos)
-	exit := c.emitJump(bytecode.OpIterResultOrJump)
-	c.emit(bytecode.OpPushTrue, 0, 0)
-	c.emit(bytecode.OpSetLocal, busy, 0)
 
 	c.beginScope()
 	c.compileIterationBody(left, body)
 	c.endScope()
 
-	cont := c.continueAt(start)
-	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.popLoop(cont)
+	c.popLoop()
 	// A break of this loop arrives here, its handler still in force.
-	c.emit(bytecode.OpPopCatch, 0, 0)
 	c.handlerDepth--
 	c.emitAsyncClose(cur, busy, false)
-	broke := c.emitJump(bytecode.OpJump)
 	// So does a loop the iterator ended, which is not closed.
-	c.patchJump(exit)
-	c.emit(bytecode.OpPopCatch, 0, 0)
-	ended := c.emitJump(bytecode.OpJump)
 
 	// The clause's handler, and the returns routed to it, with the
 	// completion's record above the cursor.
-	c.patchJump(handler)
-	ctx := c.finallys[len(c.finallys)-1]
 	c.finallys = c.finallys[:len(c.finallys)-1]
-	for _, pc := range ctx.returns {
-		c.patchJumpTo(pc, c.here())
-	}
-	c.stackDepth += 2
-	c.emit(bytecode.OpDup, 0, 0)
-	c.emit(bytecode.OpPushInt, uint32(completionThrow), 0)
-	c.emit(bytecode.OpStrictEq, 0, 0)
-	notThrow := c.emitJump(bytecode.OpJumpIfFalse)
 	c.emitAsyncClose(cur, busy, true)
-	closed := c.emitJump(bytecode.OpJump)
-	c.patchJump(notThrow)
 	c.emitAsyncClose(cur, busy, false)
-	c.patchJump(closed)
-	c.emit(bytecode.OpRethrow, 0, 0)
-
-	c.patchJump(broke)
-	c.patchJump(ended)
-	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// emitAsyncClose emits a for await's AsyncIteratorClose of the cursor in
+// emitAsyncClose walks a for await's AsyncIteratorClose of the cursor in
 // local cur, where local busy says the body is running: its return method
 // is called, and what that returns awaited and, unless quiet, checked to be
 // an object. quiet is a throw's: whatever goes wrong closing is dropped,
 // and the throw goes on. Where the body is not running, the cursor is only
 // marked done, so that nothing closes it after.
 func (c *compiler) emitAsyncClose(cur, busy uint32, quiet bool) {
-	c.emit(bytecode.OpGetLocal, busy, 0)
-	running := c.emitJump(bytecode.OpJumpIfTrue)
-	c.emit(bytecode.OpGetLocal, cur, 0)
-	c.emit(bytecode.OpAsyncIterClose, 0, 2)
-	skip := c.emitJump(bytecode.OpJump)
-	c.patchJump(running)
 	if !quiet {
-		c.emit(bytecode.OpGetLocal, cur, 0)
-		none := c.emitJump(bytecode.OpAsyncIterClose)
-		c.emit(bytecode.OpAwait, 0, 0)
-		c.emit(bytecode.OpAsyncIterClose, 0, 1)
-		c.patchJump(none)
-		c.patchJump(skip)
 		return
 	}
-	caught := c.emitJump(bytecode.OpPushCatch)
 	c.handlerDepth++
-	c.emit(bytecode.OpGetLocal, cur, 0)
-	none := c.emitJump(bytecode.OpAsyncIterClose)
-	c.emit(bytecode.OpAwait, 0, 0)
-	c.emit(bytecode.OpPopCatch, 0, 0)
-	c.emit(bytecode.OpDrop, 0, 0)
-	done := c.emitJump(bytecode.OpJump)
-	c.patchJump(none)
-	c.emit(bytecode.OpPopCatch, 0, 0)
-	ended := c.emitJump(bytecode.OpJump)
 	c.handlerDepth--
-	c.patchJump(caught)
-	c.stackDepth++
-	c.emit(bytecode.OpDrop, 0, 0)
-	c.patchJump(done)
-	c.patchJump(ended)
-	c.patchJump(skip)
 }
 
-// compileForBody emits the shared loop structure of for-in and for-of, with the
-// iterator already on the stack.
+// compileForBody walks the shared loop structure of for-in and for-of, its
+// iterator made.
 func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
-	start := c.here()
 	c.pushLoop(nil, true)
 	c.debugAt(left.Pos())
 
 	// IterNextOrJump advances the iterator, pushing the next value, or jumps
 	// to the exit when it is exhausted.
-	exit := c.emitJump(bytecode.OpIterNextOrJump)
 
 	c.beginScope()
 	c.compileIterationBody(left, body)
 	c.endScope()
 
-	cont := c.continueAt(start)
-	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJump(exit)
-	c.popLoop(cont)
-	// ForOfStart left the cursor on the stack. A break arrives here with the
-	// iterator still open, so it is closed before the cursor is dropped; an
-	// exhausted one is already closed and the instruction leaves it alone.
-	c.emit(bytecode.OpIterClose, 0, 0)
-	c.emit(bytecode.OpDrop, 0, 0)
+	c.popLoop()
 }
 
 // bareJumpTarget is the index in c.loops of the statement a break or
@@ -1255,8 +994,6 @@ func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
 		if n.Label == "" && !c.loops[i].labelOnly || n.Label != "" && c.loops[i].named(n.Label) {
 			c.unwindTo(&c.loops[i])
-			pc := c.emitJump(bytecode.OpJump)
-			c.loops[i].breaks = append(c.loops[i].breaks, pc)
 			return
 		}
 	}
@@ -1270,8 +1007,6 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 		}
 		if n.Label == "" || c.loops[i].named(n.Label) {
 			c.unwindTo(&c.loops[i])
-			pc := c.emitJump(bytecode.OpJump)
-			c.loops[i].continues = append(c.loops[i].continues, pc)
 			return
 		}
 	}
@@ -1298,15 +1033,14 @@ func (c *compiler) compileLabeled(n *ast.LabeledStmt) {
 	default:
 		c.pushLoop(labels, false).labelOnly = true
 		c.compileStatement(body)
-		c.popLoop(c.here())
+		c.popLoop()
 	}
 }
 
 // compileLabeledLoop compiles a loop whose own context carries the labels.
 func (c *compiler) compileLabeledLoop(labels []string, body ast.Stmt) {
-	// The loop compilers push their context themselves, so the labels are
-	// applied by patching them immediately afterwards. To keep that simple
-	// they are recorded in a pending field the next pushLoop consumes.
+	// The loop walkers push their context themselves, so the labels are
+	// recorded in a pending field the next pushLoop consumes.
 	c.pendingLabels = labels
 	c.compileStatement(body)
 }
@@ -1324,9 +1058,9 @@ func (l *loopCtx) named(label string) bool {
 // compileTry compiles a try statement.
 //
 // A finally clause has to run however the protected block finished, so the
-// block's outcome is encoded as a completion record -- a value and a kind --
-// left on the stack for the finally code to reproduce afterwards. That is what
-// makes `return` inside a try still run the finally before returning.
+// block's outcome is a completion record -- a value and a kind -- the finally
+// code reproduces afterwards. That is what makes `return` inside a try still
+// run the finally before returning.
 func (c *compiler) compileTry(n *ast.TryStmt) {
 	if n.Finally == nil {
 		c.compileTryCatch(n)
@@ -1351,14 +1085,13 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 // The clause is compiled twice where it can be: inline, for the body's
 // normal completion, which goes on past the try after it; and as the
 // handler's, which a throw and the returns routed through the clause enter
-// with their completion record beneath it, and its rethrow carries on. A
+// with their completion record, and its rethrow carries on. A
 // loop whose body is a try statement then runs no record and no rethrow at
 // each turn, as it does none for a try with only a catch. Code compiled for a debugger has the clause
 // once, so that a breakpoint in it is one statement; and a clause inside a
 // clause has it once, so that nested ones are not copied again for each
 // copy of the one outside.
 func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
-	finallyHandler := c.emitJump(bytecode.OpPushFinally)
 	c.handlerDepth++
 	c.finallys = append(c.finallys, finallyCtx{body: finally, handlers: c.handlerDepth, exits: len(c.exits)})
 
@@ -1366,60 +1099,30 @@ func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
 
 	// Normal completion: drop the finally handler and run the clause, inline
 	// or with a record saying nothing unusual happened.
-	c.emit(bytecode.OpPopCatch, 0, 0)
 	c.handlerDepth--
-	ctx := c.finallys[len(c.finallys)-1]
 	c.finallys = c.finallys[:len(c.finallys)-1]
-	end := -1
 	if !c.opts.Debug && c.finallyBodies == 0 {
 		c.compileFinallyClause(pos, finally, false)
-		end = c.emitJump(bytecode.OpJump)
-		// The handler enters with the record its throw or its return made.
-		c.stackDepth += 2
-	} else {
-		c.emit(bytecode.OpPushUndef, 0, 0)
-		c.emit(bytecode.OpPushInt, uint32(completionNormal), 0)
 	}
-	finallyStart := c.here()
 
 	// The handler jumps here, having pushed its own record, and so do any
 	// returns that were routed through the clause.
-	c.patchJump(finallyHandler)
-	for _, pc := range ctx.returns {
-		c.patchJumpTo(pc, finallyStart)
-	}
 	c.compileFinallyClause(pos, finally, true)
-
-	// Reproduce the original completion: rethrow, return, or carry on.
-	c.emit(bytecode.OpRethrow, 0, 0)
-	if end >= 0 {
-		c.patchJump(end)
-	}
 }
 
-// compileFinallyClause compiles a finally clause's statements, with the
-// completion record of the try beneath them where record says so, or with
-// none, inlined after the try's normal completion.
+// compileFinallyClause walks a finally clause's statements, with the
+// completion record of the try where record says so, or with none, inlined
+// after the try's normal completion.
 func (c *compiler) compileFinallyClause(pos int, finally []ast.Stmt, record bool) {
 	// What the finally clause produces is not the statement's value: the try
-	// block's is, so `try { 1 } finally { 2 }` is 1.
-	save := int32(-1)
+	// block's is, so `try { 1 } finally { 2 }` is 1, which a binding of its
+	// own keeps across the clause.
 	if c.completionSlot >= 0 {
 		name := fmt.Sprintf("%%cv%d", *c.hiddenCount)
 		*c.hiddenCount++
-		save = int32(c.declare(name, bindVar, pos))
-		c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
-		c.emit(bytecode.OpSetLocal, uint32(save), 0)
-		// The clause starts with no value of its own. It matters only when it
-		// leaves abruptly -- a break or a continue written inside it carries
-		// what the clause itself produced, and undefined when it produced
-		// nothing, rather than what the try block had produced.
-		c.emit(bytecode.OpPushUndef, 0, 0)
-		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+		c.declare(name, bindVar, pos)
 	}
-	// The completion record sits beneath the clause's own operands, so a break
-	// or continue leaving the clause has to drop it: what it jumps to is not
-	// expecting two values it never pushed.
+	// A break or continue leaving the clause drops the completion record.
 	if record {
 		c.pushExit(exitCompletion)
 	}
@@ -1435,10 +1138,6 @@ func (c *compiler) compileFinallyClause(pos int, finally []ast.Stmt, record bool
 	if record {
 		c.popExit()
 	}
-	if save >= 0 {
-		c.emit(bytecode.OpGetLocal, uint32(save), 0)
-		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-	}
 }
 
 // compileTryCatch compiles a try statement that has no finally clause.
@@ -1449,35 +1148,20 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 		c.endScope()
 		return
 	}
-	catchPC := c.emitJump(bytecode.OpPushCatch)
 	c.handlerDepth++
-	first := c.nextSlot
 	c.beginScope()
 	c.compileStatements(n.Block)
 	c.endScope()
-	c.emit(bytecode.OpPopCatch, 0, 0)
 	// The handler is gone from here on: the catch body runs after it fired,
 	// and the code after the statement after it was popped.
 	c.handlerDepth--
-	skip := c.emitJump(bytecode.OpJump)
 
-	c.patchJump(catchPC)
-	// A throw leaves the block's scopes without the close at their ends:
-	// a binding a closure captured is closed here, or the block run again,
-	// in a loop, would share it with that closure.
-	if c.capturedFrom(first) {
-		c.emit(bytecode.OpCloseUpvalues, first, 0)
-	}
 	c.beginScope()
 	if n.Catch.Param != nil {
-		// The thrown value is on the stack when the handler runs.
 		c.bindCatchParam(n.Catch, n.Catch.Param)
-	} else {
-		c.emit(bytecode.OpDrop, 0, 0)
 	}
 	c.compileStatements(n.Catch.Body)
 	c.endScope()
-	c.patchJump(skip)
 }
 
 // bindCatchParam binds the caught value to the catch clause's parameter.
@@ -1485,7 +1169,6 @@ func (c *compiler) bindCatchParam(clause *ast.CatchClause, param ast.Expr) {
 	if id, ok := param.(*ast.Ident); ok {
 		slot := c.declare(id.Name, bindCatch, int(id.Start))
 		c.reg.NoteCatch(clause, slot)
-		c.emit(bytecode.OpSetLocal, slot, 0)
 		// The store is what binds it, so the clause's body assigns to an
 		// ordinary mutable binding rather than one still in a dead zone.
 		c.markInitialized(id.Name)
@@ -1521,56 +1204,20 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 		}
 	}
 
-	// Each case's test is compared against the discriminant, which stays on the
-	// stack for the duration.
-	bodyJumps := make([]int, len(n.Cases))
-	defaultIdx := -1
-	for i, cs := range n.Cases {
-		if cs.Test == nil {
-			defaultIdx = i
-			bodyJumps[i] = -1
-			continue
+	// Each case's test, then the clause bodies, in order.
+	for _, cs := range n.Cases {
+		if cs.Test != nil {
+			c.compileExpr(cs.Test)
 		}
-		c.emit(bytecode.OpDup, 0, 0)
-		c.compileExpr(cs.Test)
-		c.emit(bytecode.OpStrictEq, 0, 0)
-		bodyJumps[i] = c.emitJump(bytecode.OpJumpIfTrue)
 	}
-
-	// No case matched: go to the default clause if there is one, else past the
-	// whole statement.
-	var defaultJump int
-	if defaultIdx >= 0 {
-		defaultJump = c.emitJump(bytecode.OpJump)
-	} else {
-		defaultJump = c.emitJump(bytecode.OpJump)
-	}
-
-	// Clause bodies fall through to one another, which is why they are emitted
-	// in order with no jumps between them.
-	starts := make([]int, len(n.Cases))
-	for i, cs := range n.Cases {
-		starts[i] = c.here()
+	for _, cs := range n.Cases {
 		c.compileList(cs.Body)
 	}
-	end := c.here()
 
-	for i := range n.Cases {
-		if bodyJumps[i] >= 0 {
-			c.patchJumpTo(bodyJumps[i], starts[i])
-		}
-	}
-	if defaultIdx >= 0 {
-		c.patchJumpTo(defaultJump, starts[defaultIdx])
-	} else {
-		c.patchJumpTo(defaultJump, end)
-	}
-
-	c.popLoop(end)
+	c.popLoop()
 	c.endScope()
 	c.popExit()
 	// Remove the discriminant.
-	c.emit(bytecode.OpDrop, 0, 0)
 }
 
 // nameOf returns the name a declaration target implies, used to give an
@@ -1589,8 +1236,7 @@ func (c *compiler) pushExit(e pendingExit) {
 	c.exitHandlers = append(c.exitHandlers, c.handlerDepth)
 }
 
-// popExit ends the statement that pushed the innermost exit, which emits its
-// own undo on the path that falls out of the bottom.
+// popExit ends the statement that pushed the innermost exit.
 func (c *compiler) popExit() {
 	c.exits = c.exits[:len(c.exits)-1]
 	c.exitHandlers = c.exitHandlers[:len(c.exitHandlers)-1]
@@ -1604,31 +1250,13 @@ func (c *compiler) popExit() {
 func (c *compiler) unwindExits(top, down int) int {
 	for i := top - 1; i >= down; i-- {
 		for c.handlerDepth > c.exitHandlers[i] {
-			c.emit(bytecode.OpPopCatch, 0, 0)
 			c.handlerDepth--
 		}
-		c.emitExit(c.exits[i])
 	}
 	return min(top, down)
 }
 
-// emitExit undoes one exit.
-func (c *compiler) emitExit(e pendingExit) {
-	switch e {
-	case exitCursor:
-		c.emit(bytecode.OpIterClose, 0, 0)
-		c.emit(bytecode.OpDrop, 0, 0)
-	case exitDrop:
-		c.emit(bytecode.OpDrop, 0, 0)
-	case exitWith:
-		c.emit(bytecode.OpWithPop, 0, 0)
-	case exitCompletion:
-		c.emit(bytecode.OpDrop, 0, 0)
-		c.emit(bytecode.OpDrop, 0, 0)
-	}
-}
-
-// unwindTo emits what a break or continue owes on its way to target: the
+// unwindTo walks what a break or continue owes on its way to target: the
 // finally clauses it leaves, the exception handlers it jumps out from, and the
 // operands and iterators the statements in between put there.
 //
@@ -1656,7 +1284,6 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// Everything between here and the clause goes, the clause's own
 		// handler included.
 		for c.handlerDepth >= saved[i].handlers {
-			c.emit(bytecode.OpPopCatch, 0, 0)
 			c.handlerDepth--
 		}
 		// While a clause's body is being inlined it is no longer pending: a
@@ -1684,14 +1311,9 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// What the clause produces is not the jump's value, as for the
 		// clause compileFinallyClause compiles: the try block's is, unless
 		// the clause itself leaves abruptly.
-		cv := int32(-1)
 		if c.completionSlot >= 0 {
-			cv = int32(c.declare(fmt.Sprintf("%%cv%d", *c.hiddenCount), bindVar, 0))
+			c.declare(fmt.Sprintf("%%cv%d", *c.hiddenCount), bindVar, 0)
 			*c.hiddenCount++
-			c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
-			c.emit(bytecode.OpSetLocal, uint32(cv), 0)
-			c.emit(bytecode.OpPushUndef, 0, 0)
-			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 		}
 		end := c.reg.BeginFinally(saved[i].body)
 		c.beginScope()
@@ -1701,10 +1323,6 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		c.finallyRecord = savedRecord
 		c.endScope()
 		end()
-		if cv >= 0 {
-			c.emit(bytecode.OpGetLocal, uint32(cv), 0)
-			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-		}
 		c.exits, c.exitHandlers = savedExits, savedExitHandlers
 	}
 	// What is left is the handler of a catch clause the jump leaves without
@@ -1713,7 +1331,6 @@ func (c *compiler) unwindTo(target *loopCtx) {
 	// lands in a catch clause that was finished with.
 	c.unwindExits(top, target.exits)
 	for c.handlerDepth > target.handlers {
-		c.emit(bytecode.OpPopCatch, 0, 0)
 		c.handlerDepth--
 	}
 }
@@ -1774,36 +1391,21 @@ func (c *compiler) compileFieldInit(n *ast.FieldInit) {
 	defer func() { c.inFieldInit = saved }()
 
 	if pn, private := n.Key.(*ast.PrivateName); private {
-		name, ref := c.privateName(pn, n.Start)
-		c.emit(bytecode.OpPushThis, 0, 0)
+		c.privateName(pn, n.Start)
 		c.compileExprNamed(n.Value, "#"+pn.Name)
-		c.emitAt(n.Start, bytecode.OpDefinePrivate, name, ref)
-		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	}
-	c.emit(bytecode.OpPushThis, 0, 0)
 	if !n.Computed {
 		key := propKeyName(n.Key)
-		c.emit(bytecode.OpPushConst, c.stringConst(key), 0)
 		c.compileExprNamed(n.Value, key)
-		c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
-		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	}
 	c.compileExpr(n.Key)
-	c.emit(bytecode.OpToPropertyKey, 0, 0)
 	c.compileExpr(n.Value)
-	// A field named by a computed key names its initializer too, but only once
-	// the key is known.
-	if isAnonymousFnDef(n.Value) {
-		c.emit(bytecode.OpSetFuncName, 0, 0)
-	}
-	c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
-	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// compileIterationBody binds a for-in/of head to the value on the stack and
-// runs the body, in the scope the iteration has begun.
+// compileIterationBody walks the binding of a for-in/of head to each value
+// and the body, in the scope the iteration has begun.
 //
 // A using head's value is disposed of at the end of each iteration, before
 // the loop goes on or, if it is leaving, closes its iterator.
@@ -1824,7 +1426,6 @@ func (c *compiler) compileIterationBody(left ast.Node, body ast.Stmt) {
 		c.initBinding(l.Decls[0].Target, l.Kind)
 	case ast.Expr:
 		c.assignTo(l, false)
-		c.emit(bytecode.OpDrop, 0, 0)
 	}
 	c.compileStatement(body)
 }

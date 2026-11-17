@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // Using declarations.
@@ -51,8 +50,6 @@ func (c *compiler) compileDisposeScope(pos int, async bool, body func()) {
 	name := fmt.Sprintf("%%dispose%d", *c.hiddenCount)
 	*c.hiddenCount++
 	slot := c.declare(name, bindVar, pos)
-	c.emit(bytecode.OpNewDisposeCapability, 0, 0)
-	c.emit(bytecode.OpSetLocal, slot, 0)
 
 	c.disposeScopes = append(c.disposeScopes, disposeScope{slot: slot})
 	c.compileTryFinally(pos, func() {
@@ -63,65 +60,27 @@ func (c *compiler) compileDisposeScope(pos int, async bool, body func()) {
 
 // compileDispose compiles the disposal of a scope's resources.
 func (c *compiler) compileDispose(n *ast.DisposeStmt) {
-	l, ok := c.resolveLocal(n.Capability)
+	_, ok := c.resolveLocal(n.Capability)
 	if !ok {
 		c.errorf(n.Start, "internal error: no resources to dispose of")
 		return
 	}
-	c.emit(bytecode.OpGetLocal, l.slot, 0)
-	flags := uint32(0)
-	if c.finallyRecord {
-		flags |= bytecode.DisposeRecord
-	}
 	if !n.Async {
-		c.emitAt(n.Start, bytecode.OpDispose, flags, 0)
 		return
 	}
 	// Each step runs the disposers until one leaves something to await,
 	// which the loop awaits before the next; what is awaited is dropped. An
 	// await that throws goes to the step that folds it in.
-	done := []int{c.emitAtJumpB(n.Start, bytecode.OpDispose, flags|bytecode.DisposeStep|bytecode.DisposeStart)}
-	loop := c.here()
-	threw := c.emitJump(bytecode.OpPushCatch)
 	c.handlerDepth++
 	c.emitAwait(n.Start)
-	c.emit(bytecode.OpPopCatch, 0, 0)
 	c.handlerDepth--
-	c.emit(bytecode.OpDrop, 0, 0)
-	c.emit(bytecode.OpGetLocal, l.slot, 0)
-	done = append(done, c.emitAtJumpB(n.Start, bytecode.OpDispose, bytecode.DisposeStep))
-	c.emit(bytecode.OpJump, uint32(loop), 0)
-	// The handler's own depth is the awaited value's, under what it threw.
-	c.patchJump(threw)
-	c.stackDepth++
-	c.emit(bytecode.OpNipUnder, 1, 0)
-	c.emit(bytecode.OpGetLocal, l.slot, 0)
-	done = append(done, c.emitAtJumpB(n.Start, bytecode.OpDispose, bytecode.DisposeStep|bytecode.DisposeFail))
-	c.emit(bytecode.OpJump, uint32(loop), 0)
-	for _, pc := range done {
-		c.patchJump(pc)
-	}
-	c.emit(bytecode.OpGetLocal, l.slot, 0)
-	c.emitAt(n.Start, bytecode.OpDispose, 0, bytecode.DisposeStep|bytecode.DisposeFinish)
 }
 
-// emitAtJumpB is emitJumpB with a source position.
-func (c *compiler) emitAtJumpB(pos int, op bytecode.Op, b uint32) int {
-	c.recordLine(pos)
-	return c.emitJumpB(op, b)
-}
-
-// addDisposable adds the value on top of the stack, which stays there, to the
-// innermost scope's resources.
+// addDisposable walks the addition of a declaration's value to the innermost
+// scope's resources.
 func (c *compiler) addDisposable(kind ast.DeclKind, pos int) {
 	if len(c.disposeScopes) == 0 {
 		c.errorf(pos, "internal error: a using declaration outside a scope that disposes")
 		return
 	}
-	async := uint32(0)
-	if kind == ast.DeclAwaitUsing {
-		async = 1
-	}
-	c.emit(bytecode.OpGetLocal, c.disposeScopes[len(c.disposeScopes)-1].slot, 0)
-	c.emitAt(pos, bytecode.OpAddDisposable, async, 0)
 }

@@ -52,7 +52,7 @@ func (r *Runtime) jitRegCountsMake(cc *closureCode, sites int) {
 // construction's, which Go makes.
 func (f *jitRegFeedback) Frequency(pc int) (float64, bool) {
 	fn, cl := f.fb.fn, f.fb.cl
-	if fn.Leaf != bytecode.LeafNone || fn.Generator || fn.Async || cl == nil || cl.closureCode == nil {
+	if f.rc.Leaf != bytecode.LeafNone || fn.Generator || fn.Async || cl == nil || cl.closureCode == nil {
 		return 0, false
 	}
 	w, op, ok := f.at(pc)
@@ -84,7 +84,7 @@ func jitFramed(x jitInline) bool {
 // jitCountedCallee reports whether the interpreter counts every call of
 // cl's function it makes (jitFramed).
 func jitCountedCallee(cl *closure) bool {
-	switch cl.fn.Leaf {
+	switch leafKind(cl) {
 	case bytecode.LeafNone, bytecode.LeafPure, bytecode.LeafForward:
 		return true
 	}

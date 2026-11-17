@@ -262,8 +262,8 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 		})(), V=m.V, plus=m.plus, one=new V(1);
 		function loop(n){let v=new V(0);for(let i=0;i<n;i++)v=v.plus(one);return v.x}`)
 	pcl := r.global.getOwn(r.atoms.intern("plus")).value().Object().fn().closure
-	if pcl.fn.Leaf != bytecode.LeafPure {
-		t.Fatalf("plus is no pure body: %v", pcl.fn.Leaf)
+	if k := pcl.fn.RegCode().Leaf; k != bytecode.LeafPure {
+		t.Fatalf("plus is no pure body: %v", k)
 	}
 	var pe *jitEntry
 	for range 16 {
@@ -532,20 +532,20 @@ func TestJITCompilesLongFunctions(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	src := `function long(n){let t=0;for(let i=0;i<n;i++){` + strings.Repeat(`t=(t*3+i)|0;`, 1100) + `}return t}`
+	src := `function long(n){let t=0;for(let i=0;i<n;i++){` + strings.Repeat(`t=(t*3+i)|0;`, 2100) + `}return t}`
 	for _, budget := range []int64{32 << 20, 0} {
 		r, run := jitTierRuntimeForTest(t, 2, src)
 		r.jitMemoryLimit = budget
 		cl := r.global.getOwn(r.atoms.intern("long")).value().Object().fn().closure
-		if len(cl.fn.Code) <= 4096 {
-			t.Fatalf("long is %d instructions", len(cl.fn.Code))
+		if n := len(firstReg(cl.fn).rc.Code); n <= 4096 {
+			t.Fatalf("long is %d instructions", n)
 		}
 		for range 4 {
 			run(`long(3)`)
 		}
 		e := jitEntryOfForTest(r, cl)
 		if compiles := jitCompiles(cl.fn, r.jitBudget()); !compiles || e == nil || !jitHasCodeOfForTest(r, cl) || e.ssaStats.entries == 0 {
-			t.Fatalf("long (%d instructions) not run natively within %d bytes: %+v", len(cl.fn.Code), r.jitBudget(), jitHasCodeOfForTest(r, cl))
+			t.Fatalf("long (%d instructions) not run natively within %d bytes: %+v", len(firstReg(cl.fn).rc.Code), r.jitBudget(), jitHasCodeOfForTest(r, cl))
 		}
 	}
 }

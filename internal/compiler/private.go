@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
@@ -115,9 +114,7 @@ func (c *compiler) nameHiddenBindings(bindings []privateBinding) {
 // what makes this evaluation of the class distinct from every other.
 func (c *compiler) emitPrivateKeys(bindings []privateBinding, pos int) {
 	for _, b := range bindings {
-		slot := c.declare(b.hidden, bindConst, pos)
-		c.emit(bytecode.OpPrivateName, c.nameIdx("#"+b.name), 0)
-		c.emit(bytecode.OpSetLocal, slot, 0)
+		c.declare(b.hidden, bindConst, pos)
 		c.markInitialized(b.hidden)
 	}
 }

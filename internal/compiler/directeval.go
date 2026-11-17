@@ -38,6 +38,7 @@ func isDirectEval(n *ast.Call) bool {
 func (c *compiler) compileDirectEval(n *ast.Call) {
 	idx := c.evalScopeIdx()
 	c.reg.NoteEval(n, idx)
+	c.facts.eval = true
 	// A receiver is pushed beneath the callee, which is undefined for the
 	// ordinary resolution and the object for one a `with` answered: inside a
 	// `with` body the name may be the object's own eval, and calling that is
@@ -47,20 +48,17 @@ func (c *compiler) compileDirectEval(n *ast.Call) {
 	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
 		probe = c.withProbe(bytecode.OpWithGetThis, id.Name)
 		c.regWith(id, probe)
-		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileIdentReadStatic(id)
-		c.patchWithProbe(probe)
 	} else {
-		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileExpr(n.Callee)
 	}
 	if hasSpread(n.Args) {
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(int(n.Start), c.callOp(n, bytecode.OpDirectEval), idx, bytecode.DirectEvalSpread)
+		c.noteTail(n)
 		return
 	}
-	argc := c.compileArguments(n.Args)
-	c.emitAt(int(n.Start), c.callOp(n, bytecode.OpDirectEval), idx, uint32(argc))
+	c.compileArguments(n.Args)
+	c.noteTail(n)
 }
 
 // evalScopeIdx records what is in scope at the current position and returns its

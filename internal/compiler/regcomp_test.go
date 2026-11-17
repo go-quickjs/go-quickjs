@@ -52,10 +52,10 @@ func TestRegisterBackendCode(t *testing.T) {
 		"fib": `
    0  jnlt_imm r2, 2 -> 2
    1  ret r2
-   2  get_global r3, name0 @3
+   2  get_global r3, name0 @1
    3  sub_imm r5, r2, 1
    4  call_w r3 = r3(1)
-   5  get_global r4, name0 @4
+   5  get_global r4, name0 @2
    6  sub_imm r6, r2, 2
    7  call_w r4 = r4(1)
    8  add r3, r3, r4
@@ -105,8 +105,8 @@ func TestRegisterBackendCode(t *testing.T) {
 	has("cap", "closure_w")
 }
 
-// TestRegisterBackendFallsBack pins forms the backend once left to the
-// stack form, each function as a whole: a generator and a direct eval
+// TestRegisterBackendFallsBack pins forms the backend once refused, each
+// function as a whole: a generator and a direct eval
 // are register code. A try statement is register code, with a handler
 // table, and so are a catch clause's pattern, an optional chain and a
 // strict global store of a value that runs code, which settles whether

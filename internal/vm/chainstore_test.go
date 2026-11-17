@@ -69,11 +69,11 @@ func TestChainStoreFollowsTheCell(t *testing.T) {
 		t.Errorf("got %s\nwant %s", got, want)
 	}
 	cl := r.global.getOwn(r.atoms.intern("add")).value().Object().fn().closure
-	for _, in := range cl.fn.Code {
-		if in.Op != bytecode.OpSetProp {
+	for _, w := range cl.fn.RegCompiled().Code {
+		if w.Op() != bytecode.RSetProp {
 			continue
 		}
-		if c := &cl.ic[in.B]; c.cell == nil || c.next == nil || c.fills >= maxCacheFills {
+		if c := &cl.ic[w.C()]; c.cell == nil || c.next == nil || c.fills >= maxCacheFills {
 			t.Errorf("the site's entry has cell %v, next %v, fills %d", c.cell != nil, c.next != nil, c.fills)
 		}
 	}

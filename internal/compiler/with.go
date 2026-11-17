@@ -3,6 +3,7 @@ package compiler
 import (
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // The `with` statement.
@@ -25,7 +26,6 @@ func (c *compiler) compileWith(n *ast.WithStmt) {
 		return
 	}
 	c.compileExpr(n.Object)
-	c.emitAt(n.Start, bytecode.OpWithPush, 0, 0)
 	c.pushExit(exitWith)
 	c.withDepth++
 	c.withStatements++
@@ -40,25 +40,31 @@ func (c *compiler) compileWith(n *ast.WithStmt) {
 	c.withDepth--
 	c.withStatements--
 	c.popExit()
-	c.emit(bytecode.OpWithPop, 0, 0)
 }
 
-// withProbe emits the probe that precedes a name's static instruction, and
-// returns the jump to patch once that instruction has been emitted.
+// withProbe notes the probe op that precedes a name's static access (regWith),
+// and returns its handle, 0.
 //
 // It returns -1 where there is nothing to probe: outside a `with` body, or for
 // a name whose binding was declared inside every enclosing one, which no
 // `with` object can shadow.
 //
-// The operand packs the name index with how many of the innermost objects to
-// consult, since a binding declared between two `with` statements is shadowed
-// by the inner one and not by the outer.
+// A probe consults the innermost objects as many as withLimit says, since a
+// binding declared between two `with` statements is shadowed by the inner one
+// and not by the outer.
 func (c *compiler) withProbe(op bytecode.Op, name string) int {
 	limit := c.withLimit(name)
 	if limit == 0 {
 		return -1
 	}
-	return c.emit(op, c.nameIdx(name)|uint32(limit)<<bytecode.WithLimitShift, 0xFFFFFFFF)
+	return c.emitProbe(op, name, limit, 0xFFFFFFFF)
+}
+
+// emitProbe notes the probe op of the innermost limit with objects for
+// name, for the register form (regWith), and returns 0, a probe's handle.
+func (c *compiler) emitProbe(op bytecode.Op, name string, limit int, b uint32) int {
+	c.probe = regcomp.WithProbe{Op: op, Limit: uint16(limit)}
+	return 0
 }
 
 // withLimit is how many of the innermost `with` objects a reference to a name
@@ -106,17 +112,7 @@ func (c *compiler) checkGlobalRef(n *ast.Ident) bool {
 	if c.globalLex[n.Name] || c.isModuleLex(n.Name) || c.withLimit(n.Name) > 0 {
 		return false
 	}
-	c.emitAt(int(n.Start), bytecode.OpCheckGlobalRef, c.nameIdx(n.Name), 0)
 	return true
-}
-
-// patchWithProbe points a probe past the static instruction it guards.
-func (c *compiler) patchWithProbe(pc int) {
-	if pc < 0 {
-		return
-	}
-	c.markTarget(len(c.fn.Code))
-	c.fn.Code[pc].B = uint32(len(c.fn.Code))
 }
 
 // beginWithRef starts a reference that will be read and then written back, for
@@ -127,17 +123,13 @@ func (c *compiler) patchWithProbe(pc int) {
 // running still leaves the write on the object rather than on the binding the
 // name would otherwise mean.
 //
-// What it leaves on the stack is a base beneath the value read: the object the
-// name resolved to, or undefined when it resolved to a binding. endWithRef
-// reads that to decide where the write goes.
+// What the read resolved to -- an object, or a binding -- is where endWithRef's
+// write goes.
 func (c *compiler) beginWithRef(n *ast.Ident) {
 	limit := c.withLimit(n.Name)
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	probe := c.emit(bytecode.OpWithGetUnder,
-		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0xFFFFFFFF)
+	probe := c.emitProbe(bytecode.OpWithGetUnder, n.Name, limit, 0xFFFFFFFF)
 	c.regWith(n, probe)
 	c.compileIdentReadStatic(n)
-	c.patchWithProbe(probe)
 }
 
 // resolveWithRef settles a reference without reading it, which is what a plain
@@ -145,18 +137,11 @@ func (c *compiler) beginWithRef(n *ast.Ident) {
 // nothing is read from the binding it names.
 func (c *compiler) resolveWithRef(n *ast.Ident) {
 	limit := c.withLimit(n.Name)
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.regWith(n, c.emit(bytecode.OpWithResolve,
-		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0))
+	c.regWith(n, c.emitProbe(bytecode.OpWithResolve, n.Name, limit, 0))
 }
 
-// endWithRef writes the value on top back through the reference beginWithRef
-// resolved, leaving the value and removing the base.
+// endWithRef walks the write back through the reference beginWithRef
+// resolved: the static store, where the read came from a binding.
 func (c *compiler) endWithRef(n *ast.Ident) {
-	probe := c.emit(bytecode.OpWithPutUnder, c.nameIdx(n.Name), 0xFFFFFFFF)
-	// The read came from a binding, so the base goes and the static store
-	// stands in for the write.
-	c.emit(bytecode.OpNipUnder, 1, 0)
 	c.assignToIdentStatic(n, false)
-	c.patchWithProbe(probe)
 }

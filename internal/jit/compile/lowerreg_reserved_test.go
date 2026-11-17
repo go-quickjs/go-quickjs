@@ -56,6 +56,8 @@ func TestLowerRegReservedAsserts(t *testing.T) {
 	pc = find(arith, bytecode.RMul, bytecode.RRet)
 	m := arith.RegCode().Code[pc]
 	aux := make([]uint32, len(arith.RegCode().Code))
+	// The | 0's position, at a pc past the code (RegCode.Lines).
+	aux[pc] = uint32(len(aux))
 	add := bytecode.MakeR(bytecode.RAddI32, 0, m.A(), m.B(), m.C())
 	if err := lowerWith(arith, pc, add, aux); err != nil {
 		t.Errorf("add_i32: %v", err)

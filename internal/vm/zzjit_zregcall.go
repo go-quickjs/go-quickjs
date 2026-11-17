@@ -1890,7 +1890,7 @@ func (r *Runtime) jitRegGoCallNested(ctx *abi.Context, idx, root int) bool {
 	if !found {
 		return false
 	}
-	run.f.pc = regSrc(run.c, int(rpc)) + 1
+	run.f.pc = uint32(rpc) + 1
 	r.jitRegConstructs(&l, caller, at)
 	depthBefore := r.frameDepth
 	lazy := idx - root - 1
@@ -1973,7 +1973,7 @@ func (r *Runtime) jitRegGoCallLevels(ctx *abi.Context, idx, root int) bool {
 	if ok {
 		run := s.regRuns[root]
 		rpc, _ := jit.CallPC(s.ssaCtxs[root])
-		run.f.pc = regSrc(run.c, int(rpc)) + 1
+		run.f.pc = uint32(rpc) + 1
 		caller, at := run.c, int(rpc)
 		for k := range levels {
 			l := &levels[k]
@@ -1988,7 +1988,7 @@ func (r *Runtime) jitRegGoCallLevels(ctx *abi.Context, idx, root int) bool {
 			pc := uint32(0)
 			if k < len(levels)-1 {
 				rpc, _ := jit.CallPC(s.ssaCtxs[l.ctx])
-				pc = regSrc(l.c, int(rpc)) + 1
+				pc = uint32(rpc) + 1
 			}
 			s.regNestFrames = append(s.regNestFrames, r.jitRegPushLevel(l, pc))
 		}
@@ -2051,7 +2051,7 @@ func (r *Runtime) jitRegMakeLazy(lz *jitLazyLevels) {
 		if caller != nil {
 			r.jitRegConstructs(&l, caller, at)
 		}
-		f := r.jitRegPushLevel(&l, regSrc(l.c, int(p))+1)
+		f := r.jitRegPushLevel(&l, uint32(p)+1)
 		s.regLazyLevels = append(s.regLazyLevels, l)
 		s.regLazyFrames = append(s.regLazyFrames, f)
 		caller, at = l.c, int(p)
@@ -2290,7 +2290,7 @@ func (r *Runtime) jitRegUnwind(idx int) (_ Value, _ error, gen bool) {
 	for k := range levels {
 		l := &levels[k]
 		loopFrames[k] = r.jitRegLoopCallee(idx, levels, k)
-		pc := regSrc(l.c, l.pc)
+		pc := uint32(l.pc)
 		if k < n-1 || l.ctx+1 < len(s.ssaCtxs) && s.ssaCtxs[l.ctx+1].Live == abi.LiveInline {
 			// Past the call it makes, as the interpreter's frame is during
 			// one, which a stack trace shows: a native callee's, or the

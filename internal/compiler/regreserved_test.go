@@ -32,8 +32,8 @@ func pairAt(t *testing.T, rc *bytecode.RegCode, op, partner bytecode.ROp) int {
 
 // The verifier's rules for the reserved operations: a step-and-branch
 // with its partner at pc+1, of the same A, B and target, and a step it
-// can make; mul_imm's X 0; the int32 forms' Aux, the | 0's stack
-// instruction, in the stack code; add_imm_i32's X, and its SC where it
+// can make; mul_imm's X 0; the int32 forms' Aux, the pc past the code of
+// the | 0's position; add_imm_i32's X, and its SC where it
 // stands for a subtraction. Nothing the compiler emits holds them yet but
 // the step-and-branches.
 func TestVerifyReservedOps(t *testing.T) {
@@ -112,16 +112,20 @@ func TestVerifyReservedOps(t *testing.T) {
 			a = make([]uint32, len(code))
 			a[pc] = aux
 		}
-		return withCode(rc, code, a)
+		c := withCode(rc, code, a)
+		// The position of the | 0, a pc past the code (Lines).
+		c.Lines = append(append([]bytecode.SourceLoc(nil), rc.Lines...), bytecode.SourceLoc{PC: uint32(len(code)), Pos: 0})
+		return c
 	}
-	last := uint32(len(f.Code) - 1)
+	last := uint32(len(rc.Code))
 	ok("mul_imm", f, with(bytecode.MakeR(bytecode.RMulI, 0, m.A(), m.B(), 0).WithSC(3), 0, false), true)
 	ok("mul_imm of an X", f, with(bytecode.MakeR(bytecode.RMulI, 1, m.A(), m.B(), 0).WithSC(3), 0, false), false)
 	for _, op := range []bytecode.ROp{bytecode.RAddI32, bytecode.RSubI32} {
 		w := bytecode.MakeR(op, 0, m.A(), m.B(), m.C())
 		ok(op.String(), f, with(w, last, true), true)
 		ok(op.String()+" without Aux", f, with(w, 0, false), false)
-		ok(op.String()+" of an Aux past the code", f, with(w, last+1, true), false)
+		ok(op.String()+" of an Aux in the code", f, with(w, last-1, true), false)
+		ok(op.String()+" of an Aux past the positions", f, with(w, last+1, true), false)
 		ok(op.String()+" of a register past the frame", f, with(bytecode.MakeR(op, 0, m.A(), m.B(), uint16(rc.NumRegs)), last, true), false)
 	}
 	addI := func(x uint8, sc int32) bytecode.RInstr {

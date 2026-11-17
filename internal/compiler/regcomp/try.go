@@ -173,7 +173,7 @@ func (g *gen) finallyBody(list []ast.Stmt) {
 		// What the clause produces is not the statement's value: the try
 		// block's is, kept meanwhile; a break or a continue inside the
 		// clause carries the clause's own, undefined where it produced
-		// none, as the stack form's compileFinallyClause has it.
+		// none.
 		save := g.alloc()
 		release := g.hold()
 		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(save), r16(g.completion), 0))
@@ -335,7 +335,7 @@ func (g *gen) jumpIfKind(kind, k int, m *mark) {
 }
 
 // usingKind reports whether a statement list declares anything with
-// using, and whether any of it is await using (the stack form's).
+// using, and whether any of it is await using.
 func usingKind(body []ast.Stmt) (has, async bool) {
 	for _, s := range body {
 		if vd, ok := s.(*ast.VarDecl); ok && vd.Kind.IsUsing() {
@@ -346,8 +346,8 @@ func usingKind(body []ast.Stmt) (has, async bool) {
 	return has, async
 }
 
-// usingScope compiles body as a scope with using declarations, as the
-// stack form's compileDisposeScope: its resources in a register of their
+// usingScope compiles body as a scope with using declarations: its
+// resources in a register of their
 // own (new_dispose_capability), and a finally clause that disposes of
 // them, compiled for each way out -- its normal end and each exit with
 // no exception to fold in, a throw with the one it folds in.
@@ -409,7 +409,7 @@ func (g *gen) usingDecl(n *ast.VarDecl) {
 // clause, where thrown is the register of a throw leaving the scope, or -1.
 // An await using scope's is a loop of steps, each running the disposers
 // until one leaves a value to await, which the loop awaits, an await that
-// throws folded in by the next step (the stack form's compileDispose).
+// throws folded in by the next step.
 func (g *gen) disposeOut(ds *ast.DisposeStmt, thrown int) {
 	c, ok := g.disposeCaps[ds]
 	if !ok {
@@ -537,8 +537,7 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 			panic("regcomp: a for-of or for-in head's declaration")
 		}
 		if l.Decls[0].Init != nil {
-			// Assigned once, before the object is evaluated, as the
-			// stack form's compileForIn.
+			// Assigned once, before the object is evaluated.
 			g.varDecl(l)
 		}
 		target, lexical = l.Decls[0].Target, l.Kind != ast.DeclVar
@@ -591,9 +590,8 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 	}
 	src := g.expr(right, -1)
 	cursor := g.alloc()
-	// The cursor is made, and stepped, at the position the stack form's
-	// for_of_start and iter_next_or_jump have, which no line of their own
-	// starts: the last of the expression's, or before it (forHead).
+	// The cursor is made, and stepped, at a position no line of their
+	// own starts: the last of the expression's, or before it (forHead).
 	head := g.forHead(pos)
 	g.emit(bytecode.MakeR(cursorStart(await, in), 0, r16(cursor), r16(src), 0))
 	l := g.pushLoop(label)
@@ -703,14 +701,11 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 
 // forHead is the position a for-of or a for-in loop at pos makes and steps
 // its cursor at, once its expression is compiled: the position the
-// expression's code left, as the stack form's cursor instructions, which
-// record none, have the line of the expression's last instruction that
-// records one. The loop's own position where the expression left none
-// before it. A stack trace through a step -- a generator's body, an
-// iterator's next -- names the line of that instruction, through SrcPC,
-// which maps a position to the stack form's line at or before it: the
-// loop's own position comes before any where the function's code before
-// the loop records none, and named no line at all.
+// expression's code left, the line of the expression's last instruction
+// that records one, which a stack trace through a step -- a generator's
+// body, an iterator's next -- names, as V8 does. The loop's own position
+// where the expression left none before it: where the function's code
+// before the loop records none, it would name no line at all.
 func (g *gen) forHead(pos int) int {
 	if g.cur < int32(pos) {
 		g.at(pos)
@@ -733,7 +728,7 @@ func cursorStart(await, in bool) bytecode.ROp {
 // value: iter_next, or for a for await, the next method's result awaited
 // and unpacked, in a register of its own, which code that runs meanwhile
 // could otherwise see in the binding. The await is at awaitPos, the loop's
-// expression's, where the stack form's is.
+// expression's.
 func (g *gen) iterStep(val, cursor int, brk *mark, await bool, awaitPos int) {
 	if !await {
 		g.jump(bytecode.MakeR(bytecode.RIterNext, 0, r16(val), r16(cursor), 0), brk, true)

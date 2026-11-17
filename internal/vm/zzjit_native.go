@@ -1772,9 +1772,15 @@ const (
 // slots by instructions that the frame states, the liveness and the
 // builder's definitions had been, linear now -- which refused a function
 // of 4,080 instructions at the default budget, and of 1,000 slots one of
-// 1,000.
+// 1,000. The instructions are counted as inlining counts them
+// (jitRegInlineSize), in the unit the shares were measured in.
 func jitCompileBytes(fn *bytecode.Function) int64 {
-	return int64(len(fn.Code))*jitCompileInstrBytes + int64(fn.LocalCount+fn.MaxStack+len(fn.Upvalues))*jitCompileSlotBytes + 32<<10
+	rc := fn.RegCode()
+	if rc == nil {
+		return 32 << 10
+	}
+	n := (len(rc.Code)*20 + 8) / 17
+	return int64(n)*jitCompileInstrBytes + int64(rc.NumRegs+len(fn.Upvalues))*jitCompileSlotBytes + 32<<10
 }
 
 // jitState is the runtime's JIT state, made at its first use.

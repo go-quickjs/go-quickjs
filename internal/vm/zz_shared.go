@@ -175,8 +175,9 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 			if err := r.tick(); err != nil {
 				return Undefined, err
 			}
-			if leaf := fn.Leaf; leaf == bytecode.LeafPure {
-				if pureFirst(fd, fn) {
+			if c := fd.closure.reg; c == nil {
+			} else if leaf := c.rc.Leaf; leaf == bytecode.LeafPure {
+				if pureFirst(fd, c.rc) {
 					if v, ok := r.pureCall(fd, this, args); ok {
 						return v, nil
 					}

@@ -32,7 +32,7 @@ async function run(a) { a[a.length - 1]++; await 0 }
 		"  register code: 18 instructions, 5 registers\n",
 		"    function sum at 2:1 (params=1 locals=3)\n",
 		"      locals: 0:n 1:s 2:j\n",
-		"         3  get_global r5, name0 @2\n",
+		"         3  get_global r5, name0 @1\n",
 		"         5  step_jlt r4 += 1 (update), r2 -> 3\n",
 		"         7  and_imm r5, r3, 255\n",
 		"            ; 4: for (var j = 0; j < n; j++) s += g;\n",

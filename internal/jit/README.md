@@ -19,11 +19,10 @@ The tier is **experimental and opt-in**, and it needs two things:
 Without either, nothing of it runs: a function runs in the register
 interpreter (see [Zero cost when off](#zero-cost-when-off)).
 
-The front end still compiles each function to a stack bytecode
-(`bytecode.Function`'s `Code`) before its register code, which the register
-backend reads for positions, sites and facts. The JIT compiles register
-code alone; a few of its estimates, and of the VM's helpers it calls, still
-read the stack form: its length, or its instruction at a `SrcPC`.
+The front end compiles each function to register code alone
+(docs/register-interpreter.md, "The compiler"), which is what the JIT
+compiles: its lowering, its feedback and the VM's helpers native code calls
+read register code and its tables, positions included (`RegCode.Lines`).
 
 This file states the design and the contracts the code keeps.
 
@@ -664,8 +663,9 @@ deoptimizations, what its runs did -- is its `regLearned` entry
 (`jitReg`). A callee native callers call that has no code is compiled at
 their first call of it through Go (`jitRegNativeCallee`): they make no
 sample of it. But one too long to inline (`ssa.MaxInline`, against its
-register code's length scaled to the stack form's instructions the limits
-were set in, `jitRegInlineSize`) that is warming up, its budget begun and
+register code's length scaled, `jitRegInlineSize`, to the unit of the
+stack bytecode the front end once made, which the limits were set in) that
+is warming up, its budget begun and
 not spent or not begun -- run fewer times than its first compile takes --
 and not refused for host operations alone (`jitRegLongWarming`), is compiled
 once its budget is spent, as any function -- the interpreter's runs of it
@@ -2796,8 +2796,9 @@ asked for again once each budget is spent. The budget bounds what the JIT
 holds, not a compile's working memory, which is linear in the function's
 size as what it holds is (`TestJITCompileLinear`): some 16,000
 instructions are compiled at the default budget, 65,000 at 32 MiB,
-whatever their slots. The estimate counts the front end's stack
-instructions and slots, which the front end still makes of every function.
+whatever their slots. The estimate counts the register code's
+instructions, scaled as inlining's bounds are (`jitRegInlineSize`) to the
+unit the shares were measured in, and its registers.
 
 **Hints.** A template's hint, a slot of the cache's hint table (not a
 pointer), names its function's link for generic calls, which native code

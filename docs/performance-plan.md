@@ -101,10 +101,9 @@ the register tiers.
   was 20.7% of zlib's interpreted time, 870 million conversions a run
   (2026-10-27). A local that only ever holds an int32 needs mapped
   `arguments`, direct eval and reads before its first store accounted for.
-- **The stack form.** Every function is compiled twice, to stack bytecode
-  and to register code, and the leaf evaluators (`pureCall`, `leafCall`)
-  interpret the stack form (register-interpreter.md, "Known limits and open
-  work"). Their own limits, *unverified* since: a pure call deeper than 32
+- **The leaf evaluators** (`pureCall`, `leafCall`), which read register
+  code. Their limits, *unverified* since they read the stack bytecode the
+  front end no longer makes: a pure call deeper than 32
   falls back to frames entirely, where switching at the limit alone needs
   the pure path to pass on an error such as a stack overflow; and
   `pureCallAt` could switch on a case byte for each function. Queens, 1.31
@@ -231,13 +230,27 @@ the program's own objects, which only allocating less removes.
 
 ### Start-up, compiling and programs run again
 
-- **The compiler's speed** (Octane's CodeLoad, +25.2% with the JIT at
-  `388324de`; see the register JIT's remaining gaps). `Token.IsPunct`'s chains
+- **The compiler's speed** (Octane's CodeLoad, 129.8 -> 102.8 ms once
+  the stack bytecode went, 2026-11-17). `Token.IsPunct`'s chains
   and the name maps are each about 3% of a compile, the final tables are
   allocated one by one, and a string `Op` in a binary node is 16 bytes
   where a kind would be one, at most of the compiler's sites
   (2026-11-06). A RegExp literal is validated by building and dropping its
-  parse tree. Every function is also compiled to the stack form (above).
+  parse tree.
+- **Resolving a function at its first call.** A function is compiled to
+  register code at its first call, from its AST and the record of its
+  scopes the walk made when the program was compiled, both kept until then
+  (register-interpreter.md, "Compiled at the first call"). The AST is
+  7.7 MB of Three.js's 14.0 MB after its load and 24.6 MB of Babel's 44.5
+  (2026-11-15, the walk's stack bytecode, since removed, included). V8's
+  way keeps neither: a preparse at load, which finds a function's extent
+  and early errors and resolves no more of its inner scopes than it must,
+  and a full parse of the function's source at its first call. Between
+  them, a full parse and walk at load with the AST dropped and the
+  function parsed again at its first call would release the same memory
+  at today's load time. Both need a resolver that can start inside a
+  function, in the scopes the load recorded around it -- eval, with,
+  arguments and class fields included -- which the walk is not.
 - **A `Program` run again** keeps its literals' roots (KI-66,
   `zzz_rerun.go`) and nothing else: each run interns its names, makes its
   constants and fills every cache anew, most of what a run of a large
@@ -722,10 +735,6 @@ by more than 3% at every placement:
   `forward_poly` and `forward_loop` (+9%) and `json_parse_new_layout`
   (+16%). The interpreter's two are listed above, under the register
   interpreter.
-- Octane's CodeLoad with the JIT, +25.2% (5.5 to 6.9 ms): the register JIT
-  does nothing for it, and the front end still compiles every function to
-  the stack form as well. The follow-up removes the stack form
-  (register-interpreter.md, "Known limits and open work").
 - **keyAtoms.** The keyed reads' and the in operator's cache of key atoms
   (`keySlot`) is direct-mapped by the string's address, 256 slots
   (`abi.KeyAtomsMul`): two keys that share a slot each find the other's

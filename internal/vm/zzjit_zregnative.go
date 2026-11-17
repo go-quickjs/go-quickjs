@@ -591,7 +591,11 @@ func (s *jitState) jitRegRoomAhead(cl *closure, life *jitEntry, old *jitRegEntry
 		s.regAccount(life)
 	}
 	if old == nil {
-		return s.makeRoom(len(cl.fn.Code) * s.perInstr)
+		n := 0
+		if c := cl.reg; c != nil {
+			n = len(c.rc.Code)
+		}
+		return s.makeRoom(n * s.perInstr)
 	}
 	if life.reoptRoom == 0 {
 		return true
@@ -701,7 +705,7 @@ func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f 
 	s.callRefs = max(s.callRefs, uint64(code.CallRefs()))
 	// What the entry and its program hold, by the function's instructions:
 	// the room the next compile asks for first.
-	s.learn(len(c.fn.Code), need+p.Footprint())
+	s.learn(len(c.rc.Code), need+p.Footprint())
 	e.targets = jitTargetsOf(e.life)
 	e.scratch = f.Scratch
 	e.keeps = f.Keeps
@@ -1947,7 +1951,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 		s.hosts++
 		e.life.ssaStats.hosts++
 		r.jitRegMaterialize(f, e, wb)
-		f.pc = regSrc(c, exitPC) + 1
+		f.pc = uint32(exitPC) + 1
 		var ran bool
 		if p := s.regPending; p.set && p.pc == exitPC && p.ctx == int(ctx.Level) {
 			// A call Go made from native code, which left after it
@@ -2234,7 +2238,7 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 		callee := s.ssaCtxs[idx+1]
 		back, base := callee.ReturnTo, callee.Base
 		rpc, _ := jit.CallPC(ctx)
-		f.pc = regSrc(c, int(rpc)) + 1
+		f.pc = uint32(rpc) + 1
 		v, uerr, gen := r.jitRegUnwind(idx)
 		if uerr == nil && r.stopped == nil && back != 0 && !e.invalid && e.code != nil && e.code.Contains(back) {
 			callee.Base, callee.Live, callee.ReturnTo = base, 0, 0
@@ -2291,7 +2295,7 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 		// Go finishes the callee, and the call goes on with what it
 		// answered, as a native callee's (regPending).
 		rpc := int(ctx.ExitPC)
-		f.pc = regSrc(c, rpc) + 1
+		f.pc = uint32(rpc) + 1
 		if v, uerr, ok := r.jitRegInlined(idx, f, e, rpc, wb); ok {
 			s.regPending = jitGoPending{set: true, pc: rpc, ctx: idx, v: v, err: uerr}
 		}
@@ -2775,7 +2779,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 		// does not inline nor call natively (ssa.AccessorSite's call of
 		// Go): made as the interpreter makes it, through the site's cache,
 		// the getter or the setter called on the frame.
-		f.pc = regSrc(c, rpc) + 1
+		f.pc = uint32(rpc) + 1
 		last, shared := s.ssaCtx, s.ssaSharedGen
 		s.goCalls++
 		r.noteRegGoCall(w, false, Value{})
@@ -2802,7 +2806,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 		if aux >= len(f.cl.ic) {
 			return false
 		}
-		f.pc = regSrc(c, rpc) + 1
+		f.pc = uint32(rpc) + 1
 		last, shared := s.ssaCtx, s.ssaSharedGen
 		s.goCalls++
 		yes, err := r.instanceOfAt(&f.cl.ic[aux], jitGoArg(ctx, 0), jitGoArg(ctx, 1))
@@ -2863,7 +2867,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 	r.noteRegGoCall(w, false, callee)
 	r.stackTop, r.stackHigh = end, max(r.stackHigh, end)
 	s.goCalls++
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	var v Value
 	var err error
@@ -3073,7 +3077,7 @@ func (r *Runtime) jitRegStepMade(ctx *abi.Context, idx int, run jitRegRun, rpc i
 	w := regAt(c.code, rpc)
 	r.noteRegGoCall(w, false, Value{})
 	s.goCalls++
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	var v Value
 	var more bool
@@ -3227,7 +3231,7 @@ func (r *Runtime) jitRegStepCallMade(ctx *abi.Context, idx int, run jitRegRun, r
 	}
 	r.noteRegGoCall(w, false, Value{})
 	s.goCalls++
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	var v Value
 	var err error
@@ -3490,12 +3494,12 @@ func (r *Runtime) jitRegWhole(ctx *abi.Context, idx int, run jitRegRun, rpc int)
 // found invalid.
 func (r *Runtime) jitRegOpMade(ctx *abi.Context, idx int, run jitRegRun, rpc int, w bytecode.RInstr) bool {
 	s := r.jit
-	f, c := run.f, run.c
+	f := run.f
 	if run.e == nil || int(ctx.GoOp>>abi.GoOpArgcShift&0xff) != 2 {
 		return false
 	}
 	a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	s.goCalls++
 	r.noteRegGoCall(w, true, Value{})
 	last, shared := s.ssaCtx, s.ssaSharedGen
@@ -3550,7 +3554,7 @@ func (r *Runtime) jitRegSuperMade(ctx *abi.Context, idx int, run jitRegRun, rpc 
 	for i := range args {
 		args[i] = jitGoArg(ctx, 1+i)
 	}
-	f.pc = regSrc(c, rpc) + 1
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	s.goCalls++
 	r.noteRegGoCall(w, false, Value{})
@@ -3622,8 +3626,8 @@ func (r *Runtime) jitRegPropertyMade(f *frame, w bytecode.RInstr, key Atom, obj,
 // finishes at the call's exit (regPending, regFinishCall), as a getter's.
 func (r *Runtime) jitRegIterMade(ctx *abi.Context, idx int, run jitRegRun, rpc int, w bytecode.RInstr) bool {
 	s := r.jit
-	f, c := run.f, run.c
-	f.pc = regSrc(c, rpc) + 1
+	f := run.f
+	f.pc = uint32(rpc) + 1
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	s.goCalls++
 	r.noteRegGoCall(w, false, Value{})

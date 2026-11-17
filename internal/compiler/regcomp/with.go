@@ -6,9 +6,9 @@ import (
 )
 
 // A name inside a with statement's body, or in a function with a direct
-// eval that may declare it, is compiled as the stack form compiles it: a
-// probe of the with objects and the eval's variables in scope -- the
-// innermost Limit of them (Record.Withs) -- that sets a found flag, and a
+// eval that may declare it, is compiled as a probe of the with objects and
+// the eval's variables in scope -- the innermost Limit of them
+// (Record.Withs) -- that sets a found flag, and a
 // branch around the static access the record resolved. The probes are cold
 // operations, each with the name and the limit, the flag's register in
 // Aux: with_get, with_get_this, with_delete and with_set read, call, delete
@@ -48,8 +48,8 @@ func (g *gen) probedNames() {
 	}
 }
 
-// withStatic compiles f with id's static resolution in the record, as the
-// stack form compiled its access past the probe, and no probe of it.
+// withStatic compiles f with id's static resolution in the record, the
+// access past the probe, and no probe of it.
 func (g *gen) withStatic(id *ast.Ident, f func()) {
 	w := g.withs[id]
 	if w == nil {
@@ -64,8 +64,8 @@ func (g *gen) withStatic(id *ast.Ident, f func()) {
 	g.rec.setWrite(id, Res{Kind: ResWith}, w.hasRwr)
 }
 
-// probeOp is id's probe's instruction, which must be one of ops: what the
-// stack form compiled for the name where the backend compiles it.
+// probeOp is id's probe's operation, which must be one of ops: what the
+// walk recorded for the name where the backend compiles it.
 func (g *gen) probeOp(id *ast.Ident, ops ...bytecode.Op) bytecode.Op {
 	op := g.withs[id].probe.Op
 	for _, o := range ops {
@@ -156,7 +156,7 @@ func (g *gen) withStore(id *ast.Ident, v int) {
 
 // withAssign is storeIdent's assignment of value to the probed name id:
 // resolved before the value is made (with_resolve) or probed after it
-// (with_set), as the stack form compiled it.
+// (with_set), as the walk recorded it.
 func (g *gen) withAssign(id *ast.Ident, value ast.Expr) int {
 	if g.probeOp(id, bytecode.OpWithResolve, bytecode.OpWithSet) == bytecode.OpWithResolve {
 		g.withResolve(id)
@@ -174,8 +174,7 @@ func (g *gen) withRefFor(id *ast.Ident) {
 	g.withResolve(id)
 }
 
-// withStmt compiles a with statement, as the stack form's compileWith:
-// its object put on the frame's with objects (with_push, which converts
+// withStmt compiles a with statement: its object put on the frame's with objects (with_push, which converts
 // it with ToObject), and its body in the range of a handler that takes it
 // off again (with_pop) for a throw, as each other way out does (leave).
 func (g *gen) withStmt(n *ast.WithStmt) {

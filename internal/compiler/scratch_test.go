@@ -1,9 +1,7 @@
 package compiler
 
 import (
-	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -57,7 +55,6 @@ func TestCompilerStateReuse(t *testing.T) {
 				}
 				upvalues = exact(captured.Upvalues)
 				copy := *fn
-				copy.Code, copy.Lines = exact(fn.Code), exact(fn.Lines)
 				copy.Names, copy.Constants = exact(fn.Names), exact(fn.Constants)
 				copy.Locals, copy.Upvalues = exact(fn.Locals), exact(fn.Upvalues)
 				snapshot = &copy
@@ -73,70 +70,6 @@ func TestCompilerStateReuse(t *testing.T) {
 		if fn == nil || !reflect.DeepEqual(first, snapshot) || !reflect.DeepEqual(captured.Upvalues, upvalues) {
 			t.Fatal("returning the pool changed a returned function")
 		}
-	}
-}
-
-// The size a function's tables are given comes from its own source: the
-// wrapper of a bundle spans the bundle, and has little code of its own.
-func TestReserveLeavesNestedFunctionsOut(t *testing.T) {
-	body := strings.Repeat("x = x + 1;\n", 2000)
-	src := "(function wrapper() {\n" +
-		"function inner() {" + body + "}\n" +
-		"var arrow = () => {" + body + "};\n" +
-		"class C { m() {" + body + "} }\n" +
-		"})"
-	prog, err := parser.Parse(src, parser.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrapper := prog.Body[0].(*ast.ExprStmt).X.(*ast.FuncLit)
-	own := wrapper.End - wrapper.Start - scanFunction(wrapper, false).innerBytes
-	if own >= reserveMin {
-		t.Errorf("the wrapper's own source is %d of its %d bytes", own, wrapper.End-wrapper.Start)
-	}
-	inner := wrapper.Body[0].(*ast.FuncDecl).Fn
-	if got := scanFunction(inner, false).innerBytes; got != 0 {
-		t.Errorf("a function with none written in it has %d bytes of them", got)
-	}
-}
-
-// A function's scratch clears what it wrote and no more, and a table a large
-// function grew is not cleared again for each sibling after it.
-func TestScratchAfterALargeFunction(t *testing.T) {
-	var large strings.Builder
-	large.WriteString("function large() { return 0")
-	for i := range 2 * bigIndex {
-		fmt.Fprintf(&large, " + g%d.p%d + 'c%d'", i, i, i)
-	}
-	large.WriteString("; }\nfunction small() { return s.t + 'u'; }\n")
-	src := large.String()
-	prog, err := parser.Parse(src, parser.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := newCompiler(nil, Options{Text: src, Source: "large.js"})
-	pool := c.pool
-	var fns []*bytecode.Function
-	for _, stmt := range prog.Body {
-		c.compileFunctionLiteral(stmt.(*ast.FuncDecl).Fn, "")
-		fns = append(fns, c.fn.Constants[len(c.fn.Constants)-1].Fn)
-		s := pool.free[len(pool.free)-1]
-		if len(s.nameIndex) != 0 || len(s.constIndex) != 0 {
-			t.Fatal("a map was left with entries")
-		}
-		for _, name := range s.names[:cap(s.names)] {
-			if name != "" {
-				t.Fatalf("the scratch holds the name %q", name)
-			}
-		}
-		for _, k := range s.consts[:cap(s.consts)] {
-			if k != (bytecode.Constant{}) {
-				t.Fatalf("the scratch holds the constant %+v", k)
-			}
-		}
-	}
-	if len(fns[0].Names) < 4*bigIndex || len(fns[1].Names) != 2 || fns[1].Names[0] != "s" || fns[1].Names[1] != "t" {
-		t.Errorf("functions with %d and %d names: %q", len(fns[0].Names), len(fns[1].Names), fns[1].Names)
 	}
 }
 

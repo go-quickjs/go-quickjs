@@ -882,7 +882,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			// So is a constructor that only stores its parameters in this,
 			// and one that only hands them on to a method of it.
 			done := false
-			switch fd.closure.fn.Leaf {
+			switch leafKind(fd.closure) {
 			case bytecode.LeafNone, bytecode.LeafPure:
 			case bytecode.LeafForward:
 				done, err = r.leafForward(fd.closure, o, obj, args, newTarget)

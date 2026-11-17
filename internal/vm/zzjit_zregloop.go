@@ -421,7 +421,7 @@ func (r *Runtime) jitRegLoopLeft(f *frame, c *regCode, e *jitRegEntry, wb int, c
 func (r *Runtime) jitRegLoopFinish(f *frame, c *regCode, e *jitRegEntry, wb, rpc int, loop uint64, after bool, v Value, err error) (Value, error) {
 	p := e.p
 	at := jitRegSlotIndex(p, wb, p.Locals+int(loop&0xffffffff)-1)
-	return r.jitLoopFinishAt(f, at, regSrc(c, rpc)+1, loop, after, v, err)
+	return r.jitLoopFinishAt(f, at, uint32(rpc)+1, loop, after, v, err)
 }
 
 // jitRegSlotIndex is where in the VM's stack slot i of p, past its Locals,

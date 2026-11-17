@@ -116,7 +116,6 @@ var (
 	offStErr        int32
 	offRCLocals     int32
 	recNFOff        int32
-	recRCOff        int32
 	recCodeBaseOff  int32
 	offItDone       int32
 	offItArr        int32
@@ -152,7 +151,6 @@ var (
 	offCCRegCalls  int32
 
 	offRCCode      int32
-	offRCSrc       int32
 	offRCAux       int32
 	offCCReg       int32
 	offCCJITEnters int32
@@ -379,7 +377,6 @@ func loadOffsets() {
 	offStErr = off("regState.err")
 	offRCLocals = off("regCode.locals")
 	recNFOff = off("nativeRec.nf")
-	recRCOff = off("nativeRec.rc")
 	recCodeBaseOff = off("nativeRec.codeBase")
 	offItDone = off("iterObject.st") + off("iterState.done")
 	offItArr = off("iterObject.st") + off("iterState.arr")
@@ -417,7 +414,6 @@ func loadOffsets() {
 	offCCJITEnters = ccRel(off("closureCode.jitEnters"))
 
 	offRCCode = off("regCode.code")
-	offRCSrc = off("regCode.src")
 	offRCAux = off("regCode.aux")
 	offSymAtom = off("Symbol.atom")
 	offSymAtoms = off("Symbol.atoms")

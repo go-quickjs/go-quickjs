@@ -286,8 +286,9 @@ func (r *Runtime) jitRegNativeCalleeN(cl *closure, c *regCode, calls int64, call
 }
 
 // jitRegInlineSize is the length of c's function in the instructions
-// inlining's bounds count (ssa.MaxInline), whose unit is a stack-form
-// instruction: register code has 0.85 of the stack form's instructions, and
+// inlining's bounds count (ssa.MaxInline), whose unit is an instruction of
+// the stack bytecode the front end once made: register code has 0.85 of
+// its instructions, and
 // each counts 20/17 of one, as ssa's inlineSize counts a register
 // program's.
 func jitRegInlineSize(c *regCode) int {

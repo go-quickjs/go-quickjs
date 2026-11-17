@@ -209,12 +209,11 @@ func (r *Runtime) jitRegCodeIn(ctx *abi.Context, idx int) bool {
 // jitRegPlainSet is, for a call of Go register code makes in ctx, in
 // context idx (reg), a set_prop's write jitGoCallPlain may make without a
 // frame (jitPlainWrite): the code's closure -- the run's, or a native
-// callee's -- and the write as the stack form's instruction names it, its
-// site's name and its cache, of the register instruction at its register
-// pc, an inlined callee's its own; a nil closure where it is none.
-func (r *Runtime) jitRegPlainSet(ctx *abi.Context, idx int) (*closure, bytecode.Instr, bool) {
+// callee's -- and the write, its site's name and its cache, of the
+// register instruction at its register pc, an inlined callee's its own; a nil closure where it is none.
+func (r *Runtime) jitRegPlainSet(ctx *abi.Context, idx int) (*closure, jitInstr, bool) {
 	if !r.jitRegCodeIn(ctx, idx) {
-		return nil, bytecode.Instr{}, false
+		return nil, jitInstr{}, false
 	}
 	var cl *closure
 	var c *regCode
@@ -247,18 +246,18 @@ func (r *Runtime) jitRegPlainSet(ctx *abi.Context, idx int) (*closure, bytecode.
 			}
 		}
 		if in == nil || in.reg == nil {
-			return nil, bytecode.Instr{}, true
+			return nil, jitInstr{}, true
 		}
 		cl, c, rpc = in, in.reg, int(st.InlinePC)
 	}
 	if cl == nil || c == nil || rpc >= len(c.rc.Code) {
-		return nil, bytecode.Instr{}, true
+		return nil, jitInstr{}, true
 	}
 	w := c.rc.Code[rpc]
 	if w.Op() != bytecode.RSetProp || int(w.C()) >= len(c.rc.SiteName) {
-		return nil, bytecode.Instr{}, true
+		return nil, jitInstr{}, true
 	}
-	return cl, bytecode.Instr{Op: bytecode.OpSetProp, A: c.rc.SiteName[w.C()], B: uint32(w.C())}, true
+	return cl, jitInstr{Op: bytecode.OpSetProp, A: c.rc.SiteName[w.C()], B: uint32(w.C())}, true
 }
 
 // jitRegAllocSeen learns, after Go made new_w w at register pc rpc of f's
@@ -434,7 +433,7 @@ func (f *jitRegFeedback) CellsPool() (uintptr, []int32, bool) {
 
 // jitRegFrameless makes register instruction op, whole, for native code
 // in ctx without its frame where that runs nothing and throws nothing, each
-// as jitOpFrameless makes the stack instruction of it: an object's spread
+// as jitOpFrameless makes its operation: an object's spread
 // -- learning the layouts' copy native code makes next (jitCopyLearn) -- an
 // array's spread of a dense array's elements, an element appended, an
 // object pattern's rest, a computed key converted or defined, a literal's
@@ -448,7 +447,7 @@ func (f *jitRegFeedback) CellsPool() (uintptr, []int32, bool) {
 // reports whether it made it; what it does not make, Go makes on the
 // frame (jitRegOpMade, jitRegWhole).
 func (r *Runtime) jitRegFrameless(ctx *abi.Context, cl *closure, c *regCode, rpc int, op bytecode.ROp) bool {
-	var in bytecode.Instr
+	var in jitInstr
 	n := int(ctx.GoOp >> abi.GoOpArgcShift & 0xff)
 	switch op {
 	case bytecode.RSetHomeObject, bytecode.RSetFieldInit, bytecode.RDefineMethod, bytecode.RDefineGetter, bytecode.RDefineSetter,
@@ -516,7 +515,7 @@ func (r *Runtime) jitRegFrameless(ctx *abi.Context, cl *closure, c *regCode, rpc
 	default:
 		return false
 	}
-	if n < 1 || n != jitcompile.GoOperands(in) {
+	if n < 1 || n != jitcompile.GoOperands(in.Op, in.A) {
 		return false
 	}
 	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[0])), n)
@@ -648,7 +647,7 @@ func (r *Runtime) jitRegSiteMegamorphic(cl *closure, c *regCode, l *jitEntry, rp
 // there.
 func (f *jitRegFeedback) PureBody() bool {
 	fn := f.fb.fn
-	return fn != nil && fn.Leaf == bytecode.LeafPure && !fn.Generator && !fn.Async
+	return fn != nil && f.rc.Leaf == bytecode.LeafPure && !fn.Generator && !fn.Async
 }
 
 // jitRegGenMakeable reports whether register code of cl's may make the

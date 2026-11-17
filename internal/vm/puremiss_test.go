@@ -35,8 +35,8 @@ func TestPureMissPerTemplate(t *testing.T) {
 		t.Errorf("sum %v, want 20500", got)
 	}
 	fd := elems[1].Object().fn()
-	if fd.closure.fn.Leaf != bytecode.LeafPure {
-		t.Fatalf("the callback is leaf %d, not pure", fd.closure.fn.Leaf)
+	if k := fd.closure.fn.RegCompiled().Leaf; k != bytecode.LeafPure {
+		t.Fatalf("the callback is leaf %d, not pure", k)
 	}
 	if n := fd.closure.pureMiss; n > pureMissLimit {
 		t.Errorf("register code: the callback's template missed %d times, want %d at most", n, pureMissLimit)
