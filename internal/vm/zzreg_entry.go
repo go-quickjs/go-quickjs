@@ -167,6 +167,7 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 		// A short straight body of numbers and upvalues is run as its
 		// register code without a frame (regLeafRun).
 		c.leaf, c.leafOps = regLeafCode, regLeafOps(fn, rc)
+		c.leafBinary = regBinaryLeaf(c)
 	case rc.Leaf == bytecode.LeafPure && !rc.PureCalls && !pureByTree(rc):
 		// A longer body runs faster as code than in the frameless
 		// evaluator (pureByTree).

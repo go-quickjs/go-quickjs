@@ -104,6 +104,9 @@ type regCode struct {
 	// code's (bigSeenMarks), which the slow paths mark where the runtime
 	// runs the JIT (regBigOf); nil until one has.
 	bigSeen atomic.Pointer[bigSeenMarks]
+	// leafBinary describes a numeric binary leaf's two parameters or
+	// upvalues for the native call handler, or is zero (regBinaryLeaf).
+	leafBinary uint64
 }
 
 // runReg runs frame f as register code c, from instruction start, and

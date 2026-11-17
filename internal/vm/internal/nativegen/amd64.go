@@ -34,6 +34,8 @@ type nativeGen struct {
 	// after the last handler, so that what a later round adds to an
 	// early handler moves none of the handlers after it.
 	late []func()
+	// after is appended after every handler, including the cursors.
+	after []func()
 }
 
 // ex is the call handler's exit number n.

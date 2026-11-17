@@ -1139,6 +1139,9 @@ func armEmit(v *variant) (*block, error) {
 	h(bytecode.RIterClose, g.iterClose)
 	h(bytecode.RIterStep, g.iterStep)
 
+	for i := 0; i < len(g.after); i++ {
+		g.after[i]()
+	}
 	for n, l := range g.exits {
 		if n == 0 {
 			continue

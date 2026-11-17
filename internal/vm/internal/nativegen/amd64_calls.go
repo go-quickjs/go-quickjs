@@ -249,9 +249,9 @@ func (g *nativeGen) call() {
 	a.Load(RCX, RDI, ncUndef)
 	a.Op(Xor, RDX, RDX, false)
 	a.LoadS32(R9, R8, offRCLeafArg)
-	a.MovRR(R8, RAX)
-	a.ShiftImm(Shr, R8, 8, true)
-	a.MovZX8(R8, R8)
+	// The byte load leaves room for the far binary-leaf branch without
+	// moving the following handlers when the assembler shortens jumps.
+	a.LoadU8(R8, RBX, 1)
 	a.Op(Cmp, R9, R8, true)
 	a.Jcc(CondGE, leafStore)
 	a.ShiftImm(Shl, R9, 4, true)
@@ -270,7 +270,12 @@ func (g *nativeGen) call() {
 	a.Load(R9, RCX, offECl)
 	a.LoadS32(RDX, R8, offRCLeafUp)
 	a.OpImm(Sub, RDX, 1, true)
-	a.Jcc(CondS, notLeaf)
+	mathLeaf := notLeaf
+	if g.v == plain {
+		mathLeaf = a.NewLabel()
+		g.after = append(g.after, func() { g.binaryLeaf(mathLeaf, notLeaf) })
+	}
+	a.Jcc(CondS, mathLeaf)
 	a.CmpMem(RDX, R9, offClUpvals+8, true)
 	a.Jcc(CondAE, notLeaf)
 	a.Load(R9, R9, offClUpvals)

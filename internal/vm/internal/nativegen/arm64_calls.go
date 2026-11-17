@@ -245,7 +245,12 @@ func (g *armGen) call() {
 	a.Load(r9, rC, offECl)
 	a.LoadS32(rD, r8, offRCLeafUp)
 	a.SubsImm(rD, rD, 1, true)
-	a.BCond(MI, notLeaf)
+	mathLeaf := notLeaf
+	if g.v == plain {
+		mathLeaf = a.NewLabel()
+		g.after = append(g.after, func() { g.binaryLeaf(mathLeaf, notLeaf) })
+	}
+	a.BCond(MI, mathLeaf)
 	g.cmpMem(rD, r9, offClUpvals+8)
 	a.BCond(HS, notLeaf)
 	a.Load(r9, r9, offClUpvals)
