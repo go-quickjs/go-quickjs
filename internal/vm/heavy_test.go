@@ -13,8 +13,7 @@ import (
 // process under the JIT's stress peaked at 16 GB on a machine of 32 CPUs,
 // and on a runner of 4 CPUs and 16 GB, beside the root package's tests, ran
 // out of memory. Each holds a slot (heavy); the other parallel tests run
-// beside them, as many at once as -parallel lets, as regdiff bounds its
-// corpora's. The serial tests of gigabytes -- the JIT's long code,
+// beside them, as many at once as -parallel lets. The serial tests of gigabytes -- the JIT's long code,
 // TestJITCompileLinear, TestJITSameWorkWhileMarking -- run alone already.
 var heavySlots = make(chan struct{}, heavyLimit())
 

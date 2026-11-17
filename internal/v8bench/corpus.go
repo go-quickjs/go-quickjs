@@ -8,7 +8,8 @@ import (
 )
 
 // Corpus is the source the benchmarks run, for tests that run it as a
-// corpus of programs rather than time it (internal/regdiff). For "micro"
+// corpus of programs rather than time it (the vm package's
+// TestRegNativeCaches). For "micro"
 // it is microbench.js without the call of its main that ends it, then
 // microbench_extra.js, and work is each test's name and the argument it
 // is timed with, in microbench.js's order. For a suite's name it is the

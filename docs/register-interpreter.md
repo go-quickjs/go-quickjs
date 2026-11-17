@@ -1253,17 +1253,16 @@ generated files' staleness tests.
 
 - **The verifier** proves what the handlers take on trust, for every
   function as it is compiled ([The verifier](#the-verifier)).
-- **Differential tests.** `internal/regdiff` runs programs -- cases of its
-  own for each mechanism and the edges of each fused instruction, the
-  micro-benchmarks and the V8 suite -- and compares every answer, stack
-  trace and error position with golden answers the stack interpreter and
-  the tree tier gave before they were removed
-  (`testdata/golden.json`, `TestRegDiff*`). `TestRegNativeCaches` runs the
-  corpus natively and on the Go table and compares the caches the JIT reads
-  (`RegCacheDigest`): the native fast paths and the Go handlers must fill
-  them alike. With the JIT, `TestRegLowerEvaluate` lowers each function's
-  register code and runs it by the IR's evaluator against the
-  interpreter.
+- **The forms test262 never reaches.** `TestRegForms*` (regforms_test.go)
+  run what an instruction's operands cannot number -- names, registers,
+  jumps, call arguments and cache sites past 16 bits or 8 -- a stack trace
+  through register frames and f.arguments with Node's quirks, and check
+  each answer against the one the stack interpreter and the tree tier gave
+  before they were removed. `TestRegNativeCaches` (internal/vm) runs the
+  micro-benchmarks natively and on the Go table and compares the caches
+  the JIT reads (`RegCacheDigest`): the native fast paths and the Go
+  handlers must fill them alike. The register interpreter's semantics are
+  test262's, in each of its modes, and the vm package's tests'.
 - **Native against Go.** The native kernel, fast-path and call tests run
   each case natively and by the Go table, with the write-barrier flag set
   and clear, and compare answers and exit counts.

@@ -35,9 +35,6 @@ The main areas are:
   which emits no code, records of its scopes;
   `internal/vm/internal/nativegen` generates the register interpreter's
   native handlers.
-- `internal/regdiff`: tests only, the register interpreter's differential
-  tests, over cases of their own and the corpora `internal/v8bench` holds
-  for the benchmark runners.
 - `stdlib`: opt-in host functionality.
 - `cmd/qjs`: the command-line host.
 - `conformance`: the test262 runner. The test262 checkout is external.
@@ -269,12 +266,9 @@ git diff --check
 
 The long checks run once, on the final code: the full suite with and without
 the JIT's tag, test262's modes and the timing across suites. A change to
-the register interpreter or its JIT path also runs `internal/regdiff`,
-plain and with `-tags quickjs_jit`, with `QUICKJS_V8_DIR` naming the V8
-suite, whose answers it checks against golden answers
-(`internal/regdiff/testdata`); on amd64 or arm64 the suite with
-`QJS_NONATIVE=1`, which runs the Go handler table; and the 386 build and
-`TestLengthsPastAnInt32` there, where the Go table alone runs.
+the register interpreter or its JIT path also runs, on amd64 or arm64, the
+suite with `QJS_NONATIVE=1`, which runs the Go handler table; and the 386
+build and `TestLengthsPastAnInt32` there, where the Go table alone runs.
 While a change
 is iterated, test the packages it touches and time only the benchmarks it is
 for, at two placements (`compare -k 2 -suite List`, `-micro -suite

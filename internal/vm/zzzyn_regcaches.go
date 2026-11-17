@@ -12,7 +12,7 @@ import (
 // runtime's, each call site's kind and callee -- in an order and a form
 // that two runtimes running one program alike give alike: what a test
 // compares between the native handlers and the Go table's
-// (TestRegNativeCaches in internal/v8bench). It is a test's, and slow.
+// (TestRegNativeCaches). It is a test's, and slow.
 func RegCacheDigest(r *Runtime) string {
 	var b strings.Builder
 	seenObj := map[*Object]bool{}

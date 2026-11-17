@@ -407,9 +407,10 @@ lowering did the work of -- `boolBranch`'s loads and jump, which a
 compare-and-branch run whole goes on to without its value written -- the VM
 runs those too, as the interpreter does, to where the program does its
 instruction's own work. That is what native code's exits do too
-(see [Exits and deoptimization](#exits-and-deoptimization)), so
-`TestRegLowerEvaluate` checks the lowering and the exits' contract without a
-backend.
+(see [Exits and deoptimization](#exits-and-deoptimization)), so the IR's
+evaluator with the VM as its runner (`RegLowerCall`) checks the lowering
+and the exits' contract without a backend
+(`TestJITRegBoolWholeRun`).
 
 ## Feedback
 
@@ -3222,7 +3223,7 @@ do, and every way of changing a watched property clears.
 
 ```sh
 go test ./internal/jit/... ./internal/vm                      # untagged
-QUICKJS_REQUIRE_JIT=1 CGO_ENABLED=0 go test -tags quickjs_jit ./internal/jit/... ./internal/vm ./internal/regdiff .
+QUICKJS_REQUIRE_JIT=1 CGO_ENABLED=0 go test -tags quickjs_jit ./internal/jit/... ./internal/vm .
 go test -tags quickjs_jit -race -count=1 ./internal/jit/...
 go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 ./internal/jit/... ./internal/vm
 (cd internal/jit/verify && go test -tags quickjs_jit ./...)   # encodings, both arches
@@ -3232,8 +3233,6 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
 
 | Check | What it holds |
 |---|---|
-| `TestRegLowerEvaluate` (internal/regdiff) | The lowering and the exits' contract without a backend: each call of the register interpreter's differential corpus run by the IR's evaluator with the VM as its runner (`RegLowerCall`), compared with an ordinary call in a second runtime that has run the same calls. Its cases run in parallel, the micro-benchmarks in 16 parts, each function called with 3 sets of arguments; `QUICKJS_REGLOWER_FULL=1` calls each with 8 and runs the micro-benchmarks whole, `QUICKJS_REGLOWER_ARGS=n` sets the sets of arguments, `QUICKJS_REGLOWER_SHARD=k/n` runs a shard. `-short` skips it. |
-| `TestRegNativeCall` (internal/regdiff) | Native code made from register code: the corpus compiled at each function's first call and entered by `vm.RegNativeCall` -- the call's frame made as `regEnterW` makes it, run natively from its start, or, by the evaluator with the VM up to the second time it reaches a loop's header, from there -- each answer compared with an ordinary call's. |
 | `TestJITRegNative` (internal/vm) | Functions run so, the collector seen idle and marking. |
 | `TestJITSameWorkWhileMarking` (internal/vm) | The marking rule, over the micro-benchmarks. |
 | `ir.Validate`, `Evaluate` | The atomicity rule, on every program and as it runs. |
