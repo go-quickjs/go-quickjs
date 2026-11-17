@@ -32,7 +32,8 @@ import (
 // replacing, splitting, named groups, the u flag -- objects a loop carries
 // from turn to turn, and the ways keeping those out of the heap may not pay,
 // JSON's documents of every kind, parsed and written, functions that
-// forward their arguments, f.apply(this, arguments) --
+// forward their arguments, f.apply(this, arguments), the kernels of an
+// asm.js module and a call shaped as one's export is called --
 // written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
@@ -82,7 +83,7 @@ var microWork = []struct {
 	{"try_catch", 8388608}, {"try_throw", 4194304}, {"try_finally", 8388608}, {"iterator_for_of", 8192},
 	{"map_for_of", 32768}, {"object_for_in", 262144}, {"dict_for_in", 131072}, {"using_scope", 8388608}, {"closure_make", 524288}, {"closure_many_locals", 524288}, {"closure_counter", 4194304},
 	{"closure_callback", 262144}, {"tail_self", 4194304}, {"tail_mutual", 4194304},
-	{"call_fib", 4194304}, {"call_mutual", 4194304}, {"crypto_am3", 4194304},
+	{"call_fib", 4194304}, {"call_mutual", 4194304}, {"call_cross", 2097152}, {"crypto_am3", 4194304},
 	{"method_call", 2097152}, {"method_call_leaf", 4194304}, {"loop_sum", 8388608},
 	{"loop_arith", 2097152}, {"loop_locals", 4194304}, {"loop_elements", 8388608},
 	{"loop_props", 8388608}, {"loop_int32", 2097152},
@@ -200,6 +201,9 @@ var microWork = []struct {
 	{"forward_poly", 524288}, {"forward_loop", 131072}, {"forward_construct", 524288},
 	{"forward_array", 524288},
 	{"class_new", 1048576}, {"subclass_new", 524288}, {"subclass_new2", 524288}, {"instanceof_class", 2097152},
+	{"asm_adler", 4194304}, {"asm_crc32", 4194304}, {"asm_copy", 4194304}, {"asm_fnv", 2097152},
+	{"asm_dot", 2097152}, {"asm_fib", 4194304}, {"asm_call_leaf", 2097152}, {"asm_switch", 4194304},
+	{"asm_table", 2097152},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

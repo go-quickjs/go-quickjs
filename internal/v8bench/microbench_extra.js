@@ -1025,6 +1025,24 @@ function call_mutual(n)
     return n;
 }
 
+/* a loop calling a function of two ints with asm.js's coercions, timed a
+   call: func_call's shape, as an asm.js module's exports are called */
+function cross_add(a, b)
+{
+    a = a | 0;
+    b = b | 0;
+    return (a + b) | 0;
+}
+
+function call_cross(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s = cross_add(s, j);
+    global_res = s;
+    return n;
+}
+
 /* a method whose body has a loop, which it does not enter, so that it is
    called with a frame of its own, and a method that only returns its
    argument. The loop makes a call, so that the JIT does not inline the
@@ -4850,6 +4868,324 @@ function instanceof_class(n)
         if (objs[j & 3] instanceof ExtraBox)
             s++;
     }
+    global_res = s;
+    return n;
+}
+
+/* asm.js: a module of the kernels Emscripten's output is made of, over
+   one heap of 64 KiB -- bytes from 0, a copy's destination from 0x4000,
+   a CRC table at 0x8000, two arrays of doubles at 0xA000 and 0xB000 --
+   made once and linked with the global object as its stdlib */
+function ExtraAsmKernels(stdlib, foreign, heap)
+{
+    "use asm";
+    var H8 = new stdlib.Uint8Array(heap);
+    var H32 = new stdlib.Int32Array(heap);
+    var F64 = new stdlib.Float64Array(heap);
+    var imul = stdlib.Math.imul;
+    var count = 0;
+
+    function fill(n)
+    {
+        n = n | 0;
+        var i = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            H8[i] = (imul(i, 31) | 0) + 7;
+    }
+
+    function fillF(p, n)
+    {
+        p = p | 0;
+        n = n | 0;
+        var i = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            F64[(p + (i << 3)) >> 3] = +(i | 0) * 0.5 + 1.0;
+    }
+
+    function crcInit()
+    {
+        var i = 0, c = 0, k = 0;
+        for (i = 0; (i | 0) < 256; i = (i + 1) | 0) {
+            c = i;
+            for (k = 0; (k | 0) < 8; k = (k + 1) | 0) {
+                if (c & 1)
+                    c = (c >>> 1) ^ 0xEDB88320;
+                else
+                    c = c >>> 1;
+            }
+            H32[(0x8000 + (i << 2)) >> 2] = c;
+        }
+    }
+
+    function adler(p, n)
+    {
+        p = p | 0;
+        n = n | 0;
+        var a = 1, b = 0, end = 0;
+        end = (p + n) | 0;
+        while ((p | 0) < (end | 0)) {
+            a = (a + (H8[p] | 0)) | 0;
+            b = (b + a) | 0;
+            p = (p + 1) | 0;
+        }
+        a = ((a >>> 0) % 65521) | 0;
+        b = ((b >>> 0) % 65521) | 0;
+        return ((b << 16) | a) | 0;
+    }
+
+    function crc(p, n)
+    {
+        p = p | 0;
+        n = n | 0;
+        var c = -1, end = 0;
+        end = (p + n) | 0;
+        while ((p | 0) < (end | 0)) {
+            c = H32[(0x8000 + (((c ^ (H8[p] | 0)) & 255) << 2)) >> 2] ^ (c >>> 8);
+            p = (p + 1) | 0;
+        }
+        return ~c | 0;
+    }
+
+    function copy(dst, src, n)
+    {
+        dst = dst | 0;
+        src = src | 0;
+        n = n | 0;
+        var end = 0;
+        end = (src + n) | 0;
+        while ((src | 0) < (end | 0)) {
+            H32[dst >> 2] = H32[src >> 2];
+            dst = (dst + 4) | 0;
+            src = (src + 4) | 0;
+        }
+    }
+
+    function fnv(p, n)
+    {
+        p = p | 0;
+        n = n | 0;
+        var h = -2128831035, end = 0;
+        end = (p + n) | 0;
+        while ((p | 0) < (end | 0)) {
+            h = imul(h ^ (H8[p] | 0), 16777619) | 0;
+            p = (p + 1) | 0;
+        }
+        return h | 0;
+    }
+
+    function dot(p, q, n)
+    {
+        p = p | 0;
+        q = q | 0;
+        n = n | 0;
+        var s = 0.0, i = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            s = s + F64[(p + (i << 3)) >> 3] * F64[(q + (i << 3)) >> 3];
+        return +s;
+    }
+
+    function fib(k)
+    {
+        k = k | 0;
+        if ((k | 0) < 2)
+            return k | 0;
+        return ((fib((k - 1) | 0) | 0) + (fib((k - 2) | 0) | 0)) | 0;
+    }
+
+    function add2(a, b)
+    {
+        a = a | 0;
+        b = b | 0;
+        return (a + b) | 0;
+    }
+
+    function callLeaf(n)
+    {
+        n = n | 0;
+        var i = 0, s = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            s = add2(s, i) | 0;
+        return s | 0;
+    }
+
+    function sw(n)
+    {
+        n = n | 0;
+        var i = 0, s = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0) {
+            switch (i & 7) {
+            case 0:
+                s = (s + 1) | 0;
+                break;
+            case 1:
+                s = s ^ i;
+                break;
+            case 2:
+                s = (s - i) | 0;
+                break;
+            case 3:
+                s = s << 1;
+                break;
+            case 4:
+                s = s >> 1;
+                break;
+            case 5:
+                s = (s + 3) | 0;
+                break;
+            default:
+                s = s | 1;
+            }
+        }
+        return s | 0;
+    }
+
+    function op0(a, b)
+    {
+        a = a | 0;
+        b = b | 0;
+        return (a + b) | 0;
+    }
+
+    function op1(a, b)
+    {
+        a = a | 0;
+        b = b | 0;
+        return (a - b) | 0;
+    }
+
+    function op2(a, b)
+    {
+        a = a | 0;
+        b = b | 0;
+        return (a ^ b) | 0;
+    }
+
+    function op3(a, b)
+    {
+        a = a | 0;
+        b = b | 0;
+        return imul(a, b) | 0;
+    }
+
+    function table(n)
+    {
+        n = n | 0;
+        var i = 0, s = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0) {
+            s = ops[i & 3](s, i) | 0;
+            count = (count + 1) | 0;
+        }
+        return s | 0;
+    }
+
+    var ops = [op0, op1, op2, op3];
+
+    return { fill: fill, fillF: fillF, crcInit: crcInit, adler: adler, crc: crc, copy: copy, fnv: fnv,
+             dot: dot, fib: fib, callLeaf: callLeaf, sw: sw, table: table };
+}
+
+var extra_asm = null;
+
+/* the module's instance, made and its heap filled at its first use */
+function extra_asm_kernels()
+{
+    if (extra_asm === null) {
+        extra_asm = ExtraAsmKernels(globalThis, {}, new ArrayBuffer(0x10000));
+        extra_asm.fill(0x4000);
+        extra_asm.crcInit();
+        extra_asm.fillF(0xA000, 512);
+        extra_asm.fillF(0xB000, 512);
+    }
+    return extra_asm;
+}
+
+/* adler-32's sums over 4 KiB, timed a byte */
+function asm_adler(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 4096)
+        s = (s + m.adler(0, 4096)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* CRC-32 by its table over 4 KiB, timed a byte */
+function asm_crc32(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 4096)
+        s = (s + m.crc(0, 4096)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a copy of 4 KiB by words, timed a word */
+function asm_copy(n)
+{
+    var m = extra_asm_kernels(), j;
+    for (j = 0; j < n; j += 1024)
+        m.copy(0x4000, 0, 4096);
+    global_res = m.adler(0x4000, 4096);
+    return n;
+}
+
+/* FNV-1a by Math.imul over 4 KiB, timed a byte */
+function asm_fnv(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 4096)
+        s = (s + m.fnv(0, 4096)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a dot product of two arrays of 512 doubles, timed a term */
+function asm_dot(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 512)
+        s += m.dot(0xA000, 0xB000, 512);
+    global_res = s;
+    return n;
+}
+
+/* fib(10) by asm.js's recursion, timed a call */
+function asm_fib(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 177)
+        s = (s + m.fib(10)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a loop calling a function of two ints, timed a call */
+function asm_call_leaf(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 1024)
+        s = (s + m.callLeaf(1024)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* a switch over eight cases, timed a turn */
+function asm_switch(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 1024)
+        s = (s + m.sw(1024)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* calls through a function table of four, and a module global's
+   update, timed a call */
+function asm_table(n)
+{
+    var m = extra_asm_kernels(), j, s = 0;
+    for (j = 0; j < n; j += 1024)
+        s = (s + m.table(1024)) | 0;
     global_res = s;
     return n;
 }

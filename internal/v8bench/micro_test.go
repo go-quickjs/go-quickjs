@@ -236,3 +236,36 @@ func TestCarriedMicrobenchmarks(t *testing.T) {
 		})
 	}
 }
+
+// TestAsmMicrobenchmarks pins the asm.js module's kernels and call_cross
+// to what QuickJS and Node compute for them, whichever form runs them.
+func TestAsmMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		res  string
+	}{
+		{"asm_adler", "961802452"},
+		{"asm_crc32", "-1170694714"},
+		{"asm_copy", "480901226"},
+		{"asm_fnv", "-792937590"},
+		{"asm_dot", "180534272"},
+		{"asm_fib", "2585"},
+		{"asm_call_leaf", "4190208"},
+		{"asm_switch", "-516120"},
+		{"asm_table", "1550913536"},
+		{"call_cross", "33550336"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := rt.Eval(fmt.Sprintf("%s(8192) + ':' + global_res", tc.name))
+			want := "8192:" + tc.res
+			if err != nil || v.String() != want {
+				t.Fatalf("got %v, %v; want %q", v, err, want)
+			}
+		})
+	}
+}
