@@ -83,3 +83,29 @@ func TestJITBackgroundWaitingInstallIsDue(t *testing.T) {
 		t.Errorf("pending %v, reoptimized %d, discarded %d: want the waiting compile installed", s.regPendingJobs[e.key] != nil, s.reoptimized-reoptimized, s.bgDiscarded)
 	}
 }
+
+// A native caller's call Go makes of a callee whose compile in the
+// background is done asks for its code (jitRegNativeCallee), and that ask
+// installs it, as a call entering the callee is a check: native callers'
+// calls of a callee Go makes enter none of its code, and AWFY's
+// DeltaBlue called markUnsatisfied through Go 11,000 times with its
+// compile done, between the checks that installed it.
+func TestJITBackgroundCalleeAskInstalls(t *testing.T) {
+	r := jitBackgroundRuntime(t)
+	if _, err := r.Run(compileForTest(t, `function sum(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := jitGlobalClosureForTest(r, "sum")
+	jitCallForTest(t, r, `sum(10)`, 45)
+	j := jitRegJobForTest(t, r, cl)
+	r.jitRegSubmit(j)
+	<-j.done
+	if r.jit.regPendingJobs[j.key] != j || jitHasCodeOfForTest(r, cl) {
+		t.Fatalf("pending %v, code %v: want the compile done, not installed", r.jit.regPendingJobs[j.key] == j, jitHasCodeOfForTest(r, cl))
+	}
+	e := r.jitRegForAs(cl, r.regOf(cl), true)
+	if e == nil || e.code == nil || r.jit.regPendingJobs[j.key] != nil || jitRegOfForTest(r, cl) != e {
+		t.Fatalf("asked: entry %v, pending %v: want the compile installed and its code given", e != nil && e.code != nil, r.jit.regPendingJobs[j.key] != nil)
+	}
+	jitCallForTest(t, r, `sum(100)`, 4950)
+}

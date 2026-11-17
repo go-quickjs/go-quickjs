@@ -199,9 +199,21 @@ func (r *Runtime) jitRegForAs(cl *closure, c *regCode, callee bool) *jitRegEntry
 		return nil
 	}
 	key := r.jitRegKeyOf(cl)
-	if s.regPendingJobs[key] != nil {
+	if j := s.regPendingJobs[key]; j != nil {
 		// Being compiled in the background (jitRegSubmit): installed at
-		// a later check.
+		// a later check -- this ask one where the compile is done, as a
+		// call that enters the function is, outside QJS_JIT_STRESS's
+		// schedule of checks. Native callers' calls of a callee Go makes
+		// ask here and enter no code of the callee's: Are We Fast Yet's
+		// DeltaBlue called markUnsatisfied through Go 11,000 times with
+		// its compile done, between the checks that installed it.
+		if j.state.Load() != jitJobDone || r.jitStress.background {
+			return nil
+		}
+		r.jitDrain()
+		if e := s.regCache[key]; e != nil && e.code != nil && !e.invalid && s.regPendingJobs[key] == nil {
+			return e
+		}
 		return nil
 	}
 	if e := s.regCache[key]; e != nil {

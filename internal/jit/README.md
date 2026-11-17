@@ -698,9 +698,10 @@ interfaces it would; a worker builds, optimizes and compiles from it
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile
-pending (`jitRegEnter`): a compile handed to the workers marks its
-function's closure (`closureCode`'s `jitEnters`) so that its calls go to the
-JIT, and a call of code compiled again in the background installs the
+pending (`jitRegEnter`), or a native caller's ask for a callee's code whose
+compile is done (`jitRegForAs`, outside `QJS_JIT_STRESS`'s schedule): a
+compile handed to the workers marks its function's closure (`closureCode`'s
+`jitEnters`) so that its calls go to the JIT, and a call of code compiled again in the background installs the
 replacement as one of its first code does -- putting back what the questions
 appended to the feedback's lists (`replay`) and placing the code as the
 compile on the spot (`jitRegPlace`). A question the snapshot was not asked
