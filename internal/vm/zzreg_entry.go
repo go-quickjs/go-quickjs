@@ -167,13 +167,14 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 		// A short straight body of numbers and upvalues is run as its
 		// register code without a frame (regLeafRun).
 		c.leaf, c.leafOps = regLeafCode, regLeafOps(fn, rc)
-		c.leafBinary = regBinaryLeaf(c)
+		c.leafNative = regBinaryLeaf(c)
 	case rc.Leaf == bytecode.LeafPure && !rc.PureCalls && !pureByTree(rc):
 		// A longer body runs faster as code than in the frameless
 		// evaluator (pureByTree).
 		c.leaf = regLeafPure
 	case rc.Leaf != bytecode.LeafNone && rc.Leaf != bytecode.LeafPure:
 		c.leaf = regLeafThis
+		c.leafNative = regGetterLeaf(rc)
 	}
 	if len(rc.Code) > 0 && !c.suspends {
 		// A body that returns a parameter, a constant or nothing first

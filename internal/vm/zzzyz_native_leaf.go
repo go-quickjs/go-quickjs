@@ -48,3 +48,20 @@ func regBinaryOperand(ops []regLeafOp, reg uint16, params int32) (uint32, bool) 
 	}
 	return uint32(reg - 2), reg >= 2 && int32(reg)-2 < params
 }
+
+// regGetterLeaf describes the property cache and optional parameter of a
+// this getter. RGetProp distinguishes it from a numeric binary leaf; the
+// next bytes hold its LeafKind, the cache site of its get_prop and, for
+// LeafGetThisIndex, the index of the parameter get_index reads.
+func regGetterLeaf(rc *bytecode.RegCode) uint64 {
+	switch rc.Leaf {
+	case bytecode.LeafGetThis, bytecode.LeafGetThisLength, bytecode.LeafGetThisIndex:
+		d := uint64(bytecode.RGetProp) | uint64(rc.Leaf)<<8 | uint64(rc.Code[0].C())<<16
+		if rc.Leaf == bytecode.LeafGetThisIndex {
+			// leafOf has checked that it is a parameter's register.
+			d |= uint64(rc.Code[1].C()-2) << 32
+		}
+		return d
+	}
+	return 0
+}

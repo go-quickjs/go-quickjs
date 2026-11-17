@@ -241,7 +241,11 @@ func (g *nativeGen) call() {
 	a.OpImm(Cmp, R9, regLeafCode, false)
 	a.Jcc(CondE, upLeaf)
 	a.OpImm(Cmp, R9, regLeafArg, false)
-	a.Jcc(CondB, notLeaf)
+	thisLeaf := notLeaf
+	if g.v == plain {
+		thisLeaf = upLeaf
+	}
+	a.Jcc(CondB, thisLeaf)
 	a.Load(RDX, R8, offRCLeafVal+8)
 	a.Load(RCX, R8, offRCLeafVal)
 	a.Jcc(CondNE, leafStore)

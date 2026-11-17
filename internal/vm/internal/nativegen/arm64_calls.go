@@ -221,7 +221,11 @@ func (g *armGen) call() {
 	a.CmpImm(r9, int64(regLeafCode), false)
 	a.BCond(EQ, upLeaf)
 	a.CmpImm(r9, int64(regLeafArg), false)
-	a.BCond(LO, notLeaf)
+	thisLeaf := notLeaf
+	if g.v == plain {
+		thisLeaf = upLeaf
+	}
+	a.BCond(LO, thisLeaf)
 	a.Load(rD, r8, offRCLeafVal+8)
 	a.Load(rC, r8, offRCLeafVal)
 	a.BCond(NE, leafStore)

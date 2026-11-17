@@ -815,7 +815,7 @@ skipped another's check.
 
 The plain native call handler also answers a leaf returning one numeric
 addition, subtraction or multiplication of parameters or captured bindings.
-Its register code records the operation and its two sources in `leafBinary`;
+Its register code records the operation and its two sources in `leafNative`;
 the handler reads them directly from the call window or closure, without
 making a frame. Missing arguments and non-numbers take the ordinary call
 path before a value is stored. Its result uses the ordinary native store,
@@ -823,6 +823,15 @@ including the write barrier while the collector marks. These helpers follow
 the existing native handlers so that adding them moves none of those
 handlers. The JIT's feedback dispatcher retains its ordinary call path and
 counts the callee for compilation.
+
+The same descriptor also records getters returning `this.k`, `this.k.length`
+or `this.k[p]`. The native helper probes the callee's own-property cache
+before reading the field. It answers lengths of dense arrays and numeric
+indices naming present dense elements; other cases enter the ordinary
+frame, with the call window untouched. A cached replacement for the call's
+`this`, an accessor, an inherited property, a hole or a non-numeric index
+also takes that path. Pointer results use the native write barrier. The
+helpers sit after the handlers and preserve every handler's offset.
 
 **Built-ins.** A built-in of the call's realm is a kind of the site's cache
 (`regCallNative`), called with the window's arguments as its slice, without
