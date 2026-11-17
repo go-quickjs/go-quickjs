@@ -1789,6 +1789,11 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 			return r.jitRegLeaveTo(f, c, e, rpc, loop), Undefined, false, nil
 		}
 		next, pc, v, done, err, native := r.jitRegLeft(f, c, e, wb, ctx, ret)
+		// The run's hold on e let go of (jitRegStretch): code the cache let
+		// go of while it was in it, closed now if no other run is; what
+		// goes on goes on in its replacement.
+		e.runs--
+		r.jit.regClose(e)
 		if !native {
 			if !done && err == nil {
 				pc = r.jitRegLeaveTo(f, c, e, pc, loop)
@@ -2132,7 +2137,14 @@ func jitRegNoEntryWhy(f *frame, c *regCode, e *jitRegEntry, wb, ipc int) string 
 // a guard of which failed meanwhile, a throw -- the call's state is
 // written to the frame, its exit a host exit at the call, which Go
 // finishes with the callee's answer (regPending). ok is false where it did
-// not run: no context, or the code closed.
+// not run: no context, or the code closed. Where ok, the run still holds e
+// (its runs), which its caller lets go of once it has made of the exit what
+// it needs (jitRegGoOnAt): an exit's frame names what e's code did not make
+// -- the closures of its feedback's made, the objects whose homes its frame
+// slots are -- which jitRegLeft makes from e. Let go of here, code the
+// cache had dropped during the run was closed before it, its feedback gone,
+// and a callback it had not made was handed to the call Go ran as its
+// template: TypedArray.prototype.map threw that it was no function.
 func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, at int, resume uintptr, loop bool) (ctx *abi.Context, ret Value, ok bool) {
 	s := r.jit
 	idx := s.ctxTop
@@ -2337,12 +2349,11 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 		// is closed, if nothing else uses it (regClose).
 		s.jitRegCloseRetired()
 	}
-	e.runs--
-	closed := e.code == nil
-	// Code the cache let go of while this run was in it, closed now if no
-	// other is: what goes on goes on in its replacement (jitRegGoOnAt).
-	s.regClose(e)
-	if closed || err != nil {
+	if closed := e.code == nil; closed || err != nil {
+		// Code the cache let go of while this run was in it, closed now if
+		// no other is.
+		e.runs--
+		s.regClose(e)
 		if s.reporting {
 			s.regEndWhy = "code closed"
 			if err != nil {
