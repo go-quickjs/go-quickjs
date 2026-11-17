@@ -945,10 +945,12 @@ func rhTGSetF(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int
 // bytes it reads as of the runtime's typedEpoch -- a buffer detached or
 // transferred has none, every access out of it.
 type asmHeap struct {
-	view *typedArrayData
-	size uintptr
+	// base and len first: the abi.HeapCell native code reads
+	// (zzjit_zregtyped.go).
 	base unsafe.Pointer
 	len  uintptr
+	view *typedArrayData
+	size uintptr
 	// epoch is the runtime's typedEpoch base and len are as of, plus one:
 	// 0 is never current.
 	epoch uint64

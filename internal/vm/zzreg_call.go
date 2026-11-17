@@ -292,6 +292,11 @@ func (r *Runtime) regCallKind(fd *funcData, method bool, caller *regCode) (cl *c
 	if cl.regTyped != nil || !cl.asmTried {
 		if t := r.regTypedOf(cl); t != nil && (caller != nil && caller.typed || rc.leaf == regLeafNone) {
 			rc = t
+			if tw := t.typedExt().twin; tw != nil {
+				// A runtime with the JIT's: the closure whose code is the
+				// typed code (asmTwin), its frames' and its native code's.
+				cl = tw
+			}
 		}
 	}
 	return cl, rc, kind, this, true

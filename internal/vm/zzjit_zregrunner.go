@@ -219,6 +219,11 @@ func regWholeTail(w bytecode.RInstr) bool {
 // the interpreter does (regWholeTail).
 func (r *Runtime) regWhole(f *frame, c *regCode, wb, rpc int) (next int, ok bool, err error) {
 	w := regAt(c.code, rpc)
+	if c.typed {
+		// Typed code's, by the typed table (asmTwin), whose values of
+		// the cold range are its own operations.
+		return r.regWholeTyped(f, c, wb, rpc, w)
+	}
 	if !regWholeRuns(w) && !regWholeTail(w) && !r.regAwaitsInPlace(f, w, wb) {
 		return 0, false, nil
 	}
@@ -390,7 +395,7 @@ func (r *Runtime) RegLowerCall(fnv Value, args []Value, budget uint64) RegLowerR
 			res.Resumed = "budget"
 		}
 		x.store(slots)
-		return r.runReg(f, c, int(exit.State.PC))
+		return r.runRegFor(f, c, int(exit.State.PC))
 	})
 	return res
 }

@@ -1576,7 +1576,12 @@ func (r *Runtime) jitRegApplyRecords(f *frame, p *ir.Program, wb int, ctx *abi.C
 		}
 	}
 	for i, rec := range ctx.Record[:n] {
-		*r.jitRegSlot(f, p, wb, int(rec.Slot&^flags)) = src[i]
+		slot := int(rec.Slot &^ flags)
+		if slot < len(p.Kinds) && p.Kinds[slot] != abi.SlotValue {
+			// Typed code's raw slot, written raw (abi.RawWord).
+			src[i] = Value{num: math.Float64frombits(abi.RawWord(p.Kinds[slot], math.Float64bits(src[i].num)))}
+		}
+		*r.jitRegSlot(f, p, wb, slot) = src[i]
 	}
 	ctx.Records = 0
 }
@@ -1710,7 +1715,7 @@ func (r *Runtime) jitRegRun(f *frame, c *regCode, e *jitRegEntry, wb, rpc int) (
 	case done:
 		return v, nil
 	}
-	return r.runReg(f, c, pc)
+	return r.runRegFor(f, c, pc)
 }
 
 // jitRegGoOn runs f, running c with its window at wb, in e's code from
@@ -2420,6 +2425,9 @@ func (e *jitRegEntry) isLoop(rpc int) bool {
 // entering the code at its loops.
 func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges int, osr bool) {
 	life := e.life
+	if life.typed {
+		return
+	}
 	st := &life.ssaStats
 	work := uint64(0)
 	if back := edges - (r.backEdges - r.jit.pollCredit); back > 0 {
@@ -2469,6 +2477,9 @@ func (r *Runtime) jitRegRunWork(run *jitRegRun) int64 {
 // the run to leave once the call is made (jitRegRun's leave).
 func (r *Runtime) jitRegRunGoProfit(e *jitRegEntry, run *jitRegRun, rpc int) bool {
 	life := e.life
+	if life.typed {
+		return false
+	}
 	st := &life.ssaStats
 	edges := r.backEdges - r.jit.pollCredit
 	if back := run.edges - edges; back > 0 {
@@ -2514,7 +2525,7 @@ type jitRegGoMark struct {
 func (r *Runtime) jitRegCalleeProfit(e *jitRegEntry, rpc int) {
 	s := r.jit
 	life := e.life
-	if life == nil || e.invalid || e.code == nil {
+	if life == nil || e.invalid || e.code == nil || life.typed {
 		return
 	}
 	st := &life.ssaStats
@@ -3971,7 +3982,7 @@ func (r *Runtime) RegNativeCall(fnv Value, args []Value, osr bool) RegNativeResu
 			x.store(slots)
 			if exit.Kind != ir.BudgetExit {
 				// Left for good: runReg from its pc.
-				return r.runReg(f, c, int(at))
+				return r.runRegFor(f, c, int(at))
 			}
 			if _, ok := e.loopEntry(int(at)); ok {
 				if seen[at] {

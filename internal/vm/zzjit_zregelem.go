@@ -93,6 +93,10 @@ func (s *jitState) dropRegLowering(key jitKey, l *jitLowering) {
 func jitRegLowerWith(rc *bytecode.RegCode, fn *bytecode.Function, kind jitLowerKind, h jitcompile.Hints) (*ir.Program, error) {
 	var p *ir.Program
 	var err error
+	if rc.Typed {
+		// Typed code's, a twin's (asmTwin): one lowering for every kind.
+		return jitTypedLower(rc, fn)
+	}
 	switch kind {
 	case jitLowerInline:
 		p, err = jitcompile.LowerRegInlineWith(rc, fn, h)

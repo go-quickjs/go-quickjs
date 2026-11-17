@@ -113,6 +113,16 @@ func (r *Runtime) framePC(f *frame, i int) uint32 {
 	return pc
 }
 
+// runRegFor runs frame f's code c from start by the table of its kind:
+// typed code's or the ordinary code's -- for what goes on in the
+// interpreter after native code, which runs both (asmTwin).
+func (r *Runtime) runRegFor(f *frame, c *regCode, start int) (Value, error) {
+	if c.typed {
+		return r.runRegTyped(f, c, start)
+	}
+	return r.runReg(f, c, start)
+}
+
 // regEnterTyped is regEnter's state for frame f running typed code c,
 // from the typed states' list.
 func (r *Runtime) regEnterTyped(f *frame, c *regCode) *regState {
@@ -287,7 +297,12 @@ func rhTCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int
 				nf.regKind = regFrameCall
 				var v Value
 				var err error
-				v, err = r.runRegTyped(nf, rc, 0)
+				if jitBuilt && cl.jitEnters {
+					// Native code made from the typed code (asmTwin).
+					v, err = r.jitRegEnter(nf, cl, rc, base, 0)
+				} else {
+					v, err = r.runRegTyped(nf, rc, 0)
+				}
 				nf.regKind = 0
 				if rc.ncap != 0 && len(nf.openUpvalues) != 0 {
 					regCloseUpvalues(nf)
@@ -355,7 +370,13 @@ func (r *Runtime) regEnterWTyped(o *Object, cl *closure, rc *regCode, base, argc
 	}
 	f.newTarget = Undefined
 	f.regKind = regFrameEnter
-	v, err := r.runRegTyped(f, rc, 0)
+	var v Value
+	var err error
+	if jitBuilt && cl.jitEnters {
+		v, err = r.jitRegEnter(f, cl, rc, base, 0)
+	} else {
+		v, err = r.runRegTyped(f, rc, 0)
+	}
 	f.regKind = 0
 	if len(f.openUpvalues) != 0 {
 		regCloseUpvalues(f)
@@ -376,6 +397,10 @@ type regTypedCode struct {
 	// closure of the template enters.
 	heap  *asmHeap
 	asmCl *closure
+	// twin is, in a runtime with the JIT, asmCl's twin whose register
+	// code is this typed code (asmTwin): what typed call sites enter and
+	// the JIT compiles; nil elsewhere.
+	twin *closure
 	// floats is the first of rc.Floats, which TFConst's native handler
 	// reads, or nil where the code has none.
 	floats unsafe.Pointer

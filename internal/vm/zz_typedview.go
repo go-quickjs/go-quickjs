@@ -35,4 +35,16 @@ func (r *Runtime) cacheView(t *typedArrayData) *typedArrayData {
 // that it was detached: every view's copy of them (cacheView) is stale.
 func (r *Runtime) bufferChanged() {
 	r.typedEpoch++
+	if r.asmHeaps != nil {
+		r.asmHeapsAt()
+	}
+}
+
+// asmHeapsAt makes the heaps native code reads current (asmHeapKeep).
+//
+//go:noinline
+func (r *Runtime) asmHeapsAt() {
+	for _, h := range r.asmHeaps {
+		h.at(r)
+	}
 }

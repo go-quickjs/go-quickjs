@@ -291,7 +291,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			var next int
 			next, _, err = r.regFinishCall(f, x.cl.reg, x.wb, x.pc, v, err)
 			if err == nil {
-				v, err = r.runReg(f, x.cl.reg, next)
+				v, err = r.runRegFor(f, x.cl.reg, next)
 			}
 		}
 		if err == errRegRestart {
@@ -457,6 +457,6 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		s.regEndWhy = "inlined callee left"
 		s.noteRegEnded(c, pc)
 	}
-	v, err = r.runReg(f, c, pc)
+	v, err = r.runRegFor(f, c, pc)
 	return v, err, learned
 }

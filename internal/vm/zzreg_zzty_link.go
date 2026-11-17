@@ -77,7 +77,7 @@ func init() {
 // the code takes them for.
 func (r *Runtime) asmLink(cl *closure) *regCode {
 	g := cl.reg
-	if !regTypedOn || r.jitOn() || g == nil || !g.wide || !cl.fn.HasRegTyped() {
+	if !regTypedOn || g == nil || !g.wide || !cl.fn.HasRegTyped() {
 		return nil
 	}
 	rc := cl.fn.RegTypedCode()
@@ -140,6 +140,10 @@ func (r *Runtime) asmLink(cl *closure) *regCode {
 		calls := make([]regCallCache, rc.CallSites)
 		copy(calls, cl.regCalls)
 		cl.regCalls = calls
+	}
+	if jitBuilt && r.jitOn() {
+		// Compiled natively, from the typed code (jitTypedLinked).
+		r.jitTypedLinked(cl, t)
 	}
 	return t
 }

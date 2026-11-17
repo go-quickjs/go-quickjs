@@ -36,6 +36,9 @@ func (*Runtime) recordJITSubstrings()             {}
 
 func (*Runtime) jitOn() bool { return false }
 
+// Typed code has no native code (zzjit_zregtyped.go).
+func (*Runtime) jitTypedLinked(*closure, *regCode) {}
+
 // The register tier's hooks (zzjit_zregtier.go), which jitBuilt's false
 // compiles out.
 func (*Runtime) jitRegResumed(*closure, *regCode) {}

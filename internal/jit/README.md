@@ -3217,14 +3217,21 @@ script, its positions, which its own register code, the typed code, gives
 closure's, and enters the twin's code (`jitTypedTwinOf`).
 
 **Compiled at the link.** The link of a module's closure
-(`jitTypedLinked`) links the module's functions the closure calls, then
+(`jitTypedLinked`) links the module's functions the closure calls --
+those its function tables hold among them -- then
 asks for its twin's code as any compile asks (`jitRegFor`): in the
 foreground, or in the background where the runtime compiles there, the
 typed interpreter running the function until its code installs; the
 compile asks the cache for room as every compile does, and one with no room
 or refused leaves the function to the typed interpreter. Typed code's state
 is marked `typed`: no stretch, call of Go or exit judges it slow, as none
-of them is a speculation's cost.
+of them is a speculation's cost. A call through a function table (a call
+whose function `ttab_get` read) has the table's functions as its targets
+from the first compile (`regTableTargets`), each checked by its object as
+a learned target is: validation fixes the table, and its functions are
+linked with the caller. Learned a call of Go at a time, each a compile
+again, the micro-benchmarks' calls through a table of four had been Go's
+for most of a run.
 
 **The lowering** (`compile.LowerTyped`, beside `LowerReg`). A register is a
 slot, as `LowerReg` has it, and the ordinary operations typed code holds

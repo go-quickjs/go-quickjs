@@ -63,13 +63,15 @@ const (
 	snapClosure
 	snapCellsPool
 	snapPureBody
+	snapHeap
+	snapRawMath
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{false, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false}
+var jitSnapAtPC = [...]bool{false, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"VirtualRoot", "BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody"}
+var jitSnapNames = [...]string{"VirtualRoot", "BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
@@ -603,6 +605,25 @@ func (q *jitRegSnapshot) PureBody() (r0 bool) {
 	return r0
 }
 
+func (q *jitRegSnapshot) Heap() (r0 uintptr) {
+	a := q.get(snapHeap, 0)
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	return r0
+}
+
+func (q *jitRegSnapshot) RawMath(pc int) (r0 ssa.Intrinsic, r1 bool) {
+	a := q.get(snapRawMath, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.Intrinsic)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
 // askOnceReg asks fb the questions of no argument.
 func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 	{
@@ -676,6 +697,12 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		r0 := fb.PureBody()
 		s.end(fb.fb, before, snapPureBody, 0)
 		s.put(snapPureBody, 0, r0)
+	}
+	{
+		before := s.begin(fb.fb)
+		r0 := fb.Heap()
+		s.end(fb.fb, before, snapHeap, 0)
+		s.put(snapHeap, 0, r0)
 	}
 }
 
@@ -1052,6 +1079,15 @@ func jitRegSnapAskClosure(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskRawMath(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.RawMath(pc)
+	s.end(fb.fb, before, snapRawMath, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapRawMath, int64(pc), r0, r1)
+	}
+}
+
 // jitRegSnapAskers are the register askers by method, nil for one the
 // register feedback has not or of another argument.
 var jitRegSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback, pc int)
@@ -1112,7 +1148,9 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapBigString |
 	1<<snapClosure |
 	1<<snapCellsPool |
-	1<<snapPureBody
+	1<<snapPureBody |
+	1<<snapHeap |
+	1<<snapRawMath
 
 // The register askers are set at init, as jitSnapAskers are.
 func init() {
@@ -1157,5 +1195,6 @@ func init() {
 		snapParseInt:       jitRegSnapAskParseInt,
 		snapBigString:      jitRegSnapAskBigString,
 		snapClosure:        jitRegSnapAskClosure,
+		snapRawMath:        jitRegSnapAskRawMath,
 	}
 }

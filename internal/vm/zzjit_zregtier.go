@@ -1019,7 +1019,7 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 		if cc.jitResumeSkip != 0 {
 			// One of the resumptions counted at the last look (below).
 			cc.jitResumeSkip--
-			return r.runReg(f, c, start)
+			return r.runRegFor(f, c, start)
 		}
 		if e != nil && e.life.entrySlow && !e.invalid && !e.life.reopt {
 			// A resumption of a generator's or an async function's code
@@ -1032,7 +1032,7 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 			cc.jitResumeSkip = jitSSAProbe
 			r.jit.slowResumes++
 			if r.jitRegRetrySlow(e); e.life.entrySlow {
-				return r.runReg(f, c, start)
+				return r.runRegFor(f, c, start)
 			}
 		}
 	}
@@ -1047,7 +1047,7 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 		// compiled again for, which, never entered, would never be compiled
 		// for it (below).
 		if r.jitRegRetrySlow(e); e.life.entrySlow {
-			return r.runReg(f, c, start)
+			return r.runRegFor(f, c, start)
 		}
 	}
 	if e == nil || e.invalid || e.code == nil || !e.cached || !r.jitEnabled {
@@ -1057,13 +1057,13 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 			// call is not -- or no code.
 			cl.closureCode.setJITReg(nil)
 		}
-		return r.runReg(f, c, start)
+		return r.runRegFor(f, c, start)
 	}
 	if !r.jitRegContextFree() {
 		// As deep in native code, through Go, as there are contexts: the
 		// interpreter runs the frame, the code neither entered nor judged
 		// for it.
-		return r.runReg(f, c, start)
+		return r.runRegFor(f, c, start)
 	}
 	if start == 0 {
 		e.life.starts++
@@ -1097,7 +1097,7 @@ func (r *Runtime) jitRegEnter(f *frame, cl *closure, c *regCode, base, start int
 			// Judged slow, its compile again not due yet: the
 			// interpreter's, as above.
 			if r.jitRegRetrySlow(e); e.life.entrySlow {
-				return r.runReg(f, c, start)
+				return r.runRegFor(f, c, start)
 			}
 		}
 	} else if ipc := e.ipc(start); e.code != nil && ipc >= 0 && e.code.HasEntry(ipc) {

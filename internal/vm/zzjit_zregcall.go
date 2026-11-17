@@ -325,6 +325,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 			unfilled = e.callee == nil
 		}
 	}
+	f.regTableTargets(t, pc, w, rpc, argc, method)
 	if unfilled && method && l != nil && argc >= 1 && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc }) {
 		// G.call(x, ...) the interpreter has not made yet, G the binding the
 		// method's read read -- _super.call(this, ...) of a class compiled
@@ -358,6 +359,11 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 				rc := cl.reg
 				if rc == nil {
 					rc = f.fb.r.regOf(cl)
+				}
+				if f.rc.Typed {
+					// Typed code calls the module's functions' typed code,
+					// their twins' (asmTwin), or Go calls them.
+					cl, rc = jitTypedCallee(cl)
 				}
 				if n := t.n; rc != nil {
 					f.regAddTarget(t, pc, argc, method, o, cl, rc, nil, nil, false, false)
@@ -529,6 +535,11 @@ func jitRegSameCode(site ssa.CallSite, cl *closure) bool {
 // regCallThis, regCallObjThis): a leaf's too, which its calls of the
 // interpreter answer without one.
 func jitRegCallKind(e *regCallCache) bool {
+	if e.kind&regCallCross != 0 {
+		// Code of the other kind, typed or ordinary, which Go enters in a
+		// code entry of its own (regCallCross).
+		return false
+	}
 	switch e.kind &^ regCallMarks {
 	case regCallEnter, regCallThis, regCallObjThis:
 		return e.callee != nil && e.cl != nil
@@ -1208,7 +1219,7 @@ func (r *Runtime) jitRegCallable(o *Object, cl *closure, rc *regCode, argc int) 
 // (jitRegCallable, jitRegConstructable).
 func (r *Runtime) jitRegTarget(o *Object, cl *closure, rc *regCode, argc int) bool {
 	fd := o.fn()
-	if fd == nil || fd.closure != cl || fd.bound || cl.realm != r.Realm || rc == nil || rc != cl.reg || !jitRegCalled(cl, rc) ||
+	if fd == nil || fd.closure != cl && !jitTypedTwinOf(fd.closure, cl) || fd.bound || cl.realm != r.Realm || rc == nil || rc != cl.reg || !jitRegCalled(cl, rc) ||
 		cl.fn.HasDirectEval {
 		return false
 	}
@@ -2334,7 +2345,7 @@ func (r *Runtime) jitRegUnwind(idx int) (_ Value, _ error, gen bool) {
 			var done bool
 			pc, v, done, err = r.jitRegGoOnAt(f, l.c, l.e, l.wb, 0, l.ctx, levels[k+1].back)
 			if err == nil && !done {
-				v, err = r.runReg(f, l.c, pc)
+				v, err = r.runRegFor(f, l.c, pc)
 			}
 		default:
 			jit.ExpandCall(c)
@@ -2448,7 +2459,7 @@ func (r *Runtime) jitRegFinishLevel(f *frame, l *jitRegLevel, c *abi.Context) (V
 		pc, v, done, err = r.jitRegGoOn(f, l.c, l.e, l.wb, next)
 	}
 	if err == nil && !done {
-		v, err = r.runReg(f, l.c, pc)
+		v, err = r.runRegFor(f, l.c, pc)
 	}
 	return v, err
 }

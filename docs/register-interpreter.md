@@ -1287,8 +1287,10 @@ not inline (`floor`, `pow`, ...) run in Go, by the engine's own Math.
 
 ### The table and the call path
 
-- **Where T lives.** On the template, as `closureCode.regTyped`, and only
-  in a runtime without the JIT, whose JIT compiles G.
+- **Where T lives.** On the template, as `closureCode.regTyped`. In a
+  runtime with the JIT the linked closure also has a twin whose register
+  code is T, which typed call sites enter and the JIT compiles at the
+  module's link (internal/jit/README.md, "Typed code").
 - **Tables switch only at a code entry.** A call site caches as enterable
   only a callee whose code is of its own kind. `regCallKind` gives a typed
   caller the callee's T, and an ordinary caller T where the callee is no
@@ -1384,7 +1386,9 @@ gives it:
   is materialized as a register frame at its caller's window.
 
 The JIT refuses direct eval, `with`, the debugger's code and far registers
-([Known limits](#known-limits-and-open-work)).
+([Known limits](#known-limits-and-open-work)). Typed code it compiles from
+its kinds, at its module's link and with no speculation, and an exit from
+it resumes the typed table (internal/jit/README.md, "Typed code").
 
 ## The debugger, eval and with
 

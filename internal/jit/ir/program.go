@@ -294,6 +294,9 @@ const (
 	Raw
 )
 
+// LastOp is the last Op: a table by Op has LastOp+1 entries.
+const LastOp = Raw
+
 // RethrowNormal and RethrowReturn are the kinds a normal completion's
 // record, and a return's, have (Rethrow).
 const (

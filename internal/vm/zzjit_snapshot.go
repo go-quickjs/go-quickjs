@@ -323,10 +323,11 @@ var jitSnapOps = map[jitSnapMethod][]ir.Op{
 	snapTypedRead:      {ir.ArrayRead},
 	snapTypedKind:      {ir.ArrayRead, ir.ArrayUpdate, ir.ArrayWrite},
 	snapUpvalueTyped:   {ir.UpvalueRead},
+	snapRawMath:        {ir.Raw},
 }
 
 // jitSnapAsks is jitSnapOps by op: a bit for each method asked there.
-var jitSnapAsks = func() (t [ir.ParamDefault + 1]uint64) {
+var jitSnapAsks = func() (t [ir.LastOp + 1]uint64) {
 	for m, ops := range jitSnapOps {
 		for _, op := range ops {
 			t[op] |= 1 << m

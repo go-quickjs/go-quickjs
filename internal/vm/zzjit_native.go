@@ -679,6 +679,10 @@ type jitEntry struct {
 	// which Go does not enter by on-stack replacement either.
 	entrySlow bool
 	loopSlow  bool
+	// typed marks typed code's (asmTwin), compiled at its module's link
+	// with no speculation: no stretch, call of Go or exit judges it, as
+	// none of them is a speculation's cost (jitRegStretchWork).
+	typed bool
 	// deferred marks a refusal for want of room in the JIT's budget, made at
 	// the cache generation in generation: it is retried once that has moved
 	// on.

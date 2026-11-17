@@ -391,6 +391,9 @@ type Runtime struct {
 	// whose frames a stack trace finds the positions of in the typed
 	// code (typedFrame).
 	typedRuns []typedRun
+	// asmHeaps are the heaps of typed code native code reads, which
+	// bufferChanged keeps current (asmHeapKeep).
+	asmHeaps []*asmHeap
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
