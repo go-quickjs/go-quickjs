@@ -100,10 +100,22 @@ func (r *Runtime) jitTypedLinked(cl *closure, t *regCode) {
 			}
 		}
 	}
-	if s := r.jitState(); !s.unavailable {
+	s := r.jitState()
+	if !s.unavailable {
 		s.regLearnedOf(r.jitRegKeyOf(tw)).typed = true
 	}
-	if e := r.jitRegFor(tw, t); e != nil && e.code != nil && !e.invalid {
+	e := r.jitRegFor(tw, t)
+	if e == nil && !s.unavailable && s.jobsFull() && s.regPendingJobs[r.jitRegKeyOf(tw)] == nil {
+		// The background has no room for it (jitJobsMax), and nothing
+		// asks a typed function to be compiled again: compiled on the
+		// spot. A module's functions, linked at once, had filled it at
+		// its fifth, and the rest ran in the typed interpreter for good --
+		// zlib 2.6 times as long in the background as on the spot.
+		s.onSpot = true
+		e = r.jitRegFor(tw, t)
+		s.onSpot = false
+	}
+	if e != nil && e.code != nil && !e.invalid {
 		// Its calls enter it from now on, as tier-up's (setJITReg); one
 		// compiled in the background installs itself so.
 		tw.closureCode.setJITReg(e)

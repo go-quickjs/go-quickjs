@@ -1157,10 +1157,14 @@ type jitState struct {
 	// compileTime, what the compiles took, and, compiling, the compile
 	// begun at compileFrom; compiling counts the compiles begun within
 	// it.
-	clockFrom, compileFrom   time.Time
-	compileTime              time.Duration
-	compiling                int
-	draining                 bool
+	clockFrom, compileFrom time.Time
+	compileTime            time.Duration
+	compiling              int
+	draining               bool
+	// onSpot, while set, has a runtime that compiles in the background
+	// compile on the spot (jitInBackground): a typed link's compile the
+	// background has no room for (jitTypedLinked).
+	onSpot                   bool
 	bgSubmitted, bgDiscarded uint64
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.

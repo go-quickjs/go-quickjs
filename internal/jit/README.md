@@ -3268,7 +3268,9 @@ closure's, and enters the twin's code (`jitTypedTwinOf`).
 those its function tables hold among them -- then
 asks for its twin's code as any compile asks (`jitRegFor`): in the
 foreground, or in the background where the runtime compiles there, the
-typed interpreter running the function until its code installs; the
+typed interpreter running the function until its code installs -- on the
+spot where the background has no room for another compile (`jitJobsMax`),
+since nothing asks a typed function's code again; the
 compile asks the cache for room as every compile does, and one with no room
 or refused leaves the function to the typed interpreter. Typed code's state
 is marked `typed`: no stretch, call of Go or exit judges it slow, as none

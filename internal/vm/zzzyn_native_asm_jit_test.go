@@ -133,6 +133,56 @@ func TestAsmJITBackground(t *testing.T) {
 	}
 }
 
+// TestAsmJITBackgroundFull links a module of more functions than the
+// background has room for at once (jitJobsMax): the link asks for each
+// function's code, and those the background has no room for are compiled
+// on the spot (jitTypedLinked), as nothing asks a typed function's code
+// again. Past the fourth they had run in the typed interpreter for good:
+// Octane's zlib took 2.6 times as long in the background as on the spot.
+// Every function's answer is exact, and every one is native.
+func TestAsmJITBackgroundFull(t *testing.T) {
+	const src = `
+function Many(stdlib, foreign, heap) {
+    "use asm";
+    function f0(a) { a = a | 0; return (a + 1) | 0; }
+    function f1(a) { a = a | 0; return (a + 2) | 0; }
+    function f2(a) { a = a | 0; return (a + 3) | 0; }
+    function f3(a) { a = a | 0; return (a + 4) | 0; }
+    function f4(a) { a = a | 0; return (a + 5) | 0; }
+    function f5(a) { a = a | 0; return (a + 6) | 0; }
+    function f6(a) { a = a | 0; return (a + 7) | 0; }
+    function f7(a) { a = a | 0; return (a + 8) | 0; }
+    return { f0: f0, f1: f1, f2: f2, f3: f3, f4: f4, f5: f5, f6: f6, f7: f7 };
+}
+var many = Many(globalThis, {}, new ArrayBuffer(65536));
+`
+	names := []string{"f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7"}
+	r := jitBackgroundRuntime(t)
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	for round := range 2 {
+		// The first calls link the module; the second run each function's
+		// code, the compiles in the background installed meanwhile.
+		v, err := r.Run(compileForTest(t, "[many.f0(1), many.f1(1), many.f2(1), many.f3(1), many.f4(1), many.f5(1), many.f6(1), many.f7(1)].join()"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := v.String().Go(), "2,3,4,5,6,7,8,9"; got != want {
+			t.Errorf("round %d: results %s, want %s", round, got, want)
+		}
+		for _, j := range r.jitState().regJobs {
+			<-j.done
+		}
+		r.jitDrain()
+	}
+	for name, how := range asmJITNative(r, "many", names) {
+		if how != "native" {
+			t.Errorf("%s: %s", name, how)
+		}
+	}
+}
+
 // TestAsmJITTableCalls calls through a function table of four from typed
 // code compiled at the link, from script calling it 200 times: the
 // table's functions are its call's targets from that first compile

@@ -53,7 +53,7 @@ const (
 // finds the runtime with as many in the background as it may (jobsFull)
 // waits, asked again at a later check, rather than be made on the spot.
 func (r *Runtime) jitInBackground(fn *bytecode.Function) bool {
-	return (r.jitBackground || r.jitStress.background) && !fn.TopLevel && r.jit != nil && r.jit.compiling == 0 &&
+	return (r.jitBackground || r.jitStress.background) && !fn.TopLevel && r.jit != nil && r.jit.compiling == 0 && !r.jit.onSpot &&
 		mir.Timing == nil && JITCompileRepeat == 0 && jitSSAOptimized == nil
 }
 
