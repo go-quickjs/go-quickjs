@@ -113,6 +113,37 @@ jobs:
       - name: Run tests
         run: go test -count=1 ./...
 
+  # Every target builds, plain and with the JIT's tag, whatever builds it
+  # natively: an int is 32 bits on 386 and arm, where a constant past it
+  # fails the build (the spill slots' heaps had packed a gap and an index
+  # into an int), and a length past an int32 is checked on 386.
+  portability:
+    name: Portability builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build every target, plain and with the JIT
+        run: |
+          set -e
+          for target in linux/386 linux/arm windows/amd64 windows/arm64 darwin/arm64 linux/arm64; do
+            for tags in "" "quickjs_jit"; do
+              echo "== $target ${tags:-plain}"
+              GOOS=${target%/*} GOARCH=${target#*/} go build -tags "$tags" ./...
+            done
+          done
+
+      - name: Test lengths past an int32 on 386
+        run: GOARCH=386 go test . -run TestLengthsPastAnInt32
+
   # Go 1.27's loop invariant pass moves unsafe.Add's sums out of the branch
   # that guards them, which with a nil base leaves nil+32 in a pointer slot
   # live across calls (jitSortCopy's a.extAt()). hoistcheck builds the

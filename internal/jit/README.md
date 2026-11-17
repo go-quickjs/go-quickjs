@@ -1804,8 +1804,31 @@ budget loop's register goes first, its loop then counting in memory. A phi's
 edge move to a slot its phi or argument already holds, and may share, costs
 nothing, and so is taken off the cost of that value in a slot (`inSlot`):
 spilled together, the two share the slot and the edge moves nothing.
-Spilled, an interval is in its slot whole: stored where it is made, loaded
-at each use.
+Beyond that hint, a group's spilled members share one slot (`gslot`): its
+first spilled member takes a slot for the group, which every later one
+spilled takes too -- the members' intervals meet none of each other's, so
+the slot holds each in turn. Freed at a member's end while the group has
+members to come, the slot is held for them, until the group's last member
+ends. Another value takes it only where no slot of the free list may hold
+it, only if its interval ends before the group's next member begins (the
+slot's gap) -- so that the group keeps it (`lends`) -- and not if it is a
+member of another group, which is to keep the slot it takes. The held
+slots are in a heap by gap, the greatest first: where its gap is too
+short, every other one's is; found by a walk of every held slot, each
+checked against its group's members, they had taken zlib's compiles ten
+times as long to allocate. An edge's move between
+two spilled members is then none. Given only a register's coalescing and
+the hint, a large function's spilled phis had each been a slot of its own
+and its edges copied them slot to slot: Octane zlib's largest asm.js
+function had 2.4 MB of its 3 MB of code at its edges. Given to any value
+where the free list had none, the groups lost their slots where most
+values were spilled, and zlib's edges moved nearly as much as without the
+sharing. A function takes more slots so where many values are live at
+once and few slots are free between a group's members -- 199 to 269 in
+one of `TestSSANativeHighPressure`'s random programs -- and those past
+the context's own are in its `SpillMore` (below), which those tests give
+their contexts as the vm does. Spilled, an interval is in its slot whole:
+stored where it is made, loaded at each use.
 
 **Spill slots.** Nothing bounds how many a function takes: the free slots'
 lists grow, doubling, as the slots taken pass them, and the code says how

@@ -1923,36 +1923,147 @@ func (c *core) allocate() error {
 			regs = c.fprs
 		}
 		free := append(c.ints(len(regs))[:0], regs...)
-		// The free slots, in the order freed: a list by slot, fnext and
+		// The free slots: a list by slot, in the order freed, fnext and
 		// fprev 1 plus the slot after and before it or 0, ftail 1 plus the
-		// last; fend, by slot, the end of the interval that held it last;
-		// isFree, whether it is in the list. A slot is in it once at most:
-		// freed when its interval ends, taken from it to be used again.
-		// They have room for the context's own slots at first, or the
-		// slots the first class took, and grow, doubling, as the slots
-		// taken pass it: nothing bounds a function's slots (abi.Context's
-		// SpillMore).
+		// last; and the slots kept for phi groups whose members are still
+		// to come (gslot, below), held, in a heap by the start of the
+		// group's next member (kept, below). fend is, by slot, the end of
+		// the interval that held it last; isFree whether it is in the
+		// list or held. A slot is free once at most: freed when its
+		// interval ends, taken to be used again. They have room for the
+		// context's own slots at first, or the slots the first class
+		// took, and grow, doubling, as the slots taken pass it: nothing
+		// bounds a function's slots (abi.Context's SpillMore).
 		room := abi.SpillSlots
 		for room <= spills {
 			room *= 2
 		}
-		fl := c.ints(3 * room)
-		fnext, fprev, fend := fl[:room], fl[room:2*room], fl[2*room:]
-		isFree := c.bools(room)
+		fl := c.ints(5 * room)
+		fnext, fprev, fend, gown, gap := fl[:room], fl[room:2*room], fl[2*room:3*room], fl[3*room:4*room], fl[4*room:]
+		fb := c.bools(2 * room)
+		isFree, held := fb[:room], fb[room:]
 		grow := func() {
 			n := 2 * len(fnext)
-			fl := c.ints(3 * n)
+			fl := c.ints(5 * n)
 			copy(fl, fnext)
 			copy(fl[n:], fprev)
 			copy(fl[2*n:], fend)
-			fnext, fprev, fend = fl[:n], fl[n:2*n], fl[2*n:]
-			b := c.bools(n)
+			copy(fl[3*n:], gown)
+			copy(fl[4*n:], gap)
+			fnext, fprev, fend, gown, gap = fl[:n], fl[n:2*n], fl[2*n:3*n], fl[3*n:4*n], fl[4*n:]
+			b := c.bools(2 * n)
 			copy(b, isFree)
-			isFree = b
+			copy(b[n:], held)
+			isFree, held = b[:n], b[n:]
 		}
 		ftail := 0
-		freeSlot := func(s, end int) {
-			fend[s], isFree[s] = end, true
+		// gslot is, by a phi group's root, the spill slot its spilled
+		// members share, -1 for none; gown, by slot, 1 plus the root of
+		// the group it was last given to, or 0. The members' intervals
+		// meet none of each other's, so one slot holds each in turn, and
+		// an edge's move between two spilled members -- the phi and its
+		// argument -- is none (phiSchedule). A member's slot freed while
+		// the group has members to come is held for them until the
+		// group's last member ends (gends, a heap of each group's end,
+		// shifted 32 bits, and root), when it joins the list. Another
+		// value takes it only where no slot of the list may hold it, and
+		// only for an interval that ends before the group's next member
+		// begins, which gap holds by slot (lends): the group keeps it.
+		// The held slots are found by gap, the greatest first (kept, a
+		// heap of gaps shifted 32 bits and slots, an entry left behind
+		// when its slot is taken or its gap changes): where the greatest
+		// gap is too short, none is long enough. A member of another
+		// group takes none, as its own group is to keep the slot it
+		// takes. Given only a register's coalescing,
+		// a large function's spilled phis were each a slot of its own,
+		// and its edges copied them slot to slot -- Octane zlib's largest
+		// asm.js function, 2.4 of its 3 MB of code edge moves. Given to
+		// any other value where the first list had none, a group's slot
+		// was lost where most values spilled, and zlib's edges moved
+		// nearly as much as without the sharing; lent to members of
+		// other groups too, it went to groups that could not keep it,
+		// and they moved a sixth more than with none lent to them. Found
+		// by a walk of every held slot, each looked at against its
+		// group's members, the slots had taken Octane zlib's compiles
+		// ten times as long to allocate, 256 ms a run against 24.
+		gslot := c.ints(len(gm))
+		for i := range gslot {
+			gslot[i] = -1
+		}
+		gends := c.words(len(gm))[:0]
+		gpush := func(e uint64) {
+			gends = append(gends, e)
+			for i := len(gends) - 1; i > 0; {
+				up := (i - 1) / 2
+				if gends[i] >= gends[up] {
+					break
+				}
+				gends[i], gends[up] = gends[up], gends[i]
+				i = up
+			}
+		}
+		gpop := func() uint64 {
+			e := gends[0]
+			last := len(gends) - 1
+			gends[0] = gends[last]
+			gends = gends[:last]
+			for i := 0; ; {
+				m, l, r := i, 2*i+1, 2*i+2
+				if l < len(gends) && gends[l] < gends[m] {
+					m = l
+				}
+				if r < len(gends) && gends[r] < gends[m] {
+					m = r
+				}
+				if m == i {
+					break
+				}
+				gends[i], gends[m] = gends[m], gends[i]
+				i = m
+			}
+			return e
+		}
+		kept := c.words(len(gm))[:0]
+		kpush := func(e uint64) {
+			kept = append(kept, e)
+			for i := len(kept) - 1; i > 0; {
+				up := (i - 1) / 2
+				if kept[i] <= kept[up] {
+					break
+				}
+				kept[i], kept[up] = kept[up], kept[i]
+				i = up
+			}
+		}
+		kpop := func() {
+			last := len(kept) - 1
+			kept[0] = kept[last]
+			kept = kept[:last]
+			for i := 0; ; {
+				m, l, r := i, 2*i+1, 2*i+2
+				if l < len(kept) && kept[l] > kept[m] {
+					m = l
+				}
+				if r < len(kept) && kept[r] > kept[m] {
+					m = r
+				}
+				if m == i {
+					break
+				}
+				kept[i], kept[m] = kept[m], kept[i]
+				i = m
+			}
+		}
+		// freeSlot frees slot s, its last interval ended at end: held for
+		// its group till the start of the group's next member, next, or
+		// into the list for -1.
+		freeSlot := func(s, end, next int) {
+			fend[s], isFree[s], held[s] = end, true, next >= 0
+			if next >= 0 {
+				gap[s] = next
+				kpush(uint64(next)<<32 | uint64(s))
+				return
+			}
 			fprev[s], fnext[s] = ftail, 0
 			if ftail != 0 {
 				fnext[ftail-1] = s + 1
@@ -1961,6 +2072,11 @@ func (c *core) allocate() error {
 		}
 		takeSlot := func(s int) int {
 			isFree[s] = false
+			if held[s] {
+				// Its entry in kept is left behind.
+				held[s] = false
+				return s
+			}
 			p, n := fprev[s], fnext[s]
 			if p != 0 {
 				fnext[p-1] = n
@@ -1971,6 +2087,13 @@ func (c *core) allocate() error {
 				ftail = p
 			}
 			return s
+		}
+		// lends reports whether slot s, free, may hold an interval that
+		// ends at end: not if it is held for a group (gslot) whose next
+		// member begins by then, one the slot is to hold, spilled.
+		lends := func(s, end int) bool {
+			g := gown[s] - 1
+			return !held[s] || g < 0 || gslot[g] != s || end < gap[s]
 		}
 		// Neither list outgrows the intervals. The spilled intervals, in
 		// the order spilled, are found by when they end through a heap of
@@ -2022,14 +2145,41 @@ func (c *core) allocate() error {
 			}
 			return k
 		}
+		// slot is the spill slot of v, spilled from from: its phi group's
+		// (gslot), else one that becomes the group's.
+		var slotOf func(from int, v *ssa.Value) (int, error)
 		slot := func(from int, v *ssa.Value) (int, error) {
+			r := root(v)
+			if r >= 0 && gslot[r] >= 0 {
+				if s := gslot[r]; isFree[s] && fend[s] < from {
+					return takeSlot(s), nil
+				}
+			}
+			s, err := slotOf(from, v)
+			if err == nil && r >= 0 {
+				gslot[r], gown[s] = s, r+1
+				gpush(uint64(gm[r].last)<<32 | uint64(r))
+			}
+			return s, err
+		}
+		slotOf = func(from int, v *ssa.Value) (int, error) {
 			// The slot of a phi or an argument of it v is to share, if
 			// free (hinted).
+			end := iv[v.ID].end
+			member := root(v) >= 0
+			may := func(s int) bool {
+				if member {
+					// A member borrows no other group's: its own group
+					// is to keep the slot it takes.
+					return lends(s, math.MaxInt)
+				}
+				return lends(s, end)
+			}
 			related := func(x *ssa.Value) int {
 				if x == nil || !c.hasLoc[x.ID] {
 					return -1
 				}
-				if l := c.locAt(x); l.reg < 0 && l.spill >= 0 && isFree[l.spill] && fend[l.spill] < from {
+				if l := c.locAt(x); l.reg < 0 && l.spill >= 0 && isFree[l.spill] && fend[l.spill] < from && may(l.spill) {
 					return l.spill
 				}
 				return -1
@@ -2049,6 +2199,29 @@ func (c *core) allocate() error {
 				if fend[s-1] < from {
 					return takeSlot(s - 1), nil
 				}
+			}
+			// A held slot, the one of the greatest gap, past the entries
+			// of slots taken, regapped, or whose group gave them up (into
+			// the list, where the walk above did not find them).
+			for !member && len(kept) > 0 {
+				e := kept[0]
+				s := int(uint32(e))
+				if !isFree[s] || !held[s] || gap[s] != int(e>>32) {
+					kpop()
+					continue
+				}
+				if g := gown[s] - 1; g < 0 || gslot[g] != s {
+					kpop()
+					fe := fend[s]
+					takeSlot(s)
+					freeSlot(s, fe, -1)
+					continue
+				}
+				if end < gap[s] && fend[s] < from {
+					kpop()
+					return takeSlot(s), nil
+				}
+				break
 			}
 			if spills == len(fnext) {
 				grow()
@@ -2142,7 +2315,26 @@ func (c *core) allocate() error {
 			}
 			for _, k := range done {
 				a := spilled[k]
-				freeSlot(c.locs[a.v.ID].spill, a.end)
+				s := c.locs[a.v.ID].spill
+				// A group's, held for its members to come: till the next
+				// to begin.
+				next := -1
+				if g := gown[s] - 1; g >= 0 && gslot[g] == s && int(gm[g].last) > a.end {
+					ms := members(g)
+					if i, _ := slices.BinarySearch(ms, uint64(a.end)<<32|math.MaxUint32); i < len(ms) {
+						next = int(ms[i] >> 32)
+					}
+				}
+				freeSlot(s, a.end, next)
+			}
+			for len(gends) > 0 && int(gends[0]>>32) < it.start {
+				// The group ended: its slot, if still kept, is any value's.
+				g := int(uint32(gpop()))
+				if s := gslot[g]; s >= 0 && isFree[s] && held[s] && gown[s] == g+1 {
+					e := fend[s]
+					takeSlot(s)
+					freeSlot(s, e, -1)
+				}
 			}
 			r := roots[j]
 			if takesOperand(it.v) {

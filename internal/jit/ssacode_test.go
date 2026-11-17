@@ -1215,6 +1215,9 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	// their numbers' entries in the frame are poison.
 	ctx := &abi.Context{}
 	ctx.SetConsts(&testEncoding)
+	// The slots past the context's own, as Go gives a context before
+	// code that takes more runs in it (the vm's GrowSpill).
+	ctx.GrowSpill(c.mc.Spills)
 	this := (*testValue)(unsafe.Pointer(&ctx.This))
 	// A register program's scratch slots, the last Scratch of its Locals,
 	// are below the context's Stack, in the frame as an operand is.
