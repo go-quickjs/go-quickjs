@@ -1506,9 +1506,9 @@ func (fb *jitFeedback) mathIntrinsic(o *Object, n int, plain bool) (ssa.Intrinsi
 const jitMathArgs = 8
 
 // jitUnaryMath is the op native code makes a Math function of one number
-// with, named name: an instruction of its own, or a call of Go
-// (ssa.OpMathCall), which roundings are without SSE4.1 (abi.Encoding's
-// Round).
+// with, named name: an instruction of its own -- the roundings SSE4.1's
+// or, without it, SSE2's (mir's roundSD) -- or a call of Go
+// (ssa.OpMathCall).
 func jitUnaryMath(name string) ssa.Op {
 	switch name {
 	case "sqrt":
@@ -1520,17 +1520,15 @@ func jitUnaryMath(name string) ssa.Op {
 	case "fround":
 		return ssa.OpFroundF64
 	}
-	if jitEncoding.Round {
-		switch name {
-		case "floor":
-			return ssa.OpFloorF64
-		case "ceil":
-			return ssa.OpCeilF64
-		case "trunc":
-			return ssa.OpTruncF64
-		case "round":
-			return ssa.OpRoundF64
-		}
+	switch name {
+	case "floor":
+		return ssa.OpFloorF64
+	case "ceil":
+		return ssa.OpCeilF64
+	case "trunc":
+		return ssa.OpTruncF64
+	case "round":
+		return ssa.OpRoundF64
 	}
 	return ssa.OpMathCall
 }

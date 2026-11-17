@@ -1572,10 +1572,12 @@ type Encoding struct {
 	// only the context's register and arm64's link register. Code is
 	// compiled only where it is set.
 	StoreRef uint64
-	// Round says native code may round a double to an integer, as
-	// Math.floor, Math.ceil, Math.trunc and Math.round do: always on arm64,
-	// with SSE4.1's ROUNDSD on amd64. The VM asks for those only where it
-	// is set (ssa's OpFloorF64...).
+	// Round says the CPU rounds a double to an integer in one
+	// instruction, as Math.floor, Math.ceil, Math.trunc and Math.round
+	// do: always on arm64, with SSE4.1's ROUNDSD on amd64. Without it,
+	// amd64's code rounds with SSE2's instructions alone (ssa's
+	// OpFloorF64..., mir's roundSD), and a Uint8ClampedArray's store of a
+	// double is Go's.
 	Round bool
 	// An ordinary object of class ClassObject, whose table has at most
 	// MaxScan entries, may be searched for a key, as the VM's own small

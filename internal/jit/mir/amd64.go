@@ -9417,20 +9417,17 @@ func (c *compiler) extremum(v *ssa.Value) {
 // ceiling, less one if the ceiling less a half is above x -- computed
 // again otherwise, which keeps its -0.
 func (c *compiler) round(v *ssa.Value) {
-	if !c.enc.Round {
-		panic("rounding without SSE4.1")
-	}
 	if x := c.xmm(v.Args[0], xScratch1); x != xScratch1 {
 		c.a.SSEOp(amd64.MovAPD, xScratch1, x)
 	}
 	down, done := c.a.NewLabel(), c.a.NewLabel()
-	c.a.RoundSD(xScratch0, xScratch1, amd64.RoundCeil)
+	c.roundSD(xScratch1, amd64.RoundCeil)
 	c.movImm(scratchA, math.Float64bits(0.5))
 	c.a.MovQToX(xScratch2, scratchA)
 	c.a.SSEOp(amd64.SubSD, xScratch0, xScratch2)
 	c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch1)
 	c.a.Jcc(amd64.CondA, down)
-	c.a.RoundSD(xScratch0, xScratch1, amd64.RoundCeil)
+	c.roundSD(xScratch1, amd64.RoundCeil)
 	c.a.Jmp(done)
 	c.a.Bind(down)
 	c.a.SSEOp(amd64.SubSD, xScratch0, xScratch2)
@@ -11670,16 +11667,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpMaxF64, ssa.OpMinF64:
 		c.extremum(v)
 	case ssa.OpFloorF64, ssa.OpCeilF64, ssa.OpTruncF64:
-		if !c.enc.Round {
-			panic("rounding without SSE4.1")
-		}
 		mode := uint8(amd64.RoundFloor)
 		if v.Op == ssa.OpCeilF64 {
 			mode = amd64.RoundCeil
 		} else if v.Op == ssa.OpTruncF64 {
 			mode = amd64.RoundTrunc
 		}
-		c.a.RoundSD(xScratch0, c.xmm(arg(0), xScratch0), mode)
+		c.roundSD(c.xmm(arg(0), xScratch1), mode)
 		c.setX(v, xScratch0)
 	case ssa.OpRoundF64:
 		c.round(v)
@@ -12378,4 +12372,50 @@ func shiftOp(op ssa.Op) amd64.Shift {
 		return amd64.Sar
 	}
 	return amd64.Shr
+}
+
+// roundSD rounds x to an integer in xScratch0, as mode says (RoundFloor,
+// RoundCeil, RoundTrunc): SSE4.1's ROUNDSD where the encoding has it
+// (abi.Encoding's Round), and otherwise SSE2's alone, as V8's portable
+// code and Go's math.Trunc do: x past 2^52 in magnitude -- an integer
+// already -- NaN and the infinities as they are; else x truncated to an
+// int64 and converted back, which is exact, its sign made x's -- so that
+// -0.5 truncates to -0 -- and a floor one less where that is above x, a
+// ceiling one more where it is below. x is neither xScratch0 nor
+// xScratch2, which it uses with scratchA, B and C.
+func (c *compiler) roundSD(x amd64.XReg, mode uint8) {
+	if c.enc.Round {
+		c.a.RoundSD(xScratch0, x, mode)
+		return
+	}
+	done := c.a.NewLabel()
+	c.a.SSEOp(amd64.MovAPD, xScratch0, x)
+	c.a.MovQFromX(scratchB, x)
+	c.movImm(scratchA, 1<<63-1)
+	c.a.Op(amd64.And, scratchA, scratchB, true)
+	c.movImm(scratchC, math.Float64bits(1<<52))
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	c.a.Jcc(amd64.CondAE, done)
+	c.a.Cvttsd2si(scratchA, x)
+	c.a.Cvtsi2sd(xScratch0, scratchA, true)
+	c.movImm(scratchC, 1<<63)
+	c.a.Op(amd64.And, scratchB, scratchC, true)
+	c.a.MovQFromX(scratchA, xScratch0)
+	c.a.Op(amd64.Or, scratchA, scratchB, true)
+	c.a.MovQToX(xScratch0, scratchA)
+	if mode != amd64.RoundTrunc {
+		c.movImm(scratchA, math.Float64bits(1))
+		c.a.MovQToX(xScratch2, scratchA)
+		c.a.SSEOp(amd64.UcomiSD, xScratch0, x)
+		if mode == amd64.RoundFloor {
+			// Above x: one less.
+			c.a.Jcc(amd64.CondBE, done)
+			c.a.SSEOp(amd64.SubSD, xScratch0, xScratch2)
+		} else {
+			// Below x: one more.
+			c.a.Jcc(amd64.CondAE, done)
+			c.a.SSEOp(amd64.AddSD, xScratch0, xScratch2)
+		}
+	}
+	c.a.Bind(done)
 }

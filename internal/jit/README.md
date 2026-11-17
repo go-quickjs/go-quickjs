@@ -1285,6 +1285,19 @@ and `includes` are a call of Go of their own (`ssa.GoIndexOf`), which
 answers where the built-in runs nothing. Anything else such a call meets is
 Go's.
 
+**Roundings.** `Math.floor`, `Math.ceil`, `Math.trunc` and `Math.round`
+are instructions of their own (`ssa.OpFloorF64` ...) on every CPU: arm64's
+FRINT, amd64's SSE4.1 ROUNDSD where the CPU has it (`abi.Encoding`'s
+`Round`), and otherwise SSE2's instructions alone (mir's `roundSD`), as
+V8's portable code and Go's `math.Trunc` round: a magnitude past 2^52 --
+an integer already -- NaN and the infinities as they are; anything else
+truncated to an int64 and converted back, which is exact, given the sign
+of the operand, so that -0.5 truncates to -0, then a floor one less where
+that is above the operand and a ceiling one more where it is below.
+`Math.round` is its ceiling, less one where the ceiling less a half is
+above the operand. `TestJITRoundings` pins all four against Go's math over
+their edges with the instruction and without it.
+
 **Leaves.** A built-in that runs no script where its check passes -- a leaf:
 String's methods, Number's, a Map's or a Set's operations, `Date.now`,
 `Object.prototype.hasOwnProperty` and `Array.isArray` of what is neither a
