@@ -18,6 +18,7 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	sub := newCompiler(c, c.opts)
 	sub.reg = regcomp.NewRecord(fn.Idents)
 	sub.lit = fn
+	sub.validateAsm(fn)
 	sub.fn.Strict = fn.Strict || c.fn.Strict
 	sub.fn.Async = fn.Async
 	sub.fn.Generator = fn.Generator
@@ -45,6 +46,7 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 		// never compiled (docs/register-interpreter.md, "Compiled at the
 		// first call").
 		compiled.Reg = regcomp.Later(fn, compiled, rec)
+		c.setTyped(fn, compiled, rec)
 	} else if rec != nil {
 		regcomp.Refuse(compiled, "a name the record resolves two ways")
 	}

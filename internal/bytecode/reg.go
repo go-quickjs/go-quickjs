@@ -994,6 +994,15 @@ type RegCode struct {
 	Names     []string
 	Constants []Constant
 	PropSites uint32
+	// Typed marks typed code (regtyped.go): decoded through the typed
+	// table, each register of the kind Kinds gives it for the whole code.
+	Typed bool
+	Kinds []RegKind
+	// Floats are typed code's float constants (TFConst).
+	Floats []float64
+	// Asm is, for typed code compiled from an asm.js module, what each
+	// of its function's upvalues the code reads is, which the link checks.
+	Asm []AsmUp
 }
 
 // ThisStore is a store of RegCode.Stores: this's property at the cache
@@ -1074,6 +1083,10 @@ type RegLater struct {
 	// make compiles the code, holding what the compiler recorded until
 	// then; it is dropped once it has run.
 	make func() *RegCode
+	// typed is the function's typed code, compiled when first asked for
+	// (RegTypedCode), or nil: kept here rather than in Function, which
+	// stays the size it was.
+	typed *RegLater
 }
 
 // RegNone is a RegLater with no code: top-level code's that the register
@@ -1106,6 +1119,11 @@ func (f *Function) RegCode() *RegCode {
 	if l == nil {
 		return nil
 	}
+	return l.code()
+}
+
+// code is l's code, compiled now if it has not been.
+func (l *RegLater) code() *RegCode {
 	if l.done.Load() {
 		return l.rc
 	}
@@ -1268,6 +1286,9 @@ func (op ROp) String() string {
 // Format renders the instruction at pc, for tests and disassembly.
 func (rc *RegCode) Format(pc int) string {
 	w := rc.Code[pc]
+	if rc.Typed && w.Op().Typed() {
+		return rc.formatTyped(pc, w)
+	}
 	r := func(n uint16) string { return fmt.Sprintf("r%d", n) }
 	target := func(off int32) string { return fmt.Sprintf("-> %d", pc+1+int(off)) }
 	switch op := w.Op(); op {

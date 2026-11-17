@@ -505,8 +505,16 @@ func (f *Function) PositionAt(pc uint32) (line, col int32) {
 
 // PosAt returns the byte offset in the script of the register code's
 // instruction at pc -- or of the error a pc past the code stands for
-// (RegCode.Lines) -- and whether it is known.
+// (RegCode.Lines), or of the typed code's instruction at a pc marked
+// TypedPC -- and whether it is known.
 func (f *Function) PosAt(pc uint32) (int32, bool) {
+	if pc&TypedPC != 0 {
+		// A pc of the typed code, which a frame running it held.
+		if rc := f.RegTypedCompiled(); rc != nil {
+			return rc.PosAt(int(pc &^ TypedPC))
+		}
+		return 0, false
+	}
 	if rc := f.RegCompiled(); rc != nil {
 		return rc.PosAt(int(pc))
 	}

@@ -319,6 +319,21 @@ func (d *writer) reg(fn *bytecode.Function) {
 		return
 	}
 	fmt.Fprintf(d.w, "Reg: %v\n", why)
+	d.regCode("reg", rc)
+	if fn.HasRegTyped() {
+		// A function of an asm.js module: its typed code, compiled now.
+		if t := fn.RegTypedCode(); t != nil {
+			fmt.Fprintln(d.w, "RegTyped:")
+			d.regCode("typed", t)
+		} else {
+			fmt.Fprintln(d.w, "RegTyped: none")
+		}
+	}
+}
+
+// regCode writes every field of rc, each line headed by what, an
+// instruction a line with its word and its listing.
+func (d *writer) regCode(what string, rc *bytecode.RegCode) {
 	v := reflect.ValueOf(rc).Elem()
 	for i := range v.NumField() {
 		f := regCodeType.Field(i)
@@ -328,7 +343,7 @@ func (d *writer) reg(fn *bytecode.Function) {
 			}
 			continue
 		}
-		fmt.Fprint(d.w, "reg ", f.Name, ": ")
+		fmt.Fprint(d.w, what, " ", f.Name, ": ")
 		d.value(v.Field(i))
 		fmt.Fprintln(d.w)
 	}

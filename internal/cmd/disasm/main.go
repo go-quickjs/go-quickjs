@@ -244,6 +244,17 @@ func (p *printer) code(fn *bytecode.Function, indent string) {
 			fmt.Fprintf(p.w, "%s  %4d  %s\n", indent, pc, rc.Format(pc))
 		}
 	}
+	if fn.HasRegTyped() {
+		// A function of an asm.js module: its typed code too.
+		if t := fn.RegTypedCode(); t == nil {
+			fmt.Fprintln(p.w, indent+"  typed code: none (QJS_ASMTRACE says why)")
+		} else {
+			fmt.Fprintf(p.w, "%s  typed code: %d instructions, %d registers\n", indent, len(t.Code), t.NumRegs)
+			for pc := range t.Code {
+				fmt.Fprintf(p.w, "%s  %4d  %s\n", indent, pc, t.Format(pc))
+			}
+		}
+	}
 }
 
 var kinds = map[bytecode.FuncKind]string{

@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/asmjs"
 	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
@@ -272,6 +273,9 @@ type compiler struct {
 	// 0 not yet, 1 no, 2 yes.
 	lit          *ast.FuncLit
 	mentionsEval uint8
+	// asm is the validated asm.js module this function is, where it is
+	// one: its functions are given typed code (setTyped).
+	asm *asmjs.Module
 	// lengthRead says the name being compiled is x of x.length (compiledRead).
 	lengthRead bool
 	// mentioned is, of the names asked about, whether a function or a
