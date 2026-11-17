@@ -973,6 +973,17 @@ type RegCode struct {
 	// at its start, so that nothing can give up after one, and so is a call
 	// of a body that stores.
 	PureTail int32
+	// Stores is the plan of an initializer's body -- a run of stores of
+	// its parameters in this, each maybe a parameter that is 0 where it is
+	// falsy (if (!p) p = 0, or p ? p : 0), and the return of undefined --
+	// which the native interpreter makes itself where a construction or
+	// an apply_args calls it, without its frame; nil for any other body.
+	Stores []ThisStore
+	// Forward is the plan of a body that only hands its call on to a
+	// method of its this, this.k.apply(this, arguments) or
+	// this.k.call(this, ...), which the native interpreter constructs
+	// through where the method's body has Stores; nil for any other.
+	Forward *ForwardPlan
 	// Names, Constants and PropSites are the function's names, constants
 	// and property sites with those the register code adds, where it was
 	// compiled at the function's first call (RegLater): the Function's own
@@ -983,6 +994,32 @@ type RegCode struct {
 	Names     []string
 	Constants []Constant
 	PropSites uint32
+}
+
+// ThisStore is a store of RegCode.Stores: this's property at the cache
+// site Site is given parameter Param, or 0 where Zero says so and the
+// parameter is falsy.
+type ThisStore struct {
+	Site  uint16
+	Param uint16
+	Zero  bool
+}
+
+// ForwardPlan is RegCode.Forward: the cache sites of the read of the
+// method, this.k, and of its apply or call (Call says which); and, for
+// call, each argument after this, by Args.
+type ForwardPlan struct {
+	Method, Fn uint16
+	Call       bool
+	Args       []ForwardArg
+}
+
+// ForwardArg is an argument a ForwardPlan's call hands on: the body's
+// parameter Param, or, where Param is -1, the constant the load
+// instruction Load makes.
+type ForwardArg struct {
+	Param int32
+	Load  RInstr
 }
 
 // PosAt is the source position of the instruction at pc, or of the error

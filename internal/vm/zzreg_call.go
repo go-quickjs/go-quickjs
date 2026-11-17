@@ -510,7 +510,7 @@ type regCallCache struct {
 	cl     *closure
 	rc     *regCode
 	// this is a call's receiver; for regCallConstruct its unused words
-	// cache the constructor's prototype slot (nativeCtorThis).
+	// cache the constructor's prototype slot (regCtorThis).
 	this Value
 	kind uint8
 }
@@ -1230,19 +1230,38 @@ func (r *Runtime) regCtorEntered(o *Object, fd *funcData) (cl *closure, rc *regC
 	return cl, rc, true
 }
 
-// regCtorThis is the object a construction with o, of funcData fd, a
-// constructor its site's cache holds (regCallConstruct), is made: of o's
-// prototype, its own data property holding an object, and of its root,
-// whose room is settled (tracked) where it is a base constructor's, as
-// regConstruct and constructWithTarget make it; or nil, the construction
-// then regConstruct's, which reads the prototype however it is and notes
-// the room an object came to need.
-func (r *Runtime) regCtorThis(o *Object, fd *funcData) *Object {
-	p := o.getOwnVisible(atomPrototype)
-	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() {
+// regCtorThis is the object a construction with e's callee, of funcData
+// fd, a constructor its site's cache holds (regCallConstruct), is made:
+// of the callee's prototype, its own data property holding an object, and
+// of its root, whose room is settled (tracked) where it is a base
+// constructor's, as regConstruct and constructWithTarget make it; or nil,
+// the construction then regConstruct's, which reads the prototype however
+// it is and notes the room an object came to need. The entry's this, which
+// a construction has no use for, remembers where the callee's shape keeps
+// prototype -- the shape in ref, the slot in num -- so that a construction
+// reads the slot by one compare; the value is read afresh, so that one
+// assigned takes effect, and a shape remembered is changed in place by
+// nothing (remember).
+func (r *Runtime) regCtorThis(e *regCallCache, fd *funcData) *Object {
+	o := e.callee
+	var p Value
+	if s := o.shape; s != nil && s == (*shape)(e.this.ref) {
+		p = o.vals()[int(e.this.num)]
+	} else {
+		own := o.getOwnVisible(atomPrototype)
+		if !own.ok() || own.flags()&propAccessor != 0 {
+			return nil
+		}
+		p = own.value()
+		if i := o.findOwn(atomPrototype); i >= 0 && s != nil && !s.loose &&
+			s.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+			e.this = Value{num: float64(i), ref: unsafe.Pointer(remember(s))}
+		}
+	}
+	if !p.IsObject() {
 		return nil
 	}
-	proto := p.value().Object()
+	proto := p.Object()
 	root := r.shapes.ctorRoot(fd, proto)
 	if root != nil && !root.tracked() && fd.ctorKind != ctorDerived {
 		return nil

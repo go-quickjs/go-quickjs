@@ -181,9 +181,8 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 			c.leaf, c.leafNative = regLeafPure, d
 		}
 	}
-	if len(c.leafOps) == 0 {
-		c.leafOps = regInitOps(fn, rc)
-	}
+	c.initPlan = regInitPlan(rc)
+	c.fwdKind, c.fwdSites, c.fwdArgs = regForwardPlan(fn, rc)
 	if len(rc.Code) > 0 && !c.suspends {
 		// A body that returns a parameter, a constant or nothing first
 		// thing -- what follows is unreachable: a call's answer is read

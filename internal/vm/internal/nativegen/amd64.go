@@ -36,6 +36,10 @@ type nativeGen struct {
 	late []func()
 	// after is appended after every handler, including the cursors.
 	after []func()
+	// initL is the native initializer's run (initRun), emitted after the
+	// handlers once one has asked for it (initMade).
+	initL    Label
+	initMade bool
 }
 
 // ex is the call handler's exit number n.

@@ -29,8 +29,13 @@ func (r *Runtime) fwdCache(cl *closure, site int, o *Object, key Atom) *propCach
 	return t
 }
 
-// fwdWays is how many entries a forwarder's table of method reads has.
-const fwdWays = 16
+// fwdWays is how many entries a forwarder's table of method reads has,
+// and fwdShift the bits of a shape's address below those that pick its
+// entry: the native construction picks it as fwdSite does.
+const (
+	fwdWays  = 16
+	fwdShift = 5
+)
 
 // fwdSite is the entry of cl's table of its method's reads (fwdCache)
 // for o's shape: a property cache of its own, which fills and answers as
@@ -48,5 +53,5 @@ func (r *Runtime) fwdSite(cl *closure, o *Object) *propCache {
 		}
 		cl.fwd = t
 	}
-	return &t[uintptr(unsafe.Pointer(o.shape))>>5%fwdWays]
+	return &t[uintptr(unsafe.Pointer(o.shape))>>fwdShift%fwdWays]
 }

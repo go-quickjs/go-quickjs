@@ -128,6 +128,12 @@ func TestRegOutputIsWhole(t *testing.T) {
 				f.SetUint(f.Uint() + 1)
 			case reflect.Bool:
 				f.SetBool(!f.Bool())
+			case reflect.Pointer:
+				if f.IsNil() {
+					f.Set(reflect.New(f.Type().Elem()))
+				} else {
+					f.SetZero()
+				}
 			default:
 				t.Fatalf("no change planted in %s, a %v", name, f.Kind())
 			}

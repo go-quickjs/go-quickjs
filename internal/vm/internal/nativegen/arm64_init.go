@@ -1,0 +1,457 @@
+package nativegen
+
+import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
+
+// The native initializer, as amd64's (amd64_init.go): its run, its ways
+// in from new_w and apply_args, and the forwarder's checks, in arm64's
+// instructions, the same scratch words holding the same things.
+
+// initEntry is amd64's.
+func (g *armGen) initEntry() Label {
+	if !g.initMade {
+		g.initMade = true
+		g.initL = g.a.NewLabel()
+		g.after = append(g.after, g.initRun)
+	}
+	return g.initL
+}
+
+// initRun is amd64's: rS the object, rD the plan and rW the store's
+// index while the stores are checked; then the scratch alone, which
+// ptrStore keeps.
+func (g *armGen) initRun() {
+	a := g.a
+	shapeOff := off("Object.shape")
+	loop1, existing, next1, phase2, loop2, zero, have, add, step, ok, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(),
+		a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(g.initL)
+	a.Load(r9, rCtx, scr(sV1))
+	a.Load(rW, r9, offCCIC)
+	a.Store(rCtx, scr(sBase), rW)
+	a.Load(r9, r9, offCCReg)
+	a.Load(rD, r9, offRCInitPlan)
+	a.Store(rCtx, scr(sNF), rD)
+	a.Load(rC, r9, offRCInitPlan+8)
+	a.Store(rCtx, scr(sSaved), rC)
+	a.Load(rS, rCtx, scr(sKa))
+	a.Load(r8, rS, shapeOff)
+	a.Cbz(r8, miss, true)
+	a.Store(rCtx, scr(sV1), r8)
+	a.LoadU32(r9, rS, off("Object.valn"))
+	a.Store(rCtx, scr(sTop), r9)
+	a.Store(rCtx, scr(sRC), ZR)
+	a.MovImm(rW, 0)
+
+	a.Bind(loop1)
+	g.cmpMem(rW, rCtx, scr(sSaved))
+	a.BCond(HS, phase2)
+	g.initSite()
+	a.Load(r8, rCtx, scr(sV1))
+	g.cmpMem(r8, rC, off("propCache.ownShape"))
+	a.BCond(EQ, existing)
+	g.initAdds(miss)
+	a.Bind(existing)
+	a.AddLsl(rC, rD, rW, 2)
+	a.LoadU32(r9, rC, 0)
+	a.TstImm(r9, 1, false)
+	a.BCond(EQ, next1)
+	g.initArg()
+	g.initFalsy(next1, miss)
+	a.MovImm(r9, 1)
+	a.ShiftReg(Lsl, r9, r9, rW, true)
+	a.Load(r8, rCtx, scr(sRC))
+	a.Op(Orr, r8, r8, r9, true)
+	a.Store(rCtx, scr(sRC), r8)
+	a.Bind(next1)
+	a.AddImm(rW, rW, 1, true)
+	a.B(loop1)
+
+	a.Bind(phase2)
+	a.Store(rCtx, scr(sTop), ZR)
+	a.Bind(loop2)
+	a.Load(rW, rCtx, scr(sTop))
+	g.cmpMem(rW, rCtx, scr(sSaved))
+	a.BCond(HS, ok)
+	a.Load(rD, rCtx, scr(sNF))
+	g.initSite()
+	a.Store(rCtx, scr(sV1), rC)
+	a.Load(r8, rCtx, scr(sRC))
+	a.ShiftReg(Lsr, r8, r8, rW, true)
+	a.TstImm(r8, 1, true)
+	a.BCond(NE, zero)
+	a.AddLsl(rC, rD, rW, 2)
+	a.LoadU32(r9, rC, 0)
+	g.initArg()
+	a.B(have)
+	a.Bind(zero)
+	a.MovImm(r9, 0)
+	a.MovImm(r8, 0)
+	a.Bind(have)
+	a.Load(rS, rCtx, scr(sKa))
+	a.Load(rC, rCtx, scr(sV1))
+	a.Load(rD, rC, off("propCache.ownShape"))
+	g.cmpMem(rD, rS, shapeOff)
+	a.BCond(NE, add)
+	a.LoadS32(rW, rC, off("propCache.idx"))
+	a.ShiftImm(Lsl, rW, rW, 4, true)
+	g.addMem(rW, rS, off("Object.valp"))
+	a.Store(rW, 0, r9)
+	a.MovRR(rC, r8)
+	a.AddImm(rW, rW, 8, true)
+	g.ptrStore()
+	a.B(step)
+	a.Bind(add)
+	a.LoadU32(rD, rS, off("Object.valn"))
+	a.ShiftImm(Lsl, rW, rD, 4, true)
+	g.addMem(rW, rS, off("Object.valp"))
+	a.Store(rW, 0, r9)
+	a.AddImm(rD, rD, 1, true)
+	a.Store32(rS, off("Object.valn"), rD)
+	a.MovRR(rC, r8)
+	a.AddImm(rW, rW, 8, true)
+	g.ptrStore()
+	a.Load(rS, rCtx, scr(sKa))
+	a.Load(rC, rCtx, scr(sV1))
+	a.Load(rC, rC, off("propCache.next"))
+	a.AddImm(rW, rS, int64(shapeOff), true)
+	g.ptrStore()
+	a.Bind(step)
+	g.incMem(rCtx, scr(sTop), 1)
+	a.B(loop2)
+
+	a.Bind(ok)
+	a.MovImm(rW, 1)
+	a.Load(rK, rCtx, scr(sKind))
+	a.Br(rK)
+	a.Bind(miss)
+	a.MovImm(rW, 0)
+	a.Load(rK, rCtx, scr(sKind))
+	a.Br(rK)
+}
+
+// initSite is amd64's: the cache of the store at index rW of the plan at
+// rD, in rC. r8 is its scratch.
+func (g *armGen) initSite() {
+	a := g.a
+	a.AddLsl(rC, rD, rW, 2)
+	a.LoadU32(rC, rC, 0)
+	a.ShiftImm(Lsr, rC, rC, 16, false)
+	a.MovImm(r8, uint64(size("propCache")))
+	a.Mul(rC, rC, r8)
+	g.addMem(rC, rCtx, scr(sBase))
+}
+
+// initAdds is amd64's, of the cache at rC, the object at rS and the
+// shape in r8. r9 is its scratch.
+func (g *armGen) initAdds(miss Label) {
+	a := g.a
+	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	shapeOff := off("Object.shape")
+	g.cmpMem(r8, rC, off("propCache.shape"))
+	a.BCond(NE, miss)
+	a.Load(r8, rC, off("propCache.next"))
+	a.Cbz(r8, miss, true)
+	g.cmpMem(r8, rCtx, ncSetterNx)
+	a.BCond(EQ, miss)
+	a.LoadU16(r9, rS, offObjFlags)
+	a.TstImm(r9, uint64(objExtensible), false)
+	a.BCond(EQ, miss)
+	a.Load(r9, rC, off("propCache.p1"))
+	a.Cbz(r9, p1ok, true)
+	a.Load(r9, r9, shapeOff)
+	g.cmpMem(r9, rC, off("propCache.s1"))
+	a.BCond(EQ, p1ok)
+	a.Load(r9, rC, off("propCache.cell"))
+	a.Cbz(r9, miss, true)
+	a.LoadU8(r9, r9, offCellValid)
+	a.Cbz(r9, miss, false)
+	a.Bind(p1ok)
+	a.Load(r9, rC, off("propCache.p2"))
+	a.Cbz(r9, p2ok, true)
+	a.Load(r9, r9, shapeOff)
+	g.cmpMem(r9, rC, off("propCache.s2"))
+	a.BCond(NE, miss)
+	a.Bind(p2ok)
+	a.Load(r9, rCtx, scr(sTop))
+	a.LoadU32(rC, rS, off("Object.valc"))
+	a.Cmp(r9, rC, true)
+	a.BCond(HS, miss)
+	g.cmpMemImm(r8, off("shape.index"), 0)
+	a.BCond(NE, idxok)
+	a.CmpImm(r9, int64(linearScanLimit), true)
+	a.BCond(HS, miss)
+	a.Bind(idxok)
+	g.incMem(rCtx, scr(sTop), 1)
+	a.Store(rCtx, scr(sV1), r8)
+}
+
+// initArg is amd64's: the argument the plan's word in r9 stores, in r9
+// and r8. rC is its scratch.
+func (g *armGen) initArg() {
+	a := g.a
+	undef, done := a.NewLabel(), a.NewLabel()
+	a.Ubfx(r9, r9, 1, 15)
+	g.cmpMem(r9, rCtx, scr(sEnd))
+	a.BCond(HS, undef)
+	a.Load(rC, rCtx, scr(sI))
+	a.AddLsl(rC, rC, r9, 4)
+	a.Load(r9, rC, 0)
+	a.Load(r8, rC, 8)
+	a.B(done)
+	a.Bind(undef)
+	a.Load(r9, rCtx, ncUndef)
+	a.MovImm(r8, 0)
+	a.Bind(done)
+}
+
+// initFalsy is amd64's, of the value in r9 and r8. rC is its scratch.
+func (g *armGen) initFalsy(truthy, miss Label) {
+	a := g.a
+	notNum, falsy := a.NewLabel(), a.NewLabel()
+	a.Cmp(r9, rTag, true)
+	a.BCond(HS, notNum)
+	// 0, -0 and NaN: equal to 0, or unordered.
+	a.FMovToF(0, r9)
+	a.FMovToF(1, ZR)
+	a.FCmp(0, 1)
+	a.BCond(EQ, falsy)
+	a.BCond(VS, falsy)
+	a.B(truthy)
+	a.Bind(notNum)
+	for _, w := range []int32{ncUndef, ncNull, ncFalse} {
+		g.cmpMem(r9, rCtx, w)
+		a.BCond(EQ, falsy)
+	}
+	g.cmpMem(r9, rCtx, ncTrue)
+	a.BCond(EQ, truthy)
+	g.cmpMem(r9, rCtx, ncObjBits)
+	a.BCond(NE, miss)
+	a.LoadU16(rC, r8, offObjFlags)
+	a.TstImm(rC, uint64(objHTMLDDA), false)
+	a.BCond(NE, miss)
+	a.B(truthy)
+	a.Bind(falsy)
+}
+
+// newInit is amd64's: at hook, the flags nativeNew's answer's compare
+// with 2 left.
+func (g *armGen) newInit(hook, resume, done Label) {
+	a := g.a
+	fwd, back := a.NewLabel(), a.NewLabel()
+	a.Bind(hook)
+	a.BCond(EQ, done)
+	a.Load(rW, rIP, 0)
+	g.newSite()
+	a.Load(r8, rC, offERC)
+	a.LoadU32(r9, r8, offRCFwdKind)
+	a.Cbnz(r9, fwd, false)
+	a.Load(r9, rS, 24)
+	a.Store(rCtx, scr(sKa), r9)
+	a.Load(r9, rC, offECl)
+	a.Load(r9, r9, offClCode)
+	g.addMem(r9, rCtx, ncCCBase)
+	a.Store(rCtx, scr(sV1), r9)
+	g.initWindowArgs()
+	a.Adr(r9, back)
+	a.Store(rCtx, scr(sKind), r9)
+	a.B(g.initEntry())
+	a.Bind(back)
+	a.Cbz(rW, resume, true)
+	a.Load(rW, rIP, 0)
+	g.regA(rD)
+	a.Load(r9, rD, 16)
+	a.Load(r8, rD, 24)
+	g.regB(rW)
+	g.storeValue()
+	a.Bind(fwd)
+	g.forwardInit(back, resume)
+}
+
+// initWindowArgs is amd64's: the instruction in rW, its window at rS.
+func (g *armGen) initWindowArgs() {
+	a := g.a
+	a.AddImm(r9, rS, 32, true)
+	a.Store(rCtx, scr(sI), r9)
+	a.Ubfx(r9, rW, 8, 8)
+	a.Store(rCtx, scr(sEnd), r9)
+}
+
+// forwardInit is amd64's: the entry at rC, the window at rS, the
+// forwarder's code at r8.
+func (g *armGen) forwardInit(back, resume Label) {
+	a := g.a
+	have, isCall, cmpFn, callArgs, argLoop, konst, undef, put, run := a.NewLabel(), a.NewLabel(), a.NewLabel(),
+		a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	propCache := uint64(size("propCache"))
+	saved := g.exit
+	g.exit = resume
+	a.Load(r9, rS, 24)
+	a.Store(rCtx, scr(sKa), r9)
+	a.LoadU32(r9, r8, offRCFwdKind)
+	a.Store(rCtx, scr(sRC), r9)
+	a.LoadU32(r9, r8, offRCFwdSites)
+	a.Store(rCtx, scr(sTop), r9)
+	a.Store(rCtx, scr(sNF), r8)
+	a.Load(r9, rC, offECl)
+	a.Load(r9, r9, offClCode)
+	g.addMem(r9, rCtx, ncCCBase)
+	a.Store(rCtx, scr(sBase), r9)
+	a.Load(rC, r9, offCCIC)
+	a.Load(rD, rCtx, scr(sTop))
+	a.AndImm(rD, rD, 0xFFFF, true)
+	a.MovImm(r8, propCache)
+	a.Mul(rD, rD, r8)
+	a.Op(Add, rC, rC, rD, true)
+	a.LoadU8(rD, rC, off("propCache.fills"))
+	a.CmpImm(rD, int64(maxCacheFills), false)
+	a.BCond(LO, have)
+	a.Load(rC, r9, offCCFwd)
+	a.Cbz(rC, resume, true)
+	a.Load(rS, rCtx, scr(sKa))
+	a.Load(rD, rS, off("Object.shape"))
+	a.Ubfx(rD, rD, uint8(fwdShift), uint8(log2(int(fwdWays))))
+	a.Mul(rD, rD, r8)
+	a.Op(Add, rC, rC, rD, true)
+	a.Bind(have)
+	a.Load(rS, rCtx, scr(sKa))
+	g.readSlot()
+	a.Load(r9, rC, 0)
+	g.cmpMem(r9, rCtx, ncObjBits)
+	a.BCond(NE, resume)
+	a.Load(rS, rC, 8)
+	a.LoadU16(rD, rS, offObjFlags)
+	a.TstImm(rD, uint64(objHasData), false)
+	a.BCond(EQ, resume)
+	a.Load(rD, rS, sizeObj+offExtData)
+	g.cmpMem(rD, rCtx, ncFuncT)
+	a.BCond(NE, resume)
+	a.Load(rD, rS, sizeObj+offExtData+8)
+	a.LoadU8(r8, rD, offFDBound)
+	a.Cbnz(r8, resume, false)
+	a.Load(rD, rD, offFdClosure)
+	a.Cbz(rD, resume, true)
+	a.Load(rD, rD, offClCode)
+	g.addMem(rD, rCtx, ncCCBase)
+	a.Store(rCtx, scr(sV1), rD)
+	a.Load(r8, rD, offCCReg)
+	a.Cbz(r8, resume, true)
+	a.Load(r8, r8, offRCInitPlan+8)
+	a.Cbz(r8, resume, true)
+	a.Load(r9, rCtx, scr(sBase))
+	a.Load(rC, r9, offCCIC)
+	a.Load(rD, rCtx, scr(sTop))
+	a.ShiftImm(Lsr, rD, rD, 16, false)
+	a.MovImm(r8, propCache)
+	a.Mul(rD, rD, r8)
+	a.Op(Add, rC, rC, rD, true)
+	g.readSlot()
+	a.Load(r9, rC, 0)
+	g.cmpMem(r9, rCtx, ncObjBits)
+	a.BCond(NE, resume)
+	a.Load(r8, rC, 8)
+	a.Load(rD, rCtx, ncRT)
+	a.Load(rD, rD, rtRel(0))
+	g.cmpMemImm(rCtx, scr(sRC), int64(fwdCall))
+	a.BCond(EQ, isCall)
+	g.addMem(rD, rCtx, ncApplyAt)
+	a.B(cmpFn)
+	a.Bind(isCall)
+	g.addMem(rD, rCtx, ncCallFn)
+	a.Bind(cmpFn)
+	g.cmpMem(r8, rD, 0)
+	a.BCond(NE, resume)
+	g.exit = saved
+	a.Load(rW, rIP, 0)
+	g.regA(rS)
+	g.cmpMemImm(rCtx, scr(sRC), int64(fwdCall))
+	a.BCond(EQ, callArgs)
+	g.initWindowArgs()
+	a.B(run)
+	a.Bind(callArgs)
+	// rD the next argument's plan, rC twice its index, r8 the
+	// forwarder's argument count.
+	a.Load(r8, rCtx, scr(sNF))
+	a.Load(rD, r8, offRCFwdArgs)
+	a.Load(rC, r8, offRCFwdArgs+8)
+	a.Store(rCtx, scr(sEnd), rC)
+	a.Op(Add, rC, rC, rC, true)
+	a.Store(rCtx, scr(sSaved), rC)
+	a.Ubfx(r8, rW, 8, 8)
+	a.MovImm(rC, 0)
+	a.Bind(argLoop)
+	g.cmpMem(rC, rCtx, scr(sSaved))
+	a.BCond(HS, run)
+	a.Load(rW, rD, off("fwdArg.param"))
+	a.CmpImm(rW, 0, true)
+	a.BCond(LT, konst)
+	a.Cmp(rW, r8, true)
+	a.BCond(HS, undef)
+	a.AddLsl(rW, rS, rW, 4)
+	a.Load(r9, rW, 32)
+	a.Load(rW, rW, 40)
+	a.B(put)
+	a.Bind(konst)
+	a.Load(r9, rD, off("fwdArg.k"))
+	a.Load(rW, rD, off("fwdArg.k")+8)
+	a.B(put)
+	a.Bind(undef)
+	a.Load(r9, rCtx, ncUndef)
+	a.MovImm(rW, 0)
+	a.Bind(put)
+	a.AddLsl(rT, rCtx, rC, 3)
+	a.Store(rT, ncFwdArgs, r9)
+	a.Store(rT, ncFwdArgs+8, rW)
+	a.AddImm(rC, rC, 2, true)
+	a.AddImm(rD, rD, int64(size("fwdArg")), true)
+	a.B(argLoop)
+	a.Bind(run)
+	isApply := a.NewLabel()
+	g.cmpMemImm(rCtx, scr(sRC), int64(fwdCall))
+	a.BCond(NE, isApply)
+	a.AddImm(r9, rCtx, int64(ncFwdArgs), true)
+	a.Store(rCtx, scr(sI), r9)
+	a.Bind(isApply)
+	a.Adr(r9, back)
+	a.Store(rCtx, scr(sKind), r9)
+	a.B(g.initEntry())
+}
+
+// applyInit is amd64's.
+func (g *armGen) applyInit(hook, resume Label) {
+	a := g.a
+	back := a.NewLabel()
+	a.Bind(hook)
+	a.Cbz(rW, g.exit, true)
+	a.Load(rC, rCtx, scr(sE))
+	a.Load(rS, rCtx, scr(sWin))
+	a.Load(r9, rS, 24)
+	a.Store(rCtx, scr(sKa), r9)
+	a.Load(r9, rC, offECl)
+	a.Load(r9, r9, offClCode)
+	g.addMem(r9, rCtx, ncCCBase)
+	a.Store(rCtx, scr(sV1), r9)
+	a.AddImm(r9, rS, 32, true)
+	a.Store(rCtx, scr(sI), r9)
+	a.Load(r9, rCtx, scr(sArgc))
+	a.Store(rCtx, scr(sEnd), r9)
+	a.Adr(r9, back)
+	a.Store(rCtx, scr(sKind), r9)
+	a.B(g.initEntry())
+	a.Bind(back)
+	a.Cbz(rW, resume, true)
+	a.Load(rW, rIP, 0)
+	g.regA(rW)
+	a.Load(r9, rCtx, ncUndef)
+	a.MovImm(r8, 0)
+	g.storeValue()
+}
+
+// log2 is n's base-2 logarithm, n a power of 2.
+func log2(n int) int {
+	k := 0
+	for n > 1 {
+		n >>= 1
+		k++
+	}
+	return k
+}

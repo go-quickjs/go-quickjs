@@ -13,9 +13,11 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // in it.
 func leafOf(fn *bytecode.Function, rc *bytecode.RegCode) {
 	rc.Leaf, rc.PureTail, rc.PureCalls = bytecode.LeafNone, 0, false
+	rc.Stores, rc.Forward = nil, nil
 	if fn.Debug != nil || fn.Generator || fn.Async || fn.HasRest || fn.HasDirectEval || !fn.HasSimpleParams || fn.ParamsAreLexical {
 		return
 	}
+	plansOf(fn, rc)
 	code := rc.Code
 	this := func(r uint16) bool { return r == regThis }
 	// The register of parameter k, which the body never writes.
@@ -29,6 +31,7 @@ func leafOf(fn *bytecode.Function, rc *bytecode.RegCode) {
 		code[3].Op() == bytecode.RApplyArgs && code[3].B() == code[0].A() &&
 		code[4].Op() == bytecode.RRetUndef {
 		rc.Leaf = bytecode.LeafForward
+		rc.Forward = &bytecode.ForwardPlan{Method: code[0].C(), Fn: code[1].C()}
 		return
 	}
 	if fn.UsesArguments {
@@ -194,4 +197,111 @@ func pureSafe(w bytecode.RInstr) bool {
 		return bytecode.Op(w.X()) == bytecode.OpNot
 	}
 	return false
+}
+
+// maxStores is the most stores a plan of RegCode.Stores has.
+const maxStores = 8
+
+// plansOf sets rc's Stores, where fn's body is an initializer's, and its
+// Forward, where it hands its parameters on to a method of its this by
+// call (leafOf sets an apply's, LeafForward's). The native interpreter
+// makes the stores itself, without the body's frame, where every site's
+// cache answers for the object it is given: a function's or a method's
+// body that only stores up to maxStores of its parameters in this, some
+// made 0 where they are falsy, and returns undefined. leafOf has turned
+// away what does anything before its body.
+func plansOf(fn *bytecode.Function, rc *bytecode.RegCode) {
+	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindMethod || fn.UsesArguments || rc.Params > 64 {
+		return
+	}
+	code := rc.Code
+	if len(code) >= 5 && code[0].Op() == bytecode.RGetProp {
+		rc.Forward = forwardCall(fn, rc)
+		return
+	}
+	param := func(r uint16) bool { return r >= regParams && int(r) < regParams+rc.Params }
+	// The parameters if (!p) p = 0 has made 0 where they were falsy.
+	var defaults uint64
+	var stores []bytecode.ThisStore
+	for pc := 0; pc < len(code); {
+		w := code[pc]
+		st := bytecode.ThisStore{Site: w.C()}
+		switch {
+		case w.Op() == bytecode.RJmpT && param(w.A()) && int32(w.BC()) == 1 && pc+1 < len(code):
+			// if (!p) p = 0: jmp_true p, +1; load_int p, 0.
+			if next := code[pc+1]; next.Op() != bytecode.RLoadInt || next.A() != w.A() || next.BC() != 0 {
+				return
+			}
+			defaults |= 1 << (w.A() - regParams)
+			pc += 2
+			continue
+		case w.Op() == bytecode.RJmpF && param(w.A()) && int32(w.BC()) == 2 && pc+4 < len(code):
+			// this.k = p ? p : 0: jmp_false p, +2; move t, p; jmp +1;
+			// load_int t, 0; set_prop this, t.
+			move, jump, load, set := code[pc+1], code[pc+2], code[pc+3], code[pc+4]
+			if move.Op() != bytecode.RMove || move.B() != w.A() || int(move.A()) < regParams+rc.Params ||
+				jump.Op() != bytecode.RJmp || int32(jump.BC()) != 1 ||
+				load.Op() != bytecode.RLoadInt || load.A() != move.A() || load.BC() != 0 ||
+				set.Op() != bytecode.RSetProp || set.A() != regThis || set.B() != move.A() {
+				return
+			}
+			st = bytecode.ThisStore{Site: set.C(), Param: w.A() - regParams, Zero: true}
+			pc += 5
+		case w.Op() == bytecode.RSetProp && w.A() == regThis && param(w.B()):
+			st.Param = w.B() - regParams
+			st.Zero = defaults&(1<<st.Param) != 0
+			pc++
+		case w.Op() == bytecode.RRetUndef:
+			rc.Stores = stores
+			return
+		default:
+			return
+		}
+		if len(stores) == maxStores {
+			return
+		}
+		stores = append(stores, st)
+	}
+}
+
+// forwardCall is the plan of a body that is this.k.call(this, ...) and
+// nothing else: get_prop of this, get_method_w of call, the move of this
+// and of each argument -- a parameter, or a constant loaded -- then
+// call_method_w and the return of undefined; nil for any other.
+func forwardCall(fn *bytecode.Function, rc *bytecode.RegCode) *bytecode.ForwardPlan {
+	code := rc.Code
+	m, c, t := code[0], code[1], code[2]
+	if m.B() != regThis || c.Op() != bytecode.RGetMethodW || c.B() != m.A() || !siteIs(fn, rc, c.C(), "call") ||
+		t.Op() != bytecode.RMove || t.A() != c.A()+2 || t.B() != regThis {
+		return nil
+	}
+	plan := &bytecode.ForwardPlan{Method: m.C(), Fn: c.C(), Call: true}
+	for i, w := range code[3:] {
+		if w.Op() == bytecode.RCallMW {
+			if w.A() != c.A() || int(w.X()) != len(plan.Args)+1 {
+				return nil
+			}
+			for _, ret := range code[3+i+1:] {
+				if ret.Op() != bytecode.RRetUndef {
+					return nil
+				}
+			}
+			return plan
+		}
+		if len(plan.Args) == maxStores || w.A() != c.A()+3+uint16(len(plan.Args)) {
+			return nil
+		}
+		switch w.Op() {
+		case bytecode.RMove:
+			if w.B() < regParams || int(w.B()) >= regParams+rc.Params {
+				return nil
+			}
+			plan.Args = append(plan.Args, bytecode.ForwardArg{Param: int32(w.B() - regParams)})
+		case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull, bytecode.RLoadTrue, bytecode.RLoadFalse:
+			plan.Args = append(plan.Args, bytecode.ForwardArg{Param: -1, Load: w})
+		default:
+			return nil
+		}
+	}
+	return nil
 }

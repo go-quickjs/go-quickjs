@@ -80,8 +80,7 @@ type regCode struct {
 	// thing, which the native call handler reads, or 0.
 	leafUp  int32
 	leafVal Value
-	// leafOps is a regLeafCode body's code as regLeafRun runs it, or a
-	// plain native initializer's stores (regInitOps).
+	// leafOps is a regLeafCode body's code as regLeafRun runs it.
 	leafOps []regLeafOp
 	// switches is each switch instruction's table, made from the code's.
 	switches []*regSwitchTable
@@ -108,6 +107,17 @@ type regCode struct {
 	// leafNative describes a numeric binary leaf, a this getter, or a
 	// typeof predicate for the native call handler.
 	leafNative uint64
+	// initPlan is the code's Stores as the native handlers read them, one
+	// word a store: its site<<16, its parameter<<1, and 1 where a falsy
+	// parameter is stored as 0 (regInitPlan); nil for any other code.
+	initPlan []uint32
+	// fwdKind is the code's Forward for the native construction:
+	// fwdApply, fwdCall, or 0 for none; fwdSites its method's site and,
+	// past 16 bits, its apply's or call's; fwdArgs a call's arguments
+	// after this (regForwardPlan).
+	fwdKind  uint32
+	fwdSites uint32
+	fwdArgs  []fwdArg
 }
 
 // runReg runs frame f as register code c, from instruction start, and

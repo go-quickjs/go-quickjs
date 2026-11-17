@@ -900,33 +900,41 @@ the arrows inside it. Anything else -- a bound function, a proxy, a
 built-in, a class with fields -- is constructed by the generic path, the
 site's miss (`regConstruct`).
 
-The construction cache's unused `this` words hold the constructor shape
-and its own data-property slot for `prototype` (`nativeCtorThis`). A shape
-check replaces the general property lookup; the slot's value is read each
-time, so replacing `prototype` takes effect immediately. A changed shape
-refreshes the slot, and accessors, missing properties and primitive values
-take the ordinary construction path. No cache or function fields are added.
+The construction cache's unused `this` words remember where the
+constructor's shape keeps `prototype`: the shape and the slot
+(`regCtorThis`). A shape check replaces the property lookup; the slot's
+value is read each time, so that a `prototype` assigned takes effect, and
+a remembered shape is never changed in place. Another shape is looked up
+and remembered again; an accessor, a missing property or a primitive takes
+the ordinary construction path.
 
-In the plain native interpreter, a body that stores up to eight parameters
-in plain data properties can finish without a frame (`nativeInit`). Its
-register code supplies a plan, kept with the leaf code, including optional
-falsy-to-zero defaults written as `if (!p) p = 0` or `p ? p : 0`. Every
-store cache and prototype guard is checked before any write. With enough
-room already in the object, the values are written and the final shape
-and property count committed together. A failed guard runs the ordinary
-body, preserving setters, exceptions and partial writes. JIT execution
-keeps its ordinary frames and feedback.
-
-A constructor whose whole body is `this.k.apply(this, arguments)` or
-`this.k.call(this, p, ...)` can finish the same way (`nativeForwardInit`).
-The latter's arguments are parameters, numbers, booleans, null or
-undefined, recorded with the initializer plans. The method and its
-`apply` or `call` must be guarded data properties, the latter the realm's
-built-in, and the target must have a validated initializer plan.
-Neither forwarding nor target
-then needs a frame: no script can observe either. Accessors, replacements,
-bound or proxy targets, and any target whose body can run code take the
-ordinary path.
+**Initializers.** The register compiler gives a body that only stores up
+to eight of its parameters in `this` -- some made 0 where falsy, written
+`if (!p) p = 0` or `this.k = p ? p : 0` -- and returns undefined a plan of
+its stores (`RegCode.Stores`: each store's cache site, its parameter, and
+whether a falsy one is 0), and a constructor that is
+`this.k.apply(this, arguments)` or `this.k.call(this, ...)` -- the call's
+arguments parameters or constants -- a plan of its forwarding
+(`RegCode.Forward`). The native interpreter makes those stores itself,
+without the bodies' frames (`initRun` in nativegen's `*_init.go`): at a
+construction of a constructor with a plan, at one through a forwarder whose
+method `this.k` -- read at the forwarder's site, or in its table of
+`this.k` reads (`fwdSite`) where the site has given up -- is a function of
+a closure, not bound, with a plan, and whose `apply` or `call` is the
+realm's, and at an `apply_args` of a target with a plan. Every store is
+checked before any is made, as `set_prop`'s handler checks it: a plain
+writable property of the shape the stores before it leave, or an addition
+`addProp` would make, with room for it; and a parameter made 0 is decided,
+a string's, a BigInt's or `document.all`'s by the body. Then each is made as
+`set_prop`'s handler makes it, its pointers through the write barrier's
+routine while the collector marks. Anything else -- a setter, a read-only or
+missing property, a proxy, an accessor or a replacement of the method or of
+`apply`, a bound or proxy target, a body that is not a plan -- runs the
+bodies in their frames, nothing written. `nativeNew` and `nativeApply` say
+where the handler may try: the JIT not running, whose frames have feedback
+to give, no interrupt due, and the frames the bodies would have had within
+the limit, so that past it they throw the frames' RangeError. The Go table
+runs these bodies in their frames, as it runs any other.
 
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While
@@ -946,9 +954,9 @@ each such call is `apply_args`, which hands on the frame's arguments as
 passed. Where an object is made, the frame keeps its arguments on the
 runtime's argument stack until it returns, before its bindings take the
 window past the parameters.
-The plain native `apply_args` also answers a validated initializer plan
-without entering the initializer's frame; its forwarding caller keeps its
-own frame and arguments.
+The native `apply_args` makes the stores of a target's initializer plan
+itself, as a construction does (see Initializers); the caller keeps its own
+frame and arguments.
 
 ## Exceptions
 

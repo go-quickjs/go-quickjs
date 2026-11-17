@@ -667,10 +667,14 @@ func (g *armGen) newW() {
 	a.Br(rJ)
 	a.Bind(after)
 	g.reload()
-	// 0: Go's; 2: done, a body leafCall answered; 1: entered.
+	// 0: Go's; 2: done, a body leafCall answered; 3: the native
+	// initializer's to try first (newInit); 1: entered.
 	a.Cbz(rW, g.exit, true)
 	a.CmpImm(rW, 2, true)
-	a.BCond(EQ, done)
+	hook, resume := a.NewLabel(), a.NewLabel()
+	a.BCond(HS, hook)
+	g.after = append(g.after, func() { g.newInit(hook, resume, done) })
+	a.Bind(resume)
 	a.Load(rW, rIP, 0)
 	g.newSite()
 	plain := a.NewLabel()
@@ -821,15 +825,16 @@ func (g *armGen) applyW() {
 	a.Bind(after)
 	g.reload()
 	if g.v == plain {
-		check, resume := a.NewLabel(), a.NewLabel()
+		// 0: Go's; 3: the native initializer's to try first
+		// (applyInit); 1: entered.
+		check, hook, resume := a.NewLabel(), a.NewLabel(), a.NewLabel()
 		a.B(check)
 		a.Bind(resume)
 		g.after = append(g.after, func() {
 			a.Bind(check)
 			a.CmpImm(rW, 1, true)
 			a.BCond(EQ, resume)
-			a.Cbz(rW, g.exit, true)
-			g.next()
+			g.applyInit(hook, resume)
 		})
 	} else {
 		a.Cbz(rW, g.exit, true)

@@ -45,6 +45,10 @@ var (
 	genSuspendedYield, genExecuting, genCompleted int32
 
 	tailCallDepth, linearScanLimit int32
+	// maxCacheFills is when a site gives up; fwdApply and fwdCall a
+	// forwarder's kinds, and fwdWays and fwdShift its table of its
+	// method's reads (vm's fwdSite).
+	maxCacheFills, fwdApply, fwdCall, fwdWays, fwdShift int32
 	// atomIndexTag bounds an index an atom holds (hasIndexQuick's).
 	atomIndexTag int32
 	// atomPrototype is the key prototype, and propOddKey the flags of a
@@ -113,6 +117,7 @@ func loadConsts() {
 		{&genSuspendedYield, "genSuspendedYield"}, {&genExecuting, "genExecuting"},
 		{&genCompleted, "genCompleted"},
 		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"},
+		{&maxCacheFills, "maxCacheFills"}, {&fwdApply, "fwdApply"}, {&fwdCall, "fwdCall"}, {&fwdWays, "fwdWays"}, {&fwdShift, "fwdShift"},
 		{&atomIndexTag, "atomIndexTag"}, {&atomPrototype, "atomPrototype"}, {&propOddKey, "propOddKey"}} {
 		*c.p = int32(k(c.name))
 	}

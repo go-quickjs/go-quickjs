@@ -204,6 +204,14 @@ type nativeCtx struct {
 	// (reflectConstructFn), an offset from the realm running now.
 	reflectFn uintptr
 	reflect   uintptr
+	// applyAt is where a Realm has its Function.prototype.apply
+	// (applyFn), an offset from the realm running now, as callFn is.
+	applyAt uintptr
+	// fwdArgs is where a construction through this.k.call(this, ...)
+	// lays the arguments it hands on for the stores its method makes
+	// (the native initializer): words the collector does not read, for
+	// values the forwarder's window or code holds while they are here.
+	fwdArgs [2 * 8]uint64
 }
 
 // nativeMaxDepth is how deep the native frame stack goes.

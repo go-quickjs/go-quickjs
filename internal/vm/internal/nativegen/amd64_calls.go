@@ -814,11 +814,15 @@ func (g *nativeGen) newW() {
 	a.JmpMem(RDI, ncCallH)
 	a.Bind(after)
 	g.reload()
-	// 0: Go's; 2: done, a body leafCall answered; 1: entered.
+	// 0: Go's; 2: done, a body leafCall answered; 3: the native
+	// initializer's to try first (newInit); 1: entered.
 	a.Op(Test, RAX, RAX, true)
 	a.Jcc(CondE, g.exit)
 	a.OpImm(Cmp, RAX, 2, true)
-	a.Jcc(CondE, done)
+	hook, resume := a.NewLabel(), a.NewLabel()
+	a.Jcc(CondAE, hook)
+	g.after = append(g.after, func() { g.newInit(hook, resume, done) })
+	a.Bind(resume)
 	a.Load(RAX, RBX, 0)
 	g.newSite()
 	plain := a.NewLabel()
@@ -944,15 +948,13 @@ func (g *nativeGen) applyW() {
 	a.Bind(after)
 	g.reload()
 	if g.v == plain {
-		done := a.NewLabel()
+		// 0: Go's; 3: the native initializer's to try first
+		// (applyInit); 1: entered.
+		hook, resume := a.NewLabel(), a.NewLabel()
 		a.OpImm(Cmp, RAX, 1, false)
-		a.Jcc(CondNE, done)
-		g.after = append(g.after, func() {
-			a.Bind(done)
-			a.Op(Test, RAX, RAX, true)
-			a.Jcc(CondE, g.exit)
-			g.next()
-		})
+		a.Jcc(CondNE, hook)
+		g.after = append(g.after, func() { g.applyInit(hook, resume) })
+		a.Bind(resume)
 	} else {
 		a.Op(Test, RAX, RAX, true)
 		a.Jcc(CondE, g.exit)

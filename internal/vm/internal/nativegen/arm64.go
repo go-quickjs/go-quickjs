@@ -91,6 +91,9 @@ type armGen struct {
 	genObj Label
 	// after is appended after every handler, keeping their layout intact.
 	after []func()
+	// initL and initMade are amd64's.
+	initL    Label
+	initMade bool
 }
 
 func (g *armGen) ex(n int) Label {

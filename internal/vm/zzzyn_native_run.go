@@ -489,6 +489,7 @@ func (r *Runtime) newNativeCtx(st *regState) *nativeCtx {
 	ctx.applyFn = *(*uintptr)(unsafe.Pointer(&nativeApplyFn))
 	ctx.reflectFn = *(*uintptr)(unsafe.Pointer(&nativeReflectFn))
 	ctx.reflect = unsafe.Offsetof(Realm{}.reflectConstructFn)
+	ctx.applyAt = unsafe.Offsetof(Realm{}.applyFn)
 	ctx.grow()
 	st.native = ctx
 	return ctx
@@ -1042,12 +1043,17 @@ var nativeJITCallFn func(*[1 << 16]Value, bytecode.RInstr, int, *regState) int
 // with the constructor its site's cache holds (regCallConstruct), which
 // the handler has checked is R[A], made as regCtorThis makes it and put
 // in R[A+1], the frame's this. It reports 1 for the handler to enter the
-// constructor with it; 2 where the constructor is a body that only stores
-// its parameters in this, which nativeInit or leafCall has done, R[B] the object; and 0
+// constructor with it; 3 where the handler may first make the stores of
+// the constructor's initializer plan, or of its forwarder's method's
+// (regCode's initPlan, fwdKind), itself, without a frame -- the JIT not
+// running, whose frames have feedback to give, an interrupt not due, and
+// the frames the body would have had within the limit, so that its
+// RangeError is the frame's -- and enter it where they do not all
+// validate; 2 where the constructor is a body that only stores its
+// parameters in this, which leafCall has done, R[B] the object; and 0
 // where the construction is Go's (rsNewW): a prototype that is no data
 // property holding an object, a root whose room is not settled, a leaf
-// body leafCall does not answer. It throws
-// nothing and runs no code.
+// body leafCall does not answer. It throws nothing and runs no code.
 //
 //go:nocheckptr
 func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) int {
@@ -1055,7 +1061,7 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 	r := ctx.st.r
 	e := &f.cl.regCalls[w.C()]
 	o := e.callee
-	obj := r.nativeCtorThis(e, o.fn())
+	obj := r.regCtorThis(e, o.fn())
 	if obj == nil {
 		return 0
 	}
@@ -1070,14 +1076,16 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 		ctx.scratch[sThisRef] = uint64(uintptr(unsafe.Pointer(ctx.thisRef)))
 		return 1
 	}
-	if !r.jitOn() {
-		args := regs[a+2 : a+2+int(w.X())]
-		if r.nativeInit(e.cl, obj, args) ||
-			(leafKind(e.cl) == bytecode.LeafForward || len(e.rc.leafOps) != 0 && e.rc.leafOps[0].op == rlInitCall) &&
-				r.nativeForwardInit(e.cl, obj, args) {
-			regs[w.B()] = Obj(obj)
-			return 2
+	if c := e.rc; (len(c.initPlan) > 0 && r.frameDepth < r.maxFrames || c.fwdKind != 0 && r.frameDepth+1 < r.maxFrames) &&
+		r.interruptCounter > 1 && !r.jitOn() {
+		if c.fwdKind != 0 {
+			// The handler reads the method of obj's shape at the
+			// forwarder's site, or in its table where the site has given
+			// up, which leafForward would have filled (fwdCache).
+			site := int(c.fwdSites & 0xffff)
+			r.fwdCache(e.cl, site, obj, e.cl.names[c.siteName[site]])
 		}
+		return 3
 	}
 	if leaf := leafKind(e.cl); leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
 		if _, done := r.leafCall(e.cl, obj, regs[a+2:a+2+int(w.X())]); !done {
@@ -1167,9 +1175,10 @@ func nativeSuper(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx
 // arguments as regApplyArgs hands them on -- without apply's frame, which
 // a stack trace and a caller pass over. It reports 1 for the handler to
 // enter it, the context's super the entry, and 0 where the call is Go's
-// (rsApplyArgs). A plain native initializer whose stores all validate is
-// answered without a frame and reports 2, with R[A] undefined. It throws
-// nothing and runs no code.
+// (rsApplyArgs); 3 where the handler may first make the stores of f's
+// initializer plan (regCode's initPlan) itself, on the this, an object,
+// without f's frame, as nativeNew's 3 says, and enter f where they do not
+// all validate. It throws nothing and runs no code.
 //
 //go:nocheckptr
 func nativeApply(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) int {
@@ -1211,10 +1220,6 @@ func nativeApply(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx
 			}
 		}
 	}
-	if !r.jitOn() && r.interruptCounter > 1 && this.IsObject() && r.nativeInit(cl, this.Object(), args) {
-		regs[w.A()] = Undefined
-		return 2
-	}
 	wb := r.stackTop
 	if wb+2+len(args) > len(r.stack) {
 		return 0
@@ -1227,6 +1232,9 @@ func nativeApply(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx
 	ctx.scratch[sE] = uint64(uintptr(unsafe.Pointer(&ctx.super)))
 	ctx.scratch[sWin] = uint64(uintptr(unsafe.Pointer(&win[0])))
 	ctx.scratch[sArgc] = uint64(len(args))
+	if len(rc.initPlan) > 0 && this.IsObject() && r.frameDepth < r.maxFrames && r.interruptCounter > 1 && !r.jitOn() {
+		return 3
+	}
 	return 1
 }
 

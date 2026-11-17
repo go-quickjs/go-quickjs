@@ -20,7 +20,7 @@ Pair`))
 	// Keep a cache across these turns: the runtime releases its call-site
 	// caches at each turn's end.
 	e := &regCallCache{callee: v.Object(), kind: regCallConstruct}
-	if obj := r.nativeCtorThis(e, e.callee.fn()); obj == nil {
+	if obj := r.regCtorThis(e, e.callee.fn()); obj == nil {
 		t.Fatal("settled constructor was not allocated")
 	}
 	if e.this.ref == nil || (*shape)(e.this.ref) != e.callee.shape {
@@ -42,7 +42,7 @@ var x; for (var i = 0; i < 20; i++) x = make();
 		if e.callee.shape != oldShape {
 			t.Fatal("assigning prototype changed the constructor's shape")
 		}
-		obj := r.nativeCtorThis(e, e.callee.fn())
+		obj := r.regCtorThis(e, e.callee.fn())
 		if obj == nil || obj.proto() != e.callee.vals()[int(e.this.num)].Object() {
 			t.Fatal("cached slot did not read the new prototype")
 		}
@@ -58,7 +58,7 @@ var y = make();
 	if err != nil || v.String().Go() != "true,3,2,false" {
 		t.Fatalf("changed shape and prototype: %v, %v", v, err)
 	}
-	r.nativeCtorThis(e, e.callee.fn())
+	r.regCtorThis(e, e.callee.fn())
 	if (*shape)(e.this.ref) != e.callee.shape || e.callee.shape == oldShape {
 		t.Fatal("changed constructor shape did not refresh the slot")
 	}

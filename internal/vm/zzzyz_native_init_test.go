@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -249,6 +250,145 @@ out.push(log.join()); out.join("|")`
 		nativeMarking(t, marking)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+		}
+	}
+}
+
+// A construction the native initializer answers makes no frame, but the
+// frames its bodies would have made still meet the limit: where the
+// constructor's frame, or the forwarder's and its method's, would be past
+// it, the bodies run and throw the RangeError the frames would. probe
+// records how far below the deepest frame a construction first throws:
+// at it for a constructor that stores, one below for a forwarder or an
+// apply_args of an initializer; and
+// never for one that only stores its parameters (LeafSetThis), which
+// leafCall answers without a frame, as the Go table does, past the limit.
+func TestRegNativeInitFrameLimit(t *testing.T) {
+	const src = nativeInitSource + `
+function probe(C) {
+ var first = -1, deepest = 0;
+ function down(d) {
+  try { new C(1, 2) } catch (e) { if (first < 0) first = d; if (!(e instanceof RangeError)) throw e }
+  deepest = d;
+  try { down(d + 1) } catch (e) {}
+ }
+ for (var i = 0; i < 100; i++) new C(1, 2);
+ down(0);
+ return first < 0 ? "none" : deepest - first;
+}
+function Via(a, b) { Defaults.apply(this, arguments) }
+[probe(Pair), probe(Defaults), probe(Forward), probe(ForwardCall), probe(ForwardCallDefaults), probe(Via)].join()`
+	// Via's apply_args: the Go table counts apply's frame
+	// (regApplyArgs), which the native handler, entering the target
+	// itself (nativeApply), makes none of, with the plan or without.
+	const table, native = "none,0,1,1,1,2", "none,0,1,1,1,1"
+	if got := nativeRunSrc(t, src, false); got != table {
+		t.Fatalf("Go table: got %q, want %q", got, table)
+	}
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		if got := nativeRunSrc(t, src, true); got != native {
+			t.Fatalf("marking %v: got %q, want %q", marking, got, native)
+		}
+	}
+}
+
+// A forwarder made anew for each class, as Class.create makes one, is one
+// site of more shapes than a site keeps: the method is read in the
+// forwarder's table (fwdSite), which nativeNew fills, and every
+// construction is still made without a frame.
+func TestRegNativeInitForwardTable(t *testing.T) {
+	nativeCounting(t)
+	const src = `
+function create() { return function () { this.initialize.apply(this, arguments) } }
+function init(a, b) { this.a = a; this.b = b }
+var cs = [];
+for (var k = 0; k < 24; k++) { var C = create(); C.prototype.initialize = init; cs.push(C) }
+function run(n) {
+ var s = 0;
+ for (var i = 0; i < n; i++) for (var j = 0; j < cs.length; j++) { var p = new cs[j](i, 1); s += p.a + p.b }
+ return s;
+}
+run(50);
+String(run(100))`
+	const want = "121200"
+	if got := nativeRunSrc(t, src, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		before := atomic.LoadInt64(&nativeCalls)
+		if got := nativeRunSrc(t, src, true); got != want {
+			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+		}
+		// The warm-up's constructions fill the sites and the table.
+		if n := atomic.LoadInt64(&nativeCalls) - before; n > 2*24*20 {
+			t.Fatalf("marking %v: forwarded constructions entered %d frames", marking, n)
+		}
+	}
+}
+
+// The register compiler's plans (RegCode.Stores and Forward), by body:
+// the forms it takes, and bodies that are none of them.
+func TestRegInitPlans(t *testing.T) {
+	const src = `
+function stores(a, b) { this.a = a; this.b = b }
+function defaults(x, y) { if (!x) x = 0; this.x = x; this.y = y ? y : 0; this.z = x }
+function method(a) { this.m = a }
+function apply() { this.k.apply(this, arguments) }
+function call(a, b) { this.k.call(this, b, 3, a, null) }
+function computed(a) { this.a = a + 1 }
+function args(a) { this.a = arguments.length }
+function nine(a) { this.a = a; this.b = a; this.c = a; this.d = a; this.e = a; this.f = a; this.g = a; this.h = a; this.i = a }
+function five(a) { if (!a) a = 5; this.a = a }
+function other(a) { other.k.call(this, a) }
+function returns(a) { this.a = a; return a }
+var K = class { constructor(a) { this.a = a } };
+var o = { k() {} };
+for (var f of [stores, defaults, method, apply, call, computed, args, nine, five, other, returns]) {
+	try { f.call(o, 1, 2) } catch (e) {}
+}
+new K(1);`
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	plan := func(name string) string {
+		v := r.global.getOwn(r.atoms.intern(name)).value()
+		rc := v.Object().fn().closure.reg.rc
+		s := fmt.Sprint(len(rc.Stores) > 0)
+		for _, st := range rc.Stores {
+			s += fmt.Sprintf(" %d:%v", st.Param, st.Zero)
+		}
+		if f := rc.Forward; f != nil {
+			s += fmt.Sprintf(" forward call=%v", f.Call)
+			for _, a := range f.Args {
+				if a.Param < 0 {
+					s += " k:" + a.Load.Op().String()
+				} else {
+					s += fmt.Sprintf(" p%d", a.Param)
+				}
+			}
+		}
+		return s
+	}
+	for _, tc := range []struct{ name, want string }{
+		{"stores", "true 0:false 1:false"},
+		{"defaults", "true 0:true 1:true 0:true"},
+		{"method", "true 0:false"},
+		{"apply", "false forward call=false"},
+		{"call", "false forward call=true p1 k:load_int p0 k:load_null"},
+		{"computed", "false"},
+		{"args", "false"},
+		{"nine", "false"},
+		{"five", "false"},
+		{"other", "false"},
+		{"returns", "false"},
+		{"K", "false"},
+	} {
+		if got := plan(tc.name); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

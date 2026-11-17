@@ -228,10 +228,22 @@ var (
 	ncReflectFn  int32
 	ncReflect    int32
 	ncMiss       int32
-	offUpSlot    int32
-	offUpClosed  int32
-	offRCLeafUp  int32
-	offRCTailTo  int32
+	// The native initializer's (init.go): the realm's apply, the
+	// forwarded arguments' words, the plans of a callee's code, a
+	// forwarder's table of its method's reads, a function's closure.
+	ncApplyAt     int32
+	ncFwdArgs     int32
+	offRCInitPlan int32
+	offRCFwdKind  int32
+	offRCFwdSites int32
+	offRCFwdArgs  int32
+	offCCFwd      int32
+	offFdClosure  int32
+	offFdBound    int32
+	offUpSlot     int32
+	offUpClosed   int32
+	offRCLeafUp   int32
+	offRCTailTo   int32
 
 	offFiKeys      int32
 	offFiObj       int32
@@ -482,6 +494,15 @@ func loadOffsets() {
 	ncReflectFn = off("nativeCtx.reflectFn")
 	ncReflect = off("nativeCtx.reflect")
 	ncMiss = off("nativeCtx.miss")
+	ncApplyAt = off("nativeCtx.applyAt")
+	ncFwdArgs = off("nativeCtx.fwdArgs")
+	offRCInitPlan = off("regCode.initPlan")
+	offRCFwdKind = off("regCode.fwdKind")
+	offRCFwdSites = off("regCode.fwdSites")
+	offRCFwdArgs = off("regCode.fwdArgs")
+	offCCFwd = ccRel(off("closureCode.fwd"))
+	offFdClosure = off("funcData.closure")
+	offFdBound = off("funcData.bound")
 	offUpSlot = off("upvalue.slot")
 	offUpClosed = off("upvalue.closed")
 	offRCLeafUp = off("regCode.leafUp")
