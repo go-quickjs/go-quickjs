@@ -125,6 +125,7 @@ func run(cmd string, args []string) (same bool, err error) {
 	fs.StringVar(&o.modes, "modes", strings.Join(allModes, ","), "the modes to compile in")
 	fs.StringVar(&o.file, "file", "", "show: the file, as dump names it")
 	fs.BoolVar(&o.perFunc, "perfunc", false, "dump: a line for each function of each compile")
+	fs.BoolVar(&o.reg, "reg", false, "the register code alone, its operands as what they name")
 	fs.Parse(args)
 	roots := fs.Args()
 	if len(roots) == 0 {
@@ -153,7 +154,11 @@ func run(cmd string, args []string) (same bool, err error) {
 
 // flags are what passes o on to the other side's tool.
 func (o options) flags() []string {
-	return []string{"-mutants", fmt.Sprint(o.mutants), "-mutmax", fmt.Sprint(o.mutmax), "-modes", o.modes}
+	f := []string{"-mutants", fmt.Sprint(o.mutants), "-mutmax", fmt.Sprint(o.mutmax), "-modes", o.modes}
+	if o.reg {
+		f = append(f, "-reg")
+	}
+	return f
 }
 
 // compareWith runs this build and one of base.

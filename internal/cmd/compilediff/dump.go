@@ -27,6 +27,9 @@ type options struct {
 	// perFunc dumps a line for each function of each compile, rather than
 	// one for each file: the fold command's.
 	perFunc bool
+	// reg writes each function's register code with its operands as what
+	// they name, and none of the stack form (regonly.go).
+	reg bool
 }
 
 var allModes = []string{"script", "strict", "module", "debug", "moddebug", "quirks", "eval"}
@@ -196,6 +199,8 @@ type writer struct {
 	// path, rather than its being written to w; and a compile's error, and
 	// its script's, as functions "error" and "script".
 	perFunc func(path string, text []byte)
+	// regOnly is options.reg.
+	regOnly bool
 }
 
 var (
@@ -239,7 +244,11 @@ func (d *writer) part(path string, write func()) {
 // function writes all of fn's fields, each on a line, and an instruction
 // or a constant a line each, and then the functions it holds.
 func (d *writer) function(path string, fn *bytecode.Function) {
-	d.part(path, func() { d.fields(path, fn) })
+	if d.regOnly {
+		d.part(path, func() { d.regFields(path, fn) })
+	} else {
+		d.part(path, func() { d.fields(path, fn) })
+	}
 	n := 0
 	for _, c := range fn.Constants {
 		if c.Fn != nil {
@@ -482,7 +491,7 @@ func compileFile(w io.Writer, f source, modes []string, o options, verbose bool)
 			return
 		}
 		if o.perFunc {
-			d := writer{seen: map[uintptr]int{}, perFunc: func(path string, text []byte) {
+			d := writer{seen: map[uintptr]int{}, regOnly: o.reg, perFunc: func(path string, text []byte) {
 				h := fnv.New64a()
 				h.Write(text)
 				fmt.Fprintf(w, "%s\t%s\t%016x\t%s\n", prevKey, path, h.Sum64(), regState(text))
@@ -491,7 +500,7 @@ func compileFile(w io.Writer, f source, modes []string, o options, verbose bool)
 			return
 		}
 		fmt.Fprintln(w, prevHead)
-		d := writer{w: w, seen: map[uintptr]int{}}
+		d := writer{w: w, seen: map[uintptr]int{}, regOnly: o.reg}
 		d.result(prev, prevText)
 	}
 	seed := fnv.New64a()
