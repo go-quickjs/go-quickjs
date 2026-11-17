@@ -362,9 +362,10 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		return nil
 	}
 	background := r.jitInBackground(cl.fn)
-	if background && s.jobsFull() {
-		// As many compiles in the background as there may be: asked again
-		// at a later sample.
+	if background && (s.jobsFull() || osrAt == 0 && s.regPendingJobs[key] != nil) {
+		// As many compiles in the background as there may be, or one of
+		// the function's under way or waiting to be installed
+		// (jitRegInstallWaits): asked again at a later sample.
 		return nil
 	}
 	// Young from its compile on (jitCodeAge): made unused since epoch 0,
@@ -1755,6 +1756,12 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 	// the turns after, had its code found slow for the loop (loopSlow) at
 	// once, the rest of each call the interpreter's.
 	loop, fixed := run == 2, run != 0
+	if j := r.jit.regPendingJobs[e.key]; resume == 0 && j != nil && j.waiting {
+		// A compile of this function waiting for the run that left
+		// (jitRegCompileDueNow): installed now, a check, and gone on in
+		// below.
+		r.jitDrain()
+	}
 	for {
 		ipc := 0
 		if resume == 0 && f.cl.reg == c {

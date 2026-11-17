@@ -53,6 +53,11 @@ type jitRegJob struct {
 	// miss has the worker leave the build as a miss (QJS_JIT_STRESS's
 	// miss), built on the runtime's goroutine at the install.
 	miss bool
+	// waiting marks a job done whose install waits for the native calls
+	// under way of the code it replaces (jitRegInstallWaits): kept, and
+	// installed at a check after they are done, it is no longer one of
+	// the compiles the background has room for (jobsFull).
+	waiting bool
 	// e is the entry being made, its program p, rf its feedback, which a
 	// build on the runtime's goroutine asks, snap that feedback asked ahead,
 	// which the worker's build asks.
@@ -249,6 +254,11 @@ func (r *Runtime) jitRegDrainJobs(stress bool, k int) {
 			i++
 			continue
 		}
+		if r.jitRegInstallWaits(j) {
+			j.waiting = true
+			i++
+			continue
+		}
 		s.regJobs = slices.Delete(s.regJobs, i, i+1)
 		if s.regPendingJobs[j.key] == j {
 			delete(s.regPendingJobs, j.key)
@@ -258,6 +268,25 @@ func (r *Runtime) jitRegDrainJobs(stress bool, k int) {
 		r.jitRegInstall(j)
 		r.Realm = prev
 	}
+}
+
+// jitRegInstallWaits reports whether j, a compile in the background that is
+// done, is to wait for its install: the code it replaces, which the cache
+// holds still, is run by a native call under way, which finds its code in
+// the cache (jitRegLevelAt) -- the function neither gone nor deoptimized
+// since, which would throw it away. A compile on the spot is not made
+// meanwhile (jitRegForAs); one in the background had been thrown away and
+// asked again, built a second time and as often thrown away again: Are We
+// Fast Yet's DeltaBlue, whose functions are mostly under way in recursive
+// native calls, threw away 77 of its 201 compiles, a third longer in the
+// background than on the spot.
+func (r *Runtime) jitRegInstallWaits(j *jitRegJob) bool {
+	s := r.jit
+	if j.osrAt != 0 || j.key.gone() || j.e.life.deopts != j.deopts {
+		return false
+	}
+	old := s.regCache[j.key]
+	return old != nil && s.regCalled(old)
 }
 
 // jitRegAbandonJobs lets the runtime's register compiles in the

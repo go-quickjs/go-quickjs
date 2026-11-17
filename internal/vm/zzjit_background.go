@@ -58,9 +58,16 @@ func (r *Runtime) jitInBackground(fn *bytecode.Function) bool {
 }
 
 // jobsFull reports whether the runtime has as many compiles in the
-// background as it may.
+// background as it may, not counting those done that wait for their
+// install (jitRegInstallWaits).
 func (s *jitState) jobsFull() bool {
-	return len(s.regJobs) >= jitJobsMax
+	n := 0
+	for _, j := range s.regJobs {
+		if !j.waiting {
+			n++
+		}
+	}
+	return n >= jitJobsMax
 }
 
 // inFlight reports whether the runtime has compiles or lowerings in the

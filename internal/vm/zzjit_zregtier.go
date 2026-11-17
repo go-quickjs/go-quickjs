@@ -1527,5 +1527,16 @@ func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 		// call's, from the run's context on, which its leaving unwinds.
 		limit, pending = run.root, 0
 	}
+	if j := r.jit.regPendingJobs[e.key]; j != nil && j.waiting && !e.invalid && e.code != nil && !r.jit.regCalledBelow(e, limit) {
+		// Compiled again in the background, the install waiting for the
+		// native calls of this code under way (jitRegInstallWaits), of
+		// which none is left once this run leaves: it leaves for it, the
+		// exit installing it (jitRegGoOnAt) as it compiles one due on the
+		// spot. Its installs had been tried only at the checks of calls
+		// it made, each under way inside it: AWFY's DeltaBlue's
+		// constructors waited out tens of thousands of them, their
+		// super() calls Go's meanwhile.
+		return true
+	}
 	return r.jitRegLearnedDueWith(run.f.cl, e, limit, pending)
 }

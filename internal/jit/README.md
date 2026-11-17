@@ -705,7 +705,15 @@ replacement as one of its first code does -- putting back what the questions
 appended to the feedback's lists (`replay`) and placing the code as the
 compile on the spot (`jitRegPlace`). A question the snapshot was not asked
 is a miss (`jitSnapMiss`): the compile is built at the install instead
-(`regSnapMisses` counts them). Meanwhile the function runs in the
+(`regSnapMisses` counts them). A compile done while the code it replaces is
+run by a native call under way waits (`jitRegInstallWaits`): kept, no
+longer one of the `jitJobsMax` compiles the background has room for, it is
+installed at the first check after that call is done, as a compile on the
+spot is not made meanwhile (`jitRegForAs`), rather than thrown away and asked
+again: a call of Go the replaced code makes from its own run, with no native
+call of it below, is due for it (`jitRegCompileDueNow`), the run leaving and
+its exit installing it (`jitRegGoOnAt`), as for a compile due on the spot. A function with a compile under way or waiting is not asked for
+another (`jitRegCompile`). Meanwhile the function runs in the
 interpreter, or in the code the compile replaces, valid and called by its
 native callers, and is not compiled again (`regPendingJobs`). A compile of
 a function deoptimized since it was prepared is thrown away at the install
