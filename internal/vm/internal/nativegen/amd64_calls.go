@@ -943,8 +943,20 @@ func (g *nativeGen) applyW() {
 	a.JmpMem(RDI, ncCallH)
 	a.Bind(after)
 	g.reload()
-	a.Op(Test, RAX, RAX, true)
-	a.Jcc(CondE, g.exit)
+	if g.v == plain {
+		done := a.NewLabel()
+		a.OpImm(Cmp, RAX, 1, false)
+		a.Jcc(CondNE, done)
+		g.after = append(g.after, func() {
+			a.Bind(done)
+			a.Op(Test, RAX, RAX, true)
+			a.Jcc(CondE, g.exit)
+			g.next()
+		})
+	} else {
+		a.Op(Test, RAX, RAX, true)
+		a.Jcc(CondE, g.exit)
+	}
 	a.Load(RAX, RBX, 0)
 	a.Load(RCX, RDI, scr(sE))
 	a.Load(RSI, RDI, scr(sWin))

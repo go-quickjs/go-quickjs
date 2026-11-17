@@ -820,7 +820,20 @@ func (g *armGen) applyW() {
 	a.Br(rJ)
 	a.Bind(after)
 	g.reload()
-	a.Cbz(rW, g.exit, true)
+	if g.v == plain {
+		check, resume := a.NewLabel(), a.NewLabel()
+		a.B(check)
+		a.Bind(resume)
+		g.after = append(g.after, func() {
+			a.Bind(check)
+			a.CmpImm(rW, 1, true)
+			a.BCond(EQ, resume)
+			a.Cbz(rW, g.exit, true)
+			g.next()
+		})
+	} else {
+		a.Cbz(rW, g.exit, true)
+	}
 	a.Load(rW, rIP, 0)
 	a.Load(rC, rCtx, scr(sE))
 	a.Load(rS, rCtx, scr(sWin))

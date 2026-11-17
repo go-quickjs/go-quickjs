@@ -509,8 +509,10 @@ type regCallCache struct {
 	callee *Object
 	cl     *closure
 	rc     *regCode
-	this   Value
-	kind   uint8
+	// this is a call's receiver; for regCallConstruct its unused words
+	// cache the constructor's prototype slot (nativeCtorThis).
+	this Value
+	kind uint8
 }
 
 // The kinds of regCallCache: what entering the callee takes of its this.

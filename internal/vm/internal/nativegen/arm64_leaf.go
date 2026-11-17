@@ -5,8 +5,8 @@ import (
 	. "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 )
 
-// binaryLeaf answers a numeric binary leaf or this getter without a frame. rC is the
-// cache, rS the window, r8 the code and r9 the closure, as at call's
+// binaryLeaf answers a numeric binary leaf, this getter or typeof predicate
+// without a frame. rC is the cache, rS the window, r8 the code and r9 the closure, as at call's
 // upvalue-leaf check. Every failure leaves the call's window untouched.
 func (g *armGen) binaryLeaf(start, miss Label) {
 	a := g.a
@@ -21,6 +21,9 @@ func (g *armGen) binaryLeaf(start, miss Label) {
 	a.Ubfx(rD, rJ, 0, 8)
 	a.CmpImm(rD, int64(bytecode.RGetProp), true)
 	a.BCond(EQ, getter)
+	predicate := a.NewLabel()
+	a.CmpImm(rD, int64(bytecode.RJTypeof), true)
+	a.BCond(EQ, predicate)
 	for i, shift := range []uint8{8, 32} {
 		up, ready := a.NewLabel(), a.NewLabel()
 		a.Ubfx(rD, rJ, shift, 17)
@@ -60,6 +63,55 @@ func (g *armGen) binaryLeaf(start, miss Label) {
 	g.storeB(0)
 	a.Bind(getter)
 	g.getterLeaf(miss)
+	a.Bind(predicate)
+	classify, classified, no, result := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Store(rCtx, scr(sE), rC)
+	a.Ubfx(rD, rJ, 16, 16)
+	up, ready := a.NewLabel(), a.NewLabel()
+	a.TstImm(rJ, 1<<32, true)
+	a.BCond(NE, up)
+	a.Ubfx(r9, rW, 8, 8)
+	a.Cmp(rD, r9, true)
+	a.BCond(LO, classify)
+	a.MovImm(rC, 0) // A missing argument is undefined.
+	a.B(classified)
+	a.Bind(classify)
+	a.AddLsl(rK, rS, rD, 4)
+	a.AddImm(rK, rK, 32, true)
+	typeMiss := a.NewLabel()
+	a.B(ready)
+	a.Bind(up)
+	g.cmpMem(rD, rK, offClUpvals+8)
+	a.BCond(HS, typeMiss)
+	a.Load(rK, rK, offClUpvals)
+	a.LoadIdx(rK, rK, rD, true)
+	a.Load(rK, rK, offUpSlot)
+	a.Bind(ready)
+	savedExit := g.exit
+	g.exit = typeMiss
+	g.typeIndex(rK)
+	g.exit = savedExit
+	a.Bind(classified)
+	a.Ubfx(rD, rJ, 8, 7)
+	a.Cmp(rC, rD, true)
+	a.BCond(NE, no)
+	a.Load(r9, rCtx, ncTrue)
+	a.B(result)
+	a.Bind(no)
+	a.Load(r9, rCtx, ncFalse)
+	a.Bind(result)
+	equal := a.NewLabel()
+	a.TstImm(rJ, uint64(bytecode.RCmpTrue)<<8, true)
+	a.BCond(NE, equal)
+	a.MovImm(rT, 1<<8)
+	a.Op(Eor, r9, r9, rT, true)
+	a.Bind(equal)
+	a.MovImm(r8, 0)
+	g.regB(rW)
+	g.storeValue()
+	a.Bind(typeMiss)
+	a.Load(rC, rCtx, scr(sE))
+	a.B(miss)
 }
 
 // getterLeaf reads an own data property through the callee's cache. rJ is

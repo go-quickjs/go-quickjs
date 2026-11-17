@@ -824,6 +824,16 @@ the existing native handlers so that adding them moves none of those
 handlers. The JIT's feedback dispatcher retains its ordinary call path and
 counts the callee for compilation.
 
+A pure helper comparing `typeof` of a parameter or captured binding with
+any type name also has a `leafNative` descriptor, for equality or inequality.
+The plain native handler uses the ordinary type classifier and returns the
+boolean without a frame; a missing argument is undefined. Proxies and
+`[[IsHTMLDDA]]` objects take the ordinary call path before a value is stored.
+The descriptor is recognized from the complete register-code pattern,
+including the boolean return, so a numeric result or additional work still
+runs as the ordinary body. The Go table evaluates the pure body, and the
+JIT's feedback dispatcher keeps its call and compilation counts.
+
 The same descriptor also records getters returning `this.k`, `this.k.length`
 or `this.k[p]`. The native helper probes the callee's own-property cache
 before reading the field. It answers lengths of dense arrays and numeric
@@ -888,6 +898,23 @@ the arrows inside it. Anything else -- a bound function, a proxy, a
 built-in, a class with fields -- is constructed by the generic path, the
 site's miss (`regConstruct`).
 
+The construction cache's unused `this` words hold the constructor shape
+and its own data-property slot for `prototype` (`nativeCtorThis`). A shape
+check replaces the general property lookup; the slot's value is read each
+time, so replacing `prototype` takes effect immediately. A changed shape
+refreshes the slot, and accessors, missing properties and primitive values
+take the ordinary construction path. No cache or function fields are added.
+
+In the plain native interpreter, a body that stores up to eight parameters
+in plain data properties can finish without a frame (`nativeInit`). Its
+register code supplies a plan, kept with the leaf code, including optional
+falsy-to-zero defaults written as `if (!p) p = 0` or `p ? p : 0`. Every
+store cache and prototype guard is checked before any write. With enough
+room already in the object, the values are written and the final shape
+and property count committed together. A failed guard runs the ordinary
+body, preserving setters, exceptions and partial writes. JIT execution
+keeps its ordinary frames and feedback.
+
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While
 the stack is shallower than `tailCallDepth` they are ordinary calls. Deeper,
@@ -906,6 +933,9 @@ each such call is `apply_args`, which hands on the frame's arguments as
 passed. Where an object is made, the frame keeps its arguments on the
 runtime's argument stack until it returns, before its bindings take the
 window past the parameters.
+The plain native `apply_args` also answers a validated initializer plan
+without entering the initializer's frame; its forwarding caller keeps its
+own frame and arguments.
 
 ## Exceptions
 

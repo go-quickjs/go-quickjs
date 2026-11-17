@@ -845,6 +845,104 @@ func TestRegNativeTypeofJumps(t *testing.T) {
 		var o = { n: 0 }, s = 0, vals = [1, "x", null, 2.5]
 		for (var i = 0; i < 1000; i++) { s += f(vals[i & 3]); o.n++; s += g(i, "y").length }
 		String(s + o.n)`, bytecode.RJTypeof, bytecode.RStrPart, bytecode.RUnary)
+
+	// Pure typeof helpers also return without entering a call frame.
+	t.Run("predicates", func(t *testing.T) {
+		nativeCounting(t)
+		var source strings.Builder
+		for i, name := range typeofNames {
+			fmt.Fprintf(&source, "function yes%d(x) { return typeof x === %q }\n", i, name)
+			fmt.Fprintf(&source, "function no%d(x) { return %q != typeof x }\n", i, name)
+			fmt.Fprintf(&source, "function second%d(unused, x) { return typeof x == %q }\n", i, name)
+		}
+		source.WriteString(`
+	var ro = Proxy.revocable({}, {}), rf = Proxy.revocable(function() {}, {});
+	ro.revoke(); rf.revoke();
+	var vals = [undefined, null, true, false, 0, -0, NaN, 1e-99, "", "s", Symbol(), 0n, 1n << 100n,
+	 {}, [], new Number(1), () => 1, class {}, Math.max, Math.max.bind(null), async () => 1, function*() {},
+	 new Proxy({}, {}), new Proxy(() => 1, {}), ro.proxy, rf.proxy, dda];
+	function makeCaptures() {
+	 var value;
+	 return { set(v) { value = v }, obj: () => typeof value === "object",
+	  number: () => typeof value !== "number", undef: () => typeof value === "undefined" };
+	}
+	var captures = makeCaptures(), out = [];
+	for (var value of vals) {
+	 var yes = 0, no = 0, second = 0;
+	`)
+		for i := range typeofNames {
+			fmt.Fprintf(&source, "if (yes%d(value)) yes += %d; if (no%d(value)) no += %d; if (second%d(0, value)) second += %d;\n", i, 1<<i, i, 1<<i, i, 1<<i)
+		}
+		source.WriteString(`
+	 captures.set(value);
+	 out.push(yes + "/" + no + "/" + second + "/" + captures.obj() + "/" + captures.number() + "/" + captures.undef());
+	}
+	out.join("|")`)
+		indices := []int{0, 1, 2, 2, 3, 3, 3, 3, 4, 4, 5, 6, 6, 1, 1, 1, 7, 7, 7, 7, 7, 7, 1, 7, 1, 7, 0}
+		var expected []string
+		for _, i := range indices {
+			bit := 1 << i
+			expected = append(expected, fmt.Sprintf("%d/%d/%d/%v/%v/%v", bit, 255^bit, bit, i == 1, i != 3, i == 0))
+		}
+		want := strings.Join(expected, "|")
+		for _, native := range []bool{false, true} {
+			for _, marking := range []bool{false, true} {
+				t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
+					nativeMarking(t, marking)
+					was := regNativeOn
+					regNativeOn = native
+					defer func() { regNativeOn = was }()
+					r := New(Config{})
+					defer r.Close()
+					dda := r.NewObject()
+					dda.MarkHTMLDDA()
+					r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
+					v, err := r.Run(compileForTest(t, source.String()))
+					if err != nil || v.String().Go() != want {
+						t.Errorf("native %v, marking %v: got %v, %v; want %s", native, marking, v, err, want)
+					}
+					if native {
+						var loop strings.Builder
+						loop.WriteString("captures.set(0); var sum = 0; for (var j = 0; j < 1000; j++) {\n")
+						for i := range typeofNames {
+							fmt.Fprintf(&loop, "if (yes%d(j)) sum++; if (no%d(j)) sum++; if (second%d(0, j)) sum++;\n", i, i, i)
+						}
+						loop.WriteString("if (!captures.obj() && !captures.number() && !captures.undef()) sum++; } String(sum)")
+						before := atomic.LoadInt64(&nativeCalls)
+						v, err := r.Run(compileForTest(t, loop.String()))
+						if err != nil || v.String().Go() != "10000" {
+							t.Errorf("marking %v: fast predicates got %v, %v", marking, v, err)
+						}
+						if n := atomic.LoadInt64(&nativeCalls) - before; n > 96 {
+							t.Errorf("marking %v: entered %d frames for typeof predicates", marking, n)
+						}
+					}
+					v, err = r.Run(compileForTest(t, `
+	function number(x) { return typeof x === "number" }
+	function other(x) { return typeof x !== "number" }
+	function second(unused, x) { return typeof x == "number" }
+	function numeric(x) { return typeof x === "number" ? 1 : 0 }
+	function negated(x) { return !(typeof x === "number") }
+	[number(), other(), second(), numeric(1), numeric("1"), negated(1), negated("1")].join()`))
+					if err != nil || v.String().Go() != "false,true,false,1,0,false,true" {
+						t.Errorf("missing arguments and result forms: got %v, %v", v, err)
+					}
+					v, err = r.Run(compileForTest(t, `
+	function checkTDZ() {
+	 const predicate = () => typeof late === "undefined";
+	 var error;
+	 try { predicate() } catch (e) { error = e.name }
+	 let late = 3;
+	 return error + "," + predicate();
+	}
+	checkTDZ()`))
+					if err != nil || v.String().Go() != "ReferenceError,false" {
+						t.Errorf("TDZ predicate: got %v, %v", v, err)
+					}
+				})
+			}
+		}
+	})
 }
 
 // TestRegNativeInIndex runs in of number keys natively, against the Go

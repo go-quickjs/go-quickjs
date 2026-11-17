@@ -80,7 +80,8 @@ type regCode struct {
 	// thing, which the native call handler reads, or 0.
 	leafUp  int32
 	leafVal Value
-	// leafOps is a regLeafCode body's code as regLeafRun runs it.
+	// leafOps is a regLeafCode body's code as regLeafRun runs it, or a
+	// plain native initializer's stores (regInitOps).
 	leafOps []regLeafOp
 	// switches is each switch instruction's table, made from the code's.
 	switches []*regSwitchTable
@@ -104,8 +105,8 @@ type regCode struct {
 	// code's (bigSeenMarks), which the slow paths mark where the runtime
 	// runs the JIT (regBigOf); nil until one has.
 	bigSeen atomic.Pointer[bigSeenMarks]
-	// leafNative describes a numeric binary leaf's operands or a this
-	// getter for the native call handler (regBinaryLeaf, regGetterLeaf).
+	// leafNative describes a numeric binary leaf, a this getter, or a
+	// typeof predicate for the native call handler.
 	leafNative uint64
 }
 

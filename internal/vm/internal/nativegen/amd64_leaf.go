@@ -5,8 +5,9 @@ import (
 	. "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 )
 
-// binaryLeaf is arm64's frameless numeric binary leaf or this getter. The cache in RCX
-// is restored on a miss; RSI and RAX keep the window and instruction.
+// binaryLeaf answers a numeric binary leaf, this getter or typeof predicate
+// without a frame. The cache in RCX is restored on a miss; RSI and RAX keep
+// the window and instruction.
 func (g *nativeGen) binaryLeaf(start, fallback Label) {
 	a := g.a
 	miss := a.NewLabel()
@@ -23,6 +24,9 @@ func (g *nativeGen) binaryLeaf(start, fallback Label) {
 	a.MovZX8(RDX, RCX)
 	a.OpImm(Cmp, RDX, int32(bytecode.RGetProp), false)
 	a.Jcc(CondE, getter)
+	predicate := a.NewLabel()
+	a.OpImm(Cmp, RDX, int32(bytecode.RJTypeof), false)
+	a.Jcc(CondE, predicate)
 	for i, shift := range []uint8{8, 32} {
 		up, ready := a.NewLabel(), a.NewLabel()
 		a.MovRR(RDX, RCX)
@@ -68,6 +72,62 @@ func (g *nativeGen) binaryLeaf(start, fallback Label) {
 	g.storeB(0)
 	a.Bind(getter)
 	g.getterLeaf(miss)
+	a.Bind(predicate)
+	classify, classified, no, result := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Store(RDI, scr(sV0), RCX)
+	a.MovRR(RDX, RCX)
+	a.ShiftImm(Shr, RDX, 16, true)
+	a.OpImm(And, RDX, 0xffff, false)
+	up, ready := a.NewLabel(), a.NewLabel()
+	a.MovRR(R9, RCX)
+	a.ShiftImm(Shr, R9, 32, true)
+	a.OpImm(And, R9, 1, false)
+	a.Jcc(CondNE, up)
+	a.MovRR(R9, RAX)
+	a.ShiftImm(Shr, R9, 8, true)
+	a.MovZX8(R9, R9)
+	a.Op(Cmp, RDX, R9, true)
+	a.Jcc(CondB, classify)
+	a.Op(Xor, RCX, RCX, false) // A missing argument is undefined.
+	a.Jmp(classified)
+	a.Bind(classify)
+	a.ShiftImm(Shl, RDX, 4, true)
+	a.LeaIdx(RDX, RSI, RDX, 1, 32)
+	a.Op(Sub, RDX, R12, true)
+	a.Jmp(ready)
+	a.Bind(up)
+	a.CmpMem(RDX, R8, offClUpvals+8, true)
+	a.Jcc(CondAE, miss)
+	a.Load(R8, R8, offClUpvals)
+	a.LoadIdx(RDX, R8, RDX, 8, 0)
+	a.Load(RDX, RDX, offUpSlot)
+	a.Op(Sub, RDX, R12, true)
+	a.Bind(ready)
+	savedExit := g.exit
+	g.exit = miss
+	g.typeIndex(RDX)
+	g.exit = savedExit
+	a.Bind(classified)
+	a.Load(RDX, RDI, scr(sV0))
+	a.ShiftImm(Shr, RDX, 8, true)
+	a.MovRR(R8, RDX)
+	a.OpImm(And, R8, 0x7f, false)
+	a.Op(Cmp, RCX, R8, true)
+	a.Jcc(CondNE, no)
+	a.Load(R9, RDI, ncTrue)
+	a.Jmp(result)
+	a.Bind(no)
+	a.Load(R9, RDI, ncFalse)
+	a.Bind(result)
+	equal := a.NewLabel()
+	a.OpImm(And, RDX, int32(bytecode.RCmpTrue), true)
+	a.Jcc(CondNE, equal)
+	a.OpImm(Xor, R9, 1<<8, true)
+	a.Bind(equal)
+	a.Op(Xor, R8, R8, false)
+	g.decB(RDX)
+	a.LeaIdx(RAX, R12, RDX, 1, 0)
+	g.storeValue()
 	a.Bind(miss)
 	a.Load(RCX, RDI, scr(sE))
 	a.Jmp(fallback)
