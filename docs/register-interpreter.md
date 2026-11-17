@@ -28,6 +28,7 @@ measures it against. Nothing runs them now.
 - [Closures and upvalues](#closures-and-upvalues)
 - [Inline caches and feedback](#inline-caches-and-feedback)
 - [Loop-kernel instructions](#loop-kernel-instructions)
+- [Typed code](#typed-code)
 - [Tiering to the JIT](#tiering-to-the-jit)
 - [The debugger, eval and with](#the-debugger-eval-and-with)
 - [Code layout](#code-layout)
@@ -338,11 +339,11 @@ How a value is allotted:
   table removed, and an instruction that interprets operations of its own
   is a frameless evaluator inside the loop, which the design rules out.
 
-The raw-register designs ([Known limits](#known-limits-and-open-work))
-need more values than are free; what they would take is a second table for
-code typed throughout, whose values are free where the verifier proves the
-generic operations absent, rather than a wider opcode, which would cost
-every dispatch an instruction and break X's 8-bit users.
+Typed code's raw operations need more values than are free; they take a
+second table instead ([Typed code](#typed-code)), whose values are free
+where the verifier proves the generic operations absent, rather than a
+wider opcode, which would cost every dispatch an instruction and break X's
+8-bit users.
 
 ## The compiler
 
@@ -1217,6 +1218,141 @@ the partner's operation of the same A, B and target, and an instruction
 after it (`bytecode.StepPaired`); `mul_imm`'s X 0; the int32 forms' Aux a
 pc past the code's that `Lines` has.
 
+## Typed code
+
+A function of a validated asm.js module is given *typed code* (T), a twin
+of its ordinary register code (G) in which every register has one kind for
+the whole function (`RegCode.Kinds`): a Value, a raw int32 or a raw
+float64. T needs operations the ordinary set has no values for, so it is
+decoded through a second table, in which the cold range's values -- which
+typed code never holds -- are the raw operations. G stays the function's
+code: every generic entry runs it, and a module that fails validation, or a
+closure that fails its link, runs G alone, so nothing is refused.
+
+### Validation and compilation
+
+- **Validation.** `internal/compiler/asmjs` validates a function that says
+  `"use asm"` as the compiler meets it (`compileFunctionLiteral`), before
+  its body is compiled. The subset is what fastcomp-era Emscripten writes,
+  floats and `Math.fround` included. It records each expression's type. A
+  literal's type comes from its source text: the parser folds an operator
+  of literals into one literal, which keeps its first operand's position,
+  so a folded literal is typed by its value and its first token. Code
+  compiled for a debugger is never validated. `QJS_ASMTRACE` prints why a
+  module fails.
+- **Compilation.** `regcomp.CompileTyped` compiles a function of the
+  module from those types at its first typed call (`regcomp.LaterTyped`,
+  kept in the function's `RegLater`, so that `Function` keeps its size),
+  after its ordinary code, whose call sites, names and constants it
+  extends: T numbers its call sites past G's, since the two codes share
+  the template's caches. The frame is registers 0 and 1, then the
+  parameters as the call passed them -- Values that nothing writes, so
+  that `f.arguments` reads them as passed -- then a raw register for each
+  local, raw temporaries of one kind each, and last every call's window,
+  Values: a call's arguments are computed into raw temporaries first, so
+  every window is at the same place, past everything raw.
+- **Positions.** T has its own line table (`Lines`), each instruction at
+  the position the ordinary code gives the same expression. A frame
+  running T holds a pc of T; a stack trace marks it `bytecode.TypedPC` as
+  it captures the frame (`framePC`), and `Function.PosAt` finds a marked
+  pc in T's table. Which frames run T it reads from the runtime's typed
+  code entries (`typedRuns`): a typed entry runs typed frames alone, and
+  a call out of it is an entry of its own, so its frames are its own
+  depth and those its native context entered past it.
+  `TestAsmStackPositions` pins every frame's position against G's.
+- **The kinds verifier.** `regcomp.VerifyKinds` checks the rules K1 to K8
+  before the code is used: each operation's operand kinds, the frame's
+  head Value and never written, every call's window Value with nothing raw
+  live above it, nothing that reads a frame generically (no handlers,
+  closures, suspension, `arguments`, far registers or method calls), raw
+  words leaving only through a box, and the heap's shifts, module
+  variables and tables in range. All 51 functions of Octane's zlib compile
+  and pass.
+
+### The operations
+
+`bytecode/regtypedops.go` names them at the cold range's values: moves
+and constants; the conversions into raw (`tconv_i`, `tconv_f`, which may
+run `valueOf` and throw) and the boxes out of it (`ibox`, `ubox`, `fbox`,
+the last making a NaN canonical); int32 arithmetic that wraps, division and
+remainder that give `| 0`'s results (a zero divisor gives 0, `MinInt32 /
+-1` gives `MinInt32`); compares and compare-and-branches, signed and
+unsigned; float arithmetic, compares and branches, whose negations differ
+on NaN; `fround`; heap loads and stores of every view, bounds-checked (out
+of bounds a load is 0 or NaN and a store does nothing); module variables,
+read and written in their upvalue cells; and `tab_get`, a function
+table's entry. An I register's int32 is its number word's low 32 bits. A
+`switch` compiles to compare-and-branches, and the Math functions T does
+not inline (`floor`, `pow`, ...) run in Go, by the engine's own Math.
+
+### The table and the call path
+
+- **Where T lives.** On the template, as `closureCode.regTyped`, and only
+  in a runtime without the JIT, whose JIT compiles G.
+- **Tables switch only at a code entry.** A call site caches as enterable
+  only a callee whose code is of its own kind. `regCallKind` gives a typed
+  caller the callee's T, and an ordinary caller T where the callee is no
+  leaf. `regCacheCallee` marks a callee of the other kind `regCallCross`,
+  which none of the hit paths' compares of the kind, Go's (`rhCallW`) or
+  native, lets through; the site's miss (`regCallSlow`) then enters T by
+  `regEnterWTyped`, in a code entry of its own. A typed site caches no
+  built-in, since the call handler calls one with no exit, after which the
+  code would read its heap as it was. `f.call` and `f.apply` of a typed
+  function enter its ordinary code.
+- **Go.** `runRegTyped` is `runReg`'s loop over `regTypedTable` and
+  `regTypedSlowTable` (`zzreg_zzty.go`, after the ordinary table's files),
+  with states from a list of their own (`regFreeTyped`). The ordinary
+  operations typed code may hold (`bytecode.TypedPlainOps`) keep their
+  handlers; `call_w`'s is `rhTCallW`, `rhCallW`'s copy, whose entered
+  callee runs by `runRegTyped`. Every other value is `rhInvalid`.
+- **Native.** The typed dispatcher is a variant of nativegen's
+  (`nativegen/typed.go`, `amd64_typed.go`, `arm64_typed.go`), in every
+  amd64 and arm64 build but the layout's. Its table has its own handlers
+  of the raw operations, plain's of the ordinary operations typed code
+  holds, and the exit stub for every other value. A typed code entry's
+  context holds it throughout, so a call between two typed functions is
+  plain's call handler, its callee's frame decoded by the same table and
+  its return going back to typed code. `nativeRunTyped`, `nativeLoopTyped`
+  and `nativeCallMissTyped` are the ordinary ones' copies over the typed
+  table, since those name the ordinary one. Division, `Math.clz32`, `abs`,
+  `min`, `max`, `%` of doubles, the other Math functions and `tab_get`
+  exit to Go.
+- **What ordinary code pays.** Nothing on the hit paths: `runReg`,
+  `rhCallW`, `nativeLoop` and plain's handlers are the same code. A miss
+  pays one compare (`rc.typed`), and a cache fill one load of `regTyped`.
+- **The prototype.** `QJS_TYPEDPROTO=name,...` (test-only, read once)
+  gives the named functions a twin that is their ordinary code
+  (`bytecode.TypedTwin`), the ordinary arithmetic and branches of
+  `call_fib_rec`, `call_even`, `call_odd` and `cross_add` in the typed
+  table too (`bytecode.TypedProtoOps`): the call path's tests and
+  `call_cross`'s crossing run on it. When the call path was built
+  (2026-11-15, two placements), ordinary calls' geometric mean was 1.002
+  natively and 1.001 in the Go loop, typed calls to typed code within 2%
+  of untyped, and a crossing 11.6 ns natively, 3.4 times `func_call`.
+
+### The link and the heap
+
+- **The link** is per closure, at its first call from a call site
+  (`regTypedOf`, from `regCallKind`'s cache fill). T reaches the module's
+  bindings through its own closure's upvalues, and its code names what
+  each upvalue it reads must be (`RegCode.Asm`): a view of the heap, the
+  realm's own Math function, a number, a module variable, an import, a
+  function of the module or a table. Validation forbids assigning the
+  bindings the link checks, so what a closure's upvalues hold at its first
+  call is what they held at the module's return. Only a template's first
+  closure is linked (`regTypedCode.asmCl`), since its typed code and heap
+  are the template's.
+- **The heap** is the views' buffer, read as of the runtime's
+  `typedEpoch` (`asmHeap`). A buffer detached later, by an import or a
+  host, has no bytes: every load gives 0 or NaN and every store does
+  nothing, as JavaScript's views of a detached buffer do. Native code
+  reads the base and length from its context, which Go makes current at
+  the entry and after every exit (`nativeTypedExit`, `nativeLoopTyped`).
+  A typed site enters a typed callee in its own code entry only where the
+  callee's heap is its own or none (`regTypedCross`).
+- **Switches.** `QJS_NOTYPED`, read once, leaves every module to its
+  ordinary code, as `QJS_NONATIVE` does the native handlers.
+
 ## Tiering to the JIT
 
 With the JIT on, the JIT compiles register code; internal/jit/README.md is
@@ -1356,6 +1492,9 @@ generated files' staleness tests.
 | `QJS_REGREPORT` | at a runtime's close, the calls into and out of register code, by kind and by callee |
 | `QJS_REGTRACE` | print why a function has no register code |
 | `QJS_REGDUMP` | print each function's register code as it is made |
+| `QJS_NOTYPED=1` | asm.js modules run their ordinary code, never typed code |
+| `QJS_ASMTRACE` | print why a `"use asm"` module fails validation, or a function has no typed code |
+| `QJS_TYPEDPROTO=name,...` | test-only: the named functions run typed twins of their ordinary code |
 | `disasm` | each function's register code; `-jit` whether `LowerReg` lowers it, and its exit maps |
 | `regrefusals` | compile directories of code and count the backend's refusals by reason |
 | `regcount` | static counts of the patterns fused and int32 instructions take, and of those they leave |
@@ -1378,14 +1517,13 @@ generated files' staleness tests.
 - **The JIT's refusals of register code:** direct eval, `with`, the
   debugger's code, an arguments object the frame cannot own, and far
   registers past what an exit's records name (`abi.MaxSlot`).
-- **Raw registers.** Index-heavy and asm.js code pays a float conversion
-  at every element access and every `| 0`, where the tree tier had kept an
-  int32 in a Go variable. Designed and not built: raw float64 temporaries
-  within an expression behind one guard, and raw int32 regions with
-  statically bounded exactness, each with a verifier of kinds. Their
-  operations need more opcode values than are free, so they wait for a
-  second table for code typed throughout ([Opcode
-  values](#opcode-values)), whose call-path cost is to be measured first.
+- **Raw registers outside asm.js.** Index-heavy code that is not a
+  validated asm.js module pays a float conversion at every element access
+  and every `| 0`, where the tree tier had kept an int32 in a Go variable.
+  Designed and not built: raw float64 temporaries within an expression
+  behind one guard, and raw int32 regions with statically bounded
+  exactness, each with a verifier of kinds, whose operations would take
+  values of the typed table ([Typed code](#typed-code)).
 - **A baseline compiler or an assembly loop.** Neither is planned: the
   native handlers are the interpreter's machine code, and a baseline
   compiler would pay only if it almost never fell back to the interpreter.
