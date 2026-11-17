@@ -38,6 +38,9 @@ func (r *Runtime) nativeCtorThis(e *regCallCache, fd *funcData) *Object {
 const (
 	rlInit = rlRetUndef + 1 + iota
 	rlInitZero
+	rlInitCall
+	rlInitArg
+	rlInitConst
 )
 
 // regInitOps recognizes parameter stores, with optional falsy-to-zero
@@ -47,6 +50,9 @@ func regInitOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
 		fn.Generator || fn.Async || fn.HasRest || !fn.HasSimpleParams || fn.HasDirectEval || fn.UsesArguments ||
 		rc.Params > 64 {
 		return nil
+	}
+	if code := rc.Code; len(code) >= 5 && code[0].Op() == bytecode.RGetProp {
+		return regForwardCallOps(fn, rc)
 	}
 	param := func(r uint16) bool { return r >= 2 && int(r) < 2+rc.Params }
 	var defaults uint64
@@ -105,7 +111,7 @@ func regInitOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
 // existing room. No intermediate shape can be observed: nothing calls code.
 func (r *Runtime) nativeInit(cl *closure, o *Object, args []Value) bool {
 	ops := cl.reg.leafOps
-	if len(ops) == 0 || ops[0].op < rlInit {
+	if len(ops) == 0 || ops[0].op != rlInit && ops[0].op != rlInitZero {
 		return false
 	}
 	s := o.shape
@@ -152,4 +158,100 @@ func (r *Runtime) nativeInit(cl *closure, o *Object, args []Value) bool {
 	}
 	o.shape, o.valn = s, uint32(n)
 	return true
+}
+
+// nativeForwardInit answers this.k.apply(this, arguments) and
+// this.k.call(this, parameters or constants) where the target
+// only initializes data properties. No script runs, so neither forwarding
+// nor apply needs a frame that script could observe.
+func (r *Runtime) nativeForwardInit(cl *closure, o *Object, args []Value) bool {
+	var method, call uint16
+	builtin := r.applyFn
+	ops := cl.reg.leafOps
+	if len(ops) != 0 && ops[0].op == rlInitCall {
+		method, call, builtin = ops[0].a, ops[0].b, r.callFn
+	} else if leafKind(cl) == bytecode.LeafForward {
+		code := cl.reg.rc.Code
+		method, call = code[0].C(), code[1].C()
+	} else {
+		return false
+	}
+	key := cl.names[cl.reg.siteName[method]]
+	m, ok := plainOwn(o, key)
+	if !ok {
+		m, ok = r.cachedData(r.fwdCache(cl, int(method), o, key), o, key)
+	}
+	if !ok || !m.IsObject() {
+		return false
+	}
+	fd := m.Object().fn()
+	if fd == nil || fd.bound || fd.closure == nil || fd.closure.reg == nil {
+		return false
+	}
+	if ap, ok := r.cachedData(&cl.ic[call], m.Object(), cl.names[cl.reg.siteName[call]]); !ok ||
+		!ap.IsObject() || ap.Object() != builtin {
+		return false
+	}
+	if builtin == r.callFn {
+		var forwarded [8]Value
+		for i, op := range ops[1:] {
+			v := op.k
+			if op.op == rlInitArg {
+				v = Undefined
+				if int(op.b) < len(args) {
+					v = args[op.b]
+				}
+			}
+			forwarded[i] = v
+		}
+		return r.nativeInit(fd.closure, o, forwarded[:len(ops)-1])
+	}
+	return r.nativeInit(fd.closure, o, args)
+}
+
+// regForwardCallOps records a complete forwarding body, including the
+// reads of the method and its call property. Only argument loads follow
+// those reads, so the plan can validate them all before writing anything.
+func regForwardCallOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
+	code := rc.Code
+	m, c, t := code[0], code[1], code[2]
+	names := rc.Names
+	if names == nil {
+		names = fn.Names
+	}
+	if m.B() != 1 || c.Op() != bytecode.RGetMethodW || c.B() != m.A() ||
+		names[rc.SiteName[c.C()]] != "call" ||
+		t.Op() != bytecode.RMove || t.A() != c.A()+2 || t.B() != 1 {
+		return nil
+	}
+	var ops [9]regLeafOp
+	ops[0] = regLeafOp{op: rlInitCall, a: m.C(), b: c.C()}
+	n := 1
+	for _, w := range code[3:] {
+		if w.Op() == bytecode.RCallMW {
+			if w.A() != c.A() || int(w.X()) != n {
+				return nil
+			}
+			for _, ret := range code[3+n:] {
+				if ret.Op() != bytecode.RRetUndef {
+					return nil
+				}
+			}
+			return append([]regLeafOp(nil), ops[:n]...)
+		}
+		if n == len(ops) || w.A() != c.A()+2+uint16(n) {
+			return nil
+		}
+		op := regLeafOp{op: rlInitArg, b: w.B() - 2}
+		if w.Op() != bytecode.RMove || w.B() < 2 || int(w.B()) >= 2+rc.Params {
+			v, ok := regConstOf(regConsts(fn, rc), w)
+			if !ok {
+				return nil
+			}
+			op = regLeafOp{op: rlInitConst, k: v}
+		}
+		ops[n] = op
+		n++
+	}
+	return nil
 }

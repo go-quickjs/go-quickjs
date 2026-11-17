@@ -276,7 +276,9 @@ the instruction. The families:
   immediate (`_imm`) or an upvalue (`_upval`, a loop bound a closure
   captures) on the right; `jseq`, `jsne`, `jeq`, `jne`, `jnull`,
   `jnotnull`, `jtypeof` (a `typeof` compared with a literal). A comparison
-  that decides a jump never makes a boolean.
+  that decides a jump never makes a boolean. `jnull` and `jnotnull` with
+  `RNullStrict` in X compare with null alone (`=== null`, `!== null`),
+  avoiding the temporary value and load of a two-register comparison.
 - **Step-and-branch:** `step_jlt` and its kin, a counter's step and the
   compare-and-branch after it in one dispatch.
 - **Jumps:** `jmp`, `jmp_true`, `jmp_false` (ToBoolean, a boolean's without
@@ -914,6 +916,17 @@ room already in the object, the values are written and the final shape
 and property count committed together. A failed guard runs the ordinary
 body, preserving setters, exceptions and partial writes. JIT execution
 keeps its ordinary frames and feedback.
+
+A constructor whose whole body is `this.k.apply(this, arguments)` or
+`this.k.call(this, p, ...)` can finish the same way (`nativeForwardInit`).
+The latter's arguments are parameters, numbers, booleans, null or
+undefined, recorded with the initializer plans. The method and its
+`apply` or `call` must be guarded data properties, the latter the realm's
+built-in, and the target must have a validated initializer plan.
+Neither forwarding nor target
+then needs a frame: no script can observe either. Accessors, replacements,
+bound or proxy targets, and any target whose body can run code take the
+ordinary path.
 
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While

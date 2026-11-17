@@ -62,3 +62,40 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 		}
 	}
 }
+
+// TestPureStrictNull pins === null and !== null in a pure body, which
+// compiles them as jnull and jnotnull with RNullStrict: the frameless
+// evaluator tests null alone, as the interpreters do, and undefined and
+// document.all's stand-in are not null. It took every jnull for == null.
+func TestPureStrictNull(t *testing.T) {
+	const src = `
+function isNull(x) { return x === null ? 1 : 2 }
+function notNull(x) { return null !== x ? 1 : 2 }
+function loose(x) { return x == null ? 1 : 2 }
+function run() {
+ var vals = [null, undefined, 0, "", false, {}], out = [];
+ for (var i = 0; i < 50; i++) for (var v of vals) { isNull(v); notNull(v); loose(v) }
+ for (var v of vals) out.push("" + isNull(v) + notNull(v) + loose(v));
+ out.push("" + isNull(dda) + notNull(dda) + loose(dda));
+ return out.join("|");
+}
+run()`
+	const want = "121|211|212|212|212|212|211"
+	for _, native := range []bool{false, regNativeOn} {
+		was := regNativeOn
+		regNativeOn = native
+		r := New(Config{})
+		dda := r.NewObject()
+		dda.MarkHTMLDDA()
+		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
+		v, err := r.Run(compileForTest(t, src))
+		regNativeOn = was
+		r.Close()
+		if err != nil {
+			t.Fatalf("native %v: %v", native, err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("native %v: got %q, want %q", native, got, want)
+		}
+	}
+}

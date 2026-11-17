@@ -340,7 +340,15 @@ func armEmit(v *variant) (*block, error) {
 		jumpIfNull := op == bytecode.RJNull
 		h(op, func() {
 			isNull, notNull, notObj := a.NewLabel(), a.NewLabel(), a.NewLabel()
-			g.regA(rD)
+			// Keep the old body and its size: the strict and loose tests
+			// share a shorter path after the handlers.
+			check := a.NewLabel()
+			a.B(check)
+			a.AddLsl(rD, rRegs, rD, 4)
+			g.after = append(g.after, func() {
+				a.Bind(check)
+				g.nullJump(isNull, notNull)
+			})
 			a.Load(r9, rD, 0)
 			g.cmpMem(r9, rCtx, ncObjBits)
 			a.BCond(NE, notObj)

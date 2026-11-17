@@ -365,11 +365,17 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				pc += int(w.SC())
 			}
 		case bytecode.RJNull, bytecode.RJNotNull:
+			// == null, document.all's stand-in Go's to answer, or, with
+			// RNullStrict, === null: null alone.
 			v := regs[w.A()]
-			if v.IsObject() && v.object().flags&objHTMLDDA != 0 {
-				return miss()
+			null := v.IsNull()
+			if w.X()&bytecode.RNullStrict == 0 {
+				if v.IsObject() && v.object().flags&objHTMLDDA != 0 {
+					return miss()
+				}
+				null = null || v.IsUndefined()
 			}
-			if (v.IsNull() || v.IsUndefined()) == (op == bytecode.RJNull) {
+			if null == (op == bytecode.RJNull) {
 				pc += int(w.SC())
 			}
 		case bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt,

@@ -288,7 +288,8 @@ const (
 	// in the case.
 	RGetLength
 	// RJEq, RJNe and their immediate forms are == and != that branch;
-	// RJNull and RJNotNull jump by SC if R[A] == null, or != null.
+	// RJNull and RJNotNull jump by SC if R[A] == null, or != null;
+	// X's RNullStrict bit makes the comparison === null or !== null.
 	RJEq
 	RJNe
 	RJEqI
@@ -789,6 +790,9 @@ func StepPaired(code []RInstr, pc int) bool {
 // set_upval's) that says it jumps when the comparison holds, rather than
 // when it does not.
 const RCmpTrue = 0x80
+
+// RNullStrict makes jnull and jnotnull test null alone, without coercion.
+const RNullStrict = 1
 
 // RDirectEvalSpread is the bit of direct_eval's Aux that says its
 // arguments are an array.
@@ -1321,6 +1325,9 @@ func (rc *RegCode) Format(pc int) string {
 	case RJmpF, RJmpT:
 		return fmt.Sprintf("%s %s %s", op, r(w.A()), target(int32(w.BC())))
 	case RJNull, RJNotNull:
+		if w.X()&RNullStrict != 0 {
+			return fmt.Sprintf("%s.strict %s %s", op, r(w.A()), target(w.SC()))
+		}
 		return fmt.Sprintf("%s %s %s", op, r(w.A()), target(w.SC()))
 	case RJLt, RJNLt, RJLe, RJNLe, RJGt, RJNGt, RJGe, RJNGe, RJSEq, RJSNe, RJEq, RJNe:
 		return fmt.Sprintf("%s %s, %s %s", op, r(w.A()), r(w.B()), target(w.SC()))

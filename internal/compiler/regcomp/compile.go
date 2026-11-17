@@ -2861,6 +2861,24 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 			return
 		}
 	case *ast.Binary:
+		if n.Op == "===" || n.Op == "!==" {
+			other := n.Left
+			_, rightNull := n.Right.(*ast.NullLit)
+			_, leftNull := n.Left.(*ast.NullLit)
+			if leftNull {
+				other = n.Right
+			}
+			if leftNull || rightNull {
+				a := g.expr(other, -1)
+				op := bytecode.RJNull
+				if (n.Op == "===") != when {
+					op = bytecode.RJNotNull
+				}
+				g.at(n.Start)
+				g.jump(bytecode.MakeR(op, bytecode.RNullStrict, r16(a), 0, 0), target, true)
+				return
+			}
+		}
 		if n.Op == "==" || n.Op == "!=" {
 			// == null and != null: whether the value is null or undefined.
 			other, isNull := n.Left, isNullish(n.Right)

@@ -403,7 +403,15 @@ func nativeEmit(v *variant) (*block, error) {
 		jumpIfNull := op == bytecode.RJNull
 		h(op, func() {
 			isNull, notNull, notObj := a.NewLabel(), a.NewLabel(), a.NewLabel()
-			g.decA(RDX)
+			// The jump replaces decA's first five bytes. Its remaining
+			// mask and the old body keep every following handler in place.
+			check := a.NewLabel()
+			a.Jmp(check)
+			a.OpImm(And, RDX, 0xFFFF0, false)
+			g.after = append(g.after, func() {
+				a.Bind(check)
+				g.nullJump(isNull, notNull)
+			})
 			a.LoadIdx(R9, R12, RDX, 1, 0)
 			a.CmpMem(R9, RDI, ncObjBits, true)
 			a.Jcc(CondNE, notObj)

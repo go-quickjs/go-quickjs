@@ -20,6 +20,10 @@ function ForwardDefaults() { this.initialize.apply(this, arguments) }
 ForwardDefaults.prototype.initialize = function (x, y, z) {
  this.x = x ? x : 0; this.y = y ? y : 0; this.z = z ? z : 0;
 };
+function ForwardCall(a, b) { this.initialize.call(this, a, b) }
+ForwardCall.prototype.initialize = Forward.prototype.initialize;
+function ForwardCallDefaults(x, y, z) { this.initialize.call(this, z, y, x) }
+ForwardCallDefaults.prototype.initialize = ForwardDefaults.prototype.initialize;
 function makePairs(n) {
  var sum = 0;
  for (var i = 0; i < n; i++) { var p = new Pair(i, 1); sum += p.a + p.b }
@@ -39,10 +43,20 @@ function makeForwardDefaults(n) {
  var sum = 0;
  for (var i = 0; i < n; i++) { var p = new ForwardDefaults(i, 1); sum += p.x + p.y + p.z }
  return sum;
+}
+function makeForwardCall(n) {
+ var sum = 0;
+ for (var i = 0; i < n; i++) { var p = new ForwardCall(i, 1); sum += p.a + p.b }
+ return sum;
+}
+function makeForwardCallDefaults(n) {
+ var sum = 0;
+ for (var i = 0; i < n; i++) { var p = new ForwardCallDefaults(i, 1); sum += p.x + p.y + p.z }
+ return sum;
 }`
 
 func BenchmarkRegNativeInit(b *testing.B) {
-	for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults"} {
+	for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults", "makeForwardCall", "makeForwardCallDefaults"} {
 		b.Run(name, func(b *testing.B) {
 			r := New(Config{})
 			b.Cleanup(func() { r.Close(); r.ReleaseClosed() })
@@ -68,15 +82,12 @@ func TestRegNativeInitFrameless(t *testing.T) {
 	nativeCounting(t)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults"} {
+		for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults", "makeForwardCall", "makeForwardCallDefaults"} {
 			before := atomic.LoadInt64(&nativeCalls)
 			if got := nativeRunSrc(t, nativeInitSource+`String(`+name+`(1000))`, true); got != "500500" {
 				t.Fatalf("marking %v, %s: got %s", marking, name, got)
 			}
 			limit := int64(20)
-			if name == "makeForward" || name == "makeForwardDefaults" {
-				limit += 1000
-			}
 			if n := atomic.LoadInt64(&nativeCalls) - before; n > limit {
 				t.Fatalf("marking %v, %s: entered %d frames, want at most %d", marking, name, n, limit)
 			}
@@ -132,6 +143,70 @@ out.join("|")`
 	}
 	if exits[0] != exits[1] {
 		t.Fatalf("%d exits, %d while marking", exits[0], exits[1])
+	}
+	const forwarding = `
+function factory() { return function Forward(a, b) { FORWARD } }
+function init(a, b) { this.a = a; this.b = b }
+var cs = [], out = [], log = [];
+for (var k = 0; k < 20; k++) {
+ var C = factory(); C.prototype.initialize = init; cs.push(C);
+}
+for (var i = 0; i < 100; i++) for (var C of cs) new C(i, 1);
+out.push(new cs[19](7, 8).a);
+var F = cs[0];
+F.prototype.initialize = function (a, b) { this.a = b; this.b = a };
+out.push(new F(2, 3).a);
+Object.defineProperty(F.prototype, "initialize", {
+ get() { log.push("method"); return init }, configurable: true
+});
+out.push(new F(4, 5).b);
+Object.defineProperty(F.prototype, "initialize", { value: init, writable: true, configurable: true });
+var original = Function.prototype.OP;
+Object.defineProperty(init, "OP", {
+ get() { log.push("OP"); return original }, configurable: true
+});
+out.push(new F(6, 7).a); delete init.OP;
+init.OP = function (t, a, b) { t.a = 90; return 123 };
+out.push(new F(8, 9).a); delete init.OP;
+Function.prototype.OP = function () { this.seen = true; return Reflect.apply(original, this, arguments) };
+out.push(new F(10, 11).b, init.seen); Function.prototype.OP = original;
+out.push(new F(12).a, String(new F(12).b));
+F.prototype.initialize = init.bind({}); out.push(String(new F(13, 14).a));
+F.prototype.initialize = new Proxy(init, { apply(t, o, a) { log.push("proxy"); return Reflect.apply(t, o, a) } });
+out.push(new F(15, 16).b);
+F.prototype.initialize = function (a) { this.a = arguments.length; this.b = arguments[1] };
+out.push(new F(17, 18).a, new F(17, 18).b);
+F.prototype.initialize = function boom() { throw new RangeError("forward") };
+try { new F(19, 20) } catch (e) { out.push(e.name, e.message, /boom/.test(e.stack), /Forward/.test(e.stack)) }
+F.prototype.initialize = init;
+Object.defineProperty(F.prototype, "b", { set(v) { throw new TypeError("store") }, configurable: true });
+try { new F(21, 22) } catch (e) { out.push(e.name, e.message, /Forward/.test(e.stack)) }
+delete F.prototype.b;
+F.prototype = new Proxy({ initialize: init }, { get(t, k, r) { log.push(String(k)); return Reflect.get(t, k, r) } });
+out.push(new F(23, 24).b);
+function constants(a, b) { this.initialize.call(this, b, a, 3, null) }
+constants.prototype.initialize = function (a, b, c, d) { this.a = a; this.b = b; this.c = c; this.d = d };
+var p; for (var i = 0; i < 100; i++) p = new constants(25, 26);
+out.push(p.a, p.b, p.c, p.d === null, log.join());
+out.join("|")`
+	for _, op := range []string{"apply", "call"} {
+		t.Run(op, func(t *testing.T) {
+			body := "this.initialize.apply(this, arguments)"
+			if op == "call" {
+				body = "this.initialize.call(this, a, b)"
+			}
+			src := strings.ReplaceAll(strings.ReplaceAll(forwarding, "FORWARD", body), "OP", op)
+			want := "7|3|5|6|90|11|true|12|undefined|undefined|16|2|18|RangeError|forward|true|true|TypeError|store|true|24|26|25|3|true|method," + op + ",proxy,initialize"
+			if got := nativeRunSrc(t, src, false); got != want {
+				t.Fatalf("Go table: got %q, want %q", got, want)
+			}
+			for _, marking := range []bool{false, true} {
+				nativeMarking(t, marking)
+				if got := nativeRunSrc(t, src, true); got != want {
+					t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+				}
+			}
+		})
 	}
 }
 

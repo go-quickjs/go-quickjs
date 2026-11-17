@@ -1332,7 +1332,7 @@ func (l *regLowering) lower(pc int) {
 	case bytecode.RJNull, bytecode.RJNotNull:
 		// == null, document.all's stand-in included, which ?? does not
 		// take for null (ir's Nullish): the loose equality.
-		branch(ir.Eq, reg(a), ir.Literal(ir.Value{Kind: ir.Null}), op == bytecode.RJNull, false, regTarget(pc, w.SC()))
+		branch(ir.Eq, reg(a), ir.Literal(ir.Value{Kind: ir.Null}), op == bytecode.RJNull, w.X()&bytecode.RNullStrict != 0, regTarget(pc, w.SC()))
 	case bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 		bytecode.RJEq, bytecode.RJNe, bytecode.RJSEq, bytecode.RJSNe:
 		o, when, _ := regBranch(op)

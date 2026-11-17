@@ -1070,9 +1070,14 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 		ctx.scratch[sThisRef] = uint64(uintptr(unsafe.Pointer(ctx.thisRef)))
 		return 1
 	}
-	if !r.jitOn() && r.nativeInit(e.cl, obj, regs[a+2:a+2+int(w.X())]) {
-		regs[w.B()] = Obj(obj)
-		return 2
+	if !r.jitOn() {
+		args := regs[a+2 : a+2+int(w.X())]
+		if r.nativeInit(e.cl, obj, args) ||
+			(leafKind(e.cl) == bytecode.LeafForward || len(e.rc.leafOps) != 0 && e.rc.leafOps[0].op == rlInitCall) &&
+				r.nativeForwardInit(e.cl, obj, args) {
+			regs[w.B()] = Obj(obj)
+			return 2
+		}
 	}
 	if leaf := leafKind(e.cl); leaf != bytecode.LeafNone && leaf != bytecode.LeafPure && leaf != bytecode.LeafForward {
 		if _, done := r.leafCall(e.cl, obj, regs[a+2:a+2+int(w.X())]); !done {

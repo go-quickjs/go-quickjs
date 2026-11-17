@@ -335,6 +335,24 @@ func TestRegNativeArrayAppend(t *testing.T) {
 // units and not in bytes, lone surrogates, lengths around eight bytes,
 // and ropes, which Go flattens first.
 func TestRegNativeStringEquals(t *testing.T) {
+	t.Run("null-branches", func(t *testing.T) {
+		const src = `
+var vals = [null, undefined, false, true, 0, -0, NaN, "", "null", 0n, Symbol(), {}, [], function() {},
+ { valueOf() { throw new Error("coercion") } }, new Proxy({}, {})];
+function check(v) {
+ var n = 0;
+ if (v === null) n += 1;
+ if (v !== null) n += 2;
+ if (null === v) n += 4;
+ if (null !== v) n += 8;
+ if (v == null) n += 16;
+ if (v != null) n += 32;
+ return n;
+}
+var n = 0; for (var j = 0; j < 100; j++) for (var v of vals) n += check(v);
+String(n)`
+		nativeCheck(t, src, src, bytecode.RJNull, bytecode.RJNotNull)
+	})
 	nativeCheck(t, `
 		var out = []
 		var strs = ["", "a", "b", "é", "ab", "abcdefgh", "abcdefgi", "abcdefghi", "abcdefghj", "bbcdefghi", "ünïcödé", "ünïcödè", "\ud83d", "\ude00", "😀", "\ud83d\ude00", "x".repeat(17), "x".repeat(16) + "y", String.fromCharCode(97, 98), "z".repeat(2000), "z".repeat(1999) + "y", "z".repeat(1024)]

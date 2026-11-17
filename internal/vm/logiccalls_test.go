@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -70,4 +71,36 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 	if got := v.String().Go(); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
+	t.Run("strict-null", func(t *testing.T) {
+		r := New(Config{})
+		defer r.Close()
+		v, err := r.Run(compileForTest(t, `
+var values = [null, undefined, false, true, 0, -0, NaN, "", "null", 0n, Symbol(), {}, [],
+ { valueOf() { throw new Error("coercion") } }, new Proxy({}, {})];
+function checks(v) {
+ var bits = "";
+ if (v === null) bits += "1"; else bits += "0";
+ if (null === v) bits += "1"; else bits += "0";
+ if (v !== null) bits += "1"; else bits += "0";
+ if (null !== v) bits += "1"; else bits += "0";
+ if (v == null) bits += "1"; else bits += "0";
+ if (null != v) bits += "1"; else bits += "0";
+ return bits;
+}
+var out = [], log = "";
+for (var v of values) out.push(checks(v));
+var o = { get v() { log += "g"; return null } };
+out.push(o.v === null, null !== o.v, log);
+function shadow(undefined) { return undefined === null }
+out.push(shadow(null), shadow(), (() => { try { null === x; let x; } catch(e) { return e.name } })());
+var n = 0; for (var p = null; p === null; p = {}) n++;
+out.push(n); out.join("|")`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "110010|001110|" + strings.Repeat("001101|", 13) + "true|false|gg|true|false|ReferenceError|1"
+		if got := v.String().Go(); got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
 }
