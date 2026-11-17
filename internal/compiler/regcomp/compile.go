@@ -94,7 +94,7 @@ func Later(lit *ast.FuncLit, fn *bytecode.Function, rec *Record) *bytecode.RegLa
 			rc.Constants = append(make([]bytecode.Constant, 0, len(view.Constants)), view.Constants...)
 			rc.PropSites = view.PropSites
 		}
-		sc.viewNames, sc.viewConsts = view.Names[:0], view.Constants[:0]
+		sc.viewNames, sc.viewConsts = view.Names, view.Constants
 		return rc
 	})
 }
@@ -186,9 +186,12 @@ func putScratch(sc *scratch) {
 	// captures alive in the pool.
 	clear(sc.names)
 	clear(sc.consts)
-	clear(sc.caps[:cap(sc.caps)])
-	clear(sc.viewNames[:cap(sc.viewNames)])
-	clear(sc.viewConsts[:cap(sc.viewConsts)])
+	// Only what this compile used: clearing each table's whole capacity
+	// had every compile after a large function's pay for its size.
+	clear(sc.caps)
+	clear(sc.viewNames)
+	clear(sc.viewConsts)
+	sc.caps, sc.viewNames, sc.viewConsts = sc.caps[:0], sc.viewNames[:0], sc.viewConsts[:0]
 	scratchPool.Put(sc)
 }
 
@@ -4742,7 +4745,7 @@ func (g *gen) finish() *bytecode.RegCode {
 		Handlers: g.handlerTable(), BackLive: g.backLive, KeepsArgs: g.fn.HasRest || g.forwardsArgs, ThisRef: g.thisRef,
 	}
 	// The scratch's tables as the code grew them, for the next compile.
-	g.s.caps, g.s.siteName = g.caps[:0], g.siteName[:0]
+	g.s.caps, g.s.siteName = g.caps, g.siteName[:0]
 	if why := Verify(rc, g.fn); why != "" {
 		Refuse(g.orig, why)
 		return nil
