@@ -288,7 +288,11 @@ and messages of V8 (Node 26), word for word, prefixes included
   `Exception`, an exported function -- is a `DataCloneError` with Node's
   message, and so is any of them in a transfer list. A runtime the
   namespace is not installed in cannot deserialize a `Module` or a
-  `Memory`;
+  `Memory`. A shared memory's buffers clone as `SharedArrayBuffer`s of the
+  same memory, its growable one as a growable one -- but under
+  `WithNodeQuirks`, as in Node, that one cannot be deserialized: an
+  `Error`, "Unable to deserialize cloned data.", or a worker's
+  `messageerror`;
 - one list of waiters for each address of a shared memory, whichever engine
   waits and whichever notifies: `Atomics.wait` and `Atomics.waitAsync` on any
   of the memory's buffers -- in any runtime, a clone's included -- and wasm's
