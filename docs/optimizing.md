@@ -281,8 +281,13 @@ What each lever cannot move:
   compiler -- are not pinned, and the placements do not vary them either.
   Their order follows the order in which vm's files, in file-name order,
   first import them: renaming vm's files put `internal/bignum` and
-  `internal/bytecode` before go-intl and moved the matcher 14 KB, which X
-  took back. In another
+  `internal/bytecode` before go-intl, moved the matcher 14 KB, which X
+  took back, and `bignum`'s `writeSmall` 3 KB, which made
+  `bigint_toString` 6% slower at every placement. `aa_imports.go` and
+  `aa_imports_jit.go`, which sort before every other file and hold no
+  code, import vm's packages in the order its files did before the
+  renames, which keeps that order on Windows and Linux amd64; a package
+  vm newly imports comes after them. In another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
 - **Assembly** is laid out after the closures of the named functions and

@@ -63,17 +63,19 @@ concurrently.
   and a new file goes where its topic is. Do not rename or reorder files
   or move code between them without comparing builds with
   `internal/cmd/v8bench/placements` (see Validation): what lies between
-  the lock's anchors still moves. Names still decide three things. The
+  the lock's anchors still moves. Names still decide four things. The
   lock's pads sort right before their anchors (`builtin_layoutpad.go`
   before `builtins.go`, `calls_layoutpad.go` before `callsite.go`,
-  `regexp_a_layoutpad.go` before `regexp_abstract.go`, `strh_layoutpad.go`
-  before `string.go`,
-  `jit_layoutpad.go` before
+  `regexp_a_layoutpad.go` before `regexp_abstract.go`,
+  `strh_layoutpad.go` before `string.go`, `jit_layoutpad.go` before
   `jit_leaffast.go`, `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go`
   around `reg_run.go`, `vm_b_layoutpad.go` before `vm_call.go`,
   `z_layoutpad.go` after every file), and the assembly pad,
   `native_a_layoutpad_*.s`, after the JIT's assembly and before
-  `native_<arch>.s`, the first of the native handlers' block. Go runs a
+  `native_<arch>.s`, the first of the native handlers' block. The
+  linker lays out the packages linked before vm in the order vm's files
+  first import them, which `aa_imports.go` and `aa_imports_jit.go`,
+  sorted first, hold. Go runs a
   package's inits in file-name order, and the handler tables are written
   and read by several: the Go handler tables are written by
   `reg_table.go` and each `reg_table_<name>.go`, then copied by
