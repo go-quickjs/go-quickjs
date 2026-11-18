@@ -172,7 +172,8 @@ func (it *sectionIterator) advance(toEnd bool) {
 func (it *sectionIterator) next() {
 	d := it.d
 	if !d.more() {
-		it.code = secUnknown
+		// Past the last section there is none, custom or not.
+		it.code, it.custom = secUnknown, false
 		return
 	}
 	it.sectionStart = d.pc
