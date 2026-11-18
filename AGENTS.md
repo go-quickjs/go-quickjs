@@ -67,13 +67,18 @@ concurrently.
   or move code between them without comparing builds with
   `internal/cmd/v8bench/placements` (see Validation): what lies between
   the lock's anchors still moves. Names still decide four things. The
-  lock's pads sort right before their anchors (`builtin_layoutpad.go`
-  before `builtins.go`, `calls_layoutpad.go` before `callsite.go`,
-  `regexp_a_layoutpad.go` before `regexp_abstract.go`,
-  `strh_layoutpad.go` before `string.go`, `jit_layoutpad.go` before
-  `jit_leaffast.go`, `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go`
-  around `reg_run.go`, `vm_b_layoutpad.go` before `vm_call.go`,
-  `z_layoutpad.go` after every file), and the assembly pad,
+  lock's pads sort right before their anchors (`bigi_layoutpad.go`
+  before `bigint.go`, `builtin_layoutpad.go` before `builtins.go`,
+  `calls_layoutpad.go` before `callsite.go`, `generato_layoutpad.go`
+  before `generator.go`, `regexp_a_layoutpad.go` before
+  `regexp_abstract.go`, `strh_layoutpad.go` before `string.go`,
+  `jit_layoutpad.go` before `jit_leaffast.go`, `native_r_layoutpad.go`
+  before `native_run.go`, `reg_cal_layoutpad.go` before `reg_call.go`,
+  `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go` around
+  `reg_run.go`, `reg_runr_layoutpad.go` before `reg_runs.go`,
+  `reg_sw_layoutpad.go` before `reg_switch.go`, `vl_layoutpad.go` before
+  `vm.go`, `vm_b_layoutpad.go` before `vm_call.go`, `z_layoutpad.go`
+  after every file), and the assembly pad,
   `native_a_layoutpad_*.s`, after the JIT's assembly and before
   `native_<arch>.s`, the first of the native handlers' block. The
   linker lays out the packages linked before vm in the order vm's files

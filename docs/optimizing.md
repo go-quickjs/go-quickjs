@@ -214,8 +214,8 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
-| A E C D B J | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `firstElem` (`builtins*.go`, the JSON codec among them), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `callObject` (with `callDirect` and `runFD` after it), and `regCall` (the register calls' entries, `regCallSlow` and `regRunFD`) or with the JIT `jitLeafGo` |
-| Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the call path after it, `rhCallW` (W), its handlers after them |
+| A I E C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`, the JSON codec among them), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
+| Q W U V | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), the call path after it, `rhCallW` (W), its operations in Go, `regBinImm` and `regBinary` (`reg_runs.go`, U), and its handlers, `newRegSwitchTable` (`reg_switch.go` and `reg_table*.go`, V, at `2f05d3fc`'s layout) |
 | R S | `layoutPadX`, the same, after the register interpreter's files | every function after it to the next position | a replace's loop, `regExpReplaceIn` with its templates after it (`regexp_abstract.go`, R), and the string builder, `partsBuilder` (`string.go`, S) |
 | Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
 | G*x* M*x* CZ | a generic a position's pad, or a method at it, calls; a closure in a generic the last file calls | the generics plain functions or methods meet first, from that file back; the closures of generics | nothing at present: no configuration anchors them |
@@ -241,7 +241,21 @@ What each lever cannot move:
   `string.go`) do the same for a replace's code, which the renames had
   put after files new to its place: `regexp_replace_dollar` was 4 to 8%
   slower at every placement, where the base with the same code shifted
-  by 32 to 96 bytes was not.
+  by 32 to 96 bytes was not. I, F, L, N, P and U hold at `3ecb8200`'s
+  offsets the code the renames and those positions moved (`bigint.go`,
+  `generator.go`, `vm.go` from `add`, `native_run.go`, `reg_call.go`,
+  `reg_runs.go`):
+  `forward_construct` was 18%, `generator_next` 14%, `bigint64_divmod`
+  13%, `bigint256_arith` 9% and `string_upper` 8% slower there. Without
+  the JIT, `regCall` comes after `native_run.go`, so P, not J, holds it.
+  V holds `reg_switch.go` and `reg_table*.go` where `2f05d3fc` had them,
+  not `3ecb8200` (see Generics below). The positions trade some rows for
+  others, as the code between them moves: over four placements against
+  `2f05d3fc`, the micro-benchmarks' geometric mean is 0.996, and
+  `async_call` is 9% slower at every placement (its promises,
+  `promise.go`, lie in N's range; 221 ns at `3ecb8200`, 190 at
+  `2f05d3fc`, 207 now), `array_spread` 4.6%, `spread_call` 4.2%,
+  `asm_table` 7.4% and `int_to_string` 2.6% slower at most of them.
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.
@@ -260,7 +274,17 @@ What each lever cannot move:
   `spreadShaped` in the round the lock was made for), and the generics
   package-level variables' initializers or other types' methods meet first
   are groups no lever reaches (shape budgets' `setRoot` and `firstRoot`,
-  `newPolyObject`, `appendGrown`, the constructors' `chargeChild`).
+  `newPolyObject`, `appendGrown`, the constructors' `chargeChild`). No
+  configuration anchors a generic now, and so a function pinned at an
+  older offset is not held against the generics it calls, nor the native
+  handlers' block's time, which depends on where the Go handlers sit
+  against the generics: code against code, which no single anchor
+  covers. V put at `3ecb8200`'s offset `rsAdd` (`reg_table.go`), with the
+  generic string appends it calls (`strAppend`, `strAppendOp`, laid out
+  after the assembly) left at `2f05d3fc`'s, made `upvalue_string_append`
+  29% slower than either; with no V, where U's pad left them,
+  `forward_construct` was 30% slower than `3ecb8200`, its Go functions
+  all at their offsets; so V holds them at `2f05d3fc`'s.
 - **Data**: the levers place the zeroed data. The initialized data and the
   read-only data, among it the type descriptors `mallocgc` reads, are not
   pinned. A build's data depends on its build information as well -- VCS
