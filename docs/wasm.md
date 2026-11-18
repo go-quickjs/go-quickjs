@@ -286,7 +286,13 @@ and messages of V8 (Node 26), word for word, prefixes included
   `Exception`, an exported function -- is a `DataCloneError` with Node's
   message, and so is any of them in a transfer list. A runtime the
   namespace is not installed in cannot deserialize a `Module` or a
-  `Memory`.
+  `Memory`;
+- one list of waiters for each address of a shared memory, whichever engine
+  waits and whichever notifies: `Atomics.wait` and `Atomics.waitAsync` on any
+  of the memory's buffers -- in any runtime, a clone's included -- and wasm's
+  `memory.atomic.wait32` and `wait64` are woken, longest waiting first, by
+  `Atomics.notify` and `memory.atomic.notify` alike, and a notify counts
+  every waiter it wakes.
 
 Constructors read `new.target`'s prototype before their arguments, as Node's
 do. A context that ends -- `EvalContext`'s deadline, say -- stops wasm as it
@@ -605,7 +611,8 @@ host functions keep. Separate instances, of one compiled module or of
 several, run at once. A shared memory is used from several goroutines at
 once, as the threads proposal intends: its bytes never move, its atomics are
 atomic, and `memory.atomic.wait` is woken by a `notify` from another
-goroutine.
+goroutine. The waiters of every shared memory are in one table of the
+process's (`internal/atomicwait`), which JavaScript's `Atomics` wait in too.
 
 Native code is shared by every instance and goroutine running a compiled
 module. Placing new code takes a write lock and running code a read lock, so

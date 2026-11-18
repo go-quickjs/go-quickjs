@@ -2,11 +2,11 @@ package engine
 
 import (
 	"math/bits"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/atomicwait"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
@@ -162,69 +162,27 @@ func rmwKind(op opcode.Opcode) byte {
 	return 0
 }
 
-// waiters holds, for each address of each shared memory, the threads
-// waiting on it, first come first woken.
-var waiters struct {
-	sync.Mutex
-	m map[waitKey][]chan struct{}
-}
-
-type waitKey struct {
-	m  *Memory
-	ea uint64
-}
-
 // wait implements memory.atomic.wait32 and wait64: 1 if the value at ea is
 // not want, 2 if timeout nanoseconds pass (none if negative), 0 if a notify
-// wakes the thread first.
+// wakes the thread first. The thread waits in the process's table of
+// waiters, keyed by the memory, where a host's waiters on views of the
+// memory -- JavaScript's Atomics.wait on its buffer -- wait too.
 func wait(x *exec, m *Memory, b []byte, ea, width, want uint64, timeout int64) uint32 {
-	waiters.Lock()
-	if atomicLoad(b, ea, width) != want {
-		waiters.Unlock()
-		return 1
-	}
-	ch := make(chan struct{})
-	k := waitKey{m, ea}
-	if waiters.m == nil {
-		waiters.m = make(map[waitKey][]chan struct{})
-	}
-	waiters.m[k] = append(waiters.m[k], ch)
-	waiters.Unlock()
-
-	var expired <-chan time.Time
-	if timeout >= 0 {
-		t := time.NewTimer(time.Duration(timeout))
-		defer t.Stop()
-		expired = t.C
-	}
 	var done <-chan struct{}
 	if x.ctx != nil {
 		done = x.ctx.Done()
 	}
-	select {
-	case <-ch:
+	equal := func() bool { return atomicLoad(b, ea, width) == want }
+	switch atomicwait.Wait(m, ea, equal, time.Duration(timeout), done, nil) {
+	case atomicwait.OK:
 		return 0
-	case <-expired:
-	case <-done:
+	case atomicwait.NotEqual:
+		return 1
 	}
-	// Leave the queue, unless a notify took the thread out of it meanwhile.
-	waiters.Lock()
-	q := waiters.m[k]
-	for i, w := range q {
-		if w == ch {
-			waiters.m[k] = append(q[:i:i], q[i+1:]...)
-			if len(waiters.m[k]) == 0 {
-				delete(waiters.m, k)
-			}
-			waiters.Unlock()
-			if done != nil && x.ctx.Err() != nil {
-				x.pollContext()
-			}
-			return 2
-		}
+	if done != nil && x.ctx.Err() != nil {
+		x.pollContext()
 	}
-	waiters.Unlock()
-	return 0
+	return 2
 }
 
 // notify wakes up to n threads waiting at ea of memory m, returning how
@@ -233,20 +191,5 @@ func notify(m *Memory, ea uint64, n uint32) uint32 {
 	if !m.Shared {
 		return 0
 	}
-	waiters.Lock()
-	defer waiters.Unlock()
-	k := waitKey{m, ea}
-	q := waiters.m[k]
-	woken := uint32(0)
-	for len(q) > 0 && woken < n {
-		close(q[0])
-		q = q[1:]
-		woken++
-	}
-	if len(q) == 0 {
-		delete(waiters.m, k)
-	} else {
-		waiters.m[k] = q
-	}
-	return woken
+	return uint32(atomicwait.Notify(m, ea, uint64(n)))
 }

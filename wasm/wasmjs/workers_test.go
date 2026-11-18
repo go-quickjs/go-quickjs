@@ -10,6 +10,7 @@ import (
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/stdlib"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
 )
 
@@ -129,5 +130,60 @@ func TestSharedResizableBuffer(t *testing.T) {
 	var exc *quickjs.Error
 	if !errors.As(err, &exc) || exc.Error() != "Error: Unable to deserialize cloned data." {
 		t.Errorf("under Node's quirks: %v", err)
+	}
+}
+
+// TestWaitersShared pins that JavaScript's Atomics and wasm's wait and
+// notify on one shared memory are one list of waiters, without Node's
+// quirks and with the JIT where there is one: a wasm wait in a worker is
+// woken by Atomics.notify, an Atomics.wait in a worker by wasm's notify, and
+// one notify counts both kinds, the longest waiting first.
+func TestWaitersShared(t *testing.T) {
+	mod := watBytes(t, `(module (import "m" "mem" (memory 1 4 shared))
+		(func (export "wait32") (param i32 i32 i64) (result i32)
+			(memory.atomic.wait32 (local.get 0) (local.get 1) (local.get 2)))
+		(func (export "notify") (param i32 i32) (result i32)
+			(memory.atomic.notify (local.get 0) (local.get 1))))`)
+	src := `
+		const mod = new WebAssembly.Module(` + mod + `);
+		const mem = new WebAssembly.Memory({ initial: 1, maximum: 4, shared: true });
+		const e = new WebAssembly.Instance(mod, { m: { mem } }).exports;
+		const i32 = new Int32Array(mem.buffer);
+		const code = ` + "`" + `
+			import { parentPort } from "node:worker_threads";
+			parentPort.once("message", ({ mod, mem, op }) => {
+				const e = new WebAssembly.Instance(mod, { m: { mem } }).exports;
+				parentPort.postMessage(op === "wasm" ? e.wait32(0, 0, -1n) : Atomics.wait(new Int32Array(mem.buffer), 0, 0));
+			});` + "`" + `;
+		const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+		async function wake(n, notify) {
+			let woken = 0;
+			while (woken < n) { woken += notify(); if (woken < n) await sleep(1); }
+			return woken;
+		}
+		(async () => {
+			const out = [];
+			let done = inWorker(code, { mod, mem, op: "wasm" });
+			out.push(await wake(1, () => Atomics.notify(i32, 0, 1)), await done);
+			done = inWorker(code, { mod, mem, op: "js" });
+			out.push(await wake(1, () => e.notify(0, 1)), await done);
+			const both = [inWorker(code, { mod, mem, op: "wasm" }), inWorker(code, { mod, mem, op: "js" })];
+			out.push(await wake(2, () => e.notify(0, 2)), ...(await Promise.all(both)));
+			const order = [];
+			const a = Atomics.waitAsync(i32, 1, 0).value.then((v) => order.push("a" + v));
+			const b = Atomics.waitAsync(new Int32Array(structuredClone(mem).buffer), 1, 0).value.then((v) => order.push("b" + v));
+			out.push(e.notify(4, 1), Atomics.notify(i32, 1, 1), e.notify(4, 1));
+			await Promise.all([a, b]);
+			out.push(order.join(" "));
+			globalThis.out = out.join();
+		})();`
+	opts := [][]quickjs.Option{nil}
+	if engine.JITAvailable() {
+		opts = append(opts, []quickjs.Option{quickjs.WithJIT()})
+	}
+	for _, o := range opts {
+		if got, want := runWorkers(t, src, o...), "1,0,1,ok,2,0,ok,1,1,0,aok bok"; got != want {
+			t.Errorf("%d options: got  %s\nwant %s", len(o), got, want)
+		}
 	}
 }

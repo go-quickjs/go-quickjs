@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/atomicwait"
 )
 
 // Shared memory.
@@ -38,25 +40,13 @@ type SharedMemory struct {
 	max int64
 	// pinned records that the memory has been shared, and so may not move.
 	pinned bool
-	// waiters are the agents waiting in Atomics.wait, by the byte offset
-	// they wait on, in the order they began.
-	waiters map[int][]*waiter
 	// host is set for memory a host package owns (HostSharedMemory).
 	host *sharedHost
 }
 
-// waiter is an agent waiting: in Atomics.wait, which notify wakes by closing
-// wake, or in Atomics.waitAsync, which it tells by calling deliver.
-type waiter struct {
-	wake     chan struct{}
-	notified bool
-	// deliver and timer are an asynchronous waiter's: what settles its
-	// promise, and what does so when its time runs out.
-	deliver func(result string)
-	timer   *time.Timer
-	// at is the byte offset an asynchronous waiter waits on.
-	at int
-}
+// waiter is an agent waiting in Atomics.wait or Atomics.waitAsync, in the
+// process's table of waiters, which WebAssembly's waits share.
+type waiter = atomicwait.Waiter
 
 // waitTimer is how long a timeout of ms milliseconds is, and false for one
 // too long to be anything but forever: a time.Duration holds 292 years, and
@@ -268,59 +258,37 @@ func sharedUpdate(b []byte, at, size int, op func(old uint64) uint64) uint64 {
 
 // --- Waiting -------------------------------------------------------------------
 
+// waitKey is what the memory's agents wait on in the table of waiters: the
+// memory, or, for memory a host owns, its owner, whose own waiters -- a
+// WebAssembly memory's -- wait there too, as do those of every other view
+// of it.
+func (m *SharedMemory) waitKey() any {
+	if m.host != nil && m.host.owner != nil {
+		return m.host.owner
+	}
+	return m
+}
+
+// waitTimeout is the duration a timeout of ms milliseconds waits, negative
+// for forever.
+func waitTimeout(ms float64) time.Duration {
+	if d, ok := waitTimer(ms); ok {
+		return d
+	}
+	return -1
+}
+
+// equalAt reports whether the element at a byte offset holds v.
+func (m *SharedMemory) equalAt(at, size int, v uint64) func() bool {
+	return func() bool { return sharedLoad(m.bytes(), at, size) == v&sizeMask(size) }
+}
+
 // wait blocks while the element at a byte offset holds v, until another agent
 // notifies it, the time runs out, or done or abort is closed. It reports
 // whether it waited at all, and whether it was notified.
 func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done, abort <-chan struct{}) (waited, notified bool) {
-	m.mu.Lock()
-	if sharedLoad(m.bytes(), at, size) != v&sizeMask(size) {
-		m.mu.Unlock()
-		return false, false
-	}
-	w := &waiter{wake: make(chan struct{})}
-	if m.waiters == nil {
-		m.waiters = make(map[int][]*waiter)
-	}
-	m.waiters[at] = append(m.waiters[at], w)
-	m.mu.Unlock()
-
-	var timer <-chan time.Time
-	if d, ok := waitTimer(timeout); ok {
-		t := time.NewTimer(d)
-		defer t.Stop()
-		timer = t.C
-	}
-	select {
-	case <-w.wake:
-		return true, true
-	case <-timer:
-	case <-done:
-	case <-abort:
-	}
-	// Out of time, or stopped: the waiter leaves the list -- unless a notify
-	// took it off first, which then counts.
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if w.notified {
-		return true, true
-	}
-	m.remove(at, w)
-	return true, false
-}
-
-// remove takes a waiter off the list of a byte offset. The lock is held.
-func (m *SharedMemory) remove(at int, w *waiter) {
-	list := m.waiters[at]
-	for i, x := range list {
-		if x == w {
-			if len(list) == 1 {
-				delete(m.waiters, at)
-			} else {
-				m.waiters[at] = append(list[:i:i], list[i+1:]...)
-			}
-			return
-		}
-	}
+	res := atomicwait.Wait(m.waitKey(), uint64(at), m.equalAt(at, size, v), waitTimeout(timeout), done, abort)
+	return res != atomicwait.NotEqual, res == atomicwait.OK
 }
 
 // waitAsync begins an asynchronous wait on the element at a byte offset. It
@@ -329,48 +297,23 @@ func (m *SharedMemory) remove(at int, w *waiter) {
 // whichever goroutine notifies it or finds its time is up, with "ok" or
 // "timed-out".
 func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, deliver func(string)) (*waiter, string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if sharedLoad(m.bytes(), at, size) != v&sizeMask(size) {
-		return nil, "not-equal"
-	}
-	if timeout == 0 {
-		return nil, "timed-out"
-	}
-	w := &waiter{deliver: deliver, at: at}
-	if m.waiters == nil {
-		m.waiters = make(map[int][]*waiter)
-	}
-	m.waiters[at] = append(m.waiters[at], w)
-	if d, ok := waitTimer(timeout); ok {
-		w.timer = time.AfterFunc(d, func() {
-			m.mu.Lock()
-			if w.notified {
-				m.mu.Unlock()
-				return
-			}
-			w.notified = true
-			m.remove(at, w)
-			m.mu.Unlock()
-			deliver("timed-out")
-		})
+	w, res := atomicwait.WaitAsync(m.waitKey(), uint64(at), m.equalAt(at, size, v), waitTimeout(timeout),
+		func(res atomicwait.Result) { deliver(waitResult(res)) })
+	if w == nil {
+		return nil, waitResult(res)
 	}
 	return w, ""
 }
 
-// cancelAsync takes an asynchronous waiter off the list, unless it has been
-// told already, and says nothing to it.
-func (m *SharedMemory) cancelAsync(w *waiter) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if w.notified {
-		return
+// waitResult is what Atomics.wait answers for a wait that ended so.
+func waitResult(res atomicwait.Result) string {
+	switch res {
+	case atomicwait.OK:
+		return "ok"
+	case atomicwait.NotEqual:
+		return "not-equal"
 	}
-	w.notified = true
-	if w.timer != nil {
-		w.timer.Stop()
-	}
-	m.remove(w.at, w)
+	return "timed-out"
 }
 
 // asyncWaits is a runtime's waiters in Atomics.waitAsync that have not been
@@ -378,24 +321,24 @@ func (m *SharedMemory) cancelAsync(w *waiter) {
 // notify meant for a live agent, and keep the runtime's heap reachable.
 type asyncWaits struct {
 	mu      sync.Mutex
-	waiters map[*waiter]*SharedMemory
+	waiters map[*waiter]struct{}
 	closed  bool
 }
 
 // add records a waiter, or cancels it at once for a runtime that has
 // closed. It is safe to call from any goroutine.
-func (a *asyncWaits) add(w *waiter, m *SharedMemory) {
+func (a *asyncWaits) add(w *waiter) {
 	a.mu.Lock()
 	if !a.closed {
 		if a.waiters == nil {
-			a.waiters = map[*waiter]*SharedMemory{}
+			a.waiters = map[*waiter]struct{}{}
 		}
-		a.waiters[w] = m
+		a.waiters[w] = struct{}{}
 		a.mu.Unlock()
 		return
 	}
 	a.mu.Unlock()
-	m.cancelAsync(w)
+	atomicwait.Cancel(w)
 }
 
 // done forgets a waiter that has been told. It is safe to call from any
@@ -406,50 +349,26 @@ func (a *asyncWaits) done(w *waiter) {
 	a.mu.Unlock()
 }
 
-// close cancels every waiter left. The runtime's lock is let go before a
-// memory's is taken.
+// close cancels every waiter left. The runtime's lock is let go before the
+// table's is taken.
 func (a *asyncWaits) close() {
 	a.mu.Lock()
 	a.closed = true
 	waiters := a.waiters
 	a.waiters = nil
 	a.mu.Unlock()
-	for w, m := range waiters {
-		m.cancelAsync(w)
+	for w := range waiters {
+		atomicwait.Cancel(w)
 	}
 }
 
 // notify wakes up to count of the agents waiting on a byte offset, the
-// longest waiting first, and returns how many it woke. An asynchronous
-// waiter is told once the lock is let go: telling it hands the answer to its
-// runtime's host, which a host may do by taking locks of its own.
+// longest waiting first -- WebAssembly's on the same memory among them --
+// and returns how many it woke.
 func (m *SharedMemory) notify(at int, count float64) int {
-	m.mu.Lock()
-	list := m.waiters[at]
-	n := len(list)
-	if count < float64(n) {
-		n = int(count)
+	n := uint64(math.MaxUint64)
+	if count < 1<<63 {
+		n = uint64(count)
 	}
-	var deliver []func(string)
-	for _, w := range list[:n] {
-		w.notified = true
-		if w.deliver == nil {
-			close(w.wake)
-			continue
-		}
-		if w.timer != nil {
-			w.timer.Stop()
-		}
-		deliver = append(deliver, w.deliver)
-	}
-	if n == len(list) {
-		delete(m.waiters, at)
-	} else {
-		m.waiters[at] = list[n:]
-	}
-	m.mu.Unlock()
-	for _, d := range deliver {
-		d("ok")
-	}
-	return n
+	return int(atomicwait.Notify(m.waitKey(), uint64(at), n))
 }

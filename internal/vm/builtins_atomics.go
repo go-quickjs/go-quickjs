@@ -391,7 +391,7 @@ func (r *Runtime) initAtomicsBuiltins() {
 		mem := t.storage().block
 		w, now := mem.waitAsync(at, t.info().size, v, timeout, deliver)
 		if w != nil {
-			rt.asyncWaits.add(w, mem)
+			rt.asyncWaits.add(w)
 		}
 		close(ready)
 		if now != "" {

@@ -26,6 +26,9 @@ The main areas are:
   not Go's `unicode` package, anything a script can observe.
 - `internal/jsonscan`: the scan of long JSON strings, AVX2 on amd64 and NEON on
   arm64, nothing needing it on the rest.
+- `internal/atomicwait`: the process's table of shared memory's waiters,
+  which JavaScript's `Atomics` and WebAssembly's `memory.atomic.wait` and
+  `notify` share, so that each engine's notify wakes the other's waiters.
 - `internal/vm`: JavaScript runtime semantics and built-ins. `Intl`, `Date`'s
   local time and `Temporal` are bindings over
   [go-intl](https://github.com/go-quickjs/go-intl), which holds the locale
