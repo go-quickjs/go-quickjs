@@ -2,8 +2,9 @@ package main
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // looksLikeModule reports whether source uses the syntax only a module may:
@@ -239,7 +240,7 @@ func skipTrivia(src string, i int, lineStart bool) (int, bool) {
 			switch {
 			case r == 0x2028 || r == 0x2029:
 				lineStart = true
-			case r == 0xFEFF || unicode.Is(unicode.Zs, r):
+			case r == 0xFEFF || ucd.IsSpaceSeparator(r):
 			default:
 				return i, lineStart
 			}
@@ -298,7 +299,7 @@ func nameEnd(src string, i int) int {
 			}
 		case c >= utf8.RuneSelf:
 			r, n := utf8.DecodeRuneInString(src[i:])
-			if r == 0x2028 || r == 0x2029 || r == 0xFEFF || unicode.Is(unicode.Zs, r) {
+			if r == 0x2028 || r == 0x2029 || r == 0xFEFF || ucd.IsSpaceSeparator(r) {
 				return i
 			}
 			i += n
