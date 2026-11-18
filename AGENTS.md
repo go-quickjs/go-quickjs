@@ -278,8 +278,8 @@ Do not manually edit generated files or their binary companions:
   code handlers, both written by `internal/simdgen` beside it; numgen also
   writes `wasm/internal/engine/internal/regdef/num_gen.go`, the numeric
   operations' values, and simdgen `simd_gen.go` beside it, the SIMD
-  operators'; and `wasm/internal/engine/native_handlers_amd64.s`,
-  register code's native handlers, written by
+  operators'; and `wasm/internal/engine/native_handlers_amd64.s` and
+  `native_handlers_arm64.s`, register code's native handlers, written by
   `wasm/internal/engine/internal/nativegen`. After changing a generator,
   run `go generate ./wasm/internal/engine`; `TestNumericGenerated`,
   `TestSIMDGenerated` and `TestNativeGenerated` (skipped under `-short`)
@@ -413,7 +413,7 @@ design, which a change to that design updates in the same commit.
   at none. `WASM_INTERP=tree` compiles bodies to the closure tree instead,
   kept to compare the two until native handlers run register code; after a
   change to the interpreter, run the spec both ways, and with
-  `WASM_REG_VERIFY=1`. On amd64 native handlers run register code
+  `WASM_REG_VERIFY=1`. On amd64 and arm64 native handlers run register code
   (wasm/internal/engine/README.md, "Native handlers"), `WASM_NONATIVE=1`
   the Go table; they keep the JIT's execution boundary rules, store a
   pointer only under the marking rule below, through a barrier routine of

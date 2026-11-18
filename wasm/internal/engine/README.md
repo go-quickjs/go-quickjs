@@ -46,8 +46,8 @@ Code asks for the closure tree (`Code.reg`, `WASM_INTERP=tree`); the
 record holds one or the other (`compiled.reg`, or `compiled.body` and
 `epi`), and `exec.interpret` runs whichever it holds. Calls cross between
 the two forms, and between either and native code, in both directions.
-Register code runs by native threaded handlers on amd64 ([Native
-handlers](#native-handlers)), and by the Go table's loop ([The
+Register code runs by native threaded handlers on amd64 and arm64
+([Native handlers](#native-handlers)), and by the Go table's loop ([The
 loop](#the-loop)) elsewhere and with `WASM_NONATIVE=1`.
 
 Every validated body compiles to register code: every instruction of
@@ -508,8 +508,8 @@ broken code it guards against.
 
 ## Native handlers
 
-On amd64 register code runs by native threaded handlers
-(native_handlers_amd64.s): machine code for the hot operations, over the
+On amd64 and arm64 register code runs by native threaded handlers
+(native_handlers_<arch>.s): machine code for the hot operations, over the
 same instructions and frames, each handler ending in its own dispatch --
 the next word loaded, its handler's address from the native table, an
 indirect jump. There is no second interpreter: what the native code does
@@ -519,9 +519,10 @@ works natively from the start. Elsewhere, and with `WASM_NONATIVE=1` (or
 `SetRegNative` in a test), the Go table's loop runs it.
 
 **Generated, position-independent, one for every build.** The handlers are
-written with the JIT's amd64 assembler by the engine's own generator,
+written with the JIT's assemblers by the engine's own generator,
 internal/nativegen (nothing of internal/vm or its generator is imported),
-as one TEXT symbol of BYTE directives and the native table as DATA, every
+as one TEXT symbol of BYTE directives (WORD directives on arm64, whose
+assembler takes nothing else) and the native tables as DATA, every
 address the code needs given by the context: no JIT is needed at run
 time, and no tag. The generator reads the operations' values and the
 context's layout from internal/regdef, which the engine aliases and
@@ -539,9 +540,37 @@ Go tables, the trampoline, memory 0 where it is unshared, the globals,
 the branch tables, the native second table, the barrier routine and the
 marking flag's address, and for a frame native code called, the way back
 to its caller). `RAX` holds the instruction word; `RCX`, `RDX`, `RSI`,
-`R8` to `R10`, `X0` and `X1` are a handler's scratch. The code never moves SP, never
-writes `R14`, `RBP` or `X15`, never executes a call instruction, and is
-never a safe point.
+`R8` to `R10` and `X0` to `X5` are a handler's scratch. The code never
+moves SP, never writes `R14`, `RBP` or `X15`, never executes a call
+instruction, and is never a safe point.
+
+**arm64.** The same handlers, tables, context and exit protocol in arm64's
+instructions (internal/nativegen's arm64*.go, each the amd64 file's of its
+name). `R19` the instruction's address, `R20` the slots, `R21` the native
+table, `R23` the tick, `R25` the context; `R0` the instruction word, `R1`
+to `R7`, `R16`, `R17` and `V0` to `V5` a handler's scratch. The code
+never moves SP and never writes `R18` (the platform's), `R26` but as the
+func value an exit gives Go, `R28` (g), `R29` or `R30`, which holds
+`wasmNativeEnter`'s return to `nativeRun` throughout, so that a traceback
+taken in the code or in the trampolines' frames reads it. The exit stub
+calls the Go handler through `wasmNativeCallH` (native_arm64.s) by Go's
+internal ABI on arm64: the arguments in `R0` to `R3`, the func value in
+`R26`, the result in `R0`, the spill room at `8(RSP)` to `40(RSP)`, the
+word below the stack pointer left alone (it holds `nativeRun`'s caller's
+frame pointer); `wasmNativeStoreRef` saves every register the code keeps
+and calls the store by ABI0. The block is in the binary, so no instruction
+cache is flushed. What differs from amd64 is the machine's: an operand is
+decoded to its slot's address (arm64 has no base-plus-index addressing
+with a displacement); a truncation is FCVTZS, which saturates, its NaN
+and its range's edges left to Go; FMIN and FMAX are min and max whole,
+and the conversions from unsigned 64 bits are UCVTF, so neither leaves to
+Go; the floats' NaNs are arm64's (a signaling NaN ahead of a quiet one),
+as the Go handlers give there. The SIMD handlers are ASIMD, which every
+arm64 CPU has, and cover more than amd64's: min, max, i64x2's mul, abs
+and shr_s, i8x16's shifts, popcnt, q15mulr, the extending multiplies and
+pairwise adds, the conversions and saturating truncations, and the
+relaxed operators with the results the Go handlers give on arm64
+(relaxed_other.go). Darwin and Linux take the same block.
 
 **The exit stub.** It stores the tick into the frame and calls the Go
 handler of the instruction at `RBX` -- or, for a branch back that spent
@@ -704,8 +733,8 @@ both the Go table and native code for a 1 KB shift of what follows.
 
 ## Open work
 
-1. arm64's handlers; then the closure tree's deletion with
-   `WASM_INTERP`.
+1. The closure tree's deletion with `WASM_INTERP`, once arm64's handlers
+   have run on hardware.
 2. Native GC accesses -- struct.get and set, array.get, set and len of
    numeric fields and elements -- and call_ref: the arrays and gc
    workloads still leave to Go for each.

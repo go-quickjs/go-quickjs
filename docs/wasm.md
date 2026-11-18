@@ -447,8 +447,8 @@ The match is tested against Node, not assumed. With
 
 The interpreter compiles a function body, on its first call, to register
 code: fixed-width instructions over the frame's slots, run by native
-threaded handlers on amd64 and a loop over a table of Go handlers
-elsewhere (`wasm/internal/engine/README.md`). `WASM_INTERP=tree`
+threaded handlers on amd64 and arm64 and a loop over a table of Go
+handlers elsewhere (`wasm/internal/engine/README.md`). `WASM_INTERP=tree`
 compiles bodies to the closure tree that interpreted them before, kept to
 compare the two until native handlers run register code; it goes once they
 do. The baseline JIT (`wasm/internal/jit`)
@@ -635,7 +635,7 @@ The environment names them:
 | `WASM_THREADS_DIR` | a WebAssembly/threads checkout, for `test/core/threads` |
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
 | `WASM_INTERP` | `tree` compiles function bodies to the closure tree rather than register code, to compare the two |
-| `WASM_NONATIVE` | `1` runs register code by the Go table's loop rather than the native handlers (amd64) |
+| `WASM_NONATIVE` | `1` runs register code by the Go table's loop rather than the native handlers (amd64, arm64) |
 | `WASM_REG_VERIFY` | `1` verifies every body of register code as it is compiled |
 | `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` at its first call, the interpreter compiling no body it does not run; a number after that many calls in the interpreter |
 | `WASM_JIT_OSR` | the back edges a call runs before its loop enters native code, or `off` |
