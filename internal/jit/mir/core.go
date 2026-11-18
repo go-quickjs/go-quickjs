@@ -2907,14 +2907,10 @@ func (c *core) operandsLive(s *ssa.FrameState, ops int) bool {
 }
 
 // inlineLevels are the inlined frames an exit in state s makes, the
-// outermost first (ssa.InlineState). No exit makes a typed callee's
-// (InlineState's Typed): the code is refused.
+// outermost first (ssa.InlineState).
 func inlineLevels(s *ssa.FrameState) []*ssa.InlineState {
 	var levels []*ssa.InlineState
 	for in := s.Inline; in != nil; in = in.Parent {
-		if in.Typed {
-			panic("an exit inside an inlined typed callee")
-		}
 		levels = append(levels, in)
 	}
 	slices.Reverse(levels)
@@ -3913,11 +3909,7 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 		st.SetsPC, st.PC, st.Depth = true, uint32(v.State.PC), uint32(v.State.Depth)
 		if in := v.State.Inline; in != nil {
 			// Inside an inlined callee: its instruction, which Go makes
-			// without a frame or not at all -- never a typed callee's
-			// (inlineLevels).
-			if in.Typed {
-				panic("a call of Go inside an inlined typed callee")
-			}
+			// without a frame or not at all.
 			st.Inline, st.InlinePC = in.Closure, in.PC
 		}
 	}

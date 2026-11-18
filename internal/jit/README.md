@@ -2497,8 +2497,8 @@ and its caches', the same at each. So is a closure the function makes and only c
 gives to a callee that calls it, unchecked and never made, an arrow reading
 its this among them, its this the maker's (see [Closures the code only
 calls](#allocation-and-escape-analysis)). A typed callee, a function of an
-asm.js module, is offered so too, and taken into typed code only, where
-nothing inside it exits (see [Typed code](#typed-code)).
+asm.js module, is offered so too, and taken into typed code only (see
+[Typed code](#typed-code)).
 
 **What the builder takes.** What a function inlines is bounded by size
 alone, as V8's JSInliningHeuristic bounds it, never by a count of calls: a
@@ -2641,6 +2641,14 @@ of the callee's -- a property's read or write whose site is not
 megamorphic, a construction whose pool ran out (`jitRegLeftAtSite`) --
 nor one of code to be compiled again, nor one whose operation threw, which the callee
 called natively leaves native code for just the same.
+
+An inlined typed callee's window has its raw slots: the function's slot
+kinds (`ssa.Func`'s `Kinds`, the exits' `abi.ExitFrame` `Kinds`) are its
+program's and, past them, each inlined typed callee's at its window
+(`frameKinds`), so that an exit writes every level's raw slots raw, as the
+root's (see [Typed code](#typed-code)). The level's frame is its twin's,
+whose code is the typed code, and Go goes on with it by the typed table
+(`runRegFor`, `regWholeTyped`), as with the root's.
 
 ## Exits and deoptimization
 
@@ -3331,24 +3339,25 @@ code.
 **Inlined.** A typed callee is offered as any register callee is (see
 [Inlining](#inlining)), its program its typed lowering and its feedback
 its own -- its heap, its Math functions' computations -- and the builder
-takes it by the ordinary rules, its frequency and the same budgets, into
-typed code alone, where nothing inside it exits (`ssa`'s `typedInline`):
-no call, no loop and so no poll, no guard or host exit -- no % of doubles
-or pow, which fail to Go where they are not exact -- its operations raw
-ones native code makes alone, a Math function Go computes from native
-code among them, its branches forward, its parameters' conversions of the
-boxes its caller's call made (typed code boxes every argument), and what
-it reads of the VM answered by its feedback. So no frame state names its
-frame, whose raw slots no exit writes, and the backends refuse code where
-one would (`ssa.InlineState`'s `Typed`). Its module variables are read
-and written in its closure's cells, as an inlined callee's captured
-bindings are (`rawCell`); its raw values stay in registers, the boxes of
-its arguments and its result folded away; and its phis are typed code's,
-int32 wherever their arguments are (intPhis).
+takes it by the ordinary rules, its frequency, the same budgets and its
+calls inlined in it, every one, or it is not, into typed code alone
+(`ssa`'s `typedInline`), where what it reads of the VM its feedback
+answers: a typed build refuses what its feedback does not answer, which
+no callee's may make it do. Its module variables are read and written in
+its closure's cells, as an inlined callee's captured bindings are
+(`rawCell`); its raw values stay in registers, the boxes of its arguments
+and its result folded away; its phis are typed code's, int32 wherever
+their arguments are (intPhis). Its slots' kinds are the function's past
+the caller's, at its window (`frameKinds`): an exit inside it -- a loop's
+poll, a guard's failure -- writes its raw slots raw, and Go makes its
+frame of its typed code and goes on with it in the typed interpreter (see
+[Its exits](#inlining)), as at the root's exits; and so do the records Go
+writes a frame from (`jitRegApplyRecords`, by the code's kinds,
+`jitRegEntry`'s `kinds`). A recursion is not inlined in itself, nor a
+callee whose call of an import, Go's, nothing inlines -- as an ordinary
+callee is not.
 
-**What is left.** A typed callee with a call or a loop, or one that may
-exit, is called natively: its frame in the exits' records, its raw slots
-by their kinds, would let it be inlined too. Such a call boxes its
+**What is left.** A call between typed functions natively boxes its
 arguments into the window and the callee unboxes them; a raw calling
 convention would keep them in registers. A typed function the
 interpreter answers without a frame (a leaf, `regCallKind`) is never

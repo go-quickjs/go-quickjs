@@ -3286,6 +3286,9 @@ type builder struct {
 	// atomicErr is the exit such a build made.
 	atomic    bool
 	atomicErr error
+	// kindsOwn says the Func's Kinds are its own, not its root program's,
+	// which inlined typed callees' kinds extend (frameKinds).
+	kindsOwn bool
 	// p and fb are the program the block being translated is in, and its
 	// feedback: the function's own (root), or an inlined callee's.
 	p      *ir.Program
@@ -4773,6 +4776,7 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 	b.enter(fr)
 	p := fr.p
 	fr.cont = cont
+	b.frameKinds(fr)
 	leaders := b.f.bools(len(p.Code) + 1)
 	leaders[0] = true
 	for pc, in := range p.Code {
@@ -7514,7 +7518,7 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 		b.stateSlots(s, blk, pc, &sf, call)
 		s.Inline = b.f.inlineState(InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
-			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc, Typed: b.p.Kinds != nil})
+			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc})
 		if fr.site.Arguments || fr.site.ReadsArguments {
 			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
 		}

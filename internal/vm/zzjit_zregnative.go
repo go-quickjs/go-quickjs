@@ -35,6 +35,10 @@ import (
 type jitRegEntry struct {
 	p    *ir.Program
 	code *jit.SSACode
+	// kinds are, for typed code, the kinds of its code's slots (ssa.Func's
+	// Kinds): its program's, and its inlined typed callees' past them,
+	// which its native calls' records write raw (jitRegApplyRecords).
+	kinds []uint8
 	// keep is what the code reads by address -- the shapes, holders and
 	// constants' cells its feedback answered with -- kept alive with it.
 	keep *jitFeedback
@@ -746,6 +750,7 @@ func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f 
 	}
 	e.unentered = slices.Clone(f.Unentered)
 	e.kept = slices.Clone(f.EntryKept)
+	e.kinds = f.Kinds
 	// The pools' roots and prototypes escape analysis took, which the
 	// objects it does not make are made with at an exit.
 	rf.fb.keepVirtuals(f.VirtualAsked)
@@ -1541,8 +1546,10 @@ func (r *Runtime) jitRegSlot(f *frame, p *ir.Program, wb, i int) *Value {
 // jitRegApplyRecords writes the slots ctx's records name into f's register
 // frame, every value read before any is written: an exit's own records
 // native code applies itself as it leaves, so these are a native call's
-// caller's state.
-func (r *Runtime) jitRegApplyRecords(f *frame, p *ir.Program, wb int, ctx *abi.Context) {
+// caller's state. kinds are the code's slots' kinds (jitRegEntry's): a
+// typed slot's word is written raw, the inlined typed callees' past the
+// program's slots among them.
+func (r *Runtime) jitRegApplyRecords(f *frame, p *ir.Program, kinds []uint8, wb int, ctx *abi.Context) {
 	n := int(ctx.Records)
 	if n == 0 {
 		return
@@ -1577,9 +1584,9 @@ func (r *Runtime) jitRegApplyRecords(f *frame, p *ir.Program, wb int, ctx *abi.C
 	}
 	for i, rec := range ctx.Record[:n] {
 		slot := int(rec.Slot &^ flags)
-		if slot < len(p.Kinds) && p.Kinds[slot] != abi.SlotValue {
+		if slot < len(kinds) && kinds[slot] != abi.SlotValue {
 			// Typed code's raw slot, written raw (abi.RawWord).
-			src[i] = Value{num: math.Float64frombits(abi.RawWord(p.Kinds[slot], math.Float64bits(src[i].num)))}
+			src[i] = Value{num: math.Float64frombits(abi.RawWord(kinds[slot], math.Float64bits(src[i].num)))}
 		}
 		*r.jitRegSlot(f, p, wb, slot) = src[i]
 	}
@@ -2299,7 +2306,7 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 	}
 	if err == nil {
 		r.jitRegStretchWork(e, ctx, ipc, edges, osr)
-		r.jitRegApplyRecords(f, p, wb, ctx)
+		r.jitRegApplyRecords(f, p, e.kinds, wb, ctx)
 		if ctx.ExitKind == abi.ExitReturn {
 			ret = Value{num: math.Float64frombits(ctx.Ret)}
 			if src := jitSource(&ctx.RetFrom); src != nil && src.ref != nil {

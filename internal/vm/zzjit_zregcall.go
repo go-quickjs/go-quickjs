@@ -2326,7 +2326,7 @@ func (r *Runtime) jitRegUnwind(idx int) (_ Value, _ error, gen bool) {
 			// Its records first, which the objects its code did not make
 			// are materialized from with its inlined callees' (jitRegInlined);
 			// applied, none is left for jitRegFinishLevel.
-			r.jitRegApplyRecords(f, l.e.p, l.wb, c)
+			r.jitRegApplyRecords(f, l.e.p, l.e.kinds, l.wb, c)
 			if iv, ierr, ok := r.jitRegInlined(l.ctx, f, l.e, l.pc, l.wb); ok {
 				// It left inside a callee its code inlined, at the call
 				// it is inlined at: Go finishes the callee, and the call
@@ -2453,7 +2453,7 @@ func (r *Runtime) jitRegFinishLevel(f *frame, l *jitRegLevel, c *abi.Context) (V
 	if c.ExitKind == abi.ExitTable {
 		s.ssaRecords += uint64(s.exitScratch.Apply(c))
 	}
-	r.jitRegApplyRecords(f, l.e.p, l.wb, c)
+	r.jitRegApplyRecords(f, l.e.p, l.e.kinds, l.wb, c)
 	next, pc, v, done, err, native := r.jitRegLeft(f, l.c, l.e, l.wb, c, Undefined)
 	if native {
 		pc, v, done, err = r.jitRegGoOn(f, l.c, l.e, l.wb, next)

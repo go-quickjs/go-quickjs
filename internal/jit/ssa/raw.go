@@ -283,22 +283,13 @@ func (b *builder) rawCell(blk *Block, k int) *Value {
 
 // typedInline reports whether site's callee may be inlined in the frame
 // being translated, as far as typed code (ir.Program's Kinds) goes:
-// ordinary code as anywhere; typed code only in typed code, and only
-// where nothing inside it exits -- no call, no loop and so no poll, no
-// host exit or guard that stays after the build's passes -- so that no
-// frame state names its frame, whose raw slots no exit writes. Its
-// instructions are a raw operation's that native code makes alone, a
-// copy, a forward jump or a raw compare's branch, a return; a Math
-// function Go computes from native code (OpMathCall), which leaves
-// nothing to Go, among them, but not % of doubles or pow, which fail to
-// Go where they are not exact. A parameter's conversion (ir.RawConvI,
-// RawConvF) converts a number natively: typed code's call boxes each
-// argument (the typed compiler's call), so where the parameter's slot is
-// written by nothing in the callee, its value is the caller's box, and
-// the conversion its number. What it reads of the VM -- the heap, a Math
-// function's computation, its module variables' cells -- its feedback
-// answers, or it is not inlined: the build of a typed function refuses
-// what its feedback does not answer.
+// ordinary code as anywhere; typed code in typed code, by the ordinary
+// rules, where what it reads of the VM -- the heap, a Math function's
+// computation, its module variables' cells -- its feedback answers: the
+// build of a typed function refuses what its feedback does not answer,
+// which no callee's may make it do. An exit inside it writes its frame's
+// raw slots raw, by their kinds (frameKinds), and the VM makes its frame
+// of its typed code, which the typed interpreter goes on with.
 func (b *builder) typedInline(site InlineSite) bool {
 	p := site.Program
 	if p.Kinds == nil {
@@ -310,50 +301,17 @@ func (b *builder) typedInline(site InlineSite) bool {
 	}
 	fb := site.Feedback
 	gf, _ := fb.(GoFeedback)
-	written := func(slot int) bool {
-		for pc := range p.Code {
-			if !reachable(p, pc) {
-				continue
-			}
-			if a, c := p.Code[pc].Writes(); a == slot || c == slot {
-				return true
-			}
-		}
-		return false
-	}
 	for pc, in := range p.Code {
-		if !reachable(p, pc) {
+		if !reachable(p, pc) || in.Op != ir.Raw {
 			continue
-		}
-		if in.Check {
-			return false
-		}
-		switch in.Op {
-		case ir.Nop, ir.Copy, ir.Return:
-			continue
-		case ir.Jump:
-			if in.Target > pc {
-				continue
-			}
-			return false
-		case ir.Branch:
-			if in.Raw != ir.RawNone && in.Target > pc {
-				continue
-			}
-			return false
-		case ir.Raw:
-		default:
-			return false
 		}
 		switch in.Raw {
-		case ir.RawFMod:
-			return false
 		case ir.RawFMath:
 			mf, ok := fb.(RawMathFeedback)
 			if !ok {
 				return false
 			}
-			if k, ok := mf.RawMath(pc); !ok || k.Op != OpMathCall || gf == nil || !gf.GoCalls() {
+			if k, ok := mf.RawMath(pc); !ok || k.Op != OpPowF64 && (k.Op != OpMathCall || gf == nil || !gf.GoCalls()) {
 				return false
 			}
 		case ir.RawLoad, ir.RawStore:
@@ -364,14 +322,29 @@ func (b *builder) typedInline(site InlineSite) bool {
 			if site.Upvalues == 0 {
 				return false
 			}
-		case ir.RawConvI, ir.RawConvF:
-			k := in.Left.Slot - p.ParamBase
-			if in.Left.Slot < 0 || k < 0 || k >= p.Params || k >= site.Argc || written(in.Left.Slot) {
-				return false
-			}
 		}
 	}
 	return true
+}
+
+// frameKinds gives the function's slots (Func's Kinds) the kinds of fr's,
+// an inlined typed callee's, laid past the caller's at its base: an exit
+// inside it writes its raw slots raw (abi.ExitFrame's Kinds), and so do
+// the records of a native call it makes, for the VM to go on with its
+// frame in the typed interpreter.
+func (b *builder) frameKinds(fr *frame) {
+	k := fr.p.Kinds
+	if k == nil {
+		return
+	}
+	f := b.f
+	if end := fr.base + len(k); end > len(f.Kinds) || !b.kindsOwn {
+		// The root program's, which other builds share, copied first.
+		kinds := make([]uint8, max(end, len(f.Kinds)))
+		copy(kinds, f.Kinds)
+		f.Kinds, b.kindsOwn = kinds, true
+	}
+	copy(f.Kinds[fr.base:], k)
 }
 
 // entryLoad is slot's value as an entry in blk loads it from the frame: a
