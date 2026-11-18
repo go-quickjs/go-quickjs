@@ -10,14 +10,30 @@
 // data from one Unicode version with a name list from another is how a property
 // ends up accepted but empty.
 //
-// Usage:
+// The same run writes package ucd's tables (internal/ucd/tables.go), which
+// the lexer, the regexp's case folding and the string case conversions read,
+// so that the language accepts and maps the same characters whatever Go's own
+// unicode tables are. Its sets -- ID_Start, ID_Continue, the space separators,
+// the upper-case letters, Cased, Case_Ignorable -- come from the same
+// generated tests; its case mappings and foldings from the Unicode Character
+// Database of the version those tests name (UnicodeData.txt, CaseFolding.txt,
+// SpecialCasing.txt), fetched from unicode.org or read from -ucddata, and
+// checked against the SHA-256 sums pinned in ucd.go.
 //
-//	go run ./internal/regexp/internal/unicodegen /path/to/test262 > internal/regexp/unicodetables.go
+// Usage, from the repository root:
+//
+//	go run ./internal/regexp/internal/unicodegen [-ucddata dir] /path/to/test262
+//
+// Both files are written only once both are made and formatted.
 package main
 
 import (
 	"bufio"
+	"bytes"
+	"flag"
 	"fmt"
+	"go/format"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,11 +61,15 @@ var (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: unicodegen <test262-dir>")
+	ucdData := flag.String("ucddata", "", "directory holding the Unicode Character Database files (default: fetch them)")
+	regexpOut := flag.String("regexp", filepath.Join("internal", "regexp", "unicodetables.go"), "the regexp's tables")
+	ucdOut := flag.String("ucd", filepath.Join("internal", "ucd", "tables.go"), "package ucd's tables")
+	flag.Parse()
+	if flag.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: unicodegen [-ucddata dir] <test262-dir>")
 		os.Exit(2)
 	}
-	dir := filepath.Join(os.Args[1], "test", "built-ins", "RegExp",
+	dir := filepath.Join(flag.Arg(0), "test", "built-ins", "RegExp",
 		"property-escapes", "generated")
 	files, err := filepath.Glob(filepath.Join(dir, "*.js"))
 	if err != nil || len(files) == 0 {
@@ -93,7 +113,57 @@ func main() {
 		}
 		strProps = append(strProps, p)
 	}
-	emit(os.Stdout, version, props, strProps)
+
+	byName := map[string]*property{}
+	for i := range props {
+		for _, n := range props[i].names {
+			byName[n] = &props[i]
+		}
+	}
+	for _, p := range ucdProperties {
+		if byName[p.name] == nil {
+			fail(fmt.Errorf("no generated test for %s", p.name))
+		}
+	}
+	cases, err := readCaseData(*ucdData, version)
+	if err != nil {
+		fail(err)
+	}
+	if err := cases.check(byName); err != nil {
+		fail(err)
+	}
+
+	var rx, ud bytes.Buffer
+	emit(&rx, version, props, strProps)
+	emitUCD(&ud, version, byName, cases)
+	outs := []struct {
+		path string
+		src  []byte
+	}{{*regexpOut, rx.Bytes()}, {*ucdOut, ud.Bytes()}}
+	for i := range outs {
+		src, err := format.Source(outs[i].src)
+		if err != nil {
+			fail(fmt.Errorf("%s: %v", outs[i].path, err))
+		}
+		outs[i].src = src
+	}
+	// Each file goes to a temporary one beside it first, so that a failed
+	// write leaves the tracked file as it was.
+	for _, o := range outs {
+		tmp := o.path + ".tmp"
+		if err := os.WriteFile(tmp, o.src, 0o644); err != nil {
+			fail(err)
+		}
+		if err := os.Rename(tmp, o.path); err != nil {
+			os.Remove(tmp)
+			fail(err)
+		}
+	}
+}
+
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "unicodegen:", err)
+	os.Exit(1)
 }
 
 // stringProperty is a property of strings: a list of code point sequences.
@@ -346,7 +416,7 @@ func appendVarint(sb *strings.Builder, n uint32) {
 	}
 }
 
-func emit(out *os.File, version string, props []property, strProps []stringProperty) {
+func emit(out io.Writer, version string, props []property, strProps []stringProperty) {
 	// Each set is encoded once; the spellings that name it share the offset.
 	var data strings.Builder
 	offsets := map[string]int{}

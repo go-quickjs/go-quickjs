@@ -20,6 +20,9 @@ The main areas are:
   behavior tests.
 - `internal/lexer`, `internal/parser`, `internal/ast`: source processing.
 - `internal/compiler`, `internal/bytecode`: compilation and VM instructions.
+- `internal/ucd`: the Unicode properties and case data the language asks
+  about, generated at the regexp's Unicode version. Production code asks it,
+  not Go's `unicode` package, anything a script can observe.
 - `internal/jsonscan`: the scan of long JSON strings, AVX2 on amd64 and NEON on
   arm64, nothing needing it on the rest.
 - `internal/vm`: JavaScript runtime semantics and built-ins. `Intl`, `Date`'s
@@ -200,7 +203,19 @@ concurrently.
 
 Do not manually edit generated files or their binary companions:
 
-- `internal/regexp/unicodetables.go`
+- `internal/regexp/unicodetables.go` and `internal/ucd/tables.go`, the
+  Unicode data, at one version: 17.0.0, the one the test262 at CI's pin
+  expects. The first is the regexp's property escapes; the second is
+  package ucd's identifier, space and case tables, which the lexer, the
+  regexp's case folding and group names, the compiler and the string case
+  conversions read in place of Go's `unicode` package, whose tables are at
+  the Unicode version of the Go that builds the program (15.0 in Go 1.24).
+  `internal/regexp/internal/unicodegen` writes both in one run (below): the
+  property sets from test262's generated property-escape tests, the case
+  mappings and foldings from the Unicode Character Database of the version
+  those tests name, checked against the SHA-256 sums pinned in its `ucd.go`.
+  `TestMatchesGo` (internal/ucd) compares every code point with Go's tables
+  when a Go's are at the same version.
 - `internal/regexp/exec_ascii.go` and `internal/regexp/exec_utf8.go`, the
   regexp matchers over an ASCII string's bytes and over UTF-8 by code point,
   made from `exec.go`'s matcher over UTF-16 code units so that they stay the
@@ -252,13 +267,15 @@ Run generators from the repository root. Use a temporary output file for
 generators that write Go source to stdout so a failed run cannot truncate the
 tracked file.
 
-Unicode regular-expression tables require a test262 checkout:
+The Unicode tables require a test262 checkout, and fetch UnicodeData.txt,
+CaseFolding.txt and SpecialCasing.txt of its Unicode version from
+unicode.org (`-ucddata DIR` reads them from a directory instead). The
+generator writes both files itself, formatted, each through a temporary
+file and only once both are made. A test262 at a new Unicode version needs
+that version's sums in `ucd.go` first:
 
 ```sh
-generated=$(mktemp /tmp/quickjs-unicode.XXXXXX.go)
-go run ./internal/regexp/internal/unicodegen /path/to/test262 > "$generated" && \
-  mv "$generated" internal/regexp/unicodetables.go
-gofmt -w internal/regexp/unicodetables.go
+go run ./internal/regexp/internal/unicodegen /path/to/test262
 ```
 
 ## Intl and data-loading invariants
