@@ -49,9 +49,11 @@ loop](#the-loop)) elsewhere and with `WASM_NONATIVE=1`.
 Every validated body compiles to register code: every instruction of
 WebAssembly 3.0 and the threads proposal, every value kind, any number of
 locals, any offset and memory; the spec test logs the count
-(`ReadJITStats().Interpreted`), 6,842 bodies. The one body it refuses, by
-a panic, is one of a module whose offsets do not fit the 32 bits every
-part of the engine reports them in ([Traps](#traps)).
+(`ReadJITStats().Interpreted`), 6,842 bodies. A module is at most 2^32-1
+bytes, what its 32-bit offsets address (the decoder refuses a larger one
+under any limits); a body whose register code would pass what a pc holds
+stops the call that needs it with `ErrFunctionTooLarge`, an error, not a
+panic ([Traps](#traps)).
 
 ## Why registers
 
@@ -326,15 +328,14 @@ A trap keeps the engine's panic, recovered at the call's entry (`invoke`,
 `recovered`). It is the cheapest form in Go: the path that does not trap
 pays nothing -- a handler that returned an error would test it on every
 instruction, and the loop would test the handler's answer. To keep even
-the trap's offset off the hot path, a handler traps with its pc's
-complement (`regAt`), which is past every offset of its module, and the
-recovery makes it the module offset of the instruction the pc was compiled
-from, through the innermost frame's register code (`offs`,
-`exec.regOffset`); an offset native code reports is below the module's
-size and stays as it is. So a division's handler passes `^pc`, at no
-cost. A module whose
-offsets with its pcs would pass 32 bits is the register compiler's one
-refusal; no part of the engine reports such a module's offsets.
+the trap's offset off the hot path, a handler traps with its pc marked by
+a bit past every 32-bit offset (`regAt`, `regPC`), and the recovery makes
+it the module offset of the instruction the pc was compiled from, through
+the innermost frame's register code (`offs`, `exec.regOffset`); a module
+offset, which native code and a call's site report, carries no mark and
+stays as it is. So a division's handler passes its marked pc, at no cost,
+and the offsets come out exact at any module size
+(`TestRegLargeOffsets`).
 
 ## Exceptions
 
