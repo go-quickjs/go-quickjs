@@ -40,6 +40,9 @@ type nativeCtx struct {
 	fn, cd, rc                     uintptr
 	// extTable is the native second table, rExt's.
 	extTable uintptr
+	// rch and rsp are the exec's reference chunk and slot to give back
+	// as a frame native code called returns.
+	rch, rsp uintptr
 }
 
 // regNativeOn runs register code by the native handlers where they are

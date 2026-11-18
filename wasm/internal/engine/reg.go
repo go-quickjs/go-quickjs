@@ -126,7 +126,7 @@ type regCode struct {
 	// gc are the GC instructions' records (reg_gc.go).
 	gc []regGC
 	// callee says native code may call the function itself: the body has
-	// no try region and no tail call, and its frame no reference.
+	// no try region and no tail call.
 	callee bool
 }
 

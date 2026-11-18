@@ -56,9 +56,17 @@ func (b *block) source() []byte {
 		fmt.Fprintf(&s, "//\t%5d  %s\n", b.at[op], b.names[op])
 	}
 	s.WriteString("TEXT ·wasmNativeHandlers(SB), NOSPLIT|NOFRAME, $0-0\n")
-	for i := 0; i < len(b.code); i += 16 {
+	// The block is padded with INT3 to whole 4 KB pages, so that a change
+	// to the handlers moves none of the code after it within its page:
+	// what follows is the package's closures, some of them hot in Go's
+	// handlers, whose speed moves with where they lie.
+	code := b.code
+	for len(code)%4096 != 0 {
+		code = append(code, 0xcc)
+	}
+	for i := 0; i < len(code); i += 16 {
 		var parts []string
-		for _, c := range b.code[i:min(i+16, len(b.code))] {
+		for _, c := range code[i:min(i+16, len(code))] {
 			parts = append(parts, fmt.Sprintf("BYTE $0x%02x", c))
 		}
 		s.WriteString("\t" + strings.Join(parts, "; ") + "\n")

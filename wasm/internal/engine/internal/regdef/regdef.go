@@ -76,7 +76,9 @@ const (
 	CtxCd        = 232 // the call's scratch: the record
 	CtxRc        = 240 // the call's scratch: the register code
 	CtxExtTable  = 248 // the native second table, rExt's
-	CtxSize      = 256
+	CtxRch       = 256 // the exec's reference chunk to give back to
+	CtxRsp       = 264 // the exec's reference chunk's slot to give back to
+	CtxSize      = 272
 )
 
 // The engine's structures the handlers read, on amd64 and arm64.
@@ -86,6 +88,7 @@ const (
 	SliceSize = 24 // a slice
 
 	FrameL       = 8   // frame.l
+	FrameR       = 32  // frame.r
 	FrameInst    = 56  // frame.inst
 	FrameOsr     = 64  // frame.osr, an int32
 	FrameRc      = 72  // frame.rc
@@ -95,8 +98,11 @@ const (
 	FrameNctx    = 232 // frame.nctx
 
 	XNchunks = 16  // exec.nchunks
+	XRchunks = 40  // exec.rchunks
 	XNc      = 64  // exec.nc
+	XRc      = 72  // exec.rc
 	XNsp     = 80  // exec.nsp
+	XRsp     = 88  // exec.rsp
 	XDepth   = 96  // exec.depth
 	XCalls   = 104 // exec.calls
 	XPoll    = 128 // exec.poll, an int32
@@ -109,6 +115,8 @@ const (
 	FnIndex = 40 // Function.Index
 
 	CdNslots = 0  // compiled.nslots
+	CdRslots = 8  // compiled.rslots
+	CdRefs   = 32 // compiled.refs, a bool
 	CdReg    = 80 // compiled.reg
 
 	RcCode   = 0   // regCode.code
@@ -126,6 +134,9 @@ const (
 	MoveTo   = 4  // regMove.to
 	MoveK    = 8  // regMove.k
 	MoveSize = 12 // a regMove
+	MoveV128 = 1  // regMove.k of a v128
+	MoveRef  = 2  // regMove.k of a reference
+	RefSize  = 16 // a Ref, its pointer word first
 
 	MemoryBuf = 0 // Memory.buf
 	GlobalNum = 0 // Global.Num

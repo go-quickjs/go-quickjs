@@ -95,7 +95,10 @@ func TestNativeLayout(t *testing.T) {
 		{"cd", unsafe.Offsetof(c.cd), regdef.CtxCd},
 		{"rc", unsafe.Offsetof(c.rc), regdef.CtxRc},
 		{"extTable", unsafe.Offsetof(c.extTable), regdef.CtxExtTable},
+		{"rch", unsafe.Offsetof(c.rch), regdef.CtxRch},
+		{"rsp", unsafe.Offsetof(c.rsp), regdef.CtxRsp},
 		{"frame.l", unsafe.Offsetof(f.l), regdef.FrameL},
+		{"frame.r", unsafe.Offsetof(f.r), regdef.FrameR},
 		{"frame.inst", unsafe.Offsetof(f.inst), regdef.FrameInst},
 		{"frame.osr", unsafe.Offsetof(f.osr), regdef.FrameOsr},
 		{"frame.rc", unsafe.Offsetof(f.rc), regdef.FrameRc},
@@ -104,6 +107,9 @@ func TestNativeLayout(t *testing.T) {
 		{"frame.nctx", unsafe.Offsetof(f.nctx), regdef.FrameNctx},
 		{"exec.nchunks", unsafe.Offsetof(x.nchunks), regdef.XNchunks},
 		{"exec.nc", unsafe.Offsetof(x.nc), regdef.XNc},
+		{"exec.rchunks", unsafe.Offsetof(x.rchunks), regdef.XRchunks},
+		{"exec.rc", unsafe.Offsetof(x.rc), regdef.XRc},
+		{"exec.rsp", unsafe.Offsetof(x.rsp), regdef.XRsp},
 		{"exec.nsp", unsafe.Offsetof(x.nsp), regdef.XNsp},
 		{"exec.depth", unsafe.Offsetof(x.depth), regdef.XDepth},
 		{"exec.calls", unsafe.Offsetof(x.calls), regdef.XCalls},
@@ -114,6 +120,8 @@ func TestNativeLayout(t *testing.T) {
 		{"Function.Inst", unsafe.Offsetof(fn.Inst), regdef.FnInst},
 		{"Function.Index", unsafe.Offsetof(fn.Index), regdef.FnIndex},
 		{"compiled.nslots", unsafe.Offsetof(cd.nslots), regdef.CdNslots},
+		{"compiled.rslots", unsafe.Offsetof(cd.rslots), regdef.CdRslots},
+		{"compiled.refs", unsafe.Offsetof(cd.refs), regdef.CdRefs},
 		{"compiled.reg", unsafe.Offsetof(cd.reg), regdef.CdReg},
 		{"regCode.code", unsafe.Offsetof(rc.code), regdef.RcCode},
 		{"regCode.sites", unsafe.Offsetof(rc.sites), regdef.RcSites},
@@ -128,6 +136,10 @@ func TestNativeLayout(t *testing.T) {
 		{"regMove.to", unsafe.Offsetof(mv.to), regdef.MoveTo},
 		{"regMove.k", unsafe.Offsetof(mv.k), regdef.MoveK},
 		{"a regMove", unsafe.Sizeof(mv), regdef.MoveSize},
+		{"vkV128", uintptr(vkV128), regdef.MoveV128},
+		{"vkRef", uintptr(vkRef), regdef.MoveRef},
+		{"a Ref", unsafe.Sizeof(Ref{}), regdef.RefSize},
+		{"Ref.p", unsafe.Offsetof(Ref{}.p), 0},
 		{"frame.tick", unsafe.Offsetof(f.tick), regdef.FrameTick},
 		{"Memory.buf", unsafe.Offsetof(m.buf), regdef.MemoryBuf},
 		{"Global.Num", unsafe.Offsetof(g.Num), regdef.GlobalNum},
@@ -658,6 +670,25 @@ func TestNativeCalls(t *testing.T) {
 	  (func $loads (param i32) (result i32) (i32.store (local.get 0) (i32.const 77)) (i32.load (local.get 0)))
 	  (func (export "mixed") (param i32) (result i32)
 	    (i32.add (i32.add (call $withref (local.get 0)) (call $withtry (local.get 0))) (call $loads (i32.const 64))))
+	  (type $node (struct (field (ref null $node)) (field (ref null $node))))
+	  (func $make (param i32) (result (ref $node))
+	    (if (result (ref $node)) (i32.eqz (local.get 0))
+	      (then (struct.new $node (ref.null $node) (ref.null $node)))
+	      (else (struct.new $node (call $make (i32.sub (local.get 0) (i32.const 1)))
+	                              (call $make (i32.sub (local.get 0) (i32.const 1)))))))
+	  (func $check (param (ref null $node)) (result i32)
+	    (if (result i32) (ref.is_null (struct.get $node 0 (local.get 0)))
+	      (then (i32.const 1))
+	      (else (i32.add (i32.const 1) (i32.add (call $check (struct.get $node 0 (local.get 0)))
+	                                            (call $check (struct.get $node 1 (local.get 0))))))))
+	  (func (export "tree") (param i32) (result i32) (call $check (call $make (local.get 0))))
+	  (func $pass (param externref i32 externref) (result externref i32 externref)
+	    (local externref) (local.set 3 (local.get 0))
+	    (local.get 2) (i32.add (local.get 1) (i32.const 1)) (local.get 3))
+	  (func (export "swap") (param externref externref) (result externref i32 externref)
+	    (call $pass (local.get 0) (i32.const 6) (local.get 1)))
+	  (func $lane (param v128) (result i32) (i32x4.extract_lane 2 (local.get 0)))
+	  (func (export "lane") (param i32) (result i32) (call $lane (i32x4.splat (local.get 0))))
 	  (func (export "refs") (param externref externref i32) (result externref)
 	    (local externref)
 	    (local.set 3 (local.get 0))
@@ -673,11 +704,33 @@ func TestNativeCalls(t *testing.T) {
 		{"catch", []Val{{N: 0}}}, {"catch", []Val{{N: 4}}},
 		{"mixed", []Val{{N: 3}}},
 		{"refs", []Val{{R: host}, {R: Null}, {N: 0}}}, {"refs", []Val{{R: host}, {R: Null}, {N: 1}}},
+		{"tree", []Val{{N: 0}}}, {"tree", []Val{{N: 10}}},
+		{"lane", []Val{{N: 7}}}, {"lane", []Val{{N: 9}}}, {"lane", []Val{{N: 11}}},
+		{"swap", []Val{{R: host}, {R: HostRef("k")}}}, {"swap", []Val{{R: Null}, {R: host}}},
 	}
 	marked, unmarked := matchNativeWithHost(t, src, calls)
 	t.Logf("the barrier routine's stores: %d marking, %d not", marked, unmarked)
 	if marked == 0 || unmarked != 0 {
 		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
+	}
+	// Callees with reference slots are called natively: once a first run
+	// has compiled them and made the frames, no call leaves to Go.
+	inst := instantiateMode(t, src, true)
+	withNative(true, func() {
+		if _, err := call(t, inst, "tree", 8); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var counts [256]int64
+	nativeExitCounts = &counts
+	withNative(true, func() {
+		if got, err := call(t, inst, "tree", 8); err != nil || got[0].N != 511 {
+			t.Errorf("tree(8) = %v, %v", got, err)
+		}
+	})
+	nativeExitCounts = nil
+	if counts[rCall] != 0 {
+		t.Errorf("%d calls of tree(8) left to Go", counts[rCall])
 	}
 }
 

@@ -234,6 +234,7 @@ func (g *gen) exitStub() {
 	// other register Go's.
 	a.Bind(after)
 	a.Load(R12, RDI, rd.CtxL)
+	a.Load(R13, RDI, rd.CtxTable)
 	a.Load(RDX, RDI, rd.CtxF)
 	a.LoadS32(R11, RDX, rd.FrameTick)
 	a.Op(Test, RAX, RAX, false)
@@ -251,9 +252,9 @@ func (g *gen) exitStub() {
 	a.MovRR32(RAX, RAX)
 	a.Load(RSI, RDI, rd.CtxCode)
 	a.LeaIdx(RBX, RSI, RAX, 8, 0)
-	a.Load(R13, RDI, rd.CtxTable)
 	g.dispatch()
-	// The frame has returned: to its native caller where it has one.
+	// The frame has returned: to its native caller where it has one, whose
+	// dispatch needs R13, reloaded above.
 	a.Bind(done)
 	a.Jmp(g.retNative)
 }

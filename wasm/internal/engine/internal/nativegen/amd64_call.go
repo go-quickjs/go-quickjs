@@ -126,6 +126,23 @@ func (g *gen) calls() {
 		a.OpMem(Add, RCX, R9, rd.CdNslots, true)
 		a.CmpMem(RCX, RAX, rd.SliceLen, true)
 		a.Jcc(CondA, g.exit)
+		// The callee's reference slots past its chunk's room: Go's. A
+		// body that holds no reference takes none.
+		refsFit := a.NewLabel()
+		a.LoadU8(RAX, R9, rd.CdRefs)
+		a.Op(Test, RAX, RAX, false)
+		a.Jcc(CondE, refsFit)
+		a.Load(RAX, R9, rd.CdRslots)
+		a.Load(RCX, RSI, rd.XRc)
+		a.CmpMem(RCX, RSI, rd.XRchunks+rd.SliceLen, true)
+		a.Jcc(CondAE, g.exit)
+		a.LeaIdx(RCX, RCX, RCX, 2, 0)
+		a.ShiftImm(Shl, RCX, 3, true)
+		a.OpMem(Add, RCX, RSI, rd.XRchunks, true)
+		a.OpMem(Add, RAX, RSI, rd.XRsp, true)
+		a.CmpMem(RAX, RCX, rd.SliceLen, true)
+		a.Jcc(CondA, g.exit)
+		a.Bind(refsFit)
 
 		// The call is native's from here. The caller's tick, and its
 		// call's offset in its record on the exec's calls.
@@ -213,7 +230,7 @@ func (g *gen) calls() {
 			a.Load(RDX, RDI, f)
 			a.Store(R10, cc+f, RDX)
 		}
-		a.StoreImm(R10, cc+rd.CtxR, 0) // the callee has no reference slot
+		g.takeRefs()
 		a.Store(R10, cc+rd.CtxF, R10)
 		a.Load(R8, R10, cc+rd.CtxRc)
 		a.Load(RDX, R8, rd.RcCode)
@@ -229,31 +246,12 @@ func (g *gen) calls() {
 		}
 		a.Store(R10, cc+rd.CtxCaller, RDI)
 		a.Store(R10, cc+rd.CtxRetAddr, RBX)
-		// The arguments, from the caller's slots (R12) to the callee's
-		// (RCX): a number's word or a v128's two.
+		// The arguments, from the caller's slots (R12 and its context's
+		// r) to the callee's (RCX and its context's r).
 		a.Load(RSI, R10, cc+rd.CtxSite)
 		a.Load(RDX, RSI, rd.SiteArgs+rd.SliceLen)
 		a.Load(RSI, RSI, rd.SiteArgs)
-		loop, done, two := a.NewLabel(), a.NewLabel(), a.NewLabel()
-		a.Bind(loop)
-		a.Op(Test, RDX, RDX, true)
-		a.Jcc(CondE, done)
-		a.LoadU32(R8, RSI, rd.MoveFrom)
-		a.LoadU32(R9, RSI, rd.MoveTo)
-		a.LoadIdx(RAX, R12, R8, 8, 0)
-		a.StoreIdx(RCX, R9, 8, 0, RAX)
-		a.TestMem8(RSI, rd.MoveK, 0xff)
-		a.Jcc(CondNE, two)
-		a.OpImm(Add, RSI, rd.MoveSize, true)
-		a.OpImm(Sub, RDX, 1, true)
-		a.Jmp(loop)
-		a.Bind(two)
-		a.LoadIdx(RAX, R12, R8, 8, 8)
-		a.StoreIdx(RCX, R9, 8, 8, RAX)
-		a.OpImm(Add, RSI, rd.MoveSize, true)
-		a.OpImm(Sub, RDX, 1, true)
-		a.Jmp(loop)
-		a.Bind(done)
+		g.siteMoves(RCX, RDI, rd.CtxR, R10, cc+rd.CtxR)
 		// Into the callee: its context, slots, code and tick.
 		a.Lea(RDI, R10, cc)
 		a.MovRR(R12, RCX)
@@ -274,26 +272,7 @@ func (g *gen) calls() {
 	a.Load(RDX, RSI, rd.SiteRets+rd.SliceLen)
 	a.Load(RSI, RSI, rd.SiteRets)
 	a.Load(R10, RCX, rd.CtxL)
-	loop, done, two := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	a.Bind(loop)
-	a.Op(Test, RDX, RDX, true)
-	a.Jcc(CondE, done)
-	a.LoadU32(R8, RSI, rd.MoveFrom)
-	a.LoadU32(R9, RSI, rd.MoveTo)
-	a.LoadIdx(RAX, R12, R8, 8, 0)
-	a.StoreIdx(R10, R9, 8, 0, RAX)
-	a.TestMem8(RSI, rd.MoveK, 0xff)
-	a.Jcc(CondNE, two)
-	a.OpImm(Add, RSI, rd.MoveSize, true)
-	a.OpImm(Sub, RDX, 1, true)
-	a.Jmp(loop)
-	a.Bind(two)
-	a.LoadIdx(RAX, R12, R8, 8, 8)
-	a.StoreIdx(R10, R9, 8, 8, RAX)
-	a.OpImm(Add, RSI, rd.MoveSize, true)
-	a.OpImm(Sub, RDX, 1, true)
-	a.Jmp(loop)
-	a.Bind(done)
+	g.siteMoves(R10, RDI, rd.CtxR, RCX, rd.CtxR)
 	a.Load(RSI, RDI, rd.CtxX)
 	a.Load(RDX, RSI, rd.XCalls+rd.SliceLen)
 	a.OpImm(Sub, RDX, 1, true)
@@ -305,6 +284,10 @@ func (g *gen) calls() {
 	a.Store(RSI, rd.XNc, RDX)
 	a.Load(RDX, RDI, rd.CtxNsp)
 	a.Store(RSI, rd.XNsp, RDX)
+	a.Load(RDX, RDI, rd.CtxRch)
+	a.Store(RSI, rd.XRc, RDX)
+	a.Load(RDX, RDI, rd.CtxRsp)
+	a.Store(RSI, rd.XRsp, RDX)
 	a.Load(RBX, RDI, rd.CtxRetAddr)
 	a.OpImm(Add, RBX, 8, true)
 	a.MovRR(RDI, RCX)
@@ -314,4 +297,108 @@ func (g *gen) calls() {
 	g.dispatch()
 	a.Bind(toGo)
 	a.Ret()
+}
+
+// takeRefs gives the callee of a native call, its frame at R10 and the
+// exec at RSI, its reference slots from the exec's chunk, cleared, as
+// Go's call does, the chunk and slot to give back kept in its context
+// (R10's): the slots in the context's r and the frame's r. A body that
+// holds no reference (compiled.refs) reads and writes none, and takes
+// none: its context's r is 0 and its frame's r is left as it was. RCX,
+// RSI, R10 and RDI are kept.
+func (g *gen) takeRefs() {
+	a := g.a
+	const cc = rd.FrameNctx
+	none, clear, cleared, same := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Load(RDX, RSI, rd.XRc)
+	a.Store(R10, cc+rd.CtxRch, RDX)
+	a.Load(RDX, RSI, rd.XRsp)
+	a.Store(R10, cc+rd.CtxRsp, RDX)
+	a.StoreImm(R10, cc+rd.CtxR, 0)
+	a.Load(RDX, R10, cc+rd.CtxCd)
+	a.LoadU8(R8, RDX, rd.CdRefs)
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondE, none)
+	a.Load(RDX, RDX, rd.CdRslots)
+	// R8 the chunk's first slot, R9 the slot taken first.
+	a.Load(R8, RSI, rd.XRc)
+	a.LeaIdx(R8, R8, R8, 2, 0)
+	a.ShiftImm(Shl, R8, 3, true)
+	a.OpMem(Add, R8, RSI, rd.XRchunks, true)
+	a.Load(R8, R8, 0)
+	a.Load(R9, RSI, rd.XRsp)
+	a.LeaIdx(RAX, R9, RDX, 1, 0)
+	a.Store(RSI, rd.XRsp, RAX)
+	a.ShiftImm(Shl, R9, 4, true)
+	a.Op(Add, R8, R9, true)
+	a.Store(R10, cc+rd.CtxR, R8)
+	// Cleared from the last: each payload plainly, each pointer by
+	// storeRef.
+	a.Bind(clear)
+	a.Op(Test, RDX, RDX, true)
+	a.Jcc(CondE, cleared)
+	a.OpImm(Sub, RDX, 1, true)
+	a.MovRR(R8, RDX)
+	a.ShiftImm(Shl, R8, 4, true)
+	a.OpMem(Add, R8, R10, cc+rd.CtxR, true)
+	a.StoreImm(R8, 8, 0)
+	a.Op(Xor, R9, R9, false)
+	g.storeRef()
+	a.Jmp(clear)
+	a.Bind(cleared)
+	// The frame's r: the slots.
+	a.Load(RDX, R10, cc+rd.CtxCd)
+	a.Load(RDX, RDX, rd.CdRslots)
+	a.Store(R10, rd.FrameR+rd.SliceLen, RDX)
+	a.Store(R10, rd.FrameR+rd.SliceCap, RDX)
+	a.Load(R9, R10, cc+rd.CtxR)
+	a.CmpMem(R9, R10, rd.FrameR, true)
+	a.Jcc(CondE, same)
+	a.Lea(R8, R10, rd.FrameR)
+	g.storeRef()
+	a.Bind(same)
+	a.Bind(none)
+}
+
+// siteMoves makes the RDX moves at RSI from the slots at R12 and the
+// reference slots at [srcR+srcDisp] to the slots at dst and the reference
+// slots at [dstR+dstDisp]: a number's word, a v128's two, a reference's
+// pointer by storeRef and its payload. RAX, RDX, RSI, R8 and R9 are its
+// scratch.
+func (g *gen) siteMoves(dst, srcR Reg, srcDisp int32, dstR Reg, dstDisp int32) {
+	a := g.a
+	loop, done, two, ref, next := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(loop)
+	a.Op(Test, RDX, RDX, true)
+	a.Jcc(CondE, done)
+	a.LoadU32(R8, RSI, rd.MoveFrom)
+	a.LoadU32(R9, RSI, rd.MoveTo)
+	a.LoadU8(RAX, RSI, rd.MoveK)
+	a.OpImm(Cmp, RAX, rd.MoveRef, false)
+	a.Jcc(CondE, ref)
+	a.OpImm(Cmp, RAX, rd.MoveV128, false)
+	a.LoadIdx(RAX, R12, R8, 8, 0)
+	a.StoreIdx(dst, R9, 8, 0, RAX)
+	a.Jcc(CondE, two)
+	a.Bind(next)
+	a.OpImm(Add, RSI, rd.MoveSize, true)
+	a.OpImm(Sub, RDX, 1, true)
+	a.Jmp(loop)
+	a.Bind(two)
+	a.LoadIdx(RAX, R12, R8, 8, 8)
+	a.StoreIdx(dst, R9, 8, 8, RAX)
+	a.Jmp(next)
+	a.Bind(ref)
+	a.ShiftImm(Shl, R9, 4, true)
+	a.OpMem(Add, R9, dstR, dstDisp, true)
+	a.ShiftImm(Shl, R8, 4, true)
+	a.OpMem(Add, R8, srcR, srcDisp, true)
+	a.Load(RAX, R8, 8)
+	a.Store(R9, 8, RAX)
+	a.Load(RAX, R8, 0)
+	a.MovRR(R8, R9)
+	a.MovRR(R9, RAX)
+	g.storeRef()
+	a.Jmp(next)
+	a.Bind(done)
 }
