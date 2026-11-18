@@ -128,9 +128,9 @@ type api struct {
 	jspi *jspiState
 
 	// qrt is the public runtime, which internal scripts are evaluated in;
-	// streamBytes and streamThen are the functions streamingJS makes.
-	qrt                     any
-	streamBytes, streamThen vm.Value
+	// streamFn and streamThen are the functions streamingJS makes.
+	qrt                  any
+	streamFn, streamThen vm.Value
 
 	// budget charges what wasm holds to the runtime's memory limit, nil for
 	// a runtime without one (see memlimit.go).
@@ -149,7 +149,7 @@ type api struct {
 // newAPI builds the WebAssembly namespace of r.
 func newAPI(r *vm.Runtime, qrt any, c config, proxy vm.Value, objectProto *vm.Object) *api {
 	a := &api{rt: r, qrt: qrt, quirks: vm.HostNodeQuirks(r), proxy: proxy, objectProto: objectProto,
-		streamBytes: vm.Undefined, streamThen: vm.Undefined, moduleURL: c.moduleURL,
+		streamFn: vm.Undefined, streamThen: vm.Undefined, moduleURL: c.moduleURL,
 		esmInstances: map[*vm.Object]*vm.Object{}}
 	if a.quirks {
 		a.limits = decoder.V8Limits()

@@ -250,7 +250,8 @@ and messages of V8 (Node 26), word for word, prefixes included
 
 - `validate`, `compile`, `instantiate`, and `compileStreaming` and
   `instantiateStreaming` over the runtime's `Response` (the standard
-  library's `Network` installs it), with Node's checks of the response;
+  library's `Network` installs it), with Node's checks of the response
+  (see [Streaming](#streaming));
 - `Module` (`imports`, `exports`, `customSections`), `Instance`, `Memory`
   (shared memories as `SharedArrayBuffer`, memory64 sizes as BigInts,
   `toResizableBuffer` and `toFixedLengthBuffer`: a shared memory's
@@ -306,6 +307,34 @@ stops script, in a call made directly or from a promising call.
 
 A runtime made `WithJIT` runs the WebAssembly it compiles natively too, where
 the JavaScript JIT runs: see [The JIT](#the-jit).
+
+### Streaming
+
+`compileStreaming` and `instantiateStreaming` read the response's body as
+it arrives, chunk by chunk (`for await` over `response.body`, each chunk an
+`ArrayBuffer` or a view of one, anything else the `TypeError` Node throws),
+and hand each chunk to a streaming decoder (`decoder.Stream`) on a
+goroutine of its own, which decodes each section once all of it has
+arrived and, in the code section, validates each function body as soon as
+its bytes are there. The interpreter compiles a body to register code at
+its first call and the JIT at its first call too, so there is no machine
+code to make ahead: what streaming overlaps with the download is the
+decoding and the validation, which is all of the compile but the last
+section's. A module of 3.6 MB arriving in 64 KB chunks a millisecond apart
+is ready less than half a millisecond (the clock's resolution) after its
+last byte, where reading the whole body and then compiling it took 20 to 23
+ms more (`TestStreamingTiming`).
+
+The result is the one-shot compile's, error for error: the decoder runs the
+same checks in the same order, and wherever it finds an error -- or the
+bytes it has do not settle a check -- it decodes and validates the whole
+module again once the body has ended, so that the error reported is the
+one a compile of the whole would report, at the same offset (a malformed
+section after the code section wins over an invalid body before it, and a
+function's error names it from the name section after the bodies).
+`TestStreamMatchesDecode` holds it to `Decode` and `ValidateFunctions` over
+the decoder's corpus, cut into chunks of 1, 3, 17 and 256 bytes and whole. A
+response with a `url` gives the module's frames in stack traces that URL.
 
 ### WebAssembly modules as ES modules
 

@@ -132,11 +132,19 @@ func (a *api) compile(t thrower, b []byte, ci compileImports, async bool) (*modu
 	if derr := decoder.ValidateFunctions(m, a.limits); derr != nil {
 		return nil, t.compileError("%s", derr.Error())
 	}
+	return a.compiled(t, md, async)
+}
+
+// compiled finishes the compile of a module decoded and validated, as
+// compile does: it checks the compile-time imports of an asynchronous
+// compile, and makes the module's code.
+func (a *api) compiled(t thrower, md *moduleData, async bool) (*moduleData, error) {
 	if async {
 		if msg, _, ok := md.checkBuiltins(); !ok {
 			return nil, t.compileError("%s", msg)
 		}
 	}
+	m := md.m
 	md.code = engine.NewCode(m)
 	// A runtime that runs its JavaScript natively runs its WebAssembly
 	// natively too, its code bounded as its JavaScript's is.

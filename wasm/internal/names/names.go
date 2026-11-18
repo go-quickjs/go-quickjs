@@ -65,6 +65,9 @@ func (n *Names) FrameName(fn uint32) string {
 func read(m *module.Module) *Names {
 	n := &Names{Module: m.Name, HasModule: m.HasName}
 	n.URL = moduleURL(m.Bytes, m.Name, m.HasName)
+	if m.SourceURL != "" {
+		n.URL = m.SourceURL
+	}
 	r := m.NameSection
 	if r.Len == 0 {
 		return n

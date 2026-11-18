@@ -188,6 +188,9 @@ type CustomSection struct {
 // which the Ranges in it locate.
 type Module struct {
 	Bytes []byte
+	// SourceURL, if set, is the URL the module's bytes came from, which
+	// stack traces call it by in the place of the URL its bytes give it.
+	SourceURL string
 
 	Types []TypeDef
 	// Canonical holds each type's canonical index: two types of any modules
