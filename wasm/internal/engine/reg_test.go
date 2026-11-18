@@ -171,10 +171,10 @@ const regKernels = `(module
 )`
 
 // TestRegKernels checks register code's results, exact, against the
-// closure tree's and against the values they must be.
+// values they must be and, natively and on the Go table, against the
+// golden answers.
 func TestRegKernels(t *testing.T) {
-	reg := instantiateMode(t, regKernels, true)
-	tree := instantiateMode(t, regKernels, false)
+	reg := instantiateReg(t, regKernels)
 	f32 := func(f float32) uint64 { return uint64(math.Float32bits(f)) }
 	f64 := func(f float64) uint64 { return math.Float64bits(f) }
 	cases := []struct {
@@ -243,16 +243,7 @@ func TestRegKernels(t *testing.T) {
 			t.Fatalf("%s%v: %v", c.name, c.args, err)
 		}
 		if regOf(reg, c.name) == nil {
-			t.Errorf("%s runs the closure tree", c.name)
-		}
-		want, err := call(t, tree, c.name, c.args...)
-		if err != nil {
-			t.Fatalf("tree %s%v: %v", c.name, c.args, err)
-		}
-		for i := range got {
-			if got[i].N != want[i].N {
-				t.Errorf("%s%v = %#x, the tree's %#x", c.name, c.args, got[i].N, want[i].N)
-			}
+			t.Errorf("%s runs no register code", c.name)
 		}
 		if c.name == "loopsw" {
 			continue
@@ -263,6 +254,14 @@ func TestRegKernels(t *testing.T) {
 			}
 		}
 	}
+	calls := make([]regCall, len(cases))
+	for i, c := range cases {
+		calls[i].name = c.name
+		for _, a := range c.args {
+			calls[i].args = append(calls[i].args, Val{N: a})
+		}
+	}
+	regMatchesGolden(t, regKernels, calls)
 }
 
 // TestRegTraps checks the traps register code raises: their messages, and
@@ -426,9 +425,9 @@ func TestRegPollsContext(t *testing.T) {
 	}
 }
 
-// TestRegMatchesTreeOnWorkloads runs wasmbench's micro workloads, register
-// code against the closure tree, at a small size.
-func TestRegMatchesTreeOnWorkloads(t *testing.T) {
+// TestRegWorkloads runs wasmbench's micro workloads at a small size,
+// natively and on the Go table, against the golden answers.
+func TestRegWorkloads(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "internal", "cmd", "wasmbench", "testdata", "wat")
 	for _, w := range []struct {
 		file string
@@ -439,22 +438,9 @@ func TestRegMatchesTreeOnWorkloads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		reg := instantiateMode(t, string(src), true)
-		tree := instantiateMode(t, string(src), false)
-		got, err := call(t, reg, "run", w.arg)
-		if err != nil {
-			t.Fatalf("%s: %v", w.file, err)
-		}
-		want, err := call(t, tree, "run", w.arg)
-		if err != nil {
-			t.Fatalf("%s on the tree: %v", w.file, err)
-		}
-		if got[0].N != want[0].N {
-			t.Errorf("%s: run(%d) = %#x, the tree's %#x", w.file, w.arg, got[0].N, want[0].N)
-		}
-		if regOf(reg, "run") == nil {
-			t.Errorf("%s: run is the closure tree's", w.file)
-		}
+		t.Run(w.file, func(t *testing.T) {
+			regMatchesGolden(t, string(src), []regCall{{"run", []Val{{N: w.arg}}}})
+		})
 	}
 }
 
@@ -508,7 +494,7 @@ func TestRegRefs(t *testing.T) {
 			t.Errorf("%s%v = %v, %v; want %v", c.name, c.args, got, err, c.want)
 		}
 		if regOf(inst, c.name) == nil {
-			t.Errorf("%s runs the closure tree", c.name)
+			t.Errorf("%s runs no register code", c.name)
 		}
 	}
 	ext, _ := inst.Export("asnn")
@@ -525,42 +511,17 @@ type regCall struct {
 	args []Val
 }
 
-// regMatchesTree runs calls on the module of src compiled to register code
-// and to the closure tree, and fails where a result or an error differs,
-// or where a called function runs the tree under register code.
-func regMatchesTree(t *testing.T, src string, calls []regCall) {
+// instantiateReg instantiates the module of src, its bodies compiled to
+// register code.
+func instantiateReg(t *testing.T, src string) *Instance {
 	t.Helper()
-	reg := instantiateMode(t, src, true)
-	tree := instantiateMode(t, src, false)
-	for _, c := range calls {
-		re, _ := reg.Export(c.name)
-		te, _ := tree.Export(c.name)
-		got, gerr := Invoke(context.Background(), re.Func, c.args)
-		want, werr := Invoke(context.Background(), te.Func, c.args)
-		if regOf(reg, c.name) == nil {
-			t.Errorf("%s runs the closure tree", c.name)
-		}
-		if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
-			t.Errorf("%s%v: error %v, the tree's %v", c.name, c.args, gerr, werr)
-			continue
-		}
-		var gt, wt *Trap
-		if errors.As(gerr, &gt) && errors.As(werr, &wt) && (len(gt.Frames) == 0) == (len(wt.Frames) == 0) && len(gt.Frames) > 0 && gt.Frames[0].Offset != wt.Frames[0].Offset {
-			t.Errorf("%s%v: trap at %#x, the tree's at %#x", c.name, c.args, gt.Frames[0].Offset, wt.Frames[0].Offset)
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("%s%v = %v, the tree's %v", c.name, c.args, got, want)
-				break
-			}
-		}
-	}
+	return instantiateMode(t, src, true)
 }
 
 // TestRegMemories checks the generic accesses: a second memory, an i64
 // memory, offsets past 16 bits, and the bulk operations.
 func TestRegMemories(t *testing.T) {
-	regMatchesTree(t, `(module
+	regMatchesGolden(t, `(module
 	  (memory $a 1) (memory $b i64 2) (memory $c 1)
 	  (data $d (memory $c) (i32.const 0) "hello")
 	  (func (export "multi") (param i32) (result i64)
@@ -592,7 +553,7 @@ func TestRegMemories(t *testing.T) {
 
 // TestRegSIMD checks SIMD operations of each form against the tree's.
 func TestRegSIMD(t *testing.T) {
-	regMatchesTree(t, `(module
+	regMatchesGolden(t, `(module
 	  (memory 1)
 	  (func (export "ops") (param i32 i64) (result i64)
 	    (local v128 v128)
@@ -625,7 +586,7 @@ func TestRegSIMD(t *testing.T) {
 // TestRegTables checks the table instructions and the calls through tables
 // and references, tail calls included, with their traps.
 func TestRegTables(t *testing.T) {
-	regMatchesTree(t, `(module
+	regMatchesGolden(t, `(module
 	  (type $ii (func (param i32) (result i32)))
 	  (type $v (func))
 	  (table $t 4 (ref null $ii)) (table $u i64 2 10 (ref null $ii))
@@ -665,7 +626,7 @@ func TestRegTables(t *testing.T) {
 
 // TestRegGC checks the GC instructions against the tree's, traps included.
 func TestRegGC(t *testing.T) {
-	regMatchesTree(t, `(module
+	regMatchesGolden(t, `(module
 	  (type $p (struct (field (mut i32)) (field (mut i8)) (field (mut v128)) (field (mut anyref))))
 	  (type $a (array (mut i16)))
 	  (type $r (array (mut eqref)))
@@ -711,7 +672,7 @@ func TestRegGC(t *testing.T) {
 // TestRegAtomics checks the atomic instructions against the tree's, traps
 // included.
 func TestRegAtomics(t *testing.T) {
-	regMatchesTree(t, `(module
+	regMatchesGolden(t, `(module
 	  (memory 1 1 shared) (memory $u 1)
 	  (func (export "rmw") (param i32 i64) (result i64)
 	    (i32.atomic.store (local.get 0) (i32.const 10))
@@ -745,7 +706,7 @@ func TestRegExceptions(t *testing.T) {
 	    (if (i32.eqz (local.get 0)) (then (throw $e (i32.const 42))))
 	    (if (i32.eq (local.get 0) (i32.const 1)) (then (throw $f (i64.const 7) (v128.const i32x4 1 2 3 4))))
 	    (if (i32.eq (local.get 0) (i32.const 2)) (then (unreachable))))`
-	regMatchesTree(t, `(module `+thrower+`
+	regMatchesGolden(t, `(module `+thrower+`
 	  (func (export "table") (param i32) (result i64)
 	    (block $b (result i32)
 	      (block $c (result i64 v128)
@@ -785,7 +746,7 @@ func TestRegExceptions(t *testing.T) {
 		{"ref", []Val{{N: 1}}},
 		{"ref", []Val{{N: 3}}},
 	})
-	regMatchesTree(t, `(module `+thrower+`
+	regMatchesGolden(t, `(module `+thrower+`
 	  (func (export "legacy") (param i32) (result i32) (local i32)
 	    (try (result i32)
 	      (do
@@ -847,7 +808,7 @@ func TestRegFarSlots(t *testing.T) {
 	    (global.set $g (call $id (local.get $a)))
 	    (i32.add (ref.is_null (local.get $r))
 	      (select (i32.add (i32.load (i32.const 8)) (global.get $g)) (i32x4.extract_lane 0 (local.get $v)) (local.get 0)))))`
-	regMatchesTree(t, src, []regCall{{"f", []Val{{N: 1}}}, {"f", []Val{{N: 0}}}, {"f", []Val{{N: 5}}}})
+	regMatchesGolden(t, src, []regCall{{"f", []Val{{N: 1}}}, {"f", []Val{{N: 0}}}, {"f", []Val{{N: 5}}}})
 	inst := instantiateMode(t, src, true)
 	if _, err := call(t, inst, "f", 1); err != nil {
 		t.Fatal(err)
