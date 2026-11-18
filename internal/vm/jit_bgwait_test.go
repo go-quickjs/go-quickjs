@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"math"
 	"testing"
 	"unsafe"
 
@@ -90,8 +91,16 @@ func TestJITBackgroundWaitingInstallIsDue(t *testing.T) {
 // calls of a callee Go makes enter none of its code, and AWFY's
 // DeltaBlue called markUnsatisfied through Go 11,000 times with its
 // compile done, between the checks that installed it.
+//
+// The test's compile is the only one: the function's own calls spend no
+// budget it could compile at (jitRuntimeForTest's threshold of one had
+// sum(10)'s call hand a compile of its own to the background, installed
+// at whichever check came after it was done -- before the test looked on
+// a slow runner, its code there), and the compile is waited for by its
+// job's own signal, done, which no check installs.
 func TestJITBackgroundCalleeAskInstalls(t *testing.T) {
 	r := jitBackgroundRuntime(t)
+	r.jitCallThreshold, r.jitICThreshold = math.MaxUint16, math.MaxUint16
 	if _, err := r.Run(compileForTest(t, `function sum(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`)); err != nil {
 		t.Fatal(err)
 	}

@@ -156,8 +156,9 @@ func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
 	t.Helper()
 	// The register code the function's calls made, read as they read it:
 	// regOf writes the closure's, which a compile of it in the background
-	// may be reading.
-	s, c := r.jit, cl.reg
+	// may be reading. The JIT's state is made here if nothing has been
+	// compiled yet, as a first compile makes it.
+	s, c := r.jitState(), cl.reg
 	if c == nil {
 		c = r.regOf(cl)
 	}
