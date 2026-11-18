@@ -145,6 +145,15 @@ concurrently.
   the inliner takes, how registers are allocated and spilled, what a frame
   state or an exit holds, a new kind of native path -- updates it in the same
   commit, saying how the JIT works now rather than how it came to.
+- A path that runs a function's body without its frame -- a leaf, an
+  initializer, a forwarder -- is native handler code that nativegen
+  generates, from a plan the register compiler decides (regcomp's leaf
+  classification). Go only says whether the handler may try, from runtime
+  state such as the JIT, a due interrupt and the frame limit; it never
+  evaluates the body itself. Such code shares with the ordinary path the one
+  implementation of what both do, as `appendTransition`'s bookkeeping and
+  `regCtorThis`, rather than a copy. The Go table, on other architectures
+  and under `QJS_NONATIVE`, runs these bodies in their frames.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
