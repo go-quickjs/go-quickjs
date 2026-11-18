@@ -12,11 +12,14 @@ against C QuickJS and Node is in
 commits and the release notes say what each did and what it measured.
 
 Many figures below predate `388324de`, which removed the stack
-interpreter, the closure-tree tier and the stack JIT. An item measured on
-those tiers is kept only where its cost lies outside them -- a built-in,
-the object model, the collector, the JIT's SSA optimizer and backends --
-and is marked *unverified* where its size has not been measured again on
-the register tiers.
+interpreter, the closure-tree tier and the stack JIT, and `d6ac45be`,
+after which the front end compiles a function to register code alone, at
+its first call. An item measured on those tiers is kept only where its
+cost lies outside them -- a built-in, the object model, the collector, the
+JIT's SSA optimizer and backends -- and is marked *unverified* where its
+size has not been measured again on the register tiers. Figures against
+C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
+5 3600 (benchmarks.md).
 
 ## How an item is measured
 
@@ -90,26 +93,36 @@ the register tiers.
   against the base before it, two micro-benchmarks are more than 3% slower
   at every placement: `regexp_split` +8.4% and `forward_construct` +16.9%,
   a constructor that hands its arguments to `this.initialize.apply(this,
-  arguments)`. Neither is profiled yet; the span measured holds several
-  changes, so the first step is to find which. The JIT's slower rows are
-  under [The register JIT's remaining
-  gaps](#the-register-jits-remaining-gaps).
-- **Raw int32 and float64 values.** Index-heavy and asm.js code pays a
-  float conversion at every element access and every `| 0`
-  (register-interpreter.md, "Known limits and open work", which has the
-  design). Before the old tiers kept int32 results in trees, `toInt32`
-  was 20.7% of zlib's interpreted time, 870 million conversions a run
-  (2026-10-27). A local that only ever holds an int32 needs mapped
-  `arguments`, direct eval and reads before its first store accounted for.
-- **The leaf evaluators** (`pureCall`, `leafCall`), which read register
-  code. Their limits, *unverified* since they read the stack bytecode the
-  front end no longer makes: a pure call deeper than 32
-  falls back to frames entirely, where switching at the limit alone needs
-  the pure path to pass on an error such as a stack overflow; and
-  `pureCallAt` could switch on a case byte for each function. Queens, 1.31
-  times QuickJS's time on the old tiers (2026-10-15), spends 47% of it in
-  two tiny methods that read and write elements, which pure bodies with
-  element reads and several stores would serve.
+  arguments)`. `regexp_split` is not profiled yet; the span measured holds
+  several changes, so the first step is to find which.
+  `forward_construct`'s forwarder runs without a frame in native handlers
+  since v0.39.0, 0.23 times QuickJS's time where it took 0.54, and has not
+  been compared with the old tiers again. The JIT's slower rows are under
+  [The register JIT's remaining gaps](#the-register-jits-remaining-gaps).
+- **Raw int32 and float64 values outside asm.js.** A validated asm.js
+  module runs as typed code, its registers raw int32 and float64 values
+  for the whole function (register-interpreter.md, "Typed code"); zlib
+  took 1,556 ms at v0.39.0 where it took 7,605. Other index-heavy code
+  still pays a float conversion at every element access and every `| 0`
+  (register-interpreter.md, "Known limits and open work"). A local that
+  only ever holds an int32 needs mapped `arguments`, direct eval and reads
+  before its first store accounted for.
+- **asm.js modules' limits.** A function table of more than four functions
+  learns its targets one call at a time; only the first closure of a
+  module's template is linked to typed code; a module instantiated a second
+  time in a runtime runs as ordinary code. The JIT does not inline a typed
+  callee: `asm_call_leaf` took 9.4 ns with the JIT against 4.3 for the
+  same code as ordinary JavaScript, and `asm_fib` 29% longer (v0.39.0).
+- **The leaf evaluators** (`pureCall`, `leafCall`), which evaluate register
+  code (regcomp's pure and leaf bodies) for the Go table and wherever no
+  native handler takes the call. A recursion of pure calls deeper than 32
+  (`pureCallDepth`) is given up on whole and, after a few such, made with
+  frames, where switching at the limit alone needs the pure path to pass
+  on an error such as a stack overflow; and `pureCallAt` could switch on a
+  case byte for each function. Queens, 1.31 times QuickJS's time on the
+  old tiers (2026-10-15), spent 47% of it in two tiny methods that read and
+  write elements, which pure bodies with element reads and several stores
+  would serve (*unverified*).
 - **Growing an array by index.** `array_prop_create` took 2.51 times
   QuickJS's time at `6a53e072`, the prototypes checked at each append and
   Go's slice growth (*unverified*). Arrays could start at a capacity of 8
@@ -416,6 +429,22 @@ the stack JIT lowered; their counts are from then.
   22.8%, 12.5% and 13.5%; on Box2D the property ops lead. A call's inline
   bytes are per site by nature (see Rejected); emitting less is what is
   left.
+- **The JIT behind the interpreter in a cold run.** In Octane's fixed work,
+  one run of each benchmark, the JIT took longer than the interpreter at
+  v0.39.0 on Richards (62%), DeltaBlue (44%), PdfJS (34%), RayTrace (27%),
+  RegExp (14%), Typescript (13%) and CodeLoad (8%), Box2D level. Most of
+  it is the time compiles take on the runtime's own goroutine (2026-11-17,
+  `31c7f1b9`, a Ryzen 9 9950X3D, one run): PdfJS ran 60 ms behind and
+  compiled for 66, Typescript 200 behind and compiled for 373, Box2D 10
+  and 23, Richards 1.5 and 3.2; without it each is faster than the
+  interpreter, RegExp level, and by five runs the JIT is ahead on all but
+  DeltaBlue. CodeLoad compiles nothing. A compile costs 0.25 to 0.5 ms,
+  its SSA build 36% of it, the encoding 20% and the optimizer 18%.
+  Compiling a callee on its own budget rather than at its native caller's
+  call (Are We Fast Yet +15%) was dropped; the tier-up budgets wait for a
+  baseline compiler's experiment. RegExp's share is its exec arrays: the
+  interpreter reuses them (`zzz_regexpreuse.go`), which a runtime with the
+  JIT does not, in code native or interpreted.
 - **Where a compile's time and memory go.** `allocate` 14% of a compile,
   the build's `plan` 15% (most of it the feedback's answers), the
   assemblers' `Finish` 9%; the
@@ -426,10 +455,13 @@ the stack JIT lowered; their counts are from then.
   its earlier cost from loop alignment (*unverified*). Optimize's last round
   finds nothing in most compiles (3 to 4% of their time), and skipping it
   soundly needs care with `unboxPhis`; worklists would replace the rounds.
-- **A compile's working memory** is about 7.5 KB an instruction (17 KB for
-  Box2D's `initPhysics`), in a pool the process shares (`d4d57347`) and
-  outside every runtime's budget; the fit check assumes 2 KB, and the
-  measured figure would refuse functions that compile today.
+- **A compile's working memory** is outside every runtime's budget, in a
+  pool the process shares (`d4d57347`). The budget weighs only what a
+  compile will hold, 512 bytes an instruction and 64 a slot
+  (`jitCompileBytes`, internal/jit/README.md); the working memory is
+  linear in the function's size (`TestJITCompileLinear`), and was about
+  7.5 KB an instruction on the stack JIT (17 KB for Box2D's
+  `initPhysics`), not measured on the register JIT.
 - **The slot IR's size.** An `ir.Instruction` is 136 bytes, 83% of a
   program's bytes, with a 16-byte StateMap for each instruction: packing the
   operands' slots to `int32` would save about 18%, and literals as indexes
@@ -484,8 +516,6 @@ the stack JIT lowered; their counts are from then.
 - **test262 with `-conformance.debugger` and `-conformance.jit`
   together** fails "no test ran native code": code compiled for a debugger
   is never native.
-- **The 24-hour differential fuzz** has never run; the longest stopped at
-  2 h 39 min. It runs at milestones.
 - **Flaky tests.** `TestAsyncWorkTimer` under the full suite's load;
   `TestJITNoHeapWalks` once in four runs under `QJS_JIT_STRESS`, the meter
   counting the process's allocations, which another runtime's cleanups may
@@ -717,9 +747,6 @@ round measures it there.
   JIT on the same native code but for displacements and constants, the
   extra samples on the dependent loads of the global's shape, its keys and
   the lexical names; no pad, seed or collector setting moved it.
-- **The JIT behind the interpreter in a cold run.** In Octane's fixed work,
-  one run of each benchmark, the JIT was behind the interpreter on
-  RayTrace (22%), Richards (10%) and DeltaBlue (8%) at `6a53e072`.
 - **test262 under JIT stress** ran 10 to 50% slower since `45d15dc`.
 
 **Left by the removal's timing.** Against the base before the removal, over
