@@ -5192,3 +5192,126 @@ function asm_table(n)
     global_res = s;
     return n;
 }
+
+/* fresh captured-value leaves alternating templates at the same call site */
+function closure_leaf_miss(n)
+{
+    function invoke(f) { var value = f(); return value; }
+    function first(x) { return function () { return x; }; }
+    function second(x) { return function () { return x; }; }
+    var i, sum = 0;
+    for (i = 0; i < n; i++)
+        sum += invoke(i & 1 ? first(i) : second(i));
+    global_res = sum;
+    return n;
+}
+
+/* a render-like map callback returning an element factory's call */
+function array_map_tail(n)
+{
+    "use strict";
+    function element(type, props, key) { return {type, props, key}; }
+    function row(entry) { return element("row", {entry}, entry.id); }
+    var entries = [], i, j;
+    for (i = 0; i < 100; i++)
+        entries.push({id: i});
+    for (j = 0; j < n; j++)
+        global_res = entries.map(row);
+    return n * 100;
+}
+
+/* the same work, with an ordinary call in the callback */
+function array_map_call(n)
+{
+    "use strict";
+    function element(type, props, key) { return {type, props, key}; }
+    function row(entry) { var value = element("row", {entry}, entry.id); return value; }
+    var entries = [], i, j;
+    for (i = 0; i < 100; i++)
+        entries.push({id: i});
+    for (j = 0; j < n; j++)
+        global_res = entries.map(row);
+    return n * 100;
+}
+
+/* a callback retaining its arguments, then calling a factory in tail position */
+function array_map_tail_args(n)
+{
+    "use strict";
+    function element(type, props, key) { return {type, props, key}; }
+    function row(entry) { return element("row", {entry, count: arguments.length}, arguments[1]); }
+    var entries = [], i, j;
+    for (i = 0; i < 100; i++)
+        entries.push({id: i});
+    for (j = 0; j < n; j++)
+        global_res = entries.map(row);
+    return n * 100;
+}
+
+/* charCodeAt of a local index, one fused char_code_at */
+function string_charcode_local(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        h += s.charCodeAt(i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* charCodeAt of ++i: the method read before the argument is evaluated */
+function string_charcode_update(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = (j & 15) - 1;
+        h += s.charCodeAt(++i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* charCodeAt of i + 1 */
+function string_charcode_add(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = (j & 15) - 1;
+        h += s.charCodeAt(i + 1);
+    }
+    global_res = h;
+    return n;
+}
+
+function extra_charcode_custom(i) { return i; }
+
+/* an object's own charCodeAt, a script function, called as the above */
+function string_charcode_custom(n)
+{
+    var s = { charCodeAt: extra_charcode_custom }, h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        h += s.charCodeAt(++i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* String.prototype.charCodeAt replaced by a script function, then restored */
+function string_charcode_override(n)
+{
+    var saved = String.prototype.charCodeAt;
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    String.prototype.charCodeAt = extra_charcode_custom;
+    try {
+        for (j = 0; j < n; j++) {
+            i = j & 15;
+            h += s.charCodeAt(++i);
+        }
+    } finally {
+        String.prototype.charCodeAt = saved;
+    }
+    global_res = h;
+    return n;
+}

@@ -8,6 +8,33 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
+func TestLeafMissMicrobenchmark(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	v, err := rt.Eval("var global_res;\n" + microbenchExtra + "\nclosure_leaf_miss(100) + ':' + global_res")
+	if err != nil || v.String() != "100:4950" {
+		t.Fatalf("got %v, %v", v, err)
+	}
+}
+
+func TestTailCallbackMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"array_map_tail", "array_map_call", "array_map_tail_args"} {
+		v, err := rt.Eval(name + `(2) + ':' + global_res.length + ':' + global_res[99].type + ':' + global_res[99].props.entry.id + ':' + global_res[99].key`)
+		if err != nil || v.String() != "200:100:row:99:99" {
+			t.Fatalf("%s: got %v, %v", name, v, err)
+		}
+	}
+	v, err := rt.Eval(`global_res[99].props.count`)
+	if err != nil || v.String() != "3" {
+		t.Fatalf("callback arguments length: got %v, %v", v, err)
+	}
+}
+
 func TestStringSwitchMicrobenchmarks(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
@@ -267,5 +294,29 @@ func TestAsmMicrobenchmarks(t *testing.T) {
 				t.Fatalf("got %v, %v; want %q", v, err, want)
 			}
 		})
+	}
+}
+
+func TestCharCodeMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"string_charcode_local", "string_charcode_update", "string_charcode_add"} {
+		v, err := rt.Eval(name + "(32) + ':' + global_res")
+		if err != nil || v.String() != "32:3344" {
+			t.Fatalf("%s: got %v, %v; want 32:3344", name, v, err)
+		}
+	}
+	for _, name := range []string{"string_charcode_custom", "string_charcode_override"} {
+		v, err := rt.Eval(name + "(32) + ':' + global_res")
+		if err != nil || v.String() != "32:272" {
+			t.Fatalf("%s: got %v, %v; want 32:272", name, v, err)
+		}
+	}
+	v, err := rt.Eval(`"a".charCodeAt(0)`)
+	if err != nil || v.String() != "97" {
+		t.Fatalf("charCodeAt was not restored: got %v, %v; want 97", v, err)
 	}
 }

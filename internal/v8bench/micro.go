@@ -83,6 +83,7 @@ var microWork = []struct {
 	{"try_catch", 8388608}, {"try_throw", 4194304}, {"try_finally", 8388608}, {"iterator_for_of", 8192},
 	{"map_for_of", 32768}, {"object_for_in", 262144}, {"dict_for_in", 131072}, {"using_scope", 8388608}, {"closure_make", 524288}, {"closure_many_locals", 524288}, {"closure_counter", 4194304},
 	{"closure_callback", 262144}, {"tail_self", 4194304}, {"tail_mutual", 4194304},
+	{"closure_leaf_miss", 262144},
 	{"call_fib", 4194304}, {"call_mutual", 4194304}, {"call_cross", 2097152}, {"crypto_am3", 4194304},
 	{"method_call", 2097152}, {"method_call_leaf", 4194304}, {"loop_sum", 8388608},
 	{"loop_arith", 2097152}, {"loop_locals", 4194304}, {"loop_elements", 8388608},
@@ -115,6 +116,7 @@ var microWork = []struct {
 	{"object_computed", 1048576}, {"array_spread", 262144}, {"spread_call", 262144},
 	{"array_forEach", 32768}, {"array_reduce", 32768},
 	{"array_map", 16384}, {"array_filter", 16384}, {"array_some", 32768},
+	{"array_map_tail", 4096}, {"array_map_call", 4096}, {"array_map_tail_args", 4096},
 	{"array_forEach_once", 32768}, {"array_forEach_function", 32768}, {"array_forEach_this", 32768},
 	{"array_forEach_user", 32768}, {"array_reduce_upvalue", 32768}, {"array_every_upvalue", 32768},
 	{"array_find_upvalue", 32768}, {"array_sort", 4096},
@@ -204,6 +206,10 @@ var microWork = []struct {
 	{"asm_adler", 4194304}, {"asm_crc32", 4194304}, {"asm_copy", 4194304}, {"asm_fnv", 2097152},
 	{"asm_dot", 2097152}, {"asm_fib", 4194304}, {"asm_call_leaf", 2097152}, {"asm_switch", 4194304},
 	{"asm_table", 2097152},
+	{"string_charcode_local", 2097152}, {"string_charcode_update", 2097152},
+	{"string_charcode_add", 2097152},
+	{"string_charcode_custom", 2097152},
+	{"string_charcode_override", 2097152},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with
