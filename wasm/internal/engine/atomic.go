@@ -7,7 +7,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
@@ -161,123 +160,6 @@ func rmwKind(op opcode.Opcode) byte {
 		return '?'
 	}
 	return 0
-}
-
-// atomicOps compiles the atomic instructions, reporting whether op is one.
-func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
-	if op.Prefix() != opcode.PrefixAtomic {
-		return false
-	}
-	switch op {
-	case opcode.AtomicFence:
-		c.r.byte()
-		return true
-	case opcode.Pause:
-		return true
-	}
-	mem, off := c.r.memarg()
-	m := memAt(mem)
-	result := func(is64 bool, get func(*frame) uint64) {
-		if is64 {
-			c.pushTree(module.I64, ti64(get))
-		} else {
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(get(f)) }))
-		}
-	}
-	switch op {
-	case opcode.AtomicNotify:
-		n := c.i32(c.pop())
-		ea := c.addr(c.pop(), mem, off, at)
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-			e := ea(f)
-			cnt := n(f)
-			mm := m(f)
-			atomicSpan(mm, e, 4, at)
-			return notify(mm, e, cnt)
-		}))
-		return true
-	case opcode.I32AtomicWait, opcode.I64AtomicWait:
-		width := uint64(4)
-		if op == opcode.I64AtomicWait {
-			width = 8
-		}
-		timeout := c.i64(c.pop())
-		expected := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off, at)
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-			e := ea(f)
-			want := expected(f)
-			t := int64(timeout(f))
-			mm := m(f)
-			if !mm.Shared {
-				trapAt(TrapAtomicsWaitNotAllowed, at)
-			}
-			b := atomicSpan(mm, e, width, at)
-			return wait(f.x, mm, b, e, width, want, t)
-		}))
-		return true
-	}
-	width, is64 := atomicWidth(op)
-	switch {
-	case op >= opcode.I32AtomicLoad && op <= opcode.I64AtomicLoad32U:
-		ea := c.addr(c.pop(), mem, off, at)
-		result(is64, func(f *frame) uint64 {
-			e := ea(f)
-			return atomicLoad(atomicSpan(m(f), e, width, at), e, width)
-		})
-	case op >= opcode.I32AtomicStore && op <= opcode.I64AtomicStore32U:
-		v := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off, at)
-		c.flushBelow(0)
-		c.emit(func(f *frame) int32 {
-			e := ea(f)
-			val := v(f)
-			atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(uint64) uint64 { return val })
-			return 0
-		})
-	case rmwKind(op) == '?':
-		repl := c.lowBits(c.pop())
-		exp := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off, at)
-		mask := uint64(1)<<(width*8) - 1
-		if width == 8 {
-			mask = ^uint64(0)
-		}
-		result(is64, func(f *frame) uint64 {
-			e := ea(f)
-			want, nv := exp(f)&mask, repl(f)&mask
-			return atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(old uint64) uint64 {
-				if old == want {
-					return nv
-				}
-				return old
-			})
-		})
-	default:
-		kind := rmwKind(op)
-		v := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off, at)
-		result(is64, func(f *frame) uint64 {
-			e := ea(f)
-			val := v(f)
-			return atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(old uint64) uint64 {
-				switch kind {
-				case '+':
-					return old + val
-				case '-':
-					return old - val
-				case '&':
-					return old & val
-				case '|':
-					return old | val
-				case '^':
-					return old ^ val
-				}
-				return val
-			})
-		})
-	}
-	return true
 }
 
 // waiters holds, for each address of each shared memory, the threads

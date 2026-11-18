@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-// TestSIMDGenerated fails while ops_simd_gen.go or reg_simd_gen.go differs
-// from what internal/simdgen writes; go generate ./wasm/internal/engine
-// rewrites them.
+// TestSIMDGenerated fails while simd_lanes_gen.go, reg_simd_gen.go or
+// regdef/simd_gen.go differs from what internal/simdgen writes; go
+// generate ./wasm/internal/engine rewrites them.
 func TestSIMDGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	checkGenerated(t, "./internal/simdgen", "ops_simd_gen.go", "reg_simd_gen.go", "internal/regdef/simd_gen.go")
+	checkGenerated(t, "./internal/simdgen", "simd_lanes_gen.go", "reg_simd_gen.go", "internal/regdef/simd_gen.go")
 }
 
 // randV128 returns a vector whose lanes are often at the edges of their

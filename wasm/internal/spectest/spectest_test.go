@@ -569,25 +569,13 @@ func scripts(t *testing.T, dir string) []string {
 }
 
 // logInterp logs how many function bodies the interpreter compiled to
-// register code and how many it left to the closure tree, by why, when
-// WASM_INTERP=reg turned the register compiler on.
+// register code, and in what time.
 func logInterp(t *testing.T) {
-	st := engine.ReadInterpStats()
-	if st.Register == 0 && len(st.Tree) == 0 {
+	st := engine.ReadJITStats()
+	if st.Interpreted == 0 {
 		return
 	}
-	tree := 0
-	reasons := make([]string, 0, len(st.Tree))
-	for r, n := range st.Tree {
-		tree += n
-		reasons = append(reasons, r)
-	}
-	sort.Slice(reasons, func(i, j int) bool { return st.Tree[reasons[i]] > st.Tree[reasons[j]] })
-	t.Logf("interp: %d bodies compiled to register code, %d left to the closure tree, in %v",
-		st.Register, tree, engine.ReadJITStats().InterpTime)
-	for _, r := range reasons {
-		t.Logf("interp: %6d left to the tree: %s", st.Tree[r], r)
-	}
+	t.Logf("interp: %d bodies compiled to register code in %v", st.Interpreted, st.InterpTime)
 }
 
 // logJIT logs what the JIT compiled and refused, when WASM_JIT turned it on.

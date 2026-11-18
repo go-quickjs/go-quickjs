@@ -6,8 +6,8 @@ import (
 	"sync"
 )
 
-// The interpreter runs a function as a tree of Go closures, compiled from its
-// body (see compile.go). A frame is what every node is given.
+// The interpreter runs a function's register code (README.md) in a frame,
+// which every handler is given.
 
 // frame is a running function's state.
 type frame struct {
@@ -16,7 +16,7 @@ type frame struct {
 	r    []Ref
 	inst *Instance
 	// osr counts down the back edges the call runs in the interpreter
-	// before its loops ask for the function's native code (osrLoopStmt).
+	// before its loops ask for the function's native code (backEdge).
 	osr int32
 
 	// rc is the register code the frame runs, if it runs any (runReg);

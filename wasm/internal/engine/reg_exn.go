@@ -7,7 +7,7 @@ import (
 )
 
 // Register code's exceptions (README.md, "Traps and exceptions"). A throw
-// is a Go panic of an *Exception, as the tree's. The body of a try_table or
+// is a Go panic of an *Exception. The body of a try_table or
 // a legacy try is a region of the code's, by the module offsets of its
 // instructions; a frame whose code has any runs under the catching loop
 // (runRegCatching), which recovers an exception, finds the innermost region

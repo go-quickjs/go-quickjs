@@ -181,7 +181,7 @@ func TestNativeGC(t *testing.T) {
 	// The loops run natively: a call of n turns leaves to Go for its
 	// allocations alone, and for the room a fresh exec makes as it first
 	// needs it (logNativeExits), which is not counted.
-	inst := instantiateMode(t, nativeGCSrc, true)
+	inst := instantiateReg(t, nativeGCSrc)
 	for _, c := range []struct {
 		name  string
 		args  []uint64

@@ -34,7 +34,7 @@ import "unsafe"
 //
 // Each operation computes its result as Go does and looks at it again only
 // when it is a NaN, so that a result that is not costs one comparison. The
-// helpers here are inlined where the interpreter's nodes call them, and
+// helpers here are inlined where the interpreter's handlers call them, and
 // read a float's bits in place rather than by math.Float32bits, which the
 // inliner charges more for.
 

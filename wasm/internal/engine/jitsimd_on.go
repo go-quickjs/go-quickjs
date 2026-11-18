@@ -3,14 +3,16 @@
 package engine
 
 import (
+	"unsafe"
+
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // A SIMD instruction native code leaves to Go (wjit.ExitSIMD) runs the
-// interpreter's own code for it: the instruction compiled as the
-// interpreter compiles it, over operands read from the frame's slots, its
-// result stored into the first operand's.
+// interpreter's own code for it: the instruction compiled to register code
+// as the interpreter compiles it, over operands in the frame's slots, its
+// result stored into the first operand's, and run by the Go table.
 
 // simdExitFn runs one SIMD instruction on a frame whose operands are in
 // its slots.
@@ -46,8 +48,10 @@ func (cj *codeJIT) simdExit(c *Code, at uint32, base int) simdExitFn {
 
 func buildSIMDExit(code *Code, at uint32, base int) simdExitFn {
 	m := code.Module
-	c := &compiler{code: code, m: m}
+	c := &regCompiler{code: code, m: m, last: -1, farPCs: map[int]bool{}}
+	c.out.loops = map[int32]uint32{}
 	c.r = reader{b: m.Bytes, pc: int(at)}
+	c.at = at
 	op := c.r.opcode()
 	var params []module.ValueType
 	switch {
@@ -71,11 +75,21 @@ func buildSIMDExit(code *Code, at uint32, base int) simdExitFn {
 	// Stack position h is slot base + 2h.
 	c.nlocals = base
 	for h, t := range params {
-		c.push(c.slotEntry(t, h))
+		c.push(rentry{t: t, slot: c.numSlot(h), local: -1, def: -1})
 	}
-	if !c.simd(op, at) || len(c.stack) != 1 {
+	if !c.simdOp(op) || len(c.stack) != 1 {
 		panic("wasm jit: no SIMD exit for " + op.Name())
 	}
-	st := c.store(c.pop(), base)
-	return func(f *frame) { st(f) }
+	c.materialize(0)
+	rc := c.out
+	return func(f *frame) {
+		saved := f.rc
+		f.rc = &rc
+		l := unsafe.Pointer(&f.l[0])
+		for pc := int32(0); int(pc) < len(rc.code); {
+			w := rc.code[pc]
+			pc = regTable[uint8(w)](l, w, pc, f)
+		}
+		f.rc = saved
+	}
 }

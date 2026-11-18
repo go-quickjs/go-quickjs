@@ -442,3 +442,20 @@ func init() {
 		regExtTable[x] = h
 	}
 }
+
+// readLE returns the bytes of b as a little-endian integer; writeLE
+// writes x to b so.
+func readLE(b []byte) uint64 {
+	var x uint64
+	for i := len(b) - 1; i >= 0; i-- {
+		x = x<<8 | uint64(b[i])
+	}
+	return x
+}
+
+func writeLE(b []byte, x uint64) {
+	for i := range b {
+		b[i] = byte(x)
+		x >>= 8
+	}
+}

@@ -8,8 +8,8 @@ import (
 )
 
 // The register compiler compiles a validated function body to register code
-// in one pass, following the operand stack symbolically as the closure tree's
-// compiler does (README.md, "The compiler"). An entry of the stack is a
+// in one pass, following the operand stack symbolically (README.md, "The
+// compiler"). An entry of the stack is a
 // constant, or a slot holding the value: a local's, read in place, or its
 // stack position's. Every instruction is emitted as it is read, so entries
 // are never pending work; what is deferred is only where a value lives:
@@ -34,7 +34,7 @@ import (
 // reference slot rlocals+h.
 
 // regBail is what the register compiler panics with for a body it does not
-// compile, which the closure tree then compiles: why.
+// compile, why: a compiler bug for a validated body (compileFunction).
 type regBail string
 
 // rentry is an entry of the symbolic operand stack.
@@ -127,7 +127,8 @@ type regCompiler struct {
 	ctrl      []*rctl
 	out       regCode
 	// refs says a reference was pushed; tries is the deepest nesting of
-	// legacy try constructs, as the tree's compiler counts them.
+	// legacy try constructs, which take a reference slot each past the
+	// operand stack's.
 	refs  bool
 	tries int
 	// retFixes are the catch clauses that land at the function's label;

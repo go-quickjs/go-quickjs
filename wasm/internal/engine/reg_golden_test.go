@@ -13,11 +13,10 @@ import (
 )
 
 // The register tests' expected answers (testdata/reg.golden): each call's
-// results, or its error and the offset of its trap, by test and call. They
-// were recorded from the closure tree, the interpreter before register
-// code, so that register code is held to what the two agreed on;
-// WASM_REG_GOLDEN=update records them again from the Go table, which a
-// change to what a test calls needs.
+// results, or its error and the offset of its trap, by test and call,
+// recorded at 5d883381 from the interpreter that preceded register code
+// and agreed with it there. WASM_REG_GOLDEN=update records them again
+// from the Go table, which a change to what a test calls needs.
 
 var regGolden struct {
 	once sync.Once
@@ -36,7 +35,7 @@ func loadRegGolden(t *testing.T) {
 		regGolden.new = map[string]string{}
 		f, err := os.Open(regGoldenFile)
 		if err != nil {
-			if !regGoldenUpdate() && os.Getenv("WASM_REG_GOLDEN") != "tree" {
+			if !regGoldenUpdate() {
 				t.Fatal(err)
 			}
 			return
@@ -100,17 +99,6 @@ func regMatchesGolden(t *testing.T, src string, calls []regCall) {
 	if nativeBuilt {
 		ways = append(ways, true)
 	}
-	if os.Getenv("WASM_REG_GOLDEN") == "tree" {
-		inst := instantiateMode(t, src, false)
-		for _, c := range calls {
-			ext, _ := inst.Export(c.name)
-			got, err := Invoke(context.Background(), ext.Func, c.args)
-			regGolden.mu.Lock()
-			regGolden.new[regKey(t, c)] = regAnswer(got, err)
-			regGolden.mu.Unlock()
-		}
-		return
-	}
 	for _, native := range ways {
 		inst := instantiateReg(t, src)
 		for _, c := range calls {
@@ -147,7 +135,7 @@ func regMatchesGolden(t *testing.T, src string, calls []regCall) {
 // writeRegGolden writes the answers an update recorded, the file's own
 // for the tests that did not run kept.
 func writeRegGolden() error {
-	if !regGoldenUpdate() && os.Getenv("WASM_REG_GOLDEN") != "tree" || len(regGolden.new) == 0 {
+	if !regGoldenUpdate() || len(regGolden.new) == 0 {
 		return nil
 	}
 	for k, v := range regGolden.new {

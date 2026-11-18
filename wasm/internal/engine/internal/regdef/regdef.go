@@ -232,7 +232,7 @@ const (
 	CdNslots = 0  // compiled.nslots
 	CdRslots = 8  // compiled.rslots
 	CdRefs   = 32 // compiled.refs, a bool
-	CdReg    = 80 // compiled.reg
+	CdReg    = 56 // compiled.reg
 
 	RcCode   = 0   // regCode.code
 	RcSites  = 48  // regCode.sites

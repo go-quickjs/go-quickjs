@@ -14,10 +14,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/wat"
 )
 
-// instantiateMode instantiates the module of src with its bodies compiled to
-// register code (reg), or to the closure tree, and run by the interpreter
-// alone, whatever WASM_JIT asks.
-func instantiateMode(t *testing.T, src string, reg bool) *Instance {
+// instantiateReg instantiates the module of src, its bodies compiled to
+// register code and run by the interpreter alone, whatever WASM_JIT asks.
+func instantiateReg(t *testing.T, src string) *Instance {
 	t.Helper()
 	b, err := wat.Compile([]byte(src))
 	if err != nil {
@@ -30,7 +29,7 @@ func instantiateMode(t *testing.T, src string, reg bool) *Instance {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions)), reg: reg}
+	code := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
 	inst, err := Instantiate(context.Background(), code, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +267,7 @@ func TestRegKernels(t *testing.T) {
 // their innermost frame's offset, the trapping instruction's, as every case
 // of TestTrapOffsets has it where the register compiler takes the function.
 func TestRegTraps(t *testing.T) {
-	inst := instantiateMode(t, regKernels, true)
+	inst := instantiateReg(t, regKernels)
 	for _, c := range []struct {
 		name string
 		args []uint64
@@ -289,7 +288,7 @@ func TestRegTraps(t *testing.T) {
 	}
 	ran := 0
 	for _, c := range trapCases {
-		inst := instantiateMode(t, c.src, true)
+		inst := instantiateReg(t, c.src)
 		ext, _ := inst.Export("f")
 		_, err := call(t, inst, "f")
 		if regOf(inst, "f") == nil {
@@ -313,11 +312,11 @@ func TestRegTraps(t *testing.T) {
 // TestRegTrapUnderCall checks a trap's frames below a call in register code:
 // the trapping function at its instruction, its caller at its call.
 func TestRegTrapUnderCall(t *testing.T) {
-	inst := instantiateMode(t, `(module
+	inst := instantiateReg(t, `(module
 		(func $id (param i32) (result i32) (local.get 0))
 		(func $g (param i32) (result i32)
 			(i32.div_u (call $id (i32.const 1)) (local.get 0)))
-		(func (export "f") (param i32) (result i32) nop (call $g (local.get 0))))`, true)
+		(func (export "f") (param i32) (result i32) nop (call $g (local.get 0))))`)
 	_, err := call(t, inst, "f", 0)
 	var tr *Trap
 	if !errors.As(err, &tr) || tr.Code != TrapDivByZero {
@@ -328,7 +327,7 @@ func TestRegTrapUnderCall(t *testing.T) {
 		t.Fatalf("frames %+v, want %+v", tr.Frames, want)
 	}
 	if regOf(inst, "f") == nil {
-		t.Fatal("f runs the closure tree")
+		t.Fatal("f runs no register code")
 	}
 }
 
@@ -337,7 +336,7 @@ func TestRegTrapUnderCall(t *testing.T) {
 // the constant an immediate and the comparison fused with its branch: five
 // instructions a turn for the loop's fifteen.
 func TestRegCopyElision(t *testing.T) {
-	inst := instantiateMode(t, regKernels, true)
+	inst := instantiateReg(t, regKernels)
 	if _, err := call(t, inst, "loop", 3); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +392,7 @@ func TestRegFarBranches(t *testing.T) {
 		b.WriteString(` (local.set 1 (i32.add (local.get 1) (i32.const 1)))`)
 	}
 	b.WriteString(`) (local.get 1)))`)
-	inst := instantiateMode(t, b.String(), true)
+	inst := instantiateReg(t, b.String())
 	for _, c := range [][2]uint64{{1, 0}, {9, 40000}} {
 		got, err := call(t, inst, "f", c[0])
 		if err != nil || got[0].N != c[1] {
@@ -402,7 +401,7 @@ func TestRegFarBranches(t *testing.T) {
 	}
 	rc := regOf(inst, "f")
 	if rc == nil {
-		t.Fatal("f runs the closure tree")
+		t.Fatal("f runs no register code")
 	}
 	if op := uint8(rc.code[1]); op != rBrNZ {
 		t.Fatalf("the second instruction is %d, want a 32-bit branch", op)
@@ -412,7 +411,7 @@ func TestRegFarBranches(t *testing.T) {
 // TestRegPollsContext checks that a loop of register code ends when its
 // context does.
 func TestRegPollsContext(t *testing.T) {
-	inst := instantiateMode(t, `(module (func (export "f") (loop $l (br $l))))`, true)
+	inst := instantiateReg(t, `(module (func (export "f") (loop $l (br $l))))`)
 	ext, _ := inst.Export("f")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -421,7 +420,7 @@ func TestRegPollsContext(t *testing.T) {
 		t.Fatalf("f() = %v, want the context's error", err)
 	}
 	if regOf(inst, "f") == nil {
-		t.Fatal("f runs the closure tree")
+		t.Fatal("f runs no register code")
 	}
 }
 
@@ -471,7 +470,7 @@ const regRefs = `(module
 // TestRegRefs checks register code's references: locals, globals, select,
 // ref.func, ref.is_null, br_on_null, br_on_non_null and ref.as_non_null.
 func TestRegRefs(t *testing.T) {
-	inst := instantiateMode(t, regRefs, true)
+	inst := instantiateReg(t, regRefs)
 	host := HostRef("x")
 	for _, c := range []struct {
 		name string
@@ -509,13 +508,6 @@ func TestRegRefs(t *testing.T) {
 type regCall struct {
 	name string
 	args []Val
-}
-
-// instantiateReg instantiates the module of src, its bodies compiled to
-// register code.
-func instantiateReg(t *testing.T, src string) *Instance {
-	t.Helper()
-	return instantiateMode(t, src, true)
 }
 
 // TestRegMemories checks the generic accesses: a second memory, an i64
@@ -809,7 +801,7 @@ func TestRegFarSlots(t *testing.T) {
 	    (i32.add (ref.is_null (local.get $r))
 	      (select (i32.add (i32.load (i32.const 8)) (global.get $g)) (i32x4.extract_lane 0 (local.get $v)) (local.get 0)))))`
 	regMatchesGolden(t, src, []regCall{{"f", []Val{{N: 1}}}, {"f", []Val{{N: 0}}}, {"f", []Val{{N: 5}}}})
-	inst := instantiateMode(t, src, true)
+	inst := instantiateReg(t, src)
 	if _, err := call(t, inst, "f", 1); err != nil {
 		t.Fatal(err)
 	}

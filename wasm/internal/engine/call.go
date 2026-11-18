@@ -59,17 +59,7 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 // its caller finds them, and returns sigTail where it ended in a tail call,
 // the exec's tail call set.
 func (x *exec) interpret(f *frame, cd *compiled) int32 {
-	if cd.reg != nil {
-		return x.runReg(f, cd)
-	}
-	c := runSeq(f, cd.body)
-	if c >= 0 {
-		// The end of the body leaves the results in its stack positions; a
-		// return left them in place.
-		runSeq(f, cd.epi)
-		return 0
-	}
-	return c
+	return x.runReg(f, cd)
 }
 
 // stackOverflow traps for a call of wasm function fn that would pass
@@ -257,13 +247,4 @@ func narrow(v uint64, t module.ValueType) uint64 {
 		return uint64(uint32(v))
 	}
 	return v
-}
-
-// callArgs evaluates arguments into a fresh Val slice.
-func evalArgs(f *frame, args []func(*frame) Val) []Val {
-	vals := make([]Val, len(args))
-	for i, a := range args {
-		vals[i] = a(f)
-	}
-	return vals
 }

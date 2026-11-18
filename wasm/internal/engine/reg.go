@@ -2,8 +2,6 @@ package engine
 
 import (
 	"math"
-	"os"
-	"sync"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
@@ -654,47 +652,4 @@ func init() {
 			}
 		}
 	}
-}
-
-// regDefault says whether new Codes compile function bodies to register
-// code: they do unless WASM_INTERP=tree asks for the closure tree, kept to
-// compare the two until the native handlers land.
-var regDefault = os.Getenv("WASM_INTERP") != "tree"
-
-// InterpStats counts the function bodies the interpreter compiled to
-// register code and those left to the closure tree, by the reason the
-// register compiler gave.
-type InterpStats struct {
-	Register int
-	Tree     map[string]int
-}
-
-var interpStats struct {
-	mu       sync.Mutex
-	register int
-	tree     map[string]int
-}
-
-// ReadInterpStats returns the interpreter's counts so far.
-func ReadInterpStats() InterpStats {
-	interpStats.mu.Lock()
-	defer interpStats.mu.Unlock()
-	s := InterpStats{Register: interpStats.register, Tree: map[string]int{}}
-	for k, v := range interpStats.tree {
-		s.Tree[k] = v
-	}
-	return s
-}
-
-func countInterp(reason string) {
-	interpStats.mu.Lock()
-	defer interpStats.mu.Unlock()
-	if reason == "" {
-		interpStats.register++
-		return
-	}
-	if interpStats.tree == nil {
-		interpStats.tree = map[string]int{}
-	}
-	interpStats.tree[reason]++
 }

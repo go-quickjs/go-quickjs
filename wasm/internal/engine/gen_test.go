@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-// TestNumericGenerated fails while ops_num_gen.go or reg_num_gen.go differs
+// TestNumericGenerated fails while reg_num_gen.go or regdef/num_gen.go differs
 // from what internal/numgen writes; go generate ./wasm/internal/engine
 // rewrites them.
 func TestNumericGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	checkGenerated(t, "./internal/numgen", "ops_num_gen.go", "reg_num_gen.go", "internal/regdef/num_gen.go")
+	checkGenerated(t, "./internal/numgen", "reg_num_gen.go", "internal/regdef/num_gen.go")
 }
 
 // checkGenerated runs generator gen, which writes files, into a temporary

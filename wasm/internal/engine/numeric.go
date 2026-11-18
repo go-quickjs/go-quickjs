@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-//go:generate go run ./internal/numgen ops_num_gen.go reg_num_gen.go internal/regdef/num_gen.go
+//go:generate go run ./internal/numgen reg_num_gen.go internal/regdef/num_gen.go
 
 // The numeric operators' semantics where Go's operators differ from wasm's.
 // Those that trap are given the offset of their instruction, for the trap.

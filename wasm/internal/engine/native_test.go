@@ -261,7 +261,7 @@ func TestNativeCallHConvention(t *testing.T) {
 		return orig(l, w, pc, f)
 	}
 	withNative(true, func() {
-		inst := instantiateMode(t, regKernels, true)
+		inst := instantiateReg(t, regKernels)
 		for i := uint64(0); i < 120; i++ {
 			got, err := call(t, inst, "pop", i)
 			if err != nil || got[0].N != uint64(bitsOnes(i)) {
@@ -745,8 +745,8 @@ func contains(s []string, x string) bool {
 func TestNativeMatchesGoTable(t *testing.T) {
 	nativeOnly(t)
 	src, calls := nativeCases()
-	native := instantiateMode(t, src, true)
-	goTable := instantiateMode(t, src, true)
+	native := instantiateReg(t, src)
+	goTable := instantiateReg(t, src)
 	run := func(inst *Instance, c regCall) ([]Val, error) {
 		ext, ok := inst.Export(c.name)
 		if !ok {
@@ -789,7 +789,7 @@ func TestNativeMatchesGoTable(t *testing.T) {
 // code never runs.
 func TestNativeOff(t *testing.T) {
 	nativeOnly(t)
-	inst := instantiateMode(t, regKernels, true)
+	inst := instantiateReg(t, regKernels)
 	var exits int64
 	withNative(false, func() {
 		exits = countNativeExits(func() {
@@ -830,7 +830,7 @@ func matchNative(t *testing.T, src string, calls []regCall) (marked, unmarked in
 	var flag uint8
 	nativeMarkFlag = &flag
 	defer func() { nativeMarkFlag = nil }()
-	insts := [3]*Instance{instantiateMode(t, src, true), instantiateMode(t, src, true), instantiateMode(t, src, true)}
+	insts := [3]*Instance{instantiateReg(t, src), instantiateReg(t, src), instantiateReg(t, src)}
 	for _, c := range calls {
 		var res [3][]Val
 		var errs [3]error
@@ -984,7 +984,7 @@ func TestNativeCalls(t *testing.T) {
 	}
 	// Callees with reference slots are called natively: once a first run
 	// has compiled them and made the frames, no call leaves to Go.
-	inst := instantiateMode(t, src, true)
+	inst := instantiateReg(t, src)
 	withNative(true, func() {
 		if _, err := call(t, inst, "tree", 8); err != nil {
 			t.Fatal(err)

@@ -11,7 +11,7 @@ func init() { regVerify = true }
 // TestRegVerifierRejects checks that the verifier passes the compiler's
 // code and refuses each kind of broken code the handlers would trust.
 func TestRegVerifierRejects(t *testing.T) {
-	inst := instantiateMode(t, regKernels, true)
+	inst := instantiateReg(t, regKernels)
 	for _, name := range []string{"loop", "switch", "fib", "globals", "mem", "sel", "pair"} {
 		if _, err := call(t, inst, name, 1, 1, 1); err != nil {
 			var tr *Trap

@@ -1,16 +1,12 @@
-// Command simdgen writes the engine's ops_simd_gen.go: the closure tree's
-// nodes for the SIMD operators without immediates, and the lane-wise
-// functions of those whose lanes are computed alike; and reg_simd_gen.go,
-// register code's handlers of the same operators (reg.go).
+// Command simdgen writes the engine's SIMD operators without immediates:
+// reg_simd_gen.go, register code's handlers of them (reg.go);
+// simd_lanes_gen.go, the lane-wise functions of those whose lanes are
+// computed alike; and internal/regdef's simd_gen.go, their values in
+// rSIMD's table. A lane-wise operator is written as the expression of one
+// result lane over operand lanes a and b, and its function unpacks the
+// operands into lanes, computes each and packs them.
 //
-// A node calls the operator's function on its operands. Calling a closure
-// for an operand that is a slot of the frame is an indirect call it does not
-// need, so each operator gets a node for each pairing of a slot read in
-// place and any other operand. A lane-wise operator is written as the
-// expression of one result lane over operand lanes a and b, and its
-// function unpacks the operands into lanes, computes each and packs them.
-//
-// Usage: go run ./wasm/internal/engine/internal/simdgen TREE-OUTPUT REG-OUTPUT
+// Usage: go run ./wasm/internal/engine/internal/simdgen LANES-OUTPUT REG-OUTPUT REGDEF-OUTPUT
 package main
 
 import (
@@ -263,77 +259,6 @@ func ops() []op {
 	return o
 }
 
-// operand is how a node reads a v128 operand: in place from a slot, or by
-// the reader c.v128 returns.
-type operand bool
-
-const (
-	inSlot operand = true
-	viaFn  operand = false
-)
-
-func (k operand) test(e string) string {
-	if k == inSlot {
-		return e + ".k == eSlot"
-	}
-	return e + ".k != eSlot"
-}
-
-func (k operand) capture(v, e string) string {
-	if k == inSlot {
-		return v + " := " + e + ".slot"
-	}
-	return v + " := c.v128(" + e + ")"
-}
-
-func (k operand) read(v string) string {
-	if k == inSlot {
-		return "V128{f.l[" + v + "], f.l[" + v + "+1]}"
-	}
-	return v + "(f)"
-}
-
-func node(b *bytes.Buffer, o op) {
-	fmt.Fprintf(b, "case opcode.%s:\n", o.name)
-	fn := o.function()
-	switch o.kind {
-	case unary, test:
-		res, tree, gt := "module.V128", "tv128", "V128"
-		if o.kind == test {
-			res, tree, gt = "module.I32", "ti32", "uint32"
-		}
-		b.WriteString("x := c.pop()\nif x.k == eSlot {\n")
-		fmt.Fprintf(b, "%s\n", inSlot.capture("xa", "x"))
-		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { return %s(%s) }))\n", res, tree, gt, fn, inSlot.read("xa"))
-		b.WriteString("} else {\n")
-		fmt.Fprintf(b, "%s\n", viaFn.capture("xa", "x"))
-		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { return %s(%s) }))\n", res, tree, gt, fn, viaFn.read("xa"))
-		b.WriteString("}\n")
-	case binary:
-		b.WriteString("y := c.pop()\nx := c.pop()\nswitch {\n")
-		for _, p := range [][2]operand{{inSlot, inSlot}, {inSlot, viaFn}, {viaFn, inSlot}, {viaFn, viaFn}} {
-			fmt.Fprintf(b, "case %s && %s:\n", p[0].test("x"), p[1].test("y"))
-			fmt.Fprintf(b, "%s\n%s\n", p[0].capture("xa", "x"), p[1].capture("yb", "y"))
-			fmt.Fprintf(b, "c.pushTree(module.V128, tv128(func(f *frame) V128 { return %s(%s, %s) }))\n",
-				fn, p[0].read("xa"), p[1].read("yb"))
-		}
-		b.WriteString("}\n")
-	case ternary:
-		b.WriteString("z := c.v128(c.pop())\ny := c.v128(c.pop())\nx := c.v128(c.pop())\n")
-		fmt.Fprintf(b, "c.pushTree(module.V128, tv128(func(f *frame) V128 { return %s(x(f), y(f), z(f)) }))\n", fn)
-	case shift:
-		b.WriteString("y := c.pop()\nx := c.pop()\nswitch {\n")
-		for _, k := range []operand{inSlot, viaFn} {
-			fmt.Fprintf(b, "case y.k == eConst && %s:\n", k.test("x"))
-			fmt.Fprintf(b, "%s\ns := uint32(y.c)\n", k.capture("xa", "x"))
-			fmt.Fprintf(b, "c.pushTree(module.V128, tv128(func(f *frame) V128 { return %s(%s, s) }))\n", fn, k.read("xa"))
-		}
-		b.WriteString("default:\nxa, s := c.v128(x), c.i32(y)\n")
-		fmt.Fprintf(b, "c.pushTree(module.V128, tv128(func(f *frame) V128 { return %s(xa(f), s(f)) }))\n", fn)
-		b.WriteString("}\n")
-	}
-}
-
 // laneFunc writes the function of a lane-wise operator.
 func laneFunc(b *bytes.Buffer, o op) {
 	r := fmt.Sprintf("var r [%d]%s\n", o.out.n, o.out.gotype)
@@ -353,7 +278,7 @@ func laneFunc(b *bytes.Buffer, o op) {
 
 func main() {
 	if len(os.Args) != 4 {
-		fmt.Fprintln(os.Stderr, "usage: simdgen TREE-OUTPUT REG-OUTPUT REGDEF-OUTPUT")
+		fmt.Fprintln(os.Stderr, "usage: simdgen LANES-OUTPUT REG-OUTPUT REGDEF-OUTPUT")
 		os.Exit(2)
 	}
 	all := ops()
@@ -367,9 +292,6 @@ package engine
 import (
 	"math"
 	"math/bits"
-
-	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
-	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 var (
@@ -377,15 +299,7 @@ var (
 	_ = math.Sqrt
 )
 
-// simdOp compiles a SIMD operator without immediates, reporting whether op
-// is one.
-func (c *compiler) simdOp(op opcode.Opcode) bool {
-	switch op {
 `)
-	for _, o := range all {
-		node(&b, o)
-	}
-	b.WriteString("default:\nreturn false\n}\nreturn true\n}\n\n")
 	for _, o := range all {
 		if o.expr != "" {
 			laneFunc(&b, o)
