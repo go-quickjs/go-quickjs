@@ -755,6 +755,8 @@ Where `call_w` or `call_method_w` meets another, the handler exits with the
 context's `miss` set and the stub calls `nativeCallMiss`, which makes the
 cache the new callee's and calls it as the cache says, so that the code
 then enters it itself rather than Go entering it in a code entry of its own.
+The feedback dispatcher counts the call again as it dispatches it again, and
+`nativeCallMiss` takes back its first count (`jitRegUncount`).
 
 **The context.** What the code reads beyond the pinned registers is the
 context (`nativeCtx`), kept by a frame's `regState` and made at its first

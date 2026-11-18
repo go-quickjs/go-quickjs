@@ -950,16 +950,19 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		// and a frame that keeps its arguments is entered by regEnterW,
 		// each cheaper than the exit the call would come back to. One with
 		// native code the handler has Go enter (nativeJITCall), as
-		// rhCallW's hit does. A runtime that runs the JIT keeps its leaves
-		// on rhCallW's miss, as its callbacks keep them on callDirect: the
-		// feedback dispatcher counted the call where it began, and the
-		// call made again would be counted again, a second call of the
-		// site to the frequencies the JIT inlines by.
-		if cl, rc, kind, this, enter := r.regCallKind(fd, method, c); enter && kind != 0 && (rc.leaf == regLeafNone || (rc.leaf >= regLeafArg || rc.leafUp != 0) && !(jitBuilt && r.jitOn())) && !rc.args && !regTypedCross(rc, c) && (kind != regCallObjThis || win[1].IsObject()) {
+		// rhCallW's hit does. The feedback dispatcher of a runtime that
+		// runs the JIT counted the call where it dispatched it, and counts
+		// the call made again as it dispatches it again: the first count
+		// is taken back (jitRegUncount), so that the site's frequency, which
+		// the JIT inlines by, counts the call once.
+		if cl, rc, kind, this, enter := r.regCallKind(fd, method, c); enter && kind != 0 && (rc.leaf == regLeafNone || rc.leaf >= regLeafArg || rc.leafUp != 0) && !rc.args && !regTypedCross(rc, c) && (kind != regCallObjThis || win[1].IsObject()) {
 			if !f.cl.regCallsHeld {
 				r.regCallsHold(f.cl.closureCode)
 			}
 			regCacheCallee(e, o, cl, rc, this, kind, c)
+			if jitBuilt && r.jitOn() {
+				f.cl.closureCode.jitRegUncount(int(w.C()))
+			}
 			return pc
 		}
 	}

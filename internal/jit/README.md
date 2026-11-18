@@ -576,12 +576,17 @@ nothing of it; every other entry is plain's handler. Its calls -- `call_w`,
 call site, and its returns the function's runs, into the counts of the
 function's closure's code (`jitRegCounts`: slot 0 the runs, 1+C the calls at
 call site C), made with the call sites' caches where the runtime runs the
-JIT (`jitRegCountsMake`). `Frequency` is a site's calls over the runs, once
-`jitCountsEnough` runs are counted (jit_freq.go); not a leaf's, whose
-calls the call path answers without a frame and so without its returns, nor
-a generator's or an async function's, whose runs end at suspensions too, nor
-a construction's, which Go makes. Native code counts nothing, as V8's
-optimized code counts nothing; a run that on-stack replacement took into
+JIT (`jitRegCountsMake`). A callee that missed the site's cache counts
+once: `nativeCallMiss` makes the cache the callee's and has the handler
+make the call again, whose instruction dispatched again counts again, and
+takes back the first count (`jitRegUncount`,
+`TestJITRegFramedMissCountedOnce`). `Frequency` is a site's calls over the
+runs, once `jitCountsEnough` runs are counted (jit_freq.go); not a leaf's,
+whose calls the call path answers without a frame and so without its
+returns, nor a generator's or an async function's, whose runs end at
+suspensions too, nor a construction's, which Go makes. Native code counts
+nothing, as V8's optimized code counts nothing; a run that on-stack
+replacement took into
 native code ends at a return of the interpreter's (`jitRegLoop`), and
 counts. Nor does Go's dispatcher count, where it runs register frames in
 place of the native handlers (`QJS_NONATIVE`, a verifying build): no

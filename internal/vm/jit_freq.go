@@ -43,6 +43,18 @@ func (r *Runtime) jitRegCountsMake(cc *closureCode, sites int) {
 	}
 }
 
+// jitRegUncount takes back the call the feedback dispatcher counted at
+// cc's call site site, where Go has the call handler make the call again
+// rather than make it (nativeCallMiss): the dispatcher counts a call as
+// it dispatches its instruction, and the instruction dispatched again
+// counts it again. A count made before cc had its counts is none to take
+// back.
+func (cc *closureCode) jitRegUncount(site int) {
+	if c := cc.jitRegCounts; 1+site < len(c) && c[1+site] != 0 {
+		c[1+site]--
+	}
+}
+
 // Frequency is ssa.FrequencyFeedback's: how often the call at pc, a call
 // of the program's register code's, is made for each run of its function,
 // from what the feedback dispatcher counted (jitRegCounts), once it has

@@ -12,8 +12,8 @@ func TestJITRegLeafMiss(t *testing.T) {
 
 // In a runtime that runs the JIT, a call whose callee misses the site's
 // cache is counted once by the feedback dispatcher, a leaf's as any
-// other: the miss leaves it to rhCallW rather than make it again, which
-// would count it twice and double the site's frequency.
+// other: the miss has the handler make it again, which counts it again,
+// and takes back the first count, which had doubled the site's frequency.
 func TestJITRegLeafMissCountedOnce(t *testing.T) {
 	prog := compileForTest(t, nativeLeafMissSource)
 	r := New(Config{JIT: true})
