@@ -267,18 +267,15 @@ Do not manually edit generated files or their binary companions:
   `go generate ./internal/vm` runs it last, after the generators above,
   since it measures what they write; `TestLayoutLock` fails while an anchor
   is off its target.
-- `wasm/internal/engine/ops_num_gen.go`, the closure tree's numeric
-  operators, a node for each pairing of a tree, a slot and a constant, and
-  the loads and stores of memory 0 at an i32 address (`memFast`), and
-  `wasm/internal/engine/reg_num_gen.go`, the same operators as register
-  code's operations and their handlers (wasm/internal/engine/README.md),
-  both written by `wasm/internal/engine/internal/numgen`; and
-  `wasm/internal/engine/ops_simd_gen.go`, the SIMD operators without
-  immediates, and `wasm/internal/engine/reg_simd_gen.go`, their register
-  code handlers, both written by `internal/simdgen` beside it; numgen also
-  writes `wasm/internal/engine/internal/regdef/num_gen.go`, the numeric
-  operations' values, and simdgen `simd_gen.go` beside it, the SIMD
-  operators'; and `wasm/internal/engine/native_handlers_amd64.s` and
+- `wasm/internal/engine/reg_num_gen.go`, the numeric operators as
+  register code's operations and their handlers
+  (wasm/internal/engine/README.md), and
+  `wasm/internal/engine/internal/regdef/num_gen.go`, their values, written
+  by `wasm/internal/engine/internal/numgen`; and
+  `wasm/internal/engine/reg_simd_gen.go`, the SIMD operators without
+  immediates as register code's handlers, `simd_lanes_gen.go`, their
+  lane-wise functions, and `internal/regdef/simd_gen.go`, their values,
+  written by `internal/simdgen` beside it; and `wasm/internal/engine/native_handlers_amd64.s` and
   `native_handlers_arm64.s`, register code's native handlers, written by
   `wasm/internal/engine/internal/nativegen`. After changing a generator,
   run `go generate ./wasm/internal/engine`; `TestNumericGenerated`,
@@ -408,12 +405,11 @@ design, which a change to that design updates in the same commit.
   architecture: `TestJITFloatBits` holds every float operation to it, and
   `TestJITDifferential` every spec module's exports.
 - The interpreter runs register code (wasm/internal/engine/README.md):
-  every validated body compiles to it, and `ReadInterpStats`, which the spec
-  test logs, counts any left to the closure tree, which a change must keep
-  at none. `WASM_INTERP=tree` compiles bodies to the closure tree instead,
-  kept to compare the two until native handlers run register code; after a
-  change to the interpreter, run the spec both ways, and with
-  `WASM_REG_VERIFY=1`. On amd64 and arm64 native handlers run register code
+  every validated body compiles to it. After a change to the interpreter,
+  run the spec with `WASM_REG_VERIFY=1`, and the register tests, which
+  hold register code to golden answers (`testdata/reg.golden`, rewritten
+  from the Go table by `WASM_REG_GOLDEN=update` only where a test's calls
+  change). On amd64 and arm64 native handlers run register code
   (wasm/internal/engine/README.md, "Native handlers"), `WASM_NONATIVE=1`
   the Go table; they keep the JIT's execution boundary rules, store a
   pointer only under the marking rule below, through a barrier routine of

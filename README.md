@@ -132,8 +132,9 @@ tail calls, memory64, multiple memories, SIMD and relaxed SIMD -- and the
 threads proposal, and passes all 65,824 assertions of the spec's tests and
 the threads proposal's, at pinned commits. Invalid modules, failed links and
 traps are reported with V8's messages: validation matches Node 26 over
-345,311 modules with no difference. Functions run in a closure-tree
-interpreter; a baseline JIT compiles hot ones on amd64 (Linux and Windows)
+345,311 modules with no difference. Functions run in a register
+interpreter, its handlers native code on amd64 and arm64; a baseline JIT
+compiles hot ones on amd64 (Linux and Windows)
 and arm64 (macOS and Linux), with `-tags quickjs_jit` and
 `wasm.NewRuntimeConfigCompiler()` or a runtime made `WithJIT`. See
 [WebAssembly](docs/wasm.md).

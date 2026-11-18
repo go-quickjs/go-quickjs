@@ -2,14 +2,13 @@
 
 The engine interprets a function as *register code*: its validated body
 compiled in one pass to fixed-width instructions that name the frame's
-slots as their operands, run by a small loop over a table of handlers. It
+slots as their operands, run by native threaded handlers on amd64 and
+arm64 and by a small loop over a table of Go handlers elsewhere. It
 follows the JavaScript engine's register interpreter
-([docs/register-interpreter.md](../../../docs/register-interpreter.md)) and
-replaced the closure tree that interpreted every body before it
-(compile.go's header), which `WASM_INTERP=tree` still selects for
-comparison. The JIT (wasm/internal/jit,
-[wasm/internal/jit/README.md](../jit/README.md)) compiles from the module's
-bytes, not from either form, and shares the interpreter's frames.
+([docs/register-interpreter.md](../../../docs/register-interpreter.md)).
+The JIT (wasm/internal/jit, [wasm/internal/jit/README.md](../jit/README.md))
+compiles from the module's bytes, not from register code, and shares the
+interpreter's frames.
 
 This document is the design: what is built, where it departs from the
 JavaScript design and why, and what is left.
@@ -29,7 +28,6 @@ JavaScript design and why, and what is left.
 - [Calls and returns](#calls-and-returns)
 - [Polls, OSR and the JIT](#polls-osr-and-the-jit)
 - [Offsets](#offsets)
-- [The switch](#the-switch)
 - [Where it departs from the JavaScript design](#where-it-departs-from-the-javascript-design)
 - [The verifier](#the-verifier)
 - [Native handlers](#native-handlers)
@@ -41,31 +39,27 @@ JavaScript design and why, and what is left.
 `Code.interp` compiles a body when the interpreter first needs it: at the
 first call, or where native code ran the function from its first call
 (`nativeFirst`, `boundRecord`), when a call first reaches the interpreter.
-`compileFunction` compiles it to register code (`regCompile`) unless the
-Code asks for the closure tree (`Code.reg`, `WASM_INTERP=tree`); the
-record holds one or the other (`compiled.reg`, or `compiled.body` and
-`epi`), and `exec.interpret` runs whichever it holds. Calls cross between
-the two forms, and between either and native code, in both directions.
+`compileFunction` compiles it to register code (`regCompile`), which the
+record holds (`compiled.reg`) and `exec.interpret` runs. Calls cross
+between register code and the JIT's native code in both directions.
 Register code runs by native threaded handlers on amd64 and arm64
 ([Native handlers](#native-handlers)), and by the Go table's loop ([The
 loop](#the-loop)) elsewhere and with `WASM_NONATIVE=1`.
 
 Every validated body compiles to register code: every instruction of
 WebAssembly 3.0 and the threads proposal, every value kind, any number of
-locals, any offset and memory. `ReadInterpStats` counts the bodies of each
-form, and of the tree's by the reason the register compiler gave, which
-the spec test logs: 6,842 bodies, none left to the tree. The one check
-left is a module whose offsets do not fit the 32 bits every part of the
-engine reports them in ([Traps](#traps)).
+locals, any offset and memory; the spec test logs the count
+(`ReadJITStats().Interpreted`), 6,842 bodies. The one body it refuses, by
+a panic, is one of a module whose offsets do not fit the 32 bits every
+part of the engine reports them in ([Traps](#traps)).
 
 ## Why registers
 
-The tree runs an expression as nested closures: each operand that is not a
-slot or a constant is an indirect call, every statement returns a signal
-its block tests, and each node reloads what its caller had live, since Go
-keeps nothing in registers across a call. A register instruction reads its
-operands where they lie and writes its result to a slot, and the loop's
-one indirect call is the only dispatch. `local.get`, `local.set` and
+A register instruction reads its operands where they lie and writes its
+result to a slot, and the dispatch -- an indirect jump natively, the
+loop's one indirect call on the Go table -- is the only one: no operand is
+a call of its own, no statement returns a signal its block tests, and
+nothing is reloaded but the next instruction. `local.get`, `local.set` and
 constants mostly vanish into operands, so the instruction count is close to
 the number of operations: wasmbench's loop.wat kernel is seven
 instructions a turn for its nineteen wasm instructions -- the fused
@@ -143,11 +137,11 @@ The forms, by family:
 
 The numeric operations, their handlers and what the compiler needs to know
 of each (`regNumeric`, `regMemOp`, `regLoadAny`, `regStoreAny`) are
-generated (reg_num_gen.go, internal/numgen) from the same table of
-operators as the tree's nodes, and the SIMD operators (reg_simd_gen.go,
-internal/simdgen) from the tree's SIMD table, calling the same lane
-functions: the two forms' semantics -- NaN payloads, the truncations'
-ranges, the relaxed operators' host choices -- are one source.
+generated (reg_num_gen.go, internal/numgen) from one table of operators,
+and the SIMD operators (reg_simd_gen.go, internal/simdgen) from one SIMD
+table, calling its lane functions (simd_lanes_gen.go): their semantics --
+NaN payloads, the truncations' ranges, the relaxed operators' host choices
+-- are one source, which the native handlers are held to bit for bit.
 
 ## The opcode space
 
@@ -197,12 +191,12 @@ reference slot rlocals+h  stack position h's reference
 numeric slots from 0      the results, as layout() places them
 ```
 
-The frame's size is the tree's exactly -- `nlocals + 2(maxHeight+1)`
-numeric slots, and the reference slots and the `refs` flag counted as the
-tree counts them (a reference pushed, reference locals, legacy try depth)
+The frame's size is validation's bound exactly -- `nlocals +
+2(maxHeight+1)` numeric slots, and the reference slots and the `refs` flag
+counted from a reference pushed, reference locals and the legacy try depth
 -- since the compiler pushes and pops as validation does, so
-`boundRecord`, `frameBound`, `withinBound` and the JIT's callee frames hold
-for either form. An i32 or f32 in a slot has its upper half clear: every
+`boundRecord`, `frameBound`, `withinBound` and the JIT's callee frames
+hold. An i32 or f32 in a slot has its upper half clear: every
 handler writing one writes `uint64(uint32(...))`, and what comes from the
 host is narrowed as it enters a frame (`narrow`). So an index of an i32 or
 an i64 table or memory is the slot's whole word either way, and one
@@ -212,8 +206,7 @@ handler serves both.
 
 reg_compile.go, one pass over the body, after validation, with a symbolic
 operand stack. An entry is a constant, or the slot that holds the value: a
-local's, read in place, or its own position's. Unlike the tree's entries no
-entry is pending work -- every instruction is emitted as it is read -- so
+local's, read in place, or its own position's. No entry is pending work -- every instruction is emitted as it is read -- so
 there is no evaluation order to keep, and the only hazard is a local read
 in place and then written: `local.set` and `local.tee` first copy the
 stack's reads of the local to their positions (`flushLocal`). A slot field
@@ -264,7 +257,7 @@ still fuse: they write only positions below its own.
 - `try_table` and `try` begin a region ([Exceptions](#exceptions)); a
   catch clause's landing is patched as a branch to its label is.
 - Code after `br`, `br_table`, `return`, `unreachable`, a throw and a tail
-  call is skipped to the construct's end, as the tree does.
+  call is skipped to the construct's end.
 
 **Branches that do not reach.** A compare-and-branch's offset is 16 bits.
 Where one does not reach, the body is compiled again with every
@@ -337,20 +330,20 @@ the trap's offset off the hot path, a handler traps with its pc's
 complement (`regAt`), which is past every offset of its module, and the
 recovery makes it the module offset of the instruction the pc was compiled
 from, through the innermost frame's register code (`offs`,
-`exec.regOffset`); an offset the tree or native code reports is below the
-module's size and stays as it is. So a division's handler passes `^pc`
-where the tree's node passed a captured offset, at no cost. A module whose
+`exec.regOffset`); an offset native code reports is below the module's
+size and stays as it is. So a division's handler passes `^pc`, at no
+cost. A module whose
 offsets with its pcs would pass 32 bits is the register compiler's one
 refusal; no part of the engine reports such a module's offsets.
 
 ## Exceptions
 
-A throw is a Go panic of an `*Exception`, as the tree's: a frame that never
-catches pays nothing. The body of each `try_table` and legacy `try` is a
+A throw is a Go panic of an `*Exception`: a frame that never catches pays
+nothing. The body of each `try_table` and legacy `try` is a
 region of the code's (`regRegion`), by the module offsets of its
 instructions, with its catch clauses and their landings. A frame whose
 code has any regions runs its loop under `runRegCatching`, which recovers
-an exception (or a tree frame's delegation, which is its exception),
+an exception (or a delegation, which is its exception),
 restores the exec as the frame had it (`tryState`, saved once at the
 frame's entry), and finds the innermost region holding the offset the
 frame was at -- the call or the throw it was making, which its entry in
@@ -374,10 +367,9 @@ place, or a position's, each a word, two words or a reference -- to the
 callee's parameter slots, and of the results from the callee's slots to
 the caller's positions. The handler takes the callee's frame from the
 exec's chunks, makes the moves, and runs the callee by `exec.run`, which
-keeps what it did for the tree: the depth check and the stack overflow's
-frame, the call's poll, the record in `exec.calls`, native code where the
-callee has it, and the interpreter in whichever form the callee's record
-holds. A host function, or another instance's, is the same site: the
+makes the depth check and the stack overflow's frame, counts the call's
+poll, pushes the record in `exec.calls`, and runs native code where the
+callee has it, the callee's register code otherwise. A host function, or another instance's, is the same site: the
 handler calls the host through `hostCall` with the arguments in `Val`s.
 `call_indirect` and `call_ref` are sites with the slot of their target,
 the callee found after the arguments' moves are read (`indirectCallee`,
@@ -385,7 +377,7 @@ the reference's function).
 
 A tail call stores its arguments in the exec's tail call and ends the
 frame with `sigTail`; `exec.run`'s `tailChain` makes the call in place of
-the frame, as for the tree's. A frame that returns leaves its results in
+the frame. A frame that returns leaves its results in
 slots from 0, where its caller and native code look for them.
 
 ## Polls, OSR and the JIT
@@ -396,7 +388,7 @@ of the exec's poll and the frame's OSR budget (`osr`, from `osrBudget`).
 Where it is spent the slow function (`backEdge`) counts the back edges
 since the last check toward both: the poll, which checks the context at
 zero, and the budget, which at zero goes on in native code from the loop's
-head (`exec.osr`) and otherwise is set past reach, as the tree's loops do.
+head (`exec.osr`) and otherwise is set past reach.
 Calls count toward the poll in `exec.run`, as before; a frame's tick does
 not see them until its next check, so a context's end is seen at most one
 tick later, and the OSR budget is exact. Under `WASM_JIT=osr` the spec
@@ -430,20 +422,11 @@ and the record, not the body:
 `offs` holds, for each instruction, the module offset of the wasm
 instruction it was compiled from: what a trap's innermost frame reports
 (`TestTrapOffsets`' cases, `TestRegTraps`). A call records its offset in
-the caller's `exec.calls` entry from its site, as the tree's did, which a
+the caller's `exec.calls` entry from its site, which a
 stack trace, a host's `Trace` and the catching loop read; a throw records
 its own there too. A stack overflow's frame is made by `exec.run`,
 unchanged. Moves and branches the compiler adds take the offset of the
 instruction that caused them; none of them traps.
-
-## The switch
-
-`WASM_INTERP`, read once, picks the form of the Codes made after: register
-code by default, and the closure tree with `WASM_INTERP=tree`, kept for
-side-by-side comparison until the native handlers land; then the tree is
-deleted. Tests pick a form per Code (`Code.reg`, `instantiateMode`, whose
-Codes run the interpreter alone whatever `WASM_JIT` asks), and
-`regMatchesTree` compares the two over each instruction family.
 
 ## Where it departs from the JavaScript design
 
@@ -708,7 +691,8 @@ native handlers on.
 ## Measurements
 
 Interpreter only, wasmbench (`-engine interp`), best run in ms; Ryzen 9
-9950X3D2, Windows. Two fresh processes of three timed runs each. The Go
+9950X3D2, Windows, at c2e3befb, whose Tree column is the closure tree that
+interpreted bodies before register code, deleted since. Two fresh processes of three timed runs each. The Go
 table and native code at three placements: the build as it is, and with
 1,024 and 2,112 bytes after the handlers' block, which move the code after
 it (the range is theirs). The programs are Go-compiled wasm, their results
@@ -756,16 +740,14 @@ was padded to whole pages.
 
 ## Open work
 
-1. The closure tree's deletion with `WASM_INTERP`, once arm64's handlers
-   have run on hardware.
-2. Native allocation of small structs and arrays, from a pool of the
+1. Native allocation of small structs and arrays, from a pool of the
    context's, once the arrays and gc workloads show it worth more than
    the exit each costs now.
-3. Forms with a 32-bit immediate in the word after the instruction for the
+2. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i
    1048576` in bytes.wat).
-4. Fused forms of a global's read, operation and write, once a profile
+3. Fused forms of a global's read, operation and write, once a profile
    with the native handlers shows they matter.
-5. The verifier always on, should its cost on first runs come down: it
+4. The verifier always on, should its cost on first runs come down: it
    adds 0.7 - 3% to a large program's first run today.

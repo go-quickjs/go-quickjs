@@ -113,9 +113,9 @@ at a loop's head.
 At a loop's head both tiers have the frame in the same state: every operand
 stack entry in its position's slot, the loop's parameters at its base, every
 local in its own slot (native code's homes are stored at every exit and
-loaded at every entry). The interpreter's loop statement stores the branch's
-values into the loop's slots before it counts the back edge, so its frame
-there is what native code's loop label wants, with no translation.
+loaded at every entry). The interpreter's register code puts every operand
+stack entry in its position's slot at a construct's start, so its frame at
+a back edge is what native code's loop label wants, with no translation.
 
 Each loop has an entry (`Code.Loops`, by the loop instruction's offset in
 the module, which both tiers read the body from): out of line, it loads

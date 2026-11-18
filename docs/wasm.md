@@ -448,10 +448,8 @@ The match is tested against Node, not assumed. With
 The interpreter compiles a function body, on its first call, to register
 code: fixed-width instructions over the frame's slots, run by native
 threaded handlers on amd64 and arm64 and a loop over a table of Go
-handlers elsewhere (`wasm/internal/engine/README.md`). `WASM_INTERP=tree`
-compiles bodies to the closure tree that interpreted them before, kept to
-compare the two until native handlers run register code; it goes once they
-do. The baseline JIT (`wasm/internal/jit`)
+handlers elsewhere (`wasm/internal/engine/README.md`). The baseline JIT
+(`wasm/internal/jit`)
 compiles a function to native code in one pass over its validated body, with
 a register cache of the operand stack over the interpreter's own frames, so a
 call crosses between the tiers in either direction. Where the JIT runs, it
@@ -507,7 +505,7 @@ function in the interpreter for its first n calls, and compiles it then,
 or once a call of it has run 1,000 back edges of its loops in the
 interpreter (`engine.DefaultOSRThreshold`): the call then goes on in native
 code from the loop's head, on-stack replacement. Against compiling after 10
-calls, with the interpreter's closures built for every function called,
+calls, with the interpreter's code built for every function called,
 compiling at the first call made the Go-built programs' first runs as fast
 or up to 16% faster (json 100 ms to 84), their second runs up to 13%
 faster, and allocated a twelfth of the objects in the first run, as
@@ -634,7 +632,6 @@ The environment names them:
 | `WASM_SPEC_DIR` | a WebAssembly/spec checkout: `test/core`, `test/legacy` and `test/js-api` |
 | `WASM_THREADS_DIR` | a WebAssembly/threads checkout, for `test/core/threads` |
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
-| `WASM_INTERP` | `tree` compiles function bodies to the closure tree rather than register code, to compare the two |
 | `WASM_NONATIVE` | `1` runs register code by the Go table's loop rather than the native handlers (amd64, arm64) |
 | `WASM_REG_VERIFY` | `1` verifies every body of register code as it is compiled |
 | `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` at its first call, the interpreter compiling no body it does not run; a number after that many calls in the interpreter |
