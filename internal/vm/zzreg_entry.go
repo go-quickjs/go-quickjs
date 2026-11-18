@@ -182,6 +182,9 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 		}
 	}
 	c.initPlan = regInitPlan(rc)
+	if c.initPlan != nil && fn.Kind == bytecode.KindConstructor {
+		c.initNew = 1
+	}
 	c.fwdKind, c.fwdSites, c.fwdArgs = regForwardPlan(fn, rc)
 	if len(rc.Code) > 0 && !c.suspends {
 		// A body that returns a parameter, a constant or nothing first

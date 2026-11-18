@@ -330,6 +330,9 @@ func (g *armGen) forwardInit(back, resume Label) {
 	a.Store(rCtx, scr(sV1), rD)
 	a.Load(r8, rD, offCCReg)
 	a.Cbz(r8, resume, true)
+	// Not a class's constructor's, which a call of it throws for.
+	a.LoadU32(r9, r8, offRCInitNew)
+	a.Cbnz(r9, resume, false)
 	a.Load(r8, r8, offRCInitPlan+8)
 	a.Cbz(r8, resume, true)
 	a.Load(r9, rCtx, scr(sBase))

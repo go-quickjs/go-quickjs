@@ -208,14 +208,17 @@ const maxStores = 8
 // makes the stores itself, without the body's frame, where every site's
 // cache answers for the object it is given: a function's or a method's
 // body that only stores up to maxStores of its parameters in this, some
-// made 0 where they are falsy, and returns undefined. leafOf has turned
-// away what does anything before its body.
+// made 0 where they are falsy, and returns undefined; and a base class's
+// constructor's that does the same and returns this, whose plan only a
+// construction runs (a class is not called without new). leafOf has
+// turned away what does anything before its body.
 func plansOf(fn *bytecode.Function, rc *bytecode.RegCode) {
-	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindMethod || fn.UsesArguments || rc.Params > 64 {
+	ctor := fn.Kind == bytecode.KindConstructor
+	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindMethod && !ctor || fn.UsesArguments || rc.Params > 64 {
 		return
 	}
 	code := rc.Code
-	if len(code) >= 5 && code[0].Op() == bytecode.RGetProp {
+	if !ctor && len(code) >= 5 && code[0].Op() == bytecode.RGetProp {
 		rc.Forward = forwardCall(fn, rc)
 		return
 	}
@@ -251,7 +254,7 @@ func plansOf(fn *bytecode.Function, rc *bytecode.RegCode) {
 			st.Param = w.B() - regParams
 			st.Zero = defaults&(1<<st.Param) != 0
 			pc++
-		case w.Op() == bytecode.RRetUndef:
+		case w.Op() == bytecode.RRetUndef, ctor && w.Op() == bytecode.RRet && w.A() == regThis:
 			rc.Stores = stores
 			return
 		default:

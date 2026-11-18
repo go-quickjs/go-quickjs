@@ -1244,7 +1244,7 @@ func nativeApply(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx
 	ctx.scratch[sE] = uint64(uintptr(unsafe.Pointer(&ctx.super)))
 	ctx.scratch[sWin] = uint64(uintptr(unsafe.Pointer(&win[0])))
 	ctx.scratch[sArgc] = uint64(len(args))
-	if len(rc.initPlan) > 0 && this.IsObject() && r.frameDepth < r.maxFrames && r.interruptCounter > 1 && !r.jitOn() {
+	if len(rc.initPlan) > 0 && rc.initNew == 0 && this.IsObject() && r.frameDepth < r.maxFrames && r.interruptCounter > 1 && !r.jitOn() {
 		return 3
 	}
 	return 1

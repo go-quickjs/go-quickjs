@@ -237,6 +237,7 @@ var (
 	offRCFwdKind  int32
 	offRCFwdSites int32
 	offRCFwdArgs  int32
+	offRCInitNew  int32
 	offCCFwd      int32
 	offFdClosure  int32
 	offFdBound    int32
@@ -500,6 +501,7 @@ func loadOffsets() {
 	offRCFwdKind = off("regCode.fwdKind")
 	offRCFwdSites = off("regCode.fwdSites")
 	offRCFwdArgs = off("regCode.fwdArgs")
+	offRCInitNew = off("regCode.initNew")
 	offCCFwd = ccRel(off("closureCode.fwd"))
 	offFdClosure = off("funcData.closure")
 	offFdBound = off("funcData.bound")

@@ -292,6 +292,67 @@ out.join("|")`
 	}
 }
 
+// A base class's constructor that only stores its parameters has a plan
+// (RegCode.Stores) the native interpreter makes at a construction, without
+// the constructor's frame -- and only there: the class called, applied,
+// or the method a forwarder calls throws the TypeError a class called
+// without new throws, as the Go table does, marking or not.
+func TestRegNativeInitClass(t *testing.T) {
+	const src = `
+class K { constructor(a, b) { if (!b) b = 0; this.a = a; this.b = b } }
+var object = { tag: 7 }, out = [];
+function run(n) { var s = 0, k; for (var i = 0; i < n; i++) { k = new K(i, object); s += k.a + (k.b === object) } return s }
+run(100);
+out.push(run(1000));
+var k = new K(5); out.push(Object.keys(k).join(), k.a, Object.is(k.b, 0), k instanceof K);
+var o = {};
+function via(a, b) { return K.apply(this, arguments) }
+function call() { try { return K(1, 2) } catch (e) { return e.name } }
+function callOn() { try { return K.call(o, 1, 2) } catch (e) { return e.name } }
+function applyOn() { try { return K.apply(o, [1, 2]) } catch (e) { return e.name } }
+function viaOn() { try { return via.call(o, 1, 2) } catch (e) { return e.name } }
+for (var i = 0; i < 100; i++) out.push(call(), callOn(), applyOn(), viaOn());
+out.push(Object.keys(o).join());
+function init(a, b) { this.a = a; this.b = b }
+function Fwd(a, b) { this.initialize.apply(this, arguments) }
+function FwdCall(a, b) { this.initialize.call(this, a, b) }
+Fwd.prototype.initialize = FwdCall.prototype.initialize = init;
+function make(C) { try { return new C(1, 2).a } catch (e) { return e.name } }
+for (var i = 0; i < 100; i++) make(Fwd), make(FwdCall);
+Fwd.prototype.initialize = FwdCall.prototype.initialize = K;
+for (var i = 0; i < 100; i++) out.push(make(Fwd), make(FwdCall));
+class S extends K { constructor(a) { super(a, 2) } }
+out.push(new S(3).a, new S(3).b, new S(3) instanceof S);
+var R = Reflect.construct(K, [4, 5], S); out.push(R.a, R.b, Object.getPrototypeOf(R) === S.prototype);
+Object.defineProperty(K.prototype, "b", { set(v) { out.push("set:" + v) }, configurable: true });
+k = new K(6, 7); out.push(Object.keys(k).join());
+out.join("|")`
+	want := "500500|a,b|5|true|true|" + strings.Repeat("TypeError|", 400) + "|" + strings.Repeat("TypeError|", 200) +
+		"3|2|true|4|5|true|set:7|a"
+	nativeCounting(t)
+	if got := nativeRunSrc(t, src, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	const constructions = `
+class K { constructor(a, b) { if (!b) b = 0; this.a = a; this.b = b } }
+function run(n) { var s = 0, k; for (var i = 0; i < n; i++) { k = new K(i); s += k.a + k.b } return s }
+run(100); String(run(1000))`
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		if got := nativeRunSrc(t, src, true); got != want {
+			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+		}
+		// The constructions but the first few have no frames.
+		before := atomic.LoadInt64(&nativeCalls)
+		if got := nativeRunSrc(t, constructions, true); got != "499500" {
+			t.Fatalf("marking %v: constructions gave %s", marking, got)
+		}
+		if n := atomic.LoadInt64(&nativeCalls) - before; n > 20 {
+			t.Fatalf("marking %v: constructions entered %d frames", marking, n)
+		}
+	}
+}
+
 func TestRegNativeInitDefaults(t *testing.T) {
 	const src = nativeInitSource + `
 makeDefaults(100); makeForwardDefaults(100);
@@ -425,11 +486,15 @@ function five(a) { if (!a) a = 5; this.a = a }
 function other(a) { other.k.call(this, a) }
 function returns(a) { this.a = a; return a }
 var K = class { constructor(a) { this.a = a } };
+var KReturns = class { constructor(a) { this.a = a; return a } };
+var KDerived = class extends K { constructor(a) { super(a) } };
+var KForward = class { constructor(a) { this.k.call(this, a) } };
 var o = { k() {} };
 for (var f of [stores, defaults, method, apply, call, computed, args, nine, five, other, returns]) {
 	try { f.call(o, 1, 2) } catch (e) {}
 }
-new K(1);`
+new K(1); new KReturns(1); new KDerived(1);
+try { new KForward(1) } catch (e) {}`
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
@@ -466,7 +531,10 @@ new K(1);`
 		{"five", "false"},
 		{"other", "false"},
 		{"returns", "false"},
-		{"K", "false"},
+		{"K", "true 0:false"},
+		{"KReturns", "false"},
+		{"KDerived", "false"},
+		{"KForward", "false"},
 	} {
 		if got := plan(tc.name); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)

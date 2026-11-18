@@ -975,9 +975,11 @@ type RegCode struct {
 	PureTail int32
 	// Stores is the plan of an initializer's body -- a run of stores of
 	// its parameters in this, each maybe a parameter that is 0 where it is
-	// falsy (if (!p) p = 0, or p ? p : 0), and the return of undefined --
-	// which the native interpreter makes itself where a construction or
-	// an apply_args calls it, without its frame; nil for any other body.
+	// falsy (if (!p) p = 0, or p ? p : 0), and the return of undefined,
+	// or of this in a base class's constructor -- which the native
+	// interpreter makes itself where a construction or an apply_args
+	// calls it (a class's at a construction alone), without its frame;
+	// nil for any other body.
 	Stores []ThisStore
 	// Forward is the plan of a body that only hands its call on to a
 	// method of its this, this.k.apply(this, arguments) or

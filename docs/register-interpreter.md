@@ -926,7 +926,11 @@ the ordinary construction path.
 to eight of its parameters in `this` -- some made 0 where falsy, written
 `if (!p) p = 0` or `this.k = p ? p : 0` -- and returns undefined a plan of
 its stores (`RegCode.Stores`: each store's cache site, its parameter, and
-whether a falsy one is 0), and a constructor that is
+whether a falsy one is 0); a base class's constructor that does the same
+and returns `this` gets one too, which only a construction makes
+(`regCode.initNew`: a forwarder whose method is the class, and an
+`apply_args` of it, run it in its frame, which throws the TypeError of a
+class called without `new`); and a constructor that is
 `this.k.apply(this, arguments)` or `this.k.call(this, ...)` -- the call's
 arguments parameters or constants -- a plan of its forwarding
 (`RegCode.Forward`). The native interpreter makes those stores itself,

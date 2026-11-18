@@ -123,6 +123,10 @@ type regCode struct {
 	fwdKind  uint32
 	fwdSites uint32
 	fwdArgs  []fwdArg
+	// initNew is 1 where initPlan is a base class's constructor's, which
+	// only a construction runs: a forwarder's method or an apply_args's
+	// target with it is called, and a class called throws.
+	initNew uint32
 }
 
 // runReg runs frame f as register code c, from instruction start, and

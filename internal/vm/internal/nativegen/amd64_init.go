@@ -329,8 +329,9 @@ func (g *nativeGen) initWindowArgs() {
 // closure, not bound, whose code has a plan; its apply's or call's read,
 // the realm's built-in; then the plan made on the object R[A+1], given
 // the forwarder's arguments as apply hands them on, or as call does,
-// laid at the context's fwdArgs; back at back. Anything else enters the
-// forwarder at resume.
+// laid at the context's fwdArgs; back at back. A method whose plan is a
+// class constructor's (initNew), anything else, enters the forwarder at
+// resume.
 func (g *nativeGen) forwardInit(back, resume Label) {
 	a := g.a
 	have, isCall, cmpFn, callArgs, argLoop, konst, undef, put, run := a.NewLabel(), a.NewLabel(), a.NewLabel(),
@@ -398,6 +399,10 @@ func (g *nativeGen) forwardInit(back, resume Label) {
 	a.Jcc(CondE, resume)
 	a.CmpMemImm8(R8, offRCInitPlan+8, 0)
 	a.Jcc(CondE, resume)
+	// Not a class's constructor's, which a call of it throws for.
+	a.LoadU32(R9, R8, offRCInitNew)
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondNE, resume)
 	// Its apply or call, the realm's.
 	a.Load(R9, RDI, scr(sBase))
 	a.Load(RCX, R9, offCCIC)
