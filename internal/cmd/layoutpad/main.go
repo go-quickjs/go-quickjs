@@ -141,6 +141,8 @@ var positions = []position{
 	{"J", "jit_layoutpad.go", "after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo, or without the JIT the register interpreter's calls, regCall"},
 	{"Q", "reg_ru_layoutpad.go", "after reg_report.go, before reg_run.go: the register interpreter's loop, runReg"},
 	{"W", "reg_run_a_layoutpad.go", "after reg_run.go, before reg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},
+	{"R", "regexp_a_layoutpad.go", "after reg_yieldstar.go, before regexp_abstract.go: a replace's loop, regExpReplaceIn and its templates"},
+	{"S", "strh_layoutpad.go", "after strcut.go, before string.go: a string's builder, partsBuilder"},
 	{"Z", "z_layoutpad.go", "after every file: the closures, and the generics the last files call"},
 }
 

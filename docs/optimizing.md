@@ -216,6 +216,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 |---|---|---|---|
 | A E C D B J | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `firstElem` (`builtins*.go`, the JSON codec among them), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `callObject` (with `callDirect` and `runFD` after it), and `regCall` (the register calls' entries, `regCallSlow` and `regRunFD`) or with the JIT `jitLeafGo` |
 | Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the call path after it, `rhCallW` (W), its handlers after them |
+| R S | `layoutPadX`, the same, after the register interpreter's files | every function after it to the next position | a replace's loop, `regExpReplaceIn` with its templates after it (`regexp_abstract.go`, R), and the string builder, `partsBuilder` (`string.go`, S) |
 | Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
 | G*x* M*x* CZ | a generic a position's pad, or a method at it, calls; a closure in a generic the last file calls | the generics plain functions or methods meet first, from that file back; the closures of generics | nothing at present: no configuration anchors them |
 | DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
@@ -235,7 +236,12 @@ What each lever cannot move:
   2 KB and made `array_indexOf` 23%, `json_round_trip` 10% and
   `string_upper` 7% slower at every placement. E (`builtin_layoutpad.go`,
   before `builtins.go`) and C (`calls_layoutpad.go`, before `callsite.go`)
-  hold those loops at their earlier offsets.
+  hold those loops at their earlier offsets. R (`regexp_a_layoutpad.go`,
+  before `regexp_abstract.go`) and S (`strh_layoutpad.go`, before
+  `string.go`) do the same for a replace's code, which the renames had
+  put after files new to its place: `regexp_replace_dollar` was 4 to 8%
+  slower at every placement, where the base with the same code shifted
+  by 32 to 96 bytes was not.
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.

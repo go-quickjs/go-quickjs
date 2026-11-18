@@ -25,7 +25,12 @@
 # builtins_json.go), C asciiCaseMemo (casetables.go), at f9829c9f's
 # layout; the files the renames after it put among them had moved them
 # 2 KB and made array_indexOf 23%, json_round_trip 10% and string_upper
-# 7% slower at every placement.
+# 7% slower at every placement. R and S, after W, hold a replace's loop
+# (regExpReplaceIn, regexp_abstract.go) and the string builder
+# (partsBuilder, string.go) at f9829c9f's layout, which the files the
+# renames put before them had moved: regexp_replace_dollar was 4 to 8%
+# slower at every placement, where the base, its code shifted by 32 to
+# 96 bytes, was not.
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -37,6 +42,8 @@ anchor B  0x00ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callOb
 anchor J  0x00580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
 anchor Q  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00c80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor R  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x004e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x00f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00a40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
 anchor DH 0x000 runtime.mheap_
@@ -52,6 +59,8 @@ anchor B  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callOb
 anchor J  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
 anchor Q  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00fe0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor R  0x009c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00aa0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x00680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
 anchor DH 0x000 runtime.mheap_
@@ -67,6 +76,8 @@ anchor B  0x00d20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callOb
 anchor J  0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
 anchor Q  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor R  0x00660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x009a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
 anchor DH 0x000 runtime.mheap_
@@ -82,6 +93,8 @@ anchor B  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callOb
 anchor J  0x00e60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
 anchor Q  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor R  0x00880 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00960 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x009e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00f20 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
 anchor DH 0x000 runtime.mheap_
