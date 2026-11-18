@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -349,6 +350,230 @@ run(100); String(run(1000))`
 		}
 		if n := atomic.LoadInt64(&nativeCalls) - before; n > 20 {
 			t.Fatalf("marking %v: constructions entered %d frames", marking, n)
+		}
+	}
+}
+
+// nativeInitCacheSrc constructs through the initializer cache (initCache)
+// and makes each change it must see between constructions, every answer
+// exact against the Go table: a hit with a parameter made 0 and one
+// whose argument the body decides; the constructor's prototype replaced
+// by one with a setter; a setter and a read-only property added to the
+// prototype; the prototype frozen over a property the stores name, and
+// made non-extensible; Object.prototype given a read-only property; the
+// prototype made a dictionary and given a setter; a chain past two
+// prototypes (its cell) given a setter at its top; apply_args on a
+// receiver of the cached layout made non-extensible; a constructor that
+// returns an object; another new.target; classes a factory makes on
+// fresh prototypes; and a forwarder's method over more classes than the
+// cache refills for.
+const nativeInitCacheSrc = `
+var out = [], log = [];
+function run(C, n, a, b) { var o; for (var i = 0; i < n; i++) o = new C(a + i, b); return o }
+function show(o) { return Object.keys(o).join() + ":" + Object.keys(o).map(function (k) { return String(o[k]) }).join() }
+
+function P(a, b) { this.a = a; this.b = b }
+out.push(show(run(P, 50, 1, 2)));
+P.prototype = { set b(v) { log.push("replaced:" + v) } };
+out.push(show(run(P, 3, 10, 20)));
+Object.defineProperty(P.prototype, "a", { set(v) { log.push("added:" + v) }, configurable: true });
+out.push(show(run(P, 3, 30, 40)));
+
+function Q(a, b) { this.a = a; this.b = b }
+run(Q, 50, 1, 2);
+Object.defineProperty(Q.prototype, "b", { value: "ro", writable: false });
+out.push(show(run(Q, 3, 5, 6)));
+
+function F(a, b) { this.a = a; this.b = b }
+F.prototype.a = "proto";
+run(F, 50, 1, 2);
+Object.freeze(F.prototype);
+out.push(show(run(F, 3, 7, 8)));
+
+function N(a, b) { this.a = a; this.b = b }
+run(N, 50, 1, 2);
+Object.preventExtensions(N.prototype);
+out.push(show(run(N, 3, 9, 10)));
+
+function O(a, zz) { this.a = a; this.zz = zz }
+run(O, 50, 1, 2);
+Object.defineProperty(Object.prototype, "zz", { value: "oro", writable: false, configurable: true });
+out.push(show(run(O, 3, 11, 12)));
+delete Object.prototype.zz;
+
+function D(a, b) { this.a = a; this.b = b }
+for (var k = 0; k < 40; k++) D.prototype["k" + k] = k;
+run(D, 50, 1, 2);
+for (var k = 0; k < 40; k++) delete D.prototype["k" + k];
+run(D, 50, 1, 2);
+Object.defineProperty(D.prototype, "b", { set(v) { log.push("dict:" + v) }, configurable: true });
+out.push(show(run(D, 3, 13, 14)));
+
+var top = {};
+function Deep(a, b) { this.a = a; this.b = b }
+Deep.prototype = Object.create(Object.create(Object.create(top)));
+run(Deep, 50, 1, 2);
+Object.defineProperty(top, "a", { set(v) { log.push("deep:" + v) }, configurable: true });
+out.push(show(run(Deep, 3, 15, 16)));
+
+function Z(x, y) { if (!x) x = 0; this.x = x; this.y = y }
+run(Z, 50, 1, 2);
+out.push(show(run(Z, 1, -1, 3)), show(new Z("", 4)), show(new Z(-0, 5)), Object.is(new Z(-0, 5).x, 0), show(new Z(NaN, 6)));
+
+function init(a, b) { this.a = a; this.b = b }
+function via(a, b) { init.apply(this, arguments) }
+for (var i = 0; i < 50; i++) via.call({}, i, i);
+var sealed = Object.preventExtensions({});
+via.call(sealed, 1, 2); out.push(show(sealed), Object.isExtensible(sealed));
+var mixed = { b: 0 };
+for (var i = 0; i < 50; i++) via.call({ b: 0 }, i, i);
+via.call(mixed, 3, 4); out.push(show(mixed));
+
+function R(a) { this.a = a; return { r: a } }
+out.push(show(run(R, 50, 1, 0)));
+
+function T(a, b) { this.a = a; this.b = b }
+function U() {}
+run(T, 50, 1, 2);
+var t = Reflect.construct(T, [17, 18], U);
+out.push(show(t), Object.getPrototypeOf(t) === U.prototype, show(run(T, 1, 19, 20)));
+
+function factory() { return function (a, b) { this.a = a; this.b = b } }
+var made = [];
+for (var k = 0; k < 20; k++) made.push(factory());
+for (var i = 0; i < 3; i++) for (var k = 0; k < made.length; k++) new made[k](i, k);
+Object.defineProperty(made[7].prototype, "b", { set(v) { log.push("fresh:" + v) }, configurable: true });
+out.push(show(new made[7](21, 22)), show(new made[8](23, 24)));
+
+function create() { return function (a, b) { this.initialize.apply(this, arguments) } }
+function initialize(a, b) { this.a = a; this.b = b }
+var cs = [];
+for (var k = 0; k < 24; k++) { var C = create(); C.prototype.initialize = initialize; cs.push(C) }
+var sum = 0;
+for (var i = 0; i < 40; i++) for (var k = 0; k < cs.length; k++) { var c = new cs[k](i, k); sum += c.a + c.b }
+Object.defineProperty(cs[23].prototype, "a", { set(v) { log.push("many:" + v) }, configurable: true });
+out.push(sum, show(new cs[23](25, 26)), show(new cs[0](27, 28)));
+out.push(log.join());
+out.join("|")`
+
+// The initializer cache answers as the Go table does through every change
+// nativeInitCacheSrc makes, marking or not, with the same exits.
+func TestRegNativeInitCache(t *testing.T) {
+	const want = "a,b:50,2|a:12|:|a:7|b:8|a,b:11,10|a:13|a:15|b:16|x,y:-1,3|x,y:0,4|x,y:0,5|true|x,y:0,6|" +
+		":|false|b,a:4,3|r:50|a,b:17,18|true|a,b:19,20|a:21|a,b:23,24|29760|b:26|a,b:27,28|" +
+		"replaced:20,replaced:20,replaced:20,added:30,replaced:40,added:31,replaced:40,added:32,replaced:40," +
+		"dict:14,dict:14,dict:14,deep:15,deep:16,deep:17,fresh:22,many:25"
+	if got := nativeRunSrc(t, nativeInitCacheSrc, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	nativeCheck(t, nativeInitCacheSrc, "")
+}
+
+// initCacheOf is the initializer cache of the global function name.
+func initCacheOf(r *Runtime, name string) *initCache {
+	return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.ctorInit
+}
+
+// The cache's state: none before the constructor has register code; filled
+// once, from the
+// constructor's root to its objects' layout, with each store's slot, by
+// constructions that go on hitting; emptied and refilled when the
+// prototype's layout changes; and, over more layouts than maxCacheFills,
+// no longer refilled. Each with the constructions frameless but the
+// first few.
+func TestRegNativeInitCacheState(t *testing.T) {
+	nativeCounting(t)
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		was := regNativeOn
+		regNativeOn = true
+		r := New(Config{})
+		run := func(src string) string {
+			t.Helper()
+			v, err := r.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !v.IsString() {
+				return ""
+			}
+			return v.String().Go()
+		}
+		run(`function P(a, b, c) { this.a = a; this.b = b; this.a = c }
+function make(C, n) { var s = 0; for (var i = 0; i < n; i++) { var o = new C(i, 1, 2); s += o.a + o.b } return s }`)
+		if c := initCacheOf(r, "P"); c != nil {
+			t.Fatalf("marking %v: a cache before P has register code: %+v", marking, c)
+		}
+		before := atomic.LoadInt64(&nativeCalls)
+		if got := run(`String(make(P, 1000))`); got != "3000" {
+			t.Fatalf("marking %v: got %s", marking, got)
+		}
+		c := initCacheOf(r, "P")
+		if n := atomic.LoadInt64(&nativeCalls) - before; n > 20 {
+			t.Fatalf("marking %v: %d frames", marking, n)
+		}
+		o := run(`var o = new P(1, 2, 3); Object.keys(o).join()`)
+		obj := r.global.getOwn(r.atoms.intern("o")).value().Object()
+		if o != "a,b" || c.fills != 1 || c.to != obj.shape || c.from == nil || c.from.n != 0 || c.slots[0] != 0 || c.slots[1] != 1 || c.slots[2] != 0 {
+			t.Fatalf("marking %v: after constructions: keys %s, %+v", marking, o, c)
+		}
+		run(`P.prototype.x = 1; make(P, 100)`)
+		if c.fills != 2 || c.from == nil {
+			t.Fatalf("marking %v: after the prototype's change: %+v", marking, c)
+		}
+		run(`for (var k = 0; k < 40; k++) { P.prototype["y" + k] = k; make(P, 2) }`)
+		if c.fills != maxCacheFills {
+			t.Fatalf("marking %v: %d fills, want %d", marking, c.fills, maxCacheFills)
+		}
+		if got := run(`String(make(P, 100))`); got != "300" {
+			t.Fatalf("marking %v: past the fills: got %s", marking, got)
+		}
+		r.Close()
+		regNativeOn = was
+	}
+}
+
+// Runtimes on goroutines of their own run one compiled function, whose
+// bytecode they share: each template's closureCode, and so its
+// initializer cache, is its runtime's, filled from its own layouts and
+// prototypes. Run under the race detector in the gates.
+func TestRegNativeInitCacheRuntimes(t *testing.T) {
+	fn := compileForTest(t, `
+function P(a, b) { this.a = a; this.b = b }
+var s = 0;
+for (var i = 0; i < 2000; i++) { var o = new P(i, 1); s += o.a + o.b }
+P.prototype.x = 1;
+for (var i = 0; i < 100; i++) { var o = new P(i, 2); s += o.a + o.b + o.x }
+String(s)`)
+	was := regNativeOn
+	regNativeOn = true
+	defer func() { regNativeOn = was }()
+	var wg sync.WaitGroup
+	errs := make([]string, 4)
+	for g := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := New(Config{})
+			defer r.Close()
+			v, err := r.Run(fn)
+			switch {
+			case err != nil:
+				errs[g] = err.Error()
+			case v.String().Go() != "2006250":
+				errs[g] = v.String().Go()
+			default:
+				c := initCacheOf(r, "P")
+				if c == nil || c.fills != 2 || c.to == nil || c.to.tree != r.shapes {
+					errs[g] = fmt.Sprintf("cache %+v", c)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	for g, e := range errs {
+		if e != "" {
+			t.Errorf("runtime %d: %s", g, e)
 		}
 	}
 }

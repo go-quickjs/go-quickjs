@@ -852,6 +852,12 @@ type closureCode struct {
 	// held weakly (regCallSeen), until regCallsRestored makes the entries
 	// again from it; nil when there is none.
 	regSeen []regCallSeen
+	// ctorInit is, for a template whose register code has an initializer's
+	// plan (regCode's initPlan), the layouts its last validated stores
+	// went from and to (initCache), which the native initializer makes
+	// them by without checking each; nil for any other. Last, so that no
+	// field before it moves.
+	ctorInit *initCache
 }
 
 // closure is a function template paired with the upvalues it captured.

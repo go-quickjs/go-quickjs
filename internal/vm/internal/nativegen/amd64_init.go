@@ -35,36 +35,107 @@ func (g *nativeGen) initEntry() Label {
 // sV1 (relative to cc, as ncCCBase makes it) in the object at sKa, of the
 // arguments at sI, sEnd of them, and goes on at the address in sKind, RAX
 // 1 where it made them and 0 where it made none. It keeps in the scratch
-// the caches (sBase), the plan and its length (sNF, sSaved), the shape and
-// count of values the stores so far leave (sV1, sTop) -- then the last
-// one's shape and the store made -- and the stores whose parameter is made
-// 0 (sRC).
+// the closureCode (sBase), the plan and its length (sNF, sSaved), the
+// shape and count of values the stores so far leave (sV1, sTop) -- then
+// the last one's shape and the store made -- and the stores whose
+// parameter is made 0 (sRC), whose bit 63 says the template's initCache
+// answered for the object (a hit) and bit 62 that the stores refill it.
+//
+// An object of the layout the cache went from, its chain as the cache's
+// additions found it, with room for the layout it went to, is a hit: no
+// store is checked, the parameters made 0 are decided, and each value
+// goes to the slot the cache says. Any other is checked store by store,
+// as set_prop's handler checks each, and refills the cache.
 func (g *nativeGen) initRun() {
 	a := g.a
 	shapeOff := off("Object.shape")
-	loop1, existing, next1, phase2, loop2, zero, have, own, slot, ok, made, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(),
-		a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	L := a.NewLabel
+	loop1, existing, next1, cold, idxok, p1ok, hit, hitLoop, hitNext := L(), L(), L(), L(), L(), L(), L(), L(), L()
+	phase2, p2start, loop2, zero, have, own, cached, slot, nofit := L(), L(), L(), L(), L(), L(), L(), L(), L()
+	ok, made, done, miss := L(), L(), L(), L()
+	ic := func(f string) int32 { return off("initCache." + f) }
 	a.Bind(g.initL)
 	a.Load(R9, RDI, scr(sV1))
-	a.Load(RAX, R9, offCCIC)
-	a.Store(RDI, scr(sBase), RAX)
-	a.Load(R9, R9, offCCReg)
-	a.Load(RDX, R9, offRCInitPlan)
+	a.Store(RDI, scr(sBase), R9)
+	a.Load(RAX, R9, offCCReg)
+	a.Load(RDX, RAX, offRCInitPlan)
 	a.Store(RDI, scr(sNF), RDX)
-	a.Load(RCX, R9, offRCInitPlan+8)
+	a.Load(RCX, RAX, offRCInitPlan+8)
 	a.Store(RDI, scr(sSaved), RCX)
 	a.Load(RSI, RDI, scr(sKa))
 	a.Load(R8, RSI, shapeOff)
 	a.Op(Test, R8, R8, true)
 	a.Jcc(CondE, miss)
-	a.Store(RDI, scr(sV1), R8)
-	a.LoadU32(R9, RSI, off("Object.valn"))
-	a.Store(RDI, scr(sTop), R9)
 	a.StoreImm(RDI, scr(sRC), 0)
+
+	// The template's cache: R9 it, R8 the object's layout, RSI the object,
+	// RDX the plan.
+	a.Load(R9, R9, offCCInit)
+	a.Op(Test, R9, R9, true)
+	a.Jcc(CondE, cold)
+	a.CmpMem(R8, R9, ic("from"), true)
+	a.Jcc(CondNE, cold)
+	a.Load(RCX, R9, ic("to"))
+	a.CmpMem(RCX, RSI, shapeOff, true)
+	a.Jcc(CondE, hit)
+	// Additions: room for the values of to, its index past the linear
+	// scan's keys, the object extensible with its prototype in its layout,
+	// and the chain as the additions' caches checked it (initAdds).
+	a.LoadU32(RAX, RCX, off("shape.n"))
+	a.CmpMem(RAX, RSI, off("Object.valc"), false)
+	a.Jcc(CondA, cold)
+	a.OpImm(Cmp, RAX, linearScanLimit, false)
+	a.Jcc(CondBE, idxok)
+	a.CmpMemImm8(RCX, off("shape.index"), 0)
+	a.Jcc(CondE, cold)
+	a.Bind(idxok)
+	a.LoadU16(RAX, RSI, offObjFlags)
+	a.OpImm(And, RAX, int32(objExtensible|objPolyProto), false)
+	a.OpImm(Cmp, RAX, int32(objExtensible), false)
+	a.Jcc(CondNE, cold)
+	a.Load(RCX, R9, ic("p1"))
+	a.Op(Test, RCX, RCX, true)
+	a.Jcc(CondE, p1ok)
+	a.Load(RAX, RCX, shapeOff)
+	a.CmpMem(RAX, R9, ic("s1"), true)
+	a.Jcc(CondE, p1ok)
+	a.Load(RCX, R9, ic("cell"))
+	a.Op(Test, RCX, RCX, true)
+	a.Jcc(CondE, cold)
+	a.LoadU8(RAX, RCX, offCellValid)
+	a.Op(Test, RAX, RAX, false)
+	a.Jcc(CondE, cold)
+	a.Bind(p1ok)
+	a.Load(RCX, R9, ic("p2"))
+	a.Op(Test, RCX, RCX, true)
+	a.Jcc(CondE, hit)
+	a.Load(RAX, RCX, shapeOff)
+	a.CmpMem(RAX, R9, ic("s2"), true)
+	a.Jcc(CondNE, cold)
+	// A hit: the layout the stores leave is to; only the parameters made
+	// 0 are decided.
+	a.Bind(hit)
+	a.Load(RCX, R9, ic("to"))
+	a.Store(RDI, scr(sV1), RCX)
+	a.MovImm(RAX, 1<<63)
+	a.Store(RDI, scr(sRC), RAX)
 	a.Op(Xor, RAX, RAX, false)
+	a.Bind(hitLoop)
+	a.CmpMem(RAX, RDI, scr(sSaved), true)
+	a.Jcc(CondAE, phase2)
+	g.initZero(hitNext, miss)
+	a.Bind(hitNext)
+	a.OpImm(Add, RAX, 1, true)
+	a.Jmp(hitLoop)
 
 	// Each store checked: RSI the object, RDX the plan, RAX the store's
 	// index.
+	a.Bind(cold)
+	a.Load(R8, RSI, shapeOff)
+	a.Store(RDI, scr(sV1), R8)
+	a.LoadU32(R9, RSI, off("Object.valn"))
+	a.Store(RDI, scr(sTop), R9)
+	a.Op(Xor, RAX, RAX, false)
 	a.Bind(loop1)
 	a.CmpMem(RAX, RDI, scr(sSaved), true)
 	a.Jcc(CondAE, phase2)
@@ -74,43 +145,69 @@ func (g *nativeGen) initRun() {
 	a.Jcc(CondE, existing)
 	g.initAdds(miss)
 	a.Bind(existing)
-	// A parameter made 0 where falsy: decided now.
-	a.LeaIdx(RCX, RDX, RAX, 4, 0)
-	a.LoadU32(R9, RCX, 0)
-	a.TestMem8(RCX, 0, 1)
-	a.Jcc(CondE, next1)
-	g.initArg()
-	g.initFalsy(next1, miss)
-	a.MovRR(RCX, RAX)
-	a.MovImm(R9, 1)
-	a.ShiftCL(Shl, R9, true)
-	a.Load(R8, RDI, scr(sRC))
-	a.Op(Or, R8, R9, true)
-	a.Store(RDI, scr(sRC), R8)
+	g.initZero(next1, miss)
 	a.Bind(next1)
 	a.OpImm(Add, RAX, 1, true)
 	a.Jmp(loop1)
 
-	// Each store made, its index at sTop, at its slot: an own property's
-	// idx, an addition's the last of its transition's layout -- the values
-	// past valn in the room phase one found. sV1 keeps the layout the
-	// stores leave, given the object once they are all made.
+	// Checked store by store, the cache is refilled where it may be: its
+	// from emptied first, then each slot recorded as it is written.
 	a.Bind(phase2)
+	a.Load(R8, RDI, scr(sRC))
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondS, p2start)
+	a.Load(R9, RDI, scr(sBase))
+	a.Load(R9, R9, offCCInit)
+	a.Op(Test, R9, R9, true)
+	a.Jcc(CondE, p2start)
+	a.LoadU8(RAX, R9, ic("fills"))
+	a.OpImm(Cmp, RAX, maxCacheFills, false)
+	a.Jcc(CondAE, p2start)
+	a.Lea(RAX, R9, ic("from"))
+	a.Op(Xor, RCX, RCX, false)
+	g.ptrStore()
+	a.Load(R8, RDI, scr(sRC))
+	a.MovImm(R9, 1<<62)
+	a.Op(Or, R8, R9, true)
+	a.Store(RDI, scr(sRC), R8)
+
+	// Each store made, its index at sTop, at its slot: the cache's on a
+	// hit; else an own property's idx, an addition's the last of its
+	// transition's layout -- the values past valn in the room the checks
+	// found. sV1 keeps the layout the stores leave, given the object once
+	// they are all made.
+	a.Bind(p2start)
 	a.StoreImm(RDI, scr(sTop), 0)
 	a.Bind(loop2)
 	a.Load(RAX, RDI, scr(sTop))
 	a.CmpMem(RAX, RDI, scr(sSaved), true)
 	a.Jcc(CondAE, ok)
 	a.Load(RDX, RDI, scr(sNF))
+	a.Load(R8, RDI, scr(sRC))
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondS, cached)
 	g.initSite()
 	a.Load(R8, RCX, off("propCache.next"))
 	a.Op(Test, R8, R8, true)
 	a.Jcc(CondE, own)
 	a.LoadU32(RSI, R8, off("shape.n"))
 	a.OpImm(Sub, RSI, 1, true)
-	a.Jmp(slot)
+	g.initRecord(slot, nofit)
 	a.Bind(own)
 	a.LoadS32(RSI, RCX, off("propCache.idx"))
+	g.initRecord(slot, nofit)
+	a.Bind(nofit)
+	// A slot past 16 bits: no refill.
+	a.Load(R8, RDI, scr(sRC))
+	a.MovImm(R9, ^uint64(1<<62))
+	a.Op(And, R8, R9, true)
+	a.Store(RDI, scr(sRC), R8)
+	a.Jmp(slot)
+	a.Bind(cached)
+	a.Load(R9, RDI, scr(sBase))
+	a.Load(R9, R9, offCCInit)
+	a.LeaIdx(R9, R9, RAX, 2, ic("slots"))
+	a.LoadU16(RSI, R9, 0)
 	a.Bind(slot)
 	a.ShiftImm(Shl, RSI, 4, true)
 	a.Load(R8, RDI, scr(sKa))
@@ -145,6 +242,12 @@ func (g *nativeGen) initRun() {
 	a.Lea(RAX, RSI, shapeOff)
 	g.ptrStore()
 	a.Bind(made)
+	a.Load(R8, RDI, scr(sRC))
+	a.MovImm(R9, 62)
+	a.Bt(R8, R9)
+	a.Jcc(CondAE, done)
+	g.initFill(done)
+	a.Bind(done)
 	a.MovImm(RAX, 1)
 	a.JmpMem(RDI, scr(sKind))
 	a.Bind(miss)
@@ -152,8 +255,126 @@ func (g *nativeGen) initRun() {
 	a.JmpMem(RDI, scr(sKind))
 }
 
+// initZero decides the parameter of the store at index RAX of the plan at
+// RDX where the plan makes it 0 when falsy, marking the store at sRC, and
+// goes on at next; at miss where the body decides. RCX, R8 and R9 are its
+// scratch.
+func (g *nativeGen) initZero(next, miss Label) {
+	a := g.a
+	a.LeaIdx(RCX, RDX, RAX, 4, 0)
+	a.LoadU32(R9, RCX, 0)
+	a.TestMem8(RCX, 0, 1)
+	a.Jcc(CondE, next)
+	g.initArg()
+	g.initFalsy(next, miss)
+	a.MovRR(RCX, RAX)
+	a.MovImm(R9, 1)
+	a.ShiftCL(Shl, R9, true)
+	a.Load(R8, RDI, scr(sRC))
+	a.Op(Or, R8, R9, true)
+	a.Store(RDI, scr(sRC), R8)
+}
+
+// initRecord, with the slot of the store at index RAX in RSI, records it
+// as the cache's where the stores refill it, and goes on at slot; at
+// nofit where it is past 16 bits. R8 and R9 are its scratch.
+func (g *nativeGen) initRecord(slot, nofit Label) {
+	a := g.a
+	a.Load(R8, RDI, scr(sRC))
+	a.MovImm(R9, 62)
+	a.Bt(R8, R9)
+	a.Jcc(CondAE, slot)
+	a.OpImm(Cmp, RSI, 0xFFFF, true)
+	a.Jcc(CondA, nofit)
+	a.Load(R9, RDI, scr(sBase))
+	a.Load(R9, R9, offCCInit)
+	a.LeaIdx(R9, R9, RAX, 2, off("initCache.slots"))
+	a.Store16(R9, 0, RSI)
+	a.Jmp(slot)
+}
+
+// initFill ends the cache's refill, the stores made and their slots
+// recorded: where every addition's cache checked the chain alike, the
+// chain they checked, the layout the stores leave (to), the count of
+// fills, and the layout they went from last, which the first store's
+// cache names; each pointer through ptrStore. Anything else leaves the
+// cache empty. It goes on at done.
+func (g *nativeGen) initFill(done Label) {
+	a := g.a
+	L := a.NewLabel
+	loop, next, first, put, own := L(), L(), L(), L(), L()
+	pc := func(f string) int32 { return off("propCache." + f) }
+	ic := func(f string) int32 { return off("initCache." + f) }
+	chain := []string{"p1", "s1", "p2", "s2", "cell"}
+	// sV1 the first addition's cache, sTop the store.
+	a.StoreImm(RDI, scr(sV1), 0)
+	a.StoreImm(RDI, scr(sTop), 0)
+	a.Bind(loop)
+	a.Load(RAX, RDI, scr(sTop))
+	a.CmpMem(RAX, RDI, scr(sSaved), true)
+	a.Jcc(CondAE, put)
+	a.Load(RDX, RDI, scr(sNF))
+	g.initSite()
+	a.CmpMemImm8(RCX, pc("next"), 0)
+	a.Jcc(CondE, next)
+	a.Load(R8, RDI, scr(sV1))
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, first)
+	for _, f := range chain {
+		a.Load(R9, RCX, pc(f))
+		a.CmpMem(R9, R8, pc(f), true)
+		a.Jcc(CondNE, done)
+	}
+	a.Jmp(next)
+	a.Bind(first)
+	a.Store(RDI, scr(sV1), RCX)
+	a.Bind(next)
+	a.IncMem(RDI, scr(sTop))
+	a.Jmp(loop)
+	a.Bind(put)
+	// The layout they went from, at sTop: the first store's cache's,
+	// own or added to.
+	a.Op(Xor, RAX, RAX, false)
+	a.Load(RDX, RDI, scr(sNF))
+	g.initSite()
+	a.Load(R8, RCX, pc("ownShape"))
+	a.CmpMemImm8(RCX, pc("next"), 0)
+	a.Jcc(CondE, own)
+	a.Load(R8, RCX, pc("shape"))
+	a.Bind(own)
+	a.Store(RDI, scr(sTop), R8)
+	cache := func() {
+		a.Load(R9, RDI, scr(sBase))
+		a.Load(R9, R9, offCCInit)
+	}
+	cache()
+	a.Lea(RAX, R9, ic("to"))
+	a.Load(RSI, RDI, scr(sKa))
+	a.Load(RCX, RSI, off("Object.shape"))
+	g.ptrStore()
+	for _, f := range chain {
+		skip := L()
+		cache()
+		a.Lea(RAX, R9, ic(f))
+		a.Op(Xor, RCX, RCX, false)
+		a.Load(R8, RDI, scr(sV1))
+		a.Op(Test, R8, R8, true)
+		a.Jcc(CondE, skip)
+		a.Load(RCX, R8, pc(f))
+		a.Bind(skip)
+		g.ptrStore()
+	}
+	cache()
+	a.LoadU8(RAX, R9, ic("fills"))
+	a.OpImm(Add, RAX, 1, false)
+	a.Store8(R9, ic("fills"), RAX)
+	a.Lea(RAX, R9, ic("from"))
+	a.Load(RCX, RDI, scr(sTop))
+	g.ptrStore()
+}
+
 // initSite puts in RCX the cache of the store at index RAX of the plan at
-// RDX. R8 is its scratch.
+// RDX, of the closureCode at sBase. R8 is its scratch.
 func (g *nativeGen) initSite() {
 	a := g.a
 	a.LeaIdx(RCX, RDX, RAX, 4, 0)
@@ -161,7 +382,8 @@ func (g *nativeGen) initSite() {
 	a.ShiftImm(Shr, RCX, 16, false)
 	a.MovImm(R8, uint64(size("propCache")))
 	a.Imul(RCX, R8)
-	a.AddMem(RCX, RDI, scr(sBase))
+	a.Load(R8, RDI, scr(sBase))
+	a.AddMem(RCX, R8, offCCIC)
 }
 
 // initAdds checks the addition the cache at RCX makes to the object at

@@ -959,6 +959,31 @@ no interrupt due, and the frames the bodies would have had within the
 limit, so that past it they throw the frames' RangeError. The Go table
 runs these bodies in their frames, as it runs any other.
 
+The native initializer keeps, on the template's `closureCode`, what the
+last plan it checked in full proved (`initCache`), as V8 keeps a
+constructor's initial map and the map its stores lead to: the layout the
+object had before the stores and the one they left, each store's slot, and
+the prototype chain as the additions' caches checked it -- the first two
+prototypes and their layouts, or the chain's validity cell. The layouts
+are remembered ones, never changed in place, so an object of the first
+layout whose chain is as it was takes the same stores to the same slots:
+`initRun` then checks the layout, the room for the second, the object's
+extensibility and the chain once, decides the parameters made 0, and
+writes each value at its slot and the final layout, with no check of each
+store. Anything else is checked store by store as before and refills the
+entry -- emptied first, its slots recorded as the values are written, its
+pointers written through the write barrier's routine while the collector
+marks, and the first layout last -- where every addition's cache checked
+the same chain; past `maxCacheFills` fills, as a site's cache gives up, it
+is not refilled. A prototype replaced roots the objects elsewhere, and a
+prototype's layout changed -- a property added or made an accessor,
+frozen, sealed, given another prototype, made a dictionary -- fails the
+chain's check, so the entry needs no invalidation of its own. It is one
+runtime's, as the template's caches are, and holds what they hold. One
+entry serves a constructor wherever it is constructed, since its objects
+start from one root; a site's call cache, which the call handlers index by
+its size, does not grow for it.
+
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While
 the stack is shallower than `tailCallDepth` they are ordinary calls. Deeper,

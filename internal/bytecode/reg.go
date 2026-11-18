@@ -1007,6 +1007,11 @@ type RegCode struct {
 	Asm []AsmUp
 }
 
+// MaxStores is the most stores a plan of RegCode.Stores has, and the most
+// arguments a ForwardPlan's call hands on: what the native initializer's
+// cache of a plan's slots holds (package vm's initCache).
+const MaxStores = 8
+
 // ThisStore is a store of RegCode.Stores: this's property at the cache
 // site Site is given parameter Param, or 0 where Zero says so and the
 // parameter is falsy.

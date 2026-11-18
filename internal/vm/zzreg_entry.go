@@ -54,6 +54,10 @@ func errNoRegCode(fn *bytecode.Function) error {
 // closure is first given its register code (cl.reg), which every entry
 // into the code reads but those a plan makes (regBindPlan).
 func (r *Runtime) regExtend(cl *closure, c *regCode) {
+	if c.initPlan != nil && cl.ctorInit == nil {
+		// The native initializer's cache, which it fills.
+		cl.ctorInit = new(initCache)
+	}
 	rc := c.rc
 	if rc.Names == nil {
 		return

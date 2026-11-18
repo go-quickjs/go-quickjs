@@ -199,8 +199,9 @@ func pureSafe(w bytecode.RInstr) bool {
 	return false
 }
 
-// maxStores is the most stores a plan of RegCode.Stores has.
-const maxStores = 8
+// maxStores is the most stores a plan of RegCode.Stores has
+// (bytecode.MaxStores).
+const maxStores = bytecode.MaxStores
 
 // plansOf sets rc's Stores, where fn's body is an initializer's, and its
 // Forward, where it hands its parameters on to a method of its this by
