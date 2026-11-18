@@ -113,6 +113,7 @@ func (c *regCompiler) callBy(x uint8, tail bool, sig *module.FuncType, s regSite
 	c.out.sites = append(c.out.sites, s)
 	c.emitBC(rExt, x, 0, uint32(si))
 	if tail {
+		c.tails = true
 		c.markDead()
 		return
 	}

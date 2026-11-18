@@ -16,21 +16,28 @@ import (
 
 // nativeCtx is what native code reads beyond its pinned registers, a
 // frame's own (frame.nctx): internal/regdef gives each field's offset,
-// which TestNativeLayout checks.
+// which TestNativeLayout checks. Its fields are plain words, which native
+// code writes as it calls a function without a write barrier: what each
+// addresses is kept by the exec, the frame, the instance or the Code
+// besides, and no Go object moves.
 type nativeCtx struct {
-	l         unsafe.Pointer
-	code      unsafe.Pointer
-	table     uintptr
-	pc        uintptr
-	f         *frame
-	goTable   uintptr
-	slowTable uintptr
-	callH     uintptr
-	after     uintptr
-	mem0      unsafe.Pointer
-	globals   unsafe.Pointer
-	tables    unsafe.Pointer
-	exits     unsafe.Pointer
+	l, code, table, pc, f            uintptr
+	goTable, slowTable, callH, after uintptr
+	mem0, globals, tables, exits     uintptr
+	// r is the frame's reference slots; x the exec; inst the instance;
+	// funcs, fns and sites the first of the instance's functions, the
+	// Code's records and the code's sites; calls says native code may
+	// call a function itself (nativeCall); maxDepth is MaxCallDepth;
+	// storeRef the barrier routine and wb the collector's marking flag's
+	// address (nativeStoreRef).
+	r, x, inst, funcs, fns, sites uintptr
+	calls, maxDepth, storeRef, wb uintptr
+	// caller is the context of the frame that called this one natively,
+	// or 0; retAddr its call's address, site its site, nc and nsp the
+	// exec's chunk and slot to give back as it returns; fn, cd and rc are
+	// the call's scratch.
+	caller, retAddr, site, nc, nsp uintptr
+	fn, cd, rc                     uintptr
 }
 
 // regNativeOn runs register code by the native handlers where they are
@@ -64,22 +71,57 @@ func regRun(f *frame, rc *regCode, pc int32) {
 // nativeSet makes frame f's context for running rc from pc.
 func nativeSet(f *frame, rc *regCode, pc int32) *nativeCtx {
 	c := &f.nctx
-	c.l = unsafe.Pointer(&f.l[0])
-	c.code = unsafe.Pointer(&rc.code[0])
+	inst := f.inst
+	c.l = uintptr(unsafe.Pointer(&f.l[0]))
+	c.code = uintptr(unsafe.Pointer(&rc.code[0]))
 	c.pc = uintptr(pc)
-	c.f = f
-	c.mem0 = nil
-	if m := f.inst.mem0; m != nil && !m.Shared {
-		c.mem0 = unsafe.Pointer(m)
+	c.f = uintptr(unsafe.Pointer(f))
+	c.mem0 = 0
+	if m := inst.mem0; m != nil && !m.Shared {
+		c.mem0 = uintptr(unsafe.Pointer(m))
 	}
-	c.globals = nil
-	if len(f.inst.Globals) > 0 {
-		c.globals = unsafe.Pointer(&f.inst.Globals[0])
+	c.globals = sliceAddr(inst.Globals)
+	c.tables = sliceAddr(rc.tables)
+	c.exits = uintptr(unsafe.Pointer(nativeExitCounts))
+	c.r = sliceAddr(f.r)
+	c.x = uintptr(unsafe.Pointer(f.x))
+	c.inst = uintptr(unsafe.Pointer(inst))
+	c.funcs = sliceAddr(inst.Funcs)
+	c.fns = sliceAddr(inst.Code.fns)
+	c.sites = sliceAddr(rc.sites)
+	c.calls = 0
+	if nativeCall(inst.Code) {
+		c.calls = 1
 	}
-	c.tables = nil
-	if len(rc.tables) > 0 {
-		c.tables = unsafe.Pointer(&rc.tables[0])
-	}
-	c.exits = unsafe.Pointer(nativeExitCounts)
+	c.maxDepth = uintptr(MaxCallDepth)
+	c.caller = 0
 	return c
 }
+
+// sliceAddr is the address of s's first element, or 0.
+func sliceAddr[T any](s []T) uintptr {
+	if len(s) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&s[0]))
+}
+
+// nativeMarkFlag, set by a test, is the flag the contexts made after it
+// read for the collector's, so that native code stores as it does while
+// the collector marks.
+var nativeMarkFlag *uint8
+
+// nativeStoreRefGo is the barrier routine's store (nativeStoreRef): a
+// pointer stored with Go's write barrier.
+func nativeStoreRefGo(p *unsafe.Pointer, v unsafe.Pointer) {
+	nativeStoreRefs++
+	*p = v
+}
+
+// nativeStoreRefs counts the barrier routine's stores, for the tests.
+var nativeStoreRefs int64
+
+// nativeCall reports whether native code may call code's functions itself:
+// not where the JIT runs code, whose calls Go's run makes, entering native
+// code where a callee has it.
+func nativeCall(code *Code) bool { return code.jit.Load() == nil }

@@ -30,6 +30,45 @@ TEXT ·wasmNativeCallH(SB), NOSPLIT|NOFRAME, $0-0
 	ADJSP $-40
 	JMP nativeCtx_after(DI)
 
+// wasmNativeStoreRef stores the pointer in R9 at the address in R8 with
+// Go's write barrier, for native code, which jumps here while the collector
+// marks with its return address in AX: every general register but AX, R8
+// and R9 is as it was. As wasmNativeCallH's, its frame is one the function
+// that entered the code called.
+TEXT ·wasmNativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
+	ADJSP $112
+	NO_LOCAL_POINTERS
+	MOVQ R8, 0(SP)
+	MOVQ R9, 8(SP)
+	MOVQ AX, 16(SP)
+	MOVQ BX, 24(SP)
+	MOVQ CX, 32(SP)
+	MOVQ DX, 40(SP)
+	MOVQ SI, 48(SP)
+	MOVQ DI, 56(SP)
+	MOVQ R10, 64(SP)
+	MOVQ R11, 72(SP)
+	MOVQ R12, 80(SP)
+	MOVQ R13, 88(SP)
+	CALL ·nativeStoreRefGo(SB)
+	MOVQ 16(SP), AX
+	MOVQ 24(SP), BX
+	MOVQ 32(SP), CX
+	MOVQ 40(SP), DX
+	MOVQ 48(SP), SI
+	MOVQ 56(SP), DI
+	MOVQ 64(SP), R10
+	MOVQ 72(SP), R11
+	MOVQ 80(SP), R12
+	MOVQ 88(SP), R13
+	ADJSP $-112
+	JMP AX
+
+TEXT ·wasmNativeStoreRefAddr(SB), NOSPLIT, $0-8
+	LEAQ ·wasmNativeStoreRef(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
 TEXT ·wasmNativeCallHAddr(SB), NOSPLIT, $0-8
 	LEAQ ·wasmNativeCallH(SB), AX
 	MOVQ AX, ret+0(FP)

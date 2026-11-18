@@ -130,8 +130,10 @@ type regCompiler struct {
 	// legacy try constructs, as the tree's compiler counts them.
 	refs  bool
 	tries int
-	// retFixes are the catch clauses that land at the function's label.
+	// retFixes are the catch clauses that land at the function's label;
+	// tails says the body makes a tail call.
 	retFixes []rfix
+	tails    bool
 	// at is the offset of the instruction being compiled; last the pc of
 	// the last instruction emitted, -1 before the first or after a label;
 	// farPCs the pcs of the instructions behind a far prefix, which are not
@@ -209,6 +211,7 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 	p.caught = c.rlocals + c.maxHeight + 1
 	p.built = true
 	out := c.out
+	out.callee = len(out.regions) == 0 && !c.tails && !p.refs
 	p.reg = &out
 	p.params, _, _ = layout(sig.Params)
 	p.results, _, _ = layout(sig.Results)
@@ -1067,6 +1070,7 @@ func (c *regCompiler) call(idx uint32, tail bool) {
 	si := len(c.out.sites)
 	c.out.sites = append(c.out.sites, s)
 	if tail {
+		c.tails = true
 		c.emitBC(rReturnCall, 0, 0, uint32(si))
 		c.markDead()
 		return

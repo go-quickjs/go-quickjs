@@ -51,6 +51,13 @@ func TestNativeLayout(t *testing.T) {
 	var f frame
 	var m Memory
 	var g Global
+	var x exec
+	var cs callSite
+	var fn Function
+	var cd compiled
+	var rc regCode
+	var st regSite
+	var mv regMove
 	for _, x := range []struct {
 		what      string
 		got, want uintptr
@@ -69,6 +76,57 @@ func TestNativeLayout(t *testing.T) {
 		{"tables", unsafe.Offsetof(c.tables), regdef.CtxTables},
 		{"exits", unsafe.Offsetof(c.exits), regdef.CtxExits},
 		{"the context's size", unsafe.Sizeof(c), regdef.CtxSize},
+		{"r", unsafe.Offsetof(c.r), regdef.CtxR},
+		{"x", unsafe.Offsetof(c.x), regdef.CtxX},
+		{"inst", unsafe.Offsetof(c.inst), regdef.CtxInst},
+		{"funcs", unsafe.Offsetof(c.funcs), regdef.CtxFuncs},
+		{"fns", unsafe.Offsetof(c.fns), regdef.CtxFns},
+		{"sites", unsafe.Offsetof(c.sites), regdef.CtxSites},
+		{"calls", unsafe.Offsetof(c.calls), regdef.CtxCalls},
+		{"maxDepth", unsafe.Offsetof(c.maxDepth), regdef.CtxMaxDepth},
+		{"storeRef", unsafe.Offsetof(c.storeRef), regdef.CtxStoreRef},
+		{"wb", unsafe.Offsetof(c.wb), regdef.CtxWB},
+		{"caller", unsafe.Offsetof(c.caller), regdef.CtxCaller},
+		{"retAddr", unsafe.Offsetof(c.retAddr), regdef.CtxRetAddr},
+		{"site", unsafe.Offsetof(c.site), regdef.CtxSite},
+		{"nc", unsafe.Offsetof(c.nc), regdef.CtxNc},
+		{"nsp", unsafe.Offsetof(c.nsp), regdef.CtxNsp},
+		{"fn", unsafe.Offsetof(c.fn), regdef.CtxFn},
+		{"cd", unsafe.Offsetof(c.cd), regdef.CtxCd},
+		{"rc", unsafe.Offsetof(c.rc), regdef.CtxRc},
+		{"frame.l", unsafe.Offsetof(f.l), regdef.FrameL},
+		{"frame.inst", unsafe.Offsetof(f.inst), regdef.FrameInst},
+		{"frame.osr", unsafe.Offsetof(f.osr), regdef.FrameOsr},
+		{"frame.rc", unsafe.Offsetof(f.rc), regdef.FrameRc},
+		{"frame.tickSet", unsafe.Offsetof(f.tickSet), regdef.FrameTickSet},
+		{"frame.sig", unsafe.Offsetof(f.sig), regdef.FrameSig},
+		{"frame.nctx", unsafe.Offsetof(f.nctx), regdef.FrameNctx},
+		{"exec.nchunks", unsafe.Offsetof(x.nchunks), regdef.XNchunks},
+		{"exec.nc", unsafe.Offsetof(x.nc), regdef.XNc},
+		{"exec.nsp", unsafe.Offsetof(x.nsp), regdef.XNsp},
+		{"exec.depth", unsafe.Offsetof(x.depth), regdef.XDepth},
+		{"exec.calls", unsafe.Offsetof(x.calls), regdef.XCalls},
+		{"exec.poll", unsafe.Offsetof(x.poll), regdef.XPoll},
+		{"exec.frames", unsafe.Offsetof(x.frames), regdef.XFrames},
+		{"callSite.offset", unsafe.Offsetof(cs.offset), regdef.CallSiteOffset},
+		{"a callSite", unsafe.Sizeof(cs), regdef.CallSiteSize},
+		{"Function.Inst", unsafe.Offsetof(fn.Inst), regdef.FnInst},
+		{"Function.Index", unsafe.Offsetof(fn.Index), regdef.FnIndex},
+		{"compiled.nslots", unsafe.Offsetof(cd.nslots), regdef.CdNslots},
+		{"compiled.reg", unsafe.Offsetof(cd.reg), regdef.CdReg},
+		{"regCode.code", unsafe.Offsetof(rc.code), regdef.RcCode},
+		{"regCode.sites", unsafe.Offsetof(rc.sites), regdef.RcSites},
+		{"regCode.tables", unsafe.Offsetof(rc.tables), regdef.RcTables},
+		{"regCode.callee", unsafe.Offsetof(rc.callee), regdef.RcCallee},
+		{"regSite.fn", unsafe.Offsetof(st.fn), regdef.SiteFn},
+		{"regSite.at", unsafe.Offsetof(st.at), regdef.SiteAt},
+		{"regSite.args", unsafe.Offsetof(st.args), regdef.SiteArgs},
+		{"regSite.rets", unsafe.Offsetof(st.rets), regdef.SiteRets},
+		{"a regSite", unsafe.Sizeof(st), regdef.SiteSize},
+		{"regMove.from", unsafe.Offsetof(mv.from), regdef.MoveFrom},
+		{"regMove.to", unsafe.Offsetof(mv.to), regdef.MoveTo},
+		{"regMove.k", unsafe.Offsetof(mv.k), regdef.MoveK},
+		{"a regMove", unsafe.Sizeof(mv), regdef.MoveSize},
 		{"frame.tick", unsafe.Offsetof(f.tick), regdef.FrameTick},
 		{"Memory.buf", unsafe.Offsetof(m.buf), regdef.MemoryBuf},
 		{"Global.Num", unsafe.Offsetof(g.Num), regdef.GlobalNum},
@@ -101,7 +159,7 @@ func TestNativeGenerated(t *testing.T) {
 // it says which part differs.
 func TestNativeCallHConvention(t *testing.T) {
 	nativeOnly(t)
-	op := rCall
+	op := rExt
 	orig := regTable[op]
 	defer func() { regTable[op] = orig }()
 	want := goid()
@@ -155,9 +213,11 @@ func TestNativeCallHConvention(t *testing.T) {
 	}
 	withNative(true, func() {
 		inst := instantiateMode(t, regKernels, true)
-		got, err := call(t, inst, "fib", 15)
-		if err != nil || got[0].N != 610 {
-			t.Fatalf("fib(15) = %v, %v", got, err)
+		for i := uint64(0); i < 120; i++ {
+			got, err := call(t, inst, "pop", i)
+			if err != nil || got[0].N != uint64(bitsOnes(i)) {
+				t.Fatalf("pop(%d) = %v, %v", i, got, err)
+			}
 		}
 	})
 	if calls == 0 {
@@ -166,6 +226,14 @@ func TestNativeCallHConvention(t *testing.T) {
 	if len(bad) > 0 {
 		t.Fatalf("%d calls; %s", calls, strings.Join(bad[:min(len(bad), 5)], "; "))
 	}
+}
+
+func bitsOnes(x uint64) int {
+	n := 0
+	for ; x != 0; x &= x - 1 {
+		n++
+	}
+	return n
 }
 
 // goid returns the goroutine's header line, its id.
@@ -461,7 +529,7 @@ func TestNativeOff(t *testing.T) {
 	var exits int64
 	withNative(false, func() {
 		exits = countNativeExits(func() {
-			if _, err := call(t, inst, "fib", 12); err != nil {
+			if _, err := call(t, inst, "pop", 12); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -471,13 +539,13 @@ func TestNativeOff(t *testing.T) {
 	}
 	withNative(true, func() {
 		exits = countNativeExits(func() {
-			if _, err := call(t, inst, "fib", 12); err != nil {
+			if _, err := call(t, inst, "pop", 12); err != nil {
 				t.Fatal(err)
 			}
 		})
 	})
 	if exits == 0 {
-		t.Fatal("no native exits for fib's calls with the native handlers on")
+		t.Fatal("no native exit for popcnt's escape with the native handlers on")
 	}
 }
 
@@ -488,24 +556,162 @@ func nativeHandles(op regOp) bool {
 	return t[op] != t[rInvalid]
 }
 
-// TestNativeStoresNoReference checks the rule the native handlers keep for
-// the collector: no operation that writes a reference slot, a reference
-// global or anything else a reference may be stored in has a native
-// handler, so that native code stores no pointer and does the same work
-// whether the collector marks or not; every such operation leaves to its
-// Go handler, whose stores have Go's write barrier.
-func TestNativeStoresNoReference(t *testing.T) {
+// matchNative runs calls on the module of src natively, with the
+// collector's marking flag read as set and as clear, and on the Go table,
+// and fails where a result, an error or a trap's frames differ. It
+// returns the barrier routine's stores natively with the flag set and
+// clear.
+func matchNative(t *testing.T, src string, calls []regCall) (marked, unmarked int64) {
+	t.Helper()
+	var flag uint8
+	nativeMarkFlag = &flag
+	defer func() { nativeMarkFlag = nil }()
+	insts := [3]*Instance{instantiateMode(t, src, true), instantiateMode(t, src, true), instantiateMode(t, src, true)}
+	for _, c := range calls {
+		var res [3][]Val
+		var errs [3]error
+		for k, inst := range insts {
+			ext, ok := inst.Export(c.name)
+			if !ok {
+				t.Fatalf("no export %q", c.name)
+			}
+			flag = uint8(k & 1)
+			before := nativeStoreRefs
+			withNative(k < 2, func() { res[k], errs[k] = Invoke(context.Background(), ext.Func, c.args) })
+			switch k {
+			case 0:
+				unmarked += nativeStoreRefs - before
+			case 1:
+				marked += nativeStoreRefs - before
+			}
+		}
+		for k := 0; k < 2; k++ {
+			got, gerr := res[k], errs[k]
+			want, werr := res[2], errs[2]
+			if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
+				t.Errorf("%s%v (marking %v): native %v, the Go table's %v", c.name, c.args, k == 1, gerr, werr)
+				continue
+			}
+			var gt, wt *Trap
+			if errors.As(gerr, &gt) && errors.As(werr, &wt) {
+				if len(gt.Frames) != len(wt.Frames) {
+					t.Errorf("%s%v: native trap of %d frames, the Go table's %d", c.name, c.args, len(gt.Frames), len(wt.Frames))
+				} else {
+					for i := range gt.Frames {
+						if gt.Frames[i].Func != wt.Frames[i].Func || gt.Frames[i].Offset != wt.Frames[i].Offset {
+							t.Errorf("%s%v: native frame %d %+v, the Go table's %+v", c.name, c.args, i, gt.Frames[i], wt.Frames[i])
+							break
+						}
+					}
+				}
+			}
+			for i := range got {
+				if got[i] != want[i] {
+					t.Errorf("%s%v (marking %v) = %v, the Go table's %v", c.name, c.args, k == 1, got, want)
+					break
+				}
+			}
+		}
+	}
+	return marked, unmarked
+}
+
+// TestNativeCalls checks the calls native code makes itself, and those it
+// leaves to Go, against the Go table: recursion, many arguments of each
+// kind and several results, the stack's exhaustion, traps and exceptions
+// in a callee, callees with references and try regions, host functions,
+// the poll of a recursion.
+func TestNativeCalls(t *testing.T) {
 	nativeOnly(t)
-	for _, op := range []regOp{rRefMov, rRefNull, rExt, rSIMD, rFar, rCall, rReturnCall} {
+	src := `(module
+	  (tag $e (param i32))
+	  (memory 1)
+	  (func $fib (export "fib") (param i32) (result i64)
+	    (if (result i64) (i32.lt_u (local.get 0) (i32.const 2))
+	      (then (i64.extend_i32_u (local.get 0)))
+	      (else (i64.add (call $fib (i32.sub (local.get 0) (i32.const 1))) (call $fib (i32.sub (local.get 0) (i32.const 2)))))))
+	  (func $even (export "even") (param i32) (result i32)
+	    (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1)) (else (call $odd (i32.sub (local.get 0) (i32.const 1))))))
+	  (func $odd (param i32) (result i32)
+	    (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0)) (else (call $even (i32.sub (local.get 0) (i32.const 1))))))
+	  (func $many (param i32 i64 f32 f64 v128 i32) (result i64 f64 v128)
+	    (i64.add (local.get 1) (i64.extend_i32_u (i32.add (local.get 0) (local.get 5))))
+	    (f64.add (local.get 3) (f64.promote_f32 (local.get 2)))
+	    (local.get 4))
+	  (func (export "many") (param i32) (result i64)
+	    (local i64 f64 v128)
+	    (call $many (local.get 0) (i64.const 7) (f32.const 1.5) (f64.const 2.25) (v128.const i64x2 3 4) (i32.const 9))
+	    (local.set 3) (local.set 2) (local.set 1)
+	    (i64.add (i64.add (local.get 1) (i64.trunc_f64_s (local.get 2))) (i64x2.extract_lane 1 (local.get 3))))
+	  (func $deep (export "deep") (param i32) (result i32)
+	    (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0))
+	      (else (i32.add (call $deep (i32.sub (local.get 0) (i32.const 1))) (i32.const 1)))))
+	  (func $trap (param i32) (result i32) (i32.div_u (i32.const 1) (local.get 0)))
+	  (func (export "trapdeep") (param i32) (result i32) (i32.add (call $trap (local.get 0)) (call $trap (i32.const 0))))
+	  (func $throw (param i32) (result i32) (if (local.get 0) (then (throw $e (local.get 0)))) (i32.const 5))
+	  (func (export "catch") (param i32) (result i32)
+	    (block $h (result i32)
+	      (try_table (catch $e $h) (drop (call $throw (local.get 0))))
+	      (i32.const -1)))
+	  (func $withref (param i32) (result i32) (local externref) (local.get 0))
+	  (func $withtry (param i32) (result i32) (block (try_table (drop (call $throw (i32.const 0))))) (local.get 0))
+	  (func $loads (param i32) (result i32) (i32.store (local.get 0) (i32.const 77)) (i32.load (local.get 0)))
+	  (func (export "mixed") (param i32) (result i32)
+	    (i32.add (i32.add (call $withref (local.get 0)) (call $withtry (local.get 0))) (call $loads (i32.const 64))))
+	  (func (export "refs") (param externref externref i32) (result externref)
+	    (local externref)
+	    (local.set 3 (local.get 0))
+	    (if (local.get 2) (then (local.set 3 (ref.null extern))))
+	    (select (result externref) (local.get 3) (local.get 1) (local.get 2))))`
+	host := HostRef("h")
+	calls := []regCall{
+		{"fib", []Val{{N: 0}}}, {"fib", []Val{{N: 1}}}, {"fib", []Val{{N: 15}}},
+		{"even", []Val{{N: 10001}}}, {"even", []Val{{N: 10000}}},
+		{"many", []Val{{N: 1}}}, {"many", []Val{{N: 0xffffffff}}},
+		{"deep", []Val{{N: 1000}}}, {"deep", []Val{{N: uint64(MaxCallDepth) + 10}}},
+		{"trapdeep", []Val{{N: 3}}},
+		{"catch", []Val{{N: 0}}}, {"catch", []Val{{N: 4}}},
+		{"mixed", []Val{{N: 3}}},
+		{"refs", []Val{{R: host}, {R: Null}, {N: 0}}}, {"refs", []Val{{R: host}, {R: Null}, {N: 1}}},
+	}
+	marked, unmarked := matchNativeWithHost(t, src, calls)
+	t.Logf("the barrier routine's stores: %d marking, %d not", marked, unmarked)
+	if marked == 0 || unmarked != 0 {
+		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
+	}
+}
+
+// matchNativeWithHost is matchNative with the spectest's print_i32 to
+// import.
+func matchNativeWithHost(t *testing.T, src string, calls []regCall) (int64, int64) {
+	return matchNative(t, src, calls)
+}
+
+// TestNativeRefsMarking checks the reference moves natively with the
+// collector's marking flag read as set and clear: the same results, the
+// pointer words stored through the barrier routine only while it is set.
+func TestNativeRefsMarking(t *testing.T) {
+	nativeOnly(t)
+	if !nativeHandles(rRefMov) || !nativeHandles(rRefNull) {
+		t.Fatal("ref.mov or ref.null has no native handler")
+	}
+	for _, op := range []regOp{rExt, rSIMD, rFar, rReturnCall} {
 		if nativeHandles(op) {
 			t.Errorf("operation %d has a native handler", op)
 		}
 	}
-	n := 0
-	for op := 0; op < 256; op++ {
-		if nativeHandles(regOp(op)) {
-			n++
-		}
+	host, other := HostRef("a"), HostRef("b")
+	marked, unmarked := matchNative(t, `(module
+	  (func (export "f") (param externref externref i32) (result externref) (local externref externref)
+	    (local.set 3 (local.get 0))
+	    (local.set 4 (local.get 1))
+	    (if (local.get 2) (then (local.set 3 (ref.null extern)) (local.set 4 (local.get 3))))
+	    (local.get 4)))`, []regCall{
+		{"f", []Val{{R: host}, {R: other}, {N: 0}}},
+		{"f", []Val{{R: host}, {R: other}, {N: 1}}},
+		{"f", []Val{{R: Null}, {R: other}, {N: 0}}},
+	})
+	if marked == 0 || unmarked != 0 {
+		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
 	}
-	t.Logf("%d operations have native handlers", n)
 }

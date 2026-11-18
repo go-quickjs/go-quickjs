@@ -23,9 +23,11 @@ type gen struct {
 	// exit leaves an instruction to its Go handler; exitSlow a branch back
 	// that spent the tick to its slow function (regSlowTable).
 	exit, exitSlow Label
-	labels         map[int]Label
-	names          map[int]string
-	order          []int
+	// retNative returns from a frame, to Go or to its native caller.
+	retNative Label
+	labels    map[int]Label
+	names     map[int]string
+	order     []int
 }
 
 // h lays out op's handler, named name.
@@ -119,7 +121,7 @@ const (
 func emitAMD64() (*block, error) {
 	g := &gen{a: &Asm{}, labels: map[int]Label{}, names: map[int]string{}}
 	a := g.a
-	g.exit, g.exitSlow = a.NewLabel(), a.NewLabel()
+	g.exit, g.exitSlow, g.retNative = a.NewLabel(), a.NewLabel(), a.NewLabel()
 
 	// The entry: the pinned registers from the context, and the first
 	// dispatch.
@@ -139,6 +141,8 @@ func emitAMD64() (*block, error) {
 	g.control()
 	g.integers()
 	g.floats()
+	g.refs()
+	g.calls()
 	g.memory()
 
 	code, err := a.Finish()
@@ -220,8 +224,9 @@ func (g *gen) exitStub() {
 	a.LeaIdx(RBX, RSI, RAX, 8, 0)
 	a.Load(R13, RDI, rd.CtxTable)
 	g.dispatch()
+	// The frame has returned: to its native caller where it has one.
 	a.Bind(done)
-	a.Ret()
+	a.Jmp(g.retNative)
 }
 
 func (g *gen) moves() {
@@ -349,12 +354,12 @@ func (g *gen) control() {
 		g.dispatch()
 	})
 	g.h(rd.Ret, "Ret", func() {
-		a.Ret()
+		a.Jmp(g.retNative)
 	})
 	g.h(rd.Ret1, "Ret1", func() {
 		g.load(RDX, 0)
 		a.Store(R12, 0, RDX)
-		a.Ret()
+		a.Jmp(g.retNative)
 	})
 }
 
