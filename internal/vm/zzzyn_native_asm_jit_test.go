@@ -206,7 +206,10 @@ var tableCalls = TableCalls(globalThis, {}, new ArrayBuffer(65536));
 
 // TestAsmJITMicroKernels runs the micro-benchmarks' asm.js kernels with
 // the JIT, its stress settings and the collector marking: each the value
-// Node gives (TestAsmMicroKernels), and every kernel native.
+// Node gives (TestAsmMicroKernels), every kernel native, and callLeaf's
+// add2, a typed callee nothing inside of which exits, inlined in it, as
+// the ordinary code's is (ssa's typedInline): called natively, a call
+// had cost twice what the ordinary code's inlined one does.
 func TestAsmJITMicroKernels(t *testing.T) {
 	src, err := os.ReadFile("../v8bench/microbench_extra.js")
 	if err != nil {
@@ -225,6 +228,7 @@ func TestAsmJITMicroKernels(t *testing.T) {
 			if c.marking {
 				jitMarkingForTest(t)
 			}
+			inlined := jitInlinedForTest(t)
 			fn := compileForTest(t, prog)
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			if c.stress {
@@ -236,6 +240,9 @@ func TestAsmJITMicroKernels(t *testing.T) {
 			}
 			if got := v.String().Go(); got != want {
 				t.Errorf("got %s", got)
+			}
+			if n := len(inlined["callLeaf"]); n != 1 {
+				t.Errorf("callLeaf inlined %d callees, want 1 (add2)", n)
 			}
 			for name, how := range asmJITNative(r, "asmMicro", []string{"adler", "crc", "copy", "fnv", "dot", "fib", "callLeaf", "table"}) {
 				if how != "native" {

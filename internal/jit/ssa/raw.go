@@ -243,7 +243,7 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 			setI(ld)
 		}
 	case ir.RawCellGetI, ir.RawCellGetF:
-		n := val(OpCellNumLoad, Float64, b.cellOf(blk, b.root.p.UpvalueBase+int(in.Key)))
+		n := val(OpCellNumLoad, Float64, b.rawCell(blk, int(in.Key)))
 		if in.Raw == ir.RawCellGetI {
 			setI(val(OpToInt32, Int32, n))
 		} else {
@@ -256,7 +256,7 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 		} else {
 			x = fl(in.Left)
 		}
-		val(OpCellNumStore, None, b.cellOf(blk, b.root.p.UpvalueBase+int(in.Key)), val(OpBoxF64, Tagged, x))
+		val(OpCellNumStore, None, b.rawCell(blk, int(in.Key)), val(OpBoxF64, Tagged, x))
 	case ir.RawIBox:
 		setF(f64(i32(in.Left)))
 	case ir.RawUBox:
@@ -268,14 +268,122 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 	}
 }
 
+// rawCell is the cell of the module variable that is captured binding k
+// of the frame being translated: the function's own, which its context
+// has, or an inlined callee's, read from its closure's cells
+// (InlineSite's Upvalues), as an inlined callee's captured binding is.
+func (b *builder) rawCell(blk *Block, k int) *Value {
+	if fr := b.cur; fr != b.root {
+		cell := b.f.newValue(blk, OpUpvalueCell, Source)
+		cell.Index, cell.Aux, cell.Const = k, 2, ir.Value{Bits: uint64(fr.site.Upvalues)}
+		return cell
+	}
+	return b.cellOf(blk, b.root.p.UpvalueBase+k)
+}
+
+// typedInline reports whether site's callee may be inlined in the frame
+// being translated, as far as typed code (ir.Program's Kinds) goes:
+// ordinary code as anywhere; typed code only in typed code, and only
+// where nothing inside it exits -- no call, no loop and so no poll, no
+// host exit or guard that stays after the build's passes -- so that no
+// frame state names its frame, whose raw slots no exit writes. Its
+// instructions are a raw operation's that native code makes alone, a
+// copy, a forward jump or a raw compare's branch, a return; a Math
+// function Go computes from native code (OpMathCall), which leaves
+// nothing to Go, among them, but not % of doubles or pow, which fail to
+// Go where they are not exact. A parameter's conversion (ir.RawConvI,
+// RawConvF) converts a number natively: typed code's call boxes each
+// argument (the typed compiler's call), so where the parameter's slot is
+// written by nothing in the callee, its value is the caller's box, and
+// the conversion its number. What it reads of the VM -- the heap, a Math
+// function's computation, its module variables' cells -- its feedback
+// answers, or it is not inlined: the build of a typed function refuses
+// what its feedback does not answer.
+func (b *builder) typedInline(site InlineSite) bool {
+	p := site.Program
+	if p.Kinds == nil {
+		return true
+	}
+	if b.f.Kinds == nil || b.p.Kinds == nil || site.Construct || site.Method || site.Restart || site.Forward || site.Arguments ||
+		site.ReadsArguments || site.Captured != nil || site.LexThis || !site.Window {
+		return false
+	}
+	fb := site.Feedback
+	gf, _ := fb.(GoFeedback)
+	written := func(slot int) bool {
+		for pc := range p.Code {
+			if !reachable(p, pc) {
+				continue
+			}
+			if a, c := p.Code[pc].Writes(); a == slot || c == slot {
+				return true
+			}
+		}
+		return false
+	}
+	for pc, in := range p.Code {
+		if !reachable(p, pc) {
+			continue
+		}
+		if in.Check {
+			return false
+		}
+		switch in.Op {
+		case ir.Nop, ir.Copy, ir.Return:
+			continue
+		case ir.Jump:
+			if in.Target > pc {
+				continue
+			}
+			return false
+		case ir.Branch:
+			if in.Raw != ir.RawNone && in.Target > pc {
+				continue
+			}
+			return false
+		case ir.Raw:
+		default:
+			return false
+		}
+		switch in.Raw {
+		case ir.RawFMod:
+			return false
+		case ir.RawFMath:
+			mf, ok := fb.(RawMathFeedback)
+			if !ok {
+				return false
+			}
+			if k, ok := mf.RawMath(pc); !ok || k.Op != OpMathCall || gf == nil || !gf.GoCalls() {
+				return false
+			}
+		case ir.RawLoad, ir.RawStore:
+			if hf, ok := fb.(HeapFeedback); !ok || hf.Heap() == 0 {
+				return false
+			}
+		case ir.RawCellGetI, ir.RawCellGetF, ir.RawCellSetI, ir.RawCellSetF:
+			if site.Upvalues == 0 {
+				return false
+			}
+		case ir.RawConvI, ir.RawConvF:
+			k := in.Left.Slot - p.ParamBase
+			if in.Left.Slot < 0 || k < 0 || k >= p.Params || k >= site.Argc || written(in.Left.Slot) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // entryLoad is slot's value as an entry in blk loads it from the frame: a
 // value, or, for typed code's raw slot (ir.Program's Kinds), the box of
-// the int32 or the float64 its number word holds.
+// the int32 or the float64 its number word holds. An entry is the root's,
+// and so are the slots it loads, whatever frame is being translated when
+// one is read (readVar).
 func (b *builder) entryLoad(blk *Block, slot int) *Value {
 	f := b.f
 	kind := ir.SlotValue
-	if slot < len(b.p.Kinds) {
-		kind = b.p.Kinds[slot]
+	if k := b.root.p.Kinds; slot < len(k) {
+		kind = k[slot]
 	}
 	switch kind {
 	case ir.SlotI32:

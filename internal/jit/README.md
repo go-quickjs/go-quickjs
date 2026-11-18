@@ -2496,7 +2496,9 @@ forwarding callee's, whose frame is its call's: its answers are its code's
 and its caches', the same at each. So is a closure the function makes and only calls, or only
 gives to a callee that calls it, unchecked and never made, an arrow reading
 its this among them, its this the maker's (see [Closures the code only
-calls](#allocation-and-escape-analysis)).
+calls](#allocation-and-escape-analysis)). A typed callee, a function of an
+asm.js module, is offered so too, and taken into typed code only, where
+nothing inside it exits (see [Typed code](#typed-code)).
 
 **What the builder takes.** What a function inlines is bounded by size
 alone, as V8's JSInliningHeuristic bounds it, never by a count of calls: a
@@ -3324,16 +3326,33 @@ Values, made natively: the feedback answers the callee from the binding the
 call's register was read from, the callee's twin and typed code
 (`jitTypedCallee`). The callee converts its parameters as its code's
 prologue says, a number's natively. An import's call is Go's from native
-code. Typed code is never inlined (`ssa`'s `Program.Kinds` check): an exit
-inside an inlined callee writes the callee's frame, whose raw slots the
-caller's kinds do not name.
+code.
 
-**What is left.** A call between typed functions boxes its arguments into
-the window and the callee unboxes them; a raw calling convention, or
-inlining typed callees with their kinds in the frame states, would keep
-them in registers. A typed function the interpreter answers without a
-frame (a leaf, `regCallKind`) is never linked, and runs as the ordinary
-code's leaf.
+**Inlined.** A typed callee is offered as any register callee is (see
+[Inlining](#inlining)), its program its typed lowering and its feedback
+its own -- its heap, its Math functions' computations -- and the builder
+takes it by the ordinary rules, its frequency and the same budgets, into
+typed code alone, where nothing inside it exits (`ssa`'s `typedInline`):
+no call, no loop and so no poll, no guard or host exit -- no % of doubles
+or pow, which fail to Go where they are not exact -- its operations raw
+ones native code makes alone, a Math function Go computes from native
+code among them, its branches forward, its parameters' conversions of the
+boxes its caller's call made (typed code boxes every argument), and what
+it reads of the VM answered by its feedback. So no frame state names its
+frame, whose raw slots no exit writes, and the backends refuse code where
+one would (`ssa.InlineState`'s `Typed`). Its module variables are read
+and written in its closure's cells, as an inlined callee's captured
+bindings are (`rawCell`); its raw values stay in registers, the boxes of
+its arguments and its result folded away; and its phis are typed code's,
+int32 wherever their arguments are (intPhis).
+
+**What is left.** A typed callee with a call or a loop, or one that may
+exit, is called natively: its frame in the exits' records, its raw slots
+by their kinds, would let it be inlined too. Such a call boxes its
+arguments into the window and the callee unboxes them; a raw calling
+convention would keep them in registers. A typed function the
+interpreter answers without a frame (a leaf, `regCallKind`) is never
+linked, and runs as the ordinary code's leaf.
 
 ## Zero cost when off
 

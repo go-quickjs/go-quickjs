@@ -337,7 +337,7 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		}
 	}
 	calls, ok := b.inlineCallsOf(s.Program)
-	if !ok || !inlineFits(*total, inlineSize(s.Program)) || s.Program.Kinds != nil {
+	if !ok || !inlineFits(*total, inlineSize(s.Program)) || !b.typedInline(s) {
 		return false
 	}
 	nslots, before, keeps, inlined := b.nslots, *total, b.f.Keeps, len(b.f.Inlined)
@@ -4145,11 +4145,8 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	if ok {
 		calls, givenCalls, ok = b.inlineCalls(site, isAccessor)
 	}
-	if !ok || !inlineFits(*total, inlineSize(site.Program)) || site.Program.Kinds != nil ||
+	if !ok || !inlineFits(*total, inlineSize(site.Program)) || !b.typedInline(site) ||
 		site.Argc < 0 || site.Params < 0 || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
-		// Nor typed code (ir.Program's Kinds), whose raw slots an exit
-		// inside would write as the callee's frame knows none of: called
-		// natively.
 		return nil, false
 	}
 	if site.Window && isAccessor {
@@ -7517,7 +7514,7 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 		b.stateSlots(s, blk, pc, &sf, call)
 		s.Inline = b.f.inlineState(InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
-			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc})
+			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc, Typed: b.p.Kinds != nil})
 		if fr.site.Arguments || fr.site.ReadsArguments {
 			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
 		}

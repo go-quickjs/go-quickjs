@@ -1014,6 +1014,11 @@ func (s *FrameState) Own() int { return s.n - s.Virtual }
 // Base the first of them is, among the caller's slots at the call; or 0.
 // Go gives the frame them (the VM's f.args), which its apply_arguments
 // hands on.
+//
+// Typed marks a frame of typed code (ir.Program's Kinds), which no exit
+// makes: a typed callee is inlined only where nothing inside it exits
+// (the builder's typedInline), and the backends refuse code where
+// something does.
 type InlineState struct {
 	Parent   *InlineState
 	Closure  uintptr
@@ -1025,6 +1030,7 @@ type InlineState struct {
 	Depth    int
 	Site     int
 	Args     uint64
+	Typed    bool
 }
 
 // Kind is how a block ends.
