@@ -15,6 +15,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // testHost is a host with room for any code.
@@ -568,7 +569,7 @@ func TestNativeItemSpans(t *testing.T) {
 func TestNativeFoldables(t *testing.T) {
 	f := foldables()
 	for c := rune(0); c <= unicode.MaxRune; c++ {
-		if unicode.SimpleFold(c) != c {
+		if ucd.SimpleFold(c) != c {
 			if _, ok := slices.BinarySearch(f, c); !ok {
 				t.Fatalf("%U has another case but is not listed", c)
 			}

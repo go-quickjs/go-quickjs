@@ -5,10 +5,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -684,15 +684,15 @@ func (p *parser) parseGroupName() (string, error) {
 	return sb.String(), nil
 }
 
-// isGroupNameStart and isGroupNamePart mirror the identifier rules, which is
-// what a group name has to satisfy.
+// isGroupNameStart and isGroupNamePart are the identifier rules, which is
+// what a group name has to satisfy: RegExpIdentifierStart's ID_Start, $ and _,
+// and RegExpIdentifierPart's ID_Continue, $, ZWNJ and ZWJ.
 func isGroupNameStart(r rune) bool {
-	return r == '$' || r == '_' || unicode.IsLetter(r)
+	return r == '$' || r == '_' || ucd.IsIDStart(r)
 }
 
 func isGroupNamePart(r rune) bool {
-	return isGroupNameStart(r) || r == 0x200C || r == 0x200D ||
-		unicode.IsDigit(r) || unicode.In(r, unicode.Mn, unicode.Mc, unicode.Pc)
+	return r == '$' || r == 0x200C || r == 0x200D || ucd.IsIDContinue(r)
 }
 
 // parseEscape parses a backslash sequence outside a character class.

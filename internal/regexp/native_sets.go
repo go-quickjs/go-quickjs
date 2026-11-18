@@ -5,7 +5,8 @@ package regexp
 import (
 	"slices"
 	"sync"
-	"unicode"
+
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // The characters an instruction matches, for native code: runs of code
@@ -107,7 +108,7 @@ func bools128(sp []span) (set [128]bool) {
 var foldables = sync.OnceValue(func() []rune {
 	var out []rune
 	for c := rune(0); c < 0x20000; c++ {
-		if unicode.SimpleFold(c) != c {
+		if ucd.SimpleFold(c) != c {
 			out = append(out, c)
 		}
 	}

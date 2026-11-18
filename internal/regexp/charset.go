@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"unicode"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // charSet is a set of code points, stored as sorted non-overlapping ranges.
@@ -200,13 +202,13 @@ func complementRanges(in []charRange) []charRange {
 
 // caseFolds returns the other code points that case-fold to the same value.
 //
-// unicode.SimpleFold walks the equivalence class in a cycle, so following it
+// ucd.SimpleFold walks the equivalence class in a cycle, so following it
 // until it returns to the start yields every member. This is what makes /k/i
 // match the Kelvin sign, which surprises people but is what the specification
 // requires. They are returned in an array rather than a slice, which a
 // class asked about every character of a subject would allocate for each.
 func caseFolds(r rune) (folds [4]rune, n int) {
-	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+	for f := ucd.SimpleFold(r); f != r; f = ucd.SimpleFold(f) {
 		folds[n] = f
 		if n++; n == len(folds) {
 			// No equivalence class in Unicode is larger than this; the guard
@@ -278,7 +280,7 @@ func canonical(r rune, unicodeFold bool) rune {
 
 // upperCanonical is Canonicalize outside unicode mode.
 func upperCanonical(r rune) rune {
-	u := unicode.ToUpper(r)
+	u := ucd.ToUpper(r)
 	// A mapping to more than one character -- the sharp s to "SS" -- is no
 	// mapping at all here, and Go's simple mapping already leaves those alone.
 	if r >= 128 && u < 128 {
@@ -294,7 +296,7 @@ func foldCase(r rune) rune {
 	// not capture -- but SimpleFold's smallest member is a stable
 	// representative of the class.
 	min := r
-	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+	for f := ucd.SimpleFold(r); f != r; f = ucd.SimpleFold(f) {
 		if f < min {
 			min = f
 		}
