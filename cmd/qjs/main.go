@@ -45,6 +45,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	// The time zone database, so that a script can format a date in any zone
 	// on any machine, including one that keeps no zone files of its own.
@@ -436,17 +437,55 @@ func moduleURL(name string) string {
 	return name
 }
 
+// fileURL is the URL of an absolute path, as node's url.pathToFileURL makes
+// it -- import.meta.url is pathToFileURL(import.meta.filename).href -- on the
+// host's own paths: a UNC path's server is the host, a drive's path starts
+// with a slash, and the path is percent-encoded as filePathEscape says.
 func fileURL(path string) string {
-	text := filepath.ToSlash(path)
-	if volume := filepath.VolumeName(path); strings.HasPrefix(volume, `\\`) {
-		serverAndPath := strings.TrimPrefix(text, "//")
-		server, rest, _ := strings.Cut(serverAndPath, "/")
-		return (&url.URL{Scheme: "file", Host: server, Path: "/" + rest}).String()
+	windows := filepath.Separator == '\\'
+	if windows && strings.HasPrefix(path, `\\`) {
+		rest := path[2:]
+		if strings.HasPrefix(path, `\\?\UNC\`) {
+			rest = path[8:]
+		}
+		if server, p, ok := strings.Cut(rest, `\`); ok && server != "" {
+			return "file://" + strings.ToLower(server) + filePathEscape(`\`+p, windows)
+		}
 	}
-	if volume := filepath.VolumeName(path); strings.HasSuffix(volume, ":") {
+	text := filePathEscape(path, windows)
+	if !strings.HasPrefix(text, "/") {
 		text = "/" + text
 	}
-	return (&url.URL{Scheme: "file", Path: text}).String()
+	return "file://" + text
+}
+
+// filePathEscape percent-encodes a path for a file URL as node's
+// pathToFileURL does: the controls, DEL, space, " # % < > ? [ ] ^ ` { | } ~
+// and every byte past ASCII; a backslash is a separator, a slash, on Windows
+// and a character of a name, %5C, elsewhere.
+func filePathEscape(path string, windows bool) string {
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	for _, r := range path {
+		switch {
+		case r == '\\' && windows:
+			b.WriteByte('/')
+			continue
+		case r == utf8.RuneError:
+			// What is not UTF-8 is the replacement character, as a URL
+			// takes it.
+		case r > 0x20 && r < 0x7f && !strings.ContainsRune("\\\" #%<>?[]^`{|}~", r):
+			b.WriteRune(r)
+			continue
+		}
+		var buf [utf8.UTFMax]byte
+		for _, c := range buf[:utf8.EncodeRune(buf[:], r)] {
+			b.WriteByte('%')
+			b.WriteByte(hexDigits[c>>4])
+			b.WriteByte(hexDigits[c&15])
+		}
+	}
+	return b.String()
 }
 
 // describe renders what a rejection carried: an Error shows its stack, and
@@ -1475,9 +1514,5 @@ func scriptURL(name string) string {
 	if !filepath.IsAbs(name) {
 		return name
 	}
-	p := filepath.ToSlash(name)
-	if !strings.HasPrefix(p, "/") {
-		p = "/" + p
-	}
-	return (&url.URL{Scheme: "file", Path: p}).String()
+	return fileURL(name)
 }
