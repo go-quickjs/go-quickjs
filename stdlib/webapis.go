@@ -702,32 +702,46 @@ const webAPIsJS = `(function (host) {
     return out;
   }
 
-  // Removing dot segments, which is what makes a/b/../c into a/c.
-  function normalizePath(path) {
+  // normalizePath takes a path's segments as the URL standard's path state
+  // does, which is what makes a/b/../c into a/c: a dot segment ("." or
+  // "%2e") is dropped, a double-dot one (".." in any spelling with %2e) drops
+  // the segment before it -- but for a file URL's drive, which stays -- and
+  // either, last, leaves the path ending in a slash; an empty segment is a
+  // segment and stays.
+  function normalizePath(path, file) {
     const parts = path.split("/");
-    const out = [];
-    for (let i = 0; i < parts.length; i++) {
-      const p = parts[i];
-      if (p === "." || (p === "" && i > 0 && i < parts.length - 1)) {
-        if (p === ".") { if (i === parts.length - 1) out.push(""); }
-        continue;
+    const segments = [];
+    for (let i = path.startsWith("/") ? 1 : 0; i < parts.length; i++) {
+      const p = parts[i], lower = p.toLowerCase(), last = i === parts.length - 1;
+      if (lower === ".." || lower === ".%2e" || lower === "%2e." || lower === "%2e%2e") {
+        if (segments.length > 0 && !(file && segments.length === 1 && /^[A-Za-z]:$/.test(segments[0]))) {
+          segments.pop();
+        }
+        if (last) segments.push("");
+      } else if (lower === "." || lower === "%2e") {
+        if (last) segments.push("");
+      } else {
+        segments.push(p);
       }
-      if (p === "..") {
-        if (out.length > 1) out.pop();
-        if (i === parts.length - 1) out.push("");
-        continue;
-      }
-      out.push(p);
     }
-    let joined = out.join("/");
-    if (!joined.startsWith("/")) joined = "/" + joined;
-    return joined;
+    return "/" + segments.join("/");
+  }
+
+  // invalidURL is the error a URL that does not parse throws, with the code
+  // and the input node's has.
+  function invalidURL(input) {
+    const e = new TypeError("Invalid URL");
+    e.code = "ERR_INVALID_URL";
+    e.input = String(input);
+    return e;
   }
 
   function parseURL(input, base) {
     let rest = String(input).trim().replace(/[\t\n\r]/g, "");
+    // authority says the URL has one, "//" and a host, empty or not, which
+    // only a special scheme's URL always has.
     const url = {scheme: "", username: "", password: "", host: "", port: "",
-                 path: "", query: null, fragment: null};
+                 path: "", query: null, fragment: null, authority: false};
 
     const schemeMatch = /^([A-Za-z][A-Za-z0-9+\-.]*):/.exec(rest);
     if (schemeMatch) {
@@ -737,11 +751,12 @@ const webAPIsJS = `(function (host) {
       // A relative reference takes everything up to the part it replaces.
       return resolveRelative(rest, base);
     } else {
-      throw new TypeError("Invalid URL: " + input);
+      throw invalidURL(input);
     }
 
     if (isSpecial(url.scheme)) rest = rest.replace(/^[\\/]{2}/, "//");
     if (rest.startsWith("//")) {
+      url.authority = true;
       rest = rest.slice(2);
       let authority = rest;
       const end = authority.search(/[/?#]/);
@@ -770,14 +785,16 @@ const webAPIsJS = `(function (host) {
         }
       }
       if (url.port !== "" && !/^\d*$/.test(url.port)) {
-        throw new TypeError("Invalid URL: " + input);
+        throw invalidURL(input);
       }
       if (url.port === specialPorts[url.scheme]) url.port = "";
+      // A file URL's host localhost is the local machine, which is no host.
+      if (url.scheme === "file:" && url.host === "localhost") url.host = "";
       if (isSpecial(url.scheme) && url.host === "" && url.scheme !== "file:") {
-        throw new TypeError("Invalid URL: " + input);
+        throw invalidURL(input);
       }
     } else if (isSpecial(url.scheme) && url.scheme !== "file:") {
-      throw new TypeError("Invalid URL: " + input);
+      throw invalidURL(input);
     }
 
     const hash = rest.indexOf("#");
@@ -785,7 +802,14 @@ const webAPIsJS = `(function (host) {
     const q = rest.indexOf("?");
     if (q >= 0) { url.query = rest.slice(q + 1); rest = rest.slice(0, q); }
     url.path = rest;
-    if (url.host !== "" || isSpecial(url.scheme)) url.path = normalizePath(url.path);
+    // A file URL's drive may be written C| for C:.
+    if (url.scheme === "file:") url.path = url.path.replace(/^\/([A-Za-z])\|(?=[/\\?#]|$)/, "/$1:");
+    // A special scheme's path is segments, and an empty one is "/"; another
+    // scheme's is segments where it starts from the root, and otherwise
+    // empty (foo://h) or opaque (mailto:x).
+    if (isSpecial(url.scheme) || url.path.startsWith("/")) {
+      url.path = normalizePath(url.path, url.scheme === "file:");
+    }
     return url;
   }
 
@@ -793,7 +817,7 @@ const webAPIsJS = `(function (host) {
   function resolveRelative(ref, base) {
     const url = {scheme: base.scheme, username: base.username, password: base.password,
                  host: base.host, port: base.port, path: base.path,
-                 query: base.query, fragment: null};
+                 query: base.query, fragment: null, authority: base.authority};
     if (ref === "") { url.query = base.query; return url; }
     if (ref.startsWith("#")) { url.fragment = ref.slice(1); url.query = base.query; return url; }
     if (ref.startsWith("//")) return parseURL(base.scheme + ref);
@@ -806,17 +830,32 @@ const webAPIsJS = `(function (host) {
     else url.query = rest === "" ? base.query : null;
 
     if (rest === "") { url.path = base.path; return url; }
-    if (rest.startsWith("/")) url.path = normalizePath(rest);
+    if (url.scheme === "file:") {
+      // A file URL's drive: a reference that starts with one is a path of
+      // its own, and a path from the root keeps the base's drive.
+      const drive = /^\/?([A-Za-z])[:|](?=\/|$)/;
+      const own = drive.exec(rest);
+      if (own) {
+        url.path = normalizePath("/" + own[1] + ":" + rest.slice(own[0].length), true);
+        return url;
+      }
+      const baseDrive = /^\/[A-Za-z]:(?=\/|$)/.exec(base.path);
+      if (rest.startsWith("/") && baseDrive) {
+        url.path = normalizePath(baseDrive[0] + rest, true);
+        return url;
+      }
+    }
+    if (rest.startsWith("/")) url.path = normalizePath(rest, url.scheme === "file:");
     else {
       const dir = base.path.slice(0, base.path.lastIndexOf("/") + 1);
-      url.path = normalizePath(dir + rest);
+      url.path = normalizePath(dir + rest, url.scheme === "file:");
     }
     return url;
   }
 
   function serialize(u, excludeFragment) {
     let out = u.scheme;
-    if (u.host !== "" || u.scheme === "file:") {
+    if (u.host !== "" || u.scheme === "file:" || u.authority) {
       out += "//";
       if (u.username !== "" || u.password !== "") {
         out += u.username;
@@ -988,7 +1027,7 @@ const webAPIsJS = `(function (host) {
     get pathname() { return internal.get(this).url.path; }
     set pathname(v) {
       const u = internal.get(this).url;
-      u.path = normalizePath(encodeSet(String(v), "?#"));
+      u.path = normalizePath(encodeSet(String(v), "?#"), u.scheme === "file:");
     }
     get search() {
       const q = internal.get(this).url.query;
