@@ -8,232 +8,234 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // The numeric operations of register code: in the first table from
-// regNumFirst, and in the second, rExt's, from regExtNumFirst.
+// regNumFirst (internal/regdef's values), and in the second, rExt's, from
+// regExtNumFirst.
 const (
-	rI32Add = regNumFirst + iota
-	rI32AddI
-	rI32Sub
-	rI32SubI
-	rI32Mul
-	rI32MulI
-	rI32And
-	rI32AndI
-	rI32Ior
-	rI32IorI
-	rI32Xor
-	rI32XorI
-	rI32Shl
-	rI32ShlI
-	rI32ShrS
-	rI32ShrSI
-	rI32ShrU
-	rI32ShrUI
-	rI32Rol
-	rI32RolI
-	rI32Ror
-	rI32RorI
-	rI32DivS
-	rI32DivU
-	rI32RemS
-	rI32RemU
-	rI32Eq
-	rI32EqI
-	rBrI32Eq
-	rBrI32EqI
-	rI32Ne
-	rI32NeI
-	rBrI32Ne
-	rBrI32NeI
-	rI32LtS
-	rI32LtSI
-	rBrI32LtS
-	rBrI32LtSI
-	rI32LtU
-	rI32LtUI
-	rBrI32LtU
-	rBrI32LtUI
-	rI32GtS
-	rI32GtSI
-	rBrI32GtS
-	rBrI32GtSI
-	rI32GtU
-	rI32GtUI
-	rBrI32GtU
-	rBrI32GtUI
-	rI32LeS
-	rI32LeSI
-	rBrI32LeS
-	rBrI32LeSI
-	rI32LeU
-	rI32LeUI
-	rBrI32LeU
-	rBrI32LeUI
-	rI32GeS
-	rI32GeSI
-	rBrI32GeS
-	rBrI32GeSI
-	rI32GeU
-	rI32GeUI
-	rBrI32GeU
-	rBrI32GeUI
-	rI64Add
-	rI64AddI
-	rI64Sub
-	rI64SubI
-	rI64Mul
-	rI64MulI
-	rI64And
-	rI64AndI
-	rI64Ior
-	rI64IorI
-	rI64Xor
-	rI64XorI
-	rI64Shl
-	rI64ShlI
-	rI64ShrS
-	rI64ShrSI
-	rI64ShrU
-	rI64ShrUI
-	rI64Rol
-	rI64Ror
-	rI64DivS
-	rI64DivU
-	rI64RemS
-	rI64RemU
-	rI64Eq
-	rI64EqI
-	rBrI64Eq
-	rBrI64EqI
-	rI64Ne
-	rI64NeI
-	rBrI64Ne
-	rBrI64NeI
-	rI64LtS
-	rI64LtSI
-	rBrI64LtS
-	rBrI64LtSI
-	rI64LtU
-	rI64LtUI
-	rBrI64LtU
-	rBrI64LtUI
-	rI64GtS
-	rI64GtSI
-	rBrI64GtS
-	rBrI64GtSI
-	rI64GtU
-	rI64GtUI
-	rBrI64GtU
-	rBrI64GtUI
-	rI64LeS
-	rI64LeSI
-	rBrI64LeS
-	rBrI64LeSI
-	rI64LeU
-	rI64LeUI
-	rBrI64LeU
-	rBrI64LeUI
-	rI64GeS
-	rI64GeSI
-	rBrI64GeS
-	rBrI64GeSI
-	rI64GeU
-	rI64GeUI
-	rBrI64GeU
-	rBrI64GeUI
-	rF32Add
-	rF32Sub
-	rF32Mul
-	rF32Div
-	rF32Min
-	rF32Max
-	rF32Eq
-	rF32Ne
-	rF32Lt
-	rF32Gt
-	rF32Le
-	rF32Ge
-	rF64Add
-	rF64Sub
-	rF64Mul
-	rF64Div
-	rF64Min
-	rF64Max
-	rF64Eq
-	rF64Ne
-	rF64Lt
-	rF64Gt
-	rF64Le
-	rF64Ge
-	rI32Eqz
-	rI32Clz
-	rI32Ctz
-	rI32SExtendI8
-	rI32SExtendI16
-	rI64Eqz
-	rI64Clz
-	rI64Ctz
-	rI64SExtendI8
-	rI64SExtendI16
-	rI64SExtendI32
-	rF32Abs
-	rF32Neg
-	rF32Sqrt
-	rF64Abs
-	rF64Neg
-	rF64Ceil
-	rF64Floor
-	rF64Trunc
-	rF64Sqrt
-	rI32ConvertI64
-	rI32SConvertF32
-	rI32UConvertF32
-	rI32SConvertF64
-	rI32UConvertF64
-	rI64SConvertI32
-	rI64SConvertF32
-	rI64UConvertF32
-	rI64SConvertF64
-	rI64UConvertF64
-	rF32SConvertI32
-	rF32UConvertI32
-	rF32SConvertI64
-	rF32UConvertI64
-	rF32ConvertF64
-	rF64SConvertI32
-	rF64UConvertI32
-	rF64SConvertI64
-	rF64UConvertI64
-	rF64ConvertF32
-	rI32LoadMem
-	rI64LoadMem
-	rF32LoadMem
-	rF64LoadMem
-	rI32LoadMem8S
-	rI32LoadMem8U
-	rI32LoadMem16S
-	rI32LoadMem16U
-	rI64LoadMem8S
-	rI64LoadMem8U
-	rI64LoadMem16S
-	rI64LoadMem16U
-	rI64LoadMem32S
-	rI64LoadMem32U
-	rI32StoreMem
-	rI64StoreMem
-	rF32StoreMem
-	rF64StoreMem
-	rI32StoreMem8
-	rI32StoreMem16
-	rI64StoreMem8
-	rI64StoreMem16
-	rI64StoreMem32
+	rI32Add         = regdef.I32Add
+	rI32AddI        = regdef.I32AddI
+	rI32Sub         = regdef.I32Sub
+	rI32SubI        = regdef.I32SubI
+	rI32Mul         = regdef.I32Mul
+	rI32MulI        = regdef.I32MulI
+	rI32And         = regdef.I32And
+	rI32AndI        = regdef.I32AndI
+	rI32Ior         = regdef.I32Ior
+	rI32IorI        = regdef.I32IorI
+	rI32Xor         = regdef.I32Xor
+	rI32XorI        = regdef.I32XorI
+	rI32Shl         = regdef.I32Shl
+	rI32ShlI        = regdef.I32ShlI
+	rI32ShrS        = regdef.I32ShrS
+	rI32ShrSI       = regdef.I32ShrSI
+	rI32ShrU        = regdef.I32ShrU
+	rI32ShrUI       = regdef.I32ShrUI
+	rI32Rol         = regdef.I32Rol
+	rI32RolI        = regdef.I32RolI
+	rI32Ror         = regdef.I32Ror
+	rI32RorI        = regdef.I32RorI
+	rI32DivS        = regdef.I32DivS
+	rI32DivU        = regdef.I32DivU
+	rI32RemS        = regdef.I32RemS
+	rI32RemU        = regdef.I32RemU
+	rI32Eq          = regdef.I32Eq
+	rI32EqI         = regdef.I32EqI
+	rBrI32Eq        = regdef.BrI32Eq
+	rBrI32EqI       = regdef.BrI32EqI
+	rI32Ne          = regdef.I32Ne
+	rI32NeI         = regdef.I32NeI
+	rBrI32Ne        = regdef.BrI32Ne
+	rBrI32NeI       = regdef.BrI32NeI
+	rI32LtS         = regdef.I32LtS
+	rI32LtSI        = regdef.I32LtSI
+	rBrI32LtS       = regdef.BrI32LtS
+	rBrI32LtSI      = regdef.BrI32LtSI
+	rI32LtU         = regdef.I32LtU
+	rI32LtUI        = regdef.I32LtUI
+	rBrI32LtU       = regdef.BrI32LtU
+	rBrI32LtUI      = regdef.BrI32LtUI
+	rI32GtS         = regdef.I32GtS
+	rI32GtSI        = regdef.I32GtSI
+	rBrI32GtS       = regdef.BrI32GtS
+	rBrI32GtSI      = regdef.BrI32GtSI
+	rI32GtU         = regdef.I32GtU
+	rI32GtUI        = regdef.I32GtUI
+	rBrI32GtU       = regdef.BrI32GtU
+	rBrI32GtUI      = regdef.BrI32GtUI
+	rI32LeS         = regdef.I32LeS
+	rI32LeSI        = regdef.I32LeSI
+	rBrI32LeS       = regdef.BrI32LeS
+	rBrI32LeSI      = regdef.BrI32LeSI
+	rI32LeU         = regdef.I32LeU
+	rI32LeUI        = regdef.I32LeUI
+	rBrI32LeU       = regdef.BrI32LeU
+	rBrI32LeUI      = regdef.BrI32LeUI
+	rI32GeS         = regdef.I32GeS
+	rI32GeSI        = regdef.I32GeSI
+	rBrI32GeS       = regdef.BrI32GeS
+	rBrI32GeSI      = regdef.BrI32GeSI
+	rI32GeU         = regdef.I32GeU
+	rI32GeUI        = regdef.I32GeUI
+	rBrI32GeU       = regdef.BrI32GeU
+	rBrI32GeUI      = regdef.BrI32GeUI
+	rI64Add         = regdef.I64Add
+	rI64AddI        = regdef.I64AddI
+	rI64Sub         = regdef.I64Sub
+	rI64SubI        = regdef.I64SubI
+	rI64Mul         = regdef.I64Mul
+	rI64MulI        = regdef.I64MulI
+	rI64And         = regdef.I64And
+	rI64AndI        = regdef.I64AndI
+	rI64Ior         = regdef.I64Ior
+	rI64IorI        = regdef.I64IorI
+	rI64Xor         = regdef.I64Xor
+	rI64XorI        = regdef.I64XorI
+	rI64Shl         = regdef.I64Shl
+	rI64ShlI        = regdef.I64ShlI
+	rI64ShrS        = regdef.I64ShrS
+	rI64ShrSI       = regdef.I64ShrSI
+	rI64ShrU        = regdef.I64ShrU
+	rI64ShrUI       = regdef.I64ShrUI
+	rI64Rol         = regdef.I64Rol
+	rI64Ror         = regdef.I64Ror
+	rI64DivS        = regdef.I64DivS
+	rI64DivU        = regdef.I64DivU
+	rI64RemS        = regdef.I64RemS
+	rI64RemU        = regdef.I64RemU
+	rI64Eq          = regdef.I64Eq
+	rI64EqI         = regdef.I64EqI
+	rBrI64Eq        = regdef.BrI64Eq
+	rBrI64EqI       = regdef.BrI64EqI
+	rI64Ne          = regdef.I64Ne
+	rI64NeI         = regdef.I64NeI
+	rBrI64Ne        = regdef.BrI64Ne
+	rBrI64NeI       = regdef.BrI64NeI
+	rI64LtS         = regdef.I64LtS
+	rI64LtSI        = regdef.I64LtSI
+	rBrI64LtS       = regdef.BrI64LtS
+	rBrI64LtSI      = regdef.BrI64LtSI
+	rI64LtU         = regdef.I64LtU
+	rI64LtUI        = regdef.I64LtUI
+	rBrI64LtU       = regdef.BrI64LtU
+	rBrI64LtUI      = regdef.BrI64LtUI
+	rI64GtS         = regdef.I64GtS
+	rI64GtSI        = regdef.I64GtSI
+	rBrI64GtS       = regdef.BrI64GtS
+	rBrI64GtSI      = regdef.BrI64GtSI
+	rI64GtU         = regdef.I64GtU
+	rI64GtUI        = regdef.I64GtUI
+	rBrI64GtU       = regdef.BrI64GtU
+	rBrI64GtUI      = regdef.BrI64GtUI
+	rI64LeS         = regdef.I64LeS
+	rI64LeSI        = regdef.I64LeSI
+	rBrI64LeS       = regdef.BrI64LeS
+	rBrI64LeSI      = regdef.BrI64LeSI
+	rI64LeU         = regdef.I64LeU
+	rI64LeUI        = regdef.I64LeUI
+	rBrI64LeU       = regdef.BrI64LeU
+	rBrI64LeUI      = regdef.BrI64LeUI
+	rI64GeS         = regdef.I64GeS
+	rI64GeSI        = regdef.I64GeSI
+	rBrI64GeS       = regdef.BrI64GeS
+	rBrI64GeSI      = regdef.BrI64GeSI
+	rI64GeU         = regdef.I64GeU
+	rI64GeUI        = regdef.I64GeUI
+	rBrI64GeU       = regdef.BrI64GeU
+	rBrI64GeUI      = regdef.BrI64GeUI
+	rF32Add         = regdef.F32Add
+	rF32Sub         = regdef.F32Sub
+	rF32Mul         = regdef.F32Mul
+	rF32Div         = regdef.F32Div
+	rF32Min         = regdef.F32Min
+	rF32Max         = regdef.F32Max
+	rF32Eq          = regdef.F32Eq
+	rF32Ne          = regdef.F32Ne
+	rF32Lt          = regdef.F32Lt
+	rF32Gt          = regdef.F32Gt
+	rF32Le          = regdef.F32Le
+	rF32Ge          = regdef.F32Ge
+	rF64Add         = regdef.F64Add
+	rF64Sub         = regdef.F64Sub
+	rF64Mul         = regdef.F64Mul
+	rF64Div         = regdef.F64Div
+	rF64Min         = regdef.F64Min
+	rF64Max         = regdef.F64Max
+	rF64Eq          = regdef.F64Eq
+	rF64Ne          = regdef.F64Ne
+	rF64Lt          = regdef.F64Lt
+	rF64Gt          = regdef.F64Gt
+	rF64Le          = regdef.F64Le
+	rF64Ge          = regdef.F64Ge
+	rI32Eqz         = regdef.I32Eqz
+	rI32Clz         = regdef.I32Clz
+	rI32Ctz         = regdef.I32Ctz
+	rI32SExtendI8   = regdef.I32SExtendI8
+	rI32SExtendI16  = regdef.I32SExtendI16
+	rI64Eqz         = regdef.I64Eqz
+	rI64Clz         = regdef.I64Clz
+	rI64Ctz         = regdef.I64Ctz
+	rI64SExtendI8   = regdef.I64SExtendI8
+	rI64SExtendI16  = regdef.I64SExtendI16
+	rI64SExtendI32  = regdef.I64SExtendI32
+	rF32Abs         = regdef.F32Abs
+	rF32Neg         = regdef.F32Neg
+	rF32Sqrt        = regdef.F32Sqrt
+	rF64Abs         = regdef.F64Abs
+	rF64Neg         = regdef.F64Neg
+	rF64Ceil        = regdef.F64Ceil
+	rF64Floor       = regdef.F64Floor
+	rF64Trunc       = regdef.F64Trunc
+	rF64Sqrt        = regdef.F64Sqrt
+	rI32ConvertI64  = regdef.I32ConvertI64
+	rI32SConvertF32 = regdef.I32SConvertF32
+	rI32UConvertF32 = regdef.I32UConvertF32
+	rI32SConvertF64 = regdef.I32SConvertF64
+	rI32UConvertF64 = regdef.I32UConvertF64
+	rI64SConvertI32 = regdef.I64SConvertI32
+	rI64SConvertF32 = regdef.I64SConvertF32
+	rI64UConvertF32 = regdef.I64UConvertF32
+	rI64SConvertF64 = regdef.I64SConvertF64
+	rI64UConvertF64 = regdef.I64UConvertF64
+	rF32SConvertI32 = regdef.F32SConvertI32
+	rF32UConvertI32 = regdef.F32UConvertI32
+	rF32SConvertI64 = regdef.F32SConvertI64
+	rF32UConvertI64 = regdef.F32UConvertI64
+	rF32ConvertF64  = regdef.F32ConvertF64
+	rF64SConvertI32 = regdef.F64SConvertI32
+	rF64UConvertI32 = regdef.F64UConvertI32
+	rF64SConvertI64 = regdef.F64SConvertI64
+	rF64UConvertI64 = regdef.F64UConvertI64
+	rF64ConvertF32  = regdef.F64ConvertF32
+	rI32LoadMem     = regdef.I32LoadMem
+	rI64LoadMem     = regdef.I64LoadMem
+	rF32LoadMem     = regdef.F32LoadMem
+	rF64LoadMem     = regdef.F64LoadMem
+	rI32LoadMem8S   = regdef.I32LoadMem8S
+	rI32LoadMem8U   = regdef.I32LoadMem8U
+	rI32LoadMem16S  = regdef.I32LoadMem16S
+	rI32LoadMem16U  = regdef.I32LoadMem16U
+	rI64LoadMem8S   = regdef.I64LoadMem8S
+	rI64LoadMem8U   = regdef.I64LoadMem8U
+	rI64LoadMem16S  = regdef.I64LoadMem16S
+	rI64LoadMem16U  = regdef.I64LoadMem16U
+	rI64LoadMem32S  = regdef.I64LoadMem32S
+	rI64LoadMem32U  = regdef.I64LoadMem32U
+	rI32StoreMem    = regdef.I32StoreMem
+	rI64StoreMem    = regdef.I64StoreMem
+	rF32StoreMem    = regdef.F32StoreMem
+	rF64StoreMem    = regdef.F64StoreMem
+	rI32StoreMem8   = regdef.I32StoreMem8
+	rI32StoreMem16  = regdef.I32StoreMem16
+	rI64StoreMem8   = regdef.I64StoreMem8
+	rI64StoreMem16  = regdef.I64StoreMem16
+	rI64StoreMem32  = regdef.I64StoreMem32
 	// regOpCount is the number of values the first table's operations take.
-	regOpCount
+	regOpCount = regdef.OpCount
 )
 
 const (

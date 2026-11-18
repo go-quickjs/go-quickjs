@@ -33,6 +33,8 @@ type frame struct {
 	// prefix (rhFar).
 	farN [8]uint64
 	farR [4]Ref
+	// nctx is the frame's context for native code (nativeRun).
+	nctx nativeCtx
 }
 
 // exec is the state of a chain of wasm calls entered from the host: the

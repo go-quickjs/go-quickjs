@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -29,34 +30,35 @@ type regOp = uint8
 // The hand-written operations of the first table; the numeric ones follow
 // from regNumFirst (reg_num_gen.go). The second table's start with the
 // hand-written ones and go on from regExtNumFirst.
+// (internal/regdef says what each is.)
 const (
-	rInvalid     regOp = iota
-	rExt               // regExtTable[X]
-	rMov               // A = B
-	rConst32           // A = BC, zero-extended
-	rConst32S          // A = BC, sign-extended
-	rConst64           // A = the next word
-	rJmp               // pc += BC
-	rBrNZ              // if A != 0: pc += BC
-	rBrZ               // if A == 0: pc += BC
-	rBrTable           // pc = tables[BC][min(A, last)]
-	rRet               // the frame returns, its results in place
-	rRet1              // slot 0 = A; the frame returns
-	rCall              // the call of sites[BC]
-	rReturnCall        // the tail call of sites[BC]
-	rSelect            // if C == 0: A = B
-	rGlobalGet32       // A = global BC's low half
-	rGlobalGet64       // A = global BC
-	rGlobalSet         // global BC = A
-	rMov2              // A, A+1 = B, B+1: a v128
-	rRefMov            // reference A = reference B
-	rRefNull           // reference A = null
-	rConst128          // A, A+1 = the next two words
-	rSIMD              // regSIMDTable[X]
-	rFar               // the instruction after the next two words, its slots past 16 bits (rhFar)
+	rInvalid     regOp = regdef.Invalid
+	rExt         regOp = regdef.Ext
+	rMov         regOp = regdef.Mov
+	rConst32     regOp = regdef.Const32
+	rConst32S    regOp = regdef.Const32S
+	rConst64     regOp = regdef.Const64
+	rJmp         regOp = regdef.Jmp
+	rBrNZ        regOp = regdef.BrNZ
+	rBrZ         regOp = regdef.BrZ
+	rBrTable     regOp = regdef.BrTable
+	rRet         regOp = regdef.Ret
+	rRet1        regOp = regdef.Ret1
+	rCall        regOp = regdef.Call
+	rReturnCall  regOp = regdef.ReturnCall
+	rSelect      regOp = regdef.Select
+	rGlobalGet32 regOp = regdef.GlobalGet32
+	rGlobalGet64 regOp = regdef.GlobalGet64
+	rGlobalSet   regOp = regdef.GlobalSet
+	rMov2        regOp = regdef.Mov2
+	rRefMov      regOp = regdef.RefMov
+	rRefNull     regOp = regdef.RefNull
+	rConst128    regOp = regdef.Const128
+	rSIMD        regOp = regdef.SIMD
+	rFar         regOp = regdef.Far
 
 	// regNumFirst is the first numeric operation's value.
-	regNumFirst regOp = 24
+	regNumFirst regOp = regdef.NumFirst
 )
 
 const (
@@ -263,7 +265,7 @@ func (x *exec) runReg(f *frame, cd *compiled) int32 {
 	if len(rc.regions) > 0 {
 		x.runRegCatching(f, rc)
 	} else {
-		regLoop(unsafe.Pointer(&f.l[0]), unsafe.Pointer(&rc.code[0]), 0, f)
+		regRun(f, rc, 0)
 	}
 	f.rc = nil
 	return f.sig

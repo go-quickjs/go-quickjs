@@ -15,7 +15,7 @@ func TestNumericGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	checkGenerated(t, "./internal/numgen", "ops_num_gen.go", "reg_num_gen.go")
+	checkGenerated(t, "./internal/numgen", "ops_num_gen.go", "reg_num_gen.go", "internal/regdef/num_gen.go")
 }
 
 // checkGenerated runs generator gen, which writes files, into a temporary
@@ -25,13 +25,13 @@ func checkGenerated(t *testing.T, gen string, files ...string) {
 	dir := t.TempDir()
 	args := []string{"run", gen}
 	for _, f := range files {
-		args = append(args, filepath.Join(dir, f))
+		args = append(args, filepath.Join(dir, filepath.Base(f)))
 	}
 	if b, err := osexec.Command("go", args...).CombinedOutput(); err != nil {
 		t.Fatalf("%s: %v\n%s", gen, err, b)
 	}
 	for _, f := range files {
-		want, err := os.ReadFile(filepath.Join(dir, f))
+		want, err := os.ReadFile(filepath.Join(dir, filepath.Base(f)))
 		if err != nil {
 			t.Fatal(err)
 		}

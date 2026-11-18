@@ -10,7 +10,7 @@
 // constant captured. There are too many to keep alike by hand, and so are
 // the register handlers, which are made from the same table of operators.
 //
-// Usage: go run ./wasm/internal/engine/internal/numgen TREE-OUTPUT REG-OUTPUT
+// Usage: go run ./wasm/internal/engine/internal/numgen TREE-OUTPUT REG-OUTPUT REGDEF-OUTPUT
 package main
 
 import (
@@ -248,12 +248,12 @@ func read(k kind, t typ, v string) string {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: numgen TREE-OUTPUT REG-OUTPUT")
+	if len(os.Args) != 4 {
+		fmt.Fprintln(os.Stderr, "usage: numgen TREE-OUTPUT REG-OUTPUT REGDEF-OUTPUT")
 		os.Exit(2)
 	}
 	writeTree(os.Args[1])
-	writeReg(os.Args[2])
+	writeReg(os.Args[2], os.Args[3])
 }
 
 // writeFile formats src and writes it to path.

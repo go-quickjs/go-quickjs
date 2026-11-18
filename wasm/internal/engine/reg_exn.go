@@ -248,7 +248,7 @@ func (x *exec) regTry(f *frame, rc *regCode, pc int32, st tryState, ci int) (nex
 		}
 		panic(exn)
 	}()
-	regLoop(unsafe.Pointer(&f.l[0]), unsafe.Pointer(&rc.code[0]), pc, f)
+	regRun(f, rc, pc)
 	return 0, false
 }
 
