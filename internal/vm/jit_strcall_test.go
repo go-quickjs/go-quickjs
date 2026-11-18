@@ -109,3 +109,69 @@ func TestJITSavedStringCall(t *testing.T) {
 		})
 	}
 }
+
+// codePointAt, at and charAt by the JIT as the interpreter gives them,
+// each case run until its functions are compiled, idle and marking.
+func TestJITStringUnitCalls(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			for _, tc := range stringUnitCalls {
+				for k, m := range stringUnitMethods {
+					r := jitRuntimeForTest(t, Config{JIT: true})
+					p := compileForTest(t, stringUnitSource(tc.source, m))
+					for round := range 12 {
+						v, err := r.Run(p)
+						if err != nil {
+							t.Fatalf("%s %s round %d: %v", m, tc.name, round, err)
+						}
+						if got := v.String().Go(); got != tc.want[k] {
+							t.Fatalf("%s %s round %d: got %q, want %q", m, tc.name, round, got, tc.want[k])
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// A loop of codePointAt, at and charAt calls, compiled, with the
+// built-ins, replaced and put back, by the JIT and the interpreter alike.
+func TestJITStringUnitLoops(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitAgreesForTest(t, `
+                var saved = [String.prototype.codePointAt, String.prototype.at, String.prototype.charAt];
+                function units(s,n) {
+                    let h=0;
+                    for(let j=0;j<n;j++) {
+                        let i=(j%(s.length+3))-2;
+                        h+=s.codePointAt(++i)|0;
+                        let a=s.at(i-1), c=s.charAt(i+1);
+                        if(a===undefined)h+=7;else h+=a.length+a.charCodeAt(0);
+                        h+=c.length*3;
+                        if(c===s[i+1])h+=11;
+                    }
+                    return h;
+                }
+            `,
+				`units("ab\u00e9\ud83d\ude00z",1000)`, `units("ab\u00e9\ud83d\ude00z",1000)`, `units("abcdef",1000)`,
+				`(String.prototype.at=function(i){return "q"+i},units("abcdef",1000))`,
+				`(String.prototype.at=saved[1],String.prototype.codePointAt=function(i){return 1000+i},units("abcdef",1000))`,
+				`(String.prototype.codePointAt=saved[0],units("ab\u00e9\ud83d\ude00z",1000))`,
+			)
+			jitNativeForTest(t, r, "units")
+		})
+	}
+}

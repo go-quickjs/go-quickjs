@@ -1,6 +1,9 @@
 package vm
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
 // savedStringCallLegacySource calls a sloppy method named charCodeAt with
 // an argument evaluated after the method's read.
@@ -91,5 +94,84 @@ func TestSavedStringCalls(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// stringUnitShow prints a value, a string as its code units in hex, so
+// that a lone surrogate prints as itself.
+const stringUnitShow = `function show(v){if(typeof v!="string")return String(v);let o="'";for(let k=0;k<v.length;k++)o+=(k?" ":"")+v.charCodeAt(k).toString(16);return o+"'"}
+`
+
+// stringUnitMethods are the methods stringUnitCalls call, in the order
+// of their answers.
+var stringUnitMethods = [3]string{"codePointAt", "at", "charAt"}
+
+// stringUnitCalls are calls of codePointAt, at and charAt, M in each
+// source, as method calls (call_method_w), with each method's answer,
+// Node's: every position of ASCII, Latin-1, wide and surrogate strings
+// and of ropes, positions that are fractions, negative, NaN, infinite or
+// of no int64, arguments that are not numbers or convert by a call, a
+// receiver that is not a string, overrides, getters, proxies and bound
+// methods.
+var stringUnitCalls = []struct {
+	name, source string
+	want         [3]string
+}{
+	{"ascii", `function f(s){let o=[];for(let i=-4;i<=s.length+1;i++)o.push(show(s.M(i)));return o.join()} f("abc")`, [3]string{"undefined,undefined,undefined,undefined,97,98,99,undefined,undefined", "undefined,'61','62','63','61','62','63',undefined,undefined", "'','','','','61','62','63','',''"}},
+	{"positions", `function f(s){let o=[];for(const i of [-0.5,0.9,-1.5,2.99,-2.99,NaN,Infinity,-Infinity,2**31,2**32+1,2**53,-(2**63),2**63,2**64,1e300,-1e300,-0,5e-324])o.push(show(s.M(i)));return o.join()} f("abc")`, [3]string{"97,97,undefined,99,undefined,97,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,97,97", "'61','61','63','63','62','61',undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,'61','61'", "'61','61','','63','','61','','','','','','','','','','','61','61'"}},
+	{"updates", `function f(s){let i=-1,o=[];o.push(show(s.M(++i)));o.push(show(s.M(i++)));o.push(show(s.M(i+1)));o.push(show(s.M(i-3)));return o.join()+":"+i} f("abc")`, [3]string{"97,97,99,undefined:1", "'61','61','63','62':1", "'61','61','63','':1"}},
+	{"conversions", `function f(s){let o=[];for(const i of ["1","x",undefined,null,true,false,{valueOf(){return 2}},[1],"-1"," 2 ","0x2"])o.push(show(s.M(i)));return o.join()} f("abc")`, [3]string{"98,97,97,97,98,97,99,98,undefined,99,99", "'62','61','61','61','62','61','63','62','63','63','63'", "'62','61','61','61','62','61','63','62','','63','63'"}},
+	{"conversion once", `function f(s){let n=0,i={valueOf(){n++;return 1}};let a=s.M(i);let b=s.M([i][0]);return [show(a),show(b),n].join()} f("abc")`, [3]string{"98,98,2", "'62','62',2", "'62','62',2"}},
+	{"symbol", `function f(s){let i=Symbol();try{s.M([i][0])}catch(e){return e.name}} f("abc")`, [3]string{"TypeError", "TypeError", "TypeError"}},
+	{"bigint", `function f(s){let i=0n;try{s.M(++i)}catch(e){return e.name+":"+i}} f("abc")`, [3]string{"TypeError:1", "TypeError:1", "TypeError:1"}},
+	{"no argument and two", `function f(s){let i=0;return [show(s.M()),show(s.M(i+1,i++)),i].join()} f("abc")`, [3]string{"97,98,1", "'61','62',1", "'61','62',1"}},
+	{"pairs", `function f(s){let o=[];for(let i=-1;i<=s.length;i++)o.push(show(s.M(i)));return o.join()} f("a\ud83d\ude00b\udbff\udfff\ude00x\ud800\ud800\udc00\ud83d")`, [3]string{"undefined,97,128512,56832,98,1114111,57343,56832,120,55296,65536,56320,55357,undefined", "'d83d','61','d83d','de00','62','dbff','dfff','de00','78','d800','d800','dc00','d83d',undefined", "'','61','d83d','de00','62','dbff','dfff','de00','78','d800','d800','dc00','d83d',''"}},
+	{"latin1 and wide", `function f(s){let o=[];for(let i=-s.length-1;i<=s.length;i++)o.push(show(s.M(i)));return o.join()} f("a\u00e9\u20ac\u4e2d\u00ff\u0100\u0080\u007f")`, [3]string{"undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,97,233,8364,20013,255,256,128,127,undefined", "undefined,'61','e9','20ac','4e2d','ff','100','80','7f','61','e9','20ac','4e2d','ff','100','80','7f',undefined", "'','','','','','','','','','61','e9','20ac','4e2d','ff','100','80','7f',''"}},
+	{"latin1 string", `function f(s){let o=[];for(let i=0;i<s.length;i++)o.push(show(s.M(i)));return o.join()} f("\u00e9t\u00e9\u00ff\u0080")`, [3]string{"233,116,233,255,128", "'e9','74','e9','ff','80'", "'e9','74','e9','ff','80'"}},
+	{"rope", `function f(n){let a="abcdefghijklmnopqrstuvwxyz012345",o=[];for(let j=0;j<n;j++){let s=a+"6789abcdefghijklmnopqrstuvwxyz0123456789\u20ac";o.push(show(s.M(j*9-40)))}return o.join()} f(12)`, [3]string{"undefined,undefined,undefined,undefined,undefined,102,111,120,54,102,111,120", "'37','67','70','79','37','66','6f','78','36','66','6f','78'", "'','','','','','66','6f','78','36','66','6f','78'"}},
+	{"wide rope", `function f(n){let a="\u4e2dbcdefghijklmnopqrstuvwxyz012345",o=[];for(let j=0;j<n;j++){let s=a+"6789abcdefghijklmnopqrstuvwxyz0123456789\ud83d\ude00";o.push(show(s.M(j*7-30)))}return o.join()} f(12)`, [3]string{"undefined,undefined,undefined,undefined,undefined,102,109,116,48,55,101,108", "'69','70','77','33','d83d','66','6d','74','30','37','65','6c'", "'','','','','','66','6d','74','30','37','65','6c'"}},
+	{"string object receiver", `function f(){let i=0,s=new String("abc");return show(s.M(++i))} f()`, [3]string{"98", "'62'", "'62'"}},
+	{"number receiver", `function f(){let i=0;Number.prototype.M=String.prototype.M;let a=(12345).M(i+1);delete Number.prototype.M;return show(a)} f()`, [3]string{"50", "'32'", "'32'"}},
+	{"object receiver", `function f(){let i=0,s={toString(){return "xyz"},M:String.prototype.M};return show(s.M(++i))} f()`, [3]string{"121", "'79'", "'79'"}},
+	{"nullish receiver", `function f(){let i=0,c=String.prototype.M;try{c.call(undefined,++i)}catch(e){return e.name+":"+i}} f()`, [3]string{"TypeError:1", "TypeError:1", "TypeError:1"}},
+	{"proxy receiver", `function f(){let log=[],i=0,p=new Proxy({M:String.prototype.M,toString(){return "pq"}},{get(t,k){log.push(String(k));return t[k]}});let a=p.M(++i);return [show(a),log.join("/")].join()} f()`, [3]string{"113,codePointAt/Symbol(Symbol.toPrimitive)/toString", "'71',at/Symbol(Symbol.toPrimitive)/toString", "'71',charAt/Symbol(Symbol.toPrimitive)/toString"}},
+	{"proxy method", `function f(){let i=0,saved=String.prototype.M,c=new Proxy(saved,{apply(t,th,args){return "p"+show(Reflect.apply(t,th,args))}}),s=new String("abc");s.M=c;let a=s.M(++i);String.prototype.M=c;let b="abc".M(i+1);String.prototype.M=saved;return [a,b].join()} f()`, [3]string{"p98,p99", "p'62',p'63'", "p'62',p'63'"}},
+	{"bound", `function f(){let i=0,s={M:String.prototype.M.bind("xyz")};return show(s.M(++i))} f()`, [3]string{"121", "'79'", "'79'"}},
+	{"override", `function read(i){let v="abc".M(i+0);return show(v)} function many(){let o=[];for(let i=0;i<4;i++)o.push(read(i&1));return o.join()} function f(){let saved=String.prototype.M,out=[many()];String.prototype.M=function(i){return "o"+i};out.push(many());String.prototype.M=saved;out.push(many());return out.join("|")} f()`, [3]string{"97,98,97,98|'6f 30','6f 31','6f 30','6f 31'|97,98,97,98", "'61','62','61','62'|'6f 30','6f 31','6f 30','6f 31'|'61','62','61','62'", "'61','62','61','62'|'6f 30','6f 31','6f 30','6f 31'|'61','62','61','62'"}},
+	{"prototype getter", `function f(){let n=0,saved=String.prototype.M,i=0;Object.defineProperty(String.prototype,"M",{configurable:true,get(){n++;return saved}});let a="abc".M(++i),b="abc".M(i+1);Object.defineProperty(String.prototype,"M",{configurable:true,writable:true,value:saved});return [show(a),show(b),n].join()} f()`, [3]string{"98,99,2", "'62','63',2", "'62','63',2"}},
+	{"argument replaces method", `function f(){let s="abc",saved=String.prototype.M,i={valueOf(){String.prototype.M=function(){return 7};return 0}},a=s.M(++i);String.prototype.M=saved;return [show(a),i].join()} f()`, [3]string{"98,1", "'62',1", "'62',1"}},
+	{"identity", `function f(s){let a=s.M(1),b=s.M(1),c="xbx".M(1);return [a===b,a===c,typeof a].join()} f("abc")`, [3]string{"true,true,number", "true,true,string", "true,true,string"}},
+	{"result kept", `function f(s){let o=[];for(let i=0;i<s.length;i++){let c=s.M(i);o.push(c)}return o.map(show).join()} f("ab\u00e9\u20ac")`, [3]string{"97,98,233,8364", "'61','62','e9','20ac'", "'61','62','e9','20ac'"}},
+}
+
+// stringUnitMethod is a word M, stringUnitCalls' method.
+var stringUnitMethod = regexp.MustCompile(`\bM\b`)
+
+// stringUnitSource is stringUnitCalls' source for method m.
+func stringUnitSource(source, m string) string {
+	return stringUnitShow + stringUnitMethod.ReplaceAllString(source, m)
+}
+
+func TestStringUnitCalls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range stringUnitCalls {
+		for k, m := range stringUnitMethods {
+			t.Run(m+"/"+tc.name, func(t *testing.T) {
+				// Twice in one runtime, the second with the sites' caches
+				// filled.
+				r := New(Config{})
+				defer r.Close()
+				p := compileForTest(t, stringUnitSource(tc.source, m))
+				for round := range 2 {
+					v, err := r.Run(p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := v.String().Go(); got != tc.want[k] {
+						t.Fatalf("round %d: got %q, want %q", round, got, tc.want[k])
+					}
+				}
+			})
+		}
 	}
 }

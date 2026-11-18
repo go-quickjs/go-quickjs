@@ -258,6 +258,10 @@ var (
 	offKANone      int32
 	sizeKA         int32
 
+	// offRtCharStrs and offRtLatin1Strs are the runtime's strings of one
+	// ASCII and one Latin-1 character past it (unitString).
+	offRtCharStrs, offRtLatin1Strs int32
+
 	// Switches (switchW).
 	offRCSwitches int32
 	offSwDense    int32
@@ -517,6 +521,8 @@ func loadOffsets() {
 	offFiIndexKeys = off("forInObject.in") + off("forInState.indexKeys")
 	offRtKeyAtoms = rtRel(off("Runtime.keyAtoms"))
 	offRtIntStrs = rtRel(off("Runtime.intStrings"))
+	offRtCharStrs = rtRel(off("Runtime.charStrings"))
+	offRtLatin1Strs = rtRel(off("Runtime.latin1Strings"))
 	offKAS = off("keyAtom.s")
 	offKAAtom = off("keyAtom.atom")
 	offKANone = off("keyAtom.none")

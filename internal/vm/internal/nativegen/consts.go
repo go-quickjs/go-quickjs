@@ -35,6 +35,10 @@ var (
 // closureCode's fields the code reads relative to the context's rt and cc.
 var (
 	elemStrCharCodeAt, elemPush int32
+	// elemStrAt, elemStrCharAt and elemStrCodePointAt are the elemOps of
+	// String.prototype's at, charAt and codePointAt, which with
+	// charCodeAt's are four in a row (strIntrinsic).
+	elemStrAt, elemStrCharAt, elemStrCodePointAt int32
 
 	regCallEnter, regCallThis, regCallObjThis, regCallOut, regCallLeaf, regLeafArg int32
 	regCallNative, regCallConstruct, regCallThrough                                int32
@@ -110,7 +114,8 @@ func loadConsts() {
 	for _, c := range []struct {
 		p    *int32
 		name string
-	}{{&elemStrCharCodeAt, "elemStrCharCodeAt"}, {&elemPush, "elemPush"}, {&regCallNative, "regCallNative"},
+	}{{&elemStrCharCodeAt, "elemStrCharCodeAt"}, {&elemPush, "elemPush"},
+		{&elemStrAt, "elemStrAt"}, {&elemStrCharAt, "elemStrCharAt"}, {&elemStrCodePointAt, "elemStrCodePointAt"}, {&regCallNative, "regCallNative"},
 		{&regCallEnter, "regCallEnter"}, {&regCallThis, "regCallThis"}, {&regCallObjThis, "regCallObjThis"},
 		{&regCallOut, "regCallOut"}, {&regCallLeaf, "regCallLeaf"}, {&regLeafArg, "regLeafArg"}, {&regLeafCode, "regLeafCode"},
 		{&regFrameCall, "regFrameCall"}, {&regFrameEnter, "regFrameEnter"}, {&regFrameGenStep, "regFrameGenStep"}, {&regFrameConstruct, "regFrameConstruct"}, {&regFrameSuper, "regFrameSuper"}, {&regCallConstruct, "regCallConstruct"}, {&regCallThrough, "regCallThrough"},
