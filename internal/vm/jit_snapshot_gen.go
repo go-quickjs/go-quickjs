@@ -9,8 +9,7 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 
 // The methods, numbered.
 const (
-	snapVirtualRoot jitSnapMethod = iota
-	snapBigInt
+	snapBigInt jitSnapMethod = iota
 	snapBigIntWide
 	snapBigIntFailed
 	snapInlineExit
@@ -65,27 +64,17 @@ const (
 	snapPureBody
 	snapHeap
 	snapRawMath
+	snapVirtualRoot
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{false, true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"VirtualRoot", "BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath", "VirtualRoot"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
-
-func (q *jitRegSnapshot) VirtualRoot(pool uintptr) (r0 uintptr, r1 uintptr, r2 bool) {
-	a := q.get(snapVirtualRoot, int64(pool))
-	if a == nil {
-		return
-	}
-	r0, _ = a[0].(uintptr)
-	r1, _ = a[1].(uintptr)
-	r2, _ = a[2].(bool)
-	return r0, r1, r2
-}
 
 func (q *jitRegSnapshot) BigInt(pc int) (r0 bool) {
 	a := q.get(snapBigInt, int64(pc))
@@ -624,6 +613,17 @@ func (q *jitRegSnapshot) RawMath(pc int) (r0 ssa.Intrinsic, r1 bool) {
 	return r0, r1
 }
 
+func (q *jitRegSnapshot) VirtualRoot(pool uintptr) (r0 uintptr, r1 uintptr, r2 bool) {
+	a := q.get(snapVirtualRoot, int64(pool))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].(uintptr)
+	r2, _ = a[2].(bool)
+	return r0, r1, r2
+}
+
 // askOnceReg asks fb the questions of no argument.
 func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 	{
@@ -1095,7 +1095,6 @@ var jitRegSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback,
 // jitRegSnapMethods are the methods the register feedback has, a bit
 // for each.
 const jitRegSnapMethods uint64 = 0 |
-	1<<snapVirtualRoot |
 	1<<snapBigInt |
 	1<<snapBigIntWide |
 	1<<snapBigIntFailed |
@@ -1150,7 +1149,8 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapCellsPool |
 	1<<snapPureBody |
 	1<<snapHeap |
-	1<<snapRawMath
+	1<<snapRawMath |
+	1<<snapVirtualRoot
 
 // The register askers are set at init, as jitSnapAskers are.
 func init() {

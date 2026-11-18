@@ -11,16 +11,16 @@ const (
 	layoutPadNA  = 333
 	layoutPadNGA = -1
 	layoutPadNMA = -1
-	layoutPadND  = 283
+	layoutPadND  = 392
 	layoutPadNGD = -1
 	layoutPadNMD = -1
-	layoutPadNB  = 456
+	layoutPadNB  = 530
 	layoutPadNGB = -1
 	layoutPadNMB = -1
-	layoutPadNJ  = 296
+	layoutPadNJ  = 150
 	layoutPadNGJ = -1
 	layoutPadNMJ = -1
-	layoutPadNQ  = 237
+	layoutPadNQ  = 324
 	layoutPadNGQ = -1
 	layoutPadNMQ = -1
 	layoutPadNW  = 365
@@ -30,12 +30,12 @@ const (
 	layoutPadNGZ = -1
 	layoutPadNMZ = -1
 	layoutPadNCZ = -1
-	layoutPadNH  = 126
+	layoutPadNH  = 97
 	layoutPadNDH = 1
 	layoutPadNDW = 3
 	layoutPadNDG = 0
 )
 
 // layoutPadH is the assembly pad, in
-// zzzyn_native_a_layoutpad_linux_amd64.s. It is never called.
+// native_a_layoutpad_linux_amd64.s. It is never called.
 func layoutPadH()

@@ -8,19 +8,19 @@ package vm
 // stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a
 // data lever's variables.
 const (
-	layoutPadNA  = 260
+	layoutPadNA  = 530
 	layoutPadNGA = -1
 	layoutPadNMA = -1
-	layoutPadND  = 283
+	layoutPadND  = 223
 	layoutPadNGD = -1
 	layoutPadNMD = -1
-	layoutPadNB  = 447
+	layoutPadNB  = 530
 	layoutPadNGB = -1
 	layoutPadNMB = -1
-	layoutPadNJ  = 429
+	layoutPadNJ  = 411
 	layoutPadNGJ = -1
 	layoutPadNMJ = -1
-	layoutPadNQ  = 40
+	layoutPadNQ  = 557
 	layoutPadNGQ = -1
 	layoutPadNMQ = -1
 	layoutPadNW  = 365
@@ -30,12 +30,12 @@ const (
 	layoutPadNGZ = -1
 	layoutPadNMZ = -1
 	layoutPadNCZ = -1
-	layoutPadNH  = 22
+	layoutPadNH  = 36
 	layoutPadNDH = 0
 	layoutPadNDW = 6
 	layoutPadNDG = 0
 )
 
 // layoutPadH is the assembly pad, in
-// zzzyn_native_a_layoutpad_jit_linux_amd64.s. It is never called.
+// native_a_layoutpad_jit_linux_amd64.s. It is never called.
 func layoutPadH()

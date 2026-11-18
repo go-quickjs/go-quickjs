@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadQ is the layout lock's pad Q, after zzreg_report.go, before zzreg_run.go: the register interpreter's loop, runReg.
+// layoutPadQ is the layout lock's pad Q, after reg_report.go, before reg_run.go: the register interpreter's loop, runReg.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

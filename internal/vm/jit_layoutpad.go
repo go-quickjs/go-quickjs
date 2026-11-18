@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadJ is the layout lock's pad J, after zzbigown.go, before the JIT's zzjit files.
+// layoutPadJ is the layout lock's pad J, after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo, or without the JIT the register interpreter's calls, regCall.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline
