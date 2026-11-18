@@ -51,7 +51,7 @@ const modulesJS = `(host) => {
         "The argument 'id' must be a non-empty string. Received ''");
     }
     try {
-      return host.resolve(request, parent ? parent.path : host.cwd);
+      return host.resolve(request, parent ? parent.path : host.cwd, parent && parent.filename ? parent.filename : "");
     } catch (e) {
       if (e && e.code === "MODULE_NOT_FOUND") {
         const stack = requireStack(parent);

@@ -732,6 +732,9 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context, opts 
 	modules, _ := m.(*nodeModules)
 	switch {
 	case opts.isModule(name, src):
+		if modules != nil && !filepath.IsAbs(name) {
+			modules.evalModule = true
+		}
 		_, err = rt.EvalModuleContext(ctx, name, src)
 	case filepath.IsAbs(name) && !opts.script && modules != nil:
 		// A CommonJS file runs as node's entry point does.

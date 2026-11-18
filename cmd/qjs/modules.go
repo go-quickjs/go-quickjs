@@ -65,6 +65,10 @@ type nodeModules struct {
 	// api is what modulesJS returns: load, createRequire, runMain and the
 	// rest, which keep the Module objects and require.cache.
 	api quickjs.Value
+	// evalModule says the program's own input that is not a file -- -e or
+	// standard input -- runs as an ES module, which a resolution error names
+	// [eval1] as it names CommonJS input [eval] or [stdin].
+	evalModule bool
 }
 
 // modulesOf finds a runtime's module system, for the worker it is the
@@ -132,7 +136,7 @@ func installModules(rt *quickjs.Runtime) (*nodeModules, error) {
 			if isBuiltin(request) {
 				return request, nil
 			}
-			f, err := m.resolve(request, filepath.Dir(specifier), importConditions, false)
+			f, err := m.resolve(request, filepath.Dir(specifier), specifier, importConditions, false)
 			if err != nil {
 				return "", err
 			}
@@ -174,18 +178,41 @@ func (m *nodeModules) codedError(code, format string, args ...any) error {
 }
 
 // resolveRequire is require.resolve: a file, as require finds one from a
-// directory.
-func (m *nodeModules) resolveRequire(request, fromDir string) (string, error) {
-	return m.resolve(request, fromDir, requireConditions, true)
+// directory, for the module of file -- the file an error names -- or, file
+// empty, for code that is not a file, which an error names by its directory.
+func (m *nodeModules) resolveRequire(request, fromDir, file string) (string, error) {
+	if file == "" {
+		file = fromDir
+	}
+	return m.resolve(request, fromDir, file, requireConditions, true)
+}
+
+// importer is the directory an import from referrer resolves from and the
+// name a resolution error gives the module it is made from: the module's
+// file, or, for the program's input that is not a file, the name node gives
+// such code in the working directory.
+func (m *nodeModules) importer(referrer string) (dir, name string) {
+	if filepath.IsAbs(referrer) {
+		return filepath.Dir(referrer), referrer
+	}
+	dir = cwd()
+	switch {
+	case (referrer == "<cmdline>" || referrer == "<stdin>") && m.evalModule:
+		return dir, filepath.Join(dir, "[eval1]")
+	case referrer == "<cmdline>" || referrer == "<stdin>":
+		return dir, filepath.Join(dir, evalName(referrer))
+	}
+	return dir, dir
 }
 
 // resolve is node's resolution of a request from a directory: for require
 // (cjs), which tries extensions and index files, or for import, which takes a
-// path as it is written. It returns the file's real path.
-func (m *nodeModules) resolve(request, fromDir string, conditions []string, cjs bool) (string, error) {
+// path as it is written. It returns the file's real path. base is the module
+// a resolution error says the request was made from.
+func (m *nodeModules) resolve(request, fromDir, base string, conditions []string, cjs bool) (string, error) {
 	switch {
 	case strings.HasPrefix(request, "#"):
-		return m.resolveImports(request, fromDir, conditions, cjs)
+		return m.resolveImports(request, fromDir, base, conditions, cjs)
 	case isPathRequest(request):
 		p, err := m.requestPath(request, fromDir)
 		if err != nil {
@@ -197,9 +224,9 @@ func (m *nodeModules) resolve(request, fromDir string, conditions []string, cjs 
 			}
 			return "", m.codedError("MODULE_NOT_FOUND", "Cannot find module '%s'", request)
 		}
-		return m.exactFile(p, request, fromDir)
+		return m.exactFile(p, base)
 	}
-	return m.resolvePackage(request, fromDir, conditions, cjs)
+	return m.resolvePackage(request, fromDir, base, conditions, cjs)
 }
 
 // isPathRequest reports whether a request names a path rather than a
@@ -228,16 +255,16 @@ func (m *nodeModules) requestPath(request, fromDir string) (string, error) {
 
 // exactFile is a file import names exactly: an ES module's import tries no
 // extension and no index file.
-func (m *nodeModules) exactFile(p, request, fromDir string) (string, error) {
+func (m *nodeModules) exactFile(p, base string) (string, error) {
 	isFile, isDir := stat(p)
 	switch {
 	case isFile:
 		return realPath(p), nil
 	case isDir:
 		return "", m.codedError("ERR_UNSUPPORTED_DIR_IMPORT",
-			"Directory import '%s' is not supported resolving ES modules imported from %s", p, fromDir)
+			"Directory import '%s' is not supported resolving ES modules imported from %s", p, base)
 	}
-	return "", m.codedError("ERR_MODULE_NOT_FOUND", "Cannot find module '%s' imported from %s", p, fromDir)
+	return "", m.codedError("ERR_MODULE_NOT_FOUND", "Cannot find module '%s' imported from %s", p, base)
 }
 
 // probe finds a file as require does: the path, with .js or .json, or as a
@@ -278,13 +305,13 @@ func indexFile(dir string) (string, bool) {
 // resolvePackage finds a package's module: the package itself, when the
 // request names the package the directory is in and it has "exports", or
 // one in node_modules, from the directory up.
-func (m *nodeModules) resolvePackage(request, fromDir string, conditions []string, cjs bool) (string, error) {
+func (m *nodeModules) resolvePackage(request, fromDir, base string, conditions []string, cjs bool) (string, error) {
 	name, sub, ok := splitPackage(request)
 	if !ok {
 		return "", m.codedError("ERR_INVALID_MODULE_SPECIFIER", "Invalid module %q", request)
 	}
 	if scope := packageScope(fromDir); scope != nil && scope.Name == name && scope.exports != nil {
-		return m.packageExports(scope, sub, conditions, request)
+		return m.packageExports(scope, sub, base, conditions, cjs)
 	}
 	for dir := fromDir; ; {
 		if filepath.Base(dir) != "node_modules" {
@@ -292,14 +319,14 @@ func (m *nodeModules) resolvePackage(request, fromDir string, conditions []strin
 			if _, isDir := stat(pkgDir); isDir {
 				pkg := readPackage(pkgDir)
 				if pkg != nil && pkg.exports != nil {
-					return m.packageExports(pkg, sub, conditions, request)
+					return m.packageExports(pkg, sub, base, conditions, cjs)
 				}
 				p := filepath.Join(pkgDir, filepath.FromSlash(sub))
 				if f, ok := probe(p); ok && (cjs || sub == ".") {
 					return realPath(f), nil
 				}
 				if !cjs && sub != "." {
-					return m.exactFile(p, request, fromDir)
+					return m.exactFile(p, base)
 				}
 				break
 			}
@@ -313,7 +340,7 @@ func (m *nodeModules) resolvePackage(request, fromDir string, conditions []strin
 	if cjs {
 		return "", m.codedError("MODULE_NOT_FOUND", "Cannot find module '%s'", request)
 	}
-	return "", m.codedError("ERR_MODULE_NOT_FOUND", "Cannot find package '%s' imported from %s", name, fromDir)
+	return "", m.codedError("ERR_MODULE_NOT_FOUND", "Cannot find package '%s' imported from %s", name, base)
 }
 
 // splitPackage is a request's package name and the subpath in it: "a/b" is
@@ -337,8 +364,13 @@ func splitPackage(request string) (name, sub string, ok bool) {
 
 // packageExports is a subpath of a package, through its "exports": the
 // target the first condition it is read with gives, which has to be a file
-// in the package.
-func (m *nodeModules) packageExports(pkg *packageJSON, sub string, conditions []string, request string) (string, error) {
+// in the package. An import's error says which module made it (base); a
+// require's does not, its require stack saying so.
+func (m *nodeModules) packageExports(pkg *packageJSON, sub, base string, conditions []string, cjs bool) (string, error) {
+	from := ""
+	if !cjs {
+		from = " imported from " + base
+	}
 	target, found, err := matchSubpath(pkg.exports, sub, ".", conditions)
 	if err != nil {
 		return "", m.codedError("ERR_INVALID_PACKAGE_TARGET",
@@ -347,10 +379,10 @@ func (m *nodeModules) packageExports(pkg *packageJSON, sub string, conditions []
 	if !found {
 		if sub == "." {
 			return "", m.codedError("ERR_PACKAGE_PATH_NOT_EXPORTED",
-				"No \"exports\" main defined in %s", pkg.file())
+				"No \"exports\" main defined in %s%s", pkg.file(), from)
 		}
 		return "", m.codedError("ERR_PACKAGE_PATH_NOT_EXPORTED",
-			"Package subpath '%s' is not defined by \"exports\" in %s", sub, pkg.file())
+			"Package subpath '%s' is not defined by \"exports\" in %s%s", sub, pkg.file(), from)
 	}
 	f := filepath.Join(pkg.dir, filepath.FromSlash(target))
 	if isFile, _ := stat(f); !isFile {
@@ -361,20 +393,20 @@ func (m *nodeModules) packageExports(pkg *packageJSON, sub string, conditions []
 
 // resolveImports is a #name, through the "imports" of the package the
 // directory is in: a file of the package, or another package's module.
-func (m *nodeModules) resolveImports(request, fromDir string, conditions []string, cjs bool) (string, error) {
+func (m *nodeModules) resolveImports(request, fromDir, base string, conditions []string, cjs bool) (string, error) {
 	pkg := packageScope(fromDir)
 	if pkg == nil || pkg.imports == nil {
 		return "", m.codedError("ERR_PACKAGE_IMPORT_NOT_DEFINED",
-			"Package import specifier %q is not defined imported from %s", request, fromDir)
+			"Package import specifier %q is not defined imported from %s", request, base)
 	}
 	target, found, err := matchSubpath(pkg.imports, request, "#", conditions)
 	if err != nil || !found {
 		return "", m.codedError("ERR_PACKAGE_IMPORT_NOT_DEFINED",
-			"Package import specifier %q is not defined in package %s imported from %s", request, pkg.file(), fromDir)
+			"Package import specifier %q is not defined in package %s imported from %s", request, pkg.file(), base)
 	}
 	if !strings.HasPrefix(target, "./") {
 		// Another package's module.
-		return m.resolvePackage(target, pkg.dir, conditions, cjs)
+		return m.resolvePackage(target, pkg.dir, base, conditions, cjs)
 	}
 	f := filepath.Join(pkg.dir, filepath.FromSlash(target))
 	if isFile, _ := stat(f); !isFile {
@@ -671,11 +703,8 @@ func (m *nodeModules) loadESM(specifier, referrer string) (string, string, error
 		// An installed one never reaches the loader.
 		return "", "", m.codedError("ERR_UNKNOWN_BUILTIN_MODULE", "No such built-in module: %s", specifier)
 	}
-	from := cwd()
-	if filepath.IsAbs(referrer) {
-		from = filepath.Dir(referrer)
-	}
-	filename, err := m.resolve(specifier, from, importConditions, false)
+	from, base := m.importer(referrer)
+	filename, err := m.resolve(specifier, from, base, importConditions, false)
 	if err != nil {
 		return "", "", err
 	}
@@ -740,7 +769,7 @@ func (m *nodeModules) commonJSNames(filename string, seen map[string]bool) ([]st
 		if isBuiltin(request) {
 			continue
 		}
-		f, err := m.resolve(request, filepath.Dir(filename), requireConditions, true)
+		f, err := m.resolve(request, filepath.Dir(filename), filename, requireConditions, true)
 		if err != nil || isESM(f) {
 			continue
 		}
