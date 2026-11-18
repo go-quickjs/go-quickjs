@@ -456,3 +456,64 @@ func TestRegMatchesTreeOnWorkloads(t *testing.T) {
 		}
 	}
 }
+
+const regRefs = `(module
+  (type $f (func (result i32)))
+  (global $g (mut funcref) (ref.null func))
+  (func $one (type $f) (i32.const 1))
+  (elem declare func $one)
+  (func (export "refs") (param i32) (result i32) (local funcref)
+    (local.set 1 (ref.func $one))
+    (global.set $g (select (result funcref) (local.get 1) (ref.null func) (local.get 0)))
+    (ref.is_null (global.get $g)))
+  (func (export "bronnull") (param i32) (result i32) (local funcref)
+    (if (local.get 0) (then (local.set 1 (ref.func $one))))
+    (block $null (result i32)
+      (i32.const 7)
+      (br_on_null $null (local.get 1))
+      (drop) (drop) (i32.const 9)))
+  (func (export "nonnull") (param externref) (result i32)
+    (block $nn (result externref)
+      (br_on_non_null $nn (local.get 0))
+      (return (i32.const 5)))
+    (drop) (i32.const 6))
+  (func (export "pass") (param externref externref i32) (result externref)
+    (select (result externref) (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "asnn") (param externref) (result i32) (drop (ref.as_non_null (local.get 0))) (i32.const 1)))`
+
+// TestRegRefs checks register code's references: locals, globals, select,
+// ref.func, ref.is_null, br_on_null, br_on_non_null and ref.as_non_null.
+func TestRegRefs(t *testing.T) {
+	inst := instantiateMode(t, regRefs, true)
+	host := HostRef("x")
+	for _, c := range []struct {
+		name string
+		args []Val
+		want Val
+	}{
+		{"refs", []Val{{N: 1}}, Val{N: 0}},
+		{"refs", []Val{{N: 0}}, Val{N: 1}},
+		{"bronnull", []Val{{N: 0}}, Val{N: 7}},
+		{"bronnull", []Val{{N: 1}}, Val{N: 9}},
+		{"nonnull", []Val{{R: Null}}, Val{N: 5}},
+		{"nonnull", []Val{{R: host}}, Val{N: 6}},
+		{"pass", []Val{{R: host}, {R: Null}, {N: 1}}, Val{R: host}},
+		{"pass", []Val{{R: host}, {R: Null}, {N: 0}}, Val{R: Null}},
+		{"asnn", []Val{{R: host}}, Val{N: 1}},
+	} {
+		ext, _ := inst.Export(c.name)
+		got, err := Invoke(context.Background(), ext.Func, c.args)
+		if err != nil || got[0] != c.want {
+			t.Errorf("%s%v = %v, %v; want %v", c.name, c.args, got, err, c.want)
+		}
+		if regOf(inst, c.name) == nil {
+			t.Errorf("%s runs the closure tree", c.name)
+		}
+	}
+	ext, _ := inst.Export("asnn")
+	_, err := Invoke(context.Background(), ext.Func, []Val{{R: Null}})
+	var tr *Trap
+	if !errors.As(err, &tr) || tr.Code != TrapNullDereference {
+		t.Fatalf("asnn(null) = %v, want a null dereference", err)
+	}
+}

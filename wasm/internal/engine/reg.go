@@ -48,17 +48,43 @@ const (
 	rGlobalGet32       // A = global BC's low half
 	rGlobalGet64       // A = global BC
 	rGlobalSet         // global BC = A
+	rMov2              // A, A+1 = B, B+1: a v128
+	rRefMov            // reference A = reference B
+	rRefNull           // reference A = null
+	rConst128          // A, A+1 = the next two words
+	rSIMD              // regSIMDTable[X]
 
 	// regNumFirst is the first numeric operation's value.
 	regNumFirst regOp = 24
 )
 
 const (
-	xUnreachable regOp = iota // trap
-	xMemorySize               // A = memory 0's size in pages
-	xMemoryGrow               // A = memory 0 grown by B pages
+	xUnreachable  regOp = iota // trap
+	xMemorySize                // A = memory 0's size in pages
+	xMemoryGrow                // A = memory 0 grown by B pages
+	xGlobalGetRef              // reference A = global BC
+	xGlobalSetRef              // global BC = reference A
+	xGlobalGet128              // v128 A = global BC
+	xGlobalSet128              // global BC = v128 A
+	xSelectRef                 // if C == 0: reference A = reference B
+	xSelect128                 // if C == 0: v128 A = v128 B
+	xRefIsNull                 // A = reference B is null
+	xRefFunc                   // reference A = function BC
+	xRefEq                     // A = references B and C are the same
+	xRefAsNonNull              // trap if reference A is null
+	xBrNull                    // if reference A is null: pc += BC
+	xBrNonNull                 // if reference A is not null: pc += BC
+	xCaughtTo                  // drop the caught exceptions past the frame's BC-th
 
-	regExtNumFirst
+	// regExtNumFirst is the second table's first numeric operation.
+	regExtNumFirst regOp = 32
+)
+
+// The kinds of value a move carries: a word, a v128's two, a reference.
+const (
+	vkNum uint8 = iota
+	vkV128
+	vkRef
 )
 
 // regNum is how a numeric operator compiles (regNumeric): op is its
@@ -90,6 +116,9 @@ type regCode struct {
 	// loops maps each loop's head, by pc, to the loop's offset in the
 	// module, which names its entry in native code.
 	loops map[int32]uint32
+	// regions are the bodies of the code's try constructs, which a frame
+	// that has any runs under the catching loop (reg_exn.go).
+	regions []regRegion
 }
 
 // regSite is a call's site: the function called, the offset of the call,
@@ -101,8 +130,11 @@ type regSite struct {
 	args, rets []regMove
 }
 
-// regMove is a slot's move from one frame to another.
-type regMove struct{ from, to uint32 }
+// regMove is a value's move from one frame's slot to another's, of kind k.
+type regMove struct {
+	from, to uint32
+	k        uint8
+}
 
 // regHandler is an operation's handler: given the frame's numeric slots,
 // the instruction, its pc and the frame, it returns the pc to go on at: the
@@ -114,15 +146,57 @@ type regHandler func(l unsafe.Pointer, w uint64, pc int32, f *frame) int32
 const regDone int32 = math.MinInt32
 
 var (
-	regTable     [256]regHandler
-	regSlowTable [256]regHandler
-	regExtTable  [256]regHandler
+	regTable        [256]regHandler
+	regSlowTable    [256]regHandler
+	regExtTable     [256]regHandler
+	regExtSlowTable [256]regHandler
+	regSIMDTable    [256]regHandler
 )
 
 // rs returns the slot an instruction's field e, in its low 16 bits, names.
 // The compiler made every slot an instruction names one of the frame's.
 func rs(l unsafe.Pointer, e uint64) *uint64 {
 	return (*uint64)(unsafe.Add(l, uintptr(uint16(e))<<3))
+}
+
+// rv returns the v128 in the slots field e names; setV stores one there.
+func rv(l unsafe.Pointer, e uint64) V128 {
+	p := rs(l, e)
+	return V128{*p, *(*uint64)(unsafe.Add(unsafe.Pointer(p), 8))}
+}
+
+func setV(l unsafe.Pointer, e uint64, v V128) {
+	p := rs(l, e)
+	*p = v.Lo
+	*(*uint64)(unsafe.Add(unsafe.Pointer(p), 8)) = v.Hi
+}
+
+// rr returns the reference slot field e names.
+func (f *frame) rr(e uint64) *Ref { return &f.r[uint16(e)] }
+
+// getVal and putVal read and write a value of kind k in slot s of frame f,
+// whose numeric slots are at l.
+func getVal(l unsafe.Pointer, f *frame, k uint8, s uint32) Val {
+	switch k {
+	case vkRef:
+		return Val{R: f.r[s]}
+	case vkV128:
+		p := (*[2]uint64)(unsafe.Add(l, uintptr(s)<<3))
+		return Val{N: p[0], Hi: p[1]}
+	}
+	return Val{N: *(*uint64)(unsafe.Add(l, uintptr(s)<<3))}
+}
+
+func putVal(l unsafe.Pointer, f *frame, k uint8, s uint32, v Val) {
+	switch k {
+	case vkRef:
+		f.r[s] = v.R
+	case vkV128:
+		p := (*[2]uint64)(unsafe.Add(l, uintptr(s)<<3))
+		p[0], p[1] = v.N, v.Hi
+	default:
+		*(*uint64)(unsafe.Add(l, uintptr(s)<<3)) = v.N
+	}
 }
 
 // regPCMark marks a trap's offset as a pc of register code (regAt), which
@@ -268,6 +342,34 @@ func rhExt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return regExtTable[uint8(w>>8)](l, w, pc, f)
 }
 
+func rhExtSlow(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	return regExtSlowTable[uint8(w>>8)](l, w, pc, f)
+}
+
+func rhSIMD(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	return regSIMDTable[uint8(w>>8)](l, w, pc, f)
+}
+
+func rhMov2(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	setV(l, w>>16, rv(l, w>>32))
+	return pc + 1
+}
+
+func rhRefMov(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	*f.rr(w >> 16) = *f.rr(w >> 32)
+	return pc + 1
+}
+
+func rhRefNull(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	*f.rr(w >> 16) = Null
+	return pc + 1
+}
+
+func rhConst128(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	setV(l, w>>16, V128{f.rc.code[pc+1], f.rc.code[pc+2]})
+	return pc + 3
+}
+
 func rhMov(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	*rs(l, w>>16) = *rs(l, w>>32)
 	return pc + 1
@@ -341,34 +443,61 @@ func rhCall(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	fn := f.inst.Funcs[s.fn]
 	x.calls[len(x.calls)-1].offset = s.at
 	if fn.Host != nil {
-		regHostCall(l, x, fn, s)
+		regHostCall(l, f, fn, s)
 		return pc + 1
 	}
 	cd := fn.Inst.Code.get(fn.Index)
 	nc, nsp, rc, rsp := x.nc, x.nsp, x.rc, x.rsp
 	nl, _, _ := x.takeNum(cd.nslots)
 	nr, _, _ := x.takeRef(cd.rslots)
-	for _, m := range s.args {
-		nl[m.to] = *rs(l, uint64(m.from))
-	}
+	regArgs(l, f, s.args, nl, nr)
 	x.run(fn, cd, nl, nr, nc, nsp, rc, rsp)
-	for _, m := range s.rets {
-		*rs(l, uint64(m.to)) = nl[m.from]
-	}
+	regRets(l, f, s.rets, nl, nr)
 	x.nc, x.nsp, x.rc, x.rsp = nc, nsp, rc, rsp
 	return pc + 1
 }
 
+// regArgs moves a call's arguments into the callee's frame nl and nr.
+func regArgs(l unsafe.Pointer, f *frame, args []regMove, nl []uint64, nr []Ref) {
+	for _, m := range args {
+		switch m.k {
+		case vkNum:
+			nl[m.to] = *(*uint64)(unsafe.Add(l, uintptr(m.from)<<3))
+		case vkV128:
+			p := (*[2]uint64)(unsafe.Add(l, uintptr(m.from)<<3))
+			nl[m.to], nl[m.to+1] = p[0], p[1]
+		default:
+			nr[m.to] = f.r[m.from]
+		}
+	}
+}
+
+// regRets moves a call's results out of the callee's frame nl and nr.
+func regRets(l unsafe.Pointer, f *frame, rets []regMove, nl []uint64, nr []Ref) {
+	for _, m := range rets {
+		switch m.k {
+		case vkNum:
+			*(*uint64)(unsafe.Add(l, uintptr(m.to)<<3)) = nl[m.from]
+		case vkV128:
+			p := (*[2]uint64)(unsafe.Add(l, uintptr(m.to)<<3))
+			p[0], p[1] = nl[m.from], nl[m.from+1]
+		default:
+			f.r[m.to] = nr[m.from]
+		}
+	}
+}
+
 // regHostCall calls host function fn from site s.
-func regHostCall(l unsafe.Pointer, x *exec, fn *Function, s *regSite) {
+func regHostCall(l unsafe.Pointer, f *frame, fn *Function, s *regSite) {
+	x := f.x
 	vals, top := x.takeVals(len(s.args))
 	for i, m := range s.args {
-		vals[i] = Val{N: *rs(l, uint64(m.from))}
+		vals[i] = getVal(l, f, m.k, m.from)
 	}
 	res := x.hostCall(fn, vals)
 	x.vals = x.vals[:top]
 	for i, m := range s.rets {
-		*rs(l, uint64(m.to)) = res[i].N
+		putVal(l, f, m.k, m.to, res[i])
 	}
 }
 
@@ -377,7 +506,7 @@ func rhReturnCall(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	x := f.x
 	x.tailArgs = x.tailArgs[:0]
 	for _, m := range s.args {
-		x.tailArgs = append(x.tailArgs, Val{N: *rs(l, uint64(m.from))})
+		x.tailArgs = append(x.tailArgs, getVal(l, f, m.k, m.from))
 	}
 	x.tail = f.inst.Funcs[s.fn]
 	f.sig = sigTail
@@ -427,6 +556,7 @@ func init() {
 		rJmp: rhJmp, rBrNZ: rhBrNZ, rBrZ: rhBrZ, rBrTable: rhBrTable,
 		rRet: rhRet, rRet1: rhRet1, rCall: rhCall, rReturnCall: rhReturnCall, rSelect: rhSelect,
 		rGlobalGet32: rhGlobalGet32, rGlobalGet64: rhGlobalGet64, rGlobalSet: rhGlobalSet,
+		rMov2: rhMov2, rRefMov: rhRefMov, rRefNull: rhRefNull, rConst128: rhConst128, rSIMD: rhSIMD,
 	} {
 		regTable[op] = h
 	}
@@ -434,10 +564,11 @@ func init() {
 	regSlowTable[rBrNZ] = regSlow32
 	regSlowTable[rBrZ] = regSlow32
 	regSlowTable[rBrTable] = regSlowBrTable
+	regSlowTable[rExt] = rhExtSlow
 	regExtTable[xUnreachable] = rhUnreachable
 	regExtTable[xMemorySize] = rhMemorySize
 	regExtTable[xMemoryGrow] = rhMemoryGrow
-	for _, t := range []*[256]regHandler{&regTable, &regSlowTable, &regExtTable} {
+	for _, t := range []*[256]regHandler{&regTable, &regSlowTable, &regExtTable, &regExtSlowTable, &regSIMDTable} {
 		for i := range t {
 			if t[i] == nil {
 				t[i] = rhInvalid
