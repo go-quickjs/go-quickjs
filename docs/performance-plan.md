@@ -110,9 +110,10 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
 - **asm.js modules' limits.** A function table of more than four functions
   learns its targets one call at a time; only the first closure of a
   module's template is linked to typed code; a module instantiated a second
-  time in a runtime runs as ordinary code. The JIT does not inline a typed
-  callee: `asm_call_leaf` took 9.4 ns with the JIT against 4.3 for the
-  same code as ordinary JavaScript, and `asm_fib` 29% longer (v0.39.0).
+  time in a runtime runs as ordinary code. The JIT inlines a typed callee
+  nothing inside of which exits (`asm_call_leaf` 9.4 ns at v0.39.0, 4.5
+  now, against 4.3 for the same code as ordinary JavaScript); `asm_fib`
+  still takes 23% longer with the JIT than as ordinary JavaScript.
 - **The leaf evaluators** (`pureCall`, `leafCall`), which evaluate register
   code (regcomp's pure and leaf bodies) for the Go table and wherever no
   native handler takes the call. A recursion of pure calls deeper than 32
@@ -442,7 +443,12 @@ the stack JIT lowered; their counts are from then.
   its SSA build 36% of it, the encoding 20% and the optimizer 18%.
   Compiling a callee on its own budget rather than at its native caller's
   call (Are We Fast Yet +15%) was dropped; the tier-up budgets wait for a
-  baseline compiler's experiment. RegExp's share is its exec arrays: the
+  baseline compiler's experiment. Compiled in the background (as `qjs
+  --jit` compiles), the compiles leave the runtime's goroutine: Octane's
+  fixed work takes 0.92 times what it takes compiled in the foreground
+  (1,223 against 1,326 ms over four placements, 2026-11-18), where it had
+  taken 1.49 times, zlib 3.3 times; Are We Fast Yet's takes 1.004 times,
+  DeltaBlue 1.03 (1.13 before). RegExp's share is its exec arrays: the
   interpreter reuses them (`zzz_regexpreuse.go`), which a runtime with the
   JIT does not, in code native or interpreted.
 - **Where a compile's time and memory go.** `allocate` 14% of a compile,
@@ -756,8 +762,7 @@ by more than 3% at every placement:
 - The register JIT against the stack JIT: Octane's RayTrace +7.6%; Are We
   Fast Yet's Json +8.2%, Permute +7.0% and Queens +6.3% (Havlak +3.2% at two
   placements of four); 27 micro-benchmarks, among them generators and async
-  functions (+11 to 29%), loops whose objects are carried across calls
-  (`carried_exit_*`, `carried_every_*`, +10 to 35%), `array_fill_down`
+  functions (+11 to 29%), `array_fill_down`
   (+137%), `math_clz32` (+17%), classes and prototypes (+10 to 22%),
   `forward_poly` and `forward_loop` (+9%) and `json_parse_new_layout`
   (+16%). The interpreter's two are listed above, under the register
