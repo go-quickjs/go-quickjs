@@ -396,6 +396,9 @@ func (r *Runtime) regDirect(o *Object, fd *funcData, c *regCode, this Value, arg
 	for i, a := range args[:m] {
 		w[2+i] = a
 	}
+	if c.fn.HasTailCall {
+		return r.regDirectTail(o, fd.closure, c, base, m, args)
+	}
 	if r.nodeQuirks {
 		// f.arguments reads the arguments as the built-in passed them.
 		return r.regDirectLegacy(o, fd.closure, c, base, m, args)

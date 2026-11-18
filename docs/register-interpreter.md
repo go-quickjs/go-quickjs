@@ -910,6 +910,13 @@ returns a parameter or a constant is answered from the arguments
 (`callDirect`). A runtime that runs the JIT keeps its leaves on
 `callDirect`, which counts them for tier-up, and so does the Go table,
 whose loop entered for each call is slower than the frameless evaluators.
+A function with calls in tail position is entered so too, directly
+(`regDirectTail`) or kept ready: its frame may end given to a callee in
+place or in a call given up, which the entry finishes once the frame is
+closed (`regTailEntryEnd`) -- the frame run again with the callee's code
+(`regRerun`), or the call made by `regTailLoop`, but where that loop owns
+the chain at this depth -- and a kept callback's window is reserved again
+as it was, however many registers a callee given its frame used.
 A reviver that cannot see a third argument -- fewer than three parameters,
 none a rest parameter, no arguments object or direct eval, no debugger and
 not Node's quirks -- is given no context object, and the parse keeps no

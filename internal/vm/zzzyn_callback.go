@@ -192,6 +192,9 @@ func (cb *regCallback) call(args []Value) (Value, error) {
 		regCloseUpvalues(f)
 	}
 	r.frameDepth--
+	if c.fn.HasTailCall {
+		return r.regTailEntryEnd(v, err, cb.base+int(c.numRegs))
+	}
 	return v, err
 }
 

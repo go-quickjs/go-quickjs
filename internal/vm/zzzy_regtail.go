@@ -11,8 +11,7 @@ import (
 // tail_call_method_w; docs/register-interpreter.md, "Frames and calls"),
 // in a file that sorts after the package's others but the layout lock's
 // last pad: what only a tail call runs moves none of the call path's code.
-// regPlan, which gives no regCall to a function with a tail call, is here
-// too:
+// regPlan and the direct entry of a function with tail calls are here too:
 // with the call path grown by the tail calls' checks of its errors, 192
 // bytes, its 192 bytes leave the slow path, regIn, regNative and runReg where
 // they were before tail calls (weak_map_set, has_own_method_hit and
@@ -20,9 +19,8 @@ import (
 
 // regCallEnd is regCall's end in an error: where its frame ended in a tail
 // call (errTailCall), the chain the call starts made by regTailLoop,
-// unless the loop called it (tailLoopDepth). Only regCall's own frame can
-// end so: a function with a tail call has no regCall (regPlan), so
-// callDirect makes its tail calls itself.
+// unless the loop called it (tailLoopDepth). A direct register entry also
+// finishes its tail calls here, after closing its frame (regDirectTail).
 //
 //go:noinline
 func (r *Runtime) regCallEnd(v Value, err error) (Value, error) {
@@ -82,6 +80,36 @@ func (r *Runtime) regTailRest() (Value, error) {
 	tc := r.pendingTail
 	r.pendingTail = tailCall{}
 	return r.regCall(tc.callee, tc.this, tc.args)
+}
+
+// regDirectTail enters a direct callback whose frame may be replaced or
+// given up by a tail call. The entry closes its frame first; a replacement
+// is reopened in the same slot, and a pending call is consumed here unless
+// regTailLoop already owns the chain at this depth.
+func (r *Runtime) regDirectTail(o *Object, cl *closure, c *regCode, base, m int, args []Value) (Value, error) {
+	var v Value
+	var err error
+	if r.nodeQuirks {
+		v, err = r.regDirectLegacy(o, cl, c, base, m, args)
+	} else {
+		v, err = r.regEnterW(o, cl, c, base, m, args, Undefined)
+	}
+	return r.regTailEntryEnd(v, err, base)
+}
+
+// regTailEntryEnd finishes a direct or retained callback's tail
+// completion, after its entry closed the frame. A retained callback keeps
+// its original window reserved between calls, even if a tail replacement
+// used a larger one.
+func (r *Runtime) regTailEntryEnd(v Value, err error, saved int) (Value, error) {
+	if err == errRegRestart {
+		v, err = r.regRerun(r.frameAt(r.frameDepth), regFrameEnter, saved)
+	}
+	r.stackTop = saved
+	if err != nil {
+		return r.regCallEnd(v, err)
+	}
+	return v, nil
 }
 
 // regTailCallW is tail_call_w and tail_call_method_w: call_w and
@@ -308,11 +336,6 @@ func regPlan(fd *funcData) {
 	}
 	c := (*regCode)(atomic.LoadPointer(&fd.closure.fn.VMCode))
 	if c == nil || !c.wide || c.suspends {
-		return
-	}
-	if fd.closure.fn.HasTailCall {
-		// A frame that may end in a tail call, whose callers must make
-		// it: no regCall, whose callers expect none.
 		return
 	}
 	if isClassConstructorKind(fd.closure.fn.Kind) {
