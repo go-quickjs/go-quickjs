@@ -666,8 +666,8 @@ func (d *deserializer) value(i int) (Value, error) {
 		n.bytes = nil
 	case snSharedArrayBuffer:
 		if r.nodeQuirks && n.mem.host != nil && n.mem.max >= 0 {
-			// Node cannot deserialize a growable buffer over memory a host
-			// owns, a WebAssembly memory's toResizableBuffer().
+			// With Node's quirks, a growable buffer over memory a host owns
+			// -- a WebAssembly memory's toResizableBuffer() -- is refused.
 			return Undefined, r.throwError(errError, "Unable to deserialize cloned data.")
 		}
 		o = r.NewSharedArrayBuffer(n.mem).Object()
