@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
@@ -14,8 +15,8 @@ import (
 )
 
 // instantiateMode instantiates the module of src with its bodies compiled to
-// register code where the register compiler takes them (reg), or to the
-// closure tree.
+// register code (reg), or to the closure tree, and run by the interpreter
+// alone, whatever WASM_JIT asks.
 func instantiateMode(t *testing.T, src string, reg bool) *Instance {
 	t.Helper()
 	b, err := wat.Compile([]byte(src))
@@ -29,8 +30,7 @@ func instantiateMode(t *testing.T, src string, reg bool) *Instance {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := NewCode(m)
-	code.reg = reg
+	code := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions)), reg: reg}
 	inst, err := Instantiate(context.Background(), code, nil)
 	if err != nil {
 		t.Fatal(err)
