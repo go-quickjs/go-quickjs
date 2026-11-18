@@ -2,10 +2,8 @@
 
 Native code for WebAssembly functions, built only with the `quickjs_jit` tag
 on amd64 (linux and windows) and arm64 (darwin and linux) and used only for
-code that asks for it (`engine.Code.EnableJIT`, or `WASM_JIT` in tests). On
-linux/arm64 it is the only native code: the JavaScript JIT is not built
-there, and the engine checks `internal/jit.RawSupported`, not `Supported`.
-Elsewhere -- without the tag, on 386, on other systems -- the engine's
+code that asks for it (`engine.Code.EnableJIT`, or `WASM_JIT` in tests),
+where the JavaScript JIT is built too (`internal/jit.Supported`). Elsewhere -- without the tag, on 386, on other systems -- the engine's
 `jit_off.go` makes every hook a constant or an empty type, and the
 closure-tree interpreter (`wasm/internal/engine`) runs everything.
 

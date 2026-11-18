@@ -41,7 +41,7 @@ func storeCode(v uint32, n int) []byte {
 // stopping it: were a page that code is in made writable meanwhile, the
 // goroutines running it would fault.
 func TestPlaceRawApart(t *testing.T) {
-	if !RawSupported() {
+	if !Supported() {
 		t.Skip("no native code")
 	}
 	a := NewArena()

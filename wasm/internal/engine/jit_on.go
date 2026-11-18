@@ -24,7 +24,7 @@ import (
 
 const jitBuilt = true
 
-func jitAvailable() bool { return ijit.RawSupported() }
+func jitAvailable() bool { return ijit.Supported() }
 
 // jitCodeIDs counts the codeJITs made, for their ids.
 var jitCodeIDs atomic.Uint64
@@ -502,7 +502,7 @@ func (c *Code) setOSRThreshold(n int) {
 }
 
 func (c *Code) enableJIT(threshold int) bool {
-	if !ijit.RawSupported() {
+	if !ijit.Supported() {
 		return false
 	}
 	if threshold < 0 {

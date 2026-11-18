@@ -491,8 +491,7 @@ r := wasm.NewRuntimeWithConfig(ctx, wasm.NewRuntimeConfigCompiler())
 
 A `quickjs.Runtime` made `WithJIT` (`qjs --jit`) compiles the WebAssembly its
 scripts load as well, on the platforms where the JavaScript JIT runs:
-linux/amd64, windows/amd64 and darwin/arm64. On linux/arm64 only the Go API
-reaches the wasm JIT. A runtime made `WithDebugger` runs wasm in the
+linux/amd64, windows/amd64, darwin/arm64 and linux/arm64. A runtime made `WithDebugger` runs wasm in the
 interpreter.
 
 A function is compiled to native code at its first call

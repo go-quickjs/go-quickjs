@@ -357,9 +357,9 @@ design, which a change to that design updates in the same commit.
   package or `stdlib` depends on one, or when the tag no longer decides
   whether `qjs` links the wasm engine.
   What the bridge needs of the VM is a host hook, a package variable
-  assigned in the `init` of `internal/vm/zzzz_host.go`, the last file, so
-  that no function moves (see the layout rules above); `HostJITEnabled` is
-  set in `zzzz_host_jit.go`, built with the JIT. wazero is a benchmark
+  assigned a closure in the `init` of `internal/vm/host_hooks.go`, so that
+  it adds no function among the package's (see the layout rules above);
+  `HostJITEnabled` is set in `host_hooks_jit.go`, built with the JIT. wazero is a benchmark
   baseline only, in a module of its own: `TestNoWazeroDependency` fails if
   it reaches `go.mod` or `go.sum`.
 - What a module is told is V8's, word for word: the decoder's and the

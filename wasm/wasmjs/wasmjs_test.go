@@ -245,8 +245,7 @@ func TestJITRuntimeCompilesWasm(t *testing.T) {
 		t.Skip("no native code in this build")
 	}
 	if vm.HostJITEnabled == nil {
-		// linux/arm64 compiles wasm but has no JavaScript JIT, whose
-		// WithJIT the bridge follows.
+		// The bridge follows the JavaScript JIT's WithJIT.
 		t.Skip("no JavaScript JIT in this build")
 	}
 	rt := newRuntime(t, quickjs.WithJIT())
