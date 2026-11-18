@@ -111,12 +111,24 @@ func (r *Runtime) builtString(s string) (Value, error) {
 	return Str(out), nil
 }
 
-// NewString returns a String for a Go string.
+// NewString returns a String for a Go string. A Go string may hold any
+// bytes; a String's are canonical WTF-8, which every walk over them relies
+// on, so a byte no UTF-8 sequence takes becomes U+FFFD, one for each such
+// byte, as ranging over the Go string decodes it, and surrogates encoded
+// one by one that make a pair become the pair's code point.
 func NewString(s string) *String {
 	if s == "" {
 		return emptyString
 	}
-	ascii, length := scanString(s)
+	i := wtf8.ASCIIPrefix(s)
+	if i == len(s) {
+		return &String{s: s, length: len(s), ascii: true}
+	}
+	n, canonical := wtf8.Scan(s[i:])
+	if !canonical {
+		s = s[:i] + wtf8.Canonical(s[i:])
+	}
+	ascii, length := false, i+n
 	out := &String{s: s, length: length, ascii: ascii}
 	if !ascii {
 		out.endsHigh, out.startsLow = wtf8.UnpairedEnds(s)

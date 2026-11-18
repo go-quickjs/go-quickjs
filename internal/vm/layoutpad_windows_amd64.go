@@ -56,7 +56,7 @@ const (
 	layoutPadNR  = 322
 	layoutPadNGR = -1
 	layoutPadNMR = -1
-	layoutPadNS  = 425
+	layoutPadNS  = 398
 	layoutPadNGS = -1
 	layoutPadNMS = -1
 	layoutPadNZ  = -1

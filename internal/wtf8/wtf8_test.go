@@ -375,3 +375,61 @@ func TestASCIIPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestCanonical pins what a Go string of any bytes becomes: a byte no
+// sequence takes is U+FFFD, one for each such byte, as ranging over the
+// string decodes it, and surrogates encoded one by one that make a pair are
+// the pair's code point -- the code units Count counts in both.
+func TestCanonical(t *testing.T) {
+	tests := []struct {
+		in, want  string
+		canonical bool
+	}{
+		{"", "", true},
+		{"abc", "abc", true},
+		{"café\U0001F600", "café\U0001F600", true},
+		{"a\xed\xa0\xbd", "a\xed\xa0\xbd", true},                       // a lone high surrogate
+		{"\xed\xb8\x80\xed\xa0\xbd", "\xed\xb8\x80\xed\xa0\xbd", true}, // low, then high
+		{"x\xffy", "x\uFFFDy", false},
+		{"ab\xff", "ab\uFFFD", false},
+		{"a\xc3", "a\uFFFD", false},
+		{"a\xe2\x82", "a\uFFFD\uFFFD", false},
+		{"\xf0\x9f\x98", "\uFFFD\uFFFD\uFFFD", false},
+		{"\xc0\x80", "\uFFFD\uFFFD", false}, // an overlong NUL
+		{"\xed\xa0", "\uFFFD\uFFFD", false}, // a surrogate cut short
+		{"\xed\xa0\xbd\xed\xb8\x80", "\U0001F600", false},
+		{"\uFFFD", "\uFFFD", true}, // the replacement character itself
+	}
+	for _, tt := range tests {
+		n, canonical := Scan(tt.in)
+		if canonical != tt.canonical {
+			t.Errorf("Scan(%q) canonical = %v, want %v", tt.in, canonical, tt.canonical)
+		}
+		got := Canonical(tt.in)
+		if got != tt.want {
+			t.Errorf("Canonical(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if m, ok := Scan(got); !ok || m != n {
+			t.Errorf("Canonical(%q) = %q: Scan gives %d, %v; want %d, true", tt.in, got, m, ok, n)
+		}
+		if n != len(ToUTF16(got)) {
+			t.Errorf("Scan(%q) = %d units; Canonical's decode to %d", tt.in, n, len(ToUTF16(got)))
+		}
+	}
+	// Random bytes: Canonical's output is canonical and keeps the count.
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 20000; i++ {
+		b := make([]byte, rng.Intn(12))
+		for j := range b {
+			b[j] = byte(rng.Intn(256))
+			if rng.Intn(4) == 0 {
+				b[j] = 0xED
+			}
+		}
+		n, _ := Scan(string(b))
+		out := Canonical(string(b))
+		if m, ok := Scan(out); !ok || m != n {
+			t.Fatalf("Canonical(%q) = %q: Scan gives %d, %v; want %d, true", b, out, m, ok, n)
+		}
+	}
+}

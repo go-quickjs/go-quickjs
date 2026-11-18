@@ -218,7 +218,17 @@ func appendUTF16(buf []byte, u []uint16, ascii bool) []byte {
 // anything malformed are left to the decoder below, which alone says what
 // such a byte counts for.
 func Count(s string) int {
-	n := 0
+	n, _ := Scan(s)
+	return n
+}
+
+// Scan is Count, and reports too whether s is canonical WTF-8: valid UTF-8
+// but for surrogates in their three-byte form, no two of which make a pair
+// (which WTF-8 spells as the pair's code point). What Count makes of any
+// other bytes -- a byte no sequence takes counts for one code unit, U+FFFD
+// -- is what Canonical writes, so that the two agree on the length.
+func Scan(s string) (n int, canonical bool) {
+	canonical = true
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c < utf8.RuneSelf {
@@ -246,13 +256,21 @@ func Count(s string) int {
 				continue
 			}
 		}
-		if _, ok := decodeSurrogateAt(s, i); ok {
+		if c, ok := decodeSurrogateAt(s, i); ok {
 			// An encoded surrogate is one code unit despite being three bytes.
+			if c <= surrHighMax {
+				if lo, ok := decodeSurrogateAt(s, i+3); ok && lo >= surrLowMin {
+					canonical = false
+				}
+			}
 			n++
 			i += 3
 			continue
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			canonical = false
+		}
 		if r > 0xFFFF {
 			// A code point outside the basic multilingual plane is a pair.
 			n += 2
@@ -261,7 +279,43 @@ func Count(s string) int {
 		}
 		i += size
 	}
-	return n
+	return n, canonical
+}
+
+// Canonical returns s as canonical WTF-8 (Scan): every byte no sequence
+// takes is replaced by U+FFFD, one for each such byte, as ranging over a Go
+// string decodes it, and two encoded surrogates that make a pair are joined
+// into the pair's code point. The code units are those Count counts.
+func Canonical(s string) string {
+	buf := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			buf = append(buf, c)
+			i++
+			continue
+		}
+		if hi, ok := decodeSurrogateAt(s, i); ok {
+			if hi <= surrHighMax {
+				if lo, ok := decodeSurrogateAt(s, i+3); ok && lo >= surrLowMin {
+					buf = utf8.AppendRune(buf, utf16.DecodeRune(hi, lo))
+					i += 6
+					continue
+				}
+			}
+			buf = append(buf, s[i:i+3]...)
+			i += 3
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			buf = utf8.AppendRune(buf, utf8.RuneError)
+		} else {
+			buf = append(buf, s[i:i+size]...)
+		}
+		i += size
+	}
+	return string(buf)
 }
 
 // IsASCII reports whether every byte is below 0x80, in which case byte offsets
