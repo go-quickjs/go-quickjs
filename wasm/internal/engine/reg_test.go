@@ -620,3 +620,44 @@ func TestRegSIMD(t *testing.T) {
 		{"relaxed", []Val{{N: uint64(math.Float32bits(1.25))}}},
 	})
 }
+
+// TestRegTables checks the table instructions and the calls through tables
+// and references, tail calls included, with their traps.
+func TestRegTables(t *testing.T) {
+	regMatchesTree(t, `(module
+	  (type $ii (func (param i32) (result i32)))
+	  (type $v (func))
+	  (table $t 4 (ref null $ii)) (table $u i64 2 10 (ref null $ii))
+	  (elem $e (ref $ii) (ref.func $dbl) (ref.func $inc))
+	  (func $dbl (type $ii) (i32.mul (local.get 0) (i32.const 2)))
+	  (func $inc (type $ii) (i32.add (local.get 0) (i32.const 1)))
+	  (func (export "ind") (param i32 i32) (result i32)
+	    (table.init $t $e (i32.const 0) (i32.const 0) (i32.const 2))
+	    (call_indirect $t (type $ii) (local.get 1) (local.get 0)))
+	  (func (export "ops") (param i32) (result i64)
+	    (table.init $t $e (i32.const 1) (i32.const 0) (i32.const 2))
+	    (elem.drop $e)
+	    (table.copy $u $t (i64.const 0) (i32.const 1) (i32.const 2))
+	    (drop (table.grow $u (table.get $t (i32.const 2)) (i64.const 3)))
+	    (table.fill $t (i32.const 3) (ref.null $ii) (local.get 0))
+	    (table.set $u (i64.const 4) (ref.func $dbl))
+	    (i64.add (table.size $u) (i64.extend_i32_u (call_ref $ii (i32.const 20) (table.get $u (i64.const 4))))))
+	  (func (export "tailind") (param i32) (result i32)
+	    (table.init $t $e (i32.const 0) (i32.const 0) (i32.const 2))
+	    (return_call_indirect $t (type $ii) (i32.const 5) (local.get 0)))
+	  (func (export "tailref") (param i32) (result i32)
+	    (return_call_ref $ii (local.get 0) (ref.func $inc)))
+	  (func (export "wrongtype") (call_indirect $t (type $v) (i32.const 0)))
+	  (func (export "nullref") (result i32) (call_ref $ii (i32.const 1) (ref.null $ii))))`, []regCall{
+		{"ind", []Val{{N: 0}, {N: 21}}},
+		{"ind", []Val{{N: 1}, {N: 21}}},
+		{"ind", []Val{{N: 9}, {N: 21}}},
+		{"ops", []Val{{N: 1}}},
+		{"ops", []Val{{N: 2}}},
+		{"tailind", []Val{{N: 1}}},
+		{"tailind", []Val{{N: 3}}},
+		{"tailref", []Val{{N: 41}}},
+		{"wrongtype", nil},
+		{"nullref", nil},
+	})
+}

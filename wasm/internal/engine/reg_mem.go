@@ -234,7 +234,6 @@ func init() {
 
 // The families still compiled by the closure tree.
 
-func (c *regCompiler) tableOp(op opcode.Opcode) bool  { return false }
 func (c *regCompiler) gcOp(op opcode.Opcode) bool     { return false }
 func (c *regCompiler) atomicOp(op opcode.Opcode) bool { return false }
 func (c *regCompiler) exnOp(op opcode.Opcode) bool    { return false }

@@ -128,6 +128,10 @@ type regSite struct {
 	fn         uint32
 	at         uint32
 	args, rets []regMove
+	// typeIndex, table and checked are a call_indirect's: its type, its
+	// table, and whether it checks the callee's type (indirectCallee).
+	typeIndex, table uint32
+	checked          bool
 }
 
 // regMove is a value's move from one frame's slot to another's, of kind k.
