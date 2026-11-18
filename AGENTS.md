@@ -365,8 +365,10 @@ design, which a change to that design updates in the same commit.
   package or `stdlib` depends on one, or when the tag no longer decides
   whether `qjs` links the wasm engine.
   What the bridge needs of the VM is a host hook, a package variable
-  assigned a closure in the `init` of `internal/vm/host_hooks.go`, so that
-  it adds no function among the package's (see the layout rules above);
+  assigned a closure in the `init` of `internal/vm/host_hooks.go` --
+  `host_hooks_modules.go` for WebAssembly modules in the module graph and
+  for the opaque objects JSON and structured clone meet -- so that it adds
+  no function among the package's (see the layout rules above);
   `HostJITEnabled` is set in `host_hooks_jit.go`, built with the JIT. wazero is a benchmark
   baseline only, in a module of its own: `TestNoWazeroDependency` fails if
   it reaches `go.mod` or `go.sum`.
