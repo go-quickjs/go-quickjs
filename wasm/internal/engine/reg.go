@@ -119,6 +119,8 @@ type regCode struct {
 	// regions are the bodies of the code's try constructs, which a frame
 	// that has any runs under the catching loop (reg_exn.go).
 	regions []regRegion
+	// gc are the GC instructions' records (reg_gc.go).
+	gc []regGC
 }
 
 // regSite is a call's site: the function called, the offset of the call,

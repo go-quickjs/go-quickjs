@@ -433,7 +433,8 @@ func TestRegMatchesTreeOnWorkloads(t *testing.T) {
 	for _, w := range []struct {
 		file string
 		arg  uint64
-	}{{"fib.wat", 18}, {"loop.wat", 1000}, {"i64.wat", 1000}, {"globals.wat", 1000}, {"brtable.wat", 1000}, {"bytes.wat", 1}, {"mandelbrot.wat", 20}, {"nbody.wat", 100}} {
+	}{{"fib.wat", 18}, {"loop.wat", 1000}, {"i64.wat", 1000}, {"globals.wat", 1000}, {"brtable.wat", 1000}, {"bytes.wat", 1}, {"mandelbrot.wat", 20}, {"nbody.wat", 100},
+		{"gc.wat", 8}, {"arrays.wat", 1000}, {"simd.wat", 10}, {"indirect.wat", 1000}, {"bulk.wat", 2}} {
 		src, err := os.ReadFile(filepath.Join(dir, w.file))
 		if err != nil {
 			t.Fatal(err)
@@ -659,5 +660,50 @@ func TestRegTables(t *testing.T) {
 		{"tailref", []Val{{N: 41}}},
 		{"wrongtype", nil},
 		{"nullref", nil},
+	})
+}
+
+// TestRegGC checks the GC instructions against the tree's, traps included.
+func TestRegGC(t *testing.T) {
+	regMatchesTree(t, `(module
+	  (type $p (struct (field (mut i32)) (field (mut i8)) (field (mut v128)) (field (mut anyref))))
+	  (type $a (array (mut i16)))
+	  (type $r (array (mut eqref)))
+	  (data $d "\01\02\03\04\05\06")
+	  (elem $e i31ref (ref.i31 (i32.const 7)) (ref.i31 (i32.const -1)))
+	  (func (export "structs") (param i32) (result i32)
+	    (local $s (ref null $p))
+	    (local.set $s (struct.new $p (local.get 0) (i32.const 0x1ff) (v128.const i32x4 1 2 3 4) (ref.i31 (local.get 0))))
+	    (struct.set $p 1 (local.get $s) (i32.add (struct.get_s $p 1 (local.get $s)) (i32.const 3)))
+	    (i32.add (i32.add (struct.get $p 0 (local.get $s)) (struct.get_u $p 1 (local.get $s)))
+	      (i32.add (i32x4.extract_lane 2 (struct.get $p 2 (local.get $s)))
+	        (i31.get_s (ref.cast (ref i31) (struct.get $p 3 (local.get $s)))))))
+	  (func (export "arrays") (param i32) (result i32)
+	    (local $x (ref null $a)) (local $y (ref null $a))
+	    (local.set $x (array.new $a (i32.const -2) (local.get 0)))
+	    (local.set $y (array.new_data $a $d (i32.const 0) (i32.const 3)))
+	    (array.set $a (local.get $x) (i32.const 1) (i32.const 0x12345))
+	    (array.fill $a (local.get $x) (i32.const 2) (i32.const 9) (i32.const 2))
+	    (array.copy $a $a (local.get $x) (i32.const 0) (local.get $y) (i32.const 1) (i32.const 2))
+	    (array.init_data $a $d (local.get $y) (i32.const 0) (i32.const 2) (i32.const 1))
+	    (i32.add (i32.add (array.get_s $a (local.get $x) (i32.const 1)) (array.get_u $a (local.get $x) (i32.const 3)))
+	      (i32.add (array.len (local.get $x)) (array.get_u $a (local.get $y) (i32.const 0)))))
+	  (func (export "refs") (param i32) (result i32)
+	    (local $r (ref null $r))
+	    (local.set $r (array.new_elem $r $e (i32.const 0) (i32.const 2)))
+	    (array.set $r (local.get $r) (i32.const 0) (array.new_fixed $r 1 (ref.null eq)))
+	    (block $l (result (ref $r))
+	      (br_on_cast $l (ref null eq) (ref $r) (array.get $r (local.get $r) (local.get 0)))
+	      (drop)
+	      (return (ref.test (ref i31) (array.get $r (local.get $r) (i32.const 1)))))
+	    (array.len)))`, []regCall{
+		{"structs", []Val{{N: 5}}},
+		{"structs", []Val{{N: 0x40000000}}},
+		{"arrays", []Val{{N: 4}}},
+		{"arrays", []Val{{N: 2}}},
+		{"arrays", []Val{{N: 0x7fffffff}}},
+		{"refs", []Val{{N: 0}}},
+		{"refs", []Val{{N: 1}}},
+		{"refs", []Val{{N: 2}}},
 	})
 }
