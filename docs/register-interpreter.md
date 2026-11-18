@@ -901,7 +901,7 @@ a constructor the handler enters as `call_w` enters a callee
 room is settled, a derived class's, and a forwarder's (`LeafForward`), none
 with fields of its own. Its object is made by Go with no exit (`nativeNew`)
 of the constructor's prototype and root, as `constructWithTarget` makes it
--- a body that only stores its parameters answered by `leafStores` there --
+-- a body that only stores its parameters answered by `leafCall` there --
 and the frame is `regFrameConstruct`, its new.target the constructor, a
 derived class's with its this binding (`regThisBinding`); `ret` gives the
 frame's this where the body returns no object. `super_call` and
@@ -939,30 +939,21 @@ realm's, and at an `apply_args` of a target with a plan. Every store is
 checked before any is made, as `set_prop`'s handler checks it: a plain
 writable property of the shape the stores before it leave, or an addition
 `addProp` would make, with room for it; and a parameter made 0 is decided,
-a string's, a BigInt's or `document.all`'s by the body. Then each is made as
-`set_prop`'s handler makes it, its pointers through the write barrier's
-routine while the collector marks. Anything else -- a setter, a read-only or
-missing property, a proxy, an accessor or a replacement of the method or of
-`apply`, a bound or proxy target, a body that is not a plan -- runs the
-bodies in their frames, nothing written. `nativeNew` and `nativeApply` say
-where the handler may try: the JIT not running, whose frames have feedback
-to give, no interrupt due, and the frames the bodies would have had within
-the limit, so that past it they throw the frames' RangeError. The Go table
+a string's, a BigInt's or `document.all`'s by the body. Then each is
+written, in the plan's order, at its slot -- a property's own, or the one
+its addition's layout gives it, in the room the check found -- its
+pointers through the write barrier's routine while the collector marks;
+and the layout the last store leaves, with its count of values, is given
+the object once, as `addProp` gives an addition's, no code having run that
+could see the layouts between. A name stored twice is written twice, in
+order. Anything else -- a setter, a read-only or missing property, a
+proxy, an accessor or a replacement of the method or of `apply`, a bound
+or proxy target, a body that is not a plan -- runs the bodies in their
+frames, nothing written. `nativeNew` and `nativeApply` say where the
+handler may try: the JIT not running, whose frames have feedback to give,
+no interrupt due, and the frames the bodies would have had within the
+limit, so that past it they throw the frames' RangeError. The Go table
 runs these bodies in their frames, as it runs any other.
-
-A construction whose body only stores parameters (`LeafSetThis`) completes
-those writes during the Go call that allocates its object, before trying
-the native initializer plan. `leafStores` validates every write before
-making any; a miss leaves the object for the native plan or the body. This
-avoids a separate native pass over the same writes after allocation. It
-does the same work while the collector marks, using Go's write barriers.
-The JIT keeps its existing path and feedback.
-
-Once `leafStores` has validated the writes, an object whose table already
-has room for the final layout is filled by slot and given that layout once.
-Repeated names write the same slot in order. A table that needs to grow,
-or a final layout that needs an index built, keeps the individual
-transitions. No write can call code that observes the intermediate layouts.
 
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While

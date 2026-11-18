@@ -14,8 +14,12 @@ import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 // set_prop's handler checks it (an own writable data property of the
 // shape the stores before it leave, or an addition addProp would make), and
 // a parameter made 0 is decided; anything else, and the body runs, in its
-// frame, with nothing written. The stores are then made as set_prop's
-// handler makes them, their pointers through ptrStore.
+// frame, with nothing written. The stores are then made in order, each
+// at its slot -- an own property's, or the one its addition's layout gives
+// it, in the room the check found -- their pointers through ptrStore; and
+// the layout the last leaves and its count of values are given the object
+// once, as addProp gives each addition's, with no layout between them
+// that any code could have seen.
 
 // initEntry is the label of initRun, emitted once after the handlers.
 func (g *nativeGen) initEntry() Label {
@@ -32,13 +36,14 @@ func (g *nativeGen) initEntry() Label {
 // arguments at sI, sEnd of them, and goes on at the address in sKind, RAX
 // 1 where it made them and 0 where it made none. It keeps in the scratch
 // the caches (sBase), the plan and its length (sNF, sSaved), the shape and
-// count of values the stores so far leave, then the store made (sV1, sTop),
-// and the stores whose parameter is made 0 (sRC).
+// count of values the stores so far leave (sV1, sTop) -- then the last
+// one's shape and the store made -- and the stores whose parameter is made
+// 0 (sRC).
 func (g *nativeGen) initRun() {
 	a := g.a
 	shapeOff := off("Object.shape")
-	loop1, existing, next1, phase2, loop2, zero, have, add, step, ok, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(),
-		a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	loop1, existing, next1, phase2, loop2, zero, have, own, slot, ok, made, miss := a.NewLabel(), a.NewLabel(), a.NewLabel(),
+		a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(g.initL)
 	a.Load(R9, RDI, scr(sV1))
 	a.Load(RAX, R9, offCCIC)
@@ -86,7 +91,10 @@ func (g *nativeGen) initRun() {
 	a.OpImm(Add, RAX, 1, true)
 	a.Jmp(loop1)
 
-	// Each store made, its index at sTop, its cache at sV1.
+	// Each store made, its index at sTop, at its slot: an own property's
+	// idx, an addition's the last of its transition's layout -- the values
+	// past valn in the room phase one found. sV1 keeps the layout the
+	// stores leave, given the object once they are all made.
 	a.Bind(phase2)
 	a.StoreImm(RDI, scr(sTop), 0)
 	a.Bind(loop2)
@@ -95,7 +103,18 @@ func (g *nativeGen) initRun() {
 	a.Jcc(CondAE, ok)
 	a.Load(RDX, RDI, scr(sNF))
 	g.initSite()
-	a.Store(RDI, scr(sV1), RCX)
+	a.Load(R8, RCX, off("propCache.next"))
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, own)
+	a.LoadU32(RSI, R8, off("shape.n"))
+	a.OpImm(Sub, RSI, 1, true)
+	a.Jmp(slot)
+	a.Bind(own)
+	a.LoadS32(RSI, RCX, off("propCache.idx"))
+	a.Bind(slot)
+	a.ShiftImm(Shl, RSI, 4, true)
+	a.Load(R8, RDI, scr(sKa))
+	a.AddMem(RSI, R8, off("Object.valp"))
 	a.Load(R8, RDI, scr(sRC))
 	a.Bt(R8, RAX)
 	a.Jcc(CondB, zero)
@@ -107,42 +126,25 @@ func (g *nativeGen) initRun() {
 	a.Op(Xor, R9, R9, false)
 	a.Op(Xor, R8, R8, false)
 	a.Bind(have)
-	a.Load(RSI, RDI, scr(sKa))
-	a.Load(RCX, RDI, scr(sV1))
-	a.Load(RDX, RCX, off("propCache.ownShape"))
-	a.CmpMem(RDX, RSI, shapeOff, true)
-	a.Jcc(CondNE, add)
-	a.LoadS32(RAX, RCX, off("propCache.idx"))
-	a.ShiftImm(Shl, RAX, 4, true)
-	a.AddMem(RAX, RSI, off("Object.valp"))
-	a.Store(RAX, 0, R9)
+	a.Store(RSI, 0, R9)
 	a.MovRR(RCX, R8)
-	a.Lea(RAX, RAX, 8)
+	a.Lea(RAX, RSI, 8)
 	g.ptrStore()
-	a.Jmp(step)
-	// An addition, as addProp makes it: the value at valn, valn past it,
-	// then the shape.
-	a.Bind(add)
-	a.LoadU32(RDX, RSI, off("Object.valn"))
-	a.MovRR(RAX, RDX)
-	a.ShiftImm(Shl, RAX, 4, true)
-	a.AddMem(RAX, RSI, off("Object.valp"))
-	a.Store(RAX, 0, R9)
-	a.OpImm(Add, RDX, 1, true)
-	a.Store32(RSI, off("Object.valn"), RDX)
-	a.MovRR(RCX, R8)
-	a.Lea(RAX, RAX, 8)
-	g.ptrStore()
-	a.Load(RSI, RDI, scr(sKa))
-	a.Load(RCX, RDI, scr(sV1))
-	a.Load(RCX, RCX, off("propCache.next"))
-	a.Lea(RAX, RSI, shapeOff)
-	g.ptrStore()
-	a.Bind(step)
 	a.IncMem(RDI, scr(sTop))
 	a.Jmp(loop2)
 
+	// The layout the stores leave, as addProp leaves its addition's: the
+	// count of values past them, then the layout.
 	a.Bind(ok)
+	a.Load(RSI, RDI, scr(sKa))
+	a.Load(RCX, RDI, scr(sV1))
+	a.CmpMem(RCX, RSI, shapeOff, true)
+	a.Jcc(CondE, made)
+	a.LoadU32(RDX, RCX, off("shape.n"))
+	a.Store32(RSI, off("Object.valn"), RDX)
+	a.Lea(RAX, RSI, shapeOff)
+	g.ptrStore()
+	a.Bind(made)
 	a.MovImm(RAX, 1)
 	a.JmpMem(RDI, scr(sKind))
 	a.Bind(miss)

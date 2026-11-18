@@ -238,6 +238,60 @@ out.join("|")`
 	}
 }
 
+// The native initializer writes every store at its slot and gives the
+// object the layout the last leaves once: a name stored twice keeps the
+// last value and its first place; stores over an object's own properties
+// (apply_args on a receiver that has them) leave its layout; a default
+// made 0 is written with the rest; and the object made goes on as any
+// other -- its keys, a property added, deleted and redefined after, and
+// another object of the same constructor sharing its layout. Each with
+// the body made without a frame, while the collector is idle and while
+// it marks.
+func TestRegNativeInitFinalLayout(t *testing.T) {
+	const src = `
+var object = { tag: 7 };
+function Repeated(a, b) { this.a = a; this.b = b; this.a = b; this.c = a }
+function Zeroes(x, y) { if (!x) x = 0; this.x = x; this.y = y; this.x = y; this.z = x }
+function via(a, b) { Repeated.apply(this, arguments) }
+function run(n) {
+ var s = 0, p, z;
+ for (var i = 0; i < n; i++) {
+  p = new Repeated(object, i); z = new Zeroes(-0, i);
+  s += p.a + p.b + (p.c === object) + z.x + z.y + z.z;
+ }
+ return s;
+}
+function reuse(o, n) { for (var i = 0; i < n; i++) via.call(o, i, i + 1); return o }
+run(100);
+var out = [String(run(1000))];
+var p = new Repeated(object, 9), q = new Repeated(1, 2), z = new Zeroes(-0, 5);
+out.push(p.a, p.b, p.c === object, Object.keys(p).join(), Object.keys(q).join());
+out.push(Object.is(z.x, 5), Object.is(z.z, 0), Object.keys(z).join());
+var o = reuse({ a: 0, b: 0, c: 0 }, 1000);
+out.push(o.a, o.b, o.c, Object.keys(o).join());
+p.d = 4; delete p.b; p.b = 5;
+Object.defineProperty(q, "a", { get() { return "got" } });
+out.push(Object.keys(p).join(), p.a, p.b, p.d, q.a, q.b, new Repeated(3, 4).a);
+out.join("|")`
+	const want = "1999000|9|9|true|a,b,c|a,b,c|true|true|x,y,z|1000|1000|999|a,b,c|a,c,d,b|9|5|4|got|2|4"
+	nativeCounting(t)
+	if got := nativeRunSrc(t, src, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		before := atomic.LoadInt64(&nativeCalls)
+		if got := nativeRunSrc(t, src, true); got != want {
+			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
+		}
+		// reuse's 1,000 calls of via have frames, the Repeated each applies
+		// none; nor have run's 2,000 constructions but the first few.
+		if n := atomic.LoadInt64(&nativeCalls) - before; n > 1000+20 {
+			t.Fatalf("marking %v: entered %d frames", marking, n)
+		}
+	}
+}
+
 func TestRegNativeInitDefaults(t *testing.T) {
 	const src = nativeInitSource + `
 makeDefaults(100); makeForwardDefaults(100);
