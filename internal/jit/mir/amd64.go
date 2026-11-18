@@ -11112,6 +11112,14 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		} else {
 			c.a.MovQToX(amd64.XReg(l.reg), r)
 		}
+	case ssa.OpNumberF64:
+		// A value proven a number (ssa.OpNumberF64): its number word.
+		r := c.gpr(arg(0), scratchB)
+		if l := c.locAt(v); l.reg < 0 {
+			c.spillStore(l.spill, r)
+		} else {
+			c.a.MovQToX(amd64.XReg(l.reg), r)
+		}
 	case ssa.OpOddballF64:
 		c.oddball(v, guard)
 	case ssa.OpCheckInit:

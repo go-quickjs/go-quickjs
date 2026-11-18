@@ -190,11 +190,15 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 		// A value's ToInt32 or ToNumber: a number's natively, an
 		// oddball's too, anything else's by Go at a host exit, which runs
 		// the instruction whole -- valueOf, which may throw -- and goes on
-		// after it.
+		// after it; a value proven a number (ir.RawNumber), its number.
 		x := operand(in.Left)
 		var n *Value
 		if x.Op == OpBoxF64 {
 			n = x.Args[0]
+		} else if in.Key == ir.RawNumber {
+			// A call's result of a function of the module, a number of its
+			// declared type by validation: its number word, unchecked.
+			n = val(OpNumberF64, Float64, x)
 		} else {
 			n = guard(OpOddballF64, Float64, ir.HostExit, x)
 			if b.goCalls() {

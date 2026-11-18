@@ -3334,7 +3334,13 @@ Values, made natively: the feedback answers the callee from the binding the
 call's register was read from, the callee's twin and typed code
 (`jitTypedCallee`). The callee converts its parameters as its code's
 prologue says, a number's natively. An import's call is Go's from native
-code.
+code, and its result, which may be anything, is converted as a value is.
+The result of a call of a function of the module -- a function binding's,
+which the link checks, or a table's element -- is a number of the
+function's declared type, every return of which validation proves: its
+conversion is marked so (`ir.RawNumber`, found by the lowering's
+`callResult`), and is its number word, unchecked (`ssa.OpNumberF64`), with
+no check of a tag and no call of Go for a string.
 
 **Inlined.** A typed callee is offered as any register callee is (see
 [Inlining](#inlining)), its program its typed lowering and its feedback

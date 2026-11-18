@@ -644,6 +644,11 @@ const (
 	// a number throughout. Neither exits; the store writes no pointer.
 	OpCellNumLoad  // source -> f64
 	OpCellNumStore // source, tagged -> none
+	// OpNumberF64 is the number a value proven to be one holds -- typed
+	// code's call of a function of its module, every return of which
+	// validation proves of its declared type (ir's RawNumber): its number
+	// word as a float64, with no check, as OpUnboxF64 makes it of a number.
+	OpNumberF64 // tagged -> f64
 )
 
 // OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
@@ -687,7 +692,7 @@ var opNames = [...]string{
 	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis", OpTypeofCell: "typeofcell",
 	OpCursorCell: "cursorcell", OpHeapLoad: "heapload", OpHeapStore: "heapstore",
 	OpDivI32: "divi", OpDivU32: "divu", OpRemI32: "remi", OpRemU32: "remu",
-	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore",
+	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore", OpNumberF64: "numberf",
 }
 
 func (o Op) String() string {

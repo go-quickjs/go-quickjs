@@ -491,7 +491,9 @@ func (in *Instruction) MayExit() bool {
 	case Raw:
 		// Typed code's leave only where Go converts or computes (raw.go).
 		switch in.Raw {
-		case RawConvI, RawConvF, RawFMod, RawFMath:
+		case RawConvI, RawConvF:
+			return in.Key != RawNumber
+		case RawFMod, RawFMath:
 			return true
 		}
 		return false

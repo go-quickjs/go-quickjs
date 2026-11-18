@@ -710,6 +710,13 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{f: math.Float64frombits(a.t.Bits)}
+			case OpNumberF64:
+				if a.t.Kind != ir.Number {
+					// Proven a number (ir's RawNumber): anything else is the
+					// model's error, not the program's.
+					panic("ssa: a value proven a number is not one")
+				}
+				vals[v.ID] = val{f: math.Float64frombits(a.t.Bits)}
 			case OpOddballF64:
 				switch {
 				case a.t.Kind == ir.Number:

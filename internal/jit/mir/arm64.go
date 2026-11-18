@@ -9866,6 +9866,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		d := c.fdst(v)
 		c.a.FMovToF(d, r)
 		c.setF(v, d)
+	case ssa.OpNumberF64:
+		// As amd64's: the number word of a value proven a number.
+		d := c.fdst(v)
+		c.a.FMovToF(d, c.gpr(arg(0), a64B))
+		c.setF(v, d)
 	case ssa.OpOddballF64:
 		c.oddball(v, guard)
 	case ssa.OpCheckInit:

@@ -260,7 +260,7 @@ func simplify(f *Func, v *Value) *Value {
 			v.Args[0], v.Args[1], v.Args[2] = array, key, x.Args[0]
 		}
 		return nil
-	case OpUnboxF64:
+	case OpUnboxF64, OpNumberF64:
 		switch a := arg(0); {
 		case a.Op == OpBoxF64:
 			return a.Args[0]

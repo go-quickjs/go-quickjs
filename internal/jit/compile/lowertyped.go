@@ -76,6 +76,59 @@ func typedSuccessors(rc *bytecode.RegCode, pc int) []int {
 type typedLowering struct {
 	*regLowering
 	kinds []uint8
+	// targets marks the instructions a jump or a branch goes to, made at
+	// callResult's first ask.
+	targets []bool
+}
+
+// callResult is the Key of the conversion at pc of register r: ir's
+// RawNumber where r is the result of the call just before, of a function
+// of the module -- its function register written by the read of a
+// function binding (AsmUpFunc) or a table's element (TTabGet), which the
+// link checks, with nothing jumping in between -- whose every return
+// validation proves a number of its declared type; else 0, a value Go
+// converts what is no number of: an import's result.
+func (l *typedLowering) callResult(pc, r int) uint32 {
+	rc := l.rc
+	if pc < 1 {
+		return 0
+	}
+	call := rc.Code[pc-1]
+	if call.Op() != bytecode.RCallW || int(call.A()) != r {
+		return 0
+	}
+	if l.targets == nil {
+		l.targets = make([]bool, len(rc.Code)+1)
+		for q := range rc.Code {
+			for _, t := range typedSuccessors(rc, q) {
+				if t != q+1 && t >= 0 && t < len(l.targets) {
+					l.targets[t] = true
+				}
+			}
+		}
+	}
+	fr := int(call.A())
+	for q := pc - 2; q >= 0; q-- {
+		if l.targets[q+1] {
+			return 0
+		}
+		x := rc.Code[q]
+		if int(x.A()) != fr {
+			continue
+		}
+		switch x.Op() {
+		case bytecode.RGetUpval:
+			if k := int(x.BC()); k < len(rc.Asm) && rc.Asm[k].Kind == bytecode.AsmUpFunc {
+				return ir.RawNumber
+			}
+		case bytecode.TTabGet:
+			if k := int(x.C()); k < len(rc.Asm) && rc.Asm[k].Kind == bytecode.AsmUpTable {
+				return ir.RawNumber
+			}
+		}
+		return 0
+	}
+	return 0
 }
 
 // rawTemp is a scratch slot of kind k of the current instruction's.
@@ -208,9 +261,9 @@ func (l *typedLowering) lowerTyped(pc int) string {
 		}
 		raw(ir.RawFConst, a, number(rc.Floats[w.BC()]), unaryNone)
 	case bytecode.TConvI:
-		raw(ir.RawConvI, a, slot(b), unaryNone)
+		rawK(ir.RawConvI, a, slot(b), unaryNone, l.callResult(pc, b))
 	case bytecode.TConvF:
-		raw(ir.RawConvF, a, slot(b), unaryNone)
+		rawK(ir.RawConvF, a, slot(b), unaryNone, l.callResult(pc, b))
 	case bytecode.TIBox:
 		raw(ir.RawIBox, a, slot(b), unaryNone)
 	case bytecode.TUBox:

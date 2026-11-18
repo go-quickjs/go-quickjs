@@ -17,6 +17,13 @@ package ir
 // RawOp is a Raw instruction's operation (Instruction's Raw).
 type RawOp uint8
 
+// RawNumber, as a RawConvI's or RawConvF's Key, says its operand is a
+// number: the result of typed code's call of a function of its module
+// (call_w of a function binding or a table's element), every return of
+// which validation proves of the function's declared type -- a signed
+// int's, a double's or a float's -- however the callee runs.
+const RawNumber = 1
+
 // Slot kinds (Program's Kinds).
 const (
 	SlotValue uint8 = iota
@@ -94,7 +101,8 @@ const (
 	RawF2I
 	// RawConvI and RawConvF are ToInt32 and ToNumber of a value slot, into
 	// a raw one: a number's natively, anything else's by Go, which may run
-	// code and throw.
+	// code and throw -- but where their Key is RawNumber, of a value proven
+	// a number, which neither converts by Go nor leaves.
 	RawConvI
 	RawConvF
 	// RawIBox, RawUBox and RawFBox make a value slot's number of a raw
