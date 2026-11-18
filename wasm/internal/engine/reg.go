@@ -144,6 +144,9 @@ type regSite struct {
 	// target is the slot of the table index or the reference that names
 	// the callee of a call_indirect or a call_ref.
 	target uint32
+	// want is a checked call_indirect's type's canonical index, which
+	// native code compares with the callee's.
+	want module.CanonicalIndex
 }
 
 // regMove is a value's move from one frame's slot to another's, of kind k.

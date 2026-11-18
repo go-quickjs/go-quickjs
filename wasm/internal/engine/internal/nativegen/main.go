@@ -43,6 +43,9 @@ type block struct {
 	// extAt and extNames are the second table's handlers, by X.
 	extAt    map[int]int
 	extNames map[int]string
+	// simdAt and simdNames are rSIMD's table's handlers, by X.
+	simdAt    map[int]int
+	simdNames map[int]string
 }
 
 // source is the block's file.
@@ -91,5 +94,16 @@ func (b *block) source() []byte {
 		fmt.Fprintf(&s, "DATA ·wasmNativeExtTable+%d(SB)/8, $·wasmNativeHandlers+%d(SB)\n", 8*x, off)
 	}
 	s.WriteString("GLOBL ·wasmNativeExtTable(SB), RODATA, $2048\n")
+	s.WriteString("\n// wasmNativeSIMDTable is rSIMD's native table: each operator's handler's\n// address, the exit stub's where it has none.\n")
+	for x := 0; x < 256; x++ {
+		off, ok := b.simdAt[x]
+		if !ok {
+			off = b.exit
+		} else {
+			fmt.Fprintf(&s, "// %d: %s\n", x, b.simdNames[x])
+		}
+		fmt.Fprintf(&s, "DATA ·wasmNativeSIMDTable+%d(SB)/8, $·wasmNativeHandlers+%d(SB)\n", 8*x, off)
+	}
+	s.WriteString("GLOBL ·wasmNativeSIMDTable(SB), RODATA, $2048\n")
 	return s.Bytes()
 }

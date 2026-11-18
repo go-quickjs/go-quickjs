@@ -43,6 +43,9 @@ type nativeCtx struct {
 	// rch and rsp are the exec's reference chunk and slot to give back
 	// as a frame native code called returns.
 	rch, rsp uintptr
+	// simdTable is rSIMD's native table, or one of the exit stub alone
+	// where the CPU lacks what its handlers use.
+	simdTable uintptr
 }
 
 // regNativeOn runs register code by the native handlers where they are

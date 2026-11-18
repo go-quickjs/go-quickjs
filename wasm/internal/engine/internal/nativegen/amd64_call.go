@@ -67,6 +67,42 @@ func (g *gen) refs() {
 func (g *gen) calls() {
 	a := g.a
 	retNative := g.retNative
+	callFn := a.NewLabel()
+	// call_indirect: the function the table's entry names, where the
+	// entry is in the table, not null, and of the site's type exactly
+	// where the site checks it; then the call as call's. A null entry, an
+	// index out of bounds, a type to check further (a subtype) leave to
+	// Go, which traps or calls.
+	g.hx(rd.XCallIndirect, "CallIndirect", func() {
+		a.CmpMemImm8(RDI, rd.CtxCalls, 0)
+		a.Jcc(CondE, g.exit)
+		g.bc(RCX, false)
+		a.ImulImm(RCX, RCX, rd.SiteSize, true)
+		a.OpMem(Add, RCX, RDI, rd.CtxSites, true)
+		a.LoadU32(RDX, RCX, rd.SiteTable)
+		a.Load(R8, RDI, rd.CtxInst)
+		a.Load(R8, R8, rd.InstTables)
+		a.LoadIdx(R8, R8, RDX, 8, 0)
+		a.LoadU32(R9, RCX, rd.SiteTarget)
+		a.LoadIdx(RSI, R12, R9, 8, 0)
+		a.CmpMem(RSI, R8, rd.TableElems+rd.SliceLen, true)
+		a.Jcc(CondAE, g.exit)
+		a.Load(R8, R8, rd.TableElems)
+		a.ShiftImm(Shl, RSI, 4, true)
+		a.LoadIdx(R8, R8, RSI, 1, 0)
+		a.Op(Test, R8, R8, true)
+		a.Jcc(CondE, g.exit)
+		unchecked := a.NewLabel()
+		a.LoadU8(RDX, RCX, rd.SiteChecked)
+		a.Op(Test, RDX, RDX, false)
+		a.Jcc(CondE, unchecked)
+		a.LoadU32(RDX, R8, rd.FnType)
+		a.LoadU32(RSI, RCX, rd.SiteWant)
+		a.Op(Cmp, RDX, RSI, false)
+		a.Jcc(CondNE, g.exit)
+		a.Bind(unchecked)
+		a.Jmp(callFn)
+	})
 	g.h(rd.Call, "Call", func() {
 		const cc = rd.FrameNctx // the callee's context, at R10
 		a.CmpMemImm8(RDI, rd.CtxCalls, 0)
@@ -78,6 +114,8 @@ func (g *gen) calls() {
 		a.LoadU32(RDX, RCX, rd.SiteFn)
 		a.Load(R8, RDI, rd.CtxFuncs)
 		a.LoadIdx(R8, R8, RDX, 8, 0)
+		// The function R8 of site RCX, call_indirect's too.
+		a.Bind(callFn)
 		a.Load(RDX, R8, rd.FnInst)
 		a.CmpMem(RDX, RDI, rd.CtxInst, true)
 		a.Jcc(CondNE, g.exit)
@@ -224,7 +262,7 @@ func (g *gen) calls() {
 		a.Store32(R10, rd.FrameTickSet, RDX)
 		// The callee's context: the instance's and the run's from the
 		// caller's, its code's, and the way back.
-		for _, f := range []int32{rd.CtxTable, rd.CtxExtTable, rd.CtxGoTable, rd.CtxSlowTable, rd.CtxCallH, rd.CtxMem0,
+		for _, f := range []int32{rd.CtxTable, rd.CtxExtTable, rd.CtxSIMDTable, rd.CtxGoTable, rd.CtxSlowTable, rd.CtxCallH, rd.CtxMem0,
 			rd.CtxGlobals, rd.CtxExits, rd.CtxX, rd.CtxInst, rd.CtxFuncs, rd.CtxFns, rd.CtxCalls,
 			rd.CtxMaxDepth, rd.CtxStoreRef, rd.CtxWB} {
 			a.Load(RDX, RDI, f)

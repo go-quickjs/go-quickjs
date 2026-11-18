@@ -58,6 +58,7 @@ func TestNativeLayout(t *testing.T) {
 	var rc regCode
 	var st regSite
 	var mv regMove
+	var inst Instance
 	for _, x := range []struct {
 		what      string
 		got, want uintptr
@@ -97,6 +98,7 @@ func TestNativeLayout(t *testing.T) {
 		{"extTable", unsafe.Offsetof(c.extTable), regdef.CtxExtTable},
 		{"rch", unsafe.Offsetof(c.rch), regdef.CtxRch},
 		{"rsp", unsafe.Offsetof(c.rsp), regdef.CtxRsp},
+		{"simdTable", unsafe.Offsetof(c.simdTable), regdef.CtxSIMDTable},
 		{"frame.l", unsafe.Offsetof(f.l), regdef.FrameL},
 		{"frame.r", unsafe.Offsetof(f.r), regdef.FrameR},
 		{"frame.inst", unsafe.Offsetof(f.inst), regdef.FrameInst},
@@ -131,7 +133,15 @@ func TestNativeLayout(t *testing.T) {
 		{"regSite.at", unsafe.Offsetof(st.at), regdef.SiteAt},
 		{"regSite.args", unsafe.Offsetof(st.args), regdef.SiteArgs},
 		{"regSite.rets", unsafe.Offsetof(st.rets), regdef.SiteRets},
+		{"regSite.table", unsafe.Offsetof(st.table), regdef.SiteTable},
+		{"regSite.checked", unsafe.Offsetof(st.checked), regdef.SiteChecked},
+		{"regSite.target", unsafe.Offsetof(st.target), regdef.SiteTarget},
+		{"regSite.want", unsafe.Offsetof(st.want), regdef.SiteWant},
 		{"a regSite", unsafe.Sizeof(st), regdef.SiteSize},
+		{"Function.Type", unsafe.Offsetof(fn.Type), regdef.FnType},
+		{"Instance.Tables", unsafe.Offsetof(inst.Tables), regdef.InstTables},
+		{"Table.Elems", unsafe.Offsetof(Table{}.Elems), regdef.TableElems},
+		{"xCallIndirect", uintptr(xCallIndirect), regdef.XCallIndirect},
 		{"regMove.from", unsafe.Offsetof(mv.from), regdef.MoveFrom},
 		{"regMove.to", unsafe.Offsetof(mv.to), regdef.MoveTo},
 		{"regMove.k", unsafe.Offsetof(mv.k), regdef.MoveK},
@@ -142,6 +152,7 @@ func TestNativeLayout(t *testing.T) {
 		{"Ref.p", unsafe.Offsetof(Ref{}.p), 0},
 		{"frame.tick", unsafe.Offsetof(f.tick), regdef.FrameTick},
 		{"Memory.buf", unsafe.Offsetof(m.buf), regdef.MemoryBuf},
+		{"Memory.Is64", unsafe.Offsetof(m.Is64), regdef.MemoryIs64},
 		{"Global.Num", unsafe.Offsetof(g.Num), regdef.GlobalNum},
 		{"a slice", unsafe.Sizeof([]int32(nil)), regdef.SliceSize},
 	} {
@@ -462,8 +473,169 @@ func nativeCases() (string, []regCall) {
 			calls = append(calls, regCall{name, []Val{{N: a}, {N: v}}})
 		}
 	}
+	calls = nativeSIMDCases(&b, calls, vals)
 	b.WriteString(")")
 	return b.String(), calls
+}
+
+// nativeSIMDCases adds to the module of nativeCases a function for each
+// SIMD operator with a native handler, and calls of it over vectors of
+// edge cases of every lane type: zeros, ones, the signed extremes, NaNs
+// quiet and signalling with payloads and signs, infinities, zeros of
+// either sign, subnormals and the truncations' bounds.
+func nativeSIMDCases(b *strings.Builder, calls []regCall, vals map[string][]uint64) []regCall {
+	vecs := [][2]uint64{
+		{0, 0}, {^uint64(0), ^uint64(0)}, {1 << 63, 1<<63 - 1}, {0x80ff7f0001fe8081, 0x0123456789abcdef},
+		{0x7fc00000ffc00001, 0x7fa0000000000001}, {0x3f800000bf800000, 0x7f800000ff800000},
+		{0x7ff8000000000001, 0xfff4000000000000}, {1 << 63, 0x3ff0000000000000},
+		{0x4f0000004effffff, 0xcf0000003fc00000}, {0x400c000000000000, 0xc004000000000000},
+		{0x0001000200030004, 0xfffefffd80008001}, {0x7fff80007fffffff, 0x8000000000000001},
+	}
+	v := func(x [2]uint64) Val { return Val{N: x[0], Hi: x[1]} }
+	bin := []string{"v128.and", "v128.or", "v128.xor", "v128.andnot", "i8x16.swizzle"}
+	for _, ty := range []string{"i8x16", "i16x8", "i32x4", "i64x2"} {
+		ops := []string{"add", "sub", "eq", "ne", "lt_s", "gt_s", "le_s", "ge_s"}
+		switch ty {
+		case "i8x16":
+			ops = append(ops, "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u", "min_s", "min_u", "max_s", "max_u",
+				"avgr_u", "narrow_i16x8_s", "narrow_i16x8_u", "lt_u", "gt_u", "le_u", "ge_u")
+		case "i16x8":
+			ops = append(ops, "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u", "mul", "min_s", "min_u", "max_s", "max_u",
+				"avgr_u", "narrow_i32x4_s", "narrow_i32x4_u", "lt_u", "gt_u", "le_u", "ge_u")
+		case "i32x4":
+			ops = append(ops, "mul", "min_s", "min_u", "max_s", "max_u", "dot_i16x8_s", "lt_u", "gt_u", "le_u", "ge_u")
+		}
+		for _, op := range ops {
+			bin = append(bin, ty+"."+op)
+		}
+	}
+	for _, ty := range []string{"f32x4", "f64x2"} {
+		for _, op := range []string{"add", "sub", "mul", "div", "pmin", "pmax", "eq", "ne", "lt", "gt", "le", "ge"} {
+			bin = append(bin, ty+"."+op)
+		}
+	}
+	for _, op := range bin {
+		name := "v." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128 v128) (result v128) (%s (local.get 0) (local.get 1)))\n", name, op)
+		for _, x := range vecs {
+			for _, y := range vecs {
+				calls = append(calls, regCall{name, []Val{v(x), v(y)}})
+			}
+		}
+	}
+	un := []string{"v128.not", "i8x16.abs", "i8x16.neg", "i16x8.abs", "i16x8.neg", "i32x4.abs", "i32x4.neg", "i64x2.neg"}
+	for _, e := range []string{"i16x8.extend_%s_i8x16_%s", "i32x4.extend_%s_i16x8_%s", "i64x2.extend_%s_i32x4_%s"} {
+		for _, half := range []string{"low", "high"} {
+			for _, sg := range []string{"s", "u"} {
+				un = append(un, fmt.Sprintf(e, half, sg))
+			}
+		}
+	}
+	for _, ty := range []string{"f32x4", "f64x2"} {
+		for _, op := range []string{"abs", "neg", "sqrt", "ceil", "floor", "trunc", "nearest"} {
+			un = append(un, ty+"."+op)
+		}
+	}
+	for _, op := range un {
+		name := "v." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128) (result v128) (%s (local.get 0)))\n", name, op)
+		for _, x := range vecs {
+			calls = append(calls, regCall{name, []Val{v(x)}})
+		}
+	}
+	tests := []string{"v128.any_true"}
+	for _, ty := range []string{"i8x16", "i16x8", "i32x4", "i64x2"} {
+		tests = append(tests, ty+".all_true", ty+".bitmask")
+	}
+	for _, op := range tests {
+		name := "v." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128) (result i32) (%s (local.get 0)))\n", name, op)
+		for _, x := range append(vecs, [2]uint64{0x0101010101010101, 0x0101010101010100}, [2]uint64{0x0001000100010001, 0x0001000100000001}) {
+			calls = append(calls, regCall{name, []Val{v(x)}})
+		}
+	}
+	for _, op := range []string{"i16x8.shl", "i16x8.shr_s", "i16x8.shr_u", "i32x4.shl", "i32x4.shr_s", "i32x4.shr_u", "i64x2.shl", "i64x2.shr_u"} {
+		name := "v." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128 i32) (result v128) (%s (local.get 0) (local.get 1)))\n", name, op)
+		for _, x := range vecs {
+			for _, n := range []uint64{0, 1, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 0xffffffff} {
+				calls = append(calls, regCall{name, []Val{v(x), {N: n}}})
+			}
+		}
+	}
+	b.WriteString("(func (export \"v.bitselect\") (param v128 v128 v128) (result v128) (v128.bitselect (local.get 0) (local.get 1) (local.get 2)))\n")
+	for _, x := range vecs[:6] {
+		for _, y := range vecs[6:] {
+			for _, c := range vecs {
+				calls = append(calls, regCall{"v.bitselect", []Val{v(x), v(y), v(c)}})
+			}
+		}
+	}
+	for i, lanes := range []string{
+		"0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15", "16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31",
+		"31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16", "0 16 1 17 2 18 3 19 4 20 5 21 6 22 7 23",
+		"4 5 6 7 8 9 10 11 12 13 14 15 0 1 2 3", "31 0 31 0 15 16 15 16 7 7 7 7 24 24 24 24",
+	} {
+		name := fmt.Sprintf("v.shuffle%d", i)
+		fmt.Fprintf(b, "(func (export %q) (param v128 v128) (result v128) (i8x16.shuffle %s (local.get 0) (local.get 1)))\n", name, lanes)
+		for _, x := range vecs[:4] {
+			for _, y := range vecs[8:] {
+				calls = append(calls, regCall{name, []Val{v(x), v(y)}})
+			}
+		}
+	}
+	for _, e := range []struct {
+		op, res string
+		lanes   []int
+	}{
+		{"i8x16.extract_lane_s", "i32", []int{0, 7, 8, 15}}, {"i8x16.extract_lane_u", "i32", []int{0, 7, 8, 15}},
+		{"i16x8.extract_lane_s", "i32", []int{0, 3, 4, 7}}, {"i16x8.extract_lane_u", "i32", []int{0, 3, 4, 7}},
+		{"i32x4.extract_lane", "i32", []int{0, 1, 2, 3}}, {"f32x4.extract_lane", "f32", []int{0, 3}},
+		{"i64x2.extract_lane", "i64", []int{0, 1}}, {"f64x2.extract_lane", "f64", []int{0, 1}},
+	} {
+		for _, lane := range e.lanes {
+			name := fmt.Sprintf("v.%s%d", e.op, lane)
+			fmt.Fprintf(b, "(func (export %q) (param v128) (result %s) (%s %d (local.get 0)))\n", name, e.res, e.op, lane)
+			for _, x := range vecs {
+				calls = append(calls, regCall{name, []Val{v(x)}})
+			}
+		}
+	}
+	for _, r := range []struct {
+		ty, arg string
+		lanes   []int
+	}{
+		{"i8x16", "i32", []int{0, 9, 15}}, {"i16x8", "i32", []int{0, 5, 7}}, {"i32x4", "i32", []int{0, 3}},
+		{"f32x4", "f32", []int{1, 2}}, {"i64x2", "i64", []int{0, 1}}, {"f64x2", "f64", []int{0, 1}},
+	} {
+		arg := vals["i32"]
+		if r.arg == "i64" || r.arg == "f64" {
+			arg = vals["i64"]
+		}
+		for _, lane := range r.lanes {
+			name := fmt.Sprintf("v.%s.replace_lane%d", r.ty, lane)
+			fmt.Fprintf(b, "(func (export %q) (param v128 %s) (result v128) (%s.replace_lane %d (local.get 0) (local.get 1)))\n", name, r.arg, r.ty, lane)
+			for _, x := range vecs[:4] {
+				for _, n := range arg {
+					calls = append(calls, regCall{name, []Val{v(x), {N: n}}})
+				}
+			}
+		}
+		name := "v." + r.ty + ".splat"
+		fmt.Fprintf(b, "(func (export %q) (param %s) (result v128) (%s.splat (local.get 0)))\n", name, r.arg, r.ty)
+		for _, n := range arg {
+			calls = append(calls, regCall{name, []Val{{N: n}}})
+		}
+	}
+	b.WriteString(`(func (export "v.mem.load") (param i32) (result v128) (v128.load offset=7 (local.get 0)))
+(func (export "v.mem.store") (param i32 v128) (result v128) (v128.store offset=9 (local.get 0) (local.get 1)) (v128.load offset=9 (local.get 0)))
+(func (export "v.mem.load8x8") (param i32) (result v128) (v128.load8x8_s (local.get 0)))
+`)
+	for _, a := range []uint64{0, 100, 65536 - 23, 65536 - 22, 0xffffffff} {
+		calls = append(calls, regCall{"v.mem.load", []Val{{N: a}}}, regCall{"v.mem.load8x8", []Val{{N: a}}})
+		calls = append(calls, regCall{"v.mem.store", []Val{{N: a}, v(vecs[3])}})
+	}
+	return calls
 }
 
 // nativeMayExit reports whether a call of export name may leave native
@@ -471,6 +643,11 @@ func nativeCases() (string, []regCall) {
 // operations in the second table -- i64 comparisons made booleans with an
 // immediate.
 func nativeMayExit(name string) bool {
+	if strings.HasPrefix(name, "v.") {
+		// Of the SIMD operators, the accesses out of bounds and the loads
+		// that extend leave to Go.
+		return strings.HasPrefix(name, "v.mem.")
+	}
 	if strings.Contains(name, "div") || strings.Contains(name, "rem") || name == "count" || strings.Contains(name, "trunc_") || strings.Contains(name, "convert_i64_u") {
 		return true
 	}
@@ -688,6 +865,20 @@ func TestNativeCalls(t *testing.T) {
 	  (func (export "swap") (param externref externref) (result externref i32 externref)
 	    (call $pass (local.get 0) (i32.const 6) (local.get 1)))
 	  (func $lane (param v128) (result i32) (i32x4.extract_lane 2 (local.get 0)))
+	  (type $ii (func (param i32) (result i32)))
+	  (type $none (func))
+	  (table $t 5 funcref)
+	  (elem (table $t) (i32.const 0) func $sq $inc $nop)
+	  (func $sq (type $ii) (i32.mul (local.get 0) (local.get 0)))
+	  (func $inc (type $ii) (i32.add (local.get 0) (i32.const 1)))
+	  (func $nop (type $none))
+	  (func (export "ind") (param i32 i32) (result i32) (call_indirect $t (type $ii) (local.get 0) (local.get 1)))
+	  (func (export "indloop") (param i32) (result i32) (local i32 i32)
+	    (loop $l
+	      (local.set 1 (call_indirect $t (type $ii) (local.get 1) (i32.and (local.get 2) (i32.const 1))))
+	      (local.set 2 (i32.add (local.get 2) (i32.const 1)))
+	      (br_if $l (i32.lt_u (local.get 2) (local.get 0))))
+	    (local.get 1))
 	  (func (export "lane") (param i32) (result i32) (call $lane (i32x4.splat (local.get 0))))
 	  (func (export "refs") (param externref externref i32) (result externref)
 	    (local externref)
@@ -706,6 +897,9 @@ func TestNativeCalls(t *testing.T) {
 		{"refs", []Val{{R: host}, {R: Null}, {N: 0}}}, {"refs", []Val{{R: host}, {R: Null}, {N: 1}}},
 		{"tree", []Val{{N: 0}}}, {"tree", []Val{{N: 10}}},
 		{"lane", []Val{{N: 7}}}, {"lane", []Val{{N: 9}}}, {"lane", []Val{{N: 11}}},
+		{"ind", []Val{{N: 5}, {N: 0}}}, {"ind", []Val{{N: 5}, {N: 1}}}, {"ind", []Val{{N: 5}, {N: 0}}},
+		{"ind", []Val{{N: 5}, {N: 2}}}, {"ind", []Val{{N: 5}, {N: 3}}}, {"ind", []Val{{N: 5}, {N: 5}}},
+		{"ind", []Val{{N: 5}, {N: 0xffffffff}}}, {"indloop", []Val{{N: 1000}}},
 		{"swap", []Val{{R: host}, {R: HostRef("k")}}}, {"swap", []Val{{R: Null}, {R: host}}},
 	}
 	marked, unmarked := matchNativeWithHost(t, src, calls)
@@ -732,6 +926,24 @@ func TestNativeCalls(t *testing.T) {
 	if counts[rCall] != 0 {
 		t.Errorf("%d calls of tree(8) left to Go", counts[rCall])
 	}
+	// So are call_indirect's callees whose entry and type are right, once
+	// compiled.
+	withNative(true, func() {
+		if _, err := call(t, inst, "indloop", 10); err != nil {
+			t.Fatal(err)
+		}
+	})
+	counts = [256]int64{}
+	nativeExitCounts = &counts
+	withNative(true, func() {
+		if _, err := call(t, inst, "indloop", 100); err != nil {
+			t.Error(err)
+		}
+	})
+	nativeExitCounts = nil
+	if counts[rExt] != 0 {
+		t.Errorf("%d of indloop(100)'s indirect calls left to Go", counts[rExt])
+	}
 }
 
 // matchNativeWithHost is matchNative with the spectest's print_i32 to
@@ -748,7 +960,7 @@ func TestNativeRefsMarking(t *testing.T) {
 	if !nativeHandles(rRefMov) || !nativeHandles(rRefNull) {
 		t.Fatal("ref.mov or ref.null has no native handler")
 	}
-	for _, op := range []regOp{rSIMD, rFar, rReturnCall} {
+	for _, op := range []regOp{rFar, rReturnCall} {
 		if nativeHandles(op) {
 			t.Errorf("operation %d has a native handler", op)
 		}
@@ -766,5 +978,27 @@ func TestNativeRefsMarking(t *testing.T) {
 	})
 	if marked == 0 || unmarked != 0 {
 		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
+	}
+}
+
+// TestNativeSIMDWithout runs SIMD operators natively with rSIMD's table
+// the exit stub's alone, as on a CPU without SSE4.2: every operator leaves
+// to Go, with the Go table's results.
+func TestNativeSIMDWithout(t *testing.T) {
+	nativeOnly(t)
+	was := nativeSIMDTable
+	nativeSIMDTable = uintptr(unsafe.Pointer(&nativeSIMDExits))
+	defer func() { nativeSIMDTable = was }()
+	src := `(module
+	  (func (export "f") (param v128 v128 i32) (result v128)
+	    (i32x4.shl (i8x16.shuffle 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
+	      (i32x4.mul (local.get 0) (local.get 1)) (f64x2.sqrt (local.get 1))) (local.get 2))))`
+	calls := []regCall{
+		{"f", []Val{{N: 0x0123456789abcdef, Hi: 0xfedcba9876543210}, {N: 0x7ff8000000000001, Hi: 0x4010000000000000}, {N: 3}}},
+		{"f", []Val{{N: ^uint64(0), Hi: 1}, {N: 1 << 63, Hi: 0xfff4000000000000}, {N: 33}}},
+	}
+	exits := countNativeExits(func() { matchNative(t, src, calls) })
+	if exits == 0 {
+		t.Fatal("no SIMD operator left to Go with rSIMD's table the exit stub's")
 	}
 }

@@ -5,225 +5,227 @@ package engine
 import (
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
-// The SIMD operators of register code, their values in rSIMD's table.
+// The SIMD operators of register code, their values in rSIMD's table
+// (internal/regdef's).
 const (
-	sS128Not regOp = iota
-	sS128And
-	sS128AndNot
-	sS128Or
-	sS128Xor
-	sS128Select
-	sV128AnyTrue
-	sI8x16Swizzle
-	sI8x16Eq
-	sI8x16Ne
-	sI8x16LtS
-	sI8x16GtS
-	sI8x16LeS
-	sI8x16GeS
-	sI8x16LtU
-	sI8x16GtU
-	sI8x16LeU
-	sI8x16GeU
-	sI8x16Abs
-	sI8x16Neg
-	sI8x16Popcnt
-	sI8x16AllTrue
-	sI8x16BitMask
-	sI8x16SConvertI16x8
-	sI8x16UConvertI16x8
-	sI8x16Shl
-	sI8x16ShrS
-	sI8x16ShrU
-	sI8x16Add
-	sI8x16Sub
-	sI8x16AddSatS
-	sI8x16AddSatU
-	sI8x16SubSatS
-	sI8x16SubSatU
-	sI8x16MinS
-	sI8x16MinU
-	sI8x16MaxS
-	sI8x16MaxU
-	sI8x16RoundingAverageU
-	sI16x8Eq
-	sI16x8Ne
-	sI16x8LtS
-	sI16x8GtS
-	sI16x8LeS
-	sI16x8GeS
-	sI16x8LtU
-	sI16x8GtU
-	sI16x8LeU
-	sI16x8GeU
-	sI16x8ExtAddPairwiseI8x16S
-	sI16x8ExtAddPairwiseI8x16U
-	sI16x8Abs
-	sI16x8Neg
-	sI16x8Q15MulRSatS
-	sI16x8AllTrue
-	sI16x8BitMask
-	sI16x8SConvertI32x4
-	sI16x8UConvertI32x4
-	sI16x8SConvertI8x16Low
-	sI16x8SConvertI8x16High
-	sI16x8UConvertI8x16Low
-	sI16x8UConvertI8x16High
-	sI16x8Shl
-	sI16x8ShrS
-	sI16x8ShrU
-	sI16x8Add
-	sI16x8Sub
-	sI16x8AddSatS
-	sI16x8AddSatU
-	sI16x8SubSatS
-	sI16x8SubSatU
-	sI16x8Mul
-	sI16x8MinS
-	sI16x8MinU
-	sI16x8MaxS
-	sI16x8MaxU
-	sI16x8RoundingAverageU
-	sI16x8ExtMulLowI8x16S
-	sI16x8ExtMulHighI8x16S
-	sI16x8ExtMulLowI8x16U
-	sI16x8ExtMulHighI8x16U
-	sI32x4Eq
-	sI32x4Ne
-	sI32x4LtS
-	sI32x4GtS
-	sI32x4LeS
-	sI32x4GeS
-	sI32x4LtU
-	sI32x4GtU
-	sI32x4LeU
-	sI32x4GeU
-	sI32x4ExtAddPairwiseI16x8S
-	sI32x4ExtAddPairwiseI16x8U
-	sI32x4Abs
-	sI32x4Neg
-	sI32x4AllTrue
-	sI32x4BitMask
-	sI32x4SConvertI16x8Low
-	sI32x4SConvertI16x8High
-	sI32x4UConvertI16x8Low
-	sI32x4UConvertI16x8High
-	sI32x4Shl
-	sI32x4ShrS
-	sI32x4ShrU
-	sI32x4Add
-	sI32x4Sub
-	sI32x4Mul
-	sI32x4MinS
-	sI32x4MinU
-	sI32x4MaxS
-	sI32x4MaxU
-	sI32x4DotI16x8S
-	sI32x4ExtMulLowI16x8S
-	sI32x4ExtMulHighI16x8S
-	sI32x4ExtMulLowI16x8U
-	sI32x4ExtMulHighI16x8U
-	sI64x2Eq
-	sI64x2Ne
-	sI64x2LtS
-	sI64x2GtS
-	sI64x2LeS
-	sI64x2GeS
-	sI64x2Abs
-	sI64x2Neg
-	sI64x2AllTrue
-	sI64x2BitMask
-	sI64x2SConvertI32x4Low
-	sI64x2SConvertI32x4High
-	sI64x2UConvertI32x4Low
-	sI64x2UConvertI32x4High
-	sI64x2Shl
-	sI64x2ShrS
-	sI64x2ShrU
-	sI64x2Add
-	sI64x2Sub
-	sI64x2Mul
-	sI64x2ExtMulLowI32x4S
-	sI64x2ExtMulHighI32x4S
-	sI64x2ExtMulLowI32x4U
-	sI64x2ExtMulHighI32x4U
-	sF32x4Eq
-	sF32x4Ne
-	sF32x4Lt
-	sF32x4Gt
-	sF32x4Le
-	sF32x4Ge
-	sF64x2Eq
-	sF64x2Ne
-	sF64x2Lt
-	sF64x2Gt
-	sF64x2Le
-	sF64x2Ge
-	sF32x4Abs
-	sF32x4Neg
-	sF32x4Sqrt
-	sF32x4Add
-	sF32x4Sub
-	sF32x4Mul
-	sF32x4Div
-	sF32x4Min
-	sF32x4Max
-	sF32x4Pmin
-	sF32x4Pmax
-	sF32x4Ceil
-	sF32x4Floor
-	sF32x4Trunc
-	sF32x4NearestInt
-	sF64x2Abs
-	sF64x2Neg
-	sF64x2Sqrt
-	sF64x2Add
-	sF64x2Sub
-	sF64x2Mul
-	sF64x2Div
-	sF64x2Min
-	sF64x2Max
-	sF64x2Pmin
-	sF64x2Pmax
-	sF64x2Ceil
-	sF64x2Floor
-	sF64x2Trunc
-	sF64x2NearestInt
-	sF32x4DemoteF64x2Zero
-	sF64x2PromoteLowF32x4
-	sI32x4SConvertF32x4
-	sI32x4UConvertF32x4
-	sF32x4SConvertI32x4
-	sF32x4UConvertI32x4
-	sI32x4TruncSatF64x2SZero
-	sI32x4TruncSatF64x2UZero
-	sF64x2ConvertLowI32x4S
-	sF64x2ConvertLowI32x4U
-	sI8x16RelaxedSwizzle
-	sI32x4RelaxedTruncF32x4S
-	sI32x4RelaxedTruncF32x4U
-	sI32x4RelaxedTruncF64x2SZero
-	sI32x4RelaxedTruncF64x2UZero
-	sF32x4Qfma
-	sF32x4Qfms
-	sF64x2Qfma
-	sF64x2Qfms
-	sI8x16RelaxedLaneSelect
-	sI16x8RelaxedLaneSelect
-	sI32x4RelaxedLaneSelect
-	sI64x2RelaxedLaneSelect
-	sF32x4RelaxedMin
-	sF32x4RelaxedMax
-	sF64x2RelaxedMin
-	sF64x2RelaxedMax
-	sI16x8RelaxedQ15MulRS
-	sI16x8DotI8x16I7x16S
-	sI32x4DotI8x16I7x16AddS
+	sS128Not                     regOp = regdef.SS128Not
+	sS128And                     regOp = regdef.SS128And
+	sS128AndNot                  regOp = regdef.SS128AndNot
+	sS128Or                      regOp = regdef.SS128Or
+	sS128Xor                     regOp = regdef.SS128Xor
+	sS128Select                  regOp = regdef.SS128Select
+	sV128AnyTrue                 regOp = regdef.SV128AnyTrue
+	sI8x16Swizzle                regOp = regdef.SI8x16Swizzle
+	sI8x16Eq                     regOp = regdef.SI8x16Eq
+	sI8x16Ne                     regOp = regdef.SI8x16Ne
+	sI8x16LtS                    regOp = regdef.SI8x16LtS
+	sI8x16GtS                    regOp = regdef.SI8x16GtS
+	sI8x16LeS                    regOp = regdef.SI8x16LeS
+	sI8x16GeS                    regOp = regdef.SI8x16GeS
+	sI8x16LtU                    regOp = regdef.SI8x16LtU
+	sI8x16GtU                    regOp = regdef.SI8x16GtU
+	sI8x16LeU                    regOp = regdef.SI8x16LeU
+	sI8x16GeU                    regOp = regdef.SI8x16GeU
+	sI8x16Abs                    regOp = regdef.SI8x16Abs
+	sI8x16Neg                    regOp = regdef.SI8x16Neg
+	sI8x16Popcnt                 regOp = regdef.SI8x16Popcnt
+	sI8x16AllTrue                regOp = regdef.SI8x16AllTrue
+	sI8x16BitMask                regOp = regdef.SI8x16BitMask
+	sI8x16SConvertI16x8          regOp = regdef.SI8x16SConvertI16x8
+	sI8x16UConvertI16x8          regOp = regdef.SI8x16UConvertI16x8
+	sI8x16Shl                    regOp = regdef.SI8x16Shl
+	sI8x16ShrS                   regOp = regdef.SI8x16ShrS
+	sI8x16ShrU                   regOp = regdef.SI8x16ShrU
+	sI8x16Add                    regOp = regdef.SI8x16Add
+	sI8x16Sub                    regOp = regdef.SI8x16Sub
+	sI8x16AddSatS                regOp = regdef.SI8x16AddSatS
+	sI8x16AddSatU                regOp = regdef.SI8x16AddSatU
+	sI8x16SubSatS                regOp = regdef.SI8x16SubSatS
+	sI8x16SubSatU                regOp = regdef.SI8x16SubSatU
+	sI8x16MinS                   regOp = regdef.SI8x16MinS
+	sI8x16MinU                   regOp = regdef.SI8x16MinU
+	sI8x16MaxS                   regOp = regdef.SI8x16MaxS
+	sI8x16MaxU                   regOp = regdef.SI8x16MaxU
+	sI8x16RoundingAverageU       regOp = regdef.SI8x16RoundingAverageU
+	sI16x8Eq                     regOp = regdef.SI16x8Eq
+	sI16x8Ne                     regOp = regdef.SI16x8Ne
+	sI16x8LtS                    regOp = regdef.SI16x8LtS
+	sI16x8GtS                    regOp = regdef.SI16x8GtS
+	sI16x8LeS                    regOp = regdef.SI16x8LeS
+	sI16x8GeS                    regOp = regdef.SI16x8GeS
+	sI16x8LtU                    regOp = regdef.SI16x8LtU
+	sI16x8GtU                    regOp = regdef.SI16x8GtU
+	sI16x8LeU                    regOp = regdef.SI16x8LeU
+	sI16x8GeU                    regOp = regdef.SI16x8GeU
+	sI16x8ExtAddPairwiseI8x16S   regOp = regdef.SI16x8ExtAddPairwiseI8x16S
+	sI16x8ExtAddPairwiseI8x16U   regOp = regdef.SI16x8ExtAddPairwiseI8x16U
+	sI16x8Abs                    regOp = regdef.SI16x8Abs
+	sI16x8Neg                    regOp = regdef.SI16x8Neg
+	sI16x8Q15MulRSatS            regOp = regdef.SI16x8Q15MulRSatS
+	sI16x8AllTrue                regOp = regdef.SI16x8AllTrue
+	sI16x8BitMask                regOp = regdef.SI16x8BitMask
+	sI16x8SConvertI32x4          regOp = regdef.SI16x8SConvertI32x4
+	sI16x8UConvertI32x4          regOp = regdef.SI16x8UConvertI32x4
+	sI16x8SConvertI8x16Low       regOp = regdef.SI16x8SConvertI8x16Low
+	sI16x8SConvertI8x16High      regOp = regdef.SI16x8SConvertI8x16High
+	sI16x8UConvertI8x16Low       regOp = regdef.SI16x8UConvertI8x16Low
+	sI16x8UConvertI8x16High      regOp = regdef.SI16x8UConvertI8x16High
+	sI16x8Shl                    regOp = regdef.SI16x8Shl
+	sI16x8ShrS                   regOp = regdef.SI16x8ShrS
+	sI16x8ShrU                   regOp = regdef.SI16x8ShrU
+	sI16x8Add                    regOp = regdef.SI16x8Add
+	sI16x8Sub                    regOp = regdef.SI16x8Sub
+	sI16x8AddSatS                regOp = regdef.SI16x8AddSatS
+	sI16x8AddSatU                regOp = regdef.SI16x8AddSatU
+	sI16x8SubSatS                regOp = regdef.SI16x8SubSatS
+	sI16x8SubSatU                regOp = regdef.SI16x8SubSatU
+	sI16x8Mul                    regOp = regdef.SI16x8Mul
+	sI16x8MinS                   regOp = regdef.SI16x8MinS
+	sI16x8MinU                   regOp = regdef.SI16x8MinU
+	sI16x8MaxS                   regOp = regdef.SI16x8MaxS
+	sI16x8MaxU                   regOp = regdef.SI16x8MaxU
+	sI16x8RoundingAverageU       regOp = regdef.SI16x8RoundingAverageU
+	sI16x8ExtMulLowI8x16S        regOp = regdef.SI16x8ExtMulLowI8x16S
+	sI16x8ExtMulHighI8x16S       regOp = regdef.SI16x8ExtMulHighI8x16S
+	sI16x8ExtMulLowI8x16U        regOp = regdef.SI16x8ExtMulLowI8x16U
+	sI16x8ExtMulHighI8x16U       regOp = regdef.SI16x8ExtMulHighI8x16U
+	sI32x4Eq                     regOp = regdef.SI32x4Eq
+	sI32x4Ne                     regOp = regdef.SI32x4Ne
+	sI32x4LtS                    regOp = regdef.SI32x4LtS
+	sI32x4GtS                    regOp = regdef.SI32x4GtS
+	sI32x4LeS                    regOp = regdef.SI32x4LeS
+	sI32x4GeS                    regOp = regdef.SI32x4GeS
+	sI32x4LtU                    regOp = regdef.SI32x4LtU
+	sI32x4GtU                    regOp = regdef.SI32x4GtU
+	sI32x4LeU                    regOp = regdef.SI32x4LeU
+	sI32x4GeU                    regOp = regdef.SI32x4GeU
+	sI32x4ExtAddPairwiseI16x8S   regOp = regdef.SI32x4ExtAddPairwiseI16x8S
+	sI32x4ExtAddPairwiseI16x8U   regOp = regdef.SI32x4ExtAddPairwiseI16x8U
+	sI32x4Abs                    regOp = regdef.SI32x4Abs
+	sI32x4Neg                    regOp = regdef.SI32x4Neg
+	sI32x4AllTrue                regOp = regdef.SI32x4AllTrue
+	sI32x4BitMask                regOp = regdef.SI32x4BitMask
+	sI32x4SConvertI16x8Low       regOp = regdef.SI32x4SConvertI16x8Low
+	sI32x4SConvertI16x8High      regOp = regdef.SI32x4SConvertI16x8High
+	sI32x4UConvertI16x8Low       regOp = regdef.SI32x4UConvertI16x8Low
+	sI32x4UConvertI16x8High      regOp = regdef.SI32x4UConvertI16x8High
+	sI32x4Shl                    regOp = regdef.SI32x4Shl
+	sI32x4ShrS                   regOp = regdef.SI32x4ShrS
+	sI32x4ShrU                   regOp = regdef.SI32x4ShrU
+	sI32x4Add                    regOp = regdef.SI32x4Add
+	sI32x4Sub                    regOp = regdef.SI32x4Sub
+	sI32x4Mul                    regOp = regdef.SI32x4Mul
+	sI32x4MinS                   regOp = regdef.SI32x4MinS
+	sI32x4MinU                   regOp = regdef.SI32x4MinU
+	sI32x4MaxS                   regOp = regdef.SI32x4MaxS
+	sI32x4MaxU                   regOp = regdef.SI32x4MaxU
+	sI32x4DotI16x8S              regOp = regdef.SI32x4DotI16x8S
+	sI32x4ExtMulLowI16x8S        regOp = regdef.SI32x4ExtMulLowI16x8S
+	sI32x4ExtMulHighI16x8S       regOp = regdef.SI32x4ExtMulHighI16x8S
+	sI32x4ExtMulLowI16x8U        regOp = regdef.SI32x4ExtMulLowI16x8U
+	sI32x4ExtMulHighI16x8U       regOp = regdef.SI32x4ExtMulHighI16x8U
+	sI64x2Eq                     regOp = regdef.SI64x2Eq
+	sI64x2Ne                     regOp = regdef.SI64x2Ne
+	sI64x2LtS                    regOp = regdef.SI64x2LtS
+	sI64x2GtS                    regOp = regdef.SI64x2GtS
+	sI64x2LeS                    regOp = regdef.SI64x2LeS
+	sI64x2GeS                    regOp = regdef.SI64x2GeS
+	sI64x2Abs                    regOp = regdef.SI64x2Abs
+	sI64x2Neg                    regOp = regdef.SI64x2Neg
+	sI64x2AllTrue                regOp = regdef.SI64x2AllTrue
+	sI64x2BitMask                regOp = regdef.SI64x2BitMask
+	sI64x2SConvertI32x4Low       regOp = regdef.SI64x2SConvertI32x4Low
+	sI64x2SConvertI32x4High      regOp = regdef.SI64x2SConvertI32x4High
+	sI64x2UConvertI32x4Low       regOp = regdef.SI64x2UConvertI32x4Low
+	sI64x2UConvertI32x4High      regOp = regdef.SI64x2UConvertI32x4High
+	sI64x2Shl                    regOp = regdef.SI64x2Shl
+	sI64x2ShrS                   regOp = regdef.SI64x2ShrS
+	sI64x2ShrU                   regOp = regdef.SI64x2ShrU
+	sI64x2Add                    regOp = regdef.SI64x2Add
+	sI64x2Sub                    regOp = regdef.SI64x2Sub
+	sI64x2Mul                    regOp = regdef.SI64x2Mul
+	sI64x2ExtMulLowI32x4S        regOp = regdef.SI64x2ExtMulLowI32x4S
+	sI64x2ExtMulHighI32x4S       regOp = regdef.SI64x2ExtMulHighI32x4S
+	sI64x2ExtMulLowI32x4U        regOp = regdef.SI64x2ExtMulLowI32x4U
+	sI64x2ExtMulHighI32x4U       regOp = regdef.SI64x2ExtMulHighI32x4U
+	sF32x4Eq                     regOp = regdef.SF32x4Eq
+	sF32x4Ne                     regOp = regdef.SF32x4Ne
+	sF32x4Lt                     regOp = regdef.SF32x4Lt
+	sF32x4Gt                     regOp = regdef.SF32x4Gt
+	sF32x4Le                     regOp = regdef.SF32x4Le
+	sF32x4Ge                     regOp = regdef.SF32x4Ge
+	sF64x2Eq                     regOp = regdef.SF64x2Eq
+	sF64x2Ne                     regOp = regdef.SF64x2Ne
+	sF64x2Lt                     regOp = regdef.SF64x2Lt
+	sF64x2Gt                     regOp = regdef.SF64x2Gt
+	sF64x2Le                     regOp = regdef.SF64x2Le
+	sF64x2Ge                     regOp = regdef.SF64x2Ge
+	sF32x4Abs                    regOp = regdef.SF32x4Abs
+	sF32x4Neg                    regOp = regdef.SF32x4Neg
+	sF32x4Sqrt                   regOp = regdef.SF32x4Sqrt
+	sF32x4Add                    regOp = regdef.SF32x4Add
+	sF32x4Sub                    regOp = regdef.SF32x4Sub
+	sF32x4Mul                    regOp = regdef.SF32x4Mul
+	sF32x4Div                    regOp = regdef.SF32x4Div
+	sF32x4Min                    regOp = regdef.SF32x4Min
+	sF32x4Max                    regOp = regdef.SF32x4Max
+	sF32x4Pmin                   regOp = regdef.SF32x4Pmin
+	sF32x4Pmax                   regOp = regdef.SF32x4Pmax
+	sF32x4Ceil                   regOp = regdef.SF32x4Ceil
+	sF32x4Floor                  regOp = regdef.SF32x4Floor
+	sF32x4Trunc                  regOp = regdef.SF32x4Trunc
+	sF32x4NearestInt             regOp = regdef.SF32x4NearestInt
+	sF64x2Abs                    regOp = regdef.SF64x2Abs
+	sF64x2Neg                    regOp = regdef.SF64x2Neg
+	sF64x2Sqrt                   regOp = regdef.SF64x2Sqrt
+	sF64x2Add                    regOp = regdef.SF64x2Add
+	sF64x2Sub                    regOp = regdef.SF64x2Sub
+	sF64x2Mul                    regOp = regdef.SF64x2Mul
+	sF64x2Div                    regOp = regdef.SF64x2Div
+	sF64x2Min                    regOp = regdef.SF64x2Min
+	sF64x2Max                    regOp = regdef.SF64x2Max
+	sF64x2Pmin                   regOp = regdef.SF64x2Pmin
+	sF64x2Pmax                   regOp = regdef.SF64x2Pmax
+	sF64x2Ceil                   regOp = regdef.SF64x2Ceil
+	sF64x2Floor                  regOp = regdef.SF64x2Floor
+	sF64x2Trunc                  regOp = regdef.SF64x2Trunc
+	sF64x2NearestInt             regOp = regdef.SF64x2NearestInt
+	sF32x4DemoteF64x2Zero        regOp = regdef.SF32x4DemoteF64x2Zero
+	sF64x2PromoteLowF32x4        regOp = regdef.SF64x2PromoteLowF32x4
+	sI32x4SConvertF32x4          regOp = regdef.SI32x4SConvertF32x4
+	sI32x4UConvertF32x4          regOp = regdef.SI32x4UConvertF32x4
+	sF32x4SConvertI32x4          regOp = regdef.SF32x4SConvertI32x4
+	sF32x4UConvertI32x4          regOp = regdef.SF32x4UConvertI32x4
+	sI32x4TruncSatF64x2SZero     regOp = regdef.SI32x4TruncSatF64x2SZero
+	sI32x4TruncSatF64x2UZero     regOp = regdef.SI32x4TruncSatF64x2UZero
+	sF64x2ConvertLowI32x4S       regOp = regdef.SF64x2ConvertLowI32x4S
+	sF64x2ConvertLowI32x4U       regOp = regdef.SF64x2ConvertLowI32x4U
+	sI8x16RelaxedSwizzle         regOp = regdef.SI8x16RelaxedSwizzle
+	sI32x4RelaxedTruncF32x4S     regOp = regdef.SI32x4RelaxedTruncF32x4S
+	sI32x4RelaxedTruncF32x4U     regOp = regdef.SI32x4RelaxedTruncF32x4U
+	sI32x4RelaxedTruncF64x2SZero regOp = regdef.SI32x4RelaxedTruncF64x2SZero
+	sI32x4RelaxedTruncF64x2UZero regOp = regdef.SI32x4RelaxedTruncF64x2UZero
+	sF32x4Qfma                   regOp = regdef.SF32x4Qfma
+	sF32x4Qfms                   regOp = regdef.SF32x4Qfms
+	sF64x2Qfma                   regOp = regdef.SF64x2Qfma
+	sF64x2Qfms                   regOp = regdef.SF64x2Qfms
+	sI8x16RelaxedLaneSelect      regOp = regdef.SI8x16RelaxedLaneSelect
+	sI16x8RelaxedLaneSelect      regOp = regdef.SI16x8RelaxedLaneSelect
+	sI32x4RelaxedLaneSelect      regOp = regdef.SI32x4RelaxedLaneSelect
+	sI64x2RelaxedLaneSelect      regOp = regdef.SI64x2RelaxedLaneSelect
+	sF32x4RelaxedMin             regOp = regdef.SF32x4RelaxedMin
+	sF32x4RelaxedMax             regOp = regdef.SF32x4RelaxedMax
+	sF64x2RelaxedMin             regOp = regdef.SF64x2RelaxedMin
+	sF64x2RelaxedMax             regOp = regdef.SF64x2RelaxedMax
+	sI16x8RelaxedQ15MulRS        regOp = regdef.SI16x8RelaxedQ15MulRS
+	sI16x8DotI8x16I7x16S         regOp = regdef.SI16x8DotI8x16I7x16S
+	sI32x4DotI8x16I7x16AddS      regOp = regdef.SI32x4DotI8x16I7x16AddS
 	// regSIMDGenCount is the number of values the generated operators take.
-	regSIMDGenCount
+	regSIMDGenCount = regdef.SIMDGenCount
 )
 
 func rhSS128Not(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {

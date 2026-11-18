@@ -12,7 +12,7 @@ func TestSIMDGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	checkGenerated(t, "./internal/simdgen", "ops_simd_gen.go", "reg_simd_gen.go")
+	checkGenerated(t, "./internal/simdgen", "ops_simd_gen.go", "reg_simd_gen.go", "internal/regdef/simd_gen.go")
 }
 
 // randV128 returns a vector whose lanes are often at the edges of their

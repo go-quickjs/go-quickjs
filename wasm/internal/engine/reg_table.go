@@ -72,7 +72,7 @@ func (c *regCompiler) tableOp(op opcode.Opcode) bool {
 	case opcode.CallIndirect, opcode.ReturnCallIndirect:
 		ti := c.r.u32()
 		table := c.r.u32()
-		s := regSite{at: c.at, typeIndex: ti, table: table, checked: indirectChecksType(c.m, ti, table)}
+		s := regSite{at: c.at, typeIndex: ti, table: table, checked: indirectChecksType(c.m, ti, table), want: c.m.Canonical[ti]}
 		x := xCallIndirect
 		if op == opcode.ReturnCallIndirect {
 			x = xReturnCallIndirect

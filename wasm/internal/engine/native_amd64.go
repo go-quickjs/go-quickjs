@@ -2,6 +2,8 @@ package engine
 
 import (
 	"unsafe"
+
+	"golang.org/x/sys/cpu"
 	_ "unsafe" // linkname
 )
 
@@ -19,6 +21,7 @@ func wasmNativeTableAddr() uintptr
 func wasmNativeTablePtr() unsafe.Pointer
 func wasmNativeExtTableAddr() uintptr
 func wasmNativeExtTablePtr() unsafe.Pointer
+func wasmNativeSIMDTablePtr() unsafe.Pointer
 
 var (
 	nativeEntry     = wasmNativeHandlersAddr()
@@ -49,6 +52,7 @@ func nativeRun(f *frame, rc *regCode, pc int32) {
 	c := nativeSet(f, rc, pc)
 	c.table = nativeTable
 	c.extTable = nativeExtTable
+	c.simdTable = nativeSIMDTable
 	c.callH = nativeCallHAddr
 	c.goTable = uintptr(unsafe.Pointer(&nativeExitTable[0]))
 	c.slowTable = uintptr(unsafe.Pointer(&regSlowTable[0]))
@@ -64,9 +68,21 @@ func nativeRun(f *frame, rc *regCode, pc int32) {
 // for every operation.
 var nativeExitTable [256]regHandler
 
-// nativeGo says which operations of the first table, and of the second
-// (rExt's, by X), have no native handler: those an exit runs in Go.
-var nativeGo, nativeExtGo [256]bool
+// nativeGo says which operations of the first table, of the second
+// (rExt's, by X) and of rSIMD's have no native handler: those an exit runs
+// in Go.
+var nativeGo, nativeExtGo, nativeSIMDGo [256]bool
+
+// nativeSIMDOn says the CPU has what the SIMD handlers use: SSSE3, SSE4.1
+// and SSE4.2. Without, rSIMD's table is nativeSIMDExits.
+var nativeSIMDOn = cpu.X86.HasSSSE3 && cpu.X86.HasSSE41 && cpu.X86.HasSSE42
+
+// nativeSIMDExits is rSIMD's table of the exit stub alone, and
+// nativeSIMDTable the one the contexts are given.
+var (
+	nativeSIMDExits [256]uintptr
+	nativeSIMDTable uintptr
+)
 
 func init() {
 	for i := range nativeExitTable {
@@ -75,9 +91,18 @@ func init() {
 	t := (*[256]uintptr)(wasmNativeTablePtr())
 	ext := (*[256]uintptr)(wasmNativeExtTablePtr())
 	exit := t[rInvalid]
+	for i := range nativeSIMDExits {
+		nativeSIMDExits[i] = exit
+	}
+	simd := (*[256]uintptr)(wasmNativeSIMDTablePtr())
+	if !nativeSIMDOn {
+		simd = &nativeSIMDExits
+	}
+	nativeSIMDTable = uintptr(unsafe.Pointer(simd))
 	for i := range t {
 		nativeGo[i] = t[i] == exit
 		nativeExtGo[i] = ext[i] == exit
+		nativeSIMDGo[i] = simd[i] == exit
 	}
 }
 
@@ -92,7 +117,8 @@ func nativeExitRun(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	code := unsafe.Pointer(&f.rc.code[0])
 	for pc >= 0 {
 		w = *(*uint64)(unsafe.Add(code, uintptr(pc)<<3))
-		if op := uint8(w); !nativeGo[op] && (op != uint8(rExt) || !nativeExtGo[uint8(w>>8)]) {
+		if op := uint8(w); !nativeGo[op] && (op != uint8(rExt) || !nativeExtGo[uint8(w>>8)]) &&
+			(op != uint8(rSIMD) || !nativeSIMDGo[uint8(w>>8)]) {
 			break
 		}
 		pc = regTable[uint8(w)](l, w, pc, f)

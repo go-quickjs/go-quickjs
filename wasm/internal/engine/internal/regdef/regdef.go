@@ -41,6 +41,37 @@ const (
 	ExtNumFirst = 32
 )
 
+// The hand-written operations of rSIMD's table, after the generated ones
+// (simd_gen.go).
+const (
+	SShuffle = SIMDGenCount + iota
+	SExtractI8S
+	SExtractI8U
+	SExtractI16S
+	SExtractI16U
+	SExtract32
+	SExtract64
+	SReplace8
+	SReplace16
+	SReplace32
+	SReplace64
+	SSplat8
+	SSplat16
+	SSplat32
+	SSplat64
+)
+
+// call_indirect, of the second table.
+const XCallIndirect = 104
+
+// The SIMD memory operations of the second table, rExt's.
+const (
+	XV128Load = 80 + iota
+	XV128Store
+	XV128LoadLane
+	XV128StoreLane
+)
+
 // The native handlers' context (the engine's nativeCtx): the byte offset
 // of each field.
 const (
@@ -78,7 +109,8 @@ const (
 	CtxExtTable  = 248 // the native second table, rExt's
 	CtxRch       = 256 // the exec's reference chunk to give back to
 	CtxRsp       = 264 // the exec's reference chunk's slot to give back to
-	CtxSize      = 272
+	CtxSIMDTable = 272 // rSIMD's native table, or one of the exit stub alone
+	CtxSize      = 280
 )
 
 // The engine's structures the handlers read, on amd64 and arm64.
@@ -111,6 +143,7 @@ const (
 	CallSiteOffset = 8  // callSite.offset
 	CallSiteSize   = 16 // a callSite
 
+	FnType  = 16 // Function.Type, a uint32
 	FnInst  = 32 // Function.Inst
 	FnIndex = 40 // Function.Index
 
@@ -124,11 +157,18 @@ const (
 	RcTables = 72  // regCode.tables
 	RcCallee = 152 // regCode.callee
 
-	SiteFn   = 0  // regSite.fn
-	SiteAt   = 4  // regSite.at
-	SiteArgs = 8  // regSite.args
-	SiteRets = 32 // regSite.rets
-	SiteSize = 72 // a regSite
+	SiteFn      = 0  // regSite.fn
+	SiteAt      = 4  // regSite.at
+	SiteArgs    = 8  // regSite.args
+	SiteRets    = 32 // regSite.rets
+	SiteTable   = 60 // regSite.table
+	SiteChecked = 64 // regSite.checked
+	SiteTarget  = 68 // regSite.target
+	SiteWant    = 72 // regSite.want
+	SiteSize    = 80 // a regSite
+
+	InstTables = 40 // Instance.Tables
+	TableElems = 0  // Table.Elems
 
 	MoveFrom = 0  // regMove.from
 	MoveTo   = 4  // regMove.to
@@ -138,6 +178,7 @@ const (
 	MoveRef  = 2  // regMove.k of a reference
 	RefSize  = 16 // a Ref, its pointer word first
 
-	MemoryBuf = 0 // Memory.buf
-	GlobalNum = 0 // Global.Num
+	MemoryBuf  = 0  // Memory.buf
+	MemoryIs64 = 40 // Memory.Is64, a bool
+	GlobalNum  = 0  // Global.Num
 )

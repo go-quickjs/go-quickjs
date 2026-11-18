@@ -30,8 +30,11 @@ type gen struct {
 	// by X.
 	extLabels map[int]Label
 	extNames  map[int]string
-	names     map[int]string
-	order     []int
+	// simdLabels and simdNames are rSIMD's table's handlers, by X.
+	simdLabels map[int]Label
+	simdNames  map[int]string
+	names      map[int]string
+	order      []int
 }
 
 // hx lays out the handler of operation x of the second table, named name.
@@ -135,7 +138,8 @@ const (
 )
 
 func emitAMD64() (*block, error) {
-	g := &gen{a: &Asm{}, labels: map[int]Label{}, names: map[int]string{}, extLabels: map[int]Label{}, extNames: map[int]string{}}
+	g := &gen{a: &Asm{}, labels: map[int]Label{}, names: map[int]string{}, extLabels: map[int]Label{}, extNames: map[int]string{},
+		simdLabels: map[int]Label{}, simdNames: map[int]string{}}
 	a := g.a
 	g.exit, g.exitSlow, g.retNative = a.NewLabel(), a.NewLabel(), a.NewLabel()
 
@@ -164,23 +168,36 @@ func emitAMD64() (*block, error) {
 		a.Load(RDX, RDI, rd.CtxExtTable)
 		a.JmpIdx(RDX, RCX, 8, 0)
 	})
+	// The SIMD operators likewise, from the context's SIMD table.
+	g.h(rd.SIMD, "SIMD", func() {
+		a.MovRR(RCX, RAX)
+		a.ShiftImm(Shr, RCX, 8, true)
+		a.MovZX8(RCX, RCX)
+		a.Load(RDX, RDI, rd.CtxSIMDTable)
+		a.JmpIdx(RDX, RCX, 8, 0)
+	})
 	g.integers()
 	g.floats()
 	g.refs()
 	g.calls()
 	g.memory()
+	g.simd()
+	g.simdMemory()
 
 	code, err := a.Finish()
 	if err != nil {
 		return nil, err
 	}
 	b := &block{code: code, at: map[int]int{}, names: g.names, order: g.order, entry: a.Offset(entry), exit: a.Offset(g.exit),
-		extAt: map[int]int{}, extNames: g.extNames}
+		extAt: map[int]int{}, extNames: g.extNames, simdAt: map[int]int{}, simdNames: g.simdNames}
 	for _, op := range g.order {
 		b.at[op] = a.Offset(g.labels[op])
 	}
 	for x, l := range g.extLabels {
 		b.extAt[x] = a.Offset(l)
+	}
+	for x, l := range g.simdLabels {
+		b.simdAt[x] = a.Offset(l)
 	}
 	if b.entry != 0 {
 		panic("nativegen: the entry is not at 0")

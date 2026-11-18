@@ -94,6 +94,11 @@ TEXT ·wasmNativeExtTablePtr(SB), NOSPLIT, $0-8
 	MOVQ AX, ret+0(FP)
 	RET
 
+TEXT ·wasmNativeSIMDTablePtr(SB), NOSPLIT, $0-8
+	LEAQ ·wasmNativeSIMDTable(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
 TEXT ·wasmNativeTablePtr(SB), NOSPLIT, $0-8
 	LEAQ ·wasmNativeTable(SB), AX
 	MOVQ AX, ret+0(FP)

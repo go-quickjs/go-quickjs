@@ -5,6 +5,7 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -24,30 +25,32 @@ const (
 )
 
 // The hand-written operations of rSIMD's table, after the generated ones.
+// Their values are internal/regdef's.
 const (
-	sShuffle     = regSIMDGenCount + iota // A = shuffle of B and C by the lanes in the two words after
-	sExtractI8S                           // A = lane C of B
-	sExtractI8U                           //
-	sExtractI16S                          //
-	sExtractI16U                          //
-	sExtract32                            //
-	sExtract64                            //
-	sReplace8                             // A = B with lane (the word after) set to C
-	sReplace16                            //
-	sReplace32                            //
-	sReplace64                            //
-	sSplat8                               // A = B in every lane
-	sSplat16                              //
-	sSplat32                              //
-	sSplat64                              //
+	sShuffle     = regdef.SShuffle     // A = shuffle of B and C by the lanes in the two words after
+	sExtractI8S  = regdef.SExtractI8S  // A = lane C of B
+	sExtractI8U  = regdef.SExtractI8U  //
+	sExtractI16S = regdef.SExtractI16S //
+	sExtractI16U = regdef.SExtractI16U //
+	sExtract32   = regdef.SExtract32   //
+	sExtract64   = regdef.SExtract64   //
+	sReplace8    = regdef.SReplace8    // A = B with lane (the word after) set to C
+	sReplace16   = regdef.SReplace16   //
+	sReplace32   = regdef.SReplace32   //
+	sReplace64   = regdef.SReplace64   //
+	sSplat8      = regdef.SSplat8      // A = B in every lane
+	sSplat16     = regdef.SSplat16     //
+	sSplat32     = regdef.SSplat32     //
+	sSplat64     = regdef.SSplat64     //
 )
 
-// The SIMD memory operations of the second table.
+// The SIMD memory operations of the second table (internal/regdef's
+// values).
 const (
-	xV128Load      regOp = 80 + iota // A = the load of B's address, its opcode in the word after
-	xV128Store                       // store of B at A's address
-	xV128LoadLane                    // A = C with a lane loaded from B's address
-	xV128StoreLane                   // store of a lane of B at A's address
+	xV128Load      regOp = regdef.XV128Load      // A = the load of B's address, its opcode in the word after
+	xV128Store     regOp = regdef.XV128Store     // store of B at A's address
+	xV128LoadLane  regOp = regdef.XV128LoadLane  // A = C with a lane loaded from B's address
+	xV128StoreLane regOp = regdef.XV128StoreLane // store of a lane of B at A's address
 )
 
 // simdOp compiles a SIMD instruction, reporting whether op is one.
