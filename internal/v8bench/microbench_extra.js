@@ -4054,9 +4054,9 @@ function carried_fresh_long(n)
     return n * 2000000;
 }
 
-/* a loop each call leaves native code in at its sixth turn, at a write of
-   a number's property, as long as each name says: all its turns but five
-   past that */
+/* a loop each call writes a number's property in at its sixth turn,
+   which Go makes from native code -- it had left native code there -- as
+   long as each name says: all its turns but five past that */
 function extra_carried_exit_3000(n, k)
 {
     let s = new ExtraVec(0, 0);
@@ -4174,7 +4174,8 @@ function extra_carried_mixed(n, k)
     return s.x + s.y;
 }
 
-/* every other call leaves, the others run their loop through */
+/* every other call writes a number's property at its sixth turn, the
+   others run their loop through */
 function carried_exit_mixed(n)
 {
     var j, t = 0;
@@ -4215,7 +4216,8 @@ function extra_carried_loops(n, k)
     return t;
 }
 
-/* a function of two dozen such loops, each left early */
+/* a function of two dozen such loops, each writing a number's property
+   at its sixth turn */
 function carried_exit_loops(n)
 {
     var j, t = 0;
@@ -4225,7 +4227,8 @@ function carried_exit_loops(n)
     return n * 200 * 24;
 }
 
-/* left on one turn of each two and of each eight, an object live at each */
+/* a number's property written on one turn of each two and of each
+   eight, an object live at each */
 function extra_carried_every_2(turns)
 {
     let s = new ExtraVec(0, 0);
