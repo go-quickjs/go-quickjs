@@ -7,7 +7,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -544,17 +543,18 @@ func TestUnhandledRejectionIsReported(t *testing.T) {
 	}
 }
 
-// A module is told where it came from, in the forms node offers.
+// A module is told where it came from, in the forms node offers: its URL is
+// pathToFileURL's of its file, which escapes what a temporary directory's
+// name may hold -- a Windows short name's ~ among it -- as node's does
+// (TestURLMatchesNode, TestFileURLIsPathToFileURL).
 func TestImportMetaInTheCommand(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "m.mjs")
-	urlPath := filepath.ToSlash(script)
-	if runtime.GOOS == "windows" {
-		urlPath = "/" + urlPath
-	}
-	wantURL := (&url.URL{Scheme: "file", Path: urlPath}).String()
-	source := fmt.Sprintf(`console.log(import.meta.url === %s, import.meta.filename === %s, import.meta.dirname === %s)`,
-		quote(wantURL), quote(script), quote(dir))
+	source := fmt.Sprintf(`import { pathToFileURL } from "node:url";
+const url = import.meta.url;
+console.log(url === pathToFileURL(%s).href && url.startsWith("file:///") && url.endsWith("/m.mjs"),
+  import.meta.filename === %s, import.meta.dirname === %s)`,
+		quote(script), quote(script), quote(dir))
 	if err := os.WriteFile(script, []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
