@@ -64,7 +64,9 @@ concurrently.
   or move code between them without comparing builds with
   `internal/cmd/v8bench/placements` (see Validation): what lies between
   the lock's anchors still moves. Names still decide three things. The
-  lock's pads sort right before their anchors (`jit_layoutpad.go` before
+  lock's pads sort right before their anchors (`builtin_layoutpad.go`
+  before `builtins.go`, `calls_layoutpad.go` before `callsite.go`,
+  `jit_layoutpad.go` before
   `jit_leaffast.go`, `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go`
   around `reg_run.go`, `vm_b_layoutpad.go` before `vm_call.go`,
   `z_layoutpad.go` after every file), and the assembly pad,

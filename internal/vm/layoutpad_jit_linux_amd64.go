@@ -11,7 +11,13 @@ const (
 	layoutPadNA  = 530
 	layoutPadNGA = -1
 	layoutPadNMA = -1
-	layoutPadND  = 223
+	layoutPadNE  = 72
+	layoutPadNGE = -1
+	layoutPadNME = -1
+	layoutPadNC  = 456
+	layoutPadNGC = -1
+	layoutPadNMC = -1
+	layoutPadND  = 278
 	layoutPadNGD = -1
 	layoutPadNMD = -1
 	layoutPadNB  = 530

@@ -19,11 +19,19 @@
 # vm's assembly puts after every closure of its named functions: it
 # anchors regNativeHandlers at fba9570a's layout: the closures one round
 # added moved it 672 bytes (608 in one of its branches, which made
-# Octane's RegExp and the generator tests slower).
+# Octane's RegExp and the generator tests slower). E and C hold the
+# built-ins' hot loops between A and D, which the placements do not vary:
+# E anchors firstElem (builtins.go, and with it the JSON codec in
+# builtins_json.go), C asciiCaseMemo (casetables.go), at f9829c9f's
+# layout; the files the renames after it put among them had moved them
+# 2 KB and made array_indexOf 23%, json_round_trip 10% and string_upper
+# 7% slower at every placement.
 toolchain go1.27.3
 
 config windows/amd64 plain
 anchor A  0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor E  0x008c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor C  0x00800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor B  0x00ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
 anchor J  0x00580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
@@ -37,6 +45,8 @@ anchor DG 0x020 runtime.gcController
 
 config windows/amd64 jit
 anchor A  0x004c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor E  0x000c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor C  0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor B  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
 anchor J  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
@@ -50,6 +60,8 @@ anchor DG 0x020 runtime.gcController
 
 config linux/amd64 plain
 anchor A  0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor E  0x00b40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor C  0x00a40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor B  0x00d20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
 anchor J  0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
@@ -63,6 +75,8 @@ anchor DG 0x000 runtime.gcController
 
 config linux/amd64 jit
 anchor A  0x003c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor E  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor C  0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor B  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
 anchor J  0x00e60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo

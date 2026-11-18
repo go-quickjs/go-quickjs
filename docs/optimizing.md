@@ -214,7 +214,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
-| A D B J | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `descriptorObject` (`define.go` on), `callObject` (with `callDirect` and `runFD` after it), and `regCall` (the register calls' entries, `regCallSlow` and `regRunFD`) or with the JIT `jitLeafGo` |
+| A E C D B J | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `firstElem` (`builtins*.go`, the JSON codec among them), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `callObject` (with `callDirect` and `runFD` after it), and `regCall` (the register calls' entries, `regCallSlow` and `regRunFD`) or with the JIT `jitLeafGo` |
 | Q W | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), and the call path after it, `rhCallW` (W), its handlers after them |
 | Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
 | G*x* M*x* CZ | a generic a position's pad, or a method at it, calls; a closure in a generic the last file calls | the generics plain functions or methods meet first, from that file back; the closures of generics | nothing at present: no configuration anchors them |
@@ -228,8 +228,14 @@ What each lever cannot move:
   code keeps its own layout, and a change inside a range moves what follows
   it there. A position is a file name sorted where the gap must open
   (`defg_layoutpad.go` between `deferred.go` and `define.go`), and every one
-  costs its pad. The built-ins before `define.go` are one range, pinned at
-  its start only.
+  costs its pad. The built-ins before `define.go` were one range, pinned
+  at its start only, and no placement pad lies before them, so the
+  placements never vary them: when the files were renamed to plain names,
+  the files that came to sort among them moved the built-ins' hot loops
+  2 KB and made `array_indexOf` 23%, `json_round_trip` 10% and
+  `string_upper` 7% slower at every placement. E (`builtin_layoutpad.go`,
+  before `builtins.go`) and C (`calls_layoutpad.go`, before `callsite.go`)
+  hold those loops at their earlier offsets.
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.
@@ -266,7 +272,11 @@ What each lever cannot move:
   function pad in the file that sorts first there and the package's own
   constants. The regexp generics vm instantiates are vm's and move with
   its generics' levers. The other packages before vm -- go-intl, the JIT's
-  compiler -- are not pinned, and in another
+  compiler -- are not pinned, and the placements do not vary them either.
+  Their order follows the order in which vm's files, in file-name order,
+  first import them: renaming vm's files put `internal/bignum` and
+  `internal/bytecode` before go-intl and moved the matcher 14 KB, which X
+  took back. In another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
 - **Assembly** is laid out after the closures of the named functions and

@@ -10,6 +10,12 @@ const (
 	layoutPadNA  = -1
 	layoutPadNGA = -1
 	layoutPadNMA = -1
+	layoutPadNE  = -1
+	layoutPadNGE = -1
+	layoutPadNME = -1
+	layoutPadNC  = -1
+	layoutPadNGC = -1
+	layoutPadNMC = -1
 	layoutPadND  = -1
 	layoutPadNGD = -1
 	layoutPadNMD = -1
