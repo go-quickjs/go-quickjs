@@ -29,6 +29,10 @@ type frame struct {
 	// cbase is the exec's caught exceptions below the frame's, where the
 	// frame's code has try regions (runRegCatching).
 	cbase int
+	// farN and farR are the scratch slots of an instruction behind a far
+	// prefix (rhFar).
+	farN [8]uint64
+	farR [4]Ref
 }
 
 // exec is the state of a chain of wasm calls entered from the host: the
@@ -233,8 +237,8 @@ func recovered(x *exec, r any) error {
 		}
 		return v
 	case trapSite:
-		if v.at&regPCMark != 0 {
-			v.at = x.regOffset(v.at &^ regPCMark)
+		if v.at != 0 && len(x.calls) > 0 {
+			v.at = x.regOffset(v.at)
 		}
 		return v.trap(x.trace())
 	case *Exception:

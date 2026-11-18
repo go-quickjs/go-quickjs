@@ -8,10 +8,11 @@ import (
 )
 
 // Register code's atomic instructions: one rExt operation, xAtomic, whose
-// handler does what its opcode says. A is the result, B the address, C the
-// value, the expected value or a notify's count; the word after holds the
-// memory and the opcode, the next the offset, and the last a third
-// operand's slot -- a compare-exchange's replacement, a wait's timeout.
+// handler does what its opcode says. The word after it holds the memory and
+// the opcode, the next the offset; the next two the slots, 32 bits each, of
+// the result and the address, and of the value (the expected value, a
+// notify's count) and a third operand (a compare-exchange's replacement, a
+// wait's timeout).
 const xAtomic regOp = 160
 
 // atomicOp compiles an atomic instruction, reporting whether op is one.
@@ -47,44 +48,28 @@ func (c *regCompiler) atomicOp(op opcode.Opcode) bool {
 		}
 	}
 	ops, h := c.operands(n)
-	var b, cc, third uint64
-	b = c.near(ops[0])
-	if n > 1 {
-		cc = c.near(ops[1])
-	}
-	if n > 2 {
-		third = c.near(ops[2])
-	}
-	dst := uint64(0)
+	ops = append(ops, 0, 0)
+	dst := uint64(c.numSlot(h))
+	c.emit(rExt, xAtomic, 0, 0, 0, uint64(mem)|uint64(op)<<32, off, dst|uint64(ops[0])<<32, uint64(ops[1])|uint64(ops[2])<<32)
 	if hasRes {
-		dst = ns(c.numSlot(h))
-	}
-	pc := c.emit(rExt, xAtomic, dst, b, cc, uint64(mem)|uint64(op)<<32, off, third)
-	if hasRes {
-		c.def(res, h, pc)
+		c.pushSlot(res, h)
 	}
 	return true
 }
 
-// near returns slot s as a field, bailing out where it is past 16 bits.
-func (c *regCompiler) near(s uint32) uint64 {
-	if s > 0xffff {
-		panic(regBail("a slot past 65,535"))
-	}
-	return uint64(s)
-}
-
 func rhAtomic(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	op := opcode.Opcode(f.rc.code[pc+1] >> 32)
-	m, ea := regEA(l, w>>32, pc, f)
+	da, vt := f.rc.code[pc+3], f.rc.code[pc+4]
+	res := numAt(l, uint32(da))
+	m, ea := regEAOf(num(l, uint32(da>>32)), pc, f)
 	at := regAt(pc)
-	v := *rs(l, w>>48)
-	third := *rs(l, f.rc.code[pc+3])
+	v := num(l, uint32(vt))
+	third := num(l, uint32(vt>>32))
 	switch op {
 	case opcode.AtomicNotify:
 		atomicSpan(m, ea, 4, at)
-		*rs(l, w>>16) = uint64(notify(m, ea, uint32(v)))
-		return pc + 4
+		*res = uint64(notify(m, ea, uint32(v)))
+		return pc + 5
 	case opcode.I32AtomicWait, opcode.I64AtomicWait:
 		width := uint64(4)
 		if op == opcode.I64AtomicWait {
@@ -94,8 +79,8 @@ func rhAtomic(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 			trapAt(TrapAtomicsWaitNotAllowed, at)
 		}
 		b := atomicSpan(m, ea, width, at)
-		*rs(l, w>>16) = uint64(wait(f.x, m, b, ea, width, v, int64(third)))
-		return pc + 4
+		*res = uint64(wait(f.x, m, b, ea, width, v, int64(third)))
+		return pc + 5
 	}
 	width, is64 := atomicWidth(op)
 	var r uint64
@@ -104,7 +89,7 @@ func rhAtomic(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		r = atomicLoad(atomicSpan(m, ea, width, at), ea, width)
 	case op >= opcode.I32AtomicStore && op <= opcode.I64AtomicStore32U:
 		atomicRMW(atomicSpan(m, ea, width, at), ea, width, func(uint64) uint64 { return v })
-		return pc + 4
+		return pc + 5
 	case rmwKind(op) == '?':
 		mask := uint64(1)<<(width*8) - 1
 		if width == 8 {
@@ -138,8 +123,8 @@ func rhAtomic(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	if !is64 {
 		r = uint64(uint32(r))
 	}
-	*rs(l, w>>16) = r
-	return pc + 4
+	*res = r
+	return pc + 5
 }
 
 func init() {

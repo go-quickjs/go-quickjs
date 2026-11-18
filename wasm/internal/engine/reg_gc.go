@@ -7,15 +7,18 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
-// Register code's GC instructions. Each is an rExt operation whose
-// destination, if it has one, is A, and whose types and operands are a
-// record of the code's (regGC) that BC names -- or, for a branch, whose BC
-// is its offset and whose record is named by the word after.
+// Register code's GC instructions. Each is an rExt operation whose types,
+// operands and destination are a record of the code's (regGC) that BC
+// names, the slots as 32-bit indices -- or, for a branch, whose operand is
+// A, whose BC is its offset and whose record is named by the word after.
 
 // regGC is a GC instruction's record: what its operands are and what its
 // types say.
 type regGC struct {
 	rt *rtt
+	// dst is the result's slot, a numeric slot or a reference slot by the
+	// result's type.
+	dst uint32
 	// ops are the operands' slots, in the instruction's order; vals the
 	// values a struct.new or array.new_fixed stores, with their kinds.
 	ops  []uint32
@@ -84,7 +87,9 @@ func (c *regCompiler) operands(n int) ([]uint32, int) {
 // gcResult emits GC operation x of record g writing a value of type t at
 // position h, and pushes it.
 func (c *regCompiler) gcResult(x uint8, t module.ValueType, h int, g regGC) {
-	c.def(t, h, c.emitBC(rExt, x, c.dst(t, h), c.gcRec(g)))
+	g.dst = uint32(c.posSlot(t, h))
+	rec := c.gcRec(g)
+	c.push(rentry{t: t, slot: int(g.dst), local: -1, def: c.emitBC(rExt, x, 0, rec), rec: int(rec) + 1})
 }
 
 // gcOp compiles a GC instruction, reporting whether op is one.
@@ -264,8 +269,10 @@ func (f *frame) nonNullAt(s uint32, pc int32) Ref {
 	return r
 }
 
-// num returns numeric slot s.
-func num(l unsafe.Pointer, s uint32) uint64 { return *(*uint64)(unsafe.Add(l, uintptr(s)<<3)) }
+// num returns numeric slot s; numAt its address.
+func num(l unsafe.Pointer, s uint32) uint64 { return *numAt(l, s) }
+
+func numAt(l unsafe.Pointer, s uint32) *uint64 { return (*uint64)(unsafe.Add(l, uintptr(s)<<3)) }
 
 func rhStructNew(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
@@ -274,21 +281,21 @@ func rhStructNew(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		valToCell(g.types[i], cellAt(r.p, g.rt.cells[i]), getVal(l, f, v.k, v.from))
 	}
 	f.inst.budget.chargeGC(f.x, structSize(g.rt))
-	*f.rr(w >> 16) = r
+	f.r[g.dst] = r
 	return pc + 1
 }
 
 func rhStructNewDefault(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
 	f.inst.budget.chargeGC(f.x, structSize(g.rt))
-	*f.rr(w >> 16) = newStruct(g.rt)
+	f.r[g.dst] = newStruct(g.rt)
 	return pc + 1
 }
 
 func rhStructGet(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
 	r := f.nonNullAt(g.ops[0], pc)
-	putVal(l, f, g.k, uint32(uint16(w>>16)), g.read(cellAt(r.p, g.cell)))
+	putVal(l, f, g.k, g.dst, g.read(cellAt(r.p, g.cell)))
 	return pc + 1
 }
 
@@ -306,13 +313,13 @@ func rhArrayNew(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	for i := 0; i < a.n; i++ {
 		arraySet(a, g.et, i, v)
 	}
-	*f.rr(w >> 16) = ArrayRef(a)
+	f.r[g.dst] = ArrayRef(a)
 	return pc + 1
 }
 
 func rhArrayNewDefault(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
-	*f.rr(w >> 16) = ArrayRef(newArray(g.rt, uint32(num(l, g.ops[0])), f.inst.budget, f.x, regAt(pc)))
+	f.r[g.dst] = ArrayRef(newArray(g.rt, uint32(num(l, g.ops[0])), f.inst.budget, f.x, regAt(pc)))
 	return pc + 1
 }
 
@@ -324,7 +331,7 @@ func rhArrayNewFixed(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		arraySet(a, g.et, i, getVal(l, f, v.k, v.from))
 	}
 	f.inst.budget.chargeGC(f.x, arraySize(g.rt, cnt))
-	*f.rr(w >> 16) = ArrayRef(a)
+	f.r[g.dst] = ArrayRef(a)
 	return pc + 1
 }
 
@@ -338,7 +345,7 @@ func rhArrayNewSegment(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		}
 		a := newArray(g.rt, cnt, f.inst.budget, f.x, regAt(pc))
 		copy(a.bytes(), d[src:])
-		*f.rr(w >> 16) = ArrayRef(a)
+		f.r[g.dst] = ArrayRef(a)
 		return pc + 1
 	}
 	e := f.inst.elems[g.seg]
@@ -347,7 +354,7 @@ func rhArrayNewSegment(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	}
 	a := newArray(g.rt, cnt, f.inst.budget, f.x, regAt(pc))
 	copy(a.refs(), e[src:])
-	*f.rr(w >> 16) = ArrayRef(a)
+	f.r[g.dst] = ArrayRef(a)
 	return pc + 1
 }
 
@@ -358,7 +365,7 @@ func rhArrayGet(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	if uint64(x) >= uint64(a.n) {
 		trapAt(TrapArrayOutOfBounds, regAt(pc))
 	}
-	putVal(l, f, g.k, uint32(uint16(w>>16)), arrayGet(a, g.et, int(x), g.signed))
+	putVal(l, f, g.k, g.dst, arrayGet(a, g.et, int(x), g.signed))
 	return pc + 1
 }
 
@@ -375,7 +382,7 @@ func rhArraySet(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 
 func rhArrayLen(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
-	*rs(l, w>>16) = uint64(uint32(asArray(f.nonNullAt(g.ops[0], pc)).n))
+	*numAt(l, g.dst) = uint64(uint32(asArray(f.nonNullAt(g.ops[0], pc)).n))
 	return pc + 1
 }
 
@@ -430,7 +437,8 @@ func rhArrayInit(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 }
 
 func rhRefI31(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
-	*f.rr(w >> 16) = I31(uint32(num(l, f.regRec(w).ops[0])))
+	g := f.regRec(w)
+	f.r[g.dst] = I31(uint32(num(l, g.ops[0])))
 	return pc + 1
 }
 
@@ -438,9 +446,9 @@ func rhI31Get(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
 	r := f.nonNullAt(g.ops[0], pc)
 	if g.signed {
-		*rs(l, w>>16) = uint64(uint32(r.I31Signed()))
+		*numAt(l, g.dst) = uint64(uint32(r.I31Signed()))
 	} else {
-		*rs(l, w>>16) = uint64(r.I31Unsigned())
+		*numAt(l, g.dst) = uint64(r.I31Unsigned())
 	}
 	return pc + 1
 }
@@ -455,7 +463,7 @@ func (g *regGC) test(r Ref) bool {
 
 func rhRefTest(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	g := f.regRec(w)
-	*rs(l, w>>16) = uint64(b2i(g.test(f.r[g.ops[0]])))
+	*numAt(l, g.dst) = uint64(b2i(g.test(f.r[g.ops[0]])))
 	return pc + 1
 }
 

@@ -103,8 +103,7 @@ func (c *regCompiler) tableIndex(table uint32) module.ValueType {
 // the operand on top of the stack names, a table index or a reference.
 func (c *regCompiler) callBy(x uint8, tail bool, sig *module.FuncType, s regSite) {
 	target := c.pop()
-	h := len(c.stack)
-	ts := c.read(target, h)
+	s.target = uint32(c.slotOf(target, len(c.stack)))
 	var base int
 	s.args, base = c.siteArgs(sig)
 	if !tail {
@@ -112,7 +111,7 @@ func (c *regCompiler) callBy(x uint8, tail bool, sig *module.FuncType, s regSite
 	}
 	si := len(c.out.sites)
 	c.out.sites = append(c.out.sites, s)
-	c.emitBC(rExt, x, ts, uint32(si))
+	c.emitBC(rExt, x, 0, uint32(si))
 	if tail {
 		c.markDead()
 		return
@@ -153,15 +152,15 @@ func regTailFn(l unsafe.Pointer, f *frame, s *regSite, fn *Function) int32 {
 }
 
 // regIndirect returns the function the call_indirect of site s finds at
-// the table index in field e.
-func regIndirect(l unsafe.Pointer, e uint64, f *frame, s *regSite) *Function {
-	return indirectCallee(f.inst, s.typeIndex, s.table, *rs(l, e), s.checked, s.at)
+// the table index in its target's slot.
+func regIndirect(l unsafe.Pointer, f *frame, s *regSite) *Function {
+	return indirectCallee(f.inst, s.typeIndex, s.table, num(l, s.target), s.checked, s.at)
 }
 
-// regReferenced returns the function the reference in field e names,
-// trapping on null as site s.
-func regReferenced(e uint64, f *frame, s *regSite) *Function {
-	r := *f.rr(e)
+// regReferenced returns the function the reference in site s's target's
+// slot names, trapping on null at its call.
+func regReferenced(f *frame, s *regSite) *Function {
+	r := f.r[s.target]
 	if r.IsNull() {
 		trapAt(TrapNullDereference, s.at)
 	}
@@ -170,24 +169,24 @@ func regReferenced(e uint64, f *frame, s *regSite) *Function {
 
 func rhCallIndirect(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	s := &f.rc.sites[uint32(w>>32)]
-	regCallFn(l, f, s, regIndirect(l, w>>16, f, s))
+	regCallFn(l, f, s, regIndirect(l, f, s))
 	return pc + 1
 }
 
 func rhCallRef(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	s := &f.rc.sites[uint32(w>>32)]
-	regCallFn(l, f, s, regReferenced(w>>16, f, s))
+	regCallFn(l, f, s, regReferenced(f, s))
 	return pc + 1
 }
 
 func rhReturnCallIndirect(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	s := &f.rc.sites[uint32(w>>32)]
-	return regTailFn(l, f, s, regIndirect(l, w>>16, f, s))
+	return regTailFn(l, f, s, regIndirect(l, f, s))
 }
 
 func rhReturnCallRef(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	s := &f.rc.sites[uint32(w>>32)]
-	return regTailFn(l, f, s, regReferenced(w>>16, f, s))
+	return regTailFn(l, f, s, regReferenced(f, s))
 }
 
 func rhTableGet(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {

@@ -153,11 +153,8 @@ func (c *regCompiler) simdGen(x regOp, kind int) {
 		h := len(c.stack)
 		as := c.read(a, h)
 		bs := c.read(b, h+1)
-		zs, far := strip(c.read(z, h+2))
-		if far {
-			panic(regBail("a slot past 65,535"))
-		}
-		c.def(module.V128, h, c.emit(rSIMD, x, nv(c.numSlot(h)), as, bs, zs))
+		zs := c.read(z, h+2)
+		c.def(module.V128, h, c.emitD(rSIMD, x, nv(c.numSlot(h)), as, bs, zs))
 	}
 }
 

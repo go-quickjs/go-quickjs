@@ -50,7 +50,7 @@ type regClause struct {
 // The exception operations of the second table.
 const (
 	xThrow    regOp = 176 + iota // throw the tag and the values of sites[BC]
-	xThrowRef                    // throw the exception reference A
+	xThrowRef                    // throw the exception reference in reference slot BC
 	xRethrow                     // throw the frame's caught exception BC
 )
 
@@ -78,7 +78,7 @@ func (c *regCompiler) exnOp(op opcode.Opcode) bool {
 		c.markDead()
 	case opcode.ThrowRef:
 		e := c.pop()
-		c.emit(rExt, xThrowRef, c.read(e, len(c.stack)), 0, 0)
+		c.emitBC(rExt, xThrowRef, 0, uint32(c.slotOf(e, len(c.stack))))
 		c.markDead()
 	case opcode.Rethrow:
 		ti := len(c.ctrl) - 1 - int(c.r.u32())
@@ -307,7 +307,7 @@ func rhThrow(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 }
 
 func rhThrowRef(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
-	r := *f.rr(w >> 16)
+	r := f.r[uint32(w>>32)]
 	if r.IsNull() {
 		trapAt(TrapRethrowNull, regAt(pc))
 	}

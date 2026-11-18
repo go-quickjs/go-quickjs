@@ -818,3 +818,47 @@ func TestRegExceptions(t *testing.T) {
 		{"outer", []Val{{N: 3}}},
 	})
 }
+
+// TestRegFarSlots checks a body whose slots pass 16 bits: forty thousand
+// v128 locals put every later local and every stack position past what an
+// instruction's field holds, so that its instructions run behind the far
+// prefix, against the tree's.
+func TestRegFarSlots(t *testing.T) {
+	src := `(module
+	  (memory 1)
+	  (global $g (mut i32) (i32.const 0))
+	  (table 1 funcref)
+	  (func $id (param i32) (result i32) (local.get 0))
+	  (func (export "f") (param i32) (result i32)
+	    (local` + strings.Repeat(" v128", 40000) + `)
+	    (local $a i32) (local $b i32) (local $r funcref) (local $v v128)
+	    (local.set $a (i32.add (local.get 0) (i32.const 1000)))
+	    (local.set $b (i32.mul (local.get $a) (local.get $a)))
+	    (local.set $v (i32x4.splat (local.get $b)))
+	    (local.set $v (v128.bitselect (local.get $v) (local.get 1) (local.get $v)))
+	    (local.set $r (table.get (i32.const 0)))
+	    (block $out
+	      (loop $l
+	        (br_if $out (i32.ge_u (local.get $a) (i32.const 1010)))
+	        (local.set $a (i32.add (local.get $a) (i32.const 1)))
+	        (block $x (block $y (br_table $x $y $l (i32.and (local.get $a) (i32.const 1)))))
+	        (br $l)))
+	    (i32.store (i32.const 8) (local.get $b))
+	    (global.set $g (call $id (local.get $a)))
+	    (i32.add (ref.is_null (local.get $r))
+	      (select (i32.add (i32.load (i32.const 8)) (global.get $g)) (i32x4.extract_lane 0 (local.get $v)) (local.get 0)))))`
+	regMatchesTree(t, src, []regCall{{"f", []Val{{N: 1}}}, {"f", []Val{{N: 0}}}, {"f", []Val{{N: 5}}}})
+	inst := instantiateMode(t, src, true)
+	if _, err := call(t, inst, "f", 1); err != nil {
+		t.Fatal(err)
+	}
+	far := 0
+	for _, w := range regOf(inst, "f").code {
+		if uint8(w) == rFar {
+			far++
+		}
+	}
+	if far == 0 {
+		t.Fatal("no instruction behind a far prefix")
+	}
+}

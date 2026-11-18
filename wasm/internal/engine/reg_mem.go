@@ -142,8 +142,13 @@ func loadType(op opcode.Opcode) module.ValueType {
 // word after the instruction, the offset the next word. An i64 memory's
 // address that overflows traps.
 func regEA(l unsafe.Pointer, e uint64, pc int32, f *frame) (*Memory, uint64) {
+	return regEAOf(*rs(l, e), pc, f)
+}
+
+// regEAOf is regEA of address a.
+func regEAOf(a uint64, pc int32, f *frame) (*Memory, uint64) {
 	m := f.inst.Memories[uint32(f.rc.code[pc+1])]
-	a, off := *rs(l, e), f.rc.code[pc+2]
+	off := f.rc.code[pc+2]
 	if m.Is64 {
 		ea := a + off
 		if ea < a {

@@ -55,6 +55,9 @@ type rentry struct {
 	cmp    opcode.Opcode
 	cmpImm bool
 	eqz    bool
+	// rec is, where def is a GC instruction, its record's index plus one:
+	// its destination is the record's.
+	rec int
 }
 
 // The kinds of a branch whose target is not known yet.
@@ -130,16 +133,19 @@ type regCompiler struct {
 	// retFixes are the catch clauses that land at the function's label.
 	retFixes []rfix
 	// at is the offset of the instruction being compiled; last the pc of
-	// the last instruction emitted, -1 before the first or after a label.
-	at   uint32
-	last int
+	// the last instruction emitted, -1 before the first or after a label;
+	// farPCs the pcs of the instructions behind a far prefix, which are not
+	// rewritten.
+	at     uint32
+	last   int
+	farPCs map[int]bool
 }
 
 // regCompile compiles function index to register code, or returns why it
 // did not.
 func regCompile(code *Code, index uint32) (*compiled, string) {
 	for _, far := range [2]bool{false, true} {
-		c := &regCompiler{code: code, m: code.Module, fn: index, far: far, last: -1}
+		c := &regCompiler{code: code, m: code.Module, fn: index, far: far, last: -1, farPCs: map[int]bool{}}
 		p, why := c.compile()
 		if why != "" || !c.retry {
 			return p, why
@@ -159,10 +165,6 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 		}
 	}()
 	m := c.m
-	if len(m.Bytes) > math.MaxInt32 {
-		// A trap's offset is marked as a pc by bit 31 (regAt).
-		panic(regBail("a module past 2 GiB"))
-	}
 	f := &m.Functions[c.fn]
 	sig := m.Types[f.TypeIndex].Func
 	c.r = reader{b: m.Bytes, pc: int(f.Code.Offset)}
@@ -190,8 +192,11 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 	if len(c.out.code) == 0 {
 		c.emit(rRet, 0, 0, 0, 0)
 	}
-	if len(c.out.code) > math.MaxInt32/2 {
-		panic(regBail("a body past 2^30 instructions"))
+	if uint64(len(c.out.code))+uint64(len(m.Bytes)) >= math.MaxUint32 {
+		// A trap's pc is reported past the module's offsets (regAt), which
+		// a module whose offsets do not fit 32 bits leaves no room for: no
+		// part of the engine reports such a module's offsets.
+		panic(regBail("a module past 4 GiB"))
 	}
 	p = newCompiled()
 	p.nslots = c.nlocals + 2*(c.maxHeight+1)
@@ -251,15 +256,53 @@ func strip(f uint64) (uint64, bool) {
 // emit appends an instruction, and the words after it that some take, and
 // returns its pc.
 func (c *regCompiler) emit(op regOp, x uint8, a, b, cc uint64, ext ...uint64) int {
-	a, fa := strip(a)
-	b, fb := strip(b)
-	cc, fc := strip(cc)
-	if fa || fb || fc {
-		panic(regBail("a slot past 65,535"))
+	return c.emitD(op, x, a, b, cc, 0, ext...)
+}
+
+// emitD is emit of an instruction with a fourth slot operand, d, in the
+// word after it, before ext. An instruction naming a slot past what its
+// field holds is emitted behind a far prefix (rFar): its slot fields name
+// the frame's scratch slots, and the prefix the slots they stand for.
+func (c *regCompiler) emitD(op regOp, x uint8, a, b, cc, d uint64, ext ...uint64) int {
+	fields := [4]uint64{a, b, cc, d}
+	far := false
+	for _, f := range fields {
+		if _, past := strip(f); past {
+			far = true
+		}
 	}
 	pc := len(c.out.code)
-	c.out.code = append(c.out.code, uint64(op)|uint64(x)<<8|a<<16|b<<32|cc<<48)
+	if far {
+		var kinds, slots [4]uint64
+		for i, f := range fields {
+			if f&(fNum|fRef) == 0 {
+				continue
+			}
+			slots[i] = f & math.MaxUint32
+			switch {
+			case f&fRef != 0:
+				kinds[i], fields[i] = 3, uint64(i)
+			case f&fV128 != 0:
+				kinds[i], fields[i] = 2, uint64(2*i)
+			default:
+				kinds[i], fields[i] = 1, uint64(2*i)
+			}
+		}
+		k := kinds[0] | kinds[1]<<2 | kinds[2]<<4 | kinds[3]<<6
+		c.out.code = append(c.out.code, uint64(rFar)|k<<16|slots[3]<<32, slots[0]|slots[1]<<32, slots[2])
+		c.out.offs = append(c.out.offs, c.at, c.at, c.at)
+		pc = len(c.out.code)
+		c.farPCs[pc] = true
+	} else {
+		for i, f := range fields {
+			fields[i], _ = strip(f)
+		}
+	}
+	c.out.code = append(c.out.code, uint64(op)|uint64(x)<<8|fields[0]<<16|fields[1]<<32|fields[2]<<48)
 	c.out.offs = append(c.out.offs, c.at)
+	if d != 0 {
+		ext = append([]uint64{fields[3]}, ext...)
+	}
 	for _, w := range ext {
 		c.out.code = append(c.out.code, w)
 		c.out.offs = append(c.out.offs, c.at)
@@ -398,7 +441,7 @@ func (c *regCompiler) flushLocal(k int) {
 // the stores: they write only the slots of positions below keep's, which it
 // does not read, so that keep's instruction is still the last.
 func (c *regCompiler) flushAll(keep *rentry) {
-	if keep == nil || keep.def < 0 || keep.def != c.last {
+	if keep == nil || keep.def < 0 || keep.def != c.last || c.farPCs[c.last] {
 		for h := range c.stack {
 			c.materialize(h)
 		}
@@ -432,6 +475,13 @@ func (c *regCompiler) retarget(e rentry, s, local int) bool {
 				return false
 			}
 		}
+	}
+	if e.rec > 0 {
+		c.out.gc[e.rec-1].dst = uint32(s)
+		return true
+	}
+	if c.farPCs[e.def] {
+		return false
 	}
 	a, far := strip(field(e.t, s))
 	if far {
@@ -671,7 +721,7 @@ func (c *regCompiler) jumpExt(x uint8, a uint64) rfix {
 // or zero (!when), to a target not known yet. A comparison or an eqz the
 // last instruction computed becomes the branch.
 func (c *regCompiler) branchIf(cond rentry, when bool, h int) rfix {
-	if cond.def >= 0 && cond.def == c.last {
+	if cond.def >= 0 && cond.def == c.last && !c.farPCs[c.last] {
 		w := c.out.code[c.last]
 		b, cc := w>>32&0xffff, w>>48
 		switch {
@@ -895,7 +945,7 @@ func (c *regCompiler) ret(es []rentry) {
 		case e.konst:
 			c.loadConst(dst[0].i, e)
 		case c.retarget(e, dst[0].i, -1):
-		case !e.t.IsRef() && e.t.Kind != module.KindV128:
+		case !e.t.IsRef() && e.t.Kind != module.KindV128 && e.slot <= math.MaxUint16:
 			c.emit(rRet1, 0, ns(e.slot), 0, 0)
 			return
 		default:
@@ -997,9 +1047,6 @@ func (c *regCompiler) siteRets(sig *module.FuncType, base int) []regMove {
 	for i, r := range results {
 		t := sig.Results[i]
 		s := c.posSlot(t, base+i)
-		if _, far := strip(field(t, s)); far {
-			panic(regBail("a slot past 65,535"))
-		}
 		rets = append(rets, regMove{from: uint32(r.i), to: uint32(s), k: kindOf(t)})
 	}
 	return rets

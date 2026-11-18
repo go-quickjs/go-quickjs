@@ -53,6 +53,7 @@ const (
 	rRefNull           // reference A = null
 	rConst128          // A, A+1 = the next two words
 	rSIMD              // regSIMDTable[X]
+	rFar               // the instruction after the next two words, its slots past 16 bits (rhFar)
 
 	// regNumFirst is the first numeric operation's value.
 	regNumFirst regOp = 24
@@ -134,6 +135,9 @@ type regSite struct {
 	// table, and whether it checks the callee's type (indirectCallee).
 	typeIndex, table uint32
 	checked          bool
+	// target is the slot of the table index or the reference that names
+	// the callee of a call_indirect or a call_ref.
+	target uint32
 }
 
 // regMove is a value's move from one frame's slot to another's, of kind k.
@@ -205,20 +209,29 @@ func putVal(l unsafe.Pointer, f *frame, k uint8, s uint32, v Val) {
 	}
 }
 
-// regPCMark marks a trap's offset as a pc of register code (regAt), which
-// the trap's recovery makes the module offset of the instruction the pc's
-// was compiled from: the register compiler takes no module past 2 GiB,
-// whose offsets could have the mark.
-const regPCMark = 1 << 31
+// regAt is the offset a handler at pc traps with: the pc's complement,
+// which is past every offset of the module (the compiler makes sure), and
+// which the trap's recovery makes the module offset of the instruction the
+// pc's was compiled from (regOffset). So a handler's trap carries no
+// offset on the path that does not trap.
+func regAt(pc int32) uint32 { return ^uint32(pc) }
 
-// regAt is the offset a handler at pc traps with.
-func regAt(pc int32) uint32 { return uint32(pc) | regPCMark }
-
-// regOffset returns the module offset of the instruction at pc of the
-// innermost frame's register code, which trapped.
-func (x *exec) regOffset(pc uint32) uint32 {
+// regOffset returns the module offset a trap of the innermost frame
+// reported as at: where at is past the module's offsets and the frame runs
+// register code, the offset of the instruction at the pc regAt made it of.
+func (x *exec) regOffset(at uint32) uint32 {
 	c := x.calls[len(x.calls)-1]
-	return c.fn.Inst.Code.fns[c.fn.Index].Load().reg.offs[pc]
+	if c.fn == nil || c.fn.Inst == nil {
+		return at
+	}
+	code := c.fn.Inst.Code
+	if at < uint32(len(code.Module.Bytes)) {
+		return at
+	}
+	if p := code.fns[c.fn.Index].Load(); p != nil && p.reg != nil && int(^at) < len(p.reg.offs) {
+		return p.reg.offs[^at]
+	}
+	return at
 }
 
 // regLoop runs register code from pc in frame f until the frame returns.
@@ -342,6 +355,53 @@ func regSlowBrTable(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 		return regDone
 	}
 	return target
+}
+
+// rhFar runs the instruction behind a far prefix: one whose slot fields
+// would name slots past 16 bits. Its fields name the frame's scratch slots
+// instead -- numeric 0, 2, 4, 6 and reference 0 to 3 for A, B, C and the
+// fourth operand in the word after it -- and the prefix the slots they
+// stand for: the kind of each in its bits 16-23, two bits each, D in its
+// high half, A and B in the next word and C in the one after. The operands
+// are copied in, the instruction run on the scratch slots, its slow
+// function too where it asks for it, and A, its destination if it has one,
+// copied out, unless the frame has returned.
+func rhFar(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	ab := f.rc.code[pc+1]
+	ipc := pc + 3
+	iw := f.rc.code[ipc]
+	kinds := uint8(w >> 16)
+	slots := [4]uint32{uint32(ab), uint32(ab >> 32), uint32(f.rc.code[pc+2]), uint32(w >> 32)}
+	for i, s := range slots {
+		switch kinds >> (2 * i) & 3 {
+		case 1:
+			f.farN[2*i] = *numAt(l, s)
+		case 2:
+			f.farN[2*i], f.farN[2*i+1] = *numAt(l, s), *numAt(l, s+1)
+		case 3:
+			f.farR[i] = f.r[s]
+		}
+	}
+	sl := unsafe.Pointer(&f.farN[0])
+	r := f.r
+	f.r = f.farR[:]
+	next := regTable[uint8(iw)](sl, iw, ipc, f)
+	f.r = r
+	if next < 0 && next != regDone {
+		next = regSlowTable[uint8(iw)](sl, iw, ^next, f)
+	}
+	if next != regDone {
+		switch kinds & 3 {
+		case 1:
+			*numAt(l, slots[0]) = f.farN[0]
+		case 2:
+			*numAt(l, slots[0]), *numAt(l, slots[0]+1) = f.farN[0], f.farN[1]
+		case 3:
+			f.r[slots[0]] = f.farR[0]
+		}
+	}
+	clear(f.farR[:])
+	return next
 }
 
 func rhInvalid(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
@@ -566,7 +626,7 @@ func init() {
 		rJmp: rhJmp, rBrNZ: rhBrNZ, rBrZ: rhBrZ, rBrTable: rhBrTable,
 		rRet: rhRet, rRet1: rhRet1, rCall: rhCall, rReturnCall: rhReturnCall, rSelect: rhSelect,
 		rGlobalGet32: rhGlobalGet32, rGlobalGet64: rhGlobalGet64, rGlobalSet: rhGlobalSet,
-		rMov2: rhMov2, rRefMov: rhRefMov, rRefNull: rhRefNull, rConst128: rhConst128, rSIMD: rhSIMD,
+		rMov2: rhMov2, rRefMov: rhRefMov, rRefNull: rhRefNull, rConst128: rhConst128, rSIMD: rhSIMD, rFar: rhFar,
 	} {
 		regTable[op] = h
 	}
