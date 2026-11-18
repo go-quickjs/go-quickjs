@@ -1,0 +1,556 @@
+regTable 0 nop vm.rhNop
+regTable 1 move vm.rhMove
+regTable 2 load_int vm.rhLoadInt
+regTable 3 load_const vm.rhLoadConst
+regTable 4 load_undef vm.rhLoadUndef
+regTable 5 load_null vm.rhLoadNull
+regTable 6 load_true vm.rhLoadTrue
+regTable 7 load_false vm.rhLoadFalse
+regTable 8 load_empty vm.rhLoadEmpty
+regTable 9 load_uninit vm.rhLoadUninit
+regTable 10 load_this vm.rhLoadThis
+regTable 11 check_ref vm.rhCheckRef
+regTable 12 get_upval vm.rhGetUpval
+regTable 13 set_upval vm.rhSetUpval
+regTable 14 get_global vm.rhGetGlobal
+regTable 15 set_global vm.rhSetGlobal
+regTable 16 get_prop vm.rhGetProp
+regTable 17 get_method vm.rhGetProp
+regTable 18 set_prop vm.rhSetProp
+regTable 19 get_index vm.rhGetIndex
+regTable 20 set_index vm.rhSetIndexTyped
+regTable 21 define_field vm.rsDefineField
+regTable 22 new_object vm.rsNewObject
+regTable 23 new_array vm.rsNewArray
+regTable 24 iter_next vm.rhIterNext
+regTable 25 add vm.rhAdd
+regTable 26 sub vm.rhSub
+regTable 27 mul vm.rhMul
+regTable 28 bin vm.rhBin
+regTable 29 regexp_lit vm.rhLit
+regTable 30 inc vm.rhInc
+regTable 31 dec vm.rhDec
+regTable 32 unary vm.rsUnary
+regTable 33 jmp vm.rhJmp
+regTable 34 jmp_false vm.rhJmpF
+regTable 35 jmp_true vm.rhJmpT
+regTable 36 tail_call_w vm.rhCallWT
+regTable 37 tail_call_method_w vm.rhCallWT
+regTable 38 ret vm.rhRet
+regTable 39 ret_undef vm.rhRetUndef
+regTable 40 get_private vm.rhGetPrivateSite
+regTable 41 set_private vm.rhSetPrivateSite
+regTable 42 yield vm.rhYield
+regTable 43 bit_and vm.rhBitAnd
+regTable 44 bit_or vm.rhBitOr
+regTable 45 bit_xor vm.rhBitXor
+regTable 46 shl vm.rhShl
+regTable 47 shr vm.rhShr
+regTable 48 ushr vm.rhUShr
+regTable 49 and_imm vm.rhAndI
+regTable 50 or_imm vm.rhOrI
+regTable 51 xor_imm vm.rhXorI
+regTable 52 shl_imm vm.rhShlI
+regTable 53 shr_imm vm.rhShrI
+regTable 54 ushr_imm vm.rhUShrI
+regTable 55 call_w vm.rhCallW
+regTable 56 add_imm vm.rhAddI
+regTable 57 sub_imm vm.rhSubI
+regTable 58 jlt vm.rhJLt
+regTable 59 jnlt vm.rhJNLt
+regTable 60 jle vm.rhJLe
+regTable 61 jnle vm.rhJNLe
+regTable 62 jgt vm.rhJGt
+regTable 63 jngt vm.rhJNGt
+regTable 64 jge vm.rhJGe
+regTable 65 jnge vm.rhJNGe
+regTable 66 jlt_imm vm.rhJLtI
+regTable 67 jnlt_imm vm.rhJNLtI
+regTable 68 jle_imm vm.rhJLeI
+regTable 69 jnle_imm vm.rhJNLeI
+regTable 70 jgt_imm vm.rhJGtI
+regTable 71 jngt_imm vm.rhJNGtI
+regTable 72 jge_imm vm.rhJGeI
+regTable 73 jnge_imm vm.rhJNGeI
+regTable 74 jseq vm.rhJSEq
+regTable 75 jsne vm.rhJSNe
+regTable 76 jseq_imm vm.rhJSEqI
+regTable 77 jsne_imm vm.rhJSNeI
+regTable 78 get_index_imm vm.rhGetIndexI
+regTable 79 set_index_imm vm.rhSetIndexITyped
+regTable 80 call_method_w vm.rhCallW
+regTable 81 new_w vm.rsNewW
+regTable 82 closure_w vm.rsClosureW
+regTable 83 post_inc vm.rhPostInc
+regTable 84 post_dec vm.rhPostDec
+regTable 85 get_length vm.rhGetLength
+regTable 86 jeq vm.rhJEq
+regTable 87 jne vm.rhJNe
+regTable 88 jeq_imm vm.rhJEqI
+regTable 89 jne_imm vm.rhJNeI
+regTable 90 jnull vm.rhNull
+regTable 91 jnotnull vm.rhNotNull
+regTable 92 throw vm.rhThrow
+regTable 93 instanceof vm.rsInstanceOf
+regTable 94 in vm.rhIn
+regTable 95 delete vm.rsDelete
+regTable 96 arguments vm.rsArguments
+regTable 97 new_array_k vm.rsNewArrayK
+regTable 98 add_prop vm.rhAddProp
+regTable 99 add_prop_imm vm.rhAddPropI
+regTable 100 apply_args vm.rsApplyArgs
+regTable 101 get_index_pre vm.rhGetIndexPre
+regTable 102 jlt_upval vm.rhJLtU
+regTable 103 jnlt_upval vm.rhJNLtU
+regTable 104 jle_upval vm.rhJLeU
+regTable 105 jnle_upval vm.rhJNLeU
+regTable 106 get_method_w vm.rhGetMethodW
+regTable 107 args_len vm.rsArgsLen
+regTable 108 args_index vm.rsArgsIndex
+regTable 109 concat vm.rsConcat
+regTable 110 str_part vm.rhStrPart
+regTable 111 key_of_base vm.rhKeyOfBase
+regTable 112 get_index_post vm.rhGetIndexPost
+regTable 113 new_array_empty vm.rhNewArrayE
+regTable 114 add_index vm.rsAddIndex
+regTable 115 add_index_k vm.rhAddIndexK
+regTable 116 add_index_imm vm.rsAddIndexI
+regTable 117 switch vm.rhSwitch
+regTable 118 jtypeof vm.rhJTypeof
+regTable 119 typeof vm.rhTypeof
+regTable 120 switch_typeof vm.rhSwitchTypeof
+regTable 121 new_object_lit vm.rhNewObjectLit
+regTable 122 append vm.rhAppend
+regTable 123 str_freeze vm.rhStrFreeze
+regTable 124 char_code_at vm.rhCharCodeAt
+regTable 125 new_regexp vm.rhNewRegExp
+regTable 126 for_of_start vm.rhForOfStart
+regTable 127 for_in_start vm.rhForInStart
+regTable 128 iter_close vm.rhIterClose
+regTable 129 iter_close_throw vm.rhIterCloseThrow
+regTable 130 check_global_lex vm.rhCheckGlobalLex
+regTable 131 check_global_var vm.rhCheckGlobalVar
+regTable 132 define_global_var vm.rhDefineGlobalVar
+regTable 133 declare_global_lex vm.rhDeclareGlobalLex
+regTable 134 define_global_func vm.rhDefineGlobalFunc
+regTable 135 init_global_lex vm.rhInitGlobalLex
+regTable 136 get_global_opt vm.rhGetGlobalOpt
+regTable 137 declare_module_lex vm.rhDeclareModuleLex
+regTable 138 init_module_lex vm.rhInitModuleLex
+regTable 139 iter_step vm.rhIterStep
+regTable 140 iter_rest vm.rhIterRest
+regTable 141 check_coercible vm.rhCheckCoercible
+regTable 142 to_property_key vm.rhToPropertyKey
+regTable 143 object_rest vm.rhObjectRest
+regTable 144 rest_param vm.rhRestParam
+regTable 145 to_string vm.rhToString
+regTable 146 template_object vm.rhTemplateObject
+regTable 147 copy_data_props vm.rhCopyDataProps
+regTable 148 define_getter vm.rhDefineGetter
+regTable 149 define_setter vm.rhDefineSetter
+regTable 150 define_getter_index vm.rhDefineGetterIndex
+regTable 151 define_setter_index vm.rhDefineSetterIndex
+regTable 152 define_index vm.rhDefineIndex
+regTable 153 set_func_name vm.rhSetFuncName
+regTable 154 set_home_object vm.rhSetHomeObject
+regTable 155 set_proto_of vm.rhSetProtoOf
+regTable 156 array_push vm.rhArrayPush
+regTable 157 array_spread vm.rhArraySpread
+regTable 158 call_spread vm.rhCallSpread
+regTable 159 assign_const vm.rhAssignConst
+regTable 160 check_global_ref vm.rhCheckGlobalRef
+regTable 161 assert_resolved vm.rhAssertResolved
+regTable 162 new_class vm.rhNewClass
+regTable 163 set_field_init vm.rhSetFieldInit
+regTable 164 define_method vm.rhDefineMethod
+regTable 165 class_getter vm.rhClassGetter
+regTable 166 class_setter vm.rhClassSetter
+regTable 167 class_getter_index vm.rhClassGetterIndex
+regTable 168 class_setter_index vm.rhClassSetterIndex
+regTable 169 class_index vm.rhClassIndex
+regTable 170 private_name vm.rhPrivateName
+regTable 171 new_private_methods vm.rhNewPrivateMethods
+regTable 172 add_private_method vm.rhAddPrivateMethod
+regTable 173 add_private_getter vm.rhAddPrivateGetter
+regTable 174 add_private_setter vm.rhAddPrivateSetter
+regTable 175 install_private_methods vm.rhInstallPrivateMethods
+regTable 176 define_private vm.rhDefinePrivate
+regTable 177 define_private_method vm.rhDefinePrivateMethod
+regTable 178 define_private_getter vm.rhDefinePrivateGetter
+regTable 179 define_private_setter vm.rhDefinePrivateSetter
+regTable 180 private_in vm.rhPrivateIn
+regTable 181 super_call vm.rhSuperCall
+regTable 182 super_forward vm.rhSuperForward
+regTable 183 super_spread vm.rhSuperSpread
+regTable 184 super_get vm.rhSuperGet
+regTable 185 super_set vm.rhSuperSet
+regTable 186 super_base vm.rhSuperBase
+regTable 187 super_get_index vm.rhSuperGetIndex
+regTable 188 super_set_index vm.rhSuperSetIndex
+regTable 189 this_bound vm.rhThis
+regTable 190 check_this_init vm.rhCheckThis
+regTable 191 new_target vm.rhNewTarget
+regTable 192 derived_ret vm.rhDerivedRet
+regTable 193 delete_super vm.rhDeleteSuper
+regTable 194 close_regs vm.rhCloseRegs
+regTable 195 wrap vm.rhWrap
+regTable 196 gen_entry vm.rhGenEntry
+regTable 197 end_params vm.rhEndParams
+regTable 198 await vm.rhAwait
+regTable 199 yield_star vm.rhYieldStar
+regTable 200 iter_resume vm.rhIterResume
+regTable 201 iter_unpack_delegate vm.rhIterUnpackDelegate
+regTable 202 for_await_of_start vm.rhForAwaitOfStart
+regTable 203 async_iter_next vm.rhAsyncIterNext
+regTable 204 iter_result vm.rhIterResult
+regTable 205 async_iter_close vm.rhAsyncIterClose
+regTable 206 async_iter_check vm.rhAsyncIterCheck
+regTable 207 get_upval_check vm.rhGetUpvalCheck
+regTable 208 set_upval_check vm.rhSetUpvalCheck
+regTable 209 delete_var vm.rhDeleteVar
+regTable 210 import vm.rhImport
+regTable 211 import_meta vm.rhImportMeta
+regTable 212 new_dispose_capability vm.rhNewDispose
+regTable 213 add_disposable vm.rhAddDisposable
+regTable 214 dispose vm.rhDispose
+regTable 215 dispose_step vm.rhDisposeStep
+regTable 216 direct_eval vm.rhDirectEval
+regTable 217 with_get vm.rhWithGet
+regTable 218 with_get_this vm.rhWithGetThis
+regTable 219 with_delete vm.rhWithDelete
+regTable 220 with_set vm.rhWithSet
+regTable 221 with_resolve vm.rhWithResolve
+regTable 222 with_read vm.rhWithRead
+regTable 223 with_write vm.rhWithWrite
+regTable 224 with_push vm.rhWithPush
+regTable 225 with_pop vm.rhWithPop
+regTable 226 throw_reference_error vm.rhThrowRef
+regTable 227 debug vm.rhDebug
+regTable 228 mov_far vm.rhMovFar
+regTable 229 mov_to_far vm.rhMovToFar
+regTable 230 far_init vm.rhFarInit
+regTable 231 step_jlt vm.rhStepJLt
+regTable 232 step_jle vm.rhStepJLe
+regTable 233 step_jlt_imm vm.rhStepJLtI
+regTable 234 step_jgt_imm vm.rhStepJGtI
+regTable 235 step_jge_imm vm.rhStepJGeI
+regTable 236 step_jle_upval vm.rhStepJLeU
+regTable 237 mul_imm vm.rhMulI
+regTable 238 add_i32 vm.rhAddI32
+regTable 239 sub_i32 vm.rhSubI32
+regTable 240 add_imm_i32 vm.rhAddII32
+regSlowTable 2 load_int vm.rsLoadInt
+regSlowTable 4 load_undef vm.rsLoadUndef
+regSlowTable 5 load_null vm.rsLoadNull
+regSlowTable 6 load_true vm.rsLoadTrue
+regSlowTable 7 load_false vm.rsLoadFalse
+regSlowTable 9 load_uninit vm.rsLoadUninit
+regSlowTable 14 get_global vm.rsGetGlobal
+regSlowTable 15 set_global vm.rsSetGlobal
+regSlowTable 16 get_prop vm.rsGetProp
+regSlowTable 17 get_method vm.rsGetMethod
+regSlowTable 18 set_prop vm.rsSetPropLength
+regSlowTable 19 get_index vm.rsGetIndex
+regSlowTable 20 set_index vm.rsSetIndex
+regSlowTable 25 add vm.rsAdd
+regSlowTable 26 sub vm.rsSub
+regSlowTable 27 mul vm.rsMul
+regSlowTable 28 bin vm.rsBin
+regSlowTable 30 inc vm.rsInc
+regSlowTable 31 dec vm.rsDec
+regSlowTable 33 jmp vm.rsJmp
+regSlowTable 34 jmp_false vm.rsTruth
+regSlowTable 35 jmp_true vm.rsTruth
+regSlowTable 40 get_private vm.rhGetPrivate
+regSlowTable 41 set_private vm.rhSetPrivate
+regSlowTable 43 bit_and vm.rsBitAnd
+regSlowTable 44 bit_or vm.rsBitOr
+regSlowTable 45 bit_xor vm.rsBitXor
+regSlowTable 46 shl vm.rsShl
+regSlowTable 47 shr vm.rsShr
+regSlowTable 48 ushr vm.rsUShr
+regSlowTable 49 and_imm vm.rsAndI
+regSlowTable 50 or_imm vm.rsOrI
+regSlowTable 51 xor_imm vm.rsXorI
+regSlowTable 52 shl_imm vm.rsShlI
+regSlowTable 53 shr_imm vm.rsShrI
+regSlowTable 54 ushr_imm vm.rsUShrI
+regSlowTable 56 add_imm vm.rsAddI
+regSlowTable 57 sub_imm vm.rsSubI
+regSlowTable 58 jlt vm.rsCompare
+regSlowTable 59 jnlt vm.rsCompare
+regSlowTable 60 jle vm.rsCompare
+regSlowTable 61 jnle vm.rsCompare
+regSlowTable 62 jgt vm.rsCompare
+regSlowTable 63 jngt vm.rsCompare
+regSlowTable 64 jge vm.rsCompare
+regSlowTable 65 jnge vm.rsCompare
+regSlowTable 66 jlt_imm vm.rsCompare
+regSlowTable 67 jnlt_imm vm.rsCompare
+regSlowTable 68 jle_imm vm.rsCompare
+regSlowTable 69 jnle_imm vm.rsCompare
+regSlowTable 70 jgt_imm vm.rsCompare
+regSlowTable 71 jngt_imm vm.rsCompare
+regSlowTable 72 jge_imm vm.rsCompare
+regSlowTable 73 jnge_imm vm.rsCompare
+regSlowTable 74 jseq vm.rsStrictEq
+regSlowTable 75 jsne vm.rsStrictEq
+regSlowTable 76 jseq_imm vm.rsJump
+regSlowTable 77 jsne_imm vm.rsJump
+regSlowTable 78 get_index_imm vm.rsGetIndexI
+regSlowTable 79 set_index_imm vm.rsSetIndexITyped
+regSlowTable 83 post_inc vm.rsPostStep
+regSlowTable 84 post_dec vm.rsPostStep
+regSlowTable 85 get_length vm.rsGetLength
+regSlowTable 86 jeq vm.rsCompare
+regSlowTable 87 jne vm.rsCompare
+regSlowTable 88 jeq_imm vm.rsCompare
+regSlowTable 89 jne_imm vm.rsCompare
+regSlowTable 90 jnull vm.rsNull
+regSlowTable 91 jnotnull vm.rsNull
+regSlowTable 94 in vm.rsIn
+regSlowTable 98 add_prop vm.rsAddProp
+regSlowTable 99 add_prop_imm vm.rsAddProp
+regSlowTable 101 get_index_pre vm.rsGetIndexPre
+regSlowTable 102 jlt_upval vm.rsCompare
+regSlowTable 103 jnlt_upval vm.rsCompare
+regSlowTable 104 jle_upval vm.rsCompare
+regSlowTable 105 jnle_upval vm.rsCompare
+regSlowTable 106 get_method_w vm.rsGetMethodWPrim
+regSlowTable 110 str_part vm.rsStrPart
+regSlowTable 111 key_of_base vm.rsKeyOfBase
+regSlowTable 112 get_index_post vm.rsGetIndexPost
+regSlowTable 115 add_index_k vm.rsAddIndexK
+regSlowTable 118 jtypeof vm.rsJTypeof
+regSlowTable 231 step_jlt vm.rsStep
+regSlowTable 232 step_jle vm.rsStep
+regSlowTable 233 step_jlt_imm vm.rsStep
+regSlowTable 234 step_jgt_imm vm.rsStep
+regSlowTable 235 step_jge_imm vm.rsStep
+regSlowTable 236 step_jle_upval vm.rsStep
+regSlowTable 237 mul_imm vm.rsMulI
+regSlowTable 238 add_i32 vm.rsAddI32
+regSlowTable 239 sub_i32 vm.rsSubI32
+regSlowTable 240 add_imm_i32 vm.rsAddII32
+regTypedTable 0 nop vm.rhNop
+regTypedTable 1 move vm.rhMove
+regTypedTable 2 load_int vm.rhLoadInt
+regTypedTable 4 load_undef vm.rhLoadUndef
+regTypedTable 12 get_upval vm.rhGetUpval
+regTypedTable 14 get_global vm.rhGetGlobal
+regTypedTable 25 add vm.rhAdd
+regTypedTable 33 jmp vm.rhJmp
+regTypedTable 38 ret vm.rhRet
+regTypedTable 39 ret_undef vm.rhRetUndef
+regTypedTable 50 or_imm vm.rhOrI
+regTypedTable 55 call_w vm.rhTCallW
+regTypedTable 56 add_imm vm.rhAddI
+regTypedTable 57 sub_imm vm.rhSubI
+regTypedTable 67 jnlt_imm vm.rhJNLtI
+regTypedTable 77 jsne_imm vm.rhJSNeI
+regTypedTable 125 new_regexp vm.rhTMov
+regTypedTable 126 for_of_start vm.rhTIConst
+regTypedTable 127 for_in_start vm.rhTFConst
+regTypedTable 128 iter_close vm.rhTConvI
+regTypedTable 129 iter_close_throw vm.rhTConvF
+regTypedTable 130 check_global_lex vm.rhTIBox
+regTypedTable 131 check_global_var vm.rhTUBox
+regTypedTable 132 define_global_var vm.rhTFBox
+regTypedTable 133 declare_global_lex vm.rhTAdd
+regTypedTable 134 define_global_func vm.rhTSub
+regTypedTable 135 init_global_lex vm.rhTMul
+regTypedTable 136 get_global_opt vm.rhTDivS
+regTypedTable 137 declare_module_lex vm.rhTDivU
+regTypedTable 138 init_module_lex vm.rhTRemS
+regTypedTable 139 iter_step vm.rhTRemU
+regTypedTable 140 iter_rest vm.rhTAnd
+regTypedTable 141 check_coercible vm.rhTOr
+regTypedTable 142 to_property_key vm.rhTXor
+regTypedTable 143 object_rest vm.rhTShl
+regTypedTable 144 rest_param vm.rhTShr
+regTypedTable 145 to_string vm.rhTUShr
+regTypedTable 146 template_object vm.rhTAddI
+regTypedTable 147 copy_data_props vm.rhTAndI
+regTypedTable 148 define_getter vm.rhTOrI
+regTypedTable 149 define_setter vm.rhTXorI
+regTypedTable 150 define_getter_index vm.rhTShlI
+regTypedTable 151 define_setter_index vm.rhTShrI
+regTypedTable 152 define_index vm.rhTUShrI
+regTypedTable 153 set_func_name vm.rhTNeg
+regTypedTable 154 set_home_object vm.rhTNot
+regTypedTable 155 set_proto_of vm.rhTLNot
+regTypedTable 156 array_push vm.rhTClz
+regTypedTable 157 array_spread vm.rhTAbs
+regTypedTable 158 call_spread vm.rhTMinS
+regTypedTable 159 assign_const vm.rhTMaxS
+regTypedTable 160 check_global_ref vm.rhTLtS
+regTypedTable 161 assert_resolved vm.rhTLeS
+regTypedTable 162 new_class vm.rhTLtU
+regTypedTable 163 set_field_init vm.rhTLeU
+regTypedTable 164 define_method vm.rhTEq
+regTypedTable 165 class_getter vm.rhTNe
+regTypedTable 166 class_setter vm.rhTJLtS
+regTypedTable 167 class_getter_index vm.rhTJLeS
+regTypedTable 168 class_setter_index vm.rhTJLtU
+regTypedTable 169 class_index vm.rhTJLeU
+regTypedTable 170 private_name vm.rhTJEq
+regTypedTable 171 new_private_methods vm.rhTJNe
+regTypedTable 172 add_private_method vm.rhTJLtSI
+regTypedTable 173 add_private_getter vm.rhTJLeSI
+regTypedTable 174 add_private_setter vm.rhTJGtSI
+regTypedTable 175 install_private_methods vm.rhTJGeSI
+regTypedTable 176 define_private vm.rhTJEqI
+regTypedTable 177 define_private_method vm.rhTJNeI
+regTypedTable 178 define_private_getter vm.rhTJZ
+regTypedTable 179 define_private_setter vm.rhTJNZ
+regTypedTable 180 private_in vm.rhTFAdd
+regTypedTable 181 super_call vm.rhTFSub
+regTypedTable 182 super_forward vm.rhTFMul
+regTypedTable 183 super_spread vm.rhTFDiv
+regTypedTable 184 super_get vm.rhTFMod
+regTypedTable 185 super_set vm.rhTFNeg
+regTypedTable 186 super_base vm.rhTFAbs
+regTypedTable 187 super_get_index vm.rhTFSqrt
+regTypedTable 188 super_set_index vm.rhTFRound
+regTypedTable 189 this_bound vm.rhTFMath1
+regTypedTable 190 check_this_init vm.rhTFMath2
+regTypedTable 191 new_target vm.rhTFMin
+regTypedTable 192 derived_ret vm.rhTFMax
+regTypedTable 193 delete_super vm.rhTFLt
+regTypedTable 194 close_regs vm.rhTFLe
+regTypedTable 195 wrap vm.rhTFEq
+regTypedTable 196 gen_entry vm.rhTFNe
+regTypedTable 197 end_params vm.rhTJFLt
+regTypedTable 198 await vm.rhTJFNLt
+regTypedTable 199 yield_star vm.rhTJFLe
+regTypedTable 200 iter_resume vm.rhTJFNLe
+regTypedTable 201 iter_unpack_delegate vm.rhTJFEq
+regTypedTable 202 for_await_of_start vm.rhTJFNe
+regTypedTable 203 async_iter_next vm.rhTI2FS
+regTypedTable 204 iter_result vm.rhTI2FU
+regTypedTable 205 async_iter_close vm.rhTF2I
+regTypedTable 206 async_iter_check vm.rhTLd8S
+regTypedTable 207 get_upval_check vm.rhTLd8U
+regTypedTable 208 set_upval_check vm.rhTLd16S
+regTypedTable 209 delete_var vm.rhTLd16U
+regTypedTable 210 import vm.rhTLd32
+regTypedTable 211 import_meta vm.rhTLdF32
+regTypedTable 212 new_dispose_capability vm.rhTLdF64
+regTypedTable 213 add_disposable vm.rhTSt8
+regTypedTable 214 dispose vm.rhTSt16
+regTypedTable 215 dispose_step vm.rhTSt32
+regTypedTable 216 direct_eval vm.rhTStF32
+regTypedTable 217 with_get vm.rhTStF64
+regTypedTable 218 with_get_this vm.rhTGGetI
+regTypedTable 219 with_delete vm.rhTGSetI
+regTypedTable 220 with_set vm.rhTGGetF
+regTypedTable 221 with_resolve vm.rhTGSetF
+regTypedTable 222 with_read vm.rhTTabGet
+regTypedTable 238 add_i32 vm.rhAddI32
+regTypedSlowTable 2 load_int vm.rsLoadInt
+regTypedSlowTable 4 load_undef vm.rsLoadUndef
+regTypedSlowTable 14 get_global vm.rsGetGlobal
+regTypedSlowTable 25 add vm.rsAdd
+regTypedSlowTable 33 jmp vm.rsJmp
+regTypedSlowTable 50 or_imm vm.rsOrI
+regTypedSlowTable 56 add_imm vm.rsAddI
+regTypedSlowTable 57 sub_imm vm.rsSubI
+regTypedSlowTable 67 jnlt_imm vm.rsCompare
+regTypedSlowTable 77 jsne_imm vm.rsJump
+regTypedSlowTable 128 iter_close vm.rsTConvI
+regTypedSlowTable 129 iter_close_throw vm.rsTConvF
+regTypedSlowTable 130 check_global_lex vm.rsTBox
+regTypedSlowTable 131 check_global_var vm.rsTBox
+regTypedSlowTable 132 define_global_var vm.rsTBox
+regTypedSlowTable 166 class_setter vm.rsTJump
+regTypedSlowTable 167 class_getter_index vm.rsTJump
+regTypedSlowTable 168 class_setter_index vm.rsTJump
+regTypedSlowTable 169 class_index vm.rsTJump
+regTypedSlowTable 170 private_name vm.rsTJump
+regTypedSlowTable 171 new_private_methods vm.rsTJump
+regTypedSlowTable 172 add_private_method vm.rsTJump
+regTypedSlowTable 173 add_private_getter vm.rsTJump
+regTypedSlowTable 174 add_private_setter vm.rsTJump
+regTypedSlowTable 175 install_private_methods vm.rsTJump
+regTypedSlowTable 176 define_private vm.rsTJump
+regTypedSlowTable 177 define_private_method vm.rsTJump
+regTypedSlowTable 178 define_private_getter vm.rsTJump
+regTypedSlowTable 179 define_private_setter vm.rsTJump
+regTypedSlowTable 197 end_params vm.rsTJump
+regTypedSlowTable 198 await vm.rsTJump
+regTypedSlowTable 199 yield_star vm.rsTJump
+regTypedSlowTable 200 iter_resume vm.rsTJump
+regTypedSlowTable 201 iter_unpack_delegate vm.rsTJump
+regTypedSlowTable 202 for_await_of_start vm.rsTJump
+regTypedSlowTable 218 with_get_this vm.rsTGlobal
+regTypedSlowTable 219 with_delete vm.rsTGlobal
+regTypedSlowTable 220 with_set vm.rsTGlobal
+regTypedSlowTable 221 with_resolve vm.rsTGlobal
+regTypedSlowTable 238 add_i32 vm.rsAddI32
+leafChecks 22 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 23 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 24 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 25 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 26 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 27 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 28 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 29 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 30 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 31 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 32 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 33 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 34 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 35 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 36 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 37 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 38 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 39 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 40 closure: str := func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 41 closure: leafChecks[elemStrConcat] = func(r *Runtime, this Value, args []Value) bool {
+leafChecks 42 closure: leafChecks[elemStrRepeat] = func(r *Runtime, this Value, args []Value) bool {
+leafChecks 43 closure: pad := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 44 closure: pad := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 45 closure: leafChecks[elemStrNormalize] = func(r *Runtime, this Value, args []Value) bool {
+leafChecks 46 closure: leafChecks[elemStrLocaleCompare] = func(r *Runtime, this Value, args []Value) bool {
+leafChecks 47 closure: leafChecks[elemStrFromCharCode] = func(_ *Runtime, _ Value, args []Value) bool {
+leafChecks 48 closure: leafChecks[elemStrFromCodePoint] = func(_ *Runtime, _ Value, args []Value) bool {
+leafChecks 49 closure: leafChecks[op] = func(*Runtime, Value, []Value) bool { return true }
+leafChecks 50 closure: leafChecks[op] = func(*Runtime, Value, []Value) bool { return true }
+leafChecks 51 closure: leafChecks[op] = func(*Runtime, Value, []Value) bool { return true }
+leafChecks 52 closure: leafChecks[op] = func(*Runtime, Value, []Value) bool { return true }
+leafChecks 53 closure: leafChecks[op] = func(_ *Runtime, _ Value, args []Value) bool { return leafPrimitives(args) }
+leafChecks 54 closure: leafChecks[op] = func(_ *Runtime, _ Value, args []Value) bool { return leafPrimitives(args) }
+leafChecks 55 closure: leafChecks[op] = func(_ *Runtime, _ Value, args []Value) bool { return leafPrimitives(args) }
+leafChecks 56 closure: leafChecks[op] = func(_ *Runtime, _ Value, args []Value) bool { return leafPrimitives(args) }
+leafChecks 57 closure: return func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 58 closure: leafChecks[elemNumValueOf] = func(_ *Runtime, this Value, _ []Value) bool { return this.IsNumber() }
+leafChecks 59 closure: return func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 60 closure: return func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 61 closure: return func(_ *Runtime, this Value, args []Value) bool {
+leafChecks 62 closure: search := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 63 closure: search := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 64 closure: search := func(r *Runtime, this Value, args []Value) bool {
+leafChecks 65 vm.(*regexpLeaf[...]).check-fm
+leafChecks 66 vm.(*regexpLeaf[...]).check-fm
+leafChecks 67 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 68 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 69 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 70 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 71 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 72 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 73 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 74 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 75 vm.(*dataViewLeaf[...]).check-fm
+leafChecks 76 vm.hasOwnLeaf[...].check-fm
+leafChecks 77 vm.isArrayCheck[...].check-fm
+leafChecks 78 closure: leafChecks[elemArrayNew] = func(_ *Runtime, _ Value, args []Value) bool {
+tMath1 0 math.Floor
+tMath1 1 math.Ceil
+tMath1 2 fdlibm.Sin
+tMath1 3 fdlibm.Cos
+tMath1 4 fdlibm.Tan
+tMath1 5 fdlibm.Asin
+tMath1 6 fdlibm.Acos
+tMath1 7 fdlibm.Atan
+tMath1 8 fdlibm.Exp
+tMath1 9 fdlibm.Log
