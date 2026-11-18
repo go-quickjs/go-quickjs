@@ -764,7 +764,7 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 		p.Forwards = true
 	}
 	regCaptured(p, rc, fn)
-	liveRegs(p, rc)
+	liveRegs(p, rc, m.hints.KeepParams)
 	regStringParts(p)
 	if live := l.litsLive(p, start); len(live) != 0 {
 		// Their window's registers read past them, which the lowering
@@ -1797,7 +1797,8 @@ func (l *regLowering) hostAt(pc int) ir.Instruction {
 // dataflow over the program, each Host's registers by its register
 // instruction (RegAccess). A throw goes to the handler in force, whatever
 // the instruction writes; a register a closure captures is live
-// throughout, which the closure may read at any call.
+// throughout, which the closure may read at any call. keepParams does
+// the same for parameters observable through legacy Function.arguments.
 //
 // The dataflow runs over the program's blocks, each block's set at its
 // start found again from its successors' until none changes, and then each
@@ -1807,14 +1808,22 @@ func (l *regLowering) hostAt(pc int) ir.Instruction {
 // every instruction had made the liveness of n registers and m
 // instructions n·m bits, and each pass over it as long, whatever the
 // instructions changed.
-func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
+func liveRegs(p *ir.Program, rc *bytecode.RegCode, keepParams bool) {
 	n, m := p.Regs, len(p.Code)
 	lb := ir.NewLiveBuilder(n)
 	captured := func(r int) bool { return r >= 0 && r < len(p.Captured) && p.Captured[r] }
+	keptParam := func(r int) bool { return keepParams && r >= p.ParamBase && r < p.ParamBase+p.Params }
 	var ops []ir.LiveOp
 	for r := range min(n, len(p.Captured)) {
 		if p.Captured[r] {
 			ops = append(ops, ir.LiveOp{Slot: int32(r)})
+		}
+	}
+	if keepParams {
+		for r := p.ParamBase; r < min(n, p.ParamBase+p.Params); r++ {
+			if !captured(r) {
+				ops = append(ops, ir.LiveOp{Slot: int32(r)})
+			}
 		}
 	}
 	always := lb.Apply(lb.Empty(), ops)
@@ -1827,7 +1836,7 @@ func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
 	all := make([]bool, m)
 	ops = ops[:0]
 	kill := func(r int) {
-		if r >= 0 && r < n && !captured(r) {
+		if r >= 0 && r < n && !captured(r) && !keptParam(r) {
 			ops = append(ops, ir.LiveOp{Slot: int32(r), Clear: true})
 		}
 	}

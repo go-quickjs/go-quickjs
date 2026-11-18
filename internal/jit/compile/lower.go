@@ -84,6 +84,9 @@ func HostOnly(err error) bool {
 // call.
 type Hints struct {
 	StringAdds, ElementReads, StringReads []int32
+	// KeepParams keeps parameter values in frame states for legacy
+	// Function.arguments, which can observe them without a local read.
+	KeepParams bool
 }
 
 // lowering is how a function is lowered: for which entry points, and for

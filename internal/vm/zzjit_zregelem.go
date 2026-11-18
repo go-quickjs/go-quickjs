@@ -38,11 +38,13 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 	if s == nil || rc == nil || rc != cl.fn.RegCompiled() {
 		// Before the runtime has any state, which no compile is, or code
 		// not the function's own register code, which no key names.
-		return jitRegLowerWith(rc, cl.fn, kind, jitcompile.Hints{})
+		return jitRegLowerWith(rc, cl.fn, kind, jitcompile.Hints{KeepParams: r.nodeQuirks && !cl.fn.Strict})
 	}
 	l := s.regLowering(r.jitRegKeyOf(cl))
 	if !l.done[kind] {
-		l.progs[kind], l.errs[kind] = jitRegLowerWith(rc, cl.fn, kind, l.hints)
+		h := l.hints
+		h.KeepParams = r.nodeQuirks && !cl.fn.Strict
+		l.progs[kind], l.errs[kind] = jitRegLowerWith(rc, cl.fn, kind, h)
 		l.done[kind] = true
 		n := l.progs[kind].Footprint()
 		l.bytes += n

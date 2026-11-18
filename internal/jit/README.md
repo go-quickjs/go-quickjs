@@ -184,7 +184,11 @@ smaller, as they are for most functions of a few hundred registers or
 fewer; a dense row at every instruction would make the liveness of n
 registers and m instructions n·m bits. The builder asks a set's slots
 (`Liveness.Slots`) and the slots two sets tell apart where their trees
-differ (`Liveness.Changed`).
+differ (`Liveness.Changed`). Under `WithNodeQuirks`, a sloppy function's
+parameters stay live throughout too (`Hints.KeepParams`): legacy
+`Function.arguments` can read them at any call, even when its body never
+reads the parameter. Native and inlined frames therefore reconstruct the
+current parameter values before reflection runs.
 
 **One register instruction, one or more IR instructions.** Most register
 instructions are one IR instruction with their operands named: `add r4, r2,

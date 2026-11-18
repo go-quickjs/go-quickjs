@@ -216,7 +216,7 @@ func lowerTyped(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, error
 		}
 	}
 	selectNumericProperties(p, true)
-	liveRegs(p, rc)
+	liveRegs(p, rc, false)
 	if err := p.Validate(); err != nil {
 		return nil, refuse(-1, err.Error())
 	}
