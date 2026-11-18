@@ -40,6 +40,9 @@ type block struct {
 	names       map[int]string
 	order       []int
 	entry, exit int
+	// extAt and extNames are the second table's handlers, by X.
+	extAt    map[int]int
+	extNames map[int]string
 }
 
 // source is the block's file.
@@ -69,5 +72,16 @@ func (b *block) source() []byte {
 		fmt.Fprintf(&s, "DATA ·wasmNativeTable+%d(SB)/8, $·wasmNativeHandlers+%d(SB)\n", 8*op, off)
 	}
 	s.WriteString("GLOBL ·wasmNativeTable(SB), RODATA, $2048\n")
+	s.WriteString("\n// wasmNativeExtTable is the native second table, rExt's: each operation's\n// handler's address, the exit stub's where it has none.\n")
+	for x := 0; x < 256; x++ {
+		off, ok := b.extAt[x]
+		if !ok {
+			off = b.exit
+		} else {
+			fmt.Fprintf(&s, "// %d: %s\n", x, b.extNames[x])
+		}
+		fmt.Fprintf(&s, "DATA ·wasmNativeExtTable+%d(SB)/8, $·wasmNativeHandlers+%d(SB)\n", 8*x, off)
+	}
+	s.WriteString("GLOBL ·wasmNativeExtTable(SB), RODATA, $2048\n")
 	return s.Bytes()
 }

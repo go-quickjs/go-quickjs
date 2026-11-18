@@ -26,8 +26,24 @@ type gen struct {
 	// retNative returns from a frame, to Go or to its native caller.
 	retNative Label
 	labels    map[int]Label
+	// extLabels and extNames are the second table's handlers, rExt's,
+	// by X.
+	extLabels map[int]Label
+	extNames  map[int]string
 	names     map[int]string
 	order     []int
+}
+
+// hx lays out the handler of operation x of the second table, named name.
+func (g *gen) hx(x int, name string, body func()) {
+	if _, dup := g.extLabels[x]; dup {
+		panic("nativegen: two handlers of " + name)
+	}
+	g.a.Align(16)
+	l := g.a.NewLabel()
+	g.a.Bind(l)
+	g.extLabels[x], g.extNames[x] = l, name
+	body()
 }
 
 // h lays out op's handler, named name.
@@ -119,7 +135,7 @@ const (
 )
 
 func emitAMD64() (*block, error) {
-	g := &gen{a: &Asm{}, labels: map[int]Label{}, names: map[int]string{}}
+	g := &gen{a: &Asm{}, labels: map[int]Label{}, names: map[int]string{}, extLabels: map[int]Label{}, extNames: map[int]string{}}
 	a := g.a
 	g.exit, g.exitSlow, g.retNative = a.NewLabel(), a.NewLabel(), a.NewLabel()
 
@@ -139,6 +155,15 @@ func emitAMD64() (*block, error) {
 
 	g.moves()
 	g.control()
+	// The second table's operations: X picks their handler from the
+	// native second table, the exit stub where they have none.
+	g.h(rd.Ext, "Ext", func() {
+		a.MovRR(RCX, RAX)
+		a.ShiftImm(Shr, RCX, 8, true)
+		a.MovZX8(RCX, RCX)
+		a.Load(RDX, RDI, rd.CtxExtTable)
+		a.JmpIdx(RDX, RCX, 8, 0)
+	})
 	g.integers()
 	g.floats()
 	g.refs()
@@ -149,9 +174,13 @@ func emitAMD64() (*block, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &block{code: code, at: map[int]int{}, names: g.names, order: g.order, entry: a.Offset(entry), exit: a.Offset(g.exit)}
+	b := &block{code: code, at: map[int]int{}, names: g.names, order: g.order, entry: a.Offset(entry), exit: a.Offset(g.exit),
+		extAt: map[int]int{}, extNames: g.extNames}
 	for _, op := range g.order {
 		b.at[op] = a.Offset(g.labels[op])
+	}
+	for x, l := range g.extLabels {
+		b.extAt[x] = a.Offset(l)
 	}
 	if b.entry != 0 {
 		panic("nativegen: the entry is not at 0")
@@ -379,6 +408,8 @@ type cmpOp struct {
 	name             string
 	op, opI, br, brI int
 	cond             Cond
+	// extI says opI is of the second table.
+	extI bool
 }
 
 var i32 = intType{name: "I32", wide: false,
@@ -389,16 +420,16 @@ var i32 = intType{name: "I32", wide: false,
 	divS: rd.I32DivS, divU: rd.I32DivU, remS: rd.I32RemS, remU: rd.I32RemU,
 	eqz: rd.I32Eqz, clz: rd.I32Clz, ctz: rd.I32Ctz, ext8: rd.I32SExtendI8, ext16: rd.I32SExtendI16,
 	cmp: [10]cmpOp{
-		{"Eq", rd.I32Eq, rd.I32EqI, rd.BrI32Eq, rd.BrI32EqI, CondE},
-		{"Ne", rd.I32Ne, rd.I32NeI, rd.BrI32Ne, rd.BrI32NeI, CondNE},
-		{"LtS", rd.I32LtS, rd.I32LtSI, rd.BrI32LtS, rd.BrI32LtSI, CondL},
-		{"LtU", rd.I32LtU, rd.I32LtUI, rd.BrI32LtU, rd.BrI32LtUI, CondB},
-		{"GtS", rd.I32GtS, rd.I32GtSI, rd.BrI32GtS, rd.BrI32GtSI, CondG},
-		{"GtU", rd.I32GtU, rd.I32GtUI, rd.BrI32GtU, rd.BrI32GtUI, CondA},
-		{"LeS", rd.I32LeS, rd.I32LeSI, rd.BrI32LeS, rd.BrI32LeSI, CondLE},
-		{"LeU", rd.I32LeU, rd.I32LeUI, rd.BrI32LeU, rd.BrI32LeUI, CondBE},
-		{"GeS", rd.I32GeS, rd.I32GeSI, rd.BrI32GeS, rd.BrI32GeSI, CondGE},
-		{"GeU", rd.I32GeU, rd.I32GeUI, rd.BrI32GeU, rd.BrI32GeUI, CondAE},
+		{"Eq", rd.I32Eq, rd.I32EqI, rd.BrI32Eq, rd.BrI32EqI, CondE, false},
+		{"Ne", rd.I32Ne, rd.I32NeI, rd.BrI32Ne, rd.BrI32NeI, CondNE, false},
+		{"LtS", rd.I32LtS, rd.I32LtSI, rd.BrI32LtS, rd.BrI32LtSI, CondL, false},
+		{"LtU", rd.I32LtU, rd.I32LtUI, rd.BrI32LtU, rd.BrI32LtUI, CondB, false},
+		{"GtS", rd.I32GtS, rd.I32GtSI, rd.BrI32GtS, rd.BrI32GtSI, CondG, false},
+		{"GtU", rd.I32GtU, rd.I32GtUI, rd.BrI32GtU, rd.BrI32GtUI, CondA, false},
+		{"LeS", rd.I32LeS, rd.I32LeSI, rd.BrI32LeS, rd.BrI32LeSI, CondLE, false},
+		{"LeU", rd.I32LeU, rd.I32LeUI, rd.BrI32LeU, rd.BrI32LeUI, CondBE, false},
+		{"GeS", rd.I32GeS, rd.I32GeSI, rd.BrI32GeS, rd.BrI32GeSI, CondGE, false},
+		{"GeU", rd.I32GeU, rd.I32GeUI, rd.BrI32GeU, rd.BrI32GeUI, CondAE, false},
 	}}
 
 var i64 = intType{name: "I64", wide: true,
@@ -409,16 +440,16 @@ var i64 = intType{name: "I64", wide: true,
 	divS: rd.I64DivS, divU: rd.I64DivU, remS: rd.I64RemS, remU: rd.I64RemU,
 	eqz: rd.I64Eqz, clz: rd.I64Clz, ctz: rd.I64Ctz, ext8: rd.I64SExtendI8, ext16: rd.I64SExtendI16,
 	cmp: [10]cmpOp{
-		{"Eq", rd.I64Eq, -1, rd.BrI64Eq, rd.BrI64EqI, CondE},
-		{"Ne", rd.I64Ne, -1, rd.BrI64Ne, rd.BrI64NeI, CondNE},
-		{"LtS", rd.I64LtS, -1, rd.BrI64LtS, rd.BrI64LtSI, CondL},
-		{"LtU", rd.I64LtU, -1, rd.BrI64LtU, rd.BrI64LtUI, CondB},
-		{"GtS", rd.I64GtS, -1, rd.BrI64GtS, rd.BrI64GtSI, CondG},
-		{"GtU", rd.I64GtU, -1, rd.BrI64GtU, rd.BrI64GtUI, CondA},
-		{"LeS", rd.I64LeS, -1, rd.BrI64LeS, rd.BrI64LeSI, CondLE},
-		{"LeU", rd.I64LeU, -1, rd.BrI64LeU, rd.BrI64LeUI, CondBE},
-		{"GeS", rd.I64GeS, -1, rd.BrI64GeS, rd.BrI64GeSI, CondGE},
-		{"GeU", rd.I64GeU, -1, rd.BrI64GeU, rd.BrI64GeUI, CondAE},
+		{"Eq", rd.I64Eq, rd.XI64EqI, rd.BrI64Eq, rd.BrI64EqI, CondE, true},
+		{"Ne", rd.I64Ne, rd.XI64NeI, rd.BrI64Ne, rd.BrI64NeI, CondNE, true},
+		{"LtS", rd.I64LtS, rd.XI64LtSI, rd.BrI64LtS, rd.BrI64LtSI, CondL, true},
+		{"LtU", rd.I64LtU, rd.XI64LtUI, rd.BrI64LtU, rd.BrI64LtUI, CondB, true},
+		{"GtS", rd.I64GtS, rd.XI64GtSI, rd.BrI64GtS, rd.BrI64GtSI, CondG, true},
+		{"GtU", rd.I64GtU, rd.XI64GtUI, rd.BrI64GtU, rd.BrI64GtUI, CondA, true},
+		{"LeS", rd.I64LeS, rd.XI64LeSI, rd.BrI64LeS, rd.BrI64LeSI, CondLE, true},
+		{"LeU", rd.I64LeU, rd.XI64LeUI, rd.BrI64LeU, rd.BrI64LeUI, CondBE, true},
+		{"GeS", rd.I64GeS, rd.XI64GeSI, rd.BrI64GeS, rd.BrI64GeSI, CondGE, true},
+		{"GeU", rd.I64GeU, rd.XI64GeUI, rd.BrI64GeU, rd.BrI64GeUI, CondAE, true},
 	}}
 
 func (g *gen) integers() {
@@ -562,17 +593,19 @@ func (g *gen) intType(t intType) {
 			if imm {
 				o, n = c.opI, n+"I"
 			}
-			if o < 0 {
-				continue
-			}
-			g.h(o, n, func() {
+			body := func() {
 				rr(imm)
 				a.Op(Cmp, RDX, RSI, w)
 				a.Setcc(c.cond, RDX)
 				a.MovZX8(RDX, RDX)
 				g.store(0, RDX)
 				g.next(1)
-			})
+			}
+			if imm && c.extI {
+				g.hx(o, n, body)
+			} else {
+				g.h(o, n, body)
+			}
 		}
 		for _, imm := range []bool{false, true} {
 			o, n := c.br, "Br"+t.name+c.name

@@ -207,7 +207,7 @@ func (g *gen) calls() {
 		a.Store32(R10, rd.FrameTickSet, RDX)
 		// The callee's context: the instance's and the run's from the
 		// caller's, its code's, and the way back.
-		for _, f := range []int32{rd.CtxTable, rd.CtxGoTable, rd.CtxSlowTable, rd.CtxCallH, rd.CtxMem0,
+		for _, f := range []int32{rd.CtxTable, rd.CtxExtTable, rd.CtxGoTable, rd.CtxSlowTable, rd.CtxCallH, rd.CtxMem0,
 			rd.CtxGlobals, rd.CtxExits, rd.CtxX, rd.CtxInst, rd.CtxFuncs, rd.CtxFns, rd.CtxCalls,
 			rd.CtxMaxDepth, rd.CtxStoreRef, rd.CtxWB} {
 			a.Load(RDX, RDI, f)

@@ -80,7 +80,7 @@ const (
 	xCaughtTo                  // drop the caught exceptions past the frame's BC-th
 
 	// regExtNumFirst is the second table's first numeric operation.
-	regExtNumFirst regOp = 32
+	regExtNumFirst regOp = regdef.ExtNumFirst
 )
 
 // The kinds of value a move carries: a word, a v128's two, a reference.

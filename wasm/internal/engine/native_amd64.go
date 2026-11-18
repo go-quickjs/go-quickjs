@@ -17,11 +17,13 @@ func wasmNativeCallHAddr() uintptr
 func wasmNativeHandlersAddr() uintptr
 func wasmNativeTableAddr() uintptr
 func wasmNativeTablePtr() unsafe.Pointer
+func wasmNativeExtTableAddr() uintptr
 
 var (
 	nativeEntry     = wasmNativeHandlersAddr()
 	nativeTable     = wasmNativeTableAddr()
 	nativeCallHAddr = wasmNativeCallHAddr()
+	nativeExtTable  = wasmNativeExtTableAddr()
 )
 
 func wasmNativeStoreRef()
@@ -45,6 +47,7 @@ var nativeWB struct {
 func nativeRun(f *frame, rc *regCode, pc int32) {
 	c := nativeSet(f, rc, pc)
 	c.table = nativeTable
+	c.extTable = nativeExtTable
 	c.callH = nativeCallHAddr
 	c.goTable = uintptr(unsafe.Pointer(&regTable[0]))
 	c.slowTable = uintptr(unsafe.Pointer(&regSlowTable[0]))

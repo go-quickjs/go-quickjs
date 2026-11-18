@@ -234,3 +234,36 @@ const (
 	// OpCount is the number of values the first table's operations take.
 	OpCount
 )
+
+// The numeric operations of the second table, rExt's, from ExtNumFirst.
+const (
+	XI64EqI = ExtNumFirst + iota
+	XI64NeI
+	XI64LtSI
+	XI64LtUI
+	XI64GtSI
+	XI64GtUI
+	XI64LeSI
+	XI64LeUI
+	XI64GeSI
+	XI64GeUI
+	XF32CopySign
+	XF64CopySign
+	XI32Popcnt
+	XI64Popcnt
+	XF32Ceil
+	XF32Floor
+	XF32Trunc
+	XF32NearestInt
+	XF64NearestInt
+	XI32SConvertSatF32
+	XI32UConvertSatF32
+	XI32SConvertSatF64
+	XI32UConvertSatF64
+	XI64SConvertSatF32
+	XI64UConvertSatF32
+	XI64SConvertSatF64
+	XI64UConvertSatF64
+	// ExtOpCount is the number of values the second table's numeric operations reach to.
+	ExtOpCount
+)

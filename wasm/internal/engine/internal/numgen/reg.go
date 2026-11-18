@@ -267,17 +267,20 @@ const (
 			fmt.Fprintf(&def, "%s\n", n)
 		}
 	}
-	def.WriteString("// OpCount is the number of values the first table's operations take.\nOpCount\n)\n")
-	writeFile(defPath, def.Bytes())
+	def.WriteString("// OpCount is the number of values the first table's operations take.\nOpCount\n)\n\n")
+	def.WriteString("// The numeric operations of the second table, rExt's, from ExtNumFirst.\nconst (\n")
 	b.WriteString("// regOpCount is the number of values the first table's operations take.\nregOpCount = regdef.OpCount\n)\n\nconst (\n")
 	for i, n := range g.ext {
+		fmt.Fprintf(b, "x%s = regdef.X%s\n", n, n)
 		if i == 0 {
-			fmt.Fprintf(b, "x%s = regExtNumFirst + iota\n", n)
+			fmt.Fprintf(&def, "X%s = ExtNumFirst + iota\n", n)
 		} else {
-			fmt.Fprintf(b, "x%s\n", n)
+			fmt.Fprintf(&def, "X%s\n", n)
 		}
 	}
-	b.WriteString("// regExtOpCount is the number of values the second table's operations take.\nregExtOpCount\n)\n\n")
+	def.WriteString("// ExtOpCount is the number of values the second table's numeric operations reach to.\nExtOpCount\n)\n")
+	writeFile(defPath, def.Bytes())
+	b.WriteString("// regExtOpCount is the number of values the second table's operations take.\nregExtOpCount = regdef.ExtOpCount\n)\n\n")
 	b.Write(g.h.Bytes())
 	b.WriteString(`// regNumeric returns how numeric operator op compiles to register code,
 // reporting whether op is one.

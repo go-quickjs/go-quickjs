@@ -94,6 +94,7 @@ func TestNativeLayout(t *testing.T) {
 		{"fn", unsafe.Offsetof(c.fn), regdef.CtxFn},
 		{"cd", unsafe.Offsetof(c.cd), regdef.CtxCd},
 		{"rc", unsafe.Offsetof(c.rc), regdef.CtxRc},
+		{"extTable", unsafe.Offsetof(c.extTable), regdef.CtxExtTable},
 		{"frame.l", unsafe.Offsetof(f.l), regdef.FrameL},
 		{"frame.inst", unsafe.Offsetof(f.inst), regdef.FrameInst},
 		{"frame.osr", unsafe.Offsetof(f.osr), regdef.FrameOsr},
@@ -461,8 +462,7 @@ func nativeMayExit(name string) bool {
 	if strings.Contains(name, "div") || strings.Contains(name, "rem") || name == "count" || strings.Contains(name, "trunc_") || strings.Contains(name, "convert_i64_u") {
 		return true
 	}
-	return strings.HasPrefix(name, "i64.") && strings.Contains(name, ".imm") && !strings.Contains(name, ".br.") &&
-		contains([]string{"eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"}, strings.Split(name, ".")[1])
+	return false
 }
 
 func contains(s []string, x string) bool {
@@ -695,7 +695,7 @@ func TestNativeRefsMarking(t *testing.T) {
 	if !nativeHandles(rRefMov) || !nativeHandles(rRefNull) {
 		t.Fatal("ref.mov or ref.null has no native handler")
 	}
-	for _, op := range []regOp{rExt, rSIMD, rFar, rReturnCall} {
+	for _, op := range []regOp{rSIMD, rFar, rReturnCall} {
 		if nativeHandles(op) {
 			t.Errorf("operation %d has a native handler", op)
 		}

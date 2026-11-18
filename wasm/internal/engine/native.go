@@ -38,6 +38,8 @@ type nativeCtx struct {
 	// the call's scratch.
 	caller, retAddr, site, nc, nsp uintptr
 	fn, cd, rc                     uintptr
+	// extTable is the native second table, rExt's.
+	extTable uintptr
 }
 
 // regNativeOn runs register code by the native handlers where they are

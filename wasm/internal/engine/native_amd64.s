@@ -84,6 +84,11 @@ TEXT ·wasmNativeTableAddr(SB), NOSPLIT, $0-8
 	MOVQ AX, ret+0(FP)
 	RET
 
+TEXT ·wasmNativeExtTableAddr(SB), NOSPLIT, $0-8
+	LEAQ ·wasmNativeExtTable(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
 TEXT ·wasmNativeTablePtr(SB), NOSPLIT, $0-8
 	LEAQ ·wasmNativeTable(SB), AX
 	MOVQ AX, ret+0(FP)

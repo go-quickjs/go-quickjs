@@ -249,35 +249,35 @@ const (
 )
 
 const (
-	xI64EqI = regExtNumFirst + iota
-	xI64NeI
-	xI64LtSI
-	xI64LtUI
-	xI64GtSI
-	xI64GtUI
-	xI64LeSI
-	xI64LeUI
-	xI64GeSI
-	xI64GeUI
-	xF32CopySign
-	xF64CopySign
-	xI32Popcnt
-	xI64Popcnt
-	xF32Ceil
-	xF32Floor
-	xF32Trunc
-	xF32NearestInt
-	xF64NearestInt
-	xI32SConvertSatF32
-	xI32UConvertSatF32
-	xI32SConvertSatF64
-	xI32UConvertSatF64
-	xI64SConvertSatF32
-	xI64UConvertSatF32
-	xI64SConvertSatF64
-	xI64UConvertSatF64
+	xI64EqI            = regdef.XI64EqI
+	xI64NeI            = regdef.XI64NeI
+	xI64LtSI           = regdef.XI64LtSI
+	xI64LtUI           = regdef.XI64LtUI
+	xI64GtSI           = regdef.XI64GtSI
+	xI64GtUI           = regdef.XI64GtUI
+	xI64LeSI           = regdef.XI64LeSI
+	xI64LeUI           = regdef.XI64LeUI
+	xI64GeSI           = regdef.XI64GeSI
+	xI64GeUI           = regdef.XI64GeUI
+	xF32CopySign       = regdef.XF32CopySign
+	xF64CopySign       = regdef.XF64CopySign
+	xI32Popcnt         = regdef.XI32Popcnt
+	xI64Popcnt         = regdef.XI64Popcnt
+	xF32Ceil           = regdef.XF32Ceil
+	xF32Floor          = regdef.XF32Floor
+	xF32Trunc          = regdef.XF32Trunc
+	xF32NearestInt     = regdef.XF32NearestInt
+	xF64NearestInt     = regdef.XF64NearestInt
+	xI32SConvertSatF32 = regdef.XI32SConvertSatF32
+	xI32UConvertSatF32 = regdef.XI32UConvertSatF32
+	xI32SConvertSatF64 = regdef.XI32SConvertSatF64
+	xI32UConvertSatF64 = regdef.XI32UConvertSatF64
+	xI64SConvertSatF32 = regdef.XI64SConvertSatF32
+	xI64UConvertSatF32 = regdef.XI64UConvertSatF32
+	xI64SConvertSatF64 = regdef.XI64SConvertSatF64
+	xI64UConvertSatF64 = regdef.XI64UConvertSatF64
 	// regExtOpCount is the number of values the second table's operations take.
-	regExtOpCount
+	regExtOpCount = regdef.ExtOpCount
 )
 
 func rhI32Add(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
