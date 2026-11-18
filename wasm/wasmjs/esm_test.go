@@ -216,8 +216,9 @@ func normalizeESM(out, dir string) string {
 // standard library and the WebAssembly namespace, whose loader reads the
 // tree's files as Node's does -- a specifier resolved against the
 // importer's directory, a module named by its path -- and returns what the
-// runner recorded.
-func runESMQuickJS(t *testing.T, dir string) string {
+// runner recorded. With async the loader is an AsyncModuleLoader, which
+// answers from a goroutine of its own.
+func runESMQuickJS(t *testing.T, dir string, async ...bool) string {
 	t.Helper()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
@@ -228,7 +229,7 @@ func runESMQuickJS(t *testing.T, dir string) string {
 	if err := wasmjs.Install(rt, wasmjs.WithModuleURL(fileURLOf)); err != nil {
 		t.Fatal(err)
 	}
-	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+	load := func(specifier, referrer string) (string, string, error) {
 		from := dir
 		if referrer != "" {
 			from = filepath.Dir(referrer)
@@ -241,7 +242,15 @@ func runESMQuickJS(t *testing.T, dir string) string {
 			return "", "", rt.Throw(e)
 		}
 		return string(b), p, err
-	})
+	}
+	if len(async) > 0 && async[0] {
+		rt.SetAsyncModuleLoader(func(ctx context.Context, req quickjs.ModuleRequest, done func(quickjs.LoadedModule, error)) {
+			source, resolved, err := load(req.Specifier, req.Referrer)
+			go done(quickjs.LoadedModule{Source: source, Resolved: resolved}, err)
+		})
+	} else {
+		rt.SetModuleLoader(load)
+	}
 	runner := filepath.Join(dir, "runner.mjs")
 	src, err := os.ReadFile(runner)
 	if err != nil {
@@ -272,6 +281,10 @@ func TestESMIntegration(t *testing.T) {
 			a := readESMArchive(t, path)
 			dir := writeESMArchive(t, a)
 			got := normalizeESM(runESMQuickJS(t, dir), dir)
+			// An asynchronous loader's graph is the same graph.
+			if async := normalizeESM(runESMQuickJS(t, dir, true), dir); async != got {
+				t.Errorf("with an asynchronous loader:\n%s\nwith a loader:\n%s", async, got)
+			}
 			if os.Getenv("QUICKJS_ESM_UPDATE") == "1" {
 				b, err := os.ReadFile(path)
 				if err != nil {

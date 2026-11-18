@@ -63,6 +63,10 @@ type fetchCall struct {
 	key                 [2]string
 	specifier, referrer string
 	typ                 string
+	// source marks a request for the module's source alone, whose own
+	// requests are not wanted; visit, one for the module too, made while
+	// the call was out.
+	source, visit bool
 }
 
 // fetchResult is what a call came back with.
@@ -122,7 +126,7 @@ type graphFetch struct {
 	// seen are the modules whose requests have been asked for, asked the
 	// requests asked for.
 	seen  map[*Module]bool
-	asked map[[2]string]bool
+	asked map[[2]string]*fetchCall
 	// deliver hands what a call came back with to the runtime's goroutine,
 	// where receive takes it. It may be called on any goroutine.
 	deliver func(fetchResult)
@@ -134,33 +138,38 @@ func (r *Runtime) newGraphFetch() *graphFetch {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	return &graphFetch{r: r, ctx: ctx, cancel: cancel, seen: map[*Module]bool{}, asked: map[[2]string]bool{}}
+	return &graphFetch{r: r, ctx: ctx, cancel: cancel, seen: map[*Module]bool{}, asked: map[[2]string]*fetchCall{}}
 }
 
 // want asks for the module a request names from referrer, and then for what
-// that module requests, unless it is in hand.
+// that module requests, unless it is in hand -- or the request is for its
+// source alone, which needs nothing it requests.
 func (g *graphFetch) want(request, referrer string) {
 	r := g.r
 	request, _ = bytecode.SplitDeferRequest(request)
-	request, _ = bytecode.SplitSourceRequest(request)
+	request, source := bytecode.SplitSourceRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
 	if typ == "" && r.nativeModule(specifier) != nil {
 		return
 	}
 	key := [2]string{referrer, request}
 	if m, ok := r.requested[key]; ok {
-		if typ == "" {
+		if typ == "" && !source {
 			g.visit(m)
 		}
 		return
 	}
-	if g.asked[key] || g.err != nil {
+	if c := g.asked[key]; c != nil || g.err != nil {
+		if c != nil && !source {
+			c.visit = true
+		}
 		return
 	}
-	g.asked[key] = true
+	c := &fetchCall{g: g, key: key, specifier: specifier, referrer: referrer, typ: typ, source: source, visit: !source}
+	g.asked[key] = c
 	g.pending++
 	f := r.modfetch
-	f.queue = append(f.queue, &fetchCall{g: g, key: key, specifier: specifier, referrer: referrer, typ: typ})
+	f.queue = append(f.queue, c)
 	r.pumpFetches()
 }
 
@@ -269,7 +278,7 @@ func (g *graphFetch) receive(res fetchResult) {
 		r.requested = map[[2]string]*Module{}
 	}
 	r.requested[c.key] = m
-	if c.typ == "" {
+	if c.typ == "" && c.visit {
 		g.visit(m)
 	}
 }

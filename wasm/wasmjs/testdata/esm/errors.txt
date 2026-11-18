@@ -85,6 +85,10 @@ p("source of a module whose imports are not there", () => x instanceof WebAssemb
 await import("./nodep.wasm");
 -- t21.mjs --
 import "./bad.wasm";
+-- t22.mjs --
+import { p } from "./harness.mjs";
+const x = await import.source("./nodep.wasm");
+p("import.source of a module whose imports are not there", () => x instanceof WebAssembly.Module);
 -- want --
 t01.mjs -> CompileError: $DIR/bad.wasm: WebAssembly.Module(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0
 t02.mjs -> CompileError: $DIR/empty.wasm: WebAssembly.Module(): BufferSource argument is empty
@@ -108,3 +112,5 @@ source of a module whose imports are not there -> true
 t19.mjs -> ok
 t20.mjs -> Error: Cannot find module '$DIR/nowhere.mjs' imported from $DIR/nodep.wasm [ERR_MODULE_NOT_FOUND]
 t21.mjs -> CompileError: $DIR/bad.wasm: WebAssembly.Module(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0
+import.source of a module whose imports are not there -> true
+t22.mjs -> ok

@@ -307,7 +307,8 @@ func (r *Runtime) importDeferred(request, referrer string, result *Object) {
 // it fails.
 func (r *Runtime) importSource(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
-		r.whenFetched(request, referrer, func(err error) {
+		// What the module requests is not wanted.
+		r.whenFetched(bytecode.SourceRequest(request), referrer, func(err error) {
 			var mod *Module
 			if err == nil {
 				mod, err = r.loadDependency(request, referrer)
