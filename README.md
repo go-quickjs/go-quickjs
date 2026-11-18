@@ -93,15 +93,15 @@ workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-Measured at `3ecb8200`, on the register interpreter, on the V8 benchmark
-suite as a whole it is well ahead of C QuickJS: it takes 0.35 times
-QuickJS's time over the suite and has 2.05 times its composite score, and
-with the experimental JIT 0.22 times its time and a composite score 5.5
+Measured at `2f05d3fc`, on the register interpreter, on the V8 benchmark
+suite as a whole it is well ahead of C QuickJS: it takes 0.34 times
+QuickJS's time over the suite and has 2.08 times its composite score, and
+with the experimental JIT 0.21 times its time and a composite score 5.5
 times as high. On the larger programs of Octane and Are We Fast Yet it
-takes 0.44 and 0.66 times QuickJS's time, and 0.31 and 0.20 times with the
+takes 0.44 and 0.67 times QuickJS's time, and 0.31 and 0.20 times with the
 JIT; Octane's zlib, an asm.js module run as typed code, takes 0.19 times,
-and 0.10 with the JIT. A page React 18 renders on the server takes 0.64
-times, and 0.55 with the JIT. Single operations cost about half as much:
+and 0.10 with the JIT. A page React 18 renders on the server takes 0.65
+times, and 0.53 with the JIT. Single operations cost about half as much:
 QuickJS's own micro-benchmarks take 0.50 times as long on average, and
 0.28 times with the JIT, though a few take up to 1.5 times as long, the
 weak collections and the BigInts past 64 bits among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).

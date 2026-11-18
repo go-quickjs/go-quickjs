@@ -96,8 +96,15 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
   arguments)`. `regexp_split` is not profiled yet; the span measured holds
   several changes, so the first step is to find which.
   `forward_construct`'s forwarder runs without a frame in native handlers
-  since v0.39.0, 0.23 times QuickJS's time where it took 0.54, and has not
-  been compared with the old tiers again. The JIT's slower rows are under
+  since v0.39.0, 0.23 times QuickJS's time where it took 0.54, and 0.32 at
+  `2f05d3fc`: builds of the revisions between put most of the step at the
+  renaming of package vm's files (`c985f5b0`, `be71fe74`), which changed
+  no code it runs, and the layout lock's positions at `c2dae008` put
+  that code back at `3ecb8200`'s offsets, where it takes 0.25. The rest,
+  with 4 to 8% of the `carried_` and `escape_` tests', came with the
+  native initializer's remembered layouts (`8505335a`), not profiled on
+  Zen 2 yet. It has not been compared with the old tiers again. The
+  JIT's slower rows are under
   [The register JIT's remaining gaps](#the-register-jits-remaining-gaps).
 - **Raw int32 and float64 values outside asm.js.** A validated asm.js
   module runs as typed code, its registers raw int32 and float64 values
