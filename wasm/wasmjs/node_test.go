@@ -124,7 +124,7 @@ var nodeKnownDifferences = map[string]string{
 	"api.js: subclass Exception":               "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for an Exception",
 	"api.js: subclass Suspending":              "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Suspending",
 	"gc.js: method":                            "the runtime names the callee of a call through a proxy undefined",
-	"gc.js: JSON":                              "JSON.stringify writes a GC object as an empty object, where V8 writes null",
+	"gc.js: spread into array":                 "the runtime's own message for spreading what is not iterable, which it does not name",
 }
 
 // v8Conversion matches the messages of V8's ToPrimitive and ToBigInt, which

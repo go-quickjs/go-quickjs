@@ -263,7 +263,10 @@ and messages of V8 (Node 26), word for word, prefixes included
   `RuntimeError`;
 - the conversion of every value type: i64 as BigInt; numbers that fit an
   i31 as i31refs; externref and anyref holding any value; GC structs and
-  arrays as opaque objects wasm gets back as themselves; v128 and exnref
+  arrays as opaque objects wasm gets back as themselves -- of no prototype
+  and no properties, refusing every change, left out by `JSON.stringify`
+  as a function is (`null` in an array) and not cloneable
+  (`[object Object] could not be cloned.`), as in Node; v128 and exnref
   refused;
 - exceptions both ways: a JavaScript exception crossing wasm is caught by
   `catch_all` and by a `catch` of `WebAssembly.JSTag`, and comes out the
@@ -1027,8 +1030,6 @@ The `WebAssembly` namespace:
 
 - `Object.getOwnPropertyDescriptor(globalThis, "WebAssembly")` is the
   accessor the global is until first read, as Intl's is.
-- `JSON.stringify` writes a GC object as an empty object, where V8 writes
-  `null`.
 - A suspended promising call is a goroutine's stack, which keeps reachable
   what its wasm and its imports reach -- the runtime among it -- until it
   ends: when the collector finds nothing holds the reactions that would

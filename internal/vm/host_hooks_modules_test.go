@@ -113,3 +113,26 @@ func TestHostModules(t *testing.T) {
 		t.Errorf("later = %q, want %q", l, want)
 	}
 }
+
+// TestHostOpaqueJSON pins that JSON.stringify leaves out a proxy whose
+// handler is HostOpaque, as it leaves out a function, and writes any other
+// proxy as its keys give it.
+func TestHostOpaqueJSON(t *testing.T) {
+	rt, r := hostRuntime(t)
+	proxy, err := r.GetProp(vm.Obj(r.Global()), r.Intern("Proxy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]any{"opaque": vm.HostOpaque{}, "plain": nil} {
+		target := vm.HostObject(nil, nil)
+		p, err := r.Construct(proxy, []vm.Value{vm.Obj(target), vm.Obj(vm.HostObject(nil, data))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		setGlobal(r, name, p)
+	}
+	got := hostEval(t, rt, `[String(JSON.stringify(opaque)), JSON.stringify([opaque, plain]), JSON.stringify({ o: opaque, p: plain })].join(" | ")`)
+	if want := `undefined | [null,{}] | {"p":{}}`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}

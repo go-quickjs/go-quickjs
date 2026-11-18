@@ -46,6 +46,12 @@ func TestStructuredCloneMatchesNode(t *testing.T) {
 		t("weakmap", () => c(new WeakMap()));
 		t("proxy", () => c(new Proxy({}, {})));
 		t("proxy array", () => c(new Proxy([], {})));
+		t("proxy of no prototype", () => c(new Proxy(new Proxy(Object.create(null), {}), {})));
+		t("proxy of a class", () => { class Foo {} return c(new Proxy(new Foo(), {})) });
+		t("proxy of a Map", () => c(new Proxy(new Map(), {})));
+		t("proxy of a Date", () => c(new Proxy(new Date(0), {})));
+		t("proxy of a tagged object", () => c(new Proxy({ __proto__: null, [Symbol.toStringTag]: "T" }, {})));
+		t("proxy of an error", () => c(new Proxy(new RangeError("r"), {})));
 		t("getter throws", () => c({ get x() { throw new RangeError("g") } }));
 		t("options", () => c(1, { transfer: undefined }));
 		t("options bad", () => c(1, { transfer: 5 }));
@@ -85,6 +91,12 @@ promise THROWS DOMException DataCloneError 25 "#<Promise> could not be cloned."
 weakmap THROWS DOMException DataCloneError 25 "#<WeakMap> could not be cloned."
 proxy THROWS DOMException DataCloneError 25 "#<Object> could not be cloned."
 proxy array THROWS DOMException DataCloneError 25 "[object Array] could not be cloned."
+proxy of no prototype THROWS DOMException DataCloneError 25 "[object Object] could not be cloned."
+proxy of a class THROWS DOMException DataCloneError 25 "#<Foo> could not be cloned."
+proxy of a Map THROWS DOMException DataCloneError 25 "#<Map> could not be cloned."
+proxy of a Date THROWS DOMException DataCloneError 25 "[object Date] could not be cloned."
+proxy of a tagged object THROWS DOMException DataCloneError 25 "[object T] could not be cloned."
+proxy of an error THROWS DOMException DataCloneError 25 "RangeError: r could not be cloned."
 getter throws THROWS RangeError RangeError undefined "g"
 options 1
 options bad THROWS TypeError TypeError ERR_INVALID_ARG_TYPE "Failed to execute 'structuredClone': transfer in Options cannot be converted to sequence."

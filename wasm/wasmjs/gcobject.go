@@ -24,7 +24,8 @@ const msgOpaque = "WebAssembly objects are opaque"
 // makeOpaqueHandler makes the handler the proxies are made with.
 func (a *api) makeOpaqueHandler() {
 	r := a.rt
-	h := vm.HostObject(nil, nil)
+	// JSON.stringify leaves the proxies out, as it leaves out a function.
+	h := vm.HostObject(nil, vm.HostOpaque{})
 	trap := func(name string, length int, fn vm.NativeFunc) {
 		vm.HostDefineOwn(h, r.Intern(name), vm.Obj(r.NewFunc(name, length, fn)), false, false, false)
 	}

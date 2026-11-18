@@ -6,7 +6,8 @@ import "strconv"
 // -- a WebAssembly module, imported from JavaScript -- a place in it: a module
 // it makes from the source a loader gives, which imports from other modules
 // and exports bindings of its own, and the module source a source phase
-// import of it gives.
+// import of it gives. And what JSON and structured clone make of the opaque
+// objects a host stands for by proxies -- WebAssembly's GC objects.
 //
 // The functions are package variables assigned in init, as host_hooks.go's
 // are, so that adding them moves no code before them.
@@ -54,7 +55,20 @@ type HostModuleSourceClass interface {
 	ModuleSourceClassName() string
 }
 
+// HostOpaque is the data (HostObject) of a proxy handler whose proxies stand
+// for a host's objects that have no JSON form -- WebAssembly's structs and
+// arrays: JSON.stringify leaves such a proxy out, as it leaves out a
+// function.
+type HostOpaque struct{}
+
 var (
+	// hostNoJSON reports whether o, a proxy, stands for an object with no
+	// JSON form (HostOpaque).
+	hostNoJSON func(o *Object) bool
+	// hostDescribeTarget names the object t, which a proxy that cannot be
+	// cloned stands for, where it may run no code: an error by its name and
+	// message, anything else as describeReceiver names it.
+	hostDescribeTarget func(r *Runtime, t *Object) string
 	// hostModuleSourceTag is what %AbstractModuleSource%.prototype's
 	// Symbol.toStringTag getter answers for this: the class of a module
 	// source, or undefined for anything else.
@@ -152,6 +166,43 @@ func init() {
 		}
 		r.modules[h.Name] = m
 		return m
+	}
+	hostNoJSON = func(o *Object) bool {
+		p := proxyOf(o)
+		if p == nil || p.handler == nil {
+			return false
+		}
+		_, ok := p.handler.dataOf().(HostOpaque)
+		return ok
+	}
+	hostDescribeTarget = func(r *Runtime, t *Object) string {
+		if t.class != ClassError {
+			return r.describeReceiver(t)
+		}
+		// A data property's string, through the prototypes, or "".
+		data := func(key Atom) (string, bool) {
+			for p := t; p != nil && proxyOf(p) == nil; p = p.proto() {
+				if d := p.getOwnVisible(key); d.ok() {
+					if d.isAccessor() || !d.value().IsString() {
+						return "", false
+					}
+					return d.value().String().Go(), true
+				}
+			}
+			return "", false
+		}
+		name, ok := data(atomName)
+		if !ok {
+			name = "Error"
+		}
+		msg, _ := data(atomMessage)
+		switch {
+		case name == "":
+			return msg
+		case msg == "":
+			return name
+		}
+		return name + ": " + msg
 	}
 	hostModuleSourceTag = func(this Value) Value {
 		if !this.IsObject() {

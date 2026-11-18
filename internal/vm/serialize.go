@@ -276,7 +276,8 @@ func (s *serializer) value(v Value) (int, error) {
 			if t.IsCallable() {
 				return 0, &DataCloneError{functionText(t) + " could not be cloned."}
 			}
-			break
+			// Any other is named by the object it stands for.
+			return 0, &DataCloneError{hostDescribeTarget(s.r, t) + " could not be cloned."}
 		}
 		return 0, &DataCloneError{"#<Object> could not be cloned."}
 	}

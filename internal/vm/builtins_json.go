@@ -693,7 +693,7 @@ func (e *jsonEncoder) encodeObject(buf []byte, v Value) ([]byte, bool, error) {
 		return e.encode(buf, bi)
 	}
 
-	if o.IsCallable() {
+	if o.IsCallable() || o.class == ClassProxy && hostNoJSON(o) {
 		return buf, false, nil
 	}
 	if e.entered(o) {
