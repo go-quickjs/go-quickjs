@@ -275,10 +275,14 @@ Do not manually edit generated files or their binary companions:
   both written by `wasm/internal/engine/internal/numgen`; and
   `wasm/internal/engine/ops_simd_gen.go`, the SIMD operators without
   immediates, and `wasm/internal/engine/reg_simd_gen.go`, their register
-  code handlers, both written by `internal/simdgen` beside it. After changing either
-  generator, run `go generate ./wasm/internal/engine`; `TestNumericGenerated`
-  and `TestSIMDGenerated` (skipped under `-short`) fail while a file is out
-  of date.
+  code handlers, both written by `internal/simdgen` beside it; numgen also
+  writes `wasm/internal/engine/internal/regdef/num_gen.go`, the numeric
+  operations' values; and `wasm/internal/engine/native_handlers_amd64.s`,
+  register code's native handlers, written by
+  `wasm/internal/engine/internal/nativegen`. After changing a generator,
+  run `go generate ./wasm/internal/engine`; `TestNumericGenerated`,
+  `TestSIMDGenerated` and `TestNativeGenerated` (skipped under `-short`)
+  fail while a file is out of date.
 - `wasm/internal/opcode/tables.go`, every opcode's constant, name and
   signature, written by `wasm/internal/opcode/internal/opgen` from the
   opcode lists of V8's `src/wasm/wasm-opcodes.h` (see
@@ -407,7 +411,12 @@ design, which a change to that design updates in the same commit.
   test logs, counts any left to the closure tree, which a change must keep
   at none. `WASM_INTERP=tree` compiles bodies to the closure tree instead,
   kept to compare the two until native handlers run register code; after a
-  change to the interpreter, run the spec both ways.
+  change to the interpreter, run the spec both ways, and with
+  `WASM_REG_VERIFY=1`. On amd64 native handlers run register code
+  (wasm/internal/engine/README.md, "Native handlers"), `WASM_NONATIVE=1`
+  the Go table; they keep the JIT's execution boundary rules, store no
+  pointer, and a change to them runs `TestNativeMatchesGoTable` and the
+  spec with them on and off.
 - Native code keeps references only in Go memory the collector sees --
   frames' reference slots, tables, globals -- never in a register across an
   exit, and stores every pointer word through the write barrier's routine

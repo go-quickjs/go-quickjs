@@ -31,8 +31,9 @@ JavaScript design and why, and what is left.
 - [Offsets](#offsets)
 - [The switch](#the-switch)
 - [Where it departs from the JavaScript design](#where-it-departs-from-the-javascript-design)
-- [Measurements](#measurements)
+- [The verifier](#the-verifier)
 - [Native handlers](#native-handlers)
+- [Measurements](#measurements)
 - [Open work](#open-work)
 
 ## Where it runs
@@ -45,6 +46,9 @@ Code asks for the closure tree (`Code.reg`, `WASM_INTERP=tree`); the
 record holds one or the other (`compiled.reg`, or `compiled.body` and
 `epi`), and `exec.interpret` runs whichever it holds. Calls cross between
 the two forms, and between either and native code, in both directions.
+Register code runs by native threaded handlers on amd64 ([Native
+handlers](#native-handlers)), and by the Go table's loop ([The
+loop](#the-loop)) elsewhere and with `WASM_NONATIVE=1`.
 
 Every validated body compiles to register code: every instruction of
 WebAssembly 3.0 and the threads proposal, every value kind, any number of
@@ -462,12 +466,10 @@ Codes run the interpreter alone whatever `WASM_JIT` asks), and
   Wasm traps cannot be caught by wasm code and exceptions are rare, so the
   panic stays and the pc travels in the panic's value; the catching loop
   finds a region by the offset the frame already records.
-- **No verifier yet.** The JavaScript loop's trust is proved by a verifier
-  for every function; here the compiler is the only producer and the tests
-  and the spec check it. A verifier of the same rules (slots below the
-  frame's count, branches onto instructions, tables' entries, sites' and
-  records' slots) comes with the native handlers, which trust the code as
-  the Go handlers do.
+- **The verifier off by default.** The JavaScript engine verifies every
+  function as it is compiled; here the verifier runs in the engine's tests
+  and where `WASM_REG_VERIFY=1` asks ([The verifier](#the-verifier)),
+  about doubling the interpreter's compile time of a small body.
 - **The tick is the frame's.** JavaScript's back edges count the runtime's
   interrupt budget; here a frame's tick stands for the exec's poll and the
   frame's OSR budget together, so that the handler decrements one counter.
@@ -475,68 +477,147 @@ Codes run the interpreter alone whatever `WASM_JIT` asks), and
   static, so the ordinary code is already what asm.js's typed code is in
   the JavaScript engine: raw words in slots, operations of one type each.
 
+## The verifier
+
+The handlers, Go's and native, read slots and code without bounds checks,
+so what they take on trust is proved for a body (`regCode.verify`,
+reg_verify.go): every slot an instruction names is in the frame -- a
+v128's two, a reference among the reference slots, the scratch slots for
+an instruction behind a far prefix and the frame's for the prefix itself
+-- every branch, table entry, loop head and catch landing is an
+instruction's start, the words an instruction takes after it are there,
+every index into the code's sites, branch tables and GC records and into
+the module's globals (of the operation's kind), functions, memories,
+tables, segments and tags is in range, sites' and records' slots are in
+the frame, every operation and escaped operation has a handler, and the
+last instruction does not go on past the end. What each operation's
+fields and words are is a descriptor (`rd`): the generators write the
+numeric and SIMD operations' beside their handlers.
+
+It runs on every body as it is compiled in the engine's tests and where
+`WASM_REG_VERIFY=1` asks; the spec runs pass it in every JIT mode.
+Measured on the spec's 6,842 bodies, it takes the interpreter's compile
+time from 3.5 ms to 7.7 - 11 ms, about 0.6 us a body, which is why it is
+not on by default. `TestRegVerifierRejects` shows it refusing each kind of
+broken code it guards against.
+
+## Native handlers
+
+On amd64 register code runs by native threaded handlers
+(native_handlers_amd64.s): machine code for the hot operations, over the
+same instructions and frames, each handler ending in its own dispatch --
+the next word loaded, its handler's address from the native table, an
+indirect jump. There is no second interpreter: what the native code does
+not do, the exit stub does by calling the instruction's Go handler in
+place, so the Go table stays the whole semantics and every operation
+works natively from the start. Elsewhere, and with `WASM_NONATIVE=1` (or
+`SetRegNative` in a test), the Go table's loop runs it.
+
+**Generated, position-independent, one for every build.** The handlers are
+written with the JIT's amd64 assembler by the engine's own generator,
+internal/nativegen (nothing of internal/vm or its generator is imported),
+as one TEXT symbol of BYTE directives and the native table as DATA, every
+address the code needs given by the context: no JIT is needed at run
+time, and no tag. The generator reads the operations' values and the
+context's layout from internal/regdef, which the engine aliases and
+`TestNativeLayout` checks against its structures; `TestNativeGenerated`
+fails while the file is stale.
+
+**Pinned registers.** `RBX` the instruction's address, `R12` the frame's
+numeric slots, `R13` the native table, `R11` the frame's tick, `RDI` the
+context (`nativeCtx`, a frame's own: the code, the slots, the frame, the
+Go tables, the trampoline, memory 0 where it is unshared, the globals,
+the branch tables). `RAX` holds the instruction word; `RCX`, `RDX`, `RSI`
+and `R8` to `R10` are a handler's scratch. The code never moves SP, never
+writes `R14`, `RBP` or `X15`, never executes a call instruction, and is
+never a safe point.
+
+**The exit stub.** It stores the tick into the frame and calls the Go
+handler of the instruction at `RBX` -- or, for a branch back that spent
+the tick, its slow function -- through `wasmNativeCallH`
+(native_amd64.s), which writes Go's internal ABI by hand: the four
+arguments in `AX`, `BX`, `CX` and `DI`, the func value in `DX`, the
+goroutine in `R14`, `X15` zero, the arguments' spill room in its 40-byte
+frame, whose caller to the unwinder and the collector is the Go that
+entered the code. Back from Go it reloads the pinned registers and goes on
+at the pc Go answered, runs the slow function on `^pc`, or returns to Go
+once the frame has returned. A trap is an exit: the Go handler panics in
+Go, through the trampoline's frame. `TestNativeCallHConvention` checks
+each part of the convention and says which differs.
+
+**What is native.** Moves and constants (64-bit and v128 ones too),
+select, the numeric globals, `jmp`, `br_nz`, `br_z`, `br_table`, `ret` and
+`ret1`; every i32 and i64 operator of the first table -- arithmetic,
+bitwise, shifts and rotations with their immediate forms, divisions and
+remainders (a divisor of 0 or -1 left to Go), comparisons, every
+compare-and-branch, `eqz`, `clz`, `ctz`, the sign extensions, the wrap;
+and the 23 loads and stores of memory 0, an unshared one (a shared
+memory's size another thread may change, so its accesses are Go's; an
+access out of bounds is Go's, which traps). 182 of the first table's
+values. A branch back counts down the tick in `R11` and leaves to the slow
+function where it is spent, so the poll, OSR and preemption happen as in
+the Go loop; native code is not preemptible, and Go reaches it at the
+exits.
+
+**References and the collector.** No native handler stores a pointer:
+every operation that writes a reference slot or a reference global goes to
+its Go handler, whose stores have Go's write barrier, so native code does
+the same work whether the collector marks or not
+(`TestNativeStoresNoReference`). A handler that stores one natively will
+take the JavaScript engine's marking rule -- plainly while the collector
+does not mark, through a barrier routine of the engine's own while it
+does -- with its tests run both ways.
+
+**Correctness.** `TestNativeMatchesGoTable` runs every handled operation
+over its edge cases natively and on the Go table and compares results,
+traps and trap offsets, and fails on an exit the operation should not
+make; the spec and `TestJITDifferential` pass with the native handlers on.
+
 ## Measurements
 
 Interpreter only, wasmbench (`-engine interp`), best run in ms; Ryzen 9
 9950X3D2, Windows. The micro workloads: three fresh processes of three
 timed runs, two alternating rounds; the programs (Go-compiled wasm, their
-results checked): one process, one timed run.
+results checked): one process, two timed runs.
 
-| Micro | Tree | Register | Register, `regLoop` at 32 mod 64 |
+| Micro | Tree | Go table | Native |
 |---|---:|---:|---:|
-| fib | 209 - 211 | 201 - 202 | 198 - 199 |
-| loop | 229 - 232 | 178 - 180 | 154 - 156 |
-| i64 | 274 - 281 | 267 - 270 | 231 - 233 |
-| globals | 181 - 182 | 208 - 210 | 181 - 183 |
-| brtable | 240 - 242 | 177 - 178 | 161 - 162 |
-| bytes | 205 - 207 | 175 - 179 | 155 - 157 |
-| mandelbrot | 155 - 156 | 158 | 129 - 131 |
-| nbody | 105 | 104 | 98.6 - 99.8 |
+| fib | 208 | 220 - 221 | 238 |
+| loop | 221 | 179 | 66.8 - 67.4 |
+| i64 | 262 | 269 | 90.0 - 90.4 |
+| globals | 173 | 213 | 137 - 138 |
+| brtable | 235 - 237 | 178 | 111 |
+| bytes | 195 | 175 | 66.1 - 75.6 |
+| mandelbrot | 149 | 159 | 195 - 196 |
+| nbody | 103 - 104 | 103 - 104 | 114 - 115 |
 
-| Program | Tree | Register | Change |
+| Program | Tree | Go table | Native |
 |---|---:|---:|---:|
-| sha256 | 1,955 | 1,772 | -9% |
-| sort | 1,801 | 1,168 | -35% |
-| json | 956 | 597 | -38% |
-| regexp | 806 | 484 | -40% |
-| gzip | 478 | 325 | -32% |
-| interp | 494 | 312 | -37% |
+| sha256 | 1,956 | 1,751 | 799 |
+| sort | 1,784 | 1,177 | 735 |
+| json | 954 | 605 | 495 |
+| regexp | 812 | 486 | 324 |
+| gzip | 480 | 333 | 206 |
+| interp | 497 | 307 | 166 |
 
-The last column is the same code with `regLoop` 32 bytes later: Go aligns
-a function to 32 bytes, and `regLoop`'s 45-byte loop fits one 64-byte line
-where the function starts at 32 mod 64 and straddles two where it starts at
-0 mod 64, which is where this build put it. Its instructions are the same
-either way, and so is every handler's; a quarter of what a turn of a tight
-loop costs is that line. The native handlers end the question, since
-`regLoop` then runs only where they do not; until then, the placement is
-noise of up to 15% on the tightest loops. `globals` is a global's read, an
-operation and its write, three dispatches where the tree's statement was
-one closure reading the global in place; `fib` is mostly the call: the
-site's moves and `exec.run`.
-
-## Native handlers
-
-Stage 2 generates machine code for the first table's hot operations on
-amd64 and arm64, over the same instructions and frames, with a generator of
-the wasm engine's own (the engines stay apart: nothing of internal/vm or
-its nativegen is imported). Each native handler ends in its own dispatch
--- the next word loaded, its handler's address from the table, an indirect
-jump -- with the slots' base, the code's address, the table and the tick
-pinned in machine registers. An operation with no native handler, and
-every miss, exits to the Go handler through a stub that calls it in Go's
-convention and goes on at the pc it returns, so the Go table stays the
-whole semantics. A trap is an exit too: the stub calls the Go handler,
-which panics in Go. The escapes' tables get native entries where an
-operation earns one. Since the numeric handlers are leaves of one load,
-one operation and one store, the native form removes almost all that is
-left of an instruction's cost: the return to the loop and the indirect
-call.
+The integer kernels run 1.5 to 3 times as fast natively as on the Go
+table, and the programs 1.2 to 2.2 times. What is slower natively is what
+still leaves to Go on every instruction: mandelbrot's and nbody's floats,
+and fib's calls, each an exit and a native entry of the callee's frame;
+an exit costs more than a dispatch of the Go table's loop. The Go table's
+own figures move with where the linker puts `regLoop`: its 45-byte loop
+fits one 64-byte line where the function starts at 32 mod 64 and
+straddles two at 0 mod 64, up to 15% on the tightest loops; native code
+does not run that loop.
 
 ## Open work
 
-1. A verifier of register code, before native handlers trust it.
-2. The native handlers (stage 2), then the closure tree's deletion with
-   `WASM_INTERP`.
+1. Native handlers for the float operators, the calls (a callee entered
+   natively from the caller's code, without a return to Go), the reference
+   moves under the marking rule, then arm64's handlers; then the closure
+   tree's deletion with `WASM_INTERP`.
+2. Whether the verifier runs always, once what it costs a large program's
+   compile is measured.
 3. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i
