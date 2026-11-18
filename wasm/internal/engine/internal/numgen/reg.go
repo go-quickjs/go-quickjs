@@ -254,7 +254,20 @@ func regMemOp(op opcode.Opcode) (rop regOp, store, ok bool) {
 	switch op {
 `)
 	b.Write(mem.Bytes())
-	b.WriteString("}\nreturn 0, false, false\n}\n\nfunc init() {\n")
+	b.WriteString("}\nreturn 0, false, false\n}\n\n")
+	// The loads and stores of any memory at any address, by opcode.
+	b.WriteString("// regLoadAny returns the word load op reads from memory m at ea, trapping as\n// the instruction at offset at.\n")
+	b.WriteString("func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint32) uint64 {\nswitch op {\n")
+	for _, l := range loads {
+		fmt.Fprintf(b, "case opcode.%s:\nb := m.span(ea, %d, at)\nreturn %s\n", l.name, l.width, regWrite(l.t, l.expr))
+	}
+	b.WriteString("}\npanic(\"wasm: not a load\")\n}\n\n")
+	b.WriteString("// regStoreAny stores word w as store op does into memory m at ea, trapping\n// as the instruction at offset at.\n")
+	b.WriteString("func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint32, w uint64) {\nswitch op {\n")
+	for _, s := range stores {
+		fmt.Fprintf(b, "case opcode.%s:\nv := %s\nb := m.span(ea, %d, at)\n%s\n", s.name, wordRead(s.t, "w"), s.width, s.expr)
+	}
+	b.WriteString("default:\npanic(\"wasm: not a store\")\n}\n}\n\nfunc init() {\n")
 	b.Write(g.init.Bytes())
 	b.WriteString("}\n\nvar _ = bits.Len\nvar _ = binary.LittleEndian\nvar _ module.ValueType\n")
 	writeFile(path, b.Bytes())
@@ -263,3 +276,16 @@ func regMemOp(op opcode.Opcode) (rop regOp, store, ok bool) {
 // firstReserved is the number of the first table's values the hand-written
 // operations take (regNumFirst).
 const firstReserved = 24
+
+// wordRead returns the expression reading word e as type t.
+func wordRead(t typ, e string) string {
+	switch t.name {
+	case "I32":
+		return "uint32(" + e + ")"
+	case "F32":
+		return "math.Float32frombits(uint32(" + e + "))"
+	case "F64":
+		return "math.Float64frombits(" + e + ")"
+	}
+	return e
+}

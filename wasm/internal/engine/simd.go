@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-//go:generate go run ./internal/simdgen ops_simd_gen.go
+//go:generate go run ./internal/simdgen ops_simd_gen.go reg_simd_gen.go
 
 // The SIMD operators' lanes. A vector's lanes run from the low bytes of Lo
 // to the high bytes of Hi; an operator unpacks its operands into arrays of

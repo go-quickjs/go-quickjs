@@ -517,3 +517,106 @@ func TestRegRefs(t *testing.T) {
 		t.Fatalf("asnn(null) = %v, want a null dereference", err)
 	}
 }
+
+// regCall is a call of an export with its arguments.
+type regCall struct {
+	name string
+	args []Val
+}
+
+// regMatchesTree runs calls on the module of src compiled to register code
+// and to the closure tree, and fails where a result or an error differs,
+// or where a called function runs the tree under register code.
+func regMatchesTree(t *testing.T, src string, calls []regCall) {
+	t.Helper()
+	reg := instantiateMode(t, src, true)
+	tree := instantiateMode(t, src, false)
+	for _, c := range calls {
+		re, _ := reg.Export(c.name)
+		te, _ := tree.Export(c.name)
+		got, gerr := Invoke(context.Background(), re.Func, c.args)
+		want, werr := Invoke(context.Background(), te.Func, c.args)
+		if regOf(reg, c.name) == nil {
+			t.Errorf("%s runs the closure tree", c.name)
+		}
+		if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
+			t.Errorf("%s%v: error %v, the tree's %v", c.name, c.args, gerr, werr)
+			continue
+		}
+		var gt, wt *Trap
+		if errors.As(gerr, &gt) && errors.As(werr, &wt) && (len(gt.Frames) == 0) == (len(wt.Frames) == 0) && len(gt.Frames) > 0 && gt.Frames[0].Offset != wt.Frames[0].Offset {
+			t.Errorf("%s%v: trap at %#x, the tree's at %#x", c.name, c.args, gt.Frames[0].Offset, wt.Frames[0].Offset)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("%s%v = %v, the tree's %v", c.name, c.args, got, want)
+				break
+			}
+		}
+	}
+}
+
+// TestRegMemories checks the generic accesses: a second memory, an i64
+// memory, offsets past 16 bits, and the bulk operations.
+func TestRegMemories(t *testing.T) {
+	regMatchesTree(t, `(module
+	  (memory $a 1) (memory $b i64 2) (memory $c 1)
+	  (data $d (memory $c) (i32.const 0) "hello")
+	  (func (export "multi") (param i32) (result i64)
+	    (i32.store $c offset=70000 (i32.const 0) (local.get 0))
+	    (i64.store $b offset=65536 (i64.const 8) (i64.extend_i32_u (local.get 0)))
+	    (i64.add (i64.load32_u $c offset=70000 (i32.const 0)) (i64.load $b (i64.const 65544))))
+	  (func (export "big") (param i32) (result i32) (i32.load8_u offset=65537 (local.get 0)))
+	  (func (export "over") (param i64) (result i32) (i32.load $b offset=8 (local.get 0)))
+	  (func (export "sizes") (result i64)
+	    (drop (memory.grow $c (i32.const 1)))
+	    (i64.add (i64.add (memory.size $b) (memory.grow $b (i64.const 1))) (i64.extend_i32_u (memory.size $c))))
+	  (func (export "bulk") (param i32) (result i32)
+	    (memory.init $c $d (i32.const 100) (i32.const 1) (i32.const 4))
+	    (memory.copy $a $c (i32.const 10) (i32.const 100) (i32.const 4))
+	    (memory.fill $a (i32.const 12) (i32.const 0x41) (local.get 0))
+	    (data.drop $d)
+	    (i32.load $a (i32.const 10))))`, []regCall{
+		{"multi", []Val{{N: 7}}},
+		{"big", []Val{{N: 0}}},
+		{"big", []Val{{N: 0xffff}}},
+		{"over", []Val{{N: math.MaxUint64 - 4}}},
+		{"over", []Val{{N: 2*65536 - 4}}},
+		{"sizes", nil},
+		{"bulk", []Val{{N: 1}}},
+		{"bulk", []Val{{N: 1}}},
+		{"bulk", []Val{{N: 0x10000}}},
+	})
+}
+
+// TestRegSIMD checks SIMD operations of each form against the tree's.
+func TestRegSIMD(t *testing.T) {
+	regMatchesTree(t, `(module
+	  (memory 1)
+	  (func (export "ops") (param i32 i64) (result i64)
+	    (local v128 v128)
+	    (local.set 2 (i32x4.splat (local.get 0)))
+	    (local.set 3 (v128.const i8x16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))
+	    (local.set 2 (i8x16.add (local.get 2) (local.get 3)))
+	    (local.set 2 (i16x8.shl (local.get 2) (local.get 0)))
+	    (local.set 2 (v128.bitselect (local.get 2) (local.get 3) (v128.const i64x2 -1 0)))
+	    (local.set 2 (i8x16.shuffle 0 17 2 19 4 21 6 23 8 25 10 27 12 29 14 31 (local.get 2) (local.get 3)))
+	    (local.set 2 (i64x2.replace_lane 1 (local.get 2) (local.get 1)))
+	    (local.set 2 (f32x4.add (local.get 2) (f32x4.splat (f32.const 1.5))))
+	    (i64.add (i64x2.extract_lane 1 (local.get 2))
+	      (i64.extend_i32_s (i32.add (i8x16.extract_lane_s 3 (local.get 2))
+	        (i32.add (i8x16.bitmask (local.get 2)) (v128.any_true (local.get 3)))))))
+	  (func (export "mem") (param i32) (result i64)
+	    (v128.store offset=16 (local.get 0) (v128.const i32x4 1 -2 3 -4))
+	    (v128.store8_lane 5 (i32.const 100) (v128.load offset=16 (local.get 0)))
+	    (i64.add (i64x2.extract_lane 0 (v128.load32x2_s offset=20 (local.get 0)))
+	      (i64x2.extract_lane 1 (v128.load16_lane 7 (i32.const 100) (v128.load32_splat offset=16 (local.get 0))))))
+	  (func (export "relaxed") (param f32) (result f32)
+	    (f32x4.extract_lane 2 (f32x4.relaxed_madd (f32x4.splat (local.get 0)) (f32x4.splat (local.get 0)) (f32x4.splat (f32.const 2))))))`, []regCall{
+		{"ops", []Val{{N: 3}, {N: 1 << 40}}},
+		{"ops", []Val{{N: 0xffffffff}, {N: 5}}},
+		{"mem", []Val{{N: 0}}},
+		{"mem", []Val{{N: 65530}}},
+		{"relaxed", []Val{{N: uint64(math.Float32bits(1.25))}}},
+	})
+}

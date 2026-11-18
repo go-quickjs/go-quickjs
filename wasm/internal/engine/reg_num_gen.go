@@ -2085,6 +2085,101 @@ func regMemOp(op opcode.Opcode) (rop regOp, store, ok bool) {
 	return 0, false, false
 }
 
+// regLoadAny returns the word load op reads from memory m at ea, trapping as
+// the instruction at offset at.
+func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint32) uint64 {
+	switch op {
+	case opcode.I32LoadMem:
+		b := m.span(ea, 4, at)
+		return uint64(binary.LittleEndian.Uint32(b))
+	case opcode.I64LoadMem:
+		b := m.span(ea, 8, at)
+		return binary.LittleEndian.Uint64(b)
+	case opcode.F32LoadMem:
+		b := m.span(ea, 4, at)
+		return uint64(math.Float32bits(math.Float32frombits(binary.LittleEndian.Uint32(b))))
+	case opcode.F64LoadMem:
+		b := m.span(ea, 8, at)
+		return math.Float64bits(math.Float64frombits(binary.LittleEndian.Uint64(b)))
+	case opcode.I32LoadMem8S:
+		b := m.span(ea, 1, at)
+		return uint64(uint32(int32(int8(b[0]))))
+	case opcode.I32LoadMem8U:
+		b := m.span(ea, 1, at)
+		return uint64(uint32(b[0]))
+	case opcode.I32LoadMem16S:
+		b := m.span(ea, 2, at)
+		return uint64(uint32(int32(int16(binary.LittleEndian.Uint16(b)))))
+	case opcode.I32LoadMem16U:
+		b := m.span(ea, 2, at)
+		return uint64(uint32(binary.LittleEndian.Uint16(b)))
+	case opcode.I64LoadMem8S:
+		b := m.span(ea, 1, at)
+		return uint64(int64(int8(b[0])))
+	case opcode.I64LoadMem8U:
+		b := m.span(ea, 1, at)
+		return uint64(b[0])
+	case opcode.I64LoadMem16S:
+		b := m.span(ea, 2, at)
+		return uint64(int64(int16(binary.LittleEndian.Uint16(b))))
+	case opcode.I64LoadMem16U:
+		b := m.span(ea, 2, at)
+		return uint64(binary.LittleEndian.Uint16(b))
+	case opcode.I64LoadMem32S:
+		b := m.span(ea, 4, at)
+		return uint64(int64(int32(binary.LittleEndian.Uint32(b))))
+	case opcode.I64LoadMem32U:
+		b := m.span(ea, 4, at)
+		return uint64(binary.LittleEndian.Uint32(b))
+	}
+	panic("wasm: not a load")
+}
+
+// regStoreAny stores word w as store op does into memory m at ea, trapping
+// as the instruction at offset at.
+func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint32, w uint64) {
+	switch op {
+	case opcode.I32StoreMem:
+		v := uint32(w)
+		b := m.span(ea, 4, at)
+		binary.LittleEndian.PutUint32(b, v)
+	case opcode.I64StoreMem:
+		v := w
+		b := m.span(ea, 8, at)
+		binary.LittleEndian.PutUint64(b, v)
+	case opcode.F32StoreMem:
+		v := math.Float32frombits(uint32(w))
+		b := m.span(ea, 4, at)
+		binary.LittleEndian.PutUint32(b, math.Float32bits(v))
+	case opcode.F64StoreMem:
+		v := math.Float64frombits(w)
+		b := m.span(ea, 8, at)
+		binary.LittleEndian.PutUint64(b, math.Float64bits(v))
+	case opcode.I32StoreMem8:
+		v := uint32(w)
+		b := m.span(ea, 1, at)
+		b[0] = byte(v)
+	case opcode.I32StoreMem16:
+		v := uint32(w)
+		b := m.span(ea, 2, at)
+		binary.LittleEndian.PutUint16(b, uint16(v))
+	case opcode.I64StoreMem8:
+		v := w
+		b := m.span(ea, 1, at)
+		b[0] = byte(v)
+	case opcode.I64StoreMem16:
+		v := w
+		b := m.span(ea, 2, at)
+		binary.LittleEndian.PutUint16(b, uint16(v))
+	case opcode.I64StoreMem32:
+		v := w
+		b := m.span(ea, 4, at)
+		binary.LittleEndian.PutUint32(b, uint32(v))
+	default:
+		panic("wasm: not a store")
+	}
+}
+
 func init() {
 	regTable[rI32Add] = rhI32Add
 	regTable[rI32AddI] = rhI32AddI

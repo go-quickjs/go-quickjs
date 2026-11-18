@@ -1,36 +1,18 @@
 package engine
 
 import (
-	"bytes"
 	"math/rand"
-	"os"
-	osexec "os/exec"
-	"path/filepath"
 	"testing"
 )
 
-// TestSIMDGenerated fails while ops_simd_gen.go differs from what
-// internal/simdgen writes; go generate ./wasm/internal/engine rewrites it.
+// TestSIMDGenerated fails while ops_simd_gen.go or reg_simd_gen.go differs
+// from what internal/simdgen writes; go generate ./wasm/internal/engine
+// rewrites them.
 func TestSIMDGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	out := filepath.Join(t.TempDir(), "ops_simd_gen.go")
-	cmd := osexec.Command("go", "run", "./internal/simdgen", out)
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("simdgen: %v\n%s", err, b)
-	}
-	want, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile("ops_simd_gen.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n")), want) {
-		t.Fatal("ops_simd_gen.go is out of date: run go generate ./wasm/internal/engine")
-	}
+	checkGenerated(t, "./internal/simdgen", "ops_simd_gen.go", "reg_simd_gen.go")
 }
 
 // randV128 returns a vector whose lanes are often at the edges of their

@@ -274,7 +274,8 @@ Do not manually edit generated files or their binary companions:
   code's operations and their handlers (wasm/internal/engine/README.md),
   both written by `wasm/internal/engine/internal/numgen`; and
   `wasm/internal/engine/ops_simd_gen.go`, the SIMD operators without
-  immediates, written by `internal/simdgen` beside it. After changing either
+  immediates, and `wasm/internal/engine/reg_simd_gen.go`, their register
+  code handlers, both written by `internal/simdgen` beside it. After changing either
   generator, run `go generate ./wasm/internal/engine`; `TestNumericGenerated`
   and `TestSIMDGenerated` (skipped under `-short`) fail while a file is out
   of date.
