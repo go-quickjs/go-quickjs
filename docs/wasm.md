@@ -1,7 +1,7 @@
 # WebAssembly
 
 go-quickjs has a WebAssembly engine of its own, in pure Go: a decoder and
-validator, a closure-tree interpreter, and an optional JIT for amd64 and
+validator, a register interpreter, and an optional JIT for amd64 and
 arm64: a baseline tier and an optimizing one above it. It implements WebAssembly 3.0 and the threads proposal, and it
 reports invalid modules, failed links and traps with V8's messages, word for
 word.
@@ -445,9 +445,12 @@ The match is tested against Node, not assumed. With
 
 ## The JIT
 
-The interpreter compiles a function body, on its first call, into trees of Go
-closures: each expression a tree of typed nodes, each statement returning
-whether to go on, branch or return. The baseline JIT (`wasm/internal/jit`)
+The interpreter compiles a function body, on its first call, to register
+code: fixed-width instructions over the frame's slots, run by a loop over a
+table of Go handlers (`wasm/internal/engine/README.md`). `WASM_INTERP=tree`
+compiles bodies to the closure tree that interpreted them before, kept to
+compare the two until native handlers run register code; it goes once they
+do. The baseline JIT (`wasm/internal/jit`)
 compiles a function to native code in one pass over its validated body, with
 a register cache of the operand stack over the interpreter's own frames, so a
 call crosses between the tiers in either direction. Where the JIT runs, it
@@ -495,7 +498,7 @@ linux/amd64, windows/amd64, darwin/arm64 and linux/arm64. A runtime made `WithDe
 interpreter.
 
 A function is compiled to native code at its first call
-(`engine.DefaultJITThreshold`, 0), without the interpreter's closures: the
+(`engine.DefaultJITThreshold`, 0), without the interpreter's compile: the
 interpreter compiles the body only of a function the JIT refuses, or of
 one a call runs in the interpreter for a test (`WASM_JIT=eager`, `osr`). A
 Code given a threshold above 0 (`EnableJIT(n)`, `WASM_JIT=N`) runs a
@@ -630,6 +633,7 @@ The environment names them:
 | `WASM_SPEC_DIR` | a WebAssembly/spec checkout: `test/core`, `test/legacy` and `test/js-api` |
 | `WASM_THREADS_DIR` | a WebAssembly/threads checkout, for `test/core/threads` |
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
+| `WASM_INTERP` | `tree` compiles function bodies to the closure tree rather than register code, to compare the two |
 | `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` at its first call, the interpreter compiling no body it does not run; a number after that many calls in the interpreter |
 | `WASM_JIT_OSR` | the back edges a call runs before its loop enters native code, or `off` |
 | `WASM_JIT_OPT` | the calls of a function's baseline code before the optimizing tier compiles it: a number, `on` for the default, `eager` at its first compile, or `off` |

@@ -5,7 +5,7 @@ on amd64 (linux and windows) and arm64 (darwin and linux) and used only for
 code that asks for it (`engine.Code.EnableJIT`, or `WASM_JIT` in tests),
 where the JavaScript JIT is built too (`internal/jit.Supported`). Elsewhere -- without the tag, on 386, on other systems -- the engine's
 `jit_off.go` makes every hook a constant or an empty type, and the
-closure-tree interpreter (`wasm/internal/engine`) runs everything.
+interpreter (`wasm/internal/engine`, register code) runs everything.
 
 The JavaScript and WebAssembly JITs share the lowest layer and nothing else:
 the instruction encoders (`internal/jit/asm/amd64` and `asm/arm64`, checked

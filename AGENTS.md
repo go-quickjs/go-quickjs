@@ -267,7 +267,7 @@ Do not manually edit generated files or their binary companions:
   `go generate ./internal/vm` runs it last, after the generators above,
   since it measures what they write; `TestLayoutLock` fails while an anchor
   is off its target.
-- `wasm/internal/engine/ops_num_gen.go`, the wasm interpreter's numeric
+- `wasm/internal/engine/ops_num_gen.go`, the closure tree's numeric
   operators, a node for each pairing of a tree, a slot and a constant, and
   the loads and stores of memory 0 at an i32 address (`memFast`), and
   `wasm/internal/engine/reg_num_gen.go`, the same operators as register
@@ -402,6 +402,12 @@ design, which a change to that design updates in the same commit.
   results bit for bit where the specification fixes them, on each
   architecture: `TestJITFloatBits` holds every float operation to it, and
   `TestJITDifferential` every spec module's exports.
+- The interpreter runs register code (wasm/internal/engine/README.md):
+  every validated body compiles to it, and `ReadInterpStats`, which the spec
+  test logs, counts any left to the closure tree, which a change must keep
+  at none. `WASM_INTERP=tree` compiles bodies to the closure tree instead,
+  kept to compare the two until native handlers run register code; after a
+  change to the interpreter, run the spec both ways.
 - Native code keeps references only in Go memory the collector sees --
   frames' reference slots, tables, globals -- never in a register across an
   exit, and stores every pointer word through the write barrier's routine

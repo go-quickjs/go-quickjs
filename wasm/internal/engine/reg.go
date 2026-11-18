@@ -648,9 +648,9 @@ func init() {
 }
 
 // regDefault says whether new Codes compile function bodies to register
-// code, where the register compiler takes them: WASM_INTERP=reg says so,
-// and WASM_INTERP=tree or nothing leaves every body to the closure tree.
-var regDefault = os.Getenv("WASM_INTERP") == "reg"
+// code: they do unless WASM_INTERP=tree asks for the closure tree, kept to
+// compare the two until the native handlers land.
+var regDefault = os.Getenv("WASM_INTERP") != "tree"
 
 // InterpStats counts the function bodies the interpreter compiled to
 // register code and those left to the closure tree, by the reason the
