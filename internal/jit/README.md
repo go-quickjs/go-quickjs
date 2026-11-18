@@ -1708,6 +1708,24 @@ index, which an element read by it finds again (mir's `forInIndex`,
 or, done, the uninitialized value native code branches on. A step's iterator
 is closed however the loop is left, as the interpreter closes it.
 
+**A for...in's start** over an ordinary object whose keys are its layout's
+is native code's too (mir's `forInStart`), as V8's `ForInPrepare` takes the
+receiver's map's enum cache: the object of class Object with no elements,
+its prototype its layout's, its layout shared and its keys made already --
+kept on the layout's side by the first loop that walked an object of it
+(the VM's `shapeKeys`, `abi.Encoding`'s `SideForIn`) -- and its prototypes
+none, or a chain the realm found no enumerable key on, its validity cell
+valid (the realm's `forInChains`), each prototype with no elements, which
+the cell does not see. The cursor is the runtime's last (`forInLast`), done,
+taken again as the VM's `newForInObject` takes it: not done, at its first
+key, walking the object's keys, its object and its layout, written to the
+call's keep cell; its pointer words go through Go's write barrier while the
+collector marks. Anything else -- another object, a cursor still in use, a
+layout no loop has walked -- is the call of Go it had been
+(`jitForInPlain`), which makes the keys a layout keeps. The start had been
+that call at every loop, a native call's round trip of Go: for_in_break
+took 18 ns a loop with the JIT, 15.5 without, 4.6 with it now.
+
 **Iterators written in script.** Register code's step whose cursor has met
 an iterator whose `next` is written in script calls that `next` natively
 (ssa's `userStep`), as any native call of a function is made: the step's
@@ -3143,8 +3161,10 @@ too, as do the pointer words of the calls of Go native code makes itself,
 made alike whether the collector marks or not (mir's `byMarking`): an object
 spread by layout and a literal's field along its shape's transition -- the
 values, the shape, the result -- an array spread and an element appended --
-the elements, the result -- and an array's length written shorter, whose
-elements past it are cleared so, which shades what they held.
+the elements, the result -- an array's length written shorter, whose
+elements past it are cleared so, which shades what they held, and a
+for...in's cursor taken again -- the keys, their atoms, the object, its
+layout, the cursor to its keep cell (mir's `forInStart`).
 
 **A loop's step** copies a pointer into a keep cell with no barrier, by that
 same rule read the other way: an array's element, a Map entry's, a

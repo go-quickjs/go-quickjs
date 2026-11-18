@@ -5566,6 +5566,17 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		c.setG(v, a64A)
 		return
 	}
+	if forInStarts(site, len(v.Args), c.enc) {
+		// As amd64's: a for...in's cursor taken from the runtime's last.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.forInStart(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if site.Step && c.enc.IterState != 0 {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.iterStep(v, slow)
@@ -6694,6 +6705,142 @@ func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) 
 	c.movImm(a64A, 0)
 	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
 	c.a.B(done)
+}
+
+// forInStart is amd64's: a for...in's cursor of its operand taken from the
+// runtime's last, done, walking the keys of its object's layout, or slow.
+// It uses A, B, C and D, and F0.
+func (c *a64Compiler) forInStart(v *ssa.Value, slow, join arm64.Label) {
+	x := v.Args[0]
+	in := c.enc.IterState + c.enc.ForInState
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	w := c.gpr(x, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	c.a.BCond(arm64.NE, slow)
+	c.pointerWord(x, w)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64C, int64(c.enc.ClassObject), false)
+	c.a.BCond(arm64.NE, slow)
+	c.forInPlain(a64B, slow)
+	// As amd64's: the keys of its layout, a shared one's.
+	c.a.Load(a64C, a64B, c.enc.ObjectShape)
+	c.a.Cbz(a64C, slow, true)
+	c.a.LoadU8(a64A, a64C, c.enc.ShapeUnique)
+	c.a.Cbnz(a64A, slow, false)
+	c.a.Load(a64A, a64C, c.enc.ShapeSide)
+	c.a.Cbz(a64A, slow, true)
+	c.a.Load(a64D, a64A, c.enc.SideForIn)
+	c.a.Cbz(a64D, slow, true)
+	c.a.FMovToF(a64F0, a64B)
+	// As amd64's: its prototypes, none or a chain the realm found no
+	// enumerable key on, each with no elements.
+	protos, walk := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(a64A, a64C, c.enc.ShapeProto)
+	c.a.Cbz(a64A, protos, true)
+	c.a.Load(a64B, a64Ctx, abi.OffHost)
+	c.a.Load(a64B, a64B, c.enc.HostRealm)
+	for i := range int32(2) {
+		next := c.a.NewLabel()
+		at := c.enc.ForInChains + i*c.enc.ChainSize
+		c.a.Load(a64C, a64B, at+c.enc.ChainProto)
+		c.a.Cmp(a64A, a64C, true)
+		c.a.BCond(arm64.NE, next)
+		c.a.Load(a64C, a64B, at+c.enc.ChainCell)
+		c.a.LoadU8(a64C, a64C, c.enc.CellValid)
+		c.a.Cbnz(a64C, walk, false)
+		c.a.Bind(next)
+	}
+	c.a.B(slow)
+	c.a.Bind(walk)
+	c.forInPlain(a64A, slow)
+	c.a.Load(a64C, a64A, c.enc.ObjectShape)
+	c.a.Cbz(a64C, protos, true)
+	c.a.Load(a64A, a64C, c.enc.ShapeProto)
+	c.a.Cbnz(a64A, walk, true)
+	c.a.Bind(protos)
+	// As amd64's: the runtime's last cursor, done, used again.
+	c.a.Load(a64A, a64Ctx, abi.OffHost)
+	c.a.Load(a64A, a64A, c.enc.HostForInLast)
+	c.a.Cbz(a64A, slow, true)
+	c.a.LoadU8(a64C, a64A, c.enc.IterState+c.enc.IterDone)
+	c.a.Cbz(a64C, slow, false)
+	c.a.Store8(a64A, c.enc.IterState+c.enc.IterDone, arm64.ZR)
+	c.a.Store(a64A, c.enc.IterState+c.enc.IterIdx, arm64.ZR)
+	c.a.Store(a64A, in+c.enc.ForInIndexKeys, arm64.ZR)
+	for _, f := range [][2]int32{{c.enc.EnumKeys, c.enc.ForInKeys}, {c.enc.EnumAtoms, c.enc.ForInAtoms}} {
+		for _, word := range []int32{8, 16} {
+			c.a.Load(a64C, a64D, f[0]+word)
+			c.a.Store(a64A, in+f[1]+word, a64C)
+		}
+	}
+	c.movImm(a64C, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+	marked := c.a.NewLabel()
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, marked, false)
+	c.a.Load(a64C, a64D, c.enc.EnumKeys)
+	c.a.Store(a64A, in+c.enc.ForInKeys, a64C)
+	c.a.Load(a64C, a64D, c.enc.EnumAtoms)
+	c.a.Store(a64A, in+c.enc.ForInAtoms, a64C)
+	c.a.FMovFromF(a64B, a64F0)
+	c.a.Store(a64A, in+c.enc.ForInObj, a64B)
+	c.a.Load(a64C, a64B, c.enc.ObjectShape)
+	c.a.Store(a64A, in+c.enc.ForInShape, a64C)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+	c.a.B(join)
+	c.cold = append(c.cold, func() {
+		// As amd64's: each pointer word through storeRef, what it stores
+		// found again.
+		c.a.Bind(marked)
+		cursor := func(field int32) {
+			c.a.Load(a64A, a64Ctx, abi.OffHost)
+			c.a.Load(a64A, a64A, c.enc.HostForInLast)
+			c.a.AddImm(a64A, a64A, int64(in+field), true)
+		}
+		object := func() {
+			c.pointerWord(x, c.gpr(x, a64A))
+		}
+		object()
+		c.a.MovRR(a64C, a64B)
+		cursor(c.enc.ForInObj)
+		c.refStore()
+		object()
+		c.a.Load(a64C, a64B, c.enc.ObjectShape)
+		cursor(c.enc.ForInShape)
+		c.refStore()
+		for _, f := range [][2]int32{{c.enc.EnumKeys, c.enc.ForInKeys}, {c.enc.EnumAtoms, c.enc.ForInAtoms}} {
+			object()
+			c.a.Load(a64C, a64B, c.enc.ObjectShape)
+			c.a.Load(a64C, a64C, c.enc.ShapeSide)
+			c.a.Load(a64C, a64C, c.enc.SideForIn)
+			c.a.Load(a64C, a64C, f[0])
+			cursor(f[1])
+			c.refStore()
+		}
+		c.a.Load(a64C, a64Ctx, abi.OffHost)
+		c.a.Load(a64C, a64C, c.enc.HostForInLast)
+		c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
+		c.refStore()
+		c.a.B(join)
+	})
+}
+
+// forInPlain is amd64's: slow unless the object at o has no elements and
+// its prototype is its layout's. It uses C.
+func (c *a64Compiler) forInPlain(o arm64.Reg, slow arm64.Label) {
+	none := c.a.NewLabel()
+	c.a.LoadU8(a64C, o, c.enc.ObjectFlags+1)
+	c.a.TstImm(a64C, uint64(c.enc.FlagPoly), false)
+	c.a.BCond(arm64.NE, slow)
+	c.a.LoadU8(a64C, o, c.enc.ObjectFlags)
+	c.a.TstImm(a64C, uint64(c.enc.FlagExt), false)
+	c.a.BCond(arm64.EQ, none)
+	c.a.Load(a64C, o, c.enc.ObjectExt+c.enc.ExtElems+8)
+	c.a.Cbnz(a64C, slow, true)
+	c.a.Bind(none)
 }
 
 // forInIndex is amd64's: forInStep's step over an array's indices, the

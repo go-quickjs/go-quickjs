@@ -1126,6 +1126,7 @@ var (
 	OffGoSite   = int32(unsafe.Offsetof(Context{}.GoSite))
 	OffGoArgs   = int32(unsafe.Offsetof(Context{}.GoArgs))
 
+	OffHost      = int32(unsafe.Offsetof(Context{}.Host))
 	OffShade     = int32(unsafe.Offsetof(Context{}.Shade))
 	OffCallState = int32(unsafe.Offsetof(Context{}.CallState))
 	OffGoState   = int32(unsafe.Offsetof(Context{}.GoState))
@@ -1336,6 +1337,23 @@ type Encoding struct {
 	IterForIn                                   int32
 	ForInState, ForInKeys, ForInObj, ForInShape int32
 	ForInIndexKeys                              int32
+	// A for...in's start (ssa.CallSite's ForIn) finds the keys it hands
+	// out where the VM keeps them for an ordinary object's layout, as V8's
+	// enum cache is its map's: the layout's side at ShapeSide, nil on most,
+	// a shared layout's (the byte at ShapeUnique 0), and on it, at
+	// SideForIn, the keys, two slices, values at EnumKeys and atoms at
+	// EnumAtoms, nil until a loop has asked for them. The atoms' slice of a
+	// cursor's walk is at ForInAtoms. A prototype chain a loop found no
+	// enumerable key on is one of the realm's (HostRealm, the runtime's
+	// pointer to it, abi.Context's Host the runtime) ForInChains entries,
+	// ChainSize bytes each: the chain's first object at ChainProto and its
+	// validity cell at ChainCell, valid while its byte at CellValid is not
+	// 0. The runtime's last for...in cursor, which the next loop takes once
+	// it is done, is at HostForInLast (0 where native code makes none).
+	ShapeUnique, ShapeSide, SideForIn, EnumKeys, EnumAtoms int32
+	ForInAtoms, HostForInLast, HostRealm                   int32
+	ForInChains, ChainSize, ChainProto, ChainCell          int32
+	CellValid                                              int32
 	// A for...of over a Map's or a Set's iterator has the iterator at
 	// IterIter and its next at IterNext, values both; the iterator's data's
 	// type word is then MapIterData (0 where native code does not step

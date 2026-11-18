@@ -15,7 +15,9 @@ package vm
 // jump out. So nothing reads the cursor again, whenever the next loop
 // takes it.
 // Every loop's start comes through here, the interpreter's and native code's by
-// jitForInPlain, so native code needs no release of its own.
+// jitForInPlain, or takes the last cursor as newForInObject does, native
+// code's own start (mir's forInStart), so native code needs no release of
+// its own.
 //
 // What that rests on. No script reaches a cursor, so its loop is its only
 // reader, and a loop that is running is not done: a nested loop, a generator

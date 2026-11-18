@@ -4276,6 +4276,15 @@ func closes(site *ssa.CallSite, x int32) bool {
 }
 
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
+// forInStarts reports whether a call of Go of argc operands, of site, is a
+// for...in's start native code makes where it can (forInStart): where the
+// encoding says where the VM keeps a layout's keys, the realm's chains and
+// the runtime's last cursor.
+func forInStarts(site *ssa.CallSite, argc int, enc abi.Encoding) bool {
+	return site.ForIn && argc == 1 && enc.ValueSize == 16 && enc.WriteBarrier != 0 && enc.IterState != 0 && enc.ForInState != 0 &&
+		enc.HostForInLast != 0 && enc.SideForIn != 0
+}
+
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
 	if site.Go == ssa.GoArith || site.Go == ssa.GoAdd || site.Go == ssa.GoAppend {

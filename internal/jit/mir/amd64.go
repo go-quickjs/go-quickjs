@@ -2868,6 +2868,19 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		c.setG(v, scratchA)
 		return
 	}
+	if forInStarts(site, len(v.Args), c.enc) {
+		// A for...in's cursor native code takes from the runtime's last,
+		// of the keys of its object's layout (forInStart); any other Go
+		// makes.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.forInStart(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if site.Step && c.enc.IterState != 0 {
 		// A loop's step over an array native code makes itself; any other
 		// Go makes.
@@ -3957,6 +3970,173 @@ func (c *compiler) forInStep(v *ssa.Value, notForIn, slow, done amd64.Label) {
 	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchA)
 	c.a.StoreImm(regCtx, keep+c.enc.RefOffset, 0)
 	c.a.Jmp(done)
+}
+
+// forInStart makes call v, a for...in's cursor of its operand (ssa.CallSite's
+// ForIn), as the VM's startForIn makes it for an ordinary object whose
+// keys are its layout's own, as V8's ForInPrepare takes the receiver's
+// map's enum cache: an object of class Object with no elements, its
+// prototype its layout's, its layout shared and its keys made already
+// (abi.Encoding's SideForIn), and its prototypes -- none, or a chain the
+// realm found no enumerable key on, its validity cell valid
+// (ForInChains), each of them with no elements, which the cell does not
+// see -- whose cursor is the runtime's last, done (HostForInLast), used
+// again as newForInObject uses it: not done, at its first key, walking
+// the object's keys, the cursor to the call's keep cell. Any other goes
+// to slow, where Go makes it, without a frame where it can
+// (jitForInPlain), which also makes the keys of a layout no loop has
+// walked yet. The pointer words it writes -- the walk's keys, atoms,
+// object and shape, and the cursor to the keep cell -- go through Go's
+// write barrier while the collector marks (refStore), the rest as they
+// are: the same work, marking or not. It goes on at join. It uses every
+// scratch register, and xScratch0 and xScratch1.
+func (c *compiler) forInStart(v *ssa.Value, slow, join amd64.Label) {
+	x := v.Args[0]
+	in := c.enc.IterState + c.enc.ForInState
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	w := c.gpr(x, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.pointerWord(x, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.ClassObject), false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.forInPlain(scratchB, slow)
+	// The keys of its layout, a shared one's.
+	c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.LoadU8(scratchA, scratchC, c.enc.ShapeUnique)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchA, scratchC, c.enc.ShapeSide)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Load(scratchA, scratchA, c.enc.SideForIn)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.MovQToX(xScratch0, scratchA)
+	c.a.MovQToX(xScratch1, scratchB)
+	// Its prototypes: none, or a chain the realm found no enumerable key
+	// on, each with no elements.
+	protos, walk := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(scratchA, scratchC, c.enc.ShapeProto)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, protos)
+	c.a.Load(scratchB, regCtx, abi.OffHost)
+	c.a.Load(scratchB, scratchB, c.enc.HostRealm)
+	for i := range int32(2) {
+		next := c.a.NewLabel()
+		at := c.enc.ForInChains + i*c.enc.ChainSize
+		c.a.Load(scratchC, scratchB, at+c.enc.ChainProto)
+		c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+		c.a.Jcc(amd64.CondNE, next)
+		c.a.Load(scratchC, scratchB, at+c.enc.ChainCell)
+		c.a.LoadU8(scratchC, scratchC, c.enc.CellValid)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.Jcc(amd64.CondNE, walk)
+		c.a.Bind(next)
+	}
+	c.a.Jmp(slow)
+	c.a.Bind(walk)
+	c.forInPlain(scratchA, slow)
+	c.a.Load(scratchC, scratchA, c.enc.ObjectShape)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, protos)
+	c.a.Load(scratchA, scratchC, c.enc.ShapeProto)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, walk)
+	c.a.Bind(protos)
+	// The runtime's last cursor, done.
+	c.a.Load(scratchA, regCtx, abi.OffHost)
+	c.a.Load(scratchA, scratchA, c.enc.HostForInLast)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.LoadU8(scratchC, scratchA, c.enc.IterState+c.enc.IterDone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondE, slow)
+	// Used again: not done, at its first key, of no index, the keys'
+	// lengths; then their pointer words.
+	c.a.MovImm(scratchC, 0)
+	c.a.Store8(scratchA, c.enc.IterState+c.enc.IterDone, scratchC)
+	c.a.StoreImm(scratchA, c.enc.IterState+c.enc.IterIdx, 0)
+	c.a.StoreImm(scratchA, in+c.enc.ForInIndexKeys, 0)
+	c.a.MovQFromX(scratchB, xScratch0)
+	for _, f := range [][2]int32{{c.enc.EnumKeys, c.enc.ForInKeys}, {c.enc.EnumAtoms, c.enc.ForInAtoms}} {
+		for _, word := range []int32{8, 16} {
+			c.a.Load(scratchC, scratchB, f[0]+word)
+			c.a.Store(scratchA, in+f[1]+word, scratchC)
+		}
+	}
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchC)
+	marked := c.a.NewLabel()
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.markingLoaded(scratchC)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.a.Load(scratchC, scratchB, c.enc.EnumKeys)
+	c.a.Store(scratchA, in+c.enc.ForInKeys, scratchC)
+	c.a.Load(scratchC, scratchB, c.enc.EnumAtoms)
+	c.a.Store(scratchA, in+c.enc.ForInAtoms, scratchC)
+	c.a.MovQFromX(scratchB, xScratch1)
+	c.a.Store(scratchA, in+c.enc.ForInObj, scratchB)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+	c.a.Store(scratchA, in+c.enc.ForInShape, scratchC)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+	c.a.Jmp(join)
+	c.cold = append(c.cold, func() {
+		// While the collector marks: each pointer word through storeRef,
+		// which keeps no scratch register, what it stores found again.
+		c.a.Bind(marked)
+		cursor := func(field int32) {
+			c.a.Load(scratchA, regCtx, abi.OffHost)
+			c.a.Load(scratchA, scratchA, c.enc.HostForInLast)
+			c.a.Lea(scratchA, scratchA, in+field)
+		}
+		object := func() {
+			c.pointerWord(x, c.gpr(x, scratchA))
+		}
+		object()
+		c.a.MovRR(scratchC, scratchB)
+		cursor(c.enc.ForInObj)
+		c.refStore()
+		object()
+		c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+		cursor(c.enc.ForInShape)
+		c.refStore()
+		for _, f := range [][2]int32{{c.enc.EnumKeys, c.enc.ForInKeys}, {c.enc.EnumAtoms, c.enc.ForInAtoms}} {
+			object()
+			c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+			c.a.Load(scratchC, scratchC, c.enc.ShapeSide)
+			c.a.Load(scratchC, scratchC, c.enc.SideForIn)
+			c.a.Load(scratchC, scratchC, f[0])
+			cursor(f[1])
+			c.refStore()
+		}
+		c.a.Load(scratchC, regCtx, abi.OffHost)
+		c.a.Load(scratchC, scratchC, c.enc.HostForInLast)
+		c.a.Lea(scratchA, regCtx, keep+c.enc.RefOffset)
+		c.refStore()
+		c.a.Jmp(join)
+	})
+}
+
+// forInPlain goes to slow unless the object at o has no elements and its
+// prototype is its layout's (abi.Encoding's FlagPoly), as forInStart asks
+// of the object and of each of its prototypes. It uses scratchC.
+func (c *compiler) forInPlain(o amd64.Reg, slow amd64.Label) {
+	none := c.a.NewLabel()
+	c.a.LoadU8(scratchC, o, c.enc.ObjectFlags+1)
+	c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagPoly), false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.LoadU8(scratchC, o, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagExt), false)
+	c.a.Jcc(amd64.CondE, none)
+	c.a.Load(scratchC, o, c.enc.ObjectExt+c.enc.ExtElems+8)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Bind(none)
 }
 
 // forInIndices reports whether a for...in's step over an array's indices
