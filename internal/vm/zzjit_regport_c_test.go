@@ -154,7 +154,13 @@ func regLoopHeaderForTest(r *Runtime, name string) int {
 // code the cache holds for the function at its install.
 func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
 	t.Helper()
-	s, c := r.jit, r.regOf(cl)
+	// The register code the function's calls made, read as they read it:
+	// regOf writes the closure's, which a compile of it in the background
+	// may be reading.
+	s, c := r.jit, cl.reg
+	if c == nil {
+		c = r.regOf(cl)
+	}
 	key := r.jitRegKeyOf(cl)
 	p, err := r.jitRegLower(cl, c.rc, jitLowerSSA)
 	if err != nil {

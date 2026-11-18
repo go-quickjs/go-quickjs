@@ -103,7 +103,7 @@ func TestJITBackgroundCalleeAskInstalls(t *testing.T) {
 	if r.jit.regPendingJobs[j.key] != j || jitHasCodeOfForTest(r, cl) {
 		t.Fatalf("pending %v, code %v: want the compile done, not installed", r.jit.regPendingJobs[j.key] == j, jitHasCodeOfForTest(r, cl))
 	}
-	e := r.jitRegForAs(cl, r.regOf(cl), true)
+	e := r.jitRegForAs(cl, cl.reg, true)
 	if e == nil || e.code == nil || r.jit.regPendingJobs[j.key] != nil || jitRegOfForTest(r, cl) != e {
 		t.Fatalf("asked: entry %v, pending %v: want the compile installed and its code given", e != nil && e.code != nil, r.jit.regPendingJobs[j.key] != nil)
 	}
