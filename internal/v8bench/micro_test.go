@@ -320,3 +320,26 @@ func TestCharCodeMicrobenchmarks(t *testing.T) {
 		t.Fatalf("charCodeAt was not restored: got %v, %v; want 97", v, err)
 	}
 }
+
+// The codePointAt, at and charAt rows give Node's answers.
+func TestStringUnitMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, res string }{
+		{"string_codepoint_local", "3344"},
+		{"string_codepoint_update", "3344"},
+		{"string_codepoint_pairs", "1151170"},
+		{"string_at_local", "2"},
+		{"string_at_negative", "2"},
+		{"string_charat_local", "2"},
+		{"string_charat_latin1", "2"},
+	} {
+		v, err := rt.Eval(tc.name + "(32) + ':' + global_res")
+		if want := "32:" + tc.res; err != nil || v.String() != want {
+			t.Fatalf("%s: got %v, %v; want %q", tc.name, v, err, want)
+		}
+	}
+}

@@ -210,6 +210,10 @@ var microWork = []struct {
 	{"string_charcode_add", 2097152},
 	{"string_charcode_custom", 2097152},
 	{"string_charcode_override", 2097152},
+	{"string_codepoint_local", 2097152}, {"string_codepoint_update", 2097152},
+	{"string_codepoint_pairs", 2097152},
+	{"string_at_local", 2097152}, {"string_at_negative", 2097152},
+	{"string_charat_local", 2097152}, {"string_charat_latin1", 2097152},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

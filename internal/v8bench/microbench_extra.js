@@ -5315,3 +5315,92 @@ function string_charcode_override(n)
     global_res = h;
     return n;
 }
+
+/* codePointAt of a local index: a method call, call_method_w */
+function string_codepoint_local(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        h += s.codePointAt(i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* codePointAt of ++i */
+function string_codepoint_update(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = (j & 15) - 1;
+        h += s.codePointAt(++i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* codePointAt over a string of surrogate pairs, Latin-1 and other
+   characters, read at every code unit */
+function string_codepoint_pairs(n)
+{
+    var s = "a€😀bé𝄞c中🎉deüf", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        h += s.codePointAt(i);
+    }
+    global_res = h;
+    return n;
+}
+
+/* at of a local index, a string of one character the answer */
+function string_at_local(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        if (s.at(i) === "e")
+            h++;
+    }
+    global_res = h;
+    return n;
+}
+
+/* at of a negative index, counted from the end */
+function string_at_negative(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        if (s.at(-1 - i) === "e")
+            h++;
+    }
+    global_res = h;
+    return n;
+}
+
+/* charAt of a local index */
+function string_charat_local(n)
+{
+    var s = "abcdefghijklmnop", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = j & 15;
+        if (s.charAt(i) === "e")
+            h++;
+    }
+    global_res = h;
+    return n;
+}
+
+/* charAt of ++i, over a string of Latin-1 characters past ASCII */
+function string_charat_latin1(n)
+{
+    var s = "abcdéfghïjklmnöp", h = 0, i, j;
+    for (j = 0; j < n; j++) {
+        i = (j & 15) - 1;
+        if (s.charAt(++i) === "é")
+            h++;
+    }
+    global_res = h;
+    return n;
+}
