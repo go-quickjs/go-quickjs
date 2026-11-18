@@ -7,8 +7,10 @@ import (
 	"errors"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
+	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -27,12 +29,81 @@ import (
 // runtime's goroutine free to return the promise and run other script; a
 // reaction to the promise the suspension waits for replies, and services
 // the stack again until it next suspends or ends.
+//
+// A suspended stack whose promise never settles would keep its goroutine,
+// and what the goroutine reaches -- the runtime among it -- for good. It is
+// cancelled once it can never resume: when nothing holds the reactions that
+// would resume it, which the collector finds, and when the runtime closes,
+// which waits for every stack's goroutine to end. A cancelled stack's calls
+// out fail, its wasm stops at its next poll, and its goroutine returns
+// without touching the runtime.
 
 // jspiState is the namespace's state of the promising calls.
 type jspiState struct {
 	// current is the stack whose calls out the runtime's goroutine is
 	// servicing now, nil if none.
 	current *jspiStack
+
+	// mu guards live, the lives of the stacks whose goroutines have not
+	// ended, which the runtime's closing ends: the goroutines' ends come
+	// from those goroutines.
+	mu   sync.Mutex
+	live map[*stackLife]struct{}
+	// hooked records that the runtime's closing has been asked to end the
+	// stacks.
+	hooked bool
+}
+
+// stackLife is a stack's goroutine, as what cancels it sees it.
+type stackLife struct {
+	once     sync.Once
+	canceled chan struct{}
+	// ended is closed when the goroutine has returned.
+	ended chan struct{}
+}
+
+// cancel tells the stack it can never resume. It is safe to call more than
+// once, from any goroutine.
+func (l *stackLife) cancel() { l.once.Do(func() { close(l.canceled) }) }
+
+// started records a stack's goroutine about to start, and has the runtime's
+// closing end it. It runs on the runtime's goroutine.
+func (j *jspiState) started(qrt any, l *stackLife) {
+	if !j.hooked {
+		if q, ok := qrt.(*quickjs.Runtime); ok {
+			q.OnClose(j.closeAll)
+		}
+		j.hooked = true
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.live == nil {
+		j.live = map[*stackLife]struct{}{}
+	}
+	j.live[l] = struct{}{}
+}
+
+// ended records a stack's goroutine returning.
+func (j *jspiState) ended(l *stackLife) {
+	j.mu.Lock()
+	delete(j.live, l)
+	j.mu.Unlock()
+	close(l.ended)
+}
+
+// closeAll cancels every stack left, when the runtime closes, and waits
+// for their goroutines to return.
+func (j *jspiState) closeAll() {
+	j.mu.Lock()
+	live := j.live
+	j.live = nil
+	j.mu.Unlock()
+	for l := range live {
+		l.cancel()
+	}
+	for l := range live {
+		<-l.ended
+	}
 }
 
 // jspiStack is a promising call's stack, as the runtime's goroutine sees
@@ -188,11 +259,14 @@ func (a *api) callPromising(f *engine.Function, args []vm.Value) (vm.Value, erro
 	}
 	s := &jspiStack{a: a, sig: sig, result: a.rt.NewHostPromise(),
 		toJS: make(chan stackMsg), toWasm: make(chan error)}
-	ctx := &stackContext{r: a.rt, toJS: s.toJS, toWasm: s.toWasm, canceled: make(chan struct{})}
+	life := &stackLife{canceled: make(chan struct{}), ended: make(chan struct{})}
+	ctx := &stackContext{r: a.rt, toJS: s.toJS, toWasm: s.toWasm, canceled: life.canceled}
 	s.handle = &stackHandle{s: s}
 	// Once nothing can resume the stack, its goroutine is told so and ends.
-	runtime.AddCleanup(s.handle, func(c chan struct{}) { close(c) }, ctx.canceled)
+	runtime.AddCleanup(s.handle, (*stackLife).cancel, life)
+	a.jspi.started(a.qrt, life)
 	go func() {
+		defer a.jspi.ended(life)
 		res, err := engine.Invoke(ctx, f, vals)
 		select {
 		case ctx.toJS <- stackMsg{done: true, results: res, err: err}:

@@ -274,7 +274,9 @@ and messages of V8 (Node 26), word for word, prefixes included
 - the JS Promise Integration, `WebAssembly.Suspending` and
   `WebAssembly.promising`. A promising call's wasm runs on a goroutine of its
   own; script runs only on the runtime's goroutine, which serves the wasm
-  goroutine's imports and suspensions, so that one of the two runs at a time;
+  goroutine's imports and suspensions, so that one of the two runs at a time.
+  A call suspended for good ends its goroutine once nothing holds what would
+  resume it, and `Close` ends every suspended call's before it returns;
 - structured cloning, by `postMessage` to a worker and by `structuredClone`:
   a `Module` clones as a `Module` of the same compiled code, which the
   receiving runtime instantiates without compiling it again (its native
@@ -940,8 +942,13 @@ The `WebAssembly` namespace:
   accessor the global is until first read, as Intl's is.
 - `JSON.stringify` writes a GC object as an empty object, where V8 writes
   `null`.
-- A promising call suspended on a promise that never settles keeps its
-  goroutine until nothing holds the promise's reactions.
+- A suspended promising call is a goroutine's stack, which keeps reachable
+  what its wasm and its imports reach -- the runtime among it -- until it
+  ends: when the collector finds nothing holds the reactions that would
+  resume it, or when the runtime is closed. A promise only the suspending
+  function's closure or the runtime's globals hold, that will never settle,
+  keeps its stack until `Close`, and a runtime dropped without `Close` with
+  such a stack is not collected.
 - Type reflection (`WebAssembly.Function`, the `type()` methods), which Node
   does not ship either.
 
