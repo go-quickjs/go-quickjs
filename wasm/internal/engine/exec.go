@@ -26,6 +26,9 @@ type frame struct {
 	rc            *regCode
 	tick, tickSet int32
 	sig           int32
+	// cbase is the exec's caught exceptions below the frame's, where the
+	// frame's code has try regions (runRegCatching).
+	cbase int
 }
 
 // exec is the state of a chain of wasm calls entered from the host: the

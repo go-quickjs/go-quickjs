@@ -733,3 +733,88 @@ func TestRegAtomics(t *testing.T) {
 		{"unshared", nil},
 	})
 }
+
+// TestRegExceptions checks throw, throw_ref, try_table's clauses to a
+// block, a loop and the function, and the legacy try, catch, catch_all,
+// rethrow and delegate, nested and across calls, against the tree's.
+func TestRegExceptions(t *testing.T) {
+	const thrower = `
+	  (tag $e (param i32))
+	  (tag $f (param i64 v128))
+	  (func $thrower (param i32)
+	    (if (i32.eqz (local.get 0)) (then (throw $e (i32.const 42))))
+	    (if (i32.eq (local.get 0) (i32.const 1)) (then (throw $f (i64.const 7) (v128.const i32x4 1 2 3 4))))
+	    (if (i32.eq (local.get 0) (i32.const 2)) (then (unreachable))))`
+	regMatchesTree(t, `(module `+thrower+`
+	  (func (export "table") (param i32) (result i64)
+	    (block $b (result i32)
+	      (block $c (result i64 v128)
+	        (try_table (catch $e $b) (catch $f $c)
+	          (call $thrower (local.get 0)))
+	        (return (i64.const 100)))
+	      (i64x2.extract_lane 1)
+	      (i64.add)
+	      (return))
+	    (i64.extend_i32_u))
+	  (func (export "loop") (param i32) (result i32) (local i32)
+	    (loop $l
+	      (try_table (catch_all $l)
+	        (local.set 1 (i32.add (local.get 1) (i32.const 1)))
+	        (call $thrower (i32.sub (local.get 0) (local.get 1)))))
+	    (local.get 1))
+	  (func (export "fn") (param i32) (result i32)
+	    (try_table (catch $e 0) (call $thrower (local.get 0)))
+	    (i32.const -1))
+	  (func (export "ref") (param i32) (result i32)
+	    (block $h (result exnref)
+	      (try_table (catch_all_ref $h) (call $thrower (local.get 0)))
+	      (return (i32.const 0)))
+	    (block $g (param exnref) (result i32 exnref)
+	      (try_table (param exnref) (catch_ref $e $g) (throw_ref))
+	      (unreachable))
+	    (drop)))`, []regCall{
+		{"table", []Val{{N: 0}}},
+		{"table", []Val{{N: 1}}},
+		{"table", []Val{{N: 2}}},
+		{"table", []Val{{N: 3}}},
+		{"loop", []Val{{N: 4}}},
+		{"fn", []Val{{N: 0}}},
+		{"fn", []Val{{N: 3}}},
+		{"fn", []Val{{N: 1}}},
+		{"ref", []Val{{N: 0}}},
+		{"ref", []Val{{N: 1}}},
+		{"ref", []Val{{N: 3}}},
+	})
+	regMatchesTree(t, `(module `+thrower+`
+	  (func (export "legacy") (param i32) (result i32) (local i32)
+	    (try (result i32)
+	      (do
+	        (try (result i32)
+	          (do (call $thrower (local.get 0)) (i32.const 5))
+	          (catch $e (local.set 1 (i32.const 10)) (rethrow 0))
+	          (catch_all (i32.const 6))))
+	      (catch $e (i32.add (local.get 1)))))
+	  (func (export "delegate") (param i32) (result i32)
+	    (try (result i32)
+	      (do
+	        (try (result i32)
+	          (do (try (do (call $thrower (local.get 0))) (delegate 1)) (i32.const 1))
+	          (catch_all (i32.const 2))))
+	      (catch_all (i32.const 3))))
+	  (func (export "outer") (param i32) (result i32)
+	    (block $b (result i32)
+	      (try (result i32)
+	        (do
+	          (try (do (call $thrower (local.get 0))) (catch $f (br $b (i32.const 7))))
+	          (try (do (call $thrower (i32.const 0))) (catch_all (br $b (i32.const 8))))
+	          (i32.const 9))
+	        (catch $e (drop) (i32.const 10))))))`, []regCall{
+		{"legacy", []Val{{N: 0}}},
+		{"legacy", []Val{{N: 1}}},
+		{"legacy", []Val{{N: 3}}},
+		{"delegate", []Val{{N: 0}}},
+		{"delegate", []Val{{N: 3}}},
+		{"outer", []Val{{N: 1}}},
+		{"outer", []Val{{N: 3}}},
+	})
+}

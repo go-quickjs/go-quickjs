@@ -247,7 +247,11 @@ func (x *exec) runReg(f *frame, cd *compiled) int32 {
 		f.osr = math.MaxInt32
 	}
 	f.setTick()
-	regLoop(unsafe.Pointer(&f.l[0]), unsafe.Pointer(&rc.code[0]), 0, f)
+	if len(rc.regions) > 0 {
+		x.runRegCatching(f, rc)
+	} else {
+		regLoop(unsafe.Pointer(&f.l[0]), unsafe.Pointer(&rc.code[0]), 0, f)
+	}
 	f.rc = nil
 	return f.sig
 }

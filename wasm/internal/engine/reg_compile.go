@@ -127,6 +127,8 @@ type regCompiler struct {
 	// legacy try constructs, as the tree's compiler counts them.
 	refs  bool
 	tries int
+	// retFixes are the catch clauses that land at the function's label.
+	retFixes []rfix
 	// at is the offset of the instruction being compiled; last the pc of
 	// the last instruction emitted, -1 before the first or after a label.
 	at   uint32
@@ -184,6 +186,7 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 	for c.r.pc < end && len(c.ctrl) > 0 {
 		c.instr()
 	}
+	c.retStub()
 	if len(c.out.code) == 0 {
 		c.emit(rRet, 0, 0, 0, 0)
 	}

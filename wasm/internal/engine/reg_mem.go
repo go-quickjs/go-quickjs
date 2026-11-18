@@ -231,8 +231,3 @@ func init() {
 		regExtTable[x] = h
 	}
 }
-
-// The families still compiled by the closure tree.
-
-func (c *regCompiler) exnOp(op opcode.Opcode) bool { return false }
-func (c *regCompiler) endTry(t *rctl)              { panic("wasm: a try in register code") }
