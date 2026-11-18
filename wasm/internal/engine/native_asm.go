@@ -1,17 +1,17 @@
+//go:build amd64 || arm64
+
 package engine
 
 import (
 	"unsafe"
-
-	"golang.org/x/sys/cpu"
 	_ "unsafe" // linkname
 )
 
 // nativeBuilt says the native handlers are built for this architecture.
 const nativeBuilt = true
 
-// The native code and its trampolines (native_amd64.s,
-// native_handlers_amd64.s).
+// The native code and its trampolines (native_<arch>.s,
+// native_handlers_<arch>.s).
 func wasmNativeEnter(code uintptr, ctx unsafe.Pointer)
 func wasmNativeCallH()
 func wasmNativeHandlers()
@@ -72,10 +72,6 @@ var nativeExitTable [256]regHandler
 // (rExt's, by X) and of rSIMD's have no native handler: those an exit runs
 // in Go.
 var nativeGo, nativeExtGo, nativeSIMDGo [256]bool
-
-// nativeSIMDOn says the CPU has what the SIMD handlers use: SSSE3, SSE4.1
-// and SSE4.2. Without, rSIMD's table is nativeSIMDExits.
-var nativeSIMDOn = cpu.X86.HasSSSE3 && cpu.X86.HasSSE41 && cpu.X86.HasSSE42
 
 // nativeSIMDExits is rSIMD's table of the exit stub alone, and
 // nativeSIMDTable the one the contexts are given.

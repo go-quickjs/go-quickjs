@@ -92,17 +92,17 @@ func (g *gen) floatType(t floatType) {
 		sse  SSE
 	}{{t.add, "Add", AddSD}, {t.sub, "Sub", SubSD}, {t.mul, "Mul", MulSD}, {t.div, "Div", DivSD}} {
 		g.h(b.op, t.name+b.name, func() {
-			g.loadF(X0, RDX, 1, w)
-			g.loadF(X1, RSI, 2, w)
-			g.sse(b.sse, X0, X1, w)
-			g.storeF(0, X0, w)
+			g.loadF(XM0, RDX, 1, w)
+			g.loadF(XM1, RSI, 2, w)
+			g.sse(b.sse, XM0, XM1, w)
+			g.storeF(0, XM0, w)
 			g.next(1)
 		})
 	}
 	g.h(t.sqrt, t.name+"Sqrt", func() {
-		g.loadF(X0, RDX, 1, w)
-		g.sse(SqrtSD, X0, X0, w)
-		g.storeF(0, X0, w)
+		g.loadF(XM0, RDX, 1, w)
+		g.sse(SqrtSD, XM0, XM0, w)
+		g.storeF(0, XM0, w)
 		g.next(1)
 	})
 	// abs and neg: the sign bit alone, which keeps a NaN's payload.
@@ -135,9 +135,9 @@ func (g *gen) floatType(t floatType) {
 	minmax := func(op int, name string, isMin bool) {
 		g.h(op, t.name+name, func() {
 			nan, eq, takeA, aNaN := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
-			g.loadF(X0, RDX, 1, w)
-			g.loadF(X1, RSI, 2, w)
-			g.ucomi(X0, X1, w)
+			g.loadF(XM0, RDX, 1, w)
+			g.loadF(XM1, RSI, 2, w)
+			g.ucomi(XM0, XM1, w)
 			a.Jcc(CondP, nan)
 			a.Jcc(CondE, eq)
 			if isMin {
@@ -159,7 +159,7 @@ func (g *gen) floatType(t floatType) {
 			g.store(0, RDX)
 			g.next(1)
 			a.Bind(nan)
-			g.ucomi(X0, X0, w)
+			g.ucomi(XM0, XM0, w)
 			a.Jcc(CondP, aNaN)
 			a.MovRR(RDX, RSI)
 			a.Bind(aNaN)
@@ -188,12 +188,12 @@ func (g *gen) floatType(t floatType) {
 		{t.lt, t.brLt, "Lt", true, CondA}, {t.le, t.brLe, "Le", true, CondAE},
 	} {
 		g.h(c.op, t.name+c.name, func() {
-			g.loadF(X0, RDX, 1, w)
-			g.loadF(X1, RSI, 2, w)
+			g.loadF(XM0, RDX, 1, w)
+			g.loadF(XM1, RSI, 2, w)
 			if c.swap {
-				g.ucomi(X1, X0, w)
+				g.ucomi(XM1, XM0, w)
 			} else {
-				g.ucomi(X0, X1, w)
+				g.ucomi(XM0, XM1, w)
 			}
 			a.Setcc(c.cond, RDX)
 			a.MovZX8(RDX, RDX)
@@ -213,9 +213,9 @@ func (g *gen) floatType(t floatType) {
 		})
 	}
 	g.h(t.eq, t.name+"Eq", func() {
-		g.loadF(X0, RDX, 1, w)
-		g.loadF(X1, RSI, 2, w)
-		g.ucomi(X0, X1, w)
+		g.loadF(XM0, RDX, 1, w)
+		g.loadF(XM1, RSI, 2, w)
+		g.ucomi(XM0, XM1, w)
 		a.Setcc(CondE, RDX)
 		a.Setcc(CondNP, RCX)
 		a.MovZX8(RDX, RDX)
@@ -225,9 +225,9 @@ func (g *gen) floatType(t floatType) {
 		g.next(1)
 	})
 	g.h(t.ne, t.name+"Ne", func() {
-		g.loadF(X0, RDX, 1, w)
-		g.loadF(X1, RSI, 2, w)
-		g.ucomi(X0, X1, w)
+		g.loadF(XM0, RDX, 1, w)
+		g.loadF(XM1, RSI, 2, w)
+		g.ucomi(XM0, XM1, w)
 		a.Setcc(CondNE, RDX)
 		a.Setcc(CondP, RCX)
 		a.MovZX8(RDX, RDX)
@@ -257,12 +257,12 @@ func (g *gen) floatType(t floatType) {
 func (g *gen) floatBranch(w, swap bool, jump func(tk Label)) {
 	a := g.a
 	tk := a.NewLabel()
-	g.loadF(X0, RDX, 0, w)
-	g.loadF(X1, RSI, 1, w)
+	g.loadF(XM0, RDX, 0, w)
+	g.loadF(XM1, RSI, 1, w)
 	if swap {
-		g.ucomi(X1, X0, w)
+		g.ucomi(XM1, XM0, w)
 	} else {
-		g.ucomi(X0, X1, w)
+		g.ucomi(XM0, XM1, w)
 	}
 	jump(tk)
 	g.next(1)
@@ -290,13 +290,13 @@ func (g *gen) conversions() {
 				a.Op(Test, RSI, RSI, true)
 				a.Jcc(CondS, g.exit)
 			}
-			a.SSEOp(XorPD, X0, X0)
+			a.SSEOp(XorPD, XM0, XM0)
 			if f64 {
-				a.Cvtsi2sd(X0, RSI, src64 || unsigned)
+				a.Cvtsi2sd(XM0, RSI, src64 || unsigned)
 			} else {
-				a.Cvtsi2ss(X0, RSI, src64 || unsigned)
+				a.Cvtsi2ss(XM0, RSI, src64 || unsigned)
 			}
-			g.storeF(0, X0, f64)
+			g.storeF(0, XM0, f64)
 		})
 	}
 	toFloat(rd.F64SConvertI32, "F64SConvertI32", true, false, true, false)
@@ -308,29 +308,29 @@ func (g *gen) conversions() {
 	toFloat(rd.F32SConvertI64, "F32SConvertI64", false, true, false, false)
 	toFloat(rd.F32UConvertI64, "F32UConvertI64", false, true, false, true)
 	unary(rd.F32ConvertF64, "F32ConvertF64", func() {
-		a.MovQToX(X0, RSI)
-		a.Cvtsd2ss(X1, X0)
-		g.storeF(0, X1, false)
+		a.MovQToX(XM0, RSI)
+		a.Cvtsd2ss(XM1, XM0)
+		g.storeF(0, XM1, false)
 	})
 	unary(rd.F64ConvertF32, "F64ConvertF32", func() {
-		a.MovDToX(X0, RSI)
-		a.Cvtss2sd(X1, X0)
-		g.storeF(0, X1, true)
+		a.MovDToX(XM0, RSI)
+		a.Cvtss2sd(XM1, XM0)
+		g.storeF(0, XM1, true)
 	})
 	trunc := func(op int, name string, from64, to64, unsigned bool) {
 		unary(op, name, func() {
 			if from64 {
-				a.MovQToX(X0, RSI)
+				a.MovQToX(XM0, RSI)
 			} else {
-				a.MovDToX(X0, RSI)
+				a.MovDToX(XM0, RSI)
 			}
 			switch {
 			case !to64 && !unsigned:
 				// The 32-bit indefinite integer, 0x80000000.
 				if from64 {
-					a.Cvttsd2si32(RDX, X0)
+					a.Cvttsd2si32(RDX, XM0)
 				} else {
-					a.Cvttss2si(RDX, X0, false)
+					a.Cvttss2si(RDX, XM0, false)
 				}
 				a.OpImm(Cmp, RDX, -0x80000000, false)
 				a.Jcc(CondE, g.exit)
@@ -366,18 +366,18 @@ func (g *gen) conversions() {
 	trunc(rd.I64UConvertF64, "I64UConvertF64", true, true, true)
 }
 
-// cvtt64 truncates X0, a double if from64 else a float, to a 64-bit
+// cvtt64 truncates XM0, a double if from64 else a float, to a 64-bit
 // integer in RDX.
 func (g *gen) cvtt64(from64 bool) {
 	if from64 {
-		g.a.Cvttsd2si(RDX, X0)
+		g.a.Cvttsd2si(RDX, XM0)
 	} else {
-		g.a.Cvttss2si(RDX, X0, true)
+		g.a.Cvttss2si(RDX, XM0, true)
 	}
 }
 
 // The SSE registers the float handlers use, their scratch.
 const (
-	X0 XReg = 0
-	X1 XReg = 1
+	XM0 XReg = 0
+	XM1 XReg = 1
 )

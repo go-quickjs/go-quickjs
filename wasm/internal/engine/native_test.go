@@ -171,7 +171,7 @@ func TestNativeGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	checkGenerated(t, "./internal/nativegen", "native_handlers_amd64.s")
+	checkGenerated(t, "./internal/nativegen", "native_handlers_amd64.s", "native_handlers_arm64.s")
 }
 
 // TestNativeCallHConvention checks the convention the exit stub calls Go
@@ -627,6 +627,55 @@ func nativeSIMDCases(b *strings.Builder, calls []regCall, vals map[string][]uint
 			calls = append(calls, regCall{name, []Val{{N: n}}})
 		}
 	}
+	// The operators arm64 has native handlers of and amd64 has not
+	// ("v.x."), relaxed ones among them, which must give what the Go
+	// handlers give on the machine running them.
+	for _, op := range []string{"f32x4.min", "f32x4.max", "f64x2.min", "f64x2.max", "i64x2.mul", "i16x8.q15mulr_sat_s",
+		"i16x8.extmul_low_i8x16_s", "i16x8.extmul_high_i8x16_s", "i16x8.extmul_low_i8x16_u", "i16x8.extmul_high_i8x16_u",
+		"i32x4.extmul_low_i16x8_s", "i32x4.extmul_high_i16x8_s", "i32x4.extmul_low_i16x8_u", "i32x4.extmul_high_i16x8_u",
+		"i64x2.extmul_low_i32x4_s", "i64x2.extmul_high_i32x4_s", "i64x2.extmul_low_i32x4_u", "i64x2.extmul_high_i32x4_u",
+		"i16x8.relaxed_q15mulr_s", "f32x4.relaxed_min", "f32x4.relaxed_max", "f64x2.relaxed_min", "f64x2.relaxed_max",
+		"i8x16.relaxed_swizzle", "i16x8.relaxed_dot_i8x16_i7x16_s"} {
+		name := "v.x." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128 v128) (result v128) (%s (local.get 0) (local.get 1)))\n", name, op)
+		for _, x := range vecs {
+			for _, y := range vecs {
+				calls = append(calls, regCall{name, []Val{v(x), v(y)}})
+			}
+		}
+	}
+	for _, op := range []string{"i8x16.popcnt", "i64x2.abs", "i16x8.extadd_pairwise_i8x16_s", "i16x8.extadd_pairwise_i8x16_u",
+		"i32x4.extadd_pairwise_i16x8_s", "i32x4.extadd_pairwise_i16x8_u", "f32x4.demote_f64x2_zero", "f64x2.promote_low_f32x4",
+		"f32x4.convert_i32x4_s", "f32x4.convert_i32x4_u", "f64x2.convert_low_i32x4_s", "f64x2.convert_low_i32x4_u",
+		"i32x4.trunc_sat_f32x4_s", "i32x4.trunc_sat_f32x4_u", "i32x4.trunc_sat_f64x2_s_zero", "i32x4.trunc_sat_f64x2_u_zero",
+		"i32x4.relaxed_trunc_f32x4_s", "i32x4.relaxed_trunc_f32x4_u", "i32x4.relaxed_trunc_f64x2_s_zero", "i32x4.relaxed_trunc_f64x2_u_zero"} {
+		name := "v.x." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128) (result v128) (%s (local.get 0)))\n", name, op)
+		for _, x := range vecs {
+			calls = append(calls, regCall{name, []Val{v(x)}})
+		}
+	}
+	for _, op := range []string{"i8x16.shl", "i8x16.shr_s", "i8x16.shr_u", "i64x2.shr_s"} {
+		name := "v.x." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128 i32) (result v128) (%s (local.get 0) (local.get 1)))\n", name, op)
+		for _, x := range vecs {
+			for _, n := range []uint64{0, 1, 7, 8, 9, 63, 64, 65, 0xffffffff} {
+				calls = append(calls, regCall{name, []Val{v(x), {N: n}}})
+			}
+		}
+	}
+	for _, op := range []string{"i8x16.relaxed_laneselect", "i16x8.relaxed_laneselect", "i32x4.relaxed_laneselect", "i64x2.relaxed_laneselect",
+		"f32x4.relaxed_madd", "f32x4.relaxed_nmadd", "f64x2.relaxed_madd", "f64x2.relaxed_nmadd", "i32x4.relaxed_dot_i8x16_i7x16_add_s"} {
+		name := "v.x." + op
+		fmt.Fprintf(b, "(func (export %q) (param v128 v128 v128) (result v128) (%s (local.get 0) (local.get 1) (local.get 2)))\n", name, op)
+		for _, x := range vecs {
+			for _, y := range vecs[3:9] {
+				for _, z := range vecs[4:8] {
+					calls = append(calls, regCall{name, []Val{v(x), v(y), v(z)}})
+				}
+			}
+		}
+	}
 	b.WriteString(`(func (export "v.mem.load") (param i32) (result v128) (v128.load offset=7 (local.get 0)))
 (func (export "v.mem.store") (param i32 v128) (result v128) (v128.store offset=9 (local.get 0) (local.get 1)) (v128.load offset=9 (local.get 0)))
 (func (export "v.mem.load8x8") (param i32) (result v128) (v128.load8x8_s (local.get 0)))
@@ -645,8 +694,9 @@ func nativeSIMDCases(b *strings.Builder, calls []regCall, vals map[string][]uint
 func nativeMayExit(name string) bool {
 	if strings.HasPrefix(name, "v.") {
 		// Of the SIMD operators, the accesses out of bounds and the loads
-		// that extend leave to Go.
-		return strings.HasPrefix(name, "v.mem.")
+		// that extend leave to Go, and on amd64 the operators only arm64
+		// has native handlers of.
+		return strings.HasPrefix(name, "v.mem.") || strings.HasPrefix(name, "v.x.") && runtime.GOARCH != "arm64"
 	}
 	if strings.Contains(name, "div") || strings.Contains(name, "rem") || name == "count" || strings.Contains(name, "trunc_") || strings.Contains(name, "convert_i64_u") {
 		return true

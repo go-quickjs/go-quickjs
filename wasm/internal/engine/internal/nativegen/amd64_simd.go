@@ -12,12 +12,12 @@ import (
 // table, which the engine gives these handlers only where the CPU has
 // SSSE3, SSE4.1 and SSE4.2, and the exit stub's elsewhere.
 
-// The SSE registers the SIMD handlers use beyond X0 and X1, their scratch.
+// The SSE registers the SIMD handlers use beyond XM0 and XM1, their scratch.
 const (
-	X2 XReg = 2
-	X3 XReg = 3
-	X4 XReg = 4
-	X5 XReg = 5
+	XM2 XReg = 2
+	XM3 XReg = 3
+	XM4 XReg = 4
+	XM5 XReg = 5
 )
 
 // hs lays out the handler of operation x of rSIMD's table, named name.
@@ -59,18 +59,18 @@ func (g *gen) simd() {
 	// A = B op C, or C op B where swap; the result negated where not.
 	bin := func(x int, name string, op VOp, swap, not bool) {
 		g.hs(x, name, func() {
-			g.loadV(X0, 1)
-			g.loadV(X1, 2)
-			r := X0
+			g.loadV(XM0, 1)
+			g.loadV(XM1, 2)
+			r := XM0
 			if swap {
-				a.Vec(op, X1, X0)
-				r = X1
+				a.Vec(op, XM1, XM0)
+				r = XM1
 			} else {
-				a.Vec(op, X0, X1)
+				a.Vec(op, XM0, XM1)
 			}
 			if not {
-				g.ones(X2)
-				a.Vec(Pxor, r, X2)
+				g.ones(XM2)
+				a.Vec(Pxor, r, XM2)
 			}
 			g.storeV(0, r)
 			g.next(1)
@@ -79,14 +79,14 @@ func (g *gen) simd() {
 	// A = B op C with an immediate (CMPPS, CMPPD), or C op B where swap.
 	binImm := func(x int, name string, op VOp, imm uint8, swap bool) {
 		g.hs(x, name, func() {
-			g.loadV(X0, 1)
-			g.loadV(X1, 2)
-			r := X0
+			g.loadV(XM0, 1)
+			g.loadV(XM1, 2)
+			r := XM0
 			if swap {
-				a.VecImm(op, X1, X0, imm)
-				r = X1
+				a.VecImm(op, XM1, XM0, imm)
+				r = XM1
 			} else {
-				a.VecImm(op, X0, X1, imm)
+				a.VecImm(op, XM0, XM1, imm)
 			}
 			g.storeV(0, r)
 			g.next(1)
@@ -227,15 +227,15 @@ func (g *gen) simd() {
 			negation bool
 		}{{u.le, "LeU", u.min, false}, {u.gt, "GtU", u.min, true}, {u.ge, "GeU", u.max, false}, {u.lt, "LtU", u.max, true}} {
 			g.hs(c.x, u.name+c.name, func() {
-				g.loadV(X0, 1)
-				g.loadV(X1, 2)
-				a.Vec(c.op, X1, X0)
-				a.Vec(u.eq, X0, X1)
+				g.loadV(XM0, 1)
+				g.loadV(XM1, 2)
+				a.Vec(c.op, XM1, XM0)
+				a.Vec(u.eq, XM0, XM1)
 				if c.negation {
-					g.ones(X2)
-					a.Vec(Pxor, X0, X2)
+					g.ones(XM2)
+					a.Vec(Pxor, XM0, XM2)
 				}
-				g.storeV(0, X0)
+				g.storeV(0, XM0)
 				g.next(1)
 			})
 		}
@@ -244,15 +244,15 @@ func (g *gen) simd() {
 	// A = op B.
 	un := func(x int, name string, body func()) {
 		g.hs(x, name, func() {
-			g.loadV(X0, 1)
+			g.loadV(XM0, 1)
 			body()
-			g.storeV(0, X0)
+			g.storeV(0, XM0)
 			g.next(1)
 		})
 	}
 	un(rd.SS128Not, "S128Not", func() {
-		g.ones(X1)
-		a.Vec(Pxor, X0, X1)
+		g.ones(XM1)
+		a.Vec(Pxor, XM0, XM1)
 	})
 	for _, b := range []struct {
 		x    int
@@ -272,7 +272,7 @@ func (g *gen) simd() {
 		{rd.SI64x2UConvertI32x4Low, "I64x2UConvertI32x4Low", Pmovzxdq},
 	} {
 		op := b.op
-		un(b.x, b.name, func() { a.Vec(op, X0, X0) })
+		un(b.x, b.name, func() { a.Vec(op, XM0, XM0) })
 	}
 	// The high halves' extensions: the high quadword moved down first.
 	for _, b := range []struct {
@@ -289,8 +289,8 @@ func (g *gen) simd() {
 	} {
 		op := b.op
 		un(b.x, b.name, func() {
-			a.VecImm(Pshufd, X0, X0, 0xEE)
-			a.Vec(op, X0, X0)
+			a.VecImm(Pshufd, XM0, XM0, 0xEE)
+			a.Vec(op, XM0, XM0)
 		})
 	}
 	// neg is 0 - B.
@@ -301,10 +301,10 @@ func (g *gen) simd() {
 	}{{rd.SI8x16Neg, "I8x16Neg", Psubb}, {rd.SI16x8Neg, "I16x8Neg", Psubw}, {rd.SI32x4Neg, "I32x4Neg", Psubd}, {rd.SI64x2Neg, "I64x2Neg", Psubq}} {
 		op := b.op
 		g.hs(b.x, b.name, func() {
-			g.loadV(X1, 1)
-			a.Vec(Pxor, X0, X0)
-			a.Vec(op, X0, X1)
-			g.storeV(0, X0)
+			g.loadV(XM1, 1)
+			a.Vec(Pxor, XM0, XM0)
+			a.Vec(op, XM0, XM1)
+			g.storeV(0, XM0)
 			g.next(1)
 		})
 	}
@@ -319,14 +319,14 @@ func (g *gen) simd() {
 	}{{rd.SF32x4Abs, rd.SF32x4Neg, "F32x4", PsrldImm, PslldImm, 32}, {rd.SF64x2Abs, rd.SF64x2Neg, "F64x2", PsrlqImm, PsllqImm, 64}} {
 		b := b
 		un(b.abs, b.name+"Abs", func() {
-			g.ones(X1)
-			a.VecShift(b.right, X1, 1)
-			a.Vec(Pand, X0, X1)
+			g.ones(XM1)
+			a.VecShift(b.right, XM1, 1)
+			a.Vec(Pand, XM0, XM1)
 		})
 		un(b.neg, b.name+"Neg", func() {
-			g.ones(X1)
-			a.VecShift(b.left, X1, b.bits-1)
-			a.Vec(Pxor, X0, X1)
+			g.ones(XM1)
+			a.VecShift(b.left, XM1, b.bits-1)
+			a.Vec(Pxor, XM0, XM1)
 		})
 	}
 	// The roundings: ROUNDPS's modes, the precision exception masked.
@@ -342,13 +342,13 @@ func (g *gen) simd() {
 		{rd.SF64x2Ceil, "F64x2Ceil", Roundpd, 2}, {rd.SF64x2Trunc, "F64x2Trunc", Roundpd, 3},
 	} {
 		r := r
-		un(r.x, r.name, func() { a.VecImm(r.op, X0, X0, 8|r.mode) })
+		un(r.x, r.name, func() { a.VecImm(r.op, XM0, XM0, 8|r.mode) })
 	}
 
 	// The tests: i32 A = op B.
 	test := func(x int, name string, body func()) {
 		g.hs(x, name, func() {
-			g.loadV(X0, 1)
+			g.loadV(XM0, 1)
 			body()
 			g.store(0, RDX)
 			g.next(1)
@@ -356,7 +356,7 @@ func (g *gen) simd() {
 	}
 	test(rd.SV128AnyTrue, "V128AnyTrue", func() {
 		a.Op(Xor, RDX, RDX, false)
-		a.Vec(Ptest, X0, X0)
+		a.Vec(Ptest, XM0, XM0)
 		a.Setcc(CondNE, RDX)
 	})
 	for _, b := range []struct {
@@ -367,21 +367,21 @@ func (g *gen) simd() {
 		eq := b.eq
 		test(b.x, b.name, func() {
 			// No lane equal to zero.
-			a.Vec(Pxor, X1, X1)
-			a.Vec(eq, X1, X0)
+			a.Vec(Pxor, XM1, XM1)
+			a.Vec(eq, XM1, XM0)
 			a.Op(Xor, RDX, RDX, false)
-			a.Vec(Ptest, X1, X1)
+			a.Vec(Ptest, XM1, XM1)
 			a.Setcc(CondE, RDX)
 		})
 	}
-	test(rd.SI8x16BitMask, "I8x16BitMask", func() { a.VecMask(Pmovmskb, RDX, X0) })
+	test(rd.SI8x16BitMask, "I8x16BitMask", func() { a.VecMask(Pmovmskb, RDX, XM0) })
 	test(rd.SI16x8BitMask, "I16x8BitMask", func() {
-		a.Vec(Packsswb, X0, X0)
-		a.VecMask(Pmovmskb, RDX, X0)
+		a.Vec(Packsswb, XM0, XM0)
+		a.VecMask(Pmovmskb, RDX, XM0)
 		a.MovZX8(RDX, RDX)
 	})
-	test(rd.SI32x4BitMask, "I32x4BitMask", func() { a.VecMask(Movmskps, RDX, X0) })
-	test(rd.SI64x2BitMask, "I64x2BitMask", func() { a.VecMask(Movmskpd, RDX, X0) })
+	test(rd.SI32x4BitMask, "I32x4BitMask", func() { a.VecMask(Movmskps, RDX, XM0) })
+	test(rd.SI64x2BitMask, "I64x2BitMask", func() { a.VecMask(Movmskpd, RDX, XM0) })
 
 	// The shifts: A = B shifted by the i32 C modulo the lane's width.
 	for _, s := range []struct {
@@ -398,37 +398,37 @@ func (g *gen) simd() {
 		g.hs(s.x, s.name, func() {
 			g.load(RDX, 2)
 			a.OpImm(And, RDX, s.mask, false)
-			a.MovQToX(X1, RDX)
-			g.loadV(X0, 1)
-			a.Vec(s.op, X0, X1)
-			g.storeV(0, X0)
+			a.MovQToX(XM1, RDX)
+			g.loadV(XM0, 1)
+			a.Vec(s.op, XM0, XM1)
+			g.storeV(0, XM0)
 			g.next(1)
 		})
 	}
 
 	// bitselect: A = B & D | C & ^D, D's slot field in the word after.
 	g.hs(rd.SS128Select, "S128Select", func() {
-		g.loadV(X0, 1)
-		g.loadV(X1, 2)
+		g.loadV(XM0, 1)
+		g.loadV(XM1, 2)
 		a.LoadU16(R9, RBX, 8)
 		a.ShiftImm(Shl, R9, 3, true)
-		a.LoadVecIdx(X2, R12, R9, 0)
-		a.Vec(Pand, X0, X2)
-		a.Vec(Pandn, X2, X1)
-		a.Vec(Por, X0, X2)
-		g.storeV(0, X0)
+		a.LoadVecIdx(XM2, R12, R9, 0)
+		a.Vec(Pand, XM0, XM2)
+		a.Vec(Pandn, XM2, XM1)
+		a.Vec(Por, XM0, XM2)
+		g.storeV(0, XM0)
 		g.next(2)
 	})
 
 	// swizzle: B's byte C[i], or 0 where C[i] is past 15: PSHUFB's mask
 	// with the top bit set past 15 by a saturating add of 0x70.
 	g.hs(rd.SI8x16Swizzle, "I8x16Swizzle", func() {
-		g.loadV(X0, 1)
-		g.loadV(X1, 2)
-		g.splatByte(X2, 0x70)
-		a.Vec(Paddusb, X1, X2)
-		a.Vec(Pshufb, X0, X1)
-		g.storeV(0, X0)
+		g.loadV(XM0, 1)
+		g.loadV(XM1, 2)
+		g.splatByte(XM2, 0x70)
+		a.Vec(Paddusb, XM1, XM2)
+		a.Vec(Pshufb, XM0, XM1)
+		g.storeV(0, XM0)
 		g.next(1)
 	})
 
@@ -436,18 +436,18 @@ func (g *gen) simd() {
 	// after, below 32: B's bytes by a mask whose lanes past 15 have their
 	// top bit set, C's by one whose lanes below 16 have.
 	g.hs(rd.SShuffle, "Shuffle", func() {
-		g.loadV(X0, 1)
-		g.loadV(X1, 2)
-		a.LoadVec(X2, RBX, 8)
-		g.splatByte(X3, 0x70)
-		g.splatByte(X4, 0x10)
-		a.Vec(Pxor, X4, X2)
-		a.Vec(Paddusb, X2, X3)
-		a.Vec(Paddusb, X4, X3)
-		a.Vec(Pshufb, X0, X2)
-		a.Vec(Pshufb, X1, X4)
-		a.Vec(Por, X0, X1)
-		g.storeV(0, X0)
+		g.loadV(XM0, 1)
+		g.loadV(XM1, 2)
+		a.LoadVec(XM2, RBX, 8)
+		g.splatByte(XM3, 0x70)
+		g.splatByte(XM4, 0x10)
+		a.Vec(Pxor, XM4, XM2)
+		a.Vec(Paddusb, XM2, XM3)
+		a.Vec(Paddusb, XM4, XM3)
+		a.Vec(Pshufb, XM0, XM2)
+		a.Vec(Pshufb, XM1, XM4)
+		a.Vec(Por, XM0, XM1)
+		g.storeV(0, XM0)
 		g.next(3)
 	})
 
@@ -503,8 +503,8 @@ func (g *gen) simd() {
 		e := e
 		g.hs(e.x, e.name, func() {
 			g.load(RDX, 2)
-			g.loadV(X0, 1)
-			g.storeV(0, X0)
+			g.loadV(XM0, 1)
+			g.storeV(0, XM0)
 			g.off(RCX, 0)
 			a.Op(Add, RCX, R12, true)
 			a.Load(RSI, RBX, 8)
@@ -526,32 +526,32 @@ func (g *gen) simd() {
 	// splat: A = the number B in every lane.
 	g.hs(rd.SSplat8, "Splat8", func() {
 		g.load(RDX, 1)
-		a.MovDToX(X0, RDX)
-		a.Vec(Pxor, X1, X1)
-		a.Vec(Pshufb, X0, X1)
-		g.storeV(0, X0)
+		a.MovDToX(XM0, RDX)
+		a.Vec(Pxor, XM1, XM1)
+		a.Vec(Pshufb, XM0, XM1)
+		g.storeV(0, XM0)
 		g.next(1)
 	})
 	g.hs(rd.SSplat16, "Splat16", func() {
 		g.load(RDX, 1)
-		a.MovDToX(X0, RDX)
-		a.VecImm(Pshuflw, X0, X0, 0)
-		a.Vec(Punpcklqdq, X0, X0)
-		g.storeV(0, X0)
+		a.MovDToX(XM0, RDX)
+		a.VecImm(Pshuflw, XM0, XM0, 0)
+		a.Vec(Punpcklqdq, XM0, XM0)
+		g.storeV(0, XM0)
 		g.next(1)
 	})
 	g.hs(rd.SSplat32, "Splat32", func() {
 		g.load(RDX, 1)
-		a.MovDToX(X0, RDX)
-		a.VecImm(Pshufd, X0, X0, 0)
-		g.storeV(0, X0)
+		a.MovDToX(XM0, RDX)
+		a.VecImm(Pshufd, XM0, XM0, 0)
+		g.storeV(0, XM0)
 		g.next(1)
 	})
 	g.hs(rd.SSplat64, "Splat64", func() {
 		g.load(RDX, 1)
-		a.MovQToX(X0, RDX)
-		a.Vec(Punpcklqdq, X0, X0)
-		g.storeV(0, X0)
+		a.MovQToX(XM0, RDX)
+		a.Vec(Punpcklqdq, XM0, XM0)
+		g.storeV(0, XM0)
 		g.next(1)
 	})
 }
@@ -587,11 +587,11 @@ func (g *gen) simdMemory() {
 			a.Jcc(CondA, g.exit)
 			a.Load(R8, R8, rd.MemoryBuf)
 			if m.addr == 1 {
-				a.LoadVecIdx(X0, R8, RSI, 0)
-				g.storeV(0, X0)
+				a.LoadVecIdx(XM0, R8, RSI, 0)
+				g.storeV(0, XM0)
 			} else {
-				g.loadV(X0, 1)
-				a.StoreVecIdx(R8, RSI, 0, X0)
+				g.loadV(XM0, 1)
+				a.StoreVecIdx(R8, RSI, 0, XM0)
 			}
 			g.next(3)
 		})

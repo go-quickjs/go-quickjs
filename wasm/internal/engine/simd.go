@@ -6,7 +6,7 @@ import (
 )
 
 //go:generate go run ./internal/simdgen ops_simd_gen.go reg_simd_gen.go internal/regdef/simd_gen.go
-//go:generate go run ./internal/nativegen native_handlers_amd64.s
+//go:generate go run ./internal/nativegen native_handlers_amd64.s native_handlers_arm64.s
 
 // The SIMD operators' lanes. A vector's lanes run from the low bytes of Lo
 // to the high bytes of Hi; an operator unpacks its operands into arrays of
