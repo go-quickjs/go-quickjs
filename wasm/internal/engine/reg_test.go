@@ -707,3 +707,29 @@ func TestRegGC(t *testing.T) {
 		{"refs", []Val{{N: 2}}},
 	})
 }
+
+// TestRegAtomics checks the atomic instructions against the tree's, traps
+// included.
+func TestRegAtomics(t *testing.T) {
+	regMatchesTree(t, `(module
+	  (memory 1 1 shared) (memory $u 1)
+	  (func (export "rmw") (param i32 i64) (result i64)
+	    (i32.atomic.store (local.get 0) (i32.const 10))
+	    (drop (i32.atomic.rmw.add (local.get 0) (i32.const 5)))
+	    (drop (i32.atomic.rmw8.cmpxchg_u (local.get 0) (i32.const 15) (i32.const 0x1ff)))
+	    (i64.atomic.store offset=8 (local.get 0) (local.get 1))
+	    (atomic.fence)
+	    (i64.add (i64.atomic.rmw16.xchg_u offset=8 (local.get 0) (i64.const 7))
+	      (i64.add (i64.atomic.load offset=8 (local.get 0)) (i64.extend_i32_u (i32.atomic.load (local.get 0))))))
+	  (func (export "wait") (param i32) (result i32)
+	    (i32.add (memory.atomic.wait32 (local.get 0) (i32.const 1) (i64.const 0))
+	      (memory.atomic.notify (local.get 0) (i32.const 2))))
+	  (func (export "unshared") (result i32) (memory.atomic.wait64 $u (i32.const 0) (i64.const 0) (i64.const 0))))`, []regCall{
+		{"rmw", []Val{{N: 16}, {N: 0x123456789}}},
+		{"rmw", []Val{{N: 2}, {N: 1}}},
+		{"rmw", []Val{{N: 65536}, {N: 1}}},
+		{"wait", []Val{{N: 64}}},
+		{"wait", []Val{{N: 3}}},
+		{"unshared", nil},
+	})
+}

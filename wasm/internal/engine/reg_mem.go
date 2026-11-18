@@ -234,6 +234,5 @@ func init() {
 
 // The families still compiled by the closure tree.
 
-func (c *regCompiler) atomicOp(op opcode.Opcode) bool { return false }
-func (c *regCompiler) exnOp(op opcode.Opcode) bool    { return false }
-func (c *regCompiler) endTry(t *rctl)                 { panic("wasm: a try in register code") }
+func (c *regCompiler) exnOp(op opcode.Opcode) bool { return false }
+func (c *regCompiler) endTry(t *rctl)              { panic("wasm: a try in register code") }
