@@ -349,8 +349,12 @@ func (g *armGen) call() {
 	a.Bind(builtin)
 	a.CmpImm(r9, int64(regCallNative), false)
 	a.BCond(NE, g.ex(4))
-	notPush := a.NewLabel()
-	g.push(notPush)
+	notPush, intrinsic := a.NewLabel(), a.NewLabel()
+	g.push(notPush, intrinsic)
+	g.end = append(g.end, func() {
+		a.Bind(intrinsic)
+		g.strIntrinsic(notPush, light)
+	})
 	reflect := a.NewLabel()
 	a.Bind(notPush)
 	g.genNext(reflect)
@@ -937,9 +941,10 @@ func (g *armGen) lightW(fn int32, given bool) {
 }
 
 // push is amd64's (amd64_calls.go): call_method_w of push, of one
-// argument, appended to an array with room for it. rC is the site's
-// cache entry, rS the window, rW the instruction.
-func (g *armGen) push(light Label) {
+// argument, appended to an array with room for it, another built-in of
+// one argument going to other, the funcData in r9 and its elemOp in rD.
+// rC is the site's cache entry, rS the window, rW the instruction.
+func (g *armGen) push(light, other Label) {
 	a := g.a
 	a.Ubfx(rD, rW, 0, 8)
 	a.CmpImm(rD, int64(bytecode.RCallMW), false)
@@ -958,7 +963,7 @@ func (g *armGen) push(light Label) {
 	a.Load(r9, r9, sizeObj+offExtData+8)
 	a.LoadU8(rD, r9, offFDElemOp)
 	a.CmpImm(rD, int64(elemPush), false)
-	a.BCond(NE, light)
+	a.BCond(NE, other)
 	a.LoadU8(rD, r9, offFDBound)
 	a.Cbnz(rD, light, false)
 	// The receiver, an array with room.

@@ -649,7 +649,8 @@ elements, `typeof` and `jtypeof`, a template's parts, `length`, dense
 arrays' and typed arrays' elements (every kind but Float16), short BigInts'
 `+`, `-`, `*`, their compare-and-branches of two registers and of a register
 and an upvalue, and their `===` and `!==` (equal only if both their words
-are, a BigInt the Value holds being held one way), a string's `charCodeAt`,
+are, a BigInt the Value holds being held one way), a string's `charCodeAt`
+(fused, or the built-in a method call's site has cached),
 an element written at an array's length where it has room,
 `Array.prototype.push` of one argument, a `switch`'s table, a for-in's step
 over an array's indices or a snapshot of keys, a for-of's step over a dense
@@ -719,6 +720,26 @@ an exit's state, since it throws nothing and runs no code (`string_at` 61.0
 to 52.0 ns on a Ryzen 5 3600); anything else as `rhCallW` makes it
 (`regNative`), returning to the exit stub's tail, which goes on or ends the
 frame, so that a built-in that throws or calls back is the exit's case.
+
+**String methods by their target.** Some of String.prototype's methods
+the handlers answer themselves where `call_method_w`'s site has cached
+the built-in, as V8's call feedback, not its bytecode, decides what a
+call does: the method is known by its `elemOp`, the mark a built-in has
+of a frameless application, and answered on a string, with a number for
+its argument, by the kernel of its fused form -- `charCodeAt` by
+`char_code_at`'s (nativegen's `strIntrinsic`, `charCodeUnit`). So
+`s.charCodeAt(++i)` and `s.charCodeAt(i + 1)`, whose method is read
+before the argument is evaluated and which `char_code_at` therefore
+cannot take, are an ordinary method call: a script function in the
+built-in's place, or another built-in, is the site's callee like any
+other, and the JIT reads the same feedback. A receiver that is not a
+string, an argument that is not a number, a rope or anything else the
+kernel does not answer is `nativeBuiltin`'s. The Go table calls the
+built-in as a native leaf. The code is laid after the call handler's
+numbered exits (nativegen's `end`): push's check of its `elemOp`, which
+goes there, is the only jump of an earlier handler it changed, and that
+by its displacement. `codePointAt`, `at` and `charAt` have no native
+kernel yet.
 
 **Call sites of several callees.** A call site's cache holds one callee.
 Where `call_w` or `call_method_w` meets another, the handler exits with the

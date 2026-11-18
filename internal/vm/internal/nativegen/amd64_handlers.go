@@ -1019,7 +1019,6 @@ func nativeEmit(v *variant) (*block, error) {
 		// from the realm's cache of String.prototype's properties and i a
 		// number, as regCharCodeAt reads it; a rope, the code units of a
 		// string not ASCII not made yet, anything else Go's.
-		nan, wide, have, idx := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.decB(RSI)
 		a.LoadIdx(R9, R12, RSI, 1, 0)
 		a.MovRR(RCX, R9)
@@ -1062,35 +1061,7 @@ func nativeEmit(v *variant) (*block, error) {
 		a.MovZX8(RDX, RDX)
 		a.ShiftImm(Shl, RDX, 4, true)
 		g.num(0, RDX)
-		a.SSEOp(UcomiSD, 0, 0)
-		a.Jcc(CondNP, idx)
-		a.SSEOp(XorPD, 0, 0)
-		a.Bind(idx)
-		a.Cvttsd2si(RCX, 0)
-		a.Load(RSI, RDI, scr(sV0))
-		a.CmpMem(RCX, RSI, offStrLen, true)
-		a.Jcc(CondAE, nan)
-		a.CmpMemImm8(RSI, offStrLeft, 0)
-		a.Jcc(CondNE, g.exit)
-		a.LoadU8(RDX, RSI, offStrASCII)
-		a.Op(Test, RDX, RDX, false)
-		a.Jcc(CondE, wide)
-		a.Load(RDX, RSI, offStrS)
-		a.LeaIdx(RDX, RDX, RCX, 1, 0)
-		a.LoadU8(RCX, RDX, 0)
-		a.Jmp(have)
-		a.Bind(wide)
-		a.Load(RDX, RSI, offStrAux)
-		a.Op(Test, RDX, RDX, true)
-		a.Jcc(CondE, g.exit)
-		a.LeaIdx(RDX, RDX, RCX, 2, 0)
-		a.LoadU16(RCX, RDX, 0)
-		a.Bind(have)
-		a.Cvtsi2sd(0, RCX, true)
-		g.storeA(0)
-		a.Bind(nan)
-		a.LoadSD(0, RDI, ncNaN)
-		g.storeA(0)
+		g.charCodeUnit(g.exit, g.storeA)
 	})
 	// o[k] += v, a statement's update of a dense array's element that
 	// holds a number, by a number: its word alone written, as
@@ -1342,6 +1313,9 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Bind(l)
 		a.StoreImm(RDI, scr(15), int32(n))
 		a.Jmp(g.exit)
+	}
+	for _, emit := range g.end {
+		emit()
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)

@@ -886,7 +886,6 @@ func armEmit(v *variant) (*block, error) {
 		// from the realm's cache of String.prototype's properties and i a
 		// number, as regCharCodeAt reads it; a rope, the code units of a
 		// string not ASCII not made yet, anything else Go's.
-		nan, wide, have, idx := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 		g.regB(rS)
 		a.Load(r9, rS, 0)
 		g.kindIs(r9, KindString)
@@ -918,33 +917,7 @@ func armEmit(v *variant) (*block, error) {
 		// The position, NaN as 0, truncated: one below the length, or NaN.
 		g.regX(rD)
 		g.num(0, rD)
-		a.FCmp(0, 0)
-		a.BCond(VC, idx)
-		a.FMovToF(0, ZR)
-		a.Bind(idx)
-		a.Fcvtzs(rC, 0)
-		a.Load(rS, rCtx, scr(sV0))
-		g.cmpMem(rC, rS, offStrLen)
-		a.BCond(HS, nan)
-		g.cmpMemImm(rS, offStrLeft, 0)
-		a.BCond(NE, g.exit)
-		a.LoadU8(rD, rS, offStrASCII)
-		a.Cbz(rD, wide, false)
-		a.Load(rD, rS, offStrS)
-		a.Op(Add, rD, rD, rC, true)
-		a.LoadU8(rC, rD, 0)
-		a.B(have)
-		a.Bind(wide)
-		a.Load(rD, rS, offStrAux)
-		a.Cbz(rD, g.exit, true)
-		a.AddLsl(rD, rD, rC, 1)
-		a.LoadU16(rC, rD, 0)
-		a.Bind(have)
-		a.Scvtf(0, rC, true)
-		g.storeA(0)
-		a.Bind(nan)
-		a.LoadF(0, rCtx, ncNaN)
-		g.storeA(0)
+		g.charCodeUnit(g.exit, g.storeA)
 	})
 	// o[k] += v of a dense array's number element, as amd64's: the object
 	// in rS, the value in D1, the key in D0 or rC.
@@ -1160,6 +1133,9 @@ func armEmit(v *variant) (*block, error) {
 		a.Bind(l)
 		g.storeImm(rCtx, scr(15), int64(n))
 		a.B(g.exit)
+	}
+	for _, emit := range g.end {
+		emit()
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)

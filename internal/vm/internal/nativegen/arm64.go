@@ -93,6 +93,8 @@ type armGen struct {
 	after []func()
 	// last follows the existing out-of-line helpers as well as the handlers.
 	last []func()
+	// end is amd64's, after the numbered exits.
+	end []func()
 	// initL and initMade are amd64's.
 	initL    Label
 	initMade bool

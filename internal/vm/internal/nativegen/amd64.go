@@ -38,6 +38,10 @@ type nativeGen struct {
 	after []func()
 	// last follows the existing out-of-line helpers as well as the handlers.
 	last []func()
+	// end is laid after the call handler's numbered exits, the block's
+	// last code: what a later round adds there changes no jump of the
+	// code before it, not even a jump's displacement to an exit.
+	end []func()
 	// initL is the native initializer's run (initRun), emitted after the
 	// handlers once one has asked for it (initMade).
 	initL    Label

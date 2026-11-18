@@ -392,10 +392,14 @@ func (g *nativeGen) call() {
 	a.Bind(builtin)
 	a.OpImm(Cmp, R9, regCallNative, false)
 	a.Jcc(CondNE, g.ex(4))
-	notPush := a.NewLabel()
-	g.push(notPush)
+	notPush, intrinsic := a.NewLabel(), a.NewLabel()
+	g.push(notPush, intrinsic)
 	a.Bind(light)
 	g.light(ncBuiltinFn)
+	g.end = append(g.end, func() {
+		a.Bind(intrinsic)
+		g.strIntrinsic(notPush, light)
+	})
 	// Another callee than the cache's, of another template: the exit, its
 	// Go function nativeCallMiss (ncMiss), which makes the cache the
 	// callee's where the code enters it with a frame and has the call made
@@ -1079,10 +1083,12 @@ func (g *nativeGen) lightW(fn int32, given bool) {
 // push appends it: the receiver an array an element appended at its
 // length is stored in as arrayAppend stores one (appendRoom), the
 // argument at elems[len], the length past it, and R[B] the new length. A
-// bound function, another built-in, another count of arguments, a full
-// array or anything else exits, before anything is written. RCX is the
-// site's cache entry, RSI the window, RAX the instruction.
-func (g *nativeGen) push(light Label) {
+// bound function, another count of arguments, a full array or anything
+// else goes to light, before anything is written; another built-in, of
+// one argument, to other, the funcData in R9 and its elemOp in RDX
+// (strIntrinsic). RCX is the site's cache entry, RSI the window, RAX the
+// instruction.
+func (g *nativeGen) push(light, other Label) {
 	a := g.a
 	a.MovZX8(RDX, RAX)
 	a.OpImm(Cmp, RDX, int32(bytecode.RCallMW), false)
@@ -1103,7 +1109,7 @@ func (g *nativeGen) push(light Label) {
 	a.Load(R9, R9, sizeObj+offExtData+8)
 	a.LoadU8(RDX, R9, offFDElemOp)
 	a.OpImm(Cmp, RDX, int32(elemPush), false)
-	a.Jcc(CondNE, light)
+	a.Jcc(CondNE, other)
 	a.LoadU8(RDX, R9, offFDBound)
 	a.Op(Test, RDX, RDX, false)
 	a.Jcc(CondNE, light)
