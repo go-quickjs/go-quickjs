@@ -2,10 +2,10 @@ package compiler
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // A function or class the language leaves anonymous -- `a.b = function () {}`
@@ -34,7 +34,7 @@ func (c *compiler) traceJoin(base string, parts ...string) string {
 		return ""
 	}
 	if base == "" {
-		if r, _ := utf8.DecodeRuneInString(c.fn.Name); unicode.IsUpper(r) {
+		if r, _ := utf8.DecodeRuneInString(c.fn.Name); ucd.IsUpper(r) {
 			base = c.fn.Name
 		}
 	}

@@ -120,6 +120,10 @@ func TestStackTraceInferredNames(t *testing.T) {
 		{trace + "var a = {}; a[0] = function () { throw new Error() }; top(() => a[0]())", "at a.<computed> (<eval>:2:40)"},
 		// this.x
 		{trace + "function C() { this.x = function () { throw new Error() } }; top(() => new C().x())", "at C.x (<eval>:2:45)"},
+		// a function named by a capital of Unicode 16.0, whose name a path
+		// in it begins with, and one named by its small letter, whose does not
+		{trace + "function \u1C89() { var o = {}; o.y = function () { throw new Error() }; return o }; top(() => \u1C89().y())", "at \u1C89.o.y (<eval>:2:54)"},
+		{trace + "function \u1C8A() { var o = {}; o.y = function () { throw new Error() }; return o }; top(() => \u1C8A().y())", "at o.y (<eval>:2:54)"},
 		// exports
 		{trace + "var exports = {}; exports.f = function () { throw new Error() }; top(() => exports.f())", "at exports.f (<eval>:2:51)"},
 		// module.exports
