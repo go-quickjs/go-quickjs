@@ -661,7 +661,9 @@ func (m *nodeModules) toPath(from string) (string, error) {
 
 // loadESM is the module loader. One of node's modules not installed is
 // refused; an ES module, and a JSON file a typed import asks for, is its
-// source; and a CommonJS file is a synthetic module, whose default export --
+// source; a .wasm file is its bytes, which the WebAssembly namespace
+// compiles as a WebAssembly module; and a CommonJS file is a synthetic
+// module, whose default export --
 // and "module.exports" -- is module.exports and whose named exports are the
 // names its source exports, run by requiring it in its turn.
 func (m *nodeModules) loadESM(specifier, referrer string) (string, string, error) {
@@ -680,6 +682,10 @@ func (m *nodeModules) loadESM(specifier, referrer string) (string, string, error
 	if isESM(filename) || strings.EqualFold(filepath.Ext(filename), ".json") {
 		src, err := readSource(filename)
 		return src, filename, err
+	}
+	if filepath.Ext(filename) == ".wasm" {
+		b, err := os.ReadFile(filename)
+		return string(b), filename, err
 	}
 	names, err := m.commonJSNames(filename, map[string]bool{})
 	if err != nil {

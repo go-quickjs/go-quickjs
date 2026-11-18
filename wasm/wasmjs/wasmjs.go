@@ -16,6 +16,14 @@ import (
 // Install defines the global WebAssembly on rt. The namespace is made the
 // first time a script reads the global, so a runtime that never uses it pays
 // nothing for it.
+//
+// It also makes WebAssembly modules importable as ES modules: the source a
+// module loader gives for a name ending in .wasm, or that starts with the
+// binary format's magic number, is compiled as a WebAssembly module, which
+// is the bytes of the file as a string. Its exports are its bindings -- a
+// global's value, not the WebAssembly.Global -- and each module its imports
+// name is a module it imports from, resolved against its name; an import of
+// its source phase gives the WebAssembly.Module.
 func Install(rt *quickjs.Runtime, opts ...Option) error {
 	if rt == nil {
 		return errors.New("wasmjs: no runtime")
@@ -42,10 +50,15 @@ func Install(rt *quickjs.Runtime, opts ...Option) error {
 	if err != nil || !objectProto.IsObject() {
 		return errors.New("wasmjs: no Object.prototype")
 	}
+	objectAssign, err := r.GetProp(objectCtor, r.Intern("assign"))
+	if err != nil {
+		return err
+	}
 	var built *api
 	namespace := func() *api {
 		if built == nil {
 			built = newAPI(r, rt, c, proxy, objectProto.Object())
+			built.objectAssign = objectAssign
 		}
 		return built
 	}
@@ -54,6 +67,13 @@ func Install(rt *quickjs.Runtime, opts ...Option) error {
 	// namespace, whether or not a script has read the global: the global
 	// object, which lives as long as the runtime, keeps what makes it.
 	vm.HostSetSlot(r, r.Global(), installation(namespace))
+	vm.HostSetModuleCompiler(r, func(name, source string) (*vm.Module, bool, error) {
+		if !isWasmModule(name, source) {
+			return nil, false, nil
+		}
+		m, err := namespace().esmModule(name, source)
+		return m, true, err
+	})
 	return nil
 }
 
@@ -92,9 +112,11 @@ type api struct {
 	// proxy is the Proxy constructor, which wasm's GC objects are made
 	// opaque with, and opaque the handler they are made with.
 	proxy vm.Value
-	// objectProto is Object.prototype, as Install found it.
-	objectProto *vm.Object
-	opaque      *vm.Object
+	// objectProto is Object.prototype, and objectAssign Object.assign, as
+	// Install found them.
+	objectProto  *vm.Object
+	objectAssign vm.Value
+	opaque       *vm.Object
 
 	// wrappers maps wasm's objects -- functions, memories, tables, globals,
 	// tags, exceptions, structs and arrays -- to the JavaScript objects that
@@ -116,12 +138,19 @@ type api struct {
 	// jitBudget bounds the native code of the runtime's modules, made at
 	// the first compile that has any (see memlimit.go).
 	jitBudget *engine.JITBudget
+
+	// moduleURL is how a link error names a module imported as an ES
+	// module, or nil for by its name; esmInstances maps the namespace of
+	// each such module evaluated to its instance's exports (see esm.go).
+	moduleURL    func(name string) string
+	esmInstances map[*vm.Object]*vm.Object
 }
 
 // newAPI builds the WebAssembly namespace of r.
 func newAPI(r *vm.Runtime, qrt any, c config, proxy vm.Value, objectProto *vm.Object) *api {
 	a := &api{rt: r, qrt: qrt, quirks: vm.HostNodeQuirks(r), proxy: proxy, objectProto: objectProto,
-		streamBytes: vm.Undefined, streamThen: vm.Undefined}
+		streamBytes: vm.Undefined, streamThen: vm.Undefined, moduleURL: c.moduleURL,
+		esmInstances: map[*vm.Object]*vm.Object{}}
 	if a.quirks {
 		a.limits = decoder.V8Limits()
 	} else {

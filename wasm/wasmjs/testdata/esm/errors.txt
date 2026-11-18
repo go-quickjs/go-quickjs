@@ -1,0 +1,110 @@
+What importing a WebAssembly module fails with: compiling, the names it may
+not use, linking its imports, its start function, cycles that reach a
+binding before it is initialized, and source phase imports.
+
+-- bad.wasm.bin --
+not wasm
+-- empty.wasm.bin --
+-- js.mjs --
+export const f = 1;
+export const g = 5;
+export const tab = 5;
+-- t01.mjs --
+import "./bad.wasm";
+-- t02.mjs --
+import "./empty.wasm";
+-- m.wat --
+(module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))
+-- t03.mjs --
+import { nope } from "./m.wasm";
+-- notcallable.wat --
+(module (import "./js.mjs" "f" (func)))
+-- t04.mjs --
+import "./notcallable.wasm";
+-- missing.wat --
+(module (import "./js.mjs" "h" (func)))
+-- t05.mjs --
+import "./missing.wasm";
+-- jsprefix.wat --
+(module (import "wasm-js:x" "f" (func)))
+-- t06.mjs --
+import "./jsprefix.wasm";
+-- nameprefix.wat --
+(module (import "./js.mjs" "wasm:f" (func)))
+-- t07.mjs --
+import "./nameprefix.wasm";
+-- exportprefix.wat --
+(module (func (export "wasm-js:f")))
+-- t08.mjs --
+import "./exportprefix.wasm";
+-- start.wat --
+(module (func $s unreachable) (start $s))
+-- t09.mjs --
+import "./start.wasm";
+-- mutable.wat --
+(module (import "./js.mjs" "g" (global (mut i32))))
+-- t10.mjs --
+import "./mutable.wasm";
+-- table.wat --
+(module (import "./js.mjs" "g" (global i32)) (import "./js.mjs" "tab" (table 1 funcref)))
+-- t11.mjs --
+import "./table.wasm";
+-- self.wat --
+(module (import "./self.wasm" "f" (func)) (func (export "f")))
+-- t12.mjs --
+import "./self.wasm";
+-- tdz.mjs --
+import { g } from "./tdz.wasm";
+export function f() {}
+export const seen = typeof g;
+-- tdz.wat --
+(module (import "./tdz.mjs" "f" (func)) (global (export "g") i32 (i32.const 1)))
+-- t13.mjs --
+import "./tdz.wasm";
+-- a.wat --
+(module (import "./b.wasm" "g" (func)) (func (export "f")))
+-- b.wat --
+(module (import "./a.wasm" "f" (func)) (func (export "g")))
+-- t14.mjs --
+import "./a.wasm";
+-- t15.mjs --
+import source x from "./js.mjs";
+-- t16.mjs --
+await import.source("./js.mjs");
+-- t17.mjs --
+await import.source("./bad.wasm");
+-- t18.mjs --
+await import.source("./jsprefix.wasm");
+-- nodep.wat --
+(module (import "./nowhere.mjs" "f" (func)))
+-- t19.mjs --
+import { p } from "./harness.mjs";
+import source x from "./nodep.wasm";
+p("source of a module whose imports are not there", () => x instanceof WebAssembly.Module);
+-- t20.mjs --
+await import("./nodep.wasm");
+-- t21.mjs --
+import "./bad.wasm";
+-- want --
+t01.mjs -> CompileError: $DIR/bad.wasm: WebAssembly.Module(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0
+t02.mjs -> CompileError: $DIR/empty.wasm: WebAssembly.Module(): BufferSource argument is empty
+t03.mjs -> SyntaxError: "$DIR/m.wasm" does not export "nope"
+t04.mjs -> LinkError: WebAssembly.Instance(): Import #0 "./js.mjs" "f": function import requires a callable
+t05.mjs -> LinkError: WebAssembly.Instance(): Import #0 "./js.mjs" "h": function import requires a callable
+t06.mjs -> LinkError: Invalid Wasm import "wasm-js:x" in $URL/jsprefix.wasm
+t07.mjs -> LinkError: Invalid Wasm import name "wasm:f" in $URL/nameprefix.wasm
+t08.mjs -> LinkError: Invalid Wasm export name "wasm-js:f" in $URL/exportprefix.wasm
+t09.mjs -> RuntimeError: unreachable
+t10.mjs -> LinkError: WebAssembly.Instance(): Import #0 "./js.mjs" "g": imported mutable global must be a WebAssembly.Global object
+t11.mjs -> LinkError: WebAssembly.Instance(): Import #1 "./js.mjs" "tab": table import requires a WebAssembly.Table
+t12.mjs -> LinkError: WebAssembly.Instance(): Import #0 "./self.wasm" "f": function import requires a callable
+t13.mjs -> ReferenceError: cannot access "g" before it is initialized
+t14.mjs -> ReferenceError: cannot access "f" before it is initialized
+t15.mjs -> SyntaxError: the module "$DIR/js.mjs" has no source to import
+t16.mjs -> SyntaxError: the module "$DIR/js.mjs" has no source to import
+t17.mjs -> CompileError: $DIR/bad.wasm: WebAssembly.Module(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0
+t18.mjs -> LinkError: Invalid Wasm import "wasm-js:x" in $URL/jsprefix.wasm
+source of a module whose imports are not there -> true
+t19.mjs -> ok
+t20.mjs -> Error: Cannot find module '$DIR/nowhere.mjs' imported from $DIR/nodep.wasm [ERR_MODULE_NOT_FOUND]
+t21.mjs -> CompileError: $DIR/bad.wasm: WebAssembly.Module(): expected magic word 00 61 73 6d, found 6e 6f 74 20 @+0

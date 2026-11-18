@@ -384,10 +384,7 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 	}
 	m, ok := r.modules[resolved]
 	if !ok {
-		if r.compileModule == nil {
-			return nil, r.throwError(errType, "this runtime cannot compile modules")
-		}
-		if m, err = r.compileModule(resolved, source); err != nil {
+		if m, err = hostCompileModule(r, resolved, source); err != nil {
 			return nil, err
 		}
 	}
@@ -430,7 +427,12 @@ func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) error {
 		return nil
 	}
 	if _, source := bytecode.SplitSourceRequest(imp.specifier); source {
-		return r.moduleSourceError(src)
+		s, err := hostModuleSource(r, src)
+		if err != nil {
+			return err
+		}
+		m.env.setOwnRaw(r.atoms.intern(imp.local), s, moduleBindingFlags(imp.local))
+		return nil
 	}
 	if imp.namespace {
 		namespace := r.namespaceObject
@@ -1136,10 +1138,11 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 	return m, nil
 }
 
-// moduleSourceError is what asking for a module's source gives. A module
-// source is what a module of a kind that has one -- WebAssembly, say -- is
-// before it is instantiated; a JavaScript module, and a JSON, text or bytes
-// one, has none, and so every source import here fails to link.
+// moduleSourceError is what asking for a module's source gives where it has
+// none. A module source is what a module of a kind that has one --
+// WebAssembly, which a host gives (HostDefineModule) -- is before it is
+// instantiated; a JavaScript module, and a JSON, text or bytes one, has
+// none, and a source import of one fails to link.
 func (r *Runtime) moduleSourceError(m *Module) error {
 	return r.throwError(errSyntax, "the module %q has no source to import", m.Specifier)
 }

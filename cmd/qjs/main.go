@@ -255,8 +255,9 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 	}
 	rt := quickjs.New(rtOpts...)
 	// WebAssembly, in a build with the quickjs_wasm tag; without it there is
-	// none.
-	if err := wasmjs.Install(rt); err != nil && !errors.Is(err, wasmjs.ErrNotBuilt) {
+	// none. A module's link errors name it by its URL, as import.meta.url
+	// does.
+	if err := wasmjs.Install(rt, wasmjs.WithModuleURL(moduleURL)); err != nil && !errors.Is(err, wasmjs.ErrNotBuilt) {
 		rt.Close()
 		return nil, err
 	}
@@ -426,6 +427,15 @@ func fileURLPath(specifier string, windows bool) (string, error) {
 
 // fileURL writes an absolute native path as a file URL. Drive-letter paths
 // need an extra leading slash, while a UNC server becomes the URL host.
+// moduleURL is the URL of a module by the name the loader resolved: a
+// file's URL, or the name of one that is not a file.
+func moduleURL(name string) string {
+	if filepath.IsAbs(name) {
+		return fileURL(name)
+	}
+	return name
+}
+
 func fileURL(path string) string {
 	text := filepath.ToSlash(path)
 	if volume := filepath.VolumeName(path); strings.HasPrefix(volume, `\\`) {

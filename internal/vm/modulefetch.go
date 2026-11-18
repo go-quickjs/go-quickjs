@@ -258,11 +258,7 @@ func (g *graphFetch) receive(res fetchResult) {
 	default:
 		var ok bool
 		if m, ok = r.modules[res.resolved]; !ok {
-			if r.compileModule == nil {
-				err = r.throwError(errType, "this runtime cannot compile modules")
-			} else {
-				m, err = r.compileModule(res.resolved, res.source)
-			}
+			m, err = hostCompileModule(r, res.resolved, res.source)
 		}
 	}
 	if err != nil {

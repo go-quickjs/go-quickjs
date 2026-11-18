@@ -307,6 +307,60 @@ stops script, in a call made directly or from a promising call.
 A runtime made `WithJIT` runs the WebAssembly it compiles natively too, where
 the JavaScript JIT runs: see [The JIT](#the-jit).
 
+### WebAssembly modules as ES modules
+
+`Install` also makes a WebAssembly module importable from JavaScript, as Node
+26 does without a flag (the WebAssembly ESM integration):
+
+```js
+import { add, memory } from "./m.wasm";  // its instance's exports
+import source mod from "./m.wasm";       // its WebAssembly.Module
+const again = await import.source("./m.wasm");
+```
+
+It works through the runtime's module loading, so any embedder that installs
+the namespace has it: the source a module loader returns for a name that
+ends in `.wasm`, or that begins with the binary format's magic number, is
+the module's bytes, and is compiled as WebAssembly -- with the JS String
+builtins and `wasm:js/string-constants` as its string constants' module, as
+Node compiles it. `qjs`'s loader returns a `.wasm` file's bytes.
+
+- Each module name its imports use (but the builtins' and the constants')
+  is a module it imports from, resolved against its own name, loaded,
+  linked and evaluated before it as an `import * as` of it would be.
+  Evaluating it instantiates it with those modules' namespaces as its
+  imports object, so a JavaScript module gives it functions, numbers,
+  `WebAssembly.Memory`s and the rest by its exports, with the link errors of
+  `new WebAssembly.Instance` (`WebAssembly.Instance(): Import #0 "./js.mjs"
+  "f": function import requires a callable`). A global it imports from
+  another WebAssembly module is that module's `WebAssembly.Global`, so a
+  mutable one is shared.
+- Its exports are its namespace's bindings: functions, memories, tables and
+  tags as the instance's exports objects are, and a global as its value when
+  the module was evaluated (`undefined` for a v128), not as the
+  `WebAssembly.Global`. They are in their temporal dead zone until it is
+  evaluated: a cycle that reaches one sooner -- a JavaScript module reading
+  one at its top level, a WebAssembly module importing from one being
+  evaluated -- throws a `ReferenceError`.
+- A module is compiled once, instantiated once however many modules import
+  it, and its source phase is the same `WebAssembly.Module` each time. A
+  source phase import loads the module alone: what its imports name is
+  neither loaded nor linked. `%AbstractModuleSource%.prototype`'s
+  `Symbol.toStringTag` getter names its class, `WebAssembly.Module`.
+- A module that does not compile fails to load with the `CompileError` of
+  `new WebAssembly.Module`, its message prefixed with the module's name
+  (`/app/m.wasm: WebAssembly.Module(): expected magic word ...`); one whose
+  imports name a `wasm-js:` module, or whose imports or exports use a name
+  beginning with `wasm:` or `wasm-js:`, with a `LinkError` naming its URL
+  (`Invalid Wasm import "wasm-js:x" in file:///app/m.wasm`), which
+  `wasmjs.WithModuleURL` gives from its name -- `qjs` gives a file's
+  `file:` URL -- and is its name by default.
+
+Node prints an `ExperimentalWarning` when it first evaluates such a module;
+go-quickjs prints nothing. The source phase of a JavaScript module is the
+runtime's `SyntaxError`, worded its own way, where Node's loader throws
+`ERR_SOURCE_PHASE_NOT_DEFINED`.
+
 ## Limits
 
 A module is validated against one of three sets of limits, the presets of
@@ -971,8 +1025,6 @@ WASI:
 
 ## Follow-ups
 
-- ESM integration: importing a `.wasm` file as a module, and its source
-  phase (`import source m from "./m.wasm"`).
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
 - array.new of a length not constant, or of more than 16 elements, still

@@ -302,9 +302,9 @@ func (r *Runtime) importDeferred(request, referrer string, result *Object) {
 	})
 }
 
-// importSource settles import.source()'s promise. It asks for a module's
-// source, which a module here never has: once the module is found it rejects,
-// as linking a static source import of it fails.
+// importSource settles import.source()'s promise with a module's source,
+// once the module is found, or rejects as linking a static source import of
+// it fails.
 func (r *Runtime) importSource(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
 		r.whenFetched(request, referrer, func(err error) {
@@ -313,7 +313,11 @@ func (r *Runtime) importSource(request, referrer string, result *Object) {
 				mod, err = r.loadDependency(request, referrer)
 			}
 			if err == nil {
-				err = r.moduleSourceError(mod)
+				var s Value
+				if s, err = hostModuleSource(r, mod); err == nil {
+					r.resolvePromise(result, s)
+					return
+				}
 			}
 			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
 		})
@@ -330,10 +334,10 @@ func (r *Runtime) initModuleSource() {
 			return Undefined, rt.throwTypeError("AbstractModuleSource is abstract and cannot be constructed")
 		})
 	r.global.deleteOwn(r.atoms.intern("AbstractModuleSource"))
-	// Its tag names the class of a module source, and nothing that is not
-	// one has a class: with no such classes here, it is always undefined.
+	// Its tag names the class of a module source -- a host's, which says
+	// (HostModuleSourceClass) -- and nothing that is not one has a class.
 	get := r.newNativeFunc("get [Symbol.toStringTag]", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return Undefined, nil
+		return hostModuleSourceTag(this), nil
 	})
 	r.defineAccessor(proto, r.atoms.internSymbol(r.wellKnown.toStringTag), get, nil, propConfigurable)
 }

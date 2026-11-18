@@ -30,9 +30,19 @@ var ErrNotBuilt = errors.New("wasmjs: this build has no WebAssembly (build with 
 type Option func(*config)
 
 type config struct {
-	noJSPI bool
+	noJSPI    bool
+	moduleURL func(name string) string
 }
 
 // WithoutJSPI leaves out the JS Promise Integration: WebAssembly.Suspending,
 // WebAssembly.promising and WebAssembly.SuspendError.
 func WithoutJSPI() Option { return func(c *config) { c.noJSPI = true } }
+
+// WithModuleURL gives how the link errors of a WebAssembly module imported as
+// an ES module name it: by the URL url returns for the name its loader
+// resolved, where by default they name it by that name. A compile error
+// names it by its name either way. A host whose names are files' paths gives
+// their file: URLs, as qjs does.
+func WithModuleURL(url func(name string) string) Option {
+	return func(c *config) { c.moduleURL = url }
+}

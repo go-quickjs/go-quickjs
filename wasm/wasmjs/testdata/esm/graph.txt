@@ -1,0 +1,106 @@
+WebAssembly modules and JavaScript modules importing each other: cycles,
+a dependency that awaits at the top level, globals between WebAssembly
+modules, the JS String builtins and string constants, and functions passed
+through.
+
+-- cycle.mjs --
+import { run } from "./cycle.wasm";
+export function f() { return 41; }
+export const result = () => run();
+-- cycle.wat --
+(module
+  (import "./cycle.mjs" "f" (func $f (result i32)))
+  (func (export "run") (result i32) call $f i32.const 1 i32.add))
+-- t1.mjs --
+import { p } from "./harness.mjs";
+import { result } from "./cycle.mjs";
+p("JavaScript first", () => result());
+-- cycle2.mjs --
+import { run } from "./cycle2.wasm";
+export function f() { return 1; }
+-- cycle2.wat --
+(module
+  (import "./cycle2.mjs" "f" (func $f (result i32)))
+  (func (export "run") (result i32) call $f))
+-- t2.mjs --
+import { p } from "./harness.mjs";
+import { run } from "./cycle2.wasm";
+p("WebAssembly first", () => run());
+-- tla.mjs --
+await 0;
+export function f() { return 7; }
+-- tla.wat --
+(module
+  (import "./tla.mjs" "f" (func $f (result i32)))
+  (func (export "run") (result i32) call $f))
+-- t3.mjs --
+import { p } from "./harness.mjs";
+import { run } from "./tla.wasm";
+p("awaits", () => run());
+-- ga.wat --
+(module
+  (global (export "g") i32 (i32.const 3))
+  (global (export "mg") (mut i64) (i64.const 4)))
+-- gb.wat --
+(module
+  (import "./ga.wasm" "g" (global $g i32))
+  (import "./ga.wasm" "mg" (global $mg (mut i64)))
+  (func (export "get") (result i32) global.get $g)
+  (func (export "bump") (result i64) global.get $mg i64.const 1 i64.add global.set $mg global.get $mg))
+-- t4.mjs --
+import { p } from "./harness.mjs";
+import { get, bump } from "./gb.wasm";
+import * as ga from "./ga.wasm";
+p("globals between modules", () => [get(), bump(), bump(), ga.g, ga.mg]);
+-- jsglobal.mjs --
+export const g = new WebAssembly.Global({ value: "i32", mutable: true }, 9);
+export const n = 1.5;
+-- jsglobal.wat --
+(module
+  (import "./jsglobal.mjs" "g" (global $g (mut i32)))
+  (import "./jsglobal.mjs" "n" (global $n f64))
+  (func (export "get") (result f64) global.get $g f64.convert_i32_s global.get $n f64.add))
+-- t5.mjs --
+import { p } from "./harness.mjs";
+import { get } from "./jsglobal.wasm";
+p("a WebAssembly.Global from JavaScript", () => get());
+-- strings.wat --
+(module
+  (import "wasm:js-string" "length" (func $len (param externref) (result i32)))
+  (import "wasm:js/string-constants" "hello" (global $h externref))
+  (func (export "len") (param externref) (result i32) local.get 0 call $len)
+  (func (export "hello") (result externref) global.get $h))
+-- t6.mjs --
+import { p } from "./harness.mjs";
+import { len, hello } from "./strings.wasm";
+import source s from "./strings.wasm";
+p("string builtins", () => [len("abcd"), hello()]);
+p("their imports", () => WebAssembly.Module.imports(s).length);
+-- through.mjs --
+export function f() { return 1; }
+-- through.wat --
+(module
+  (import "./through.mjs" "f" (func $f (result i32)))
+  (export "f" (func $f))
+  (global (export "fr") funcref (ref.func $f)))
+-- t7.mjs --
+import { p } from "./harness.mjs";
+import { f as jf } from "./through.mjs";
+import { f, fr } from "./through.wasm";
+p("a function passed through", () => [f === jf, fr === f, f()]);
+-- want --
+JavaScript first -> 42
+t1.mjs -> ok
+WebAssembly first -> 1
+t2.mjs -> ok
+awaits -> 7
+t3.mjs -> ok
+globals between modules -> [3, 5n, 6n, 3, 4n]
+t4.mjs -> ok
+a WebAssembly.Global from JavaScript -> 10.5
+t5.mjs -> ok
+string builtins -> [4, "hello"]
+their imports -> 0
+t6.mjs -> ok
+a function passed through -> [false, true, 1]
+t7.mjs -> ok

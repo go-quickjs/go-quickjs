@@ -23,6 +23,11 @@ type moduleData struct {
 	builtins []builtin
 }
 
+// ModuleSourceClassName names the class of a WebAssembly.Module as a module
+// source: what %AbstractModuleSource%.prototype[Symbol.toStringTag] answers
+// for it.
+func (md *moduleData) ModuleSourceClassName() string { return "WebAssembly.Module" }
+
 // compileImports are the compile-time imports a compile is asked for: the
 // JS String builtins, and the module name string constants are imported
 // from.

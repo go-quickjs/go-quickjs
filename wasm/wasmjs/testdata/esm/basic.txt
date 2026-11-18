@@ -1,0 +1,81 @@
+A WebAssembly module imported as an ES module: its exports as bindings, of
+every kind, the same instance for every importer, and its source phase.
+
+-- m.wat --
+(module
+  (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)
+  (global (export "g") i32 (i32.const 7))
+  (global (export "mg") (mut i32) (i32.const 8))
+  (global (export "v") v128 (v128.const i32x4 1 2 3 4))
+  (global (export "big") i64 (i64.const 5))
+  (global (export "ext") externref (ref.null extern))
+  (memory (export "mem") 1)
+  (table (export "tab") 1 funcref)
+  (tag (export "tag") (param i32))
+  (func (export "default") (result i32) i32.const 99)
+  (func (export "a-b") (result i32) i32.const 1)
+  (func (export "") (result i32) i32.const 2)
+  (func (export "setmg") (param i32) local.get 0 global.set 1)
+  (func (export "getmg") (result i32) global.get 1))
+-- t1.mjs --
+import { p } from "./harness.mjs";
+import * as ns from "./m.wasm";
+import def, { add, g, mg, v, big, ext, mem, tab, tag, "a-b" as ab, "" as empty, setmg, getmg } from "./m.wasm";
+p("keys", () => Reflect.ownKeys(ns).map(String));
+p("tag", () => Object.prototype.toString.call(ns));
+p("add", () => add(2, 3));
+p("add is the export", () => add === ns.add);
+p("globals", () => [g, mg, v, big, ext]);
+p("a global is its value once", () => { setmg(10); return [mg, getmg()]; });
+p("memory", () => [mem instanceof WebAssembly.Memory, mem.buffer.byteLength]);
+p("table", () => tab instanceof WebAssembly.Table);
+p("tag", () => tag instanceof WebAssembly.Tag);
+p("default", () => def());
+p("names", () => [ab(), empty()]);
+p("descriptor", () => { const d = Object.getOwnPropertyDescriptor(ns, "g"); return [d.value, d.writable, d.enumerable, d.configurable]; });
+p("namespace =", () => { "use strict"; ns.g = 1; });
+-- t2.mjs --
+import { p, pa } from "./harness.mjs";
+import * as ns from "./m.wasm";
+import source m from "./m.wasm";
+import source again from "./m.wasm";
+p("source", () => [m instanceof WebAssembly.Module, m === again]);
+p("source exports", () => WebAssembly.Module.exports(m).map(e => e.name + ":" + e.kind));
+p("source tag", () => [Object.prototype.toString.call(m), Object.getOwnPropertyDescriptor(Object.getPrototypeOf(WebAssembly.Module.prototype), Symbol.toStringTag).get.call(m)]);
+p("abstract module source", () => [Object.getPrototypeOf(WebAssembly.Module).name, Object.getOwnPropertyDescriptor(Object.getPrototypeOf(WebAssembly.Module.prototype), Symbol.toStringTag).get.call({})]);
+p("instance of the source", () => new WebAssembly.Instance(m).exports.add(1, 1));
+pa("import.source", async () => (await import.source("./m.wasm")) === m);
+pa("import()", async () => (await import("./m.wasm")) === ns);
+-- t3.mjs --
+import { p } from "./harness.mjs";
+import { add, g } from "./reexport.mjs";
+import * as re from "./reexport.mjs";
+p("re-exported", () => [add(4, 5), g, Object.keys(re)]);
+-- reexport.mjs --
+export * from "./m.wasm";
+export { add as plus } from "./m.wasm";
+-- want --
+keys -> ["", "a-b", "add", "big", "default", "ext", "g", "getmg", "mem", "mg", "setmg", "tab", "tag", "v", "Symbol(Symbol.toStringTag)"]
+tag -> "[object Module]"
+add -> 5
+add is the export -> true
+globals -> [7, 8, undefined, 5n, null]
+a global is its value once -> [8, 10]
+memory -> [true, 65536]
+table -> true
+tag -> true
+default -> 99
+names -> [1, 2]
+descriptor -> [7, true, true, false]
+namespace = -> TypeError: cannot assign to "g" of a module namespace
+t1.mjs -> ok
+source -> [true, true]
+source exports -> ["add:function", "g:global", "mg:global", "v:global", "big:global", "ext:global", "mem:memory", "tab:table", "tag:tag", "default:function", "a-b:function", ":function", "setmg:function", "getmg:function"]
+source tag -> ["[object WebAssembly.Module]", "WebAssembly.Module"]
+abstract module source -> ["AbstractModuleSource", undefined]
+instance of the source -> 2
+t2.mjs -> ok
+import.source -> true
+import() -> true
+re-exported -> [9, 7, ["", "a-b", "add", "big", "ext", "g", "getmg", "mem", "mg", "plus", "setmg", "tab", "tag", "v"]]
+t3.mjs -> ok
