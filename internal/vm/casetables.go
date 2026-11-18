@@ -3,130 +3,21 @@ package vm
 import (
 	"hash/maphash"
 	"strings"
-	"unicode"
 
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
-// Unicode's full case mappings, for the characters whose upper- or lower-case
-// form is more than one character or is not what the simple mapping gives.
-//
-// The tables hold the unconditional entries of Unicode's SpecialCasing data;
-// everything else is the simple mapping, which the standard library already
-// knows. The language-sensitive entries are deliberately absent: what
-// toUpperCase and toLowerCase apply is the language-independent mapping, and
-// the one context-sensitive rule they do apply -- a final sigma lowercasing to
+// The case conversions' data is package ucd's, at its Unicode version
+// rather than the toolchain's: the simple mappings, SpecialCasing's
+// unconditional full mappings for the characters whose upper- or lower-case
+// form is more than one character or is not what the simple mapping gives,
+// and the Cased and Case_Ignorable properties the final sigma's rule reads.
+// The language-sensitive mappings are not among them: what toUpperCase and
+// toLowerCase apply is the language-independent mapping, and the one
+// context-sensitive rule they do apply -- a final sigma lowercasing to
 // U+03C2 -- is a condition rather than a table entry, so it lives in the code
 // that walks the string.
-
-var specialLower = map[rune][]rune{
-	0x0130: {0x0069, 0x0307},
-}
-
-var specialUpper = map[rune][]rune{
-	0x00DF: {0x0053, 0x0053},
-	0x0149: {0x02BC, 0x004E},
-	0x01F0: {0x004A, 0x030C},
-	0x0390: {0x0399, 0x0308, 0x0301},
-	0x03B0: {0x03A5, 0x0308, 0x0301},
-	0x0587: {0x0535, 0x0552},
-	0x1E96: {0x0048, 0x0331},
-	0x1E97: {0x0054, 0x0308},
-	0x1E98: {0x0057, 0x030A},
-	0x1E99: {0x0059, 0x030A},
-	0x1E9A: {0x0041, 0x02BE},
-	0x1F50: {0x03A5, 0x0313},
-	0x1F52: {0x03A5, 0x0313, 0x0300},
-	0x1F54: {0x03A5, 0x0313, 0x0301},
-	0x1F56: {0x03A5, 0x0313, 0x0342},
-	0x1F80: {0x1F08, 0x0399},
-	0x1F81: {0x1F09, 0x0399},
-	0x1F82: {0x1F0A, 0x0399},
-	0x1F83: {0x1F0B, 0x0399},
-	0x1F84: {0x1F0C, 0x0399},
-	0x1F85: {0x1F0D, 0x0399},
-	0x1F86: {0x1F0E, 0x0399},
-	0x1F87: {0x1F0F, 0x0399},
-	0x1F88: {0x1F08, 0x0399},
-	0x1F89: {0x1F09, 0x0399},
-	0x1F8A: {0x1F0A, 0x0399},
-	0x1F8B: {0x1F0B, 0x0399},
-	0x1F8C: {0x1F0C, 0x0399},
-	0x1F8D: {0x1F0D, 0x0399},
-	0x1F8E: {0x1F0E, 0x0399},
-	0x1F8F: {0x1F0F, 0x0399},
-	0x1F90: {0x1F28, 0x0399},
-	0x1F91: {0x1F29, 0x0399},
-	0x1F92: {0x1F2A, 0x0399},
-	0x1F93: {0x1F2B, 0x0399},
-	0x1F94: {0x1F2C, 0x0399},
-	0x1F95: {0x1F2D, 0x0399},
-	0x1F96: {0x1F2E, 0x0399},
-	0x1F97: {0x1F2F, 0x0399},
-	0x1F98: {0x1F28, 0x0399},
-	0x1F99: {0x1F29, 0x0399},
-	0x1F9A: {0x1F2A, 0x0399},
-	0x1F9B: {0x1F2B, 0x0399},
-	0x1F9C: {0x1F2C, 0x0399},
-	0x1F9D: {0x1F2D, 0x0399},
-	0x1F9E: {0x1F2E, 0x0399},
-	0x1F9F: {0x1F2F, 0x0399},
-	0x1FA0: {0x1F68, 0x0399},
-	0x1FA1: {0x1F69, 0x0399},
-	0x1FA2: {0x1F6A, 0x0399},
-	0x1FA3: {0x1F6B, 0x0399},
-	0x1FA4: {0x1F6C, 0x0399},
-	0x1FA5: {0x1F6D, 0x0399},
-	0x1FA6: {0x1F6E, 0x0399},
-	0x1FA7: {0x1F6F, 0x0399},
-	0x1FA8: {0x1F68, 0x0399},
-	0x1FA9: {0x1F69, 0x0399},
-	0x1FAA: {0x1F6A, 0x0399},
-	0x1FAB: {0x1F6B, 0x0399},
-	0x1FAC: {0x1F6C, 0x0399},
-	0x1FAD: {0x1F6D, 0x0399},
-	0x1FAE: {0x1F6E, 0x0399},
-	0x1FAF: {0x1F6F, 0x0399},
-	0x1FB2: {0x1FBA, 0x0399},
-	0x1FB3: {0x0391, 0x0399},
-	0x1FB4: {0x0386, 0x0399},
-	0x1FB6: {0x0391, 0x0342},
-	0x1FB7: {0x0391, 0x0342, 0x0399},
-	0x1FBC: {0x0391, 0x0399},
-	0x1FC2: {0x1FCA, 0x0399},
-	0x1FC3: {0x0397, 0x0399},
-	0x1FC4: {0x0389, 0x0399},
-	0x1FC6: {0x0397, 0x0342},
-	0x1FC7: {0x0397, 0x0342, 0x0399},
-	0x1FCC: {0x0397, 0x0399},
-	0x1FD2: {0x0399, 0x0308, 0x0300},
-	0x1FD3: {0x0399, 0x0308, 0x0301},
-	0x1FD6: {0x0399, 0x0342},
-	0x1FD7: {0x0399, 0x0308, 0x0342},
-	0x1FE2: {0x03A5, 0x0308, 0x0300},
-	0x1FE3: {0x03A5, 0x0308, 0x0301},
-	0x1FE4: {0x03A1, 0x0313},
-	0x1FE6: {0x03A5, 0x0342},
-	0x1FE7: {0x03A5, 0x0308, 0x0342},
-	0x1FF2: {0x1FFA, 0x0399},
-	0x1FF3: {0x03A9, 0x0399},
-	0x1FF4: {0x038F, 0x0399},
-	0x1FF6: {0x03A9, 0x0342},
-	0x1FF7: {0x03A9, 0x0342, 0x0399},
-	0x1FFC: {0x03A9, 0x0399},
-	0xFB00: {0x0046, 0x0046},
-	0xFB01: {0x0046, 0x0049},
-	0xFB02: {0x0046, 0x004C},
-	0xFB03: {0x0046, 0x0046, 0x0049},
-	0xFB04: {0x0046, 0x0046, 0x004C},
-	0xFB05: {0x0053, 0x0054},
-	0xFB06: {0x0053, 0x0054},
-	0xFB13: {0x0544, 0x0546},
-	0xFB14: {0x0544, 0x0535},
-	0xFB15: {0x0544, 0x053B},
-	0xFB16: {0x054E, 0x0546},
-	0xFB17: {0x0544, 0x053D},
-}
 
 // asciiCase is caseConvert for an ASCII string, in which only the 26 letters
 // have a case, each the other's with bit 5 flipped. A string with none to
@@ -244,15 +135,10 @@ func isCaseOf(out, a string, upper bool) bool {
 
 // caseConvert maps a string to upper or lower case, character by character.
 //
-// Most characters have a single-character mapping the standard library knows.
-// The rest are in the tables above, except the final sigma, whose mapping
-// depends on what surrounds it rather than on what it is.
+// Most characters have a single-character mapping, the simple one. The rest
+// have a full mapping, except the final sigma, whose mapping depends on what
+// surrounds it rather than on what it is.
 func caseConvert(s string, upper bool) string {
-	table := specialLower
-	simple := unicode.ToLower
-	if upper {
-		table, simple = specialUpper, unicode.ToUpper
-	}
 	var b strings.Builder
 	b.Grow(len(s))
 	// The text is decoded rather than ranged over, because ranging decodes an
@@ -269,12 +155,22 @@ func caseConvert(s string, upper bool) string {
 		case !upper && r == 'Σ':
 			b.WriteRune(finalSigma(s, i))
 		default:
-			if to, ok := table[r]; ok {
+			var to []rune
+			var full bool
+			if upper {
+				to, full = ucd.FullUpper(r)
+			} else {
+				to, full = ucd.FullLower(r)
+			}
+			switch {
+			case full:
 				for _, c := range to {
 					b.WriteRune(c)
 				}
-			} else {
-				b.WriteRune(simple(r))
+			case upper:
+				b.WriteRune(ucd.ToUpper(r))
+			default:
+				b.WriteRune(ucd.ToLower(r))
 			}
 		}
 		i += size
@@ -322,22 +218,16 @@ func reverseRunes(s string) []rune {
 }
 
 // isCased reports whether a character is one the sigma rule counts as a letter
-// on either side of it.
+// on either side of it: Cased.
 func isCased(r rune) bool {
-	return unicode.IsUpper(r) || unicode.IsLower(r) || unicode.IsTitle(r) ||
-		unicode.In(r, unicode.Other_Lowercase, unicode.Other_Uppercase)
+	return ucd.IsCased(r)
 }
 
-// isCaseIgnorable reports whether a character is one the sigma rule looks past.
+// isCaseIgnorable reports whether a character is one the sigma rule looks
+// past: Case_Ignorable, the marks, the format characters, the modifier
+// letters and symbols, and the word-breaking punctuation that may sit inside a
+// word, the MidLetter, MidNumLet and Single_Quote classes. A full stop is one
+// of them, which is what makes the sigma in "A.\u03A3" a final one.
 func isCaseIgnorable(r rune) bool {
-	switch r {
-	// The word-breaking punctuation that may sit inside a word: the MidLetter,
-	// MidNumLet and Single_Quote classes. A full stop is one of them, which is
-	// what makes the sigma in "A.\u03A3" a final one.
-	case '\'', ':', '\u00b7', '\u0387', '\u055f', '\u05f4', '\u2027',
-		'\ufe13', '\ufe55', '\uff1a',
-		'.', '\u2018', '\u2019', '\u2024', '\ufe52', '\uff07', '\uff0e':
-		return true
-	}
-	return unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
+	return ucd.IsCaseIgnorable(r)
 }

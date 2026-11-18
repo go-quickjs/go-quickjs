@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -3562,9 +3562,8 @@ func nativeFunctionName(name string) string {
 func isIdentifierName(name string) bool {
 	for i, c := range name {
 		switch {
-		case c == '$' || c == '_' || unicode.IsLetter(c):
-		case i > 0 && (unicode.IsDigit(c) || c == 0x200C || c == 0x200D ||
-			unicode.Is(unicode.Mn, c) || unicode.Is(unicode.Mc, c) || unicode.Is(unicode.Pc, c)):
+		case c == '$' || c == '_' || ucd.IsIDStart(c):
+		case i > 0 && (c == 0x200C || c == 0x200D || ucd.IsIDContinue(c)):
 		default:
 			return false
 		}
