@@ -69,6 +69,17 @@ jobs:
           # that are easier to get than macOS's.
           - ubuntu-24.04-arm
     steps:
+      # The machine, as the native boundary's jobs print it: a Windows
+      # runner's wrong answers in the VM's tests, which no other machine
+      # reproduces, are told from a change's by its CPU.
+      - name: Machine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Get-CimInstance Win32_Processor
+          "CPU: " + $p.Name + " | " + $p.Caption
+          "OS: " + (Get-CimInstance Win32_OperatingSystem).Version
+
       - name: Check out repository
         uses: actions/checkout@v4
 
