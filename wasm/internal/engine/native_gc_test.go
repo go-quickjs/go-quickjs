@@ -179,7 +179,8 @@ func TestNativeGC(t *testing.T) {
 		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
 	}
 	// The loops run natively: a call of n turns leaves to Go for its
-	// allocations and its first calls alone.
+	// allocations alone, and for the room a fresh exec makes as it first
+	// needs it (logNativeExits), which is not counted.
 	inst := instantiateMode(t, nativeGCSrc, true)
 	for _, c := range []struct {
 		name  string
@@ -192,16 +193,16 @@ func TestNativeGC(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		var exits int64
+		var exits []nativeExit
 		withNative(true, func() {
-			exits = countNativeExits(func() {
+			exits = logNativeExits(func() {
 				if _, err := call(t, inst, c.name, c.args...); err != nil {
 					t.Fatal(err)
 				}
 			})
 		})
-		if exits > c.exits {
-			t.Errorf("%s%v left native code %d times, want at most %d", c.name, c.args, exits, c.exits)
+		if n, all := exitsBut(exits, exitRoom); int64(n) > c.exits {
+			t.Errorf("%s%v left native code %d times, want at most %d:%s", c.name, c.args, n, c.exits, all)
 		}
 	}
 }

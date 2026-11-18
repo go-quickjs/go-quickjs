@@ -990,16 +990,18 @@ func TestNativeCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	var counts [256]int64
-	nativeExitCounts = &counts
+	// An exec fresh from the pool makes its frames, call records and
+	// chunks as Go's calls first need them; those exits are not counted.
+	var exits []nativeExit
 	withNative(true, func() {
-		if got, err := call(t, inst, "tree", 8); err != nil || got[0].N != 511 {
-			t.Errorf("tree(8) = %v, %v", got, err)
-		}
+		exits = logNativeExits(func() {
+			if got, err := call(t, inst, "tree", 8); err != nil || got[0].N != 511 {
+				t.Errorf("tree(8) = %v, %v", got, err)
+			}
+		})
 	})
-	nativeExitCounts = nil
-	if counts[rCall] != 0 {
-		t.Errorf("%d calls of tree(8) left to Go", counts[rCall])
+	if n, all := exitsBut(callExits(exits), exitRoom); n != 0 {
+		t.Errorf("%d of tree(8)'s calls left to Go:%s", n, all)
 	}
 	// So are call_indirect's callees whose entry and type are right, once
 	// compiled.
@@ -1008,16 +1010,15 @@ func TestNativeCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	counts = [256]int64{}
-	nativeExitCounts = &counts
 	withNative(true, func() {
-		if _, err := call(t, inst, "indloop", 100); err != nil {
-			t.Error(err)
-		}
+		exits = logNativeExits(func() {
+			if _, err := call(t, inst, "indloop", 100); err != nil {
+				t.Error(err)
+			}
+		})
 	})
-	nativeExitCounts = nil
-	if counts[rExt] != 0 {
-		t.Errorf("%d of indloop(100)'s indirect calls left to Go", counts[rExt])
+	if n, all := exitsBut(callExits(exits), exitRoom); n != 0 {
+		t.Errorf("%d of indloop(100)'s indirect calls left to Go:%s", n, all)
 	}
 }
 
