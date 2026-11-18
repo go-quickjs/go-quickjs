@@ -277,7 +277,8 @@ Do not manually edit generated files or their binary companions:
   immediates, and `wasm/internal/engine/reg_simd_gen.go`, their register
   code handlers, both written by `internal/simdgen` beside it; numgen also
   writes `wasm/internal/engine/internal/regdef/num_gen.go`, the numeric
-  operations' values; and `wasm/internal/engine/native_handlers_amd64.s`,
+  operations' values, and simdgen `simd_gen.go` beside it, the SIMD
+  operators'; and `wasm/internal/engine/native_handlers_amd64.s`,
   register code's native handlers, written by
   `wasm/internal/engine/internal/nativegen`. After changing a generator,
   run `go generate ./wasm/internal/engine`; `TestNumericGenerated`,
@@ -414,9 +415,12 @@ design, which a change to that design updates in the same commit.
   change to the interpreter, run the spec both ways, and with
   `WASM_REG_VERIFY=1`. On amd64 native handlers run register code
   (wasm/internal/engine/README.md, "Native handlers"), `WASM_NONATIVE=1`
-  the Go table; they keep the JIT's execution boundary rules, store no
-  pointer, and a change to them runs `TestNativeMatchesGoTable` and the
-  spec with them on and off.
+  the Go table; they keep the JIT's execution boundary rules, store a
+  pointer only under the marking rule below, through a barrier routine of
+  the engine's own (`wasmNativeStoreRef`; `TestNativeRefsMarking` runs
+  them with the flag read set and clear), and a change to them runs
+  `TestNativeMatchesGoTable`, `TestNativeCalls` and the spec with them on
+  and off.
 - Native code keeps references only in Go memory the collector sees --
   frames' reference slots, tables, globals -- never in a register across an
   exit, and stores every pointer word through the write barrier's routine
