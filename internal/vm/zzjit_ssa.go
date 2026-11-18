@@ -244,10 +244,11 @@ type jitPolySite struct {
 	// the code that did (jitEntry's ssaSerial).
 	mega   bool
 	missed []jitMissed
-	// prim marks a read that met a receiver that is a primitive, but not
-	// undefined or null, whose read throws: Go reads such a receiver's
-	// property on the read's branch of its own (ssa.PropertySite's
-	// Primitives), rather than at an exit.
+	// prim marks a read or a write that met a receiver that is a
+	// primitive, but not undefined or null, whose read or write throws:
+	// Go reads or writes such a receiver's property on the operation's
+	// branch of its own (ssa.PropertySite's Primitives), rather than at an
+	// exit.
 	prim bool
 }
 
@@ -544,10 +545,10 @@ func (r *Runtime) jitDeoptSeenOp(e *jitEntry, pc int, op jitPropOp, serial uint3
 	}
 	if !recv.IsObject() || op.c == nil {
 		p.mega = true
-		if !recv.IsObject() && !recv.IsNullish() && op.plain() {
-			// A primitive's read, Go's from native code in the code
-			// compiled again (jitPolySite's prim): one compile, not one to
-			// be megamorphic and another for the primitive.
+		if !recv.IsObject() && !recv.IsNullish() && (op.plain() || write && !r.jitStress.primLeave) {
+			// A primitive's read or write, Go's from native code in the
+			// code compiled again (jitPolySite's prim): one compile, not
+			// one to be megamorphic and another for the primitive.
 			p.prim = true
 		}
 		return

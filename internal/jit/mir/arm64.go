@@ -2233,6 +2233,14 @@ func (c *a64Compiler) sourceAddr() {
 // propStore stores a value in a property, as amd64's does. It uses every
 // scratch register and F1.
 func (c *a64Compiler) propStore(v *ssa.Value, guard a64Guard) {
+	var miss arm64.Label
+	if v.Type == ssa.Bool {
+		miss = c.a.NewLabel()
+		if o := v.Args[0]; o.Op == ssa.OpObjectOf && o.Index == ssa.ObjectOfTry {
+			// As amd64's: a receiver that is no object is a miss.
+			c.a.Cbz(c.gpr(o, a64B), miss, true)
+		}
+	}
 	x := v.Args[1]
 	var w arm64.Reg
 	if remat(x) {
@@ -2255,7 +2263,6 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard a64Guard) {
 	c.a.Bind(have)
 	c.a.FMovToF(a64F1, a64B)
 	added := c.a.NewLabel()
-	var miss arm64.Label
 	if v.Add() != nil || len(v.Adds()) != 0 {
 		// As amd64's: along each transition the site met.
 		adds := v.Adds()
@@ -2306,7 +2313,6 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard a64Guard) {
 		guard.jump(arm64.NE)
 	} else if v.Type == ssa.Bool {
 		// As amd64's: a megamorphic site's write whose misses Go makes.
-		miss = c.a.NewLabel()
 		c.property(v, a64GuardLabel(c, miss))
 	} else {
 		c.property(v, guard)

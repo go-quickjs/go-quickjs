@@ -1206,7 +1206,16 @@ met (`ssa.PropertySite`'s `Primitives`) -- is read so too, not left for: its
 object is none (`OpObjectOf`'s `ObjectOfTry`), and Go reads the property of
 the primitive on the call's branch, a getter called with it as this; a read
 of undefined or null, which throws, still leaves. In an inlined callee,
-whose frame Go cannot make, either leaves.
+whose frame Go cannot make, either leaves. A megamorphic site's write of
+such a receiver is a miss so too: the write's object none, Go writes the
+property of the primitive on the call's branch -- a setter on its
+prototypes called with it as this, nothing in sloppy code otherwise, a
+TypeError in strict code, which leaves at the call -- and native code goes
+on after it. A write learns that it met a primitive where the interpreter
+makes it, at a deoptimization or at a host exit, and the code is compiled
+again for it (the VM's `jitPolySite`'s prim): before, each such write left
+native code with no entry after it, and the interpreter ran the rest of the
+invocation.
 
 **Accessors.** A read whose site found a getter on its receivers'
 prototypes, or a write a setter -- a class's accessor, or one

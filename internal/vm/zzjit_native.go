@@ -119,6 +119,12 @@ type jitStressConfig struct {
 	// checks is background's K.
 	checks uint16
 	miss   bool
+	// primLeave, for tests, has a write of a primitive's property leave
+	// native code at a host exit, its site never learning the primitive
+	// (jitPolySite's prim): the tests of what an exit with no entry after
+	// it does -- on-stack replacement, objects carried unmade -- make one
+	// so.
+	primLeave bool
 }
 
 var jitStressDefault = parseJITStress(os.Getenv("QJS_JIT_STRESS"))

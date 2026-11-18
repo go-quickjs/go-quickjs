@@ -936,6 +936,18 @@ func (r *Runtime) jitRegHostSeen(f *frame, c *regCode, wb, rpc int) jitRegWrite 
 		if op.recv.IsObject() {
 			x.o = op.recv.Object()
 			x.before = x.o.shape
+		} else if !op.recv.IsNullish() && !r.jitStress.primLeave {
+			// A write of a primitive's property -- a number's, a
+			// string's, a boolean's -- which the code compiled again
+			// leaves to Go from native code (jitPolySite's prim), as a
+			// read of one: it had left native code at every such write,
+			// with no entry after it, the interpreter running the rest of
+			// the invocation.
+			e := r.jit.regLearnedOf(r.jitRegKeyOf(f.cl))
+			if p := jitPolySiteAt(e, rpc); !p.prim {
+				p.prim, p.mega = true, true
+				e.polyReopt = true
+			}
 		}
 		return x
 	}

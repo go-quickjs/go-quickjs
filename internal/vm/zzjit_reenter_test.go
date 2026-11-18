@@ -338,13 +338,15 @@ func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	// A number's property written, at a site megamorphic for it, is left
-	// to Go at an exit with no entry after it.
+	// to Go at an exit with no entry after it (jitStressConfig's
+	// primLeave).
 	setup := `var obj={x:2};
 		function callee(n,k){let t=0;for(let i=0;i<n;i++){const o=i===k?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
 		function caller(m){let s=0;for(let j=0;j<m;j++){s=(s+callee(100,j%5===0?j:-1))|0}return s}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.jitStress.primLeave = true
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)

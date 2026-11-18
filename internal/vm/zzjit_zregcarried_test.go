@@ -9,8 +9,9 @@ import (
 
 // regCarriedExitSrc is osrSetup's loops, for register code: a loop a call
 // leaves native code in at turn k, at a write of a number's property with
-// no entry after it, the way a frame comes to a loop whose entry the
-// function's code does not have, its object s carried unmade.
+// no entry after it (jitStressConfig's primLeave), the way a frame comes
+// to a loop whose entry the function's code does not have, its object s
+// carried unmade.
 const regCarriedExitSrc = `
 function P(v) { this.v = v }
 P.prototype.add = function (o) { return new P(this.v + o.v) }
@@ -81,7 +82,7 @@ func TestJITRegCarriedExitsGoOn(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			rts := regNativeRuntimes(t, regCarriedExitSrc)
-			rts[0].jitStress = jitStressConfig{}
+			rts[0].jitStress = jitStressConfig{primLeave: true}
 			for range 2 {
 				regCarriedCall(t, rts, "600000", "mixed", 6000)
 			}
@@ -122,7 +123,7 @@ func TestJITRegCarriedFramesLeave(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			rts := regNativeRuntimes(t, regCarriedExitSrc)
-			rts[0].jitStress = jitStressConfig{}
+			rts[0].jitStress = jitStressConfig{primLeave: true}
 			for range 2 {
 				regCarriedCall(t, rts, "300000", "calls", 3000, 100, 5)
 			}
@@ -209,7 +210,7 @@ func TestJITRegKeptEntryGoes(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			rts := regNativeRuntimes(t, regKeptSrc)
-			rts[0].jitStress = jitStressConfig{}
+			rts[0].jitStress = jitStressConfig{primLeave: true}
 			e := regKeptStart(t, rts)
 			base := e.life.ssaStats.workBase
 			for range jitKeptStarts + 1 {
@@ -223,7 +224,7 @@ func TestJITRegKeptEntryGoes(t *testing.T) {
 			}
 
 			rts = regNativeRuntimes(t, regKeptSrc)
-			rts[0].jitStress = jitStressConfig{}
+			rts[0].jitStress = jitStressConfig{primLeave: true}
 			regKeptStart(t, rts)
 			regCarriedCall(t, rts, "18900000", "longs", 200000)
 			if e = regCodeNamed(t, rts[0], "long"); e == nil || e.code == nil || len(e.kept) != 0 {
@@ -260,7 +261,7 @@ func TestJITRegKeptEntryStaysForCallsThatLeave(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	rts := regNativeRuntimes(t, regKeptSrc)
-	rts[0].jitStress = jitStressConfig{}
+	rts[0].jitStress = jitStressConfig{primLeave: true}
 	regKeptLeaving(t, rts)
 	// Two of its looks at its calls, jitKeptStarts calls each: later, what
 	// its exits taught it has it compiled again at a call, with no frame
@@ -272,7 +273,7 @@ func TestJITRegKeptEntryStaysForCallsThatLeave(t *testing.T) {
 		t.Fatalf("calls that left gave up the entry: %+v", e)
 	}
 	rts = regNativeRuntimes(t, regKeptSrc)
-	rts[0].jitStress = jitStressConfig{}
+	rts[0].jitStress = jitStressConfig{primLeave: true}
 	regKeptLeaving(t, rts)
 	for i := range 2 * jitKeptStarts {
 		regCarriedCall(t, rts, "300", "long", 100, float64(map[bool]int{true: 5, false: -1}[i%2 == 0]))
@@ -300,7 +301,7 @@ func TestJITRegGoOnJudgedAsRun(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			rts := regNativeRuntimes(t, regCarriedExitSrc)
-			rts[0].jitStress = jitStressConfig{}
+			rts[0].jitStress = jitStressConfig{primLeave: true}
 			for range 3 {
 				regCarriedCall(t, rts, "140000", "calls", 20000, 7, 5)
 			}

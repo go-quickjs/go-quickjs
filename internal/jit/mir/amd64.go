@@ -8085,6 +8085,17 @@ func (c *compiler) sourceAddr() {
 // Everything that exits comes before the first write. It uses every
 // scratch register and xScratch1.
 func (c *compiler) propStore(v *ssa.Value, guard guardTo) {
+	var miss amd64.Label
+	if v.Type == ssa.Bool {
+		miss = c.a.NewLabel()
+		if o := v.Args[0]; o.Op == ssa.OpObjectOf && o.Index == ssa.ObjectOfTry {
+			// A megamorphic write's receiver that is no object: a miss,
+			// which Go writes (ssa's OpPropWrite).
+			r := c.gpr(o, scratchB)
+			c.a.Op(amd64.Test, r, r, true)
+			c.a.Jcc(amd64.CondE, miss)
+		}
+	}
 	x := v.Args[1]
 	var w amd64.Reg
 	if remat(x) {
@@ -8107,7 +8118,6 @@ func (c *compiler) propStore(v *ssa.Value, guard guardTo) {
 	c.a.Bind(have)
 	c.a.MovQToX(xScratch1, scratchB)
 	added := c.a.NewLabel()
-	var miss amd64.Label
 	if v.Add() != nil || len(v.Adds()) != 0 {
 		// A property the cache adds, along the transition of the object's
 		// shape among those the site met, or else one the object has.
@@ -8160,7 +8170,6 @@ func (c *compiler) propStore(v *ssa.Value, guard guardTo) {
 	} else if v.Type == ssa.Bool {
 		// A megamorphic site's write whose misses Go makes, on the branch
 		// its result, true there, controls (ssa's OpPropWrite).
-		miss = c.a.NewLabel()
 		c.property(v, guardLabel(c, miss))
 	} else {
 		c.property(v, guard)

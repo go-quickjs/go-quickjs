@@ -3042,10 +3042,11 @@ type PropertySite struct {
 	// as V8's map checks do: the interpreter makes the operation, its cache
 	// learning the shape, and the code is compiled again for it.
 	Megamorphic bool
-	// Primitives, for a megamorphic site's read, says it has met receivers
-	// that are primitives -- strings, numbers, booleans -- whose reads Go
-	// makes on the read's branch of its own (ObjectOfTry), rather than
-	// at an exit; a read of undefined or null, which throws, exits still.
+	// Primitives, for a megamorphic site's read or write, says it has met
+	// receivers that are primitives -- strings, numbers, booleans -- whose
+	// reads and writes Go makes on the operation's branch of its own
+	// (ObjectOfTry), rather than at an exit; a read of undefined or null,
+	// which throws, exits still.
 	Primitives bool
 	// Scan, for a read whose cache is empty though it may have run, has a
 	// receiver's own small table searched for
@@ -8635,6 +8636,21 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// this.minChar = -1 met a new shape at nearly every one; a
 				// length's write, rd.actuals.length = 0, which no site's
 				// cache holds.
+				// A receiver that is no object -- a number, a string, a
+				// boolean, which the site met (PropertySite's Primitives)
+				// -- is written so too, not left for: its object is none
+				// (ObjectOfTry), the write a miss, and Go writes the
+				// property of the primitive on the call's branch, as the
+				// interpreter does -- a setter on its prototype called with
+				// it as this, nothing in sloppy code otherwise, a TypeError
+				// in strict code, which leaves at the call. Each such
+				// receiver had left native code at the write, the
+				// interpreter running the rest of the invocation: a loop
+				// whose receiver was a number on every other turn ran 3.6
+				// times as long as in the interpreter.
+				if site.Primitives {
+					object.Index = ObjectOfTry
+				}
 				st, recv := v.State, operand(in.Left)
 				v.Type = Bool
 				miss, _ := b.splitOn(blk, v)
