@@ -1,0 +1,458 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
+	"github.com/go-quickjs/go-quickjs/wasm/wat"
+)
+
+// instantiateMode instantiates the module of src with its bodies compiled to
+// register code where the register compiler takes them (reg), or to the
+// closure tree.
+func instantiateMode(t *testing.T, src string, reg bool) *Instance {
+	t.Helper()
+	b, err := wat.Compile([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, derr := decoder.Decode(b, decoder.CoreLimits())
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
+		t.Fatal(derr)
+	}
+	code := NewCode(m)
+	code.reg = reg
+	inst, err := Instantiate(context.Background(), code, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inst
+}
+
+// regOf returns the register code export name's function runs, nil if it
+// runs the tree or has not been compiled.
+func regOf(inst *Instance, name string) *regCode {
+	ext, _ := inst.Export(name)
+	p := inst.Code.fns[ext.Func.Index].Load()
+	if p == nil {
+		return nil
+	}
+	return p.reg
+}
+
+const regKernels = `(module
+  (memory 1)
+  (global $g (mut i32) (i32.const 7))
+  (global $h (mut i64) (i64.const -2))
+  (global $d (mut f64) (f64.const 0.5))
+  (func (export "add") (param i32 i32) (result i32) (i32.add (local.get 0) (local.get 1)))
+  (func (export "subimm") (param i32) (result i32) (i32.sub (local.get 0) (i32.const -3)))
+  (func (export "rsub") (param i32) (result i32) (i32.sub (i32.const 10) (local.get 0)))
+  (func (export "shifts") (param i32) (result i32)
+    (i32.xor (i32.shl (local.get 0) (i32.const 35)) (i32.shr_s (local.get 0) (i32.const 1))))
+  (func (export "rot") (param i32 i32) (result i32) (i32.rotr (local.get 0) (local.get 1)))
+  (func (export "big") (param i32) (result i32) (i32.mul (local.get 0) (i32.const 0x9E3779B1)))
+  (func (export "i64mix") (param i64 i64) (result i64)
+    (i64.add (i64.mul (local.get 0) (i64.const 0x123456789)) (i64.rotl (local.get 1) (i64.const 7))))
+  (func (export "i64neg") (param i64) (result i64) (i64.add (local.get 0) (i64.const -5)))
+  (func (export "f32") (param f32 f32) (result f32)
+    (f32.sqrt (f32.add (f32.mul (local.get 0) (local.get 1)) (f32.const 1.5))))
+  (func (export "f64") (param f64) (result f64)
+    (f64.copysign (f64.floor (f64.div (local.get 0) (f64.const 3))) (f64.const -0)))
+  (func (export "min") (param f64 f64) (result f64) (f64.min (local.get 0) (local.get 1)))
+  (func (export "conv") (param f64) (result i64) (i64.trunc_f64_s (local.get 0)))
+  (func (export "sat") (param f32) (result i32) (i32.trunc_sat_f32_u (local.get 0)))
+  (func (export "wrap") (param i64) (result i32) (i32.wrap_i64 (local.get 0)))
+  (func (export "ext") (param i32) (result i64) (i64.extend_i32_s (local.get 0)))
+  (func (export "zext") (param i32) (result i64) (i64.extend_i32_u (local.get 0)))
+  (func (export "bits") (param f32) (result i32) (i32.reinterpret_f32 (local.get 0)))
+  (func (export "cmp") (param i32 i32) (result i32)
+    (i32.add (i32.lt_s (local.get 0) (local.get 1)) (i32.mul (i32.lt_u (local.get 0) (local.get 1)) (i32.const 2))))
+  (func (export "fcmp") (param f64 f64) (result i32) (f64.lt (local.get 0) (local.get 1)))
+  (func (export "eqz") (param i64) (result i32) (i64.eqz (local.get 0)))
+  (func (export "pop") (param i32) (result i32) (i32.popcnt (local.get 0)))
+  (func (export "div") (param i32 i32) (result i32) (i32.div_s (local.get 0) (local.get 1)))
+  (func (export "rem") (param i64 i64) (result i64) (i64.rem_u (local.get 0) (local.get 1)))
+  (func (export "sel") (param i32 i32 i32) (result i32) (select (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "globals") (result i64)
+    (global.set $g (i32.add (global.get $g) (i32.const 1)))
+    (global.set $h (i64.mul (global.get $h) (i64.const 3)))
+    (global.set $d (f64.add (global.get $d) (f64.const 0.25)))
+    (i64.add (i64.add (i64.extend_i32_u (global.get $g)) (global.get $h)) (i64.trunc_f64_s (f64.mul (global.get $d) (f64.const 8)))))
+  (func (export "mem") (param i32 i32) (result i64)
+    (i32.store offset=3 (local.get 0) (local.get 1))
+    (i32.store8 (i32.const 100) (i32.const 0x1ff))
+    (i64.store16 offset=200 (i32.const 0) (i64.const -1))
+    (f64.store (i32.const 300) (f64.const 2.5))
+    (i64.add (i64.add (i64.load32_u offset=3 (local.get 0)) (i64.load8_s (i32.const 100)))
+      (i64.add (i64.load16_s (i32.const 200)) (i64.trunc_f64_s (f64.load (i32.const 300))))))
+  (func (export "grow") (param i32) (result i32)
+    (i32.add (memory.grow (local.get 0)) (i32.mul (memory.size) (i32.const 1000))))
+  (func (export "load") (param i32) (result i32) (i32.load (local.get 0)))
+  (func (export "trap") (unreachable))
+  (func (export "loop") (param $n i32) (result i32)
+    (local $i i32) (local $acc i32)
+    (block $done
+      (loop $l
+        (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $acc (i32.add (i32.mul (local.get $acc) (i32.const 33)) (local.get $i)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $l)))
+    (local.get $acc))
+  (func (export "dowhile") (param $n i32) (result i64)
+    (local $i i32) (local $s i64)
+    (loop $l
+      (local.set $s (i64.add (local.get $s) (i64.extend_i32_u (local.get $i))))
+      (local.tee $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_s (local.get $n))))
+    (local.get $s))
+  (func (export "switch") (param i32) (result i32)
+    (block $c2 (result i32)
+      (block $c1 (result i32)
+        (block $c0 (result i32)
+          (br_table $c0 $c1 $c2 (i32.const 10) (local.get 0)))
+        (i32.add (i32.const 1)))
+      (i32.add (i32.const 2))))
+  (func (export "loopsw") (param $n i32) (result i32)
+    (local $i i32) (local $a i32)
+    (loop $l
+      (block $b
+        (br_table $l $b (i32.and (local.get $i) (i32.const 1))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (local.set $a (i32.add (local.get $a) (i32.const 3)))))
+      (local.set $a (i32.add (local.get $a) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_u (local.get $i) (local.get $n))))
+    (local.get $a))
+  (func (export "ifelse") (param i32) (result i32 i32)
+    (i32.const 5)
+    (if (param i32) (result i32 i32) (local.get 0)
+      (then (i32.const 1))
+      (else (i32.const 2) (i32.add) (i32.const 3))))
+  (func (export "swap") (param i32 i32) (result i32 i32) (local.get 1) (local.get 0))
+  (func (export "brval") (param i32) (result i32)
+    (block (result i32)
+      (i32.const 9)
+      (br_if 0 (local.get 0))
+      (drop)
+      (i32.const 4)))
+  (func (export "earlyret") (param i32) (result i32)
+    (drop (br_if 0 (i32.const 11) (i32.eqz (local.get 0))))
+    (i32.const 22))
+  (func (export "tee") (param i32) (result i32) (local i32)
+    (i32.add (local.tee 1 (i32.mul (local.get 0) (i32.const 3))) (local.get 1)))
+  (func (export "readbefore") (param i32) (result i32)
+    (i32.sub (local.get 0) (local.set 0 (i32.const 100)) (local.get 0)))
+  (func $fib (export "fib") (param i32) (result i64)
+    (if (result i64) (i32.lt_u (local.get 0) (i32.const 2))
+      (then (i64.extend_i32_u (local.get 0)))
+      (else (i64.add (call $fib (i32.sub (local.get 0) (i32.const 1)))
+                     (call $fib (i32.sub (local.get 0) (i32.const 2)))))))
+  (func $pair (param i32) (result i32 i64) (local.get 0) (i64.extend_i32_s (local.get 0)))
+  (func (export "pair") (param i32) (result i64) (local i64)
+    (call $pair (local.get 0))
+    (local.set 1)
+    (i64.extend_i32_u)
+    (local.get 1)
+    (i64.add))
+  (func $count (param i32 i64) (result i64)
+    (if (result i64) (i32.eqz (local.get 0)) (then (local.get 1))
+      (else (return_call $count (i32.sub (local.get 0) (i32.const 1)) (i64.add (local.get 1) (i64.const 2))))))
+  (func (export "tail") (param i32) (result i64) (return_call $count (local.get 0) (i64.const 0)))
+)`
+
+// TestRegKernels checks register code's results, exact, against the
+// closure tree's and against the values they must be.
+func TestRegKernels(t *testing.T) {
+	reg := instantiateMode(t, regKernels, true)
+	tree := instantiateMode(t, regKernels, false)
+	f32 := func(f float32) uint64 { return uint64(math.Float32bits(f)) }
+	f64 := func(f float64) uint64 { return math.Float64bits(f) }
+	cases := []struct {
+		name string
+		args []uint64
+		want []uint64
+	}{
+		{"add", []uint64{0xffffffff, 2}, []uint64{1}},
+		{"subimm", []uint64{1}, []uint64{4}},
+		{"rsub", []uint64{3}, []uint64{7}},
+		{"shifts", []uint64{0x80000003}, []uint64{0x18 ^ 0xc0000001}},
+		{"rot", []uint64{1, 1}, []uint64{0x80000000}},
+		{"big", []uint64{3}, []uint64{(3 * 0x9E3779B1) & 0xffffffff}},
+		{"i64mix", []uint64{2, 1 << 60}, []uint64{2*0x123456789 + 8}},
+		{"i64neg", []uint64{3}, []uint64{math.MaxUint64 - 1}},
+		{"f32", []uint64{f32(2), f32(3.5)}, []uint64{f32(float32(math.Sqrt(8.5)))}},
+		{"f64", []uint64{f64(10)}, []uint64{f64(-3)}},
+		{"min", []uint64{f64(0), f64(math.Copysign(0, -1))}, []uint64{f64(math.Copysign(0, -1))}},
+		{"conv", []uint64{f64(-7.9)}, []uint64{math.MaxUint64 - 6}},
+		{"sat", []uint64{f32(-3)}, []uint64{0}},
+		{"wrap", []uint64{0x1234567890}, []uint64{0x34567890}},
+		{"ext", []uint64{0xfffffffe}, []uint64{math.MaxUint64 - 1}},
+		{"zext", []uint64{0xfffffffe}, []uint64{0xfffffffe}},
+		{"bits", []uint64{f32(1)}, []uint64{0x3f800000}},
+		{"cmp", []uint64{0xffffffff, 1}, []uint64{1}},
+		{"fcmp", []uint64{f64(math.NaN()), f64(1)}, []uint64{0}},
+		{"eqz", []uint64{1 << 40}, []uint64{0}},
+		{"pop", []uint64{0xf0f0}, []uint64{8}},
+		{"div", []uint64{uint64(uint32(-7 & 0xffffffff)), 2}, []uint64{uint64(uint32(0xfffffffd))}},
+		{"rem", []uint64{17, 5}, []uint64{2}},
+		{"sel", []uint64{1, 2, 0}, []uint64{2}},
+		{"sel", []uint64{1, 2, 7}, []uint64{1}},
+		{"globals", nil, []uint64{8 - 6 + 6}},
+		{"mem", []uint64{8, 0xfffffff0}, []uint64{0xfffffff0 - 1 - 1 + 2}},
+		{"grow", []uint64{2}, []uint64{1 + 3000}},
+		{"loop", []uint64{10}, []uint64{0}},
+		{"dowhile", []uint64{100}, []uint64{4950}},
+		{"switch", []uint64{0}, []uint64{13}},
+		{"switch", []uint64{1}, []uint64{12}},
+		{"switch", []uint64{99}, []uint64{10}},
+		{"loopsw", []uint64{10}, []uint64{0}},
+		{"ifelse", []uint64{1}, []uint64{5, 1}},
+		{"ifelse", []uint64{0}, []uint64{7, 3}},
+		{"swap", []uint64{1, 2}, []uint64{2, 1}},
+		{"brval", []uint64{1}, []uint64{9}},
+		{"brval", []uint64{0}, []uint64{4}},
+		{"earlyret", []uint64{0}, []uint64{11}},
+		{"earlyret", []uint64{5}, []uint64{22}},
+		{"tee", []uint64{5}, []uint64{30}},
+		{"readbefore", []uint64{1}, []uint64{0xffffff9d}},
+		{"fib", []uint64{20}, []uint64{6765}},
+		{"pair", []uint64{0xffffffff}, []uint64{0xfffffffe}},
+		{"tail", []uint64{100000}, []uint64{200000}},
+	}
+	// The loop's value: acc = acc*33 + i for i below 10, from 0.
+	var acc uint32
+	for i := uint32(0); i < 10; i++ {
+		acc = acc*33 + i
+	}
+	for _, c := range cases {
+		if c.name == "loop" {
+			c.want[0] = uint64(acc)
+		}
+		got, err := call(t, reg, c.name, c.args...)
+		if err != nil {
+			t.Fatalf("%s%v: %v", c.name, c.args, err)
+		}
+		if regOf(reg, c.name) == nil {
+			t.Errorf("%s runs the closure tree", c.name)
+		}
+		want, err := call(t, tree, c.name, c.args...)
+		if err != nil {
+			t.Fatalf("tree %s%v: %v", c.name, c.args, err)
+		}
+		for i := range got {
+			if got[i].N != want[i].N {
+				t.Errorf("%s%v = %#x, the tree's %#x", c.name, c.args, got[i].N, want[i].N)
+			}
+		}
+		if c.name == "loopsw" {
+			continue
+		}
+		for i, w := range c.want {
+			if got[i].N != w {
+				t.Errorf("%s%v result %d = %#x, want %#x", c.name, c.args, i, got[i].N, w)
+			}
+		}
+	}
+}
+
+// TestRegTraps checks the traps register code raises: their messages, and
+// their innermost frame's offset, the trapping instruction's, as every case
+// of TestTrapOffsets has it where the register compiler takes the function.
+func TestRegTraps(t *testing.T) {
+	inst := instantiateMode(t, regKernels, true)
+	for _, c := range []struct {
+		name string
+		args []uint64
+		msg  string
+	}{
+		{"div", []uint64{1, 0}, "divide by zero"},
+		{"div", []uint64{0x80000000, 0xffffffff}, "divide result unrepresentable"},
+		{"rem", []uint64{1, 0}, "remainder by zero"},
+		{"conv", []uint64{math.Float64bits(math.NaN())}, "float unrepresentable in integer range"},
+		{"load", []uint64{65533}, "memory access out of bounds"},
+		{"trap", nil, "unreachable"},
+	} {
+		_, err := call(t, inst, c.name, c.args...)
+		var tr *Trap
+		if !errors.As(err, &tr) || tr.Error() != c.msg {
+			t.Fatalf("%s%v = %v, want the trap %q", c.name, c.args, err, c.msg)
+		}
+	}
+	ran := 0
+	for _, c := range trapCases {
+		inst := instantiateMode(t, c.src, true)
+		ext, _ := inst.Export("f")
+		_, err := call(t, inst, "f")
+		if regOf(inst, "f") == nil {
+			continue
+		}
+		ran++
+		var tr *Trap
+		if !errors.As(err, &tr) || tr.Code != c.code || len(tr.Frames) != 1 {
+			t.Fatalf("%s: f() = %v, want the trap %q in f's frame", c.name, err, c.code)
+		}
+		if fr := tr.Frames[0]; fr.Func != ext.Func.Index || fr.Offset != c.offset {
+			t.Fatalf("%s: innermost frame: function %d at %#x, want %d at %#x", c.name, fr.Func, fr.Offset, ext.Func.Index, c.offset)
+		}
+	}
+	t.Logf("%d of the trap cases ran on register code", ran)
+	if ran < 10 {
+		t.Fatalf("%d of the trap cases ran on register code", ran)
+	}
+}
+
+// TestRegTrapUnderCall checks a trap's frames below a call in register code:
+// the trapping function at its instruction, its caller at its call.
+func TestRegTrapUnderCall(t *testing.T) {
+	inst := instantiateMode(t, `(module
+		(func $id (param i32) (result i32) (local.get 0))
+		(func $g (param i32) (result i32)
+			(i32.div_u (call $id (i32.const 1)) (local.get 0)))
+		(func (export "f") (param i32) (result i32) nop (call $g (local.get 0))))`, true)
+	_, err := call(t, inst, "f", 0)
+	var tr *Trap
+	if !errors.As(err, &tr) || tr.Code != TrapDivByZero {
+		t.Fatalf("f(0) = %v, want divide by zero", err)
+	}
+	want := []Frame{{Module: inst, Func: 1, Offset: 0x2d}, {Module: inst, Func: 2, Offset: 0x34}}
+	if len(tr.Frames) != 2 || tr.Frames[0] != want[0] || tr.Frames[1] != want[1] {
+		t.Fatalf("frames %+v, want %+v", tr.Frames, want)
+	}
+	if regOf(inst, "f") == nil {
+		t.Fatal("f runs the closure tree")
+	}
+}
+
+// TestRegCopyElision pins what the register compiler makes of a loop: the
+// locals read in place, the results written to the locals they are set to,
+// the constant an immediate and the comparison fused with its branch: five
+// instructions a turn for the loop's fifteen.
+func TestRegCopyElision(t *testing.T) {
+	inst := instantiateMode(t, regKernels, true)
+	if _, err := call(t, inst, "loop", 3); err != nil {
+		t.Fatal(err)
+	}
+	rc := regOf(inst, "loop")
+	var ops []regOp
+	for _, w := range rc.code {
+		ops = append(ops, uint8(w))
+	}
+	want := []regOp{rBrI32GeU, rI32MulI, rI32Add, rI32AddI, rJmp, rRet1}
+	if len(ops) != len(want) {
+		t.Fatalf("ops %v, want %v", ops, want)
+	}
+	for i := range want {
+		if ops[i] != want[i] {
+			t.Fatalf("ops %v, want %v", ops, want)
+		}
+	}
+	// add writes acc's slot, add_imm i's.
+	if a := uint16(rc.code[2] >> 16); a != 2 {
+		t.Errorf("i32.add writes slot %d, want local 2's", a)
+	}
+	if a := uint16(rc.code[3] >> 16); a != 1 {
+		t.Errorf("i32.add of the counter writes slot %d, want local 1's", a)
+	}
+	// The do-while loop's tee is the add's own destination, and the
+	// comparison its branch back.
+	if _, err := call(t, inst, "dowhile", 3); err != nil {
+		t.Fatal(err)
+	}
+	rc = regOf(inst, "dowhile")
+	ops = ops[:0]
+	for _, w := range rc.code {
+		ops = append(ops, uint8(w))
+	}
+	want = []regOp{rI64Add, rI32AddI, rBrI32LtS, rRet1}
+	if len(ops) != len(want) {
+		t.Fatalf("dowhile ops %v, want %v", ops, want)
+	}
+	for i := range want {
+		if ops[i] != want[i] {
+			t.Fatalf("dowhile ops %v, want %v", ops, want)
+		}
+	}
+}
+
+// TestRegFarBranches checks a body whose compare-and-branch cannot reach its
+// target in 16 bits: it is compiled with 32-bit branches, and runs.
+func TestRegFarBranches(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`(module (func (export "f") (param i32) (result i32) (local i32)
+		(block $out (br_if $out (i32.lt_s (local.get 0) (i32.const 5)))`)
+	for i := 0; i < 40000; i++ {
+		b.WriteString(` (local.set 1 (i32.add (local.get 1) (i32.const 1)))`)
+	}
+	b.WriteString(`) (local.get 1)))`)
+	inst := instantiateMode(t, b.String(), true)
+	for _, c := range [][2]uint64{{1, 0}, {9, 40000}} {
+		got, err := call(t, inst, "f", c[0])
+		if err != nil || got[0].N != c[1] {
+			t.Fatalf("f(%d) = %v, %v; want %d", c[0], got, err, c[1])
+		}
+	}
+	rc := regOf(inst, "f")
+	if rc == nil {
+		t.Fatal("f runs the closure tree")
+	}
+	if op := uint8(rc.code[1]); op != rBrNZ {
+		t.Fatalf("the second instruction is %d, want a 32-bit branch", op)
+	}
+}
+
+// TestRegPollsContext checks that a loop of register code ends when its
+// context does.
+func TestRegPollsContext(t *testing.T) {
+	inst := instantiateMode(t, `(module (func (export "f") (loop $l (br $l))))`, true)
+	ext, _ := inst.Export("f")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Invoke(ctx, ext.Func, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("f() = %v, want the context's error", err)
+	}
+	if regOf(inst, "f") == nil {
+		t.Fatal("f runs the closure tree")
+	}
+}
+
+// TestRegMatchesTreeOnWorkloads runs wasmbench's micro workloads, register
+// code against the closure tree, at a small size.
+func TestRegMatchesTreeOnWorkloads(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "internal", "cmd", "wasmbench", "testdata", "wat")
+	for _, w := range []struct {
+		file string
+		arg  uint64
+	}{{"fib.wat", 18}, {"loop.wat", 1000}, {"i64.wat", 1000}, {"globals.wat", 1000}, {"brtable.wat", 1000}, {"bytes.wat", 1}, {"mandelbrot.wat", 20}, {"nbody.wat", 100}} {
+		src, err := os.ReadFile(filepath.Join(dir, w.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := instantiateMode(t, string(src), true)
+		tree := instantiateMode(t, string(src), false)
+		got, err := call(t, reg, "run", w.arg)
+		if err != nil {
+			t.Fatalf("%s: %v", w.file, err)
+		}
+		want, err := call(t, tree, "run", w.arg)
+		if err != nil {
+			t.Fatalf("%s on the tree: %v", w.file, err)
+		}
+		if got[0].N != want[0].N {
+			t.Errorf("%s: run(%d) = %#x, the tree's %#x", w.file, w.arg, got[0].N, want[0].N)
+		}
+		if regOf(reg, "run") == nil {
+			t.Errorf("%s: run is the closure tree's", w.file)
+		}
+	}
+}

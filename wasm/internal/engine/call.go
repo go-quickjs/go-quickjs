@@ -48,14 +48,28 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 		}
 		f.osr = osrBudget(fn.Inst.Code, code)
 	}
-	c := runSeq(f, code.body)
-	if c >= 0 {
-		runSeq(f, code.epi)
-	} else if c == sigTail {
+	if x.interpret(f, code) == sigTail {
 		x.tailChain(f, code, l, r, nc, nsp, rc, rsp)
 	}
 	x.calls = x.calls[:len(x.calls)-1]
 	x.depth--
+}
+
+// interpret runs the body of record cd in frame f, leaving its results where
+// its caller finds them, and returns sigTail where it ended in a tail call,
+// the exec's tail call set.
+func (x *exec) interpret(f *frame, cd *compiled) int32 {
+	if cd.reg != nil {
+		return x.runReg(f, cd)
+	}
+	c := runSeq(f, cd.body)
+	if c >= 0 {
+		// The end of the body leaves the results in its stack positions; a
+		// return left them in place.
+		runSeq(f, cd.epi)
+		return 0
+	}
+	return c
 }
 
 // stackOverflow traps for a call of wasm function fn that would pass
@@ -112,14 +126,8 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 			}
 			f.osr = osrBudget(fn.Inst.Code, callee)
 		}
-		c := runSeq(f, callee.body)
-		if c == sigTail {
+		if x.interpret(f, callee) == sigTail {
 			continue
-		}
-		// A return left the results in place; the end of the body leaves
-		// them in its stack positions.
-		if c >= 0 {
-			runSeq(f, callee.epi)
 		}
 		copyResults(l, r, nl, nr, results)
 		return

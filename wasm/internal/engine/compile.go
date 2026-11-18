@@ -58,11 +58,14 @@ type Code struct {
 	// rtts are the runtime information of the module's types, by type
 	// index, as Go's work for native code asks for them (typeRTT).
 	rtts atomic.Pointer[[]atomic.Pointer[rtt]]
+	// reg says function bodies are compiled to register code where the
+	// register compiler takes them, and to the closure tree otherwise.
+	reg bool
 }
 
 // NewCode returns the engine's code of module m.
 func NewCode(m *module.Module) *Code {
-	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions)), reg: regDefault}
 	if jitBuilt {
 		c.jitFromEnv()
 	}
@@ -89,6 +92,9 @@ type compiled struct {
 	// interpreter needs them (Code.interp).
 	built bool
 	body  []stmt
+	// reg is the body's register code, where the register compiler took
+	// it, in place of body and epi.
+	reg *regCode
 	// epi moves the results from their stack positions to where the caller
 	// finds them, after the body ends or branches to the function's label.
 	epi []stmt
@@ -180,7 +186,7 @@ func (c *Code) interp(index uint32) *compiled {
 			panic("wasm: a function body's frame larger than validation's bound")
 		}
 		q := *old
-		q.built, q.body, q.epi = true, p.body, p.epi
+		q.built, q.body, q.epi, q.reg = true, p.body, p.epi, p.reg
 		p = &q
 	}
 	c.fns[index].Store(p)
@@ -373,6 +379,13 @@ func (c *compiler) newCtl() *ctl {
 }
 
 func compileFunction(code *Code, index uint32) *compiled {
+	if code.reg {
+		p, why := regCompile(code, index)
+		countInterp(why)
+		if p != nil {
+			return p
+		}
+	}
 	m := code.Module
 	f := &m.Functions[index]
 	sig := m.Types[f.TypeIndex].Func

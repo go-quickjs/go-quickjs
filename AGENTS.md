@@ -269,8 +269,10 @@ Do not manually edit generated files or their binary companions:
   is off its target.
 - `wasm/internal/engine/ops_num_gen.go`, the wasm interpreter's numeric
   operators, a node for each pairing of a tree, a slot and a constant, and
-  the loads and stores of memory 0 at an i32 address (`memFast`), written by
-  `wasm/internal/engine/internal/numgen`; and
+  the loads and stores of memory 0 at an i32 address (`memFast`), and
+  `wasm/internal/engine/reg_num_gen.go`, the same operators as register
+  code's operations and their handlers (wasm/internal/engine/README.md),
+  both written by `wasm/internal/engine/internal/numgen`; and
   `wasm/internal/engine/ops_simd_gen.go`, the SIMD operators without
   immediates, written by `internal/simdgen` beside it. After changing either
   generator, run `go generate ./wasm/internal/engine`; `TestNumericGenerated`

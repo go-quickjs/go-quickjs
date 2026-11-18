@@ -8,26 +8,33 @@ import (
 	"testing"
 )
 
-// TestNumericGenerated fails while ops_num_gen.go differs from what
-// internal/numgen writes; go generate ./wasm/internal/engine rewrites it.
+// TestNumericGenerated fails while ops_num_gen.go or reg_num_gen.go differs
+// from what internal/numgen writes; go generate ./wasm/internal/engine
+// rewrites them.
 func TestNumericGenerated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the generator")
 	}
-	out := filepath.Join(t.TempDir(), "ops_num_gen.go")
-	cmd := osexec.Command("go", "run", "./internal/numgen", out)
-	if b, err := cmd.CombinedOutput(); err != nil {
+	dir := t.TempDir()
+	files := []string{"ops_num_gen.go", "reg_num_gen.go"}
+	args := []string{"run", "./internal/numgen"}
+	for _, f := range files {
+		args = append(args, filepath.Join(dir, f))
+	}
+	if b, err := osexec.Command("go", args...).CombinedOutput(); err != nil {
 		t.Fatalf("numgen: %v\n%s", err, b)
 	}
-	want, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile("ops_num_gen.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n")), want) {
-		t.Fatal("ops_num_gen.go is out of date: run go generate ./wasm/internal/engine")
+	for _, f := range files {
+		want, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n")), want) {
+			t.Fatalf("%s is out of date: run go generate ./wasm/internal/engine", f)
+		}
 	}
 }

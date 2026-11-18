@@ -18,6 +18,14 @@ type frame struct {
 	// osr counts down the back edges the call runs in the interpreter
 	// before its loops ask for the function's native code (osrLoopStmt).
 	osr int32
+
+	// rc is the register code the frame runs, if it runs any (runReg);
+	// tick counts down its back edges to the next check of the context or
+	// of native code, from tickSet (backEdge); sig is how it ended: 0, or
+	// sigTail for a tail call.
+	rc            *regCode
+	tick, tickSet int32
+	sig           int32
 }
 
 // exec is the state of a chain of wasm calls entered from the host: the
@@ -222,6 +230,9 @@ func recovered(x *exec, r any) error {
 		}
 		return v
 	case trapSite:
+		if v.at&regPCMark != 0 {
+			v.at = x.regOffset(v.at &^ regPCMark)
+		}
 		return v.trap(x.trace())
 	case *Exception:
 		return v
