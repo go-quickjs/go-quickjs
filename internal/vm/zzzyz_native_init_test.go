@@ -97,6 +97,21 @@ func TestRegNativeInitFrameless(t *testing.T) {
 }
 
 func TestRegNativeInitFallback(t *testing.T) {
+	const constructed = `
+function Pair(a, b) { "use strict"; this.a = a; this.b = b }
+var p, object = { tag: 7 }, out = [], held;
+for (var i = 0; i < 100; i++) p = new Pair(object, object);
+out.push(p.a === object, p.b === object, Object.keys(p).join());
+p = new Pair(object); out.push(p.a === object, p.b === undefined);
+Object.defineProperty(Pair.prototype, "b", {
+ set(v) { held = this; throw new RangeError("store:" + v) }, configurable: true
+});
+try { new Pair(9, 10) } catch (e) { out.push(e.name, e.message, held.a, Object.hasOwn(held, "b")) }
+delete Pair.prototype.b;
+Object.defineProperty(Pair.prototype, "a", { value: 1, writable: false });
+try { new Pair(2, 3) } catch (e) { out.push(e.name) }
+out.join("|")`
+	const constructedWant = "true|true|a,b|true|true|RangeError|store:10|9|false|TypeError"
 	const src = nativeInitSource + `
 var out = [], log = [];
 makePairs(100); makeForward(100);
@@ -130,12 +145,18 @@ out.push(d.a + d.l, Object.keys(d).join(), log.join());
 out.join("|")`
 	const want = "|7|undefined|a,b|9|TypeError|setter|9|4|6|0|11|b|12|13|3|2|x,y|9|a,b,c,d,e,f,g,h,i,j,k,l|set8,proto10,a12,b13"
 	nativeCounting(t)
+	if got := nativeRunSrc(t, constructed, false); got != constructedWant {
+		t.Fatalf("Go table construction: got %q, want %q", got, constructedWant)
+	}
 	if got := nativeRunSrc(t, src, false); got != want {
 		t.Fatalf("Go table: got %q, want %q", got, want)
 	}
 	var exits [2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
+		if got := nativeRunSrc(t, constructed, true); got != constructedWant {
+			t.Fatalf("marking %v construction: got %q, want %q", marking, got, constructedWant)
+		}
 		before := atomic.LoadInt64(&nativeEnters)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)

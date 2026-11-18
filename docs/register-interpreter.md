@@ -902,7 +902,7 @@ a constructor the handler enters as `call_w` enters a callee
 room is settled, a derived class's, and a forwarder's (`LeafForward`), none
 with fields of its own. Its object is made by Go with no exit (`nativeNew`)
 of the constructor's prototype and root, as `constructWithTarget` makes it
--- a body that only stores its parameters answered by `leafCall` there --
+-- a body that only stores its parameters answered by `leafStores` there --
 and the frame is `regFrameConstruct`, its new.target the constructor, a
 derived class's with its this binding (`regThisBinding`); `ret` gives the
 frame's this where the body returns no object. `super_call` and
@@ -950,6 +950,14 @@ where the handler may try: the JIT not running, whose frames have feedback
 to give, no interrupt due, and the frames the bodies would have had within
 the limit, so that past it they throw the frames' RangeError. The Go table
 runs these bodies in their frames, as it runs any other.
+
+A construction whose body only stores parameters (`LeafSetThis`) completes
+those writes during the Go call that allocates its object, before trying
+the native initializer plan. `leafStores` validates every write before
+making any; a miss leaves the object for the native plan or the body. This
+avoids a separate native pass over the same writes after allocation. It
+does the same work while the collector marks, using Go's write barriers.
+The JIT keeps its existing path and feedback.
 
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While

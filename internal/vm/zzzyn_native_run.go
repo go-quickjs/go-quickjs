@@ -1062,7 +1062,7 @@ var nativeJITCallFn func(*[1 << 16]Value, bytecode.RInstr, int, *regState) int
 // the frames the body would have had within the limit, so that its
 // RangeError is the frame's -- and enter it where they do not all
 // validate; 2 where the constructor is a body that only stores its
-// parameters in this, which leafCall has done, R[B] the object; and 0
+// parameters in this, which leafStores has done, R[B] the object; and 0
 // where the construction is Go's (rsNewW): a prototype that is no data
 // property holding an object, a root whose room is not settled, a leaf
 // body leafCall does not answer. It throws nothing and runs no code.
@@ -1087,6 +1087,12 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 		ctx.thisRef = r.regThisBinding(e.rc, Obj(obj))
 		ctx.scratch[sThisRef] = uint64(uintptr(unsafe.Pointer(ctx.thisRef)))
 		return 1
+	}
+	// Allocation has already called Go. Finish plain parameter stores in
+	// that call rather than returning to the native plan's two passes.
+	if e.rc.rc.Leaf == bytecode.LeafSetThis && !r.jitOn() && r.leafStores(e.cl, obj, regs[a+2:a+2+int(w.X())]) {
+		regs[w.B()] = Obj(obj)
+		return 2
 	}
 	if c := e.rc; (len(c.initPlan) > 0 && r.frameDepth < r.maxFrames || c.fwdKind != 0 && r.frameDepth+1 < r.maxFrames) &&
 		r.interruptCounter > 1 && !r.jitOn() {

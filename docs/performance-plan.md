@@ -887,3 +887,9 @@ Measured and dropped; each needs a new angle before it is tried again.
   address is computed: probing before it repeated that work on misses
   and made a primitive-only loop 9% slower; sharing the address brought
   that cost down to 2%.
+- **Branching through comma expressions and strict boolean wrappers**
+  (2026-11-17, darwin/arm64, JIT off, two placements) removed five
+  instructions from Boyer's equality function: `(a === b) !== false`
+  branched on the comparison without materializing its boolean. EarleyBoyer
+  stayed at 26.15 ms, within 0.1%, against the version with parameter
+  stores completed in the allocation call. The compiler change was removed.
