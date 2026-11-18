@@ -926,7 +926,8 @@ func nativeIterRes(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeC
 // made again, which the code then enters itself, rather than Go entering
 // it in a code entry of its own (regCallMiss) -- a site that calls several
 // functions in turn, an array of them or a method of several layouts --
-// where the handler enters the callee with a frame.
+// where the handler enters the callee with a frame or reads its leaf's
+// answer itself.
 // The cache holds the callee the second time, so that a call the handler
 // leaves to Go anyway is its Go handler's then (rhCallW, rhCallWT for the
 // calls in tail position whose handlers are call_w's). Anything else is
@@ -944,12 +945,21 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		return regTable[w.Op()](regs, w, pc, st)
 	}
 	if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
-		// Only a callee the handler enters with a frame: a leaf rhCallW's
-		// miss answers without one (pureCall, leafCall), and a frame that
-		// keeps its arguments is entered by regEnterW, each cheaper than
-		// the exit the call would come back to. One with native code the
-		// handler has Go enter (nativeJITCall), as rhCallW's hit does.
-		if cl, rc, kind, this, enter := r.regCallKind(fd, method, c); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && !regTypedCross(rc, c) && (kind != regCallObjThis || win[1].IsObject()) {
+		// A callee the handler enters with a frame, and a leaf whose
+		// answer the handler reads itself, from the regcomp's
+		// classification -- a parameter, a constant, a captured binding
+		// (regLeafArg, regLeafConst, leafUp) -- which the handler then
+		// answers with no exit, where Go's would have run the body. Other
+		// leaves are rhCallW's miss's (pureCall, leafCall, regLeafRun),
+		// and a frame that keeps its arguments is entered by regEnterW,
+		// each cheaper than the exit the call would come back to. One with
+		// native code the handler has Go enter (nativeJITCall), as
+		// rhCallW's hit does. A runtime that runs the JIT keeps its leaves
+		// on rhCallW's miss, as its callbacks keep them on callDirect: the
+		// feedback dispatcher counted the call where it began, and the
+		// call made again would be counted again, a second call of the
+		// site to the frequencies the JIT inlines by.
+		if cl, rc, kind, this, enter := r.regCallKind(fd, method, c); enter && kind != 0 && (rc.leaf == regLeafNone || (rc.leaf >= regLeafArg || rc.leafUp != 0) && !(jitBuilt && r.jitOn())) && !rc.args && !regTypedCross(rc, c) && (kind != regCallObjThis || win[1].IsObject()) {
 			if !f.cl.regCallsHeld {
 				r.regCallsHold(f.cl.closureCode)
 			}
