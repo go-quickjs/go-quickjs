@@ -108,43 +108,33 @@ const (
 	rI64RemS        = regdef.I64RemS
 	rI64RemU        = regdef.I64RemU
 	rI64Eq          = regdef.I64Eq
-	rI64EqI         = regdef.I64EqI
 	rBrI64Eq        = regdef.BrI64Eq
 	rBrI64EqI       = regdef.BrI64EqI
 	rI64Ne          = regdef.I64Ne
-	rI64NeI         = regdef.I64NeI
 	rBrI64Ne        = regdef.BrI64Ne
 	rBrI64NeI       = regdef.BrI64NeI
 	rI64LtS         = regdef.I64LtS
-	rI64LtSI        = regdef.I64LtSI
 	rBrI64LtS       = regdef.BrI64LtS
 	rBrI64LtSI      = regdef.BrI64LtSI
 	rI64LtU         = regdef.I64LtU
-	rI64LtUI        = regdef.I64LtUI
 	rBrI64LtU       = regdef.BrI64LtU
 	rBrI64LtUI      = regdef.BrI64LtUI
 	rI64GtS         = regdef.I64GtS
-	rI64GtSI        = regdef.I64GtSI
 	rBrI64GtS       = regdef.BrI64GtS
 	rBrI64GtSI      = regdef.BrI64GtSI
 	rI64GtU         = regdef.I64GtU
-	rI64GtUI        = regdef.I64GtUI
 	rBrI64GtU       = regdef.BrI64GtU
 	rBrI64GtUI      = regdef.BrI64GtUI
 	rI64LeS         = regdef.I64LeS
-	rI64LeSI        = regdef.I64LeSI
 	rBrI64LeS       = regdef.BrI64LeS
 	rBrI64LeSI      = regdef.BrI64LeSI
 	rI64LeU         = regdef.I64LeU
-	rI64LeUI        = regdef.I64LeUI
 	rBrI64LeU       = regdef.BrI64LeU
 	rBrI64LeUI      = regdef.BrI64LeUI
 	rI64GeS         = regdef.I64GeS
-	rI64GeSI        = regdef.I64GeSI
 	rBrI64GeS       = regdef.BrI64GeS
 	rBrI64GeSI      = regdef.BrI64GeSI
 	rI64GeU         = regdef.I64GeU
-	rI64GeUI        = regdef.I64GeUI
 	rBrI64GeU       = regdef.BrI64GeU
 	rBrI64GeUI      = regdef.BrI64GeUI
 	rF32Add         = regdef.F32Add
@@ -154,11 +144,21 @@ const (
 	rF32Min         = regdef.F32Min
 	rF32Max         = regdef.F32Max
 	rF32Eq          = regdef.F32Eq
+	rBrF32Eq        = regdef.BrF32Eq
 	rF32Ne          = regdef.F32Ne
+	rBrF32Ne        = regdef.BrF32Ne
 	rF32Lt          = regdef.F32Lt
+	rBrF32Lt        = regdef.BrF32Lt
+	rBrNotF32Lt     = regdef.BrNotF32Lt
 	rF32Gt          = regdef.F32Gt
+	rBrF32Gt        = regdef.BrF32Gt
+	rBrNotF32Gt     = regdef.BrNotF32Gt
 	rF32Le          = regdef.F32Le
+	rBrF32Le        = regdef.BrF32Le
+	rBrNotF32Le     = regdef.BrNotF32Le
 	rF32Ge          = regdef.F32Ge
+	rBrF32Ge        = regdef.BrF32Ge
+	rBrNotF32Ge     = regdef.BrNotF32Ge
 	rF64Add         = regdef.F64Add
 	rF64Sub         = regdef.F64Sub
 	rF64Mul         = regdef.F64Mul
@@ -166,11 +166,21 @@ const (
 	rF64Min         = regdef.F64Min
 	rF64Max         = regdef.F64Max
 	rF64Eq          = regdef.F64Eq
+	rBrF64Eq        = regdef.BrF64Eq
 	rF64Ne          = regdef.F64Ne
+	rBrF64Ne        = regdef.BrF64Ne
 	rF64Lt          = regdef.F64Lt
+	rBrF64Lt        = regdef.BrF64Lt
+	rBrNotF64Lt     = regdef.BrNotF64Lt
 	rF64Gt          = regdef.F64Gt
+	rBrF64Gt        = regdef.BrF64Gt
+	rBrNotF64Gt     = regdef.BrNotF64Gt
 	rF64Le          = regdef.F64Le
+	rBrF64Le        = regdef.BrF64Le
+	rBrNotF64Le     = regdef.BrNotF64Le
 	rF64Ge          = regdef.F64Ge
+	rBrF64Ge        = regdef.BrF64Ge
+	rBrNotF64Ge     = regdef.BrNotF64Ge
 	rI32Eqz         = regdef.I32Eqz
 	rI32Clz         = regdef.I32Clz
 	rI32Ctz         = regdef.I32Ctz
@@ -239,7 +249,17 @@ const (
 )
 
 const (
-	xF32CopySign = regExtNumFirst + iota
+	xI64EqI = regExtNumFirst + iota
+	xI64NeI
+	xI64LtSI
+	xI64LtUI
+	xI64GtSI
+	xI64GtUI
+	xI64LeSI
+	xI64LeUI
+	xI64GeSI
+	xI64GeUI
+	xF32CopySign
 	xF64CopySign
 	xI32Popcnt
 	xI64Popcnt
@@ -1168,9 +1188,25 @@ func rhF32Eq(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF32Eq(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a == b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF32Ne(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float32frombits(uint32(*rs(l, w>>32))), math.Float32frombits(uint32(*rs(l, w>>48)))
 	*rs(l, w>>16) = uint64(b2i(a != b))
+	return pc + 1
+}
+
+func rhBrF32Ne(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a != b {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1180,9 +1216,41 @@ func rhF32Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF32Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a < b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF32Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if !(a < b) {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF32Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float32frombits(uint32(*rs(l, w>>32))), math.Float32frombits(uint32(*rs(l, w>>48)))
 	*rs(l, w>>16) = uint64(b2i(a > b))
+	return pc + 1
+}
+
+func rhBrF32Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a > b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF32Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if !(a > b) {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1192,9 +1260,41 @@ func rhF32Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF32Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a <= b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF32Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if !(a <= b) {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF32Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float32frombits(uint32(*rs(l, w>>32))), math.Float32frombits(uint32(*rs(l, w>>48)))
 	*rs(l, w>>16) = uint64(b2i(a >= b))
+	return pc + 1
+}
+
+func rhBrF32Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if a >= b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF32Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float32frombits(uint32(*rs(l, w>>16))), math.Float32frombits(uint32(*rs(l, w>>32)))
+	if !(a >= b) {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1246,9 +1346,25 @@ func rhF64Eq(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF64Eq(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a == b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF64Ne(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float64frombits(*rs(l, w>>32)), math.Float64frombits(*rs(l, w>>48))
 	*rs(l, w>>16) = uint64(b2i(a != b))
+	return pc + 1
+}
+
+func rhBrF64Ne(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a != b {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1258,9 +1374,41 @@ func rhF64Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF64Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a < b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF64Lt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if !(a < b) {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF64Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float64frombits(*rs(l, w>>32)), math.Float64frombits(*rs(l, w>>48))
 	*rs(l, w>>16) = uint64(b2i(a > b))
+	return pc + 1
+}
+
+func rhBrF64Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a > b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF64Gt(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if !(a > b) {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1270,9 +1418,41 @@ func rhF64Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	return pc + 1
 }
 
+func rhBrF64Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a <= b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF64Le(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if !(a <= b) {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
 func rhF64Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 	a, b := math.Float64frombits(*rs(l, w>>32)), math.Float64frombits(*rs(l, w>>48))
 	*rs(l, w>>16) = uint64(b2i(a >= b))
+	return pc + 1
+}
+
+func rhBrF64Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if a >= b {
+		return regTake16(w, pc, f)
+	}
+	return pc + 1
+}
+
+func rhBrNotF64Ge(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
+	a, b := math.Float64frombits(*rs(l, w>>16)), math.Float64frombits(*rs(l, w>>32))
+	if !(a >= b) {
+		return regTake16(w, pc, f)
+	}
 	return pc + 1
 }
 
@@ -1788,25 +1968,25 @@ func regNumeric(op opcode.Opcode) (regNum, bool) {
 	case opcode.I32RemU:
 		return regNum{op: rI32RemU, ext: false, res: module.I32}, true
 	case opcode.I32Eq:
-		return regNum{op: rI32Eq, ext: false, imm: rI32EqI, br: rBrI32Eq, brI: rBrI32EqI, swap: opcode.I32Eq, neg: opcode.I32Ne, res: module.I32}, true
+		return regNum{op: rI32Eq, ext: false, imm: rI32EqI, br: rBrI32Eq, brI: rBrI32EqI, brNot: rBrI32Ne, brNotI: rBrI32NeI, swap: opcode.I32Eq, res: module.I32}, true
 	case opcode.I32Ne:
-		return regNum{op: rI32Ne, ext: false, imm: rI32NeI, br: rBrI32Ne, brI: rBrI32NeI, swap: opcode.I32Ne, neg: opcode.I32Eq, res: module.I32}, true
+		return regNum{op: rI32Ne, ext: false, imm: rI32NeI, br: rBrI32Ne, brI: rBrI32NeI, brNot: rBrI32Eq, brNotI: rBrI32EqI, swap: opcode.I32Ne, res: module.I32}, true
 	case opcode.I32LtS:
-		return regNum{op: rI32LtS, ext: false, imm: rI32LtSI, br: rBrI32LtS, brI: rBrI32LtSI, swap: opcode.I32GtS, neg: opcode.I32GeS, res: module.I32}, true
+		return regNum{op: rI32LtS, ext: false, imm: rI32LtSI, br: rBrI32LtS, brI: rBrI32LtSI, brNot: rBrI32GeS, brNotI: rBrI32GeSI, swap: opcode.I32GtS, res: module.I32}, true
 	case opcode.I32LtU:
-		return regNum{op: rI32LtU, ext: false, imm: rI32LtUI, br: rBrI32LtU, brI: rBrI32LtUI, swap: opcode.I32GtU, neg: opcode.I32GeU, res: module.I32}, true
+		return regNum{op: rI32LtU, ext: false, imm: rI32LtUI, br: rBrI32LtU, brI: rBrI32LtUI, brNot: rBrI32GeU, brNotI: rBrI32GeUI, swap: opcode.I32GtU, res: module.I32}, true
 	case opcode.I32GtS:
-		return regNum{op: rI32GtS, ext: false, imm: rI32GtSI, br: rBrI32GtS, brI: rBrI32GtSI, swap: opcode.I32LtS, neg: opcode.I32LeS, res: module.I32}, true
+		return regNum{op: rI32GtS, ext: false, imm: rI32GtSI, br: rBrI32GtS, brI: rBrI32GtSI, brNot: rBrI32LeS, brNotI: rBrI32LeSI, swap: opcode.I32LtS, res: module.I32}, true
 	case opcode.I32GtU:
-		return regNum{op: rI32GtU, ext: false, imm: rI32GtUI, br: rBrI32GtU, brI: rBrI32GtUI, swap: opcode.I32LtU, neg: opcode.I32LeU, res: module.I32}, true
+		return regNum{op: rI32GtU, ext: false, imm: rI32GtUI, br: rBrI32GtU, brI: rBrI32GtUI, brNot: rBrI32LeU, brNotI: rBrI32LeUI, swap: opcode.I32LtU, res: module.I32}, true
 	case opcode.I32LeS:
-		return regNum{op: rI32LeS, ext: false, imm: rI32LeSI, br: rBrI32LeS, brI: rBrI32LeSI, swap: opcode.I32GeS, neg: opcode.I32GtS, res: module.I32}, true
+		return regNum{op: rI32LeS, ext: false, imm: rI32LeSI, br: rBrI32LeS, brI: rBrI32LeSI, brNot: rBrI32GtS, brNotI: rBrI32GtSI, swap: opcode.I32GeS, res: module.I32}, true
 	case opcode.I32LeU:
-		return regNum{op: rI32LeU, ext: false, imm: rI32LeUI, br: rBrI32LeU, brI: rBrI32LeUI, swap: opcode.I32GeU, neg: opcode.I32GtU, res: module.I32}, true
+		return regNum{op: rI32LeU, ext: false, imm: rI32LeUI, br: rBrI32LeU, brI: rBrI32LeUI, brNot: rBrI32GtU, brNotI: rBrI32GtUI, swap: opcode.I32GeU, res: module.I32}, true
 	case opcode.I32GeS:
-		return regNum{op: rI32GeS, ext: false, imm: rI32GeSI, br: rBrI32GeS, brI: rBrI32GeSI, swap: opcode.I32LeS, neg: opcode.I32LtS, res: module.I32}, true
+		return regNum{op: rI32GeS, ext: false, imm: rI32GeSI, br: rBrI32GeS, brI: rBrI32GeSI, brNot: rBrI32LtS, brNotI: rBrI32LtSI, swap: opcode.I32LeS, res: module.I32}, true
 	case opcode.I32GeU:
-		return regNum{op: rI32GeU, ext: false, imm: rI32GeUI, br: rBrI32GeU, brI: rBrI32GeUI, swap: opcode.I32LeU, neg: opcode.I32LtU, res: module.I32}, true
+		return regNum{op: rI32GeU, ext: false, imm: rI32GeUI, br: rBrI32GeU, brI: rBrI32GeUI, brNot: rBrI32LtU, brNotI: rBrI32LtUI, swap: opcode.I32LeU, res: module.I32}, true
 	case opcode.I64Add:
 		return regNum{op: rI64Add, ext: false, imm: rI64AddI, comm: true, res: module.I64}, true
 	case opcode.I64Sub:
@@ -1838,25 +2018,25 @@ func regNumeric(op opcode.Opcode) (regNum, bool) {
 	case opcode.I64RemU:
 		return regNum{op: rI64RemU, ext: false, res: module.I64}, true
 	case opcode.I64Eq:
-		return regNum{op: rI64Eq, ext: false, imm: rI64EqI, br: rBrI64Eq, brI: rBrI64EqI, swap: opcode.I64Eq, neg: opcode.I64Ne, res: module.I32}, true
+		return regNum{op: rI64Eq, ext: false, imm: xI64EqI, immExt: true, br: rBrI64Eq, brI: rBrI64EqI, brNot: rBrI64Ne, brNotI: rBrI64NeI, swap: opcode.I64Eq, res: module.I32}, true
 	case opcode.I64Ne:
-		return regNum{op: rI64Ne, ext: false, imm: rI64NeI, br: rBrI64Ne, brI: rBrI64NeI, swap: opcode.I64Ne, neg: opcode.I64Eq, res: module.I32}, true
+		return regNum{op: rI64Ne, ext: false, imm: xI64NeI, immExt: true, br: rBrI64Ne, brI: rBrI64NeI, brNot: rBrI64Eq, brNotI: rBrI64EqI, swap: opcode.I64Ne, res: module.I32}, true
 	case opcode.I64LtS:
-		return regNum{op: rI64LtS, ext: false, imm: rI64LtSI, br: rBrI64LtS, brI: rBrI64LtSI, swap: opcode.I64GtS, neg: opcode.I64GeS, res: module.I32}, true
+		return regNum{op: rI64LtS, ext: false, imm: xI64LtSI, immExt: true, br: rBrI64LtS, brI: rBrI64LtSI, brNot: rBrI64GeS, brNotI: rBrI64GeSI, swap: opcode.I64GtS, res: module.I32}, true
 	case opcode.I64LtU:
-		return regNum{op: rI64LtU, ext: false, imm: rI64LtUI, br: rBrI64LtU, brI: rBrI64LtUI, swap: opcode.I64GtU, neg: opcode.I64GeU, res: module.I32}, true
+		return regNum{op: rI64LtU, ext: false, imm: xI64LtUI, immExt: true, br: rBrI64LtU, brI: rBrI64LtUI, brNot: rBrI64GeU, brNotI: rBrI64GeUI, swap: opcode.I64GtU, res: module.I32}, true
 	case opcode.I64GtS:
-		return regNum{op: rI64GtS, ext: false, imm: rI64GtSI, br: rBrI64GtS, brI: rBrI64GtSI, swap: opcode.I64LtS, neg: opcode.I64LeS, res: module.I32}, true
+		return regNum{op: rI64GtS, ext: false, imm: xI64GtSI, immExt: true, br: rBrI64GtS, brI: rBrI64GtSI, brNot: rBrI64LeS, brNotI: rBrI64LeSI, swap: opcode.I64LtS, res: module.I32}, true
 	case opcode.I64GtU:
-		return regNum{op: rI64GtU, ext: false, imm: rI64GtUI, br: rBrI64GtU, brI: rBrI64GtUI, swap: opcode.I64LtU, neg: opcode.I64LeU, res: module.I32}, true
+		return regNum{op: rI64GtU, ext: false, imm: xI64GtUI, immExt: true, br: rBrI64GtU, brI: rBrI64GtUI, brNot: rBrI64LeU, brNotI: rBrI64LeUI, swap: opcode.I64LtU, res: module.I32}, true
 	case opcode.I64LeS:
-		return regNum{op: rI64LeS, ext: false, imm: rI64LeSI, br: rBrI64LeS, brI: rBrI64LeSI, swap: opcode.I64GeS, neg: opcode.I64GtS, res: module.I32}, true
+		return regNum{op: rI64LeS, ext: false, imm: xI64LeSI, immExt: true, br: rBrI64LeS, brI: rBrI64LeSI, brNot: rBrI64GtS, brNotI: rBrI64GtSI, swap: opcode.I64GeS, res: module.I32}, true
 	case opcode.I64LeU:
-		return regNum{op: rI64LeU, ext: false, imm: rI64LeUI, br: rBrI64LeU, brI: rBrI64LeUI, swap: opcode.I64GeU, neg: opcode.I64GtU, res: module.I32}, true
+		return regNum{op: rI64LeU, ext: false, imm: xI64LeUI, immExt: true, br: rBrI64LeU, brI: rBrI64LeUI, brNot: rBrI64GtU, brNotI: rBrI64GtUI, swap: opcode.I64GeU, res: module.I32}, true
 	case opcode.I64GeS:
-		return regNum{op: rI64GeS, ext: false, imm: rI64GeSI, br: rBrI64GeS, brI: rBrI64GeSI, swap: opcode.I64LeS, neg: opcode.I64LtS, res: module.I32}, true
+		return regNum{op: rI64GeS, ext: false, imm: xI64GeSI, immExt: true, br: rBrI64GeS, brI: rBrI64GeSI, brNot: rBrI64LtS, brNotI: rBrI64LtSI, swap: opcode.I64LeS, res: module.I32}, true
 	case opcode.I64GeU:
-		return regNum{op: rI64GeU, ext: false, imm: rI64GeUI, br: rBrI64GeU, brI: rBrI64GeUI, swap: opcode.I64LeU, neg: opcode.I64LtU, res: module.I32}, true
+		return regNum{op: rI64GeU, ext: false, imm: xI64GeUI, immExt: true, br: rBrI64GeU, brI: rBrI64GeUI, brNot: rBrI64LtU, brNotI: rBrI64LtUI, swap: opcode.I64LeU, res: module.I32}, true
 	case opcode.F32Add:
 		return regNum{op: rF32Add, ext: false, res: module.F32}, true
 	case opcode.F32Sub:
@@ -1872,17 +2052,17 @@ func regNumeric(op opcode.Opcode) (regNum, bool) {
 	case opcode.F32CopySign:
 		return regNum{op: xF32CopySign, ext: true, res: module.F32}, true
 	case opcode.F32Eq:
-		return regNum{op: rF32Eq, ext: false, res: module.I32}, true
+		return regNum{op: rF32Eq, ext: false, br: rBrF32Eq, brNot: rBrF32Ne, res: module.I32}, true
 	case opcode.F32Ne:
-		return regNum{op: rF32Ne, ext: false, res: module.I32}, true
+		return regNum{op: rF32Ne, ext: false, br: rBrF32Ne, brNot: rBrF32Eq, res: module.I32}, true
 	case opcode.F32Lt:
-		return regNum{op: rF32Lt, ext: false, res: module.I32}, true
+		return regNum{op: rF32Lt, ext: false, br: rBrF32Lt, brNot: rBrNotF32Lt, res: module.I32}, true
 	case opcode.F32Gt:
-		return regNum{op: rF32Gt, ext: false, res: module.I32}, true
+		return regNum{op: rF32Gt, ext: false, br: rBrF32Gt, brNot: rBrNotF32Gt, res: module.I32}, true
 	case opcode.F32Le:
-		return regNum{op: rF32Le, ext: false, res: module.I32}, true
+		return regNum{op: rF32Le, ext: false, br: rBrF32Le, brNot: rBrNotF32Le, res: module.I32}, true
 	case opcode.F32Ge:
-		return regNum{op: rF32Ge, ext: false, res: module.I32}, true
+		return regNum{op: rF32Ge, ext: false, br: rBrF32Ge, brNot: rBrNotF32Ge, res: module.I32}, true
 	case opcode.F64Add:
 		return regNum{op: rF64Add, ext: false, res: module.F64}, true
 	case opcode.F64Sub:
@@ -1898,17 +2078,17 @@ func regNumeric(op opcode.Opcode) (regNum, bool) {
 	case opcode.F64CopySign:
 		return regNum{op: xF64CopySign, ext: true, res: module.F64}, true
 	case opcode.F64Eq:
-		return regNum{op: rF64Eq, ext: false, res: module.I32}, true
+		return regNum{op: rF64Eq, ext: false, br: rBrF64Eq, brNot: rBrF64Ne, res: module.I32}, true
 	case opcode.F64Ne:
-		return regNum{op: rF64Ne, ext: false, res: module.I32}, true
+		return regNum{op: rF64Ne, ext: false, br: rBrF64Ne, brNot: rBrF64Eq, res: module.I32}, true
 	case opcode.F64Lt:
-		return regNum{op: rF64Lt, ext: false, res: module.I32}, true
+		return regNum{op: rF64Lt, ext: false, br: rBrF64Lt, brNot: rBrNotF64Lt, res: module.I32}, true
 	case opcode.F64Gt:
-		return regNum{op: rF64Gt, ext: false, res: module.I32}, true
+		return regNum{op: rF64Gt, ext: false, br: rBrF64Gt, brNot: rBrNotF64Gt, res: module.I32}, true
 	case opcode.F64Le:
-		return regNum{op: rF64Le, ext: false, res: module.I32}, true
+		return regNum{op: rF64Le, ext: false, br: rBrF64Le, brNot: rBrNotF64Le, res: module.I32}, true
 	case opcode.F64Ge:
-		return regNum{op: rF64Ge, ext: false, res: module.I32}, true
+		return regNum{op: rF64Ge, ext: false, br: rBrF64Ge, brNot: rBrNotF64Ge, res: module.I32}, true
 	case opcode.I32Eqz:
 		return regNum{op: rI32Eqz, ext: false, unary: true, res: module.I32}, true
 	case opcode.I32Clz:
@@ -2385,8 +2565,8 @@ func init() {
 	regDescs[rI64RemU] = rd("nnn")
 	regTable[rI64Eq] = rhI64Eq
 	regDescs[rI64Eq] = rd("nnn")
-	regTable[rI64EqI] = rhI64EqI
-	regDescs[rI64EqI] = rd("nn-")
+	regExtTable[xI64EqI] = rhI64EqI
+	regExtDescs[xI64EqI] = rd("nn-")
 	regTable[rBrI64Eq] = rhBrI64Eq
 	regDescs[rBrI64Eq] = rd("nno")
 	regTable[rBrI64EqI] = rhBrI64EqI
@@ -2395,8 +2575,8 @@ func init() {
 	regSlowTable[rBrI64EqI] = regSlow16
 	regTable[rI64Ne] = rhI64Ne
 	regDescs[rI64Ne] = rd("nnn")
-	regTable[rI64NeI] = rhI64NeI
-	regDescs[rI64NeI] = rd("nn-")
+	regExtTable[xI64NeI] = rhI64NeI
+	regExtDescs[xI64NeI] = rd("nn-")
 	regTable[rBrI64Ne] = rhBrI64Ne
 	regDescs[rBrI64Ne] = rd("nno")
 	regTable[rBrI64NeI] = rhBrI64NeI
@@ -2405,8 +2585,8 @@ func init() {
 	regSlowTable[rBrI64NeI] = regSlow16
 	regTable[rI64LtS] = rhI64LtS
 	regDescs[rI64LtS] = rd("nnn")
-	regTable[rI64LtSI] = rhI64LtSI
-	regDescs[rI64LtSI] = rd("nn-")
+	regExtTable[xI64LtSI] = rhI64LtSI
+	regExtDescs[xI64LtSI] = rd("nn-")
 	regTable[rBrI64LtS] = rhBrI64LtS
 	regDescs[rBrI64LtS] = rd("nno")
 	regTable[rBrI64LtSI] = rhBrI64LtSI
@@ -2415,8 +2595,8 @@ func init() {
 	regSlowTable[rBrI64LtSI] = regSlow16
 	regTable[rI64LtU] = rhI64LtU
 	regDescs[rI64LtU] = rd("nnn")
-	regTable[rI64LtUI] = rhI64LtUI
-	regDescs[rI64LtUI] = rd("nn-")
+	regExtTable[xI64LtUI] = rhI64LtUI
+	regExtDescs[xI64LtUI] = rd("nn-")
 	regTable[rBrI64LtU] = rhBrI64LtU
 	regDescs[rBrI64LtU] = rd("nno")
 	regTable[rBrI64LtUI] = rhBrI64LtUI
@@ -2425,8 +2605,8 @@ func init() {
 	regSlowTable[rBrI64LtUI] = regSlow16
 	regTable[rI64GtS] = rhI64GtS
 	regDescs[rI64GtS] = rd("nnn")
-	regTable[rI64GtSI] = rhI64GtSI
-	regDescs[rI64GtSI] = rd("nn-")
+	regExtTable[xI64GtSI] = rhI64GtSI
+	regExtDescs[xI64GtSI] = rd("nn-")
 	regTable[rBrI64GtS] = rhBrI64GtS
 	regDescs[rBrI64GtS] = rd("nno")
 	regTable[rBrI64GtSI] = rhBrI64GtSI
@@ -2435,8 +2615,8 @@ func init() {
 	regSlowTable[rBrI64GtSI] = regSlow16
 	regTable[rI64GtU] = rhI64GtU
 	regDescs[rI64GtU] = rd("nnn")
-	regTable[rI64GtUI] = rhI64GtUI
-	regDescs[rI64GtUI] = rd("nn-")
+	regExtTable[xI64GtUI] = rhI64GtUI
+	regExtDescs[xI64GtUI] = rd("nn-")
 	regTable[rBrI64GtU] = rhBrI64GtU
 	regDescs[rBrI64GtU] = rd("nno")
 	regTable[rBrI64GtUI] = rhBrI64GtUI
@@ -2445,8 +2625,8 @@ func init() {
 	regSlowTable[rBrI64GtUI] = regSlow16
 	regTable[rI64LeS] = rhI64LeS
 	regDescs[rI64LeS] = rd("nnn")
-	regTable[rI64LeSI] = rhI64LeSI
-	regDescs[rI64LeSI] = rd("nn-")
+	regExtTable[xI64LeSI] = rhI64LeSI
+	regExtDescs[xI64LeSI] = rd("nn-")
 	regTable[rBrI64LeS] = rhBrI64LeS
 	regDescs[rBrI64LeS] = rd("nno")
 	regTable[rBrI64LeSI] = rhBrI64LeSI
@@ -2455,8 +2635,8 @@ func init() {
 	regSlowTable[rBrI64LeSI] = regSlow16
 	regTable[rI64LeU] = rhI64LeU
 	regDescs[rI64LeU] = rd("nnn")
-	regTable[rI64LeUI] = rhI64LeUI
-	regDescs[rI64LeUI] = rd("nn-")
+	regExtTable[xI64LeUI] = rhI64LeUI
+	regExtDescs[xI64LeUI] = rd("nn-")
 	regTable[rBrI64LeU] = rhBrI64LeU
 	regDescs[rBrI64LeU] = rd("nno")
 	regTable[rBrI64LeUI] = rhBrI64LeUI
@@ -2465,8 +2645,8 @@ func init() {
 	regSlowTable[rBrI64LeUI] = regSlow16
 	regTable[rI64GeS] = rhI64GeS
 	regDescs[rI64GeS] = rd("nnn")
-	regTable[rI64GeSI] = rhI64GeSI
-	regDescs[rI64GeSI] = rd("nn-")
+	regExtTable[xI64GeSI] = rhI64GeSI
+	regExtDescs[xI64GeSI] = rd("nn-")
 	regTable[rBrI64GeS] = rhBrI64GeS
 	regDescs[rBrI64GeS] = rd("nno")
 	regTable[rBrI64GeSI] = rhBrI64GeSI
@@ -2475,8 +2655,8 @@ func init() {
 	regSlowTable[rBrI64GeSI] = regSlow16
 	regTable[rI64GeU] = rhI64GeU
 	regDescs[rI64GeU] = rd("nnn")
-	regTable[rI64GeUI] = rhI64GeUI
-	regDescs[rI64GeUI] = rd("nn-")
+	regExtTable[xI64GeUI] = rhI64GeUI
+	regExtDescs[xI64GeUI] = rd("nn-")
 	regTable[rBrI64GeU] = rhBrI64GeU
 	regDescs[rBrI64GeU] = rd("nno")
 	regTable[rBrI64GeUI] = rhBrI64GeUI
@@ -2499,16 +2679,46 @@ func init() {
 	regExtDescs[xF32CopySign] = rd("nnn")
 	regTable[rF32Eq] = rhF32Eq
 	regDescs[rF32Eq] = rd("nnn")
+	regTable[rBrF32Eq] = rhBrF32Eq
+	regDescs[rBrF32Eq] = rd("nno")
+	regSlowTable[rBrF32Eq] = regSlow16
 	regTable[rF32Ne] = rhF32Ne
 	regDescs[rF32Ne] = rd("nnn")
+	regTable[rBrF32Ne] = rhBrF32Ne
+	regDescs[rBrF32Ne] = rd("nno")
+	regSlowTable[rBrF32Ne] = regSlow16
 	regTable[rF32Lt] = rhF32Lt
 	regDescs[rF32Lt] = rd("nnn")
+	regTable[rBrF32Lt] = rhBrF32Lt
+	regDescs[rBrF32Lt] = rd("nno")
+	regSlowTable[rBrF32Lt] = regSlow16
+	regTable[rBrNotF32Lt] = rhBrNotF32Lt
+	regDescs[rBrNotF32Lt] = rd("nno")
+	regSlowTable[rBrNotF32Lt] = regSlow16
 	regTable[rF32Gt] = rhF32Gt
 	regDescs[rF32Gt] = rd("nnn")
+	regTable[rBrF32Gt] = rhBrF32Gt
+	regDescs[rBrF32Gt] = rd("nno")
+	regSlowTable[rBrF32Gt] = regSlow16
+	regTable[rBrNotF32Gt] = rhBrNotF32Gt
+	regDescs[rBrNotF32Gt] = rd("nno")
+	regSlowTable[rBrNotF32Gt] = regSlow16
 	regTable[rF32Le] = rhF32Le
 	regDescs[rF32Le] = rd("nnn")
+	regTable[rBrF32Le] = rhBrF32Le
+	regDescs[rBrF32Le] = rd("nno")
+	regSlowTable[rBrF32Le] = regSlow16
+	regTable[rBrNotF32Le] = rhBrNotF32Le
+	regDescs[rBrNotF32Le] = rd("nno")
+	regSlowTable[rBrNotF32Le] = regSlow16
 	regTable[rF32Ge] = rhF32Ge
 	regDescs[rF32Ge] = rd("nnn")
+	regTable[rBrF32Ge] = rhBrF32Ge
+	regDescs[rBrF32Ge] = rd("nno")
+	regSlowTable[rBrF32Ge] = regSlow16
+	regTable[rBrNotF32Ge] = rhBrNotF32Ge
+	regDescs[rBrNotF32Ge] = rd("nno")
+	regSlowTable[rBrNotF32Ge] = regSlow16
 	regTable[rF64Add] = rhF64Add
 	regDescs[rF64Add] = rd("nnn")
 	regTable[rF64Sub] = rhF64Sub
@@ -2525,16 +2735,46 @@ func init() {
 	regExtDescs[xF64CopySign] = rd("nnn")
 	regTable[rF64Eq] = rhF64Eq
 	regDescs[rF64Eq] = rd("nnn")
+	regTable[rBrF64Eq] = rhBrF64Eq
+	regDescs[rBrF64Eq] = rd("nno")
+	regSlowTable[rBrF64Eq] = regSlow16
 	regTable[rF64Ne] = rhF64Ne
 	regDescs[rF64Ne] = rd("nnn")
+	regTable[rBrF64Ne] = rhBrF64Ne
+	regDescs[rBrF64Ne] = rd("nno")
+	regSlowTable[rBrF64Ne] = regSlow16
 	regTable[rF64Lt] = rhF64Lt
 	regDescs[rF64Lt] = rd("nnn")
+	regTable[rBrF64Lt] = rhBrF64Lt
+	regDescs[rBrF64Lt] = rd("nno")
+	regSlowTable[rBrF64Lt] = regSlow16
+	regTable[rBrNotF64Lt] = rhBrNotF64Lt
+	regDescs[rBrNotF64Lt] = rd("nno")
+	regSlowTable[rBrNotF64Lt] = regSlow16
 	regTable[rF64Gt] = rhF64Gt
 	regDescs[rF64Gt] = rd("nnn")
+	regTable[rBrF64Gt] = rhBrF64Gt
+	regDescs[rBrF64Gt] = rd("nno")
+	regSlowTable[rBrF64Gt] = regSlow16
+	regTable[rBrNotF64Gt] = rhBrNotF64Gt
+	regDescs[rBrNotF64Gt] = rd("nno")
+	regSlowTable[rBrNotF64Gt] = regSlow16
 	regTable[rF64Le] = rhF64Le
 	regDescs[rF64Le] = rd("nnn")
+	regTable[rBrF64Le] = rhBrF64Le
+	regDescs[rBrF64Le] = rd("nno")
+	regSlowTable[rBrF64Le] = regSlow16
+	regTable[rBrNotF64Le] = rhBrNotF64Le
+	regDescs[rBrNotF64Le] = rd("nno")
+	regSlowTable[rBrNotF64Le] = regSlow16
 	regTable[rF64Ge] = rhF64Ge
 	regDescs[rF64Ge] = rd("nnn")
+	regTable[rBrF64Ge] = rhBrF64Ge
+	regDescs[rBrF64Ge] = rd("nno")
+	regSlowTable[rBrF64Ge] = regSlow16
+	regTable[rBrNotF64Ge] = rhBrNotF64Ge
+	regDescs[rBrNotF64Ge] = rd("nno")
+	regSlowTable[rBrNotF64Ge] = regSlow16
 	regTable[rI32Eqz] = rhI32Eqz
 	regDescs[rI32Eqz] = rd("nn-")
 	regTable[rI32Clz] = rhI32Clz

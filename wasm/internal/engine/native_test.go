@@ -263,6 +263,72 @@ func nativeCases() (string, []regCall) {
 			}
 		}
 	}
+	fvals := map[string][]uint64{
+		"f32": {0, 0x80000000, 0x3f800000, 0xbf800000, 0x7f800000, 0xff800000, 0x7fc00000, 0x7fa00001, 0xffc00123,
+			1, 0x4f000000, 0xcf000000, 0x4f800000, 0x5f000000, 0x3f000000, 0xbf7fffff, 0x4effffff, 0xcf000001},
+		"f64": {0, 1 << 63, 0x3ff0000000000000, 0xbff0000000000000, 0x7ff0000000000000, 0xfff0000000000000,
+			0x7ff8000000000000, 0x7ff0000000000001, 0xfff8000000000123, 1, 0x41dfffffffe00000, 0xc1e0000000100000,
+			0xc1e0000000200000, 0x41f0000000000000, 0x43e0000000000000, 0x43f0000000000000, 0xbfe0000000000000,
+			0x41efffffffffffff, 0xbfefffffffffffff},
+	}
+	for _, ty := range []string{"f32", "f64"} {
+		for _, op := range []string{"add", "sub", "mul", "div", "min", "max", "eq", "ne", "lt", "gt", "le", "ge"} {
+			r := ty
+			if contains([]string{"eq", "ne", "lt", "gt", "le", "ge"}, op) {
+				r = "i32"
+				for _, form := range []string{"if", "br"} {
+					name := ty + "." + form + "." + op
+					if form == "if" {
+						fmt.Fprintf(&b, "(func (export %q) (param %s %s) (result i32) (if (result i32) (%s.%s (local.get 0) (local.get 1)) (then (i32.const 1)) (else (i32.const 0))))\n", name, ty, ty, ty, op)
+					} else {
+						fmt.Fprintf(&b, "(func (export %q) (param %s %s) (result i32) (block (br_if 0 (%s.%s (local.get 0) (local.get 1))) (return (i32.const 0))) (i32.const 1))\n", name, ty, ty, ty, op)
+					}
+					for _, x := range fvals[ty] {
+						for _, y := range fvals[ty] {
+							calls = append(calls, regCall{name, []Val{{N: x}, {N: y}}})
+						}
+					}
+				}
+			}
+			name := ty + "." + op
+			fmt.Fprintf(&b, "(func (export %q) (param %s %s) (result %s) (%s.%s (local.get 0) (local.get 1)))\n", name, ty, ty, r, ty, op)
+			for _, x := range fvals[ty] {
+				for _, y := range fvals[ty] {
+					calls = append(calls, regCall{name, []Val{{N: x}, {N: y}}})
+				}
+			}
+		}
+		for _, op := range []string{"abs", "neg", "sqrt"} {
+			name := ty + "." + op
+			fmt.Fprintf(&b, "(func (export %q) (param %s) (result %s) (%s.%s (local.get 0)))\n", name, ty, ty, ty, op)
+			for _, x := range fvals[ty] {
+				calls = append(calls, regCall{name, []Val{{N: x}}})
+			}
+		}
+		for _, it := range []string{"i32", "i64"} {
+			for _, sg := range []string{"s", "u"} {
+				name := it + ".trunc_" + ty + "_" + sg
+				fmt.Fprintf(&b, "(func (export %q) (param %s) (result %s) (%s (local.get 0)))\n", name, ty, it, name)
+				for _, x := range fvals[ty] {
+					calls = append(calls, regCall{name, []Val{{N: x}}})
+				}
+				cn := ty + ".convert_" + it + "_" + sg
+				fmt.Fprintf(&b, "(func (export %q) (param %s) (result %s) (%s (local.get 0)))\n", cn, it, ty, cn)
+				for _, x := range vals[it] {
+					calls = append(calls, regCall{cn, []Val{{N: x}}})
+				}
+			}
+		}
+	}
+	b.WriteString(`(func (export "demote") (param f64) (result f32) (f32.demote_f64 (local.get 0)))
+(func (export "promote") (param f32) (result f64) (f64.promote_f32 (local.get 0)))
+`)
+	for _, x := range fvals["f64"] {
+		calls = append(calls, regCall{"demote", []Val{{N: x}}})
+	}
+	for _, x := range fvals["f32"] {
+		calls = append(calls, regCall{"promote", []Val{{N: x}}})
+	}
 	b.WriteString(`(func (export "wrap") (param i64) (result i32) (i32.wrap_i64 (local.get 0)))
 (func (export "ext_s") (param i32) (result i64) (i64.extend_i32_s (local.get 0)))
 (func (export "consts") (result i64) (i64.add (i64.add (i64.const 0x123456789abcdef) (i64.const -5)) (i64.extend_i32_u (i32.const 0xfffffff0))))
@@ -319,6 +385,18 @@ func nativeCases() (string, []regCall) {
 	return b.String(), calls
 }
 
+// nativeMayExit reports whether a call of export name may leave native
+// code where it returns: a division (by 0 or -1), a loop's poll, and the
+// operations in the second table -- i64 comparisons made booleans with an
+// immediate.
+func nativeMayExit(name string) bool {
+	if strings.Contains(name, "div") || strings.Contains(name, "rem") || name == "count" || strings.Contains(name, "trunc_") || strings.Contains(name, "convert_i64_u") {
+		return true
+	}
+	return strings.HasPrefix(name, "i64.") && strings.Contains(name, ".imm") && !strings.Contains(name, ".br.") &&
+		contains([]string{"eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"}, strings.Split(name, ".")[1])
+}
+
 func contains(s []string, x string) bool {
 	for _, y := range s {
 		if y == x {
@@ -365,7 +443,7 @@ func TestNativeMatchesGoTable(t *testing.T) {
 				break
 			}
 		}
-		if gerr == nil && exits > 0 && !strings.Contains(c.name, "div") && !strings.Contains(c.name, "rem") && c.name != "count" {
+		if gerr == nil && exits > 0 && !nativeMayExit(c.name) {
 			t.Errorf("%s%v: %d exits", c.name, c.args, exits)
 		}
 		if exits > 0 {

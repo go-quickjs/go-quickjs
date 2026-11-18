@@ -5,8 +5,6 @@ import (
 	"unsafe"
 )
 
-//go:generate go run ./internal/nativegen native_handlers_amd64.s
-
 // The native handlers (README.md, "Native handlers"): machine code for the
 // hot operations of register code, made offline by internal/nativegen and
 // assembled into the binary (native_handlers_<arch>.s), one block for every

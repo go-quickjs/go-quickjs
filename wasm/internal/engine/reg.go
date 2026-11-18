@@ -94,17 +94,18 @@ const (
 // operation, in the second table if ext, a move for an operator that
 // changes no bit; imm its form with an immediate right operand, or 0; comm
 // says the operator is commutative, so an immediate on the left can be its
-// right; unary that it has one operand; res is the result's type. A
-// comparison of integers fuses with a branch: br and brI are the branch's
-// operations, swap the comparison with its operands swapped and neg its
-// negation.
+// right, in the second table if immExt; unary that it has one operand; res
+// is the result's type. A comparison fuses with a branch: br and brI are
+// the branch's operations, brNot and brNotI the branch's on its negation,
+// and swap the comparison with its operands swapped.
 type regNum struct {
-	op, imm     regOp
-	ext         bool
-	comm, unary bool
-	br, brI     regOp
-	swap, neg   opcode.Opcode
-	res         module.ValueType
+	op, imm       regOp
+	ext, immExt   bool
+	comm, unary   bool
+	br, brI       regOp
+	brNot, brNotI regOp
+	swap          opcode.Opcode
+	res           module.ValueType
 }
 
 // regCode is a function's register code.

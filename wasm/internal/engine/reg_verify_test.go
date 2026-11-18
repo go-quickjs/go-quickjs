@@ -96,7 +96,7 @@ func TestRegVerifierRejects(t *testing.T) {
 			rc.code[len(rc.code)-1] = uint64(rMov)
 		}},
 		{"an operation with no handler", "loop", func(rc *regCode, p *compiled) {
-			rc.code[0] = rc.code[0]&^0xff | 250
+			rc.code[0] = rc.code[0]&^0xff | 255
 		}},
 		{"an escape with no handler", "loop", func(rc *regCode, p *compiled) {
 			rc.code[0] = uint64(rExt) | 250<<8

@@ -56,6 +56,15 @@ var commutative = map[string]bool{
 	"I64Add": true, "I64Mul": true, "I64And": true, "I64Ior": true, "I64Xor": true,
 }
 
+// floatCompares are the float comparisons, which fuse with the branch
+// that tests them, each with its negation where that is another
+// comparison; an ordering's is not (a NaN satisfies it), and has a branch
+// of its own (BrNot).
+var floatCompares = map[string]string{
+	"F32Eq": "F32Ne", "F32Ne": "F32Eq", "F32Lt": "", "F32Gt": "", "F32Le": "", "F32Ge": "",
+	"F64Eq": "F64Ne", "F64Ne": "F64Eq", "F64Lt": "", "F64Gt": "", "F64Le": "", "F64Ge": "",
+}
+
 // intCompares are the integer comparisons, each with its operands swapped
 // and its negation, which fuse with the branch that tests them.
 var intCompares = map[string][2]string{}
@@ -152,8 +161,16 @@ func writeReg(path, defPath string) {
 		if immOps[o.name] {
 			body := fmt.Sprintf("a, b := %s, %s\n*rs(l, w>>16) = %s\nreturn pc + 1\n",
 				regRead(o.arg, "w>>32"), regImm(o.arg, "w>>48"), regWrite(o.res, regExpr(o.expr)))
-			g.handler(o.name+"I", body, false, "nn-")
-			fmt.Fprintf(&g.info, ", imm: r%sI", o.name)
+			// An i64 comparison made a boolean with an immediate is rare
+			// enough for the second table: i64 comparisons mostly fuse
+			// with their branches.
+			immCold := strings.HasPrefix(o.name, "I64") && intCompares[o.name] != [2]string{}
+			g.handler(o.name+"I", body, immCold, "nn-")
+			if immCold {
+				fmt.Fprintf(&g.info, ", imm: x%sI, immExt: true", o.name)
+			} else {
+				fmt.Fprintf(&g.info, ", imm: r%sI", o.name)
+			}
 		}
 		if commutative[o.name] {
 			g.info.WriteString(", comm: true")
@@ -166,7 +183,22 @@ func writeReg(path, defPath string) {
 				regRead(o.arg, "w>>16"), regImm(o.arg, "w>>32"), cond(o.expr))
 			g.handler("Br"+o.name+"I", body, false, "n-o")
 			fmt.Fprintf(&g.init, "regSlowTable[rBr%s] = regSlow16\nregSlowTable[rBr%sI] = regSlow16\n", o.name, o.name)
-			fmt.Fprintf(&g.info, ", br: rBr%s, brI: rBr%sI, swap: opcode.%s, neg: opcode.%s", o.name, o.name, c[0], c[1])
+			fmt.Fprintf(&g.info, ", br: rBr%s, brI: rBr%sI, brNot: rBr%s, brNotI: rBr%sI, swap: opcode.%s", o.name, o.name, c[1], c[1], c[0])
+		}
+		if neg, ok := floatCompares[o.name]; ok {
+			body := fmt.Sprintf("a, b := %s, %s\nif %s {\nreturn regTake16(w, pc, f)\n}\nreturn pc + 1\n",
+				regRead(o.arg, "w>>16"), regRead(o.arg, "w>>32"), cond(o.expr))
+			g.handler("Br"+o.name, body, false, "nno")
+			fmt.Fprintf(&g.init, "regSlowTable[rBr%s] = regSlow16\n", o.name)
+			if neg == "" {
+				// The negation of an ordering, which a NaN satisfies.
+				body := fmt.Sprintf("a, b := %s, %s\nif !(%s) {\nreturn regTake16(w, pc, f)\n}\nreturn pc + 1\n",
+					regRead(o.arg, "w>>16"), regRead(o.arg, "w>>32"), cond(o.expr))
+				g.handler("BrNot"+o.name, body, false, "nno")
+				fmt.Fprintf(&g.init, "regSlowTable[rBrNot%s] = regSlow16\n", o.name)
+				neg = "Not" + o.name
+			}
+			fmt.Fprintf(&g.info, ", br: rBr%s, brNot: rBr%s", o.name, neg)
 		}
 		fmt.Fprintf(&g.info, ", res: %s}, true\n", o.res.mtype)
 	}

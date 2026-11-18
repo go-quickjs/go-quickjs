@@ -647,14 +647,14 @@ func (c *regCompiler) binary(op opcode.Opcode, n regNum) {
 	e := rentry{t: n.res, slot: c.numSlot(h), local: -1}
 	switch {
 	case n.imm != 0 && y.konst && !x.konst && fits16(y.c, x.t):
-		e.def = c.emit(n.imm, 0, dst, ns(x.slot), uint64(uint16(y.c)))
+		e.def = c.emitNum(n.imm, n.immExt, dst, ns(x.slot), uint64(uint16(y.c)))
 		e.cmp, e.cmpImm = c.cmpOf(op, n), true
 	case n.imm != 0 && x.konst && !y.konst && fits16(x.c, y.t) && (n.comm || n.br != 0):
 		if n.br != 0 {
 			op = n.swap
 			n, _ = regNumeric(op)
 		}
-		e.def = c.emit(n.imm, 0, dst, ns(y.slot), uint64(uint16(x.c)))
+		e.def = c.emitNum(n.imm, n.immExt, dst, ns(y.slot), uint64(uint16(x.c)))
 		e.cmp, e.cmpImm = c.cmpOf(op, n), true
 	default:
 		xs := c.read(x, h)
@@ -729,14 +729,14 @@ func (c *regCompiler) branchIf(cond rentry, when bool, h int) rfix {
 		b, cc := w>>32&0xffff, w>>48
 		switch {
 		case cond.cmp != 0:
-			op := cond.cmp
-			if !when {
-				n, _ := regNumeric(op)
-				op = n.neg
-			}
-			n, _ := regNumeric(op)
+			n, _ := regNumeric(cond.cmp)
 			rop := n.br
-			if cond.cmpImm {
+			switch {
+			case !when && cond.cmpImm:
+				rop = n.brNotI
+			case !when:
+				rop = n.brNot
+			case cond.cmpImm:
 				rop = n.brI
 			}
 			c.out.code[c.last] = uint64(rop) | b<<16 | cc<<32

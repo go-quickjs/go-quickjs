@@ -138,6 +138,7 @@ func emitAMD64() (*block, error) {
 	g.moves()
 	g.control()
 	g.integers()
+	g.floats()
 	g.memory()
 
 	code, err := a.Finish()
@@ -403,16 +404,16 @@ var i64 = intType{name: "I64", wide: true,
 	divS: rd.I64DivS, divU: rd.I64DivU, remS: rd.I64RemS, remU: rd.I64RemU,
 	eqz: rd.I64Eqz, clz: rd.I64Clz, ctz: rd.I64Ctz, ext8: rd.I64SExtendI8, ext16: rd.I64SExtendI16,
 	cmp: [10]cmpOp{
-		{"Eq", rd.I64Eq, rd.I64EqI, rd.BrI64Eq, rd.BrI64EqI, CondE},
-		{"Ne", rd.I64Ne, rd.I64NeI, rd.BrI64Ne, rd.BrI64NeI, CondNE},
-		{"LtS", rd.I64LtS, rd.I64LtSI, rd.BrI64LtS, rd.BrI64LtSI, CondL},
-		{"LtU", rd.I64LtU, rd.I64LtUI, rd.BrI64LtU, rd.BrI64LtUI, CondB},
-		{"GtS", rd.I64GtS, rd.I64GtSI, rd.BrI64GtS, rd.BrI64GtSI, CondG},
-		{"GtU", rd.I64GtU, rd.I64GtUI, rd.BrI64GtU, rd.BrI64GtUI, CondA},
-		{"LeS", rd.I64LeS, rd.I64LeSI, rd.BrI64LeS, rd.BrI64LeSI, CondLE},
-		{"LeU", rd.I64LeU, rd.I64LeUI, rd.BrI64LeU, rd.BrI64LeUI, CondBE},
-		{"GeS", rd.I64GeS, rd.I64GeSI, rd.BrI64GeS, rd.BrI64GeSI, CondGE},
-		{"GeU", rd.I64GeU, rd.I64GeUI, rd.BrI64GeU, rd.BrI64GeUI, CondAE},
+		{"Eq", rd.I64Eq, -1, rd.BrI64Eq, rd.BrI64EqI, CondE},
+		{"Ne", rd.I64Ne, -1, rd.BrI64Ne, rd.BrI64NeI, CondNE},
+		{"LtS", rd.I64LtS, -1, rd.BrI64LtS, rd.BrI64LtSI, CondL},
+		{"LtU", rd.I64LtU, -1, rd.BrI64LtU, rd.BrI64LtUI, CondB},
+		{"GtS", rd.I64GtS, -1, rd.BrI64GtS, rd.BrI64GtSI, CondG},
+		{"GtU", rd.I64GtU, -1, rd.BrI64GtU, rd.BrI64GtUI, CondA},
+		{"LeS", rd.I64LeS, -1, rd.BrI64LeS, rd.BrI64LeSI, CondLE},
+		{"LeU", rd.I64LeU, -1, rd.BrI64LeU, rd.BrI64LeUI, CondBE},
+		{"GeS", rd.I64GeS, -1, rd.BrI64GeS, rd.BrI64GeSI, CondGE},
+		{"GeU", rd.I64GeU, -1, rd.BrI64GeU, rd.BrI64GeUI, CondAE},
 	}}
 
 func (g *gen) integers() {
@@ -555,6 +556,9 @@ func (g *gen) intType(t intType) {
 			o, n := c.op, t.name+c.name
 			if imm {
 				o, n = c.opI, n+"I"
+			}
+			if o < 0 {
+				continue
 			}
 			g.h(o, n, func() {
 				rr(imm)
