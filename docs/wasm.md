@@ -297,7 +297,7 @@ that names the limit and its value:
 | Table initializer entries | 2^27 | 10,000,000 | 10,000,000 |
 | Struct fields; subtyping depth | 2^27; 2^27 | 10,000; 63 | 10,000; 63 |
 | `br_table` targets; `array.new_fixed` length | 2^27; 2^27 | 65,520; 10,000 | 65,520; 10,000 |
-| Module size | 2^63-1 bytes | 1 GiB | 1 GiB |
+| Module size | 2^32-1 bytes, what its 32-bit offsets address | 1 GiB | 1 GiB |
 
 The bounds on a function, which also bound what validating it costs, are the
 same in all three: a body of 7,654,321 bytes, 50,000 locals, 1,000 parameters

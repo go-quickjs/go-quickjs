@@ -26,7 +26,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 	arr := func(i int) *Array {
 		r := f.r[f.rslot(slot+2*i)]
 		if r.IsNull() {
-			trapAt(TrapNullDereference, at)
+			trapAt(TrapNullDereference, uint64(at))
 		}
 		return asArray(r)
 	}
@@ -46,11 +46,11 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		rt := inst.Code.typeRTT(a)
 		et := m.Types[a].Array.Elem.Type
 		if op == opcode.ArrayNewDefault {
-			f.put(ref, slot, Val{R: ArrayRef(newArray(rt, u32(0), inst.budget, x, at))})
+			f.put(ref, slot, Val{R: ArrayRef(newArray(rt, u32(0), inst.budget, x, uint64(at)))})
 			return true
 		}
 		val := get(0, et.Unpacked())
-		ar := newArray(rt, u32(1), inst.budget, x, at)
+		ar := newArray(rt, u32(1), inst.budget, x, uint64(at))
 		for i := 0; i < ar.n; i++ {
 			arraySet(ar, et, i, val)
 		}
@@ -59,7 +59,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		rt := inst.Code.typeRTT(a)
 		et := m.Types[a].Array.Elem.Type
 		// The operands stay in their slots until the result is put.
-		ar := newArray(rt, b, inst.budget, x, at)
+		ar := newArray(rt, b, inst.budget, x, uint64(at))
 		for i := range int(b) {
 			arraySet(ar, et, i, get(i, et.Unpacked()))
 		}
@@ -70,25 +70,25 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		if op == opcode.ArrayNewData {
 			d := inst.datas[b]
 			if uint64(src)+uint64(cnt)*uint64(rt.elemSize) > uint64(len(d)) {
-				trapAt(TrapDataSegmentOutOfBounds, at)
+				trapAt(TrapDataSegmentOutOfBounds, uint64(at))
 			}
-			ar := newArray(rt, cnt, inst.budget, x, at)
+			ar := newArray(rt, cnt, inst.budget, x, uint64(at))
 			copy(ar.bytes(), d[src:])
 			f.put(ref, slot, Val{R: ArrayRef(ar)})
 			return true
 		}
 		e := inst.elems[b]
 		if uint64(src)+uint64(cnt) > uint64(len(e)) {
-			trapAt(TrapElementSegmentOutOfBounds, at)
+			trapAt(TrapElementSegmentOutOfBounds, uint64(at))
 		}
-		ar := newArray(rt, cnt, inst.budget, x, at)
+		ar := newArray(rt, cnt, inst.budget, x, uint64(at))
 		copy(ar.refs(), e[src:])
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayFill:
 		et := m.Types[a].Array.Elem.Type
 		ar := arr(0)
 		dst, val, cnt := u32(1), get(2, et.Unpacked()), u32(3)
-		checkArray(ar, dst, cnt, at)
+		checkArray(ar, dst, cnt, uint64(at))
 		for i := uint32(0); i < cnt; i++ {
 			arraySet(ar, et, int(dst+i), val)
 		}
@@ -98,8 +98,8 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		dst := u32(1)
 		sa := arr(2)
 		src, cnt := u32(3), u32(4)
-		checkArray(da, dst, cnt, at)
-		checkArray(sa, src, cnt, at)
+		checkArray(da, dst, cnt, uint64(at))
+		checkArray(sa, src, cnt, uint64(at))
 		if et.IsRef() {
 			copy(da.refs()[dst:dst+cnt], sa.refs()[src:src+cnt])
 		} else {
@@ -110,19 +110,19 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		et := m.Types[a].Array.Elem.Type
 		ar := arr(0)
 		dst, src, cnt := u32(1), u32(2), u32(3)
-		checkArray(ar, dst, cnt, at)
+		checkArray(ar, dst, cnt, uint64(at))
 		if op == opcode.ArrayInitData {
 			d := inst.datas[b]
 			size := uint64(et.Size())
 			if uint64(src)+uint64(cnt)*size > uint64(len(d)) {
-				trapAt(TrapDataSegmentOutOfBounds, at)
+				trapAt(TrapDataSegmentOutOfBounds, uint64(at))
 			}
 			copy(ar.bytes()[uint64(dst)*size:], d[src:uint64(src)+uint64(cnt)*size])
 			return true
 		}
 		e := inst.elems[b]
 		if uint64(src)+uint64(cnt) > uint64(len(e)) {
-			trapAt(TrapElementSegmentOutOfBounds, at)
+			trapAt(TrapElementSegmentOutOfBounds, uint64(at))
 		}
 		copy(ar.refs()[dst:dst+cnt], e[src:src+cnt])
 	default:
@@ -285,7 +285,7 @@ func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint
 	class := int(hi) - 1
 	switch {
 	case hi&wjit.AllocMake != 0:
-		a := newArray(lv.inst.Code.typeRTT(ti), uint32(length), lv.inst.budget, x, at)
+		a := newArray(lv.inst.Code.typeRTT(ti), uint32(length), lv.inst.budget, x, uint64(at))
 		f.r[hi&^wjit.AllocMake] = ArrayRef(a)
 		return
 	case hi == wjit.AllocLength:

@@ -301,13 +301,13 @@ func regMemOp(op opcode.Opcode) (rop regOp, store, ok bool) {
 	b.WriteString("}\nreturn 0, false, false\n}\n\n")
 	// The loads and stores of any memory at any address, by opcode.
 	b.WriteString("// regLoadAny returns the word load op reads from memory m at ea, trapping as\n// the instruction at offset at.\n")
-	b.WriteString("func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint32) uint64 {\nswitch op {\n")
+	b.WriteString("func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint64) uint64 {\nswitch op {\n")
 	for _, l := range loads {
 		fmt.Fprintf(b, "case opcode.%s:\nb := m.span(ea, %d, at)\nreturn %s\n", l.name, l.width, regWrite(l.t, l.expr))
 	}
 	b.WriteString("}\npanic(\"wasm: not a load\")\n}\n\n")
 	b.WriteString("// regStoreAny stores word w as store op does into memory m at ea, trapping\n// as the instruction at offset at.\n")
-	b.WriteString("func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint32, w uint64) {\nswitch op {\n")
+	b.WriteString("func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint64, w uint64) {\nswitch op {\n")
 	for _, s := range stores {
 		fmt.Fprintf(b, "case opcode.%s:\nv := %s\nb := m.span(ea, %d, at)\n%s\n", s.name, wordRead(s.t, "w"), s.width, s.expr)
 	}

@@ -155,7 +155,7 @@ func regTailFn(l unsafe.Pointer, f *frame, s *regSite, fn *Function) int32 {
 // regIndirect returns the function the call_indirect of site s finds at
 // the table index in its target's slot.
 func regIndirect(l unsafe.Pointer, f *frame, s *regSite) *Function {
-	return indirectCallee(f.inst, s.typeIndex, s.table, num(l, s.target), s.checked, s.at)
+	return indirectCallee(f.inst, s.typeIndex, s.table, num(l, s.target), s.checked, uint64(s.at))
 }
 
 // regReferenced returns the function the reference in site s's target's
@@ -163,7 +163,7 @@ func regIndirect(l unsafe.Pointer, f *frame, s *regSite) *Function {
 func regReferenced(f *frame, s *regSite) *Function {
 	r := f.r[s.target]
 	if r.IsNull() {
-		trapAt(TrapNullDereference, s.at)
+		trapAt(TrapNullDereference, uint64(s.at))
 	}
 	return r.Func()
 }

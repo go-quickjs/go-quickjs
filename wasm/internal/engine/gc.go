@@ -256,7 +256,7 @@ func maxArrayLength(size int) int {
 // newArray allocates an array of type t and length n, its elements zero,
 // charging it to b for a call running on x, for the instruction at offset
 // at: 0 for a constant expression's.
-func newArray(t *rtt, n uint32, b *Budget, x *exec, at uint32) *Array {
+func newArray(t *rtt, n uint32, b *Budget, x *exec, at uint64) *Array {
 	size := t.elemSize
 	if t.refElems {
 		size = 8

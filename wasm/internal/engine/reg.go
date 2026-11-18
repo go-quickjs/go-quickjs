@@ -216,29 +216,33 @@ func putVal(l unsafe.Pointer, f *frame, k uint8, s uint32, v Val) {
 	}
 }
 
-// regAt is the offset a handler at pc traps with: the pc's complement,
-// which is past every offset of the module (the compiler makes sure), and
-// which the trap's recovery makes the module offset of the instruction the
-// pc's was compiled from (regOffset). So a handler's trap carries no
-// offset on the path that does not trap.
-func regAt(pc int32) uint32 { return ^uint32(pc) }
+// regAt is what a handler at pc traps with: the pc marked by regPC, a bit
+// past every module offset (offsets are 32 bits), which the trap's
+// recovery makes the module offset of the instruction the pc was compiled
+// from (regOffset). So a handler's trap carries no offset on the path that
+// does not trap, and a module of any size the engine takes has its traps'
+// offsets exact.
+func regAt(pc int32) uint64 { return regPC | uint64(uint32(pc)) }
+
+// regPC marks a trap's at as a pc of register code (regAt).
+const regPC = 1 << 32
 
 // regOffset returns the module offset a trap of the innermost frame
-// reported as at: where at is past the module's offsets and the frame runs
-// register code, the offset of the instruction at the pc regAt made it of.
-func (x *exec) regOffset(at uint32) uint32 {
+// reported as at: a module offset as it is, and a pc regAt marked as the
+// offset of the instruction at that pc of the frame's register code.
+func (x *exec) regOffset(at uint64) uint32 {
+	if at < regPC {
+		return uint32(at)
+	}
 	c := x.calls[len(x.calls)-1]
 	if c.fn == nil || c.fn.Inst == nil {
-		return at
+		return 0
 	}
-	code := c.fn.Inst.Code
-	if at < uint32(len(code.Module.Bytes)) {
-		return at
+	pc := uint32(at)
+	if p := c.fn.Inst.Code.fns[c.fn.Index].Load(); p != nil && p.reg != nil && int(pc) < len(p.reg.offs) {
+		return p.reg.offs[pc]
 	}
-	if p := code.fns[c.fn.Index].Load(); p != nil && p.reg != nil && int(^at) < len(p.reg.offs) {
-		return p.reg.offs[^at]
-	}
-	return at
+	return 0
 }
 
 // regLoop runs register code from pc in frame f until the frame returns.

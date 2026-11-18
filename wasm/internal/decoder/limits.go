@@ -79,7 +79,8 @@ func JSAPILimits() *Limits {
 
 // CoreLimits returns limits for the core specification alone, which has
 // none of the interface's: counts up to 1<<27, memories and tables up to the
-// largest their address types allow. The bounds on a function body stay
+// largest their address types allow, a module up to what its offsets
+// address (MaxModuleSize). The bounds on a function body stay
 // those of V8Limits, since they also bound what validating a function costs.
 func CoreLimits() *Limits {
 	const count = 1 << 27
@@ -102,6 +103,15 @@ func CoreLimits() *Limits {
 	l.Memory64Pages = 1 << 48
 	l.TableSize = 1<<32 - 1
 	l.Table64Size = 1<<64 - 1
-	l.ModuleSize = 1<<63 - 1
+	l.ModuleSize = MaxModuleSize
 	return l
 }
+
+// MaxModuleSize is the most bytes a module may take whatever its limits:
+// every offset into a module, of its sections, its bodies and the
+// instructions a trap reports, is 32 bits.
+const MaxModuleSize = 1<<32 - 1
+
+// moduleSizeLimit is the most bytes a module under limits l may take: l's
+// ModuleSize, at most MaxModuleSize.
+func moduleSizeLimit(l *Limits) uint64 { return min(l.ModuleSize, MaxModuleSize) }

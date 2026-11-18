@@ -108,7 +108,7 @@ func elemBytes(a *Array, off, size int) []byte {
 
 // checkArray traps, as the instruction at offset at, unless [i, i+n) lies
 // within array a.
-func checkArray(a *Array, i, n, at uint32) {
+func checkArray(a *Array, i, n uint32, at uint64) {
 	if uint64(i)+uint64(n) > uint64(a.n) {
 		trapAt(TrapArrayOutOfBounds, at)
 	}

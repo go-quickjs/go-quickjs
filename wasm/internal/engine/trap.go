@@ -91,25 +91,26 @@ func (t *Trap) Error() string {
 func trap(c TrapCode) { panic(&Trap{Code: c}) }
 
 // trapAt panics with a trap of code c raised by the instruction at module
-// offset at, which the innermost frame reports; at is 0 where there is no
-// frame, in a constant expression. It panics with a trapSite, which
+// offset at, which the innermost frame reports, or, for register code, the
+// instruction at a pc of the innermost frame's code regAt makes at of; at
+// is 0 where there is no frame, in a constant expression. It panics with a trapSite, which
 // recovered makes the *Trap: a value that a closure inlining trapAt passes
 // to the runtime's conversion, so that it keeps nothing live across a call
 // and spills nothing on the path that does not trap.
-func trapAt(c TrapCode, at uint32) { panic(trapSite{c, at}) }
+func trapAt(c TrapCode, at uint64) { panic(trapSite{c, at}) }
 
 // trapSite is what trapAt panics with: the trap's code and the offset of
 // the instruction that raised it.
 type trapSite struct {
 	code TrapCode
-	at   uint32
+	at   uint64
 }
 
 // trap returns the trap the site raised, its innermost frame at the
 // site's instruction among frames.
 func (s trapSite) trap(frames []Frame) *Trap {
 	if s.at != 0 && len(frames) > 0 {
-		frames[0].Offset = s.at
+		frames[0].Offset = uint32(s.at)
 	}
 	return &Trap{Code: s.code, Frames: frames}
 }

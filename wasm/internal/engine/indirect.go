@@ -15,7 +15,7 @@ func indirectChecksType(m *module.Module, typeIndex, table uint32) bool {
 // signature mismatch" where the call checks its callee's type and "null
 // function" where the table's type made the check needless -- as the
 // instruction at offset at.
-func indirectCallee(inst *Instance, typeIndex, table uint32, i uint64, checked bool, at uint32) *Function {
+func indirectCallee(inst *Instance, typeIndex, table uint32, i uint64, checked bool, at uint64) *Function {
 	t := inst.Tables[table]
 	if i >= uint64(len(t.Elems)) {
 		trapAt(TrapTableOutOfBounds, at)

@@ -321,7 +321,7 @@ func rhSSplat64(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 // vecLoad loads the v128 vector load op reads from memory m at ea, trapping
 // as the instruction at offset at: a whole vector, its lanes widened, a
 // lane splatted, or a lane with zeros above it.
-func vecLoad(op opcode.Opcode, m *Memory, ea uint64, at uint32) V128 {
+func vecLoad(op opcode.Opcode, m *Memory, ea uint64, at uint64) V128 {
 	switch op {
 	case opcode.S128LoadMem:
 		b := m.span(ea, 16, at)

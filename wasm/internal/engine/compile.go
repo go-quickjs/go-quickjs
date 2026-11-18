@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -244,11 +246,22 @@ func layout(ts []module.ValueType) (refs []slotRef, nslots, rslots int) {
 	return refs, nslots, rslots
 }
 
-// compileFunction compiles function index's body to register code.
+// compileFunction compiles function index's body to register code. A body
+// whose register code would pass what a pc holds stops the call that needs
+// it with ErrFunctionTooLarge; no limit of the decoder's keeps such a body
+// out, a body's size bounding its code only loosely (a branch carries its
+// values' moves). Any other refusal is a compiler bug.
 func compileFunction(code *Code, index uint32) *compiled {
 	p, why := regCompile(code, index)
 	if p == nil {
+		if why == regTooLarge {
+			panic(hostError{fmt.Errorf("%w: function %d", ErrFunctionTooLarge, index)})
+		}
 		panic("wasm: a body register code does not hold: " + why)
 	}
 	return p
 }
+
+// ErrFunctionTooLarge stops a call of a function whose body compiles to more
+// register code than the interpreter addresses.
+var ErrFunctionTooLarge = errors.New("wasm: function too large for the interpreter")

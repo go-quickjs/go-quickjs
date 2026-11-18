@@ -41,7 +41,7 @@ func le64(v uint64) uint64 {
 // atomicSpan returns memory m's bytes after checking that the access of
 // width bytes at ea, by the instruction at offset at, is aligned and in
 // bounds.
-func atomicSpan(m *Memory, ea, width uint64, at uint32) []byte {
+func atomicSpan(m *Memory, ea, width uint64, at uint64) []byte {
 	if ea&(width-1) != 0 {
 		trapAt(TrapUnalignedAccess, at)
 	}

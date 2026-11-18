@@ -2269,7 +2269,7 @@ func regMemOp(op opcode.Opcode) (rop regOp, store, ok bool) {
 
 // regLoadAny returns the word load op reads from memory m at ea, trapping as
 // the instruction at offset at.
-func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint32) uint64 {
+func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint64) uint64 {
 	switch op {
 	case opcode.I32LoadMem:
 		b := m.span(ea, 4, at)
@@ -2319,7 +2319,7 @@ func regLoadAny(op opcode.Opcode, m *Memory, ea uint64, at uint32) uint64 {
 
 // regStoreAny stores word w as store op does into memory m at ea, trapping
 // as the instruction at offset at.
-func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint32, w uint64) {
+func regStoreAny(op opcode.Opcode, m *Memory, ea uint64, at uint64, w uint64) {
 	switch op {
 	case opcode.I32StoreMem:
 		v := uint32(w)

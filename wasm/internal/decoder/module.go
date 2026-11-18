@@ -230,8 +230,8 @@ type moduleDecoder struct {
 // bodies under limits l, returning the first error if there is one.
 // ValidateFunctions validates the bodies.
 func Decode(b []byte, l *Limits) (*module.Module, *Error) {
-	if uint64(len(b)) > l.ModuleSize {
-		return nil, &Error{Offset: 0, Msg: fmt.Sprintf("size > maximum module size (%d): %d", l.ModuleSize, len(b))}
+	if max := moduleSizeLimit(l); uint64(len(b)) > max {
+		return nil, &Error{Offset: 0, Msg: fmt.Sprintf("size > maximum module size (%d): %d", max, len(b))}
 	}
 	md := &moduleDecoder{m: &module.Module{Bytes: b}, lim: l}
 	md.b = b

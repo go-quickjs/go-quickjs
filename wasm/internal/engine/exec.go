@@ -240,7 +240,7 @@ func recovered(x *exec, r any) error {
 		return v
 	case trapSite:
 		if v.at != 0 && len(x.calls) > 0 {
-			v.at = x.regOffset(v.at)
+			v.at = uint64(x.regOffset(v.at))
 		}
 		return v.trap(x.trace())
 	case *Exception:

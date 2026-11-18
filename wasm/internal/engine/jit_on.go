@@ -1435,7 +1435,7 @@ func (x *exec) jitCallee(lv *jitLevel, f *exitFrame, ft *module.FuncType, slot i
 	if ctx.Exit == wjit.ExitCallRef || ctx.Exit == wjit.ExitTailRef {
 		r := f.r[f.rslot(k)]
 		if r.IsNull() {
-			trapAt(TrapNullDereference, at)
+			trapAt(TrapNullDereference, uint64(at))
 		}
 		return r.Func()
 	}
@@ -1537,7 +1537,7 @@ func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64, at uint32
 	if !inst.Module.Tables[table].Limits.Is64 {
 		i = uint64(uint32(i))
 	}
-	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table), at)
+	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table), uint64(at))
 }
 
 // jitOp runs instruction op for native code, with immediates a and imm, its
@@ -1574,8 +1574,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		dst, src, cnt := arg(0, mem64(b)), arg(1, false), arg(2, false)
 		data := inst.datas[a]
 		buf := inst.Memories[b].bytes()
-		checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds, at)
-		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, at)
+		checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds, uint64(at))
+		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, uint64(at))
 		copy(buf[dst:dst+cnt], data[src:src+cnt])
 	case opcode.DataDrop:
 		inst.datas[a] = nil
@@ -1583,14 +1583,14 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		d64, s64 := mem64(a), mem64(b)
 		dst, src, cnt := arg(0, d64), arg(1, s64), arg(2, d64 && s64)
 		db, sb := inst.Memories[a].bytes(), inst.Memories[b].bytes()
-		checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds, at)
-		checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds, at)
+		checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds, uint64(at))
+		checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds, uint64(at))
 		copy(db[dst:dst+cnt], sb[src:src+cnt])
 	case opcode.MemoryFill:
 		is64 := mem64(a)
 		dst, val, cnt := arg(0, is64), byte(arg(1, false)), arg(2, is64)
 		buf := inst.Memories[a].bytes()
-		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, uint64(at))
 		s := buf[dst : dst+cnt]
 		for i := range s {
 			s[i] = val
@@ -1600,8 +1600,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		dst, src, cnt := arg(0, tab64(b)), arg(1, false), arg(2, false)
 		elems := inst.elems[a]
 		t := inst.Tables[b]
-		checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, at)
-		checkRange(src, cnt, uint64(len(elems)), TrapElementSegmentOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, uint64(at))
+		checkRange(src, cnt, uint64(len(elems)), TrapElementSegmentOutOfBounds, uint64(at))
 		copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 	case opcode.ElemDrop:
 		inst.elems[a] = nil
@@ -1609,8 +1609,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		d64, s64 := tab64(a), tab64(b)
 		dst, src, cnt := arg(0, d64), arg(1, s64), arg(2, d64 && s64)
 		de, se := inst.Tables[a].Elems, inst.Tables[b].Elems
-		checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds, at)
-		checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds, at)
+		checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds, uint64(at))
+		checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds, uint64(at))
 		copy(de[dst:dst+cnt], se[src:src+cnt])
 	case opcode.TableSize:
 		put(inst.Tables[a].Size(), tab64(a))
@@ -1619,7 +1619,7 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		mm := inst.Memories[a]
 		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a), at)
 		cnt := uint32(frame[slot+2])
-		atomicSpan(mm, ea, 4, at)
+		atomicSpan(mm, ea, 4, uint64(at))
 		put(uint64(notify(mm, ea, cnt)), false)
 	case opcode.I32AtomicWait, opcode.I64AtomicWait:
 		width, want := uint64(4), uint64(uint32(frame[slot+2]))
@@ -1630,9 +1630,9 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a), at)
 		timeout := int64(frame[slot+4])
 		if !mm.Shared {
-			trapAt(TrapAtomicsWaitNotAllowed, at)
+			trapAt(TrapAtomicsWaitNotAllowed, uint64(at))
 		}
-		put(uint64(wait(x, mm, atomicSpan(mm, ea, width, at), ea, width, want, timeout)), false)
+		put(uint64(wait(x, mm, atomicSpan(mm, ea, width, uint64(at)), ea, width, want, timeout)), false)
 	case opcode.TableGrow:
 		init := ref(0)
 		put(uint64(inst.Tables[a].Grow(arg(1, tab64(a)), init)), tab64(a))
@@ -1649,14 +1649,14 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 	case opcode.ThrowRef:
 		r := ref(0)
 		if r.IsNull() {
-			trapAt(TrapRethrowNull, at)
+			trapAt(TrapRethrowNull, uint64(at))
 		}
 		panic(r.Exn())
 	case opcode.TableFill:
 		is64 := tab64(a)
 		dst, val, cnt := arg(0, is64), ref(1), arg(2, is64)
 		e := inst.Tables[a].Elems
-		checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds, uint64(at))
 		s := e[dst : dst+cnt]
 		for i := range s {
 			s[i] = val
@@ -1674,7 +1674,7 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 func atomicEA(addr, off uint64, is64 bool, at uint32) uint64 {
 	ea := addr + off
 	if is64 && ea < addr {
-		trapAt(TrapMemOutOfBounds, at)
+		trapAt(TrapMemOutOfBounds, uint64(at))
 	}
 	return ea
 }

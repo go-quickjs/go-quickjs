@@ -34,8 +34,19 @@ import (
 // reference slot rlocals+h.
 
 // regBail is what the register compiler panics with for a body it does not
-// compile, why: a compiler bug for a validated body (compileFunction).
+// compile, why: regTooLarge for a body whose register code would pass what
+// a pc holds, which compileFunction makes an error of the call; anything
+// else a compiler bug for a validated body.
 type regBail string
+
+// regTooLarge is the bail of a body whose register code would take
+// maxRegCode words or more.
+const regTooLarge = "register code past what a pc holds"
+
+// maxRegCode is the most words a body's register code may take: a pc is a
+// positive int32, and its words after it stay below that too. A test lowers
+// it to reach the bail.
+var maxRegCode = 1<<31 - 1<<16
 
 // rentry is an entry of the symbolic operand stack.
 type rentry struct {
@@ -198,12 +209,6 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 	if len(c.out.code) == 0 {
 		c.emit(rRet, 0, 0, 0, 0)
 	}
-	if uint64(len(c.out.code))+uint64(len(m.Bytes)) >= math.MaxUint32 {
-		// A trap's pc is reported past the module's offsets (regAt), which
-		// a module whose offsets do not fit 32 bits leaves no room for: no
-		// part of the engine reports such a module's offsets.
-		panic(regBail("a module past 4 GiB"))
-	}
 	p = newCompiled()
 	p.nslots = c.nlocals + 2*(c.maxHeight+1)
 	p.rslots = c.rlocals + c.maxHeight + 1 + c.tries
@@ -271,6 +276,9 @@ func (c *regCompiler) emit(op regOp, x uint8, a, b, cc uint64, ext ...uint64) in
 // field holds is emitted behind a far prefix (rFar): its slot fields name
 // the frame's scratch slots, and the prefix the slots they stand for.
 func (c *regCompiler) emitD(op regOp, x uint8, a, b, cc, d uint64, ext ...uint64) int {
+	if len(c.out.code) >= maxRegCode {
+		panic(regBail(regTooLarge))
+	}
 	fields := [4]uint64{a, b, cc, d}
 	far := false
 	for _, f := range fields {
