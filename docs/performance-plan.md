@@ -875,3 +875,15 @@ Measured and dropped; each needs a new angle before it is tried again.
   2026-10-30): only 1.8 of their 3.29 MiB on a render could be freed, and
   lowering them again cost about 10 ms a render. Under pressure the cache
   drops the lowerings of functions with no entry before any code.
+- **Trimming entry clears by backwards liveness** (2026-11-17,
+  darwin/arm64, JIT off, two placements) saved only 1.5% on EarleyBoyer.
+  The compiler pass and its interaction with the JIT's use of `Inits` to
+  identify sole BigInt bindings did not justify that gain; it was removed.
+- **The native interpreter probing the shared constructor cache for
+  instanceof** (same comparison) cost 1%. Collections clear that cache,
+  and a native handler that subsequently succeeds through its ordinary
+  path never fills it again. The retained optimization keeps the prototype
+  slot in the property's site instead. Its probe runs after the site
+  address is computed: probing before it repeated that work on misses
+  and made a primitive-only loop 9% slower; sharing the address brought
+  that cost down to 2%.

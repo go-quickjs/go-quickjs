@@ -3,6 +3,7 @@ package vm
 import (
 	"runtime/debug"
 	"testing"
+	"unsafe"
 )
 
 // instanceOfChangesSrc tests constructors instanceof remembers
@@ -137,6 +138,9 @@ func TestInstanceOfKnown(t *testing.T) {
 // A remembered constructor is answered from its entry: a test of one that
 // stops being ordinary is not.
 func TestInstanceOfKnownEntry(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) == 8 && unsafe.Sizeof(propCache{}) != 80 {
+		t.Fatalf("property cache grew to %d bytes", unsafe.Sizeof(propCache{}))
+	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := New(Config{})
 	defer r.Close()
@@ -149,6 +153,19 @@ func TestInstanceOfKnownEntry(t *testing.T) {
 	if e.ctor != c || e.shape != c.shape {
 		t.Fatalf("F not remembered: %+v", e)
 	}
+	var ic propCache
+	r.fillPropCache(&ic, c, r.hasInstanceAtom, false)
+	r.noteInstanceOfSite(&ic, c)
+	if got := ic.instanceProto; int(got) != int(e.idx)+1 {
+		t.Fatalf("site prototype slot = %d, want %d", got, e.idx+1)
+	}
+	// A collection's clearing of the shared cache must leave the site's
+	// proof usable. The property cache already keeps this shape alive.
+	clear(r.ctorsKnown[:])
+	if int(ic.instanceProto) != int(e.idx)+1 || ic.shape != c.shape {
+		t.Fatal("site lost its prototype slot with the shared cache")
+	}
+	r.ctorsKnown[instanceOfSlot(c)] = e
 	if _, err := r.Run(compileForTest(t, `Object.defineProperty(F, Symbol.hasInstance, { value: () => false })`)); err != nil {
 		t.Fatal(err)
 	}
@@ -157,5 +174,11 @@ func TestInstanceOfKnownEntry(t *testing.T) {
 	}
 	if _, ok := r.instanceOfKnown(c, Obj(c)); ok {
 		t.Error("answered from an entry F's new layout does not prove")
+	}
+	if _, err := r.instanceOfAt(&ic, Obj(c), Obj(c)); err != nil {
+		t.Fatal(err)
+	}
+	if ic.instanceProto != 0 {
+		t.Error("refilling the changed constructor kept the old prototype slot")
 	}
 }

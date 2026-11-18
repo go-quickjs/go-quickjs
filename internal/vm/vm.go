@@ -1062,6 +1062,7 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 			// register interpreter's native handler answers from it alone,
 			// and comes here each time it misses.
 			r.cachedProp(ic, c, r.hasInstanceAtom)
+			r.noteInstanceOfSite(ic, c)
 		}
 		return yes, nil
 	}
@@ -1085,6 +1086,7 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 			if yes, ok := ordinaryHasInstance(c, obj); ok {
 				if obj.IsObject() {
 					r.noteInstanceOf(c)
+					r.noteInstanceOfSite(ic, c)
 				}
 				return yes, nil
 			}

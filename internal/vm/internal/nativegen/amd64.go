@@ -36,6 +36,8 @@ type nativeGen struct {
 	late []func()
 	// after is appended after every handler, including the cursors.
 	after []func()
+	// last follows the existing out-of-line helpers as well as the handlers.
+	last []func()
 	// initL is the native initializer's run (initRun), emitted after the
 	// handlers once one has asked for it (initMade).
 	initL    Label
@@ -1023,13 +1025,23 @@ func (g *nativeGen) ownSlot(dst, obj Reg) {
 // remembers of the object in RSI: its own, or a prototype's in the holder
 // propCache.holder finds, as runReg's property read does; else it exits.
 // R8, R9 and RDX are its scratch.
-func (g *nativeGen) readSlot() {
+// With a probe's entry and return labels, its first own-shape comparison
+// is left to the probe, which returns with that comparison's flags set.
+func (g *nativeGen) readSlot(probe ...Label) {
 	a := g.a
 	own, holder, noCell, p1Holder := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	poly, polyLoop, polyNext, shaped, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	shapeOff := off("Object.shape")
-	a.Load(R8, RCX, off("propCache.ownShape"))
-	a.CmpMem(R8, RSI, shapeOff, true)
+	if len(probe) == 0 {
+		a.Load(R8, RCX, off("propCache.ownShape"))
+		a.CmpMem(R8, RSI, shapeOff, true)
+	} else {
+		// The probe's miss path makes the original comparison. Replace
+		// its eight bytes with a branch and a dead move.
+		a.Jmp(probe[0])
+		a.MovRR(R8, R8)
+		a.Bind(probe[1])
+	}
 	a.Jcc(CondE, own)
 	a.Load(R8, RCX, off("propCache.shape"))
 	a.CmpMem(R8, RSI, shapeOff, true)

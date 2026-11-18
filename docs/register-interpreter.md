@@ -666,6 +666,20 @@ jumps to the exit before it has written anything. arm64 answers one case
 more: NaN made an integer, which `FCVTZS` gives as 0 where `CVTTSD2SI` has
 no integer.
 
+An `instanceof` site's property cache also keeps the constructor's own
+prototype slot, plus one, in two bytes of its padding. It is filled only
+when the constructor's remembered shape proves its inherited
+`Symbol.hasInstance` is the realm's immutable intrinsic and its prototype
+property holds data. A matching shape and an ordinary, unbound function
+then need no property lookup: the handler reads the current prototype
+value and walks the instance's chain, leaving proxies and errors to Go.
+Refilling the property cache clears the slot; collecting the runtime's
+shared constructor cache leaves it intact. The probe uses the site's
+already computed address, so a miss does not repeat that lookup.
+This probe follows the existing
+out-of-line native helpers, keeping their positions as well as the
+handlers' unchanged.
+
 **The exit stub.** An operation with no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the
 instruction, its index and the budget to the context, makes the top frame's

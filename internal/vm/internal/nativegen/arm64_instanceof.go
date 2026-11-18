@@ -9,8 +9,10 @@ import (
 func (g *armGen) instanceOf() {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.regC(rD)
 	g.object(rS, rD)
+	g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
 	a.Store(rCtx, scr(sE), rS)
 	// The site, Aux[pc]: &ic[Aux[pc]].
 	a.Load(r8, rCtx, ncRC)
@@ -25,7 +27,7 @@ func (g *armGen) instanceOf() {
 	a.Mul(rC, rC, rT)
 	a.Op(Add, rC, rC, rIC, true)
 	// Symbol.hasInstance, the realm's.
-	g.readSlot()
+	g.readSlot(check, miss)
 	a.Load(r8, rC, 0)
 	g.cmpMem(r8, rCtx, ncObjBits)
 	a.BCond(NE, g.exit)
@@ -81,6 +83,7 @@ func (g *armGen) instanceOf() {
 	a.Load(rC, rC, 8)
 	// The value: a primitive is no instance; an object's prototypes are
 	// walked, a proxy's trap left to Go.
+	a.Bind(value)
 	a.Load(rW, rIP, 0)
 	g.regB(rD)
 	a.Load(r9, rD, 0)
@@ -114,6 +117,43 @@ func (g *armGen) instanceOf() {
 	a.LoadF(0, rCtx, ncFalse)
 	a.Bind(store)
 	g.storeA(0)
+}
+
+// instanceOfSite uses the prototype slot cached by noteInstanceOfSite.
+// The site's shape proves an immutable inherited Symbol.hasInstance and
+// a plain prototype property. The function's identity need not match:
+// its kind and bound flag are checked, and its prototype read anew.
+func (g *armGen) instanceOfSite(check, miss, value Label) {
+	a := g.a
+	a.Bind(check)
+	uncached := a.NewLabel()
+	a.LoadU16(rD, rC, off("propCache.instanceProto"))
+	a.Cbz(rD, uncached, false)
+	a.Load(r8, rS, offObjShape)
+	g.cmpMem(r8, rC, off("propCache.shape"))
+	a.BCond(NE, uncached)
+	// A shape can be shared with a bound function or a non-function.
+	a.LoadU16(r8, rS, offObjFlags)
+	a.TstImm(r8, uint64(objHasData), false)
+	a.BCond(EQ, uncached)
+	a.Load(r8, rS, sizeObj+offExtData)
+	g.cmpMem(r8, rCtx, ncFuncT)
+	a.BCond(NE, uncached)
+	a.Load(r9, rS, sizeObj+offExtData+8)
+	a.LoadU8(r8, r9, offFDBound)
+	a.Cbnz(r8, uncached, false)
+	a.AddImm(rD, rD, -1, true)
+	a.Load(r8, rS, off("Object.valp"))
+	a.AddLsl(rC, r8, rD, 4)
+	a.Load(r8, rC, 0)
+	g.cmpMem(r8, rCtx, ncObjBits)
+	a.BCond(NE, g.exit)
+	a.Load(rC, rC, 8)
+	a.B(value)
+	a.Bind(uncached)
+	a.Load(r8, rC, off("propCache.ownShape"))
+	g.cmpMem(r8, rS, offObjShape)
+	a.B(miss)
 }
 
 // derivedRet is derived_ret, as amd64's.

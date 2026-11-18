@@ -104,6 +104,10 @@ const nativeInstanceOfSrc = `
 // Go table: the same answers and errors, marking or not, and a site of
 // one constructor answered with no exit once its cache holds it.
 func TestRegNativeInstanceOf(t *testing.T) {
+	// The constructor cache must see changes to the constructor's shape,
+	// prototype value and instance chain, including proxy traps. Reuse the
+	// exact-answer cases of the Go cache, under both marking states.
+	nativeCheck(t, instanceOfChangesSrc, "")
 	nativeCheck(t, nativeInstanceOfSrc, `
 		class K {} class L extends K {}
 		function F() {}

@@ -91,6 +91,8 @@ type armGen struct {
 	genObj Label
 	// after is appended after every handler, keeping their layout intact.
 	after []func()
+	// last follows the existing out-of-line helpers as well as the handlers.
+	last []func()
 	// initL and initMade are amd64's.
 	initL    Label
 	initMade bool
@@ -1033,13 +1035,23 @@ func (g *armGen) ownSlot(dst, obj Reg) {
 // readSlot puts in rC the address of the data property the site at rC
 // remembers of the object in rS, as amd64's; else it exits. r8, r9 and
 // rD are its scratch.
-func (g *armGen) readSlot() {
+// The optional probe's entry and return labels are amd64's.
+func (g *armGen) readSlot(probe ...Label) {
 	a := g.a
 	own, holder, noCell, p1Holder := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	poly, polyLoop, polyNext, shaped, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	shapeOff := off("Object.shape")
-	a.Load(r8, rC, off("propCache.ownShape"))
-	g.cmpMem(r8, rS, shapeOff)
+	if len(probe) == 0 {
+		a.Load(r8, rC, off("propCache.ownShape"))
+		g.cmpMem(r8, rS, shapeOff)
+	} else {
+		// The probe returns here with the original comparison's flags.
+		// Dead instructions keep every following handler in place.
+		a.B(probe[0])
+		a.Load(r8, rC, off("propCache.ownShape"))
+		a.Cmp(r8, rT, true)
+		a.Bind(probe[1])
+	}
 	a.BCond(EQ, own)
 	a.Load(r8, rC, off("propCache.shape"))
 	g.cmpMem(r8, rS, shapeOff)

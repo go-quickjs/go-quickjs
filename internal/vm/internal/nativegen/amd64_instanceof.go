@@ -16,8 +16,10 @@ import (
 func (g *nativeGen) instanceOf() {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.decC(RDX)
 	g.object(RSI, RDX)
+	g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
 	a.Store(RDI, scr(sE), RSI)
 	// The site, Aux[pc]: &ic[Aux[pc]].
 	a.Load(R8, RDI, ncRC)
@@ -34,7 +36,7 @@ func (g *nativeGen) instanceOf() {
 	a.Imul(RCX, R8)
 	a.Op(Add, RCX, R15, true)
 	// Symbol.hasInstance, the realm's.
-	g.readSlot()
+	g.readSlot(check, miss)
 	a.Load(R8, RCX, 0)
 	a.CmpMem(R8, RDI, ncObjBits, true)
 	a.Jcc(CondNE, g.exit)
@@ -91,6 +93,7 @@ func (g *nativeGen) instanceOf() {
 	a.Load(RCX, RCX, 8)
 	// The value: a primitive is no instance; an object's prototypes are
 	// walked, a proxy's trap left to Go.
+	a.Bind(value)
 	a.Load(RAX, RBX, 0)
 	g.decB(RDX)
 	a.LoadIdx(R9, R12, RDX, 1, 0)
@@ -127,6 +130,41 @@ func (g *nativeGen) instanceOf() {
 	a.Bind(store)
 	a.MovQToX(0, R9)
 	g.storeA(0)
+}
+
+// instanceOfSite is arm64's site cache probe.
+func (g *nativeGen) instanceOfSite(check, miss, value Label) {
+	a := g.a
+	a.Bind(check)
+	uncached := a.NewLabel()
+	a.LoadU16(RDX, RCX, off("propCache.instanceProto"))
+	a.Op(Test, RDX, RDX, false)
+	a.Jcc(CondE, uncached)
+	a.Load(R8, RSI, offObjShape)
+	a.CmpMem(R8, RCX, off("propCache.shape"), true)
+	a.Jcc(CondNE, uncached)
+	a.LoadU16(R8, RSI, offObjFlags)
+	a.OpImm(And, R8, int32(objHasData), false)
+	a.Jcc(CondE, uncached)
+	a.Load(R8, RSI, sizeObj+offExtData)
+	a.CmpMem(R8, RDI, ncFuncT, true)
+	a.Jcc(CondNE, uncached)
+	a.Load(R9, RSI, sizeObj+offExtData+8)
+	a.LoadU8(R8, R9, offFDBound)
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondNE, uncached)
+	a.OpImm(Sub, RDX, 1, true)
+	a.ShiftImm(Shl, RDX, 4, true)
+	a.AddMem(RDX, RSI, off("Object.valp"))
+	a.Load(R8, RDX, 0)
+	a.CmpMem(R8, RDI, ncObjBits, true)
+	a.Jcc(CondNE, g.exit)
+	a.Load(RCX, RDX, 8)
+	a.Jmp(value)
+	a.Bind(uncached)
+	a.Load(R8, RCX, off("propCache.ownShape"))
+	a.CmpMem(R8, RSI, offObjShape, true)
+	a.Jmp(miss)
 }
 
 // derivedRet is derived_ret: R[A], what a derived class's constructor

@@ -1332,6 +1332,9 @@ func nativeEmit(v *variant) (*block, error) {
 	for i := 0; i < len(g.after); i++ {
 		g.after[i]()
 	}
+	for _, emit := range g.last {
+		emit()
+	}
 	for n, l := range g.exits {
 		if n == 0 {
 			continue

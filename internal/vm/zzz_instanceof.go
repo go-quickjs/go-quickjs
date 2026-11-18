@@ -97,3 +97,17 @@ func (r *Runtime) noteInstanceOf(c *Object) {
 	}
 	r.ctorsKnown[instanceOfSlot(c)] = instanceOfEntry{ctor: c, shape: remember(s), idx: i}
 }
+
+// noteInstanceOfSite keeps the prototype slot at the operator's property
+// site too. Unlike the runtime's small constructor cache it survives a
+// collection, without keeping any constructor or realm beyond what the
+// property cache already holds. refill clears it on a change of shape.
+func (r *Runtime) noteInstanceOfSite(ic *propCache, c *Object) {
+	if ic == nil || ic.instanceProto != 0 || ic.shape != c.shape {
+		return
+	}
+	e := &r.ctorsKnown[instanceOfSlot(c)]
+	if e.ctor == c && e.shape == c.shape && uint32(e.idx) < 65535 {
+		ic.instanceProto = uint16(e.idx + 1)
+	}
+}

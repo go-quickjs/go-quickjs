@@ -1156,6 +1156,12 @@ type propCache struct {
 	// meeting new shapes stops trying: filling costs a lookup of its own. A
 	// read then uses the realm's shared cache.
 	fills uint8
+	// instanceProto is an instanceof site's constructor's own prototype
+	// data slot plus one, or zero before noteInstanceOfSite proves it.
+	// Its shape proves the inherited Symbol.hasInstance is immutable; the
+	// native handler still checks that the function is not bound. These
+	// two bytes occupy the entry's padding.
+	instanceProto uint16
 	// ownShape is shape where the entry is of a plain data property the
 	// object has itself and keeps -- not a prototype's, not an accessor, not
 	// one a write adds -- and noShape otherwise: what own, rhGetProp and
