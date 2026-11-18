@@ -18,8 +18,9 @@ type memoryData struct {
 	// buf is the buffer the buffer attribute returns, made when first asked
 	// for: a fixed-length ArrayBuffer, detached and made anew when the memory
 	// grows, or a resizable one that follows the memory as it grows. A
-	// shared memory's is a SharedArrayBuffer of the memory's length when it
-	// was made.
+	// shared memory's is a SharedArrayBuffer: of a fixed length, the
+	// memory's when it was made, and made anew when the memory has grown
+	// since; or growable, following the memory as it grows.
 	buf       vm.Value
 	resizable bool
 	bufLen    uint64
@@ -204,15 +205,19 @@ func (a *api) refreshBuffer(d *memoryData) {
 func (a *api) buffer(d *memoryData) vm.Value {
 	mem := d.mem
 	if mem.Shared {
+		if d.resizable {
+			return d.buf
+		}
 		size := mem.Size()
 		if d.buf.IsUndefined() || d.bufLen != size {
 			// The buffer is of the memory's size now, and made anew when
 			// the memory has grown: it spans that much, which the runtime's
 			// memory limit counts, not the reservation.
-			d.buf = vm.HostSharedArrayBuffer(a.rt, mem.Bytes(), int(size), mem, -1, nil)
+			b := mem.Bytes()
+			d.buf = a.rt.NewSharedArrayBuffer(vm.HostSharedMemory(b, len(b), mem, -1, nil))
 			// A shared memory's buffer is frozen.
 			vm.HostPreventExtensions(d.buf.Object())
-			d.bufLen = size
+			d.bufLen = uint64(len(b))
 		}
 		return d.buf
 	}
@@ -265,13 +270,17 @@ func (a *api) memoryToFixedLengthBuffer(rt *vm.Runtime, this vm.Value, args []vm
 	if err != nil {
 		return vm.Undefined, err
 	}
-	if d.mem.Shared || !d.resizable || d.buf.IsUndefined() {
+	if !d.resizable || d.buf.IsUndefined() {
 		return a.buffer(d), nil
 	}
 	old := d.buf
 	d.buf, d.resizable = vm.Undefined, false
 	fixed := a.buffer(d)
-	vm.HostDetachArrayBuffer(a.rt, old)
+	if !d.mem.Shared {
+		// A shared memory's buffers are never detached: other threads
+		// may be using the memory through them.
+		vm.HostDetachArrayBuffer(a.rt, old)
+	}
 	return fixed, nil
 }
 
@@ -287,10 +296,15 @@ func (a *api) memoryToResizableBuffer(rt *vm.Runtime, this vm.Value, args []vm.V
 	if !mem.HasMax {
 		return vm.Undefined, t.typeError("Memory must have a maximum")
 	}
-	if mem.Shared {
-		return a.buffer(d), nil
-	}
 	if d.resizable {
+		return d.buf, nil
+	}
+	if mem.Shared {
+		// A growable SharedArrayBuffer of the memory's process-wide view,
+		// which every runtime's growable buffers of it share.
+		d.buf = a.rt.NewSharedArrayBuffer(sharedView(mem))
+		vm.HostPreventExtensions(d.buf.Object())
+		d.resizable = true
 		return d.buf, nil
 	}
 	old := d.buf
@@ -312,4 +326,25 @@ func (a *api) memoryToResizableBuffer(rt *vm.Runtime, this vm.Value, args []vm.V
 		vm.HostDetachArrayBuffer(a.rt, old)
 	}
 	return d.buf, nil
+}
+
+// sharedView returns the memory the growable SharedArrayBuffers of a shared
+// memory are over, made the first time it is asked for: all of the memory
+// up to its maximum, its length the memory's size, which every grow of the
+// memory -- by wasm, by Memory.prototype.grow, by a buffer's grow, in any
+// runtime or thread -- updates before it returns.
+func sharedView(mem *engine.Memory) *vm.SharedMemory {
+	// A growable buffer can be posted to another runtime, which may grow the
+	// memory through it.
+	mem.Unbudget()
+	return mem.HostView(func() (any, func(uint64)) {
+		maxBytes := int64(mem.Max) * engine.PageSize
+		sm := vm.HostSharedMemory(mem.Span(), int(mem.Size()), mem, maxBytes, func(r *vm.Runtime, n int) error {
+			if n < 0 || uint64(n)%engine.PageSize != 0 || !mem.GrowTo(uint64(n)/engine.PageSize) {
+				return r.ThrowRangeError("SharedArrayBuffer.prototype.grow: Invalid length parameter")
+			}
+			return nil
+		})
+		return sm, func(newBytes uint64) { vm.HostSharedMemoryGrown(sm, int(newBytes)) }
+	}).(*vm.SharedMemory)
 }

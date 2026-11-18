@@ -102,3 +102,60 @@ func TestSharedMemoryConcurrentGrow(t *testing.T) {
 		t.Fatalf("pages %d, want 64", m.Pages())
 	}
 }
+
+// TestSharedMemoryHostView pins what a host keeps with a shared memory: a
+// view made once, told of every grow -- by Grow and by GrowTo, from any
+// goroutine -- before the grow returns; GrowTo refusing to shrink, to pass
+// the maximum, and taking a grow to the size the memory has.
+func TestSharedMemoryHostView(t *testing.T) {
+	m := NewMemory(1, 8, true, false, true)
+	var mu sync.Mutex
+	var told []uint64
+	made := 0
+	view := func() (any, func(uint64)) {
+		made++
+		return "view", func(n uint64) { mu.Lock(); told = append(told, n); mu.Unlock() }
+	}
+	if v := m.HostView(view); v != "view" || m.HostView(view) != "view" || made != 1 {
+		t.Fatalf("view %v, made %d times", v, made)
+	}
+	if len(m.Span()) != 8*PageSize || len(m.Bytes()) != PageSize {
+		t.Fatalf("span %d bytes, size %d", len(m.Span()), len(m.Bytes()))
+	}
+	m.Grow(1)
+	if !m.GrowTo(2) || !m.GrowTo(4) || m.GrowTo(3) || m.GrowTo(9) || m.Pages() != 4 {
+		t.Fatalf("GrowTo: %d pages", m.Pages())
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() { defer wg.Done(); m.Grow(1) }()
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	want := []uint64{2, 4, 5, 6, 7, 8}
+	for i := range want {
+		want[i] *= PageSize
+	}
+	if len(told) != len(want) {
+		t.Fatalf("told %v, want %v", told, want)
+	}
+	for i := range want {
+		if told[i] != want[i] {
+			t.Fatalf("told %v, want %v", told, want)
+		}
+	}
+	if NewMemory(1, 1, true, false, false).Span() != nil {
+		t.Error("an unshared memory has a span")
+	}
+}
+
+// TestSharedMemoryNoPages pins that a shared memory whose maximum is no
+// pages can be made: there is nothing to reserve.
+func TestSharedMemoryNoPages(t *testing.T) {
+	m := NewMemory(0, 0, true, false, true)
+	if m == nil || m.Size() != 0 || m.Grow(1) != -1 || m.Grow(0) != 0 {
+		t.Fatalf("got %v", m)
+	}
+}

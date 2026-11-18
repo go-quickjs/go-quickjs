@@ -116,6 +116,24 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if !b.resizable {
 			return Undefined, rt.throwTypeError("%s requires a growable SharedArrayBuffer", name)
 		}
+		if h := b.block.host; h != nil && h.grow != nil {
+			// The host grows memory it owns, and says how long it is now;
+			// a length that is not an index is one it cannot grow to.
+			f, err := rt.toInteger(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			n := -1
+			if f >= 0 && f <= maxSafeInteger {
+				n = int(min(f, math.MaxInt))
+			}
+			if err := h.grow(rt, n); err != nil {
+				return Undefined, err
+			}
+			b.sharedMemory()
+			rt.bufferChanged()
+			return Undefined, nil
+		}
 		n, err := rt.toIndex(arg(args, 0))
 		if err != nil {
 			return Undefined, err

@@ -57,10 +57,6 @@ var (
 	// HostSetArrayBufferBytes gives a buffer HostArrayBuffer made new
 	// bytes, as its memory grew.
 	HostSetArrayBufferBytes func(r *Runtime, v Value, b []byte)
-	// HostSharedArrayBuffer returns a SharedArrayBuffer over the first
-	// length bytes of mem, memory owner keeps that never moves; growable up
-	// to max bytes by grow if max >= 0.
-	HostSharedArrayBuffer func(r *Runtime, mem []byte, length int, owner any, max int64, grow func(n int) error) Value
 	// HostJITEnabled reports whether the runtime runs native code it
 	// compiles (WithJIT), or is nil in a build without a JIT, which never
 	// does.
@@ -135,11 +131,11 @@ var (
 // HostSized is host data that says how much memory it holds, for a
 // runtime's memory limit: the walk that measures the runtime's heap asks
 // the data of an object HostObject or HostSetSlot made rather than looking
-// into it. The bytes of a buffer HostArrayBuffer or HostSharedArrayBuffer
-// made are counted by their capacity, so a host gives it no more than its
-// length. MemoryFootprint returns the bytes held and kept alive; has
-// reports whether the walk has counted p already, marking it counted, so
-// that what several objects share is counted once.
+// into it. The bytes of a buffer HostArrayBuffer made are counted by their
+// capacity, so a host gives it no more than its length, and those of a
+// HostSharedMemory by its length. MemoryFootprint returns the bytes held and
+// kept alive; has reports whether the walk has counted p already, marking it
+// counted, so that what several objects share is counted once.
 type HostSized interface {
 	MemoryFootprint(has func(p unsafe.Pointer) bool) int64
 }
@@ -241,18 +237,6 @@ func init() {
 			d.bytes = b
 			r.bufferChanged()
 		}
-	}
-	HostSharedArrayBuffer = func(r *Runtime, mem []byte, length int, owner any, max int64, grow func(n int) error) Value {
-		m := &SharedMemory{mem: mem, max: max, pinned: true}
-		m.length.Store(int64(length))
-		o := newObject(r.proto.sharedArrayBuffer, ClassArrayBuffer)
-		d := &arrayBufferData{bytes: m.bytes(), shared: true, block: m, external: true,
-			host: &hostBuffer{owner: owner, resize: grow}}
-		if max >= 0 {
-			d.resizable, d.maxByteLength = true, max
-		}
-		o.setData(d)
-		return Obj(o)
 	}
 	HostDefineLazyGlobal = func(r *Runtime, name string, build func(*Runtime) *Object) {
 		r.defineLazyGlobal(name, build)

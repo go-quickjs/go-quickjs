@@ -371,6 +371,10 @@ func WithLocale(tag string) Option {
 // V8's limits rather than the WebAssembly JavaScript interface's: a memory64
 // may declare at most 262,144 pages, where the interface allows 2^37-1, and a
 // module may have up to 100,000 memories, where the interface allows 100.
+// A growable SharedArrayBuffer of a shared WebAssembly memory -- its
+// toResizableBuffer() -- cannot be deserialized, structuredClone throwing an
+// Error and a worker it is posted to hearing a messageerror, where the
+// standard clones it as it clones any growable SharedArrayBuffer.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {

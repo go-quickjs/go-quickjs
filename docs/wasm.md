@@ -253,7 +253,11 @@ and messages of V8 (Node 26), word for word, prefixes included
   library's `Network` installs it), with Node's checks of the response;
 - `Module` (`imports`, `exports`, `customSections`), `Instance`, `Memory`
   (shared memories as `SharedArrayBuffer`, memory64 sizes as BigInts,
-  `toResizableBuffer` and `toFixedLengthBuffer`), `Table` (table64),
+  `toResizableBuffer` and `toFixedLengthBuffer`: a shared memory's
+  resizable buffer is a growable `SharedArrayBuffer`, of the memory's
+  maximum as its `maxByteLength`, whose length follows every grow of the
+  memory -- by wasm, by `Memory.prototype.grow` or by its own `grow`, which
+  takes a whole number of pages, in any runtime or thread), `Table` (table64),
   `Global`, `Tag`, `Exception`, `JSTag`, and `CompileError`, `LinkError` and
   `RuntimeError`;
 - the conversion of every value type: i64 as BigInt; numbers that fit an
@@ -363,7 +367,10 @@ heap with what its WebAssembly holds in it.
   each WebAssembly object it reaches what it holds, and a memory's buffer is
   counted by the memory's size, not the address space reserved for it. A
   `WebAssembly.Table` that does not fit stops the script, as an allocation of
-  a size the script chose does.
+  a size the script chose does. A shared memory another runtime can grow --
+  one cloned to it, or one whose growable buffer was made, which can be --
+  is no longer charged as it grows, since its grows run on that runtime's
+  goroutine too: each runtime's measurement counts it at its size.
 
 The count of GC objects is an estimate: the Go API's may pass the limit by a
 sixteenth of it before it is found, and what only a call running on another
@@ -924,8 +931,6 @@ The `WebAssembly` namespace:
 
 - `Object.getOwnPropertyDescriptor(globalThis, "WebAssembly")` is the
   accessor the global is until first read, as Intl's is.
-- `toResizableBuffer` of a shared memory returns its fixed-length
-  `SharedArrayBuffer`, not a growable one.
 - `JSON.stringify` writes a GC object as an empty object, where V8 writes
   `null`.
 - A promising call suspended on a promise that never settles keeps its

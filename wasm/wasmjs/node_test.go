@@ -117,6 +117,8 @@ var nodeKnownDifferences = map[string]string{
 	"runtime.js: exported toString":            "the runtime writes a name that is not an identifier as a computed key",
 	"clone.js: clone exported function":        "the runtime writes a name that is not an identifier as a computed key",
 	"clone.js: clone nested exported function": "the runtime writes a name that is not an identifier as a computed key",
+	"resizable.js: grow a BigInt":              "the runtime's own message for ToNumber of a BigInt",
+	"resizable.js: grow a Symbol":              "the runtime's own message for ToNumber of a Symbol",
 	"runtime.js: deep recursion through JS":    "the runtime's own stack overflow message",
 	"api.js: subclass Tag":                     "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Tag",
 	"api.js: subclass Exception":               "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for an Exception",

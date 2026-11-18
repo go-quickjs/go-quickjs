@@ -69,6 +69,12 @@ type Memory struct {
 
 	// charge is what the memory holds of a budget, if it is charged to one.
 	charge *charge
+
+	// hostView and hostGrown are what a host keeps with a shared memory,
+	// made once by HostView: a view of the memory, and what each grow tells
+	// of the memory's new size, under mu, before Grow returns.
+	hostView  any
+	hostGrown func(newBytes uint64)
 }
 
 // SetBudget charges the memory, and its growth from now on, to b,
@@ -102,8 +108,8 @@ func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
 	// fill the address space, so an unshared memory is a Go slice there. A
 	// shared one is made at its maximum either way, and a reservation that
 	// cannot be had fails, where a Go allocation that cannot be had ends the
-	// process.
-	if canReserve && (bits.UintSize == 64 || shared) {
+	// process. A memory that can have no pages has nothing to reserve.
+	if canReserve && max > 0 && (bits.UintSize == 64 || shared) {
 		r, err := reserve(max * PageSize)
 		if err == nil {
 			if err := commit(r, 0, initial*PageSize); err != nil {
@@ -168,6 +174,52 @@ func (m *Memory) Size() uint64 {
 // Pages returns the memory's size in pages.
 func (m *Memory) Pages() uint64 { return m.Size() / PageSize }
 
+// Span returns a shared memory's bytes up to its maximum, which never move:
+// those past its size are not the memory's yet, nor, in a reservation,
+// memory at all, and are not to be touched. It returns nil for an unshared
+// memory.
+func (m *Memory) Span() []byte {
+	if !m.Shared {
+		return nil
+	}
+	return m.buf
+}
+
+// HostView returns a shared memory's host view, made by make the first time
+// it is asked for, which also returns what the memory tells of each grow
+// from then on, with its new size in bytes. make and the function it
+// returns are called with the memory's grows held off, and must not grow
+// it.
+func (m *Memory) HostView(make func() (view any, grown func(newBytes uint64))) any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hostView == nil {
+		m.hostView, m.hostGrown = make()
+	}
+	return m.hostView
+}
+
+// Unbudget stops charging a shared memory's growth to the budget it is
+// charged to, keeping what it has charged: once other runtimes can grow the
+// memory, from goroutines of their own, its growth is no longer one budget's
+// to bound as it happens.
+func (m *Memory) Unbudget() {
+	m.mu.Lock()
+	m.charge = nil
+	m.mu.Unlock()
+}
+
+// GrowTo grows a shared memory to pages pages, reporting false if it cannot:
+// it is larger than that already -- another thread may have grown it since
+// the caller looked -- or the pages are past its maximum or not to be had.
+// It reports true for a memory of pages pages already.
+func (m *Memory) GrowTo(pages uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old := m.Pages()
+	return pages >= old && m.grow(pages-old) >= 0
+}
+
 // Grow grows the memory by delta pages, returning its old size in pages, or
 // -1 if it cannot: past its maximum, or the memory is not to be had.
 func (m *Memory) Grow(delta uint64) int64 {
@@ -175,6 +227,11 @@ func (m *Memory) Grow(delta uint64) int64 {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 	}
+	return m.grow(delta)
+}
+
+// grow is Grow, with a shared memory's lock held.
+func (m *Memory) grow(delta uint64) int64 {
 	old := m.Pages()
 	if delta > m.Max-old {
 		return -1
@@ -227,6 +284,9 @@ func (m *Memory) Grow(delta uint64) int64 {
 		}
 	}
 	m.size.Store(newBytes)
+	if m.hostGrown != nil {
+		m.hostGrown(newBytes)
+	}
 	if m.OnGrow != nil {
 		m.OnGrow(oldBytes, newBytes)
 	}

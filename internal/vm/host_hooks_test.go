@@ -321,10 +321,35 @@ func TestHostArrayBuffers(t *testing.T) {
 		t.Fatalf("after detaching: %s", got)
 	}
 	shared := make([]byte, 16)
-	sab := vm.HostSharedArrayBuffer(r, shared, 8, nil, -1, nil)
+	sab := r.NewSharedArrayBuffer(vm.HostSharedMemory(shared[:8:8], 8, nil, -1, nil))
 	setGlobal(r, "sab", sab)
 	if got := hostEval(t, rt, `new Int32Array(sab)[0] = 9; [sab.byteLength, sab.growable, Object.prototype.toString.call(sab)].join()`); got != "8,false,[object SharedArrayBuffer]" || shared[0] != 9 {
 		t.Fatalf("shared: %s (%d)", got, shared[0])
+	}
+	// A growable one grows as the host says, through its grow or otherwise.
+	var sm *vm.SharedMemory
+	sm = vm.HostSharedMemory(shared, 8, nil, 16, func(r *vm.Runtime, n int) error {
+		if n != 12 {
+			return r.ThrowRangeError("not %d", n)
+		}
+		vm.HostSharedMemoryGrown(sm, n)
+		return nil
+	})
+	setGlobal(r, "gsab", r.NewSharedArrayBuffer(sm))
+	got = hostEval(t, rt, `
+		globalThis.track = new Uint8Array(gsab);
+		const gout = [gsab.growable, gsab.maxByteLength, gsab.byteLength, track.length];
+		try { gsab.grow(10) } catch (e) { gout.push(e.message) }
+		gsab.grow(12);
+		gout.push(gsab.byteLength, track.length);
+		gout.join()`)
+	if got != "true,16,8,8,not 10,12,12" {
+		t.Fatalf("growable: %s", got)
+	}
+	vm.HostSharedMemoryGrown(sm, 16)
+	vm.HostSharedMemoryGrown(sm, 14)
+	if got := hostEval(t, rt, `[gsab.byteLength, track.length].join()`); got != "16,16" {
+		t.Fatalf("grown by the host: %s", got)
 	}
 }
 

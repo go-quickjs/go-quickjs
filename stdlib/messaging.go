@@ -514,12 +514,18 @@ func (e *portEnd) dispatchNext() {
 }
 
 // dispatch deserializes a message and dispatches it to the port's listeners;
-// one that cannot be deserialized is a messageerror.
+// one that cannot be deserialized is a messageerror, whose data is what
+// deserializing it threw.
 func (e *portEnd) dispatch(msg portMsg) {
 	m := e.m
 	v, ports, err := m.deserialize(msg.data, msg.ports)
 	if err != nil {
-		m.raise(m.deliver.Call(e.obj, "messageerror"))
+		var exc *quickjs.Error
+		if errors.As(err, &exc) {
+			m.raise(m.deliver.Call(e.obj, "messageerror", exc.Value()))
+		} else {
+			m.raise(m.deliver.Call(e.obj, "messageerror"))
+		}
 		return
 	}
 	items := make([]any, len(ports))

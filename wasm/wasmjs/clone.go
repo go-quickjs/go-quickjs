@@ -47,6 +47,8 @@ func (d *memoryData) CloneToken() (vm.HostCloneToken, bool) {
 	if !d.mem.Shared {
 		return nil, false
 	}
+	// The runtime it is cloned to may grow the memory, on its goroutine.
+	d.mem.Unbudget()
 	return memoryToken{d.mem}, true
 }
 

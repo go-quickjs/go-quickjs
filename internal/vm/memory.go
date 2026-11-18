@@ -504,7 +504,15 @@ func (m *memoryMeter) data(o *Object) {
 		}
 	case ClassArray:
 	default:
-		if d := o.dataOf(); d != nil {
+		d := o.dataOf()
+		if b, ok := d.(*arrayBufferData); ok && b.block != nil && b.block.host != nil {
+			// The bytes are of memory a host owns, which may reserve far more
+			// than they are: the memory counts what is in use.
+			m.total += int64(unsafe.Sizeof(*b))
+			m.values = append(m.values, reflect.ValueOf(b.block))
+			return
+		}
+		if d != nil {
 			meterData(m, d)
 		}
 	}
@@ -547,8 +555,15 @@ func (m *memoryMeter) generic(v reflect.Value) {
 			return
 		case sharedMemoryPtrType:
 			// Other agents change it as it is read, so only its size is
-			// counted, which does not move.
-			m.total += int64(cap((*SharedMemory)(v.UnsafePointer()).mem))
+			// counted, which does not move: what is reserved -- or, of
+			// memory a host owns, which reserves address space that is not
+			// memory, what is in use.
+			sm := (*SharedMemory)(v.UnsafePointer())
+			if sm.host != nil {
+				m.total += sm.length.Load()
+			} else {
+				m.total += int64(cap(sm.mem))
+			}
 			return
 		case regexpPtrType:
 			// A pattern is the regexp package's, which says what it takes:

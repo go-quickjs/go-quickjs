@@ -41,6 +41,8 @@ type SharedMemory struct {
 	// waiters are the agents waiting in Atomics.wait, by the byte offset
 	// they wait on, in the order they began.
 	waiters map[int][]*waiter
+	// host is set for memory a host package owns (HostSharedMemory).
+	host *sharedHost
 }
 
 // waiter is an agent waiting: in Atomics.wait, which notify wakes by closing
@@ -175,7 +177,7 @@ func (r *Runtime) SharedMemoryOf(v Value) (*SharedMemory, bool, error) {
 // another runtime shared.
 func (r *Runtime) NewSharedArrayBuffer(m *SharedMemory) Value {
 	o := newObject(r.proto.sharedArrayBuffer, ClassArrayBuffer)
-	b := &arrayBufferData{bytes: m.bytes(), shared: true, block: m}
+	b := &arrayBufferData{bytes: m.bytes(), shared: true, block: m, external: m.host != nil}
 	if m.max >= 0 {
 		b.resizable, b.maxByteLength = true, m.max
 	}
