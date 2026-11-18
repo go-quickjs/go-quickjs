@@ -716,43 +716,43 @@ checked.
 
 | Micro | Tree | Go table | Native | Native / Go |
 |---|---:|---:|---:|---:|
-| fib | 210 | 217 - 219 | 107 - 111 | 0.49 - 0.51 |
-| loop | 222 | 153 - 156 | 66.7 - 67.3 | 0.43 - 0.44 |
-| i64 | 263 | 230 - 232 | 90.2 - 97.6 | 0.39 - 0.42 |
-| mandelbrot | 145 | 123 | 91.8 - 93.3 | 0.75 - 0.76 |
-| nbody | 101 | 98.9 - 99.6 | 71.1 - 71.6 | 0.72 |
-| bytes | 194 | 155 - 156 | 66.2 - 67.0 | 0.43 |
-| bulk | 125 | 122 - 123 | 100 - 101 | 0.82 - 0.83 |
-| indirect | 384 | 340 - 344 | 172 - 188 | 0.50 - 0.55 |
-| brtable | 231 | 161 - 164 | 113 | 0.69 - 0.70 |
-| globals | 171 | 175 - 176 | 74.6 - 77.0 | 0.42 - 0.44 |
-| gc | 344 | 347 - 352 | 282 - 288 | 0.81 - 0.83 |
-| arrays | 124 | 101 | 101 - 104 | 1.00 - 1.03 |
-| simd | 74.6 | 89.9 - 90.7 | 17.7 - 18.3 | 0.20 |
+| fib | 215 | 218 - 228 | 110 - 111 | 0.49 - 0.50 |
+| loop | 224 | 154 - 158 | 66.7 - 66.8 | 0.42 - 0.43 |
+| i64 | 271 | 229 - 234 | 90.4 - 97.6 | 0.39 - 0.42 |
+| mandelbrot | 149 | 122 | 92.2 - 93.5 | 0.76 - 0.77 |
+| nbody | 104 | 98.5 - 100 | 63.9 - 72.0 | 0.65 - 0.73 |
+| bytes | 186 | 156 - 167 | 66.1 - 76.3 | 0.40 - 0.46 |
+| bulk | 126 | 123 | 101 - 104 | 0.82 - 0.85 |
+| indirect | 391 | 352 - 358 | 178 - 198 | 0.50 - 0.56 |
+| brtable | 235 | 162 - 164 | 112 | 0.69 |
+| globals | 173 | 174 - 178 | 76.3 - 76.9 | 0.43 - 0.44 |
+| gc | 349 | 341 - 343 | 229 - 233 | 0.67 - 0.68 |
+| arrays | 126 | 101 - 104 | 61.9 - 62.5 | 0.60 - 0.62 |
+| simd | 76.1 | 90.6 - 91.6 | 18.0 - 18.3 | 0.20 |
 
 | Program | Tree | Go table | Native | Native / Go |
 |---|---:|---:|---:|---:|
-| sha256 | 1,885 | 1,515 - 1,536 | 752 - 758 | 0.49 - 0.50 |
-| sort | 1,726 | 1,046 - 1,055 | 681 - 693 | 0.65 - 0.66 |
-| json | 937 | 631 - 633 | 457 - 458 | 0.72 - 0.73 |
-| regexp | 794 | 452 - 455 | 295 - 296 | 0.65 |
-| gzip | 478 | 299 - 305 | 186 - 187 | 0.61 - 0.63 |
-| interp | 490 | 290 - 293 | 165 | 0.56 - 0.57 |
+| sha256 | 1,915 | 1,526 - 1,541 | 752 - 784 | 0.49 - 0.51 |
+| sort | 1,736 | 1,046 - 1,054 | 681 - 686 | 0.65 - 0.66 |
+| json | 944 | 620 - 630 | 463 - 465 | 0.73 - 0.75 |
+| regexp | 859 | 454 - 460 | 298 - 299 | 0.65 - 0.66 |
+| gzip | 480 | 301 - 304 | 187 - 191 | 0.62 - 0.63 |
+| interp | 488 | 290 - 294 | 163 - 165 | 0.56 |
 
-Every workload but arrays runs faster natively than on the Go table, by
-1.2 to 5 times. arrays is level: its loops' array.get, array.set and
-array.len are Go's, an exit each. The integer kernels and the calls gain
-most; simd runs its loop's operators natively, five times the Go table's
-speed and four times the tree's. The Go table's own figures move with
+Every workload runs faster natively than on the Go table, by 1.2 to 5
+times. gc and arrays gained most from the native GC accesses: their loops
+left to Go for every struct.get of a reference, ref.is_null and array
+access before (arrays: about 800,000 exits a run at 20,000, now its
+80,000 allocations alone), which on arm64 made arrays slower natively
+than on the Go table, an exit costing more there. simd runs its loop's
+operators natively, five times the Go table's speed and four times the
+tree's. The Go table's own figures move with
 where the linker puts `regLoop` and the Go handlers: its 45-byte loop fits
 one 64-byte line where the function starts at 32 mod 64 and straddles two
-at 0 mod 64, up to 15% on the tightest loops, and loop, i64 and mandelbrot
-ran 13 - 19% faster on it in this build than in the one before, the Go
-code unchanged; native code does not run that loop. An exit-heavy
-workload moves with the code after the handlers' block too: arrays and
-bulk by 35% for a 64-byte shift, before the block was padded to whole
-pages, and indirect, while its calls still left to Go, by 21 - 27% on
-both the Go table and native code for a 1 KB shift of what follows.
+at 0 mod 64, up to 15% on the tightest loops; native code does not run
+that loop. An exit-heavy workload moves with the code after the handlers'
+block too: arrays and bulk by 35% for a 64-byte shift, before the block
+was padded to whole pages.
 
 ## Open work
 
