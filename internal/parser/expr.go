@@ -859,6 +859,9 @@ func (p *parser) parseImportExpr() ast.Expr {
 	if !p.isPunct("(") {
 		p.errorf("expected \"(\" after %q", callee)
 	}
+	if callee == "import.source" {
+		return p.parseImportSource(start)
+	}
 	args := p.parseArguments()
 	// import() takes a specifier and, optionally, an options object. It is not
 	// a function, so the arity is fixed by the grammar rather than ignored.
@@ -876,6 +879,32 @@ func (p *parser) parseImportExpr() ast.Expr {
 	return &ast.Call{
 		Callee: &ast.Ident{Name: callee, Start: int32(start)},
 		Args:   args,
+		Start:  int32(start),
+	}
+}
+
+// parseImportSource parses the parenthesized part of `import.source(...)`,
+// whose grammar is one AssignmentExpression and nothing else: no options
+// object, as import() and import.defer() take, and no trailing comma.
+func (p *parser) parseImportSource(start int) ast.Expr {
+	p.expectPunct("(")
+	saved := p.noIn
+	p.noIn = false
+	defer func() { p.noIn = saved }()
+	switch {
+	case p.isPunct(")"):
+		p.errorf("%q needs a specifier", "import.source")
+	case p.isPunct("..."):
+		p.errorf("%q does not take a spread argument", "import.source")
+	}
+	arg := p.parseAssign()
+	if p.isPunct(",") {
+		p.errorf("%q takes only a specifier", "import.source")
+	}
+	p.expectPunct(")")
+	return &ast.Call{
+		Callee: &ast.Ident{Name: "import.source", Start: int32(start)},
+		Args:   []ast.Expr{arg},
 		Start:  int32(start),
 	}
 }

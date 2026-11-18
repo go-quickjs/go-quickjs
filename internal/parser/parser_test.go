@@ -104,6 +104,23 @@ func TestNullishCannotMixWithLogical(t *testing.T) {
 	checkError(t, "a && b ?? c", "cannot be mixed")
 }
 
+// TestImportSourceTakesOneSpecifier pins import.source's grammar, one
+// AssignmentExpression: a second argument or a trailing comma, which
+// import() and import.defer() accept for their options, is an error.
+func TestImportSourceTakesOneSpecifier(t *testing.T) {
+	checkError(t, `import.source("m", {})`, `"import.source" takes only a specifier`)
+	checkError(t, `import.source("m",)`, `"import.source" takes only a specifier`)
+	checkError(t, `import.source()`, `"import.source" needs a specifier`)
+	checkError(t, `import.source(...["m"])`, `"import.source" does not take a spread argument`)
+	checkParse(t, `import.source("m")`, parseOK(t, `import.source(("m"))`))
+	parseOK(t, `import.source(x = "m")`)
+	parseOK(t, `import.source("m" in o)`)
+	parseOK(t, `import("m", {})`)
+	parseOK(t, `import("m",)`)
+	parseOK(t, `import.defer("m", {})`)
+	parseOK(t, `import.defer("m",)`)
+}
+
 func TestUnaryBeforeExponentIsAnError(t *testing.T) {
 	// `-2 ** 2` is ambiguous to a reader, so the grammar rejects it.
 	checkError(t, "-2 ** 2", "requires parentheses")
