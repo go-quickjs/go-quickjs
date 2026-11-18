@@ -38,3 +38,18 @@ function pa(label, f) {
 }
 function bytes(...b) { return new Uint8Array(b); }
 const emptyModule = bytes(0, 0x61, 0x73, 0x6d, 1, 0, 0, 0);
+// workerThreads is node:worker_threads, which the go-quickjs runner imports
+// as require_worker_threads.
+function workerThreads() {
+  return typeof require_worker_threads === "object" ? require_worker_threads : process.getBuiltinModule("node:worker_threads");
+}
+// inWorker runs code, a module, in a worker, posts it data, and settles with
+// the first message it posts back, once it has ended.
+function inWorker(code, data) {
+  return new Promise((resolve, reject) => {
+    const w = new (workerThreads().Worker)(code, { eval: true });
+    w.on("error", reject);
+    w.on("message", (m) => w.terminate().then(() => resolve(m)));
+    w.postMessage(data);
+  });
+}

@@ -270,7 +270,19 @@ and messages of V8 (Node 26), word for word, prefixes included
 - the JS Promise Integration, `WebAssembly.Suspending` and
   `WebAssembly.promising`. A promising call's wasm runs on a goroutine of its
   own; script runs only on the runtime's goroutine, which serves the wasm
-  goroutine's imports and suspensions, so that one of the two runs at a time.
+  goroutine's imports and suspensions, so that one of the two runs at a time;
+- structured cloning, by `postMessage` to a worker and by `structuredClone`:
+  a `Module` clones as a `Module` of the same compiled code, which the
+  receiving runtime instantiates without compiling it again (its native
+  code, and the JIT memory budget that code is charged to, stay the
+  compiling runtime's), and a shared `Memory` as a `Memory` of the same
+  memory, its buffer a `SharedArrayBuffer` of the same bytes, a grow
+  through either seen by both. Anything else of the namespace -- an
+  unshared `Memory`, an `Instance`, a `Table`, a `Global`, a `Tag`, an
+  `Exception`, an exported function -- is a `DataCloneError` with Node's
+  message, and so is any of them in a transfer list. A runtime the
+  namespace is not installed in cannot deserialize a `Module` or a
+  `Memory`.
 
 Constructors read `new.target`'s prototype before their arguments, as Node's
 do. A context that ends -- `EvalContext`'s deadline, say -- stops wasm as it
@@ -938,8 +950,6 @@ WASI:
 
 - ESM integration: importing a `.wasm` file as a module, and its source
   phase (`import source m from "./m.wasm"`).
-- `postMessage` and structured clone of a `Module`, and of a shared
-  `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
 - array.new of a length not constant, or of more than 16 elements, still

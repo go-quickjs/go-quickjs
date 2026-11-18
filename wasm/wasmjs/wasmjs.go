@@ -42,14 +42,32 @@ func Install(rt *quickjs.Runtime, opts ...Option) error {
 	if err != nil || !objectProto.IsObject() {
 		return errors.New("wasmjs: no Object.prototype")
 	}
-	var built *vm.Object
-	vm.HostDefineLazyGlobal(r, "WebAssembly", func(r *vm.Runtime) *vm.Object {
+	var built *api
+	namespace := func() *api {
 		if built == nil {
-			built = newAPI(r, rt, c, proxy, objectProto.Object()).ns
+			built = newAPI(r, rt, c, proxy, objectProto.Object())
 		}
 		return built
-	})
+	}
+	vm.HostDefineLazyGlobal(r, "WebAssembly", func(*vm.Runtime) *vm.Object { return namespace().ns })
+	// A Module or a Memory cloned into the runtime is made by its
+	// namespace, whether or not a script has read the global: the global
+	// object, which lives as long as the runtime, keeps what makes it.
+	vm.HostSetSlot(r, r.Global(), installation(namespace))
 	return nil
+}
+
+// installation returns a runtime's namespace, made the first time it is
+// asked for.
+type installation func() *api
+
+// apiOf returns the namespace of r, or nil if it has none.
+func apiOf(r *vm.Runtime) *api {
+	f, ok := vm.HostSlot(r, vm.Obj(r.Global())).(installation)
+	if !ok {
+		return nil
+	}
+	return f()
 }
 
 // api is a runtime's WebAssembly namespace: its classes and the state that

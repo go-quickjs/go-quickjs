@@ -161,6 +161,12 @@ func (a *api) link(t thrower, md *moduleData, i int, iv importValue) (engine.Ext
 			return ext, t.linkError("%s: memory import must be a WebAssembly.Memory object", importName(m, i))
 		}
 		ext.Memory = d.mem
+		if d.mem.Shared {
+			// A shared memory can have several Memory objects in one
+			// runtime, clones of each other: the instance exports the one
+			// it was given.
+			a.wrappers.put(unsafe.Pointer(d.mem), v.Object())
+		}
 	case module.ExternGlobal:
 		g, err := a.importGlobal(t, md, i, v)
 		if err != nil {

@@ -299,6 +299,17 @@ func (s *serializer) value(v Value) (int, error) {
 			return i, nil
 		}
 	}
+	// A host package's object that says how it clones is cloned so, and one
+	// that says it cannot be is refused, before the host's codec is asked.
+	if hc, ok := o.dataOf().(HostCloneable); ok && o.class == ClassObject {
+		token, ok := hc.CloneToken()
+		if !ok {
+			return 0, s.uncloneable(o)
+		}
+		i := s.add(snode{kind: snHost, token: token})
+		s.memory[o] = i
+		return i, nil
+	}
 	if s.codec != nil && s.codec.Serialize != nil && (branded ||
 		o.class == ClassError || o.class == ClassObject && o.proto() != s.r.proto.object && o.proto() != nil) {
 		token, ok, err := s.codec.Serialize(v)
@@ -656,6 +667,14 @@ func (d *deserializer) value(i int) (Value, error) {
 	case snSharedArrayBuffer:
 		o = r.NewSharedArrayBuffer(n.mem).Object()
 	case snHost:
+		if t, ok := n.token.(HostCloneToken); ok {
+			v, err := t.Revive(r)
+			if err != nil {
+				return Undefined, err
+			}
+			d.made[i], d.done[i] = v, true
+			return v, nil
+		}
 		if d.codec == nil || d.codec.Revive == nil {
 			return Undefined, &DataCloneError{"the value cannot be deserialized here"}
 		}

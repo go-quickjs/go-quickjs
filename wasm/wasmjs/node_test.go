@@ -31,17 +31,29 @@ func builderPath(t *testing.T) string {
 }
 
 // runQuickJS runs the files in a runtime as qjs makes one, with Node's
-// quirks, the standard library and the WebAssembly namespace, and returns
-// what the script recorded.
+// quirks, the standard library, workers and the WebAssembly namespace, and
+// returns what the script recorded.
 func runQuickJS(t *testing.T, files ...string) string {
 	t.Helper()
 	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	loop := stdlib.NewLoop(rt)
-	if err := stdlib.Install(rt, stdlib.Config{Loop: loop}); err != nil {
+	workers := &stdlib.Workers{
+		New:       func() (*quickjs.Runtime, error) { return quickjs.New(quickjs.WithNodeQuirks()), nil },
+		Installed: func(w *quickjs.Runtime) error { return wasmjs.Install(w) },
+	}
+	if err := stdlib.Install(rt, stdlib.Config{Loop: loop, Workers: workers}); err != nil {
 		t.Fatal(err)
 	}
 	if err := wasmjs.Install(rt); err != nil {
+		t.Fatal(err)
+	}
+	// Scripts reach node:worker_threads as Node's reach it through
+	// process.getBuiltinModule.
+	if _, err := rt.EvalModule("<threads>", `import * as w from "node:worker_threads"; globalThis.require_worker_threads = w;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.RunJobs(); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range files {
@@ -101,14 +113,16 @@ func TestCompareNode(t *testing.T) {
 // is known to differ from Node, and why. None is the WebAssembly namespace's
 // own: each is a message of the runtime's, or of the wasm engine's.
 var nodeKnownDifferences = map[string]string{
-	"runtime.js: new exported":              "the runtime names the callee by its name, not by the expression",
-	"runtime.js: exported toString":         "the runtime writes a name that is not an identifier as a computed key",
-	"runtime.js: deep recursion through JS": "the runtime's own stack overflow message",
-	"api.js: subclass Tag":                  "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Tag",
-	"api.js: subclass Exception":            "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for an Exception",
-	"api.js: subclass Suspending":           "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Suspending",
-	"gc.js: method":                         "the runtime names the callee of a call through a proxy undefined",
-	"gc.js: JSON":                           "JSON.stringify writes a GC object as an empty object, where V8 writes null",
+	"runtime.js: new exported":                 "the runtime names the callee by its name, not by the expression",
+	"runtime.js: exported toString":            "the runtime writes a name that is not an identifier as a computed key",
+	"clone.js: clone exported function":        "the runtime writes a name that is not an identifier as a computed key",
+	"clone.js: clone nested exported function": "the runtime writes a name that is not an identifier as a computed key",
+	"runtime.js: deep recursion through JS":    "the runtime's own stack overflow message",
+	"api.js: subclass Tag":                     "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Tag",
+	"api.js: subclass Exception":               "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for an Exception",
+	"api.js: subclass Suspending":              "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Suspending",
+	"gc.js: method":                            "the runtime names the callee of a call through a proxy undefined",
+	"gc.js: JSON":                              "JSON.stringify writes a GC object as an empty object, where V8 writes null",
 }
 
 // v8Conversion matches the messages of V8's ToPrimitive and ToBigInt, which
