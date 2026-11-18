@@ -370,7 +370,7 @@ func (r *Runtime) applyLocaleIdentityOptions(loc *intl.Locale, options *Object) 
 	if variantsSet {
 		seen := map[string]bool{}
 		var names []string
-		for _, variant := range strings.Split(strings.ToLower(variants), "-") {
+		for _, variant := range strings.Split(asciiLower(variants), "-") {
 			if !isVariant(variant) || seen[variant] {
 				return r.intlIncorrectLocale()
 			}
@@ -429,7 +429,7 @@ func (r *Runtime) firstDayOption(options *Object) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	day := strings.ToLower(text.Go())
+	day := asciiLower(text.Go())
 	if named := weekdayName(day); named != "" {
 		return named, nil
 	}

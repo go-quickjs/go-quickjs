@@ -401,7 +401,7 @@ func (r *Runtime) typeOption(o *Object, name string) (string, error) {
 	key := map[string]string{
 		"calendar": "ca", "numberingSystem": "nu", "collation": "co",
 	}[name]
-	return canonicalSetting(key, strings.ToLower(got)), nil
+	return canonicalSetting(key, asciiLower(got)), nil
 }
 
 // boolWord is how a flag is written in a tag.
@@ -685,7 +685,7 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 		if len(currency) != 3 || !allLetters(currency) {
 			return nil, r.intlInvalidRange("currency code", currency)
 		}
-		o.currency = strings.ToUpper(currency)
+		o.currency = asciiUpper(currency)
 	}
 	if o.currencyDisplay, err = r.stringOption(options, "currencyDisplay", "symbol",
 		"code", "symbol", "narrowSymbol", "name"); err != nil {

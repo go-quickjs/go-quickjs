@@ -456,7 +456,7 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 	switch o.kind {
 	case "region":
 		if len(code) == 2 && allLetters(code) {
-			return strings.ToUpper(code), nil
+			return asciiUpper(code), nil
 		}
 		if len(code) == 3 && allDigits(code) {
 			return code, nil
@@ -466,12 +466,12 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 		if len(code) != 4 || !allLetters(code) {
 			return "", r.intlInvalidArgumentRange()
 		}
-		return strings.ToUpper(code[:1]) + strings.ToLower(code[1:]), nil
+		return asciiUpper(code[:1]) + asciiLower(code[1:]), nil
 	case "currency":
 		if len(code) != 3 || !allLetters(code) {
 			return "", r.intlInvalidArgumentRange()
 		}
-		return strings.ToUpper(code), nil
+		return asciiUpper(code), nil
 	case "language":
 		// A language is named by a tag without any of the extensions a tag may
 		// carry: "en-u-hebrew" asks for something that is not a language.
@@ -491,7 +491,7 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 				return "", r.intlInvalidArgumentRange()
 			}
 		}
-		return strings.ToLower(code), nil
+		return asciiLower(code), nil
 	case "dateTimeField":
 		switch code {
 		case "era", "year", "quarter", "month", "weekOfYear", "weekday", "day",

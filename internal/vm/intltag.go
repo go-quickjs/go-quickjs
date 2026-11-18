@@ -34,3 +34,30 @@ func isVariant(s string) bool {
 	}
 	return len(s) == 4 && s[0] >= '0' && s[0] <= '9' && allAlphanumeric(s)
 }
+
+// asciiLower and asciiUpper change the case of the ASCII letters of s and
+// nothing else, which is how a tag, an option's value or a code is
+// case-insensitive: strings.ToLower would take U+0130 to "i" and the Kelvin
+// sign to "k", so that "fr" followed by U+0130 passed for "fri", where V8
+// rejects it.
+func asciiLower(s string) string { return asciiCaseString(s, 'A', 'Z') }
+
+func asciiUpper(s string) string { return asciiCaseString(s, 'a', 'z') }
+
+// asciiCaseString flips bit 5 of each byte of s from lo to hi.
+func asciiCaseString(s string, lo, hi byte) string {
+	i := 0
+	for i < len(s) && (s[i] < lo || s[i] > hi) {
+		i++
+	}
+	if i == len(s) {
+		return s
+	}
+	b := []byte(s)
+	for ; i < len(b); i++ {
+		if c := b[i]; c >= lo && c <= hi {
+			b[i] = c ^ 0x20
+		}
+	}
+	return string(b)
+}
