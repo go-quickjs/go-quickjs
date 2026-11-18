@@ -126,10 +126,9 @@ var nativeSlowOnMiss = [...]bytecode.ROp{
 	bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
 }
 
-// The exit table, made after regTable (zzreg_table.go's and
-// zzreg_zztable.go's inits, which sort first).
+// The Go functions native code calls; the exit table is reg_tables.go's,
+// made once regTable is whole.
 func init() {
-	nativeExitTable = regTable
 	nativeClosureFn = nativeClosure
 	nativeLitFn = nativeLit
 	nativeBuiltinFn = nativeBuiltin
@@ -140,9 +139,6 @@ func init() {
 	nativeSuperFn = nativeSuper
 	nativeApplyFn = nativeApply
 	nativeReflectFn = nativeReflect
-	for _, op := range nativeSlowOnMiss {
-		nativeExitTable[op] = regSlowTable[op]
-	}
 }
 
 // nativeRun runs frame f as register code c, from instruction start, by
