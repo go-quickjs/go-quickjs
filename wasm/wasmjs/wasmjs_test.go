@@ -111,9 +111,9 @@ func TestInstallLazy(t *testing.T) {
 	rt := newRuntime(t)
 	got := eval(t, rt, `
 		const d = Object.getOwnPropertyDescriptor(globalThis, "WebAssembly");
-		var out = [typeof d.get, WebAssembly === WebAssembly, typeof WebAssembly.Module,
-			Object.getOwnPropertyDescriptor(globalThis, "WebAssembly").writable].join()`)
-	if got != "function,true,function,true" {
+		var out = [typeof d.get, d.value === WebAssembly, d.writable, d.enumerable, d.configurable,
+			typeof WebAssembly.Module].join()`)
+	if got != "undefined,true,true,false,true,function" {
 		t.Fatalf("got %s", got)
 	}
 }

@@ -84,10 +84,6 @@ func runSpecFile(t *testing.T, root, file string, opts ...quickjs.Option) []spec
 // specKnownFailures are the subtests expected to fail, by file and name,
 // with why.
 var specKnownFailures = map[string]string{
-	// The global is an accessor until it is first read, as the runtime's
-	// other globals built when first read (Intl, Temporal) are.
-	"interface.any.js: WebAssembly: property descriptor": "a lazy global's descriptor is its accessor's",
-
 	// Node 26 fails these the same way, with the same messages.
 	"global/value-get-set.any.js: Calling setter without argument":              "V8 requires the setter's argument",
 	"table/get-set.any.js: Arguments for anyfunc table set":                     "V8 converts an explicit undefined rather than taking it as missing",

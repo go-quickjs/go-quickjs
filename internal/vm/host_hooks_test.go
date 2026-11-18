@@ -365,6 +365,10 @@ func TestHostDefineLazyGlobal(t *testing.T) {
 	if built != 0 {
 		t.Fatal("the global was built before it was read")
 	}
+	// Its descriptor is the data property's, which builds it.
+	if got := hostEval(t, rt, `const d = Object.getOwnPropertyDescriptor(globalThis, "Lazy"); [d.value.n, d.writable, d.enumerable, d.configurable, "get" in d].join()`); got != "1,true,false,true,false" || built != 1 {
+		t.Fatalf("descriptor: %s, built %d times", got, built)
+	}
 	if got := hostEval(t, rt, `[Lazy.n, Lazy === Lazy, Object.getOwnPropertyDescriptor(globalThis, "Lazy").writable].join()`); got != "1,true,true" {
 		t.Fatalf("got %s", got)
 	}

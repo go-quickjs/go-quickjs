@@ -23,15 +23,17 @@ import (
 // programs never format anything: building it with every runtime costs every
 // embedder for what few of them use. So the property is an accessor that
 // builds the namespace the first time it is read and then puts itself away,
-// leaving an ordinary property behind. The only way to tell is to ask for the
-// property's descriptor before anything has touched it.
+// leaving an ordinary property behind -- or the first time anything asks for
+// its descriptor, which is the data property's, so that nothing can tell.
 func (r *Runtime) initIntlBuiltins() {
 	r.defineLazyGlobal("Intl", (*Runtime).buildIntl)
 }
 
 // defineLazyGlobal puts a global on the global object that is built the
 // first time it is read, and then becomes the ordinary writable property it
-// stands for.
+// stands for: a data property, writable and configurable, not enumerable,
+// which is what its descriptor is from the start (currentDescriptor builds
+// it before describing it).
 //
 // It becomes one only while it is still the configurable accessor it was
 // made as: a global object frozen before it was read keeps the accessor, as
@@ -41,15 +43,19 @@ func (r *Runtime) initIntlBuiltins() {
 func (r *Runtime) defineLazyGlobal(name string, build func(*Runtime) *Object) {
 	key := r.atoms.intern(name)
 	var getter *Object
-	settle := func(rt *Runtime, v Value) {
+	// pending reports whether the property is still the accessor made here.
+	pending := func(rt *Runtime) bool {
 		p := rt.global.getOwn(key)
 		if !p.ok() || !p.isAccessor() || p.flags()&propConfigurable == 0 {
-			return
+			return false
 		}
-		if acc := p.getterSetter(); acc == nil || acc.getter != getter {
-			return
+		acc := p.getterSetter()
+		return acc != nil && acc.getter == getter
+	}
+	settle := func(rt *Runtime, v Value) {
+		if pending(rt) {
+			rt.global.setOwnRaw(key, v, propWritable|propConfigurable)
 		}
-		rt.global.setOwnRaw(key, v, propWritable|propConfigurable)
 	}
 	if r.lazyGlobals == nil {
 		r.lazyGlobals = map[Atom]func(*Runtime){}
@@ -57,7 +63,11 @@ func (r *Runtime) defineLazyGlobal(name string, build func(*Runtime) *Object) {
 	// A script that redefines the property, or freezes or seals the global
 	// object, is given the data property it stands for, as it would find in
 	// any other engine: frozen, it is read-only, not an accessor to call.
-	r.lazyGlobals[key] = func(rt *Runtime) { settle(rt, Obj(build(rt))) }
+	r.lazyGlobals[key] = func(rt *Runtime) {
+		if pending(rt) {
+			settle(rt, Obj(build(rt)))
+		}
+	}
 	getter = r.newNativeFunc("get "+name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		ns := Obj(build(rt))
 		settle(rt, ns)

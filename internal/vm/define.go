@@ -252,6 +252,13 @@ func (r *Runtime) validateRedefine(cur *propDesc, d *propDesc) bool {
 // currentDescriptor reads an own property into descriptor form, or nil if there
 // is none.
 func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
+	if o == r.global {
+		// A global built when first read is the data property it stands
+		// for to anything that looks at its attributes.
+		if settle := r.lazyGlobals[key]; settle != nil {
+			settle(r)
+		}
+	}
 	if o.class == ClassModuleNamespace {
 		if err := r.touchDeferred(o, key); err != nil {
 			return nil, err

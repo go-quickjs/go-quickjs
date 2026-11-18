@@ -239,7 +239,9 @@ The namespace is built only with the `quickjs_wasm` build tag: without it,
 `Install` returns `wasmjs.ErrNotBuilt`, defines nothing, and nothing of the
 wasm engine is linked. `Install` defines the global `WebAssembly`, which is
 made the first time a script reads it, so a runtime that never uses
-WebAssembly pays nothing for it. A `qjs` built with the tag installs it in
+WebAssembly pays nothing for it; it is a data property from the start,
+writable, configurable and not enumerable, as in Node -- asking for its
+descriptor builds it, as `Intl`'s and `Temporal`'s do. A `qjs` built with the tag installs it in
 every runtime it makes, workers' included; the root package and the
 standard library do not. `wasmjs.WithoutJSPI()` leaves out the
 JS Promise Integration.
@@ -720,7 +722,7 @@ whose goroutine and the runtime's take turns.
 |---|---|---|
 | The spec's core and legacy-exception tests, and the threads proposal's | 65,824 of 65,824 assertions, interpreted and with every function compiled, on amd64 and arm64; 65,824 interpreted on 386 | WebAssembly/spec [`f3268fa9`](https://github.com/WebAssembly/spec/commit/f3268fa9dcb7d3a60d09546e743e7281e75cddb0), WebAssembly/threads [`cc535ada`](https://github.com/WebAssembly/threads/commit/cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0) |
 | The spec scripts, parsed | 276 of 276 scripts; 5,321 text modules compiled and 1,240 malformed ones rejected | the same |
-| The JavaScript API tests (`test/js-api`) | 1,204 of 1,223 subtests; 18 of the others fail in Node 26 too, with the same messages, and the last is the lazy global's descriptor | WebAssembly/spec `f3268fa9` |
+| The JavaScript API tests (`test/js-api`) | 1,205 of 1,223 subtests; the 18 others fail in Node 26 too, with the same messages | WebAssembly/spec `f3268fa9` |
 | Validation against Node 26 (V8 14.6) | no difference over 345,311 modules, in three corpora | -- |
 | wasi-testsuite, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, the 5 that make symbolic links skipped without the privilege to | `prod/testsuite-base` |
 
@@ -1028,8 +1030,6 @@ The engine:
 
 The `WebAssembly` namespace:
 
-- `Object.getOwnPropertyDescriptor(globalThis, "WebAssembly")` is the
-  accessor the global is until first read, as Intl's is.
 - A suspended promising call is a goroutine's stack, which keeps reachable
   what its wasm and its imports reach -- the runtime among it -- until it
   ends: when the collector finds nothing holds the reactions that would

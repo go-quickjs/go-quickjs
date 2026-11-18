@@ -800,6 +800,8 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 	}
 }
 
+// TestTemporalIsLazy pins that Temporal, built when first used, is the data
+// property it stands for whether its descriptor is asked for before or after.
 func TestTemporalIsLazy(t *testing.T) {
 	t.Parallel()
 	rt := quickjs.New()
@@ -811,7 +813,7 @@ func TestTemporalIsLazy(t *testing.T) {
         [typeof before.get, "value" in before, first === Temporal,
          typeof after.get, after.value === first].join(",")
     }`)
-	if got != "function,false,true,undefined,true" {
+	if got != "undefined,true,true,undefined,true" {
 		t.Fatalf("lazy Temporal descriptor = %q", got)
 	}
 }
