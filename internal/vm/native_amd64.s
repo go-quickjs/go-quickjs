@@ -3,7 +3,7 @@
 #include "textflag.h"
 
 // The native handlers' entry, and their store of a pointer with the write
-// barrier (zzzyn_native_amd64.go): the JIT's enterRaw and storeRef, the
+// barrier (native_run.go): the JIT's enterRaw and storeRef, the
 // package's own, so that the handlers need no JIT.
 
 TEXT ·nativeEnter(SB), NOSPLIT|NOFRAME, $0-16

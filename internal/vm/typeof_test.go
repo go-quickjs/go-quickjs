@@ -79,7 +79,7 @@ s[0] + ' | ' + (s[0] === s[1] && s[1] === s[2])
 
 const typeofTestWant = "uOF?/10101010/n/p--/0/undefined:false,oFU?/01101010/on/p--/0/object:true,bOFU?/00101011/n/p--/0/boolean:false,bOFU?/00101011/n/p--/0/boolean:false,nOFNU?/00101010/n/p--/3/number:false,nOFNU?/00101010/n/p--/3/number:false,nOFNU?/00101010/n/p--/3/number:false,nOFNU?/00101010/n/p--/3/number:false,sOFSU?/00101010/sn/p--/5/string:false,sOFSU?/00101010/sn/p--/5/string:false,yOFU?/00100010/n/p--/0/symbol:false,gOFU?/00111010/n/p--/0/bigint:false,gOFU?/00111010/n/p--/0/bigint:false,oFU?/01101010/on/p--/0/object:true,oFU?/01101010/on/p--/0/object:true,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,fOU?/00001010/n/pf-/0/function:false,oFU?/01101010/on/p--/0/object:true,oFU?/01101010/on/p--/0/object:true,oFU?/01101010/on/p--/0/object:true,oFU?/01101010/on/p--/0/object:true,uOF?/10101010/n/p--/0/undefined:false,true,false,undefined,false,112 | true"
 
-// typeof's tests (zzz_typeof.go) answer as the interpreter does, and
+// typeof's tests (typeof.go) answer as the interpreter does, and
 // as Node does, for every kind of value, document.all among them; a test
 // against a name of no type is false with its operand still evaluated
 // (calls counts them); typeof of a name nothing declares throws nothing.

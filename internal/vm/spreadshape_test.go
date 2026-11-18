@@ -7,7 +7,7 @@ import (
 )
 
 // spreadShapeSrc spreads sources of every kind into empty literals and into
-// literals with properties (zzz_spreadshape.go): {...o}, {...o, x: 1}, {...o,
+// literals with properties (spreadshape.go): {...o}, {...o, x: 1}, {...o,
 // a: 9}, {a: 0, ...o} and two spreads, each way round -- a plain object,
 // an empty one, frozen, sealed and not extensible ones, one with a read-only
 // property, a class's instance, one with a key not enumerable, with a

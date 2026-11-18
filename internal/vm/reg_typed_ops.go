@@ -946,7 +946,7 @@ func rhTGSetF(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int
 // transferred has none, every access out of it.
 type asmHeap struct {
 	// base and len first: the abi.HeapCell native code reads
-	// (zzjit_zregtyped.go).
+	// (jit_typed.go).
 	base unsafe.Pointer
 	len  uintptr
 	view *typedArrayData

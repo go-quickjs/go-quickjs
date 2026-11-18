@@ -86,7 +86,7 @@ table() + " " + run(1000) + " " + run(3000)
 
 const matchResultTestWant = "2661856178 3081 1410175481 853667658"
 
-// A match's array and its strings are made together (zzz_regexpresult.go):
+// A match's array and its strings are made together (regexpresult.go):
 // each answer is Node's, with the collector idle and running.
 func TestRegExpMatchResults(t *testing.T) {
 	for _, idle := range []bool{true, false} {

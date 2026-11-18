@@ -9,7 +9,7 @@ import (
 // them, which is six shapes a run of this one, each an allocation, and keys
 // beside them, in a runtime's realm or any other. The same bytecode run
 // otherwise makes them each time, for literals of no keys of their own: those
-// with keys are the realm's, whatever runs them (zzz_literalkeys.go).
+// with keys are the realm's, whatever runs them (literalkeys.go).
 func TestProgramRerunsMakeNoLayouts(t *testing.T) {
 	r := New()
 	defer r.Close()

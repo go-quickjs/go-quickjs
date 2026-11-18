@@ -8,7 +8,7 @@ import (
 
 // The locals that hold their values alone: the interpreter and the JIT
 // give back a BigInt such a local held when it is assigned the next result
-// of arithmetic (the VM's zzbigown.go), which the operators whose results
+// of arithmetic (the VM's bigown.go), which the operators whose results
 // such a local takes say (RArithOwnA).
 
 // soleLocals is the locals of the function, of the first 64, that hold

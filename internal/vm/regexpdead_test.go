@@ -15,7 +15,7 @@ import (
 )
 
 // regexpDeadTestSrc calls RegExp.prototype.exec where nothing reads its
-// result but, at most, whether it is truthy (zzz_regexpdead.go) -- as a
+// result but, at most, whether it is truthy (regexpdead.go) -- as a
 // statement, in an if, a while, a not, an && and a ternary's arm, a comma's
 // left side and a void -- on RegExps global, sticky and neither, held by
 // an upvalue, a global, a local, a property of a local and of this, this
@@ -224,7 +224,7 @@ func TestRegExpDeadExecDeadline(t *testing.T) {
 }
 
 // regexpDeadReplaceTestSrc replaces by RegExps where nothing reads the
-// result (zzz_regexpdead.go) -- as a statement, in an if, a not, an &&,
+// result (regexpdead.go) -- as a statement, in an if, a not, an &&,
 // a ternary's arm, a comma's left side and a void -- global, sticky,
 // neither and with named groups, held by an upvalue, a global, this's
 // property and literals, of subjects in locals, elements and properties,

@@ -9,8 +9,8 @@ import (
 
 // Object literals, additions to captured bindings, push
 // and pop (pureElemOp, which native code's growth of an array calls too), a
-// for...in's cursors used again (zzz_forincursor.go) and arrays grown past
-// 16,384 elements (zzz_growelems.go) answer as the interpreter does with
+// for...in's cursors used again (forincursor.go) and arrays grown past
+// 16,384 elements (growelems.go) answer as the interpreter does with
 // the JIT on, the interpreter warming code up and running what native code
 // leaves -- under every stress setting, with the collector idle and while
 // it marks -- and native code runs some of each.

@@ -10,7 +10,7 @@ import (
 )
 
 // regexpReuseTestSrc calls exec where its array and its pieces may be made
-// again (zzz_regexpreuse.go) -- Octane's Exec, of patterns of 1 to 18
+// again (regexpreuse.go) -- Octane's Exec, of patterns of 1 to 18
 // elements, named groups, the d flag, global ones, subjects past ASCII and
 // empty ones; Exec again from a valueOf of its sum while it still reads
 // its array; a loop that reads a piece of the last match after the next;
@@ -147,7 +147,7 @@ all() + ' # ' + all() + ' # ' + leaks()
 const regexpReuseTestWant = `-384824464 -384824464 -384824464 85/28.23.7.4.16.1.2.1.2.1. 113/29.23.7.4.16.2.2.1.2.1. 116/30.23.7.4.16.3.2.1.2.1. 118/31.23.7.4.16.4.2.1.2.1. 1122111 11442 0:33:23:12,null,24 0:4:-1:12,null,0 0:2:-1:12,0:2:1:3,0 0:5:-1:12,0:5:2:3,24 0:5:-1:12,null,0 0:3:-1:12,null,30 0:6:-1:12,null,39 0:2:-1:12,null,0 0:2:-1:12,null,0 0:9:-1:12,null,0 0:3:-1:12,null,0 0:21:-1:12,null,0 0:0:-1:12,null,0 0:6:-1:12,null,0 uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||,y,1,bark|||||||bark||||,99,a1|||||||a1||||,y,1,uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||,99,bark|||||||bark||||,y,1,a1|||||||a1||||,99 distinct uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||;bark|||||||bark|||| # -384824464 -384824464 -384824464 85/28.23.7.4.16.1.2.1.2.1. 113/29.23.7.4.16.2.2.1.2.1. 116/30.23.7.4.16.3.2.1.2.1. 118/31.23.7.4.16.4.2.1.2.1. 1122111 11442 0:33:23:12,null,24 0:4:-1:12,null,0 0:2:-1:12,0:2:1:3,0 0:5:-1:12,0:5:2:3,24 0:5:-1:12,null,0 0:3:-1:12,null,30 0:6:-1:12,null,39 0:2:-1:12,null,0 0:2:-1:12,null,0 0:9:-1:12,null,0 0:3:-1:12,null,0 0:21:-1:12,null,0 0:0:-1:12,null,0 0:6:-1:12,null,0 uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||,y,1,bark|||||||bark||||,99,a1|||||||a1||||,y,1,uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||,99,bark|||||||bark||||,y,1,a1|||||||a1||||,99 distinct uggc://jjj.snprobbx.pbz/ybtva.cuc|uggc://jjj.snprobbx.pbz|uggc://|uggc|jjj.snprobbx.pbz|||/ybtva.cuc||||;bark|||||||bark|||| # 56 uggc://b.pbz@0 uggc://c0.pbz@0 uggc://c1.pbz@0 uggc://c2.pbz@0 uggc://c3.pbz@0 uggc://c4.pbz@0 uggc://c5.pbz@0 uggc://e.pbz@0 uggc://g0.pbz@0 uggc://g1.pbz@0 uggc://g2.pbz@0 uggc://g3.pbz@0 uggc://g4.pbz@0 uggc://g5.pbz@0 uggc://i.pbz@0 uggc://j0.pbz@0 uggc://j1.pbz@0 uggc://j2.pbz@0 uggc://j3.pbz@0 uggc://j4.pbz@0 uggc://j5.pbz@0 uggc://l.pbz@0 uggc://m0.pbz@0 uggc://m1.pbz@0 uggc://m2.pbz@0 uggc://m3.pbz@0 uggc://m4.pbz@0 uggc://m5.pbz@0 uggc://b.pbz@0 uggc://c0.pbz@0 uggc://c1.pbz@0 uggc://c2.pbz@0 uggc://c3.pbz@0 uggc://c4.pbz@0 uggc://c5.pbz@0 uggc://e.pbz@0 uggc://g0.pbz@0 uggc://g1.pbz@0 uggc://g2.pbz@0 uggc://g3.pbz@0 uggc://g4.pbz@0 uggc://g5.pbz@0 uggc://i.pbz@0 uggc://j0.pbz@0 uggc://j1.pbz@0 uggc://j2.pbz@0 uggc://j3.pbz@0 uggc://j4.pbz@0 uggc://j5.pbz@0 uggc://l.pbz@0 uggc://m0.pbz@0 uggc://m1.pbz@0 uggc://m2.pbz@0 uggc://m3.pbz@0 uggc://m4.pbz@0 uggc://m5.pbz@0`
 
 // An array exec makes where only a local of its function can reach it is
-// made again in the memory of its site's last (zzz_regexpreuse.go): each
+// made again in the memory of its site's last (regexpreuse.go): each
 // answer is Node's, with the collector idle and running -- the arrays a
 // valueOf's call of the same site made while the outer one was read, the
 // pieces a loop read after the next match, and the arrays and pieces kept,

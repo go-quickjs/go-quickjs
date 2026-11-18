@@ -41,7 +41,7 @@
 //     moves as much as vm, and which vm's pads, after it, cannot reach.
 //   - An assembly pad (H), a function of raw bytes in an assembly file
 //     sorted before the native handlers' files
-//     (zzzyn_native_a_layoutpad_*.s), its size a whole number of 32-byte
+//     (native_a_layoutpad_*.s), its size a whole number of 32-byte
 //     slots: package vm's assembly is laid out after every closure of its
 //     named functions, so that any closure's growth moves the native
 //     handlers' block (nativeEnter, nativeCallH, the feedback handlers and
@@ -136,10 +136,10 @@ var positions = []position{
 	{"A", "aa_layoutpad.go", "before every file of package vm: the built-ins"},
 	{"D", "defg_layoutpad.go", "after deferred.go, before define.go: the files after the built-ins"},
 	{"B", "vm_b_layoutpad.go", "after vm_amath.go, before vm_call.go: callObject, callDirect, runFD"},
-	{"J", "zzj_layoutpad.go", "after zzbigown.go, before the JIT's zzjit files"},
-	{"Q", "zzreg_ru_layoutpad.go", "after zzreg_report.go, before zzreg_run.go: the register interpreter's loop, runReg"},
-	{"W", "zzreg_run_a_layoutpad.go", "after zzreg_run.go, before zzreg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},
-	{"Z", "zzzz_layoutpad.go", "after every file: the closures, and the generics the last files call"},
+	{"J", "jit_layoutpad.go", "after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo, or without the JIT the register interpreter's calls, regCall"},
+	{"Q", "reg_ru_layoutpad.go", "after reg_report.go, before reg_run.go: the register interpreter's loop, runReg"},
+	{"W", "reg_run_a_layoutpad.go", "after reg_run.go, before reg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},
+	{"Z", "z_layoutpad.go", "after every file: the closures, and the generics the last files call"},
 }
 
 // An outer is a function pad in a package linked before package vm, in
@@ -647,13 +647,13 @@ func configFiles(c *config) []string {
 
 // asmFile is c's assembly pad's file (lever H), named to sort after the
 // JIT's assembly and before every native handlers' file
-// (zzzyn_native_<arch>.s first), and so laid out right before them.
+// (native_<arch>.s first), and so laid out right before them.
 func asmFile(c *config) string {
 	jit := ""
 	if c.jit {
 		jit = "jit_"
 	}
-	return filepath.Join(vmDir, "zzzyn_native_a_layoutpad_"+jit+c.goos+"_"+c.goarch+".s")
+	return filepath.Join(vmDir, "native_a_layoutpad_"+jit+c.goos+"_"+c.goarch+".s")
 }
 
 // asmSource is c's assembly pad of n 32-byte slots, int3 bytes, or a file

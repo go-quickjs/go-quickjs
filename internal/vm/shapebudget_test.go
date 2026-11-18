@@ -68,7 +68,7 @@ func TestShapeBudgetChurn(t *testing.T) {
 	// the first prototypes it made and the first literals, whose budgets
 	// share a chunk with prototypes that live (budgetChunk), and those of
 	// the objects whose prototype is in their table, the first made on each
-	// prototype (zzz_polyproto.go) -- which, past the first, are all a class
+	// prototype (polyproto.go) -- which, past the first, are all a class
 	// made by a factory makes. No literal's root is among them (settleSites)
 	// but the realm's for a literal's keys, and the shapes grown from those.
 	patterns := []struct {
@@ -128,7 +128,7 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 		function make(a) { return new Q(a) }
 		function lit(a) { return {u: a, v: 2} }
 		// The first object made on a prototype keeps it in its table
-		// (zzz_polyproto.go): the ones compared are made after it.
+		// (polyproto.go): the ones compared are made after it.
 		make(0)
 		var q1 = make(1), q2 = make(2), l1 = lit(1), l2 = lit(2)
 		function A(v) { this.x = v; this.y = v + 1 }
@@ -152,7 +152,7 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 
 // The first ordinary object made on a prototype keeps it in its table, of
 // a layout in the tree the runtime keeps for such objects, which a cache
-// may remember, whatever their prototypes (zzz_polyproto.go); the objects
+// may remember, whatever their prototypes (polyproto.go); the objects
 // after it start from the root the prototype's layout keeps, and so does
 // the first once a cache finds a property past it. Objects of other classes
 // start from the prototype's root from the first.

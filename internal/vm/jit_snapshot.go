@@ -18,7 +18,7 @@ import (
 // every PC of the program, the questions of no argument once, and those of
 // the callees the answers' inline sites name, to the inliner's depth
 // (jitSnapDepth), each callee's feedback a snapshot of its own. The build
-// asks it as it asks jitFeedback (zzjit_snapshot_gen.go); a question it
+// asks it as it asks jitFeedback (jit_snapshot_gen.go); a question it
 // was not asked ahead is a miss (jitSnapMiss), which has the compile built
 // on the runtime's goroutine after all. It reads nothing of the runtime's:
 // answers are values, and addresses the VM keeps alive with the compile,
@@ -49,7 +49,7 @@ type jitSnapshot struct {
 	uses    []jitSnapUse
 	bad     bool
 	// reg is the snapshot as register code's feedback answers, where it
-	// was asked of that (zzjit_zregsnap.go).
+	// was asked of that (jit_snap.go).
 	reg *jitRegSnapshot
 }
 

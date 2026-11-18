@@ -8,9 +8,9 @@ import (
 )
 
 // Register code's feedback asked ahead, for its compiles in the background
-// (zzjit_snapshot.go): a jitRegSnapshot answers what jitRegFeedback answers
+// (jit_snapshot.go): a jitRegSnapshot answers what jitRegFeedback answers
 // -- its methods alone, generated from them (snapgen,
-// zzjit_snapshot_gen.go) -- from a jitSnapshot asked of it on the runtime's
+// jit_snapshot_gen.go) -- from a jitSnapshot asked of it on the runtime's
 // goroutine. A question it was not asked ahead is a miss, which has the
 // compile built on the runtime's goroutine at its install.
 type jitRegSnapshot struct {

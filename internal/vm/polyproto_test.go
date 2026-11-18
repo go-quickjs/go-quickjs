@@ -3,7 +3,7 @@ package vm
 import "testing"
 
 // polyProtoSemantics exercises objects whose prototype is in their table
-// (zzz_polyproto.go) -- the first ordinary object made on a prototype, by
+// (polyproto.go) -- the first ordinary object made on a prototype, by
 // Object.create, a literal's __proto__, setPrototypeOf, and a class made
 // for each call -- through everything that reads or changes a prototype
 // or lists keys: the slot is no property a script sees, a new prototype is

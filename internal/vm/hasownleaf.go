@@ -21,7 +21,7 @@ package vm
 // As regexpLeaves' are, the functions are generic, instantiated with
 // struct{} alone, and the check a method of a generic type used as a
 // method value: laid out after every function and closure of the package,
-// they move none of them (see zzz_regexpleaf.go). regexpLeaves, the
+// they move none of them (see regexpleaf.go). regexpLeaves, the
 // realm's last setup of its leaves, calls objectLeaves.
 
 // objectLeaves gives the realm's Object.prototype.hasOwnProperty its

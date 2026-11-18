@@ -9,7 +9,7 @@ import (
 // (watchEngine in package quickjs) for this package's tests, which run
 // scripts with Runtime.SetContext: once ctx ends, the counters are run out
 // until r runs no script, so that the next back edge or call checks
-// (zstop.go). The function it returns ends the watch. With the race
+// (stop.go). The function it returns ends the watch. With the race
 // detector on, it watches nothing.
 func watchStopForTest(r *Runtime, ctx context.Context) (unwatch func()) {
 	if raceDetector {

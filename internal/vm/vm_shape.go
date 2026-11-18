@@ -33,7 +33,7 @@ import (
 //     they were added. Objects built the same way share the node. An object
 //     literal's objects start from its realm's root for the literal's keys,
 //     or a root of the literal's own where the compiler says none
-//     (zzz_literalkeys.go), a constructor's from one of the function's, and
+//     (literalkeys.go), a constructor's from one of the function's, and
 //     any other object from its class's -- when it is given its first
 //     property, or when a cache first meets it with none.
 //   - Unique: the object has a shape of its own. It is what an object gets
@@ -70,7 +70,7 @@ type shape struct {
 	// prototype with its layout, and a new prototype is a new layout
 	// (setProto) -- but for the layouts of the objects that keep their
 	// prototype in their table instead, which say none (objPolyProto,
-	// zzz_polyproto.go).
+	// polyproto.go).
 	proto *Object
 	// more is the transitions out of the shape past the first (next).
 	more map[shapeEdge]*shape
@@ -183,12 +183,12 @@ type shapeSide struct {
 	// json is what JSON.stringify keeps of the layout: see jsonLayout.
 	json *jsonLayout
 	// programs is, on the layout of a realm's Object.prototype, the roots
-	// of the literals of the Programs the realm runs (zzz_rerun.go) and of
-	// the literals of its code by their keys (zzz_literalkeys.go).
+	// of the literals of the Programs the realm runs (rerun.go) and of
+	// the literals of its code by their keys (literalkeys.go).
 	programs *programTable
 	// spread is, on a layout shapeKeys has kept the keys of, the layouts
 	// object spreads of its objects into empty objects made, by their
-	// roots (zzz_spreadshape.go).
+	// roots (spreadshape.go).
 	spread *spreadLayouts
 }
 
@@ -692,7 +692,7 @@ func (s *shape) orRoot(c Class, p *Object) *shape {
 // different properties, and a root of their own saves each of them a search
 // among the others' transitions out of their class's root. What a literal
 // whose keys are known starts from is had before it asks, its cache then
-// holding the realm's root for them (zzz_literalkeys.go). It is nil once the
+// holding the realm's root for them (literalkeys.go). It is nil once the
 // tree is full, while the realm is being made, and for a prototype other than
 // the one the literal's objects have had, proto (orRoot). A root is counted
 // only until the code stops running (settleSites), and the shapes grown from
@@ -1638,7 +1638,7 @@ func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
 	if before.unique || next == nil || next == before || next.unique || next.loose || next.parent != before ||
 		next.key != key || next.flags&(plain|propWritable) != propWritable || o.flags&objPolyProto != 0 {
 		// Or o's prototype is in its table: one no other object has had,
-		// which no entry would meet again (zzz_polyproto.go).
+		// which no entry would meet again (polyproto.go).
 		return
 	}
 	var e deepAdd
@@ -1726,7 +1726,7 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			return
 		}
 		if depth == 0 && o.flags&objPolyProto != 0 {
-			// o's layout does not say its prototype (zzz_polyproto.go): an
+			// o's layout does not say its prototype (polyproto.go): an
 			// entry for objects of no layout's, which names the prototype
 			// and checks it, as a dictionary's does (dictRead) -- a
 			// singleton made on a prototype of its own, read in a loop, is
@@ -2047,7 +2047,7 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 	next := o.shape
 	if before.unique || next == nil || next.unique || next.loose || next.parent != before || next.key != key ||
 		next.flags&(plain|propWritable) != propWritable || o.flags&objPolyProto != 0 {
-		// Or o's layout does not say its prototype (zzz_polyproto.go).
+		// Or o's layout does not say its prototype (polyproto.go).
 		return
 	}
 	var up [2]*Object

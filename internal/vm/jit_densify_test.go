@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Sparse arrays made dense again (zzz_densify.go) under the JIT, which
+// Sparse arrays made dense again (densify.go) under the JIT, which
 // reads and writes them natively once they are: Node's answers, with the
 // collector idle and while it marks.
 func TestJITDensify(t *testing.T) {

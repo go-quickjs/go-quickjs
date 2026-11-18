@@ -16,7 +16,7 @@ import (
 // has checked it calls -- is made by jitLeafGo, as V8's optimized code
 // calls a fast API function, with no frame of JavaScript's and with
 // nothing of the call to find out: native code jumps to jitLeafFast
-// (zzjit_leaffast_*.s, abi.Encoding's LeafFast), which calls it with the
+// (jit_leaffast_*.s, abi.Encoding's LeafFast), which calls it with the
 // call's description and where the call goes on, and goes straight back
 // there with the result's number word in a register. A call of Go had
 // gone through jit's callGo, goCall, ExpandGoCall, jit.HostCall and
@@ -279,7 +279,7 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 	}
 	fd := (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))).fn()
 	if fd == nil || fd.elemOp == 0 {
-		// A string's replace (zzjit_regexpreplaceleaf.go), or no leaf.
+		// A string's replace (jit_regexpreplaceleaf.go), or no leaf.
 		return jitReplaceLeafForm[struct{}](r, st, fd, first, argc, method)
 	}
 	form := &jitLeafForm{first: first, argc: argc, keep: st.Keep, method: method}
@@ -292,7 +292,7 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 			form.check = c
 		}
 		if st.Unused {
-			// Nothing reads the result (zzjit_regexpdead.go).
+			// Nothing reads the result (jit_regexpdead.go).
 			form.native = jitRegExpDeadNative[struct{}](r, (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))), form.native)
 		}
 		if st.Give != 0 && (op == elemRegExpExec || op == elemRegExpTest) {

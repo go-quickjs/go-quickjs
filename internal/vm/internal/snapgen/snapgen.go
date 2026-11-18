@@ -1,13 +1,12 @@
-// Package snapgen writes internal/vm's zzjit_snapshot_gen.go and
-// zzjit_asked_gen_test.go from jitFeedback's methods, which it reads from
-// the package's source: the snapshot of a build's feedback asked ahead
-// (zzjit_snapshot.go), its answer to each method and its asker of each
-// method of a PC, and the proxy that notes what a build asks
-// (zzjit_asked_test.go). A method added to jitFeedback is then a method of
-// both, which the build may ask either of: written by hand, the two would
+// Package snapgen writes internal/vm's jit_snapshot_gen.go from
+// jitFeedback's methods, which it reads from the package's source: the
+// snapshot of a build's feedback asked ahead (jit_snapshot.go), its
+// answer to each method and its asker of each method of a PC. A method
+// added to jitFeedback is then a method of the feedback and of its
+// snapshot, which the build may ask either of: written by hand, the two would
 // drift from the feedback, the snapshot answering a question it was never
 // asked. And the same of register code's feedback, jitRegFeedback's
-// methods: the register snapshot's (jitRegSnapshot, zzjit_zregsnap.go),
+// methods: the register snapshot's (jitRegSnapshot, jit_snap.go),
 // which has those methods alone, as the build finds what a feedback
 // answers by the methods it has, and its askers.
 package snapgen
@@ -40,13 +39,14 @@ func (m method) atPC() bool {
 	return len(m.pnames) == 1 && (m.pnames[0] == "pc" || m.pnames[0] == "rpc") && m.ptype[0] == "int"
 }
 
-// methods are recv's exported methods in dir's zzjit_*.go files, by file
-// name and then by position.
+// methods are recv's exported methods in dir's JIT files, jit.go and
+// jit_*.go, by file name and then by position.
 func methods(dir, recv string) ([]method, error) {
-	files, err := filepath.Glob(filepath.Join(dir, "zzjit_*.go"))
+	files, err := filepath.Glob(filepath.Join(dir, "jit_*.go"))
 	if err != nil {
 		return nil, err
 	}
+	files = append(files, filepath.Join(dir, "jit.go"))
 	sort.Strings(files)
 	fset := token.NewFileSet()
 	var out []method
@@ -120,7 +120,7 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 
 `
 
-// Generate is zzjit_snapshot_gen.go for the package in dir.
+// Generate is jit_snapshot_gen.go for the package in dir.
 func Generate(dir string) (snapshot []byte, err error) {
 	ms, err := methods(dir, "jitRegFeedback")
 	if err != nil {
@@ -159,7 +159,7 @@ func Generate(dir string) (snapshot []byte, err error) {
 	}
 	snapshot, err = format.Source(b.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("zzjit_snapshot_gen.go: %w", err)
+		return nil, fmt.Errorf("jit_snapshot_gen.go: %w", err)
 	}
 	return snapshot, nil
 }
@@ -253,11 +253,11 @@ func results(m method) string {
 	return strings.Join(rs, ", ")
 }
 
-// Write writes zzjit_snapshot_gen.go into dir.
+// Write writes jit_snapshot_gen.go into dir.
 func Write(dir string) error {
 	snapshot, err := Generate(dir)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "zzjit_snapshot_gen.go"), snapshot, 0o644)
+	return os.WriteFile(filepath.Join(dir, "jit_snapshot_gen.go"), snapshot, 0o644)
 }

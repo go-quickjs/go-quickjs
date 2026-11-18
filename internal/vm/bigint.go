@@ -203,7 +203,7 @@ func (r *Runtime) bigGive(b *BigInt) {
 // fresh: results of arithmetic of their own, which nothing else takes,
 // which a BigInt operator of the two may give back (bigRelease).
 // treeOwnRes marks the operator as one whose result is stored to a local
-// that holds its values alone (zzbigown.go). treeOwnShift and treePCMask
+// that holds its values alone (bigown.go). treeOwnShift and treePCMask
 // are read by nothing.
 const (
 	treePCMask   = 1<<20 - 1

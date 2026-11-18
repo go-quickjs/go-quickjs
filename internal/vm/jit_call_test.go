@@ -12,7 +12,7 @@ import (
 )
 
 // regCallSrc's functions call one another natively from register code
-// (jitRegFeedback's NativeCalls, zzjit_zregcall.go): plain calls, a
+// (jitRegFeedback's NativeCalls, jit_call.go): plain calls, a
 // method's, a sloppy function's this, an arrow's captured this, missing
 // and extra arguments, chains of native calls whose innermost leaves
 // native code -- a shape it was not compiled for, a closure made, a throw

@@ -1,7 +1,7 @@
 package amd64
 
 // Indexed addressing, [base + index*scale + disp], which the register
-// interpreter's native handlers use (internal/vm/zzzyn_native_amd64.go):
+// interpreter's native handlers use (internal/vm/native_handlers_amd64.s):
 // a register's Value at the window and a byte offset, and the dispatch's
 // jump through its table by the opcode.
 

@@ -12,7 +12,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// Native code's calls of exec whose result nothing reads (zzz_regexpdead.go)
+// Native code's calls of exec whose result nothing reads (regexpdead.go)
 // tell exec's leaf so: a leaf's call by its description, which marks it
 // (ssa.CallSite's Unused) -- a statement's, an if's, a while's, a not's, an
 // &&'s, a ternary's -- and a literal's call of Go by the instruction after
@@ -106,7 +106,7 @@ func TestJITRegExpDeadExec(t *testing.T) {
 }
 
 // Native code's replace whose result is tested for truth alone is as
-// truthy as the string it would have made (zzz_regexpdead.go's
+// truthy as the string it would have made (regexpdead.go's
 // regexpDeadTruth): each answer is the interpreter's and Node's, with the
 // collector idle and while it marks, the call made natively -- each from a
 // runtime of its own, as code that met them all would be compiled for none.
@@ -140,7 +140,7 @@ func TestJITRegExpDeadReplaceTruth(t *testing.T) {
 }
 
 // Native code's calls of Go of a string's replace whose result nothing
-// reads (zzz_regexpdead.go) tell it so by the bytecode after the call:
+// reads (regexpdead.go) tell it so by the bytecode after the call:
 // each answer is the interpreter's and Node's, with the collector idle and
 // while it marks, the calls made natively, and none leaves replace told of
 // a call.

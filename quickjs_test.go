@@ -5563,7 +5563,7 @@ func TestBigIntGivenBack(t *testing.T) {
 }
 
 // TestBigIntSoleLocals pins the BigInts a local holds alone, which register
-// code gives back when the local is assigned the next (zzbigown.go): sums,
+// code gives back when the local is assigned the next (bigown.go): sums,
 // products, remainders and shifts of numbers of hundreds of bits assigned
 // to the locals they are made of, run twice; and locals whose values
 // something else keeps -- copied to another local, pushed, stored to a

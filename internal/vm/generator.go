@@ -78,12 +78,12 @@ type generator struct {
 	// loop over it, which no loop has taken yet (see genAlloc).
 	room bool
 	// reg marks a generator whose body runs as register code, its vals
-	// the frame's window and its pc a register pc (zzreg_zgen.go): every
+	// the frame's window and its pc a register pc (reg_generator.go): every
 	// generator newGenerator makes.
 	reg bool
 	// awaitJob marks an async function its await's job is resuming, from
 	// the job queue itself (resumeAwait): an await of a settled value
-	// there may go on in place (zzreg_zgen.go).
+	// there may go on in place (reg_generator.go).
 	awaitJob bool
 }
 

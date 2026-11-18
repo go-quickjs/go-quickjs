@@ -14,7 +14,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
-// The typed table's call path (zzreg_zzty.go), by its prototype's typed
+// The typed table's call path (reg_typed.go), by its prototype's typed
 // twins (bytecode.TypedTwin, QJS_TYPEDPROTO): typed code that is its
 // ordinary code run through the typed table, entered by call sites alone.
 

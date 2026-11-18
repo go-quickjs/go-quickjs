@@ -13,8 +13,7 @@ import "unsafe"
 // does. An object that keeps its prototype in its table (objPolyProto) is
 // not filled in: the body's own read, whose site decides how the code's
 // classes keep theirs (sharedProtos), is left to make it. Out of
-// leafForward, which only calls it, and of the files before the layout
-// lock's anchors (zzz_*), so that nothing they hold moves.
+// leafForward, which only calls it.
 //
 //go:noinline
 func (r *Runtime) fwdCache(cl *closure, site int, o *Object, key Atom) *propCache {

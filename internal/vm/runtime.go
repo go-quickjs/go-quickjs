@@ -269,7 +269,7 @@ type Runtime struct {
 	// see keyString.
 	keyAtoms [256]keyAtom
 	// bigTmp is where BigInt arithmetic makes a result before it is held
-	// in its Value or a BigInt of its own (zzbigint.go's bigRoom).
+	// in its Value or a BigInt of its own (bigint.go's bigRoom).
 	bigTmp []uint
 	// modfetch is the asynchronous module loader and its calls, made when a
 	// loader is installed; see modulefetch.go.
@@ -279,13 +279,13 @@ type Runtime struct {
 	// script running; see hostCall.
 	hostCalls int
 	// debug is the debugger of a runtime made for one, and nil for any
-	// other; see zdebug.go.
+	// other; see debug.go.
 	debug *debugState
 	// The room of the realm's powFn, atan2Fn and hypotFn, which were the
 	// runtime's, so that no field the interpreter reads moves.
 	_ [3]uintptr
 	// sourceMaps maps stack traces through scripts' source maps, once a
-	// host gives a loader; see zsourcemap.go.
+	// host gives a loader; see sourcemap.go.
 	sourceMaps *sourceMaps
 	// treeSuspend is read by nothing: it keeps the room of the removed
 	// closure trees' suspension, so that no other field moves.
@@ -304,7 +304,7 @@ type Runtime struct {
 	// is.
 	bigFree *bigFreeList
 	// arraySamples are the literal sites holding a sample, which a
-	// collection or the turn's end releases (zzz_arrayroom.go). They take the
+	// collection or the turn's end releases (arrayroom.go). They take the
 	// room of the realm's leafFns, which was the runtime's, so that no later
 	// field moves.
 	arraySamples []*arrayRoom
@@ -370,7 +370,7 @@ type Runtime struct {
 	// cbFree is the built-ins' callbacks not in use, a list by their next
 	// (regCallbackOf).
 	cbFree *regCallback
-	// concats is the memo of short concatenations (zzz_concatpair.go),
+	// concats is the memo of short concatenations (concatpair.go),
 	// made once concatCount of them have been made without it.
 	concats     *pairMemo
 	concatCount uint32
@@ -679,7 +679,7 @@ type Realm struct {
 	// deep is the cache of the additions made at the sites that have given
 	// up their own (deepStore), made when one first is.
 	deep *deepAdds
-	// has is the cache of the in operator's answers (see zvreg_ain.go),
+	// has is the cache of the in operator's answers (see reg_in.go),
 	// made when one is first remembered.
 	has *hasCache
 	// finalizing are the FinalizationRegistry objects with this realm's
@@ -833,7 +833,7 @@ type closureCode struct {
 	regTyped *regCode
 	_        [8]byte
 	// reg is the template's register code, once a call has found it has
-	// some, for the register interpreter's calls (see zzreg_call.go).
+	// some, for the register interpreter's calls (see reg_call.go).
 	reg *regCode
 	// regCalls are the register code's call caches (rhCallW), made at its
 	// first call.

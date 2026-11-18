@@ -1161,7 +1161,7 @@ func (r *Runtime) initStringRegExpMethods() {
 	})
 
 	// And then RegExp.prototype's exec and test made leaves
-	// (zzz_regexpleaf.go).
+	// (regexpleaf.go).
 	regexpLeaves[struct{}](r, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.dispatchStringRegExp(this, args, rt.wellKnown.search, "", nil)
 	})

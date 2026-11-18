@@ -15,7 +15,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// Register code compiled in the background (zzjit_background.go): the
+// Register code compiled in the background (jit_background.go): the
 // runtime's goroutine lowers the function's register code and asks its
 // feedback ahead (jitRegSnapshotOf); a worker of the process's builds the
 // function from the snapshot, optimizes it and runs the backend

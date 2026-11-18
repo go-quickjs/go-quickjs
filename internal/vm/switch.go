@@ -16,7 +16,7 @@ package vm
 // a case has its length. Integers in a range of no more than
 // switchDense are an array's index, other numbers a map's key; a
 // switch (typeof x) of type names a table of the eight types, x's kind
-// asked (see zzz_typeof.go) and its name stored where the discriminant
+// asked (see typeof.go) and its name stored where the discriminant
 // goes.
 
 // switchDense is the most integers' range an array of their blocks is

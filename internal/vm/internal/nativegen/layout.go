@@ -32,7 +32,7 @@ type Layout struct {
 }
 
 // layoutTag is the build tag that alone builds vm's NativeLayout
-// (zzzyn_native_layout.go) and the helper that prints it.
+// (native_layout.go) and the helper that prints it.
 const layoutTag = "quickjs_nativelayout"
 
 // helper is the helper's package, which imports vm.
@@ -45,7 +45,7 @@ var wordSize = map[string]int64{"amd64": 8, "arm64": 8}
 // jitTarget says where a build with the quickjs_jit tag has the JIT, for
 // a target architecture: amd64's on linux and windows, arm64's on darwin
 // and linux
-// (vm's zzjit_*.go). Its layout has the JIT's fields.
+// (vm's jit.go and jit_*.go). Its layout has the JIT's fields.
 var jitTarget = map[string]bool{"amd64": true, "arm64": true}
 
 // ReadLayout reads vm's layout in a build for goarch with the build tags
@@ -175,5 +175,5 @@ func (r *reader) err() error {
 		return nil
 	}
 	sort.Strings(r.failed)
-	return fmt.Errorf("nativegen: vm's layout has no %s (NativeLayout, zzzyn_native_layout.go)", strings.Join(r.failed, ", "))
+	return fmt.Errorf("nativegen: vm's layout has no %s (NativeLayout, native_layout.go)", strings.Join(r.failed, ", "))
 }

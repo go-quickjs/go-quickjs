@@ -10,7 +10,7 @@ import (
 )
 
 // A string's replace by a template without a $, both ASCII, is made in one
-// pass (zzz_regexpreplace.go) for native code's calls of replace too: run,
+// pass (regexpreplace.go) for native code's calls of replace too: run,
 // compiled, replaces in its loop, with the collector idle and while it
 // marks, and each answer is the interpreter's and Node's
 // (replaceFlatTestWant).

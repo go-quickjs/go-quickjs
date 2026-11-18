@@ -9,7 +9,7 @@ import (
 // The Go handlers' fast paths that the native handlers have too
 // (nativegen), for the Go table, the fallback of every other
 // architecture and of QJS_NONATIVE: in a file of their own, sorting after
-// the handlers zzreg_table.go holds, whose entries this file's init
+// the handlers reg_table.go holds, whose entries this file's init
 // replaces, so that what is added here moves no handler there
 // (docs/register-interpreter.md, "The loop").
 func init() {

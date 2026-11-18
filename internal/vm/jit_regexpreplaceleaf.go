@@ -13,7 +13,7 @@ import (
 // Native code's call of String.prototype.replace given a RegExp that is no
 // literal's and a string, s.replace(re, ""), is a leaf's call (ssa.GoLeaf),
 // made without a frame by the VM's routine for leaves, as exec's and
-// test's are (zzjit_regexpleaf.go): compiled a leaf's call of Go of its own
+// test's are (jit_regexpleaf.go): compiled a leaf's call of Go of its own
 // from the first compile, where its site's cache holds the built-in and
 // the template is a string constant (jitRegFeedback's Leaf): Octane's
 // runBlocks, each run a few times, had made most of their replaces before

@@ -32,7 +32,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 //     them, as a site's holds any layout.
 //   - The JIT's entries, whose code holds its realm's objects: the cache lets
 //     go of a realm none of whose entries has run for a second of the
-//     program's time (zzz_jitrealm.go).
+//     program's time (jit_realm.go).
 //   - The shape tree's count: what a realm's prototypes and its literals' roots
 //     grew is counted against budgets they hold, so that the tree has it back
 //     with them (shapeBudget, chargeChild).

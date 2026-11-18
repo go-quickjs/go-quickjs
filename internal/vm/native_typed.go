@@ -10,7 +10,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// The native handlers' code entry of typed code (zzreg_zzty.go): a
+// The native handlers' code entry of typed code (reg_typed.go): a
 // context whose table is the typed dispatcher's (nativeTyped), and whose
 // exits run the typed table's Go handlers. nativeLoop and nativeCallMiss
 // name the ordinary table, and making them take it would change the

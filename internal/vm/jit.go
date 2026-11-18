@@ -57,7 +57,7 @@ const (
 	jitInvocationsAfterICUpdate = 500
 )
 
-// jitBuilt guards the JIT's hooks in the interpreter; see zzjit_disabled.go.
+// jitBuilt guards the JIT's hooks in the interpreter; see jit_disabled.go.
 const jitBuilt = true
 
 type jitFields struct {
@@ -388,7 +388,7 @@ func (r *Runtime) jitLoopFn(kind int) *Object {
 
 // jitLoopTyped is the typed array a loop of a %TypedArray%.prototype
 // method's is made over, as Go reads it (jitTypedLoops): a view of a
-// number type or a BigInt type (zzjit_bigtyped.go) and a fixed length, its prototype its type's, the realm's --
+// number type or a BigInt type (jit_bigtyped.go) and a fixed length, its prototype its type's, the realm's --
 // an instance of a subclass, a view that tracks a resizable buffer's
 // length, are Go's -- its storage looked at, which native code reads its
 // length and elements by (fixedStorage); or nil.
@@ -449,7 +449,7 @@ type jitCodeFields struct {
 	jitResumeSkip uint8
 	jitHint       [4]byte
 	// jitRegRefused says the function is not compiled from its register
-	// code; jitReg is its code, nil until compiled (zzjit_zregtier.go).
+	// code; jitReg is its code, nil until compiled (jit_tier.go).
 	jitRegRefused bool
 	// jitRegHostOnly says the cache held the function's code refused for
 	// host operations alone at the last resumption Go made of it, and
@@ -463,7 +463,7 @@ type jitCodeFields struct {
 	// run in (jitRegKeyOf), made at its first use.
 	jitRegKey jitKey
 	// jitRegCounts are what the feedback dispatcher counted of the
-	// function's register code (zzjit_zregfreq.go): its runs, then the
+	// function's register code (jit_freq.go): its runs, then the
 	// calls made at each of its call sites; nil until its call sites'
 	// caches are made, and in a runtime that runs no JIT.
 	jitRegCounts []uint64
@@ -805,10 +805,10 @@ type jitState struct {
 	// realm of the entries it asks for (jitKey).
 	rt *Runtime
 	// regCache is the code compiled from functions' register code, by the
-	// same keys (zzjit_zregnative.go): the cache's other form.
+	// same keys (jit_native.go): the cache's other form.
 	regCache map[jitKey]*jitRegEntry
 	// regLinks are the links native callers call functions' register code
-	// through, by the same keys (zzjit_zregcall.go).
+	// through, by the same keys (jit_call.go).
 	regLinks map[jitKey]*jitLink
 	// regGoOn is the frame the interpreter runs where register code left
 	// it with no entry, and regForced marks the interpreter's check made
@@ -1095,7 +1095,7 @@ type jitState struct {
 	regRetired []*jitRegEntry
 	// regJobs are the register compiles in the background, in the order
 	// they were handed over, and regPendingJobs each by its function's
-	// key (zzjit_zregbg.go).
+	// key (jit_bg.go).
 	regJobs        []*jitRegJob
 	regPendingJobs map[jitKey]*jitRegJob
 	// regSnapMisses counts the register compiles in the background whose
@@ -1648,7 +1648,7 @@ func (s *jitState) epoch() uint64 {
 // jitEpochNow and jitFlushNow, where a test sets them, stand in for the
 // cache's clocks (epoch, flushNow) of every runtime; jitClocksForTest,
 // set by the package's tests, for one runtime's where it says so -- every
-// test runtime's held but those a test lets run (zzjit_clocks_test.go).
+// test runtime's held but those a test lets run (jit_clocks_test.go).
 // Nil outside tests.
 var (
 	jitEpochNow, jitFlushNow func() uint64

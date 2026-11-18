@@ -24,11 +24,11 @@ const regLoopMaxBytes = 864
 // registers, the code and the state, is saved once, before the loop, and
 // only read back after each call. A value live across the call that it
 // stored at each dispatch would cost every instruction of every program.
-func TestRegLoopIsSmall(t *testing.T) { testRegLoopIsSmall(t, "zzreg_run.go", "runReg") }
+func TestRegLoopIsSmall(t *testing.T) { testRegLoopIsSmall(t, "reg_run.go", "runReg") }
 
 // TestRegTypedLoopIsSmall is TestRegLoopIsSmall for runRegTyped, the
-// typed table's copy of the loop (zzreg_zzty.go).
-func TestRegTypedLoopIsSmall(t *testing.T) { testRegLoopIsSmall(t, "zzreg_zzty.go", "runRegTyped") }
+// typed table's copy of the loop (reg_typed.go).
+func TestRegTypedLoopIsSmall(t *testing.T) { testRegLoopIsSmall(t, "reg_typed.go", "runRegTyped") }
 
 // testRegLoopIsSmall checks the loop of the function name, in file.
 func testRegLoopIsSmall(t *testing.T, file, name string) {
@@ -80,7 +80,7 @@ func testRegLoopIsSmall(t *testing.T, file, name string) {
 		t.Fatalf("no %s in the build", name)
 	}
 	if size > regLoopMaxBytes {
-		t.Errorf("%s is %d bytes, past %d: the loop is the same for every operation, each of which is a handler (zzreg_table.go)", name, size, regLoopMaxBytes)
+		t.Errorf("%s is %d bytes, past %d: the loop is the same for every operation, each of which is a handler (reg_table.go)", name, size, regLoopMaxBytes)
 	}
 	out, err := exec.Command(gotool, "tool", "objdump", "-s", `vm\.\(\*Runtime\)\.`+name+`$`, exe).CombinedOutput()
 	if err != nil {

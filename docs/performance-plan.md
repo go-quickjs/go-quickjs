@@ -177,12 +177,12 @@ the program's own objects, which only allocating less removes.
   blocks by size class would take them back. The risk is a wrong answer
   rather than a crash: anything holding the slice across a growth --
   `o.elemsOf()` passed to a helper that appends -- would see reused values
-  rather than stale ones. A literal's learned room (`zzz_arrayroom.go`) and
-  growth by half from 16,384 elements (`zzz_growelems.go`) took most of
+  rather than stale ones. A literal's learned room (`arrayroom.go`) and
+  growth by half from 16,384 elements (`growelems.go`) took most of
   the bytes; a capacity floor on the first growths does not help (below).
 - **Strings.** Splay's `String(key)` makes 24,000 allocations a run
   (2026-10-12, *unverified*). Appends a binding owns grow in place
-  (`compiler/strappend.go`, `vm/zzz_strappend.go`); forms not taken are
+  (`compiler/strappend.go`, `vm/strappend.go`); forms not taken are
   `out = out + x`, as Pug writes it, a template's `with`, as lodash's, and
   a closure's append whose right side runs code, which could append to the
   binding between its read and the addition.
@@ -266,7 +266,7 @@ the program's own objects, which only allocating less removes.
   function, in the scopes the load recorded around it -- eval, with,
   arguments and class fields included -- which the walk is not.
 - **A `Program` run again** keeps its literals' roots (KI-66,
-  `zzz_rerun.go`) and nothing else: each run interns its names, makes its
+  `rerun.go`) and nothing else: each run interns its names, makes its
   constants and fills every cache anew, most of what a run of a large
   program pays before it does anything. Keeping a function's caches from
   run to run would not serve as it stands: a class a run defines is a new
@@ -276,7 +276,7 @@ the program's own objects, which only allocating less removes.
   runtime, before deciding.
 - **`Eval` of one source for each request** compiles anew. A literal that
   names its keys shares a layout with every other of them in the realm
-  (`zzz_literalkeys.go`), and what reads it keeps what it learned; `{}`
+  (`literalkeys.go`), and what reads it keeps what it learned; `{}`
   filled in after, a spread and the rest make their shapes anew. A cache of
   compiled source would serve such hosts; none has asked for one.
 
@@ -449,7 +449,7 @@ the stack JIT lowered; their counts are from then.
   (1,223 against 1,326 ms over four placements, 2026-11-18), where it had
   taken 1.49 times, zlib 3.3 times; Are We Fast Yet's takes 1.004 times,
   DeltaBlue 1.03 (1.13 before). RegExp's share is its exec arrays: the
-  interpreter reuses them (`zzz_regexpreuse.go`), which a runtime with the
+  interpreter reuses them (`regexpreuse.go`), which a runtime with the
   JIT does not, in code native or interpreted.
 - **Where a compile's time and memory go.** `allocate` 14% of a compile,
   the build's `plan` 15% (most of it the feedback's answers), the
@@ -706,7 +706,7 @@ round measures it there.
   record the maps and elements kinds they meet in the interpreter, so
   optimized code is compiled for a typed array from its first compile. Here
   an element read's kind is learned at native code's own exits
-  (`zzjit_zregelem.go`): a site the first compile took for an array's meets
+  (`jit_elem.go`): a site the first compile took for an array's meets
   typed arrays at exits, and the code runs on, learning, until a budget
   every cache change restarts is spent -- Gameboy's `executeIteration` read
   `TICKTable[op]` as an array's for 3,076 exits a run. The fix is V8's: the
@@ -800,7 +800,7 @@ Measured and dropped; each needs a new angle before it is tried again.
   alone, and native spreads and clones are compiled along it. With the
   JIT, over four placements, `object_spread` +174%, `prop_clone` +192%,
   `prop_delete` +29%, `object_getter_spread` +36%, `object_computed` +13%.
-  A root for each set of keys is kept (`zzz_literalkeys.go`).
+  A root for each set of keys is kept (`literalkeys.go`).
 - **An outgrown creation site's objects in a table sized to its largest**,
   up to 32 properties: one large outlier makes every small object take 1.6
   times the memory.

@@ -7,7 +7,7 @@ import "testing"
 // order, come out of Object.keys in order, and setting the
 // array's length below them deletes them from the highest down, stopping at
 // none but a key that may not go: Node's answers (v26.10.0). The keys had
-// been sorted in the square of their number (zzz_sortindexed.go), seconds
+// been sorted in the square of their number (sortindexed.go), seconds
 // for these.
 func TestSortIndexedKeys(t *testing.T) {
 	t.Parallel()

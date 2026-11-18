@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// A match's array and its strings are made together (zzz_regexpresult.go)
+// A match's array and its strings are made together (regexpresult.go)
 // for native code's leaves' calls of exec too: run's Exec, compiled, calls
 // exec through the VM's routine for leaves, with the collector idle and
 // while it marks, and each answer is the interpreter's and Node's

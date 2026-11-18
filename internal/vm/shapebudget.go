@@ -23,7 +23,7 @@ import (
 // met anew.
 //
 // The first ordinary object made on a prototype keeps it in its table, of a
-// layout of the runtime's for such objects (zzz_polyproto.go), most
+// layout of the runtime's for such objects (polyproto.go), most
 // prototypes made and dropped being of one object each; where it cannot --
 // a prototype of a layout of its own, or in no tree -- it joins no tree: its
 // layout is its own (firstRoot). A constructor's root is counted as its first object is given
@@ -319,7 +319,7 @@ func ctorChild[_ any](s *shape, e shapeEdge) (*shape, bool) {
 // gives the class's prototype object its parent's prototype too: a
 // subclass made by each call had had a layout of its own made for its
 // prototype, on which an object then made could not keep the prototype in
-// its table (zzz_polyproto.go), as on a prototype of a layout no other has.
+// its table (polyproto.go), as on a prototype of a layout no other has.
 //
 //go:noinline
 func classProto[_ any](ctor, parent *Object) {

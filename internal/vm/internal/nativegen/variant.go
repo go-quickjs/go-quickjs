@@ -47,7 +47,7 @@ type variant struct {
 	typedOps bool
 }
 
-// jitBuild is the JIT's build constraint (internal/vm's zzjit_*.go).
+// jitBuild is the JIT's build constraint (internal/vm's jit.go and jit_*.go).
 const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || ((darwin || linux) && arm64))"
 
 // variants are the dispatchers, plain first.

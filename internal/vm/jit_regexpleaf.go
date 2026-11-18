@@ -2,7 +2,7 @@
 
 package vm
 
-// Native code's call of RegExp.prototype's exec or test (zzz_regexpleaf.go)
+// Native code's call of RegExp.prototype's exec or test (regexpleaf.go)
 // is compiled a leaf's call of Go of its own (ssa.GoLeaf), made through the
 // VM's routine for leaves without a frame, where its site's cache holds the
 // built-in at the compile (jitRegFeedback's Leaf). A literal's call is one

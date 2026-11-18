@@ -7,7 +7,7 @@ import (
 )
 
 // regexpExecDirectTestSrc calls exec where its array may be made again
-// (zzz_regexpreuse.go), as Octane's Exec does: on global, sticky, global
+// (regexpreuse.go), as Octane's Exec does: on global, sticky, global
 // and sticky, and unicode patterns from lastIndex at, which it writes
 // before, reads after, before and past the subject's end and between the
 // halves of a pair; given a number and undefined for the subject; on a

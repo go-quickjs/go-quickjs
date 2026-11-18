@@ -41,7 +41,7 @@ var leafOps [elemNativeFirst]leafFunc
 // where their check passed -- a match that spends the step budget or
 // meets an interrupt -- and then make no error: they err with
 // errRegExpLeafAgain, having made nothing, and are made again with a
-// frame, which throws (see zzz_regexpleaf.go).
+// frame, which throws (see regexpleaf.go).
 //
 // Each call that applies leaves asks the check itself and calls the
 // function it holds (funcData.native) -- callDirect, callRest, pureInvoke,

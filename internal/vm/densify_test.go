@@ -3,7 +3,7 @@ package vm
 import "testing"
 
 // densifySrc fills arrays that are sparse while they are filled
-// (zzz_densify.go): from the end down, from 10 to 70,000 elements; new
+// (densify.go): from the end down, from 10 to 70,000 elements; new
 // Array(n) past the length its holes are written in for, filled up and
 // every other element; an array given its last element first; one with
 // named properties around its elements; one with an index read-only, and

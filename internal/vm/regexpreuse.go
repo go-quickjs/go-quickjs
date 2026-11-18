@@ -52,7 +52,7 @@ import (
 // leaf's check, the leaf's call without a frame, the frame and the tick
 // where it is refused. The call only tells exec's leaf, just before, of
 // the call's local and the frame's locals (execReuseCall, as
-// zzz_regexpdead.go tells it of a result nothing reads), which the leaf
+// regexpdead.go tells it of a result nothing reads), which the leaf
 // takes as it begins, and uses where it makes the array of a match of
 // that receiver. Native code tells it nothing, and so where a runtime runs
 // the JIT nothing is told: a frame native code took over in a loop holds

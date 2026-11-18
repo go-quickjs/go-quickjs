@@ -45,7 +45,7 @@ import (
 // wherever the method read is exec's or replace's; any other call is made
 // as before. Native code tells the functions through its leaf's call's
 // description (ssa.CallSite's Unused) or the bytecode after its call of Go
-// (zzjit_regexpdead.go).
+// (jit_regexpdead.go).
 //
 // The functions are generic, each instantiated with struct{} alone: Go
 // lays a generic function's instantiations out after every function and

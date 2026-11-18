@@ -56,22 +56,38 @@ concurrently.
 - `internal/vm` is sensitive to code layout. Go lays out a package's
   functions in file-name order, then all its closures, each aligned to 32
   bytes, so adding, moving or renaming code there -- even code a benchmark
-  never runs -- can move the V8 suite by 5 to 10%. Do not rename or reorder
-  its files or move code between them without comparing builds with
-  `internal/cmd/v8bench/placements` (see Validation); the JIT's
-  `zzjit_*.go` and the register interpreter's `zzreg_*.go` and
-  `zzzy*_*.go` sort last, in that order, on purpose, so that what is added
-  in a later group moves nothing of an earlier one.
+  never runs -- can move the V8 suite by 5 to 10%. The layout lock (below),
+  not file order, keeps the hot code in place, so files are named by
+  topic -- `jit.go` and `jit_*.go` for the JIT's side, `reg_*.go` for the
+  register interpreter, `native_*.go` and `.s` for the native handlers --
+  and a new file goes where its topic is. Do not rename or reorder files
+  or move code between them without comparing builds with
+  `internal/cmd/v8bench/placements` (see Validation): what lies between
+  the lock's anchors still moves. Names still decide three things. The
+  lock's pads sort right before their anchors (`jit_layoutpad.go` before
+  `jit_leaffast.go`, `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go`
+  around `reg_run.go`, `vm_b_layoutpad.go` before `vm_call.go`,
+  `z_layoutpad.go` after every file), and the assembly pad,
+  `native_a_layoutpad_*.s`, after the JIT's assembly and before
+  `native_<arch>.s`, the first of the native handlers' block. Go runs a
+  package's inits in file-name order, and the handler tables are written
+  and read by several: the Go handler tables are written by
+  `reg_table.go` and each `reg_table_<name>.go`, then copied by
+  `reg_tables.go`'s init into the native exit table, then by
+  `reg_typed.go`'s into the typed tables, an order those names keep
+  (`TestHandlerTables` pins every table's entries). And go generate runs
+  in file-name order: snapgen (`generate.go`), nativegen
+  (`native_run.go`), then layoutpad (`z_layoutpad.go`).
 - The register interpreter's hot code is its loop, `runReg`, its call path,
   `rhCallW`, `regEnterW`, `regCallSlow` and `regRunFD`, the native
   dispatcher's Go side, `nativeLoop` and its loop `nativeDrive`, and the
   native handlers' block.
   `runReg` is a fixed loop over a table of handlers, the same for every
   operation (`TestRegLoopIsSmall`): an operation is a handler of its own,
-  never a case added to it. A Go handler added to `zzreg_table.go` moves
-  every handler after it, so a new operation's handlers go in a file that
-  sorts after it (`zzreg_zztable_*.go`) and replace their table entries in
-  its `init`; its value is appended before `bytecode.ROpCount`, never
+  never a case added to it. A Go handler added to `reg_table.go` moves
+  every handler after it, so a new operation's handlers go in a file of
+  their own, `reg_table_<name>.go`, which sorts after it, and replace
+  their table entries in its `init`; its value is appended before `bytecode.ROpCount`, never
   inserted, and its native handler is appended to nativegen's
   `handlerOps`, with any path its handler takes rarely laid after the last
   handler, so that no handler before it moves. A new operation lands with
@@ -185,22 +201,23 @@ Do not manually edit generated files or their binary companions:
   same code; the UTF-8 one is patched where `internal/asciigen` says. After
   changing `exec.go`, run `go generate ./internal/regexp`.
   `TestASCIIMatcherGenerated` fails while either file is out of date.
-- `internal/vm/zzjit_snapshot_gen.go`, the JIT's snapshot of a build's
+- `internal/vm/jit_snapshot_gen.go`, the JIT's snapshot of a build's
   feedback -- its answer to and its asker of each of `jitRegFeedback`'s
   methods -- written by `internal/vm/internal/snapgen` from those methods,
-  which it reads from the package's `zzjit_*.go` files only. After changing
-  a method of `jitRegFeedback`, run `go generate ./internal/vm`;
+  which it reads from the package's `jit.go` and `jit_*.go` files only.
+  After changing a method of `jitRegFeedback`, run `go generate ./internal/vm`;
   `TestSnapshotGenerated` fails while the file is out of date.
-- `internal/vm/zzzyn_native_handlers_amd64.s`,
-  `zzzyn_native_handlers_arm64.s`, `zzzyn_native_feedback_amd64.s` and
-  `zzzyn_native_feedback_arm64.s`, the register interpreter's native
-  handlers on each architecture with their plain table, and the feedback
-  dispatcher's table and own handlers, built with the JIT alone: machine
+- `internal/vm/native_handlers_amd64.s`, `native_handlers_arm64.s`,
+  `native_typed_amd64.s`, `native_typed_arm64.s`,
+  `native_feedback_amd64.s` and `native_feedback_arm64.s`, the register
+  interpreter's native handlers on each architecture with their plain
+  table, the typed code's table, and the feedback dispatcher's table and
+  own handlers, built with the JIT alone: machine
   code made with the JIT's assemblers by `internal/vm/internal/nativegen`
   (docs/register-interpreter.md, "Native handlers"). The generator reads
   package vm's private layout -- the context, a frame, the Runtime fields
   and the constants the handlers use -- as plain numbers from
-  `NativeLayout` (`zzzyn_native_layout.go`), which only its helper's
+  `NativeLayout` (`native_layout.go`), which only its helper's
   build tag, `quickjs_nativelayout`, builds. After changing the emitter, or
   a layout its offsets come from, run `go generate ./internal/vm` on amd64
   or arm64 (`go run ./internal/nativegen/cmd` in `internal/vm`
@@ -213,7 +230,7 @@ Do not manually edit generated files or their binary companions:
   fails while a file is out of date; on a host with no JIT (darwin amd64,
   say), it checks every file but the feedback dispatchers'.
 - `internal/vm/*_layoutpad.go`, `internal/vm/layoutpad_*.go`,
-  `internal/vm/zzzyn_native_a_layoutpad_*.s`,
+  `internal/vm/native_a_layoutpad_*.s`,
   `internal/regexp/aa_layoutpad.go` and `internal/regexp/layoutpad_*.go`,
   the layout lock's pads and the constants that size them for each
   configuration,
@@ -351,7 +368,7 @@ kinds:
   code go after about a second of program time without use, which a slow
   build (checkptr, qemu) reaches. The vm tests therefore hold every
   runtime's JIT clocks by default, per runtime, so that parallel tests keep
-  theirs (`zzjit_clocks_test.go`). A test about aging or flushing sets the
+  theirs (`jit_clocks_test.go`). A test about aging or flushing sets the
   clocks itself (`jitEpochNow`, `jitFlushNow`) or lets its runtime's run
   (`jitRunClocksForTest`), and says why. `QUICKJS_TEST_FAST_CLOCKS=1` runs
   the clocks it lets run fast.

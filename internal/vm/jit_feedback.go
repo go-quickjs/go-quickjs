@@ -28,7 +28,7 @@ import (
 // met, and the register pcs whose guards failed (Generic). jitFeedback
 // holds the state its answers share; the methods the builder asks are
 // jitRegFeedback's, and the snapshot of a background compile
-// (zzjit_snapshot_gen.go) is generated from them.
+// (jit_snapshot_gen.go) is generated from them.
 type jitRegFeedback struct {
 	fb *jitFeedback
 	rc *bytecode.RegCode

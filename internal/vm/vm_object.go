@@ -194,7 +194,7 @@ const (
 	// value, under the hidden key atomProtoSlot, rather than in its layout:
 	// the first ordinary object made on a prototype, which shares the
 	// runtime's layouts of such objects whatever its prototype is
-	// (zzz_polyproto.go). Native code reads it too (abi.Encoding's
+	// (polyproto.go). Native code reads it too (abi.Encoding's
 	// FlagPoly).
 	objPolyProto
 	// objInlineProps marks an object whose properties are still in the room
@@ -293,7 +293,7 @@ type arrayExt struct {
 	// -- and because an array is not required to have its last index present.
 	arrayLen uint32
 	// densifyAt is, on a sparse array, how many dense elements it has to
-	// have before densify looks at it again (zzz_densify.go). It fills what
+	// have before densify looks at it again (densify.go). It fills what
 	// would be padding.
 	densifyAt uint32
 }

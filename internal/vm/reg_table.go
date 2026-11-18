@@ -2125,7 +2125,7 @@ func rsArguments(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) 
 	return pc + 1
 }
 
-// rsNewArrayK is new_array_k: the shared literal (zvreg_a0shared.go), the
+// rsNewArrayK is new_array_k: the shared literal (reg_sharedlit.go), the
 // site keeping the array of the constants, and each array sharing its
 // elements until one is written.
 func rsNewArrayK(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {

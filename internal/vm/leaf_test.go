@@ -33,7 +33,7 @@ func TestNativeLeafChecksExact(t *testing.T) {
 	// Each native leaf's function, as the calls take it (funcData.native).
 	fns := map[uint8]NativeFunc{}
 	// RegExp's exec and test among them, which are not among the leaves
-	// native code's calls of Go are asked to be of (zzz_regexpleaf.go).
+	// native code's calls of Go are asked to be of (regexpleaf.go).
 	for _, o := range append(r.leafFns, r.regexpExecFn, r.regexpTestFn) {
 		if fd := o.fn(); fd.elemOp >= elemNativeFirst {
 			fns[fd.elemOp] = fd.native

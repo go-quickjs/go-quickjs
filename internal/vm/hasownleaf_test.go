@@ -2,7 +2,7 @@ package vm
 
 import "testing"
 
-// Object.prototype.hasOwnProperty is a native leaf (zzz_hasownleaf.go):
+// Object.prototype.hasOwnProperty is a native leaf (hasownleaf.go):
 // called without a frame where its receiver is an object, no proxy nor
 // module namespace, and its key no object, and as the built-in otherwise.
 // A hot loop asks it of each kind -- an object's own and inherited keys, a

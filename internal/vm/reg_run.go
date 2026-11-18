@@ -20,9 +20,6 @@ import (
 // proves every register an instruction names is below the frame's count,
 // and a frame is given that many slots before it runs. The code is read the
 // same way, every jump proven to land in it.
-//
-// The files sort after the JIT's (zzjit_*.go), so that the functions they
-// add move none of an earlier file's.
 
 // regsBuilt counts the functions given register code.
 var regsBuilt atomic.Int64
@@ -56,7 +53,7 @@ type regCode struct {
 	// args says a frame keeps its arguments as passed, for RArguments.
 	args bool
 	// suspends marks a generator's or an async function's code, which
-	// only a generator's resumption runs (zzreg_zgen.go).
+	// only a generator's resumption runs (reg_generator.go).
 	suspends bool
 	// cellThis marks a derived constructor whose this binding is the
 	// runtime's cell for its frame's depth (thisCells): its body makes no
@@ -135,7 +132,7 @@ type regCode struct {
 //
 // The loop is the same few instructions for every operation: the
 // instruction read, its handler called through regTable, and the pc it
-// returns gone on at (zzreg_table.go). A handler's ^pc runs the
+// returns gone on at (reg_table.go). A handler's ^pc runs the
 // operation's slow function from regSlowTable; regDone leaves: with the
 // state's error, or with what the return it ended at returns, which the
 // loop reads itself, so that ret's handler stores nothing. Nothing of the
@@ -147,7 +144,7 @@ func (r *Runtime) runReg(f *frame, c *regCode, start int) (Value, error) {
 	}
 	if regNativeOn {
 		// the native handlers, which leave to this table's handlers
-		// what they do not do (zzzyn_native_run.go).
+		// what they do not do (native_run.go).
 		return r.nativeRun(f, c, start)
 	}
 	st := r.regEnter(f, c)
@@ -203,7 +200,7 @@ type regState struct {
 	err  error
 	next *regState
 	// native is the native handlers' context of the frames this state
-	// runs (zzzyn_native_run.go), made at its first native run and
+	// runs (native_run.go), made at its first native run and
 	// kept with the state.
 	native *nativeCtx
 }

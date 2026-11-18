@@ -22,7 +22,7 @@ func regTableRunSrc(t *testing.T, src string, native bool) string {
 }
 
 // TestRegTableFastPaths runs what the Go table's fast paths of
-// zzreg_zztable.go answer -- bin's division and int32 remainder, typed
+// reg_table_fast.go answer -- bin's division and int32 remainder, typed
 // arrays' elements stored at a constant index (numbers, and BigInts held
 // in their Values) and at a register's, in by the realm's cache and by an array's elements,
 // private members by their sites, a string's and a number's methods by

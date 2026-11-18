@@ -539,13 +539,13 @@ const (
 	elemArrIncludes
 	// RegExp.prototype's exec and test, on a RegExp neither global nor
 	// sticky, of a primitive, where the match calls nothing and cannot fail
-	// (zzz_regexpleaf.go). Next to the searches, which native code's calls
+	// (regexpleaf.go). Next to the searches, which native code's calls
 	// of Go do not make without a frame either (jitLeafOp).
 	elemRegExpExec
 	elemRegExpTest
 	// DataView.prototype's getters and setters, by the bytes they move, a
 	// setter of a BigInt apart: an index in the view, its buffer there
-	// (zzz_dataview.go).
+	// (dataview.go).
 	elemViewGet1
 	elemViewGet2
 	elemViewGet4
@@ -556,9 +556,9 @@ const (
 	elemViewSet8
 	elemViewSetBig
 	// Object.prototype.hasOwnProperty, on an object no proxy nor module
-	// namespace, of a key no object (zzz_hasownleaf.go).
+	// namespace, of a key no object (hasownleaf.go).
 	elemObjHasOwn
-	// Array.isArray, of anything but a proxy (zzz_isarrayleaf.go).
+	// Array.isArray, of anything but a proxy (isarrayleaf.go).
 	elemArrIsArray
 	// Native leaves a construction applies too, where new.target is the
 	// built-in itself (constructWithTarget): its call and its construction

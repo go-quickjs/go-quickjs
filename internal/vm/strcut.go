@@ -26,7 +26,7 @@ import (
 // The byte is free on these strings: strAppend reads it only on a string with
 // building set, which is a rope it made itself, and a cut is flat and is never
 // building; and it writes it only on such a rope. No other code and no native
-// code reads it (the JIT's offsets are ropes-free: zzjit_ssa.go's String
+// code reads it (the JIT's offsets are ropes-free: jit_ssa.go's String
 // fields). strRooted's bit keeps strAppend's small counts, which a string from
 // a runtime without a limit may still have, from being taken for a size.
 //

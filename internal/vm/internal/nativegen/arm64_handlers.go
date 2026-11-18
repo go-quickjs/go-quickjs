@@ -10,7 +10,7 @@ import (
 // armEmit makes arm64's handlers' code for variant v, as nativeEmit makes
 // amd64's: position-independent, every address it needs given by the
 // context in R25. plain's is the handlers' block
-// (zzzyn_native_handlers_arm64.s): the entry, the exit stub and every
+// (native_handlers_arm64.s): the entry, the exit stub and every
 // handler, in handlerOps' order. Another variant's is its own handlers
 // alone, which reach plain's code through the variant's table, R21, by a
 // load into R16 and a jump through it: arm64 has no jump through memory.

@@ -13,7 +13,7 @@ import (
 
 // Compiling in the background, as V8's concurrent recompilation does
 // (internal/jit/README.md, "Tier-up and on-stack replacement"). A compile is a jitRegJob
-// (zzjit_zregbg.go) in three steps: the runtime's goroutine lowers the
+// (jit_bg.go) in three steps: the runtime's goroutine lowers the
 // function's register code and asks its feedback ahead
 // (jitRegSnapshotOf); a worker of the process's builds, optimizes it and
 // runs the backend (jitRegJob.run), touching nothing of the runtime's; and

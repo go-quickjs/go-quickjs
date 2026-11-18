@@ -447,7 +447,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	// placed, are let go of by none meanwhile (regUnlink).
 	defer s.regBuilding(&rf)()
 	if background {
-		// Asked ahead here, built on a worker (zzjit_zregbg.go).
+		// Asked ahead here, built on a worker (jit_bg.go).
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
 			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, frameAt: frameAt,

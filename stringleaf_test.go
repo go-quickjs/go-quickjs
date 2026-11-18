@@ -50,7 +50,7 @@ function sweep() {
 `
 
 // TestStringLeaves pins that String's methods, called without a frame where
-// they run no script (zvreg_aleaf.go), answer as the ordinary call does and
+// they run no script (reg_leaf.go), answer as the ordinary call does and
 // as Node does, in the interpreter; the JIT's is internal/vm's
 // TestJITStringLeaves.
 func TestStringLeaves(t *testing.T) {

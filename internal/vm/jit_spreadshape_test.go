@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Object spread by layout (zzz_spreadshape.go) under the JIT: the spreads
+// Object spread by layout (spreadshape.go) under the JIT: the spreads
 // native code leaves to Go, and those it makes from what Go's taught it
 // (jitCopyLearn), make what the interpreter makes -- Node's answer -- with
 // the collector idle and while it marks.

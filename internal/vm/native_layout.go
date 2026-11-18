@@ -17,7 +17,7 @@ import (
 // prints them for the generator, which never imports the package.
 //
 // It builds on every architecture, with the types it reads
-// (zzzyn_native_ctx.go), so that the helper runs on any host: Go lays
+// (native_ctx.go), so that the helper runs on any host: Go lays
 // these structs out alike on every 64-bit one, so a 64-bit host's layout
 // is amd64's and arm64's (nativegen.ReadLayout). What a host cannot give
 // is a build's whose files its own GOOS and GOARCH leave out: the JIT's,

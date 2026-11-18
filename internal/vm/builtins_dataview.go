@@ -224,7 +224,7 @@ func (r *Runtime) initDataViewBuiltins() {
 		r.defMethod(proto, "set"+spec.name, 2, r.dataViewSetter(spec))
 	}
 
-	// Its toStringTag, and its accessors declared leaves (zzz_dataview.go).
+	// Its toStringTag, and its accessors declared leaves (dataview.go).
 	dataViewLeaves[struct{}](r, proto)
 }
 

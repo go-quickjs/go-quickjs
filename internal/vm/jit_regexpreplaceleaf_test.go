@@ -58,7 +58,7 @@ var regexpReplaceLeafCases = []struct {
 }
 
 // String.prototype.replace given a RegExp no literal's and a string is a
-// leaf's call of native code (zzjit_regexpreplaceleaf.go), made through
+// leaf's call of native code (jit_regexpreplaceleaf.go), made through
 // the VM's routine for leaves: each answer the interpreter's and Node's,
 // with the collector idle and while it marks -- the matches, the
 // replacements, lastIndex and the legacy statics -- and where the leaf's

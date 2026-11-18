@@ -20,7 +20,7 @@ import (
 // (feedbackEdges), as V8's JumpLoop spends its function's budget.
 //
 // The counts are the function's closure's code's jitRegCounts (package
-// vm, zzjit_zregfreq.go), which the top frame's cc reaches: slot 0 its
+// vm, jit_freq.go), which the top frame's cc reaches: slot 0 its
 // runs, counted at each return its frame makes -- the runs that end so,
 // a return being where a run of the interpreter's ends whoever began it,
 // Go or a native call; slot 1+C the calls made at call site C, counted at

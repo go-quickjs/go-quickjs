@@ -54,9 +54,9 @@ type arch struct {
 // file is the name of v's file for ar: the handlers' file for plain.
 func (ar *arch) file(v *variant) string {
 	if v == plain {
-		return "zzzyn_native_handlers_" + ar.goarch + ".s"
+		return "native_handlers_" + ar.goarch + ".s"
 	}
-	return "zzzyn_native_" + v.name + "_" + ar.goarch + ".s"
+	return "native_" + v.name + "_" + ar.goarch + ".s"
 }
 
 // arches are the architectures whose handlers are generated.

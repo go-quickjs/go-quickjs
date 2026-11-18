@@ -14,7 +14,7 @@ import (
 // from it, of which nothing the run before it learned knows. V8's literals
 // reach the same map run after run, along the transitions out of their
 // function's initial map. Here a literal whose keys the compiler says starts
-// from the realm's root for them (zzz_literalkeys.go), which is the same from
+// from the realm's root for them (literalkeys.go), which is the same from
 // run to run; any other's objects start from a root of its site's own, which
 // keeps their room and their transitions apart from every other site's, and
 // that it is the same root from run to run is had by keeping it: {}, filled in
@@ -55,7 +55,7 @@ type programTable struct {
 	byCode map[weak.Pointer[bytecode.Function]]*programSites
 	at     int
 	// roots is the roots of the realm's literals, by their keys
-	// (zzz_literalkeys.go), which a realm that runs no Program has too.
+	// (literalkeys.go), which a realm that runs no Program has too.
 	roots *literalRoots
 }
 
@@ -65,7 +65,7 @@ type programTable struct {
 type programSites struct {
 	// at is the literals' caches, each function's after those of the one
 	// before it in fns, and roots their roots: the realm's for a literal's
-	// keys (zzz_literalkeys.go), or one of the program's.
+	// keys (literalkeys.go), or one of the program's.
 	at    []uint32
 	roots []*shape
 	// keys is the hash of each literal's keys, 0 where it says none

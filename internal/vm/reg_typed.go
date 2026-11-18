@@ -7,9 +7,10 @@ import (
 )
 
 // The typed table (docs/register-interpreter.md, "The typed table"): the
-// loop that runs typed code, its table and its call handler, in a file
-// that sorts after the ordinary table's (zzreg_zztable*.go), so that what
-// it adds moves nothing of runReg's block.
+// loop that runs typed code, its table and its call handler. The file
+// sorts after the ordinary table's (reg_table*.go) and reg_tables.go:
+// its init copies the ordinary handlers once their inits have written
+// them (TestHandlerTables).
 //
 // Typed code is a template's twin of its ordinary code (closureCode's
 // regTyped), entered by call sites alone: a site of typed code caches only

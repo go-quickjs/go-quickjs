@@ -10,7 +10,7 @@ package vm
 //
 // As hasOwnProperty's leaf, the functions are generic, instantiated with
 // struct{} alone, and the check a method of a generic type used as a
-// method value (see zzz_hasownleaf.go); objectLeaves calls isArrayLeaf.
+// method value (see hasownleaf.go); objectLeaves calls isArrayLeaf.
 
 // isArrayLeaf gives the realm's Array.isArray its leaf's op.
 func isArrayLeaf[_ any](r *Runtime) {

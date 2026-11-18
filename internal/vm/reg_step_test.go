@@ -9,7 +9,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// regStepSrc runs the step-and-branches (zzreg_zztable_step.go) on their
+// regStepSrc runs the step-and-branches (reg_table_step.go) on their
 // fast paths and on every way off them, three rounds, each loop entered
 // and left at its boundaries: each of the six kinds, steps of 1, of 63
 // and of -64; counters past 2^53 and across the int32 range, fractions,

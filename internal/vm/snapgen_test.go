@@ -17,11 +17,11 @@ func TestSnapshotGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile("zzjit_snapshot_gen.go")
+	got, err := os.ReadFile("jit_snapshot_gen.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n")), snapshot) {
-		t.Error("zzjit_snapshot_gen.go is out of date: run go generate ./internal/vm")
+		t.Error("jit_snapshot_gen.go is out of date: run go generate ./internal/vm")
 	}
 }

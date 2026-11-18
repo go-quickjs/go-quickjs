@@ -10,7 +10,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// A DataView's accessors, native leaves (zzz_dataview.go), are leaves'
+// A DataView's accessors, native leaves (dataview.go), are leaves'
 // calls of native code (ssa.GoLeaf), made by the VM's routine for leaves
 // rather than by calls of Go with frames: mix's loop, its indices and its
 // values varied by the turn, makes its eleven accessors' calls a turn

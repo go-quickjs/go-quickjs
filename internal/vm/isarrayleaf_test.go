@@ -2,7 +2,7 @@ package vm
 
 import "testing"
 
-// Array.isArray is a native leaf (zzz_isarrayleaf.go): called without a
+// Array.isArray is a native leaf (isarrayleaf.go): called without a
 // frame where its argument is no proxy, and as the built-in otherwise. A
 // hot loop asks it, plainly through a binding and as a method, of arrays,
 // a subclass's, an array-like, primitives and no argument, and of what

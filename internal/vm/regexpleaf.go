@@ -54,7 +54,7 @@ import (
 // generic function's instantiations out after every function and closure of
 // the package (docs/optimizing.md, "The layout lock"), and the check is a
 // method of a generic type, used as a method value, which is laid out after
-// them (see zzz_dataview.go). initStringRegExpMethods reaches them through
+// them (see dataview.go). initStringRegExpMethods reaches them through
 // regexpLeaves, called where its last call, defMethod's of search, was: its
 // code shrinks within the padding that rounds it to 32 bytes, and every
 // function and closure of the package stays at its address (go tool nm).
@@ -109,7 +109,7 @@ type regexpLeaf[_ any] struct {
 	test bool
 	// dead is the RegExp the call about to be made -- its next, and only
 	// that one -- is of where nothing reads the call's result but, at
-	// most, whether it is truthy (see zzz_regexpdead.go): exec's match
+	// most, whether it is truthy (see regexpdead.go): exec's match
 	// then makes what it does besides, the legacy statics and lastIndex,
 	// and gives back dummy, an object, for the array it would have made.
 	// match takes it as it begins, whatever it then does.
@@ -117,7 +117,7 @@ type regexpLeaf[_ any] struct {
 	dummy *Object
 	// reuse is the call about to be made -- its next, and only that one --
 	// where its array may be made again in the memory of its site's last
-	// (see zzz_regexpreuse.go), and reuseTable the arrays to make again.
+	// (see regexpreuse.go), and reuseTable the arrays to make again.
 	// match takes it as it begins.
 	reuse      execReuseCall
 	reuseTable *execReuseTable

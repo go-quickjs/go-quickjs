@@ -48,11 +48,11 @@
 // met into the function's feedback slot, every other handler plain's.
 // Later, mode tables -- the debugger's -- are variants too.
 //
-// A handler is generated once. plain's block (zzzyn_native_handlers_<arch>.s)
+// A handler is generated once. plain's block (native_handlers_<arch>.s)
 // holds the entry, the exit stub and every handler, and plain's table.
 // Another variant overrides only the handlers that differ (its overrides,
 // whose bodies the emitter writes for it, nativeGen.v): they are a block
-// of their own, in the variant's file (zzzyn_native_<variant>_<arch>.s)
+// of their own, in the variant's file (native_<variant>_<arch>.s)
 // with its table, whose entries point at those and at plain's handlers
 // for every other operation, so that the binary holds no copy of a
 // shared one. The variant's file has its build constraint: a binary

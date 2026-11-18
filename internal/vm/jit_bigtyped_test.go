@@ -63,7 +63,7 @@ const bigTypedWant = "70994965823488:undefined:undefined | 49326101049356:undefi
 
 // A BigInt typed array's element is read natively, as a BigInt held in its
 // value (ssa.OpBigElemRead), at an element read and in the loops its
-// methods are made into (zzjit_bigtyped.go), map's results stored as their
+// methods are made into (jit_bigtyped.go), map's results stored as their
 // low 64 bits (ssa.OpBigElemWrite): every answer the interpreter's and
 // Node's, with the collector idle and while it marks, and the sums' loops
 // and the methods' run natively, leaving native code nowhere.

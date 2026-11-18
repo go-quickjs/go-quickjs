@@ -1737,7 +1737,7 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoHost, ssa.GoArgument, ssa.GoCells, ssa.GoClosure, ssa.GoClose:
 		if r.jitRegIsFrameOp(ctx) {
 			// Register code's, whose frame is its window, not the stack
-			// form's frame these read (zzjit_zregframe.go).
+			// form's frame these read (jit_frame.go).
 			return r.jitRegFrameOp(ctx)
 		}
 	}
@@ -2197,7 +2197,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	if ctx.Live == abi.LiveCall {
 		if len(s.regRuns) != 0 {
 			if root := r.jitRegRootOf(idx); root >= 0 {
-				// A native callee's of register code (zzjit_zregcall.go):
+				// A native callee's of register code (jit_call.go):
 				// an operation that runs nothing made without the levels'
 				// frames (jitRegPlainWhole).
 				if cl := (*closure)(ctx.Closure); cl != nil && r.jitRegPlainWhole(ctx, cl, cl.reg) {
@@ -2209,7 +2209,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		return false
 	}
 	if ctx.Live == 0 && idx < len(s.regRuns) && s.regRuns[idx].f != nil && s.ssaCtxs[idx] == ctx {
-		// On a register frame (zzjit_zregnative.go).
+		// On a register frame (jit_native.go).
 		return r.jitRegGoCall(ctx, idx)
 	}
 	return false
@@ -4107,7 +4107,7 @@ type jitLowering struct {
 	busy uint8
 	// typedCells are the cells of its element reads and writes of numbers,
 	// by PC, that learn the element types of their typed arrays
-	// (zzjit_typedkind.go).
+	// (jit_typedkind.go).
 	typedCells map[int32]*Value
 }
 

@@ -43,9 +43,9 @@ the register interpreter; there is no other tier to fall back to, and a
 function with no register code is an internal error.
 
 - **amd64 and arm64.** The native handlers run it
-  (`internal/vm/zzzyn_native_*`).
+  (`internal/vm/native_*`).
 - **Other architectures.** The Go handler table runs it
-  (`zzreg_table*.go`), the portable form of the same interpreter, slower
+  (`reg_table*.go`), the portable form of the same interpreter, slower
   than the native handlers; an architecture that needs the speed gets
   native handlers of its own.
 - **A runtime with the JIT.** The same, and the JIT compiles the hot
@@ -492,9 +492,9 @@ handler. Code that fails is a compiler bug: it is refused
 ## The loop
 
 The interpreter's portable form is a small fixed loop, `runReg`
-(`zzreg_run.go`), over a table of handlers, a Go function an operation
-(`zzreg_table.go`, `zzreg_table_cold.go`, and the later additions in
-`zzreg_zztable*.go`):
+(`reg_run.go`), over a table of handlers, a Go function an operation
+(`reg_table.go`, `reg_table_cold.go`, and the later additions in
+`reg_table_<name>.go`):
 
 ```go
 st := r.regEnter(f, c)
@@ -603,7 +603,7 @@ state's fields are loads. The native handlers remove all three.
 ## Native handlers
 
 On amd64 and arm64 a register frame runs by native threaded handlers
-(`zzzyn_native_run.go`): machine code for the hot operations, over the same
+(`native_run.go`): machine code for the hot operations, over the same
 instructions and the same frames, which leaves to the Go table what it does
 not do itself. There is no second interpreter: what the native code does
 not do, an exit to the Go handler does. arm64's handlers are amd64's,
@@ -764,7 +764,7 @@ written with the JIT's assemblers by a generator,
 `internal/vm/internal/nativegen`, and assembled into the binary as one TEXT
 symbol of machine code -- BYTE directives on amd64, WORD directives on
 arm64, whose assembler takes nothing else -- with the table as GLOBL/DATA
-(`zzzyn_native_handlers_<arch>.s`, `go generate ./internal/vm`). The
+(`native_handlers_<arch>.s`, `go generate ./internal/vm`). The
 generator does not import package vm: it reads vm's private layout -- the
 context's, the frame records', the Runtime's offsets, the constants the
 handlers test -- as plain numbers from `NativeLayout`, which only a build
@@ -785,7 +785,7 @@ builds with it. `feedback`, in JIT builds alone, is a runtime's that runs
 the JIT ([Inline caches and feedback](#inline-caches-and-feedback)): its own
 handlers record what the JIT needs and then go on in plain's handler, so
 that plain's code has no part of it. A variant's block holds only the
-handlers it overrides (`zzzyn_native_feedback_<arch>.s`), its table
+handlers it overrides (`native_feedback_<arch>.s`), its table
 pointing at plain's for every other operation. `TestRegNativePlainSameWithJIT`
 checks that plain's block is the same with and without the JIT, and
 `TestRegNativeFeedbackSelected` that a runtime picks its table. The
@@ -1110,7 +1110,7 @@ AsyncIteratorClose's, the result awaited.
 ## Generators and async functions
 
 A generator's frame is its window (regcomp's `gen.go`, the VM's
-`zzreg_zgen.go`). Suspension copies the window and the pc into the
+`reg_generator.go`). Suspension copies the window and the pc into the
 generator object, and resumption copies them back to the top of the stack
 and goes on at the pc. There is no operand stack, so the copy is the
 registers alone, and only from `genFrom`: where no closure captures the
@@ -1377,7 +1377,7 @@ not inline (`floor`, `pow`, ...) run in Go, by the engine's own Math.
   code would read its heap as it was. `f.call` and `f.apply` of a typed
   function enter its ordinary code.
 - **Go.** `runRegTyped` is `runReg`'s loop over `regTypedTable` and
-  `regTypedSlowTable` (`zzreg_zzty.go`, after the ordinary table's files),
+  `regTypedSlowTable` (`reg_typed.go`, after the ordinary table's files),
   with states from a list of their own (`regFreeTyped`). The ordinary
   operations typed code may hold (`bytecode.TypedPlainOps`) keep their
   handlers; `call_w`'s is `rhTCallW`, `rhCallW`'s copy, whose entered
@@ -1483,31 +1483,40 @@ it resumes the typed table (internal/jit/README.md, "Typed code").
 Package vm's code layout decides much of the interpreter's speed: AMD Zen
 2's op cache holds the code at one offset of every 4 KB in one of 64 sets,
 and hot code a change moves onto the same sets is decoded again on every
-pass (AGENTS.md, docs/optimizing.md). The register tier is laid out so that
-what changes moves as little as possible, and the layout lock holds the
-rest.
+pass (AGENTS.md, docs/optimizing.md). The layout lock holds the hot code
+in place whatever a change moves around it, and the register tier is laid
+out so that what changes moves as little of the rest as it can.
 
-- **The files sort late.** The register interpreter's Go code is in
-  `zzreg_*.go` and `zzzy*_*.go`, after the built-ins' files and the JIT's
-  (`zzjit_*.go`): functions are laid out in file-name order, so nothing
-  added there moves the functions before them.
+- **The lock, not the names.** The register interpreter's Go code is in
+  `reg_*.go`, the native handlers' Go side in `native_*.go`, the JIT's in
+  `jit.go` and `jit_*.go`. Functions are laid out in file-name order, so
+  code added in one file moves every function after it; the lock's pads
+  put the anchors back (`runReg`, `rhCallW`, `regNativeHandlers` below),
+  and file names are chosen by topic, not by where they sort. What still
+  depends on names is listed in AGENTS.md: the pads' files, the
+  assembly pad before the handlers' files, and the inits that read the
+  handler tables (`reg_tables.go`, `reg_typed.go`) after the files that
+  write them.
 - **No case lock.** `runReg` is a fixed loop with no cases, so there is no
   golden file of case offsets and no lever inside it, as the switch it
   replaced needed; an operation added changes no instruction of it.
 - **Levers Q, W and H.** The lock anchors `runReg` (Q) and the call path
   after it, `rhCallW` (W), at fixed offsets modulo 4 KB
-  (`zzreg_ru_layoutpad.go`, `zzreg_run_a_layoutpad.go`); the Go handlers
+  (`reg_ru_layoutpad.go`, `reg_run_a_layoutpad.go`); the Go handlers
   follow them in their files. The native handlers' block is assembly, laid
   out after every closure of the package, so that a closure added anywhere
   moved all of it -- 672 bytes in one round, which made Octane's RegExp and
   the generator tests slower; H anchors it (`regNativeHandlers`) by a pad
   of whole 32-byte slots of `int3` in an assembly file before it
-  (`zzzyn_native_a_layoutpad_*.s`).
+  (`native_a_layoutpad_*.s`).
 - **New handlers go in files of their own.** A Go handler added to
-  `zzreg_table.go` moves every handler after it; a branch added to
+  `reg_table.go` moves every handler after it; a branch added to
   `rhCallW` once cost the Go table 7 to 10%. So later handlers are in files
-  that sort after it (`zzreg_zztable.go`, `zzreg_zztable_i32.go`,
-  `zzreg_zztable_step.go`), whose `init` replaces their table entries.
+  of their own, `reg_table_<name>.go`, which sort after it
+  (`reg_table_fast.go`, `reg_table_i32.go`, `reg_table_step.go`), whose
+  `init` replaces their table entries; `reg_tables.go`, which sorts after
+  every such file, then makes the native exit table from the whole
+  tables.
 - **The native block is laid out in `handlerOps`' order,** and what came
   later goes last, so that it moves no handler before it. A path an early
   handler takes rarely -- `get_index` by a key string, a tail call past

@@ -104,7 +104,7 @@ func TestAsmSource(t *testing.T) {
 	if _, err := asmSource(&config{goos: "linux", goarch: "arm64"}, 1); err == nil {
 		t.Fatal("arm64 pad written")
 	}
-	if got := filepath.Base(asmFile(c)); got >= "zzzyn_native_amd64.s" || got <= "zzjit_leaffast_amd64.s" {
+	if got := filepath.Base(asmFile(c)); got >= "native_amd64.s" || got <= "jit_leaffast_amd64.s" {
 		t.Fatalf("%s does not sort between the JIT's assembly and the native handlers'", got)
 	}
 }

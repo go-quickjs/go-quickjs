@@ -218,7 +218,7 @@ const (
 	// RYield suspends a generator's frame with R[B], and on its
 	// resumption R[A] = the value sent in, the next instruction a jump past
 	// the return path a return resumes at: the step of a loop over a
-	// generator, which a resumption by next goes on past (zzreg_zgen.go).
+	// generator, which a resumption by next goes on past (reg_generator.go).
 	RYield
 
 	// The bitwise operators and shifts, each an operation of its own so
@@ -579,7 +579,7 @@ const (
 	// and passes the call over -- never a BigInt past 64 bits, which the
 	// call would cut down again.
 	RWrap
-	// A generator's and an async function's (zzreg_zgen.go): RGenEntry,
+	// A generator's and an async function's (reg_generator.go): RGenEntry,
 	// the code's first instruction, run by its first run and by a
 	// resumption that throws, which it throws at the suspension; a
 	// resumption that goes on starts at its pc. REndParams suspends a
@@ -617,7 +617,7 @@ const (
 	RAsyncIterCheck
 	// RGetUpvalCheck, R[A] = upvalue BC, and RSetUpvalCheck,
 	// upvalue BC = R[A], throw where the binding is in its dead zone, and
-	// the store where it is a constant (zzreg_znames.go).
+	// the store where it is a constant (reg_names.go).
 	RGetUpvalCheck
 	RSetUpvalCheck
 	// RDeleteVar: R[A] = delete of the global Names[B] (delete_var).

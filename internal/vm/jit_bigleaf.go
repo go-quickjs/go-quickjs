@@ -26,7 +26,7 @@ import (
 // jitGoBig), which had cost more than the operator: as V8's code
 // allocates a BigInt inline and adds its digits in a builtin of its own.
 // What would throw or run anything it leaves to that call. Native code
-// jumps to jitBigFast (zzjit_bigleaf_*.s), as it would to jit's callGo,
+// jumps to jitBigFast (jit_bigleaf_*.s), as it would to jit's callGo,
 // which jitBigFast goes on to when the leaf does not make the operator.
 //
 // jitBigFast is, as callGo is, to the Go runtime a function the Go

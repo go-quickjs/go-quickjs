@@ -13,7 +13,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// A loop's step over a register generator, natively (zzjit_genstep.go's
+// A loop's step over a register generator, natively (jit_genstep.go's
 // for register code).
 //
 // A for...of's step, or a call of the realm's next, over a generator of

@@ -19,7 +19,7 @@ import (
 // The native handlers are generated offline by
 // internal/vm/internal/nativegen (go generate ./internal/vm), from the
 // package's layout, which its helper reads in a build with the
-// quickjs_nativelayout tag (zzzyn_native_layout.go).
+// quickjs_nativelayout tag (native_layout.go).
 
 // nativeBuildTags are the build tags this test binary was built with.
 func nativeBuildTags() []string {
@@ -61,7 +61,7 @@ func nativeBuild(t *testing.T, tags ...string) *nativegen.Output {
 
 // nativeTestTables are the dispatchers' tables this binary has, by the
 // generator's names: plain's, the typed dispatcher's, and the feedback
-// dispatcher's in a build with the JIT (zzzyn_native_feedback_test.go).
+// dispatcher's in a build with the JIT (native_feedback_test.go).
 var nativeTestTables = map[string]uintptr{"plain": nativePlain.addr, "typed": nativeTyped.addr}
 
 // TestRegNativeGenerated checks that every generated file -- the

@@ -13,7 +13,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // makes it and goes on at pc+1; a bound that is not a number, and a
 // backward jump that finds the interrupt budget spent, go on at pc+1
 // once the step is made, where the partner compares and checks the
-// interrupt. In a file of their own, sorting after zzreg_zztable.go, so
+// interrupt. In a file of their own, sorting after reg_table_fast.go, so
 // that they move no handler before them; the Go table's, not
 // layout-tuned.
 func init() {

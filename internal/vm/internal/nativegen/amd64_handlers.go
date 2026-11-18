@@ -10,7 +10,7 @@ import (
 // nativeEmit makes amd64's handlers' code for variant v:
 // position-independent, every address it needs given by the context, so
 // that it may be placed anywhere. plain's is the handlers' block
-// (zzzyn_native_handlers_amd64.s): the entry, the exit stub and every
+// (native_handlers_amd64.s): the entry, the exit stub and every
 // handler. Another variant's is its own handlers alone, which reach
 // plain's code through the variant's table, R13: the exits through its
 // slots after the operations' (slotExit, slotExitRet), another handler

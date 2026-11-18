@@ -11,7 +11,7 @@ import (
 )
 
 // regElemSrc reads and writes elements native code learns the kinds of at
-// its exits (zzjit_zregelem.go): a typed array's, a BigInt64Array's, an
+// its exits (jit_elem.go): a typed array's, a BigInt64Array's, an
 // object's property by its name, a string's character, an object's
 // property written by its name, and additions of an array's strings.
 const regElemSrc = `

@@ -1207,7 +1207,7 @@ func (s *Symbol) String() string {
 // (shortBig), but for what Value.BigInt and NewBigInt make.
 //
 // A BigInt is never changed once made: an operation writes its result
-// elsewhere, or in a BigInt it has just made (zzbigint.go's bigInPlace),
+// elsewhere, or in a BigInt it has just made (bigint.go's bigInPlace),
 // or one that nothing else has seen, an operand's the interpreter had just
 // made for the operation, which it has given back (regBigRelease,
 // bigRelease).

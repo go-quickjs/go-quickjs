@@ -1,5 +1,5 @@
-// Command cmd writes internal/vm's zzjit_snapshot_gen.go and
-// zzjit_asked_gen_test.go. It is run by go generate in internal/vm.
+// Command cmd writes internal/vm's jit_snapshot_gen.go. It is run by go
+// generate in internal/vm (generate.go).
 package main
 
 import (

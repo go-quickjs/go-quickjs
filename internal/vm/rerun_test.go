@@ -170,7 +170,7 @@ func TestShapeAfterReruns(t *testing.T) {
 				function make(a) { return new Q(a) }
 				function lit(a) { return {u: a, v: 2} }
 				// The first object made on a prototype keeps it in its table
-				// (zzz_polyproto.go): the ones compared are made after it.
+				// (polyproto.go): the ones compared are made after it.
 				make(0)
 				var q1 = make(1), q2 = make(2), l1 = lit(1), l2 = lit(2)
 				String(q1.a + q2.b + l1.u + l2.v)`))

@@ -20,9 +20,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-01 Suspended generators and async functions share frame state with later calls
 - **Where:** a generator's resumption (`internal/vm/generator.go`,
-  `zzreg_zgen.go`) restores `handlers` and `openUpvalues` into a pooled frame
+  `reg_generator.go`) restores `handlers` and `openUpvalues` into a pooled frame
   and saves them back sharing the same backing arrays. The next call at the
-  same depth truncates and appends to them (`zzreg_call.go`).
+  same depth truncates and appends to them (`reg_call.go`).
 - **Effect:** a suspended function's catch handlers and captured variables
   are overwritten. The result is a Go panic that closes the runtime, or wrong
   results.
@@ -176,8 +176,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   `NumberFormat` and the rest, as globals.
 
 ### KI-67 Native code read a closure's template from a run since collected
-- **Where:** the JIT's feedback, `internal/vm/zzjit_zregfeedback.go`
-  (`CalledClosure`) and `zzjit_zregloop.go`. A closure native code does not
+- **Where:** the JIT's feedback, `internal/vm/jit_feedback.go`
+  (`CalledClosure`) and `jit_loop.go`. A closure native code does not
   make stood in a frame state as the address of its template in the
   constants of the closure the code was compiled from, one run of the
   program; the entry kept neither.
@@ -186,7 +186,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   exit read freed memory into the frame: `TypeError: 7.04892706e-316 is not
   a function`, or `fatal error: invalid pointer found on stack`.
 - **Status:** fixed. The code keeps the template in a cell of its own, as it
-  keeps string constants (`jitTemplateCell`, `zzz_jittemplate.go`).
+  keeps string constants (`jitTemplateCell`, `jit_template.go`).
   - Test: `TestJITMadeTemplateOutlivesItsRun`.
 
 ## P1: limits, hangs, leaks
@@ -197,7 +197,7 @@ Paths are relative to this repository; `go-intl:` paths are in
     rejection.
   - Closing the iterators an exception leaves drops what their `return`
     throws, an interrupt among it: the register interpreter's
-    `iter_close_throw` (`rhIterCloseThrow`, `zzreg_table_cold.go`).
+    `iter_close_throw` (`rhIterCloseThrow`, `reg_table_cold.go`).
   - The interrupt counter is re-armed after reporting, so `DrainJobs`'s
     per-job check rarely sees it.
 - **Effect:** a script past its deadline, or a terminated worker, keeps
@@ -406,7 +406,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-66 Running one program again and again fills the shape tree
 - **Where:** `internal/vm/vm_shape.go` (`siteRoot`, `shape.child`) and
-  `internal/vm/zzz_shapebudget.go`.
+  `internal/vm/shapebudget.go`.
 - **Effect:** each run of a compiled program prepares its code anew
   (`prepare`), so each object literal has a new root and new shapes grown from
   it. Those are garbage once the run's closures are, but the tree's count keeps
@@ -428,7 +428,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   `Program` makes no shape for a run after its first: a realm keeps a root for
   each of its literals, as the layout of its `Object.prototype` keeps the roots
   of other objects made on it, and each run's caches start from them
-  (`zzz_rerun.go`), so that a run's objects have the layouts the last run's had
+  (`rerun.go`), so that a run's objects have the layouts the last run's had
   and code compiled in one run holds for the next. The two-literal script's
   allocations fall from 17 to 7 a run. `TestShapeReruns`,
   `TestShapeRerunsAlternating`, `TestShapeFreshCodeRuns`,
@@ -436,7 +436,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   `TestProgramRerunsLetGo` and `TestJITProgramRerunsKeepLayouts` pin it. A
   literal that names its keys goes further, in any code: a realm keeps a root
   for those keys, and new code makes none of its shapes
-  (`zzz_literalkeys.go`), past a quarter of the tree starting again
+  (`literalkeys.go`), past a quarter of the tree starting again
   (`TestFreshCodeMakesNoLiteralShapes`, `TestLiteralKeysMadeUp`). What remains:
   - Shapes are given back by a cleanup, after a collection. A host with a heap
     so large that it allocates 65,536 shapes between two collections, running
@@ -450,7 +450,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-68 Code run once stays for what it left in a realm's tables
 - **Where:** `internal/vm/vm.go` (`templateObject`), `vm_shape.go` (`chainCell`)
-  and `zsourcemap.go`.
+  and `sourcemap.go`.
 - **Effect:** a host that runs new code for each request -- `Eval`, a `Program`
   of its own, a direct eval or `new Function` in a loop -- grew until it closed
   the runtime, in what a table kept of each request's code:
@@ -499,7 +499,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** fixed, for a runtime with a memory limit; any other cuts as it
   did. A cut shares its parent's bytes only if it is at least half the size of
   its root, the string whose bytes they are, and a shorter one is copied, then
-  counts exactly and is a root itself (`keptCut`, `zzz_strcut.go`).
+  counts exactly and is a root itself (`keptCut`, `strcut.go`).
   - The bound: a shared cut holds at most twice what it is counted at, a
     factor of 2 stated against the root's length; a root a builder made
     holds the slack of its buffer past that, as it did. A cut and its parent
@@ -765,7 +765,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   the instants a Date can hold. `WithNodeQuirks` now refuses them too.
 
 ### KI-64 Native code of one realm ran in another
-- **Where:** `internal/vm/zzjit_native.go`. The JIT's cache was keyed by the
+- **Where:** `internal/vm/jit.go`. The JIT's cache was keyed by the
   bytecode function alone.
 - **Effect:** a compiled program run in two realms `WithJIT` ran the code of
   the realm that made it hot first. Objects, arrays, functions, arrows,
@@ -871,7 +871,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-73 A native caller Go resumed read another local's object
 - **Where:** what finishes the native calls under one whose callee left
   native code, a generator's resumption among them: now `jitRegUnwind`
-  (`internal/vm/zzjit_zregcall.go`). A value native code took from a frame
+  (`internal/vm/jit_call.go`). A value native code took from a frame
   slot read its pointer word through the slot's address for as long as it
   lived, whatever the local had been assigned since, because native code
   writes its frame only at an exit. A native caller whose callee left native
@@ -904,8 +904,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-74 A compile in the background taken for a refusal
 - **Where:** the JIT's decision of a native call's target and its entry of
-  hot code, now `internal/vm/zzjit_zregcall.go` (`jitRegCallSeen`,
-  `jitRegTarget`) and `zzjit_zregtier.go` (`jitRegEnter`). Each asked a
+  hot code, now `internal/vm/jit_call.go` (`jitRegCallSeen`,
+  `jitRegTarget`) and `jit_tier.go` (`jitRegEnter`). Each asked a
   compile for code, which on the spot it had on return. In the background the
   same call returned nothing yet, which both took for no. A call whose target
   was an arrow reading `this`, which no empty link may take, was left to Go
@@ -1009,7 +1009,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-61 A value doubled in a short loop escapes the memory limit
 - **Where:** `internal/vm/memory.go`; the template literal's join
-  (`concatParts`, `zvreg_zops.go`), `Array.prototype.join`, `JSON.stringify`
+  (`concatParts`, `reg_slow.go`), `Array.prototype.join`, `JSON.stringify`
   and spread.
 - **Effect:** with a 16 MB limit, `` s = `${s}${s}` `` or `s = [s, s].join("")`
   twenty times gave a string of 84 million characters, `a = [...a, ...a]`

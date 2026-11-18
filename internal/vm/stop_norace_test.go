@@ -2,5 +2,5 @@
 
 package vm
 
-// raceDetector is whether the race detector is on (zstop_race_test.go).
+// raceDetector is whether the race detector is on (stop_race_test.go).
 const raceDetector = false

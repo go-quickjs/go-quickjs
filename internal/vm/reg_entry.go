@@ -8,10 +8,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-//go:generate go run ./internal/snapgen/cmd
-
 // The register interpreter's set-up: what runs once a function or a
-// closure, out of the hot block (zzreg_run.go).
+// closure, out of the hot block (reg_run.go).
 
 // RegsBuilt is how many functions have been given register code, for tests
 // that check it ran.

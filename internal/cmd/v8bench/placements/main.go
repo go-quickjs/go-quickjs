@@ -12,14 +12,14 @@
 // build makes eight builds of internal/cmd/v8bench from the working tree,
 // each with the register tier's hot code placed differently. Six pads, of m
 // functions that each fill one 32-byte slot, go before the six pieces of
-// hot code, in files the linker places there:
+// hot code, in files the linker places there, in this order:
 //
-//	vm_b_pad.go           after vm.go, before vm_call.go     callObject
-//	zzjit_leaf_pad.go     before zzjit_leaffast.go           jitLeafGo
-//	zzreg_ru_pad.go       before zzreg_run.go                runReg
-//	zzreg_run_b_pad.go    after zzreg_run.go, before calls   rhCallW
-//	zzzyn_native_r_pad.go before zzzyn_native_run.go         nativeDrive
-//	zzzzz_pad.go          closures, after every other one    regNativeHandlers
+//	jit_leaf_pad.go       before jit_leaffast.go             jitLeafGo
+//	native_r_pad.go       before native_run.go               nativeDrive
+//	reg_ru_pad.go         before reg_run.go                  runReg
+//	reg_run_b_pad.go      after reg_run.go, before calls     rhCallW
+//	vm_b_pad.go           after vm_amath.go, before vm_call.go callObject
+//	zz_pad.go             closures, after every other one    regNativeHandlers
 //
 // callObject is the calls of functions and built-ins; jitLeafGo the JIT's
 // calls of Go leaves (built with the JIT alone: a build without it has no
@@ -31,7 +31,7 @@
 // exit's call of Go and its handlers, regNativeHandlers. The assembly is
 // laid out after the package's closures, so its pad is closures, function
 // literals of the last file's, laid out after every other closure.
-// regRunFD and regCallSlow (zzreg_call.go) move with jitLeafGo's pad.
+// regRunFD and regCallSlow (reg_call.go) move with nativeDrive's pad.
 //
 // A pad moves what follows it by exactly 32*m bytes. For each placement a
 // build with the pads empty says where the six are, and m is chosen so that
@@ -176,14 +176,19 @@ func exePath(out, label string, n int) string {
 // pads are the files the pads go in, each before its target; targets are
 // the targets, as go tool nm names them after the package's path.
 var (
-	pads = [nPads]string{"internal/vm/vm_b_pad.go", "internal/vm/zzjit_leaf_pad.go", "internal/vm/zzreg_ru_pad.go",
-		"internal/vm/zzreg_run_b_pad.go", "internal/vm/zzzyn_native_r_pad.go", "internal/vm/zzzzz_pad.go"}
+	pads = [nPads]string{"internal/vm/vm_b_pad.go", "internal/vm/jit_leaf_pad.go", "internal/vm/reg_ru_pad.go",
+		"internal/vm/reg_run_b_pad.go", "internal/vm/native_r_pad.go", "internal/vm/zz_pad.go"}
 	targets = [nPads]string{"(*Runtime).callObject", "jitLeafGo", "(*Runtime).runReg",
 		"rhCallW", "(*Runtime).nativeDrive", "regNativeHandlers.abi0"}
 	// optional are the targets a build may lack: the JIT's leaf calls,
 	// without the JIT, and the native handlers, on an architecture that
 	// has the Go table alone.
 	optional = [nPads]bool{1: true, 5: true}
+	// order is the pads' indexes in the order their files sort, which is
+	// the order the linker lays them out in. An index is a target's
+	// column of the design and its pad's even part (padCounts), whatever
+	// its place in the order.
+	order = [nPads]int{1, 4, 2, 3, 0, 5}
 )
 
 // nPads is how many pads and targets there are; closurePad is the pad
@@ -243,15 +248,16 @@ const padDataBase = 64
 
 // padCounts is how many one-slot functions each pad needs for placement
 // n, given where the targets are with the pads empty. Each pad moves its
-// target and everything after it, and the targets come in this order, so
-// each is chosen given the ones before; a pad is an even number of slots,
-// varying with n and the pad, plus the one that sets its target's phase.
-// A target the build lacks (0 in ref) takes the even part alone.
+// target and everything after it, and the targets come in the pads'
+// order, so each is chosen given the ones before; a pad is an even number
+// of slots, varying with n and the pad, plus the one that sets its
+// target's phase. A target the build lacks (0 in ref) takes the even part
+// alone.
 func padCounts(ref [nPads]uint64, n int) [nPads]int {
 	want := design(n)
 	var counts [nPads]int
 	shift := 0
-	for i := range nPads {
+	for _, i := range order {
 		m := 2 * ((n*37 + i*11) % 32)
 		if ref[i] != 0 {
 			phase := int((ref[i]/32 + uint64(shift)) % 2)
@@ -416,15 +422,16 @@ func targetAddrs(nm []byte) ([nPads]uint64, error) {
 	return addrs, nil
 }
 
-// padFile is pad p with m functions. The first holds the one init, which
-// keeps every pad's functions reachable, and the data's pad: it is before
-// the first target, where its size is the same in every placement. The
+// padFile is pad p with m functions. The first in the order holds the one
+// init, which keeps every pad's functions reachable, and the data's pad:
+// it is before the first target, where its size is the same in every
+// placement. The
 // closures' pad (closurePad) is m function literals, closures laid out
 // after every other closure of the package and before its assembly.
 func padFile(p, m, data int) []byte {
 	var b strings.Builder
 	b.WriteString("package vm\n\n")
-	if p == 0 {
+	if p == order[0] {
 		b.WriteString("var padSink int\n\n")
 		// The data's phase: the initialized data, which the zeroed data
 		// follows, data bytes more (dataPhase).

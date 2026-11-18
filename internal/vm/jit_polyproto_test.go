@@ -9,7 +9,7 @@ import (
 )
 
 // Native code reads the prototype of an object that keeps it in its table
-// (zzz_polyproto.go) there, not in its layout (mir's loadProto): instanceof,
+// (polyproto.go) there, not in its layout (mir's loadProto): instanceof,
 // the in operator and reads up the chain of the first objects made on
 // prototypes made and dropped, and of objects made on them, answer as the
 // interpreter does, before and after their prototypes change; and a loop

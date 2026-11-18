@@ -8,7 +8,7 @@ import (
 
 // A call of exec whose result is stored in a binding nothing else can
 // reach the array from has its arrays made again, at its next match, in
-// the memory of the last (the VM's zzz_regexpreuse.go): the call is marked
+// the memory of the last (the VM's regexpreuse.go): the call is marked
 // RMarkReuse, its Aux the binding (bytecode.ReuseAux). Which calls are is decided
 // here, of the function's finished code: the binding l, the call's
 // destination, is no parameter -- the arguments object may alias one --

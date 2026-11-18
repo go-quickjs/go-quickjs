@@ -118,13 +118,14 @@ func TestDesignBalanced(t *testing.T) {
 
 // TestPadCountsReachTheDesign pins that the pads padCounts chooses put the
 // targets at the design's phases, wherever the targets start: a pad of m
-// slots moves its target and every later one by 32*m bytes.
+// slots moves its target and every later one by 32*m bytes, the targets
+// in the pads' order.
 func TestPadCountsReachTheDesign(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	for range 1000 {
 		var ref [nPads]uint64
 		a := uint64(0x140000000) + uint64(rng.Intn(1<<20))*32
-		for i := range ref {
+		for _, i := range order {
 			ref[i] = a
 			a += uint64(rng.Intn(1<<16)) * 32
 		}
@@ -136,7 +137,7 @@ func TestPadCountsReachTheDesign(t *testing.T) {
 			counts := padCounts(ref, n)
 			var got [nPads]uint64
 			shift := uint64(0)
-			for i := range ref {
+			for _, i := range order {
 				shift += uint64(counts[i]) * 32
 				if ref[i] != 0 {
 					got[i] = ref[i] + shift
@@ -174,5 +175,36 @@ func TestTargetAddrs(t *testing.T) {
 	}
 	if _, err := targetAddrs([]byte(strings.Replace(nm, "rhCallW", "rhCall", 1))); err == nil {
 		t.Error("a build without rhCallW passed")
+	}
+}
+
+// TestPadsInOrder pins order to the order the pads' files sort in, which
+// is where the linker lays them out, and checks each pad sorts before the
+// file of the target it moves.
+func TestPadsInOrder(t *testing.T) {
+	for i := 1; i < nPads; i++ {
+		if a, b := filepath.Base(pads[order[i-1]]), filepath.Base(pads[order[i]]); a >= b {
+			t.Errorf("pad %s sorts after %s, but order puts it before", a, b)
+		}
+	}
+	before := map[string]string{
+		"jit_leaf_pad.go":  "jit_leaffast.go",
+		"native_r_pad.go":  "native_run.go",
+		"reg_ru_pad.go":    "reg_run.go",
+		"reg_run_b_pad.go": "reg_run_call.go",
+		"vm_b_pad.go":      "vm_call.go",
+	}
+	for _, p := range pads {
+		base := filepath.Base(p)
+		target, ok := before[base]
+		if !ok {
+			continue
+		}
+		if base >= target {
+			t.Errorf("pad %s does not sort before %s", base, target)
+		}
+		if _, err := os.Stat(filepath.Join("..", "..", "..", "vm", target)); err != nil {
+			t.Errorf("pad %s's target file: %v", base, err)
+		}
 	}
 }

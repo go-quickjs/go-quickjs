@@ -11,7 +11,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// RegExp.prototype's exec and test, native leaves (zzz_regexpleaf.go), are
+// RegExp.prototype's exec and test, native leaves (regexpleaf.go), are
 // leaves' calls of native code (ssa.GoLeaf) where their receiver is no
 // literal's: loop's exec of a RegExp it holds, its test of one neither
 // global nor sticky and its test of a global one, which writes lastIndex,

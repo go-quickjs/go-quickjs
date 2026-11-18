@@ -3,8 +3,8 @@ package vm
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // The register interpreter's calls and slow path, after its loop
-// (zzreg_run.go): rhCallW first, which the layout lock's pad W
-// (zzreg_run_a_layoutpad.go) keeps where it was against runReg whatever
+// (reg_run.go): rhCallW first, which the layout lock's pad W
+// (reg_run_a_layoutpad.go) keeps where it was against runReg whatever
 // the loop's size does (docs/optimizing.md, "The layout lock").
 
 // rhCallW is call_w's and call_method_w's handler: a call whose callee's

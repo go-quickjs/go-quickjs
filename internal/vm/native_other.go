@@ -2,7 +2,7 @@
 
 package vm
 
-// The native handlers are amd64's and arm64's (zzzyn_native_run.go):
+// The native handlers are amd64's and arm64's (native_run.go):
 // every other architecture runs register frames by the Go table's loop
 // alone.
 const regNativeOn = false

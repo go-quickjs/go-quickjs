@@ -12,8 +12,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// The handlers' files, after the other generators', before layoutpad's
-// (zzzz_layoutpad.go), which measures what they make.
+// The handlers' files, after the snapshot's (generate.go), before
+// layoutpad's (z_layoutpad.go), which measures what they make.
 //
 //go:generate go run ./internal/nativegen/cmd
 
@@ -28,12 +28,12 @@ import (
 // and enters the code again after it.
 //
 // The code is made offline by internal/vm/internal/nativegen, from the
-// package's layout (zzzyn_native_layout.go), and assembled into the
-// binary (zzzyn_native_handlers_<arch>.s, go generate): one block for
+// package's layout (native_layout.go), and assembled into the
+// binary (native_handlers_<arch>.s, go generate): one block for
 // every runtime and every build tag of an architecture, never patched,
 // every address it needs given by the context. The trampolines that enter
 // it and that it calls Go by are each architecture's own
-// (zzzyn_native_<arch>.s).
+// (native_<arch>.s).
 //
 // The machine registers on amd64, kept across the dispatch:
 //
@@ -1437,7 +1437,7 @@ var nativeExitAddr = func() uintptr {
 // nativePlain is the plain dispatcher, the only one in builds without
 // the JIT; nativeFeedback, in builds with it, a runtime's that runs the
 // JIT, whose handlers record the JIT's feedback
-// (zzzyn_native_feedback.go), and plain in builds without.
+// (native_feedback.go), and plain in builds without.
 var nativePlain = newNativeTable(nativeTableAddr())
 
 // nativeDispatch is the dispatcher r's contexts give the code.
@@ -1482,7 +1482,7 @@ func nativeCallHAddr() uintptr
 func nativeEnter(code uintptr, ctx unsafe.Pointer)
 
 // regNativeHandlers is the assembled block of the handlers
-// (zzzyn_native_handlers_<arch>.s); nativeHandlersAddr is its address and
+// (native_handlers_<arch>.s); nativeHandlersAddr is its address and
 // nativeTableAddr its table's, each operation's handler's address, the
 // exit stub's where it has none.
 func regNativeHandlers()

@@ -34,7 +34,7 @@ type Config struct {
 	// standards where compatibility is more important than conformance.
 	NodeQuirks bool
 	// Debug makes the runtime for a debugger, which runs code compiled for
-	// one; see zdebug.go.
+	// one; see debug.go.
 	Debug bool
 }
 

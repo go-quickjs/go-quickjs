@@ -9,7 +9,7 @@ import (
 // results of a sum or a difference, (x + y) | 0, (x - y) | 0 and
 // (x + k) | 0 in one instruction (docs/register-interpreter.md,
 // "Loop-kernel instructions"): in a file of their own, sorting after
-// zzreg_zztable.go, so that what they add moves no handler before them.
+// reg_table_fast.go, so that what they add moves no handler before them.
 func init() {
 	regTable[bytecode.RMulI], regSlowTable[bytecode.RMulI] = rhMulI, rsMulI
 	regTable[bytecode.RAddI32], regSlowTable[bytecode.RAddI32] = rhAddI32, rsAddI32

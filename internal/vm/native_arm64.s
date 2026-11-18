@@ -3,7 +3,7 @@
 #include "textflag.h"
 
 // The native handlers' entry, their store of a pointer with the write
-// barrier and their call of a Go handler on arm64 (zzzyn_native_run.go),
+// barrier and their call of a Go handler on arm64 (native_run.go),
 // amd64's in arm64's convention. The code never touches R28 (g), R29 (the
 // frame pointer) or R30, which holds nativeEnter's return to nativeRun
 // from the entry on: nativeStoreRef and nativeCallH are functions

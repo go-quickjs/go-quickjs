@@ -9,7 +9,7 @@ import (
 )
 
 // The state of a closure's code in either form, for the tests of
-// zzjit_native_test.go that read it: the stack form's entry the cache
+// jit_test.go that read it: the stack form's entry the cache
 // holds for its function, or the register form's code entry and the
 // state that outlives its compiles (jitRegEntry's life), whose counts --
 // entries, hosts, guards, deopts, calls of Go -- and learning (nativeCalls,

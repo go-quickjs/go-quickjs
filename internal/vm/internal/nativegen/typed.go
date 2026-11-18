@@ -3,7 +3,7 @@ package nativegen
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // The typed dispatcher (the typed variant): the table typed register code
-// is decoded through (package vm's zzreg_zzty.go). Its entries of the
+// is decoded through (package vm's reg_typed.go). Its entries of the
 // ordinary operations typed code holds (bytecode.TypedTableOps) are
 // plain's handlers, call_w's among them, so that a call between two typed
 // functions is plain's call handler's, its callee's frame decoded by the

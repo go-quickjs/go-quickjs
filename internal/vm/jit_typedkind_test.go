@@ -22,7 +22,7 @@ var typedKindNames = []string{"Int8Array", "Uint8Array", "Uint8ClampedArray", "I
 // writes, functions of their own -- each its own bytecode and so its own
 // sites -- that read and write typed arrays of that type: each site meets
 // one element type, which it learns as native code runs
-// (zzjit_typedkind.go) and is compiled again for, its element read or
+// (jit_typedkind.go) and is compiled again for, its element read or
 // written inline with no other type's case.
 var typedKindSetup = func() string {
 	var b strings.Builder
