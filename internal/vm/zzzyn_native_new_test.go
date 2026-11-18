@@ -116,6 +116,40 @@ func TestRegNativeInstanceOf(t *testing.T) {
 		String(s)`, bytecode.RInstanceOf)
 }
 
+// nativeInstanceOfSlotSrc runs one instanceof site through the prototype
+// slot its cache keeps (propCache.instanceProto) and each change that
+// must be seen there: another function of the constructor's shape, whose
+// own prototype is read; the prototype made a primitive, a TypeError; the
+// prototype assigned another object; the instance's chain changed; and a
+// Symbol.hasInstance of the constructor's own, which changes its shape.
+const nativeInstanceOfSlotSrc = `
+	function A() {} function B() {}
+	var a = new A(), b = new B(), out = []
+	function site(v, c) { try { return v instanceof c } catch (e) { return e.name } }
+	function run(v, c) { var r; for (var i = 0; i < 100; i++) r = site(v, c); out.push(r) }
+	run(a, A); run(b, A); run(b, B); run(a, B); run(1, A)
+	A.prototype = 3; run(a, A); run(1, A); run(b, B)
+	A.prototype = B.prototype; run(b, A); run(a, A)
+	Object.setPrototypeOf(a, B.prototype); run(a, A); run(a, B)
+	Object.defineProperty(A, Symbol.hasInstance, { value: v => v === 1 }); run(1, A); run(b, A)
+	out.join()`
+
+// The prototype slot instanceof's site keeps answers as the Go table
+// does, through every change nativeInstanceOfSlotSrc makes, marking or
+// not.
+func TestRegNativeInstanceOfSlot(t *testing.T) {
+	const want = "true,false,true,false,false,TypeError,false,true,true,false,true,true,true,false"
+	if got := nativeRunSrc(t, nativeInstanceOfSlotSrc, false); got != want {
+		t.Fatalf("Go table: got %q, want %q", got, want)
+	}
+	nativeCheck(t, nativeInstanceOfSlotSrc, `
+		function A() {} function B() {}
+		var a = new A(), b = new B(), s = 0
+		function site(v, c) { return v instanceof c }
+		for (var i = 0; i < 1000; i++) if (site(a, A) && site(b, B) && !site(a, B)) s++
+		String(s)`, bytecode.RInstanceOf)
+}
+
 // nativeDerivedSrc constructs derived classes of every kind their
 // constructions and super() calls meet: a super() of arguments and one
 // handing on the frame's (a class with no constructor), chains two and

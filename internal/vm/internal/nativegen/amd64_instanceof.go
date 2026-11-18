@@ -132,7 +132,14 @@ func (g *nativeGen) instanceOf() {
 	g.storeA(0)
 }
 
-// instanceOfSite is arm64's site cache probe.
+// instanceOfSite is instanceof's probe of the prototype slot the site's
+// cache keeps (propCache.instanceProto, noteInstanceOfSite): RCX the
+// site, RSI the constructor. The site's shape proves an immutable
+// inherited Symbol.hasInstance and a plain prototype property; the
+// function's identity need not match: its kind and bound flag are
+// checked, and its prototype read anew, then walked for at value. With
+// no slot, or another shape, it makes readSlot's first comparison and
+// goes back to it at miss with the comparison's flags.
 func (g *nativeGen) instanceOfSite(check, miss, value Label) {
 	a := g.a
 	a.Bind(check)

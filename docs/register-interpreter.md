@@ -675,10 +675,9 @@ then need no property lookup: the handler reads the current prototype
 value and walks the instance's chain, leaving proxies and errors to Go.
 Refilling the property cache clears the slot; collecting the runtime's
 shared constructor cache leaves it intact. The probe uses the site's
-already computed address, so a miss does not repeat that lookup.
-This probe follows the existing
-out-of-line native helpers, keeping their positions as well as the
-handlers' unchanged.
+already computed address, so a miss does not repeat that lookup. This
+probe follows the existing out-of-line native helpers, keeping their
+positions as well as the handlers' unchanged.
 
 **The exit stub.** An operation with no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the

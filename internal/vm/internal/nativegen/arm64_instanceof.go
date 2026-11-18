@@ -119,10 +119,7 @@ func (g *armGen) instanceOf() {
 	g.storeA(0)
 }
 
-// instanceOfSite uses the prototype slot cached by noteInstanceOfSite.
-// The site's shape proves an immutable inherited Symbol.hasInstance and
-// a plain prototype property. The function's identity need not match:
-// its kind and bound flag are checked, and its prototype read anew.
+// instanceOfSite is amd64's: rC the site, rS the constructor.
 func (g *armGen) instanceOfSite(check, miss, value Label) {
 	a := g.a
 	a.Bind(check)
