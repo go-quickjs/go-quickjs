@@ -959,6 +959,12 @@ avoids a separate native pass over the same writes after allocation. It
 does the same work while the collector marks, using Go's write barriers.
 The JIT keeps its existing path and feedback.
 
+Once `leafStores` has validated the writes, an object whose table already
+has room for the final layout is filled by slot and given that layout once.
+Repeated names write the same slot in order. A table that needs to grow,
+or a final layout that needs an index built, keeps the individual
+transitions. No write can call code that observes the intermediate layouts.
+
 **Tail calls.** `tail_call_w` and `tail_call_method_w` are operations of
 their own, so that the ordinary call checks nothing of tail position. While
 the stack is shallower than `tailCallDepth` they are ordinary calls. Deeper,

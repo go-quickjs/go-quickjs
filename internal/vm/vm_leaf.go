@@ -100,6 +100,35 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 			s = e.next
 		}
 	}
+	// When the table has room, install the validated final layout once.
+	// No write can call code that observes the intermediate shapes.
+	if uint32(s.n) <= o.valc && (s.n <= linearScanLimit || s.index != nil) {
+		vals := o.vals()[:int(s.n)]
+		for i := 0; i < len(code) && code[i].Op() == bytecode.RSetProp; i++ {
+			w := code[i]
+			e := &cl.ic[w.C()]
+			v := Undefined
+			if p := int(w.B()) - 2; p < len(args) {
+				v = args[p]
+			}
+			idx := e.idx
+			if e.next != nil {
+				idx = e.next.n - 1
+			}
+			if verifyShapes {
+				r.verifyStoreCache(e, o, cl.names[c.siteName[w.C()]])
+			}
+			vals[idx] = v
+			if verifyShapes && e.next != nil {
+				o.valn, o.shape = uint32(e.next.n), e.next
+			}
+		}
+		o.valn, o.shape = uint32(s.n), s
+		if verifyShapes {
+			checkShape(o)
+		}
+		return true
+	}
 	for i := 0; i < len(code) && code[i].Op() == bytecode.RSetProp; i++ {
 		w := code[i]
 		e := &cl.ic[w.C()]

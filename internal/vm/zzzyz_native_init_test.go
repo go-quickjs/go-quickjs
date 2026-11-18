@@ -103,6 +103,12 @@ var p, object = { tag: 7 }, out = [], held;
 for (var i = 0; i < 100; i++) p = new Pair(object, object);
 out.push(p.a === object, p.b === object, Object.keys(p).join());
 p = new Pair(object); out.push(p.a === object, p.b === undefined);
+function Repeated(a, b) { this.a = a; this.b = b; this.a = b; this.c = a }
+for (var i = 0; i < 100; i++) p = new Repeated(object, 9);
+out.push(p.a, p.b, p.c === object, Object.keys(p).join());
+for (var i = 0; i < 100; i++) Repeated.call(p, object, 10);
+Repeated.call(p, object); out.push(p.a === undefined, p.b === undefined, p.c === object);
+Repeated.apply(p, [object, 11]); out.push(p.a, p.b, p.c === object);
 Object.defineProperty(Pair.prototype, "b", {
  set(v) { held = this; throw new RangeError("store:" + v) }, configurable: true
 });
@@ -111,7 +117,7 @@ delete Pair.prototype.b;
 Object.defineProperty(Pair.prototype, "a", { value: 1, writable: false });
 try { new Pair(2, 3) } catch (e) { out.push(e.name) }
 out.join("|")`
-	const constructedWant = "true|true|a,b|true|true|RangeError|store:10|9|false|TypeError"
+	const constructedWant = "true|true|a,b|true|true|9|9|true|a,b,c|true|true|true|11|11|true|RangeError|store:10|9|false|TypeError"
 	const src = nativeInitSource + `
 var out = [], log = [];
 makePairs(100); makeForward(100);
