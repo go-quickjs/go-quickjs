@@ -61,8 +61,88 @@ const (
 	SSplat64
 )
 
-// call_indirect, of the second table.
-const XCallIndirect = 104
+// call_indirect and call_ref, of the second table.
+const (
+	XCallIndirect = 104
+	XCallRef      = 105
+)
+
+// The reference operations of the second table the native handlers run.
+const (
+	XSelectRef    = 7
+	XSelect128    = 8
+	XRefIsNull    = 9
+	XRefEq        = 11
+	XRefAsNonNull = 12
+	XBrNull       = 13
+	XBrNonNull    = 14
+	XBrOnCast     = 130
+	XBrOnCastFail = 131
+)
+
+// The GC operations of the second table whose operands are the
+// instruction's fields, not a record's: a struct's field of a kind (A the
+// value's slot, B the struct's reference slot, C the field's cell; a set's
+// A the struct's, B the value's), an array's element of a kind (a get's A
+// the value's slot, B the array's, C the index's; a set's A the array's, B
+// the index's, C the value's), an array's length (A, of B), ref.i31 (A of
+// B), i31.get (A of B), and ref.test and ref.cast (A the result, B the
+// reference -- a cast's A the reference -- C the GC record of the type).
+const (
+	XSGet8S = 192 + iota
+	XSGet8U
+	XSGet16S
+	XSGet16U
+	XSGet32
+	XSGet64
+	XSGet128
+	XSGetRef
+	XSSet8
+	XSSet16
+	XSSet32
+	XSSet64
+	XSSet128
+	XSSetRef
+	XAGet8S
+	XAGet8U
+	XAGet16S
+	XAGet16U
+	XAGet32
+	XAGet64
+	XAGet128
+	XAGetRef
+	XASet8
+	XASet16
+	XASet32
+	XASet64
+	XASet128
+	XASetRef
+	XALen
+	XRefI31
+	XI31GetS
+	XI31GetU
+	XRefTest
+	XRefCast
+)
+
+// How native code tests a reference (the engine's regGC.mode).
+const (
+	CastGo = iota
+	CastIndex
+	CastI31
+	CastStruct
+	CastArray
+	CastEq
+	CastTop
+)
+
+// The kinds of objects a reference may point to (the engine's ObjKind),
+// at an object's header's HeaderKind.
+const (
+	ObjStruct  = 2
+	ObjArray   = 3
+	HeaderKind = 8
+)
 
 // The SIMD memory operations of the second table, rExt's.
 const (
@@ -110,7 +190,9 @@ const (
 	CtxRch       = 256 // the exec's reference chunk to give back to
 	CtxRsp       = 264 // the exec's reference chunk's slot to give back to
 	CtxSIMDTable = 272 // rSIMD's native table, or one of the exit stub alone
-	CtxSize      = 280
+	CtxGC        = 280 // the code's GC records' first
+	CtxI31       = 288 // what an i31's pointer word points to
+	CtxSize      = 296
 )
 
 // The engine's structures the handlers read, on amd64 and arm64.
@@ -155,6 +237,7 @@ const (
 	RcCode   = 0   // regCode.code
 	RcSites  = 48  // regCode.sites
 	RcTables = 72  // regCode.tables
+	RcGC     = 128 // regCode.gc
 	RcCallee = 152 // regCode.callee
 
 	SiteFn      = 0  // regSite.fn
@@ -180,5 +263,14 @@ const (
 
 	MemoryBuf  = 0  // Memory.buf
 	MemoryIs64 = 40 // Memory.Is64, a bool
-	GlobalNum  = 0  // Global.Num
+
+	GCSize     = 160 // a regGC
+	GCNullable = 132 // regGC.nullable
+	GCMode     = 144 // regGC.mode, a byte
+	GCDepth    = 148 // regGC.depth, a uint32
+	GCCanon    = 152 // regGC.canon, a uint32
+	RttSupers  = 16  // rtt.supers, a slice of uint32
+	ArrayElems = 16  // Array.e
+	ArrayLen   = 24  // Array.n
+	GlobalNum  = 0   // Global.Num
 )

@@ -135,7 +135,11 @@ The forms, by family:
 - **Records and sites**: a call, a throw, a GC instruction and an atomic
   name their operands through a site, a record or the words after them, as
   32-bit slot indices, since they have more operands, or more kinds, than
-  fields.
+  fields -- but for the GC accesses native code runs (reg_gc_fast.go): a
+  struct's field and an array's element by storage kind, an array's
+  length, `ref.i31`, `i31.get`, `ref.test` and `ref.cast`, whose operands
+  are the instruction's fields (a field's cell in C, a test's record in
+  C), the record forms kept for a cell or a record past 16 bits.
 
 The numeric operations, their handlers and what the compiler needs to know
 of each (`regNumeric`, `regMemOp`, `regLoadAny`, `regStoreAny`) are
@@ -165,9 +169,10 @@ escapes, each a second table of 256 indexed by X:
 | 64-71 | the generic loads and stores, any memory's size and growth, `memory.init`, `memory.copy`, `memory.fill`, `data.drop` |
 | 80-83 | the vector loads, stores and lane accesses |
 | 96-107 | the table operations, `elem.drop`, `call_indirect`, `call_ref` and their tail calls |
-| 112-131 | the GC instructions |
+| 112-131 | the GC instructions, by their records |
 | 160 | the atomics, one operation whose handler switches on the opcode it carries |
 | 176-178 | `throw`, `throw_ref`, `rethrow` |
+| 192-225 | the GC accesses by their fields: struct get and set and array get and set of each storage kind, `array.len`, `ref.i31`, `i31.get_s` and `_u`, `ref.test`, `ref.cast` |
 
 `rSIMD`'s table holds the 212 generated SIMD operators -- every operator
 without immediates, the relaxed ones included -- and 15 hand-written: the
@@ -602,11 +607,13 @@ floats and integers (a truncation out of range, NaN or infinite left to Go,
 which traps or saturates; an unsigned 64-bit source past 2^63 too); the
 23 loads and stores of memory 0, an unshared one (a shared memory's size
 another thread may change, so its accesses are Go's; an access out of
-bounds is Go's, which traps); `call` and `call_indirect`, the reference
-moves; the escapes to the second table, whose i64 compares with a
-constant, `v128.load` and `v128.store` are native, and to rSIMD's table,
-169 of whose SIMD operators are (**SIMD** below). 245 of the
-first table's values, 13 of the second's. A branch back counts down
+bounds is Go's, which traps); `call`, `call_indirect` and `call_ref`, the
+reference moves; the escapes to the second table, whose i64 compares with
+a constant, `v128.load` and `v128.store`, the reference tests, selects and
+branches and the GC accesses are native (**GC objects** below), and to
+rSIMD's table, 169 of whose SIMD operators are on amd64 and 227 on arm64
+(**SIMD** below).
+245 of the first table's values, 57 of the second's. A branch back counts down
 the tick in `R11` and leaves to the slow function where it is spent, so the
 poll, OSR and preemption happen as in the Go loop; native code is not
 preemptible, and Go reaches it at the exits.
@@ -634,6 +641,22 @@ only where the CPU has SSSE3, SSE4.1 and SSE4.2 (golang.org/x/sys/cpu);
 elsewhere the table is the exit stub's alone. The floats' min and max,
 the conversions, popcnt, q15mulr, the extending multiplies and the
 relaxed operators are Go's.
+
+**GC objects.** An object is read and written in place, by the layout
+gc.go gives it: a struct's field in its cell's payload (a v128 in two
+cells', a reference the whole cell), an array's element at its elements'
+first (`Array.e`) plus the index times its size, below its length
+(`Array.n`). A reference stored, to a slot or into an object, goes by
+storeRef, under the marking rule. `ref.test`, `ref.cast` and
+`br_on_cast` test by the record's mode (`regGC.mode`): a type index by
+the object's type's supertype at the target's depth (`rtt.supers`), i31,
+struct, array and eq by what the reference points to, a top type as
+always true; a bottom type is Go's. A null where an object is needed, an
+index out of bounds and a failed cast exit to Go, which traps;
+allocations (`struct.new`, `array.new*`) stay in Go, an exit each.
+`TestNativeGC` holds every kind, the traps and the casts to the Go table
+with the marking flag read set and clear, and fails where a loop of them
+leaves to Go but for its allocations.
 
 **Calls.** `call` enters its callee natively where Go's call would do no
 more than native code can: a function of the same instance with register
@@ -735,9 +758,9 @@ both the Go table and native code for a 1 KB shift of what follows.
 
 1. The closure tree's deletion with `WASM_INTERP`, once arm64's handlers
    have run on hardware.
-2. Native GC accesses -- struct.get and set, array.get, set and len of
-   numeric fields and elements -- and call_ref: the arrays and gc
-   workloads still leave to Go for each.
+2. Native allocation of small structs and arrays, from a pool of the
+   context's, once the arrays and gc workloads show it worth more than
+   the exit each costs now.
 3. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i

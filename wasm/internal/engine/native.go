@@ -46,6 +46,9 @@ type nativeCtx struct {
 	// simdTable is rSIMD's native table, or one of the exit stub alone
 	// where the CPU lacks what its handlers use.
 	simdTable uintptr
+	// gc is the code's GC records' first; i31 what an i31's pointer word
+	// points to.
+	gc, i31 uintptr
 }
 
 // regNativeOn runs register code by the native handlers where they are
@@ -97,6 +100,8 @@ func nativeSet(f *frame, rc *regCode, pc int32) *nativeCtx {
 	c.funcs = sliceAddr(inst.Funcs)
 	c.fns = sliceAddr(inst.Code.fns)
 	c.sites = sliceAddr(rc.sites)
+	c.gc = sliceAddr(rc.gc)
+	c.i31 = uintptr(unsafe.Pointer(&i31Mark))
 	c.calls = 0
 	if nativeCall(inst.Code) {
 		c.calls = 1

@@ -210,6 +210,7 @@ func emitARM64() (*block, error) {
 	g.refs()
 	g.calls()
 	g.memory()
+	g.gc()
 	g.simd()
 	g.simdMemory()
 

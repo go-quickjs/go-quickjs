@@ -96,6 +96,19 @@ func (g *armGen) calls() {
 		a.Bind(unchecked)
 		a.B(callFn)
 	})
+	// call_ref: the function the reference in the site's target slot
+	// names, where it is not null.
+	g.hx(rd.XCallRef, "CallRef", func() {
+		a.Load(aT, aCtx, rd.CtxCalls)
+		a.Cbz(aT, g.exit, true)
+		siteAddr()
+		a.LoadU32(a9, aC, rd.SiteTarget)
+		a.Load(aT, aCtx, rd.CtxR)
+		a.AddLsl(a9, aT, a9, 4)
+		a.Load(a8, a9, 0)
+		a.Cbz(a8, g.exit, true)
+		a.B(callFn)
+	})
 	g.h(rd.Call, "Call", func() {
 		a.Load(aT, aCtx, rd.CtxCalls)
 		a.Cbz(aT, g.exit, true)
@@ -254,7 +267,7 @@ func (g *armGen) calls() {
 		// caller's, its code's, and the way back.
 		for _, f := range []int32{rd.CtxTable, rd.CtxExtTable, rd.CtxSIMDTable, rd.CtxGoTable, rd.CtxSlowTable, rd.CtxCallH, rd.CtxMem0,
 			rd.CtxGlobals, rd.CtxExits, rd.CtxX, rd.CtxInst, rd.CtxFuncs, rd.CtxFns, rd.CtxCalls,
-			rd.CtxMaxDepth, rd.CtxStoreRef, rd.CtxWB} {
+			rd.CtxMaxDepth, rd.CtxStoreRef, rd.CtxWB, rd.CtxI31} {
 			a.Load(aD, aCtx, f)
 			a.Store(a10, cc+f, aD)
 		}
@@ -263,7 +276,7 @@ func (g *armGen) calls() {
 		a.Load(a8, a10, cc+rd.CtxRc)
 		a.Load(aD, a8, rd.RcCode)
 		a.Store(a10, cc+rd.CtxCode, aD)
-		for _, f := range []struct{ slice, ctx int32 }{{rd.RcTables, rd.CtxTables}, {rd.RcSites, rd.CtxSites}} {
+		for _, f := range []struct{ slice, ctx int32 }{{rd.RcTables, rd.CtxTables}, {rd.RcSites, rd.CtxSites}, {rd.RcGC, rd.CtxGC}} {
 			has := a.NewLabel()
 			a.MovRR(aD, ZR)
 			a.Load(aT, a8, f.slice+rd.SliceLen)

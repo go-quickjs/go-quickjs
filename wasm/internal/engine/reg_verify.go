@@ -33,7 +33,8 @@ type regDesc struct {
 
 // rd parses a descriptor: the kinds of A, B and C -- 'n' a numeric slot,
 // 'v' a v128's first slot, 'r' a reference slot, 'o' (C) a 16-bit branch
-// offset, '-' anything -- or, where B is '=', A's kind and BC's meaning:
+// offset, 'c' (C) a struct field's cell, 'q' (C) a GC record, '-'
+// anything -- or, where B is '=', A's kind and BC's meaning:
 // 'o' a 32-bit branch offset, 'g', 'G' and 'W' a numeric, reference and
 // v128 global, 's' a site, 't' a branch table, 'f' a function, 'm' a
 // memory, 'T' a table, 'd' and 'e' a data and an element segment, 'R' a GC
@@ -123,6 +124,23 @@ type regVerifier struct {
 	starts  []bool
 	targets []int
 	err     error
+	// cells is the most cells a struct of the module's types takes, once
+	// asked for.
+	cells int
+}
+
+// maxCells returns the most cells a struct of the module's types takes,
+// its header's included: what a struct field's cell is below.
+func (v *regVerifier) maxCells() int {
+	if v.cells == 0 {
+		v.cells = 1
+		for ti, t := range v.m.Types {
+			if t.Kind == module.TypeStruct {
+				v.cells = max(v.cells, rttOf(v.m.Canonical[ti]).ncells)
+			}
+		}
+	}
+	return v.cells
 }
 
 func (v *regVerifier) fail(pc int, format string, args ...any) {
@@ -258,6 +276,14 @@ func (v *regVerifier) instr(pc, nslots, rslots int) (int, bool) {
 		switch k {
 		case 'o':
 			v.targets = append(v.targets, pc+int(int16(f)))
+		case 'c':
+			if f >= v.maxCells() {
+				v.fail(pc, "struct cell %d past the module's structs' %d", f, v.maxCells())
+			}
+		case 'q':
+			if f >= len(v.rc.gc) {
+				v.fail(pc, "GC record %d past the code's %d", f, len(v.rc.gc))
+			}
 		default:
 			v.slotIn(pc, k, f, nslots, rslots)
 		}

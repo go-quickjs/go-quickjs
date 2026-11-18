@@ -40,6 +40,13 @@ type regGC struct {
 	h        module.HeapType
 	nullable bool
 	m        *module.Module
+	// mode says how native code tests a reference for h (castMode); for
+	// a type index, canonical type canon declared at depth among its
+	// supertypes, which the object's type's supertype at depth must be
+	// (rtt.isSub).
+	mode  uint8
+	depth uint32
+	canon module.CanonicalIndex
 }
 
 // The GC operations of the second table.
@@ -119,6 +126,10 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		ft := m.Types[ti].Struct.Fields[fi].Type
 		ops, h := c.operands(1)
 		t := ft.Unpacked()
+		if cell := rt.cells[fi]; cell <= 0xffff {
+			c.fastResult(xSGet8S+gcGetKind(ft, op == opcode.StructGetS), t, h, rf(int(ops[0])), uint64(cell))
+			return true
+		}
 		c.gcResult(xStructGet, t, h, regGC{ops: ops, cell: rt.cells[fi], read: cellToVal(ft, op == opcode.StructGetS), k: kindOf(t)})
 	case opcode.StructSet:
 		ti := c.r.u32()
@@ -126,6 +137,10 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		rt := rttOf(m.Canonical[ti])
 		ft := m.Types[ti].Struct.Fields[fi].Type
 		ops, _ := c.operands(2)
+		if cell := rt.cells[fi]; cell <= 0xffff {
+			c.emit(rExt, uint8(xSSet8+gcSetKind(ft)), rf(int(ops[0])), field(ft.Unpacked(), int(ops[1])), uint64(cell))
+			return true
+		}
 		c.emitBC(rExt, xStructSet, 0, c.gcRec(regGC{ops: ops, cell: rt.cells[fi], et: ft, k: kindOf(ft.Unpacked())}))
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
 		ti := c.r.u32()
@@ -161,15 +176,15 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		et := m.Types[ti].Array.Elem.Type
 		ops, h := c.operands(2)
 		t := et.Unpacked()
-		c.gcResult(xArrayGet, t, h, regGC{ops: ops, et: et, signed: op == opcode.ArrayGetS, k: kindOf(t)})
+		c.fastResult(xAGet8S+gcGetKind(et, op == opcode.ArrayGetS), t, h, rf(int(ops[0])), ns(int(ops[1])))
 	case opcode.ArraySet:
 		ti := c.r.u32()
 		et := m.Types[ti].Array.Elem.Type
 		ops, _ := c.operands(3)
-		c.emitBC(rExt, xArraySet, 0, c.gcRec(regGC{ops: ops, et: et, k: kindOf(et.Unpacked())}))
+		c.emit(rExt, uint8(xASet8+gcSetKind(et)), rf(int(ops[0])), ns(int(ops[1])), field(et.Unpacked(), int(ops[2])))
 	case opcode.ArrayLen:
 		ops, h := c.operands(1)
-		c.gcResult(xArrayLen, module.I32, h, regGC{ops: ops})
+		c.fastResult(xALen, module.I32, h, rf(int(ops[0])), 0)
 	case opcode.ArrayFill:
 		ti := c.r.u32()
 		et := m.Types[ti].Array.Elem.Type
@@ -187,10 +202,14 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		c.emitBC(rExt, xArrayInit, 0, c.gcRec(g))
 	case opcode.RefI31:
 		ops, h := c.operands(1)
-		c.gcResult(xRefI31, module.Ref(module.HeapI31), h, regGC{ops: ops})
+		c.fastResult(xRefI31F, module.Ref(module.HeapI31), h, ns(int(ops[0])), 0)
 	case opcode.I31GetS, opcode.I31GetU:
 		ops, h := c.operands(1)
-		c.gcResult(xI31Get, module.I32, h, regGC{ops: ops, signed: op == opcode.I31GetS})
+		x := xI31GetU
+		if op == opcode.I31GetS {
+			x = xI31GetS
+		}
+		c.fastResult(x, module.I32, h, rf(int(ops[0])), 0)
 	case opcode.AnyConvertExtern, opcode.ExternConvertAny:
 		e := c.pop()
 		hp := module.HeapAny
@@ -204,9 +223,14 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		hp := c.r.heapType()
 		nullable := op == opcode.RefTestNull || op == opcode.RefCastNull
 		g := regGC{h: hp, nullable: nullable, m: m}
+		c.castTarget(&g, hp)
 		if op == opcode.RefTest || op == opcode.RefTestNull {
 			var h int
 			g.ops, h = c.operands(1)
+			if n := len(c.out.gc); n <= 0xffff {
+				c.fastResult(xRefTestF, module.I32, h, rf(int(g.ops[0])), uint64(c.gcRec(g)))
+				return true
+			}
 			c.gcResult(xRefTest, module.I32, h, g)
 			return true
 		}
@@ -214,7 +238,11 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		h := len(c.stack)
 		s := c.slotOf(e, h)
 		g.ops = []uint32{uint32(s)}
-		c.emitBC(rExt, xRefCast, 0, c.gcRec(g))
+		if n := len(c.out.gc); n <= 0xffff {
+			c.emit(rExt, uint8(xRefCastF), rf(s), 0, uint64(c.gcRec(g)))
+		} else {
+			c.emitBC(rExt, xRefCast, 0, c.gcRec(g))
+		}
 		c.push(rentry{t: module.RefMaybeNull(hp, nullable), slot: s, local: e.local, def: -1})
 	case opcode.BrOnCast, opcode.BrOnCastFail:
 		flags := c.r.byte()
@@ -239,7 +267,9 @@ func (c *regCompiler) brOnCast(fail bool, depth int, h module.HeapType, nullable
 	}
 	ref := c.stack[top]
 	es := c.stack[len(c.stack)-n:]
-	rec := uint64(c.gcRec(regGC{h: h, nullable: nullable, m: c.m}))
+	g := regGC{h: h, nullable: nullable, m: c.m}
+	c.castTarget(&g, h)
+	rec := uint64(c.gcRec(g))
 	taken, skip := xBrOnCast, xBrOnCastFail
 	if fail {
 		taken, skip = xBrOnCastFail, xBrOnCast
