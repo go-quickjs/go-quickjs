@@ -583,7 +583,8 @@ func logInterp(t *testing.T) {
 		reasons = append(reasons, r)
 	}
 	sort.Slice(reasons, func(i, j int) bool { return st.Tree[reasons[i]] > st.Tree[reasons[j]] })
-	t.Logf("interp: %d bodies compiled to register code, %d left to the closure tree", st.Register, tree)
+	t.Logf("interp: %d bodies compiled to register code, %d left to the closure tree, in %v",
+		st.Register, tree, engine.ReadJITStats().InterpTime)
 	for _, r := range reasons {
 		t.Logf("interp: %6d left to the tree: %s", st.Tree[r], r)
 	}

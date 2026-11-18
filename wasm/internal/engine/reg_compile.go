@@ -148,6 +148,9 @@ func regCompile(code *Code, index uint32) (*compiled, string) {
 		c := &regCompiler{code: code, m: code.Module, fn: index, far: far, last: -1, farPCs: map[int]bool{}}
 		p, why := c.compile()
 		if why != "" || !c.retry {
+			if p != nil && regVerify {
+				verifyCompiled(code.Module, index, p)
+			}
 			return p, why
 		}
 	}

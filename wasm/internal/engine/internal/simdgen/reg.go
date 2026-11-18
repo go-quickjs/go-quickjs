@@ -75,7 +75,8 @@ func regSIMDOp(op opcode.Opcode) (regOp, int, bool) {
 	}
 	b.WriteString("}\nreturn 0, 0, false\n}\n\nfunc init() {\n")
 	for _, o := range all {
-		fmt.Fprintf(&b, "regSIMDTable[s%s] = rhS%s\n", o.name, o.name)
+		desc := map[kind]string{unary: "vv-", binary: "vvv", ternary: "vvv+v", shift: "vvn", test: "nv-"}[o.kind]
+		fmt.Fprintf(&b, "regSIMDTable[s%s] = rhS%s\nregSIMDDescs[s%s] = rd(%q)\n", o.name, o.name, o.name, desc)
 	}
 	b.WriteString("}\n")
 	writeFile(path, b.Bytes())

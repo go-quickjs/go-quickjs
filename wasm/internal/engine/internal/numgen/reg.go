@@ -124,15 +124,16 @@ type regGen struct {
 	first, ext       []string
 }
 
-// handler writes a handler's function and gives it a value in its table.
-func (g *regGen) handler(name, body string, isCold bool) {
+// handler writes a handler's function and gives it a value in its table,
+// with the descriptor of its fields the verifier checks (rd).
+func (g *regGen) handler(name, body string, isCold bool, desc string) {
 	fmt.Fprintf(&g.h, "func rh%s(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {\n%s}\n\n", name, body)
 	if isCold {
 		g.ext = append(g.ext, name)
-		fmt.Fprintf(&g.init, "regExtTable[x%s] = rh%s\n", name, name)
+		fmt.Fprintf(&g.init, "regExtTable[x%s] = rh%s\nregExtDescs[x%s] = rd(%q)\n", name, name, name, desc)
 	} else {
 		g.first = append(g.first, name)
-		fmt.Fprintf(&g.init, "regTable[r%s] = rh%s\n", name, name)
+		fmt.Fprintf(&g.init, "regTable[r%s] = rh%s\nregDescs[r%s] = rd(%q)\n", name, name, name, desc)
 	}
 }
 
@@ -142,7 +143,7 @@ func writeReg(path string) {
 		isCold := cold[o.name]
 		body := fmt.Sprintf("a, b := %s, %s\n*rs(l, w>>16) = %s\nreturn pc + 1\n",
 			regRead(o.arg, "w>>32"), regRead(o.arg, "w>>48"), regWrite(o.res, regExpr(o.expr)))
-		g.handler(o.name, body, isCold)
+		g.handler(o.name, body, isCold, "nnn")
 		ref := "r" + o.name
 		if isCold {
 			ref = "x" + o.name
@@ -151,7 +152,7 @@ func writeReg(path string) {
 		if immOps[o.name] {
 			body := fmt.Sprintf("a, b := %s, %s\n*rs(l, w>>16) = %s\nreturn pc + 1\n",
 				regRead(o.arg, "w>>32"), regImm(o.arg, "w>>48"), regWrite(o.res, regExpr(o.expr)))
-			g.handler(o.name+"I", body, false)
+			g.handler(o.name+"I", body, false, "nn-")
 			fmt.Fprintf(&g.info, ", imm: r%sI", o.name)
 		}
 		if commutative[o.name] {
@@ -160,10 +161,10 @@ func writeReg(path string) {
 		if c, ok := intCompares[o.name]; ok {
 			body := fmt.Sprintf("a, b := %s, %s\nif %s {\nreturn regTake16(w, pc, f)\n}\nreturn pc + 1\n",
 				regRead(o.arg, "w>>16"), regRead(o.arg, "w>>32"), cond(o.expr))
-			g.handler("Br"+o.name, body, false)
+			g.handler("Br"+o.name, body, false, "nno")
 			body = fmt.Sprintf("a, b := %s, %s\nif %s {\nreturn regTake16(w, pc, f)\n}\nreturn pc + 1\n",
 				regRead(o.arg, "w>>16"), regImm(o.arg, "w>>32"), cond(o.expr))
-			g.handler("Br"+o.name+"I", body, false)
+			g.handler("Br"+o.name+"I", body, false, "n-o")
 			fmt.Fprintf(&g.init, "regSlowTable[rBr%s] = regSlow16\nregSlowTable[rBr%sI] = regSlow16\n", o.name, o.name)
 			fmt.Fprintf(&g.info, ", br: rBr%s, brI: rBr%sI, swap: opcode.%s, neg: opcode.%s", o.name, o.name, c[0], c[1])
 		}
@@ -177,7 +178,7 @@ func writeReg(path string) {
 		isCold := cold[o.name]
 		body := fmt.Sprintf("a := %s\n*rs(l, w>>16) = %s\nreturn pc + 1\n",
 			regRead(o.arg, "w>>32"), regWrite(o.res, regExpr(o.expr)))
-		g.handler(o.name, body, isCold)
+		g.handler(o.name, body, isCold, "nn-")
 		ref := "r" + o.name
 		if isCold {
 			ref = "x" + o.name
@@ -188,13 +189,13 @@ func writeReg(path string) {
 	for _, l := range loads {
 		body := fmt.Sprintf("b := f.inst.mem0.span(uint64(uint32(*rs(l, w>>32)))+uint64(uint16(w>>48)), %d, regAt(pc))\n*rs(l, w>>16) = %s\nreturn pc + 1\n",
 			l.width, regWrite(l.t, l.expr))
-		g.handler(l.name, body, false)
+		g.handler(l.name, body, false, "nn-")
 		fmt.Fprintf(&mem, "case opcode.%s:\nreturn r%s, false, true\n", l.name, l.name)
 	}
 	for _, s := range stores {
 		body := fmt.Sprintf("v := %s\nb := f.inst.mem0.span(uint64(uint32(*rs(l, w>>16)))+uint64(uint16(w>>48)), %d, regAt(pc))\n%s\nreturn pc + 1\n",
 			regRead(s.t, "w>>32"), s.width, s.expr)
-		g.handler(s.name, body, false)
+		g.handler(s.name, body, false, "nn-")
 		fmt.Fprintf(&mem, "case opcode.%s:\nreturn r%s, true, true\n", s.name, s.name)
 	}
 	if n := len(g.first); n > 256-firstReserved {
