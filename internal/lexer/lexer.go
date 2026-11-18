@@ -5,10 +5,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -264,7 +264,7 @@ func (l *Lexer) skipSpace() error {
 			case r == 0x2028 || r == 0x2029:
 				l.pos += size
 				l.newline()
-			case r == 0xFEFF || unicode.Is(unicode.Zs, r):
+			case r == 0xFEFF || ucd.IsSpaceSeparator(r):
 				l.pos += size
 			default:
 				return nil
@@ -1195,27 +1195,14 @@ func isIdentStartByte(c byte) bool {
 	return c == '$' || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+// isIdentStart and isIdentPart are the grammar's IdentifierStartChar and
+// IdentifierPartChar: past ASCII, ID_Start and ID_Continue, at package ucd's
+// Unicode version rather than the toolchain's.
 func isIdentStart(r rune) bool {
 	if r < utf8.RuneSelf {
 		return isIdentStartByte(byte(r))
 	}
-	if isPatternSyntaxExclusion(r) {
-		return false
-	}
-	return unicode.In(r, unicode.L, unicode.Nl, unicode.Other_ID_Start)
-}
-
-// isPatternSyntaxExclusion reports whether a character is one of the few that
-// Unicode's derived identifier properties take back out again.
-//
-// They are letters by category but are reserved for syntax, so a language that
-// uses the derived properties -- as this one does -- must not accept them.
-func isPatternSyntaxExclusion(r rune) bool {
-	switch r {
-	case 0x2E2F: // VERTICAL TILDE
-		return true
-	}
-	return false
+	return ucd.IsIDStart(r)
 }
 
 func isIdentPart(r rune) bool {
@@ -1225,9 +1212,5 @@ func isIdentPart(r rune) bool {
 	if r == 0x200C || r == 0x200D { // ZWNJ, ZWJ
 		return true
 	}
-	if isPatternSyntaxExclusion(r) {
-		return false
-	}
-	return unicode.In(r, unicode.L, unicode.Nl, unicode.Other_ID_Start,
-		unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue)
+	return ucd.IsIDContinue(r)
 }

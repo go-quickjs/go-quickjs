@@ -399,6 +399,57 @@ func TestUnicodeIdentifiers(t *testing.T) {
 	}
 }
 
+// TestIdentifiersAtUnicode17 lexes identifiers of characters that Unicode
+// 15.1, 16.0 and 17.0 made ID_Start or ID_Continue, which a build with a Go
+// whose own tables are older -- Go 1.24's are at 15.0 -- had rejected, and a
+// character the derived properties leave out, whatever its category.
+func TestIdentifiersAtUnicode17(t *testing.T) {
+	for _, src := range []string{
+		"\U0002EBF0",      // CJK Extension I, 15.1
+		"a\u30FB\uFF65",   // the katakana middle dots, ID_Continue at 15.1
+		"\u1C89\u1C8A",    // CYRILLIC CAPITAL and SMALL LETTER TJE, 16.0
+		"\U00010D50",      // GARAY CAPITAL LETTER A, 16.0
+		"\U00016EA0",      // BERIA ERFE CAPITAL LETTER ARKAB, 17.0
+		"a\U00011B60",     // SHARADA VOWEL SIGN OE, Mn, 17.0
+		"\u2160\u1885",    // Nl and Other_ID_Start
+		`\u{2EBF0}\u30FB`, // escaped
+	} {
+		// One identifier, then the end: a character that begins nothing
+		// would be an empty name, the lexer standing where it was.
+		l := New(src)
+		first, err := l.Next()
+		end, err2 := l.Next()
+		if err != nil || err2 != nil || first.Kind != Ident || first.Value == "" || end.Kind != EOF {
+			t.Errorf("%+q lexes as %v (%v), %v (%v), want one identifier", src, first, err, end, err2)
+		}
+	}
+	// VERTICAL TILDE is Lm but Pattern_Syntax; U+2FFC is a symbol.
+	for _, src := range []string{"\u2E2F", "a\u2E2F", "\u2FFC", `\u2E2F`, `a\u2E2F`, `\u{2FFC}`} {
+		// The lexer rejects an escape with an error and leaves a character
+		// that begins nothing as an empty name, which the parser rejects.
+		l := New(src)
+		rejected := false
+		for {
+			tok, err := l.Next()
+			if err != nil {
+				rejected = strings.Contains(err.Error(), "invalid character")
+				break
+			}
+			if tok.Kind == EOF || tok.Kind == Ident && tok.Value == "" {
+				rejected = tok.Kind != EOF
+				break
+			}
+		}
+		if !rejected {
+			t.Errorf("%+q lexes, want it rejected", src)
+		}
+	}
+	// The space separators are whitespace, the ideographic space among them.
+	if toks := scanAll(t, "a\u3000\u202Fb"); len(toks) != 2 {
+		t.Errorf("got %v, want two identifiers", toks)
+	}
+}
+
 func TestSeekRestoresPosition(t *testing.T) {
 	// The parser relies on Seek to re-scan after lookahead.
 	l := New("a b c")
