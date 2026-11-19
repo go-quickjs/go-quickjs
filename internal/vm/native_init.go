@@ -35,7 +35,8 @@ func regInitPlan(rc *bytecode.RegCode) []uint32 {
 // closureCode, and holds what the template's own caches hold; initRun
 // fills it, each pointer through the write barrier's routine while the
 // collector marks, and stops refilling past maxCacheFills, as a site's
-// cache gives up. Go only makes it, empty (regExtend).
+// cache gives up. Go makes it empty, with the short plain plan's count
+// and parameter indexes (regExtend).
 type initCache struct {
 	from, to *shape
 	p1, p2   *Object
@@ -47,6 +48,30 @@ type initCache struct {
 	slots [bytecode.MaxStores]uint16
 	// fills counts the fills, as propCache.fills does.
 	fills uint8
+	// plain is the number of stores where there are at most four and
+	// none defaults its parameter. The cached path makes them directly.
+	plain uint8
+	// args is each plain store's parameter, and need their largest index
+	// plus one: the argument count a straight-line copy needs. A plan has
+	// at most 64 parameters (regcomp's plansOf).
+	args [4]uint8
+	need uint8
+}
+
+func newInitCache(plan []uint32) *initCache {
+	c := new(initCache)
+	if len(plan) <= 4 {
+		c.plain = uint8(len(plan))
+		for i, w := range plan {
+			if w&1 != 0 {
+				c.plain = 0
+				break
+			}
+			c.args[i] = uint8(w >> 1)
+			c.need = max(c.need, c.args[i]+1)
+		}
+	}
+	return c
 }
 
 // The kinds of a forwarder's plan (regCode's fwdKind).

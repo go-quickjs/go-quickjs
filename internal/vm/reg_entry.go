@@ -54,7 +54,7 @@ func errNoRegCode(fn *bytecode.Function) error {
 func (r *Runtime) regExtend(cl *closure, c *regCode) {
 	if c.initPlan != nil && cl.ctorInit == nil {
 		// The native initializer's cache, which it fills.
-		cl.ctorInit = new(initCache)
+		cl.ctorInit = newInitCache(c.initPlan)
 	}
 	rc := c.rc
 	if rc.Names == nil {

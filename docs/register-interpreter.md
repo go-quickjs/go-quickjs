@@ -1019,7 +1019,13 @@ layout whose chain is as it was takes the same stores to the same slots:
 `initRun` then checks the layout, the room for the second, the object's
 extensibility and the chain once, decides the parameters made 0, and
 writes each value at its slot and the final layout, with no check of each
-store. Anything else is checked store by store as before and refills the
+store. For a plan of up to four stores with no parameter made 0, the cache
+also keeps each store's parameter index and the argument count it needs.
+A hit with enough arguments makes the stores directly, in order, without
+walking the plan; missing arguments take the ordinary cached path, which
+supplies undefined. Both paths use the same pointer barriers and final
+layout update.
+Anything else is checked store by store as before and refills the
 entry -- emptied first, its slots recorded as the values are written, its
 pointers written through the write barrier's routine while the collector
 marks, and the first layout last -- where every addition's cache checked

@@ -514,8 +514,34 @@ function make(C, n) { var s = 0; for (var i = 0; i < n; i++) { var o = new C(i, 
 		}
 		o := run(`var o = new P(1, 2, 3); Object.keys(o).join()`)
 		obj := r.global.getOwn(r.atoms.intern("o")).value().Object()
-		if o != "a,b" || c.fills != 1 || c.to != obj.shape || c.from == nil || c.from.n != 0 || c.slots[0] != 0 || c.slots[1] != 1 || c.slots[2] != 0 {
+		if o != "a,b" || c.fills != 1 || c.to != obj.shape || c.from == nil || c.from.n != 0 || c.slots[0] != 0 || c.slots[1] != 1 || c.slots[2] != 0 || c.plain != 3 {
 			t.Fatalf("marking %v: after constructions: keys %s, %+v", marking, o, c)
+		}
+		if got := run(`
+function Four(a, b) { this.a = a; this.b = b; this.c = a; this.d = b }
+function Many(a, b) { this.a = a; this.b = b; this.c = a; this.d = b; this.e = a }
+function Need(a, b, c, d) { this.a = d; this.b = a }
+function Defaulted(a, b) { this.a = a ? a : 0; this.b = b }
+var pointer = {}, f, m, n;
+for (var i = 0; i < 100; i++) {
+ f = new Four(pointer, i); m = new Many(pointer, i);
+ n = new Need(pointer, i, 0, pointer); new Defaulted(pointer, i);
+}
+n = new Need(pointer);
+[f.a === pointer, f.d === 99, m.e === pointer, n.a === undefined,
+ n.b === pointer, Object.keys(f).join()].join("|")`); got != "true|true|true|true|true|a,b,c,d" {
+			t.Fatalf("marking %v: short plans: %s", marking, got)
+		}
+		for _, tc := range []struct {
+			name  string
+			plain uint8
+		}{{"Four", 4}, {"Many", 0}, {"Need", 2}, {"Defaulted", 0}} {
+			if ic := initCacheOf(r, tc.name); ic == nil || ic.plain != tc.plain {
+				t.Fatalf("marking %v: %s's short plan: %+v", marking, tc.name, ic)
+			}
+		}
+		if ic := initCacheOf(r, "Need"); ic.need != 4 || ic.args[0] != 3 || ic.args[1] != 0 {
+			t.Fatalf("marking %v: remapped arguments: %+v", marking, ic)
 		}
 		run(`P.prototype.x = 1; make(P, 100)`)
 		if c.fills != 2 || c.from == nil {

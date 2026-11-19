@@ -26,6 +26,7 @@ func (g *armGen) initRun() {
 	loop1, existing, next1, cold, idxok, p1ok, hit, hitLoop, hitNext := L(), L(), L(), L(), L(), L(), L(), L(), L()
 	phase2, p2start, loop2, zero, have, own, cached, slot, nofit := L(), L(), L(), L(), L(), L(), L(), L(), L()
 	ok, made, done, miss := L(), L(), L(), L()
+	short, general := L(), L()
 	ic := func(f string) int32 { return off("initCache." + f) }
 	a.Bind(g.initL)
 	a.Load(r9, rCtx, scr(sV1))
@@ -81,6 +82,9 @@ func (g *armGen) initRun() {
 	a.Store(rCtx, scr(sV1), rC)
 	a.MovImm(rW, 1<<63)
 	a.Store(rCtx, scr(sRC), rW)
+	a.LoadU8(r8, r9, ic("plain"))
+	a.Cbnz(r8, short, false)
+	a.Bind(general)
 	a.MovImm(rW, 0)
 	a.Bind(hitLoop)
 	g.cmpMem(rW, rCtx, scr(sSaved))
@@ -204,6 +208,41 @@ func (g *armGen) initRun() {
 	a.MovImm(rW, 0)
 	a.Load(rK, rCtx, scr(sKind))
 	a.Br(rK)
+	a.Bind(short)
+	g.initShortStores(ok, general)
+}
+
+// initShortStores makes a cached plan's at most four stores without
+// defaults. sTop keeps the cache across barriers, with its argument
+// indexes and slots; sSaved keeps the number of stores.
+func (g *armGen) initShortStores(done, slow Label) {
+	a := g.a
+	a.LoadU8(r8, r9, off("initCache.need"))
+	g.cmpMem(r8, rCtx, scr(sEnd))
+	a.BCond(HI, slow)
+	a.Store(rCtx, scr(sTop), r9)
+	for i := 0; i < 4; i++ {
+		if i != 0 {
+			a.Load(rW, rCtx, scr(sSaved))
+			a.CmpImm(rW, int64(i), true)
+			a.BCond(LS, done)
+		}
+		a.Load(rD, rCtx, scr(sTop))
+		a.LoadU8(rC, rD, off("initCache.args")+int32(i))
+		a.LoadU16(rD, rD, off("initCache.slots")+int32(i*2))
+		a.Load(rS, rCtx, scr(sI))
+		a.AddLsl(rC, rS, rC, 4)
+		a.Load(r9, rC, 0)
+		a.Load(r8, rC, 8)
+		a.Load(rS, rCtx, scr(sKa))
+		a.Load(rS, rS, off("Object.valp"))
+		a.AddLsl(rS, rS, rD, 4)
+		a.Store(rS, 0, r9)
+		a.MovRR(rC, r8)
+		a.AddImm(rW, rS, 8, true)
+		g.ptrStore()
+	}
+	a.B(done)
 }
 
 // initZero is amd64's, of the store at index rW of the plan at rD. rC, r8

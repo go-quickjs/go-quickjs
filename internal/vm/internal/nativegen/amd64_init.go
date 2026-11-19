@@ -40,6 +40,7 @@ func (g *nativeGen) initEntry() Label {
 // the last one's shape and the store made -- and the stores whose
 // parameter is made 0 (sRC), whose bit 63 says the template's initCache
 // answered for the object (a hit) and bit 62 that the stores refill it.
+// A short plain hit keeps the cache at sTop instead of a store index.
 //
 // An object of the layout the cache went from, its chain as the cache's
 // additions found it, with room for the layout it went to, is a hit: no
@@ -53,6 +54,7 @@ func (g *nativeGen) initRun() {
 	loop1, existing, next1, cold, idxok, p1ok, hit, hitLoop, hitNext := L(), L(), L(), L(), L(), L(), L(), L(), L()
 	phase2, p2start, loop2, zero, have, own, cached, slot, nofit := L(), L(), L(), L(), L(), L(), L(), L(), L()
 	ok, made, done, miss := L(), L(), L(), L()
+	short, general := L(), L()
 	ic := func(f string) int32 { return off("initCache." + f) }
 	a.Bind(g.initL)
 	a.Load(R9, RDI, scr(sV1))
@@ -119,6 +121,10 @@ func (g *nativeGen) initRun() {
 	a.Store(RDI, scr(sV1), RCX)
 	a.MovImm(RAX, 1<<63)
 	a.Store(RDI, scr(sRC), RAX)
+	a.LoadU8(R8, R9, ic("plain"))
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondNE, short)
+	a.Bind(general)
 	a.Op(Xor, RAX, RAX, false)
 	a.Bind(hitLoop)
 	a.CmpMem(RAX, RDI, scr(sSaved), true)
@@ -253,6 +259,43 @@ func (g *nativeGen) initRun() {
 	a.Bind(miss)
 	a.Op(Xor, RAX, RAX, false)
 	a.JmpMem(RDI, scr(sKind))
+	a.Bind(short)
+	g.initShortStores(ok, general)
+}
+
+// initShortStores makes a cached plan's at most four stores without
+// defaults. sTop keeps the cache across barriers, with its argument
+// indexes and slots; sSaved keeps the number of stores.
+func (g *nativeGen) initShortStores(done, slow Label) {
+	a := g.a
+	a.LoadU8(R8, R9, off("initCache.need"))
+	a.CmpMem(R8, RDI, scr(sEnd), true)
+	a.Jcc(CondA, slow)
+	a.Store(RDI, scr(sTop), R9)
+	for i := 0; i < 4; i++ {
+		if i != 0 {
+			a.Load(RAX, RDI, scr(sSaved))
+			a.OpImm(Cmp, RAX, int32(i), true)
+			a.Jcc(CondBE, done)
+		}
+		a.Load(RDX, RDI, scr(sTop))
+		a.LoadU8(RCX, RDX, off("initCache.args")+int32(i))
+		a.LoadU16(RDX, RDX, off("initCache.slots")+int32(i*2))
+		a.Load(RSI, RDI, scr(sI))
+		a.ShiftImm(Shl, RCX, 4, true)
+		a.LeaIdx(RCX, RSI, RCX, 1, 0)
+		a.Load(R9, RCX, 0)
+		a.Load(R8, RCX, 8)
+		a.Load(RSI, RDI, scr(sKa))
+		a.Load(RSI, RSI, off("Object.valp"))
+		a.ShiftImm(Shl, RDX, 4, true)
+		a.Op(Add, RSI, RDX, true)
+		a.Store(RSI, 0, R9)
+		a.MovRR(RCX, R8)
+		a.Lea(RAX, RSI, 8)
+		g.ptrStore()
+	}
+	a.Jmp(done)
 }
 
 // initZero decides the parameter of the store at index RAX of the plan at
