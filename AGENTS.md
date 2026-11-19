@@ -581,9 +581,9 @@ time or about code that is missing, not a wrong answer. There are three
 kinds:
 
 - Tests that compare elapsed times or have a deadline:
-  `TestJITCompileLinear/time`, `TestNativeLoopsAreInterruptible`, and the
-  JIT's cancellation tests under qemu. Run them as a step of their own
-  (`-run '^Name$' -count=3`), not beside other heavy tests.
+  `TestJITCompileLinear/time` and the JIT's cancellation tests under
+  qemu. Run them as a step of their own (`-run '^Name$' -count=3`), not
+  beside other heavy tests.
 - Tests that look at the JIT's cache after a run. The time-based flush lets
   code go after about a second of program time without use, which a slow
   build (checkptr, qemu) reaches. The vm tests therefore hold every

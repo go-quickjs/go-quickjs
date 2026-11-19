@@ -95,27 +95,41 @@ func TestNestedEvalKeepsTheOuterCall(t *testing.T) {
 	}
 }
 
-// TestNativeLoopsAreInterruptible pins that a deadline stops the engine's
-// own loops that run no script between their steps: fill over an array-like
-// of four billion, JSON.stringify of a long dense array, and Intl's reading
-// of a locale list of length 2^53 - 1 (KI-16).
+// TestNativeLoopsAreInterruptible pins that a stop -- the context's end --
+// stops the engine's own loops that run no script between their steps:
+// fill over an array-like of four billion, JSON.stringify of a long dense
+// array, and Intl's reading of a locale list of length 2^53 - 1 (KI-16). The
+// stop is made due just before each loop begins, where it then finds it:
+// fill's and the locale list's run for good, and stringify's would return
+// its text, if they did not look. What fill wrote before it stopped is at
+// most a counted check's steps, 4,096. The array stringify walks is made
+// before, apart: made in the walk's run, its one allocation of 240 MB,
+// which nothing interrupts, took four seconds under the race detector, and
+// the stop was found after it, in fill.
 func TestNativeLoopsAreInterruptible(t *testing.T) {
-	for name, src := range map[string]string{
-		"fill":        `Array.prototype.fill.call({length: 2 ** 32 + 3}, 7)`,
-		"stringify":   `JSON.stringify(new Array(3e7).fill(1)).length`,
-		"locale list": `Intl.getCanonicalLocales({length: 2 ** 53 - 1})`,
+	for name, c := range map[string]struct{ setup, src string }{
+		"fill":        {`var o = {length: 2 ** 32 + 3}`, `stop(); Array.prototype.fill.call(o, 7)`},
+		"stringify":   {`var a = new Array(1e6).fill(1)`, `stop(); JSON.stringify(a).length`},
+		"locale list": {``, `stop(); Intl.getCanonicalLocales({length: 2 ** 53 - 1})`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rt := quickjs.New()
 			defer rt.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			defer cancel()
-			start := time.Now()
-			if _, err := rt.EvalContext(ctx, src); !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("err = %v, want the deadline", err)
+			if _, err := rt.Eval(c.setup); err != nil {
+				t.Fatal(err)
 			}
-			if d := time.Since(start); d > 3*time.Second {
-				t.Errorf("stopped after %v", d)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := rt.Set("stop", func() { cancel() }); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rt.EvalContext(ctx, c.src); !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want the stop", err)
+			}
+			if name == "fill" {
+				if v, err := rt.Eval(`Object.keys(o).length - 1`); err != nil || v.Int() > 4096 {
+					t.Errorf("fill wrote %v elements past the stop: %v", v, err)
+				}
 			}
 		})
 	}
