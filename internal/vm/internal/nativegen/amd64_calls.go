@@ -121,7 +121,6 @@ func (g *nativeGen) frameArgs() {
 // table, an index to build, a setter's entry.
 func (g *nativeGen) addProp(add, own Label) {
 	a := g.a
-	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	poly, polyCheck, exitNear, length := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
 	// A miss of the entry's shape goes to the probe of the site's entries
@@ -138,18 +137,28 @@ func (g *nativeGen) addProp(add, own Label) {
 	a.Bind(exitNear)
 	a.Jmp(g.exit)
 	a.Bind(add)
-	shapeOff := off("Object.shape")
 	a.Load(R8, RCX, off("propCache.shape"))
-	a.CmpMem(R8, RSI, shapeOff, true)
+	a.CmpMem(R8, RSI, off("Object.shape"), true)
 	a.Jcc(CondNE, polyCheck)
+	g.addTransition(exitNear)
+}
+
+// addTransition is addProp's addition once the object is known to be of
+// the shape of the entry at RCX: the entry's transition, which a keyed
+// store's entry of the object's shape and key takes too (keyedStore). Its
+// first checks leave by early, a jump to the exit stub near them.
+func (g *nativeGen) addTransition(early Label) {
+	a := g.a
+	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	shapeOff := off("Object.shape")
 	a.Load(R8, RCX, off("propCache.next"))
 	a.Op(Test, R8, R8, true)
-	a.Jcc(CondE, exitNear)
+	a.Jcc(CondE, early)
 	a.CmpMem(R8, RDI, ncSetterNx, true)
-	a.Jcc(CondE, exitNear)
+	a.Jcc(CondE, early)
 	a.LoadU16(R9, RSI, offObjFlags)
 	a.OpImm(And, R9, int32(objExtensible), false)
-	a.Jcc(CondE, exitNear)
+	a.Jcc(CondE, early)
 	a.Load(R9, RCX, off("propCache.p1"))
 	a.Op(Test, R9, R9, true)
 	a.Jcc(CondE, p1ok)

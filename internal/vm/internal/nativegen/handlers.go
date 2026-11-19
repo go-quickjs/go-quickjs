@@ -72,6 +72,9 @@ var handlerOps = []bytecode.ROp{
 	bytecode.RGetPropNext,
 	bytecode.RInstanceOfNext,
 	bytecode.RJBool,
+	// A computed key's define by its site's keyed store cache
+	// (keyedStore).
+	bytecode.RDefineIndex,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

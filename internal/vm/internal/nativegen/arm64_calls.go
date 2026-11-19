@@ -113,13 +113,20 @@ func (g *armGen) frameArgs() {
 // address in rD.
 func (g *armGen) addProp(own Label) {
 	a := g.a
-	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	poly, length := a.NewLabel(), a.NewLabel()
 	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
-	shapeOff := off("Object.shape")
 	a.Load(r8, rC, off("propCache.shape"))
-	g.cmpMem(r8, rS, shapeOff)
+	g.cmpMem(r8, rS, off("Object.shape"))
 	a.BCond(NE, poly)
+	g.addTransition()
+}
+
+// addTransition is addProp's addition once the object is known to be of
+// the shape of the entry at rC, as amd64's.
+func (g *armGen) addTransition() {
+	a := g.a
+	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	shapeOff := off("Object.shape")
 	a.Load(r8, rC, off("propCache.next"))
 	a.Cbz(r8, g.exit, true)
 	g.cmpMem(r8, rCtx, ncSetterNx)

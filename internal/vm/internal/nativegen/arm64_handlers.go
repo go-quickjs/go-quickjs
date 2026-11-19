@@ -657,12 +657,19 @@ func armEmit(v *variant) (*block, error) {
 		g.typedBigWrite(rS, rC)
 		g.next()
 	}
+	// A key that is no number: a string stored by the site's keyed store
+	// cache (keyedStore), laid out after every handler, as amd64's.
+	keyed := a.NewLabel()
 	h(bytecode.RSetIndex, func() {
 		miss := a.NewLabel()
+		g.tail = append(g.tail, func() {
+			a.Bind(keyed)
+			g.keyedStore()
+		})
 		g.regA(rD)
 		g.object(rS, rD)
 		g.regB(r8)
-		g.num(0, r8)
+		g.numOr(0, r8, keyed)
 		g.element(rC, rS, 0, objMappedArguments|objSharedElems, miss)
 		setElem(miss)
 	})
@@ -1151,6 +1158,15 @@ func armEmit(v *variant) (*block, error) {
 	}{
 		{bytecode.RInstanceOfNext, func() { g.instanceOfMode(true) }},
 		{bytecode.RJBool, g.jBool},
+		// A computed key's define by the site's keyed store cache, as
+		// amd64's.
+		{bytecode.RDefineIndex, func() {
+			g.regA(rD)
+			g.object(rS, rD)
+			g.regB(r8)
+			a.Load(r9, r8, 0)
+			a.B(keyed)
+		}},
 	} {
 		n := len(g.last)
 		h(x.op, x.emit)

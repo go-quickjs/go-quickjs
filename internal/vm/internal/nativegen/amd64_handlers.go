@@ -740,12 +740,20 @@ func nativeEmit(v *variant) (*block, error) {
 		g.typedBigWrite(RSI, RCX)
 		g.next()
 	}
+	// A key that is no number: a string stored by the site's keyed store
+	// cache (keyedStore), laid out after every handler, as define_index's
+	// handler goes on there.
+	keyed := a.NewLabel()
 	h(bytecode.RSetIndex, func() {
 		miss := a.NewLabel()
+		g.tail = append(g.tail, func() {
+			a.Bind(keyed)
+			g.keyedStore()
+		})
 		g.decA(RDX)
 		g.object(RSI, RDX)
 		g.decB(R8)
-		g.num(0, R8)
+		g.numOr(0, R8, keyed)
 		g.element(RCX, RSI, 0, objMappedArguments|objSharedElems, miss)
 		setElem(miss)
 	})
@@ -1315,6 +1323,15 @@ func nativeEmit(v *variant) (*block, error) {
 	}{
 		{bytecode.RInstanceOfNext, func() { g.instanceOfMode(true) }},
 		{bytecode.RJBool, g.jBool},
+		// A computed key's define by the site's keyed store cache, as
+		// set_index's key string (keyedStore).
+		{bytecode.RDefineIndex, func() {
+			g.decA(RDX)
+			g.object(RSI, RDX)
+			g.decB(R8)
+			a.LoadIdx(R9, R12, R8, 1, 0)
+			a.Jmp(keyed)
+		}},
 	} {
 		n := len(g.last)
 		h(x.op, x.emit)

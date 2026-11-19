@@ -660,7 +660,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 131 of the 244 operations have a native handler
+**What is native.** 132 of the 244 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,
@@ -669,8 +669,9 @@ to 1,024 bytes; a longer text is Go's, so that a loop comparing it each turn
 still exits to see an interrupt), moves, constants, upvalues, globals by
 their site, property reads and writes by the site's entry or its
 polymorphic entries (`propPoly`), a property added by the transition the
-site remembers, an array's length written as long or shorter, as
-`setArrayLength` truncates it (nativegen's `arrayLength`: a longer one, a
+site remembers, a key string's store by its keyed site's entries
+(`set_index`, `define_index`), an array's length written as long or
+shorter, as `setArrayLength` truncates it (nativegen's `arrayLength`: a longer one, a
 value that is no length and storage a literal shares are Go's), `o.n +=`, `in` by the realm's cache and by an array's
 elements, `typeof` and `jtypeof`, a template's parts, `length`, dense
 arrays' and typed arrays' elements (every kind but Float16), short BigInts'
@@ -1273,6 +1274,15 @@ beside it for the globals, `regCalls` for calls.
   declared, so the check is one compare. A site is filled only for a plain
   data property -- a writable one for a write -- of a global object no
   lexical binding shadows.
+- **A keyed store** -- `o[k] = v`, `{ [k]: v }`, a class's field --
+  has a site of its own (its Aux, regcomp's `keyedSite`), whose entries
+  remember, for each pair of a shape and a key it met, the slot it wrote
+  or the transition it took, its own entry and up to three more, as V8's
+  keyed store inline caches remember names and maps
+  (reg_table_keyed.go). A key string's atom is the one keyAtoms
+  remembers with it, as for a keyed read; an array index is the
+  element paths' and no entry's. A site that keeps meeting new pairs
+  stops filling (`maxCacheFills`).
 - **An element** of a dense array is read or written in place for an index
   that is an int32 in range; a typed array's element, an append, a hole
   filled are out of line but not the slow path's (`regElemMiss`,
