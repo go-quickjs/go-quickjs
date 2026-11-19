@@ -1064,7 +1064,7 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `atomics` | a struct or array atomic instruction |
 | `gc` | a GC instruction past the GC proposal's |
 | `frame` | more spill slots than its frame has below the call area |
-| `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
+| `size` | code past `MaxCodeBytes` (wasm/internal/jit, a megabyte), or, on arm64, past a branch's reach |
 | `internal` | a panic of the compiler's |
 
 `engine.ReadJITStats` counts what the tier compiled and refused, by
