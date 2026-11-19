@@ -267,7 +267,8 @@ Do not manually edit generated files or their binary companions:
   say), it checks every file but the feedback dispatchers'.
 - `internal/vm/*_layoutpad.go`, `internal/vm/layoutpad_*.go`,
   `internal/vm/native_a_layoutpad_*.s`,
-  `internal/regexp/aa_layoutpad.go` and `internal/regexp/layoutpad_*.go`,
+  `internal/regexp/aa_layoutpad.go`, `internal/regexp/layoutpad_*.go`,
+  `internal/jit/aa_layoutpad.go` and `internal/jit/layoutpad_*.go`,
   the layout lock's pads and the constants that size them for each
   configuration,
   written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.

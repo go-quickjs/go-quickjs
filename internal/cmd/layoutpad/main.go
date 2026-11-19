@@ -34,8 +34,9 @@
 //     without pointers (DW, DG), which the linker sorts by size among the
 //     zeroed data before the Go runtime's mheap_, writeBarrier and
 //     gcController, and so moves within their cache lines.
-//   - An outer pad (X), a function pad in a package linked before vm, in
-//     the file that sorts first there (internal/regexp/aa_layoutpad.go),
+//   - An outer pad (X, XJ), a function pad in a package linked before vm,
+//     in the file that sorts first there (internal/regexp/aa_layoutpad.go,
+//     internal/jit/aa_layoutpad.go),
 //     its constant in that package's configuration files: it moves the
 //     whole package, which a change growing the packages linked before it
 //     moves as much as vm, and which vm's pads, after it, cannot reach.
@@ -173,6 +174,7 @@ type outer struct {
 
 var outers = []outer{
 	{"X", "internal/regexp", "regexp", "before every file of package regexp: the matcher's run and search"},
+	{"XJ", "internal/jit", "jit", "before every file of package jit: the calls of Go native code makes, ExpandGoCall"},
 }
 
 // outerOf is the outer pad a lever is, if it is one.
