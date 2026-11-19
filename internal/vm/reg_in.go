@@ -181,14 +181,16 @@ func init() {
 			return false, false
 		case key.IsString():
 			s := key.String()
-			e := &r.keyAtoms[keySlot(s)]
-			if e.s != s {
+			e := r.keyFind(s)
+			if e == nil {
 				// Looked up, and its atom, or that it names none,
-				// remembered there (toPropertyName): two keys whose
-				// strings share a slot had each found the other's there
-				// at every evaluation, and left every one to inOperator,
-				// never remembered in hasCache.
-				if _, err := r.toPropertyName(key); err != nil || e.s != s {
+				// remembered there (toPropertyName), so that a key whose
+				// entry its set's newer keys displaced is answered here
+				// and remembered in hasCache, not left to inOperator.
+				if _, err := r.toPropertyName(key); err != nil {
+					return false, false
+				}
+				if e = r.keyFind(s); e == nil {
 					return false, false
 				}
 			}

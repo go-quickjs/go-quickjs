@@ -774,17 +774,6 @@ by more than 3% at every placement:
   `forward_poly` and `forward_loop` (+9%) and `json_parse_new_layout`
   (+16%). The interpreter's two are listed above, under the register
   interpreter.
-- **keyAtoms.** The keyed reads' and the in operator's cache of key atoms
-  (`keySlot`) is direct-mapped by the string's address, 256 slots
-  (`abi.KeyAtomsMul`): two keys that share a slot each find the other's
-  there at every evaluation (`hasQuick`'s key conversion). In 60 runs of
-  `prop_in_keyed`'s four keys their slots collided 13 times, with no call
-  of Go because the in operator's cache (`hasCache`) answered; a keyed read
-  that leaned on `keyAtoms` alone would do different work from run to run,
-  as `hasCache` with two ways to a set did, against the rule that native
-  code does the same work whether the collector marks or not. Give it ways
-  -- `hasCache` has four, an address hash and four-way sets chosen over a
-  content hash that cost `prop_in` 24 to 51% -- or another remedy.
 
 ## Rejected
 

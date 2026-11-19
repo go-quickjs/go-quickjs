@@ -30,42 +30,68 @@ func TestPropertyNameAtoms(t *testing.T) {
 	}
 }
 
-// Two key strings that share a slot of keyAtoms, converted in turn, each
-// find their atom remembered: the one a conversion moved out of the slot
-// is kept in its second way (keyRemember) and found there (keyVictim),
-// where each had evicted the other and been looked up anew every time.
-// The strings are found by their addresses, which keySlot hashes.
-func TestPropertyNameSharedSlot(t *testing.T) {
-	r := New(Config{})
-	defer r.Close()
-	first := map[uint64]*String{}
-	var a, b *String
-	for i := 0; a == nil; i++ {
-		s := NewString("key" + string(rune('a'+i%26)) + string(rune('a'+i/26%26)) + string(rune('a'+i/676%26)))
-		if p, ok := first[keySlot(s)]; ok && p.Go() != s.Go() {
-			a, b = p, s
-		} else {
-			first[keySlot(s)] = s
+// keyStringsInOneSet makes n strings of distinct names whose entries in
+// keyAtoms share a set: the set is the strings' addresses', which keySet
+// hashes, so that a test finds such strings rather than hoping for them.
+func keyStringsInOneSet(n int, seed int) []*String {
+	sets := map[uint64][]*String{}
+	for i := 0; ; i++ {
+		j := i + seed*100000
+		s := NewString("key" + string(rune('a'+j%26)) + string(rune('a'+j/26%26)) + string(rune('a'+j/676%26)) + string(rune('a'+j/17576%26)))
+		set := keySet(s)
+		if sets[set] = append(sets[set], s); len(sets[set]) == n {
+			return sets[set]
 		}
 	}
-	atomA, atomB := r.atoms.intern(a.Go()), r.atoms.intern(b.Go())
-	for i := 0; i < 4; i++ {
-		for _, c := range []struct {
-			s    *String
-			atom Atom
-		}{{a, atomA}, {b, atomB}} {
-			pn, err := r.toPropertyName(Str(c.s))
-			if err != nil || !pn.hasAtom || pn.atom != c.atom {
-				t.Fatalf("round %d: %q converts to %+v, %v, want atom %v", i, c.s.Go(), pn, err, c.atom)
-			}
-			if i > 0 && r.keyAtoms[keySlot(c.s)].s != c.s {
-				t.Fatalf("round %d: %q is not in its slot after its conversion", i, c.s.Go())
+}
+
+// Four key strings that share a set of keyAtoms, converted in turn, each
+// keep their entry, wherever their addresses put them: after the first
+// round none is looked up again, which the set's next way, moved on by
+// each new entry (keyPut), shows unchanged. A fifth takes the oldest's
+// way, and the oldest is then the one looked up. Direct-mapped, two keys
+// that shared a slot had each evicted the other at every conversion, in
+// some runs and not others.
+func TestPropertyNameSharedSet(t *testing.T) {
+	for seed := range 20 {
+		r := New(Config{})
+		keys := keyStringsInOneSet(keyWays+1, seed)
+		atoms := make([]Atom, len(keys))
+		for i, s := range keys {
+			atoms[i] = r.atoms.intern(s.Go())
+		}
+		set := (*[keyWays]keyAtom)(r.keyAtoms[keySet(keys[0]):])
+		convert := func(i int) {
+			t.Helper()
+			pn, err := r.toPropertyName(Str(keys[i]))
+			if err != nil || !pn.hasAtom || pn.atom != atoms[i] {
+				t.Fatalf("seed %d: %q converts to %+v, %v, want atom %v", seed, keys[i].Go(), pn, err, atoms[i])
 			}
 		}
-		if i > 0 {
-			if v := r.keyVictims; v == nil || v[keySlot(a)].s != a {
-				t.Fatalf("round %d: %q, evicted, is not in the slot's second way", i, a.Go())
+		for i := range keyWays {
+			convert(i)
+		}
+		next := set[0].next
+		for range 100 {
+			for i := range keyWays {
+				convert(i)
+				if r.keyFind(keys[i]) == nil {
+					t.Fatalf("seed %d: %q has no entry after its conversion", seed, keys[i].Go())
+				}
 			}
 		}
+		if set[0].next != next {
+			t.Fatalf("seed %d: four keys of one set were looked up again: next %d, was %d", seed, set[0].next, next)
+		}
+		convert(keyWays)
+		if r.keyFind(keys[0]) != nil || r.keyFind(keys[keyWays]) == nil {
+			t.Fatalf("seed %d: a fifth key did not take the oldest's way", seed)
+		}
+		for i := 1; i < keyWays; i++ {
+			if r.keyFind(keys[i]) == nil {
+				t.Fatalf("seed %d: a fifth key displaced %q, not the oldest", seed, keys[i].Go())
+			}
+		}
+		r.Close()
 	}
 }

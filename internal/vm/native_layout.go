@@ -182,6 +182,8 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"hasCacheMul":     uint64(hasCacheMul),
 		"hasCacheWaysLog": uint64(hasCacheWaysLog),
 		"keySlotMul":      keySlotMul,
+		"keySetShift":     keySetShift,
+		"keyWaysLog":      keyWaysLog,
 		"intStringsLen":   uint64(len(Runtime{}.intStrings)),
 
 		"sE":     sE,

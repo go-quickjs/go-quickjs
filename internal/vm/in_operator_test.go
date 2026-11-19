@@ -316,12 +316,11 @@ func TestInOperator(t *testing.T) {
 	}
 }
 
-// TestInOperatorKeysSharingASlot pins in of two key strings whose entries
-// in the runtime's keyAtoms share a slot, asked in turn: each finds the
-// other's entry there, and hasQuick looks its atom up rather than leaving
-// it to inOperator, so that its answer is remembered in hasCache too, where
-// the two do not share a place.
-func TestInOperatorKeysSharingASlot(t *testing.T) {
+// TestInOperatorKeysSharingASet pins in of two key strings whose entries
+// in the runtime's keyAtoms share a set, asked in turn: each keeps its
+// entry there, and hasQuick finds its atom rather than leaving it to
+// inOperator, so that its answer is remembered in hasCache too.
+func TestInOperatorKeysSharingASet(t *testing.T) {
 	t.Parallel()
 	r := New(Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
@@ -329,15 +328,15 @@ func TestInOperatorKeysSharingASlot(t *testing.T) {
 		function ask(ks, n) { var s = 0; for (var i = 0; i < n; i++) if (ks[i & 1] in o) s++; return s; }`)); err != nil {
 		t.Fatal(err)
 	}
-	// Two strings of the names aa and zz whose slots are one.
+	// Two strings of the names aa and zz whose sets are one.
 	var keys [2]*String
 	seen := map[uint64]*String{}
 	for keys[1] == nil {
 		a, z := NewString("a"+"a"), NewString("z"+"z")
-		if b := seen[keySlot(z)]; b != nil && b.Go() == "aa" {
+		if b := seen[keySet(z)]; b != nil && b.Go() == "aa" {
 			keys = [2]*String{b, z}
 		}
-		seen[keySlot(a)] = a
+		seen[keySet(a)] = a
 	}
 	r.global.setOwnRaw(r.atoms.intern("ks"), Obj(r.newArrayFrom([]Value{Str(keys[0]), Str(keys[1])})), propDefault)
 	v, err := r.Run(compileForTest(t, `ask(ks, 100)`))
@@ -348,6 +347,9 @@ func TestInOperatorKeysSharingASlot(t *testing.T) {
 	for i, want := range []bool{true, false} {
 		if has, ok := hasCached(r, Str(keys[i]), o); !ok || has != want {
 			t.Errorf("%q in o: the cache answers %v (%v), want %v", keys[i].Go(), has, ok, want)
+		}
+		if r.keyFind(keys[i]) == nil {
+			t.Errorf("%q has no entry in keyAtoms", keys[i].Go())
 		}
 	}
 }

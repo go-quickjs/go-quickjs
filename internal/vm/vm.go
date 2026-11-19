@@ -578,8 +578,8 @@ func (r *Runtime) newArrayFrom(vals []Value) *Object {
 // same property: a[k] in for (k in a), whose keys are an array's indices.
 // It reports false for anything else.
 func (r *Runtime) stringKeyRead(o *Object, s *String) (Value, bool) {
-	e := &r.keyAtoms[keySlot(s)]
-	if e.s != s || e.none {
+	e := r.keyFind(s)
+	if e == nil || e.none {
 		return Undefined, false
 	}
 	key := e.atom

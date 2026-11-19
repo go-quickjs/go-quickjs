@@ -265,9 +265,9 @@ type Runtime struct {
 	// the runtime's: what follows stays where it was within its cache
 	// lines and pages.
 	_ [192]uintptr
-	// keyAtoms remembers the atoms of key strings the runtime handed out;
-	// see keyString.
-	keyAtoms [256]keyAtom
+	// keyAtoms remembers the atoms of key strings the runtime handed out,
+	// in sets of keyWays; see keyString and keySet.
+	keyAtoms [1 << keyAtomsBits]keyAtom
 	// bigTmp is where BigInt arithmetic makes a result before it is held
 	// in its Value or a BigInt of its own (bigint.go's bigRoom).
 	bigTmp []uint
@@ -358,12 +358,6 @@ type Runtime struct {
 	// count past which the dead are swept out.
 	strConsts      map[string]weak.Pointer[String]
 	strConstsSweep int
-	// keyVictims is keyAtoms' second way, Go's alone: the entry a key
-	// string took a slot from, where two hot keys whose strings share a
-	// slot would otherwise each evict the other at every conversion
-	// (keyRemember). Made at the first eviction. After everything the
-	// interpreter reads, so that none of it moves.
-	keyVictims *[256]keyAtom
 	// caseMemo remembers the case conversions of short ASCII strings by
 	// their text (asciiCaseMemo); made at the first.
 	caseMemo *caseMemo

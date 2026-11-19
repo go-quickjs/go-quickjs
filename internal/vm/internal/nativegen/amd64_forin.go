@@ -38,27 +38,35 @@ func (g *nativeGen) forInStep() {
 	a.LoadIdx(R9, R9, RCX, 8, 0)
 	a.Op(Test, R9, R9, true)
 	a.Jcc(CondE, g.exit)
-	// keyAtoms[keySlot(s)] = {s, the index's atom}, where it is not.
-	a.MovImm(RDX, keySlotMul)
-	a.MovRR(R8, R9)
-	a.Imul(R8, RDX)
-	a.ShiftImm(Shr, R8, 56, true)
-	a.MovImm(RDX, uint64(sizeKA))
-	a.Imul(R8, RDX)
-	a.Load(RDX, RDI, ncRT)
-	a.LeaIdx(R8, RDX, R8, 1, offRtKeyAtoms)
+	// keyAtoms' entry of s, {s, the index's atom}, where it is not: its
+	// atom written where its set has it, else the way the set's next says,
+	// which moves on (keyPut).
+	g.keySet(R8, R9, RDX)
 	a.MovImm(RDX, uint64(uint32(atomIndexTag)))
 	a.Op(Or, RDX, RCX, true)
-	a.CmpMem(R9, R8, offKAS, true)
-	a.Jcc(CondNE, store)
+	fix := a.NewLabel()
+	g.keyFind(R8, R9, store)
 	a.LoadU32(RCX, R8, offKAAtom)
 	a.Op(Cmp, RCX, RDX, false)
-	a.Jcc(CondNE, store)
+	a.Jcc(CondNE, fix)
 	a.LoadU8(RCX, R8, offKANone)
 	a.Op(Test, RCX, RCX, false)
 	a.Jcc(CondE, same)
-	a.Bind(store)
 	// Nothing is written before here.
+	a.Bind(fix)
+	a.Store32(R8, offKAAtom, RDX)
+	a.Op(Xor, RCX, RCX, false)
+	a.Store8(R8, offKANone, RCX)
+	a.Jmp(same)
+	a.Bind(store)
+	a.LoadU8(RCX, R8, offKANext)
+	a.OpImm(Add, RCX, 1, false)
+	a.OpImm(And, RCX, 1<<keyWaysLog-1, false)
+	a.Store8(R8, offKANext, RCX)
+	a.OpImm(Add, RCX, 1<<keyWaysLog-1, false)
+	a.OpImm(And, RCX, 1<<keyWaysLog-1, false)
+	a.ShiftImm(Shl, RCX, uint8(log2(int(sizeKA))), true)
+	a.Op(Add, R8, RCX, true)
 	a.Store32(R8, offKAAtom, RDX)
 	a.Op(Xor, RCX, RCX, false)
 	a.Store8(R8, offKANone, RCX)
@@ -108,6 +116,46 @@ func (g *nativeGen) forInStep() {
 	a.Store8(RSI, offItDone, RCX)
 	g.immSC(RCX)
 	g.taken(RCX)
+}
+
+// keySet puts in dst the address of the first entry of the set of the
+// runtime's keyAtoms where the string s is, if anywhere (keySet). tmp is
+// its scratch; s is kept.
+func (g *nativeGen) keySet(dst, s, tmp Reg) {
+	a := g.a
+	a.MovImm(tmp, keySlotMul)
+	a.MovRR(dst, s)
+	a.Imul(dst, tmp)
+	a.ShiftImm(Shr, dst, keySetShift, true)
+	a.ShiftImm(Shl, dst, keyWaysLog+uint8(log2(int(sizeKA))), true)
+	a.Load(tmp, RDI, ncRT)
+	a.LeaIdx(dst, tmp, dst, 1, offRtKeyAtoms)
+}
+
+// keyFind moves set, the first entry of a set of keyAtoms (keySet), to
+// the entry of the string s, or goes to miss, set as it was, where none of
+// the set's is (keyFind).
+func (g *nativeGen) keyFind(set, s Reg, miss Label) {
+	a := g.a
+	ways := 1 << keyWaysLog
+	hit := make([]Label, ways)
+	found := a.NewLabel()
+	for w := range ways {
+		hit[w] = a.NewLabel()
+		a.CmpMem(s, set, int32(w)*sizeKA+offKAS, true)
+		a.Jcc(CondE, hit[w])
+	}
+	a.Jmp(miss)
+	for w := range ways {
+		a.Bind(hit[w])
+		if w > 0 {
+			a.OpImm(Add, set, int32(w)*sizeKA, true)
+		}
+		if w < ways-1 {
+			a.Jmp(found)
+		}
+	}
+	a.Bind(found)
 }
 
 // keyIndex puts in RCX the index that the string whose words are R9 (num)

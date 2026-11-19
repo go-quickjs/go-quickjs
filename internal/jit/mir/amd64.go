@@ -4201,25 +4201,34 @@ func (c *compiler) forInIndex(v *ssa.Value, slow, done amd64.Label) {
 	// The string's entry in the table of key strings, in scratchA, and its
 	// atom, the index's, in scratchB.
 	c.a.MovQToX(xScratch1, scratchC)
-	c.a.MovRR(scratchA, scratchC)
-	c.movImm(scratchB, abi.KeyAtomsMul)
-	c.a.Imul(scratchA, scratchB)
-	c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.KeyAtomsBits, true)
-	c.a.ShiftImm(amd64.Shl, scratchA, keyAtomShift, true)
-	c.movImm(scratchB, uint64(c.f.KeyAtoms))
-	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.keyAtomSet(scratchA, scratchC, scratchB)
 	c.a.MovQFromX(scratchB, xScratch0)
 	c.a.OpImm(amd64.Or, scratchB, -1<<31, false)
-	write := c.a.NewLabel()
-	c.a.CmpMem(scratchC, scratchA, abi.KeyAtomString, true)
-	c.a.Jcc(amd64.CondNE, write)
+	// The string's entry, if its set has one: its atom and none written
+	// where they are not the index's.
+	write, fix := c.a.NewLabel(), c.a.NewLabel()
+	c.keyAtomFind(scratchA, scratchC, write)
 	c.a.LoadU32(scratchC, scratchA, abi.KeyAtomAtom)
 	c.a.Op(amd64.Cmp, scratchC, scratchB, false)
-	c.a.Jcc(amd64.CondNE, write)
+	c.a.Jcc(amd64.CondNE, fix)
 	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondE, done)
+	c.a.Bind(fix)
+	c.a.Store32(scratchA, abi.KeyAtomAtom, scratchB)
+	c.a.MovImm(scratchC, 0)
+	c.a.Store8(scratchA, abi.KeyAtomNone, scratchC)
+	c.a.Jmp(done)
+	// Else the way the set's next says, which moves on.
 	c.a.Bind(write)
+	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNext)
+	c.a.OpImm(amd64.Add, scratchC, 1, false)
+	c.a.OpImm(amd64.And, scratchC, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.Store8(scratchA, abi.KeyAtomNext, scratchC)
+	c.a.OpImm(amd64.Add, scratchC, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.OpImm(amd64.And, scratchC, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.ShiftImm(amd64.Shl, scratchC, keyAtomShift, true)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
 	c.a.Store32(scratchA, abi.KeyAtomAtom, scratchB)
 	c.a.MovImm(scratchC, 0)
 	c.a.Store8(scratchA, abi.KeyAtomNone, scratchC)
@@ -4234,6 +4243,44 @@ func (c *compiler) forInIndex(v *ssa.Value, slow, done amd64.Label) {
 // keyAtomShift is log2 of abi.KeyAtomSize, which an entry's slot is
 // shifted by.
 const keyAtomShift = 4
+
+// keyAtomSet puts in dst the address of the first entry of the set of the
+// VM's table of key strings (abi.KeyAtomsBits) where the string whose
+// pointer is in s is, if anywhere. tmp is its scratch; s is kept.
+func (c *compiler) keyAtomSet(dst, s, tmp amd64.Reg) {
+	c.a.MovRR(dst, s)
+	c.movImm(tmp, abi.KeyAtomsMul)
+	c.a.Imul(dst, tmp)
+	c.a.ShiftImm(amd64.Shr, dst, 64-abi.KeyAtomsBits+abi.KeyAtomsWaysLog, true)
+	c.a.ShiftImm(amd64.Shl, dst, keyAtomShift+abi.KeyAtomsWaysLog, true)
+	c.movImm(tmp, uint64(c.f.KeyAtoms))
+	c.a.Op(amd64.Add, dst, tmp, true)
+}
+
+// keyAtomFind moves set, the first entry of a set of the VM's table of key
+// strings (keyAtomSet), to the entry of the string whose pointer is in s,
+// or goes to miss, set as it was, where none of the set's is.
+func (c *compiler) keyAtomFind(set, s amd64.Reg, miss amd64.Label) {
+	const ways = 1 << abi.KeyAtomsWaysLog
+	var hit [ways]amd64.Label
+	found := c.a.NewLabel()
+	for w := range ways {
+		hit[w] = c.a.NewLabel()
+		c.a.CmpMem(s, set, int32(w)*abi.KeyAtomSize+abi.KeyAtomString, true)
+		c.a.Jcc(amd64.CondE, hit[w])
+	}
+	c.a.Jmp(miss)
+	for w := range ways {
+		c.a.Bind(hit[w])
+		if w > 0 {
+			c.a.OpImm(amd64.Add, set, int32(w)*abi.KeyAtomSize, true)
+		}
+		if w < ways-1 {
+			c.a.Jmp(found)
+		}
+	}
+	c.a.Bind(found)
+}
 
 var _ [0]struct{} = [1<<keyAtomShift - abi.KeyAtomSize]struct{}{}
 var _ [0]struct{} = [abi.KeyAtomSize - 1<<keyAtomShift]struct{}{}
@@ -4280,15 +4327,8 @@ func (c *compiler) keyedRead(v *ssa.Value, slow amd64.Label) {
 	c.pointerWord(key, scratchA)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	fail.jump(amd64.CondE)
-	c.a.MovRR(scratchA, scratchB)
-	c.movImm(scratchC, abi.KeyAtomsMul)
-	c.a.Imul(scratchA, scratchC)
-	c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.KeyAtomsBits, true)
-	c.a.ShiftImm(amd64.Shl, scratchA, keyAtomShift, true)
-	c.movImm(scratchC, uint64(c.f.KeyAtoms))
-	c.a.Op(amd64.Add, scratchA, scratchC, true)
-	c.a.CmpMem(scratchB, scratchA, abi.KeyAtomString, true)
-	fail.jump(amd64.CondNE)
+	c.keyAtomSet(scratchA, scratchB, scratchC)
+	c.keyAtomFind(scratchA, scratchB, slow)
 	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	fail.jump(amd64.CondNE)

@@ -256,6 +256,7 @@ var (
 	offKAS         int32
 	offKAAtom      int32
 	offKANone      int32
+	offKANext      int32
 	sizeKA         int32
 
 	// offRtCharStrs and offRtLatin1Strs are the runtime's strings of one
@@ -526,6 +527,7 @@ func loadOffsets() {
 	offKAS = off("keyAtom.s")
 	offKAAtom = off("keyAtom.atom")
 	offKANone = off("keyAtom.none")
+	offKANext = off("keyAtom.next")
 	sizeKA = size("keyAtom")
 	offRCSwitches = off("regCode.switches")
 	offSwDense = off("regSwitchTable.dense")

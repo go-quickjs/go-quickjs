@@ -208,48 +208,8 @@ func (r *Runtime) keyString(k Atom) *String {
 			r.keyStrings[k] = s
 		}
 	}
-	// Put in its slot as it is, the entry there forgotten: the keys
-	// handed out -- each index of an array JSON.stringify walks -- would
-	// otherwise each move another into the second way (keyRemember),
-	// work for keys no conversion asks for again.
-	r.keyAtoms[keySlot(s)] = keyAtom{s: s, atom: k}
+	r.keyPut(keyAtom{s: s, atom: k})
 	return s
-}
-
-// keyRemember puts k in e, an entry of keyAtoms, as a conversion that
-// looked its atom up remembers it (toPropertyName), the entry it takes
-// the slot from moved to the slot's second way (keyVictims), from which
-// keyVictim takes it back: by address, two strings share a slot one time
-// in 256, and two keys a loop converts in turn, o.hasOwnProperty(k) of
-// four keys, had each found the other's there at every conversion and
-// looked its atom up anew. Native code and the JIT's read and write the
-// first way alone, and so does keyString.
-func (r *Runtime) keyRemember(e *keyAtom, k keyAtom) {
-	if old := e.s; old != nil && old != k.s {
-		v := r.keyVictims
-		if v == nil {
-			v = new([256]keyAtom)
-			r.keyVictims = v
-		}
-		v[keySlot(old)] = *e
-	}
-	*e = k
-}
-
-// keyVictim is the entry of string s in the second way of keyAtoms
-// (keyRemember), swapped back into e, its slot's first, or nil where it
-// has none.
-func (r *Runtime) keyVictim(e *keyAtom, s *String) *keyAtom {
-	v := r.keyVictims
-	if v == nil {
-		return nil
-	}
-	w := &v[keySlot(s)]
-	if w.s != s {
-		return nil
-	}
-	*e, *w = *w, *e
-	return e
 }
 
 // keyAtom is a string a runtime handed out as a key, and the atom it names.
@@ -259,19 +219,77 @@ func (r *Runtime) keyVictim(e *keyAtom, s *String) *keyAtom {
 // With none, the string is a key that named no atom when the table had
 // atom of them (atomTable.next): it names none while the table has no
 // more -- atoms are only ever added -- and so is the key of no property.
+//
+// next is, in the first entry of a set, the way the set's next new entry
+// takes (keyPut); in the others, nothing. It is in the padding after none.
 type keyAtom struct {
 	s    *String
 	atom Atom
 	none bool
+	next uint8
 }
 
-// keySlot is where a key string goes in a runtime's keyAtoms, by its
-// address.
-func keySlot(s *String) uint64 {
-	return uint64(uintptr(unsafe.Pointer(s))) * keySlotMul >> 56
+// keyAtoms is a runtime's table of key strings and their atoms, in sets of
+// keyWays entries, a string's set found by its address (keySet), as
+// hasCache's are. A set's entries are found by comparing each one's
+// string, and a new one takes the way its first entry's next says, which
+// then moves on: the set's oldest leaves, so that up to keyWays keys whose
+// strings share a set keep their entries however their addresses fall,
+// and a key is looked up anew only where more than that are used in turn.
+// Direct-mapped, two hot keys sharing a slot had each evicted the other at
+// every conversion -- o.hasOwnProperty(k) of four keys, prop_in_keyed's
+// keys 13 runs in 60 -- and their work had differed from run to run with
+// where the strings were. Native code and the JIT's find and fill the
+// entries so too (abi.KeyAtomsWaysLog).
+const (
+	// keyAtomsBits is the bits of an entry's index: 256 entries.
+	keyAtomsBits = 8
+	// keyWaysLog is log2 of keyWays, the entries of a set.
+	keyWaysLog = 2
+	keyWays    = 1 << keyWaysLog
+	// keySetShift is how far keySet shifts the hash down to a set's
+	// number.
+	keySetShift = 64 - keyAtomsBits + keyWaysLog
+)
+
+// keySet is the index in keyAtoms of the first entry of key string s's set,
+// by its address.
+func keySet(s *String) uint64 {
+	return uint64(uintptr(unsafe.Pointer(s))) * keySlotMul >> keySetShift << keyWaysLog
 }
 
-// keySlotMul is keySlot's multiplier, which native code's is too
+// keyFind is s's entry in keyAtoms, or nil where it has none.
+func (r *Runtime) keyFind(s *String) *keyAtom {
+	w := (*[keyWays]keyAtom)(r.keyAtoms[keySet(s):])
+	for i := range w {
+		if w[i].s == s {
+			return &w[i]
+		}
+	}
+	return nil
+}
+
+// keyPut remembers k in keyAtoms: in the entry of its string, where it has
+// one, or in the way its set's next new entry takes, the oldest's, which
+// leaves. The set's next is not changed by the entry written.
+func (r *Runtime) keyPut(k keyAtom) {
+	w := (*[keyWays]keyAtom)(r.keyAtoms[keySet(k.s):])
+	e := (*keyAtom)(nil)
+	for i := range w {
+		if w[i].s == k.s {
+			e = &w[i]
+			break
+		}
+	}
+	if e == nil {
+		i := w[0].next & (keyWays - 1)
+		w[0].next = (i + 1) & (keyWays - 1)
+		e = &w[i]
+	}
+	e.atom, e.none, e.s = k.atom, k.none, k.s
+}
+
+// keySlotMul is keySet's multiplier, which native code's is too
 // (abi.KeyAtomsMul).
 const keySlotMul = 0x9E3779B97F4A7C15
 
@@ -436,8 +454,7 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		return propertyName{name: jsnum.FormatFloat(f)}, nil
 	case KindString:
 		s := v.String()
-		e := &r.keyAtoms[keySlot(s)]
-		if e.s == s || r.keyVictim(e, s) != nil {
+		if e := r.keyFind(s); e != nil {
 			if !e.none {
 				return propertyName{atom: e.atom, hasAtom: true}, nil
 			}
@@ -452,10 +469,10 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		// no atom: k in o, o[k], of keys no object has.
 		name := s.Go()
 		if a, ok := r.atoms.lookup(name); ok {
-			r.keyRemember(e, keyAtom{s: s, atom: a})
+			r.keyPut(keyAtom{s: s, atom: a})
 			return propertyName{atom: a, hasAtom: true}, nil
 		}
-		r.keyRemember(e, keyAtom{s: s, atom: r.atoms.next(), none: true})
+		r.keyPut(keyAtom{s: s, atom: r.atoms.next(), none: true})
 		return propertyName{name: name, noAtom: true}, nil
 	case KindSymbol:
 		return propertyName{sym: v.Symbol()}, nil

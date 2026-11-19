@@ -6885,31 +6885,77 @@ func (c *a64Compiler) forInIndex(v *ssa.Value, slow, done arm64.Label) {
 	// The string's entry in the table of key strings, in D, and its atom,
 	// the index's, in B.
 	c.a.FMovToF(a64F0, a64A)
-	c.movImm(a64B, abi.KeyAtomsMul)
-	c.a.Mul(a64B, a64C, a64B)
-	c.a.ShiftImm(arm64.Lsr, a64B, a64B, 64-abi.KeyAtomsBits, true)
-	c.a.ShiftImm(arm64.Lsl, a64B, a64B, keyAtomShift, true)
-	c.movImm(a64D, uint64(c.f.KeyAtoms))
-	c.a.Op(arm64.Add, a64D, a64D, a64B, true)
+	c.keyAtomSet(a64D, a64C, a64B)
 	c.a.FMovFromF(a64A, a64F0)
 	c.movImm(a64B, abi.AtomIndexTag)
 	c.a.Op(arm64.Orr, a64B, a64A, a64B, false)
-	write := c.a.NewLabel()
-	c.a.Load(a64A, a64D, abi.KeyAtomString)
-	c.a.Cmp(a64A, a64C, true)
-	c.a.BCond(arm64.NE, write)
+	// The string's entry, if its set has one: its atom and none written
+	// where they are not the index's.
+	write, fix := c.a.NewLabel(), c.a.NewLabel()
+	c.keyAtomFind(a64D, a64C, a64A, write)
 	c.a.LoadU32(a64A, a64D, abi.KeyAtomAtom)
 	c.a.Cmp(a64A, a64B, false)
-	c.a.BCond(arm64.NE, write)
+	c.a.BCond(arm64.NE, fix)
 	c.a.LoadU8(a64A, a64D, abi.KeyAtomNone)
 	c.a.Cbz(a64A, done, false)
+	c.a.Bind(fix)
+	c.a.Store32(a64D, abi.KeyAtomAtom, a64B)
+	c.movImm(a64A, 0)
+	c.a.Store8(a64D, abi.KeyAtomNone, a64A)
+	c.a.B(done)
+	// Else the way the set's next says, which moves on.
 	c.a.Bind(write)
+	c.a.LoadU8(a64A, a64D, abi.KeyAtomNext)
+	c.a.AddImm(a64A, a64A, 1, false)
+	c.a.AndImm(a64A, a64A, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.Store8(a64D, abi.KeyAtomNext, a64A)
+	c.a.AddImm(a64A, a64A, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.AndImm(a64A, a64A, 1<<abi.KeyAtomsWaysLog-1, false)
+	c.a.AddLsl(a64D, a64D, a64A, keyAtomShift)
 	c.a.Store32(a64D, abi.KeyAtomAtom, a64B)
 	c.movImm(a64A, 0)
 	c.a.Store8(a64D, abi.KeyAtomNone, a64A)
 	c.a.AddImm(a64A, a64D, abi.KeyAtomString, true)
 	c.storeByFlag()
 	c.a.B(done)
+}
+
+// keyAtomSet is amd64's: the first entry of the set of the VM's table of
+// key strings where the string whose pointer is in s is, in dst; tmp is
+// its scratch, s kept.
+func (c *a64Compiler) keyAtomSet(dst, s, tmp arm64.Reg) {
+	c.movImm(tmp, abi.KeyAtomsMul)
+	c.a.Mul(dst, s, tmp)
+	c.a.ShiftImm(arm64.Lsr, dst, dst, 64-abi.KeyAtomsBits+abi.KeyAtomsWaysLog, true)
+	c.a.ShiftImm(arm64.Lsl, dst, dst, keyAtomShift+abi.KeyAtomsWaysLog, true)
+	c.movImm(tmp, uint64(c.f.KeyAtoms))
+	c.a.Op(arm64.Add, dst, dst, tmp, true)
+}
+
+// keyAtomFind is amd64's: set moved to the entry of the string whose
+// pointer is in s, or miss, set as it was, where the set has none; tmp is
+// its scratch.
+func (c *a64Compiler) keyAtomFind(set, s, tmp arm64.Reg, miss arm64.Label) {
+	const ways = 1 << abi.KeyAtomsWaysLog
+	var hit [ways]arm64.Label
+	found := c.a.NewLabel()
+	for w := range ways {
+		hit[w] = c.a.NewLabel()
+		c.a.Load(tmp, set, int32(w)*abi.KeyAtomSize+abi.KeyAtomString)
+		c.a.Cmp(tmp, s, true)
+		c.a.BCond(arm64.EQ, hit[w])
+	}
+	c.a.B(miss)
+	for w := range ways {
+		c.a.Bind(hit[w])
+		if w > 0 {
+			c.a.AddImm(set, set, int64(w)*abi.KeyAtomSize, true)
+		}
+		if w < ways-1 {
+			c.a.B(found)
+		}
+	}
+	c.a.Bind(found)
 }
 
 // keyedRead is amd64's: an array's dense element, no hole, read natively
@@ -6940,15 +6986,8 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	fail.jump(arm64.NE)
 	c.pointerWord(key, a64A)
 	c.a.Cbz(a64B, slow, true)
-	c.movImm(a64C, abi.KeyAtomsMul)
-	c.a.Mul(a64A, a64B, a64C)
-	c.a.ShiftImm(arm64.Lsr, a64A, a64A, 64-abi.KeyAtomsBits, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, keyAtomShift, true)
-	c.movImm(a64C, uint64(c.f.KeyAtoms))
-	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
-	c.a.Load(a64C, a64A, abi.KeyAtomString)
-	c.a.Cmp(a64C, a64B, true)
-	fail.jump(arm64.NE)
+	c.keyAtomSet(a64A, a64B, a64C)
+	c.keyAtomFind(a64A, a64B, a64C, slow)
 	c.a.LoadU8(a64C, a64A, abi.KeyAtomNone)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.LoadU32(a64B, a64A, abi.KeyAtomAtom)

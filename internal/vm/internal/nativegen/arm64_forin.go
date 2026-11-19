@@ -25,19 +25,31 @@ func (g *armGen) forInStep() {
 	a.Cbz(r9, g.exit, true)
 	a.LoadIdx(r9, r9, rC, true)
 	a.Cbz(r9, g.exit, true)
-	// keyAtoms[keySlot(s)] = {s, the index's atom}, where it is not.
-	g.keySlot(r8, r9)
+	// keyAtoms' entry of s, {s, the index's atom}, where it is not, as
+	// amd64's.
+	g.keySet(r8, r9)
 	a.MovImm(rD, uint64(uint32(atomIndexTag)))
 	a.Op(Orr, rD, rD, rC, true)
-	g.cmpMem(r9, r8, offKAS)
-	a.BCond(NE, store)
+	fix := a.NewLabel()
+	g.keyFind(r8, r9, store)
 	a.LoadU32(rC, r8, offKAAtom)
 	a.Cmp(rC, rD, false)
-	a.BCond(NE, store)
+	a.BCond(NE, fix)
 	a.LoadU8(rC, r8, offKANone)
 	a.Cbz(rC, same, false)
-	a.Bind(store)
 	// Nothing is written before here.
+	a.Bind(fix)
+	a.Store32(r8, offKAAtom, rD)
+	a.Store8(r8, offKANone, ZR)
+	a.B(same)
+	a.Bind(store)
+	a.LoadU8(rC, r8, offKANext)
+	a.AddImm(rC, rC, 1, false)
+	a.AndImm(rC, rC, 1<<keyWaysLog-1, false)
+	a.Store8(r8, offKANext, rC)
+	a.AddImm(rC, rC, 1<<keyWaysLog-1, false)
+	a.AndImm(rC, rC, 1<<keyWaysLog-1, false)
+	a.AddLsl(r8, r8, rC, uint8(log2(int(sizeKA))))
 	a.Store32(r8, offKAAtom, rD)
 	a.Store8(r8, offKANone, ZR)
 	a.Store(rCtx, scr(sE), rS)
@@ -83,18 +95,44 @@ func (g *armGen) forInStep() {
 	g.taken(rC)
 }
 
-// keySlot puts in dst the address of the runtime's keyAtoms entry of the
-// string s (keySlot). rD is its scratch.
-func (g *armGen) keySlot(dst, s Reg) {
+// keySet puts in dst the address of the first entry of the set of the
+// runtime's keyAtoms where the string s is, if anywhere (keySet). rD is
+// its scratch.
+func (g *armGen) keySet(dst, s Reg) {
 	a := g.a
 	a.MovImm(rD, keySlotMul)
 	a.Mul(dst, s, rD)
-	a.ShiftImm(Lsr, dst, dst, 56, true)
-	a.MovImm(rD, uint64(sizeKA))
-	a.Mul(dst, dst, rD)
+	a.ShiftImm(Lsr, dst, dst, keySetShift, true)
+	a.ShiftImm(Lsl, dst, dst, keyWaysLog+uint8(log2(int(sizeKA))), true)
 	a.Load(rD, rCtx, ncRT)
 	a.Op(Add, dst, dst, rD, true)
 	a.AddImm(dst, dst, int64(offRtKeyAtoms), true)
+}
+
+// keyFind is amd64's: set moved to the entry of the string s, or miss,
+// set as it was, where the set has none. rC is its scratch.
+func (g *armGen) keyFind(set, s Reg, miss Label) {
+	a := g.a
+	ways := 1 << keyWaysLog
+	hit := make([]Label, ways)
+	found := a.NewLabel()
+	for w := range ways {
+		hit[w] = a.NewLabel()
+		a.Load(rC, set, int32(w)*sizeKA+offKAS)
+		a.Cmp(rC, s, true)
+		a.BCond(EQ, hit[w])
+	}
+	a.B(miss)
+	for w := range ways {
+		a.Bind(hit[w])
+		if w > 0 {
+			a.AddImm(set, set, int64(w)*int64(sizeKA), true)
+		}
+		if w < ways-1 {
+			a.B(found)
+		}
+	}
+	a.Bind(found)
 }
 
 // keyIndex puts in rC the index the string at the register address addr

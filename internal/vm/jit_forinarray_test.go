@@ -69,7 +69,7 @@ func jitForInArrayChecked(t *testing.T) {
 		if s == nil {
 			t.Fatalf("no string of %d", i)
 		}
-		if e := r.keyAtoms[keySlot(s)]; e.s == s && (e.none || e.atom != r.atoms.indexAtom(uint32(i))) {
+		if e := r.keyFind(s); e != nil && (e.none || e.atom != r.atoms.indexAtom(uint32(i))) {
 			t.Fatalf("the key %q recorded as %+v", s.Go(), e)
 		}
 	}
