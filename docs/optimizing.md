@@ -216,6 +216,8 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 |---|---|---|---|
 | A I E T C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`), the JSON encoder's `encode` (`builtins_json.go` on, T), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
 | Q W U V | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), the call path after it, `rhCallW` (W), its operations in Go, `regBinImm` and `regBinary` (`reg_runs.go`, U), and its handlers, `newRegSwitchTable` (`reg_switch.go` and `reg_table*.go`, V, at `2f05d3fc`'s layout) |
+| Y K | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the generators and async functions, `regGenOf` (`reg_generator.go`, Y: `regAsyncStart`, `regAsyncRun`), and the cold handlers, `regColdInit` (`reg_table_cold.go`, K: await's `rhAwait`), at `16f8b5e9`'s layout |
+| O | `layoutPadO`, before `vm_object.go` | `vm_object.go` and every function after it | what follows the literal constructors, `newErrorObject`, and with it the property definitions after it (`setOwnRaw`, `appendProp`, `setArrayLength`, `vm_property.go`, `vm_shape.go`), at `16f8b5e9`'s layout; the functions before the constructors in `vm_object.go` (`newObject`) move with the pad |
 | R S | `layoutPadX`, the same, after the register interpreter's files | every function after it to the next position | a replace's loop, `regExpReplaceIn` with its templates after it (`regexp_abstract.go`, R), and the string builder, `partsBuilder` (`string.go`, S) |
 | Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
 | G*x* M*x* CZ | a generic a position's pad, or a method at it, calls; a closure in a generic the last file calls | the generics plain functions or methods meet first, from that file back; the closures of generics | nothing at present: no configuration anchors them |
@@ -266,6 +268,16 @@ What each lever cannot move:
   past `5ef0d50b`'s offsets. T with those at their offsets, the
   encoder 96 bytes early, gave `json_round_trip` back but left
   `json_stringify_records` and `json_stringify_small` slower.
+  Y, K and O hold at `16f8b5e9`'s offsets code that changes around it
+  moved where no position was: the literal constructors' rewrite moved
+  `vm_object.go`'s code after them 608 bytes back, and
+  `array_hole_length_decr` (`setArrayLength`) and `object_computed`
+  (`appendProp`, `shapeAdded`, `defineOwnProp`), their code unchanged,
+  were 5 to 7% slower at every placement or nearly; changes to the
+  register calls' entries moved `reg_generator.go` and to the handlers
+  before it `reg_table_cold.go`, and `async_call` was 9% slower. A pad
+  must sit between files, so O, before `vm_object.go`, moves the
+  functions before the constructors (`newObject`) with it.
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.

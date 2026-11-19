@@ -58,7 +58,17 @@
 # file -- encodeProps, writeLayout, the parser -- and the built-ins up
 # to C stay 96 bytes past 5ef0d50b's offsets: T at their offsets, the
 # encoder 96 bytes before its own, gave json_round_trip back but not
-# json_stringify_records or json_stringify_small.
+# json_stringify_records or json_stringify_small. Y, K and O hold at
+# 16f8b5e9's layout code that changes around it moved with no position
+# between: Y the generators' and async functions' file (reg_generator.go,
+# regGenOf first, regAsyncStart and regAsyncRun), past the register
+# calls' entries; K the cold handlers (reg_table_cold.go, regColdInit
+# first, await's rhAwait), past reg_switch*.go and reg_table.go; O what
+# follows the literal constructors in vm_object.go (newErrorObject first)
+# and the files after it, vm_property.go's and vm_shape.go's property
+# definitions among them, which the constructors' rewrite had moved 608
+# bytes: async_call was 9%, array_hole_length_decr 5% and object_computed
+# 5 to 7% slower at every placement or nearly.
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -77,6 +87,9 @@ anchor Q  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00c80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor U  0x00bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
 anchor V  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x003e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x004e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x00f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
@@ -101,6 +114,9 @@ anchor Q  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00fe0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor U  0x00fe0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
 anchor V  0x004e0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x005c0 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x009c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00aa0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x00680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
@@ -125,6 +141,9 @@ anchor Q  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor U  0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
 anchor V  0x002a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x009a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
@@ -149,6 +168,9 @@ anchor Q  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
 anchor W  0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
 anchor U  0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
 anchor V  0x003a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00480 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00880 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00960 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
 anchor X  0x009e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run

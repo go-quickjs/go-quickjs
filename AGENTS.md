@@ -81,11 +81,14 @@ concurrently.
   `regexp_abstract.go`, `strh_layoutpad.go` before `string.go`,
   `jit_layoutpad.go` before `jit_leaffast.go`, `native_r_layoutpad.go`
   before `native_run.go`, `reg_cal_layoutpad.go` before `reg_call.go`,
+  `reg_gene_layoutpad.go` before `reg_generator.go`,
   `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go` around
   `reg_run.go`, `reg_runr_layoutpad.go` before `reg_runs.go`,
-  `reg_sw_layoutpad.go` before `reg_switch.go`, `vl_layoutpad.go` before
-  `vm.go`, `vm_b_layoutpad.go` before `vm_call.go`, `z_layoutpad.go`
-  after every file), and the assembly pad,
+  `reg_sw_layoutpad.go` before `reg_switch.go`,
+  `reg_table_c_layoutpad.go` before `reg_table_cold.go`,
+  `vl_layoutpad.go` before `vm.go`, `vm_b_layoutpad.go` before
+  `vm_call.go`, `vm_o_layoutpad.go` before `vm_object.go`,
+  `z_layoutpad.go` after every file), and the assembly pad,
   `native_a_layoutpad_*.s`, after the JIT's assembly and before
   `native_<arch>.s`, the first of the native handlers' block. The
   linker lays out the packages linked before vm in the order vm's files
