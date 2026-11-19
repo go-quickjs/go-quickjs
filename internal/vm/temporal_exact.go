@@ -709,7 +709,7 @@ func (r *Runtime) initTemporalDuration(ns *Object) {
 		return s, rt.temporalErr(err)
 	})
 	k.method("toLocaleString", 0, func(rt *Runtime, d temporal.Duration, args []Value) (Value, error) {
-		options, err := rt.durationOptionsFrom(args)
+		options, err := rt.durationOptionsFrom("Temporal.Duration.prototype.toLocaleString", args)
 		if err != nil {
 			return Undefined, err
 		}

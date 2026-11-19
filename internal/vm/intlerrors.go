@@ -87,8 +87,14 @@ func (r *Runtime) intlRequiresNew(ctor string) error {
 }
 
 // kValueOutOfRange: an option that is not one of the words it may be.
+// Intl.Locale is "locale" here, as V8's js-locale.cc names it, and
+// "Intl.Locale" in its other messages.
 func (r *Runtime) intlValueOutOfRange(value, property string) error {
-	return r.throwRangeError("Value %s out of range for %s options property %s", value, r.intlService, property)
+	service := r.intlService
+	if service == "Intl.Locale" {
+		service = "locale"
+	}
+	return r.throwRangeError("Value %s out of range for %s options property %s", value, service, property)
 }
 
 // kPropertyValueOutOfRange: a number option outside its bounds.

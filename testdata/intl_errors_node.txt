@@ -118,3 +118,42 @@ loc-tostring	TypeError: Method Intl.Locale.prototype.toString called on incompat
 loc-calendars	TypeError: Method Intl.Locale.prototype.getCalendars called on incompatible receiver #<Object>
 tolocalestring-bad-locale	RangeError: Invalid language tag: en_US
 localecompare-bad-locale	RangeError: Invalid language tag: en_US
+coll-value	RangeError: Value x out of range for Intl.Collator options property usage
+dtf-value	RangeError: Value x out of range for Intl.DateTimeFormat options property hourCycle
+pr-value	RangeError: Value x out of range for Intl.PluralRules options property type
+pr-options-null	TypeError: Intl.PluralRules called on null or undefined
+pr-options-5	(no error)
+rtf-value	RangeError: Value x out of range for Intl.RelativeTimeFormat options property numeric
+lf-value	RangeError: Value x out of range for Intl.ListFormat options property type
+dn-value	RangeError: Value x out of range for Intl.DisplayNames options property type
+seg-value	RangeError: Value x out of range for Intl.Segmenter options property granularity
+df-value	RangeError: Value x out of range for Intl.DurationFormat options property years
+loc-hourcycle	RangeError: Value H12 out of range for locale options property hourCycle
+loc-casefirst	RangeError: Value x out of range for locale options property caseFirst
+loc-options-null	TypeError: Intl.Locale called on null or undefined
+slo-matcher	RangeError: Value x out of range for Intl.Collator.supportedLocalesOf options property localeMatcher
+slo-matcher-df	RangeError: Value x out of range for Intl.DurationFormat.supportedLocalesOf options property localeMatcher
+slo-null	TypeError: Intl.Segmenter.supportedLocalesOf called on null or undefined
+date-value	RangeError: Value x out of range for Date.prototype.toLocaleString options property hourCycle
+date-date-value	RangeError: Value x out of range for Date.prototype.toLocaleDateString options property weekday
+date-time-value	RangeError: Value x out of range for Date.prototype.toLocaleTimeString options property hour
+date-null	TypeError: Date.prototype.toLocaleString called on null or undefined
+number-value	RangeError: Value x out of range for Number.prototype.toLocaleString options property style
+number-null	TypeError: Number.prototype.toLocaleString called on null or undefined
+number-unit-missing	TypeError: Invalid unit argument for Number.prototype.toLocaleString() ''
+number-unit-bad	RangeError: Invalid unit argument for Number.prototype.toLocaleString() 'x'
+bigint-value	RangeError: Value x out of range for BigInt.prototype.toLocaleString options property style
+bigint-unit-bad	RangeError: Invalid unit argument for BigInt.prototype.toLocaleString() 'x'
+array-value	RangeError: Value x out of range for Number.prototype.toLocaleString options property style
+array-date-value	RangeError: Value x out of range for Date.prototype.toLocaleString options property weekday
+typed-null	TypeError: Number.prototype.toLocaleString called on null or undefined
+localecompare-value	RangeError: Value x out of range for String.prototype.localeCompare options property usage
+localecompare-null	TypeError: String.prototype.localeCompare called on null or undefined
+plaindate-value	RangeError: Value x out of range for Temporal.PlainDate.prototype.toLocaleString options property weekday
+plaintime-null	TypeError: Temporal.PlainTime.prototype.toLocaleString called on null or undefined
+plaindatetime-value	RangeError: Value x out of range for Temporal.PlainDateTime.prototype.toLocaleString options property hourCycle
+zoned-value	RangeError: Value x out of range for Temporal.ZonedDateTime.prototype.toLocaleString options property weekday
+instant-null	TypeError: Temporal.Instant.prototype.toLocaleString called on null or undefined
+yearmonth-value	RangeError: Value x out of range for Temporal.PlainYearMonth.prototype.toLocaleString options property weekday
+monthday-value	RangeError: Value x out of range for Temporal.PlainMonthDay.prototype.toLocaleString options property weekday
+duration-value	RangeError: Value x out of range for Temporal.Duration.prototype.toLocaleString options property style

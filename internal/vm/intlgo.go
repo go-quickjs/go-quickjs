@@ -88,16 +88,13 @@ func (r *Runtime) intlLocale(service intl.Service, tags []string, matcher string
 // defSupportedLocalesOfService defines a constructor's supportedLocalesOf
 // over a service's available locales.
 func (r *Runtime) defSupportedLocalesOfService(ctor *Object, service intl.Service) {
+	method := "Intl." + ctor.fn().name + ".supportedLocalesOf"
 	r.defMethod(ctor, "supportedLocalesOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		if arg(args, 1).IsNull() {
-			// V8's words for CoerceOptionsToObject(null).
-			return Undefined, rt.throwTypeError("Intl.%s.supportedLocalesOf called on null or undefined",
-				ctor.fn().name)
-		}
+		defer rt.enterIntl(method)()
 		options, err := rt.optionsObject(arg(args, 1))
 		if err != nil {
 			return Undefined, err

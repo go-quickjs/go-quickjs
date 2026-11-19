@@ -59,7 +59,7 @@ func (r *Runtime) initDurationFormat(intlObj *Object) {
 		if !rt.Constructing() {
 			return Undefined, rt.intlRequiresNew("Intl.DurationFormat")
 		}
-		o, err := rt.durationOptionsFrom(args)
+		o, err := rt.durationOptionsFrom("Intl.DurationFormat", args)
 		if err != nil {
 			return Undefined, err
 		}
@@ -132,9 +132,10 @@ func (r *Runtime) initDurationFormat(intlObj *Object) {
 }
 
 // durationOptionsFrom reads the arguments shared by the DurationFormat
-// constructor and Temporal.Duration.prototype.toLocaleString.
-func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
-	defer r.enterIntl("Intl.DurationFormat")()
+// constructor and Temporal.Duration.prototype.toLocaleString, the service
+// V8's errors name.
+func (r *Runtime) durationOptionsFrom(service string, args []Value) (*durationOptions, error) {
+	defer r.enterIntl(service)()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err

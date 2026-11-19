@@ -66,7 +66,7 @@ func (r *Runtime) initBigIntBuiltins() {
 		}
 		// The digits are written as they are rather than through a float,
 		// which would lose them: a big integer is big.
-		o, err := rt.numberOptionsFrom(args)
+		o, err := rt.numberOptionsFrom("BigInt.prototype.toLocaleString", args)
 		if err != nil {
 			return Undefined, err
 		}

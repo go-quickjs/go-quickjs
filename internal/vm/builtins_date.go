@@ -348,7 +348,7 @@ func (r *Runtime) initDateBuiltins() {
 			if math.IsNaN(t) {
 				return Str(NewString("Invalid Date")), nil
 			}
-			d, err := rt.newDateTimeFormat(args, required, defaults, "")
+			d, err := rt.newDateTimeFormat(method, args, required, defaults, "")
 			if err != nil {
 				return Undefined, err
 			}

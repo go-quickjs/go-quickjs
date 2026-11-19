@@ -29,7 +29,7 @@ func (r *Runtime) initCollator(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		o, err := rt.collatorFor(args)
+		o, err := rt.collatorFor("Intl.Collator", args)
 		if err != nil {
 			return Undefined, err
 		}
@@ -91,9 +91,9 @@ func (r *Runtime) initCollator(intlObj *Object) {
 // collatorFor builds a collator from a locale and options, as the
 // constructor and localeCompare, which takes the same two, both do: the
 // options read in the order ECMA-402 reads them, since a getter among them
-// can tell.
-func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
-	defer r.enterIntl("Intl.Collator")()
+// can tell. service is the function V8's errors name.
+func (r *Runtime) collatorFor(service string, args []Value) (*collatorOptions, error) {
+	defer r.enterIntl(service)()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -194,7 +194,8 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.strictOptions(arg(args, 1))
+		// CoerceOptionsToObject, as ECMA-402 has PluralRules read them.
+		options, err := rt.optionsObject(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
@@ -796,10 +797,10 @@ func (r *Runtime) relativeOf(this Value, method string) (*relativeOptions, error
 	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
-// formatNumberFor is how the toLocaleString methods reach the number
+// formatNumberFor is how Number.prototype.toLocaleString reaches the number
 // formatting: the options are read as Intl.NumberFormat reads them.
 func (r *Runtime) formatNumberFor(args []Value, x float64) (string, error) {
-	o, err := r.numberOptionsFrom(args)
+	o, err := r.numberOptionsFrom("Number.prototype.toLocaleString", args)
 	if err != nil {
 		return "", err
 	}

@@ -793,7 +793,7 @@ func (r *Runtime) initStringExtras() {
 		if len(args) > 1 {
 			rest = args[1:]
 		}
-		c, err := rt.collatorFor(rest)
+		c, err := rt.collatorFor("String.prototype.localeCompare", rest)
 		if err != nil {
 			return Undefined, err
 		}

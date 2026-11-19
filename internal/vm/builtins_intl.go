@@ -551,7 +551,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		o, err := rt.numberOptionsFrom(args)
+		o, err := rt.numberOptionsFrom("Intl.NumberFormat", args)
 		if err != nil {
 			return Undefined, err
 		}
@@ -645,8 +645,11 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 	})
 }
 
-func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
-	defer r.enterIntl("Intl.NumberFormat")()
+// numberOptionsFrom reads the arguments of the NumberFormat constructor and of
+// the toLocaleString methods that are it by another name; service is the
+// function V8's errors name.
+func (r *Runtime) numberOptionsFrom(service string, args []Value) (*numberOptions, error) {
+	defer r.enterIntl(service)()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -712,10 +715,10 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 	switch {
 	case unit == "":
 		if o.style == "unit" {
-			return nil, r.throwTypeError("Invalid unit argument for Intl.NumberFormat() ''")
+			return nil, r.throwTypeError("Invalid unit argument for %s() ''", service)
 		}
 	case !wellFormedUnit(unit):
-		return nil, r.throwRangeError("Invalid unit argument for Intl.NumberFormat() '%s'", unit)
+		return nil, r.throwRangeError("Invalid unit argument for %s() '%s'", service, unit)
 	default:
 		o.unit = unit
 	}
@@ -983,7 +986,7 @@ func (r *Runtime) initDateTimeFormat(namespace *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		d, err := rt.newDateTimeFormat(args, intl.ComponentsAny, intl.ComponentsDate, "")
+		d, err := rt.newDateTimeFormat("Intl.DateTimeFormat", args, intl.ComponentsAny, intl.ComponentsDate, "")
 		if err != nil {
 			return Undefined, err
 		}

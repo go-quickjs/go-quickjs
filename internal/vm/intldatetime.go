@@ -32,10 +32,11 @@ type dateTimeFormat struct {
 // its order, with its errors, and a formatter built from what they settle.
 // required and defaults are the fields a method needs and the ones it
 // supplies; zoned is a ZonedDateTime's zone, which its toLocaleString writes
-// in, or empty.
-func (r *Runtime) newDateTimeFormat(args []Value, required, defaults intl.DateTimeComponents,
+// in, or empty. service is the function V8's errors name: the constructor,
+// or the toLocaleString method that called.
+func (r *Runtime) newDateTimeFormat(service string, args []Value, required, defaults intl.DateTimeComponents,
 	zoned string) (*dateTimeFormat, error) {
-	defer r.enterIntl("Intl.DateTimeFormat")()
+	defer r.enterIntl(service)()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -341,8 +342,8 @@ func (r *Runtime) formatDateTime(d *dateTimeFormat, v Value) (string, error) {
 // temporalToLocaleString is a plain Temporal value's toLocaleString: a
 // DateTimeFormat made with the fields the type needs and supplies, writing
 // the value.
-func (r *Runtime) temporalToLocaleString(v Value, args []Value, required, defaults intl.DateTimeComponents) (Value, error) {
-	d, err := r.newDateTimeFormat(args, required, defaults, "")
+func (r *Runtime) temporalToLocaleString(method string, v Value, args []Value, required, defaults intl.DateTimeComponents) (Value, error) {
+	d, err := r.newDateTimeFormat(method, args, required, defaults, "")
 	if err != nil {
 		return Undefined, err
 	}
@@ -356,7 +357,8 @@ func (r *Runtime) temporalToLocaleString(v Value, args []Value, required, defaul
 // zonedToLocaleString is a ZonedDateTime's toLocaleString: its instant,
 // written in its own zone, in a calendar that is its own or ISO's.
 func (r *Runtime) zonedToLocaleString(zoned temporal.ZonedDateTime, args []Value) (Value, error) {
-	d, err := r.newDateTimeFormat(args, intl.ComponentsAny, intl.ComponentsAll, zoned.TimeZone().Identifier())
+	d, err := r.newDateTimeFormat("Temporal.ZonedDateTime.prototype.toLocaleString", args,
+		intl.ComponentsAny, intl.ComponentsAll, zoned.TimeZone().Identifier())
 	if err != nil {
 		return Undefined, err
 	}

@@ -138,8 +138,9 @@ func (k temporalKind[T]) toJSON(json func(rt *Runtime, v T) (string, error)) {
 // toLocaleString defines toLocaleString, which is Intl.DateTimeFormat with
 // the fields the type needs and supplies.
 func (k temporalKind[T]) toLocaleString(required, defaults intl.DateTimeComponents) {
+	method := "Temporal." + k.name + ".prototype.toLocaleString"
 	k.method("toLocaleString", 0, func(rt *Runtime, v T, args []Value) (Value, error) {
-		return rt.temporalToLocaleString(temporalObject(nil, v), args, required, defaults)
+		return rt.temporalToLocaleString(method, temporalObject(nil, v), args, required, defaults)
 	})
 }
 
