@@ -2268,7 +2268,7 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 	} else {
 		err = e.code.Run(ipc, ctx)
 	}
-	if r.gcYield.on && nativeWB.enabled {
+	if r.gcYield.on && r.gcMarking() {
 		r.gcYieldNow()
 	}
 	for err == nil && s.ssaCtxs[idx+1].Live == abi.LiveCall {
@@ -2292,7 +2292,7 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 			s.resumed++
 			s.regPending = jitGoPending{}
 			err = e.code.Resume(back, callee)
-			if r.gcYield.on && nativeWB.enabled {
+			if r.gcYield.on && r.gcMarking() {
 				r.gcYieldNow()
 			}
 			continue

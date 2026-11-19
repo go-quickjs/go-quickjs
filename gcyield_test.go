@@ -6,8 +6,10 @@ import (
 )
 
 // WithGCYield reaches the runtime, is off without it, and changes no
-// answer: with one P, a runtime made with it waits while the collector
-// marks, one made without never does, and both compute the same.
+// answer: at one P, with the collector marking for the first three
+// questions (vm's SetGCMarkingForTest), a runtime made with it waits once,
+// and one made without it never asks and never waits; both compute the
+// same.
 func TestWithGCYield(t *testing.T) {
 	const src = `(() => {
 		let keep = [], sum = 0;
@@ -25,6 +27,11 @@ func TestWithGCYield(t *testing.T) {
 			opts = append(opts, WithGCYield())
 		}
 		r := New(opts...)
+		asked := 0
+		r.rt.SetGCMarkingForTest(func() bool {
+			asked++
+			return asked <= 3
+		})
 		v, err := r.Eval(src)
 		if err != nil {
 			t.Fatal(err)
@@ -33,8 +40,8 @@ func TestWithGCYield(t *testing.T) {
 			t.Fatalf("WithGCYield %v: %q, want %q", on, got, "300000:4688")
 		}
 		pauses, _, _ := r.rt.GCYieldStats()
-		if on != (pauses > 0) {
-			t.Fatalf("WithGCYield %v: %d waits", on, pauses)
+		if on && (pauses != 1 || asked <= 4) || !on && (pauses != 0 || asked != 0) {
+			t.Fatalf("WithGCYield %v: %d waits, %d questions", on, pauses, asked)
 		}
 		r.Close()
 	}

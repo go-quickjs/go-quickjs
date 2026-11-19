@@ -53,7 +53,31 @@ type gcYieldState struct {
 	// (GCYieldStats).
 	pauses        int
 	waited, worst time.Duration
+	// marking, when a test sets it (SetGCMarkingForTest), is what the
+	// runtime takes for the collector's marking in place of the
+	// write-barrier flag, so that a test knows when the runtime finds the
+	// collector marking rather than leaving it to where the collector's
+	// cycles fall.
+	marking func() bool
 }
+
+// gcMarking reports whether the collector marks, as Config.GCYield's checks
+// see it: the write-barrier flag, or a test's answer (SetGCMarkingForTest).
+func (r *Runtime) gcMarking() bool {
+	if f := r.gcYield.marking; f != nil {
+		return f()
+	}
+	return nativeWB.enabled
+}
+
+// SetGCMarkingForTest has Config.GCYield's checks take marking's answer for
+// whether the collector marks, in place of the collector's own state; nil
+// gives them the collector's again. Each check, and each look of a wait,
+// asks it once. It is for tests, which then know when the runtime finds the
+// collector marking: the collector's cycles start and end where the
+// process's allocation and the machine's speed put them, which a check may
+// meet or not.
+func (r *Runtime) SetGCMarkingForTest(marking func() bool) { r.gcYield.marking = marking }
 
 // gcYieldRecheck is how many checks made while the collector marks a
 // runtime makes between readings of GOMAXPROCS when it was not 1: a reading
@@ -87,7 +111,7 @@ func (r *Runtime) gcYieldNow() {
 		return
 	}
 	start := time.Now()
-	for nativeWB.enabled {
+	for r.gcMarking() {
 		time.Sleep(gcYieldPoll)
 	}
 	d := time.Since(start)

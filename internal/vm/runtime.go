@@ -1402,7 +1402,7 @@ func (r *Runtime) checkInterruptPoll() error {
 // makes it unsuitable for inlining.
 func (r *Runtime) checkInterruptNow() error {
 	r.interruptCounter = interruptCheckInterval
-	if r.gcYield.on && nativeWB.enabled {
+	if r.gcYield.on && r.gcMarking() {
 		r.gcYieldNow()
 	}
 	if r.stopped != nil {
