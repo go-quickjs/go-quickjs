@@ -1032,6 +1032,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				}
 			case OpSameSymbol:
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
+			case OpKeyIs:
+				return ir.Exit{}, fmt.Errorf("%w: a key's atom", ErrUnsupported)
 			case OpIterClosed:
 				return ir.Exit{}, fmt.Errorf("%w: a cursor", ErrUnsupported)
 			case OpHolderCell, OpChainCheck, OpProtoIs:

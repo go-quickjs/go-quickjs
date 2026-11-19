@@ -20,6 +20,7 @@ const (
 	snapKeyedRead
 	snapKeyedWrite
 	snapUpvalueTyped
+	snapKeyedStore
 	snapProperty
 	snapStringProperty
 	snapAccessor
@@ -68,10 +69,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath", "VirtualRoot"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
@@ -173,6 +174,16 @@ func (q *jitRegSnapshot) UpvalueTyped(pc int) (r0 uint8, r1 bool) {
 		return
 	}
 	r0, _ = a[0].(uint8)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) KeyedStore(pc int) (r0 ssa.KeyedStoreSite, r1 bool) {
+	a := q.get(snapKeyedStore, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.KeyedStoreSite)
 	r1, _ = a[1].(bool)
 	return r0, r1
 }
@@ -799,6 +810,15 @@ func jitRegSnapAskUpvalueTyped(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskKeyedStore(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.KeyedStore(pc)
+	s.end(fb.fb, before, snapKeyedStore, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapKeyedStore, int64(pc), r0, r1)
+	}
+}
+
 func jitRegSnapAskProperty(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	before := s.begin(fb.fb)
 	r0, r1 := fb.Property(pc)
@@ -1106,6 +1126,7 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapKeyedRead |
 	1<<snapKeyedWrite |
 	1<<snapUpvalueTyped |
+	1<<snapKeyedStore |
 	1<<snapProperty |
 	1<<snapStringProperty |
 	1<<snapAccessor |
@@ -1165,6 +1186,7 @@ func init() {
 		snapKeyedRead:      jitRegSnapAskKeyedRead,
 		snapKeyedWrite:     jitRegSnapAskKeyedWrite,
 		snapUpvalueTyped:   jitRegSnapAskUpvalueTyped,
+		snapKeyedStore:     jitRegSnapAskKeyedStore,
 		snapProperty:       jitRegSnapAskProperty,
 		snapStringProperty: jitRegSnapAskStringProperty,
 		snapAccessor:       jitRegSnapAskAccessor,

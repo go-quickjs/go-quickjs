@@ -934,7 +934,7 @@ func fusable(op ssa.Op) (ok, pure bool) {
 	switch op {
 	case ssa.OpNot, ssa.OpCmpF64, ssa.OpCmpI64, ssa.OpCmpI32, ssa.OpStrictNullish, ssa.OpCellNone:
 		return true, true
-	case ssa.OpLooseNullish, ssa.OpEqTagged, ssa.OpTypeIs, ssa.OpInstanceOf, ssa.OpTruth:
+	case ssa.OpLooseNullish, ssa.OpEqTagged, ssa.OpTypeIs, ssa.OpInstanceOf, ssa.OpTruth, ssa.OpKeyIs:
 		// They read the objects and strings their operands are, through
 		// where they came from (origin.go), and exit to their states: they
 		// are fused only where nothing is emitted after them in the block.

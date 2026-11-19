@@ -4,6 +4,7 @@ package vm
 
 import (
 	"slices"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -408,3 +409,86 @@ var (
 	_ ssa.StringElementFeedback = (*jitRegFeedback)(nil)
 	_ ssa.UpvalueTypedFeedback  = (*jitRegFeedback)(nil)
 )
+
+// KeyedStore is ssa.KeyedStoreFeedback's: the site of set_index's write
+// (ir.ArrayWrite) or define_index's define (its whole host) at the
+// program's instruction pc, as its keyed store cache (reg_table_keyed.go)
+// holds it -- its entry and its poly's -- grouped by key: for each, the
+// slots objects of its shapes have (an assignment's only: a define's
+// entry for one is left to Go) and the additions it made, as a named
+// write's site has them (siteOf, add), a define's marked so. A site that
+// gave up, or holds nothing native code is compiled for, has none.
+func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
+	fb := f.fb
+	w, op, ok := f.at(pc)
+	if !ok || fb.cl == nil {
+		return ssa.KeyedStoreSite{}, false
+	}
+	define := w.Op() == bytecode.RDefineIndex
+	if !(w.Op() == bytecode.RSetIndex && op == ir.ArrayWrite || define && op == ir.Host) {
+		return ssa.KeyedStoreSite{}, false
+	}
+	rpc := int(f.p.Origin[pc])
+	if rpc >= len(f.rc.Aux) {
+		return ssa.KeyedStoreSite{}, false
+	}
+	s := int(f.rc.Aux[rpc])
+	if s == 0 || s >= len(fb.cl.ic) {
+		return ssa.KeyedStoreSite{}, false
+	}
+	c := &fb.cl.ic[s]
+	if c.fills >= maxCacheFills {
+		return ssa.KeyedStoreSite{}, false
+	}
+	site := ssa.KeyedStoreSite{Define: define}
+	keyOf := func(k Atom) *ssa.PropertySite {
+		for i := range site.Keys {
+			if site.Keys[i].Key == uint32(k) {
+				return &site.Keys[i]
+			}
+		}
+		site.Keys = append(site.Keys, ssa.PropertySite{Key: uint32(k)})
+		return &site.Keys[len(site.Keys)-1]
+	}
+	note := func(e *propCache) {
+		sh := e.shape
+		if sh == nil || sh == noShape || sh == dictShape || e.getter || e.next == setterNext {
+			return
+		}
+		if e.next != nil {
+			add := fb.add(e)
+			if add == nil {
+				return
+			}
+			k := e.next.key
+			if define {
+				add.Define, add.Key = true, uint32(k)
+			}
+			ks := keyOf(k)
+			if ks.Add == nil {
+				ks.Add = add
+			} else {
+				ks.Adds = append(ks.Adds, add)
+			}
+			return
+		}
+		if define || e.cell != nil || e.p1 != nil || e.idx < 0 || e.idx >= sh.n || sh.loose {
+			return
+		}
+		k := sh.keys[e.idx].key
+		fb.keep().shapes = append(fb.keep().shapes, remember(sh))
+		ks := keyOf(k)
+		if ks.Shape == 0 {
+			ks.Shape, ks.Index = uintptr(unsafe.Pointer(sh)), e.idx
+		} else {
+			ks.Cases = append(ks.Cases, ssa.PropertyCase{Shape: uintptr(unsafe.Pointer(sh)), Index: e.idx})
+		}
+	}
+	note(c)
+	if p := c.poly; p != nil {
+		for i := range p.n {
+			note(&p.entries[i])
+		}
+	}
+	return site, len(site.Keys) != 0
+}

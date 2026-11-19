@@ -7734,6 +7734,8 @@ func (c *compiler) test(v *ssa.Value, t target) {
 		c.eqTagged(v, c.guardFor(v), &t)
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v), &t)
+	case ssa.OpKeyIs:
+		c.keyIs(v, &t)
 	case ssa.OpInstanceOf:
 		c.instanceOf(v, c.guardFor(v), &t)
 	case ssa.OpTruth:
@@ -7920,6 +7922,47 @@ func (c *compiler) typeIs(v *ssa.Value, guard guardTo, to *target) {
 		}
 	}
 	c.setBool(v, to, t, v.Const.Bits^1)
+}
+
+// keyIs answers whether its value is a string the VM's table of key
+// strings (abi.KeyAtomsBits) names atom Const.Bits by, or with Index
+// ssa.KeyIsAny any atom but an index's (ssa.OpKeyIs): its
+// pointer word looked for in the string's set, as keyedRead looks for it,
+// the entry naming an atom and that one. A value that is no string, a
+// string with no entry or one of none or of another atom, is false; so is
+// any where the table is not the code's to read. It uses every scratch
+// register.
+func (c *compiler) keyIs(v *ssa.Value, to *target) {
+	t := c.tests(to, false)
+	key := v.Args[0]
+	if c.f.KeyAtoms == 0 || c.enc.ValueSize != 16 {
+		c.jumpTo(t, t.no)
+		c.setBool(v, to, t, 1)
+		return
+	}
+	if w := c.gpr(key, scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, c.enc.String)
+	c.a.Jcc(amd64.CondNE, t.no)
+	c.pointerWord(key, scratchA)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, t.no)
+	c.keyAtomSet(scratchA, scratchB, scratchC)
+	c.keyAtomFind(scratchA, scratchB, t.no)
+	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondNE, t.no)
+	c.a.LoadU32(scratchC, scratchA, abi.KeyAtomAtom)
+	if v.Index == ssa.KeyIsAny {
+		// Any atom but an index's, whose top bit is set.
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.jumpIf(t, amd64.CondNS)
+	} else {
+		c.a.OpImm(amd64.Cmp, scratchC, int32(uint32(v.Const.Bits)), false)
+		c.jumpIf(t, amd64.CondE)
+	}
+	c.setBool(v, to, t, 1)
 }
 
 // primitive guards that its operand is a number, a string, a boolean, null
@@ -11171,6 +11214,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.instanceOf(v, c.guardFor(v), nil)
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v), nil)
+	case ssa.OpKeyIs:
+		c.keyIs(v, nil)
 	case ssa.OpSameObject:
 		if v.Index == 1 {
 			// A typed array of the prototype at Const.Bits.

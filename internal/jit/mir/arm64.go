@@ -1693,6 +1693,8 @@ func (c *a64Compiler) test(v *ssa.Value, t a64Target) {
 		c.eqTagged(v, c.guardFor(v), &t)
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v), &t)
+	case ssa.OpKeyIs:
+		c.keyIs(v, &t)
 	case ssa.OpInstanceOf:
 		c.instanceOf(v, c.guardFor(v), &t)
 	case ssa.OpTruth:
@@ -6721,6 +6723,43 @@ func (c *a64Compiler) keyAtomFind(set, s, tmp arm64.Reg, miss arm64.Label) {
 	c.a.Bind(found)
 }
 
+// keyIs is amd64's: whether its value is a string the VM's table of key
+// strings names atom Const.Bits by, or any atom but an index's. It uses
+// A, B and C.
+func (c *a64Compiler) keyIs(v *ssa.Value, to *a64Target) {
+	t := c.tests(to, false)
+	key := v.Args[0]
+	if c.f.KeyAtoms == 0 || c.enc.ValueSize != 16 {
+		c.jumpTo(t, t.no)
+		c.setBool(v, to, t, 1)
+		return
+	}
+	if w := c.gpr(key, a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, c.enc.String)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.NE, t.no)
+	c.pointerWord(key, a64A)
+	c.a.Cbz(a64B, t.no, true)
+	c.keyAtomSet(a64A, a64B, a64C)
+	c.keyAtomFind(a64A, a64B, a64C, t.no)
+	c.a.LoadU8(a64C, a64A, abi.KeyAtomNone)
+	c.a.Cbnz(a64C, t.no, false)
+	c.a.LoadU32(a64C, a64A, abi.KeyAtomAtom)
+	if v.Index == ssa.KeyIsAny {
+		// Any atom but an index's, whose top bit is set.
+		c.a.ShiftImm(arm64.Lsr, a64C, a64C, 31, false)
+		c.a.CmpImm(a64C, 0, false)
+		c.jumpIf(t, arm64.EQ)
+	} else {
+		c.movImm(a64B, uint64(uint32(v.Const.Bits)))
+		c.a.Cmp(a64C, a64B, false)
+		c.jumpIf(t, arm64.EQ)
+	}
+	c.setBool(v, to, t, 1)
+}
+
 // keyedRead is amd64's: an array's dense element, no hole, read natively
 // by an index or by a key string the VM handed out for one, at a site
 // whose reads Go makes for other receivers and keys. It uses A, B, C, D
@@ -9894,6 +9933,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.instanceOf(v, c.guardFor(v), nil)
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v), nil)
+	case ssa.OpKeyIs:
+		c.keyIs(v, nil)
 	case ssa.OpCall:
 		c.call(v, c.guardFor(v))
 	case ssa.OpCallCell:

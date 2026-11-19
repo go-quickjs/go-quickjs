@@ -1274,6 +1274,28 @@ the binding holds the key it was compiled for (`ssa.OpSameSymbol`). Go makes
 the rest -- a member's definition, an accessor, a key in a local, and a
 class's or an object literal's other members.
 
+**Keyed stores.** `o[k] = v` (`ir.ArrayWrite`) and a computed key's define
+-- `{ [k]: v }`, a class's field, register code's `define_index`, a whole
+host of three operands -- are compiled from their site's keyed store cache
+(the VM's reg_table_keyed.go, `ssa.KeyedStoreSite`), which remembers for
+each pair of a shape and a key it met the slot written or the transition
+taken, as V8's keyed store inline caches remember names and maps. The
+builder makes a branch for each key (`keyedStores`, `split`): whether the
+key is a string the VM's table of key strings names that key's atom by
+(`ssa.OpKeyIs`, looked for as `keyedRead` looks, never exiting), and on its
+true edge the key's write, an `OpPropWrite` of the key's own slots and
+additions exactly as a named write's site makes it, its map checks, its
+transitions along the chain the cache found (none for a define, its
+additions marked `Define`), its barrier and its room. A receiver none of the
+key's shapes deoptimizes, and so does a string the table names an atom by
+that none of the keys is (`OpKeyIs`'s `KeyIsAny`), the interpreter's store
+teaching the cache the new pair; once the site has deoptimized (`Generic`)
+such a receiver exits to Go, which stores and goes on natively, and such a
+key goes the way any other key goes -- a string the table does not know,
+made anew for each store, or no string: an element's store, Go's keyed
+write (`ssa.GoKeyedWrite`), or the define's call of Go. A site whose cache
+gave up (`maxCacheFills`) is compiled as before.
+
 **The in operator.** `k in o` (`ir.HasProperty`) is a call of Go from native
 code (`ssa.GoHas`), as V8's code calls its HasProperty builtin: Go searches
 the object and its chain as the interpreter does, where that runs nothing

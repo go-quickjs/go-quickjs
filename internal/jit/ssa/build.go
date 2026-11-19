@@ -1606,6 +1606,90 @@ func (b *builder) keyedWrite(pc int) bool {
 	return ok && f.KeyedWrite(pc)
 }
 
+// KeyedStoreFeedback is Feedback that knows the keyed stores' sites: an
+// element's write (ir.ArrayWrite), o[k] = v, or a computed key's define,
+// { [k]: v } or a class's field (a whole ir.Host of three operands: the
+// object, the key, the value), whose cache remembers the keys it stored
+// and, for each, the shapes it stored to (the VM's keyed store cache), as
+// V8's keyed store inline caches remember the names and maps they met.
+type KeyedStoreFeedback interface {
+	KeyedStore(pc int) (KeyedStoreSite, bool)
+}
+
+// KeyedStoreSite is a keyed store's site: for each key it met, a string
+// the VM's table of key strings names by its atom (Func's KeyAtoms), the
+// write of that key as a named write's site has it -- Key its atom, the
+// properties objects of Shape and of Cases' shapes have, the additions
+// Add and Adds make, a define's marked so (PropertyAdd's Define, whose
+// Key is the key's) where Define says the site is one.
+type KeyedStoreSite struct {
+	Keys   []PropertySite
+	Define bool
+}
+
+// keyedStore is the site of the keyed store at pc where native code can
+// tell its keys -- the VM's table of key strings is the code's to read --
+// and the store is the root frame's, whose block it splits (keyedStores).
+func (b *builder) keyedStore(pc int) (KeyedStoreSite, bool) {
+	kf, ok := b.fb.(KeyedStoreFeedback)
+	if !ok || b.cur != b.root || b.f.KeyAtoms == 0 {
+		return KeyedStoreSite{}, false
+	}
+	s, ok := kf.KeyedStore(pc)
+	return s, ok && len(s.Keys) != 0
+}
+
+// keyedStores makes the stores of value to obj by key that site knows,
+// ahead of the store the instruction makes otherwise: a branch for each of
+// its keys on whether key is a string naming the key's atom (OpKeyIs), to
+// the key's write of the shapes the site met (OpPropWrite, as a named
+// write's site makes it), as V8's keyed store inline caches check the
+// name, then the map. An object none of the key's shapes deoptimizes, as
+// a named write's map check does, and so does a string none of the keys
+// is that the VM's table of key strings names an atom by, the
+// interpreter's store teaching the site's cache the pair for the code
+// compiled next. Once the site has deoptimized (Generic), such an object
+// exits to Go, which stores and goes on natively, and such a key is stored
+// as any other key is -- a string the table does not know, made anew for
+// each store, no string at all: in the block keyedStores returns, where
+// the instruction makes its store as it would have. The instructions
+// after go on where all meet.
+func (b *builder) keyedStores(blk *Block, site KeyedStoreSite, obj, key, value *Value, generic bool, state func() *FrameState) *Block {
+	f := b.f
+	var cont *Block
+	kind := ir.GuardExit
+	if generic {
+		kind = ir.HostExit
+	}
+	at := func(blk *Block, op Op, t Type, args ...*Value) *Value {
+		v := f.newValue(blk, op, t, args...)
+		v.Aux, v.State = int(kind), state()
+		v.State.addUse()
+		return v
+	}
+	for _, ks := range site.Keys {
+		is := f.newValue(blk, OpKeyIs, Bool, key)
+		is.Const = ir.Value{Bits: uint64(ks.Key)}
+		yes, no, c := b.split(blk, is, true)
+		if cont == nil {
+			cont = c
+		}
+		object := at(yes, OpObjectOf, Ptr, obj)
+		w := at(yes, OpPropWrite, None, object, value)
+		w.Const, w.Index, w.Key = ir.Value{Bits: uint64(ks.Shape)}, int(ks.Index), ks.Key
+		f.setProperty(w, nil, ks.Cases, ks.Add, ks.Adds)
+		blk = no
+	}
+	if !generic {
+		// A key the site did not know, by its atom.
+		known := f.newValue(blk, OpKeyIs, Bool, key)
+		known.Index = KeyIsAny
+		at(blk, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, f.newValue(blk, OpNot, Bool, known)))
+	}
+	b.next = cont
+	return blk
+}
+
 // StringElementFeedback is Feedback that knows the element reads whose
 // receivers have been strings (OpStringChar): such a read is compiled for
 // a string, which native code makes the element of, and any other
@@ -8312,6 +8396,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 		guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
 		guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
 	case ir.ArrayWrite:
+		if site, ok := b.keyedStore(pc); ok && !site.Define {
+			blk = b.keyedStores(blk, site, operand(in.Left), operand(in.Right), operand(in.Third), b.fb.Generic(pc), state)
+		}
 		if b.keyedWrite(pc) {
 			// Any receiver's, by Go from native code; what Go does not
 			// store leaves, and native code goes on after it.
@@ -9096,6 +9183,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 				b.reloadAfterCall(blk)
 			}
 			break
+		}
+		if in.Op == ir.Host && in.Whole && b.wholeAt(pc) && b.goCalls() {
+			// A computed key's define the site's keys tell, ahead of Go's.
+			if site, ok := b.keyedStore(pc); ok && site.Define {
+				if reads, n, _, _ := in.WholeOperands(b.p.Regs); n == 3 {
+					blk = b.keyedStores(blk, site, b.read(reads[0], blk), b.read(reads[1], blk), b.read(reads[2], blk), b.fb.Generic(pc), state)
+				}
+			}
 		}
 		if in.Op == ir.Host && in.Whole && b.whole(blk, pc, in, guard) {
 			break

@@ -656,6 +656,13 @@ const (
 	// making one. Anything but a cursor it leaves as it is. It writes no
 	// cell and never exits.
 	OpForInDone // tagged -> none
+	// OpKeyIs is whether its operand is a string the VM's table of key
+	// strings (Func's KeyAtoms) names atom Const.Bits by: a keyed store's
+	// test of its key (KeyedStoreSite), before the store of that key's
+	// shapes; with Index KeyIsAny, by any atom but an index's. Anything
+	// else -- no string, a string the table has no entry for, or one of
+	// another atom or of none -- is false. It never exits.
+	OpKeyIs // tagged -> bool
 )
 
 // OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
@@ -665,6 +672,10 @@ const (
 	TailWindow = 4
 	TailPolled = 8
 )
+
+// KeyIsAny is OpKeyIs's Index for a string the VM's table of key strings
+// names any atom by but an index's.
+const KeyIsAny = 1
 
 // OpNumberIs's Aux: which of Number's predicates.
 const (
@@ -700,6 +711,7 @@ var opNames = [...]string{
 	OpCursorCell: "cursorcell", OpHeapLoad: "heapload", OpHeapStore: "heapstore",
 	OpDivI32: "divi", OpDivU32: "divu", OpRemI32: "remi", OpRemU32: "remu",
 	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore", OpNumberF64: "numberf", OpForInDone: "forindone",
+	OpKeyIs: "keyis",
 }
 
 func (o Op) String() string {
