@@ -21,9 +21,8 @@
 # added moved it 672 bytes (608 in one of its branches, which made
 # Octane's RegExp and the generator tests slower). E and C hold the
 # built-ins' hot loops between A and D, which the placements do not vary:
-# E anchors firstElem (builtins.go, and with it the JSON codec in
-# builtins_json.go), C asciiCaseMemo (casetables.go), at f9829c9f's
-# layout; the files the renames after it put among them had moved them
+# E anchors firstElem (builtins.go), C asciiCaseMemo (casetables.go),
+# at f9829c9f's layout; the files the renames after it put among them had moved them
 # 2 KB and made array_indexOf 23%, json_round_trip 10% and string_upper
 # 7% slower at every placement. R and S, after W, hold a replace's loop
 # (regExpReplaceIn, regexp_abstract.go) and the string builder
@@ -50,13 +49,23 @@
 # forward_construct 30% -- and at 2f05d3fc's no row is slower than
 # there. No position holds builtins_bigint.go: one before it moved the
 # built-ins after it, the JSON codec among them, off E's layout, and
-# json_parse_strings was 14% slower with the JIT.
+# json_parse_strings was 14% slower with the JIT. T, before
+# builtins_json.go, holds the JSON encoder (encode, and stringify and
+# encodeObject around it) at 5ef0d50b's layout: builtins_atomics.go and
+# builtins_intl.go grew by 160 bytes in the WebAssembly engine's merge,
+# and json_round_trip was 7% slower with the JIT at every placement.
+# encodeObject grew there too, by 96 bytes, so what follows it in the
+# file -- encodeProps, writeLayout, the parser -- and the built-ins up
+# to C stay 96 bytes past 5ef0d50b's offsets: T at their offsets, the
+# encoder 96 bytes before its own, gave json_round_trip back but not
+# json_stringify_records or json_stringify_small.
 toolchain go1.27.3
 
 config windows/amd64 plain
 anchor A  0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
 anchor I  0x004c0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x008c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00960 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
 anchor C  0x00800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -80,6 +89,7 @@ config windows/amd64 jit
 anchor A  0x004c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
 anchor I  0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x000c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
 anchor C  0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00b20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -103,6 +113,7 @@ config linux/amd64 plain
 anchor A  0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
 anchor I  0x00700 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00b40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00ba0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
 anchor C  0x00a40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -126,6 +137,7 @@ config linux/amd64 jit
 anchor A  0x003c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
 anchor I  0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
 anchor C  0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x009e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult

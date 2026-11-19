@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadE is the layout lock's pad E, after bigown.go, before builtins.go: the built-ins' hot loops, firstElem and the JSON codec.
+// layoutPadE is the layout lock's pad E, after bigown.go, before builtins.go: the built-ins' hot loops, firstElem.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

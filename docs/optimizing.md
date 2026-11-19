@@ -214,7 +214,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
-| A I E C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`, the JSON codec among them), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
+| A I E T C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`), the JSON encoder's `encode` (`builtins_json.go` on, T), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
 | Q W U V | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), the call path after it, `rhCallW` (W), its operations in Go, `regBinImm` and `regBinary` (`reg_runs.go`, U), and its handlers, `newRegSwitchTable` (`reg_switch.go` and `reg_table*.go`, V, at `2f05d3fc`'s layout) |
 | R S | `layoutPadX`, the same, after the register interpreter's files | every function after it to the next position | a replace's loop, `regExpReplaceIn` with its templates after it (`regexp_abstract.go`, R), and the string builder, `partsBuilder` (`string.go`, S) |
 | Z | `layoutPadZ`, after every file | the closures, and the generics the last files call | nothing at present: no configuration anchors it, and its pad is left out |
@@ -256,6 +256,16 @@ What each lever cannot move:
   `promise.go`, lie in N's range; 221 ns at `3ecb8200`, 190 at
   `2f05d3fc`, 207 now), `array_spread` 4.6%, `spread_call` 4.2%,
   `asm_table` 7.4% and `int_to_string` 2.6% slower at most of them.
+  T (`builtins_j_layoutpad.go`, before `builtins_json.go`) holds the
+  JSON encoder at `5ef0d50b`'s offsets: the WebAssembly engine's merge
+  grew `builtins_atomics.go` and `builtins_intl.go` by 160 bytes, which
+  moved it, and `json_round_trip` was 7% slower with the JIT at every
+  placement. One position holds one stretch: `encodeObject` grew by 96
+  bytes in the same merge, so what follows it -- `encodeProps`,
+  `writeLayout`, the parser and the built-ins up to C -- stays 96 bytes
+  past `5ef0d50b`'s offsets. T with those at their offsets, the
+  encoder 96 bytes early, gave `json_round_trip` back but left
+  `json_stringify_records` and `json_stringify_small` slower.
 - **Closures** come after every function, in the compiler's order: the
   named functions' closures roughly in file order, then the init
   functions' in descending init order, then a group in reverse file order.

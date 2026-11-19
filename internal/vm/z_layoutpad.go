@@ -205,6 +205,9 @@ func init() {
 		if layoutPadNE >= 0 {
 			layoutPadE()
 		}
+		if layoutPadNT >= 0 {
+			layoutPadT()
+		}
 		if layoutPadNC >= 0 {
 			layoutPadC()
 		}
