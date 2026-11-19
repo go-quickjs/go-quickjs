@@ -38,8 +38,8 @@ func (r *Runtime) initArrayExtras2() {
 	p := r.proto.array
 
 	r.defMethod(p, "splice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if v, ok := rt.spliceDense(this, args); ok {
-			return v, nil
+		if v, ok, err := rt.spliceDense(this, args); ok || err != nil {
+			return v, err
 		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
@@ -1553,32 +1553,43 @@ func (r *Runtime) arrayLikeToLocaleString(this Value, n int64, locale []Value) (
 // through the property protocol, each of PDF.js's charstring splices, which
 // replace one element with two or three, had cost a couple of
 // microseconds. It reports false for any other, which the protocol makes.
-func (r *Runtime) spliceDense(this Value, args []Value) (Value, bool) {
+// The elements it moves count towards the next check for an interrupt
+// (countWalk), checked before it moves them.
+func (r *Runtime) spliceDense(this Value, args []Value) (Value, bool, error) {
 	o := r.plainArray(this)
 	if o == nil || len(args) < 2 || !args[0].IsNumber() || !args[1].IsNumber() ||
 		o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
 		!r.noInheritedIndices(o) || !r.plainSpecies(o) {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	o.ownElems()
 	elems := o.elemsOf()
 	n := int64(len(elems))
 	start, err := r.relativeIndex64(args[0], n, 0)
 	if err != nil {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	c, err := r.toInteger(args[1])
 	if err != nil {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	remove := int64(clampFloatIndex(c, int(n-start)))
 	inserted := args[2:]
 	if n+int64(len(inserted))-remove > maxArrayLength {
-		return Undefined, false
+		return Undefined, false, nil
+	}
+	// What it removes is copied, what it inserts written, and, where the
+	// two differ in number, the rest moved.
+	walk := remove + int64(len(inserted))
+	if int64(len(inserted)) != remove {
+		walk = n - start + int64(len(inserted))
+	}
+	if err := r.countWalk(walk); err != nil {
+		return Undefined, true, err
 	}
 	out := r.newArrayFrom(elems[start : start+remove])
 	o.extOf().elems = slices.Replace(elems, int(start), int(start+remove), inserted...)
-	return Obj(out), true
+	return Obj(out), true, nil
 }
 
 // sliceDense is slice where it is a copy of a dense array's elements: an
@@ -1589,27 +1600,46 @@ func (r *Runtime) spliceDense(this Value, args []Value) (Value, bool) {
 // element or a hole that nothing inherited fills, which the result keeps
 // as a hole, so the range is copied at once rather than asked HasProperty
 // and Get of index by index and pushed one at a time. It reports false for
-// any other, which the protocol makes.
-func (r *Runtime) sliceDense(this Value, args []Value) (Value, bool) {
+// any other, which the protocol makes. The elements it copies count towards
+// the next check for an interrupt (countWalk), checked before it copies
+// them.
+func (r *Runtime) sliceDense(this Value, args []Value) (Value, bool, error) {
 	o := r.plainArray(this)
 	if o == nil || !numberOrAbsent(args, 0) || !numberOrAbsent(args, 1) ||
 		!r.noInheritedIndices(o) || !r.plainSpecies(o) {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	elems := o.elemsOf()
 	n := int64(len(elems))
 	start, err := r.relativeIndex64(arg(args, 0), n, 0)
 	if err != nil {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	end, err := r.relativeIndex64(arg(args, 1), n, n)
 	if err != nil {
-		return Undefined, false
+		return Undefined, false, nil
 	}
 	if end < start {
 		end = start
 	}
-	return Obj(r.newArrayFrom(elems[start:end])), true
+	if err := r.countWalk(end - start); err != nil {
+		return Undefined, true, err
+	}
+	return Obj(r.newArrayFrom(elems[start:end])), true, nil
+}
+
+// countWalk counts n elements that a dense array's fast path walks at once
+// -- copies, moves -- towards the next check for an interrupt, as the
+// protocol's walk counts each one it reads (arrayLike's at), and checks
+// once they run the count out. Counted as one step, a script calling
+// a.slice() of 100,000 elements in a loop ran a thousand of them, seconds,
+// past a stop that only the counted checks notice, as they alone do in a
+// build with the race detector.
+func (r *Runtime) countWalk(n int64) error {
+	if r.interruptCounter -= int(min(max(n, 0), interruptCheckInterval)); r.interruptCounter <= 0 {
+		return r.checkInterruptNow()
+	}
+	return nil
 }
 
 // numberOrAbsent reports whether args' i'th argument is a number or not

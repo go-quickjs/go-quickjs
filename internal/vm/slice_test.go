@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 // slice on a dense array copies its range at once (sliceDense), and the
 // spec's algorithm, written out below with nothing but property reads and
@@ -125,7 +129,7 @@ func TestSliceDenseTakes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := r.sliceDense(v, c.args); ok != c.want {
+		if _, ok, _ := r.sliceDense(v, c.args); ok != c.want {
 			t.Errorf("%s: sliceDense took it %v, want %v", c.src, ok, c.want)
 		}
 	}
@@ -138,8 +142,39 @@ func TestSliceDenseTakes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := r.sliceDense(v, nil); ok {
+		if _, ok, _ := r.sliceDense(v, nil); ok {
 			t.Errorf("after %s: sliceDense took a plain array", src)
 		}
+	}
+}
+
+// The elements slice and splice copy or move at once on a dense array
+// (sliceDense, spliceDense) count towards the next check for an interrupt,
+// as the protocol's walk counts each one (arrayLike's at): a stop the
+// counted checks alone notice -- as in a build with the race detector, and
+// here, where nothing watches the context -- stops a loop of them within
+// the first call after it, not a thousand calls on at the loop's back
+// edges. Counted as one step each, a.slice() of 100,000 elements in a loop
+// ran seconds past its deadline (TestInterruptIsNotAValue under -race).
+func TestDenseCopiesCountTowardsTheCheck(t *testing.T) {
+	t.Parallel()
+	for _, op := range []string{"big.slice()", "big.slice(1, -1)", "big.splice(0, 0, 1)", "big.splice(1, 1)"} {
+		r := New(Config{})
+		ctx, cancel := context.WithCancel(context.Background())
+		r.global.setOwnRaw(r.atoms.intern("stop"), r.NewFunction("stop", 0, func(*Runtime, Value, []Value) (Value, error) {
+			cancel()
+			return Undefined, nil
+		}), propWritable|propConfigurable)
+		r.SetContext(ctx)
+		_, err := r.Run(compileForTest(t, `var big = new Array(100000).fill(1), n = 0;
+			while (true) { `+op+`; if (++n == 3) stop() }`))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s: %v, want the stop", op, err)
+		}
+		if n := r.global.getOwn(r.atoms.intern("n")).value().Number(); n != 3 {
+			t.Errorf("%s: %v calls made, want 3: the stop came %v calls late", op, n, n-3)
+		}
+		r.Close()
+		cancel()
 	}
 }

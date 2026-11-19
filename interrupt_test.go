@@ -9,36 +9,50 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
-// TestInterruptIsNotAValue pins that a deadline stops a script however the
-// interrupt reaches it: a promise reaction used to turn it into a rejection
-// that the next .catch took, and an iterator being closed dropped it, and the
-// script ran on for good (KI-14). The runtime's next call is not stopped.
+// TestInterruptIsNotAValue pins that a stop -- the context's end -- stops a
+// script however the interrupt reaches it: a promise reaction used to turn
+// it into a rejection that the next .catch took, and an iterator being
+// closed dropped it, and the script ran on for good (KI-14). The runtime's
+// next call is not stopped. What it measures is the script's own count of
+// what it did past the stop, which the script makes due itself (stop): no
+// handler or catch ever sees the interrupt, and a loop of a.slice() over a
+// long array stops at the first call after it, the walk counting towards
+// the next check (KI-14): counted as one step, it ran a thousand calls on,
+// seconds, where only the counted checks notice a stop, as under the race
+// detector.
 func TestInterruptIsNotAValue(t *testing.T) {
-	for name, src := range map[string]string{
-		"reaction": `var big = new Array(100000).fill(1);
-			function spin() { while (true) big.slice(); }
-			function again() { return Promise.resolve().then(spin).catch(again); }
-			Promise.resolve().then(spin).catch(again);`,
-		"iterator return": `var big = new Array(100000).fill(1);
+	for name, c := range map[string]struct{ src, check, want string }{
+		"reaction": {`var big = new Array(100000).fill(1), turns = 0, caught = 0;
+			function spin() { while (true) { big.slice(); if (++turns == 3) stop(); } }
+			function again() { caught++; return Promise.resolve().then(spin).catch(again); }
+			Promise.resolve().then(spin).catch(again);`, `[turns, caught].join()`, "3,0"},
+		// The interrupt meets the iterator's closing, which a throw out of
+		// the loop began: the throw goes on to its catch, as the standard
+		// has it, the interrupt remembered, and Array.from's next call does
+		// not begin.
+		"iterator return": {`var big = new Array(100000).fill(1), turns = 0, caught = 0;
 			var it = {[Symbol.iterator]() { return this }, next() { return {done: false} },
-				return() { while (true) big.slice(); }};
-			Array.from({length: 2 ** 31}, function () { try { for (var x of it) throw 1; } catch (e) {} });`,
-		"async catch": `(async () => { for (;;) { try { await null; while (true); } catch (e) {} } })()`,
+				return() { while (true) { big.slice(); if (++turns == 3) stop(); } }};
+			Array.from({length: 2 ** 31}, function () { try { for (var x of it) throw 1; } catch (e) { caught++ } });`, `[turns, caught].join()`, "3,1"},
+		// Its empty loop's back edges are checked every so many: how many
+		// turns it made past the stop is not the point, that nothing caught
+		// it is.
+		"async catch": {`var turns = 0, caught = 0;
+			(async () => { for (;;) { try { await null; while (true) if (++turns == 3) stop(); } catch (e) { caught++ } } })()`, `String(caught)`, "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rt := quickjs.New()
 			defer rt.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			start := time.Now()
-			_, err := rt.EvalContext(ctx, src)
-			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("err = %v, want the deadline", err)
+			if err := rt.Set("stop", func() { cancel() }); err != nil {
+				t.Fatal(err)
 			}
-			// A walk of a dense array counts towards the next check too: a
-			// script calling a.slice() in a loop took seconds to stop.
-			if d := time.Since(start); d > 2*time.Second {
-				t.Errorf("stopped after %v", d)
+			if _, err := rt.EvalContext(ctx, c.src); !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v, want the stop", err)
+			}
+			if got := evalString(t, rt, c.check); got != c.want {
+				t.Errorf("%s = %s, want %s", c.check, got, c.want)
 			}
 			if v, err := rt.Eval(`1 + 1`); err != nil || v.Int() != 2 {
 				t.Errorf("the next call: %v, %v", v, err)

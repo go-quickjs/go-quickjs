@@ -1238,8 +1238,8 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if v, ok := rt.sliceDense(this, args); ok {
-			return v, nil
+		if v, ok, err := rt.sliceDense(this, args); ok || err != nil {
+			return v, err
 		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {

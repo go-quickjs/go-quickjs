@@ -1,51 +1,82 @@
 package quickjs_test
 
 import (
-	"context"
+	"fmt"
+	"math"
+	"runtime"
 	"testing"
-	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
 // TestLinearBuilds pins that building a string a surrogate half at a time,
 // binding a function to itself over and over, joining a long list and
-// breaking long Thai into words take time in proportion to how much there is:
-// joining the halves of a pair flattened the string, each bind copied the
-// "bound bound ..." name in full, a list was folded an item at a time, and
-// each of Thai's words was searched for from the first (KI-27).
+// breaking long Thai into words take work in proportion to how much there
+// is: joining the halves of a pair flattened the string, each bind copied
+// the "bound bound ..." name in full, a list was folded an item at a time,
+// and each of Thai's words was searched for from the first (KI-27). The work
+// measured is what each allocates, at a size and at twice it: twice as
+// much, where a build copying all built so far at each step allocates four
+// times as much. Not time, which other tests stretch: the race detector's
+// full run took it past a deadline of 20 seconds, which it takes 3 alone.
+// go-intl's searches of Thai's breaks, which allocate nothing either way,
+// it pins itself (TestSegmentingScales); here the engine's segments, asked
+// which segment holds each offset, are not made again for each.
+//
+// Not parallel: it reads the process's count of what was allocated, which
+// a test running beside it would add to.
 func TestLinearBuilds(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct{ src, want string }{
-		"surrogate halves": {`
-			let s = "";
-			for (let i = 0; i < 200000; i++) { s += "\uD83D"; s += "\uDE00"; }
-			[s.length, s === "\u{1F600}".repeat(200000), s.codePointAt(399998).toString(16)].join()`,
-			"400000,true,1f600"},
-		"bound names": {`
-			let f = function g() {};
-			for (let i = 0; i < 100000; i++) f = f.bind();
-			[f.name.length, f.name.startsWith("bound bound "), f.name.endsWith("bound g")].join()`,
-			"600001,true,true"},
-		"a long list": {`
-			new Intl.ListFormat("en").format(Array(200000).fill("x")).length`,
-			"600002"},
-		"long Thai": {`
-			const s = "สวัสดีครับ".repeat(30000);
+	for name, tc := range map[string]struct {
+		n    int
+		src  func(n int) string
+		want func(n int) string
+	}{
+		"surrogate halves": {20000, func(n int) string {
+			return fmt.Sprintf(`{ let s = "";
+			for (let i = 0; i < %d; i++) { s += "\uD83D"; s += "\uDE00"; }
+			[s.length, s === "\u{1F600}".repeat(%[1]d), s.codePointAt(%d).toString(16)].join() }`, n, 2*n-2)
+		}, func(n int) string { return fmt.Sprintf("%d,true,1f600", 2*n) }},
+		"bound names": {5000, func(n int) string {
+			return fmt.Sprintf(`{ let f = function g() {};
+			for (let i = 0; i < %d; i++) f = f.bind();
+			[f.name.length, f.name.startsWith("bound bound "), f.name.endsWith("bound g")].join() }`, n)
+		}, func(n int) string { return fmt.Sprintf("%d,true,true", 6*n+1) }},
+		"a long list": {20000, func(n int) string {
+			return fmt.Sprintf(`new Intl.ListFormat("en").format(Array(%d).fill("x")).length`, n)
+		}, func(n int) string { return fmt.Sprint(3*n + 2) }},
+		"long Thai": {2000, func(n int) string {
+			return fmt.Sprintf(`{ const s = "สวัสดีครับ".repeat(%d);
 			const segs = new Intl.Segmenter("th", {granularity: "word"}).segment(s);
 			let n = 0;
 			for (let i = 0; i < s.length; i += 5) n += segs.containing(i).segment.length > 0;
-			[n, [...segs].length > 30000].join()`,
-			"60000,true"},
+			[n, [...segs].length >= %[1]d].join() }`, n)
+		}, func(n int) string { return fmt.Sprintf("%d,true", 2*n) }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rt := quickjs.New()
 			defer rt.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			v, err := rt.EvalContext(ctx, tc.src)
-			if err != nil || v.String() != tc.want {
-				t.Errorf("= %v, %v; want %s", v, err, tc.want)
+			// The bytes allocated evaluating it at size n, the least of two
+			// runs: anything else allocating meanwhile only adds.
+			alloc := func(n int) uint64 {
+				least := uint64(math.MaxUint64)
+				for range 2 {
+					var before, after runtime.MemStats
+					runtime.ReadMemStats(&before)
+					v, err := rt.Eval(tc.src(n))
+					runtime.ReadMemStats(&after)
+					if err != nil || v.String() != tc.want(n) {
+						t.Fatalf("size %d: %v, %v; want %s", n, v, err, tc.want(n))
+					}
+					least = min(least, after.TotalAlloc-before.TotalAlloc)
+				}
+				return least
+			}
+			// What a first use makes -- Intl's data, the formatters -- made
+			// before.
+			alloc(tc.n / 16)
+			one, two := alloc(tc.n), alloc(2*tc.n)
+			if ratio := float64(two) / float64(one); ratio > 3 {
+				t.Errorf("%d bytes allocated at size %d, %d at twice it: %.2f times as much", one, tc.n, two, ratio)
 			}
 		})
 	}

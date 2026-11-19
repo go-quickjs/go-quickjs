@@ -138,7 +138,7 @@ func TestSpliceDenseTakes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := r.spliceDense(v, c.args); ok != c.want {
+		if _, ok, _ := r.spliceDense(v, c.args); ok != c.want {
 			t.Errorf("%s: spliceDense took it %v, want %v", c.src, ok, c.want)
 		}
 	}
@@ -151,7 +151,7 @@ func TestSpliceDenseTakes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := r.spliceDense(v, []Value{Int(1), Int(1)}); ok {
+		if _, ok, _ := r.spliceDense(v, []Value{Int(1), Int(1)}); ok {
 			t.Errorf("after %s: spliceDense took a plain array", src)
 		}
 	}
