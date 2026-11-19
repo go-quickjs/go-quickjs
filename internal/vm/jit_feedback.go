@@ -846,6 +846,15 @@ func (f *jitRegFeedback) inline(pc int) (ssa.InlineSite, bool) {
 		// its size, as V8's Turbofan decides it.
 		return ssa.InlineSite{}, false
 	}
+	if f.fb.r.jitMegaGetter(cl) {
+		// One whose read at a megamorphic site has met a getter on its
+		// receivers' prototypes is called natively, its own code making
+		// the read on its frame: inlined, the read has no frame for Go to
+		// call the getter on, and leaves native code, the interpreter
+		// finishing the caller's invocation, at every receiver of the
+		// getter.
+		return ssa.InlineSite{}, false
+	}
 	if site.Parent != 0 {
 		// A construction with a class that has no constructor of its own,
 		// run with its parent's code while the class's prototype is still
@@ -1784,4 +1793,59 @@ func (f *jitRegFeedback) TypedKind(pc int) (ssa.TypedSite, bool) {
 	k := f.fb.keep()
 	k.cells = append(k.cells, cell)
 	return ssa.TypedSite{Kinds: uint16(math.Float64bits(cell.num)), Cell: uintptr(unsafe.Pointer(cell))}, true
+}
+
+// jitMegaGetter reports whether a read of cl's register code, at a site
+// that is megamorphic -- its cache gave up, or the code met more shapes
+// than its cases hold (jitRegSiteMegamorphic) -- has met a getter on its
+// receivers' prototypes and receivers of more than one shape: an entry of
+// its cache's, or of those it held before (poly, seen), is an accessor's
+// (propCache's getter), and their shapes are not all one. Such a callee
+// is not inlined (Inline). A site of one receiver shape, whose cache gave
+// up on a getter it cannot hold -- a function's legacy arguments, read
+// by method.arguments -- is compiled for the getter, which checks that
+// shape, and inlined.
+func (r *Runtime) jitMegaGetter(cl *closure) bool {
+	c := cl.reg
+	if c == nil {
+		return false
+	}
+	l := r.jitState().regLearnedOf(r.jitRegKeyOf(cl))
+	for rpc, w := range c.rc.Code {
+		if op := w.Op(); op != bytecode.RGetProp {
+			continue
+		}
+		site := int(w.C())
+		if site >= len(cl.ic) || !r.jitRegSiteMegamorphic(cl, c, l, rpc) {
+			continue
+		}
+		var one *shape
+		getter, shapes := false, 0
+		note := func(e *propCache) {
+			if e.shape == nil || e.shape == noShape {
+				return
+			}
+			getter = getter || e.getter
+			if shapes == 0 || e.shape != one && shapes == 1 {
+				one = e.shape
+				shapes++
+			}
+		}
+		e := &cl.ic[site]
+		note(e)
+		if p := e.poly; p != nil {
+			for i := range p.n {
+				note(&p.entries[i])
+			}
+		}
+		if s := e.seenOf(); s != nil {
+			for i := range s.n {
+				note(&s.entries[i])
+			}
+		}
+		if getter && shapes > 1 {
+			return true
+		}
+	}
+	return false
 }

@@ -2556,7 +2556,15 @@ sites' caches have seen added first (`jitRegSeenFeedback`), the root's keep
 holding what its sites name. A getter or setter a register read or write
 calls (`jitRegFeedback`'s `Accessor`, `accessorOf`) is offered the same way
 (`AccessorSite`'s `Inline`), once the receiver and the accessor are checked
-(`accessorOp`). A compile asks each call once: the builder asks the root's
+(`accessorOp`). A callee whose read at a megamorphic site has met a
+getter on its receivers' prototypes, and receivers of more than one
+shape, is not offered (`jitMegaGetter`): inlined, the read has no frame
+for Go to call the getter on, and native code leaves there, the
+interpreter finishing the caller's invocation, at every receiver of the
+getter; called natively, its own code makes the read on its frame. A
+site of one receiver shape whose cache gave up on a getter it cannot
+hold -- a function's legacy arguments -- is compiled for the getter,
+which checks that shape, and its callee inlined. A compile asks each call once: the builder asks the root's
 calls in each of its builds, and a callee's at each call of it it plans,
 and `Inline`'s and `NativeCalls`' answers are kept by the program's
 instruction for the rest (`jitRegFeedback`'s `askedOf`); and every call of

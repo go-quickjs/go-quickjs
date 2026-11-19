@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -917,6 +918,71 @@ func TestJITMegamorphicReadsByGo(t *testing.T) {
 	}
 	if n := r.jit.interpreted - interpreted; n != 0 {
 		t.Errorf("the interpreter finished %d invocations", n)
+	}
+}
+
+// jitLastInlinesForTest has the last compile of a function named name
+// record the closures it inlines (ssa.Func's Inlined) in *into: a
+// process-wide hook, which also keeps compiles out of the background, so
+// that a test using it is never parallel.
+func jitLastInlinesForTest(t *testing.T, name string, into *[]uintptr) {
+	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+		if fn.Name == name {
+			*into = slices.Clone(f.Inlined)
+		}
+	}
+	t.Cleanup(func() { jitSSAOptimized = nil })
+}
+
+// megaGetterSrc has drive call look at each of twelve receivers, three of
+// whose prototypes hold a getter of hit, look's read megamorphic; fail
+// reads hit of a receiver whose getter throws.
+const megaGetterSrc = `var data={hit:7}, getter={get hit(){if(this.p0===-1)throw new Error('hit of '+this.p1);return this.p0+this.p1+100}}, shapes=[];
+					for(let k=0;k<12;k++){const o=Object.create(k%3==1?data:k%3==2?getter:Object.prototype);
+						for(let j=0;j<=k;j++)o['p'+j]=j*k;if(k%4==0)o.hit=k;shapes.push(o)}
+					var bad=Object.create(getter);bad.p0=-1;bad.p1=9;for(let j=2;j<12;j++)bad['p'+j]=j
+					function look(o){const h=o.hit;return h===undefined?-1:h}
+					function drive(n){let t=0;for(let i=0;i<n;i++)t+=look(shapes[i%12]);return t}
+					function fail(){try{return look(bad)}catch(e){return e.message+'|'+e.stack.split(String.fromCharCode(10)).slice(0,3).join('|')}}`
+
+// A callee whose read at a megamorphic site has met a getter on its
+// receivers' prototypes is not inlined (jitMegaGetter): inlined, the read
+// would have no frame for Go to call the getter on, and would leave native
+// code at every receiver of the getter. drive does not inline look, by
+// the Go table and the native handlers, marking and not, and the answers
+// -- the getter's this, and the exception one receiver's getter throws,
+// with its stack -- are the interpreter's.
+func TestJITMegamorphicGetterNotInlined(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, native := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
+				was := regNativeOn
+				regNativeOn = native
+				t.Cleanup(func() { regNativeOn = was })
+				if marking {
+					jitMarkingForTest(t)
+				}
+				var inlined []uintptr
+				jitLastInlinesForTest(t, "drive", &inlined)
+				r, run := jitTierRuntimeForTest(t, 1, megaGetterSrc)
+				for range 4 {
+					run(`drive(96)`)
+				}
+				look := jitGlobalClosureForTest(r, "look")
+				if !jitSiteMegamorphicForTest(t, r, look, r.jit.regLearnedOf(r.jitRegKeyOf(look)), bytecode.OpGetProp, bytecode.RGetProp) {
+					t.Fatal("look's read is not megamorphic: no test of its rule")
+				}
+				jitNativeForTest(t, r, "drive")
+				if slices.Contains(inlined, uintptr(unsafe.Pointer(look))) {
+					t.Fatal("drive inlines look, whose megamorphic read meets a getter")
+				}
+				run(`drive(120)`)
+				run(`fail()`)
+			})
+		}
 	}
 }
 
