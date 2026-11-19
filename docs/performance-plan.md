@@ -894,3 +894,43 @@ Measured and dropped; each needs a new angle before it is tried again.
   branched on the comparison without materializing its boolean. EarleyBoyer
   stayed at 26.15 ms, within 0.1%, against the version with parameter
   stores completed in the allocation call. The compiler change was removed.
+- **Prepared objects for constructions** (2026-11-19, Go 1.27.3, JIT
+  off, three rounds at two placements): a site whose base constructor's
+  initializer and shape had settled kept 32 objects made ahead, which
+  `new_w`'s native handler took without calling Go, Go refilling the
+  pool when it ran out. Far fewer allocation calls, but the target
+  suites were 1.6% slower, 2.1% in a repeat, RayTrace 3.3% slower at
+  both placements. The pool was removed.
+- **Smaller native interpreter changes against `dc7ddd31`** (2026-11-19,
+  Go 1.27.3, JIT off, three rounds at two placements unless said, on an
+  M5 Max (arm64) and an i9-9900K (Windows amd64)), each removed for a
+  gain of under a per cent or one that did not hold on both machines.
+  The figures are RayTrace, EarleyBoyer, Splay:
+  - The barrier flag's padding moved past an unconditional jump, every
+    handler's offset kept: arm64 -0.5%, -0.1%, +0.1%; amd64, five
+    rounds, +1.5%, +0.2%, +1.3%.
+  - arm64's property slot address as one shifted add: -0.2%, -0.1%,
+    +0.5%.
+  - An unbound function's kind remembered in an object flag, so that
+    instanceof skips its kind and bound checks after the site's shape
+    check: probed out of line, level, -0.2%, +1.8%; inline, +0.1%,
+    -0.7%, -0.6%, EarleyBoyer faster at one placement alone. Neither
+    pays for an object flag.
+  - The old pointer's equality check skipped while the collector is
+    idle, on arm64: -1.0%, +0.1%, -0.4%.
+  - Adjacent property reads fused three or four at a time rather than
+    two, a count checked in each pair, on arm64: RayTrace +3.8%, slower
+    at both placements, EarleyBoyer level, Splay -0.4%.
+  - A settled two-property constructor's object allocated inline: arm64
+    +0.6%, -0.7%, -1.5%, nine construction micro-benchmarks 0.997;
+    amd64 +0.3%, +1.2%, -1.0%.
+  - The next instruction loaded before its pointer is advanced, every
+    offset and count kept: arm64 +0.3%, +0.9%, +0.4%; amd64 -1.1%,
+    +0.1%, -0.1%.
+  - Native globals' slot bounds check dropped, the epoch proving the
+    slot: arm64 +0.3%, -0.4%, -0.2%; amd64 -1.4%, -0.9%, +0.7%. With
+    the epoch also kept at each return from Go, which saves its load:
+    arm64 -0.0%, -0.2%, -0.8%; amd64 +0.6%, +0.2%, +0.3%.
+  - Constant array literals made by the native literal helper, as
+    object literals and empty arrays are, measured on amd64 alone
+    against the boolean-literal branch: +0.6%, +0.3%, +1.5%.
