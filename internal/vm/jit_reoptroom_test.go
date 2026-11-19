@@ -41,10 +41,29 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 	// room, keeps the old and notes the room it was short of (reoptRoom,
 	// jitRegPlace), its budget the runtime's (jitBudget), which each
 	// compile reads: every byte held young, the clock not moving, a limit
-	// below what the cache holds leaves no room to make.
+	// of what the cache holds less g's code, which the new code replaces
+	// (regRoomFor), leaves no room for code of any length. A limit a byte
+	// below what the cache holds was no room only for code as long as the
+	// old: arm64's code loads the addresses it embeds -- its calls of Go's
+	// states, made for each compile -- in as many instructions as they
+	// have half-words not zero, and g's, compiled again with one at a
+	// 64 KB boundary, came to 896 bytes rather than 900, a line of the
+	// arena less, and was placed: 29 and 54 of 6,000 runs under qemu.
 	key := r.jitRegKeyOf(cl)
 	limit := r.jitMemoryLimit
-	r.jitMemoryLimit = int64(r.jit.held() - 1)
+	old := r.jit.regReplaced(cv.reg)
+	// The compile short of room lets go of g's program (jitRegPlace),
+	// which takes the cache below the limit again, so that it lets go of
+	// no young code to get there (settle): the program is larger than
+	// g's code.
+	program := 0
+	if l := r.jit.regLowered[key]; l != nil {
+		program = l.bytes
+	}
+	if program < old {
+		t.Fatalf("g's program %d bytes, its code %d", program, old)
+	}
+	r.jitMemoryLimit = int64(r.jit.held() - old)
 	reopts := r.jit.reoptimized
 	for i := 0; i < 4; i++ {
 		if ne := r.jitRegCompileFor(cl, cl.reg, key, false); ne != nil && ne.code != nil || e.reoptRoom <= 0 || r.jit.reoptimized != reopts || !cv.same(r, cl) {
