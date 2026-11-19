@@ -8419,10 +8419,12 @@ func (c *compiler) valueStore() {
 // scratchA, the pointer in scratchC. Every allocatable register is saved
 // across it, and none of the scratch ones. The stores share a routine
 // (refStoring), which saves them and jumps to storeRef (abi.Encoding's
-// StoreRef); a site is where it comes back to, which Go never refuses. A nil
-// over a nil, a primitive's over a primitive's -- a literal's number in a new
-// object -- has nothing to write or to shade, and goes straight back, the
-// registers unsaved: a fifth of a render's stores, a third of a literal's.
+// StoreRef); a site is where it comes back to, which Go never refuses. A
+// pointer over itself -- a nil over a nil, a primitive's over a
+// primitive's, a literal's number in a new object, or the same object's
+// pointer stored back -- has nothing to write or to shade, and goes
+// straight back, the registers unsaved: a fifth of a render's stores, a
+// third of a literal's.
 func (c *compiler) refStore() {
 	if !c.refStoringUsed {
 		c.refStoring, c.refStoringUsed = c.a.NewLabel(), true
@@ -8435,14 +8437,15 @@ func (c *compiler) refStore() {
 }
 
 // refStoringCall is the routine refStore's sites share: back to the site at
-// once for a nil over a nil; or every allocatable register saved in the
+// once for a pointer over itself, a nil over a nil among them, which
+// changes no edge of the heap; or every allocatable register saved in the
 // context's register area, as savingCall saves them; storeRef, which comes
 // back to it, where scratchB says; the frame's registers read again, and every
 // allocatable one restored; then back to the site, at GoSite.
 func (c *compiler) refStoringCall() {
 	work := c.a.NewLabel()
 	c.a.Load(scratchB, scratchA, 0)
-	c.a.Op(amd64.Or, scratchB, scratchC, true)
+	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	c.a.Jcc(amd64.CondNE, work)
 	c.a.JmpMem(regCtx, abi.OffGoSite)
 	c.a.Bind(work)
