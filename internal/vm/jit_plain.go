@@ -38,6 +38,13 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	// alone: most calls of Go are of none of these, which jitGoCall makes.
 	switch ctx.GoOp >> abi.GoOpKindShift & 0xff {
 	case abi.GoCallSet:
+	case abi.GoCallGet:
+		// A megamorphic read's miss inside an inlined callee
+		// (jitPlainRead); the run's own and a native callee's are
+		// jitGoCall's, which learns from them.
+		if !jitGoInline(ctx) {
+			return false
+		}
 	case abi.GoCallOp:
 		// An operation Go makes (jitOpPlain).
 		return r.jitOpPlain(ctx)
@@ -79,10 +86,25 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		}
 		// Register code's: its set_prop's site and name, at its register pc.
 		cl, rin, reg := r.jitRegPlainSet(ctx, idx)
-		if !reg || cl == nil || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
+		if !reg || cl == nil || rin.Op != bytecode.OpSetProp || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
 			return false
 		}
 		v = Undefined
+	case bytecode.OpGetProp:
+		// An inlined callee's read, as its write above: its get_prop's
+		// site and name.
+		s, idx := r.jit, int(ctx.Level)
+		if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
+			return false
+		}
+		cl, rin, reg := r.jitRegPlainSet(ctx, idx)
+		if !reg || cl == nil || rin.Op != bytecode.OpGetProp {
+			return false
+		}
+		var ok bool
+		if v, ok = r.jitPlainRead(cl, rin, jitGoArg(ctx, 0)); !ok {
+			return false
+		}
 	case bytecode.OpCall, bytecode.OpCallMethod:
 		var ok bool
 		if v, ok = r.jitPlainCall(ctx, in, n); !ok {
@@ -294,6 +316,8 @@ func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
 	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn, abi.GoCallForOf, abi.GoCallStep:
 		return true
+	case abi.GoCallGet:
+		return jitGoInline(ctx)
 	case abi.GoCallForward:
 		// Array.apply(null, arguments), Array the call's first operand.
 		return ctx.GoArgs[0].Ref == uintptr(unsafe.Pointer(r.proto.arrayCtor))
@@ -416,4 +440,37 @@ func (r *Runtime) jitLeafSeen(ctx *abi.Context) {
 	}
 	st := (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast)))
 	st.LeafSeen = true
+}
+
+// jitPlainRead makes in, a megamorphic site's read of obj Go makes inside
+// an inlined callee (ssa's megamorphic read, abi.GoCallState's Inline),
+// where it runs nothing and throws nothing: a plain data property obj or a
+// prototype of its has, or undefined where none of them has the key, each
+// an ordinary object -- no proxy, whose trap would run, no class that
+// answers keys of its own -- as the interpreter's read finds it; the
+// megamorphic cache filled as at a read's exit (jitRegReadSeen), so that
+// native code finds it there next. It reports false for anything else --
+// a getter, whose call needs the callee's frame, a receiver that is no
+// object -- which leaves native code, Go making it there.
+func (r *Runtime) jitPlainRead(cl *closure, in jitInstr, obj Value) (Value, bool) {
+	if !obj.IsObject() || int(in.A) >= len(cl.names) {
+		return Undefined, false
+	}
+	o, key := obj.Object(), cl.names[in.A]
+	v := Undefined
+	for p := o; p != nil; p = p.proto() {
+		if p.class != ClassObject {
+			return Undefined, false
+		}
+		if i := p.findOwn(key); i >= 0 {
+			if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return Undefined, false
+			}
+			v = p.vals()[i]
+			break
+		}
+	}
+	r.jit.megaFill(o, key)
+	r.jitMegaFillProto(o, key)
+	return v, true
 }

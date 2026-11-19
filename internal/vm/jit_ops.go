@@ -207,10 +207,12 @@ func (r *Runtime) jitRegCodeIn(ctx *abi.Context, idx int) bool {
 }
 
 // jitRegPlainSet is, for a call of Go register code makes in ctx, in
-// context idx (reg), a set_prop's write jitGoCallPlain may make without a
-// frame (jitPlainWrite): the code's closure -- the run's, or a native
-// callee's -- and the write, its site's name and its cache, of the
-// register instruction at its register pc, an inlined callee's its own; a nil closure where it is none.
+// context idx (reg), a set_prop's write or a get_prop's read
+// jitGoCallPlain may make without a frame (jitPlainWrite, jitPlainRead):
+// the code's closure -- the run's, or a native callee's -- and the write
+// or the read, its site's name and its cache, of the register instruction
+// at its register pc, an inlined callee's its own; a nil closure where it
+// is none.
 func (r *Runtime) jitRegPlainSet(ctx *abi.Context, idx int) (*closure, jitInstr, bool) {
 	if !r.jitRegCodeIn(ctx, idx) {
 		return nil, jitInstr{}, false
@@ -254,10 +256,20 @@ func (r *Runtime) jitRegPlainSet(ctx *abi.Context, idx int) (*closure, jitInstr,
 		return nil, jitInstr{}, true
 	}
 	w := c.rc.Code[rpc]
-	if w.Op() != bytecode.RSetProp || int(w.C()) >= len(c.rc.SiteName) {
+	op := bytecode.OpSetProp
+	switch w.Op() {
+	case bytecode.RSetProp:
+	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW:
+		// A read (jitPlainRead): get_method's and get_method_w's value is
+		// the method read, which the expansion puts in its registers.
+		op = bytecode.OpGetProp
+	default:
 		return nil, jitInstr{}, true
 	}
-	return cl, jitInstr{Op: bytecode.OpSetProp, A: c.rc.SiteName[w.C()], B: uint32(w.C())}, true
+	if int(w.C()) >= len(c.rc.SiteName) {
+		return nil, jitInstr{}, true
+	}
+	return cl, jitInstr{Op: op, A: c.rc.SiteName[w.C()], B: uint32(w.C())}, true
 }
 
 // jitRegAllocSeen learns, after Go made new_w w at register pc rpc of f's

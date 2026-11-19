@@ -1225,7 +1225,12 @@ met (`ssa.PropertySite`'s `Primitives`) -- is read so too, not left for: its
 object is none (`OpObjectOf`'s `ObjectOfTry`), and Go reads the property of
 the primitive on the call's branch, a getter called with it as this; a read
 of undefined or null, which throws, still leaves. In an inlined callee,
-whose frame Go cannot make, either leaves. A megamorphic site's write of
+whose frame Go cannot make, Go reads a miss only where that needs no frame
+(`abi.GoCallState`'s `Inline`, the VM's `jitPlainRead`): a data property
+an ordinary object or its prototypes have, or none; a getter, and a
+receiver that is no object, leave there, and a callee whose megamorphic
+read has met a getter is not inlined (see [Inlining](#inlining)). Each
+such miss had left native code. A megamorphic site's write of
 such a receiver is a miss so too: the write's object none, Go writes the
 property of the primitive on the call's branch -- a setter on its
 prototypes called with it as this, nothing in sloppy code otherwise, a

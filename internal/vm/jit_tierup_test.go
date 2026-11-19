@@ -1056,6 +1056,60 @@ func TestJITMegamorphicAccessorReadsByGo(t *testing.T) {
 	}
 }
 
+// A megamorphic site's read in an inlined callee is Go's at its miss too
+// (ssa's megamorphic read), where it needs no frame (jitPlainRead): a data
+// property its receiver or a prototype has, or none -- which had left
+// native code at every such miss, the interpreter finishing the caller's
+// invocation. look, inlined in drive, reads hit of 3,000 objects of as
+// many shapes, over three prototypes, some with hit of their own, more
+// than the megamorphic cache holds, so that its misses go on: by the Go
+// table and the native handlers, marking and not, drive never leaves,
+// each answer the interpreter's.
+func TestJITMegamorphicInlinedReadsByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, native := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
+				was := regNativeOn
+				regNativeOn = native
+				t.Cleanup(func() { regNativeOn = was })
+				if marking {
+					jitMarkingForTest(t)
+				}
+				var inlined []uintptr
+				jitLastInlinesForTest(t, "drive", &inlined)
+				// The interpreter runs look first, its cache giving up.
+				r, run := jitTierRuntimeForTest(t, 200, `var a={hit:7}, b={hit:'b'}, objs=[];
+					for(let k=0;k<3000;k++){const o=Object.create(k%3==1?a:k%3==2?b:Object.prototype);
+						o['q'+k]=k;for(let j=0;j<10;j++)o['p'+j]=j;if(k%4==0)o.hit=k;objs.push(o)}
+					function look(o){return o.hit}
+					function drive(n){let t=0,s='';for(let i=0;i<n;i++){const h=look(objs[i%3000]);if(typeof h=='number')t+=h;else s+=h}return t+s.length}`)
+				for range 4 {
+					run(`drive(3000)`)
+				}
+				look := jitGlobalClosureForTest(r, "look")
+				if !jitSiteMegamorphicForTest(t, r, look, r.jit.regLearnedOf(r.jitRegKeyOf(look)), bytecode.OpGetProp, bytecode.RGetProp) {
+					t.Fatal("look's read is not megamorphic: no test of its misses")
+				}
+				if !slices.Contains(inlined, uintptr(unsafe.Pointer(look))) {
+					t.Fatal("drive does not inline look")
+				}
+				ed := jitNativeForTest(t, r, "drive")
+				dh, dg, interpreted := ed.ssaStats.hosts, ed.ssaStats.guards, r.jit.interpreted
+				run(`drive(6000)`)
+				if n := ed.ssaStats.hosts - dh + ed.ssaStats.guards - dg; n != 0 {
+					t.Errorf("drive left native code %d times", n)
+				}
+				if n := r.jit.interpreted - interpreted; n != 0 {
+					t.Errorf("the interpreter finished %d invocations", n)
+				}
+			})
+		}
+	}
+}
+
 // A megamorphic site's method read whose miss Go makes (ssa.GoCall) leaves
 // the site's cache as the interpreter reads a method (get_prop_this, by
 // cachedProp, whose entries are data): a getter's read of the method there

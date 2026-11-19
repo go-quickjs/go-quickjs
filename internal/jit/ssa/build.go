@@ -8476,7 +8476,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, k)
 			break
 		}
-		if (in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead) && site.Megamorphic && !in.Private && b.cur == b.root && b.goCalls() && f.Keeps < f.keepLimit() &&
+		if (in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead) && site.Megamorphic && !in.Private && b.goCalls() && f.Keeps < f.keepLimit() &&
 			!b.originGoesOn(pc) {
 			// A megamorphic site's read: what neither the receiver's own
 			// table nor the megamorphic cache has -- a shape the site never
@@ -8490,6 +8490,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// unbox.
 			// Of a primitive too, where the site has met one: it has no
 			// cell, and Go reads its property (ObjectOfTry).
+			// Inside an inlined callee too, where Go reads it only as it
+			// needs no frame (abi.GoCallState's Inline, the VM's
+			// jitPlainRead) -- a data property an ordinary object or its
+			// prototypes have, or none -- and leaves otherwise: a getter's
+			// call needs the callee's frame, and a callee whose megamorphic
+			// read has met one is not inlined (the VM's jitMegaGetter).
+			// Each such miss had left native code, the interpreter finishing
+			// the invocation.
 			if site.Primitives {
 				object.Index = ObjectOfTry
 			}
