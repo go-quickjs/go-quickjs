@@ -2809,7 +2809,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 		// regexp_lit's call, of the method its expansion read, on its
 		// literal's RegExp, of its one argument (compile's regexpLit).
 		argc = 1
-	case op == bytecode.RGetProp && kind == abi.GoCallGet, op == bytecode.RSetProp && kind == abi.GoCallSet,
+	case (op == bytecode.RGetProp || op == bytecode.RGetPropNext) && kind == abi.GoCallGet, op == bytecode.RSetProp && kind == abi.GoCallSet,
 		(op == bytecode.RGetMethod || op == bytecode.RGetMethodW) && kind == abi.GoCallGet:
 		// get_method's and get_method_w's too, a megamorphic site's miss
 		// (ssa's megamorphic read): its value the expansion's, which puts it
@@ -3700,7 +3700,7 @@ func (r *Runtime) regFinishCall(f *frame, c *regCode, wb, rpc int, v Value, err 
 	if err == nil {
 		dest := int(w.B())
 		switch w.Op() {
-		case bytecode.RInstanceOf, bytecode.RTypeof, bytecode.RGetProp, bytecode.RGetMethod, bytecode.RApplyArgs,
+		case bytecode.RInstanceOf, bytecode.RTypeof, bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RApplyArgs,
 			bytecode.RIterStep, bytecode.RIterRest:
 			// R[A]'s: a getter's, called for get_prop (an accessor
 			// inlined, jitRegInlined), as typeof's and instanceof's, and a

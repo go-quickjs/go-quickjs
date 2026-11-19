@@ -9,7 +9,7 @@ import (
 // and fit the 8-bit field with values to spare; they are neither cold nor
 // unnamed.
 func TestReservedOps(t *testing.T) {
-	reserved := []ROp{RStepJLt, RStepJLe, RStepJLtI, RStepJGtI, RStepJGeI, RStepJLeU, RMulI, RAddI32, RSubI32, RAddII32}
+	reserved := []ROp{RStepJLt, RStepJLe, RStepJLtI, RStepJGtI, RStepJGeI, RStepJLeU, RMulI, RAddI32, RSubI32, RAddII32, RGetPropNext}
 	if RStepJLt != RFarInit+1 {
 		t.Fatalf("far_init is %d and step_jlt %d: the reserved values must follow every other", RFarInit, RStepJLt)
 	}

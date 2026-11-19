@@ -206,6 +206,11 @@ origin (`ir.Program.Origin`):
 | a compare with a captured bound | the bound's read and the compare |
 | `jtypeof`, a switch's cases | the tests and their branches |
 
+`get_prop_next` and its following `get_prop` lower as two independent
+property reads, each with its own origin, feedback site and frame state.
+Their combined dispatch and omitted intermediate store belong to the
+native interpreter; an exit from compiled code can resume at either read.
+
 Where a register instruction's operands are a run of registers that is not
 where its result goes -- `new_array`'s elements, `concat`'s parts -- they
 are copied to scratch slots first, which the operation reads as a run of

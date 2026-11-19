@@ -1300,6 +1300,7 @@ func nativeEmit(v *variant) (*block, error) {
 	// after the rarer paths, so that they move none of them.
 	h(bytecode.RIterClose, g.iterClose)
 	h(bytecode.RIterStep, g.iterStep)
+	h(bytecode.RGetPropNext, g.getPropNext)
 	for i := 0; i < len(g.after); i++ {
 		g.after[i]()
 	}

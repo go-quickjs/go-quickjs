@@ -894,12 +894,28 @@ const nativeMore5Src = `
 
 // TestRegNativeMore5 runs nativeMore5Src as TestRegNativeMore runs its.
 func TestRegNativeMore5(t *testing.T) {
+	nativeCounting(t)
 	want := nativeRunSrc(t, nativeMore5Src, false)
-	for _, marking := range []bool{false, true} {
+	if got := nativeRunSrc(t, regPropertyChainSrc, false); got != regPropertyChainWant {
+		t.Fatalf("property chain: %s, want %s", got, regPropertyChainWant)
+	}
+	var chainExits [2]int64
+	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
 		if got := nativeRunSrc(t, nativeMore5Src, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
+		before := nativeExitOps()[bytecode.RGetPropNext]
+		if got := nativeRunSrc(t, regPropertyChainSrc, true); got != regPropertyChainWant {
+			t.Errorf("property chain (marking %v): %s, want %s", marking, got, regPropertyChainWant)
+		}
+		chainExits[i] = nativeExitOps()[bytecode.RGetPropNext] - before
+		if chainExits[i] >= 50 {
+			t.Errorf("property chain (marking %v): %d misses in the warmed loops", marking, chainExits[i])
+		}
+	}
+	if chainExits[0] != chainExits[1] {
+		t.Errorf("property chain: %d exits, %d while marking", chainExits[0], chainExits[1])
 	}
 }
 

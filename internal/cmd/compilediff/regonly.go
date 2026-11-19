@@ -347,7 +347,7 @@ func regInstr(t *regTables, fn *bytecode.Function, rc *bytecode.RegCode, pc int,
 		extra = append(extra, t.konst(w.BC()))
 	case bytecode.RTemplateObject:
 		// The function's Templates, which the walk numbers.
-	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp,
+	case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp,
 		bytecode.RAddProp, bytecode.RAddPropI:
 		op = fmt.Sprintf("%s a%d b%d x%d", w.Op(), a, b, w.X())
 		extra = append(extra, t.site(c))

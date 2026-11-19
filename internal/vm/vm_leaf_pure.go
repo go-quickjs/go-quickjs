@@ -124,7 +124,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			regs[w.A()] = False
 		case bytecode.RLoadEmpty:
 			regs[w.A()] = Str(emptyString)
-		case bytecode.RGetProp:
+		case bytecode.RGetProp, bytecode.RGetPropNext:
 			o := regs[w.B()]
 			if !o.IsObject() {
 				return miss()

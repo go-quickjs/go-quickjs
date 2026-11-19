@@ -53,7 +53,7 @@ func regRoles(w bytecode.RInstr) (reads, writes []int, known bool) {
 	}
 	switch w.Op() {
 	case bytecode.RMove, bytecode.RInc, bytecode.RDec, bytecode.RUnary, bytecode.RTypeof, bytecode.RGetLength,
-		bytecode.RGetProp, bytecode.RGetIndexI, bytecode.RAddI, bytecode.RSubI, bytecode.RAndI, bytecode.ROrI,
+		bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetIndexI, bytecode.RAddI, bytecode.RSubI, bytecode.RAndI, bytecode.ROrI,
 		bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI, bytecode.RMulI, bytecode.RAddII32:
 		return []int{b}, []int{a}, true
 	case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull, bytecode.RLoadTrue,
@@ -182,7 +182,7 @@ func (g *gen) reuseOf(call, l int) (int, int, bool, bool) {
 			default:
 				return 0, 0, false, false
 			}
-		case op == bytecode.RGetProp && int(w.B()) == reg:
+		case (op == bytecode.RGetProp || op == bytecode.RGetPropNext) && int(w.B()) == reg:
 			switch name := g.siteNameOf(w.C()); name {
 			case "index", "input":
 			default:

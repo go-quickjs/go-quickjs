@@ -67,8 +67,11 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 					}
 				}
 			}
-		case bytecode.RGetProp, bytecode.RGetMethod:
+		case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod:
 			ok = reg(a) && reg(b) && site(c)
+			if w.Op() == bytecode.RGetPropNext {
+				ok = ok && pc+1 < len(code) && code[pc+1].Op() == bytecode.RGetProp && code[pc+1].B() == a
+			}
 		case bytecode.RArgsLen:
 			ok = reg(a) && reg(b)
 		case bytecode.RArgsIndex:

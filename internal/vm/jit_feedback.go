@@ -99,7 +99,7 @@ func (f *jitRegFeedback) propertyAt(pc int) (rpc int, key Atom, c *propCache, wr
 		return f.regLitProperty(pc, w, op)
 	}
 	switch w.Op() {
-	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
+	case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
 	default:
 		return 0, 0, nil, false, false, false, false
 	}
@@ -116,7 +116,7 @@ func (f *jitRegFeedback) propertyAt(pc int) (rpc int, key Atom, c *propCache, wr
 	}
 	write = op == ir.PropertyWrite
 	method = w.Op() == bytecode.RGetMethod || w.Op() == bytecode.RGetMethodW
-	plain = w.Op() == bytecode.RGetProp
+	plain = w.Op() == bytecode.RGetProp || w.Op() == bytecode.RGetPropNext
 	return int(f.p.Origin[pc]), key, c, write, method, plain, true
 }
 
@@ -1218,7 +1218,7 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 			// Operands, results of their own, tests and branches; an
 			// append's addition, of a result of its own, and a read of the
 			// string it grows that leaves the value where it is.
-		case bytecode.RMove, bytecode.RPostInc, bytecode.RPostDec, bytecode.RGetLength, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RGetProp:
+		case bytecode.RMove, bytecode.RPostInc, bytecode.RPostDec, bytecode.RGetLength, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RGetProp, bytecode.RGetPropNext:
 			// Its value left in another register, or read a property of.
 			escape(b)
 		case bytecode.RRet, bytecode.RSetGlobal:

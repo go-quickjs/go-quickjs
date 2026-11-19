@@ -69,6 +69,7 @@ var handlerOps = []bytecode.ROp{
 	bytecode.RArgsIndex,
 	// A cursor's close and a destructuring's step.
 	bytecode.RIterClose, bytecode.RIterStep,
+	bytecode.RGetPropNext,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

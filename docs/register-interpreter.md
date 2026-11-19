@@ -315,8 +315,8 @@ the instruction. The families:
 `bytecode.ROp` is 8 bits, and the Go table, its slow functions and the
 native table each have 256 entries, every value with one: a value no
 operation has is `rhInvalid`'s, which panics and which the verifier proves
-no code holds, so the dispatch needs no range check. 241 values are taken
-(`ROpCount`), 15 are free.
+no code holds, so the dispatch needs no range check. 242 values are taken
+(`ROpCount`), 14 are free.
 
 How a value is allotted:
 
@@ -448,6 +448,16 @@ and test `step_jlt` (by a peephole over the finished code, `fuseSteps`). A
 fused instruction keeps, in `RegCode.Aux` where it needs one, the pc past
 the code's whose position its second part's errors take
 ([Positions](#from-the-ast)).
+
+Two adjacent named reads, `o.a.b`, keep both instructions and positions:
+the first is `get_prop_next`, followed by an ordinary `get_prop` reading
+its temporary. The native handler probes both data-property caches and,
+where both answer, stores only the final result and skips the partner.
+A miss leaves the first read to its Go handler, then runs the partner at
+its own position, so accessors, proxies and errors retain their order.
+Longer chains pair without overlap; optional chains keep their ordinary
+reads. The JIT lowers each instruction as an independent property read,
+with its original frame state and feedback site.
 
 A negative literal is an immediate wherever a literal is, and a literal
 left operand of `*` is moved to the right (`3 * x` is `mul_imm`), which
@@ -635,7 +645,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 128 of the 241 operations have a native handler
+**What is native.** 129 of the 242 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,

@@ -779,7 +779,7 @@ func (r *Runtime) jitRegPropOp(f *frame, c *regCode, wb, rpc int) (jitPropOp, bo
 	recv := int(w.B())
 	op := jitPropOp{}
 	switch w.Op() {
-	case bytecode.RGetProp:
+	case bytecode.RGetProp, bytecode.RGetPropNext:
 	case bytecode.RGetMethod, bytecode.RGetMethodW:
 		op.method = true
 	case bytecode.RSetProp:
@@ -810,7 +810,7 @@ func (r *Runtime) jitRegSeenFeedback(cl *closure, c *regCode) {
 	for rpc, w := range c.rc.Code {
 		write := false
 		switch w.Op() {
-		case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW:
+		case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW:
 		case bytecode.RSetProp:
 			write = true
 		default:

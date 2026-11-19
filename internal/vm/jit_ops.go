@@ -41,7 +41,7 @@ func (f *jitRegFeedback) regChainValue(rpc, reg, n int) (Value, bool) {
 		return Undefined, false
 	}
 	switch w.Op() {
-	case bytecode.RGetProp:
+	case bytecode.RGetProp, bytecode.RGetPropNext:
 		// A property of the object the read just before it left in the
 		// register this one reads, its own data property's value now.
 		site := int(w.C())

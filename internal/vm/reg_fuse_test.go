@@ -53,4 +53,39 @@ func TestRegFusedElements(t *testing.T) {
 		out`
 	const want = "1|2|3|undefined|g|@4 1|undefined|3|undefined|g|@4 6@0 b,number ,2,1 20 noobject true:1 o|p|undefined|undefined|undefined|@4 s|t|r|undefined|undefined|@4 43,1103 7 9/2,5,9,4 5"
 	regRunBoth(t, src, want, 10)
+	regRunBoth(t, regPropertyChainSrc, regPropertyChainWant, 5)
 }
+
+// Adjacent reads retain each property's effects and error, even when a
+// site's cached data property becomes an accessor or its prototype changes.
+const regPropertyChainSrc = `
+	function pair(o) { var v = o.link.value; return v }
+	function longer(o) { var v = o.a.b.c.d; return v }
+	function alias(o) { o = o.link.value; return o }
+	function optional(o) { var v = o?.link.value; return v }
+	function caught(o) { try { return pair(o) } catch(e) { return e.name } }
+	var out = [], leaf = {value: 7}, root = {link: leaf}, sum = 0;
+	for (var i = 0; i < 100; i++) sum += pair(root);
+	out.push(sum, alias(root), longer({a:{b:{c:{d:9}}}}));
+	var child = Object.create(root);
+	out.push(pair(child));
+	var first = 0, second = 0;
+	var accessor = {get link() { first++; return {get value() { second++; return 11 }} }};
+	out.push(pair(accessor), first, second);
+	var reads = '';
+	var proxy = new Proxy({link: new Proxy({value: 13}, {get(t,k) {reads += k + ','; return t[k]}})},
+		{get(t,k) {reads += k + ','; return t[k]}});
+	out.push(pair(proxy), reads);
+	Object.defineProperty(leaf, 'value', {get() {second++; return 17}, configurable:true});
+	out.push(pair(root), second);
+	Object.defineProperty(root, 'link', {get() {first++; return {value:19}}, configurable:true});
+	out.push(pair(child), first);
+	Object.setPrototypeOf(child, {link:{value:23}});
+	out.push(pair(child), caught(null), caught({link:null}), caught({link:0}), optional(null));
+	var kept = {x:31};
+	root = {link:{value:kept}};
+	for (var i = 0; i < 100; i++) if (pair(root) !== kept) throw new Error('lost object');
+	out.push(pair(root).x);
+	out.join('|')`
+
+const regPropertyChainWant = "700|7|9|7|11|1|1|13|link,value,|17|2|19|2|23|TypeError|TypeError|||31"

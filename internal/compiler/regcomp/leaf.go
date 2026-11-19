@@ -127,7 +127,7 @@ func pureBody(fn *bytecode.Function, rc *bytecode.RegCode) {
 			calls = true
 			ok = writes(w.B()) && writes(w.A())
 		case bytecode.RMove, bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull,
-			bytecode.RLoadTrue, bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RGetProp, bytecode.RGetLength,
+			bytecode.RLoadTrue, bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetLength,
 			bytecode.RGetGlobal, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBitAnd, bytecode.RBitOr,
 			bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr, bytecode.RAddI, bytecode.RSubI,
 			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI,

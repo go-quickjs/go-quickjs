@@ -1217,7 +1217,7 @@ func (l *regLowering) lower(pc int) {
 		l.emit(ir.Instruction{Op: ir.BindingRead, Left: ir.Literal(ir.Value{Kind: ir.Undefined}), Dest: int(a), Key: l.name(b)}, false)
 	case bytecode.RSetGlobal:
 		l.emit(ir.Instruction{Op: ir.BindingWrite, Left: reg(a), Key: l.name(b)}, false)
-	case bytecode.RGetProp:
+	case bytecode.RGetProp, bytecode.RGetPropNext:
 		l.emit(ir.Instruction{Op: ir.PropertyRead, Left: reg(b), Dest: int(a), Key: l.siteName(c)}, false)
 	case bytecode.RGetMethod:
 		l.emit(ir.Instruction{Op: ir.ReferenceRead, Left: reg(b), Dest: int(a), Key: l.siteName(c)}, false)

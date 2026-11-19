@@ -3639,6 +3639,15 @@ func (g *gen) member(n *ast.Member, dst int) int {
 		g.emit(bytecode.MakeR(bytecode.RGetLength, 0, r16(d), r16(o), 0))
 		return d
 	}
+	if inner, ok := n.Object.(*ast.Member); ok && !inner.Optional && !inner.Computed && !special(inner) &&
+		!g.isBinding(o) && len(g.code) > 0 {
+		pc := len(g.code) - 1
+		w := g.code[pc]
+		if w.Op() == bytecode.RGetProp && int(w.A()) == o &&
+			(pc == 0 || g.code[pc-1].Op() != bytecode.RGetPropNext) {
+			g.code[pc] = bytecode.MakeR(bytecode.RGetPropNext, w.X(), w.A(), w.B(), w.C())
+		}
+	}
 	g.emit(bytecode.MakeR(bytecode.RGetProp, 0, r16(d), r16(o), g.propSite(bytecode.OpGetProp, g.nameIdx(name))))
 	return d
 }

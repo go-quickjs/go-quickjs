@@ -332,7 +332,7 @@ func (r *Runtime) jitRegLeftAtSite(x *jitRegInlineLevel) bool {
 	w := rc.Code[x.pc]
 	l := r.jit.regLearnedOf(r.jitRegKeyOf(x.cl))
 	switch w.Op() {
-	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
+	case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
 		return r.jitRegShapeMiss(x)
 	case bytecode.RNewW:
 		for _, t := range jitTargets(l) {
@@ -363,7 +363,7 @@ func (r *Runtime) jitRegShapeMiss(x *jitRegInlineLevel) bool {
 	}
 	w := rc.Code[x.pc]
 	switch w.Op() {
-	case bytecode.RGetProp, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
+	case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
 	default:
 		return false
 	}

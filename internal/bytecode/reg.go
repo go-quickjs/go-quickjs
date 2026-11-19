@@ -725,6 +725,12 @@ const (
 	RAddI32
 	RSubI32
 	RAddII32
+	// RGetPropNext is RGetProp with an adjacent RGetProp partner whose B
+	// is this instruction's A, a temporary dead after the partner. Where
+	// both caches answer plain data reads, write the partner's A and go
+	// on at pc+2. Otherwise make the first read and go on at pc+1, leaving
+	// the partner its source position and its ordinary semantics.
+	RGetPropNext
 
 	// ROpCount is how many operations there are, each below it: the
 	// interpreter's table has an entry for every value an ROp can hold,
@@ -1209,7 +1215,7 @@ var rOpNames = [...]string{
 	RLoadThis: "load_this", RCheckRef: "check_ref",
 	RGetUpval: "get_upval", RSetUpval: "set_upval",
 	RGetGlobal: "get_global", RSetGlobal: "set_global",
-	RGetProp: "get_prop", RGetMethod: "get_method", RGetMethodW: "get_method_w", RArgsLen: "args_len", RArgsIndex: "args_index", RConcat: "concat", RStrPart: "str_part", RKeyOfBase: "key_of_base", RSetProp: "set_prop",
+	RGetProp: "get_prop", RGetPropNext: "get_prop_next", RGetMethod: "get_method", RGetMethodW: "get_method_w", RArgsLen: "args_len", RArgsIndex: "args_index", RConcat: "concat", RStrPart: "str_part", RKeyOfBase: "key_of_base", RSetProp: "set_prop",
 	RGetIndex: "get_index", RSetIndex: "set_index", RDefineField: "define_field",
 	RNewObject: "new_object", RNewArray: "new_array",
 	RAdd: "add", RSub: "sub", RMul: "mul", RBin: "bin",
@@ -1327,7 +1333,7 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s = key of %s for %s", op, r(w.A()), r(w.C()), r(w.B()))
 	case RArgsIndex:
 		return fmt.Sprintf("%s %s, %s[%s]", op, r(w.A()), r(w.B()), r(w.C()))
-	case RGetProp, RGetMethod, RGetMethodW:
+	case RGetProp, RGetPropNext, RGetMethod, RGetMethodW:
 		return fmt.Sprintf("%s %s, %s @%d", op, r(w.A()), r(w.B()), w.C())
 	case RSetProp:
 		return fmt.Sprintf("%s %s @%d, %s", op, r(w.A()), w.C(), r(w.B()))

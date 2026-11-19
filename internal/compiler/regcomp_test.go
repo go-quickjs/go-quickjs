@@ -47,7 +47,10 @@ func TestRegisterBackendCode(t *testing.T) {
 		function stores(o, t, n) { for (var j = 0; j < n; j++) { o.a = j; t[3] = j } }
 		function method(o, n) { var s = 0; for (var j = 0; j < n; j++) s += o.sum(0); return s }
 		function post(a, i) { var j = i++; return a[i++] + j + i }
-		function cap(n) { var calls = 0; var f = () => { calls++ }; f(); return calls }`)
+		function cap(n) { var calls = 0; var f = () => { calls++ }; f(); return calls }
+		function chain(o) { return o.a.b.c.d }
+		function chainSelf(o) { o = o.a.b; return o }
+		function chainOptional(o) { return o?.a.b }`)
 	want := map[string]string{
 		"fib": `
    0  jnlt_imm r2, 2 -> 2
@@ -103,6 +106,25 @@ func TestRegisterBackendCode(t *testing.T) {
 	has("post", "post_inc")
 	has("post", "get_index_post")
 	has("cap", "closure_w")
+	for _, name := range []string{"chain", "chainSelf"} {
+		has(name, "get_prop_next")
+		code := fns[name].RegCode().Code
+		pairs := 0
+		for pc, w := range code {
+			if w.Op() == bytecode.RGetPropNext {
+				pairs++
+				if pc+1 >= len(code) || code[pc+1].Op() != bytecode.RGetProp || code[pc+1].B() != w.A() {
+					t.Errorf("%s: broken property pair at %d", name, pc)
+				}
+			}
+		}
+		if name == "chain" && pairs != 2 {
+			t.Errorf("chain: %d pairs, want 2", pairs)
+		}
+	}
+	if code := fns["chainOptional"].RegCode().String(); strings.Contains(code, "get_prop_next") {
+		t.Errorf("optional chain has a fused read:\n%s", code)
+	}
 }
 
 // TestRegisterBackendFallsBack pins forms the backend once refused, each
