@@ -429,7 +429,7 @@ func (r *Runtime) toPropertyKey(v Value) (Atom, error) {
 		// A numeric key that is a canonical index avoids interning entirely.
 		return r.numberToAtom(v.Number()), nil
 	case KindString:
-		return r.atoms.intern(v.String().Go()), nil
+		return r.stringKey(v.String()), nil
 	case KindSymbol:
 		return r.atoms.internSymbol(v.Symbol()), nil
 	}
@@ -445,6 +445,21 @@ func (r *Runtime) toPropertyKey(v Value) (Atom, error) {
 		return 0, err
 	}
 	return r.atoms.intern(s.Go()), nil
+}
+
+// stringKey is the atom of key string s, made where it has none: the one
+// keyAtoms remembers with s, as toPropertyName finds it, or interned and
+// then remembered, so that a key a define or a keyed write converts at
+// every evaluation -- { [k]: v }, o[k] = v -- is not looked up in the atom
+// table's maps each time. An entry that says s names no atom is written
+// over by keyPut, which finds it: interning has made one.
+func (r *Runtime) stringKey(s *String) Atom {
+	if e := r.keyFind(s); e != nil && !e.none {
+		return e.atom
+	}
+	a := r.atoms.intern(s.Go())
+	r.keyPut(keyAtom{s: s, atom: a})
+	return a
 }
 
 // A propertyName is a key as ToPropertyKey makes it, before an atom is made
