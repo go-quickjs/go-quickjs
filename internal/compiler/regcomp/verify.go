@@ -17,6 +17,9 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 	if len(code) == 0 || n < regParams+rc.Params+rc.Inits {
 		return "no code"
 	}
+	if int(rc.SkipInit) > rc.Inits {
+		return "invalid initialization prefix"
+	}
 	// The line table: rising pcs from the code's first, and past the
 	// code's last, one for each error placed apart (virtual).
 	if len(rc.Lines) == 0 || rc.Lines[0].PC != 0 {

@@ -50,7 +50,14 @@ func TestRegisterBackendCode(t *testing.T) {
 		function cap(n) { var calls = 0; var f = () => { calls++ }; f(); return calls }
 		function chain(o) { return o.a.b.c.d }
 		function chainSelf(o) { o = o.a.b; return o }
-		function chainOptional(o) { return o?.a.b }`)
+		function chainOptional(o) { return o?.a.b }
+		function initBoth(p) { var a; if (p) a = 1; else a = 2; return a }
+		function initSome(p) { var a, b; if (p) a = 1; b = 2; return a }
+		function initLoop(n) { var i, a; for (i = 0; i < n; i++) a = i; return a }
+		function initRead() { var a, b = a; a = 1; return b }
+		function initCaptured() { var a = 1; return () => a }
+		function initOwned(n) { var a = n * 3n; a = a * 2n; return a }
+		function initSwitch(p) { var a; switch (p) { case 1: a = 2; break; case 2: return a } return a }`)
 	want := map[string]string{
 		"fib": `
    0  jnlt_imm r2, 2 -> 2
@@ -124,6 +131,41 @@ func TestRegisterBackendCode(t *testing.T) {
 	}
 	if code := fns["chainOptional"].RegCode().String(); strings.Contains(code, "get_prop_next") {
 		t.Errorf("optional chain has a fused read:\n%s", code)
+	}
+	for name, want := range map[string]int{
+		"locals": 0, "initBoth": 0, "initSome": 1, "initLoop": 2,
+		"initRead": 1, "initCaptured": 1, "initOwned": 1, "initSwitch": 1,
+	} {
+		rc := fns[name].RegCode()
+		if got := rc.Inits - int(rc.SkipInit); got != want {
+			t.Errorf("%s: %d bindings initialized, want %d:\n%s", name, got, want, rc)
+		}
+	}
+}
+
+// TestRegisterBackendSkipInitExclusions pins the functions whose bindings
+// the entry still makes undefined, each read before it is written or where
+// what reads it is not the code's own: a let read in its dead zone, a var a
+// closure reads before it is written, a binding a handler or a finally
+// block reads, a generator's, an async function's, one beside arguments
+// and one a direct eval may read.
+func TestRegisterBackendSkipInitExclusions(t *testing.T) {
+	fns := regFunctions(t, `
+		function tdz(p) { if (p) return x; let x = 1; return x }
+		function captured() { var get = () => v; var r = get(); var v = 2; return r }
+		function fin(p) { var a; try { if (p) throw 1; a = 1 } finally { return a } }
+		function* gen() { var a; yield 1; a = 2; return a }
+		async function asy() { var a; await 1; a = 2; return a }
+		function args() { var a; a = arguments.length; return a }
+		function evals(s) { var a; a = 1; return eval(s) }
+		function written() { var a; a = 1; return a }`)
+	for _, name := range []string{"tdz", "captured", "fin", "gen", "asy", "args", "evals"} {
+		if rc := fns[name].RegCode(); rc.Inits == 0 || rc.SkipInit != 0 {
+			t.Errorf("%s: %d of %d bindings left to their writes, want none:\n%s", name, rc.SkipInit, rc.Inits, rc)
+		}
+	}
+	if rc := fns["written"].RegCode(); rc.SkipInit != 1 {
+		t.Errorf("written: %d bindings left to their writes, want 1:\n%s", rc.SkipInit, rc)
 	}
 }
 

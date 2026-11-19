@@ -7,14 +7,15 @@ import (
 
 // TestRecordedFactsInPadding holds the facts the compiler records for the
 // JIT (Function's FrameCallee and the five like it, UpvalueDesc's
-// Assigned) to the padding they were put in, on every architecture: each
-// structure is the size it was, and the fields the interpreter reads did
+// Assigned) and RegCode's SkipInit to their padding on every architecture.
+// Each structure is the size it was, and the fields the interpreter reads did
 // not move. Three after Anonymous end where Script, a pointer, begins;
 // three after ArrowThisValue, and Assigned after ByValue, end each
 // structure.
 func TestRecordedFactsInPadding(t *testing.T) {
 	var f Function
 	var u UpvalueDesc
+	var r RegCode
 	align := func(n, a uintptr) uintptr { return (n + a - 1) &^ (a - 1) }
 	ptr := unsafe.Alignof(f.Script)
 	for _, c := range []struct {
@@ -32,6 +33,9 @@ func TestRecordedFactsInPadding(t *testing.T) {
 		{"Function's size", unsafe.Sizeof(f), unsafe.Offsetof(f.Reg) + ptr},
 		{"Assigned", unsafe.Offsetof(u.Assigned), unsafe.Offsetof(u.ByValue) + 1},
 		{"UpvalueDesc's size", unsafe.Sizeof(u), align(unsafe.Offsetof(u.ByValue)+1, unsafe.Alignof(u))},
+		{"SkipInit", unsafe.Offsetof(r.SkipInit), unsafe.Offsetof(r.Typed) + 1},
+		{"Kinds", unsafe.Offsetof(r.Kinds), align(unsafe.Offsetof(r.Typed)+1, ptr)},
+		{"RegCode's size", unsafe.Sizeof(r), unsafe.Offsetof(r.Asm) + unsafe.Sizeof(r.Asm)},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s at %d, want %d", c.name, c.got, c.want)

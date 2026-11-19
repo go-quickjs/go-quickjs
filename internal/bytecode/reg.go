@@ -907,7 +907,7 @@ type RegCode struct {
 	// Wide marks code of the register form's own frame layout, which the
 	// register backend compiles from the AST: register 0 the function, 1
 	// its this, the Params parameters from 2, and then Inits bindings, which
-	// a call makes undefined, before the temporaries.
+	// are conceptually undefined on entry, before the temporaries.
 	Wide          bool
 	Params, Inits int
 	// Caps is, for each constant that is a nested function, the register
@@ -1005,7 +1005,12 @@ type RegCode struct {
 	// Typed marks typed code (regtyped.go): decoded through the typed
 	// table, each register of the kind Kinds gives it for the whole code.
 	Typed bool
-	Kinds []RegKind
+	// SkipInit is the trailing part of Inits that every path writes before
+	// reading, at most 64. The interpreter can omit its entry stores; the bindings
+	// retain their registers and their conceptual initial value of undefined.
+	// It fits the padding after Typed, without moving any field.
+	SkipInit uint8
+	Kinds    []RegKind
 	// Floats are typed code's float constants (TFConst).
 	Floats []float64
 	// Asm is, for typed code compiled from an asm.js module, what each

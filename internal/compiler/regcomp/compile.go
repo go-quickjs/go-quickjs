@@ -4572,6 +4572,7 @@ func (g *gen) finish() *bytecode.RegCode {
 	}
 	// The scratch's tables as the code grew them, for the next compile.
 	g.s.caps, g.s.siteName = g.caps, g.siteName[:0]
+	trimInits(g.fn, rc)
 	leafOf(g.fn, rc)
 	if why := Verify(rc, g.fn); why != "" {
 		Refuse(g.orig, why)
