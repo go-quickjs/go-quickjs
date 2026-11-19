@@ -41,7 +41,7 @@ var intendedInlining = []string{
 	"isHole",
 	"remember",
 	"ownOf",
-	"megaSlot",
+	"megaSet",
 	"(*propCache).own",
 	"(*propCache).holder",
 	"(*Runtime).tick",

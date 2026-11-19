@@ -23,7 +23,13 @@ func (r *Runtime) fwdCache(cl *closure, site int, o *Object, key Atom) *propCach
 	}
 	t := r.fwdSite(cl, o)
 	if t.holder(o) == nil && t.fills < maxCacheFills && o.flags&objPolyProto == 0 {
-		r.fillPropCache(t, o, key, false)
+		// Unless one of the entry's others answers (poly), which native
+		// code reads too: the shapes that meet in an entry had each been
+		// filled again at every construction, its fills spent in the
+		// first few hundred of them.
+		if e, _ := t.polyEntry(o); e == nil {
+			r.fillPropCache(t, o, key, false)
+		}
 	}
 	return t
 }

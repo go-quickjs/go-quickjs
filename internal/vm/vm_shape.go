@@ -1226,17 +1226,46 @@ type propPoly struct {
 // loads apart in memory -- a table the site keeps in the processor's cache.
 // An entry is checked against the object's shape, as an entry of the
 // site's own is, and remembers it (remember), so that a layout that would
-// change in place gets another identity instead.
-type megaOwn [16]megaEntry
+// change in place gets another identity instead. Its entries are in sets
+// of megaWays, a shape's set by its address (megaSet), the newest first: a
+// new one takes the first way, the others each moving one way on and the
+// oldest leaving, so that up to megaWays shapes of one set keep their
+// entries wherever they lie. Direct-mapped, 16 entries, a read of o.y
+// over 24 classes' objects had found a shape's entry taken by another's
+// from 1 in 3 to 9 in 10 of the time, by where the layouts were.
+type megaOwn [1 << (megaSetsLog + megaWaysLog)]megaEntry
+
+// megaOwn's sets, 1<<megaSetsLog of 1<<megaWaysLog entries each.
+const (
+	megaSetsLog = 4
+	megaWaysLog = 2
+	megaWays    = 1 << megaWaysLog
+)
 
 type megaEntry struct {
 	shape *shape
 	idx   int32
 }
 
-// megaSlot is where s goes in a megaOwn.
-func megaSlot(s *shape) uintptr {
-	return uintptr(uint64(uintptr(unsafe.Pointer(s))>>4) * 0x9e3779b97f4a7c15 >> 60)
+// megaSet is the index of the first entry of the set of a megaOwn s goes
+// in.
+func megaSet(s *shape) uintptr {
+	return uintptr(uint64(uintptr(unsafe.Pointer(s))>>4)*0x9e3779b97f4a7c15>>(64-megaSetsLog)) << megaWaysLog
+}
+
+// megaNote remembers in m that objects of shape s have the property at i:
+// see megaOwn.
+func megaNote(m *megaOwn, s *shape, i int32) {
+	ways := (*[megaWays]megaEntry)(m[megaSet(s):])
+	last := megaWays - 1
+	for j := range ways {
+		if ways[j].shape == s {
+			last = j
+			break
+		}
+	}
+	copy(ways[1:last+1], ways[:last])
+	ways[0] = megaEntry{shape: remember(s), idx: i}
 }
 
 // maxPolyEntries is how many shapes a site remembers besides its entry's:
@@ -1414,7 +1443,7 @@ func (c *propCache) noteOwn(o *Object, i int32) {
 			m = new(megaOwn)
 			c.poly.mega = m
 		}
-		m[megaSlot(s)] = megaEntry{shape: remember(s), idx: i}
+		megaNote(m, s, i)
 	}
 }
 
@@ -1428,9 +1457,12 @@ func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
 				return o.vals()[e.idx], true
 			}
 		} else if m := p.mega; m != nil {
-			if s := o.shape; s != nil {
-				if e := &m[megaSlot(s)]; e.shape == s && o.class == ClassObject {
-					return o.vals()[e.idx], true
+			if s := o.shape; s != nil && o.class == ClassObject {
+				ways := (*[megaWays]megaEntry)(m[megaSet(s):])
+				for i := range ways {
+					if ways[i].shape == s {
+						return o.vals()[ways[i].idx], true
+					}
 				}
 			}
 		}
@@ -1591,8 +1623,29 @@ type deepAdd struct {
 const deepAddDepth = 8
 
 // deepAdds is a realm's cache of additions, by the shape added to and the
-// key, as sharedCache is of reads.
+// key, as sharedCache is of reads: in sets of deepWays entries, the set
+// the shape's and the key's (deepSetOf), the newest entry first. A new one
+// takes the first way, the others each moving one way on and the oldest
+// leaving; one noted again replaces its own, the newer ones moving past
+// it. Up to deepWays additions whose shapes and keys share a set so keep
+// their entries, wherever the shapes lie. Direct-mapped, the 72 additions
+// of 24 classes' three stores each had shared slots from 1 in 35 to 3 in
+// 4 of the time, by where the classes' layouts were, each such store the
+// long way.
 type deepAdds [sharedCacheSize]deepAdd
+
+// deepWays is how many entries a set of deepAdds has, 1<<deepWaysLog.
+const (
+	deepWaysLog = 2
+	deepWays    = 1 << deepWaysLog
+)
+
+// deepSetOf is the index of the first entry of the set of deepAdds an
+// addition of key to objects of shape s is in, mixed by a multiplication
+// whose top bits are the set, as sharedProp's: a test may replace it.
+var deepSetOf = func(s *shape, key Atom) uintptr {
+	return uintptr((uint64(uintptr(unsafe.Pointer(s)))>>4^uint64(key)<<24)*0x9e3779b97f4a7c15>>(64-sharedCacheBits+deepWaysLog)) << deepWaysLog
+}
 
 // deepStore is an addition of v as o's key at a site whose cache has given
 // up, made as the realm's cache of additions says (deepAdds), or false
@@ -1607,8 +1660,15 @@ func (r *Runtime) deepStore(o *Object, key Atom, v Value) bool {
 	if s == nil || t == nil {
 		return false
 	}
-	e := &t[(uintptr(unsafe.Pointer(s))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize]
-	if e.key != key || e.from != s || o.flags&objExtensible == 0 {
+	ways := (*[deepWays]deepAdd)(t[deepSetOf(s, key):])
+	var e *deepAdd
+	for i := range ways {
+		if ways[i].key == key && ways[i].from == s {
+			e = &ways[i]
+			break
+		}
+	}
+	if e == nil || o.flags&objExtensible == 0 {
 		return false
 	}
 	p := o.proto()
@@ -1656,7 +1716,16 @@ func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
 	if r.deep == nil {
 		r.deep = new(deepAdds)
 	}
-	r.deep[(uintptr(unsafe.Pointer(before))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize] = e
+	ways := (*[deepWays]deepAdd)(r.deep[deepSetOf(before, key):])
+	last := deepWays - 1
+	for i := range ways {
+		if ways[i].key == key && ways[i].from == before {
+			last = i
+			break
+		}
+	}
+	copy(ways[1:last+1], ways[:last])
+	ways[0] = e
 }
 
 // maxCacheFills is how many times a cache is filled before it gives up.
