@@ -78,10 +78,16 @@ func TestPromisingStackEndsCollectedAfterResuming(t *testing.T) {
 	rt := newRuntime(t)
 	mod := watBytes(t, `(module (import "m" "f" (func $f (result i32)))
 		(func (export "run") (result i32) (drop (call $f)) (call $f)))`)
-	if _, err := rt.Eval(`{
+	if _, err := rt.Eval(`globalThis.pending = [];
+		{
 			let n = 0;
 			const e = new WebAssembly.Instance(new WebAssembly.Module(` + mod + `), {m: {
-				f: new WebAssembly.Suspending(() => n++ < 10 ? Promise.resolve(1) : new Promise(() => {})),
+				f: new WebAssembly.Suspending(() => {
+					if (n++ < 10) return Promise.resolve(1);
+					const p = new Promise(() => {});
+					pending.push(p);
+					return p;
+				}),
 			}}).exports;
 			for (let i = 0; i < 10; i++) WebAssembly.promising(e.run)();
 		}`); err != nil {
@@ -90,8 +96,14 @@ func TestPromisingStackEndsCollectedAfterResuming(t *testing.T) {
 	if err := rt.RunJobs(); err != nil {
 		t.Fatal(err)
 	}
+	// Keep each second suspension reachable until its stack is counted;
+	// otherwise a collection during RunJobs can already end some of them.
+	runtime.GC()
 	if n := promisingStacks(); n != before+10 {
 		t.Fatalf("%d promising stacks, want 10 more than the %d before", n, before)
+	}
+	if _, err := rt.Eval(`pending = null`); err != nil {
+		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for promisingStacks() > before {

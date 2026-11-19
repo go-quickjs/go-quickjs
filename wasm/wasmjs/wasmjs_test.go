@@ -166,15 +166,22 @@ func TestPromisingStackEnds(t *testing.T) {
 	rt := newRuntime(t)
 	before := promisingStacks()
 	// (import "m" "f" (func (result i32))) (func (export "run") (result i32) (call 0))
+	// Each suspension's promise is kept until its stack is counted: a
+	// collection after the call suspends could otherwise end it first.
 	_ = eval(t, rt, `
+		globalThis.pending = [];
 		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,9,2,96,0,1,127,96,0,1,127,2,7,1,1,109,1,102,0,0,3,2,1,1,
 			7,7,1,3,114,117,110,0,1,10,6,1,4,0,16,0,11]);
 		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes),
-			{m: {f: new WebAssembly.Suspending(() => new Promise(() => {}))}}).exports;
+			{m: {f: new WebAssembly.Suspending(() => { const p = new Promise(() => {}); pending.push(p); return p })}}).exports;
 		for (let i = 0; i < 20; i++) WebAssembly.promising(e.run)();
 		var out = "";`)
+	runtime.GC()
 	if n := promisingStacks(); n != before+20 {
 		t.Fatalf("%d promising stacks, want the 20 suspended calls' too (%d before)", n, before)
+	}
+	if _, err := rt.Eval(`pending = null`); err != nil {
+		t.Fatal(err)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for promisingStacks() > before {
