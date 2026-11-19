@@ -129,10 +129,9 @@ func lowerRegJS(t *testing.T, src string) *Func {
 // A loop's int32 read after it reaches the exit of register code's loop,
 // which tests at its end, through a phi of the turn's value and the one
 // before the first turn: that phi is an int32 phi, converted after it,
-// not its argument converted in the test's block at every turn -- a
-// conversion the stack form's loop, testing at its head, never made: the
-// micro-benchmark try_catch's sum, read after its loop, had cost one more
-// conversion a turn than the stack form's.
+// not its argument converted in the test's block at every turn: the
+// micro-benchmark try_catch's sum, read after its loop, had cost one
+// conversion a turn.
 func TestIntPhiAtRotatedLoopExit(t *testing.T) {
 	for _, src := range []string{
 		`function f(n){var i,s=0;for(i=0;i<n;i++){try{s=(s+i)|0}catch(e){s=0}}g=s;return n}`,

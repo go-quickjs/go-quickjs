@@ -1495,9 +1495,8 @@ func (c *core) allocate() error {
 			// A call whose pool Go fills is made again from its start, its
 			// operands read again after Go had the registers: they live
 			// across it, saved and restored (saves). Its state names them
-			// where they are its frame's slots, as the stack form's
-			// operands are; a register program's literal's elements are in
-			// scratch slots no state names, and a string element's words,
+			// where they are its frame's slots; a register program's
+			// literal's elements are in scratch slots no state names, and a string element's words,
 			// in registers, had been what Go's call left there.
 			pa := p
 			if !fused && ssa.RefillsPools(v) {

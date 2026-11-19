@@ -836,8 +836,7 @@ type InlineCache struct {
 	// its window, bit k for its k'th, that the interpreter's frame does
 	// not read past the call, normally or at a handler (ir.Program's
 	// LiveAt), the result's register among them: the operands the call
-	// consumes, as the stack form's call does its operand stack's, whose
-	// words the call's state leaves out (Consumes).
+	// consumes, whose words the call's state leaves out (Consumes).
 	Calls    []*CallSite
 	Consumed uint64
 	// Mega, for a read, is its site's Megamorphic (PropertySite); Scan its
@@ -1144,7 +1143,7 @@ type Func struct {
 	// makes undefined: register code's bindings (bytecode.RegCode's
 	// Inits), which the interpreter's call makes undefined, before its
 	// temporaries, which the code writes before it reads them. 0 is every
-	// local to FrameLocals, the stack form's.
+	// local to FrameLocals, a slot program's.
 	InitEnd int
 	// Cells marks code whose captured locals are in cells of their own
 	// (ir.Program's Cells): its native callers' call clears the context's
@@ -1199,7 +1198,7 @@ type Func struct {
 	// many of the last Locals are its expansions' scratch slots, past its
 	// registers and its captured bindings: live only inside one register
 	// instruction, never in a frame state. Where one is in memory -- a run
-	// of operands an operation reads as the stack form's top -- it is past
+	// of operands an operation reads in order -- it is past
 	// the window, below the context's Stack, as an operand slot is above
 	// it.
 	Scratch int
@@ -1221,8 +1220,8 @@ type Func struct {
 	Inlined []uintptr
 	// InlinedCode is how many instructions the callees the code inlines
 	// have, at every depth, the loops' callbacks among them: what
-	// inlining's budget (maxInlineTotal) is spent in, counted in the
-	// stack form's instructions, register code's converted (inlineSize).
+	// inlining's budget (maxInlineTotal) is spent in, counted in
+	// inlineSize's unit.
 	InlinedCode int
 	// HostsLeft are the PCs of the function's own host operations (ir.Host)
 	// the code leaves to Go -- at an exit, or a call Go makes from native

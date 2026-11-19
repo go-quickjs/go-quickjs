@@ -668,8 +668,11 @@ type StateMap struct {
 // Construction is the responsibility of a validated bytecode adapter.
 type Program struct {
 	// Origin is, for register code's program (the compile package's
-	// LowerReg), the register pc of each instruction, nil for the stack
-	// form's, whose instructions are its pcs. A register instruction that
+	// LowerReg and LowerTyped, which make every program the JIT
+	// compiles), the register pc of each instruction; nil for a slot
+	// program, one built by hand as ir's and ssa's tests build them, whose
+	// instructions are their own pcs and whose operands are on its
+	// operand stack. A register instruction that
 	// does several things -- add_prop's read, addition and store, a
 	// literal's object and its fields -- is several instructions of the
 	// same origin, in order, each state's PC that pc: an exit anywhere in
@@ -694,9 +697,9 @@ type Program struct {
 	// slots, which no state holds: every state's Depth is 0, and
 	// StackSize 0.
 	Regs int
-	// ParamBase is the slot of the first parameter (Params): 0 in the
-	// stack form's frame, 2 in register code's, whose registers 0 and 1
-	// are the function and its this.
+	// ParamBase is the slot of the first parameter (Params): 2 in register
+	// code's frame, whose registers 0 and 1 are the function and its this;
+	// 0 in a program built by hand, as ir's and ssa's tests build them.
 	ParamBase int
 	Locals    int
 	StackSize int

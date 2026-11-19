@@ -1802,9 +1802,9 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			// they are more than its registers (LocalCount): what its code
 			// takes past the window, which each compile of it sets, the
 			// context's StackEnd leaves room for below the VM's stack's end
-			// (abi.Context's StackEnd), so that the check is of a constant,
-			// as the stack form's -- the link's room, read at every call,
-			// had been two loads more. scratchC keeps the callee, which a
+			// (abi.Context's StackEnd), so that the check is of a constant:
+			// the link's room, read at every call, had been two loads
+			// more. scratchC keeps the callee, which a
 			// construction's checks read, or else the stack's top.
 			room := int32(max(t.LocalCount, 2+site.Argc))
 			if keepTop {
@@ -1893,8 +1893,8 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		operands = calleeSlot
 	}
 	// Register code's call leaves out of its state the operands it
-	// consumes, the stack form's way (ssa.Value's Consumes): its window's
-	// registers the frame reads no more, which a callee that leaves is
+	// consumes (ssa.Value's Consumes): its window's registers the frame
+	// reads no more, which a callee that leaves is
 	// finished without -- each had been a record's words stored at every
 	// call.
 	st, recs := c.callState(v, s, func(i int) bool {
@@ -2087,8 +2087,8 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			}
 			if t.Tail {
 				// Whether its calls in tail position may give its frame up
-				// (abi.Context's TailFrame), as the stack form's call says:
-				// set at every call of such a callee, so that none reads a
+				// (abi.Context's TailFrame), as the call site says: set at
+				// every call of such a callee, so that none reads a
 				// flag an earlier frame in the context left -- a
 				// construction's, which no tail call gives up.
 				c.a.Load(calleeCtx, regCtx, abi.OffNext)
@@ -2099,7 +2099,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 				// A construction's receiver, the pool's last object, its cell
 				// cleared, in the window's register 1 and the callee's
 				// context's This, which the result is if not an object, and
-				// its new.target there, as the stack form's. A derived
+				// its new.target there. A derived
 				// constructor's is its instance (abi.Context's Instance),
 				// its this unbound, the function whose code it is its
 				// Function, which its super() reads; a class's with no
@@ -5506,9 +5506,9 @@ func (c *core) tailInits() bool { return !c.f.StartOnly && c.f.Params < c.f.Init
 // call in tail position (ssa.OpTailSelf, TailWindow), args, tailDeep
 // writes to the frame without staging them in the context's operands:
 // its function, the callee, whose pointer word the context's CallCallee
-// keeps, and a plain call's receiver, undefined -- as the stack form's
-// call stages neither, its frame having no register of them. Each staged
-// had been four words stored and four loaded more at every call.
+// keeps, and a plain call's receiver, undefined, which the callee's
+// window is given without them. Each staged had been four words stored
+// and four loaded more at every call.
 func tailUnstaged(v *ssa.Value, args []*ssa.Value) (fn, this bool) {
 	if v.Key&ssa.TailWindow == 0 {
 		return false, false
@@ -5528,8 +5528,7 @@ func tailUnstaged(v *ssa.Value, args []*ssa.Value) (fn, this bool) {
 // makes them -- the call wrote its window's parameters alone, as a native
 // call's does (windowSetup) -- and goes on at the start, as Go's entry
 // does. Made here, of the code's own constants, they are no loads of its
-// link at every call in tail position (the stack form's tailJump writes
-// its callee's constants, its frame's size a constant of its function).
+// link at every call in tail position.
 func (c *compiler) tailEntry() {
 	vs := int32(c.enc.ValueSize)
 	c.a.Lea(regStack, regLocals, int32(c.f.FrameLocals+c.f.Scratch)*vs)
@@ -5560,8 +5559,8 @@ func (c *compiler) tailEntry() {
 // window's function, receiver and arguments -- in a native callee's frame:
 // t's code, which native callers may call, takes the frame's place, its
 // window the frame's -- its registers the operands up to its parameters,
-// undefined past them -- its context this one, as the stack form's
-// tailJump makes them, and goes on at its tail entry (Code.TailEntry),
+// undefined past them -- its context this one, and goes on at its tail
+// entry (Code.TailEntry),
 // which makes what its call entry makes past the window, returning where
 // this frame would have. The room checked is its window's, a constant:
 // what its code takes past the window the context's StackEnd leaves below
@@ -6737,8 +6736,7 @@ func windowArgc(t *ssa.CallSite) int {
 // made (abi.Context's Instance) in 1 -- the receiver of a base parent,
 // whose context's This it is; a derived parent's instance, its this
 // unbound -- and new.target handed on and that function in its context,
-// ctx, as the stack form's super() writes them (call's setup). It uses a
-// and b.
+// ctx, as Go's super() gives them. It uses a and b.
 func (c *compiler) windowSuper(t *ssa.CallSite, locals, ctx, a, b amd64.Reg) {
 	vs := int32(c.enc.ValueSize)
 	fn := derivedFunction(t)
@@ -6767,8 +6765,8 @@ func (c *compiler) windowSuper(t *ssa.CallSite, locals, ctx, a, b amd64.Reg) {
 // function and receiver written: its parameters the frame's arguments,
 // which its context holds (abi.Context's Args), undefined past them; and,
 // for a callee that keeps its arguments (FrameArgs), all of them and
-// their count in its context, ctx, as the stack form's forwardArgs gives
-// them, plain stores of what the caller's context holds while the callee
+// their count in its context, ctx, as Go's forwarding call gives them,
+// plain stores of what the caller's context holds while the callee
 // runs. An arrow's receiver is the this it captured. It uses RBX, R12,
 // R13, scratchA and scratchC.
 func (c *compiler) windowForward(t *ssa.CallSite, locals, ctx amd64.Reg) {
@@ -6792,8 +6790,8 @@ func (c *compiler) windowForward(t *ssa.CallSite, locals, ctx amd64.Reg) {
 // windowArgs gives a register callee that keeps its arguments
 // (ssa.CallSite's FrameArgs) all of them and their count in its context,
 // ctx, read from its window at locals, where the call wrote them -- a call
-// through Function.prototype.call's past its receiver (windowArgc) -- as the
-// stack form's call writes them (call's setup): plain stores, the
+// through Function.prototype.call's past its receiver (windowArgc) -- as
+// Go's call gives them: plain stores, the
 // collector marking or not, of what the VM's stack holds as long as the
 // callee runs. It uses a.
 func (c *compiler) windowArgs(t *ssa.CallSite, locals, ctx, a amd64.Reg) {

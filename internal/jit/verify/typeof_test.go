@@ -150,7 +150,7 @@ func TestMirTypeof(t *testing.T) {
 	if cells == 0 {
 		// Register code's typeof is a Window Host (the compile package's
 		// LowerReg), which ssa's typeofAt, asking the operand stack's
-		// depths of the stack form's typeof, never takes: the builder
+		// depths of a slot program's typeof, never takes: the builder
 		// makes it a call of Go in every function (its window's TypeOf).
 		t.Errorf("typeof's answers made natively %d: register code's typeof is always Go's", cells)
 	}

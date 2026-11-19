@@ -351,9 +351,9 @@ func (b *builder) wrapsAt(pc int) bool {
 	}
 	d := in.Dest
 	// Register code's operator writes a register -- one no closure
-	// captures, which the stack form's operand stack's top stands for --
-	// that what takes it is the last to read (below); the stack form's,
-	// its stack's top, which an instruction after it writes only above.
+	// captures -- that what takes it is the last to read (below); a slot
+	// program's, its stack's top, which an instruction after it writes
+	// only above.
 	reg := p.Origin != nil
 	if reg && (d < 0 || d >= p.Regs || p.IsCaptured(d)) || !reg && d != p.Locals+p.Maps[pc+1].Depth-1 {
 		return false
@@ -714,11 +714,10 @@ func (b *builder) bigFresh(pc, slot int) bool {
 // constant's load into another -- and which
 // nothing reads after pc before writing it (ir.Program's Live), or which
 // the instruction itself writes, its result replacing the operand -- a
-// temporary's t = t * x, which the stack form's operand on the stack is.
-// Not one of the registers that hold their values alone (BigIntSole),
-// the bindings, whose values are given back where an operator writes the
-// register next (bigOwner's ReleaseOld), as the stack form's locals are:
-// both would give the block back twice.
+// temporary's t = t * x. Not one of the registers that hold their values
+// alone (BigIntSole), the bindings, whose values are given back where an
+// operator writes the register next (bigOwner's ReleaseOld): both would
+// give the block back twice.
 func (b *builder) regBigFresh(pc, slot int) bool {
 	p := b.p
 	if slot < 0 || slot >= p.Regs || p.IsCaptured(slot) || !regWhole(p, pc) || pc+1 >= len(p.Code) ||

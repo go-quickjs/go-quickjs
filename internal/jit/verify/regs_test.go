@@ -54,7 +54,7 @@ func regLowerWithForTest(fn *bytecode.Function, h jitcompile.Hints) (*ir.Program
 // past them, in their cells and the context; the expansions' scratch slots
 // past those, which are only values; the parameters from register 2; and
 // the bindings the call makes undefined after them. The entries the VM asks
-// for are the caller's to choose. A program of the stack form's is left as
+// for are the caller's to choose. A slot program (Origin nil) is left as
 // Build made it.
 func regShape(f *ssa.Func, p *ir.Program) {
 	if p.Origin == nil {
@@ -104,8 +104,8 @@ func regElementReads(rc *bytecode.RegCode) []int32 {
 // regCall reports whether program pc pc of p is register code's call --
 // call_w's, call_method_w's, new_w's or their tail position's, a Window
 // Host -- and its arguments and whether it is a method's, as the VM's
-// NativeCalls reads them (its nativeCalls): the stack form's call read its
-// operands' count from the states' depths, which register code's are all 0.
+// NativeCalls reads them (its nativeCalls), not from the states' depths,
+// which register code's are all 0.
 func regCall(p *ir.Program, pc int) (argc int, method, ok bool) {
 	w, ok := regInstr(p, pc)
 	if !ok || p.Code[pc].Op != ir.Host || !p.Code[pc].Window {

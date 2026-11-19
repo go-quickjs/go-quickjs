@@ -77,10 +77,9 @@ func TestMirSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
 	defer func() { mir.Annotate = false }()
 	mir.Annotate = true
-	// Ten parameters, where the stack form's programs had eight: register
-	// code's carry all four sums as int32s (ssa's intPhis), the stack
-	// form's two, so that eight parameters' phis and the counter fit the
-	// floating-point registers and nothing was spilled.
+	// Ten parameters: register code's carry all four sums as int32s (ssa's
+	// intPhis), so that with eight the parameters' phis and the counter fit
+	// the floating-point registers and nothing was spilled.
 	for _, src := range []string{
 		`function f(a,b,c,d,e,g,h,k,l,m,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}const t=(a|0)+(b|0)+(c|0)+(d|0)+(e|0)+(g|0)+(h|0)+(k|0)+(l|0)+(m|0);return(t+s0+s1+s2+s3)|0}`,
 		`function f(a,b,c,d,e,g,h,k,l,m,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}return(a+b+c+d+e+g+h+k+l+m+s0+s1+s2+s3)|0}`,

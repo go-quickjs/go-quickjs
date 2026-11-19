@@ -221,8 +221,7 @@ var bigCorpus = []string{
 	// Widths other than 64, the zero-extension's and the sign-extension's
 	// of 0 and 13 bits; and a phi of an Int64 and a Uint64, which stays a
 	// tagged BigInt, its low word read from its value by the operator
-	// after it that an asUintN takes (ssa's OpBigLow), as the stack form's
-	// PCs had made the widths of bigCorpus's first loop.
+	// after it that an asUintN takes (ssa's OpBigLow).
 	`function f(n,x,y){for(let i=0;i<n;i++){if(i&1)x=BigInt.asIntN(13,x*3n);else x=BigInt.asUintN(64,x+5n);y=BigInt.asUintN(0,x*7n)}return x+y}`,
 }
 
@@ -231,12 +230,10 @@ var bigCorpus = []string{
 // in a cell, of 64 bits or fewer; and every call of BigInt.asUintN or
 // asIntN, of a width the program gives as a constant, and of BigInt, of one
 // argument and no receiver, made natively, as the VM's feedback finds them
-// in register code (its BigIntCell and Intrinsic). The stack form's fakes
-// had picked the constants and the widths by the PCs, which put a 64-bit
-// width and small shifts' counts where the stack form's PCs fell: register
-// code's, which do not count the operands' pushes, put a shift by 2^63 at
-// the first loop's x>>7n, a call, and a sign-extension of 13 bits at both
-// its calls.
+// in register code (its BigIntCell and Intrinsic). The fakes pick the
+// constants and the widths by the PCs: register code's put a shift by
+// 2^63 at the first loop's x>>7n, a call, and a sign-extension of 13 bits
+// at both its calls.
 type bigs struct {
 	globals
 	p *ir.Program

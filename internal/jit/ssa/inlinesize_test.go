@@ -7,7 +7,7 @@ import (
 )
 
 // inlineSizeProgram is a straight program of n instructions, the last a
-// return: register code's (Origin, Regs) where reg says, the stack form's
+// return: register code's (Origin, Regs) where reg says, a slot program
 // otherwise.
 func inlineSizeProgram(n int, reg bool) *ir.Program {
 	p := &ir.Program{Locals: 3}
@@ -26,10 +26,11 @@ func inlineSizeProgram(n int, reg bool) *ir.Program {
 	return p
 }
 
-// Inlining's bounds are the stack form's instructions; a register
-// program's count 20/17 each (inlineSize), as its lowering has 0.85 of the
-// stack form's for the same function: the largest callee inlined is 48
-// stack instructions or 41 register ones, the largest small one 10 or 8.
+// Inlining's bounds are in the unit of an instruction of the stack
+// bytecode they were measured in, which a slot program's instructions
+// count one each; a register program's count 20/17 each (inlineSize): the
+// largest callee inlined is 48 slot instructions or 41 register ones, the
+// largest small one 10 or 8.
 func TestInlineSizeRegister(t *testing.T) {
 	for _, c := range []struct {
 		n    int

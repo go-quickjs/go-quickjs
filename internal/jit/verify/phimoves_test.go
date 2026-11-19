@@ -140,8 +140,7 @@ func TestMirPhisCoalesced(t *testing.T) {
 	// (the entries' loads read for their unboxings alone, mir's findLazy,
 	// had taken the total to 156, 130 into headers): 159, 133, 9.
 	// Register code's programs (the compile package's LowerReg), two
-	// lowerings of each function where the stack form had three, and
-	// loops that test at their foot, their test copied before them: 106,
+	// lowerings of each function, and loops that test at their foot, their test copied before them: 106,
 	// 70, 12. The keep corpus spills its 8 as before; the loop of
 	// x=-0,y=NaN,z=Infinity none, where it had spilled 1; and
 	// array_for_of 2 in each lowering, where it had none: its inner loop

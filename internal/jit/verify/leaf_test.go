@@ -48,9 +48,8 @@ func (l leaves) NativeCalls(pc int) []ssa.CallSite {
 }
 func (l leaves) Leaf(pc int) (uintptr, bool) {
 	// The kind of a leaf of codePointAt's, at's or isNaN's name its own,
-	// another's by its PC: the stack form's PCs had put each kind at a call
-	// that allows it, which register code's PCs, not counting a call's
-	// operands' pushes, do not.
+	// another's by its PC, which by itself would not put each kind at a
+	// call that allows it.
 	kind := pc % 6
 	switch regCalleeName(l.p, pc) {
 	case "at":
