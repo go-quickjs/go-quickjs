@@ -42,6 +42,10 @@ type nativeGen struct {
 	// last code: what a later round adds there changes no jump of the
 	// code before it, not even a jump's displacement to an exit.
 	end []func()
+	// tail is out-of-line code of a handler laid out before the appended
+	// ones, added since: emitted after every handler, so that it moves
+	// none (set_prop's polymorphic probe, polyOwnStore).
+	tail []func()
 	// initL is the native initializer's run (initRun), emitted after the
 	// handlers once one has asked for it (initMade).
 	initL    Label

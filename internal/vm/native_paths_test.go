@@ -943,6 +943,71 @@ func TestRegNativeLiterals(t *testing.T) {
 		String(s)`, bytecode.RNewObjectLit, bytecode.RNewArrayE)
 }
 
+// polyStoreSrc writes own data properties of objects of a site's several
+// shapes, its polymorphic entries, and of more shapes than it keeps, then
+// changes what a write may meet after the entries fill: a setter, then a
+// read-only property, on the objects' prototype, which own properties
+// shadow and an addition meets; extensions prevented, sealed and frozen
+// objects; a prototype with a setter put under an object whose own
+// property shadows it. polyStoreWant is Node's answer
+// (vm.runInThisContext).
+const polyStoreSrc = `
+	var out = [], proto = {}
+	function write(o, v) { o.x = v }
+	function swrite(o, v) { "use strict"; o.x = v }
+	function mk(k) { var o = Object.create(proto); o[k] = 0; o.x = 0; return o }
+	var objs = [mk("a"), mk("b"), mk("c"), mk("d")], many = [mk("e"), mk("f"), mk("g"), mk("h"), mk("i"), mk("j")]
+	for (var i = 0; i < 100; i++) { for (var o of objs) { write(o, i); swrite(o, -i) } for (var o of many) write(o, i) }
+	out.push(objs.map(o => o.x).join(), many.map(o => o.x).join())
+	Object.defineProperty(proto, "x", { set(v) { out.push("proto-set:" + v) }, configurable: true })
+	for (var o of objs) write(o, "own")
+	Object.defineProperty(proto, "x", { value: 1, writable: false })
+	for (var o of objs) swrite(o, "own2")
+	var n1 = Object.create(proto); n1.a = 0
+	try { swrite(n1, 5) } catch (e) { out.push(e.name) }
+	write(n1, 6); out.push(Object.keys(n1).join(), n1.x)
+	Object.preventExtensions(objs[0]); swrite(objs[0], "pe")
+	Object.seal(objs[1]); swrite(objs[1], "sealed")
+	Object.freeze(objs[2])
+	try { swrite(objs[2], "frozen") } catch (e) { out.push(e.name) }
+	write(objs[2], "frozen-sloppy")
+	Object.setPrototypeOf(objs[3], { set x(v) { out.push("new-proto-set") } }); write(objs[3], "after-proto")
+	for (var i = 0; i < 50; i++) for (var o of objs) try { swrite(o, i) } catch (e) { if (i == 49) out.push(e.name) }
+	out.push(JSON.stringify(objs.map(o => o.x)), Object.getOwnPropertyNames(objs[3]).join())
+	out.join("|")`
+
+const polyStoreWant = `-99,-99,-99,-99|99,99,99,99,99,99|TypeError|a|1|TypeError|TypeError|[49,49,"own2",49]|d,x`
+
+// TestRegNativePolyStores writes own properties through a site's
+// polymorphic entries natively (polyOwnStore), against the Go table,
+// marking and not, with Node's answers; its fast case of four shapes, of
+// numbers and objects, avoids exits after warm-up.
+func TestRegNativePolyStores(t *testing.T) {
+	if got := nativeRunSrc(t, polyStoreSrc, false); got != polyStoreWant {
+		t.Errorf("Go table: %s, want %s", got, polyStoreWant)
+	}
+	nativeCheck(t, polyStoreSrc, "")
+	nativeCheck(t, `
+	function write(o, v) { "use strict"; o.x = v }
+	var objs = [{ x: 0 }, { a: 0, x: 0 }, { x: 0, b: 0 }, { c: 0, x: 0, d: 0 }], out = [];
+	for (var i = 0; i < 100; i++) for (var o of objs) write(o, i & 1 ? { n: i } : i);
+	out.push(JSON.stringify(objs));
+	Object.defineProperty(objs[1], "x", { writable: false });
+	try { write(objs[1], 12) } catch (e) { out.push(e.name) }
+	Object.defineProperty(objs[2], "x", { set(v) { out.push("set:" + v) } });
+	write(objs[2], 13);
+	Object.freeze(objs[3]);
+	try { write(objs[3], 14) } catch (e) { out.push(e.name) }
+	delete objs[0].x; write(objs[0], "new"); out.push(objs[0].x);
+	var p = new Proxy(objs[0], { set(o, k, v) { out.push("proxy:" + v); return true } });
+	write(p, 15);
+	out.join("|")`, `
+	function write(o, v) { o.x = v }
+	var objs = [{ x: 0 }, { a: 0, x: 0 }, { x: 0, b: 0 }, { c: 0, x: 0, d: 0 }], sum = 0;
+	for (var i = 0; i < 1000; i++) { var o = objs[i & 3]; write(o, i & 1 ? objs[0] : i); sum += typeof o.x === "object" ? 1 : o.x }
+	String(sum)`, bytecode.RSetProp)
+}
+
 // TestRegNativeLiteralsCollecting makes them while the collector runs
 // all along (GOGC=1).
 func TestRegNativeLiteralsCollecting(t *testing.T) {

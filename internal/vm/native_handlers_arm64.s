@@ -2,7 +2,7 @@
 
 #include "textflag.h"
 
-// regNativeHandlers is the register interpreter's native handlers, 83356
+// regNativeHandlers is the register interpreter's native handlers, 83420
 // bytes of position-independent machine code made by armEmit: every
 // address it needs is in the context it is given in R25. Its handlers, in
 // order:
@@ -1167,7 +1167,7 @@ TEXT ·regNativeHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xf9401335; WORD $0xf9401736; WORD $0xf9401b37; WORD $0xf9402338
 	WORD $0x91002273; WORD $0xf9400260; WORD $0xd3401c10; WORD $0xf8707ab0
 	WORD $0xd61f0200; WORD $0xf9400024; WORD $0xf9400c66; WORD $0xeb06009f
-	WORD $0x54fdff41; WORD $0xf9400424; WORD $0xb4fdff04; WORD $0xf940a726
+	WORD $0x54082ae1; WORD $0xf9400424; WORD $0xb4fdff04; WORD $0xf940a726
 	WORD $0xeb06009f; WORD $0x54fdfea0; WORD $0x79400465; WORD $0x720000bf
 	WORD $0x54fdfe40; WORD $0xf9400825; WORD $0xb4000125; WORD $0xf9400ca5
 	WORD $0xf9401026; WORD $0xeb0600bf; WORD $0x540000a0; WORD $0xf9401825
@@ -5348,7 +5348,11 @@ TEXT ·regNativeHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0x54000085; WORD $0xf10006ff; WORD $0x54f5d60d; WORD $0xd10006f7
 	WORD $0x8b010e73; WORD $0x91002273; WORD $0xf9400260; WORD $0xd3401c10
 	WORD $0xf8707ab0; WORD $0xd61f0200; WORD $0x91002273; WORD $0xf9400260
-	WORD $0xd3401c10; WORD $0xf8707ab0; WORD $0xd61f0200
+	WORD $0xd3401c10; WORD $0xf8707ab0; WORD $0xd61f0200; WORD $0xf9401c24
+	WORD $0xb4f5d444; WORD $0x39400085; WORD $0x34f5d405; WORD $0xf940ab26
+	WORD $0x8b060084; WORD $0xf9400c61; WORD $0xf9402486; WORD $0xeb06003f
+	WORD $0x540000a0; WORD $0x91014084; WORD $0x710004a5; WORD $0x54ffff61
+	WORD $0x17ffae96; WORD $0xaa0403e1; WORD $0x17ffbe75
 
 // regNativeTable is the native table: each operation's handler's address,
 // the exit stub's where it has none.

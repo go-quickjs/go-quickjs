@@ -607,7 +607,7 @@ func nativeEmit(v *variant) (*block, error) {
 	h(bytecode.RGetProp, getProp)
 	h(bytecode.RGetMethod, getProp)
 	h(bytecode.RSetProp, func() {
-		add := a.NewLabel()
+		add, own := a.NewLabel(), a.NewLabel()
 		g.decA(RDX)
 		g.object(RSI, RDX)
 		g.decB(RDX)
@@ -617,13 +617,13 @@ func nativeEmit(v *variant) (*block, error) {
 		a.Load(R8, RCX, off("propCache.ownShape"))
 		a.CmpMem(R8, RSI, off("Object.shape"), true)
 		a.Jcc(CondNE, add)
+		a.Bind(own)
 		a.LoadS32(RAX, RCX, off("propCache.idx"))
 		a.ShiftImm(Shl, RAX, 4, true)
 		a.AddMem(RAX, RSI, off("Object.valp"))
 		g.loadValue(RDX)
 		g.storeValue()
-		a.Bind(add)
-		g.addProp()
+		g.addProp(add, own)
 	})
 	// An element read: a number of a dense array's where the register
 	// holds none, any value of one by storeValue, a typed array's.
@@ -1321,6 +1321,11 @@ func nativeEmit(v *variant) (*block, error) {
 		for _, emit := range g.last[n:] {
 			emit()
 		}
+	}
+	// Out-of-line code of handlers laid out before the appended ones,
+	// added since: after every handler, so that it moves none.
+	for _, emit := range g.tail {
+		emit()
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)

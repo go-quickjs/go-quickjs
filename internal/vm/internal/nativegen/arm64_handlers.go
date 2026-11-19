@@ -533,7 +533,7 @@ func armEmit(v *variant) (*block, error) {
 	h(bytecode.RGetProp, getProp)
 	h(bytecode.RGetMethod, getProp)
 	h(bytecode.RSetProp, func() {
-		add := a.NewLabel()
+		add, own := a.NewLabel(), a.NewLabel()
 		g.regA(rD)
 		g.object(rS, rD)
 		g.regB(rD)
@@ -542,13 +542,14 @@ func armEmit(v *variant) (*block, error) {
 		a.Load(r8, rC, off("propCache.ownShape"))
 		g.cmpMem(r8, rS, off("Object.shape"))
 		a.BCond(NE, add)
+		a.Bind(own)
 		a.LoadS32(rW, rC, off("propCache.idx"))
 		a.ShiftImm(Lsl, rW, rW, 4, true)
 		g.addMem(rW, rS, off("Object.valp"))
 		g.loadValue(rD)
 		g.storeValue()
 		a.Bind(add)
-		g.addProp()
+		g.addProp(own)
 	})
 	// An element read: a number of a dense array's where the register
 	// holds none, any value of one by storeValue, a typed array's.
@@ -1156,6 +1157,11 @@ func armEmit(v *variant) (*block, error) {
 		for _, emit := range g.last[n:] {
 			emit()
 		}
+	}
+	// Out-of-line code of handlers laid out before the appended ones,
+	// added since: after every handler, so that it moves none.
+	for _, emit := range g.tail {
+		emit()
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)

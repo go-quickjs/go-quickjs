@@ -99,6 +99,10 @@ type armGen struct {
 	end []func()
 	// reloads follows the existing helpers, preserving their offsets too.
 	reloads []func()
+	// tail is out-of-line code of a handler laid out before the appended
+	// ones, added since: emitted after every handler, so that it moves
+	// none (set_prop's polymorphic probe, polyOwnStore).
+	tail []func()
 	// initL and initMade are amd64's.
 	initL    Label
 	initMade bool
