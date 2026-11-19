@@ -59,8 +59,10 @@ var (
 	// property that is no plain data property: an accessor, a private
 	// name, one deleted or not initialized yet.
 	atomPrototype, propOddKey int32
-	hasCacheBits              uint8
-	hasCacheMul               uint64
+	// atomLength is the key length (arrayLength).
+	atomLength   int32
+	hasCacheBits uint8
+	hasCacheMul  uint64
 	// hasCacheWaysLog is log2 of hasCacheWays, the entries of a set.
 	hasCacheWaysLog uint8
 	hasCacheWays    int32
@@ -126,7 +128,8 @@ func loadConsts() {
 		{&genCompleted, "genCompleted"},
 		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"},
 		{&maxCacheFills, "maxCacheFills"}, {&fwdApply, "fwdApply"}, {&fwdCall, "fwdCall"}, {&fwdWays, "fwdWays"}, {&fwdShift, "fwdShift"},
-		{&atomIndexTag, "atomIndexTag"}, {&atomPrototype, "atomPrototype"}, {&propOddKey, "propOddKey"}} {
+		{&atomIndexTag, "atomIndexTag"}, {&atomPrototype, "atomPrototype"}, {&propOddKey, "propOddKey"},
+		{&atomLength, "atomLength"}} {
 		*c.p = int32(k(c.name))
 	}
 	hasCacheBits, hasCacheMul = uint8(k("hasCacheBits")), k("hasCacheMul")

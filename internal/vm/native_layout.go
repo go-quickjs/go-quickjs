@@ -176,6 +176,7 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"fwdShift":        uint64(fwdShift),
 		"atomIndexTag":    uint64(atomIndexTag),
 		"atomPrototype":   uint64(atomPrototype),
+		"atomLength":      uint64(atomLength),
 		"propOddKey":      uint64(propAccessor | propPrivate | propDeleted | propUninit),
 		"ClassProxy":      uint64(ClassProxy),
 		"hasCacheBits":    uint64(hasCacheBits),

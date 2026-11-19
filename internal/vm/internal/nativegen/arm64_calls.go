@@ -114,8 +114,8 @@ func (g *armGen) frameArgs() {
 func (g *armGen) addProp(own Label) {
 	a := g.a
 	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	poly := a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own) })
+	poly, length := a.NewLabel(), a.NewLabel()
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
 	shapeOff := off("Object.shape")
 	a.Load(r8, rC, off("propCache.shape"))
 	g.cmpMem(r8, rS, shapeOff)

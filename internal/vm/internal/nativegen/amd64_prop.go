@@ -3,14 +3,15 @@ package nativegen
 import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 
 // polyOwnStore finds an own writable slot among the site's other shapes.
-// The source address stays in RDX; own shares the ordinary store and barrier.
-func (g *nativeGen) polyOwnStore(start, own Label) {
+// The source address stays in RDX; own shares the ordinary store and
+// barrier, and a site with no other shapes goes to none.
+func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a := g.a
 	loop, found := a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.Load(R8, RCX, off("propCache.poly"))
 	a.Op(Test, R8, R8, true)
-	a.Jcc(CondE, g.exit)
+	a.Jcc(CondE, none)
 	a.LoadU8(R9, R8, off("propPoly.n"))
 	a.Op(Test, R9, R9, false)
 	a.Jcc(CondE, g.exit)
@@ -50,4 +51,87 @@ func (g *nativeGen) getPropNext() {
 	a.LeaIdx(RAX, R12, RDX, 1, 0)
 	a.OpImm(Add, RBX, 8, true)
 	g.storeValue()
+}
+
+// arrayLength is set_prop of an array's own length, which no entry of a
+// site holds, as rsSetPropLength and setProp's first case write it: from
+// addProp, the object in RSI, the value's address in RDX, the instruction
+// in RAX. An ordinary array of its own dense elements (no index key, its
+// length writable, its storage not shared with a literal's) given a number
+// that is a length no more than its own: setArrayLength's truncation, the
+// slots past the new length cleared for the collector -- the number's
+// word stored, the pointer's by ptrStore where it holds one -- then the
+// length; the same length writes nothing. Anything else exits before it
+// writes: a longer length, storage to unshare, a value that is not a
+// length (whose RangeError is Go's), another name or object. R8, R9, RCX
+// and RDX are its scratch.
+func (g *nativeGen) arrayLength(start Label) {
+	a := g.a
+	loop, cleared, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(start)
+	a.LoadU8(R8, RSI, offObjClass)
+	a.OpImm(Cmp, R8, int32(ClassArray), false)
+	a.Jcc(CondNE, g.exit)
+	// The name: names[siteName[C]].
+	a.MovRR(RCX, RAX)
+	a.ShiftImm(Shr, RCX, 48, true)
+	a.Load(R9, RDI, ncRC)
+	a.Load(R9, R9, offRCSiteName)
+	a.LeaIdx(R9, R9, RCX, 4, 0)
+	a.LoadU32(RCX, R9, 0)
+	a.Load(R9, RDI, ncCC)
+	a.Load(R9, R9, offCCNames)
+	a.LeaIdx(R9, R9, RCX, 4, 0)
+	a.LoadU32(RCX, R9, 0)
+	a.OpImm(Cmp, RCX, atomLength, false)
+	a.Jcc(CondNE, g.exit)
+	want := objArrayLengthWritable | objHasExt
+	a.LoadU16(R8, RSI, offObjFlags)
+	a.OpImm(And, R8, int32(want|objHasSparseElements|objSharedElems), false)
+	a.OpImm(Cmp, R8, int32(want), false)
+	a.Jcc(CondNE, g.exit)
+	// The value: a number whose uint32 is itself.
+	a.Load(R9, RDX, 0)
+	a.Op(Cmp, R9, R10, true)
+	a.Jcc(CondAE, g.exit)
+	a.MovQToX(1, R9)
+	a.Cvttsd2si(R9, 1)
+	a.MovRR32(R8, R9)
+	a.Op(Cmp, R8, R9, true)
+	a.Jcc(CondNE, g.exit)
+	a.Cvtsi2sd(3, R9, true)
+	a.SSEOp(UcomiSD, 1, 3)
+	a.Jcc(CondNE, g.exit)
+	a.Jcc(CondP, g.exit)
+	// No longer than the elements: growing is Go's.
+	a.CmpMem(R9, RSI, sizeObj+8, true)
+	a.Jcc(CondA, g.exit)
+	g.noIndexKeys(RSI)
+	// From the last element down to the new length, each slot cleared and
+	// then the length one less, as ptrStore leaves no scratch register.
+	a.Store(RDI, scr(sE), RSI)
+	a.Store(RDI, scr(sRC), R9)
+	a.Bind(loop)
+	a.Load(RSI, RDI, scr(sE))
+	a.Load(R9, RSI, sizeObj+8)
+	a.CmpMem(R9, RDI, scr(sRC), true)
+	a.Jcc(CondBE, done)
+	a.OpImm(Sub, R9, 1, true)
+	a.MovRR(RAX, R9)
+	a.ShiftImm(Shl, RAX, 4, true)
+	a.AddMem(RAX, RSI, sizeObj)
+	a.Op(Xor, RCX, RCX, false)
+	a.Store(RAX, 0, RCX)
+	a.CmpMem(RCX, RAX, 8, true)
+	a.Jcc(CondE, cleared)
+	a.Lea(RAX, RAX, 8)
+	g.ptrStore()
+	a.Load(RSI, RDI, scr(sE))
+	a.Load(R9, RSI, sizeObj+8)
+	a.OpImm(Sub, R9, 1, true)
+	a.Bind(cleared)
+	a.Store(RSI, sizeObj+8, R9)
+	a.Jmp(loop)
+	a.Bind(done)
+	g.next()
 }

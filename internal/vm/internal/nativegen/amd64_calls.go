@@ -122,18 +122,19 @@ func (g *nativeGen) frameArgs() {
 func (g *nativeGen) addProp(add, own Label) {
 	a := g.a
 	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	poly, polyCheck, exitNear := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own) })
-	// A miss of the entry's shape at a site with no entries for other
-	// shapes exits from here, before add, which the store before it never
-	// falls into: the probe, laid out after every handler, is a jump away,
-	// which a write Go always makes -- an array's length -- had paid at
-	// every turn. The early exits share the jump to the exit stub, which
+	poly, polyCheck, exitNear, length := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
+	// A miss of the entry's shape goes to the probe of the site's entries
+	// for other shapes where it has some, and else to an array's length
+	// (arrayLength), which no entry holds; both are laid out after every
+	// handler. This is before add, which the store before it never falls
+	// into, and the early exits share its jump to the exit stub, which
 	// keeps set_prop within its 16 bytes and every handler after it where
 	// it was.
 	a.Bind(polyCheck)
 	a.CmpMemImm8(RCX, off("propCache.poly"), 0)
 	a.Jcc(CondNE, poly)
+	a.Jmp(length)
 	a.Bind(exitNear)
 	a.Jmp(g.exit)
 	a.Bind(add)

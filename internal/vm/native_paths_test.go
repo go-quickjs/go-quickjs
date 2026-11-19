@@ -978,6 +978,144 @@ const polyStoreSrc = `
 
 const polyStoreWant = `-99,-99,-99,-99|99,99,99,99,99,99|TypeError|a|1|TypeError|TypeError|[49,49,"own2",49]|d,x`
 
+// arrayLengthSrc writes length, sloppy and strict, of arrays of every kind
+// and of objects that are none, each until the site's caches hold it: the
+// same length, shorter with numbers, holes and objects, zero, longer, a
+// value that is no length (a RangeError) and one that converts, of a
+// read-only length, frozen, sealed, not extensible, with named properties,
+// a subclass's, sparse, a literal's shared storage, proxies, an object
+// and a typed array with a length, an arguments object, and a loop
+// shortening an array of objects one at a time. arrayLengthWant is Node's
+// answer (vm.runInThisContext).
+const arrayLengthSrc = `
+	var out = []
+	function write(o, v) { o.length = v }
+	function swrite(o, v) { "use strict"; o.length = v }
+	function at(f, o, v) { try { f(o, v); return "ok" } catch (e) { return e.name } }
+	function show(a) { var s = []; for (var i = 0; i < a.length; i++) s.push(i in a ? typeof a[i] === "object" && a[i] ? "o" + a[i].n : String(a[i]) : "_"); return a.length + ":" + s.join(",") }
+	function lit() { return [1, 2, 3, 4] }
+	function run(name, make, v, n) {
+		var r = []
+		for (var k = 0; k < (n || 40); k++) {
+			var a = make(), b = make()
+			r = [at(write, a, v), show(a), at(swrite, b, v), show(b)]
+		}
+		out.push(name + "=" + r.join(" "))
+	}
+	run("same", () => [1, 2, 3], 3)
+	run("shrink", () => [1, 2, 3, 4, 5], 2)
+	run("shrink-one", () => [1, 2, 3], 2)
+	run("holes", () => [1, , 3, , 5, ,], 3)
+	run("objects", () => [{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }], 1)
+	run("zero", () => [{ n: 1 }, 2, "x", null], 0)
+	run("empty-zero", () => [], 0)
+	run("grow", () => [1, 2], 5)
+	run("negative", () => [1, 2], -1)
+	run("fraction", () => [1, 2], 1.5)
+	run("nan", () => [1, 2], NaN)
+	run("string", () => [1, 2, 3], "1")
+	run("minus-zero", () => [1, 2, 3], -0)
+	run("big", () => [1, 2], 4294967296)
+	run("readonly", () => { var a = [1, 2, 3]; Object.defineProperty(a, "length", { writable: false }); return a }, 1)
+	run("frozen", () => Object.freeze([1, 2, 3]), 1)
+	run("sealed", () => Object.seal([1, 2, 3]), 1)
+	run("noext", () => Object.preventExtensions([1, 2, 3]), 1)
+	run("named", () => { var a = [1, 2, 3]; a.foo = 7; a.bar = 8; return a }, 1)
+	class Sub extends Array {}
+	run("subclass", () => Sub.of(1, 2, 3), 1)
+	run("sparse", () => { var a = [1, 2]; a[1000] = 3; return a }, 1)
+	run("literal", lit, 1)
+	out.push("literal-again=" + show(lit()))
+	run("proxy", () => new Proxy([1, 2, 3], {}), 1)
+	run("proxy-trap", () => new Proxy([1, 2, 3], { set(t, k, v) { t[k] = v; return true } }), 2)
+	run("object", () => ({ length: 5, 0: "a" }), 2)
+	out.push("object-value=" + (function () { var o = { length: 5 }; for (var i = 0; i < 40; i++) write(o, i); return o.length })())
+	run("typed", () => new Int8Array(3), 1)
+	run("args", function () { return arguments }, 1)
+	var loop = []; for (var i = 0; i < 1000; i++) loop[i] = { n: i }
+	for (var i = loop.length; i-- > 0;) loop.length = i
+	out.push("loop=" + loop.length)
+	out.join("\n")`
+
+const arrayLengthWant = `same=ok 3:1,2,3 ok 3:1,2,3
+shrink=ok 2:1,2 ok 2:1,2
+shrink-one=ok 2:1,2 ok 2:1,2
+holes=ok 3:1,_,3 ok 3:1,_,3
+objects=ok 1:o1 ok 1:o1
+zero=ok 0: ok 0:
+empty-zero=ok 0: ok 0:
+grow=ok 5:1,2,_,_,_ ok 5:1,2,_,_,_
+negative=RangeError 2:1,2 RangeError 2:1,2
+fraction=RangeError 2:1,2 RangeError 2:1,2
+nan=RangeError 2:1,2 RangeError 2:1,2
+string=ok 1:1 ok 1:1
+minus-zero=ok 0: ok 0:
+big=RangeError 2:1,2 RangeError 2:1,2
+readonly=ok 3:1,2,3 TypeError 3:1,2,3
+frozen=ok 3:1,2,3 TypeError 3:1,2,3
+sealed=ok 3:1,2,3 TypeError 3:1,2,3
+noext=ok 1:1 ok 1:1
+named=ok 1:1 ok 1:1
+subclass=ok 1:1 ok 1:1
+sparse=ok 1:1 ok 1:1
+literal=ok 1:1 ok 1:1
+literal-again=4:1,2,3,4
+proxy=ok 1:1 ok 1:1
+proxy-trap=ok 2:1,2 ok 2:1,2
+object=ok 2:a,_ ok 2:a,_
+object-value=39
+typed=ok 3:0,0,0 TypeError 3:0,0,0
+args=ok 1:_ ok 1:_
+loop=0`
+
+// TestRegNativeArrayLength writes arrays' lengths natively (nativegen's
+// arrayLength), against the Go table, marking and not, with Node's
+// answers; its fast case, an array shortened an element at a time, writes
+// with no exit once warm; and the slots past the new length are cleared,
+// marking and not, as setArrayLength clears them.
+func TestRegNativeArrayLength(t *testing.T) {
+	if got := nativeRunSrc(t, arrayLengthSrc, false); got != arrayLengthWant {
+		t.Errorf("Go table:\n%s\nwant\n%s", got, arrayLengthWant)
+	}
+	nativeCheck(t, arrayLengthSrc, `
+	var ref = [], t = 0
+	for (var i = 0; i < 100; i++) ref[i] = i & 1 ? { n: i } : i
+	for (var j = 0; j < 20; j++) { var a = ref.slice(); for (var i = a.length; i --> 0;) a.length = i; t += a.length }
+	String(t)`, bytecode.RSetProp)
+	const src = `
+	function cut(a, n) { a.length = n }
+	var a
+	for (var j = 0; j < 50; j++) { a = [{ n: 1 }, { n: 2 }, "s", { n: 4 }, 5, { n: 6 }]; cut(a, 4); cut(a, 1) }
+	a`
+	for _, marking := range []bool{false, true} {
+		nativeMarking(t, marking)
+		was := regNativeOn
+		regNativeOn = true
+		r := New(Config{})
+		before := nativeExitOps()
+		v, err := r.Run(compileForTest(t, src))
+		after := nativeExitOps()
+		regNativeOn = was
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := after[bytecode.RSetProp] - before[bytecode.RSetProp]; n > nativeWarmExits {
+			t.Errorf("marking %v: set_prop exited %d times", marking, n)
+		}
+		es := v.Object().extAt().elems
+		if len(es) != 1 {
+			t.Fatalf("marking %v: %d elements, want 1", marking, len(es))
+		}
+		for i, e := range es[1:6:6] {
+			if e != (Value{}) {
+				t.Errorf("marking %v: slot %d past the length holds %v", marking, i+1, e)
+			}
+		}
+		r.Close()
+	}
+	nativeMarking(t, false)
+}
+
 // TestRegNativePolyStores writes own properties through a site's
 // polymorphic entries natively (polyOwnStore), against the Go table,
 // marking and not, with Node's answers; its fast case of four shapes, of
