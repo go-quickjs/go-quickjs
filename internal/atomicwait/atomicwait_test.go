@@ -1,16 +1,19 @@
 package atomicwait
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // waiting returns how many wait at addr of mem.
 func waiting(mem any, addr uint64) int {
-	table.Lock()
-	defer table.Unlock()
-	return len(table.m[slot{mem, addr}])
+	t := shardOf(slot{mem, addr})
+	t.Lock()
+	defer t.Unlock()
+	return len(t.m[slot{mem, addr}])
 }
 
 // until waits for cond, failing the test after a while.
@@ -92,9 +95,21 @@ func TestWaitNotify(t *testing.T) {
 	if n := Notify(mem, 8, 2); n != 2 || waiting(mem, 8) != 1 || Notify(mem, 8, 5) != 1 {
 		t.Fatalf("notify 2 of 3 woke %d", n)
 	}
-	if Notify(other, 8, 1) != 1 || Notify(mem, 16, 1) != 1 || len(table.m) != 0 {
-		t.Fatalf("left %v", table.m)
+	if Notify(other, 8, 1) != 1 || Notify(mem, 16, 1) != 1 || left() != 0 {
+		t.Fatalf("%d waiters left", left())
 	}
+}
+
+// left is how many slots of the table have waiters.
+func left() int {
+	n := 0
+	for i := range table {
+		t := &table[i]
+		t.Lock()
+		n += len(t.m)
+		t.Unlock()
+	}
+	return n
 }
 
 // TestWaitTimeouts pins the ends of a wait other than a notify: its time
@@ -120,5 +135,24 @@ func TestWaitTimeouts(t *testing.T) {
 	Cancel(w)
 	if n := Notify(mem, 0, 1); n != 0 || waiting(mem, 0) != 0 {
 		t.Fatalf("a cancelled waiter was woken: %d", n)
+	}
+}
+
+// The table has four shards for each processor, a power of two from 64 to
+// 1024, each a cache line pair of its own.
+func TestShards(t *testing.T) {
+	for _, c := range []struct{ cpus, want int }{
+		{1, 64}, {8, 64}, {16, 64}, {17, 128}, {32, 128}, {33, 256}, {64, 256},
+		{128, 512}, {200, 1024}, {256, 1024}, {1024, 1024},
+	} {
+		if got := shardsFor(c.cpus); got != c.want {
+			t.Errorf("%d processors: %d shards, want %d", c.cpus, got, c.want)
+		}
+	}
+	if n := len(table); n != shardsFor(runtime.NumCPU()) || 1<<(64-shardShift) != n {
+		t.Errorf("%d shards, shift %d, on %d processors", n, shardShift, runtime.NumCPU())
+	}
+	if s := unsafe.Sizeof(shard{}); s != 128 {
+		t.Errorf("a shard is %d bytes, want 128", s)
 	}
 }
