@@ -722,9 +722,9 @@ type Program struct {
 	TailOwn bool
 	// DerivedConstructor marks a derived class's constructor, whose this
 	// slot (This) holds the uninitialized value until its super() binds
-	// it, and which returns that this: native code makes a return of
-	// undefined its this, Go any other, and Go a return before super()
-	// with this unbound, which throws.
+	// it: register code's derived_ret makes the construction's result
+	// the operand of its return, and a check of this unbound leaves to
+	// Go, which throws (ssa's thisCheckKind).
 	DerivedConstructor bool
 	// Globals contains source-name indices for reserved binding-view slots,
 	// following captured bindings and the optional receiver snapshot.

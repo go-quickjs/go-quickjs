@@ -3627,22 +3627,6 @@ func (b *builder) closureKeep(pc int) (int, bool) {
 	return k, k >= 0
 }
 
-// derivedReturnExits reports whether in, a return of the root's, is a
-// derived constructor's of anything but undefined (ir.Program's
-// DerivedConstructor), which Go makes: an object is the construction's
-// result, anything else a TypeError.
-func (b *builder) derivedReturnExits(in ir.Instruction) bool {
-	return in.Op == ir.Return && b.stackDerived() && (in.Left.Slot >= 0 || in.Left.Literal.Kind != ir.Undefined)
-}
-
-// stackDerived reports whether the program is the stack form's of a
-// derived constructor, whose returns the builder makes the derived
-// construction's (ir.Program's DerivedConstructor): register code's
-// derived_ret makes its return's operand that already.
-func (b *builder) stackDerived() bool {
-	return b.p.DerivedConstructor && b.p.Origin == nil
-}
-
 // thisCheckKind is how a check of slot that it is initialized leaves where
 // it is not (ir.Instruction's Check): a register code's derived
 // constructor's this slot (ir.Program's This), unbound, to Go, which
@@ -6782,9 +6766,6 @@ func (b *builder) plan() error {
 			}
 		case ir.Return:
 			blk.Kind = BlockReturn
-			if b.derivedReturnExits(last) {
-				blk.Kind = BlockExit
-			}
 		case ir.IterStep:
 			if b.host(end) {
 				blk.Kind = BlockExit
@@ -8187,23 +8168,6 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.Control = c
 		c.Uses++
 	case ir.Return:
-		if b.cur == b.root && b.derivedReturnExits(in) {
-			// Go's, which throws for anything but an object.
-			blk.ExitKind = ir.HostExit
-			blk.State = state()
-			blk.State.addUse()
-			break
-		}
-		if b.cur == b.root && b.stackDerived() {
-			// undefined: a derived constructor's this, as its construction
-			// returns it, if super() bound it; Go returns, and throws, if
-			// not.
-			this := b.read(b.p.Locals-1, blk)
-			guard(OpCheckInit, None, ir.HostExit, this)
-			blk.Control = this
-			this.Uses++
-			break
-		}
 		v := operand(in.Left)
 		guard(OpCheckInit, None, ir.GuardExit, v)
 		if b.cur != b.root {
