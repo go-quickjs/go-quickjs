@@ -1380,27 +1380,23 @@ type Encoding struct {
 	// bytes past it, in its allocation (0 where native code resumes
 	// none), which native code resumes where it is (ssa.CallSite's Gens).
 	// Its closure is the pointer at GenClosure, its receiver the value at
-	// GenThis; its locals follow its GenArgs arguments (a uint32) in the
-	// slice at GenVals; the uint32 at GenPC is where it goes on, and the
-	// pointer at GenRare what few generators need. What its last
-	// suspension left besides its place is at the pointer at GenSaved, nil
-	// where none ever left anything: the operands saved there are the
-	// slice at SavedStack, the handlers then in force the slice at
-	// SavedHandlers. Its state is the byte at GenState --
+	// GenThis; its values -- its whole register file -- are the slice at
+	// GenVals; the uint32 at GenPC is where it goes on, and the pointer at
+	// GenRare what few generators need. The pointer at GenSaved is what
+	// its suspensions left besides its place, the captures of its
+	// registers, nil where none was ever left: native code resumes only a
+	// generator with none. Its state is the byte at GenState --
 	// GenSuspendedStart, GenSuspendedYield, GenExecuting or GenCompleted
 	// -- the byte at GenStarted is set once its body has begun, and the
 	// one at GenDelegating while it is suspended in a yield*. Native code
-	// writes its state and its place, and in what its saved part points
-	// to, the operands it saves and the lengths of the operands and the
-	// handlers.
-	GenObject                             int32
-	ClassGenerator                        uint8
-	GenClosure, GenThis, GenVals, GenArgs int32
-	GenPC, GenRare, GenSaved              int32
-	SavedStack, SavedHandlers             int32
-	GenState, GenStarted, GenDelegating   int32
-	GenSuspendedStart, GenSuspendedYield  uint8
-	GenExecuting, GenCompleted            uint8
+	// writes its state and its place.
+	GenObject                            int32
+	ClassGenerator                       uint8
+	GenClosure, GenThis, GenVals         int32
+	GenPC, GenRare, GenSaved             int32
+	GenState, GenStarted, GenDelegating  int32
+	GenSuspendedStart, GenSuspendedYield uint8
+	GenExecuting, GenCompleted           uint8
 	// A generator made with room for the cursor of the first loop over it
 	// (the VM's generatorLoop) has the byte at GenRoom set until a loop
 	// takes it, the cursor's object GenRoomCursor bytes past the
@@ -1416,10 +1412,6 @@ type Encoding struct {
 	GenIterFrom, GenIterCell       int32
 	GenIterNextObj, GenIterNextIdx int32
 	GenIterIterObj, GenIterIterIdx int32
-	// A handler the generator saves is HandlerSize bytes: the uint32 at
-	// HandlerPC where it goes on, the int at HandlerDepth the operands
-	// beneath it, and the byte at HandlerFinally set for a finally clause's.
-	HandlerSize, HandlerPC, HandlerDepth, HandlerFinally int32
 	// A typed array is an object of class ClassTypedArray, whose data --
 	// which every one has, from before any code sees it -- is its view, the
 	// data's pointer word: as V8's JSTypedArray holds its data pointer and

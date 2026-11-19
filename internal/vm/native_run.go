@@ -756,7 +756,7 @@ func (r *Runtime) nativeGenEnd(s *regState, ctx *nativeCtx, rec *nativeRec, v Va
 		copy(saved, kept)
 		if ups := f.openUpvalues; len(ups) != 0 || g.saved != nil {
 			regMoveUps(ups, kept, saved)
-			g.keep(nil, nil, ups)
+			g.keep(ups)
 		}
 		g.delegating = sig.delegate
 		g.state = genSuspendedYield

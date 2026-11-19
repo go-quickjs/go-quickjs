@@ -7784,8 +7784,7 @@ func (b *builder) placeAfter(blk *Block, made []*Block, cont *Block) {
 	copy(f.Blocks[at+len(made):], f.Blocks[at:n])
 	copy(f.Blocks[at:], made)
 	cont.Kind, cont.Control, cont.Succs, cont.State, cont.ExitKind = blk.Kind, blk.Control, blk.Succs, blk.State, blk.ExitKind
-	cont.Yield, cont.YieldHandlers, blk.Yield, blk.YieldHandlers = blk.Yield, blk.YieldHandlers, false, nil
-	cont.YieldSlot = blk.YieldSlot
+	cont.Yield, cont.YieldSlot, blk.Yield = blk.Yield, blk.YieldSlot, false
 	for _, s := range cont.Succs {
 		for i, p := range s.Preds {
 			if p == blk {
@@ -9355,16 +9354,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.givenStates = append(b.givenStates, givenState{fr: b.cur, pc: pc, state: blk.State})
 		}
 		// A generator's yield, which code a loop's step resumed natively
-		// makes itself (Block's Yield), saving the handlers in force.
+		// makes itself (Block's Yield): its value in its operand's
+		// register, its handlers the code's by register pc, which a
+		// resumption finds again without anything saved.
 		if in.Suspend && b.cur == b.root {
-			if b.p.Origin != nil {
-				// Register code's: its value in its operand's register, its
-				// handlers the code's by register pc, which a resumption
-				// finds again without anything saved.
-				blk.Yield, blk.YieldSlot = true, in.Left.Slot
-			} else {
-				blk.YieldHandlers, blk.Yield = b.handlersAt(pc)
-			}
+			blk.Yield, blk.YieldSlot = true, in.Left.Slot
 		}
 	}
 }
@@ -9615,29 +9609,6 @@ func (b *builder) superCall(blk *Block, pc int, in ir.Instruction, calls []*Call
 	if b.hasCells() {
 		b.reloadAfterCall(blk)
 	}
-}
-
-// maxYieldHandlers bounds the handlers a yield native code makes saves
-// (Block's YieldHandlers): one under more is Go's.
-const maxYieldHandlers = 8
-
-// handlersAt are the handlers in force at pc, as a generator suspended
-// there saves them, the outermost first, and whether there are no more
-// than maxYieldHandlers of them.
-func (b *builder) handlersAt(pc int) ([]ir.Handler, bool) {
-	p := b.p
-	if p.HandlerAt == nil || pc >= len(p.HandlerAt) {
-		return nil, true
-	}
-	var out []ir.Handler
-	for k := p.HandlerAt[pc]; k != 0; k = p.Handlers[k-1].Outer {
-		if len(out) == maxYieldHandlers {
-			return nil, false
-		}
-		out = append(out, p.Handlers[k-1])
-	}
-	slices.Reverse(out)
-	return out, true
 }
 
 // callTables makes the tables of the calls by PC, once one has a site.

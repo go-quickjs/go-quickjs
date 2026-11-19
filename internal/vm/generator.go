@@ -54,9 +54,9 @@ type generator struct {
 	vals  []Value
 	pc    uint32
 	nargs uint32
-	// saved is what a suspension leaves besides its place (see keep):
-	// nil, as nothing calls keep, though native code still reads it
-	// (abi's GenSaved).
+	// saved is what its suspensions leave besides its place, the
+	// captures of its registers (see keep), nil where none ever left any:
+	// a generator native code may resume (abi's GenSaved).
 	saved *genSaved
 	// rare is what only some generators need, or nil.
 	rare *genRare
@@ -89,18 +89,11 @@ type generator struct {
 
 // genSaved is what a generator's suspension leaves for its next
 // resumption besides its place, made by the first that leaves any: most
-// suspend with nothing beneath the value, inside no try statement, with
-// nothing captured.
+// suspend with nothing captured.
 type genSaved struct {
-	// stack holds the operand stack contents at the point of suspension,
-	// in stackRoom where there are few.
-	stack []Value
-	// handlers is the handlers in force there.
-	handlers []handler
 	// openUpvalues carries the captures across a suspension, so that two
 	// closures made in different resumptions still share a binding.
 	openUpvalues []*upvalue
-	stackRoom    [2]Value
 }
 
 // savedUpvalues is the captures of g's locals its frames have made.
@@ -111,25 +104,21 @@ func (g *generator) savedUpvalues() []*upvalue {
 	return nil
 }
 
-// keep saves what a suspension of g leaves for its next resumption: ops,
-// the operands beneath what it suspended with, which it copies, and the
-// handlers and captures its frame had, which g takes over (see
-// detachSuspended). g's saved part is made where one of them is the first
-// thing left.
+// keep saves what a suspension of g leaves for its next resumption: the
+// captures its frame had, ups, which g takes over (see detachSuspended).
+// g's saved part is made where they are the first thing left.
 //
 //go:noinline
-func (g *generator) keep(ops []Value, hs []handler, ups []*upvalue) {
+func (g *generator) keep(ups []*upvalue) {
 	s := g.saved
 	if s == nil {
-		if len(ops) == 0 && len(hs) == 0 && len(ups) == 0 {
+		if len(ups) == 0 {
 			return
 		}
 		s = &genSaved{}
-		s.stack = s.stackRoom[:0]
 		g.saved = s
 	}
-	s.stack = append(s.stack[:0], ops...)
-	s.handlers, s.openUpvalues = hs, ups
+	s.openUpvalues = ups
 }
 
 // object is g's object, in whose generatorObject it is.

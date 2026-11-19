@@ -1762,36 +1762,36 @@ generator (`ssa.CallSite`'s `Gens`) resumes it by a native call, as V8's
 code calls a generator's resumption: the step checks the cursor's generator
 -- of a function it has met, suspended, not in a `yield*`, stepped by the
 realm's `next` -- and jumps to the generator code's generator entry (mir's
-`genEntry`), which makes the frame from the generator, its locals the
-generator's own, and goes on at the entry for its place (`ssa.Func`'s
-`GenResumes`). A yield there writes the frame, saves the generator's place,
-operands and handlers as Go's suspension would and returns the value to the
-step (`ssa.Block`'s `Yield`); a return finishes it and returns the step's
-done. Anything else leaves as a native callee does, and Go finishes the
+`genEntry`), which makes the frame from the generator and goes on at the
+entry for its place (`ssa.Func`'s `GenResumes`). A yield there writes the
+frame, saves the generator's place and returns the value to the step
+(`ssa.Block`'s `Yield`); a return finishes it and returns the step's done.
+Anything else leaves as a native callee does, and Go finishes the
 resumption from the generator. Only a synchronous generator without `yield*`
-whose locals no closure captures is resumed so.
+whose locals no closure captures is resumed so: one whose suspension left
+captures of its registers (the VM's `genSaved`, `abi.Encoding`'s
+`GenSaved`) is Go's.
 
-Register code's generator a loop's step may resume natively keeps its whole
-register file in its values, the callee's and this's registers included
-(`regGenNative`, the VM's `regCode.genFrom` 0; an async function's and a
-generator's Go alone resumes keep them from register 2), and its native code
-runs on them as its registers: its code's generator entry (`ssa.Func`'s
-`GenWindow`, mir's `windowGenEntry`) points the context's `Locals` at the
-generator's values, copying none, makes room past the VM's stack's top for
-what the code keeps past its registers -- its scratch slots and its calls'
-windows, past them -- as a call entry makes a native callee's, and writes
-the value sent in to the yield's register (`ssa.GenResume`'s `Sent`), its
-pointer word through `storeRef` while the collector marks -- where the
-generator's place (its register pc, `Place`) has an entry, the resumption by
-`next` going on at the jump's target after the yield, the first past
-`end_params`. A yield (`ssa.Block`'s `YieldSlot`, its value's register)
-writes the frame as an exit does, into the generator's values, and saves its
-place, suspended and begun, as `regGenRun` does; the handlers are the
-code's, by register pc, so nothing of them is saved. The room past the VM's
-stack's top has a window of the registers' size at its base (`abi.Context`'s
-`Base`): where the code leaves native code, Go copies the values to it the
-first time it finds the level (`jitRegGenLevel`), points the context's
-`Locals` there, and moves an exit's description there
+A generator a loop's step may resume natively keeps its whole register file
+in its values, the callee's and this's registers included (`regGenNative`,
+the VM's `regCode.genFrom` 0; an async function's and a generator's Go
+alone resumes keep them from register 2), and its native code runs on them
+as its registers: its code's generator entry points the context's `Locals`
+at the generator's values, copying none, makes room past the VM's stack's
+top for what the code keeps past its registers -- its scratch slots and its
+calls' windows, past them -- as a call entry makes a native callee's, and
+writes the value sent in to the yield's register (`ssa.GenResume`'s
+`Sent`), its pointer word through `storeRef` while the collector marks --
+where the generator's place (its register pc, `Place`) has an entry, the
+resumption by `next` going on at the jump's target after the yield, the
+first past `end_params`. A yield (`ssa.Block`'s `YieldSlot`, its value's
+register) writes the frame as an exit does, into the generator's values,
+and saves its place, suspended and begun, as `regGenRun` does; the handlers
+are the code's, by register pc, so nothing of them is saved. The room past
+the VM's stack's top has a window of the registers' size at its base
+(`abi.Context`'s `Base`): where the code leaves native code, Go copies the
+values to it the first time it finds the level (`jitRegGenLevel`), points
+the context's `Locals` there, and moves an exit's description there
 (`jit.RebaseExitLocals`), so that Go reads and writes the frame where it
 does any level's, and native code going on runs on the window; a yield then
 copies the window back to the values, their pointer words through `storeRef`

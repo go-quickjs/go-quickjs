@@ -404,7 +404,7 @@ func TestJITRegGenStepsCompileForARM64(t *testing.T) {
 		}
 		jitRegShape(f, e.p, cl, cl.reg)
 		ssa.Optimize(f)
-		if f.GenEntry && f.GenWindow {
+		if f.GenEntry {
 			gens++
 		}
 		for _, b := range f.Blocks {

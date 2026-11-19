@@ -1108,19 +1108,13 @@ func TestJITObjectLayout(t *testing.T) {
 	}
 	// A generator a loop's step resumes natively (mir's genEntry,
 	// yieldExit): its object's class a byte, the generator in the object's
-	// allocation; its state, begun and delegating bytes, its place and its
-	// arguments' count uint32s, its values slice, its saved part a
-	// pointer, whose saved operands and handlers are slices, and a
-	// handler's place a uint32, its depth an int and its kind a byte,
-	// which native code writes.
+	// allocation; its state, begun and delegating bytes, its place a
+	// uint32, its values slice and its saved part a pointer, which native
+	// code reads and writes.
 	var g generator
-	var sv genSaved
-	var h handler
 	if unsafe.Sizeof(g.state) != 1 || unsafe.Sizeof(g.started) != 1 || unsafe.Sizeof(g.delegating) != 1 ||
-		unsafe.Sizeof(g.pc) != 4 || unsafe.Sizeof(g.nargs) != 4 || unsafe.Sizeof(g.vals) != 3*unsafe.Sizeof(uintptr(0)) ||
-		unsafe.Sizeof(g.saved) != unsafe.Sizeof(uintptr(0)) ||
-		unsafe.Sizeof(sv.stack) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(sv.handlers) != 3*unsafe.Sizeof(uintptr(0)) ||
-		unsafe.Sizeof(h.pc) != 4 || unsafe.Sizeof(h.stackDepth) != 8 || unsafe.Sizeof(h.isFinally) != 1 || int(ClassGenerator) > 255 {
+		unsafe.Sizeof(g.pc) != 4 || unsafe.Sizeof(g.vals) != 3*unsafe.Sizeof(uintptr(0)) ||
+		unsafe.Sizeof(g.saved) != unsafe.Sizeof(uintptr(0)) || int(ClassGenerator) > 255 {
 		t.Fatal("a generator field native code reads or writes changed its width; update jitEncoding and mir")
 	}
 	var gobj generatorObject

@@ -384,7 +384,7 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 		copy(saved, kept)
 		if ups := f.openUpvalues; len(ups) != 0 || g.saved != nil {
 			regMoveUps(ups, kept, saved)
-			g.keep(nil, nil, ups)
+			g.keep(ups)
 		}
 	} else {
 		for _, u := range f.openUpvalues {
@@ -775,7 +775,7 @@ func (r *Runtime) regAsyncRun(o *Object, cl *closure, c *regCode, this Value, ba
 		copy(vals, kept)
 		if ups := f.openUpvalues; len(ups) != 0 {
 			regMoveUps(ups, kept, vals[:n-from])
-			g.keep(nil, nil, ups)
+			g.keep(ups)
 		}
 		g.state = genSuspendedYield
 		g.started = true

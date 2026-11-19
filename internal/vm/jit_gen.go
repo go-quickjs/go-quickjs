@@ -65,7 +65,6 @@ func jitRegGenShape(f *ssa.Func, p *ir.Program, cl *closure, c *regCode) {
 	}
 	f.GenResumes = jitRegGenResumes(c.rc, p, f)
 	f.GenEntry = len(f.GenResumes) != 0
-	f.GenWindow = true
 }
 
 // jitRegGenResumes are the places a step resumes a generator of register

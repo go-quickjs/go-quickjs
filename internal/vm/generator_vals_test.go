@@ -133,11 +133,12 @@ func TestGeneratorLoopRoom(t *testing.T) {
 
 // TestGeneratorSavedPart pins the generator's size and what its saved
 // part holds: a generator with two values or fewer is 152 bytes, in the
-// size class of 160, with no ext, and the 88 of its state; one that
-// suspends with nothing beneath the value, in no try statement and with
-// nothing captured has no saved part however often it suspends, one
-// that leaves operands, handlers or captures makes it once, and a
-// generator that finishes lets it go.
+// size class of 160, with no ext, and the 88 of its state. Its registers
+// are its values, and its handlers the code's by register pc, so that one
+// that suspends with nothing captured has no saved part however often it
+// suspends -- in an array literal, a try statement or a for-of alike --
+// one whose registers closures capture makes it once, and a generator
+// that finishes lets it go.
 func TestGeneratorSavedPart(t *testing.T) {
 	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
@@ -157,15 +158,13 @@ func TestGeneratorSavedPart(t *testing.T) {
 		// saved says whether the generator has a saved part after each
 		// next(), the last of which finishes it.
 		saved []bool
-		// stack is the operands saved after each next() where saved.
-		stack []int
 	}{
-		{`(function* () { for (var i = 0; i < 3; i++) yield i })`, []bool{false, false, false, false}, nil},
-		{`(function* () { var a = [1, (yield 0), (yield 1)]; yield a })`, []bool{true, true, true, false}, []int{1, 2, 0}},
-		{`(function* () { try { yield 1; yield 2 } finally { } })`, []bool{true, true, false}, []int{0, 0}},
-		{`(function* () { var x = 1; yield () => x; yield 2 })`, []bool{true, true, false}, []int{0, 0}},
-		{`(function* () { for (const x of [1, 2]) yield x })`, []bool{true, true, false}, []int{1, 1}},
-		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}, []int{0}},
+		{`(function* () { for (var i = 0; i < 3; i++) yield i })`, []bool{false, false, false, false}},
+		{`(function* () { var a = [1, (yield 0), (yield 1)]; yield a })`, []bool{false, false, false, false}},
+		{`(function* () { try { yield 1; yield 2 } finally { } })`, []bool{false, false, false}},
+		{`(function* () { var x = 1; yield () => x; yield 2 })`, []bool{true, true, false}},
+		{`(function* () { for (const x of [1, 2]) yield x })`, []bool{false, false, false}},
+		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}},
 	} {
 		r := New(Config{})
 		fn, err := r.Run(compileForTest(t, tt.src))
@@ -182,9 +181,7 @@ func TestGeneratorSavedPart(t *testing.T) {
 			if _, _, err := r.resume(g, Int(i), resumeNext); err != nil {
 				t.Fatalf("%s: %v", tt.src, err)
 			}
-			// A generator of register code keeps its window in its
-			// vals, and a saved part only for captures.
-			if got := g.saved != nil; got != want && !g.reg {
+			if got := g.saved != nil; got != want {
 				t.Errorf("%s, next %d: saved part %v, want %v", tt.src, i, got, want)
 				continue
 			}
@@ -195,9 +192,6 @@ func TestGeneratorSavedPart(t *testing.T) {
 				first = g.saved
 			} else if g.saved != first {
 				t.Errorf("%s, next %d: the saved part made again", tt.src, i)
-			}
-			if n := len(g.saved.stack); n != tt.stack[i] {
-				t.Errorf("%s, next %d: %d operands saved, want %d", tt.src, i, n, tt.stack[i])
 			}
 		}
 		if g.state != genCompleted {

@@ -384,18 +384,22 @@ func (g genCalls) NativeCalls(int) []ssa.CallSite {
 }
 
 // genResumes is where code built as f, of p, a generator's, resumes it
-// natively (ssa.Func's GenResumes), as the VM finds them: each entry after a
-// yield, and the first other as its start.
+// natively (ssa.Func's GenResumes), much as the VM finds them: the first
+// entry as its start, and after each yield the next entry, the value sent
+// in to the yield's register. Place is the entry's PC, which the code
+// compares with the generator's place as it would a register pc.
 func genResumes(p *ir.Program, f *ssa.Func) []ssa.GenResume {
 	var out []ssa.GenResume
-	start := false
-	for _, e := range f.Entries {
-		switch {
-		case e.PC > 0 && p.Code[e.PC-1].Suspend && e.Depth >= 1:
-			out = append(out, ssa.GenResume{PC: e.PC, Saved: e.Depth - 1, Started: true})
-		case !start:
-			start = true
-			out = append(out, ssa.GenResume{PC: e.PC, Saved: e.Depth})
+	for i, e := range f.Entries {
+		if i == 0 {
+			out = append(out, ssa.GenResume{PC: e.PC, Place: e.PC, Sent: -1})
+			continue
+		}
+		for pc := e.PC - 1; pc >= 0 && pc >= f.Entries[i-1].PC; pc-- {
+			if in := p.Code[pc]; in.Suspend {
+				out = append(out, ssa.GenResume{PC: e.PC, Place: e.PC, Sent: in.Left.Slot, Started: true})
+				break
+			}
 		}
 	}
 	return out
@@ -633,13 +637,12 @@ func TestMirEmitted(t *testing.T) {
 	genEnc.IterState, genEnc.ClassCursor, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 56, 30, 8, 16, 24, 32, 48
 	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems, genEnc.ObjectProps = 40, 8, 64, 16
 	genEnc.ObjectPropsLen, genEnc.ObjectPropsCap = 24, 28
-	genEnc.GenObject, genEnc.ClassGenerator, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 56, 21, 0, 8, 24, 48
-	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare, genEnc.SavedStack, genEnc.SavedHandlers = 52, 56, 64, 0, 24
+	genEnc.GenObject, genEnc.ClassGenerator, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals = 56, 21, 0, 8, 24
+	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare = 52, 56, 64
 	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 88, 89, 90
 	genEnc.GenSuspendedYield, genEnc.GenExecuting, genEnc.GenCompleted = 1, 2, 3
 	genEnc.ClosureFn, genEnc.ClosureEnv, genEnc.ClosureRealm, genEnc.ClosureUpvalues = 0, 8, 16, 24
 	genEnc.LinkIn, genEnc.LinkGen, genEnc.WriteBarrier, genEnc.CallGo = 16, 72, 0x71000, 0x72000
-	genEnc.HandlerSize, genEnc.HandlerPC, genEnc.HandlerDepth, genEnc.HandlerFinally = 24, 0, 8, 16
 	genEntries, genYields, genSteps := 0, 0, 0
 	for _, src := range genCorpus {
 		for i, p := range lowered(t, src) {

@@ -1074,15 +1074,12 @@ type Block struct {
 	Generic bool
 	// Yield marks a BlockExit that is a generator's yield (ir.Instruction's
 	// Suspend): in code a loop's step resumed natively (Func's GenEntry),
-	// the yield writes the frame, saves the generator's state -- its
-	// handlers YieldHandlers, those in force at the yield, the outermost
-	// first -- and returns the value to the step, as Go's suspension would
-	// (mir's yieldExit); the exit otherwise.
-	Yield         bool
-	YieldHandlers []ir.Handler
-	// YieldSlot is, for register code's yield (Func's GenWindow), the
-	// register its value is in; its handlers are the code's, by register
-	// pc, which nothing saves (YieldHandlers none).
+	// the yield writes the frame, suspends the generator past it and
+	// returns the value to the step, as Go's suspension would (mir's
+	// yieldExit); the exit otherwise. YieldSlot is the register its value
+	// is in; its handlers are the code's, by register pc, which nothing
+	// saves.
+	Yield     bool
 	YieldSlot int
 }
 
@@ -1112,16 +1109,14 @@ type Entry struct {
 
 // GenResume is where a generator's resumption goes on (Func's GenEntry):
 // at the entry for PC, its first after its parameters (Started false) or
-// one after a yield, its operands the Saved its suspension kept and, after
-// a yield, the value sent in above them.
+// one after a yield. Place is the generator's place, its register pc,
+// that the resumption is of -- past end_params, or a yield's next
+// instruction, where the code goes on at the entry for PC, the jump's
+// target after it -- and Sent the register the value sent in goes to,
+// the yield's, or -1.
 type GenResume struct {
-	PC, Saved int
-	Started   bool
-	// Place and Sent are register code's (Func's GenWindow): the
-	// generator's place, its register pc, that the resumption is of --
-	// past end_params, or a yield's next instruction, where the code goes
-	// on at the entry for PC, the jump's target after it -- and the
-	// register the value sent in goes to, the yield's, or -1.
+	PC          int
+	Started     bool
 	Place, Sent int
 }
 
@@ -1176,14 +1171,6 @@ type Func struct {
 	// there natively, and its returns finish it.
 	GenEntry   bool
 	GenResumes []GenResume
-	// GenWindow marks register code's generator entry and yields (mir's
-	// windowGenEntry, windowYieldExit): the frame's FrameLocals registers
-	// are the generator's values, which keep the whole register file, as
-	// the stack form's frame's locals are the generator's; what the code
-	// keeps past them is past the VM's stack's top, as a call entry makes
-	// it. Where Go made a window of them in the VM's stack, the code
-	// having left native code, a yield writes the window back.
-	GenWindow bool
 	// Loops says the code makes loops of built-ins' calls (OpLoopMark), whose
 	// word it clears at its entries; LoopsEnd is the slot past their slots,
 	// which the frame holds while they run: their callbacks' frames start

@@ -281,11 +281,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	genAt := -1
 	if c.f.GenEntry {
 		genAt = c.a.Len()
-		if c.f.GenWindow {
-			c.windowGenEntry()
-		} else {
-			c.genEntry()
-		}
+		c.genEntry()
 	}
 	if c.genDoneUsed {
 		c.a.Bind(c.genDone)
@@ -1380,10 +1376,6 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 		// As amd64's: to Go.
 		c.a.Ret()
 	case ssa.BlockExit:
-		if b.Yield && c.f.GenEntry && c.f.GenWindow {
-			c.windowYieldExit(b)
-			break
-		}
 		if b.Yield && c.f.GenEntry {
 			c.yieldExit(b)
 			break
@@ -3498,236 +3490,12 @@ func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) {
 	}
 }
 
-// genEntry is the code's generator entry, as amd64's: the step's context
-// in the context register, the call entry's registers, where the step goes
-// on if the code cannot resume the generator in X10, the generator and the
-// step's cursor in the next context. It uses every register.
+// genEntry is amd64's: the code's generator entry, the step's
+// context in the context register, the call entry's registers, where the
+// step goes on if the code cannot resume the generator in X10, the
+// generator and the step's cursor in the next context. It uses every
+// register.
 func (c *a64Compiler) genEntry() {
-	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
-	miss := c.a.NewLabel()
-	c.a.Load(next, a64Ctx, abi.OffNext)
-	c.a.Load(g, next, abi.OffGenObject)
-	// Room for the frame's operands.
-	c.a.Load(t, a64Ctx, abi.OffStackTop)
-	c.a.Load(t, t, 0)
-	c.a.AddImm(t, t, int64(c.frameSize()-c.f.FrameLocals), true)
-	c.a.Load(u, a64Ctx, abi.OffStackEnd)
-	c.a.Cmp(t, u, true)
-	c.a.BCond(arm64.HI, miss)
-	c.a.LoadU32(t, g, c.enc.GenPC)
-	for _, gr := range c.f.GenResumes {
-		blk := c.entryAt(gr.PC)
-		if blk == nil {
-			continue
-		}
-		skip := c.a.NewLabel()
-		c.a.CmpImm(t, int64(gr.PC), false)
-		c.a.BCond(arm64.NE, skip)
-		// As amd64's: as many saved operands as the entry's, none where
-		// it has no saved part.
-		c.a.Load(u, g, c.enc.GenSaved)
-		if gr.Saved == 0 {
-			none := c.a.NewLabel()
-			c.a.Cbz(u, none, true)
-			c.a.Load(u, u, c.enc.SavedStack+8)
-			c.a.Cbnz(u, miss, true)
-			c.a.Bind(none)
-		} else {
-			c.a.Cbz(u, miss, true)
-			c.a.Load(u, u, c.enc.SavedStack+8)
-			c.a.CmpImm(u, int64(gr.Saved), true)
-			c.a.BCond(arm64.NE, miss)
-		}
-		c.a.LoadU8(u, g, c.enc.GenStarted)
-		c.a.CmpImm(u, int64(b2i(gr.Started)), false)
-		c.a.BCond(arm64.NE, miss)
-		c.genFrame(gr, blk)
-		c.a.Bind(skip)
-	}
-	c.a.Bind(miss)
-	c.a.Br(arm64.Reg(10))
-}
-
-// genFrame is amd64's: the generator's frame and context made, the
-// generator running, and on at blk.
-func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
-	vs := int32(c.enc.ValueSize)
-	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
-	c.a.Store(next, abi.OffReturnTo, a64CallRet)
-	c.a.Store(next, abi.OffClosure, a64CallClosure)
-	c.a.Load(t, a64CallClosure, c.enc.ClosureUpvalues)
-	c.a.Store(next, abi.OffUpvalues, t)
-	// Its operands past the VM's stack's top, which moves past them, its
-	// high water with it.
-	c.a.Load(u, a64Ctx, abi.OffStackTop)
-	c.a.Load(t, u, 0)
-	c.a.Store(next, abi.OffBase, t)
-	c.a.AddImm(a64A, t, int64(c.frameSize()-c.f.FrameLocals), true)
-	c.a.Store(u, 0, a64A)
-	same := c.a.NewLabel()
-	c.a.Load(u, a64Ctx, abi.OffStackHigh)
-	c.a.Load(a64C, u, 0)
-	c.a.Cmp(a64A, a64C, true)
-	c.a.BCond(arm64.LS, same)
-	c.a.Store(u, 0, a64A)
-	c.a.Bind(same)
-	c.a.ShiftImm(arm64.Lsl, t, t, 4, true)
-	c.a.Load(u, a64Ctx, abi.OffStackBase)
-	c.a.Op(arm64.Add, t, t, u, true)
-	c.a.Store(next, abi.OffStack, t)
-	// Its locals, the generator's, past its arguments.
-	c.a.LoadU32(u, g, c.enc.GenArgs)
-	c.a.Load(a64A, g, c.enc.GenVals)
-	c.a.AddLsl(u, a64A, u, 4)
-	c.a.Store(next, abi.OffLocals, u)
-	c.a.Store(next, abi.OffOpen, arm64.ZR)
-	c.a.Store(next, abi.OffCells, arm64.ZR)
-	if c.f.Loops {
-		c.a.Store(next, abi.OffLoop, arm64.ZR)
-	}
-	c.a.MovImm(a64A, abi.LiveCall)
-	c.a.Store(next, abi.OffLive, a64A)
-	c.a.Load(a64A, a64CallLink, c.enc.LinkIn)
-	c.a.AddImm(a64A, a64A, 1, true)
-	c.a.Store(a64CallLink, c.enc.LinkIn, a64A)
-	if c.f.ThisSlot >= 0 {
-		// Its receiver, which its code reads.
-		c.a.Load(a64A, g, c.enc.GenThis+c.enc.NumOffset)
-		c.a.Store(next, abi.OffThis+c.enc.NumOffset, a64A)
-		c.a.Load(a64A, g, c.enc.GenThis+c.enc.RefOffset)
-		c.a.Store(next, abi.OffThis+c.enc.RefOffset, a64A)
-	}
-	// The operands its suspension saved, and on them the value sent in.
-	if gr.Saved > 0 {
-		c.a.Load(u, g, c.enc.GenSaved)
-		c.a.Load(u, u, c.enc.SavedStack)
-		for i := range int32(gr.Saved) {
-			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-				c.a.Load(a64A, u, i*vs+w)
-				c.a.Store(t, i*vs+w, a64A)
-			}
-		}
-	}
-	if gr.Started {
-		// As amd64's: the value sent in, the context's.
-		c.a.Load(a64A, next, abi.OffGenSent+c.enc.NumOffset)
-		c.a.Store(t, int32(gr.Saved)*vs+c.enc.NumOffset, a64A)
-		c.a.Load(a64A, next, abi.OffGenSent+c.enc.RefOffset)
-		c.a.Store(t, int32(gr.Saved)*vs+c.enc.RefOffset, a64A)
-	}
-	c.a.MovImm(a64A, uint64(c.enc.GenExecuting))
-	c.a.Store8(g, c.enc.GenState, a64A)
-	c.a.MovRR(a64Ctx, next)
-	c.a.B(c.labels[blk.ID])
-}
-
-// yieldExit is amd64's: a generator's yield, suspended natively in code a
-// loop's step resumed natively, its handlers saved and its value returned
-// to the step; the exit otherwise.
-func (c *a64Compiler) yieldExit(b *ssa.Block) {
-	s, hs := b.State, b.YieldHandlers
-	vs := int32(c.enc.ValueSize)
-	c.a.Load(a64A, a64Ctx, abi.OffReturnTo)
-	c.a.Cbz(a64A, c.stubLabel(s, abi.ExitHost), true)
-	then, toGo := c.a.NewLabel(), c.a.NewLabel()
-	c.exitThen(s, abi.ExitHost, &then)
-	c.a.Bind(then)
-	saved, n := int32(s.Depth-1), int32(len(hs))
-	// As amd64's: the generator's saved part, which Go makes where it has
-	// none and the yield leaves anything.
-	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
-	c.a.Load(a64B, a64B, c.enc.GenSaved)
-	if n > 0 || saved > 0 {
-		c.a.Cbz(a64B, toGo, true)
-	} else {
-		none := c.a.NewLabel()
-		c.a.Cbz(a64B, none, true)
-		c.a.Store(a64B, c.enc.SavedStack+8, arm64.ZR)
-		c.a.Store(a64B, c.enc.SavedHandlers+8, arm64.ZR)
-		c.a.Bind(none)
-	}
-	if n > 0 {
-		// Room where the generator keeps its handlers.
-		c.a.Load(a64C, a64B, c.enc.SavedHandlers+16)
-		c.a.CmpImm(a64C, int64(n), true)
-		c.a.BCond(arm64.LO, toGo)
-	}
-	if saved > 0 {
-		// As amd64's: the operands beneath the value where the generator
-		// keeps them, where it has room, their pointer words with Go's
-		// write barrier while the collector marks, the saved part read
-		// again from the generator at each.
-		c.a.Load(a64C, a64B, c.enc.SavedStack+16)
-		c.a.CmpImm(a64C, int64(saved), true)
-		c.a.BCond(arm64.LO, toGo)
-		marked, copied := c.a.NewLabel(), c.a.NewLabel()
-		c.movImm(a64C, c.enc.WriteBarrier)
-		c.a.LoadU8(a64C, a64C, 0)
-		c.a.Cbnz(a64C, marked, false)
-		c.a.Load(a64C, a64B, c.enc.SavedStack)
-		for i := range saved {
-			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
-				c.a.Load(a64A, a64Stack, i*vs+w)
-				c.a.Store(a64C, i*vs+w, a64A)
-			}
-		}
-		c.a.Bind(copied)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(marked)
-			for i := range saved {
-				c.a.Load(a64C, a64Ctx, abi.OffGenObject)
-				c.a.Load(a64C, a64C, c.enc.GenSaved)
-				c.a.Load(a64C, a64C, c.enc.SavedStack)
-				c.a.Load(a64A, a64Stack, i*vs+c.enc.NumOffset)
-				c.a.Store(a64C, i*vs+c.enc.NumOffset, a64A)
-				c.a.AddImm(a64A, a64C, int64(i*vs+c.enc.RefOffset), true)
-				c.a.Load(a64C, a64Stack, i*vs+c.enc.RefOffset)
-				c.refStore()
-			}
-			c.a.Load(a64B, a64Ctx, abi.OffGenObject)
-			c.a.Load(a64B, a64B, c.enc.GenSaved)
-			c.a.B(copied)
-		})
-	}
-	if n > 0 || saved > 0 {
-		c.movImm(a64A, uint64(saved))
-		c.a.Store(a64B, c.enc.SavedStack+8, a64A)
-		if n > 0 {
-			// The handlers in force, no pointers among their words.
-			c.a.Load(a64C, a64B, c.enc.SavedHandlers)
-			for i, h := range hs {
-				at := int32(i) * c.enc.HandlerSize
-				c.a.MovImm(a64A, uint64(h.PC))
-				c.a.Store32(a64C, at+c.enc.HandlerPC, a64A)
-				c.movImm(a64A, uint64(int64(h.Depth)))
-				c.a.Store(a64C, at+c.enc.HandlerDepth, a64A)
-				c.a.MovImm(a64A, uint64(b2i(h.Finally)))
-				c.a.Store8(a64C, at+c.enc.HandlerFinally, a64A)
-			}
-		}
-		c.movImm(a64A, uint64(n))
-		c.a.Store(a64B, c.enc.SavedHandlers+8, a64A)
-	}
-	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
-	c.a.MovImm(a64A, uint64(s.PC)+1)
-	c.a.Store32(a64B, c.enc.GenPC, a64A)
-	c.a.MovImm(a64A, uint64(c.enc.GenSuspendedYield))
-	c.a.Store8(a64B, c.enc.GenState, a64A)
-	c.a.MovImm(a64A, 1)
-	c.a.Store8(a64B, c.enc.GenStarted, a64A)
-	c.a.Load(a64RetNum, a64Stack, saved*vs+c.enc.NumOffset)
-	c.a.Load(a64RetRef, a64Stack, saved*vs+c.enc.RefOffset)
-	c.a.Load(a64CallLink, a64Ctx, abi.OffReturnTo)
-	c.returnTail()
-	if n > 0 || saved > 0 {
-		c.a.Bind(toGo)
-		c.a.Ret()
-	}
-}
-
-// windowGenEntry is amd64's: register code's generator entry, the miss in
-// X10. It uses every register.
-func (c *a64Compiler) windowGenEntry() {
 	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
 	miss := c.a.NewLabel()
 	c.a.Load(next, a64Ctx, abi.OffNext)
@@ -3753,20 +3521,20 @@ func (c *a64Compiler) windowGenEntry() {
 		c.a.LoadU8(u, g, c.enc.GenStarted)
 		c.a.CmpImm(u, int64(b2i(gr.Started)), false)
 		c.a.BCond(arm64.NE, miss)
-		c.windowGenFrame(gr, blk)
+		c.genFrame(gr, blk)
 		c.a.Bind(skip)
 	}
 	c.a.Bind(miss)
 	c.a.Br(arm64.Reg(10))
 }
 
-// windowGenFrame is amd64's: the generator's frame its values, which keep
+// genFrame is amd64's: the generator's frame its values, which keep
 // its whole register file, nothing copied; room past the VM's stack's top
 // for what the code keeps past its registers and for the window Go makes
 // of them where the code leaves native code; the value sent in written to
 // the yield's register, its pointer word through storeRef while the
 // collector marks; the context made, the generator running, and on at blk.
-func (c *a64Compiler) windowGenFrame(gr ssa.GenResume, blk *ssa.Block) {
+func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	vs := int32(c.enc.ValueSize)
 	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
 	c.a.Store(next, abi.OffReturnTo, a64CallRet)
@@ -3861,11 +3629,11 @@ func (c *a64Compiler) copyValues(dst arm64.Reg, doff int32, src arm64.Reg, soff 
 	c.a.BCond(arm64.LO, loop)
 }
 
-// windowYieldExit is amd64's: register code's yield, suspended natively in
+// yieldExit is amd64's: a generator's yield, suspended natively in
 // code a loop's step or a call of next resumed natively, a window Go made
 // of the generator's values written back to them, the value in the
 // yield's register returned to the step; the exit otherwise.
-func (c *a64Compiler) windowYieldExit(b *ssa.Block) {
+func (c *a64Compiler) yieldExit(b *ssa.Block) {
 	s := b.State
 	vs := int32(c.enc.ValueSize)
 	c.a.Load(a64A, a64Ctx, abi.OffReturnTo)
@@ -3952,12 +3720,6 @@ func (c *a64Compiler) genFinish() {
 	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
 	c.a.MovImm(a64A, uint64(c.enc.GenCompleted))
 	c.a.Store8(a64B, c.enc.GenState, a64A)
-	// Its saved operands none, where it has a saved part.
-	none := c.a.NewLabel()
-	c.a.Load(a64B, a64B, c.enc.GenSaved)
-	c.a.Cbz(a64B, none, true)
-	c.a.Store(a64B, c.enc.SavedStack+8, arm64.ZR)
-	c.a.Bind(none)
 	// As amd64's: a call of next, no cursor, its value the body's, the
 	// context's generator none.
 	call := c.a.NewLabel()
