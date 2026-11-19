@@ -85,7 +85,8 @@ CPU -- a prefork server of single-threaded processes, or a container with one
 marking took 12 ms rather than 1.5, so that the script runs under the write
 barrier for much of its time. Rendering a React page, the collector is marking
 for 42% of a render at `GOMAXPROCS=1` and 10% on 32 cores. Two settings change
-that, and neither needs anything of the engine.
+that, and neither needs anything of the engine; an option of the engine's,
+below, does it for a runtime.
 
 Collect between requests, which is the better of the two: turn the collector's
 pacing off, collect when no request is waiting, and keep a memory limit, so
@@ -128,6 +129,27 @@ Neither is for a process with more than one CPU, or more than one runtime:
 - A collection is the process's, so stopping the world stops every runtime in
   it. Thirty-two runtimes on one CPU, in test262's runner, kept taking each
   other's turns: a test that finishes in moments had waited 30 seconds.
+
+The engine has a third way, for a runtime rather than the process: make it
+with `WithGCYield`, and when the runtime finds the collector marking -- at an
+interrupt check, or where the JIT's code returns to Go -- it sleeps until the
+marking is done, and Go marks with the idle CPU at full speed. The script
+pauses for a mark phase, as under `gcstoptheworld=1`, and no other goroutine
+is stopped. On a Ryzen 9 at `GOMAXPROCS=1`, Go's default, `gcstoptheworld=1`
+and `WithGCYield`:
+
+| | Go's default | `gcstoptheworld=1` | `WithGCYield` | its longest wait |
+|---|---|---|---|---|
+| V8 suite | 736 ms | 634 ms | 649 ms | 20 ms |
+| V8 suite, with the JIT | 439 ms | 378 ms | 388 ms | 20 ms |
+| A React render (`v8bench -bench ssr`) | 631 ms | 542 ms | 563 ms | 19 ms |
+| The same, with the JIT | 683 ms | 596 ms | 611 ms | 12 ms |
+
+It wins only while the CPU would otherwise be idle. Beside a goroutine that
+spins, the CPU goes to that goroutine while the runtime waits, the marking
+goes on at a quarter of the CPU, and the runtime waits that much longer: the V8
+suite took 12% longer with `WithGCYield` than without it, and a single wait up
+to 115 ms. It does nothing at more than one CPU.
 
 `GOGC` trades in the same way, more plainly: `GOGC=400` took 20% off fifty
 renders at one thread, and the peak heap went from 60 MB to 136.

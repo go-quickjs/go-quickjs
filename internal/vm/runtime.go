@@ -394,6 +394,9 @@ type Runtime struct {
 	// asmHeaps are the heaps of typed code native code reads, which
 	// bufferChanged keeps current (asmHeapKeep).
 	asmHeaps []*asmHeap
+	// gcYield is Config.GCYield's state (writebarrier.go), after every field the
+	// interpreter reads, so that it moves none of them.
+	gcYield gcYieldState
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
@@ -1399,6 +1402,9 @@ func (r *Runtime) checkInterruptPoll() error {
 // makes it unsuitable for inlining.
 func (r *Runtime) checkInterruptNow() error {
 	r.interruptCounter = interruptCheckInterval
+	if r.gcYield.on && nativeWB.enabled {
+		r.gcYieldNow()
+	}
 	if r.stopped != nil {
 		return r.stopped
 	}

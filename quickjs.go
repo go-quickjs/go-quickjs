@@ -131,6 +131,7 @@ type config struct {
 	debug            bool
 	sourceMaps       bool
 	sourceMapLoader  SourceMapLoader
+	gcYield          bool
 }
 
 // WithJIT enables the experimental JIT: hot functions are compiled to native
@@ -215,6 +216,42 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 func WithJITMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.jitMemoryLimit = bytes }
 }
+
+// WithGCYield has the Runtime wait while Go's collector marks, in a process
+// whose GOMAXPROCS is 1, so that the collector marks at full speed and the
+// script runs none of that time under the write barrier.
+//
+// With one P, Go runs no dedicated mark worker: a quarter of the P marks,
+// so a mark phase lasts four times its work or more, and all that while
+// each pointer the script stores goes through the collector's write
+// barrier. A script that allocates much runs a quarter to a third of its
+// time so: at GOMAXPROCS=1 the V8 benchmark suite took 1.16 times as long
+// as with the collector stopping the world (GODEBUG=gcstoptheworld=1), with
+// WithJIT and without. With this option, when the runtime finds the
+// collector marking -- at its interrupt checks, which come at least every
+// thousand loop iterations or four thousand calls, and where the JIT's code
+// returns to Go or calls it -- it sleeps until the marking ends, its P idle,
+// and Go marks with the idle P at full speed: the suite took 1.02 times as
+// long as with the world stopped, 1.03 with the JIT, 85% of the difference
+// won back.
+//
+// The cost is a pause: each wait lasts one mark phase, as a stop-the-world
+// collection would -- 20 ms at most in that suite, longer the more the
+// program holds -- and the script does no work meanwhile. It helps only
+// while the P would be idle otherwise. Another goroutine of the process
+// that wants the CPU -- a busy loop, another request's work -- takes the P
+// while the runtime waits, the marking goes on at a quarter of it, and the
+// runtime waits that much longer: beside a goroutine that spins, the suite
+// took 1.12 times as long with the option as without it, and a single wait
+// up to 115 ms. Use it for a process that gives its one CPU to one runtime
+// at a time.
+//
+// It does nothing while GOMAXPROCS is more than 1: Go then marks on other
+// Ps, or on idle ones, while the script runs. The runtime reads GOMAXPROCS
+// at its first check while the collector marks, after each wait and every
+// 64 checks made while the collector marks, so a change from 1 is seen at
+// the next mark phase and one to 1 within 64 such checks.
+func WithGCYield() Option { return func(c *config) { c.gcYield = true } }
 
 // WithMemoryLimit caps the memory a script may hold, beyond what the
 // runtime's built-ins take. A script that exceeds it is stopped, and the
@@ -396,6 +433,7 @@ func New(opts ...Option) *Runtime {
 		Locale:         c.locale,
 		NodeQuirks:     c.nodeQuirks,
 		Debug:          c.debug,
+		GCYield:        c.gcYield,
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration,
 		moduleFetchLimit: c.moduleFetchLimit, debug: c.debug}
 	if c.jitBackground {

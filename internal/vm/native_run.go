@@ -1407,16 +1407,6 @@ func nativePop(ctx *nativeCtx, rec *nativeRec) {
 	ctx.topOK = 0
 }
 
-// nativeWB is the runtime's write-barrier flag, as the JIT reads it
-// (internal/jit/barrier.go).
-//
-//go:linkname nativeWB runtime.writeBarrier
-var nativeWB struct {
-	enabled bool
-	pad     [3]byte
-	alignme uint64
-}
-
 // nativeBase is the handlers' block's address, where the code is entered.
 var nativeBase = nativeHandlersAddr()
 

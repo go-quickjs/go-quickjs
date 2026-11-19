@@ -3223,6 +3223,15 @@ writes from it (`jit.ApplyExit`). Nothing is Go's for the marking's sake,
 and nothing leaves native code for it: code is compiled only with `storeRef`
 (`abi.Encoding.StoreRef`).
 
+**Waiting for the marking.** A runtime made with `WithGCYield`, in a
+process with one P, waits while the collector marks (`gcYieldNow`), so that
+Go's idle mark worker marks at full speed rather than a quarter of the P.
+It waits only where Go runs already -- after native code has returned to Go
+(`jitRegStretch`), at the top of a call of Go from native code
+(`jitHostCall`), in a pool's refill and at the interrupt check -- never by
+leaving native code: the code does the same work, with or without the
+option, marking or not.
+
 `TestJITSameWorkWhileMarking` holds the code to the rule: every test of
 the micro-benchmarks is run with native code seeing the collector idle and
 marking, and must make as many calls of Go, leave as often, have the

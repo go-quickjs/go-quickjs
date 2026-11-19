@@ -1721,6 +1721,9 @@ func jitHostCall(ctx *abi.Context) bool {
 	if r == nil || ctx.GoKeep >= abi.MaxKeeps {
 		return false
 	}
+	if r.gcYield.on && nativeWB.enabled {
+		r.gcYieldNow()
+	}
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoLeaf && jitGoCallWork == nil {
 		// A leaf's call, its function checked by the code (jitLeafCall).
 		return r.jitLeafCall(ctx)
@@ -3998,6 +4001,9 @@ type jitPoolSource struct {
 // has one now: a construction's function whose prototype is no longer an
 // object leaves it empty, and the site to Go.
 func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
+	if r.gcYield.on && nativeWB.enabled {
+		r.gcYieldNow()
+	}
 	src := (*jitPoolSource)(pool.Source)
 	if want := pool.Want; want != 0 && src != nil && src.ctor != nil {
 		// A new Array(n) of an n past its arrays' room, or one less than

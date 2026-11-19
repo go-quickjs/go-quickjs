@@ -2268,6 +2268,9 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 	} else {
 		err = e.code.Run(ipc, ctx)
 	}
+	if r.gcYield.on && nativeWB.enabled {
+		r.gcYieldNow()
+	}
 	for err == nil && s.ssaCtxs[idx+1].Live == abi.LiveCall {
 		// A native call's callee left native code: Go finishes it, and
 		// every native call between, then the code goes on where the
@@ -2289,6 +2292,9 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 			s.resumed++
 			s.regPending = jitGoPending{}
 			err = e.code.Resume(back, callee)
+			if r.gcYield.on && nativeWB.enabled {
+				r.gcYieldNow()
+			}
 			continue
 		}
 		// The call's state written to the frame below, the call's exit a

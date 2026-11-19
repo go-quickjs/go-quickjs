@@ -36,6 +36,9 @@ type Config struct {
 	// Debug makes the runtime for a debugger, which runs code compiled for
 	// one; see debug.go.
 	Debug bool
+	// GCYield has the runtime wait while the collector marks, when the
+	// process has one P (writebarrier.go).
+	GCYield bool
 }
 
 // New creates a Runtime with the standard globals installed.
@@ -78,6 +81,7 @@ func New(cfg Config) *Runtime {
 	r.initRealm()
 	r.setMemoryLimit(cfg.MemoryLimit)
 	r.initJIT(cfg.JIT, cfg.JITMemoryLimit)
+	r.gcYield.on = cfg.GCYield
 	return r
 }
 
