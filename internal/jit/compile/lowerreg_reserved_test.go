@@ -19,7 +19,8 @@ func TestLowerRegReservedAsserts(t *testing.T) {
 	fns := regCompiled(t, `function up(n) { for (let i = 0; i < n; i++) {} }
 		function arith(x, y) { return x * y }
 		function instance(o, C) { var n = 0; for (var i = 0; i < 10; i++) if (o instanceof C) n++; return n }
-		function instanceNot(o, C) { var n = 0; for (var i = 0; i < 10; i++) if (!(o instanceof C)) n++; return n }`)
+		function instanceNot(o, C) { var n = 0; for (var i = 0; i < 10; i++) if (!(o instanceof C)) n++; return n }
+		function bools(x) { return (x === false ? 1 : 0) + (true === x ? 2 : 0) + (x !== true ? 4 : 0) + (false !== x ? 8 : 0) }`)
 	lowerWith := func(fn *bytecode.Function, pc int, w bytecode.RInstr, aux []uint32) error {
 		rc := *fn.RegCode()
 		rc.Code = append([]bytecode.RInstr(nil), rc.Code...)
@@ -86,6 +87,31 @@ func TestLowerRegReservedAsserts(t *testing.T) {
 		if !found || err != nil || plainErr != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: instanceof_next differs from the original pair: %v, %v", name, err, plainErr)
 		}
+	}
+	fn := fns["bools"]
+	lowered := regLowered(t, fn)
+	seen := 0
+	for pc, w := range fn.RegCode().Code {
+		if w.Op() != bytecode.RJBool {
+			continue
+		}
+		for i, origin := range lowered.Origin {
+			if int(origin) != pc || lowered.Code[i].Op != ir.Branch {
+				continue
+			}
+			seen++
+			in := lowered.Code[i]
+			if in.Operator != ir.Eq || !in.Strict || in.Right != ir.Literal(ir.Bool(w.X()&1 != 0)) || in.When != (w.X()&bytecode.RCmpTrue != 0) {
+				t.Errorf("jbool lowered as %+v", in)
+			}
+		}
+		reads, writes, all := RegAccess(fn.RegCode(), pc)
+		if all || len(writes) != 0 || !reflect.DeepEqual(reads, []int{int(w.A())}) {
+			t.Errorf("jbool access: reads %v, writes %v, all %v", reads, writes, all)
+		}
+	}
+	if seen != 4 {
+		t.Errorf("%d boolean branches lowered, want 4", seen)
 	}
 }
 

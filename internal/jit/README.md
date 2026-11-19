@@ -636,8 +636,8 @@ budget is a function's too (`jit_tier.go`):
 - a backward jump spends its function's budget by its distance, as V8's
   `JumpLoop` spends its bytecodes' distance: the feedback dispatcher's
   jumps, the step-and-branches' among them, which jump as their partners
-  do, and the partners of the `instanceof_next` it runs unfused
-  (nativegen's `feedback.go`, `feedbackEdgeAMD64` and
+  do, and `jbool`, and the partners of the `instanceof_next` it runs
+  unfused (nativegen's `feedback.go`, `feedbackEdgeAMD64` and
   `feedbackEdgeARM64`; the Go table's `regJump`, `regJumpSlow` and
   `regStepTaken`, `regEdgeTick`) count down the work left of it for back
   edges (`closureCode`'s `jitRegEdges`, armed by `jitRegArmEdges`), and

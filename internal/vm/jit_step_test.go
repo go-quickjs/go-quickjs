@@ -139,14 +139,15 @@ func TestJITRegStepLoopTiersUp(t *testing.T) {
 }
 
 // TestJITRegFusedBranchLoopTiersUp runs, once, a loop whose only back edge
-// is the jump of a fused branch -- instanceof_next's partner -- for 20,000
-// turns, in the native dispatcher and in the Go table, the collector idle
-// and marking: each back edge counts its function's budget as the unfused
-// jump's does (nativegen's feedbackUnfused), and the loop is compiled
-// while the call runs, a few hundred turns in. Before, plain's handler,
-// which takes the partner's jump itself, ran in the feedback dispatcher
-// too, and the budget was counted only where the interrupt budget ran out,
-// a turn in 1,024: the loop was compiled some 200,000 turns in.
+// is the jump of a fused branch -- instanceof_next's partner, jbool -- for
+// 20,000 turns, in the native dispatcher and in the Go table, the
+// collector idle and marking: each back edge counts its function's budget
+// as the unfused jump's does (nativegen's feedbackUnfused and
+// feedbackSCJumps), and the loop is compiled while the call runs, a few
+// hundred turns in. Before, the feedback dispatcher ran plain's handler of
+// each, which counts nothing, and the budget was counted only where the
+// interrupt budget ran out, a turn in 1,024: the loop was compiled some
+// 200,000 turns in.
 func TestJITRegFusedBranchLoopTiersUp(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -158,6 +159,9 @@ func TestJITRegFusedBranchLoopTiersUp(t *testing.T) {
 		{"instanceof", `function C() {} var o = new C()
 			function count(n) { var s = 0, i = 0; do { s = (s + i) | 0; if (++i >= n) break } while (o instanceof C); return s }`,
 			bytecode.RInstanceOfNext},
+		{"jbool", `var go = true
+			function count(n) { var s = 0, i = 0; do { s = (s + i) | 0; if (++i >= n) break } while (go === true); return s }`,
+			bytecode.RJBool},
 	} {
 		for _, native := range []bool{true, false} {
 			for _, marking := range []bool{false, true} {

@@ -17,6 +17,8 @@ func TestArrowLeafKinds(t *testing.T) {
 	}{
 		{`(x, y) => x - y`, bytecode.LeafPure},
 		{`o => o.id === 7`, bytecode.LeafPure},
+		{`x => x === false`, bytecode.LeafPure},
+		{`x => true !== x ? 1 : 2`, bytecode.LeafPure},
 		{`x => x * k`, bytecode.LeafPure},
 		{`(x, y) => this.k * (x - y)`, bytecode.LeafNone},
 		{`x => (() => this)()`, bytecode.LeafNone},

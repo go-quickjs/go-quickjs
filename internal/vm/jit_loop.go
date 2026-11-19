@@ -242,7 +242,7 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 			bytecode.RJSEq, bytecode.RJSNe, bytecode.RJEq, bytecode.RJNe:
 			ok = read(w.A()) && read(w.B()) && forward(pc, w.SC())
 		case bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
-			bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJNull, bytecode.RJNotNull:
+			bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJNull, bytecode.RJNotNull, bytecode.RJBool:
 			ok = read(w.A()) && forward(pc, w.SC())
 		case bytecode.RStepJLt, bytecode.RStepJLe:
 			// A step and its partner, which is checked as itself.

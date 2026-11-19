@@ -937,7 +937,7 @@ func regSuccessors(rc *bytecode.RegCode, pc int, w bytecode.RInstr) []int {
 			out = append(out, int(c.To))
 		}
 		return out
-	case bytecode.RJTypeof, bytecode.RJNull, bytecode.RJNotNull, bytecode.RIterNext:
+	case bytecode.RJTypeof, bytecode.RJBool, bytecode.RJNull, bytecode.RJNotNull, bytecode.RIterNext:
 		return []int{pc + 1, regTarget(pc, w.SC())}
 	default:
 		if _, _, ok := regBranch(op); ok {
@@ -1342,6 +1342,8 @@ func (l *regLowering) lower(pc int) {
 		l.emit(ir.Instruction{Op: ir.Jump, Target: regTarget(pc, int32(w.BC()))}, true)
 	case bytecode.RJmpF, bytecode.RJmpT:
 		branch(ir.Truth, reg(a), ir.Operand{}, op == bytecode.RJmpT, false, regTarget(pc, int32(w.BC())))
+	case bytecode.RJBool:
+		branch(ir.Eq, reg(a), ir.Literal(ir.Bool(w.X()&1 != 0)), w.X()&bytecode.RCmpTrue != 0, true, regTarget(pc, w.SC()))
 	case bytecode.RJNull, bytecode.RJNotNull:
 		// == null, document.all's stand-in included, which ?? does not
 		// take for null (ir's Nullish): the loose equality.
@@ -2220,6 +2222,8 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 	case bytecode.RUnary:
 		return []int{b}, []int{a}, false
 	case bytecode.RThrow:
+		return []int{a}, nil, false
+	case bytecode.RJBool:
 		return []int{a}, nil, false
 	case bytecode.RArguments, bytecode.RNewArrayK, bytecode.RLoadThis:
 		return nil, []int{a}, false

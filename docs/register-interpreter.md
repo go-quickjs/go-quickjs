@@ -280,6 +280,9 @@ the instruction. The families:
   that decides a jump never makes a boolean. `jnull` and `jnotnull` with
   `RNullStrict` in X compare with null alone (`=== null`, `!== null`),
   avoiding the temporary value and load of a two-register comparison.
+  `jbool` compares directly with a boolean literal, X's low bit, under
+  strict equality; `RCmpTrue` says to branch on equality rather than
+  inequality. Other types never equal the literal and need no conversion.
 - **Step-and-branch:** `step_jlt` and its kin, a counter's step and the
   compare-and-branch after it in one dispatch.
 - **Jumps:** `jmp`, `jmp_true`, `jmp_false` (ToBoolean, a boolean's without
@@ -315,8 +318,8 @@ the instruction. The families:
 `bytecode.ROp` is 8 bits, and the Go table, its slow functions and the
 native table each have 256 entries, every value with one: a value no
 operation has is `rhInvalid`'s, which panics and which the verifier proves
-no code holds, so the dispatch needs no range check. 243 values are taken
-(`ROpCount`), 13 are free.
+no code holds, so the dispatch needs no range check. 244 values are taken
+(`ROpCount`), 12 are free.
 
 How a value is allotted:
 
@@ -657,7 +660,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 130 of the 243 operations have a native handler
+**What is native.** 131 of the 244 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,

@@ -67,7 +67,7 @@ func regRoles(w bytecode.RInstr) (reads, writes []int, known bool) {
 	case bytecode.RSetUpval, bytecode.RSetGlobal, bytecode.RJmpF, bytecode.RJmpT, bytecode.RJNull, bytecode.RJNotNull,
 		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,
 		bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
-		bytecode.RJTypeof, bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU, bytecode.RRet,
+		bytecode.RJTypeof, bytecode.RJBool, bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU, bytecode.RRet,
 		bytecode.RThrow, bytecode.RStrFreeze, bytecode.RSwitch, bytecode.RSwitchTypeof, bytecode.RAddPropI:
 		return []int{a}, nil, true
 	case bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt, bytecode.RJGe,
@@ -334,7 +334,7 @@ func regJumps(op bytecode.ROp) bool {
 		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,
 		bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
 		bytecode.RJNull, bytecode.RJNotNull, bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU,
-		bytecode.RJTypeof, bytecode.RIterNext, bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI,
+		bytecode.RJTypeof, bytecode.RJBool, bytecode.RIterNext, bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI,
 		bytecode.RStepJGtI, bytecode.RStepJGeI, bytecode.RStepJLeU:
 		return true
 	}

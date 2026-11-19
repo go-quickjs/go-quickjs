@@ -84,6 +84,8 @@ var (
 		// are where they are not fused.
 		bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI,
 		bytecode.RStepJGeI, bytecode.RStepJLeU,
+		// Appended, so that no table slot before it moves (slotPlain).
+		bytecode.RJBool,
 	}
 	// feedbackOtherJumps are the jumps feedbackOps has for nothing else.
 	feedbackOtherJumps = func() []bytecode.ROp {

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -331,11 +332,115 @@ func TestRegNativeArrayAppend(t *testing.T) {
 		String(t)`, bytecode.RSetIndex)
 }
 
+// boolLiteralSrc compares values of every kind with a boolean literal on
+// either side: strictly (jbool), as conditions forward and as a loop's
+// back edges, and as values, which the compiler makes by branching to a
+// load of either boolean; loosely, which converts the boolean to a number
+// and the other side by ToPrimitive -- a valueOf called, one throwing --
+// and is never jbool. boolLiteralWant is Node's answer
+// (vm.runInThisContext).
+const boolLiteralSrc = `
+var calls = 0
+var vals = [false, true, 0, 1, -0, 2, NaN, "", "0", "1", "true", "false", null, undefined, 0n, 1n, 2n, Symbol(),
+	{}, [], [0], [1], Object(false), Object(true), { valueOf() { calls++; return 1 } }, { valueOf() { throw new RangeError("v") } }, function () {}]
+function strict(v) {
+	var s = ""
+	s += v === true ? "a" : "-"; s += true === v ? "b" : "-"; s += v !== true ? "c" : "-"; s += true !== v ? "d" : "-"
+	s += v === false ? "e" : "-"; s += false === v ? "f" : "-"; s += v !== false ? "g" : "-"; s += false !== v ? "h" : "-"
+	if (v === true) s += "i"; if (!(false !== v)) s += "j"
+	return s
+}
+function loose(v) {
+	var s = ""
+	try { s += v == true ? "a" : "-" } catch (e) { s += e.name[0] }
+	try { s += false == v ? "b" : "-" } catch (e) { s += e.name[0] }
+	try { s += v != false ? "c" : "-" } catch (e) { s += e.name[0] }
+	try { s += true != v ? "d" : "-" } catch (e) { s += e.name[0] }
+	return s
+}
+function value(v) { var t = v === true, f = false !== v; return (t ? "T" : "t") + (f ? "F" : "f") }
+function loop(v) { var n = 0; do { n++ } while (n < 3 && v === true); while (n < 6 && false !== v) n++; return n }
+function all(v) { return strict(v) + "|" + loose(v) + "|" + value(v) + "|" + loop(v) }
+function run() {
+	var out
+	calls = 0
+	for (var r = 0; r < 60; r++) { out = []; for (var i = 0; i < vals.length; i++) out.push(all(vals[i])) }
+	out.push(calls)
+	return out.join("\n")
+}
+run()`
+
+const boolLiteralWant = `--cdef--j|-b-d|tf|1
+ab----ghi|a-c-|TF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|--cd|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|-b-d|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|a-c-|tF|6
+--cd--gh|RRRR|tF|6
+--cd--gh|--cd|tF|6
+240`
+
+// TestRegBoolLiteralBranches runs boolLiteralSrc by the Go table and
+// natively, marking and not, with Node's answers: strict comparisons with
+// a boolean literal branch by jbool, loose ones do not.
+func TestRegBoolLiteralBranches(t *testing.T) {
+	fn := compileForTest(t, boolLiteralSrc)
+	for _, c := range fn.Constants {
+		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
+			continue
+		}
+		has := slices.ContainsFunc(c.Fn.RegCode().Code, func(w bytecode.RInstr) bool { return w.Op() == bytecode.RJBool })
+		if want := c.Fn.Name == "strict" || c.Fn.Name == "value" || c.Fn.Name == "loop"; has != want {
+			t.Errorf("%s: jbool %v, want %v:\n%s", c.Fn.Name, has, want, c.Fn.RegCode())
+		}
+	}
+	if got := nativeRunSrc(t, boolLiteralSrc, false); got != boolLiteralWant {
+		t.Errorf("Go table:\n%s\nwant\n%s", got, boolLiteralWant)
+	}
+	nativeCheck(t, boolLiteralSrc, "")
+}
+
 // TestRegNativeStringEquals runs === and !== of two flat strings of one
 // length natively, by their text: ASCII and not, of one length in code
 // units and not in bytes, lone surrogates, lengths around eight bytes,
 // and ropes, which Go flattens first.
 func TestRegNativeStringEquals(t *testing.T) {
+	t.Run("boolean-branches", func(t *testing.T) {
+		const src = `
+var revoked = Proxy.revocable({}, {}); revoked.revoke();
+var vals = [false, true, 0, 1, -0, NaN, null, undefined, "", "false", 0n, 1n, Symbol(), {}, [],
+ Object(false), { valueOf() { throw new Error("coercion") } }, revoked.proxy];
+function check(v) {
+ return (v === false ? 1 : 0) + (true === v ? 2 : 0) + (v !== true ? 4 : 0) + (false !== v ? 8 : 0);
+}
+var out = [], side = 0;
+for (var v of vals) out.push(check(v));
+function next() { return ++side < 2000 ? false : true }
+do {} while (next() === false);
+out.push(side);
+side = 0; do {} while (false === next()); out.push(side);
+out.join("|")`
+		nativeCheck(t, src, src, bytecode.RJBool)
+	})
 	t.Run("null-branches", func(t *testing.T) {
 		const src = `
 var vals = [null, undefined, false, true, 0, -0, NaN, "", "null", 0n, Symbol(), {}, [], function() {},

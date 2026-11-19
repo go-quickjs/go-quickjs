@@ -378,6 +378,10 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			if null == (op == bytecode.RJNull) {
 				pc += int(w.SC())
 			}
+		case bytecode.RJBool:
+			if regs[w.A()].StrictEquals(Bool(w.X()&1 != 0)) == (w.X()&bytecode.RCmpTrue != 0) {
+				pc += int(w.SC())
+			}
 		case bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt,
 			bytecode.RJGe, bytecode.RJNGe, bytecode.RJEq, bytecode.RJNe, bytecode.RJLtI, bytecode.RJNLtI,
 			bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,

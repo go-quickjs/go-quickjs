@@ -72,15 +72,17 @@ func TestPureStrictNull(t *testing.T) {
 function isNull(x) { return x === null ? 1 : 2 }
 function notNull(x) { return null !== x ? 1 : 2 }
 function loose(x) { return x == null ? 1 : 2 }
+function booleans(x) { return (x === false ? 1 : 0) + (true === x ? 2 : 0) + (x !== true ? 4 : 0) + (false !== x ? 8 : 0) }
 function run() {
  var vals = [null, undefined, 0, "", false, {}], out = [];
  for (var i = 0; i < 50; i++) for (var v of vals) { isNull(v); notNull(v); loose(v) }
  for (var v of vals) out.push("" + isNull(v) + notNull(v) + loose(v));
  out.push("" + isNull(dda) + notNull(dda) + loose(dda));
+ for (var v of [false, true, 0, 1, null, undefined, "", {}, dda]) out.push(booleans(v));
  return out.join("|");
 }
 run()`
-	const want = "121|211|212|212|212|212|211"
+	const want = "121|211|212|212|212|212|211|5|10|12|12|12|12|12|12|12"
 	for _, native := range []bool{false, regNativeOn} {
 		was := SetRegNative(native)
 		r := New(Config{})

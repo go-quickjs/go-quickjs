@@ -127,6 +127,8 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			ok = reg(a) && reg(b) && reg(uint16(w.X())) && site(c) && pc < len(rc.Aux) && virtual(rc.Aux[pc])
 		case bytecode.RJTypeof:
 			ok = reg(a) && w.X()&^bytecode.RCmpTrue < 8 && in(pc, int64(w.SC()))
+		case bytecode.RJBool:
+			ok = reg(a) && b == 0 && w.X()&^(bytecode.RCmpTrue|1) == 0 && in(pc, int64(w.SC()))
 		case bytecode.RSwitch, bytecode.RSwitchTypeof:
 			ok = reg(a) && int(w.BC()) < len(rc.Switches)
 			if ok {

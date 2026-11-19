@@ -73,7 +73,7 @@ func (g *gen) soleLocals() uint64 {
 			bytecode.RJGe, bytecode.RJNGe, bytecode.RJEq, bytecode.RJNe, bytecode.RJSEq, bytecode.RJSNe,
 			bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,
 			bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
-			bytecode.RAppend, bytecode.RStrFreeze, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
+			bytecode.RJBool, bytecode.RAppend, bytecode.RStrFreeze, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
 			// An operand, read to make a value of the operator's own; an
 			// append's, whose string is its binding's; str_freeze's,
 			// which leaves the value where it is.
@@ -150,7 +150,7 @@ func soleOp(w bytecode.RInstr) bool {
 		bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
 		bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI,
 		bytecode.RGetGlobal, bytecode.RSetGlobal, bytecode.RGetMethodW, bytecode.RCallW, bytecode.RCallMW,
-		bytecode.RRet, bytecode.RRetUndef, bytecode.RStrFreeze, bytecode.RAppend:
+		bytecode.RJBool, bytecode.RRet, bytecode.RRetUndef, bytecode.RStrFreeze, bytecode.RAppend:
 		return true
 	}
 	return false

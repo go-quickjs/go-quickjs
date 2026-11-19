@@ -56,6 +56,8 @@ func TestRegisterBackendCode(t *testing.T) {
 		function instanceLoop(o, C, f) { do { o = f(o) } while (o instanceof C) }
 		function instanceValue(o, C) { return o instanceof C }
 		function instanceAssign(o, C) { var b; if (b = o instanceof C) return b; return b }
+		function booleanBranch(x) { return (x === false ? 1 : 0) + (true === x ? 2 : 0) + (x !== true ? 4 : 0) + (false !== x ? 8 : 0) }
+		function booleanLoose(x) { return x == false ? 1 : 0 }
 		function initBoth(p) { var a; if (p) a = 1; else a = 2; return a }
 		function initSome(p) { var a, b; if (p) a = 1; b = 2; return a }
 		function initLoop(n) { var i, a; for (i = 0; i < n; i++) a = i; return a }
@@ -118,6 +120,22 @@ func TestRegisterBackendCode(t *testing.T) {
 	has("post", "post_inc")
 	has("post", "get_index_post")
 	has("cap", "closure_w")
+	bools := fns["booleanBranch"].RegCode()
+	seen := map[uint8]bool{}
+	for _, w := range bools.Code {
+		if w.Op() == bytecode.RJBool {
+			seen[w.X()] = true
+		}
+		if w.Op() == bytecode.RLoadTrue || w.Op() == bytecode.RLoadFalse {
+			t.Errorf("a boolean branch loads its literal:\n%s", bools)
+		}
+	}
+	if len(seen) != 4 {
+		t.Errorf("boolean branches have flags %v, want both literals and polarities:\n%s", seen, bools)
+	}
+	if code := fns["booleanLoose"].RegCode().String(); strings.Contains(code, "jbool") {
+		t.Errorf("a loose comparison became strict:\n%s", code)
+	}
 	for _, name := range []string{"chain", "chainSelf"} {
 		has(name, "get_prop_next")
 		code := fns[name].RegCode().Code

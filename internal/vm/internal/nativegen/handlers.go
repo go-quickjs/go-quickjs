@@ -71,6 +71,7 @@ var handlerOps = []bytecode.ROp{
 	bytecode.RIterClose, bytecode.RIterStep,
 	bytecode.RGetPropNext,
 	bytecode.RInstanceOfNext,
+	bytecode.RJBool,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

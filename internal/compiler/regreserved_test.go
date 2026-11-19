@@ -121,6 +121,28 @@ func TestVerifyReservedOps(t *testing.T) {
 		ok("instanceof without partner", f, withCode(rc, rc.Code[:pc+1], rc.Aux), false)
 	}
 
+	f = regFunctions(t, `function test(v) { return v === false ? 1 : 2 }`)["test"]
+	rc = f.RegCode()
+	for pc, w := range rc.Code {
+		if w.Op() != bytecode.RJBool {
+			continue
+		}
+		for _, x := range []uint8{0, 1, bytecode.RCmpTrue, bytecode.RCmpTrue | 1, 2, 0x40} {
+			code := append([]bytecode.RInstr(nil), rc.Code...)
+			code[pc] = bytecode.MakeR(bytecode.RJBool, x, w.A(), 0, 0).WithSC(w.SC())
+			ok("boolean flags", f, withCode(rc, code, rc.Aux), x&^(bytecode.RCmpTrue|1) == 0)
+		}
+		for name, bad := range map[string]bytecode.RInstr{
+			"another operand": bytecode.MakeR(bytecode.RJBool, w.X(), w.A(), 1, 0).WithSC(w.SC()),
+			"bad register":    bytecode.MakeR(bytecode.RJBool, w.X(), uint16(rc.NumRegs), 0, 0).WithSC(w.SC()),
+			"bad target":      w.WithSC(int32(len(rc.Code))),
+		} {
+			code := append([]bytecode.RInstr(nil), rc.Code...)
+			code[pc] = bad
+			ok("boolean "+name, f, withCode(rc, code, rc.Aux), false)
+		}
+	}
+
 	// arith: mul r, x, y, and the operations of its form.
 	f = fns["arith"]
 	rc = f.RegCode()

@@ -1314,6 +1314,7 @@ func nativeEmit(v *variant) (*block, error) {
 		emit func()
 	}{
 		{bytecode.RInstanceOfNext, func() { g.instanceOfMode(true) }},
+		{bytecode.RJBool, g.jBool},
 	} {
 		n := len(g.last)
 		h(x.op, x.emit)

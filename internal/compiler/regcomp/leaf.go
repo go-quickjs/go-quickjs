@@ -169,7 +169,7 @@ func pureBody(fn *bytecode.Function, rc *bytecode.RegCode) {
 			bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,
 			bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
 			bytecode.RJNull, bytecode.RJNotNull, bytecode.RJLtU, bytecode.RJNLtU, bytecode.RJLeU, bytecode.RJNLeU,
-			bytecode.RJTypeof:
+			bytecode.RJTypeof, bytecode.RJBool:
 			ok = forward(pc, w.SC())
 		default:
 			ok = false
@@ -190,7 +190,7 @@ func pureSafe(w bytecode.RInstr) bool {
 	case bytecode.RMove, bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull,
 		bytecode.RLoadTrue, bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RTypeof,
 		bytecode.RRet, bytecode.RRetUndef, bytecode.RJmp, bytecode.RJmpF, bytecode.RJmpT,
-		bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJTypeof,
+		bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJTypeof, bytecode.RJBool,
 		bytecode.RSwitch, bytecode.RSwitchTypeof:
 		return true
 	case bytecode.RUnary:

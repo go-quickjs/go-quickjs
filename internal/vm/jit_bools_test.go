@@ -28,6 +28,11 @@ function calls(n) {
 	for (var i = 0; i < n; i++) s = (s + (table[i & 3](i) | 0)) | 0
 	return s
 }
+function strict(x, n) {
+	var s = 0;
+	for (var i = 0; i < n; i++) s += (x === false ? 1 : 0) + (true === x ? 2 : 0) + (x !== true ? 4 : 0) + (false !== x ? 8 : 0);
+	return s;
+}
 `
 
 // TestJITRegBoolsNoDeopt runs regBoolsSrc's functions natively and without
@@ -80,6 +85,57 @@ func TestJITRegBoolsNoDeopt(t *testing.T) {
 			// it (jitRegCallRepeats); its guards never fail.
 			if st := r.RegNativeStats(); st.Guards != 0 {
 				t.Errorf("calls: %d guards failed; want none", st.Guards)
+			}
+			for _, c := range []struct {
+				value Value
+				want  string
+			}{{False, "5000"}, {True, "10000"}, {Int(0), "12000"}, {Int(1), "12000"}, {Null, "12000"}, {Undefined, "12000"}} {
+				for range 30 {
+					for _, rt := range rts {
+						fn, _ := rt.GetProp(Obj(rt.Global()), rt.Intern("strict"))
+						v, err := rt.Call(fn, Undefined, []Value{c.value, Int(1000)})
+						if got := regNativeShow(rt, v, err); got != c.want {
+							t.Fatalf("strict(%v): got %s, want %s", c.value, got, c.want)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestJITRegBoolLiterals runs boolLiteralSrc compiled by the JIT, the
+// collector idle and marking, with Node's answers: jbool lowered as a
+// strict comparison with the literal (compile's LowerReg), on both sides
+// and both senses, its back edges in loop among them.
+func TestJITRegBoolLiterals(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			rts := regNativeRuntimes(t, boolLiteralSrc)
+			for _, r := range rts {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern("run"))
+				for range 3 {
+					v, err := r.Call(fn, Undefined, nil)
+					if got := regNativeShow(r, v, err); got != boolLiteralWant {
+						t.Fatalf("JIT %v:\n%s\nwant\n%s", r.jitEnabled, got, boolLiteralWant)
+					}
+				}
+			}
+			r := rts[0]
+			for _, name := range []string{"strict", "loop"} {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
+				if e := fn.Object().fn().closure.closureCode.jitReg; e == nil || e.code == nil {
+					t.Errorf("%s not compiled", name)
+				}
+			}
+			if st := r.RegNativeStats(); st.Entries == 0 {
+				t.Errorf("no native code entered: %+v", st)
 			}
 		})
 	}

@@ -2848,7 +2848,24 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 		}
 	case *ast.Binary:
 		if n.Op == "===" || n.Op == "!==" {
-			other := n.Left
+			other, literal := n.Left, n.Right
+			if _, ok := n.Left.(*ast.BoolLit); ok {
+				other, literal = n.Right, n.Left
+			}
+			if b, ok := literal.(*ast.BoolLit); ok {
+				a := g.expr(other, -1)
+				var x uint8
+				if b.Value {
+					x = 1
+				}
+				if (n.Op == "===") == when {
+					x |= bytecode.RCmpTrue
+				}
+				g.at(n.Start)
+				g.jump(bytecode.MakeR(bytecode.RJBool, x, r16(a), 0, 0), target, true)
+				return
+			}
+			other = n.Left
 			_, rightNull := n.Right.(*ast.NullLit)
 			_, leftNull := n.Left.(*ast.NullLit)
 			if leftNull {
