@@ -27,6 +27,7 @@ type nativeCtx struct {
 	ic      uintptr
 	budget  int64
 	objBits uint64
+	// On amd64, the low bit caches the barrier flag between Go calls.
 	tagBase uint64
 	one     float64
 	nan     uint64

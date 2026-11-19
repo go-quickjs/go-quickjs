@@ -42,6 +42,10 @@ import (
 //	R11  the back-edge budget             R10  tagBase, the tags' least
 //	RDI  the context (nativeCtx)
 //
+// R10's low bit caches the barrier flag; its other low 32 bits are zero.
+// All valid tags lie at or above tagBase+1, and numbers below tagBase.
+// Exact tag tests ignore the low payload bits.
+//
 // and, in a handler, RAX the instruction word, RCX, RDX, RSI, R8, R9,
 // X0, X1 and X3 its scratch. On arm64 (nativegen's arm64.go):
 //
@@ -50,8 +54,9 @@ import (
 //	R23  the back-edge budget             R24  tagBase, the tags' least
 //	R25  the context (nativeCtx)
 //
-// and R0 the instruction word, R1 to R7, R16, R17 and D0 to D3 a
-// handler's scratch; R30 holds the return to nativeRun throughout. A
+// and R0 the instruction word, R1 to R6, R16, R17 and D0 to D3 a
+// handler's scratch; R7 pins the barrier flag until the next Go return,
+// and R30 holds the return to nativeRun throughout. A
 // pointer word is stored plainly while the
 // collector does not mark and by the barrier's routine (nativeStoreRef)
 // while it does: the same work marking or not but the barrier's, and no

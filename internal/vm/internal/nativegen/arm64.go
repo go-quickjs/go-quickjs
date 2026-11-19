@@ -13,7 +13,8 @@ import (
 //   - The pinned registers: rIP the instruction's address, rRegs the
 //     frame's registers, rTab the native table, rIC the closure's caches,
 //     rBud the back-edge budget, rTag the least tag and rCtx the context;
-//     rW holds the instruction word, as RAX does.
+//     rWB the barrier flag read at the last Go return; rW holds the
+//     instruction word, as RAX does.
 //   - An operand is decoded to its register's address (regA, regB, regC),
 //     not to its offset in the window: arm64 has no base-plus-index
 //     addressing with a displacement.
@@ -40,6 +41,7 @@ const (
 	r8    Reg = 4  // R8
 	r9    Reg = 5  // R9
 	rT    Reg = 6  // the helpers' temporary
+	rWB   Reg = 7  // the barrier flag at the last resume from Go
 	rJ    Reg = 16 // a jump's address; ptrStore's way back
 	rK    Reg = 17 // a jump's address; an exclusive store's status
 	rIP   Reg = 19 // amd64's RBX
@@ -95,6 +97,8 @@ type armGen struct {
 	last []func()
 	// end is amd64's, after the numbered exits.
 	end []func()
+	// reloads follows the existing helpers, preserving their offsets too.
+	reloads []func()
 	// initL and initMade are amd64's.
 	initL    Label
 	initMade bool
@@ -446,9 +450,7 @@ func (g *armGen) storeValue() {
 	a := g.a
 	barrier, cont := a.NewLabel(), a.NewLabel()
 	a.Store(rW, 0, r9)
-	a.Load(rS, rCtx, ncWB)
-	a.LoadU8(rS, rS, 0)
-	a.Cbnz(rS, barrier, false)
+	g.wbTest(barrier)
 	a.Store(rW, 8, r8)
 	g.next()
 	a.Bind(barrier)
@@ -1492,9 +1494,7 @@ func (g *armGen) typedBigWrite(obj, idx Reg) {
 func (g *armGen) ptrStore() {
 	a := g.a
 	barrier, cont, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	a.Load(rS, rCtx, ncWB)
-	a.LoadU8(rS, rS, 0)
-	a.Cbnz(rS, barrier, false)
+	g.wbTest(barrier)
 	a.Store(rW, 0, rC)
 	a.B(done)
 	a.Bind(barrier)
@@ -1508,10 +1508,32 @@ func (g *armGen) ptrStore() {
 	a.Bind(done)
 }
 
-// reload puts the pinned registers back from the context.
-func (g *armGen) reload() {
+// wbTest uses the flag read at the last resume from Go. Native code has no
+// safe point, so the collector cannot enable its barrier until Go is entered
+// again. Keep the two replaced loads' space so later native code stays put.
+func (g *armGen) wbTest(marking Label) {
+	g.a.Data([]byte{0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5})
+	g.a.Cbnz(rWB, marking, false)
+}
+
+// reload puts the pinned registers back from the context. The native
+// entry reads the barrier flag; a Go trampoline refreshes it on return.
+func (g *armGen) reload(entry ...bool) {
 	a := g.a
-	a.Load(rIP, rCtx, ncIP)
+	if len(entry) != 0 && entry[0] {
+		read, resume := a.NewLabel(), a.NewLabel()
+		a.B(read)
+		a.Bind(resume)
+		g.reloads = append(g.reloads, func() {
+			a.Bind(read)
+			a.Load(rWB, rCtx, ncWB)
+			a.LoadU8(rWB, rWB, 0)
+			a.Load(rIP, rCtx, ncIP)
+			a.B(resume)
+		})
+	} else {
+		a.Load(rIP, rCtx, ncIP)
+	}
 	a.Load(rRegs, rCtx, ncRegs)
 	a.Load(rTab, rCtx, ncTable)
 	a.Load(rIC, rCtx, ncIC)

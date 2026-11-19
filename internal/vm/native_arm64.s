@@ -19,20 +19,20 @@ TEXT ·nativeEnter(SB), NOSPLIT|NOFRAME, $0-16
 
 // nativeStoreRef stores the pointer in R1 at the slot in R0 by
 // nativeStoreRefGo, with the write barrier, and goes on at R16, the
-// context in R25 kept.
+// context in R25 kept and the barrier flag in R7 refreshed.
 TEXT ·nativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
 	SUB $48, RSP
 	NO_LOCAL_POINTERS
 	MOVD R30, 0(RSP)
-	MOVD R0, 8(RSP)
-	MOVD R1, 16(RSP)
-	MOVD R25, 24(RSP)
-	MOVD R16, 32(RSP)
+	STP (R0, R1), 8(RSP)
+	STP (R25, R16), 24(RSP)
 	BL ·nativeStoreRefGo(SB)
 	MOVD 32(RSP), R16
 	MOVD 24(RSP), R25
 	MOVD 0(RSP), R30
 	ADD $48, RSP
+	MOVD nativeCtx_wb(R25), R7
+	MOVBU (R7), R7
 	JMP (R16)
 
 TEXT ·nativeStoreRefAddr(SB), NOSPLIT, $0-8
@@ -55,7 +55,7 @@ TEXT ·nativeTableAddr(SB), NOSPLIT, $0-8
 // convention (ABIInternal), the context in R25. The handler's arguments'
 // spill room is 8(RSP) to 40(RSP), the context is kept at 48(RSP), and
 // 56(RSP) is left alone (above). It goes on at the context's after, the
-// result in R0 and the context in R25.
+// result in R0, the context in R25 and the refreshed barrier flag in R7.
 TEXT ·nativeCallH(SB), NOSPLIT|NOFRAME, $0-0
 	SUB $64, RSP
 	NO_LOCAL_POINTERS
@@ -66,6 +66,8 @@ TEXT ·nativeCallH(SB), NOSPLIT|NOFRAME, $0-0
 	MOVD 48(RSP), R25
 	MOVD 0(RSP), R30
 	ADD $64, RSP
+	MOVD nativeCtx_wb(R25), R7
+	MOVBU (R7), R7
 	MOVD nativeCtx_after(R25), R16
 	JMP (R16)
 

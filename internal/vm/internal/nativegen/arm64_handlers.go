@@ -56,7 +56,7 @@ func armEmit(v *variant) (*block, error) {
 	if v == plain {
 		// The entry, at the code's start: the pinned registers from the
 		// context, and the first dispatch.
-		g.reload()
+		g.reload(true)
 		g.dispatch()
 		g.exitStub()
 	}
@@ -1136,6 +1136,9 @@ func armEmit(v *variant) (*block, error) {
 		a.B(g.exit)
 	}
 	for _, emit := range g.end {
+		emit()
+	}
+	for _, emit := range g.reloads {
 		emit()
 	}
 	if len(missing) > 0 {

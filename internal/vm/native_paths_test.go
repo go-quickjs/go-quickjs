@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -418,7 +419,8 @@ func nativeZeroed(n int) bool {
 // memory, and what it returns is where the code goes on; its stack walks
 // through nativeCallH to nativeRun, and a collection while it runs scans
 // that stack. A toolchain whose convention differs fails it, and the
-// native handlers then need their trampoline changed.
+// native handlers then need their trampoline changed. The flag read for
+// marking alternates at Go returns, so a pinned copy must be refreshed.
 func TestRegNativeCallHConvention(t *testing.T) {
 	op := bytecode.RNewArray
 	if nativePlain.has[op] {
@@ -429,8 +431,9 @@ func TestRegNativeCallHConvention(t *testing.T) {
 	// the operation's Go handler.
 	orig := nativeExitTable[op]
 	defer func() { nativeExitTable[op] = orig }()
-	var calls, viaCallH int
+	var calls, viaCallH, refreshed int
 	var bad []string
+	marking := uint8(1)
 	nativeExitTable[op] = func(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 		calls++
 		pcs := make([]uintptr, 16)
@@ -478,15 +481,36 @@ func TestRegNativeCallHConvention(t *testing.T) {
 			// A collection scans the stack through nativeCallH's frame.
 			runtime.GC()
 		}
-		return orig(regs, w, pc, st)
+		if runtime.GOARCH == "amd64" && st.native != nil && st.native.wb == uintptr(unsafe.Pointer(&marking)) {
+			refreshed++
+			if st.native.tagBase&1 == 0 {
+				bad = append(bad, "the pinned barrier bit was not refreshed")
+			}
+		}
+		next := orig(regs, w, pc, st)
+		if st.native != nil {
+			// A real flag changes only at a safe point, while Go runs.
+			st.native.wb = uintptr(unsafe.Pointer(&nativeWB.enabled))
+			if calls%2 == 1 {
+				st.native.wb = uintptr(unsafe.Pointer(&marking))
+			}
+		}
+		return next
 	}
 	src := `function f(n) { var s = 0; for (var i = 0; i < n; i++) { var o = [i, 1]; s += o[0] + o[1] } return s }
-		String(f(200)) + " " + String((function (k) { return [k] })(7)[0])`
-	if got := nativeRunSrc(t, src, true); got != "20100 7" {
-		t.Errorf("got %q, want %q", got, "20100 7")
+		var keep = [];
+		function refs(n) { for (var i = 0; i < n; i++) { var a = [{x: i}, "s" + i]; keep.push(a) } }
+		refs(200);
+		String(f(200)) + " " + String((function (k) { return [k] })(7)[0]) + " " +
+		keep[0][0].x + ":" + keep[0][1] + " " + keep[199][0].x + ":" + keep[199][1]`
+	if got := nativeRunSrc(t, src, true); got != "20100 7 0:s0 199:s199" {
+		t.Errorf("got %q, want %q", got, "20100 7 0:s0 199:s199")
 	}
 	if calls == 0 || viaCallH == 0 {
 		t.Fatalf("%d calls of the handler, %d through nativeCallH: the test reached no exit's call", calls, viaCallH)
+	}
+	if runtime.GOARCH == "amd64" && refreshed == 0 {
+		t.Error("no return from Go refreshed the pinned barrier bit")
 	}
 	if len(bad) > 0 {
 		t.Fatalf("nativeCallH's convention does not hold on this toolchain (%d of %d calls): %s", len(bad), calls, strings.Join(bad, "; "))

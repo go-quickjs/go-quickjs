@@ -186,10 +186,7 @@ func (g *nativeGen) bigCmpU() {
 func (g *nativeGen) nullish(x Reg, yes Label) {
 	a := g.a
 	no := a.NewLabel()
-	a.MovRR(RCX, x)
-	a.ShiftImm(Shr, RCX, 16, true)
-	a.ShiftImm(Shl, RCX, 16, true)
-	a.Op(Cmp, RCX, R10, true)
+	g.tagTest(x)
 	a.Jcc(CondNE, no)
 	a.MovZX8(RCX, x)
 	a.OpImm(Cmp, RCX, int32(KindNull), false)
@@ -332,10 +329,7 @@ func (g *nativeGen) storeValue() {
 	a := g.a
 	barrier, cont := a.NewLabel(), a.NewLabel()
 	a.Store(RAX, 0, R9)
-	a.Load(RSI, RDI, ncWB)
-	a.LoadU8(RSI, RSI, 0)
-	a.Op(Test, RSI, RSI, false)
-	a.Jcc(CondNE, barrier)
+	g.wbTest(barrier, RSI)
 	a.Store(RAX, 8, R8)
 	g.next()
 	a.Bind(barrier)
@@ -1532,10 +1526,7 @@ func (g *nativeGen) typedBigWrite(obj, idx Reg) {
 func (g *nativeGen) ptrStore() {
 	a := g.a
 	barrier, cont := a.NewLabel(), a.NewLabel()
-	a.Load(RSI, RDI, ncWB)
-	a.LoadU8(RSI, RSI, 0)
-	a.Op(Test, RSI, RSI, false)
-	a.Jcc(CondNE, barrier)
+	g.wbTest(barrier, RSI)
 	a.Store(RAX, 0, RCX)
 	done := a.NewLabel()
 	a.Jmp(done)
@@ -1547,6 +1538,29 @@ func (g *nativeGen) ptrStore() {
 	a.Bind(cont)
 	g.reload()
 	a.Bind(done)
+}
+
+// wbTest reads the flag in R10's low bit. Its other low 32 bits are zero.
+// Keep the replaced loads' space so later native code stays put.
+func (g *nativeGen) wbTest(marking Label, scratch Reg) {
+	if ncWB > 127 {
+		g.a.Nop(3)
+	}
+	g.a.Nop(5)
+	g.a.MovRR32(scratch, R10)
+	g.a.Op(Test, scratch, scratch, false)
+	g.a.Jcc(CondNE, marking)
+}
+
+// tagTest sets ZF for a tag with no payload above bit 15, ignoring the
+// barrier flag in R10's low bit. Keep the former shift/compare's size,
+// with a final test that can fuse with the caller's branch.
+func (g *nativeGen) tagTest(x Reg) {
+	g.a.MovRR(RCX, x)
+	g.a.Op(Xor, RCX, R10, true)
+	g.a.ShiftImm(Shr, RCX, 16, true)
+	g.a.Nop(1)
+	g.a.Op(Test, RCX, RCX, true)
 }
 
 // reload puts the pinned registers back from the context.

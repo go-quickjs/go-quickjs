@@ -256,9 +256,7 @@ func (g *armGen) initShortIdle(start, marking, done, slow Label) {
 	a := g.a
 	a.Bind(start)
 	a.LoadU8(r8, r9, off("initCache.need"))
-	a.Load(rW, rCtx, ncWB)
-	a.LoadU8(rW, rW, 0)
-	a.Cbnz(rW, marking, false)
+	g.wbTest(marking)
 	g.cmpMem(r8, rCtx, scr(sEnd))
 	a.BCond(HI, slow)
 	a.MovRR(rD, r9)

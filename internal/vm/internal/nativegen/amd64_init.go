@@ -309,10 +309,7 @@ func (g *nativeGen) initShortIdle(start, marking, done, slow Label) {
 	a := g.a
 	a.Bind(start)
 	a.LoadU8(R8, R9, off("initCache.need"))
-	a.Load(RAX, RDI, ncWB)
-	a.LoadU8(RAX, RAX, 0)
-	a.Op(Test, RAX, RAX, false)
-	a.Jcc(CondNE, marking)
+	g.wbTest(marking, RAX)
 	a.CmpMem(R8, RDI, scr(sEnd), true)
 	a.Jcc(CondA, slow)
 	a.MovRR(RDX, R9)

@@ -4,11 +4,16 @@
 
 // The native handlers' entry, and their store of a pointer with the write
 // barrier (native_run.go): the JIT's enterRaw and storeRef, the
-// package's own, so that the handlers need no JIT.
+// package's own, so that the handlers need no JIT. Every entry and return
+// from Go refreshes the barrier flag in the tag threshold's low byte,
+// which the handlers reload into R10. R14 keeps Go's goroutine pointer.
 
 TEXT ·nativeEnter(SB), NOSPLIT|NOFRAME, $0-16
 	MOVQ code+0(FP), AX
 	MOVQ ctx+8(FP), DI
+	MOVQ nativeCtx_wb(DI), R10
+	MOVBLZX (R10), R10
+	MOVB R10, nativeCtx_tagBase(DI)
 	JMP AX
 
 TEXT ·nativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
@@ -22,6 +27,9 @@ TEXT ·nativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
 	MOVQ 16(SP), DI
 	MOVQ 24(SP), AX
 	ADJSP $-40
+	MOVQ nativeCtx_wb(DI), R10
+	MOVBLZX (R10), R10
+	MOVB R10, nativeCtx_tagBase(DI)
 	JMP AX
 
 TEXT ·nativeStoreRefAddr(SB), NOSPLIT, $0-8
@@ -56,6 +64,9 @@ TEXT ·nativeCallH(SB), NOSPLIT|NOFRAME, $0-0
 	CALL 0(DX)
 	MOVQ 32(SP), DI
 	ADJSP $-40
+	MOVQ nativeCtx_wb(DI), R10
+	MOVBLZX (R10), R10
+	MOVB R10, nativeCtx_tagBase(DI)
 	JMP nativeCtx_after(DI)
 
 TEXT ·nativeCallHAddr(SB), NOSPLIT, $0-8
