@@ -142,7 +142,10 @@ func (g *gen) taggedTemplate(n *ast.TaggedTemplate, dst int) int {
 // given the literal as its home object.
 func (g *gen) property(d int, p ast.Property) {
 	cold := func(sub bytecode.ROp, a, b, c int) {
-		g.emit(bytecode.MakeR(sub, 0, r16(a), r16(b), r16(c)))
+		at := g.emit(bytecode.MakeR(sub, 0, r16(a), r16(b), r16(c)))
+		if sub == bytecode.RDefineIndex {
+			g.keyedSite(at)
+		}
 	}
 	at := p.Start
 	if at == 0 {
@@ -601,7 +604,7 @@ func (g *gen) logicalAssign(n *ast.Assign, dst int) int {
 			short()
 			v := g.expr(n.Value, -1)
 			g.at(int(n.Start))
-			g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v)))
+			g.keyedSite(g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v))))
 			g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(d), r16(v), 0))
 			break
 		}

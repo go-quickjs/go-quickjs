@@ -173,6 +173,14 @@ func (r *Runtime) regDefineIndex(f *frame, rc *regCode, pc int, w bytecode.RInst
 	a := regs[w.A()]
 	b := regs[w.B()]
 	c := regs[w.C()]
+	if a.IsObject() && (b.IsString() || b.IsSymbol()) {
+		// By the site's cache (keyedDefine).
+		if e := regKeyedSite(rc, f.cl, pc); e != nil && e.fills < maxCacheFills {
+			if k := r.keyedAtom(b); !k.IsIndex() {
+				return r.keyedDefine(e, a.Object(), k, c)
+			}
+		}
+	}
 	k, err := r.toPropertyKey(b)
 	if err != nil {
 		return err

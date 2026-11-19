@@ -123,7 +123,7 @@ func (g *gen) storeRef(l leaf, v int, declaring bool) {
 	if m := l.member; m != nil {
 		g.at(int(m.Start))
 		if m.Computed {
-			g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(l.obj), r16(l.key), r16(v)))
+			g.keyedSite(g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(l.obj), r16(l.key), r16(v))))
 			return
 		}
 		name := memberName(m)

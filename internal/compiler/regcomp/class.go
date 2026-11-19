@@ -496,7 +496,7 @@ func (g *gen) fieldInit(n *ast.FieldInit) {
 		g.expr(&ast.StringLit{Value: keyName(n.Key)}, k)
 		v := g.expr(n.Value, -1)
 		g.at(n.Start)
-		g.cold(bytecode.RDefineIndex, this, k, v)
+		g.keyedSite(g.cold(bytecode.RDefineIndex, this, k, v))
 		return
 	}
 	g.into(n.Key, k)
@@ -510,7 +510,7 @@ func (g *gen) fieldInit(n *ast.FieldInit) {
 		g.cold(bytecode.RSetFuncName, v, k, 0)
 	}
 	g.at(n.Start)
-	g.cold(bytecode.RDefineIndex, this, k, v)
+	g.keyedSite(g.cold(bytecode.RDefineIndex, this, k, v))
 }
 
 // installPrivate compiles the installation of the class's private methods

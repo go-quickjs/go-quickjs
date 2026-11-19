@@ -690,9 +690,14 @@ func rhSetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 	return ^pc
 }
 
-// rsSetIndex is set_index's slow path: an append or a typed array's
-// element (regSetMiss), and otherwise the store setIndexed makes.
+// rsSetIndex is set_index's slow path: a key that is a string or a
+// symbol by the site's keyed store cache (rsSetIndexKeyed); an append or
+// a typed array's element (regSetMiss), and otherwise the store
+// setIndexed makes.
 func rsSetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+	if key := regs[w.B()]; key.IsString() || key.IsSymbol() {
+		return rsSetIndexKeyed(regs, w, pc, st)
+	}
 	r := st.r
 	st.kept.pc = pc + 1
 	if r.regSetMiss(st.c, &st.kept, regs) {

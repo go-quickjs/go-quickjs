@@ -91,7 +91,9 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			ok = reg(a) && reg(b) && site(c)
 		case bytecode.RDefineField:
 			ok = reg(a) && reg(b) && nameOK(rc, fn, pc, c)
-		case bytecode.RGetIndex, bytecode.RSetIndex, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
+		case bytecode.RSetIndex:
+			ok = reg(a) && reg(b) && reg(c) && keyedSiteOK(rc, fn, pc)
+		case bytecode.RGetIndex, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
 			bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
 			ok = reg(a) && reg(b) && reg(c)
 		case bytecode.RGetIndexPre, bytecode.RGetIndexPost:
@@ -356,8 +358,10 @@ func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RIns
 		return reg(a) && reg(b)
 	case bytecode.RDefineGetter, bytecode.RDefineSetter:
 		return reg(a) && reg(b) && nameOK(rc, fn, pc, w.C())
-	case bytecode.RDefineGetterIndex, bytecode.RDefineSetterIndex, bytecode.RDefineIndex:
+	case bytecode.RDefineGetterIndex, bytecode.RDefineSetterIndex:
 		return reg(a) && reg(b) && reg(w.C())
+	case bytecode.RDefineIndex:
+		return reg(a) && reg(b) && reg(w.C()) && keyedSiteOK(rc, fn, pc)
 	case bytecode.RAssignConst, bytecode.RThrowRef:
 		return nameOK(rc, fn, pc, b)
 	case bytecode.RDebug:
@@ -442,4 +446,10 @@ func suspendOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.R
 		return fn.Async && reg(a)
 	}
 	return false
+}
+
+// keyedSiteOK reports whether the keyed store at pc, a set_index or a
+// define_index, has its cache site in its Aux (gen.keyedSite).
+func keyedSiteOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int) bool {
+	return pc < len(rc.Aux) && rc.Aux[pc] != 0 && int(rc.Aux[pc]) <= int(fn.PropSites)
 }

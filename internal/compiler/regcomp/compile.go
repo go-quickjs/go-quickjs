@@ -3185,7 +3185,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 				}
 				v := g.expr(n.Value, into)
 				g.at(int(n.Start))
-				g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v)))
+				g.keyedSite(g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v))))
 				return g.place(v, dst)
 			}
 			name := memberName(t)
@@ -3254,7 +3254,7 @@ func (g *gen) assign(n *ast.Assign, dst int, keep bool) int {
 		v := g.operate(text, op, nil, n.Value, cur, cur, int(n.Start))
 		g.at(int(n.Start))
 		if t.Computed {
-			g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v)))
+			g.keyedSite(g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v))))
 		} else {
 			g.emit(bytecode.MakeR(bytecode.RSetProp, 0, r16(o), r16(v), g.propSite(bytecode.OpSetProp, name)))
 		}
@@ -3520,7 +3520,7 @@ func (g *gen) update(n *ast.Update, keep bool, dst int) int {
 			g.emit(bytecode.MakeR(bytecode.RGetIndex, 0, r16(cur), r16(o), r16(k)))
 			return g.stepped(n, cur, step, keep, dst, func(v int) {
 				g.at(n.Start)
-				g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v)))
+				g.keyedSite(g.emit(bytecode.MakeR(bytecode.RSetIndex, 0, r16(o), r16(k), r16(v))))
 			})
 		}
 		s := memberName(t)
@@ -4250,6 +4250,15 @@ func (g *gen) debugMark(pos int) {
 		b = 1
 	}
 	g.aux(g.cold(bytecode.RDebug, 0, b, 0), m.Index)
+}
+
+// keyedSite gives the keyed store at pc, a set_index or a define_index, a
+// cache site of its own, its Aux: the VM's keyed store cache, which
+// remembers for the pairs of an object's shape and a key the store met
+// where the value went -- a slot the object has, or the transition that
+// adds it.
+func (g *gen) keyedSite(pc int) {
+	g.aux(pc, uint32(g.site(0)))
 }
 
 func (g *gen) aux(pc int, v uint32) {
