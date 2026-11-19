@@ -68,7 +68,15 @@
 # and the files after it, vm_property.go's and vm_shape.go's property
 # definitions among them, which the constructors' rewrite had moved 608
 # bytes: async_call was 9%, array_hole_length_decr 5% and object_computed
-# 5 to 7% slower at every placement or nearly.
+# 5 to 7% slower at every placement or nearly. CZ holds the generics
+# laid out after the native handlers' block, which the block's growth
+# moves -- appendGrown, an array's growth by push, among them -- at
+# 41a137be's layout: the fused branches' and the store probe's handlers
+# grew the block by 967 bytes, and array_push_args5_single was 7%
+# slower with the JIT at every placement, the push rows at most. Z,
+# after every file, holds the closures of the named functions, the
+# first of them init.func1, at 41a137be's layout: CZ's pad, which the
+# last file's init calls, would move them 32 bytes.
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -92,8 +100,10 @@ anchor K  0x00000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
 anchor O  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x004e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x00f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00a40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
@@ -119,8 +129,10 @@ anchor K  0x00000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
 anchor O  0x005c0 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x009c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00aa0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00460 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x00680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x000 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
@@ -146,8 +158,10 @@ anchor K  0x00240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
 anchor O  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00d20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x009a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x000 runtime.gcController
@@ -173,8 +187,10 @@ anchor K  0x00ec0 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
 anchor O  0x00480 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
 anchor R  0x00880 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
 anchor S  0x00960 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00320 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x009e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor H  0x00f20 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00de0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x030 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
