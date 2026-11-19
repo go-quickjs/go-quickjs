@@ -584,7 +584,7 @@ func regTypedRead(r *Runtime, o *Object, k float64) (float64, bool) {
 // rsGetIndex is get_index's slow path: a miss path's element (regElemMiss),
 // a key string the runtime handed out -- a for-in's -- read by
 // stringKeyRead, a[k] in for (k in a) an element by
-// the key's index, and the read as the stack form makes it otherwise.
+// the key's index, and otherwise the read getIndexed makes.
 func rsGetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.kept.pc = pc + 1
 	r := st.r
@@ -622,8 +622,8 @@ func rhGetIndexPre(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState
 	return ^pc
 }
 
-// rsGetIndexPre is x[++i]'s slow path: the step, then the read, each as the
-// stack form makes it.
+// rsGetIndexPre is x[++i]'s slow path: the step (regStep), then the read
+// (getIndexed).
 func rsGetIndexPre(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	r := st.r
 	st.at(pc)
@@ -656,8 +656,8 @@ func rhGetIndexPost(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 	return ^pc
 }
 
-// rsGetIndexPost is x[i++]'s slow path: the step, its old value the key,
-// then the read, as the stack form makes them.
+// rsGetIndexPost is x[i++]'s slow path: the step (regStep), its old value
+// the key, then the read (getIndexed).
 func rsGetIndexPost(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	r := st.r
 	st.at(pc)
@@ -691,7 +691,7 @@ func rhSetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 }
 
 // rsSetIndex is set_index's slow path: an append or a typed array's
-// element (regSetMiss), and the store as the stack form makes it.
+// element (regSetMiss), and otherwise the store setIndexed makes.
 func rsSetIndex(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	r := st.r
 	st.kept.pc = pc + 1

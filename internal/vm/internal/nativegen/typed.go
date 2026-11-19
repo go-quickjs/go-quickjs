@@ -48,18 +48,3 @@ func loadTypedOffsets() {
 	ncHeapLen = off("nativeTypedCtx.heapLen")
 	offRCFloats = off("regTypedCode.floats")
 }
-
-// typedBlock is the typed variant's own block of code, its handlers at
-// at.
-func typedBlock(v *variant, code []byte, at map[bytecode.ROp]int) *block {
-	if at == nil {
-		at = map[bytecode.ROp]int{}
-	}
-	b := &block{at: at, code: code}
-	for _, op := range handlerOps {
-		if _, ok := at[op]; ok && v.has(op) {
-			b.order = append(b.order, op)
-		}
-	}
-	return b
-}

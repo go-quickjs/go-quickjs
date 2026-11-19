@@ -4,7 +4,6 @@ import (
 	"errors"
 	"runtime"
 	"sync"
-	"unsafe"
 	"weak"
 )
 
@@ -73,28 +72,6 @@ func (w weakTarget) get() (Value, bool) {
 		return Obj(o), true
 	}
 	return Undefined, false
-}
-
-// is reports whether the target is still there and is v.
-func (w weakTarget) is(v Value) bool {
-	if w.isSymbol {
-		return v.IsSymbol() && w.sym.Value() == v.Symbol()
-	}
-	return w.set && v.IsObject() && w.obj.Value() == v.Object()
-}
-
-// pointer is the target while it is there, or nil.
-func (w weakTarget) pointer() unsafe.Pointer {
-	if w.isSymbol {
-		return unsafe.Pointer(w.sym.Value())
-	}
-	return unsafe.Pointer(w.obj.Value())
-}
-
-// alive reports whether the target is still there.
-func (w weakTarget) alive() bool {
-	_, ok := w.get()
-	return ok
 }
 
 // keepDuringJob holds a value strongly until the next time the job queue

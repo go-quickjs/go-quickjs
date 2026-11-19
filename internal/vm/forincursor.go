@@ -30,8 +30,7 @@ package vm
 //
 // A cursor made done, of null or undefined, is not kept: it is done before
 // its loop's first step, which a statement's debugger pause may come ahead
-// of. One whose loop was left by a throw, or by a break in the stack form,
-// is not done, and is the collector's; the next cursor takes its place.
+// of. One whose loop was left by a throw is not done, and is the collector's; the next cursor takes its place.
 //
 // The cursor holds the object its loop walked, so the runtime lets it go
 // each time the collector has run and when its turn ends

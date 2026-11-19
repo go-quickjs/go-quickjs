@@ -603,12 +603,8 @@ func located(err error, format string, args ...any) error {
 	return fmt.Errorf(format+": %w", append(args, err)...)
 }
 
-// toNatural converts a value to the Go form a *any destination receives.
-func toNatural(rt *vm.Runtime, val vm.Value) (any, error) {
-	return naturalAt(rt, val, 0)
-}
-
-// naturalAt is toNatural of a value depth levels down.
+// naturalAt converts a value depth levels down to the Go form a *any
+// destination receives.
 func naturalAt(rt *vm.Runtime, val vm.Value, depth int) (any, error) {
 	if depth > maxConvertDepth {
 		return nil, errConvertDepth

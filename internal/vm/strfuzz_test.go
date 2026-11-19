@@ -28,7 +28,6 @@ type strFuzz struct {
 	vars []string
 	// sloppy says the function may use with and eval.
 	sloppy bool
-	serial int
 }
 
 const strFuzzPrelude = `

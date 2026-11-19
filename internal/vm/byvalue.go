@@ -54,7 +54,7 @@ type arrowFuncObject3v struct {
 //
 // Register code's captured locals are its window's registers, caps the
 // register of each of tmpl's upvalues (bytecode.RegCode's Caps) and wb the
-// window's base; caps is nil for a frame of the stack form.
+// window's base; caps is nil where newClosureIn makes it.
 func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure, caps []uint16, wb int) *Object {
 	descs := tmpl.fn.Upvalues
 	arrow := tmpl.fn.Kind == bytecode.KindArrow

@@ -667,10 +667,6 @@ type jitEntry struct {
 	// whose code the cache let go of (regLetGo), whose next compile is one
 	// again of code dropped (jitState's recompiled).
 	regCounted, regFlushed bool
-	// inlinePending marks calls found to inline since the code was
-	// compiled (jitLearned's callSites), which it is compiled again for
-	// once the calls around them have been seen.
-	inlinePending bool
 	// inlineReopt marks code to be compiled again for the calls found to
 	// inline. upgradeReopts counts the times it was to inline a call it
 	// makes natively, its callee now inlining its own calls

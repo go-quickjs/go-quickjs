@@ -21,10 +21,9 @@ import "weak"
 // only until the next literal or until a collection has run
 // (arraySamplesLetGo), and weak after that: a long render can still teach its
 // final length without keeping its result alive. At a turn's end only the
-// counts remain, and acrossTurns, which says the room held at a turn's end.
-// Sampling starts on the
-// second execution: an array made by code loaded only once must not keep that
-// load's object graph until a sweep.
+// counts remain. Sampling starts on the second execution: an array made by
+// code loaded only once must not keep that load's object graph until a
+// sweep.
 //
 // Where it lives. A site's state is on the closureCode: a template's closures
 // in one realm of one runtime. Nothing is on the bytecode.Function, which
@@ -53,9 +52,6 @@ type arrayRoom struct {
 	listed bool
 	// wait is how many executions are left to skip before the next sample.
 	wait uint8
-	// acrossTurns says room was confirmed at a turn's end: what a result
-	// came to, not what a callback's growing array had reached.
-	acrossTurns bool
 	// pc is the literal's instruction, which names the site to native code:
 	// the site's ordinal does not, and an inlined callee has its own.
 	pc int32
@@ -69,7 +65,6 @@ func arrayObserve[_ any](s *arrayRoom, a *Object) {
 	}
 	if n < arrayRoomLeast {
 		s.room, s.previous, s.wait = 0, 0, arrayRoomPause
-		s.acrossTurns = false
 		return
 	}
 	s.room = min(n, s.previous)
@@ -110,7 +105,6 @@ func arraySamplesLetGo[_ any](r *Runtime) {
 			}
 			if a != nil {
 				arrayObserve[struct{}](s, a)
-				s.acrossTurns = s.room >= arrayRoomLeast
 			}
 		}
 		s.sample, s.weak, s.listed = nil, weak.Pointer[Object]{}, false

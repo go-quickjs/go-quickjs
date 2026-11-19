@@ -312,7 +312,7 @@ func TestJITGoEqual(t *testing.T) {
 		var vals = ['1', 1, 1n, '1.0', long, long2, long + 'x', true, 'true', null, undefined, 0, '', -0, NaN, 'NaN']
 		// Native work around each, as code has, which the profit check
 		// weighs Go's calls against: a function of Go's calls alone is
-		// judged slow on some machines, and left to the tree tier.
+		// judged slow on some machines, and left to the interpreter.
 		function eqs(a) { let n = 0, m = 0; for (const x of a) for (const y of a) { if (x == y) n++; if (x === y) m++; if (x != y) n += 2; for (let k = 0; k < 40; k++) n = (n * 7 + k) & 0xffff } return n + ':' + m }
 		var o = { valueOf() { return 1 } }
 		function objEq(a) { let n = 0; for (const x of a) if (x == o) n++; return n }

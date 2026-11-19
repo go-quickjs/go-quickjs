@@ -417,30 +417,17 @@ var typeNames = map[string]int{"number": ir.TypeNumber, "string": ir.TypeString,
 	"undefined": ir.TypeUndefined, "function": ir.TypeFunction, "object": ir.TypeObject, "symbol": ir.TypeSymbol,
 	"bigint": ir.TypeBigInt}
 
-// GoOperation reports whether op is one the new pipeline has Go make,
-// called from native code, where its operands are the top of the stack and
-// its one result replaces them: the VM's GoCall of an operation
-// (abi.GoCallOp), which makes it without a frame where that runs no script
-// -- an object's own data properties copied, a dense array's elements
-// spread, a key that is a primitive converted -- and with the code's frame
-// where it may run some, a getter, a proxy's trap, an iterator's next, a
-// key's toString, a call: object spread and rest, array spread and spread
-// calls, an element appended to an array literal, a literal's __proto__,
-// its computed keys and its fields where native code does not define them
-// along the shapes' transitions (ir.FieldDefine), a tagged template's
-// strings and a function's own object.
-func GoOperation(op bytecode.Op) bool {
-	switch op {
-	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
-		bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee,
-		bytecode.OpDefineIndex, bytecode.OpToPropertyKey, bytecode.OpDefineField:
-		return true
-	}
-	return false
-}
-
-// GoOperands is how many operands an operation Go makes (GoOperation)
-// takes, op and its operand a, whose one result replaces them.
+// GoOperands is how many operands an operation the pipeline has Go make
+// takes, op and its operand a, whose one result replaces them, or 0 for
+// any other op. Go makes it called from native code: the VM's GoCall of
+// an operation (abi.GoCallOp), which makes it without a frame where that
+// runs no script -- an object's own data properties copied, a dense
+// array's elements spread, a key that is a primitive converted -- and with
+// the code's frame where it may run some, a getter, a proxy's trap, an
+// iterator's next, a key's toString, a call: object spread and rest, array
+// spread and spread calls, an element appended to an array literal, a
+// literal's __proto__, its computed keys and its fields where native code
+// does not define them along the shapes' transitions (ir.FieldDefine).
 func GoOperands(op bytecode.Op, a uint32) int {
 	switch op {
 	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,

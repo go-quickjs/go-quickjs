@@ -54,9 +54,9 @@ type generator struct {
 	vals  []Value
 	pc    uint32
 	nargs uint32
-	// saved is what a suspension of the stack form's frames left besides
-	// its place (see keep): nil, as nothing calls keep, though native code
-	// still reads it (abi's GenSaved).
+	// saved is what a suspension leaves besides its place (see keep):
+	// nil, as nothing calls keep, though native code still reads it
+	// (abi's GenSaved).
 	saved *genSaved
 	// rare is what only some generators need, or nil.
 	rare *genRare
@@ -101,14 +101,6 @@ type genSaved struct {
 	// closures made in different resumptions still share a binding.
 	openUpvalues []*upvalue
 	stackRoom    [2]Value
-}
-
-// savedStack is the operands g's last suspension left.
-func (g *generator) savedStack() []Value {
-	if s := g.saved; s != nil {
-		return s.stack
-	}
-	return nil
 }
 
 // savedUpvalues is the captures of g's locals its frames have made.

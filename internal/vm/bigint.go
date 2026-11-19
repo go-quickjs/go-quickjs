@@ -605,51 +605,6 @@ func bigNeg(v Value) Value {
 	return bigOf(!n && len(x) != 0, x)
 }
 
-// bigNotOf is ~v of a BigInt.
-func (r *Runtime) bigNotOf(v Value) Value {
-	var buf bigScratch
-	n, x := bigParts(v, &buf)
-	z := r.bigRoom(len(x) + 1)
-	copy(z, x)
-	return bigOf(bignum.Not(z, n, z[:len(x)]))
-}
-
-// bigCmp compares two BigInts.
-func bigCmp(a, b Value) int {
-	if a.isInt64Big() && b.isInt64Big() {
-		x, y := a.int64Big(), b.int64Big()
-		switch {
-		case x < y:
-			return -1
-		case x > y:
-			return 1
-		}
-		return 0
-	}
-	var ba, bb bigScratch
-	var an, bn bool
-	var x, y []uint
-	if a.isShortBig() {
-		an, x = shortParts(a, &ba)
-	} else {
-		an, x = heapParts(a)
-	}
-	if b.isShortBig() {
-		bn, y = shortParts(b, &bb)
-	} else {
-		bn, y = heapParts(b)
-	}
-	switch {
-	case an && !bn:
-		return -1
-	case !an && bn:
-		return 1
-	case an:
-		return bignum.Cmp(y, x)
-	}
-	return bignum.Cmp(x, y)
-}
-
 // bigString is a BigInt in base, 2 to 36, as a String, its digits in lower
 // case: written into the String's own room, which they are ASCII for.
 func bigString(v Value, base int) *String {
@@ -668,24 +623,6 @@ func bigString(v Value, base int) *String {
 	var buf bigScratch
 	n, x := bigParts(v, &buf)
 	return asciiString(bignum.Append(b[:0], n, x, base))
-}
-
-// bigText is a BigInt in base, 2 to 36, its digits in lower case.
-func bigText(v Value, base int) string {
-	var buf bigScratch
-	n, x := bigParts(v, &buf)
-	return string(bignum.Append(nil, n, x, base))
-}
-
-// bigFloat is a BigInt as the nearest Number.
-func bigFloat(v Value) float64 {
-	var buf bigScratch
-	n, x := bigParts(v, &buf)
-	f := bignum.Float64(x)
-	if n {
-		return -f
-	}
-	return f
 }
 
 // wrapShort is asIntN, signed, or asUintN of the width w and a op b, two

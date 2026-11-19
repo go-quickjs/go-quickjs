@@ -1647,9 +1647,6 @@ const (
 // every tag is at or above it.
 const NumberLimit = 0xFFF8000000000000
 
-// IsNumber reports whether a number word holds a number.
-func IsNumber(word uint64) bool { return word < NumberLimit }
-
 // A call's GoOp (Context.GoOp): the operation in its low byte, the
 // arguments' count in the next, the kind in the next -- a method call's,
 // with its receiver below its function, or a construction's; or an
@@ -1668,7 +1665,7 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // or a destructuring's rest element (GoCallRest), of its one operand, the
 // cursor, the result the array of what it has left; or a for...in's cursor
 // made (GoCallForIn) of its one operand, the object; or an operation Go
-// makes (GoCallOp, the lowering's GoOperation), the VM's opcode in the high
+// makes (GoCallOp, the lowering's GoOperands), the VM's opcode in the high
 // half's low byte and its instruction's A operand in the 24 bits above, of
 // the argument count's operands, the top of the stack, which its result
 // replaces; or apply_arguments (GoCallForward), f.apply(x, arguments), of

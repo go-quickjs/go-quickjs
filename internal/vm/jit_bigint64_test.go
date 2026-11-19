@@ -130,8 +130,8 @@ func TestJITBigInt64(t *testing.T) {
 		if e == nil {
 			t.Fatalf("%s has no code", name)
 		}
-		// Learned at a guard that failed, or from the tree tier -- or,
-		// of register code, from the register interpreter's marks.
+		// Learned at a guard that failed, or from the register
+		// interpreter's marks.
 		held := 0
 		re := r.jit.regCache[r.jitRegKeyOf(cl)]
 		rf := r.jitRegFeedbackFor(cl, re.p)

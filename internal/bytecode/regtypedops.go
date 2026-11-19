@@ -214,22 +214,6 @@ func (rc *RegCode) OpName(op ROp) string {
 	return op.String()
 }
 
-// TypedHeapShift is the heap access op's element size's log2, and
-// whether op is one.
-func TypedHeapShift(op ROp) (uint8, bool) {
-	switch op {
-	case TLd8S, TLd8U, TSt8:
-		return 0, true
-	case TLd16S, TLd16U, TSt16:
-		return 1, true
-	case TLd32, TLdF32, TSt32, TStF32:
-		return 2, true
-	case TLdF64, TStF64:
-		return 3, true
-	}
-	return 0, false
-}
-
 // formatTyped renders typed instruction w at pc.
 func (rc *RegCode) formatTyped(pc int, w RInstr) string {
 	op := w.Op()

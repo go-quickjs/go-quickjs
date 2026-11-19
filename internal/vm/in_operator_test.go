@@ -57,7 +57,7 @@ var keys = [0, 1, 2, 3, 4, 5, 6, -1, -0, 0.5, NaN, Infinity, 2147483647, 2147483
 var objects = [arr, sparse, big, sub, bare, plain, child, deep, str, ta, fn, argsMapped, argsStrict, trap, dict, [], {}, globalThis];
 var names = ["arr", "sparse", "big", "sub", "bare", "plain", "child", "deep", "str", "ta", "fn", "argsMapped", "argsStrict", "trap", "dict", "[]", "{}", "global"];
 // Every key in every object, each answer a bit of a row, in a loop: the
-// tree tier's and native code's.
+// interpreter's and native code's.
 function table() {
 	var out = "";
 	log.length = 0;

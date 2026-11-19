@@ -57,20 +57,20 @@ type jitSnapshot struct {
 // compile keeps alive with its code, and the calls, callees and closures it
 // decides, which its install takes into its entry.
 type jitSnapLists struct {
-	shapes                        []*shape
-	holders                       []*Object
-	cells                         []*Value
-	links                         []*jitLink
-	inlined, made, wanted, linked []*closure
-	pools                         []*abi.ObjectPool
+	shapes                []*shape
+	holders               []*Object
+	cells                 []*Value
+	links                 []*jitLink
+	inlined, made, linked []*closure
+	pools                 []*abi.ObjectPool
 }
 
 // jitSnapLens are the lengths of a feedback's lists (jitSnapLists), all a
 // question's effect is found by: most questions append nothing.
-type jitSnapLens [9]int
+type jitSnapLens [8]int
 
 func jitSnapLensOf(f *jitFeedback) jitSnapLens {
-	return jitSnapLens{len(f.shapes), len(f.holders), len(f.cells), len(f.links), len(f.inlined), len(f.made), len(f.wanted), len(f.linked), len(f.pools)}
+	return jitSnapLens{len(f.shapes), len(f.holders), len(f.cells), len(f.links), len(f.inlined), len(f.made), len(f.linked), len(f.pools)}
 }
 
 // jitSnapEffect is what a question appended to the asked feedback's lists
@@ -202,9 +202,8 @@ func jitSnapTake(f *jitFeedback, before jitSnapLens, bad *bool) jitSnapLists {
 	d.links, f.links = jitSnapGained(f.links, before[3], bad)
 	d.inlined, f.inlined = jitSnapGained(f.inlined, before[4], bad)
 	d.made, f.made = jitSnapGained(f.made, before[5], bad)
-	d.wanted, f.wanted = jitSnapGained(f.wanted, before[6], bad)
-	d.linked, f.linked = jitSnapGained(f.linked, before[7], bad)
-	d.pools, f.pools = jitSnapGained(f.pools, before[8], bad)
+	d.linked, f.linked = jitSnapGained(f.linked, before[6], bad)
+	d.pools, f.pools = jitSnapGained(f.pools, before[7], bad)
 	return d
 }
 
@@ -222,14 +221,13 @@ func jitSnapGained[T any](now []T, n int, bad *bool) (gained, back []T) {
 }
 
 func (l *jitSnapLists) empty() bool {
-	return len(l.shapes)+len(l.holders)+len(l.cells)+len(l.links)+len(l.inlined)+len(l.made)+len(l.wanted)+len(l.linked)+len(l.pools) == 0
+	return len(l.shapes)+len(l.holders)+len(l.cells)+len(l.links)+len(l.inlined)+len(l.made)+len(l.linked)+len(l.pools) == 0
 }
 
 // apply appends l's lists to f's, as the feedback appends to them: the
-// callees it wants compiled and those it calls through their links once
-// each, a closure it does not make once, with its inlining (each guarded
-// by slices.Contains in jitFeedback's), everything else as often as a
-// question appends it.
+// callees it calls through their links once each, a closure it does not
+// make once, with its inlining (each guarded by slices.Contains in
+// jitFeedback's), everything else as often as a question appends it.
 func (l *jitSnapLists) apply(f *jitFeedback) {
 	f.shapes = append(f.shapes, l.shapes...)
 	f.holders = append(f.holders, l.holders...)
@@ -247,7 +245,6 @@ func (l *jitSnapLists) apply(f *jitFeedback) {
 		f.made = append(f.made, t)
 	}
 	f.inlined = append(f.inlined, inlined...)
-	f.wanted = jitSnapAppendNew(f.wanted, l.wanted)
 	f.linked = jitSnapAppendNew(f.linked, l.linked)
 	f.pools = append(f.pools, l.pools...)
 }

@@ -333,13 +333,6 @@ func (c *core) words(n int) valueSet {
 	return make(valueSet, n)
 }
 
-func (c *core) setList(n int) []valueSet {
-	if c.ws != nil {
-		return c.ws.sets.Make(n)
-	}
-	return make([]valueSet, n)
-}
-
 func (c *core) valueList(n int) []*ssa.Value {
 	if c.ws != nil {
 		return c.ws.values.Make(n)

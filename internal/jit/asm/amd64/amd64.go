@@ -93,7 +93,7 @@ type label struct{ pos, first int32 }
 
 type fixup struct {
 	// at is where the rel32 is, or an alignment's padding starts, and
-	// start where its instruction starts (at less opLen), kept so that
+	// start where its instruction starts (at less opLens'), kept so that
 	// Finish's walks over the fixups compute it at none of them: positions
 	// in a function's code, which a rel32 reaches across (Finish), as 32
 	// bits each, the fixup sixteen bytes, where 24 had been.
@@ -132,8 +132,7 @@ const (
 	fixAlign
 )
 
-// shortened is how many bytes a fixup of kind k's jump loses shortened, and
-// opLen how many bytes precede its displacement.
+// shortened is how many bytes a fixup of kind k's jump loses shortened.
 func shortened(k uint8) int {
 	switch k {
 	case fixJmp:
@@ -144,22 +143,10 @@ func shortened(k uint8) int {
 	return 0
 }
 
-// opLens are opLen's, by kind, for fix, in which a table costs the
-// inliner less than opLen's switch: a jump's emission, which calls fix, is
-// inlined where it is emitted.
+// opLens is how many bytes precede a fixup's displacement, by its kind, for
+// fix: a table, which costs the inliner less than a switch would, as a
+// jump's emission, which calls fix, is inlined where it is emitted.
 var opLens = [4]uint8{fixLea: 3, fixJmp: 1, fixJcc: 2, fixAlign: 0}
-
-func opLen(k uint8) int {
-	switch k {
-	case fixJmp:
-		return 1
-	case fixJcc:
-		return 2
-	case fixAlign:
-		return 0
-	}
-	return 3
-}
 
 // Len is the number of bytes emitted so far.
 func (a *Asm) Len() int { return len(a.buf) }

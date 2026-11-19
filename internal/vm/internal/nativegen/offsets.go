@@ -241,7 +241,6 @@ var (
 	offCCInit     int32
 	offCCFwd      int32
 	offFdClosure  int32
-	offFdBound    int32
 	offUpSlot     int32
 	offUpClosed   int32
 	offRCLeafUp   int32
@@ -511,7 +510,6 @@ func loadOffsets() {
 	offCCInit = ccRel(off("closureCode.ctorInit"))
 	offCCFwd = ccRel(off("closureCode.fwd"))
 	offFdClosure = off("funcData.closure")
-	offFdBound = off("funcData.bound")
 	offUpSlot = off("upvalue.slot")
 	offUpClosed = off("upvalue.closed")
 	offRCLeafUp = off("regCode.leafUp")

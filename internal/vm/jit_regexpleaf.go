@@ -3,9 +3,11 @@
 package vm
 
 // Native code's call of RegExp.prototype's exec or test (regexpleaf.go)
-// is compiled a leaf's call of Go of its own (ssa.GoLeaf), made through the
-// VM's routine for leaves without a frame, where its site's cache holds the
-// built-in at the compile (jitRegFeedback's Leaf). A literal's call is one
+// is to be compiled a leaf's call of Go of its own (ssa.GoLeaf), made
+// through the VM's routine for leaves without a frame, where its site's
+// cache holds the built-in at the compile (jitRegFeedback's Leaf). The
+// register JIT does not yet make every such call one (TestJITRegExpLeaves,
+// skipped, and docs/performance-plan.md). A literal's call is one
 // too, its RegExp taken from the literal's pool, to which the leaf gives it
 // back (jitRegExpLeafGive).
 //

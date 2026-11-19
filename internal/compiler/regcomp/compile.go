@@ -37,22 +37,9 @@ const farReg = 1 << 30
 // (nearCap).
 const errRegs = "more than 65,536 registers"
 
-// Compile compiles lit, whose tables the walk made in fn and whose
-// identifiers' resolution is rec, into register code. It returns nil where
-// the function has anything the backend does not compile, which the runtime
-// reports as an internal error.
-func Compile(lit *ast.FuncLit, fn *bytecode.Function, rec *Record) *bytecode.RegCode {
-	if w := why(fn); w != "" && !(w == "arguments" && simpleArguments(fn)) {
-		Refuse(fn, w)
-		return nil
-	}
-	sc := getScratch()
-	defer putScratch(sc)
-	return compile(lit, fn, rec, fn, sc)
-}
-
-// Later is lit's register code as Compile compiles it, compiled when it is
-// first asked for (bytecode.Function.RegCode), or nil where fn's kind
+// Later is lit's register code -- lit's, whose tables the walk made in fn
+// and whose identifiers' resolution is rec -- compiled when it is first
+// asked for (bytecode.Function.RegCode), or nil where fn's kind
 // refuses it at once. The record and the AST are kept until then. The
 // code compiled so adds nothing to fn, whose tables are shared by the
 // runtimes running it by then: its names, constants and sites are the
@@ -361,8 +348,7 @@ type loop struct {
 	isLoop    bool
 	// named says the statement is a labelled one that is no loop or
 	// switch: only a break naming it leaves it.
-	named        bool
-	scopeTopMark int
+	named bool
 }
 
 // mark is a place in the code jumps go to, and the jumps waiting for it.

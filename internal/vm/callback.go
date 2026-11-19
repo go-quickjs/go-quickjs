@@ -10,8 +10,7 @@ package vm
 // writes the window's registers and the frame record and runs the code,
 // rather than going through callDirect, regDirect and regEnterW and making
 // a code entry anew. A leaf is run so too, with a frame -- one entered
-// natively is cheaper than the stack form's frameless evaluator
-// (pureCallAt) -- but a short straight body of numbers and upvalues
+// natively is cheaper than Go's frameless evaluator (pureCallAt) -- but a short straight body of numbers and upvalues
 // (regLeafCode), whose register code regLeafRun runs in the window faster
 // still: acc + x, a - b. The frame record is pushed for the call alone, so that what Go runs between
 // two calls -- a comparator's result converted to a number -- finds no

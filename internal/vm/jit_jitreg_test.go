@@ -29,7 +29,7 @@ func jitCodeForTest(r *Runtime, name string) *jitEntry {
 }
 
 // jitSSACodeForTest is the native code of the global function name, nil
-// where it has none: its stack form's entry's, or its register code's.
+// where it has none: its register code's entry's.
 func jitSSACodeForTest(r *Runtime, name string) *jit.SSACode {
 	cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	if e := r.jit.regCache[r.jitRegKeyOf(cl)]; e != nil {

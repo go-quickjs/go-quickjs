@@ -1885,7 +1885,7 @@ func (r *Runtime) freezeArray(o *Object) *Object {
 // endTurn releases what the turn left behind.
 //
 // Two things outlive a call for reasons that stop applying once nothing is
-// running: the operand stack above the live frames, which popFrame leaves dirty
+// running: the operand stack above the live frames, which popFrameOf leaves dirty
 // because clearing it per call was the interpreter's single largest cost, and
 // the values a WeakRef handed out, which have to survive the turn they were
 // read in and no longer. Doing both here costs one pass over the part of the

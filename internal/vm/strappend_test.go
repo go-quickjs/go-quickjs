@@ -358,7 +358,7 @@ function joined() {
     v === long + 'ab\ud83d', u === long + 'ab😀z', u.codePointAt(72), hash(u)].join()
 }
 
-// A reader only the interpreter runs: the tree tier builds no with.
+// A reader with a with statement.
 function interpreted() {
   var s = long
   const add = x => { s += x }

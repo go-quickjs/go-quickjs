@@ -275,16 +275,6 @@ func (g *nativeGen) looseEq(jumpIfEq bool) {
 	}
 }
 
-// int32 makes dst the int32 the number in x is exactly, or exits.
-func (g *nativeGen) int32(dst Reg, x XReg) {
-	a := g.a
-	a.Cvttsd2si(dst, x)
-	a.Cvtsi2sd(3, dst, false)
-	a.SSEOp(UcomiSD, x, 3)
-	a.Jcc(CondNE, g.exit)
-	a.Jcc(CondP, g.exit)
-}
-
 // noRef exits unless the window's Value at off holds no pointer.
 func (g *nativeGen) noRef(off Reg) {
 	g.a.CmpIdxImm8(R12, off, 1, 8, 0)

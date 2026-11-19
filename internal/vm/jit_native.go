@@ -99,10 +99,8 @@ type jitRegEntry struct {
 	// that deoptimizes for a shape again in code compiled since it first
 	// did is megamorphic (jitDeoptSeenOp).
 	serial uint32
-	// rc is the register code it was compiled from; loopPC and loopLen the
-	// loop a frame last entered it at and that loop's length (loopLength).
-	rc              *bytecode.RegCode
-	loopPC, loopLen int
+	// rc is the register code it was compiled from.
+	rc *bytecode.RegCode
 	// loopMean is its loops' mean length in the program's instructions,
 	// at least one, which a stretch's back edges are counted by
 	// (jitRegStretchWork, irLoopMean); callsNative says the code makes
@@ -150,24 +148,6 @@ func (e *jitRegEntry) loopEntry(rpc int) (int, bool) {
 		return 0, false
 	}
 	return e.ipc(rpc), true
-}
-
-// loopLength is the length of the loop whose header is register pc rpc,
-// from it to a backward jump to it: the one a frame entered the loop
-// after (jitRegLoop), or else the first backward jump past the header
-// (RegCode's BackLive), which is the loop's own or a loop's inside it.
-func (e *jitRegEntry) loopLength(rpc int) int {
-	if e.loopLen != 0 && e.loopPC == rpc {
-		return e.loopLen
-	}
-	if e.rc != nil {
-		for i := 0; i+1 < len(e.rc.BackLive); i += 2 {
-			if pc := int(e.rc.BackLive[i]); pc >= rpc {
-				return pc - rpc + 1
-			}
-		}
-	}
-	return 1
 }
 
 // ipc is the first instruction of the program's lowering of register pc

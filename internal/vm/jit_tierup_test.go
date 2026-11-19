@@ -99,8 +99,7 @@ func TestJITDeoptInvalidates(t *testing.T) {
 	// of the budget (jitRegEdges), so that what the invocations spend is
 	// their own length -- but the one that deoptimizes, which meets B at
 	// its first turn.
-	deopt, fb := `f(b,10)`, `f(b,10)`
-	deopt, fb = `f(b,1)`, `f(b,0)`
+	deopt, fb := `f(b,1)`, `f(b,0)`
 	run(deopt)
 	if link := jitLinkOfForTest(r, fcl); !e.invalid || e.deopts != 1 || link.entry != 0 || e.ssaSerial != 1 {
 		t.Fatalf("f's deoptimization did not invalidate its code: invalid %v, deopts %d, link %#x, compiles %d", e.invalid, e.deopts, link.entry, e.ssaSerial)
@@ -125,8 +124,8 @@ func TestJITDeoptInvalidates(t *testing.T) {
 
 // A change of a function's caches' feedback while its invalidated code waits
 // for the existing tiers' budget delays the compile by a fresh budget, as
-// V8's NotifyICChanged does: f, invalidated by B, meets C in the tree tier
-// at its second call, and is compiled at the eighth, not the fourth, for
+// V8's NotifyICChanged does: f, invalidated by B, meets C in the
+// interpreter at its second call, and is compiled at the eighth, not the fourth, for
 // all three shapes. The caches filled again with what they held -- the
 // same entries, in another order -- delay nothing (jitFeedbackMark).
 func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
@@ -139,12 +138,10 @@ func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
 		run(`f(a,10)`)
 	}
 	e := jitNativeForTest(t, r, "f")
-	// Invocations of ten turns in the stack form, of none in register
-	// code's but where they meet a shape, as TestJITDeoptInvalidates has
-	// them: a turn, whose back edges' work no check spends before the
-	// compile (jitRegEdges).
-	deopt, fb, fc := `f(b,10)`, `f(b,10)`, `f(c,10)`
-	deopt, fb, fc = `f(b,1)`, `f(b,0)`, `f(c,1)`
+	// Invocations of no turns but where they meet a shape, as
+	// TestJITDeoptInvalidates has them: a turn, whose back edges' work no
+	// check spends before the compile (jitRegEdges).
+	deopt, fb, fc := `f(b,1)`, `f(b,0)`, `f(c,1)`
 	run(deopt)
 	if !e.invalid {
 		t.Fatal("f's deoptimization did not invalidate its code")
@@ -181,7 +178,7 @@ func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
 
 // A function that keeps deoptimizing is compiled no more past jitMaxDeopts
 // eager deoptimizations, as V8 gives up optimizing one: f, at the limit,
-// deoptimizes once more, and the tree tier runs it from then on, however
+// deoptimizes once more, and the interpreter runs it from then on, however
 // many budgets it spends.
 func TestJITDeoptLimit(t *testing.T) {
 	t.Parallel()
@@ -312,11 +309,9 @@ func TestJITLearnedCodeRunsOn(t *testing.T) {
 	// Compiled with no call of inc seen: register code's call caches note
 	// their targets, which its first compile would inline (regCallSites),
 	// so it is compiled at calls that make none, and learns inc at its
-	// calls of Go as the stack form's code does.
-	warm, warmCalls := `apply(inc,3)`, 4
-	// Counted at their returns (regTickRet): compiled at the call
-	// after the fourth.
-	warm, warmCalls = `apply(inc,0)`, 5
+	// calls of Go. Counted at their returns (regTickRet): compiled at the
+	// call after the fourth.
+	warm, warmCalls := `apply(inc,0)`, 5
 	for range warmCalls {
 		run(warm)
 	}
@@ -329,12 +324,10 @@ func TestJITLearnedCodeRunsOn(t *testing.T) {
 		t.Fatalf("apply learned nothing to compile again for in %d calls: compiled %d times", k, e.ssaSerial)
 	}
 	starts := e.starts
-	// Calls of three turns in the stack form, whose code spends its budget
-	// by its invocations; of none in register code's, whose native
-	// stretches spend it by their turns too (jitRegStretchWork), as its
-	// back edges do in the interpreter: what they spend is their length.
-	after := `apply(inc,3)`
-	after = `apply(inc,0)`
+	// Calls of no turns: register code's native stretches spend its budget
+	// by their turns too (jitRegStretchWork), as its back edges do in the
+	// interpreter: what they spend is their length.
+	after := `apply(inc,0)`
 	for k = 0; k < 64 && e.ssaSerial == 1; k++ {
 		if e.invalid || jitLinkOfForTest(r, jitGlobalClosure(r, "apply")).entry == 0 {
 			t.Fatalf("call %d after apply learned: its code invalidated", k)
@@ -405,11 +398,10 @@ func TestJITV8Budgets(t *testing.T) {
 			t.Fatalf("k compiled at call %d", n)
 		}
 	}
-	// Register code counts an invocation at its return (regTickRet), the
-	// stack form at its call: a budget spent by the last invocation's run
-	// compiles the function at the call after it.
-	late := 0
-	late = 1
+	// Register code counts an invocation at its return (regTickRet): a
+	// budget spent by the last invocation's run compiles the function at
+	// the call after it.
+	late := 1
 	run(`k(a)`)
 	if code("k") {
 		t.Fatalf("k compiled at call %d", jitInvocationsForMaglev)
@@ -650,8 +642,8 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 // back edges, which a long loop's would make look seldom: w's loop, run
 // once, calls g at every tenth of its iterations, which is compiled when w
 // is, before its own budget is spent. Octane's Richards had run
-// HandlerTask.run, called 0.37 times a call of its caller, in the tree
-// tier for 750 calls.
+// HandlerTask.run, called 0.37 times a call of its caller, in the
+// interpreter for 750 calls.
 func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -714,7 +706,6 @@ func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
 	e := jitEntryOfForTest(r2, g2)
 	invoked := int64(0)
 	if e != nil {
-		invoked = int64(e.invoked)
 		// Register code's runs while it had no code (jitRegInvoked).
 		invoked = jitRegInvoked(g2, e)
 	}
@@ -776,7 +767,7 @@ func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 // invocation, whose loop proves it long, goes on natively. sum, judged
 // slow, runs a call of a million iterations natively from its loop.
 // DeltaBlue's forEach, judged slow on its many short calls, had run its
-// plan's, thousands of constraints long, in the tree tier.
+// plan's, thousands of constraints long, in the interpreter.
 func TestJITSlowCodeEnteredByOSR(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {

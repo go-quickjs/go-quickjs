@@ -1447,13 +1447,10 @@ type jitFeedback struct {
 	// called is how many closures the code makes that it only calls and
 	// does not make (ssa.Func's Called).
 	called int
-	// wanted are callees of calls to inline that the compile made calls
-	// instead -- past its budget (ssa's maxInlineTotal) -- which had no code
-	// for native callers: compiled after it. linked
-	// are the callees it calls through their links before they have code,
-	// compiled after it too, which native code then calls, the caller's code
-	// as it is.
-	wanted, linked []*closure
+	// linked are the callees it calls through their links before they
+	// have code, compiled after it, which native code then calls, the
+	// caller's code as it is.
+	linked []*closure
 	// keeps is how many keep cells the code uses (ssa.Func.Keeps), and
 	// keepLimit how many the build may number (ssa.KeepFeedback), or 0.
 	keepLimit int

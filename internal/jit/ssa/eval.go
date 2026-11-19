@@ -331,23 +331,19 @@ func truth(v ir.Value) (bool, bool) {
 	return false, false
 }
 
-// Evaluate runs f from the entry for a slot IR PC, on slots (locals, then
-// operands, as the slot IR evaluator takes them), and returns the exit the
-// slot IR evaluator would: the same kind, state, value and live slots. Steps
-// is not counted. With pollEvery > 0, every pollEvery-th backward branch
-// exits as a budget exit at its loop header, where the function can be
-// entered again.
+// EvaluateArrays runs f from the entry for a slot IR PC, on slots (locals,
+// then operands, as the slot IR evaluator takes them), and returns the
+// exit the slot IR evaluator would: the same kind, state, value and live
+// slots. Steps is not counted. With pollEvery > 0, every pollEvery-th
+// backward branch exits as a budget exit at its loop header, where the
+// function can be entered again. arrays are as the slot IR's
+// EvaluateArrays takes them: an Opaque value's Bits index arrays, and a
+// view with a NumberLimit is an array whose cells it reads and writes in
+// place.
 //
 // It also checks what generated code relies on to move references: at
 // every exit and return, a reference is the value its origin slot held at
 // entry (origin.go), and it reports ErrOrigin when one is not.
-func Evaluate(f *Func, pc int, slots []ir.Value, pollEvery int) (ir.Exit, error) {
-	return EvaluateArrays(f, pc, slots, nil, pollEvery)
-}
-
-// EvaluateArrays is Evaluate with arrays, as the slot IR's EvaluateArrays
-// takes them: an Opaque value's Bits index arrays, and a view with a
-// NumberLimit is an array whose cells it reads and writes in place.
 func EvaluateArrays(f *Func, pc int, slots []ir.Value, arrays []ir.ArrayView, pollEvery int) (ir.Exit, error) {
 	return EvaluateHeap(f, pc, slots, Heap{Arrays: arrays}, pollEvery)
 }
@@ -588,7 +584,7 @@ const absent = -2
 
 var undefinedCell = ir.Value{Kind: ir.Undefined}
 
-// EvaluateHeap is Evaluate with a heap.
+// EvaluateHeap is EvaluateArrays with a heap.
 func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (ir.Exit, error) {
 	f.Finish()
 	arrays := heap.Arrays

@@ -2070,7 +2070,7 @@ type CallSite struct {
 	TypeOf, InstanceOf bool
 	// Instr, where not 0, marks a call of Go (GoCall) that is an operation
 	// Go makes, the VM's instruction at the call's PC (compile's
-	// GoOperation) -- its opcode in Instr's low byte, its A operand in the
+	// GoOperands) -- its opcode in Instr's low byte, its A operand in the
 	// 24 bits above -- of its Argc operands, the top of the stack, its
 	// result in their place: object spread and rest, array spread, a spread call,
 	// a literal's computed key or __proto__ -- as V8's code calls its
@@ -2579,7 +2579,7 @@ func allocOnly(v *Value) bool {
 }
 
 // InlineSite is a call the VM has seen call one function, whose program,
-// lowered for inlining, Inlinable accepts: that program and its own
+// lowered for inlining, InlineCalls accepts: that program and its own
 // feedback; the function object's address, which the VM keeps alive and
 // the call checks it still calls, and its closure's, for Go to make its
 // frame from at an exit inside it (InlineState); the call's argument
@@ -2717,17 +2717,6 @@ const (
 	MaxInlineTotal = maxInlineTotal
 )
 
-// Inlinable reports whether a callee may be inlined: a small program that
-// reads and writes properties and elements, computes, branches forward --
-// or back, in a loop smaller still (maxInlineLoop) -- and returns, which
-// native code can do all of, with no operation it leaves to Go, which
-// would have Go finish the call every time. An exit inside it makes its
-// frame (InlineState), so that what it did before is not done again.
-func Inlinable(p *ir.Program) bool {
-	calls, ok := InlineCalls(p)
-	return ok && len(calls) == 0
-}
-
 // maxInlineLoop is the most instructions a callee with a loop may have and
 // be inlined, and then only if it leaves nothing to Go (smallLoop). Such a
 // callee is a search of a short list, EarleyBoyer's sc_assq -- three
@@ -2761,9 +2750,13 @@ func NeverInlined(p *ir.Program) bool {
 }
 
 // InlineCalls reports whether a callee may be inlined if the operations it
-// leaves to Go, which it returns by PC, are calls inlined in it too: it is
-// Inlinable but for those. A callee with a loop is taken only if it is
-// small and leaves nothing to Go (smallLoop).
+// leaves to Go, which it returns by PC, are calls inlined in it too: a
+// small program that reads and writes properties and elements, computes,
+// branches forward -- or back, in a loop smaller still (maxInlineLoop) --
+// and returns, which native code can do all of but for those calls. An
+// exit inside it makes its frame (InlineState), so that what it did before
+// is not done again. A callee with a loop is taken only if it is small and
+// leaves nothing to Go (smallLoop).
 func InlineCalls(p *ir.Program) ([]int, bool) {
 	if p == nil || !p.Checked && p.Validate() != nil || inlineSize(p) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 || p.Forwards {
 		// A callee whose locals closures capture: an inlined frame's

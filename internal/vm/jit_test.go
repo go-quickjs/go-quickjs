@@ -3466,7 +3466,7 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 			}
 		}
 	}
-	// Every round ran natively: none was demoted to the tree tier.
+	// Every round ran natively: none was left to the interpreter.
 	for _, name := range []string{"run", "swap"} {
 		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		if e := jitClosureCodeForTest(r, cl); e == nil || e.entrySlow || e.ssaStats.entries == 0 {
@@ -6062,12 +6062,12 @@ func TestJITSSANestedExits(t *testing.T) {
 	}
 }
 
-// A small method the tree tier calls, which calls out again and returns,
-// costs more native than in the tree tier: each call is an entry, an exit
-// for its call, an entry after it and a return, around a few instructions.
+// A small method the interpreter calls, which calls out again and returns,
+// costs more native than interpreted: each call is an entry, an exit for
+// its call, an entry after it and a return, around a few instructions.
 // Its stretches, returns counted (their exit site, the return's block), do
-// less than jitSSAMinWork, and the tree tier runs it from then on; a loop
-// that does enough work stays native.
+// less than jitSSAMinWork, and the interpreter runs it from then on; a
+// loop that does enough work stays native.
 func TestJITSSAProfitReturns(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

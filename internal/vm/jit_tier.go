@@ -1189,7 +1189,6 @@ func (r *Runtime) jitRegLoop(st *regState, target int) int {
 			}
 		}
 	} else {
-		n := int(st.kept.pc) - target
 		// The work its frames' back edges did since the last check, each
 		// its distance (jitRegEdgeWork): counted, not sampled, so that
 		// when a loop is compiled does not hang on where the interrupt
@@ -1236,7 +1235,6 @@ func (r *Runtime) jitRegLoop(st *regState, target int) int {
 		r.jitFrameFn = nil
 		r.jitRegArmEdges(cl, c)
 		if e != nil {
-			e.loopPC, e.loopLen = target, max(n, 1)
 			// The interpreter's work in the loop, which Go enters, counted
 			// toward what the code spends (jitRegSpent).
 			e.life.osrWork += work

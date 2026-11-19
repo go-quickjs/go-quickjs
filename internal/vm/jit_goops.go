@@ -11,7 +11,7 @@ import (
 )
 
 // jitOpPlain makes an operation Go makes for native code (abi.GoCallOp,
-// the lowering's GoOperation) without a frame, where that runs no script
+// the lowering's GoOperands) without a frame, where that runs no script
 // and throws nothing (jitOpFrameless), as V8's CloneObject and
 // CopyDataProperties builtins take their fast paths: it writes the result
 // to the call's keep cell and reports whether it made it. What it does not

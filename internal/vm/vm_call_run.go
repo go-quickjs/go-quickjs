@@ -150,8 +150,9 @@ func (r *Runtime) topFrame() *frame {
 	return r.frameAt(r.frameDepth - 1)
 }
 
-// popFrame releases a frame's stack window, closing any upvalues that pointed
-// into its locals so that closures created inside it keep working.
+// popFrameOf releases the frame f's stack window, f the top one, closing any
+// upvalues that pointed into its locals so that closures created inside it
+// keep working.
 //
 // The window is deliberately left dirty. Clearing it on the way out was the
 // single largest cost in the interpreter -- it doubled the zeroing work per
@@ -163,12 +164,6 @@ func (r *Runtime) topFrame() *frame {
 // reused. That delays collection, so the region above the live frames is
 // cleared once per turn instead -- see endTurn, which is where a program could
 // next observe the difference.
-func (r *Runtime) popFrame(base int) {
-	r.popFrameOf(r.frameAt(r.frameDepth-1), base)
-}
-
-// popFrameOf is popFrame for a caller that has the frame, which is the top
-// one: finding it again by its depth is a cost every call would pay.
 func (r *Runtime) popFrameOf(f *frame, base int) {
 	for _, u := range f.openUpvalues {
 		u.close()

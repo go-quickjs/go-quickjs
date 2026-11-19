@@ -19,12 +19,3 @@ func asciiParts[_ any](r *Runtime, t string) (Value, error) {
 	}
 	return Str(&String{s: t, length: len(t), ascii: true}), nil
 }
-
-// stringFits is the RangeError for a string of n code units, longer than a
-// string may be, or nil.
-func stringFits[_ any](r *Runtime, n int) error {
-	if n > maxStringLength {
-		return r.throwStringLength()
-	}
-	return nil
-}

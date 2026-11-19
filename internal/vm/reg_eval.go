@@ -7,7 +7,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // arguments, or an array of them. Where the callee is the realm's eval and
 // the first argument a string, the code runs in the frame's scope
 // (regEval); a value that is no string is given back; any other callee is
-// an ordinary call, and a tail call where the stack form made one.
+// an ordinary call, and a tail call in tail position (RMarkTail).
 func (r *Runtime) regDirectEval(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
 	a := int(w.A())
 	callee, recv := regs[a], regs[a+1]

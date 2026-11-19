@@ -554,7 +554,7 @@ func regGoBranches(w bytecode.RInstr) bool {
 // object literal's member, or a private one's, which a callee's code
 // leaves to Go: of those,
 // what reads only its operands and the frame, and the operations Go makes
-// from native code (GoOperation), a callee keeps.
+// from native code (GoOperands), a callee keeps.
 func regDefinition(op bytecode.ROp) bool {
 	switch op {
 	case bytecode.RDefineGetterIndex, bytecode.RDefineSetterIndex, bytecode.RClassGetterIndex,

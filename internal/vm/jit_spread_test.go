@@ -9,7 +9,7 @@ import (
 )
 
 // jitSpreadProgram exercises the operations Go makes from native code
-// (jitcompile.GoOperation) in loops, which compile for Go's entry, and in
+// (jitcompile.GoOperands) in loops, which compile for Go's entry, and in
 // callees without loops, which compile for native callers: object spread
 // and rest, array spread, spread calls, a literal's computed keys, its
 // __proto__ and the fields after them, tagged templates and a named
@@ -163,7 +163,7 @@ const jitSpreadProgram = `
 // Object spread and rest, array spread, spread calls, a literal's computed
 // keys and __proto__ and the fields after them, tagged templates and a
 // named function expression's own name are compiled, each an operation Go
-// makes from native code (jitcompile.GoOperation): without a frame where
+// makes from native code (jitcompile.GoOperands): without a frame where
 // that runs no script, and with the code's frame where it may -- a getter,
 // a proxy's trap, an iterator, a key's toString, a callee -- in the order
 // of evaluation the interpreter keeps, its exceptions caught where it
