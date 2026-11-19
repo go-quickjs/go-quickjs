@@ -97,6 +97,27 @@ func TestConcatMemo(t *testing.T) {
 	if got := v.String().Go(); got != want {
 		t.Errorf("halves\n got %s\nwant %s", got, want)
 	}
+	t.Run("recent", func(t *testing.T) {
+		r := New(Config{})
+		defer r.Close()
+		parts := []Value{Str(NewString("pre-")), Str(NewString("abc")), Str(NewString("-post"))}
+		first := r.joinMemoized(parts)
+		if got := r.joinMemoized(parts); got != first || r.concatMemo.recentGate.hits != 1 {
+			t.Fatal("repeated pieces did not use the recent join")
+		}
+		// The address alone cannot establish identity: input storage can
+		// be reused, and a builder can change without moving its bytes.
+		impostor := NewString("pre-abd-post")
+		r.concatMemo.recent.s = impostor
+		if got := r.joinMemoized(parts); got.Go() != "pre-abc-post" || got == impostor {
+			t.Fatalf("recent join with another text returned %q", got.Go())
+		}
+		parts[1].String().building = true
+		hits := r.concatMemo.recentGate.hits
+		if got := r.joinMemoized(parts); got.Go() != "pre-abc-post" || r.concatMemo.recentGate.hits != hits {
+			t.Fatal("recent join used a builder's pieces")
+		}
+	})
 }
 
 // A runtime whose joins never repeat turns its memo off, its strings
@@ -117,6 +138,9 @@ for (let i = 0; i < 5000; i++) globalThis.last = 'k' + i + 'v'
 		if s != nil {
 			t.Fatal("memo off but still keeps strings")
 		}
+	}
+	if m.recent.s != nil {
+		t.Fatal("memo off but still keeps its recent join")
 	}
 	off := m.off
 	if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 10; i++) globalThis.last = 'k' + i + 'v'`)); err != nil {
@@ -158,6 +182,7 @@ func TestConcatMemoCollision(t *testing.T) {
 		}
 		impostor := NewString(other)
 		r.concatMemo.slots[at] = impostor
+		r.concatMemo.recent = joinRecent{}
 		v, err := r.Run(compileForTest(t, `j('abc')`))
 		if err != nil {
 			t.Fatal(err)
@@ -173,6 +198,7 @@ func TestConcatMemoCollision(t *testing.T) {
 	odd := NewString(want)
 	odd.ascii = false
 	r.concatMemo.slots[at] = odd
+	r.concatMemo.recent = joinRecent{}
 	v, err := r.Run(compileForTest(t, `j('abc')`))
 	if err != nil {
 		t.Fatal(err)
