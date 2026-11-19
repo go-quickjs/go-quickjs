@@ -241,8 +241,17 @@ func init() {
 		if layoutPadNU >= 0 {
 			layoutPadU()
 		}
+		if layoutPadNY >= 0 {
+			layoutPadY()
+		}
 		if layoutPadNV >= 0 {
 			layoutPadV()
+		}
+		if layoutPadNK >= 0 {
+			layoutPadK()
+		}
+		if layoutPadNO >= 0 {
+			layoutPadO()
 		}
 		if layoutPadNR >= 0 {
 			layoutPadR()
