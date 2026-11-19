@@ -173,7 +173,7 @@ for (var k = 0; k < 20; k++) work(pt, 5);
 				want == native && (sites[0].Window != p.Code[pc].Left.Slot+1 || sites[0].Callee != uintptr(unsafe.Pointer(cl.regCalls[w.C()].callee)) || sites[0].Entry == 0) {
 				t.Errorf("pc %d: call %s: sites %+v", pc, cl.fn.RegCode().Format(int(p.Origin[pc])), sites)
 			}
-		case bytecode.RTypeof, bytecode.RInstanceOf:
+		case bytecode.RTypeof, bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		default:
 			if sites != nil {
 				t.Errorf("pc %d: %s: native calls %+v", pc, cl.fn.RegCode().Format(int(p.Origin[pc])), sites)

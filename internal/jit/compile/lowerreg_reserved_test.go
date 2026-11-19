@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,7 +17,9 @@ import (
 // lowered.
 func TestLowerRegReservedAsserts(t *testing.T) {
 	fns := regCompiled(t, `function up(n) { for (let i = 0; i < n; i++) {} }
-		function arith(x, y) { return x * y }`)
+		function arith(x, y) { return x * y }
+		function instance(o, C) { var n = 0; for (var i = 0; i < 10; i++) if (o instanceof C) n++; return n }
+		function instanceNot(o, C) { var n = 0; for (var i = 0; i < 10; i++) if (!(o instanceof C)) n++; return n }`)
 	lowerWith := func(fn *bytecode.Function, pc int, w bytecode.RInstr, aux []uint32) error {
 		rc := *fn.RegCode()
 		rc.Code = append([]bytecode.RInstr(nil), rc.Code...)
@@ -65,6 +68,24 @@ func TestLowerRegReservedAsserts(t *testing.T) {
 	want(lowerWith(arith, pc, add, nil), "add_i32 at "+strconv.Itoa(pc)+" without its | 0's position")
 	if err := lowerWith(arith, pc, bytecode.MakeR(bytecode.RMulI, 0, m.A(), m.B(), 0).WithSC(3), nil); err != nil {
 		t.Errorf("mul_imm: %v", err)
+	}
+	for _, name := range []string{"instance", "instanceNot"} {
+		fn := fns[name]
+		rc := fn.RegCode()
+		plain := *rc
+		plain.Code = append([]bytecode.RInstr(nil), rc.Code...)
+		found := false
+		for pc, w := range plain.Code {
+			if w.Op() == bytecode.RInstanceOfNext {
+				found = true
+				plain.Code[pc] = bytecode.MakeR(bytecode.RInstanceOf, w.X(), w.A(), w.B(), w.C())
+			}
+		}
+		got, err := LowerReg(rc, fn)
+		want, plainErr := LowerReg(&plain, fn)
+		if !found || err != nil || plainErr != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: instanceof_next differs from the original pair: %v, %v", name, err, plainErr)
+		}
 	}
 }
 

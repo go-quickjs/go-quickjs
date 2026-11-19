@@ -4,7 +4,7 @@
 
 #include "textflag.h"
 
-// regNativeFeedbackHandlers is the feedback dispatcher's own handlers, 3812 bytes of
+// regNativeFeedbackHandlers is the feedback dispatcher's own handlers, 3820 bytes of
 // position-independent machine code made by armEmit, which reach the
 // handlers' block through the dispatcher's table. Its handlers, in order:
 //
@@ -57,6 +57,7 @@
 //	 3668  step_jgt_imm
 //	 3716  step_jge_imm
 //	 3764  step_jle_upval
+//	 3812  instanceof_next
 TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a; WORD $0xf9405b25
 	WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4; WORD $0xf100009f
@@ -296,7 +297,7 @@ TEXT ·regNativeFeedbackHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xd61f0200; WORD $0x9370fc01; WORD $0xf100003f; WORD $0x5400010a
 	WORD $0xf9405b25; WORD $0xf85d80a4; WORD $0x8b010084; WORD $0xf81d80a4
 	WORD $0xf100009f; WORD $0x5400004c; WORD $0xd2800037; WORD $0xf944cab0
-	WORD $0xd61f0200
+	WORD $0xd61f0200; WORD $0xf94176b0; WORD $0xd61f0200
 
 // regNativeFeedbackTable is the feedback dispatcher's table: each operation's
 // handler's address, its own or the handlers' block's, the exit stub's
@@ -545,7 +546,7 @@ DATA ·regNativeFeedbackTable+1904(SB)/8, $·regNativeHandlers+59980(SB)
 DATA ·regNativeFeedbackTable+1912(SB)/8, $·regNativeHandlers+60168(SB)
 DATA ·regNativeFeedbackTable+1920(SB)/8, $·regNativeHandlers+60356(SB)
 DATA ·regNativeFeedbackTable+1928(SB)/8, $·regNativeHandlers+71004(SB)
-DATA ·regNativeFeedbackTable+1936(SB)/8, $·regNativeHandlers+40(SB)
+DATA ·regNativeFeedbackTable+1936(SB)/8, $·regNativeFeedbackHandlers+3812(SB)
 DATA ·regNativeFeedbackTable+1944(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+1952(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeFeedbackTable+1960(SB)/8, $·regNativeHandlers+40(SB)
@@ -610,7 +611,8 @@ DATA ·regNativeFeedbackTable+2424(SB)/8, $·regNativeHandlers+59120(SB)
 DATA ·regNativeFeedbackTable+2432(SB)/8, $·regNativeHandlers+59284(SB)
 DATA ·regNativeFeedbackTable+2440(SB)/8, $·regNativeHandlers+59448(SB)
 DATA ·regNativeFeedbackTable+2448(SB)/8, $·regNativeHandlers+59612(SB)
-GLOBL ·regNativeFeedbackTable(SB), RODATA, $2456
+DATA ·regNativeFeedbackTable+2456(SB)/8, $·regNativeHandlers+82448(SB)
+GLOBL ·regNativeFeedbackTable(SB), RODATA, $2464
 
 // nativeFeedbackTableAddr is the table's address.
 TEXT ·nativeFeedbackTableAddr(SB), NOSPLIT, $0-8

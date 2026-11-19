@@ -137,3 +137,57 @@ func TestJITRegStepLoopTiersUp(t *testing.T) {
 		}
 	}
 }
+
+// TestJITRegFusedBranchLoopTiersUp runs, once, a loop whose only back edge
+// is the jump of a fused branch -- instanceof_next's partner -- for 20,000
+// turns, in the native dispatcher and in the Go table, the collector idle
+// and marking: each back edge counts its function's budget as the unfused
+// jump's does (nativegen's feedbackUnfused), and the loop is compiled
+// while the call runs, a few hundred turns in. Before, plain's handler,
+// which takes the partner's jump itself, ran in the feedback dispatcher
+// too, and the budget was counted only where the interrupt budget ran out,
+// a turn in 1,024: the loop was compiled some 200,000 turns in.
+func TestJITRegFusedBranchLoopTiersUp(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, c := range []struct {
+		name, src string
+		op        bytecode.ROp
+	}{
+		{"instanceof", `function C() {} var o = new C()
+			function count(n) { var s = 0, i = 0; do { s = (s + i) | 0; if (++i >= n) break } while (o instanceof C); return s }`,
+			bytecode.RInstanceOfNext},
+	} {
+		for _, native := range []bool{true, false} {
+			for _, marking := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/native=%v/marking=%v", c.name, native, marking), func(t *testing.T) {
+					was := regNativeOn
+					regNativeOn = native
+					t.Cleanup(func() { regNativeOn = was })
+					if marking {
+						jitMarkingForTest(t)
+					}
+					rts := regNativeRuntimes(t, c.src)
+					r := rts[0]
+					fn, _ := r.GetProp(Obj(r.Global()), r.Intern("count"))
+					cl := fn.Object().fn().closure
+					v, err := r.Call(fn, Undefined, []Value{Float(20000)})
+					// Node: count(20000).
+					if got := regNativeShow(r, v, err); got != "199990000" {
+						t.Fatalf("count(20000) = %s, want 199990000", got)
+					}
+					if cl.reg == nil || !slices.ContainsFunc(cl.reg.rc.Code, func(w bytecode.RInstr) bool { return w.Op() == c.op }) {
+						t.Fatalf("count's loop does not end in %s", c.op)
+					}
+					if e := cl.closureCode.jitReg; e == nil || e.code == nil {
+						t.Fatalf("count's loop not compiled in a run of 20,000 turns: %+v", e)
+					}
+					if st := r.RegNativeStats(); st.Entries == 0 {
+						t.Errorf("no native code entered: %+v", st)
+					}
+				})
+			}
+		}
+	}
+}

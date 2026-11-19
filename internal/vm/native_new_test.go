@@ -3,6 +3,8 @@
 package vm
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -108,12 +110,209 @@ func TestRegNativeInstanceOf(t *testing.T) {
 	// prototype value and instance chain, including proxy traps. Reuse the
 	// exact-answer cases of the Go cache, under both marking states.
 	nativeCheck(t, instanceOfChangesSrc, "")
+	for _, body := range []string{
+		"if (v instanceof c) return true; return false",
+		"if (!(v instanceof c)) return false; return true",
+	} {
+		nativeCheck(t, strings.ReplaceAll(nativeInstanceOfSrc, "return v instanceof c", body), "")
+	}
+	nativeCheck(t, `
+		function F() {} var o = new F(), n = 0
+		do { if (++n == 20000) o = {} } while (o instanceof F)
+		String(n)`, "")
 	nativeCheck(t, nativeInstanceOfSrc, `
 		class K {} class L extends K {}
 		function F() {}
 		var o = new L(), f = new F(), s = 0
 		for (var i = 0; i < 1000; i++) if (o instanceof K && !(f instanceof K) && f instanceof F && !(i instanceof F)) s++
-		String(s)`, bytecode.RInstanceOf)
+		String(s)`, bytecode.RInstanceOfNext)
+}
+
+// instanceOfBranchSrc is instanceof consumed by a branch alone
+// (instanceof_next), forward both ways and as a loop's back edge, each
+// case run until its sites' caches hold it: primitives on the left, a
+// derived class, Symbol.hasInstance of the constructor's own and
+// inherited, defined after the site warmed and deleted again, put on the
+// constructor's prototype chain; bound functions, proxies as the
+// constructor (its get trap's keys) and as the instance, a proxy's
+// getPrototypeOf trap, a right side that is no function or no object, an
+// object with a Symbol.hasInstance, a prototype that is no object, an
+// arrow, a throwing getter, and the instance's chain and the prototype
+// changed after the sites warmed. instanceOfBranchWant is Node's answer
+// (vm.runInThisContext); the messages are the engine's own.
+const instanceOfBranchSrc = `
+	var out = [], keys = []
+	function br(v, C) { if (v instanceof C) return "T"; return "F" }
+	function nbr(v, C) { if (!(v instanceof C)) return "f"; return "t" }
+	function loop(v, C) { var i = 0; do { if (++i >= 3) break } while (v instanceof C); return i }
+	function at(f, v, C) { try { return f(v, C) } catch (e) { return e.name } }
+	function run(name, v, C) {
+		var r
+		for (var i = 0; i < 40; i++) r = at(br, v, C) + at(nbr, v, C) + at(loop, v, C)
+		out.push(name + "=" + r)
+	}
+	function F() {} var f = new F()
+	class K {} class L extends K {} var l = new L()
+	run("plain", f, F); run("object", {}, F); run("int", 1, F); run("string", "s", F); run("null", null, F)
+	run("undefined", undefined, F); run("symbol", Symbol(), F); run("bigint", 1n, F); run("derived", l, K); run("base", new K(), L)
+	class H { static [Symbol.hasInstance](v) { return v === 7 } } class H2 extends H {}
+	run("own-has", 7, H); run("own-has-no", f, H); run("inherited-has", 7, H2); run("inherited-has-no", 8, H2)
+	function G() {} var g = new G()
+	run("before-replace", g, G)
+	Object.defineProperty(G, Symbol.hasInstance, { value: v => v === 1, configurable: true })
+	run("replaced", g, G); run("replaced-int", 1, G)
+	delete G[Symbol.hasInstance]
+	run("restored", g, G)
+	function G2() {} var g2 = new G2()
+	run("before-ctor-proto", g2, G2)
+	Object.setPrototypeOf(G2, Object.create(Function.prototype, { [Symbol.hasInstance]: { value: () => "yes" } }))
+	run("ctor-proto", 0, G2)
+	var BF = F.bind(null), BBF = BF.bind(null)
+	run("bound", f, BF); run("bound-bound", f, BBF); run("bound-no", {}, BF); run("bound-int", 1, BF)
+	var PF = new Proxy(F, {}), PT = new Proxy(F, { get(t, k, r) { keys.push(typeof k === "symbol" ? k.description : k); return Reflect.get(t, k, r) } })
+	run("proxy-ctor", f, PF); run("proxy-trap", f, PT)
+	out.push("keys=" + keys.slice(0, 4).join(","))
+	var px = new Proxy(new F(), {}), pxo = new Proxy(new F(), { getPrototypeOf() { return Object.prototype } })
+	run("proxy-instance", px, F); run("proxy-instance-trap", pxo, F); run("proxy-in-chain", Object.create(px), F)
+	run("plain-object-right", f, {}); run("int-right", f, 1); run("null-right", f, null); run("string-right", f, "F")
+	run("has-on-object", f, { [Symbol.hasInstance]: () => 1 })
+	function P() {} P.prototype = 3
+	run("nonobject-proto", {}, P); run("nonobject-proto-int", 1, P)
+	var arrow = () => 1
+	run("arrow", {}, arrow); run("arrow-int", 1, arrow)
+	function T() {} Object.defineProperty(T, Symbol.hasInstance, { get() { throw new RangeError("x") } })
+	run("throwing-has", f, T)
+	function R() {} var ri = new R(), other = {}
+	run("chain-before", ri, R)
+	Object.setPrototypeOf(ri, other)
+	run("chain-cut", ri, R)
+	Object.setPrototypeOf(other, Object.create(R.prototype))
+	run("chain-deep", ri, R)
+	R.prototype = {}
+	run("ctor-proto-reassigned", ri, R); run("new-after-reassign", new R(), R)
+	function msg(v, C) { try { if (v instanceof C) return "T"; return "F" } catch (e) { return e.message } }
+	out.push(msg(f, {}), msg(f, 1), msg({}, P))
+	out.join("\n")`
+
+const instanceOfBranchWant = `plain=Tt3
+object=Ff1
+int=Ff1
+string=Ff1
+null=Ff1
+undefined=Ff1
+symbol=Ff1
+bigint=Ff1
+derived=Tt3
+base=Ff1
+own-has=Tt3
+own-has-no=Ff1
+inherited-has=Tt3
+inherited-has-no=Ff1
+before-replace=Tt3
+replaced=Ff1
+replaced-int=Tt3
+restored=Tt3
+before-ctor-proto=Tt3
+ctor-proto=Tt3
+bound=Tt3
+bound-bound=Tt3
+bound-no=Ff1
+bound-int=Ff1
+proxy-ctor=Tt3
+proxy-trap=Tt3
+keys=Symbol.hasInstance,prototype,Symbol.hasInstance,prototype
+proxy-instance=Tt3
+proxy-instance-trap=Ff1
+proxy-in-chain=Tt3
+plain-object-right=TypeErrorTypeErrorTypeError
+int-right=TypeErrorTypeErrorTypeError
+null-right=TypeErrorTypeErrorTypeError
+string-right=TypeErrorTypeErrorTypeError
+has-on-object=Tt3
+nonobject-proto=TypeErrorTypeErrorTypeError
+nonobject-proto-int=Ff1
+arrow=TypeErrorTypeErrorTypeError
+arrow-int=Ff1
+throwing-has=RangeErrorRangeErrorRangeError
+chain-before=Tt3
+chain-cut=Ff1
+chain-deep=Tt3
+ctor-proto-reassigned=Ff1
+new-after-reassign=Tt3
+the right operand of "instanceof" is not callable
+the right operand of "instanceof" must be an object
+the prototype is not an object`
+
+// TestRegNativeInstanceOfBranch runs instanceOfBranchSrc's branches on
+// an instanceof, which the register compiler fuses (instanceof_next), by
+// the Go table and natively, marking and not, with Node's answers.
+func TestRegNativeInstanceOfBranch(t *testing.T) {
+	prog := compileForTest(t, instanceOfBranchSrc)
+	n := 0
+	for _, c := range prog.Constants {
+		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
+			continue
+		}
+		if rc := c.Fn.RegCode(); rc != nil && slices.ContainsFunc(rc.Code, func(w bytecode.RInstr) bool { return w.Op() == bytecode.RInstanceOfNext }) {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Fatalf("%d functions branch on a fused instanceof, want br, nbr, loop and msg", n)
+	}
+	if got := nativeRunSrc(t, instanceOfBranchSrc, false); got != instanceOfBranchWant {
+		t.Errorf("Go table:\n%s\nwant\n%s", got, instanceOfBranchWant)
+	}
+	nativeCheck(t, instanceOfBranchSrc, "")
+}
+
+// TestRegNativeInstanceOfRealms branches on instanceof between two realms'
+// constructors and objects, by the Go table and natively, marking and
+// not: an object is an instance of its own realm's constructors alone,
+// Symbol.hasInstance being each realm's own.
+func TestRegNativeInstanceOfRealms(t *testing.T) {
+	const foreign = `function FB() {} [FB, new FB(), [], {}]`
+	const src = `
+	function FA() {} var a = new FA(), out = []
+	function br(v, C) { if (v instanceof C) return "T"; return "F" }
+	function loop(v, C) { var i = 0; do { if (++i >= 3) break } while (v instanceof C); return i }
+	var FB = foreign[0], b = foreign[1]
+	for (var i = 0; i < 40; i++) {
+		out = [br(a, FA), br(b, FB), br(a, FB), br(b, FA), br(foreign[2], Array), br(foreign[2], foreign[2].constructor),
+			br(foreign[3], Object), br(b, foreign[3].constructor), loop(b, FB), loop(b, FA)]
+	}
+	out.join()`
+	// Node, the foreign values from vm.runInNewContext.
+	const want = "T,T,F,F,F,T,F,T,3,1"
+	for _, native := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			if marking && !native {
+				continue
+			}
+			nativeMarking(t, marking)
+			was := regNativeOn
+			regNativeOn = native
+			r := New(Config{})
+			other := r.NewRealm()
+			fv, err := r.RunIn(other, compileForTest(t, foreign))
+			if err == nil {
+				err = r.SetProp(Obj(r.Global()), r.Intern("foreign"), fv)
+			}
+			var v Value
+			if err == nil {
+				v, err = r.Run(compileForTest(t, src))
+			}
+			regNativeOn = was
+			if err != nil {
+				t.Fatalf("native %v, marking %v: %v", native, marking, err)
+			}
+			if got := v.String().Go(); got != want {
+				t.Errorf("native %v, marking %v: %s, want %s", native, marking, got, want)
+			}
+			r.Close()
+		}
+	}
+	nativeMarking(t, false)
 }
 
 // nativeInstanceOfSlotSrc runs one instanceof site through the prototype

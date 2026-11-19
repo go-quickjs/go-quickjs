@@ -2917,6 +2917,15 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 		g.dead = c
 	}
 	r := g.expr(e, -1)
+	if n, ok := e.(*ast.Binary); ok && n.Op == "instanceof" {
+		// cond alone consumes the result: the partner may branch without
+		// materializing the boolean in this temporary.
+		pc := len(g.code) - 1
+		w := g.code[pc]
+		if w.Op() == bytecode.RInstanceOf && int(w.A()) == r && !g.isBinding(r) {
+			g.code[pc] = bytecode.MakeR(bytecode.RInstanceOfNext, w.X(), w.A(), w.B(), w.C())
+		}
+	}
 	op := bytecode.RJmpF
 	if when {
 		op = bytecode.RJmpT

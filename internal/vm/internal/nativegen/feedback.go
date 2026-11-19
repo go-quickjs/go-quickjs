@@ -31,14 +31,27 @@ import (
 // feedbackOps are the feedback variant's own handlers: the calls --
 // call_w, call_method_w and those in tail position -- and the returns;
 // and the operators plain's handlers make of two BigInts held in their
-// Values (feedbackBigOps), in handlerOps' order.
-var feedbackOps = append([]bytecode.ROp{
+// Values (feedbackBigOps), in handlerOps' order; the jumps; and the fused
+// operations whose partner is a jump (feedbackUnfused).
+var feedbackOps = append(append([]bytecode.ROp{
 	bytecode.RAdd, bytecode.RSub, bytecode.RMul,
 	bytecode.RJLt, bytecode.RJNLt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 	bytecode.RCallW, bytecode.RCallMW, bytecode.RRet, bytecode.RRetUndef,
 	bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt,
 	bytecode.RCallWT, bytecode.RCallMWT,
-}, feedbackOtherJumps...)
+}, feedbackOtherJumps...), bytecode.RInstanceOfNext)
+
+// feedbackUnfused is, of each fused operation whose partner is a jump that
+// plain's handler takes itself, the operation unfused: the feedback
+// variant's handler of it is plain's handler of that, through the table,
+// which leaves the partner to run as its own instruction and count its
+// back edge (feedbackBCJumps). instanceof_next's plain handler branches
+// on its partner's offset where the partner would, which counts nothing,
+// so a loop whose condition is an instanceof never spent its function's
+// budget.
+var feedbackUnfused = map[bytecode.ROp]bytecode.ROp{
+	bytecode.RInstanceOfNext: bytecode.RInstanceOf,
+}
 
 // The back edges. Each of feedbackBCJumps and feedbackSCJumps -- every
 // operation that jumps, by int32(BC) or by SC -- counts a backward jump's

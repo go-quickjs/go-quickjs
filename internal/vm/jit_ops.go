@@ -82,7 +82,7 @@ func (f *jitRegFeedback) regChainValue(rpc, reg, n int) (Value, bool) {
 // Symbol.hasInstance the realm's.
 func (f *jitRegFeedback) InstanceOf(pc int) (ssa.InstanceOfSite, bool) {
 	w, op, ok := f.at(pc)
-	if !ok || op != ir.Host || w.Op() != bytecode.RInstanceOf || f.fb.r.hasInstanceFn == nil {
+	if !ok || op != ir.Host || w.Op() != bytecode.RInstanceOf && w.Op() != bytecode.RInstanceOfNext || f.fb.r.hasInstanceFn == nil {
 		return ssa.InstanceOfSite{}, false
 	}
 	v, ok := f.regDefined(int(f.p.Origin[pc]), int(w.C()))

@@ -99,6 +99,28 @@ func TestVerifyReservedOps(t *testing.T) {
 	upPast[pc+1] = bytecode.MakeR(bytecode.RJLeU, 0, p.A(), 7, 0).WithSC(p.SC())
 	ok("an upvalue past the function's", f, withCode(rc, upPast, rc.Aux), false)
 
+	// instanceof_next keeps the conditional branch as its partner.
+	f = regFunctions(t, `function test(o, C) { if (o instanceof C) return 1; return 0 }`)["test"]
+	rc = f.RegCode()
+	view := *f
+	view.PropSites = rc.PropSites
+	f = &view
+	for pc, w := range rc.Code {
+		if w.Op() != bytecode.RInstanceOfNext {
+			continue
+		}
+		ok("instanceof branch", f, rc, true)
+		for name, partner := range map[string]bytecode.RInstr{
+			"another operand":   bytecode.MakeR(bytecode.RJmpF, 0, w.B(), 0, 0),
+			"another operation": bytecode.MakeR(bytecode.RMove, 0, w.A(), w.B(), 0),
+		} {
+			code := append([]bytecode.RInstr(nil), rc.Code...)
+			code[pc+1] = partner
+			ok("instanceof "+name, f, withCode(rc, code, rc.Aux), false)
+		}
+		ok("instanceof without partner", f, withCode(rc, rc.Code[:pc+1], rc.Aux), false)
+	}
+
 	// arith: mul r, x, y, and the operations of its form.
 	f = fns["arith"]
 	rc = f.RegCode()

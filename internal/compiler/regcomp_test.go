@@ -51,6 +51,11 @@ func TestRegisterBackendCode(t *testing.T) {
 		function chain(o) { return o.a.b.c.d }
 		function chainSelf(o) { o = o.a.b; return o }
 		function chainOptional(o) { return o?.a.b }
+		function instanceBranch(o, C) { if (o instanceof C) return 1; return 2 }
+		function instanceNot(o, C) { if (!(o instanceof C)) return 1; return 2 }
+		function instanceLoop(o, C, f) { do { o = f(o) } while (o instanceof C) }
+		function instanceValue(o, C) { return o instanceof C }
+		function instanceAssign(o, C) { var b; if (b = o instanceof C) return b; return b }
 		function initBoth(p) { var a; if (p) a = 1; else a = 2; return a }
 		function initSome(p) { var a, b; if (p) a = 1; b = 2; return a }
 		function initLoop(n) { var i, a; for (i = 0; i < n; i++) a = i; return a }
@@ -131,6 +136,21 @@ func TestRegisterBackendCode(t *testing.T) {
 	}
 	if code := fns["chainOptional"].RegCode().String(); strings.Contains(code, "get_prop_next") {
 		t.Errorf("optional chain has a fused read:\n%s", code)
+	}
+	for _, name := range []string{"instanceBranch", "instanceNot", "instanceLoop"} {
+		has(name, "instanceof_next")
+		code := fns[name].RegCode().Code
+		for pc, w := range code {
+			if w.Op() == bytecode.RInstanceOfNext && (pc+2 >= len(code) || code[pc+1].A() != w.A() ||
+				code[pc+1].Op() != bytecode.RJmpT && code[pc+1].Op() != bytecode.RJmpF) {
+				t.Errorf("%s: broken instanceof pair at %d", name, pc)
+			}
+		}
+	}
+	for _, name := range []string{"instanceValue", "instanceAssign"} {
+		if code := fns[name].RegCode().String(); strings.Contains(code, "instanceof_next") {
+			t.Errorf("%s loses its boolean value:\n%s", name, code)
+		}
 	}
 	for name, want := range map[string]int{
 		"locals": 0, "initBoth": 0, "initSome": 1, "initLoop": 2,

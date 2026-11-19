@@ -1,12 +1,15 @@
 package nativegen
 
 import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	. "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 )
 
 // instanceOf is instanceof by ordinaryHasInstance, as amd64's
 // (amd64_instanceof.go).
-func (g *armGen) instanceOf() {
+func (g *armGen) instanceOf() { g.instanceOfMode(false) }
+
+func (g *armGen) instanceOfMode(branch bool) {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
@@ -110,6 +113,30 @@ func (g *armGen) instanceOf() {
 	a.Cmp(r8, rC, true)
 	a.BCond(EQ, yes)
 	a.B(loop)
+	if branch {
+		a.Bind(yes)
+		a.MovImm(rD, uint64(bytecode.RJmpT))
+		a.B(store)
+		a.Bind(no)
+		a.MovImm(rD, uint64(bytecode.RJmpF))
+		a.Bind(store)
+		skip, forward := a.NewLabel(), a.NewLabel()
+		a.LoadU8(rC, rIP, 8)
+		a.Cmp(rC, rD, false)
+		a.BCond(NE, skip)
+		a.LoadS32(rC, rIP, 12)
+		a.CmpImm(rC, 0, true)
+		a.BCond(PL, forward)
+		a.CmpImm(rBud, 1, true)
+		a.BCond(LE, g.exit)
+		a.AddImm(rBud, rBud, -1, true)
+		a.Bind(forward)
+		a.AddLsl(rIP, rIP, rC, 3)
+		a.Bind(skip)
+		a.AddImm(rIP, rIP, 16, true)
+		g.dispatch()
+		return
+	}
 	a.Bind(yes)
 	a.LoadF(0, rCtx, ncTrue)
 	a.B(store)

@@ -576,7 +576,12 @@ plain one only where the JIT needs what no cache holds: it does its part and
 goes on in plain's handler of its operation, through a slot of its table
 that holds it (`nativegen`'s `slotPlain`), made by the variant's own emitter
 (`nativegen`'s feedback.go), so that plain's emitter and handlers know
-nothing of it; every other entry is plain's handler. Its calls -- `call_w`,
+nothing of it; every other entry is plain's handler. A fused operation
+whose partner is a jump that plain's handler takes itself,
+`instanceof_next`, has for its feedback handler plain's handler of the
+operation unfused, `instanceof`, through that operation's entry
+(`nativegen`'s `feedbackUnfused`): the partner then runs as its own
+instruction and counts its back edge (below). Its calls -- `call_w`,
 `call_method_w` and those in tail position -- count the calls made at each
 call site, and its returns the function's runs, into the counts of the
 function's closure's code (`jitRegCounts`: slot 0 the runs, 1+C the calls at
@@ -631,7 +636,8 @@ budget is a function's too (`jit_tier.go`):
 - a backward jump spends its function's budget by its distance, as V8's
   `JumpLoop` spends its bytecodes' distance: the feedback dispatcher's
   jumps, the step-and-branches' among them, which jump as their partners
-  do (nativegen's `feedback.go`, `feedbackEdgeAMD64` and
+  do, and the partners of the `instanceof_next` it runs unfused
+  (nativegen's `feedback.go`, `feedbackEdgeAMD64` and
   `feedbackEdgeARM64`; the Go table's `regJump`, `regJumpSlow` and
   `regStepTaken`, `regEdgeTick`) count down the work left of it for back
   edges (`closureCode`'s `jitRegEdges`, armed by `jitRegArmEdges`), and

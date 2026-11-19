@@ -315,8 +315,8 @@ the instruction. The families:
 `bytecode.ROp` is 8 bits, and the Go table, its slow functions and the
 native table each have 256 entries, every value with one: a value no
 operation has is `rhInvalid`'s, which panics and which the verifier proves
-no code holds, so the dispatch needs no range check. 242 values are taken
-(`ROpCount`), 14 are free.
+no code holds, so the dispatch needs no range check. 243 values are taken
+(`ROpCount`), 13 are free.
 
 How a value is allotted:
 
@@ -657,7 +657,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 129 of the 242 operations have a native handler
+**What is native.** 130 of the 243 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,
@@ -702,6 +702,21 @@ shared constructor cache leaves it intact. The probe uses the site's
 already computed address, so a miss does not repeat that lookup. This
 probe follows the existing out-of-line native helpers, keeping their
 positions as well as the handlers' unchanged.
+
+When a condition alone consumes an `instanceof` result, regcomp emits
+`instanceof_next` followed by its ordinary `jmp_true` or `jmp_false`
+partner. The native handler shares `instanceof`'s checks and prototype
+walk, then takes the partner's branch without storing a boolean or
+dispatching the partner. A backward branch spends the same interrupt
+budget. Any miss, including a spent budget, leaves both operands intact
+for Go, which stores the boolean and continues at the partner. The Go
+table and JIT execute the pair as the two original instructions, and so
+does the feedback dispatcher, whose handler of `instanceof_next` is
+plain's `instanceof` (nativegen's `feedbackUnfused`): the partner then
+counts its back edge toward the function's budget, which a branch taken
+by `instanceof_next` itself would not. The handler and its cache probe
+follow every handler and helper before them, so that none of those
+moves.
 
 **The exit stub.** An operation with no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the

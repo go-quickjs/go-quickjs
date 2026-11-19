@@ -197,8 +197,12 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 					}
 				}
 			}
-		case bytecode.RInstanceOf:
+		case bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 			ok = reg(a) && reg(b) && reg(c) && pc < len(rc.Aux) && rc.Aux[pc] != 0 && int(rc.Aux[pc]) <= int(fn.PropSites)
+			if w.Op() == bytecode.RInstanceOfNext {
+				ok = ok && pc+2 < len(code) && code[pc+1].A() == a &&
+					(code[pc+1].Op() == bytecode.RJmpT || code[pc+1].Op() == bytecode.RJmpF)
+			}
 		case bytecode.RApplyArgs:
 			ok = reg(a) && int(b)+3 <= n && reg(c) && rc.ForwardsArguments
 		case bytecode.RRetUndef:

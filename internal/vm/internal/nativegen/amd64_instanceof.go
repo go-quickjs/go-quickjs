@@ -1,6 +1,7 @@
 package nativegen
 
 import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	. "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 )
 
@@ -13,7 +14,9 @@ import (
 // false, or an object whose prototypes, walked as proto walks them, are
 // no proxies. Anything else exits, before anything is written: Go fills
 // the site's cache, makes a prototype not made yet, and throws.
-func (g *nativeGen) instanceOf() {
+func (g *nativeGen) instanceOf() { g.instanceOfMode(false) }
+
+func (g *nativeGen) instanceOfMode(branch bool) {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
@@ -122,6 +125,30 @@ func (g *nativeGen) instanceOf() {
 	a.Op(Cmp, R8, RCX, true)
 	a.Jcc(CondE, yes)
 	a.Jmp(loop)
+	if branch {
+		a.Bind(yes)
+		a.MovImm(RDX, uint64(bytecode.RJmpT))
+		a.Jmp(store)
+		a.Bind(no)
+		a.MovImm(RDX, uint64(bytecode.RJmpF))
+		a.Bind(store)
+		skip, forward := a.NewLabel(), a.NewLabel()
+		a.LoadU8(RCX, RBX, 8)
+		a.Op(Cmp, RCX, RDX, false)
+		a.Jcc(CondNE, skip)
+		a.LoadS32(RCX, RBX, 12)
+		a.Op(Test, RCX, RCX, true)
+		a.Jcc(CondNS, forward)
+		a.OpImm(Cmp, R11, 1, true)
+		a.Jcc(CondLE, g.exit)
+		a.OpImm(Sub, R11, 1, true)
+		a.Bind(forward)
+		a.LeaIdx(RBX, RBX, RCX, 8, 0)
+		a.Bind(skip)
+		a.OpImm(Add, RBX, 16, true)
+		g.dispatch()
+		return
+	}
 	a.Bind(yes)
 	a.Load(R9, RDI, ncTrue)
 	a.Jmp(store)

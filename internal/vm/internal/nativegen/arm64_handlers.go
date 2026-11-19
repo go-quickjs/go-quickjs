@@ -1141,6 +1141,21 @@ func armEmit(v *variant) (*block, error) {
 	for _, emit := range g.reloads {
 		emit()
 	}
+	// The handlers added since the code above was laid out, after all of
+	// it, so that none of it moves, each followed by the out-of-line code
+	// it leaves in last.
+	for _, x := range []struct {
+		op   bytecode.ROp
+		emit func()
+	}{
+		{bytecode.RInstanceOfNext, func() { g.instanceOfMode(true) }},
+	} {
+		n := len(g.last)
+		h(x.op, x.emit)
+		for _, emit := range g.last[n:] {
+			emit()
+		}
+	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)
 	}

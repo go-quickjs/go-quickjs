@@ -1423,7 +1423,7 @@ func (l *regLowering) lower(pc int) {
 			break
 		}
 		host()
-	case bytecode.RInstanceOf:
+	case bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		// Go's, from native code where the VM says so (ir's Window).
 		l.emit(ir.Instruction{Op: ir.Host, Window: true, Left: reg(b), Right: reg(c), Dest: int(a), Extra: 1}, false)
 	case bytecode.RIn:
@@ -2197,7 +2197,7 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return []int{a, b, c}, nil, false
 	case bytecode.RApplyArgs:
 		return append(span(b, 3), c), []int{a}, false
-	case bytecode.RInstanceOf:
+	case bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		return []int{b, c}, []int{a}, false
 	case bytecode.RPrivateIn:
 		// #x in o, of the object and the key's register.

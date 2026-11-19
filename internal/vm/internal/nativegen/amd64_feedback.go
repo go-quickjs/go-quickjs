@@ -25,6 +25,10 @@ func feedbackAMD64(v *variant) (*block, error) {
 		l := a.NewLabel()
 		a.Bind(l)
 		labels[op] = l
+		if unfused, ok := feedbackUnfused[op]; ok {
+			a.JmpMem(R13, 8*int32(unfused))
+			continue
+		}
 		if jumps, bc := feedbackJumps(op); jumps {
 			feedbackEdgeAMD64(a, bc)
 		}

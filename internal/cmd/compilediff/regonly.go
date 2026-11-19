@@ -373,7 +373,7 @@ func regInstr(t *regTables, fn *bytecode.Function, rc *bytecode.RegCode, pc int,
 	case bytecode.RGetPrivate, bytecode.RSetPrivate:
 		extra = append(extra, t.site(aux>>16), t.name(aux&0xffff))
 		auxRaw = false
-	case bytecode.RInstanceOf:
+	case bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		extra = append(extra, t.siteAnon(aux))
 		auxRaw = false
 	case bytecode.RLit:

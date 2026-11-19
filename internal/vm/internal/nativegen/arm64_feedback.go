@@ -25,6 +25,11 @@ func feedbackARM64(v *variant) (*block, error) {
 		l := a.NewLabel()
 		a.Bind(l)
 		labels[op] = l
+		if unfused, ok := feedbackUnfused[op]; ok {
+			a.Load(rJ, rTab, 8*int32(unfused))
+			a.Br(rJ)
+			continue
+		}
 		if jumps, bc := feedbackJumps(op); jumps {
 			feedbackEdgeARM64(a, bc)
 		}

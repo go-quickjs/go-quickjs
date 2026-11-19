@@ -1022,7 +1022,7 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 	case bytecode.RTypeof:
 		// Its name, which Go makes from native code.
 		return []ssa.CallSite{{Go: ssa.GoCall, TypeOf: true, ThisSlot: -1}}
-	case bytecode.RInstanceOf:
+	case bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		// Go's, from native code, by the site's cache, as the interpreter
 		// makes it: it may run code, a Symbol.hasInstance method or a
 		// proxy's trap.

@@ -62,7 +62,7 @@ func regRoles(w bytecode.RInstr) (reads, writes []int, known bool) {
 		return nil, []int{a}, true
 	case bytecode.RGetIndex, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin, bytecode.RBitAnd,
 		bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr, bytecode.RAddI32,
-		bytecode.RSubI32, bytecode.RIn, bytecode.RInstanceOf:
+		bytecode.RSubI32, bytecode.RIn, bytecode.RInstanceOf, bytecode.RInstanceOfNext:
 		return []int{b, c}, []int{a}, true
 	case bytecode.RSetUpval, bytecode.RSetGlobal, bytecode.RJmpF, bytecode.RJmpT, bytecode.RJNull, bytecode.RJNotNull,
 		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,

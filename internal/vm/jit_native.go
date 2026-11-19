@@ -2839,7 +2839,7 @@ func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool 
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
-	case op == bytecode.RInstanceOf && kind == abi.GoCallInstanceOf:
+	case (op == bytecode.RInstanceOf || op == bytecode.RInstanceOfNext) && kind == abi.GoCallInstanceOf:
 		// As rsInstanceOf makes it, by the site's cache: it may run code.
 		aux := int(c.rc.Aux[rpc])
 		if aux >= len(f.cl.ic) {
@@ -3700,7 +3700,7 @@ func (r *Runtime) regFinishCall(f *frame, c *regCode, wb, rpc int, v Value, err 
 	if err == nil {
 		dest := int(w.B())
 		switch w.Op() {
-		case bytecode.RInstanceOf, bytecode.RTypeof, bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RApplyArgs,
+		case bytecode.RInstanceOf, bytecode.RInstanceOfNext, bytecode.RTypeof, bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RApplyArgs,
 			bytecode.RIterStep, bytecode.RIterRest:
 			// R[A]'s: a getter's, called for get_prop (an accessor
 			// inlined, jitRegInlined), as typeof's and instanceof's, and a

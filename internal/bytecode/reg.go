@@ -731,6 +731,11 @@ const (
 	// on at pc+2. Otherwise make the first read and go on at pc+1, leaving
 	// the partner its source position and its ordinary semantics.
 	RGetPropNext
+	// RInstanceOfNext is RInstanceOf with an adjacent RJmpT or RJmpF
+	// partner of its A, a temporary dead after the branch. The native
+	// handler may branch without storing the boolean; the slow path
+	// stores it and goes on at pc+1. The JIT lowers both instructions.
+	RInstanceOfNext
 
 	// ROpCount is how many operations there are, each below it: the
 	// interpreter's table has an entry for every value an ROp can hold,
@@ -1235,7 +1240,7 @@ var rOpNames = [...]string{
 	RGetIndexI: "get_index_imm", RSetIndexI: "set_index_imm", RCallMW: "call_method_w", RNewW: "new_w", RClosureW: "closure_w",
 	RPostInc: "post_inc", RPostDec: "post_dec", RGetLength: "get_length",
 	RJEq: "jeq", RJNe: "jne", RJEqI: "jeq_imm", RJNeI: "jne_imm", RJNull: "jnull", RJNotNull: "jnotnull",
-	RThrow: "throw", RInstanceOf: "instanceof", RIn: "in", RDelete: "delete", RArguments: "arguments", RNewArrayK: "new_array_k", RAddProp: "add_prop", RAddPropI: "add_prop_imm", RApplyArgs: "apply_args",
+	RThrow: "throw", RInstanceOf: "instanceof", RInstanceOfNext: "instanceof_next", RIn: "in", RDelete: "delete", RArguments: "arguments", RNewArrayK: "new_array_k", RAddProp: "add_prop", RAddPropI: "add_prop_imm", RApplyArgs: "apply_args",
 	RGetIndexPre: "get_index_pre", RGetIndexPost: "get_index_post", RNewArrayE: "new_array_empty", RAddIndex: "add_index", RAddIndexK: "add_index_k", RAddIndexI: "add_index_imm", RSwitch: "switch", RJTypeof: "jtypeof", RTypeof: "typeof", RSwitchTypeof: "switch_typeof", RNewObjectLit: "new_object_lit", RAppend: "append", RStrFreeze: "str_freeze", RCharCodeAt: "char_code_at", RIterNext: "iter_next", RYield: "yield", RLit: "regexp_lit", RGetPrivate: "get_private", RSetPrivate: "set_private", RJLtU: "jlt_upval", RJNLtU: "jnlt_upval", RJLeU: "jle_upval", RJNLeU: "jnle_upval",
 	RNewRegExp: "new_regexp", RForOfStart: "for_of_start", RForInStart: "for_in_start",
 	RIterClose: "iter_close", RIterCloseThrow: "iter_close_throw",
@@ -1344,7 +1349,7 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s @%d, %s", op, r(w.A()), w.C(), r(w.B()))
 	case RDefineField:
 		return fmt.Sprintf("%s %s name%d, %s", op, r(w.A()), w.C(), r(w.B()))
-	case RInstanceOf, RIn, RDelete:
+	case RInstanceOf, RInstanceOfNext, RIn, RDelete:
 		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
 	case RGetPrivate:
 		return fmt.Sprintf("%s %s, %s.#%s", op, r(w.A()), r(w.B()), r(w.C()))
