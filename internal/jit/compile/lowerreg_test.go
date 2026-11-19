@@ -3,6 +3,7 @@ package compile
 import (
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -260,5 +261,31 @@ function loop(o) { let s = 0; for (let i = 0; i < 9; i++) s += o.f(); return s }
 		t.Errorf("loop: %v", err)
 	} else if err := p.Validate(); err != nil {
 		t.Errorf("loop: %v", err)
+	}
+}
+
+// A cold lowering (LowerRegCold), its scratch its own, makes the program
+// LowerReg makes with the scratch the last lowering kept, whose
+// instructions it copies at their lengths: what a measure of the cold
+// lowering's memory measures is the lowering the JIT makes.
+func TestLowerRegColdSameProgram(t *testing.T) {
+	fns := regCompiled(t, `
+function sum(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s }
+function nested(n) { let c = 0; for (let i = 0; i < n; i++) for (let j = i; j >= 0; j--) { if (j == 3) continue; if (i > 7) break; c += j * i } return c }
+function sw(x) { switch (x) { case 1: return 10; case 2: case 3: return 20; default: return 40 } }
+`)
+	for _, name := range []string{"nested", "sum", "sw", "nested"} {
+		fn := fns[name]
+		warm, err := LowerReg(fn.RegCode(), fn)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		cold, err := LowerRegCold(fn.RegCode(), fn)
+		if err != nil {
+			t.Fatalf("%s: cold: %v", name, err)
+		}
+		if !reflect.DeepEqual(warm, cold) {
+			t.Errorf("%s: the cold lowering's program differs:\n%v\nwarm:\n%v", name, cold.Code, warm.Code)
+		}
 	}
 }

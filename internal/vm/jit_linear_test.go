@@ -128,11 +128,18 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 		runtime.ReadMemStats(&ms)
 		return ms.TotalAlloc
 	}
-	// The least of three lowerings: what the lowering keeps for the next
-	// one (its scratch's pool) is there or not as collections run. So no
-	// collection runs while they do: one that ran during each of the three,
-	// on a slow runner, had each make its scratch anew, 110 MB for the
-	// 8,000 values' 77.
+	// The least of three lowerings, each with a scratch of its own
+	// (LowerRegCold), as the build and the backend below each have a
+	// workspace of their own. The scratch LowerReg takes from the
+	// process's pool, kept in a slot of the processor the last lowering
+	// ran on, is there or not as the goroutine moves between processors
+	// and collections run: with it the loops' lowering took 3.4 MB for
+	// 1,000 values and 30.8 MB for 8,000, without it 7.6 and 72.7 MB, and
+	// on a loaded runner the 1,000 had it and the 8,000 did not, 21.3
+	// times the memory (spill's 16.8 times, 5.7 and 95.3 MB). Nor does a
+	// collection run while they do, nor the finalizers and cleanups it
+	// sets off, whose allocations the process's count (TotalAlloc) adds
+	// to the lowering's.
 	var c linearCompile
 	var p *ir.Program
 	runtime.GC()
@@ -141,7 +148,7 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 		defer debug.SetGCPercent(debug.SetGCPercent(-1))
 		for k := range 3 {
 			a0 := alloc()
-			q, err := jitcompile.LowerReg(cl.reg.rc, cl.fn)
+			q, err := jitcompile.LowerRegCold(cl.reg.rc, cl.fn)
 			if err != nil {
 				t.Fatal(err)
 			}

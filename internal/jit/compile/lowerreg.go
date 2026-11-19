@@ -28,6 +28,17 @@ func LowerReg(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, error) 
 	return lowerRegRecovered(rc, fn, lowering{ssa: true})
 }
 
+// LowerRegCold is LowerReg with a scratch of its own (regScratch), made
+// for it and let go of, not the one the process's lowerings keep
+// (regScratchPool): what it allocates is the same at every call, whatever
+// lowerings ran before it -- the pool keeps the scratch in a slot of the
+// processor the lowering ran on, which one on another finds empty -- as
+// the build's and the backend's are, each in a workspace of its own. A
+// measure of a lowering's memory uses it (vm's TestJITCompileLinear).
+func LowerRegCold(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, error) {
+	return lowerRegRecovered(rc, fn, lowering{ssa: true, cold: true})
+}
+
 // LowerRegHot is LowerReg for a function its callers have shown to be hot.
 func LowerRegHot(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRegRecovered(rc, fn, lowering{ssa: true, hot: true})
@@ -653,12 +664,14 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 		return nil, err
 	}
 	l := &regLowering{rc: rc, fn: fn, m: m, scratch: rc.NumRegs + len(fn.Upvalues), this: -1, litHosts: litHosts, ins: regJumpIns(rc, reach)}
-	ls := regScratchPool.Get().(*regScratch)
-	l.code, l.origin, l.patch = ls.code[:0], ls.origin[:0], ls.patch[:0]
-	defer func() {
-		ls.code, ls.origin, ls.patch = l.code[:0], l.origin[:0], l.patch[:0]
-		regScratchPool.Put(ls)
-	}()
+	if !m.cold {
+		ls := regScratchPool.Get().(*regScratch)
+		l.code, l.origin, l.patch = ls.code[:0], ls.origin[:0], ls.patch[:0]
+		defer func() {
+			ls.code, ls.origin, ls.patch = l.code[:0], l.origin[:0], l.patch[:0]
+			regScratchPool.Put(ls)
+		}()
+	}
 	derived := fn.Kind == bytecode.KindDerivedConstructor
 	if derived {
 		// A derived constructor's this binding, past the captured
