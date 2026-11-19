@@ -648,6 +648,35 @@ func newShapedLiteral(s *shape, class Class, n int) *Object {
 	return &lo.Object
 }
 
+// newLiteralPair makes an ordinary object of shape s with its two values.
+// Keep the header and value pointers together so that their initialization
+// shares one write-barrier check.
+func newLiteralPair(s *shape, first, second Value) *Object {
+	lo := new(literalObject2)
+	lo.flags, lo.valn, lo.valc = objExtensible|objInlineProps, 2, 2
+	lo.inline[0].num, lo.inline[1].num = first.num, second.num
+	lo.shape, lo.valp, lo.inline[0].ref, lo.inline[1].ref = s, &lo.inline[0], first.ref, second.ref
+	return &lo.Object
+}
+
+// objectPair is the JSON parser's objectOf of an object it has every key
+// of, a pair -- two values, no room -- made with its values in place
+// (newLiteralPair). It is here, not among the parser's functions, so that
+// objectOf keeps its size and the parser's code after it its layout.
+func (p *jsonParser) objectPair(s *shape, mark int) *Object {
+	vals := p.scratch[mark:]
+	if len(vals) != 2 {
+		return p.objectOf(s, mark, 0)
+	}
+	o := newLiteralPair(s, vals[0], vals[1])
+	clear(vals)
+	p.scratch = p.scratch[:mark]
+	if verifyShapes {
+		checkShape(o)
+	}
+	return o
+}
+
 // errorObject carries the Go wrapper used to propagate this error through the
 // interpreter. An Error and its wrapper have the same lifetime, so keeping
 // them together avoids a second allocation each time the Error is thrown.

@@ -56,6 +56,10 @@ var intendedInlining = []string{
 	"(*shape).roomFor",
 	"(*shape).noteBuilt",
 	"(*funcData).ctorShape",
+	// Literal headers and values initialized together, and the gate of
+	// the first literal's lookup of its shared root.
+	"newLiteralPair",
+	"(*Runtime).regLiteralKeyedRoot",
 	// The array methods' receiver and element reads, Object.getPrototypeOf,
 	// a global's read past a with or a proxy.
 	"(*Runtime).plainArray",

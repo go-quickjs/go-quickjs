@@ -78,10 +78,14 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 		// The shape the keys led to from this root before, which the
 		// site keeps: transitions are
 		// never undone, so the values go in place.
-		o := newShapedLiteral(final, ClassObject, m)
-		dst := o.vals()[:n]
-		copy(dst, vals)
-		o.valn = uint32(n)
+		var o *Object
+		if n == 2 && m == 2 {
+			o = newLiteralPair(final, vals[0], vals[1])
+		} else {
+			o = newShapedLiteral(final, ClassObject, m)
+			copy(o.vals()[:n], vals)
+			o.valn = uint32(n)
+		}
 		if verifyShapes {
 			checkShape(o)
 		}
@@ -363,10 +367,14 @@ func regCallSiteNative(cl *closure, w bytecode.RInstr, o *Object, fd *funcData, 
 // object.
 func (r *Runtime) regLiteralKeyedRoot(c *regCode, pc int, ic *propCache) {
 	if s := ic.shape; s != nil && s.next == nil {
-		if hs := c.rc.ObjKeysHash; pc < len(c.rc.Aux) && int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {
-			if h := hs[c.rc.Aux[pc]]; h != 0 {
-				keyedRoot[struct{}](r, h, ic)
-			}
+		r.regLiteralKeyedRootSlow(c, pc, ic, s)
+	}
+}
+
+func (r *Runtime) regLiteralKeyedRootSlow(c *regCode, pc int, ic *propCache, s *shape) {
+	if hs := c.rc.ObjKeysHash; pc < len(c.rc.Aux) && int(c.rc.Aux[pc]) < len(hs) && (s == noShape || s.proto == r.proto.object) {
+		if h := hs[c.rc.Aux[pc]]; h != 0 {
+			keyedRoot[struct{}](r, h, ic)
 		}
 	}
 }

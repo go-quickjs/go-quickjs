@@ -1668,7 +1668,7 @@ func (p *jsonParser) parseObject() (Value, error) {
 			if s != *slot {
 				*slot = remember(s)
 			}
-			return Obj(p.objectOf(s, mark, 0)), nil
+			return Obj(p.objectPair(s, mark)), nil
 		default:
 			return Undefined, p.rt.throwSyntaxError(
 				"expected ',' or '}' in JSON at position %d", p.pos)

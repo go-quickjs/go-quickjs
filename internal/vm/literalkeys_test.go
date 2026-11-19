@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -124,6 +125,24 @@ func TestLiteralKeysRoom(t *testing.T) {
 	}
 	if c := objs[1].Object().valc; c != 2 {
 		t.Errorf("a literal of other keys has room for %d, want 2", c)
+	}
+	v, err = r.Run(compileForTest(t, `
+		function literalPair(first, second) { return {first: first, second: second} }
+		var pair;
+		for (var i = 0; i < 50; i++) pair = literalPair({tag: "first"}, {tag: "second"});
+		pair`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	pair := v.Object()
+	if pair.valn != 2 || pair.valc != 2 {
+		t.Fatalf("pair has %d values in room for %d", pair.valn, pair.valc)
+	}
+	for i, want := range []string{"first", "second"} {
+		if got := pair.valAt(i); !got.IsObject() || got.Object().valAt(0).String().Go() != want {
+			t.Fatalf("pair value %d did not retain its object", i)
+		}
 	}
 }
 
