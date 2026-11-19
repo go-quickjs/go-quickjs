@@ -463,12 +463,15 @@ func TestRegExpLeafDeadline(t *testing.T) {
 // once more: a call of f2 below took four times what a call of a global
 // pattern's exec, never a leaf's, takes. (A body pureCall has found closed
 // often enough is no longer tried: the warm-up calls f2 with a pattern
-// whose leaf's call passes.)
+// whose leaf's call passes.) Asserted on the matches made -- exec's calls
+// that find no match remembered -- not on time, which a loaded machine
+// stretched past any bound.
 func TestRegExpLeafSpentOnceNested(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spends the step budget")
 	}
 	r := New(Config{})
+	defer r.Close()
 	src := `function f0(re, s) { return re.exec(s) }
 function f1(re, s) { return f0(re, s) }
 function f2(re, s) { return f1(re, s) }
@@ -478,26 +481,48 @@ warm(); warm()`
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)
 	}
-	// In the process's CPU time, as TestRegExpLeafFailsAgainWithFrame.
-	best := func(src string) time.Duration {
-		b := time.Duration(1 << 62)
-		for range 2 {
-			start := processCPUForTest()
-			v, err := r.Run(compileForTest(t, src))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := v.String().Go(); got != "SyntaxError: regular expression is too complex" {
-				t.Fatalf("%s = %s", src, got)
-			}
-			b = min(b, processCPUForTest()-start)
+	// exec's function watched: each call finding no match remembered
+	// matches, and spends the budget.
+	l := regexpExecLeafForTest(r)
+	fd := r.regexpExecFn.fn()
+	native := fd.native
+	t.Cleanup(func() { fd.native = native })
+	var leafCalls, framedCalls, matches int
+	fd.native = func(r *Runtime, this Value, args []Value) (Value, error) {
+		if l.framed(r) {
+			framedCalls++
+		} else {
+			leafCalls++
 		}
-		return b
+		if !l.spends(this.Object().dataOf().(*regexpData).re, args[0].String(), 0) {
+			matches++
+		}
+		return native(r, this, args)
 	}
 	call := "var out; try { %s } catch (e) { out = e.name + ': ' + e.message } out"
-	leaf, framed := best(fmt.Sprintf(call, "f2(/(a+)+b/, s)")), best(fmt.Sprintf(call, "/(a+)+b/g.exec(s)"))
-	r.Close()
-	if leaf > 2*framed {
-		t.Errorf("the leaf's failed call took %v, one with a frame %v: the match made %.1f times", leaf, framed, float64(leaf)/float64(framed))
+	for _, c := range []struct {
+		src                 string
+		leaf, framed, match int
+	}{
+		// A global pattern's exec, never a leaf's: one call, with its frame.
+		{"/(a+)+b/g.exec(s)", 0, 1, 1},
+		// The leaf's, nested in three bodies: the leaf's call, any made
+		// again without a frame as a pure body gives up, and the call with
+		// a frame that throws -- one of them matching.
+		{"f2(/(a+)+b/, s)", -1, 1, 1},
+	} {
+		leafCalls, framedCalls, matches = 0, 0, 0
+		v, err := r.Run(compileForTest(t, fmt.Sprintf(call, c.src)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != "SyntaxError: regular expression is too complex" {
+			t.Fatalf("%s = %s", c.src, got)
+		}
+		t.Logf("%s: exec called %d times as a leaf, %d with a frame, %d matching", c.src, leafCalls, framedCalls, matches)
+		if c.leaf < 0 && leafCalls == 0 || c.leaf >= 0 && leafCalls != c.leaf || framedCalls != c.framed || matches != c.match {
+			t.Errorf("%s: exec called %d times as a leaf, %d with a frame, %d matching; want %d with a frame, %d matching",
+				c.src, leafCalls, framedCalls, matches, c.framed, c.match)
+		}
 	}
 }
