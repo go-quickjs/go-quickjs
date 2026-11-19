@@ -73,22 +73,22 @@ func (r *Runtime) regNewObjectLit(f *frame, c *regCode, k *regKept, regs *[1 << 
 	if root != nil && int(root.slack) > m {
 		m = int(root.slack)
 	}
-	o := newShapedLiteral(root.orRoot(ClassObject, r.proto.object), ClassObject, m)
 	vals := regs[w.B() : int(w.B())+n]
-	if final := ic.next; final != nil && root != nil && ic.s1 == root && n <= int(o.valc) {
+	if final := ic.next; final != nil && root != nil && ic.s1 == root && n <= m {
 		// The shape the keys led to from this root before, which the
 		// site keeps: transitions are
 		// never undone, so the values go in place.
+		o := newShapedLiteral(final, ClassObject, m)
 		dst := o.vals()[:n]
 		copy(dst, vals)
-		o.setVals(dst)
-		o.shape = final
+		o.valn = uint32(n)
 		if verifyShapes {
 			checkShape(o)
 		}
 		regs[w.A()] = Obj(o)
 		return
 	}
+	o := newShapedLiteral(root.orRoot(ClassObject, r.proto.object), ClassObject, m)
 	along := root != nil
 	keys := c.rc.ObjKeys[c.rc.Aux[pc]]
 	for i, key := range keys {
