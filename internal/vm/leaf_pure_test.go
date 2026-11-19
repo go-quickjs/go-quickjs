@@ -82,14 +82,13 @@ function run() {
 run()`
 	const want = "121|211|212|212|212|212|211"
 	for _, native := range []bool{false, regNativeOn} {
-		was := regNativeOn
-		regNativeOn = native
+		was := SetRegNative(native)
 		r := New(Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
 		v, err := r.Run(compileForTest(t, src))
-		regNativeOn = was
+		SetRegNative(was)
 		r.Close()
 		if err != nil {
 			t.Fatalf("native %v: %v", native, err)
