@@ -1082,14 +1082,15 @@ func nativeNew(regs *[1 << 16]Value, w bytecode.RInstr, pc int, ctx *nativeCtx) 
 	r := ctx.st.r
 	e := &f.cl.regCalls[w.C()]
 	o := e.callee
-	obj := r.regCtorThis(e, o.fn())
+	fd := o.fn()
+	obj := r.regCtorThis(e, fd)
 	if obj == nil {
 		return 0
 	}
 	a := int(w.A())
 	regs[a+1] = Obj(obj)
 	ctx.scratch[sThisRef] = 0
-	if e.callee.fn().ctorKind == ctorDerived {
+	if fd.ctorKind == ctorDerived {
 		// A derived class's frame, with its this binding, which the
 		// handler gives the frame, holding the object until super()
 		// binds it, as regRunFD makes one.

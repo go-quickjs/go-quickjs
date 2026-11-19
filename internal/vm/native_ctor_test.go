@@ -22,6 +22,9 @@ Pair`))
 	e := &regCallCache{callee: v.Object(), kind: regCallConstruct}
 	if obj := r.regCtorThis(e, e.callee.fn()); obj == nil {
 		t.Fatal("settled constructor was not allocated")
+	} else if root := e.callee.fn().ctorShape(); obj.shape != root || !root.tracked() ||
+		!e.callee.fn().closure.sharedProtos || obj.valc != uint32(root.slack) {
+		t.Fatal("settled constructor did not use its tracked root and room")
 	}
 	if e.this.ref == nil || (*shape)(e.this.ref) != e.callee.shape {
 		t.Fatal("constructor's prototype slot was not cached")
@@ -32,8 +35,14 @@ Pair`))
 	oldShape := e.callee.shape
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
+		if _, err := r.Run(compileForTest(t, `Pair.prototype = { tag: 7 }`)); err != nil {
+			t.Fatal(err)
+		}
+		if obj := r.regCtorThis(e, e.callee.fn()); obj != nil {
+			t.Fatal("new prototype bypassed slack tracking")
+		}
 		v, err = r.Run(compileForTest(t, `
-var p = { tag: 7 }; Pair.prototype = p;
+var p = Pair.prototype;
 var x; for (var i = 0; i < 20; i++) x = make();
 [Object.getPrototypeOf(x) === p, x.a, x.b].join()`))
 		if err != nil || v.String().Go() != "true,1,2" {

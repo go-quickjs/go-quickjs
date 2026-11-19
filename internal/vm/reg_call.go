@@ -1314,8 +1314,14 @@ func (r *Runtime) regCtorThis(e *regCallCache, fd *funcData) *Object {
 	}
 	proto := p.Object()
 	root := r.shapes.ctorRoot(fd, proto)
-	if root != nil && !root.tracked() && fd.ctorKind != ctorDerived {
-		return nil
+	if root != nil {
+		if root.tracked() {
+			if fd.closure.sharedProtos {
+				return newShapedLiteral(root, ClassObject, int(root.slack))
+			}
+		} else if fd.ctorKind != ctorDerived {
+			return nil
+		}
 	}
 	return newOrdinary[struct{}](fd, root, proto, root.roomFor(int(fd.closure.fn.ThisProps)))
 }
