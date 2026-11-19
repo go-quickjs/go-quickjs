@@ -425,6 +425,13 @@ func (r *Runtime) initDisplayNames(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		if rt.nodeQuirks && o.kind != "language" {
+			// V8 checks the form of a region, a script, a currency or a
+			// calendar but keeps its case, and ICU names one only in its
+			// own case, a currency's aside: "ISLAMIC" is no calendar, and
+			// is written back as it came.
+			canonical = code.Go()
+		}
 		if name, ok := o.names.Of(canonical); ok {
 			return Str(NewString(name)), nil
 		}

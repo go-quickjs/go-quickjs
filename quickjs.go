@@ -367,7 +367,12 @@ func WithLocale(tag string) Option {
 // -- where the standard has no direction; and Intl.Locale's maximize keeps a
 // locale that names a language, a script and a region as it is, as ICU
 // does, though the script is "Zzzz" or the region "ZZ", which the standard
-// fills in: "en-Zzzz-US" rather than "en-Latn-US".
+// fills in: "en-Zzzz-US" rather than "en-Latn-US". Intl.DisplayNames' of
+// keeps the case of a region, a script, a currency or a calendar code, as
+// V8 does, so that it names no region, script or calendar not written in
+// ICU's own case and writes the code back as it came: calendar "ISLAMIC" is
+// "ISLAMIC" where the standard, which canonicalizes the code first, answers
+// "Hijri Calendar".
 //
 // Under it, as ICU does, Intl.NumberFormat writes an accounting amount with
 // signDisplay "never" by the plain currency pattern, Norwegian -1 euro
