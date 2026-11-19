@@ -3101,6 +3101,17 @@ would not make the room, it reclaims nothing and the compile is refused: the
 function runs in the interpreter until some code is old. An epoch is a
 collector cycle, or 50 ms.
 
+The cache holds no more than its budget whenever it returns to the program.
+A compile, refused or not, ends with a settle (`settle`): past the budget --
+the programs its callees lowered, the states its callers joined -- it takes
+young code too, the least recently used first, none that runs. A look of
+the cache's (`age`, the flush) counts what it holds anew -- every state
+measured again, grown by what its code learned at its exits, and the states
+kept with no room for them -- and outside a compile or a background
+compile's install, whose end settles, it settles at once (`keepWithin`):
+at a function's first sample, a link's hint, the contexts' growth, a
+regular expression's compile, a back edge's flush.
+
 **Release.**
 
 - `ReleaseClosed` releases code once native frames have unwound; code a

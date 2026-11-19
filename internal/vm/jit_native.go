@@ -247,7 +247,12 @@ func (r *Runtime) jitRegForAs(cl *closure, c *regCode, callee bool) *jitRegEntry
 // compile refused or deferred had left them over the budget.
 func (r *Runtime) jitRegCompileFor(cl *closure, c *regCode, key jitKey, callee bool) (e *jitRegEntry) {
 	// The code it returns, which its caller enters, is kept (settleKeeping).
-	defer func() { r.jit.settleKeeping(e) }()
+	s := r.jit
+	s.settleAfter++
+	defer func() {
+		s.settleAfter--
+		s.settleKeeping(e)
+	}()
 	e = r.jitRegCompile(cl, c, key, callee, 0)
 	if e == nil {
 		return nil

@@ -322,6 +322,14 @@ func (s *jitState) jitRegAbandonJobs() {
 // the code, as jitRegHot gives it, where it has none meanwhile.
 func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	s := r.jit
+	// Ended with no more than the budget held, whatever came of it: a look
+	// meanwhile leaves it to the end (keepWithin), where the code placed is
+	// settled (below), and anything else kept within.
+	s.settleAfter++
+	defer func() {
+		s.settleAfter--
+		s.keepWithin()
+	}()
 	// The links the job's feedback asked for are let go of by none until
 	// its code holds them (regUnlink).
 	defer s.regBuilding(&j.rf)()

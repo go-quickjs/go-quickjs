@@ -1147,8 +1147,11 @@ type jitState struct {
 	floor                                        int
 	floorAt, agedAt, flushedAt                   uint64
 	// settling marks settle's look past the budget, which takes young
-	// code too (regVictims, regReclaim).
-	settling bool
+	// code too (regVictims, regReclaim); inSettle, settle itself, whose
+	// looks settle nothing again (keepWithin); and settleAfter counts the
+	// compiles and installs under way, each of which ends with a settle.
+	settling, inSettle bool
+	settleAfter        uint16
 
 	// What follows is last so that it moves no field before it, which
 	// the interpreter's and the native code's calls of Go read.
@@ -1530,6 +1533,7 @@ func (s *jitState) flush() {
 	s.jitShrinkContexts()
 	s.regFlush(tick, s.epoch())
 	jitFlushRealms[struct{}](s)
+	s.keepWithin()
 }
 
 // settle has the JIT hold no more than its budget once a compile has
@@ -1542,6 +1546,8 @@ func (s *jitState) flush() {
 // budget, its floor noted above the budget. Past it, settle's look takes
 // young code too, the least recently used first, and none that runs.
 func (s *jitState) settle() {
+	s.inSettle = true
+	defer func() { s.inSettle = false }()
 	if s.held() <= s.budget || s.makeRoom(0) {
 		return
 	}
@@ -1552,6 +1558,35 @@ func (s *jitState) settle() {
 	// are not the next look's.
 	s.settling = false
 	s.floorAt, s.victims, s.victimsAt, s.victimPos, s.victimLeft = 0, nil, 0, 0, 0
+}
+
+// keepWithin has the JIT hold no more than its budget once a look of the
+// cache's (age, flush) has counted what it holds anew, where no compile's
+// end settles it after: every function's state measured again (regAge),
+// grown by what its code learned at its exits since, and the states kept
+// with no room for them (regLearnedOf), counted from the look on. The
+// look's own makeRoom takes what is old; past it, young code goes too
+// (settle), as at a compile's end. Looked at outside a compile -- at a
+// function's first sample, a link's hint, the contexts' growth, a regular
+// expression's compile, a back edge's flush -- the JIT had held past its
+// budget until the next compile ended: with all it held young, the look
+// found that reclaiming all it might would not make the room, so reclaimed
+// none of it -- not even the states it had just counted, which it might
+// have -- and noted its floor, and the compiles after it were deferred,
+// none to end with a settle. A state grown a few kilobytes past all the
+// look could take besides code so left the JIT 125 KB past a budget of
+// 257 KB (TestJITHeldWithinBudgetAfterALook), and a program of 300 hot
+// functions at a budget of 1 MB ended holding 1,233,688 bytes on arm64
+// under load (TestJITMemoryLimitOption). Within a compile or a background
+// compile's install (settleAfter), the end settles, as before; within
+// settle, it is settling.
+func (s *jitState) keepWithin() {
+	if s.settleAfter != 0 || s.inSettle {
+		return
+	}
+	if s.budget = s.rt.jitBudget(); s.held() > s.budget {
+		s.settle()
+	}
 }
 
 // settleKeeping is settle, keeping keep, register code a compile just made,
@@ -1611,6 +1646,7 @@ func (s *jitState) age(now uint64) {
 		}
 	}
 	s.regAge(now)
+	s.keepWithin()
 }
 
 // dropLowering forgets fn's lowering, l.

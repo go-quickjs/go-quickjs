@@ -240,6 +240,10 @@ func TestJITLongCodeBudget(t *testing.T) {
 	s := r.jit
 	mapped, _ := s.arena.Mapped()
 	e := &jitRegEntry{key: key, p: p, life: s.regLearnedOf(key)}
+	// Placed as a compile places it, whose end settles (jitRegCompileFor):
+	// a look meanwhile leaves the budget to it (keepWithin).
+	s.settleAfter++
+	defer func() { s.settleAfter-- }()
 	// A budget short of the footprint alone, whatever the cache lets go.
 	r.jitMemoryLimit = int64(need - 1)
 	if r.jitRegPlace(e, cl.reg, rf, f, mc, looped, nil) || e.code != nil || e.refusal != "" || !e.life.deferred || e.life.generation != s.generation {

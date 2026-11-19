@@ -1349,8 +1349,13 @@ func (r *Runtime) jitRegLoopCode(f *frame, c *regCode, e *jitRegEntry, target in
 	// The JIT holds no more than its budget after, as after any compile,
 	// the code the frame enters kept, with the function's code it goes
 	// with (jitRegCompileFor, regKeepOSR).
+	s := r.jit
+	s.settleAfter++
 	o := r.jitRegCompile(f.cl, c, e.key, false, target)
-	defer r.jit.settleKeeping(o, e)
+	defer func() {
+		s.settleAfter--
+		s.settleKeeping(o, e)
+	}()
 	if o == nil || o.code == nil {
 		// No room, a refusal, or compiled in the background.
 		return nil
