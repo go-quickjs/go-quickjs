@@ -217,7 +217,11 @@ func (g *armGen) initRun() {
 // indexes and slots; sSaved keeps the number of stores.
 func (g *armGen) initShortStores(done, slow Label) {
 	a := g.a
-	a.LoadU8(r8, r9, off("initCache.need"))
+	idle, marking := a.NewLabel(), a.NewLabel()
+	a.B(idle)
+	a.Bind(marking)
+	// Append the idle path to keep the existing native code at its offsets.
+	g.end = append(g.end, func() { g.initShortIdle(idle, marking, done, slow) })
 	g.cmpMem(r8, rCtx, scr(sEnd))
 	a.BCond(HI, slow)
 	a.Store(rCtx, scr(sTop), r9)
@@ -241,6 +245,40 @@ func (g *armGen) initShortStores(done, slow Label) {
 		a.MovRR(rC, r8)
 		a.AddImm(rW, rS, 8, true)
 		g.ptrStore()
+	}
+	a.B(done)
+}
+
+// initShortIdle copies a short plan while the collector is idle. There
+// is no safe point between the flag's test and the stores; marking takes
+// the existing per-pointer barrier path, with need already in r8.
+func (g *armGen) initShortIdle(start, marking, done, slow Label) {
+	a := g.a
+	a.Bind(start)
+	a.LoadU8(r8, r9, off("initCache.need"))
+	a.Load(rW, rCtx, ncWB)
+	a.LoadU8(rW, rW, 0)
+	a.Cbnz(rW, marking, false)
+	g.cmpMem(r8, rCtx, scr(sEnd))
+	a.BCond(HI, slow)
+	a.MovRR(rD, r9)
+	a.Load(rS, rCtx, scr(sKa))
+	a.Load(rS, rS, off("Object.valp"))
+	a.Load(rC, rCtx, scr(sI))
+	for i := 0; i < 4; i++ {
+		if i != 0 {
+			a.Load(rT, rCtx, scr(sSaved))
+			a.CmpImm(rT, int64(i), true)
+			a.BCond(LS, done)
+		}
+		a.LoadU8(rW, rD, off("initCache.args")+int32(i))
+		a.LoadU16(rT, rD, off("initCache.slots")+int32(i*2))
+		a.AddLsl(rJ, rS, rT, 4)
+		a.AddLsl(rW, rC, rW, 4)
+		a.Load(r9, rW, 0)
+		a.Load(r8, rW, 8)
+		a.Store(rJ, 0, r9)
+		a.Store(rJ, 8, r8)
 	}
 	a.B(done)
 }

@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -518,30 +519,38 @@ function make(C, n) { var s = 0; for (var i = 0; i < n; i++) { var o = new C(i, 
 			t.Fatalf("marking %v: after constructions: keys %s, %+v", marking, o, c)
 		}
 		if got := run(`
-function Four(a, b) { this.a = a; this.b = b; this.c = a; this.d = b }
+function One(a) { this.a = a }
+function Four(a, b, c, d) { this.a = a; this.b = b; this.c = c; this.d = d }
 function Many(a, b) { this.a = a; this.b = b; this.c = a; this.d = b; this.e = a }
 function Need(a, b, c, d) { this.a = d; this.b = a }
 function Defaulted(a, b) { this.a = a ? a : 0; this.b = b }
-var pointer = {}, f, m, n;
+var pointer = {}, f, m, n, one;
 for (var i = 0; i < 100; i++) {
- f = new Four(pointer, i); m = new Many(pointer, i);
+ one = new One(pointer); f = new Four(pointer, i, pointer, i); m = new Many(pointer, i);
  n = new Need(pointer, i, 0, pointer); new Defaulted(pointer, i);
 }
 n = new Need(pointer);
-[f.a === pointer, f.d === 99, m.e === pointer, n.a === undefined,
- n.b === pointer, Object.keys(f).join()].join("|")`); got != "true|true|true|true|true|a,b,c,d" {
+[one.a === pointer, f.a === pointer, f.d === 99, m.e === pointer, n.a === undefined,
+ n.b === pointer, Object.keys(f).join()].join("|")`); got != "true|true|true|true|true|true|a,b,c,d" {
 			t.Fatalf("marking %v: short plans: %s", marking, got)
 		}
 		for _, tc := range []struct {
 			name  string
 			plain uint8
-		}{{"Four", 4}, {"Many", 0}, {"Need", 2}, {"Defaulted", 0}} {
+		}{{"One", 1}, {"Four", 4}, {"Many", 0}, {"Need", 2}, {"Defaulted", 0}} {
 			if ic := initCacheOf(r, tc.name); ic == nil || ic.plain != tc.plain {
 				t.Fatalf("marking %v: %s's short plan: %+v", marking, tc.name, ic)
 			}
 		}
 		if ic := initCacheOf(r, "Need"); ic.need != 4 || ic.args[0] != 3 || ic.args[1] != 0 {
 			t.Fatalf("marking %v: remapped arguments: %+v", marking, ic)
+		}
+		run(`
+f = new Four({ tag: 17 }, "retained" + 23, 1n << 80n, function () { return 41 });
+one = new One(-0);`)
+		runtime.GC()
+		if got := run(`[f.a.tag, f.b, String(f.c), f.d(), Object.is(one.a, -0)].join("|")`); got != "17|retained23|1208925819614629174706176|41|true" {
+			t.Fatalf("marking %v: retained short-plan values: %s", marking, got)
 		}
 		run(`P.prototype.x = 1; make(P, 100)`)
 		if c.fills != 2 || c.from == nil {
