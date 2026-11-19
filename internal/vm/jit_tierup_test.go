@@ -986,6 +986,76 @@ func TestJITMegamorphicGetterNotInlined(t *testing.T) {
 	}
 }
 
+// A megamorphic site's read whose receivers' prototypes hold a getter is
+// compiled as the site's other reads are -- the receiver's own table, the
+// megamorphic cache, and Go's read from native code on a branch of its own
+// (ssa's megamorphicByGo) -- and Go calls the getter there, with the
+// receiver its this; the function is not inlined (jitMegaGetter), so that
+// its code, called natively, has the frame Go calls the getter on.
+// Compiled for the getter and the shapes it was found for, every other
+// receiver had left look's own code, two entries in three; inlined, every
+// receiver of the getter left. drive calls look at each of twelve
+// receivers, three of whose prototypes hold the getter: by the Go table
+// and the native handlers, marking and not, neither function leaves native
+// code, look's code runs as drive's native callee and calls Go for the
+// getter, and the answers -- the getter's this, and the exception one
+// receiver's getter throws, with its stack -- are the interpreter's.
+func TestJITMegamorphicAccessorReadsByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, native := range []bool{false, true} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
+				was := regNativeOn
+				regNativeOn = native
+				t.Cleanup(func() { regNativeOn = was })
+				if marking {
+					jitMarkingForTest(t)
+				}
+				var inlined []uintptr
+				jitLastInlinesForTest(t, "drive", &inlined)
+				r, run := jitTierRuntimeForTest(t, 1, megaGetterSrc)
+				for range 4 {
+					run(`drive(96)`)
+				}
+				look := jitGlobalClosureForTest(r, "look")
+				if !jitSiteMegamorphicForTest(t, r, look, r.jit.regLearnedOf(r.jitRegKeyOf(look)), bytecode.OpGetProp, bytecode.RGetProp) {
+					t.Fatal("look's read is not megamorphic: no test of its misses")
+				}
+				if slices.Contains(inlined, uintptr(unsafe.Pointer(look))) {
+					t.Fatal("drive inlines look, whose megamorphic read meets a getter")
+				}
+				// look runs only as drive's native callee: its code is entered
+				// by no call from Go (jitNativeForTest's entries).
+				el, ed := jitRegLifeForTest(r, "look"), jitNativeForTest(t, r, "drive")
+				if el == nil {
+					t.Fatal("look was never compiled")
+				}
+				lh, lg, lc, lw := el.ssaStats.hosts, el.ssaStats.guards, el.ssaStats.calleeGoCalls, el.ssaStats.calleeWork
+				dh, dg, interpreted := ed.ssaStats.hosts, ed.ssaStats.guards, r.jit.interpreted
+				run(`drive(120)`)
+				if n := el.ssaStats.hosts - lh + el.ssaStats.guards - lg + ed.ssaStats.hosts - dh + ed.ssaStats.guards - dg; n != 0 {
+					t.Errorf("look or drive left native code %d times", n)
+				}
+				if n := r.jit.interpreted - interpreted; n != 0 {
+					t.Errorf("the interpreter finished %d invocations", n)
+				}
+				// A getter that throws: the exception leaves at the call, Go
+				// finishing it (goPending), its message and stack the
+				// interpreter's.
+				run(`fail()`)
+				if el.ssaStats.calleeWork == lw {
+					t.Error("look's code never ran as drive's native callee")
+				}
+				if el.ssaStats.calleeGoCalls == lc {
+					t.Error("look's code called Go for no getter")
+				}
+			})
+		}
+	}
+}
+
 // A megamorphic site's method read whose miss Go makes (ssa.GoCall) leaves
 // the site's cache as the interpreter reads a method (get_prop_this, by
 // cachedProp, whose entries are data): a getter's read of the method there

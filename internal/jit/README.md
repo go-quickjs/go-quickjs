@@ -1250,7 +1250,13 @@ getter's this; a setter's result is dropped. Frames Go makes for such a call
 show the accessor as the interpreter's do. Register code makes no native
 call of an accessor: one not inlined -- a built-in's, a bound function's, a
 callee past inlining's bounds -- is a call of Go on the register frame
-(`jitRegGoCallOn`, `jitRegPropertyMade`).
+(`jitRegGoCallOn`, `jitRegPropertyMade`). A read at a megamorphic site
+whose misses Go reads from native code (see Megamorphic reads above) is no
+accessor's (`ssa`'s `megamorphicByGo`): Go calls the getter at the miss,
+as V8's megamorphic loads call the runtime for an accessor they meet.
+Compiled for the one getter, the read had checked every receiver against
+the shapes the getter was found for, and the rest -- most, at such a site
+-- had left native code there.
 
 **Private members.** A private member is a property under a key each
 evaluation of its class mints, a symbol, which a binding the class's methods

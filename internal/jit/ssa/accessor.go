@@ -34,7 +34,7 @@ func (b *builder) accessor(pc int) (*AccessorSite, bool) {
 		// takes before an accessor's.
 	} else if af, ok := b.fb.(AccessorFeedback); ok {
 		if s, ok := af.Accessor(pc); ok && s.Function != 0 && s.Property.Shape != 0 && s.Property.Holders[0].Object != 0 &&
-			s.Setter == (in.Op == ir.PropertyWrite) {
+			s.Setter == (in.Op == ir.PropertyWrite) && !(!s.Setter && b.megamorphicByGo(pc)) {
 			a = b.f.accessorSite(s)
 		}
 	}
@@ -46,6 +46,23 @@ func (b *builder) accessor(pc int) (*AccessorSite, bool) {
 	}
 	fr.accessors[pc], fr.asked[pc] = a, 2
 	return a, true
+}
+
+// megamorphicByGo reports whether the read at pc is a megamorphic site's
+// whose misses Go reads from native code, on a branch of the read's own
+// (build's split, GoCall): a getter its receivers' prototypes have is
+// then Go's too, called there as the interpreter calls it, as V8's
+// megamorphic loads call the runtime for an accessor they meet. Compiled
+// for the one getter, the read had checked its receivers against the
+// shapes the getter was found for, and every other receiver -- most, at
+// a megamorphic site -- had left native code there.
+func (b *builder) megamorphicByGo(pc int) bool {
+	in := b.p.Code[pc]
+	if in.Op != ir.PropertyRead && in.Op != ir.ReferenceRead || in.Private || b.cur != b.root || !b.goCalls() || b.originGoesOn(pc) {
+		return false
+	}
+	site, ok := b.property(pc)
+	return ok && site.Megamorphic
 }
 
 // accessorCalls are the calls an accessor's read or write makes where it
