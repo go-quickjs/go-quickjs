@@ -418,7 +418,7 @@ func newRegTypedCode(fn *bytecode.Function, rc *bytecode.RegCode, g *regCode) *r
 	x := &regTypedCode{}
 	x.regCode = regCode{
 		code: unsafe.Pointer(unsafe.SliceData(rc.Code)), siteName: rc.SiteName,
-		numRegs: int32(rc.NumRegs), locals: g.locals, params: int32(rc.Params), inits: int32(rc.Inits),
+		numRegs: int32(rc.NumRegs), locals: g.locals, params: int32(rc.Params), inits: int32(rc.Inits - int(rc.SkipInit)),
 		coerceThis: g.coerceThis, wide: true, keep: g.keep, ncap: g.ncap, newTarget: g.newTarget,
 		args: g.args, rc: rc, fn: fn, typed: true,
 	}

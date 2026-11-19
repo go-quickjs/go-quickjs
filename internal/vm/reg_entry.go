@@ -127,7 +127,7 @@ func regBuild(fn *bytecode.Function, rc *bytecode.RegCode) *regCode {
 	}
 	c := &regCode{
 		code: unsafe.Pointer(unsafe.SliceData(rc.Code)), siteName: rc.SiteName,
-		numRegs: int32(rc.NumRegs), params: int32(rc.Params), inits: int32(rc.Inits),
+		numRegs: int32(rc.NumRegs), params: int32(rc.Params), inits: int32(rc.Inits - int(rc.SkipInit)),
 		coerceThis: fn.CoerceThis, rc: rc, fn: fn, wide: true, ncap: int32(ncap), newTarget: fn.UsesNewTarget, args: rc.UsesArguments || rc.ForwardsArguments || rc.KeepsArgs,
 		suspends: fn.Generator || fn.Async,
 	}

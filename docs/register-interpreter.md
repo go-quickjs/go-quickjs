@@ -396,7 +396,14 @@ callee's frame: the caller writes the callee to the window's first
 register, the receiver to the second and the arguments after them, and the
 callee's registers start there. Nothing is copied. A parameter no argument
 was given for, and the bindings after the parameters (`RegCode.Inits`),
-are made undefined by the call; arguments past the parameters, which only
+start as undefined. The register compiler can prove that a trailing part
+of those bindings is written before every read (`RegCode.SkipInit`), so
+the interpreter omits their entry stores. The proof excludes captured
+bindings, direct eval, debugger code, arguments objects, suspending
+functions and exception handlers; an unknown instruction or a bounded
+liveness analysis that does not converge retains all entry stores. The
+full binding count and conceptual initial state remain available to the
+JIT. Arguments past the parameters, which only
 `arguments` and a rest parameter read, are kept aside by the functions that
 have them (`KeepsArgs`, `UsesArguments`).
 

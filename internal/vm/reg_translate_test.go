@@ -37,14 +37,26 @@ func TestRegBackendRuns(t *testing.T) {
 		function upd() { var o = { a: 1, s: "5", t: "5" }, j = 2; o.a += j; o.a++; o.s++; o.t += 1; o.u++; return [o.a, o.s, o.t, o.u].join() }
 		function NT() { var a = () => new.target; this.t = a() === NT; this.u = a() }
 		function lits() { var x = [1, true, null, undefined, -2, "s"], y = [1, true, null, undefined, -2, "s"]; y[0] = 5; return x.join() + "/" + y.join() }
+		function initSome(p) { var a, b; if (p) a = { x: 1 }; b = 2; return a === undefined }
+		function initBoth(p) { var a; if (p) a = 1; else a = 2; return a }
+		function initLoop(n) { var i, a; for (i = 0; i < n; i++) a = i; return a === undefined }
+		function initOwned(n) { var a = n * 3n; a = a * 2n; return a }
+		function initializers() {
+			var keep = (1n << 256n) + 11n;
+			for (var i = 0; i < 100; i++) {
+				initSome(true); initLoop(3); initOwned(keep);
+				if (!initSome(false) || !initLoop(0) || initBoth(i & 1) !== (i & 1 ? 1 : 2)) return false;
+			}
+			return keep === (1n << 256n) + 11n;
+		}
 		function build() { var c = new C(3), l = new L(1, 2), o = new O(), a = new A(1, 2, 3);
 			var nt = new NT(), plain = {}; NT.call(plain);
 			return [c.m(), c instanceof C, Object.getPrototypeOf(c) === C.prototype, l.x + l.y, o.y, o.x, a.n, nt.t, plain.t, plain.u, lits(), upd()].join() }
 		[fib(15), locals(7), props(9), elems(5), globals(10), method(4), reduce(5), cmp(1, "1"), cmp(null, undefined), post(3), dead(),
 		 extra(1, 2), ops(new P(1)), (function () { try { thrower(5) } catch (e) { return e.message } })(), thrower(1),
-		 sw(1) + sw(2) + sw("s") + sw(7), args(1, 2, 3), fwd(4, 5), build()].join(" ")`
+		 sw(1) + sw(2) + sw("s") + sw(7), args(1, 2, 3), fwd(4, 5), build(), initializers()].join(" ")`
 	const want = "610 2432 19 4,8,2,3,4,5,6,7,8,9 45 24 30015 true,true,false,false,true,false true,false,false,false,false,true 0,1,23 true " +
-		"1, true,true,true,false,true k 5 1 abbsd 9,3,3,2 9,2,,5 9,true,true,3,2,,3,true,false,,1,true,,,-2,s/5,true,,,-2,s,4,6,51,NaN"
+		"1, true,true,true,false,true k 5 1 abbsd 9,3,3,2 9,2,,5 9,true,true,3,2,,3,true,false,,1,true,,,-2,s/5,true,,,-2,s,4,6,51,NaN true"
 	// Each run its own compile: a function keeps the form its first
 	// run gave it.
 	fn := compileForTest(t, src)
@@ -61,6 +73,40 @@ func TestRegBackendRuns(t *testing.T) {
 		t.Errorf("only %d functions ran as register code", built)
 	}
 	r.Close()
+}
+
+// TestRegSkipInitStaleFrames runs functions whose bindings are read before
+// they are written, or by what is not the code's own, in frames a call just
+// before filled with values, so that an entry store left out (SkipInit)
+// where it was needed shows that call's value: a let in its dead zone, a
+// var a closure reads first, a finally block's, a generator's, one read
+// beside arguments; and one written before every read, whose stores are
+// left out.
+func TestRegSkipInitStaleFrames(t *testing.T) {
+	const src = `
+		function fill() { var a = "stale", b = "stale", c = "stale", d = "stale", e = "stale", f = "stale"; return a + b + c + d + e + f }
+		function tdz(p) { if (p) { try { return x } catch (e) { return e instanceof ReferenceError } } let x = 1; return x }
+		function captured() { var get = () => v; var r = get(); var v = 2; return r }
+		function fin(p) { var a; try { if (p) throw 1; a = 1 } catch (e) {} finally { return a } }
+		function* gen() { var a; yield a; a = 1; yield a }
+		function args() { var a; if (arguments.length > 1) a = 1; return a }
+		function written(p) { var a, b; a = p; b = a + 1; return b }
+		function run(g, p) { fill(); return g(p) }
+		var out = [];
+		for (var i = 0; i < 3; i++)
+			out.push(run(tdz, true), run(captured), run(fin, true), run(gen).next().value, run(args), run(written, i));
+		out.join()`
+	const want = "true,,,,,1,true,,,,,2,true,,,,,3"
+	fn := compileForTest(t, src)
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
 }
 
 // TestRegFrameErrors pins a register frame's errors: the error a slow
