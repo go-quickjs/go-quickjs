@@ -596,9 +596,10 @@ type largeLiteralObject[A [4]Value | [5]Value | [6]Value | [7]Value | [8]Value] 
 	inline A
 }
 
-func newLargeLiteralObject[A [4]Value | [5]Value | [6]Value | [7]Value | [8]Value](o Object) *Object {
-	lo := &largeLiteralObject[A]{Object: o}
-	lo.setRoom(&lo.inline[0], len(lo.inline))
+func newLargeLiteralObject[A [4]Value | [5]Value | [6]Value | [7]Value | [8]Value](s *shape, class Class) *Object {
+	lo := new(largeLiteralObject[A])
+	lo.class, lo.flags, lo.valc = class, objExtensible|objInlineProps, uint32(len(lo.inline))
+	lo.shape, lo.valp = s, &lo.inline[0]
 	return &lo.Object
 }
 
@@ -611,35 +612,39 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 
 // newShapedLiteral is newLiteralObject for the layout s, which says the
 // object's prototype: a literal's or a constructor's root (orRoot).
+// Initialize each header in its allocation, keeping its pointer stores
+// together so that they share a write-barrier check.
 func newShapedLiteral(s *shape, class Class, n int) *Object {
-	o := Object{shape: s, class: class, flags: objExtensible | objInlineProps}
 	switch n {
 	case 1:
-		lo := &literalObject1{Object: o}
-		lo.setRoom(&lo.inline[0], len(lo.inline))
+		lo := new(literalObject1)
+		lo.class, lo.flags, lo.valc = class, objExtensible|objInlineProps, uint32(len(lo.inline))
+		lo.shape, lo.valp = s, &lo.inline[0]
 		return &lo.Object
 	case 2:
-		lo := &literalObject2{Object: o}
-		lo.setRoom(&lo.inline[0], len(lo.inline))
+		lo := new(literalObject2)
+		lo.class, lo.flags, lo.valc = class, objExtensible|objInlineProps, uint32(len(lo.inline))
+		lo.shape, lo.valp = s, &lo.inline[0]
 		return &lo.Object
 	case 4:
-		return newLargeLiteralObject[[4]Value](o)
+		return newLargeLiteralObject[[4]Value](s, class)
 	case 5:
-		return newLargeLiteralObject[[5]Value](o)
+		return newLargeLiteralObject[[5]Value](s, class)
 	case 6:
-		return newLargeLiteralObject[[6]Value](o)
+		return newLargeLiteralObject[[6]Value](s, class)
 	case 7:
-		return newLargeLiteralObject[[7]Value](o)
+		return newLargeLiteralObject[[7]Value](s, class)
 	case 8:
-		return newLargeLiteralObject[[8]Value](o)
+		return newLargeLiteralObject[[8]Value](s, class)
 	}
 	if n > len(literalObject{}.inline) {
 		o := &Object{shape: s, class: class, flags: objExtensible}
 		o.setVals(make([]Value, 0, n))
 		return o
 	}
-	lo := &literalObject{Object: o}
-	lo.setRoom(&lo.inline[0], len(lo.inline))
+	lo := new(literalObject)
+	lo.class, lo.flags, lo.valc = class, objExtensible|objInlineProps, uint32(len(lo.inline))
+	lo.shape, lo.valp = s, &lo.inline[0]
 	return &lo.Object
 }
 
