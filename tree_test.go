@@ -429,10 +429,8 @@ func TestGlobalWriteSites(t *testing.T) {
 	}
 	const want = "2,3 1,1  ReferenceError: g1 is not defined ReferenceError: g1 is not defined 9 1,2 0,0 7,8 7,0 " +
 		"TypeError 7,0 1 set0,get,set1,get,get,set0,get,set0,get,set0,get"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -465,10 +463,8 @@ func TestArrayAppendThroughTheChain(t *testing.T) {
 		r.push(log.join()); r.join(" ")`
 	const want = "0,1,2 0,1,g,3|4 3 ro,1 TypeError 0 TypeError 0 TypeError 2 0,1 own,1 0,1,2,5001 3 true 2 0,1,2 " +
 		"A2,A2,O1,P0,P1,C0"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -517,10 +513,8 @@ func TestArgumentsReads(t *testing.T) {
 			"k | x2 | q2 | 0/undefined | a2 | z2 | 1 | d2 | e | 3 | 2 | 3 | NaN/undefined"},
 	}
 	for _, tc := range cases {
-		for _, tier := range []bool{false, true} {
-			if got := treeRun(t, tc.src); got != tc.want {
-				t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, tc.want)
-			}
+		if got := treeRun(t, tc.src); got != tc.want {
+			t.Errorf("\n got %s\nwant %s", got, tc.want)
 		}
 	}
 }
@@ -543,10 +537,8 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 		r.push(fill(4).join(), [1, 2].concat([3]).join(), [3, 1, 2].sort().join(), log);
 		r.join(" | ")`
 	const want = "0,1,2 |  | 2 | TypeError | 0,1,2,3 | 1,2,3 | 1,2,3 | A1,A0,g,2,O0,"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -586,10 +578,8 @@ func TestElementKeysAndViews(t *testing.T) {
 		f() + " | " + g()`
 	const want = "10,10,undefined,30,F,M,nan,big,10,N,T,U,10,sym,3:7undefined3,3:7undefined3,3:173,3:1undefined7,3:1undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3" +
 		" | 0,0,-24,false,-875902488,80,-55,false,,180,-54,true,,255,-53,true,,,,true,,0,0,,,0,80,,,0,180,,0,2,-24,51688,2,-55,,2,0,TypeError,TypeError,-3,-2,0.3333333432674408,1.3333333730697632,1.5,-Infinity,NaN,,v,9,v,9,v,,0,v,,0"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -637,10 +627,8 @@ func TestElementUpdates(t *testing.T) {
 	const want = "-1/-4/37.5/4 NaN/NaN/NaN -1/NaN/4 -1/46/4 -1/-4/36 0/0/255 1/2/3 37.5 TypeError" +
 		" cannot read property of null cannot read property of null cannot read property of undefined cannot read property of undefined" +
 		" set105 50 [null,null,4] 2 7 0,2147483648,-1,1.5,4294967295 NaN NaN NaN 18 NaN 3 1,3 TypeError 7 true true NaN"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -662,7 +650,7 @@ func TestElementUpdates(t *testing.T) {
 // count and a hash of them.
 func TestPlaceUpdates(t *testing.T) {
 	if testing.Short() {
-		t.Skip("86,688 generated updates in both tiers; run without -short")
+		t.Skip("86,688 generated updates; run without -short")
 	}
 	const src = `		// Every place an update can target x every operator x prefix/postfix x value
 		// used or not x operand kind x value kind, each run four times in a loop
@@ -838,10 +826,8 @@ func TestPlaceUpdates(t *testing.T) {
 		var summary = count + " " + h.toString(16);
 		summary`
 	const want = "86688 ca250439"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }
 
@@ -936,10 +922,8 @@ func TestPlaceUpdateCases(t *testing.T) {
 		r.push(err(function () { var o = { x: Symbol() }; return o.x++ }), err(function () { var o = { x: Symbol() }; o.x += 1 }));
 		r.join(" ")`
 	const want = "3 TypeError 3 g s6 g s6 g 3 33 34 0 1 4 x 4/6/4/6 0 2 11 2,2 10,21 3 7 3 7 9 1,5,3 7 6 7 7 TypeError 27 ReferenceError ReferenceError G3=8 G3=8 G3=8 G3=8 4 28 12 TypeError 2 -12 5/7/71/5/3/1/4/71/73/731/3/1/4/25 string 1,25 2/3/3/6/6/7/7/14 [object Object] ReferenceError 39 39 3,1 2.700000047683716 1,NaN,3 TypeError TypeError"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -956,22 +940,20 @@ func TestPlaceUpdateGlobalLex(t *testing.T) {
 		`function up() { "use strict"; for (var j = 0; j < 2; j++) U9 += 1 } var ur; try { up() } catch (e) { ur = e.constructor.name } ur`,
 	}
 	want := []string{"13", "112,13", "undefined", "ReferenceError,12", "TypeError,1", "ReferenceError"}
-	for _, tier := range []bool{false, true} {
-		rt := quickjs.New()
-		for i, src := range scripts {
-			v, err := rt.Eval(src)
-			got := ""
-			if err != nil {
-				got = "error: " + err.Error()
-			} else {
-				got = v.String()
-			}
-			if got != want[i] {
-				t.Errorf("tree tier %v, script %d: got %s, want %s", tier, i, got, want[i])
-			}
+	rt := quickjs.New()
+	for i, src := range scripts {
+		v, err := rt.Eval(src)
+		got := ""
+		if err != nil {
+			got = "error: " + err.Error()
+		} else {
+			got = v.String()
 		}
-		rt.Close()
+		if got != want[i] {
+			t.Errorf("script %d: got %s, want %s", i, got, want[i])
+		}
 	}
+	rt.Close()
 }
 
 // TestPlaceUpdateModuleBindings pins updates of a module's own bindings,
@@ -998,24 +980,22 @@ func TestPlaceUpdateModuleBindings(t *testing.T) {
 		r.push(err(function () { var t; for (var j = 0; j < 2; j++) t = y++; return t }));
 		export const out = r.join(" ")`
 	const want = "ReferenceError 9a0122 15a012012-1 60 TypeError TypeError 1 11 TypeError"
-	for _, tier := range []bool{false, true} {
-		rt := quickjs.New()
-		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
-			return dep, specifier, nil
-		})
-		ns, err := rt.EvalModule("main.js", main)
-		if err != nil {
-			t.Fatalf("tree tier %v: %v", tier, err)
-		}
-		out, err := ns.Get("out")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := out.String(); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
-		rt.Close()
+	rt := quickjs.New()
+	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		return dep, specifier, nil
+	})
+	ns, err := rt.EvalModule("main.js", main)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
+	out, err := ns.Get("out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+	rt.Close()
 }
 
 // TestTypedElementAccess pins reads and writes of typed array elements by
@@ -1075,10 +1055,8 @@ func TestTypedElementAccess(t *testing.T) {
 		" | " + "77 | 12 |  | 0 | 3 | " +
 		" | " + "6 | 0,1 | true | true | 4/54/9 | 253/54/9" +
 		" | " + "3.0999999046325684/5.400000095367432/6.300000190734863 | 5 | 6 |  | 0"
-	for _, tier := range []bool{false, true} {
-		if got := treeRun(t, src); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
+	if got := treeRun(t, src); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
 	}
 }
 
@@ -1158,27 +1136,25 @@ func TestTreeTierSharedAcrossRuntimes(t *testing.T) {
 // name's: deleted, redefined as an accessor, shadowed by a script's let.
 func TestPureGlobalReads(t *testing.T) {
 	const want = "2,2,2,6,ReferenceError,8,get,11,11"
-	for _, tier := range []bool{false, true} {
-		rt := quickjs.New()
-		_, err := rt.Eval(`var r = []; globalThis.G = 1; globalThis.H = 5;
-			function rd() { return G + 1 } function rh() { return H + 1 }
-			function run(f) { for (var i = 0; i < 3; i++) r.push(f()) }
-			run(rd); r.push(rh()); delete globalThis.H;
-			try { rh() } catch (e) { r.push(e.constructor.name) }
-			globalThis.H = 7; r.push(rh());
-			Object.defineProperty(globalThis, "H", { get() { r.push("get"); return 0 }, configurable: true }); rh();`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v, err := rt.Eval(`let G = 10; r.push(rd(), rd()); r.join()`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := v.String(); got != want {
-			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
-		}
-		rt.Close()
+	rt := quickjs.New()
+	_, err := rt.Eval(`var r = []; globalThis.G = 1; globalThis.H = 5;
+		function rd() { return G + 1 } function rh() { return H + 1 }
+		function run(f) { for (var i = 0; i < 3; i++) r.push(f()) }
+		run(rd); r.push(rh()); delete globalThis.H;
+		try { rh() } catch (e) { r.push(e.constructor.name) }
+		globalThis.H = 7; r.push(rh());
+		Object.defineProperty(globalThis, "H", { get() { r.push("get"); return 0 }, configurable: true }); rh();`)
+	if err != nil {
+		t.Fatal(err)
 	}
+	v, err := rt.Eval(`let G = 10; r.push(rd(), rd()); r.join()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String(); got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+	rt.Close()
 }
 
 // TestPlaceUpdateNotAnUpdate pins reads that look like the start of an
@@ -1202,15 +1178,13 @@ for (var i = 0; i < fs.length; i++) {
 }
 out.join(" ")`
 	const want = "2,1 1,2 2,1 1,2 4,5 5,6 7/7 8/8 2,1 1,2 2,1 1,2 3,1 4,3"
-	for _, tier := range []bool{false, true} {
-		rt := quickjs.New()
-		v, err := rt.Eval(src)
-		if err != nil {
-			t.Fatalf("tree tier %v: %v", tier, err)
-		}
-		if got := v.String(); got != want {
-			t.Errorf("tree tier %v: got %s, want %s", tier, got, want)
-		}
-		rt.Close()
+	rt := quickjs.New()
+	v, err := rt.Eval(src)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
+	if got := v.String(); got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	rt.Close()
 }
