@@ -2,11 +2,13 @@ package nativegen
 
 import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 
-// polyOwnStore is amd64's probe, retaining the source address in rD; a
-// site with no other shapes, or none of the object's, goes to none.
-func (g *armGen) polyOwnStore(start, own, none Label) {
+// polyOwnStore is amd64's probe, retaining the source address in rD: an
+// entry of the object's own slot goes to own, one of an addition to add
+// with the entry in rC; a site with no other shapes, or none of the
+// object's, goes to none.
+func (g *armGen) polyOwnStore(start, own, add, none Label) {
 	a := g.a
-	loop, found := a.NewLabel(), a.NewLabel()
+	loop, found, trans, next := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.Load(r8, rC, off("propCache.poly"))
 	a.Cbz(r8, none, true)
@@ -17,6 +19,9 @@ func (g *armGen) polyOwnStore(start, own, none Label) {
 	a.Bind(loop)
 	g.cmpMem(rC, r8, off("propCache.ownShape"))
 	a.BCond(EQ, found)
+	g.cmpMem(rC, r8, off("propCache.shape"))
+	a.BCond(EQ, trans)
+	a.Bind(next)
 	a.AddImm(r8, r8, int64(size("propCache")), true)
 	a.SubsImm(r9, r9, 1, false)
 	a.BCond(NE, loop)
@@ -24,6 +29,12 @@ func (g *armGen) polyOwnStore(start, own, none Label) {
 	a.Bind(found)
 	a.MovRR(rC, r8)
 	a.B(own)
+	// As amd64's: an addition's entry, where it has a transition.
+	a.Bind(trans)
+	a.Load(rT, r8, off("propCache.next"))
+	a.Cbz(rT, next, true)
+	a.MovRR(rC, r8)
+	a.B(add)
 }
 
 // getPropNext reads two adjacent data properties without storing the

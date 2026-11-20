@@ -116,12 +116,15 @@ func (g *armGen) addProp(own Label) {
 	poly, length := a.NewLabel(), a.NewLabel()
 	// As amd64's: a site that has given up, past an array's length,
 	// megaWrite's, its store addTransition's.
-	mega, store := a.NewLabel(), a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length, mega) })
+	mega, store, trans := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, trans, length) }, func() { g.arrayLength(length, mega) })
 	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
 	a.Load(r8, rC, off("propCache.shape"))
 	g.cmpMem(r8, rS, off("Object.shape"))
 	a.BCond(NE, poly)
+	// The entry's transition; polyOwnStore's of an entry of the site's
+	// other shapes comes here too, the entry in rC.
+	a.Bind(trans)
 	g.addTransition(store)
 }
 

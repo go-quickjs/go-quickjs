@@ -2,14 +2,16 @@ package nativegen
 
 import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 
-// polyOwnStore finds an own writable slot among the site's other shapes.
-// The source address stays in RDX; own shares the ordinary store and
-// barrier, and a site with no other shapes, or none of the object's, goes
-// to none: an array's length, or the realm's caches where the site has
-// given up (megaWrite).
-func (g *nativeGen) polyOwnStore(start, own, none Label) {
+// polyOwnStore finds the object's shape among the site's other shapes, as
+// setPropCached's walk of them does: an entry of its own writable slot goes
+// to own, which shares the ordinary store and barrier, and an entry of an
+// addition to add, the entry in RCX, whose transition addProp makes. The
+// source address stays in RDX. A site with no other shapes, or none of the
+// object's, goes to none: an array's length, or the realm's caches where
+// the site has given up (megaWrite).
+func (g *nativeGen) polyOwnStore(start, own, add, none Label) {
 	a := g.a
-	loop, found := a.NewLabel(), a.NewLabel()
+	loop, found, trans, next := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.Load(R8, RCX, off("propCache.poly"))
 	a.Op(Test, R8, R8, true)
@@ -22,6 +24,9 @@ func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a.Bind(loop)
 	a.CmpMem(RCX, R8, off("propCache.ownShape"), true)
 	a.Jcc(CondE, found)
+	a.CmpMem(RCX, R8, off("propCache.shape"), true)
+	a.Jcc(CondE, trans)
+	a.Bind(next)
 	a.OpImm(Add, R8, size("propCache"), true)
 	a.OpImm(Sub, R9, 1, false)
 	a.Jcc(CondNE, loop)
@@ -29,6 +34,14 @@ func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a.Bind(found)
 	a.MovRR(RCX, R8)
 	a.Jmp(own)
+	// An entry of the object's shape that is no own slot's: an addition's
+	// where it has a transition, which addTransition checks; any other,
+	// a setter's or a prototype's, is Go's.
+	a.Bind(trans)
+	a.CmpMemImm8(R8, off("propCache.next"), 0)
+	a.Jcc(CondE, next)
+	a.MovRR(RCX, R8)
+	a.Jmp(add)
 }
 
 // getPropNext reads two adjacent data properties without storing the

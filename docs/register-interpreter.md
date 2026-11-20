@@ -669,7 +669,8 @@ to 1,024 bytes; a longer text is Go's, so that a loop comparing it each turn
 still exits to see an interrupt), moves, constants, upvalues, globals by
 their site, property reads and writes by the site's entry or its
 polymorphic entries (`propPoly`), a property added by the transition the
-site remembers, a key string's store by its keyed site's entries
+site remembers or one of its polymorphic entries does, a key string's
+store by its keyed site's entries
 (`set_index`, `define_index`), an array's length written as long or
 shorter, as `setArrayLength` truncates it (nativegen's `arrayLength`: a longer one, a
 value that is no length and storage a literal shares are Go's), `o.n +=`, `in` by the realm's cache and by an array's

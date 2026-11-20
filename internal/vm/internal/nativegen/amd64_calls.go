@@ -125,7 +125,7 @@ func (g *nativeGen) addProp(add, own Label) {
 	// A site that has given up, past an array's length: megaWrite, by the
 	// realm's cache of additions, its store addTransition's.
 	mega, store := a.NewLabel(), a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length, mega) })
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, add, length) }, func() { g.arrayLength(length, mega) })
 	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
 	// A miss of the entry's shape goes to the probe of the site's entries
 	// for other shapes where it has some, and else to an array's length

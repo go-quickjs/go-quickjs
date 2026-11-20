@@ -146,3 +146,67 @@ func TestRegNativeMegaProps(t *testing.T) {
 		})
 	}
 }
+
+// nativePolyAddSrc adds y at a site that meets objects of three layouts,
+// which it keeps as entries of its own (propCache.poly), and at one that
+// meets objects of eight prototypes' layouts and gives up: some of their
+// additions the site's entries hold, the rest the realm's cache of
+// additions. nativePolyAddWant is Node's answer (vm.runInThisContext).
+const nativePolyAddSrc = `
+var protos = [];
+for (var i = 0; i < 8; i++) { var p = { x: i }; p["k" + i] = i; protos.push(p); }
+function add(o, v) { o.y = v; return o }
+function poly(n) {
+	var s = 0, o;
+	for (var i = 0; i < n; i++) {
+		o = add(i % 3 == 0 ? { a: i } : i % 3 == 1 ? { b: i, a: 1 } : { c: i, b: 1, a: 2 }, i);
+		s += o.y + o.a;
+	}
+	return s + "/" + Object.keys(o).join();
+}
+function mega(n) {
+	var s = 0, o;
+	for (var i = 0; i < n; i++) {
+		o = Object.create(protos[i & 7]);
+		o.y = i;
+		o.y = o.y + 1;
+		s += o.y + o.x;
+	}
+	return s + "/" + Object.keys(o).join();
+}
+`
+
+const nativePolyAddWant = "60000/c,b,a,y 46192/y"
+
+// TestRegNativePolyAdds runs nativePolyAddSrc by the Go table and by the
+// native handlers, marking and not: Node's answer; and once warm, its
+// additions made with no exit to Go, by the site's entries for its other
+// shapes and, past them at a site that has given up, the realm's cache of
+// additions (polyOwnStore, megaWrite).
+func TestRegNativePolyAdds(t *testing.T) {
+	const run = "[poly(300), mega(300)].join(\" \")"
+	if got := nativeRunSrc(t, nativePolyAddSrc+run, false); got != nativePolyAddWant {
+		t.Fatalf("Go table: %s, want %s", got, nativePolyAddWant)
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			nativeCounting(t)
+			nativeMarking(t, marking)
+			r := newTestRuntime(t, Config{}.withNative(true))
+			defer r.Close()
+			if v, err := r.Run(compileForTest(t, nativePolyAddSrc+run)); err != nil || v.String().Go() != nativePolyAddWant {
+				t.Fatalf("native: %v, %v; want %s", v, err, nativePolyAddWant)
+			}
+			for _, name := range []string{"poly", "mega"} {
+				fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
+				before := nativeExitOps(t)
+				if _, err := r.Call(fn, Undefined, []Value{Float(300)}); err != nil {
+					t.Fatal(err)
+				}
+				if n := nativeExitOps(t)[bytecode.RSetProp] - before[bytecode.RSetProp]; n != 0 {
+					t.Errorf("%s: set_prop exited to Go %d times in 300 turns once warm", name, n)
+				}
+			}
+		})
+	}
+}
