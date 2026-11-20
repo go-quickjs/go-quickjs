@@ -1,6 +1,10 @@
 package quickjs_test
 
-import "testing"
+import (
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
 
 // An ordinary function's .prototype is built when something first asks for it,
 // which nothing may be able to tell. These pin what has to look the same as it
@@ -243,4 +247,20 @@ func TestBoundCallsFromLoop(t *testing.T) {
 		r.push(ok);
 		r.join(" ; ")`,
 		`o,1,2,,2 ; o,1,2,3,4 ; o,1,2,3,5 ; o,9,8,,2 ; 7 ; NaN|NaN|NaN ; 42 ; 5 ; TypeError ; 4 ; true ; t<thrower<caller ; 501500 ; 900`)
+}
+
+// TestFunctionPrototypeKeyOrder pins Function.prototype's own keys in V8's
+// order, in standards mode and under WithNodeQuirks alike: the standard
+// leaves the order to the implementation, and Node lists them so.
+func TestFunctionPrototypeKeyOrder(t *testing.T) {
+	t.Parallel()
+	const want = "length,name,constructor,apply,bind,call,toString,arguments,caller,Symbol(Symbol.hasInstance)"
+	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithNodeQuirks()}} {
+		rt := quickjs.New(opts...)
+		v, err := rt.Eval(`Reflect.ownKeys(Function.prototype).map(String).join()`)
+		if err != nil || v.String() != want {
+			t.Errorf("quirks=%v: got %v, %v\nwant %s", len(opts) > 0, v, err, want)
+		}
+		rt.Close()
+	}
 }
