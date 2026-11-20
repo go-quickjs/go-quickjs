@@ -103,9 +103,9 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
   that code back at `3ecb8200`'s offsets, where it takes 0.25. The rest,
   with 4 to 8% of the `carried_` and `escape_` tests', came with the
   native initializer's remembered layouts (`8505335a`), not profiled on
-  Zen 2 yet. At `b8c2c45f` it takes 0.24, 88.8 ns against 84.8 at
+  Zen 2 yet. At `b5df63ea` it takes 0.24, 87.9 ns against 84.8 at
   `3ecb8200`, and the `carried_` and `escape_` tests are faster than they
-  were there (`carried_short` 119 ns against 134), after the allocation
+  were there (`carried_short` 114 ns against 134), after the allocation
   round (`af68d128`..`dc7ddd31`). It has not been compared with the old
   tiers again. The
   JIT's slower rows are under
@@ -530,6 +530,23 @@ the stack JIT lowered; their counts are from then.
   side, and distances inside a JIT function: `bigint64_search` was 25%
   slower at six of eight offsets for one byte more inside its function
   (2026-11-08).
+- **Where Windows loads a build.** An image with DYNAMICBASE is loaded
+  where the system chooses, once for each file until a restart, in steps
+  of 64 KB, which neither the lock nor the placements hold: two copies of
+  one build of `91f885a1` took 26 and 46 ns on `json_stringify_ints`, and
+  ten copies of twelve 49 ns on `json_stringify_decimals` where the other
+  two took 35 (2026-11-20). A copy runs at one speed every time, and a
+  build with DYNAMICBASE and HIGH_ENTROPY_VA cleared in its PE header
+  loads at its link address, 0x140000000, as a Linux build does, at one
+  speed from any copy. Open: an option of `placements build` and the
+  matrix to clear the two flags in the Windows builds they time (the
+  tests run the builds as made).
+- **A pad past a page.** A lever that wraps adds 4 KB and moves everything
+  after it a page against everything before it, every offset modulo 4 KB
+  the same, so `TestLayoutLock` passes: E did at `c7c7830a`, and
+  `json_stringify_decimals` was 46% slower at every placement until
+  `b5df63ea`. Open: `layoutpad` and the test to say when a pad goes past a
+  page, and which pads are near none.
 - **test262 with `-conformance.debugger` and `-conformance.jit`
   together** fails "no test ran native code": code compiled for a debugger
   is never native.
