@@ -596,8 +596,12 @@ the clobber routines, the hooks (`goCallWork`, `ssaOptimized`, `noInline`,
 `codeHook`, ...), mir's options and the cache's clocks. A test's switches
 reach its runtimes and its subtests' and no other test's
 (`TestTestSwitchesAreTheTests`); `jitTestSwitch` also changes the JIT of
-the runtimes the test made before, until it ends. Elsewhere a switch is
-an option of what the test makes: mir's `CompileWith` and
+the runtimes the test and its parents made before, which it gives back
+what they had when the test ends. The WebAssembly engine's tests do the
+same for an instance (`withNative`, `countNativeExits`) and a Code
+(`testCode`, which every Code a test makes goes through, and
+`codeSwitch`). Elsewhere a switch is an option of what the test makes:
+mir's `CompileWith` and
 `CompileAMD64With`, a regexp's `compileOpts`, `compiler.Options`'
 `TypedProto`, an arena's or an assembler's own fields. Tools
 (internal/cmd) set the process's defaults for their runs (`JITCodeHook`,
