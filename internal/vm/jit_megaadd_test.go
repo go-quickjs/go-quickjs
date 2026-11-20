@@ -74,6 +74,14 @@ func TestJITMegaAdd(t *testing.T) {
 					}
 				}
 			}
+			// A collection's end empties the megamorphic cache (jitState's
+			// flush), whose entries the next additions are Go's to fill
+			// again: the calls counted are ones no collection ends in, the
+			// collector held off (jitCollectorHeldForTest) and the cache
+			// filled again by a call first. A checkptr build, slower, had
+			// a collection end in them.
+			jitCollectorHeldForTest(t)
+			call(rts[0], 0)
 			before := rts[0].RegNativeStats()
 			const calls = 10
 			for range calls {
