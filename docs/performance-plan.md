@@ -103,7 +103,11 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
   that code back at `3ecb8200`'s offsets, where it takes 0.25. The rest,
   with 4 to 8% of the `carried_` and `escape_` tests', came with the
   native initializer's remembered layouts (`8505335a`), not profiled on
-  Zen 2 yet. It has not been compared with the old tiers again. The
+  Zen 2 yet. At `b8c2c45f` it takes 0.24, 88.8 ns against 84.8 at
+  `3ecb8200`, and the `carried_` and `escape_` tests are faster than they
+  were there (`carried_short` 119 ns against 134), after the allocation
+  round (`af68d128`..`dc7ddd31`). It has not been compared with the old
+  tiers again. The
   JIT's slower rows are under
   [The register JIT's remaining gaps](#the-register-jits-remaining-gaps).
 - **Raw int32 and float64 values outside asm.js.** A validated asm.js
