@@ -1642,8 +1642,8 @@ const (
 
 // deepSetOf is the index of the first entry of the set of deepAdds an
 // addition of key to objects of shape s is in, mixed by a multiplication
-// whose top bits are the set, as sharedProp's: a test may replace it.
-var deepSetOf = func(s *shape, key Atom) uintptr {
+// whose top bits are the set, as sharedProp's.
+func deepSetOf(s *shape, key Atom) uintptr {
 	return uintptr((uint64(uintptr(unsafe.Pointer(s)))>>4^uint64(key)<<24)*0x9e3779b97f4a7c15>>(64-sharedCacheBits+deepWaysLog)) << deepWaysLog
 }
 

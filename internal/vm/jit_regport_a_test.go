@@ -65,11 +65,9 @@ func jitEnterFirstForTest(cl *closure) {
 // for the rest of t, as they do but under QJS_NONATIVE and in a verifying
 // build (quickjs_verify), which run the Go dispatcher: the native handlers
 // count the calls the JIT inlines by frequency (jitRegCounts), the Go
-// dispatcher none. Not for a parallel test: regNativeOn is the process's.
+// dispatcher none.
 func jitNativeCountsForTest(t *testing.T) {
-	was := regNativeOn
-	regNativeOn = true
-	t.Cleanup(func() { regNativeOn = was })
+	nativeForTest(t, true)
 }
 
 // jitRunFirstSourceForTest is jitRunFirstForTest of source compiled.

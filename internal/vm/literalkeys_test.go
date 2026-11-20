@@ -26,8 +26,7 @@ func shapeOfNew(t *testing.T, r *Runtime, src string) *shape {
 // one of their own for other keys.
 func TestRegLiteralKeysShareALayout(t *testing.T) {
 	for _, native := range []bool{false, true} {
-		was := SetRegNative(native)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		want := shapeOfNew(t, r, `(function () { return {a: 1, b: 2} })()`)
 		if want == nil || want.unique || want.loose || want.n != 2 {
 			t.Fatalf("native %v: no shared layout: %+v", native, want)
@@ -51,7 +50,6 @@ func TestRegLiteralKeysShareALayout(t *testing.T) {
 			}
 		}
 		r.Close()
-		SetRegNative(was)
 	}
 }
 

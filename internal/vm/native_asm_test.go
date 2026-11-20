@@ -16,9 +16,7 @@ import (
 func asmRun(t *testing.T, src, call string, native, typed bool, mod, export string) (string, bool) {
 	t.Helper()
 	fn := compileForTest(t, src+"\n"+call)
-	wasNative, wasTyped := SetRegNative(native), SetRegTyped(typed)
-	defer func() { SetRegNative(wasNative); SetRegTyped(wasTyped) }()
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native).withTyped(typed))
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {

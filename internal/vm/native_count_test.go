@@ -28,9 +28,6 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 		t.Skip("the shape checks are the Go handlers' alone")
 	}
 	// Native whatever QJS_NONATIVE says, as nativeRunSrc runs it.
-	was := regNativeOn
-	regNativeOn = true
-	defer func() { regNativeOn = was }()
 	prog := compileForTest(t, nativeCountSrc+"String(f(1000))")
 	run := func(r *Runtime) {
 		t.Helper()
@@ -40,18 +37,18 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 	}
 	// Alone: what the runtime counts.
 	nativeCounting(t)
-	alone := newTestRuntime(t, Config{})
+	alone := newTestRuntime(t, nativeConfig(true))
 	defer alone.Close()
 	run(alone)
-	want := nativeCounter.Load().exits
+	want := nativeCountsOf(t).exits
 	if want[bytecode.RDelete] < 1000 {
 		t.Fatalf("delete exited %d times, want 1000 or more", want[bytecode.RDelete])
 	}
 	// Another runtime, counting into counters of its own, runs the loop on
 	// another goroutine until told to stop.
 	nativeCounting(t)
-	other := nativeCounter.Load()
-	busy := newTestRuntime(t, Config{})
+	other := nativeCountsOf(t)
+	busy := newTestRuntime(t, nativeConfig(true))
 	defer busy.Close()
 	if _, err := busy.Run(compileForTest(t, nativeCountSrc)); err != nil {
 		t.Fatal(err)
@@ -73,8 +70,8 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 	}
 	// The counting runtime, made now, while the other runs.
 	nativeCounting(t)
-	mine := nativeCounter.Load()
-	r := newTestRuntime(t, Config{})
+	mine := nativeCountsOf(t)
+	r := newTestRuntime(t, nativeConfig(true))
 	defer r.Close()
 	from := atomic.LoadInt64(&other.exits[bytecode.RDelete])
 	run(r)

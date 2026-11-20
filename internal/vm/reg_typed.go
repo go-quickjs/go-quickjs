@@ -48,7 +48,7 @@ func (r *Runtime) runRegTyped(f *frame, c *regCode, start int) (Value, error) {
 	if r.stopped != nil {
 		return Undefined, r.stopped
 	}
-	if regNativeOn {
+	if regNativeBuilt && r.runNative {
 		return r.nativeRunTyped(f, c, start)
 	}
 	st := r.regEnterTyped(f, c)

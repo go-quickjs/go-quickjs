@@ -99,7 +99,7 @@ func (cc *closureCode) setJITReg(e *jitRegEntry) {
 // (regBackEdge, jitRegLoop). Native handlers' jumps leave to the Go table's
 // handlers having counted.
 func regEdgeTick(st *regState, off int32) {
-	if !regNativeOn {
+	if !regNativeBuilt || !st.r.runNative {
 		cc := st.cl.closureCode
 		if cc.jitRegEdges += int64(off); cc.jitRegEdges <= 0 {
 			st.r.backEdges = 1

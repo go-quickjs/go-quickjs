@@ -78,8 +78,7 @@ func TestJITRegDroppedCodeExits(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for k := uint16(0); k <= 8; k++ {
 			t.Run(fmt.Sprintf("native=%v/background=%d", native, k), func(t *testing.T) {
-				was := SetRegNative(native)
-				t.Cleanup(func() { SetRegNative(was) })
+				nativeForTest(t, native)
 				r := jitBackgroundRuntime(t)
 				regStressForTest(r, jitStressConfig{budget: 3, deopt: 7, background: true, checks: k})
 				if got, _ := jitRunWithin(t, r, regDroppedSrc, 10*time.Second); got != want {

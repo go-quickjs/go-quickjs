@@ -53,7 +53,7 @@ func TestJITRegFrequency(t *testing.T) {
 			if _, err := r.Call(drive, Undefined, []Value{Float(1000)}); err != nil {
 				t.Fatal(err)
 			}
-			if !regNativeOn {
+			if !regNativeDefault {
 				// The Go dispatcher counts nothing (QJS_NONATIVE, a
 				// verifying build): no frequency is known.
 				for _, n := range cl.jitRegCounts {

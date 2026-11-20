@@ -73,7 +73,7 @@ func (r *Runtime) regCallbackOf(fn, this Value) *regCallback {
 			// The JIT's runtime counts its leaves in callDirect.
 			return nil
 		}
-		if !regNativeOn && fd.closure.pureMiss < pureMissLimit {
+		if !(regNativeBuilt && r.runNative) && fd.closure.pureMiss < pureMissLimit {
 			// The Go table's loop, entered for each call, is slower than
 			// the frameless evaluators while they answer the body; once
 			// they have given up on it (pureMiss), every call through
@@ -109,7 +109,7 @@ func (r *Runtime) regCallbackOf(fn, this Value) *regCallback {
 	if top > r.stackHigh {
 		r.stackHigh = top
 	}
-	if regNativeOn {
+	if regNativeBuilt && r.runNative {
 		cb.st, cb.ctx = r.nativeCallback(c)
 	}
 	return cb

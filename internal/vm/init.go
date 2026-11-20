@@ -39,6 +39,61 @@ type Config struct {
 	// GCYield has the runtime wait while the collector marks, when the
 	// process has one P (writebarrier.go).
 	GCYield bool
+
+	// test is what a test makes the runtime with in place of the
+	// process's defaults; nil is them.
+	test *testConfig
+}
+
+// testConfig is what a test makes a runtime with in place of the
+// process's defaults, which a process takes from its environment
+// (QJS_NONATIVE, QJS_NOTYPED) for every runtime it makes: a test sets them
+// for its runtimes alone, so that tests that run each mode run in
+// parallel, each runtime as it was made.
+type testConfig struct {
+	// noCompare keeps the type from being compared, which would have the
+	// compiler make it an equality function, laid out among the generics
+	// after the native handlers' block, where it moved the string
+	// appends (strAppend) 64 bytes.
+	noCompare [0]func()
+	// native and typed, where set, are whether the runtime runs register
+	// frames by the native handlers (regNativeDefault), where the build
+	// has them -- in a verifying build too, whose default is the Go
+	// table's loop -- and links typed code (regTypedDefault).
+	native, typed testSwitch
+	// counters, if set, is what the runtime's native code counts its work
+	// into (Runtime's nativeCounts).
+	counters *nativeCounters
+	// marking, if set, is the flag the runtime's native contexts read for
+	// the collector's, so that native code stores as it does while the
+	// collector marks, or not.
+	marking *uint8
+	// exits, if set, is the Go functions the runtime's native code's exits
+	// call, in place of nativeExitTable.
+	exits *[256]regHandler
+}
+
+// testSwitch is a switch of testConfig: the process's default, or on or
+// off.
+type testSwitch int8
+
+const (
+	switchDefault testSwitch = iota
+	switchOn
+	switchOff
+)
+
+// switchOf is the switch set to on.
+func switchOf(on bool) testSwitch {
+	if on {
+		return switchOn
+	}
+	return switchOff
+}
+
+// or is whether the switch is on, def if it is the default.
+func (s testSwitch) or(def bool) bool {
+	return s == switchOn || s == switchDefault && def
 }
 
 // New creates a Runtime with the standard globals installed.
@@ -72,7 +127,13 @@ func New(cfg Config) *Runtime {
 		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
 		asyncCtx:         Undefined,
 		typedEpoch:       1,
-		nativeCounts:     nativeCounter.Load(),
+		runNative:        regNativeDefault,
+		regTyped:         regTypedDefault,
+	}
+	if t := cfg.test; t != nil {
+		r.test, r.nativeCounts = t, t.counters
+		r.runNative = regNativeBuilt && t.native.or(regNativeDefault)
+		r.regTyped = t.typed.or(regTypedDefault)
 	}
 	if cfg.Debug {
 		r.debug = newDebugState()

@@ -2,24 +2,17 @@
 
 package vm
 
-import "sync/atomic"
-
 // nativeCounters are a test's counts of the native code's work
 // (native_run.go's): here there is none to count, and no runtime counts.
 type nativeCounters struct{}
 
-// nativeCounter is the counters the runtimes made while a test counts count
-// into (native_run.go's), nil here.
-var nativeCounter atomic.Pointer[nativeCounters]
-
 // The native handlers are amd64's and arm64's (native_run.go):
 // every other architecture runs register frames by the Go table's loop
-// alone.
-const regNativeOn = false
-
-// SetRegNative is the switch of the native handlers: here there are none,
-// and it reports they were off.
-func SetRegNative(on bool) bool { return false }
+// alone, whatever a test asks (testConfig).
+const (
+	regNativeDefault = false
+	regNativeBuilt   = false
+)
 
 func (r *Runtime) nativeRun(f *frame, c *regCode, start int) (Value, error) {
 	panic("vm: no native handlers on this architecture")

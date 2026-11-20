@@ -233,9 +233,7 @@ func TestJITRegUnmadeInInlined(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	was := regNativeOn
-	regNativeOn = false
-	t.Cleanup(func() { regNativeOn = was })
+	nativeForTest(t, false)
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

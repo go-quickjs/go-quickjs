@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -82,34 +83,43 @@ func nativeKernelSource(t testing.TB, names ...string) string {
 
 // nativeCounting turns the native handlers' counters on for a test, and
 // holds the collector off: a collection between two runs may empty a
-// cache one run then misses, an exit the other has not. The runtimes made
-// from here on count into the test's counters (nativeCounter), and only
-// they: native code a runtime made before runs -- another test's, left
-// running -- counts nothing there. The flag the code reads for the
+// cache one run then misses, an exit the other has not. The runtimes the
+// test makes from here on count into the test's counters
+// (nativeCountsOf), and only they. The flag the code reads for the
 // collector's is what a test sets (nativeMarking).
 func nativeCounting(t testing.TB) {
-	nativeCounter.Store(new(nativeCounters))
+	c := new(nativeCounters)
+	setTestSwitch(t, func(s *testConfig) { s.counters = c })
 	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { nativeCounter.Store(nil); debug.SetGCPercent(gc) })
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
 }
 
-// nativeMarking has the contexts made after it store as while the
-// collector marks, or not.
-func nativeMarking(t testing.TB, on bool) {
-	if on {
-		m := new(uint8)
-		*m = 1
-		nativeMarkFlag.Store(m)
-	} else {
-		nativeMarkFlag.Store(nil)
+// nativeCountsOf is the counters t's runtimes count into (nativeCounting).
+func nativeCountsOf(t testing.TB) *nativeCounters {
+	if c := testConfigFor(t, Config{}).test; c != nil && c.counters != nil {
+		return c.counters
 	}
-	t.Cleanup(func() { nativeMarkFlag.Store(nil) })
+	t.Fatal("the test counts nothing (nativeCounting)")
+	return nil
 }
 
-// nativeExitOps is the exits to Go so far, by operation.
-func nativeExitOps() (n [256]int64) {
+// nativeMarking has the native contexts of the runtimes the test makes
+// from here on store as while the collector marks, or as the collector
+// says.
+func nativeMarking(t testing.TB, on bool) {
+	m := (*uint8)(unsafe.Pointer(&nativeWB.enabled))
+	if on {
+		m = new(uint8)
+		*m = 1
+	}
+	setTestSwitch(t, func(s *testConfig) { s.marking = m })
+}
+
+// nativeExitOps is the exits to Go so far of t's runtimes, by operation.
+func nativeExitOps(t testing.TB) (n [256]int64) {
+	c := nativeCountsOf(t)
 	for i := range n {
-		n[i] = atomic.LoadInt64(&nativeCounter.Load().exits[i])
+		n[i] = atomic.LoadInt64(&c.exits[i])
 	}
 	return n
 }
@@ -120,10 +130,7 @@ func nativeExitOps() (n [256]int64) {
 func nativeRunSrc(t testing.TB, src string, native bool) string {
 	t.Helper()
 	fn := compileForTest(t, src)
-	was := regNativeOn
-	regNativeOn = native
-	defer func() { regNativeOn = was }()
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native))
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -157,11 +164,11 @@ func TestRegNativeKernels(t *testing.T) {
 		var exits [2]int64
 		for i, on := range []bool{false, true} {
 			nativeMarking(t, on)
-			before := atomic.LoadInt64(&nativeCounter.Load().enters)
+			before := atomic.LoadInt64(&nativeCountsOf(t).enters)
 			if got, _ := nativeRunKernel(t, true, k.name, k.deps, k.n); got != want {
 				t.Errorf("%s (marking %v): %s, want %s", k.name, on, got, want)
 			}
-			exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
+			exits[i] = atomic.LoadInt64(&nativeCountsOf(t).enters) - before
 		}
 		nativeMarking(t, false)
 		if exits[0] != exits[1] {
@@ -176,16 +183,16 @@ func TestRegNativeKernels(t *testing.T) {
 func TestRegNativeExits(t *testing.T) {
 	nativeCounting(t)
 	for _, k := range nativeKernels {
-		before, exits := atomic.LoadInt64(&nativeCounter.Load().enters), nativeExitOps()
+		before, exits := atomic.LoadInt64(&nativeCountsOf(t).enters), nativeExitOps(t)
 		_, ops := nativeRunKernel(t, true, k.name, k.deps, k.n*50)
 		var top []string
-		for op, c := range nativeExitOps() {
+		for op, c := range nativeExitOps(t) {
 			if d := c - exits[op]; d*20 > ops {
 				top = append(top, fmt.Sprintf("%s %.2f", bytecode.ROp(op), float64(d)/float64(ops)))
 			}
 		}
 		t.Logf("%-16s %6.3f entries an operation; exits by op: %v", k.name,
-			float64(atomic.LoadInt64(&nativeCounter.Load().enters)-before)/float64(ops), top)
+			float64(atomic.LoadInt64(&nativeCountsOf(t).enters)-before)/float64(ops), top)
 	}
 }
 
@@ -402,11 +409,11 @@ func TestRegNativeCalls(t *testing.T) {
 	want := nativeRunSrc(t, nativeCallsSrc, false)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCounter.Load().calls)
+		before := atomic.LoadInt64(&nativeCountsOf(t).calls)
 		if got := nativeRunSrc(t, nativeCallsSrc, true); got != want {
 			t.Errorf("native (marking %v): %s, want %s", marking, got, want)
 		}
-		if atomic.LoadInt64(&nativeCounter.Load().calls) == before {
+		if atomic.LoadInt64(&nativeCountsOf(t).calls) == before {
 			t.Errorf("native (marking %v): no call made natively", marking)
 		}
 	}
@@ -421,11 +428,11 @@ func TestRegNativeFastPaths(t *testing.T) {
 	var exits [2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCounter.Load().enters)
+		before := atomic.LoadInt64(&nativeCountsOf(t).enters)
 		if got := nativeRunSrc(t, nativeFastSrc, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
+		exits[i] = atomic.LoadInt64(&nativeCountsOf(t).enters) - before
 	}
 	if exits[0] != exits[1] {
 		t.Errorf("%d exits, %d while marking", exits[0], exits[1])
@@ -444,9 +451,9 @@ func TestRegNativeCallExits(t *testing.T) {
 	for _, c := range nativeCallCases {
 		src := c.src + fmt.Sprintf("; String(run(%d))", n)
 		want := nativeRunSrc(t, src, false)
-		before := nativeExitOps()
+		before := nativeExitOps(t)
 		got := nativeRunSrc(t, src, true)
-		after := nativeExitOps()
+		after := nativeExitOps(t)
 		exits := after[bytecode.RCallW] - before[bytecode.RCallW] + after[bytecode.RCallMW] - before[bytecode.RCallMW]
 		if got != want {
 			t.Errorf("%s: %s, want %s", c.name, got, want)
@@ -493,11 +500,8 @@ func TestRegNativeConcurrent(t *testing.T) {
 		"call_fib(177 * 20); var a = global_res; call_mutual(65 * 20); a + ' ' + global_res"
 	kfn := compileForTest(t, kern)
 	ffn := compileForTest(t, nativeFastSrc)
-	was := regNativeOn
-	regNativeOn = true
-	defer func() { regNativeOn = was }()
 	run := func() (string, error) {
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(true))
 		defer r.Close()
 		var out []string
 		for i := 0; i < 20; i++ {
@@ -561,8 +565,6 @@ func TestRegNativeOpMix(t *testing.T) {
 		defs += s
 	}
 	defFn := compileForTest(t, "if (typeof console === 'undefined') globalThis.console = { log: function () {} };\n"+defs)
-	was := regNativeOn
-	defer func() { regNativeOn = was }()
 	nativeCounting(t)
 	var counts [256]int64
 	orig := regTable
@@ -575,19 +577,18 @@ func TestRegNativeOpMix(t *testing.T) {
 		call := compileForTest(t, fmt.Sprintf("String(%s(%s))", name, n))
 		var before, after [256]int64
 		run := func(native bool) int64 {
-			regNativeOn = native
-			r := newTestRuntime(t, Config{})
+			r := newTestRuntime(t, nativeConfig(native))
 			defer r.Close()
 			if _, err := r.Run(defFn); err != nil {
 				t.Fatal(err)
 			}
 			counts = [256]int64{}
-			before = nativeExitOps()
+			before = nativeExitOps(t)
 			v, err := r.Run(call)
 			if err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
-			after = nativeExitOps()
+			after = nativeExitOps(t)
 			var ops int64
 			fmt.Sscan(v.String().Go(), &ops)
 			return max(ops, 1)
@@ -657,15 +658,12 @@ func TestRegNativeFileMix(t *testing.T) {
 	}
 	src.WriteString(os.Getenv("QJS_NATIVE_EXPR"))
 	fn := compileForTest(t, src.String())
-	was := regNativeOn
-	defer func() { regNativeOn = was }()
 	nativeCounting(t)
 	var counts, slow [256]int64
 	orig, origSlow := regTable, regSlowTable
 	defer func() { regTable, regSlowTable = orig, origSlow }()
 	run := func(native bool) {
-		regNativeOn = native
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		defer r.Close()
 		if _, err := r.Run(fn); err != nil {
 			t.Fatal(err)
@@ -685,9 +683,9 @@ func TestRegNativeFileMix(t *testing.T) {
 	}
 	run(false)
 	regTable, regSlowTable = orig, origSlow
-	before, enters := nativeExitOps(), atomic.LoadInt64(&nativeCounter.Load().enters)
+	before, enters := nativeExitOps(t), atomic.LoadInt64(&nativeCountsOf(t).enters)
 	run(true)
-	after := nativeExitOps()
+	after := nativeExitOps(t)
 	var total, exited int64
 	type row struct {
 		op             bytecode.ROp
@@ -707,7 +705,7 @@ func TestRegNativeFileMix(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d instructions, %d exits (%.1f%%), %d entries", total, exited, 100*float64(exited)/float64(max(total, 1)), atomic.LoadInt64(&nativeCounter.Load().enters)-enters)
+	t.Logf("%d instructions, %d exits (%.1f%%), %d entries", total, exited, 100*float64(exited)/float64(max(total, 1)), atomic.LoadInt64(&nativeCountsOf(t).enters)-enters)
 	for _, r := range rows[:min(len(rows), 25)] {
 		if r.exits == 0 {
 			break
@@ -784,11 +782,11 @@ func TestRegNativeMore(t *testing.T) {
 	var exits [2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCounter.Load().enters)
+		before := atomic.LoadInt64(&nativeCountsOf(t).enters)
 		if got := nativeRunSrc(t, nativeMoreSrc, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
+		exits[i] = atomic.LoadInt64(&nativeCountsOf(t).enters) - before
 	}
 	if exits[0] != exits[1] {
 		t.Errorf("%d exits, %d while marking", exits[0], exits[1])
@@ -908,11 +906,11 @@ func TestRegNativeMore5(t *testing.T) {
 		if got := nativeRunSrc(t, nativeMore5Src, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		before := nativeExitOps()[bytecode.RGetPropNext]
+		before := nativeExitOps(t)[bytecode.RGetPropNext]
 		if got := nativeRunSrc(t, regPropertyChainSrc, true); got != regPropertyChainWant {
 			t.Errorf("property chain (marking %v): %s, want %s", marking, got, regPropertyChainWant)
 		}
-		chainExits[i] = nativeExitOps()[bytecode.RGetPropNext] - before
+		chainExits[i] = nativeExitOps(t)[bytecode.RGetPropNext] - before
 		if chainExits[i] >= 50 {
 			t.Errorf("property chain (marking %v): %d misses in the warmed loops", marking, chainExits[i])
 		}
@@ -987,24 +985,24 @@ func TestRegCallSameTemplate(t *testing.T) {
 	// it in a code entry of its own: an entry for each call of outer, not
 	// two.
 	nativeCounting(t)
-	enters, calls := atomic.LoadInt64(&nativeCounter.Load().enters), atomic.LoadInt64(&nativeCounter.Load().calls)
+	enters, calls := atomic.LoadInt64(&nativeCountsOf(t).enters), atomic.LoadInt64(&nativeCountsOf(t).calls)
 	nativeRunSrc(t, `
 		function outer(k) { var f = function () { var a = [k]; return a[0] }; return f() }
 		var s = 0;
 		for (var k = 0; k < 200; k++) s += outer(k);
 		String(s)`, true)
-	enters, calls = atomic.LoadInt64(&nativeCounter.Load().enters)-enters, atomic.LoadInt64(&nativeCounter.Load().calls)-calls
+	enters, calls = atomic.LoadInt64(&nativeCountsOf(t).enters)-enters, atomic.LoadInt64(&nativeCountsOf(t).calls)-calls
 	if enters > 210 || calls < 199 {
 		t.Errorf("%d entries of the code and %d calls it made itself, want 210 entries at most and 199 calls or more", enters, calls)
 	}
 	// The native call answers the new closure itself, the cache made
 	// its own, with no exit to Go (call's template check).
-	before := nativeExitOps()[bytecode.RCallW]
+	before := nativeExitOps(t)[bytecode.RCallW]
 	nativeRunSrc(t, `
 		function maker(k) { var j = k, f = function () { var a = [j]; return a[0] }; return f() }
 		function outer() { var s = 0; for (var k = 0; k < 200; k++) s += maker(k); return s }
 		String(outer())`, true)
-	if n := nativeExitOps()[bytecode.RCallW] - before; n > 10 {
+	if n := nativeExitOps(t)[bytecode.RCallW] - before; n > 10 {
 		t.Errorf("calls of a closure made anew exited to Go %d times in 200, want 10 at most", n)
 	}
 }
@@ -1014,7 +1012,7 @@ func TestRegCallSameTemplate(t *testing.T) {
 // to the literal's shared elements.
 func TestRegNativeAddIndex(t *testing.T) {
 	nativeCounting(t)
-	before := nativeExitOps()
+	before := nativeExitOps(t)
 	got := nativeRunSrc(t, `
 		function run() {
 			var tab = [1, 2, 3, 4];
@@ -1039,7 +1037,7 @@ func TestRegNativeAddIndex(t *testing.T) {
 		run()`, false); got != want {
 		t.Fatalf("native %s, want %s", got, want)
 	}
-	after := nativeExitOps()
+	after := nativeExitOps(t)
 	for _, op := range []bytecode.ROp{bytecode.RAddIndex, bytecode.RAddIndexK, bytecode.RAddIndexI} {
 		// The literal's elements are shared until the first store copies
 		// them, which Go makes.
@@ -1093,13 +1091,13 @@ func TestRegNativePrivate(t *testing.T) {
 		}
 	}
 	nativeCounting(t)
-	before := nativeExitOps()
+	before := nativeExitOps(t)
 	if got := nativeRunSrc(t, `
 		class P { #n = 0; add(k) { for (var i = 0; i < k; i++) this.#n = (this.#n + i) | 0; return this.#n } }
 		String(new P().add(1000))`, true); got != "499500" {
 		t.Fatalf("got %s, want 499500", got)
 	}
-	after := nativeExitOps()
+	after := nativeExitOps(t)
 	for _, op := range []bytecode.ROp{bytecode.RGetPrivate, bytecode.RSetPrivate} {
 		if n := after[op] - before[op]; n > 2 {
 			t.Errorf("%v exited to Go %d times in 1,000 turns, want 2 at most", op, n)

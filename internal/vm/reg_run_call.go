@@ -208,14 +208,14 @@ func regSameTemplate(e *regCallCache, o *Object) bool {
 	default:
 		return false
 	}
-	if e.kind&(regCallOut|regCallLeaf) == regCallOut && !regNativeOn {
+	ecl := e.cl
+	if ecl == nil || e.rc == nil {
+		return false
+	}
+	if e.kind&(regCallOut|regCallLeaf) == regCallOut && !(regNativeBuilt && ecl.realm.agent.runNative) {
 		// A frame that keeps its arguments, which the table's loop
 		// enters from the miss whatever the cache holds; native code
 		// enters it itself.
-		return false
-	}
-	ecl := e.cl
-	if ecl == nil || e.rc == nil {
 		return false
 	}
 	fd := o.fn()

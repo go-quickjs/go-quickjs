@@ -83,7 +83,7 @@ func TestJITRegFramedMissCountedOnce(t *testing.T) {
 				if _, err := r.Call(run, Undefined, []Value{site, Float(n), Float(float64(tc.kinds))}); err != nil {
 					t.Fatal(err)
 				}
-				if !regNativeOn {
+				if !regNativeDefault {
 					return
 				}
 				c := site.Object().fn().closure.jitRegCounts

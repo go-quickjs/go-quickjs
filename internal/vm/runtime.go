@@ -84,6 +84,13 @@ type Runtime struct {
 	// cannotBlock is the host's agent policy: Atomics.wait validates its
 	// arguments and then throws rather than suspending this agent.
 	cannotBlock bool
+	// runNative runs register frames by the native handlers
+	// (regNativeDefault, testConfig): beside stopped, which runReg reads
+	// before it, in the padding before regexpLits, so that it moves no
+	// field.
+	runNative bool
+	// regTyped links typed code (regTypedDefault, testConfig).
+	regTyped bool
 	// regexpLits is the patterns of the RegExp literals the runtime has
 	// evaluated, by their constants; see newRegExpLiteral.
 	regexpLits [regexpLitCount]regexpLiteral
@@ -399,6 +406,10 @@ type Runtime struct {
 	// counts: after every field the interpreter and the native code read,
 	// so that it moves none of them.
 	nativeCounts *nativeCounters
+	// test is the switches a test made the runtime with (Config's test),
+	// nil but in a test's runtime: after every field the interpreter and
+	// the native code read, as nativeCounts is.
+	test *testConfig
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

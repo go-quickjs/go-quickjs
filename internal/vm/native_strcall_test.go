@@ -40,10 +40,7 @@ func strIntrinsicRun(t *testing.T, src string, native bool) (string, int) {
 // whose elemOp is op.
 func strMethodRun(t *testing.T, src string, native bool, name string, op uint8) (string, int) {
 	t.Helper()
-	was := regNativeOn
-	regNativeOn = native
-	t.Cleanup(func() { regNativeOn = was })
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native))
 	defer r.Close()
 	m, err := r.Run(compileForTest(t, `String.prototype.`+name))
 	if err != nil {
@@ -87,7 +84,7 @@ func TestRegNativeStrIntrinsic(t *testing.T) {
 			if got != "104468:104468" || calls != 2000 {
 				t.Fatalf("Go table: got %s, %d calls of the built-in; want 104468:104468, 2000", got, calls)
 			}
-			before := nativeExitOps()
+			before := nativeExitOps(t)
 			got, calls = strIntrinsicRun(t, src, true)
 			if got != "104468:104468" {
 				t.Fatalf("native: got %s", got)
@@ -96,7 +93,7 @@ func TestRegNativeStrIntrinsic(t *testing.T) {
 			if calls > 2 {
 				t.Fatalf("native: the built-in was called %d times", calls)
 			}
-			if n := nativeExitOps()[bytecode.RCallMW] - before[bytecode.RCallMW]; n > 2 {
+			if n := nativeExitOps(t)[bytecode.RCallMW] - before[bytecode.RCallMW]; n > 2 {
 				t.Fatalf("native: call_method_w left native code %d times", n)
 			}
 			got, calls = strIntrinsicRun(t, `
@@ -118,12 +115,12 @@ func TestRegNativeStrIntrinsicOverride(t *testing.T) {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			nativeMarking(t, marking)
 			for _, name := range []string{"string_charcode_custom", "string_charcode_override"} {
-				before := nativeExitOps()
+				before := nativeExitOps(t)
 				got := nativeRunSrc(t, nativeKernelSource(t, "extra_charcode_custom", name)+name+`(1000); ''+global_res`, true)
 				if got != "8468" {
 					t.Fatalf("%s: got %s", name, got)
 				}
-				if n := nativeExitOps()[bytecode.RCallMW] - before[bytecode.RCallMW]; n > 2 {
+				if n := nativeExitOps(t)[bytecode.RCallMW] - before[bytecode.RCallMW]; n > 2 {
 					t.Fatalf("%s: the call missed its cache %d times", name, n)
 				}
 			}
@@ -199,7 +196,7 @@ func TestRegNativeStringUnitKernels(t *testing.T) {
 				if want := 1000 * len(row.rows); got != row.want || calls != want {
 					t.Fatalf("%s, Go table: got %s, %d calls of the built-in; want %s, %d", row.method, got, calls, row.want, want)
 				}
-				before := nativeExitOps()
+				before := nativeExitOps(t)
 				got, calls = strMethodRun(t, src, true, row.method, row.op)
 				if got != row.want {
 					t.Fatalf("%s, native: got %s", row.method, got)
@@ -210,7 +207,7 @@ func TestRegNativeStringUnitKernels(t *testing.T) {
 				if most := 17 * len(row.rows); calls > most {
 					t.Fatalf("%s, native: the built-in was called %d times, more than %d", row.method, calls, most)
 				}
-				if n := nativeExitOps()[bytecode.RCallMW] - before[bytecode.RCallMW]; n > int64(len(row.rows)) {
+				if n := nativeExitOps(t)[bytecode.RCallMW] - before[bytecode.RCallMW]; n > int64(len(row.rows)) {
 					t.Fatalf("%s, native: call_method_w left native code %d times", row.method, n)
 				}
 			}

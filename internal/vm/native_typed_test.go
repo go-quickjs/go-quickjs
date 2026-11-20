@@ -80,9 +80,7 @@ func typedRunSrcIn(t *testing.T, cfg Config, src string, native bool, names ...s
 	was := compiler.SetTypedProto(names...)
 	fn := compileForTest(t, src)
 	compiler.SetTypedProto(was...)
-	wasNative := SetRegNative(native)
-	defer SetRegNative(wasNative)
-	r := newTestRuntime(t, cfg)
+	r := newTestRuntime(t, cfg.withNative(native))
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -187,8 +185,7 @@ func TestRegTypedProtoInterrupt(t *testing.T) {
 		was := compiler.SetTypedProto("tfib")
 		fn, fin := compileForTest(t, forever), compileForTest(t, finite)
 		compiler.SetTypedProto(was...)
-		wasNative := SetRegNative(native)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		r.SetContext(ctx)
 		unwatch := watchStopForTest(r, ctx)
@@ -206,6 +203,5 @@ func TestRegTypedProtoInterrupt(t *testing.T) {
 			t.Errorf("native %v: no typed twin", native)
 		}
 		r.Close()
-		SetRegNative(wasNative)
 	}
 }

@@ -78,7 +78,7 @@ func TestJITCountsNotNative(t *testing.T) {
 			t.Fatalf("%s has no code: %+v", name, e)
 		}
 		c := jitGlobalClosure(r, name).jitRegCounts
-		if c == nil || regNativeOn && c[0] == 0 {
+		if c == nil || regNativeDefault && c[0] == 0 {
 			t.Fatalf("%s counts nothing: %v", name, c)
 		}
 		counts = append(counts, slices.Clone(c))

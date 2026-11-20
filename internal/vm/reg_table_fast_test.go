@@ -10,9 +10,7 @@ import (
 func regTableRunSrc(t *testing.T, src string, native bool) string {
 	t.Helper()
 	fn := compileForTest(t, src)
-	was := SetRegNative(native)
-	defer func() { SetRegNative(was) }()
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native))
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {

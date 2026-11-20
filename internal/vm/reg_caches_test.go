@@ -34,9 +34,7 @@ var global_res;
 	}
 	text := prog.String()
 	digest := func(native bool) string {
-		was := SetRegNative(native)
-		defer SetRegNative(was)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		defer r.Close()
 		if _, err := r.Run(compileForTest(t, text)); err != nil {
 			t.Fatal(err)

@@ -8,9 +8,7 @@ import "testing"
 func regGoTableRuntime(t *testing.T, src string, native bool) (*Runtime, string) {
 	t.Helper()
 	fn := compileForTest(t, src)
-	was := SetRegNative(native)
-	t.Cleanup(func() { SetRegNative(was) })
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native))
 	t.Cleanup(r.Close)
 	v, err := r.Run(fn)
 	if err != nil {

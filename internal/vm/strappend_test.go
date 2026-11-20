@@ -786,8 +786,7 @@ func TestStrAppendAllocations(t *testing.T) {
 // between them see what they read.
 func TestRegStrAppendUpvalue(t *testing.T) {
 	for _, native := range []bool{false, true} {
-		was := SetRegNative(native)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		if _, err := r.Run(compileForTest(t, `
 			function appends(n) {
 				var s = ""
@@ -820,7 +819,6 @@ func TestRegStrAppendUpvalue(t *testing.T) {
 			t.Errorf("native %v: reads = %v, %v, want %s", native, v, err, want)
 		}
 		r.Close()
-		SetRegNative(was)
 	}
 }
 

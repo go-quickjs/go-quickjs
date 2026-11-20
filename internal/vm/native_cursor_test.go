@@ -59,11 +59,11 @@ func TestRegNativeCursors(t *testing.T) {
 	var exits [2][2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := nativeExitOps()
+		before := nativeExitOps(t)
 		if got := nativeRunSrc(t, nativeCursorSrc, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		after := nativeExitOps()
+		after := nativeExitOps(t)
 		exits[i] = [2]int64{after[bytecode.RIterStep] - before[bytecode.RIterStep], after[bytecode.RIterClose] - before[bytecode.RIterClose]}
 	}
 	if exits[0][0] == 0 || exits[0][1] == 0 {

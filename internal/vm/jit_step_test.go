@@ -108,9 +108,7 @@ func TestJITRegStepLoopTiersUp(t *testing.T) {
 	for _, native := range []bool{true, false} {
 		for _, marking := range []bool{false, true} {
 			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
-				was := regNativeOn
-				regNativeOn = native
-				t.Cleanup(func() { regNativeOn = was })
+				nativeForTest(t, native)
 				if marking {
 					jitMarkingForTest(t)
 				}
@@ -166,9 +164,7 @@ func TestJITRegFusedBranchLoopTiersUp(t *testing.T) {
 		for _, native := range []bool{true, false} {
 			for _, marking := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/native=%v/marking=%v", c.name, native, marking), func(t *testing.T) {
-					was := regNativeOn
-					regNativeOn = native
-					t.Cleanup(func() { regNativeOn = was })
+					nativeForTest(t, native)
 					if marking {
 						jitMarkingForTest(t)
 					}

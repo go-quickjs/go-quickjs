@@ -38,7 +38,7 @@ func TestJITRegNativeBigIntMarks(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	if !regNativeOn {
+	if !regNativeDefault {
 		t.Skip("no native handlers in this build")
 	}
 	const want = "2550:1"

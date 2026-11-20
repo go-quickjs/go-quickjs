@@ -56,11 +56,11 @@ func TestRegNativeBinaryLeafFrameless(t *testing.T) {
 	String(run())`
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCounter.Load().calls)
+		before := atomic.LoadInt64(&nativeCountsOf(t).calls)
 		if got := nativeRunSrc(t, src, true); got != "999000" {
 			t.Fatalf("marking %v: got %s, want 999000", marking, got)
 		}
-		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 4 {
+		if n := atomic.LoadInt64(&nativeCountsOf(t).calls) - before; n > 4 {
 			t.Fatalf("marking %v: arithmetic leaves entered %d native frames", marking, n)
 		}
 	}

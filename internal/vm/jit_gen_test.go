@@ -294,8 +294,7 @@ func TestJITRegGenConsumerSampled(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	was := SetRegNative(false)
-	t.Cleanup(func() { SetRegNative(was) })
+	nativeForTest(t, false)
 	rts := regNativeRuntimes(t, regGenStepSrc)
 	r := rts[0]
 	var got [2]string

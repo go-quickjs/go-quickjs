@@ -19,18 +19,12 @@ import (
 // a template is linked: the typed code is the template's, its heap its
 // closure's.
 
-// regTypedOn links typed code: QJS_NOTYPED set in the environment, read
-// once, leaves every function to its ordinary code, to compare the two
-// and as an escape hatch, as QJS_NONATIVE does the native handlers.
-var regTypedOn = os.Getenv("QJS_NOTYPED") == ""
-
-// SetRegTyped links typed code from now on or not, and reports whether it
-// did: a test's switch, as QJS_NOTYPED is the environment's.
-func SetRegTyped(on bool) bool {
-	was := regTypedOn
-	regTypedOn = on
-	return was
-}
+// regTypedDefault is whether a runtime links typed code (Runtime's
+// regTyped): QJS_NOTYPED set in the environment, read once, leaves every
+// function to its ordinary code, to compare the two and as an escape
+// hatch, as QJS_NONATIVE does the native handlers; a test chooses for
+// each runtime (testConfig).
+var regTypedDefault = os.Getenv("QJS_NOTYPED") == ""
 
 // regTypedOf is closure cl's typed code, linked at its template's first
 // call where it has some (asmLink), or nil: where the runtime runs the JIT,
@@ -77,7 +71,7 @@ func init() {
 // the code takes them for.
 func (r *Runtime) asmLink(cl *closure) *regCode {
 	g := cl.reg
-	if !regTypedOn || g == nil || !g.wide || !cl.fn.HasRegTyped() {
+	if !r.regTyped || g == nil || !g.wide || !cl.fn.HasRegTyped() {
 		return nil
 	}
 	rc := cl.fn.RegTypedCode()

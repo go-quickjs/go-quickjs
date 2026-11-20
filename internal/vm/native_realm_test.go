@@ -29,9 +29,7 @@ const nativeInRealmSrc = `
 func nativeRealmFn(t *testing.T, src string) *bytecode.Function {
 	t.Helper()
 	fn := compileForTest(t, src)
-	was := regNativeOn
-	regNativeOn = true
-	t.Cleanup(func() { regNativeOn = was })
+	nativeForTest(t, true)
 	return fn
 }
 
@@ -59,10 +57,10 @@ func TestRegNativeInRealmCache(t *testing.T) {
 	defer r.Close()
 	nativeRunInRealm(t, r, r.NewRealm(), fn)
 	b := r.NewRealm()
-	before := nativeExitOps()[bytecode.RIn]
+	before := nativeExitOps(t)[bytecode.RIn]
 	nativeRunInRealm(t, r, b, fn)
 	// The first of each object's layouts exits, to fill the cache.
-	if n := nativeExitOps()[bytecode.RIn] - before; n > 2 {
+	if n := nativeExitOps(t)[bytecode.RIn] - before; n > 2 {
 		t.Errorf("%d of 400 in operators exited to Go in the second realm, want 2 at most", n)
 	}
 }

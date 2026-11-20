@@ -153,12 +153,12 @@ function g(n) { var o = [1], s = 0; for (var i = 0; i < n; i++) s += f(o, i); re
 		fcl.closureCode.setJITReg(e)
 		gcl.closureCode.jitRegRefused = true
 		const n = 2000
-		exits := atomic.LoadInt64(&nativeCounter.Load().exits[bytecode.RCallW])
+		exits := atomic.LoadInt64(&nativeCountsOf(t).exits[bytecode.RCallW])
 		v, err := r.Call(gv, Undefined, []Value{Float(n)})
 		if got := regNativeShow(r, v, err); got != "2001000" {
 			t.Fatalf("g(%d) = %q, want 2001000", n, got)
 		}
-		if d := atomic.LoadInt64(&nativeCounter.Load().exits[bytecode.RCallW]) - exits; d > 2 {
+		if d := atomic.LoadInt64(&nativeCountsOf(t).exits[bytecode.RCallW]) - exits; d > 2 {
 			t.Errorf("%d of %d calls left the native handlers by an exit", d, n)
 		}
 		// Each call goes to the JIT, which enters the code or, judged

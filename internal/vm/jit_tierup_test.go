@@ -959,9 +959,7 @@ func TestJITMegamorphicGetterNotInlined(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, marking := range []bool{false, true} {
 			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
-				was := regNativeOn
-				regNativeOn = native
-				t.Cleanup(func() { regNativeOn = was })
+				nativeForTest(t, native)
 				if marking {
 					jitMarkingForTest(t)
 				}
@@ -1007,9 +1005,7 @@ func TestJITMegamorphicAccessorReadsByGo(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, marking := range []bool{false, true} {
 			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
-				was := regNativeOn
-				regNativeOn = native
-				t.Cleanup(func() { regNativeOn = was })
+				nativeForTest(t, native)
 				if marking {
 					jitMarkingForTest(t)
 				}
@@ -1072,9 +1068,7 @@ func TestJITMegamorphicInlinedReadsByGo(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, marking := range []bool{false, true} {
 			t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
-				was := regNativeOn
-				regNativeOn = native
-				t.Cleanup(func() { regNativeOn = was })
+				nativeForTest(t, native)
 				if marking {
 					jitMarkingForTest(t)
 				}

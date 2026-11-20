@@ -62,34 +62,16 @@ import (
 // while it does: the same work marking or not but the barrier's, and no
 // call of Go for the marking's sake (the JIT's marking rule).
 
-// regNativeOn runs register frames by the native handlers. QJS_NONATIVE
-// set in the environment, read once, leaves them to the Go table's loop,
-// to compare the two and as an escape hatch. The quickjs_verify tag's
-// shape checks are the Go handlers' alone.
-var regNativeOn = os.Getenv("QJS_NONATIVE") == "" && !verifyShapes
+// regNativeDefault is whether a runtime runs register frames by the
+// native handlers (Runtime's runNative). QJS_NONATIVE set in the
+// environment, read once, leaves them to the Go table's loop, to compare
+// the two and as an escape hatch; a test chooses for each runtime
+// (testConfig). The quickjs_verify tag's shape checks are the Go
+// handlers' alone.
+var regNativeDefault = os.Getenv("QJS_NONATIVE") == "" && !verifyShapes
 
-// SetRegNative runs register frames by the native handlers or not, and
-// reports whether they were: a test's switch, as QJS_NONATIVE is the
-// environment's. The frames a runtime runs meanwhile run as they began.
-func SetRegNative(on bool) bool {
-	was := regNativeOn
-	regNativeOn = on && !verifyShapes
-	return was
-}
-
-// The switches of the tests: process-wide, off but in a test
-// (nativeCounting, nativeMarking).
-var (
-	// nativeCounter, set by a test, is the counters of the runtimes made
-	// while it is set (Runtime's nativeCounts): a runtime made before,
-	// which may still be running native code -- another test's, left on a
-	// goroutine of its own -- counts nothing into it.
-	nativeCounter atomic.Pointer[nativeCounters]
-	// nativeMarkFlag, set by a test, is the flag the contexts made after
-	// it read for the collector's, so that the code stores as it does
-	// while the collector marks.
-	nativeMarkFlag atomic.Pointer[uint8]
-)
+// regNativeBuilt is whether the build has native handlers.
+const regNativeBuilt = true
 
 // nativeCounters are a test's counts of the native code's work in the
 // runtimes that count into them (Runtime's nativeCounts).
@@ -481,12 +463,15 @@ func (r *Runtime) initNativeCtx(ctx *nativeCtx, st *regState) {
 	// The runtime's: a regState is of one runtime's list.
 	ctx.rt = uintptr(unsafe.Pointer(r)) + rtBase
 	ctx.wb = uintptr(unsafe.Pointer(&nativeWB.enabled))
-	if m := nativeMarkFlag.Load(); m != nil {
-		ctx.wb = uintptr(unsafe.Pointer(m))
+	if t := r.test; t != nil && t.marking != nil {
+		ctx.wb = uintptr(unsafe.Pointer(t.marking))
 	}
 	ctx.typeofs = uintptr(unsafe.Pointer(&r.typeofStrs[0]))
 	ctx.typedEpoch = uintptr(unsafe.Pointer(&r.typedEpoch))
 	ctx.goTable = uintptr(unsafe.Pointer(&nativeExitTable[0]))
+	if t := r.test; t != nil && t.exits != nil {
+		ctx.goTable = uintptr(unsafe.Pointer(&t.exits[0]))
+	}
 	ctx.slowTable = uintptr(unsafe.Pointer(&regSlowTable[0]))
 	ctx.callH = nativeCallHAddr()
 	ctx.protoStr = unsafe.Offsetof(Realm{}.proto) + unsafe.Offsetof(intrinsics{}.str)

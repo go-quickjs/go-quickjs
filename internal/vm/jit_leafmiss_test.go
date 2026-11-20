@@ -31,7 +31,7 @@ func TestJITRegLeafMissCountedOnce(t *testing.T) {
 	if v, err := r.Call(misses, Undefined, []Value{Float(1000)}); err != nil || v.Number() != 499500 {
 		t.Fatalf("got %v, %v", v, err)
 	}
-	if !regNativeOn {
+	if !regNativeDefault {
 		return
 	}
 	// The first call, made before the site has its counts, is not one.

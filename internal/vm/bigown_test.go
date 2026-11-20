@@ -45,8 +45,7 @@ func TestRegBigIntGivenBack(t *testing.T) {
 	}
 	want := v.String().Go()
 	for _, native := range []bool{false, true} {
-		was := SetRegNative(native)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		if _, err := r.Run(compileForTest(t, src)); err != nil {
 			t.Fatal(err)
 		}
@@ -68,6 +67,5 @@ func TestRegBigIntGivenBack(t *testing.T) {
 			t.Errorf("native %v: 10,000 turns of sum += a * a; a += incr made %d allocations", native, n)
 		}
 		r.Close()
-		SetRegNative(was)
 	}
 }

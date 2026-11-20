@@ -290,9 +290,7 @@ func TestRegNativeInstanceOfRealms(t *testing.T) {
 				continue
 			}
 			nativeMarking(t, marking)
-			was := regNativeOn
-			regNativeOn = native
-			r := newTestRuntime(t, Config{})
+			r := newTestRuntime(t, nativeConfig(native))
 			other := r.NewRealm()
 			fv, err := r.RunIn(other, compileForTest(t, foreign))
 			if err == nil {
@@ -302,7 +300,6 @@ func TestRegNativeInstanceOfRealms(t *testing.T) {
 			if err == nil {
 				v, err = r.Run(compileForTest(t, src))
 			}
-			regNativeOn = was
 			if err != nil {
 				t.Fatalf("native %v, marking %v: %v", native, marking, err)
 			}
@@ -569,11 +566,11 @@ func TestRegNativeLeafInterrupt(t *testing.T) {
 			return sum
 		}
 		String(run(10) + run(200000))`
-	before := nativeExitOps()
+	before := nativeExitOps(t)
 	if got := nativeRunSrc(t, src, true); got != "400020" {
 		t.Fatalf("got %s, want 400020", got)
 	}
-	after := nativeExitOps()
+	after := nativeExitOps(t)
 	if n := after[bytecode.RCallW] - before[bytecode.RCallW]; n > 1000 {
 		t.Errorf("call_w exited %d times of 400020 calls", n)
 	}

@@ -73,8 +73,7 @@ func TestRegGlobalLex(t *testing.T) {
 		for i, s := range steps {
 			fns[i] = compileForTest(t, s.src)
 		}
-		was := SetRegNative(native)
-		r := newTestRuntime(t, Config{})
+		r := newTestRuntime(t, nativeConfig(native))
 		for i, s := range steps {
 			v, err := r.Run(fns[i])
 			if err != nil {
@@ -85,6 +84,5 @@ func TestRegGlobalLex(t *testing.T) {
 			}
 		}
 		r.Close()
-		SetRegNative(was)
 	}
 }

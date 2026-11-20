@@ -20,7 +20,7 @@ func TestRegNativeFeedbackSelected(t *testing.T) {
 	if nativeFeedback.has != nativePlain.has {
 		t.Error("the feedback dispatcher's operations with a handler are not plain's")
 	}
-	withJIT, without := newTestRuntime(t, Config{JIT: true}), newTestRuntime(t, Config{})
+	withJIT, without := newTestRuntime(t, Config{JIT: true}), newTestRuntime(t, nativeConfig(true))
 	defer withJIT.Close()
 	defer without.Close()
 	for _, c := range []struct {
@@ -43,9 +43,6 @@ func TestRegNativeFeedbackSelected(t *testing.T) {
 		function g(n) { return n < 2 ? n : g(n - 1) + g(n - 2) }
 		String(f(300)) + " " + String(g(15))`
 	fn := compileForTest(t, src)
-	was := regNativeOn
-	regNativeOn = true
-	defer func() { regNativeOn = was }()
 	run := func() string {
 		v, err := without.Run(fn)
 		if err != nil {

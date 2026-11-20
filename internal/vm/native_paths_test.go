@@ -38,11 +38,11 @@ func nativeCheck(t *testing.T, src, fastSrc string, fast ...bytecode.ROp) {
 	var exits [2][256]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := nativeExitOps()
+		before := nativeExitOps(t)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		after := nativeExitOps()
+		after := nativeExitOps(t)
 		for op := range after {
 			exits[i][op] = after[op] - before[op]
 		}
@@ -59,18 +59,18 @@ func nativeCheck(t *testing.T, src, fastSrc string, fast ...bytecode.ROp) {
 		return
 	}
 	want = nativeRunSrc(t, fastSrc, false)
-	before := nativeExitOps()
+	before := nativeExitOps(t)
 	if got := nativeRunSrc(t, fastSrc, true); got != want {
 		t.Errorf("native fast case: %s, want %s", got, want)
 	}
-	after := nativeExitOps()
+	after := nativeExitOps(t)
 	for _, op := range fast {
 		// A few while the caches fill, none after.
 		if n := after[op] - before[op]; n > nativeWarmExits {
 			t.Errorf("%s exited %d times", op, n)
 		}
 	}
-	if atomic.LoadInt64(&nativeCounter.Load().enters) == 0 {
+	if atomic.LoadInt64(&nativeCountsOf(t).enters) == 0 {
 		t.Error("nothing ran natively")
 	}
 }
@@ -533,13 +533,15 @@ func TestRegNativeCallHConvention(t *testing.T) {
 	}
 	want := nativeGoid()
 	// The exit stub calls the exit table's function (nativeExitTable),
-	// the operation's Go handler.
-	orig := nativeExitTable[op]
-	defer func() { nativeExitTable[op] = orig }()
+	// the operation's Go handler: the test's runtime's a copy, its
+	// entry for op the test's.
+	exits := nativeExitTable
+	orig := exits[op]
+	setTestSwitch(t, func(c *testConfig) { c.exits = &exits })
 	var calls, viaCallH, refreshed int
 	var bad []string
 	marking := uint8(1)
-	nativeExitTable[op] = func(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+	exits[op] = func(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 		calls++
 		pcs := make([]uintptr, 16)
 		frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
@@ -1089,13 +1091,10 @@ func TestRegNativeArrayLength(t *testing.T) {
 	a`
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		was := regNativeOn
-		regNativeOn = true
-		r := newTestRuntime(t, Config{})
-		before := nativeExitOps()
+		r := newTestRuntime(t, nativeConfig(true))
+		before := nativeExitOps(t)
 		v, err := r.Run(compileForTest(t, src))
-		after := nativeExitOps()
-		regNativeOn = was
+		after := nativeExitOps(t)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1239,10 +1238,7 @@ func TestRegNativeTypeofJumps(t *testing.T) {
 			for _, marking := range []bool{false, true} {
 				t.Run(fmt.Sprintf("native=%v/marking=%v", native, marking), func(t *testing.T) {
 					nativeMarking(t, marking)
-					was := regNativeOn
-					regNativeOn = native
-					defer func() { regNativeOn = was }()
-					r := newTestRuntime(t, Config{})
+					r := newTestRuntime(t, nativeConfig(native))
 					defer r.Close()
 					dda := r.NewObject()
 					dda.MarkHTMLDDA()
@@ -1258,12 +1254,12 @@ func TestRegNativeTypeofJumps(t *testing.T) {
 							fmt.Fprintf(&loop, "if (yes%d(j)) sum++; if (no%d(j)) sum++; if (second%d(0, j)) sum++;\n", i, i, i)
 						}
 						loop.WriteString("if (!captures.obj() && !captures.number() && !captures.undef()) sum++; } String(sum)")
-						before := atomic.LoadInt64(&nativeCounter.Load().calls)
+						before := atomic.LoadInt64(&nativeCountsOf(t).calls)
 						v, err := r.Run(compileForTest(t, loop.String()))
 						if err != nil || v.String().Go() != "10000" {
 							t.Errorf("marking %v: fast predicates got %v, %v", marking, v, err)
 						}
-						if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 96 {
+						if n := atomic.LoadInt64(&nativeCountsOf(t).calls) - before; n > 96 {
 							t.Errorf("marking %v: entered %d frames for typeof predicates", marking, n)
 						}
 					}
@@ -1397,11 +1393,11 @@ func TestRegNativeForInKeysAnyHeap(t *testing.T) {
 		keep = append(keep, filler)
 		runtime.GC()
 		nativeMarking(t, i%2 == 1)
-		before := nativeExitOps()
+		before := nativeExitOps(t)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("run %d: %s, want %s", i, got, want)
 		}
-		after := nativeExitOps()
+		after := nativeExitOps(t)
 		exits[after[bytecode.RGetIndex]-before[bytecode.RGetIndex]]++
 	}
 	nativeMarking(t, false)

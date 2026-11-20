@@ -142,7 +142,7 @@ func (r *Runtime) runReg(f *frame, c *regCode, start int) (Value, error) {
 	if r.stopped != nil {
 		return Undefined, r.stopped
 	}
-	if regNativeOn {
+	if regNativeBuilt && r.runNative {
 		// the native handlers, which leave to this table's handlers
 		// what they do not do (native_run.go).
 		return r.nativeRun(f, c, start)

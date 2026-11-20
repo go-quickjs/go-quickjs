@@ -2,6 +2,8 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"testing"
 	"unsafe"
 )
@@ -23,40 +25,105 @@ warm(); warm();
 function adds(picks, n) { for (var r = 0; r < n; r++) for (var i = 0; i < picks.length; i++) add(new ctors[picks[i]](), r) }
 `
 
-// The realm's cache of additions (deepAdds) holds four to a set: four
-// additions whose shapes and keys share a set -- here every set is one,
-// deepSetOf replaced -- keep their entries, each found and none made
-// again, however many times they are made in turn, where five in turn
-// displace one another. The set is counted by deepSetOf's calls: one for
-// each addition looked up (deepStore), one more for each remembered
-// (fillDeepStore).
-func TestDeepAddsFourWays(t *testing.T) {
-	was := deepSetOf
-	calls := 0
-	deepSetOf = func(*shape, Atom) uintptr { calls++; return 0 }
-	t.Cleanup(func() { deepSetOf = was })
-	r := newTestRuntime(t, Config{})
-	defer r.Close()
-	run := func(src string) {
-		t.Helper()
-		if _, err := r.Run(compileForTest(t, src)); err != nil {
-			t.Fatal(err)
+// deepProbe has the script's probe(), which it calls after each addition
+// it makes, check whether r's cache of additions (deepAdds) changed since
+// the last call: an entry made, or one moved to the front of its set,
+// which only an addition made the long way does (fillDeepStore). It
+// returns the number of changes seen so far, which reset sets to zero.
+// The collector is held off until t ends: a collection's end lets the
+// sites' caches and the cache of additions start again.
+func deepProbe(t *testing.T, r *Runtime) (changes func() int, reset func()) {
+	runtime.GC()
+	gc := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	var last deepAdds
+	n := 0
+	probe := r.NewFunction("probe", 0, func(r *Runtime, this Value, args []Value) (Value, error) {
+		if r.deep != nil && *r.deep != last {
+			n++
+			last = *r.deep
+		}
+		return Undefined, nil
+	})
+	if err := r.SetProp(Obj(r.Global()), r.Intern("probe"), probe); err != nil {
+		t.Fatal(err)
+	}
+	return func() int { return n }, func() {
+		n = 0
+		if r.deep != nil {
+			last = *r.deep
 		}
 	}
-	run(waysCtors)
+}
+
+// The realm's cache of additions (deepAdds) holds four to a set: four
+// additions whose shapes and keys share a set -- the layouts picked so,
+// from 600 -- keep their entries, each found and none made again,
+// however many times they are made in turn, where five in turn displace
+// one another, each made again. Each addition is made as a write at a
+// site that has given up makes it (setPropCached): looked up
+// (deepStore), and where it is not found made and remembered
+// (fillDeepStore).
+func TestDeepAddsFourWays(t *testing.T) {
+	src := "var ctors = [];\n"
+	for i := range 600 {
+		src += fmt.Sprintf("ctors.push(function () { this.k%d = 0 });\n", i)
+	}
+	src += `var made = ctors.map(function (C) { return new C() });
+function batch(picks, n) { var out = []; for (var r = 0; r < n; r++) for (var i = 0; i < picks.length; i++) out.push(new ctors[picks[i]]()); return out }`
+	r := newTestRuntime(t, Config{})
+	defer r.Close()
+	run := func(src string) Value {
+		t.Helper()
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	run(src)
+	// The layouts by the set their addition of x is in.
+	x := r.atoms.intern("x")
+	sets := map[uintptr][]int{}
+	var five []int
+	for i, v := range r.global.getOwn(r.atoms.intern("made")).value().Object().elemsOf() {
+		set := deepSetOf(v.Object().shape, x)
+		if sets[set] = append(sets[set], i); len(sets[set]) == deepWays+1 {
+			five = sets[set]
+			break
+		}
+	}
+	if five == nil {
+		t.Fatal("no five of 600 layouts whose additions share a set")
+	}
+	// adds makes the additions of x to objects of picks' layouts, n
+	// rounds of them, and returns how many were not found.
+	adds := func(picks []int, n int) (misses int) {
+		for i, v := range run(`batch(` + jsInts(picks) + `, ` + fmt.Sprint(n) + `)`).Object().elemsOf() {
+			o := v.Object()
+			if r.deepStore(o, x, Float(float64(i))) {
+				continue
+			}
+			misses++
+			before := o.shape
+			if _, err := r.setProp(o, x, Float(float64(i)), Obj(o), false); err != nil {
+				t.Fatal(err)
+			}
+			r.fillDeepStore(o, before, x)
+		}
+		return misses
+	}
 	for _, c := range []struct {
 		picks []int
 		fills bool
-	}{{[]int{0, 1, 2, 3}, false}, {[]int{4, 5, 6, 7, 8}, true}} {
-		run(`adds(` + jsInts(c.picks) + `, 2)`)
-		calls = 0
-		run(`adds(` + jsInts(c.picks) + `, 100)`)
-		n := 100 * len(c.picks)
+	}{{five[:deepWays], false}, {five, true}} {
+		adds(c.picks, 2)
+		n := adds(c.picks, 100)
 		switch {
-		case !c.fills && calls != n:
-			t.Errorf("%v: %d lookups and fills for %d additions, want %d: some looked up again", c.picks, calls, n, n)
-		case c.fills && calls <= n:
-			t.Errorf("%v: %d lookups and fills for %d additions in one set of four ways, want more", c.picks, calls, n)
+		case !c.fills && n != 0:
+			t.Errorf("%v: %d of %d additions made again: some looked up again", c.picks, n, 100*len(c.picks))
+		case c.fills && n == 0:
+			t.Errorf("%v: no addition of %d in one set of four ways made again, want some", c.picks, 100*len(c.picks))
 		}
 	}
 }
@@ -64,14 +131,10 @@ func TestDeepAddsFourWays(t *testing.T) {
 // The same additions, in sets as the shapes' addresses put them, in
 // runtimes whose heaps differ by what was allocated before each: 24
 // classes' three additions each, as Class.create's initializers make
-// them, are each found after the first round in every runtime. Direct-
-// mapped, from 1 in 35 to 3 in 4 of them had been made the long way, by
-// where the layouts were.
+// them, are each found after the first round in every runtime, none made
+// again. Direct-mapped, from 1 in 35 to 3 in 4 of them had been made the
+// long way, by where the layouts were.
 func TestDeepAddsAnyHeap(t *testing.T) {
-	was := deepSetOf
-	calls := 0
-	deepSetOf = func(s *shape, key Atom) uintptr { calls++; return was(s, key) }
-	t.Cleanup(func() { deepSetOf = was })
 	fn := compileForTest(t, `
 var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
 var classes = [];
@@ -80,21 +143,35 @@ for (var k = 0; k < 24; k++) {
   C.prototype = { initialize: function (x, y, z) { this.x = x; this.y = y; this.z = z } };
   classes.push(C);
 }
-function run(n) { var s = 0; for (var i = 0; i < n; i++) for (var j = 0; j < 24; j++) { var o = new classes[j](i, 1, 2); s += o.y } return s }
+function run(n) { var s = 0; for (var i = 0; i < n; i++) for (var j = 0; j < 24; j++) { var o = new classes[j](i, 1, 2); probe(); s += o.y } return s }
 run(50);`)
 	var keep [][]byte
 	for seed := range 20 {
 		keep = append(keep, make([]byte, 112*(seed*37%61+1)))
 		r := newTestRuntime(t, Config{})
+		changes, reset := deepProbe(t, r)
 		if _, err := r.Run(fn); err != nil {
 			t.Fatal(err)
 		}
-		calls = 0
+		reset()
 		if _, err := r.Run(compileForTest(t, `run(100)`)); err != nil {
 			t.Fatal(err)
 		}
-		if calls > 3*24*100 {
-			t.Errorf("seed %d: %d lookups and fills for %d additions", seed, calls, 3*24*100)
+		if n := changes(); n != 0 {
+			t.Errorf("seed %d: the cache changed after %d of %d objects' additions", seed, n, 24*100)
+		}
+		// And it holds the classes' additions: the cache is where they
+		// were found.
+		held := 0
+		if r.deep != nil {
+			for _, e := range r.deep {
+				if k := r.atoms.name(e.key); e.from != nil && (k == "x" || k == "y" || k == "z") {
+					held++
+				}
+			}
+		}
+		if held == 0 {
+			t.Errorf("seed %d: the cache holds none of the classes' additions", seed)
 		}
 		r.Close()
 	}
@@ -114,10 +191,7 @@ func TestMegaOwnFourWays(t *testing.T) {
 }
 
 func megaOwnFourWays(t *testing.T, native bool) {
-	was := regNativeOn
-	regNativeOn = native
-	defer func() { regNativeOn = was }()
-	r := newTestRuntime(t, Config{})
+	r := newTestRuntime(t, nativeConfig(native))
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, waysCtors+`
 var objs = [];

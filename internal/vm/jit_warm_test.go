@@ -512,7 +512,7 @@ func TestJITRegSmallCalleeAtColdCall(t *testing.T) {
 				}
 			}
 			r := rts[0]
-			if !regNativeOn {
+			if !regNativeDefault {
 				t.Skip("the Go dispatcher counts no calls: no frequency is known")
 			}
 			inlined := func(name string) map[string]bool {
