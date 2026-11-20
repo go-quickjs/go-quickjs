@@ -5504,11 +5504,49 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 		c.goCallBig = true
 		defer func() { c.goCallBig = false }()
 	}
+	if createMakes(v, c.enc) {
+		// As amd64's: Object.create's object from its pool (createMake).
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.createMake(v, slow, join)
+		c.a.Bind(slow)
+		c.leafCall(v, site)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if leafFast(site, c.enc) {
 		c.leafCall(v, site)
 		return
 	}
 	c.goCallOp(v, goOpWord(site), false)
+}
+
+// createMake is amd64's: the argument an object, the pool's prototype, the
+// pool not empty, its next object the result; anything else to slow, the
+// leaf's call. It uses every scratch register.
+func (c *a64Compiler) createMake(v *ssa.Value, slow, done arm64.Label) {
+	site := v.Calls()[0]
+	x := v.Args[len(v.Args)-1]
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		c.a.B(slow)
+		return
+	}
+	fail := a64GuardLabel(c, slow)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Cmp(c.gpr(x, a64A), a64B, true)
+	fail.jump(arm64.NE)
+	c.sourceRef(x, fail)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolProto)
+	c.a.Cmp(a64C, a64B, true)
+	fail.jump(arm64.NE)
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	join := c.markingTake(v, site)
+	c.poolTake(v, site)
+	c.a.Bind(join)
+	c.a.B(done)
 }
 
 // leafCall is amd64's: the description's address in C, where to come back

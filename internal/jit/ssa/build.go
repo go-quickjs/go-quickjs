@@ -1156,7 +1156,32 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 		args = append(args, b.read(at+1+k, blk))
 	}
 	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn, Unused: b.resultUnused(pc, base)}
+	b.createPool(pc, fn, site)
 	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.write(base, blk, v) })
+}
+
+// CreatePoolFeedback is Feedback that knows, for a call at a PC of the
+// leaf at fn, the abi.ObjectPool of the objects native code makes the
+// call's of where the leaf is the realm's Object.create, called with a
+// receiver and one argument: an object of the pool's prototype (its
+// Proto), the pool's next, as the leaf would make it, Go's leaf making any
+// other and filling the pool again (CallSite's Pool and Give, mir's
+// createMake), as V8's code allocates the object CreateObjectWithoutProperties
+// would. 0 for any other.
+type CreatePoolFeedback interface {
+	CreatePool(pc int, fn uintptr) uintptr
+}
+
+// createPool gives site, the call at pc of the leaf at fn, its pool of
+// objects where the feedback has one (CreatePoolFeedback).
+func (b *builder) createPool(pc int, fn uintptr, site *CallSite) {
+	f, ok := b.fb.(CreatePoolFeedback)
+	if !ok || !site.Method || site.Argc != 1 {
+		return
+	}
+	if pool := f.CreatePool(pc, fn); pool != 0 {
+		site.Pool, site.Give = pool, pool
+	}
 }
 
 // leafMade makes the call at pc of the leaf at fn, c its call's site, args
@@ -1212,6 +1237,7 @@ func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite,
 		// regexp_lit's: its RegExp, the pool's, given back to it.
 		site.Give = c.Give
 	}
+	b.createPool(pc, fn, site)
 	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
 }
 
@@ -1907,7 +1933,9 @@ type LiteralFeedback interface {
 // `new`, has Pool, the address of the abi.ObjectPool its receiver comes
 // from, and ProtoIndex and ProtoKey, where in the function's table its
 // own prototype property is and its name, which the call checks holds the
-// pool's prototype; its result, if not an object, is the receiver. One with
+// pool's prototype; its result, if not an object, is the receiver. A
+// leaf's call of Object.create (GoLeaf) may have Pool too, the objects
+// native code makes it of (CreatePoolFeedback). One with
 // Alloc is a built-in's with nothing to run, `new Array()`: its result is
 // the pool's object, whose prototype the realm fixed. One with Receiver is a
 // construction's receiver alone, taken from the pool once its function's
@@ -2263,7 +2291,9 @@ type CallSite struct {
 	// nothing but the call reaches: a leaf's call of it (GoLeaf) has Go
 	// give the receiver back to the pool once the leaf has returned, as
 	// its call of Go of the same call gives the literal its RegExp back
-	// (abi.GoCallState's Give).
+	// (abi.GoCallState's Give). Of a leaf's call of Object.create with
+	// Pool (CreatePoolFeedback), it is that pool, which Go fills again as
+	// its leaf makes an object of the pool's prototype.
 	Give uintptr
 }
 

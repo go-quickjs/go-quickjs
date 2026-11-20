@@ -2764,11 +2764,56 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard guardTo) {
 		c.goCallBig = true
 		defer func() { c.goCallBig = false }()
 	}
+	if createMakes(v, c.enc) {
+		// Object.create's object from its pool (createMake); any other
+		// the leaf's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.createMake(v, slow, join)
+		c.a.Bind(slow)
+		c.leafCall(v, site)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if leafFast(site, c.enc) {
 		c.leafCall(v, site)
 		return
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// createMake makes v, a leaf's call of Object.create of one argument
+// (createMakes), where the argument is an object, the pool's prototype,
+// and the pool has an object: the pool's next, made as the leaf makes
+// one of that prototype, the call's result in its keep cell, the pool's
+// cell cleared -- with Go's write barrier while the collector marks
+// (markingTake) -- as V8's code allocates the object
+// CreateObjectWithoutProperties would. Anything else goes to slow, the
+// leaf's call, which fills the pool again (the VM's jitCreateFill). It
+// goes on at done. It uses every scratch register.
+func (c *compiler) createMake(v *ssa.Value, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	x := v.Args[len(v.Args)-1]
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		// Never an object, null among them: the leaf's.
+		c.a.Jmp(slow)
+		return
+	}
+	fail := guardLabel(c, slow)
+	c.cmpWord(c.gpr(x, scratchA), c.enc.Object)
+	fail.jump(amd64.CondNE)
+	c.sourceRef(x, fail)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.CmpMem(scratchC, scratchA, abi.OffPoolProto, true)
+	fail.jump(amd64.CondNE)
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail.jump(amd64.CondE)
+	join := c.markingTake(v, site)
+	c.poolTake(v, site)
+	c.a.Bind(join)
+	c.a.Jmp(done)
 }
 
 // leafCall calls a leaf (ssa.GoLeaf) through the VM's routine for them

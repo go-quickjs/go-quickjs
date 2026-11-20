@@ -1355,6 +1355,9 @@ func (e *jitEntry) learnedBytes() int {
 		n += jitPoolBytes(e.literals[i].pool)
 	}
 	n += jitPoolBytes(e.cellsPool)
+	for i := range e.creates {
+		n += jitPoolBytes(e.creates[i].pool)
+	}
 	for _, calls := range [2][]jitInline{e.inlines, e.nativeCalls} {
 		for i := range calls {
 			n += jitPoolBytes(calls[i].pool)

@@ -80,6 +80,9 @@ type jitLearned struct {
 	// functions whose generators it makes natively (jitRegGenMakeSeen).
 	genResults []jitGenResult
 	genMakes   []jitGenMake
+	// creates are the calls of Object.create whose objects the code makes
+	// natively, with their pools (jitCreatePool).
+	creates []jitCreate
 	// strSites are the method reads that met a string receiver, which the
 	// code reads off String.prototype once compiled again
 	// (jitFeedback.StringProperty).

@@ -1401,7 +1401,19 @@ reducer reduces the builtins it knows (`ssa.LeafKind`): `codePointAt` and
 `at` of a flat string's code units (`ssa.OpStringCodePointOr`,
 `OpStringAtOr`), the leaf's call made on a branch of its own where native
 code says nothing, and Number's `isNaN`, `isFinite`, `isInteger` and
-`isSafeInteger` with no call at all (`OpNumberIs`). A method call of the
+`isSafeInteger` with no call at all (`OpNumberIs`). `Object.create` of
+one argument native code makes of a pool the call's site has
+(`ssa.CreatePoolFeedback`, mir's `createMake`), as V8's code allocates the
+object `CreateObjectWithoutProperties` would: of an object that is the
+pool's prototype, the pool's next object, taken as a construction's
+receiver is (`poolTake`, with the barrier while the collector marks), the
+leaf's call made for any other -- which fills the pool, of another
+prototype the pool that prototype's and empty, of the pool's, run out,
+filled with objects made as the leaf makes them, but for the first such
+call, whose object teaches the prototype's objects their room (the VM's
+`jitCreateFill`); a site given other prototypes `maxCacheFills` times in a
+row, none of them filled for, gives its pool up and calls the leaf alone
+(`jitCreateForm`). A method call of the
 realm's `Function.prototype.call` of a leaf, `G.call(recv, ...args)`, is G's
 call of recv, as V8 reduces `Function.prototype.call`:
 `hasOwnProperty.call(o, k)` is the leaf's.

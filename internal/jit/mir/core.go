@@ -4392,6 +4392,19 @@ func genForOfs(v *ssa.Value, enc abi.Encoding) bool {
 	return site.Go == ssa.GoCall && site.ForOf && site.GenIter != 0 && site.GenIterFn != 0 && site.GenNext != 0 && len(v.Args) == 1
 }
 
+// createMakes reports whether v, a leaf's call (ssa.GoLeaf) of
+// Object.create of a receiver and one argument, makes its object natively
+// from its pool (ssa.CallSite's Pool, createMake): of 16-byte values, the
+// encoding knowing the collector's flag and the VM's routine for leaves,
+// which makes any other.
+func createMakes(v *ssa.Value, enc abi.Encoding) bool {
+	if len(v.Calls()) != 1 || enc.ValueSize != 16 || enc.WriteBarrier == 0 {
+		return false
+	}
+	site := v.Calls()[0]
+	return leafFast(site, enc) && site.Pool != 0 && site.Method && site.Argc == 1 && len(v.Args) == 3
+}
+
 // genMakes reports whether v, a call Go would make, makes a generator
 // natively (ssa.CallSite's GenMake, genMake): of 16-byte values, the
 // encoding knowing a generator's layout, an object's properties and the

@@ -299,6 +299,10 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 		if st.Give != 0 && (op == elemRegExpExec || op == elemRegExpTest) {
 			form.give, form.test = (*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))), op == elemRegExpTest
 		}
+		if st.Give != 0 && op == elemObjCreate {
+			// Object.create's, whose site's pool it fills (jit_create.go).
+			jitCreateForm[struct{}](form, (*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))))
+		}
 	case op > elemRandom:
 		f := leafOps[op]
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return f(r, this, args, true) }

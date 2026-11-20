@@ -14,6 +14,7 @@ const (
 	snapBigIntFailed
 	snapInlineExit
 	snapKeepLimit
+	snapCreatePool
 	snapStringRead
 	snapTypedRead
 	snapTypedBigRead
@@ -69,10 +70,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "Heap", "RawMath", "VirtualRoot"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
@@ -119,6 +120,15 @@ func (q *jitRegSnapshot) KeepLimit() (r0 int) {
 		return
 	}
 	r0, _ = a[0].(int)
+	return r0
+}
+
+func (q *jitRegSnapshot) CreatePool(pc int, fn uintptr) (r0 uintptr) {
+	a := q.get(snapCreatePool, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
 	return r0
 }
 
@@ -1120,6 +1130,7 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapBigIntFailed |
 	1<<snapInlineExit |
 	1<<snapKeepLimit |
+	1<<snapCreatePool |
 	1<<snapStringRead |
 	1<<snapTypedRead |
 	1<<snapTypedBigRead |
