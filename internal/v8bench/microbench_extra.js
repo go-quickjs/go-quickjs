@@ -3740,6 +3740,50 @@ function object_create_shared(n)
     return n;
 }
 
+/* reads at sites that meet objects of eight layouts, more than a site's
+   cache keeps: an own property and a prototype's, answered by the realm's
+   cache of such reads. Each prototype has made a few objects, as a class's
+   does: the first on a prototype has a layout of its own */
+function mega_read(n)
+{
+    var objs = [], j, k, s = 0, o, p;
+    for (j = 0; j < 8; j++) {
+        p = { x: j };
+        p["k" + j] = j;
+        for (k = 0; k < 3; k++) {
+            o = Object.create(p);
+            o.y = j;
+        }
+        objs.push(o);
+    }
+    for (j = 0; j < n; j++) {
+        o = objs[j & 7];
+        s += o.x + o.y;
+    }
+    global_res = s;
+    return n;
+}
+
+/* an addition and a write at sites that meet objects of eight
+   prototypes' layouts: the realm's cache of additions */
+function mega_add(n)
+{
+    var protos = [], j, s = 0, o, p;
+    for (j = 0; j < 8; j++) {
+        p = { x: j };
+        p["k" + j] = j;
+        protos.push(p);
+    }
+    for (j = 0; j < n; j++) {
+        o = Object.create(protos[j & 7]);
+        o.y = j;
+        o.y = o.y + 1;
+        s += o.y;
+    }
+    global_res = s;
+    return n;
+}
+
 /* a literal whose prototype is an object made with it: { __proto__: p } */
 function proto_literal_fresh(n)
 {
