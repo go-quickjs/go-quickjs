@@ -18,6 +18,9 @@
 // and 32-byte windows within their lines.
 // internal/cmd/v8bench/placements varies all three from placement to
 // placement.
+//
+// Built with the quickjs_wasm tag, it links the WebAssembly engine and
+// installs the WebAssembly namespace in every runtime, as qjs does.
 package main
 
 import (
@@ -48,6 +51,10 @@ var (
 	jitTimeFlag   = flag.Int("jitcompile", 0, "time the JIT's compiles phase by phase, each compile run this many times, and print the times per run after each benchmark (fixed and micro modes, with -jit)")
 	gcYieldFlag   = flag.Bool("gcyield", false, "make each runtime with WithGCYield, which waits while the collector marks when GOMAXPROCS is 1")
 )
+
+// installWasm installs the WebAssembly namespace in a runtime; it is set in
+// a build with the quickjs_wasm tag (wasm.go) and nil in any other.
+var installWasm func(rt *quickjs.Runtime) error
 
 // Compile is the whole front end: the parser and the compiler, as
 // quickjs.Compile runs them, and then the register code of every function,
@@ -98,6 +105,12 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 		opts = append(opts, quickjs.WithGCYield())
 	}
 	rt := quickjs.New(opts...)
+	if installWasm != nil {
+		if err := installWasm(rt); err != nil {
+			rt.Close()
+			return nil, err
+		}
+	}
 	if err := rt.Set("print", host.Print); err != nil {
 		return nil, err
 	}
