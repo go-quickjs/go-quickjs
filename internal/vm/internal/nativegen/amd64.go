@@ -46,6 +46,13 @@ type nativeGen struct {
 	// ones, added since: emitted after every handler, so that it moves
 	// none (set_prop's polymorphic probe, polyOwnStore).
 	tail []func()
+	// mega is the megamorphic paths of get_prop and set_prop
+	// (amd64_mega.go), laid out after every other code of the block,
+	// tail's included, so that they move none of it.
+	mega []func()
+	// megaMiss, while set, is where readSlot's last miss goes in place of
+	// the exit, and megaRet where it binds its end (megaRead).
+	megaMiss, megaRet Label
 	// initL is the native initializer's run (initRun), emitted after the
 	// handlers once one has asked for it (initMade).
 	initL    Label
@@ -1078,13 +1085,19 @@ func (g *nativeGen) readSlot(probe ...Label) {
 	a.Jmp(done)
 	// A site of several shapes: the entries it remembered before, an own
 	// data property of the object's shape among them.
+	// Where the site's entries say nothing of the object's shape: the
+	// exit, or megaRead's probe (megaMiss).
+	miss := g.exit
+	if g.megaMiss != 0 {
+		miss, g.megaRet = g.megaMiss, done
+	}
 	a.Bind(poly)
 	a.Load(R8, RCX, off("propCache.poly"))
 	a.Op(Test, R8, R8, true)
-	a.Jcc(CondE, g.exit)
+	a.Jcc(CondE, miss)
 	a.LoadU8(R9, R8, off("propPoly.n"))
 	a.Op(Test, R9, R9, false)
-	a.Jcc(CondE, g.exit)
+	a.Jcc(CondE, miss)
 	a.AddMem(R8, RDI, ncPolyEnt)
 	a.Load(RDX, RSI, shapeOff)
 	a.Bind(polyLoop)
@@ -1100,7 +1113,7 @@ func (g *nativeGen) readSlot(probe ...Label) {
 	a.OpImm(Add, R8, size("propCache"), true)
 	a.OpImm(Sub, R9, 1, false)
 	a.Jcc(CondNE, polyLoop)
-	a.Jmp(g.exit)
+	a.Jmp(miss)
 	a.Bind(done)
 }
 

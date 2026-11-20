@@ -114,16 +114,21 @@ func (g *armGen) frameArgs() {
 func (g *armGen) addProp(own Label) {
 	a := g.a
 	poly, length := a.NewLabel(), a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
+	// As amd64's: a site that has given up, past an array's length,
+	// megaWrite's, its store addTransition's.
+	mega, store := a.NewLabel(), a.NewLabel()
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length, mega) })
+	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
 	a.Load(r8, rC, off("propCache.shape"))
 	g.cmpMem(r8, rS, off("Object.shape"))
 	a.BCond(NE, poly)
-	g.addTransition()
+	g.addTransition(store)
 }
 
 // addTransition is addProp's addition once the object is known to be of
-// the shape of the entry at rC, as amd64's.
-func (g *armGen) addTransition() {
+// the shape of the entry at rC, as amd64's, its store bound at store where
+// given (megaWrite's).
+func (g *armGen) addTransition(store ...Label) {
 	a := g.a
 	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	shapeOff := off("Object.shape")
@@ -150,6 +155,9 @@ func (g *armGen) addTransition() {
 	g.cmpMem(r9, rC, off("propCache.s2"))
 	a.BCond(NE, g.exit)
 	a.Bind(p2ok)
+	if len(store) != 0 {
+		a.Bind(store[0])
+	}
 	// Room for the value; a shape of no index past linearScanLimit
 	// values is given one by Go.
 	a.LoadU32(r9, rS, off("Object.valn"))

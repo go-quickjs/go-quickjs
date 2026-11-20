@@ -66,6 +66,8 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		reflect.TypeFor[upvalue](),
 		reflect.TypeFor[regSwitchTable](),
 		reflect.TypeFor[bytecode.SwitchCase](),
+		reflect.TypeFor[sharedEntry](),
+		reflect.TypeFor[deepAdd](),
 	} {
 		sizes[t.Name()] = t.Size()
 		depth := map[string]int{}
@@ -178,6 +180,9 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"atomPrototype":   uint64(atomPrototype),
 		"atomLength":      uint64(atomLength),
 		"propOddKey":      uint64(propAccessor | propPrivate | propDeleted | propUninit),
+		"propWritable":    uint64(propWritable),
+		"sharedCacheBits": uint64(sharedCacheBits),
+		"deepWaysLog":     uint64(deepWaysLog),
 		"ClassProxy":      uint64(ClassProxy),
 		"hasCacheBits":    uint64(hasCacheBits),
 		"hasCacheMul":     uint64(hasCacheMul),

@@ -440,7 +440,14 @@ func nativeEmit(v *variant) (*block, error) {
 		g.decB(RSI)
 		g.object(RSI, RSI)
 		g.site(RCX)
+		// A site that has given up is answered by the realm's shared
+		// cache (megaRead), laid out after every other code.
+		miss := a.NewLabel()
+		g.megaMiss = miss
 		g.readSlot()
+		ret := g.megaRet
+		g.megaMiss, g.megaRet = 0, 0
+		g.mega = append(g.mega, func() { g.megaRead(miss, ret) })
 		g.loadValue(RCX)
 		g.decA(RDX)
 		a.LeaIdx(RAX, R12, RDX, 1, 0)
@@ -1342,6 +1349,10 @@ func nativeEmit(v *variant) (*block, error) {
 	// Out-of-line code of handlers laid out before the appended ones,
 	// added since: after every handler, so that it moves none.
 	for _, emit := range g.tail {
+		emit()
+	}
+	// The megamorphic paths of get_prop and set_prop, last of all.
+	for _, emit := range g.mega {
 		emit()
 	}
 	if len(missing) > 0 {

@@ -4,7 +4,9 @@ import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 
 // polyOwnStore finds an own writable slot among the site's other shapes.
 // The source address stays in RDX; own shares the ordinary store and
-// barrier, and a site with no other shapes goes to none.
+// barrier, and a site with no other shapes, or none of the object's, goes
+// to none: an array's length, or the realm's caches where the site has
+// given up (megaWrite).
 func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a := g.a
 	loop, found := a.NewLabel(), a.NewLabel()
@@ -14,7 +16,7 @@ func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a.Jcc(CondE, none)
 	a.LoadU8(R9, R8, off("propPoly.n"))
 	a.Op(Test, R9, R9, false)
-	a.Jcc(CondE, g.exit)
+	a.Jcc(CondE, none)
 	a.AddMem(R8, RDI, ncPolyEnt)
 	a.Load(RCX, RSI, off("Object.shape"))
 	a.Bind(loop)
@@ -23,7 +25,7 @@ func (g *nativeGen) polyOwnStore(start, own, none Label) {
 	a.OpImm(Add, R8, size("propCache"), true)
 	a.OpImm(Sub, R9, 1, false)
 	a.Jcc(CondNE, loop)
-	a.Jmp(g.exit)
+	a.Jmp(none)
 	a.Bind(found)
 	a.MovRR(RCX, R8)
 	a.Jmp(own)
@@ -65,13 +67,15 @@ func (g *nativeGen) getPropNext() {
 // writes: a longer length, storage to unshare, a value that is not a
 // length (whose RangeError is Go's), another name or object. R8, R9, RCX
 // and RDX are its scratch.
-func (g *nativeGen) arrayLength(start Label) {
+//
+// Any other class goes to other, a site's megamorphic write (megaWrite).
+func (g *nativeGen) arrayLength(start, other Label) {
 	a := g.a
 	loop, cleared, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.LoadU8(R8, RSI, offObjClass)
 	a.OpImm(Cmp, R8, int32(ClassArray), false)
-	a.Jcc(CondNE, g.exit)
+	a.Jcc(CondNE, other)
 	// The name: names[siteName[C]].
 	a.MovRR(RCX, RAX)
 	a.ShiftImm(Shr, RCX, 48, true)

@@ -100,6 +100,11 @@ var (
 	offRtCur        int32
 	offRtArgStack   int32
 	offRtBackEdges  int32
+	// offRealmShared and offRealmDeep are where a Realm has its caches of
+	// the reads and the additions of sites that have given up (vm's
+	// sharedProp, deepStore).
+	offRealmShared  int32
+	offRealmDeep    int32
 	offShapeIndex   int32
 	offIdxIndexKeys int32
 	offStrS         int32
@@ -379,6 +384,8 @@ func loadOffsets() {
 	offRtCur = rtRel(off("Runtime.cur"))
 	offRtArgStack = rtRel(off("Runtime.argStack"))
 	offRtBackEdges = rtRel(off("Runtime.backEdges"))
+	offRealmShared = off("Realm.shared")
+	offRealmDeep = off("Realm.deep")
 	offShapeIndex = off("shape.index")
 	offIdxIndexKeys = off("propIndex.indexKeys")
 	offStrS = off("String.s")

@@ -103,6 +103,9 @@ type armGen struct {
 	// ones, added since: emitted after every handler, so that it moves
 	// none (set_prop's polymorphic probe, polyOwnStore).
 	tail []func()
+	// mega, megaMiss and megaRet are amd64's (arm64_mega.go).
+	mega              []func()
+	megaMiss, megaRet Label
 	// initL and initMade are amd64's.
 	initL    Label
 	initMade bool
@@ -1098,11 +1101,16 @@ func (g *armGen) readSlot(probe ...Label) {
 	a.B(done)
 	// A site of several shapes: the entries it remembered before, an own
 	// data property of the object's shape among them.
+	// As amd64's: the exit, or megaRead's probe (megaMiss).
+	miss := g.exit
+	if g.megaMiss != 0 {
+		miss, g.megaRet = g.megaMiss, done
+	}
 	a.Bind(poly)
 	a.Load(r8, rC, off("propCache.poly"))
-	a.Cbz(r8, g.exit, true)
+	a.Cbz(r8, miss, true)
 	a.LoadU8(r9, r8, off("propPoly.n"))
-	a.Cbz(r9, g.exit, false)
+	a.Cbz(r9, miss, false)
 	g.addMem(r8, rCtx, ncPolyEnt)
 	a.Load(rD, rS, shapeOff)
 	a.Bind(polyLoop)
@@ -1117,7 +1125,7 @@ func (g *armGen) readSlot(probe ...Label) {
 	a.AddImm(r8, r8, int64(size("propCache")), true)
 	a.SubsImm(r9, r9, 1, false)
 	a.BCond(NE, polyLoop)
-	a.B(g.exit)
+	a.B(miss)
 	a.Bind(done)
 }
 

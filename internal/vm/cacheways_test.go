@@ -183,8 +183,9 @@ run(50);`)
 // its property is in objects of each layout, four to a set: four layouts
 // of one set, read in turn, keep their entries however many times they
 // are read, which the set's order, changed by each entry made, shows; a
-// fifth displaces the oldest.
-// Each with the Go table, whose reads ask it, and the native handlers.
+// fifth displaces the oldest. That is the Go table's, whose reads ask it;
+// the native handlers read a small table's own property themselves at such
+// a site (nativegen's megaRead), and leave it no table to make.
 func TestMegaOwnFourWays(t *testing.T) {
 	t.Parallel()
 	for _, native := range []bool{false, true} {
@@ -220,6 +221,12 @@ function rds(picks, n) { var s = 0; for (var r = 0; r < n; r++) for (var i = 0; 
 		if p := rd.ic[i].poly; p != nil && p.mega != nil {
 			m = p.mega
 		}
+	}
+	if native {
+		if m != nil {
+			t.Error("rd's reads of objects' own small tables made it a table of its own: Go's, not the native handlers'")
+		}
+		return
 	}
 	if m == nil {
 		t.Fatal("rd has no table of its own")

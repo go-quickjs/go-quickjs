@@ -1264,9 +1264,15 @@ beside it for the globals, `regCalls` for calls.
   caches keep four maps); a site that keeps meeting new shapes stops
   filling (`maxCacheFills`) and reads through the realm's shared cache,
   found by the shape and the key together, what V8 calls the megamorphic
-  stub cache. A prototype's property is cached with the holder and the
-  prototype chain's validity cell; an accessor with its getter or setter.
-  An addition remembers its transition.
+  stub cache; its additions through the realm's cache of them
+  (`deepAdds`), each with the prototype chain it was made along. The
+  native handlers probe both themselves at such a site, as V8's
+  interpreter's handlers probe its stub cache, and an object's own small
+  table for a read and a write of a property it has
+  (`internal/vm/internal/nativegen`'s `*_mega.go`), laid out after every
+  other code of the block; Go fills them. A prototype's property is cached
+  with the holder and the prototype chain's validity cell; an accessor with
+  its getter or setter. An addition remembers its transition.
 - **A global** reads or writes the slot its site remembers while the global
   epoch is the one the site was filled at. The epoch advances when a
   binding of the global object moves, goes or changes its attributes and

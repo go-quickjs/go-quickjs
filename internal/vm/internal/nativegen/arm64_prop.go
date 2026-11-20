@@ -3,7 +3,7 @@ package nativegen
 import . "github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 
 // polyOwnStore is amd64's probe, retaining the source address in rD; a
-// site with no other shapes goes to none.
+// site with no other shapes, or none of the object's, goes to none.
 func (g *armGen) polyOwnStore(start, own, none Label) {
 	a := g.a
 	loop, found := a.NewLabel(), a.NewLabel()
@@ -11,7 +11,7 @@ func (g *armGen) polyOwnStore(start, own, none Label) {
 	a.Load(r8, rC, off("propCache.poly"))
 	a.Cbz(r8, none, true)
 	a.LoadU8(r9, r8, off("propPoly.n"))
-	a.Cbz(r9, g.exit, false)
+	a.Cbz(r9, none, false)
 	g.addMem(r8, rCtx, ncPolyEnt)
 	a.Load(rC, rS, off("Object.shape"))
 	a.Bind(loop)
@@ -20,7 +20,7 @@ func (g *armGen) polyOwnStore(start, own, none Label) {
 	a.AddImm(r8, r8, int64(size("propCache")), true)
 	a.SubsImm(r9, r9, 1, false)
 	a.BCond(NE, loop)
-	a.B(g.exit)
+	a.B(none)
 	a.Bind(found)
 	a.MovRR(rC, r8)
 	a.B(own)
@@ -51,13 +51,15 @@ func (g *armGen) getPropNext() {
 
 // arrayLength is amd64's set_prop of an array's own length: the object in
 // rS, the value's address in rD, the instruction in rW.
-func (g *armGen) arrayLength(start Label) {
+//
+// Any other class goes to other, as amd64's.
+func (g *armGen) arrayLength(start, other Label) {
 	a := g.a
 	loop, cleared, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.LoadU8(r8, rS, offObjClass)
 	a.CmpImm(r8, int64(ClassArray), false)
-	a.BCond(NE, g.exit)
+	a.BCond(NE, other)
 	// The name: names[siteName[C]].
 	a.ShiftImm(Lsr, rC, rW, 48, true)
 	a.Load(r9, rCtx, ncRC)

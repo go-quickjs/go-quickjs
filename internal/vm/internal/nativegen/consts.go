@@ -59,6 +59,11 @@ var (
 	// property that is no plain data property: an accessor, a private
 	// name, one deleted or not initialized yet.
 	atomPrototype, propOddKey int32
+	// propWritable is a writable property's flag; sharedCacheBits and
+	// deepWaysLog size the realm's caches of the reads and the additions
+	// of sites that have given up (vm's sharedProp, deepStore).
+	propWritable                 int32
+	sharedCacheBits, deepWaysLog uint8
 	// atomLength is the key length (arrayLength).
 	atomLength   int32
 	hasCacheBits uint8
@@ -131,9 +136,10 @@ func loadConsts() {
 		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"},
 		{&maxCacheFills, "maxCacheFills"}, {&fwdApply, "fwdApply"}, {&fwdCall, "fwdCall"}, {&fwdWays, "fwdWays"}, {&fwdShift, "fwdShift"},
 		{&atomIndexTag, "atomIndexTag"}, {&atomPrototype, "atomPrototype"}, {&propOddKey, "propOddKey"},
-		{&atomLength, "atomLength"}} {
+		{&atomLength, "atomLength"}, {&propWritable, "propWritable"}} {
 		*c.p = int32(k(c.name))
 	}
+	sharedCacheBits, deepWaysLog = uint8(k("sharedCacheBits")), uint8(k("deepWaysLog"))
 	hasCacheBits, hasCacheMul = uint8(k("hasCacheBits")), k("hasCacheMul")
 	hasCacheWaysLog = uint8(k("hasCacheWaysLog"))
 	hasCacheWays = 1 << hasCacheWaysLog

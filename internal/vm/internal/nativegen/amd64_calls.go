@@ -122,7 +122,11 @@ func (g *nativeGen) frameArgs() {
 func (g *nativeGen) addProp(add, own Label) {
 	a := g.a
 	poly, polyCheck, exitNear, length := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
-	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length) })
+	// A site that has given up, past an array's length: megaWrite, by the
+	// realm's cache of additions, its store addTransition's.
+	mega, store := a.NewLabel(), a.NewLabel()
+	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, length) }, func() { g.arrayLength(length, mega) })
+	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
 	// A miss of the entry's shape goes to the probe of the site's entries
 	// for other shapes where it has some, and else to an array's length
 	// (arrayLength), which no entry holds; both are laid out after every
@@ -140,14 +144,18 @@ func (g *nativeGen) addProp(add, own Label) {
 	a.Load(R8, RCX, off("propCache.shape"))
 	a.CmpMem(R8, RSI, off("Object.shape"), true)
 	a.Jcc(CondNE, polyCheck)
-	g.addTransition(exitNear)
+	g.addTransition(exitNear, store)
 }
 
 // addTransition is addProp's addition once the object is known to be of
 // the shape of the entry at RCX: the entry's transition, which a keyed
 // store's entry of the object's shape and key takes too (keyedStore). Its
 // first checks leave by early, a jump to the exit stub near them.
-func (g *nativeGen) addTransition(early Label) {
+//
+// With store, it binds there its store, the object in RSI, the next shape
+// in R8 and the value's address in RDX: megaWrite's addition from the
+// realm's cache takes it.
+func (g *nativeGen) addTransition(early Label, store ...Label) {
 	a := g.a
 	p1ok, p2ok, idxok := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	shapeOff := off("Object.shape")
@@ -179,6 +187,9 @@ func (g *nativeGen) addTransition(early Label) {
 	a.CmpMem(R9, RCX, off("propCache.s2"), true)
 	a.Jcc(CondNE, g.exit)
 	a.Bind(p2ok)
+	if len(store) != 0 {
+		a.Bind(store[0])
+	}
 	// Room for the value; a shape of no index past linearScanLimit
 	// values is given one by Go.
 	a.LoadU32(R9, RSI, off("Object.valn"))
