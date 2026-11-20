@@ -22,6 +22,16 @@ import (
 // with struct{} alone: laid out after every function and closure of the
 // package, they move none of them.
 
+// reserveFunctionProtoKeys gives Function.prototype's keys their places in
+// V8's order, which is neither the order initFunctionBuiltins makes them in
+// nor the constructor's, made last: each takes the place held for it here,
+// which defining it keeps.
+func (r *Runtime) reserveFunctionProtoKeys(p *Object) {
+	for _, k := range [...]string{"constructor", "apply", "bind", "call", "toString", "arguments", "caller"} {
+		defBuiltin(p, r.atoms.intern(k), Undefined, propWritable|propConfigurable)
+	}
+}
+
 // keyOrder gives c, the built-in name -- a constructor's or a namespace's
 // own name -- and p, the constructor's prototype, either nil where it is not
 // being made, their keys' places in V8's order (reserveKeys), where they

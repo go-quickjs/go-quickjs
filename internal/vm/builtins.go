@@ -681,13 +681,7 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 
 func (r *Runtime) initFunctionBuiltins() {
 	p := r.proto.function
-
-	// Its keys are listed in V8's order, which is neither the order they are
-	// made in below nor the constructor's, made last: each takes the place
-	// held for it here, which defining it keeps.
-	for _, k := range [...]string{"constructor", "apply", "bind", "call", "toString", "arguments", "caller"} {
-		defBuiltin(p, r.atoms.intern(k), Undefined, propWritable|propConfigurable)
-	}
+	r.reserveFunctionProtoKeys(p)
 
 	r.initLegacyReflection()
 

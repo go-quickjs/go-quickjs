@@ -24,7 +24,15 @@
 # E anchors firstElem (builtins.go), C asciiCaseMemo (casetables.go),
 # at f9829c9f's layout; the files the renames after it put among them had moved them
 # 2 KB and made array_indexOf 23%, json_round_trip 10% and string_upper
-# 7% slower at every placement. R and S, after W, hold a replace's loop
+# 7% slower at every placement. E's pad is kept short of a page:
+# Function.prototype's key reservation (8b5d6339) took it from 32 stores
+# to none, three keyOrder calls (c7c7830a) took firstElem 96 bytes past
+# that, the pad went to 4,011 bytes, and everything after it moved 4 KB
+# against the code before it and the packages linked before vm -- its
+# offsets modulo 4 KB the same -- and json_stringify_decimals was 39%,
+# json_stringify_records 15% and json_stringify_indent 11% slower at
+# every placement than with E short. The reservation is in keyorder.go, after T, and E 20
+# stores. R and S, after W, hold a replace's loop
 # (regExpReplaceIn, regexp_abstract.go) and the string builder
 # (partsBuilder, string.go) at f9829c9f's layout, which the files the
 # renames put before them had moved: regexp_replace_dollar was 4 to 8%

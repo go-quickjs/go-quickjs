@@ -410,7 +410,19 @@ dropping them, and every variable is the same size whatever the levers are
 but the data levers' own. They cost their size and only grow: an anchor a
 change moves back by 32 bytes takes a pad 4,064 bytes longer, and a pad's
 own function moves what follows it, so a position whose target is where its
-code was takes a pad of 4 KB. The lock as first made, against
+code was takes a pad of 4 KB. A pad that goes so past a page moves
+everything after it 4 KB against everything before it: the same offsets
+modulo 4 KB, and a page further from the packages linked before vm and
+from the runtime, which Zen 2 still tells apart. Function.prototype's
+key reservation (`8b5d6339`) took E from 32 stores to none, three
+`keyOrder` calls (`c7c7830a`) took `firstElem` 96 bytes past that, and
+E went to 4,011 bytes: `json_stringify_decimals` was 39%,
+`json_stringify_records` 15% and `json_stringify_indent` 11% slower at
+every placement than with E short, their code and its offsets
+unchanged. With the
+reservation in `keyorder.go`, after T, E is 20 stores and the three are
+back. A pad near none is worth a look before a change grows the code
+before its anchor. The lock as first made, against
 `db306c0e`'s layout and with the tree tier's anchors, was 49 KB of pads,
 60 KB of binary.
 
