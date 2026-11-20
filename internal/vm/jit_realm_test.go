@@ -422,15 +422,11 @@ func TestJITRegRealmsWithinTheBudgetClocked(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	fn := compileForTest(t, jitHotProgram(40))
-	epoch, flush := jitEpochNow, jitFlushNow
-	t.Cleanup(func() {
-		jitEpochNow, jitFlushNow = epoch, flush
-	})
 	for _, step := range []uint64{0, 1, 2, 3} {
 		for _, limit := range []int64{96 << 10, 256 << 10} {
 			tick := uint64(1000)
-			jitEpochNow = func() uint64 { tick += step; return tick }
-			jitFlushNow = func() uint64 { return tick / 4 }
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { tick += step; return tick } })
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.flushNow = func() uint64 { return tick / 4 } })
 			r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: limit})
 			r.SetJITWarmUp(8, 8)
 			for i := range 30 {

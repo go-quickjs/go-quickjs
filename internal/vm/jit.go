@@ -127,6 +127,14 @@ type jitTestConfig struct {
 	// typedViewMade, if set, is called at each view's copy jitTypedView
 	// makes.
 	typedViewMade func()
+	// epochNow and flushNow, if set, stand in for the cache's clocks
+	// (epoch, flushNow); clocks, if set, for both where it says so --
+	// every test runtime's held but those a test lets run
+	// (jit_clocks_test.go).
+	epochNow, flushNow func() uint64
+	clocks             func(s *jitState) (uint64, bool)
+	// flushAge, if not 0, is the runtime's jitFlushAge.
+	flushAge uint64
 	// compileRepeat, codeHook and crossHook, where set, are the runtime's
 	// JITCompileRepeat, JITCodeHook and JITCrossHook.
 	compileRepeat int
@@ -1583,9 +1591,17 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) {
 // jitFlushAge is how many of the flush's ticks (flushNow) apart the
 // cache looks for code to flush (flush): code unused between two looks
 // is, a second of the program's apart. V8's code ages so before it is
-// flushed. A variable, which tests of the cache's room set past any tick
-// they reach.
-var jitFlushAge uint64 = 20
+// flushed. A test of the cache's room sets its runtime's past any tick it
+// reaches (jitTestConfig's flushAge).
+const jitFlushAge = 20
+
+// flushAge is the runtime's jitFlushAge.
+func (s *jitState) flushAge() uint64 {
+	if a := s.rt.jitTest.flushAge; a != 0 {
+		return a
+	}
+	return jitFlushAge
+}
 
 // flushNow is the flush's clock: jitEpochTime's ticks of the program's
 // time (running) alone. The cache's epochs count the collector's cycles
@@ -1593,13 +1609,17 @@ var jitFlushAge uint64 = 20
 // run in a loop -- has go by within a call: code a function runs once a
 // call was flushed within it.
 func (s *jitState) flushNow() uint64 {
-	if jitFlushNow != nil {
-		return jitFlushNow()
+	t := &s.rt.jitTest
+	if f := t.flushNow; f != nil {
+		return f()
 	}
-	if jitClocksForTest != nil {
-		if t, ok := jitClocksForTest(s); ok {
-			return t
+	if c := t.clocks; c != nil {
+		if tick, ok := c(s); ok {
+			return tick
 		}
+	}
+	if jitClocksHeld.Load() {
+		return 0
 	}
 	return uint64(s.running() / jitEpochTime)
 }
@@ -1632,7 +1652,7 @@ func (s *jitState) flush() {
 		}
 	}
 	tick := s.flushNow()
-	if tick < s.flushedAt+jitFlushAge {
+	if tick < s.flushedAt+s.flushAge() {
 		return
 	}
 	s.flushedAt = tick
@@ -1775,27 +1795,26 @@ const (
 // numeric kernel, one phase of a program's after another -- each
 // jitEpochTime of the program's time (running) besides.
 func (s *jitState) epoch() uint64 {
-	if jitEpochNow != nil {
-		return jitEpochNow()
+	t := &s.rt.jitTest
+	if f := t.epochNow; f != nil {
+		return f()
 	}
-	if jitClocksForTest != nil {
-		if t, ok := jitClocksForTest(s); ok {
-			return t
+	if c := t.clocks; c != nil {
+		if tick, ok := c(s); ok {
+			return tick
 		}
+	}
+	if jitClocksHeld.Load() {
+		return 0
 	}
 	g, k := jitGCEpoch.Load(), jitRepeatCycles.Load()
 	return g - min(k, g) + uint64(s.running()/jitEpochTime)
 }
 
-// jitEpochNow and jitFlushNow, where a test sets them, stand in for the
-// cache's clocks (epoch, flushNow) of every runtime; jitClocksForTest,
-// set by the package's tests, for one runtime's where it says so -- every
-// test runtime's held but those a test lets run (jit_clocks_test.go).
-// Nil outside tests.
-var (
-	jitEpochNow, jitFlushNow func() uint64
-	jitClocksForTest         func(s *jitState) (uint64, bool)
-)
+// jitClocksHeld, which a host sets for its runs (JITHoldClocks), stops
+// every runtime's cache's clocks (epoch, flushNow); a test sets its own
+// runtime's (jitTestConfig's epochNow, flushNow and clocks).
+var jitClocksHeld atomic.Bool
 
 // running is the program's time, which the cache's clocks run on: the
 // time since the runtime's JIT state was made, less what its compiles

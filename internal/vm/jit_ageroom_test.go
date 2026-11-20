@@ -35,9 +35,8 @@ func TestJITHeldWithinBudgetAfterALook(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
 	epoch := uint64(1)
-	jitEpochNow = func() uint64 { return epoch }
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
 	const limit = 256 << 10
 	r := jitRuntimeForTest(t, Config{JIT: true, JITMemoryLimit: limit})
 	var b strings.Builder

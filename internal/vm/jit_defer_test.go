@@ -18,14 +18,10 @@ func TestJITRegDeferredWarmsUpAgain(t *testing.T) {
 	}
 	fn := compileForTest(t, jitHotProgram(40))
 	call := compileForTest(t, `f39(100000)`)
-	epoch, flush := jitEpochNow, jitFlushNow
-	t.Cleanup(func() {
-		jitEpochNow, jitFlushNow = epoch, flush
-	})
 	// Clocks that do not move: the code compiled first stays young, and
 	// what comes after it is deferred.
-	jitEpochNow = func() uint64 { return 1000 }
-	jitFlushNow = func() uint64 { return 250 }
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return 1000 } })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.flushNow = func() uint64 { return 250 } })
 	r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: 96 << 10})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	// Its asks counted at the JIT's own back-edge budget, not

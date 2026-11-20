@@ -105,10 +105,8 @@ func TestJITEvictionKeepsRunningCode(t *testing.T) {
 	}
 	// The cache's clock a tick at every look: code is old at once, and the
 	// cache drops it to make room for whatever is compiled next.
-	now := jitEpochNow
 	var tick uint64
-	jitEpochNow = func() uint64 { tick++; return tick }
-	t.Cleanup(func() { jitEpochNow = now })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { tick++; return tick } })
 	jitNoFlushForTest(t)
 	r := jitRuntimeForTest(t, Config{JIT: true, JITMemoryLimit: 1 << 20})
 	// Between rounds, every link holds, and the collector runs, releasing
@@ -155,10 +153,8 @@ func TestJITEvictedWaitToCompileAgain(t *testing.T) {
 	}
 	b.WriteString("const a = []; for (let i = 0; i < 50; i++) a.push(i);\n")
 	fmt.Fprintf(&b, "let r = 0; for (let k = 0; k < %d; k++) for (let i = 0; i < %d; i++) r = (r + this[\"f\" + i](a)) | 0; r", rounds, funcs)
-	now := jitEpochNow
 	var tick uint64
-	jitEpochNow = func() uint64 { tick++; return tick }
-	t.Cleanup(func() { jitEpochNow = now })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { tick++; return tick } })
 	r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: 256 << 10})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })

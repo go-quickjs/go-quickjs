@@ -229,7 +229,8 @@ const jitMarkingAllocLimit = 8 << 30
 // count (jitGCEpoch) has settled -- a finalizer counts a cycle at some time
 // after it, and a count landing in one run emptied the megamorphic cache
 // there (flush) -- and the clocks the JIT's cache ages and flushes code by
-// held (JITHoldClocks), which otherwise run on the program's time, and the
+// held, as every test runtime's are (jit_clocks_test.go), which otherwise
+// run on the program's time, and the
 // marking runs' calls of the barrier lengthen it: code flushed, or
 // reclaimed for room, in one run and not the other was compiled again in
 // that run alone. Run so on arm64 under emulation, two rounds of the
@@ -248,11 +249,7 @@ func jitMarkingHeldForTest() (restore func()) {
 		runtime.GC()
 		time.Sleep(time.Millisecond)
 	}
-	clocks := JITHoldClocks()
-	return func() {
-		clocks()
-		debug.SetGCPercent(gc)
-	}
+	return func() { debug.SetGCPercent(gc) }
 }
 
 // jitMarkingBudget is the JIT's memory for jitMarkingRun's runtimes. The

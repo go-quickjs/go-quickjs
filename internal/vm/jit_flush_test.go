@@ -14,11 +14,9 @@ import (
 // at what the returned function sets, for the rest of the test.
 func jitFlushForTest(t *testing.T) func(uint64) {
 	t.Helper()
-	now, flushNow := jitEpochNow, jitFlushNow
 	epoch := uint64(1000)
-	jitEpochNow = func() uint64 { return epoch }
-	jitFlushNow = func() uint64 { return epoch }
-	t.Cleanup(func() { jitEpochNow, jitFlushNow = now, flushNow })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.flushNow = func() uint64 { return epoch } })
 	return func(e uint64) { epoch = e }
 }
 
@@ -27,9 +25,7 @@ func jitFlushForTest(t *testing.T) func(uint64) {
 // enough that code would be flushed before there was none.
 func jitNoFlushForTest(t *testing.T) {
 	t.Helper()
-	was := jitFlushAge
-	jitFlushAge = 1 << 62
-	t.Cleanup(func() { jitFlushAge = was })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.flushAge = 1 << 62 })
 }
 
 // jitGlobalClosure is the closure the global name holds.
@@ -272,7 +268,7 @@ func TestJITFlushByTimeNotCollections(t *testing.T) {
 	}
 	// The epochs race, as the collector's cycles would; the flush's clock
 	// stands.
-	jitFlushNow = func() uint64 { return 1000 }
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.flushNow = func() uint64 { return 1000 } })
 	for k := uint64(1); k <= 4; k++ {
 		setEpoch(1000 + k*100*jitFlushAge)
 		s.flush()

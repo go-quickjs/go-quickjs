@@ -55,10 +55,8 @@ var JITCrossHook func(f JITFunction, code *mir.Code, err error)
 // and restore, which it returns, after the last is done: the clocks run
 // again.
 func JITHoldClocks() (restore func()) {
-	epoch, flush := jitEpochNow, jitFlushNow
-	jitEpochNow = func() uint64 { return 0 }
-	jitFlushNow = func() uint64 { return 0 }
-	return func() { jitEpochNow, jitFlushNow = epoch, flush }
+	was := jitClocksHeld.Swap(true)
+	return func() { jitClocksHeld.Store(was) }
 }
 
 // SetJITReport has the JIT note why its runs ended in the interpreter and

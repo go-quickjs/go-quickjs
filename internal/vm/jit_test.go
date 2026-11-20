@@ -2442,8 +2442,7 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	epoch := uint64(0)
-	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
-	jitEpochNow = func() uint64 { return epoch }
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
 	const chains = 30
 	jitNoInlineForTest(t, "")
 	// A budget of 1 MB, which the cold functions fill.
@@ -2671,9 +2670,7 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// The clock stopped: under checkptr, the script ran past code's ages.
-	now := jitEpochNow
-	jitEpochNow = func() uint64 { return 100 }
-	t.Cleanup(func() { jitEpochNow = now })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return 100 } })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function P(x){this.x=x}
 		function mk(n){let s=0;for(let i=0;i<n;i++){const o={a:i,b:i+1};s=(s+new P(o.a).x+o.b)|0}return s}
@@ -2700,10 +2697,9 @@ func TestJITMemoryLimitKeepsEighth(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
 	for _, cfg := range []Config{{JIT: true, MemoryLimit: 16 << 20}, {JIT: true, JITMemoryLimit: 2 << 20}, {JIT: true, MemoryLimit: 1 << 30, JITMemoryLimit: 2 << 20}} {
 		epoch := uint64(0)
-		jitEpochNow = func() uint64 { return epoch }
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
 		r := jitRuntimeForTest(t, cfg)
 		budget := int64(r.jitBudget())
 		if budget != 2<<20 {

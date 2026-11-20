@@ -26,8 +26,8 @@ import (
 // what it was made with.
 
 // newTestRuntime is New for a test or benchmark tb: every runtime the
-// package's tests make is made by it, with the switches tb set
-// (testConfigFor).
+// package's tests make is made by it, with the test binary's defaults
+// (testDefaults) and the switches tb set (testConfigFor).
 func newTestRuntime(tb testing.TB, cfg Config) *Runtime {
 	r := New(testConfigFor(tb, cfg))
 	e := testEntryOf(tb)
@@ -59,6 +59,11 @@ func testRuntimesOf(tb testing.TB) []*Runtime {
 		name = name[:i]
 	}
 }
+
+// testDefaults is what every runtime the package's tests make is made
+// with before its test's switches: settings of the test binary's, set by
+// inits before any test runs and never after.
+var testDefaults []func(*testConfig)
 
 // testSwitches is the switches tests have set for the runtimes they make,
 // by the test's name, which is unique among the tests running: each
@@ -120,6 +125,12 @@ func testConfigFor(tb testing.TB, cfg Config) Config {
 		name = name[:i]
 	}
 	var t *testConfig
+	for _, set := range testDefaults {
+		if t == nil {
+			t = new(testConfig)
+		}
+		set(t)
+	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		e := chain[i]
 		e.mu.Lock()
@@ -226,7 +237,7 @@ func TestTestSwitchesAreTheTests(t *testing.T) {
 			t.Errorf("the Config's own switch under the test's: %+v", c.test)
 		}
 	})
-	if c := testConfigFor(prefixTB{t, t.Name() + "B"}, Config{}); c.test != nil {
+	if c := testConfigFor(prefixTB{t, t.Name() + "B"}, Config{}); c.test != nil && c.test.native != switchDefault {
 		t.Errorf("another test's runtime, by a name the test's begins: %+v", c.test)
 	}
 }

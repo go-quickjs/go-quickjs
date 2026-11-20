@@ -19,8 +19,7 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	epoch := uint64(0)
-	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
-	jitEpochNow = func() uint64 { return epoch }
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
 	r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 8 << 20})
 	if _, err := r.Run(compileForTest(t, `function g(n) { let s = 0; for (let i = 0; i < n; i++) s += i * 2; return s }
 		function h(n) { var s = 0; for (var i = 0; i < n; i++) s += i; return s }
