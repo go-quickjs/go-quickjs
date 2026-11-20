@@ -78,7 +78,6 @@ const (
 // a failure.
 var unsupportedFeatures = map[string]string{
 	"decorators": "decorators are not implemented",
-	"caller":     "no legacy caller access",
 }
 
 // A newly named difference permits a failure while documenting why; an

@@ -1749,7 +1749,7 @@ func synthesized(c Class, key Atom) bool {
 	case ClassArray:
 		return key == atomLength
 	case ClassFunction:
-		return key == atomLength || key == atomName || key == atomPrototype
+		return key == atomLength || key == atomName || key == atomPrototype || key == atomCaller
 	}
 	return false
 }

@@ -348,10 +348,12 @@ func WithLocale(tag string) Option {
 // the global object's chain nothing first, taking it to have the name, where
 // the standard asks its has trap; and Iterator.prototype.take and drop take a
 // finite count past 2^53 - 1, which the standard refuses; and a sloppy
-// function's caller and arguments say what called it and with what, as every
-// engine's accessors on Function.prototype do, where the standard has its
-// %ThrowTypeError%, which throws; and Date.prototype.setYear reads the date's
-// time value after converting the year, where the standard reads it first.
+// function's caller and arguments say what called it and with what, through
+// accessors on Function.prototype, as V8's do, where standards mode keeps
+// the standard's %ThrowTypeError% there and gives a sloppy ordinary function
+// an own caller accessor instead, which the standard permits, and no
+// arguments; and Date.prototype.setYear reads the date's time value after
+// converting the year, where the standard reads it first.
 // Error instances have an own stack accessor accepting any assigned value,
 // where the standard inherits Error.prototype.stack and its setter requires
 // a string and creates an own data property.

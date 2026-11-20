@@ -1974,6 +1974,10 @@ type funcData struct {
 	bound bool
 	// planned records that planCall has decided about the function.
 	planned bool
+	// callerMade records that a sloppy function's own caller, in standards
+	// mode, has been put in its table; see materializeCaller. It is in the
+	// flags' padding.
+	callerMade bool
 
 	// extra is what only some functions have -- an arrow's surroundings, a
 	// bound function's target, the scopes of one made inside a `with` body

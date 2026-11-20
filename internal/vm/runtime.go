@@ -695,6 +695,10 @@ type Realm struct {
 	// above the objects they walked: chains with no enumerable key, by
 	// their first prototype and their validity cell (protosNoEnum).
 	forInChains [2]forInChain
+	// callerAccessors are the getter and setter of the realm's sloppy
+	// functions' own caller in standards mode, made when first needed; see
+	// legacyCallerAccessors.
+	callerAccessors [2]*Object
 	jitRealmFields
 	// primProps remembers where methods of primitives were found on their
 	// prototypes; see primProp. Last, being kilobytes long, and after the

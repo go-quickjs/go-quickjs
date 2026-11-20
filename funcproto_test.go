@@ -66,32 +66,32 @@ func TestFunctionPrototypeIsOrdinary(t *testing.T) {
 func TestFunctionPrototypeOrder(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ src, want string }{
-		{`function f() {}; Object.getOwnPropertyNames(f).join()`, "length,name,prototype"},
+		{`function f() {}; Object.getOwnPropertyNames(f).join()`, "length,name,prototype,caller"},
 		{`function f() {}; f.prototype; Object.getOwnPropertyNames(f).join()`,
-			"length,name,prototype"},
+			"length,name,prototype,caller"},
 		{`function f() {}; f.x = 1; Object.getOwnPropertyNames(f).join()`,
-			"length,name,prototype,x"},
+			"length,name,prototype,caller,x"},
 		{`function f() {}; f.x = 1; f.prototype; Object.getOwnPropertyNames(f).join()`,
-			"length,name,prototype,x"},
+			"length,name,prototype,caller,x"},
 		{`function f() {}; f.prototype; f.x = 1; Object.getOwnPropertyNames(f).join()`,
-			"length,name,prototype,x"},
+			"length,name,prototype,caller,x"},
 		// Reading name first materializes it, which must not push prototype in
 		// front of it.
 		{`function f() {}; f.name; f.x = 1; f.prototype
-		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype,x"},
+		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype,caller,x"},
 		{`function f() {}; Object.defineProperty(f, "name", {value: "z"})
 		  f.x = 1
-		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype,x"},
-		{`function f() {}; Reflect.ownKeys(f).join()`, "length,name,prototype"},
+		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype,caller,x"},
+		{`function f() {}; Reflect.ownKeys(f).join()`, "length,name,prototype,caller"},
 		{`function f() {}; f[0] = "i"; Object.getOwnPropertyNames(f).join()`,
-			"0,length,name,prototype"},
+			"0,length,name,prototype,caller"},
 		// Through a proxy, whose own-keys trap reports the target's.
 		{`Object.getOwnPropertyNames(new Proxy(function f() {}, {})).join()`,
-			"length,name,prototype"},
+			"length,name,prototype,caller"},
 		{`var p = new Proxy(function f() {}, {}); p.prototype
-		  Object.getOwnPropertyNames(p).join()`, "length,name,prototype"},
+		  Object.getOwnPropertyNames(p).join()`, "length,name,prototype,caller"},
 		{`Reflect.ownKeys(new Proxy(function f() {}, {ownKeys: t => Reflect.ownKeys(t)})).join()`,
-			"length,name,prototype"},
+			"length,name,prototype,caller"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
@@ -109,7 +109,7 @@ func TestFunctionPrototypeWrites(t *testing.T) {
 		{`function f() {}; f.prototype = 42
 		  Object.getOwnPropertyDescriptor(f, "prototype").enumerable`, "false"},
 		{`function f() {}; f.prototype = 42; Object.getOwnPropertyNames(f).join()`,
-			"length,name,prototype"},
+			"length,name,prototype,caller"},
 		{`function f() {}; f.prototype = 42; Object.keys(f).length`, "0"},
 
 		// It is not configurable, so deleting it fails rather than removing it.
@@ -140,7 +140,7 @@ func TestFunctionPrototypeWrites(t *testing.T) {
 		{`function f() {}; Object.seal(f); typeof f.prototype`, "object"},
 		{`function f() {}; Object.preventExtensions(f); typeof f.prototype`, "object"},
 		{`function f() {}; Object.preventExtensions(f)
-		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype"},
+		  Object.getOwnPropertyNames(f).join()`, "length,name,prototype,caller"},
 
 		// Assigning through a receiver that is not the function leaves the
 		// function's own property alone.

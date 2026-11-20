@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -51,26 +52,28 @@ var legacyCallerCases = []struct{ src, want string }{
 	{`var e; try { (function () {}).bind(null).caller } catch (x) { e = x } e instanceof TypeError`, "true"},
 }
 
-// TestLegacyCaller pins a sloppy function's caller and arguments, which
-// WithNodeQuirks answers, and which standards mode refuses as the standard
-// has it, with %ThrowTypeError%; and that a function that has neither throws
-// V8's TypeError under WithNodeQuirks.
+// TestLegacyCaller pins caller access in both modes, legacy arguments under
+// WithNodeQuirks, and the restricted properties of other function kinds.
 func TestLegacyCaller(t *testing.T) {
 	t.Parallel()
-	for _, c := range legacyCallerCases {
-		rt := quickjs.New(quickjs.WithNodeQuirks())
-		v, err := rt.Eval(c.src)
-		if err != nil {
-			t.Errorf("%s: %v", c.src, err)
-		} else if v.String() != c.want {
-			t.Errorf("%s = %q, want %q", c.src, v, c.want)
+	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithNodeQuirks()}} {
+		for _, c := range legacyCallerCases {
+			if len(opts) == 0 && strings.Contains(c.src, ".arguments") {
+				continue
+			}
+			rt := quickjs.New(opts...)
+			v, err := rt.Eval(c.src)
+			if err != nil {
+				t.Errorf("%s: %v", c.src, err)
+			} else if v.String() != c.want {
+				t.Errorf("%s = %q, want %q", c.src, v, c.want)
+			}
+			rt.Close()
 		}
-		rt.Close()
 	}
 	for _, src := range []string{
-		`function f() { return f.caller } function g() { return f() } g()`,
 		`function f() { return f.arguments } f(1)`,
-		`function f() {} f.caller = 1`,
+		`Function.prototype.caller`,
 	} {
 		checkEval(t, `try { `+src+`; "answered" } catch (e) { e.constructor.name + ": " + e.message }`,
 			"TypeError: this property may not be read or written")
@@ -83,10 +86,9 @@ func TestLegacyCaller(t *testing.T) {
 	}
 }
 
-// TestLegacyCallerOwnProperties pins where caller and arguments live: on
-// Function.prototype in both modes, as the standard's %ThrowTypeError% or as
-// V8's accessors, and never on a function itself, whose own keys are every
-// engine's.
+// TestLegacyCallerOwnProperties pins the standard prototype's thrower and
+// sloppy functions' own caller accessor; compatibility mode inherits both
+// caller and arguments from Function.prototype instead.
 func TestLegacyCallerOwnProperties(t *testing.T) {
 	t.Parallel()
 	const src = `
@@ -104,7 +106,7 @@ func TestLegacyCallerOwnProperties(t *testing.T) {
 		opts []quickjs.Option
 		want string
 	}{
-		{nil, "true |  |  | 0 |  | false | true | length,name,prototype | false"},
+		{nil, "true |  |  | 0 |  | false | true | length,name,prototype,caller | true"},
 		{[]quickjs.Option{quickjs.WithNodeQuirks()},
 			"false | get caller | set caller | 1 | get arguments | false | true | length,name,prototype | false"},
 	} {
@@ -113,5 +115,99 @@ func TestLegacyCallerOwnProperties(t *testing.T) {
 			t.Errorf("quirks=%v:\n got %v, %v\nwant %s", len(c.opts) > 0, v, err, c.want)
 		}
 		rt.Close()
+	}
+}
+
+func TestStandardCaller(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		opts []quickjs.Option
+	}{
+		{"interpreter", nil},
+		{"jit", []quickjs.Option{quickjs.WithJIT()}},
+		{"debugger", []quickjs.Option{quickjs.WithDebugger()}},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, src := range []string{
+				`function f() { return f.caller; }
+				 function g() { return f(); }
+				 function s() { "use strict"; return f(); }
+				 for (let i = 0; i < 2000; i++) {
+				   if (g() !== g || s() !== null) throw new Error('caller');
+				 }
+				 f.caller === null`,
+				`function f() {}
+				 const d = Object.getOwnPropertyDescriptor(f, 'caller');
+				 const p = new Proxy(f, {});
+				 Object.hasOwn(p, 'caller') && Reflect.ownKeys(p).includes('caller') &&
+				 Reflect.getOwnPropertyDescriptor(p, 'caller').get === d.get &&
+				 !d.enumerable && d.configurable && d.get.call(f) === null`,
+				`function f() {}
+				 Object.freeze(f);
+				 f.caller === null && !Object.getOwnPropertyDescriptor(f, 'caller').configurable`,
+				`function f() {}
+				 f.extra = 1;
+				 const before = Reflect.ownKeys(f).join();
+				 f.caller; f.prototype;
+				 before === 'length,name,prototype,caller,extra' && Reflect.ownKeys(f).join() === before`,
+				`function f() {}
+				 f.prototype;
+				 const before = Reflect.ownKeys(f).join();
+				 Object.getOwnPropertyDescriptor(f, 'caller');
+				 before === 'length,name,prototype,caller' && Reflect.ownKeys(f).join() === before`,
+				`function f() {}
+				 delete f.caller;
+				 let threw = false;
+				 try { f.caller; } catch (e) { threw = e instanceof TypeError; }
+				 threw && !Object.hasOwn(f, 'caller')`,
+				`function f() {}
+				 Object.defineProperty(f, 'caller', {value: 42});
+				 f.caller === 42 && Object.getOwnPropertyDescriptor(f, 'caller').value === 42`,
+				`function f() {}
+				 f.caller; f.x = 1;
+				 Reflect.ownKeys(f).join() === 'length,name,prototype,caller,x'`,
+				`function f() {}
+				 Object.defineProperty(f, 'name', {value: 'g'}); f.x = 1;
+				 Reflect.ownKeys(f).join() === 'length,name,prototype,caller,x'`,
+				`function f() {}
+				 Object.preventExtensions(f);
+				 f.caller === null && Object.hasOwn(f, 'caller') && !Object.isSealed(f) &&
+				 (Object.seal(f), Object.isSealed(f))`,
+				`function f() {} function g() {}
+				 const d = Object.getOwnPropertyDescriptor(f, 'caller');
+				 const e = Object.getOwnPropertyDescriptor(g, 'caller');
+				 let threw = '';
+				 try { d.get.call(() => {}); } catch (x) { threw = x.constructor.name; }
+				 d.get === e.get && d.set === e.set && d.get.call(g) === null &&
+				 d.get.name === 'get caller' && d.set.name === 'set caller' && threw === 'TypeError'`,
+				`[function () { 'use strict'; }, () => {}, class {}, ({m() {}}).m,
+				  function () {}.bind(), function* () {}, async function () {},
+				  Math.max].every(f => !Object.hasOwn(f, 'caller') &&
+				    !Reflect.ownKeys(f).includes('caller'))`,
+				`Object.hasOwn(new Function(''), 'caller') &&
+				 !Object.hasOwn(new Function('"use strict"'), 'caller')`,
+				`let n = 0;
+				 for (let i = 0; i < 3000; i++) {
+				   const f = function () {}, g = function () {};
+				   if (f.caller === null && Object.hasOwn(f, 'caller') && f.hasOwnProperty('caller') &&
+				       g.hasOwnProperty('caller') && g.caller === null &&
+				       Reflect.ownKeys(i % 2 ? f : g).join() === 'length,name,prototype,caller') n++;
+				 }
+				 n === 3000`,
+				`const a = function () {}, b = function () {};
+				 function read(f) { return f.caller; }
+				 for (let i = 0; i < 2000; i++) {
+				   if (read(i % 2 ? a : b) !== null) throw new Error('cached caller');
+				 }
+				 true`,
+			} {
+				rt := quickjs.New(mode.opts...)
+				v, err := rt.Eval(src)
+				if err != nil || v.String() != "true" {
+					t.Errorf("%s: got %v, %v; want true", src, v, err)
+				}
+				rt.Close()
+			}
+		})
 	}
 }

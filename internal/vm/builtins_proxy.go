@@ -682,10 +682,13 @@ func (r *Runtime) ownPropDesc(o *Object, key Atom) (*propDesc, error) {
 				return nil, err
 			}
 		}
-		// A function's prototype is made when first asked for, and this is
-		// asking.
-		if key == atomPrototype {
+		// A function's prototype and caller are made when first asked for,
+		// and this is asking.
+		switch key {
+		case atomPrototype:
 			r.materializeFunctionProto(o)
+		case atomCaller:
+			r.materializeCaller(o)
 		}
 		return r.currentDescriptor(o, key)
 	}
@@ -1107,6 +1110,9 @@ func (r *Runtime) ownKeysOf(o *Object, includeSymbols bool) ([]Atom, error) {
 			}
 		}
 		r.materializeFunctionProto(o)
+		if o.class == ClassFunction {
+			r.materializeCaller(o)
+		}
 		return o.ownKeys(includeSymbols, r.atoms), nil
 	}
 	keys, err := r.proxyOwnKeys(p)

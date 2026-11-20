@@ -881,9 +881,9 @@ func TestClassPrototypeIsFixed(t *testing.T) {
 func TestFunctionLengthAndNameOrder(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ src, want string }{
-		{`Object.getOwnPropertyNames(function (a, b) {}).join(",")`, "length,name,prototype"},
+		{`Object.getOwnPropertyNames(function (a, b) {}).join(",")`, "length,name,prototype,caller"},
 		{`function f() {} f.x = 1; Object.getOwnPropertyNames(f).join(",")`,
-			"length,name,prototype,x"},
+			"length,name,prototype,caller,x"},
 		{`class C { static method() {} static length() {} }
 		  Object.getOwnPropertyNames(C).join(",")`, "length,name,prototype,method"},
 		{`class C { static method() {} static name() {} }
@@ -893,9 +893,9 @@ func TestFunctionLengthAndNameOrder(t *testing.T) {
 		  Object.getOwnPropertyNames(C).join(",")`, "length,name,prototype,method"},
 		{`function f() {} Object.defineProperty(f, "length", {value: 3})
 		  Object.getOwnPropertyNames(f).join(",") + "|" + f.length`,
-			"length,name,prototype|3"},
+			"length,name,prototype,caller|3"},
 		{`function f() {} f.x = 1; delete f.name
-		  Object.getOwnPropertyNames(f).join(",")`, "length,prototype,x"},
+		  Object.getOwnPropertyNames(f).join(",")`, "length,prototype,caller,x"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

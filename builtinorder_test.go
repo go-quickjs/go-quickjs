@@ -638,10 +638,10 @@ func TestFunctionOwnKeyOrder(t *testing.T) {
 		{`class C { static [1]() {} static [2]() {} static a() {} static c() {} }
 		  Object.getOwnPropertyNames(C).join(",")`, "1,2,length,name,prototype,a,c"},
 		{`function f() {}; f.b = 1; f[0] = 2
-		  Object.getOwnPropertyNames(f).join(",")`, "0,length,name,prototype,b"},
+		  Object.getOwnPropertyNames(f).join(",")`, "0,length,name,prototype,caller,b"},
 		{`var o = {[2]: 1, b: 2, [0]: 3, a: 4}
 		  Object.getOwnPropertyNames(o).join(",")`, "0,2,b,a"},
-		{`Object.getOwnPropertyNames(function () {}).join(",")`, "length,name,prototype"},
+		{`Object.getOwnPropertyNames(function () {}).join(",")`, "length,name,prototype,caller"},
 		{`Object.getOwnPropertyNames(() => {}).join(",")`, "length,name"},
 	}
 	for _, tc := range cases {

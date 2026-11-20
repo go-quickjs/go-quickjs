@@ -83,9 +83,12 @@ settled on its own goroutine, by the host's event loop when it has one.
 test262's multi-agent tests run that way; a host has no API to share memory
 yet.
 
-A sloppy-mode function's `caller` and `arguments` are not reachable from
-outside it in standards mode: reading either throws, as the standard's
-`Function.prototype` accessors do. `WithNodeQuirks` exposes them as V8 does.
+In standards mode a sloppy ordinary function has an own `caller` accessor,
+which the standard permits, answering what called it as V8 does, and null
+for a strict caller; its `arguments` is `Function.prototype`'s, which keeps
+the standard's throwing `caller` and `arguments`. `WithNodeQuirks` has no
+own `caller` and answers both from accessors on `Function.prototype`, as
+V8 does.
 
 In WebAssembly: importing a `.wasm` file as a module, `postMessage` of a
 `Module` or a shared `Memory` between workers, and type reflection, which
@@ -123,6 +126,8 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
+Tests tagged `caller` run in standards mode, including legacy caller access.
+
 Tests tagged `source-phase-imports-module-source` receive test262's special
 `"<module source>"` host module. Its source object inherits from
 `%AbstractModuleSource%.prototype`, and every import resolves to the same
@@ -136,8 +141,8 @@ holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
 Measured coverage, as of the most recent run, on test262 commit
 [`e4fbf57745c6aae3d1f12f181ecef78b1665d812`](https://github.com/tc39/test262/commit/e4fbf57745c6aae3d1f12f181ecef78b1665d812)
-of November 6, 2026: 100,254 variants pass and none fail. The other 65 are
-skipped because they require an unsupported feature or host facility.
+of November 6, 2026: 100,277 variants pass and none fail. The other 42 are
+skipped because decorators are not implemented.
 
 Where test262 and current engines disagree, the engine follows the standard
 and a test records the difference. Two of Annex B's block-function rules are

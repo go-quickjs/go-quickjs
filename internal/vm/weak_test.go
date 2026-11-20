@@ -505,7 +505,7 @@ func TestWeakMapKeySideFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `a f o d z 1,2,3,4 4 42 e 5 true [[WeakMapRefs]] 0,length,name,prototype x {"[[WeakMapRefs]]":7} {"[[WeakMapRefs]]":7} true 0 7 x`
+	want := `a f o d z 1,2,3,4 4 42 e 5 true [[WeakMapRefs]] 0,length,name,prototype,caller x {"[[WeakMapRefs]]":7} {"[[WeakMapRefs]]":7} true 0 7 x`
 	if got := v.String().Go(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

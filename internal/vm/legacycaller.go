@@ -8,9 +8,12 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // with what, which the web's older libraries depend on: f.caller and
 // f.arguments. V8, SpiderMonkey and JavaScriptCore agree on the answers, and
 // keep them in accessors on Function.prototype. The standard has no such
-// thing: Function.prototype's caller and arguments are its %ThrowTypeError%,
-// which test262 checks, so standards mode keeps that, and only a runtime
-// WithNodeQuirks answers, as V8 does.
+// thing on Function.prototype: its caller and arguments are its
+// %ThrowTypeError%, which test262 checks. It does permit a sloppy ordinary
+// function an own caller that never answers a strict function, which
+// test262's caller tests read, so standards mode gives each such function
+// one, answering as V8's accessor does (materializeCaller), and no
+// arguments. WithNodeQuirks keeps both on Function.prototype, as V8 does.
 
 // errLegacyReflection is V8's message for a function that has neither.
 const errLegacyReflection = "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them"
@@ -76,6 +79,63 @@ func (r *Runtime) initLegacyReflection() {
 		})
 		r.defineAccessor(p, prop.key, get, set, propConfigurable)
 	}
+}
+
+// materializeCaller gives a sloppy ordinary function, in standards mode, the
+// own caller accessor the standard permits it, as a real property: the
+// function has it from its creation, but it is put in the table only when
+// something asks about caller or lists the function's keys, which few
+// programs do of few functions. callerMade records that it was put there,
+// after which it is the table's like any other property, so that deleting or
+// redefining it sticks.
+//
+// It goes after length, name and prototype, wherever those are yet, and
+// before anything a script has added: a prototype built later goes before
+// it, as length and name, made later, go before both.
+func (r *Runtime) materializeCaller(o *Object) {
+	fd := o.fn()
+	if fd == nil || fd.callerMade || r.nodeQuirks || !isLegacyFunc(fd) {
+		return
+	}
+	fd.callerMade = true
+	at := 0
+	for at < int(o.valn) {
+		if k := o.shape.keys[at].key; k != atomLength && k != atomName && k != atomPrototype {
+			break
+		}
+		at++
+	}
+	realm := fd.closure.realm
+	if realm == nil {
+		realm = r.Realm
+	}
+	get, set := r.legacyCallerAccessors(realm)
+	o.insertProp(at, Property{key: atomCaller, value: accessorValue(&accessor{getter: get, setter: set}),
+		flags: propAccessor | propConfigurable})
+}
+
+// legacyCallerAccessors are a realm's getter and setter of its functions' own
+// caller, made when the first of them is put in a table. Every function of
+// the realm shares them, as they answer for whatever function they are
+// called on; the TypeError of one that has no caller is the realm's.
+func (r *Runtime) legacyCallerAccessors(realm *Realm) (get, set *Object) {
+	if realm.callerAccessors[0] == nil {
+		here := r.Realm
+		r.Realm = realm
+		realm.callerAccessors[0] = r.newNativeFunc("get caller", 0, func(rt *Runtime, this Value, _ []Value) (Value, error) {
+			fn, err := rt.legacyFunc(this)
+			if err != nil {
+				return Undefined, err
+			}
+			return rt.legacyCaller(fn), nil
+		})
+		realm.callerAccessors[1] = r.newNativeFunc("set caller", 1, func(rt *Runtime, this Value, _ []Value) (Value, error) {
+			_, err := rt.legacyFunc(this)
+			return Undefined, err
+		})
+		r.Realm = here
+	}
+	return realm.callerAccessors[0], realm.callerAccessors[1]
 }
 
 // activationOf is the depth of a function's innermost activation on the

@@ -203,7 +203,7 @@ func TestFunctionNameAndLength(t *testing.T) {
 		{`JSON.stringify(Object.getOwnPropertyDescriptor(function foo() {}, "name"))`,
 			`{"value":"foo","writable":false,"enumerable":false,"configurable":true}`},
 		{`JSON.stringify(Object.getOwnPropertyNames(function foo(a, b) {}))`,
-			`["length","name","prototype"]`},
+			`["length","name","prototype","caller"]`},
 		// Non-writable: assignment does nothing rather than shadowing it.
 		{`var f = function foo() {}; f.name = "no"; f.name`, "foo"},
 		// But configurable: defineProperty and delete both work.

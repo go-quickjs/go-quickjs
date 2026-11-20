@@ -14,7 +14,7 @@ const (
 	layoutPadNI   = 229
 	layoutPadNGI  = -1
 	layoutPadNMI  = -1
-	layoutPadNE   = 32
+	layoutPadNE   = 0
 	layoutPadNGE  = -1
 	layoutPadNME  = -1
 	layoutPadNT   = 536
@@ -23,7 +23,7 @@ const (
 	layoutPadNJP  = 9
 	layoutPadNGJP = -1
 	layoutPadNMJP = -1
-	layoutPadNC   = 436
+	layoutPadNC   = 427
 	layoutPadNGC  = -1
 	layoutPadNMC  = -1
 	layoutPadND   = 239
@@ -41,7 +41,7 @@ const (
 	layoutPadNJ   = -1
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNN   = 339
+	layoutPadNN   = 229
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
 	layoutPadNP   = 157
@@ -68,17 +68,17 @@ const (
 	layoutPadNO   = 576
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
-	layoutPadNR   = 162
+	layoutPadNR   = 157
 	layoutPadNGR  = -1
 	layoutPadNMR  = -1
 	layoutPadNS   = 96
 	layoutPadNGS  = -1
 	layoutPadNMS  = -1
-	layoutPadNZ   = 576
+	layoutPadNZ   = 521
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
 	layoutPadNCZ  = 224
-	layoutPadNH   = 52
+	layoutPadNH   = 42
 	layoutPadNDH  = 3
 	layoutPadNDW  = 0
 	layoutPadNDG  = 2
