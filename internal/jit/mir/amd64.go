@@ -3994,6 +3994,7 @@ const keyAtomShift = 4
 // pointer is in s is, if anywhere. tmp is its scratch; s is kept.
 func (c *compiler) keyAtomSet(dst, s, tmp amd64.Reg) {
 	c.a.MovRR(dst, s)
+	c.a.ShiftImm(amd64.Shr, dst, abi.KeyAtomsAddrShift, true)
 	c.movImm(tmp, abi.KeyAtomsMul)
 	c.a.Imul(dst, tmp)
 	c.a.ShiftImm(amd64.Shr, dst, 64-abi.KeyAtomsBits+abi.KeyAtomsWaysLog, true)

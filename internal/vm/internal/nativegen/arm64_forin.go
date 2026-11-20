@@ -100,8 +100,9 @@ func (g *armGen) forInStep() {
 // its scratch.
 func (g *armGen) keySet(dst, s Reg) {
 	a := g.a
+	a.ShiftImm(Lsr, dst, s, keyAddrShift, true)
 	a.MovImm(rD, keySlotMul)
-	a.Mul(dst, s, rD)
+	a.Mul(dst, dst, rD)
 	a.ShiftImm(Lsr, dst, dst, keySetShift, true)
 	a.ShiftImm(Lsl, dst, dst, keyWaysLog+uint8(log2(int(sizeKA))), true)
 	a.Load(rD, rCtx, ncRT)

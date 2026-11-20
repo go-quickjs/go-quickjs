@@ -123,8 +123,9 @@ func (g *nativeGen) forInStep() {
 // its scratch; s is kept.
 func (g *nativeGen) keySet(dst, s, tmp Reg) {
 	a := g.a
-	a.MovImm(tmp, keySlotMul)
 	a.MovRR(dst, s)
+	a.ShiftImm(Shr, dst, keyAddrShift, true)
+	a.MovImm(tmp, keySlotMul)
 	a.Imul(dst, tmp)
 	a.ShiftImm(Shr, dst, keySetShift, true)
 	a.ShiftImm(Shl, dst, keyWaysLog+uint8(log2(int(sizeKA))), true)

@@ -6686,8 +6686,9 @@ func (c *a64Compiler) forInIndex(v *ssa.Value, slow, done arm64.Label) {
 // key strings where the string whose pointer is in s is, in dst; tmp is
 // its scratch, s kept.
 func (c *a64Compiler) keyAtomSet(dst, s, tmp arm64.Reg) {
+	c.a.ShiftImm(arm64.Lsr, dst, s, abi.KeyAtomsAddrShift, true)
 	c.movImm(tmp, abi.KeyAtomsMul)
-	c.a.Mul(dst, s, tmp)
+	c.a.Mul(dst, dst, tmp)
 	c.a.ShiftImm(arm64.Lsr, dst, dst, 64-abi.KeyAtomsBits+abi.KeyAtomsWaysLog, true)
 	c.a.ShiftImm(arm64.Lsl, dst, dst, keyAtomShift+abi.KeyAtomsWaysLog, true)
 	c.movImm(tmp, uint64(c.f.KeyAtoms))

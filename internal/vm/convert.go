@@ -250,12 +250,31 @@ const (
 	// keySetShift is how far keySet shifts the hash down to a set's
 	// number.
 	keySetShift = 64 - keyAtomsBits + keyWaysLog
+	// keyAddrShift is how far keySet shifts a string's address down,
+	// to its 16-byte granule, before it multiplies it (keySetOf).
+	keyAddrShift = 4
 )
 
 // keySet is the index in keyAtoms of the first entry of key string s's set,
-// by its address.
+// by its address (keySetOf).
 func keySet(s *String) uint64 {
-	return uint64(uintptr(unsafe.Pointer(s))) * keySlotMul >> keySetShift << keyWaysLog
+	return keySetOf(uint64(uintptr(unsafe.Pointer(s))))
+}
+
+// keySetOf is keySet of a string at address p: its 16-byte granule
+// multiplied by keySlotMul, the product's top bits the set's number. The
+// address itself multiplied, strings 144 bytes apart -- one size class's
+// neighbours, a span's strings made one after another, as after a
+// collection -- had their sets' numbers 63 apart, the same set but for
+// the first: five keys a site used in turn had shared a set of four
+// ways, each evicting another at every conversion, and native code had
+// found none of them. The granule multiplied keeps what Fibonacci's
+// multiplier is chosen for, neighbours spread evenly over the sets, at
+// every multiple of 16 bytes up to 2 KiB (TestKeySetStrides): a mix that
+// spread them as a random hash does had put more than four of 24 key
+// strings a program made in one set in 1 runtime in 20 or so.
+func keySetOf(p uint64) uint64 {
+	return (p >> keyAddrShift) * keySlotMul >> keySetShift << keyWaysLog
 }
 
 // keyFind is s's entry in keyAtoms, or nil where it has none.
@@ -290,7 +309,7 @@ func (r *Runtime) keyPut(k keyAtom) {
 }
 
 // keySlotMul is keySet's multiplier, which native code's is too
-// (abi.KeyAtomsMul).
+// (abi.KeyAtomsMul), as keyAddrShift is (abi.KeyAtomsAddrShift).
 const keySlotMul = 0x9E3779B97F4A7C15
 
 // intString is the string of an integer below 1024. A small integer becomes a

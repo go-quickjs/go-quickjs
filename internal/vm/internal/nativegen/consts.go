@@ -70,8 +70,10 @@ var (
 	// integers' strings the runtime keeps (intStrings).
 	keySlotMul, intStringsLen uint64
 	// keySetShift is how far keySet shifts the hash down to a set of
-	// keyAtoms, and keyWaysLog log2 of its keyWays entries.
-	keySetShift, keyWaysLog uint8
+	// keyAtoms, keyWaysLog log2 of its keyWays entries, and
+	// keyAddrShift how far it shifts a string's address down before it
+	// multiplies it (keySetOf).
+	keySetShift, keyWaysLog, keyAddrShift uint8
 
 	rtBase, ccBase uint64
 )
@@ -137,6 +139,7 @@ func loadConsts() {
 	hasCacheWays = 1 << hasCacheWaysLog
 	keySlotMul, intStringsLen = k("keySlotMul"), k("intStringsLen")
 	keySetShift, keyWaysLog = uint8(k("keySetShift")), uint8(k("keyWaysLog"))
+	keyAddrShift = uint8(k("keyAddrShift"))
 	rtBase, ccBase = k("rtBase"), k("ccBase")
 	for _, c := range []struct {
 		p    *int

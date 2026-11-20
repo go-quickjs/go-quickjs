@@ -1776,8 +1776,9 @@ const (
 // (its keyAtoms), which a for...in's step over an array's indices writes
 // and an element read by a key string reads (ssa.Func's KeyAtoms): 1 <<
 // KeyAtomsBits entries of KeyAtomSize bytes, in sets of 1 <<
-// KeyAtomsWaysLog. A string of pointer word k is in set (k * KeyAtomsMul)
-// >> (64 - KeyAtomsBits + KeyAtomsWaysLog), whose entries follow each
+// KeyAtomsWaysLog. A string of pointer word k is in set ((k >>
+// KeyAtomsAddrShift) * KeyAtomsMul) >> (64 - KeyAtomsBits +
+// KeyAtomsWaysLog), whose entries follow each
 // other, in whichever of them names it: the pointer at KeyAtomString is
 // k. It names an atom where the byte at KeyAtomNone is 0: the uint32 at
 // KeyAtomAtom, an array index i where it is AtomIndexTag|i. A string with
@@ -1795,13 +1796,16 @@ const (
 	KeyAtomsBits    = 8
 	KeyAtomsWaysLog = 2
 	KeyAtomsMul     = 0x9E3779B97F4A7C15
-	KeyAtomSize     = 16
-	KeyAtomString   = 0
-	KeyAtomAtom     = 8
-	KeyAtomNone     = 12
-	KeyAtomNext     = 13
-	AtomIndexTag    = 0x80000000
-	IntStrings      = 1024
+	// KeyAtomsAddrShift is how far a string's pointer word is shifted
+	// down, to its 16-byte granule, before it is multiplied.
+	KeyAtomsAddrShift = 4
+	KeyAtomSize       = 16
+	KeyAtomString     = 0
+	KeyAtomAtom       = 8
+	KeyAtomNone       = 12
+	KeyAtomNext       = 13
+	AtomIndexTag      = 0x80000000
+	IntStrings        = 1024
 )
 
 // HeapCell is where typed code's native heap accesses find their heap
