@@ -3795,6 +3795,9 @@ type RegNativeStats struct {
 	// register instruction it left at and its function, counted while
 	// the runtime reports (SetJITReport).
 	Ended map[string]uint64
+	// PlainWrites counts the property writes Go made for native code
+	// without a frame (jitGoCallPlain): a megamorphic site's misses.
+	PlainWrites uint64
 }
 
 // RegNativeStats reports r's counts (RegNativeStats); zero before any.
@@ -3807,7 +3810,7 @@ func (r *Runtime) RegNativeStats() RegNativeStats {
 		Interpreted: s.interpreted, Records: s.ssaRecords, Materialized: s.materialized, GoCalls: s.goCalls,
 		Unwound: s.unwound, Resumed: s.resumed, HostOps: s.regHostCounts(), WholeLeft: s.wholeLeft,
 		GoCallOps: s.regGoOpsByName(), NestedGoCalls: s.regNestedCalls, Levels: s.regLevelsFound, LevelsMade: s.regLazyMade, LevelsPutOff: s.regLazyLevelsPut,
-		Ended: maps.Clone(s.regEnded)}
+		Ended: maps.Clone(s.regEnded), PlainWrites: s.plainWrites}
 }
 
 // jitRegGoKey is what a call of Go register code made made

@@ -38,10 +38,10 @@ const (
 	layoutPadNB   = 484
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
-	layoutPadNJ   = 356
+	layoutPadNJ   = 351
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNN   = 255
+	layoutPadNN   = 72
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
 	layoutPadNP   = -1

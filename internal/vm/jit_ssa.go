@@ -741,6 +741,43 @@ func (r *Runtime) jitMegaFillProto(o *Object, key Atom) (absent bool) {
 	return true
 }
 
+// jitMegaFillAdd has the megamorphic cache name the addition of key, a
+// plain data property, that a store has just made to o, of shape from
+// before it, along from's shared transition (abi.MegaEntry's Next): where
+// none of o's prototypes has the key -- the chain all of them, up to
+// abi.MegaDepth, each of a class with shapes that does not answer the key,
+// as an absent read's entry has them (jitMegaFillProto) -- so that native
+// code adds it to the next object of that shape, extensible and with room,
+// as V8's megamorphic stores take a transition the stub cache holds. A
+// write whose site met more shapes than it was compiled for -- o.y = j on
+// objects Object.create made of a prototype each call of a function makes
+// anew -- had had each addition made by Go.
+func (r *Runtime) jitMegaFillAdd(o *Object, from *shape, key Atom) {
+	s := r.jit
+	next := o.shape
+	if s == nil || s.mega == nil || from == nil || from.loose || from.unique || from.tree == nil || next == nil || next.loose || next.unique ||
+		next.parent != from || next.n != from.n+1 || int(o.valn) != int(next.n) || o.class != ClassObject || o == r.global ||
+		key.IsIndex() || next.keys[from.n] != (propKey{key: key, flags: propDefault}) {
+		return
+	}
+	chain := new(abi.MegaChain)
+	n := 0
+	for p := o.proto(); p != nil; p = p.proto() {
+		if n == abi.MegaDepth || r.ensureProtoShape(p) == nil || p.cacheShape() == nil || !shapeClass(p.class) || synthesized(p.class, key) ||
+			p.findOwn(key) >= 0 {
+			return
+		}
+		chain[n] = abi.MegaLink{Object: unsafe.Pointer(p), Shape: unsafe.Pointer(p.shape)}
+		n++
+	}
+	remember(from)
+	remember(next)
+	for _, l := range chain[:n] {
+		remember((*shape)(l.Shape))
+	}
+	s.megaPut(abi.MegaEntry{Shape: unsafe.Pointer(from), Chain: chain, Key: uint32(key), Index: abi.MegaWritable | abi.MegaAbsent, Next: unsafe.Pointer(next)})
+}
+
 // jitNumberMissed notes that the read at pc met a value that is not a
 // number. Lowering makes a read a number's where any use of its value
 // wants one (ir.PropertyRead) -- a use on a branch never taken, too:

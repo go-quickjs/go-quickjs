@@ -25,9 +25,11 @@ package vm
 // realm's last setup of its leaves, calls objectLeaves.
 
 // objectLeaves gives the realm's Object.prototype.hasOwnProperty its
-// leaf's op, and Array.isArray its own (isArrayLeaf).
+// leaf's op, Array.isArray its own (isArrayLeaf) and Object.create its own
+// (createLeaf).
 func objectLeaves[_ any](r *Runtime) {
 	isArrayLeaf[struct{}](r)
+	createLeaf[struct{}](r)
 	m := r.proto.object.getOwn(r.atoms.intern("hasOwnProperty"))
 	if !m.ok() || !m.value().IsObject() {
 		return

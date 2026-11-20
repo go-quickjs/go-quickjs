@@ -102,6 +102,11 @@ func (r *Runtime) jitStoreProp(obj *Object, key Atom, v Value, store, keyed bool
 		t.keyed = was
 		return true
 	}
+	from := obj.shape
 	obj.appendProp(Property{key: key, flags: propDefault, value: v})
+	if !keyed {
+		// Natively next time, by the megamorphic cache's entry.
+		r.jitMegaFillAdd(obj, from, key)
+	}
 	return true
 }

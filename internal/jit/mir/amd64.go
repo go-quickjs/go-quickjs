@@ -8805,11 +8805,12 @@ func (c *compiler) scan(v *ssa.Value, guard guardTo, found, mega amd64.Label) {
 	} else {
 		guard.jump(amd64.CondA)
 	}
-	// No properties, no shape -- but for a read the megamorphic cache's,
-	// which names a property its prototypes have or none has: a leaf's
-	// child, read of an empty object.
+	// No properties, no shape -- but the megamorphic cache's, which names a
+	// property its prototypes have or none has: a leaf's child, read of an
+	// empty object; or a property a write adds, as to an object
+	// Object.create has just made.
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+	if mega != 0 && v.Megamorphic() {
 		c.a.Jcc(amd64.CondE, mega)
 	} else {
 		guard.jump(amd64.CondE)
@@ -8826,12 +8827,14 @@ func (c *compiler) scan(v *ssa.Value, guard guardTo, found, mega amd64.Label) {
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+	if mega != 0 && v.Megamorphic() {
 		// Not its own: a prototype's, which the megamorphic cache may
 		// have, as V8's megamorphic loads look further rather than
 		// deoptimize. Box2D's contacts, of seven classes, each read
 		// IsSensor of their base class's prototype, and the read left
-		// native code for the shapes past its cases.
+		// native code for the shapes past its cases. Or a write's
+		// addition, which the cache may name too, as V8's megamorphic
+		// stores take a transition the stub cache holds.
 		c.a.Jcc(amd64.CondE, mega)
 	} else {
 		guard.jump(amd64.CondE)
@@ -8895,8 +8898,10 @@ func (c *compiler) mega(v *ssa.Value, guard guardTo, found amd64.Label) {
 // receiver's own data property, plain, and writable for a write; or, for a
 // read, a prototype's, along the entry's chain, each prototype the one it
 // names with its shape, or none of them, the value undefined
-// (abi.MegaAbsent) -- or 0. It uses every scratch register, xScratch2, and
-// for a read xScratch1.
+// (abi.MegaAbsent); or, for a write, the property the entry adds, none of
+// the prototypes having it (megaAdd) -- or 0. It uses every scratch
+// register, xScratch2, and for a read xScratch1: a write's value's pointer
+// word waits there.
 func (c *compiler) megaProbe(write bool) {
 	fail := c.a.NewLabel()
 	c.a.MovQToX(xScratch2, scratchA)
@@ -8933,9 +8938,17 @@ func (c *compiler) megaProbe(write bool) {
 	c.a.Jmp(fail)
 	c.a.Bind(hit)
 	c.a.LoadU32(scratchC, scratchA, abi.OffMegaIndex)
+	var add amd64.Label
 	if write {
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		c.a.Jcc(amd64.CondNS, fail)
+		if c.enc.ObjectPropsCap != 0 && c.enc.FlagExtensible != 0 && c.enc.ValueSize == 16 {
+			// Writable and absent: an addition (abi.MegaEntry's Next).
+			add = c.a.NewLabel()
+			c.a.MovRR(scratchB, scratchC)
+			c.a.OpImm(amd64.And, scratchB, abi.MegaAbsent, false)
+			c.a.Jcc(amd64.CondNE, add)
+		}
 	} else {
 		// A prototype's: the chain's objects, each of its shape, from the
 		// receiver's prototype on, the last the holder; or, absent, all of
@@ -8993,8 +9006,91 @@ func (c *compiler) megaProbe(write bool) {
 	c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
 	c.a.Op(amd64.Add, scratchA, scratchC, true)
 	c.a.JmpMem(regCtx, abi.OffProbeBack)
+	if add != 0 {
+		c.a.Bind(add)
+		c.megaAdd(fail)
+	}
 	c.a.Bind(fail)
 	c.movImm(scratchA, 0)
+	c.a.JmpMem(regCtx, abi.OffProbeBack)
+}
+
+// megaAdd is megaProbe's addition, the entry's address in scratchA, the
+// receiver in xScratch2 -- the entry's address waits in the context's
+// GoArgs, an integer the collector does not read, xScratch1 holding the
+// value's pointer word: where none of the receiver's prototypes has the
+// key -- the entry's chain, all of them, each the object it names with its
+// shape, the last's prototype none -- and the receiver is extensible, with
+// room in its table, the property is added as addAlong adds one: the
+// length one more, the shape the entry's Next, which has the key, and back
+// with the address of the entry past the old length in scratchA, for the
+// write to store the value at, as at any other it finds. While the
+// collector marks, the shape is stored through Go's write barrier
+// (refStore), which keeps no scratch register nor xScratch1: the value's
+// address and its pointer word wait in GoArgs too. The write's store of the
+// value has its own barrier.
+// Anything else goes to fail, before it writes anything.
+func (c *compiler) megaAdd(fail amd64.Label) {
+	absent, end, marked := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchA)
+	c.a.Load(scratchA, scratchA, abi.OffMegaChain)
+	c.a.MovQFromX(scratchB, xScratch2)
+	c.loadProto(scratchB, scratchB)
+	c.a.Bind(absent)
+	c.a.Load(scratchC, scratchA, abi.OffLinkObject)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, end)
+	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondNE, fail)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+	c.a.CmpMem(scratchC, scratchA, abi.OffLinkShape, true)
+	c.a.Jcc(amd64.CondNE, fail)
+	c.loadProto(scratchB, scratchB)
+	c.a.OpImm(amd64.Add, scratchA, abi.MegaLinkSize, true)
+	c.a.Jmp(absent)
+	c.a.Bind(end)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondNE, fail)
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.LoadU8(scratchB, scratchA, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagExtensible), false)
+	c.a.Jcc(amd64.CondE, fail)
+	c.a.LoadU32(scratchB, scratchA, c.enc.ObjectPropsLen)
+	c.a.LoadU32(scratchC, scratchA, c.enc.ObjectPropsCap)
+	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondAE, fail)
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.markingLoaded(scratchC)
+	c.a.Jcc(amd64.CondNE, marked)
+	// The length, then the shape, then the entry's address: the old length
+	// times a value's size, 16, past the table's start.
+	c.a.MovRR(scratchC, scratchB)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.Store32(scratchA, c.enc.ObjectPropsLen, scratchB)
+	c.a.Load(scratchB, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(scratchB, scratchB, abi.OffMegaNext)
+	c.a.Store(scratchA, c.enc.ObjectShape, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.JmpMem(regCtx, abi.OffProbeBack)
+	c.a.Bind(marked)
+	c.a.MovRR(scratchC, scratchB)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.Store32(scratchA, c.enc.ObjectPropsLen, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchC)
+	c.a.MovQFromX(scratchB, xScratch1)
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.ValueSize+c.enc.NumOffset, scratchB)
+	c.a.Lea(scratchA, scratchA, c.enc.ObjectShape)
+	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(scratchC, scratchC, abi.OffMegaNext)
+	c.refStore()
+	c.a.Load(scratchB, regCtx, abi.OffGoArgs+c.enc.ValueSize+c.enc.NumOffset)
+	c.a.MovQToX(xScratch1, scratchB)
+	c.a.Load(scratchA, regCtx, abi.OffGoArgs+c.enc.NumOffset)
 	c.a.JmpMem(regCtx, abi.OffProbeBack)
 }
 

@@ -548,7 +548,8 @@ leafChecks 74 vm.(*dataViewLeaf[...]).check-fm
 leafChecks 75 vm.(*dataViewLeaf[...]).check-fm
 leafChecks 76 vm.hasOwnLeaf[...].check-fm
 leafChecks 77 vm.isArrayCheck[...].check-fm
-leafChecks 78 closure: leafChecks[elemArrayNew] = func(_ *Runtime, _ Value, args []Value) bool {
+leafChecks 78 vm.createCheck[...].check-fm
+leafChecks 79 closure: leafChecks[elemArrayNew] = func(_ *Runtime, _ Value, args []Value) bool {
 tMath1 0 math.Floor
 tMath1 1 math.Ceil
 tMath1 2 fdlibm.Sin

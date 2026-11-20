@@ -61,8 +61,8 @@ import (
 // code shrinks within the padding that rounds it to 32 bytes, and every
 // function and closure of the package stays at its address (go tool nm).
 
-// regexpLeafOnce gives exec and test their checks, and hasOwnProperty and
-// isArray theirs (objectLeaves).
+// regexpLeafOnce gives exec and test their checks, and hasOwnProperty,
+// isArray and Object.create theirs (objectLeaves).
 var regexpLeafOnce sync.Once
 
 // regexpLeaves is initStringRegExpMethods' last call: String.prototype's
@@ -92,6 +92,7 @@ func regexpLeafChecks[_ any]() {
 	regexpNativeChecks[0], regexpNativeChecks[1] = exec.statefulCheck, test.statefulCheck
 	hasOwnLeafCheck[struct{}]()
 	isArrayLeafCheck[struct{}]()
+	createLeafCheck[struct{}]()
 }
 
 // regexpNativeChecks are exec's and test's checks for native code's leaf's

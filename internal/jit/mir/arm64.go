@@ -2763,8 +2763,9 @@ func (c *a64Compiler) mega(v *ssa.Value, guard a64Guard, found arm64.Label) {
 }
 
 // megaProbe is amd64's: the probe a function's sites share, the receiver in
-// A, back with the value's address in A, or 0. It uses every scratch
-// register, F2, and for a read F1.
+// A, back with the value's address in A, or 0 -- a write's addition too
+// (megaAdd). It uses every scratch register, F2, and for a read F1: a
+// write's value's pointer word waits there.
 func (c *a64Compiler) megaProbe(write bool) {
 	fail := c.a.NewLabel()
 	back := func() {
@@ -2803,10 +2804,18 @@ func (c *a64Compiler) megaProbe(write bool) {
 	c.a.B(fail)
 	c.a.Bind(hit)
 	c.a.LoadU32(a64C, a64A, abi.OffMegaIndex)
+	var add arm64.Label
 	if write {
 		c.movImm(a64B, abi.MegaWritable)
 		c.a.Tst(a64C, a64B, false)
 		c.a.BCond(arm64.EQ, fail)
+		if c.enc.ObjectPropsCap != 0 && c.enc.FlagExtensible != 0 && c.enc.ValueSize == 16 {
+			// As amd64's: writable and absent, an addition.
+			add = c.a.NewLabel()
+			c.movImm(a64B, abi.MegaAbsent)
+			c.a.Tst(a64C, a64B, false)
+			c.a.BCond(arm64.NE, add)
+		}
 	} else {
 		// As amd64's: a prototype's, along the chain, the last the holder;
 		// or, absent, all of them, the last's prototype none. D holds the
@@ -2865,8 +2874,82 @@ func (c *a64Compiler) megaProbe(write bool) {
 	c.a.Load(a64A, a64A, c.enc.ObjectProps)
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
 	back()
+	if add != 0 {
+		c.a.Bind(add)
+		c.megaAdd(fail)
+	}
 	c.a.Bind(fail)
 	c.movImm(a64A, 0)
+	back()
+}
+
+// megaAdd is amd64's: the entry's address in A, the receiver in F2, the
+// write's value's pointer word in F1, which it keeps; the entry's address,
+// and while the collector marks the value's and the pointer word, wait in
+// the context's GoArgs. D holds the object, B the link's word to compare.
+func (c *a64Compiler) megaAdd(fail arm64.Label) {
+	absent, end, marked := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	back := func() {
+		c.a.Load(a64B, a64Ctx, abi.OffProbeBack)
+		c.a.Br(a64B)
+	}
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+	c.a.Load(a64A, a64A, abi.OffMegaChain)
+	c.a.FMovFromF(a64D, a64F2)
+	c.loadProto(a64D, a64D)
+	c.a.Bind(absent)
+	c.a.Load(a64B, a64A, abi.OffLinkObject)
+	c.a.Cbz(a64B, end, true)
+	c.a.Cmp(a64D, a64B, true)
+	c.a.BCond(arm64.NE, fail)
+	c.a.Load(a64C, a64D, c.enc.ObjectShape)
+	c.a.Load(a64B, a64A, abi.OffLinkShape)
+	c.a.Cmp(a64C, a64B, true)
+	c.a.BCond(arm64.NE, fail)
+	c.loadProto(a64D, a64D)
+	c.a.AddImm(a64A, a64A, int64(abi.MegaLinkSize), true)
+	c.a.B(absent)
+	c.a.Bind(end)
+	c.a.Cbnz(a64D, fail, true)
+	// Extensible, with room, as addAlong checks it.
+	c.a.FMovFromF(a64D, a64F2)
+	c.a.LoadU8(a64B, a64D, c.enc.ObjectFlags)
+	c.movImm(a64C, uint64(c.enc.FlagExtensible))
+	c.a.Tst(a64B, a64C, false)
+	c.a.BCond(arm64.EQ, fail)
+	c.a.LoadU32(a64B, a64D, c.enc.ObjectPropsLen)
+	c.a.LoadU32(a64C, a64D, c.enc.ObjectPropsCap)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.HS, fail)
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, marked, false)
+	// The length, then the shape, then the entry's address.
+	c.a.AddImm(a64C, a64B, 1, true)
+	c.a.Store32(a64D, c.enc.ObjectPropsLen, a64C)
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(a64C, a64C, abi.OffMegaNext)
+	c.a.Store(a64D, c.enc.ObjectShape, a64C)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64A, a64D, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	back()
+	c.a.Bind(marked)
+	c.a.AddImm(a64C, a64B, 1, true)
+	c.a.Store32(a64D, c.enc.ObjectPropsLen, a64C)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64C, a64D, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.NumOffset, a64C)
+	c.a.FMovFromF(a64B, a64F1)
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.ValueSize+c.enc.NumOffset, a64B)
+	c.a.AddImm(a64A, a64D, int64(c.enc.ObjectShape), true)
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(a64C, a64C, abi.OffMegaNext)
+	c.refStore()
+	c.a.Load(a64B, a64Ctx, abi.OffGoArgs+c.enc.ValueSize+c.enc.NumOffset)
+	c.a.FMovToF(a64F1, a64B)
+	c.a.Load(a64A, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
 	back()
 }
 
@@ -3207,10 +3290,10 @@ func (c *a64Compiler) scan(v *ssa.Value, guard a64Guard, found, mega arm64.Label
 	} else {
 		guard.jump(arm64.HI)
 	}
-	// No properties, no shape -- but for a read the megamorphic cache's,
-	// as amd64's.
+	// No properties, no shape -- but the megamorphic cache's, a read's or
+	// a write's addition, as amd64's.
 	c.a.CmpImm(a64B, 0, true)
-	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+	if mega != 0 && v.Megamorphic() {
 		c.a.BCond(arm64.EQ, mega)
 	} else {
 		guard.jump(arm64.EQ)
@@ -3226,9 +3309,9 @@ func (c *a64Compiler) scan(v *ssa.Value, guard a64Guard, found, mega arm64.Label
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.CmpImm(a64B, 0, true)
-	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+	if mega != 0 && v.Megamorphic() {
 		// As amd64's: not its own, a prototype's, which the megamorphic
-		// cache may have.
+		// cache may have, or a write's addition.
 		c.a.BCond(arm64.EQ, mega)
 	} else {
 		guard.jump(arm64.EQ)

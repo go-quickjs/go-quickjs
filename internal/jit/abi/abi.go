@@ -127,9 +127,10 @@ type HintTable struct {
 // an entry naming the data property of that key that objects of that shape
 // have -- their own, with MegaWritable set if it may be written, or, with a
 // Chain, a prototype's -- by its index in the table of the object that has
-// it. A property operation whose site met more shapes than it was compiled
-// for, of a receiver whose own table does not have it, or too large to
-// search (MaxScan), looks there before it leaves for Go, which fills the
+// it -- or a property a write adds, as V8's stub cache holds a store's
+// transition. A property operation whose site met more shapes than it was
+// compiled for, of a receiver whose own table does not have it, or too large
+// to search (MaxScan), looks there before it leaves for Go, which fills the
 // entry when it reads or writes one; a shape it names is remembered (the
 // VM's), so it never changes, and the entry holds it, so its address is
 // never another's. Native code only reads it.
@@ -141,12 +142,20 @@ type MegaCache [MegaEntries]MegaEntry
 // with MegaAbsent set names a property none of them has, the chain all
 // of the receiver's prototypes, the last's prototype none: a read finds
 // undefined (Encoding's UndefinedCell), as V8's loads of a nonexistent
-// property do.
+// property do. Such an entry with MegaWritable set too names an addition:
+// a write adds the property, a plain data property, at the end of the
+// table of an extensible receiver with room for it, which takes the shape
+// Next, the transition the receiver's shape has by the key -- as the VM's
+// appendTransition adds it, and as V8's megamorphic stores take a map's
+// transition. Next is nil on any other entry.
 type MegaEntry struct {
 	Shape      unsafe.Pointer
 	Chain      *MegaChain
 	Key, Index uint32
-	_          [32 - 2*unsafe.Sizeof(uintptr(0)) - 8]byte
+	// The room to 32 bytes, before Next: a last field of none would have
+	// been given room past it.
+	_    [32 - 3*unsafe.Sizeof(uintptr(0)) - 8]byte
+	Next unsafe.Pointer
 }
 
 // MegaChain is a prototype chain a MegaEntry was found along: the objects
@@ -180,6 +189,7 @@ const (
 	OffMegaChain  = int32(unsafe.Offsetof(MegaEntry{}.Chain))
 	OffMegaKey    = int32(unsafe.Offsetof(MegaEntry{}.Key))
 	OffMegaIndex  = int32(unsafe.Offsetof(MegaEntry{}.Index))
+	OffMegaNext   = int32(unsafe.Offsetof(MegaEntry{}.Next))
 	MegaSize      = int32(unsafe.Sizeof(MegaEntry{}))
 	OffLinkObject = int32(unsafe.Offsetof(MegaLink{}.Object))
 	OffLinkShape  = int32(unsafe.Offsetof(MegaLink{}.Shape))

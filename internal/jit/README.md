@@ -1210,9 +1210,20 @@ back-edge check), as V8 clears its stub caches after every full
 collection: an entry holds its shape, and the shape its prototype, whose
 methods hold all they capture. A read
 whose receiver's prototypes are no longer its case's -- a method added to
-one -- looks there too. A megamorphic site's write that neither the
-receiver's own table nor the megamorphic cache has -- an addition, a shape
-it never met -- is a call of Go (`ssa.GoCall`) on a branch the builder makes
+one -- looks there too. So does a megamorphic site's write of a property
+the receiver has not: an entry may name an addition, as V8's stub cache
+holds a store's transition -- none of the receiver's prototypes has the key,
+the chain checked as an absent read's is, and the receiver extensible with
+room in its table takes the property at its table's end and the entry's
+next shape (`abi.MegaEntry`'s `Next`), as the VM's appendTransition adds it
+(mir's `megaAdd`), the shape stored through the barrier's routine while the
+collector marks. Go fills such an entry when it makes an addition along a
+shared transition for native code (the VM's `jitMegaFillAdd`): a loop
+adding `o.y` to objects `Object.create` makes of a prototype each call of
+its function makes anew, which had had Go make every addition. A
+megamorphic site's write that neither the receiver's own table nor the
+megamorphic cache has -- an addition it has no entry for, a shape it never
+met -- is a call of Go (`ssa.GoCall`) on a branch the builder makes
 within the instruction (`splitOn`), the write true where it stored nothing,
 native code going on where the two ways meet, as V8's megamorphic stores
 call the runtime on a miss; the analyses see the call on its branch alone. A
@@ -1375,7 +1386,8 @@ their edges with the instruction and without it.
 **Leaves.** A built-in that runs no script where its check passes -- a leaf:
 String's methods, Number's, a Map's or a Set's operations, `Date.now`,
 `Object.prototype.hasOwnProperty` and `Array.isArray` of what is neither a
-proxy nor a module namespace, an array's `push` of any number of values,
+proxy nor a module namespace, `Object.create` of a prototype alone, an
+array's `push` of any number of values,
 `RegExp.prototype.exec` and `test` -- that a call has been seen to call is a
 call of Go of its own (`ssa.GoLeaf`), checked to call that function, as V8's
 code calls a fast API function: native code jumps to the VM's routine for

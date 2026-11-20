@@ -1174,6 +1174,9 @@ type jitState struct {
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.
 	arrayRooms []weak.Pointer[abi.ObjectPool]
+	// plainWrites counts the property writes Go made without a frame for
+	// native code (jitGoCallPlain's, RegNativeStats' PlainWrites).
+	plainWrites uint64
 }
 
 func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {

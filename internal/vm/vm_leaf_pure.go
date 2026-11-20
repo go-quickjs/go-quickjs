@@ -564,6 +564,9 @@ const (
 	elemObjHasOwn
 	// Array.isArray, of anything but a proxy (isarrayleaf.go).
 	elemArrIsArray
+	// Object.create of a prototype alone, an object or null
+	// (createleaf.go).
+	elemObjCreate
 	// Native leaves a construction applies too, where new.target is the
 	// built-in itself (constructWithTarget): its call and its construction
 	// are the same, as Array's are. Array(...) and new Array(...).

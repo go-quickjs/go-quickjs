@@ -89,6 +89,7 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		if !reg || cl == nil || rin.Op != bytecode.OpSetProp || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
 			return false
 		}
+		s.plainWrites++
 		v = Undefined
 	case bytecode.OpGetProp:
 		// An inlined callee's read, as its write above: its get_prop's
