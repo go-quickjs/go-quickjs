@@ -129,6 +129,7 @@ func TestJITDelete(t *testing.T) {
 // object key's, which Go converts there, and in strict code at a property
 // that cannot be deleted, whose TypeError Go throws there.
 func TestJITDeleteGoCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -19,6 +19,7 @@ import (
 // compiled at the first call and at the second, idle and while the
 // collector marks, and under forced deoptimizations.
 func TestJITArrowSuperOfNativeCallee(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

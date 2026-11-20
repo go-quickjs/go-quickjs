@@ -53,6 +53,7 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 // the prototype, the prototype replaced, and a throw's stack through the
 // forwarder. The answers are Node's.
 func TestForwarderMethodsByShape(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var Class = { create: function() { return function() { this.initialize.apply(this, arguments); }; } };
 		function mk(init) { var C = Class.create(); C.prototype = { initialize: init }; return C; }

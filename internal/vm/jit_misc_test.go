@@ -80,6 +80,7 @@ function forof(n) {
 // that runs no script left to Go whole or at an exit but the few that do
 // run one.
 func TestJITRegFrameless(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -171,6 +172,7 @@ function wide(n) {
 // and marking: the answers equal, xorshift's code compiled with no guard
 // of it failing, and arith's division and remainder marked.
 func TestJITRegBigIntFirstCompile(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -264,6 +266,7 @@ function fillDown(n) {
 // is left to the interpreter once judged not to pay, not gone on in
 // natively after each store.
 func TestJITRegLoopsLeaving(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -329,6 +332,7 @@ func TestJITRegLoopsLeaving(t *testing.T) {
 // (jitRegCallSettle) after jitCallsToInline of them, its learning asked
 // no more, and the answers are the interpreter's.
 func TestJITRegCallSettles(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

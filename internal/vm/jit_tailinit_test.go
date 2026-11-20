@@ -38,6 +38,7 @@ function deepFewer(n, k) { var s; for (var i = 0; i < k; i++) s = fewer(n, 0, 1,
 // the millionth call too -- and a million calls deep leave native code
 // at none of the calls of each other's code.
 func TestJITRegTailInits(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

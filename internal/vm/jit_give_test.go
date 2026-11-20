@@ -59,6 +59,7 @@ function distinct() { return seen.length + ":" + new Set(seen).size }
 // filled with new RegExps -- a RegExp made at each call, 1.3 GB of the
 // micro-benchmarks regexp_ascii and regexp_utf16.
 func TestJITRegExpLiteralGivesBack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

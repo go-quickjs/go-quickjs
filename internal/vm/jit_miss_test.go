@@ -39,6 +39,7 @@ function run() {
 // left a miss here (QJS_JIT_STRESS's miss), and the answers are the
 // interpreter's, with the collector idle and marking.
 func TestJITRegMissedInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

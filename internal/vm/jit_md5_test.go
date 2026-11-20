@@ -69,6 +69,7 @@ func TestJITStringArrayGrowth(t *testing.T) {
 }
 
 func TestJITArrayGrowthCancellation(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()

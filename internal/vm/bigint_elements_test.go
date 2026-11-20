@@ -13,6 +13,7 @@ import "testing"
 // (pureBigArith), and leaves the rest -- a result past the range, a BigInt
 // beside a Number, which throws -- to its frame.
 func TestBigIntElements(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var out = []
 		function stores(a, vals) {

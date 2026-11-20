@@ -72,6 +72,7 @@ var mapStepRounds = [][2]string{
 // answer is Node's and the interpreter's, and sumValues's steps call no Go
 // but at each loop's start and end.
 func TestJITMapStep(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

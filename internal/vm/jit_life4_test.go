@@ -57,6 +57,7 @@ function walks() {
 // compiled again, and it left at each new visitor's call for good: Octane
 // Typescript's AstWalker.walk, 285,000 times a run.
 func TestJITRegRecursiveRecompiled(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		regNoInline(t)
 		rts := regNativeRuntimes(t, regWalkSrc)
@@ -129,6 +130,7 @@ function interleave() { order = []; tick("a", 5000); tick("b", 3000); Promise.re
 // the await to the interpreter, which went on in place and ran the rest of
 // the frame, every turn of the loop to its end.
 func TestJITRegSettledAwaitGoesOn(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regBusyAsyncSrc)
 		r := rts[0]
@@ -225,6 +227,7 @@ function throws(n) {
 // closes the iterator, and what next throws, or a result that is no object,
 // goes to the loop's handler.
 func TestJITRegIteratorStepMade(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regRangeSrc)
 		r := rts[0]
@@ -284,6 +287,7 @@ function swap() { P = Q }
 // learned only at a call of Go from code of the callee's, or of the code
 // inlining it, which then had to be compiled again for it.
 func TestJITRegInlinedConstructionLearned(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regInlinedCtorSrc)
 		r := rts[0]

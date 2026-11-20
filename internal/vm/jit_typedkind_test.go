@@ -326,6 +326,7 @@ func TestJITTypedSiteMeetsAnotherNatively(t *testing.T) {
 // typed array's read, Go's for anything else -- settles in native code
 // again, compiled for what it met. Each answer is the interpreter's.
 func TestJITTypedUpvalueBecomesArray(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

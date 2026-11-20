@@ -1417,6 +1417,7 @@ func TestJITReferenceCallbackRelease(t *testing.T) {
 }
 
 func TestJITReferenceCancellation(t *testing.T) {
+	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	p := compileForTest(t, `function forever(o){let s=0;for(;;)s+=o.array[0]}forever({array:[1]})`)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -2666,6 +2667,7 @@ func TestJITNoEntryForTopLevelCode(t *testing.T) {
 // compiles' workspaces, which are the process's (jit.Workspace). The sums the cache keeps are what
 // measuring each afresh finds.
 func TestJITHeldCountsEachKind(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -2972,6 +2974,7 @@ func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 }
 
 func TestJITLoopPromotionCancellation(t *testing.T) {
+	t.Parallel()
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := newTestRuntime(t, Config{JIT: true})
@@ -3625,6 +3628,7 @@ func TestJITSSAReferenceStoresUnderGC(t *testing.T) {
 // not save gives another answer. Its reference stores had each been a call
 // of Go (ssa.GoStore), and before that had each left.
 func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -3672,6 +3676,7 @@ func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
 // and rev made a cycle (a test that ran forever). With the write-barrier
 // flag set throughout, every reversal is the interpreter's.
 func TestJITSSAKeepsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -3717,6 +3722,7 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 // on such exits had Go stop entering it for good (entrySlow), as CI met at
 // two CPUs.
 func TestJITSSAWideConstructionsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -3827,6 +3833,7 @@ func jitCollectorHeldForTest(t *testing.T) {
 // longer inlined but made natively, to either function, as V8's feedback
 // goes polymorphic (regCallSites). Each answer is the interpreter's.
 func TestJITSSAInline(t *testing.T) {
+	t.Parallel()
 
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6331,6 +6338,7 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 // (jit.StoreRefClobber). None leaves native code, nor is a call of Go.
 // Go had made each (abi.GoOpMarking).
 func TestJITSSANativeCallsWhileMarking(t *testing.T) {
+	t.Parallel()
 	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6380,6 +6388,7 @@ func TestJITSSANativeCallsWhileMarking(t *testing.T) {
 // (markingCall), the operands saved across its call with every other
 // register. The error, its stack included, is the interpreter's.
 func TestJITSSAMarkingCallThrows(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6425,6 +6434,7 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 // constructs a P: mid counts its 600 calls of parseInt alone. The answer is
 // the interpreter's.
 func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
+	t.Parallel()
 	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6528,6 +6538,7 @@ func TestJITSSAMarkingUnderGC(t *testing.T) {
 // call of Go passes -- which had each left native code then, at mid's
 // level (two exits, unjudged, counted), are made natively.
 func TestJITSSAMarkingBeginsBeforeWideConstruction(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6590,6 +6601,7 @@ var jitMarkingSources = []string{
 // Each answer is the interpreter's, and once the code is compiled for its
 // calls, a run leaves native code nowhere.
 func TestJITSSANoExitsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -9581,6 +9593,7 @@ func TestJITSSAReleasedWhileNative(t *testing.T) {
 // (abi.Encoding's Round), Go rounds. A Math function a script replaced is
 // what is called.
 func TestJITSSAMathFunctions(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

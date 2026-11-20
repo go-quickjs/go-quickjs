@@ -19,6 +19,7 @@ import (
 // made it 2 and 3. Each answer the interpreter's and the specification's,
 // idle and while the collector marks.
 func TestJITStrictEvalAssigns(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -62,6 +63,7 @@ func TestJITStrictEvalAssigns(t *testing.T) {
 // (GoClosure) and from its pools, over bindings taken by value and shared.
 // Its cases of a strict closure's eval are TestJITStrictEvalAssigns's.
 func TestJITCaptureByValue(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -62,6 +62,7 @@ function round() { return [sum(200), early(100), odd(40), thrown(30), mixed(300)
 // collector idle and marking, and the steps of the plain iterator are
 // native.
 func TestJITRegStepCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

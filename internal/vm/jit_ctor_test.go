@@ -99,6 +99,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += new P(i).x; return
 // was Go's from then on: RayTrace's IntersectionInfo's, hundreds of
 // thousands of times, in some runs.
 func TestJITRegConstructionEmptyPool(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regEmptyPoolSrc)
 		r := rts[0]
@@ -178,6 +179,7 @@ function run(n) {
 // often enough it was made by a native call of the forwarder, whose
 // apply_args calls four methods natively and the rest by Go.
 func TestJITRegForwardingConstructionReads(t *testing.T) {
+	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
 		rts := regNativeRuntimes(t, regForwardCtorSrc)
 		r := rts[0]

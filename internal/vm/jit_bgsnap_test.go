@@ -14,6 +14,7 @@ import (
 // runtime's goroutine, more than its compiles on the spot took. A callee
 // it may inline is asked as before, and the build misses nothing.
 func TestJITBackgroundSnapshotSkipsLongCallees(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -91,6 +91,7 @@ func regWrongCheck(t *testing.T, src string, cases []regWrongCase) {
 // setter's arguments.length was 0 (TestJITAccessors' args(30), 1035 for
 // 3735).
 func TestJITRegAccessorArguments(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `function A(){this.k=0}
 	Object.defineProperty(A.prototype,"n",{get(){return arguments.length+(arguments[0]===undefined?10:0)}});
 	Object.defineProperty(A.prototype,"m",{set(v){this.k=arguments.length*100+v}});
@@ -113,6 +114,7 @@ func TestJITRegAccessorArguments(t *testing.T) {
 // a later entry for its register's cell, two iterations' closures then
 // sharing a let (TestJITCellsClosedMarking's loops(200)).
 func TestJITRegClosureCellsByValue(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `function lc(n) {
 		const fs = []
 		for (let i = 0; i < n; i++) {
@@ -140,6 +142,7 @@ func TestJITRegClosureCellsByValue(t *testing.T) {
 // what calls made since had left there: "Number.tThrow" for "tThrow"
 // (TestJITForwardersInlined), "at" for "fw".
 func TestJITRegForwardReceiverInStack(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `function tT(a) { if (a === 7) throw new RangeError('at ' + a); return a * 2 }
 	function tS(a) { 'use strict'; if (a === 7) throw new RangeError('s' + a); return a }
 	function fw() { return tT.apply(this, arguments) }
@@ -165,6 +168,7 @@ func TestJITRegForwardReceiverInStack(t *testing.T) {
 // trace through it named the line before the call's ("Object.walk
 // (test:20:5)" for "(test:21:12)", TestJITInlinesCapturedBindings).
 func TestJITRegInlinedExitCallerPosition(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, inlineUpvaluesSetup+`
 	function wl(k, v) { mod.reset(); n2.v = v; let s = ''; for (let j = 0; j < 2; j++) { try { s += mod.walk(n1, k) + '|' + mod.walk(n2, k) } catch (e) { s += e.stack } } return s }`,
 		[]regWrongCase{
@@ -185,6 +189,7 @@ func TestJITRegInlinedExitCallerPosition(t *testing.T) {
 // "at Array.forEach" out and named the callback "Number.throwAt" by what
 // its window held.
 func TestJITRegLoopCallbackFrames(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `var nums = [1, 2, 3, 4, 5], u8 = new Uint8Array([1, 2, 3, 4, 5]), self = { k: 1 }
 	function at(e) { return e.stack.split(String.fromCharCode(10)).slice(1, 4).map(l => l.trim().split(' ')[1]).join() }
 	function sloppy(n) { let s = 0; for (let i = 0; i < n; i++) nums.forEach(function (x) { s += this === globalThis ? 1 : 0 }); return s }
@@ -226,6 +231,7 @@ func TestJITRegLoopCallbackFrames(t *testing.T) {
 // "Leaf.leaf", "Number.get" for "N.get [as far]" (TestJITTailCallsInlined,
 // TestJITAccessors, TestJITInlinedSmallLoopFrames).
 func TestJITRegInlinedReceiverInStack(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `class Leaf { constructor(x) { this.x = x } leaf() { return this.x.y } }
 	function N(o) { this.o = o }
 	Object.defineProperty(N.prototype, 'far', { get() { return this.o.v } })
@@ -251,6 +257,7 @@ func TestJITRegInlinedReceiverInStack(t *testing.T) {
 // on constructing with the old one's code (TestJITDerivedDefaultConstruct's
 // case 7, h for q).
 func TestJITRegDefaultDerivedParentChanged(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, `class P { constructor(h) { this.h = h } }
 	class D extends P {}
 	class Q { constructor(h) { this.q = h } }

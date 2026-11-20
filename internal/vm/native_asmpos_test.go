@@ -64,6 +64,7 @@ function posRun() {
 // found in its own line table (bytecode.TypedPC) -- and the frames typed
 // code entered natively, one from the other, are among them.
 func TestAsmStackPositions(t *testing.T) {
+	t.Parallel()
 	want, ran := asmRun(t, asmPosSrc, "posRun()", true, false, "posModule", "outer")
 	if ran {
 		t.Fatal("the module ran typed with typed code off")

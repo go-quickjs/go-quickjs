@@ -44,6 +44,7 @@ const poolsSetup = `
 // interpreter's. Go had made each while it marked (ssa.GoTake,
 // markingCall), and the closures and cells.
 func TestJITPoolsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -85,6 +86,7 @@ func TestJITPoolsWhileMarking(t *testing.T) {
 // interpreter's. It had left native code at each such call while the
 // collector marked.
 func TestJITTailCallsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

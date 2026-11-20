@@ -47,6 +47,7 @@ function deadParam(a, b) { a = b * 2; var s = 0; for (var i = 0; i < 3; i++) s +
 // with the collector idle and marking; and the stack form's rounds agree
 // with the interpreter under CI's stress.
 func TestJITRegMappedArgumentsAssigned(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

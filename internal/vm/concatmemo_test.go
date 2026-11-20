@@ -49,6 +49,7 @@ function halves() {
 `
 
 func TestConcatMemo(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, concatMemoSrc)); err != nil {
 		t.Fatal(err)
@@ -123,6 +124,7 @@ func TestConcatMemo(t *testing.T) {
 // A runtime whose joins never repeat turns its memo off, its strings
 // dropped, and on again after concatMemoOff joins.
 func TestConcatMemoTurnsOff(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
@@ -169,6 +171,7 @@ func TestConcatMemoNotMetered(t *testing.T) {
 // falls in the same slot: a slot holding another text of the same length,
 // or one differing in its last byte, is replaced, never returned.
 func TestConcatMemoCollision(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function j(a) { return 'pre-' + a + '-post' }`)); err != nil {

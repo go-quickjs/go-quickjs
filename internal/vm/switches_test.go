@@ -220,6 +220,7 @@ func typedForTest(tb testing.TB, on bool) {
 // test's -- TestA's never TestAB's -- and that a runtime keeps the
 // switches it was made with.
 func TestTestSwitchesAreTheTests(t *testing.T) {
+	t.Parallel()
 	nativeForTest(t, false)
 	before := newTestRuntime(t, Config{})
 	defer before.Close()

@@ -12,6 +12,7 @@ var o={charCodeAt:function method(x){return method.arguments.length+":"+method.a
 function legacy(n){let result;for(let i=0;i<20;i++)result=o.charCodeAt(n+0);return ''+result}`
 
 func TestSavedStringCallLegacyArguments(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{NodeQuirks: true})
 	defer r.Close()
 	program := compileForTest(t, savedStringCallLegacySource+`;legacy(42)`)
@@ -24,6 +25,7 @@ func TestSavedStringCallLegacyArguments(t *testing.T) {
 }
 
 func TestSavedStringCallDeepOverride(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	program := compileForTest(t, `

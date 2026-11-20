@@ -16,6 +16,7 @@ import (
 // which calls Go once a cache: Math.random had been a call of Go each
 // time, 50 ns, slower than the interpreter's 37.
 func TestJITMathRandom(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

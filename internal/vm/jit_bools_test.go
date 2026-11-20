@@ -44,6 +44,7 @@ function strict(x, n) {
 // function, of 13,648 register instructions, at 22 of them, each
 // deoptimization a compile of a second.
 func TestJITRegBoolsNoDeopt(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -109,6 +110,7 @@ func TestJITRegBoolsNoDeopt(t *testing.T) {
 // strict comparison with the literal (compile's LowerReg), on both sides
 // and both senses, its back edges in loop among them.
 func TestJITRegBoolLiterals(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

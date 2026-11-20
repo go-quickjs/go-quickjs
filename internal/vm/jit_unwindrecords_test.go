@@ -17,6 +17,7 @@ import (
 // the record, the slot had the value read another's pointer: Box2D's
 // CollidePolygons, in the background, took a transform for a polygon.
 func TestJITLevelResumesWithItsSlots(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -57,6 +58,7 @@ func TestJITLevelResumesWithItsSlots(t *testing.T) {
 // own; and what the callee assigned of a local its closures captured stays
 // assigned, in the slot the frame holds its cell open on.
 func TestJITLevelKeepsWhatItsCalleeAssigned(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

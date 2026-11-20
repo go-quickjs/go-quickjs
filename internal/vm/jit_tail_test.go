@@ -40,6 +40,7 @@ function checks(n) {
 // natively and in a runtime with no JIT and compares them: once compiled,
 // classes' constructions are native, none Go's.
 func TestJITRegClassConstructions(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

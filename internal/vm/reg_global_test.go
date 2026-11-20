@@ -54,6 +54,7 @@ func TestRegGlobalEpoch(t *testing.T) {
 // global property a later script's let shadows, natively and by the Go
 // table alike.
 func TestRegGlobalLex(t *testing.T) {
+	t.Parallel()
 	steps := []struct{ src, want string }{
 		{`function readA() { var s = 0; for (var j = 0; j < 3; j++) s += a; return s }
 		  function writeB(v) { for (var j = 0; j < 3; j++) b = v + j; return b }

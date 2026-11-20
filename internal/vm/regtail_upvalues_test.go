@@ -14,6 +14,7 @@ import (
 // open in a frame at most -- two, k and f -- and each closure answers its
 // own k.
 func TestRegTailToClosesUpvalues(t *testing.T) {
+	t.Parallel()
 	const src = `
 		"use strict"
 		var fs = [], open = -1

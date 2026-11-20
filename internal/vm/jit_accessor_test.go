@@ -91,6 +91,7 @@ const jitAccessorSetup = `class P{constructor(x){this._x=x;this.log=0}get x(){re
 // built-in's getter, the original receiver of one two prototypes up --
 // with the collector marking too, which has Go make every store.
 func TestJITAccessors(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

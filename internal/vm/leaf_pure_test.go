@@ -68,6 +68,7 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 // evaluator tests null alone, as the interpreters do, and undefined and
 // document.all's stand-in are not null. It took every jnull for == null.
 func TestPureStrictNull(t *testing.T) {
+	t.Parallel()
 	const src = `
 function isNull(x) { return x === null ? 1 : 2 }
 function notNull(x) { return null !== x ? 1 : 2 }

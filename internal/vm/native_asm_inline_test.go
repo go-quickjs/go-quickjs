@@ -68,6 +68,7 @@ func asmBackgroundForTest(t *testing.T, src, call string) [2]string {
 // inliner inlines ordinary ones -- the operations' dispatchers inlining
 // the operations nothing inside of which exits.
 func TestAsmJITOpsThroughCalls(t *testing.T) {
+	t.Parallel()
 	src, want := asmCallsSource(t)
 	typed, ran := asmRun(t, src, "asmCalls()", true, true, "asmOpsModule", "iop")
 	if !ran {
@@ -152,6 +153,7 @@ func asmInlinedMostForTest(t *testing.T) map[string]int {
 // interpreter's, which are the ordinary code's; and Go finished inlined
 // typed frames.
 func TestAsmJITInlinedExits(t *testing.T) {
+	t.Parallel()
 	srcb, err := os.ReadFile("testdata/asm_inline_exits.js")
 	if err != nil {
 		t.Fatal(err)

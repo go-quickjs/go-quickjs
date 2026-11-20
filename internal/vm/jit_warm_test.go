@@ -67,6 +67,7 @@ function awaits(n) { waits(n).then(function (v) { out.push(v) }); return n }
 // and an async function's every first run enters its code past gen_entry
 // (regGenRun).
 func TestJITRegSuspendNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -212,6 +213,7 @@ function late(n) {
 // until its loop was judged slow for it, and the interpreter ran the loop
 // for a thousand samples.
 func TestJITRegCallRepeatsInvalidates(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -362,6 +364,7 @@ function traces(n) {
 // jitRegNativeMade), rather than through regCallSlow's search of the site's
 // cache and the generic call.
 func TestJITRegBuiltinCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -433,6 +436,7 @@ function outer(n) {
 // loop2 had left at 4674 of them, 7316 exits in all, each run ending in
 // the interpreter.
 func TestJITRegMadeAnewCallsSettle(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -492,6 +496,7 @@ function drive(n) {
 // callee at a cold call is Turbolev's, which Node does not run. Exact
 // answers with the JIT and without, the collector idle and marking.
 func TestJITRegSmallCalleeAtColdCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

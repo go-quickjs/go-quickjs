@@ -50,6 +50,7 @@ function run(site, n, kinds) {
 // construction, which nothing counts, while the collector is idle and
 // while it marks.
 func TestJITRegFramedMissCountedOnce(t *testing.T) {
+	t.Parallel()
 	const n = 1000
 	for _, marking := range []bool{false, true} {
 		for _, tc := range []struct {

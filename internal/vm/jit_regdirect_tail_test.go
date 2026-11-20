@@ -8,6 +8,7 @@ import (
 )
 
 func TestJITRegDirectTailCallbacks(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

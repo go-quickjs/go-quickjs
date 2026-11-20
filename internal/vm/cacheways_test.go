@@ -65,6 +65,7 @@ func deepProbe(t *testing.T, r *Runtime) (changes func() int, reset func()) {
 // (deepStore), and where it is not found made and remembered
 // (fillDeepStore).
 func TestDeepAddsFourWays(t *testing.T) {
+	t.Parallel()
 	src := "var ctors = [];\n"
 	for i := range 600 {
 		src += fmt.Sprintf("ctors.push(function () { this.k%d = 0 });\n", i)
@@ -185,6 +186,7 @@ run(50);`)
 // fifth displaces the oldest.
 // Each with the Go table, whose reads ask it, and the native handlers.
 func TestMegaOwnFourWays(t *testing.T) {
+	t.Parallel()
 	for _, native := range []bool{false, true} {
 		t.Run(fmt.Sprint("native=", native), func(t *testing.T) { megaOwnFourWays(t, native) })
 	}
@@ -282,6 +284,7 @@ func jsInts(ix []int) string {
 // turn, are each filled once, where each had been filled again at every
 // construction until the entry gave up after sixteen.
 func TestFwdTableEntryKeepsItsOthers(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `

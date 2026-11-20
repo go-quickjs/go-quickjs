@@ -369,6 +369,7 @@ const bigPowSetup = `
 `
 
 func TestJITPow(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -576,6 +577,7 @@ const bigStringSetup = `
 `
 
 func TestJITBigIntToString(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

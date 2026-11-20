@@ -190,6 +190,7 @@ func loop1000(call string) string {
 // the function its caller's call called, the closures named by their
 // templates made before the interpreter goes on with them.
 func TestJITRegTailCalledClosuresPolled(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

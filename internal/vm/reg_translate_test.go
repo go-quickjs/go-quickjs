@@ -83,6 +83,7 @@ func TestRegBackendRuns(t *testing.T) {
 // beside arguments; and one written before every read, whose stores are
 // left out.
 func TestRegSkipInitStaleFrames(t *testing.T) {
+	t.Parallel()
 	const src = `
 		function fill() { var a = "stale", b = "stale", c = "stale", d = "stale", e = "stale", f = "stale"; return a + b + c + d + e + f }
 		function tdz(p) { if (p) { try { return x } catch (e) { return e instanceof ReferenceError } } let x = 1; return x }
@@ -113,6 +114,7 @@ func TestRegSkipInitStaleFrames(t *testing.T) {
 // path throws, its position in a stack trace through register frames, and
 // a binding read in its dead zone.
 func TestRegFrameErrors(t *testing.T) {
+	t.Parallel()
 	const src = `
 		function inner(o) { return o.x.y }
 		function outer(o) { return inner(o) + 1 }

@@ -27,6 +27,7 @@ func regDeadCompile(t *testing.T, src string) *bytecode.Function {
 // windowResultUnused), so that it gives back exec's dummy rather than
 // making an array, as the stack form's leaf does.
 func TestJITRegExpDeadExecLeaf(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -19,6 +19,7 @@ import (
 // 2.5 million calls of Go of a function with code in a long EarleyBoyer
 // run.
 func TestJITRegArgumentsLengthWhole(t *testing.T) {
+	t.Parallel()
 	const src = `
 function Pair(car, cdr) { this.car = car; this.cdr = cdr }
 function list() { var a = arguments, res = null; for (var i = a.length - 1; i >= 0; i--) res = new Pair(a[i], res); return res }

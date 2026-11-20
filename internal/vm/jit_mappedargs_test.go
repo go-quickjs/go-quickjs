@@ -86,6 +86,7 @@ const mappedArgsSetup = `
 // at an exit for a key past them. Each answer is the interpreter's, with
 // the collector idle and marking, and under budgets and deoptimizations.
 func TestJITMappedArgumentsAssigned(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

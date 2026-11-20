@@ -36,6 +36,7 @@ function accessorGoCalls(n) {
 // the collector idle and marking: the answers equal, and its reads and
 // writes left to Go at exits only where a setter threw.
 func TestJITRegAccessorGoCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

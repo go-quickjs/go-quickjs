@@ -19,6 +19,7 @@ import (
 // (jit.StoreRefClobber, jit.CallGoClobber): a value or an object the code
 // kept across either without saving it gives another answer.
 func TestJITKeyedStoreSemantics(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

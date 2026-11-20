@@ -11,6 +11,7 @@ import "testing"
 // Map's and Set's forEach, Array.from's mapping, replace's function and
 // JSON's replacer and reviver call theirs as the array methods do.
 func TestCallbackTreeRest(t *testing.T) {
+	t.Parallel()
 	const src = `
 		var out = [], last
 		function sums(a) {

@@ -114,6 +114,7 @@ func TestRegNativeInDroppedRealm(t *testing.T) {
 // callback's, most often -- clears what it used rather than every state
 // the stack was ever grown to.
 func TestRegNativeLeaveClearsUsed(t *testing.T) {
+	t.Parallel()
 	fn := nativeRealmFn(t, `
 	function deep(n) { var a = [n]; return n === 0 ? a[0] : 1 + deep(n - 1) }
 	deep(100)`)

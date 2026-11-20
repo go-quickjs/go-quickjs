@@ -51,6 +51,7 @@ func frequencyRuntime(t *testing.T) *Runtime {
 // tiers made while they warmed are their code's entries'. Each answer is
 // the interpreter's.
 func TestJITCountsNotNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -99,6 +100,7 @@ func TestJITCountsNotNative(t *testing.T) {
 // the code optimized from it (jitGhost): caller's, flushed unused, are its
 // next entry's, which goes on counting from them.
 func TestJITCountsOutliveCode(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

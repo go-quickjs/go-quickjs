@@ -110,6 +110,7 @@ const regexpLeafTestWant = `null,1,false,1 null,0,false,0 null,0,false,0 null,1,
 // writes lastIndex: each answer is Node's, and the check passes exactly
 // where it says.
 func TestRegExpLeaves(t *testing.T) {
+	t.Parallel()
 	{
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpLeafTestSrc))

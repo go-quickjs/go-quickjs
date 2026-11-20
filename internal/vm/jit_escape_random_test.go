@@ -424,6 +424,7 @@ func TestJITEscapeHeldMerged(t *testing.T) {
 // out of the background: where they are to be made there, the runtime is
 // made without it.
 func TestJITEscapeTakeOperand(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

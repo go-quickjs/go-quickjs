@@ -73,6 +73,7 @@ func regBigCompile(t *testing.T, src string) *bytecode.Function {
 // a value an array, a call, a string, a global, a closure, another
 // register or a postfix update holds.
 func TestJITRegBigIntGivenBack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -164,6 +165,7 @@ func TestJITRegBigIntGivenBackAllocs(t *testing.T) {
 // been held as bindings, and a str_freeze had the function hold none),
 // whether the collector marks or not.
 func TestJITRegBigIntTemporariesGivenBack(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

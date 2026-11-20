@@ -30,6 +30,7 @@ var up5 = upv(600);
 // concatenation -- and the loop goes on, with the interpreter's answers,
 // natively and by on-stack replacement, the collector idle and marking.
 func TestJITRegStepLeaves(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -101,6 +102,7 @@ func TestJITRegStepLeaves(t *testing.T) {
 // the interrupt budget alone: the loop never compiled, and a function
 // whose loops all ended so was never compiled at its loops.
 func TestJITRegStepLoopTiersUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -147,6 +149,7 @@ func TestJITRegStepLoopTiersUp(t *testing.T) {
 // interrupt budget ran out, a turn in 1,024: the loop was compiled some
 // 200,000 turns in.
 func TestJITRegFusedBranchLoopTiersUp(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

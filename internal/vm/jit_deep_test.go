@@ -283,6 +283,7 @@ function deep(n) { return n == 0 ? 0 : deep(n - 1) + 1 }
 // by a handler a level up, which reads its frame's own registers. Each
 // answer is the interpreter's.
 func TestJITRegConsumedOperands(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -123,6 +123,7 @@ var escapeUnmade = []string{"dots", "literal", "nested", "branches", "readsOther
 // at once, a budget of three back edges, and the interpreter finishing
 // every few exits' invocations.
 func TestJITEscapeAnalysis(t *testing.T) {
+	t.Parallel()
 
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -295,6 +296,7 @@ const mergeSetup = `
 // for the object it carries (ssa.Entry's OSR), has code compiled with the
 // entry, and goes on natively there.
 func TestJITEscapeMerges(t *testing.T) {
+	t.Parallel()
 
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -331,6 +333,7 @@ func TestJITEscapeMerges(t *testing.T) {
 // taken: left unmade it saves nothing, and its loop keeps the entry a
 // loop-carried object's would have dropped (ssa.Entry's OSR).
 func TestJITEscapeMadeAnyway(t *testing.T) {
+	t.Parallel()
 
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

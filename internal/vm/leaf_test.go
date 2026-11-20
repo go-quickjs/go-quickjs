@@ -13,6 +13,7 @@ import "testing"
 // arguments objects, a function and the global object -- with no memory
 // meter, as the leaves are called.
 func TestNativeLeafChecksExact(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	v, err := r.Run(compileForTest(t, `[0, 1, -1, 2, 3.7, -0, NaN, Infinity, -Infinity, 1e9, 2 ** 31, 0x10FFFF, 0x110000,

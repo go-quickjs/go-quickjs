@@ -570,6 +570,7 @@ one = new One(-0);`)
 // initializer cache, is its runtime's, filled from its own layouts and
 // prototypes. Run under the race detector in the gates.
 func TestRegNativeInitCacheRuntimes(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, `
 function P(a, b) { this.a = a; this.b = b }
 var s = 0;
@@ -660,6 +661,7 @@ out.push(log.join()); out.join("|")`
 // never for one that only stores its parameters (LeafSetThis), which
 // leafCall answers without a frame, as the Go table does, past the limit.
 func TestRegNativeInitFrameLimit(t *testing.T) {
+	t.Parallel()
 	const src = nativeInitSource + `
 function probe(C) {
  var first = -1, deepest = 0;
@@ -727,6 +729,7 @@ String(run(100))`
 // The register compiler's plans (RegCode.Stores and Forward), by body:
 // the forms it takes, and bodies that are none of them.
 func TestRegInitPlans(t *testing.T) {
+	t.Parallel()
 	const src = `
 function stores(a, b) { this.a = a; this.b = b }
 function defaults(x, y) { if (!x) x = 0; this.x = x; this.y = y ? y : 0; this.z = x }

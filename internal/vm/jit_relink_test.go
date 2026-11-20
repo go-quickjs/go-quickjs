@@ -76,6 +76,7 @@ func regCallsOfGo(r *Runtime) uint64 {
 // AWFY's Havlak made 4.2 million calls of som.js's hashFn through Go, let
 // go of during CD, each putting off the levels of the recursion below it.
 func TestJITRegReleasedCalleeRelinked(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -148,6 +149,7 @@ func TestJITRegReleasedCalleeRelinked(t *testing.T) {
 // either was taken for one warming up, its native caller's calls left to
 // Go: AWFY's CD's isInVoxel, 3.2 million of them.
 func TestJITRegReleasedLongCallee(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

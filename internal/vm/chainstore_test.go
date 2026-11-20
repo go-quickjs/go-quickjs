@@ -17,6 +17,7 @@ import (
 // to its subclasses' instances are made the same way. Node's answers; the
 // site's entry is the cell's, and it has not given up.
 func TestChainStoreFollowsTheCell(t *testing.T) {
+	t.Parallel()
 	const src = `'use strict'
 		class A {} class B extends A {} class C extends B {} class D extends C {}
 		function add(o, v) { o.x = v; return o }

@@ -53,6 +53,7 @@ func TestJITForIn(t *testing.T) {
 // TestJITForInMarking is TestJITForIn while the collector marks: the steps
 // store no pointer, so they are the same.
 func TestJITForInMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

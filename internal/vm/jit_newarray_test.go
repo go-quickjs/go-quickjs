@@ -24,6 +24,7 @@ import (
 // left its recursion slower than the interpreter's, had been judged
 // not to pay.
 func TestJITNewArrayLength(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

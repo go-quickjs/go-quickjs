@@ -14,6 +14,7 @@ func init() { nativeTestTables["feedback"] = nativeFeedback.addr }
 // feedback table as through plain's, which it is but for the handlers it
 // overrides, none yet.
 func TestRegNativeFeedbackSelected(t *testing.T) {
+	t.Parallel()
 	if nativeFeedback == nativePlain || nativeFeedback.addr == nativePlain.addr {
 		t.Fatal("a build with the JIT has no feedback dispatcher of its own")
 	}

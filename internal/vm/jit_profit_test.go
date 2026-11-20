@@ -52,6 +52,7 @@ func regProfitEntry(t *testing.T, r *Runtime, name string) (*closure, *jitRegEnt
 // at the calls Go entered it for, which it did not, it stayed in the
 // interpreter: AWFY's CD's Vector and append, 700,000 calls a run.
 func TestJITRegNotNativeRetriedByNativeCallers(t *testing.T) {
+	t.Parallel()
 	const src = `
 function v(n) { var a = new Array(n & 3); return a.length + 1 }
 function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
@@ -94,6 +95,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
 // calls counted only since, the callee was judged not to pay at its next
 // look. AWFY's Json's putIntoMap, compiled again, was judged so at once.
 func TestJITRegCalleeJudgedAfresh(t *testing.T) {
+	t.Parallel()
 	const src = `
 function v(n) { var a = new Array(n & 3); return a.length + 1 }
 function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
@@ -141,6 +143,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s += v(i); return s }
 // one a call after a loop of forty turns, and its native callers keep
 // calling it.
 func TestJITRegCalleeThatLosesDeclined(t *testing.T) {
+	t.Parallel()
 	const src = `
 function heavy(x) { var s = 0; for (var k = 0; k < 10; k++) s += JSON.stringify((x + k) & 7).length; return s }
 function light(x) { var s = 0; for (var k = 0; k < 40; k++) s = (s + x * k) & 1023; return s + JSON.stringify(x & 7).length }
@@ -182,6 +185,7 @@ function run(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + heavy(i) + lig
 // shape. AWFY's Dictionary.at, compiled while DeltaBlue's keys
 // were hashed, left so at each of Havlak's two million calls.
 func TestJITRegInlinedShapeMissCompiledAgain(t *testing.T) {
+	t.Parallel()
 	const src = `
 class A1 { constructor(v) { this.v = v } h() { return this.v } }
 class A2 { constructor(v) { this.u = 0; this.v = v } h() { return this.v } }
@@ -269,6 +273,7 @@ function runB(n) { return run(new B(2), n) }
 // every call: AWFY's Havlak's Vector.forEach of stepD's callback, 86,000
 // calls a run.
 func TestJITRegGenericCalleeByCodeLinked(t *testing.T) {
+	t.Parallel()
 	const src = `
 var acc = 0;
 function each(a, f) { for (var i = 0; i < a.length; i++) f(a[i]) }
@@ -312,6 +317,7 @@ function run(n) { var t = 0; for (var i = 0; i < n; i++) t += mk(i & 7); return 
 // an exit at a time, a budget waited for each compile -- V8's Richards'
 // TaskControlBlock.run left native code at 344 of its first run's calls.
 func TestJITRegPolymorphicCallSeeded(t *testing.T) {
+	t.Parallel()
 	const src = `
 class T1 { run(p) { return p + 1 } }
 class T2 { run(p) { return p + 2 } }

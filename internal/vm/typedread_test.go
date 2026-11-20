@@ -12,6 +12,7 @@ import (
 // shrunk under a view of a fixed length or tracked by one, answer as the
 // interpreter has them.
 func TestTreeTypedArrayReads(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		function at(a, k) { return a[k] }
@@ -53,6 +54,7 @@ func TestTreeTypedArrayReads(t *testing.T) {
 // read-only, a prototype with an element, a sparse array and a strict
 // function's refusals answer as the interpreter has them.
 func TestTreeArrayAppends(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		function put(a, k, v) { a[k] = v; return a.length }
@@ -96,6 +98,7 @@ func TestTreeArrayAppends(t *testing.T) {
 // not numbers and convert, a detached buffer, answer as the interpreter has
 // them.
 func TestTreeTypedArrayWrites(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		function put(a, k, v) { a[k] = v; return a[k] }
@@ -133,6 +136,7 @@ func TestTreeTypedArrayWrites(t *testing.T) {
 // length past the holes an array keeps in its storage makes it sparse, as
 // before.
 func TestArrayLengthGrowsWithHoles(t *testing.T) {
+	t.Parallel()
 	const src = `
 		const out = []
 		for (const n of [0, 1, 4, 10, 1000, 2000]) {

@@ -64,6 +64,7 @@ const typedMapFilterSetup = `
 // and filterOdd's loops neither leave their code nor call their callbacks
 // natively, which are inlined.
 func TestJITTypedArrayMapFilter(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

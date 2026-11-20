@@ -9,6 +9,7 @@ import "testing"
 // prototype replaced or an object made non-extensible after the addition
 // was remembered each takes the write the long way.
 func TestDeepStoreFollowsTheChain(t *testing.T) {
+	t.Parallel()
 	const src = `
 		'use strict'
 		class A {} class B extends A {} class C extends B {} class D extends C {} class E extends D {}

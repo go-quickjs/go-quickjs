@@ -41,6 +41,7 @@ function run(n) {
 // and inlined, the collector idle and marking: no write is lost or made to
 // another property.
 func TestJITRegPlainWrite(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

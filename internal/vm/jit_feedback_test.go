@@ -28,6 +28,7 @@ var (
 // slot of the name; each call its argument count and the function it
 // called, from the call's cache.
 func TestJITRegFeedback(t *testing.T) {
+	t.Parallel()
 	src := `
 var total = 0;
 function Point(x, y) { this.x = x; this.y = y }

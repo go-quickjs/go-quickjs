@@ -29,6 +29,7 @@ used({alpha: 1, beta: 2}) + [1, 2, 3].map(twice).join() + used({alpha: 3, beta: 
 // and the code a call compiles, with the names, constants and sites it adds
 // past its function's own, gives the expected answers.
 func TestRegCompiledLazily(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, regLazySrc)
 	byName := map[string]*bytecode.Function{}
 	for _, c := range fn.Constants {
@@ -71,6 +72,7 @@ func TestRegCompiledLazily(t *testing.T) {
 // register code at once: under the race detector, the compile is made
 // once and adds nothing to the Function the runtimes share.
 func TestRegCompiledLazilyConcurrently(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, regLazySrc)
 	var wg sync.WaitGroup
 	errs := make([]string, 8)

@@ -12,6 +12,7 @@ import (
 // trace reads it: its new.target the call wrote, the frame named "new F",
 // as the interpreter's is -- with the collector idle and marking.
 func TestJITLazyLevelConstructs(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -259,6 +259,7 @@ func TestPrivateMembersAgreeWithNode(t *testing.T) {
 // the object's shape and where in it each member is; a getter's member,
 // which is called, is remembered by none.
 func TestPrivateSitesCached(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `

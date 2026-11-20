@@ -19,6 +19,7 @@ import (
 // Round off: SSE2's sequence, mir's roundSD), each exactly what Go's math
 // gives, -0 included, and the code native.
 func TestJITRoundings(t *testing.T) {
+	t.Parallel()
 	two52, two63 := math.Ldexp(1, 52), math.Ldexp(1, 63)
 	xs := []float64{0, math.Copysign(0, -1), 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 0.4, -0.4, 0.49999999999999994, -0.49999999999999994,
 		two52 - 1, two52 + 1, -(two52 - 1), -(two52 + 1), two52 - 0.5, -(two52 - 0.5), two52, -two52, two63, -two63, 1e300, -1e300,

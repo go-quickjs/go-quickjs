@@ -303,6 +303,7 @@ func TestJITDerivedNativeUnwind(t *testing.T) {
 // (jit.StoreRefClobber); every answer is the interpreter's. Go had made
 // each, entering the constructor's code (jitMarkingCallee).
 func TestJITDerivedNativeMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

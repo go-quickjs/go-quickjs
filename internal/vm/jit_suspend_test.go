@@ -52,6 +52,7 @@ for (var k = 0; k < 30000; k++) top = (top + k * 3) % 65521;
 // compiled and entered: at its loop and, for those that suspend, where
 // they resume.
 func TestJITRegSuspendedAndTopLevel(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

@@ -79,6 +79,7 @@ function spreads(n) {
 // clobbering what they may: the answers equal, and the instructions left
 // to Go at exits only where they did not go on natively.
 func TestJITRegWholeGoCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -167,6 +168,7 @@ function poly(n) {
 // the getter and the setter called as often, and add_prop and the pushes
 // left to Go at exits only where their speculation failed.
 func TestJITRegAddPropPush(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -241,6 +243,7 @@ function closures(n) {
 // JIT, the collector idle and marking: the answers equal, and none of
 // those instructions left to Go at exits but a few times.
 func TestJITRegWholeFallbacks(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -46,6 +46,7 @@ func asmRun(t *testing.T, src, call string, native, typed bool, mod, export stri
 // each what Node gives (testdata/asm_edges.want), and the module typed
 // where it should be.
 func TestAsmEdges(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("testdata/asm_edges.js")
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +86,7 @@ func TestAsmEdges(t *testing.T) {
 // v8bench runner's TestAsmMicrobenchmarks), and the module typed where it
 // should be.
 func TestAsmMicroKernels(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("../v8bench/microbench_extra.js")
 	if err != nil {
 		t.Fatal(err)

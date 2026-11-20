@@ -133,6 +133,7 @@ inStep() + " " + inTest()`
 // back edges spend the interrupt budget, by the runtime's context, by the
 // Go table and natively; the runtime then runs a loop of each to its end.
 func TestRegStepInterrupt(t *testing.T) {
+	t.Parallel()
 	forever := []string{
 		`(function () { for (var i = 0; i < Infinity; i++) {} })()`,
 		`(function (n) { for (var i = 0; i <= n; i++) {} })(Infinity)`,

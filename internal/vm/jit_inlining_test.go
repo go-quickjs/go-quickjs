@@ -375,6 +375,7 @@ func TestJITInlinesCapturedBindings(t *testing.T) {
 // to one cell, two, four: closures made at the start, a loop's closures
 // of its iteration's binding, which a scope's end closes.
 func TestJITClosuresWithKeepsLimited(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -629,6 +630,7 @@ func TestJITInlinesBySize(t *testing.T) {
 // wrap2, 9 instructions with two tinies inlined in it, 19 in all. Each
 // answer is the interpreter's.
 func TestJITInlinesSmallPastBudget(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -667,6 +669,7 @@ func TestJITInlinesSmallPastBudget(t *testing.T) {
 // four bigs before the loop, 44 each, with it. In the order of their PCs
 // the bigs took the budget, and mid2 was called natively at every turn.
 func TestJITInlinesLoopsFirst(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -708,6 +711,7 @@ func TestJITInlinesLoopsFirst(t *testing.T) {
 // interpreter making it in the inlined frame: each answer, a stack trace
 // through the inlined constructor included, is the interpreter's.
 func TestJITInlinedMegamorphicWrites(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

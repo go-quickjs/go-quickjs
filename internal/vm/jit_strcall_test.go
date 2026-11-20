@@ -8,6 +8,7 @@ import "testing"
 // own, or String.prototype's replaced -- is ordinary call feedback, which
 // the JIT inlines.
 func TestJITSavedStringCallScriptInlining(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -48,6 +49,7 @@ func TestJITSavedStringCallScriptInlining(t *testing.T) {
 // The saved call of a sloppy method, with Node's quirks, gives
 // f.arguments the argument as passed.
 func TestJITSavedStringCallLegacyArguments(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -82,6 +84,7 @@ func TestJITSavedStringCallLegacyArguments(t *testing.T) {
 // JIT and the interpreter alike: the built-in, a replacement, a getter
 // read once a call, and a replacement made by the argument's conversion.
 func TestJITSavedStringCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -113,6 +116,7 @@ func TestJITSavedStringCall(t *testing.T) {
 // codePointAt, at and charAt by the JIT as the interpreter gives them,
 // each case run until its functions are compiled, idle and marking.
 func TestJITStringUnitCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -143,6 +147,7 @@ func TestJITStringUnitCalls(t *testing.T) {
 // A loop of codePointAt, at and charAt calls, compiled, with the
 // built-ins, replaced and put back, by the JIT and the interpreter alike.
 func TestJITStringUnitLoops(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

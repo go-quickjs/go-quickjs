@@ -12,6 +12,7 @@ import "testing"
 // whose argument is a construction of the same class get theirs as they
 // were given. Node's answers.
 func TestSuperArgumentsInPlace(t *testing.T) {
+	t.Parallel()
 	const src = `'use strict'
 		class Keep { constructor(a, b = a * 10, ...rest) { this.args = arguments; this.b = b; this.rest = rest; this.n = arguments.length } }
 		function calc(k) { let s = 0; for (let i = 0; i < k; i++) s += i; return s }

@@ -16,6 +16,7 @@ import (
 // while frames below hold theirs. Each answer is the interpreter's and
 // Node's (Node's messages are its own).
 func TestClassConstructionsOnTrees(t *testing.T) {
+	t.Parallel()
 	const src = `'use strict'
 		class A { constructor(x) { this.x = x; if (x === 'throw') throw new RangeError('A ' + x) } }
 		class B extends A { constructor(x) { super(x); this.y = new.target.name } }

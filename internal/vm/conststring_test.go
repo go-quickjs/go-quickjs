@@ -38,6 +38,7 @@ func TestConstStringShared(t *testing.T) {
 // Go 1.24's weak.Make faults on a pointer to no heap object ("getWeakHandle
 // on invalid pointer") -- and a script's empty literals are it.
 func TestConstStringEmpty(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if s := r.constString(""); s != emptyString {

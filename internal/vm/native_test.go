@@ -472,6 +472,7 @@ func TestRegNativeCallExits(t *testing.T) {
 // by calls the code makes and by calls Go makes between them, to the
 // stack's limit: the answers of the Go table's loop.
 func TestRegNativeDeep(t *testing.T) {
+	t.Parallel()
 	src := `
 	function deep(n) { return n === 0 ? 0 : 1 + deep(n - 1) }
 	function viaGo(n) { return n === 0 ? 0 : 1 + [n - 1].map(viaGo)[0] }
@@ -495,6 +496,7 @@ func TestRegNativeDeep(t *testing.T) {
 // goroutine of its own, the code shared: each gives the answers it gives
 // alone.
 func TestRegNativeConcurrent(t *testing.T) {
+	t.Parallel()
 	fn := compileForTest(t, nativeCallsSrc)
 	kern := nativeKernelSource(t, "call_fib", "call_fib_rec", "call_mutual", "call_even", "call_odd") +
 		"call_fib(177 * 20); var a = global_res; call_mutual(65 * 20); a + ' ' + global_res"
@@ -808,6 +810,7 @@ const nativeMore2Src = `
 
 // TestRegNativeMore2 runs nativeMore2Src as TestRegNativeMore runs its.
 func TestRegNativeMore2(t *testing.T) {
+	t.Parallel()
 	want := nativeRunSrc(t, nativeMore2Src, false)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
@@ -831,6 +834,7 @@ const nativeMore3Src = `
 
 // TestRegNativeMore3 runs nativeMore3Src as TestRegNativeMore runs its.
 func TestRegNativeMore3(t *testing.T) {
+	t.Parallel()
 	want := nativeRunSrc(t, nativeMore3Src, false)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
@@ -867,6 +871,7 @@ const nativeMore4Src = `
 
 // TestRegNativeMore4 runs nativeMore4Src as TestRegNativeMore runs its.
 func TestRegNativeMore4(t *testing.T) {
+	t.Parallel()
 	want := nativeRunSrc(t, nativeMore4Src, false)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
@@ -928,6 +933,7 @@ func TestRegNativeMore5(t *testing.T) {
 // arguments object itself, Array -- by a call or a call in tail position
 // the site's cache answered.
 func TestRegNativeKeptArgumentsClosed(t *testing.T) {
+	t.Parallel()
 	src := `
 	var kept = [];
 	var s1 = function s(n, a) { kept.push(arguments); return arguments.length + ":" + Array.prototype.join.call(arguments, ","); };

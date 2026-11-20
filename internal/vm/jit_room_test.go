@@ -47,6 +47,7 @@ function tails(n) { var s = 0; for (var i = 0; i < 20; i++) s = (s + tailA(n + (
 // of two functions as many as they like, with the collector idle and
 // marking.
 func TestJITRegCallRoom(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

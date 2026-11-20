@@ -111,6 +111,7 @@ func TestJITHoleStores(t *testing.T) {
 // stored into a hole with Go's write barrier (jit's storeRef), every
 // register native code may keep given junk across it.
 func TestJITHoleStoresMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

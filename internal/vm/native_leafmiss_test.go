@@ -43,6 +43,7 @@ func BenchmarkRegNativeLeafMiss(b *testing.B) {
 // A miss must cache these existing native leaves and retry the instruction,
 // rather than run their bodies through Go's framed call entry.
 func TestRegNativeLeafMissRetries(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source string
 		leaf         uint8
@@ -119,6 +120,7 @@ leafMisses(1000) + "|" + ok + "|" + leafValue(f, 0).a`
 }
 
 func TestRegNativeLeafMissFallback(t *testing.T) {
+	t.Parallel()
 	const src = nativeLeafMissSource + `
 var out = [];
 function identity(x) { return x }

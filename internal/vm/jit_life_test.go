@@ -128,6 +128,7 @@ function caller(n) { var s = 0; for (var i = 0; i < n; i++) s = target(s, i) | 0
 // outnumbered back edges four to one, and the recursion was sampled about
 // once a run, AWFY's Towers' moveDisks never compiled.
 func TestJITRegCallSamplesSurvivePolls(t *testing.T) {
+	t.Parallel()
 	const src = `
 var o = { v: 0 };
 function leaf(x) { for (var k = 0; k < 4; k++) x.v = (x.v + k) | 0 }
@@ -164,6 +165,7 @@ function run() { rec(13); return o.v }
 // again, which is counted once. Counted again, it left there again, for
 // ever.
 func TestJITRegStartPollOnce(t *testing.T) {
+	t.Parallel()
 	const src = `
 function get(o) { return o.a + 1 }
 function drive(n) { var o = { a: 1 }, s = 0; for (var i = 0; i < n; i++) s += get(o); return s }
@@ -246,6 +248,7 @@ function g(n) { return f(n) }
 // FrameAt (dropping the entry again), and no other compile asked one at
 // all.
 func TestJITRegOSRAtDroppedEntry(t *testing.T) {
+	t.Parallel()
 	const src = `
 function sum(n) { var s = { v: n - n }, i = 0; do { s.v = s.v + i; i++ } while (i < n); return s.v }
 `

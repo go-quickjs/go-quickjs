@@ -6,6 +6,7 @@ import "testing"
 // register entry, including below the depth where tail calls give up or
 // replace their frame. Its entry must finish both kinds of completion.
 func TestRegDirectTailCallbacks(t *testing.T) {
+	t.Parallel()
 	const src = `
 		"use strict";
 		function element(type, props, key) { return {type, props, key}; }
@@ -73,6 +74,7 @@ func TestRegDirectTailCallbacks(t *testing.T) {
 // body. The retained entry must restore its own reservation before the
 // built-in makes the next call, and release it when iteration ends.
 func TestRegRetainedTailWindow(t *testing.T) {
+	t.Parallel()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("probe"), Obj(r.newNativeFunc("probe", 1,
@@ -157,6 +159,7 @@ var tailChainCallbacks = []struct{ src, want string }{
 }
 
 func TestRegTailCallbacksInTailChains(t *testing.T) {
+	t.Parallel()
 	for _, cfg := range []Config{{}, {NodeQuirks: true}} {
 		for i, c := range tailChainCallbacks {
 			r := newTestRuntime(t, cfg)

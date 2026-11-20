@@ -21,6 +21,7 @@ function drive(f, n, k) { var r; for (var j = 0; j < k; j++) { try { r = f(n + j
 // and by on-stack replacement at their loops, each answer compared with a
 // runtime's without the JIT, the collector seen idle and marking.
 func TestJITRegTierUp(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

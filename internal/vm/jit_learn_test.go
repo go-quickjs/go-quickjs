@@ -342,6 +342,7 @@ var replaces = (function () {
 `
 
 func TestJITRegReplaceLeaf(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {
@@ -411,6 +412,7 @@ function shared(n) {
 `
 
 func TestJITRegSharedLiteral(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

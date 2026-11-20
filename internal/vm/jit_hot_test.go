@@ -94,6 +94,7 @@ func TestJITHotCallsAnyOrder(t *testing.T) {
 // marked often, in TestJITHotCallsAnyOrder on Windows -- and the interpreter
 // ran it.
 func TestJITHotCallsWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

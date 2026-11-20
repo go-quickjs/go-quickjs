@@ -96,6 +96,7 @@ func regCalledRounds(setup string) []string {
 // before it does, as at any exit -- left unmade, squares threw "object is
 // not a function" at its call of sq.
 func TestJITRegCalledClosuresPolled(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

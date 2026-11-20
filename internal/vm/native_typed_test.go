@@ -105,6 +105,7 @@ func typedRunSrcIn(t *testing.T, cfg Config, src string, native bool, names ...s
 // In a runtime of Node's quirks, f.arguments and f.caller read the frames
 // of typed code; in a standard one they throw.
 func TestRegTypedProtoCalls(t *testing.T) {
+	t.Parallel()
 	for _, cfg := range []Config{{}, {NodeQuirks: true}} {
 		want := typedRunSrcIn(t, cfg, typedProtoSrc, false)
 		for _, native := range []bool{false, true} {
@@ -176,6 +177,7 @@ function cross_add(a, b) { a = a | 0; b = b | 0; return (a + b) | 0; }
 // TestRegTypedProtoInterrupt stops typed code by the runtime's context,
 // by the Go table and natively, and then runs it to its end.
 func TestRegTypedProtoInterrupt(t *testing.T) {
+	t.Parallel()
 	const forever = `function tfib(k) { return k < 2 ? k : tfib(k - 1) + tfib(k - 2); } tfib(60)`
 	const finite = `String(tfib(20))`
 	for _, native := range []bool{false, true} {

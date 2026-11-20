@@ -120,6 +120,7 @@ func regClosRun(t *testing.T, src string, n float64, calls int, want string, cou
 // inner scope's end closes its registers alone, and arrows an arrow makes
 // read its this. No scope's end leaves native code.
 func TestJITRegClosures(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -174,6 +175,7 @@ function main(n) { var s = ""; for (var i = 0; i < 3; i++) s += new Derived(n).r
 // makes natively from its pool capture the this its derived
 // constructor's super() bound, never the binding's state before.
 func TestJITRegArrowsOfArrowsThis(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -212,6 +214,7 @@ function main(n) {
 // closures inlined, their additions learned at their host exits, not
 // called once their exits had counted against inlining them.
 func TestJITRegCapturedAppendInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -241,6 +244,7 @@ func TestJITRegCapturedAppendInlined(t *testing.T) {
 // the exit, and the register held the turn before's value. g() answered
 // the k of the turn before at every refill of the pool.
 func TestJITRegByValueFromCells(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -40,6 +40,7 @@ function main(n) {
 // property by its name -- is made natively, or by Go from native code,
 // once its code is compiled again for what it met (jitRegElemSeen).
 func TestJITRegElementKinds(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -100,6 +101,7 @@ var regTypedKindSrc = func() string {
 // code that reads every element through its cold path, a typed array an
 // Array's read's miss.
 func TestJITRegTypedKinds(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

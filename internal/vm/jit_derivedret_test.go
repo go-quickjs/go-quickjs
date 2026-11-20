@@ -30,6 +30,7 @@ function both() { var r = 0; for (var i = 0; i < 300; i++) { var d = new D(), f 
 // an earlier frame, or threw that a derived constructor may return only
 // an object.
 func TestJITRegDerivedArrowSuper(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

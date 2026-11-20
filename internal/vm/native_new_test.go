@@ -271,6 +271,7 @@ func TestRegNativeInstanceOfBranch(t *testing.T) {
 // not: an object is an instance of its own realm's constructors alone,
 // Symbol.hasInstance being each realm's own.
 func TestRegNativeInstanceOfRealms(t *testing.T) {
+	t.Parallel()
 	const foreign = `function FB() {} [FB, new FB(), [], {}]`
 	const src = `
 	function FA() {} var a = new FA(), out = []

@@ -43,6 +43,7 @@ function run(n) {
 // TestJITRegCalleeLeftOut runs regCalleeSrc's run natively and with no JIT
 // and compares what probe saw, the collector idle and marking.
 func TestJITRegCalleeLeftOut(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

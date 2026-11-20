@@ -42,6 +42,7 @@ function always(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + 
 // compiled at every iteration after the first, 4.8 MB of code for
 // initPhysics alone.
 func TestJITRegLongCalleeWarms(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -9,6 +9,7 @@ import "testing"
 // about caller puts it in without building the prototype; and the realm's
 // functions share one getter and one setter.
 func TestCallerMadeWhenAsked(t *testing.T) {
+	t.Parallel()
 	src := `
 		function f() {}
 		function g() {}

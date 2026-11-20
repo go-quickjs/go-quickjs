@@ -36,6 +36,7 @@ function main(n) { return count(n) + "," + viaCall(n) + "," + hyp(n) + "," + sea
 // answers: the instanceofs made natively -- no call of Go -- and Math's
 // calls in an inlined callee too.
 func TestJITRegInstanceOfNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -94,6 +95,7 @@ function main() { log = 0; loop(3000); return JSON.stringify(objs) + log }
 // a call of Go at a register pc, writes the property its register
 // instruction names (jitRegPlainSet), not the stack form's at that pc.
 func TestJITRegPlainSetterCall(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -154,6 +156,7 @@ function main(n) { return loops(n) + "," + advances(n * 10) + "," + bounces() }
 // a native callee, no forEach given a new arrow each call, leaves native
 // code at every turn.
 func TestJITRegLoopSteps(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -206,6 +209,7 @@ function main() { return tree(5) + "," + lists(3000) }
 // without the JIT, before and after Array is replaced, and compares their
 // answers: the constructions made from pools, not by Go at each.
 func TestJITRegArrayAlloc(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -276,6 +280,7 @@ function grows(n) { var a = new Array(40); for (var i = 0; i < n; i++) a.push(i)
 // 16 had been Go's construction at every call -- AWFY Json's new
 // Array(32) in both JITs.
 func TestJITRegArrayPooled(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -364,6 +369,7 @@ function main(n) { return lets(n) + "," + counters(n) + "," + adders(n) + "," + 
 // runtime without the JIT and compares their answers, the closures made
 // from pools and the collector idle and marking.
 func TestJITRegClosurePools(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -421,6 +427,7 @@ function main() { return run(3000) }
 // #p in o and a derived constructor's return made on the frame, not at
 // exits.
 func TestJITRegClassOps(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -481,6 +488,7 @@ function main() { return sp(3000) }
 // iterator is replaced, the collector idle and marking: no spread, push
 // or field definition a call of Go each.
 func TestJITRegSpreads(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -592,6 +600,7 @@ function main() {
 // runtime without the JIT: arrows reading this taken from pools, the
 // collector idle and marking.
 func TestJITRegArrowThisPools(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -676,6 +685,7 @@ function main(n) { return String(sums(n)) }
 // TestJITRegPureBodies runs regPureSrc's main natively and in a runtime
 // without the JIT, the collector idle and marking.
 func TestJITRegPureBodies(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -722,6 +732,7 @@ function swap() { range.prototype = { tag: 1 }; return Object.getPrototypeOf(ran
 // TestJITRegGenMake runs regGenMakeSrc natively and in a runtime without
 // the JIT, before and after the swap: the generators made from pools.
 func TestJITRegGenMake(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -799,6 +810,7 @@ function main(n) { return classes(n) + ":" + spreads(n) }
 // TestJITRegClassDefinitions runs regClassDefsSrc's main natively and in a runtime
 // without the JIT, the collector idle and marking.
 func TestJITRegClassDefinitions(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -856,6 +868,7 @@ function main(n) { return lits("the quick brown fox", n) + ":" + kept("a b", n) 
 // TestJITRegLitArg runs regLitArgSrc's main natively and in a runtime
 // without the JIT, the collector idle and marking.
 func TestJITRegLitArg(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

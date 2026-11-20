@@ -129,6 +129,7 @@ func TestJITArrayLoops(t *testing.T) {
 // map's results, numbers and objects alike, are appended to the array the
 // loop made natively: Go is called once a call, to make it.
 func TestJITMapAppends(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

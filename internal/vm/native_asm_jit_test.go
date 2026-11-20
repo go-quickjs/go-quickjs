@@ -50,6 +50,7 @@ func asmJITNative(r *Runtime, mod string, names []string) map[string]string {
 // functions linked to typed code and compiled natively from it at the link
 // -- before they run, with no warm-up -- by the JIT.
 func TestAsmJIT(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("testdata/asm_edges.js")
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +103,7 @@ func TestAsmJIT(t *testing.T) {
 // (testdata/asm_edges.want), while the compiles run and once each is
 // installed, and every function is then native.
 func TestAsmJITBackground(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("testdata/asm_edges.js")
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +143,7 @@ func TestAsmJITBackground(t *testing.T) {
 // Octane's zlib took 2.6 times as long in the background as on the spot.
 // Every function's answer is exact, and every one is native.
 func TestAsmJITBackgroundFull(t *testing.T) {
+	t.Parallel()
 	const src = `
 function Many(stdlib, foreign, heap) {
     "use asm";
@@ -261,6 +264,7 @@ var tableCalls = TableCalls(globalThis, {}, new ArrayBuffer(65536));
 // the ordinary code's is (ssa's typedInline): called natively, a call
 // had cost twice what the ordinary code's inlined one does.
 func TestAsmJITMicroKernels(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("../v8bench/microbench_extra.js")
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +312,7 @@ func TestAsmJITMicroKernels(t *testing.T) {
 // module in an error's stack where the ordinary code puts it
 // (TestAsmStackPositions), and the stack overflows where it does.
 func TestAsmJITStackPositions(t *testing.T) {
+	t.Parallel()
 	want, _ := asmRun(t, asmPosSrc, "posRun()", true, false, "posModule", "outer")
 	for _, stress := range []bool{false, true} {
 		fn := compileForTest(t, asmPosSrc+"\nposRun()")
@@ -337,6 +342,7 @@ func TestAsmJITStackPositions(t *testing.T) {
 // ordinary code's, each Node's (testdata/asm_ops.want), the module
 // validated and its functions native.
 func TestAsmJITOps(t *testing.T) {
+	t.Parallel()
 	src, err := os.ReadFile("testdata/asm_ops.js")
 	if err != nil {
 		t.Fatal(err)

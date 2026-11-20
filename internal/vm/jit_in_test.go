@@ -105,6 +105,7 @@ func TestJITIn(t *testing.T) {
 // whose trap Go calls after the exit, and at an object key's, which Go
 // converts there.
 func TestJITInGoCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

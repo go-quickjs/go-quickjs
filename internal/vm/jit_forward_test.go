@@ -114,6 +114,7 @@ const forwardSetup = `
 // with the collector idle and marking, and under budgets and
 // deoptimizations.
 func TestJITForwardingCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

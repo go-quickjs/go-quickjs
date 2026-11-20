@@ -58,6 +58,7 @@ function thrown(n) {
 // next and return calls counted, a next's RangeError caught -- and once
 // warm no destructuring leaves native code or runs whole.
 func TestJITRegPatternSteps(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

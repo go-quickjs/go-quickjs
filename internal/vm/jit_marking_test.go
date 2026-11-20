@@ -15,6 +15,7 @@ import (
 // jitRegUnwind, mir's resumeCall). They had finished their
 // invocations in the interpreter, and what they called with them.
 func TestJITResumesWhileMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

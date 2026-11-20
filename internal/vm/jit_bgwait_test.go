@@ -99,6 +99,7 @@ func TestJITBackgroundWaitingInstallIsDue(t *testing.T) {
 // a slow runner, its code there), and the compile is waited for by its
 // job's own signal, done, which no check installs.
 func TestJITBackgroundCalleeAskInstalls(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundRuntime(t)
 	r.jitCallThreshold, r.jitICThreshold = math.MaxUint16, math.MaxUint16
 	if _, err := r.Run(compileForTest(t, `function sum(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`)); err != nil {

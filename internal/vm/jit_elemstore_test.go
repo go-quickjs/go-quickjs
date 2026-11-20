@@ -463,6 +463,7 @@ func TestJITMegamorphicProperties(t *testing.T) {
 // shape, at the property's index, writable if it is; never an accessor's,
 // nor a small object's, which native code searches itself.
 func TestJITMegamorphicCacheFills(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -93,6 +93,7 @@ func TestJITCellsClosed(t *testing.T) {
 // marks (mir's cellsCloseMarking), every register native code may keep
 // given junk across each store (jit.StoreRefClobber).
 func TestJITCellsClosedMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

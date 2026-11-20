@@ -89,6 +89,7 @@ const dataViewTestWant = `255.254.18.52.52.18.251.255.255.255.63.192.0.0.3.0 255
 // a frame where nothing they do runs script or throws: each answer is
 // Node's, and an immutable buffer's setters still throw.
 func TestDataViewLeaves(t *testing.T) {
+	t.Parallel()
 	{
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, dataViewTestSrc))

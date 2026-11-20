@@ -363,6 +363,7 @@ func TestJITBackgroundSnapshotMiss(t *testing.T) {
 // through a link let go with its code had made every call of the callee
 // through Go.
 func TestJITBackgroundStaleLink(t *testing.T) {
+	t.Parallel()
 	r := jitBackgroundForTest(t, 1)
 	if _, err := r.Run(compileForTest(t, `function half(x) { return x / 2 }
 		function loop(n) { let s = 0; for (let i = 0; i < n; i++) s += half(i); return s }`)); err != nil {
@@ -424,6 +425,7 @@ func jitBackgroundRuntime(t *testing.T) *Runtime {
 // runtime having as many in the background as it may (jitRegCompile,
 // jobsFull).
 func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

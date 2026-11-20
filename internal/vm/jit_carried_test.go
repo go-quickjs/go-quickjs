@@ -73,6 +73,7 @@ func regCodeNamed(t *testing.T, r *Runtime, name string) *jitRegEntry {
 // whatever entries the function's code has. Asked only of code with a loop
 // entry (jitRegLeaveTo), it had every call finish in the interpreter.
 func TestJITRegCarriedExitsGoOn(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -114,6 +115,7 @@ func TestJITRegCarriedExitsGoOn(t *testing.T) {
 // exit's objects and a run of the code kept, for the few turns before it
 // left.
 func TestJITRegCarriedFramesLeave(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -201,6 +203,7 @@ func regKeptStart(t *testing.T, rts [2]*Runtime) *jitRegEntry {
 // again only to give up the entry is judged by all it did. Exact answers,
 // idle and marking.
 func TestJITRegKeptEntryGoes(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -292,6 +295,7 @@ func TestJITRegKeptEntryStaysForCallsThatLeave(t *testing.T) {
 // the rest of every call ran in the interpreter, and the loop's entry was
 // never learned back for the frames that leave (jitRegFramesLeave).
 func TestJITRegGoOnJudgedAsRun(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

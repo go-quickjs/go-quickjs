@@ -13,6 +13,7 @@ import (
 // from holes and lengths to elements, prototypes and errors; and the
 // check's own answers.
 func TestArrayConstructionLeaf(t *testing.T) {
+	t.Parallel()
 	const src = `'use strict'
 		function show(a) { return Array.isArray(a) + ':' + a.length + ':' + Object.keys(a).join('.') + ':' + Array.from(a, (v) => v === undefined ? 'u' : String(v)).join('.') + ':' + (Object.getPrototypeOf(a) === Array.prototype) }
 		function err(f) { try { f(); return 'none' } catch (e) { return e.constructor.name } }

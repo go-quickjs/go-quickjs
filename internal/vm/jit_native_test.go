@@ -96,6 +96,7 @@ func regNativeShow(r *Runtime, v Value, err error) string {
 // register instruction whole, its deoptimizations have runReg go on, and
 // a deoptimized function is compiled again at its next call.
 func TestJITRegNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -67,6 +67,7 @@ func TestJITCellsFromPools(t *testing.T) {
 // What TestJITCellsFromPools runs while the collector marks: Go makes the
 // cells, and each answer is still the interpreter's.
 func TestJITCellsFromPoolsMarking(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

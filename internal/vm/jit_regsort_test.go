@@ -22,6 +22,7 @@ import (
 // nor leave their code, nor have Go finish or restart them, and those by
 // any other comparator, or of a BigInt64Array, are Go's.
 func TestJITRegSortNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -145,6 +146,7 @@ func testJITRegSortNative(t *testing.T) {
 // (jitRegLoopFinish):
 // every answer is still the interpreter's.
 func TestJITRegSortRestarts(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

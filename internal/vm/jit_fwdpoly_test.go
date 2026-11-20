@@ -27,6 +27,7 @@ function poly(n) { var s = 0; for (var j = 0; j < n; j++) s += fs[j & 3](j, 3); 
 // in four. Exact answers, idle and marking; once warm, no guard fails and
 // no forward is a call of Go.
 func TestJITRegForwardPolySettles(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

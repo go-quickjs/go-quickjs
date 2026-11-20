@@ -117,6 +117,7 @@ func TestJITFlushesUnusedCode(t *testing.T) {
 // looks; nor an entry with no code -- a function the JIT refuses, w, whose
 // uses are not counted, and which runs all the same.
 func TestJITFlushKeepsCodeInUse(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -161,6 +162,7 @@ func TestJITFlushKeepsCodeInUse(t *testing.T) {
 // one kept there, its entry gone, kept what it had learned and compiled
 // for alive with it, through a callee whose own code stayed in use.
 func TestJITDroppedCallerLeavesCallees(t *testing.T) {
+	t.Parallel()
 	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -209,6 +211,7 @@ func TestJITDroppedCallerLeavesCallees(t *testing.T) {
 // caller's code compiled again learns from. g is recorded as inlined in
 // f's code here, as a compile of f that inlines it records it.
 func TestJITFlushKeepsInlinedCallees(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -251,6 +254,7 @@ func TestJITFlushKeepsInlinedCallees(t *testing.T) {
 // within a call. TestJITBigInt64, its collector running in a loop, had
 // found squares, which all calls once a call, flushed between its calls.
 func TestJITFlushByTimeNotCollections(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

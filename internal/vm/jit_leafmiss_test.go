@@ -5,6 +5,7 @@ package vm
 import "testing"
 
 func TestJITRegLeafMiss(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, nativeLeafMissSource, []regWrongCase{
 		{"leafMisses", []float64{100}, 3, "4950"},
 	})
@@ -15,6 +16,7 @@ func TestJITRegLeafMiss(t *testing.T) {
 // other: the miss has the handler make it again, which counts it again,
 // and takes back the first count, which had doubled the site's frequency.
 func TestJITRegLeafMissCountedOnce(t *testing.T) {
+	t.Parallel()
 	prog := compileForTest(t, nativeLeafMissSource)
 	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(r.Close)

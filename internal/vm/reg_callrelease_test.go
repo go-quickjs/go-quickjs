@@ -143,6 +143,7 @@ func TestRegCallFeedbackOutlivesTurn(t *testing.T) {
 // thousand scripts one a turn spent three quarters of its time there,
 // each turn's end longer than the last until the collector came.
 func TestRegCallsReleaseTheTurnsOwn(t *testing.T) {
+	t.Parallel()
 	setup := compileForTest(t, `function f() { return 1; }`)
 	scripts := make([]*bytecode.Function, 1000)
 	for i := range scripts {

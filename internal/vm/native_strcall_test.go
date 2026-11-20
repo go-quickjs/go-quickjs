@@ -11,6 +11,7 @@ import (
 // The saved string calls answer alike natively and by the Go table, with
 // the collector idle and while it marks.
 func TestRegNativeSavedStringCalls(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			nativeMarking(t, marking)
@@ -146,6 +147,7 @@ func TestRegNativeStrIntrinsicOverride(t *testing.T) {
 // codePointAt, at and charAt answer alike natively and by the Go table,
 // with the collector idle and while it marks.
 func TestRegNativeStringUnitCalls(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			nativeMarking(t, marking)

@@ -125,6 +125,7 @@ const sortSetup = `
 // engine's, Node's; and the sorts of numbers neither leave their code nor
 // have Go finish or restart them.
 func TestJITSortNative(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -199,6 +200,7 @@ func testJITSortNative(t *testing.T, built *jitBuiltForTest) {
 // deopt) -- has Go sort the array again from the first, as it was
 // (jitRegLoopFinish): every answer is still the interpreter's.
 func TestJITSortRestarts(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

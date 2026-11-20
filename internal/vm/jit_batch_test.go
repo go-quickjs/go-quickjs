@@ -122,6 +122,7 @@ function constructs(n) {
 // marking, calls of Go clobbering what they may, with inlining and
 // without: the answers equal, and no compile refused for a panic.
 func TestJITRegBatch(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -230,6 +231,7 @@ function callsGo(n) { var s = 0; for (var i = 0; i < n; i++) s += str(i % 3 ? { 
 // equal. The objects in the inlined callee's window had been left unmade:
 // it read a property of undefined.
 func TestJITRegUnmadeInInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

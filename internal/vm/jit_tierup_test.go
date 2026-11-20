@@ -954,6 +954,7 @@ const megaGetterSrc = `var data={hit:7}, getter={get hit(){if(this.p0===-1)throw
 // -- the getter's this, and the exception one receiver's getter throws,
 // with its stack -- are the interpreter's.
 func TestJITMegamorphicGetterNotInlined(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1000,6 +1001,7 @@ func TestJITMegamorphicGetterNotInlined(t *testing.T) {
 // getter, and the answers -- the getter's this, and the exception one
 // receiver's getter throws, with its stack -- are the interpreter's.
 func TestJITMegamorphicAccessorReadsByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -1063,6 +1065,7 @@ func TestJITMegamorphicAccessorReadsByGo(t *testing.T) {
 // table and the native handlers, marking and not, drive never leaves,
 // each answer the interpreter's.
 func TestJITMegamorphicInlinedReadsByGo(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

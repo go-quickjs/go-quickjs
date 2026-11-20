@@ -62,6 +62,7 @@ function reenters(n, m) { var s = ""; for (var i = 0; i < m; i++) s += downRe(n,
 // levels' code, compiled again while they wait, is not let go from under
 // them. The collector idle and marking.
 func TestJITRegGoCallDepth(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

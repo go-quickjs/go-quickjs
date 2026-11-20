@@ -31,6 +31,7 @@ function drive(m) { let t = 0; for (let k = 0; k < m; k++) t += caller(k); retur
 // (jitRegFeedback.Frequency): 4 calls a run of one site, 0.5 of the
 // other.
 func TestJITRegFrequency(t *testing.T) {
+	t.Parallel()
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

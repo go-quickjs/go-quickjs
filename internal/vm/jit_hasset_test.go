@@ -87,6 +87,7 @@ function prop_in_keyed(n)
 // the string's pointer, ever answers.) Twenty such keys of one layout:
 // none called Go once each had been asked.
 func TestJITInRopeKeys(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -140,6 +141,7 @@ function inRopes(n) { var s = 0; for (var j = 0; j < n; j++) if (keys[j % 20] in
 // of the set takes the newest place, and the oldest of the four -- the
 // first noted -- leaves.
 func TestJITHasCacheFourWays(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

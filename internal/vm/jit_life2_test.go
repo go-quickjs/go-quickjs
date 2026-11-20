@@ -30,6 +30,7 @@ func regBothMarking(t *testing.T, f func(t *testing.T)) {
 // work: AWFY's Havlak, whose depth-first search recurses past the contexts,
 // finished 2.7 million runs so, each judged against its code.
 func TestJITRegNoContextDeclines(t *testing.T) {
+	t.Parallel()
 	const src = `
 function leaf(o) { return o.v + 1 }
 function rec(d, o) { if (d == 0) return 0; var s = leaf(o); return s + rec(d - 1, o) }
@@ -89,6 +90,7 @@ func regBothMarkingNative(t *testing.T, f func(t *testing.T)) {
 // that between two samples was compiled at its second or third sample, or
 // never.
 func TestJITRegCountedTierUp(t *testing.T) {
+	t.Parallel()
 	const src = `
 function f(o) { return o[0] + o[1] }
 var o = [1, 2];
@@ -176,6 +178,7 @@ function g(n) { var o = [1], s = 0; for (var i = 0; i < n; i++) s += f(o, i); re
 // judgement was made and its result dropped: the loop ran its calls of Go
 // natively to its end.
 func TestJITRegLoopOfGoCallsLeaves(t *testing.T) {
+	t.Parallel()
 	const src = `
 function f(n) { var s = 0; for (var i = 0; i < n; i++) s += JSON.stringify(i & 7).length; return s }
 `
@@ -248,6 +251,7 @@ function f(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * 2 + 1;
 // once: AWFY-like generator_delegate's 400,000 resumptions each an entry
 // and an exit.
 func TestJITRegSlowResumptionsSkip(t *testing.T) {
+	t.Parallel()
 	const src = `
 function* count(n) { for (var i = 0; i < n; i++) yield i }
 function* delegate(n) { yield* count(n) }

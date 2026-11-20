@@ -39,6 +39,7 @@ const elemAppendSetup = `
 // was filled with. Each answer is the interpreter's, and fill, the array
 // grown from none, calls Go only to grow its storage.
 func TestJITElemStoreAppends(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

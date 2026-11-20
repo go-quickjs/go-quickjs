@@ -87,6 +87,7 @@ func TestJITRegLoopsOneHeader(t *testing.T) {
 // code with the entry: a long loop called from Go ran in the interpreter
 // to its end, every call.
 func TestJITRegLoopEntryUnmade(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -223,6 +224,7 @@ function driveDo(n, m) { var t = 0; for (var j = 0; j < n; j++) t += doLoop(m, 5
 // it, which read the home's word left in the register as the object -- a
 // null, and s.add(d) threw. Exact answers, idle and marking.
 func TestJITRegPollMakesObjects(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -103,6 +103,7 @@ const superAgainSrc = `'use strict'
 const superAgainWant = "A1:B:true:x | A2:B:true:x | ReferenceError | B x=1 same=true keys=x | F#p | F.n | F#p | F.n | ReferenceError | G n=true p=true | R | R | ReferenceError | S same=true | A5:T:true:x | A5:T:true:x | ReferenceError | T x=5 | A3:N:true:x | A4:N:true:x | ReferenceError | N x=3 | ReferenceError | Arr 2,7,true | TypeError in parent | W y=1 || same true"
 
 func TestSecondSuperMakesItsOwnObject(t *testing.T) {
+	t.Parallel()
 	{
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, superAgainSrc))

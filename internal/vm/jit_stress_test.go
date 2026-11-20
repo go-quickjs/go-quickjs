@@ -41,6 +41,7 @@ func regStressForTest(r *Runtime, c jitStressConfig) {
 //     its closures, run by another, whose template of get the frame's
 //     closure does not hold (jitRegMadeIn's panic).
 func TestJITRegStressAgrees(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

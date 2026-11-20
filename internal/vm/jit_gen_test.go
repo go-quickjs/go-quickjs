@@ -220,6 +220,7 @@ function pairs(n) {
 // Gens, mir's windowGenEntry and windowYieldExit) -- pinned, equal without
 // the JIT, the collector idle and marking.
 func TestJITRegGenSteps(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -291,6 +292,7 @@ func TestJITRegGenSteps(t *testing.T) {
 // sample -- so that every back edge of forOf's spent its budget for
 // nothing, and forOf, sampled never, was never compiled.
 func TestJITRegGenConsumerSampled(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

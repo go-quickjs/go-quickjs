@@ -353,6 +353,7 @@ func TestJITDroppedRealmsAreCollected(t *testing.T) {
 // with code, while another's go: warming, an entry's uses are not counted,
 // and what it is compiled for needs the invocations it has.
 func TestJITFlushKeepsTheRunningRealm(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

@@ -9,6 +9,7 @@ import "testing"
 // used as an ordinary key keeps its own property, and another runtime's
 // table interns the same symbol to an atom of its own.
 func TestPrivateNamesKeepTheirAtoms(t *testing.T) {
+	t.Parallel()
 	const src = `
 		function make() {
 			return class { #n = 1; get() { return this.#n } set(v) { this.#n = v; return this.#n } static has(o) { return #n in o } }

@@ -234,6 +234,7 @@ function main(n) { return protoNull(n) + ";" + protoObj(n) + ";" + method(n) + "
 // whose literals' members -- getters and setters among them -- are calls
 // of Go, not host exits.
 func TestJITRegCellsWhole(t *testing.T) {
+	t.Parallel()
 	regWrongCheck(t, regCellsWholeSrc, []regWrongCase{
 		{"protoNull", []float64{300}, 2, "179400:299:150"},
 		{"protoNull", []float64{7}, 0, "84:6:3"},

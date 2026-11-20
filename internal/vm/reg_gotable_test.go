@@ -32,6 +32,7 @@ func regGlobalFn(t *testing.T, r *Runtime, name string) Value {
 // it (pureMiss), rather than callDirect's at each call, which tried the
 // evaluator and then entered a frame. Its answers are the same.
 func TestRegGoTableLeafCallbackKept(t *testing.T) {
+	t.Parallel()
 	src := `
 		var f = (acc, x) => acc + x
 		var a = new BigInt64Array(10)

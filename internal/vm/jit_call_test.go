@@ -93,6 +93,7 @@ function stacks(n) { var s = 0; for (var i = 0; i < n; i++) s += midStack(i); re
 // answers: native calls made, their callees' exits finished by Go and their
 // callers gone on natively, the collector seen idle and marking.
 func TestJITRegNativeCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -169,6 +170,7 @@ function getter() { var e = RegExp.prototype.exec; Object.defineProperty(RegExp.
 // TestJITRegExpLiteralCalls runs regLitSrc's lits natively and as ordinary
 // calls and compares them: Go makes no regexp_lit whole at host exits.
 func TestJITRegExpLiteralCalls(t *testing.T) {
+	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

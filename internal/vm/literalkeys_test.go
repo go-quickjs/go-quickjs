@@ -25,6 +25,7 @@ func shapeOfNew(t *testing.T, r *Runtime, src string) *shape {
 // any function, a closure made anew or two of one function's sites, and
 // one of their own for other keys.
 func TestRegLiteralKeysShareALayout(t *testing.T) {
+	t.Parallel()
 	for _, native := range []bool{false, true} {
 		r := newTestRuntime(t, nativeConfig(native))
 		want := shapeOfNew(t, r, `(function () { return {a: 1, b: 2} })()`)
