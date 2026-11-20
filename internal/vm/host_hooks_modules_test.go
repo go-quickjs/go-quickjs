@@ -136,3 +136,58 @@ func TestHostOpaqueJSON(t *testing.T) {
 		t.Errorf("got %s, want %s", got, want)
 	}
 }
+
+// TestHostSourceReexport pins that a module source imported and exported
+// again is the host module's source wherever it is reached: a named import
+// of the re-export, a namespace's property, and two star exports of it,
+// which agree on the one binding rather than conflicting; and that
+// re-exporting a JavaScript module's source fails to link with a
+// SyntaxError, which a JavaScript module has no source to give.
+func TestHostSourceReexport(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	r := hostaccess.VM(rt)
+	files := map[string]string{
+		"/kind.fake": "FAKE",
+		"/left.mjs":  `import source s from "./kind.fake"; export { s };`,
+		"/right.mjs": `import source s from "./kind.fake"; export { s as s };`,
+		"/both.mjs":  `export * from "./left.mjs"; export * from "./right.mjs";`,
+		"/plain.mjs": `export default 1;`,
+		"/bad.mjs":   `import source s from "./plain.mjs"; export { s };`,
+	}
+	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		name := "/" + strings.TrimPrefix(specifier, "./")
+		return files[name], name, nil
+	})
+	sourceProto := r.NewPlainObject()
+	vm.HostSetModuleCompiler(r, func(name, source string) (*vm.Module, bool, error) {
+		if source != "FAKE" {
+			return nil, false, nil
+		}
+		return vm.HostDefineModule(r, vm.HostModule{
+			Name:     name,
+			Source:   vm.Obj(vm.HostObject(sourceProto, fakeSource{})),
+			Evaluate: func([]*vm.Object) ([]vm.Value, error) { return nil, nil },
+		}), true, nil
+	})
+	ns, err := rt.EvalModule("/main.mjs", `
+		import source direct from "./kind.fake";
+		import { s } from "./left.mjs";
+		import { s as fromBoth } from "./both.mjs";
+		import * as left from "./left.mjs";
+		import * as both from "./both.mjs";
+		export const got = [s === direct, fromBoth === direct, left.s === direct,
+			both.s === direct, Object.keys(both).join()].join(" | ");
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ns.Get("got")
+	if want := "true | true | true | true | s"; got.String() != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	_, err = rt.EvalModule("/main2.mjs", `import { s } from "./bad.mjs";`)
+	if err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+		t.Errorf("re-exported JavaScript source: %v, want a SyntaxError", err)
+	}
+}

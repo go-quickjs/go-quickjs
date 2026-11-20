@@ -99,6 +99,9 @@ func (r *Runtime) resolveExport(m *Module, name string,
 				if err != nil {
 					return nil, err
 				}
+				if _, source := bytecode.SplitSourceRequest(imp.specifier); source {
+					return &exportBinding{module: src, local: moduleSourceBinding}, nil
+				}
 				if imp.namespace {
 					local := nsBindingName
 					if _, deferred := bytecode.SplitDeferRequest(imp.specifier); deferred {

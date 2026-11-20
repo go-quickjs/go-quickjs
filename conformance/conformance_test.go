@@ -75,11 +75,10 @@ const (
 
 // unsupportedFeatures lists the test262 feature tags for things this engine
 // does not implement. A test tagged with one is skipped rather than counted as
-// a failure, except for source-import syntax tests that need no module source.
+// a failure.
 var unsupportedFeatures = map[string]string{
-	"source-phase-imports-module-source": "test262's <module source> host module is not provided",
-	"decorators":                         "decorators are not implemented",
-	"caller":                             "no legacy caller access",
+	"decorators": "decorators are not implemented",
+	"caller":     "no legacy caller access",
 }
 
 // A newly named difference permits a failure while documenting why; an
@@ -311,12 +310,6 @@ func areaOf(path string) string {
 func runOne(suite *conformance.Suite, tc *conformance.Test,
 	forcedFeatures map[string]bool, jitStats *vm.JITStats) (result, string) {
 	for _, f := range tc.Meta.Features {
-		// These tests check the grammar without needing a successful source
-		// import. The tag also covers tests that need the host's source object.
-		if f == "source-phase-imports-module-source" &&
-			strings.HasPrefix(tc.Path, "language/expressions/dynamic-import/syntax/") {
-			continue
-		}
 		if reason, unsupported := unsupportedFeatures[f]; unsupported &&
 			reason != "" && !forcedFeatures[f] {
 			return resultSkip, reason
@@ -383,6 +376,11 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		return rt.Eval(src)
 	})
 	rt.Set("abstractModuleSource", rt.AbstractModuleSource())
+	if slices.Contains(tc.Meta.Features, "source-phase-imports-module-source") {
+		if err := installModuleSource(rt); err != nil {
+			return resultFail, "could not install <module source>: " + err.Error()
+		}
+	}
 	// IsHTMLDDA stands for document.all. The suite's interpreting guide asks
 	// that a call with nothing or with "" answer null; any other call answers
 	// undefined.
@@ -465,6 +463,9 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	// resolves relative to the test's own directory.
 	dir := path.Dir(tc.Path)
 	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		if specifier == "<module source>" {
+			return "", specifier, nil
+		}
 		base := dir
 		if referrer != "" {
 			base = path.Dir(referrer)
