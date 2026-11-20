@@ -582,10 +582,42 @@ whose arguments are evaluated at once, but wrapped in a closure for
 one such cleanup ran without a collection, which kept the crash above out of
 CI for as long as it was there.
 
+How a test picks a mode: it makes its runtimes in it, never sets a
+package variable, which every other runtime in the process would see.
+`QJS_NONATIVE`, `QJS_NOTYPED`, `QJS_JIT_STRESS` and the like are the
+process's defaults, read once; a runtime's modes and the JIT's switches
+are fixed when it is made, from `vm.Config`'s unexported `test`
+(`testConfig`, the JIT's `jitTestConfig`). In internal/vm's tests every
+runtime is made by `newTestRuntime(t, cfg)`, which gives it what `cfg`
+says (`cfg.withNative(on)`, `cfg.withTyped(on)`) over what the test has
+set for the rest of it: `nativeForTest`, `typedForTest`, `nativeMarking`,
+`nativeCounting`, and `jitTestSwitch` for the JIT's -- `jitMarkingForTest`,
+the clobber routines, the hooks (`goCallWork`, `ssaOptimized`, `noInline`,
+`codeHook`, ...), mir's options and the cache's clocks. A test's switches
+reach its runtimes and its subtests' and no other test's
+(`TestTestSwitchesAreTheTests`); `jitTestSwitch` also changes the JIT of
+the runtimes the test made before, until it ends. Elsewhere a switch is
+an option of what the test makes: mir's `CompileWith` and
+`CompileAMD64With`, a regexp's `compileOpts`, `compiler.Options`'
+`TypedProto`, an arena's or an assembler's own fields. Tools
+(internal/cmd) set the process's defaults for their runs (`JITCodeHook`,
+`JITCompileRepeat`, `JITHoldClocks`, `mir.Timing`, `jit.LayoutSeed`).
+`TestNoTestSetsAProcessSwitch` (the root package) fails where a test
+assigns a package variable of the module's code outside an `init`; its
+allowlist says why for each it still lets a test set.
+
+What still keeps a test from running in parallel is what is the
+process's by nature: the collector's percent (`debug.SetGCPercent`,
+which `nativeCounting`, `jitCollectorHeldForTest` and the tests that
+count allocations or exits hold off: another test's restore turns it on
+again), the Go handler tables `runReg`'s loop indexes directly
+(`regTable`, which the operation-mix tests wrap), the write-barrier flag
+and the CPU's features.
+
 Some tests fail when they share the machine with other test processes, and
 such a failure says nothing about the change. A failure is load if the test
 passes alone at the same commit and at the base, and its message is about
-time or about code that is missing, not a wrong answer. There are three
+time or about code that is missing, not a wrong answer. There are two
 kinds:
 
 - Tests that compare elapsed times or have a deadline:
@@ -595,16 +627,11 @@ kinds:
 - Tests that look at the JIT's cache after a run. The time-based flush lets
   code go after about a second of program time without use, which a slow
   build (checkptr, qemu) reaches. The vm tests therefore hold every
-  runtime's JIT clocks by default, per runtime, so that parallel tests keep
-  theirs (`jit_clocks_test.go`). A test about aging or flushing sets the
-  clocks itself (`jitEpochNow`, `jitFlushNow`) or lets its runtime's run
+  runtime's JIT clocks by default, each its own (`jit_clocks_test.go`). A
+  test about aging or flushing sets its runtimes' clocks itself
+  (`jitTestSwitch`'s `epochNow`, `flushNow`) or lets a runtime's run
   (`jitRunClocksForTest`), and says why. `QUICKJS_TEST_FAST_CLOCKS=1` runs
   the clocks it lets run fast.
-- Tests that set a process-wide switch (`jitSSAOptimized`, `mir.Timing`,
-  `JITCompileRepeat`, `regNativeOn`, the clocks). They change what every
-  other runtime in the process does, so a parallel one makes other tests
-  fail at random: `jitSSAOptimized` keeps compiles out of the background.
-  They are never top-level parallel.
 
 Under qemu, a test that runs its own binary as a child
 (`TestStoreRefShades`, `TestRegNativeInDroppedRealm`) fails with
