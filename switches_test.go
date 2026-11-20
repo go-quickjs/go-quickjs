@@ -39,23 +39,22 @@ var testSwitchesAllowed = map[string]string{
 	"internal/bignum.parseSplit":        "the package's own tests, no runtime",
 	"internal/bignum.toomThreshold":     "the package's own tests, no runtime",
 	"internal/parser.maxFoldedString":   "the package's own tests, no runtime",
-	// The WebAssembly engine's switches, which its tests still set: to be
-	// made each instance's and compile's.
-	"wasm/internal/engine.MaxMemory32Pages": "wasm, to convert",
-	"wasm/internal/engine.MaxMemory64Pages": "wasm, to convert",
-	"wasm/internal/engine.jitCodeIDs":       "wasm, to convert",
-	"wasm/internal/engine.jitCountExits":    "wasm, to convert",
-	"wasm/internal/engine.jitEpochForTest":  "wasm, to convert",
-	"wasm/internal/engine.jitLayout":        "wasm, to convert",
-	"wasm/internal/engine.jitStoreRef":      "wasm, to convert",
-	"wasm/internal/engine.jitWriteBarrier":  "wasm, to convert",
-	"wasm/internal/engine.maxRegCode":       "wasm, to convert",
-	"wasm/internal/engine.optWorkerHook":    "wasm, to convert",
-	"wasm/internal/engine.relaxedDotSigned": "wasm, to convert",
-	"wasm/internal/engine.relaxedDotVNNI":   "wasm, to convert",
-	"wasm/internal/engine.relaxedFused":     "wasm, to convert",
-	"wasm/internal/jit.CPU":                 "wasm, to convert",
-	"wasm/internal/jit/opt.Timing":          "wasm, to convert",
+	// The WebAssembly engine's process-wide facts and a measuring host's
+	// setting: the CPU's features, which the relaxed SIMD test sets to run
+	// each one's code, the interpreter's and the JIT's alike; the engine's
+	// memory limits, which the spec differential test lowers for both its
+	// runs; the optimizing tier's phase timing (opt.Timing), which the
+	// corpus test, measuring, sets with no compile in the background; and
+	// the codes' ID counter, which a test takes IDs from as the engine
+	// does. Their tests are not parallel.
+	"wasm/internal/engine.relaxedDotSigned": "the CPU's features",
+	"wasm/internal/engine.relaxedDotVNNI":   "the CPU's features",
+	"wasm/internal/engine.relaxedFused":     "the CPU's features",
+	"wasm/internal/jit.CPU":                 "the CPU's features",
+	"wasm/internal/engine.MaxMemory32Pages": "the engine's memory limit",
+	"wasm/internal/engine.MaxMemory64Pages": "the engine's memory limit",
+	"wasm/internal/jit/opt.Timing":          "a measuring host's setting",
+	"wasm/internal/engine.jitCodeIDs":       "an ID counter, not a switch",
 }
 
 // TestNoTestSetsAProcessSwitch fails where a test assigns a package

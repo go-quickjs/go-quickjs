@@ -9,6 +9,12 @@ const jitBuilt = false
 
 type codeJIT struct{}
 
+// codeJITTest is codeTest's for the JIT: nothing, without one.
+type codeJITTest struct{}
+
+// setTest makes t what a test compiles and runs c with.
+func (c *Code) setTest(t *codeTest) { c.test = t }
+
 type nativeFn struct{}
 
 type jitExec struct{}

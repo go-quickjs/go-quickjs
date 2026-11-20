@@ -487,7 +487,7 @@ func binaryInstance(t testing.TB, b []byte, threshold int) *Instance {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := NewCode(m)
+	code := testCode(t, NewCode(m))
 	if !code.EnableJIT(threshold) {
 		t.Fatal("EnableJIT refused where JITAvailable")
 	}

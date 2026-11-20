@@ -128,7 +128,7 @@ func (cj *codeJIT) inBackground() bool {
 // exits no more meanwhile, and stored again by every later ask, which a
 // call's decrement racing with the store may have undone.
 func (cj *codeJIT) tierUpLater(idx uint32, cd *compiled) {
-	if waitsForRoom(cd) {
+	if cj.waitsForRoom(cd) {
 		// Refused for want of room in this epoch: asked again after as
 		// many calls again.
 		atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
@@ -249,8 +249,8 @@ func (p *optPool) drop(cj *codeJIT) {
 // spot does. A Code collected while the request was queued is not
 // compiled for.
 func (cj *codeJIT) compileInBackground(idx uint32) {
-	if optWorkerHook != nil {
-		optWorkerHook()
+	if t := cj.test; t != nil && t.optWorker != nil {
+		t.optWorker()
 	}
 	c := cj.bg.owner.Value()
 	if c == nil {
@@ -375,12 +375,9 @@ func (cj *codeJIT) placeReady() {
 // epoch. cj.mu is held.
 func (cj *codeJIT) refuseOptRoom(idx uint32, cd *compiled, need int64) {
 	cd.optDone.Store(false)
-	noRoom(cd, true, need)
+	cj.noRoom(cd, true, need)
 	atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
 }
-
-// optWorkerHook, for tests, runs before each compile in the background.
-var optWorkerHook func()
 
 // waitOptBackground waits until no function of the code is queued, being
 // compiled or waiting to be placed in the background, for tests.

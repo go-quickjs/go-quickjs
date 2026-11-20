@@ -22,7 +22,7 @@ func instantiateWAT(t *testing.T, src string) (*Instance, error) {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	return Instantiate(context.Background(), NewCode(m), nil)
+	return Instantiate(context.Background(), testCode(t, NewCode(m)), nil)
 }
 
 // TestCallIndirectNullEntry pins which trap a null table entry gives: a

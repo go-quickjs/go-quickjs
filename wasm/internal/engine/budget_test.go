@@ -24,7 +24,7 @@ func budgetInstance(t *testing.T, src string, b *Budget) (*Instance, error) {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	return InstantiateBudget(context.Background(), NewCode(m), nil, b)
+	return InstantiateBudget(context.Background(), testCode(t, NewCode(m)), nil, b)
 }
 
 func callExport(t *testing.T, inst *Instance, name string, args ...Val) ([]Val, error) {

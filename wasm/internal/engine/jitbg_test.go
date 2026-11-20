@@ -270,8 +270,7 @@ func TestOptBackgroundStress(t *testing.T) {
 func TestOptBackgroundCodeCollected(t *testing.T) {
 	waitOptWorkers()
 	gate := make(chan struct{})
-	optWorkerHook = func() { <-gate }
-	defer func() { optWorkerHook = nil }()
+	codeSwitch(t, func(c *codeTest) { c.optWorker = func() { <-gate } })
 	opened := false
 	defer func() {
 		if !opened {

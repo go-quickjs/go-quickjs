@@ -183,24 +183,13 @@ func TestJITReferences(t *testing.T) {
 func jitMarkingForTest(t *testing.T, clobber bool) {
 	flag := new(uint8)
 	*flag = 1
-	wb, sr := jitWriteBarrier, jitStoreRef
-	jitWriteBarrier = uint64(uintptr(unsafe.Pointer(flag)))
-	if clobber {
-		jitStoreRef = ijit.StoreRefClobber()
-	}
-	t.Cleanup(func() {
-		jitWriteBarrier, jitStoreRef = wb, sr
-		runtime.KeepAlive(flag)
+	codeSwitch(t, func(c *codeTest) {
+		c.jit.writeBarrier = uint64(uintptr(unsafe.Pointer(flag)))
+		if clobber {
+			c.jit.storeRef = ijit.StoreRefClobber()
+		}
 	})
-}
-
-// countExits returns the exits native code takes while f runs.
-func countExits(f func()) int64 {
-	jitCountExits = true
-	defer func() { jitCountExits = false }()
-	before := jitExits.Load()
-	f()
-	return jitExits.Load() - before
+	t.Cleanup(func() { runtime.KeepAlive(flag) })
 }
 
 // Native code does the same work whether the collector marks or not: it
@@ -219,13 +208,13 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 		}{{"", func(t testing.TB, src string) *Instance { return nativeInstance(t, src) }}, {"/opt", optInstance}} {
 			var idle [][]Val
 			var idleErr []error
-			idleExits := countExits(func() { idle, idleErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
+			idleExits := countExits(t, func() { idle, idleErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
 			for _, clobber := range []bool{false, true} {
 				t.Run(mod.name+tier.name+map[bool]string{false: "/marking", true: "/clobbered"}[clobber], func(t *testing.T) {
 					jitMarkingForTest(t, clobber)
 					var got [][]Val
 					var gotErr []error
-					exits := countExits(func() { got, gotErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
+					exits := countExits(t, func() { got, gotErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
 					sameOutcomes(t, "marking", mod.cases(), idle, idleErr, got, gotErr)
 					if exits != idleExits {
 						t.Fatalf("%d exits while marking, %d idle", exits, idleExits)

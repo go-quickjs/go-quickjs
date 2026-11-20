@@ -207,7 +207,7 @@ func testJITBulk(t *testing.T, opt bool) {
 	if !ran(inst, "refs") {
 		t.Fatal("refs has no native code")
 	}
-	if n := countExits(func() {
+	if n := countExits(t, func() {
 		for range 100 {
 			call(t, inst, "copyA", 100, 300, 64)
 			call(t, inst, "copyBA", 100, 300, 64)

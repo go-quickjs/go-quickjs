@@ -35,7 +35,7 @@ func blockChain(t *testing.T, n int) *Code {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	return NewCode(m)
+	return testCode(t, NewCode(m))
 }
 
 // TestBlockChainCompile checks that a chain of nested blocks, run as one

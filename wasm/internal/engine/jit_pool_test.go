@@ -122,14 +122,6 @@ func poolInstance(t testing.TB, threshold int, opt bool) *Instance {
 	return inst
 }
 
-// countAllocExits returns the ExitAllocs native code takes while f runs,
-// and all its exits.
-func countAllocExits(f func()) (alloc, all int64) {
-	a := jitAllocExits.Load()
-	all = countExits(f)
-	return jitAllocExits.Load() - a, all
-}
-
 // Native code makes structs from the engine's pools, in the baseline's code
 // and optimized, idle and with the collector marking: the results are the
 // interpreter's, the pools are filled a few times for many structs, and the
@@ -147,7 +139,7 @@ func TestJITPools(t *testing.T) {
 				inst := poolInstance(t, 0, opt)
 				var got [][]Val
 				var gerr []error
-				alloc, all := countAllocExits(func() { got, gerr = runCases(t, inst, poolCases()) })
+				alloc, all := countAllocExits(t, func() { got, gerr = runCases(t, inst, poolCases()) })
 				sameOutcomes(t, tier, poolCases(), want, werr, got, gerr)
 				if mode == "idle" {
 					idleExits = [2]int64{alloc, all}
@@ -274,7 +266,7 @@ func jitBudgetInstance(t *testing.T, src string, b *Budget, opt bool) *Instance 
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := NewCode(m)
+	code := testCode(t, NewCode(m))
 	code.EnableJIT(0)
 	if opt {
 		code.SetOptThreshold(0)

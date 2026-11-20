@@ -72,11 +72,11 @@ func TestCompileCost(t *testing.T) {
 
 	// Fixed addresses, so that the code is the same from one build to the
 	// next; it is never run.
-	wb, sr, lay := jitWriteBarrier, jitStoreRef, jitLayout
 	fixed := *jitLayout
 	fixed.I31Mark = 0x1_0000_1000
-	jitWriteBarrier, jitStoreRef, jitLayout = 0x1_0000_2000, 0x1_0000_3000, &fixed
-	t.Cleanup(func() { jitWriteBarrier, jitStoreRef, jitLayout = wb, sr, lay })
+	codeSwitch(t, func(c *codeTest) {
+		c.jit.writeBarrier, c.jit.storeRef, c.jit.layout = 0x1_0000_2000, 0x1_0000_3000, &fixed
+	})
 
 	lim := decoder.CoreLimits()
 	var bodyBytes, funcs int
@@ -138,7 +138,7 @@ func TestCompileCost(t *testing.T) {
 	})
 	measure("interp compile", func() {
 		for _, m := range mods {
-			c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+			c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 			for fn, f := range m.Functions {
 				if !f.Imported {
 					c.fns[fn].Store(compileFunction(c, uint32(fn)))
@@ -151,7 +151,7 @@ func TestCompileCost(t *testing.T) {
 	codes := make([]*Code, len(mods))
 	measure("bound frame", func() {
 		for i, m := range mods {
-			c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+			c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 			for fn, f := range m.Functions {
 				if !f.Imported {
 					c.fns[fn].Store(c.boundRecord(uint32(fn)))

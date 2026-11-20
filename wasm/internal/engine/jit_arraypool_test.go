@@ -295,7 +295,7 @@ func TestJITArrayPools(t *testing.T) {
 				inst := arrayPoolInstance(t, 0, opt)
 				var got [][]Val
 				var gerr []error
-				alloc, all := countAllocExits(func() { got, gerr = runCases(t, inst, arrayPoolCases()) })
+				alloc, all := countAllocExits(t, func() { got, gerr = runCases(t, inst, arrayPoolCases()) })
 				sameOutcomes(t, tier, arrayPoolCases(), want, werr, got, gerr)
 				if mode == "idle" {
 					idleExits = [2]int64{alloc, all}
@@ -552,7 +552,7 @@ func TestJITArrayPoolsManyClasses(t *testing.T) {
 		if _, err := refCall(t, inst, "lengths", Val{N: n}); err != nil {
 			t.Fatal(err)
 		}
-		alloc, _ := countAllocExits(func() {
+		alloc, _ := countAllocExits(t, func() {
 			if _, err := refCall(t, inst, "lengths", Val{N: n}); err != nil {
 				t.Fatal(err)
 			}

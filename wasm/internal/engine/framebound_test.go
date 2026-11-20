@@ -22,7 +22,7 @@ import (
 // bound is that frame exactly.
 func checkFrameBounds(t *testing.T, name string, m *module.Module) (funcs, exact int) {
 	t.Helper()
-	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 	for fn, f := range m.Functions {
 		if f.Imported {
 			continue

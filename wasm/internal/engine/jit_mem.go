@@ -223,11 +223,11 @@ func tierOf(opt bool) int {
 // budget, or would not, need bytes if it was made and is known: it runs in
 // the interpreter, and is not compiled again before the next epoch. cj.mu
 // is held.
-func noRoom(cd *compiled, opt bool, need int64) {
+func (cj *codeJIT) noRoom(cd *compiled, opt bool, need int64) {
 	if need > 0 {
 		cd.roomNeed[tierOf(opt)] = need
 	}
-	cd.noRoom.Store(jitEpoch())
+	cd.noRoom.Store(cj.epoch())
 	if opt {
 		countOptRefused(RefuseBudget)
 	} else {
@@ -237,9 +237,17 @@ func noRoom(cd *compiled, opt bool, need int64) {
 
 // waitsForRoom reports whether function cd's compile found no room in this
 // epoch.
-func waitsForRoom(cd *compiled) bool {
+func (cj *codeJIT) waitsForRoom(cd *compiled) bool {
 	r := cd.noRoom.Load()
-	return r != 0 && jitEpoch() <= r
+	return r != 0 && cj.epoch() <= r
+}
+
+// epoch is the JIT's clock (jitEpoch) for the code, or its test's.
+func (cj *codeJIT) epoch() uint64 {
+	if t := cj.test; t != nil && t.epoch != nil {
+		return t.epoch()
+	}
+	return jitEpoch()
 }
 
 // reserve takes need bytes of the budget for a code about to be placed,
@@ -253,7 +261,7 @@ func (cj *codeJIT) reserve(need int64) bool {
 	if b.limit > 0 && need > b.limit {
 		return false
 	}
-	now := jitEpoch()
+	now := cj.epoch()
 	if cj.reclaimedAt != now {
 		cj.reclaimedAt = now
 		cj.reclaim(now, need)

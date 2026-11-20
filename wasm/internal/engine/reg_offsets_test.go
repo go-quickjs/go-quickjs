@@ -71,9 +71,7 @@ func TestRegLargeOffsets(t *testing.T) {
 // a pc holds stops its call with ErrFunctionTooLarge rather than a panic,
 // the limit lowered to reach it.
 func TestRegTooLarge(t *testing.T) {
-	saved := maxRegCode
-	maxRegCode = 20
-	defer func() { maxRegCode = saved }()
+	codeSwitch(t, func(c *codeTest) { c.maxRegCode = 20 })
 	inst := instantiateReg(t, `(module
 	  (func (export "big") (param i32) (result i32)
 	    (local.get 0) (i32.const 1) (i32.add) (i32.const 2) (i32.mul) (i32.const 3) (i32.xor)

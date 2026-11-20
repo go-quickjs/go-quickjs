@@ -102,9 +102,6 @@ const (
 // jitClockStart is when the JIT's clock started.
 var jitClockStart = time.Now()
 
-// jitEpochForTest, where a test sets it, stands in for the JIT's clock.
-var jitEpochForTest func() uint64
-
 // jitClockSteps is the JIT's clock where WASM_JIT_CLOCK, read when the
 // engine starts, is "step", for tests: an epoch passes at each reading, so
 // that every compile that finds its budget full makes a pass that may drop
@@ -117,9 +114,6 @@ var (
 // jitEpoch is the JIT's clock, which ages code: the epochs of jitEpochTime
 // since the engine started, from 1.
 func jitEpoch() uint64 {
-	if jitEpochForTest != nil {
-		return jitEpochForTest()
-	}
 	if jitClockStep {
 		return jitClockSteps.Add(1)
 	}

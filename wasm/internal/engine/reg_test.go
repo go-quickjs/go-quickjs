@@ -29,7 +29,7 @@ func instantiateReg(t *testing.T, src string) *Instance {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	code := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 	inst, err := Instantiate(context.Background(), code, nil)
 	if err != nil {
 		t.Fatal(err)

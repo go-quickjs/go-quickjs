@@ -243,7 +243,7 @@ func TestOptCallIndirect(t *testing.T) {
 	same("mix", 5000)
 	same("fast", 10)
 	same("fast", 100000)
-	if n := countExits(func() { call(t, inst, "fast", 100000) }); n > 100 {
+	if n := countExits(t, func() { call(t, inst, "fast", 100000) }); n > 100 {
 		t.Fatalf("%d exits in 100,000 calls through the table", n)
 	}
 	same("deep", 1000)
@@ -306,7 +306,7 @@ func TestOptBulkMemory(t *testing.T) {
 	same("fill", 0, 0, 0xffffffff)
 	same("copy", size, size, 0)
 	same("fill", size, 1, 0)
-	if n := countExits(func() {
+	if n := countExits(t, func() {
 		for range 1000 {
 			call(t, inst, "both", 100, 300, 64)
 		}

@@ -42,6 +42,32 @@ type Code struct {
 	// rtts are the runtime information of the module's types, by type
 	// index, as Go's work for native code asks for them (typeRTT).
 	rtts atomic.Pointer[[]atomic.Pointer[rtt]]
+	// test is what a test compiles and runs the code with, nil but in a
+	// test's (codeTest).
+	test *codeTest
+}
+
+// codeTest is what a test compiles and runs a Code with in place of the
+// process's, set on the code (and its native code's state) before it
+// runs.
+type codeTest struct {
+	// maxRegCode, if not 0, is the most words a body's register code may
+	// take, in place of maxRegCode.
+	maxRegCode int
+	// epoch, if set, stands in for the JIT's clock (jitEpoch).
+	epoch func() uint64
+	// optWorker, if set, runs before each of the code's compiles in the
+	// background.
+	optWorker func()
+	// counts, if set, counts the exits the code's native code takes.
+	counts *jitExitCounts
+	// jit is the JIT's own (codeJITTest).
+	jit codeJITTest
+}
+
+// jitExitCounts counts native code's exits, and of them its ExitAllocs.
+type jitExitCounts struct {
+	exits, allocs atomic.Int64
 }
 
 // NewCode returns the engine's code of module m.

@@ -32,6 +32,8 @@ var jitCodeIDs atomic.Uint64
 // codeJIT is a Code's native code: its functions' code in an arena of its
 // own, and the link table native calls go through.
 type codeJIT struct {
+	// test is its Code's (codeTest), nil but in a test's.
+	test *codeTest
 	// id tells the code's levels on an exec from others' (codeLevels).
 	id        uint64
 	threshold int32
@@ -247,13 +249,25 @@ var jitWriteBarrier, jitStoreRef = func() (uint64, uint64) {
 // jitAlwaysMarking is a write barrier's flag that is always set.
 var jitAlwaysMarking uint8 = 1
 
-// jitCountExits has jitExits count the exits native code takes, and
-// jitAllocExits its ExitAllocs, for tests.
-var (
-	jitCountExits bool
-	jitExits      atomic.Int64
-	jitAllocExits atomic.Int64
-)
+// setTest makes t what a test compiles and runs c with, its native code's
+// state's too.
+func (c *Code) setTest(t *codeTest) {
+	c.test = t
+	if cj := c.jit.Load(); cj != nil {
+		cj.test = t
+	}
+}
+
+// codeJITTest is codeTest's for the JIT: what a test compiles a Code's
+// native code with in place of the process's.
+type codeJITTest struct {
+	// writeBarrier and storeRef, if not 0, are the write barrier's flag
+	// and store the code is compiled with (jitWriteBarrier, jitStoreRef);
+	// layout, if set, is where the engine's objects keep what it reads
+	// (jitLayout).
+	writeBarrier, storeRef uint64
+	layout                 *wjit.Layout
+}
 
 // jitExec is an exec's native state: the levels entered, and the native
 // return stack they share.
@@ -515,7 +529,7 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	n := max(len(c.Module.Functions), 1)
-	cj := &codeJIT{id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), rframes: make([]uint64, n), counters: make([]int64, n),
+	cj := &codeJIT{test: c.test, id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), rframes: make([]uint64, n), counters: make([]int64, n),
 		fns: make([]*fnJIT, n), tableBytes: tableBytes(n)}
 	cj.joinBudget(NewJITBudget(jitMemEnv))
 	cj.optThreshold.Store(-1)
@@ -562,7 +576,7 @@ func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 		}
 		return nat
 	}
-	if cd.refused.Load() || cd.hot.Add(1) <= cj.threshold || waitsForRoom(cd) {
+	if cd.refused.Load() || cd.hot.Add(1) <= cj.threshold || cj.waitsForRoom(cd) {
 		return nil
 	}
 	nat := cj.compile(c, idx, cd)
@@ -576,12 +590,12 @@ func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
-	if nat := cd.native.Load(); nat != nil || cd.refused.Load() || waitsForRoom(cd) {
+	if nat := cd.native.Load(); nat != nil || cd.refused.Load() || cj.waitsForRoom(cd) {
 		return nat
 	}
 	cj.fns[idx] = cd.fnJIT
 	if !cj.mayFit(c, idx, cd, false) {
-		noRoom(cd, false, 0)
+		cj.noRoom(cd, false, 0)
 		return nil
 	}
 	if cj.optThreshold.Load() == 0 {
@@ -611,7 +625,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	countTime(&jitStats.placeTime, placeStart)
 	switch why {
 	case RefuseBudget:
-		noRoom(cd, false, placedNeed(code.Bytes, recordBytes(code.Loops, code.Handlers)))
+		cj.noRoom(cd, false, placedNeed(code.Bytes, recordBytes(code.Loops, code.Handlers)))
 		return nil
 	case "unplaced":
 		cd.refused.Store(true)
@@ -624,7 +638,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
 	}
-	cd.used.Store(jitEpoch())
+	cd.used.Store(cj.epoch())
 	cd.native.Store(nat)
 	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
@@ -646,7 +660,7 @@ func newNative(pc *placedCode, code *wjit.Code, cd *compiled) *nativeFn {
 func (cj *codeJIT) relink(idx uint32, cd *compiled) {
 	cj.run.RLock()
 	if nat := cd.native.Load(); nat != nil && !nat.place.dropped.Load() {
-		cd.used.Store(jitEpoch())
+		cd.used.Store(cj.epoch())
 		atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(nat.entry))
 	}
 	cj.run.RUnlock()
@@ -669,7 +683,7 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 	if !cj.mayFit(c, idx, cd, true) {
 		// Tried again once it has counted as many calls again.
 		cd.optDone.Store(false)
-		noRoom(cd, true, 0)
+		cj.noRoom(cd, true, 0)
 		return nil
 	}
 	start := time.Now()
@@ -689,7 +703,7 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 	switch why {
 	case RefuseBudget:
 		cd.optDone.Store(false)
-		noRoom(cd, true, placedNeed(code.Bytes, recordBytes(nil, code.Handlers)))
+		cj.noRoom(cd, true, placedNeed(code.Bytes, recordBytes(nil, code.Handlers)))
 		return nil
 	case "unplaced":
 		countOptRefused("unplaced")
@@ -710,7 +724,7 @@ func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, pc *placedCode, code *wj
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
 	}
-	cd.used.Store(jitEpoch())
+	cd.used.Store(cj.epoch())
 	cd.native.Store(nat)
 	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
@@ -838,6 +852,18 @@ func compileNative(c *Code, idx uint32, cd *compiled, counter uint64) (code *wji
 
 // request is the request to compile function idx.
 func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
+	wb, sr, lay := jitWriteBarrier, jitStoreRef, jitLayout
+	if t := c.test; t != nil {
+		if t.jit.writeBarrier != 0 {
+			wb = t.jit.writeBarrier
+		}
+		if t.jit.storeRef != 0 {
+			sr = t.jit.storeRef
+		}
+		if t.jit.layout != nil {
+			lay = t.jit.layout
+		}
+	}
 	return &wjit.Request{
 		Module:         c.Module,
 		Func:           idx,
@@ -848,9 +874,9 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		RefSlotsOf:     func(f uint32) int { _, n := c.calleeFrame(f); return n },
 		FrameLocals:    cd.nlocals,
 		FrameRefLocals: cd.rlocals,
-		WriteBarrier:   jitWriteBarrier,
-		StoreRef:       jitStoreRef,
-		Layout:         jitLayout,
+		WriteBarrier:   wb,
+		StoreRef:       sr,
+		Layout:         lay,
 		CaughtSlot:     cd.caught,
 		TierCounter:    counter,
 		Marks:          jitCode != nil,
@@ -958,7 +984,7 @@ func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 			return 0, false
 		}
 		if nat = cj.compile(code, idx, cd); nat == nil {
-			if waitsForRoom(cd) {
+			if cj.waitsForRoom(cd) {
 				f.osr = max(cj.osrThreshold.Load(), DefaultOSRThreshold)
 			}
 			return 0, false
@@ -1172,10 +1198,10 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		}
 		cj.run.RUnlock()
 		x.poll = int32(ctx.Poll)
-		if jitCountExits {
-			jitExits.Add(1)
+		if t := cj.test; t != nil && t.counts != nil {
+			t.counts.exits.Add(1)
 			if ctx.Exit == wjit.ExitAlloc {
-				jitAllocExits.Add(1)
+				t.counts.allocs.Add(1)
 			}
 		}
 		var next *nativeFn

@@ -47,7 +47,7 @@ func thresholdInstance(t testing.TB, src string, threshold int, imports ...Exter
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := NewCode(m)
+	code := testCode(t, NewCode(m))
 	if !code.EnableJIT(threshold) {
 		t.Fatal("EnableJIT refused where JITAvailable")
 	}
@@ -520,7 +520,7 @@ func TestTailCallsPoll(t *testing.T) {
 		if derr != nil {
 			t.Fatal(derr)
 		}
-		code := NewCode(m)
+		code := testCode(t, NewCode(m))
 		if native && !code.EnableJIT(0) {
 			continue
 		}

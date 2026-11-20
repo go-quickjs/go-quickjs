@@ -163,7 +163,7 @@ func TestRelaxedMatchesNode(t *testing.T) {
 	if derr := decoder.ValidateFunctions(m, lim); derr != nil {
 		t.Fatal(derr)
 	}
-	inst, err := Instantiate(context.Background(), NewCode(m), nil)
+	inst, err := Instantiate(context.Background(), testCode(t, NewCode(m)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

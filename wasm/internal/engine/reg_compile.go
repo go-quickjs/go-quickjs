@@ -46,7 +46,7 @@ const regTooLarge = "register code past what a pc holds"
 // maxRegCode is the most words a body's register code may take: a pc is a
 // positive int32, and its words after it stay below that too. A test lowers
 // it to reach the bail.
-var maxRegCode = 1<<31 - 1<<16
+const maxRegCode = 1<<31 - 1<<16
 
 // rentry is an entry of the symbolic operand stack.
 type rentry struct {
@@ -123,7 +123,10 @@ type regCompiler struct {
 	code *Code
 	m    *module.Module
 	fn   uint32
-	r    reader
+	// maxCode is the most words the body's register code may take
+	// (maxRegCode, a test's code's own).
+	maxCode int
+	r       reader
 	// far says every conditional branch's offset is 32 bits; retry that a
 	// 16-bit offset did not reach, and the body is compiled again far.
 	far, retry bool
@@ -159,7 +162,10 @@ type regCompiler struct {
 // did not.
 func regCompile(code *Code, index uint32) (*compiled, string) {
 	for _, far := range [2]bool{false, true} {
-		c := &regCompiler{code: code, m: code.Module, fn: index, far: far, last: -1, farPCs: map[int]bool{}}
+		c := &regCompiler{code: code, m: code.Module, fn: index, far: far, last: -1, farPCs: map[int]bool{}, maxCode: maxRegCode}
+		if t := code.test; t != nil && t.maxRegCode != 0 {
+			c.maxCode = t.maxRegCode
+		}
 		p, why := c.compile()
 		if why != "" || !c.retry {
 			if p != nil && regVerify {
@@ -276,7 +282,7 @@ func (c *regCompiler) emit(op regOp, x uint8, a, b, cc uint64, ext ...uint64) in
 // field holds is emitted behind a far prefix (rFar): its slot fields name
 // the frame's scratch slots, and the prefix the slots they stand for.
 func (c *regCompiler) emitD(op regOp, x uint8, a, b, cc, d uint64, ext ...uint64) int {
-	if len(c.out.code) >= maxRegCode {
+	if len(c.out.code) >= c.maxCode {
 		panic(regBail(regTooLarge))
 	}
 	fields := [4]uint64{a, b, cc, d}

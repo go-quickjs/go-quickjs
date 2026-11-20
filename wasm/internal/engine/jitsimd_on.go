@@ -48,7 +48,7 @@ func (cj *codeJIT) simdExit(c *Code, at uint32, base int) simdExitFn {
 
 func buildSIMDExit(code *Code, at uint32, base int) simdExitFn {
 	m := code.Module
-	c := &regCompiler{code: code, m: m, last: -1, farPCs: map[int]bool{}}
+	c := &regCompiler{code: code, m: m, last: -1, farPCs: map[int]bool{}, maxCode: maxRegCode}
 	c.out.loops = map[int32]uint32{}
 	c.r = reader{b: m.Bytes, pc: int(at)}
 	c.at = at

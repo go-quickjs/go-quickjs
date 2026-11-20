@@ -218,7 +218,7 @@ func testOptRefs(t *testing.T) {
 			t.Fatalf("%s not optimized", name)
 		}
 	}
-	if n := countExits(func() { call(t, inst, "tails", 100000) }); n > 1000 {
+	if n := countExits(t, func() { call(t, inst, "tails", 100000) }); n > 1000 {
 		t.Fatalf("%d exits in 300,000 tail calls", n)
 	}
 }

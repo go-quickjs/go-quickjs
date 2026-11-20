@@ -21,7 +21,7 @@ func benchInstance(tb testing.TB, src string) *Instance {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		tb.Fatal(derr)
 	}
-	inst, err := Instantiate(context.Background(), NewCode(m), nil)
+	inst, err := Instantiate(context.Background(), testCode(tb, NewCode(m)), nil)
 	if err != nil {
 		tb.Fatal(err)
 	}

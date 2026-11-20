@@ -79,7 +79,7 @@ func TestOptCompileCorpus(t *testing.T) {
 		if derr := decoder.ValidateFunctions(m, lim); derr != nil {
 			return
 		}
-		c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+		c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 		for i := range m.Functions {
 			if m.Functions[i].Imported {
 				continue

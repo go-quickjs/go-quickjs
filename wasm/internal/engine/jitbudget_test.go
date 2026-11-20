@@ -38,7 +38,7 @@ func budgetCode(t testing.TB, src string, b *JITBudget) *Code {
 	if derr := decoder.ValidateFunctions(m, decoder.CoreLimits()); derr != nil {
 		t.Fatal(derr)
 	}
-	code := NewCode(m)
+	code := testCode(t, NewCode(m))
 	if !code.EnableJIT(0) {
 		t.Fatal("EnableJIT refused where JITAvailable")
 	}
@@ -66,8 +66,7 @@ func steppingClock(t *testing.T) { slowClock(t, 1) }
 func slowClock(t *testing.T, k uint64) {
 	var n atomic.Uint64
 	n.Store(1000 * k)
-	jitEpochForTest = func() uint64 { return n.Add(1) / k }
-	t.Cleanup(func() { jitEpochForTest = nil })
+	codeSwitch(t, func(c *codeTest) { c.epoch = func() uint64 { return n.Add(1) / k } })
 }
 
 // checkAccounting checks that what the code says it holds is what its
@@ -259,8 +258,7 @@ func TestJITDropsAndRefuses(t *testing.T) {
 
 	// The clock stands still: the first four fit, the rest are refused,
 	// none being old.
-	jitEpochForTest = func() uint64 { return 10 }
-	t.Cleanup(func() { jitEpochForTest = nil })
+	codeSwitch(t, func(c *codeTest) { c.epoch = func() uint64 { return 10 } })
 	before := ReadJITStats()
 	for k := 0; k < n; k++ {
 		res, err := call(t, inst, fmt.Sprintf("f%d", k), 7)

@@ -48,7 +48,7 @@ func TestConcurrentCompiles(t *testing.T) {
 		t.Fatal(derr)
 	}
 	compileAll := func() [][]byte {
-		c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+		c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
 		for fn := range m.Functions {
 			c.fns[fn].Store(compileFunction(c, uint32(fn)))
 		}
@@ -124,7 +124,7 @@ func TestFirstCallsAtOnce(t *testing.T) {
 		t.Fatal(derr)
 	}
 	for round := range 20 {
-		code := NewCode(m)
+		code := testCode(t, NewCode(m))
 		if !code.EnableJIT(0) {
 			t.Fatal("EnableJIT refused where JITAvailable")
 		}

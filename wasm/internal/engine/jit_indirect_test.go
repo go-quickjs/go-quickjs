@@ -180,7 +180,7 @@ func testJITIndirectBaseline(t *testing.T) {
 		same("refpass", 77, i)
 	}
 	same("refpassref", 5)
-	if n := countExits(func() {
+	if n := countExits(t, func() {
 		call(t, inst, "refpass", 3, 10)
 		call(t, inst, "refpassref", 3)
 	}); n > 0 {
@@ -189,20 +189,20 @@ func testJITIndirectBaseline(t *testing.T) {
 	same("mix", 5000)
 	same("fast", 10)
 	same("fast", 100000)
-	if n := countExits(func() { call(t, inst, "fast", 100000) }); n > 100 {
+	if n := countExits(t, func() { call(t, inst, "fast", 100000) }); n > 100 {
 		t.Fatalf("%d exits in 200,000 calls through a table and references", n)
 	}
-	if n := countExits(func() { call(t, inst, "vec", 7) }); n > 0 {
+	if n := countExits(t, func() { call(t, inst, "vec", 7) }); n > 0 {
 		t.Fatalf("%d exits in a call of v128s through a table", n)
 	}
 	same("deep", 1000)
 	same("deep", 1_000_000)
 	same("tdeep", 1_000_000)
 	same("rdeep", 1_000_000)
-	if n := countExits(func() { call(t, inst, "tdeep", 1_000_000) }); n > 1000 {
+	if n := countExits(t, func() { call(t, inst, "tdeep", 1_000_000) }); n > 1000 {
 		t.Fatalf("%d exits in 1,000,000 tail calls through a table", n)
 	}
-	if n := countExits(func() { call(t, inst, "rdeep", 1_000_000) }); n > 1000 {
+	if n := countExits(t, func() { call(t, inst, "rdeep", 1_000_000) }); n > 1000 {
 		t.Fatalf("%d exits in 1,000,000 tail calls through references", n)
 	}
 }
