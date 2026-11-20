@@ -54,6 +54,11 @@ func Compile(source, flags string) (*Regexp, error) {
 
 // CompileFlags compiles a pattern with already-parsed flags.
 func CompileFlags(source string, f Flags) (*Regexp, error) {
+	return compileFlagsWith(source, f, compileOpts{})
+}
+
+// compileFlagsWith is CompileFlags, the forms opts leaves out left out.
+func compileFlagsWith(source string, f Flags, opts compileOpts) (*Regexp, error) {
 	tree, groups, names, err := parse(source, f)
 	if err != nil {
 		return nil, err
@@ -61,7 +66,7 @@ func CompileFlags(source string, f Flags) (*Regexp, error) {
 	return &Regexp{core: &core{
 		source:     source,
 		flags:      f,
-		prog:       compileNode(tree, f),
+		prog:       compileNodeFor(tree, f, false, opts),
 		groupCount: groups,
 		groupNames: names,
 	}}, nil

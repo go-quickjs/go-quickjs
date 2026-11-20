@@ -6,6 +6,16 @@ import (
 	"unicode/utf16"
 )
 
+// compileWith is Compile, the forms of the program o leaves out left out:
+// a test's compile of the program without them, to compare.
+func compileWith(source, flags string, o compileOpts) (*Regexp, error) {
+	f, err := ParseFlags(flags)
+	if err != nil {
+		return nil, &SyntaxError{Msg: err.Error(), Pattern: source}
+	}
+	return compileFlagsWith(source, f, o)
+}
+
 // TestAnchoredStartsAgree pins that a pattern tried only at the start of the
 // subject, because it begins with ^, matches what it does when every position
 // is tried, over code units and over UTF-8, from every start.
@@ -22,13 +32,10 @@ func TestAnchoredStartsAgree(t *testing.T) {
 	}
 	for _, flags := range []string{"", "m", "i", "s", "u", "y", "mu"} {
 		for _, src := range patterns {
-			anchorStarts = true
 			fast, err := Compile(src, flags)
 			fast8, err8 := CompileUTF8(src, flags)
-			anchorStarts = false
-			slow, err2 := Compile(src, flags)
-			slow8, err28 := CompileUTF8(src, flags)
-			anchorStarts = true
+			slow, err2 := compileWith(src, flags, compileOpts{noAnchor: true})
+			slow8, err28 := compileUTF8With(src, flags, compileOpts{noAnchor: true})
 			if err != nil || err2 != nil || err8 != nil || err28 != nil {
 				t.Fatalf("/%s/%s: %v %v %v %v", src, flags, err, err2, err8, err28)
 			}

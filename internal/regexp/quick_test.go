@@ -29,9 +29,7 @@ func TestQuickSplitsAgree(t *testing.T) {
 	}
 	for _, src := range patterns {
 		for _, flags := range []string{"", "i", "u", "iu", "y"} {
-			quickSplits = false
-			want, err := Compile(src, flags)
-			quickSplits = true
+			want, err := compileWith(src, flags, compileOpts{noQuick: true})
 			if err != nil {
 				continue
 			}

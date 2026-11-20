@@ -185,9 +185,6 @@ func first(n node, fold, unicodeFold bool) (f firstUnits, empty, ok bool) {
 	return f, false, false
 }
 
-// anchorStarts turns anchoredStart on; a test turns it off, to compare.
-var anchorStarts = true
-
 // anchoredStart reports whether every match of n begins at the start of the
 // subject: whether every way through it meets a ^ without the m flag before
 // it consumes anything. A search then tries the start alone, where it would

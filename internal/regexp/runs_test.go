@@ -30,9 +30,7 @@ func TestRunsMatchAsCharacters(t *testing.T) {
 	}
 	for _, src := range patterns {
 		for _, flags := range []string{"", "u", "y", "i", "uy"} {
-			compileRuns = false
-			want, err := Compile(src, flags)
-			compileRuns = true
+			want, err := compileWith(src, flags, compileOpts{noRuns: true})
 			if err != nil {
 				continue
 			}

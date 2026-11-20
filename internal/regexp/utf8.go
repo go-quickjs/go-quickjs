@@ -30,6 +30,11 @@ var utf8MatcherPool sync.Pool
 
 // CompileUTF8 compiles a pattern for MatchUTF8Into.
 func CompileUTF8(source, flags string) (*Regexp, error) {
+	return compileUTF8With(source, flags, compileOpts{})
+}
+
+// compileUTF8With is CompileUTF8, the forms opts leaves out left out.
+func compileUTF8With(source, flags string, opts compileOpts) (*Regexp, error) {
 	f, err := ParseFlags(flags)
 	if err != nil {
 		return nil, &SyntaxError{Msg: err.Error(), Pattern: source}
@@ -44,7 +49,7 @@ func CompileUTF8(source, flags string) (*Regexp, error) {
 	return &Regexp{core: &core{
 		source:     source,
 		flags:      f,
-		prog:       compileNodeFor(tree, f, true),
+		prog:       compileNodeFor(tree, f, true, opts),
 		groupCount: groups,
 		groupNames: names,
 		utf8:       true,

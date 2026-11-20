@@ -25,13 +25,10 @@ func TestUnrolledRepeatsAgree(t *testing.T) {
 	}
 	for _, flags := range []string{"", "i", "m", "s", "u", "iu", "y", "v"} {
 		for _, src := range patterns {
-			unrollRepeats = true
 			fast, err := Compile(src, flags)
 			fast8, err8 := CompileUTF8(src, flags)
-			unrollRepeats = false
-			slow, err2 := Compile(src, flags)
-			slow8, err28 := CompileUTF8(src, flags)
-			unrollRepeats = true
+			slow, err2 := compileWith(src, flags, compileOpts{noUnroll: true})
+			slow8, err28 := compileUTF8With(src, flags, compileOpts{noUnroll: true})
 			if err != nil {
 				if err2 == nil || err8 == nil || err28 == nil {
 					t.Fatalf("/%s/%s: an error only one way: %v %v %v %v", src, flags, err, err2, err8, err28)

@@ -164,17 +164,30 @@ type compiler struct {
 	noGreedy bool
 	// runLen is how many items runAt's last run took.
 	runLen int
+	// opts is which of its forms the compile leaves out.
+	opts compileOpts
+}
+
+// compileOpts leaves forms of the program out, which a test turns off to
+// compare the program without them; the zero value, every compile's but a
+// test's, has them all.
+type compileOpts struct {
+	// noAnchor leaves out anchoredStart's anchor; noRuns runAt's runs;
+	// noQuick quickFirst's splits; noGreedy opGreedy; noUnroll a repeat's
+	// iterations written out.
+	noAnchor, noRuns, noQuick, noGreedy, noUnroll bool
 }
 
 func compileNode(n node, flags Flags) *program {
-	return compileNodeFor(n, flags, false)
+	return compileNodeFor(n, flags, false, compileOpts{})
 }
 
-// compileNodeFor is compileNode for the matcher over UTF-8 where utf8 is set.
-func compileNodeFor(n node, flags Flags, utf8 bool) *program {
+// compileNodeFor is compileNode for the matcher over UTF-8 where utf8 is
+// set, the forms opts leaves out left out.
+func compileNodeFor(n node, flags Flags, utf8 bool, opts compileOpts) *program {
 	c := &compiler{prog: &program{
 		unicodeFold: flags&(FlagUnicode|FlagUnicodeSets) != 0,
-	}, flags: flags, noGreedy: utf8}
+	}, flags: flags, noGreedy: utf8, opts: opts}
 	// Slot 0 and 1 hold the whole match's bounds, so group k uses slots 2k and
 	// 2k+1.
 	c.emit(instr{op: opSave, arg: 0})
@@ -182,7 +195,7 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
 	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0, c.prog.unicodeFold)
-	c.prog.anchored = anchorStarts && anchoredStart(n)
+	c.prog.anchored = !opts.noAnchor && anchoredStart(n)
 	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
 		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
 		if !utf8 && flags&FlagIgnoreCase == 0 {
@@ -347,7 +360,7 @@ func (c *compiler) compile(n node) {
 // the pattern's own ends the run: it is a character only where the subject
 // does not pair it.
 func (c *compiler) runAt(items []node) []uint16 {
-	if c.reverse || c.noGreedy || c.flags&FlagIgnoreCase != 0 || !compileRuns {
+	if c.reverse || c.noGreedy || c.flags&FlagIgnoreCase != 0 || c.opts.noRuns {
 		return nil
 	}
 	unicode := c.flags&(FlagUnicode|FlagUnicodeSets) != 0
@@ -373,19 +386,11 @@ func (c *compiler) runAt(items []node) []uint16 {
 	return units
 }
 
-// compileRuns says whether runAt makes runs, which a test turns off to have
-// what the run's characters one by one would match to compare with.
-var compileRuns = true
-
-// quickSplits says whether quickFirst works out a branch's first units,
-// which a test turns off to compare.
-var quickSplits = true
-
 // quickFirst is an opSplit's quick for its first branch n: what n can begin
 // with, kept in firsts, where every way through it begins by consuming a
 // unit, rightwards, and fewer than 2**16 are kept; or 0.
 func (c *compiler) quickFirst(n node) uint16 {
-	if !quickSplits || c.reverse || len(c.prog.firsts) >= 1<<16-1 {
+	if c.opts.noQuick || c.reverse || len(c.prog.firsts) >= 1<<16-1 {
 		return 0
 	}
 	f := firstOf(n, c.flags&FlagIgnoreCase != 0, c.prog.unicodeFold)
@@ -432,8 +437,6 @@ func (c *compiler) compileAlt(t nodeAlt) {
 //
 // The common unbounded forms get a two-instruction loop. A counted form uses a
 // runtime counter rather than being unrolled, so that {0,65535} is small.
-// greedyLoops turns opGreedy on; a test turns it off, to compare.
-var greedyLoops = true
 
 // oneUnit reports whether a node matches exactly one code unit outside unicode
 // mode, and compiles to one instruction that does: a character of the basic
@@ -470,10 +473,6 @@ func asciiOnly(n node) bool {
 	return false
 }
 
-// unrollRepeats turns writing out a repeat's iterations on; a test turns it
-// off, to compare.
-var unrollRepeats = true
-
 // maxUnrolled is the most required iterations of one character written out
 // rather than counted: enough for a date, a time or a UUID's groups, without
 // a pattern like a{1000} growing a thousand instructions.
@@ -492,19 +491,19 @@ func oneCharacter(n node) bool {
 }
 
 func (c *compiler) compileRepeat(t nodeRepeat) {
-	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
+	if !c.opts.noGreedy && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
 		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
 		c.emit(instr{op: opGreedy, arg: t.min})
 		c.compile(t.item)
 		return
 	}
-	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse && !c.noGreedy &&
+	if !c.opts.noGreedy && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse && !c.noGreedy &&
 		c.flags&(FlagUnicode|FlagUnicodeSets) != 0 && oneCharacter(t.item) {
 		c.emit(instr{op: opGreedyRune, arg: t.min})
 		c.compile(t.item)
 		return
 	}
-	if greedyLoops && !t.greedy && t.max < 0 && t.min <= 1 && !c.reverse {
+	if !c.opts.noGreedy && !t.greedy && t.max < 0 && t.min <= 1 && !c.reverse {
 		unicode := c.flags&(FlagUnicode|FlagUnicodeSets) != 0
 		if !unicode && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
 			c.emit(instr{op: opLazy, arg: t.min})
@@ -518,7 +517,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		}
 	}
 
-	if unrollRepeats && t.min > 0 && t.min <= maxUnrolled && oneCharacter(t.item) && (t.min > 1 || t.max >= 0) {
+	if !c.opts.noUnroll && t.min > 0 && t.min <= maxUnrolled && oneCharacter(t.item) && (t.min > 1 || t.max >= 0) {
 		// The required iterations of one character are written out, as RE2
 		// and V8 write them: \d{4} is four \d, with no counter to keep and no
 		// choice point to push for each. What may repeat past them is a
@@ -698,7 +697,7 @@ func (c *compiler) patchSplitAlt(pc int, greedy bool, target int) {
 func (c *compiler) compileLook(t nodeLook) {
 	// A lookaround sets its own direction: a lookbehind inside a lookahead
 	// still matches leftwards, and a lookahead inside a lookbehind rightwards.
-	sub := &compiler{prog: c.prog, flags: c.flags, reverse: t.behind, noGreedy: c.noGreedy}
+	sub := &compiler{prog: c.prog, flags: c.flags, reverse: t.behind, noGreedy: c.noGreedy, opts: c.opts}
 	// The body is compiled into a scratch buffer and then moved, so that its
 	// jump targets are relative to its own start.
 	saved := c.prog.code

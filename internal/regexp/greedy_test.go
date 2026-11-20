@@ -42,11 +42,8 @@ func TestGreedyLoopsAgree(t *testing.T) {
 				// class there.
 				continue
 			}
-			greedyLoops = true
 			fast, err := Compile(src, flags)
-			greedyLoops = false
-			slow, err2 := Compile(src, flags)
-			greedyLoops = true
+			slow, err2 := compileWith(src, flags, compileOpts{noGreedy: true})
 			if err != nil || err2 != nil {
 				t.Fatalf("/%s/%s: %v %v", src, flags, err, err2)
 			}
@@ -67,11 +64,8 @@ func TestGreedyLoopsAgree(t *testing.T) {
 	}
 	for _, flags := range []string{"", "i", "m", "s", "y", "g"} {
 		for _, src := range patterns {
-			greedyLoops = true
 			fast, err := Compile(src, flags)
-			greedyLoops = false
-			slow, err2 := Compile(src, flags)
-			greedyLoops = true
+			slow, err2 := compileWith(src, flags, compileOpts{noGreedy: true})
 			if err != nil || err2 != nil {
 				t.Fatalf("/%s/%s: %v %v", src, flags, err, err2)
 			}
