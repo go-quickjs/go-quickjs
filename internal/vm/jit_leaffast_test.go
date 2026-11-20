@@ -149,15 +149,17 @@ func TestJITLeafFastWhileCollecting(t *testing.T) {
 			jitMarkingForTest(t)
 		}
 		calls := 0
-		jitGoCallWork = func() {
-			if calls++; calls%97 == 0 {
-				runtime.GC()
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%97 == 0 {
+					runtime.GC()
+				}
 			}
-		}
+		})
 		r := jitLeafFastForTest(t)
 		fast := r.jit.leafFast
 		jitLeafFastAgree(t, r)
-		jitGoCallWork = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 		if r.jit.leafFast == fast || calls < 97 {
 			t.Errorf("marking %v: %d leaves' calls through the routine while collections ran, %d calls of Go", marking, r.jit.leafFast-fast, calls)
 		}
@@ -406,11 +408,13 @@ func TestJITMathCallsSaveLive(t *testing.T) {
 			jitMarkingForTest(t)
 		}
 		calls := 0
-		jitGoCallWork = func() {
-			if calls++; calls%113 == 0 {
-				runtime.GC()
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%113 == 0 {
+					runtime.GC()
+				}
 			}
-		}
+		})
 		var rounds []string
 		for range 6 {
 			rounds = append(rounds, "trig(100)", "onlySin(1000)")
@@ -429,7 +433,7 @@ func TestJITMathCallsSaveLive(t *testing.T) {
 				t.Errorf("marking %v: %s = %q, want Node's %q", marking, rd[0], got, rd[1])
 			}
 		}
-		jitGoCallWork = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 		for _, name := range []string{"trig", "onlySin"} {
 			jitNativeForTest(t, r, name)
 		}

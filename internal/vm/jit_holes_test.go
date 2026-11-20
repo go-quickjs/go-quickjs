@@ -64,8 +64,7 @@ func TestJITHoleStores(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	// The collector marking would have Go make calls the count is not
 	// about (TestJITHoleStoresMarking runs the stores so).
 	runtime.GC()

@@ -59,12 +59,11 @@ func TestJITElemStoreAppends(t *testing.T) {
 		t.Fatalf("fill has no native code: %+v, link %+v", v.e, link)
 	}
 	in, calls := link.in, 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	if _, err := r.Run(compileForTest(t, `fillSum(256)`)); err != nil {
 		t.Fatal(err)
 	}
-	jitGoCallWork = nil
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	if link.in == in {
 		t.Fatal("fill was not called natively")
 	}

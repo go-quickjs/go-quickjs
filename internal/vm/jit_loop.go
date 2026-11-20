@@ -279,7 +279,7 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 func (f *jitRegFeedback) callbackInline(x jitInline, site ssa.CallSite, argc int) (ssa.InlineSite, bool) {
 	cl, o := x.cb, x.cbObj
 	byCode := x.byCode || site.ByCode != 0
-	if site.ArrowThis || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || jitNoInline != nil && jitNoInline(cl.fn) ||
+	if site.ArrowThis || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || f.fb.r.jitNoInlined(cl.fn) ||
 		cl.fn.CoerceThis && cl.fn.UsesThis && cl.fn.Kind != bytecode.KindArrow || x.cbLeft {
 		return ssa.InlineSite{}, false
 	}

@@ -47,8 +47,7 @@ function prop_in_keyed(n)
 				t.Fatal(err)
 			}
 			calls := 0
-			jitGoCallWork = func() { calls++ }
-			defer func() { jitGoCallWork = nil }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 			for range 2 {
 				if res := r.RegNativeCall(fn, []Value{Float(32)}, false); res.Err != nil {
 					t.Fatal(res.Err)
@@ -116,8 +115,7 @@ function inRopes(n) { var s = 0; for (var j = 0; j < n; j++) if (keys[j % 20] in
 		t.Fatal(err)
 	}
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	for range 2 {
 		if res := r.RegNativeCall(fn, []Value{Float(40)}, false); res.Err != nil {
 			t.Fatal(res.Err)
@@ -181,8 +179,7 @@ function inSome(ks, n) { var s = 0; for (var j = 0; j < n; j++) if (ks[j % ks.le
 	}
 	fn := global("inSome")
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	run := func(pick string, n int) {
 		t.Helper()
 		if res := r.RegNativeCall(fn, []Value{global(pick), Float(float64(n))}, false); res.Err != nil {

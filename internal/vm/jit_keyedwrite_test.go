@@ -161,8 +161,8 @@ func jitCountGoCalls(t *testing.T, r *Runtime, src string) (Value, int) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
+	defer jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)

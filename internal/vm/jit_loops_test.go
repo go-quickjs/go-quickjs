@@ -45,9 +45,10 @@ func TestJITRegLoopsOneHeader(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			listings := map[string]string{}
-			mir.Annotate = true
-			JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
-			defer func() { JITCodeHook, mir.Annotate = nil, false }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
+			})
 			rts := regNativeRuntimes(t, regLoopSrc)
 			// Compiled as the code asks, not as stress configures it.
 			rts[0].jitStress = jitStressConfig{}
@@ -161,9 +162,10 @@ func TestJITRegCallFrames(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			listings := map[string]string{}
-			mir.Annotate = true
-			JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
-			defer func() { JITCodeHook, mir.Annotate = nil, false }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
+			})
 			rts := regNativeRuntimes(t, regFramesSrc)
 			// Compiled as the code asks, not as stress configures it.
 			rts[0].jitStress = jitStressConfig{}
@@ -299,9 +301,10 @@ func TestJITRegComparisonValues(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			listings := map[string]string{}
-			mir.Annotate = true
-			JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
-			defer func() { JITCodeHook, mir.Annotate = nil, false }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
+			})
 			rts := regNativeRuntimes(t, regCompareSrc)
 			// Compiled as the code asks, not as stress configures it.
 			rts[0].jitStress = jitStressConfig{}
@@ -363,13 +366,14 @@ func TestJITRegLoopObjectsUnmade(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			var last string
-			mir.Annotate = true
-			JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) {
-				if f.Name == "sum" {
-					last = c.Listing
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) {
+					if f.Name == "sum" {
+						last = c.Listing
+					}
 				}
-			}
-			defer func() { JITCodeHook, mir.Annotate = nil, false }()
+			})
 			rts := regNativeRuntimes(t, regAccumulateSrc)
 			// Compiled as the code asks, not as stress configures it: the
 			// listing is the code a run without stress keeps.

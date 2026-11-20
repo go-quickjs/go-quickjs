@@ -173,6 +173,12 @@ func CompileAMD64(f *ssa.Func, enc abi.Encoding) (*Code, error) {
 	return compileAMD64(nil, f, enc, Settings())
 }
 
+// CompileAMD64With is CompileAMD64 with the switches opts, in place of
+// the package's (Settings).
+func CompileAMD64With(f *ssa.Func, enc abi.Encoding, opts Options) (*Code, error) {
+	return compileAMD64(nil, f, enc, opts)
+}
+
 // amd64GPRs and amd64XMMs are the registers amd64's allocator assigns,
 // never changed.
 var (

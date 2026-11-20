@@ -22,18 +22,20 @@ func recordJITCompilesForTest(t *testing.T) {
 	jitCompileLog.Lock()
 	jitCompileLog.seen = map[*Runtime]map[*bytecode.Function]*closure{}
 	jitCompileLog.Unlock()
-	jitCompileNote = func(r *Runtime, cl *closure) {
-		jitCompileLog.Lock()
-		defer jitCompileLog.Unlock()
-		m := jitCompileLog.seen[r]
-		if m == nil {
-			m = map[*bytecode.Function]*closure{}
-			jitCompileLog.seen[r] = m
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.compileNote = func(r *Runtime, cl *closure) {
+			jitCompileLog.Lock()
+			defer jitCompileLog.Unlock()
+			m := jitCompileLog.seen[r]
+			if m == nil {
+				m = map[*bytecode.Function]*closure{}
+				jitCompileLog.seen[r] = m
+			}
+			m[cl.fn] = cl
 		}
-		m[cl.fn] = cl
-	}
+	})
 	t.Cleanup(func() {
-		jitCompileNote = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.compileNote = nil })
 		jitCompileLog.Lock()
 		jitCompileLog.seen = nil
 		jitCompileLog.Unlock()

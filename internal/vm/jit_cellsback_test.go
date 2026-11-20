@@ -56,12 +56,13 @@ func TestJITCellsBack(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; calls%5 == 0 {
-			runtime.GC()
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; calls%5 == 0 {
+				runtime.GC()
+			}
 		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	var rounds []string
 	for i := range 10 {
 		rounds = append(rounds, `drive(30, `+[]string{"-1", "17"}[i/7]+`)`, `kept()`)
@@ -69,7 +70,7 @@ func TestJITCellsBack(t *testing.T) {
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 2, deopt: 3}} {
 		jitAgreesForTestWith(t, c, cellsBackSetup, rounds...)
 	}
-	jitGoCallWork = nil
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	r := jitAgreesForTestWith(t, jitStressConfig{}, cellsBackSetup, rounds[:7]...)
 	for _, name := range []string{"scale", "deep"} {
 		if _, _, unmade, ok := jitCalledForTest(r, name); !ok || unmade == 0 {

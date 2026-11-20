@@ -145,12 +145,11 @@ func TestJITMapAppends(t *testing.T) {
 	}
 	linkIn = func() uint64 { return regLinkInForTest(r, e) }
 	in, calls := linkIn(), 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	if _, err := r.Run(compileForTest(t, `drive(10)`)); err != nil {
 		t.Fatal(err)
 	}
-	jitGoCallWork = nil
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	if n := linkIn() - in; n < 10 {
 		t.Fatalf("mapBig was called natively %d times of 10", n)
 	}

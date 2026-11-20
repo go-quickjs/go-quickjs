@@ -233,20 +233,23 @@ func jitEntryLinkForTest(e *jitEntry) *jitLink {
 // note, by their function, how many objects the code compiled last does
 // not make (ssa.Func's Virtuals): the register form's counterpart of the
 // stack form's entry's ssaVirtuals, which its entries do not keep; each
-// runtime compiles functions of its own. It sets jitSSAOptimized, which
-// every compile reads, and which keeps compiles from the background: a
-// test that calls it does not run in parallel with others, nor ask for
-// compiles in the background meanwhile.
+// runtime compiles functions of its own. It sets the hook of the
+// runtimes the test makes until stop (jitTestConfig's ssaOptimized),
+// which keeps their compiles from the background: a runtime the test
+// makes meanwhile compiles none there.
 func regVirtualsForTest(t *testing.T) (virtuals func(fn *bytecode.Function) int, stop func()) {
 	var mu sync.Mutex
 	noted := map[*bytecode.Function]int{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		mu.Lock()
-		noted[fn] = f.Virtuals
-		mu.Unlock()
-	}
-	stop = func() { jitSSAOptimized = nil }
-	t.Cleanup(stop)
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			mu.Lock()
+			noted[fn] = f.Virtuals
+			mu.Unlock()
+		}
+	})
+	// The runtimes made from then on are made without it; those made
+	// before keep it, as they were made.
+	stop = func() { setTestSwitch(t, func(c *testConfig) { c.jit.ssaOptimized = nil }) }
 	return func(fn *bytecode.Function) int {
 		mu.Lock()
 		defer mu.Unlock()

@@ -201,8 +201,7 @@ func TestJITRegCompileCorpus(t *testing.T) {
 	// each the fastest of the runs -- a clock read around each compile's
 	// phases had read every few hundred microseconds on Windows -- and a
 	// phase's the difference.
-	defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
-	mir.CheckAllocations = false
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.checkAllocations = switchOff })
 	var best [3]time.Duration
 	for run := range runs {
 		for k := range 3 {
@@ -301,7 +300,7 @@ func (r *Runtime) jitRegCorpusCompile(cl *closure, c *regCode, p *ir.Program, ha
 		return "", err
 	}
 	ssa.Optimize(f)
-	mc, err := mir.CompileWith(&w.MIR, f, jitEncoding, mir.Settings())
+	mc, err := mir.CompileWith(&w.MIR, f, r.jit.enc, r.jit.opts)
 	if err != nil || !hashing {
 		return "", err
 	}
@@ -320,7 +319,7 @@ func (r *Runtime) jitRegCorpusPhases(cl *closure, c *regCode, p *ir.Program, pha
 	if phases < 3 {
 		return
 	}
-	mir.CompileWith(&w.MIR, f, jitEncoding, mir.Settings())
+	mir.CompileWith(&w.MIR, f, r.jit.enc, r.jit.opts)
 }
 
 // jitRegCorpusBuild is jitRegBuild's build: the register feedback, and

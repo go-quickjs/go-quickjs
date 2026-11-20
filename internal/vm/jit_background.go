@@ -49,12 +49,13 @@ const (
 // runs once, compiled at once -- and not inside another compile, nor while
 // a host times the compiles (mir.Timing) or repeats them
 // (JITCompileRepeat), which they do on the compiling goroutine, nor while a
-// test looks at each compile's SSA (jitSSAOptimized). A compile there that
+// test looks at each compile's SSA (jitTestConfig's ssaOptimized). A
+// compile there that
 // finds the runtime with as many in the background as it may (jobsFull)
 // waits, asked again at a later check, rather than be made on the spot.
 func (r *Runtime) jitInBackground(fn *bytecode.Function) bool {
 	return (r.jitBackground || r.jitStress.background) && !fn.TopLevel && r.jit != nil && r.jit.compiling == 0 && !r.jit.onSpot &&
-		mir.Timing == nil && JITCompileRepeat == 0 && jitSSAOptimized == nil
+		mir.Timing == nil && r.jitCompileRepeat() == 0 && r.jitTest.ssaOptimized == nil
 }
 
 // jobsFull reports whether the runtime has as many compiles in the

@@ -173,19 +173,20 @@ type jitBuildForTest struct {
 func jitBuildsForTest(t *testing.T) map[*bytecode.Function]jitBuildForTest {
 	t.Helper()
 	builds := map[*bytecode.Function]jitBuildForTest{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		b := jitBuildForTest{inlined: slices.Clone(f.Inlined)}
-		for _, blk := range f.Blocks {
-			for _, v := range blk.Values {
-				for _, c := range v.Calls() {
-					b.push = b.push || c.Push
-					b.pop = b.pop || c.Pop
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			b := jitBuildForTest{inlined: slices.Clone(f.Inlined)}
+			for _, blk := range f.Blocks {
+				for _, v := range blk.Values {
+					for _, c := range v.Calls() {
+						b.push = b.push || c.Push
+						b.pop = b.pop || c.Pop
+					}
 				}
 			}
+			builds[fn] = b
 		}
-		builds[fn] = b
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	})
 	return builds
 }
 

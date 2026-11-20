@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
 // The typed table's call path (reg_typed.go), by its prototype's typed
@@ -77,9 +76,7 @@ func typedRunSrc(t *testing.T, src string, native bool, names ...string) string 
 // typedRunSrcIn is typedRunSrc in a runtime of cfg.
 func typedRunSrcIn(t *testing.T, cfg Config, src string, native bool, names ...string) string {
 	t.Helper()
-	was := compiler.SetTypedProto(names...)
-	fn := compileForTest(t, src)
-	compiler.SetTypedProto(was...)
+	fn := compileTypedForTest(t, src, append([]string{}, names...))
 	r := newTestRuntime(t, cfg.withNative(native))
 	defer r.Close()
 	v, err := r.Run(fn)
@@ -182,9 +179,7 @@ func TestRegTypedProtoInterrupt(t *testing.T) {
 	const forever = `function tfib(k) { return k < 2 ? k : tfib(k - 1) + tfib(k - 2); } tfib(60)`
 	const finite = `String(tfib(20))`
 	for _, native := range []bool{false, true} {
-		was := compiler.SetTypedProto("tfib")
-		fn, fin := compileForTest(t, forever), compileForTest(t, finite)
-		compiler.SetTypedProto(was...)
+		fn, fin := compileTypedForTest(t, forever, []string{"tfib"}), compileTypedForTest(t, finite, []string{"tfib"})
 		r := newTestRuntime(t, nativeConfig(native))
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		r.SetContext(ctx)

@@ -410,16 +410,15 @@ func TestRanges(t *testing.T) {
 func TestLivenessMethods(t *testing.T) {
 	rng := rand.New(rand.NewPCG(13, 17))
 	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
-	defer func() { forceDataflow = false }()
+	dataflow := *cfg
+	dataflow.dataflow = true
 	for iter := 0; iter < 5000; iter++ {
 		f := randomFunc(rng)
-		forceDataflow = false
 		a, err := Allocate(f, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
-		forceDataflow = true
-		b, err := Allocate(f, cfg)
+		b, err := Allocate(f, &dataflow)
 		if err != nil {
 			t.Fatal(err)
 		}

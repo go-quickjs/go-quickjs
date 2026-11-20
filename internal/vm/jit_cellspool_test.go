@@ -34,8 +34,7 @@ func TestJITCellsFromPools(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	rounds := []string{}
 	for range 8 {
 		rounds = append(rounds, `drive(300)`, `bumps(300)`, `fives(50)`, `direct()+mk(5,6)()`)

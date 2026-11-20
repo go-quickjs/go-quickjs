@@ -101,16 +101,17 @@ type jitBuiltForTest struct {
 func jitRecordBuiltForTest(t *testing.T) *jitBuiltForTest {
 	t.Helper()
 	b := &jitBuiltForTest{by: map[*bytecode.Function]jitBuiltFacts{}}
-	prev := jitSSAOptimized
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		b.mu.Lock()
-		b.by[fn] = jitBuiltFacts{inlinedAt: len(f.InlinedAt), inlined: len(f.Inlined), virtuals: f.Virtuals, loops: f.Loops}
-		b.mu.Unlock()
-		if prev != nil {
-			prev(fn, f)
+	prev := jitTestConfigOf(t).ssaOptimized
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			b.mu.Lock()
+			b.by[fn] = jitBuiltFacts{inlinedAt: len(f.InlinedAt), inlined: len(f.Inlined), virtuals: f.Virtuals, loops: f.Loops}
+			b.mu.Unlock()
+			if prev != nil {
+				prev(fn, f)
+			}
 		}
-	}
-	t.Cleanup(func() { jitSSAOptimized = prev })
+	})
 	return b
 }
 

@@ -10,11 +10,19 @@ import (
 
 func compileForTest(t testing.TB, src string) *bytecode.Function {
 	t.Helper()
+	return compileTypedForTest(t, src, nil)
+}
+
+// compileTypedForTest is compileForTest with the functions typed names
+// given typed twins (compiler.Options' TypedProto), or, nil, those
+// QJS_TYPEDPROTO names.
+func compileTypedForTest(t testing.TB, src string, typed []string) *bytecode.Function {
+	t.Helper()
 	prog, err := parser.Parse(src, parser.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fn, err := compiler.Compile(prog, compiler.Options{Source: "test", Text: src})
+	fn, err := compiler.Compile(prog, compiler.Options{Source: "test", Text: src, TypedProto: typed})
 	if err != nil {
 		t.Fatal(err)
 	}

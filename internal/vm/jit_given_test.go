@@ -167,12 +167,13 @@ func TestJITGivenClosuresAllocate(t *testing.T) {
 		t.Errorf("drive(5000): %d allocations", n)
 	}
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; calls%3 == 0 {
-			runtime.GC()
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; calls%3 == 0 {
+				runtime.GC()
+			}
 		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 2, deopt: 3}, givenSetup, givenRounds(true)...)
 	if calls == 0 {
 		t.Error("no call of Go")

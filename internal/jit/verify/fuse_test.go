@@ -134,8 +134,6 @@ func TestMirFusedBranches(t *testing.T) {
 	}
 
 	// The List benchmark's isShorterThan: each test a compare and a jump.
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	checked := 0
 	for i, p := range lowered(t, `function f(x,y){while(y!==null){if(x===null)return true;x=x.next;y=y.next}return false}`) {
 		f, err := ssa.BuildWith(p, globals{})
@@ -144,7 +142,7 @@ func TestMirFusedBranches(t *testing.T) {
 		}
 		regShape(f, p)
 		ssa.Optimize(f)
-		mc, err := mir.CompileAMD64(f, enc)
+		mc, err := mir.CompileAMD64With(f, enc, annotated())
 		if err != nil {
 			t.Fatal(err)
 		}

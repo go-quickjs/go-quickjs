@@ -137,8 +137,8 @@ func jitMarkingRun(t *testing.T, src string, names []string, marking bool) (map[
 		t.Fatal(err)
 	}
 	calls := uint64(0)
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
+	defer jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	work := map[string]jitMarkingWork{}
@@ -187,8 +187,8 @@ func jitMarkingRegRun(t *testing.T, src string, names []string, marking bool) (m
 		t.Fatal(err)
 	}
 	calls := uint64(0)
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
+	defer jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 	work := map[string]jitMarkingWork{}
 	for _, name := range names {
 		fn, err := r.GetProp(Obj(r.Global()), r.Intern(name))

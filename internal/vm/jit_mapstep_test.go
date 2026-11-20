@@ -95,8 +95,7 @@ func TestJITMapStep(t *testing.T) {
 	// each of the 30 turns, against the hundred steps of each.
 	jitNativeForTest(t, r, "sumValues")
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	if _, err := r.Run(compileForTest(t, `sumValues(big, 30)`)); err != nil {
 		t.Fatal(err)
 	}

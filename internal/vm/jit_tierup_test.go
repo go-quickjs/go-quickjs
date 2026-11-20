@@ -926,12 +926,13 @@ func TestJITMegamorphicReadsByGo(t *testing.T) {
 // process-wide hook, which also keeps compiles out of the background, so
 // that a test using it is never parallel.
 func jitLastInlinesForTest(t *testing.T, name string, into *[]uintptr) {
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		if fn.Name == name {
-			*into = slices.Clone(f.Inlined)
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if fn.Name == name {
+				*into = slices.Clone(f.Inlined)
+			}
 		}
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	})
 }
 
 // megaGetterSrc has drive call look at each of twelve receivers, three of

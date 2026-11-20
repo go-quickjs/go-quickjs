@@ -37,8 +37,6 @@ func TestMirBudgetInRegister(t *testing.T) {
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
 		CallGo: 0x72000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	inRegister, inMemory, goCalls, entries := 0, 0, 0, 0
 	for _, src := range append(append([]string(nil), budgetCorpus...), jsCorpus...) {
 		for i, p := range lowered(t, src) {
@@ -48,7 +46,7 @@ func TestMirBudgetInRegister(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
@@ -155,7 +153,7 @@ func TestMirBudgetInRegister(t *testing.T) {
 		}
 		regShape(f, p)
 		ssa.Optimize(f)
-		mc, err := mir.CompileAMD64(f, enc)
+		mc, err := mir.CompileAMD64With(f, enc, annotated())
 		if err != nil {
 			t.Fatalf("walk (%d): %v", i, err)
 		}
@@ -223,8 +221,6 @@ func TestMirLoopExitsOutOfLine(t *testing.T) {
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
 		CallGo: 0x72000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	exits := 0
 	for _, src := range budgetCorpus[:3] {
 		for i, p := range lowered(t, src) {
@@ -234,7 +230,7 @@ func TestMirLoopExitsOutOfLine(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
@@ -290,8 +286,6 @@ func TestMirLoopsAligned(t *testing.T) {
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
 		CallGo: 0x72000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	backs, aligned := 0, 0
 	for _, src := range append(append(append([]string(nil), budgetCorpus...), moveCorpus...), jsCorpus...) {
 		for i, p := range lowered(t, src) {
@@ -301,7 +295,7 @@ func TestMirLoopsAligned(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}

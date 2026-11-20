@@ -304,8 +304,7 @@ func TestJITTypedSiteMeetsAnotherNatively(t *testing.T) {
 		t.Fatalf("put learned element types %#x, compiled again %d times: want Int32's, and compiled for it", kinds, e.reopts)
 	}
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	t.Cleanup(func() { jitGoCallWork = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	for k := range 3 {
 		calls = 0
 		v, err := r.Run(compileForTest(t, `fill(1000)`))

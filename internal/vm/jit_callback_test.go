@@ -276,9 +276,11 @@ func TestJITCallbackNotMade(t *testing.T) {
 		return (float64(many) - float64(few)) / 4000
 	}
 	// The callbacks not inlined: called natively, each closure made.
-	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "" || fn.Name == "addTotal" }
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "" || fn.Name == "addTotal" }
+	})
 	called := jitAgreesForTest(t, setup, rounds...)
-	jitNoInline = nil
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = nil })
 	made := perCall(called)
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"eachArrow", "someArrow", "reduceArrow", "eachFunction", "eachKnown"} {

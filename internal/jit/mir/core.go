@@ -3405,9 +3405,12 @@ func Compile(f *ssa.Func, enc abi.Encoding) (*Code, error) {
 }
 
 // Options are the switches a compile runs with, the package's variables
-// (Annotate, CheckAllocations, TableExits, Timing) as Settings reads them: a host
-// compiling on another goroutine reads them where it prepares the compile,
-// so that what a test or a host sets meanwhile is not read as it changes.
+// (Annotate, CheckAllocations, TableExits, Timing) as Settings reads them,
+// which a host sets for the process: a host compiling on another
+// goroutine reads them where it prepares the compile, so that what it
+// sets meanwhile is not read as it changes. A test passes its own
+// (CompileWith, CompileAMD64With, CompileARM64With) rather than set the
+// package's, which every other compile in the process reads.
 type Options struct {
 	Annotate, CheckAllocations, TableExits bool
 	// Timing is what the compile's phases are timed in (the package's

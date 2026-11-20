@@ -133,11 +133,12 @@ func TestJITSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 	t.Cleanup(func() { debug.SetGCPercent(gc) })
 	inlined := jitInlinedForTest(t)
 	listings, locations := map[string]string{}, map[string]string{}
-	mir.Annotate = true
-	JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) {
-		listings[f.Name], locations[f.Name] = c.Listing, c.Locations()
-	}
-	t.Cleanup(func() { JITCodeHook, mir.Annotate = nil, false })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) {
+			listings[f.Name], locations[f.Name] = c.Listing, c.Locations()
+		}
+	})
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking %v", marking), func(t *testing.T) {
 			if marking {

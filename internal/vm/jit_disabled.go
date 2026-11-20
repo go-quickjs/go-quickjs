@@ -12,6 +12,9 @@ import (
 const jitBuilt = false
 
 type jitFields struct{}
+
+// jitTestConfig is testConfig's for the JIT: nothing, without one.
+type jitTestConfig struct{}
 type jitCodeFields struct{}
 type jitRealmFields struct{}
 

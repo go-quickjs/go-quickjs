@@ -69,12 +69,8 @@ func (r *Runtime) jitTypedView(ctx *abi.Context) bool {
 		return false
 	}
 	r.cacheView(t)
-	if jitTypedViewMade != nil {
-		jitTypedViewMade()
+	if m := r.jitTest.typedViewMade; m != nil {
+		m()
 	}
 	return true
 }
-
-// jitTypedViewMade, if set, is called at each view's copy jitTypedView
-// makes: tests count them.
-var jitTypedViewMade func()

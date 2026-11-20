@@ -13,7 +13,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-// With mir.Annotate set, amd64's code says what each stretch of it was
+// With Annotate set (mir.Options), amd64's code says what each stretch of it was
 // emitted for (mir.Code's Marks), at the offsets the code has once its
 // jumps are shortened: every mark at an instruction's start, in order,
 // within the instructions, and one for every value given code -- what
@@ -23,7 +23,6 @@ func TestMirAnnotated(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000}
-	defer func() { mir.Annotate = false }()
 	n := 0
 	for _, src := range jsCorpus {
 		for i, p := range lowered(t, src) {
@@ -34,16 +33,14 @@ func TestMirAnnotated(t *testing.T) {
 			regShape(f, p)
 			f.CallEntry = true
 			ssa.Optimize(f)
-			mir.Annotate = false
-			plain, err := mir.CompileAMD64(f, enc)
+			plain, err := mir.CompileAMD64With(f, enc, mir.Settings())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
 			if plain.Marks != nil || plain.Listing != "" {
 				t.Fatalf("%s (%d): marks without Annotate", src, i)
 			}
-			mir.Annotate = true
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
@@ -64,6 +61,14 @@ func TestMirAnnotated(t *testing.T) {
 }
 
 // ops is c's instructions' operations, in order.
+// annotated is the package's switches (mir.Settings) with Annotate set,
+// for a test's compiles of its own.
+func annotated() mir.Options {
+	o := mir.Settings()
+	o.Annotate = true
+	return o
+}
+
 func ops(c *mir.Code) string {
 	var out []byte
 	for off := 0; off < c.Text; {

@@ -3,6 +3,7 @@ package regcomp
 import (
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -16,14 +17,37 @@ var reportOn = os.Getenv("QJS_REGREPORT") != ""
 var refused sync.Map // *bytecode.Function -> string
 
 // OnRefuse, where set, is told each refusal as it is made: the refusal
-// inventory's (internal/cmd/regrefusals). Set it before compiling.
+// inventory's (internal/cmd/regrefusals), a tool's. Set it before
+// compiling.
 var OnRefuse func(fn *bytecode.Function, why string)
+
+// refusals counts the refusals the process has made, and refusedLast is
+// the last's function and reason: none where the backend compiles every
+// function, as it does (Refusals).
+var (
+	refusals    atomic.Int64
+	refusedLast atomic.Pointer[string]
+)
+
+// Refusals is how many refusals the process has made, and what the last
+// was, its function's name and why: a test checks none is made while it
+// compiles.
+func Refusals() (int64, string) {
+	last := ""
+	if p := refusedLast.Load(); p != nil {
+		last = *p
+	}
+	return refusals.Load(), last
+}
 
 // Refuse records why fn has no register code, for the report.
 func Refuse(fn *bytecode.Function, why string) {
 	if trace {
 		println("regcomp: not", fn.Name, why)
 	}
+	last := fn.Name + ": " + why
+	refusedLast.Store(&last)
+	refusals.Add(1)
 	if OnRefuse != nil {
 		OnRefuse(fn, why)
 	}

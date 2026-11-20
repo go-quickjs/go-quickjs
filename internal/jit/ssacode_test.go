@@ -10,6 +10,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -27,8 +28,18 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
-// Every compile checks its register allocation (mir.CheckAllocations).
+// Every compile checks its register allocation (mir.CheckAllocations): a
+// setting of the test binary's, made before any test runs.
 func init() { mir.CheckAllocations = true }
+
+// compileAlone compiles f with the switches opts in no workspace, as
+// mir.Compile does with the package's.
+func compileAlone(f *ssa.Func, opts mir.Options) (*mir.Code, error) {
+	if runtime.GOARCH == "arm64" {
+		return mir.CompileARM64With(f, testEncoding, opts)
+	}
+	return mir.CompileAMD64With(f, testEncoding, opts)
+}
 
 // testValue is a VM value's layout: a number word and a pointer word.
 type testValue struct {
@@ -1165,6 +1176,11 @@ type compiled struct {
 // compileNative builds, optimizes and compiles p; it returns nil when the
 // SSA builder does not support p.
 func compileNative(p *ir.Program, l layout) (*compiled, error) {
+	return compileNativeWith(p, l, mir.Settings())
+}
+
+// compileNativeWith is compileNative with the compile's switches opts.
+func compileNativeWith(p *ir.Program, l layout, opts mir.Options) (*compiled, error) {
 	f, err := ssa.BuildWith(p, l)
 	if errors.Is(err, ssa.ErrUnsupported) {
 		return nil, nil
@@ -1184,7 +1200,7 @@ func compileNative(p *ir.Program, l layout) (*compiled, error) {
 		f.Scratch = p.Locals - base
 	}
 	ssa.Optimize(f)
-	mc, err := mir.Compile(f, testEncoding)
+	mc, err := compileAlone(f, opts)
 	if errors.Is(err, mir.ErrUnsupported) && !strings.Contains(err.Error(), "runtime error") {
 		// A refusal, such as more values live at once than there are spill
 		// slots: not compiled, as the builder's refusals are not. A
@@ -1393,7 +1409,13 @@ func minimize(p *ir.Program, l layout, pc int, slots []ir.Value, poll int, heap 
 // the function, its allocation and the program.
 func checkNative(t *testing.T, r *rand.Rand, p *ir.Program, l layout) (ok bool) {
 	t.Helper()
-	c, err := compileNative(p, l)
+	return checkNativeWith(t, r, p, l, mir.Settings())
+}
+
+// checkNativeWith is checkNative of p compiled with the switches opts.
+func checkNativeWith(t *testing.T, r *rand.Rand, p *ir.Program, l layout, opts mir.Options) (ok bool) {
+	t.Helper()
+	c, err := compileNativeWith(p, l, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1441,7 +1463,6 @@ func checkNative(t *testing.T, r *rand.Rand, p *ir.Program, l layout) (ok bool) 
 func TestSSANativeMatchesEvaluator(t *testing.T) {
 	r := rand.New(rand.NewPCG(11, 12))
 	compiled := 0
-	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
 	for attempt := 0; attempt < 100000 && compiled < 2000; attempt++ {
 		p, l := ssaTestProgram(r)
 		if p.Validate() != nil {
@@ -1450,8 +1471,9 @@ func TestSSANativeMatchesEvaluator(t *testing.T) {
 		// Every other program leaves its frames to Go to write (ApplyExit),
 		// the rest write them themselves, records and all, which the
 		// counters count.
-		mir.TableExits = compiled%2 == 1
-		if checkNative(t, r, p, l) {
+		opts := mir.Settings()
+		opts.TableExits = compiled%2 == 1
+		if checkNativeWith(t, r, p, l, opts) {
 			compiled++
 		}
 	}
@@ -1486,6 +1508,7 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 		p *ir.Program
 		l layout
 	}
+	opts := mir.Settings()
 	compile := func(j job) bool {
 		defer ws.Rewind()
 		defer mws.Rewind()
@@ -1495,7 +1518,7 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 		}
 		f.FrameLocals, f.ThisSlot = j.l.frame, j.l.this
 		ssa.Optimize(f)
-		_, err = mir.CompileIn(&mws, f, testEncoding)
+		_, err = mir.CompileWith(&mws, f, testEncoding, opts)
 		return err == nil
 	}
 	var jobs []job
@@ -1509,8 +1532,7 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 		t.Fatalf("only %d programs compiled", len(jobs))
 	}
 	// The allocation check allocates, as the compiles do not.
-	defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
-	mir.CheckAllocations = false
+	opts.CheckAllocations = false
 	allocs := testing.AllocsPerRun(3, func() {
 		for _, j := range jobs {
 			compile(j)
@@ -1613,20 +1635,20 @@ func TestWorkspaceCompilesTheSame(t *testing.T) {
 	var ws ssa.Workspace
 	var mws mir.Workspace
 	n := 0
-	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
 	for attempt := 0; attempt < 20000 && n < 1500; attempt++ {
 		p, l := ssaTestProgram(r)
 		if p.Validate() != nil {
 			continue
 		}
-		mir.TableExits = n%2 == 1
+		opts := mir.Settings()
+		opts.TableExits = n%2 == 1
 		alone, err := ssa.BuildWith(p, l)
 		if err != nil {
 			continue
 		}
 		alone.FrameLocals, alone.ThisSlot = l.frame, l.this
 		ssa.Optimize(alone)
-		want, err := mir.Compile(alone, testEncoding)
+		want, err := compileAlone(alone, opts)
 		if err != nil {
 			continue
 		}
@@ -1636,7 +1658,7 @@ func TestWorkspaceCompilesTheSame(t *testing.T) {
 		}
 		shared.FrameLocals, shared.ThisSlot = l.frame, l.this
 		ssa.Optimize(shared)
-		got, err := mir.CompileIn(&mws, shared, testEncoding)
+		got, err := mir.CompileWith(&mws, shared, testEncoding, opts)
 		if err != nil {
 			t.Fatalf("compiled alone, not in a workspace: %v", err)
 		}

@@ -114,6 +114,9 @@ type Asm struct {
 	// Tables places; tableOrder is their labels in the order made.
 	tables     map[Label][]byte
 	tableOrder []Label
+	// narrow, which a test sets, narrows the branches' reaches by so many
+	// bits.
+	narrow uint
 }
 
 // A pool is looked for once the oldest branch of a queue has come nearDue
@@ -124,16 +127,21 @@ type Asm struct {
 // branches between nearVeneer and nearDue from it, which it puts first:
 // the branch's veneer is at most 3/4 of the reach from it, a quarter left
 // for runs that block a pool, which are a few hundred instructions at
-// most. Variables only for tests, which narrow the reaches to have pools
-// in small code (narrowReach).
-var (
-	nearReach  = 1 << 18
-	nearDue    = nearReach / 2
-	nearVeneer = nearReach / 4
-	farReach   = 1 << 25
-	farDue     = farReach / 2
-	farVeneer  = farReach / 4
+// most. An assembler a test made narrows them by its narrow bits, to have
+// pools in small code (narrowReach).
+const (
+	nearReach = 1 << 18
+	farReach  = 1 << 25
 )
+
+// The assembler's reaches, dues and veneers, near and far: the
+// instructions', narrowed by a test's narrow.
+func (a *Asm) nearReach() int  { return nearReach >> a.narrow }
+func (a *Asm) nearDue() int    { return a.nearReach() / 2 }
+func (a *Asm) nearVeneer() int { return a.nearReach() / 4 }
+func (a *Asm) farReach() int   { return farReach >> a.narrow }
+func (a *Asm) farDue() int     { return a.farReach() / 2 }
+func (a *Asm) farVeneer() int  { return a.farReach() / 4 }
 
 type fixup struct {
 	at    int // instruction index
@@ -204,18 +212,18 @@ func (a *Asm) FinishInto(dst []byte) ([]byte, error) {
 		d := to - f.at
 		switch f.kind {
 		case fixB:
-			if d < -farReach || d >= farReach {
+			if d < -a.farReach() || d >= a.farReach() {
 				return nil, fmt.Errorf("arm64: branch out of range")
 			}
 			a.buf[f.at] |= uint32(d) & (1<<26 - 1)
 		case fixCond:
-			if d < -nearReach || d >= nearReach {
+			if d < -a.nearReach() || d >= a.nearReach() {
 				return nil, fmt.Errorf("arm64: conditional branch out of range")
 			}
 			a.buf[f.at] |= (uint32(d) & (1<<19 - 1)) << 5
 		case fixAdr, fixAdrJump:
 			// d instructions are 4d bytes: immlo is 0, immhi d.
-			if d < -nearReach || d >= nearReach {
+			if d < -a.nearReach() || d >= a.nearReach() {
 				return nil, fmt.Errorf("arm64: address out of range")
 			}
 			a.buf[f.at] |= (uint32(d) & (1<<19 - 1)) << 5
@@ -300,21 +308,21 @@ func (a *Asm) Tables() {
 func (a *Asm) branch(w uint32, l Label, kind int) {
 	if to := a.labels[l]; to >= 0 {
 		d := to - len(a.buf)
-		if kind == fixB && d < -farReach || kind == fixCond && d < -nearReach {
+		if kind == fixB && d < -a.farReach() || kind == fixCond && d < -a.nearReach() {
 			a.farBack(w, l, kind)
 			return
 		}
-		if (kind == fixAdr || kind == fixAdrJump) && d < -nearReach {
+		if (kind == fixAdr || kind == fixAdrJump) && d < -a.nearReach() {
 			a.block()
 			a.farAdr(Reg(w&31), l)
 			a.unblock()
 			return
 		}
 	} else if kind != fixAdr || a.isTable(l) {
-		due := len(a.buf) + farDue
+		due := len(a.buf) + a.farDue()
 		if kind != fixB {
 			a.near = append(a.near, len(a.fixups))
-			due = len(a.buf) + nearDue
+			due = len(a.buf) + a.nearDue()
 		} else {
 			a.far = append(a.far, len(a.fixups))
 		}
@@ -340,7 +348,7 @@ func (a *Asm) farBack(w uint32, l Label, kind int) {
 		}
 		at := len(a.buf)
 		a.emit(inv)
-		if a.labels[l]-len(a.buf) < -farReach {
+		if a.labels[l]-len(a.buf) < -a.farReach() {
 			a.farJump(l)
 		} else {
 			a.fixups = append(a.fixups, fixup{len(a.buf), l, fixB})
@@ -411,11 +419,11 @@ func (a *Asm) pool() {
 		}
 		a.fixups[i].label = v
 	}
-	for a.nearAt < len(a.near) && pos-a.fixups[a.near[a.nearAt]].at >= nearVeneer {
+	for a.nearAt < len(a.near) && pos-a.fixups[a.near[a.nearAt]].at >= a.nearVeneer() {
 		take(a.near[a.nearAt])
 		a.nearAt++
 	}
-	for a.farAt < len(a.far) && pos-a.fixups[a.far[a.farAt]].at >= farVeneer {
+	for a.farAt < len(a.far) && pos-a.fixups[a.far[a.farAt]].at >= a.farVeneer() {
 		take(a.far[a.farAt])
 		a.farAt++
 	}
@@ -430,10 +438,10 @@ func (a *Asm) pool() {
 	}
 	a.due = 0
 	if a.nearAt < len(a.near) {
-		a.due = a.fixups[a.near[a.nearAt]].at + nearDue
+		a.due = a.fixups[a.near[a.nearAt]].at + a.nearDue()
 	}
 	if a.farAt < len(a.far) {
-		if due := a.fixups[a.far[a.farAt]].at + farDue; a.due == 0 || due < a.due {
+		if due := a.fixups[a.far[a.farAt]].at + a.farDue(); a.due == 0 || due < a.due {
 			a.due = due
 		}
 	}

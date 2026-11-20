@@ -419,10 +419,10 @@ func TestJITEscapeHeldMerged(t *testing.T) {
 // is given, which may be an object not made till there: the object made,
 // not a value of what no longer is, the function compiled. Where the
 // construction's own object is not made, its operands need nothing made:
-// its constructor's code holds them. Not parallel: it watches the compiles
-// (jitVirtualsForTest) through jitSSAOptimized, the process's, which keeps
-// every runtime's compiles out of the background meanwhile -- in parallel,
-// it had the background tests' compiles made at once.
+// its constructor's code holds them. It watches the compiles
+// (jitVirtualsForTest) of its runtimes, whose hook keeps their compiles
+// out of the background: where they are to be made there, the runtime is
+// made without it.
 func TestJITEscapeTakeOperand(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

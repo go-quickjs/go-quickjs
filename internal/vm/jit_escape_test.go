@@ -210,12 +210,13 @@ func TestJITEscapeCollector(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; calls%3 == 0 {
-			runtime.GC()
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; calls%3 == 0 {
+				runtime.GC()
+			}
 		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	setup := `
 		var names = ['ab', 'cde', 'f'], boxes = [{ v: 1 }, { v: 2 }, { v: 3 }], odd = 'x'
 		function held(n, at) {

@@ -79,14 +79,14 @@ func TestAsmJITOpsThroughCalls(t *testing.T) {
 	if plain, _ := asmRun(t, src, "asmCalls()", true, false, "asmOpsModule", "iop"); plain != want {
 		t.Fatalf("ordinary code differs from Node:\n%s", firstDiff(plain, want))
 	}
-	was := jitEncoding.Round
-	t.Cleanup(func() { jitEncoding.Round = was })
 	for _, c := range []struct{ stress, marking, noRound bool }{{false, false, false}, {true, false, false}, {false, true, false}, {false, false, true}} {
 		t.Run(fmt.Sprintf("stress=%v/marking=%v/noRound=%v", c.stress, c.marking, c.noRound), func(t *testing.T) {
 			if c.marking {
 				jitMarkingForTest(t)
 			}
-			jitEncoding.Round = was && !c.noRound || runtime.GOARCH == "arm64"
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.round = switchOf(jitEncoding.Round && !c.noRound || runtime.GOARCH == "arm64")
+			})
 			inlined := jitInlinedForTest(t)
 			fn := compileForTest(t, src+"\nasmCalls()")
 			r := jitRuntimeForTest(t, Config{JIT: true})
@@ -129,10 +129,11 @@ func TestAsmJITOpsThroughCalls(t *testing.T) {
 func asmInlinedMostForTest(t *testing.T) map[string]int {
 	t.Helper()
 	got := map[string]int{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		got[fn.Name] = max(got[fn.Name], len(f.Inlined))
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			got[fn.Name] = max(got[fn.Name], len(f.Inlined))
+		}
+	})
 	return got
 }
 

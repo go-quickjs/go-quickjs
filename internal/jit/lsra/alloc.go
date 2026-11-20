@@ -293,7 +293,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	words := (len(globals) + 63) / 64
 	// Each block's sets, words each: live in and live out, and for the
 	// dataflow gen and kill too.
-	once = once && !forceDataflow
+	once = once && !cfg.dataflow
 	stride := 2
 	if !once {
 		stride = 4
@@ -917,10 +917,6 @@ func widthOf(f *Func, v VReg) int32 {
 	}
 	return 1
 }
-
-// forceDataflow has every allocation find liveness by the dataflow, for
-// the tests that compare it with explore.
-var forceDataflow bool
 
 // explore finds each register's liveness by the paths from its uses back
 // to its definition, as Boissinot et al.'s "Computing Liveness Sets for

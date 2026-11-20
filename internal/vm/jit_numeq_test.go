@@ -45,9 +45,10 @@ func TestJITNumberEqualities(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	listings := map[string]string{}
-	mir.Annotate = true
-	JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
-	defer func() { JITCodeHook, mir.Annotate = nil, false }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
+	})
 	rounds := []string{"drive(40, 5)", "drive(40, -3)", "drive(7, 0)"}
 	r := jitAgreesForTest(t, numberEqsSetup, rounds...)
 	l, ok := listings["numberEqs"]

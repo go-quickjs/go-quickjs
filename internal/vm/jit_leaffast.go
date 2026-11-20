@@ -62,7 +62,7 @@ func jitGoDirect(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 	}
 	ok := false
 	switch op := ssa.GoOp(ctx.GoOp & 0xff); {
-	case r == nil || ctx.GoKeep >= abi.MaxKeeps || jitGoCallWork != nil:
+	case r == nil || ctx.GoKeep >= abi.MaxKeeps || r.jitTest.goCallWork != nil:
 		ok = jitHostCall(ctx)
 	case op == ssa.GoAppend:
 		// A loop's string builder's s += x, the most frequent of them in
@@ -188,10 +188,11 @@ func (r *Runtime) jitGoAdd(ctx *abi.Context) bool {
 // Nothing reads those of a call made: they are written only for one that
 // leaves.
 func jitLeafGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) (uintptr, uint64) {
-	if jitGoCallWork != nil {
-		jitGoCallWork()
-	}
+	// Every context's Host is its runtime (jitGrowContexts).
 	r := (*Runtime)(ctx.Host)
+	if w := r.jitTest.goCallWork; w != nil {
+		w()
+	}
 	form := (*jitLeafForm)(st.LeafForm)
 	if form == nil && r != nil {
 		form = r.jitLeafFormOf(st)

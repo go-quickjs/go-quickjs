@@ -49,9 +49,7 @@ func longCodeUnchecked(t *testing.T, size int) {
 	if size < 10 {
 		return
 	}
-	on := mir.CheckAllocations
-	mir.CheckAllocations = false
-	t.Cleanup(func() { mir.CheckAllocations = on })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.checkAllocations = switchOff })
 }
 
 // longCodeObject is {v, w}, made in r.
@@ -161,9 +159,7 @@ func TestJITLongCodeCompilesARM64(t *testing.T) {
 	for _, size := range []int{3, 10} {
 		name := fmt.Sprintf("long%d", size)
 		if size >= 10 {
-			on := mir.CheckAllocations
-			mir.CheckAllocations = false
-			defer func() { mir.CheckAllocations = on }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.checkAllocations = switchOff })
 		}
 		rts := regNativeRuntimes(t, longCodeSource(name, size<<20/160))
 		r := rts[0]

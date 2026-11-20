@@ -281,17 +281,18 @@ func TestJITBigLeaf(t *testing.T) {
 	// Each function's last compile, whether a call of Go it makes is the
 	// leaf's to try (ssa.CallSite's Big).
 	leafed := map[string]bool{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		leafed[fn.Name] = false
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				for _, c := range v.Calls() {
-					leafed[fn.Name] = leafed[fn.Name] || c.Big
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			leafed[fn.Name] = false
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					for _, c := range v.Calls() {
+						leafed[fn.Name] = leafed[fn.Name] || c.Big
+					}
 				}
 			}
 		}
-	}
-	defer func() { jitSSAOptimized = nil }()
+	})
 	r := newTestRuntime(t, Config{JIT: true})
 	want := newTestRuntime(t, Config{})
 	for _, rt := range []*Runtime{want, r} {

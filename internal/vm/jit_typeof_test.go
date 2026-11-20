@@ -84,9 +84,9 @@ func TestJITTypeofNative(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				jitGoCallWork = func() { calls++ }
+				jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 				gv, err := r.Run(compileForTest(t, call))
-				jitGoCallWork = nil
+				jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 				if err != nil {
 					t.Fatal(err)
 				}

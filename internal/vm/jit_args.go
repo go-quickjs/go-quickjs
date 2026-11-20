@@ -133,7 +133,7 @@ func (r *Runtime) jitRegForwardTarget(cl *closure, ctor *Object, rpc, argc int) 
 // them on to is known (jitRegForwardTarget) and keeps none of them but to
 // read them or hand them on, in its turn, depth levels on.
 func (r *Runtime) jitRegForwardsInline(cl *closure, ctor *Object, argc, depth int) bool {
-	if depth <= 0 || jitNoInline != nil && jitNoInline(cl.fn) {
+	if depth <= 0 || r.jitNoInlined(cl.fn) {
 		return false
 	}
 	any := false
@@ -178,7 +178,7 @@ func (f *jitRegFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 		return ssa.InlineSite{}, false
 	}
 	tc := t.fn().closure
-	if tc.fn == fb.keep().fn || jitNoInline != nil && jitNoInline(tc.fn) {
+	if tc.fn == fb.keep().fn || r.jitNoInlined(tc.fn) {
 		return ssa.InlineSite{}, false
 	}
 	kind, reads, forwards := jitLowerInline, false, false

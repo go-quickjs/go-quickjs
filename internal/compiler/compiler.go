@@ -97,6 +97,10 @@ type Options struct {
 	// what is in scope there, as a direct eval's call site does. The code is
 	// for one runtime: the scopes capture what a debugger may read.
 	Debug bool
+	// TypedProto, if not nil, names the functions the typed call path's
+	// prototype gives a typed twin, in place of QJS_TYPEDPROTO's
+	// (typedProto): a test's.
+	TypedProto []string
 }
 
 // bindKind classifies a binding, which decides its initialization and

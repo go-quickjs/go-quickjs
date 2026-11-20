@@ -196,9 +196,9 @@ function runB(n) { return run(new B(2), n) }
 	regBothMarking(t, func(t *testing.T) {
 		// at called natively by run, hash inlined in it, its method
 		// called natively, as Havlak's Dictionary.at and customHash are.
-		saved := jitNoInline
-		jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "at" || fn.Name == "h" }
-		t.Cleanup(func() { jitNoInline = saved })
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "at" || fn.Name == "h" }
+		})
 		rts := regNativeRuntimes(t, src)
 		r := rts[0]
 		r.jitStress = jitStressConfig{}

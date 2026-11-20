@@ -99,10 +99,11 @@ func TestJITRegTailCalledClosures(t *testing.T) {
 			// The closures' makers compiled as functions of their own, not
 			// inlined in their callers' loops: a closure an inlined callee
 			// makes is made (CalledClosure, the function's own code alone).
-			jitNoInline = func(fn *bytecode.Function) bool {
-				return fn.Name == "contains" || fn.Name == "relink" || fn.Name == "throwsAt" || fn.Name == "stackAt" || fn.Name == "viaTail"
-			}
-			t.Cleanup(func() { jitNoInline = nil })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.noInline = func(fn *bytecode.Function) bool {
+					return fn.Name == "contains" || fn.Name == "relink" || fn.Name == "throwsAt" || fn.Name == "stackAt" || fn.Name == "viaTail"
+				}
+			})
 			rts := regNativeRuntimes(t, regTailClosSetup)
 			r := rts[0]
 			r.SetJITWarmUp(1, 1)

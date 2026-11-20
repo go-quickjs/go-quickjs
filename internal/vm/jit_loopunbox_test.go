@@ -53,9 +53,10 @@ func TestJITLoopPhisUnboxed(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	listings := map[string]string{}
-	mir.Annotate = true
-	JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
-	defer func() { JITCodeHook, mir.Annotate = nil, false }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { listings[f.Name] = c.Listing }
+	})
 	drivers := ""
 	for _, name := range append(loopUnboxNames, "eachSum", "shapes") {
 		drivers += "function drive_" + name + "(n, a, k) { let r; for (let i = 0; i < n; i++) r = " + name + "(a, k); return r };"

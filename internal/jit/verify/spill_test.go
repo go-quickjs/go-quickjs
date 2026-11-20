@@ -75,8 +75,6 @@ func TestMirSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	// Ten parameters: register code's carry all four sums as int32s (ssa's
 	// intPhis), so that with eight the parameters' phis and the counter fit
 	// the floating-point registers and nothing was spilled.
@@ -95,7 +93,7 @@ func TestMirSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
@@ -272,8 +270,6 @@ func TestMirSlotsOfLoops(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	edges, all := 0, 0
 	for _, src := range slotCorpus() {
 		for i, p := range lowered(t, src) {
@@ -283,7 +279,7 @@ func TestMirSlotsOfLoops(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}
@@ -355,8 +351,6 @@ func TestMirSplitsWhatOnlyStatesRead(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	src := bigCorpus[0]
 	for i, p := range lowered(t, src) {
 		f, err := ssa.BuildWith(p, bigs{p: p})
@@ -365,7 +359,7 @@ func TestMirSplitsWhatOnlyStatesRead(t *testing.T) {
 		}
 		regShape(f, p)
 		ssa.Optimize(f)
-		mc, err := mir.CompileAMD64(f, enc)
+		mc, err := mir.CompileAMD64With(f, enc, annotated())
 		if err != nil {
 			t.Fatalf("%s (%d): %v", src, i, err)
 		}

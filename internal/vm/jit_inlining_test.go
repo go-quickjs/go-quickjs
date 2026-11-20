@@ -19,18 +19,20 @@ import (
 func jitInlinedForTest(t *testing.T) map[string][]uintptr {
 	t.Helper()
 	got := map[string][]uintptr{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		got[fn.Name] = slices.Clone(f.Inlined)
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			got[fn.Name] = slices.Clone(f.Inlined)
+		}
+	})
 	return got
 }
 
 // jitNoInlineForTest has the functions named name -- every function
 // for "" -- not inlined while the test runs (jitNoInline).
 func jitNoInlineForTest(t *testing.T, name string) {
-	jitNoInline = func(fn *bytecode.Function) bool { return name == "" || fn.Name == name }
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return name == "" || fn.Name == name }
+	})
 }
 
 // jitNoLoopInlineForTest keeps every function with a loop -- register
@@ -39,11 +41,12 @@ func jitNoInlineForTest(t *testing.T, name string) {
 // maxInlineLoop): the tests of native calls give the callees they call
 // natively a loop of a turn or two for that.
 func jitNoLoopInlineForTest(t *testing.T) {
-	jitNoInline = func(fn *bytecode.Function) bool {
-		rc := fn.RegCode()
-		return rc != nil && len(rc.BackLive) != 0
-	}
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool {
+			rc := fn.RegCode()
+			return rc != nil && len(rc.BackLive) != 0
+		}
+	})
 }
 
 // jitClosureForTest is the closure of the function the script's global
@@ -393,14 +396,14 @@ func TestJITClosuresWithKeepsLimited(t *testing.T) {
 		function lets(n) { const fs = []; for (let i = 0; i < n; i++) { const j = i * 2; fs.push(() => i + j) } let s = 0; for (const f of fs) s += f(); return s }
 		function drive(n) { const p = new P(); let s = 0; for (let i = 0; i < n; i++) s += p.parse(i, i & 2) + lets(i % 5); return s }`
 	for _, limit := range []int{1, 2, 4} {
-		jitKeepLimit = limit
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.keepLimit = limit })
 		both := jitBothForTest(t, setup)
 		r := both.jit
 		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
 		for range 6 {
 			both.agree(t, `drive(200)`)
 		}
-		jitKeepLimit = 0
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.keepLimit = 0 })
 		v, err := r.Run(compileForTest(t, `P.prototype.parse`))
 		if err != nil || !v.IsObject() || v.Object().fn() == nil {
 			t.Fatalf("P.prototype.parse: %v %v", v, err)
@@ -442,11 +445,13 @@ func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
 	// Their own code run first, called natively by warm, which does not
 	// inline them: run enough to tell (jitRegCodeRan) that it has never left
 	// at its substring or its push.
-	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "next" || fn.Name == "keep" }
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "next" || fn.Name == "keep" }
+	})
 	for range 4 {
 		both.agree(t, `warm(o, 100)`)
 	}
-	jitNoInline = nil
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = nil })
 	for range 4 {
 		both.agree(t, `scan(o, 100)`, `keeps(o, 100)`)
 	}

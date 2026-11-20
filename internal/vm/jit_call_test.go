@@ -214,9 +214,7 @@ func TestJITRegExpLiteralCalls(t *testing.T) {
 
 // regNoInline has no function inlined until the test ends (jitNoInline).
 func regNoInline(t *testing.T) {
-	saved := jitNoInline
-	jitNoInline = func(*bytecode.Function) bool { return true }
-	t.Cleanup(func() { jitNoInline = saved })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(*bytecode.Function) bool { return true } })
 }
 
 // regReuseSrc is Octane's RegExp's Exec, a match's array kept in a local

@@ -49,9 +49,10 @@ func TestJITRegTryLoops(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			codes := map[string]*mir.Code{}
-			mir.Annotate = true
-			JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) { codes[f.Name] = c }
-			defer func() { JITCodeHook, mir.Annotate = nil, false }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) { codes[f.Name] = c }
+			})
 			rts := regNativeRuntimes(t, regTrySrc)
 			rts[0].jitStress = jitStressConfig{}
 			var got [2]string

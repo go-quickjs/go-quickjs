@@ -26,7 +26,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
-	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
@@ -308,15 +307,16 @@ func TestJITLexicalGlobals(t *testing.T) {
 			// register code's entry does not keep.
 			var inlined []uintptr
 			if tc.learning != 0 {
-				jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-					if fn.Name == "f" {
-						inlined = slices.Clone(f.Inlined)
+				jitTestSwitch(t, func(jc *jitTestConfig) {
+					jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+						if fn.Name == "f" {
+							inlined = slices.Clone(f.Inlined)
+						}
 					}
-				}
-				t.Cleanup(func() { jitSSAOptimized = nil })
+				})
 			}
 			v, err := jitRunFirstSourceForTest(t, r, tc.source)
-			jitSSAOptimized = nil
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.ssaOptimized = nil })
 			if err != nil {
 				t.Fatalf("JIT: %v; %s", err, tc.source)
 			}
@@ -1041,9 +1041,8 @@ func TestJITSSACellsUnderGC(t *testing.T) {
 		}
 	}()
 	defer func() { close(stop); <-done }()
-	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
 	for _, table := range []bool{true, false} {
-		mir.TableExits = table
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.tableExits = switchOf(table) })
 		jitSSACellsUnderGC(t, table)
 	}
 }
@@ -3636,8 +3635,7 @@ func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
 	jitMarkingForTest(t)
 	jitClobberStoresForTest(t)
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	setup := `function relink(a,n){let s=0;for(let i=0;i<n;i++){const o=a[i];o.next=a[i+1];o.v=i;s+=i*o.v}return s}
 		function count(a,n){for(let i=0;i<n;i++)a[i].v=i*2;return a[n-1].v}
 		function total(){let s=0;for(let n=arr[0];n;n=n.next)s+=n.v;return s}
@@ -3683,8 +3681,7 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 	}
 	jitMarkingForTest(t)
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	setup := `function list(k){let h=null;for(let i=0;i<k;i++)h={v:i,next:h,pad:[i,i]};return h}
 		function walk(h){let s=0,n=h,i=1,c=0;while(n){if(++c>1000)return -1;s+=n.v*i+n.pad[1];i++;n=n.next}return s}
 		function rev(h){let p=null,n=h,c=0;while(n){if(++c>1000)return null;const x=n.next;n.next=p;n.pad=[n.v,n.v];p=n;n=x}return p}
@@ -3751,17 +3748,23 @@ func TestJITSSAWideConstructionsWhileMarking(t *testing.T) {
 }
 
 // jitMarkingForTest has code compiled for the rest of the test see the
-// collector's write-barrier flag set (jitEncoding.WriteBarrier), as while
-// it marks: every store that changes a pointer word goes through Go's
-// write barrier, and every exit's records Go applies. The flag is
-// returned, for a test to clear and set again while code runs.
+// collector's write-barrier flag set (abi.Encoding's WriteBarrier), as
+// while it marks: every store that changes a pointer word goes through
+// Go's write barrier, and every exit's records Go applies. The flag is
+// returned, for a test to clear and set again while code runs. It is the
+// test's runtimes' (jitTestSwitch).
+func jitMarkingForTest(t *testing.T) *uint8 {
+	marking := new(uint8)
+	*marking = 1
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.marking = marking })
+	return marking
+}
+
 // jitClobberStoresForTest has the code the test compiles store pointer
 // words while the collector marks through jit.StoreRefClobber, which fills
 // every register native code may keep with junk first.
 func jitClobberStoresForTest(t *testing.T) {
-	old := jitEncoding.StoreRef
-	jitEncoding.StoreRef = jit.StoreRefClobber()
-	t.Cleanup(func() { jitEncoding.StoreRef = old })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.storeRef = jit.StoreRefClobber() })
 }
 
 // jitClobberCallsForTest has native code's calls of Go fill every register
@@ -3769,21 +3772,37 @@ func jitClobberStoresForTest(t *testing.T) {
 // after the call that it did not save goes wrong at once, not only where
 // Go's code happened to use it.
 func jitClobberCallsForTest(t *testing.T) {
-	old := jitEncoding.CallGo
-	jitEncoding.CallGo = jit.CallGoClobber()
-	t.Cleanup(func() { jitEncoding.CallGo = old })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.callGo = jit.CallGoClobber() })
 }
 
-func jitMarkingForTest(t *testing.T) *uint8 {
-	marking := new(uint8)
-	*marking = 1
-	old := jitEncoding.WriteBarrier
-	jitEncoding.WriteBarrier = uint64(uintptr(unsafe.Pointer(marking)))
-	t.Cleanup(func() {
-		jitEncoding.WriteBarrier = old
-		runtime.KeepAlive(marking)
-	})
-	return marking
+// jitTestConfigOf is what t's runtimes' JIT is made with from now on.
+func jitTestConfigOf(t testing.TB) jitTestConfig {
+	if c := testConfigFor(t, Config{}).test; c != nil {
+		return c.jit
+	}
+	return jitTestConfig{}
+}
+
+// jitTestSwitch applies set to the JIT of the runtimes t makes from now
+// on (jitTestConfig), and of those t and the tests it is a subtest of
+// have made, until t ends, when those are as they were: the test's
+// runtimes' compiles from then on are made so, and their hooks called,
+// and no other test's.
+func jitTestSwitch(t testing.TB, set func(*jitTestConfig)) {
+	setTestSwitch(t, func(c *testConfig) { set(&c.jit) })
+	for _, r := range testRuntimesOf(t) {
+		was := r.jitTest
+		set(&r.jitTest)
+		if r.jit != nil {
+			r.jit.jitSetEncoding()
+		}
+		t.Cleanup(func() {
+			r.jitTest = was
+			if r.jit != nil {
+				r.jit.jitSetEncoding()
+			}
+		})
+	}
 }
 
 // jitCollectorHeldForTest holds the collector off until t ends, its
@@ -3844,12 +3863,13 @@ func TestJITSSAInline(t *testing.T) {
 	// What count's last compile inlined (ssa.Func's Inlined), which
 	// register code's entry does not keep as the stack form's does.
 	var inlined []uintptr
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		if fn.Name == "count" {
-			inlined = slices.Clone(f.Inlined)
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if fn.Name == "count" {
+				inlined = slices.Clone(f.Inlined)
+			}
 		}
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	})
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -4019,12 +4039,13 @@ func TestJITSSANestedInline(t *testing.T) {
 	// What run's last compile inlined (ssa.Func's Inlined), which register
 	// code's entry does not keep.
 	var inlined []uintptr
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		if fn.Name == "run" {
-			inlined = slices.Clone(f.Inlined)
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if fn.Name == "run" {
+				inlined = slices.Clone(f.Inlined)
+			}
 		}
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	})
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -4494,7 +4515,6 @@ func TestJITSSANativeAppend(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer func() { jitGoCallWork = nil }()
 	run := func(name, src string) {
 		t.Helper()
 		wv, err := want.Run(compileForTest(t, src))
@@ -4519,9 +4539,9 @@ func TestJITSSANativeAppend(t *testing.T) {
 			t.Fatalf("%s: %s was not compiled", c.name, c.fn)
 		}
 		hosts, entries, reoptimized, calls := e.ssaStats.hosts, e.ssaStats.entries, r.jit.reoptimized, 0
-		jitGoCallWork = func() { calls++ }
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 		run(c.name, c.src)
-		jitGoCallWork = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 		if c.fn == "plain" && r.jit.reoptimized == reoptimized {
 			// The array grows a doubling at a time: a dozen times for 300,
 			// each a call of Go; Go had made each append.
@@ -6446,8 +6466,7 @@ func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 	}
 	e, mid := entry("sum"), entry("mid")
 	hosts, midCalls := e.ssaStats.hosts, mid.ssaStats.calleeGoCalls
-	jitGoCallWork = func() { *marking = 1 }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { *marking = 1 } })
 	v, err := r.Run(compileForTest(t, `sum(300)`))
 	if err != nil || v.Number() != wv.Number() {
 		t.Fatalf("sum(300) = %v, %v; interpreter %v", v, err, wv)
@@ -6540,8 +6559,7 @@ func TestJITSSAMarkingBeginsBeforeWideConstruction(t *testing.T) {
 		}
 	}
 	exits := r.jit.hosts
-	jitGoCallWork = func() { *marking = 1 }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { *marking = 1 } })
 	v, err := r.Run(compileForTest(t, `sum(300)`))
 	if err != nil || v.Number() != wv.Number() {
 		t.Fatalf("sum(300) = %v, %v; interpreter %v", v, err, wv)
@@ -7079,8 +7097,7 @@ func TestJITSSACalleeContextsKeepNothing(t *testing.T) {
 	for _, marking := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
 			if marking {
-				defer func(table bool) { mir.TableExits = table }(mir.TableExits)
-				mir.TableExits = false
+				jitTestSwitch(t, func(jc *jitTestConfig) { jc.tableExits = switchOff })
 				jitMarkingForTest(t)
 			}
 			jitCalleeContextsKeepNothing(t)
@@ -7392,15 +7409,16 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(1))
 	calls, collect := 0, true
-	jitGoCallWork = func() {
-		if calls++; churnRegisters(calls) == 0.25 {
-			t.Log("churned to a quarter")
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; churnRegisters(calls) == 0.25 {
+				t.Log("churned to a quarter")
+			}
+			if collect && calls%64 == 0 {
+				runtime.GC()
+			}
 		}
-		if collect && calls%64 == 0 {
-			runtime.GC()
-		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	setup := `function cat(n){let s='',t=0;for(let i=0;i<n;i++){const p='k'+i+':'+(i%3===0)+null+undefined+(i*0.5);t=(t+p.length)|0;if(i%50===0)s=s+p}return s.length+'/'+t+'/'+s.slice(0,40)}
 		function tree(d,tag){if(d==0)return {array:[0,1,2,3],string:'String for key '+tag+' in leaf node'};return {left:tree(d-1,tag),right:tree(d-1,tag)}}
 		var tags=[];for(let i=0;i<40;i++)tags.push(String(i/7));
@@ -7510,15 +7528,16 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 	// may with two CPUs, had its constructions and literals leave.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; churnRegisters(calls) == 0.25 {
-			t.Log("churned to a quarter")
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; churnRegisters(calls) == 0.25 {
+				t.Log("churned to a quarter")
+			}
+			if calls%8 == 0 {
+				runtime.GC()
+			}
 		}
-		if calls%8 == 0 {
-			runtime.GC()
-		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	setup := `function P(x){this.x=x;this.y=x*2} P.prototype.z=1;
 		function Q(x){for(let k=0;k<1;k++)this.v=x+k}
 		var last;
@@ -7757,12 +7776,13 @@ func TestJITSSAGoCalls(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; calls%16 == 0 {
-			runtime.GC()
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.goCallWork = func() {
+			if calls++; calls%16 == 0 {
+				runtime.GC()
+			}
 		}
-	}
-	defer func() { jitGoCallWork = nil }()
+	})
 	// h, Q, thrower and inc have with statements, which native code makes
 	// none of: Go makes their calls.
 	setup := `function h(a){with(a){}a.n=arguments.length;return a.length}
@@ -9571,8 +9591,7 @@ func TestJITSSAMathFunctions(t *testing.T) {
 	t.Run("native", testJITSSAMathFunctions)
 	if jitEncoding.Round {
 		t.Run("noround", func(t *testing.T) {
-			jitEncoding.Round = false
-			defer func() { jitEncoding.Round = true }()
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.round = switchOff })
 			testJITSSAMathFunctions(t)
 		})
 	}

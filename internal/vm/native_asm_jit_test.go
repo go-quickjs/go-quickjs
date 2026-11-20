@@ -356,8 +356,6 @@ func TestAsmJITOps(t *testing.T) {
 	if typed != plain {
 		t.Fatalf("typed and ordinary code differ:\n%s", firstDiff(typed, plain))
 	}
-	was := jitEncoding.Round
-	t.Cleanup(func() { jitEncoding.Round = was })
 	for _, c := range []struct{ stress, marking, noRound bool }{{false, false, false}, {true, false, false}, {false, true, false}, {false, false, true}} {
 		t.Run(fmt.Sprintf("stress=%v/marking=%v/noRound=%v", c.stress, c.marking, c.noRound), func(t *testing.T) {
 			if c.marking {
@@ -366,7 +364,9 @@ func TestAsmJITOps(t *testing.T) {
 			// A CPU without SSE4.1's rounding instruction, as amd64's code
 			// is made for one (abi.Encoding's Round): Math.floor's code
 			// SSE2's, and % an integer instruction all the same.
-			jitEncoding.Round = was && !c.noRound || runtime.GOARCH == "arm64"
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.round = switchOf(jitEncoding.Round && !c.noRound || runtime.GOARCH == "arm64")
+			})
 			fn := compileForTest(t, string(src)+"\nasmOps()")
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			if c.stress {

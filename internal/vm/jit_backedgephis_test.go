@@ -71,13 +71,14 @@ func TestJITBackEdgePhisNotSpilled(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	var listing, last string
-	mir.Annotate = true
-	JITCodeHook = func(f JITFunction, _ []byte, c *mir.Code) {
-		if f.Name == "isShorterThan" {
-			listing, last = c.Listing, c.Locations()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.codeHook = func(f JITFunction, _ []byte, c *mir.Code) {
+			if f.Name == "isShorterThan" {
+				listing, last = c.Listing, c.Locations()
+			}
 		}
-	}
-	defer func() { JITCodeHook, mir.Annotate = nil, false }()
+	})
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, jitListSource)); err != nil {
 		t.Fatal(err)
@@ -102,9 +103,7 @@ func TestJITBackEdgePhisNotSpilled(t *testing.T) {
 						// isShorterThan inlined in run (ssa's maxInlineLoop):
 						// its loop's back edges exit from run's code, inside
 						// the inlined frame.
-						saved := jitNoInline
-						jitNoInline = nil
-						defer func() { jitNoInline = saved }()
+						jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = nil })
 					}
 					if gc {
 						// The collector marks now and then, native code running.

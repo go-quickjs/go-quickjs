@@ -14,8 +14,8 @@ import (
 
 // typedProto names the functions the typed call path's prototype gives a
 // typed twin (bytecode.TypedTwin): QJS_TYPEDPROTO, a comma-separated
-// list, read once, as QJS_NONATIVE is. The prototype's switch, which the
-// asm.js link replaces.
+// list, read once, as QJS_NONATIVE is, or a compile's own (Options'
+// TypedProto). The prototype's switch, which the asm.js link replaces.
 var typedProto = strings.Split(os.Getenv("QJS_TYPEDPROTO"), ",")
 
 // setTyped gives fn, the function lit compiled with resolution rec, whose
@@ -36,7 +36,11 @@ func (c *compiler) setTyped(lit *ast.FuncLit, fn *bytecode.Function, rec *regcom
 			}
 		}
 	}
-	if fn.Name == "" || !slices.Contains(typedProto, fn.Name) {
+	names := typedProto
+	if c.opts.TypedProto != nil {
+		names = c.opts.TypedProto
+	}
+	if fn.Name == "" || !slices.Contains(names, fn.Name) {
 		return
 	}
 	fn.Reg.SetTyped(bytecode.NewRegLater(func() *bytecode.RegCode { return bytecode.TypedTwin(fn.RegCode()) }))
@@ -64,12 +68,4 @@ func (c *compiler) validateAsm(lit *ast.FuncLit) {
 		return
 	}
 	c.asm = m
-}
-
-// SetTypedProto names the functions given typed twins from now on, as
-// QJS_TYPEDPROTO does, and returns the names it named: a test's switch.
-func SetTypedProto(names ...string) []string {
-	was := typedProto
-	typedProto = names
-	return was
 }

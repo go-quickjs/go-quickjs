@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
-	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -174,31 +173,31 @@ func TestJITBigWords(t *testing.T) {
 		}
 	}()
 	defer func() { stop.Store(true); <-done }()
-	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
 	// Each function's last compile, whether it called Go for a BigInt's
 	// operator (ssa.GoArith), as it had where it was not made natively.
 	// And whether it has a phi of Uint64s.
 	goArith, u64Phi := map[string]bool{}, map[string]bool{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		goArith[fn.Name], u64Phi[fn.Name] = false, false
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				if v.Op == ssa.OpPhi && v.Type == ssa.Uint64 {
-					u64Phi[fn.Name] = true
-				}
-				for _, c := range v.Calls() {
-					if c.Go == ssa.GoArith {
-						goArith[fn.Name] = true
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			goArith[fn.Name], u64Phi[fn.Name] = false, false
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					if v.Op == ssa.OpPhi && v.Type == ssa.Uint64 {
+						u64Phi[fn.Name] = true
+					}
+					for _, c := range v.Calls() {
+						if c.Go == ssa.GoArith {
+							goArith[fn.Name] = true
+						}
 					}
 				}
 			}
 		}
-	}
-	defer func() { jitSSAOptimized = nil }()
+	})
 	// Exits described for Go to write the frame from, and exits whose code
 	// writes it.
 	for _, table := range []bool{true, false} {
-		mir.TableExits = table
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.tableExits = switchOf(table) })
 		r := newTestRuntime(t, Config{JIT: true})
 		want := newTestRuntime(t, Config{})
 		for _, rt := range []*Runtime{want, r} {
@@ -383,22 +382,23 @@ func TestJITPow(t *testing.T) {
 	// The powers each function's compiles made: natively, of numbers or of
 	// Int64s, or by Go.
 	made := map[string]map[string]bool{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		if made[fn.Name] == nil {
-			made[fn.Name] = map[string]bool{}
-		}
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				switch {
-				case v.Op == ssa.OpPowF64, v.Op == ssa.OpPowI64:
-					made[fn.Name][v.Op.String()] = true
-				case v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Go == ssa.GoArith && v.Calls()[0].Argc == int(ir.Pow):
-					made[fn.Name]["go"] = true
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if made[fn.Name] == nil {
+				made[fn.Name] = map[string]bool{}
+			}
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					switch {
+					case v.Op == ssa.OpPowF64, v.Op == ssa.OpPowI64:
+						made[fn.Name][v.Op.String()] = true
+					case v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Go == ssa.GoArith && v.Calls()[0].Argc == int(ir.Pow):
+						made[fn.Name]["go"] = true
+					}
 				}
 			}
 		}
-	}
-	defer func() { jitSSAOptimized = nil }()
+	})
 	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, bigPowSetup)); err != nil {
@@ -582,17 +582,18 @@ func TestJITBigIntToString(t *testing.T) {
 	// Each function's last compile, whether it makes a toString by its own
 	// call of Go.
 	own := map[string]bool{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		own[fn.Name] = false
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				for _, c := range v.Calls() {
-					own[fn.Name] = own[fn.Name] || c.Go == ssa.GoBigString
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			own[fn.Name] = false
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					for _, c := range v.Calls() {
+						own[fn.Name] = own[fn.Name] || c.Go == ssa.GoBigString
+					}
 				}
 			}
 		}
-	}
-	defer func() { jitSSAOptimized = nil }()
+	})
 	r := newTestRuntime(t, Config{JIT: true})
 	want := newTestRuntime(t, Config{})
 	for _, rt := range []*Runtime{want, r} {

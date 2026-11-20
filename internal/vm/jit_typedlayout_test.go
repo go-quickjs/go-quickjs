@@ -235,8 +235,7 @@ func TestJITTypedLayout(t *testing.T) {
 				t.Fatal(err)
 			}
 			made := 0
-			jitTypedViewMade = func() { made++ }
-			t.Cleanup(func() { jitTypedViewMade = nil })
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.typedViewMade = func() { made++ } })
 			readMaking := func(src string) (string, int) {
 				t.Helper()
 				made = 0

@@ -8,19 +8,6 @@ import (
 	"testing"
 )
 
-// narrowReach has the assembler keep branches within reaches shift bits
-// narrower than the instructions', until the test ends: pools, veneers
-// of veneers and jumps back past a B's reach, in code of a few megabytes.
-func narrowReach(t *testing.T, shift uint) {
-	near, far := nearReach, farReach
-	set := func(n, f int) {
-		nearReach, nearDue, nearVeneer = n, n/2, n/4
-		farReach, farDue, farVeneer = f, f/2, f/4
-	}
-	set(near>>shift, far>>shift)
-	t.Cleanup(func() { set(near, far) })
-}
-
 // poolBranch is a branch a test made: where it began, where the caller's
 // next instruction went, its label and what it was.
 type poolBranch struct {
@@ -93,9 +80,9 @@ func follow(code []uint32, pc int, br poolBranch, holds bool, stop func(int) boo
 // its label is when taken, and where the caller's next instruction is
 // when not, whatever pools came between, and each Adr of a table is its
 // address, where its words are.
-func poolProgram(t *testing.T, seed int64, n, every int) {
+func poolProgram(t *testing.T, seed int64, n, every int, narrow uint) {
 	rng := rand.New(rand.NewSource(seed))
-	var a Asm
+	a := Asm{narrow: narrow}
 	labels := make([]Label, 64)
 	for i := range labels {
 		labels[i] = a.NewLabel()
@@ -220,9 +207,11 @@ func poolProgram(t *testing.T, seed int64, n, every int) {
 // kind, goes where it should -- through veneers, veneers of veneers, the
 // opposite condition over a B, and a jump through the temporary.
 func TestPoolsNarrowed(t *testing.T) {
-	narrowReach(t, 8)
+	// The reaches 8 bits narrower than the instructions': pools, veneers
+	// of veneers and jumps back past a B's reach, in code of a few
+	// megabytes.
 	for seed := range int64(4) {
-		poolProgram(t, seed, 3<<20, 50)
+		poolProgram(t, seed, 3<<20, 50, 8)
 	}
 }
 
@@ -232,7 +221,7 @@ func TestPoolsLong(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short")
 	}
-	poolProgram(t, 9, 3<<20, 2000)
+	poolProgram(t, 9, 3<<20, 2000, 0)
 }
 
 // Code shorter than a quarter of a conditional branch's reach has no
@@ -240,7 +229,7 @@ func TestPoolsLong(t *testing.T) {
 func TestNoPoolInShortCode(t *testing.T) {
 	var a Asm
 	end := a.NewLabel()
-	n := nearVeneer - 16
+	n := a.nearVeneer() - 16
 	for range n {
 		a.BCond(NE, end)
 	}

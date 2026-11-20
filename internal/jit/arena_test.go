@@ -188,10 +188,9 @@ func TestArenaPacksCode(t *testing.T) {
 // than its size. Two seeds lay the same code out differently, and every
 // function runs wherever it is.
 func TestArenaLayoutSeed(t *testing.T) {
-	defer func(was uint64) { LayoutSeed = was }(LayoutSeed)
 	layout := func(seed uint64) []int {
-		LayoutSeed = seed
 		a := NewArena()
+		a.seed = seed
 		var codes []*SSACode
 		defer func() {
 			for _, c := range codes {
@@ -260,14 +259,13 @@ func TestArenaLayoutSeed(t *testing.T) {
 // runs wherever it is, its constants read where the code put them, and
 // releasing them all unmaps every chunk.
 func TestArenaLineOffset(t *testing.T) {
-	defer func(was int) { LineOffset = was }(LineOffset)
 	for _, off := range []int{0, 8, 37, 56, 63, 64 + 16} {
-		LineOffset = off
 		want := off % codeAlign
 		if runtime.GOARCH == "arm64" {
 			want &^= 3
 		}
 		a := NewArena()
+		a.line = off
 		var codes []*SSACode
 		for i := 0; i < 120; i++ {
 			n := 0

@@ -8,7 +8,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
-	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
 
 // The state the tests of tier-up, of on-stack replacement and of compiles
@@ -178,7 +177,7 @@ func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
 		t.Fatal("the snapshot's questions took back what they cannot")
 	}
 	return &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, e: e, p: p, rf: rf, snap: snap, deopts: life.deopts,
-		w: jit.GetWorkspace(), enc: jitEncoding, opts: mir.Settings()}
+		w: jit.GetWorkspace(), enc: r.jit.enc, opts: r.jit.opts}
 }
 
 // jitRegPendingRecompileForTest is the register code of sum compiled on

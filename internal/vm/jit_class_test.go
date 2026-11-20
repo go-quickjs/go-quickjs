@@ -79,12 +79,13 @@ func TestJITClassConstructorsNative(t *testing.T) {
 	// The closures chain's last compile inlined (ssa.Func's Inlined),
 	// which register code's entry does not keep.
 	var inlined []uintptr
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		if fn.Name == "chain" {
-			inlined = slices.Clone(f.Inlined)
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			if fn.Name == "chain" {
+				inlined = slices.Clone(f.Inlined)
+			}
 		}
-	}
-	t.Cleanup(func() { jitSSAOptimized = nil })
+	})
 	const setup = `
 		var Node = class { constructor(id) { this.id = id; this.next = null; this.mark = 0 } }
 		function chain(n) { let head = null; for (let i = 0; i < n; i++) { const x = new Node(i); x.next = head; head = x } let s = 0; for (let x = head; x; x = x.next) s += x.id; return s }`

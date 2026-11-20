@@ -294,8 +294,6 @@ func TestJITClocksLeaveOutCompiles(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	was := JITCompileRepeat
-	t.Cleanup(func() { JITCompileRepeat = was })
 	for repeat := 200; ; repeat *= 2 {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		if _, err := r.Run(compileForTest(t, `function f(n) { var s = 0; for (var i = 0; i < n; i++) s += i; return s } f(10)`)); err != nil {
@@ -305,7 +303,7 @@ func TestJITClocksLeaveOutCompiles(t *testing.T) {
 		if s == nil {
 			t.Fatal("the JIT did not run")
 		}
-		JITCompileRepeat = repeat
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.compileRepeat = repeat })
 		start, from, compiled := time.Now(), s.running(), s.compileTime
 		v, err := r.Run(compileForTest(t, `
 			function g(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + (i * 7) % 13) | 0; return s }
@@ -318,7 +316,6 @@ func TestJITClocksLeaveOutCompiles(t *testing.T) {
 		// what they ran is within it, to the nanosecond.
 		ran := s.running() - from
 		wall := time.Since(start)
-		JITCompileRepeat = was
 		if e, code := jitCachedForTest(r, "g"); !code {
 			t.Fatalf("g has no code: %+v", e)
 		}

@@ -119,6 +119,9 @@ type Config struct {
 	// Lap, if not nil, is called at the end of each of the allocator's
 	// phases, for a client that times its compiles.
 	Lap func(Phase)
+	// dataflow has the allocation find liveness by the dataflow, for the
+	// tests that compare it with explore.
+	dataflow bool
 }
 
 // A Phase is a stretch of an allocation that Config.Lap is told the end of.

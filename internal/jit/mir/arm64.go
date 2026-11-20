@@ -140,6 +140,12 @@ func CompileARM64(f *ssa.Func, enc abi.Encoding) (*Code, error) {
 	return compileARM64(nil, f, enc, Settings())
 }
 
+// CompileARM64With is CompileARM64 with the switches opts, in place of
+// the package's (Settings).
+func CompileARM64With(f *ssa.Func, enc abi.Encoding, opts Options) (*Code, error) {
+	return compileARM64(nil, f, enc, opts)
+}
+
 // arm64GPRs and arm64FPRs are the registers arm64's allocator assigns,
 // never changed.
 var arm64GPRs, arm64FPRs = func() (gprs, fprs []int) {

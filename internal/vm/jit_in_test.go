@@ -127,8 +127,7 @@ func TestJITInGoCalls(t *testing.T) {
 	code := jitNativeCodeForTest(t, r, "count")
 	e := code.e
 	calls := 0
-	jitGoCallWork = func() { calls++ }
-	defer func() { jitGoCallWork = nil }()
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	before := e.ssaStats
 	v, err := r.Run(compileForTest(t, warm))
 	if err != nil || v.Number() != 4+2+4 {

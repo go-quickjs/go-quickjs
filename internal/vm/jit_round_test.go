@@ -48,11 +48,9 @@ function rounds(x) { return [Math.floor(x), Math.ceil(x), Math.trunc(x), Math.ro
 function all() { var out = []; for (var i = 0; i < xs.length; i++) out.push(rounds(xs[i])); return out; }
 for (var k = 0; k < 200; k++) all();
 `)
-	was := jitEncoding.Round
-	t.Cleanup(func() { jitEncoding.Round = was })
 	for _, round := range []bool{true, false} {
 		t.Run(fmt.Sprintf("round=%v", round), func(t *testing.T) {
-			jitEncoding.Round = round || runtime.GOARCH == "arm64"
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.round = switchOf(round || runtime.GOARCH == "arm64") })
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			r.jitStress = jitStressConfig{threshold: true, budget: 3}
 			v, err := r.Run(compileForTest(t, src.String()+"all()"))

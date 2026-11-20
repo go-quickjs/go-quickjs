@@ -113,24 +113,24 @@ func TestAsmJITCallResults(t *testing.T) {
 			if c.name == "marking" {
 				jitMarkingForTest(t)
 			}
-			jitNoInline = func(fn *bytecode.Function) bool { return fn.Name != "retRun" }
-			t.Cleanup(func() { jitNoInline = nil })
+			jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(fn *bytecode.Function) bool { return fn.Name != "retRun" } })
 			ops := map[string][2]int{}
-			jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-				var n [2]int
-				for _, b := range f.Blocks {
-					for _, v := range b.Values {
-						switch v.Op {
-						case ssa.OpNumberF64:
-							n[0]++
-						case ssa.OpOddballF64:
-							n[1]++
+			jitTestSwitch(t, func(jc *jitTestConfig) {
+				jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+					var n [2]int
+					for _, b := range f.Blocks {
+						for _, v := range b.Values {
+							switch v.Op {
+							case ssa.OpNumberF64:
+								n[0]++
+							case ssa.OpOddballF64:
+								n[1]++
+							}
 						}
 					}
+					ops[fn.Name] = n
 				}
-				ops[fn.Name] = n
-			}
-			t.Cleanup(func() { jitSSAOptimized = nil })
+			})
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			r.jitStress = c.stress
 			v, err := r.Run(compileForTest(t, asmRetSrc+"\nretRun()"))

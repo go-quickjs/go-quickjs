@@ -85,8 +85,6 @@ func TestMirCallsLean(t *testing.T) {
 		// only where Go makes the calls it does not (mir's call), as the
 		// VM's encoding always lets it: without CallGo, every call exits.
 		CallGo: 0x72000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	dropped, used, boxes, entries, returns, frames := 0, 0, 0, 0, 0, 0
 	for _, src := range callCorpus {
 		for i, p := range lowered(t, src) {
@@ -97,7 +95,7 @@ func TestMirCallsLean(t *testing.T) {
 			regShape(f, p)
 			f.CallEntry = true
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}

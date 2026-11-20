@@ -167,10 +167,10 @@ func TestJITDeleteGoCalls(t *testing.T) {
 		code := jitNativeCodeForTest(t, r, c.name)
 		e := code.e
 		calls := 0
-		jitGoCallWork = func() { calls++ }
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 		before := e.ssaStats
 		v, err := r.Run(compileForTest(t, c.warm))
-		jitGoCallWork = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })
 		if err != nil || v.Number() != c.want {
 			t.Fatal(c.name, v, err)
 		}

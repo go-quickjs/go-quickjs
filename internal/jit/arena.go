@@ -45,6 +45,10 @@ type Arena struct {
 	// reuse says code is placed in the space released code left in a
 	// chunk, as well as past what the chunk handed out (NewReusingArena).
 	reuse bool
+	// seed and line are LayoutSeed and LineOffset when the arena was
+	// made, which a test sets on its own arena.
+	seed uint64
+	line int
 }
 
 type chunk struct {
@@ -72,7 +76,7 @@ const (
 )
 
 // NewArena returns an empty arena; it maps nothing until code is placed.
-func NewArena() *Arena { return &Arena{} }
+func NewArena() *Arena { return &Arena{seed: LayoutSeed, line: LineOffset} }
 
 // NewReusingArena returns an empty arena that places code in the space
 // that code released before it left in a chunk, the first such space
@@ -128,9 +132,9 @@ var LayoutSeed uint64
 // and its constants relative to it, and so is its slice (Text).
 var LineOffset int
 
-// lineShift is LineOffset as place applies it.
-func lineShift() int {
-	s := LineOffset % codeAlign
+// lineShift is the arena's LineOffset as place applies it.
+func (a *Arena) lineShift() int {
+	s := a.line % codeAlign
 	if s < 0 {
 		s += codeAlign
 	}
@@ -140,10 +144,10 @@ func lineShift() int {
 	return s
 }
 
-// layoutDraw is LayoutSeed's choice for the k-th thing of a kind (salt):
-// splitmix64 of the seed, the salt and k.
-func layoutDraw(salt, k uint64) uint64 {
-	x := LayoutSeed ^ salt*0x9e3779b97f4a7c15 ^ k*0xbf58476d1ce4e5b9
+// layoutDraw is the arena's LayoutSeed's choice for the k-th thing of a
+// kind (salt): splitmix64 of the seed, the salt and k.
+func (a *Arena) layoutDraw(salt, k uint64) uint64 {
+	x := a.seed ^ salt*0x9e3779b97f4a7c15 ^ k*0xbf58476d1ce4e5b9
 	x ^= x >> 30
 	x *= 0xbf58476d1ce4e5b9
 	x ^= x >> 27
@@ -204,17 +208,17 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 		return a.placeReusing(instructions)
 	}
 	shift := 0
-	if LineOffset != 0 {
-		shift = lineShift()
+	if a.line != 0 {
+		shift = a.lineShift()
 	}
 	// The code's slice is its instructions codeAlign-rounded at every
 	// offset, so that what a profiler reads of it (Text) is the same.
 	size := alignUp(len(instructions), codeAlign)
 	n := alignUp(shift+size, codeAlign)
 	gap := 0
-	if LayoutSeed != 0 {
+	if a.seed != 0 {
 		a.placed++
-		gap = int(layoutDraw(1, a.placed)%layoutGapLines) * codeAlign
+		gap = int(a.layoutDraw(1, a.placed)%layoutGapLines) * codeAlign
 	}
 	var c *chunk
 	if o := a.open; o != nil && o.used+gap+n <= len(o.mem) {
@@ -228,9 +232,9 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 		gap = 0
 		if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
 			c.used = pad
-		} else if LayoutSeed != 0 && len(a.chunks) > 0 {
+		} else if a.seed != 0 && len(a.chunks) > 0 {
 			a.mapped++
-			if pad := int(layoutDraw(2, a.mapped)%layoutChunkSpan) / codeAlign * codeAlign; pad+n <= len(mem) {
+			if pad := int(a.layoutDraw(2, a.mapped)%layoutChunkSpan) / codeAlign * codeAlign; pad+n <= len(mem) {
 				c.used = pad
 			}
 		}
@@ -281,8 +285,8 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	shift := 0
-	if LineOffset != 0 && !a.reuse {
-		shift = lineShift()
+	if a.line != 0 && !a.reuse {
+		shift = a.lineShift()
 	}
 	page := os.Getpagesize()
 	// A segment is the run of the batch's codes in one chunk, written

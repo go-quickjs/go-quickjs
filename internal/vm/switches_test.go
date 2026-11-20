@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"unsafe"
+	"weak"
 )
 
 // A test runs its runtimes in a mode other than the process's -- by the
@@ -29,7 +29,35 @@ import (
 // package's tests make is made by it, with the switches tb set
 // (testConfigFor).
 func newTestRuntime(tb testing.TB, cfg Config) *Runtime {
-	return New(testConfigFor(tb, cfg))
+	r := New(testConfigFor(tb, cfg))
+	e := testEntryOf(tb)
+	e.mu.Lock()
+	e.runtimes = append(e.runtimes, weak.Make(r))
+	e.mu.Unlock()
+	return r
+}
+
+// testRuntimesOf is the runtimes tb and the tests it is a subtest of have
+// made so far.
+func testRuntimesOf(tb testing.TB) []*Runtime {
+	var rs []*Runtime
+	for name := tb.Name(); ; {
+		if v, ok := testSwitches.Load(name); ok {
+			e := v.(*testSwitchEntry)
+			e.mu.Lock()
+			for _, w := range e.runtimes {
+				if r := w.Value(); r != nil {
+					rs = append(rs, r)
+				}
+			}
+			e.mu.Unlock()
+		}
+		i := strings.LastIndexByte(name, '/')
+		if i < 0 {
+			return rs
+		}
+		name = name[:i]
+	}
 }
 
 // testSwitches is the switches tests have set for the runtimes they make,
@@ -37,42 +65,53 @@ func newTestRuntime(tb testing.TB, cfg Config) *Runtime {
 // test's own, dropped when it ends.
 var testSwitches sync.Map // string -> *testSwitchEntry
 
-// testSwitchEntry is a test's switches: a copy made anew at each change,
-// for the runtimes its subtests make on goroutines of their own.
+// testSwitchEntry is a test's switches, the changes it made in order, and
+// the runtimes it has made, held weakly: a test may watch one collected.
 type testSwitchEntry struct {
-	tb  testing.TB
-	cfg atomic.Pointer[testConfig]
+	tb       testing.TB
+	mu       sync.Mutex
+	sets     []func(*testConfig)
+	runtimes []weak.Pointer[Runtime]
+}
+
+// testEntryOf is tb's entry, made at the first switch it sets or runtime
+// it makes, dropped when it ends.
+func testEntryOf(tb testing.TB) *testSwitchEntry {
+	name := tb.Name()
+	e := &testSwitchEntry{tb: tb}
+	for {
+		v, loaded := testSwitches.LoadOrStore(name, e)
+		if !loaded {
+			break
+		}
+		if old := v.(*testSwitchEntry); old.tb == tb {
+			return old
+		} else if testSwitches.CompareAndSwap(name, old, e) {
+			// A test of the same name that ended, run again (-count).
+			break
+		}
+	}
+	tb.Cleanup(func() { testSwitches.CompareAndDelete(name, e) })
+	return e
 }
 
 // setTestSwitch has the runtimes tb and its subtests make from now on
 // made with set applied to tb's switches, until tb ends.
 func setTestSwitch(tb testing.TB, set func(*testConfig)) {
-	name := tb.Name()
-	e := &testSwitchEntry{tb: tb}
-	if v, loaded := testSwitches.LoadOrStore(name, e); loaded && v.(*testSwitchEntry).tb == tb {
-		e = v.(*testSwitchEntry)
-	} else {
-		testSwitches.Store(name, e)
-		tb.Cleanup(func() { testSwitches.CompareAndDelete(name, e) })
-	}
-	c := new(testConfig)
-	if old := e.cfg.Load(); old != nil {
-		*c = *old
-	}
-	set(c)
-	e.cfg.Store(c)
+	e := testEntryOf(tb)
+	e.mu.Lock()
+	e.sets = append(e.sets, set)
+	e.mu.Unlock()
 }
 
 // testConfigFor is cfg with the switches tb set, and those the tests it is
-// a subtest of set, the innermost's over the outer's, and cfg's own over
-// them all.
+// a subtest of set before them, in the order they were set, and cfg's own
+// over them all.
 func testConfigFor(tb testing.TB, cfg Config) Config {
-	var chain []*testConfig
+	var chain []*testSwitchEntry
 	for name := tb.Name(); ; {
 		if v, ok := testSwitches.Load(name); ok {
-			if c := v.(*testSwitchEntry).cfg.Load(); c != nil {
-				chain = append(chain, c)
-			}
+			chain = append(chain, v.(*testSwitchEntry))
 		}
 		i := strings.LastIndexByte(name, '/')
 		if i < 0 {
@@ -80,12 +119,20 @@ func testConfigFor(tb testing.TB, cfg Config) Config {
 		}
 		name = name[:i]
 	}
-	if len(chain) == 0 {
-		return cfg
-	}
-	t := new(testConfig)
+	var t *testConfig
 	for i := len(chain) - 1; i >= 0; i-- {
-		t.overlay(chain[i])
+		e := chain[i]
+		e.mu.Lock()
+		for _, set := range e.sets {
+			if t == nil {
+				t = new(testConfig)
+			}
+			set(t)
+		}
+		e.mu.Unlock()
+	}
+	if t == nil {
+		return cfg
 	}
 	if cfg.test != nil {
 		t.overlay(cfg.test)
@@ -96,10 +143,18 @@ func testConfigFor(tb testing.TB, cfg Config) Config {
 
 // overlay sets t's fields to those of o that are set.
 func (t *testConfig) overlay(o *testConfig) {
-	tv, ov := reflect.ValueOf(t).Elem(), reflect.ValueOf(o).Elem()
-	for i := range tv.NumField() {
-		if f := ov.Field(i); !f.IsZero() {
-			d := tv.Field(i)
+	overlayValue(reflect.ValueOf(t).Elem(), reflect.ValueOf(o).Elem())
+}
+
+// overlayValue sets the fields of the struct t to those of o that are set,
+// a struct's field by field.
+func overlayValue(t, o reflect.Value) {
+	for i := range t.NumField() {
+		f, d := o.Field(i), t.Field(i)
+		switch {
+		case f.Kind() == reflect.Struct:
+			overlayValue(d, f)
+		case !f.IsZero():
 			reflect.NewAt(d.Type(), unsafe.Pointer(d.UnsafeAddr())).Elem().Set(reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem())
 		}
 	}

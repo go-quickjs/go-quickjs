@@ -71,6 +71,8 @@ type testConfig struct {
 	// exits, if set, is the Go functions the runtime's native code's exits
 	// call, in place of nativeExitTable.
 	exits *[256]regHandler
+	// jit is what the runtime's JIT is made with (jitTestConfig).
+	jit jitTestConfig
 }
 
 // testSwitch is a switch of testConfig: the process's default, or on or

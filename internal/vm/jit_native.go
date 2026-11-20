@@ -330,10 +330,6 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 	s.regAccount(e.life)
 }
 
-// jitCompileNote, where a test sets it (recordJITCompilesForTest), is
-// told of each closure whose register code r compiles.
-var jitCompileNote func(r *Runtime, cl *closure)
-
 // jitRegCompile is jitRegFor's compile: LowerReg, the SSA build with
 // jitRegFeedback, Optimize, the backend, the code placed in the JIT's
 // arena. A refusal is an entry with no code; nil is no room, or a compile
@@ -423,8 +419,8 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	e.p = p
 	s.regSerial++
 	e.serial = s.regSerial
-	if jitCompileNote != nil {
-		jitCompileNote(r, cl)
+	if n := r.jitTest.compileNote; n != nil {
+		n(r, cl)
 	}
 	r.jitRegSeenFeedback(cl, c)
 	rf := r.jitRegFeedbackFor(cl, p)
@@ -436,7 +432,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
 			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, frameAt: frameAt,
-				w: jit.GetWorkspace(), enc: jitEncoding, opts: mir.Settings(), miss: r.jitStress.miss}
+				w: jit.GetWorkspace(), enc: s.enc, opts: s.opts, miss: r.jitStress.miss}
 			if osrAt != 0 {
 				// The code kept beside the cache's for a loop
 				// (jitRegLoopCode), installed beside that code if it is
@@ -471,10 +467,10 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	jitRegLap(mir.PhaseBuild)
 	ssa.Optimize(f)
 	jitRegLap(mir.PhaseOptimize)
-	if jitSSAOptimized != nil {
-		jitSSAOptimized(cl.fn, f)
+	if o := r.jitTest.ssaOptimized; o != nil {
+		o(cl.fn, f)
 	}
-	mc, err := mir.CompileWith(&w.MIR, f, jitEncoding, mir.Settings())
+	mc, err := mir.CompileWith(&w.MIR, f, r.jit.enc, r.jit.opts)
 	keepLimit := rf.fb.keepLimit
 	if errors.Is(err, mir.ErrKeeps) {
 		// More keep cells live at once than the context has, which the
@@ -490,7 +486,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	if !r.jitRegPlace(e, c, rf, f, mc, looped, s.jitRegReplaced(key, osrAt)) {
 		return nil
 	}
-	if JITCompileRepeat > 0 {
+	if r.jitCompileRepeat() > 0 {
 		// In the workspace the compile used, given back: in another, of its
 		// own, they had measured a workspace whose recent compiles were the
 		// repeats alone.
@@ -517,7 +513,8 @@ func jitRegLap(ph mir.Phase) {
 func (r *Runtime) jitRegCompileRepeat(cl *closure, c *regCode, p *ir.Program, keepLimit, frameAt int) {
 	c0 := jitGCCycles()
 	bytes0, objects0 := jitAllocated()
-	for range JITCompileRepeat {
+	cross := r.jitCrossHook()
+	for range r.jitCompileRepeat() {
 		w := jit.GetWorkspace()
 		if t := mir.Timing; t != nil {
 			t.Start()
@@ -530,11 +527,11 @@ func (r *Runtime) jitRegCompileRepeat(cl *closure, c *regCode, p *ir.Program, ke
 			jitRegLap(mir.PhaseBuild)
 			ssa.Optimize(f)
 			jitRegLap(mir.PhaseOptimize)
-			if JITCrossHook != nil {
-				code, err := mir.CompileARM64(f, jitEncoding)
-				JITCrossHook(jitFunctionOf(c.fn), code, err)
+			if cross != nil {
+				code, err := mir.CompileARM64(f, r.jit.enc)
+				cross(jitFunctionOf(c.fn), code, err)
 			} else {
-				mir.CompileWith(&w.MIR, f, jitEncoding, mir.Settings())
+				mir.CompileWith(&w.MIR, f, r.jit.enc, r.jit.opts)
 			}
 		}
 		jit.PutWorkspace(w)
@@ -763,9 +760,9 @@ func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f 
 	// Its code calls through its links from now on, until it is closed
 	// (regClose).
 	s.regHoldLinks(e.keep, 1)
-	if JITCodeHook != nil {
+	if h := r.jitCodeHook(); h != nil {
 		// -jitcode's record of the code.
-		JITCodeHook(jitFunctionOf(c.fn), code.Text(), mc)
+		h(jitFunctionOf(c.fn), code.Text(), mc)
 	}
 	return true
 }

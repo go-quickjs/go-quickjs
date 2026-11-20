@@ -84,8 +84,6 @@ func TestMirKeepsCheap(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
-	defer func() { mir.Annotate = false }()
-	mir.Annotate = true
 	keeps, runs, refs, fused := 0, 0, 0, 0
 	for _, src := range append(append([]string(nil), keepCorpus...), keepSwapCorpus...) {
 		for i, p := range lowered(t, src) {
@@ -95,7 +93,7 @@ func TestMirKeepsCheap(t *testing.T) {
 			}
 			regShape(f, p)
 			ssa.Optimize(f)
-			mc, err := mir.CompileAMD64(f, enc)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
 			if err != nil {
 				t.Fatalf("%s (%d): %v", src, i, err)
 			}

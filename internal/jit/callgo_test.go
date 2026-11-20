@@ -11,6 +11,19 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
+// HostCall is the package's tests' own, set once before they run: a
+// context's Host, where a test sets it, is the function that answers the
+// calls of Go its code makes, the test's (a *func(*abi.Context) bool);
+// with none, the call is refused, as with no HostCall.
+func init() {
+	HostCall = func(ctx *abi.Context) bool {
+		if h := (*func(*abi.Context) bool)(ctx.Host); h != nil {
+			return (*h)(ctx)
+		}
+		return false
+	}
+}
+
 // grow recurses n frames of 1 KiB each, to make the goroutine's stack grow
 // (and move) under the Go a call from native code runs.
 //
@@ -46,9 +59,7 @@ func TestNativeCallsGo(t *testing.T) {
 	calls, frames := 0, 0
 	keep := new(int)
 	*keep = 7
-	old := HostCall
-	defer func() { HostCall = old }()
-	HostCall = func(ctx *abi.Context) bool {
+	host := func(ctx *abi.Context) bool {
 		calls++
 		if grow(64) < 0 {
 			return false
@@ -76,6 +87,7 @@ func TestNativeCallsGo(t *testing.T) {
 	}
 	ctx := new(abi.Context)
 	ctx.SetConsts(&testEncoding)
+	ctx.Host = unsafe.Pointer(&host)
 	ctx.GoKeep = 3
 	done := make(chan struct{})
 	go func() {
@@ -126,11 +138,10 @@ func TestNativeCallsGoKeepsFramePointer(t *testing.T) {
 		t.Skip(err)
 	}
 	defer a.release(placed)
-	old := HostCall
-	defer func() { HostCall = old }()
-	HostCall = func(ctx *abi.Context) bool { return true }
+	host := func(ctx *abi.Context) bool { return true }
 	ctx := new(abi.Context)
 	ctx.SetConsts(&testEncoding)
+	ctx.Host = unsafe.Pointer(&host)
 	before, after := enterKeepingFramePointer(&placed[0], ctx)
 	if before == 0 || before != after {
 		t.Fatalf("frame pointer %#x before the call, %#x after", before, after)

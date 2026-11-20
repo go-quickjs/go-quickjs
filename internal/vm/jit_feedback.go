@@ -49,15 +49,9 @@ func (r *Runtime) jitRegFeedbackFor(cl *closure, p *ir.Program) *jitRegFeedback 
 	if cl == nil || cl.fn == nil || cl.fn.RegCode() == nil || p == nil || p.Origin == nil {
 		return nil
 	}
-	fb := &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), keepLimit: jitKeepLimit}
+	fb := &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), keepLimit: r.jitTest.keepLimit}
 	return &jitRegFeedback{fb: fb, rc: cl.fn.RegCode(), p: p}
 }
-
-// jitKeepLimit, where a test sets it, limits the keep cells of every
-// compile's build (ssa.KeepFeedback), as a compile again past the
-// context's (abi.MaxKeeps) limits them: what is made natively past them
-// is left to Go.
-var jitKeepLimit int
 
 // at is the register instruction of the program's instruction pc, and what
 // that instruction is.
@@ -319,7 +313,7 @@ func (f *jitRegFeedback) accessorInline(callee *Object, cl *closure, write bool)
 	r := f.fb.r
 	argc := jitB2i(write)
 	if cl.reg == nil || !r.jitRegCallable(callee, cl, cl.reg, argc) || callee.fn().arrow || cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn ||
-		jitNoInline != nil && jitNoInline(cl.fn) || cl.reg.args {
+		r.jitNoInlined(cl.fn) || cl.reg.args {
 		return ssa.InlineSite{}, false
 	}
 	p, err := f.fb.r.jitRegLower(cl, cl.reg.rc, jitLowerInline)
@@ -485,7 +479,7 @@ func (f *jitRegFeedback) madeInline(t *closure) (ssa.InlineSite, bool) {
 		return ssa.InlineSite{}, false
 	}
 	if rc == nil || !rc.Wide || fn.Async || fn.Generator || fn.HasDirectEval ||
-		fn == fb.fn || fn == fb.keep().fn || jitNoInline != nil && jitNoInline(fn) {
+		fn == fb.fn || fn == fb.keep().fn || fb.r.jitNoInlined(fn) {
 		return ssa.InlineSite{}, false
 	}
 	// One that keeps its arguments only to read them by index and count
@@ -838,7 +832,7 @@ func (f *jitRegFeedback) inline(pc int) (ssa.InlineSite, bool) {
 		return ssa.InlineSite{}, false
 	}
 	site, o, cl := t.sites[0], t.objs[0], t.cls[0]
-	if cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || jitNoInline != nil && jitNoInline(cl.fn) {
+	if cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || f.fb.r.jitNoInlined(cl.fn) {
 		return ssa.InlineSite{}, false
 	}
 	if f.regCallCold(pc, rpc, cl) {

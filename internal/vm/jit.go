@@ -86,6 +86,105 @@ type jitFields struct {
 	// jitStress is QJS_JIT_STRESS's budget and deoptimization period, or
 	// zero; see jitStressConfig.
 	jitStress jitStressConfig
+	// jitTest is what a test made the runtime's JIT with (testConfig's
+	// jit), which the test may change while the runtime lives: zero but in
+	// a test's runtime.
+	jitTest jitTestConfig
+}
+
+// jitTestConfig is what a test makes a runtime's JIT with, and may change
+// on the runtime while it lives, in place of what the process's compiles
+// are made with (jitEncoding, mir.Settings) and its tools' hooks
+// (JITCompileRepeat, JITCodeHook, JITCrossHook). The encoding's and the
+// options' are read when the runtime's JIT state is made, and changed on
+// it after by jitSetEncoding; the rest where they are used.
+type jitTestConfig struct {
+	// marking, if set, is the flag the runtime's compiles read for the
+	// collector's (abi.Encoding's WriteBarrier), and storeRef and callGo
+	// the routines its code stores pointers and calls Go through
+	// (StoreRef, CallGo).
+	marking          *uint8
+	storeRef, callGo uint64
+	// round, where set, is whether the compiles round in one instruction
+	// (Round).
+	round testSwitch
+	// annotate, checkAllocations and tableExits, where set, are the
+	// compiles' mir.Options.
+	annotate, checkAllocations, tableExits testSwitch
+	// goCallWork, if set, is called at each of native code's calls of Go
+	// but a leaf's, which it sends through jitHostCall's dispatch.
+	goCallWork func()
+	// ssaOptimized, if set, is given each compile's SSA once optimized,
+	// and has the runtime compile on the spot.
+	ssaOptimized func(fn *bytecode.Function, f *ssa.Func)
+	// noInline, if set, says which functions the compiles inline nowhere.
+	noInline func(fn *bytecode.Function) bool
+	// keepLimit, if more than 0, is how many keep cells a compile's calls
+	// may hold (jitFeedback's keepLimit).
+	keepLimit int
+	// compileNote, if set, is called at each compile the runtime asks.
+	compileNote func(r *Runtime, cl *closure)
+	// typedViewMade, if set, is called at each view's copy jitTypedView
+	// makes.
+	typedViewMade func()
+	// compileRepeat, codeHook and crossHook, where set, are the runtime's
+	// JITCompileRepeat, JITCodeHook and JITCrossHook.
+	compileRepeat int
+	codeHook      func(f JITFunction, text []byte, code *mir.Code)
+	crossHook     func(f JITFunction, code *mir.Code, err error)
+}
+
+// jitSetEncoding sets s's encoding and options as its runtime's test
+// config says: the process's (jitEncoding, mir.Settings), but what the
+// test set. Compiles from then on are made so.
+func (s *jitState) jitSetEncoding() {
+	t := &s.rt.jitTest
+	s.enc = jitEncoding
+	if t.marking != nil {
+		s.enc.WriteBarrier = uint64(uintptr(unsafe.Pointer(t.marking)))
+	}
+	if t.storeRef != 0 {
+		s.enc.StoreRef = t.storeRef
+	}
+	if t.callGo != 0 {
+		s.enc.CallGo = t.callGo
+	}
+	s.enc.Round = t.round.or(s.enc.Round)
+	s.opts = mir.Settings()
+	s.opts.Annotate = t.annotate.or(s.opts.Annotate)
+	s.opts.CheckAllocations = t.checkAllocations.or(s.opts.CheckAllocations)
+	s.opts.TableExits = t.tableExits.or(s.opts.TableExits)
+}
+
+// jitNoInlined reports whether the runtime's compiles inline fn nowhere
+// (jitTestConfig's noInline).
+func (r *Runtime) jitNoInlined(fn *bytecode.Function) bool {
+	n := r.jitTest.noInline
+	return n != nil && n(fn)
+}
+
+// jitCompileRepeat, jitCodeHook and jitCrossHook are the runtime's
+// JITCompileRepeat, JITCodeHook and JITCrossHook: the host's, or what a
+// test made the runtime with.
+func (r *Runtime) jitCompileRepeat() int {
+	if n := r.jitTest.compileRepeat; n != 0 {
+		return n
+	}
+	return JITCompileRepeat
+}
+
+func (r *Runtime) jitCodeHook() func(f JITFunction, text []byte, code *mir.Code) {
+	if h := r.jitTest.codeHook; h != nil {
+		return h
+	}
+	return JITCodeHook
+}
+
+func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) {
+	if h := r.jitTest.crossHook; h != nil {
+		return h
+	}
+	return JITCrossHook
 }
 
 // jitStressConfig drives the JIT harder than ordinary use, so that tests and
@@ -1177,6 +1276,11 @@ type jitState struct {
 	// plainWrites counts the property writes Go made without a frame for
 	// native code (jitGoCallPlain's, RegNativeStats' PlainWrites).
 	plainWrites uint64
+	// enc and opts are how the runtime's compiles are made: the process's
+	// (jitEncoding, mir.Settings), but where a test made the runtime
+	// otherwise (jitSetEncoding).
+	enc  abi.Encoding
+	opts mir.Options
 }
 
 func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {
@@ -1186,6 +1290,9 @@ func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {
 	r.jitEnabled = enabled && r.debug == nil
 	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
 	r.jitStress = jitStressDefault
+	if t := r.test; t != nil {
+		r.jitTest = t.jit
+	}
 	if r.jitStress.threshold {
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 	}
@@ -1836,6 +1943,7 @@ func jitCompileBytes(fn *bytecode.Function) int64 {
 func (r *Runtime) jitState() *jitState {
 	if r.jit == nil {
 		r.jit = &jitState{rt: r, arena: jit.NewArena(), stressBudget: int(r.jitStress.budget)}
+		r.jit.jitSetEncoding()
 		jitEpochOnce.Do(jitArmEpoch)
 	}
 	return r.jit

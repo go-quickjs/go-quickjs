@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
@@ -44,13 +43,10 @@ result 45:43`
 // each pause is, by a debugger statement, a breakpoint and steps; the
 // bindings each pause sees; and what the code returns after the debugger
 // has set a binding and evaluated an assignment in a frame. No function
-// is refused.
+// is refused: the backend compiles every function, so that the process
+// makes no refusal meanwhile.
 func TestDebuggerRegisterCode(t *testing.T) {
-	var refused []string
-	regcomp.OnRefuse = func(fn *bytecode.Function, why string) {
-		refused = append(refused, fn.Name+": "+why)
-	}
-	defer func() { regcomp.OnRefuse = nil }()
+	refusals, _ := regcomp.Refusals()
 	before := vm.RegsBuilt()
 	r, h := newDebugged(t)
 	r.rt.SetBreakpoint("reg.js", 10, 0)
@@ -91,8 +87,8 @@ func TestDebuggerRegisterCode(t *testing.T) {
 	if built := vm.RegsBuilt() - before; built == 0 {
 		t.Errorf("no register code ran")
 	}
-	for _, r := range refused {
-		t.Errorf("refused: %s", r)
+	if n, last := regcomp.Refusals(); n != refusals {
+		t.Errorf("%d refused, the last %s", n-refusals, last)
 	}
 	if got := strings.Join(seen, "\n"); got != debugRegWant {
 		t.Errorf("got:\n%s\nwant:\n%s", got, debugRegWant)

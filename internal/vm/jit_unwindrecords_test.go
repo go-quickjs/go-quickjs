@@ -20,8 +20,9 @@ func TestJITLevelResumesWithItsSlots(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "inner" || fn.Name == "swap" }
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "inner" || fn.Name == "swap" }
+	})
 	setup := `
 		var obj = {a: 1}, A = {v: 1}, B = {v: 2}
 		function inner(x, k) {
@@ -59,10 +60,11 @@ func TestJITLevelKeepsWhatItsCalleeAssigned(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	jitNoInline = func(fn *bytecode.Function) bool {
-		return fn.Name == "inner" || fn.Name == "swap" || fn.Name == "set" || fn.Name == "gen"
-	}
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.noInline = func(fn *bytecode.Function) bool {
+			return fn.Name == "inner" || fn.Name == "swap" || fn.Name == "set" || fn.Name == "gen"
+		}
+	})
 	setup := `
 		var obj = {a: 1}, A = {v: 1}, B = {v: 2}
 		function inner(x, k) {

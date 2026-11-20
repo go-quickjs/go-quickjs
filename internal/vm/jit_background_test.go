@@ -31,7 +31,7 @@ func jitBackgroundForTest(t *testing.T, checks uint16) *Runtime {
 // function in the background (jitInBackground), for a test's failure.
 func jitBackgroundStateForTest(r *Runtime, cl *closure) string {
 	return fmt.Sprintf("background %v, stress %+v, compiling %d, timing %v, repeat %d, SSA hook %v, jobs %d, top level %v",
-		r.jitBackground, r.jitStress, r.jit.compiling, mir.Timing != nil, JITCompileRepeat, jitSSAOptimized != nil, len(r.jit.regJobs), cl.fn.TopLevel)
+		r.jitBackground, r.jitStress, r.jit.compiling, mir.Timing != nil, r.jitCompileRepeat(), r.jitTest.ssaOptimized != nil, len(r.jit.regJobs), cl.fn.TopLevel)
 }
 
 // jitCallForTest runs src, a script, and checks its value is want.
@@ -277,7 +277,6 @@ func TestJITBackgroundCalleeCompile(t *testing.T) {
 // marks nothing, its Listing) if it was set then, and none if it was set
 // only after.
 func TestJITBackgroundSettingsAtPrepare(t *testing.T) {
-	defer func(on bool) { mir.Annotate = on }(mir.Annotate)
 	// Installed at the first check after it was handed over; register
 	// code's at the third: its first compile is asked at its loop's check,
 	// whose next two, in the same call, would install it at the first or
@@ -287,8 +286,10 @@ func TestJITBackgroundSettingsAtPrepare(t *testing.T) {
 	for _, at := range []bool{true, false} {
 		r := jitBackgroundForTest(t, checks)
 		var marks []int
-		JITCodeHook = func(_ JITFunction, _ []byte, c *mir.Code) { marks = append(marks, len(c.Marks)+len(c.Listing)) }
-		mir.Annotate = at
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.codeHook = func(_ JITFunction, _ []byte, c *mir.Code) { marks = append(marks, len(c.Marks)+len(c.Listing)) }
+		})
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOf(at) })
 		// Lowered at the first call, prepared at the second, installed at
 		// the third; register code lowered and prepared at the first,
 		// installed at the second.
@@ -296,9 +297,9 @@ func TestJITBackgroundSettingsAtPrepare(t *testing.T) {
 		if len(r.jit.regJobs) != 1 || r.jit.regJobs[0].opts.Annotate != at {
 			t.Fatalf("%d compiles in the background, want 1, made with Annotate %v", len(r.jit.regJobs), at)
 		}
-		mir.Annotate = !at
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOf(!at) })
 		jitCallForTest(t, r, `sum(10)`, 45)
-		JITCodeHook = nil
+		jitTestSwitch(t, func(jc *jitTestConfig) { jc.codeHook = nil })
 		if len(marks) != 1 || (marks[0] != 0) != at {
 			t.Fatalf("Annotate %v when prepared: marks %v", at, marks)
 		}
@@ -369,8 +370,7 @@ func TestJITBackgroundStaleLink(t *testing.T) {
 	}
 	half, loop := jitGlobalClosureForTest(r, "half"), jitGlobalClosureForTest(r, "loop")
 	// Called, not inlined: through its link.
-	jitNoInline = func(fn *bytecode.Function) bool { return fn == half.fn }
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(fn *bytecode.Function) bool { return fn == half.fn } })
 	// Register code's link is its function's for good, by its key
 	// (regLinks), whatever code it has: a compile that calls through
 	// it is never stale, and is installed as it was built. Its native
@@ -427,8 +427,7 @@ func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name != "drive" }
-	t.Cleanup(func() { jitNoInline = nil })
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(fn *bytecode.Function) bool { return fn.Name != "drive" } })
 	var setup strings.Builder
 	setup.WriteString(`
 		class Task {

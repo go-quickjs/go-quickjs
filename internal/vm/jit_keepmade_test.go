@@ -31,23 +31,24 @@ func TestJITKeptWhereMade(t *testing.T) {
 	// keep a copy.
 	keeps := map[string]map[int]int{}
 	rekeeps := map[string]int{}
-	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		byCell := map[int]int{}
-		rekeeps[fn.Name] = 0
-		for _, b := range f.Blocks {
-			for _, v := range b.Values {
-				if v.Op != ssa.OpKeep {
-					continue
-				}
-				byCell[v.Index]++
-				if v.Args[0].Op == ssa.OpKept {
-					rekeeps[fn.Name]++
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.ssaOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+			byCell := map[int]int{}
+			rekeeps[fn.Name] = 0
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					if v.Op != ssa.OpKeep {
+						continue
+					}
+					byCell[v.Index]++
+					if v.Args[0].Op == ssa.OpKept {
+						rekeeps[fn.Name]++
+					}
 				}
 			}
+			keeps[fn.Name] = byCell
 		}
-		keeps[fn.Name] = byCell
-	}
-	defer func() { jitSSAOptimized = nil }()
+	})
 	setup := `
 		function mk(k) { return { a: { v: k }, b: { v: k + 1 }, c: { v: k + 2 }, x: 0, y: 0 } }
 		function twice(o, n) {

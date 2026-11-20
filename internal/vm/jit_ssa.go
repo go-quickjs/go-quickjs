@@ -1751,17 +1751,17 @@ func jitHostCall(ctx *abi.Context) bool {
 	if r.gcYield.on && r.gcMarking() {
 		r.gcYieldNow()
 	}
-	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoLeaf && jitGoCallWork == nil {
+	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoLeaf && r.jitTest.goCallWork == nil {
 		// A leaf's call, its function checked by the code (jitLeafCall).
 		return r.jitLeafCall(ctx)
 	}
-	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoCall && jitGoCallWork == nil {
+	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoCall && r.jitTest.goCallWork == nil {
 		// The most frequent, asked first; one that runs nothing made
 		// without a frame.
 		return r.jitMaybePlain(ctx) && r.jitGoCallPlain(ctx) || r.jitGoCall(ctx)
 	}
-	if jitGoCallWork != nil {
-		jitGoCallWork()
+	if w := r.jitTest.goCallWork; w != nil {
+		w()
 	}
 	switch ssa.GoOp(ctx.GoOp & 0xff) {
 	case ssa.GoHost, ssa.GoArgument, ssa.GoCells, ssa.GoClosure, ssa.GoClose:
@@ -2803,14 +2803,6 @@ func jitBigWords(v Value) int {
 	return (*BigInt)(v.ref).digits()
 }
 
-// jitGoCallWork, which tests set, runs at each call of Go before it is
-// answered: what Go may do there, the collector included.
-var jitGoCallWork func()
-
-// jitSSAOptimized, which tests set, is given each function's SSA once it
-// is optimized, before the backend compiles it.
-var jitSSAOptimized func(fn *bytecode.Function, f *ssa.Func)
-
 // ArrayProtos is ssa.AppendFeedback's: the realm's Array.prototype and
 // Object.prototype, as a push the code makes natively checks them, where
 // neither has an index in its table (jitStoreElem's walk up the chain,
@@ -3017,11 +3009,6 @@ func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
 		}
 	}
 }
-
-// jitNoInline, where a test sets it, says which functions are not to be
-// inlined: those whose native calls, or their code's place in the cache,
-// the test is about.
-var jitNoInline func(fn *bytecode.Function) bool
 
 // jitInlineDepth is how many levels of calls are inlined: a callee, the
 // calls it makes, theirs (ssa's maxInlineDepth).
@@ -5077,7 +5064,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for i := range chunk {
 		chunk[i].Host = unsafe.Pointer(r)
 		chunk[i].CharStrings = unsafe.Pointer(s.charStrings)
-		chunk[i].SetConsts(&jitEncoding)
+		chunk[i].SetConsts(&s.enc)
 		chunk[i].Level, chunk[i].Bounds, chunk[i].Hints = uint64(old+i), &s.bounds, &s.hintTable
 		if s.mega == nil {
 			s.mega = new(abi.MegaCache)
