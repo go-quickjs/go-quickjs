@@ -54,11 +54,11 @@
 # encodeObject around it) at 5ef0d50b's layout: builtins_atomics.go and
 # builtins_intl.go grew by 160 bytes in the WebAssembly engine's merge,
 # and json_round_trip was 7% slower with the JIT at every placement.
-# encodeObject grew there too, by 96 bytes, so what follows it in the
-# file -- encodeProps, writeLayout, the parser -- and the built-ins up
-# to C stay 96 bytes past 5ef0d50b's offsets: T at their offsets, the
-# encoder 96 bytes before its own, gave json_round_trip back but not
-# json_stringify_records or json_stringify_small. Y, K and O hold at
+# encodeObject grew there too, by 96 bytes, which moved what follows it
+# in the file -- encodeElements, the string writers, the parser -- and
+# made json_stringify_escapes 15% and json_stringify_unicode 38% slower
+# with the JIT; with the BigInt wrapper's case out of line it is as long
+# as it was, and the whole encoder is at 5ef0d50b's offsets again. Y, K and O hold at
 # 16f8b5e9's layout code that changes around it moved with no position
 # between: Y the generators' and async functions' file (reg_generator.go,
 # regGenOf first, regAsyncStart and regAsyncRun), past the register

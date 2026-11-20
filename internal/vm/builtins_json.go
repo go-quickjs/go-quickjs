@@ -22,6 +22,20 @@ import (
 // preserves property insertion order, and escapes lone surrogates rather than
 // replacing them.
 
+// encodeBigIntWrapper is encodeObject for a BigInt's wrapper, which stands
+// for the BigInt it wraps, which has no JSON form -- so the wrapper does not
+// serialize as an empty object, and stringify throws. It is out of line
+// because it always ends in that error: encodeObject, which every object
+// written runs, keeps its length with the check for a host's opaque proxies
+// (hostNoJSON), and the encoder's code after it keeps its place.
+func (e *jsonEncoder) encodeBigIntWrapper(buf []byte, v Value) ([]byte, bool, error) {
+	bi, err := e.rt.toBigIntValue(v)
+	if err != nil {
+		return buf, false, err
+	}
+	return e.encode(buf, bi)
+}
+
 func (r *Runtime) initJSONBuiltins() {
 	j := newObject(r.proto.object, ClassJSONObject)
 	r.defValue(r.global, "JSON", Obj(j))
@@ -684,13 +698,7 @@ func (e *jsonEncoder) encodeObject(buf []byte, v Value) ([]byte, bool, error) {
 		b, _ := o.dataOf().(bool)
 		return e.encode(buf, Bool(b))
 	case ClassBigIntWrapper:
-		// It stands for the BigInt it wraps, which has no JSON form -- so
-		// the wrapper does not serialize as an empty object.
-		bi, err := e.rt.toBigIntValue(v)
-		if err != nil {
-			return buf, false, err
-		}
-		return e.encode(buf, bi)
+		return e.encodeBigIntWrapper(buf, v)
 	}
 
 	if o.IsCallable() || o.class == ClassProxy && hostNoJSON(o) {

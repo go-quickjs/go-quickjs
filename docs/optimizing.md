@@ -264,11 +264,16 @@ What each lever cannot move:
   grew `builtins_atomics.go` and `builtins_intl.go` by 160 bytes, which
   moved it, and `json_round_trip` was 7% slower with the JIT at every
   placement. One position holds one stretch: `encodeObject` grew by 96
-  bytes in the same merge, so what follows it -- `encodeProps`,
-  `writeLayout`, the parser and the built-ins up to C -- stays 96 bytes
-  past `5ef0d50b`'s offsets. T with those at their offsets, the
-  encoder 96 bytes early, gave `json_round_trip` back but left
-  `json_stringify_records` and `json_stringify_small` slower.
+  bytes in the same merge, with the check for a host's opaque proxies,
+  and moved what follows it -- `encodeElements`, the string writers,
+  the parser and the built-ins up to C -- 96 bytes past `5ef0d50b`'s
+  offsets, which made `json_stringify_escapes` 15% and
+  `json_stringify_unicode` 38% slower with the JIT. T with those at
+  their offsets, the encoder 96 bytes early, had given
+  `json_round_trip` back but left `json_stringify_records` and
+  `json_stringify_small` slower; the fix was in the code:
+  `encodeObject`'s BigInt wrapper case, which always throws, went out
+  of line, and the function is as long as it was.
   Y, K and O hold at `16f8b5e9`'s offsets code that changes around it
   moved where no position was: the literal constructors' rewrite moved
   `vm_object.go`'s code after them 608 bytes back, and
