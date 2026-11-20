@@ -51,11 +51,11 @@ type nativeCtx struct {
 	gc, i31 uintptr
 }
 
-// regNativeDefault is whether an instance runs its register code by the
-// native handlers (Instance's native), where they are built.
-// WASM_NONATIVE set in the environment, read once, leaves it to the Go
-// table's loop, to compare the two and as an escape hatch; a test sets its
-// instance's (instanceTest).
+// regNativeDefault is whether a Code's register code runs by the native
+// handlers (Code's native, which its functions' register code takes when
+// it is compiled, regCode's native), where they are built. WASM_NONATIVE
+// set in the environment, read once, leaves it to the Go table's loop, to
+// compare the two and as an escape hatch; a test sets its Code's.
 var regNativeDefault = nativeBuilt && os.Getenv("WASM_NONATIVE") == ""
 
 // instanceTest is what a test runs an instance's native code with in
@@ -78,7 +78,7 @@ type instanceTest struct {
 // regRun runs register code rc in frame f from pc until the frame returns:
 // natively where the handlers are on, else by the Go table's loop.
 func regRun(f *frame, rc *regCode, pc int32) {
-	if nativeBuilt && f.inst.native {
+	if nativeBuilt && rc.native {
 		nativeRun(f, rc, pc)
 		return
 	}

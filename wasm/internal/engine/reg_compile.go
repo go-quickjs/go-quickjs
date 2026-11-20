@@ -224,6 +224,7 @@ func (c *regCompiler) compile() (p *compiled, why string) {
 	p.built = true
 	out := c.out
 	out.callee = len(out.regions) == 0 && !c.tails && c.tries == 0
+	out.native = c.code.native
 	p.reg = &out
 	p.params, _, _ = layout(sig.Params)
 	p.results, _, _ = layout(sig.Results)

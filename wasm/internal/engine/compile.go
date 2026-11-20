@@ -42,6 +42,10 @@ type Code struct {
 	// rtts are the runtime information of the module's types, by type
 	// index, as Go's work for native code asks for them (typeRTT).
 	rtts atomic.Pointer[[]atomic.Pointer[rtt]]
+	// native runs the code's register code by the native handlers
+	// (regNativeDefault), which its functions' code takes when it is
+	// compiled (regCode's native).
+	native bool
 	// test is what a test compiles and runs the code with, nil but in a
 	// test's (codeTest).
 	test *codeTest
@@ -72,7 +76,7 @@ type jitExitCounts struct {
 
 // NewCode returns the engine's code of module m.
 func NewCode(m *module.Module) *Code {
-	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions)), native: regNativeDefault}
 	if jitBuilt {
 		c.jitFromEnv()
 	}

@@ -44,13 +44,26 @@ func countNativeExits(inst *Instance, f func()) int64 {
 	return total
 }
 
-// withNative runs f with inst's register code run by the native handlers,
-// where they are built, or by the Go table's loop.
+// withNative runs f with the register code of inst's Code run by the
+// native handlers, where they are built, or by the Go table's loop: the
+// code compiled before and the code compiled meanwhile.
 func withNative(inst *Instance, on bool, f func()) {
-	was := inst.native
-	inst.native = on && nativeBuilt
-	defer func() { inst.native = was }()
+	c := inst.Code
+	was := c.native
+	setNative(c, on && nativeBuilt)
+	defer setNative(c, was)
 	f()
+}
+
+// setNative has c's register code run by the native handlers or not,
+// that compiled already and that compiled from now on.
+func setNative(c *Code, on bool) {
+	c.native = on
+	for i := range c.fns {
+		if cd := c.fns[i].Load(); cd != nil && cd.reg != nil {
+			cd.reg.native = on
+		}
+	}
 }
 
 // TestNativeLayout checks internal/regdef's offsets, which the generator

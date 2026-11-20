@@ -126,6 +126,10 @@ type regCode struct {
 	// callee says native code may call the function itself: the body has
 	// no try region and no tail call.
 	callee bool
+	// native runs the code by the native handlers: its Code's native when
+	// it was compiled, which a test may change on it after
+	// (regNativeDefault).
+	native bool
 }
 
 // regSite is a call's site: the function called, the offset of the call,

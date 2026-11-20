@@ -81,6 +81,8 @@ func testCode(tb testing.TB, c *Code) *Code {
 		e.mu.Unlock()
 	}
 	c.setTest(t)
+	// A Code the test made itself is run as NewCode's are.
+	c.native = regNativeDefault
 	e := chain[len(chain)-1]
 	e.mu.Lock()
 	e.codes = append(e.codes, weak.Make(c))
