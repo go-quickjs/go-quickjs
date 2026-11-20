@@ -110,10 +110,6 @@ func (r *Runtime) nativeLoopTyped(st *regState, ctx *nativeCtx, f *frame, c *reg
 	nativeSetTop(ctx, uintptr(unsafe.Pointer(st.regs)), f, c)
 	ctx.ip = uintptr(c.code) + uintptr(start)*8
 	ctx.top, ctx.topOK = st, 1
-	ctx.cntExits = 0
-	if nativeCount {
-		ctx.cntExits = uintptr(unsafe.Pointer(&nativeExits[0]))
-	}
 	// restarted says a tail call has given the frame to its callee in
 	// place and the code goes on with the callee's (nativeRestart).
 	restarted := false
@@ -123,8 +119,8 @@ func (r *Runtime) nativeLoopTyped(st *regState, ctx *nativeCtx, f *frame, c *reg
 			nativeHeapAt(r, ctx)
 		}
 		ctx.budget = int64(r.backEdges)
-		if nativeCount {
-			atomic.AddInt64(&nativeEnters, 1)
+		if n := r.nativeCounts; n != nil {
+			atomic.AddInt64(&n.enters, 1)
 		}
 		nativeEnter(nativeBase, unsafe.Pointer(ctx))
 		r.backEdges = int(ctx.budget)
@@ -165,8 +161,8 @@ func (r *Runtime) nativeLoopTyped(st *regState, ctx *nativeCtx, f *frame, c *reg
 		op := w.Op()
 		miss := ctx.miss != 0
 		ctx.miss = 0
-		if nativeCount {
-			atomic.AddInt64(&nativeExits[op], 1)
+		if n := r.nativeCounts; n != nil {
+			atomic.AddInt64(&n.exits[op], 1)
 		}
 		if ctx.depth == ctx.cap && ctx.cap < nativeMaxDepth && (op == bytecode.RCallW || op == bytecode.RCallMW || op == bytecode.RCallWT || op == bytecode.RCallMWT || op == bytecode.RIterNext) {
 			// A call, or a generator's step, the frame stack has no room
@@ -189,8 +185,8 @@ func (r *Runtime) nativeLoopTyped(st *regState, ctx *nativeCtx, f *frame, c *reg
 			if ctx.disp.has[op] {
 				break
 			}
-			if nativeCount {
-				atomic.AddInt64(&nativeExits[op], 1)
+			if n := r.nativeCounts; n != nil {
+				atomic.AddInt64(&n.exits[op], 1)
 			}
 			pc = regTypedTable[op](s.regs, w, pc, s)
 		}

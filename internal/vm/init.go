@@ -72,6 +72,7 @@ func New(cfg Config) *Runtime {
 		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
 		asyncCtx:         Undefined,
 		typedEpoch:       1,
+		nativeCounts:     nativeCounter.Load(),
 	}
 	if cfg.Debug {
 		r.debug = newDebugState()

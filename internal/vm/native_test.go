@@ -82,12 +82,15 @@ func nativeKernelSource(t testing.TB, names ...string) string {
 
 // nativeCounting turns the native handlers' counters on for a test, and
 // holds the collector off: a collection between two runs may empty a
-// cache one run then misses, an exit the other has not. The flag the
-// code reads for the collector's is what a test sets (nativeMarking).
+// cache one run then misses, an exit the other has not. The runtimes made
+// from here on count into the test's counters (nativeCounter), and only
+// they: native code a runtime made before runs -- another test's, left
+// running -- counts nothing there. The flag the code reads for the
+// collector's is what a test sets (nativeMarking).
 func nativeCounting(t testing.TB) {
-	nativeCount = true
+	nativeCounter.Store(new(nativeCounters))
 	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { nativeCount = false; debug.SetGCPercent(gc) })
+	t.Cleanup(func() { nativeCounter.Store(nil); debug.SetGCPercent(gc) })
 }
 
 // nativeMarking has the contexts made after it store as while the
@@ -106,7 +109,7 @@ func nativeMarking(t testing.TB, on bool) {
 // nativeExitOps is the exits to Go so far, by operation.
 func nativeExitOps() (n [256]int64) {
 	for i := range n {
-		n[i] = atomic.LoadInt64(&nativeExits[i])
+		n[i] = atomic.LoadInt64(&nativeCounter.Load().exits[i])
 	}
 	return n
 }
@@ -154,11 +157,11 @@ func TestRegNativeKernels(t *testing.T) {
 		var exits [2]int64
 		for i, on := range []bool{false, true} {
 			nativeMarking(t, on)
-			before := atomic.LoadInt64(&nativeEnters)
+			before := atomic.LoadInt64(&nativeCounter.Load().enters)
 			if got, _ := nativeRunKernel(t, true, k.name, k.deps, k.n); got != want {
 				t.Errorf("%s (marking %v): %s, want %s", k.name, on, got, want)
 			}
-			exits[i] = atomic.LoadInt64(&nativeEnters) - before
+			exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 		}
 		nativeMarking(t, false)
 		if exits[0] != exits[1] {
@@ -173,7 +176,7 @@ func TestRegNativeKernels(t *testing.T) {
 func TestRegNativeExits(t *testing.T) {
 	nativeCounting(t)
 	for _, k := range nativeKernels {
-		before, exits := atomic.LoadInt64(&nativeEnters), nativeExitOps()
+		before, exits := atomic.LoadInt64(&nativeCounter.Load().enters), nativeExitOps()
 		_, ops := nativeRunKernel(t, true, k.name, k.deps, k.n*50)
 		var top []string
 		for op, c := range nativeExitOps() {
@@ -182,7 +185,7 @@ func TestRegNativeExits(t *testing.T) {
 			}
 		}
 		t.Logf("%-16s %6.3f entries an operation; exits by op: %v", k.name,
-			float64(atomic.LoadInt64(&nativeEnters)-before)/float64(ops), top)
+			float64(atomic.LoadInt64(&nativeCounter.Load().enters)-before)/float64(ops), top)
 	}
 }
 
@@ -399,11 +402,11 @@ func TestRegNativeCalls(t *testing.T) {
 	want := nativeRunSrc(t, nativeCallsSrc, false)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, nativeCallsSrc, true); got != want {
 			t.Errorf("native (marking %v): %s, want %s", marking, got, want)
 		}
-		if atomic.LoadInt64(&nativeCalls) == before {
+		if atomic.LoadInt64(&nativeCounter.Load().calls) == before {
 			t.Errorf("native (marking %v): no call made natively", marking)
 		}
 	}
@@ -418,11 +421,11 @@ func TestRegNativeFastPaths(t *testing.T) {
 	var exits [2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeEnters)
+		before := atomic.LoadInt64(&nativeCounter.Load().enters)
 		if got := nativeRunSrc(t, nativeFastSrc, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		exits[i] = atomic.LoadInt64(&nativeEnters) - before
+		exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 	}
 	if exits[0] != exits[1] {
 		t.Errorf("%d exits, %d while marking", exits[0], exits[1])
@@ -682,7 +685,7 @@ func TestRegNativeFileMix(t *testing.T) {
 	}
 	run(false)
 	regTable, regSlowTable = orig, origSlow
-	before, enters := nativeExitOps(), atomic.LoadInt64(&nativeEnters)
+	before, enters := nativeExitOps(), atomic.LoadInt64(&nativeCounter.Load().enters)
 	run(true)
 	after := nativeExitOps()
 	var total, exited int64
@@ -704,7 +707,7 @@ func TestRegNativeFileMix(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d instructions, %d exits (%.1f%%), %d entries", total, exited, 100*float64(exited)/float64(max(total, 1)), atomic.LoadInt64(&nativeEnters)-enters)
+	t.Logf("%d instructions, %d exits (%.1f%%), %d entries", total, exited, 100*float64(exited)/float64(max(total, 1)), atomic.LoadInt64(&nativeCounter.Load().enters)-enters)
 	for _, r := range rows[:min(len(rows), 25)] {
 		if r.exits == 0 {
 			break
@@ -781,11 +784,11 @@ func TestRegNativeMore(t *testing.T) {
 	var exits [2]int64
 	for i, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeEnters)
+		before := atomic.LoadInt64(&nativeCounter.Load().enters)
 		if got := nativeRunSrc(t, nativeMoreSrc, true); got != want {
 			t.Errorf("native (marking %v):\n%s\nwant\n%s", marking, got, want)
 		}
-		exits[i] = atomic.LoadInt64(&nativeEnters) - before
+		exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 	}
 	if exits[0] != exits[1] {
 		t.Errorf("%d exits, %d while marking", exits[0], exits[1])
@@ -984,13 +987,13 @@ func TestRegCallSameTemplate(t *testing.T) {
 	// it in a code entry of its own: an entry for each call of outer, not
 	// two.
 	nativeCounting(t)
-	enters, calls := atomic.LoadInt64(&nativeEnters), atomic.LoadInt64(&nativeCalls)
+	enters, calls := atomic.LoadInt64(&nativeCounter.Load().enters), atomic.LoadInt64(&nativeCounter.Load().calls)
 	nativeRunSrc(t, `
 		function outer(k) { var f = function () { var a = [k]; return a[0] }; return f() }
 		var s = 0;
 		for (var k = 0; k < 200; k++) s += outer(k);
 		String(s)`, true)
-	enters, calls = atomic.LoadInt64(&nativeEnters)-enters, atomic.LoadInt64(&nativeCalls)-calls
+	enters, calls = atomic.LoadInt64(&nativeCounter.Load().enters)-enters, atomic.LoadInt64(&nativeCounter.Load().calls)-calls
 	if enters > 210 || calls < 199 {
 		t.Errorf("%d entries of the code and %d calls it made itself, want 210 entries at most and 199 calls or more", enters, calls)
 	}

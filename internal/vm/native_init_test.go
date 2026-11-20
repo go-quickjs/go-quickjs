@@ -86,12 +86,12 @@ func TestRegNativeInitFrameless(t *testing.T) {
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
 		for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults", "makeForwardCall", "makeForwardCallDefaults"} {
-			before := atomic.LoadInt64(&nativeCalls)
+			before := atomic.LoadInt64(&nativeCounter.Load().calls)
 			if got := nativeRunSrc(t, nativeInitSource+`String(`+name+`(1000))`, true); got != "500500" {
 				t.Fatalf("marking %v, %s: got %s", marking, name, got)
 			}
 			limit := int64(20)
-			if n := atomic.LoadInt64(&nativeCalls) - before; n > limit {
+			if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > limit {
 				t.Fatalf("marking %v, %s: entered %d frames, want at most %d", marking, name, n, limit)
 			}
 		}
@@ -165,11 +165,11 @@ out.join("|")`
 		if got := nativeRunSrc(t, constructed, true); got != constructedWant {
 			t.Fatalf("marking %v construction: got %q, want %q", marking, got, constructedWant)
 		}
-		before := atomic.LoadInt64(&nativeEnters)
+		before := atomic.LoadInt64(&nativeCounter.Load().enters)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
 		}
-		exits[i] = atomic.LoadInt64(&nativeEnters) - before
+		exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 	}
 	if exits[0] != exits[1] {
 		t.Fatalf("%d exits, %d while marking", exits[0], exits[1])
@@ -282,13 +282,13 @@ out.join("|")`
 	}
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
 		}
 		// reuse's 1,000 calls of via have frames, the Repeated each applies
 		// none; nor have run's 2,000 constructions but the first few.
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 1000+20 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 1000+20 {
 			t.Fatalf("marking %v: entered %d frames", marking, n)
 		}
 	}
@@ -345,11 +345,11 @@ run(100); String(run(1000))`
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
 		}
 		// The constructions but the first few have no frames.
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, constructions, true); got != "499500" {
 			t.Fatalf("marking %v: constructions gave %s", marking, got)
 		}
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 20 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 20 {
 			t.Fatalf("marking %v: constructions entered %d frames", marking, n)
 		}
 	}
@@ -505,12 +505,12 @@ function make(C, n) { var s = 0; for (var i = 0; i < n; i++) { var o = new C(i, 
 		if c := initCacheOf(r, "P"); c != nil {
 			t.Fatalf("marking %v: a cache before P has register code: %+v", marking, c)
 		}
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := run(`String(make(P, 1000))`); got != "3000" {
 			t.Fatalf("marking %v: got %s", marking, got)
 		}
 		c := initCacheOf(r, "P")
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 20 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 20 {
 			t.Fatalf("marking %v: %d frames", marking, n)
 		}
 		o := run(`var o = new P(1, 2, 3); Object.keys(o).join()`)
@@ -719,12 +719,12 @@ String(run(100))`
 	}
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
 		}
 		// The warm-up's constructions fill the sites and the table.
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 2*24*20 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 2*24*20 {
 			t.Fatalf("marking %v: forwarded constructions entered %d frames", marking, n)
 		}
 	}

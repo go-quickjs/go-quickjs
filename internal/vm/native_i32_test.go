@@ -59,11 +59,11 @@ func TestRegNativeMulImmInt32(t *testing.T) {
 		for i, marking := range []bool{false, true} {
 			nativeMarking(t, marking)
 			before := nativeExitOps()
-			enters0 := atomic.LoadInt64(&nativeEnters)
+			enters0 := atomic.LoadInt64(&nativeCounter.Load().enters)
 			if got, _ := nativeRunKernel(t, true, k.name, nil, k.n); got != want {
 				t.Errorf("%s (marking %v): %s, want %s", k.name, marking, got, want)
 			}
-			enters[i] = atomic.LoadInt64(&nativeEnters) - enters0
+			enters[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - enters0
 			after := nativeExitOps()
 			for _, op := range ops {
 				if n := after[op] - before[op]; n != 0 {

@@ -70,7 +70,7 @@ func nativeCheck(t *testing.T, src, fastSrc string, fast ...bytecode.ROp) {
 			t.Errorf("%s exited %d times", op, n)
 		}
 	}
-	if atomic.LoadInt64(&nativeEnters) == 0 {
+	if atomic.LoadInt64(&nativeCounter.Load().enters) == 0 {
 		t.Error("nothing ran natively")
 	}
 }
@@ -1258,12 +1258,12 @@ func TestRegNativeTypeofJumps(t *testing.T) {
 							fmt.Fprintf(&loop, "if (yes%d(j)) sum++; if (no%d(j)) sum++; if (second%d(0, j)) sum++;\n", i, i, i)
 						}
 						loop.WriteString("if (!captures.obj() && !captures.number() && !captures.undef()) sum++; } String(sum)")
-						before := atomic.LoadInt64(&nativeCalls)
+						before := atomic.LoadInt64(&nativeCounter.Load().calls)
 						v, err := r.Run(compileForTest(t, loop.String()))
 						if err != nil || v.String().Go() != "10000" {
 							t.Errorf("marking %v: fast predicates got %v, %v", marking, v, err)
 						}
-						if n := atomic.LoadInt64(&nativeCalls) - before; n > 96 {
+						if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 96 {
 							t.Errorf("marking %v: entered %d frames for typeof predicates", marking, n)
 						}
 					}

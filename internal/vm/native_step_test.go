@@ -56,11 +56,11 @@ func TestRegNativeSteps(t *testing.T) {
 		var enters [2]int64
 		for i, marking := range []bool{false, true} {
 			nativeMarking(t, marking)
-			before, exits := atomic.LoadInt64(&nativeEnters), nativeExitOps()
+			before, exits := atomic.LoadInt64(&nativeCounter.Load().enters), nativeExitOps()
 			if got := nativeRunSrc(t, c.src, true); got != want {
 				t.Errorf("%s (marking %v): %s, want %s", c.name, marking, got, want)
 			}
-			enters[i] = atomic.LoadInt64(&nativeEnters) - before
+			enters[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 			after := nativeExitOps()
 			n := int64(0)
 			for _, op := range regStepOps {

@@ -41,14 +41,14 @@ func TestRegNativeGettersFrameless(t *testing.T) {
 	nativeCounting(t)
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, nativeGetterSource+`String(getters(3000))`, true); got != "36000" {
 			t.Fatalf("marking %v: got %s", marking, got)
 		}
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 12 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 12 {
 			t.Fatalf("marking %v: getters entered %d native frames", marking, n)
 		}
-		before = atomic.LoadInt64(&nativeCalls)
+		before = atomic.LoadInt64(&nativeCounter.Load().calls)
 		const pointers = nativeGetterSource + `
 		function pointers() {
 			var a = new Box({x: 7}), b = new Box([{x: 11}]), s = 0;
@@ -59,7 +59,7 @@ func TestRegNativeGettersFrameless(t *testing.T) {
 		if got := nativeRunSrc(t, pointers, true); got != "18000" {
 			t.Fatalf("marking %v: pointer getters got %s", marking, got)
 		}
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 10 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 10 {
 			t.Fatalf("marking %v: pointer getters entered %d native frames", marking, n)
 		}
 	}
@@ -123,11 +123,11 @@ func TestRegNativeGettersFallback(t *testing.T) {
 			var exits [2]int64
 			for i, marking := range []bool{false, true} {
 				nativeMarking(t, marking)
-				before := atomic.LoadInt64(&nativeEnters)
+				before := atomic.LoadInt64(&nativeCounter.Load().enters)
 				if got := nativeRunSrc(t, src, true); got != tc.want {
 					t.Fatalf("marking %v: got %q, want %q", marking, got, tc.want)
 				}
-				exits[i] = atomic.LoadInt64(&nativeEnters) - before
+				exits[i] = atomic.LoadInt64(&nativeCounter.Load().enters) - before
 			}
 			if exits[0] != exits[1] {
 				t.Fatalf("%d exits, %d while marking", exits[0], exits[1])
@@ -157,11 +157,11 @@ run(1000)`
 	}
 	for _, marking := range []bool{false, true} {
 		nativeMarking(t, marking)
-		before := atomic.LoadInt64(&nativeCalls)
+		before := atomic.LoadInt64(&nativeCounter.Load().calls)
 		if got := nativeRunSrc(t, src, true); got != want {
 			t.Fatalf("marking %v: got %q, want %q", marking, got, want)
 		}
-		if n := atomic.LoadInt64(&nativeCalls) - before; n > 12 {
+		if n := atomic.LoadInt64(&nativeCounter.Load().calls) - before; n > 12 {
 			t.Fatalf("marking %v: the getter entered %d native frames", marking, n)
 		}
 	}

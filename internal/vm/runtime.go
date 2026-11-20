@@ -394,6 +394,11 @@ type Runtime struct {
 	// gcYield is Config.GCYield's state (writebarrier.go), after every field the
 	// interpreter reads, so that it moves none of them.
 	gcYield gcYieldState
+	// nativeCounts is what a test counts of the native code's work in the
+	// runtime (nativeCounters), nil but in a runtime made while one
+	// counts: after every field the interpreter and the native code read,
+	// so that it moves none of them.
+	nativeCounts *nativeCounters
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

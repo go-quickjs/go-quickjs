@@ -77,23 +77,33 @@ func SetRegNative(on bool) bool {
 	return was
 }
 
-// The counters and switches of the tests: process-wide, off but in a
-// test (nativeCounting, nativeMarking).
+// The switches of the tests: process-wide, off but in a test
+// (nativeCounting, nativeMarking).
 var (
-	// nativeCount turns the counters on.
-	nativeCount bool
-	// nativeEnters counts the code's entries: one, and one after each
-	// exit to Go.
-	nativeEnters int64
-	// nativeExits counts the exits to Go by operation.
-	nativeExits [256]int64
-	// nativeCalls counts the calls the code made itself.
-	nativeCalls int64
+	// nativeCounter, set by a test, is the counters of the runtimes made
+	// while it is set (Runtime's nativeCounts): a runtime made before,
+	// which may still be running native code -- another test's, left on a
+	// goroutine of its own -- counts nothing into it.
+	nativeCounter atomic.Pointer[nativeCounters]
 	// nativeMarkFlag, set by a test, is the flag the contexts made after
 	// it read for the collector's, so that the code stores as it does
 	// while the collector marks.
 	nativeMarkFlag atomic.Pointer[uint8]
 )
+
+// nativeCounters are a test's counts of the native code's work in the
+// runtimes that count into them (Runtime's nativeCounts).
+type nativeCounters struct {
+	// exits counts the exits to Go by operation: first, so that the
+	// address the contexts' cntExits holds is its, which the exit's call
+	// of Go counts at (nativeCallH).
+	exits [256]int64
+	// enters counts the code's entries: one, and one after each exit to
+	// Go.
+	enters int64
+	// calls counts the calls the code made itself.
+	calls int64
+}
 
 // nativeExitTable is the Go functions the exit stub calls for an
 // instruction the native code leaves (the context's goTable): regTable's
@@ -188,10 +198,6 @@ func (r *Runtime) nativeLoop(st *regState, ctx *nativeCtx, f *frame, c *regCode,
 	nativeSetTop(ctx, uintptr(unsafe.Pointer(st.regs)), f, c)
 	ctx.ip = uintptr(c.code) + uintptr(start)*8
 	ctx.top, ctx.topOK = st, 1
-	ctx.cntExits = 0
-	if nativeCount {
-		ctx.cntExits = uintptr(unsafe.Pointer(&nativeExits[0]))
-	}
 	return r.nativeDrive(st, ctx, false)
 }
 
@@ -206,8 +212,8 @@ func (r *Runtime) nativeDrive(st *regState, ctx *nativeCtx, entered bool) (Value
 	for {
 		if !entered {
 			ctx.budget = int64(r.backEdges)
-			if nativeCount {
-				atomic.AddInt64(&nativeEnters, 1)
+			if n := r.nativeCounts; n != nil {
+				atomic.AddInt64(&n.enters, 1)
 			}
 			nativeEnter(nativeBase, unsafe.Pointer(ctx))
 			r.backEdges = int(ctx.budget)
@@ -250,8 +256,8 @@ func (r *Runtime) nativeDrive(st *regState, ctx *nativeCtx, entered bool) (Value
 		op := w.Op()
 		miss := ctx.miss != 0
 		ctx.miss = 0
-		if nativeCount {
-			atomic.AddInt64(&nativeExits[op], 1)
+		if n := r.nativeCounts; n != nil {
+			atomic.AddInt64(&n.exits[op], 1)
 		}
 		if ctx.depth == ctx.cap && ctx.cap < nativeMaxDepth && (op == bytecode.RCallW || op == bytecode.RCallMW || op == bytecode.RCallWT || op == bytecode.RCallMWT || op == bytecode.RIterNext || op == bytecode.RNewW) {
 			// A call, or a generator's step, the frame stack has no room
@@ -274,8 +280,8 @@ func (r *Runtime) nativeDrive(st *regState, ctx *nativeCtx, entered bool) (Value
 			if ctx.disp.has[op] {
 				break
 			}
-			if nativeCount {
-				atomic.AddInt64(&nativeExits[op], 1)
+			if n := r.nativeCounts; n != nil {
+				atomic.AddInt64(&n.exits[op], 1)
 			}
 			pc = regTable[op](s.regs, w, pc, s)
 		}
@@ -309,10 +315,6 @@ func (r *Runtime) nativeCallbackRun(cb *regCallback, f *frame, regs *[1 << 16]Va
 		st.regs = regs
 		ctx.depth, ctx.filled = 0, 0
 		nativeSetTop(ctx, uintptr(unsafe.Pointer(regs)), f, c)
-		ctx.cntExits = 0
-		if nativeCount {
-			ctx.cntExits = uintptr(unsafe.Pointer(&nativeExits[0]))
-		}
 		cb.set = f
 	}
 	// The base frame the top one: a call the last run made and returned
@@ -323,8 +325,8 @@ func (r *Runtime) nativeCallbackRun(cb *regCallback, f *frame, regs *[1 << 16]Va
 	ctx.topOK = 1
 	ctx.ip = uintptr(c.code)
 	ctx.budget = int64(r.backEdges)
-	if nativeCount {
-		atomic.AddInt64(&nativeEnters, 1)
+	if n := r.nativeCounts; n != nil {
+		atomic.AddInt64(&n.enters, 1)
 	}
 	nativeEnter(nativeBase, unsafe.Pointer(ctx))
 	r.backEdges = int(ctx.budget)
@@ -333,8 +335,8 @@ func (r *Runtime) nativeCallbackRun(cb *regCallback, f *frame, regs *[1 << 16]Va
 		ctx.retDone = 0
 		v := Value{num: math.Float64frombits(ctx.scratch[sV0]), ref: *(*unsafe.Pointer)(unsafe.Pointer(&ctx.scratch[sV1]))}
 		ctx.scratch[sV1] = 0
-		if nativeCount {
-			atomic.AddInt64(&nativeCalls, ctx.made)
+		if n := r.nativeCounts; n != nil {
+			atomic.AddInt64(&n.calls, ctx.made)
 			ctx.made = 0
 		}
 		return v, nil
@@ -451,6 +453,9 @@ func (r *Runtime) newNativeCtx(st *regState) *nativeCtx {
 // initNativeCtx makes ctx st's context, as newNativeCtx makes one.
 func (r *Runtime) initNativeCtx(ctx *nativeCtx, st *regState) {
 	ctx.st = st
+	// The runtime's counters, where a test counts (nativeCounts): fixed
+	// for the context's life, as the runtime's are.
+	ctx.cntExits = uintptr(unsafe.Pointer(r.nativeCounts))
 	ctx.disp = r.nativeDispatch()
 	ctx.table = ctx.disp.addr
 	ctx.objBits = objectBits
@@ -535,8 +540,8 @@ func (r *Runtime) nativeLeave(st *regState, ctx *nativeCtx) {
 // nativeReset lets go of what a run of ctx's code left: the states of the
 // frames it entered, its top's, its count of calls.
 func nativeReset(ctx *nativeCtx) {
-	if nativeCount {
-		atomic.AddInt64(&nativeCalls, ctx.made)
+	if n := ctx.st.r.nativeCounts; n != nil {
+		atomic.AddInt64(&n.calls, ctx.made)
 	}
 	ctx.made = 0
 	ctx.top = nil
