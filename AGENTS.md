@@ -76,6 +76,7 @@ concurrently.
   lock's pads sort right before their anchors (`bigi_layoutpad.go`
   before `bigint.go`, `builtin_layoutpad.go` before `builtins.go`,
   `builtins_j_layoutpad.go` before `builtins_json.go`,
+  `builtins_json_p_layoutpad.go` before `builtins_json_parse.go`,
   `calls_layoutpad.go` before `callsite.go`, `generato_layoutpad.go`
   before `generator.go`, `regexp_a_layoutpad.go` before
   `regexp_abstract.go`, `strh_layoutpad.go` before `string.go`,

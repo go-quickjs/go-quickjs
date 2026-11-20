@@ -216,7 +216,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 
 | Lever | The pad | Moves | Pins |
 |---|---|---|---|
-| A I E T C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`), the JSON encoder's `encode` (`builtins_json.go` on, T), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
+| A I E T JP C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`), the JSON encoder's `encode` (`builtins_json.go`, T), JSON.parse's parser, `parseJSON` (`builtins_json_parse.go` on, JP), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and without the JIT `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
 | Q W U V | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), the call path after it, `rhCallW` (W), its operations in Go, `regBinImm` and `regBinary` (`reg_runs.go`, U), and its handlers, `newRegSwitchTable` (`reg_switch.go` and `reg_table*.go`, V, at `2f05d3fc`'s layout) |
 | Y K | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the generators and async functions, `regGenOf` (`reg_generator.go`, Y: `regAsyncStart`, `regAsyncRun`), and the cold handlers, `regColdInit` (`reg_table_cold.go`, K: await's `rhAwait`), at `16f8b5e9`'s layout |
 | O | `layoutPadO`, before `vm_object.go` | `vm_object.go` and every function after it | what follows the literal constructors, `newErrorObject`, and with it the property definitions after it (`setOwnRaw`, `appendProp`, `setArrayLength`, `vm_property.go`, `vm_shape.go`), at `16f8b5e9`'s layout; the functions before the constructors in `vm_object.go` (`newObject`) move with the pad |
@@ -275,7 +275,17 @@ What each lever cannot move:
   `json_round_trip` back but left `json_stringify_records` and
   `json_stringify_small` slower; the fix was in the code:
   `encodeObject`'s BigInt wrapper case, which always throws, went out
-  of line, and the function is as long as it was.
+  of line, and the function is as long as it was. That put the parser
+  and the built-ins after it back at `5ef0d50b`'s offsets too, where
+  `json_parse_decimals` was 6%, `json_parse_exponents` 4% and
+  `typed_f64_reduce` 5% slower at every placement than 96 bytes on: JP
+  (`builtins_json_p_layoutpad.go`, before `builtins_json_parse.go`, the
+  parser moved out of `builtins_json.go` for it) holds them at
+  `a2126155`'s, 96 bytes past. `json_stringify_unique` is held by
+  neither: its `encodeProps` and `writeKeys` lie between
+  `encodeElements` and `appendJSONString`, in the stretch whose
+  offsets `json_stringify_escapes` and `json_stringify_unicode` want,
+  and it is 7% slower with the JIT than 96 bytes on, as at `5ef0d50b`.
   Y, K and O hold at `16f8b5e9`'s offsets code that changes around it
   moved where no position was: the literal constructors' rewrite moved
   `vm_object.go`'s code after them 608 bytes back, and
