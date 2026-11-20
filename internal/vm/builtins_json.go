@@ -422,7 +422,7 @@ func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
 			return Undefined, err
 		}
 		if isCallable(tj) {
-			e.argv[0] = Str(e.rt.keyString(key))
+			e.argv[0] = Str(e.rt.keyText(key))
 			v, err = e.rt.callDirect(tj, v, e.argv[:1])
 			if err != nil {
 				return Undefined, err
@@ -430,7 +430,7 @@ func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
 		}
 	}
 	if e.hasFn {
-		e.argv[0], e.argv[1] = Str(e.rt.keyString(key)), v
+		e.argv[0], e.argv[1] = Str(e.rt.keyText(key)), v
 		return e.rt.callDirect(e.replacer, holder, e.argv[:2])
 	}
 	return v, nil
@@ -518,7 +518,7 @@ func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver *jsonR
 					child = rec.elements[i]
 				}
 				ik := r.indexKey(i)
-				el, err := r.reviveJSONAt(o, ik, Str(r.keyString(ik)), reviver, child, depth+1)
+				el, err := r.reviveJSONAt(o, ik, Str(r.keyText(ik)), reviver, child, depth+1)
 				if err != nil {
 					return Undefined, err
 				}
@@ -557,7 +557,7 @@ func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver *jsonR
 				if rec != nil {
 					child = rec.entries[pk]
 				}
-				el, err := r.reviveJSONAt(o, pk, Str(r.keyString(pk)), reviver, child, depth+1)
+				el, err := r.reviveJSONAt(o, pk, Str(r.keyText(pk)), reviver, child, depth+1)
 				if err != nil {
 					return Undefined, err
 				}

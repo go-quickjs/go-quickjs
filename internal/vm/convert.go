@@ -187,9 +187,22 @@ func asciiString(b []byte) *String {
 }
 
 // keyString is the string of a key a script is handed to read the property
-// by -- what for-in gives it -- remembered with its atom, so that reading
-// the property by it, o[k], finds the atom without looking the name up.
+// by -- what for-in and Object.keys give it -- remembered with its atom, so
+// that reading the property by it, o[k], finds the atom without looking
+// the name up.
 func (r *Runtime) keyString(k Atom) *String {
+	s := r.keyText(k)
+	r.keyPut(keyAtom{s: s, atom: k})
+	return s
+}
+
+// keyText is the string of key k, not remembered in keyAtoms: the key a
+// replacer, a reviver or a toJSON is given, which reads no property by it
+// as a rule. Remembering it costs a look through its set, a likely miss
+// of a line of the table for every key of the document, where a direct
+// mapped table's write had cost nothing; a key such a function does read
+// a property by is remembered at that read, as any string is.
+func (r *Runtime) keyText(k Atom) *String {
 	var s *String
 	switch {
 	case k.IsIndex() && k.Index() < 1024:
@@ -208,7 +221,6 @@ func (r *Runtime) keyString(k Atom) *String {
 			r.keyStrings[k] = s
 		}
 	}
-	r.keyPut(keyAtom{s: s, atom: k})
 	return s
 }
 

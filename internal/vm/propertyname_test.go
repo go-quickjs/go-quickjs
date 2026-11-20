@@ -182,3 +182,48 @@ func TestPropertyKeyAtoms(t *testing.T) {
 		}
 	}
 }
+
+// The keys JSON gives a replacer, a reviver and a toJSON are not
+// remembered in keyAtoms (keyText): such a function reads no property by
+// its key as a rule, and remembering each key cost a look through its
+// set. The keys for-in gives are (keyString), and a key the function
+// does read a property by is remembered at that read.
+func TestJSONKeysNotRemembered(t *testing.T) {
+	t.Parallel()
+	r := New(Config{})
+	defer r.Close()
+	const src = `
+		var seen = []
+		JSON.stringify({ jsonKeyA: 1, jsonKeyB: [1, 2], jsonKeyC: { toJSON(k) { seen.push(k); return 0 } } },
+			function (k, v) { seen.push(k); return v })
+		JSON.parse('{"jsonKeyD": 1}', function (k, v) { seen.push(k); return v })
+		seen.join()`
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), ",jsonKeyA,jsonKeyB,0,1,jsonKeyC,jsonKeyC,jsonKeyD,"; got != want {
+		t.Fatalf("keys %s, want %s", got, want)
+	}
+	remembered := func(name string) bool {
+		a := r.atoms.intern(name)
+		return int(a) < len(r.keyStrings) && r.keyStrings[a] != nil && r.keyFind(r.keyStrings[a]) != nil
+	}
+	// jsonKeyD is in the table nonetheless: the reviver's walk takes an
+	// object's keys from its shape's for-in keys (shapeKeys), which are
+	// for-in's and remembered.
+	for _, name := range []string{"jsonKeyA", "jsonKeyB", "jsonKeyC"} {
+		if remembered(name) {
+			t.Errorf("%s, a key JSON gave a function, is in keyAtoms", name)
+		}
+	}
+	if r.keyFind(r.intString(1)) != nil {
+		t.Errorf("the index 1 JSON gave a replacer is in keyAtoms")
+	}
+	if _, err := r.Run(compileForTest(t, `for (var k in { jsonKeyA: 1 }) {}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !remembered("jsonKeyA") {
+		t.Errorf("jsonKeyA, a key for-in gave, is not in keyAtoms")
+	}
+}
