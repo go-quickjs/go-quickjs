@@ -15,7 +15,7 @@ import (
 // one is added -- and some of those set again, as a closed runtime's may be,
 // answers for each map what a Go map of the same entries answers.
 func TestWeakMapKeyEntriesInOrder(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	refs := func() *weakMapRefs { return key.object().weakMapRefsOf() }
 	more := func() *weakMapMore {
@@ -130,7 +130,7 @@ func TestWeakMapPrunesOnlyAfterCollection(t *testing.T) {
 			t.Fatal("the collector's cycles are not counted")
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	keys := make([]Value, 100)
 	for i := range keys {

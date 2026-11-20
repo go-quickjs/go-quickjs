@@ -30,7 +30,7 @@ func TestJITCallRepeatsInvalidate(t *testing.T) {
 		var a = new A(3), b = new B(5)
 		function run(o, n) { let t = 0; for (let i = 0; i < n; i++) t = (t + o.step(i)) | 0; return t }
 		function each(o, n) { let t = 0; for (let i = 0; i < n; i++) t = (t + run(o, 4)) | 0; return t }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

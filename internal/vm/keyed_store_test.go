@@ -262,7 +262,7 @@ func TestKeyedStoreSemantics(t *testing.T) {
 	for _, c := range keyedStoreCases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			v, err := r.Run(compileForTest(t, c.src))
 			if err != nil {
@@ -287,7 +287,7 @@ func TestKeyedStoreCacheHits(t *testing.T) {
 		function lit(n) { var o; for (var j = 0; j < n; j++) o = { [keys[j & 3]]: j, v: 1 }; return o }
 		function set(n) { var o; for (var j = 0; j < n; j++) { o = {}; o[keys[j & 3]] = j }; return o }
 		lit(400); set(400)`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)

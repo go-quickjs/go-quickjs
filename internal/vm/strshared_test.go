@@ -35,7 +35,7 @@ last
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			v, err := r.Run(fn)
 			if err != nil {

@@ -30,7 +30,7 @@ func TestJITInstanceOfCaptured(t *testing.T) {
 		function run(n){return m.test(m.xs,n)}`
 	cases := []string{`run(30)`, `run(45)`, `(m.swap(),run(30))`, `(m.swap(),run(30))`, `(m.own(),run(30))`, `(m.unown(),run(30))`,
 		`run(27)`, `(m.reproto(),run(30))`, `run(18)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

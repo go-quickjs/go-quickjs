@@ -20,7 +20,7 @@ func TestCallerMadeWhenAsked(t *testing.T) {
 		g.caller;
 		Reflect.ownKeys(h);
 		[f, g, h]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

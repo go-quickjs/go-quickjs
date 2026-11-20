@@ -31,7 +31,7 @@ func TestArraySizes(t *testing.T) {
 			t.Errorf("%s is %d bytes, want %d", c.name, c.size, c.want)
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `[1, 2, 3]`))
 	if err != nil {

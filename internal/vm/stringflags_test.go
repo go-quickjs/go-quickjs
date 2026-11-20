@@ -24,7 +24,7 @@ func TestBuiltStringsKnowThemselves(t *testing.T) {
 		`"\ud83d".concat("\ude00")`, `"x".repeat(40).concat("y".repeat(40))`, `"\u00e9\ud800".toWellFormed()`,
 		`"abc".toWellFormed()`,
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	for _, e := range exprs {
 		if _, err := r.Run(compileForTest(t, "var f = () => "+e)); err != nil {
 			t.Fatalf("%s: %v", e, err)

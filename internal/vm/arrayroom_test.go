@@ -11,7 +11,7 @@ import (
 
 func TestArrayLiteralRoom(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function fill(n) {
 		var a = [];
@@ -59,7 +59,7 @@ func TestArrayLiteralRoom(t *testing.T) {
 
 func TestArrayLiteralRoomFirstUse(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.SetEvaluator(func(source string, _ EvalRequest) (*bytecode.Function, error) {
 		return compileForTest(t, source), nil
@@ -93,7 +93,7 @@ func TestArrayLiteralRoomFirstUse(t *testing.T) {
 
 func TestArrayLiteralRoomSamples(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	a := newArrayObject(r.proto.array, 30000)
 	s := &arrayRoom{sample: a, room: 30000, previous: 30000, listed: true}
@@ -126,7 +126,7 @@ func TestArrayLiteralRoomSamples(t *testing.T) {
 }
 
 func TestArrayLiteralRoomCollected(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	var w weak.Pointer[Object]
 	func() {
@@ -152,7 +152,7 @@ func TestArrayLiteralRoomCollected(t *testing.T) {
 
 func TestArrayLiteralRoomRealms(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `function fill(n) {
 		var a = [], b = [];
@@ -195,7 +195,7 @@ func TestArrayLiteralRoomRealms(t *testing.T) {
 
 func TestArrayLiteralRoomMemoryLimit(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 64 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 64 << 20})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function fill() {
 		var a = [];
@@ -219,7 +219,7 @@ func TestArrayLiteralRoomMemoryLimit(t *testing.T) {
 
 func TestArrayLiteralRoomAfterSmall(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function fill(n) {
 		var a = [];
@@ -262,7 +262,7 @@ func TestArrayLiteralRoomAfterSmall(t *testing.T) {
 // must read subsequent mutations from the array's current elements.
 func TestArrayLiteralRoomCallbackGrowth(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function fill(n) {
 		var a = [];

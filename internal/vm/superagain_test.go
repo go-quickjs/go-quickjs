@@ -104,7 +104,7 @@ const superAgainWant = "A1:B:true:x | A2:B:true:x | ReferenceError | B x=1 same=
 
 func TestSecondSuperMakesItsOwnObject(t *testing.T) {
 	{
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, superAgainSrc))
 		r.Close()
 		if err != nil {
@@ -116,7 +116,7 @@ func TestSecondSuperMakesItsOwnObject(t *testing.T) {
 	}
 	// The error is the engine's, its message the one a super() past the
 	// first has always had.
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `'use strict'
 		class A { constructor() { this.n = 1 } }

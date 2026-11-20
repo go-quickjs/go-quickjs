@@ -19,7 +19,7 @@ import (
 // step to test.
 func TestTypedViewCache(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	run := func(src string) Value {
 		t.Helper()

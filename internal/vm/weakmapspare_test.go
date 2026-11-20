@@ -31,7 +31,7 @@ func releaseMapsUntil(t *testing.T, r *Runtime, live int) {
 // made next take; and after deletes, and sets again. Node v26.10.0's
 // answers.
 func TestWeakMapKeysOfMapsAfterMaps(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	run := func(src string) string {
 		t.Helper()
@@ -91,7 +91,7 @@ func TestWeakMapKeysOfMapsAfterMaps(t *testing.T) {
 // kept, empty, with their room; a key that needs room for its other maps
 // takes them, and its entries are its own, none of the first key's.
 func TestWeakMapSpareEntriesTaken(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	a, b := Obj(newObject(nil, ClassObject)), Obj(newObject(nil, ClassObject))
 	maps := make([]*weakMap, 12)
 	for i := range maps {
@@ -155,7 +155,7 @@ func TestWeakMapSparesGoAfterCollection(t *testing.T) {
 	// test's.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	q := r.weakMapRegistry()
 	e := gcEpoch.Load()
 	q.dropSpares()
@@ -179,7 +179,7 @@ func TestWeakMapSparesGoAfterCollection(t *testing.T) {
 // The entries of a key's other maps keep their room when compacted, unless
 // their maps since the last compaction were fewer than a quarter of it.
 func TestWeakMapCompactKeepsRoom(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	refs := func() *weakMapRefs { return key.object().weakMapRefsOf() }
 	first := newWeakMap()
@@ -229,7 +229,7 @@ func TestWeakMapCompactKeepsRoom(t *testing.T) {
 // v26.10.0's answers.
 func TestWeakCollectionsAgreeWithNode(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var out = [];
@@ -284,7 +284,7 @@ func TestWeakCollectionsAgreeWithNode(t *testing.T) {
 // it does off its object keys: the two are listed apart (weakMapState's
 // keys and syms), and each list's keys are found as what they are.
 func TestWeakMapReleasesValuesOfSymbolKeys(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	sym, obj := Sym(NewSymbol("k", true)), Obj(newObject(nil, ClassObject))
 	live := newWeakMap()
 	live.set(r, sym, Int(1))

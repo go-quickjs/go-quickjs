@@ -175,7 +175,7 @@ func TestJITTypedKinds(t *testing.T) {
 // (v26.12.1): a check of the interpreter that the comparison stands on.
 func TestJITTypedKindsWant(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(t, typedKindSetup)); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestJITTypedUpvalues(t *testing.T) {
 		t.Error("branches' sites learned no type once its bindings held views of others")
 	}
 
-	r = New(Config{JIT: true})
+	r = newTestRuntime(t, Config{JIT: true})
 	// Compiled on the spot, as the counts below are written for, not in
 	// the background (QJS_JIT_STRESS's background).
 	r.jitStress.background = false

@@ -160,7 +160,7 @@ set2:20;setq:7;op12:12`
 func TestPropertyCreationAgreesWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 2 {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, propCreateScript))
 		if err != nil {
 			t.Fatal(err)
@@ -195,7 +195,7 @@ func TestPropertyCreationAgreesWithNode(t *testing.T) {
 // (newCreated).
 func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `
 		function record() {
@@ -261,7 +261,7 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 // again.
 func TestFindOwnPastTheTable(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function make(n) { var o = {}; for (var i = 0; i < n; i++) o["k" + i] = i; return o; }

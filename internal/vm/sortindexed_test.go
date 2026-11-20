@@ -11,7 +11,7 @@ import "testing"
 // for these.
 func TestSortIndexedKeys(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function mk(n, step) { var a = []; for (var i = n - 1; i >= 0; i -= step) a[i] = i; return a }

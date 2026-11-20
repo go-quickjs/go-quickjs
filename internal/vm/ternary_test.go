@@ -41,7 +41,7 @@ func TestTernaryExpressions(t *testing.T) {
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "F,T,F,T,F,F,F,F,T,F,T,T,1,lt,2,1,ge,3,3,ge,1,2,lt,2,a,lt,2,1,lt,2,NaN,lt,2,0,ge,2,0,lt,2,none,none,0,0,x,x,-2,0,none,y,0,2,xy,x,4,3,1,2,ab,1a,thrownat,12,12 | true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

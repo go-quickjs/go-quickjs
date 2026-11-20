@@ -21,7 +21,7 @@ func TestPrivateNamesKeepTheirAtoms(t *testing.T) {
 		out.push(o[s], Object.getOwnPropertySymbols(o).length, a.get())
 		out.join()`
 	const want = "1,5,1,true,false,false,TypeError,s,1,1"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		r.Close()

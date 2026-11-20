@@ -15,7 +15,7 @@ import (
 // range is.
 func TestBigArithKeepsSmallResultsApart(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	vals := []int64{0, 1, -1, 7, -7, 1 << 31, -(1 << 31), math.MaxInt64, math.MinInt64}
 	ops := []bytecode.Op{bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod}
 	for _, x := range vals {

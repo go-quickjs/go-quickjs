@@ -12,7 +12,7 @@ import "testing"
 // and arguments whose conversion runs code.
 func TestSpliceDenseMatchesSpec(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function toInt(v) { v = Number(v); return v !== v ? 0 : Math.trunc(v) }
@@ -115,7 +115,7 @@ func TestSpliceDenseMatchesSpec(t *testing.T) {
 // tell apart from a move of its elements.
 func TestSpliceDenseTakes(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	for _, c := range []struct {
 		src  string

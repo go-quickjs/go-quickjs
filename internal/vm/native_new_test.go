@@ -292,7 +292,7 @@ func TestRegNativeInstanceOfRealms(t *testing.T) {
 			nativeMarking(t, marking)
 			was := regNativeOn
 			regNativeOn = native
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			other := r.NewRealm()
 			fv, err := r.RunIn(other, compileForTest(t, foreign))
 			if err == nil {

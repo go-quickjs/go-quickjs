@@ -102,7 +102,7 @@ func TestJITAccessors(t *testing.T) {
 		if marking {
 			jitMarkingForTest(t)
 		}
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		for _, rt := range []*Runtime{want, r} {
 			if _, err := rt.Run(compileForTest(t, jitAccessorSetup)); err != nil {
@@ -142,7 +142,7 @@ func TestJITAccessorThrows(t *testing.T) {
 		function crashDeep(os,n){let s=0;for(let i=0;i<n;i++)s+=os[i%os.length].deep;return s}
 		function crashSum(os,n){let s=0;for(let i=0;i<n;i++)s+=os[i%os.length].sum;return s}
 		function crashFar(os,n){let s=0;for(let i=0;i<n;i++)s+=os[i%os.length].far;return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

@@ -61,7 +61,7 @@ function makeForwardCallDefaults(n) {
 func BenchmarkRegNativeInit(b *testing.B) {
 	for _, name := range []string{"makePairs", "makeForward", "makeDefaults", "makeForwardDefaults", "makeForwardCall", "makeForwardCallDefaults"} {
 		b.Run(name, func(b *testing.B) {
-			r := New(Config{})
+			r := newTestRuntime(b, Config{})
 			b.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			if _, err := r.Run(compileForTest(b, nativeInitSource)); err != nil {
 				b.Fatal(err)
@@ -488,7 +488,7 @@ func TestRegNativeInitCacheState(t *testing.T) {
 		nativeMarking(t, marking)
 		was := regNativeOn
 		regNativeOn = true
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		run := func(src string) string {
 			t.Helper()
 			v, err := r.Run(compileForTest(t, src))
@@ -589,7 +589,7 @@ String(s)`)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			v, err := r.Run(fn)
 			switch {
@@ -755,7 +755,7 @@ for (var f of [stores, defaults, method, apply, call, computed, args, nine, five
 }
 new K(1); new KReturns(1); new KDerived(1);
 try { new KForward(1) } catch (e) {}`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)

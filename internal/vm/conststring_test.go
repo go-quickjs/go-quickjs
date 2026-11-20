@@ -10,7 +10,7 @@ import (
 // literals, and a script's run later, share it while it lives; one no
 // constant holds any more is swept out of the table.
 func TestConstStringShared(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	a, b := r.constString("forward"), r.constString("forward")
 	if a != b {
@@ -38,7 +38,7 @@ func TestConstStringShared(t *testing.T) {
 // Go 1.24's weak.Make faults on a pointer to no heap object ("getWeakHandle
 // on invalid pointer") -- and a script's empty literals are it.
 func TestConstStringEmpty(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if s := r.constString(""); s != emptyString {
 		t.Fatal("the empty constant is not the runtime's empty string")

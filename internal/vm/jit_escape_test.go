@@ -151,7 +151,7 @@ func TestJITEscapeAnalysis(t *testing.T) {
 // with the JIT before anything runs.
 func jitAgreesForTestWith(t *testing.T, c jitStressConfig, setup string, rounds ...string) *Runtime {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitStress = c

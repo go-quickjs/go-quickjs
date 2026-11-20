@@ -29,7 +29,7 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		try { fwdClass() } catch (e) { out.push(e instanceof TypeError) }
 		try { fwdThrow() } catch (e) { out.push(/thrower/.test(e.stack), /fwdThrow/.test(e.stack)) }
 		[out.join(), Point.prototype.initialize]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestForwarderMethodsByShape(t *testing.T) {
 	const want = "440000; 1; 20; proto3; 1:40; undefined:50; own6; undefined; 8; one1; two2; Error: boom | at Object.initialize | at new <anonymous>"
 	for _, mode := range []string{"stack", "tree", "reg"} {
 		fn := compileForTest(t, src)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(fn)
 		if err != nil {
 			t.Fatalf("%s: %v", mode, err)

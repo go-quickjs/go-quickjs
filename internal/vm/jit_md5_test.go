@@ -197,7 +197,7 @@ func BenchmarkJITMD5FirstUse(b *testing.B) {
 			b.ResetTimer()
 			b.StopTimer()
 			for range b.N {
-				r := New(Config{JIT: mode == "native"})
+				r := newTestRuntime(b, Config{JIT: mode == "native"})
 				if _, err := r.Run(setup); err != nil {
 					b.Fatal(err)
 				}

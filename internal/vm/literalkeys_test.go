@@ -27,7 +27,7 @@ func shapeOfNew(t *testing.T, r *Runtime, src string) *shape {
 func TestRegLiteralKeysShareALayout(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		want := shapeOfNew(t, r, `(function () { return {a: 1, b: 2} })()`)
 		if want == nil || want.unique || want.loose || want.n != 2 {
 			t.Fatalf("native %v: no shared layout: %+v", native, want)
@@ -58,7 +58,7 @@ func TestRegLiteralKeysShareALayout(t *testing.T) {
 // Each realm has its own, of its own Object.prototype.
 func TestLiteralKeysByRealm(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `({a: 1, b: 2})`)
 	run := func(re *Realm) *shape {
@@ -83,7 +83,7 @@ func TestLiteralKeysByRealm(t *testing.T) {
 // nothing a run keeps of it holds the code.
 func TestFreshCodeMakesNoLiteralShapes(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := func(i int) string {
 		return fmt.Sprintf(`var o = {a: %d, b: {c: 1}}, f = function () { return {d: 1, e: [{f: 2}]} }; f().e[0].f + o.b.c`, i)
@@ -108,7 +108,7 @@ func TestFreshCodeMakesNoLiteralShapes(t *testing.T) {
 // others, however many they have.
 func TestLiteralKeysRoom(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function grown() { var o = {a: 1, b: 2}; o.c = 3; o.d = 4; o.e = 5; o.f = 6; o.g = 7; return o }
@@ -150,7 +150,7 @@ func TestLiteralKeysRoom(t *testing.T) {
 // holds for as long as it lives: past literalShapes it starts again, and what
 // no code has goes, so that the tree has room for what comes after.
 func TestLiteralKeysMadeUp(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	roots := func() *literalRoots { return r.proto.object.shape.side.programs.roots }
 	if _, err := r.Run(compileForTest(t, `({first: 1})`)); err != nil {
@@ -190,7 +190,7 @@ func TestLiteralKeysMadeUp(t *testing.T) {
 // layout of a root, and are right.
 func TestLiteralKeysTreeFull(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.shapes.count, r.shapes.settled = maxShapes, maxShapes
 	v, err := r.Run(compileForTest(t, `var o = {new1: 1, new2: 2}; o.new1 + o.new2`))

@@ -12,7 +12,7 @@ import "testing"
 func builderDifferential(t *testing.T, src string) {
 	t.Helper()
 	run := func(jit bool, threshold uint16) string {
-		r := New(Config{JIT: jit})
+		r := newTestRuntime(t, Config{JIT: jit})
 		defer func() { r.Close(); r.ReleaseClosed() }()
 		if jit && r.jitCallThreshold <= 1 && threshold > 1 {
 			// QJS_JIT_STRESS: the runtime compiles eagerly already.
@@ -236,7 +236,7 @@ func TestJITStringBuilderAppendsInPlace(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")

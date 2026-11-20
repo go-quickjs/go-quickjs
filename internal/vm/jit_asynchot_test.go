@@ -31,7 +31,7 @@ func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime
 		}
 		return got
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	w := run(want)
 	for _, c := range []jitStressConfig{

@@ -150,7 +150,7 @@ func TestRegStepInterrupt(t *testing.T) {
 		}
 		fin := compileForTest(t, finite)
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		for i, fn := range fns {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			r.SetContext(ctx)

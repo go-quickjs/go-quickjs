@@ -83,12 +83,12 @@ func TestJITFusedBranches(t *testing.T) {
 		`[dies({n:3}),dies({n:3},1),dies({n:30},undefined),dies({n:2},null),dies({n:300}),dies({n:300},'u')]`,
 		`[joins({n:300,t:1}),joins({n:300,t:2},3),joins({n:200,t:2},undefined,2),joins({n:0,t:1},5,7),joins({n:400,t:1},6,undefined),joins({n:100,t:3},4,1)]`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	// Compiled at once, with no feedback, and at the default thresholds,
 	// with what the sites learned: BigInts held in their values among it.
 	forced := jitRuntimeForTest(t, Config{JIT: true})
-	learned := New(Config{JIT: true})
+	learned := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { learned.Close(); learned.ReleaseClosed() })
 	for _, rt := range []*Runtime{want, forced, learned} {
 		dda := rt.NewObject()

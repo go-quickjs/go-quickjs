@@ -44,7 +44,7 @@ func TestJITHotCallsAnyOrder(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -99,7 +99,7 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 	}
 	marking := jitMarkingForTest(t)
 	*marking = 0
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")

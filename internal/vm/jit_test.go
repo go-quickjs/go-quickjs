@@ -297,7 +297,7 @@ func TestJITLexicalGlobals(t *testing.T) {
 		{`let k=1;function f(n){let s=0;for(let i=0;i<n;i++){s+=k;if(i===50)k='x'}return s}f(100)`, false, 0},
 	} {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			wv, err := want.Run(compileForTest(t, tc.source))
 			want.Close()
 			if err != nil {
@@ -363,7 +363,7 @@ func testJITSSARegExpLiterals(t *testing.T) {
 		`function f(n){let c=0;for(let i=0;i<n;i++){let r=/(\d+)-(\d+)/;let m=r.exec('x'+i+'-'+(i*2));c+=m[1]*1+m[2]*1+(Object.getPrototypeOf(r)===RegExp.prototype?1:0)}return c}f(1000)`,
 		`function f(s,n){let c=0;for(let i=0;i<n;i++)c+=s.replace(/b+/g,'x').length+(/^a/.test(s)?1:0);return c}f('abbc',1000)`,
 	} {
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		wv, err := want.Run(compileForTest(t, source))
 		want.Close()
 		if err != nil {
@@ -678,7 +678,7 @@ func TestJITSSAArrays(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := tc.src + ".map(v=>JSON.stringify(v)).join('|')"
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			wv, err := want.Run(compileForTest(t, src))
 			if err != nil {
@@ -723,7 +723,7 @@ func TestJITSSACaptured(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := tc.src + ".map(v=>JSON.stringify(v)).join('|')"
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			wv, err := want.Run(compileForTest(t, src))
 			if err != nil {
@@ -787,7 +787,7 @@ func TestJITSSAProperties(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			src := tc.setup + ";" + tc.warm + ";"
 			run := tc.run + ".map(v=>JSON.stringify(v)).join('|')"
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			if _, err := want.Run(compileForTest(t, src)); err != nil {
 				t.Fatal(err)
@@ -839,7 +839,7 @@ func TestJITSSAGlobals(t *testing.T) {
 		`let P=7;[readP(3),count()].join()`,
 		`globalThis.N='3';[count(),field(2)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := want.Run(compileForTest(t, setup)); err != nil {
@@ -893,7 +893,7 @@ func TestJITSSACallExits(t *testing.T) {
 		{`delete globalThis.g;globalThis.x0=1;globalThis.g=function(i){return i*2};f(10)`, 0},
 		{`O={q:0,p:'abcd'};k(10)`, 0},
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
@@ -958,7 +958,7 @@ func TestJITSSAStringMethods(t *testing.T) {
 		{`function f(xs,n){let c=0;for(let i=0;i<n;i++)c+=xs[i%2].indexOf('b');return c}f(['abc',['a','b']],1000)`, false},
 		{`function f(s,n){let c=0;for(let i=0;i<n;i++)c+=s.toString().length;return c}f('abc',1000)`, false},
 	} {
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		wv, err := want.Run(compileForTest(t, tc.source))
 		want.Close()
 		if err != nil {
@@ -986,7 +986,7 @@ func TestJITSSAStrings(t *testing.T) {
 		`[hash('hello'),hash('αβγ'),hash(''),hash(rope),hash('mixed é')].join()`,
 		`String.prototype.charCodeAt=function(i){return 7};[hash('hello'),hash('αβγ')].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := want.Run(compileForTest(t, setup)); err != nil {
@@ -1463,7 +1463,7 @@ func TestJITCryptoCorpus(t *testing.T) {
 		source.WriteByte('\n')
 	}
 	source.WriteString(`for(let i=0;i<8;i++){encrypt();decrypt()}true`)
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, source.String()))
 	if err != nil || !v.IsBool() || !v.Truthy() {
@@ -1604,7 +1604,7 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	// The tiers the JIT works with are the runtime's own: the register
 	// interpreter and the register JIT. A runtime made without the JIT, to
 	// compare with, runs the register interpreter.
-	r := New(cfg)
+	r := newTestRuntime(t, cfg)
 	// Boundary tests force promotion so guard and budget assertions cannot
 	// pass by running only the interpreter.
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
@@ -1667,7 +1667,7 @@ func TestJITSSANullish(t *testing.T) {
 		`''+walk(50)`,
 		`[count(1),count(null),walk(12)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1734,7 +1734,7 @@ func TestJITSSAManySpills(t *testing.T) {
 		fmt.Fprintf(&src, "s=(s^a%d)|0;", i)
 	}
 	src.WriteString("return s}")
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1780,7 +1780,7 @@ func TestJITSSAProfitability(t *testing.T) {
 		function gocalls(o,n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+o.m(i))|0}return s}
 		function work(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;if(i%100==0)s+=Math.abs(i)}return s}
 		var o=new O;`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1843,7 +1843,7 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 			framedCall(str,'g')+framedCall(str,'h')+framedCall(str,'a')+framedCall(str,'b')+framedCall(str,'x')+k}
 		function light(k){let x=k;for(let j=0;j<20;j++){x=(x*31+j)|0;x^=x>>>7;x=(x+j*j)|0;x^=x<<3}return (x+framedCall(str,'c'))|0}
 		function outer(n){let s=0;for(let i=0;i<n;i++)s=(s+heavy(i)+light(i))|0;return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1905,7 +1905,7 @@ func TestJITSSAEquality(t *testing.T) {
 			mixed(1,'1',3),mixed(true,1,3),mixed(null,undefined,3),mixed(true,false,3),mixed(k1,1,3)].join()`,
 		`''+(assq(k2,al)===al.cdr.car)+assq({},al)`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1943,7 +1943,7 @@ func TestJITSSACompareReferences(t *testing.T) {
 	}
 	setup := `function f(o,a,n){let k=0;for(let i=0;i<n;i++){if(o.next!=null)k++;if(a[i%2]==null)k+=10;if(o.v==3)k+=100}return k}
 		var o={next:{},v:3},a=[{},null];`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -1991,7 +1991,7 @@ func TestJITSSAElementReferences(t *testing.T) {
 		`[pick(dense,1)===dense[1],pick(holey,1),pick(dense,7),pick(notArray,0).p,pick([1,'s',null],1)].join()`,
 		`''+sum(holey,3)`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -2022,7 +2022,7 @@ func TestJITSSAElementReferences(t *testing.T) {
 // rather than taking one each; closing the runtime releases every one.
 func TestJITArenaMappings(t *testing.T) {
 	t.Parallel()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
 	// Compiled on the spot, as the counts below are written for, not in
 	// the background (QJS_JIT_STRESS's background), whose code comes
@@ -2574,7 +2574,7 @@ func benchJITCacheIn(b *testing.B, cfg Config, source, call string) {
 	if !jitSSABackend {
 		b.Skip("no SSA backend on this architecture")
 	}
-	r := New(cfg)
+	r := newTestRuntime(b, cfg)
 	defer r.Close()
 	if _, err := r.Run(compileForTest(b, source)); err != nil {
 		b.Fatal(err)
@@ -2815,7 +2815,7 @@ func TestJITSharedTemplateRuntimes(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			r.jitCallThreshold, r.jitICThreshold = 1, 1
 			defer func() { r.Close(); r.ReleaseClosed() }()
 			for j := 0; j < 3; j++ {
@@ -2884,7 +2884,7 @@ func TestJITClosureRemembersRefusal(t *testing.T) {
 // and is compiled once its budget is spent again.
 func TestJITPromotionRetriesMemoryRefusal(t *testing.T) {
 	t.Parallel()
-	r := New(Config{JIT: true, MemoryLimit: 256 << 10})
+	r := newTestRuntime(t, Config{JIT: true, MemoryLimit: 256 << 10})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -2918,7 +2918,7 @@ func TestJITPromotionRuntimeIsolation(t *testing.T) {
 	p := compileForTest(t, `function sum(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s } sum`)
 	var cold *Runtime
 	for _, calls := range []int{1, jitInvocationsForMaglev} {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 		v, err := r.Run(p)
 		if err != nil {
@@ -2943,7 +2943,7 @@ func TestJITPromotionRuntimeIsolation(t *testing.T) {
 
 func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
 	t.Parallel()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, `function f(a) { return a+1 } var result; for(var i=0;i<1000;i++) result=f(i); result`))
@@ -2964,7 +2964,7 @@ func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
 
 func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 	t.Parallel()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, `function f(n) { while(n) n--; return n } f(10000)`))
@@ -2979,7 +2979,7 @@ func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 func TestJITLoopPromotionCancellation(t *testing.T) {
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			jitDefaultsForTest(r)
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -3008,7 +3008,7 @@ func TestJITLoopGuardErrors(t *testing.T) {
 			p := compileForTest(t, tc.source)
 			var baseline *Thrown
 			for _, enabled := range []bool{false, true} {
-				r := New(Config{JIT: enabled})
+				r := newTestRuntime(t, Config{JIT: enabled})
 				jitDefaultsForTest(r)
 				t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 				_, err := r.Run(p)
@@ -3054,7 +3054,7 @@ func BenchmarkJITNumericLoop(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				r := New(Config{JIT: enabled})
+				r := newTestRuntime(b, Config{JIT: enabled})
 				defer func() { r.Close(); r.ReleaseClosed() }()
 				if _, err := r.Run(p); err != nil {
 					b.Fatal(err)
@@ -3106,7 +3106,7 @@ func BenchmarkJITCallPromotion(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						r := New(Config{JIT: mode != "existing"})
+						r := newTestRuntime(b, Config{JIT: mode != "existing"})
 						if mode == "eager" {
 							r.jitCallThreshold, r.jitICThreshold = 1, 1
 						}
@@ -3163,7 +3163,7 @@ func BenchmarkJITReferenceFirstUse(b *testing.B) {
 			b.ResetTimer()
 			b.StopTimer()
 			for range b.N {
-				r := New(Config{JIT: enabled})
+				r := newTestRuntime(b, Config{JIT: enabled})
 				if _, err := r.Run(setup); err != nil {
 					b.Fatal(err)
 				}
@@ -3206,7 +3206,7 @@ func BenchmarkJITDenseFirstUse(b *testing.B) {
 				b.ResetTimer()
 				b.StopTimer()
 				for i := 0; i < b.N; i++ {
-					r := New(Config{JIT: enabled})
+					r := newTestRuntime(b, Config{JIT: enabled})
 					if _, err := r.Run(setup); err != nil {
 						b.Fatal(err)
 					}
@@ -3343,7 +3343,7 @@ func TestJITSSAReoptimize(t *testing.T) {
 		`[many(1,1,1,1,1,1,300),many('1',1,1,1,1,1,300),many(1,'1',1,1,1,1,300),many(1,1,'1',1,1,1,300)].join()`,
 		`[many(1,1,1,'1',1,1,300),many(1,1,1,1,'1',1,300),many(1,1,1,1,1,v,300),calls].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3428,7 +3428,7 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 		`B.prototype.m=function(){return 50};[run(d,40),run(new A,40)].join()`,
 		`A.prototype.m=function(){return 7};[swap(new A,40),swap(new B,40),run(new A,40)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3488,7 +3488,7 @@ func TestJITSSAStringEquality(t *testing.T) {
 		`''+count(syms,key,200)`,
 		`[count(u,ukey,200),count(syms,'ẜsym'+'7',200),count(long,'x'.repeat(300)+'b',50)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3544,7 +3544,7 @@ func TestJITSSAReferenceStores(t *testing.T) {
 		`[walk(rev(list(30))),walk(relink(arr,40,tags)),swap(pair),pair.a.n,arr[5].tag].join()`,
 		`[walk(rev(rev(list(30)))),walk(relink(arr,20,tags)),swap(pair).n].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3689,7 +3689,7 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 		function walk(h){let s=0,n=h,i=1,c=0;while(n){if(++c>1000)return -1;s+=n.v*i+n.pad[1];i++;n=n.next}return s}
 		function rev(h){let p=null,n=h,c=0;while(n){if(++c>1000)return null;const x=n.next;n.next=p;n.pad=[n.v,n.v];p=n;n=x}return p}
 		function round(){const h=list(30),w=walk(h),r=rev(h);return r===null?'cycle':walk(r)+'/'+walk(rev(r))+'/'+w}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3829,7 +3829,7 @@ func TestJITSSAInline(t *testing.T) {
 		`T.prototype.isHeld=function(){return this.state>3};[count(ts,300),missing(one,50)].join()`,
 		`[count(ts,300),missing(one,50)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -3924,7 +3924,7 @@ func TestJITSSAInlineEffects(t *testing.T) {
 				`a.t.x='5';b.t.x='7';[run(a,200),deep(b,100),a.n,b.n].join()`,
 				`[run(a,200),deep(b,100),a.n,b.n].join()`,
 			}
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			for _, rt := range []*Runtime{want, r} {
@@ -4002,7 +4002,7 @@ func TestJITSSANestedInline(t *testing.T) {
 		`HELD='3';[run(a,300),a.state,a.count].join()`,
 		`HELD=8;[run(a,300),a.state,a.count].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4104,7 +4104,7 @@ func TestJITSSANativeConstruct(t *testing.T) {
 	rounds := []string{src, src, src, src, src,
 		`V.prototype={len(){return 7}};` + src,
 		src, src}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4178,7 +4178,7 @@ func TestJITSSANativeArrayConstruct(t *testing.T) {
 	setup := `function arrays(n){let s=0,prev=null,same=0,a;for(let i=0;i<n;i++){a=new Array();a.push(i);if(a===prev)same++;s+=a.length+a[0]+(prev===null?0:1);prev=a}
 			return [s,same,Array.isArray(a),Object.getPrototypeOf(a)===Array.prototype,a.length].join()}`
 	src := `arrays(400)`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4245,7 +4245,7 @@ func TestJITSSANativeCallThroughCall(t *testing.T) {
 	src := `[viaRun(o,300,add),subs(300),viaOne(o,300)].join()`
 	rounds := []string{src, src, src, src, src,
 		`[viaRun(o,300,other),viaRun(5,300,add),subs(300)].join()`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4312,7 +4312,7 @@ func TestJITSSANativePop(t *testing.T) {
 	rounds := []string{src, src, src, src, src,
 		`{const a=mk(10);a.length=12;drain(a)}`,
 		`{const a=mk(10);Object.defineProperty(a,'length',{writable:false});tryDrain(a)}`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4402,7 +4402,7 @@ func TestJITSSANativePush(t *testing.T) {
 			`Object.defineProperty(Object.prototype,'250',{set(v){hits++},configurable:true});` +
 				`try{const a=[];[setter(a,300),show(a),hits].join()}finally{delete Object.prototype['250']}`},
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4484,7 +4484,7 @@ func TestJITSSANativeAppend(t *testing.T) {
 			`Object.defineProperty(Object.prototype,'250',{set(v){hits++},configurable:true});` +
 				`try{const a=[];[setter(a,300,0),show(a)].join()}finally{delete Object.prototype['250']}`},
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4553,7 +4553,7 @@ func TestJITSSALengthAfterAppend(t *testing.T) {
 		function drive(n){let r;for(let k=0;k<n;k++)r=[num([1,2,3]),ref([1,2]),str([]),past([1]),loop([],40)].join();return r}`
 	// Each called on its own, and inlined into drive's loop.
 	const src = `[num([1,2,3]),ref([1,2]),str([]),past([1]),loop([],40),drive(300)].join()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4596,7 +4596,7 @@ func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
 		function put(a,n){let t=0;for(let i=0;i<n;i++){a[a.length]=i;t=(t+a.length)|0}return t}
 		function show(a){return [a.length,a[250],Object.keys(a).length,hits].join()}`
 	const src = `{const a=[],b=[];[fill(a,300),show(a),put(b,300),show(b)].join()}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4654,7 +4654,7 @@ func TestJITSSAPropertyAdds(t *testing.T) {
 		{"past the room", "four", `show4(four(mk(300),300))`, `show4(four(mk(300),300))`},
 		{"collector marking", "marked", `show(marked(mk(300),300,v),v)`, `show(marked(mk(300),300,v),v)`},
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4710,7 +4710,7 @@ func TestJITSSASharedContextsFollowDepth(t *testing.T) {
 		function at(d,n){return d===0?rec(n):at(d-1,n)}
 		function tryAt(d,n){try{return String(at(d,n))}catch(e){return e.constructor.name}}`
 	rounds := []string{`tryAt(0,10)`, `tryAt(0,10)`, `tryAt(0,10)`, `tryAt(0,10)`, `tryAt(185,20)`, `tryAt(0,10)`, `tryAt(185,20)`}
-	want := New(Config{MaxCallDepth: 200})
+	want := newTestRuntime(t, Config{MaxCallDepth: 200})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true, MaxCallDepth: 200})
 	for _, rt := range []*Runtime{want, r} {
@@ -4757,7 +4757,7 @@ func TestJITSSACallsSettleLate(t *testing.T) {
 		function g(m,x){if(m===0)return f0(x);if(m===1)return f1(x);if(m===2)return f2(x);if(m===3)return f3(x);
 			if(m===4)return f4(x);if(m===5)return f5(x);if(m===6)return f6(x);return f7(x)}
 		function run(m,n){let s=0;for(let i=0;i<n;i++)s=(s+g(m,i))|0;return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4823,7 +4823,7 @@ func TestJITSSAPolymorphicReads(t *testing.T) {
 	rounds := []string{src, src, src, src, `[reads(five,400),calls(five,400)].join()`,
 		`B.prototype.k=7;Object.getPrototypeOf(C.prototype).k=9;[reads(four,400),calls(four,400)].join()`,
 		`C.prototype.k=99;C.prototype.m=function(){return 99};[reads(four,400),calls(four,400)].join()`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4880,7 +4880,7 @@ func TestJITSSAStoreOverLiveCell(t *testing.T) {
 		function swap(o,n){let s=0;for(let i=0;i<n;i++){const a=o.x;o.x=o.y;o.y=a;s=(s*3+a.v)|0}return s}
 		var ps=[new L(1),new L(2),new L(3),new L(4),new L(5)],o={x:{v:1},y:{v:2}};`
 	src := `[run(ps,40),swap(o,60)].join()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -4934,7 +4934,7 @@ func TestJITSSAKeepCellsRunOut(t *testing.T) {
 		}
 		b.WriteString("return c}\nvar t=0;for(var k=0;k<12;k++)t+=f();t")
 		src := b.String()
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		wv, err := want.Run(compileForTest(t, src))
 		want.Close()
 		if err != nil {
@@ -4990,7 +4990,7 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 		function tick(){c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return L.n;return c.n&3}
 		function zero(){let z=0;for(let j=0;j<1;j++)z=tick();return z}
 		function f(n){let s=0.5,t=0,p=o.p;for(let i=0;i<n;i++){s=s*1.0001+zero();t=(t+p.v)|0;s+=i*0.5}return [s,t,p.v,c.n].join()}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5047,7 +5047,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 		function g(n){let t=0,u=0.25;for(let i=0;i<n;i++){t=(t+boom(i))|0;u=u*1.5+1}return [t,u].join()}
 		function tryG(n){try{return g(n)}catch(e){return e.message+c.n}}`
 	src := `o.p=A;[f(300),tryG(300)].join()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5105,7 +5105,7 @@ func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 		resumes   bool
 	}{{"f", `String(f([A],300))`, true}, {"g", `String(g([A,B],300))`, false}} {
 		t.Run(c.name, func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			for _, rt := range []*Runtime{want, r} {
@@ -5162,7 +5162,7 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 	for range 4 {
 		rounds = append(rounds, `String(outer(2000))`)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5231,9 +5231,9 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	b.WriteString(") | 0; return t }\n")
 	// A phase gives one read a shape it has not met, then runs.
 	b.WriteString(`function phase(j, k) { objs[j] = new globalThis["C" + k](); let t = 0; for (let i = 0; i < 30; i++) t = (t + sum(40)) | 0; return t }`)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
@@ -5294,7 +5294,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 			for _, objs := range []string{"one", "one", "four", "four", "four"} {
 				rounds = append(rounds, "String("+fmt.Sprintf(c.call, objs)+")")
 			}
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			for _, rt := range []*Runtime{want, r} {
@@ -5637,9 +5637,9 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 	setup := `function V(x){this.x=x;this.y=x+1}
 		function mk1(n){let t=0;for(let i=0;i<n;i++){const v=new V(i);t=(t+v.y)|0}return t}
 		function mk2(n){let t=0;for(let i=0;i<n;i++){const v=new V(i&15);t=(t*3+v.x)|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -5692,9 +5692,9 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 		var p=new P(3);
 		for(let i=0;i<2000;i++){p.big(40);heavy(40)}
 		function run(o,n){let t=0;for(let i=0;i<n;i++){t=(t+o.big(4)+heavy(3))|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
@@ -5745,9 +5745,9 @@ func TestJITSSASeedsMutualRecursion(t *testing.T) {
 		P.prototype.pong=function(n){return n<=0?0:(this.ping(n-1)*2)|0};
 		var p=new P();
 		function run(o,n){let t=0;for(let i=0;i<n;i++)t=(t+o.ping(i&7))|0;return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -5795,7 +5795,7 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 		function prims(xs){let r=[];for(const a of [null,undefined])for(const b of xs)r.push(eq(a,b),eq(b,a));return r.join()}
 		var nullish=[null,undefined,o,p,dda],mixed=[null,undefined,0,'',false,'0',o],others=[0,'',false,'0',1.5,true,'s'];`
 	rounds := []string{`pairs(nullish)`, `pairs(nullish)`, `prims(others)`, `pairs(mixed)`, `pairs(nullish)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5856,7 +5856,7 @@ func TestJITSSAAssignsGlobals(t *testing.T) {
 		function tryBad(n){try{return String(bad(n))}catch(e){return e.name+":"+(typeof maybe)}}`
 	rounds := []string{`bump(300)`, `bump(300)`, `String(sbump(300))`, `String(sbump(300))`, `[bump(50),sbump(50)].join()`,
 		`tryBad(300)`, `tryBad(300)`, `delete globalThis.maybe;tryBad(300)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5914,7 +5914,7 @@ func TestJITSSAWritesGlobals(t *testing.T) {
 		`let late=1000;lw(300)`, `lw(300)`,
 		`delete globalThis.gone;tdw(300)`,
 		`trw(300)`, `trw(300)`, `trw(300)`, `delete globalThis.miss;trw(300)`, `trw(300,true)`, `delete globalThis.miss;trw(300,true)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -5983,7 +5983,7 @@ func TestJITSSAResumesEveryLevel(t *testing.T) {
 		function top(n,m){let t=0;for(let k=0;k<n;k++){t=(t+mid(m))|0;t=(t+new P(m).v)|0}return t}
 		function tryTop(n,m){try{return String(top(n,m))}catch(e){return e.message}}`
 	rounds := []string{`tryTop(200,300)`, `tryTop(200,300)`, `tryTop(200,300)`, `tryTop(3,13)`, `tryTop(200,300)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6023,7 +6023,7 @@ func TestJITSSANestedExits(t *testing.T) {
 		function inner(o,n){let s=0;for(let i=0;i<n;i++){s=(s+i*3)|0;s^=i;s=(s*7)|0;s=(s+o.v)|0;s=(s-i)|0}s=(s+1)|0;s=(s*3)|0;return s+h(o)}
 		function outer(o,n){let t=0;for(let i=0;i<n;i++)t=(t+inner(o,4))|0;return t}
 		var o={v:5,n:0};`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6077,7 +6077,7 @@ func TestJITSSAProfitReturns(t *testing.T) {
 		function heavy(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7}return s}
 		function drive(){let s=0;for(let i=0;i<300;i++)s=(s+t.step.apply(t,[i]))|0;return [s,t.n,heavy(500)].join()}
 		var t=new T;`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6139,7 +6139,7 @@ func TestJITSSAContextsGrow(t *testing.T) {
 		function tryForever(){try{return String(forever(0))}catch(e){return e.name}}`
 	rounds := []string{`String(drive(200,40))`, `String(drive(200,40))`, `String(drive(200,40))`, `String(drive(200,40))`,
 		`String(drive(200,40))`, `String(drive(50,150))`, `String(drive(200,40))`, `tryForever()`, `String(drive(200,40))`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6210,7 +6210,7 @@ func TestJITSSANativeCalls(t *testing.T) {
 		`[sum(200),few(100),meth(p,200),fib(20),useFloor(100),catcher(60),deopt(xs,100)].join()`,
 		`xs[3]='s';[sum(200),meth(new P(9),200),catcher(60),deopt(xs,100)].join()`,
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6325,7 +6325,7 @@ func TestJITSSANativeCallsWhileMarking(t *testing.T) {
 		function pick(i){let o=objs[i&3];for(let j=0;j<2;j++)o=objs[(i+j)&3];return o}
 		function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+i+pick(i).v)|0;t^=t>>>7}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6372,7 +6372,7 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 		function g(x,o){let s=x;for(let i=0;i<2;i++)s=(s+o.k)|0;if(x===bad)throw new Error('at '+x+' '+o.k);return s}
 		function f(n){let t=0;const o={k:3};for(let i=0;i<n;i++){t=(t+g(i,o)+o.k)|0;t^=t>>>3}return t}
 		function h(n){bad=n>>1;try{return f(n)}catch(e){return e.message+e.stack}finally{bad=-1}}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6419,7 +6419,7 @@ func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 		function P(x){this.x=x;for(let i=0;i<2;i++)this.x=(this.x+i)|0}
 		function mid(i,t){let s=0;for(let j=0;j<2;j++)s=(s+parseInt('7')+new P(i+j).x)|0;return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+mid(i,t))|0;t^=t>>>7}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6484,7 +6484,7 @@ func TestJITSSAMarkingUnderGC(t *testing.T) {
 	}()
 	defer func() { close(stop); <-done }()
 	for _, source := range jitMarkingSources {
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		_, err := want.Run(compileForTest(t, source))
 		wv, err2 := want.Run(compileForTest(t, `f(300)`))
 		want.Close()
@@ -6522,7 +6522,7 @@ func TestJITSSAMarkingBeginsBeforeWideConstruction(t *testing.T) {
 		function G(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;this.t=t}
 		function mid(i,t,big){let s=0;for(let j=0;j<2;j++){s=(s+parseInt('7')+add(i+j,t&7))|0;if(big)s=(s+new G(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0).t)|0}return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+mid(i,t,i<1))|0;t^=t>>>7}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6582,7 +6582,7 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 	marking := jitMarkingForTest(t)
 	jitClobberStoresForTest(t)
 	for _, source := range jitMarkingSources {
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		_, err := want.Run(compileForTest(t, source))
 		wv, err2 := want.Run(compileForTest(t, `f(300)`))
 		want.Close()
@@ -6658,7 +6658,7 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 		var four=[new A(1),new B(2),new C(3),new D],five=[new A(4),new B(5),new C(6),new D,new E],lo={c:0};`
 	src := `[poly(four,400),useLeaf(lo,300),useLeave(300),drive(64)].join()`
 	rounds := []string{src, src, src, src, `[poly(five,400),poly(four,40),drive(64)].join()`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6759,7 +6759,7 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 		function M(k){this.k=k}
 		M.prototype.m=function(x){let s=x;for(let i=0;i<2;i++)s=(s+this.k)|0;return s};
 		function caller(n){let t=0;const o=new M(5);for(let i=0;i<n;i++){t=(t+leaf(i,o)+o.m(i))|0;t^=t>>>3}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6845,7 +6845,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 	setup := `var leaf=(function(){let k=3;return function leaf(x){x.c=(x.c+k)|0;return x.c}})();
 		function useLeaf(o,n){let t=0;for(let i=0;i<n;i++)t=(t+leaf(o))|0;return t}
 		var lo={c:0};`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -6927,7 +6927,7 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := setup + ";" + tc.run + ".map(String).join()"
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			if _, err := want.Run(compileForTest(t, setup)); err != nil {
 				t.Fatal(err)
@@ -7006,7 +7006,7 @@ func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 			`[caller(a,300),caller(a,300)].join()`, `[caller(b,300),caller(a,300)].join()`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			want.global.setOwnRaw(want.atoms.intern("host"), want.NewFunction("host", 0,
 				func(*Runtime, Value, []Value) (Value, error) { return Undefined, nil }), propDefault)
@@ -7145,7 +7145,7 @@ func TestJITSSAStringConstantsAndThrows(t *testing.T) {
 	setup := `function scale(v,n){if(v===undefined)throw "need a number, n="+n;const sep=",;";let s=0;for(let i=0;i<n;i++)s=(s+v*i)|0;return s*sep.length+n}
 		function guarded(v,n){try{return scale(v,n)}catch(e){return "caught "+e}}`
 	rounds := []string{`String(scale(3,300))`, `String(scale(3,300))`, `String(scale(5,300))`, `guarded(undefined,7)`, `String(guarded(2,300))`, `String(scale(7,300))`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7199,7 +7199,7 @@ func TestJITSSAInlinedConstructions(t *testing.T) {
 		var nums=[1,2,3,4],mixed=[1,2,"3",{valueOf(){return 9}}]`
 	src := `build(nums,300)`
 	rounds := []string{src, src, src, src, src, src, `build(mixed,300)`, src, `W.prototype={sum(){return -1}};` + src, src}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7271,7 +7271,7 @@ func TestJITSSAInlinedForwardingConstructions(t *testing.T) {
 		`V.prototype.initialize=function(x){this.x=-x;this.y=0};` + src, src,
 		`var apply=Function.prototype.apply;Function.prototype.apply=function(t,a){stats.n+=100;return apply.call(this,t,a)};` + src,
 		`build(mixed,300)`, src}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7335,7 +7335,7 @@ func TestJITSSAMathIntrinsics(t *testing.T) {
 		var vs=[{x:3,y:4},{x:-1,y:2},{x:0,y:0},{x:-0,y:-0}],odd=[{x:3,y:4},{x:"9",y:0},{x:-4,y:3}]`
 	src := `sum(300,vs)`
 	rounds := []string{src, src, src, src, src, `sum(300,odd)`, src, `Math.sqrt=function(x){return 7};` + src}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7410,7 +7410,7 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 		function syms(n,x){let r='';for(let i=0;i<n;i++){r='a'+(i<n-1?'b':x)}return r}
 		function sym(){try{return syms(300,sy)}catch(e){return e.name}}
 		function big(){let s='x';try{for(let i=0;i<40;i++)s=s+s}catch(e){return e.name+s.length}return 'no'}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7523,7 +7523,7 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 		function Q(x){for(let k=0;k<1;k++)this.v=x+k}
 		var last;
 		function mk(n){let s=0;for(let i=0;i<n;i++){const p=new P(i),q=new Q(i);const o={a:i,b:p};last=o;const a=[i,i+1,q];s=(s+o.b.y+a[1]+a[2].v+(p.z|0))|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7600,7 +7600,7 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 		function K2(){} K2.prototype=Object.create(K1.prototype); function K3(){} K3.prototype=Object.create(K2.prototype);
 		var ks=[K1,K2,K3,K0];
 		function deep(n){let t=0;for(let i=0;i<n;i++){const o=new ks[i&3]();o.strength=i;t=(t+o.strength)|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7695,7 +7695,7 @@ func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 		function f11(x) { return ((x ^ 31) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
 		function wide(n){let t=0;for(let i=0;i<n;i++){t=(f0(t)+f1(i)+f2(t)+f3(i)+f4(t)+f5(i)+f6(t)+f7(i)+f8(t)+f9(i)+f10(t)+f11(i))|0}return t}`
 	inlined := jitInlinedForTest(t)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7781,7 +7781,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 		function deeper(d){var k=arguments.length,o={};o['w'+d]=d;o.v=d+k;return rec(o,d-1)}
 		function held(o,n){let s=0;for(let i=0;i<40;i++){s=(s+o.v*i)|0;if(i==20)s=(s+away(n))|0}return s}
 		function away(n){if(arguments.length&&n)drop(n);return n}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	entry := func(name string) *jitEntry {
@@ -7876,7 +7876,7 @@ func TestJITSSAGoCallsLeaveFrameSlots(t *testing.T) {
 		function f(n){let s=1,t='3';for(let i=0;i<n;i++){t=(i % Infinity);s=h(s,i);}return s+':'+t}
 		function g(n){try{return f(n)}catch(e){return e.message}}
 		[g(1),g(3),g(7)].join()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	wv, err := want.Run(compileForTest(t, src))
 	if err != nil {
@@ -7949,7 +7949,7 @@ func TestJITSSACallSavesReuseSlots(t *testing.T) {
 	}
 	src := `function h(i){return arguments.length+i}
 		function many(n){let s=0,a=0,b=0;for(let i=0;i<n;i++){` + body.String() + `}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -7994,7 +7994,7 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 	src := `function V(a){this.a=a;this.b=a*2}
 		var o={w:3};
 		function f(n,k){let s=0;for(let i=0;i<n;i++){s=(s*3+i)|0;if(i>=k){const v=new V(i);s=(s+v.a+v.b+o.w)|0}}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8051,7 +8051,7 @@ func TestJITSSAUnfedSitesCompiledAtNextCall(t *testing.T) {
 	}
 	src := `function P(){}P.prototype={a:1,b:2,c:3,d:4,e:5};var o=new P;
 		function f(n,open){let s=0;for(let i=0;i<n;i++){s=(s*3+i)|0;if(open){s=(s+o.a+o.b+o.c+o.d+o.e)|0}}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8111,7 +8111,7 @@ func TestJITSSAReadsDropSupersededShapes(t *testing.T) {
 		function C(){this.u=0;this.v=3}C.prototype.m=function(i){this.n=i;return this.v^i};
 		var os=[new A,new B,new C];
 		function g(n){let t=0;for(let i=0;i<n;i++){t=(t+os[i%3].m(i))|0;t^=t>>>3}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8237,7 +8237,7 @@ func TestJITSSAMathPow(t *testing.T) {
 		function one(x,y,n){let r=0;for(let i=0;i<n;i++)r=Math.pow(x,y);return r}
 		function all(){return [one(10,23,50),one(17,13,50),one(0.3,3,50),one(2,-1,50),one(NaN,0,50),one(1,Infinity,50),1/one(-0,3,50),
 			one(-2,2.5,50),one('3',2,50),one(-2,63,50),one(2.5,2,50),one(-7,0,50),one(-3,33,50),one(0,-1,50),one(-1,-3,50)].join()}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8318,7 +8318,7 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 				for(let i=0;i<n;i++)s=(s+obj.k)|0;
 				return s}}}
 		var m=mk();`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8417,7 +8417,7 @@ func TestJITSSARemainder(t *testing.T) {
 		function odd(){return [md(5.5,-2,50),md(-0.5,1,50),md(-4,2,50),md(-0,5,50),md(3,0,50),md(-3,0,50),md(7,Infinity,50),md(-7,-Infinity,50),
 			md(Infinity,2,50),md(NaN,1,50),md(1,NaN,50),md(1e300,3,50),md(-(2**63),7,50),md(2**64+4096,2**63,50),md(5e-324,1e-323,50),md(-1e-300,1,50),
 			md(7,-1,50),md(-(2**53),-1,50),md(13,5,50)].map(sh).join()}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8485,7 +8485,7 @@ func TestJITSSAReadsWhatIsNotANumber(t *testing.T) {
 		Eng.prototype.sp=function(x,y){var pxW=this.options.w;var pxH=this.options.h;if(this.canvas){return x*pxW+y*pxH}return x+y+pxH};
 		var eng=new Eng();
 		function run(n){var t=0;for(var i=0;i<n;i++)t+=eng.sp(i,1);return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -8584,7 +8584,7 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 				return Int(len(names)), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want, 0)
@@ -8699,7 +8699,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 				return Str(NewString("")), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want)
@@ -8791,7 +8791,7 @@ func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 				return Int(len(names)), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want, 0)
@@ -8876,7 +8876,7 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 				return Int(len(names)), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want, 0)
@@ -8933,7 +8933,7 @@ func TestJITSSABuiltinCallsAsCallDirect(t *testing.T) {
 		function loop(n,bad){let s=0;for(let i=0;i<n;i++)s=(s+body(i,i===bad?-1:2))|0;return s}
 		function run(n,bad){try{return loop(n,bad)}catch(e){return e.name+':'+e.message+'|'+e.stack}}`
 	runs := func(jit bool) ([]string, int64) {
-		r := New(Config{JIT: jit, MemoryLimit: 1 << 40})
+		r := newTestRuntime(t, Config{JIT: jit, MemoryLimit: 1 << 40})
 		if jit {
 			r = jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 1 << 40})
 		}
@@ -9006,7 +9006,7 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 	}
 	live.WriteString(")|0;for(let j=0;j<4000;j++)t=(t*31+j)^(t>>>3)}return t}")
 	setup := many.String() + live.String()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9086,7 +9086,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 				return Int(1), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want)
@@ -9177,7 +9177,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 				return Str(NewString("")), nil
 			}), propDefault)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	install(want)
@@ -9236,7 +9236,7 @@ func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
 	setup := `var c={n:0};
 		function leaf(n){let s=0;for(let i=0;i<n;i++){s=(s*3+i)|0;c.n++}return s}
 		function mid(n){let t=0;for(let j=0;j<8;j++){if(j===5&&n<0)cancel();t=(t+leaf(n<0?-n:n))|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -9314,7 +9314,7 @@ func TestJITSSAElementStoresGrow(t *testing.T) {
 		function sum(a){let s=0;for(let i=0;i<a.length;i++)s+=a[i];return s}
 		function run(k){let t=0;for(let j=0;j<k;j++)t+=sum(fill([],20+(j&3)));return t}
 		function sealed(k){let a=Object.preventExtensions([1,2,3]),t=0;for(let j=0;j<k;j++){try{fill(a,2)}catch(e){t++}}return t+':'+a.join()}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9372,7 +9372,7 @@ func TestJITSSACharCodeAtInNativeCallees(t *testing.T) {
 		function codes(s,i){let t=0;for(let k=0;k<2;k++)t+=s.charCodeAt(i+k);return t}
 		function pairs(s){let t=0;for(let i=0;i+1<s.length;i++)t=(t*3+codes(s,i))|0;return t}
 		var str='31415926535897932384626433832795';`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9446,7 +9446,7 @@ func TestJITSSAAbsentElementsAreUndefined(t *testing.T) {
 		function look(s,i){let c=0;for(let j=0;j<1;j++)c=T[s.charCodeAt(i)];return (c==null)?-1:c}
 		function scan(s){let t=0;for(let i=0;i<s.length;i++){t=(t*7+look(s,i))|0;t=(t+(T[i+70]===undefined?1:2))|0}return t}
 		var str='3141 59x26/53';`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9539,7 +9539,7 @@ func TestJITSSAReleasedWhileNative(t *testing.T) {
 		}), propDefault)
 	src := `function f(o,a,n){let s=0;for(let i=0;i<n;i++){o.x=7;if(i===n-3)host();a[0]+=1;s+=o.x+a[0]}return s}
 		let o={x:3},a=[0];f(o,a,200);f(o,a,200);let t=f(o,a,200);t+':'+a[0]`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	want.global.setOwnRaw(want.atoms.intern("host"), want.NewFunction("host", 0,
 		func(*Runtime, Value, []Value) (Value, error) { return Undefined, nil }), propDefault)
@@ -9599,7 +9599,7 @@ func testJITSSAMathFunctions(t *testing.T) {
 	for _, name := range names {
 		fmt.Fprintf(&src, "var o_%[1]s=xs.slice();function %[1]s(n){const o=o_%[1]s;for(let i=0;i<n;i++){const x=xs[i%%L],y=xs[(i*7+3)%%L],z=xs[(i*5+1)%%L];o[i%%L]=%[2]s}return o}\n", name, calls[name])
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9670,7 +9670,7 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 		var NS={};NS.B=Class.create();NS.B.prototype={initialize:function(x,y){this.x=x;this.y=y}};
 		NS.A=Class.create();NS.A.prototype={hit:false,initialize:function(){this.c=new NS.B(1,2)}};
 		function f(n){let s=0;for(let i=0;i<n;i++){const a=new NS.A();a.hit=true;s=(s+a.c.x+a.c.y)|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9737,7 +9737,7 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 		function last(n){let o;for(let i=0;i<n;i++)o={a:i,b:2};return o}
 		function late(n){let s=0,o;for(let i=0;i<n;i++){if(i>=n-50){o={a:i,b:i+1};s=(s+o.a+o.b)|0}else s=(s+i)|0}return s}
 		function look(o){return JSON.stringify(o)+Object.getOwnPropertyNames(o)+o.hasOwnProperty('b')+('a' in o)}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9809,7 +9809,7 @@ func TestJITSSAStringConstants(t *testing.T) {
 		function run(xs,n){let s=0,last;for(let i=0;i<n;i++){const x=xs[i%xs.length];
 			s=(s+(x==='abc'?1:0)+same(x,'xyz')*10)|0;o.k='set';last=['p','q',x]}return [s,o.k,last.join(''),'end'].join()}
 		var xs=['abc','xyz','abc','',1]`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9874,7 +9874,7 @@ func TestJITSSACapturedBindings(t *testing.T) {
 		var step=(function(){let v=0;function bump(){v=v+2}return function(n){let s=0;for(let i=0;i<n;i++){v=v+1;bump();s=(s+v)|0}return s}})();
 		var grow=(function(){let v=1,w=3;function bump(){v=v<250?v+1:'x'+v}return function(n){v=1;let s=0;for(let i=0;i<n;i++){s=(s*3+v+w)%65521;bump()}return s+'|'+v}})();
 		var keep=(function(){let o={k:1};function swap(){o=o.k===1?{k:2}:{k:1}}return function(n){let s=0;for(let i=0;i<n;i++){const w=o;swap();s=(s*3+w.k*10+o.k)|0}return s}})();`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -9955,7 +9955,7 @@ func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 		function bad(){try{return sub({x:1},undefined)}catch(e){return e}}
 		function dbl(x){let r=0;for(let k=0;k<2;k++)r=r+x*1;return r}
 		function mix(xs,n){let s=0;for(let i=0;i<n;i++){const r=dbl(xs[i%xs.length]);s=(s+(typeof r==='number'?r:1))|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10026,7 +10026,7 @@ func TestJITSSAArrayLiterals(t *testing.T) {
 		function last(n){let a;for(let i=0;i<n;i++)a=[i,'x'+i,{v:i},[i,i]];return a}
 		function big(n){let s=0;for(let i=0;i<n;i++){const a=[i,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16];s=(s+a[16]+a.length)|0}return s}
 		function look(a){a.push(7);return JSON.stringify(a)+a.length+Array.isArray(a)+(Object.getPrototypeOf(a)===Array.prototype)}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10086,7 +10086,7 @@ func TestJITSSAMegamorphicOwnReads(t *testing.T) {
 	setup := `var P={x:50},objs=[Object.create(P),{x:1},{y:2,x:3},{z:4,x:5},{w:6,x:7},{v:8,x:9},{u:10,x:11},{t:12,s:13,x:14}];
 		function sum(a,n){let s=0;for(let i=0;i<n;i++){s=(s+a[i%a.length].x)|0}return s}
 		var odd=objs.concat([Object.create({x:100}),{q:1}])`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10145,7 +10145,7 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 		var NS2={R:{V:V}};
 		function run2(n){let s=0;for(let i=0;i<n;i++){s=NS2.R.V.prototype.add(s,i)}return s}
 		function odd(n){let s=0;for(let i=0;i<n;i++){s=(s+NS.W.length+NS.V.name.length+(NS.W.prototype.constructor===W?1:0))|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10209,7 +10209,7 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 		var Ray=Class.create();Ray.prototype={position:null,direction:null,initialize:function(pos,dir){this.position=pos;this.direction=dir}};
 		var NS={Ray:Ray},d={x:2};
 		function run(n){let s=0;for(let i=0;i<n;i++){const r=new NS.Ray(i,d);s=(s+r.position+r.direction.x)|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10325,7 +10325,7 @@ func TestJITSSAInstanceOf(t *testing.T) {
 		`P.prototype={};xs.push(new P(2));` + src,
 		`Object.defineProperty(Q,Symbol.hasInstance,{value:function(v){return typeof v==="number"}});` + src,
 		`xs.push(new Proxy({},{getPrototypeOf(){return P.prototype}}));` + src}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10384,7 +10384,7 @@ func TestJITSSATypeOf(t *testing.T) {
 			withDDA=plain.concat([dda]),odd=plain.concat([new Proxy({},{}),new Proxy(function(){},{})])`
 	rounds := []string{`kinds(plain,300)`, `kinds(plain,300)`, `kinds(plain,300)`, `kinds(plain,300)`, `kinds(plain,300)`,
 		`kinds(withDDA,300)`, `kinds(odd,300)`, `kinds(plain,300)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10447,7 +10447,7 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 	setup := `var obj={x:2};
 		function once(n){let t=0;for(let i=0;i<n;i++){const o=i===n>>1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
 		function every(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -10530,7 +10530,7 @@ func TestJITSSAConcatCallsGo(t *testing.T) {
 		var o={n:0,toString(){this.n++;return 'O'+this.n}};
 		function objs(n,x){let s='';for(let i=0;i<n;i++){s='a'+i+'b'+x+'c'}return s+'|'+o.n}
 		function tmpl(n,x){let s='';for(let i=0;i<n;i++){s=` + "`<${i}|${x}>`" + `}return s+'|'+o.n}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

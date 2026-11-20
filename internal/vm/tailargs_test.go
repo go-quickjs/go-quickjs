@@ -41,7 +41,7 @@ func TestTailCallArguments(t *testing.T) {
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "12502500 200:3:extra1 1/2 6000,1830 odd even 307 4,5,1,2,3 aundefined 100:100 | true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

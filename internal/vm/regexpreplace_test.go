@@ -82,7 +82,7 @@ func TestRegExpReplaceFlat(t *testing.T) {
 		if !idle {
 			debug.SetGCPercent(1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, replaceFlatTestSrc))
 		r.Close()
 		debug.SetGCPercent(gc)
@@ -106,7 +106,7 @@ func TestRegExpReplaceFlatInterrupt(t *testing.T) {
 		for ticks := 1; ticks <= 12; ticks++ {
 			var got [2]string
 			for i := range got {
-				r := New(Config{})
+				r := newTestRuntime(t, Config{})
 				rx, err := r.Run(compileForTest(t, "var re = "+re+"; re"))
 				if err != nil {
 					t.Fatal(err)
@@ -160,7 +160,7 @@ func TestRegExpMatchAllASCII(t *testing.T) {
 		for ticks := 0; ticks <= 12; ticks++ {
 			var got [2]string
 			for i := range got {
-				r := New(Config{})
+				r := newTestRuntime(t, Config{})
 				rx, err := r.Run(compileForTest(t, "var re = "+c.re+"; re.lastIndex = 1; re"))
 				if err != nil {
 					t.Fatal(err)

@@ -42,7 +42,7 @@ func TestJITDerivedDefaultConstruct(t *testing.T) {
 		function explicit(n){let s=0;for(let i=0;i<n;i++){const o=new Explicit(i);s+=o.z+o.value+(o.key==='x'?1:0)}return s}
 		function reparent(){Object.setPrototypeOf(IdEntry, Other);return 'moved'}`
 	cases := []string{`chain(50)`, `chain(200)`, `own(50)`, `String(fielded(50))`, `String(explicit(50))`, `chain(100)`, `reparent()`, `chain(50)`, `chain(60)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -489,7 +489,7 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 `
 	for _, run := range []string{"wide"} {
 		t.Run(run, func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			for _, rt := range []*Runtime{want, r} {

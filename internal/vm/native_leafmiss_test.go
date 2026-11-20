@@ -22,7 +22,7 @@ function leafMisses(n) {
 }`
 
 func BenchmarkRegNativeLeafMiss(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	b.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(b, nativeLeafMissSource)); err != nil {
 		b.Fatal(err)
@@ -54,7 +54,7 @@ func TestRegNativeLeafMissRetries(t *testing.T) {
 		{"constant", `function leaf() { return 7 }`, regLeafConst},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			if _, err := r.Run(compileForTest(t, nativeLeafMissSource+tc.source)); err != nil {
 				t.Fatal(err)

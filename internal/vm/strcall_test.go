@@ -12,7 +12,7 @@ var o={charCodeAt:function method(x){return method.arguments.length+":"+method.a
 function legacy(n){let result;for(let i=0;i<20;i++)result=o.charCodeAt(n+0);return ''+result}`
 
 func TestSavedStringCallLegacyArguments(t *testing.T) {
-	r := New(Config{NodeQuirks: true})
+	r := newTestRuntime(t, Config{NodeQuirks: true})
 	defer r.Close()
 	program := compileForTest(t, savedStringCallLegacySource+`;legacy(42)`)
 	for range 3 {
@@ -24,7 +24,7 @@ func TestSavedStringCallLegacyArguments(t *testing.T) {
 }
 
 func TestSavedStringCallDeepOverride(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	program := compileForTest(t, `
 var o={charCodeAt:function recurse(n){if(n===0)return 0;let result=o.charCodeAt(n-1);return result+1}};
@@ -81,7 +81,7 @@ func TestSavedStringCalls(t *testing.T) {
 	for _, tc := range savedStringCalls {
 		t.Run(tc.name, func(t *testing.T) {
 			// Twice in one runtime, the second with the site's cache filled.
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			p := compileForTest(t, tc.source)
 			for round := range 2 {
@@ -159,7 +159,7 @@ func TestStringUnitCalls(t *testing.T) {
 			t.Run(m+"/"+tc.name, func(t *testing.T) {
 				// Twice in one runtime, the second with the sites' caches
 				// filled.
-				r := New(Config{})
+				r := newTestRuntime(t, Config{})
 				defer r.Close()
 				p := compileForTest(t, stringUnitSource(tc.source, m))
 				for round := range 2 {

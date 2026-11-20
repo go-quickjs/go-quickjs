@@ -10,7 +10,7 @@ func regGoTableRuntime(t *testing.T, src string, native bool) (*Runtime, string)
 	fn := compileForTest(t, src)
 	was := SetRegNative(native)
 	t.Cleanup(func() { SetRegNative(was) })
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	t.Cleanup(r.Close)
 	v, err := r.Run(fn)
 	if err != nil {

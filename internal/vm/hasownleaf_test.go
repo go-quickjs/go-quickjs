@@ -14,7 +14,7 @@ import "testing"
 // (v26.12.1).
 func TestHasOwnPropertyLeaf(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const hop = Object.prototype.hasOwnProperty

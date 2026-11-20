@@ -146,7 +146,7 @@ func TestJITForEachAfterCallback(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

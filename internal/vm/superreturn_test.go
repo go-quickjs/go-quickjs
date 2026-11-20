@@ -30,7 +30,7 @@ func TestSuperReturnsOwnObject(t *testing.T) {
 		r.join(' ')`
 	const want = "true:true:true:0:false:true:true false:false:false:1:false:false:false false:false:false:2:true:false:false " +
 		"false:false:false:3:false:false:false false:1:2:true E:true:true A:true:true M:true:true D:true:true X:true:true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

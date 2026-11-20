@@ -8,7 +8,7 @@ import "testing"
 // against its fills until it gave its cache up (maxCacheFills).
 func TestPolymorphicSites(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function A() { this.x = 1 }

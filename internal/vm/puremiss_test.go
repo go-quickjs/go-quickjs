@@ -18,7 +18,7 @@ import (
 // pureMissLimit times at most.
 func TestPureMissPerTemplate(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `
 		var last, o = { get g() { return 1; } };
 		function each(f, n) { var s = 0; for (var i = 0; i < n; i++) s += f(i); return s }

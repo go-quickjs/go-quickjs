@@ -8,7 +8,7 @@ import "testing"
 // a new layout.
 func TestProtoShapeOnlyForPrototypes(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := r.atoms.intern("k")
 	dict := newObject(nil, ClassObject)
 	dict.setOwnRaw(key, Int(1), propDefault)

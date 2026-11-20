@@ -13,7 +13,7 @@ import (
 func regI32Eval(t *testing.T, src string) string {
 	t.Helper()
 	fn := compileForTest(t, src)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {

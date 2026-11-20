@@ -66,7 +66,7 @@ func TestCallbackTreeRest(t *testing.T) {
 		"10 3 true 20 3,6,9,12 18 | a1b2 26 10,21,32 a+-b+-c {\"a\":101,\"b\":[102]} 6 | " +
 		"a1b2 26 10,21,32 a+-b+-c {\"a\":101,\"b\":[102]} 6 | 3.75 | function10,function20 | " +
 		"RangeError at 2 | RangeError at 2 | RangeError at 2 | bottom0,bottom0 | outer0,outer0"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	var planned bool
 	if err == nil {

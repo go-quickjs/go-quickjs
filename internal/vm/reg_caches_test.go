@@ -36,7 +36,7 @@ var global_res;
 	digest := func(native bool) string {
 		was := SetRegNative(native)
 		defer SetRegNative(was)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		if _, err := r.Run(compileForTest(t, text)); err != nil {
 			t.Fatal(err)

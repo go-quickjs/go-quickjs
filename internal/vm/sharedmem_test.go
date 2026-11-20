@@ -73,7 +73,7 @@ func TestHostJobsReadyAfterRun(t *testing.T) {
 			return false
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	ran := 0
 	r.PostFromElsewhere(func() { ran++ })
 	if !signalled(r) {

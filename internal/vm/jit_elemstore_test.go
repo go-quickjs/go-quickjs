@@ -180,7 +180,7 @@ func TestJITBooleansAsNumbersNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		function f(a, b, c, d) { let n = 0; for (let i = 0; i < 100; i++) n = (n + ((a | 0) < (i | 0) | (c | 0) > (d | 0)) + ((a === i) & (c !== d))) | 0; return n }`
@@ -270,7 +270,7 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		const h = new Int32Array(256)
@@ -378,7 +378,7 @@ func TestJITTypedGlobalsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	// Compiled on the spot, as the counts below are written for, not in
 	// the background (QJS_JIT_STRESS's background), whose code comes
 	// checks later.
@@ -467,7 +467,7 @@ func TestJITMegamorphicCacheFills(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, `
 		const big = {}; for (let j = 0; j < 12; j++) big['p' + j] = j

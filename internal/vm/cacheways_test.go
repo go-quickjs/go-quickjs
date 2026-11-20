@@ -35,7 +35,7 @@ func TestDeepAddsFourWays(t *testing.T) {
 	calls := 0
 	deepSetOf = func(*shape, Atom) uintptr { calls++; return 0 }
 	t.Cleanup(func() { deepSetOf = was })
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	run := func(src string) {
 		t.Helper()
@@ -85,7 +85,7 @@ run(50);`)
 	var keep [][]byte
 	for seed := range 20 {
 		keep = append(keep, make([]byte, 112*(seed*37%61+1)))
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		if _, err := r.Run(fn); err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func megaOwnFourWays(t *testing.T, native bool) {
 	was := regNativeOn
 	regNativeOn = native
 	defer func() { regNativeOn = was }()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, waysCtors+`
 var objs = [];
@@ -208,7 +208,7 @@ func jsInts(ix []int) string {
 // turn, are each filled once, where each had been filled again at every
 // construction until the entry gave up after sixteen.
 func TestFwdTableEntryKeepsItsOthers(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };

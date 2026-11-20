@@ -12,7 +12,7 @@ import (
 // it is made and across the sets its hash spreads them over.
 func TestPairMemoAnswers(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const bad = []
@@ -46,7 +46,7 @@ func TestPairMemoAnswers(t *testing.T) {
 // their bytes' address; one whose piece's address another string has come
 // to have is not answered by the first's result.
 func TestPairMemoReuses(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	own := func(s string) *String {
 		x, room := newStringBytes(len(s))
@@ -95,7 +95,7 @@ func TestPairMemoReuses(t *testing.T) {
 // A runtime with a memory limit charges each concatenation and keeps no
 // memo.
 func TestPairMemoNotMetered(t *testing.T) {
-	r := New(Config{MemoryLimit: 64 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 64 << 20})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `let s; for (let i = 0; i < 5000; i++) { s = 'a' + (i & 3); s += 'b' }`)); err != nil {
 		t.Fatal(err)

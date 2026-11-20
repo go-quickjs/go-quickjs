@@ -14,7 +14,7 @@ func TestJITGeneratorProtocol(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runGeneratorCases(t, func() *Runtime {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		return r
 	}, 4)

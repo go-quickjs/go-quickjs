@@ -49,7 +49,7 @@ func TestClosureSizes(t *testing.T) {
 // says its super, rather than making one at each (funcData's classPart).
 func TestArrowSharesClassPart(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `class A { m() { return () => super.toString === Object.prototype.toString } }
 		var m = A.prototype.m, f = new A().m()`)); err != nil {

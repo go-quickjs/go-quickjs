@@ -61,7 +61,7 @@ func TestRegBackendRuns(t *testing.T) {
 	// run gave it.
 	fn := compileForTest(t, src)
 	before := RegsBuilt()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(fn)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestRegSkipInitStaleFrames(t *testing.T) {
 		out.join()`
 	const want = "true,,,,,1,true,,,,,2,true,,,,,3"
 	fn := compileForTest(t, src)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestRegFrameErrors(t *testing.T) {
 		try { outer({}) } catch (e) { out.push(e instanceof TypeError, /inner/.test(e.stack), /outer/.test(e.stack)) }
 		try { dead() } catch (e) { out.push(e instanceof ReferenceError) }
 		out.join()`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)

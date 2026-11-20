@@ -57,7 +57,7 @@ var arrayHolesCases = []struct{ src, want string }{
 // times.
 func TestArrayLiteralHoles(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, arrayHolesSetup)); err != nil {
 		t.Fatal(err)

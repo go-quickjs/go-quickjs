@@ -13,7 +13,7 @@ import (
 // its yields. A loop of 10,000 iterations makes one function rather than
 // 10,000.
 func TestReusedClosureAnswers(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function sum(n) {

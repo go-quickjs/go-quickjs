@@ -22,7 +22,7 @@ func siteEntry(r *Runtime, fn string) *propCache {
 // value does not, the value being read where it is.
 func TestProtoCellDeepReads(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	run := func(src string) string {
 		t.Helper()
@@ -65,7 +65,7 @@ func TestProtoCellDeepReads(t *testing.T) {
 // with no prototype's chain the empty one.
 func TestProtoCellAbsentReads(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function get(o) { return o.missing }
@@ -102,7 +102,7 @@ func TestProtoCellAbsentReads(t *testing.T) {
 // both. One whose receivers' layout is the same, its chain changed, does.
 func TestProtoCellAbsentKeepsPresent(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		function L(x) { this.x = x; for (var i = 0; i < 1; i++) {} if (x % 2 === 0) this.s = "s" + x }

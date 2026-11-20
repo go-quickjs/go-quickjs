@@ -98,7 +98,7 @@ true2000`
 // A sparse array made dense again answers as it did: Node's answers.
 func TestDensify(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, densifySrc)); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestDensify(t *testing.T) {
 // table keeps an index of other attributes, or a prototype, stays sparse.
 func TestDensifyMakesDense(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, densifySrc+`;
 		var p = []; Object.create(p); p[2999] = 1; for (var i = 2998; i >= 0; i--) p[i] = i;

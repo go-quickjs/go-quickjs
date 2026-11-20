@@ -31,7 +31,7 @@ func TestOneCharSlices(t *testing.T) {
 		}
 		out[0] + '\n' + (out[0] === out[1] && out[1] === out[2])`
 	const want = "1:97:true:true:true:true:true 1:34:true:true:true:true:true 1:92:true:true:true:true:true 1:10:true:true:true:true:true 1:233:true:true:true:true:true 1:8364:true:true:true:true:true 1:55357:true:true:true:true:true 1:56832:true:true:true:true:true 1:122:true:true:true:true:true z z z z true true true true false true true true true true true true true\ntrue"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

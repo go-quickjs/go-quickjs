@@ -48,7 +48,7 @@ func gcYieldRun(t *testing.T, r *Runtime, procs int) (string, int, int) {
 
 func gcYieldRuntime(t *testing.T, cfg Config) *Runtime {
 	t.Helper()
-	r := New(cfg)
+	r := newTestRuntime(t, cfg)
 	t.Cleanup(r.Close)
 	if _, err := r.Run(compileForTest(t, gcYieldSrc)); err != nil {
 		t.Fatal(err)

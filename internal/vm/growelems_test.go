@@ -71,7 +71,7 @@ const arrayGrowthTestWant = "100|4950|300|5250|100|4950|100|4950|257|32896|771|3
 // Arrays grown past where their growth changes answer as Node answers.
 func TestArrayGrowth(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, arrayGrowthTestSrc))
 	r.Close()
 	if err != nil {
@@ -92,7 +92,7 @@ func TestArrayGrowthRoom(t *testing.T) {
 		`var a = []; for (var i = 0; i < 30000; i++) a[a.length] = i; a`,
 		`var a = []; for (var i = 0; i < 30000; i++) a[i] = i; a`,
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)

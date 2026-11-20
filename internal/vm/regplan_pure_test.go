@@ -9,7 +9,7 @@ import "testing"
 // call. The removal of the tree tier had left pure bodies to pureCall, and
 // their callbacks' loops were never compiled natively.
 func TestRegPureClosuresPlanned(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := `function f(x) { return x * 2 }
 	function g(x) { s += x }

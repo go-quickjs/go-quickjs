@@ -207,7 +207,7 @@ const switchTestWant = "A.d3.-.A.3.s.Acf.AB.b!.12.25.-.-.caught:boom,S.d3.-.-.36
 // register code rather than by pureCall.
 func TestSwitchLookups(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, switchTestSrc))
 	r.Close()
 	if err != nil {

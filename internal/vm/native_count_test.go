@@ -40,7 +40,7 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 	}
 	// Alone: what the runtime counts.
 	nativeCounting(t)
-	alone := New(Config{})
+	alone := newTestRuntime(t, Config{})
 	defer alone.Close()
 	run(alone)
 	want := nativeCounter.Load().exits
@@ -51,7 +51,7 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 	// another goroutine until told to stop.
 	nativeCounting(t)
 	other := nativeCounter.Load()
-	busy := New(Config{})
+	busy := newTestRuntime(t, Config{})
 	defer busy.Close()
 	if _, err := busy.Run(compileForTest(t, nativeCountSrc)); err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestRegNativeCountsPerRuntime(t *testing.T) {
 	// The counting runtime, made now, while the other runs.
 	nativeCounting(t)
 	mine := nativeCounter.Load()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	from := atomic.LoadInt64(&other.exits[bytecode.RDelete])
 	run(r)

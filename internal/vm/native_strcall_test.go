@@ -43,7 +43,7 @@ func strMethodRun(t *testing.T, src string, native bool, name string, op uint8) 
 	was := regNativeOn
 	regNativeOn = native
 	t.Cleanup(func() { regNativeOn = was })
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	m, err := r.Run(compileForTest(t, `String.prototype.`+name))
 	if err != nil {

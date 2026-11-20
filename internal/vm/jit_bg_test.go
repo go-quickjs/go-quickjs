@@ -38,7 +38,7 @@ func TestJITRegBackground(t *testing.T) {
 			var got [2]string
 			var rts [2]*Runtime
 			for i := range rts {
-				r := New(Config{JIT: true})
+				r := newTestRuntime(t, Config{JIT: true})
 				t.Cleanup(r.Close)
 				rts[i] = r
 				r.SetJITWarmUp(1, 1)

@@ -67,7 +67,7 @@ func TestJITRegNativeBigIntMarks(t *testing.T) {
 			run()
 			// A runtime without the JIT, of register code of its own: the
 			// marks are the code's, which runtimes running it share.
-			plainRT := New(Config{})
+			plainRT := newTestRuntime(t, Config{})
 			t.Cleanup(plainRT.Close)
 			prog := compileForTest(t, regBigMarkSrc)
 			if _, err := plainRT.Run(prog); err != nil {

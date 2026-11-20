@@ -138,7 +138,7 @@ const polyProtoWant = `true|1|20|5||y,sv|y,sv|y,sv|{"y":2,"sv":5}|{"y":2,"sv":5}
 
 func TestPolyProtoSemantics(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, polyProtoSemantics))
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestPolyProtoSemantics(t *testing.T) {
 // layout as any object's.
 func TestPolyProtoLayout(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var p = {k: 1}, q = {k: 2}
@@ -262,7 +262,7 @@ func TestPolyProtoNoShapes(t *testing.T) {
 		`var D = class extends Base { constructor(a) { super(a); this.b = 1 } }; var o = new D(i)`,
 		`var a = Object.create({base: i}); a.i = i; var b = Object.create(a); b.v = 1; b.base + b.i + b.v`,
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		src := "class Base { constructor(a) { this.a = a } }\nfunction loop(n) { for (var i = 0; i < n; i++) { " + body + " } }"
 		if _, err := r.Run(compileForTest(t, src+"\nloop(100)")); err != nil {
 			t.Fatal(err)
@@ -287,7 +287,7 @@ func TestPolyProtoNoShapes(t *testing.T) {
 // object, and the code keeps making first objects so.
 func TestPolyProtoSharedClasses(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := `var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } }
 		var A = Class.create(); A.prototype = { initialize: function (x) { this.x = x } }

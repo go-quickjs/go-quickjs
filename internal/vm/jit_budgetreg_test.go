@@ -96,7 +96,7 @@ func TestJITBudgetAcrossManyFunctions(t *testing.T) {
 		function props(n) { const o = { a: 1, b: 2 }; for (let i = 0; i < n; i++) { o.a = i; o.b = o.a + 1 } return o.b }
 		function elems(n) { const a = [1, 2, 3]; let s = 0; for (let i = 0; i < n; i++) s += a[i % 3]; return s }
 		function down(n) { let s = 0; while (n-- > 0) s++; return s }`
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	r.jitStress = jitStressConfig{}
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {

@@ -138,7 +138,7 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 		function run(f, a, b) { var r = 0; for (var k = 0; k < 400; k++) r = f(a, b); return r }`
 	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed", "bounded", "keyArray", "keyHeap", "keyWrite", "keyAppend", "keyGrow", "keyHole", "keyObject", "keySearch", "keyStore", "div", "mod", "modk", "negz", "mulz", "shv", "shk", "ushr"}
 	args := []string{"0", "1", "-1", "2147483647", "-2147483648", "4294967295", "2147483648", "1.5", "-0", "NaN", "Infinity", "-7", "1e300", "9223372036854777856", "-Infinity"}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)
@@ -232,7 +232,7 @@ func TestJITInt32Phis(t *testing.T) {
 		}
 		function run(f, a, n) { var r = 0; for (var k = 0; k < 60; k++) r = f(a, n); return r }`
 	for _, budget := range []uint16{0, 3} {
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		jitDefaultsForTest(r)
 		if budget != 0 {

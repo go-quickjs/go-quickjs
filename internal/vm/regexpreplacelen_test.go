@@ -84,7 +84,7 @@ const regexpReplaceLenTestWant = `10,0,0,10,0,10,10,28 13,0,0,13,0,13,13,28 19,0
 // script's.
 func TestRegExpReplaceLenFails(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := `var gets = 0, limit = Error.stackTraceLimit;
 Object.defineProperty(Error, 'stackTraceLimit', { get() { gets++; return limit }, set(v) { limit = v }, configurable: true });

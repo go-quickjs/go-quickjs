@@ -116,7 +116,7 @@ func TestStringCutsUnderALimit(t *testing.T) {
 	}
 	for _, c := range strCutCases {
 		t.Run(c.name, func(t *testing.T) {
-			r := New(Config{MemoryLimit: 16 << 20})
+			r := newTestRuntime(t, Config{MemoryLimit: 16 << 20})
 			defer r.Close()
 			r.SetEvaluator(func(source string, _ EvalRequest) (*bytecode.Function, error) {
 				return compileForTest(t, source), nil
@@ -134,7 +134,7 @@ func TestStringCutsUnderALimit(t *testing.T) {
 			if c.long == "" {
 				return
 			}
-			r2 := New(Config{MemoryLimit: 16 << 20})
+			r2 := newTestRuntime(t, Config{MemoryLimit: 16 << 20})
 			defer r2.Close()
 			r2.SetEvaluator(r.evaluator)
 			if _, err := r2.Run(compileForTest(t, `var keep = []`)); err != nil {
@@ -162,7 +162,7 @@ func TestStringCutChains(t *testing.T) {
 		{"RegExp's source", `new RegExp(s).source`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := New(Config{MemoryLimit: 1 << 30})
+			r := newTestRuntime(t, Config{MemoryLimit: 1 << 30})
 			defer r.Close()
 			if _, err := r.Run(compileForTest(t, `var keep = []`)); err != nil {
 				t.Fatal(err)
@@ -220,7 +220,7 @@ func strCutChain(t *testing.T, r *Runtime, s *String, step func(*String) int) (c
 // for: a power of two, one less, one more.
 func TestStringCutBound(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 1 << 30})
+	r := newTestRuntime(t, Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	for _, n := range []int{2, 3, 4, 5, 7, 8, 9, 100, 1023, 1024, 1025, 4095, 4096, 4097, 65536, 65537, 1<<20 - 1, 1 << 20, 1<<20 + 1} {
 		s := NewString(strings.Repeat("ab", n)[:n])
@@ -246,7 +246,7 @@ func TestStringCutBound(t *testing.T) {
 // character, in linear time. Quadratic, it would not end in a test's life.
 func TestStringCutLoopStaysLinear(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 256 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 256 << 20})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		let s = "x".repeat(4e6) + "y", n = 0
@@ -266,7 +266,7 @@ func TestStringCutsOfKI77(t *testing.T) {
 		t.Skip("makes gigabytes of strings")
 	}
 	const loop = `var keep = []; for (let i = 0; i < 60; i++) { let p = "x".repeat(11e6) + i; keep.push(p.slice(%s)) }`
-	r := New(Config{MemoryLimit: 32 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 32 << 20})
 	defer r.Close()
 	before := heapNow()
 	if _, err := r.Run(compileForTest(t, fmt.Sprintf(loop, `0, 2`))); err != nil {
@@ -275,7 +275,7 @@ func TestStringCutsOfKI77(t *testing.T) {
 	if held := heapNow() - before; held > 1<<20 {
 		t.Errorf("sixty short cuts hold %.1f MB", float64(held)/(1<<20))
 	}
-	r2 := New(Config{MemoryLimit: 32 << 20})
+	r2 := newTestRuntime(t, Config{MemoryLimit: 32 << 20})
 	defer r2.Close()
 	if _, err := r2.Run(compileForTest(t, fmt.Sprintf(loop, `0, 6e6`))); !errors.Is(err, ErrMemoryLimit) {
 		t.Fatalf("long cuts: %v, want ErrMemoryLimit", err)
@@ -286,7 +286,7 @@ func TestStringCutsOfKI77(t *testing.T) {
 // constants are the Program's, and a runtime never writes to them.
 func TestStringCutsOfAProgramRunAgain(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 16 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 16 << 20})
 	defer r.Close()
 	big := strings.Repeat("x", 1<<20)
 	prog := compileForTest(t, `var big = "`+big+`"; globalThis.keep ??= []; keep.push(big.slice(2, 6), big.slice(1000)); keep.length`)
@@ -313,7 +313,7 @@ func TestStringCutsOfAProgramRunAgain(t *testing.T) {
 // has left is no size in one with a limit.
 func TestStringCutMarkIsNoAppendCount(t *testing.T) {
 	t.Parallel()
-	metered, plain := New(Config{MemoryLimit: 1 << 30}), New(Config{})
+	metered, plain := newTestRuntime(t, Config{MemoryLimit: 1 << 30}), newTestRuntime(t, Config{})
 	defer metered.Close()
 	defer plain.Close()
 	p := NewString(strings.Repeat("x", 1000))
@@ -350,7 +350,7 @@ func TestStringCutMarkIsNoAppendCount(t *testing.T) {
 // empty, and in a runtime with none it stays.
 func TestStringCutLeavesItsRoom(t *testing.T) {
 	t.Parallel()
-	metered, plain := New(Config{MemoryLimit: 1 << 30}), New(Config{})
+	metered, plain := newTestRuntime(t, Config{MemoryLimit: 1 << 30}), newTestRuntime(t, Config{})
 	defer metered.Close()
 	defer plain.Close()
 	p := NewString(strings.Repeat("x", 1000))
@@ -385,7 +385,7 @@ func TestStringCutMarkHasNoFieldOfItsOwn(t *testing.T) {
 // past the script's letting go, at no count.
 func TestMemoryWalkKeepsNothing(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 1 << 30})
+	r := newTestRuntime(t, Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `var keep = [{a: new Map([[1, "x".repeat(99)]])}]`)); err != nil {
 		t.Fatal(err)

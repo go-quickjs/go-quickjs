@@ -90,7 +90,7 @@ const dataViewTestWant = `255.254.18.52.52.18.251.255.255.255.63.192.0.0.3.0 255
 // Node's, and an immutable buffer's setters still throw.
 func TestDataViewLeaves(t *testing.T) {
 	{
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, dataViewTestSrc))
 		if err != nil {
 			t.Fatal(err)
@@ -108,7 +108,7 @@ func TestDataViewLeaves(t *testing.T) {
 		}
 	}
 	// Every accessor is declared the leaf of its width.
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	for _, spec := range dataViewTypes {
 		get, set := dataViewLeafOps[struct{}](spec)

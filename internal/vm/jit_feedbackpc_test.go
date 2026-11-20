@@ -34,7 +34,7 @@ func TestJITFeedbackByPCInlinedCopies(t *testing.T) {
 	gc := debug.SetGCPercent(-1)
 	t.Cleanup(func() { debug.SetGCPercent(gc) })
 	setClock := jitFlushForTest(t)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	rts := []*Runtime{want, r}

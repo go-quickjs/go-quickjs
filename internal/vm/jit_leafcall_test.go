@@ -61,7 +61,7 @@ func TestJITLeafCalls(t *testing.T) {
 	if calls, hosts, entries = e.ssaStats.goCalls-calls, e.ssaStats.hosts-hosts, e.ssaStats.entries-entries; entries == 0 || calls > 1 || hosts != 0 {
 		t.Errorf("leafLoop ran natively %d times, made %d calls of Go with frames and left its code %d times", entries, calls, hosts)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	if _, err := want.Run(compileForTest(t, leafCallSetup)); err != nil {
 		t.Fatal(err)

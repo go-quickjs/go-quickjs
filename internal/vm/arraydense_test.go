@@ -9,7 +9,7 @@ import "testing"
 // is sparse as before.
 func TestArraysStayDense(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	for _, c := range []struct {
 		src    string

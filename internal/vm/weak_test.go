@@ -32,7 +32,7 @@ func tracked(s *weakMapState) int { return len(s.keys) + len(s.syms) }
 
 // A key nothing else holds goes, and a key that is held keeps its value.
 func TestWeakMapReleasesCollectedKeys(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	var gone weak.Pointer[Object]
 	func() {
@@ -56,7 +56,7 @@ func TestWeakMapReleasesCollectedKeys(t *testing.T) {
 // alive, for an object key and for a symbol key, and the map lets go of the
 // collected key's record when it next prunes.
 func TestWeakMapValueRefersToKey(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	var objRef weak.Pointer[Object]
 	var symRef weak.Pointer[Symbol]
@@ -96,7 +96,7 @@ func TestWeakMapValueRefersToKey(t *testing.T) {
 // A map that has gone takes its value off a key that lives on, and leaves
 // another map's value for the same key where it is.
 func TestWeakMapReleasesValuesWhenMapDies(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	live := newWeakMap()
 	live.set(r, key, Int(7))
@@ -129,7 +129,7 @@ func TestWeakMapReleasesValuesWhenMapDies(t *testing.T) {
 // ephemeron would let both go. If this starts failing, the gap has closed:
 // update the page.
 func TestWeakMapValueRefersToMapKeepsIt(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	var mapRef weak.Pointer[weakMap]
 	func() {
@@ -148,7 +148,7 @@ func TestWeakMapValueRefersToMapKeepsIt(t *testing.T) {
 // The values of a map that has gone are released at the end of a turn too,
 // for a runtime that runs no loop long enough to sweep.
 func TestWeakMapReleasedAtEndOfTurn(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	var valueRef weak.Pointer[Object]
 	func() {
@@ -172,7 +172,7 @@ func TestWeakMapReleasedAtEndOfTurn(t *testing.T) {
 // one's, though the host still holds their key: the runtime runs nothing
 // that could miss them, and has no turns left to release them later.
 func TestWeakMapReleasedWhenClosed(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	live := newWeakMap()
 	var liveValue, deadValue weak.Pointer[Object]
@@ -205,7 +205,7 @@ func TestWeakMapReleasedWhenClosed(t *testing.T) {
 // to stop.
 func TestWeakMapKeptWhileClosingScriptRuns(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), Obj(r.newNativeFunc("closeNow", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			rt.Close()
@@ -231,7 +231,7 @@ func TestWeakMapKeptWhileClosingScriptRuns(t *testing.T) {
 // delete lets go of the value at once. The key stays on the map's list, its
 // entry marked deleted, so that setting it again does not list it twice.
 func TestWeakMapDeleteReleasesValue(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	key := Obj(newObject(nil, ClassObject))
 	var valueRef weak.Pointer[Object]
@@ -270,7 +270,7 @@ func TestWeakMapDeleteReleasesValue(t *testing.T) {
 // A key of several maps keeps one entry for each, which each map reads,
 // replaces and deletes on its own.
 func TestWeakMapKeyOfSeveralMaps(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	key := Obj(newObject(nil, ClassObject))
 	maps := make([]*weakMap, 5)
 	for i := range maps {
@@ -304,7 +304,7 @@ func TestWeakMapKeyOfSeveralMaps(t *testing.T) {
 // The memory meter counts a WeakMap's values, which are on its keys: a
 // script must not be able to hide memory from a limit in one.
 func TestWeakMapValuesAreMetered(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	big := Str(NewString(strings.Repeat("x", 1<<20)))
 	obj := newObject(nil, ClassObject)
 	sym := NewSymbol("k", true)
@@ -362,7 +362,7 @@ func TestWeakSetReleasesCollectedValues(t *testing.T) {
 // Two references to one object are one key: the second set replaces the
 // first's value, and delete removes the one entry.
 func TestWeakMapKeyIdentity(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	k := Obj(newObject(nil, ClassObject))
 
@@ -385,7 +385,7 @@ func TestWeakMapKeyIdentity(t *testing.T) {
 // deleted -- and its own are not lost to them. The map's record of the
 // collected keys is pruned meanwhile.
 func TestWeakMapAddressReuse(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	m := newWeakMap()
 	// The first keys' addresses, as numbers, which keep nothing alive.
 	stale := map[uintptr]bool{}
@@ -489,7 +489,7 @@ func TestWeakSetAddressReuse(t *testing.T) {
 // (arrayExt), and an ordinary object may have none. Each goes on as it was.
 func TestWeakMapKeySideFields(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var a = [1, 2, 3], f = function (x) { return x * 2 }, o = {}, d = new Date(5)

@@ -34,7 +34,7 @@ func TestJITResumesWhileMarking(t *testing.T) {
 	}
 	host("mark", 1)
 	host("unmark", 0)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	want.global.setOwnRaw(want.atoms.intern("mark"), Obj(want.newNativeFunc("mark", 0, func(*Runtime, Value, []Value) (Value, error) { return Undefined, nil })), propWritable|propConfigurable)
 	want.global.setOwnRaw(want.atoms.intern("unmark"), Obj(want.newNativeFunc("unmark", 0, func(*Runtime, Value, []Value) (Value, error) { return Undefined, nil })), propWritable|propConfigurable)

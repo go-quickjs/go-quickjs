@@ -14,7 +14,7 @@ import (
 // each must go on reading its keys where its values are.
 func TestShapeKeysShared(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function make(i) { return {a: i, b: i + 1, c: i + 2} }
@@ -71,7 +71,7 @@ func TestShapeChainsPastSixtyFour(t *testing.T) {
 		;[y.p99, y.p100, y.p150, "p150" in y, Object.keys(y).length,
 			z.q, z.p50, z.p214, Object.keys(z)[50], a.q,
 			a["p" + 50], a["p" + 214], Object.keys(a).length].join()`)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src.String()))
 	if err != nil {

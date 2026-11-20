@@ -38,7 +38,7 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 		var w = new Walker(3)
 		function tree(n) { const kids = []; for (let i = 0; i < n; i++) kids.push(n > 1 ? tree(n - 1) : null); return { kids } }
 		var big = tree(7)`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

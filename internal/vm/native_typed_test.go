@@ -82,7 +82,7 @@ func typedRunSrcIn(t *testing.T, cfg Config, src string, native bool, names ...s
 	compiler.SetTypedProto(was...)
 	wasNative := SetRegNative(native)
 	defer SetRegNative(wasNative)
-	r := New(cfg)
+	r := newTestRuntime(t, cfg)
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestRegTypedProtoInterrupt(t *testing.T) {
 		fn, fin := compileForTest(t, forever), compileForTest(t, finite)
 		compiler.SetTypedProto(was...)
 		wasNative := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		r.SetContext(ctx)
 		unwatch := watchStopForTest(r, ctx)

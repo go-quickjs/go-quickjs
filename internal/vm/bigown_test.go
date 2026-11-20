@@ -34,7 +34,7 @@ func TestRegBigIntGivenBack(t *testing.T) {
 			}
 			return keep.join(",") + "/" + s + "/" + t;
 		}`
-	ref := New(Config{})
+	ref := newTestRuntime(t, Config{})
 	if _, err := ref.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestRegBigIntGivenBack(t *testing.T) {
 	want := v.String().Go()
 	for _, native := range []bool{false, true} {
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		if _, err := r.Run(compileForTest(t, src)); err != nil {
 			t.Fatal(err)
 		}

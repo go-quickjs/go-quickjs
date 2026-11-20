@@ -89,7 +89,7 @@ const forInCursorTestWant = "x,y,z|p,q|||x,y,z|0,1,2|0,1||xp xq yp yq zp zq xx x
 // Loops answer as Node does, whichever cursor they are given.
 func TestForInCursor(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, forInCursorTestSrc))
 	r.Close()
 	if err != nil {
@@ -103,7 +103,7 @@ func TestForInCursor(t *testing.T) {
 // A loop takes the last loop's cursor once that has finished: loops run one
 // after another make one cursor between them, not one each.
 func TestForInCursorUsedAgain(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var o = { a: 1, b: 2, c: 3 }
@@ -134,7 +134,7 @@ func TestForInCursorUsedAgain(t *testing.T) {
 // not done is not taken: the next loop has one of its own.
 func TestForInCursorKept(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.startForIn(Null); err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestForInCursorKept(t *testing.T) {
 // What a loop walked goes when its turn ends and each time the collector has
 // run, though no loop follows it.
 func TestForInCursorLetsGo(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var big = { a: 1, b: 2 }

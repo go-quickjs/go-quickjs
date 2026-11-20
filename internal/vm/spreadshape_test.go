@@ -134,7 +134,7 @@ log: get b,get b,get b,get b,get b,get b,ownKeys,gopd a,get a,gopd b,get b,ownKe
 // what the definitions made: Node's answer.
 func TestSpreadByLayout(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, spreadShapeSrc+";run(1)")); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestSpreadByLayout(t *testing.T) {
 // another realm's prototype, is made by the definitions.
 func TestSpreadAdoptsLayout(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `
 	var src = {a: 1, b: 2, c: 3}
 	var hid = {a: 1, b: 2, c: 3}; Object.defineProperty(hid, 'a', {enumerable: false})
@@ -201,7 +201,7 @@ func TestSpreadAdoptsLayout(t *testing.T) {
 // spread the main realm's objects, is collected; the realm's own spreads
 // of its own sources are kept by them, which go with it.
 func TestSpreadKeepsNoRealm(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src, err := r.Run(compileForTest(t, `class P { constructor() { this.x = 1; this.y = 2 } }; [{a: 1, b: 2}, new P]`))
 	if err != nil {

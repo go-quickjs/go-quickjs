@@ -55,7 +55,7 @@ func TestJITCountsNotNative(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := frequencyRuntime(t)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	if _, err := want.Run(compileForTest(t, frequencySetup)); err != nil {
 		t.Fatal(err)

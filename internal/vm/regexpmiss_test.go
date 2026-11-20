@@ -73,7 +73,7 @@ func TestRegExpLeafMisses(t *testing.T) {
 			runtime.GC()
 			debug.SetGCPercent(-1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpMissTestSrc))
 		r.Close()
 		debug.SetGCPercent(100)

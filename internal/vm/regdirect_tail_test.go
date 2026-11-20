@@ -39,7 +39,7 @@ func TestRegDirectTailCallbacks(t *testing.T) {
 		out.join("|")`
 	const round = "row:19:19|item:3:0:1|12|3:3|arrow5|5000|RangeError:row 5"
 	for _, cfg := range []Config{{}, {NodeQuirks: true}} {
-		r := New(cfg)
+		r := newTestRuntime(t, cfg)
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			r.Close()
@@ -73,7 +73,7 @@ func TestRegDirectTailCallbacks(t *testing.T) {
 // body. The retained entry must restore its own reservation before the
 // built-in makes the next call, and release it when iteration ends.
 func TestRegRetainedTailWindow(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("probe"), Obj(r.newNativeFunc("probe", 1,
 		func(rt *Runtime, _ Value, args []Value) (Value, error) {
@@ -159,7 +159,7 @@ var tailChainCallbacks = []struct{ src, want string }{
 func TestRegTailCallbacksInTailChains(t *testing.T) {
 	for _, cfg := range []Config{{}, {NodeQuirks: true}} {
 		for i, c := range tailChainCallbacks {
-			r := New(cfg)
+			r := newTestRuntime(t, cfg)
 			p := compileForTest(t, c.src)
 			for round := range 3 {
 				v, err := r.Run(p)
@@ -181,7 +181,7 @@ func BenchmarkRegTailCallback(b *testing.B) {
 		{"ordinary", `var value = element("row", {entry}, entry.id); return value;`},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			r := New(Config{})
+			r := newTestRuntime(b, Config{})
 			defer r.Close()
 			setup := compileForTest(b, `"use strict";
 				function element(type, props, key) { return {type, props, key}; }

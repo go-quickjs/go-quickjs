@@ -14,9 +14,9 @@ import (
 // each answer is the same number; it returns the JIT's runtime.
 func jitDefaultRuns(t *testing.T, setup string, srcs ...string) *Runtime {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	for _, rt := range []*Runtime{want, r} {

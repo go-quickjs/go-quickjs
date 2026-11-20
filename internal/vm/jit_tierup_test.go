@@ -45,7 +45,7 @@ func jitTierRuntimeForTest(t *testing.T, threshold uint16, setup string) (*Runti
 // install's globals, where it is not nil, before setup runs.
 func jitTierRuntimeWithForTest(t *testing.T, threshold uint16, setup string, install func(*Runtime)) (*Runtime, func(src string)) {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitCallThreshold, r.jitICThreshold = threshold, threshold
@@ -823,13 +823,13 @@ func TestJITMegamorphicWriteKeeps(t *testing.T) {
 		}
 		const s = buildString({ loneCodePoints: [], ranges: [[0xDC00, 0xDFFF], [0x80, 0xDBFF], [0xE000, 0x10FFFF]] })
 		s.length + ':' + s.charCodeAt(s.length >> 1) + ':' + s.charCodeAt(s.length - 1)`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	wv, err := want.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	gv, err := r.Run(compileForTest(t, src))
 	if err != nil {

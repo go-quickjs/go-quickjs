@@ -38,9 +38,9 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 	// natively before the existing tiers had run it.
 	src := `objs=[];for(var i=0;i<6000;i++)objs.push(new ks[i&3]())`
 	call := `String(deep(6000))`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
@@ -99,9 +99,9 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var o={};function w(x){let s=0;for(let i=0;i<2;i++)s+=(o+"").length*x;return s}
 		function run(n){let t=0;for(let i=0;i<n;i++)t+=w(i+0.25);return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	// Compiled on the spot, as the counts below are written for, not in
 	// the background (QJS_JIT_STRESS's background), whose code comes
 	// checks later.

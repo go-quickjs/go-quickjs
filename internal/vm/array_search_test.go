@@ -125,7 +125,7 @@ var arraySearchCases = []struct{ src, want string }{
 // level and in each function's loop, against Node's answers.
 func TestArraySearches(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, arraySearchSetup)); err != nil {
 		t.Fatal(err)

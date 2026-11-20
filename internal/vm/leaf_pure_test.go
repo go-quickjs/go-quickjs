@@ -9,7 +9,7 @@ import "testing"
 // suspendCurrent, lost its frameless calls everywhere when it was.
 func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function T() { this.state = 0 }
@@ -37,7 +37,7 @@ func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
 // be answered without a frame, and so the one that should stop trying.
 func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function T() { this.state = 0; this.list = [] }
@@ -85,7 +85,7 @@ run()`
 	const want = "121|211|212|212|212|212|211|5|10|12|12|12|12|12|12|12"
 	for _, native := range []bool{false, regNativeOn} {
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		dda := r.NewObject()
 		dda.MarkHTMLDDA()
 		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)

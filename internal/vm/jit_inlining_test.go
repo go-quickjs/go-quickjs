@@ -150,7 +150,7 @@ type jitBoth struct{ jit, want *Runtime }
 // jitBothForTest is a jitBoth that has run setup.
 func jitBothForTest(t *testing.T, setup string) jitBoth {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

@@ -199,8 +199,8 @@ func TestJITBigWords(t *testing.T) {
 	// writes it.
 	for _, table := range []bool{true, false} {
 		mir.TableExits = table
-		r := New(Config{JIT: true})
-		want := New(Config{})
+		r := newTestRuntime(t, Config{JIT: true})
+		want := newTestRuntime(t, Config{})
 		for _, rt := range []*Runtime{want, r} {
 			if _, err := rt.Run(compileForTest(t, bigWordSetup)); err != nil {
 				t.Fatal(err)
@@ -267,7 +267,7 @@ func TestJITBigIntMethods(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, `
 		var x = (1n << 255n) + 12345678901234567890n
@@ -399,7 +399,7 @@ func TestJITPow(t *testing.T) {
 		}
 	}
 	defer func() { jitSSAOptimized = nil }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, bigPowSetup)); err != nil {
 		t.Fatal(err)
@@ -420,7 +420,7 @@ func TestJITPow(t *testing.T) {
 	}
 	// Compiled, which a function of ** had not been at all, and warm, where
 	// nothing is past what native code makes, never leaving it.
-	w := New(Config{JIT: true})
+	w := newTestRuntime(t, Config{JIT: true})
 	defer func() { w.Close(); w.ReleaseClosed() }()
 	if _, err := w.Run(compileForTest(t, bigPowSetup)); err != nil {
 		t.Fatal(err)
@@ -489,9 +489,9 @@ func TestJITBigIntTruth(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, bigTruthSetup)); err != nil {
 			t.Fatal(err)
@@ -593,8 +593,8 @@ func TestJITBigIntToString(t *testing.T) {
 		}
 	}
 	defer func() { jitSSAOptimized = nil }()
-	r := New(Config{JIT: true})
-	want := New(Config{})
+	r := newTestRuntime(t, Config{JIT: true})
+	want := newTestRuntime(t, Config{})
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, bigStringSetup)); err != nil {
 			t.Fatal(err)

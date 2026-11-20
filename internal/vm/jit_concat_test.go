@@ -131,7 +131,7 @@ func TestJITLongConcats(t *testing.T) {
 			t.Errorf("%s's code joins with %d concats' calls, want %d, and makes %d conversions of parts %v", c.name, concats, c.calls, others, otherOps)
 		}
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	if _, err := want.Run(compileForTest(t, concatSetup)); err != nil {
 		t.Fatal(err)

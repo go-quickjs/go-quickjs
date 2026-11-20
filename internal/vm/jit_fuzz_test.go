@@ -212,7 +212,7 @@ func jitDifferentialIn(t *testing.T, src string, generated bool) JITStats {
 		// process has allocated enough, the JIT's compiler included, and
 		// a rope that shares itself is written out unmetered, so a run
 		// over the limit may end either way (see outOfMemory).
-		r := New(Config{JIT: jit, MemoryLimit: 16 << 20})
+		r := newTestRuntime(t, Config{JIT: jit, MemoryLimit: 16 << 20})
 		defer func() { r.Close(); r.ReleaseClosed() }()
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
@@ -326,7 +326,7 @@ func jitRunWithin(t *testing.T, r *Runtime, src string, within time.Duration) (s
 func jitDifferentialWarm(t *testing.T, src string) JITStats {
 	t.Helper()
 	run := func(jit bool, warm int, c jitStressConfig, within time.Duration) (string, time.Duration, JITStats) {
-		r := New(Config{JIT: jit, MemoryLimit: 16 << 20})
+		r := newTestRuntime(t, Config{JIT: jit, MemoryLimit: 16 << 20})
 		defer func() { r.Close(); r.ReleaseClosed() }()
 		r.jitStress = c
 		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate

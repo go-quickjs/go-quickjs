@@ -40,7 +40,7 @@ func TestJITRegNativeHonoursLimits(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			prog := compileForTest(t, regPollSrc)
-			r := New(Config{JIT: true, MemoryLimit: 16 << 20})
+			r := newTestRuntime(t, Config{JIT: true, MemoryLimit: 16 << 20})
 			t.Cleanup(r.Close)
 			r.jitStress = jitStressConfig{}
 			r.SetJITWarmUp(1, 1)

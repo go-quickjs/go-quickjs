@@ -38,7 +38,7 @@ func TestStringChain(t *testing.T) {
 			if got := hasOp(fn, "f", bytecode.RConcat); got != tt.concat {
 				t.Errorf("f joins with concat: %v, want %v", got, tt.concat)
 			}
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(fn)
 			if err != nil {
 				r.Close()
@@ -59,7 +59,7 @@ func TestStringChain(t *testing.T) {
 // before, which the runtime's memo of short joins hands back (concatMemo).
 func TestStringChainAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function f(a, b) { return 'key ' + a + ' and ' + b + ' end' }; for (let i = 0; i < 10; i++) f('x', 'y'); f`))
 	if err != nil {

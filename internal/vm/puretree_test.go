@@ -29,7 +29,7 @@ func TestPureByTree(t *testing.T) {
 			if (i == 150) t.mark();
 		}
 		[n, T.prototype.held, T.prototype.mark, T.prototype.one, T.prototype.viaHeld]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestPureInt32Forms(t *testing.T) {
 			out.push(loop(100, 0));
 		}
 		[out.join(), add, sub, addK, subK, loop]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

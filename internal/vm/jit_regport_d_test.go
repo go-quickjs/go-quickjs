@@ -66,7 +66,7 @@ func regLinkInForTest(r *Runtime, e *jitRegEntry) uint64 {
 // the same way (jitAgreeRoundsForTest).
 func jitAgreesPairForTest(t *testing.T, setup string, rounds ...string) (r, want *Runtime) {
 	t.Helper()
-	want = New(Config{})
+	want = newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r = jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

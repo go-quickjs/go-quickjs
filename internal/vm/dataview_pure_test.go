@@ -169,7 +169,7 @@ const dataViewPureWant = "Int8:15,15 Uint8:15,15 Int16:15,15 Uint16:15,15 Int32:
 // is Node's.
 func TestDataViewSetterInPureBody(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, dataViewPureSrc)); err != nil {
 		t.Fatal(err)
 	}

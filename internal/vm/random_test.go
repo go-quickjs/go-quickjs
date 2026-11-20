@@ -37,7 +37,7 @@ func seedRandomForTest(r *Runtime, s0, s1 uint64) {
 // cache's numbers last made first.
 func TestMathRandomSequence(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	const s0, s1 = 0x9e3779b97f4a7c15, 0xbf58476d1ce4e5b9
 	seedRandomForTest(r, s0, s1)
@@ -65,7 +65,7 @@ func TestMathRandomSequence(t *testing.T) {
 // frame. Each call takes the next number, its body run pure or not.
 func TestMathRandomFramelessOnce(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	const s0, s1 = 0x452821e638d01377, 0xbe5466cf34e90c6c
 	seedRandomForTest(r, s0, s1)
@@ -108,7 +108,7 @@ func parseFloatForTest(t *testing.T, s string) float64 {
 // call does.
 func TestMathRandomRange(t *testing.T) {
 	t.Parallel()
-	r, other := New(Config{}), New(Config{})
+	r, other := newTestRuntime(t, Config{}), newTestRuntime(t, Config{})
 	defer r.Close()
 	defer other.Close()
 	if r.rnd != nil {

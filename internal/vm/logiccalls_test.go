@@ -62,7 +62,7 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
 	const want = "false,2,0,0,0,0,0,false,3,4,2,1,2,1,3,4,5,4,2,3,2,4,true,6,6,3,4,3,f1f2g2f1f2g2g3Lf1g1f2g2g3Lf1g1f2g3L,0,0,1,1,,,x,x,7,null,7,null,NaN,NaN,false,false,0,0,0,0,2,2,6,g1,3,0,,c,b,false,9,null,0,0,2,3,LL | true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {
@@ -72,7 +72,7 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 	t.Run("strict-null", func(t *testing.T) {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		v, err := r.Run(compileForTest(t, `
 var values = [null, undefined, false, true, 0, -0, NaN, "", "null", 0n, Symbol(), {}, [],

@@ -25,9 +25,9 @@ func TestJITLongLoopCompiledAgain(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var global_res
 		function long(n) { function f(a) { return 1 } var j, sum = 0; for (j = 0; j < n; j++) { sum += f(j); sum += f(j); sum += f(j); sum += f(j) } global_res = sum; return n * 4 }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {

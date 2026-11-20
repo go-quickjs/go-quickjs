@@ -46,7 +46,7 @@ var pt = new Point(1, 2);
 for (var k = 0; k < 20; k++) work(pt, 5);
 `
 	prog := compileForTest(t, src)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(prog); err != nil {
 		t.Fatal(err)

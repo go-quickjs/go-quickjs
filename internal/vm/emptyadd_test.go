@@ -42,7 +42,7 @@ const emptyAddTestWant = `s,string:s,s/string,s,ss,asbs,[s|s] ,string:,/string,,
 // otherwise, each answer Node's.
 func TestEmptyStringAdd(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, emptyAddTestSrc))
 	r.Close()
 	if err != nil {

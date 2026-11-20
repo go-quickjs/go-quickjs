@@ -10,7 +10,7 @@ import "testing"
 // deletions and the prototype's properties.
 func TestObjectCreateRoom(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var proto = { x: 1 }, big = { z: 0 }, out = [], o, b
@@ -53,7 +53,7 @@ func TestObjectCreateRoom(t *testing.T) {
 // strings -- and a rest object of its own, made with room for them.
 func TestObjectRestShaped(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const show = o => Object.keys(o).map(k => k + '=' + String(o[k])).join(' ') + (Object.getPrototypeOf(o) === Object.prototype ? '' : ' !proto')

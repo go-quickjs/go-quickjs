@@ -89,7 +89,7 @@ func TestShapeBudgetChurn(t *testing.T) {
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			src := setup + `function loop(n) { for (var i = 0; i < n; i++) { ` + p.body + ` } }`
 			if _, err := r.Run(compileForTest(t, src)); err != nil {
@@ -111,7 +111,7 @@ func TestShapeBudgetChurn(t *testing.T) {
 // a constructor and an object literal met for the first time still share
 // layouts in the tree, and a read of their objects stays monomorphic.
 func TestShapeBudgetAfterChurn(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	// Three shapes an iteration: more than the tree holds.
 	if _, err := r.Run(compileForTest(t, `
@@ -158,7 +158,7 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 // start from the prototype's root from the first.
 func TestShapeFirstObjectOfPrototype(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var p = {m: 1}, p2 = {m: 2}
@@ -217,7 +217,7 @@ func TestShapeFirstObjectOfPrototype(t *testing.T) {
 // of it was a lookup in its table.
 func TestShapeSingletonOnOwnPrototype(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var c = Object.create({k: 1}); c.a = 1; c.b = 2
@@ -249,7 +249,7 @@ func TestShapeSingletonOnOwnPrototype(t *testing.T) {
 // Static inheritance reads through it as through any.
 func TestShapeSubclassesShareLayout(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		class Base { static make() { return new this() } static get kind() { return "base" } }

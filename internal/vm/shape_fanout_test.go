@@ -10,7 +10,7 @@ import (
 // each their own way are a table of keys, whose shapes are kept for nothing.
 func TestShapeFanout(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	parsed := func(text string) *Object {
 		t.Helper()

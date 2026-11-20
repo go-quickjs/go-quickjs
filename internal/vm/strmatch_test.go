@@ -9,7 +9,7 @@ import "testing"
 // answered as the protocol answers it, and in its order of steps.
 func TestStringMatchIntrinsic(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const out = [], s = 'x=12 y=345 z=6'

@@ -21,7 +21,7 @@ func TestNegativeIntLiteral(t *testing.T) {
 		"-9,7,2,-1,1073741823,-5,true,false | 3-8,11,-6,0,0,0,false,false | -9,7,2,-1,1073741823,-5,false,false | " +
 		"-8,8,0,0,0,-4,false,false | 3-8,11,-6,0,0,0,false,false | -9,7,2,-1,1073741823,-5,false,false | " +
 		"-Infinity | -2147483648 | 2147483647 | -2 | true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

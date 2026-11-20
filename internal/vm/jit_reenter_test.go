@@ -14,7 +14,7 @@ import (
 // Go ran an instruction at.
 func jitLongRunForTest(t *testing.T, setup, warm, src string) (string, JITStats) {
 	t.Helper()
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -179,7 +179,7 @@ func TestJITStringTableReadsSettle(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -264,7 +264,7 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -343,7 +343,7 @@ func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	setup := `var obj={x:2};
 		function callee(n,k){let t=0;for(let i=0;i<n;i++){const o=i===k?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
 		function caller(m){let s=0;for(let j=0;j<m;j++){s=(s+callee(100,j%5===0?j:-1))|0}return s}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitStress.primLeave = true

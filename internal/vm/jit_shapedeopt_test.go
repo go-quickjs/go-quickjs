@@ -16,7 +16,7 @@ import (
 // again.
 func jitShapeRunForTest(t *testing.T, setup, name string, rounds ...string) (*Runtime, []jitShapeRound) {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

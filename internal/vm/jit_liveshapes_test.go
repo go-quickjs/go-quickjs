@@ -30,7 +30,7 @@ func TestJITSSAReadsKeepLiveAncestorShapes(t *testing.T) {
 		for (const o of neu) o.d=4;
 		var mixed=[old[0],neu[0],old[1],neu[1]];
 		function f(xs,n){let t=0;for(let i=0;i<n;i++){const o=xs[i&3];t=(t+o.a*3+o.b*5+o.c*7+i)|0}return t}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

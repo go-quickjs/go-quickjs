@@ -16,7 +16,7 @@ func TestJITRegLeafMiss(t *testing.T) {
 // and takes back the first count, which had doubled the site's frequency.
 func TestJITRegLeafMissCountedOnce(t *testing.T) {
 	prog := compileForTest(t, nativeLeafMissSource)
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(r.Close)
 	r.jitStress = jitStressConfig{}
 	r.SetJITWarmUp(1<<16, 1<<16)

@@ -111,7 +111,7 @@ const regexpLeafTestWant = `null,1,false,1 null,0,false,0 null,0,false,0 null,1,
 // where it says.
 func TestRegExpLeaves(t *testing.T) {
 	{
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpLeafTestSrc))
 		r.Close()
 		if err != nil {
@@ -121,7 +121,7 @@ func TestRegExpLeaves(t *testing.T) {
 			t.Errorf("\ngot  %s\nwant %s", got, regexpLeafTestWant)
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if fd := r.regexpExecFn.fn(); fd.elemOp != elemRegExpExec || leafChecks[elemRegExpExec] == nil {
 		t.Fatal("exec is not a leaf")
@@ -313,7 +313,7 @@ func TestRegExpLeafComplexity(t *testing.T) {
 		tree bool
 		call string
 	}{{true, "exec"}, {false, "test"}} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, `function f(re) { let _k = 0; try { return String(re.`+c.call+`('a'.repeat(40))) } catch (e) { return e.name + ': ' + e.message } }
 f(/(a+)+b/)`))
 		r.Close()
@@ -344,7 +344,7 @@ for (var how of ['exec', 'test']) {
 out.join('|')`
 	want := "SyntaxError,regular expression is too complex,,0|SyntaxError,regular expression is too complex,,0"
 	{
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {
@@ -357,7 +357,7 @@ out.join('|')`
 
 	// The leaf's call itself, without a frame: an error that is no
 	// exception, and the match remembered for the call made again.
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	recv, err := r.Run(compileForTest(t, `/(a+)+b/`))
 	if err != nil {
@@ -438,7 +438,7 @@ out.join('|')`
 // ever, and the runtime runs on.
 func TestRegExpLeafDeadline(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { return re.exec(s) }`)); err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func TestRegExpLeafSpentOnceNested(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spends the step budget")
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := `function f0(re, s) { return re.exec(s) }
 function f1(re, s) { return f0(re, s) }

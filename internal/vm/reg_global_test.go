@@ -30,7 +30,7 @@ func TestRegGlobalEpoch(t *testing.T) {
 		fns[i] = compileForTest(t, s.src)
 	}
 	before := RegsBuilt()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	for i, s := range steps {
 		v, err := r.Run(fns[i])
@@ -74,7 +74,7 @@ func TestRegGlobalLex(t *testing.T) {
 			fns[i] = compileForTest(t, s.src)
 		}
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		for i, s := range steps {
 			v, err := r.Run(fns[i])
 			if err != nil {

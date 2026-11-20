@@ -10,7 +10,7 @@ func regRunBoth(t *testing.T, src, want string, built int64) {
 	t.Helper()
 	fn := compileForTest(t, src)
 	before := RegsBuilt()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(fn)
 	if err != nil {
 		t.Fatal(err)

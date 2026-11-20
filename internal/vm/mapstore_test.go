@@ -10,7 +10,7 @@ import "testing"
 // few additions quadratic.
 func TestMapStorageBounded(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 
 	queue := newJSMap()
 	for i := 0; i < 100000; i++ {
@@ -62,7 +62,7 @@ func TestMapStorageBounded(t *testing.T) {
 // rebuilds a map filled from empty makes and those its deletions make.
 func TestMapStringKeysByText(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const bad = []

@@ -15,7 +15,7 @@ import (
 // conversion runs code.
 func TestSliceDenseMatchesSpec(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function toInt(v) { v = Number(v); return v !== v ? 0 : Math.trunc(v) }
@@ -107,7 +107,7 @@ func TestSliceDenseMatchesSpec(t *testing.T) {
 // could tell apart from a copy of its elements.
 func TestSliceDenseTakes(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	for _, c := range []struct {
 		src  string
@@ -159,7 +159,7 @@ func TestSliceDenseTakes(t *testing.T) {
 func TestDenseCopiesCountTowardsTheCheck(t *testing.T) {
 	t.Parallel()
 	for _, op := range []string{"big.slice()", "big.slice(1, -1)", "big.splice(0, 0, 1)", "big.splice(1, 1)"} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		ctx, cancel := context.WithCancel(context.Background())
 		r.global.setOwnRaw(r.atoms.intern("stop"), r.NewFunction("stop", 0, func(*Runtime, Value, []Value) (Value, error) {
 			cancel()

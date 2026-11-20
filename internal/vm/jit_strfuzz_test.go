@@ -32,11 +32,11 @@ func TestJITStrAppendRandom(t *testing.T) {
 	first, count := strFuzzRange(t, count)
 	for seed := first; seed < first+count; seed++ {
 		src := strFuzzSource(seed)
-		ref := New(Config{Debug: true})
+		ref := newTestRuntime(t, Config{Debug: true})
 		want := strFuzzRun(t, ref, src, true)
 		ref.Close()
 		for _, c := range strFuzzSettings {
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			r.jitCallThreshold, r.jitICThreshold = 1, 1
 			r.jitStress = c
 			got := strFuzzRun(t, r, src, false)
@@ -62,10 +62,10 @@ func TestJITStrAppendRandomMarking(t *testing.T) {
 	first, count := strFuzzRange(t, count)
 	for seed := first; seed < first+count; seed++ {
 		src := strFuzzSource(seed)
-		ref := New(Config{Debug: true})
+		ref := newTestRuntime(t, Config{Debug: true})
 		want := strFuzzRun(t, ref, src, true)
 		ref.Close()
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
 		got := strFuzzRun(t, r, src, false)
@@ -91,11 +91,11 @@ func TestJITArrayRoomRandom(t *testing.T) {
 	first, count := strFuzzRange(t, count)
 	for seed := first; seed < first+count; seed++ {
 		src := arrayFuzzSource(seed)
-		ref := New(Config{Debug: true})
+		ref := newTestRuntime(t, Config{Debug: true})
 		want := strFuzzRun(t, ref, src, true)
 		ref.Close()
 		for _, c := range strFuzzSettings {
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			r.jitCallThreshold, r.jitICThreshold = 1, 1
 			r.jitStress = c
 			got := strFuzzRun(t, r, src, false)
@@ -135,7 +135,7 @@ last
 `
 	want := fmt.Sprintf("RangeError:Invalid string length:%d", 270+(1<<28))
 	for _, c := range strFuzzSettings {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
 		got := strFuzzRun(t, r, src, false)

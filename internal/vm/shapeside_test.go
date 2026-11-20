@@ -20,7 +20,7 @@ func TestShapeSide(t *testing.T) {
 	if size > want {
 		t.Errorf("shape is %d bytes; want at most %d", size, want)
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var p = {m: 1}
@@ -83,7 +83,7 @@ func TestShapeSide(t *testing.T) {
 // the first child shares its parent's array.
 func TestShapeChildKeys(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function mk() { return {} }
@@ -124,7 +124,7 @@ func TestShapeChildKeys(t *testing.T) {
 // parent, and its objects made after it still start from that root.
 func TestShapeProtoRootInParent(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var p = {m: 1, n: 2}

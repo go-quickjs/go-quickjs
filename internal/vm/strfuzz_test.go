@@ -405,14 +405,14 @@ func TestStrAppendRandom(t *testing.T) {
 			src := strFuzzSource(seed)
 			var want string
 			if !t.Run("ref", func(t *testing.T) {
-				ref := New(Config{Debug: true})
+				ref := newTestRuntime(t, Config{Debug: true})
 				want = strFuzzRun(t, ref, src, true)
 				ref.Close()
 			}) {
 				return
 			}
 			t.Run(fmt.Sprintf(""), func(t *testing.T) {
-				r := New(Config{})
+				r := newTestRuntime(t, Config{})
 				got := strFuzzRun(t, r, src, false)
 				r.Close()
 				if got != want && !t.Failed() {

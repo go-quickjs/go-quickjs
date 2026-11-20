@@ -72,7 +72,7 @@ func TestJITProgramRerunsKeepLayouts(t *testing.T) {
 // the chunks of a few budgets.
 func TestJITShapeReruns(t *testing.T) {
 	testShapeReruns(t, 8*budgetSlots, func() *Runtime {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		return r
 	})

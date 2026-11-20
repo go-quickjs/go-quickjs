@@ -8,7 +8,7 @@ import "testing"
 // spread puts them, the literal's own before and after included.
 func TestSpreadReservesRoom(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `
 	var src = {};
 	for (var n = 0; n < 20; n++) src["k" + n] = n;

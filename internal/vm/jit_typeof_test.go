@@ -65,7 +65,7 @@ func TestJITTypeofNative(t *testing.T) {
 			}
 			runtime.GC()
 			defer debug.SetGCPercent(debug.SetGCPercent(-1))
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			jitDefaultsForTest(r)

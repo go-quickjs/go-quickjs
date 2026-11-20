@@ -45,7 +45,7 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 			}
 			return s
 		}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	if _, err := want.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestJITCallStateRebuildsTheFrame(t *testing.T) {
 			}
 			return out.join(";")
 		}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

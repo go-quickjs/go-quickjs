@@ -37,7 +37,7 @@ func TestSharedCacheMegamorphic(t *testing.T) {
 		[out[0].slice(0, 40), out[1].slice(0, 40), out[2].slice(0, 60), out[3].slice(0, 80), h].join("|")`
 	var answers []string
 	for range 1 {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		if err != nil {

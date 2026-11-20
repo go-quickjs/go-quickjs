@@ -29,7 +29,7 @@ func TestRegApplyArgs(t *testing.T) {
 	const want = "1,2,3,3 | 1,,,1 | 1,2,3,5 | 7,2,3;12 | 3 | 0 | 10 | 22 | object:3:5 | 3025"
 	fn := compileForTest(t, src)
 	before := RegsBuilt()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(fn)
 	if err != nil {
 		t.Fatal(err)

@@ -30,7 +30,7 @@ func TestCursorOneAllocation(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("sizes of a 64-bit build")
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	arr := Obj(r.newArrayFrom([]Value{Int(1), Int(2), Int(3)}))
 	if n := testing.AllocsPerRun(100, func() {
@@ -83,7 +83,7 @@ func TestTreeForInAsInterpreter(t *testing.T) {
 		{"var o = {}; for (var i = 0; i < 20; i++) o['k' + i] = i; var s = 0; for (var k in o) s += o[k]; return s", "190"},
 		{"var a = []; a[5] = 5; a[2] = 2; a.x = 'x'; var s = ''; for (var k in a) s += k + ','; return s", "2,5,x,"},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.src, err)
@@ -114,7 +114,7 @@ func TestTreeMapIterAsInterpreter(t *testing.T) {
 		{"var t = new Set(); for (var i = 0; i < 50; i++) t.add(i); var s = 0; for (var v of t) { s += v; if (v % 10 == 0) t.delete(v + 1) } return s", "1120"},
 		{"var m = new Map([[1, 'a'], [2, 'b'], [3, 'c']]), s = ''; var it = m.values(); for (var v of it) { s += v; break } for (var v of it) s += v; return s", "abc"},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, "(function () { var r; for (var j = 0; j < 3; j++) r = (function () { "+tc.src+" })(); return r })()"))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.src, err)

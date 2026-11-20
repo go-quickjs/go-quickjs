@@ -94,7 +94,7 @@ func TestRegExpMatchResults(t *testing.T) {
 		if !idle {
 			debug.SetGCPercent(1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, matchResultTestSrc))
 		r.Close()
 		debug.SetGCPercent(gc)

@@ -177,7 +177,7 @@ func regexpPristineCheck(t *testing.T, r *Runtime, c regexpPristineCase, where s
 func TestRegExpPristine(t *testing.T) {
 	for _, c := range regexpPristineCases {
 		gc := debug.SetGCPercent(-1)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		regexpPristineCheck(t, r, c, "tree tier")
 		r.Close()
 		debug.SetGCPercent(gc)
@@ -189,7 +189,7 @@ func TestRegExpPristine(t *testing.T) {
 // later has its own, which a change to the first one's leaves pristine.
 func TestRegExpPristineRealms(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	p, ctor := r.proto.regexp, r.proto.regexpCtor
 	if !p.shape.pristine || !ctor.shape.pristine || !p.shape.seen || !p.shape.unique {

@@ -1091,7 +1091,7 @@ func TestRegNativeArrayLength(t *testing.T) {
 		nativeMarking(t, marking)
 		was := regNativeOn
 		regNativeOn = true
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		before := nativeExitOps()
 		v, err := r.Run(compileForTest(t, src))
 		after := nativeExitOps()
@@ -1242,7 +1242,7 @@ func TestRegNativeTypeofJumps(t *testing.T) {
 					was := regNativeOn
 					regNativeOn = native
 					defer func() { regNativeOn = was }()
-					r := New(Config{})
+					r := newTestRuntime(t, Config{})
 					defer r.Close()
 					dda := r.NewObject()
 					dda.MarkHTMLDDA()

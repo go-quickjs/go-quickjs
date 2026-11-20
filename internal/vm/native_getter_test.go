@@ -19,7 +19,7 @@ function getters(n) {
 }`
 
 func BenchmarkRegNativeGetters(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	b.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(b, nativeGetterSource)); err != nil {
 		b.Fatal(err)

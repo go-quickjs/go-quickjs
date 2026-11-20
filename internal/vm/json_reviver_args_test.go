@@ -28,7 +28,7 @@ func TestJSONReviverThirdArgument(t *testing.T) {
 		`{"a":"11","b":["12","1\"x\"","1true"],"c":{"d":null}}|` +
 		`{"a":"1","b":["2","\"x\"","true"],"c":{"d":null}}|` +
 		`[4,5,6]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

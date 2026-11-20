@@ -110,13 +110,13 @@ func TestStrAppendMentions(t *testing.T) {
 	for _, m := range strMentions {
 		t.Run(strings.ReplaceAll(m.name, " ", "_"), func(t *testing.T) {
 			src := strMentionProgram(m.decl, m.read)
-			ref := New(Config{Debug: true})
+			ref := newTestRuntime(t, Config{Debug: true})
 			want := strFuzzRun(t, ref, src, true)
 			ref.Close()
 			if strings.HasPrefix(want, "uncaught") {
 				t.Fatalf("the program itself fails: %s", want)
 			}
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			got := strFuzzRun(t, r, src, false)
 			r.Close()
 			if got != want {

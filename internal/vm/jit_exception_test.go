@@ -13,7 +13,7 @@ import (
 // differs; it returns the JIT's runtime.
 func jitAgreesForTest(t *testing.T, setup string, rounds ...string) *Runtime {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

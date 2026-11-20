@@ -19,7 +19,7 @@ func TestPropertyNameAtoms(t *testing.T) {
 		r.push(delete o.a, 'a' in o)
 		r.join()`
 	const want = "true,false,true,false,true,false,true,true,false,true,false,true,false,true,false,true,false,true,true,false"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
@@ -54,7 +54,7 @@ func keyStringsInOneSet(n int, seed int) []*String {
 // some runs and not others.
 func TestPropertyNameSharedSet(t *testing.T) {
 	for seed := range 20 {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		keys := keyStringsInOneSet(keyWays+1, seed)
 		atoms := make([]Atom, len(keys))
 		for i, s := range keys {
@@ -125,7 +125,7 @@ func TestPropertyKeyAtoms(t *testing.T) {
 			var o = { [probe]: 1 }
 			return r
 		}`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestPropertyKeyAtoms(t *testing.T) {
 // does read a property by is remembered at that read.
 func TestJSONKeysNotRemembered(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	const src = `
 		var seen = []

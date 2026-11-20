@@ -632,7 +632,7 @@ func TestAppendedRopeFlattensInOneAllocation(t *testing.T) {
 // make none, and each answer is the character.
 func TestLatin1CharactersShared(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if a, b := r.latin1CharString(0xe9), r.latin1CharString(0xe9); a != b || a.Len() != 1 || a.CharCodeAt(0) != 0xe9 || a.Go() != "é" {
 		t.Fatalf("latin1CharString(0xe9) = %q, %v", a.Go(), a == b)

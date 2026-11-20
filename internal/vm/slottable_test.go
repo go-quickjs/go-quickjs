@@ -62,7 +62,7 @@ func TestSlotTable(t *testing.T) {
 		o.k3 = "again";
 		out.push(o.k3, Object.keys(o).length, Object.keys(o)[199]);
 		out.join()`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

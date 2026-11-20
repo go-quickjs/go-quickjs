@@ -31,7 +31,7 @@ func TestJITMathRandom(t *testing.T) {
 		if marking {
 			jitMarkingForTest(t)
 		}
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		for _, rt := range []*Runtime{want, r} {
 			seedRandomForTest(rt, 0x243f6a8885a308d3, 0x13198a2e03707344)

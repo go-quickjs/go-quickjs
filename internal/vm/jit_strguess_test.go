@@ -70,7 +70,7 @@ func TestJITStringGuessFilledLater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	if _, err := want.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)

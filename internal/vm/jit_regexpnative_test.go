@@ -73,7 +73,7 @@ func TestJITRegExpNative(t *testing.T) {
 		t.Fatalf("the JIT holds %d bytes, its patterns' code %d", r.jit.sharedBytes(), r.jit.regexpHost.Held())
 	}
 
-	plain := New(Config{})
+	plain := newTestRuntime(t, Config{})
 	defer plain.Close()
 	if _, err := plain.Run(compileForTest(t, regexpNativeSetup+"run(3), wide(3)")); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestJITRegExpNativeBudget(t *testing.T) {
 func TestJITRegExpNativeRuntimeCollected(t *testing.T) {
 	var gone []weak.Pointer[Runtime]
 	for range 4 {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitStress.threshold = true
 		if _, err := r.Run(compileForTest(t, regexpNativeSetup+"run(2), wide(2)")); err != nil {
 			t.Fatal(err)
@@ -157,7 +157,7 @@ for (var i = 0; i < 40; i++) {
   for (var k = 0; k < 10; k++) new RegExp("x" + k + "y+").test("x" + k + "yyy");
 }
 acc.join() + run(3) + wide(3)`)
-	plain := New(Config{})
+	plain := newTestRuntime(t, Config{})
 	want, err := plain.Run(fn)
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ acc.join() + run(3) + wide(3)`)
 		go func() {
 			defer wg.Done()
 			for round := 0; round < 3; round++ {
-				r := New(Config{JIT: true})
+				r := newTestRuntime(t, Config{JIT: true})
 				for k := 0; k < 3; k++ {
 					v, err := r.Run(fn)
 					if err != nil {
@@ -253,7 +253,7 @@ const regexpNativeSearchWant = "let x = 10 * ( y + 42 ) ;;;;bc;x1,y2;100;-1;n,N,
 // tier's, over bytes and UTF-16, with the collector idle and while it
 // marks.
 func TestJITRegExpNativeSearch(t *testing.T) {
-	interp := New(Config{})
+	interp := newTestRuntime(t, Config{})
 	v, err := interp.Run(compileForTest(t, regexpNativeSearchSetup+"search(2)"))
 	interp.Close()
 	if err != nil {

@@ -75,7 +75,7 @@ func TestJITGenericCallsNative(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	// The register JIT compiles round, which calls f1 to f7
@@ -131,7 +131,7 @@ func TestJITArrowCallsNative(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
@@ -179,7 +179,7 @@ func TestJITGenericCallsOfArrows(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	const setup = `'use strict'
@@ -225,7 +225,7 @@ func TestJITGenericCallsOfArrows(t *testing.T) {
 	if n := e.ssaStats.goCalls - goCalls + e.ssaStats.hosts - hosts; n > 2000+160 {
 		t.Errorf("forEach called its callbacks through Go %d times in 16,000 calls", n)
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	if _, err := want.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)

@@ -63,7 +63,7 @@ func TestWalkedArrayClose(t *testing.T) {
 		"own: own",
 		"deleted: ",
 	}, "\n")
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		r.Close()

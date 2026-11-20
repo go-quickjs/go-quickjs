@@ -38,7 +38,7 @@ func TestOwnCacheOnlyForPlainOwnData(t *testing.T) {
 		[out.slice(0, 10).join(), out.slice(-8).join(), log.length, log.slice(-2).join(), c.getZ()].join("|")`
 	const want = "proto,own getter 0,pget,1,proto,proto,own getter 1,pget,1,proto|" +
 		"proto,own getter 39,pget,1,proto,own,own,own|80|pset 39,own setter 39|39"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)

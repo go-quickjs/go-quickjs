@@ -172,7 +172,7 @@ func TestJITBigIntGivenBack(t *testing.T) {
 	}
 	for _, stress := range []bool{true, false} {
 		for i, p := range bigReleasePrograms {
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			if stress {
 				r.jitCallThreshold, r.jitICThreshold = 1, 1
 			}
@@ -198,7 +198,7 @@ func TestJITBigIntGivenBackAllocs(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, `

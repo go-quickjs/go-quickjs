@@ -55,7 +55,7 @@ func nativeRunInRealm(t *testing.T, r *Runtime, re *Realm, fn *bytecode.Function
 func TestRegNativeInRealmCache(t *testing.T) {
 	fn := nativeRealmFn(t, nativeInRealmSrc)
 	nativeCounting(t)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	nativeRunInRealm(t, r, r.NewRealm(), fn)
 	b := r.NewRealm()
@@ -93,7 +93,7 @@ func TestRegNativeInDroppedRealm(t *testing.T) {
 		return
 	}
 	fn := nativeRealmFn(t, nativeInRealmSrc)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	ran := func() weak.Pointer[Realm] {
 		a := r.NewRealm()
@@ -119,7 +119,7 @@ func TestRegNativeLeaveClearsUsed(t *testing.T) {
 	fn := nativeRealmFn(t, `
 	function deep(n) { var a = [n]; return n === 0 ? a[0] : 1 + deep(n - 1) }
 	deep(100)`)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	// Twice: the second run's states are the first's, which the exit stub
 	// gives frames itself (makeTop).

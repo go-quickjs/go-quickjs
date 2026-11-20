@@ -65,10 +65,10 @@ func TestArrayRoomRandom(t *testing.T) {
 		t.Run(strconv.Itoa(seed), func(t *testing.T) {
 			t.Parallel()
 			src := arrayFuzzSource(seed)
-			ref := New(Config{Debug: true})
+			ref := newTestRuntime(t, Config{Debug: true})
 			want := strFuzzRun(t, ref, src, true)
 			ref.Close()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			got := strFuzzRun(t, r, src, false)
 			r.Close()
 			if got != want {

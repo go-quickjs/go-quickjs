@@ -24,7 +24,7 @@ func TestJITLooseBooleans(t *testing.T) {
 		function count(n){let k=0;for(let i=0;i<n;i++){const a=(i&1)==1;if(a==false)k++;if(true==a)k+=2}return k}`
 	cases := []string{`flags(40)`, `mixed([true,false,1,0,"1","",null,undefined,{},[],[0],2,NaN,"true"])`,
 		`String(count(1000))`, `flags(7)`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

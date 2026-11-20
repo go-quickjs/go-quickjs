@@ -20,7 +20,7 @@ for (var i = 0; i < 3000; i++) last = f(1, i);
 `
 	fn := compileForTest(t, src)
 	for _, c := range []jitStressConfig{{}, {threshold: true}, {threshold: true, budget: 3, deopt: 7}} {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitStress = c
 		v, err := r.Run(fn)
 		if err != nil {

@@ -43,7 +43,7 @@ func freshCodeRuns(t *testing.T, r *Runtime, n int, src func(i int) string) (ali
 // a line of code. What a site's function is collected with, no code can ask
 // for.
 func TestTemplatesLeaveWithTheirCode(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	const runs = 5000
 	alive, kept := freshCodeRuns(t, r, runs, func(i int) string {
@@ -61,7 +61,7 @@ func TestTemplatesLeaveWithTheirCode(t *testing.T) {
 // runs of one function in a realm, whichever run's closure asks, and with the
 // table looked through, the function's script gone and collections between.
 func TestTemplateObjectsLastAsLongAsTheirCode(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	script := compileForTest(t, `
 		var tag = s => s
@@ -117,7 +117,7 @@ func TestTemplateObjectsLastAsLongAsTheirCode(t *testing.T) {
 // other's.
 func TestTemplateObjectsByRealm(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, "(s => s)`in a realm`")
 	a, b := r.NewRealm(), r.NewRealm()
@@ -141,7 +141,7 @@ func TestTemplateObjectsByRealm(t *testing.T) {
 // An address is the next function's once its function is collected: the entry
 // of the function that had it is not the new one's.
 func TestTemplateEntryOfACollectedFunction(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, "(s => s)`new`")
 	other := compileForTest(t, "(s => s)`old`")
@@ -173,7 +173,7 @@ func TestTemplateEntryOfACollectedFunction(t *testing.T) {
 // nothing changed it. The list is cut down as it fills, and a change of the
 // object still reaches the chains of those that live.
 func TestProtoUsersOfGoneCode(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		class Kept {}
@@ -206,7 +206,7 @@ func TestProtoUsersOfGoneCode(t *testing.T) {
 // wrote a stack, source and map, for as long as it lived. A script that lives
 // has its map read once, whatever went since.
 func TestSourceMapsLeaveWithTheirScripts(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	loads := map[string]int{}
 	r.SetSourceMapLoader(func(script, url string) ([]byte, string, bool) {

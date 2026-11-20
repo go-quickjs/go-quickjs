@@ -30,7 +30,7 @@ func TestJITFromCharCodePastLatin1(t *testing.T) {
 			}
 			return s
 		}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

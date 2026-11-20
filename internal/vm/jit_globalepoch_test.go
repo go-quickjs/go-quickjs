@@ -118,7 +118,7 @@ func TestJITGlobalEpochPaths(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			both := jitBoth{want: New(Config{}), jit: jitRuntimeForTest(t, Config{JIT: true})}
+			both := jitBoth{want: newTestRuntime(t, Config{}), jit: jitRuntimeForTest(t, Config{JIT: true})}
 			t.Cleanup(func() { both.want.Close(); both.want.ReleaseClosed() })
 			for _, rt := range []*Runtime{both.want, both.jit} {
 				rt.SetEvaluator(func(source string, req EvalRequest) (*bytecode.Function, error) {
@@ -197,7 +197,7 @@ func TestJITGlobalEpochRealms(t *testing.T) {
 	const setup = `
 		globalThis.k = 3;
 		function hot(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + i * k) | 0; return s; }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	rts := []*Runtime{want, r}

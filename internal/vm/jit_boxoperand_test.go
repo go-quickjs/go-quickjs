@@ -37,7 +37,7 @@ keep.join()
 	want := strings.TrimSuffix(strings.Repeat("NaN,", 16), ",")
 	fn := compileForTest(t, src)
 	for _, c := range []jitStressConfig{{threshold: true}, {threshold: true, budget: 1}, {threshold: true, budget: 3, deopt: 7}} {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
 		v, err := r.Run(fn)

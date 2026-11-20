@@ -63,7 +63,7 @@ func TestJITMegamorphicPrototypes(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			for _, rt := range []*Runtime{want, r} {
 				if _, err := rt.Run(compileForTest(t, jitMegaSetup)); err != nil {

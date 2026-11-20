@@ -309,7 +309,7 @@ func runGeneratorCases(t *testing.T, mk func() *Runtime, rounds int) {
 func TestGeneratorProtocol(t *testing.T) {
 	t.Parallel()
 	t.Run("tree", func(t *testing.T) {
-		runGeneratorCases(t, func() *Runtime { return New(Config{}) }, 3)
+		runGeneratorCases(t, func() *Runtime { return newTestRuntime(t, Config{}) }, 3)
 	})
 }
 
@@ -336,7 +336,7 @@ func TestResumeResultInRegisters(t *testing.T) {
 // makes once -- its generator, its helpers, its cursor -- whatever its
 // length. Each step had made two result objects a level.
 func TestHelperStepsAllocate(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
 		function pipe() { return count(100).map(x => x * 2).filter(x => x & 2).reduce((a, b) => a + b, 0) }
@@ -374,7 +374,7 @@ func TestHelperStepsAllocate(t *testing.T) {
 // no signal made for it. A loop or a destructuring allocates its generator
 // and its cursor; each had made a result object and a return signal as well.
 func TestGeneratorCloseAllocates(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
 		function* pair(a, b) { yield a; yield b }
@@ -411,7 +411,7 @@ func TestGeneratorCloseAllocates(t *testing.T) {
 // binding, not the generator's values.
 func TestGeneratorReturnClosesCaptures(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function* g() { var x = 1; yield () => x++ } var it = g(); var f = it.next().value; it.return(); f`))
 	if err != nil {

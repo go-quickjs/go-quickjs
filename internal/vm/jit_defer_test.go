@@ -26,7 +26,7 @@ func TestJITRegDeferredWarmsUpAgain(t *testing.T) {
 	// what comes after it is deferred.
 	jitEpochNow = func() uint64 { return 1000 }
 	jitFlushNow = func() uint64 { return 250 }
-	r := New(Config{JIT: true, JITMemoryLimit: 96 << 10})
+	r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: 96 << 10})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	// Its asks counted at the JIT's own back-edge budget, not
 	// QJS_JIT_STRESS's, which checks every few back edges, and compiled

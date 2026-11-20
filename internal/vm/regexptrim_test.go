@@ -44,7 +44,7 @@ func TestRegExpTrimReplace(t *testing.T) {
 			runtime.GC()
 			debug.SetGCPercent(-1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpTrimTestSrc))
 		r.Close()
 		debug.SetGCPercent(100)

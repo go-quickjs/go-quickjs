@@ -42,7 +42,7 @@ func TestMemoryMeterAccuracy(t *testing.T) {
 		{"generators suspended in loops", `function* h(n) { for (const x of [n, n + 1, {n}, [n, n]]) yield x } for (let i = 0; i < 2e4; i++) { const it = h(i); it.next(); keep.push(it) }`},
 		{"generators suspended in for-in", `function* h(n) { for (const k in {a: n, b: [n, n], c: {n}}) yield k } for (let i = 0; i < 2e4; i++) { const it = h(i); it.next(); keep.push(it) }`},
 	} {
-		r := New(Config{MemoryLimit: 1 << 40})
+		r := newTestRuntime(t, Config{MemoryLimit: 1 << 40})
 		if _, err := r.Run(compileForTest(t, `var keep = []`)); err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +68,7 @@ func TestMemoryMeterAccuracy(t *testing.T) {
 // almost nothing -- under -d=checkptr=2, whose allocations measure more
 // often, TestJITRegNativeHonoursLimits' sum.
 func TestStoppedScriptLeavesNoRegisters(t *testing.T) {
-	r := New(Config{MemoryLimit: 16 << 20})
+	r := newTestRuntime(t, Config{MemoryLimit: 16 << 20})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 function tree(d) {

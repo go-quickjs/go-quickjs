@@ -18,7 +18,7 @@ func TestCaptureRoom(t *testing.T) {
 		{name: "duplicate", src: `function f(a) { var b = a; function g() { return a + b + (function () { return a * b })() } return g() } f(3)`, want: "15"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(compileForTest(t, tt.src))
 			if err != nil {
 				r.Close()
@@ -38,7 +38,7 @@ func TestCaptureRoom(t *testing.T) {
 // three bindings.
 func TestCaptureRoomAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `function f(a, b, c) { return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestArgumentsRoom(t *testing.T) {
 		{name: "strictCallee", src: `function f() { 'use strict'; return arguments } function g() { var a = f(), b = f(); var d = Object.getOwnPropertyDescriptor(a, 'callee'); var r = (d.get === Object.getOwnPropertyDescriptor(b, 'callee').get) + ',' + d.configurable; try { a.callee } catch (e) { r += ',' + e.name } try { Object.defineProperty(a, 'callee', { get() {} }) } catch (e) { r += ',' + e.name } return r + ',' + (Object.getOwnPropertyDescriptor(b, 'callee').set === d.get) } g()`, want: "true,false,TypeError,TypeError,true"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(compileForTest(t, tt.src))
 			if err != nil {
 				r.Close()
@@ -102,7 +102,7 @@ func TestArgumentsRoomAllocs(t *testing.T) {
 		{`function f() { 'use strict'; return arguments }`, 1},
 		{`function f(a, b, c) { return arguments }`, 4},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, tt.src+`; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
 		if err != nil {
 			t.Fatal(err)
@@ -125,7 +125,7 @@ func TestArgumentsRoomAllocs(t *testing.T) {
 // runtime's, shared by its realms, and the function is the realm's.
 func TestArgumentsCalleePerRealm(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := `(function () { "use strict"; return Object.getOwnPropertyDescriptor(arguments, "callee").get })()`
 	local, err := r.Run(compileForTest(t, src))

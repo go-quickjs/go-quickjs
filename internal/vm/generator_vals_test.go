@@ -39,7 +39,7 @@ func TestGeneratorValues(t *testing.T) {
 			if tt.async {
 				src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 			}
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(compileForTest(t, src))
 			if err == nil && tt.async {
 				if err = r.runMicrotasks(); err == nil {
@@ -63,7 +63,7 @@ func TestGeneratorValues(t *testing.T) {
 // locals is made in one allocation: its object, its state, and its
 // values.
 func TestGeneratorOneAllocation(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	for _, src := range []string{
 		`(function* (a, b) { yield a; yield b })`,
@@ -95,7 +95,7 @@ func TestGeneratorOneAllocation(t *testing.T) {
 // begun again, spread, destructuring, Array.from, yield*, and generators
 // made before the function learned.
 func TestGeneratorLoopRoom(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn, err := r.Run(compileForTest(t, `(function () { function* g(a, b) { yield a; yield b }
 		return function (x) { var s = 0; for (var v of g(x, 1)) s += v; return s } })()`))
@@ -166,7 +166,7 @@ func TestGeneratorSavedPart(t *testing.T) {
 		{`(function* () { for (const x of [1, 2]) yield x })`, []bool{false, false, false}},
 		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		fn, err := r.Run(compileForTest(t, tt.src))
 		if err != nil {
 			t.Fatal(err)
@@ -226,7 +226,7 @@ func TestGeneratorArgsKept(t *testing.T) {
 		{`function* f(a, b = a) { yield a + b }`, `f(2)`, "4", 1, 3},
 		{`function* f([a, b]) { yield a + b }`, `f([1, 2])`, "3", 1, 4},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, tt.decl+"; "+tt.call))
 		if err != nil {
 			t.Fatalf("%s: %v", tt.decl, err)

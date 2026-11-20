@@ -61,7 +61,7 @@ func TestBigIntElements(t *testing.T) {
 		"0,5,4,-9,-9 | -1 | 1 | -9223372036854775808 | " +
 		"9223372036854775810 | -9223372036854775810 | 3,-6,9,-4611686018427387904,-4611686018427387904 | " +
 		"true | true | 2 | true | 2 | TypeError | 18446744073709551616 | 18446744073709551614,2"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

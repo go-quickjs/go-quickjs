@@ -27,7 +27,7 @@ func compileForTest(t testing.TB, src string) *bytecode.Function {
 // alive.
 func TestReleasedStacksAreClear(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, `
 		function deep(n, o) { return n ? deep(n - 1, {o}) : o }
 		function* g() { let big = [1, 2, 3]; yield big; yield [big, big] }
@@ -53,7 +53,7 @@ func TestReleasedStacksAreClear(t *testing.T) {
 // script keeps its stack, which the script is still running on.
 func TestReleaseStackWhileRunning(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	released := false
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), Obj(r.newNativeFunc("closeNow", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -81,7 +81,7 @@ func TestStackEndInsideAllocation(t *testing.T) {
 	t.Parallel()
 	const size = 4096 + 17
 	for i := range 2 {
-		r := New(Config{StackSize: size})
+		r := newTestRuntime(t, Config{StackSize: size})
 		if len(r.stack) != size || cap(r.stack) != size+1 {
 			t.Fatalf("runtime %d: stack of length %d, capacity %d; want %d, %d", i, len(r.stack), cap(r.stack), size, size+1)
 		}

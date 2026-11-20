@@ -14,7 +14,7 @@ func TestJITSecondSuperMakesItsOwnObject(t *testing.T) {
 	if st.Entries == 0 {
 		t.Errorf("native code never ran: %+v", st)
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	defer r.Close()
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
 	v, err := r.Run(compileForTest(t, superAgainSrc))

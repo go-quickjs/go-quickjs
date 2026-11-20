@@ -31,7 +31,7 @@ func TestJITStringReadPastEnd(t *testing.T) {
 			}
 			return c
 		}`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

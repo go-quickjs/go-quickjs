@@ -281,7 +281,7 @@ var inOperatorCases = []struct{ src, want string }{
 // answers it.
 func TestInOperator(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, inOperatorSetup)); err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestInOperator(t *testing.T) {
 // inOperator, so that its answer is remembered in hasCache too.
 func TestInOperatorKeysSharingASet(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, `var o = { aa: 1 };
 		function ask(ks, n) { var s = 0; for (var i = 0; i < n; i++) if (ks[i & 1] in o) s++; return s; }`)); err != nil {

@@ -37,7 +37,7 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 		}
 		function caller(i) { return i % 25 === 0 ? long(i) : (i * 7) | 0 }
 		function run(n) { let t = 0; for (let i = 0; i < n; i++) t = (t + caller(i)) | 0; return t }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

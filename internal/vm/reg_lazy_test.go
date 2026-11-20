@@ -41,7 +41,7 @@ func TestRegCompiledLazily(t *testing.T) {
 			t.Fatalf("%s: want register code to compile later, not yet compiled", name)
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestRegCompiledLazilyConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			v, err := r.Run(fn)
 			if err != nil {

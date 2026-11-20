@@ -74,7 +74,7 @@ func TestJITClassConstructorsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	// The closures chain's last compile inlined (ssa.Func's Inlined),
 	// which register code's entry does not keep.

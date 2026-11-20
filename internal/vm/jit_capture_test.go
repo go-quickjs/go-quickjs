@@ -27,7 +27,7 @@ func TestJITStrictEvalAssigns(t *testing.T) {
 			if marking {
 				jitMarkingForTest(t)
 			}
-			both := jitBoth{want: New(Config{}), jit: jitRuntimeForTest(t, Config{JIT: true})}
+			both := jitBoth{want: newTestRuntime(t, Config{}), jit: jitRuntimeForTest(t, Config{JIT: true})}
 			t.Cleanup(func() { both.want.Close(); both.want.ReleaseClosed() })
 			for _, rt := range []*Runtime{both.want, both.jit} {
 				rt.SetEvaluator(func(source string, req EvalRequest) (*bytecode.Function, error) {

@@ -87,7 +87,7 @@ const typeofTestWant = "uOF?/10101010/n/p--/0/undefined:false,oFU?/01101010/on/p
 // rather than by pureCall.
 func TestTypeofTests(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	dda := r.NewObject()
 	dda.MarkHTMLDDA()
 	r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)

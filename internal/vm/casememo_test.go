@@ -33,7 +33,7 @@ func TestCaseMemo(t *testing.T) {
 		var same = "12-+".toUpperCase() + "12-+".toLowerCase() + "".toUpperCase() + "q".toUpperCase() + "Q".toLowerCase() + "1".toUpperCase() + "Q".toUpperCase()
 		n + " " + bad.length + " " + same + " " + "Hello".toUpperCase() + "Hello".toLowerCase()`
 	const want = "900 0 12-+12-+Qq1Q HELLOhello"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

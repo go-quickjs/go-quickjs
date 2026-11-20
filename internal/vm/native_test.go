@@ -123,7 +123,7 @@ func nativeRunSrc(t testing.TB, src string, native bool) string {
 	was := regNativeOn
 	regNativeOn = native
 	defer func() { regNativeOn = was }()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
 	if err != nil {
@@ -497,7 +497,7 @@ func TestRegNativeConcurrent(t *testing.T) {
 	regNativeOn = true
 	defer func() { regNativeOn = was }()
 	run := func() (string, error) {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		var out []string
 		for i := 0; i < 20; i++ {
@@ -576,7 +576,7 @@ func TestRegNativeOpMix(t *testing.T) {
 		var before, after [256]int64
 		run := func(native bool) int64 {
 			regNativeOn = native
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			if _, err := r.Run(defFn); err != nil {
 				t.Fatal(err)
@@ -665,7 +665,7 @@ func TestRegNativeFileMix(t *testing.T) {
 	defer func() { regTable, regSlowTable = orig, origSlow }()
 	run := func(native bool) {
 		regNativeOn = native
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		if _, err := r.Run(fn); err != nil {
 			t.Fatal(err)

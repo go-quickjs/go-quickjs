@@ -6,7 +6,7 @@ import "testing"
 
 func TestNativeCtorPrototypeSlot(t *testing.T) {
 	nativeCounting(t)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	t.Cleanup(func() { r.Close() })
 	v, err := r.Run(compileForTest(t, `
 function Pair(a, b) { this.a = a; this.b = b }

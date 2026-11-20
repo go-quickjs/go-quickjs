@@ -121,7 +121,7 @@ func regexpExecLeafForTest(r *Runtime) *regexpLeaf[struct{}] {
 // collector idle.
 func TestRegExpDeadExec(t *testing.T) {
 	gc := debug.SetGCPercent(-1)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, regexpDeadTestSrc))
 	dummy := regexpExecLeafForTest(r).dummy
 	r.Close()
@@ -184,7 +184,7 @@ for (var re of RES) {
 }
 out.join('|')`
 	fail := "SyntaxError,regular expression is too complex,,0,0"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	// The interpreter, which makes these calls as before, of one.
 	res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", fail+"|"+fail
 
@@ -203,7 +203,7 @@ out.join('|')`
 // before.
 func TestRegExpDeadExecDeadline(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { for (var i = 0; i < 2; i++) re.exec(s) }`)); err != nil {
 		t.Fatal(err)
@@ -336,7 +336,7 @@ function rTpl(s, re, n) { for (var i = 0; i < n; i++) s.replace(re, '[$1]') }
 // it would: each answer is Node's, with the collector idle.
 func TestRegExpDeadReplace(t *testing.T) {
 	gc := debug.SetGCPercent(-1)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, regexpDeadReplaceTestSrc))
 	r.Close()
 	debug.SetGCPercent(gc)
@@ -366,7 +366,7 @@ var regexpDeadReplaceKinds = []struct{ call, want, many string }{
 // them; and a loop of them makes no string for each.
 func TestRegExpDeadReplaceKinds(t *testing.T) {
 	for _, c := range regexpDeadReplaceKinds {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		if _, err := r.Run(compileForTest(t, regexpDeadReplaceKindsSrc)); err != nil {
 			t.Fatal(err)
 		}
@@ -431,7 +431,7 @@ for (var re of RES) {
   out.push(u === d ? u : u + ' != ' + d);
 }
 out.join('|')`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	res, want := "var RES = [/(a+)+b/, /(a+)+b/g];", "SyntaxError,regular expression is too complex,,0,3|SyntaxError,regular expression is too complex,,0,0"
 
 	v, err := r.Run(compileForTest(t, res+src))
@@ -449,7 +449,7 @@ out.join('|')`
 // before.
 func TestRegExpDeadReplaceDeadline(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function f(re, s) { for (var i = 0; i < 2; i++) s.replace(re, '') }`)); err != nil {
 		t.Fatal(err)
@@ -474,7 +474,7 @@ func TestRegExpDeadReplaceDeadline(t *testing.T) {
 // throws for -- and makes the matches otherwise.
 func TestRegExpDeadReplaceTooLong(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	rx, err := r.Run(compileForTest(t, `var re = /b/g; re.lastIndex = 7; re`))
 	if err != nil {
@@ -547,7 +547,7 @@ var regexpDeadTruth = []struct{ call, want string }{
 // been true.
 func TestRegExpDeadReplaceTruth(t *testing.T) {
 	gc := debug.SetGCPercent(-1)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
 		t.Fatal(err)
 	}

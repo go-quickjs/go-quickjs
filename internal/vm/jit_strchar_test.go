@@ -51,7 +51,7 @@ func TestJITStringElementsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
@@ -161,7 +161,7 @@ func TestJITCallsBesideCharCodeAt(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -233,7 +233,7 @@ func TestJITCharCodeAtByTarget(t *testing.T) {
 				r += sum(s)
 				String.prototype.charCodeAt = saved
 				r`)
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			if r.jitCallThreshold <= 1 {
 				t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -288,7 +288,7 @@ func TestJITLocalTypedReadsLearned(t *testing.T) {
 		let r = 0
 		for (let k = 0; k < 6; k++) r += count(lengths, k % 7) + count(lengths.subarray(5, 900), 3)
 		r + count([1, 3, 3, '3', null], 3)`)
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
@@ -357,7 +357,7 @@ func TestJITKeyedReadsByGo(t *testing.T) {
 		delete map.c
 		r += count(map, plain) + ';'
 		r + hits`)
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
@@ -393,7 +393,7 @@ func TestJITFreshViewLengthsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
@@ -450,7 +450,7 @@ func TestJITFromCharCodeNative(t *testing.T) {
 		r += build([72, 73]) + ';'
 		String.fromCharCode = saved
 		r + build([74, 233])`)
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")

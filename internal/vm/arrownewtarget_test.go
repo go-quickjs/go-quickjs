@@ -9,7 +9,7 @@ import "testing"
 // closures, carries no room for it.
 func TestArrowNewTarget(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `
 		function F() { this.direct = () => new.target; this.nested = () => () => new.target;
 			this.plain = () => 1 }

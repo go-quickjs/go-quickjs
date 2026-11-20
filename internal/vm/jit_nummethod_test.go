@@ -94,7 +94,7 @@ func TestJITNumberMethods(t *testing.T) {
 			t.Errorf("%s: %s ran natively %d times, made %d calls of Go with frames and left its code %d times", c.src, c.fn, entries, calls, hosts)
 		}
 	}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	if _, err := want.Run(compileForTest(t, numMethodSetup)); err != nil {
 		t.Fatal(err)

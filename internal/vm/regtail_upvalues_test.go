@@ -28,7 +28,7 @@ func TestRegTailToClosesUpvalues(t *testing.T) {
 		})(3000)
 		open + " " + fs.map(function (g) { return g() }).join()`
 	fn := compileForTest(t, src)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("maxOpen"), r.NewFunction("maxOpen", 0, func(r *Runtime, _ Value, _ []Value) (Value, error) {
 		most := 0

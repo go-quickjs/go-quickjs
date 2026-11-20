@@ -59,7 +59,7 @@ func TestChainStoreFollowsTheCell(t *testing.T) {
 		out.push(rs.join(','))
 		out.join(', ')`
 	const want = "plain:own0/own1/own2/own3/own4, again:own0/own1/own2/own3/own4, setter:none, calls 5, gone:own0/own1/own2/own3/own4, read-only:TypeError, read-only gone:own0/own1/own2/own3/own4, chain replaced:none, calls 10, chain back:own0/own1/own2/own3/own4, top setter:none, calls 15, top gone:own0/own1/own2/own3/own4, non-extensible:TypeError, abc567,abc567,abc567,abc567"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		r.Close()

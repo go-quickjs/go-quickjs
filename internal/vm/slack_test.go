@@ -27,7 +27,7 @@ func TestSlackOutgrown(t *testing.T) {
 		{"constructor of twenty", `function C(fill) { if (fill) for (let k = 0; k < 20; k++) this["p" + k] = k } function f(fill) { return new C(fill) }`, 20, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			v, err := r.Run(compileForTest(t, tt.src+`; for (let i = 0; i < 8; i++) f(true); f(false)`))
 			if err != nil {
@@ -62,7 +62,7 @@ func TestSlackTracking(t *testing.T) {
 		fmt.Fprintf(&sw, " case %d: this.q%d = %d; break;", i, i, i)
 	}
 	sw.WriteString(" } }")
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	room := func(src string) int {
 		t.Helper()

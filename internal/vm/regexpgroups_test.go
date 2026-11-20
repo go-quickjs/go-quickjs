@@ -7,7 +7,7 @@ import "testing"
 // than a table scans has none to share, and makes each object as the first.
 func TestGroupsLayoutShared(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		function d(s) { return /(?<y>\d+)-(?<m>\d+)/.exec(s).groups }

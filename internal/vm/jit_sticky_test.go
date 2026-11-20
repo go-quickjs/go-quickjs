@@ -20,7 +20,7 @@ func TestJITSlowCodeJudgedAgain(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -44,7 +44,7 @@ func TestJITSlowCodeJudgedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := New(Config{})
+	w := newTestRuntime(t, Config{})
 	t.Cleanup(func() { w.Close(); w.ReleaseClosed() })
 	if _, err := w.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestJITCallLeftToGoDecidedAgain(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
@@ -119,7 +119,7 @@ func TestJITCallsOfNotNativeCalleesAreGos(t *testing.T) {
 		function leaf(x) { return String(x).length + x }
 		function mid(x) { let s = 0; for (let j = 0; j < 2; j++) s = (s + leaf(x + j)) | 0; return s }
 		function outer(n) { let s = 0; for (let i = 0; i < n; i++) s = (s + mid(i)) | 0; return s }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -240,7 +240,7 @@ func TestJITInlinedConcat(t *testing.T) {
 		{threshold: true, budget: 1},
 		{threshold: true, budget: 3, deopt: 7},
 	} {
-		r := New(Config{JIT: true})
+		r := newTestRuntime(t, Config{JIT: true})
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
 		v, err := r.Run(compileForTest(t, src))
@@ -273,7 +273,7 @@ func TestJITKnownNotNativeCalleeCounted(t *testing.T) {
 		function leaf(x) { return String(x).length + x }
 		function mid(x) { let s = 0; for (let j = 0; j < 2; j++) s = (s + leaf(x + j)) | 0; return s }
 		function outer(n) { let s = 0; for (let i = 0; i < n; i++) s = (s + mid(i)) | 0; return s }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

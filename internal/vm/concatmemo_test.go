@@ -49,7 +49,7 @@ function halves() {
 `
 
 func TestConcatMemo(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, concatMemoSrc)); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestConcatMemo(t *testing.T) {
 		t.Errorf("halves\n got %s\nwant %s", got, want)
 	}
 	t.Run("recent", func(t *testing.T) {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		parts := []Value{Str(NewString("pre-")), Str(NewString("abc")), Str(NewString("-post"))}
 		first := r.joinMemoized(parts)
@@ -123,7 +123,7 @@ func TestConcatMemo(t *testing.T) {
 // A runtime whose joins never repeat turns its memo off, its strings
 // dropped, and on again after concatMemoOff joins.
 func TestConcatMemoTurnsOff(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 for (let i = 0; i < 5000; i++) globalThis.last = 'k' + i + 'v'
@@ -154,7 +154,7 @@ for (let i = 0; i < 5000; i++) globalThis.last = 'k' + i + 'v'
 // Under a memory limit joins are charged as they always were, and the
 // memo is not used.
 func TestConcatMemoNotMetered(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	r.setMemoryLimit(1 << 30)
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `for (let i = 0; i < 100; i++) globalThis.last = 'k' + (i & 1) + 'v'`)); err != nil {
@@ -169,7 +169,7 @@ func TestConcatMemoNotMetered(t *testing.T) {
 // falls in the same slot: a slot holding another text of the same length,
 // or one differing in its last byte, is replaced, never returned.
 func TestConcatMemoCollision(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `function j(a) { return 'pre-' + a + '-post' }`)); err != nil {
 		t.Fatal(err)

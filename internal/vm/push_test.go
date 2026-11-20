@@ -49,7 +49,7 @@ const pushTestWant = "300|300|s0,1,2,O,4,5,s6|296,O,298,299|30100:undefined|3,4,
 // push and pop answer as Node answers.
 func TestPurePushPop(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, pushTestSrc))
 	r.Close()
 	if err != nil {

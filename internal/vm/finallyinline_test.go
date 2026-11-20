@@ -38,7 +38,7 @@ func TestFinallyInline(t *testing.T) {
 		var s = out.join('|')
 		s`
 	const want = `a|r|try|fin|504|0001101120|f|g|1k1k2|0,0,1,10,2,20|orig|e1|TypeErrorfrom finally|123|{"value":3,"done":false}|{"value":9,"done":true}|{"done":true}|t1,f1,fb,in,f1,f2,f3,f4,g,fb,g,hf,hf`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {
@@ -63,7 +63,7 @@ func TestFinallyInlineCompletion(t *testing.T) {
 		{"try { throw 1 } catch (e) { 7 } finally { 8 }", "7"},
 		{"try { } finally { 9 }", "undefined"},
 	} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, tc.src))
 		if err != nil {
 			t.Fatal(err)

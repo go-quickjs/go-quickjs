@@ -63,7 +63,7 @@ func liveShapesAfter(t *testing.T, r *Runtime, n int, run func(i int) error) int
 // a shared layout. Whether the host runs it as a Program, whose literals'
 // roots are kept, or otherwise, whose shapes go with each run.
 func TestShapeReruns(t *testing.T) {
-	testShapeReruns(t, 2*budgetSlots, func() *Runtime { return New(Config{}) })
+	testShapeReruns(t, 2*budgetSlots, func() *Runtime { return newTestRuntime(t, Config{}) })
 }
 
 // testShapeReruns is TestShapeReruns for runtimes newRuntime makes, the tree
@@ -113,7 +113,7 @@ var rerunModes = []struct {
 func TestShapeRerunsAlternating(t *testing.T) {
 	for _, mode := range rerunModes {
 		t.Run(mode.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			var fns []*bytecode.Function
 			for _, s := range rerunScripts {
@@ -134,7 +134,7 @@ func TestShapeRerunsAlternating(t *testing.T) {
 // or code that evaluates source has no program to run again, and each run a
 // new literal: the tree stays as flat as for a Program.
 func TestShapeFreshCodeRuns(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	run := func(i int) error {
 		_, err := r.Run(compileForTest(t, fmt.Sprintf(`var o = {a: %d, b: {c: 1}}, e = {}; o.a`, i)))
@@ -154,7 +154,7 @@ func TestShapeFreshCodeRuns(t *testing.T) {
 func TestShapeAfterReruns(t *testing.T) {
 	for _, mode := range rerunModes {
 		t.Run(mode.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			fn := compileForTest(t, `var o = {a: 1, b: 2}, p = {c: 3, d: 4}; o.a + p.d`)
 			for i := 0; i < 25000; i++ {
@@ -220,7 +220,7 @@ func TestProgramRerunsMakeNoShapes(t *testing.T) {
 	t.Parallel()
 	for _, s := range rerunScripts[:5] {
 		t.Run(s.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			fn := compileForTest(t, s.src)
 			runProgramForTest(t, r, fn)
@@ -251,7 +251,7 @@ func TestProgramRerunsMakeNoShapes(t *testing.T) {
 // What a run learned of a literal's objects' room, the next starts with.
 func TestProgramRerunsKeepRoom(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `var o = {a: 1}; o.b = 2; o.c = 3; o.d = 4; o.e = 5`)
 	runProgramForTest(t, r, fn)
@@ -270,7 +270,7 @@ func TestProgramRerunsKeepRoom(t *testing.T) {
 // next, and a run that keeps one sees it unchanged.
 func TestProgramRerunsAnswers(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `
 		var kept = this.kept || (this.kept = {n: 0, list: []})
@@ -295,7 +295,7 @@ func TestProgramRerunsAnswers(t *testing.T) {
 // a realm's objects never have another's layouts.
 func TestProgramRerunsRealmsApart(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `var o = {a: 1}; o instanceof Object && Object.getPrototypeOf(o) === Object.prototype`)
 	inRealm := func(re *Realm) *Object {
@@ -325,7 +325,7 @@ func TestProgramRerunsRealmsApart(t *testing.T) {
 // program it has.
 func TestProgramRerunsLetGo(t *testing.T) {
 	t.Run("realms", func(t *testing.T) {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		fn := compileForTest(t, `var o = {a: 1, b: 2}, e = {}; function f() { return {c: 1, d: 2} } f()`)
 		const realms = 200
@@ -346,7 +346,7 @@ func TestProgramRerunsLetGo(t *testing.T) {
 		}
 	})
 	t.Run("programs", func(t *testing.T) {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		defer r.Close()
 		const programs = 2000
 		var last weak.Pointer[bytecode.Function]
@@ -376,7 +376,7 @@ func TestProgramRerunsLetGo(t *testing.T) {
 // its roots hold at each run, which nothing gives back while they are kept:
 // past programShapes they are let go, and go, and the tree has room.
 func TestProgramRerunsMakingUpKeys(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	// Keys from a few, in orders of their own: each level of an object's
 	// path has room for a transition no run has taken.
@@ -414,7 +414,7 @@ func TestProgramRerunsMakingUpKeys(t *testing.T) {
 // a million parents, and each new shape of any kind paid for its own.
 func TestShapeChargedFromItsParent(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	var b strings.Builder
 	b.WriteString("var o = {")
 	for i := range 1000 {

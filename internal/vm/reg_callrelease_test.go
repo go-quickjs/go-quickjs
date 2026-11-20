@@ -27,7 +27,7 @@ func TestRegCallCachesReleasedAtTurnEnd(t *testing.T) {
 		fns[i] = compileForTest(t, s)
 	}
 	before := RegsBuilt()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fns[0])
 	if err != nil {
@@ -88,7 +88,7 @@ func TestRegCallFeedbackOutlivesTurn(t *testing.T) {
 	for i, s := range steps {
 		fns[i] = compileForTest(t, s)
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(fns[0])
 	if err != nil {
@@ -149,7 +149,7 @@ func TestRegCallsReleaseTheTurnsOwn(t *testing.T) {
 		scripts[i] = compileForTest(t, `f() + f()`)
 	}
 	last := compileForTest(t, `f() + held()`)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	r.global.setOwnRaw(r.atoms.intern("held"), r.NewFunction("held", 0, func(r *Runtime, _ Value, _ []Value) (Value, error) {
 		return Float(float64(len(r.weakMapRegistry().calls.held))), nil

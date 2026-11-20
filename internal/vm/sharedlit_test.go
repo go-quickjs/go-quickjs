@@ -23,7 +23,7 @@ func sharedElemsForTest(v Value) (bool, unsafe.Pointer) {
 // literal with anything but constants, or none, has no site.
 func TestSharedArrayLiteral(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, `
 	function lit() { return [1, 2.5, 'x', true, null, undefined, '', -3]; }
 	function notConst(x) { return [1, x]; }
@@ -179,7 +179,7 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 				// A function with a direct eval.
 				run = `(function () { ` + w + `; if (a.length < 0) eval(''); })();`
 			}
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(compileForTest(t, `
 			var lit = function () { return [1, 2.5, 'x', true, null, undefined, 'z']; };
 			var a = lit();
@@ -218,7 +218,7 @@ func TestSharedArrayLiteralWrites(t *testing.T) {
 // fast path then), copy a shared literal's elements before writing them.
 func TestSharedArrayLiteralOtherRealm(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	other := r.NewRealm()
 	for _, method := range []string{"pop", "push"} {
@@ -250,7 +250,7 @@ func TestSharedArrayLiteralOtherRealm(t *testing.T) {
 // written stops sharing, and makes each array of its own, as before.
 func TestSharedArrayLiteralGivesUp(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 	function mk() { return [0, 0, 0, 0]; }
@@ -292,7 +292,7 @@ func TestSharedArrayLiteralGivesUp(t *testing.T) {
 // header alone. The site's array had been counted apart, the storage twice.
 func TestSharedArrayLiteralMetered(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 1 << 40})
+	r := newTestRuntime(t, Config{MemoryLimit: 1 << 40})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var a = null, b = null, c = null;
@@ -359,7 +359,7 @@ func TestSharedArrayLiteralConstants(t *testing.T) {
 		`-0,number:NaN,number:Infinity,number:-1.5,number:-2147483648 | ` +
 		`1200:long,0:,2:é漢,7:tab	 | number:1,hole,number:3 | bigint:1,number:2 | [1:w,number:2],[number:3] | [number:1,number:2],[number:3] | [number:1,number:2],[number:3]`
 	sites := `[nums(), strs(), holes(), bigs(), nested(), nested()[0], negs()]`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		t.Fatal(err)
@@ -416,7 +416,7 @@ func TestSharedArrayLiteralRuntimes(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			tag := "r" + strconv.Itoa(g) + "-"
 			r.global.setOwnRaw(r.atoms.intern("tag"), Str(NewString(tag)), propDefault)

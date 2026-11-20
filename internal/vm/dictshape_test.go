@@ -14,7 +14,7 @@ func globalObject(r *Runtime, name string) *Object {
 // deleting another makes it a dictionary.
 func TestShapeDeleteLastRollsBack(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		function make() { return {a: 1, b: 2, c: 3} }
@@ -39,7 +39,7 @@ func TestShapeDeleteLastRollsBack(t *testing.T) {
 // layout of its own.
 func TestShapeReconfigureShared(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function P(x, y) { this.x = x; this.y = y; this.z = x + y }
@@ -70,7 +70,7 @@ func TestShapeReconfigureShared(t *testing.T) {
 // ones within it.
 func TestShapeKeyedStoresPastSoftLimit(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var keyed = {}, few = {}
@@ -102,7 +102,7 @@ func TestShapeKeyedStoresPastSoftLimit(t *testing.T) {
 // uncached lookup's.
 func TestShapeDictionarySites(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function D(i) { this.a = i; this.b = i * 2; this.c = i * 3 }
@@ -157,7 +157,7 @@ func TestShapeDictionarySites(t *testing.T) {
 // own (firstRoot).
 func TestShapeDictionaryPrototypeNoTree(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function dict() { var d = Object.create(null); for (var i = 0; i < 12; i++) d["k" + i] = i; return d }

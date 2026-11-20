@@ -269,7 +269,7 @@ func TestJITInlinedSmallLoopPolls(t *testing.T) {
 	}
 	for _, k := range kinds {
 		t.Run(k.caller, func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			r.jitState()

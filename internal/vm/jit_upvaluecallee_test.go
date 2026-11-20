@@ -33,7 +33,7 @@ func TestJITCapturedCalleeSeeded(t *testing.T) {
 				return s
 			}
 		})()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)
@@ -81,7 +81,7 @@ func TestJITCapturedCalleeReassigned(t *testing.T) {
 				set(k) { f = k === 0 ? function (x) { return x * 5 } : function (x) { return x - k } },
 			}
 		})()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	jitDefaultsForTest(r)

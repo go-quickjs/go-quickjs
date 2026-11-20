@@ -62,7 +62,7 @@ func TestJITRegCompileCorpus(t *testing.T) {
 		"earley-boyer.js", "regexp.js", "splay.js", "navier-stokes.js", "pdfjs.js",
 		"box2d.js",
 		"typescript.js", "typescript-input.js", "typescript-compiler.js"}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	// The interpreter alone: the caches learn, and nothing is compiled.
 	r.jitState().unavailable = true

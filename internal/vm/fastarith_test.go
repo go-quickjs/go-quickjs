@@ -23,7 +23,7 @@ function g(a, b) { return a + b }
 		"-9223372036854775809,-9223372036854775807,9223372036854775808,9223372036854775808,0,RangeError;" +
 		"abcd;;x1;1x;nnull;TypeError"
 	fn := compileForTest(t, src)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(fn)
 	if err != nil {
 		r.Close()

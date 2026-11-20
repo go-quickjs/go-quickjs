@@ -224,7 +224,7 @@ func TestJITBackgroundInstallAtNestedLoop(t *testing.T) {
 		const log = []
 		for (let r = 0; r < 12; r++) log.push(loop(400, r < 6 ? 1000 : 200))
 		log.length + '|' + log.join()`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	expect, _ := jitRunWithin(t, want, src, 10*time.Second)
 	for k := uint16(0); k <= 12; k++ {

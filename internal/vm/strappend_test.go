@@ -703,7 +703,7 @@ func TestStrAppend(t *testing.T) {
 	t.Parallel()
 	// Its strings grow to 0.8 GB in each runtime.
 	heavy(t)
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, strAppendTestSrc))
 	r.Close()
 	if err != nil {
@@ -731,7 +731,7 @@ result
 
 func TestStrAppendDeclaration(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, strAppendDeclarationSrc))
 	r.Close()
 	if err != nil {
@@ -755,7 +755,7 @@ func firstDifference(got, want string) string {
 
 // A run of appends makes one string and its right side, not a node each.
 func TestStrAppendAllocations(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		function appends(n) {
@@ -787,7 +787,7 @@ func TestStrAppendAllocations(t *testing.T) {
 func TestRegStrAppendUpvalue(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		was := SetRegNative(native)
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		if _, err := r.Run(compileForTest(t, `
 			function appends(n) {
 				var s = ""
@@ -826,7 +826,7 @@ func TestRegStrAppendUpvalue(t *testing.T) {
 
 func TestStrAppendTailGrowth(t *testing.T) {
 	for _, chunk := range []string{"x", strings.Repeat("\u00e9", 100), strings.Repeat("z", strTailLongest)} {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		s := NewString(strings.Repeat("a", 70))
 		piece := NewString(chunk)
 		n := max(200, 32768/len(chunk))
@@ -867,7 +867,7 @@ func TestStrAppendTailGrowth(t *testing.T) {
 // an append. The short ones after it go on to a tail, of their own bytes.
 func TestStrAppendLongRightSide(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	long := NewString(strings.Repeat("z", strTailLongest+1))
 	rope := NewString(strings.Repeat("r", 100)).Concat(NewString(strings.Repeat("s", 100)))
@@ -921,7 +921,7 @@ func TestStrAppendLongRightSide(t *testing.T) {
 // str_freeze ends it. The string is an ordinary one all the while.
 func TestStrAppendStates(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	long := NewString(strings.Repeat("x", 100))
 	s, err := strAppend[struct{}](r, long, NewString("a"))
@@ -981,7 +981,7 @@ func TestStrAppendStates(t *testing.T) {
 // kept as it grows, on the string and on the tail alike.
 func TestStrAppendFlags(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	long := strings.Repeat("x", 100)
 	low, high := "\xed\xb8\x80", "\xed\xa0\xbd"
@@ -1027,7 +1027,7 @@ func TestStrAppendFlags(t *testing.T) {
 // are made as ever.
 func TestStrAppendMetered(t *testing.T) {
 	t.Parallel()
-	r := New(Config{MemoryLimit: 1 << 30})
+	r := newTestRuntime(t, Config{MemoryLimit: 1 << 30})
 	defer r.Close()
 	long := NewString(strings.Repeat("x", 100))
 	s, err := strAppend[struct{}](r, long, NewString("a"))

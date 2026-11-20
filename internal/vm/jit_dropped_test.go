@@ -70,7 +70,7 @@ func TestJITRegDroppedCodeExits(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	const want = "30:3,6,12;3,6,12"
-	plain := New(Config{})
+	plain := newTestRuntime(t, Config{})
 	defer plain.Close()
 	if got, _ := jitRunWithin(t, plain, regDroppedSrc, 10*time.Second); got != want {
 		t.Fatalf("interpreter: %q, want %q", got, want)

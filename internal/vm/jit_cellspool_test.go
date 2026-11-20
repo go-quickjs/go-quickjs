@@ -78,7 +78,7 @@ func TestJITCellsFromPoolsMarking(t *testing.T) {
 	}
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	*flag = 0
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, cellsSetup)); err != nil {

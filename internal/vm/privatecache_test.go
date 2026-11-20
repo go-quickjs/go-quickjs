@@ -241,7 +241,7 @@ throw 2: 3 true`
 func TestPrivateMembersAgreeWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 4 {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, privateMemberScript))
 		if err != nil {
 			t.Fatal(err)
@@ -259,7 +259,7 @@ func TestPrivateMembersAgreeWithNode(t *testing.T) {
 // the object's shape and where in it each member is; a getter's member,
 // which is called, is remembered by none.
 func TestPrivateSitesCached(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `
 		class C {

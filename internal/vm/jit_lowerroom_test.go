@@ -39,7 +39,7 @@ func TestJITLoweringsOnlyInRoom(t *testing.T) {
 	configs := []jitStressConfig{{threshold: true, budget: 3, deopt: 7, background: true, checks: 3}, {threshold: true, background: true}, {}}
 	for _, c := range configs {
 		for limit := int64(96 << 10); limit <= 512<<10; limit += 16 << 10 {
-			r := New(Config{JIT: true, JITMemoryLimit: limit})
+			r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: limit})
 			r.SetJITWarmUp(8, 8)
 			if r.jitStress = c; c.threshold {
 				// As QJS_JIT_STRESS's threshold has a runtime made.

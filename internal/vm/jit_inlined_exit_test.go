@@ -22,7 +22,7 @@ func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const src = `
 		const piles = [null, null, null]

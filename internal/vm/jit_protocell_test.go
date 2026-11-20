@@ -20,7 +20,7 @@ func TestJITChainCellReadsNative(t *testing.T) {
 		var opts = {verbose: false}, d = new D()
 		function absent(n) { let c = 0; for (let i = 0; i < n; i++) if (opts.depth === undefined) c++; return c }
 		function deep(n) { let c = 0; for (let i = 0; i < n; i++) c += d.m(); return c }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

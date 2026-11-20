@@ -158,7 +158,7 @@ func TestRegExpReuse(t *testing.T) {
 			runtime.GC()
 			debug.SetGCPercent(-1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpReuseTestSrc))
 		r.Close()
 		debug.SetGCPercent(100)
@@ -232,7 +232,7 @@ func TestRegExpReuseSites(t *testing.T) {
 			t.Errorf("%s: site %+v, want strs %v and a local of the pieces %v", c.name, site, c.strs, c.kept)
 		}
 	}
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	src := strings.TrimSpace(regexpReuseTestSrc)
 	if _, err := r.Run(compileForTest(t, src[:strings.LastIndex(src, "\n")]+"\nall()")); err != nil {

@@ -20,7 +20,7 @@ func TestRegNativeFeedbackSelected(t *testing.T) {
 	if nativeFeedback.has != nativePlain.has {
 		t.Error("the feedback dispatcher's operations with a handler are not plain's")
 	}
-	withJIT, without := New(Config{JIT: true}), New(Config{})
+	withJIT, without := newTestRuntime(t, Config{JIT: true}), newTestRuntime(t, Config{})
 	defer withJIT.Close()
 	defer without.Close()
 	for _, c := range []struct {

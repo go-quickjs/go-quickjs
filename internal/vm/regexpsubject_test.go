@@ -7,7 +7,7 @@ import "testing"
 // twice its bytes for as long as it lived; one that is not ASCII is.
 func TestRegExpASCIISubjectKeepsNoUnits(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var names = ["exec", "test", "match", "matchAll", "search", "split", "replace", "replaceFn", "replace$", "sticky"]

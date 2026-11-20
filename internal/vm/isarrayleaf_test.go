@@ -10,7 +10,7 @@ import "testing"
 // proxy, which throws a TypeError. Each answer is Node's (v26.12.1).
 func TestIsArrayLeaf(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		const isArr = Array.isArray

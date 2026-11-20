@@ -66,7 +66,7 @@ func TestRegExpExecDirect(t *testing.T) {
 			runtime.GC()
 			debug.SetGCPercent(-1)
 		}
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpExecDirectTestSrc))
 		r.Close()
 		debug.SetGCPercent(100)
@@ -87,7 +87,7 @@ func TestRegExpExecDirect(t *testing.T) {
 // throws, its stack and Error.stackTraceLimit's getter run as often.
 func TestRegExpExecDirectFrameless(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, regexpExecDirectTestSrc+`; var rg = /(\d*)(\D*)/g, rp = /(\d*)(\D*)/`)); err != nil {
 		t.Fatal(err)

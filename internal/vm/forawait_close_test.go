@@ -42,7 +42,7 @@ func TestForAwaitClose(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			src := "var out = 'pending'; " + tt.src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
 			fn := compileForTest(t, src)
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			v, err := r.Run(fn)
 			if err == nil {
 				if err = r.runMicrotasks(); err == nil {

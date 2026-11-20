@@ -39,7 +39,7 @@ func TestJITStoreWords(t *testing.T) {
 		var got = [], last
 		for (var k = 0; k < 40; k++) got.push(run(2001))
 		got.join()`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

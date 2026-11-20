@@ -75,7 +75,7 @@ func TestJITManySlots(t *testing.T) {
 	for _, n := range sizes {
 		name := fmt.Sprintf("big%d", n)
 		setup := manySlotsHelpers + manySlotsSource(name, n) + deepStackSource
-		want := New(Config{})
+		want := newTestRuntime(t, Config{})
 		if _, err := want.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}

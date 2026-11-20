@@ -75,7 +75,7 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 		"4,5,2 | 6 | true | true | 301 | 300 | 299 | 297 | 301 | 5 | 9 | Implicit | " +
 		`TypeError: class constructor C cannot be invoked without "new" | ` +
 		`TypeError: class constructor A cannot be invoked without "new" | same true`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {
 		r.Close()
@@ -99,7 +99,7 @@ func TestDerivedConstructionAllocations(t *testing.T) {
 		class B extends A { constructor(x) { super(x); this.z = 1 } }
 		function make(n) { let o; for (let i = 0; i < n; i++) o = new B(i); return o.x }
 		make(100)`
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)

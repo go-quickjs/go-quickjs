@@ -144,7 +144,7 @@ func TestJITForwardingCalls(t *testing.T) {
 // round queued run after it, on both runtimes.
 func jitAgreesForwardForTest(t *testing.T, stress jitStressConfig, setup string, rounds ...string) *Runtime {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitStress = stress

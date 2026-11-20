@@ -21,7 +21,7 @@ func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
 		function all(k) { let r = 0; for (let j = 0; j < 30; j++) r = (r + f(2000, k) + g(2000, k) + h(500, k).length) | 0; return r }`
 	want := make([]string, 8)
 	for k := range want {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		if _, err := r.Run(compileForTest(t, src)); err != nil {
 			t.Fatal(err)
 		}
@@ -34,7 +34,7 @@ func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
 	errs := make(chan error, len(want))
 	for k := range want {
 		go func() {
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			defer r.Close()
 			if _, err := r.Run(compileForTest(t, src)); err != nil {
 				errs <- err
@@ -95,7 +95,7 @@ func TestJITEvictionKeepsRunningCode(t *testing.T) {
 	b.WriteString("const os = []; for (let i = 0; i < 20; i++) os.push({a: i, b: i * 3});\n")
 	fmt.Fprintf(&b, "let r = 0; for (let k = 0; k < 30; k++) { for (let i = 0; i < %d; i++) r = (r + this[\"c\" + i](os, 2)) %% 1000003; check() } r", callers)
 	src := b.String()
-	plain := New(Config{})
+	plain := newTestRuntime(t, Config{})
 	plain.global.setOwnRaw(plain.atoms.intern("check"), Obj(plain.newNativeFunc("check", 0, func(*Runtime, Value, []Value) (Value, error) {
 		return Undefined, nil
 	})), propDefault)
@@ -159,7 +159,7 @@ func TestJITEvictedWaitToCompileAgain(t *testing.T) {
 	var tick uint64
 	jitEpochNow = func() uint64 { tick++; return tick }
 	t.Cleanup(func() { jitEpochNow = now })
-	r := New(Config{JIT: true, JITMemoryLimit: 256 << 10})
+	r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: 256 << 10})
 	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(t, b.String())); err != nil {

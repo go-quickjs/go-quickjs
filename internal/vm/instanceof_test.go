@@ -114,7 +114,7 @@ func TestInstanceOfKnown(t *testing.T) {
 	// The entries are forgotten each time the collector has run, which a
 	// collection during the run would do before they are counted.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, instanceOfChangesSrc))
 	if err != nil {
 		r.Close()
@@ -142,7 +142,7 @@ func TestInstanceOfKnownEntry(t *testing.T) {
 		t.Fatalf("property cache grew to %d bytes", unsafe.Sizeof(propCache{}))
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function F() {}; const o = new F(); for (let i = 0; i < 3; i++) o instanceof F; F`))
 	if err != nil {

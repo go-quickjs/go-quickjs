@@ -55,7 +55,7 @@ func TestDeepStoreFollowsTheChain(t *testing.T) {
 		out.join(', ')`
 	const want = "plain:own, plain again:own, setter:none, setter calls 40, setter gone:own, read-only:TypeError, " +
 		"read-only gone:own, chain replaced:none, setter calls 80, chain back:own, non-extensible:TypeError"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	var counts string
 	if err == nil && r.deep != nil {

@@ -50,7 +50,7 @@ func TestLogicalExpressions(t *testing.T) {
 		try { new D(1) } catch (e) { r.push(e.name) }
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2]) + ' | ' + r.slice(3).join(',')`
 	const want = "0/0,0/1,0/,0/x,0/null,0/NaN,0/0,0/2,0/0,0/1,1/1,/1,x/1,null/1,NaN/1,0/1,2/1,0/1,/0,/1,/,/x,/null,/NaN,/0,/2,/0,0/x,1/x,/x,x/x,null/x,NaN/x,0/x,2/x,0/x,null/0,null/1,null/,null/x,null/null,null/NaN,null/0,null/2,null/0,NaN/0,NaN/1,NaN/,NaN/x,NaN/null,NaN/NaN,NaN/0,NaN/2,NaN/0,0/0,0/1,0/,0/x,0/null,0/NaN,0/0,0/2,0/0,0/2,1/2,/2,x/2,null/2,NaN/2,0/2,2/2,0/2,0/0,0/1,0/,0/x,0/null,0/NaN,0/0,0/2,0/0,0,x,0,,x,x,,NaN,,null,0,NaN,null,NaN,null,NaN,x,NaN,0,x,0,0,5,aab,5,1,aba,0,thrownabat,true,true,false,false,0,1,,x,null,NaN,0,2 | true | 0,ReferenceError"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

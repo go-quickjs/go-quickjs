@@ -63,7 +63,7 @@ func TestJITPolyWriteNoShapeMarking(t *testing.T) {
 func jitPolyWriteNoShape(t *testing.T) {
 	r := jitAgreesForTest(t, polyWriteSetup, polyWriteLearn...)
 	jitPolyWriteNoShapeReached(t, r)
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	if _, err := want.Run(compileForTest(t, polyWriteSetup)); err != nil {
 		t.Fatal(err)

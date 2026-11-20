@@ -46,7 +46,7 @@ func TestFillHoles(t *testing.T) {
 		}
 		out[0] + '\n' + (out[0] === out[1] && out[1] === out[2])`
 	const want = "0,10,20,30 | ,10,,30/1,3 | 3:0:TypeError | ,,:TypeError | ,:TypeError | 0,,20:3:ok:TypeError | 0,,20 | 0,10,,30:A20 | 0,,20:A20O10 | ro,10:TypeError | 0,10,20\ntrue"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {
@@ -78,7 +78,7 @@ func TestNewArrayLengths(t *testing.T) {
 		"10:11:true:5.10:true:10 11:12:true:5.11:true:11 12:13:true:6.12:true:12 13:14:true:6.13:true:13 " +
 		"16:17:true:8.16:true:16 17:18:true:8.17:true:17 1024:1025:true:512.1024:true:1024 " +
 		"1025:1026:true:512.1025:true:1025 65536:65537:true:32768.65536:true:65536 65537:65538:true:32768.65537:true:65537"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

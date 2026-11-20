@@ -26,7 +26,7 @@ func TestDeletePrimitiveProperty(t *testing.T) {
 		r.push(loop('ab'), loopStrict('ab'))
 		r.join()`
 	const want = "false,false,false,true,true,true,true,true,true,false,TypeError,TypeError,true,true,falsefalse,TypeError"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

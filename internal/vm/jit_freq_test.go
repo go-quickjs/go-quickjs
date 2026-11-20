@@ -37,7 +37,7 @@ func TestJITRegFrequency(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			prog := compileForTest(t, regFreqSrc)
-			r := New(Config{JIT: true})
+			r := newTestRuntime(t, Config{JIT: true})
 			t.Cleanup(r.Close)
 			r.jitStress = jitStressConfig{}
 			r.SetJITWarmUp(1<<16, 1<<16)

@@ -106,7 +106,7 @@ var realmPrograms = []struct{ name, src string }{
 func TestDroppedRealmsAreCollected(t *testing.T) {
 	for _, p := range realmPrograms {
 		t.Run(p.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newTestRuntime(t, Config{})
 			defer r.Close()
 			fn := compileForTest(t, p.src)
 			var refs []weak.Pointer[Realm]
@@ -140,7 +140,7 @@ func TestDroppedRealmsAreCollected(t *testing.T) {
 // finalization, on a loaded runner). The test waits on what it can see: the
 // queue holding the registration, which no turn takes from it here.
 func TestDroppedRealmQueuedCleanupLetsGo(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `var h = {}; new FinalizationRegistry(function () {}).register({}, h);`)
 	re := r.NewRealm()
@@ -179,7 +179,7 @@ func TestDroppedRealmQueuedCleanupLetsGo(t *testing.T) {
 // A realm that has run no script goes as one that has: the first thing that
 // was found to hold one was the runtime's list of every realm's leaves.
 func TestDroppedRealmNeverRun(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	var refs []weak.Pointer[Realm]
 	for range 20 {
@@ -213,7 +213,7 @@ func realmKept(t *testing.T, r *Runtime) (weak.Pointer[Realm], Value, Value, Val
 // built-ins, the object its prototype's methods, and either makes what its
 // realm makes.
 func TestRealmKeptByWhatItMade(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	w, inc, obj, arr := realmKept(t, r)
 	drop := compileForTest(t, `var o = {a: 1}; [1].map(x => x);`)
@@ -268,7 +268,7 @@ func TestRealmKeptByWhatItMade(t *testing.T) {
 // as long as that realm lives, and no longer: a function of a dropped realm
 // goes on working for the realm given it, and goes with it.
 func TestRealmKeptByAnotherRealm(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	w, inc, _, _ := realmKept(t, r)
 	holder := r.NewRealm()
@@ -296,7 +296,7 @@ func TestRealmKeptByAnotherRealm(t *testing.T) {
 // and the runtime's list of leaves had had every realm's.
 func TestRealmIntrinsicsAreItsOwn(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	math := func(name string) *Object {
 		m := r.global.getOwn(r.atoms.intern("Math")).value().Object()
@@ -324,7 +324,7 @@ func TestRealmIntrinsicsAreItsOwn(t *testing.T) {
 // in any realm but the first's was made the long way.
 func TestRealmCachesAreItsOwn(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `
 		function rd(o) { return o.x; } function has(o) { return "x" in o; } var os = [];
@@ -379,7 +379,7 @@ func TestRealmCachesAreItsOwn(t *testing.T) {
 // weakly, so that a target of a realm no longer keeps the realm (and what
 // held the registry had been the cleanup). Once its cells are gone so is it.
 func TestFinalizationRegistryKeptByItsRealm(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		var seen = [];
@@ -431,7 +431,7 @@ func TestFinalizationRegistryKeptByItsRealm(t *testing.T) {
 // counts as it runs, had filled it after some tens of thousands of runs of
 // a program, a realm for each, and every layout after that was of its own.
 func TestShapeBudgetRealms(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	fn := compileForTest(t, `
 		var o = {a: 1, b: 2}, e = {};

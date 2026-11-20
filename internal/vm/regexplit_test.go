@@ -16,7 +16,7 @@ import (
 // there.
 func TestRegExpLiteralSharedEntry(t *testing.T) {
 	t.Parallel()
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	consts := make([]bytecode.Constant, 4*regexpLitCount)
 	var a, b *bytecode.Constant

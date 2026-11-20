@@ -55,7 +55,7 @@ func TestJITPolyProto(t *testing.T) {
 		function reproto(k) { for (var i = 0; i < xs.length; i += k) Object.setPrototypeOf(Object.getPrototypeOf(xs[i]), i & 1 ? F.prototype : {m: 7}) }
 		function run(n) { return count(xs, n) + churn(n) }`
 	cases := []string{`run(64)`, `run(200)`, `(reproto(5), run(200))`, `run(300)`, `(reproto(3), run(64))`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
@@ -198,7 +198,7 @@ func TestJITHolderLayoutSaysPrototype(t *testing.T) {
 	cases := []string{`sum(o, 3000)`, `sum(o, 3000)`, `(Object.setPrototypeOf(o, B), sum(o, 3000))`,
 		`(Object.setPrototypeOf(o, mid), sum(o, 3000))`, `(Object.setPrototypeOf(mid, C), sum(o, 3000))`,
 		`(mid.m = function () { return 4 }, sum(o, 3000))`, `(delete mid.m, sum(o, 3000))`}
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {

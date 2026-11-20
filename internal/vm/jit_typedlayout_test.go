@@ -427,7 +427,7 @@ func TestJITTypedSharedGrownConcurrently(t *testing.T) {
 	if cv, ok := jitViewNamedForTest(r, "check"); !ok {
 		t.Fatalf("check is not native: %+v", cv.e)
 	}
-	other := New(Config{})
+	other := newTestRuntime(t, Config{})
 	t.Cleanup(func() { other.Close(); other.ReleaseClosed() })
 	done := make(chan error)
 	go func() {

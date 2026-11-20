@@ -521,7 +521,7 @@ generic receiver map: threw TypeError`
 func TestTypedArrayCallbacksAgreeWithNode(t *testing.T) {
 	t.Parallel()
 	for round := range 2 {
-		r := New(Config{})
+		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, typedCallbackScript))
 		if err != nil {
 			t.Fatal(err)
@@ -556,7 +556,7 @@ func diffLinesForTest(t *testing.T, round int, got, want string) {
 // as Array.prototype's methods make it, whether the callback is answered
 // as a pure body or run as its register code.
 func TestTypedArrayCallbacksAllocateOncePerLoop(t *testing.T) {
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	_, err := r.Run(compileForTest(t, `
 		var s = 0;

@@ -201,7 +201,7 @@ func TestJITRealmsWithinTheBudget(t *testing.T) {
 	}
 	fn := compileForTest(t, jitHotProgram(40))
 	for _, limit := range []int64{96 << 10, 256 << 10} {
-		r := New(Config{JIT: true, JITMemoryLimit: limit})
+		r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: limit})
 		r.SetJITWarmUp(8, 8)
 		for i := range 60 {
 			if _, err := r.RunIn(r.NewRealm(), fn); err != nil {
@@ -431,7 +431,7 @@ func TestJITRegRealmsWithinTheBudgetClocked(t *testing.T) {
 			tick := uint64(1000)
 			jitEpochNow = func() uint64 { tick += step; return tick }
 			jitFlushNow = func() uint64 { return tick / 4 }
-			r := New(Config{JIT: true, JITMemoryLimit: limit})
+			r := newTestRuntime(t, Config{JIT: true, JITMemoryLimit: limit})
 			r.SetJITWarmUp(8, 8)
 			for i := range 30 {
 				if _, err := r.RunIn(r.NewRealm(), fn); err != nil {

@@ -18,7 +18,7 @@ var (
 // BenchmarkWeakMapHot sets and gets keys that already have entries: the
 // steady state of a cache keyed by objects.
 func BenchmarkWeakMapHot(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	m := newWeakMap()
 	keys := make([]Value, 256)
 	for i := range keys {
@@ -38,7 +38,7 @@ func BenchmarkWeakMapHot(b *testing.B) {
 // BenchmarkWeakMapInsert gives one map a new key each time, the key made
 // too: what tagging fresh objects costs.
 func BenchmarkWeakMapInsert(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	m := newWeakMap()
 	b.ReportAllocs()
 	i := 0
@@ -53,7 +53,7 @@ func BenchmarkWeakMapInsert(b *testing.B) {
 // maps that have gone are released as the interpreter would, once per
 // collection, so that their queue does not grow with b.N.
 func BenchmarkWeakMapFirstSet(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	b.ReportAllocs()
 	i := 0
 	for b.Loop() {
@@ -95,7 +95,7 @@ func BenchmarkWeakSetInsert(b *testing.B) {
 
 // BenchmarkMapHot is BenchmarkWeakMapHot for a Map, to compare with.
 func BenchmarkMapHot(b *testing.B) {
-	r := New(Config{})
+	r := newTestRuntime(b, Config{})
 	m := newJSMap()
 	keys := make([]Value, 256)
 	for i := range keys {

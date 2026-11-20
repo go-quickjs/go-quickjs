@@ -72,7 +72,7 @@ const jitCallsSource = `
 // called natively.
 func jitCallsCheck(t *testing.T, r *Runtime, rounds int) {
 	t.Helper()
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, jitCallsSource)); err != nil {
@@ -158,7 +158,7 @@ func TestJITCallsReadBackFromFrame(t *testing.T) {
 		function run() { const c = new C(7); let t = 0; for (let i = 0; i < 40; i++) t += c.h(i * 0.5, 3) + c.m(i, 4); return t }`
 	for _, budget := range []uint16{0, 1} {
 		t.Run(fmt.Sprintf("budget %d", budget), func(t *testing.T) {
-			want := New(Config{})
+			want := newTestRuntime(t, Config{})
 			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 			r := jitRuntimeForTest(t, Config{JIT: true})
 			r.jitStress = jitStressConfig{threshold: true, budget: budget}
@@ -228,7 +228,7 @@ func TestJITCallStateFindsBoxesSaved(t *testing.T) {
 			return last
 		}
 		function run() { return [errs(NoSuper, 50), errs(RetPrim, 50), errs(Twice, 50), calls(50)].join() }`
-	want := New(Config{})
+	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

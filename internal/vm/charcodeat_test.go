@@ -32,7 +32,7 @@ func TestCharCodeAtNode(t *testing.T) {
 	// Node's answer.
 	const one = "97,98,97,97,55296,99,NaN,NaN,NaN,97,v,98,99,98,97,121,own7"
 	const want = one + "," + one + "," + one + ",patched1,98,true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {

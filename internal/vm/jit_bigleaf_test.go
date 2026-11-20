@@ -292,8 +292,8 @@ func TestJITBigLeaf(t *testing.T) {
 		}
 	}
 	defer func() { jitSSAOptimized = nil }()
-	r := New(Config{JIT: true})
-	want := New(Config{})
+	r := newTestRuntime(t, Config{JIT: true})
+	want := newTestRuntime(t, Config{})
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, bigLeafSetup)); err != nil {
 			t.Fatal(err)
@@ -351,7 +351,7 @@ func TestJITBigLeafOwn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	if r.jit == nil {
 		r.jit = &jitState{}
 	}
@@ -438,7 +438,7 @@ func TestJITBigLeafLeavesLongOperations(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := New(Config{JIT: true})
+	r := newTestRuntime(t, Config{JIT: true})
 	if r.jit == nil {
 		r.jit = &jitState{}
 	}

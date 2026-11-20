@@ -140,7 +140,7 @@ func TestTreeMethodCalls(t *testing.T) {
 		"object0object1\n" +
 		"74:31:c0a0c1a1c2a2\n" +
 		"true"
-	r := New(Config{})
+	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, src))
 	if err != nil {

@@ -68,7 +68,7 @@ func TestJITDestructures(t *testing.T) {
 	for range 3 {
 		want(`restTracked(300)`, "600|n0,n1,n2,n3,n0,n1")
 	}
-	interp := New(Config{})
+	interp := newTestRuntime(t, Config{})
 	defer func() { interp.Close(); interp.ReleaseClosed() }()
 	if _, err := interp.Run(compileForTest(t, destructureSetup)); err != nil {
 		t.Fatal(err)
