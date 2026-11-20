@@ -81,6 +81,9 @@ type Runtime struct {
 	// count; see nest.
 	nesting    int
 	nodeQuirks bool
+	// cannotBlock is the host's agent policy: Atomics.wait validates its
+	// arguments and then throws rather than suspending this agent.
+	cannotBlock bool
 	// regexpLits is the patterns of the RegExp literals the runtime has
 	// evaluated, by their constants; see newRegExpLiteral.
 	regexpLits [regexpLitCount]regexpLiteral

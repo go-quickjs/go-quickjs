@@ -339,6 +339,9 @@ func (r *Runtime) initAtomicsBuiltins() {
 		if !math.IsNaN(q) {
 			timeout = math.Max(q, 0)
 		}
+		if rt.cannotBlock {
+			return Undefined, rt.throwTypeError("Atomics.wait cannot be called in this context")
+		}
 		var done <-chan struct{}
 		if rt.ctx != nil {
 			done = rt.ctx.Done()

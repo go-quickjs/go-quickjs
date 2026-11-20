@@ -128,12 +128,15 @@ Tests tagged `source-phase-imports-module-source` receive test262's special
 `%AbstractModuleSource%.prototype`, and every import resolves to the same
 module, including imports from different referrers.
 
+Tests marked `CanBlockIsFalse` run with the main agent unable to suspend in
+`Atomics.wait`; other tests and the worker agents retain blocking waits.
+
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
 Measured coverage, as of the most recent run, on test262 commit
 [`e4fbf57745c6aae3d1f12f181ecef78b1665d812`](https://github.com/tc39/test262/commit/e4fbf57745c6aae3d1f12f181ecef78b1665d812)
-of November 6, 2026: 100,250 variants pass and none fail. The other 69 are
+of November 6, 2026: 100,254 variants pass and none fail. The other 65 are
 skipped because they require an unsupported feature or host facility.
 
 Where test262 and current engines disagree, the engine follows the standard

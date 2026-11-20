@@ -315,12 +315,6 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 			return resultSkip, reason
 		}
 	}
-	// The main agent can block, as a host that is not a browser's main
-	// thread can; a test for one that cannot is for another kind of host.
-	if tc.Meta.Flags["CanBlockIsFalse"] {
-		return resultSkip, "the main agent can block"
-	}
-
 	prelude, err := suite.Prelude(tc)
 	if err != nil {
 		return resultSkip, err.Error()
@@ -355,6 +349,9 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	}
 	rt := newRuntime()
 	defer rt.Close()
+	if tc.Meta.Flags["CanBlockIsFalse"] {
+		vm.HostSetCanBlock(hostaccess.VM(rt), false)
+	}
 	defer func() { *jitStats = hostaccess.VM(rt).JITStats() }()
 	// Agents are runtimes of their own, stopped when the test is over.
 	agents := newAgentPool(newRuntime)

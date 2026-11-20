@@ -28,6 +28,10 @@ type hostBuffer struct {
 }
 
 var (
+	// HostSetCanBlock sets whether this runtime's agent may suspend in
+	// Atomics.wait. Agents can block by default; realms share their agent's
+	// setting. Atomics.waitAsync does not suspend and is unaffected.
+	HostSetCanBlock func(r *Runtime, canBlock bool)
 	// HostConstructor returns a constructor named name, of length length,
 	// whose prototype property is proto, calling fn. It is not made a
 	// global.
@@ -188,6 +192,7 @@ var meterData func(m *memoryMeter, d any)
 var hostSlotSymbol = NewSymbol("host slot", true)
 
 func init() {
+	HostSetCanBlock = func(r *Runtime, canBlock bool) { r.cannotBlock = !canBlock }
 	HostConstructor = func(r *Runtime, name string, length int, proto *Object, fn NativeFunc) *Object {
 		c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
 		*fd = funcData{native: fn, name: name, length: int32(length), ctorKind: ctorBase, realm: r.Realm}

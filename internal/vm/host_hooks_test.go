@@ -42,6 +42,42 @@ func TestHostNodeQuirks(t *testing.T) {
 	}
 }
 
+func TestHostCanBlock(t *testing.T) {
+	rt, r := hostRuntime(t)
+	vm.HostSetCanBlock(r, false)
+	for _, tc := range []struct{ source, want string }{
+		{`var a = new Int32Array(new SharedArrayBuffer(4));
+			try { Atomics.wait(a, 0, 0, 0) } catch (e) { e.constructor.name + ': ' + e.message }`,
+			"TypeError: Atomics.wait cannot be called in this context"},
+		{`try { Atomics.wait(a, 0, 1, 0) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { Atomics.wait(new BigInt64Array(new SharedArrayBuffer(8)), 0, 0n, 0) }
+			catch (e) { e.constructor.name }`, "TypeError"},
+		{`var order = [];
+			try { Atomics.wait(a,
+				{valueOf() { order.push('index'); return 0; }},
+				{valueOf() { order.push('value'); return 0; }},
+				{valueOf() { order.push('timeout'); return 0; }}) }
+			catch (e) { order.push(e.constructor.name) }
+			order.join()`, "index,value,timeout,TypeError"},
+		{`try { Atomics.wait(a, 1, 0, 0) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`try { Atomics.wait(a, 0, 0, {valueOf() { throw new RangeError('timeout'); }}) }
+			catch (e) { e.constructor.name + ': ' + e.message }`, "RangeError: timeout"},
+		{`var async = Atomics.waitAsync(a, 0, 0, 0); [async.async, async.value].join()`, "false,timed-out"},
+	} {
+		if got := hostEval(t, rt, tc.source); got != tc.want {
+			t.Errorf("%s = %s, want %s", tc.source, got, tc.want)
+		}
+	}
+	other, _ := hostRuntime(t)
+	if got := hostEval(t, other, `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0)`); got != "timed-out" {
+		t.Errorf("other runtime's wait = %s", got)
+	}
+	vm.HostSetCanBlock(r, true)
+	if got := hostEval(t, rt, `Atomics.wait(a, 0, 0, 0)`); got != "timed-out" {
+		t.Errorf("enabled wait = %s", got)
+	}
+}
+
 func TestHostErrorClass(t *testing.T) {
 	rt, r := hostRuntime(t)
 	ctor, proto := vm.HostErrorClass(r, "OddError")
