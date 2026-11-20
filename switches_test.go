@@ -22,10 +22,11 @@ var testSwitchesAllowed = map[string]string{
 	// indexes directly: a table of the runtime's would be a load more for
 	// every instruction. The tests that wrap their entries to count them
 	// -- the operation mixes, typed code's -- are not parallel.
-	"internal/vm.regTable":      "the Go table's loop reads it directly",
-	"internal/vm.regSlowTable":  "the Go table's loop reads it directly",
-	"internal/vm.regTypedTable": "the typed Go table's loop reads it directly",
-	"internal/vm.nativeTyped":   "swapped with regTypedTable, in the same non-parallel test",
+	"internal/vm.regTable":          "the Go table's loop reads it directly",
+	"internal/vm.regSlowTable":      "the Go table's loop reads it directly",
+	"internal/vm.regTypedTable":     "the typed Go table's loop reads it directly",
+	"internal/vm.nativeTyped":       "swapped with regTypedTable, in the same non-parallel test",
+	"wasm/internal/engine.regTable": "the Go table's loop reads it directly",
 	"internal/vm.jitWorkerPanics": "a count of the process's workers' panics, TestMain's, " +
 		"which a test that makes one on purpose takes back",
 	// Algorithms' thresholds, which the package's own tests lower to run
@@ -49,12 +50,7 @@ var testSwitchesAllowed = map[string]string{
 	"wasm/internal/engine.jitStoreRef":      "wasm, to convert",
 	"wasm/internal/engine.jitWriteBarrier":  "wasm, to convert",
 	"wasm/internal/engine.maxRegCode":       "wasm, to convert",
-	"wasm/internal/engine.nativeExitCounts": "wasm, to convert",
-	"wasm/internal/engine.nativeExitTable":  "wasm, to convert",
-	"wasm/internal/engine.nativeMarkFlag":   "wasm, to convert",
-	"wasm/internal/engine.nativeSIMDTable":  "wasm, to convert",
 	"wasm/internal/engine.optWorkerHook":    "wasm, to convert",
-	"wasm/internal/engine.regTable":         "wasm, to convert",
 	"wasm/internal/engine.relaxedDotSigned": "wasm, to convert",
 	"wasm/internal/engine.relaxedDotVNNI":   "wasm, to convert",
 	"wasm/internal/engine.relaxedFused":     "wasm, to convert",

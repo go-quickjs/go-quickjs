@@ -184,7 +184,7 @@ func InstantiateBudget(ctx context.Context, code *Code, imports []Extern, b *Bud
 
 func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (*Instance, error) {
 	m := code.Module
-	inst := &Instance{Module: m, Code: code, budget: b}
+	inst := &Instance{Module: m, Code: code, budget: b, native: regNativeDefault}
 	b.track(inst)
 	// Memories are linked first, then the other imports in order.
 	for i, imp := range m.Imports {

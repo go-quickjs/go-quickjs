@@ -505,7 +505,8 @@ indirect jump. There is no second interpreter: what the native code does
 not do, the exit stub does by calling the instruction's Go handler in
 place, so the Go table stays the whole semantics and every operation
 works natively from the start. Elsewhere, and with `WASM_NONATIVE=1` (or
-`SetRegNative` in a test), the Go table's loop runs it.
+an instance a test made so, its `native` off), the Go table's loop runs
+it.
 
 **Generated, position-independent, one for every build.** The handlers are
 written with the JIT's assemblers by the engine's own generator,

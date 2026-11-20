@@ -115,4 +115,11 @@ type Instance struct {
 
 	// jit is what the instance's native code reads of it.
 	jit jitInstance
+
+	// native runs the instance's register code by the native handlers
+	// (regNativeDefault), and test is what a test runs its native code
+	// with, nil but in a test's (instanceTest): after every field native
+	// code reads.
+	native bool
+	test   *instanceTest
 }

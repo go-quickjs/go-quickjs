@@ -20,12 +20,22 @@ func nativeOnly(t *testing.T) {
 	}
 }
 
-// countNativeExits runs f with native code's exits counted, returning
-// their number.
-func countNativeExits(f func()) int64 {
+// testOf is inst's test switches (Instance's test), made at the first.
+func testOf(inst *Instance) *instanceTest {
+	if inst.test == nil {
+		inst.test = new(instanceTest)
+	}
+	return inst.test
+}
+
+// countNativeExits runs f with inst's native code's exits counted,
+// returning their number.
+func countNativeExits(inst *Instance, f func()) int64 {
 	var counts [256]int64
-	nativeExitCounts = &counts
-	defer func() { nativeExitCounts = nil }()
+	t := testOf(inst)
+	was := t.exits
+	t.exits = &counts
+	defer func() { t.exits = was }()
 	f()
 	total := int64(0)
 	for _, n := range counts {
@@ -34,10 +44,12 @@ func countNativeExits(f func()) int64 {
 	return total
 }
 
-// withNative runs f with the native handlers on or off.
-func withNative(on bool, f func()) {
-	was := SetRegNative(on)
-	defer SetRegNative(was)
+// withNative runs f with inst's register code run by the native handlers,
+// where they are built, or by the Go table's loop.
+func withNative(inst *Instance, on bool, f func()) {
+	was := inst.native
+	inst.native = on && nativeBuilt
+	defer func() { inst.native = was }()
 	f()
 }
 
@@ -260,8 +272,8 @@ func TestNativeCallHConvention(t *testing.T) {
 		}
 		return orig(l, w, pc, f)
 	}
-	withNative(true, func() {
-		inst := instantiateReg(t, regKernels)
+	inst := instantiateReg(t, regKernels)
+	withNative(inst, true, func() {
 		for i := uint64(0); i < 120; i++ {
 			got, err := call(t, inst, "pop", i)
 			if err != nil || got[0].N != uint64(bitsOnes(i)) {
@@ -759,8 +771,8 @@ func TestNativeMatchesGoTable(t *testing.T) {
 		var got, want []Val
 		var gerr, werr error
 		var exits int64
-		withNative(true, func() { exits = countNativeExits(func() { got, gerr = run(native, c) }) })
-		withNative(false, func() { want, werr = run(goTable, c) })
+		withNative(native, true, func() { exits = countNativeExits(native, func() { got, gerr = run(native, c) }) })
+		withNative(goTable, false, func() { want, werr = run(goTable, c) })
 		if (gerr == nil) != (werr == nil) || gerr != nil && gerr.Error() != werr.Error() {
 			t.Errorf("%s%v: native %v, the Go table's %v", c.name, c.args, gerr, werr)
 			continue
@@ -791,8 +803,8 @@ func TestNativeOff(t *testing.T) {
 	nativeOnly(t)
 	inst := instantiateReg(t, regKernels)
 	var exits int64
-	withNative(false, func() {
-		exits = countNativeExits(func() {
+	withNative(inst, false, func() {
+		exits = countNativeExits(inst, func() {
 			if _, err := call(t, inst, "pop", 12); err != nil {
 				t.Fatal(err)
 			}
@@ -801,8 +813,8 @@ func TestNativeOff(t *testing.T) {
 	if exits != 0 {
 		t.Fatalf("%d native exits with the native handlers off", exits)
 	}
-	withNative(true, func() {
-		exits = countNativeExits(func() {
+	withNative(inst, true, func() {
+		exits = countNativeExits(inst, func() {
 			if _, err := call(t, inst, "pop", 12); err != nil {
 				t.Fatal(err)
 			}
@@ -827,10 +839,19 @@ func nativeHandles(op regOp) bool {
 // clear.
 func matchNative(t *testing.T, src string, calls []regCall) (marked, unmarked int64) {
 	t.Helper()
-	var flag uint8
-	nativeMarkFlag = &flag
-	defer func() { nativeMarkFlag = nil }()
+	return matchNativeWith(t, src, calls, func(*Instance) {})
+}
+
+// matchNativeWith is matchNative, its native instances made so by set.
+func matchNativeWith(t *testing.T, src string, calls []regCall, set func(*Instance)) (marked, unmarked int64) {
+	t.Helper()
 	insts := [3]*Instance{instantiateReg(t, src), instantiateReg(t, src), instantiateReg(t, src)}
+	// The first reads the collector's flag as clear, the second as set;
+	// the third runs on the Go table.
+	clear, marking := uint8(0), uint8(1)
+	testOf(insts[0]).mark, testOf(insts[1]).mark = &clear, &marking
+	set(insts[0])
+	set(insts[1])
 	for _, c := range calls {
 		var res [3][]Val
 		var errs [3]error
@@ -839,9 +860,8 @@ func matchNative(t *testing.T, src string, calls []regCall) (marked, unmarked in
 			if !ok {
 				t.Fatalf("no export %q", c.name)
 			}
-			flag = uint8(k & 1)
 			before := nativeStoreRefs
-			withNative(k < 2, func() { res[k], errs[k] = Invoke(context.Background(), ext.Func, c.args) })
+			withNative(inst, k < 2, func() { res[k], errs[k] = Invoke(context.Background(), ext.Func, c.args) })
 			switch k {
 			case 0:
 				unmarked += nativeStoreRefs - before
@@ -985,7 +1005,7 @@ func TestNativeCalls(t *testing.T) {
 	// Callees with reference slots are called natively: once a first run
 	// has compiled them and made the frames, no call leaves to Go.
 	inst := instantiateReg(t, src)
-	withNative(true, func() {
+	withNative(inst, true, func() {
 		if _, err := call(t, inst, "tree", 8); err != nil {
 			t.Fatal(err)
 		}
@@ -993,8 +1013,8 @@ func TestNativeCalls(t *testing.T) {
 	// An exec fresh from the pool makes its frames, call records and
 	// chunks as Go's calls first need them; those exits are not counted.
 	var exits []nativeExit
-	withNative(true, func() {
-		exits = logNativeExits(func() {
+	withNative(inst, true, func() {
+		exits = logNativeExits(inst, func() {
 			if got, err := call(t, inst, "tree", 8); err != nil || got[0].N != 511 {
 				t.Errorf("tree(8) = %v, %v", got, err)
 			}
@@ -1005,13 +1025,13 @@ func TestNativeCalls(t *testing.T) {
 	}
 	// So are call_indirect's callees whose entry and type are right, once
 	// compiled.
-	withNative(true, func() {
+	withNative(inst, true, func() {
 		if _, err := call(t, inst, "indloop", 10); err != nil {
 			t.Fatal(err)
 		}
 	})
-	withNative(true, func() {
-		exits = logNativeExits(func() {
+	withNative(inst, true, func() {
+		exits = logNativeExits(inst, func() {
 			if _, err := call(t, inst, "indloop", 100); err != nil {
 				t.Error(err)
 			}
@@ -1062,9 +1082,6 @@ func TestNativeRefsMarking(t *testing.T) {
 // to Go, with the Go table's results.
 func TestNativeSIMDWithout(t *testing.T) {
 	nativeOnly(t)
-	was := nativeSIMDTable
-	nativeSIMDTable = uintptr(unsafe.Pointer(&nativeSIMDExits))
-	defer func() { nativeSIMDTable = was }()
 	src := `(module
 	  (func (export "f") (param v128 v128 i32) (result v128)
 	    (i32x4.shl (i8x16.shuffle 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
@@ -1073,7 +1090,15 @@ func TestNativeSIMDWithout(t *testing.T) {
 		{"f", []Val{{N: 0x0123456789abcdef, Hi: 0xfedcba9876543210}, {N: 0x7ff8000000000001, Hi: 0x4010000000000000}, {N: 3}}},
 		{"f", []Val{{N: ^uint64(0), Hi: 1}, {N: 1 << 63, Hi: 0xfff4000000000000}, {N: 33}}},
 	}
-	exits := countNativeExits(func() { matchNative(t, src, calls) })
+	var counts [256]int64
+	matchNativeWith(t, src, calls, func(inst *Instance) {
+		testOf(inst).simdTable = uintptr(unsafe.Pointer(&nativeSIMDExits))
+		testOf(inst).exits = &counts
+	})
+	exits := int64(0)
+	for _, n := range counts {
+		exits += n
+	}
 	if exits == 0 {
 		t.Fatal("no SIMD operator left to Go with rSIMD's table the exit stub's")
 	}

@@ -32,11 +32,14 @@ const (
 
 // logNativeExits runs f with native code's exits to Go handlers recorded,
 // each with why it left, and returns them.
-func logNativeExits(f func()) (exits []nativeExit) {
-	saved := nativeExitTable
-	defer func() { nativeExitTable = saved }()
-	for i := range nativeExitTable {
-		nativeExitTable[i] = func(l unsafe.Pointer, w uint64, pc int32, fr *frame) int32 {
+func logNativeExits(inst *Instance, f func()) (exits []nativeExit) {
+	table := nativeExitTable
+	t := testOf(inst)
+	saved := t.exitTable
+	t.exitTable = &table
+	defer func() { t.exitTable = saved }()
+	for i := range table {
+		table[i] = func(l unsafe.Pointer, w uint64, pc int32, fr *frame) int32 {
 			e := nativeExit{op: uint8(w), pc: pc, why: exitOp}
 			if e.op == uint8(rExt) || e.op == uint8(rSIMD) {
 				e.x = uint8(w >> 8)

@@ -58,8 +58,16 @@ func nativeRun(f *frame, rc *regCode, pc int32) {
 	c.slowTable = uintptr(unsafe.Pointer(&regSlowTable[0]))
 	c.storeRef = nativeStoreRefAddr
 	c.wb = uintptr(unsafe.Pointer(&nativeWB.enabled))
-	if nativeMarkFlag != nil {
-		c.wb = uintptr(unsafe.Pointer(nativeMarkFlag))
+	if t := f.inst.test; t != nil {
+		if t.mark != nil {
+			c.wb = uintptr(unsafe.Pointer(t.mark))
+		}
+		if t.exitTable != nil {
+			c.goTable = uintptr(unsafe.Pointer(&t.exitTable[0]))
+		}
+		if t.simdTable != 0 {
+			c.simdTable = t.simdTable
+		}
 	}
 	wasmNativeEnter(nativeEntry, unsafe.Pointer(c))
 }

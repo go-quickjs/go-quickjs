@@ -51,28 +51,34 @@ type nativeCtx struct {
 	gc, i31 uintptr
 }
 
-// regNativeOn runs register code by the native handlers where they are
-// built. WASM_NONATIVE set in the environment, read once, leaves it to the
-// Go table's loop, to compare the two and as an escape hatch.
-var regNativeOn = nativeBuilt && os.Getenv("WASM_NONATIVE") == ""
+// regNativeDefault is whether an instance runs its register code by the
+// native handlers (Instance's native), where they are built.
+// WASM_NONATIVE set in the environment, read once, leaves it to the Go
+// table's loop, to compare the two and as an escape hatch; a test sets its
+// instance's (instanceTest).
+var regNativeDefault = nativeBuilt && os.Getenv("WASM_NONATIVE") == ""
 
-// SetRegNative runs register code by the native handlers or not, where they
-// are built, and reports whether it did: a test's switch, as WASM_NONATIVE
-// is the environment's.
-func SetRegNative(on bool) bool {
-	was := regNativeOn
-	regNativeOn = on && nativeBuilt
-	return was
+// instanceTest is what a test runs an instance's native code with in
+// place of the process's, set on the instance (Instance's test): read
+// where a frame's native context is made.
+type instanceTest struct {
+	// exits, if set, counts native code's exits to Go by operation.
+	exits *[256]int64
+	// mark, if set, is the flag native code reads for the collector's, so
+	// that it stores as while the collector marks, or not.
+	mark *uint8
+	// exitTable, if set, is the exit stub's table of Go handlers, in
+	// place of nativeExitTable.
+	exitTable *[256]regHandler
+	// simdTable, if not 0, is rSIMD's native table, in place of
+	// nativeSIMDTable.
+	simdTable uintptr
 }
-
-// nativeExitCounts, set by a test, counts native code's exits to Go by
-// operation.
-var nativeExitCounts *[256]int64
 
 // regRun runs register code rc in frame f from pc until the frame returns:
 // natively where the handlers are on, else by the Go table's loop.
 func regRun(f *frame, rc *regCode, pc int32) {
-	if regNativeOn {
+	if nativeBuilt && f.inst.native {
 		nativeRun(f, rc, pc)
 		return
 	}
@@ -93,7 +99,10 @@ func nativeSet(f *frame, rc *regCode, pc int32) *nativeCtx {
 	}
 	c.globals = sliceAddr(inst.Globals)
 	c.tables = sliceAddr(rc.tables)
-	c.exits = uintptr(unsafe.Pointer(nativeExitCounts))
+	c.exits = 0
+	if t := inst.test; t != nil {
+		c.exits = uintptr(unsafe.Pointer(t.exits))
+	}
 	c.r = sliceAddr(f.r)
 	c.x = uintptr(unsafe.Pointer(f.x))
 	c.inst = uintptr(unsafe.Pointer(inst))
@@ -118,11 +127,6 @@ func sliceAddr[T any](s []T) uintptr {
 	}
 	return uintptr(unsafe.Pointer(&s[0]))
 }
-
-// nativeMarkFlag, set by a test, is the flag the contexts made after it
-// read for the collector's, so that native code stores as it does while
-// the collector marks.
-var nativeMarkFlag *uint8
 
 // nativeStoreRefGo is the barrier routine's store (nativeStoreRef): a
 // pointer stored with Go's write barrier.

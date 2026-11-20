@@ -29,7 +29,7 @@ func TestRegLargeOffsets(t *testing.T) {
 		frames := func(name string, args ...uint64) []Frame {
 			t.Helper()
 			var err error
-			withNative(native, func() { _, err = call(t, inst, name, args...) })
+			withNative(inst, native, func() { _, err = call(t, inst, name, args...) })
 			var tr *Trap
 			if !errors.As(err, &tr) || len(tr.Frames) < 2 {
 				t.Fatalf("%s: %v, want a trap of two frames", name, err)

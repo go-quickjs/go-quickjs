@@ -108,7 +108,7 @@ func regMatchesGolden(t *testing.T, src string, calls []regCall) {
 			}
 			var got []Val
 			var err error
-			withNative(native, func() { got, err = Invoke(context.Background(), ext.Func, c.args) })
+			withNative(inst, native, func() { got, err = Invoke(context.Background(), ext.Func, c.args) })
 			if regOf(inst, c.name) == nil {
 				t.Errorf("%s runs no register code", c.name)
 			}

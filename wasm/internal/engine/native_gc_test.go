@@ -188,14 +188,14 @@ func TestNativeGC(t *testing.T) {
 		exits int64
 	}{{"structs", []uint64{200, 5}, 2}, {"arrays", []uint64{200, 5}, 7}, {"casts", []uint64{200, 0}, 1},
 		{"casts", []uint64{200, 1}, 1}, {"casts", []uint64{200, 2}, 1}, {"callref", []uint64{200, 0}, 1}} {
-		withNative(true, func() {
+		withNative(inst, true, func() {
 			if _, err := call(t, inst, c.name, c.args...); err != nil {
 				t.Fatal(err)
 			}
 		})
 		var exits []nativeExit
-		withNative(true, func() {
-			exits = logNativeExits(func() {
+		withNative(inst, true, func() {
+			exits = logNativeExits(inst, func() {
 				if _, err := call(t, inst, c.name, c.args...); err != nil {
 					t.Fatal(err)
 				}
