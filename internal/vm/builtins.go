@@ -22,6 +22,8 @@ func inf(sign int) float64 { return math.Inf(sign) }
 
 func (r *Runtime) initObjectBuiltins() {
 	p := r.proto.object
+	// Its keys in V8's order (keyorder.go).
+	keyOrder[struct{}](r, nil, p, "Object")
 
 	r.defMethod(p, "hasOwnProperty", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		name, err := rt.toPropertyName(arg(args, 0))
@@ -2554,6 +2556,8 @@ func (r *Runtime) initErrorBuiltins() {
 		proto := r.proto.nativeErrors[k]
 		name := errorKindNames[k]
 
+		// The prototype's keys in V8's order (keyorder.go).
+		keyOrder[struct{}](r, nil, proto, name)
 		proto.setOwnRaw(atomName, Str(NewString(name)), propWritable|propConfigurable)
 		proto.setOwnRaw(atomMessage, Str(emptyString), propWritable|propConfigurable)
 
@@ -2663,6 +2667,7 @@ func (r *Runtime) initErrorBuiltins() {
 
 func (r *Runtime) initMathBuiltins() {
 	m := newObject(r.proto.object, ClassMathObject)
+	keyOrder[struct{}](r, m, nil, "Math")
 	r.defToStringTag(m, "Math")
 	r.defValue(r.global, "Math", Obj(m))
 

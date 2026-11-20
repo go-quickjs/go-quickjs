@@ -21,6 +21,7 @@ func (r *Runtime) buildTemporal() *Object {
 		return r.temporalNamespace
 	}
 	ns := newObject(r.proto.object, ClassObject)
+	keyOrder[struct{}](r, ns, nil, "Temporal")
 	r.temporalNamespace = ns
 	r.defToStringTag(ns, "Temporal")
 	r.initTemporalDuration(ns)
@@ -82,6 +83,8 @@ func (k temporalKind[T]) ctor(ns *Object, length int, make func(rt *Runtime, arg
 			return temporalObject(p, v), nil
 		}}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
+	// The keys of both in V8's order (keyorder.go).
+	keyOrder[struct{}](k.r, c, proto, k.name)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
 	// Named, so that another realm's new.target without a prototype of its
 	// own finds its realm's counterpart of this one.
@@ -264,6 +267,7 @@ func (r *Runtime) temporalNowZoned(v Value) (temporal.ZonedDateTime, error) {
 
 func (r *Runtime) initTemporalNow(ns *Object) {
 	now := newObject(r.proto.object, ClassObject)
+	keyOrder[struct{}](r, now, nil, "Temporal.Now")
 	r.defMethod(now, "instant", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		i, err := rt.temporalNowInstant()
 		if err != nil {

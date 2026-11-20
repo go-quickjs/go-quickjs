@@ -372,6 +372,9 @@ func (r *Runtime) newMemberCtor(name string, length int, proto *Object, fn Nativ
 	proto.reserveProps(8)
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	r.registerIntrinsic(name, proto)
+	// The keys of both in V8's order (keyorder.go), the prototype's from
+	// its constructor on.
+	keyOrder[struct{}](r, c, proto, name)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
 	return c
 }

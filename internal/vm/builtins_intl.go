@@ -99,6 +99,7 @@ func (r *Runtime) buildIntl() *Object {
 	// uses it.
 	r.intlFallback = NewSymbol("IntlLegacyConstructedSymbol", true)
 	intlObj := newObject(r.proto.object, ClassObject)
+	keyOrder[struct{}](r, intlObj, nil, "Intl")
 	r.intlNamespace = intlObj
 	r.defToStringTag(intlObj, "Intl")
 

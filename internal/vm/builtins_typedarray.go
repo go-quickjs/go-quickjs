@@ -863,6 +863,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 	// prototype inherits from it, which is how %TypedArray% works.
 	base := newObject(r.proto.object, ClassObject)
 	r.typedArrayProto = base
+	keyOrder[struct{}](r, nil, base, "%TypedArray%")
 	r.defineTypedArrayMethods(base)
 
 	// %TypedArray% itself is abstract: it exists to hold the shared methods and

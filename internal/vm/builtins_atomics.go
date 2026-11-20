@@ -204,6 +204,7 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 
 func (r *Runtime) initAtomicsBuiltins() {
 	a := newObject(r.proto.object, ClassObject)
+	keyOrder[struct{}](r, a, nil, "Atomics")
 	r.defValue(r.global, "Atomics", Obj(a))
 	r.defToStringTag(a, "Atomics")
 

@@ -871,6 +871,7 @@ func (r *Runtime) initProxyBuiltins() {
 
 func (r *Runtime) initReflectBuiltins() {
 	rf := newObject(r.proto.object, ClassObject)
+	keyOrder[struct{}](r, rf, nil, "Reflect")
 	r.defValue(r.global, "Reflect", Obj(rf))
 	r.defToStringTag(rf, "Reflect")
 

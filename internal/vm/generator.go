@@ -531,6 +531,7 @@ func (r *Runtime) instanceProtoFor(fn *bytecode.Function) *Object {
 func (r *Runtime) initGeneratorBuiltins() {
 	r.proto.generator = newObject(r.proto.iterator, ClassObject)
 	p := r.proto.generator
+	keyOrder[struct{}](r, p, nil, "%GeneratorPrototype%")
 
 	next := r.defMethod(p, "next", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		g, err := rt.generatorOf(this, "Generator.prototype.next")
@@ -626,6 +627,7 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 
 	r.proto.asyncGenerator = newObject(r.proto.asyncIterator, ClassObject)
 	p := r.proto.asyncGenerator
+	keyOrder[struct{}](r, p, nil, "%AsyncGeneratorPrototype%")
 
 	drive := func(mode resumeMode) NativeFunc {
 		return func(rt *Runtime, this Value, args []Value) (Value, error) {

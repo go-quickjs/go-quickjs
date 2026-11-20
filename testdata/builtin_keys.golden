@@ -1,0 +1,1534 @@
+{
+ "Object": [
+  "length",
+  "name",
+  "prototype",
+  "assign",
+  "getOwnPropertyDescriptor",
+  "getOwnPropertyDescriptors",
+  "getOwnPropertyNames",
+  "getOwnPropertySymbols",
+  "hasOwn",
+  "is",
+  "preventExtensions",
+  "seal",
+  "create",
+  "defineProperties",
+  "defineProperty",
+  "freeze",
+  "getPrototypeOf",
+  "setPrototypeOf",
+  "isExtensible",
+  "isFrozen",
+  "isSealed",
+  "keys",
+  "entries",
+  "fromEntries",
+  "values",
+  "groupBy"
+ ],
+ "Object.prototype": [
+  "constructor",
+  "__defineGetter__",
+  "__defineSetter__",
+  "hasOwnProperty",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toString",
+  "valueOf",
+  "__proto__",
+  "toLocaleString"
+ ],
+ "Function": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "Function.prototype": [
+  "length",
+  "name",
+  "constructor",
+  "apply",
+  "bind",
+  "call",
+  "toString",
+  "arguments",
+  "caller",
+  "Symbol(Symbol.hasInstance)"
+ ],
+ "Array": [
+  "length",
+  "name",
+  "prototype",
+  "isArray",
+  "from",
+  "fromAsync",
+  "of",
+  "Symbol(Symbol.species)"
+ ],
+ "Array.prototype": [
+  "length",
+  "constructor",
+  "at",
+  "concat",
+  "copyWithin",
+  "fill",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "lastIndexOf",
+  "pop",
+  "push",
+  "reverse",
+  "shift",
+  "unshift",
+  "slice",
+  "sort",
+  "splice",
+  "includes",
+  "indexOf",
+  "join",
+  "keys",
+  "entries",
+  "values",
+  "forEach",
+  "filter",
+  "flat",
+  "flatMap",
+  "map",
+  "every",
+  "some",
+  "reduce",
+  "reduceRight",
+  "toReversed",
+  "toSorted",
+  "toSpliced",
+  "with",
+  "toLocaleString",
+  "toString",
+  "Symbol(Symbol.iterator)",
+  "Symbol(Symbol.unscopables)"
+ ],
+ "Number": [
+  "length",
+  "name",
+  "prototype",
+  "isFinite",
+  "isInteger",
+  "isNaN",
+  "isSafeInteger",
+  "parseFloat",
+  "parseInt",
+  "MAX_VALUE",
+  "MIN_VALUE",
+  "NaN",
+  "NEGATIVE_INFINITY",
+  "POSITIVE_INFINITY",
+  "MAX_SAFE_INTEGER",
+  "MIN_SAFE_INTEGER",
+  "EPSILON"
+ ],
+ "Number.prototype": [
+  "constructor",
+  "toExponential",
+  "toFixed",
+  "toPrecision",
+  "toString",
+  "valueOf",
+  "toLocaleString"
+ ],
+ "Boolean": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "Boolean.prototype": [
+  "constructor",
+  "toString",
+  "valueOf"
+ ],
+ "String": [
+  "length",
+  "name",
+  "prototype",
+  "fromCharCode",
+  "fromCodePoint",
+  "raw"
+ ],
+ "String.prototype": [
+  "length",
+  "constructor",
+  "anchor",
+  "at",
+  "big",
+  "blink",
+  "bold",
+  "charAt",
+  "charCodeAt",
+  "codePointAt",
+  "concat",
+  "endsWith",
+  "fontcolor",
+  "fontsize",
+  "fixed",
+  "includes",
+  "indexOf",
+  "isWellFormed",
+  "italics",
+  "lastIndexOf",
+  "link",
+  "localeCompare",
+  "match",
+  "matchAll",
+  "normalize",
+  "padEnd",
+  "padStart",
+  "repeat",
+  "replace",
+  "replaceAll",
+  "search",
+  "slice",
+  "small",
+  "split",
+  "strike",
+  "sub",
+  "substr",
+  "substring",
+  "sup",
+  "startsWith",
+  "toString",
+  "toWellFormed",
+  "trim",
+  "trimStart",
+  "trimLeft",
+  "trimEnd",
+  "trimRight",
+  "toLocaleLowerCase",
+  "toLocaleUpperCase",
+  "toLowerCase",
+  "toUpperCase",
+  "valueOf",
+  "Symbol(Symbol.iterator)"
+ ],
+ "Symbol": [
+  "length",
+  "name",
+  "prototype",
+  "for",
+  "keyFor",
+  "asyncIterator",
+  "hasInstance",
+  "isConcatSpreadable",
+  "iterator",
+  "match",
+  "matchAll",
+  "replace",
+  "search",
+  "species",
+  "split",
+  "toPrimitive",
+  "toStringTag",
+  "unscopables",
+  "dispose",
+  "asyncDispose"
+ ],
+ "Symbol.prototype": [
+  "constructor",
+  "toString",
+  "valueOf",
+  "description",
+  "Symbol(Symbol.toStringTag)",
+  "Symbol(Symbol.toPrimitive)"
+ ],
+ "Date": [
+  "length",
+  "name",
+  "prototype",
+  "now",
+  "parse",
+  "UTC"
+ ],
+ "Date.UTC": [
+  "length",
+  "name"
+ ],
+ "Date.prototype": [
+  "constructor",
+  "toString",
+  "toDateString",
+  "toTimeString",
+  "toISOString",
+  "toUTCString",
+  "toGMTString",
+  "getDate",
+  "setDate",
+  "getDay",
+  "getFullYear",
+  "setFullYear",
+  "getHours",
+  "setHours",
+  "getMilliseconds",
+  "setMilliseconds",
+  "getMinutes",
+  "setMinutes",
+  "getMonth",
+  "setMonth",
+  "getSeconds",
+  "setSeconds",
+  "getTime",
+  "setTime",
+  "getTimezoneOffset",
+  "getUTCDate",
+  "setUTCDate",
+  "getUTCDay",
+  "getUTCFullYear",
+  "setUTCFullYear",
+  "getUTCHours",
+  "setUTCHours",
+  "getUTCMilliseconds",
+  "setUTCMilliseconds",
+  "getUTCMinutes",
+  "setUTCMinutes",
+  "getUTCMonth",
+  "setUTCMonth",
+  "getUTCSeconds",
+  "setUTCSeconds",
+  "valueOf",
+  "getYear",
+  "setYear",
+  "toJSON",
+  "toLocaleString",
+  "toLocaleDateString",
+  "toLocaleTimeString",
+  "toTemporalInstant",
+  "Symbol(Symbol.toPrimitive)"
+ ],
+ "Promise": [
+  "length",
+  "name",
+  "prototype",
+  "all",
+  "allSettled",
+  "any",
+  "race",
+  "resolve",
+  "reject",
+  "withResolvers",
+  "try",
+  "Symbol(Symbol.species)"
+ ],
+ "Promise.prototype": [
+  "constructor",
+  "then",
+  "catch",
+  "finally",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "RegExp": [
+  "length",
+  "name",
+  "prototype",
+  "input",
+  "$_",
+  "lastMatch",
+  "$&",
+  "lastParen",
+  "$+",
+  "leftContext",
+  "$`",
+  "rightContext",
+  "$'",
+  "$1",
+  "$2",
+  "$3",
+  "$4",
+  "$5",
+  "$6",
+  "$7",
+  "$8",
+  "$9",
+  "escape",
+  "Symbol(Symbol.species)"
+ ],
+ "RegExp.prototype": [
+  "constructor",
+  "exec",
+  "dotAll",
+  "flags",
+  "global",
+  "hasIndices",
+  "ignoreCase",
+  "multiline",
+  "source",
+  "sticky",
+  "unicode",
+  "unicodeSets",
+  "compile",
+  "toString",
+  "test",
+  "Symbol(Symbol.match)",
+  "Symbol(Symbol.matchAll)",
+  "Symbol(Symbol.replace)",
+  "Symbol(Symbol.search)",
+  "Symbol(Symbol.split)"
+ ],
+ "Error": [
+  "length",
+  "name",
+  "prototype",
+  "captureStackTrace",
+  "prepareStackTrace",
+  "isError",
+  "stackTraceLimit"
+ ],
+ "Error.prototype": [
+  "constructor",
+  "name",
+  "message",
+  "toString"
+ ],
+ "AggregateError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "AggregateError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "EvalError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "EvalError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "RangeError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "RangeError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "ReferenceError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "ReferenceError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "SyntaxError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "SyntaxError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "TypeError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "TypeError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "URIError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "URIError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "SuppressedError": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "SuppressedError.prototype": [
+  "constructor",
+  "name",
+  "message"
+ ],
+ "JSON": [
+  "parse",
+  "stringify",
+  "rawJSON",
+  "isRawJSON",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Math": [
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atanh",
+  "atan2",
+  "ceil",
+  "cbrt",
+  "expm1",
+  "clz32",
+  "cos",
+  "cosh",
+  "exp",
+  "floor",
+  "f16round",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "random",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc",
+  "E",
+  "LN10",
+  "LN2",
+  "LOG10E",
+  "LOG2E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl": [
+  "getCanonicalLocales",
+  "supportedValuesOf",
+  "DateTimeFormat",
+  "NumberFormat",
+  "Collator",
+  "PluralRules",
+  "RelativeTimeFormat",
+  "ListFormat",
+  "Locale",
+  "DisplayNames",
+  "Segmenter",
+  "DurationFormat",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.DateTimeFormat": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.DateTimeFormat.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "formatToParts",
+  "format",
+  "formatRange",
+  "formatRangeToParts",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.NumberFormat": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.NumberFormat.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "formatToParts",
+  "format",
+  "formatRange",
+  "formatRangeToParts",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.Collator": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.Collator.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "compare",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.PluralRules": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.PluralRules.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "select",
+  "selectRange",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.RelativeTimeFormat": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.RelativeTimeFormat.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "format",
+  "formatToParts",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.ListFormat": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.ListFormat.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "format",
+  "formatToParts",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.Locale": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "Intl.Locale.prototype": [
+  "constructor",
+  "toString",
+  "maximize",
+  "minimize",
+  "language",
+  "script",
+  "region",
+  "baseName",
+  "calendar",
+  "caseFirst",
+  "collation",
+  "firstDayOfWeek",
+  "hourCycle",
+  "numeric",
+  "numberingSystem",
+  "getCalendars",
+  "getCollations",
+  "getHourCycles",
+  "getNumberingSystems",
+  "getTimeZones",
+  "getTextInfo",
+  "getWeekInfo",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.DisplayNames": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.DisplayNames.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "of",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.Segmenter": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.Segmenter.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "segment",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Intl.DurationFormat": [
+  "length",
+  "name",
+  "prototype",
+  "supportedLocalesOf"
+ ],
+ "Intl.DurationFormat.prototype": [
+  "constructor",
+  "resolvedOptions",
+  "format",
+  "formatToParts",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "ArrayBuffer": [
+  "length",
+  "name",
+  "prototype",
+  "isView",
+  "Symbol(Symbol.species)"
+ ],
+ "ArrayBuffer.prototype": [
+  "constructor",
+  "byteLength",
+  "slice",
+  "maxByteLength",
+  "resizable",
+  "resize",
+  "transfer",
+  "transferToFixedLength",
+  "detached",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "SharedArrayBuffer": [
+  "length",
+  "name",
+  "prototype",
+  "Symbol(Symbol.species)"
+ ],
+ "SharedArrayBuffer.prototype": [
+  "constructor",
+  "byteLength",
+  "slice",
+  "maxByteLength",
+  "growable",
+  "grow",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Atomics": [
+  "load",
+  "store",
+  "add",
+  "sub",
+  "and",
+  "or",
+  "xor",
+  "exchange",
+  "compareExchange",
+  "isLockFree",
+  "wait",
+  "waitAsync",
+  "notify",
+  "pause",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Uint8Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT",
+  "fromBase64",
+  "fromHex"
+ ],
+ "Uint8Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT",
+  "toBase64",
+  "setFromBase64",
+  "toHex",
+  "setFromHex"
+ ],
+ "Int8Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Int8Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint16Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint16Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Int16Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Int16Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint32Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint32Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Int32Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Int32Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "BigUint64Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "BigUint64Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "BigInt64Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "BigInt64Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint8ClampedArray": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Uint8ClampedArray.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float32Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float32Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float64Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float64Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float16Array": [
+  "length",
+  "name",
+  "prototype",
+  "BYTES_PER_ELEMENT"
+ ],
+ "Float16Array.prototype": [
+  "constructor",
+  "BYTES_PER_ELEMENT"
+ ],
+ "DataView": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "DataView.prototype": [
+  "constructor",
+  "buffer",
+  "byteLength",
+  "byteOffset",
+  "getInt8",
+  "setInt8",
+  "getUint8",
+  "setUint8",
+  "getInt16",
+  "setInt16",
+  "getUint16",
+  "setUint16",
+  "getInt32",
+  "setInt32",
+  "getUint32",
+  "setUint32",
+  "getFloat16",
+  "setFloat16",
+  "getFloat32",
+  "setFloat32",
+  "getFloat64",
+  "setFloat64",
+  "getBigInt64",
+  "setBigInt64",
+  "getBigUint64",
+  "setBigUint64",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Map": [
+  "length",
+  "name",
+  "prototype",
+  "groupBy",
+  "Symbol(Symbol.species)"
+ ],
+ "Map.prototype": [
+  "constructor",
+  "get",
+  "set",
+  "has",
+  "delete",
+  "clear",
+  "entries",
+  "forEach",
+  "keys",
+  "size",
+  "values",
+  "getOrInsert",
+  "getOrInsertComputed",
+  "Symbol(Symbol.toStringTag)",
+  "Symbol(Symbol.iterator)"
+ ],
+ "BigInt": [
+  "length",
+  "name",
+  "prototype",
+  "asUintN",
+  "asIntN"
+ ],
+ "BigInt.prototype": [
+  "constructor",
+  "toLocaleString",
+  "toString",
+  "valueOf",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Set": [
+  "length",
+  "name",
+  "prototype",
+  "Symbol(Symbol.species)"
+ ],
+ "Set.prototype": [
+  "constructor",
+  "has",
+  "add",
+  "delete",
+  "difference",
+  "clear",
+  "entries",
+  "forEach",
+  "intersection",
+  "isSubsetOf",
+  "isSupersetOf",
+  "isDisjointFrom",
+  "size",
+  "symmetricDifference",
+  "union",
+  "values",
+  "keys",
+  "Symbol(Symbol.toStringTag)",
+  "Symbol(Symbol.iterator)"
+ ],
+ "Iterator": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "concat"
+ ],
+ "Iterator.prototype": [
+  "constructor",
+  "reduce",
+  "toArray",
+  "forEach",
+  "some",
+  "every",
+  "find",
+  "map",
+  "filter",
+  "take",
+  "drop",
+  "flatMap",
+  "Symbol(Symbol.iterator)",
+  "Symbol(Symbol.toStringTag)",
+  "Symbol(Symbol.dispose)"
+ ],
+ "WeakMap": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "WeakMap.prototype": [
+  "constructor",
+  "delete",
+  "get",
+  "set",
+  "has",
+  "getOrInsert",
+  "getOrInsertComputed",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "WeakSet": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "WeakSet.prototype": [
+  "constructor",
+  "delete",
+  "has",
+  "add",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Proxy": [
+  "length",
+  "name",
+  "revocable"
+ ],
+ "Reflect": [
+  "defineProperty",
+  "deleteProperty",
+  "apply",
+  "construct",
+  "get",
+  "getOwnPropertyDescriptor",
+  "getPrototypeOf",
+  "has",
+  "isExtensible",
+  "ownKeys",
+  "preventExtensions",
+  "set",
+  "setPrototypeOf",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "FinalizationRegistry": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "FinalizationRegistry.prototype": [
+  "constructor",
+  "register",
+  "unregister",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "WeakRef": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "WeakRef.prototype": [
+  "constructor",
+  "deref",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "DisposableStack": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "DisposableStack.prototype": [
+  "constructor",
+  "use",
+  "dispose",
+  "adopt",
+  "defer",
+  "move",
+  "disposed",
+  "Symbol(Symbol.dispose)",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "AsyncDisposableStack": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "AsyncDisposableStack.prototype": [
+  "constructor",
+  "use",
+  "disposeAsync",
+  "adopt",
+  "defer",
+  "move",
+  "disposed",
+  "Symbol(Symbol.asyncDispose)",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal": [
+  "Now",
+  "PlainDate",
+  "PlainTime",
+  "PlainDateTime",
+  "ZonedDateTime",
+  "Duration",
+  "Instant",
+  "PlainYearMonth",
+  "PlainMonthDay",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.Now": [
+  "instant",
+  "timeZoneId",
+  "plainDateTimeISO",
+  "zonedDateTimeISO",
+  "plainDateISO",
+  "plainTimeISO",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.PlainDate": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.PlainDate.prototype": [
+  "constructor",
+  "era",
+  "eraYear",
+  "calendarId",
+  "year",
+  "month",
+  "monthCode",
+  "day",
+  "dayOfWeek",
+  "dayOfYear",
+  "weekOfYear",
+  "yearOfWeek",
+  "daysInWeek",
+  "daysInMonth",
+  "daysInYear",
+  "monthsInYear",
+  "inLeapYear",
+  "toPlainYearMonth",
+  "toPlainMonthDay",
+  "add",
+  "subtract",
+  "with",
+  "withCalendar",
+  "until",
+  "since",
+  "equals",
+  "toPlainDateTime",
+  "toZonedDateTime",
+  "toString",
+  "toLocaleString",
+  "toJSON",
+  "valueOf",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.PlainTime": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.PlainTime.prototype": [
+  "constructor",
+  "hour",
+  "minute",
+  "second",
+  "millisecond",
+  "microsecond",
+  "nanosecond",
+  "add",
+  "subtract",
+  "with",
+  "until",
+  "since",
+  "round",
+  "equals",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.PlainDateTime": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.PlainDateTime.prototype": [
+  "constructor",
+  "calendarId",
+  "era",
+  "eraYear",
+  "year",
+  "month",
+  "monthCode",
+  "day",
+  "hour",
+  "minute",
+  "second",
+  "millisecond",
+  "microsecond",
+  "nanosecond",
+  "dayOfWeek",
+  "dayOfYear",
+  "weekOfYear",
+  "yearOfWeek",
+  "daysInWeek",
+  "daysInMonth",
+  "daysInYear",
+  "monthsInYear",
+  "inLeapYear",
+  "with",
+  "withCalendar",
+  "withPlainTime",
+  "add",
+  "subtract",
+  "until",
+  "since",
+  "round",
+  "equals",
+  "toLocaleString",
+  "toJSON",
+  "toString",
+  "valueOf",
+  "toZonedDateTime",
+  "toPlainDate",
+  "toPlainTime",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.ZonedDateTime": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.ZonedDateTime.prototype": [
+  "constructor",
+  "timeZoneId",
+  "calendarId",
+  "era",
+  "eraYear",
+  "year",
+  "month",
+  "monthCode",
+  "day",
+  "hour",
+  "minute",
+  "second",
+  "millisecond",
+  "microsecond",
+  "nanosecond",
+  "epochMilliseconds",
+  "epochNanoseconds",
+  "dayOfWeek",
+  "dayOfYear",
+  "weekOfYear",
+  "yearOfWeek",
+  "hoursInDay",
+  "daysInWeek",
+  "daysInMonth",
+  "daysInYear",
+  "monthsInYear",
+  "inLeapYear",
+  "offsetNanoseconds",
+  "offset",
+  "with",
+  "withCalendar",
+  "withPlainTime",
+  "withTimeZone",
+  "add",
+  "subtract",
+  "until",
+  "since",
+  "round",
+  "equals",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "startOfDay",
+  "getTimeZoneTransition",
+  "toInstant",
+  "toPlainDate",
+  "toPlainTime",
+  "toPlainDateTime",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.Duration": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.Duration.prototype": [
+  "constructor",
+  "years",
+  "months",
+  "weeks",
+  "days",
+  "hours",
+  "minutes",
+  "seconds",
+  "milliseconds",
+  "microseconds",
+  "nanoseconds",
+  "sign",
+  "blank",
+  "with",
+  "negated",
+  "abs",
+  "add",
+  "subtract",
+  "round",
+  "total",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.Instant": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "fromEpochMilliseconds",
+  "fromEpochNanoseconds",
+  "compare"
+ ],
+ "Temporal.Instant.prototype": [
+  "constructor",
+  "epochMilliseconds",
+  "epochNanoseconds",
+  "add",
+  "subtract",
+  "until",
+  "since",
+  "round",
+  "equals",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "toZonedDateTimeISO",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.PlainYearMonth": [
+  "length",
+  "name",
+  "prototype",
+  "from",
+  "compare"
+ ],
+ "Temporal.PlainYearMonth.prototype": [
+  "constructor",
+  "calendarId",
+  "era",
+  "eraYear",
+  "year",
+  "month",
+  "monthCode",
+  "daysInYear",
+  "daysInMonth",
+  "monthsInYear",
+  "inLeapYear",
+  "with",
+  "add",
+  "subtract",
+  "until",
+  "since",
+  "equals",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "toPlainDate",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "Temporal.PlainMonthDay": [
+  "length",
+  "name",
+  "prototype",
+  "from"
+ ],
+ "Temporal.PlainMonthDay.prototype": [
+  "constructor",
+  "calendarId",
+  "monthCode",
+  "day",
+  "with",
+  "equals",
+  "toLocaleString",
+  "toString",
+  "toJSON",
+  "valueOf",
+  "toPlainDate",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%TypedArray%": [
+  "length",
+  "name",
+  "prototype",
+  "of",
+  "from",
+  "Symbol(Symbol.species)"
+ ],
+ "%TypedArray%.prototype": [
+  "constructor",
+  "buffer",
+  "byteLength",
+  "byteOffset",
+  "length",
+  "entries",
+  "keys",
+  "values",
+  "at",
+  "copyWithin",
+  "every",
+  "fill",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "forEach",
+  "includes",
+  "indexOf",
+  "join",
+  "lastIndexOf",
+  "map",
+  "reverse",
+  "reduce",
+  "reduceRight",
+  "set",
+  "slice",
+  "some",
+  "sort",
+  "subarray",
+  "toReversed",
+  "toSorted",
+  "with",
+  "toLocaleString",
+  "toString",
+  "Symbol(Symbol.toStringTag)",
+  "Symbol(Symbol.iterator)"
+ ],
+ "%ArrayIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%MapIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%SetIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%StringIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%RegExpStringIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%GeneratorFunction%": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "%GeneratorFunction%.prototype": [
+  "prototype",
+  "constructor",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%GeneratorPrototype%": [
+  "constructor",
+  "next",
+  "return",
+  "throw",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%AsyncFunction%": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "%AsyncFunction%.prototype": [
+  "constructor",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%AsyncGeneratorFunction%": [
+  "length",
+  "name",
+  "prototype"
+ ],
+ "%AsyncGeneratorFunction%.prototype": [
+  "prototype",
+  "constructor",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%AsyncGeneratorPrototype%": [
+  "constructor",
+  "next",
+  "return",
+  "throw",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%AsyncIteratorPrototype%": [
+  "Symbol(Symbol.asyncIterator)",
+  "Symbol(Symbol.asyncDispose)"
+ ],
+ "%IteratorHelperPrototype%": [
+  "next",
+  "return",
+  "Symbol(Symbol.toStringTag)"
+ ],
+ "%WrapForValidIteratorPrototype%": [
+  "next",
+  "return"
+ ],
+ "%SegmentsPrototype%": [
+  "containing",
+  "Symbol(Symbol.iterator)"
+ ],
+ "%SegmentIteratorPrototype%": [
+  "next",
+  "Symbol(Symbol.toStringTag)"
+ ]
+}

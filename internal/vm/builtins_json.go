@@ -38,6 +38,7 @@ func (e *jsonEncoder) encodeBigIntWrapper(buf []byte, v Value) ([]byte, bool, er
 
 func (r *Runtime) initJSONBuiltins() {
 	j := newObject(r.proto.object, ClassJSONObject)
+	keyOrder[struct{}](r, j, nil, "JSON")
 	r.defValue(r.global, "JSON", Obj(j))
 	r.defToStringTag(j, "JSON")
 
