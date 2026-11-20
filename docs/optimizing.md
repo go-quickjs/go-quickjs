@@ -196,8 +196,9 @@ code at fixed addresses modulo 4 KB (the op cache's sets) and the Go
 runtime's hot variables at fixed offsets in their cache lines, whatever a
 change does around them. `internal/vm/layoutlock.txt` names each anchor
 and its target for each configuration -- windows/amd64 and linux/amd64,
-plain and with the JIT, for the toolchain the targets were recorded with
--- and `internal/cmd/layoutpad`, which `go generate ./internal/vm` runs,
+plain, with the JIT, with the WebAssembly engine and with both, for the
+toolchain the targets were recorded with -- and `internal/cmd/layoutpad`,
+which `go generate ./internal/vm` runs,
 builds `internal/cmd/v8bench` as the targets were recorded and sizes the
 pads until every anchor is at its target. `TestLayoutLock` fails when one
 has drifted.
@@ -208,7 +209,8 @@ measurement: the timing of the register interpreter across placements
 decides them, and a target it shows to be a bad one is recorded anew.
 
 What it pins, and how. Each lever is a constant of
-`layoutpad_GOOS_GOARCH.go` or `layoutpad_jit_GOOS_GOARCH.go`; every pad is
+`layoutpad_GOOS_GOARCH.go`, `layoutpad_jit_GOOS_GOARCH.go`,
+`layoutpad_wasm_GOOS_GOARCH.go` or `layoutpad_jit_wasm_GOOS_GOARCH.go`; every pad is
 byte stores, 7 bytes of code each, so that it fills any whole number of
 32-byte slots.
 
@@ -348,6 +350,20 @@ What each lever cannot move:
   vm newly imports comes after them. In another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
+- **The WebAssembly engine.** A build with it is laid out anew: the
+  functions only the bridge reaches (`wasm/wasmjs`'s calls of vm) are
+  linked there, which moves vm's code against itself, and the runtime's
+  code and data move too, by different amounts (`memmove` 192 bytes,
+  `growslice` 96, a 16-byte variable more before `writeBarrier`). So
+  the lock has a configuration for `v8bench` built with `quickjs_wasm`,
+  and with `quickjs_jit,quickjs_wasm` (`internal/cmd/v8bench/wasm.go`
+  installs the namespace in every runtime, as qjs does), whose anchors
+  in vm have the targets of the build without the engine: vm's hot code
+  is where it is without it, and only the runtime around it differs.
+  Without them, `json_stringify_unicode` with the JIT took 50 ns in the
+  WebAssembly build where it took 37 without, the same code at other
+  offsets. A data target such a build cannot reach is the nearest one
+  that holds (`layoutlock.txt` says which).
 - **Assembly** is laid out after the closures of the named functions and
   before vm's `init` and the generics' closures, in file order. The
   register interpreter's native handlers are one assembly block

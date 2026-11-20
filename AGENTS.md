@@ -140,7 +140,9 @@ concurrently.
   assembly pad sorted before it: package vm's assembly is laid out after
   its closures, so that any closure's growth had moved it), and the Go
   runtime's `mheap_`, `writeBarrier` and `gcController` -- at fixed offsets modulo
-  4 KB and 64 bytes in a `v8bench` build. After a change to package
+  4 KB and 64 bytes in a `v8bench` build, plain, with the JIT, with the
+  WebAssembly engine (`-tags quickjs_wasm`, which installs the namespace as
+  qjs does) and with both. After a change to package
   vm, run `go generate ./internal/vm` (or `go run ./internal/cmd/layoutpad`)
   and commit the pads; `TestLayoutLock` (internal/vm/layoutlock_test.go,
   skipped under `-short` and with another toolchain than the targets')
@@ -270,7 +272,8 @@ Do not manually edit generated files or their binary companions:
   `internal/regexp/aa_layoutpad.go`, `internal/regexp/layoutpad_*.go`,
   `internal/jit/aa_layoutpad.go` and `internal/jit/layoutpad_*.go`,
   the layout lock's pads and the constants that size them for each
-  configuration,
+  configuration -- plain, with the JIT, with the WebAssembly engine and
+  with both, on Windows and Linux amd64 --
   written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.
   `go generate ./internal/vm` runs it last, after the generators above,
   since it measures what they write; `TestLayoutLock` fails while an anchor

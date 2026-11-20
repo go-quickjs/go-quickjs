@@ -14,14 +14,15 @@ import (
 // moved an anchor of layoutlock.txt -- the hot code's, the Go runtime's hot
 // data's -- away from its target, which go generate ./internal/vm puts it
 // back to. It runs internal/cmd/layoutpad -check, which builds
-// internal/cmd/v8bench plain and with the JIT as the targets were measured,
-// some 20 seconds, under a few from the build cache. It is skipped under
+// internal/cmd/v8bench as the targets were measured -- plain, with the JIT,
+// with the WebAssembly engine and with both -- some 40 seconds, under a few
+// from the build cache. It is skipped under
 // -short, and before it builds anything where the toolchain is not the
 // one layoutlock.txt names or the platform has no targets there: the
 // targets are one toolchain's layout on each platform.
 func TestLayoutLock(t *testing.T) {
 	if testing.Short() {
-		t.Skip("builds internal/cmd/v8bench twice")
+		t.Skip("builds internal/cmd/v8bench four times")
 	}
 	b, err := os.ReadFile("layoutlock.txt")
 	if err != nil {

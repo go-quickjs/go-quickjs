@@ -12,7 +12,8 @@
 //
 // The levers, each a pad in a file internal/vm sorts where its gap must
 // open, its size a constant of the build's configuration
-// (layoutpad_GOOS_GOARCH.go, layoutpad_jit_GOOS_GOARCH.go), all of them
+// (layoutpad_GOOS_GOARCH.go, layoutpad_jit_GOOS_GOARCH.go and the wasm
+// configurations' files), all of them
 // byte stores to a variable never read, 7 bytes of code a store, so that a
 // pad fills any whole number of 32-byte slots:
 //
@@ -60,12 +61,16 @@
 // bytes takes a pad 4,064 bytes longer.
 //
 // The targets (internal/vm/layoutlock.txt) give, for each configuration --
-// GOOS, GOARCH and with the JIT or not -- each lever's anchor, the symbol
-// right after its gap, and the address the anchor must have modulo 4,096
-// for code and 64 for data, in a build of internal/cmd/v8bench made as
+// GOOS, GOARCH, and plain, with the JIT (jit), with the WebAssembly engine
+// (wasm) or with both (jit+wasm) -- each lever's anchor, the symbol right
+// after its gap, and the address the anchor must have modulo 4,096 for code
+// and 64 for data, in a build of internal/cmd/v8bench made as
 //
-//	CGO_ENABLED=0 GOAMD64=v1 go build -buildvcs=false [-tags quickjs_jit] ./internal/cmd/v8bench
+//	CGO_ENABLED=0 GOAMD64=v1 go build -buildvcs=false [-tags quickjs_jit,quickjs_wasm] ./internal/cmd/v8bench
 //
+// A configuration's files are built only in its builds:
+// layoutpad_GOOS_GOARCH.go plain, layoutpad_jit_..., layoutpad_wasm_...
+// and layoutpad_jit_wasm_..., each constrained by both tags.
 // with the toolchain the targets name; that is how the placements tool
 // builds too. A lever without an anchor in a configuration is left out of
 // its builds, and a generic pad no configuration anchors is not written.
@@ -233,19 +238,63 @@ func leverByName(name string) (lever, bool) {
 	return lever{}, false
 }
 
-// A config is one build the targets pin.
+// A config is one build the targets pin: plain, with the JIT, with the
+// WebAssembly engine (v8bench's quickjs_wasm build, which installs its
+// namespace as qjs does), or with both.
 type config struct {
 	goos, goarch string
-	jit          bool
+	jit, wasm    bool
 	anchors      []anchor
 }
 
-func (c *config) String() string {
-	s := c.goos + "/" + c.goarch
+// kinds are the configurations' names in the targets file, by jit and wasm.
+var kinds = map[[2]bool]string{
+	{false, false}: "plain",
+	{true, false}:  "jit",
+	{false, true}:  "wasm",
+	{true, true}:   "jit+wasm",
+}
+
+func (c *config) kind() string { return kinds[[2]bool{c.jit, c.wasm}] }
+
+func (c *config) String() string { return c.goos + "/" + c.goarch + " " + c.kind() }
+
+// tags is the build tags of c's builds, for go build's -tags.
+func (c *config) tags() string {
+	var t []string
 	if c.jit {
-		return s + " jit"
+		t = append(t, "quickjs_jit")
 	}
-	return s + " plain"
+	if c.wasm {
+		t = append(t, "quickjs_wasm")
+	}
+	return strings.Join(t, ",")
+}
+
+// buildLine is the build constraint of c's generated files, which no other
+// configuration of the platform builds.
+func (c *config) buildLine() string {
+	jit, wasm := "quickjs_jit", "quickjs_wasm"
+	if !c.jit {
+		jit = "!" + jit
+	}
+	if !c.wasm {
+		wasm = "!" + wasm
+	}
+	return "//go:build " + jit + " && " + wasm + "\n\n"
+}
+
+// filePrefix is what c's files are named with before the platform:
+// layoutpad_jit_wasm_windows_amd64.go, say.
+func (c *config) filePrefix() string {
+	p := ""
+	if c.jit {
+		p += "jit_"
+	}
+	if c.wasm {
+		p += "wasm_"
+	}
+	return p
 }
 
 // An anchor is the symbol a lever puts at its target.
@@ -264,7 +313,7 @@ func main() {
 	check := flag.Bool("check", false, "build this machine's configurations and report anchors away from their targets; exit 1 if any is")
 	show := flag.Bool("show", false, "print each pad, the symbol after it and each anchor, for this machine's configurations")
 	record := flag.Bool("record", false, "set every configuration's targets to where its anchors are in the tree as it is")
-	only := flag.String("config", "", "only the configurations named, comma-separated, as GOOS/GOARCH/plain or GOOS/GOARCH/jit")
+	only := flag.String("config", "", "only the configurations named, comma-separated, as GOOS/GOARCH/KIND, KIND plain, jit, wasm or jit+wasm")
 	verbose := flag.Bool("v", false, "print each build's anchors away from their targets and what each lever is set to")
 	targetsPath := flag.String("targets", targetsRel, "the targets file, from the repository's root")
 	all := flag.Bool("all", false, "with -show, write the pads and set every lever of the configurations to 0 first, to see where each lands")
@@ -291,7 +340,7 @@ func main() {
 	var picked []*config
 	for _, c := range t.configs {
 		if *only != "" {
-			name := c.goos + "/" + c.goarch + "/" + map[bool]string{false: "plain", true: "jit"}[c.jit]
+			name := c.goos + "/" + c.goarch + "/" + c.kind()
 			if !slices.Contains(strings.Split(*only, ","), name) {
 				continue
 			}
@@ -456,14 +505,23 @@ func readTargets(path string) (*targets, error) {
 			}
 			t.toolchain = f[1]
 		case "config":
-			if len(f) != 3 || (f[2] != "plain" && f[2] != "jit") {
+			if len(f) != 3 {
 				return nil, bad()
 			}
 			goos, goarch, ok := strings.Cut(f[1], "/")
 			if !ok {
 				return nil, bad()
 			}
-			cur = &config{goos: goos, goarch: goarch, jit: f[2] == "jit"}
+			cur = &config{goos: goos, goarch: goarch}
+			known := false
+			for k, name := range kinds {
+				if name == f[2] {
+					cur.jit, cur.wasm, known = k[0], k[1], true
+				}
+			}
+			if !known {
+				return nil, bad()
+			}
 			t.configs = append(t.configs, cur)
 		case "anchor":
 			// anchor LEVER TARGET SYMBOL..., the symbol last: it may have spaces.
@@ -540,8 +598,8 @@ func build(c *config) (*symtab, error) {
 	defer os.RemoveAll(dir)
 	exe := filepath.Join(dir, "v8bench.exe")
 	args := []string{"build", "-buildvcs=false", "-o", exe}
-	if c.jit {
-		args = append(args, "-tags", "quickjs_jit")
+	if tags := c.tags(); tags != "" {
+		args = append(args, "-tags", tags)
 	}
 	args = append(args, "./internal/cmd/v8bench")
 	cmd := exec.Command("go", args...)
@@ -645,11 +703,7 @@ func configFile(c *config) string { return configFileIn(c, vmDir) }
 
 // configFileIn is the configuration's file in the package at dir.
 func configFileIn(c *config, dir string) string {
-	jit := ""
-	if c.jit {
-		jit = "jit_"
-	}
-	return filepath.Join(dir, "layoutpad_"+jit+c.goos+"_"+c.goarch+".go")
+	return filepath.Join(dir, "layoutpad_"+c.filePrefix()+c.goos+"_"+c.goarch+".go")
 }
 
 // configFiles are c's files: package vm's, then the outer pads', then the
@@ -666,11 +720,7 @@ func configFiles(c *config) []string {
 // JIT's assembly and before every native handlers' file
 // (native_<arch>.s first), and so laid out right before them.
 func asmFile(c *config) string {
-	jit := ""
-	if c.jit {
-		jit = "jit_"
-	}
-	return filepath.Join(vmDir, "native_a_layoutpad_"+jit+c.goos+"_"+c.goarch+".s")
+	return filepath.Join(vmDir, "native_a_layoutpad_"+c.filePrefix()+c.goos+"_"+c.goarch+".s")
 }
 
 // asmSource is c's assembly pad of n 32-byte slots, int3 bytes, or a file
@@ -678,11 +728,7 @@ func asmFile(c *config) string {
 func asmSource(c *config, n int) (string, error) {
 	var b strings.Builder
 	b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
-	if c.jit {
-		b.WriteString("//go:build quickjs_jit\n\n")
-	} else {
-		b.WriteString("//go:build !quickjs_jit\n\n")
-	}
+	b.WriteString(c.buildLine())
 	if n < 1 {
 		fmt.Fprintf(&b, "// The layout lock's assembly pad %s is left out for %s.\n", asmLever, c)
 		return b.String(), nil
@@ -737,11 +783,7 @@ func readValues(c *config) map[string]int {
 func writeValues(c *config, v map[string]int) error {
 	var b strings.Builder
 	b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
-	if c.jit {
-		b.WriteString("//go:build quickjs_jit\n\n")
-	} else {
-		b.WriteString("//go:build !quickjs_jit\n\n")
-	}
+	b.WriteString(c.buildLine())
 	fmt.Fprintf(&b, "package vm\n\n// The layout lock's levers for %s (layoutlock.txt): a pad's byte\n// stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a\n// data lever's variables.\nconst (\n", c)
 	for _, l := range levers() {
 		if vmLever(l.name) {
@@ -763,11 +805,7 @@ func writeValues(c *config, v map[string]int) error {
 	for _, o := range outers {
 		b.Reset()
 		b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
-		if c.jit {
-			b.WriteString("//go:build quickjs_jit\n\n")
-		} else {
-			b.WriteString("//go:build !quickjs_jit\n\n")
-		}
+		b.WriteString(c.buildLine())
 		fmt.Fprintf(&b, "package %s\n\n// The layout lock's lever for %s (internal/vm/layoutlock.txt): its\n// pad's byte stores, -1 for the pad left out.\nconst layoutPadN%s = %d\n", o.pkg, c, o.name, v[o.name])
 		if err := writeGo(configFileIn(c, o.dir), b.String()); err != nil {
 			return err

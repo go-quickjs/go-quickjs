@@ -95,7 +95,7 @@ func TestAsmSource(t *testing.T) {
 	if got := strings.Count(src, "QUAD $0xcccccccccccccccc"); got != 3*slot/8 {
 		t.Fatalf("%d quads, want %d", got, 3*slot/8)
 	}
-	if !strings.Contains(src, "//go:build quickjs_jit\n") || !strings.Contains(src, "TEXT ·layoutPadH(SB), NOSPLIT|NOFRAME, $0-0\n") {
+	if !strings.Contains(src, "//go:build quickjs_jit && !quickjs_wasm\n") || !strings.Contains(src, "TEXT ·layoutPadH(SB), NOSPLIT|NOFRAME, $0-0\n") {
 		t.Fatalf("source\n%s", src)
 	}
 	if src, err := asmSource(c, -1); err != nil || strings.Contains(src, "TEXT") {
@@ -106,5 +106,43 @@ func TestAsmSource(t *testing.T) {
 	}
 	if got := filepath.Base(asmFile(c)); got >= "native_amd64.s" || got <= "jit_leaffast_amd64.s" {
 		t.Fatalf("%s does not sort between the JIT's assembly and the native handlers'", got)
+	}
+}
+
+// A configuration's kind names its tags, its files and its build
+// constraint, which no other configuration of its platform builds.
+func TestConfigKinds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	src := "toolchain go1.27.3\n"
+	for _, k := range []string{"plain", "jit", "wasm", "jit+wasm"} {
+		src += "config linux/amd64 " + k + "\nanchor Q  0x00580 github.com/x/vm.(*Runtime).runReg\n"
+	}
+	if err := os.WriteFile(path, []byte(src+"config linux/amd64 wasm+jit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTargets(path); err == nil {
+		t.Fatal("read a configuration of no kind")
+	}
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tg, err := readTargets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ name, tags, file, build string }{
+		{"linux/amd64 plain", "", "layoutpad_linux_amd64.go", "//go:build !quickjs_jit && !quickjs_wasm\n\n"},
+		{"linux/amd64 jit", "quickjs_jit", "layoutpad_jit_linux_amd64.go", "//go:build quickjs_jit && !quickjs_wasm\n\n"},
+		{"linux/amd64 wasm", "quickjs_wasm", "layoutpad_wasm_linux_amd64.go", "//go:build !quickjs_jit && quickjs_wasm\n\n"},
+		{"linux/amd64 jit+wasm", "quickjs_jit,quickjs_wasm", "layoutpad_jit_wasm_linux_amd64.go", "//go:build quickjs_jit && quickjs_wasm\n\n"},
+	}
+	if len(tg.configs) != len(want) {
+		t.Fatalf("%d configurations", len(tg.configs))
+	}
+	for i, c := range tg.configs {
+		w := want[i]
+		if c.String() != w.name || c.tags() != w.tags || filepath.Base(configFile(c)) != w.file || c.buildLine() != w.build {
+			t.Errorf("%s: tags %q, file %s, %q; want %+v", c, c.tags(), filepath.Base(configFile(c)), c.buildLine(), w)
+		}
 	}
 }
