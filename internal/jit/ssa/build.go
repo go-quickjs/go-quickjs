@@ -7215,7 +7215,7 @@ func (b *builder) readVar(slot int, blk *Block) *Value {
 	case len(blk.Preds) == 0 && slot < 0:
 		// A heap's base or length at an entry, which loads it where it is
 		// read (heapRead).
-		v = b.heapStale(slot)
+		v = b.heapEntryStale(slot)
 	case len(blk.Preds) == 0 && blk.PC < 0 && slot < blk.Header.Len():
 		// A local an entry did not load, as the interpreter's liveness has
 		// it dead there (fill): the frame's, as an entry loads it.

@@ -359,15 +359,26 @@ func (b *builder) heapLoad(blk *Block, slot int) *Value {
 
 // heapMerge is heap slot's value in blk, of several predecessors whose
 // values are args: the one they all have -- or, for a loop header's phi,
-// all but the phi itself -- or else a load of the cell at blk's start,
-// where its predecessors' values all equal the cell (a call makes the
-// value stale, and is a definition): a phi of them had been moved at
-// every edge, slot to slot where they spilled, in a large function. phi
-// is the phi a read made while the predecessors were read -- one round a
-// loop -- or nil, or mark: made a load in place, its users the load's.
+// all but the phi itself -- or a phi of them; or, where a call made one
+// stale, a load of the cell at blk's start, the cell being what every
+// one of them is (a call is a definition): a phi of them all had been
+// moved at every edge after a call, slot to slot where they spilled, in a
+// large function. phi is the phi a read made while the predecessors were
+// read -- one round a loop -- or nil, or mark: made a load in place, its
+// users the load's, where one is made.
 func (b *builder) heapMerge(blk *Block, slot int, phi, mark *Value, args []*Value) *Value {
+	// One stale since an entry, with no call since, loaded at the
+	// predecessor's end: the loop an entry goes into -- by on-stack
+	// replacement, or from the start -- keeps what it loaded there, where a
+	// load at the join had been one every turn.
+	for i, a := range args {
+		if p := blk.Preds[i]; a.Op == OpUpvalueStale && a.Aux == heapAtEntry {
+			args[i] = b.heapLoad(p, slot)
+			b.found(slot, p, args[i])
+		}
+	}
 	var one *Value
-	same := true
+	same, stale := true, false
 	for _, a := range args {
 		if a == phi {
 			continue
@@ -375,20 +386,25 @@ func (b *builder) heapMerge(blk *Block, slot int, phi, mark *Value, args []*Valu
 		if one == nil {
 			one = a
 		}
-		same = same && a == one && a.Op != OpUpvalueStale
+		same = same && a == one
+		stale = stale || a.Op == OpUpvalueStale
 	}
-	if same && one != nil {
-		if phi != nil && phi != mark {
-			// A phi of itself and one value: trivial, which Optimize takes
-			// away (trivialPhi).
-			phi.Args = b.f.refsOf(len(args))[:0]
-			for _, a := range args {
-				a.Uses++
-				phi.Args = append(phi.Args, a)
-			}
-			return phi
+	if !stale && one != nil && (!same || phi != nil && phi != mark) {
+		// One value, or several none of them a call's: a phi, trivial
+		// where the others are the phi itself (Optimize takes it away).
+		if same && (phi == nil || phi == mark) {
+			return one
 		}
-		return one
+		if phi == nil || phi == mark {
+			phi = b.newPhiID(blk, mark.ID)
+		}
+		phi.Type = Ptr
+		phi.Args = b.f.refsOf(len(args))[:0]
+		for _, a := range args {
+			a.Uses++
+			phi.Args = append(phi.Args, a)
+		}
+		return phi
 	}
 	s := -2 - slot
 	op := OpHeapBase
@@ -426,14 +442,23 @@ func (b *builder) heapMerge(blk *Block, slot int, phi, mark *Value, args []*Valu
 	return v
 }
 
-// heapStale is heap slot's stale marker, an OpUpvalueStale of the slot.
-func (b *builder) heapStale(slot int) *Value {
-	s := -2 - slot
+// heapStale is heap slot's stale marker after a call, an OpUpvalueStale
+// of the slot; heapEntryStale its marker at an entry, of Aux heapAtEntry,
+// which a join loads where its predecessor ends (heapMerge).
+func (b *builder) heapStale(slot int) *Value { return b.heapMark(slot, 0) }
+
+func (b *builder) heapEntryStale(slot int) *Value { return b.heapMark(slot, heapAtEntry) }
+
+// heapAtEntry is the Aux of a heap's marker at an entry.
+const heapAtEntry = 1
+
+func (b *builder) heapMark(slot, aux int) *Value {
+	s := 2*(-2-slot) + aux
 	for len(b.heapMarks) <= s {
 		b.heapMarks = append(b.heapMarks, nil)
 	}
 	if b.heapMarks[s] == nil {
-		b.heapMarks[s] = b.f.alloc(Value{Op: OpUpvalueStale, Type: Ptr, Index: slot})
+		b.heapMarks[s] = b.f.alloc(Value{Op: OpUpvalueStale, Type: Ptr, Index: slot, Aux: aux})
 	}
 	return b.heapMarks[s]
 }
