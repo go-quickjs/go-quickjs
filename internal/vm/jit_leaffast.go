@@ -90,6 +90,16 @@ func (r *Runtime) jitGoAppend(ctx *abi.Context) bool {
 	// A loop's string builder's s += x (jitAppend): what GoAdd takes,
 	// a string's grown in place or made a builder of.
 	a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+	if a.IsString() && b.IsString() && r.meter == nil {
+		// Two strings, nearly every append: nothing to convert, and
+		// jitAppend refuses what would pass the length limit, which the
+		// operands' checks below had each asked first.
+		s, ok := r.jitAppend(a.String(), b.String())
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Str(s)
+		}
+		return ok
+	}
 	if a.IsBigInt() && b.IsBigInt() {
 		// A loop's sum of BigInts, which it takes for a string's.
 		return r.jitGoBigAdd(ctx, a, b)
