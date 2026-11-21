@@ -7262,7 +7262,7 @@ func (b *builder) mergeVar(slot int, blk *Block) *Value {
 	at := len(b.phiArgs)
 	for _, p := range blk.Preds {
 		a := b.readVar(slot, p)
-		if a.Op == OpUpvalueStale {
+		if a.Op == OpUpvalueStale && slot >= 0 {
 			// The binding as the predecessor leaves it, from its cell.
 			a = b.reloadStale(p, slot, a)
 		}
@@ -7270,6 +7270,13 @@ func (b *builder) mergeVar(slot int, blk *Block) *Value {
 	}
 	args := b.phiArgs[at:]
 	phi := b.defs.get(blk.ID, slot)
+	if slot < 0 {
+		// A heap's base or length: the one value its predecessors all
+		// have, or else loaded here (heapMerge), never a phi.
+		v := b.heapMerge(blk, slot, phi, mark, args)
+		b.phiArgs = b.phiArgs[:at]
+		return v
+	}
 	if phi == mark {
 		phi = nil
 		same := true
@@ -7318,6 +7325,17 @@ func prepend(f *Func, blk *Block, v *Value) {
 
 func (b *builder) addPhiOperands(slot int, phi *Value) {
 	preds := phi.Block.Preds
+	if slot < 0 {
+		// A loop header's heap base or length: the one value its
+		// predecessors have but the phi, or loaded here (heapMerge).
+		at := len(b.phiArgs)
+		for _, p := range preds {
+			b.phiArgs = append(b.phiArgs, b.readVar(slot, p))
+		}
+		b.heapMerge(phi.Block, slot, phi, nil, b.phiArgs[at:])
+		b.phiArgs = b.phiArgs[:at]
+		return
+	}
 	if phi.Args == nil {
 		phi.Args = b.f.refsOf(len(preds))[:0]
 	}

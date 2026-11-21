@@ -290,13 +290,14 @@ func (b *builder) rawCell(blk *Block, k int) *Value {
 
 // The heaps' bases and lengths (OpHeapBase, OpHeapLen) are variables of
 // the builder's SSA construction, as a slot is, of slots of their own
-// below 0 (heapSlot): read where a block has them, merged by phis, and
-// loaded from the heap's cell where they are stale -- at an entry, which
-// loads nothing of them, and after a call (reloadAfterCall), which may
-// run script that detaches or moves the heap's buffer. Nothing else
-// changes a cell (the VM's bufferChanged): so a loop that calls nothing
-// reads its heap once before it, its header's phis trivial, and a block
-// of accesses once, where each access had read the cell twice.
+// below 0 (heapSlot): read where a block has them, loaded from the heap's
+// cell where they are stale -- at an entry, which loads nothing of them,
+// and after a call (reloadAfterCall), which may run script that detaches
+// or moves the heap's buffer -- and at a join whose predecessors have
+// different ones (heapMerge). Nothing else changes a cell (the VM's
+// bufferChanged): so a loop that calls nothing reads its heap once before
+// it, its header's phi trivial, and a block of accesses once, where each
+// access had read the cell twice.
 
 // heapOf is the base and the length of the heap whose abi.HeapCell is at
 // cell, as blk has them where the instruction being built reads them.
@@ -346,6 +347,75 @@ func (b *builder) heapLoad(blk *Block, slot int) *Value {
 		op = OpHeapLen
 	}
 	v := b.f.newValue(blk, op, Ptr)
+	v.Const = ir.Value{Bits: uint64(b.heaps[s/2])}
+	return v
+}
+
+// heapMerge is heap slot's value in blk, of several predecessors whose
+// values are args: the one they all have -- or, for a loop header's phi,
+// all but the phi itself -- or else a load of the cell at blk's start,
+// where its predecessors' values all equal the cell (a call makes the
+// value stale, and is a definition): a phi of them had been moved at
+// every edge, slot to slot where they spilled, in a large function. phi
+// is the phi a read made while the predecessors were read -- one round a
+// loop -- or nil, or mark: made a load in place, its users the load's.
+func (b *builder) heapMerge(blk *Block, slot int, phi, mark *Value, args []*Value) *Value {
+	var one *Value
+	same := true
+	for _, a := range args {
+		if a == phi {
+			continue
+		}
+		if one == nil {
+			one = a
+		}
+		same = same && a == one && a.Op != OpUpvalueStale
+	}
+	if same && one != nil {
+		if phi != nil && phi != mark {
+			// A phi of itself and one value: trivial, which Optimize takes
+			// away (trivialPhi).
+			phi.Args = b.f.refsOf(len(args))[:0]
+			for _, a := range args {
+				a.Uses++
+				phi.Args = append(phi.Args, a)
+			}
+			return phi
+		}
+		return one
+	}
+	s := -2 - slot
+	op := OpHeapBase
+	if s%2 == 1 {
+		op = OpHeapLen
+	}
+	var v *Value
+	if phi != nil && phi != mark {
+		// Made a load in place, after the block's phis.
+		v = phi
+		v.Op, v.Args, v.Type = op, nil, Ptr
+		vals := blk.Values
+		i := slices.Index(vals, v)
+		j := i
+		for j+1 < len(vals) && vals[j+1].Op == OpPhi {
+			vals[j], vals[j+1] = vals[j+1], vals[j]
+			j++
+		}
+	} else {
+		v = b.f.alloc(Value{Op: op, Type: Ptr, Block: blk})
+		if mark != nil {
+			b.f.nextID--
+			v.ID = mark.ID
+		}
+		vals := blk.Values
+		j := 0
+		for j < len(vals) && vals[j].Op == OpPhi {
+			j++
+		}
+		blk.Values = b.f.appendValue(blk.Values, nil)
+		copy(blk.Values[j+1:], blk.Values[j:])
+		blk.Values[j] = v
+	}
 	v.Const = ir.Value{Bits: uint64(b.heaps[s/2])}
 	return v
 }
