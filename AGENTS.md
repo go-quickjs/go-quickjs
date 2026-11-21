@@ -755,6 +755,18 @@ is the compiler's own CPU and garbage, apart from the program's; with
 go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench octane -dir /tmp/octane -suite Typescript -mode fixed -n 1 -jitcompile 10
 ```
 
+A change to the JIT's compile path -- the SSA's build and passes, mir,
+the register allocator, the lowering -- is timed so before it lands,
+base against change, over Octane's Typescript, Mandreel, zlib, PdfJS and
+Gameboy, and a phase more than a tenth slower is a regression however
+fast the code it makes runs. Nothing else sees it. A suite's time hides a
+slower compile behind what the change speeds up: ebe73f44's spill classes
+made the allocator's hints phase four to six times as long, Typescript's
+compiles 4% and Mandreel's 11% longer, while zlib ran 41% faster and
+Octane's total fell. `compilediff native` compares the code a compile
+makes, not what it took to make it, and `TestJITCompileLinear` a
+compile's growth with a function's size, not a constant factor.
+
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async
