@@ -5249,6 +5249,18 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 	c.a.Bind(done)
 }
 
+// iterRelease marks the cursor closed whose iteration state is at scratchB
+// released (abi.Encoding's IterReleased), as the VM's iter_close does for
+// an array's: its loop or pattern reads it no more, and the next cursor
+// over an array takes its place. Another's mark nothing reads. It uses
+// scratchC.
+func (c *compiler) iterRelease() {
+	if c.enc.IterReleased != 0 {
+		c.movImm(scratchC, 1)
+		c.a.Store8(scratchB, c.enc.IterReleased, scratchC)
+	}
+}
+
 // hasEntryShift is log2 of abi.HasEntrySize, which an entry's slot is
 // shifted by.
 const hasEntryShift = 6
@@ -11619,6 +11631,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			// No cell: a done cursor's alone, which jumps to ok.
 			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
 			c.a.Bind(ok)
+			c.iterRelease()
 			break
 		}
 		c.movImm(scratchC, v.Const.Bits)
@@ -11629,6 +11642,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		guard.jump(amd64.CondE)
 		c.a.Bind(ok)
+		c.iterRelease()
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.cmpWord(scratchC, v.Const.Bits)

@@ -9154,6 +9154,14 @@ func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 	c.setG(v, a64A)
 }
 
+// iterRelease is amd64's, of the state at a64B. It uses a64C.
+func (c *a64Compiler) iterRelease() {
+	if c.enc.IterReleased != 0 {
+		c.movImm(a64C, 1)
+		c.a.Store8(a64B, c.enc.IterReleased, a64C)
+	}
+}
+
 // oddball is ssa.OpOddballF64, as amd64's. It uses A.
 func (c *a64Compiler) oddball(v *ssa.Value, fail a64Guard) {
 	r := c.gpr(v.Args[0], a64B)
@@ -10250,6 +10258,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			// No cell: a done cursor's alone, which jumps to ok.
 			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
 			c.a.Bind(ok)
+			c.iterRelease()
 			break
 		}
 		c.movImm(a64C, v.Const.Bits)
@@ -10260,6 +10269,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.CmpImm(a64C, 0, false)
 		guard.jump(arm64.EQ)
 		c.a.Bind(ok)
+		c.iterRelease()
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.movImm(a64B, v.Const.Bits)

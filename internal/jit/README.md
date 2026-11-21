@@ -2268,10 +2268,13 @@ computed key converted or defined, a literal's `__proto__`; a method's home
 object set, a method defined, a literal's or a class's getter or setter
 defined, a class's field initializer given and a function named after its
 key, of the closure's names -- and a for...in's cursor, a for...of's cursor
-of an array and a loop's step over an array where it reads its dense storage
-or is done (`ssa.CallSite`'s `ForIn`, `ForOf`, `Step`: `jitGoCallPlain`'s
-`jitForInPlain`, `jitForOfPlain`, `jitStepPlain`); and on the frame
-otherwise. A class linked to its parent (`new_class`) and an object spread
+of an array -- the interpreter's last, where its loop or pattern closed it
+(`arrCursor`), which native code's close gives back as `iter_close` does
+(`mir`'s `iterRelease`) -- a loop's step over an array where it reads its
+dense storage or is done, and a destructuring's rest of an array all in its
+dense storage (`ssa.CallSite`'s `ForIn`, `ForOf`, `Step`, `abi.GoCallRest`:
+`jitGoCallPlain`'s `jitForInPlain`, `jitForOfPlain`, `jitStepPlain`,
+`jitRestPlain`); and on the frame otherwise. A class linked to its parent (`new_class`) and an object spread
 that runs a getter Go makes on the operands with the frame (`jitRegOpMade`),
 not run whole: neither writes a register, so nothing is saved and put back;
 a throw goes to the frame's handlers as a call's does (`regFinishCall`).

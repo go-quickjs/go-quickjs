@@ -1311,6 +1311,11 @@ func (r *Runtime) iterStep(cursor Value) (Value, error) {
 // iterRest drains what is left of a cursor into a dense array, which is what a
 // pattern's rest element binds.
 func (r *Runtime) iterRest(cursor Value) (Value, error) {
+	if st := cursorOf(cursor); st != nil {
+		if v, ok := r.iterRestDense(st); ok {
+			return v, nil
+		}
+	}
 	out := newObject(r.proto.array, ClassArray)
 	for {
 		v, ok, err := r.iterNext(cursor)

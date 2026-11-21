@@ -16,7 +16,8 @@ import (
 // computed keys of strings, numbers, symbols and an object whose toString
 // counts its calls; a literal's __proto__; for...in over a plain object, a
 // dictionary and a proxy; for...of over a dense array, one with a hole and
-// one that grows while it is walked.
+// one that grows while it is walked; an array pattern's rest, of a dense
+// array, of one with a hole and of a generator.
 const regFramelessSrc = `
 var gets = 0, keys = 0, sym = Symbol("s");
 function rest(n) {
@@ -71,6 +72,23 @@ function forof(n) {
 	}
 	return s;
 }
+function destruct(n) {
+	var a = [1, 2, 3, 4, 5], h = [1, , 3, 4], s = 0, x, y, r;
+	function* g() { yield 1; yield 2; yield 3 }
+	for (var j = 0; j < n; j++) {
+		[x, y, ...r] = a;
+		s += x + y + r.length * 10 + r[2];
+		if (j % 10 == 0) {
+			[x, ...r] = h;
+			s += x + r.length * 100 + (r[0] === undefined ? 1000 : 0);
+		}
+		if (j % 100 == 0) {
+			[x, ...r] = g();
+			s += r.length * 10000 + r[1];
+		}
+	}
+	return s;
+}
 `
 
 // TestJITRegFrameless runs regFramelessSrc's functions in a runtime whose
@@ -78,7 +96,8 @@ function forof(n) {
 // with no JIT, the collector idle and marking: the answers equal -- the
 // getter and the toString called as often -- and none of the operations
 // that runs no script left to Go whole or at an exit but the few that do
-// run one.
+// run one: an array pattern's rest of a dense array made without its frame,
+// and its cursor closed natively given back for the next (arrCursor).
 func TestJITRegFrameless(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -90,6 +109,7 @@ func TestJITRegFrameless(t *testing.T) {
 		"protoLit": "429571",
 		"forin":    "28140",
 		"forof":    "164000",
+		"destruct": "368130",
 	}
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
@@ -100,7 +120,7 @@ func TestJITRegFrameless(t *testing.T) {
 			rts[0].SetJITWarmUp(1, 1)
 			rts[0].jitStress = jitStressConfig{}
 			rts[0].SetJITReport(true)
-			for _, name := range []string{"rest", "computed", "protoLit", "forin", "forof"} {
+			for _, name := range []string{"rest", "computed", "protoLit", "forin", "forof", "destruct"} {
 				var got [2]string
 				for i, r := range rts {
 					fn, _ := r.GetProp(Obj(r.Global()), r.Intern(name))
@@ -132,6 +152,14 @@ func TestJITRegFrameless(t *testing.T) {
 				if n := st.HostOps[op]; n > 100 {
 					t.Errorf("%s left to Go %d times", op, n)
 				}
+			}
+			// With a frame only where a step may run script: the hole's,
+			// which the prototype may answer, and the generator's.
+			if n := st.GoCallOps["iter_rest"]; n > 700 {
+				t.Errorf("iter_rest: %d calls of Go with a frame, want at most 700", n)
+			}
+			if io := rts[0].ofLast; io == nil || !io.st.released {
+				t.Errorf("the last array pattern's cursor, closed natively, was not given back")
 			}
 		})
 	}

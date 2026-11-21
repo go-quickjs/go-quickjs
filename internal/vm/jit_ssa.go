@@ -115,6 +115,7 @@ var jitEncoding = abi.Encoding{
 	IterState:          int32(unsafe.Offsetof(iterObject{}.st)),
 	ClassCursor:        uint8(ClassCursor),
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
+	IterReleased:       int32(unsafe.Offsetof(iterState{}.released)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
 	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
 	IterForIn:          int32(unsafe.Offsetof(iterState{}.forIn)),

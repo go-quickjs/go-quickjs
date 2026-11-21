@@ -1335,8 +1335,10 @@ type Encoding struct {
 	// the state's byte at IterDone says the loop is done, the pointer at
 	// IterArr is the array a for...of walks in place, nil for any other
 	// iteration, and the int at IterIdx the next element's index. Native
-	// code writes nothing there but that index, and, as it steps a cursor
-	// to its end, the done byte.
+	// code writes nothing there but that index; as it steps a cursor to
+	// its end, the done byte; and as a loop or a pattern closes a cursor,
+	// the byte at IterReleased, which lets the VM's next cursor over an
+	// array take an array's place (the VM's arrCursor).
 	//
 	// A for...in's cursor has a nonzero byte at IterForIn, and its walk
 	// ForInState bytes past the state: the slice of the keys it hands out
@@ -1349,6 +1351,7 @@ type Encoding struct {
 	IterState                                   int32
 	ClassCursor                                 uint8
 	IterDone, IterArr, IterIdx                  int32
+	IterReleased                                int32
 	IterForIn                                   int32
 	ForInState, ForInKeys, ForInObj, ForInShape int32
 	ForInIndexKeys                              int32

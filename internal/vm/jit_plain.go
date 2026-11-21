@@ -57,6 +57,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	case abi.GoCallStep:
 		// A loop's step over an array (jitStepPlain).
 		return r.jitStepPlain(ctx)
+	case abi.GoCallRest:
+		// A destructuring's rest of an array (jitRestPlain).
+		return r.jitRestPlain(ctx)
 	case abi.GoCallForward:
 		// Array.apply(null, arguments) (jitForwardPlain).
 		return r.jitForwardPlain(ctx)
@@ -274,8 +277,28 @@ func (r *Runtime) jitForOfPlain(ctx *abi.Context) bool {
 	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || !r.usesIntrinsicArrayIterator(o) {
 		return false
 	}
-	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = r.newIterObject(iterState{arr: o})
+	// The interpreter's cursor (arrCursor): the last one, where its loop or
+	// pattern closed it, natively too (mir's iterClosed).
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = arrCursor[struct{}](r, o)
 	return true
+}
+
+// jitRestPlain makes a destructuring's rest element (abi.GoCallRest) of
+// the cursor native code passed as iter_rest makes it, without a frame,
+// where that runs no script and cannot throw: of a cursor over an array
+// whose rest is all in its dense storage (iterRestDense). It writes the
+// array to the call's keep cell and reports whether it made it; anything
+// else it leaves to the call with its frame (jitRegIterMade).
+func (r *Runtime) jitRestPlain(ctx *abi.Context) bool {
+	st := cursorOf(jitGoArg(ctx, 0))
+	if st == nil || r.meter != nil {
+		return false
+	}
+	v, ok := r.iterRestDense(st)
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	}
+	return ok
 }
 
 // jitStepPlain makes a loop's step (abi.GoCallStep) of a cursor over an
@@ -315,7 +338,7 @@ func (r *Runtime) jitStepPlain(ctx *abi.Context) bool {
 // then refuses.
 func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
-	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn, abi.GoCallForOf, abi.GoCallStep:
+	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn, abi.GoCallForOf, abi.GoCallStep, abi.GoCallRest:
 		return true
 	case abi.GoCallGet:
 		return jitGoInline(ctx)
