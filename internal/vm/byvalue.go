@@ -97,7 +97,7 @@ func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure, caps []uint16
 	}
 	*child = closure{
 		fn: tmpl.fn, closureCode: tmpl.closureCode,
-		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
+		realm: r.Realm, upvalues: upvalues,
 	}
 	var room []upvalue
 	for i, desc := range descs {

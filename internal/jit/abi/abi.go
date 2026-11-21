@@ -1442,11 +1442,12 @@ type Encoding struct {
 	// A function object made from script is one whose data's type word is
 	// FuncData: the pointer at FuncClosure, in the data, is its closure,
 	// whose function's address is at ClosureFn, its captured bindings'
-	// first cell at ClosureUpvalues, its environment at ClosureEnv and its
-	// realm at ClosureRealm -- what a native call that checks the function,
-	// not the object (ssa.CallSite's ByCode), reads.
-	FuncData                                                          uint64
-	FuncClosure, ClosureFn, ClosureUpvalues, ClosureEnv, ClosureRealm int32
+	// first cell at ClosureUpvalues and its realm at ClosureRealm; its
+	// shared template at ClosureCode holds its environment at CodeEnv --
+	// what a native call that checks the function, not the object
+	// (ssa.CallSite's ByCode), reads.
+	FuncData                                                       uint64
+	FuncClosure, ClosureFn, ClosureUpvalues, ClosureRealm, CodeEnv int32
 	// A closure's hint is the uint32 at ClosureHint of what its template's
 	// closures share, at ClosureCode, which indexes the hint table
 	// (HintTable). A link is a function's, in its runtime: the

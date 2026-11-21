@@ -43,8 +43,8 @@ func asmTwin(cl *closure, t *regCode) *closure {
 	*fn = *cl.fn
 	fn.Reg = bytecode.RegReady(t.rc)
 	fn.VMCode = unsafe.Pointer(t)
-	cc := &closureCode{names: cl.names, consts: cl.consts, ic: cl.ic, reg: t, regCalls: cl.regCalls, regEpochs: cl.regEpochs}
-	return &closure{fn: fn, upvalues: cl.upvalues, closureCode: cc, realm: cl.realm, env: cl.env}
+	cc := &closureCode{env: cl.env, names: cl.names, consts: cl.consts, ic: cl.ic, reg: t, regCalls: cl.regCalls, regEpochs: cl.regEpochs}
+	return &closure{fn: fn, upvalues: cl.upvalues, closureCode: cc, realm: cl.realm}
 }
 
 // jitTypedLinked gives cl, just linked with its typed code t, its twin,

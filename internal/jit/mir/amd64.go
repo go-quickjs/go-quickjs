@@ -4202,11 +4202,18 @@ func (c *compiler) genStep(v *ssa.Value, notGen, slow, done amd64.Label) {
 		c.a.Load(scratchC, scratchA, c.enc.ClosureFn)
 		c.cmpWord(scratchC, uint64(t.Fn))
 		c.a.Jcc(amd64.CondNE, next)
+		// Its environment, its template's, and its realm.
 		for _, f := range [...]struct {
 			off  int32
+			code bool
 			want uintptr
-		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-			c.a.Load(scratchC, scratchA, f.off)
+		}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+			from := scratchA
+			if f.code {
+				c.a.Load(scratchC, scratchA, c.enc.ClosureCode)
+				from = scratchC
+			}
+			c.a.Load(scratchC, from, f.off)
 			c.cmpWord(scratchC, uint64(f.want))
 			fail.jump(amd64.CondNE)
 		}
@@ -4608,11 +4615,18 @@ func (c *compiler) genNext(v *ssa.Value, slow, done amd64.Label) {
 		c.a.Load(scratchC, scratchA, c.enc.ClosureFn)
 		c.cmpWord(scratchC, uint64(t.Fn))
 		c.a.Jcc(amd64.CondNE, next)
+		// Its environment, its template's, and its realm.
 		for _, f := range [...]struct {
 			off  int32
+			code bool
 			want uintptr
-		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-			c.a.Load(scratchC, scratchA, f.off)
+		}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+			from := scratchA
+			if f.code {
+				c.a.Load(scratchC, scratchA, c.enc.ClosureCode)
+				from = scratchC
+			}
+			c.a.Load(scratchC, from, f.off)
 			c.cmpWord(scratchC, uint64(f.want))
 			fail.jump(amd64.CondNE)
 		}
@@ -5803,11 +5817,21 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, miss)
+	c.a.Load(scratchA, scratchB, c.enc.ClosureFn)
+	c.cmpWord(scratchA, uint64(t.ByCode))
+	c.a.Jcc(amd64.CondNE, miss)
+	// Its environment, its template's, and its realm.
 	for _, f := range [...]struct {
 		off  int32
+		code bool
 		want uintptr
-	}{{c.enc.ClosureFn, t.ByCode}, {c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-		c.a.Load(scratchA, scratchB, f.off)
+	}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+		from := scratchB
+		if f.code {
+			c.a.Load(scratchA, scratchB, c.enc.ClosureCode)
+			from = scratchA
+		}
+		c.a.Load(scratchA, from, f.off)
 		c.cmpWord(scratchA, uint64(f.want))
 		c.a.Jcc(amd64.CondNE, miss)
 	}
@@ -5880,11 +5904,18 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, miss)
+	// Its environment, its template's, and its realm.
 	for _, f := range [...]struct {
 		off  int32
+		code bool
 		want uintptr
-	}{{c.enc.ClosureEnv, site.GenericEnv}, {c.enc.ClosureRealm, site.GenericRealm}} {
-		c.a.Load(scratchA, scratchB, f.off)
+	}{{c.enc.CodeEnv, true, site.GenericEnv}, {c.enc.ClosureRealm, false, site.GenericRealm}} {
+		from := scratchB
+		if f.code {
+			c.a.Load(scratchA, scratchB, c.enc.ClosureCode)
+			from = scratchA
+		}
+		c.a.Load(scratchA, from, f.off)
 		c.cmpWord(scratchA, uint64(f.want))
 		c.a.Jcc(amd64.CondNE, miss)
 	}

@@ -17,8 +17,9 @@ import (
 // closures share behind closureCode; and 320 to 352, before a method's and
 // a class's fields went behind funcData.cls, an arrow's new.target into
 // its rare part, and an array's length out of every other object's side
-// fields (arrayExt). A field added to any of them that moves a
-// closure into the next class fails here.
+// fields (arrayExt). A closure was 56 bytes before the module environment
+// went into the template its closures share. A field added to any of them
+// that moves a closure into the next class fails here.
 func TestClosureSizes(t *testing.T) {
 	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) != 8 {
@@ -31,7 +32,7 @@ func TestClosureSizes(t *testing.T) {
 		{"funcExtra", unsafe.Sizeof(funcExtra{}), 32},
 		{"objectExt", unsafe.Sizeof(objectExt{}), 40},
 		{"funcData", unsafe.Sizeof(funcData{}), 88},
-		{"closure", unsafe.Sizeof(closure{}), 56},
+		{"closure", unsafe.Sizeof(closure{}), 48},
 		{"arrowFuncObject", unsafe.Sizeof(arrowFuncObject{}), 256},
 		{"arrowFuncObject1", unsafe.Sizeof(arrowFuncObject1{}), 256},
 		{"arrowFuncObject2", unsafe.Sizeof(arrowFuncObject2{}), 288},

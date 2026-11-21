@@ -308,8 +308,7 @@ func (r *Runtime) linkLoaded(m *Module) error {
 	// of the graph is evaluated: a module of a cycle may be asked for a
 	// function it declares before its body has run.
 	if m.initFn != nil {
-		cl := r.prepare(m.initFn)
-		cl.env = m.env
+		cl := r.prepareIn(m.initFn, m.env)
 		if _, err := r.run(cl, Undefined, nil, Undefined, nil); err != nil {
 			m.state, m.err = ModuleFailed, err
 			return err
@@ -699,8 +698,7 @@ func (r *Runtime) executeModuleBody(m *Module) error {
 		}
 		return nil
 	}
-	cl := r.prepare(m.fn)
-	cl.env = m.env
+	cl := r.prepareIn(m.fn, m.env)
 	// Module code has undefined as its top-level `this`.
 	_, err := r.run(cl, Undefined, nil, Undefined, nil)
 	return err
@@ -712,8 +710,7 @@ func (r *Runtime) executeModuleBody(m *Module) error {
 // arranged here: the modules waiting on it are run then, and the promise for
 // the graph settles.
 func (r *Runtime) executeAsyncModule(m *Module) error {
-	cl := r.prepare(m.fn)
-	cl.env = m.env
+	cl := r.prepareIn(m.fn, m.env)
 	gen, err := r.newGenerator(cl, Undefined, nil, nil, true, Undefined)
 	if err != nil {
 		return err

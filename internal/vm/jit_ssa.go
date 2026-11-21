@@ -180,7 +180,7 @@ var jitEncoding = abi.Encoding{
 	FuncClosure:        int32(unsafe.Offsetof(funcData{}.closure)),
 	ClosureFn:          int32(unsafe.Offsetof(closure{}.fn)),
 	ClosureUpvalues:    int32(unsafe.Offsetof(closure{}.upvalues)),
-	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
+	CodeEnv:            int32(unsafe.Offsetof(closureCode{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
 	ClosureCode:        int32(unsafe.Offsetof(closure{}.closureCode)),
 	ClosureHint:        int32(unsafe.Offsetof(closureCode{}.jitHint)),
@@ -1310,7 +1310,7 @@ func (fb *jitFeedback) TypeofCells() (uintptr, bool) {
 // (mir's closureTake) -- the cells and the this; an arrow that reads the
 // others its pool is not made for (jitFeedback's Closure).
 func (r *Runtime) jitFillClosures(pool *abi.ObjectPool, tmpl Value, fn *bytecode.Function, env *Object) {
-	f := &frame{cl: &closure{fn: fn, env: env, upvalues: make([]*upvalue, len(fn.Upvalues))}, this: Undefined, newTarget: Undefined}
+	f := &frame{cl: &closure{fn: fn, closureCode: &closureCode{env: env}, upvalues: make([]*upvalue, len(fn.Upvalues))}, this: Undefined, newTarget: Undefined}
 	cells := make([]*upvalue, jitCaptured(fn))
 	for i := range int(pool.Size) {
 		pool.Objects[i] = unsafe.Pointer(r.newClosureIn(f, tmpl, cells))

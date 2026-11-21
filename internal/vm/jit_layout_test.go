@@ -13,8 +13,8 @@ import (
 func TestJITFieldLayout(t *testing.T) {
 	t.Parallel()
 	if unsafe.Sizeof(uintptr(0)) == 8 {
-		if size := unsafe.Sizeof(closure{}); size <= 48 || size > 64 {
-			t.Errorf("closure is %d bytes, want 49 to 64 (the size class of 64)", size)
+		if size := unsafe.Sizeof(closure{}); size != 48 {
+			t.Errorf("closure is %d bytes, want 48", size)
 		}
 	}
 	for _, tc := range []struct {

@@ -67,7 +67,7 @@ func (r *Runtime) regEval(f *frame, c *regCode, regs *[1 << 16]Value, scope byte
 // regEvalCode runs fn, a direct eval's compiled code, in register frame
 // f's scope: regEval's, and a debugger's evaluation in a paused frame's.
 func (r *Runtime) regEvalCode(f *frame, c *regCode, regs *[1 << 16]Value, fn *bytecode.Function) (Value, error) {
-	cl := r.prepare(fn)
+	cl := r.prepareIn(fn, f.cl.env)
 	cl.upvalues = make([]*upvalue, len(fn.Upvalues))
 	for i, desc := range fn.Upvalues {
 		switch {
@@ -104,7 +104,6 @@ func regOpenUpvalue(f *frame, slot *Value) *upvalue {
 // arguments, home object and the scopes of its with statements and its
 // eval's variables.
 func (r *Runtime) evalLinked(caller *frame, cl *closure) (Value, error) {
-	cl.env = caller.cl.env
 	callee := newObject(r.proto.function, ClassFunction)
 	fd := &funcData{
 		closure: cl,

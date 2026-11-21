@@ -313,11 +313,9 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 
 // finishClosure installs the function state after its captures are ready.
 func (r *Runtime) finishClosure(f *frame, tmpl *closure, o *Object, fd *funcData, child *closure, upvalues []*upvalue, extra *funcExtra) *Object {
-	// The environment is inherited, so a function declared in a module sees
-	// the module's bindings rather than only the globals.
 	*child = closure{
 		fn: tmpl.fn, closureCode: tmpl.closureCode,
-		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
+		realm: r.Realm, upvalues: upvalues,
 	}
 	arrow := tmpl.fn.Kind == bytecode.KindArrow
 

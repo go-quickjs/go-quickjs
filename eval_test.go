@@ -26,6 +26,7 @@ func TestDirectEval(t *testing.T) {
 		  String(outer())`, "6"},
 		// And through a closure the evaluated code creates.
 		{`function f() { var x = 7; return eval("(function () { return x })()") } String(f())`, "7"},
+		{`function f(x) { return eval("(function () { return () => x })") } var a = f(7), b = f(8); a()() + "," + b()()`, "7,8"},
 		// A nested direct eval names the same bindings.
 		{`function f() { var a = 8; return eval("eval(\"a\")") } String(f())`, "8"},
 		{`function f() { var a = 9; return eval("(function () { return eval(\"a\") })()") }

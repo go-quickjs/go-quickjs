@@ -77,7 +77,7 @@ func (r *Runtime) regExtend(cl *closure, c *regCode) {
 		for i := len(cl.consts); i < n; i++ {
 			k := rc.Constants[i]
 			k.Str, k.Flags = r.ownText(k.Str), r.ownText(k.Flags)
-			consts[i] = r.materialize(k)
+			consts[i] = r.materialize(k, cl.env)
 		}
 		cl.consts = consts
 	}

@@ -638,7 +638,7 @@ func TestMirEmitted(t *testing.T) {
 	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare = 52, 56, 64
 	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 88, 89, 90
 	genEnc.GenSuspendedYield, genEnc.GenExecuting, genEnc.GenCompleted = 1, 2, 3
-	genEnc.ClosureFn, genEnc.ClosureEnv, genEnc.ClosureRealm, genEnc.ClosureUpvalues = 0, 8, 16, 24
+	genEnc.ClosureFn, genEnc.CodeEnv, genEnc.ClosureRealm, genEnc.ClosureUpvalues = 0, 8, 16, 24
 	genEnc.LinkIn, genEnc.LinkGen, genEnc.WriteBarrier, genEnc.CallGo = 16, 72, 0x71000, 0x72000
 	genEntries, genYields, genSteps := 0, 0, 0
 	for _, src := range genCorpus {

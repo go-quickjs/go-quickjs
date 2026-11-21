@@ -875,6 +875,13 @@ type closureCode struct {
 	// them by without checking each; nil for any other. Last, so that no
 	// field before it moves.
 	ctorInit *initCache
+	// env is the environment an unqualified name resolves against, bound
+	// as the template is prepared and shared by every closure made from it
+	// and its nested templates. It is nil for a script, whose names resolve
+	// on the global object, and the module environment for module code --
+	// which inherits from the global object, so the prototype chain
+	// performs the scope lookup.
+	env *Object
 }
 
 // closure is a function template paired with the upvalues it captured.
@@ -887,13 +894,9 @@ type closure struct {
 	// once: each had kept its own copy of the three slices, 72 bytes of a
 	// closure that DeltaBlue and Havlak make one of for each forEach.
 	*closureCode
-	// realm is the realm the closure belongs to.
+	// realm is the realm the closure belongs to. It is the closure's own,
+	// not its template's, so that a call's realm check is one load.
 	realm *Realm
-	// env is the environment an unqualified name resolves against. It is nil
-	// for a script, whose names resolve on the global object, and the module
-	// environment for module code -- which inherits from the global object, so
-	// the prototype chain performs the scope lookup.
-	env *Object
 }
 
 // upvalue is a captured variable.

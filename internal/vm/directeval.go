@@ -34,7 +34,7 @@ type Evaluator func(source string, req EvalRequest) (*bytecode.Function, error)
 // evalIn runs a direct eval's compiled code in the caller's scope, as a
 // debugger runs code it evaluates in a frame.
 func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
-	cl := r.prepare(fn)
+	cl := r.prepareIn(fn, caller.cl.env)
 	// Each upvalue the code asked for names one of the caller's bindings. A
 	// local is captured from the live frame, which is what lets the evaluated
 	// code write to it; an upvalue of the caller is shared directly.
@@ -53,7 +53,6 @@ func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 		cl.upvalues[i] = &upvalue{}
 		cl.upvalues[i].slot = &cl.upvalues[i].closed
 	}
-	cl.env = caller.cl.env
 
 	// The code shares the caller's `this`, `new.target`, `arguments` and home
 	// object, which is what an arrow does -- so it is run as one.

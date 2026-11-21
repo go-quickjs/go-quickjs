@@ -2659,11 +2659,22 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	c.objectData(a64B, a64C, a64C, c.enc.FuncData, a64GuardLabel(c, miss))
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Cbz(a64B, miss, true)
+	c.a.Load(a64A, a64B, c.enc.ClosureFn)
+	c.movImm(a64C, uint64(t.ByCode))
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.NE, miss)
+	// Its environment, its template's, and its realm.
 	for _, f := range [...]struct {
 		off  int32
+		code bool
 		want uintptr
-	}{{c.enc.ClosureFn, t.ByCode}, {c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-		c.a.Load(a64A, a64B, f.off)
+	}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+		from := a64B
+		if f.code {
+			c.a.Load(a64A, a64B, c.enc.ClosureCode)
+			from = a64A
+		}
+		c.a.Load(a64A, from, f.off)
 		c.movImm(a64C, uint64(f.want))
 		c.a.Cmp(a64A, a64C, true)
 		c.a.BCond(arm64.NE, miss)
@@ -2966,11 +2977,18 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 	c.objectData(a64B, a64C, a64C, c.enc.FuncData, a64GuardLabel(c, miss))
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Cbz(a64B, miss, true)
+	// Its environment, its template's, and its realm.
 	for _, f := range [...]struct {
 		off  int32
+		code bool
 		want uintptr
-	}{{c.enc.ClosureEnv, site.GenericEnv}, {c.enc.ClosureRealm, site.GenericRealm}} {
-		c.a.Load(a64A, a64B, f.off)
+	}{{c.enc.CodeEnv, true, site.GenericEnv}, {c.enc.ClosureRealm, false, site.GenericRealm}} {
+		from := a64B
+		if f.code {
+			c.a.Load(a64A, a64B, c.enc.ClosureCode)
+			from = a64A
+		}
+		c.a.Load(a64A, from, f.off)
 		c.movImm(a64C, uint64(f.want))
 		c.a.Cmp(a64A, a64C, true)
 		c.a.BCond(arm64.NE, miss)
@@ -5907,11 +5925,18 @@ func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 		c.movImm(a64A, uint64(t.Fn))
 		c.a.Cmp(a64C, a64A, true)
 		c.a.BCond(arm64.NE, next)
+		// Its environment, its template's, and its realm.
 		for _, f := range [...]struct {
 			off  int32
+			code bool
 			want uintptr
-		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-			c.a.Load(a64C, a64D, f.off)
+		}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+			from := a64D
+			if f.code {
+				c.a.Load(a64C, a64D, c.enc.ClosureCode)
+				from = a64C
+			}
+			c.a.Load(a64C, from, f.off)
 			c.movImm(a64A, uint64(f.want))
 			c.a.Cmp(a64C, a64A, true)
 			fail.jump(arm64.NE)
@@ -6273,11 +6298,18 @@ func (c *a64Compiler) genNext(v *ssa.Value, slow, done arm64.Label) {
 		c.movImm(a64A, uint64(t.Fn))
 		c.a.Cmp(a64C, a64A, true)
 		c.a.BCond(arm64.NE, next)
+		// Its environment, its template's, and its realm.
 		for _, f := range [...]struct {
 			off  int32
+			code bool
 			want uintptr
-		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
-			c.a.Load(a64C, a64D, f.off)
+		}{{c.enc.CodeEnv, true, t.Env}, {c.enc.ClosureRealm, false, t.Realm}} {
+			from := a64D
+			if f.code {
+				c.a.Load(a64C, a64D, c.enc.ClosureCode)
+				from = a64C
+			}
+			c.a.Load(a64C, from, f.off)
 			c.movImm(a64A, uint64(f.want))
 			c.a.Cmp(a64C, a64A, true)
 			fail.jump(arm64.NE)

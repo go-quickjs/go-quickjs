@@ -1722,6 +1722,13 @@ the loop's callback slot, for a callback inlined in a loop (`jitRegInlined`).
 
 ### Closures and cells
 
+A closure holds its function, captured bindings, shared template
+(`closureCode`) and realm. The template owns the module environment,
+bound while its tree of constants is prepared; every closure made from
+it uses that same environment. Native calls and generator entries read
+the environment through the template and the realm from the closure
+when checking their target.
+
 Code whose locals an inner closure captures keeps them in cells of its own
 (`ir.Program`'s `Cells`), as V8 allocates a function's context: the
 context's `Cells`, each an upvalue holding its value, which native code

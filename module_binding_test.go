@@ -21,6 +21,8 @@ func TestModuleBlockFunctions(t *testing.T) {
 		{"before its declaration", `{ result = f(); function f() { return 7; } }`, "7"},
 		{"bare block", `{ function f() { return 7; } result = f(); } result += "," + typeof f;`, "7,undefined"},
 		{"closure", `let g; { function f() { return 7; } g = () => f(); } result = g();`, "7"},
+		{"nested module environment", `let x = 7; function mk() { return function () { return () => x; }; } let a = mk(), b = mk(); x = 8; result = a()() + "," + b()();`, "8,8"},
+		{"eval module environment", `let x = 7; function mk() { return eval("(function () { return () => x; })"); } let a = mk(), b = mk(); x = 9; result = a()() + "," + b()();`, "9,9"},
 		{"generator and async", `{ function* g() { yield 7; } async function a() { return 8; } result = g().next().value + "," + (a() instanceof Promise); }`, "7,true"},
 		{"switch", `switch (1) { case 1: result = f(); break; case 2: function f() { return 7; } }`, "7"},
 		{"loop body", `result = ""; for (let i = 0; i < 2; i++) { function f() { return i; } result += f(); }`, "01"},

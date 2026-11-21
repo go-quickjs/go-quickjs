@@ -17,10 +17,17 @@ import (
 
 // prepare converts a compiled template into a closure ready to run.
 func (r *Runtime) prepare(fn *bytecode.Function) *closure {
+	return r.prepareIn(fn, nil)
+}
+
+// prepareIn binds the template tree to its environment before any closure
+// can be made from it. Scripts use nil, modules their module environment,
+// and direct eval the environment of its caller.
+func (r *Runtime) prepareIn(fn *bytecode.Function, env *Object) *closure {
 	if r.debug != nil && fn.TopLevel && fn.Debug != nil {
 		r.debugLoad(fn)
 	}
-	cl := &closure{fn: fn, realm: r.Realm, closureCode: &closureCode{}}
+	cl := &closure{fn: fn, realm: r.Realm, closureCode: &closureCode{env: env}}
 
 	cl.names = make([]Atom, len(fn.Names))
 	for i, n := range fn.Names {
@@ -30,13 +37,13 @@ func (r *Runtime) prepare(fn *bytecode.Function) *closure {
 	cl.ic = newPropCaches(int(fn.PropSites))
 	cl.consts = make([]Value, len(fn.Constants))
 	for i, c := range fn.Constants {
-		cl.consts[i] = r.materialize(c)
+		cl.consts[i] = r.materialize(c, env)
 	}
 	return cl
 }
 
 // materialize converts one constant-pool entry into a value.
-func (r *Runtime) materialize(c bytecode.Constant) Value {
+func (r *Runtime) materialize(c bytecode.Constant, env *Object) Value {
 	switch c.Kind {
 	case bytecode.ConstNumber:
 		return Float(c.Num)
@@ -50,7 +57,7 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 	case bytecode.ConstFunction:
 		// A nested template is prepared eagerly and stored as a closure with no
 		// upvalues bound; closure_w copies it and binds them per instantiation.
-		tmpl := r.prepare(c.Fn)
+		tmpl := r.prepareIn(c.Fn, env)
 		return templateValue(tmpl)
 	case bytecode.ConstRegExp:
 		// A regexp literal is built fresh each time it is evaluated, so the

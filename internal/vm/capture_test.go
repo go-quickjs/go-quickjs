@@ -36,6 +36,21 @@ func TestCaptureRoom(t *testing.T) {
 			r.Close()
 		})
 	}
+	t.Run("shared template", func(t *testing.T) {
+		r := newTestRuntime(t, Config{})
+		defer r.Close()
+		v, err := r.Run(compileForTest(t, `function make() { return function () { return function () { return globalThis } } } var a = make(), b = make(); [a, b, a(), b()]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 4; i += 2 {
+			a := v.Object().elemsOf()[i].Object().fn().closure
+			b := v.Object().elemsOf()[i+1].Object().fn().closure
+			if a.closureCode != b.closureCode || a.realm != r.Realm || b.realm != r.Realm || a.env != nil {
+				t.Error("closures of one template do not share their environment, or are not of the realm")
+			}
+		}
+	})
 }
 
 // TestCaptureRoomAllocs pins a closure's function object and capture list
