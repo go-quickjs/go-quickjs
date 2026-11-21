@@ -318,6 +318,12 @@ type compiler struct {
 	// default is being compiled, and nil elsewhere. A direct eval there cannot
 	// declare a var named by one of them.
 	paramScopeNames []string
+	// paramScope is how many of locals the parameter list's scope has:
+	// the parameters, its own name and the arguments object.
+	paramScope int
+	// paramClosures is whether the parameter list has a closure or a
+	// direct eval (paramsClose): 0 not yet asked, 1 none, 2 one.
+	paramClosures int8
 
 	// inFieldInit marks the initializer of a class field, which is a function
 	// of its own even though it is compiled into the constructor.
@@ -994,7 +1000,9 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 				}
 			}
 		} else {
-			for i := range c.locals {
+			// The latest: a body's var, not the parameter list's binding
+			// it shadows (bodyVar).
+			for i := len(c.locals) - 1; i >= 0; i-- {
 				if c.locals[i].name == name && c.locals[i].kind == bindVar {
 					return c.locals[i].slot
 				}
@@ -1014,6 +1022,68 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 			kind == bindFunction || kind == bindFunctionLexical,
 	})
 	return slot
+}
+
+// inParamScope reports whether l is a binding of the parameter list's
+// scope (paramScope).
+func (c *compiler) inParamScope(l *localVar) bool {
+	for i := range c.locals[:min(c.paramScope, len(c.locals))] {
+		if &c.locals[i] == l {
+			return true
+		}
+	}
+	return false
+}
+
+// paramsClose reports whether fn's parameter list has expressions that
+// could see its bindings after the prologue: a closure, or a direct eval,
+// which may make one. A list of plain names has none.
+func (c *compiler) paramsClose(fn *ast.FuncLit) bool {
+	if c.paramClosures == 0 {
+		c.paramClosures = 1
+		if !simpleParams(fn.Params) {
+			for _, p := range fn.Params {
+				if containsClosure(p) {
+					c.paramClosures = 2
+					break
+				}
+			}
+		}
+	}
+	return c.paramClosures == 2
+}
+
+// bodyVar gives a var of the body named as l, a binding of the parameter
+// list's, a binding of its own, as a function whose parameters have
+// expressions has (FunctionDeclarationInstantiation's varEnv): a closure
+// in a default sees the parameter, the body its var, which starts with
+// the parameter's value and changes apart from it. Only a closure or a
+// direct eval of the parameter list could see the difference, so only a
+// list with one has it (paramsClose). The register form copies the value
+// at the end of the prologue (regcomp's Record's ParamCopies).
+func (c *compiler) bodyVar(name string, l *localVar) {
+	from, copied := l.slot, l.kind != bindFuncSelf
+	l.paramScoped = true
+	if name == "arguments" && c.lazyArguments {
+		// The object is copied, and so is made.
+		c.lazyArguments = false
+		c.facts.makesArgs = true
+	}
+	slot := c.nextSlot
+	c.nextSlot++
+	c.addLocal(localVar{
+		name: name, kind: bindVar, slot: slot, depth: c.depth,
+		withDepth: c.withDepth, initialized: true,
+	})
+	if !copied {
+		// The function's own name is not a parameter: a var of its name
+		// starts undefined, and the closures of the parameter list see
+		// the function.
+		c.reg.NoteSelf(from)
+		return
+	}
+	c.noteStore(slot)
+	c.reg.NoteParamCopy(from, slot)
 }
 
 // noteCaptured marks a binding of this function's as captured.

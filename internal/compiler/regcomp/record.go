@@ -126,6 +126,9 @@ type Record struct {
 	// a derived constructor's binding, unbound until super() binds it:
 	// eval code's, and a debugger's at a frame (the walk's thisIsValue).
 	ThisRef bool
+	// Bail says the record saw one name resolved, or probed, two ways,
+	// which it cannot express.
+	Bail bool
 	// Classes is each class the function defines, as the walk laid it out
 	// (ClassRec).
 	Classes map[*ast.ClassLit]*ClassRec
@@ -144,9 +147,9 @@ type Record struct {
 	// declareLexicalNameMarked). In a debugger's code, where every binding
 	// is captured for the debugger, the register form leaves them so too.
 	Unmarked map[uint32]bool
-	// Bail says the record saw one name resolved, or probed, two ways,
-	// which it cannot express.
-	Bail bool
+	// rare is what few functions have, apart, so that every function's
+	// record stays in its size class.
+	rare *recordRare
 
 	// finallies are the finally clauses the walk has walked a copy of,
 	// and quiet how many copies other than a clause's first are being
@@ -185,6 +188,65 @@ func (r *Record) NoteFunc(fd *ast.FuncDecl, slot uint32) {
 		return
 	}
 	r.Funcs[fd] = slot
+}
+
+// recordRare is the part of a Record few functions have.
+type recordRare struct {
+	// paramCopies are the body's vars that shadow a binding of the
+	// parameter list's, each with that binding's slot first: the body's
+	// starts with its value, copied at the end of the prologue (the
+	// walk's bodyVar).
+	paramCopies [][2]uint32
+	// self is, where a body's var of the function's own name shadows the
+	// binding the parameter list's closures see, that binding's slot,
+	// which holds the function from the start.
+	self []uint32
+}
+
+// rareOf is r's rare part, made on its first use.
+func (r *Record) rareOf() *recordRare {
+	if r.rare == nil {
+		r.rare = &recordRare{}
+	}
+	return r.rare
+}
+
+// ParamCopies are the body's vars that shadow a binding of the parameter
+// list's (recordRare's paramCopies).
+func (r *Record) ParamCopies() [][2]uint32 {
+	if r.rare == nil {
+		return nil
+	}
+	return r.rare.paramCopies
+}
+
+// Self is the binding of the function's own name that a body's var
+// shadows (recordRare's self).
+func (r *Record) Self() []uint32 {
+	if r.rare == nil {
+		return nil
+	}
+	return r.rare.self
+}
+
+// NoteParamCopy records that the body's var in slot to starts with the
+// value of the parameter list's binding in slot from (ParamCopies).
+func (r *Record) NoteParamCopy(from, to uint32) {
+	if r == nil {
+		return
+	}
+	x := r.rareOf()
+	x.paramCopies = append(x.paramCopies, [2]uint32{from, to})
+}
+
+// NoteSelf records slot as the function's own name's binding that a
+// body's var shadows (Self).
+func (r *Record) NoteSelf(slot uint32) {
+	if r == nil {
+		return
+	}
+	x := r.rareOf()
+	x.self = append(x.self, slot)
 }
 
 // NewRecord makes an empty record of a function with idents identifiers

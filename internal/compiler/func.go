@@ -194,6 +194,11 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		c.facts.makesArgs = true
 	}, wantArguments)
 
+	// What the parameter list binds, its own name's binding and the
+	// arguments object with it: a var of the body of the same name is a
+	// binding of its own where the list has a closure (bodyVar).
+	c.paramScope = len(c.locals)
+
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
 	varNames, annexB := collectVarDecls(fn.Body, nil, c.fn.Strict, c.opts.NodeQuirks)
@@ -208,8 +213,11 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 	c.annexB = annexB
 	for _, n := range varNames {
-		if _, exists := c.resolveLocal(n); !exists {
+		l, exists := c.resolveLocal(n)
+		if !exists {
 			c.declare(n, bindVar, fn.Start)
+		} else if c.inParamScope(l) && c.paramsClose(fn) {
+			c.bodyVar(n, l)
 		}
 	}
 
@@ -246,10 +254,13 @@ func (c *compiler) bindSelfName(fn *ast.FuncLit) {
 	}
 	// A var of the same name is a binding of the function's own scope, and it
 	// shadows the name the function was written with -- `function n() { var n }`
-	// reads undefined, not itself.
-	for _, n := range c.varNames(fn.Body) {
-		if n == c.selfName {
-			return
+	// reads undefined, not itself -- unless a closure of the parameter list
+	// sees the name, which the var does not shadow there (bodyVar).
+	if !c.paramsClose(fn) {
+		for _, n := range c.varNames(fn.Body) {
+			if n == c.selfName {
+				return
+			}
 		}
 	}
 	if !referencesName(fn, c.selfName) {

@@ -940,6 +940,34 @@ Paths are relative to this repository; `go-intl:` paths are in
   one go in by `wtf8.AppendJoin`, as a builder's pieces do.
   - Test: `TestJSONParseJoinsSurrogatePairs`, `TestJSONDifferential`.
 
+### KI-79 A body's var shared the binding of the parameter it shadows
+- **Where:** `internal/compiler/func.go`, `compileFunctionBody`. A function
+  whose parameters have expressions gives its body a variable environment
+  of its own (FunctionDeclarationInstantiation, step 28): a var of a
+  parameter's name is a binding of the body's, which starts with the
+  parameter's value. The walk had such a var reuse the parameter's slot.
+- **Effect:** where the parameter list has a closure or a direct eval, which
+  can see the parameter after the prologue, the two were one binding.
+- **Repro:** `function f(x, y = () => x) { var x = 2; return y() }` gave 2,
+  Node 1; `var f = function n(g = () => n) { var n = 2; return g() }` threw
+  a ReferenceError, the var hiding the function's own name from the list's
+  closure.
+- **Status:** fixed for declared vars. Where the list has a closure or a
+  direct eval, a var of the body that shadows one of its bindings has a
+  slot of its own (`bodyVar`), copied from the parameter at the end of the
+  prologue (regcomp's `Record.ParamCopies`); a var of the function's own
+  name starts undefined. Still open: a var a direct eval in the body
+  declares is the parameter's binding,
+  `function f(x, g = () => x) { eval("var x = 6"); return g() }` giving 6,
+  Node 1. The eval's var belongs to the body's environment, which until
+  then has no binding of the name, so a fix needs the body's references to
+  look for the eval's variables ahead of the parameter's slot, as for a
+  name the function does not bind. test262 caught neither: its cases of the
+  separate environment (`scope-paramsbody-var-open`, `-close`, the
+  `scope-param-*` cases with an eval in a default) never redeclare a
+  parameter.
+  - Test: `TestBodyVarsShadowParameters`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

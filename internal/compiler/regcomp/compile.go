@@ -410,6 +410,12 @@ func (g *gen) layout() bool {
 			return false
 		}
 	}
+	// A body's var copies the parameter list's binding it shadows.
+	for _, cp := range g.rec.ParamCopies() {
+		if !note(Res{Kind: ResLocal, Index: cp[0]}) || !note(Res{Kind: ResLocal, Index: cp[1]}) {
+			return false
+		}
+	}
 	// A direct eval reaches a binding in scope by its slot (LocalReg),
 	// whichever it names: each has a register, and the arguments object
 	// is made as the function starts. So does a debugger, at any place
@@ -661,6 +667,31 @@ func (g *gen) checkRef(r int, slot uint32) {
 // movFar copies the k-th far binding to register d (mov_far).
 func (g *gen) movFar(d, k int) {
 	g.farPCs = append(g.farPCs, g.emit(bytecode.MakeRBC(bytecode.RMovFar, 0, r16(d), uint32(k))))
+}
+
+// copyCallee puts the function itself in the binding in slot, near or
+// far, if it has a register.
+func (g *gen) copyCallee(slot uint32) {
+	if k := g.farOf(slot); k >= 0 {
+		g.movToFar(k, regCallee)
+	} else if r := g.slotReg[slot]; r >= 0 {
+		g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(int(r)), regCallee, 0))
+	}
+}
+
+// copySlot copies the binding in slot from to the one in slot to, either
+// of them near or far.
+func (g *gen) copySlot(from, to uint32) {
+	src := int(g.slotReg[from])
+	if k := g.farOf(from); k >= 0 {
+		src = g.alloc()
+		g.movFar(src, k)
+	}
+	if k := g.farOf(to); k >= 0 {
+		g.movToFar(k, src)
+		return
+	}
+	g.emit(bytecode.MakeR(bytecode.RMove, 0, r16(int(g.slotReg[to])), r16(src), 0))
 }
 
 // movToFar copies register v to the k-th far binding (mov_to_far).
@@ -937,6 +968,9 @@ func (g *gen) body() {
 		g.retReg(g.completion)
 		return
 	}
+	for _, slot := range g.rec.Self() {
+		g.copyCallee(slot)
+	}
 	if lit.Name != nil && !declares(lit.Body, lit.Name.Name) {
 		for slot, l := range g.fn.Locals {
 			if slot < len(g.slotReg) && g.slotReg[slot] >= 0 && l.Name == lit.Name.Name && !g.declared(slot) {
@@ -971,6 +1005,11 @@ func (g *gen) body() {
 	}
 	if lexical {
 		g.params(args)
+	}
+	// The body's vars that shadow the parameter list's bindings start with
+	// their values.
+	for _, cp := range g.rec.ParamCopies() {
+		g.copySlot(cp[0], cp[1])
 	}
 	release()
 	g.top = g.topAfterBindings()

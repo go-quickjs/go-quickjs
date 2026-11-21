@@ -449,6 +449,77 @@ func TestParametersBindInOrder(t *testing.T) {
 	}
 }
 
+// A function whose parameter list has a closure gives its body's vars
+// bindings of their own (FunctionDeclarationInstantiation's varEnv, step
+// 28): a var of a parameter's name starts with the parameter's value and
+// changes apart from it, and the closures of the list see the parameter.
+// Node's answers, every one.
+func TestBodyVarsShadowParameters(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ src, want string }{
+		{`function f(x, y = () => x) { var x = 2; return y() + "," + x } f(1)`, "1,2"},
+		{`function f(x, y = () => x) { var x; return x + "," + y() } f(1)`, "1,1"},
+		{`function f(x, g = () => x, s = v => x = v) { var x; var a = x; x = 5; s(9); return [a, x, g()].join() } f(1)`, "1,5,9"},
+		{`function f(x, s = v => x = v) { var x = 3; s(7); return x } f(1)`, "3"},
+		{`function f(x, g = () => x) { var x = 2; var h = () => x; x = 3; return g() + "," + h() } f(1)`, "1,3"},
+		{`function f(x, g = () => x, h = () => { x = 6 }) { var x = 2; h(); return g() + "," + x } f(1)`, "6,2"},
+		{`function f(a, b, c, g = () => a + b + c) { var a = 10, b = 20; return g() + "," + (a + b + c) } f(1, 2, 3)`, "6,33"},
+		// Without a closure in the list nothing sees the parameter apart.
+		{`function f(x, y = 5) { var x = x + y; return x } f(1)`, "6"},
+		// Patterns and rest elements bind the list's names too.
+		{`function f({x}, g = () => x) { var x = 2; return g() + "," + x } f({x: 1})`, "1,2"},
+		{`function f([x] = [4], g = () => x) { var x; return x + "," + g() } f()`, "4,4"},
+		{`function f(g = () => r, ...r) { var r = 3; return g().length + "," + r } f(undefined, 1, 2)`, "2,3"},
+		// The arguments object is the list's binding as well.
+		{`function f(a, g = () => arguments) { var arguments; return (g() === arguments) + "," + arguments[0] } f(7)`, "true,7"},
+		{`function f(a, g = () => arguments) { var arguments = 5; return typeof g() + "," + arguments + "," + g()[0] } f(7)`, "object,5,7"},
+		{`function f(a = () => 1) { var arguments; return Math.max.apply(null, arguments) } f(3, 9, 4)`, "9"},
+		// A direct eval in the body sees the body's var; one in a default
+		// the parameter.
+		{`function f(x, g = () => x) { var x = 2; eval("x = 5"); return g() + "," + x } f(1)`, "1,5"},
+		{`function f(x, g = eval("() => x")) { var x = 2; return g() + "," + x } f(1)`, "1,2"},
+		{`function f(x, g = eval("(v) => x = v")) { var x = 2; g(8); return x } f(1)`, "2"},
+		// A function declaration of the name is the body's binding.
+		{`function f(x, g = () => x) { function x() {} return typeof g() + "," + typeof x } f(1)`, "number,function"},
+		{`function f(x, g = () => x) { var x = 3; function x() {} return typeof g() + "," + typeof x } f(1)`, "number,number"},
+		// Every kind of function, strict or not, and the var anywhere in
+		// the body.
+		{`function* f(x, g = () => x) { var x = 2; yield g(); x = 3; yield x + "," + g() } var it = f(1); it.next().value + ";" + it.next().value`, "1;3,1"},
+		{`(function () { "use strict"; function f(x, g = () => x) { var x = 2; return g() + "," + x } return f(1) })()`, "1,2"},
+		{`var f = (x, g = () => x) => { var x = 2; return g() + "," + x }; f(1)`, "1,2"},
+		{`var o = { m(x, g = () => x) { var x = 2; return g() + "," + x } }; o.m(1)`, "1,2"},
+		{`function f(x, C = class { m() { return x } }) { var x = 2; return new C().m() + "," + x } f(1)`, "1,2"},
+		{`function f(x, g = () => x) { { var x = 2 } return g() + "," + x } f(1)`, "1,2"},
+		{`function f(x, g = () => x) { for (var x = 0; x < 3; x++); return g() + "," + x } f(1)`, "1,3"},
+		{`function f(x, g = () => x) { for (var x in {k: 1}); return g() + "," + x } f(1)`, "1,k"},
+		{`function f(x, g = () => x) { try { throw 4 } catch (x) { var x = 5 } return g() + "," + x } f(1)`, "1,1"},
+		// The function's own name is no parameter: its var starts undefined.
+		{`var f = function n(x, g = () => n) { var n = 2; return typeof g() + "," + n }; f(1)`, "function,2"},
+		{`var f = function n(g = () => n) { var r = n; var n = 2; return typeof g() + "," + typeof r + "," + n }; f()`, "function,undefined,2"},
+		{`var f = function n(a = 1) { var r = n; var n = 2; return typeof r + "," + n }; f()`, "undefined,2"},
+		{`function f(x, g = () => x) { var x = 2 } f.length`, "1"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+	// An async function's body is the same.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`var r; async function f(x, g = () => x) { var x = 2; await 0; x = 3; return g() + "," + x } f(1).then(v => r = v)`); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := rt.Eval(`r`); err != nil || v.String() != "1,3" {
+		t.Errorf("async: %v, %v; want 1,3", v, err)
+	}
+}
+
 // TestGlobalLexicalEnvironment covers a script's top-level let, const and
 // class. They are not properties of the global object, but they outlive the
 // script that declared them: the next script sees them, and so does eval.
