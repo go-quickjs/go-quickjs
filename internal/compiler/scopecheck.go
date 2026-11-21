@@ -32,9 +32,13 @@ type scopeChecker struct {
 //
 // A slice rather than a map: a scope binds a handful of names at most, so a
 // linear scan beats hashing, and a scope that binds nothing -- by far the
-// common case -- costs no allocation at all.
+// common case -- costs no allocation at all. A scope of more names than a
+// compiler keeps without an index (indexedLocals) is given one at its first
+// lookup, so that each var of a script of thousands of top-level lets is
+// not a scan of them all.
 type lexScope struct {
 	names []lexName
+	index map[string]struct{}
 	// catchParam names a simple catch parameter. Web reality requires
 	// `try {} catch (e) { var e; }` to keep working, so that one collision is
 	// permitted where every other is an error.
@@ -52,8 +56,21 @@ type lexName struct {
 	fromFunc bool
 }
 
-func (s *lexScope) has(name string) bool {
+func (s *lexScope) has(name string, looks *uint64) bool {
+	*looks++
+	if len(s.names) > indexedLocals {
+		if s.index == nil {
+			*looks += uint64(len(s.names))
+			s.index = make(map[string]struct{}, len(s.names))
+			for i := range s.names {
+				s.index[s.names[i].name] = struct{}{}
+			}
+		}
+		_, ok := s.index[name]
+		return ok
+	}
 	for i := range s.names {
+		*looks++
 		if s.names[i].name == name {
 			return true
 		}
@@ -61,27 +78,23 @@ func (s *lexScope) has(name string) bool {
 	return false
 }
 
-// add records a name, ignoring a repeat: a duplicate lexical declaration is
-// reported by the compiler proper, and this pass only asks whether the name is
-// bound at all.
+// add records a name. A repeat is kept: a duplicate lexical declaration is
+// reported by the compiler proper, and this pass only asks whether the name
+// is bound at all, which a list with a name twice answers as one with it once.
 func add(names []lexName, name string, pos int) []lexName {
 	return addKind(names, name, pos, false)
 }
 
 // addKind records a name, saying whether a function declaration bound it.
 //
-// A repeat is ignored, since this pass only asks whether the name is bound at
-// all -- except that a name bound by anything other than a function
-// declaration stops being one that Annex B may hoist.
+// A repeat is appended as any name is, not looked for: a scope of n names
+// had cost n*n/2 comparisons to collect, 65,600 top-level lets a few
+// seconds. What reads the list asks whether any entry has the name -- and,
+// for Annex B, whether any that has it is not a function declaration's
+// (varCollector's shadowed), which a name bound by anything else stops
+// being one that Annex B may hoist -- and the first entry of a name is
+// where it was first declared.
 func addKind(names []lexName, name string, pos int, fromFunc bool) []lexName {
-	for i := range names {
-		if names[i].name == name {
-			if !fromFunc {
-				names[i].fromFunc = false
-			}
-			return names
-		}
-	}
 	return append(names, lexName{name: name, pos: pos, fromFunc: fromFunc})
 }
 
@@ -302,7 +315,7 @@ func (s *scopeChecker) checkVarPattern(target ast.Expr) {
 	}
 	walkPatternNames(target, func(name string) {
 		for i := len(s.scopes) - 1; i >= s.base; i-- {
-			if !s.scopes[i].has(name) {
+			if !s.scopes[i].has(name, &s.c.pool.looks) {
 				continue
 			}
 			if s.scopes[i].catchParam == name {

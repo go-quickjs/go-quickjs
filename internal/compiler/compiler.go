@@ -101,6 +101,10 @@ type Options struct {
 	// prototype gives a typed twin, in place of QJS_TYPEDPROTO's
 	// (typedProto): a test's.
 	TypedProto []string
+	// looks, where a test sets it, is given how many lookups of a scope's
+	// names the compile made and bindings they looked at (scratchPool's
+	// looks).
+	looks *uint64
 }
 
 // bindKind classifies a binding, which decides its initialization and
@@ -546,6 +550,12 @@ type scratch struct {
 // scratchPool holds the scratch no function being compiled has.
 type scratchPool struct {
 	free []*scratch
+	// looks counts the compile's lookups of a scope's names and the
+	// bindings they look at -- declare's for a collision, the scope
+	// check's of a var against the lets around it -- which grow with the
+	// bindings, not with their square (TestCompileLexicalLinear,
+	// Options's looks).
+	looks uint64
 }
 
 // scratchPools keep a compile's scratch for the next, so that each script
@@ -570,6 +580,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		pool = parent.pool
 	} else {
 		pool = scratchPools.Get().(*scratchPool)
+		pool.looks = 0
 	}
 	s := pool.get()
 	c := &s.state
@@ -838,6 +849,9 @@ func (c *compiler) release() *bytecode.Function {
 // its pool on to the next compile. One that fails keeps neither.
 func (c *compiler) done() *bytecode.Function {
 	pool := c.pool
+	if c.opts.looks != nil {
+		*c.opts.looks = pool.looks
+	}
 	fn := c.release()
 	scratchPools.Put(pool)
 	return fn
@@ -978,7 +992,13 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	// name resolves to.
 	if kind != bindParam &&
 		((kind != bindVar && kind != bindFunction && kind != bindFunctionLexical) || lexicalFn) {
-		for i := len(c.locals) - 1; i >= 0 && c.locals[i].depth == c.depth; i-- {
+		// The bindings of the current scope are the last of locals, those of
+		// its depth; where the locals are indexed, the ones of the name
+		// alone are looked at, so that declaring a scope's n bindings is not
+		// n*n/2 comparisons.
+		c.pool.looks++
+		for i := c.lastOfScope(name); i >= 0; i = c.prevOfScope(i) {
+			c.pool.looks++
 			if c.locals[i].name != name || c.locals[i].paramScoped {
 				continue
 			}
@@ -1110,6 +1130,39 @@ func (c *compiler) bodyVar(name string, l *localVar) {
 	}
 	c.noteStore(slot)
 	c.reg.NoteParamCopy(from, slot)
+}
+
+// lastOfScope is the index in locals of the last binding of the current
+// scope that may be name's: with the locals indexed, the latest of the
+// name if it is of the scope, else the last of the scope; -1 for none.
+func (c *compiler) lastOfScope(name string) int {
+	if c.localIndex != nil {
+		i := c.localIndex[name] - 1
+		if i >= 0 && c.locals[i].depth != c.depth {
+			return -1
+		}
+		return i
+	}
+	i := len(c.locals) - 1
+	if i >= 0 && c.locals[i].depth != c.depth {
+		return -1
+	}
+	return i
+}
+
+// prevOfScope is the binding before locals[i] of the current scope that
+// may be the same name's (lastOfScope), or -1: the name's previous one with
+// the locals indexed, else the one before.
+func (c *compiler) prevOfScope(i int) int {
+	if c.localIndex != nil {
+		i = c.locals[i].previous - 1
+	} else {
+		i--
+	}
+	if i >= 0 && c.locals[i].depth != c.depth {
+		return -1
+	}
+	return i
 }
 
 // noteCaptured marks a binding of this function's as captured.
