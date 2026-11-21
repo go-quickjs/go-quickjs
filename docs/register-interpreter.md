@@ -640,6 +640,10 @@ across it. That made the tier pay: the native handlers' 0.82 against the Go
 table's 0.995, both against the old tiers ([Why a register
 machine](#what-it-measured-as-the-default)).
 
+On arm64 the generated blocks are aligned to 32 bytes, keeping each
+handler's address modulo 32 fixed when the Go code before the assembly
+grows. The placement comparisons can still vary their alignment modulo 64.
+
 **Pinned registers.** `RBX` the instruction's address, `R12` the frame's
 registers, `R13` the dispatch table, `R15` the closure's caches, `R11` the
 back-edge budget, `R10` the least tag, `RDI` the context; `RAX` holds the

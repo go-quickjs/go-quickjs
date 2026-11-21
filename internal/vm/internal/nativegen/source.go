@@ -70,6 +70,10 @@ func (ar *arch) writeBlock(s *strings.Builder, sym string, b *block, typed bool)
 		fmt.Fprintf(s, "//\t%5d  %s\n", b.at[op], name)
 	}
 	fmt.Fprintf(s, "TEXT ·%s(SB), NOSPLIT|NOFRAME, $0-0\n", sym)
+	if ar.goarch == "arm64" {
+		// Keep handler addresses fixed modulo 32 as preceding Go code grows.
+		s.WriteString("\tPCALIGN $32\n")
+	}
 	for i := 0; i < len(b.code); i += 16 {
 		var parts []string
 		line := b.code[i:min(i+16, len(b.code))]

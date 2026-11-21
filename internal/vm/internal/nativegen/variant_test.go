@@ -84,6 +84,9 @@ func testVariantOverrides(t *testing.T, l *Layout, ar *arch) {
 		}
 	}
 	src := ar.source(v, p, b)
+	if got := bytes.Contains(src, []byte("\tPCALIGN $32\n")); got != (ar.goarch == "arm64") {
+		t.Errorf("handler alignment on %s: directive present %v", ar.goarch, got)
+	}
 	for _, want := range []string{"//go:build ignore\n", "TEXT ·regNativeTestHandlers(SB)", "$·regNativeTestHandlers+", "GLOBL ·regNativeTestTable(SB), RODATA, $2080\n", "TEXT ·nativeTestTableAddr(SB)"} {
 		if !bytes.Contains(src, []byte(want)) {
 			t.Errorf("the variant's file has no %q", want)
