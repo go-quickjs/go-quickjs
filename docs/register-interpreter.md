@@ -1490,7 +1490,9 @@ not inline (`floor`, `pow`, ...) run in Go, by the engine's own Math.
   leaf. `regCacheCallee` marks a callee of the other kind `regCallCross`,
   which none of the hit paths' compares of the kind, Go's (`rhCallW`) or
   native, lets through; the site's miss (`regCallSlow`) then enters T by
-  `regEnterWTyped`, in a code entry of its own. A typed site caches no
+  `regEnterWTyped`, in a code entry of its own. The JIT's native code,
+  which reads no table, calls the twin natively from either kind of code
+  (internal/jit/README.md, "Typed code"). A typed site caches no
   built-in, since the call handler calls one with no exit, after which the
   code would read its heap as it was. `f.call` and `f.apply` of a typed
   function enter its ordinary code.

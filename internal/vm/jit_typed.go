@@ -266,6 +266,24 @@ func jitTypedCallee(cl *closure) (*closure, *regCode) {
 	return t.typedExt().twin, t
 }
 
+// jitTypedCross reports whether e, a call site's cache marked
+// regCallCross, holds a twin and its typed code (asmTwin), which native
+// code calls natively whatever its caller's kind: the interpreter enters
+// it in a code entry of its own, since its context holds one table, but
+// native code reads no table and its heap from the callee's own cell
+// (ssa.HeapFeedback), and an exit of the callee's goes on in the typed
+// interpreter from the frame Go makes of its level (runRegFor). Left to
+// Go, each call of a module's function from ordinary native code had
+// been a call of Go and a code entry: asm_fib's fib(10), 177 calls, paid
+// 185 ns for it.
+func jitTypedCross(e *regCallCache) bool {
+	if e.rc == nil || !e.rc.typed || e.cl == nil || e.cl.reg != e.rc || e.callee == nil {
+		return false
+	}
+	fd := e.callee.fn()
+	return fd != nil && fd.closure != nil && jitTypedTwinOf(fd.closure, e.cl)
+}
+
 // jitTypedTwinOf reports whether tw is the twin of cl (asmTwin), whose
 // function object is cl's: a native call of typed code checks cl's object
 // and enters tw's code.

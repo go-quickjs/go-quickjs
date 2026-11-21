@@ -535,9 +535,9 @@ func jitRegSameCode(site ssa.CallSite, cl *closure) bool {
 // regCallThis, regCallObjThis): a leaf's too, which its calls of the
 // interpreter answer without one.
 func jitRegCallKind(e *regCallCache) bool {
-	if e.kind&regCallCross != 0 {
-		// Code of the other kind, typed or ordinary, which Go enters in a
-		// code entry of its own (regCallCross).
+	if e.kind&regCallCross != 0 && !jitTypedCross(e) {
+		// Ordinary code a typed site holds, which Go enters in a code
+		// entry of its own (regCallCross).
 		return false
 	}
 	switch e.kind &^ regCallMarks {

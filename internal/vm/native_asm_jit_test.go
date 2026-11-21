@@ -257,6 +257,86 @@ var tableCalls = TableCalls(globalThis, {}, new ArrayBuffer(65536));
 	}
 }
 
+// TestAsmJITCalledFromOrdinaryCode has ordinary code's native code call
+// a module's function, which recurses, from a loop and from a callback,
+// with the module's import throwing and detaching the heap on the way:
+// every call is native (jitTypedCross), its answers exact, and what the
+// callee throws or leaves to Go goes on in the typed interpreter. Left to
+// Go, each call had been a call of Go and a code entry of its own, about
+// 185 ns: a fifth of the micro-benchmarks' asm_fib.
+func TestAsmJITCalledFromOrdinaryCode(t *testing.T) {
+	const src = `
+function Calls(stdlib, foreign, heap) {
+    "use asm";
+    var H32 = new stdlib.Int32Array(heap);
+    var poke = foreign.poke;
+    function fib(k) {
+        k = k | 0;
+        if ((k | 0) < 2)
+            return k | 0;
+        return ((fib((k - 1) | 0) | 0) + (fib((k - 2) | 0) | 0)) | 0;
+    }
+    function hit(k) {
+        k = k | 0;
+        H32[k << 2 >> 2] = (H32[k << 2 >> 2] | 0) + 1 | 0;
+        if ((k | 0) == 7)
+            poke(k | 0);
+        return H32[k << 2 >> 2] | 0;
+    }
+    return { fib: fib, hit: hit };
+}
+var calls = { mode: 0 };
+var buf = new ArrayBuffer(65536);
+var callsMod = Calls(globalThis, { poke: function (k) {
+    if (calls.mode === 1) throw new RangeError('poke ' + k);
+    if (calls.mode === 2) buf.transfer();
+} }, buf);
+function drive(n) { var s = 0; for (var j = 0; j < n; j++) s = (s + callsMod.fib(10)) | 0; return s; }
+function each(n) { var a = []; for (var j = 0; j < n; j++) a.push(j & 15); return a.map(function (k) { return callsMod.hit(k); }).join(); }
+`
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		if _, err := r.Run(compileForTest(t, "drive(500)")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.jitState().reporting = true
+	v, _ := jitCountGoCalls(t, r, "''+drive(2000)")
+	if got, want := v.String().Go(), fmt.Sprint(int32(2000*55)); got != want {
+		t.Fatalf("drive(2000) is %s, want %s", got, want)
+	}
+	for op, n := range r.RegNativeStats().GoCallOps {
+		if strings.HasPrefix(op, "call") {
+			t.Errorf("%d calls of Go at %s", n, op)
+		}
+	}
+	got, err := r.Run(compileForTest(t, `
+		var out = [each(16), each(16)]
+		calls.mode = 1
+		try { each(16) } catch (e) { out.push(e.name + ': ' + e.message) }
+		calls.mode = 2
+		out.push(each(16))
+		calls.mode = 0
+		out.push(each(16))
+		out.join('|')`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1|2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2|RangeError: poke 7|" +
+		"4,4,4,4,4,4,4,0,0,0,0,0,0,0,0,0|0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+	if got.String().Go() != want {
+		t.Errorf("got  %s\nwant %s", got.String().Go(), want)
+	}
+	for name, how := range asmJITNative(r, "callsMod", []string{"fib", "hit"}) {
+		if how != "native" {
+			t.Errorf("%s: %s", name, how)
+		}
+	}
+}
+
 // TestAsmJITMicroKernels runs the micro-benchmarks' asm.js kernels with
 // the JIT, its stress settings and the collector marking: each the value
 // Node gives (TestAsmMicroKernels), every kernel native, and callLeaf's

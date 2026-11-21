@@ -3513,7 +3513,15 @@ which the link checks, or a table's element -- is a number of the
 function's declared type, every return of which validation proves: its
 conversion is marked so (`ir.RawNumber`, found by the lowering's
 `callResult`), and is its number word, unchecked (`ssa.OpNumberF64`), with
-no check of a tag and no call of Go for a string.
+no check of a tag and no call of Go for a string. Ordinary code's native
+code calls a function of the module natively too, its site's cache the
+twin's though the interpreter marks it a crossing (`regCallCross`,
+`jitTypedCross`): the interpreter enters the other kind of code in a code
+entry of its own because a native context holds one table, but native
+code reads no table, and the callee's heap is its own cell. The window is
+Values in both kinds of code, and an exit of the callee's goes on in the
+typed interpreter from the frame Go makes of its level, as an exit of a
+typed caller's callee does.
 
 **Inlined.** A typed callee is offered as any register callee is (see
 [Inlining](#inlining)), its program its typed lowering and its feedback
