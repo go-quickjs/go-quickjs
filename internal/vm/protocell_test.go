@@ -96,10 +96,11 @@ func TestProtoCellAbsentReads(t *testing.T) {
 	}
 }
 
-// A read of a property some of a site's objects have does not give up
-// their entry for one of an object that has none: a monomorphic cache
-// would otherwise trade them at each, as V8's polymorphic one would keep
-// both. One whose receivers' layout is the same, its chain changed, does.
+// A read of a property some of a site's objects have and others have not
+// keeps an entry for each: the one it takes, the other among the site's
+// others (propCache.poly), as V8's polymorphic cache keeps both maps --
+// neither traded for the other at each read, as a monomorphic cache
+// would.
 func TestProtoCellAbsentKeepsPresent(t *testing.T) {
 	t.Parallel()
 	r := newTestRuntime(t, Config{})
@@ -113,8 +114,29 @@ func TestProtoCellAbsentKeepsPresent(t *testing.T) {
 	}
 	cl := globalObject(r, "get").fn().closure
 	for i := range cl.ic {
-		if c := &cl.ic[i]; c.shape != noShape && (c.cell != nil || c.fills > 2) {
-			t.Fatalf("the site traded its entries: cell %v, %d fills", c.cell != nil, c.fills)
+		c := &cl.ic[i]
+		if c.shape == noShape {
+			continue
+		}
+		if c.fills > 2 {
+			t.Fatalf("the site traded its entries: %d fills", c.fills)
+		}
+		entries := []*propCache{c}
+		if c.poly != nil {
+			for j := range int(c.poly.n) {
+				entries = append(entries, &c.poly.entries[j])
+			}
+		}
+		absent, present := false, false
+		for _, e := range entries {
+			if e.cell != nil && e.p2 == absentHolder {
+				absent = true
+			} else if e.cell == nil {
+				present = true
+			}
+		}
+		if !absent || !present {
+			t.Fatalf("the site keeps an entry for the absent property %v, for the present one %v", absent, present)
 		}
 	}
 	if v := r.global.getOwn(r.atoms.intern("out")).value(); v.Number() != 10 {

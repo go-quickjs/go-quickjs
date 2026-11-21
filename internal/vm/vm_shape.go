@@ -1565,7 +1565,9 @@ func (e *sharedEntry) holder(o *Object) *Object {
 // by the realm's shared cache, and filling it.
 func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	s := r.ensureShape(o)
-	if s == nil || key.IsIndex() {
+	if s == nil || key.IsIndex() || o.flags&objPolyProto != 0 || r.dictObject(o) {
+		// Or a layout that says nothing of its prototype, or a
+		// dictionary's of its own, which no entry would meet again.
 		return Undefined, false
 	}
 	t := r.shapes
@@ -1589,7 +1591,12 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 			return h.vals()[f.idx], true
 		}
 	}
-	var c propCache
+	// A cache of a site's kind, which remembers a key found past two
+	// prototypes or nowhere by the chain's cell (fillChainCache): a read
+	// of what objects of many layouts have not -- a props object's ref,
+	// which a render reads of every element -- found its way up each
+	// time.
+	c := propCache{shape: noShape, ownShape: noShape}
 	r.fillPropCache(&c, o, key, false)
 	if c.fills == 0 {
 		return Undefined, false
@@ -1775,7 +1782,7 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 	var up [2]*Object
 	h := o
 	for depth := 0; ; depth++ {
-		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) {
+		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) && (depth != 0 || !ownProto(h, key)) {
 			return
 		}
 		if i := h.findOwn(key); i >= 0 {
@@ -1829,6 +1836,22 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 	}
 }
 
+// ownProto reports whether key is the prototype a function o has made in
+// its table, which its layout then says it has: synthesized for a
+// function that still owes it (funcData's protoPending), whose read makes
+// it, and an own data property from then on, which a cache remembers as
+// any other -- a read of F.prototype for each of Class.create's classes, or
+// each component a render meets, had gone the long way every time.
+func ownProto(o *Object, key Atom) bool {
+	if key != atomPrototype || o.class != ClassFunction {
+		return false
+	}
+	if fd := o.fn(); fd == nil || fd.protoPending {
+		return false
+	}
+	return o.findOwn(key) >= 0
+}
+
 // maxChainDepth bounds how far up a read's cache follows a prototype chain
 // for a property (fillChainCache).
 const maxChainDepth = 32
@@ -1863,12 +1886,12 @@ func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, 
 			break
 		}
 	}
-	if holder == absentHolder && c.shape != noShape && c.cell == nil && c.shape != o.shape {
-		// A site whose objects have the property: one that has none does
-		// not take its entry, as V8's polymorphic cache would keep both
-		// and a monomorphic one would trade them at each.
-		return
-	}
+	// A site whose objects of other shapes have the property keeps their
+	// entry among its others (refill's notePoly) as it takes this one, as
+	// V8's polymorphic cache keeps both maps: a read of a key an object of
+	// one shape has and of another has not -- a props object's key, an
+	// element's $$typeof met on an array -- had gone the long way at every
+	// object of the second.
 	cell := r.chainCell(o.proto())
 	if cell == nil {
 		return
