@@ -149,7 +149,7 @@ func soleOp(w bytecode.RInstr) bool {
 		bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI,
 		bytecode.RJGeI, bytecode.RJNGeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJSEqI, bytecode.RJSNeI,
 		bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI,
-		bytecode.RGetGlobal, bytecode.RSetGlobal, bytecode.RGetMethodW, bytecode.RCallW, bytecode.RCallMW,
+		bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf, bytecode.RSetGlobal, bytecode.RGetMethodW, bytecode.RCallW, bytecode.RCallMW,
 		bytecode.RJBool, bytecode.RRet, bytecode.RRetUndef, bytecode.RStrFreeze, bytecode.RAppend:
 		return true
 	}

@@ -242,6 +242,7 @@ regTable 240 add_imm_i32 vm.rhAddII32
 regTable 241 get_prop_next vm.rhGetPropNext
 regTable 242 instanceof_next vm.rsInstanceOf
 regTable 243 jbool vm.rhJBool
+regTable 244 get_global_instanceof vm.rhGetGlobal
 regSlowTable 2 load_int vm.rsLoadInt
 regSlowTable 4 load_undef vm.rsLoadUndef
 regSlowTable 5 load_null vm.rsLoadNull
@@ -337,6 +338,7 @@ regSlowTable 239 sub_i32 vm.rsSubI32
 regSlowTable 240 add_imm_i32 vm.rsAddII32
 regSlowTable 241 get_prop_next vm.rsGetProp
 regSlowTable 243 jbool vm.rsJBool
+regSlowTable 244 get_global_instanceof vm.rsGetGlobal
 regTypedTable 0 nop vm.rhNop
 regTypedTable 1 move vm.rhMove
 regTypedTable 2 load_int vm.rhLoadInt

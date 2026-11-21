@@ -57,7 +57,7 @@ func (f *jitRegFeedback) regChainValue(rpc, reg, n int) (Value, bool) {
 			return Undefined, false
 		}
 		return prop.value(), true
-	case bytecode.RGetGlobal:
+	case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf:
 		name, ok := f.name(rpc-1, w.B())
 		if !ok {
 			return Undefined, false

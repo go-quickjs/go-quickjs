@@ -1211,7 +1211,7 @@ func (l *regLowering) lower(pc int) {
 		l.emit(ir.Instruction{Op: ir.UpvalueRead, Dest: int(a), Key: w.BC()}, false)
 	case bytecode.RSetUpval:
 		l.emit(ir.Instruction{Op: ir.UpvalueWrite, Left: reg(a), Key: w.BC()}, false)
-	case bytecode.RGetGlobal:
+	case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf:
 		// No operand: native code reads the binding where the global object,
 		// or a script's lexical bindings, have it.
 		l.emit(ir.Instruction{Op: ir.BindingRead, Left: ir.Literal(ir.Value{Kind: ir.Undefined}), Dest: int(a), Key: l.name(b)}, false)

@@ -54,6 +54,11 @@ func TestRegisterBackendCode(t *testing.T) {
 		function instanceBranch(o, C) { if (o instanceof C) return 1; return 2 }
 		function instanceNot(o, C) { if (!(o instanceof C)) return 1; return 2 }
 		function instanceLoop(o, C, f) { do { o = f(o) } while (o instanceof C) }
+		function instanceGlobal(o) { if (o instanceof C) return 1; return 2 }
+		function instanceGlobalNot(o) { if (!(o instanceof C)) return 1; return 2 }
+		function instanceGlobalLoop(o, f) { do { o = f(o) } while (o instanceof C) }
+		function instanceGlobalValue(o) { return o instanceof C }
+		function instanceGlobalAssign(o) { var b; if (b = o instanceof C) return b; return b }
 		function instanceValue(o, C) { return o instanceof C }
 		function instanceAssign(o, C) { var b; if (b = o instanceof C) return b; return b }
 		function booleanBranch(x) { return (x === false ? 1 : 0) + (true === x ? 2 : 0) + (x !== true ? 4 : 0) + (false !== x ? 8 : 0) }
@@ -155,7 +160,7 @@ func TestRegisterBackendCode(t *testing.T) {
 	if code := fns["chainOptional"].RegCode().String(); strings.Contains(code, "get_prop_next") {
 		t.Errorf("optional chain has a fused read:\n%s", code)
 	}
-	for _, name := range []string{"instanceBranch", "instanceNot", "instanceLoop"} {
+	for _, name := range []string{"instanceBranch", "instanceNot", "instanceLoop", "instanceGlobal", "instanceGlobalNot", "instanceGlobalLoop"} {
 		has(name, "instanceof_next")
 		code := fns[name].RegCode().Code
 		for pc, w := range code {
@@ -165,7 +170,17 @@ func TestRegisterBackendCode(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"instanceValue", "instanceAssign"} {
+	for _, name := range []string{"instanceGlobal", "instanceGlobalNot", "instanceGlobalLoop"} {
+		has(name, "get_global_instanceof")
+		code := fns[name].RegCode().Code
+		for pc, w := range code {
+			if w.Op() == bytecode.RGetGlobalInstanceOf && (pc+1 >= len(code) ||
+				code[pc+1].Op() != bytecode.RInstanceOfNext || code[pc+1].C() != w.A() || code[pc+1].B() == w.A()) {
+				t.Errorf("%s: broken global instanceof pair at %d", name, pc)
+			}
+		}
+	}
+	for _, name := range []string{"instanceValue", "instanceAssign", "instanceGlobalValue", "instanceGlobalAssign"} {
 		if code := fns[name].RegCode().String(); strings.Contains(code, "instanceof_next") {
 			t.Errorf("%s loses its boolean value:\n%s", name, code)
 		}

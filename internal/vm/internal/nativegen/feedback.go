@@ -39,7 +39,7 @@ var feedbackOps = append(append([]bytecode.ROp{
 	bytecode.RCallW, bytecode.RCallMW, bytecode.RRet, bytecode.RRetUndef,
 	bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt,
 	bytecode.RCallWT, bytecode.RCallMWT,
-}, feedbackOtherJumps...), bytecode.RInstanceOfNext)
+}, feedbackOtherJumps...), bytecode.RInstanceOfNext, bytecode.RGetGlobalInstanceOf)
 
 // feedbackUnfused is, of each fused operation whose partner is a jump that
 // plain's handler takes itself, the operation unfused: the feedback
@@ -48,9 +48,11 @@ var feedbackOps = append(append([]bytecode.ROp{
 // back edge (feedbackBCJumps). instanceof_next's plain handler branches
 // on its partner's offset where the partner would, which counts nothing,
 // so a loop whose condition is an instanceof never spent its function's
-// budget.
+// budget. Its fused global read runs as get_global here too, leaving the
+// instanceof and its branch to dispatch through this table.
 var feedbackUnfused = map[bytecode.ROp]bytecode.ROp{
-	bytecode.RInstanceOfNext: bytecode.RInstanceOf,
+	bytecode.RInstanceOfNext:      bytecode.RInstanceOf,
+	bytecode.RGetGlobalInstanceOf: bytecode.RGetGlobal,
 }
 
 // The back edges. Each of feedbackBCJumps and feedbackSCJumps -- every

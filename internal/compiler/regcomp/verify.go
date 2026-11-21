@@ -50,8 +50,11 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 			ok = reg(a)
 		case bytecode.RGetUpval, bytecode.RSetUpval:
 			ok = reg(a) && int(w.BC()) < len(fn.Upvalues)
-		case bytecode.RGetGlobal, bytecode.RSetGlobal:
+		case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf, bytecode.RSetGlobal:
 			ok = reg(a) && nameOK(rc, fn, pc, b) && site(c)
+			if w.Op() == bytecode.RGetGlobalInstanceOf {
+				ok = ok && pc+1 < len(code) && code[pc+1].Op() == bytecode.RInstanceOfNext && code[pc+1].C() == a && code[pc+1].B() != a
+			}
 		case bytecode.RCheckRef:
 			// The slot past 16 bits is FarNames', as a name is.
 			ok = reg(a) && (b != bytecode.RNameFar && int(b) < len(fn.Locals) ||

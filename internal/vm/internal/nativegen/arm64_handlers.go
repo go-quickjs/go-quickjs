@@ -1187,6 +1187,22 @@ func armEmit(v *variant) (*block, error) {
 	for _, emit := range g.megaIdx {
 		emit()
 	}
+	h(bytecode.RGetGlobalInstanceOf, func() {
+		globalSlot()
+		g.object(rS, rC)
+		a.AddImm(rIP, rIP, 8, true)
+		a.Load(rW, rIP, 0)
+		miss := a.NewLabel()
+		saved := g.exit
+		// No register has changed: a miss replays the global read so
+		// the ordinary instanceof receives its constructor in C.
+		g.exit = miss
+		g.instanceOfBody(true, true)
+		g.exit = saved
+		a.Bind(miss)
+		a.AddImm(rIP, rIP, -8, true)
+		a.B(g.exit)
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)
 	}

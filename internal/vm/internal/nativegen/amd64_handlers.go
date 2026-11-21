@@ -108,8 +108,8 @@ func nativeEmit(v *variant) (*block, error) {
 		a.LeaIdx(RAX, R12, RDX, 1, 0)
 		g.storeValue()
 	})
-	h(bytecode.RGetGlobal, func() {
-		// The slot the site remembers while the global epoch is its.
+	// The slot the site remembers while the global epoch is its, in RCX.
+	globalSlot := func() {
 		a.MovRR(RCX, RAX)
 		a.ShiftImm(Shr, RCX, 48, true)
 		a.Load(R8, RDI, ncCC)
@@ -132,6 +132,9 @@ func nativeEmit(v *variant) (*block, error) {
 		a.ShiftImm(Shl, R9, 4, true)
 		a.AddMem(R9, RSI, off("Object.valp"))
 		a.MovRR(RCX, R9)
+	}
+	h(bytecode.RGetGlobal, func() {
+		globalSlot()
 		g.loadValue(RCX)
 		g.decA(RDX)
 		a.LeaIdx(RAX, R12, RDX, 1, 0)
@@ -1354,6 +1357,25 @@ func nativeEmit(v *variant) (*block, error) {
 	for _, emit := range g.megaIdx {
 		emit()
 	}
+	h(bytecode.RGetGlobalInstanceOf, func() {
+		globalSlot()
+		a.Load(R8, RCX, 0)
+		a.CmpMem(R8, RDI, ncObjBits, true)
+		a.Jcc(CondNE, g.exit)
+		a.Load(RSI, RCX, 8)
+		a.OpImm(Add, RBX, 8, true)
+		a.Load(RAX, RBX, 0)
+		miss := a.NewLabel()
+		saved := g.exit
+		// No register has changed: a miss replays the global read so
+		// the ordinary instanceof receives its constructor in C.
+		g.exit = miss
+		g.instanceOfBody(true, true)
+		g.exit = saved
+		a.Bind(miss)
+		a.OpImm(Sub, RBX, 8, true)
+		a.Jmp(g.exit)
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)
 	}

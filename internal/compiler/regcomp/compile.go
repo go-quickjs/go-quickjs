@@ -2980,6 +2980,12 @@ func (g *gen) cond(e ast.Expr, when bool, target *mark) {
 		w := g.code[pc]
 		if w.Op() == bytecode.RInstanceOf && int(w.A()) == r && !g.isBinding(r) {
 			g.code[pc] = bytecode.MakeR(bytecode.RInstanceOfNext, w.X(), w.A(), w.B(), w.C())
+			if pc > 0 && g.fn.Debug == nil {
+				p := g.code[pc-1]
+				if p.Op() == bytecode.RGetGlobal && p.A() == w.C() && p.A() != w.B() && !g.isBinding(int(p.A())) {
+					g.code[pc-1] = bytecode.MakeR(bytecode.RGetGlobalInstanceOf, p.X(), p.A(), p.B(), p.C())
+				}
+			}
 		}
 	}
 	op := bytecode.RJmpF

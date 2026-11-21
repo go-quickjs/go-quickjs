@@ -57,7 +57,7 @@ func regRoles(w bytecode.RInstr) (reads, writes []int, known bool) {
 		bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI, bytecode.RMulI, bytecode.RAddII32:
 		return []int{b}, []int{a}, true
 	case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull, bytecode.RLoadTrue,
-		bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RLoadUninit, bytecode.RGetUpval, bytecode.RGetGlobal,
+		bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RLoadUninit, bytecode.RGetUpval, bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf,
 		bytecode.RNewObject, bytecode.RNewArrayK, bytecode.RNewArrayE, bytecode.RClosureW, bytecode.RNewRegExp:
 		return nil, []int{a}, true
 	case bytecode.RGetIndex, bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin, bytecode.RBitAnd,

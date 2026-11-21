@@ -242,6 +242,7 @@ nativeExitTable 240 add_imm_i32 vm.rsAddII32
 nativeExitTable 241 get_prop_next vm.rhGetPropNext
 nativeExitTable 242 instanceof_next vm.rsInstanceOf
 nativeExitTable 243 jbool vm.rhJBool
+nativeExitTable 244 get_global_instanceof vm.rsGetGlobal
 nativeTypedExitTable 0 nop vm.nativeTypedExit
 nativeTypedExitTable 1 move vm.nativeTypedExit
 nativeTypedExitTable 2 load_int vm.nativeTypedExit
@@ -486,7 +487,7 @@ nativeTypedExitTable 240 add_imm_i32 vm.nativeTypedExit
 nativeTypedExitTable 241 get_prop_next vm.nativeTypedExit
 nativeTypedExitTable 242 instanceof_next vm.nativeTypedExit
 nativeTypedExitTable 243 jbool vm.nativeTypedExit
-nativeTypedExitTable 244 rop(244) vm.nativeTypedExit
+nativeTypedExitTable 244 get_global_instanceof vm.nativeTypedExit
 nativeTypedExitTable 245 rop(245) vm.nativeTypedExit
 nativeTypedExitTable 246 rop(246) vm.nativeTypedExit
 nativeTypedExitTable 247 rop(247) vm.nativeTypedExit
@@ -742,7 +743,7 @@ nativeTypedSlowTable 240 add_imm_i32 vm.nativeTypedSlow
 nativeTypedSlowTable 241 get_prop_next vm.nativeTypedSlow
 nativeTypedSlowTable 242 instanceof_next vm.nativeTypedSlow
 nativeTypedSlowTable 243 jbool vm.nativeTypedSlow
-nativeTypedSlowTable 244 rop(244) vm.nativeTypedSlow
+nativeTypedSlowTable 244 get_global_instanceof vm.nativeTypedSlow
 nativeTypedSlowTable 245 rop(245) vm.nativeTypedSlow
 nativeTypedSlowTable 246 rop(246) vm.nativeTypedSlow
 nativeTypedSlowTable 247 rop(247) vm.nativeTypedSlow

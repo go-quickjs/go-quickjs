@@ -9,7 +9,7 @@ import (
 // and fit the 8-bit field with values to spare; they are neither cold nor
 // unnamed.
 func TestReservedOps(t *testing.T) {
-	reserved := []ROp{RStepJLt, RStepJLe, RStepJLtI, RStepJGtI, RStepJGeI, RStepJLeU, RMulI, RAddI32, RSubI32, RAddII32, RGetPropNext, RInstanceOfNext, RJBool}
+	reserved := []ROp{RStepJLt, RStepJLe, RStepJLtI, RStepJGtI, RStepJGeI, RStepJLeU, RMulI, RAddI32, RSubI32, RAddII32, RGetPropNext, RInstanceOfNext, RJBool, RGetGlobalInstanceOf}
 	if RStepJLt != RFarInit+1 {
 		t.Fatalf("far_init is %d and step_jlt %d: the reserved values must follow every other", RFarInit, RStepJLt)
 	}
@@ -21,8 +21,8 @@ func TestReservedOps(t *testing.T) {
 			t.Errorf("%s (%d): cold %v, name %q", op, uint8(op), op.Cold(), op.String())
 		}
 	}
-	// At least 12 values are left for the raw registers' regions.
-	if ROpCount != RStepJLt+ROp(len(reserved)) || int(ROpCount) > 256-12 {
+	// Eleven ordinary values remain free; raw operations use the typed table.
+	if ROpCount != RStepJLt+ROp(len(reserved)) || int(ROpCount) > 256-11 {
 		t.Errorf("ROpCount is %d", ROpCount)
 	}
 }

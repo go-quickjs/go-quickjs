@@ -166,8 +166,9 @@ func TestLowerRegExits(t *testing.T) {
 function g(n) { let s = n + 1; return s + glob }
 function p(o, n) { let s = n * 2; return o.x + s }
 function c(f, n) { let s = n - 1; return f(s) }
+function instance(o) { if (o instanceof C) return 1; return 2 }
 `)
-	for _, name := range []string{"g", "p", "c"} {
+	for _, name := range []string{"g", "p", "c", "instance"} {
 		fn := fns[name]
 		prog := regLowered(t, fn)
 		exit, err := regEvaluate(prog, fn, 5, 5)
@@ -176,7 +177,7 @@ function c(f, n) { let s = n - 1; return f(s) }
 		}
 		w := fn.RegCode().Code[exit.State.PC]
 		switch w.Op() {
-		case bytecode.RGetGlobal, bytecode.RGetProp, bytecode.RCallW:
+		case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf, bytecode.RGetProp, bytecode.RCallW:
 		default:
 			t.Fatalf("%s: left at pc %d, %s\n%s", name, exit.State.PC, fn.RegCode().Format(int(exit.State.PC)), fn.RegCode())
 		}

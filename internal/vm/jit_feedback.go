@@ -347,7 +347,7 @@ func (f *jitRegFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	rpc := int(f.p.Origin[pc])
 	site, write, check := int(w.C()), false, false
 	switch w.Op() {
-	case bytecode.RGetGlobal:
+	case bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf:
 	case bytecode.RSetGlobal:
 		write = true
 	case bytecode.RGetGlobalOpt:
@@ -1205,7 +1205,7 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 		a, b := int(w.A()), int(w.B())
 		switch w.Op() {
 		case bytecode.RNop, bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull,
-			bytecode.RLoadTrue, bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RLoadUninit, bytecode.RGetGlobal,
+			bytecode.RLoadTrue, bytecode.RLoadFalse, bytecode.RLoadEmpty, bytecode.RLoadUninit, bytecode.RGetGlobal, bytecode.RGetGlobalInstanceOf,
 			bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin, bytecode.RAddI, bytecode.RSubI,
 			bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr,
 			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI,

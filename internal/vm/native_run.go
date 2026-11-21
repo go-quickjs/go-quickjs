@@ -121,6 +121,7 @@ var nativeSlowOnMiss = [...]bytecode.ROp{
 	// does not make, before it commits anything: rsStep's.
 	bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI, bytecode.RStepJLeU,
 	bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
+	bytecode.RGetGlobalInstanceOf,
 }
 
 // The Go functions native code calls; the exit table is reg_tables.go's,

@@ -739,6 +739,11 @@ const (
 	// RJBool: jump by SC if R[A] is strictly equal to the boolean X&1,
 	// or is not equal where X's RCmpTrue is clear. B is zero.
 	RJBool
+	// RGetGlobalInstanceOf is RGetGlobal with an adjacent RInstanceOfNext
+	// whose C is A, a temporary dead after that instruction. Native code
+	// may test the cached global without storing the temporary. On a miss,
+	// the Go handler performs the global read and goes on at pc+1.
+	RGetGlobalInstanceOf
 
 	// ROpCount is how many operations there are, each below it: the
 	// interpreter's table has an entry for every value an ROp can hold,
@@ -1227,7 +1232,7 @@ var rOpNames = [...]string{
 	RLoadFalse: "load_false", RLoadEmpty: "load_empty", RLoadUninit: "load_uninit",
 	RLoadThis: "load_this", RCheckRef: "check_ref",
 	RGetUpval: "get_upval", RSetUpval: "set_upval",
-	RGetGlobal: "get_global", RSetGlobal: "set_global",
+	RGetGlobal: "get_global", RGetGlobalInstanceOf: "get_global_instanceof", RSetGlobal: "set_global",
 	RGetProp: "get_prop", RGetPropNext: "get_prop_next", RGetMethod: "get_method", RGetMethodW: "get_method_w", RArgsLen: "args_len", RArgsIndex: "args_index", RConcat: "concat", RStrPart: "str_part", RKeyOfBase: "key_of_base", RSetProp: "set_prop",
 	RGetIndex: "get_index", RSetIndex: "set_index", RDefineField: "define_field",
 	RNewObject: "new_object", RNewArray: "new_array",
@@ -1332,7 +1337,7 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s, u%d", op, r(w.A()), w.BC())
 	case RSetUpval:
 		return fmt.Sprintf("%s u%d, %s", op, w.BC(), r(w.A()))
-	case RGetGlobal:
+	case RGetGlobal, RGetGlobalInstanceOf:
 		return fmt.Sprintf("%s %s, name%d @%d", op, r(w.A()), w.B(), w.C())
 	case RSetGlobal:
 		return fmt.Sprintf("%s name%d @%d, %s", op, w.B(), w.C(), r(w.A()))

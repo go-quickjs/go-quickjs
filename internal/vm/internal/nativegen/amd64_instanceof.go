@@ -17,12 +17,22 @@ import (
 func (g *nativeGen) instanceOf() { g.instanceOfMode(false) }
 
 func (g *nativeGen) instanceOfMode(branch bool) {
+	g.instanceOfBody(branch, false)
+}
+
+// instanceOfBody accepts the constructor in RSI where known, otherwise
+// reads it from C. The global-read handler shares the same checks and walk.
+func (g *nativeGen) instanceOfBody(branch, known bool) {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	g.decC(RDX)
-	g.object(RSI, RDX)
-	g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
+	if known {
+		defer g.instanceOfSite(check, miss, value)
+	} else {
+		g.decC(RDX)
+		g.object(RSI, RDX)
+		g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
+	}
 	a.Store(RDI, scr(sE), RSI)
 	// The site, Aux[pc]: &ic[Aux[pc]].
 	a.Load(R8, RDI, ncRC)

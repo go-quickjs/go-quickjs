@@ -318,8 +318,8 @@ the instruction. The families:
 `bytecode.ROp` is 8 bits, and the Go table, its slow functions and the
 native table each have 256 entries, every value with one: a value no
 operation has is `rhInvalid`'s, which panics and which the verifier proves
-no code holds, so the dispatch needs no range check. 244 values are taken
-(`ROpCount`), 12 are free.
+no code holds, so the dispatch needs no range check. 245 values are taken
+(`ROpCount`), 11 are free.
 
 How a value is allotted:
 
@@ -660,7 +660,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 132 of the 244 operations have a native handler
+**What is native.** 133 of the 245 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,
@@ -724,6 +724,17 @@ counts its back edge toward the function's budget, which a branch taken
 by `instanceof_next` itself would not. The handler and its cache probe
 follow every handler and helper before them, so that none of those
 moves.
+
+Where the constructor is an immediately preceding global read into a
+temporary, regcomp emits `get_global_instanceof` before that pair. The
+native handler probes the global site's epoch and slot, reads the current
+constructor there, and shares the ordinary `instanceof` checks and walk.
+It skips the temporary store and its partner's dispatch. A miss returns
+to the global read, before any visible work or register store; the Go
+table and JIT execute all three instructions normally. The fused form is
+not emitted for debugger code. The feedback dispatcher runs the ordinary
+global read and leaves the branch to its own handler, so the JIT sees each
+back edge.
 
 **The exit stub.** An operation with no native handler has the exit stub's
 address in the table, and every miss jumps to it. It writes the

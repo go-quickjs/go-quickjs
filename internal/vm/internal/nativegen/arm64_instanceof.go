@@ -10,12 +10,22 @@ import (
 func (g *armGen) instanceOf() { g.instanceOfMode(false) }
 
 func (g *armGen) instanceOfMode(branch bool) {
+	g.instanceOfBody(branch, false)
+}
+
+// instanceOfBody accepts the constructor in rS where known, otherwise
+// reads it from C. The global-read handler shares the same checks and walk.
+func (g *armGen) instanceOfBody(branch, known bool) {
 	a := g.a
 	scan, next, found, loop, yes, no, store := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	check, miss, value := a.NewLabel(), a.NewLabel(), a.NewLabel()
-	g.regC(rD)
-	g.object(rS, rD)
-	g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
+	if known {
+		defer g.instanceOfSite(check, miss, value)
+	} else {
+		g.regC(rD)
+		g.object(rS, rD)
+		g.last = append(g.last, func() { g.instanceOfSite(check, miss, value) })
+	}
 	a.Store(rCtx, scr(sE), rS)
 	// The site, Aux[pc]: &ic[Aux[pc]].
 	a.Load(r8, rCtx, ncRC)

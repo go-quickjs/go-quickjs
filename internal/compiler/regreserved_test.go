@@ -121,6 +121,30 @@ func TestVerifyReservedOps(t *testing.T) {
 		ok("instanceof without partner", f, withCode(rc, rc.Code[:pc+1], rc.Aux), false)
 	}
 
+	f = regFunctions(t, `function test(o) { if (o instanceof C) return 1; return 0 }`)["test"]
+	rc = f.RegCode()
+	view = *f
+	view.PropSites = rc.PropSites
+	view.Names = rc.Names
+	f = &view
+	for pc, w := range rc.Code {
+		if w.Op() != bytecode.RGetGlobalInstanceOf {
+			continue
+		}
+		ok("global instanceof", f, rc, true)
+		p := rc.Code[pc+1]
+		for name, partner := range map[string]bytecode.RInstr{
+			"another constructor": bytecode.MakeR(p.Op(), p.X(), p.A(), p.B(), p.B()),
+			"aliased value":       bytecode.MakeR(p.Op(), p.X(), p.A(), w.A(), w.A()),
+			"another operation":   bytecode.MakeR(bytecode.RInstanceOf, p.X(), p.A(), p.B(), p.C()),
+		} {
+			code := append([]bytecode.RInstr(nil), rc.Code...)
+			code[pc+1] = partner
+			ok("global instanceof "+name, f, withCode(rc, code, rc.Aux), false)
+		}
+		ok("global instanceof without partner", f, withCode(rc, rc.Code[:pc+1], rc.Aux), false)
+	}
+
 	f = regFunctions(t, `function test(v) { return v === false ? 1 : 2 }`)["test"]
 	rc = f.RegCode()
 	for pc, w := range rc.Code {
