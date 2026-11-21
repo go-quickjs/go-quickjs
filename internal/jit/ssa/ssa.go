@@ -762,6 +762,12 @@ const (
 // operands as uint32s.
 const CmpUnsigned = 1 << 8
 
+// ToInt32Exact, an OpToInt32's Aux, says its operand is an int32's number
+// (typed code's call of a function of its module that returns a signed
+// int): its conversion truncates, with no check of a number past the
+// int64s'.
+const ToInt32Exact = 1
+
 // ObjectOfTry, an OpObjectOf's Index, has it give 0 where its operand is no
 // object, rather than exit: a megamorphic read's receiver (InlineCache's
 // Try), whose cell is then none, Go reading the property of whatever the

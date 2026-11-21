@@ -3146,6 +3146,16 @@ func i32Boxed(v *ssa.Value) *ssa.Value {
 	return nil
 }
 
+// exactF64 reports whether x, a float64, is an integer's conversion, which
+// is never NaN: a box of it needs no NaN made canonical.
+func exactF64(x *ssa.Value) bool {
+	switch x.Op {
+	case ssa.OpI32ToF64, ssa.OpU32ToF64, ssa.OpBoolToF64:
+		return true
+	}
+	return false
+}
+
 // takesOperand reports an operation whose result may take the register of
 // an operand whose interval ends at it (allocate's scan): each backend's
 // code for it reads its operands -- into scratch registers, or in its one

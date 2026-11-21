@@ -785,7 +785,7 @@ func (c *compiler) materialize(v *ssa.Value, dst amd64.Reg) {
 		if x := i32Boxed(v); x != nil {
 			// An int32's number, made of the int32 (core's i32Boxed).
 			c.intToF64(xScratch1, c.gpr(x, dst), false)
-			c.boxF64(xScratch1, dst)
+			c.a.MovQFromX(dst, xScratch1)
 			break
 		}
 		c.boxF64(c.xmm(v.Args[0], xScratch1), dst)
@@ -11965,7 +11965,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Store(scratchA, c.enc.NumOffset, scratchB)
 		c.a.Bind(done)
 	case ssa.OpBoxF64:
-		c.boxF64(c.xmm(arg(0), xScratch0), scratchA)
+		if x := arg(0); exactF64(x) {
+			// An integer's number is no NaN.
+			c.a.MovQFromX(scratchA, c.xmm(x, xScratch0))
+		} else {
+			c.boxF64(c.xmm(x, xScratch0), scratchA)
+		}
 		c.setG(v, scratchA)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(arg(0), scratchB), scratchA)
@@ -12580,6 +12585,13 @@ func (c *compiler) truth(v *ssa.Value, guard guardTo, to *target) {
 // significand.
 func (c *compiler) toInt32(v *ssa.Value) {
 	xv := v.Args[0]
+	if v.Aux == ssa.ToInt32Exact {
+		// An int32's number (ssa.ToInt32Exact): truncated.
+		c.a.Cvttsd2si(scratchA, c.xmm(xv, xScratch0))
+		c.a.MovRR32(scratchA, scratchA)
+		c.setG(v, scratchA)
+		return
+	}
 	slow, back := c.a.NewLabel(), c.a.NewLabel()
 	x := c.xmm(xv, xScratch0)
 	c.a.Cvttsd2si(scratchA, x)

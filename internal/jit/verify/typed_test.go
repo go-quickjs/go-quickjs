@@ -42,7 +42,7 @@ func TestTypedEmitted(t *testing.T) {
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		CallGo: 0x72000, StoreRef: 0x70000}
-	n, heaps, divs := 0, 0, 0
+	n, heaps, divs, exact := 0, 0, 0, 0
 	for _, file := range []string{"../../vm/testdata/asm_ops.js", "../../vm/testdata/asm_edges.js", "../../v8bench/microbench_extra.js"} {
 		b, err := os.ReadFile(file)
 		if err != nil {
@@ -88,6 +88,10 @@ func TestTypedEmitted(t *testing.T) {
 							heaps++
 						case ssa.OpDivI32, ssa.OpDivU32, ssa.OpRemI32, ssa.OpRemU32:
 							divs++
+						case ssa.OpToInt32:
+							if v.Aux == ssa.ToInt32Exact {
+								exact++
+							}
 						}
 					}
 				}
@@ -115,8 +119,11 @@ func TestTypedEmitted(t *testing.T) {
 		}
 		walk(top)
 	}
-	if n < 40 || heaps == 0 || divs == 0 {
-		t.Fatalf("%d typed functions compiled, %d heap accesses, %d divisions", n, heaps, divs)
+	// A call's result of a function of the module that returns a signed
+	// int is converted exactly, with no check (ssa.ToInt32Exact): fib's
+	// recursion's among them.
+	if n < 40 || heaps == 0 || divs == 0 || exact == 0 {
+		t.Fatalf("%d typed functions compiled, %d heap accesses, %d divisions, %d exact conversions", n, heaps, divs, exact)
 	}
-	t.Logf("%d typed functions compiled for both targets, %d heap accesses, %d divisions", n, heaps, divs)
+	t.Logf("%d typed functions compiled for both targets, %d heap accesses, %d divisions, %d exact conversions", n, heaps, divs, exact)
 }

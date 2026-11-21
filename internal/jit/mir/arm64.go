@@ -554,7 +554,7 @@ func (c *a64Compiler) materialize(v *ssa.Value, dst arm64.Reg) {
 		if x := i32Boxed(v); x != nil {
 			// As amd64's: an int32's number, made of the int32.
 			c.a.Scvtf(a64F1, c.gpr(x, dst), false)
-			c.boxF64(a64F1, dst)
+			c.a.FMovFromF(dst, a64F1)
 			break
 		}
 		c.boxF64(c.fpr(v.Args[0], a64F1), dst)
@@ -10645,7 +10645,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Store(a64A, c.enc.NumOffset, a64B)
 		c.a.Bind(done)
 	case ssa.OpBoxF64:
-		c.boxF64(c.fpr(arg(0), a64F0), a64A)
+		if x := arg(0); exactF64(x) {
+			// As amd64's: an integer's number is no NaN.
+			c.a.FMovFromF(a64A, c.fpr(x, a64F0))
+		} else {
+			c.boxF64(c.fpr(x, a64F0), a64A)
+		}
 		c.setG(v, a64A)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(arg(0), a64B), a64A)
@@ -10920,6 +10925,13 @@ func (c *a64Compiler) truth(v *ssa.Value, guard a64Guard, to *a64Target) {
 // does.
 func (c *a64Compiler) toInt32(v *ssa.Value) {
 	xv := v.Args[0]
+	if v.Aux == ssa.ToInt32Exact {
+		// As amd64's: an int32's number, truncated.
+		c.a.Fcvtzs(a64A, c.fpr(xv, a64F0))
+		c.a.MovRR32(a64A, a64A)
+		c.setG(v, a64A)
+		return
+	}
 	slow, back := c.a.NewLabel(), c.a.NewLabel()
 	x := c.fpr(xv, a64F0)
 	c.a.Fcvtzs(a64A, x)

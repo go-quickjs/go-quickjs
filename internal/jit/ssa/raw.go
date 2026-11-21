@@ -207,7 +207,13 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 			}
 		}
 		if in.Raw == ir.RawConvI {
-			setI(val(OpToInt32, Int32, n))
+			t := val(OpToInt32, Int32, n)
+			if in.Key == ir.RawNumber {
+				// A signed int's: what validation proves of a call's result
+				// the call coerces with | 0, the function's declared type.
+				t.Aux = ToInt32Exact
+			}
+			setI(t)
 		} else {
 			setF(n)
 		}

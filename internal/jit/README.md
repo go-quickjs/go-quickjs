@@ -3564,7 +3564,11 @@ which the link checks, or a table's element -- is a number of the
 function's declared type, every return of which validation proves: its
 conversion is marked so (`ir.RawNumber`, found by the lowering's
 `callResult`), and is its number word, unchecked (`ssa.OpNumberF64`), with
-no check of a tag and no call of Go for a string. Ordinary code's native
+no check of a tag and no call of Go for a string; a signed int's, which
+the call coerces with | 0, converted by truncation alone, with no check of
+a number past the int64s' (`ssa.ToInt32Exact`). A box of an integer's
+conversion, which is never NaN, is its bits, with no NaN made canonical
+(mir's `exactF64`). Ordinary code's native
 code calls a function of the module natively too, its site's cache the
 twin's though the interpreter marks it a crossing (`regCallCross`,
 `jitTypedCross`): the interpreter enters the other kind of code in a code
@@ -3596,10 +3600,15 @@ callee whose call of an import, Go's, nothing inlines -- as an ordinary
 callee is not.
 
 **What is left.** A call between typed functions natively boxes its
-arguments into the window and the callee unboxes them; a raw calling
-convention would keep them in registers. A typed function the
-interpreter answers without a frame (a leaf, `regCallKind`) is never
-linked, and runs as the ordinary code's leaf.
+arguments into the window and the callee unboxes them, and the callee
+boxes its result, which the caller unboxes: a raw calling convention would
+keep them in registers -- the int32s and float64s passed and returned raw,
+the callee entered past its parameters' conversions at an entry of its own
+for typed callers, its window's Values still written for the frames Go
+makes of its level, and a level Go finishes giving its result back raw
+where its native caller resumes. A typed function the interpreter answers
+without a frame (a leaf, `regCallKind`) is never linked, and runs as the
+ordinary code's leaf.
 
 ## Zero cost when off
 
