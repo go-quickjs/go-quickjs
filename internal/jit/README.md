@@ -3483,7 +3483,16 @@ written at the heap's base; out of the heap a load gives 0 or NaN and a
 store does nothing. The VM keeps every heap native code reads current as
 its buffer's bytes move or go (`asmHeapKeep`, `bufferChanged`), so native
 code reads the cell with no check of an epoch: a detached heap has a
-length of 0. Neither op exits, and a store stores no pointer: the marking
+length of 0. The base and the length are values of their own, the
+accesses' last operands (`OpHeapBase`, `OpHeapLen`), and variables of the
+build's SSA construction as slots are (`heapOf`), of slots below 0: read
+where a block has them, merged by phis, and loaded from the cell only where
+they are stale -- at an entry, and after a call (`reloadAfterCall`), which
+may run script that detaches or moves the buffer; nothing else changes a
+cell. So a loop that calls nothing loads them once, before it, its
+header's phis trivial, and each access compares its address with a
+register and adds one, where it had loaded the cell's address and both of
+its words. Neither op exits, and a store stores no pointer: the marking
 rule holds with nothing of the barrier's. A module variable is its cell's
 number word (`OpCellNumLoad`, `OpCellNumStore` of the cell
 `OpUpvalueCell` gives): validation keeps anything but a number from the

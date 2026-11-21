@@ -337,6 +337,75 @@ function each(n) { var a = []; for (var j = 0; j < n; j++) a.push(j & 15); retur
 	}
 }
 
+// TestAsmJITHeapAfterCalls has native code read a heap in a loop whose
+// body calls an import that detaches the heap's buffer, before the body's
+// first read of the heap: the base and the length the code keeps for the
+// loop (ssa's heapOf) are loaded again after the call, even one built
+// before the heap was first read, so every read after the detach gives 0,
+// as the interpreter's do.
+func TestAsmJITHeapAfterCalls(t *testing.T) {
+	const src = `
+function HeapCalls(stdlib, foreign, heap) {
+    "use asm";
+    var H32 = new stdlib.Int32Array(heap);
+    var U8 = new stdlib.Uint8Array(heap);
+    var poke = foreign.poke;
+    function sum(n, k) {
+        n = n | 0;
+        k = k | 0;
+        var i = 0, s = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0) {
+            if ((i | 0) == (k | 0))
+                poke(i | 0);
+            s = (s + (H32[i << 2 >> 2] | 0)) | 0;
+            s = (s + (U8[(i + 64) | 0] | 0)) | 0;
+        }
+        return s | 0;
+    }
+    function fill(n) {
+        n = n | 0;
+        var i = 0;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            H32[i << 2 >> 2] = (i + 1) | 0;
+    }
+    return { sum: sum, fill: fill };
+}
+var detach = false, heapBuf = new ArrayBuffer(65536);
+var heapCalls = HeapCalls(globalThis, { poke: function () { if (detach) heapBuf.transfer() } }, heapBuf);
+heapCalls.fill(32);
+var heapOut = [];
+for (var j = 0; j < 50; j++) heapOut.push(heapCalls.sum(32, j & 1 ? 5 : -1));
+detach = true;
+heapOut.push(heapCalls.sum(32, 10));
+detach = false;
+heapOut.push(heapCalls.sum(32, 3), heapCalls.sum(32, -1));
+''+heapOut.slice(48)
+`
+	for _, c := range []struct{ stress, marking bool }{{false, false}, {true, false}, {false, true}} {
+		t.Run(fmt.Sprintf("stress=%v/marking=%v", c.stress, c.marking), func(t *testing.T) {
+			if c.marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if c.stress {
+				r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
+			}
+			v, err := r.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := v.String().Go(), "692,692,109,0,0"; got != want {
+				t.Errorf("got %s, want %s", got, want)
+			}
+			for name, how := range asmJITNative(r, "heapCalls", []string{"sum", "fill"}) {
+				if how != "native" {
+					t.Errorf("%s: %s", name, how)
+				}
+			}
+		})
+	}
+}
+
 // TestAsmJITMicroKernels runs the micro-benchmarks' asm.js kernels with
 // the JIT, its stress settings and the collector marking: each the value
 // Node gives (TestAsmMicroKernels), every kernel native, and callLeaf's

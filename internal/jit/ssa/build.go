@@ -3487,6 +3487,13 @@ type builder struct {
 	rootBlk *Block
 	rootPC  int
 
+	// heaps are the cells of the heaps typed code read (heapOf), each a
+	// variable of the slots heapSlot gives; heapMarks their slots' stale
+	// markers; heapKills the blocks a call made them stale in.
+	heaps     []uintptr
+	heapMarks []*Value
+	heapKills []*Block
+
 	entryPCs []int
 	blockAt  []*Block // by the PC a block starts at
 	// endOf is the last PC of each block, by block ID.
@@ -3817,16 +3824,22 @@ func (b *builder) reloadCells(blk *Block, locals []bool) {
 
 // reloadAfterCall is reloadUpvalues after a call, which may assign a
 // captured binding, or a local a closure assigns -- not one no closure
-// assigns (ir.Program's Assigned), which the call leaves as it is.
+// assigns (ir.Program's Assigned), which the call leaves as it is. The
+// heaps typed code reads are stale after it too, the call able to
+// detach or move their buffers (heapOf).
 func (b *builder) reloadAfterCall(blk *Block) {
+	b.staleHeaps(blk)
 	if p := b.root.p; p.Upvalues != 0 || p.Assigned != nil {
 		b.reloadCells(blk, p.Assigned)
 	}
 }
 
 // hasCells reports whether the function has captured bindings, or locals
-// closures capture: what a call may assign (reloadUpvalues).
-func (b *builder) hasCells() bool { return b.root.p.Upvalues > 0 || b.root.p.Captured != nil }
+// closures capture: what a call may assign (reloadUpvalues) -- or is
+// typed code, whose heaps a call may change (heapOf).
+func (b *builder) hasCells() bool {
+	return b.root.p.Upvalues > 0 || b.root.p.Captured != nil || b.root.p.Kinds != nil
+}
 
 // cellOf is the cell of slot, a captured binding's or a captured local's,
 // in blk: where its value is now.
@@ -3852,6 +3865,20 @@ func (b *builder) cellOf(blk *Block, slot int) *Value {
 // its cell at the end of blk, with st the state a guard that unboxes it
 // exits to (unboxPhis), if any: a read's, which the binding's variable met
 // marked stale.
+// reloadStale is slot's value as blk leaves it where its value there is
+// stale, the marker: a captured binding's or a heap's, loaded from its
+// cell at blk's end.
+func (b *builder) reloadStale(blk *Block, slot int, stale *Value) *Value {
+	if slot < 0 {
+		v := b.heapLoad(blk, slot)
+		b.found(slot, blk, v)
+		return v
+	}
+	v := b.loadUpvalue(blk, stale.Index, nil)
+	b.write(slot, blk, v)
+	return v
+}
+
 func (b *builder) loadUpvalue(blk *Block, slot int, st *FrameState) *Value {
 	cell := b.cellOf(blk, slot)
 	v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
@@ -7175,6 +7202,10 @@ func (b *builder) readVar(slot int, blk *Block) *Value {
 		b.incomplete[blk.ID] = append(b.incomplete[blk.ID], slotPhi{slot, v})
 	case len(blk.Preds) == 1:
 		v = b.readVar(slot, blk.Preds[0])
+	case len(blk.Preds) == 0 && slot < 0:
+		// A heap's base or length at an entry, which loads it where it is
+		// read (heapRead).
+		v = b.heapStale(slot)
 	case len(blk.Preds) == 0 && blk.PC < 0 && slot < blk.Header.Len():
 		// A local an entry did not load, as the interpreter's liveness has
 		// it dead there (fill): the frame's, as an entry loads it.
@@ -7186,6 +7217,9 @@ func (b *builder) readVar(slot int, blk *Block) *Value {
 		v = b.constIn(blk, ir.Value{Kind: ir.Undefined})
 	default:
 		v = b.mergeVar(slot, blk)
+	}
+	if slot < 0 && v.Op == OpPhi {
+		v.Type = Ptr
 	}
 	b.found(slot, blk, v)
 	return v
@@ -7220,8 +7254,7 @@ func (b *builder) mergeVar(slot int, blk *Block) *Value {
 		a := b.readVar(slot, p)
 		if a.Op == OpUpvalueStale {
 			// The binding as the predecessor leaves it, from its cell.
-			a = b.loadUpvalue(p, a.Index, nil)
-			b.write(slot, p, a)
+			a = b.reloadStale(p, slot, a)
 		}
 		b.phiArgs = append(b.phiArgs, a)
 	}
@@ -7239,6 +7272,9 @@ func (b *builder) mergeVar(slot int, blk *Block) *Value {
 			return v
 		}
 		phi = b.newPhiID(blk, mark.ID)
+		if slot < 0 {
+			phi.Type = Ptr
+		}
 	}
 	phi.Args = b.f.refsOf(len(args))[:0]
 	for _, a := range args {
@@ -7279,8 +7315,7 @@ func (b *builder) addPhiOperands(slot int, phi *Value) {
 		a := b.readVar(slot, p)
 		if a.Op == OpUpvalueStale {
 			// The binding as the predecessor leaves it, from its cell.
-			a = b.loadUpvalue(p, a.Index, nil)
-			b.write(slot, p, a)
+			a = b.reloadStale(p, slot, a)
 		}
 		a.Uses++
 		phi.Args = append(phi.Args, a)

@@ -11280,6 +11280,15 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpHeapLoad, ssa.OpHeapStore:
 		c.heapAccess(v)
+	case ssa.OpHeapBase, ssa.OpHeapLen:
+		d := c.gdst(v)
+		c.movImm(d, v.Const.Bits)
+		off := int32(abi.OffHeapBase)
+		if v.Op == ssa.OpHeapLen {
+			off = abi.OffHeapLen
+		}
+		c.a.Load(d, d, off)
+		c.setG(v, d)
 	case ssa.OpDivI32, ssa.OpDivU32, ssa.OpRemI32, ssa.OpRemU32:
 		c.divide32(v)
 	case ssa.OpCellNumLoad:
@@ -12636,26 +12645,24 @@ func shiftOp(op ssa.Op) amd64.Shift {
 
 // heapAccess is typed code's heap load or store (ssa's OpHeapLoad,
 // OpHeapStore): the byte address, its low bits cleared to the element's
-// size and sign-extended, compared unsigned with the length of the heap
-// whose abi.HeapCell is at the value's constant -- one negative is past
-// any length -- and the element read or written at the heap's base; out
-// of the heap a load gives 0 or NaN and a store does nothing. A store
-// writes no pointer: the marking rule is the interpreter's.
+// size and sign-extended, compared unsigned with the heap's length, its
+// last operand -- one negative is past any length -- and the element read
+// or written at the heap's base, the operand before; out of the heap a
+// load gives 0 or NaN and a store does nothing. A store writes no
+// pointer: the marking rule is the interpreter's.
 func (c *compiler) heapAccess(v *ssa.Value) {
 	kind := v.Aux
 	size := int32(abi.ElemSize(kind))
 	float := kind == abi.ElemFloat32 || kind == abi.ElemFloat64
 	out, done := c.a.NewLabel(), c.a.NewLabel()
-	c.a.MovRR32(scratchA, c.gpr(v.Args[0], scratchA))
+	c.a.Movsxd(scratchA, c.gpr(v.Args[0], scratchA))
 	if size > 1 {
-		c.a.OpImm(amd64.And, scratchA, -size, false)
+		c.a.OpImm(amd64.And, scratchA, -size, true)
 	}
-	c.a.Movsxd(scratchA, scratchA)
-	c.movImm(scratchB, v.Const.Bits)
-	c.a.CmpMem(scratchA, scratchB, abi.OffHeapLen, true)
+	n := len(v.Args)
+	c.a.Op(amd64.Cmp, scratchA, c.gpr(v.Args[n-1], scratchB), true)
 	c.a.Jcc(amd64.CondAE, out)
-	c.a.Load(scratchB, scratchB, abi.OffHeapBase)
-	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Op(amd64.Add, scratchA, c.gpr(v.Args[n-2], scratchB), true)
 	if v.Op == ssa.OpHeapStore {
 		if float {
 			x := c.xmm(v.Args[1], xScratch0)

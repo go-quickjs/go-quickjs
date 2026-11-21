@@ -9999,6 +9999,15 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpHeapLoad, ssa.OpHeapStore:
 		c.heapAccess(v)
+	case ssa.OpHeapBase, ssa.OpHeapLen:
+		d := c.gdst(v)
+		c.movImm(d, v.Const.Bits)
+		off := int32(abi.OffHeapBase)
+		if v.Op == ssa.OpHeapLen {
+			off = abi.OffHeapLen
+		}
+		c.a.Load(d, d, off)
+		c.setG(v, d)
 	case ssa.OpDivI32, ssa.OpDivU32, ssa.OpRemI32, ssa.OpRemU32:
 		c.divide32(v)
 	case ssa.OpCellNumLoad:
@@ -10941,17 +10950,14 @@ func (c *a64Compiler) heapAccess(v *ssa.Value) {
 	size := abi.ElemSize(kind)
 	float := kind == abi.ElemFloat32 || kind == abi.ElemFloat64
 	out, done := c.a.NewLabel(), c.a.NewLabel()
-	c.a.MovRR32(a64A, c.gpr(v.Args[0], a64A))
+	c.a.Sxtw(a64A, c.gpr(v.Args[0], a64A))
 	if size > 1 {
-		c.a.AndImm(a64A, a64A, uint64(uint32(-size)), false)
+		c.a.AndImm(a64A, a64A, uint64(int64(-size)), true)
 	}
-	c.a.Sxtw(a64A, a64A)
-	c.movImm(a64B, v.Const.Bits)
-	c.a.Load(a64C, a64B, abi.OffHeapLen)
-	c.a.Cmp(a64A, a64C, true)
+	n := len(v.Args)
+	c.a.Cmp(a64A, c.gpr(v.Args[n-1], a64B), true)
 	c.a.BCond(arm64.HS, out)
-	c.a.Load(a64B, a64B, abi.OffHeapBase)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Op(arm64.Add, a64A, a64A, c.gpr(v.Args[n-2], a64B), true)
 	if v.Op == ssa.OpHeapStore {
 		if float {
 			x := c.fpr(v.Args[1], a64F0)

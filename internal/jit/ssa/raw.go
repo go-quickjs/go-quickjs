@@ -3,6 +3,7 @@ package ssa
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -231,7 +232,8 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 			} else {
 				x = i32(in.Third)
 			}
-			st := val(OpHeapStore, None, addr, x)
+			base, n := b.heapOf(blk, heap)
+			st := val(OpHeapStore, None, addr, x, base, n)
 			st.Aux, st.Const = int(in.Key), ir.Value{Bits: uint64(heap)}
 			break
 		}
@@ -239,7 +241,8 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 		if float {
 			t = Float64
 		}
-		ld := val(OpHeapLoad, t, addr)
+		base, n := b.heapOf(blk, heap)
+		ld := val(OpHeapLoad, t, addr, base, n)
 		ld.Aux, ld.Const = int(in.Key), ir.Value{Bits: uint64(heap)}
 		if float {
 			setF(ld)
@@ -283,6 +286,92 @@ func (b *builder) rawCell(blk *Block, k int) *Value {
 		return cell
 	}
 	return b.cellOf(blk, b.root.p.UpvalueBase+k)
+}
+
+// The heaps' bases and lengths (OpHeapBase, OpHeapLen) are variables of
+// the builder's SSA construction, as a slot is, of slots of their own
+// below 0 (heapSlot): read where a block has them, merged by phis, and
+// loaded from the heap's cell where they are stale -- at an entry, which
+// loads nothing of them, and after a call (reloadAfterCall), which may
+// run script that detaches or moves the heap's buffer. Nothing else
+// changes a cell (the VM's bufferChanged): so a loop that calls nothing
+// reads its heap once before it, its header's phis trivial, and a block
+// of accesses once, where each access had read the cell twice.
+
+// heapOf is the base and the length of the heap whose abi.HeapCell is at
+// cell, as blk has them where the instruction being built reads them.
+func (b *builder) heapOf(blk *Block, cell uintptr) (base, n *Value) {
+	i := slices.Index(b.heaps, cell)
+	if i < 0 {
+		i = len(b.heaps)
+		b.heaps = append(b.heaps, cell)
+		// Stale where a call was before the heap was first read: its kill
+		// was recorded for the heaps then known alone. The calls are in
+		// blocks built already, or earlier in this one, so a block's
+		// value of it is stale at its end.
+		for _, k := range b.heapKills {
+			b.found(heapSlot(i, false), k, b.heapStale(heapSlot(i, false)))
+			b.found(heapSlot(i, true), k, b.heapStale(heapSlot(i, true)))
+		}
+	}
+	return b.heapRead(heapSlot(i, false), blk), b.heapRead(heapSlot(i, true), blk)
+}
+
+// heapSlot is the builder's slot of heap i's base, or of its length.
+func heapSlot(i int, length bool) int {
+	s := -2 - 2*i
+	if length {
+		s--
+	}
+	return s
+}
+
+// heapRead is heap slot's value in blk, loaded from its cell there where
+// it is stale.
+func (b *builder) heapRead(slot int, blk *Block) *Value {
+	v := b.readVar(slot, blk)
+	if v.Op == OpUpvalueStale {
+		v = b.heapLoad(blk, slot)
+		b.found(slot, blk, v)
+	}
+	return v
+}
+
+// heapLoad loads heap slot's base or length from its cell, at the end of
+// blk.
+func (b *builder) heapLoad(blk *Block, slot int) *Value {
+	s := -2 - slot
+	op := OpHeapBase
+	if s%2 == 1 {
+		op = OpHeapLen
+	}
+	v := b.f.newValue(blk, op, Ptr)
+	v.Const = ir.Value{Bits: uint64(b.heaps[s/2])}
+	return v
+}
+
+// heapStale is heap slot's stale marker, an OpUpvalueStale of the slot.
+func (b *builder) heapStale(slot int) *Value {
+	s := -2 - slot
+	for len(b.heapMarks) <= s {
+		b.heapMarks = append(b.heapMarks, nil)
+	}
+	if b.heapMarks[s] == nil {
+		b.heapMarks[s] = b.f.alloc(Value{Op: OpUpvalueStale, Type: Ptr, Index: slot})
+	}
+	return b.heapMarks[s]
+}
+
+// staleHeaps makes every heap stale in blk, after a call there: those not
+// read yet once they are (heapOf).
+func (b *builder) staleHeaps(blk *Block) {
+	if n := len(b.heapKills); n == 0 || b.heapKills[n-1] != blk {
+		b.heapKills = append(b.heapKills, blk)
+	}
+	for i := range b.heaps {
+		b.found(heapSlot(i, false), blk, b.heapStale(heapSlot(i, false)))
+		b.found(heapSlot(i, true), blk, b.heapStale(heapSlot(i, true)))
+	}
 }
 
 // typedInline reports whether site's callee may be inlined in the frame

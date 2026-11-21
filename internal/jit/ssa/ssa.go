@@ -621,13 +621,14 @@ const (
 	// OpHeapLoad and OpHeapStore are typed code's heap accesses (ir's
 	// RawLoad, RawStore): the element of type Aux (abi's ElemInt8 ...) at
 	// the byte address Args[0] with its low bits cleared to the element's
-	// size, in the heap whose abi.HeapCell is at Const's address -- an
-	// int32 of an integer type's, sign- or zero-extended, a float64 of a
-	// float's -- where the address is below the heap's length; else 0, or
-	// NaN for a float, and a store does nothing. Neither exits; a store
-	// stores no pointer.
-	OpHeapLoad  // i32 -> i32 or f64
-	OpHeapStore // i32, i32 or f64 -> none
+	// size, in the heap whose abi.HeapCell is at Const's address and whose
+	// base and length are their last two operands (OpHeapBase, OpHeapLen)
+	// -- an int32 of an integer type's, sign- or zero-extended, a float64
+	// of a float's -- where the address is below the heap's length; else
+	// 0, or NaN for a float, and a store, of Args[1], does nothing. Neither
+	// exits; a store stores no pointer.
+	OpHeapLoad  // i32, ptr, ptr -> i32 or f64
+	OpHeapStore // i32, i32 or f64, ptr, ptr -> none
 	// OpDivI32, OpDivU32, OpRemI32 and OpRemU32 are typed code's integer
 	// division and remainder (ir's RawIDivS ...), asm.js's as V8's
 	// I32AsmjsDivS and its kin make them: signed or of uint32s, a zero
@@ -663,6 +664,14 @@ const (
 	// else -- no string, a string the table has no entry for, or one of
 	// another atom or of none -- is false. It never exits.
 	OpKeyIs // tagged -> bool
+	// OpHeapBase and OpHeapLen are the base address and the length of the
+	// heap whose abi.HeapCell is at Const's address, as its cell holds
+	// them: typed code's heap accesses' operands. The cell changes only
+	// where script runs (the VM's bufferChanged), so the builder reads it
+	// anew only at an entry and after a call (heapOf): a loop that calls
+	// nothing reads it once, before the loop. They never exit.
+	OpHeapBase // -> ptr
+	OpHeapLen  // -> ptr
 )
 
 // OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
@@ -711,7 +720,7 @@ var opNames = [...]string{
 	OpCursorCell: "cursorcell", OpHeapLoad: "heapload", OpHeapStore: "heapstore",
 	OpDivI32: "divi", OpDivU32: "divu", OpRemI32: "remi", OpRemU32: "remu",
 	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore", OpNumberF64: "numberf", OpForInDone: "forindone",
-	OpKeyIs: "keyis",
+	OpKeyIs: "keyis", OpHeapBase: "heapbase", OpHeapLen: "heaplen",
 }
 
 func (o Op) String() string {
