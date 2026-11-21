@@ -103,12 +103,11 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
   that code back at `3ecb8200`'s offsets, where it takes 0.25. The rest,
   with 4 to 8% of the `carried_` and `escape_` tests', came with the
   native initializer's remembered layouts (`8505335a`), not profiled on
-  Zen 2 yet. At `b5df63ea` it takes 0.24, 87.9 ns against 84.8 at
-  `3ecb8200`, and the `carried_` and `escape_` tests are faster than they
-  were there (`carried_short` 114 ns against 134), after the allocation
-  round (`af68d128`..`dc7ddd31`). It has not been compared with the old
-  tiers again. The
-  JIT's slower rows are under
+  Zen 2 yet. At `7f8205ec` it takes 0.20, 75.3 ns against 84.8 at
+  `3ecb8200` and 87.9 at `b5df63ea`, and the `carried_` and `escape_`
+  tests are faster than they were there (`carried_short` 112 ns against
+  134), after the allocation round (`af68d128`..`dc7ddd31`). It has not
+  been compared with the old tiers again. The JIT's slower rows are under
   [The register JIT's remaining gaps](#the-register-jits-remaining-gaps).
 - **Raw int32 and float64 values outside asm.js.** A validated asm.js
   module runs as typed code, its registers raw int32 and float64 values
@@ -118,13 +117,16 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
   (register-interpreter.md, "Known limits and open work"). A local that
   only ever holds an int32 needs mapped `arguments`, direct eval and reads
   before its first store accounted for.
-- **asm.js modules' limits.** A function table of more than four functions
-  learns its targets one call at a time; only the first closure of a
-  module's template is linked to typed code; a module instantiated a second
-  time in a runtime runs as ordinary code. The JIT inlines a typed callee
-  nothing inside of which exits (`asm_call_leaf` 9.4 ns at v0.39.0, 4.5
-  now, against 4.3 for the same code as ordinary JavaScript); `asm_fib`
-  still takes 23% longer with the JIT than as ordinary JavaScript.
+- **asm.js modules' limits.** Only the first closure of a module's
+  template is linked to typed code, and a module instantiated a second
+  time in a runtime runs as ordinary code; a call through a function table
+  of more than four functions is made by index since `6fbcf73b`. The JIT
+  inlines a typed callee nothing inside of which exits (`asm_call_leaf` 9.4
+  ns at v0.39.0, 4.5 now, against 4.3 for the same code as ordinary
+  JavaScript); `asm_fib` took 23% longer with the JIT than as ordinary
+  JavaScript until ordinary native code called a module's typed code
+  natively (`d14b7cea`: 4.69 ns against 4.64 for the same code untyped, in
+  that commit's measure).
 - **The leaf evaluators** (`pureCall`, `leafCall`), which evaluate register
   code (regcomp's pure and leaf bodies) for the Go table and wherever no
   native handler takes the call. A recursion of pure calls deeper than 32
@@ -490,9 +492,10 @@ the stack JIT lowered; their counts are from then.
   fixed work takes 0.92 times what it takes compiled in the foreground
   (1,223 against 1,326 ms over four placements, 2026-11-18), where it had
   taken 1.49 times, zlib 3.3 times; Are We Fast Yet's takes 1.004 times,
-  DeltaBlue 1.03 (1.13 before). RegExp's share is its exec arrays: the
+  DeltaBlue 1.03 (1.13 before). RegExp's share was its exec arrays: the
   interpreter reuses them (`regexpreuse.go`), which a runtime with the
-  JIT does not, in code native or interpreted.
+  JIT did not until native code's calls of `exec` made them again too
+  (`e9bf2365`; Octane's RegExp with the JIT allocated 131 MB, now 77).
 - **Where a compile's time and memory go.** `allocate` 14% of a compile,
   the build's `plan` 15% (most of it the feedback's answers), the
   assemblers' `Finish` 9%; the

@@ -4,8 +4,9 @@ The Go benchmarks and bundle timings below were measured at `b37daa23`.
 The V8 comparison with goja was measured at `a2126155` on the register
 interpreter and the JIT that compiles its register code. The comparison
 with C QuickJS, under [Compared with C QuickJS](#compared-with-c-quickjs),
-was measured at `b5df63ea`. Other comparisons retain the revisions and
-measurement dates their sections name.
+was measured at `7f8205ec`, its JIT's column at `329ee166`. Other
+comparisons retain the revisions and measurement dates their sections
+name.
 
 On an Apple M5 Max with Go 1.27.3 and the native JIT disabled, taking
 per-metric medians of five fresh-process runs at go-quickjs `b37daa23` on
@@ -239,19 +240,19 @@ establish an overall throughput advantage for either compilation mode.
 ## Compared with C QuickJS
 
 Over the V8 suite as a whole, go-quickjs is well ahead of QuickJS. Its
-interpreter takes 0.32 times QuickJS's time and has 2.20 times its
-composite score, ahead on all eight workloads. With its JIT it takes 0.21
-times QuickJS's time and scores 5.6 times as much. On the larger programs
-of Octane and Are We Fast Yet the interpreter takes 0.43 and 0.64 times
-QuickJS's time, and the JIT 0.31 and 0.20 times
+interpreter takes 0.31 times QuickJS's time and has 2.31 times its
+composite score, ahead on all eight workloads. With its JIT it takes 0.20
+times QuickJS's time and scores 5.8 times as much. On the larger programs
+of Octane and Are We Fast Yet the interpreter takes 0.42 and 0.64 times
+QuickJS's time, and the JIT 0.29 and 0.20 times
 ([below](#octane-and-are-we-fast-yet)); a page React 18 renders on the
-server takes 0.61 times, and 0.53 with the JIT
+server takes 0.58 times, and 0.49 with the JIT
 ([below](#server-rendering)). Single operations cost about half as much,
-0.49 times QuickJS's time by the geometric mean of its micro-benchmarks,
-and 0.28 times with the JIT, as [the micro-benchmarks](#micro-benchmarks)
+0.48 times QuickJS's time by the geometric mean of its micro-benchmarks,
+and 0.27 times with the JIT, as [the micro-benchmarks](#micro-benchmarks)
 below show; the slowest of them takes 1.5 times as long.
 
-At `b5df63ea`, the revision measured here, go-quickjs compiles every
+At `7f8205ec`, the revision measured here, go-quickjs compiles every
 function to register code -- three-address instructions that name the
 frame's registers as their operands, as V8's Ignition and Lua's VM do --
 and nothing else: the stack bytecode is gone from the front end too
@@ -267,52 +268,77 @@ table of its own, natively too (register-interpreter.md, "Typed code";
 function's register code to native code that runs on the interpreter's
 own frame, and an asm.js module's typed code at its link, with no
 speculation (see its [design notes](../internal/jit/README.md);
-`5ae2317e`). The page's previous figures, at `b8c2c45f`, whose code
-v0.41.0 is, were of the same design before the megamorphic caches' native
-probes, `Object.create`'s native leaf and the changes below. The same
-suites ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.3,
-go-quickjs `b5df63ea` and QuickJS 2026-06-04. Two runs went at
-once, each on the six CPUs of a level 3 cache of its own. The JIT's
-column is a build with `-tags quickjs_jit` run with `-jit`. The figures
-are milliseconds for the same fixed work, the median of three
-fresh-process runs (lower is better):
+`5ae2317e`). The page's previous figures, at `b5df63ea`, whose code
+v0.42.0 is, were of the same design before the changes below: the
+megamorphic probes' index, the caches of absent keys, the closures' and
+the arguments' changes, and typed code's calls, heap and spill slots in
+the JIT. The same suites ran on an AMD Ryzen 5 3600 under Windows, with
+Go 1.27.3 and QuickJS 2026-06-04: go-quickjs `7f8205ec` for the plain
+columns and QuickJS's, and `329ee166` for the JIT's, whose code is
+`4eff9cf3`'s, which changed only the JIT's register allocator; its plain
+build is the same bytes as `7f8205ec`'s, but for the revision Go stamps
+in it. Two runs went at once, each on the six CPUs of a level 3 cache of
+its own, the JIT's beside the plain build's. The JIT's column is a build
+with `-tags quickjs_jit` run with `-jit`. Each runner
+was built with DYNAMICBASE cleared, so that Windows loads it at its image
+base, and each process ran from a fresh copy of it (`-fixedbase`,
+`-freshcopy`, `a9c5e457`); the previous figures were of one copy of each
+build, loaded where Windows chose (see where a program is loaded,
+below). The figures are milliseconds for the same fixed work, the median
+of three fresh-process runs (lower is better):
 
 | Workload | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| Richards | 8.2 ms | 8.1 ms | 11.2 ms | 0.73x | 0.72x |
-| DeltaBlue | 14.0 ms | 17.3 ms | 23.8 ms | 0.59x | 0.73x |
-| Crypto | 154 ms | 54.9 ms | 326 ms | 0.47x | 0.17x |
-| RayTrace | 69.8 ms | 52.2 ms | 144 ms | 0.48x | 0.36x |
-| EarleyBoyer | 172 ms | 117 ms | 398 ms | 0.43x | 0.30x |
-| RegExp | 149 ms | 128 ms | 856 ms | 0.17x | 0.15x |
-| Splay | 117 ms | 88.2 ms | 494 ms | 0.24x | 0.18x |
-| NavierStokes | 100 ms | 36.5 ms | 190 ms | 0.53x | 0.19x |
-| **Total** | **807 ms** | **525 ms** | **2,506 ms** | **0.32x** | **0.21x** |
+| Richards | 8.0 ms | 8.4 ms | 11.2 ms | 0.71x | 0.75x |
+| DeltaBlue | 14.1 ms | 16.2 ms | 24.0 ms | 0.59x | 0.67x |
+| Crypto | 156 ms | 55.2 ms | 325 ms | 0.48x | 0.17x |
+| RayTrace | 63.6 ms | 51.3 ms | 141 ms | 0.45x | 0.36x |
+| EarleyBoyer | 164 ms | 114 ms | 394 ms | 0.42x | 0.29x |
+| RegExp | 150 ms | 129 ms | 956 ms | 0.16x | 0.13x |
+| Splay | 121 ms | 93.5 ms | 508 ms | 0.24x | 0.18x |
+| NavierStokes | 101 ms | 37.1 ms | 190 ms | 0.53x | 0.20x |
+| **Total** | **802 ms** | **526 ms** | **2,581 ms** | **0.31x** | **0.20x** |
 
 The suite's own scores, the median of three (higher is better):
 
 | Workload | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| Richards | 1,397 | 5,643 | 960 | 1.46x | 5.88x |
-| DeltaBlue | 1,493 | 5,865 | 844 | 1.77x | 6.95x |
-| Crypto | 2,357 | 8,184 | 1,112 | 2.12x | 7.36x |
-| RayTrace | 3,370 | 12,480 | 1,568 | 2.15x | 7.96x |
-| EarleyBoyer | 3,871 | 4,940 | 2,181 | 1.77x | 2.27x |
-| RegExp | 2,841 | 4,099 | 436 | 6.52x | 9.40x |
-| Splay | 6,605 | 9,499 | 3,362 | 1.96x | 2.83x |
-| NavierStokes | 4,996 | 16,571 | 2,391 | 2.09x | 6.93x |
-| **Composite** | **2,960** | **7,574** | **1,348** | **2.20x** | **5.62x** |
+| Richards | 1,385 | 5,704 | 942 | 1.47x | 6.06x |
+| DeltaBlue | 1,503 | 5,860 | 840 | 1.79x | 6.98x |
+| Crypto | 2,329 | 8,198 | 1,105 | 2.11x | 7.42x |
+| RayTrace | 3,848 | 12,506 | 1,572 | 2.45x | 7.96x |
+| EarleyBoyer | 4,451 | 5,760 | 2,180 | 2.04x | 2.64x |
+| RegExp | 2,824 | 4,039 | 390 | 7.24x | 10.36x |
+| Splay | 6,719 | 9,771 | 3,366 | 2.00x | 2.90x |
+| NavierStokes | 4,913 | 16,374 | 2,404 | 2.04x | 6.81x |
+| **Composite** | **3,055** | **7,744** | **1,325** | **2.31x** | **5.84x** |
 
-At `b8c2c45f` the interpreter took 0.33 times QuickJS's time over the
-suite and had 2.19 times its composite score, and the JIT 0.22 and 5.61
-times. The interpreter's total is level, 812 to 807 ms, its composite
-0.8% higher, Splay 117 ms where it took 124. The JIT's total is 3.3%
-lower, 543 to 525 ms, with Splay 88.2 where it took 97.8 and RegExp 128
-where it took 133; its composite is level. QuickJS's total moved as much
-between sessions: 2,491 ms at `b8c2c45f`'s, 2,506 here, and 2,596 in a
-run of `91f885a1` earlier the same day, its RegExp 947 ms in every run of
-that session and 856 in this one, the binary the same (see where a
-program is loaded, below).
+At `b5df63ea` the interpreter took 0.32 times QuickJS's time over the
+suite and had 2.20 times its composite score, and the JIT 0.21 and 5.62
+times. The interpreter's total is level, 807 to 802 ms, RayTrace 63.6 ms
+where it took 69.8 and EarleyBoyer 164 where it took 172; its composite
+is 3.2% higher, RayTrace's score 14% and EarleyBoyer's 15%. A read of a
+function's `prototype` is now answered by its site's cache once the
+function has made it, and a key some of a site's objects lack is kept
+beside the shapes that have it (`6521aac5`), which took the reads that
+exit to Go of Octane's RayTrace, the same program, from 32,067 to 351:
+the `prototype` of each class `Class.create` makes. EarleyBoyer's
+closures fill their capture lists in the function object (`648d7d30`),
+and its `arguments` read through local aliases and its sloppy parameters
+captured by value need no arguments object and no cell (`9c2c76bf`,
+`a6da8b05`). The JIT's total is level,
+525 to 526 ms, and its composite 2.2% higher, EarleyBoyer's score 17%.
+Its Splay took 93.5 ms where it took 88.2, but in twelve fresh-process
+runs of each build, alternated over four placements, 91.9 ms by the
+median against 93.3, and EarleyBoyer 115 against 121; Richards, which
+took 9.6 ms in a run of `7f8205ec`, took 8.4 in both, and its warm runs,
+which the placements tool times, 0.65 ms each. A fixed run of Richards
+lasts a few milliseconds, most of it before the JIT's code takes over,
+and Splay's is mostly what the collector does. QuickJS's figures moved
+more between sessions: its RegExp took 956 ms where it took 856, as it
+took 947 in every run of another session the day `b5df63ea`'s was made,
+the binary the same, and its RegExp score is 390 where it was 436, which
+lowers its composite to 1,325 from 1,348.
 
 On amd64 and arm64 a call of a body that only stores its parameters in
 `this` (an initializer), of a constructor that only forwards to one with
@@ -343,17 +369,17 @@ agree on how far ahead go-quickjs is:
 - The total adds milliseconds, so the longest workloads, RegExp and Splay,
   make much of the lead. The composite score is the geometric mean of the
   workloads' scores, so each counts the same: Richards weighs as much as
-  RegExp. By that mean the interpreter takes 0.42 times QuickJS's time,
-  and the JIT 0.29 times, where their scores are 2.20 and 5.62 times as
+  RegExp. By that mean the interpreter takes 0.41 times QuickJS's time,
+  and the JIT 0.29 times, where their scores are 2.31 and 5.84 times as
   high.
 - The JIT's lead is much larger in the scores than in fixed time. A fixed
   run of Richards or DeltaBlue lasts a few milliseconds, and a function
   runs in the interpreter until it is hot enough to compile, so much of
   that run is spent before the JIT's code takes over: with the JIT,
-  Richards takes 0.99 times the interpreter's fixed time and DeltaBlue
-  1.24 (DeltaBlue's three runs with it took 15.7 to 17.4 ms). The scores
+  Richards takes 1.05 times the interpreter's fixed time and DeltaBlue
+  1.15 (DeltaBlue's three runs with it took 16.1 to 17.6 ms). The scores
   time warm runs, where Richards, DeltaBlue, Crypto, RayTrace and
-  NavierStokes score 3.3 to 4.0 times what the interpreter does.
+  NavierStokes score 3.2 to 4.1 times what the interpreter does.
 - Splay's lead is largest in its fixed time. That is almost all setup and
   teardown: building a tree of 8,000 nodes and dropping it, which QuickJS
   frees by counting references where Go's collector frees it later. A warm
@@ -361,10 +387,10 @@ agree on how far ahead go-quickjs is:
   property reads, and a new node for each insertion. Each node's payload
   holds array literals of constants, which share their elements with the
   literal until one is written, as V8's copy-on-write arrays do
-  (`a2d9f12e`); its score is 96% ahead of QuickJS's.
+  (`a2d9f12e`); its score is twice QuickJS's.
 - The JIT changes least where the time is spent in Go code it calls
   rather than in the script's own: the allocation-heavy EarleyBoyer and
-  Splay, 1.28 and 1.44 times the interpreter's score, and RegExp, 1.44
+  Splay, 1.29 and 1.45 times the interpreter's score, and RegExp, 1.43
   times, though a runtime with the JIT compiles its patterns to machine
   code as V8's Irregexp does (`2be0068`).
 
@@ -381,18 +407,17 @@ every time it runs: two copies of one build of `91f885a1` took 26 and 46
 ns on `json_stringify_ints`, and of twelve copies ten took 49 ns on
 `json_stringify_decimals` and two 35, where every copy of `b8c2c45f`'s
 took 33. Most of that is where Windows loads each file, in steps of 64 KB
-that the lock does not hold; the figures here were made before the
-matrix and the placements tool loaded their builds at a fixed base, as a
-Linux build loads at its link address (`-fixedbase`), and a copy at a
-fixed base can still sit apart, for where its file lies in memory, which
-the tools now take out by running each process from a fresh copy
-(`-freshcopy`; docs/optimizing.md, "Builds and the machine"). The
-figures here are of one copy of each build: a micro-benchmark that moved
-by a tenth or more between two of them may have moved for that alone. To
-reproduce
-these figures, the suites below and the micro-benchmarks, run `go run
-./internal/cmd/v8bench/matrix -engines gq,gqjit,qjs -qjs /path/to/qjs -v8
-/tmp/v8-v7 -octane /tmp/octane -awfy /tmp/awfy -ssr /tmp/ssr -fetch`.
+that the lock does not hold, and a copy at a fixed base can still sit
+apart, for where its file lies in memory. The figures here are of builds
+loaded at their image base, as a Linux build loads at its link address,
+each process from a fresh copy (`-fixedbase`, `-freshcopy`;
+docs/optimizing.md, "Builds and the machine"). The previous figures, at
+`b5df63ea`, were of one copy of each build loaded where Windows chose, so
+a micro-benchmark that moved by a tenth or more between the two may have
+moved for that alone. To reproduce these figures, the suites below and
+the micro-benchmarks, run `go run ./internal/cmd/v8bench/matrix -engines
+gq,gqjit,qjs -qjs /path/to/qjs -v8 /tmp/v8-v7 -octane /tmp/octane -awfy
+/tmp/awfy -ssr /tmp/ssr -fetch`.
 
 ### Octane and Are We Fast Yet
 
@@ -403,47 +428,52 @@ fourteen benchmarks are written to compare language implementations
 alike, each in the same style in every language. Both reach far more of
 the language and of the JIT than the V8 suite does. They ran in the same
 matrix, the same way: milliseconds for the fixed work, the median of
-three fresh-process runs (lower is better).
+three fresh-process runs (lower is better). The plain build's figures
+for the V8 suite above and for these are from a second run of the matrix
+for those three suites alone, its builds the same bytes, after other
+processes had taken a CPU for some seconds during the first run's Octane
+and Are We Fast Yet; the JIT's are from runs of their own at `329ee166`,
+for the same reason.
 
 | Octane | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| Richards | 2.9 ms | 4.6 ms | 3.9 ms | 0.74x | 1.18x |
-| DeltaBlue | 5.2 ms | 7.5 ms | 7.9 ms | 0.66x | 0.95x |
-| Crypto | 51.8 ms | 22.8 ms | 109 ms | 0.47x | 0.21x |
-| RayTrace | 26.2 ms | 33.2 ms | 49.8 ms | 0.53x | 0.67x |
-| EarleyBoyer | 59.5 ms | 48.2 ms | 136 ms | 0.44x | 0.36x |
-| RegExp | 117 ms | 132 ms | 461 ms | 0.25x | 0.29x |
-| Splay | 119 ms | 85.2 ms | 461 ms | 0.26x | 0.18x |
-| NavierStokes | 41.5 ms | 18.8 ms | 65.9 ms | 0.63x | 0.29x |
-| PdfJS | 199 ms | 261 ms | 375 ms | 0.53x | 0.70x |
-| Mandreel | 2,484 ms | 868 ms | 3,366 ms | 0.74x | 0.26x |
-| Gameboy | 391 ms | 322 ms | 461 ms | 0.85x | 0.70x |
-| CodeLoad | 12.7 ms | 13.8 ms | 12.9 ms | 0.98x | 1.07x |
-| Box2D | 89.0 ms | 98.1 ms | 154 ms | 0.58x | 0.64x |
-| zlib | 1,593 ms | 849 ms | 8,317 ms | 0.19x | 0.10x |
-| Typescript | 1,609 ms | 1,990 ms | 2,109 ms | 0.76x | 0.94x |
-| **Total** | **7,191 ms** | **5,133 ms** | **16,691 ms** | **0.43x** | **0.31x** |
+| Richards | 3.1 ms | 5.2 ms | 3.9 ms | 0.79x | 1.33x |
+| DeltaBlue | 5.2 ms | 7.7 ms | 7.7 ms | 0.68x | 1.00x |
+| Crypto | 52.2 ms | 23.2 ms | 109 ms | 0.48x | 0.21x |
+| RayTrace | 21.1 ms | 32.2 ms | 49.3 ms | 0.43x | 0.65x |
+| EarleyBoyer | 59.0 ms | 45.8 ms | 136 ms | 0.43x | 0.34x |
+| RegExp | 115 ms | 135 ms | 508 ms | 0.23x | 0.26x |
+| Splay | 114 ms | 79.6 ms | 461 ms | 0.25x | 0.17x |
+| NavierStokes | 42.6 ms | 18.7 ms | 65.9 ms | 0.65x | 0.28x |
+| PdfJS | 189 ms | 266 ms | 374 ms | 0.50x | 0.71x |
+| Mandreel | 2,514 ms | 889 ms | 3,331 ms | 0.75x | 0.27x |
+| Gameboy | 388 ms | 327 ms | 464 ms | 0.83x | 0.70x |
+| CodeLoad | 12.5 ms | 14.6 ms | 12.8 ms | 0.98x | 1.14x |
+| Box2D | 88.4 ms | 101 ms | 154 ms | 0.57x | 0.65x |
+| zlib | 1,617 ms | 582 ms | 8,312 ms | 0.19x | 0.07x |
+| Typescript | 1,482 ms | 1,988 ms | 2,149 ms | 0.69x | 0.93x |
+| **Total** | **7,105 ms** | **4,915 ms** | **16,753 ms** | **0.42x** | **0.29x** |
 
 | Are We Fast Yet | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| DeltaBlue | 561 ms | 313 ms | 713 ms | 0.79x | 0.44x |
-| Richards | 3,279 ms | 658 ms | 4,809 ms | 0.68x | 0.14x |
-| Json | 1,010 ms | 259 ms | 1,339 ms | 0.75x | 0.19x |
-| CD | 1,576 ms | 485 ms | 2,814 ms | 0.56x | 0.17x |
-| Havlak | 3,411 ms | 1,186 ms | 4,309 ms | 0.79x | 0.28x |
-| Bounce | 761 ms | 246 ms | 1,487 ms | 0.51x | 0.17x |
-| List | 544 ms | 159 ms | 1,247 ms | 0.44x | 0.13x |
-| Mandelbrot | 178 ms | 40.9 ms | 687 ms | 0.26x | 0.06x |
-| NBody | 665 ms | 122 ms | 1,026 ms | 0.65x | 0.12x |
-| Permute | 866 ms | 229 ms | 1,675 ms | 0.52x | 0.14x |
-| Queens | 658 ms | 122 ms | 1,056 ms | 0.62x | 0.12x |
-| Sieve | 560 ms | 301 ms | 1,221 ms | 0.46x | 0.25x |
-| Storage | 1,492 ms | 726 ms | 1,654 ms | 0.90x | 0.44x |
-| Towers | 889 ms | 202 ms | 1,550 ms | 0.57x | 0.13x |
-| **Total** | **16,447 ms** | **5,061 ms** | **25,609 ms** | **0.64x** | **0.20x** |
+| DeltaBlue | 554 ms | 315 ms | 712 ms | 0.78x | 0.44x |
+| Richards | 3,227 ms | 658 ms | 4,782 ms | 0.67x | 0.14x |
+| Json | 1,008 ms | 257 ms | 1,352 ms | 0.75x | 0.19x |
+| CD | 1,587 ms | 482 ms | 2,818 ms | 0.56x | 0.17x |
+| Havlak | 3,383 ms | 1,162 ms | 4,322 ms | 0.78x | 0.27x |
+| Bounce | 764 ms | 247 ms | 1,496 ms | 0.51x | 0.17x |
+| List | 550 ms | 160 ms | 1,261 ms | 0.44x | 0.13x |
+| Mandelbrot | 176 ms | 41.0 ms | 695 ms | 0.25x | 0.06x |
+| NBody | 659 ms | 121 ms | 1,027 ms | 0.64x | 0.12x |
+| Permute | 871 ms | 227 ms | 1,675 ms | 0.52x | 0.14x |
+| Queens | 657 ms | 123 ms | 1,060 ms | 0.62x | 0.12x |
+| Sieve | 562 ms | 306 ms | 1,213 ms | 0.46x | 0.25x |
+| Storage | 1,492 ms | 698 ms | 1,637 ms | 0.91x | 0.43x |
+| Towers | 907 ms | 203 ms | 1,564 ms | 0.58x | 0.13x |
+| **Total** | **16,416 ms** | **5,046 ms** | **25,626 ms** | **0.64x** | **0.20x** |
 
-- Octane's zlib takes 0.19 times QuickJS's time, 1,593 ms, and 0.10 times
-  with the JIT, 849 ms (1,609 and 854 at `b8c2c45f`). zlib is an asm.js
+- Octane's zlib takes 0.19 times QuickJS's time, 1,617 ms, and 0.07 times
+  with the JIT, 582 ms (1,593 and 849 at `b5df63ea`). zlib is an asm.js
   module, compiled from C by Emscripten, and its 51 functions pass the
   validator (`b920ca25`): each runs as typed code (`047ee156`,
   `d8cbc918`), whose int32 and float64 registers hold raw words, so its
@@ -452,17 +482,37 @@ three fresh-process runs (lower is better).
   took 5,675 ms, converting each element read and each `| 0` through a
   float. With the JIT the typed code is compiled at the module's link, as
   V8 compiled validated asm.js at its instantiation, with no guard on any
-  kind (`bc00f894`, `5ae2317e`), and the members of a phi group that spill
-  share one slot, which took zlib's largest function from 2.13 to 1.81 MB
-  of code, its moves at the edges from 1.80 to 1.31 MB (`83a58f53`). The
-  JIT also inlines a typed callee into typed code, an exit inside it
-  writing its raw slots raw (`4ae95d8b`, `de072cfa`), and takes a module
-  function's result as the number its type says, unchecked (`a4bfc824`):
-  `asm_call_leaf`, a call of a small function a turn, takes 5.95 ns with
-  the JIT, where it took 13.3 in v0.39.0. The stack JIT of v0.38.0 took
-  2,027 ms, measured in `3ecb8200`'s session.
+  kind (`bc00f894`, `5ae2317e`). Since `b5df63ea` a phi and its arguments
+  share a spill slot wherever no two of them are live at once, not only
+  where their intervals do not meet, as V8's allocator merges spill ranges
+  (`ebe73f44`): zlib's largest function, 47 loops entered by on-stack
+  replacement with some 240 values live through each, had copied its phis
+  slot to slot at every edge, and its code went from 1.80 MB to 439 KB.
+  Made for every pair before the allocator's scan, the classes had made
+  its phase of hints four to six times as long; they are now made only
+  for the pairs of a component one of whose values spills, when the scan
+  first spills it (`4eff9cf3`). A run of all of a suite's compiles,
+  timed with `-jitcompile`, spends 1.2 to 1.4 times as long on the hints
+  and the scan together as at `b5df63ea` (PdfJS 7.0 to 9.7 ms, Mandreel
+  10.5 to 14.5, zlib 16.6 to 20.7, Typescript 24.1 to 34.1), and takes
+  as long in all for PdfJS, less for zlib, 3% longer for Gameboy, 6% for
+  Mandreel and 8% for Typescript, which makes 3% more compiles.
+  The heap's base and length are loaded once outside a loop that calls
+  nothing, kept round a loop entered from an entry, and live in their
+  spill slot, read in place by each access, taking no register
+  (`47f6294a`, `6956a938`, `948a2cb1`, `6fb4805f`); a call through a
+  function table of more than four functions is made by index
+  (`6fbcf73b`); and a branch too far for 16 bits makes only itself far,
+  where it made the whole function's jumps far, or left the function
+  without typed code (`5d69103e`). The JIT also inlines a typed callee
+  into typed code, an exit inside it writing its raw slots raw
+  (`4ae95d8b`, `de072cfa`), and takes a module function's result as the
+  number its type says, unchecked (`a4bfc824`): `asm_call_leaf`, a call
+  of a small function a turn, takes 5.67 ns with the JIT, where it took
+  13.3 in v0.39.0. The stack JIT of v0.38.0 took 2,027 ms, measured in
+  `3ecb8200`'s session.
 - Mandreel, compiled from C++ too, is not asm.js and runs as ordinary
-  register code: 2,484 ms, 0.74 times QuickJS's time, and 868 with the
+  register code: 2,514 ms, 0.75 times QuickJS's time, and 878 with the
   JIT. Its largest function is compiled at its first call, within the
   timed run (`d6ac45be`). Its `| 0` arithmetic runs as int32 instructions
   (`add_i32`, `add_imm_i32`, the bitwise operators with an immediate) and
@@ -472,52 +522,70 @@ three fresh-process runs (lower is better).
   (register-interpreter.md, "Known limits and open work").
 - Without the JIT, go-quickjs is ahead on every benchmark of both suites.
   Octane's CodeLoad, which is mostly compiling, takes 0.98 times QuickJS's
-  time, and 1.07 with the JIT, where it took 0.95 and 1.06 at `b8c2c45f`
+  time, and 1.14 with the JIT, where it took 0.98 and 1.07 at `b5df63ea`
   and 1.22 and 1.37 at `258b4e96`, before the front end compiled to
   register code alone (`d6ac45be`). On Are We Fast Yet the interpreter is
-  21% ahead on DeltaBlue and on Havlak, a third on Richards, 38% on
-  Queens and 43% on Towers. A call's window of registers is the
+  22% ahead on DeltaBlue and on Havlak, a third on Richards, 38% on
+  Queens and 42% on Towers. A call's window of registers is the
   callee's frame, so nothing is copied, a frame record is written only
   where a reader needs it, and on amd64 and arm64 a call, a construction
   and a return are native handlers that never enter Go
   ([Calls](#where-the-time-goes) below). The programs that allocate most
-  are the least ahead: Storage 10%, Havlak 21%. Since `b8c2c45f` the
-  interpreter's Are We Fast Yet total is 2.2% lower, Havlak 5.5% (3,610
-  to 3,411 ms) and Storage 3.7% (1,549 to 1,492): a site that has given up
-  its cache of shapes reads and writes through the realm's megamorphic
-  caches in the native handlers, as V8's interpreter probes its stub
-  cache, where each such access had exited to Go (`5916704b`), and a
-  write site that keeps several shapes adds a property to any of them
-  natively (`d44da58c`), which took Havlak's writes that exited to Go from
-  5.39 million to 5.3 thousand. Octane's interpreter total is level,
-  7,236 to 7,191 ms. With the JIT both totals are 1.4% and 0.7% lower.
-  Octane's EarleyBoyer and Splay with the JIT move between runs more than
-  between the revisions: 47.4 to 65.2 ms and 81.7 to 109 ms in this
-  session, 48.1 to 60.7 and 87.7 to 111 in `b8c2c45f`'s.
-- With the JIT, Are We Fast Yet takes 0.06 to 0.43 times QuickJS's time,
+  are the least ahead: Storage 9%, Havlak 22%. Since `b5df63ea` the
+  interpreter's Octane total is 1.2% lower, 7,191 to 7,105 ms: RayTrace
+  26.2 to 21.1 ms, from the functions' `prototype` its classes read, now
+  cached (`6521aac5`), and Typescript 7.8%, 1,609 to 1,482 ms. A site that
+  has given up its cache of shapes had read and written natively only an
+  object with no index of its keys, and exited to Go for a larger one --
+  Typescript's syntax tree nodes, 3.07 million of its 3.11 million such
+  exits, and 261 thousand writes; the native handlers now find such a
+  property by the object's index, as Go's lookup does (`a8c984b4`), and
+  the caches' absent keys took its other reads that exit from 73,586 to
+  11,624. The Are We Fast Yet totals are level, 16,447 to 16,416 ms and
+  5,061 to 5,046 with the JIT, Storage with the JIT 726 to 698. Octane's
+  total with the JIT is 4.2% lower, 5,133 to 4,915 ms, almost all of it
+  zlib's. Octane's EarleyBoyer and Splay with the JIT move between runs
+  more than between the revisions: 45.3 to 58.8 ms and 76.9 to 99.6 ms in
+  the JIT's three runs, 47.4 to 65.2 and 81.7 to 109 in `b5df63ea`'s.
+- With the JIT, Are We Fast Yet takes 0.06 to 0.44 times QuickJS's time,
   its loops of arithmetic the least, its programs that allocate most --
   DeltaBlue, Storage -- the most. Richards' runs with the JIT fall in two
   groups, of about 650 to 680 ms and of 745 to 940: its three in the
-  matrix took 661, 657 and 658 ms, and at `b8c2c45f` 663, 659 and 938.
+  matrix took 657, 658 and 664 ms, and at `b5df63ea` 661, 657 and 658.
 - When the stack JIT was removed, its timing had the register JIT slower
   than the stack JIT just before it on Octane's RayTrace (+7.6%) and
   CodeLoad (+25%) and on Are We Fast Yet's Json (+8.2%), Permute (+7.0%)
   and Queens (+6.3%) (docs/performance-plan.md, "The register JIT's
   remaining gaps"). Against the stack JIT's figures at `acffb1aa` (270,
-  227 and 119 ms), Json and Permute are level, 259 and 229 ms, and Queens
-  2% longer, 122 ms; CodeLoad is faster, 14.2 then and 13.8 ms now.
-  RayTrace took 33.2 ms, its runs with the JIT in this session 33.0 to
-  34.0 ms, where they took 34.1 to 34.7 at `b8c2c45f`.
+  227 and 119 ms), Json is 5% shorter, 257 ms, Permute level, 227, and
+  Queens 3% longer, 123 ms; CodeLoad took 14.2 ms then and takes 14.6.
+  RayTrace took 32.2 ms, its runs with the JIT 31.2 to 33.9 ms, where
+  they took 33.0 to 34.0 at `b5df63ea`.
 - On eight of Octane's fifteen the JIT is behind the interpreter:
-  Richards (59% behind), DeltaBlue (44%), PdfJS (31%), RayTrace (27%),
-  Typescript (24%), RegExp (13%), Box2D (10%) and CodeLoad (9%).
+  Richards (68% behind), RayTrace (53%), DeltaBlue (48%), PdfJS (41%),
+  Typescript (34%), RegExp (17%), CodeLoad (17%) and Box2D (14%).
   Octane's fixed work is one run of each benchmark, so compiling counts,
   and the code runs in the interpreter until it is hot; a runtime with
   the JIT keeps the frames the plain interpreter's calls and
   constructions do without. The JIT's own figures are close to what they
-  were at `b8c2c45f` -- Richards 4.7 ms then, DeltaBlue 7.7, RayTrace
-  34.6, PdfJS 246, Typescript 2,049 -- and the interpreter's are as fast
-  or faster, which leaves less for the JIT's code to win back.
+  were at `b5df63ea` -- Richards 4.6 ms then, DeltaBlue 7.5, RayTrace
+  33.2, PdfJS 261, Typescript 1,990 -- and the interpreter's are as fast
+  or faster, RayTrace's by a fifth and Typescript's by 8%, which leaves
+  less for the JIT's code to win back. In eight fresh-process runs of
+  each build, alternated over four placements, Richards with the JIT took
+  4.9 ms by the median against 4.8, DeltaBlue 7.8 against 7.9, Mandreel
+  856 against 862 and Typescript 1,985 against 1,988; PdfJS took 2.6%
+  longer, 257 against 251, its compiles above. RegExp with the JIT took
+  135 ms in the matrix where it took 132, its three runs 127 to 139, and
+  131 against 128 in those alternated runs: a fixed run of it takes about
+  5 ms more where a collection falls within it, and whether one does
+  moves from run to run (runs of it alone took 125 to 135 ms in either
+  build, with 125 to 129 ms of CPU where none fell and about 200 where
+  one did). Native code's calls of `exec` now make their result arrays
+  again in the memory of the site's last (`e9bf2365`): it allocates 43.4
+  MB a run where it allocated 54.8, and over four placements of
+  `7f8205ec`'s build and `b5df63ea`'s its warm runs take 4.7% less time,
+  49.0 ms against 51.5.
 
 ### Server rendering
 
@@ -529,17 +597,23 @@ runs (lower is better):
 
 | ssr | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| Render | 1,145 ms | 987 ms | 1,875 ms | 0.61x | 0.53x |
-| FirstRender | 154 ms | 288 ms | | | |
+| Render | 1,086 ms | 929 ms | 1,887 ms | 0.58x | 0.49x |
+| FirstRender | 150 ms | 281 ms | | | |
 
-Render took 0.62 and 0.52 times QuickJS's time at `b8c2c45f`, 1,166 and
-968 ms, and FirstRender 158 and 286 ms. The interpreter's Render is 1.8%
-shorter, its three runs 1,141 to 1,166 ms where they took 1,161 to
-1,171, and with the JIT it is 2% longer, 974 to 990 ms where they took
-963 to 974: a run of `91f885a1`, the parent of the revision measured,
-had the interpreter's at 1,202 to 1,220 ms, and six copies of each of
-`b8c2c45f`'s and `91f885a1`'s builds, each loaded where Windows chose,
-took 1,128 to 1,173 and 1,133 to 1,178 ms, 1% apart by their medians.
+Render took 0.61 and 0.53 times QuickJS's time at `b5df63ea`, 1,145 and
+987 ms, and FirstRender 154 and 288 ms. The interpreter's Render is 5.2%
+shorter, its three runs 1,075 to 1,090 ms where they took 1,141 to
+1,166, and with the JIT 5.9%, 910 to 940 ms where they took 974 to 990;
+FirstRender is 150 and 281 ms.
+A props object's key that some of a site's objects lack is now cached
+beside the shapes that have it, and so is a function's `prototype` once
+made (`6521aac5`), which took the render's reads that exit to Go from
+106,527 to 35,402, its first render's from 10,596 to 3,724. Most of the
+rest were `defaultProps`, which a render reads of every element's type:
+a tag's name is a string, whose prototypes have no such key, and the read
+walked String.prototype's table and Object.prototype's each time. A key
+a primitive's prototypes lack is now remembered with the chain's cell,
+which a change to any of them invalidates (`18acbcb9`).
 A render helper's `return element(...)` is a callback that
 returns a call in tail position, which a built-in enters directly
 (`400fc19c`). v0.38.0, the stack design, took 0.85 and 0.58 times, and
@@ -566,49 +640,50 @@ compiles made on the spot, which none of these changes.
 
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
-takes about 150 ms for, all three ran that same work in fresh processes at
-`b5df63ea`, and the figure is the fastest of three runs. The runners'
+takes about 150 ms for, all three ran that same work in fresh
+processes -- the plain build and QuickJS at `7f8205ec`, the JIT at
+`329ee166` -- and the figure is the fastest of three runs. The runners'
 micro mode does this, from a copy of the file kept in `internal/v8bench`, and
 the matrix above runs it. `sort_bench` is left out: it reports a run's time
 over its fastest sort, not the time of an operation. Over the other 71 tests
-go-quickjs takes 0.49 times QuickJS's time by the geometric mean, as it
-did at `b8c2c45f`, and v0.38.0, the stack design, 0.79 in
+go-quickjs takes 0.48 times QuickJS's time by the geometric mean, where
+it took 0.49 at `b5df63ea`, and v0.38.0, the stack design, 0.79 in
 `3ecb8200`'s session: it is slower on 6, faster on 63, and within 5% on
-the other two. With the JIT it takes 0.28 times QuickJS's time, as it did,
-slower on 3, faster on 65 and within 5% on 3. The table has the interpreter's largest gaps
-either way:
+the other two. With the JIT it takes 0.27 times QuickJS's time, where it
+took 0.28, slower on 3, faster on 65 and within 5% on 3. The table has
+the interpreter's largest gaps either way:
 
 | Test | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| `weak_map_delete` | 372 ns | 439 ns | 250 ns | 1.49x | 1.76x |
-| `bigint256_arith` | 186 ns | 111 ns | 126 ns | 1.48x | 0.88x |
-| `weak_map_set` | 127 ns | 92.0 ns | 92.5 ns | 1.37x | 0.99x |
-| `date_parse` | 960 ns | 1,003 ns | 829 ns | 1.16x | 1.21x |
-| `int_to_string` | 56.1 ns | 49.8 ns | 48.9 ns | 1.15x | 1.02x |
-| `func_closure_call` | 35.7 ns | 2.80 ns | 31.7 ns | 1.13x | 0.09x |
-| `prop_create` | 51.5 ns | 43.4 ns | 52.0 ns | 0.99x | 0.84x |
-| `regexp_utf16` | 247 ns | 249 ns | 256 ns | 0.97x | 0.97x |
-| `array_prop_create` | 14.0 ns | 15.9 ns | 14.9 ns | 0.94x | 1.06x |
-| `float_toExponential` | 162 ns | 138 ns | 180 ns | 0.90x | 0.77x |
-| `global_func_call` | 8.17 ns | 2.13 ns | 33.0 ns | 0.25x | 0.06x |
-| `prop_update` | 2.80 ns | 1.88 ns | 11.5 ns | 0.24x | 0.16x |
-| `func_call` | 6.76 ns | 0.95 ns | 30.8 ns | 0.22x | 0.03x |
-| `array_length_decr` | 12.6 ns | 10.5 ns | 58.5 ns | 0.22x | 0.18x |
-| `array_for_in` | 14.9 ns | 12.2 ns | 76.0 ns | 0.20x | 0.16x |
-| `string_build2c` | 26.6 ns | 40.9 ns | 143 ns | 0.19x | 0.29x |
-| `array_hole_length_decr` | 12.5 ns | 9.70 ns | 69.8 ns | 0.18x | 0.14x |
-| `array_for_of` | 7.32 ns | 4.93 ns | 46.2 ns | 0.16x | 0.11x |
-| `array_slice` | 4.09 ns | 4.38 ns | 27.3 ns | 0.15x | 0.16x |
-| `prop_clone` | 10.6 ns | 9.33 ns | 72.8 ns | 0.15x | 0.13x |
+| `weak_map_delete` | 365 ns | 442 ns | 249 ns | 1.46x | 1.77x |
+| `bigint256_arith` | 184 ns | 108 ns | 127 ns | 1.45x | 0.85x |
+| `weak_map_set` | 127 ns | 92.7 ns | 93.5 ns | 1.36x | 0.99x |
+| `int_to_string` | 56.8 ns | 47.2 ns | 49.1 ns | 1.16x | 0.96x |
+| `date_parse` | 960 ns | 982 ns | 835 ns | 1.15x | 1.18x |
+| `func_closure_call` | 35.8 ns | 2.81 ns | 31.9 ns | 1.12x | 0.09x |
+| `prop_create` | 50.0 ns | 42.0 ns | 51.3 ns | 0.98x | 0.82x |
+| `regexp_utf16` | 246 ns | 257 ns | 259 ns | 0.95x | 0.99x |
+| `array_prop_create` | 13.9 ns | 16.0 ns | 14.9 ns | 0.93x | 1.07x |
+| `float_toExponential` | 162 ns | 142 ns | 182 ns | 0.89x | 0.78x |
+| `global_func_call` | 8.11 ns | 2.11 ns | 33.0 ns | 0.25x | 0.06x |
+| `prop_update` | 2.81 ns | 1.88 ns | 11.6 ns | 0.24x | 0.16x |
+| `func_call` | 6.75 ns | 0.95 ns | 31.0 ns | 0.22x | 0.03x |
+| `array_length_decr` | 12.7 ns | 11.3 ns | 59.5 ns | 0.21x | 0.19x |
+| `array_for_in` | 15.1 ns | 12.4 ns | 76.4 ns | 0.20x | 0.16x |
+| `string_build2c` | 26.5 ns | 27.6 ns | 142 ns | 0.19x | 0.19x |
+| `array_hole_length_decr` | 12.4 ns | 10.4 ns | 70.0 ns | 0.18x | 0.15x |
+| `array_for_of` | 7.33 ns | 5.02 ns | 46.3 ns | 0.16x | 0.11x |
+| `array_slice` | 4.28 ns | 4.33 ns | 27.1 ns | 0.16x | 0.16x |
+| `prop_clone` | 11.0 ns | 9.45 ns | 72.5 ns | 0.15x | 0.13x |
 
 Of the gaps the stack design had, the largest are gone: in v0.38.0,
 measured in `3ecb8200`'s session, `array_prop_create` took 2.25 times
-QuickJS's time and takes 0.94, `global_read` 1.79 and 0.85, `array_read`
-1.41 and 0.87, `empty_do_loop` 1.34 and 0.53.
+QuickJS's time and takes 0.93, `global_read` 1.79 and 0.85, `array_read`
+1.41 and 0.86, `empty_do_loop` 1.34 and 0.53.
 
 The JIT does the most for a test that is a loop of arithmetic, locals,
 property reads and writes, array elements and calls: `prop_read` takes
-0.80 ns with it, `func_call` 0.95 ns, a fifth of the interpreter's time
+0.82 ns with it, `func_call` 0.95 ns, a fifth of the interpreter's time
 or less. A test whose time is a built-in function's work runs much as it
 does in the interpreter: regular expressions, `array_slice`, and the
 conversions between numbers and strings. An object a function makes and
@@ -616,100 +691,114 @@ drops need not be made at all, even where it crosses a merge or goes round
 a loop, as in `sum = sum.add(v)`: it is made only where it escapes, by
 partial escape analysis, as in Graal (`41575a42`). `escape_accumulate`
 and `carried_short` take 0.06 and 0.04 times QuickJS's time with the JIT,
-and 0.50 and 0.48 without it. Code that keeps its objects gains nothing
+and 0.50 and 0.47 without it. Code that keeps its objects gains nothing
 from this, and the suites above hardly move for it.
 
 The interpreter has gained more than the JIT, so some tests run slower
-with the JIT than without it. In the run made for this page, 11 of these
+with the JIT than without it. In the run made for this page, 9 of these
 71 took 7% or more longer with the JIT: `prop_delete`, `array_update`,
-`array_prop_create`, `local_destruct`, `global_destruct`,
-`global_destruct_strict`, `weak_map_delete`, `string_build1`,
-`string_build2c`, `string_build_large1` and `string_to_int`. Of the extra
-tests below that QuickJS runs, 30 did, where 25 had at `b8c2c45f`:
-`generator_delegate` and four of the async tests, `hasOwnProperty`
-called through a borrowed reference three ways, pushes and spread calls
-of several arguments, `object_rest`, four of the sorts, `indexOf` of an
-array, a sticky regular expression, a global `match` and a search of
-UTF-16 text, `carried_exit_loops`, five JSON tests of instances, getters,
-exponents, additions and new layouts, `array_index_append`,
-`template_numbers`, `prop_delete_last` and `array_map_tail_args`; no
-longer `object_create_shared` (below).
+`array_prop_create`, `global_destruct`, `global_destruct_strict`,
+`weak_map_delete`, `string_build1`, `string_build_large1` and
+`string_to_int`; no longer `local_destruct` and `string_build2c`
+(below). Of the extra tests below that QuickJS runs, 27 did, where 30
+had at `b5df63ea`: `generator_delegate` and three of the async tests,
+`hasOwnProperty` called through a borrowed reference three ways, a push
+of five values, a spread call and a spread of a large object,
+`object_rest`, four of the sorts, a for-in over a dictionary, a global
+`match`, a case-insensitive search, `carried_exit_loops`, four JSON
+tests of instances, getters, new layouts and a prototype changed
+between calls, `array_index_append`, `template_numbers`,
+`prop_delete_last` and `array_map_tail_args`; no longer `async_chain`, a
+push of three values, `indexOf` of an array, a sticky regular
+expression, a search of UTF-16 text, nor the JSON tests of exponents and
+additions.
 
-Since `b8c2c45f` the gains are in objects made by `Object.create` and in
-sites that meet many shapes. `Object.create` of a prototype alone is a
-native leaf, called without a frame (`ffb23541`), and in the JIT's code
-an object of a site's prototype is taken from a pool the site keeps, as
-V8's code allocates what its builtin would (`fd52997d`):
-`object_create_shared` takes 76.8 ns where it took 89.5, and 37.9 with
-the JIT where it took 112, 0.26 times QuickJS's time. A read or write
-site that has given up its cache of shapes probes the realm's
-megamorphic caches in the native handlers, as V8's interpreter probes
-its stub cache, where it had exited to Go (`5916704b`); a write site
-that keeps several shapes adds a property to any of them natively
-(`d44da58c`); and with the JIT a megamorphic write adds a property
-natively by the entry the cache holds (`ffb23541`). The two tests added
-for them (`8c1396bf`), `mega_read` and `mega_add`, take 0.74 and 0.68
-times QuickJS's time, 0.28 and 0.49 with the JIT; those commits took
-`mega_add` from 174 to 112 ns and `mega_read` from 47.6 to 28.3. JSON's
-keys for a replacer, a reviver and `toJSON` are no longer remembered in
-the runtime's table of key strings, whose four-way sets made each one a
-probe (`ea38774a`): `json_stringify_replacer` takes 708 ns where it took
-808, 722 with the JIT where it took 851, and `json_stringify_tojson` 83.2
-where it took 91.5. The JSON encoder is at `c2dae008`'s offsets again,
-`encodeObject` as long as it was (`638b9a62`), and the lock holds the
-builds with the WebAssembly engine too (`24d565ad`):
-`json_stringify_escapes` takes 87.4 ns where it took 102, and
-`json_stringify_unicode` with the JIT 37.7 where it took 50.6. The rest
-since `b8c2c45f` is meant to move no figure here: the built-ins' and
-Function.prototype's own keys in V8's order (`8b5d6339`, `c7c7830a`;
-a runtime is made as quickly), a sloppy function's own `caller` in
-standards mode, made when first asked for (`f18011fa`), source-phase
-re-exports (`8f927215`), `Atomics.wait`'s blocking policy
-(`a327994e`), and native code's exit counts and the tests' switches
-made each runtime's (`831e57c4`, `6b858ef8`, `d8feacc5`), which leave
-`runReg` one load of its runtime's flag where it read the process's.
+Since `b5df63ea` the gains are mostly the JIT's. A builder's append of
+two strings goes straight to the JIT's append, which checks the length
+limit itself, where it first asked of each operand whether it was a
+BigInt, then its kind and length (`64bb7164`): with the JIT
+`string_build1` takes 29.6 ns where it took 40.8, `string_build2c` 27.6
+where it took 40.9 and `string_build_large1` 32.8 where it took 45.6,
+though the interpreter's 26.5 ns is still ahead on the first two. A
+destructuring in native code takes the interpreter's last cursor once its
+pattern has closed it, and copies a rest of dense elements without a
+frame (`1d50f73e`): `global_destruct` takes 27.8 ns with the JIT where
+it took 34.6, and `local_destruct` 15.7 where it took 20.7, level with
+the interpreter's 16.0. A push of several values is native, grown by
+push's leaf where the array has no room (`aad6f0b1`):
+`array_push_args3` takes 56.0 ns with the JIT where it took 76.0, and
+`array_push_args5` 80.1 where it took 96.3. Ordinary native code calls
+an asm.js module's typed code natively, where each such call had been a
+call of Go (`d14b7cea`), and a typed call's int result is truncated with
+no check (`56e02a31`): `asm_fib` takes 9.93 ns with the JIT where it
+took 13.4; with the heap's base and length kept out of the loops
+(above), `asm_dot` takes 2.67 ns where it took 3.22, `asm_copy` 1.50
+where it took 2.01, `asm_adler` 1.67 and `asm_switch` 2.57 where they
+took 1.88 and 2.96. In the interpreter `closure_leaf_miss`, whose site
+calls fresh closures of two templates in turn, takes 297 ns where it took
+350, 0.96 times QuickJS's time where it took 1.14: a closure's capture
+list is filled directly, a list of five to seventeen captures embedded
+in the function object (`648d7d30`), the module's
+environment is shared through the template (`341d1e7b`), and a fresh
+closure is made without clearing the fields already empty (`7c15bfa9`).
+A global read whose only use is an `instanceof` is one native handler
+with its branch (`03dadba8`). The rest since `b5df63ea` is meant to move
+no figure here: a direct eval's vars in the body's own scope where the
+parameter list has closures (`b9ece15f`, `b86d91f9`; KI-79), and a
+scope's lexical bindings collected and checked in linear time
+(`9954214d`).
 
 Some of these tests depend on where the linker places the code more than
 on the code. The layout lock keeps the interpreter's hot code where it
 measured best, but the code between its anchors, the Go handlers after the
 loop and the closures still move with every change to the package, and a
 change of a few per cent in one of these tests is not by itself a change in
-the engine. Since `b8c2c45f` the lock has a position before JSON.parse's
-parser (JP, `27b5b5a9`) and configurations for the builds with the
-WebAssembly engine (`24d565ad`). A pad that grows past a page moves
-everything after it 4 KB, every offset modulo 4 KB the same: the lock's
-E did when Function.prototype's and the built-ins' keys were put in
-V8's order (`8b5d6339`, `c7c7830a`), and `json_stringify_decimals` was
-46% slower at every placement until the reservation moved out of E's
-range (`b5df63ea`; docs/optimizing.md, "The layout lock"). Rows the
-matrix has slower than at `b8c2c45f`, each timed again over four
-placements of `b5df63ea` against `b8c2c45f` with both loaded at a fixed
-base, and for some over copies loaded where Windows chose:
+the engine. A pad that grows past a page moves everything after it 4 KB,
+every offset modulo 4 KB the same (docs/optimizing.md, "The layout
+lock"); since `b5df63ea` the anchors after the native handlers' block,
+after package regcomp and, with the JIT, after package mir are pages
+further on, each offset modulo 4 KB its target, as the lock means them to
+move (`16172f2e`, `ba411043`, `7c739713`, `c35e6dd2`).
 
-- slower at every placement: `json_stringify_decimals` 4.8% (34.2 ns in
-  the matrix, 32.9 at `b8c2c45f`) and `json_stringify_ints` 4.6% (25.8
-  against 24.8), and with the JIT `json_stringify_unique` 9% (122 against
-  114): their code lies in the encoder's stretch between
-  `encodeElements` and `appendJSONString`, which is at `c2dae008`'s
-  offsets for `json_stringify_escapes` and `json_stringify_unicode`,
-  where these took what they take now (`27b5b5a9`);
-- slower at most placements: `string_indexOf` 6% at three of four
-  (89.9 ns in the matrix against 82.6), `json_stringify_strings` 2.6% at
-  three (31.7 against 30.3), and with the JIT `array_indexOf` 3% at three
-  (118 against 102); `string_indexOf` and `array_indexOf` were slower in
-  every copy of `91f885a1`'s build too;
-- level over the placements, slower in the matrix's copy:
-  `json_stringify_dict` (93.3 against 80.0), `string_starts_with` (73.5
-  against 69.0), and with the JIT `string_template` (188 against 172),
-  `string_code_point_at` (6.00 against 5.41), `has_own_call_miss` (97.2
-  against 78.3, 78 to 81 over copies of `91f885a1`'s build where
-  `b8c2c45f`'s took 83 to 85) and `string_from_code_point` (87.2 against
-  75.1, 90 to 133 over those copies, 88 to 96).
+With the JIT, `string_indexOf` and `string_concat` take 86.7 and 120 ns
+in the matrix where they took 77.7 and 104, and over four placements of
+each build, loaded at a fixed base, 6.3% and 7.5% longer:
+`string_indexOf` at three of the four, `string_concat` 2.9 to 11.5% at
+each. Their code is the same. They call String's methods from the JIT's
+Go side, in the range between the lock's anchors J and N, which the lock
+does not hold and this round's JIT changes grew (`c35e6dd2`,
+`e9bf2365`): builds of the commits between `b5df63ea` and `7f8205ec`, at
+one placement, take 78 to 92 ns on `string_indexOf` with the JIT, as
+what lies before its code there grows and shrinks, and `string_trim`,
+4.8% slower over the placements at `7f8205ec`, is level at `329ee166`
+(+0.5%). `has_own_call_for_in`, which calls a borrowed `hasOwnProperty`
+from native code through the same Go side, is 7.4% slower over the
+placements, 4 to 15% at three and 4% faster at the fourth. Ten more rows
+with the JIT are 7 to 19% slower in the matrix's run and within 2.8%
+over the placements: `string_slice`, `string_starts_with`,
+`dict_for_in`, `array_length_decr`, `array_hole_length_decr`,
+`map_set_bigint`, `math_random`, `bigint64_search`,
+`object_spread_large` and `mega_add`. The interpreter's rows are within
+2.5% over the placements.
 
-The matrix's `generator_next` takes 103 ns where it took 112,
-`dataview_write` 67.1 where it took 78.8 and `array_literal_empty` 70.9
-where it took 79.7, which `b8c2c45f`'s page had among the rows that move
-both ways with where the code lies.
+The rows `b5df63ea`'s page left slower or open:
+
+- `json_stringify_decimals` takes 34.1 ns (34.2 at `b5df63ea`, 32.9 at
+  `b8c2c45f`), `json_stringify_ints` 25.0 (25.8, 24.8), and with the JIT
+  `json_stringify_unique` 123 (122, 114): the encoder's stretch is where
+  it was;
+- `string_indexOf` takes 91.4 ns (89.9, 82.6), level with `b5df63ea`'s
+  over the placements, `json_stringify_strings` 30.9 (31.7, 30.3), and
+  with the JIT `array_indexOf` 105 (118, 102);
+- `json_stringify_dict` takes 83.3 ns (93.3, 80.0) and
+  `string_starts_with` 75.4 (73.5, 69.0), level over the placements; with
+  the JIT `string_template` 181 (188, 172), `string_code_point_at` 5.17
+  (6.00, 5.41), `has_own_call_miss` 90.4 (97.2, 78.3) and
+  `string_from_code_point` 80.8 (87.2, 75.1);
+- `generator_next` takes 102 ns (103), `dataview_write` 61.4 (67.1) and
+  `array_literal_empty` 71.1 (70.9);
+- Are We Fast Yet's Storage takes 1,492 ms (1,492), and 698 with the JIT
+  (726).
 
 The runners also run `microbench_extra.js`, tests of what microbench.js has
 none of, written as its tests are: generators and async functions, try
@@ -742,67 +831,69 @@ method is read before its argument -- and since v0.40.0 `codePointAt`,
 `at` and `charAt` called as methods -- and since v0.41.0 reads and
 additions at sites that meet a new layout at every call. Over the 346
 QuickJS can run (it has no using declarations) go-quickjs takes 0.50
-times its time, and 0.23 times with the JIT; over the 344 of `b8c2c45f`
-0.50 and 0.23, where it took 0.51 and 0.23 then, and v0.38.0 0.70 and
-0.30 over its 313; leaving out the JSON tests, 0.55 and 0.22. The asm.js
+times its time, and 0.23 times with the JIT, as it did at `b5df63ea`
+(0.497 and 0.227 where it took 0.503 and 0.229), and v0.38.0 0.70 and
+0.30 over its 313; leaving out the JSON tests, 0.54 and 0.22. The asm.js
 kernels' loops (`asm_adler`, `asm_crc32`, `asm_copy`, `asm_fnv`,
-`asm_dot`, `asm_switch`) take 0.12 to 0.28 times QuickJS's time as typed
+`asm_dot`, `asm_switch`) take 0.12 to 0.29 times QuickJS's time as typed
 code, and 0.03 to 0.07 with the JIT, which compiles them at the module's
-link; their recursion and calls (`asm_fib`, `asm_call_leaf`) 0.80 and
-0.55, 0.30 and 0.09 with the JIT, which inlines a typed callee
-(`4ae95d8b`), and a call through a function table 1.06, 0.17 with the
-JIT. A switch on strings past its first few cases
-takes 0.05 to 0.16 times QuickJS's time, its literal cases one lookup
+link; their recursion and calls (`asm_fib`, `asm_call_leaf`) 0.81 and
+0.55, 0.22 and 0.09 with the JIT, which inlines a typed callee
+(`4ae95d8b`) and calls typed code natively from the ordinary code that
+drives it (`d14b7cea`), and a call through a function table 1.04, 0.16
+with the JIT. A switch on strings past its first few cases
+takes 0.05 to 0.15 times QuickJS's time, its literal cases one lookup
 (`100eb7f`). An await costs a fiftieth of QuickJS's time (`async_await`
-15.2 against 747 ns): an async function resumed by its await's job goes
+15.4 against 746 ns): an async function resumed by its await's job goes
 on in place at an await of a value that needs no job of its own. A
-generator resumed from for-of is level (`generator_for_of` 1.02), where
+generator resumed from for-of is level (`generator_for_of` 1.03), where
 v0.38.0 took 1.44 times, and a for-in over a dictionary takes 0.22 times,
 where it took 1.41: its keys are made once for the dictionary's layout and
 handed out by the native handlers. Calls in tail position take 0.55 to
-0.61 times QuickJS's time, and a `map` callback that returns a call in
-tail position 0.48, level with one that returns an ordinary call: such a
+0.60 times QuickJS's time, and a `map` callback that returns a call in
+tail position 0.46, level with one that returns an ordinary call: such a
 callback is entered directly, as any other is (`400fc19c`). A call of
 `charCodeAt` whose method is read before its argument, as in
 `s.charCodeAt(++i)`, is answered by the call handler from its target, as
-V8's call feedback does (`b90b70c4`): `string_charcode_update` takes 0.33
+V8's call feedback does (`b90b70c4`): `string_charcode_update` takes 0.31
 times QuickJS's time. A site that calls fresh closures of two templates in
 turn misses its cache at each call and retries the leaves the native call
-handler answers (`ab16fd73`); `closure_leaf_miss` takes 1.14 times. A
-global `exec` still takes 1.31 times, as it makes a result and a String
-for each match; a sticky one 1.01. The largest gaps either way:
+handler answers (`ab16fd73`); `closure_leaf_miss` takes 0.96 times, where
+it took 1.14 (above). A global `exec` still takes 1.33 times, as it makes
+a result and a String for each match; a sticky one 1.03. The largest
+gaps either way:
 
 | Test | go-quickjs | go-quickjs JIT | QuickJS | go-quickjs / QuickJS | JIT / QuickJS |
 |---|---:|---:|---:|---:|---:|
-| `scope_chain` | 665 ns | 665 ns | 363 ns | 1.83x | 1.83x |
-| `set_proto_fresh` | 375 ns | 391 ns | 210 ns | 1.78x | 1.86x |
-| `array_literal_empty` | 70.9 ns | 61.5 ns | 40.8 ns | 1.74x | 1.51x |
-| `subclass_fresh` | 1,160 ns | 1,230 ns | 682 ns | 1.70x | 1.80x |
-| `typed_u8_find` | 44.6 ns | 9.61 ns | 27.2 ns | 1.64x | 0.35x |
-| `array_fill_down` | 140 ns | 140 ns | 86.6 ns | 1.61x | 1.62x |
-| `object_create_fresh` | 344 ns | 341 ns | 228 ns | 1.51x | 1.50x |
-| `typed_findIndex` | 46.1 ns | 9.27 ns | 31.0 ns | 1.49x | 0.30x |
-| `typed_find` | 46.0 ns | 9.64 ns | 31.0 ns | 1.49x | 0.31x |
-| `typed_u64_reduce` | 108 ns | 108 ns | 74.8 ns | 1.44x | 1.45x |
-| `asm_copy` | 5.76 ns | 2.01 ns | 48.3 ns | 0.12x | 0.04x |
-| `string_switch_last` | 27.4 ns | 12.8 ns | 264 ns | 0.10x | 0.05x |
-| `json_stringify_decimals` | 34.2 ns | 34.9 ns | 331 ns | 0.10x | 0.11x |
-| `string_switch_large` | 29.0 ns | 21.4 ns | 406 ns | 0.07x | 0.05x |
-| `string_switch_miss` | 17.6 ns | 12.5 ns | 266 ns | 0.07x | 0.05x |
-| `regexp_search_utf16` | 679 ns | 737 ns | 13,142 ns | 0.05x | 0.06x |
-| `string_switch_nonstring` | 12.2 ns | 7.34 ns | 265 ns | 0.05x | 0.03x |
-| `regexp_search_i` | 672 ns | 708 ns | 20,977 ns | 0.03x | 0.03x |
-| `json_parse_long` | 1,836 ns | 1,864 ns | 83,810 ns | 0.02x | 0.02x |
-| `async_await` | 15.2 ns | 19.4 ns | 747 ns | 0.02x | 0.03x |
+| `scope_chain` | 661 ns | 674 ns | 351 ns | 1.88x | 1.92x |
+| `set_proto_fresh` | 373 ns | 375 ns | 211 ns | 1.77x | 1.78x |
+| `array_literal_empty` | 71.1 ns | 63.0 ns | 41.9 ns | 1.70x | 1.50x |
+| `subclass_fresh` | 1,144 ns | 1,193 ns | 681 ns | 1.68x | 1.75x |
+| `typed_u8_find` | 45.0 ns | 9.31 ns | 27.4 ns | 1.64x | 0.34x |
+| `array_fill_down` | 139 ns | 141 ns | 86.4 ns | 1.61x | 1.63x |
+| `object_create_fresh` | 344 ns | 347 ns | 226 ns | 1.52x | 1.53x |
+| `typed_find` | 46.5 ns | 9.54 ns | 30.9 ns | 1.51x | 0.31x |
+| `typed_findIndex` | 46.5 ns | 9.05 ns | 30.9 ns | 1.50x | 0.29x |
+| `typed_u64_reduce` | 108 ns | 109 ns | 75.9 ns | 1.42x | 1.44x |
+| `asm_copy` | 5.73 ns | 1.50 ns | 48.3 ns | 0.12x | 0.03x |
+| `string_switch_last` | 27.6 ns | 13.0 ns | 266 ns | 0.10x | 0.05x |
+| `json_stringify_decimals` | 34.1 ns | 35.4 ns | 333 ns | 0.10x | 0.11x |
+| `string_switch_large` | 29.2 ns | 21.6 ns | 411 ns | 0.07x | 0.05x |
+| `string_switch_miss` | 17.7 ns | 12.5 ns | 269 ns | 0.07x | 0.05x |
+| `regexp_search_utf16` | 679 ns | 722 ns | 13,184 ns | 0.05x | 0.05x |
+| `string_switch_nonstring` | 12.3 ns | 7.42 ns | 265 ns | 0.05x | 0.03x |
+| `regexp_search_i` | 675 ns | 728 ns | 20,972 ns | 0.03x | 0.03x |
+| `json_parse_long` | 1,822 ns | 1,870 ns | 85,582 ns | 0.02x | 0.02x |
+| `async_await` | 15.4 ns | 17.8 ns | 746 ns | 0.02x | 0.02x |
 
 A BigInt in the int64 range is held in the value itself (`9746906`), as
 QuickJS holds one that fits in a word, and so is one below 2^64 in
 magnitude (`f8c3229`); a larger one is a block of no pointers, made by the
 engine's own arithmetic (`f1bf681`). Short BigInts' `+`, `-`, `*` and
-comparisons are native handlers: `bigint64_arith` takes 0.37 times
+comparisons are native handlers: `bigint64_arith` takes 0.36 times
 QuickJS's time. A larger one is made by the engine's arithmetic in Go:
-`bigint256_arith` takes 1.48 times, and the extra BigInt tests 0.43 to
-1.27 times, `bigint_pidigits`, `bigint_toString`, `bigint_modpow` and
+`bigint256_arith` takes 1.45 times, and the extra BigInt tests 0.42 to
+1.24 times, `bigint_pidigits`, `bigint_toString`, `bigint_modpow` and
 `bigint64_xorshift` the slowest. The JIT makes BigInts of 64 bits natively: `bigint64_arith`
 takes 0.10 times QuickJS's time with it, `bigint64_xorshift` 0.05.
 
@@ -810,7 +901,7 @@ The largest gaps now are:
 
 - objects made on a prototype that is itself new -- `Object.create` of a
   fresh object, `Object.setPrototypeOf` to one, a scope chain built as
-  objects, a subclass made per call and its instance -- 1.51 to 1.83
+  objects, a subclass made per call and its instance -- 1.52 to 1.88
   times QuickJS's time;
 - arrays made empty or grown downward from past their end
   (`array_literal_empty`, `array_fill_down`);
@@ -821,7 +912,7 @@ The largest gaps now are:
   key does not keep the key alive, as the specification requires; adding
   an entry costs more for it;
 - a global `exec`, which makes a result and a String for each match, and
-  a `replace` by a template with `$` (1.31 and 1.30 times).
+  a `replace` by a template with `$` (1.33 and 1.32 times).
 
 The suite as a whole does better than the operations it is made of
 because of the places go-quickjs leads by most: strings and regular
@@ -839,13 +930,13 @@ do well, and Splay's allocation-heavy setup.
   the table, an indirect jump: four instructions -- with the interpreter's
   state pinned in machine registers across it, which Go cannot do: in Go
   every handler returns to a loop and is called again, its state stored
-  and reloaded around the call. 132 of the 244 operations have a native
+  and reloaded around the call. 134 of the 245 operations have a native
   handler; the rest, and every fast path that misses, go to their Go
   handler through an exit that calls it in Go's convention
   (register-interpreter.md, "Native handlers"). The six loops of simple
   instructions -- `empty_loop` and the extra tests `loop_sum`,
   `loop_arith`, `loop_locals`, `loop_elements` and `loop_props` -- take
-  0.21 to 0.68 times QuickJS's time, 0.42 by their geometric mean, where
+  0.21 to 0.67 times QuickJS's time, 0.42 by their geometric mean, where
   v0.38.0, its stack interpreter and its tree tier, took 0.45 to 1.15 and
   0.75 by the mean. `int_arith` takes 0.47 times QuickJS's time and
   `float_arith` 0.35.
@@ -857,11 +948,11 @@ do well, and Splay's allocation-heavy setup.
   are handlers of their own that keep the caller's state on a native
   frame stack and never enter Go (register-interpreter.md, "Frames and
   calls"). A method call whose body needs a frame takes 33.8 ns against
-  69.3 in QuickJS (`method_call`), one that only returns its argument
-  12.5 against 42.7 (`method_call_leaf`), an empty function 6.76 against
-  30.8 (`func_call`); with the JIT they take 11.6, 2.64 and 0.95 ns. A
-  recursive call is level: `call_fib` and `call_mutual` take 0.93 times
-  QuickJS's time. A body that only returns a parameter or a
+  70.1 in QuickJS (`method_call`), one that only returns its argument
+  12.4 against 43.0 (`method_call_leaf`), an empty function 6.75 against
+  31.0 (`func_call`); with the JIT they take 11.8, 2.66 and 0.95 ns. A
+  recursive call is level: `call_fib` and `call_mutual` take 0.93 and
+  0.92 times QuickJS's time. A body that only returns a parameter or a
   constant, or a short pure one of numbers and upvalues, is answered at
   the call site without a frame; natively, so are a getter of `this.k`,
   `this.k.length` or `this.k[p]`, a `typeof` test, an initializer that
@@ -869,7 +960,7 @@ do well, and Splay's allocation-heavy setup.
   to one (`d54099e3`, `09409332`, `bdab5ba4`); the initializer writes its
   values at the slots, and gives the final layout, that it remembers from
   the last construction of the same layout (`8505335a`): `class_new`
-  takes 0.43 times QuickJS's time. `Object.create` of a prototype alone
+  takes 0.44 times QuickJS's time. `Object.create` of a prototype alone
   is a leaf too, which the interpreter and native code call without a
   frame (`ffb23541`).
 - **Property access.** Objects built the same way share a shape, as in
@@ -879,19 +970,24 @@ do well, and Splay's allocation-heavy setup.
   for a write too (`defbf92d`), and one that keeps meeting new shapes
   reads through the realm's shared cache, as V8's megamorphic stub cache
   does, in sets of four ways (`46370076`), and the native handlers probe
-  that cache and the realm's cache of additions themselves (`5916704b`);
-  a write site that keeps several shapes adds to each of them natively
-  (`d44da58c`); an `instanceof` site keeps the
-  constructor's prototype slot too (`32036a73`), and a branch on its
-  result is the same instruction (`1dcf124c`). A keyed access converts
+  that cache and the realm's cache of additions themselves (`5916704b`),
+  finding an own property of an object whose keys have an index as Go's
+  lookup does (`a8c984b4`); a key some of a site's objects lack is kept
+  beside the shapes that have it, and a key a chain lacks is remembered
+  by the chain's cell (`6521aac5`, `18acbcb9`); a write site that keeps
+  several shapes adds to each of them natively (`d44da58c`); an
+  `instanceof` site keeps the constructor's prototype slot too
+  (`32036a73`), and a branch on its result is the same instruction
+  (`1dcf124c`), with the read of a global constructor before it too
+  (`03dadba8`). A keyed access converts
   its key through the runtime's table of key strings, also in sets of
   four ways (`6deb2e51`), and a keyed store remembers the shapes and keys
   its site met (`f04364dd`). Two adjacent reads of properties share one
   native dispatch (`4d5d636d`). The native handlers check the cache where
   the instruction runs: `prop_read` takes 0.49 times QuickJS's time,
-  `prop_write` 0.34, `global_read` 0.85, `global_write` 0.39,
-  `instanceof_class` 0.26, and `mega_read` and `mega_add`, at sites that
-  meet a new layout at every call, 0.74 and 0.68. An object holds only its values, its
+  `prop_write` 0.33, `global_read` 0.85, `global_write` 0.39,
+  `instanceof_class` 0.24, and `mega_read` and `mega_add`, at sites that
+  meet a new layout at every call, 0.74 and 0.67. An object holds only its values, its
   keys in its shape, as a QuickJS object does (`944e2e8`).
 - **Memory management.** QuickJS counts references: an object is freed the
   moment the last reference to it goes, and a cycle collector handles the
@@ -921,14 +1017,14 @@ Where go-quickjs is ahead by most:
 - **Crypto.** Its arithmetic is register code whose bitwise operators have
   forms with an immediate, and `(x + y) | 0` is one instruction, all
   native handlers:
-  `crypto_am3` takes 0.70 times QuickJS's time, 0.20 with the JIT, and
-  Crypto 0.47.
+  `crypto_am3` takes 0.69 times QuickJS's time, 0.20 with the JIT, and
+  Crypto 0.48.
 - **Code compiled from C to asm.js.** A validated asm.js module runs as
   typed code, its int32s and float64s raw in their registers, its heap's
   loads and stores natively, and with the JIT is compiled at its link with
   no speculation (`d8cbc918`, `5ae2317e`): Octane's zlib takes 0.19 times
-  QuickJS's time, 0.10 with the JIT, and the asm.js kernels' loops 0.12 to
-  0.28, 0.03 to 0.07 with it.
+  QuickJS's time, 0.07 with the JIT, and the asm.js kernels' loops 0.12 to
+  0.29, 0.03 to 0.07 with it.
 - **RegExp.** A pattern that contains a run of plain text every match must
   have, near where the match begins, is searched for that text first, and
   tried only where it could have been reached from -- what V8's regexp
@@ -948,9 +1044,9 @@ Where go-quickjs is ahead by most:
 - **Strings built by appending.** A closure's `s += x` and a local's
   `out += esc(x)` grow the string in place, in storage with room to spare,
   rather than making a rope (`00ce03b5`): `string_build2c` takes 0.19 times
-  QuickJS's time, `local_append_keep` 0.27 and `template_list` 0.35. The
-  interpreter is ahead of the JIT on the first of these, 0.29 times with it.
-- **JSON.** The 49 `json_` tests take 0.31 times QuickJS's time, and 0.31
+  QuickJS's time, `local_append_keep` 0.28 and `template_list` 0.34, and
+  0.19 times with the JIT on the first of these, where it took 0.29.
+- **JSON.** The 49 `json_` tests take 0.30 times QuickJS's time, and 0.31
   with the JIT, as the work is a built-in's. `JSON.parse` walks the shape
   tree as it reads, expecting the keys of the last object parsed in the same
   place, and makes each object once, at its last key. `JSON.stringify` keeps
@@ -984,10 +1080,10 @@ Where go-quickjs is ahead by most:
   whose whole body is `this.initialize.apply(this, arguments)`, as
   RayTrace's are, is constructed by its call site as a forwarder, and
   natively, where the target is an initializer, without entering either
-  frame (`746d9438`, `bdab5ba4`): `forward_construct` takes 0.24 times
+  frame (`746d9438`, `bdab5ba4`): `forward_construct` takes 0.20 times
   QuickJS's time, and 0.02 with the JIT. It took 0.54 at `258b4e96`, 0.23
   at `3ecb8200`, 0.32 at `2f05d3fc`, 0.25 at `c2dae008` and 0.24 at
-  `b8c2c45f`.
+  `b8c2c45f` and `b5df63ea`.
 
 What remains in the interpreter is mostly in Go: the operations with no
 native handler and the fast paths that miss, which exit to their Go

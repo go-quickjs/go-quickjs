@@ -96,18 +96,18 @@ workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-Measured at `b5df63ea`, on the register interpreter, on the V8 benchmark
-suite as a whole it is well ahead of C QuickJS: it takes 0.32 times
-QuickJS's time over the suite and has 2.20 times its composite score, and
-with the experimental JIT 0.21 times its time and a composite score 5.6
-times as high. On the larger programs of Octane and Are We Fast Yet it
-takes 0.43 and 0.64 times QuickJS's time, and 0.31 and 0.20 times with the
-JIT; Octane's zlib, an asm.js module run as typed code, takes 0.19 times,
-and 0.10 with the JIT. A page React 18 renders on the server takes 0.61
-times, and 0.53 with the JIT. Single operations cost about half as much:
-QuickJS's own micro-benchmarks take 0.49 times as long on average, and
-0.28 times with the JIT, though a few take up to 1.5 times as long, the
-weak collections and the BigInts past 64 bits among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
+Measured at `7f8205ec` (with the JIT at `329ee166`), on the register
+interpreter, on the V8 benchmark suite as a whole it is well ahead of C
+QuickJS: it takes 0.31 times QuickJS's time over the suite and has 2.31
+times its composite score, and with the experimental JIT 0.20 times its
+time and a composite score 5.8 times as high. On the larger programs of
+Octane and Are We Fast Yet it takes 0.42 and 0.64 times QuickJS's time,
+and 0.29 and 0.20 times with the JIT; Octane's zlib, an asm.js module run
+as typed code, takes 0.19 times, and 0.07 with the JIT. A page React 18
+renders on the server takes 0.58 times, and 0.49 with the JIT. Single
+operations cost about half as much: QuickJS's own micro-benchmarks take
+0.48 times as long on average, and 0.27 times with the JIT, though a few
+take up to 1.5 times as long, the weak collections and the BigInts past 64 bits among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## WebAssembly
 
