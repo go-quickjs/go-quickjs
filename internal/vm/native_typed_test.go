@@ -196,7 +196,9 @@ func TestRegTypedProtoInterrupt(t *testing.T) {
 		if v, err := r.Run(fin); err != nil || v.String().Go() != "6765" {
 			t.Errorf("native %v: after the stop: %v, %v", native, v, err)
 		}
-		if g, _ := r.GetProp(Obj(r.Global()), r.Intern("tfib")); g.Object().fn().closure.regTyped == nil {
+		// A stop before forever's declarations had made tfib, which a
+		// slow machine reaches (qemu), leaves none: the error above.
+		if g, _ := r.GetProp(Obj(r.Global()), r.Intern("tfib")); !g.IsObject() || g.Object().fn().closure.regTyped == nil {
 			t.Errorf("native %v: no typed twin", native)
 		}
 		r.Close()
