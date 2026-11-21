@@ -1228,10 +1228,10 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 				// or an eval throws as any does -- that holds its value
 				// already, as the closure is made where it is compiled.
 				markByValue(c.fn, idx)
-			case l.kind == bindParam && c.parent.fn.Strict:
-				// A strict function's parameter, which no arguments object
-				// aliases: by value if nothing stores to it, which only the
-				// end of its function's compile can say.
+			case l.kind == bindParam && !c.parent.fn.MappedArguments:
+				// A parameter no arguments object aliases: by value if
+				// nothing stores to it, which only the end of its
+				// function's compile can say.
 				c.parent.paramCaptures = append(c.parent.paramCaptures, paramCapture{c.fn, idx, l.slot})
 			}
 		}

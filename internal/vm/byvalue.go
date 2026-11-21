@@ -4,8 +4,8 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // A closure may take by value what its maker never assigns once the
 // closure is made (bytecode.UpvalueDesc's ByValue): a const initialized
-// by then, a strict function's parameter nothing stores to. It copies the
-// value into a cell of its own, closed from the start, which no frame
+// by then, a parameter nothing stores to or aliases through arguments. It
+// copies the value into a cell of its own, closed from the start, which no frame
 // keeps open and closes as it returns: Havlak's and DeltaBlue's callbacks,
 // made at every call of their maker to read its parameters and consts,
 // had each been a cell besides, opened on the frame and closed with it.

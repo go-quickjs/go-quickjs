@@ -34,6 +34,7 @@ var legacyCallerCases = []struct{ src, want string }{
 
 	{`function f(a, b) { a = 5; return [...f.arguments].join() } f(1, 2, 3)`, "5,2,3"},
 	{`function f(a) { const A = f.arguments; a = 9; return A[0] } f(1)`, "1"},
+	{`function f(x) { const g = () => x; const a = f.arguments; a[0] = 9; return g() + ',' + a[0] } f(1)`, "1,9"},
 	{`function f(a) { f.arguments[0] = 7; return a } f(1)`, "1"},
 	{`function f(a) { arguments[0] = 9; return [...f.arguments].join() } f(1, 2)`, "1,2"},
 	{`function f(a) { a = 5; const g = () => a; return f.arguments[0] } f(1)`, "1"},

@@ -1256,7 +1256,8 @@ A closure captures a binding by pointing an upvalue at its register while
 the frame lives; the frame's end closes it, copying the value into the
 upvalue. A binding that needs a fresh copy each turn of a loop is closed at
 the end of each turn by `close_regs`. A binding captured by value -- a
-constant, a strict parameter no one assigns -- is copied into the closure.
+constant, a parameter no one assigns and no mapped arguments object
+aliases -- is copied into the closure.
 `closure_w` carries, through `RegCode.Caps`, the register of each of the
 new function's upvalues taken from its maker, so that the function's
 template needs nothing of the maker's layout. A loop's function expression

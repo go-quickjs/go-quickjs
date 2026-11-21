@@ -64,6 +64,8 @@ func jitAsyncAgreesForTest(t *testing.T, setup, src string, rounds int) *Runtime
 // no loop's step resumes natively, one whose every resumption is a call
 // of next() native code makes, an async function that never awaits, whose
 // one resumption is its call: each answer the interpreter's.
+// pair updates its captured parameter after yielding so the closure must
+// share the register across resumptions rather than copy it by value.
 func TestJITAsyncHotResumptions(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -78,7 +80,7 @@ func TestJITAsyncHotResumptions(t *testing.T) {
 		async function rejects(i) { const v = await (i % 3 ? i : Promise.reject(new Error('e' + i))); return add(v, 1) }
 		var arrow = async (o, i) => add(await o.x, get(o, 'y') * i)
 		async function plain(o, i) { return add(get(o, 'x'), i) }
-		function* pair(a) { const c = () => a; yield add(c(), 1); yield add(a, get({ z: 2 }, 'z')) }
+		function* pair(a) { const c = () => a; yield add(c(), 1); a++; yield add(c(), get({ z: 2 }, 'z')) }
 		function* steps(a) { const c = () => a; const x = yield add(c(), 1); yield add(x, get({ z: 2 }, 'z')) }
 		function pump(n) { let s = 0; for (let i = 0; i < n; i++) { const g = steps(i); s += g.next().value; s += g.next(i).value; s += g.next().done ? 1 : 0 } return s }
 		async function drive(n) {

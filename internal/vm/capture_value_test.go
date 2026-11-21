@@ -2,6 +2,7 @@ package vm
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -11,8 +12,8 @@ import (
 
 // TestCaptureByValue pins what a closure sees of a binding it may take by
 // value (bytecode.UpvalueDesc's ByValue) -- a const initialized when it is
-// made, a strict function's parameter nothing stores to -- and of every
-// binding that looks like one and is not: one assigned after the closure
+// made, a parameter nothing stores to or aliases through arguments -- and
+// of every binding that looks like one and is not: one assigned after the closure
 // is made, by its maker, by another closure or one a closure makes, by an
 // update, by an eval, through a mapped arguments object; one still in its
 // dead zone, as a hoisted function or a switch's other case sees it, or a
@@ -40,6 +41,7 @@ func TestCaptureByValue(t *testing.T) {
 		{name: "grandchild assigns", src: `'use strict'; function f(x) { const g = () => x; const h = () => () => { x = 4 }; h()(); return g() } f(1)`, want: "4"},
 		{name: "itself assigns", src: `'use strict'; function f(x) { const g = () => { x++; return x }; return g() + g() } f(1)`, want: "5"},
 
+		{name: "sloppy param", src: `function f(x) { return () => x } const p = f(1), q = f(2); p() + ',' + q()`, want: "1,2"},
 		{name: "sloppy arguments", src: `function f(x) { const g = () => x; arguments[0] = 5; return g() } f(1)`, want: "5"},
 		{name: "hoisted function", src: `'use strict'; function f() { function g() { return y } const y = 7; return g() } f()`, want: "7"},
 		{name: "switch case", src: `'use strict'; function f(k) { switch (k) { case 0: const y = 1; case 1: return (() => typeof y)() } } try { f(1) } catch (e) { e.name }`, want: "ReferenceError"},
@@ -63,7 +65,7 @@ func TestCaptureByValue(t *testing.T) {
 	}
 }
 
-// TestCaptureByValueAllocs pins what a closure over its strict maker's
+// TestCaptureByValueAllocs pins what a closure over its maker's
 // parameters costs: an arrow over three it takes by value is the function
 // object alone, its copies in the same allocation; a function taking one
 // by value and sharing another, the object and one room for both cells,
@@ -75,7 +77,9 @@ func TestCaptureByValueAllocs(t *testing.T) {
 		want      float64
 	}{
 		{name: "by value", src: `'use strict'; function f(a, b, c) { return () => a + b + c }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 1},
+		{name: "sloppy by value", src: `function f(a, b, c) { return () => a + b + c }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 1},
 		{name: "mixed", src: `'use strict'; function f(a, b, c) { b++; return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 2},
+		{name: "sloppy mixed", src: `function f(a, b, c) { b++; return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`, want: 2},
 	} {
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, tt.src))
@@ -106,6 +110,26 @@ func TestCaptureByValueAllocs(t *testing.T) {
 type captureCase struct{ name, want, src string }
 
 var captureCases = []captureCase{
+	{name: "sloppy immutable params", want: "6", src: `(function () { function f(a, b, c) { return function () { return a + b + c } } return f(1, 2, 3)() })`},
+	{name: "sloppy sibling assigns", want: "4", src: `(function () { function f(x) { const g = () => x; const h = () => { x = 4 }; h(); return g() } return f(1) })`},
+	{name: "sloppy grandchild assigns", want: "5", src: `(function () { function f(x) { const g = () => x; const h = () => () => { x = 5 }; h()(); return g() } return f(1) })`},
+	{name: "sloppy nested arguments", want: "6", src: `(function () { function f(x) { const g = () => x; const h = () => { arguments[0] = 6 }; h(); return g() } return f(1) })`},
+	{name: "sloppy eval assigns param", want: "7", src: `(function () { function f(x) { const g = () => x; eval('x = 7'); return g() } return f(1) })`},
+	{name: "sloppy child eval assigns param", want: "8", src: `(function () { function f(x) { const g = () => x; const h = () => eval('x = 8'); h(); return g() } return f(1) })`},
+	{name: "sloppy with fallthrough assigns", want: "9", src: `(function () { function f(x) { const g = () => x; with ({}) { x = 9 } return g() } return f(1) })`},
+	{name: "sloppy child with assigns", want: "9", src: `(function () { function f(x) { const g = () => x; const h = () => { with ({}) { x = 9 } }; h(); return g() } return f(1) })`},
+	{name: "sloppy child with own binding", want: "1", src: `(function () { function f(x) { const g = () => x; const h = (o) => { with (o) { x = 9 } }; h({x: 0}); return g() } return f(1) })`},
+	{name: "sloppy child eval arguments", want: "5", src: `(function () { function f(x) { const g = () => x; const h = () => eval('arguments[0] = 5'); h(); return g() } return f(1) })`},
+	{name: "sloppy annexB function", want: "number", src: `(function () { function f(x) { const g = () => x; { function x() {} } return typeof g() } return f(1) })`},
+	{name: "sloppy function declaration", want: "function", src: `(function () { function f(x) { const g = () => x; function x() {} return typeof g() } return f(1) })`},
+	{name: "sloppy duplicate params", want: "2", src: `(function () { function f(x, x) { const g = () => x; return g() } return f(1, 2) })`},
+	{name: "sloppy var redeclared", want: "3", src: `(function () { function f(x) { const g = () => x; var x = 3; return g() } return f(1) })`},
+	{name: "sloppy var without init", want: "1", src: `(function () { function f(x) { const g = () => x; var x; return g() } return f(1) })`},
+	{name: "sloppy for-in param", want: "k", src: `(function () { function f(x) { const g = () => x; for (x in {k: 1}); return g() } return f(1) })`},
+	{name: "sloppy destructuring assigns", want: "7", src: `(function () { function f(x) { const g = () => x; [x] = [7]; return g() } return f(1) })`},
+	{name: "sloppy catch shadows", want: "1", src: `(function () { function f(x) { const g = () => x; try { throw 2 } catch (x) { x = 3 } return g() } return f(1) })`},
+	{name: "sloppy unmapped default", want: "1", src: `(function () { function f(x, y = arguments) { const g = () => x; y[0] = 5; return g() } return f(1) })`},
+	{name: "sloppy generator param", want: "4,4", src: `(function () { function* f(x) { const g = () => x; yield g(); yield g() } var it = f(4); return it.next().value + ',' + it.next().value })`},
 	{name: "tdz hoisted fn", want: "ReferenceError,7", src: `'use strict'; (function () { function g() { return y } let r; try { r = g() } catch (e) { r = e.name } const y = 7; return r + ',' + g() })`},
 	{name: "tdz block hoisted", want: "ReferenceError,3", src: `'use strict'; (function () { { function g() { return y } let r; try { r = g() } catch (e) { r = e.name } const y = 3; return r + ',' + g() } })`},
 	{name: "tdz sloppy annexB", want: "ReferenceError,4", src: `(function () { { function g() { return y } let r; try { r = g() } catch (e) { r = e.name } const y = 4; return r + ',' + g() } })`},
@@ -280,9 +304,9 @@ func TestCaptureByValueCases(t *testing.T) {
 // TestCaptureByValueMarks pins which captures the compiler marks by value:
 // in kinds of closure -- an arrow, a function, a generator, an async
 // function and generator, classes and their methods, an object
-// literal's method and getter -- every capture of a strict maker's
-// parameters nothing assigns; none where the maker assigns one, nor in
-// code compiled for a debugger.
+// literal's method and getter -- every capture of its maker's
+// parameters nothing assigns or aliases through arguments; none where the
+// maker assigns one, nor in code compiled for a debugger.
 func TestCaptureByValueMarks(t *testing.T) {
 	t.Parallel()
 	kinds := `'use strict'; function mk(a, b) { const c = 3; return [() => a + b + c, function f() { return a }, function* g() { yield a }, async function h() { return a }, async function* ag() { yield a }, class C { m() { return a + c } }, class D extends Object { constructor() { super(); this.v = b } }, { m() { return a }, get k() { return b } }] }`
@@ -292,9 +316,12 @@ func TestCaptureByValueMarks(t *testing.T) {
 		byVal, shared int
 	}{
 		{name: "kinds", src: kinds, byVal: -1, shared: 0},
+		{name: "sloppy kinds", src: strings.TrimPrefix(kinds, "'use strict'; "), byVal: -1, shared: 0},
 		{name: "kinds for a debugger", src: kinds, debug: true, byVal: 0, shared: -1},
+		{name: "sloppy kinds for a debugger", src: strings.TrimPrefix(kinds, "'use strict'; "), debug: true, byVal: 0, shared: -1},
 		{name: "assigned", src: `'use strict'; function mk(a) { const g = () => a, h = function () { return a }; a = 2; return [g, h] }`, byVal: 0, shared: 2},
-		{name: "sloppy", src: `function mk(a) { return () => a }`, byVal: 0, shared: 1},
+		{name: "sloppy", src: `function mk(a) { return () => a }`, byVal: 1, shared: 0},
+		{name: "sloppy mapped arguments", src: `function mk(a) { var args = arguments; return () => a }`, byVal: 0, shared: 1},
 	} {
 		prog, err := parser.Parse(tt.src, parser.Options{})
 		if err != nil {
