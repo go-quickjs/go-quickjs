@@ -1710,8 +1710,9 @@ func (c *core) allocate() error {
 		pool[2*i] = uint64(it.start)<<32 | uint64(i)
 	}
 	// The spill classes (spillClasses) are made of every pair, the groups
-	// of those whose intervals do not meet.
-	sclass := c.spillClasses(rec, iv, pos, start, xuses, liveIn, liveOut, lb, mem, pairs)
+	// of those whose intervals do not meet; the classes of a pair's
+	// component only once one of its values is spilled.
+	sclass := c.newSpillClasses(rec, iv, pos, start, xuses, liveIn, liveOut, lb, mem, pairs)
 	kept := pairs[:0]
 	for p := 0; p < len(pairs); p += 2 {
 		if mv, ma := pairs[p], pairs[p+1]; gm[mv].start > gm[ma].end || gm[ma].start > gm[mv].end {
@@ -2190,10 +2191,9 @@ func (c *core) allocate() error {
 		// (gslot), else one that becomes the group's.
 		var slotOf func(from int, v *ssa.Value) (int, error)
 		slot := func(from int, v *ssa.Value) (int, error) {
-			if v.ID < len(sclass) && sclass[v.ID] != 0 {
+			if k := sclass.root(v); k >= 0 {
 				// Its spill class's (spillClasses): the class's own, made
 				// for it, which no other value takes.
-				k := int(sclass[v.ID]) - 1
 				if cslot[k] < 0 {
 					if spills == len(fnext) {
 						grow()
@@ -3324,8 +3324,8 @@ type gmember struct {
 }
 
 // spillClasses are the classes of a phi and its arguments that may share
-// one spill slot, by value ID: 1 plus the root's value ID of the class of
-// each value in one of more than one value, else 0. The groups (allocate)
+// one spill slot: root gives a value's class's root's value ID, or -1 for
+// a value in none of more than one value. The groups (allocate)
 // join a phi and an argument only where no intervals of theirs meet, as
 // their register is to be one; a slot asks less: that no two of a class
 // are live at once, as V8's allocator merges the spill ranges of a phi and
@@ -3351,85 +3351,215 @@ type gmember struct {
 // start, where it is live into b, the other phis of b each live there.
 // The pairs are pairs of members (allocate's mem), a phi's and an
 // argument's of the same class of register.
-func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses []xuse, liveIn, liveOut []ir.LiveSet, lb *ir.LiveBuilder, mem, pairs []int32) []int32 {
-	nv := len(rec)
-	class := c.int32s(nv)
+//
+// A component's classes -- those its pairs join, the pairs of the values
+// one value's pairs reach -- are made only once one of its values is
+// spilled (root), its pairs taken in the order of all, so that its classes
+// are the ones every pair makes. Made for every pair, the classes had
+// made the allocator's hints four to six times as long (Octane's
+// Mandreel, zlib), most of it for phis that no register ran out for.
+type spillClasses struct {
+	c       *core
+	rec     []useRec
+	iv      []interval
+	pos     []int
+	start   []int
+	xuses   []xuse
+	liveIn  []ir.LiveSet
+	liveOut []ir.LiveSet
+	lb      *ir.LiveBuilder
+	mem     []int32
+	// comp is, by member, its component's root, or -1 for a member of no
+	// pair; done marks a root whose classes are made; cpairs, from
+	// cat[root] to cat[root+1], are each component's pairs in their order.
+	comp, cat, cpairs []int32
+	done              []bool
+	// The classes' tables, made at the first component asked for
+	// (prepare): by member, its definition's block and position, its key
+	// and end (make), whether it is a phi; and the classes' lists, n of a
+	// root's members from off in pool -- room for room -- or, for n 0,
+	// the root alone; rootOf, its class's root, or -1 for its own; and
+	// parent, the nearest of its class's members whose definition
+	// dominates its own, or -1: the class's dominance forest.
+	ready                        bool
+	pre, post                    []int
+	blk, at                      []int32
+	keys, ends                   valueSet
+	phi                          []bool
+	off, n, room, parent, rootOf []int32
+	pool                         []int32
+	used                         int
+}
+
+// newSpillClasses is the spill classes of pairs, members' (allocate's
+// mem) by twos, each a phi's and an argument's of one class of register:
+// their components, whose classes root makes as they are asked for.
+func (c *core) newSpillClasses(rec []useRec, iv []interval, pos, start []int, xuses []xuse, liveIn, liveOut []ir.LiveSet, lb *ir.LiveBuilder, mem, pairs []int32) *spillClasses {
+	sc := &spillClasses{c: c, rec: rec, iv: iv, pos: pos, start: start, xuses: xuses, liveIn: liveIn, liveOut: liveOut, lb: lb}
 	if len(pairs) == 0 {
-		return class
+		return sc
 	}
-	pre, post := c.f.DomOrder()
-	block := func(id int32) int { return int(rec[id].def) - 1 }
-	isPhi := func(id int32) bool { return iv[id].v.Op == ssa.OpPhi }
-	// at is a value's definition's position: a phi's, its block's start.
-	at := func(id int32) int {
-		if isPhi(id) {
-			return start[block(id)]
+	// The members' value IDs, copied: allocate takes mem's room for the
+	// groups' wait lists (wnext) before the scan asks.
+	nm := len(mem)
+	sc.mem = c.int32s(nm)
+	copy(sc.mem, mem)
+	comp := c.int32s(nm)
+	for i := range comp {
+		comp[i] = -1
+	}
+	find := func(i int32) int32 {
+		for comp[i] != i {
+			comp[i] = comp[comp[i]]
+			i = comp[i]
 		}
-		return pos[id]
+		return i
 	}
-	// key orders values as the dominator tree's walk meets their
-	// definitions, a block's phis first.
-	key := func(id int32) uint64 {
-		return uint64(pre[block(id)])<<32 | uint64(at(id))
+	for p := 0; p < len(pairs); p += 2 {
+		a, b := pairs[p], pairs[p+1]
+		if comp[a] < 0 {
+			comp[a] = a
+		}
+		if comp[b] < 0 {
+			comp[b] = b
+		}
+		if ra, rb := find(a), find(b); ra != rb {
+			comp[rb] = ra
+		}
 	}
+	for i := range comp {
+		if comp[i] >= 0 {
+			comp[i] = find(int32(i))
+		}
+	}
+	// Each component's pairs, in their order: counted by root, then
+	// placed.
+	cat := c.int32s(nm + 1)
+	for p := 0; p < len(pairs); p += 2 {
+		cat[comp[pairs[p]]+1] += 2
+	}
+	for i := range nm {
+		cat[i+1] += cat[i]
+	}
+	cpairs, fill := c.int32s(len(pairs)), c.int32s(nm)
+	copy(fill, cat[:nm])
+	for p := 0; p < len(pairs); p += 2 {
+		r := comp[pairs[p]]
+		cpairs[fill[r]], cpairs[fill[r]+1] = pairs[p], pairs[p+1]
+		fill[r] += 2
+	}
+	sc.comp, sc.cat, sc.cpairs, sc.done = comp, cat, cpairs, c.bools(nm)
+	return sc
+}
+
+// root is the value ID of the root of v's spill class, its component's
+// classes made now if they are not, or -1 for a value of none: of no pair,
+// or of a class of itself alone.
+func (sc *spillClasses) root(v *ssa.Value) int {
+	if sc.comp == nil || v.ID >= len(sc.rec) {
+		return -1
+	}
+	m := sc.rec[v.ID].mid - 1
+	if m < 0 || sc.comp[m] < 0 {
+		return -1
+	}
+	if r := sc.comp[m]; !sc.done[r] {
+		sc.done[r] = true
+		sc.make(sc.cpairs[sc.cat[r]:sc.cat[r+1]])
+	}
+	if r := sc.rootOf[m]; r >= 0 {
+		return int(sc.mem[r])
+	}
+	return -1
+}
+
+// prepare makes the classes' tables, at the first component asked for.
+func (sc *spillClasses) prepare() {
+	c, nm := sc.c, len(sc.mem)
+	sc.ready = true
+	sc.pre, sc.post = c.f.DomOrder()
+	sc.blk, sc.at = c.int32s(nm), c.int32s(nm)
+	sc.keys, sc.ends = c.words(nm), c.words(nm)
+	sc.phi = c.bools(nm)
+	sc.off, sc.n, sc.room, sc.parent, sc.rootOf = c.int32s(nm), c.int32s(nm), c.int32s(nm), c.int32s(nm), c.int32s(nm)
+	for i := range sc.parent {
+		sc.parent[i], sc.rootOf[i] = -1, -1
+	}
+	sc.pool = c.int32s(4*nm + 64)
+	// What each member's definition is -- its block, its position, a
+	// phi's its block's start -- and its key, which orders the members as
+	// the dominator tree's walk meets their definitions, a block's phis
+	// first; and the first key past the definitions it dominates: those
+	// of the blocks below its own in the tree, whose places in the walk's
+	// pre-order lie before its block's in the post-order, the walks
+	// sharing one clock, and those after it in its block. Once for each
+	// member, in their order, rather than for each of its pairs.
+	pre, post := sc.pre, sc.post
+	for i, id := range sc.mem {
+		b := sc.rec[id].def - 1
+		p := sc.pos[id]
+		if sc.iv[id].v.Op == ssa.OpPhi {
+			p, sc.phi[i] = sc.start[b], true
+		}
+		sc.blk[i], sc.at[i] = b, int32(p)
+		sc.keys[i] = uint64(pre[b])<<32 | uint64(p)
+		sc.ends[i] = uint64(post[b]) << 32
+	}
+}
+
+// make makes the classes of a component's pairs, in their order: each
+// pair's two classes joined where no member of one is live where one of
+// the other's that it dominates is made.
+func (sc *spillClasses) make(pairs []int32) {
+	if !sc.ready {
+		sc.prepare()
+	}
+	c, rec, mem, xuses, lb := sc.c, sc.rec, sc.mem, sc.xuses, sc.lb
+	pre, post, blk, at, keys, ends, phi := sc.pre, sc.post, sc.blk, sc.at, sc.keys, sc.ends, sc.phi
+	off, n, room, parent, root := sc.off, sc.n, sc.room, sc.parent, sc.rootOf
 	dominates := func(a, b int32) bool {
-		ba, bb := block(a), block(b)
+		ba, bb := blk[a], blk[b]
 		if ba == bb {
-			return at(a) <= at(b)
+			return at[a] <= at[b]
 		}
 		return pre[ba] <= pre[bb] && post[bb] <= post[ba]
 	}
-	cross := func(id int32) bool { return rec[id].xhead != 0 && lb != nil }
-	// liveAt reports whether a, whose definition dominates b's, is live
-	// where b is made.
+	// liveAt reports whether member a, whose definition dominates member
+	// b's, is live where b is made.
 	liveAt := func(a, b int32) bool {
-		bb := block(b)
-		if isPhi(b) {
-			if block(a) == bb {
+		id := int(mem[a])
+		cross := rec[id].xhead != 0 && lb != nil
+		bb := blk[b]
+		if phi[b] {
+			if blk[a] == bb {
 				return true
 			}
-			return cross(a) && lb.Has(liveIn[bb], int(a))
+			return cross && lb.Has(sc.liveIn[bb], id)
 		}
-		p := at(b)
-		if !(block(a) == bb || cross(a) && lb.Has(liveIn[bb], int(a))) {
+		p := at[b]
+		if !(blk[a] == bb || cross && lb.Has(sc.liveIn[bb], id)) {
 			return false
 		}
-		if cross(a) && lb.Has(liveOut[bb], int(a)) {
+		if cross && lb.Has(sc.liveOut[bb], id) {
 			return true
 		}
-		if block(a) == bb {
+		if blk[a] == bb {
 			// Used in its own block alone: its interval's end.
-			return int(rec[a].end) > p
+			return rec[id].end > p
 		}
-		for u := rec[a].xhead; u != 0; u = xuses[u-1].next {
+		for u := rec[id].xhead; u != 0; u = xuses[u-1].next {
 			c.steps++
-			if xuses[u-1].b.ID == bb {
-				return int(xuses[u-1].at) > p
+			if int32(xuses[u-1].b.ID) == bb {
+				return xuses[u-1].at > p
 			}
 		}
 		return false
 	}
-	// end is the first key past the definitions v dominates: those of the
-	// blocks below v's in the tree, whose places in the walk's pre-order
-	// lie before its block's in the post-order, the walks sharing one
-	// clock, and those after v in its block.
-	end := func(v int32) uint64 { return uint64(post[block(v)]) << 32 }
-	// The classes' values in order of key: a root's list, n of them from
-	// off in pool -- room for room -- or, for n 0, the root alone; and
-	// parent, by value ID, the nearest of its class's values whose
-	// definition dominates its own, or -1: the class's dominance forest.
-	// Their tables are the workspace's, the pool grown where full.
-	off, n, room, parent := c.int32s(nv), c.int32s(nv), c.int32s(nv), c.int32s(nv)
-	for i := range parent {
-		parent[i] = -1
-	}
-	pool := c.int32s(4*len(mem) + 64)
-	used := 0
-	find := func(id int32) int32 {
-		if class[id] != 0 {
-			return class[id] - 1
+	find := func(i int32) int32 {
+		if r := root[i]; r >= 0 {
+			return r
 		}
-		return id
+		return i
 	}
 	// first is the index of the first of ms of key k or after.
 	first := func(ms []int32, k uint64) int {
@@ -3437,7 +3567,7 @@ func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses
 		for lo < hi {
 			c.steps++
 			m := int(uint(lo+hi) >> 1)
-			if key(ms[m]) < k {
+			if keys[ms[m]] < k {
 				lo = m + 1
 			} else {
 				hi = m
@@ -3446,10 +3576,10 @@ func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses
 		return lo
 	}
 	// nearest is the nearest of ms whose definition dominates v's, which
-	// is none of them, or -1.
-	nearest := func(ms []int32, v int32) int32 {
-		i := first(ms, key(v)) - 1
-		if i < 0 {
+	// is none of them, or -1, where i is the index of the first of ms of
+	// v's key or after.
+	nearest := func(ms []int32, v int32, i int) int32 {
+		if i--; i < 0 {
 			return -1
 		}
 		x := ms[i]
@@ -3461,35 +3591,36 @@ func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses
 	}
 	var one [2]int32
 	for p := 0; p < len(pairs); p += 2 {
-		x, y := find(mem[pairs[p]]), find(mem[pairs[p+1]])
+		x, y := find(pairs[p]), find(pairs[p+1])
 		if x == y {
 			continue
 		}
 		if n[x] < n[y] {
 			x, y = y, x
 		}
-		mx := pool[off[x] : off[x]+n[x]]
+		mx := sc.pool[off[x] : off[x]+n[x]]
 		if n[x] == 0 {
 			one[0] = x
 			mx = one[:1]
 		}
-		my := pool[off[y] : off[y]+n[y]]
+		my := sc.pool[off[y] : off[y]+n[y]]
 		if n[y] == 0 {
 			one[1] = y
 			my = one[1:2]
 		}
-		// Each of y's values against the nearest of x's that dominates it,
-		// and against those of x's it dominates with none of x's between
-		// (a value one of those dominates is live where that one is made,
-		// if v is where it is).
+		// Each of y's members against the nearest of x's that dominates
+		// it, and against those of x's it dominates with none of x's
+		// between (a member one of those dominates is live where that one
+		// is made, if v is where it is).
 		clash := false
 		for _, v := range my {
-			if a := nearest(mx, v); a >= 0 && liveAt(a, v) {
+			i0 := first(mx, keys[v])
+			if a := nearest(mx, v, i0); a >= 0 && liveAt(a, v) {
 				clash = true
 				break
 			}
-			hi := end(v)
-			for i := first(mx, key(v)); i < len(mx) && key(mx[i]) < hi && !clash; i = first(mx, end(mx[i])) {
+			hi := ends[v]
+			for i := i0; i < len(mx) && keys[mx[i]] < hi && !clash; i = first(mx, ends[mx[i]]) {
 				clash = liveAt(v, mx[i])
 			}
 			if clash {
@@ -3507,39 +3638,40 @@ func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses
 		}
 		if need > int(room[x]) {
 			r := 2 * need
-			if used+r > len(pool) {
-				np := c.int32s(2*len(pool) + r)
-				copy(np, pool[:used])
-				pool = np
+			if sc.used+r > len(sc.pool) {
+				np := c.int32s(2*len(sc.pool) + r)
+				copy(np, sc.pool[:sc.used])
+				sc.pool = np
 			}
-			copy(pool[used:], mx)
-			off[x], room[x] = int32(used), int32(r)
-			used += r
+			copy(sc.pool[sc.used:], mx)
+			off[x], room[x] = int32(sc.used), int32(r)
+			sc.used += r
 			if n[x] == 0 {
 				n[x] = 1
 			}
 		}
 		ys := one[1:2]
 		if n[y] != 0 {
-			ys = pool[off[y] : off[y]+n[y]]
+			ys = sc.pool[off[y] : off[y]+n[y]]
 		}
-		// y's values put among x's, each its nearest dominator's child
+		// y's members put among x's, each its nearest dominator's child
 		// and the parent of those of x's it is now nearest to: in order of
-		// key, so that a value of y's below another of y's is put after it.
-		ms := pool[off[x] : off[x]+n[x] : off[x]+room[x]]
+		// key, so that a member of y's below another of y's is put after
+		// it.
+		ms := sc.pool[off[x] : off[x]+n[x] : off[x]+room[x]]
 		for _, v := range ys {
-			ms = slices.Insert(ms, first(ms, key(v)), v)
-			parent[v] = nearest(ms, v)
-			hi := end(v)
-			for i := first(ms, key(v)) + 1; i < len(ms) && key(ms[i]) < hi; i = first(ms, end(ms[i])) {
+			i0 := first(ms, keys[v])
+			ms = slices.Insert(ms, i0, v)
+			parent[v] = nearest(ms, v, i0)
+			hi := ends[v]
+			for i := i0 + 1; i < len(ms) && keys[ms[i]] < hi; i = first(ms, ends[ms[i]]) {
 				parent[ms[i]] = v
 			}
-			class[v] = x + 1
+			root[v] = x
 		}
 		n[x], n[y] = int32(len(ms)), 0
-		class[x] = x + 1
+		root[x] = x
 	}
-	return class
 }
 
 // xuse is a use of a value in block b, another block than the value's

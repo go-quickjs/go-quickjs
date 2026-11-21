@@ -6,4 +6,4 @@ package jit
 
 // The layout lock's lever for windows/amd64 jit (internal/vm/layoutlock.txt): its
 // pad's byte stores, -1 for the pad left out.
-const layoutPadNXJ = 430
+const layoutPadNXJ = 512
