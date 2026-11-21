@@ -541,12 +541,6 @@ the stack JIT lowered; their counts are from then.
   speed from any copy. Open: an option of `placements build` and the
   matrix to clear the two flags in the Windows builds they time (the
   tests run the builds as made).
-- **A pad past a page.** A lever that wraps adds 4 KB and moves everything
-  after it a page against everything before it, every offset modulo 4 KB
-  the same, so `TestLayoutLock` passes: E did at `c7c7830a`, and
-  `json_stringify_decimals` was 46% slower at every placement until
-  `b5df63ea`. Open: `layoutpad` and the test to say when a pad goes past a
-  page, and which pads are near none.
 - **test262 with `-conformance.debugger` and `-conformance.jit`
   together** fails "no test ran native code": code compiled for a debugger
   is never native.

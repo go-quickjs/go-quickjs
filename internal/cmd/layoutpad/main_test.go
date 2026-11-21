@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,5 +145,118 @@ func TestConfigKinds(t *testing.T) {
 		if c.String() != w.name || c.tags() != w.tags || filepath.Base(configFile(c)) != w.file || c.buildLine() != w.build {
 			t.Errorf("%s: tags %q, file %s, %q; want %+v", c, c.tags(), filepath.Base(configFile(c)), c.buildLine(), w)
 		}
+	}
+}
+
+// A code anchor's recorded address is read and written back with it, and
+// one off its own target is refused.
+func TestTargetsAddress(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	src := "toolchain go1.27.3\nconfig windows/amd64 plain\n" +
+		"anchor E  0x008c0 @0x1402f28c0 github.com/x/vm.firstElem\n" +
+		"anchor W  0x00b60 @0x1404a0b60 github.com/x/vm.listSites[go.shape.struct {}].func1\n" +
+		"anchor DW 0x020 runtime.writeBarrier\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tg, err := readTargets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := tg.configs[0].anchors
+	if a[0].at != 0x1402f28c0 || a[0].symbol != "github.com/x/vm.firstElem" || a[1].symbol != "github.com/x/vm.listSites[go.shape.struct {}].func1" || a[2].at != 0 {
+		t.Fatalf("read %+v", a)
+	}
+	a[0].at += codeMod
+	if err := writeTargets(path, tg); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if want := strings.Replace(src, "@0x1402f28c0", "@0x1402f38c0", 1); string(b) != want {
+		t.Fatalf("wrote\n%s\nwant\n%s", b, want)
+	}
+	bad := strings.Replace(src, "@0x1402f28c0", "@0x1402f28e0", 1)
+	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTargets(path); err == nil {
+		t.Fatal("read an address off its anchor's target")
+	}
+}
+
+// c7c7830a's layout, windows/amd64 plain: three keyOrder calls took
+// firstElem 96 bytes past E's least, and E's pad went from none to 4,011
+// bytes. Every anchor stayed at its target modulo 4 KB, so the targets
+// alone pass; firstElem and everything after it were a page further than
+// at f18011fa, which the recorded addresses catch, naming E.
+func TestPageDriftWrappedPad(t *testing.T) {
+	const vm = "github.com/x/vm."
+	c := &config{goos: "windows", goarch: "amd64", anchors: []anchor{
+		{lever: "A", symbol: vm + "joinSize", target: 0xcc0, at: 0x1402e2cc0},
+		{lever: "I", symbol: vm + "bigParts", target: 0x4c0, at: 0x1402e64c0},
+		{lever: "E", symbol: vm + "firstElem", target: 0x8c0, at: 0x1402f28c0},
+		{lever: "T", symbol: vm + "(*jsonEncoder).encode", target: 0x960, at: 0x140313960},
+		{lever: "C", symbol: vm + "(*Runtime).asciiCaseMemo", target: 0x800, at: 0x14033d800},
+		{lever: "DW", symbol: "runtime.writeBarrier", target: 0x10},
+	}}
+	nm := func(lines ...string) *symtab { return parseNM([]byte(strings.Join(lines, "\n") + "\n")) }
+	pad := func(name string, addr, size uint64) string {
+		return fmt.Sprintf("  %x %10d T %slayoutPad%s", addr, size, vmPrefix, name)
+	}
+	f18011fa := nm(
+		pad("E", 0x1402ead60, 64),
+		"  1402e2cc0        224 T "+vm+"joinSize",
+		"  1402e64c0        512 T "+vm+"bigParts",
+		"  1402f28c0        864 T "+vm+"firstElem",
+		"  140313960        800 T "+vm+"(*jsonEncoder).encode",
+		"  14033d800        320 T "+vm+"(*Runtime).asciiCaseMemo",
+		"  1420c2a10         16 B runtime.writeBarrier")
+	c7c7830a := nm(
+		pad("E", 0x1402ead60, 4064),
+		"  1402e2cc0        224 T "+vm+"joinSize",
+		"  1402e64c0        512 T "+vm+"bigParts",
+		"  1402f38c0        864 T "+vm+"firstElem",
+		"  140314960        800 T "+vm+"(*jsonEncoder).encode",
+		"  14033e800        320 T "+vm+"(*Runtime).asciiCaseMemo",
+		"  1420c3a10         16 B runtime.writeBarrier")
+	for name, syms := range map[string]*symtab{"f18011fa": f18011fa, "c7c7830a": c7c7830a} {
+		if lines := compare(c, syms); len(lines) != 0 {
+			t.Fatalf("%s: the targets alone %v", name, lines)
+		}
+	}
+	if lines := pageDrift(c, f18011fa); len(lines) != 0 {
+		t.Fatalf("the recorded layout drifted: %v", lines)
+	}
+	lines := pageDrift(c, c7c7830a)
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want one at E:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	for _, want := range []string{"anchor E (" + vm + "firstElem)", "a page further", "the anchors after it moved with it",
+		"its pad E (layoutPadE, 4064 bytes)", "builtin_layoutpad.go", "anchor I (" + vm + "bigParts) before it is where it was"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("%q lacks %q", lines[0], want)
+		}
+	}
+}
+
+// A move of the anchors after N by two pages against those before it, which
+// moved by one, is a move of its own: the JIT's builds at 91f885a1, where
+// the compiler before package jit grew and N's pad wrapped.
+func TestPageDriftTwoMoves(t *testing.T) {
+	const vm = "github.com/x/vm."
+	c := &config{goos: "windows", goarch: "amd64", jit: true, anchors: []anchor{
+		{lever: "XJ", symbol: "github.com/x/jit.ExpandGoCall", target: 0x100, at: 0x140100100},
+		{lever: "A", symbol: vm + "joinSize", target: 0xcc0, at: 0x140200cc0},
+		{lever: "N", symbol: vm + "(*Runtime).nativeRun", target: 0xce0, at: 0x140300ce0},
+		{lever: "Q", symbol: vm + "(*Runtime).runReg", target: 0x580, at: 0x140310580},
+	}}
+	syms := parseNM([]byte("  140101100 100 T github.com/x/jit.ExpandGoCall\n" +
+		"  140201cc0 100 T " + vm + "joinSize\n" +
+		"  140302ce0 100 T " + vm + "(*Runtime).nativeRun\n" +
+		"  140312580 100 T " + vm + "(*Runtime).runReg\n"))
+	lines := pageDrift(c, syms)
+	if len(lines) != 2 || !strings.Contains(lines[0], "anchor XJ") || !strings.Contains(lines[0], "what is linked before") ||
+		!strings.Contains(lines[1], "anchor N") || !strings.Contains(lines[1], "2 pages further from") || !strings.Contains(lines[1], "anchor A ("+vm+"joinSize) before it moved by 1") {
+		t.Fatalf("got\n%s", strings.Join(lines, "\n"))
 	}
 }

@@ -60,6 +60,21 @@
 // data levers' own. A pad only grows: an anchor a change moves back by 32
 // bytes takes a pad 4,064 bytes longer.
 //
+// A pad that so grows past what the code before its anchor shrank moves
+// everything after it a whole page, 4 KB, against everything before it,
+// every offset modulo 4 KB the same: the targets hold, and the hot code
+// after it is a page further from the runtime and from the packages linked
+// before vm, which Zen 2 still tells apart (c7c7830a took the lock's E so
+// from none to 4,011 bytes, and json_stringify_decimals was 46% slower at
+// every placement). So the targets file records each code anchor's
+// address as well (@ADDR), and an anchor whose page -- its address over
+// 4,096 -- is not the recorded one fails both a regeneration and -check,
+// which name the first anchor that moved and the pad or the code before
+// it that did. The fix is to move what grew out of that pad's range, after
+// its anchor, as b5df63ea did; -pages records the new pages where the move
+// is meant (code that grew by a page or more, where every pad after it
+// moves the same).
+//
 // The targets (internal/vm/layoutlock.txt) give, for each configuration --
 // GOOS, GOARCH, and plain, with the JIT (jit), with the WebAssembly engine
 // (wasm) or with both (jit+wasm) -- each lever's anchor, the symbol right
@@ -82,6 +97,7 @@
 //	go run ./internal/cmd/layoutpad -check      # this machine's configurations: exit 1 on drift
 //	go run ./internal/cmd/layoutpad -show       # where each pad and anchor is, and what follows each pad
 //	go run ./internal/cmd/layoutpad -record     # set the targets to the tree's present layout
+//	go run ./internal/cmd/layoutpad -pages      # pad, and record the anchors' pages as they are
 //
 // -record, run at a base revision with the tool built beforehand and the
 // pad files moved out of the tree, takes the base's layout as the targets:
@@ -298,11 +314,14 @@ func (c *config) filePrefix() string {
 	return p
 }
 
-// An anchor is the symbol a lever puts at its target.
+// An anchor is the symbol a lever puts at its target. A code anchor's at is
+// its address as the targets file records it, 0 for none: its page, at over
+// codeMod, is the one every build must keep.
 type anchor struct {
 	lever  string
 	symbol string
 	target uint64
+	at     uint64
 }
 
 type targets struct {
@@ -318,6 +337,7 @@ func main() {
 	verbose := flag.Bool("v", false, "print each build's anchors away from their targets and what each lever is set to")
 	targetsPath := flag.String("targets", targetsRel, "the targets file, from the repository's root")
 	all := flag.Bool("all", false, "with -show, write the pads and set every lever of the configurations to 0 first, to see where each lands")
+	recordPages := flag.Bool("pages", false, "pad as by default, and record each code anchor's address (its page) as the build has it, where an anchor moved a page and the move is meant")
 	flag.Parse()
 	root, err := repoRoot()
 	if err == nil {
@@ -359,7 +379,7 @@ func main() {
 	}
 	switch {
 	case *check:
-		drift := false
+		drift, paged := false, false
 		for _, c := range picked {
 			syms, err := build(c)
 			if err != nil {
@@ -369,13 +389,23 @@ func main() {
 			for _, line := range lines {
 				fmt.Printf("%s: %s\n", c, line)
 			}
-			if len(lines) == 0 {
-				fmt.Printf("%s: every anchor at its target\n", c)
+			moved := pageDrift(c, syms)
+			for _, line := range moved {
+				fmt.Printf("%s: %s\n", c, line)
+			}
+			if len(lines)+len(moved) == 0 {
+				fmt.Printf("%s: every anchor at its target, on its page\n", c)
 			}
 			drift = drift || len(lines) > 0
+			paged = paged || len(moved) > 0
 		}
 		if drift {
 			fmt.Println("layoutpad: the layout has drifted from its targets: run go generate ./internal/vm (go run ./internal/cmd/layoutpad)")
+		}
+		if paged {
+			fmt.Println(pageAdvice)
+		}
+		if drift || paged {
 			os.Exit(1)
 		}
 	case *show:
@@ -416,6 +446,10 @@ func main() {
 					fatal(fmt.Errorf("%s: anchor %s is not in the build", c, a.symbol))
 				}
 				c.anchors[i].target = s.addr % modOf(a.lever)
+				c.anchors[i].at = 0
+				if modOf(a.lever) == codeMod {
+					c.anchors[i].at = s.addr
+				}
 			}
 			fmt.Printf("%s: recorded\n", c)
 		}
@@ -427,12 +461,131 @@ func main() {
 		if err := writeSources(t); err != nil {
 			fatal(err)
 		}
+		paged := false
 		for _, c := range picked {
-			if _, err := solve(c, *verbose); err != nil {
+			syms, err := solve(c, *verbose)
+			if err != nil {
 				fatal(err)
 			}
+			if *recordPages {
+				setPages(c, syms)
+				continue
+			}
+			for _, line := range pageDrift(c, syms) {
+				fmt.Printf("%s: %s\n", c, line)
+				paged = true
+			}
+		}
+		if *recordPages {
+			if err := writeTargets(*targetsPath, t); err != nil {
+				fatal(err)
+			}
+			fmt.Println("layoutpad: recorded the anchors' pages in", *targetsPath)
+		}
+		if paged {
+			fmt.Println(pageAdvice)
+			os.Exit(1)
 		}
 	}
+}
+
+// pageAdvice is what to do about an anchor a page off.
+const pageAdvice = "layoutpad: an anchor is a page from where " + targetsRel + " records it, every offset modulo 4 KB the same: " +
+	"move what grew before it out of the pad's range, after its anchor (docs/optimizing.md, \"The layout lock\"), " +
+	"or, where the move is meant, record the new pages with go run ./internal/cmd/layoutpad -pages"
+
+// setPages records each code anchor's address in syms as its page.
+func setPages(c *config, syms *symtab) {
+	for i, a := range c.anchors {
+		if modOf(a.lever) != codeMod {
+			continue
+		}
+		if s, ok := syms.byName[a.symbol]; ok {
+			c.anchors[i].at = s.addr
+		}
+	}
+}
+
+// pageDrift lists the anchors that are not on the page the targets record
+// for them, each where a move starts: the first anchor, in address order,
+// that moved, and any after it that moved by another count of pages. An
+// anchor that moved as the one before it did moved with it.
+func pageDrift(c *config, syms *symtab) []string {
+	type placed struct {
+		a     anchor
+		addr  uint64
+		pages int64
+	}
+	var list []placed
+	for _, a := range c.anchors {
+		if modOf(a.lever) != codeMod || a.at == 0 {
+			continue
+		}
+		s, ok := syms.byName[a.symbol]
+		if !ok || s.addr%codeMod != a.target {
+			continue // compare says so
+		}
+		list = append(list, placed{a, s.addr, int64(s.addr/codeMod) - int64(a.at/codeMod)})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].addr < list[j].addr })
+	var out []string
+	for i, p := range list {
+		if p.pages == 0 || i > 0 && list[i-1].pages == p.pages {
+			continue
+		}
+		what := fmt.Sprintf("%d pages further from", p.pages)
+		switch {
+		case p.pages == 1:
+			what = "a page further from"
+		case p.pages == -1:
+			what = "a page nearer"
+		case p.pages < 0:
+			what = fmt.Sprintf("%d pages nearer", -p.pages)
+		}
+		line := fmt.Sprintf("anchor %s (%s) is at %#x, %s the start of the text than %s records (%#x)",
+			p.a.lever, p.a.symbol, p.addr, what, targetsRel, p.a.at)
+		if i+1 < len(list) && list[i+1].pages == p.pages {
+			line += ", and the anchors after it moved with it"
+		}
+		pad := "its pad"
+		if l, ok := leverByName(p.a.lever); ok {
+			if s, ok := syms.byName[l.pad]; ok {
+				pad = fmt.Sprintf("its pad %s (%s, %d bytes)", l.name, strings.TrimPrefix(l.pad, vmPrefix), s.size)
+			}
+		}
+		if i == 0 {
+			line += fmt.Sprintf(": %s or the code before it (%s) -- and what is linked before -- grew past a page", pad, leverDoc(p.a.lever))
+		} else {
+			prev := list[i-1]
+			was := "is where it was"
+			if prev.pages != 0 {
+				was = fmt.Sprintf("moved by %d", prev.pages)
+			}
+			line += fmt.Sprintf(": %s or the code in its range (%s) grew past a page, while anchor %s (%s) before it %s",
+				pad, leverDoc(p.a.lever), prev.a.lever, prev.a.symbol, was)
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// leverDoc says where a lever's pad is and what its anchor holds.
+func leverDoc(name string) string {
+	for _, p := range positions {
+		if p.name == name || "G"+p.name == name || "M"+p.name == name {
+			return p.file + ", " + p.doc
+		}
+	}
+	if o, ok := outerOf(name); ok {
+		return o.dir + "'s first file, " + o.doc
+	}
+	switch name {
+	case asmLever:
+		return "package vm's assembly, before the native handlers' block"
+	case "CZ":
+		return "the generics' closures, after the native handlers' block"
+	}
+	return "lever " + name
 }
 
 func fatal(err error) {
@@ -525,9 +678,18 @@ func readTargets(path string) (*targets, error) {
 			}
 			t.configs = append(t.configs, cur)
 		case "anchor":
-			// anchor LEVER TARGET SYMBOL..., the symbol last: it may have spaces.
+			// anchor LEVER TARGET [@ADDR] SYMBOL..., the symbol last: it may
+			// have spaces.
 			if cur == nil || len(f) < 4 {
 				return nil, bad()
+			}
+			var at uint64
+			if strings.HasPrefix(f[3], "@") {
+				a, err := strconv.ParseUint(f[3][1:], 0, 64)
+				if err != nil || len(f) < 5 {
+					return nil, bad()
+				}
+				at, f = a, append(f[:3:3], f[4:]...)
 			}
 			if _, ok := leverByName(f[1]); !ok {
 				return nil, fmt.Errorf("%s:%d: no lever %s", path, n+1, f[1])
@@ -537,7 +699,10 @@ func readTargets(path string) (*targets, error) {
 				return nil, bad()
 			}
 			sym := strings.Join(f[3:], " ")
-			cur.anchors = append(cur.anchors, anchor{lever: f[1], symbol: sym, target: v})
+			if at != 0 && (modOf(f[1]) != codeMod || at%codeMod != v) {
+				return nil, fmt.Errorf("%s:%d: %s's recorded address %#x is not at its target %#x", path, n+1, sym, at, v)
+			}
+			cur.anchors = append(cur.anchors, anchor{lever: f[1], symbol: sym, target: v, at: at})
 		default:
 			return nil, bad()
 		}
@@ -570,7 +735,11 @@ func writeTargets(path string, t *targets) error {
 			if modOf(a.lever) == codeMod {
 				width = 5
 			}
-			line = fmt.Sprintf("anchor %-2s %#0*x %s", a.lever, width, a.target, a.symbol)
+			if a.at != 0 {
+				line = fmt.Sprintf("anchor %-2s %#0*x @%#x %s", a.lever, width, a.target, a.at, a.symbol)
+			} else {
+				line = fmt.Sprintf("anchor %-2s %#0*x %s", a.lever, width, a.target, a.symbol)
+			}
 		}
 		out.WriteString(line + "\n")
 	}

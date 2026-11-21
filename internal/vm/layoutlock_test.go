@@ -13,7 +13,8 @@ import (
 // TestLayoutLock fails where the layout lock has drifted: where a change
 // moved an anchor of layoutlock.txt -- the hot code's, the Go runtime's hot
 // data's -- away from its target, which go generate ./internal/vm puts it
-// back to. It runs internal/cmd/layoutpad -check, which builds
+// back to, or a code anchor a page from the address layoutlock.txt records
+// for it, which a pad grown past what the code before it shrank does. It runs internal/cmd/layoutpad -check, which builds
 // internal/cmd/v8bench as the targets were measured -- plain, with the JIT,
 // with the WebAssembly engine and with both -- some 40 seconds, under a few
 // from the build cache. It is skipped under
@@ -72,6 +73,8 @@ func TestLayoutLock(t *testing.T) {
 		t.Skipf("%s", out)
 	default:
 		t.Fatalf("%v\n%s\nThe hot code or data has moved from the layout lock's targets: run go generate ./internal/vm "+
-			"(go run ./internal/cmd/layoutpad), which pads it back, and commit the pads.", err, out)
+			"(go run ./internal/cmd/layoutpad), which pads it back, and commit the pads. An anchor a page off "+
+			"is a pad grown past a page: move what grew in its range after its anchor (docs/optimizing.md, "+
+			"\"The layout lock\"), or record the move with go run ./internal/cmd/layoutpad -pages.", err, out)
 	}
 }

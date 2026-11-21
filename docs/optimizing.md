@@ -422,9 +422,19 @@ every placement than with E short, their code and its offsets
 unchanged. With the
 reservation in `keyorder.go`, after T, E is 20 stores and the three are
 back. A pad near none is worth a look before a change grows the code
-before its anchor. The lock as first made, against
-`db306c0e`'s layout and with the tree tier's anchors, was 49 KB of pads,
-60 KB of binary.
+before its anchor. The targets file records each code anchor's address
+too (`@ADDR`), and a build that has an anchor on another page -- its
+address over 4,096 -- fails the regeneration and `TestLayoutLock`, which
+name the first anchor that moved, its pad and its size, and the anchor
+before it that did not: the code in that pad's range grew past what the
+pad had, or the pad wrapped. Move what grew there out of the range, after
+the anchor, as `b5df63ea` did. A move that is meant -- code that grew by a
+page or more, where nothing can be moved back -- is recorded with
+`go run ./internal/cmd/layoutpad -pages`, which pads as `go generate`
+does and writes the new addresses; say so in the commit.
+
+The lock as first made, against `db306c0e`'s layout and with the tree
+tier's anchors, was 49 KB of pads, 60 KB of binary.
 
 The lock and the placements: a placement build adds its own pads to the
 locked tree and so varies what it varies around the locked layout, both
