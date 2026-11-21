@@ -442,12 +442,7 @@ func nativeEmit(v *variant) (*block, error) {
 		g.site(RCX)
 		// A site that has given up is answered by the realm's shared
 		// cache (megaRead), laid out after every other code.
-		miss := a.NewLabel()
-		g.megaMiss = miss
-		g.readSlot()
-		ret := g.megaRet
-		g.megaMiss, g.megaRet = 0, 0
-		g.mega = append(g.mega, func() { g.megaRead(miss, ret) })
+		g.megaReadSlot()
 		g.loadValue(RCX)
 		g.decA(RDX)
 		a.LeaIdx(RAX, R12, RDX, 1, 0)
@@ -465,7 +460,7 @@ func nativeEmit(v *variant) (*block, error) {
 		a.LoadIdx(RSI, R12, RSI, 1, 8)
 		a.Store(RDI, scr(sV0), RSI)
 		g.site(RCX)
-		g.readSlot()
+		g.megaReadSlot()
 		g.loadValue(RCX)
 		g.decA(RDX)
 		a.LeaIdx(RAX, R12, RDX, 1, 0)
@@ -1353,6 +1348,10 @@ func nativeEmit(v *variant) (*block, error) {
 	}
 	// The megamorphic paths of get_prop and set_prop, last of all.
 	for _, emit := range g.mega {
+		emit()
+	}
+	// Their own properties of tables that have an index, after them.
+	for _, emit := range g.megaIdx {
 		emit()
 	}
 	if len(missing) > 0 {

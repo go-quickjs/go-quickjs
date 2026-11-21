@@ -118,7 +118,9 @@ func (g *armGen) addProp(own Label) {
 	// megaWrite's, its store addTransition's.
 	mega, store, trans := a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, trans, length) }, func() { g.arrayLength(length, mega) })
-	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
+	indexed, deep := a.NewLabel(), a.NewLabel()
+	g.mega = append(g.mega, func() { g.megaWrite(mega, store, indexed, deep) })
+	g.megaIdx = append(g.megaIdx, func() { g.megaWriteIndexed(indexed, deep) })
 	a.Load(r8, rC, off("propCache.shape"))
 	g.cmpMem(r8, rS, off("Object.shape"))
 	a.BCond(NE, poly)

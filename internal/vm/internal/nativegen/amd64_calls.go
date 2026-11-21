@@ -126,7 +126,9 @@ func (g *nativeGen) addProp(add, own Label) {
 	// realm's cache of additions, its store addTransition's.
 	mega, store := a.NewLabel(), a.NewLabel()
 	g.tail = append(g.tail, func() { g.polyOwnStore(poly, own, add, length) }, func() { g.arrayLength(length, mega) })
-	g.mega = append(g.mega, func() { g.megaWrite(mega, store) })
+	indexed, deep := a.NewLabel(), a.NewLabel()
+	g.mega = append(g.mega, func() { g.megaWrite(mega, store, indexed, deep) })
+	g.megaIdx = append(g.megaIdx, func() { g.megaWriteIndexed(indexed, deep) })
 	// A miss of the entry's shape goes to the probe of the site's entries
 	// for other shapes where it has some, and else to an array's length
 	// (arrayLength), which no entry holds; both are laid out after every

@@ -32,11 +32,24 @@ func (g *armGen) sharedMix(idx, s, key, tmp Reg) {
 	a.Mul(idx, idx, tmp)
 }
 
+// megaReadSlot is amd64's: readSlot whose misses at a site that has
+// given up are a megaRead's of their own.
+func (g *armGen) megaReadSlot() {
+	a := g.a
+	miss, indexed := a.NewLabel(), a.NewLabel()
+	g.megaMiss = miss
+	g.readSlot()
+	ret := g.megaRet
+	g.megaMiss, g.megaRet = 0, 0
+	g.mega = append(g.mega, func() { g.megaRead(miss, ret, indexed) })
+	g.megaIdx = append(g.megaIdx, func() { g.megaReadIndexed(indexed, ret) })
+}
+
 // megaRead is amd64's: get_prop's miss at a site that has given up, the
 // object in rS, answered by the realm's shared cache or the object's own
 // table, back at ret with the value's address in rC; anything else exits. rW keeps the instruction;
 // r8, r9, rD, rT and rK are its scratch.
-func (g *armGen) megaRead(miss, ret Label) {
+func (g *armGen) megaRead(miss, ret, indexed Label) {
 	a := g.a
 	found, nocell, p1, have := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	own, ownLoop, ownNext := a.NewLabel(), a.NewLabel(), a.NewLabel()
@@ -114,7 +127,7 @@ func (g *armGen) megaRead(miss, ret Label) {
 	a.CmpImm(r9, int64(ClassObject), false)
 	a.BCond(NE, g.exit)
 	a.Load(r9, r8, off("shape.index"))
-	a.Cbnz(r9, g.exit, true)
+	a.Cbnz(r9, indexed, true)
 	a.LoadU32(r9, rS, off("Object.valn"))
 	a.Load(rC, r8, off("shape.keys"))
 	a.Bind(ownLoop)
@@ -144,9 +157,9 @@ func (g *armGen) megaRead(miss, ret Label) {
 // realm's cache's addition made by addTransition's store at store, the
 // next shape in r8. Anything else exits. r8, r9, rC, rT, rK and rW are its
 // scratch, and the scratch's sI keeps the value's address.
-func (g *armGen) megaWrite(miss, store Label) {
+func (g *armGen) megaWrite(miss, store, indexed, deep Label) {
 	a := g.a
-	scan, scanNext, deep, found, chain, end := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	scan, scanNext, found, chain, end := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	dsz := size("deepAdd")
 	ksz := size("propKey")
 	a.Bind(miss)
@@ -164,7 +177,7 @@ func (g *armGen) megaWrite(miss, store Label) {
 	a.Cbz(r8, g.exit, true)
 	// Its own, in a table of no index: the keys scanned.
 	a.Load(r9, r8, off("shape.index"))
-	a.Cbnz(r9, deep, true)
+	a.Cbnz(r9, indexed, true)
 	a.LoadU32(r9, rS, off("Object.valn"))
 	a.Load(rK, r8, off("shape.keys"))
 	a.Bind(scan)
@@ -252,4 +265,138 @@ func (g *armGen) megaWrite(miss, store Label) {
 	a.Load(r8, r9, off("deepAdd.next"))
 	a.Load(rD, rCtx, scr(sI))
 	a.B(store)
+}
+
+// indexFind is amd64's: vm's findOwn of the key in key in the table of the
+// object in rS, whose layout has an index -- its recent entry, else its
+// slots, what they say remembered in the recent entry. At found, i is the
+// property's position and s the address of its key among the layout's;
+// at absent, the object has none of the key. key is kept; s, i, t, u and v
+// are its scratch.
+func (g *armGen) indexFind(key, s, i, t, u, v Reg, found, absent Label) {
+	a := g.a
+	slots, loop, hit, none, remember := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	recent := off("propIndex.recent")
+	e := off("propIndex.slots") + off("slotTable.e")
+	if size("recentKey") != 8 || size("slotEntry") != 8 || size("propKey") != 8 ||
+		off("recentKey.key") != 0 || off("slotEntry.key") != 0 || off("slotEntry.idx") != 4 {
+		panic("nativegen: an index's entries are not as indexFind reads them")
+	}
+	// The recent entry, confirmed by the table's key there and its length.
+	a.Load(t, rS, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.AndImm(i, key, 15, false)
+	a.AddLsl(s, t, i, 3)
+	a.AddImm(s, s, int64(recent), true)
+	a.LoadU32(u, s, off("recentKey.key"))
+	a.Cmp(u, key, false)
+	a.BCond(NE, slots)
+	a.LoadS32(i, s, off("recentKey.idx"))
+	a.CmpImm(i, 0, true)
+	a.BCond(LT, absent)
+	a.LoadU32(t, rS, off("Object.valn"))
+	a.Cmp(i, t, true)
+	a.BCond(HS, absent)
+	a.Load(s, rS, off("Object.shape"))
+	a.Load(s, s, off("shape.keys"))
+	a.AddLsl(s, s, i, 3)
+	a.LoadU32(u, s, off("propKey.key"))
+	a.Cmp(u, key, false)
+	a.BCond(NE, slots)
+	a.LoadU8(u, s, off("propKey.flags"))
+	a.TstImm(u, uint64(uint32(propDeleted)), false)
+	a.BCond(NE, slots)
+	a.B(found)
+	// The slots, from the key's home on: s their base, t their mask, u
+	// the entry's address.
+	a.Bind(slots)
+	a.Load(t, rS, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.Load(s, t, e)
+	a.Load(t, t, e+8)
+	a.SubsImm(t, t, 1, true)
+	a.MovImm(i, slotHomeMul)
+	a.MulW(i, i, key)
+	a.ShiftImm(Lsr, i, i, uint8(slotHomeShift), false)
+	a.Bind(loop)
+	a.Op(And, i, i, t, true)
+	a.AddLsl(u, s, i, 3)
+	a.LoadU32(v, u, off("slotEntry.key"))
+	a.Cmp(v, key, false)
+	a.BCond(EQ, hit)
+	a.LoadS32(v, u, off("slotEntry.idx"))
+	a.CmpImm(v, int64(slotEmpty), false)
+	a.BCond(EQ, none)
+	a.AddImm(i, i, 1, true)
+	a.B(loop)
+	a.Bind(hit)
+	a.LoadS32(i, u, off("slotEntry.idx"))
+	a.CmpImm(i, 0, true)
+	a.BCond(GE, remember)
+	a.Bind(none)
+	a.MovImm(i, ^uint64(0))
+	// Remembered, then checked against the table, as amd64's.
+	a.Bind(remember)
+	a.Load(t, rS, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.AndImm(u, key, 15, false)
+	a.AddLsl(t, t, u, 3)
+	a.Store32(t, recent+off("recentKey.key"), key)
+	a.Store32(t, recent+off("recentKey.idx"), i)
+	a.CmpImm(i, 0, true)
+	a.BCond(LT, absent)
+	a.LoadU32(t, rS, off("Object.valn"))
+	a.Cmp(i, t, true)
+	a.BCond(HS, absent)
+	a.Load(s, rS, off("Object.shape"))
+	a.Load(s, s, off("shape.keys"))
+	a.AddLsl(s, s, i, 3)
+	a.LoadU32(u, s, off("propKey.key"))
+	a.Cmp(u, key, false)
+	a.BCond(NE, absent)
+	a.LoadU8(u, s, off("propKey.flags"))
+	a.TstImm(u, uint64(uint32(propDeleted)), false)
+	a.BCond(NE, absent)
+	a.B(found)
+}
+
+// megaReadIndexed is amd64's: megaRead's own property of a table that has
+// an index, the object in rS and the key in rD, back at ret with the
+// value's address in rC.
+func (g *armGen) megaReadIndexed(indexed, ret Label) {
+	a := g.a
+	found := a.NewLabel()
+	a.Bind(indexed)
+	g.indexFind(rD, r8, rC, r9, rT, rK, found, g.exit)
+	a.Bind(found)
+	a.LoadU8(r9, r8, off("propKey.flags"))
+	a.TstImm(r9, uint64(uint32(propOddKey)), false)
+	a.BCond(NE, g.exit)
+	a.ShiftImm(Lsl, rC, rC, 4, true)
+	a.Load(r9, rS, off("Object.valp"))
+	a.Op(Add, rC, rC, r9, true)
+	a.B(ret)
+}
+
+// megaWriteIndexed is amd64's: megaWrite's own property of a table that
+// has an index, the object in rS, the key in rC and the value's address in
+// rD, written in place; a key the object has not goes on to deep.
+func (g *armGen) megaWriteIndexed(indexed, deep Label) {
+	a := g.a
+	found := a.NewLabel()
+	a.Bind(indexed)
+	g.indexFind(rC, r8, rW, r9, rT, rK, found, deep)
+	a.Bind(found)
+	a.LoadU8(r9, r8, off("propKey.flags"))
+	a.MovImm(rT, uint64(uint32(propOddKey|propWritable)))
+	a.Op(And, r9, r9, rT, false)
+	a.CmpImm(r9, int64(propWritable), false)
+	a.BCond(NE, g.exit)
+	a.Load(r8, rS, off("Object.shape"))
+	a.LoadU8(r8, r8, off("shape.pristine"))
+	a.Cbnz(r8, g.exit, false)
+	a.ShiftImm(Lsl, rW, rW, 4, true)
+	g.addMem(rW, rS, off("Object.valp"))
+	g.loadValue(rD)
+	g.storeValue()
 }

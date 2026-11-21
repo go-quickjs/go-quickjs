@@ -1268,8 +1268,10 @@ beside it for the globals, `regCalls` for calls.
   stub cache; its additions through the realm's cache of them
   (`deepAdds`), each with the prototype chain it was made along. The
   native handlers probe both themselves at such a site, as V8's
-  interpreter's handlers probe its stub cache, and an object's own small
-  table for a read and a write of a property it has
+  interpreter's handlers probe its stub cache, and an object's own table
+  for a read and a write of a property it has -- a small one scanned, a
+  larger one's index probed as `findOwn` probes it, its recent entries and
+  then its slots (`indexFind`)
   (`internal/vm/internal/nativegen`'s `*_mega.go`), laid out after every
   other code of the block; Go fills them. A prototype's property is cached
   with the holder and the prototype chain's validity cell; an accessor with

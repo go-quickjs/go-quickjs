@@ -45,7 +45,7 @@ func (g *armGen) getPropNext() {
 	g.object(rS, rD)
 	for i := 0; i < 2; i++ {
 		g.site(rC)
-		g.readSlot()
+		g.megaReadSlot()
 		if i == 0 {
 			a.Load(r9, rC, 0)
 			g.cmpMem(r9, rCtx, ncObjBits)

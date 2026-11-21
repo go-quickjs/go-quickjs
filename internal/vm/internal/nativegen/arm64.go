@@ -103,8 +103,8 @@ type armGen struct {
 	// ones, added since: emitted after every handler, so that it moves
 	// none (set_prop's polymorphic probe, polyOwnStore).
 	tail []func()
-	// mega, megaMiss and megaRet are amd64's (arm64_mega.go).
-	mega              []func()
+	// mega, megaIdx, megaMiss and megaRet are amd64's (arm64_mega.go).
+	mega, megaIdx     []func()
 	megaMiss, megaRet Label
 	// initL and initMade are amd64's.
 	initL    Label

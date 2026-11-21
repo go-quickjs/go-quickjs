@@ -64,6 +64,11 @@ var (
 	// of sites that have given up (vm's sharedProp, deepStore).
 	propWritable                 int32
 	sharedCacheBits, deepWaysLog uint8
+	// propDeleted is a deleted property's flag; slotEmpty an index's
+	// empty entry's position, and slotHomeMul and slotHomeShift what
+	// makes a key's first entry in it (vm's slotTable).
+	propDeleted, slotEmpty, slotHomeShift int32
+	slotHomeMul                           uint64
 	// atomLength is the key length (arrayLength).
 	atomLength   int32
 	hasCacheBits uint8
@@ -136,9 +141,11 @@ func loadConsts() {
 		{&tailCallDepth, "tailCallDepth"}, {&linearScanLimit, "linearScanLimit"},
 		{&maxCacheFills, "maxCacheFills"}, {&fwdApply, "fwdApply"}, {&fwdCall, "fwdCall"}, {&fwdWays, "fwdWays"}, {&fwdShift, "fwdShift"},
 		{&atomIndexTag, "atomIndexTag"}, {&atomPrototype, "atomPrototype"}, {&propOddKey, "propOddKey"},
-		{&atomLength, "atomLength"}, {&propWritable, "propWritable"}} {
+		{&atomLength, "atomLength"}, {&propWritable, "propWritable"},
+		{&propDeleted, "propDeleted"}, {&slotEmpty, "slotEmpty"}, {&slotHomeShift, "slotHomeShift"}} {
 		*c.p = int32(k(c.name))
 	}
+	slotHomeMul = k("slotHomeMul")
 	sharedCacheBits, deepWaysLog = uint8(k("sharedCacheBits")), uint8(k("deepWaysLog"))
 	hasCacheBits, hasCacheMul = uint8(k("hasCacheBits")), k("hasCacheMul")
 	hasCacheWaysLog = uint8(k("hasCacheWaysLog"))

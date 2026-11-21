@@ -43,13 +43,30 @@ func (g *nativeGen) sharedMix(idx, s, key, tmp Reg) {
 	a.Imul(idx, tmp)
 }
 
-// megaRead is get_prop's miss at a site that has given up, from readSlot
-// at miss, the object in RSI: the read answered by
-// the realm's shared cache (vm's sharedProp), its pair of entries for the
-// object's shape and the key, the entry's holder found as its holder
-// method finds it, or, where it has none, by the object's own table, back
-// at ret with the value's address in RCX, as readSlot leaves it. Anything else exits. R8, R9 and RDX are its scratch.
-func (g *nativeGen) megaRead(miss, ret Label) {
+// megaReadSlot is readSlot at a read's site whose misses, the site having
+// given up, are megaRead's: get_prop's and get_method's, get_method_w's and
+// get_prop_next's two -- each a megaRead of its own, laid out after every
+// other code, the index's finding after them all (megaIdx), as the
+// handlers were given them.
+func (g *nativeGen) megaReadSlot() {
+	a := g.a
+	miss, indexed := a.NewLabel(), a.NewLabel()
+	g.megaMiss = miss
+	g.readSlot()
+	ret := g.megaRet
+	g.megaMiss, g.megaRet = 0, 0
+	g.mega = append(g.mega, func() { g.megaRead(miss, ret, indexed) })
+	g.megaIdx = append(g.megaIdx, func() { g.megaReadIndexed(indexed, ret) })
+}
+
+// megaRead is a read's miss at a site that has given up (megaReadSlot),
+// from readSlot at miss, the object in RSI and the instruction in RAX: the
+// read answered by the realm's shared cache (vm's sharedProp), its pair of
+// entries for the object's shape and the key, the entry's holder found as
+// its holder method finds it, or, where it has none, by the object's own
+// table, back at ret with the value's address in RCX, as readSlot leaves
+// it. Anything else exits. R8, R9, RDX and RSI are its scratch.
+func (g *nativeGen) megaRead(miss, ret, indexed Label) {
 	a := g.a
 	found, nocell, p1, have := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	own, ownLoop, ownNext := a.NewLabel(), a.NewLabel(), a.NewLabel()
@@ -139,7 +156,7 @@ func (g *nativeGen) megaRead(miss, ret Label) {
 	a.OpImm(Cmp, R9, int32(ClassObject), false)
 	a.Jcc(CondNE, g.exit)
 	a.CmpMemImm8(R8, off("shape.index"), 0)
-	a.Jcc(CondNE, g.exit)
+	a.Jcc(CondNE, indexed)
 	a.LoadU32(R9, RSI, off("Object.valn"))
 	a.Load(RCX, R8, off("shape.keys"))
 	a.Bind(ownLoop)
@@ -175,9 +192,9 @@ func (g *nativeGen) megaRead(miss, ret Label) {
 // entry's next shape in R8, room and the barrier as there. Anything else
 // exits. R8, R9, RAX and RCX are its scratch, and the scratch's sI keeps
 // the value's address.
-func (g *nativeGen) megaWrite(miss, store Label) {
+func (g *nativeGen) megaWrite(miss, store, indexed, deep Label) {
 	a := g.a
-	scan, scanNext, deep, found, chain, end := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	scan, scanNext, found, chain, end := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	dsz := size("deepAdd")
 	ksz := size("propKey")
 	a.Bind(miss)
@@ -198,7 +215,7 @@ func (g *nativeGen) megaWrite(miss, store Label) {
 	a.Jcc(CondE, g.exit)
 	// Its own, in a table of no index: the keys scanned.
 	a.CmpMemImm8(R8, off("shape.index"), 0)
-	a.Jcc(CondNE, deep)
+	a.Jcc(CondNE, indexed)
 	a.LoadU32(R9, RSI, off("Object.valn"))
 	a.Load(RAX, R8, off("shape.keys"))
 	a.Bind(scan)
@@ -292,4 +309,150 @@ func (g *nativeGen) megaWrite(miss, store Label) {
 	a.Load(R8, R9, off("deepAdd.next"))
 	a.Load(RDX, RDI, scr(sI))
 	a.Jmp(store)
+}
+
+// indexFind is vm's findOwn of the key in key in the table of the object in
+// RSI, whose layout has an index (more than linearScanLimit properties):
+// the index's recent entry for the key, what it says checked against the
+// table, as findOwn checks it; or else the index's slots, probed as
+// slotTable.get probes them, what they say remembered in the recent entry
+// as findOwn remembers it -- a key and a position, no pointer. At found, i
+// is the property's position and s the address of its key among the
+// layout's; at absent, the object has no property of the key. key is kept;
+// s, i and t are its scratch, and the scratch's sEnd holds the key while
+// the slots are probed.
+func (g *nativeGen) indexFind(key, s, i, t Reg, found, absent Label) {
+	a := g.a
+	slots, loop, hit, none, remember := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	recent := off("propIndex.recent")
+	e := off("propIndex.slots") + off("slotTable.e")
+	if size("recentKey") != 8 || size("slotEntry") != 8 || size("propKey") != 8 ||
+		off("recentKey.key") != 0 || off("slotEntry.key") != 0 || off("slotEntry.idx") != 4 {
+		panic("nativegen: an index's entries are not as indexFind reads them")
+	}
+	// The recent entry: a position, which the table's key there and its
+	// length confirm, or none.
+	a.Load(t, RSI, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.MovRR32(i, key)
+	a.OpImm(And, i, 15, false)
+	a.LeaIdx(s, t, i, 8, recent)
+	a.CmpMem(key, s, off("recentKey.key"), false)
+	a.Jcc(CondNE, slots)
+	a.LoadS32(i, s, off("recentKey.idx"))
+	a.Op(Test, i, i, true)
+	a.Jcc(CondS, absent)
+	a.LoadU32(t, RSI, off("Object.valn"))
+	a.Op(Cmp, i, t, true)
+	a.Jcc(CondAE, absent)
+	a.Load(s, RSI, off("Object.shape"))
+	a.Load(s, s, off("shape.keys"))
+	a.LeaIdx(s, s, i, 8, 0)
+	a.CmpMem(key, s, off("propKey.key"), false)
+	a.Jcc(CondNE, slots)
+	a.LoadU8(t, s, off("propKey.flags"))
+	a.OpImm(And, t, propDeleted, false)
+	a.Jcc(CondNE, slots)
+	a.Jmp(found)
+	// The slots, from the key's home on, to the key's entry or an empty
+	// one: s their base, t their mask, i the entry, key the entry's word
+	// while the key waits in sEnd.
+	a.Bind(slots)
+	a.Load(t, RSI, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.Load(s, t, e)
+	a.Load(t, t, e+8)
+	a.OpImm(Sub, t, 1, true)
+	a.MovImm(i, slotHomeMul)
+	a.Imul32(i, key)
+	a.ShiftImm(Shr, i, uint8(slotHomeShift), false)
+	a.Store(RDI, scr(sEnd), key)
+	a.Bind(loop)
+	a.Op(And, i, t, true)
+	a.LoadIdx(key, s, i, 8, 0)
+	a.CmpMem(key, RDI, scr(sEnd), false)
+	a.Jcc(CondE, hit)
+	a.ShiftImm(Shr, key, 32, true)
+	a.OpImm(Cmp, key, slotEmpty, false)
+	a.Jcc(CondE, none)
+	a.OpImm(Add, i, 1, true)
+	a.Jmp(loop)
+	a.Bind(hit)
+	a.LeaIdx(t, s, i, 8, 0)
+	a.LoadS32(i, t, off("slotEntry.idx"))
+	a.Op(Test, i, i, true)
+	a.Jcc(CondNS, remember)
+	a.Bind(none)
+	a.MovImm(i, ^uint64(0))
+	// What the slots say, remembered: the key, and its position or -1 --
+	// a deleted entry's too, as get reports it missing -- then checked
+	// against the table, as findOwn checks it.
+	a.Bind(remember)
+	a.Load(key, RDI, scr(sEnd))
+	a.Load(t, RSI, off("Object.shape"))
+	a.Load(t, t, offShapeIndex)
+	a.MovRR32(s, key)
+	a.OpImm(And, s, 15, false)
+	a.LeaIdx(t, t, s, 8, recent)
+	a.Store32(t, off("recentKey.key"), key)
+	a.Store32(t, off("recentKey.idx"), i)
+	a.Op(Test, i, i, true)
+	a.Jcc(CondS, absent)
+	a.LoadU32(t, RSI, off("Object.valn"))
+	a.Op(Cmp, i, t, true)
+	a.Jcc(CondAE, absent)
+	a.Load(s, RSI, off("Object.shape"))
+	a.Load(s, s, off("shape.keys"))
+	a.LeaIdx(s, s, i, 8, 0)
+	a.CmpMem(key, s, off("propKey.key"), false)
+	a.Jcc(CondNE, absent)
+	a.LoadU8(t, s, off("propKey.flags"))
+	a.OpImm(And, t, propDeleted, false)
+	a.Jcc(CondNE, absent)
+	a.Jmp(found)
+}
+
+// megaReadIndexed is megaRead's read of the object's own property where
+// its table has an index, from indexed, the object in RSI and the key in
+// RDX: found as vm's findOwn finds it (indexFind), a plain data property
+// back at ret with the value's address in RCX. A key the object has not,
+// or of no plain data property, exits.
+func (g *nativeGen) megaReadIndexed(indexed, ret Label) {
+	a := g.a
+	found := a.NewLabel()
+	a.Bind(indexed)
+	g.indexFind(RDX, R8, RCX, R9, found, g.exit)
+	a.Bind(found)
+	a.LoadU8(R9, R8, off("propKey.flags"))
+	a.OpImm(And, R9, propOddKey, false)
+	a.Jcc(CondNE, g.exit)
+	a.ShiftImm(Shl, RCX, 4, true)
+	a.AddMem(RCX, RSI, off("Object.valp"))
+	a.Jmp(ret)
+}
+
+// megaWriteIndexed is megaWrite's write of the object's own property
+// where its table has an index, from indexed, the object in RSI, the key
+// in RCX and the value's address in RDX: a plain writable data property
+// found as vm's findOwn finds it (indexFind) written in place, its layout
+// not pristine, as megaWrite's scan writes one; a key the object has not
+// goes on to deep, the realm's cache of additions; anything else exits.
+func (g *nativeGen) megaWriteIndexed(indexed, deep Label) {
+	a := g.a
+	found := a.NewLabel()
+	a.Bind(indexed)
+	g.indexFind(RCX, R8, RAX, R9, found, deep)
+	a.Bind(found)
+	a.LoadU8(R9, R8, off("propKey.flags"))
+	a.OpImm(And, R9, propOddKey|propWritable, false)
+	a.OpImm(Cmp, R9, propWritable, false)
+	a.Jcc(CondNE, g.exit)
+	a.Load(R8, RSI, off("Object.shape"))
+	a.LoadU8(R8, R8, off("shape.pristine"))
+	a.Op(Test, R8, R8, false)
+	a.Jcc(CondNE, g.exit)
+	a.ShiftImm(Shl, RAX, 4, true)
+	a.AddMem(RAX, RSI, off("Object.valp"))
+	g.loadValue(RDX)
+	g.storeValue()
 }

@@ -1170,8 +1170,16 @@ func (t *slotTable) init(n int) {
 }
 
 func (t *slotTable) home(key Atom) int {
-	return int((uint32(key) * 0x9e3779b1) >> 7)
+	return int((uint32(key) * slotHomeMul) >> slotHomeShift)
 }
+
+// slotHomeMul and slotHomeShift make a key's first entry in a slotTable,
+// before the table's mask: what the native handlers' probe of an index
+// computes as home does (nativegen's indexFind).
+const (
+	slotHomeMul   = 0x9e3779b1
+	slotHomeShift = 7
+)
 
 // get is key's slot.
 func (t *slotTable) get(key Atom) (int32, bool) {

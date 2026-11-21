@@ -382,12 +382,7 @@ func armEmit(v *variant) (*block, error) {
 		g.object(rS, rS)
 		g.site(rC)
 		// As amd64's: a site that has given up, megaRead's.
-		miss := a.NewLabel()
-		g.megaMiss = miss
-		g.readSlot()
-		ret := g.megaRet
-		g.megaMiss, g.megaRet = 0, 0
-		g.mega = append(g.mega, func() { g.megaRead(miss, ret) })
+		g.megaReadSlot()
 		g.loadValue(rC)
 		g.regA(rW)
 		g.storeValue()
@@ -404,7 +399,7 @@ func armEmit(v *variant) (*block, error) {
 		a.Load(rS, rS, 8)
 		a.Store(rCtx, scr(sV0), rS)
 		g.site(rC)
-		g.readSlot()
+		g.megaReadSlot()
 		g.loadValue(rC)
 		g.regA(rW)
 		a.Store(rW, 0, r9)
@@ -1187,6 +1182,9 @@ func armEmit(v *variant) (*block, error) {
 	}
 	// The megamorphic paths of get_prop and set_prop, last of all.
 	for _, emit := range g.mega {
+		emit()
+	}
+	for _, emit := range g.megaIdx {
 		emit()
 	}
 	if len(missing) > 0 {

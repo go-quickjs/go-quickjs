@@ -23,6 +23,10 @@ import (
 // is a build's whose files its own GOOS and GOARCH leave out: the JIT's,
 // whose fields the Runtime has only where the JIT is built, which
 // jitBuilt says.
+// slotEmptyPos is slotEmpty as a slotEntry's position, whose 32 bits the
+// layout gives.
+var slotEmptyPos int32 = slotEmpty
+
 func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64) {
 	offsets, sizes = map[string]uintptr{}, map[string]uintptr{}
 	for _, t := range []reflect.Type{
@@ -68,6 +72,9 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		reflect.TypeFor[bytecode.SwitchCase](),
 		reflect.TypeFor[sharedEntry](),
 		reflect.TypeFor[deepAdd](),
+		reflect.TypeFor[slotTable](),
+		reflect.TypeFor[slotEntry](),
+		reflect.TypeFor[recentKey](),
 	} {
 		sizes[t.Name()] = t.Size()
 		depth := map[string]int{}
@@ -181,6 +188,10 @@ func NativeLayout() (offsets, sizes map[string]uintptr, consts map[string]uint64
 		"atomLength":      uint64(atomLength),
 		"propOddKey":      uint64(propAccessor | propPrivate | propDeleted | propUninit),
 		"propWritable":    uint64(propWritable),
+		"propDeleted":     uint64(propDeleted),
+		"slotEmpty":       uint64(uint32(slotEmptyPos)),
+		"slotHomeMul":     uint64(slotHomeMul),
+		"slotHomeShift":   uint64(slotHomeShift),
 		"sharedCacheBits": uint64(sharedCacheBits),
 		"deepWaysLog":     uint64(deepWaysLog),
 		"ClassProxy":      uint64(ClassProxy),

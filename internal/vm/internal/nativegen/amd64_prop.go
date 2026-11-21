@@ -52,7 +52,7 @@ func (g *nativeGen) getPropNext() {
 	g.object(RSI, RDX)
 	for i := 0; i < 2; i++ {
 		g.site(RCX)
-		g.readSlot()
+		g.megaReadSlot()
 		if i == 0 {
 			a.Load(R9, RCX, 0)
 			a.CmpMem(R9, RDI, ncObjBits, true)

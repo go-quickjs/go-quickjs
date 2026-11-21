@@ -50,6 +50,9 @@ type nativeGen struct {
 	// (amd64_mega.go), laid out after every other code of the block,
 	// tail's included, so that they move none of it.
 	mega []func()
+	// megaIdx is their reads and writes of an own property of a table that
+	// has an index (indexFind), laid out after them.
+	megaIdx []func()
 	// megaMiss, while set, is where readSlot's last miss goes in place of
 	// the exit, and megaRet where it binds its end (megaRead).
 	megaMiss, megaRet Label
