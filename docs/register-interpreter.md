@@ -1110,6 +1110,13 @@ it is.
 **Arguments.** `arguments.length` and `arguments[i]` of a function whose
 object is made only on demand are `args_len` and `args_index`, which reads
 an index past the parameters from the frame's kept arguments. A function
+may read them through a local initialized with `arguments` directly in its
+body too, if neither binding is captured or reassigned and every read of
+the alias follows its initialization and reads a length or element. The
+existing compiler walk records those reads; the register backend checks
+their resolved bindings, leaving eval, debugger and with code alone. All
+aliases use the arguments binding's register, so a slow index read that
+materializes the object gives every later read the same object. A function
 whose only use of `arguments` is to hand it to `apply` has no object made:
 each such call is `apply_args`, which hands on the frame's arguments as
 passed. Where an object is made, the frame keeps its arguments on the

@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // TestRegJumpsWithoutCalls pins the jumps the loop answers without a call
 // -- a truthiness of a boolean, an object or a number, and === of two
@@ -119,6 +123,80 @@ func TestRegLazyArguments(t *testing.T) {
 		[append(), append("x"), append("a", "b", "c"), past(1, 2), mapped("p", "q"), strict("s")].join(" ")`
 	const want = "none x abc ||2|2 Aq2 s1"
 	regRunBoth(t, src, want, 4)
+	for _, tt := range []struct {
+		name, src, want string
+		lazy            bool
+	}{
+		{"var alias", `function f() { var a = arguments, s = ""; for (var i = a.length - 1; i >= 0; i--) s += a[i]; return s } f("a", "b", "c")`, "cba", true},
+		{"let alias", `function f() { let a = arguments; return a[0] + ":" + a.length } f(3, 4)`, "3:2", true},
+		{"call alias", `function f() { var a = arguments; return a[0] + ":" + a.length } f.call(null, 3, 4)`, "3:2", true},
+		{"apply alias", `function f() { var a = arguments; return a[0] + ":" + a.length } f.apply(null, [3, 4])`, "3:2", true},
+		{"const aliases", `function f() { const a = arguments, b = arguments; return a[0] + ":" + b[1] + ":" + arguments.length } f(3, 4)`, "3:4:2", true},
+		{"mapped alias", `function f(x) { var a = arguments; x = 7; return a[0] + ":" + a.length } f(3)`, "7:1", true},
+		{"strict alias", `function f(x) { "use strict"; var a = arguments; x = 7; return a[0] + ":" + a.length } f(3)`, "3:1", true},
+		{"shadowed alias", `function f() { var a = arguments, s; { let a = [9]; s = a[0] } return s + ":" + a[0] } f(3)`, "9:3", true},
+		{"nested arguments", `function f() { var a = arguments, s; { let arguments = [9]; s = arguments[0] } return s + ":" + a[0] } f(3)`, "9:3", false},
+		{"shared materialization", `function f() { var a = arguments, b = arguments; return a[-1] + ":" + arguments.length + ":" + a.length + ":" + b.length }
+			Object.defineProperty(Object.prototype, "-1", {get() { this.length = 8; return "g" }, configurable: true});
+			var s = f(1, 2); delete Object.prototype["-1"]; s`, "g:8:8:8", true},
+		{"reassigned alias", `function f() { var a = arguments; a = [9]; return a[0] } f(3)`, "9", false},
+		{"reassigned arguments", `function f() { var a = arguments; arguments = [9]; return a[0] + ":" + arguments[0] } f(3)`, "3:9", false},
+		{"read before var", `function f() { try { return a.length } catch (e) { return e.name } var a = arguments } f(3)`, "TypeError", false},
+		{"read before let", `function f() { try { return a.length } catch (e) { return e.name } let a = arguments } f(3)`, "ReferenceError", false},
+		{"conditional alias", `function f() { if (true) var a = arguments; return a[0] } f(3)`, "3", false},
+		{"captured alias", `function f() { var a = arguments; return (() => a[0])() } f(3)`, "3", false},
+		{"captured arguments", `function f() { var a = arguments; return (() => arguments[0])() + ":" + a.length } f(3)`, "3:1", false},
+		{"eval alias", `function f() { var a = arguments; try { eval("a = [9]") } catch (e) { if (e.name !== "ReferenceError") throw e } return a[0] } f(3)`, "3", false},
+		{"with alias", `function f() { var a = arguments; with ({a: [9]}) return a[0] } f(3)`, "9", false},
+		{"method receiver", `function f() { var a = arguments; return a[0]() } f(function () { return this.length })`, "1", false},
+		{"tag receiver", "function f() { var a = arguments; return a[0]`x` } f(function () { return this.length })", "1", false},
+		{"element store", `function f() { var a = arguments; a[0] = 9; return a[0] } f(3)`, "9", false},
+		{"element update", `function f() { var a = arguments; a[0]++; return a[0] } f(3)`, "4", false},
+		{"element delete", `function f() { var a = arguments; delete a[0]; return a.length + ":" + a[0] } f(3)`, "1:undefined", false},
+		{"optional alias", `function f() { var a = arguments; return a?.[0] } f(3)`, "3", false},
+		{"block function alias", `function f() { var a = arguments; { function a() {} } return typeof a[0] } f(3)`, "undefined", false},
+		{"if function alias", `function f() { var a = arguments; if (true) { function a() {} } return a.length } f(3, 4)`, "0", false},
+		{"alias redeclared", `function f() { var a = arguments; var r = a[0]; var a = [9]; return r + ":" + a[0] } f(3)`, "3:9", false},
+		{"typeof before alias", `function f() { var r = typeof a; var a = arguments; return r + ":" + a[0] } f(3)`, "undefined:3", false},
+		{"alias in its own declaration", `function f() { var a = arguments, b = a[0], c = a.length; return b + c } f(3, 4)`, "5", true},
+		{"const mapped alias", `function f(x) { const a = arguments; x = 7; return a[0] } f(3)`, "7", true},
+		{"mapped alias past the arguments", `function f(x, y) { var a = arguments; y = 8; return a[1] + ":" + a.length } f(3)`, "undefined:1", true},
+		{"mapped alias after materialization", `function f(x) { var a = arguments, b = arguments; var c = a["callee"] === f; x = 7; return c + ":" + b[0] } f(3)`, "true:7", true},
+		{"alias string keys", `function f() { var a = arguments; return a["length"] + ":" + a["0"] + ":" + a[-1] + ":" + a[1.5] + ":" + typeof a[Symbol.iterator] } f(3, 4)`, "2:3:undefined:undefined:function", true},
+		{"alias prototype element", `function f() { var a = arguments; return a[3] + ":" + a[0] } Object.prototype[3] = "p"; var s = f(3); delete Object.prototype[3]; s`, "p:3", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := compileForTest(t, tt.src)
+			var code *bytecode.RegCode
+			for _, c := range fn.Constants {
+				if c.Fn != nil && c.Fn.Name == "f" {
+					code = c.Fn.RegCode()
+				}
+			}
+			if code == nil {
+				t.Fatal("f has no register code")
+			}
+			makes := false
+			for _, w := range code.Code {
+				makes = makes || w.Op() == bytecode.RArguments
+			}
+			if makes == tt.lazy {
+				t.Errorf("arguments object at entry: %v, want %v:\n%s", makes, !tt.lazy, code)
+			}
+			for _, native := range []bool{false, true} {
+				r := newTestRuntime(t, Config{}.withNative(native))
+				v, err := r.Run(fn)
+				var got *String
+				if err == nil {
+					got, err = r.ToString(v)
+				}
+				if err != nil || got.Go() != tt.want {
+					t.Errorf("native %v: got %v, %v; want %s", native, v, err, tt.want)
+				}
+				r.Close()
+			}
+		})
+	}
 }
 
 // TestRegSteppedReads pins x[++i], x[i++] and their decrements: the key

@@ -273,11 +273,12 @@ type gen struct {
 	tdz []bool
 	// lazyArgs says the arguments object is made only on demand: its
 	// local's register is undefined until args_index makes it.
-	lazyArgs bool
-	top      int
-	max      int
-	loops    []*loop
-	label    labelSet
+	lazyArgs   bool
+	argAliases *argumentsAliases
+	top        int
+	max        int
+	loops      []*loop
+	label      labelSet
 	// usingCaps are the registers of the scopes with using declarations
 	// around the code, innermost last, and disposeCaps each scope's, by its
 	// finally clause's statement (usingScope).
@@ -382,6 +383,10 @@ func (g *gen) layout() bool {
 	// form makes it for first (lazy_arguments); then it is made as the
 	// function starts.
 	lazySlot, plain := -1, make([]bool, n)
+	g.argAliases = g.argumentsAliases()
+	if g.argAliases != nil {
+		lazySlot = int(g.argAliases.slot)
+	}
 	note := func(res Res) bool {
 		switch res.Kind {
 		case ResLocal, ResLocalCheck, ResLocalInit, ResLazyArgs:
@@ -427,7 +432,7 @@ func (g *gen) layout() bool {
 			used[i] = true
 		}
 	}
-	g.lazyArgs = lazySlot >= 0 && !plain[lazySlot] && !evals
+	g.lazyArgs = g.argAliases != nil || lazySlot >= 0 && !plain[lazySlot] && !evals
 	defer g.probedNames()
 	if c := g.rec.Completion; c >= 0 {
 		if int(c) >= n {
@@ -1805,6 +1810,9 @@ func (g *gen) varDecl(n *ast.VarDecl) {
 	}
 	for _, d := range n.Decls {
 		id, ok := d.Target.(*ast.Ident)
+		if g.argAliases != nil && g.argAliases.inits[id] {
+			continue
+		}
 		if !ok {
 			if d.Init == nil {
 				// The parser allows one only in a for-of or for-in head,
@@ -3654,7 +3662,11 @@ func (g *gen) member(n *ast.Member, dst int) int {
 		return g.member(&m, dst)
 	}
 	if id, ok := n.Object.(*ast.Ident); ok {
-		if res := g.rec.readRes(id); res.Kind == ResLazyArgs {
+		res := g.rec.readRes(id)
+		if g.argAliases != nil && g.argAliases.reads[id] {
+			res = Res{Kind: ResLazyArgs, Index: g.argAliases.slot}
+		}
+		if res.Kind == ResLazyArgs {
 			// The arguments read where they lie, the object's local
 			// undefined until something makes it (arguments_index).
 			a := int(g.slotReg[res.Index])

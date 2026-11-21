@@ -1022,6 +1022,7 @@ func (c *compiler) isLazyArguments(e ast.Expr) bool {
 }
 
 func (c *compiler) compileMemberRead(n *ast.Member) {
+	c.reg.NoteArgumentsRead(n)
 	if _, isSuper := n.Object.(*ast.Super); isSuper {
 		c.compileSuperMemberGet(n)
 		return

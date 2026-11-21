@@ -193,6 +193,9 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		}
 		c.facts.makesArgs = true
 	}, wantArguments)
+	if wantArguments && !c.lazyArguments && !c.opts.Debug && !fn.Generator && !fn.Async && c.fn.HasSimpleParams {
+		c.reg.NoteArgumentsAliases(fn.Body)
+	}
 
 	// What the parameter list binds, its own name's binding and the
 	// arguments object with it: a var of the body of the same name is a

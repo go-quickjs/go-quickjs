@@ -36,6 +36,9 @@ func TestDirectEval(t *testing.T) {
 		{`function F() { return eval("new.target") } String(new F() === F)`, "true"},
 		{`function f() { return eval("new.target") } String(f())`, "undefined"},
 		{`function f(a, b) { return eval("arguments.length") } String(f(1, 2, 3))`, "3"},
+		{`function f() { var a = arguments; eval("a = [9]"); return a[0] } String(f(3))`, "9"},
+		{`function f() { var a = arguments; eval("arguments = [9]"); return a[0] + ":" + arguments[0] } f(3)`, "3:9"},
+		{`function f() { var a = arguments; return eval("a === arguments") + ":" + a[0] } f(3)`, "true:3"},
 		{`class A { m() { return 10 } }
 		  class B extends A { n() { return eval("super.m()") } } String(new B().n())`, "10"},
 		{`class C { #p = 11; m() { return eval("this.#p") } } String(new C().m())`, "11"},

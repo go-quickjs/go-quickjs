@@ -201,6 +201,9 @@ type recordRare struct {
 	// binding the parameter list's closures see, that binding's slot,
 	// which holds the function from the start.
 	self []uint32
+	// arguments holds the walk's notes of possible arguments aliases, for
+	// a function with a candidate declaration (NoteArgumentsAliases).
+	arguments *argumentsNotes
 }
 
 // rareOf is r's rare part, made on its first use.
