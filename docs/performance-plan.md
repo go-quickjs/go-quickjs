@@ -157,9 +157,40 @@ C QuickJS marked v0.39.0 are from the comparison at `3ecb8200` on a Ryzen
 - **A for-of cursor without an Object header.** The cursor is 88 bytes
   (`d9173a40`, `323f9031`), in the size class of 96; as a kind of Value of
   its own it would shed the header's 32.
-- **A closure's blocks inside its function object** would save about
-  4,900 allocations in EarleyBoyer, at the cost of many size combinations
-  (2026-10-12, *unverified*).
+- **A closure's blocks inside its function object.** The capture list is
+  in the object's allocation for up to 17 captures; the cells a closure is
+  the first to open are not. Allocated with the object (three cells beside
+  four to six captures, four beside twelve to fifteen, the size classes
+  unchanged), they took 2,882 allocations, 17%, from an Earley run, 2.7%
+  of its time on M5 Max arm64 and 7.2% on Windows amd64 (2026-11-21,
+  Go 1.27.3, JIT off, seven rounds at two placements). It was dropped: a
+  cell another closure shares then keeps the first closure's whole
+  function object alive, with its properties and everything it captures
+  (`TestCaptureCellsKeepNoFunction`). It needs the compiler to prove that
+  no other closure, nor a second closure of the template, shares the cells.
+  Its larger `regClosure` had also moved `regRunFD` and the cell-closing
+  helpers 96 bytes, an 11% JIT `closure_make` gap.
+- **A closure's realm in its template.** With the realm shared through
+  `closureCode` as the module environment is, a closure was 40 bytes, not
+  48, and Earley allocated 4.6% fewer bytes. But `callObject`'s and
+  `callDirect`'s realm checks took a load more: each grew 32 bytes, which
+  moved `pureElemOp` off its 64-byte alignment -- `array_pop` 5.5% slower
+  at every placement, level with the code after `callObject` padded back
+  to its offsets -- and wrapped O's pad, at its minimum in the builds
+  with the JIT, a page on (2026-11-21, Ryzen 5 3600). The realm stays the
+  closure's, read in one load as before.
+- **EarleyBoyer's Earley** takes 1.61 ms against Node 26.8.1 jitless's
+  1.06 ms on M5 Max arm64, where Boyer takes 19.8 ms against 20.9
+  (2026-11-21, Go 1.27.3, JIT off, both placements): the suite's score is
+  16% below Node's for Earley alone. 74% of Earley's bytes are closures
+  and their cells. Its `sc_list` reads `arguments` through a local alias,
+  which no longer makes the object; V8's interpreter still makes it
+  (`CreateMappedArguments`), so what is left is not a V8 interpreter
+  optimization missing here. These figures are of the series with the
+  realm in the template too (above). `closure_many_locals` was 5.9% slower
+  on arm64 at both placements with that 40-byte closure, a cause not
+  found: restoring the native handlers' addresses, or the one-capture
+  object's size, did not remove it.
 - **Implicit derived constructors** took 1.21 times QuickJS's time on the
   old tiers (356 against 295 ns, 2026-10-26); their closures are 224 to 288
   bytes since `59382e63`, not timed again.
@@ -951,3 +982,25 @@ Measured and dropped; each needs a new angle before it is tried again.
   - Constant array literals made by the native literal helper, as
     object literals and empty arrays are, measured on amd64 alone
     against the boolean-literal branch: +0.6%, +0.3%, +1.5%.
+- **EarleyBoyer's calls and closures** (2026-11-20 and 21, Go 1.27.3,
+  JIT off, Earley alone unless said, two placements, M5 Max arm64 and
+  i9-9900K Windows amd64), each removed for a gain under a per cent, at
+  one placement, or not on both machines:
+  - Frameless `sc_isPair` and `sc_isVector`, global instanceof
+    wrappers, a leaf kind of their own: EarleyBoyer 0.5% faster at one
+    placement; the wrappers are 10,000 calls a Boyer run.
+  - The frame's open-cell count tested directly at a return:
+    EarleyBoyer +1.8%, then -0.7% in a confirmation; Windows +0.6%.
+  - The pinned window's and caches' bases saved in the native record,
+    four loads less a framed call: EarleyBoyer -1.8% on arm64, +0.8% on
+    Windows.
+  - Fixed-size allocations for batches of up to 16 cells: 0.6% on arm64
+    at one placement.
+  - Two adjacent captured-variable reads fused: +0.1%; with the capture
+    list's pointer shared by both, +0.7%.
+  - Entry stores omitted for locals assigned before a closure captures
+    them: +0.2% on arm64.
+  - Immutable captures counted once per template rather than at each
+    closure: 0.4% on arm64, 0.5% on Windows, at one placement.
+  - Immutable captures read straight from their closed cells, an
+    operation of their own: 1.9% slower at both placements.
