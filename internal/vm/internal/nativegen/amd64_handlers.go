@@ -1376,6 +1376,16 @@ func nativeEmit(v *variant) (*block, error) {
 		a.OpImm(Sub, RBX, 8, true)
 		a.Jmp(g.exit)
 	})
+	h(bytecode.RArgsLen, func() {
+		g.decB(RDX)
+		a.LoadIdx(R9, R12, RDX, 1, 0)
+		a.CmpMem(R9, RDI, ncObjBits, true)
+		a.Jcc(CondE, g.exit)
+		a.Load(RSI, RDI, ncNF)
+		a.Load(RCX, RSI, offFArgs+8)
+		a.Cvtsi2sd(0, RCX, true)
+		g.storeA(0)
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)
 	}

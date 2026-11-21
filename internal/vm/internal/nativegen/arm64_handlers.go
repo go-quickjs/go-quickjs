@@ -1203,6 +1203,16 @@ func armEmit(v *variant) (*block, error) {
 		a.AddImm(rIP, rIP, -8, true)
 		a.B(g.exit)
 	})
+	h(bytecode.RArgsLen, func() {
+		g.regB(rD)
+		a.Load(r9, rD, 0)
+		g.cmpMem(r9, rCtx, ncObjBits)
+		a.BCond(EQ, g.exit)
+		a.Load(rS, rCtx, ncNF)
+		a.Load(rC, rS, offFArgs+8)
+		a.Scvtf(0, rC, true)
+		g.storeA(0)
+	})
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%s: a jump to %v before its handler", v.name, missing)
 	}

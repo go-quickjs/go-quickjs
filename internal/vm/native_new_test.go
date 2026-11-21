@@ -592,18 +592,25 @@ const nativeArgsSrc = `
 		var k = ks[j % ks.length]
 		out.push(keys(k, "p", "q"), String(keys.apply(null, [k, 7])))
 	}
+	function changedLength(k) { var a = arguments; return a[k] + ":" + a.length }
+	Object.defineProperty(Object.prototype, "-1", {get() {
+		Object.defineProperty(this, "length", {get() { return "length" }}); return "g"
+	}, configurable: true})
+	out.push(changedLength(-1, 2))
+	delete Object.prototype["-1"]
 	out.join()`
 
-// TestRegNativeArgsIndex checks arguments[i] read natively from a
+// TestRegNativeArgsIndex checks arguments[i] and arguments.length read from a
 // frame's kept arguments against the Go table: the same answers, marking
 // or not, and a forwarder's reads with no exit.
 func TestRegNativeArgsIndex(t *testing.T) {
 	nativeCheck(t, nativeArgsSrc, `
-		function f() { var a = arguments; return a[0] + a[1] + a[2] }
+		function f() { var a = arguments; return a.length + a[0] + a[1] + a[2] }
 		function g() { "use strict"; return arguments[0] * arguments[1] }
+		function count() { return arguments.length }
 		var s = 0
-		for (var i = 0; i < 1000; i++) s += f(i, i, 1) + g(i, 2)
-		String(s)`, bytecode.RArgsIndex)
+		for (var i = 0; i < 1000; i++) s += f(i, i, 1) + g(i, 2) + count() + count(i, 2)
+		String(s)`, bytecode.RArgsIndex, bytecode.RArgsLen)
 }
 
 // TestRegNativeLeafInterrupt pins a register leaf's calls, which the call

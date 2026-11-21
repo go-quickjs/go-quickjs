@@ -664,7 +664,7 @@ goroutine), `R29` (the frame pointer) or `R30`, which holds `nativeEnter`'s
 return to `nativeLoop` throughout, so that a profile taken in the code
 unwinds to it.
 
-**What is native.** 133 of the 245 operations have a native handler
+**What is native.** 134 of the 245 operations have a native handler
 (nativegen's `handlerOps`); the rest go straight to the exit stub. Native
 are the numbers' arithmetic and bitwise operators, the int32 forms,
 increments, the compare-and-branches and step-and-branches, truthiness,
@@ -1109,7 +1109,9 @@ it is.
 
 **Arguments.** `arguments.length` and `arguments[i]` of a function whose
 object is made only on demand are `args_len` and `args_index`, which reads
-an index past the parameters from the frame's kept arguments. A function
+an index past the parameters from the frame's kept arguments. `args_len`
+reads the frame's kept count natively until the object is materialized;
+then its length is read as an ordinary property. A function
 may read them through a local initialized with `arguments` directly in its
 body too, if neither binding is captured or reassigned and every read of
 the alias follows its initialization and reads a length or element. The

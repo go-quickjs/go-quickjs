@@ -76,6 +76,7 @@ var handlerOps = []bytecode.ROp{
 	// (keyedStore).
 	bytecode.RDefineIndex,
 	bytecode.RGetGlobalInstanceOf,
+	bytecode.RArgsLen,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

@@ -2,7 +2,7 @@
 
 #include "textflag.h"
 
-// regNativeHandlers is the register interpreter's native handlers, 90328
+// regNativeHandlers is the register interpreter's native handlers, 90476
 // bytes of position-independent machine code made by armEmit: every
 // address it needs is in the context it is given in R25. Its handlers, in
 // order:
@@ -140,6 +140,7 @@
 //	83248  jbool
 //	83360  define_index
 //	89420  get_global_instanceof
+//	90328  args_len
 TEXT ·regNativeHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	PCALIGN $32
 	WORD $0x14005081; WORD $0xf9400f34; WORD $0xf9401335; WORD $0xf9401736
@@ -5787,7 +5788,16 @@ TEXT ·regNativeHandlers(SB), NOSPLIT|NOFRAME, $0-0
 	WORD $0xf9400464; WORD $0x8b021081; WORD $0xf9400024; WORD $0xf9401f26
 	WORD $0xeb06009f; WORD $0x540000e1; WORD $0xf9400421; WORD $0x17ffffbe
 	WORD $0xf9402424; WORD $0xf9400c66; WORD $0xeb06009f; WORD $0x17ffff50
-	WORD $0xd1002273; WORD $0x17ffa7d5
+	WORD $0xd1002273; WORD $0x17ffa7d5; WORD $0xd360bc02; WORD $0x8b021282
+	WORD $0xf9400045; WORD $0xf9401f26; WORD $0xeb0600bf; WORD $0x54f4f9e0
+	WORD $0xf9405323; WORD $0xf9403061; WORD $0x9e620020; WORD $0xd3507c02
+	WORD $0x8b021282; WORD $0xfd000040; WORD $0xf9400446; WORD $0xb4000266
+	WORD $0x91002040; WORD $0xd2800001; WORD $0xd503201f; WORD $0xd503201f
+	WORD $0x35000067; WORD $0xf9000001; WORD $0x1400000c; WORD $0xf9000333
+	WORD $0xf9001b37; WORD $0x10000070; WORD $0xf9404331; WORD $0xd61f0220
+	WORD $0xf9400333; WORD $0xf9400f34; WORD $0xf9401335; WORD $0xf9401736
+	WORD $0xf9401b37; WORD $0xf9402338; WORD $0x91002273; WORD $0xf9400260
+	WORD $0xd3401c10; WORD $0xf8707ab0; WORD $0xd61f0200
 
 // regNativeTable is the native table: each operation's handler's address,
 // the exit stub's where it has none.
@@ -5898,7 +5908,7 @@ DATA ·regNativeTable+824(SB)/8, $·regNativeHandlers+3644(SB)
 DATA ·regNativeTable+832(SB)/8, $·regNativeHandlers+4076(SB)
 DATA ·regNativeTable+840(SB)/8, $·regNativeHandlers+4508(SB)
 DATA ·regNativeTable+848(SB)/8, $·regNativeHandlers+13348(SB)
-DATA ·regNativeTable+856(SB)/8, $·regNativeHandlers+40(SB)
+DATA ·regNativeTable+856(SB)/8, $·regNativeHandlers+90328(SB)
 DATA ·regNativeTable+864(SB)/8, $·regNativeHandlers+70204(SB)
 DATA ·regNativeTable+872(SB)/8, $·regNativeHandlers+40(SB)
 DATA ·regNativeTable+880(SB)/8, $·regNativeHandlers+58660(SB)
