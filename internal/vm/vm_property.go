@@ -311,6 +311,11 @@ type primEntry struct {
 // layout, so a property added, deleted or made an accessor is noticed. Only
 // a data property of p itself is remembered; anything else is looked up.
 func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
+	if t := r.primAbsent; t != nil {
+		if a := &t[key&63]; a.key == key && a.proto == p && a.cell != nil && a.cell.valid {
+			return Undefined, nil
+		}
+	}
 	e := &r.primProps[key&63]
 	if s := p.shape; e.key == key && e.proto == p && e.shape == s && s != nil {
 		if verifyShapes {
@@ -326,8 +331,47 @@ func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
 			*e = primEntry{key: key, idx: i, proto: p, shape: remember(s)}
 			return p.vals()[i], nil
 		}
+		if r.primAbsentOn(p, key) {
+			return Undefined, nil
+		}
 	}
 	return r.getProp(p, key, v)
+}
+
+// primAbsentEntry is a key found nowhere on proto's chain, as long as the
+// chain's cell is valid: a read of it of any primitive of the prototype is
+// undefined -- a render's type.defaultProps of every element whose type is
+// a tag's name, which had walked String.prototype's large table and
+// Object.prototype's at each.
+type primAbsentEntry struct {
+	// Not comparable: no equality function is made for its type, whose
+	// code, laid out among the generics, moved them (Realm's primAbsent).
+	_     [0]func()
+	key   Atom
+	proto *Object
+	cell  *protoCell
+}
+
+// primAbsentOn reports whether key, neither an index nor length, is found
+// nowhere on p's chain, of shaped prototypes of classes whose tables are
+// all there is to them for such a key -- String.prototype's, a String
+// wrapper's, answers only indices and length of its own -- and if so
+// remembers it with the chain's cell (primAbsent).
+func (r *Runtime) primAbsentOn(p *Object, key Atom) bool {
+	for h := p; h != nil; h = h.proto() {
+		if h.cacheShape() == nil || !shapeClass(h.class) && h.class != ClassStringWrapper || synthesized(h.class, key) || h.findOwn(key) >= 0 {
+			return false
+		}
+	}
+	cell := r.chainCell(p)
+	if cell == nil {
+		return false
+	}
+	if r.primAbsent == nil {
+		r.primAbsent = new([64]primAbsentEntry)
+	}
+	r.primAbsent[key&63] = primAbsentEntry{key: key, proto: p, cell: cell}
+	return true
 }
 
 // setProp assigns a property, honouring setters found on the prototype chain

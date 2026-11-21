@@ -98,3 +98,43 @@ func TestRegNativeAbsentReads(t *testing.T) {
 		})
 	}
 }
+
+// nativePrimSrc reads of primitives a key their prototypes' chains have
+// not (a tag's name's defaultProps, a number's charAt) and one they have,
+// then puts the key on String.prototype, on Object.prototype and on
+// Number.prototype and takes it off again: the absent key remembered by
+// the chain's cell (primAbsent) reads what the chain has after each.
+// nativePrimWant is Node's answer (vm.runInThisContext).
+const nativePrimSrc = `
+function dp(t) { return t.defaultProps }
+function ca(t) { return typeof t.charAt }
+function prim() {
+	var out = [], s = 0;
+	for (var i = 0; i < 100; i++) { if (dp("div") === undefined) s++; if (ca(i) === "undefined") s++; if (ca("x") === "function") s++ }
+	out.push(s);
+	String.prototype.defaultProps = 5;
+	out.push(dp("div"), dp("span"));
+	delete String.prototype.defaultProps;
+	out.push(dp("div"));
+	Object.prototype.defaultProps = 6;
+	out.push(dp("div"), dp(1), dp(true));
+	delete Object.prototype.defaultProps;
+	out.push(dp("div"), dp(1), ca(7));
+	Number.prototype.charAt = function () { return 1 };
+	out.push(ca(7), ca(7.5), dp(2));
+	delete Number.prototype.charAt;
+	out.push(ca(7), "abc".length, "abc"[1], dp(Symbol.iterator), dp(10n));
+	return out.join();
+}
+`
+
+const nativePrimWant = "300,5,5,,6,6,6,,,undefined,function,function,,undefined,3,b,, 300,5,5,,6,6,6,,,undefined,function,function,,undefined,3,b,,"
+
+func TestPrimAbsentReads(t *testing.T) {
+	const run = "[prim(), prim()].join(' ')"
+	for _, native := range []bool{false, true} {
+		if got := nativeRunSrc(t, nativePrimSrc+run, native); got != nativePrimWant {
+			t.Errorf("native %v: %s, want %s", native, got, nativePrimWant)
+		}
+	}
+}

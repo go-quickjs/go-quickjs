@@ -715,6 +715,10 @@ type Realm struct {
 	// functions' own caller in standards mode, made when first needed; see
 	// legacyCallerAccessors.
 	callerAccessors [2]*Object
+	// primAbsent remembers the keys found nowhere on a primitive's
+	// prototype chain, with the chain's cell; see primProp. Made when
+	// first needed.
+	primAbsent *[64]primAbsentEntry
 	jitRealmFields
 	// primProps remembers where methods of primitives were found on their
 	// prototypes; see primProp. Last, being kilobytes long, and after the
