@@ -455,6 +455,20 @@ tooling").
   `construct_new_target` measured 575 against 500 ns that way and 0.85 to
   0.98 of main's built in the same checkout. The placements tool builds
   each label in the checkout it is run in.
+- **One copy of a build is one draw too.** On Windows two copies of the
+  same bytes have timed `json_stringify_ints` 26 and 46 ns, each the same
+  every run. Most of it was where Windows loads each file, in steps of
+  64 KB the lock does not hold: the placements tool and the matrix clear
+  DYNAMICBASE and HIGH_ENTROPY_VA in their windows/amd64 builds' PE
+  headers and check that each loads at its image base, 0x140000000, as a
+  Linux build loads at its link address (`-fixedbase`, package
+  `internal/cmd/v8bench/internal/fixedbase`). A copy at that base can
+  still keep a speed of its own -- one of eight took 48 ns on
+  `json_stringify_decimals` where seven took 35, until copied again --
+  most likely for where its file lies in memory, so they also run each
+  process from a fresh copy (`-freshcopy`). A row that moved by a tenth
+  between two single builds is timed again from fresh copies before it is
+  believed.
 - **Single builds are for profiles, not verdicts.**
 - **An idle machine.** Check per-process CPU before a comparison, and run
   nothing else during one. `-parallel` gives each label its own level-3

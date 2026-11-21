@@ -805,7 +805,14 @@ and the assembly -- the native handlers and the JIT's leaf stubs --
 differently in a balanced design, and checks every one with `go tool
 nm`; `-tags quickjs_jit` builds them with the JIT. `compare` runs two
 labels' placements in turn and reports each side's mean. Build both sides in
-the same checkout, and leave the machine idle while they run.
+the same checkout, and leave the machine idle while they run. On
+windows/amd64 `build` clears DYNAMICBASE in each build's PE header and
+checks it loads at its image base, and `compare` runs each process from a
+fresh copy of its build (`-fixedbase`, `-freshcopy`, on by default there,
+as in the matrix): Windows otherwise loads each file where it chooses, in
+steps of 64 KB the layout lock does not hold, and two copies of one build
+have timed a micro-benchmark 26 and 46 ns (docs/optimizing.md, "Builds and
+the machine").
 
 ```sh
 git checkout base   && go run ./internal/cmd/v8bench/placements build -label base

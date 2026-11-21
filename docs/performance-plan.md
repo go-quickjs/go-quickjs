@@ -530,17 +530,19 @@ the stack JIT lowered; their counts are from then.
   side, and distances inside a JIT function: `bigint64_search` was 25%
   slower at six of eight offsets for one byte more inside its function
   (2026-11-08).
-- **Where Windows loads a build.** An image with DYNAMICBASE is loaded
-  where the system chooses, once for each file until a restart, in steps
-  of 64 KB, which neither the lock nor the placements hold: two copies of
-  one build of `91f885a1` took 26 and 46 ns on `json_stringify_ints`, and
-  ten copies of twelve 49 ns on `json_stringify_decimals` where the other
-  two took 35 (2026-11-20). A copy runs at one speed every time, and a
-  build with DYNAMICBASE and HIGH_ENTROPY_VA cleared in its PE header
-  loads at its link address, 0x140000000, as a Linux build does, at one
-  speed from any copy. Open: an option of `placements build` and the
-  matrix to clear the two flags in the Windows builds they time (the
-  tests run the builds as made).
+- **A copy of a build at one speed of its own.** On Windows two copies of
+  one build can time apart, each the same every run: two of `91f885a1`'s
+  took 26 and 46 ns on `json_stringify_ints`, and ten of twelve 49 ns on
+  `json_stringify_decimals` where two took 35 (2026-11-20). Most of it is
+  where Windows loads each file, in steps of 64 KB: the placements tool
+  and the matrix load their windows/amd64 builds at their image base
+  (`-fixedbase`), and of ten such copies of `91f885a1`'s all took 49. But
+  of eight copies of `b5df63ea`'s at a fixed base one took 48 where seven
+  took 35, every run, and the same bytes copied again to its path took 35
+  (2026-11-21): the file's own copy, where its pages lie in memory most
+  likely, which the caches past the first index by. So the tools also
+  run each process from a fresh copy of its build there (`-freshcopy`).
+  Open: how much of a row's spread between placements was its copies'.
 - **test262 with `-conformance.debugger` and `-conformance.jit`
   together** fails "no test ran native code": code compiled for a debugger
   is never native.

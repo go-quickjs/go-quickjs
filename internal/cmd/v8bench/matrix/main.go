@@ -30,6 +30,15 @@
 // other on the groups of a Ryzen's core complexes. -parallel=false runs
 // one at a time on every CPU, as docs/benchmarks.md's figures were made.
 //
+// On windows/amd64 the runners it builds have DYNAMICBASE and
+// HIGH_ENTROPY_VA cleared in their PE headers, and are checked to load at
+// their image base (-fixedbase, package fixedbase): Windows otherwise
+// loads each where it chooses, once for each file, in steps of 64 KB that
+// the layout lock does not hold, and a micro-benchmark has timed 26 and 46
+// ns on two copies of one build. A runner at its image base can still keep
+// a speed of its own for its file, so each run is made, there, from a fresh
+// copy of its runner (-freshcopy). env.txt says which.
+//
 // Every run's output is kept in -out, with what the machine and the
 // engines are (env.txt), and the tables (tables.md); -report DIR prints
 // the tables of a directory again, without running anything.
@@ -53,6 +62,7 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/cpuset"
+	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/fixedbase"
 )
 
 // An engine is a runner and what it runs.
@@ -95,6 +105,8 @@ func run() error {
 	out := flag.String("out", "", "where the runs' outputs go, by default a new directory in the temporary one")
 	report := flag.String("report", "", "print the tables of a directory a run kept, and run nothing")
 	microRows := flag.Int("micro-rows", 12, "the micro-benchmarks' largest gaps each way the table shows")
+	fixed := flag.Bool("fixedbase", fixedbase.Default, "clear DYNAMICBASE and HIGH_ENTROPY_VA in the runners' PE headers, so that Windows loads each at its image base (windows/amd64)")
+	flag.BoolVar(&freshCopy, "freshcopy", fixedbase.Default, "run each process from a fresh copy of its runner, so that its speed is not its file's (windows/amd64)")
 	flag.Parse()
 
 	if *report != "" {
@@ -170,6 +182,10 @@ func run() error {
 		exe("goja"):     {"go", "build", "-o", filepath.Join(bin, exe("goja")), "."},
 	}
 	built := map[string]bool{}
+	loads := "where Windows chooses: the runners as the go command builds them"
+	if runtime.GOOS != "windows" {
+		loads = "at the runners' link addresses"
+	}
 	var usable []engine
 	for _, e := range chosen {
 		if !built[e.runner] {
@@ -184,6 +200,13 @@ func run() error {
 			if err := cmd.Run(); err != nil {
 				fmt.Printf("left out: %s, whose runner did not build: %v\n", e.title, err)
 				continue
+			}
+			if *fixed {
+				b, err := fixedbase.Fix(filepath.Join(bin, e.runner))
+				if err != nil {
+					return err
+				}
+				loads = fmt.Sprintf("fixed: the runners have DYNAMICBASE cleared and load at %#x", b)
 			}
 			built[e.runner] = true
 		}
@@ -226,7 +249,7 @@ func run() error {
 			how += ", unpinned: this OS gives a process no CPUs of its own"
 		}
 	}
-	if err := writeEnv(*out, root, usable, how, *qjs, *node); err != nil {
+	if err := writeEnv(*out, root, usable, how, loads, *qjs, *node); err != nil {
 		return err
 	}
 	fmt.Println(how)
@@ -307,9 +330,21 @@ func runArgs(e engine, s, dir string, nV8, nLong int) []string {
 	return append(args, "-dir", dir, "-bench", s, "-mode", "fixed", "-n", strconv.Itoa(nLong))
 }
 
+// freshCopy is -freshcopy: runOne runs each process from a fresh copy of
+// its runner.
+var freshCopy bool
+
 // runOne runs a runner once, on g if any, its output to file, what it
 // wrote to its standard error, if anything, beside it.
 func runOne(path string, args []string, file string, g cpuset.Set) error {
+	if freshCopy {
+		c, remove, err := fixedbase.FreshCopy(path)
+		if err != nil {
+			return err
+		}
+		defer remove()
+		path = c
+	}
 	cmd := exec.Command(path, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -358,7 +393,7 @@ func repoRoot() (string, error) {
 
 // writeEnv keeps what the runs ran on: the machine, the checkout, the
 // engines and how the runs were made.
-func writeEnv(out, root string, engines []engine, how, qjs, node string) error {
+func writeEnv(out, root string, engines []engine, how, loads, qjs, node string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "date: %s\n", time.Now().Format("2006-01-02 15:04 MST"))
 	fmt.Fprintf(&b, "machine: %s, %s/%s, %d CPUs\n", cpuName(), runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
@@ -384,6 +419,10 @@ func writeEnv(out, root string, engines []engine, how, qjs, node string) error {
 		}
 	}
 	fmt.Fprintf(&b, "runs: %s\n", how)
+	fmt.Fprintf(&b, "image base: %s\n", loads)
+	if freshCopy {
+		fmt.Fprintf(&b, "copies: each run from a fresh copy of its runner\n")
+	}
 	return os.WriteFile(filepath.Join(out, "env.txt"), []byte(b.String()), 0o644)
 }
 

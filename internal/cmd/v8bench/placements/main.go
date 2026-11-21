@@ -92,6 +92,20 @@
 // move with where the code lands more than suites do, so a test is slower
 // only where it is slower at every placement.
 //
+// On windows/amd64, build clears DYNAMICBASE and HIGH_ENTROPY_VA in each
+// build's PE header, and checks that Windows then loads it at its image
+// base (-fixedbase, package fixedbase): Windows otherwise loads an image
+// where it chooses, once for each file, in steps of 64 KB that no
+// placement varies and the layout lock does not hold, and one build's
+// copies have timed a micro-benchmark 26 and 46 ns. Each placement is then
+// the layout the linker made, as on Linux, where a build loads at its link
+// address. -fixedbase=false leaves the builds as the go command makes them.
+// A build at its image base can still keep a speed of its own for its
+// file -- one copy of eight took 48 ns a run where the others took 35,
+// every run, until copied again -- so compare, on windows/amd64, runs each
+// process from a fresh copy of its build (-freshcopy), and a placement's
+// fastest round is the fastest of as many copies.
+//
 // Build both sides in the same directory, one after the other: the same
 // source built in another checkout has measured differently.
 //
@@ -120,6 +134,7 @@ import (
 	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/cpuset"
+	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/fixedbase"
 )
 
 func main() {
@@ -296,6 +311,7 @@ func buildCmd(args []string) error {
 	k := fs.Int("k", 8, "how many placements")
 	out := fs.String("out", defaultOut(), "where the builds go")
 	tags := fs.String("tags", "", "build tags, as go build's -tags: quickjs_jit for the JIT (GOFLAGS' are taken too)")
+	fixed := fs.Bool("fixedbase", fixedbase.Default, "clear DYNAMICBASE and HIGH_ENTROPY_VA in the builds' PE headers, so that Windows loads each at its image base (windows/amd64)")
 	fs.Parse(args)
 	if *label == "" {
 		return errors.New("-label is required")
@@ -345,7 +361,15 @@ func buildCmd(args []string) error {
 		if !phasesMatch(got, n) {
 			return fmt.Errorf("placement %d: phases %v, want %v (pads %v)", n, phases(got), design(n), counts)
 		}
-		fmt.Printf("%s-%d: pads %v, phases %v, at %s\n", *label, n, counts, phases(got), mod4K(got))
+		loads := ""
+		if *fixed {
+			base, err := fixedbase.Fix(exe)
+			if err != nil {
+				return fmt.Errorf("placement %d: %w", n, err)
+			}
+			loads = fmt.Sprintf(", loaded at %#x", base)
+		}
+		fmt.Printf("%s-%d: pads %v, phases %v, at %s%s\n", *label, n, counts, phases(got), mod4K(got), loads)
 	}
 	fmt.Printf("built %d placements of %s in %s\n", *k, *label, *out)
 	return nil
@@ -503,8 +527,10 @@ func compareCmd(args []string) error {
 	cpus := fs.String("cpus", "auto", "the groups of CPUs -parallel runs on: auto, halves, or lists separated by ';' (0-5;6-11)")
 	verbose := fs.Bool("v", false, "print each placement's figure")
 	out := fs.String("out", defaultOut(), "where the builds are")
+	fresh := fs.Bool("freshcopy", fixedbase.Default, "run each process from a fresh copy of its build, so that its speed is not its file's (windows/amd64)")
 	micro := fs.Bool("micro", false, "run v8bench's micro mode, QuickJS's micro-benchmarks and ours, rather than a suite: -suite names tests by the start of their names, and -dir is not needed")
 	fs.Parse(args)
+	freshCopy = *fresh
 	if (*dir == "" && !*micro) || fs.NArg() != 2 {
 		usage()
 	}
@@ -668,6 +694,10 @@ func (t *repsTable) of(name string, ms float64) int {
 	return r
 }
 
+// freshCopy is compare's -freshcopy: runPlacement runs each process from a
+// fresh copy of its build.
+var freshCopy bool
+
 // runPlacement runs one build and reads its times, in milliseconds a run,
 // in the order it printed them, then the total of theirs: every benchmark
 // once, then those reps says are short again, in a process for each of
@@ -678,6 +708,15 @@ func (t *repsTable) of(name string, ms float64) int {
 func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
 	exe, env := labelExe(out, label, n)
 	run := func(reps int, only string) ([]named, error) {
+		exe := exe
+		if freshCopy {
+			c, remove, err := fixedbase.FreshCopy(exe)
+			if err != nil {
+				return nil, err
+			}
+			defer remove()
+			exe = c
+		}
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if micro {
 			args = []string{"-mode", "micro", "-n", "1"}

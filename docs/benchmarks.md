@@ -375,17 +375,21 @@ native handlers' block -- at the offsets it measured best
 (register-interpreter.md, "Code layout"), so that a change elsewhere does
 not move it; what lies between its anchors still moves, and so does
 everything after a pad that grows past a page (`b5df63ea`; see
-docs/optimizing.md, "The layout lock"). On Windows a program is also
-loaded where the system chooses, once for each file until a restart, in
-steps of 64 KB that the lock does not hold: two copies of one build of
-`91f885a1` took 26 and 46 ns on `json_stringify_ints`, and of twelve
-copies ten took 49 ns on `json_stringify_decimals` and two 35, where every
-copy of `b8c2c45f`'s took 33. One copy runs at one speed every time, and
-a build whose header asks for no relocation (DYNAMICBASE cleared), loaded
-at its link address as a Linux build is, at one speed from any copy. The
-matrix's figures are of one copy of each build: a micro-benchmark that
-moved by a tenth or more between two of them may have moved for that
-alone. To reproduce
+docs/optimizing.md, "The layout lock"). On Windows one copy of a build
+can also time apart from another copy of the same bytes, each at one speed
+every time it runs: two copies of one build of `91f885a1` took 26 and 46
+ns on `json_stringify_ints`, and of twelve copies ten took 49 ns on
+`json_stringify_decimals` and two 35, where every copy of `b8c2c45f`'s
+took 33. Most of that is where Windows loads each file, in steps of 64 KB
+that the lock does not hold; the figures here were made before the
+matrix and the placements tool loaded their builds at a fixed base, as a
+Linux build loads at its link address (`-fixedbase`), and a copy at a
+fixed base can still sit apart, for where its file lies in memory, which
+the tools now take out by running each process from a fresh copy
+(`-freshcopy`; docs/optimizing.md, "Builds and the machine"). The
+figures here are of one copy of each build: a micro-benchmark that moved
+by a tenth or more between two of them may have moved for that alone. To
+reproduce
 these figures, the suites below and the micro-benchmarks, run `go run
 ./internal/cmd/v8bench/matrix -engines gq,gqjit,qjs -qjs /path/to/qjs -v8
 /tmp/v8-v7 -octane /tmp/octane -awfy /tmp/awfy -ssr /tmp/ssr -fetch`.
