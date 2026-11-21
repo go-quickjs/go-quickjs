@@ -232,6 +232,57 @@ func TestJITForwardingCallsNative(t *testing.T) {
 	}
 }
 
+// A function a forwarding call makes natively that reads not its own
+// function object is given none in its window's register 0 (mir's
+// windowCallees), as a plain call's callee is not: a frame Go makes of its
+// level has it all the same (jitRegLevelCallee), which a function it calls
+// reads as its caller, sloppy and in a frame made where its callee throws,
+// the collector idle and marking.
+func TestJITForwardingCalleeFunction(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	jitNoInlineForTest(t, "")
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprint(marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			jitDefaultsForTest(r)
+			src := `
+				function h(a) { if (a === -1) throw new Error('x'); return h.caller === t2 ? 1 : 100 }
+				function t2(a, b) { return a + b + h(a) }
+				function own() { let s = 0; for (let i = 0; i < 8; i++) s += t2.apply(this, arguments); return s }
+				function loop(n) { let s = 0; for (let i = 0; i < n; i++) s += own(i, 2); return s }
+				function throws() { try { own(-1, 2) } catch (e) { return e.stack.split('\n')[2].trim().split(' ')[1] } }
+			`
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			for range 40 {
+				if _, err := r.Run(compileForTest(t, "loop(200)")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := jitNativeOrCalleeCodeForTest(t, r, "own").e.ssaStats.goCalls
+			v, err := r.Run(compileForTest(t, "''+loop(1000)"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := v.String().Go(), fmt.Sprint(8*(1000*999/2+3000)); got != want {
+				t.Fatalf("loop(1000) = %s, want %s", got, want)
+			}
+			if n := jitNativeOrCalleeCodeForTest(t, r, "own").e.ssaStats.goCalls - before; n != 0 {
+				t.Errorf("own: %d calls of Go for loop(1000)'s forwards, want 0", n)
+			}
+			if v, err := r.Run(compileForTest(t, "throws()")); err != nil || v.String().Go() != "t2" {
+				t.Fatalf("throws() = %v, %v, want t2", v, err)
+			}
+		})
+	}
+}
+
 // forwardInlineSetup are forwarders a loop calls, plainly and as methods,
 // sloppy and strict, which its code inlines with the functions their own
 // code learned they forward to: their forwards are calls with the loop's

@@ -4103,15 +4103,16 @@ type callRecord struct {
 // function object each site's checks find, 0 for one checked by its code
 // (abi.CallState's Callees); nil where the call writes the function to
 // the window's register 0: a callee that reads it (ReadsFunction), any
-// function past the sites (gen), a call through Function.prototype.call or
-// apply, a super().
+// function past the sites (gen), a call through Function.prototype.call, a
+// super(). A forwarding call, f.apply(x, arguments) (Forward), leaves f out
+// as a plain call does its function: its sites are f's.
 func windowCallees(site *ssa.CallSite, sites []*ssa.CallSite, gen bool) []uintptr {
-	if site.Window == 0 || gen || len(sites) == 0 || site.Via != 0 || site.Forward || site.Super {
+	if site.Window == 0 || gen || len(sites) == 0 || site.Via != 0 || site.Super {
 		return nil
 	}
 	out := make([]uintptr, len(sites))
 	for i, t := range sites {
-		if t.ReadsFunction || t.Via != 0 || t.Forward || t.Super {
+		if t.ReadsFunction || t.Via != 0 || t.Super {
 			return nil
 		}
 		if t.ByCode == 0 {

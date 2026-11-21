@@ -1955,9 +1955,12 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		inC, m := true, 0
 		switch {
 		case site.Forward:
-			// f.apply(x, arguments): f its function, x its receiver; the
-			// arguments the frame's, in its context (windowForward).
-			c.directOperand(v, v.Args[0], true, 0, &inC)
+			// f.apply(x, arguments): f its function, where a callee reads
+			// it (windowCallees), x its receiver; the arguments the
+			// frame's, in its context (windowForward).
+			if callees == nil {
+				c.directOperand(v, v.Args[0], true, 0, &inC)
+			}
 			c.directOperand(v, v.Args[2], true, vs, &inC)
 		case site.Via != 0:
 			// G.call(x, ...) through Function.prototype.call (ssa.CallSite's

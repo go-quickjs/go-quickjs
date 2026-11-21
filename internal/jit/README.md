@@ -2431,8 +2431,9 @@ realm's `apply` (`apply_args`, `ssa.CallSite`'s `Forward`), is made so too,
 of the functions the code learned it forwards to at its calls of Go, settled
 as a call's functions are: those met in its first `jitCallsToInline` calls
 decided together, up to `jitCallTargets` (`jitRegForwardSeen`,
-`jitLearned`'s `callSites` and `settling`), the window's function and
-receiver its own, its parameters the frame's arguments from its context
+`jitLearned`'s `callSites` and `settling`), the window's receiver its own,
+its function f only where a callee reads it, as a plain call's
+(`windowCallees`), its parameters the frame's arguments from its context
 (`mir`'s `windowForward`), which a function that forwards has there -- given
 at its entry from Go, or by its native caller -- so that prototype.js's
 `Class.create` constructors, as Octane's RayTrace makes every object, are

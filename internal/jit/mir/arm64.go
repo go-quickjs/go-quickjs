@@ -4230,8 +4230,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		m := 0
 		switch {
 		case site.Forward:
-			// As amd64's: f and its receiver; the arguments the frame's.
-			c.directOperand(v, v.Args[0], a64D, 0)
+			// As amd64's: f, where a callee reads it, and its receiver; the
+			// arguments the frame's.
+			if callees == nil {
+				c.directOperand(v, v.Args[0], a64D, 0)
+			}
 			c.directOperand(v, v.Args[2], a64D, vs)
 		case site.Via != 0:
 			// As amd64's: G its function, x its receiver.
