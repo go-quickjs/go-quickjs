@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"unsafe"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
@@ -325,3 +326,11 @@ func goCall(ctx *abi.Context) uintptr {
 	}
 	return ctx.GoResume
 }
+
+// WeakPool is a weak pointer to p, which a list of pools keeps (the VM's
+// arrayRooms) without keeping the pools or their code. It is made here,
+// past the layout lock's anchor ExpandGoCall, so that its instantiation
+// is laid out with this package's code: in the VM's it moved the generic
+// functions after it, which the lock does not hold, and in package abi,
+// linked before this one, the anchor.
+func WeakPool(p *abi.ObjectPool) weak.Pointer[abi.ObjectPool] { return weak.Make(p) }

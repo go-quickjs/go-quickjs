@@ -1192,6 +1192,10 @@ type ObjectPool struct {
 	Cells uint64
 }
 
+// IterReleased is the offset of a cursor's released byte from its
+// iteration state's done byte: the next (Encoding's IterDone).
+const IterReleased = 1
+
 // PoolSize is how many objects an ObjectPool is filled with at first, and
 // PoolCapacity how many it may hold. A pool that runs out has native code
 // leave, and every native caller's level with it (V8 allocates inline,
@@ -1337,8 +1341,8 @@ type Encoding struct {
 	// iteration, and the int at IterIdx the next element's index. Native
 	// code writes nothing there but that index; as it steps a cursor to
 	// its end, the done byte; and as a loop or a pattern closes a cursor,
-	// the byte at IterReleased, which lets the VM's next cursor over an
-	// array take an array's place (the VM's arrCursor).
+	// the byte after the done byte (IterReleased), which lets the VM's next
+	// cursor over an array take an array's place (the VM's arrCursor).
 	//
 	// A for...in's cursor has a nonzero byte at IterForIn, and its walk
 	// ForInState bytes past the state: the slice of the keys it hands out
@@ -1351,7 +1355,6 @@ type Encoding struct {
 	IterState                                   int32
 	ClassCursor                                 uint8
 	IterDone, IterArr, IterIdx                  int32
-	IterReleased                                int32
 	IterForIn                                   int32
 	ForInState, ForInKeys, ForInObj, ForInShape int32
 	ForInIndexKeys                              int32

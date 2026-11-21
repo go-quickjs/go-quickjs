@@ -9196,9 +9196,9 @@ func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 
 // iterRelease is amd64's, of the state at a64B. It uses a64C.
 func (c *a64Compiler) iterRelease() {
-	if c.enc.IterReleased != 0 {
+	if c.enc.IterState != 0 {
 		c.movImm(a64C, 1)
-		c.a.Store8(a64B, c.enc.IterReleased, a64C)
+		c.a.Store8(a64B, c.enc.IterDone+abi.IterReleased, a64C)
 	}
 }
 

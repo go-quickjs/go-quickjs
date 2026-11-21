@@ -5286,14 +5286,14 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 }
 
 // iterRelease marks the cursor closed whose iteration state is at scratchB
-// released (abi.Encoding's IterReleased), as the VM's iter_close does for
-// an array's: its loop or pattern reads it no more, and the next cursor
-// over an array takes its place. Another's mark nothing reads. It uses
-// scratchC.
+// released (abi.IterReleased, the byte past Encoding's IterDone), as the
+// VM's iter_close does for an array's: its loop or pattern reads it no
+// more, and the next cursor over an array takes its place. Another's mark
+// nothing reads. It uses scratchC.
 func (c *compiler) iterRelease() {
-	if c.enc.IterReleased != 0 {
+	if c.enc.IterState != 0 {
 		c.movImm(scratchC, 1)
-		c.a.Store8(scratchB, c.enc.IterReleased, scratchC)
+		c.a.Store8(scratchB, c.enc.IterDone+abi.IterReleased, scratchC)
 	}
 }
 

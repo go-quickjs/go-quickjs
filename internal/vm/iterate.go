@@ -55,7 +55,8 @@ type iterState struct {
 	done bool
 	// released marks an array's cursor whose loop or pattern has closed
 	// it (iter_close), which reads it no more: the next cursor over an
-	// array takes it (arrCursor).
+	// array takes it (arrCursor). It follows done, where native code's
+	// close writes it (abi.IterReleased).
 	released bool
 }
 
@@ -1311,11 +1312,6 @@ func (r *Runtime) iterStep(cursor Value) (Value, error) {
 // iterRest drains what is left of a cursor into a dense array, which is what a
 // pattern's rest element binds.
 func (r *Runtime) iterRest(cursor Value) (Value, error) {
-	if st := cursorOf(cursor); st != nil {
-		if v, ok := r.iterRestDense(st); ok {
-			return v, nil
-		}
-	}
 	out := newObject(r.proto.array, ClassArray)
 	for {
 		v, ok, err := r.iterNext(cursor)

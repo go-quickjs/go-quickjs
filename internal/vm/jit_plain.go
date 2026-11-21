@@ -277,28 +277,16 @@ func (r *Runtime) jitForOfPlain(ctx *abi.Context) bool {
 	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || !r.usesIntrinsicArrayIterator(o) {
 		return false
 	}
-	// The interpreter's cursor (arrCursor): the last one, where its loop or
-	// pattern closed it, natively too (mir's iterClosed).
-	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = arrCursor[struct{}](r, o)
-	return true
-}
-
-// jitRestPlain makes a destructuring's rest element (abi.GoCallRest) of
-// the cursor native code passed as iter_rest makes it, without a frame,
-// where that runs no script and cannot throw: of a cursor over an array
-// whose rest is all in its dense storage (iterRestDense). It writes the
-// array to the call's keep cell and reports whether it made it; anything
-// else it leaves to the call with its frame (jitRegIterMade).
-func (r *Runtime) jitRestPlain(ctx *abi.Context) bool {
-	st := cursorOf(jitGoArg(ctx, 0))
-	if st == nil || r.meter != nil {
+	// The interpreter's cursor (startForOf's arrCursor): the last one,
+	// where its loop or pattern closed it, natively too (mir's
+	// iterClosed). Of such an array, startForOf runs nothing and throws
+	// nothing.
+	c, err := r.startForOf(v)
+	if err != nil {
 		return false
 	}
-	v, ok := r.iterRestDense(st)
-	if ok {
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-	}
-	return ok
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = c
+	return true
 }
 
 // jitStepPlain makes a loop's step (abi.GoCallStep) of a cursor over an

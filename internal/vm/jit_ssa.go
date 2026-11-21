@@ -115,7 +115,6 @@ var jitEncoding = abi.Encoding{
 	IterState:          int32(unsafe.Offsetof(iterObject{}.st)),
 	ClassCursor:        uint8(ClassCursor),
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
-	IterReleased:       int32(unsafe.Offsetof(iterState{}.released)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
 	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
 	IterForIn:          int32(unsafe.Offsetof(iterState{}.forIn)),
@@ -5415,3 +5414,8 @@ func jitForgetHighSeen(r *Runtime) {
 		c.HighSeen = 0
 	}
 }
+
+// A cursor's released byte is the one past its done byte, where native
+// code's close writes it (abi.IterReleased).
+var _ [unsafe.Offsetof(iterState{}.released) - unsafe.Offsetof(iterState{}.done) - abi.IterReleased]struct{}
+var _ [abi.IterReleased - (unsafe.Offsetof(iterState{}.released) - unsafe.Offsetof(iterState{}.done))]struct{}
