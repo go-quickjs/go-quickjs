@@ -148,8 +148,8 @@ type tgen struct {
 
 type tjump struct {
 	at, label int
-	bc        bool // the offset is BC's, else SC's
 	ord       int  // a branch's order among those of SC (tgen.far)
+	bc        bool // the offset is BC's, else SC's
 }
 
 type tloop struct {
