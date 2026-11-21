@@ -12709,6 +12709,20 @@ func shiftOp(op ssa.Op) amd64.Shift {
 	return amd64.Shr
 }
 
+// spillOperand is the displacement from the context of x's spill slot,
+// where x is in one the context holds itself (abi.SpillSlots) and in no
+// register: what an instruction may read as a memory operand.
+func (c *compiler) spillOperand(x *ssa.Value) (int32, bool) {
+	if c.isLazy(x) {
+		return 0, false
+	}
+	l, ok := c.loc(x)
+	if !ok || l.reg >= 0 || l.spill < 0 || l.spill >= abi.SpillSlots {
+		return 0, false
+	}
+	return c.spillDisp(l.spill), true
+}
+
 // heapAccess is typed code's heap load or store (ssa's OpHeapLoad,
 // OpHeapStore): the byte address, its low bits cleared to the element's
 // size and sign-extended, compared unsigned with the heap's length, its
@@ -12725,10 +12739,21 @@ func (c *compiler) heapAccess(v *ssa.Value) {
 	if size > 1 {
 		c.a.OpImm(amd64.And, scratchA, -size, true)
 	}
+	// The length compared and the base added where they are: a register,
+	// or a spill slot of the context's own, read as a memory operand
+	// (core's memOperand).
 	n := len(v.Args)
-	c.a.Op(amd64.Cmp, scratchA, c.gpr(v.Args[n-1], scratchB), true)
+	if off, ok := c.spillOperand(v.Args[n-1]); ok {
+		c.a.CmpMem(scratchA, regCtx, off, true)
+	} else {
+		c.a.Op(amd64.Cmp, scratchA, c.gpr(v.Args[n-1], scratchB), true)
+	}
 	c.a.Jcc(amd64.CondAE, out)
-	c.a.Op(amd64.Add, scratchA, c.gpr(v.Args[n-2], scratchB), true)
+	if off, ok := c.spillOperand(v.Args[n-2]); ok {
+		c.a.AddMem(scratchA, regCtx, off)
+	} else {
+		c.a.Op(amd64.Add, scratchA, c.gpr(v.Args[n-2], scratchB), true)
+	}
 	if v.Op == ssa.OpHeapStore {
 		if float {
 			x := c.xmm(v.Args[1], xScratch0)

@@ -2400,6 +2400,26 @@ func (c *core) allocate() error {
 				}
 			}
 			r := roots[j]
+			if it.v.ID < nf && memOperand(it.v) {
+				// Only ever a memory operand: in its slot, with no register
+				// -- its phi's and its argument's the same, their spill
+				// class's, so that no edge moves it. Its accesses read it
+				// where it is, as cheaply as from a register, and the
+				// registers go to what is computed: given one, a heap's
+				// base and length had cost a small loop its budget's
+				// register, counted in memory at every back edge (asm_adler
+				// 12% slower than with the heap read from its cell at each
+				// access).
+				s, err := slot(it.start, it.v)
+				if err != nil {
+					return err
+				}
+				c.setLoc(it.v, loc{reg: -1, spill: s})
+				placed(k, -1, r)
+				spilled = append(spilled, it)
+				push(len(spilled) - 1)
+				continue
+			}
 			if takesOperand(it.v) {
 				// An operand whose interval ends here gives its register
 				// to the result: the operation reads its operands before
@@ -3144,6 +3164,20 @@ func i32Boxed(v *ssa.Value) *ssa.Value {
 		return v.Args[0].Args[0]
 	}
 	return nil
+}
+
+// memOperand reports whether v is only ever read as a memory operand: a
+// typed code's heap's base or length, or a phi of them, which the heap's
+// accesses compare and add where they are (amd64's heapAccess). Spilled,
+// it costs its accesses no load of their own.
+func memOperand(v *ssa.Value) bool {
+	switch v.Op {
+	case ssa.OpHeapBase, ssa.OpHeapLen:
+		return true
+	case ssa.OpPhi:
+		return v.Type == ssa.Ptr
+	}
+	return false
 }
 
 // exactF64 reports whether x, a float64, is an integer's conversion, which

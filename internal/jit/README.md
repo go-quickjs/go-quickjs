@@ -3532,9 +3532,15 @@ join's predecessors have different ones, the join loads them again rather
 than merge them by a phi (`heapMerge`): every one of them is the cell's,
 and a phi of them had been moved at every edge of a large function, slot
 to slot where they spilled. So a loop that calls nothing loads them once,
-before it, its header's phi of them trivial, and each access compares its
-address with a register and adds one, where it had loaded the cell's
-address and both of its words. Neither op exits, and a store stores no pointer: the marking
+before it, its header's phi of them trivial. They are only ever the
+accesses' operands, so they live in a spill slot from where they are made
+and take no register (mir's `memOperand`) -- a phi of them and its
+arguments one slot, their spill class's, which no edge moves -- and each
+access compares its address with the length and adds the base where they
+are, as memory operands (amd64's `spillOperand`; arm64 loads them), where
+it had loaded the cell's address and both of its words. Given registers,
+they had taken from a small loop the one its back-edge budget needed,
+which then counted in memory. Neither op exits, and a store stores no pointer: the marking
 rule holds with nothing of the barrier's. A module variable is its cell's
 number word (`OpCellNumLoad`, `OpCellNumStore` of the cell
 `OpUpvalueCell` gives): validation keeps anything but a number from the
