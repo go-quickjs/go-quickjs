@@ -320,12 +320,9 @@ func (r *Runtime) finishClosure(f *frame, tmpl *closure, o *Object, fd *funcData
 	arrow := tmpl.fn.Kind == bytecode.KindArrow
 
 	kind := ctorKindOf(tmpl.fn)
-	*fd = funcData{
-		closure:  child,
-		name:     tmpl.fn.Name,
-		length:   int32(tmpl.fn.Length),
-		ctorKind: kind,
-	}
+	// The function data is part of the fresh allocation too: its optional
+	// fields already have their empty values.
+	fd.closure, fd.name, fd.length, fd.ctorKind = child, tmpl.fn.Name, int32(tmpl.fn.Length), kind
 	// A function created inside a `with` body keeps the objects: the names
 	// in its own body resolve against them too, and the frame that pushed
 	// them is gone by the time it runs. What a direct eval declared in the

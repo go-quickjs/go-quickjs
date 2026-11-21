@@ -1062,7 +1062,9 @@ func newScriptFuncObject(proto *Object, class Class, upvalues int, arrow bool) (
 		fo = &scriptFuncObject{}
 		captured = make([]*upvalue, upvalues)
 	}
-	fo.Object = Object{shape: rootFor(class, proto), class: class, flags: objExtensible}
+	// Every variant is freshly allocated; its empty property storage is
+	// already zero, including while the collector marks.
+	fo.shape, fo.class, fo.flags = rootFor(class, proto), class, objExtensible
 	fo.embedExt(&fo.side)
 	fo.side.data = &fo.fn
 	return &fo.Object, &fo.fn, &fo.cl, captured, extra

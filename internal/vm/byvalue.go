@@ -88,7 +88,7 @@ func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure, caps []uint16
 		fo, upvalues, cells = &x.scriptFuncObject, x.captured[:], x.own[:]
 	}
 	if fo != nil {
-		fo.Object = Object{shape: rootFor(ClassFunction, proto), class: ClassFunction, flags: objExtensible}
+		fo.shape, fo.class, fo.flags = rootFor(ClassFunction, proto), ClassFunction, objExtensible
 		fo.embedExt(&fo.side)
 		fo.side.data = &fo.fn
 		o, fd, child = &fo.Object, &fo.fn, &fo.cl
@@ -133,12 +133,7 @@ func newClosureByValue[_ any](r *Runtime, f *frame, tmpl *closure, caps []uint16
 	}
 
 	kind := ctorKindOf(tmpl.fn)
-	*fd = funcData{
-		closure:  child,
-		name:     tmpl.fn.Name,
-		length:   int32(tmpl.fn.Length),
-		ctorKind: kind,
-	}
+	fd.closure, fd.name, fd.length, fd.ctorKind = child, tmpl.fn.Name, int32(tmpl.fn.Length), kind
 	// A function created inside a `with` body keeps the objects: the names
 	// in its own body resolve against them too, and the frame that pushed
 	// them is gone by the time it runs. What a direct eval declared in the
