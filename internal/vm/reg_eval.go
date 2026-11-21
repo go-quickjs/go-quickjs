@@ -132,6 +132,14 @@ func (r *Runtime) evalLinked(caller *frame, cl *closure) (Value, error) {
 
 // regWithPush is with_push.
 func (r *Runtime) regWithPush(f *frame, c *regCode, pc int, w bytecode.RInstr, regs *[1 << 16]Value) error {
+	if w.B() == bytecode.WithPushEvalScope {
+		// The body's scope for what a direct eval in it declares, inside
+		// the parameters' (the compiler's bodyEvalScope).
+		o := &Object{class: ClassObject, flags: objExtensible | objEvalVars}
+		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], o)
+		f.evalVars = o
+		return nil
+	}
 	o, err := r.withObject(regs[w.A()])
 	if err != nil {
 		return err

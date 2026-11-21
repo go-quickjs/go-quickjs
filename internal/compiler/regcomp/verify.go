@@ -330,7 +330,7 @@ func coldOK(rc *bytecode.RegCode, fn *bytecode.Function, pc int, w bytecode.RIns
 	case bytecode.RWithRead, bytecode.RWithWrite:
 		return reg(a) && reg(b) && nameOK(rc, fn, pc, w.C())
 	case bytecode.RWithPush:
-		return reg(a)
+		return reg(a) && b <= bytecode.WithPushEvalScope && w.C() == 0
 	case bytecode.RWithPop:
 		return true
 	case bytecode.RImportMeta, bytecode.RNewDispose:

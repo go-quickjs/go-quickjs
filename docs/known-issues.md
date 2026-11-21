@@ -952,21 +952,23 @@ Paths are relative to this repository; `go-intl:` paths are in
   Node 1; `var f = function n(g = () => n) { var n = 2; return g() }` threw
   a ReferenceError, the var hiding the function's own name from the list's
   closure.
-- **Status:** fixed for declared vars. Where the list has a closure or a
-  direct eval, a var of the body that shadows one of its bindings has a
-  slot of its own (`bodyVar`), copied from the parameter at the end of the
-  prologue (regcomp's `Record.ParamCopies`); a var of the function's own
-  name starts undefined. Still open: a var a direct eval in the body
-  declares is the parameter's binding,
+- **Status:** fixed. Where the list has a closure or a direct eval, a var
+  of the body that shadows one of its bindings has a slot of its own
+  (`bodyVar`), copied from the parameter at the end of the prologue
+  (regcomp's `Record`'s `ParamCopies`); a var of the function's own name
+  starts undefined (`b9ece15f`). A var that a direct eval in the body
+  declares had been the parameter's binding too,
   `function f(x, g = () => x) { eval("var x = 6"); return g() }` giving 6,
-  Node 1. The eval's var belongs to the body's environment, which until
-  then has no binding of the name, so a fix needs the body's references to
-  look for the eval's variables ahead of the parameter's slot, as for a
-  name the function does not bind. test262 caught neither: its cases of the
-  separate environment (`scope-paramsbody-var-open`, `-close`, the
-  `scope-param-*` cases with an eval in a default) never redeclare a
-  parameter.
-  - Test: `TestBodyVarsShadowParameters`.
+  Node 1: such a body now has a scope of its own for what the eval
+  declares (`bodyEvalScope`), pushed at the end of the prologue
+  (`with_push`'s mark), past the parameters' -- the body's references to
+  the list's bindings look there first, as for a name the function does not
+  bind, and the list's closures, made before it, never do. test262 caught
+  neither: its cases of the separate environment (`scope-paramsbody-var-open`,
+  `-close`, the `scope-param-*` cases with an eval in a default) never
+  redeclare a parameter.
+  - Test: `TestBodyVarsShadowParameters`, `TestEvalVarsBesideParameters`,
+    `TestDebuggerBodyEvalScope`.
 
 ## P3: small divergences
 

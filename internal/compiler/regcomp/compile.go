@@ -1016,6 +1016,11 @@ func (g *gen) body() {
 	for _, cp := range g.rec.ParamCopies() {
 		g.copySlot(cp[0], cp[1])
 	}
+	if g.rec.BodyScope() {
+		// The body's scope for what a direct eval in it declares, past the
+		// parameters' (with_push's mark, bytecode.RWithPush).
+		g.cold(bytecode.RWithPush, 0, bytecode.WithPushEvalScope, 0)
+	}
 	release()
 	g.top = g.topAfterBindings()
 	if g.fn.Generator {

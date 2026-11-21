@@ -204,6 +204,9 @@ type recordRare struct {
 	// arguments holds the walk's notes of possible arguments aliases, for
 	// a function with a candidate declaration (NoteArgumentsAliases).
 	arguments *argumentsNotes
+	// bodyScope says the body has a scope of its own for what a direct
+	// eval in it declares (the walk's bodyEvalScope).
+	bodyScope bool
 }
 
 // rareOf is r's rare part, made on its first use.
@@ -240,6 +243,22 @@ func (r *Record) NoteParamCopy(from, to uint32) {
 	}
 	x := r.rareOf()
 	x.paramCopies = append(x.paramCopies, [2]uint32{from, to})
+}
+
+// BodyScope says the body has a scope of its own for what a direct eval
+// in it declares, pushed at the end of the prologue (recordRare's
+// bodyScope).
+func (r *Record) BodyScope() bool {
+	return r.rare != nil && r.rare.bodyScope
+}
+
+// NoteBodyScope records that the body has a scope of its own for what a
+// direct eval in it declares (BodyScope).
+func (r *Record) NoteBodyScope() {
+	if r == nil {
+		return
+	}
+	r.rareOf().bodyScope = true
 }
 
 // NoteSelf records slot as the function's own name's binding that a

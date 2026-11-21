@@ -160,8 +160,8 @@ func (c *compiler) ownBindings(seen map[string]bool) []bytecode.EvalBinding {
 			FuncSelf:  l.kind == bindFuncSelf,
 			Mutable:   l.kind != bindConst && l.kind != bindFuncSelf,
 			TDZ:       !l.initialized,
-			VarScoped: l.varScoped(),
-			Lexical:   l.lexical(),
+			VarScoped: l.varScoped() && !c.outsideBodyScope(l),
+			Lexical:   l.lexical() && !c.outsideBodyScope(l),
 			WithDepth: l.withDepth,
 		})
 	}

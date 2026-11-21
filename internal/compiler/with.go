@@ -76,7 +76,12 @@ func (c *compiler) withLimit(name string) int {
 		return 0
 	case name == c.selfName:
 		// A named function expression's own name is a binding of the function,
-		// which is inside every `with` its body is inside.
+		// which is inside every `with` its body is inside -- but outside the
+		// body's own scope for what a direct eval in it declares, where one
+		// is (bodyEvalScope), unless a var of the body's is the name.
+		if l, ok := c.resolveLocal(name); c.bodyScope && (!ok || c.inParamScope(l)) {
+			return 1
+		}
 		return 0
 	}
 	if l, ok := c.resolveLocal(name); ok {

@@ -201,6 +201,9 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// arguments object with it: a var of the body of the same name is a
 	// binding of its own where the list has a closure (bodyVar).
 	c.paramScope = len(c.locals)
+	if c.fn.HasDirectEval && facts.bodyEval && c.paramsClose(fn) {
+		c.bodyEvalScope()
+	}
 
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.

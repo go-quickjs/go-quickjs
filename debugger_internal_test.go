@@ -435,6 +435,73 @@ outer(10);
 	}
 }
 
+// TestDebuggerBodyEvalScope pins a pause in a function whose parameter
+// list has a closure, after a direct eval in its body declared a var of a
+// parameter's name (KI-79): code evaluated there sees the eval's var, the
+// list's closure the parameter, and the eval's var is in the with scope
+// the pause lists for the body's eval, ahead of the parameters' own.
+func TestDebuggerBodyEvalScope(t *testing.T) {
+	t.Parallel()
+	r, h := newDebugged(t)
+	const src = `function f(x, g = () => x) {
+  eval("var x = 6; var y = 2");
+  debugger;
+  return g() + "," + x + "," + y;
+}
+f(1);
+`
+	var got []string
+	h.then = func(p *vm.DebugPause) vm.StepAction {
+		f := p.Frames[0]
+		var kinds []string
+		for _, s := range f.Scopes() {
+			switch s.Kind {
+			case vm.ScopeLocal:
+				kinds = append(kinds, "local["+h.scope(s)+"]")
+			case vm.ScopeWith:
+				// The eval's variables, which no script enumerates.
+				var names []string
+				for _, k := range []string{"x", "y"} {
+					v, err := r.rt.GetProp(vm.Obj(s.Object), r.rt.Intern(k))
+					if err != nil {
+						t.Fatal(err)
+					}
+					names = append(names, k+"="+h.show(v))
+				}
+				kinds = append(kinds, "with["+strings.Join(names, " ")+"]")
+			case vm.ScopeClosure:
+				kinds = append(kinds, "closure["+h.scope(s)+"]")
+			case vm.ScopeScript:
+				kinds = append(kinds, "script")
+			case vm.ScopeGlobal:
+				kinds = append(kinds, "global")
+			}
+		}
+		got = append(got, strings.Join(kinds, " "))
+		for _, e := range []string{"x", "g()", "y", "x = 7, x", "g()"} {
+			v, err := f.Evaluate(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, e+" = "+h.show(v))
+		}
+		return vm.Continue
+	}
+	v, err := r.EvalFile("b.js", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, "f = "+v.String())
+	// The locals are the frame's slots, the parameter's x among them; the
+	// eval's x is the body's scope's, the first with scope, which code
+	// evaluated in the pause finds first, as the body's code does.
+	want := "local[arguments=[object Arguments] g=() => x x=1] with[x=6 y=2] with[x=undefined y=undefined] global" +
+		" | x = 6 | g() = 1 | y = 2 | x = 7, x = 7 | g() = 1 | f = 1,7,2"
+	if s := strings.Join(got, " | "); s != want {
+		t.Errorf("got:\n%s\nwant:\n%s", s, want)
+	}
+}
+
 // TestDebuggerEvaluate pins code evaluated in a pause: an exception it
 // throws is returned rather than stopping the code, a breakpoint in a
 // function it calls does not stop it, and a frame is of no use once the

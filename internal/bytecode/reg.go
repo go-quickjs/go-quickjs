@@ -43,6 +43,10 @@ type ROp uint8
 // (RAdd).
 const RAddAppend uint8 = 1
 
+// WithPushEvalScope is with_push's B for the body's scope of its own for
+// what a direct eval in it declares (RWithPush).
+const WithPushEvalScope = 1
+
 // RArithFreshB and RArithFreshC mark, in X of an RAdd, RSub or RMul, an
 // operand register that holds a result of arithmetic nothing else has,
 // made just before (regcomp's fresh): an operator of two BigInts may give
@@ -658,7 +662,11 @@ const (
 	// or undefined. RWithRead, R[A] = Names[C] of the object R[B], and
 	// RWithWrite stores R[A] there: a reference's read and store past
 	// its with_resolve. RWithPush puts the object of R[A] on the
-	// frame's with objects (ToObject), and RWithPop takes it off.
+	// frame's with objects (ToObject), and RWithPop takes it off; with
+	// B WithPushEvalScope, it puts a scope of its own for what a direct
+	// eval in the body declares there instead, the frame's eval's
+	// variables from then on, A unused: the body's variable environment
+	// of a function whose parameter list has a closure.
 	RWithGet
 	RWithGetThis
 	RWithDelete

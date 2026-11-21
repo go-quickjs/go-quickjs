@@ -172,10 +172,21 @@ func (g *generator) rareOf() *genRare {
 }
 
 // frameRare gives f the new.target, this binding, eval vars and with
-// scopes of g.
+// scopes of g. The eval's variables are the innermost of the with
+// scopes that hold them: the body's own scope for them, where its
+// prologue pushed one past the parameters' (with_push's mark), which a
+// suspension keeps among the with scopes.
 func (g *generator) frameRare(f *frame) {
 	if x := g.rare; x != nil {
 		f.newTarget, f.thisRef, f.evalVars, f.withScopes = x.newTarget, x.thisRef, x.evalVars, x.withScopes
+		if f.evalVars != nil {
+			for i := len(f.withScopes) - 1; i >= 0; i-- {
+				if o := f.withScopes[i]; o.flags&objEvalVars != 0 {
+					f.evalVars = o
+					break
+				}
+			}
+		}
 	} else {
 		f.newTarget, f.thisRef, f.evalVars, f.withScopes = Undefined, nil, nil, nil
 	}

@@ -139,6 +139,7 @@ func TestScanFunctionMatchesTheWalks(t *testing.T) {
 				usesArguments:     referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params),
 				argumentsInParams: referencesArgumentsInParams(fn.Params),
 				directEval:        containsDirectEval(fn.Body) || containsDirectEvalInParams(fn.Params),
+				bodyEval:          containsDirectEval(fn.Body),
 			}
 			n := thisPropertyCount(fn.Body)
 			// usesNewTarget has no walk of its own (TestScanFunctionNewTarget).

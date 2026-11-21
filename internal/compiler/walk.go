@@ -65,6 +65,9 @@ type argumentsScanner struct {
 //   - directEval: whether it calls eval by that name outside any function
 //     written in it, whose frame then needs room for the bindings the
 //     evaluated code may declare.
+//   - bodyEval: whether one is in the body, not only in the parameters,
+//     whose body then may have a scope of its own for what it declares
+//     (the compiler's bodyEvalScope).
 //   - thisProps: the properties the body assigns to this by name, which a
 //     constructor's object is made with room for.
 //
@@ -74,6 +77,9 @@ type argumentsScanner struct {
 // CodeLoad, which compiles what it loads.
 type functionFacts struct {
 	usesThis, usesArguments, argumentsInParams, directEval bool
+	// bodyEval is whether such an eval is in the body, not only in the
+	// parameter list.
+	bodyEval bool
 	// usesNewTarget is whether new.target is read in the body or an arrow
 	// in it, or may be, by an eval or a super() call.
 	usesNewTarget bool
@@ -317,6 +323,7 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		if f := &w.facts; w.scanning && w.inArrow == 0 {
 			if id, ok := n.Callee.(*ast.Ident); ok && id.Name == "eval" {
 				f.directEval = true
+				f.bodyEval = f.bodyEval || !w.inParams
 			}
 		}
 		if w.seekDirectEval {

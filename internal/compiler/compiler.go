@@ -324,6 +324,9 @@ type compiler struct {
 	// paramClosures is whether the parameter list has a closure or a
 	// direct eval (paramsClose): 0 not yet asked, 1 none, 2 one.
 	paramClosures int8
+	// bodyScope says the body has a scope of its own for what a direct eval
+	// in it declares, apart from the parameter list's (bodyEvalScope).
+	bodyScope bool
 
 	// inFieldInit marks the initializer of a class field, which is a function
 	// of its own even though it is compiled into the constructor.
@@ -1051,6 +1054,29 @@ func (c *compiler) paramsClose(fn *ast.FuncLit) bool {
 		}
 	}
 	return c.paramClosures == 2
+}
+
+// bodyEvalScope gives the body of a function whose parameter list has a
+// closure, and whose body has a direct eval, a scope of its own for what
+// the eval declares: the body's variable environment, which the
+// specification makes apart from the parameters' (FunctionDeclaration-
+// Instantiation, step 28). A var the eval declares is a binding there,
+// never the parameter's of its name, which a closure of the list keeps
+// seeing; the body's references to the list's bindings look there first,
+// as for a name the function does not bind, and the body's own bindings,
+// declared inside it, do not. The register form pushes the scope at the
+// end of the prologue (with_push's mark, regcomp's Record's BodyScope).
+func (c *compiler) bodyEvalScope() {
+	c.withDepth++
+	c.bodyScope = true
+	c.reg.NoteBodyScope()
+}
+
+// outsideBodyScope reports whether l is a binding of the parameter list's
+// that a direct eval in the body sees from beyond the body's scope
+// (bodyEvalScope): no var of the eval's is it, nor does it stop one.
+func (c *compiler) outsideBodyScope(l *localVar) bool {
+	return c.bodyScope && c.inParamScope(l)
 }
 
 // bodyVar gives a var of the body named as l, a binding of the parameter

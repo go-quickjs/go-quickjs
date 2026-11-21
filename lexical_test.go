@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -517,6 +518,75 @@ func TestBodyVarsShadowParameters(t *testing.T) {
 	}
 	if v, err := rt.Eval(`r`); err != nil || v.String() != "1,3" {
 		t.Errorf("async: %v, %v; want 1,3", v, err)
+	}
+}
+
+// TestEvalVarsBesideParameters pins KI-79's second part: what a direct eval
+// in the body declares, in a function whose parameter list has a closure,
+// belongs to the body's own variable environment (FunctionDeclaration-
+// Instantiation, step 28; EvalDeclarationInstantiation), so a closure of
+// the list keeps seeing the parameter. A var of the eval's of a parameter's
+// name starts undefined there and shadows the parameter for the body and
+// later evals; one of a name the body declares is the body's. Node's
+// answers, every one; with the JIT, which compiles none of these functions
+// natively, the same.
+func TestEvalVarsBesideParameters(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ src, want string }{
+		{`function f(x, g = () => x) { eval("var x = 6"); return g() + "," + x } f(1)`, "1,6"},
+		{`function f(x, g = () => x) { eval("var y = 2"); return y + "," + eval("y") + "," + g() } f(1)`, "2,2,1"},
+		{`function f(x, g = () => x) { var x; eval("var x = 6"); return g() + "," + x } f(1)`, "1,6"},
+		{`function f(x, g = () => x) { x = 5; eval("var x = 6"); return g() + "," + x } f(1)`, "5,6"},
+		{`function f(x, g = () => x) { eval("var x"); return g() + "," + x } f(1)`, "1,undefined"},
+		{`function f(x, g = () => x) { var r = x; eval("var x = 6"); x = 7; return r + "," + g() + "," + x } f(1)`, "1,1,7"},
+		{`function f(x, g = () => x) { eval("var x = 6"); eval("x = 8"); return g() + "," + x + "," + eval("x") } f(1)`, "1,8,8"},
+		{`function f(a, g = () => arguments) { eval("var arguments = 5"); return typeof g() + "," + arguments } f(1)`, "object,5"},
+		{`function f(a, g = () => arguments) { eval("var b = arguments[0]"); return b + "," + typeof g() } f(4)`, "4,object"},
+		{`(function () { "use strict"; function f(x, g = () => x) { eval("var x = 6"); return g() + "," + x } return f(1) })()`, "1,1"},
+		{`function f(x, g = () => x, h = eval("var z = 3")) { eval("var x = 6"); return g() + "," + x + "," + z } f(1)`, "1,6,3"},
+		{`function f(x, g = eval("() => x")) { eval("var x = 6"); return g() + "," + x } f(1)`, "1,6"},
+		{`function* f(x, g = () => x) { eval("var x = 6"); yield g() + "," + x; x = 7; yield g() + "," + x } var it = f(1); it.next().value + ";" + it.next().value`, "1,6;1,7"},
+		{`var f = (x, g = () => x) => { eval("var x = 6"); return g() + "," + x }; f(1)`, "1,6"},
+		{`var o = { m(x, g = () => x) { eval("var x = 6"); return g() + "," + x } }; o.m(1)`, "1,6"},
+		{`function f(x, g = () => x) { eval("var x = 6"); var h = function () { return x }; return g() + "," + h() } f(1)`, "1,6"},
+		{`function f(x, g = () => x) { var h = () => x; eval("var x = 6"); return h() + "," + g() } f(1)`, "6,1"},
+		{`function f(x, g = () => x) { eval("var x = 6"); var a = x; delete x; return a + "," + x + "," + g() } f(1)`, "6,1,1"},
+		{`function f(x, g = () => x) { eval("function x() {}"); return typeof g() + "," + typeof x } f(1)`, "number,function"},
+		{`function f(x, g = () => x) { eval("eval('var x = 6')"); return g() + "," + x } f(1)`, "1,6"},
+		{`var f = function n(g = () => n) { eval("var n = 2"); return typeof g() + "," + n }; f()`, "function,2"},
+		{`function f(x) { eval("var x = 6"); return x + "," + arguments[0] } f(1)`, "6,6"},
+		{`function f({x}, g = () => x) { eval("var x = 6"); return g() + "," + x } f({x: 1})`, "1,6"},
+		{`function f([x], g = () => x) { eval("var x = 6"); return g() + "," + x } f([1])`, "1,6"},
+		{`function f(g = () => r, ...r) { eval("var r = 6"); return g().length + "," + r } f(undefined, 1, 2)`, "2,6"},
+		{`function f(x, g = () => x) { with ({}) { eval("var x = 6") } return g() + "," + x } f(1)`, "1,6"},
+		{`function f(x, g = () => x) { with ({x: 0}) { eval("var x = 6") } return g() + "," + x } f(1)`, "1,undefined"},
+		{`function f(x, g = () => x) { { let x = 3; try { eval("var x = 6") } catch (e) { return e.name } } } f(1)`, "SyntaxError"},
+		{`function f(x, g = () => x) { var h = () => eval("var x = 6"); h(); return g() + "," + x } f(1)`, "1,1"},
+		{`function f(x, g = () => x) { eval("var x = 6"); return typeof x + "," + (function () { return typeof x })() } f(1)`, "number,number"},
+		{`function f(x, y = 2, g = () => x + y) { eval("var x = 6; var y = 7"); return g() + "," + (x + y) } f(1)`, "3,13"},
+		{`function f(x, g = () => x) { if (false) eval("var x = 6"); return g() + "," + x } f(1)`, "1,1"},
+		{`function f(x, g = () => x) { for (var i = 0; i < 2; i++) eval("var x = " + i); return g() + "," + x } f(1)`, "1,1"},
+	}
+	for _, jit := range []bool{false, true} {
+		var opts []quickjs.Option
+		if jit {
+			opts = append(opts, quickjs.WithJIT())
+		}
+		rt := quickjs.New(opts...)
+		for _, tc := range cases {
+			src := tc.src
+			if jit {
+				// Run often enough for the JIT to see the functions hot.
+				src = "var r; for (var k = 0; k < 30; k++) r = (0, eval)(" + strconv.Quote(tc.src) + "); r"
+			}
+			v, err := rt.Eval(src)
+			if err != nil {
+				t.Errorf("jit=%v: %s: %v", jit, tc.src, err)
+			} else if got := v.String(); got != tc.want {
+				t.Errorf("jit=%v: %s = %q, want %q", jit, tc.src, got, tc.want)
+			}
+		}
+		rt.Close()
 	}
 }
 
