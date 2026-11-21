@@ -672,6 +672,12 @@ const (
 	// nothing reads it once, before the loop. They never exit.
 	OpHeapBase // -> ptr
 	OpHeapLen  // -> ptr
+	// OpTableCallee stores in the context's CallTable the address of the
+	// abi.TableEntry its operand indexes among those at Const's address
+	// (CallSite's Table): the function of typed code's call through a
+	// function table, right after it, whose checks read it. The index is
+	// masked to the table's length. It never exits.
+	OpTableCallee // i32 -> none
 )
 
 // OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
@@ -720,7 +726,7 @@ var opNames = [...]string{
 	OpCursorCell: "cursorcell", OpHeapLoad: "heapload", OpHeapStore: "heapstore",
 	OpDivI32: "divi", OpDivU32: "divu", OpRemI32: "remi", OpRemU32: "remu",
 	OpCellNumLoad: "cellnum", OpCellNumStore: "cellnumstore", OpNumberF64: "numberf", OpForInDone: "forindone",
-	OpKeyIs: "keyis", OpHeapBase: "heapbase", OpHeapLen: "heaplen",
+	OpKeyIs: "keyis", OpHeapBase: "heapbase", OpHeapLen: "heaplen", OpTableCallee: "tablecallee",
 }
 
 func (o Op) String() string {

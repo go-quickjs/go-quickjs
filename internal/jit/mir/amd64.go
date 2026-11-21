@@ -1857,7 +1857,11 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		// learns there what to call natively, and a call Go made in its
 		// place had AWFY's List run a tenth slower.
 		miss := c.a.NewLabel()
-		c.genericCheck(v, site, len(sites), checked, miss)
+		if site.Table != 0 {
+			c.tableCheck(v, site, len(sites), checked, miss)
+		} else {
+			c.genericCheck(v, site, len(sites), checked, miss)
+		}
 		c.a.Bind(miss)
 		c.a.Jmp(goCall())
 	}
@@ -5988,6 +5992,49 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	if site.Window != 0 {
 		// And the arguments register code's call writes past the callee's
 		// window, which may be more than its registers (windowSetup).
+		c.a.Load(scratchA, regCtx, abi.OffStackTop)
+		c.a.Load(scratchA, scratchA, 0)
+		c.a.OpImm(amd64.Add, scratchA, int32(2+site.Argc), true)
+		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		c.a.Jcc(amd64.CondA, miss)
+	}
+	c.a.StoreImm(regCtx, abi.OffCallTarget, int32(target))
+	c.a.Jmp(checked)
+}
+
+// tableCheck is genericCheck of typed code's call through a function
+// table (ssa.CallSite's Table): the function's entry, which the call's
+// index found (OpTableCallee, the context's CallTable), its callee the
+// function in scratchC -- the table's element at that index -- and its
+// closure, captured bindings and link the ones the call gives its callee,
+// the link's code entered by the call's generic path. An entry with no
+// link, or one a generic call does not make, is Go's call.
+func (c *compiler) tableCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss amd64.Label) {
+	c.a.Store(regCtx, abi.OffCallCallee, scratchC)
+	c.a.Load(scratchB, regCtx, abi.OffCallTable)
+	c.a.CmpMem(scratchC, scratchB, abi.OffTableCallee, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.Load(scratchA, scratchB, abi.OffTableLink)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.Store(regCtx, abi.OffCallLink, scratchA)
+	c.a.Load(scratchA, scratchA, c.enc.LinkFlags)
+	c.a.OpImm(amd64.And, scratchA, abi.LinkNotGeneric|abi.LinkArrow|abi.LinkCoerce, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.Load(scratchA, scratchB, abi.OffTableClosure)
+	c.a.Store(regCtx, abi.OffCallClosure, scratchA)
+	c.a.Load(scratchA, scratchB, abi.OffTableUpvalues)
+	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
+	// Room in the VM's stack, as genericCheck's.
+	c.a.Load(scratchA, regCtx, abi.OffStackTop)
+	c.a.Load(scratchA, scratchA, 0)
+	c.a.Load(scratchC, regCtx, abi.OffCallLink)
+	c.a.Load(scratchB, scratchC, c.enc.LinkFrame)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, regCtx, abi.OffStackEnd)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	c.a.Jcc(amd64.CondA, miss)
+	if site.Window != 0 {
 		c.a.Load(scratchA, regCtx, abi.OffStackTop)
 		c.a.Load(scratchA, scratchA, 0)
 		c.a.OpImm(amd64.Add, scratchA, int32(2+site.Argc), true)
@@ -11280,6 +11327,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpHeapLoad, ssa.OpHeapStore:
 		c.heapAccess(v)
+	case ssa.OpTableCallee:
+		// The entry's address, for the call right after it (tableCheck).
+		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
+		c.a.ShiftImm(amd64.Shl, scratchA, abi.TableEntryShift, true)
+		c.movImm(scratchB, v.Const.Bits)
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		c.a.Store(regCtx, abi.OffCallTable, scratchA)
 	case ssa.OpHeapBase, ssa.OpHeapLen:
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)

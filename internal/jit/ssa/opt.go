@@ -1325,7 +1325,7 @@ func removeDead(f *Func) bool {
 			// A Math.random() takes its number from the cache whether or
 			// not the number is used, as the interpreter's does: both
 			// take from the one cache, in the same order.
-			if v.Op.isGuard() || v.Op == OpFreeze || v.Op == OpRandomF64 || v.Op == OpLoopMark || v.Op == OpHeapStore || v.Op == OpCellNumStore || v.Op == OpForInDone {
+			if v.Op.isGuard() || v.Op == OpFreeze || v.Op == OpRandomF64 || v.Op == OpLoopMark || v.Op == OpHeapStore || v.Op == OpTableCallee || v.Op == OpCellNumStore || v.Op == OpForInDone {
 				mark(v)
 			}
 		}

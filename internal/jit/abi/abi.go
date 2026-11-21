@@ -600,6 +600,10 @@ type Context struct {
 	// where Go finds its callee (CallState's Callees). Native code never
 	// reads it.
 	CallLast uintptr
+	// CallTable is the TableEntry of the function a call through a
+	// function table of typed code calls (ssa's OpTableCallee), which the
+	// call's checks read (ssa.CallSite's Table).
+	CallTable uintptr
 }
 
 // SpillAt is the address of spill slot n: in Spill, or past it in
@@ -1114,6 +1118,7 @@ var (
 	OffCells         = int32(unsafe.Offsetof(Context{}.Cells))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
+	OffCallTable     = int32(unsafe.Offsetof(Context{}.CallTable))
 	OffCallThis      = int32(unsafe.Offsetof(Context{}.CallThis))
 	OffHints         = int32(unsafe.Offsetof(Context{}.Hints))
 	OffMega          = int32(unsafe.Offsetof(Context{}.Mega))
@@ -1828,6 +1833,29 @@ const (
 type HeapCell struct {
 	Base, Len uintptr
 }
+
+// TableEntry is a function of a function table of typed code, as a call
+// through the table calls it natively (ssa.CallSite's Table): the
+// function object, the closure whose code the call enters -- the
+// function's typed code's -- its captured bindings' first cell, and the
+// link of that code (Encoding's Link fields). Native code finds the entry
+// by the call's index into the table, which validation masks to the
+// table's length, rather than by comparing the function with each.
+type TableEntry struct {
+	Callee, Closure, Upvalues, Link uintptr
+}
+
+// The offsets of TableEntry's fields, and its size's log2.
+const (
+	OffTableCallee   = int32(unsafe.Offsetof(TableEntry{}.Callee))
+	OffTableClosure  = int32(unsafe.Offsetof(TableEntry{}.Closure))
+	OffTableUpvalues = int32(unsafe.Offsetof(TableEntry{}.Upvalues))
+	OffTableLink     = int32(unsafe.Offsetof(TableEntry{}.Link))
+	TableEntryShift  = 5
+)
+
+var _ [1<<TableEntryShift - unsafe.Sizeof(TableEntry{})]struct{}
+var _ [unsafe.Sizeof(TableEntry{}) - 1<<TableEntryShift]struct{}
 
 // The offsets of HeapCell's fields.
 const (

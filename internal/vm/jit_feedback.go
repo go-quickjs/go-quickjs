@@ -1094,6 +1094,9 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 			// which each run makes anew.
 			sites[0].Generic = true
 			sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(f.fb.cl.env)), uintptr(unsafe.Pointer(f.fb.cl.realm))
+			// Typed code's call through a function table: any of its
+			// functions by the call's index (regTableEntries).
+			sites[0].Table, sites[0].TableLen = f.regTableEntries(pc, w, argc)
 		}
 		return sites
 	}

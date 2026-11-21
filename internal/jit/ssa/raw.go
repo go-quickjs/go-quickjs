@@ -374,6 +374,42 @@ func (b *builder) staleHeaps(blk *Block) {
 	}
 }
 
+// tableRead records the function in, a function table's element, read
+// (ArrayRead's Dest) at the index raw slot in.Key-1 holds -- boxed for the
+// read by RawIBox, so its box's int32: a call of it finds its function by
+// that index (tableCall).
+func (b *builder) tableRead(blk *Block, in ir.Instruction) {
+	slot := int(in.Key) - 1
+	if b.cur != b.root {
+		slot += b.cur.base
+	}
+	k := b.read(slot, blk)
+	if k.Op != OpBoxF64 || k.Args[0].Op != OpI32ToF64 {
+		return
+	}
+	if b.tableIdx == nil {
+		b.tableIdx = map[*Value]*Value{}
+	}
+	b.tableIdx[b.read(in.Dest, blk)] = k.Args[0].Args[0]
+}
+
+// tableCall is calls, a call through a function table (CallSite's Table),
+// of function fn: the entry of the function it calls found by the index
+// fn was read at, for the call's checks (OpTableCallee) -- or, where the
+// build does not know that index, calls without the table, the call
+// checking its functions one by one.
+func (b *builder) tableCall(blk *Block, calls []*CallSite, fn *Value) []*CallSite {
+	idx := b.tableIdx[fn]
+	if idx == nil {
+		c := *calls[0]
+		c.Table, c.TableLen = 0, 0
+		return append([]*CallSite{&c}, calls[1:]...)
+	}
+	v := b.f.newValue(blk, OpTableCallee, None, idx)
+	v.Const = ir.Value{Bits: uint64(calls[0].Table)}
+	return calls
+}
+
 // typedInline reports whether site's callee may be inlined in the frame
 // being translated, as far as typed code (ir.Program's Kinds) goes:
 // ordinary code as anywhere; typed code in typed code, by the ordinary

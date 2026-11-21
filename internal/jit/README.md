@@ -3437,7 +3437,19 @@ from the first compile (`regTableTargets`), each checked by its object as
 a learned target is: validation fixes the table, and its functions are
 linked with the caller. Learned a call of Go at a time, each a compile
 again, the micro-benchmarks' calls through a table of four had been Go's
-for most of a run.
+for most of a run. A table of more functions than a call checks
+(`jitCallTargets`) is called by index (`ssa.CallSite`'s `Table`,
+`regTableEntries`): an `abi.TableEntry` for each of its functions -- the
+function object, its twin, the twin's captured bindings and link -- and
+the call's masked index, which the lowering names on the table's read
+(`ArrayRead`'s Key) and the build finds by the function's value
+(`tableRead`), has `OpTableCallee` put the entry's address in the
+context's `CallTable` right before the call. Past its first functions'
+checks, the call's generic path takes the closure and the link from the
+entry (mir's `tableCheck`) rather than from the function's hint, checking
+that the entry holds the call's function; an entry with no link is Go's
+call. Checked one by one, a table's functions past the fourth had each
+been a call of Go.
 
 **The lowering** (`compile.LowerTyped`, beside `LowerReg`). A register is a
 slot, as `LowerReg` has it, and the ordinary operations typed code holds

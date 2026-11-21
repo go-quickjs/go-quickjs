@@ -381,7 +381,9 @@ func (l *typedLowering) lowerTyped(pc int) string {
 		raw(ir.RawIAnd, m, slot(b), imm(int32(rc.Asm[c].Len-1)))
 		raw(ir.RawIBox, k, slot(m), unaryNone)
 		l.emit(ir.Instruction{Op: ir.UpvalueRead, Dest: t, Key: uint32(c)}, false)
-		l.emit(ir.Instruction{Op: ir.ArrayRead, Left: slot(t), Right: slot(k), Dest: a}, false)
+		// Key names the masked index's raw slot, plus one: what a call of
+		// the element finds its function by (ssa's CallSite's Table).
+		l.emit(ir.Instruction{Op: ir.ArrayRead, Left: slot(t), Right: slot(k), Dest: a, Key: uint32(m) + 1}, false)
 	default:
 		return "typed operation " + rc.OpName(op)
 	}

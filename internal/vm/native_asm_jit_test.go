@@ -257,6 +257,98 @@ var tableCalls = TableCalls(globalThis, {}, new ArrayBuffer(65536));
 	}
 }
 
+// TestAsmJITTableOfEight calls through a function table of eight, more
+// than a call checks one by one (jitCallTargets), from code compiled at
+// the link and run under stress and marking: every call is native, found
+// by the call's index into the table (ssa.CallSite's Table), none Go's --
+// the table's last four had each been a call of Go -- and the sum exact.
+func TestAsmJITTableOfEight(t *testing.T) {
+	const src = `
+function TableEight(stdlib, foreign, heap) {
+    "use asm";
+    var imul = stdlib.Math.imul;
+    function f0(a, b) { a = a | 0; b = b | 0; return (a + b) | 0; }
+    function f1(a, b) { a = a | 0; b = b | 0; return (a - b) | 0; }
+    function f2(a, b) { a = a | 0; b = b | 0; return (a ^ b) | 0; }
+    function f3(a, b) { a = a | 0; b = b | 0; return imul(a, b) | 0; }
+    function f4(a, b) { a = a | 0; b = b | 0; return (a | b) | 0; }
+    function f5(a, b) { a = a | 0; b = b | 0; return (a & b) | 0; }
+    function f6(a, b) { a = a | 0; b = b | 0; return (a + imul(b, 3)) | 0; }
+    function f7(a, b) { a = a | 0; b = b | 0; return (a - (b << 1)) | 0; }
+    function run(n) {
+        n = n | 0;
+        var i = 0, s = 1;
+        for (i = 0; (i | 0) < (n | 0); i = (i + 1) | 0)
+            s = ops[(imul(i, 5) + (i >> 3)) & 7](s, (i + 7) | 0) | 0;
+        return s | 0;
+    }
+    var ops = [f0, f1, f2, f3, f4, f5, f6, f7];
+    return { run: run };
+}
+var tableEight = TableEight(globalThis, {}, new ArrayBuffer(65536));
+`
+	run := func(n int) int32 {
+		s := int32(1)
+		for i := int32(0); i < int32(n); i++ {
+			b := i + 7
+			switch (i*5 + i>>3) & 7 {
+			case 0:
+				s += b
+			case 1:
+				s -= b
+			case 2:
+				s ^= b
+			case 3:
+				s *= b
+			case 4:
+				s |= b
+			case 5:
+				s &= b
+			case 6:
+				s += b * 3
+			case 7:
+				s -= b << 1
+			}
+		}
+		return s
+	}
+	want := int32(0)
+	for range 50 {
+		want += run(1024)
+	}
+	for _, c := range []struct{ stress, marking bool }{{false, false}, {true, false}, {false, true}} {
+		t.Run(fmt.Sprintf("stress=%v/marking=%v", c.stress, c.marking), func(t *testing.T) {
+			if c.marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if c.stress {
+				r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
+			}
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			r.jitState().reporting = true
+			v, _ := jitCountGoCalls(t, r, "var s = 0; for (var j = 0; j < 50; j++) s = (s + tableEight.run(1024)) | 0; ''+s")
+			if got := v.String().Go(); got != fmt.Sprint(want) {
+				t.Fatalf("the sum is %s, want %d", got, want)
+			}
+			if !c.stress {
+				for op, n := range r.RegNativeStats().GoCallOps {
+					if strings.HasPrefix(op, "call_w") {
+						t.Errorf("%d calls of Go at call_w: %s", n, op)
+					}
+				}
+			}
+			for name, how := range asmJITNative(r, "tableEight", []string{"run"}) {
+				if how != "native" {
+					t.Errorf("%s: %s", name, how)
+				}
+			}
+		})
+	}
+}
+
 // TestAsmJITCalledFromOrdinaryCode has ordinary code's native code call
 // a module's function, which recurses, from a loop and from a callback,
 // with the module's import throwing and detaching the heap on the way:

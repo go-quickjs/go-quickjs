@@ -1477,6 +1477,9 @@ type jitFeedback struct {
 	// called is how many closures the code makes that it only calls and
 	// does not make (ssa.Func's Called).
 	called int
+	// tables are the entries of the function tables typed code calls
+	// through by index (regTableEntries), which native code reads.
+	tables [][]abi.TableEntry
 	// linked are the callees it calls through their links before they
 	// have code, compiled after it, which native code then calls, the
 	// caller's code as it is.

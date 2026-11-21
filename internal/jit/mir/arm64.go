@@ -3063,6 +3063,45 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 	c.a.B(checked)
 }
 
+// tableCheck is amd64's: typed code's call through a function table, the
+// callee in C, made through the link of the entry its index found.
+func (c *a64Compiler) tableCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss arm64.Label) {
+	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
+	c.a.Load(a64B, a64Ctx, abi.OffCallTable)
+	c.a.Load(a64A, a64B, abi.OffTableCallee)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.NE, miss)
+	c.a.Load(a64A, a64B, abi.OffTableLink)
+	c.a.Cbz(a64A, miss, true)
+	c.a.Store(a64Ctx, abi.OffCallLink, a64A)
+	c.a.Load(a64A, a64A, c.enc.LinkFlags)
+	c.movImm(a64C, abi.LinkNotGeneric|abi.LinkArrow|abi.LinkCoerce)
+	c.a.Tst(a64A, a64C, true)
+	c.a.BCond(arm64.NE, miss)
+	c.a.Load(a64A, a64B, abi.OffTableClosure)
+	c.a.Store(a64Ctx, abi.OffCallClosure, a64A)
+	c.a.Load(a64A, a64B, abi.OffTableUpvalues)
+	c.a.Store(a64Ctx, abi.OffCallUpvalues, a64A)
+	c.a.Load(a64A, a64Ctx, abi.OffStackTop)
+	c.a.Load(a64A, a64A, 0)
+	c.a.Load(a64C, a64Ctx, abi.OffCallLink)
+	c.a.Load(a64B, a64C, c.enc.LinkFrame)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64Ctx, abi.OffStackEnd)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.HI, miss)
+	if site.Window != 0 {
+		c.a.Load(a64A, a64Ctx, abi.OffStackTop)
+		c.a.Load(a64A, a64A, 0)
+		c.a.AddImm(a64A, a64A, int64(2+site.Argc), true)
+		c.a.Cmp(a64A, a64B, true)
+		c.a.BCond(arm64.HI, miss)
+	}
+	c.movImm(a64B, uint64(target))
+	c.a.Store(a64Ctx, abi.OffCallTarget, a64B)
+	c.a.B(checked)
+}
+
 // objectPart is amd64's: what an object of class cls keeps off bytes
 // past it, into dst. It uses t too, which must not be obj: the class read
 // into it had made obj the class's number, and dst a field of address 21.
@@ -4111,7 +4150,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		// As amd64's: a function none of them is, called through its link,
 		// or by Go from native code.
 		miss := c.a.NewLabel()
-		c.genericCheck(v, site, len(sites), checked, miss)
+		if site.Table != 0 {
+			c.tableCheck(v, site, len(sites), checked, miss)
+		} else {
+			c.genericCheck(v, site, len(sites), checked, miss)
+		}
 		c.a.Bind(miss)
 		c.a.B(goCall())
 	}
@@ -9999,6 +10042,13 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpHeapLoad, ssa.OpHeapStore:
 		c.heapAccess(v)
+	case ssa.OpTableCallee:
+		// As amd64's: the entry's address, for the call right after it.
+		c.a.MovRR32(a64A, c.gpr(arg(0), a64A))
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, abi.TableEntryShift, true)
+		c.movImm(a64B, v.Const.Bits)
+		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		c.a.Store(a64Ctx, abi.OffCallTable, a64A)
 	case ssa.OpHeapBase, ssa.OpHeapLen:
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)

@@ -254,6 +254,70 @@ func (f *jitRegFeedback) regTableTargets(t *jitRegTargets, pc int, w bytecode.RI
 	}
 }
 
+// regTableEntries is, for the call w at pc of typed code whose function is
+// a function table's element (ttab_get) of more functions than a call
+// checks one by one (jitCallTargets), the table's functions as native
+// code calls them by the call's index (ssa.CallSite's Table): the address
+// of an abi.TableEntry for each, kept by the compile, and the table's
+// length; 0 for any other call. An entry of a function native callers do
+// not call -- an import's, one of no typed code -- has no link, and Go
+// makes the call. Checked one by one, a table's first four functions
+// were native calls and the rest Go's.
+func (f *jitRegFeedback) regTableEntries(pc int, w bytecode.RInstr, argc int) (uintptr, int) {
+	rc := f.rc
+	if rc == nil || !rc.Typed || w.Op() != bytecode.RCallW {
+		return 0, 0
+	}
+	rpc := int(f.p.Origin[pc])
+	fa := w.A()
+	for q := rpc - 1; q >= 0; q-- {
+		x := rc.Code[q]
+		if x.A() != fa {
+			continue
+		}
+		c := int(x.C())
+		if x.Op() != bytecode.TTabGet || c >= len(rc.Asm) || c >= len(f.fb.cl.upvalues) {
+			return 0, 0
+		}
+		tab := f.fb.cl.upvalues[c].get()
+		if !tab.IsObject() {
+			return 0, 0
+		}
+		elems := tab.object().elemsOf()
+		if len(elems) <= jitCallTargets || len(elems) != rc.Asm[c].Len {
+			return 0, 0
+		}
+		r := f.fb.r
+		k := f.fb.keep()
+		entries := make([]abi.TableEntry, len(elems))
+		for i, e := range elems {
+			if isHole(e) || !e.IsObject() {
+				continue
+			}
+			o := e.Object()
+			entries[i].Callee = uintptr(unsafe.Pointer(o))
+			k.holders = append(k.holders, o)
+			fd := o.fn()
+			if fd == nil || fd.closure == nil || fd.bound {
+				continue
+			}
+			cl, crc := jitTypedCallee(fd.closure)
+			if crc == nil || !r.jitRegCallable(o, cl, crc, argc) {
+				continue
+			}
+			l := r.jitState().regLinkOf(cl, crc)
+			k.links = append(k.links, l)
+			k.inlined = append(k.inlined, cl)
+			entries[i].Closure = uintptr(unsafe.Pointer(cl))
+			entries[i].Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(cl.upvalues)))
+			entries[i].Link = uintptr(unsafe.Pointer(l))
+		}
+		k.tables = append(k.tables, entries)
+		return uintptr(unsafe.Pointer(&entries[0])), len(entries)
+	}
+	return 0, 0
+}
+
 // jitTypedCallee is the closure and code a native call of typed code
 // enters for cl, a function the call's binding holds: its twin and typed
 // code where it is linked to them, else nil -- what is no function of the

@@ -2137,6 +2137,13 @@ type CallSite struct {
 	// code the function object points to.
 	Generic                  bool
 	GenericEnv, GenericRealm uintptr
+	// Table, on a Generic call of typed code through a function table, is
+	// the address of the table's TableLen abi.TableEntry: the function
+	// none of its sites is is found there by the call's index into the
+	// table (OpTableCallee), not by its hint. A call whose index the
+	// build does not know is built without it.
+	Table    uintptr
+	TableLen int
 	// ArrowThis marks a callee that is an arrow reading this: the call
 	// gives it the this it captured, read from its function object
 	// (abi.Encoding's FuncExtra), in place of its receiver, as the
@@ -3493,6 +3500,9 @@ type builder struct {
 	heaps     []uintptr
 	heapMarks []*Value
 	heapKills []*Block
+	// tableIdx is, for each function typed code read from a function
+	// table, the index it read it at (tableRead).
+	tableIdx map[*Value]*Value
 
 	entryPCs []int
 	blockAt  []*Block // by the PC a block starts at
@@ -8343,6 +8353,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.Control = v
 		v.Uses++
 	case ir.ArrayRead, ir.ArrayUpdate:
+		if in.Op == ir.ArrayRead && in.Key != 0 && b.p.Kinds != nil {
+			// Typed code's function table's element, at the index raw slot
+			// Key-1 holds (compile's LowerTyped): what a call of it finds its
+			// function by (tableRead).
+			defer b.tableRead(blk, in)
+		}
 		// The element's key, and an update's updated key: the key's own
 		// value before or after (Postfix).
 		keyOf := func(kind ir.ExitKind) (key, updated *Value) {
@@ -9645,6 +9661,9 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 		for i := range in.Extra {
 			args = append(args, b.read(a+2+i, blk))
 		}
+	}
+	if calls[0].Table != 0 {
+		calls = b.tableCall(blk, calls, b.read(a, blk))
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
