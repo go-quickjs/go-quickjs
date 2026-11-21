@@ -1673,6 +1673,8 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		c.sourceRef(callee, guard)
 	}
 	checked := c.a.NewLabel()
+	var grow amd64.Label
+	growUsed := false
 	// Past its sites, any other function, through its link
 	// (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
@@ -1766,8 +1768,14 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			continue
 		}
 		if t.Push {
-			// Array.prototype.push, its fast path's.
-			c.pushGuards(t, v.Args[0], guard)
+			// Array.prototype.push, its fast path's; an array with no room
+			// for several values grown by push's leaf (pushGrow).
+			room := guard
+			if pushGrows(t, c.enc) {
+				grow, growUsed = c.a.NewLabel(), true
+				room = guardLabel(c, grow)
+			}
+			c.pushGuards(t, v.Args[0], guard, room)
 			done()
 			continue
 		}
@@ -1868,6 +1876,15 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	c.a.Bind(checked)
 	if site.Push {
 		c.push(v)
+		if growUsed {
+			pushed := c.a.NewLabel()
+			c.a.Bind(pushed)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(grow)
+				c.pushGrow(v, site)
+				c.a.Jmp(pushed)
+			})
+		}
 		return
 	}
 	if site.Pop {
@@ -2833,9 +2850,28 @@ func (c *compiler) createMake(v *ssa.Value, slow, done amd64.Label) {
 // R11, or, where Go did nothing, to the refusal's code. Neither the code's
 // routine of calls of Go nor Go's expansion of the call is on the way.
 func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
-	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	st, _ := c.goState(goOpWord(site), v.Index, v, nil)
-	for i, x := range v.Args {
+	c.leafCallOf(v, st, v.Args)
+}
+
+// pushGrow is the call of a push of several values whose array has no room
+// for them (pushGuards' room): push's leaf, the realm's Array.prototype.push
+// at the site's Callee (the VM's jitLeafGo), which grows the array as the
+// built-in does, and goes on after it, the receiver and the values written
+// where a leaf's call writes them; refused, the call's exit. A push of one
+// leaves native code for its growth, which has the interpreter make the
+// literal's arrays with the room it learned (arrayEmptyNode).
+func (c *compiler) pushGrow(v *ssa.Value, site *ssa.CallSite) {
+	st, _ := c.goState(goOpWord(&ssa.CallSite{Go: ssa.GoLeaf, Argc: site.Argc, Method: true}), v.Index, v, nil)
+	st.Leaf, st.Unused, st.Give = site.Callee, false, 0
+	c.leafCallOf(v, st, append([]*ssa.Value{v.Args[1], v.Args[0]}, v.Args[2:]...))
+}
+
+// leafCallOf is leafCall of the leaf st describes, its operands ops: the
+// function's, which it does not write, the receiver's, the arguments'.
+func (c *compiler) leafCallOf(v *ssa.Value, st *abi.GoCallState, ops []*ssa.Value) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	for i, x := range ops {
 		if i != 0 {
 			c.goArg(abi.OffGoArgs+int32(i)*size, x)
 		}
@@ -6216,7 +6252,7 @@ func (c *compiler) refillOnEmpty(pool uintptr, guard guardTo) {
 // extensible, its length writable, with room, of the first of the
 // prototypes, which are as they were, with no elements. It uses every
 // scratch register.
-func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard guardTo) {
+func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard, room guardTo) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		// A primitive, never an array: scratchC, the callee, is not 0.
 		c.a.Op(amd64.Test, scratchC, scratchC, true)
@@ -6234,10 +6270,14 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard guardTo) {
 	c.a.OpImm(amd64.And, scratchB, int32(want|c.enc.FlagSparse|c.enc.FlagShared), false)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(want), false)
 	guard.jump(amd64.CondNE)
+	// Room for every argument: past the length, below the capacity.
 	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
+	if t.Argc > 1 {
+		c.a.OpImm(amd64.Add, scratchB, int32(t.Argc-1), true)
+	}
 	c.a.Load(scratchA, scratchC, c.enc.ObjectElems+16)
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-	guard.jump(amd64.CondAE)
+	room.jump(amd64.CondAE)
 	c.loadProtoPlain(scratchB, scratchC)
 	c.cmpWord(scratchB, uint64(t.Protos[0].Object))
 	guard.jump(amd64.CondNE)
@@ -6352,75 +6392,83 @@ func (c *compiler) pop(v *ssa.Value) {
 	c.setG(v, scratchB)
 }
 
-// push appends a call of Array.prototype.push's argument to its receiver,
-// checked (pushGuards): the value's words past the last element, the
-// length one more, which is the call's result, kept (OpCallCell). It uses
-// every scratch register, xScratch0 and xScratch1.
+// push appends a call of Array.prototype.push's arguments to its receiver,
+// checked (pushGuards), in their order: each value's words past the last
+// element, the length one more; the last length is the call's result,
+// kept (OpCallCell). It uses every scratch register, xScratch0 to
+// xScratch2.
 func (c *compiler) push(v *ssa.Value) {
 	vs := int32(c.enc.ValueSize)
-	recv, x := v.Args[0], v.Args[2]
+	recv, xs := v.Args[0], v.Args[2:]
 	if vs != 16 {
 		panic("mir: a value that is not 16 bytes")
 	}
-	// The value's words: its pointer word in xScratch1, its number word
-	// in xScratch0.
-	var w amd64.Reg
-	if remat(x) {
-		c.materialize(x, scratchA)
-		w = scratchA
-	} else {
-		w = c.gpr(x, scratchA)
-	}
-	c.a.MovQToX(xScratch0, w)
-	number, have := c.a.NewLabel(), c.a.NewLabel()
-	if x.Shadow != nil || c.origin.At(x) >= 0 {
-		c.cmpWord(w, abi.NumberLimit)
-		c.a.Jcc(amd64.CondB, number)
-	}
-	c.pointerWord(x, w)
-	c.a.Jmp(have)
-	c.a.Bind(number)
-	c.movImm(scratchB, 0)
-	c.a.Bind(have)
-	c.a.MovQToX(xScratch1, scratchB)
-	// The array, checked: its length grown, then the element's address.
-	c.sourceRef(recv, guardTo{})
-	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
-	c.a.OpImm(amd64.Add, scratchB, 1, true)
-	c.a.Store(scratchC, c.enc.ObjectElems+8, scratchB)
-	c.a.Load(scratchA, scratchC, c.enc.ObjectElems)
-	c.a.MovRR(scratchC, scratchB)
-	c.a.OpImm(amd64.Sub, scratchC, 1, true)
-	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
-	c.a.Op(amd64.Add, scratchA, scratchC, true)
-	c.a.MovQFromX(scratchC, xScratch0)
-	c.a.Store(scratchA, c.enc.NumOffset, scratchC)
-	c.a.MovQFromX(scratchC, xScratch1)
-	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
-	c.a.MovQToX(xScratch2, scratchA)
-	// The result: the length, a number.
-	c.a.Cvtsi2sd(xScratch0, scratchB, true)
-	c.a.MovQFromX(scratchA, xScratch0)
 	at := abi.OffKeep + int32(v.Index)*vs
-	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
-	c.storeImm(regCtx, at+c.enc.RefOffset, 0, scratchB)
-	// While the collector marks, the element's pointer word stored again
-	// with Go's write barrier (refStore), which shades it: the array
-	// outlives where the value came from.
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
-	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.markingLoaded(scratchB)
-	c.a.Jcc(amd64.CondNE, marked)
-	c.a.Bind(done)
-	c.cold = append(c.cold, func() {
-		c.a.Bind(marked)
-		c.a.MovQFromX(scratchA, xScratch2)
-		c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+	for k, x := range xs {
+		// The value's words: its pointer word in xScratch1, its number
+		// word in xScratch0.
+		var w amd64.Reg
+		if remat(x) {
+			c.materialize(x, scratchA)
+			w = scratchA
+		} else {
+			w = c.gpr(x, scratchA)
+		}
+		c.a.MovQToX(xScratch0, w)
+		number, have := c.a.NewLabel(), c.a.NewLabel()
+		if x.Shadow != nil || c.origin.At(x) >= 0 {
+			c.cmpWord(w, abi.NumberLimit)
+			c.a.Jcc(amd64.CondB, number)
+		}
+		c.pointerWord(x, w)
+		c.a.Jmp(have)
+		c.a.Bind(number)
+		c.movImm(scratchB, 0)
+		c.a.Bind(have)
+		c.a.MovQToX(xScratch1, scratchB)
+		// The array, checked: its length grown, then the element's address.
+		c.sourceRef(recv, guardTo{})
+		c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
+		c.a.OpImm(amd64.Add, scratchB, 1, true)
+		c.a.Store(scratchC, c.enc.ObjectElems+8, scratchB)
+		c.a.Load(scratchA, scratchC, c.enc.ObjectElems)
+		c.a.MovRR(scratchC, scratchB)
+		c.a.OpImm(amd64.Sub, scratchC, 1, true)
+		c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+		c.a.Op(amd64.Add, scratchA, scratchC, true)
+		c.a.MovQFromX(scratchC, xScratch0)
+		c.a.Store(scratchA, c.enc.NumOffset, scratchC)
 		c.a.MovQFromX(scratchC, xScratch1)
-		c.refStore()
-		c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
-		c.a.Jmp(done)
-	})
+		c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+		c.a.MovQToX(xScratch2, scratchA)
+		last := k == len(xs)-1
+		if last {
+			// The result: the last length, a number.
+			c.a.Cvtsi2sd(xScratch0, scratchB, true)
+			c.a.MovQFromX(scratchA, xScratch0)
+			c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
+			c.storeImm(regCtx, at+c.enc.RefOffset, 0, scratchB)
+		}
+		// While the collector marks, the element's pointer word stored
+		// again with Go's write barrier (refStore), which shades it: the
+		// array outlives where the value came from.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(scratchB, c.enc.WriteBarrier)
+		c.markingLoaded(scratchB)
+		c.a.Jcc(amd64.CondNE, marked)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.MovQFromX(scratchA, xScratch2)
+			c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+			c.a.MovQFromX(scratchC, xScratch1)
+			c.refStore()
+			if last {
+				c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+			}
+			c.a.Jmp(done)
+		})
+	}
 	c.setG(v, scratchA)
 }
 

@@ -4034,6 +4034,8 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	if forwardGo && site.Generic {
 		miss = goCall()
 	}
+	var grow arm64.Label
+	growUsed := false
 	for k, t := range sites {
 		// As amd64's: the last function's checks fail straight to the stub.
 		last := k == len(sites)-1 && !gen
@@ -4078,7 +4080,13 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			continue
 		}
 		if t.Push {
-			c.pushGuards(t, v.Args[0], guard)
+			// As amd64's: no room for several values, push's leaf.
+			room := guard
+			if pushGrows(t, c.enc) {
+				grow, growUsed = c.a.NewLabel(), true
+				room = a64GuardLabel(c, grow)
+			}
+			c.pushGuards(t, v.Args[0], guard, room)
 			done()
 			continue
 		}
@@ -4161,6 +4169,15 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	c.a.Bind(checked)
 	if site.Push {
 		c.push(v)
+		if growUsed {
+			pushed := c.a.NewLabel()
+			c.a.Bind(pushed)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(grow)
+				c.pushGrow(v, site)
+				c.a.B(pushed)
+			})
+		}
 		return
 	}
 	if site.Pop {
@@ -4763,7 +4780,7 @@ func (c *a64Compiler) restoreSavesOf(v *ssa.Value, refused bool) {
 
 // pushGuards checks a call of Array.prototype.push may append, as amd64's
 // does. It uses A, B and C.
-func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard) {
+func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard, room a64Guard) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		c.a.CmpImm(a64C, 0, true)
 		guard.jump(arm64.NE)
@@ -4782,10 +4799,14 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guar
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
 	guard.jump(arm64.NE)
+	// Room for every argument, as amd64's.
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+	if t.Argc > 1 {
+		c.a.AddImm(a64B, a64B, int64(t.Argc-1), true)
+	}
 	c.a.Load(a64A, a64C, c.enc.ObjectElems+16)
 	c.a.Cmp(a64B, a64A, true)
-	guard.jump(arm64.HS)
+	room.jump(arm64.HS)
 	c.loadProtoPlain(a64B, a64C)
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
@@ -4897,67 +4918,74 @@ func (c *a64Compiler) pop(v *ssa.Value) {
 	c.setG(v, a64B)
 }
 
-// push appends a call of Array.prototype.push's argument, as amd64's
-// does. It uses A, B, C, D and F1.
+// push appends a call of Array.prototype.push's arguments, as amd64's
+// does. It uses A, B, C, D, F0, F1 and F2.
 func (c *a64Compiler) push(v *ssa.Value) {
 	vs := int32(c.enc.ValueSize)
-	recv, x := v.Args[0], v.Args[2]
+	recv, xs := v.Args[0], v.Args[2:]
 	if vs != 16 {
 		panic("mir: a value that is not 16 bytes")
 	}
-	var w arm64.Reg
-	if remat(x) {
-		c.materialize(x, a64A)
-		w = a64A
-	} else {
-		w = c.gpr(x, a64A)
-	}
-	c.a.MovRR(a64D, w)
-	number, have := c.a.NewLabel(), c.a.NewLabel()
-	if x.Shadow != nil || c.origin.At(x) >= 0 {
-		c.movImm(a64B, abi.NumberLimit)
-		c.a.Cmp(w, a64B, true)
-		c.a.BCond(arm64.LO, number)
-	}
-	c.pointerWord(x, w)
-	c.a.B(have)
-	c.a.Bind(number)
-	c.movImm(a64B, 0)
-	c.a.Bind(have)
-	c.a.FMovToF(a64F1, a64B)
-	c.sourceRef(recv, a64Guard{})
-	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
-	c.a.AddImm(a64B, a64B, 1, true)
-	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
-	c.a.Load(a64A, a64C, c.enc.ObjectElems)
-	c.a.AddImm(a64C, a64B, -1, true)
-	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
-	c.a.Store(a64A, c.enc.NumOffset, a64D)
-	c.a.FMovFromF(a64C, a64F1)
-	c.a.Store(a64A, c.enc.RefOffset, a64C)
-	c.a.FMovToF(a64F2, a64A)
-	c.a.Scvtf(a64F0, a64B, true)
-	c.a.FMovFromF(a64A, a64F0)
 	at := abi.OffKeep + int32(v.Index)*vs
-	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
-	c.a.Store(a64Ctx, at+c.enc.RefOffset, arm64.ZR)
-	// As amd64's: while the collector marks, the element's pointer word
-	// stored again with Go's write barrier.
-	marked, done := c.a.NewLabel(), c.a.NewLabel()
-	c.movImm(a64B, c.enc.WriteBarrier)
-	c.a.LoadU8(a64B, a64B, 0)
-	c.a.Cbnz(a64B, marked, false)
-	c.a.Bind(done)
-	c.cold = append(c.cold, func() {
-		c.a.Bind(marked)
-		c.a.FMovFromF(a64A, a64F2)
-		c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+	for k, x := range xs {
+		var w arm64.Reg
+		if remat(x) {
+			c.materialize(x, a64A)
+			w = a64A
+		} else {
+			w = c.gpr(x, a64A)
+		}
+		c.a.MovRR(a64D, w)
+		number, have := c.a.NewLabel(), c.a.NewLabel()
+		if x.Shadow != nil || c.origin.At(x) >= 0 {
+			c.movImm(a64B, abi.NumberLimit)
+			c.a.Cmp(w, a64B, true)
+			c.a.BCond(arm64.LO, number)
+		}
+		c.pointerWord(x, w)
+		c.a.B(have)
+		c.a.Bind(number)
+		c.movImm(a64B, 0)
+		c.a.Bind(have)
+		c.a.FMovToF(a64F1, a64B)
+		c.sourceRef(recv, a64Guard{})
+		c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+		c.a.AddImm(a64B, a64B, 1, true)
+		c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
+		c.a.Load(a64A, a64C, c.enc.ObjectElems)
+		c.a.AddImm(a64C, a64B, -1, true)
+		c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+		c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+		c.a.Store(a64A, c.enc.NumOffset, a64D)
 		c.a.FMovFromF(a64C, a64F1)
-		c.refStore()
-		c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
-		c.a.B(done)
-	})
+		c.a.Store(a64A, c.enc.RefOffset, a64C)
+		c.a.FMovToF(a64F2, a64A)
+		last := k == len(xs)-1
+		if last {
+			c.a.Scvtf(a64F0, a64B, true)
+			c.a.FMovFromF(a64A, a64F0)
+			c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
+			c.a.Store(a64Ctx, at+c.enc.RefOffset, arm64.ZR)
+		}
+		// As amd64's: while the collector marks, the element's pointer
+		// word stored again with Go's write barrier.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(a64B, c.enc.WriteBarrier)
+		c.a.LoadU8(a64B, a64B, 0)
+		c.a.Cbnz(a64B, marked, false)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.FMovFromF(a64A, a64F2)
+			c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+			c.a.FMovFromF(a64C, a64F1)
+			c.refStore()
+			if last {
+				c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+			}
+			c.a.B(done)
+		})
+	}
 	c.setG(v, a64A)
 }
 
@@ -5616,9 +5644,21 @@ func (c *a64Compiler) createMake(v *ssa.Value, slow, done arm64.Label) {
 // leafCall is amd64's: the description's address in C, where to come back
 // in A, the result's number word back in B.
 func (c *a64Compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
-	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	st, _ := c.goState(goOpWord(site), v.Index, v, nil)
-	for i, x := range v.Args {
+	c.leafCallOf(v, st, v.Args)
+}
+
+// pushGrow is amd64's: a push of several values with no room, push's leaf.
+func (c *a64Compiler) pushGrow(v *ssa.Value, site *ssa.CallSite) {
+	st, _ := c.goState(goOpWord(&ssa.CallSite{Go: ssa.GoLeaf, Argc: site.Argc, Method: true}), v.Index, v, nil)
+	st.Leaf, st.Unused, st.Give = site.Callee, false, 0
+	c.leafCallOf(v, st, append([]*ssa.Value{v.Args[1], v.Args[0]}, v.Args[2:]...))
+}
+
+// leafCallOf is amd64's: leafCall of st's leaf, its operands ops.
+func (c *a64Compiler) leafCallOf(v *ssa.Value, st *abi.GoCallState, ops []*ssa.Value) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	for i, x := range ops {
 		if i != 0 {
 			c.goArg(abi.OffGoArgs+int32(i)*size, x)
 		}

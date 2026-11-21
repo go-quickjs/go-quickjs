@@ -3136,11 +3136,16 @@ func (c *core) frameSize() int {
 
 // callsAgain reports a call that may read its operands, and its state's
 // values, after Go has had the registers: a call of Go, which Go may
-// refuse, the call exiting after it; or a call whose pool Go fills, made
-// again from its start (ssa.RefillsPools). What it reads lives across it,
-// saved and restored (allocate's saves).
+// refuse, the call exiting after it; a push of several values, whose
+// growth is push's leaf, which may refuse it too (pushGrow); or a call
+// whose pool Go fills, made again from its start (ssa.RefillsPools). What
+// it reads lives across it, saved and restored (allocate's saves).
 func callsAgain(v *ssa.Value) bool {
-	return v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v))
+	if v.Op != ssa.OpCall || len(v.Calls()) == 0 {
+		return false
+	}
+	c := v.Calls()[0]
+	return c.Go != 0 || c.Push && c.Argc > 1 || ssa.RefillsPools(v)
 }
 
 // savingCall reports a call that saves the registers live across it, and
@@ -4098,6 +4103,13 @@ type callRecord struct {
 // every word of the slots from operands on, if not -1, which the call
 // reads its callee's arguments from. Those whose pointer words it writes
 // come first.
+// pushGrows reports whether a push of t's values, made natively, has its
+// array grown by push's leaf where it has no room for them (mir's
+// pushGrow): of several values, as many as a leaf's call takes.
+func pushGrows(t *ssa.CallSite, enc abi.Encoding) bool {
+	return t.Argc > 1 && 2+t.Argc <= abi.MaxGoArgs && enc.LeafFast != 0
+}
+
 // windowCallees is, for register code's native call of sites (ssa.CallSite's
 // Window) that leaves its function out of its callee's window, the
 // function object each site's checks find, 0 for one checked by its code

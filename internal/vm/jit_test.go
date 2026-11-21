@@ -4477,6 +4477,76 @@ func TestJITSSANativePush(t *testing.T) {
 	}
 }
 
+// A push of several values is made natively too, the values in their
+// order, its result the last length (mir's push); an array with no room
+// for them is grown by push's leaf, native code going on after it (mir's
+// pushGrow), as the leaf had made every such push. What the fast path may not
+// take -- an array that is not extensible, a setter for an index on
+// Object.prototype -- answers as the interpreter does, the collector idle
+// and marking.
+func TestJITSSANativePushArgs(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const fill = `function(a,n){let t=0;for(let i=0;i<n;i++)t=(t+a.push(i,i&1?o:-i,7))|0;return t}`
+	setup := `var o={k:1},hits=0;
+		function show(a){let t=0;for(let i=0;i<a.length;i++)t=(t*31+(a[i]===o?1000:a[i]))|0;return [t,a.length].join()}
+		var plain=` + fill + `, setter=` + fill + `, stopped=` + fill + `;`
+	cases := []struct{ name, fn, src string }{
+		{"plain", "plain", `{const a=[];[plain(a,3000),show(a)].join()}`},
+		{"not extensible", "stopped", `{const a=[];Object.preventExtensions(a);try{stopped(a,10)}catch(e){e.constructor.name+a.length}}`},
+		{"a setter for an index on Object.prototype", "setter",
+			`Object.defineProperty(Object.prototype,'250',{set(v){hits++},configurable:true});` +
+				`try{const a=[];[setter(a,300),show(a),hits].join()}finally{delete Object.prototype['250']}`},
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprint(marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			want := newTestRuntime(t, Config{})
+			defer func() { want.Close(); want.ReleaseClosed() }()
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			for _, rt := range []*Runtime{want, r} {
+				if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			builds := jitBuildsForTest(t)
+			run := func(name, src string) {
+				t.Helper()
+				wv, err := want.Run(compileForTest(t, src))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gv, err := r.Run(compileForTest(t, src))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := gv.String().Go(), wv.String().Go(); got != want {
+					t.Fatalf("%s: got %s, interpreter %s", name, got, want)
+				}
+			}
+			for _, c := range cases {
+				warm := `{const a=[];[` + c.fn + `(a,300),show(a)].join()}`
+				for range 8 {
+					run(c.name, warm)
+				}
+				cl := r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure
+				e := jitClosureCodeForTest(r, cl)
+				if e == nil || !builds[cl.fn].push {
+					t.Fatalf("%s: %s does not push natively", c.name, c.fn)
+				}
+				hosts, reoptimized := e.ssaStats.hosts, r.jit.reoptimized
+				run(c.name, c.src)
+				if c.fn == "plain" && r.jit.reoptimized == reoptimized && e.ssaStats.hosts != hosts {
+					t.Fatalf("plain left %d times for 3000 pushes of three", e.ssaStats.hosts-hosts)
+				}
+			}
+		})
+	}
+}
+
 // a[i] = n at an array's length appends natively where Go's jitStoreElem
 // would append, as a push does (ssa.Func's ArrayProtos): native code
 // leaves only for the array to grow. One whose array or prototypes it may

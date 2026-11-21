@@ -1944,11 +1944,11 @@ type LiteralFeedback interface {
 // Function.prototype.call, at Via, of the function at Callee, its receiver:
 // that function is called, with the first argument as its receiver and
 // the others as its arguments. One with Push calls Array.prototype.push,
-// the realm's, at Callee, with one argument: on a dense array of its own,
-// extensible, its length writable, with room, whose prototypes are Protos
-// with their shapes and no elements -- none with an indexed property a
-// setter could be asked about -- the argument is its new last element,
-// and the result its length. One with Pop calls Array.prototype.pop, the
+// the realm's, at Callee, with Argc arguments: on a dense array of its own,
+// extensible, its length writable, with room for them all, whose
+// prototypes are Protos with their shapes and no elements -- none with an
+// indexed property a setter could be asked about -- the arguments are its
+// new last elements, in their order, and the result its length. One with Pop calls Array.prototype.pop, the
 // realm's, at Callee: on a dense array of the realm's prototype, Protos[0],
 // its length writable, whose last element is not a hole, that element is
 // the result, its cell undefined and the length one less.
