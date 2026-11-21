@@ -55,6 +55,10 @@ type arrayRoom struct {
 	// pc is the literal's instruction, which names the site to native code:
 	// the site's ordinal does not, and an inlined callee has its own.
 	pc int32
+	// confirmed is the room as the last turn's end confirmed it: what a
+	// result came to, not what a callback's growing array had reached.
+	// Native code's literal takes only that room (jitLiteralArraySource).
+	confirmed int32
 }
 
 // arrayObserve notes a's length as s's latest sample.
@@ -69,6 +73,15 @@ func arrayObserve[_ any](s *arrayRoom, a *Object) {
 	}
 	s.room = min(n, s.previous)
 	s.previous = n
+}
+
+// arrayConfirm notes a's length as s's latest sample at a turn's end,
+// where it is what a result came to, the room that confirms
+// (arrayRoom's confirmed). It is no generic function, which the layout
+// lock does not hold among the others.
+func arrayConfirm(s *arrayRoom, a *Object) {
+	arrayObserve[struct{}](s, a)
+	s.confirmed = int32(s.room)
 }
 
 // arraySamplesLetGo is clearReturnedFrames' release of what a turn kept: the
@@ -104,7 +117,7 @@ func arraySamplesLetGo[_ any](r *Runtime) {
 				a = s.weak.Value()
 			}
 			if a != nil {
-				arrayObserve[struct{}](s, a)
+				arrayConfirm(s, a)
 			}
 		}
 		s.sample, s.weak, s.listed = nil, weak.Pointer[Object]{}, false

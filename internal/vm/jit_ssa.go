@@ -1192,7 +1192,7 @@ func (r *Runtime) jitObjectLiteral(e *jitEntry, cl *closure, pc int, site uint32
 func (r *Runtime) jitArrayLiteral(e *jitEntry, cl *closure, pc, n int) *jitLiteral {
 	e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), array: true, n: n, fn: cl.fn})
 	l := &e.literals[len(e.literals)-1]
-	l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: n})
+	l.pool.Source = unsafe.Pointer(jitLiteralArraySource(r, cl, l.pool, pc, n))
 	r.jitFillLiteral(l)
 	return l
 }
