@@ -1258,6 +1258,12 @@ new function's upvalues taken from its maker, so that the function's
 template needs nothing of the maker's layout. A loop's function expression
 that captures nothing a turn changes is made once (the record's `Reused`).
 
+The closure's capture list is filled directly from those registers and
+the maker's inherited upvalues. Only bindings not already open receive
+new cells, in one allocation sized to those bindings. A function with up
+to 17 captures keeps the capture list in its function object's allocation;
+the larger variants fill successive allocation size classes.
+
 Natively, `close_regs` and a return close the upvalues open on the frame
 with no exit, and `closure_w`'s closure is made by a call of Go with no
 exit. The allocation is Go's.

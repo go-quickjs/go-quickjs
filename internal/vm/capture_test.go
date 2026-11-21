@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // TestCaptureRoom pins the bindings a closure is the first to capture being
 // made in one allocation: each is still its own binding, shared with every
@@ -16,6 +20,7 @@ func TestCaptureRoom(t *testing.T) {
 		{name: "after return", src: `function mk() { var x = 1, y = 2, z = 3; return [function () { return x + y + z }, function (v) { y = v }] } function f() { var p = mk(), q = mk(); p[1](10); return p[0]() + ',' + q[0]() } f()`, want: "14,6"},
 		{name: "loop lets", src: `function f() { var fs = []; for (let i = 0; i < 3; i++) { let j = i * 10, k = i * 100; fs.push(function () { return i + j + k }) } return fs.map(function (g) { return g() }).join() } f()`, want: "0,111,222"},
 		{name: "duplicate", src: `function f(a) { var b = a; function g() { return a + b + (function () { return a * b })() } return g() } f(3)`, want: "15"},
+		{name: "many mixed", src: `function outer(z) { return function mk(a,b,c,d,e,f,g,h,i,j,k,l,m,n) { var get = function () { return z+a+b+c+d+e+f+g+h+i+j+k+l+m+n }; var set = function (v) { z = v; a++; n++ }; return [get, set] } } var mk = outer(100), p = mk(1,2,3,4,5,6,7,8,9,10,11,12,13,14), q = mk(10,20,30,40,50,60,70,80,90,100,110,120,130,140); p[1](200); [p[0](), q[0](), p[1] === q[1]].join()`, want: "307,1250,false"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newTestRuntime(t, Config{})
@@ -33,25 +38,45 @@ func TestCaptureRoom(t *testing.T) {
 	}
 }
 
-// TestCaptureRoomAllocs pins what making a closure over three of its
-// maker's bindings costs: the function object, and one allocation for the
-// three bindings.
+// TestCaptureRoomAllocs pins a closure's function object and capture list
+// sharing an allocation, with one more for the bindings first opened here.
 func TestCaptureRoomAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
-	r := newTestRuntime(t, Config{})
-	v, err := r.Run(compileForTest(t, `function f(a, b, c) { return function () { return a + b + c } }; for (let i = 0; i < 10; i++) f(1, 2, 3); f`))
-	if err != nil {
-		t.Fatal(err)
+	for _, tt := range []struct {
+		n    int
+		want float64
+	}{{3, 2}, {5, 2}, {6, 2}, {9, 2}, {10, 2}, {13, 2}, {14, 2}, {17, 2}, {18, 3}} {
+		t.Run(fmt.Sprint(tt.n), func(t *testing.T) {
+			r := newTestRuntime(t, Config{})
+			defer r.Close()
+			names, args := make([]string, tt.n), make([]Value, tt.n)
+			for i := range names {
+				names[i], args[i] = fmt.Sprintf("a%d", i), Int(i+1)
+			}
+			src := `function f(` + strings.Join(names, ",") + `) { return function () { return ` + strings.Join(names, "+") + ` } } f`
+			v, err := r.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cl Value
+			makeClosure := func() {
+				cl, err = r.Call(v, Undefined, args)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 10 {
+				makeClosure()
+			}
+			if n := testing.AllocsPerRun(100, makeClosure); n != tt.want {
+				t.Errorf("%v allocations a call, want %v", n, tt.want)
+			}
+			got, err := r.Call(cl, Undefined, nil)
+			if err != nil || got != Int(tt.n*(tt.n+1)/2) {
+				t.Errorf("closure result %v, %v", got, err)
+			}
+		})
 	}
-	args := []Value{Int(1), Int(2), Int(3)}
-	if n := testing.AllocsPerRun(100, func() {
-		if _, err := r.Call(v, Undefined, args); err != nil {
-			t.Fatal(err)
-		}
-	}); n != 2 {
-		t.Errorf("%v allocations a call, want 2", n)
-	}
-	r.Close()
 }
 
 // TestArgumentsRoom pins an arguments object made with its first elements

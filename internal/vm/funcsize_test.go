@@ -38,6 +38,10 @@ func TestClosureSizes(t *testing.T) {
 		{"scriptFuncObject", unsafe.Sizeof(scriptFuncObject{}), 224},
 		{"scriptFuncObject1", unsafe.Sizeof(scriptFuncObject1{}), 224},
 		{"scriptFuncObject2", unsafe.Sizeof(scriptFuncObject2{}), 240},
+		{"scriptFuncObject5", unsafe.Sizeof(scriptFuncObject5{}), 256},
+		{"scriptFuncObject9", unsafe.Sizeof(scriptFuncObject9{}), 288},
+		{"scriptFuncObject13", unsafe.Sizeof(scriptFuncObject13{}), 320},
+		{"scriptFuncObject17", unsafe.Sizeof(scriptFuncObject17{}), 352},
 	} {
 		if c.size > c.max {
 			t.Errorf("%s is %d bytes, past %d", c.name, c.size, c.max)

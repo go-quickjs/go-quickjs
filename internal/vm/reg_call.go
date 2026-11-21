@@ -635,30 +635,27 @@ func regClearFrame(f *frame) {
 func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *Object {
 	k := w.BC()
 	tmpl := f.cl.consts[k]
-	fn := f.cl.fn
+	t := tmpl.template()
 	caps := c.rc.Caps[k]
 	if c.wide {
 		// What an arrow captures of this is the frame's register 1, which
 		// the frame record does not keep (regEnterW).
 		f.this = r.stack[wb+1]
 	}
-	if t := tmpl.template(); t.fn.CapturesByValue {
+	if t.fn.CapturesByValue {
 		// What it takes by value copied from its registers, as
 		// newClosureIn's newClosureByValue copies it from the slots.
 		return regMadeClosure(newClosureByValue[struct{}](r, f, t, caps, wb))
 	}
-	// The cells newClosureIn reads, kept in the template's code for the next
-	// closure; the upvalues this closure is the first to open, one
-	// allocation, as newClosureIn's room.
-	cells := f.cl.regCells
-	if len(cells) < int(c.ncap) {
-		cells = make([]*upvalue, c.ncap)
-		f.cl.regCells = cells
-	}
+	// Fill the closure's capture list directly from the register mapping.
+	// Only bindings first opened here need cells of their own.
+	ups := t.fn.Upvalues
+	o, fd, child, captured, extra := newScriptFuncObject(
+		r.funcProtoFor(t.fn), ClassFunction, len(ups), t.fn.Kind == bytecode.KindArrow)
 	var room []upvalue
-	ups := tmpl.template().fn.Upvalues
 	for i, u := range ups {
 		if !u.FromParent {
+			captured[i] = f.cl.upvalues[u.Index]
 			continue
 		}
 		slot := &r.stack[wb+int(caps[i])]
@@ -671,17 +668,15 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 		}
 		if up == nil {
 			if len(room) == 0 {
-				room = make([]upvalue, len(ups)-i)
+				room = make([]upvalue, cellsWanted[struct{}](r, f, ups, i, caps, wb))
 			}
 			up, room = &room[0], room[1:]
 			up.slot = slot
 			f.openUpvalues = append(f.openUpvalues, up)
 		}
-		cells[cellOfLocal(fn, int(u.Index))] = up
+		captured[i] = up
 	}
-	o := r.newClosureIn(f, tmpl, cells)
-	clear(cells)
-	return regMadeClosure(o)
+	return regMadeClosure(r.finishClosure(f, t, o, fd, child, captured, extra))
 }
 
 // regMadeClosure is closure_w's closure o, its function's code planned

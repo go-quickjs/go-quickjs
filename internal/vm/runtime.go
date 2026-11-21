@@ -861,9 +861,6 @@ type closureCode struct {
 	// regEpochs is the global epoch each global site of the register code
 	// was filled at, plus one (regNoteGlobal), made at its first fill.
 	regEpochs []uint64
-	// regCells is the cells regClosure hands newClosureIn, kept for the
-	// next closure the template's register code makes.
-	regCells []*upvalue
 	// fwd is a forwarder's caches of its method's read by the receiver's
 	// shape (fwdCache), nil until its site gives up. Last, so that no
 	// field before it moves.

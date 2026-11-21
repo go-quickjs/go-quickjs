@@ -969,6 +969,28 @@ type scriptFuncObject4 struct {
 	captured [4]*upvalue
 }
 
+// The larger variants fill successive allocation size classes. A capture
+// list has the function object's lifetime, so it need not be allocated apart.
+type scriptFuncObject5 struct {
+	scriptFuncObject
+	captured [5]*upvalue
+}
+
+type scriptFuncObject9 struct {
+	scriptFuncObject
+	captured [9]*upvalue
+}
+
+type scriptFuncObject13 struct {
+	scriptFuncObject
+	captured [13]*upvalue
+}
+
+type scriptFuncObject17 struct {
+	scriptFuncObject
+	captured [17]*upvalue
+}
+
 // arrowFuncObject is scriptFuncObject for an arrow, with the surroundings it
 // captures, which every arrow has, in the same allocation.
 type arrowFuncObject struct {
@@ -1024,6 +1046,18 @@ func newScriptFuncObject(proto *Object, class Class, upvalues int, arrow bool) (
 	case 4:
 		x := &scriptFuncObject4{}
 		fo, captured = &x.scriptFuncObject, x.captured[:]
+	case 5:
+		x := &scriptFuncObject5{}
+		fo, captured = &x.scriptFuncObject, x.captured[:]
+	case 6, 7, 8, 9:
+		x := &scriptFuncObject9{}
+		fo, captured = &x.scriptFuncObject, x.captured[:upvalues:upvalues]
+	case 10, 11, 12, 13:
+		x := &scriptFuncObject13{}
+		fo, captured = &x.scriptFuncObject, x.captured[:upvalues:upvalues]
+	case 14, 15, 16, 17:
+		x := &scriptFuncObject17{}
+		fo, captured = &x.scriptFuncObject, x.captured[:upvalues:upvalues]
 	default:
 		fo = &scriptFuncObject{}
 		captured = make([]*upvalue, upvalues)

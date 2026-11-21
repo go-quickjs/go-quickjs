@@ -282,12 +282,6 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 	o, fd, child, upvalues, extra := newScriptFuncObject(
 		r.funcProtoFor(tmpl.fn), ClassFunction, len(tmpl.fn.Upvalues), arrow)
 
-	// The environment is inherited, so a function declared in a module sees
-	// the module's bindings rather than only the globals.
-	*child = closure{
-		fn: tmpl.fn, closureCode: tmpl.closureCode,
-		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
-	}
 	// The bindings it is the first to capture share one allocation: a
 	// closure made in a loop often captures several of its maker's, each of
 	// which was one. Like a scope's context in other engines, the room lives
@@ -313,6 +307,19 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 		}
 		upvalues[i] = u
 	}
+
+	return r.finishClosure(f, tmpl, o, fd, child, upvalues, extra)
+}
+
+// finishClosure installs the function state after its captures are ready.
+func (r *Runtime) finishClosure(f *frame, tmpl *closure, o *Object, fd *funcData, child *closure, upvalues []*upvalue, extra *funcExtra) *Object {
+	// The environment is inherited, so a function declared in a module sees
+	// the module's bindings rather than only the globals.
+	*child = closure{
+		fn: tmpl.fn, closureCode: tmpl.closureCode,
+		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
+	}
+	arrow := tmpl.fn.Kind == bytecode.KindArrow
 
 	kind := ctorKindOf(tmpl.fn)
 	*fd = funcData{
