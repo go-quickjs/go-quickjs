@@ -264,7 +264,9 @@ func slotTraffic(f *ssa.Func, mc *mir.Code) (all, edges int) {
 // phi's move as none where the phi or its argument is in a slot the other
 // may share (allocate's inSlot): 906324 and 542374. Splitting rather than
 // spilling a value whose uses but frame states' are behind: 906328 and
-// 542378, a store more at four functions' entries.
+// 542378, a store more at four functions' entries. At 8be778b6, 201150
+// and 53986; with the spill classes (mir's spillClasses), 199934 and
+// 52770.
 func TestMirSlotsOfLoops(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
@@ -288,8 +290,68 @@ func TestMirSlotsOfLoops(t *testing.T) {
 		}
 	}
 	t.Logf("slot traffic %d, %d of it in edges", all, edges)
-	if all > 906328 || edges > 542378 {
-		t.Errorf("slot traffic %d, %d of it in edges: want at most 906328 and 542378", all, edges)
+	if all > 199934 || edges > 52770 {
+		t.Errorf("slot traffic %d, %d of it in edges: want at most 199934 and 52770", all, edges)
+	}
+}
+
+// spillClassCorpus is functions of k values live through m loops one
+// after another inside another, each run or else passed by on a path laid
+// out after it, each changing two of them: more values than registers,
+// each loop's header entered by on-stack replacement too, so that every
+// value has a phi at every header, and the values of one variable meet in
+// their intervals -- one live in the loop, another on the path past it,
+// laid out after the loop -- as in Octane zlib's largest asm.js function.
+func spillClassCorpus() []string {
+	var out []string
+	for _, k := range []int{24, 40} {
+		for _, m := range []int{4, 8} {
+			var vs, rs, body []string
+			for j := range k {
+				vs = append(vs, fmt.Sprintf("v%d=o.p%d|0", j, j%4))
+				rs = append(rs, fmt.Sprintf("v%d", j))
+			}
+			for l := range m {
+				a, b := (2*l)%k, (2*l+1)%k
+				body = append(body, fmt.Sprintf("if((j>>%d)&1){for(let i=0;i<n;i++){v%d=(v%d+i)|0;if(i&1)v%d=(v%d^v%d)|0}}else{v%d=(v%d^j)|0}", l, a, a, b, b, a, b, b))
+			}
+			out = append(out, "function f(o,n){let "+strings.Join(vs, ",")+";for(let j=0;j<n;j++){"+strings.Join(body, "")+"}return "+strings.Join(rs, "+")+"}")
+		}
+	}
+	return out
+}
+
+// The values of a phi's spill class share its slot (mir's spillClasses):
+// where their intervals meet but they are never live at once, an edge
+// between two of them moves nothing. Given only the groups, whose members'
+// intervals meet none of each other's, spillClassCorpus's code read and
+// wrote slots 141,610 times, 121,476 of them at its edges, at 8be778b6;
+// with the classes, 56,838 and 36,296.
+func TestMirSpillClassesOfLoops(t *testing.T) {
+	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
+		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
+	edges, all := 0, 0
+	for _, src := range spillClassCorpus() {
+		for i, p := range lowered(t, src) {
+			f, err := ssa.BuildWith(p, stepping{props{p: p}})
+			if err != nil {
+				t.Fatalf("%s (%d): %v", src, i, err)
+			}
+			regShape(f, p)
+			ssa.Optimize(f)
+			mc, err := mir.CompileAMD64With(f, enc, annotated())
+			if err != nil {
+				t.Fatalf("%s (%d): %v", src, i, err)
+			}
+			a, e := slotTraffic(f, mc)
+			all, edges = all+a, edges+e
+		}
+	}
+	t.Logf("slot traffic %d, %d of it in edges", all, edges)
+	if all > 56838 || edges > 36296 {
+		t.Errorf("slot traffic %d, %d of it in edges: want at most 56838 and 36296", all, edges)
 	}
 }
 

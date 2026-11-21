@@ -1963,6 +1963,33 @@ the context's own are in its `SpillMore` (below), which those tests give
 their contexts as the vm does. Spilled, an interval is in its slot whole:
 stored where it is made, loaded at each use.
 
+A slot asks less of its values than a register does: only that no two
+are live at once, where an interval spans every position from a value's
+first to its last. So a phi and its arguments are also joined into spill
+classes (`spillClasses`) of every pair whose values are never live at once,
+their intervals meeting or not, as V8's allocator merges the spill ranges
+of a phi and its inputs where their use intervals, holes and all, do not
+meet; a value of a class of more than one is spilled to the class's own
+slot, which no other value takes, and the group's slot and the free list
+are for the rest. Two values of strict SSA are live at once only if one's
+definition dominates the other's and it is live there (Budimlić et al.):
+two classes are joined where, their values merged in the order of the
+dominator tree's walk (`ssa.Func`'s `DomOrder`) and walked with a stack of
+the values that dominate the one met, no value is live at the definition
+of the nearest of the other class's above it (Boissinot et al.'s check) --
+one further up would be live at that one's too, which its own class
+proved not. A value is live at a position of block b where it is live
+into b (the block liveness's sets) or made in b before it, and live out of
+b or used in b after it (`xuse`'s last position in b); a phi's position
+is its block's start, where the other phis of the block are taken as live.
+A large function's values of one variable meet in their intervals -- one
+live on a loop's exit, another on the path past it -- where they are never
+live at once: Octane zlib's largest function, 47 loops entered by on-stack
+replacement and some 240 values live through each, had its phis each in a
+slot of its own though the groups shared what they could, and its edges
+copied them slot to slot, 70% of its 1.8 MB of code; with the classes, its
+code is 440 KB.
+
 **Spill slots.** Nothing bounds how many a function takes: the free slots'
 lists grow, doubling, as the slots taken pass them, and the code says how
 many it uses (`Code`'s `Spills`). The context holds the first

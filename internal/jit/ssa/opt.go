@@ -1426,8 +1426,15 @@ type domTree struct {
 // iteration over the blocks in reverse post-order, which their IDs are
 // (Func.Blocks).
 func dominators(f *Func) *domTree {
+	d := new(domTree)
+	d.fill(f)
+	return d
+}
+
+// fill makes d f's dominator tree (dominators).
+func (d *domTree) fill(f *Func) {
 	n := len(f.Blocks)
-	d := &domTree{idom: f.ints(n)}
+	d.idom = f.ints(n)
 	for i := range d.idom {
 		d.idom[i] = -2
 	}
@@ -1501,7 +1508,16 @@ func dominators(f *Func) *domTree {
 			sp--
 		}
 	}
-	return d
+}
+
+// DomOrder is the dominator tree's walk, by block ID: each block's place
+// in its pre-order and in its post-order, from the entries' blocks -- a
+// dominates b where a's pre-order place is at most b's and its post-order
+// place at least b's (the backend's spill classes).
+func (f *Func) DomOrder() (pre, post []int) {
+	var d domTree
+	d.fill(f)
+	return d.pre, d.post
 }
 
 // dominates reports whether every path from an entry to b passes a.

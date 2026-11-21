@@ -33,7 +33,7 @@ func (c *core) checkAllocation(iv []interval, rec []useRec, spillCount int) {
 	fail := func(format string, args ...any) {
 		panic(&AllocationError{fmt.Sprintf(format, args...)})
 	}
-	ref, real := c.refIntervals()
+	ref, real, liveAt := c.refIntervals()
 	nf := c.f.NumValues()
 	for id := range nf {
 		a, b := iv[id], ref[id]
@@ -82,6 +82,19 @@ func (c *core) checkAllocation(iv []interval, rec []useRec, spillCount int) {
 	}
 	for key, spans := range byLoc {
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+		if key[0] == 2 {
+			// A spill slot: its values never live at once, their
+			// intervals meeting or not (spillClasses).
+			for i := range spans {
+				for j := i + 1; j < len(spans) && spans[j].start <= spans[i].end; j++ {
+					a, b := iv[spans[i].id].v, iv[spans[j].id].v
+					if liveAt(a, b) || liveAt(b, a) {
+						fail("v%d (%d..%d) and v%d (%d..%d) share location %v, live at once", a.ID, spans[i].start, spans[i].end, b.ID, spans[j].start, spans[j].end, key)
+					}
+				}
+			}
+			continue
+		}
 		for i := 1; i < len(spans); i++ {
 			if a, b := spans[i-1], spans[i]; b.start <= a.end && !(b.start == a.end && key[0] == 0 && takesOperand(iv[b.id].v) && reads(iv[b.id].v, iv[a.id].v)) {
 				fail("v%d (%d..%d) and v%d (%d..%d) share location %v", a.id, a.start, a.end, b.id, b.start, b.end, key)
@@ -128,7 +141,7 @@ func (c *core) valueOf(iv, ref []interval, id int) string {
 // block that saves the registers (savingCall), or by a call that may read
 // it again (callsAgain), or whether its own instruction's state reads it
 // (far): what a split value must not be.
-func (c *core) refIntervals() ([]interval, []realUse) {
+func (c *core) refIntervals() ([]interval, []realUse, func(a, b *ssa.Value) bool) {
 	nv, nb := c.f.NumValues(), numBlocks(c.f)
 	pos := make([]int, nv)
 	for i := range pos {
@@ -408,7 +421,47 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 			r.far = r.far || calls[p]
 		}
 	}
-	return iv, real
+	// liveAt reports whether a is live where b is made: live into b's
+	// block or made in it before b, and live out of it or used in it
+	// after b; at a phi, its block's start, where its block's other phis
+	// are taken as live -- what a spill class (spillClasses) may not
+	// hold at once, found again from these uses and sets.
+	usesOf := make([][]int, nv)
+	for _, u := range uses {
+		if need(u.v) {
+			usesOf[u.v.ID] = append(usesOf[u.v.ID], u.pos)
+		}
+	}
+	liveAt := func(a, b *ssa.Value) bool {
+		bb := defBlock[b.ID]
+		into := func(blk *ssa.Block) bool {
+			g := gid[a.ID]
+			return g != 0 && liveIn[blk.ID] != nil && liveIn[blk.ID].has(g-1)
+		}
+		if b.Op == ssa.OpPhi {
+			return defBlock[a.ID] == bb && a.Op == ssa.OpPhi || into(bb)
+		}
+		p := pos[b.ID]
+		da := pos[a.ID]
+		if a.Op == ssa.OpPhi {
+			da = start[defBlock[a.ID].ID]
+		}
+		if !into(bb) && !(defBlock[a.ID] == bb && da < p) {
+			return false
+		}
+		for _, s := range bb.Succs {
+			if into(s) && !(defBlock[a.ID] == s && a.Op == ssa.OpPhi) {
+				return true
+			}
+		}
+		for _, q := range usesOf[a.ID] {
+			if at[q] == bb && q > p {
+				return true
+			}
+		}
+		return false
+	}
+	return iv, real, liveAt
 }
 
 // realUse is what refIntervals finds of a value's uses but frame states':

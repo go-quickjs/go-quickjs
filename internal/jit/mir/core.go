@@ -1195,8 +1195,10 @@ func (c *core) allocate() error {
 		}
 		if r.def != int32(cur.ID)+1 {
 			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
-				xuses = append(xuses, xuse{cur, h})
+				xuses = append(xuses, xuse{cur, h, int32(p)})
 				r.xhead = int32(len(xuses))
+			} else {
+				xuses[h-1].at = max(xuses[h-1].at, int32(p))
 			}
 		}
 	}
@@ -1301,8 +1303,10 @@ func (c *core) allocate() error {
 		}
 		if r.def != int32(cur.ID)+1 {
 			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
-				xuses = append(xuses, xuse{cur, h})
+				xuses = append(xuses, xuse{cur, h, a.end})
 				r.xhead = int32(len(xuses))
+			} else {
+				xuses[h-1].at = max(xuses[h-1].at, a.end)
 			}
 		}
 	}
@@ -1608,7 +1612,7 @@ func (c *core) allocate() error {
 	//
 	// Each value's interval is then made, and counted by its start for the
 	// sort (below): first, n and floats.
-	lo, hi := c.blockLiveness(rec, xuses, inOrder, start, end, nb)
+	lo, hi, liveIn, liveOut, lb := c.blockLiveness(rec, xuses, inOrder, start, end, nb)
 	first := c.ints(count + 1)
 	n, floats := 0, 0
 	for id := range rec {
@@ -1705,6 +1709,9 @@ func (c *core) allocate() error {
 		gm[i].off, gm[i].n, gm[i].room = int32(2*i), 1, 2
 		pool[2*i] = uint64(it.start)<<32 | uint64(i)
 	}
+	// The spill classes (spillClasses) are made of every pair, the groups
+	// of those whose intervals do not meet.
+	sclass := c.spillClasses(rec, iv, pos, start, xuses, liveIn, liveOut, lb, mem, pairs)
 	kept := pairs[:0]
 	for p := 0; p < len(pairs); p += 2 {
 		if mv, ma := pairs[p], pairs[p+1]; gm[mv].start > gm[ma].end || gm[ma].start > gm[mv].end {
@@ -1943,6 +1950,11 @@ func (c *core) allocate() error {
 	// separate slots, since the second does not know when the first's
 	// spilled values die.
 	spills := 0
+	// cslot is, by a spill class's root's value ID, its slot, or -1.
+	cslot := c.ints(nv)
+	for i := range cslot {
+		cslot[i] = -1
+	}
 	for k, float := range [2]bool{false, true} {
 		regs := c.gprs
 		if float {
@@ -1966,8 +1978,10 @@ func (c *core) allocate() error {
 		}
 		fl := c.ints(5 * room)
 		fnext, fprev, fend, gown, gap := fl[:room], fl[room:2*room], fl[2*room:3*room], fl[3*room:4*room], fl[4*room:]
-		fb := c.bools(2 * room)
-		isFree, held := fb[:room], fb[room:]
+		// dedicated marks the spill classes' slots (cslot), which no other
+		// value takes.
+		fb := c.bools(3 * room)
+		isFree, held, dedicated := fb[:room], fb[room:2*room], fb[2*room:]
 		grow := func() {
 			n := 2 * len(fnext)
 			fl := c.ints(5 * n)
@@ -1977,10 +1991,11 @@ func (c *core) allocate() error {
 			copy(fl[3*n:], gown)
 			copy(fl[4*n:], gap)
 			fnext, fprev, fend, gown, gap = fl[:n], fl[n:2*n], fl[2*n:3*n], fl[3*n:4*n], fl[4*n:]
-			b := c.bools(2 * n)
+			b := c.bools(3 * n)
 			copy(b, isFree)
 			copy(b[n:], held)
-			isFree, held = b[:n], b[n:]
+			copy(b[2*n:], dedicated)
+			isFree, held, dedicated = b[:n], b[n:2*n], b[2*n:]
 		}
 		ftail := 0
 		// gslot is, by a phi group's root, the spill slot its spilled
@@ -2175,6 +2190,20 @@ func (c *core) allocate() error {
 		// (gslot), else one that becomes the group's.
 		var slotOf func(from int, v *ssa.Value) (int, error)
 		slot := func(from int, v *ssa.Value) (int, error) {
+			if v.ID < len(sclass) && sclass[v.ID] != 0 {
+				// Its spill class's (spillClasses): the class's own, made
+				// for it, which no other value takes.
+				k := int(sclass[v.ID]) - 1
+				if cslot[k] < 0 {
+					if spills == len(fnext) {
+						grow()
+					}
+					spills++
+					cslot[k] = spills - 1
+					dedicated[cslot[k]] = true
+				}
+				return cslot[k], nil
+			}
 			r := root(v)
 			if r >= 0 && gslot[r] >= 0 {
 				if s := gslot[r]; isFree[s] && fend[s] < from {
@@ -2346,6 +2375,10 @@ func (c *core) allocate() error {
 			for _, k := range done {
 				a := spilled[k]
 				s := c.locs[a.v.ID].spill
+				if s < len(dedicated) && dedicated[s] {
+					// A spill class's, which its values keep.
+					continue
+				}
 				// A group's, held for its members to come: till the next
 				// to begin.
 				next := -1
@@ -3241,12 +3274,233 @@ type gmember struct {
 	group, end, weight, start, last, off, n, room int32
 }
 
+// spillClasses are the classes of a phi and its arguments that may share
+// one spill slot, by value ID: 1 plus the root's value ID of the class of
+// each value in one of more than one value, else 0. The groups (allocate)
+// join a phi and an argument only where no intervals of theirs meet, as
+// their register is to be one; a slot asks less: that no two of a class
+// are live at once, as V8's allocator merges the spill ranges of a phi and
+// its inputs where their uses' intervals, holes and all, do not meet. An
+// interval spans every position from a value's first to its last; a
+// large function's values of one variable meet each other's there --
+// one live on a loop's exit, another on the path past the loop -- and its
+// phis had each been given a slot of its own, every edge a move between
+// two slots: Octane zlib's largest function, 70% of its code.
+//
+// Two values of a strict SSA function are live at once only if one's
+// definition dominates the other's and it is live there (Budimlić et
+// al.), and a class is joined to another only where no value of either is
+// live at the definition of one of the other's that it dominates: with
+// each class's values in the order of the dominator tree's walk, the two
+// lists merged and walked with a stack of the values that dominate the
+// one met, each is checked against the nearest of the other class's on
+// the stack alone -- one further up live where it is would be live at
+// that nearest one's definition too, which its class proved not
+// (Boissinot et al.'s check of two classes). A value is live at a
+// position of block b where it is live into b or made in b before it,
+// and live out of b or used in b after it (xuse's at); at a phi's, b's
+// start, where it is live into b, the other phis of b each live there.
+// The pairs are pairs of members (allocate's mem), a phi's and an
+// argument's of the same class of register.
+func (c *core) spillClasses(rec []useRec, iv []interval, pos, start []int, xuses []xuse, liveIn, liveOut []ir.LiveSet, lb *ir.LiveBuilder, mem, pairs []int32) []int32 {
+	nv := len(rec)
+	class := c.int32s(nv)
+	if len(pairs) == 0 {
+		return class
+	}
+	pre, post := c.f.DomOrder()
+	block := func(id int32) int { return int(rec[id].def) - 1 }
+	isPhi := func(id int32) bool { return iv[id].v.Op == ssa.OpPhi }
+	// at is a value's definition's position: a phi's, its block's start.
+	at := func(id int32) int {
+		if isPhi(id) {
+			return start[block(id)]
+		}
+		return pos[id]
+	}
+	// key orders values as the dominator tree's walk meets their
+	// definitions, a block's phis first.
+	key := func(id int32) uint64 {
+		return uint64(pre[block(id)])<<32 | uint64(at(id))
+	}
+	dominates := func(a, b int32) bool {
+		ba, bb := block(a), block(b)
+		if ba == bb {
+			return at(a) <= at(b)
+		}
+		return pre[ba] <= pre[bb] && post[bb] <= post[ba]
+	}
+	cross := func(id int32) bool { return rec[id].xhead != 0 && lb != nil }
+	// liveAt reports whether a, whose definition dominates b's, is live
+	// where b is made.
+	liveAt := func(a, b int32) bool {
+		bb := block(b)
+		if isPhi(b) {
+			if block(a) == bb {
+				return true
+			}
+			return cross(a) && lb.Has(liveIn[bb], int(a))
+		}
+		p := at(b)
+		if !(block(a) == bb || cross(a) && lb.Has(liveIn[bb], int(a))) {
+			return false
+		}
+		if cross(a) && lb.Has(liveOut[bb], int(a)) {
+			return true
+		}
+		if block(a) == bb {
+			// Used in its own block alone: its interval's end.
+			return int(rec[a].end) > p
+		}
+		for u := rec[a].xhead; u != 0; u = xuses[u-1].next {
+			c.steps++
+			if xuses[u-1].b.ID == bb {
+				return int(xuses[u-1].at) > p
+			}
+		}
+		return false
+	}
+	// end is the first key past the definitions v dominates: those of the
+	// blocks below v's in the tree, whose places in the walk's pre-order
+	// lie before its block's in the post-order, the walks sharing one
+	// clock, and those after v in its block.
+	end := func(v int32) uint64 { return uint64(post[block(v)]) << 32 }
+	// The classes' values in order of key: a root's list, n of them from
+	// off in pool -- room for room -- or, for n 0, the root alone; and
+	// parent, by value ID, the nearest of its class's values whose
+	// definition dominates its own, or -1: the class's dominance forest.
+	// Their tables are the workspace's, the pool grown where full.
+	off, n, room, parent := c.int32s(nv), c.int32s(nv), c.int32s(nv), c.int32s(nv)
+	for i := range parent {
+		parent[i] = -1
+	}
+	pool := c.int32s(4*len(mem) + 64)
+	used := 0
+	find := func(id int32) int32 {
+		if class[id] != 0 {
+			return class[id] - 1
+		}
+		return id
+	}
+	// first is the index of the first of ms of key k or after.
+	first := func(ms []int32, k uint64) int {
+		lo, hi := 0, len(ms)
+		for lo < hi {
+			c.steps++
+			m := int(uint(lo+hi) >> 1)
+			if key(ms[m]) < k {
+				lo = m + 1
+			} else {
+				hi = m
+			}
+		}
+		return lo
+	}
+	// nearest is the nearest of ms whose definition dominates v's, which
+	// is none of them, or -1.
+	nearest := func(ms []int32, v int32) int32 {
+		i := first(ms, key(v)) - 1
+		if i < 0 {
+			return -1
+		}
+		x := ms[i]
+		for x >= 0 && !dominates(x, v) {
+			c.steps++
+			x = parent[x]
+		}
+		return x
+	}
+	var one [2]int32
+	for p := 0; p < len(pairs); p += 2 {
+		x, y := find(mem[pairs[p]]), find(mem[pairs[p+1]])
+		if x == y {
+			continue
+		}
+		if n[x] < n[y] {
+			x, y = y, x
+		}
+		mx := pool[off[x] : off[x]+n[x]]
+		if n[x] == 0 {
+			one[0] = x
+			mx = one[:1]
+		}
+		my := pool[off[y] : off[y]+n[y]]
+		if n[y] == 0 {
+			one[1] = y
+			my = one[1:2]
+		}
+		// Each of y's values against the nearest of x's that dominates it,
+		// and against those of x's it dominates with none of x's between
+		// (a value one of those dominates is live where that one is made,
+		// if v is where it is).
+		clash := false
+		for _, v := range my {
+			if a := nearest(mx, v); a >= 0 && liveAt(a, v) {
+				clash = true
+				break
+			}
+			hi := end(v)
+			for i := first(mx, key(v)); i < len(mx) && key(mx[i]) < hi && !clash; i = first(mx, end(mx[i])) {
+				clash = liveAt(v, mx[i])
+			}
+			if clash {
+				break
+			}
+		}
+		if clash {
+			continue
+		}
+		// x's list with room for y's, at the pool's end where it has
+		// none.
+		need := int(n[x]) + len(my)
+		if n[x] == 0 {
+			need++
+		}
+		if need > int(room[x]) {
+			r := 2 * need
+			if used+r > len(pool) {
+				np := c.int32s(2*len(pool) + r)
+				copy(np, pool[:used])
+				pool = np
+			}
+			copy(pool[used:], mx)
+			off[x], room[x] = int32(used), int32(r)
+			used += r
+			if n[x] == 0 {
+				n[x] = 1
+			}
+		}
+		ys := one[1:2]
+		if n[y] != 0 {
+			ys = pool[off[y] : off[y]+n[y]]
+		}
+		// y's values put among x's, each its nearest dominator's child
+		// and the parent of those of x's it is now nearest to: in order of
+		// key, so that a value of y's below another of y's is put after it.
+		ms := pool[off[x] : off[x]+n[x] : off[x]+room[x]]
+		for _, v := range ys {
+			ms = slices.Insert(ms, first(ms, key(v)), v)
+			parent[v] = nearest(ms, v)
+			hi := end(v)
+			for i := first(ms, key(v)) + 1; i < len(ms) && key(ms[i]) < hi; i = first(ms, end(ms[i])) {
+				parent[ms[i]] = v
+			}
+			class[v] = x + 1
+		}
+		n[x], n[y] = int32(len(ms)), 0
+		class[x] = x + 1
+	}
+	return class
+}
+
 // xuse is a use of a value in block b, another block than the value's
 // (allocate), and next 1 plus the index of the value's use before it in
 // another block, or 0.
 type xuse struct {
 	b    *ssa.Block
 	next int32
+	// at is the last position in b that uses the value (spillClasses).
+	at int32
 }
 
 // interval is a value's live range over the linear instruction numbering.

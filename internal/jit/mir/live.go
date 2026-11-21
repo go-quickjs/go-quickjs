@@ -9,7 +9,10 @@ import (
 // use in another block than its own (rec's xhead), lo, the first position
 // of a block it is live into, and hi, the last position of a block it is
 // live into (the block's start) or out of (its end), by value ID; -1 for
-// the others. A value is live into each block from which a use of it in
+// the others. Its sets, each block's at its start (in) and at its end
+// (out), by block ID, which lb answers, are the spill classes' too
+// (spillClasses); nil where no value is used in another block than its
+// own. A value is live into each block from which a use of it in
 // another block is reached without passing its own block, and out of each
 // predecessor of such a block -- the graph's edges each laid-out block's
 // predecessors that are laid out too (inOrder).
@@ -25,7 +28,7 @@ import (
 // hold. A walk of each value's blocks back from its uses had taken as
 // many steps as there are values live in each block, summed over the
 // blocks: n values live across a loop of 2n blocks took 2n² steps.
-func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, end []int, nb int) (lo, hi []int) {
+func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, end []int, nb int) (lo, hi []int, in, out []ir.LiveSet, lb *ir.LiveBuilder) {
 	nv := len(rec)
 	lo, hi = c.ints(nv), c.ints(nv)
 	for i := range lo {
@@ -49,7 +52,7 @@ func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, 
 		}
 	}
 	if live == 0 {
-		return lo, hi
+		return lo, hi, nil, nil, nil
 	}
 	for k := range nb {
 		opAt[k+1] += opAt[k]
@@ -94,8 +97,8 @@ func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, 
 			}
 		}
 	}
-	lb := c.liveBuilder(nv)
-	in, out := c.liveSets(nb), c.liveSets(nb)
+	lb = c.liveBuilder(nv)
+	in, out = c.liveSets(nb), c.liveSets(nb)
 	outOf := func(b *ssa.Block) ir.LiveSet {
 		s := lb.Empty()
 		for _, t := range succ[succAt[b.ID]:succAt[b.ID+1]] {
@@ -168,5 +171,5 @@ func (c *core) blockLiveness(rec []useRec, xuses []xuse, inOrder []bool, start, 
 		})
 		prev = in[b.ID]
 	}
-	return lo, hi
+	return lo, hi, in, out, lb
 }
