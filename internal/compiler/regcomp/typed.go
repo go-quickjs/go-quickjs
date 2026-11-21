@@ -70,10 +70,26 @@ func CompileTyped(lit *ast.FuncLit, fn *bytecode.Function, rec *Record, m *asmjs
 	t := &tgen{m: m, f: f, fn: fn, rec: rec, lit: lit, sites: g.CallSites, win: 1 << 15}
 	t.compile()
 	win := t.nregs
-	t = &tgen{m: m, f: f, fn: fn, rec: rec, lit: lit, sites: g.CallSites, win: win}
-	t.compile()
-	if t.win+2+t.maxArgs >= 1<<16 {
-		return nil, typedFail("more than 65,536 registers")
+	// Then as many as it takes for every branch to reach: one whose
+	// offset is past 16 bits is made far in the next (tgen.far), as the
+	// ordinary code's jumps are (generate).
+	var far []bool
+	for {
+		t = &tgen{m: m, f: f, fn: fn, rec: rec, lit: lit, sites: g.CallSites, win: win, far: far}
+		t.compile()
+		if t.win+2+t.maxArgs >= 1<<16 {
+			return nil, typedFail("more than 65,536 registers")
+		}
+		if out := t.unreached(); len(out) > 0 {
+			for _, k := range out {
+				for len(far) <= k {
+					far = append(far, false)
+				}
+				far[k] = true
+			}
+			continue
+		}
+		break
 	}
 	rc = t.finish(g)
 	if err := VerifyKinds(rc, fn); err != nil {
@@ -118,9 +134,13 @@ type tgen struct {
 	floats       []float64
 	asm          []bytecode.AsmUp
 	// jumps are the branches to patch, labels each label's pc (-1 until
-	// bound).
-	labels []int
-	jumps  []tjump
+	// bound). far is, by the order of the branches of a 16-bit offset
+	// (branches), those made far: a branch over a jmp over a jmp of 32
+	// bits, each one that did not reach in a compile before.
+	labels   []int
+	jumps    []tjump
+	far      []bool
+	branches int
 	// loops are the statements break and continue leave or go on in,
 	// innermost last.
 	loops []tloop
@@ -129,6 +149,7 @@ type tgen struct {
 type tjump struct {
 	at, label int
 	bc        bool // the offset is BC's, else SC's
+	ord       int  // a branch's order among those of SC (tgen.far)
 }
 
 type tloop struct {
@@ -226,8 +247,30 @@ func (t *tgen) jmp(l int) {
 
 // branch emits w, a branch whose SC goes to label l.
 func (t *tgen) branchTo(w bytecode.RInstr, l int) {
+	ord := t.branches
+	t.branches++
+	if ord < len(t.far) && t.far[ord] {
+		t.emit(w.WithSC(1))
+		t.emit(aBC(bytecode.RJmp, 0, 1))
+		t.jmp(l)
+		return
+	}
 	at := t.emit(w)
-	t.jumps = append(t.jumps, tjump{at: at, label: l})
+	t.jumps = append(t.jumps, tjump{at: at, label: l, ord: ord})
+}
+
+// unreached is the order of each branch of SC whose label is past 16 bits
+// from it (tgen.far).
+func (t *tgen) unreached() []int {
+	var out []int
+	for _, j := range t.jumps {
+		if to := t.labels[j.label]; !j.bc && to >= 0 {
+			if off := to - (j.at + 1); off < math.MinInt16 || off > math.MaxInt16 {
+				out = append(out, j.ord)
+			}
+		}
+	}
+	return out
 }
 
 // float is the index of x in the code's float constants.

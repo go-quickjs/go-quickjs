@@ -173,10 +173,17 @@ func putScratch(sc *scratch) {
 // its bindings had a layout. A function with more cache sites than 16 bits
 // number (errSites) is compiled a second time with the sites of one key
 // shared, what the first made of the function's names, constants and
-// sites dropped.
+// sites dropped. One with a jump of a 16-bit offset that does not reach
+// (errJumps) is compiled again with that jump far (gen.farJump), as an
+// assembler relaxes its branches: each try makes far those that did not
+// reach in the one before, whose longer form may take others out of
+// reach, until every jump reaches. Compiled again with every jump far,
+// as one had not reached, a function's every conditional had been three
+// instructions.
 func generate(fn *bytecode.Function, s *scratch, mk func(*gen)) (*gen, bool) {
 	sites, names, consts := fn.PropSites, len(fn.Names), len(fn.Constants)
-	far, nearCap := false, 0
+	var far []bool
+	nearCap := 0
 	for try := 0; ; try++ {
 		g := &s.g
 		mk(g)
@@ -185,16 +192,22 @@ func generate(fn *bytecode.Function, s *scratch, mk func(*gen)) (*gen, bool) {
 		// none (bytecode.RegCode.Lines).
 		g.cur = -1
 		g.shareSites = try > 0
-		g.farJumps = far
+		g.farJump, g.farNew, g.shortJumps = far, g.farNew[:0], 0
 		g.nearCap = nearCap
 		if !g.layout() {
 			return nil, false
 		}
 		g.body()
 		s.code, s.pos = g.code[:0], g.pos[:0]
-		if g.err == errJumps && !far {
-			// Compiled again, as it was but with its jumps far.
-			far = true
+		if g.err == errJumps && len(g.farNew) > 0 {
+			// Compiled again, as it was but with the jumps that did not
+			// reach far.
+			for _, k := range g.farNew {
+				for len(far) <= k {
+					far = append(far, false)
+				}
+				far[k] = true
+			}
 			try--
 			fn.PropSites, fn.Names, fn.Constants = sites, fn.Names[:names], fn.Constants[:consts]
 			continue
@@ -234,9 +247,12 @@ type gen struct {
 	// sharedCalls is each call operation's site where the sites are
 	// shared (sharedCallSite).
 	sharedCalls map[bytecode.ROp]uint16
-	// farJumps says a jump of a 16-bit offset did not reach: the function
-	// is compiled again with each such jump far (jump).
-	farJumps bool
+	// farJump is, by the order of the jumps of a 16-bit offset (shortJumps),
+	// those to make far (jump): each did not reach as a compile before
+	// made it. farNew are those that do not reach as this one makes them.
+	farJump    []bool
+	farNew     []int
+	shortJumps int
 	// nfar is how many bindings have far registers (farReg); farPCs is
 	// each instruction whose BC is one's k, which finish makes its
 	// register, past every near one. nearCap, where it is not 0, is how
@@ -358,9 +374,12 @@ type mark struct {
 	refs []jumpRef
 }
 
+// jumpRef is a jump to patch: at its pc, of a 16-bit offset where short
+// says so, the ord'th such jump the function compiles (gen.farJump).
 type jumpRef struct {
 	at    int
 	short bool
+	ord   int
 }
 
 func (g *gen) fail(why string) {
@@ -775,6 +794,7 @@ func (g *gen) patch(ref jumpRef, target int) {
 	if ref.short {
 		if off < -1<<15 || off >= 1<<15 {
 			g.fail(errJumps)
+			g.farNew = append(g.farNew, ref.ord)
 			return
 		}
 		g.code[ref.at] = g.code[ref.at].WithSC(int32(off))
@@ -785,17 +805,22 @@ func (g *gen) patch(ref jumpRef, target int) {
 
 // jump emits w, a jump to m: short says its offset is SC, else BC.
 func (g *gen) jump(w bytecode.RInstr, m *mark, short bool) {
-	if short && g.farJumps {
-		// A jump of a 16-bit offset in a function where one did not
-		// reach: the branch taken to a jmp of 32 bits, past a jmp over it
-		// where it is not.
-		g.emit(w.WithSC(1))
-		g.emit(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0).WithBC(1))
-		g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), m, false)
-		return
+	ord := -1
+	if short {
+		ord = g.shortJumps
+		g.shortJumps++
+		if ord < len(g.farJump) && g.farJump[ord] {
+			// A jump of a 16-bit offset that did not reach: the branch
+			// taken to a jmp of 32 bits, past a jmp over it where it is
+			// not.
+			g.emit(w.WithSC(1))
+			g.emit(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0).WithBC(1))
+			g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), m, false)
+			return
+		}
 	}
 	at := g.emit(w)
-	ref := jumpRef{at: at, short: short}
+	ref := jumpRef{at: at, short: short, ord: ord}
 	if m.at >= 0 {
 		// A loop's backward jump: what is live at its head is the
 		// bindings and the registers the statements around it hold.
@@ -819,7 +844,7 @@ func (g *gen) site(name uint32) uint32 {
 const errSites = "a site past 16 bits"
 
 // errJumps is the failure of a jump past a 16-bit offset, which Compile
-// meets by compiling the function again with its jumps far (farJumps).
+// meets by compiling the function again with that jump far (gen.farJump).
 const errJumps = "a jump past 16 bits"
 
 // siteKey is what a site an instruction's 16-bit operand names is shared

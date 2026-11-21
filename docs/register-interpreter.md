@@ -222,9 +222,13 @@ compiled differently, never refused.
   with fewer bindings near where the first try runs out (`errRegs`). Such
   functions are generated code, run once.
 - **Jumps past 32,767 instructions.** A compare-and-branch's offset is 16
-  bits. A function where one does not reach is compiled again with its
-  jumps far (`farJumps`): each such branch jumps over a `jmp`, whose offset
-  is 32 bits.
+  bits. A function where one does not reach is compiled again with that
+  jump far (`farJump`, by its order among the function's jumps of 16 bits),
+  as an assembler relaxes its branches, until every jump reaches: a far
+  branch jumps over a `jmp` to a `jmp`, whose offset is 32 bits, and the
+  others stay one instruction. Typed code's branches are made far the same
+  way (`CompileTyped`), where a function with one that did not reach had
+  had no typed code.
 - **Sites past 65,535.** A function with more property, global or literal
   sites than 16 bits number is compiled again with its sites shared by key
   (`site16`, `siteKey`): two instructions of one kind and one name share an

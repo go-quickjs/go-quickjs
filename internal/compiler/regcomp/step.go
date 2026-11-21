@@ -31,15 +31,16 @@ var stepPartners = [256]bytecode.ROp{
 // a literal past what X's 7 bits hold, or of one of 0 or below, whose
 // sign would say the other operator (bytecode.RStepAdd); a compare of
 // the counter with itself; an offset whose fused form, one more, would
-// not fit 16 bits; and a function whose jumps are far, whose
-// compare-and-branches each jump over a jmp.
+// not fit 16 bits; and a far jump's compare-and-branch, which jumps over a
+// jmp.
 func (g *gen) fuseSteps() {
-	if g.farJumps {
-		return
-	}
 	code := g.code
 	for p := 0; p+2 < len(code); p++ {
 		s, c := code[p], code[p+1]
+		if c.SC() == 1 && code[p+2].Op() == bytecode.RJmp && code[p+2].BC() == 1 {
+			// A far jump's branch over the jmp over its jmp (gen.jump).
+			continue
+		}
 		fused := stepPartners[c.Op()]
 		if fused == 0 || s.A() != s.B() || c.A() != s.A() || c.SC() >= math.MaxInt16 {
 			continue
