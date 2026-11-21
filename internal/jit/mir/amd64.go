@@ -11330,7 +11330,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpTableCallee:
 		// The entry's address, for the call right after it (tableCheck).
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
-		c.a.ShiftImm(amd64.Shl, scratchA, abi.TableEntryShift, true)
+		c.a.ShiftImm(amd64.Shl, scratchA, uint8(abi.TableEntryShift), true)
 		c.movImm(scratchB, v.Const.Bits)
 		c.a.Op(amd64.Add, scratchA, scratchB, true)
 		c.a.Store(regCtx, abi.OffCallTable, scratchA)

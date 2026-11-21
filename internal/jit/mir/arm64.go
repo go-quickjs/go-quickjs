@@ -10045,7 +10045,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpTableCallee:
 		// As amd64's: the entry's address, for the call right after it.
 		c.a.MovRR32(a64A, c.gpr(arg(0), a64A))
-		c.a.ShiftImm(arm64.Lsl, a64A, a64A, abi.TableEntryShift, true)
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, uint8(abi.TableEntryShift), true)
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 		c.a.Store(a64Ctx, abi.OffCallTable, a64A)

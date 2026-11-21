@@ -1845,13 +1845,14 @@ type TableEntry struct {
 	Callee, Closure, Upvalues, Link uintptr
 }
 
-// The offsets of TableEntry's fields, and its size's log2.
+// The offsets of TableEntry's fields, and its size's log2: four words, of
+// a uintptr's size, 32 bytes where the JIT is built.
 const (
 	OffTableCallee   = int32(unsafe.Offsetof(TableEntry{}.Callee))
 	OffTableClosure  = int32(unsafe.Offsetof(TableEntry{}.Closure))
 	OffTableUpvalues = int32(unsafe.Offsetof(TableEntry{}.Upvalues))
 	OffTableLink     = int32(unsafe.Offsetof(TableEntry{}.Link))
-	TableEntryShift  = 5
+	TableEntryShift  = 3 + int(unsafe.Sizeof(uintptr(0)))/4
 )
 
 var _ [1<<TableEntryShift - unsafe.Sizeof(TableEntry{})]struct{}
