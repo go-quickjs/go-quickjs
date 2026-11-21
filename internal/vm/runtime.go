@@ -378,6 +378,11 @@ type Runtime struct {
 	// made once concatCount of them have been made without it.
 	concats     *pairMemo
 	concatCount uint32
+	// reuseQuiet counts Go's runs of an instruction or a call for native
+	// code under way, whose frame's slots may not hold what its locals do:
+	// exec's leaf is then told nothing of a call's locals (reuseCallRest).
+	// It takes the word concatCount leaves.
+	reuseQuiet int32
 	// concatMemo is the short strings joins made, which a join making the
 	// same text returns (joinShort), made by the first join.
 	concatMemo *concatMemo

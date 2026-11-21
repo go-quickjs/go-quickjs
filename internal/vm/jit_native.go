@@ -1741,6 +1741,10 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 	if resume == 0 && !r.jitRegThisBound(f, wb) {
 		return rpc, Undefined, false, nil
 	}
+	// Native code going on with the frame holds its locals where its slots
+	// cannot say: the arrays of exec's the slots hold are made no more in
+	// the memory of the last (execReuseForget).
+	execReuseForget[struct{}](r, wb, int(c.numRegs))
 	// Whether the run began at a loop's header: its stretches after host
 	// exits are judged as on-stack replacement's (jitRegStretchWork). A run
 	// going on with a frame another run of the code left (jitRegLoop's
@@ -2740,6 +2744,16 @@ func jitRegWideCall(w bytecode.RInstr) bool {
 // jitRegGoCallOn is jitRegGoCall on run's frame, the run's own or a level's
 // of its native calls (jitRegGoCallNested).
 func (r *Runtime) jitRegGoCallOn(ctx *abi.Context, idx int, run jitRegRun) bool {
+	// Go's call for native code, whose frame holds its locals where its
+	// slots cannot say: exec's leaf is told nothing (reuseCallRest).
+	r.reuseQuiet++
+	ok := r.jitRegGoCallMade(ctx, idx, run)
+	r.reuseQuiet--
+	return ok
+}
+
+// jitRegGoCallMade is jitRegGoCallOn's call.
+func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) bool {
 	s := r.jit
 	f, c := run.f, run.c
 	rpc := int(ctx.ExitPC)

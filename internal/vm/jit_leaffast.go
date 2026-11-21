@@ -302,9 +302,10 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 			// RegExp's call passes too (regexpNativeChecks).
 			form.check = c
 		}
-		if st.Unused {
-			// Nothing reads the result (jit_regexpdead.go).
-			form.native = jitRegExpDeadNative[struct{}](r, (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))), form.native)
+		if st.Unused || st.Reuse != 0 {
+			// Nothing reads the result (jit_regexpdead.go), or exec's at a
+			// site whose array it may make again (jit_regexpreuse.go).
+			jitRegExpResultForm[struct{}](r, form, st)
 		}
 		if st.Give != 0 && (op == elemRegExpExec || op == elemRegExpTest) {
 			form.give, form.test = (*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))), op == elemRegExpTest

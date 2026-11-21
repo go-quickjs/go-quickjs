@@ -1160,6 +1160,17 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.write(base, blk, v) })
 }
 
+// ExecReuseFeedback is Feedback that knows, for register code's call at a
+// PC of the leaf at fn, the realm's exec, whether its array may be made
+// again in the memory of the call's last (the VM's regexpreuse.go): the
+// VM's description of the call's site, its low bit set where the array's
+// pieces may be made again too, nothing reading the local that holds one
+// past the call before it is written; 0 for no such call (CallSite's
+// Reuse).
+type ExecReuseFeedback interface {
+	ExecReuse(pc int, fn uintptr) uint32
+}
+
 // CreatePoolFeedback is Feedback that knows, for a call at a PC of the
 // leaf at fn, the abi.ObjectPool of the objects native code makes the
 // call's of where the leaf is the realm's Object.create, called with a
@@ -1233,6 +1244,9 @@ func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite,
 	// Nothing reads the result but its truth: exec makes no array, replace
 	// no string (abi.GoCallState's Unused).
 	site.Unused = b.windowResultUnused(pc)
+	if f, ok := b.fb.(ExecReuseFeedback); ok && !site.Unused && c.Method {
+		site.Reuse = f.ExecReuse(pc, fn)
+	}
 	if c.Method {
 		// regexp_lit's: its RegExp, the pool's, given back to it.
 		site.Give = c.Give
@@ -2292,6 +2306,11 @@ type CallSite struct {
 	// leaf would make, another object that nothing else can reach
 	// (abi.GoCallState's Unused).
 	Unused bool
+	// Reuse, of a leaf's call of exec, is what ExecReuseFeedback says of
+	// the call (abi.GoCallState's Reuse): its array made again in the
+	// memory of the call's last, by the frame that made the last. It takes
+	// the word Unused leaves.
+	Reuse uint32
 	// Give, of register code's method call of Go at regexp_lit's
 	// expansion (Window), is the address of the abi.ObjectPool of the
 	// literal whose RegExp, the pool's next object, is its receiver, which

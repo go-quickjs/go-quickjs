@@ -707,6 +707,12 @@ type GoCallState struct {
 	// own.
 	Inline   uintptr
 	InlinePC uint32
+	// Reuse, for a leaf's call of exec whose array may be made again in
+	// the memory of the call's last (ssa.CallSite's Reuse), is the VM's
+	// description of the call's site, its low bit set where the array's
+	// pieces may be made again too; 0 for any other. It takes the word
+	// InlinePC leaves.
+	Reuse uint32
 	// Leaf, for a leaf's call (ssa.GoLeaf), is the address of the leaf's
 	// function object, which the code checked the call calls and holds
 	// while it runs (ssa.CallSite's Leaf): Go takes the function from

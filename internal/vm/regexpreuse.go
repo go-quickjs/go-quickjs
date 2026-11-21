@@ -54,10 +54,16 @@ import (
 // the call's local and the frame's locals (execReuseCall, as
 // regexpdead.go tells it of a result nothing reads), which the leaf
 // takes as it begins, and uses where it makes the array of a match of
-// that receiver. Native code tells it nothing, and so where a runtime runs
-// the JIT nothing is told: a frame native code took over in a loop holds
-// its locals where the slots cannot say. Nor is it where a memory meter
-// counts what is made, or a debugger may read the locals.
+// that receiver. A frame native code runs holds its locals where the
+// slots cannot say, so that its calls are told otherwise: native code's
+// leaf's call of exec tells the leaf its frame's slot of the local as the
+// call's mark, at a site of its own, and the array is made again only
+// where that frame made the last (jit_regexpreuse.go). A call Go makes for native code -- an instruction
+// run whole at its exit, a call of Go it made (Runtime's reuseQuiet) --
+// tells nothing, and where native code goes on with a frame past its
+// start, at a loop's header or after a call, the arrays the frame's slots
+// hold are forgotten (execReuseForget). Nor is it told where a memory
+// meter counts what is made, or a debugger may read the locals.
 //
 // The functions are generic, each instantiated with struct{} alone: Go
 // lays a generic function's instantiations out after every function and
@@ -137,10 +143,11 @@ func execReuseLeaf[_ any](r *Runtime) *regexpLeaf[struct{}] {
 
 // reuseCallRest is callRest's call of o on recv with args, a call of exec
 // of the site's, from the frame whose locals are locals: exec's leaf told
-// so first, and untold after; told nothing where the runtime runs the JIT,
-// meters memory or has a debugger.
+// so first, and untold after; told nothing where Go runs an instruction
+// or a call for native code (Runtime's reuseQuiet), meters memory or has
+// a debugger.
 func reuseCallRest[_ any](r *Runtime, site *execReuseSite, locals []Value, o *Object, fd *funcData, recv Value, args []Value) (Value, error) {
-	if r.regexpExecDead == nil || !recv.IsObject() || r.meter != nil || r.debug != nil || r.jitOn() {
+	if r.regexpExecDead == nil || !recv.IsObject() || r.meter != nil || r.debug != nil || r.reuseQuiet != 0 {
 		return r.callRest(o, fd, recv, args)
 	}
 	l := execReuseLeaf[struct{}](r)
@@ -162,6 +169,35 @@ func reuseCallRest[_ any](r *Runtime, site *execReuseSite, locals []Value, o *Ob
 		l.reuse = execReuseCall{}
 	}
 	return v, err
+}
+
+// execReuseForget drops the arrays the table remembers held in a slot of
+// the n locals at the stack's wb, a frame's that native code goes on with
+// past its start (vm's jitRegGoOnAt): native code keeps the frame's locals where its slots
+// cannot say, so that what a slot holds tells nothing of whether the array
+// is done with -- an array native code still reads from a register, made
+// again by a call made beneath it, had been written over under it. An
+// array dropped is left as it is; the site's next call makes a new one.
+func execReuseForget[_ any](r *Runtime, wb, n int) {
+	if r.regexpExecDead == nil || n == 0 {
+		return
+	}
+	locals := r.stack[wb : wb+n]
+	tb := execReuseLeaf[struct{}](r).reuseTable
+	if tb == nil {
+		return
+	}
+	lo := uintptr(unsafe.Pointer(&locals[0]))
+	hi := uintptr(unsafe.Pointer(&locals[len(locals)-1]))
+	in := func(p *Value) bool {
+		at := uintptr(unsafe.Pointer(p))
+		return p != nil && at >= lo && at <= hi
+	}
+	for i := range tb.e {
+		if e := &tb.e[i]; e.site != nil && (in(e.held) || in(e.sHeld)) {
+			*e = execReuseEntry{}
+		}
+	}
 }
 
 // heldBy reports whether the slot p holds the array a: a slot of a frame
@@ -193,6 +229,11 @@ func slotGone[_ any](r *Runtime, p *Value) bool {
 	return uintptr(unsafe.Pointer(p)) >= uintptr(unsafe.Pointer(&r.stack[0])) && i < uintptr(len(r.stack)) && i >= uintptr(r.stackTop)
 }
 
+// execReuseAt is the table's entry for the site's arrays of n elements.
+func execReuseAt[_ any](tb *execReuseTable, site *execReuseSite, n int) *execReuseEntry {
+	return &tb.e[(uintptr(unsafe.Pointer(site))>>4^uintptr(n))%uintptr(len(tb.e))]
+}
+
 // matchResultReused is matchResultOf's array of a match of re, for the
 // site's call rc: the site's last array of as many elements, and its
 // pieces' Strings where the site's are made again too, written again
@@ -222,7 +263,7 @@ func matchResultReused[_ any](r *Runtime, tbp **execReuseTable, rc execReuseCall
 		}
 		tb.clean = cell
 	}
-	e := &tb.e[(uintptr(unsafe.Pointer(site))>>4^uintptr(n))%uintptr(len(tb.e))]
+	e := execReuseAt[struct{}](tb, site, n)
 	held := &rc.locals[site.l]
 	var sHeld *Value
 	if site.s >= 0 {

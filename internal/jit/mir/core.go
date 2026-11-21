@@ -4236,7 +4236,7 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 	if v != nil && ssa.GoOp(op&0xff) == ssa.GoLeaf && len(v.Calls()) == 1 {
 		// The leaf the call checked it calls, which Go takes from here,
 		// and whether anything reads its result.
-		st.Leaf, st.Unused, st.Give = v.Calls()[0].Leaf, v.Calls()[0].Unused, v.Calls()[0].Give
+		st.Leaf, st.Unused, st.Give, st.Reuse = v.Calls()[0].Leaf, v.Calls()[0].Unused, v.Calls()[0].Give, v.Calls()[0].Reuse
 	}
 	c.goCalls = append(c.goCalls, st)
 	if len(args) == 0 {

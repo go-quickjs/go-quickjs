@@ -1069,6 +1069,20 @@ says (`windowResultUnused`) -- the register read by nothing after the call,
 or only by a test of its truth or a not just after it, or kept where a
 branch jumps where it is falsy, as `&&` keeps it. Exec's leaf then gives
 back its dummy rather than making an array, replace's makes no string. A
+leaf's call of `exec` at a site the register compiler marked for its array
+to be made again in the memory of its last (`RMarkReuse`, the VM's
+regexpreuse.go) is told the site by its register pc (`CallSite`'s `Reuse`,
+from `ExecReuseFeedback`, `abi.GoCallState`'s `Reuse`, each in a word
+another field leaves), with whether the
+program's liveness has the pieces' local read by nothing after the call
+before it is written: where the call is of the function's own code, not
+an inlined callee's, the VM tells exec's leaf the frame's slot of the
+result's local as the call's mark, and the leaf makes the array again only
+where the same frame made the last -- the slots of a frame native code
+runs say nothing of its locals, so none is read -- its pieces only where
+the liveness says. The calls are told a site of their own, so that the
+arrays native frames made and the interpreter's are kept apart, and one
+whose site's last array another frame made forgets it, making a new one. A
 leaf's call of `exec` or `test` on a RegExp literal's RegExp -- a calling
 `regexp_lit`'s, or a `call_method_w` marked `RMarkLitRecv` after one that
 does not call -- is told the literal's pool (`CallSite`'s `Give`, from the
