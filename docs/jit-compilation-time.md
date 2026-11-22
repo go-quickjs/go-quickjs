@@ -1,4 +1,4 @@
-# JIT compilation allocations
+# JIT compilation time
 
 ## Repeated phi inputs
 
@@ -61,6 +61,84 @@ The standard stress setting, `threshold,budget=3,deopt=7`, passes all
 100,277 executed variants with 42 existing skips. The JIT and VM tests
 also pass with `QJS_NONATIVE=1`. `hotdiff` finds the interpreter's hot
 functions and native handler blocks identical on Linux/amd64.
+
+## Rejected closure-table reuse
+
+The next comparison starts at `cac452a9`. A TypeScript allocation profile
+shows closure analysis allocating a value-user index, its fill positions,
+user pointers and control flags for every build that contains candidate
+closures. A trial borrowed the optimizer's existing phi-user tables and
+flags, which are idle during building, cleared the user pointers before
+returning, and let the optimizer reuse the storage immediately. It
+introduced no new cache or scratch fields; existing workspace accounting
+and trimming included these arrays. Neither this trial nor the arena
+variant below is retained in production.
+
+An earlier version put the four tables in the workspace's arenas. It
+reduced allocation volume, but the focused compile benchmark took
+125.56 / 127.54 us, and the three-pair default-thread TypeScript sample
+took 179.65 / 184.96 ms. That version was not kept. The scratch version
+also avoids clearing the fill positions before copying them, and the
+user list before filling every element.
+
+Five focused runs of `BenchmarkBuildOptimize/closures`, a loop making
+32 closures, take 123.89 / 122.66 us. Allocation volume falls from about
+94,387 to 82,162 bytes per compile (13%), and objects from 420 to 416.
+The small timing difference is not evidence of a large speedup.
+`TestCalledClosuresWorkspace` checks that builds of different sizes,
+reusing one workspace, match the independently built optimized SSA. It
+also checks that the fixture contains all its closure calls. The benchmark
+and this build-equivalence test are retained for future experiments.
+
+The final whole-compiler comparison uses five fresh-process pairs for
+each of default threads and `GOMAXPROCS=1`, 50 compilation repetitions
+per workload. Pair order and the order within each pair are randomized
+with seed 2026; no builds or tests run concurrently with this batch.
+
+| Workload | Default before / trial ms | GOMAXPROCS=1 before / trial ms | Single-thread before / trial MB |
+|---|---:|---:|---:|
+| PdfJS | 26.86 / 26.87 | 32.69 / 31.62 | 9.73 / 9.35 |
+| Mandreel | 45.91 / 45.78 | 50.24 / 50.50 | 10.41 / 10.40 |
+| Gameboy | 38.29 / 38.14 | 43.31 / 44.03 | 13.55 / 12.95 |
+| zlib | 43.46 / 43.75 | 44.26 / 44.58 | 5.74 / 5.72 |
+| Typescript | 171.10 / 166.68 | 186.52 / 191.56 | 53.91 / 53.82 |
+
+The whole batch's process CPU, including collection, is 19,277.6 /
+18,980.1 ms at default threads (-1.5%), but 19,867.1 / 20,118.7 ms at
+one thread (+1.3%). Peak Go heap is 731.0 / 747.0 MB at default threads
+and 751.5 / 751.7 MB at one thread. Fewer temporary bytes do not establish
+lower peak memory or generally faster compilation.
+
+The phase threshold also fails: at one thread, PdfJS hints are 0.74 /
+0.84 ms (+13.5%), Gameboy prepare 1.20 / 1.34 ms (+11.7%), and zlib
+saves 0.46 / 0.54 ms (+17.4%). At default threads, PdfJS intervals are
+0.14 / 0.16 ms (+14.3%) and zlib intervals 0.24 / 0.31 ms (+29.2%).
+These are small absolute costs, but the rule applies to each phase.
+The experiment is rejected rather than assuming that every difference
+is noise or that an allocation reduction must improve compilation time.
+
+The trial's correctness checks pass: the SSA tests, full Go suites plain
+and with the JIT, an uncached full suite with `QJS_NONATIVE=1`, the
+encoder verifier, and plain, standard JIT-stress and debugger
+test262 (each 100,277 passed, zero failures, 42 existing skips). Linux
+386's root test binary and the Windows amd64 JIT packages cross-build.
+The 386 binary is not executed on this macOS host. All eight generated
+layout configurations align.
+
+Native comparison matches 1,240 of the 1,244 non-TypeScript compile
+records. The four differing Mandreel records have the same instruction
+count differences in a control run of the changed binary against itself;
+TypeScript's compile sequence varies as in the earlier comparison.
+Linux/amd64 `hotdiff` shows identical native handler blocks and identical
+Go instruction counts, with differences only in RIP-relative addresses
+of relocated data. These comparisons do not claim byte identity where
+the tools still report address or run-dependent differences.
+
+The allocation profile still points to native-call feedback copies as a
+larger candidate. Removing those copies needs an ownership change: the
+SSA builder and optimizer mutate accepted call descriptions, while
+background compilation reads a feedback snapshot. Sharing the returned
+descriptions directly would let one build change another build's input.
 
 The original allocation measurements follow.
 

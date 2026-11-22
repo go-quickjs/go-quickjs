@@ -15,6 +15,7 @@ func BenchmarkBuildOptimize(b *testing.B) {
 		feedback  Feedback
 	}{
 		{"sum", `function f(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`, nil},
+		{"closures", closureSource(32), calledFeedback{}},
 		{"branches", `function f(o,n){let s=0;for(let i=0;i<n;i++){` +
 			strings.Repeat(`if(o.x>i)s+=o.y;else s-=o.z;`, 16) + `}return s}`, nil},
 		{"calls", `function f(o,n){let s=0;for(let i=0;i<n;i++){` +
