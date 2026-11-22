@@ -203,23 +203,29 @@ func (f *Func) callLists(n int) [][]*CallSite {
 }
 
 // holderChain is h in the workspace, if the Func has one.
+// Allocate the fallback separately: returning &h would make the input
+// escape even when it is copied into the workspace.
 func (f *Func) holderChain(h HolderChain) *HolderChain {
+	var p *HolderChain
 	if f.ws != nil {
-		p := &f.ws.holders.Make(1)[0]
-		*p = h
-		return p
+		p = &f.ws.holders.Make(1)[0]
+	} else {
+		p = new(HolderChain)
 	}
-	return &h
+	*p = h
+	return p
 }
 
 // inlineState is s in the workspace, if the Func has one.
 func (f *Func) inlineState(s InlineState) *InlineState {
+	var p *InlineState
 	if f.ws != nil {
-		p := &f.ws.inlines.Make(1)[0]
-		*p = s
-		return p
+		p = &f.ws.inlines.Make(1)[0]
+	} else {
+		p = new(InlineState)
 	}
-	return &s
+	*p = s
+	return p
 }
 
 // newFrame is a zero frame in the workspace, if the Func has one.

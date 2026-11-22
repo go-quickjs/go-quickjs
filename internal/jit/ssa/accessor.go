@@ -250,10 +250,12 @@ func (b *builder) guardOf(blk *Block, state func() *FrameState, op Op, t Type, k
 // accessorSite is s where the build keeps its sites: in the workspace,
 // if the Func has one.
 func (f *Func) accessorSite(s AccessorSite) *AccessorSite {
+	var p *AccessorSite
 	if f.ws != nil {
-		p := &f.ws.accessors.Make(1)[0]
-		*p = s
-		return p
+		p = &f.ws.accessors.Make(1)[0]
+	} else {
+		p = new(AccessorSite)
 	}
-	return &s
+	*p = s
+	return p
 }

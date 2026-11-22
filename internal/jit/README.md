@@ -2142,9 +2142,16 @@ the code (`Tables`) where no pool came first. So a pattern's code of any
 length assembles too.
 
 **Workspaces.** Compiles reuse their workspace's analysis tables and
-assembler storage (`jit.Workspace`, the SSA's and `mir`'s). On arm64, that
-includes the byte buffer the assembler's instruction words are encoded into
-(`FinishInto`). A workspace compile's bytes hold until its next compile;
+assembler storage (`jit.Workspace`, the SSA's and `mir`'s). SSA's prototype
+holder chains, inlined frame states and accessor sites are copied directly
+into their arenas. Their helpers allocate separate storage only for builds
+without a workspace; returning the address of an input parameter would
+make Go allocate that input even on the arena path. `TestWorkspaceMetadata`
+checks that repeated requests allocate no heap objects after warm-up.
+
+On arm64, the workspace also keeps the byte buffer the assembler's
+instruction words are encoded into (`FinishInto`). A workspace compile's
+bytes hold until its next compile;
 placing the code copies them into the executable arena before the workspace
 is returned. The buffer counts toward the workspace's memory and is trimmed
 with its other scratch storage when recent compiles need less. Compiling
