@@ -244,7 +244,6 @@ func TestJITDeoptTiersUpByOSR(t *testing.T) {
 // it was never compiled again, each call made by Go -- as AWFY's CD's
 // Vector2D.plus was, invalidated to inline its construction.
 func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
-	t.Skip("register JIT gap: frameless calls do not spend their callee's budget: plus is not compiled again after three calls (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

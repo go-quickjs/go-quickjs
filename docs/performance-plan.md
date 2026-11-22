@@ -669,10 +669,6 @@ in the interpreter.
 **Compiling again and learning.** The code is compiled again where it
 should not be, or not where it should, or does not learn what it met.
 
-- `TestJITFramelessCallsSpendTheBudget`: invocations of a function whose
-  code is invalid are to spend its budget even where the call path answers
-  them without a frame (`pureCall`). `plus` is not compiled again after
-  three calls.
 - `TestJITKeyedWrites`: an element's write to an object native code does not
   store to is to be Go's from native code (`ssa.GoKeyedWrite`). `fill` leaves
   its code 4 times.

@@ -254,14 +254,25 @@ func (r *Runtime) jitRegNativeCalleeN(cl *closure, c *regCode, calls int64, call
 		return
 	}
 	life := r.jitRegLifeOf(cl)
-	if life.invalid && c.leaf == regLeafNone && !r.jitRegWarmUp(cl, c, life, calls*int64(max(len(c.rc.Code), 1))) {
+	if life.invalid && c.leaf == regLeafNone {
 		// Invalidated: each call of it Go makes for its native callers an
 		// invocation of the fresh budget it is compiled again after, and
-		// the interpreter's samples the rest. Not a leaf's, which the
+		// the interpreter's samples the rest. Counted once: a call made
+		// with a frame is one of the runs the feedback dispatcher's returns
+		// count (jitRegTicked), spent here and counted afresh from here
+		// (jitRegArm), and one made without, which they do not see -- a
+		// pure body's (pureCall) -- is spent as calls. Spent by both, a
+		// framed call had counted twice, and plus in
+		// TestJITFramelessCallsSpendTheBudget was compiled again after
+		// three calls of a budget of four. Not a leaf's, which the
 		// interpreter's calls answer without a frame, sampling none: it is
 		// compiled again at its native callers' next ask, its
 		// deoptimizations counted all the same (jitMaxDeopts).
-		return
+		runs := max(calls, jitRegTicked(cc))
+		if !r.jitRegWarmUp(cl, c, life, runs*int64(max(len(c.rc.Code), 1))) {
+			r.jitRegArm(cl, c)
+			return
+		}
 	}
 	if !life.invalid && c.leaf == regLeafNone && r.jitRegLongWarming(cl, c, life) && !r.jitRegCalledOften(cl, c, life, caller) {
 		// Too long to inline and warming up: compiled once its budget is
@@ -342,6 +353,16 @@ func (r *Runtime) jitRegCalledOften(cl *closure, c *regCode, life *jitEntry, cal
 		n += int64(k.in)
 	}
 	return jitRegInvoked(cl, life)*100 >= jitInliningFrequency*max(n, 1)
+}
+
+// jitRegTicked is how many runs of cc's function the feedback
+// dispatcher's returns have counted (regTickRet) since its count was last
+// armed (jitRegArm) or begun again (setJITReg): 0 where it counts nothing.
+func jitRegTicked(cc *closureCode) int64 {
+	if cc.jitRegTickSet == math.MaxInt64 || cc.jitRegTick >= cc.jitRegTickSet {
+		return 0
+	}
+	return cc.jitRegTickSet - cc.jitRegTick
 }
 
 // jitRegInvoked is how many times cl's function, life its state, has run
