@@ -3,6 +3,8 @@
 package vm
 
 import (
+	"math/bits"
+
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -90,9 +92,11 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 		op := p.Code[pc].Op
 		s.ops[pc] = op
 		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC
-		for m := jitSnapMethod(0); int(m) < len(jitRegSnapAskers); m++ {
-			if asks&(1<<m) != 0 && jitRegSnapAskers[m] != nil {
-				jitRegSnapAskers[m](s, fb, pc)
+		for asks != 0 {
+			m := jitSnapMethod(bits.TrailingZeros64(asks))
+			asks &= asks - 1
+			if ask := jitRegSnapAskers[m]; ask != nil {
+				ask(s, fb, pc)
 			}
 		}
 	}

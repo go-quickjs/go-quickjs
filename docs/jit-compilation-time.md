@@ -1,5 +1,95 @@
 # JIT compilation time
 
+## Background snapshot method scan
+
+Background compilation first captures feedback on the runtime's goroutine.
+For every lowered instruction, `jitSnapshot.askReg` used to scan all 59
+feedback method slots to find the few selected by the instruction's mask.
+It now visits the set bits with `bits.TrailingZeros64`, clearing each bit
+after visiting it. Questions still run in increasing method order, and
+the register-PC questions, callee traversal and side-effect capture are
+unchanged. This reduces preparation before the work is submitted to a
+worker; synchronous `-jitcompile` does not exercise this path.
+
+The baseline is `902439ad`, whose production compiler is the same as
+`d08557da`. Measurements use the same darwin/arm64 host and Go 1.27.3.
+Five fresh-process pairs in randomized order (seed 732), one second per
+focused benchmark, give:
+
+| Background phase | Before ns | After ns | Bytes / objects per operation |
+|---|---:|---:|---:|
+| Snapshot preparation | 4,167 | 3,747 | 6,592 / 61 on both |
+| Worker compilation | 23,753 | 23,575 | 7,816 / 63 on both |
+
+Snapshot preparation is 10.1% faster in this fixture. The worker's 0.7%
+difference is small, and its implementation is unchanged. The fixture
+includes JSON calls that survive inlining. Reproduce it with:
+
+```sh
+go test -tags quickjs_jit ./internal/vm -run '^$' \
+  -bench BenchmarkJITBackgroundCompile -benchmem -count=5
+```
+
+Three fresh-process pairs per threading mode, 40 repeated compiles per
+workload, give these synchronous compilation medians:
+
+| Workload | Default before / after ms | GOMAXPROCS=1 before / after ms |
+|---|---:|---:|
+| PdfJS | 27.59 / 27.80 | 32.90 / 33.42 |
+| Mandreel | 48.05 / 47.68 | 52.50 / 53.16 |
+| Gameboy | 39.85 / 39.55 | 45.26 / 43.58 |
+| zlib | 48.10 / 48.17 | 49.20 / 49.59 |
+| Typescript | 176.15 / 177.21 | 206.42 / 197.10 |
+
+Every default-thread phase is within the 10% threshold. Single-thread
+zlib's saves phase is initially 0.51 / 0.62 ms. An isolated comparison,
+five randomized fresh-process pairs (seed 733), 150 repetitions, gives
+0.39 / 0.39 ms for saves and 45.05 / 44.97 ms total. Every phase in that
+comparison is within 4% of baseline. The first outlier does not persist;
+this synchronous path does not prepare snapshots.
+
+The same five workloads also run with `-jit -jitbackground -mode fixed
+-n 3`, without `-jitcompile`, in three fresh-process pairs. Median elapsed
+times for the complete benchmark are:
+
+| Workload | Before ms | After ms |
+|---|---:|---:|
+| PdfJS | 186.6 | 182.5 |
+| Mandreel | 680.4 | 690.5 |
+| Gameboy | 265.0 | 262.8 |
+| zlib | 494.0 | 480.2 |
+| Typescript | 1,376.5 | 1,363.3 |
+
+These runs include execution, scheduling and installation, and show small
+mixed differences rather than a demonstrated general speedup. The
+focused preparation benchmark isolates the benefit this change targets.
+
+
+Validation passes the full plain and JIT Go suites, an uncached full JIT
+suite with `QJS_NONATIVE=1`, background stress and background race tests.
+Plain, debugger, standard JIT stress and deterministic background stress
+test262 each pass 100,277 variants, with zero failures and 42 existing
+skips. Native code runs in 62,110 standard-stress variants and 43,238
+background-stress variants. The focused background tests also pass on
+Go 1.24.13; encoder verification and Windows/amd64 and Linux/arm64 builds
+pass. The Linux/386 root test binary builds, but is not run on this host.
+
+Native comparison uses actual background compilation with
+`QJS_JIT_STRESS=background=3`, `-jitbackground -jitheld -jitcode`.
+Outside TypeScript, 1,232 compiles match and four Mandreel compiles differ
+in instruction count; the baseline control reports the same four
+Mandreel differences, with the same counts. Overall there are 2,432
+matches, 86 differences and 70 compiles present in one run alone; the
+baseline control has 2,430 matches, 100 differences and 70 unmatched
+compiles. TypeScript remains variable against itself, so this comparison
+does not establish identity for every compile.
+
+Generation preserves all eight layout configurations without changing
+pads. Linux/amd64 `hotdiff` finds identical native handler blocks and
+instruction counts in the hot Go functions. It reports differences in
+Go functions' PC-relative data addresses, all displaced by 16 bytes;
+that comparison is not a clean tool pass and is not reported as one.
+
 ## Repeated phi inputs
 
 Measured on an Apple M5 Max with Go 1.27.3, against the allocator before
