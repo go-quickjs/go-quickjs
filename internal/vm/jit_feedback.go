@@ -197,6 +197,15 @@ func (f *jitRegFeedback) Property(pc int) (ssa.PropertySite, bool) {
 	}
 	site.Megamorphic = fb.megamorphicOf(rpc, cache, write, site)
 	site.Primitives = jitPolyPrim(fb.e, rpc)
+	if write && cache.jitPrimWriteSeen() && !fb.r.jitStress.primLeave {
+		// A write the interpreter has seen make of a primitive's property
+		// (jitNotePrimWrite): Go's from native code, as one the code met
+		// at an exit is (jitRegHostSeen). Learned only at exits, each site
+		// had deoptimized once: carried_exit_loops' 24 loops, a number's
+		// write in each, had their function compiled 24 times more, the
+		// interpreter running the rest of each invocation that failed.
+		site.Megamorphic, site.Primitives = true, true
+	}
 	if plain && !site.Megamorphic && cache.fills == 0 {
 		site.Scan = true
 	}

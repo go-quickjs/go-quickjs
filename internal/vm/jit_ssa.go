@@ -883,13 +883,37 @@ func (c *propCache) setSeen(s *propSeen) {
 // propSeen is a site's earlier cache entries, each of its own shape, the
 // latest last.
 type propSeen struct {
-	n       uint8
+	n uint8
+	// prim marks a write's site the interpreter has seen write a
+	// primitive's property -- a number's, a string's, a boolean's
+	// (jitNotePrimWrite) -- which code compiled for it makes Go's from
+	// native code (ssa.PropertySite's Primitives) rather than deoptimize
+	// at, as V8's store feedback holds a Smi receiver beside its maps.
+	prim    bool
 	entries [3]propCache
 	// deep are the additions the write made along prototype chains deeper
 	// than a cache holds (jitNoteDeepAdd), up to jitPropertyCases; reads,
 	// the properties a read found so (jitNoteDeepRead).
 	deep  []jitDeepSeen
 	reads []jitDeepRead
+}
+
+// jitNotePrimWrite marks c, a write's site, as one the interpreter has
+// seen write a primitive's property (propSeen's prim).
+func (c *propCache) jitNotePrimWrite() {
+	s := c.seenOf()
+	if s == nil {
+		s = &propSeen{}
+		c.setSeen(s)
+	}
+	s.prim = true
+}
+
+// jitPrimWriteSeen reports whether c, a write's site, has seen a
+// primitive's property written (jitNotePrimWrite).
+func (c *propCache) jitPrimWriteSeen() bool {
+	s := c.seenOf()
+	return s != nil && s.prim
 }
 
 // jitDeepRead is a read of a plain data property an object of shape found

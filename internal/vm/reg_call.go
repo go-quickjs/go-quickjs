@@ -1640,6 +1640,11 @@ func (r *Runtime) regSetProp(cl *closure, c *regCode, w bytecode.RInstr, obj, v 
 	if obj.IsObject() {
 		return r.setPropCached(&cl.ic[site], obj.Object(), name, v, cl.fn.Strict)
 	}
+	if jitBuilt && r.jitOn() && !obj.IsNullish() {
+		// A primitive's property written, which the site remembers for
+		// the code compiled for it (jitNotePrimWrite).
+		cl.ic[site].jitNotePrimWrite()
+	}
 	return r.setValueProp(obj, name, v, cl.fn.Strict)
 }
 

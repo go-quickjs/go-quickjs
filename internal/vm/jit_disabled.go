@@ -29,6 +29,8 @@ type jitCacheSeen struct{}
 
 func jitNoteSeen(p *propPoly, _, _ propCache) *propPoly { return p }
 
+func (*propCache) jitNotePrimWrite() {}
+
 func jitNoteDeepAdd(*propCache, *shape, *shape, *Object) {}
 
 func (*Runtime) jitNoteDeepRead(*propCache, *Object, Atom) {}
