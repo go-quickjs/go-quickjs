@@ -10532,7 +10532,6 @@ func TestJITSSATypeOf(t *testing.T) {
 // entered at its start and its loop's header alone. Each answer is the
 // interpreter's.
 func TestJITSSAGoesOnNatively(t *testing.T) {
-	t.Skip("register JIT gap: a run left to the interpreter does not go on natively at its loop: every(1000) runs 500 stretches (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -10540,13 +10539,17 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 	// A number's property written, at a site megamorphic for it, is left
 	// to Go at an exit, after which the code has no entry: the interpreter
 	// goes on to the loop's header. (A read of it is Go's from native
-	// code: ssa.ObjectOfTry.)
+	// code: ssa.ObjectOfTry.) The register JIT learns such a write and
+	// makes it Go's from native code, with no exit (jitPolySite's prim);
+	// primLeave keeps it an exit, as an exit with no entry after it is
+	// what this is about.
 	setup := `var obj={x:2};
 		function once(n){let t=0;for(let i=0;i<n;i++){const o=i===n>>1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
 		function every(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}`
 	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.jitStress.primLeave = true
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
@@ -10590,19 +10593,23 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 			}
 			// The read of 1 left once (or at every other iteration), the
 			// iteration went on in the interpreter, and the loop natively:
-			// a stretch of its own each time.
-			leaves := uint64(1)
+			// a stretch of its own each time. The loop's test is at its
+			// bottom, its back edge a compare and branch (step_jlt), as
+			// regcomp lays a loop out: an exit in its last iteration, as
+			// every's at 999, takes no back edge after it, and the run
+			// ends in the interpreter, which has only the return left.
+			leaves, goneOn := uint64(1), uint64(1)
 			if src == `every(1000)` {
-				leaves = 500
+				leaves, goneOn = 500, 499
 			}
 			if n := e.ssaStats.hosts - before.hosts; n != leaves {
 				t.Errorf("round %d: %s left native code %d times, want %d", i, src, n, leaves)
 			}
-			if n := e.ssaStats.entries - before.entries; n < leaves+1 {
+			if n := e.ssaStats.entries - before.entries; n < goneOn+1 {
 				t.Errorf("round %d: %s ran %d stretches; the loop did not go on natively", i, src, n)
 			}
-			if n, on := r.jit.interpreted-interpreted, r.jit.wentOn-wentOn; n != leaves || on != leaves {
-				t.Errorf("round %d: %s: %d runs of the interpreter, %d gone on from natively in the same run, want %d", i, src, n, on, leaves)
+			if n, on := r.jit.interpreted-interpreted, r.jit.wentOn-wentOn; n != leaves || on != goneOn {
+				t.Errorf("round %d: %s: %d runs of the interpreter, %d gone on from natively in the same run, want %d and %d", i, src, n, on, leaves, goneOn)
 			}
 		}
 	}

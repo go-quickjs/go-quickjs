@@ -665,9 +665,6 @@ in the interpreter.
   native code (`ssa.GoAdd`), which stays native, as V8's code calls its
   StringAdd. `tree`, a recursion like Splay's `GeneratePayloadTree`, is
   never called natively.
-- `TestJITSSAGoesOnNatively`: after a guard's exit that has no entry to go
-  on at, the interpreter finishes the iteration and goes on natively at the
-  loop's header in the same run. `every(1000)` runs 500 stretches.
 - `TestJITGenericCallsNative`, under `QJS_JIT_STRESS` only: callbacks made
   at more sites than a call calls natively are to be called by forEach's
   code through their links. Under the stress settings forEach's code does
@@ -707,9 +704,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITKeyedWrites`: an element's write to an object native code does not
   store to is to be Go's from native code (`ssa.GoKeyedWrite`). `fill` leaves
   its code 4 times.
-- `TestJITEntriesAtStartAndLoopsOnly`: code the interpreter goes on in after
-  an exit is to be entered at its start and its loops' headers alone. After
-  a compile, one run in 250 does not go on natively at its loop's header.
 
 **Exits.**
 

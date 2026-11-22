@@ -95,19 +95,21 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 // instruction dispatch, given one at each PC Go had gone on at, ran
 // natively 40% longer with 46. Each answer is the interpreter's.
 func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
-	t.Skip("register JIT gap: after a compile, one run in 250 does not go on natively at its loop's header (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// A number's property written, at a site megamorphic for it, is left
-	// to Go at an exit with no entry after it.
+	// to Go at an exit with no entry after it. The register JIT learns such
+	// a write and makes it Go's from native code, with no exit
+	// (jitPolySite's prim); primLeave keeps it an exit.
 	setup := `var obj={a:1,p1:1,p2:2,p3:3,p4:4,p5:5,p6:6,p7:7,p8:8,p9:9,p10:10,p11:11,p12:12};
 		function many(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;o.a=1;
 			t=(t+(obj.a|0)+obj.p1+obj.p2+obj.p3+obj.p4+obj.p5+obj.p6+obj.p7+obj.p8+obj.p9+obj.p10+obj.p11+obj.p12)|0}return t}`
 	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.jitStress.primLeave = true
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
@@ -148,8 +150,11 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 			continue
 		}
 		checked++
-		if n := r.jit.wentOn - wentOn; n != 250 {
-			t.Fatalf("round %d: went on natively at the header %d times, want 250", round, n)
+		// 250 exits, at the odd turns; the loop's test is at its bottom,
+		// so the last turn's exit, at 499, takes no back edge after it, and
+		// the interpreter returns.
+		if n := r.jit.wentOn - wentOn; n != 249 {
+			t.Fatalf("round %d: went on natively at the header %d times, want 249", round, n)
 		}
 	}
 	if checked < 3 {
