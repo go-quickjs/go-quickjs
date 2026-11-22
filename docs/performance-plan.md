@@ -678,10 +678,6 @@ should not be, or not where it should, or does not learn what it met.
   code is invalid are to spend its budget even where the call path answers
   them without a frame (`pureCall`). `plus` is not compiled again after
   three calls.
-- `TestJITSSANativeCallsSurviveEviction`: a callee the cache drops and
-  compiles again is to be called by its callers' code through its link
-  (`jitLink`), with no caller compiled again for it. The caller is compiled
-  again for its callee's new code.
 - `TestJITPatternReadsLearnTheirMisses`: a pattern's read searches its
   source's own table until it misses; the first miss is to deoptimize once
   and make the site megamorphic. The read is not made megamorphic, and

@@ -6861,7 +6861,6 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 // runs. While the function has no code, a call has Go run it. A link
 // outlives its entries only while code calls through it.
 func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
-	t.Skip("register JIT gap: a caller is compiled again for its callees' new code, where its native calls should survive their eviction (docs/performance-plan.md, the register JIT's remaining gaps)")
 	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6891,7 +6890,10 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 			t.Fatalf("%s: caller(300) = %v, %v; interpreter %v", round, v, err, wv)
 		}
 	}
-	for i := 0; i < 4; i++ {
+	// Past jitKeptStarts calls: compiled at its loop with the entries kept
+	// for the frame waiting there, caller is compiled again without them
+	// at its fifth (jitRegKeptGone), which no callee's eviction makes.
+	for i := 0; i < 2*jitKeptStarts; i++ {
 		run("warm-up")
 	}
 	callerCl, leafCl := jitPortNamed(r, "caller"), jitPortNamed(r, "leaf")
@@ -6908,7 +6910,9 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 	if ce == nil || ce.code == nil || ce.keep == nil || !slices.Contains(ce.keep.links, jitPortLink(r, leafCl)) || !slices.Contains(ce.keep.links, jitPortLink(r, methodCl)) {
 		t.Fatalf("caller does not call leaf and m natively: %+v", ce)
 	}
-	code, reopts := ce.code, s.reoptimized
+	// Caller's own compiles: the callees' after their eviction count in
+	// the runtime's (reoptimized) as any compile past a function's first.
+	code, reopts := ce.code, ce.life.reopts
 	for _, cl := range []*closure{leafCl, methodCl} {
 		key := r.jitRegKeyOf(cl)
 		e, l := s.regCache[key], s.regLinks[key]
@@ -6933,7 +6937,7 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 	hosts := ce.life.ssaStats.hosts
 	leafIn, mIn := jitPortLinkIn(r, leafCl), jitPortLinkIn(r, methodCl)
 	run("relinked")
-	if jitPortRegEntry(r, callerCl) != ce || ce.code != code || s.reoptimized != reopts {
+	if jitPortRegEntry(r, callerCl) != ce || ce.code != code || ce.life.reopts != reopts {
 		t.Fatal("caller was compiled again for its callees' new code")
 	}
 	if n := ce.life.ssaStats.hosts - hosts; n != 0 {
