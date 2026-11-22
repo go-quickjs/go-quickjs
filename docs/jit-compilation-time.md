@@ -237,7 +237,7 @@ changes. The background comparison also supplies `-jitbackground`.
 
 No workload is 3% slower at both placements in either mode. This is an
 incremental two-placement check on arm64, not an eight-placement final
-branch comparison or an amd64 execution measurement.
+comparison or an amd64 execution measurement.
 
 `TestJITBackgroundSnapshotStatePCs` checks empty and absent feedback,
 learned and recursive positions together, duplicate entries, non-self
@@ -297,7 +297,7 @@ go test ./internal/jit/mir -run '^$' \
 ```
 
 Three fresh-process pairs per threading mode, 40 repetitions of each
-compile across all five required Octane workloads, give:
+compile across Octane's five compile-heavy workloads, give:
 
 | Workload | Default before / after ms | GOMAXPROCS=1 before / after ms |
 |---|---:|---:|
@@ -468,8 +468,9 @@ that comparison is not a clean tool pass and is not reported as one.
 
 Measured on an Apple M5 Max with Go 1.27.3, against the allocator before
 this change. The allocator counts every phi edge's use and weight, and
-pairs a phi and an input once for register and spill coalescing. A joined pair is already in one class; a conflicting pair
-cannot stop conflicting as its classes grow. The member's pool offset,
+pairs a phi and an input once for register and spill coalescing. A
+joined pair is already in one class; a conflicting pair cannot stop
+conflicting as its classes grow. The member's pool offset,
 unused until group initialization, holds the last phi seen, so there is
 no extra table or clearing pass. zlib's largest function has 77,199 pairs
 before this filtering and 57,793 after it.
@@ -519,7 +520,10 @@ The allocation-checker stress configuration
 `constructor-unit.js` failures. Both reproduce with the baseline
 allocator: 500 of 502 NumberFormat variants pass on both builds. The
 full changed run passes 100,275 variants, fails those two and has the
-42 existing skips. The two failures are open, not counted as passes.
+42 existing skips. Those two failures were not this change's: a register
+loop's step stored a captured variable with the frame state of the code
+past the loop, which the SSA build now gives its own block's, and
+ssa.Check now holds the SSA strict.
 
 The standard stress setting, `threshold,budget=3,deopt=7`, passes all
 100,277 executed variants with 42 existing skips. The JIT and VM tests
@@ -716,7 +720,7 @@ go test -tags quickjs_jit ./internal/vm -run '^$' \
 
 ## Whole-compiler measurements
 
-The initial comparison runs all five required Octane workloads in one
+The initial comparison runs Octane's five compile-heavy workloads in one
 process, in suite order, with `-jitcompile 20`. Each figure below is the
 median of three fresh processes, with base, SSA-only and combined builds
 run in alternating order. Times include the compilation phases, not the
@@ -796,7 +800,7 @@ profile also shows no new concentrated compiler hotspot.
 The reliable gains are removal of the individual allocations and the
 focused helper speedups. Whole-compiler gains are small and dependent on
 the workload and collection behavior; the earlier slower results remain
-part of this report. These measurements do not establish a speedup across
+part of this log. These measurements do not establish a speedup across
 every workload or platform.
 
 Reproduce the whole-compiler measurements with two binaries built from
