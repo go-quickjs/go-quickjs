@@ -278,7 +278,12 @@ Do not manually edit generated files or their binary companions:
   written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.
   `go generate ./internal/vm` runs it last, after the generators above,
   since it measures what they write; `TestLayoutLock` fails while an anchor
-  is off its target.
+  is off its target. `internal/vm/layouteq.txt` is its list of each
+  configuration's compiler-generated equality functions (`type:.eq.*`),
+  which a regeneration and `TestLayoutLock` fail on a new one of: give
+  the type it compares none (no padding hole, or a non-comparable
+  `_ [0]func()` field), or record the list with `layoutpad -eq` where the
+  new one is meant (docs/optimizing.md, "Equality functions").
 - `wasm/internal/engine/reg_num_gen.go`, the numeric operators as
   register code's operations and their handlers
   (wasm/internal/engine/README.md), and

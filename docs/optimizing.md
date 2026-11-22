@@ -441,6 +441,25 @@ locked tree and so varies what it varies around the locked layout, both
 labels by the same amounts as long as both are locked or one is the base
 the targets were recorded at.
 
+**Equality functions.** The compiler makes an equality function
+(`type:.eq.*`) for a struct or array type that a comparison, a map key or
+an interface's `==` needs and that memequal cannot compare -- a padding
+hole, a float, a string or an interface among its fields -- and lays it
+out with the code of the package that first needs it: a new one moves
+every function after it up to the next pad. Three moved hot code in two
+days, each found by timing (`testConfig`, `strAppend` 64 bytes;
+`[64]primAbsentEntry`, `strAppend` and `strAppendOp` 128 bytes and
+`upvalue_string_append` 12.6% slower; regcomp's `tjump`, `wtf8.Scan` and
+the code after it up to regexp's pad 64 bytes). `internal/vm/layouteq.txt`
+lists each configuration's, and a regeneration and `TestLayoutLock` fail
+on one it does not list, naming where it is laid out and the functions
+whose code calls it (none: a map's key or an interface's comparison
+needs it). Make the type need none -- no padding hole, or a
+non-comparable `_ [0]func()` field where nothing should compare it --
+or, where the new one is meant, record the lists with
+`go run ./internal/cmd/layoutpad -eq`, beside `-pages`, and say so in
+the commit.
+
 When a change lands, run `go generate ./internal/vm`. A change that adds
 hot code where no lever reaches it should add a position or an anchor
 (`layoutlock.txt`), its target recorded at the base it is compared with.

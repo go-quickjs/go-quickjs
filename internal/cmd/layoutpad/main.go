@@ -338,6 +338,7 @@ func main() {
 	targetsPath := flag.String("targets", targetsRel, "the targets file, from the repository's root")
 	all := flag.Bool("all", false, "with -show, write the pads and set every lever of the configurations to 0 first, to see where each lands")
 	recordPages := flag.Bool("pages", false, "pad as by default, and record each code anchor's address (its page) as the build has it, where an anchor moved a page and the move is meant")
+	recordEq := flag.Bool("eq", false, "pad as by default, and record the builds' equality functions (type:.eq.*) in "+eqRel+", where a new one is meant")
 	flag.Parse()
 	root, err := repoRoot()
 	if err == nil {
@@ -347,6 +348,10 @@ func main() {
 		fatal(err)
 	}
 	t, err := readTargets(*targetsPath)
+	if err != nil {
+		fatal(err)
+	}
+	eqs, err := readEq(eqRel)
 	if err != nil {
 		fatal(err)
 	}
@@ -379,7 +384,7 @@ func main() {
 	}
 	switch {
 	case *check:
-		drift, paged := false, false
+		drift, paged, eqFailed := false, false, false
 		for _, c := range picked {
 			syms, err := build(c)
 			if err != nil {
@@ -393,11 +398,16 @@ func main() {
 			for _, line := range moved {
 				fmt.Printf("%s: %s\n", c, line)
 			}
-			if len(lines)+len(moved) == 0 {
-				fmt.Printf("%s: every anchor at its target, on its page\n", c)
+			eqLines, eqNew := eqCheck(c, syms, eqs)
+			for _, line := range eqLines {
+				fmt.Printf("%s: %s\n", c, line)
+			}
+			if len(lines)+len(moved) == 0 && !eqNew {
+				fmt.Printf("%s: every anchor at its target, on its page, and no new equality function\n", c)
 			}
 			drift = drift || len(lines) > 0
 			paged = paged || len(moved) > 0
+			eqFailed = eqFailed || eqNew
 		}
 		if drift {
 			fmt.Println("layoutpad: the layout has drifted from its targets: run go generate ./internal/vm (go run ./internal/cmd/layoutpad)")
@@ -405,7 +415,10 @@ func main() {
 		if paged {
 			fmt.Println(pageAdvice)
 		}
-		if drift || paged {
+		if eqFailed {
+			fmt.Println(eqAdvice)
+		}
+		if drift || paged || eqFailed {
 			os.Exit(1)
 		}
 	case *show:
@@ -451,21 +464,34 @@ func main() {
 					c.anchors[i].at = s.addr
 				}
 			}
+			eqs[c.String()] = eqOf(syms)
 			fmt.Printf("%s: recorded\n", c)
 		}
 		t.toolchain = goVersion()
 		if err := writeTargets(*targetsPath, t); err != nil {
 			fatal(err)
 		}
+		if err := writeEq(eqRel, t, eqs); err != nil {
+			fatal(err)
+		}
 	default:
 		if err := writeSources(t); err != nil {
 			fatal(err)
 		}
-		paged := false
+		paged, eqFailed := false, false
 		for _, c := range picked {
 			syms, err := solve(c, *verbose)
 			if err != nil {
 				fatal(err)
+			}
+			if *recordEq {
+				eqs[c.String()] = eqOf(syms)
+			} else {
+				lines, failed := eqCheck(c, syms, eqs)
+				for _, line := range lines {
+					fmt.Printf("%s: %s\n", c, line)
+				}
+				eqFailed = eqFailed || failed
 			}
 			if *recordPages {
 				setPages(c, syms)
@@ -482,8 +508,19 @@ func main() {
 			}
 			fmt.Println("layoutpad: recorded the anchors' pages in", *targetsPath)
 		}
+		if *recordEq {
+			if err := writeEq(eqRel, t, eqs); err != nil {
+				fatal(err)
+			}
+			fmt.Println("layoutpad: recorded the equality functions in", eqRel)
+		}
 		if paged {
 			fmt.Println(pageAdvice)
+		}
+		if eqFailed {
+			fmt.Println(eqAdvice)
+		}
+		if paged || eqFailed {
 			os.Exit(1)
 		}
 	}
@@ -766,6 +803,20 @@ func build(c *config) (*symtab, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
+	exe, err := buildExe(c, dir)
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command("go", "tool", "nm", "-size", "-sort", "address", exe).Output()
+	if err != nil {
+		return nil, fmt.Errorf("go tool nm: %w", err)
+	}
+	return parseNM(out), nil
+}
+
+// buildExe builds v8bench for c in dir as its targets are measured, and
+// returns the binary's path.
+func buildExe(c *config, dir string) (string, error) {
 	exe := filepath.Join(dir, "v8bench.exe")
 	args := []string{"build", "-buildvcs=false", "-o", exe}
 	if tags := c.tags(); tags != "" {
@@ -775,13 +826,9 @@ func build(c *config) (*symtab, error) {
 	cmd := exec.Command("go", args...)
 	cmd.Env = append(os.Environ(), "GOOS="+c.goos, "GOARCH="+c.goarch, "CGO_ENABLED=0", "GOAMD64=v1", "GOFLAGS=", "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("%s: go %s: %v\n%s", c, strings.Join(args, " "), err, out)
+		return "", fmt.Errorf("%s: go %s: %v\n%s", c, strings.Join(args, " "), err, out)
 	}
-	out, err := exec.Command("go", "tool", "nm", "-size", "-sort", "address", exe).Output()
-	if err != nil {
-		return nil, fmt.Errorf("go tool nm: %w", err)
-	}
-	return parseNM(out), nil
+	return exe, nil
 }
 
 func parseNM(out []byte) *symtab {
