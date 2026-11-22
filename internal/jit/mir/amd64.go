@@ -1951,7 +1951,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// in a stack trace, as the interpreter's does.
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	// Whether xScratch2 keeps the callee's frame's address (below).
-	framed := false
+	frameInX := false
 	if win {
 		// Register code's (ssa.CallSite's Window): the callee's window past
 		// the VM's stack's top, its address in xScratch2 too, given the
@@ -1968,7 +1968,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 		c.a.AddMem(scratchC, regCtx, abi.OffStackBase)
 		c.a.MovQToX(xScratch2, scratchC)
-		framed = true
+		frameInX = true
 		inC, m := true, 0
 		switch {
 		case site.Forward:
@@ -2019,7 +2019,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		}
 		for i := 0; i < site.Params && i < site.LocalCount; i++ {
 			if i >= argc || !c.scalar(s.Slot(args+i)) {
-				framed = true
+				frameInX = true
 			}
 		}
 		// The stack's top the room check left, if no record was written
@@ -2030,7 +2030,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		}
 		c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 		c.a.AddMem(scratchC, regCtx, abi.OffStackBase)
-		if framed {
+		if frameInX {
 			c.a.MovQToX(xScratch2, scratchC)
 		}
 		inC := true
@@ -2043,18 +2043,6 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			c.directOperand(v, s.Slot(this), false, abi.OffThis, &inC)
 		}
 		back()
-	}
-	// A slot's words: its record's, or the frame's, which holds it still.
-	words := func(slot int) (nb amd64.Reg, nd int32, rb amd64.Reg, rd int32) {
-		for i := range st.Records {
-			if int(st.Records[i].Slot) == slot {
-				k := int32(i)
-				return regCtx, abi.OffRecord + k*32 + 16, regCtx, abi.OffRecordRef + k*8
-			}
-		}
-		nb, nd = c.slotAddr(slot, false, scratchC)
-		rb, rd = c.slotAddr(slot, true, scratchC)
-		return nb, nd, rb, rd
 	}
 	// What is live across the call, in registers, is saved -- but what the
 	// frame holds throughout (frameResident); nothing else is in a register
@@ -2084,29 +2072,11 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	const calleeCtx, locals, tmp, top, high2 = amd64.R8, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	enter := func() {
-		if !c.enterUsed {
-			c.enter, c.enterUsed = c.a.NewLabel(), true
-		}
-		c.a.Jmp(c.enter)
-	}
-	// frame has locals be the callee's frame's address, past the VM's
-	// stack's top.
-	frame := func() {
-		if framed {
-			c.a.MovQFromX(locals, xScratch2)
-			return
-		}
-		c.a.Load(locals, regCtx, abi.OffStackTop)
-		c.a.Load(locals, locals, 0)
-		c.a.ShiftImm(amd64.Shl, locals, 4, true)
-		c.a.AddMem(locals, regCtx, abi.OffStackBase)
-	}
 	// setup writes what the call of t knows of its callee's frame and
 	// context. It keeps callLink, the callee's link.
 	setup := func(t *ssa.CallSite) {
 		if win {
-			frame()
+			c.callFrame(locals, frameInX)
 			if t.Forward {
 				c.windowForward(t, locals, calleeCtx)
 			} else {
@@ -2183,7 +2153,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			// The frame's own, as many as its context's Argc says: copied
 			// from its Args (forwardArgs).
 			argc = 0
-			frame()
+			c.callFrame(locals, frameInX)
 			framed = true
 			if t.FrameArgs {
 				c.a.Load(calleeCtx, regCtx, abi.OffNext)
@@ -2196,11 +2166,11 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 				continue
 			}
 			if !framed {
-				frame()
+				c.callFrame(locals, frameInX)
 				framed = true
 			}
 			if i < argc {
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(locals, at+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -2230,7 +2200,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			c.storeImm(calleeCtx, abi.OffArgc, uint64(argc), top)
 			for i := range argc {
 				at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Num)), top)
 				c.a.Load(top, rb, rd)
@@ -2302,7 +2272,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 		} else if (t.ThisSlot >= 0 || site.Method || t.Forward) && !direct {
-			nb, nd, rb, rd := words(this)
+			nb, nd, rb, rd := c.callWords(st, this)
 			c.a.Load(top, nb, nd)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Load(top, rb, rd)
@@ -2358,7 +2328,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			} else {
 				c.movImm(callObject, uint64(t.Callee))
 			}
-			enter()
+			c.callEnter()
 		})
 		c.a.Bind(next)
 	}
@@ -2366,7 +2336,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		// A function none of them is (genericCheck): its frame made as its
 		// link says, read from its link at run time.
 		setupGen := func() {
-			frame()
+			c.callFrame(locals, frameInX)
 			if win {
 				// Register code's (genWindowSetup).
 				c.genWindowSetup(site, locals, calleeCtx, top, tmp)
@@ -2392,7 +2362,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 				c.a.Load(top, callLink, c.enc.LinkParams)
 				c.a.OpImm(amd64.Cmp, top, int32(i), true)
 				c.a.Jcc(amd64.CondBE, fill)
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -2423,7 +2393,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			c.a.OpImm(amd64.And, top, abi.LinkArrow, true)
 			c.a.Jcc(amd64.CondNE, arrow)
 			if site.Method {
-				nb, nd, rb, rd := words(calleeSlot - 1)
+				nb, nd, rb, rd := c.callWords(st, calleeSlot-1)
 				c.a.Load(top, nb, nd)
 				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -2462,7 +2432,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			c.a.Bind(none)
 			setupGen()
 			c.a.Load(callObject, regCtx, abi.OffCallCallee)
-			enter()
+			c.callEnter()
 		})
 	}
 	// The callee returned (returnNative), its result's words in retNum and
@@ -2524,6 +2494,39 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	})
 	c.restoreSaves(v)
 	c.setG(v, retNum)
+}
+
+// callWords locates a slot's words in the call's records or the frame.
+func (c *compiler) callWords(st *abi.CallState, slot int) (nb amd64.Reg, nd int32, rb amd64.Reg, rd int32) {
+	for i := range st.Records {
+		if int(st.Records[i].Slot) == slot {
+			k := int32(i)
+			return regCtx, abi.OffRecord + k*32 + 16, regCtx, abi.OffRecordRef + k*8
+		}
+	}
+	nb, nd = c.slotAddr(slot, false, scratchC)
+	rb, rd = c.slotAddr(slot, true, scratchC)
+	return nb, nd, rb, rd
+}
+
+// callEnter branches to the shared fallback that enters a callee through Go.
+func (c *compiler) callEnter() {
+	if !c.enterUsed {
+		c.enter, c.enterUsed = c.a.NewLabel(), true
+	}
+	c.a.Jmp(c.enter)
+}
+
+// callFrame computes the callee's frame address past the stack's top.
+func (c *compiler) callFrame(locals amd64.Reg, framed bool) {
+	if framed {
+		c.a.MovQFromX(locals, xScratch2)
+		return
+	}
+	c.a.Load(locals, regCtx, abi.OffStackTop)
+	c.a.Load(locals, locals, 0)
+	c.a.ShiftImm(amd64.Shl, locals, 4, true)
+	c.a.AddMem(locals, regCtx, abi.OffStackBase)
 }
 
 // restoreSaves reads back what native call v saved (savesOf), or the frame
@@ -6843,7 +6846,7 @@ func (c *compiler) constructGuards(t *ssa.CallSite, guard guardTo) {
 // directOperand writes call v's operand x, both words, where its callee
 // has it: at disp in the callee's frame, if local, and otherwise at disp
 // from the context. The frame's address is in scratchC where *inC says
-// so, and otherwise in xScratch2 (call's framed): a scalar's write keeps
+// so, and otherwise in xScratch2 (call's frameInX): a scalar's write keeps
 // scratchC -- materialize makes a value in its own register, its operand
 // read into scratchB or xScratch1 -- and a pointer word's read does not.
 // It uses every scratch register.

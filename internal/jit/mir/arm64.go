@@ -4301,17 +4301,6 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		}
 		back()
 	}
-	words := func(slot int) (nb arm64.Reg, nd int32, rb arm64.Reg, rd int32) {
-		for i := range st.Records {
-			if int(st.Records[i].Slot) == slot {
-				k := int32(i)
-				return a64Ctx, abi.OffRecord + k*32 + 16, a64Ctx, abi.OffRecordRef + k*8
-			}
-		}
-		nb, nd = c.slotAddr(slot, false, a64C)
-		rb, rd = c.slotAddr(slot, true, a64C)
-		return nb, nd, rb, rd
-	}
 	for _, sv := range c.savesOf(v) {
 		switch {
 		case sv.frame != 0:
@@ -4329,24 +4318,10 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	const calleeCtx, locals, tmp, top, high2 = arm64.Reg(3), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	enter := func() {
-		if !c.enterUsed {
-			c.enter, c.enterUsed = c.a.NewLabel(), true
-		}
-		c.a.B(c.enter)
-	}
-	// frame has locals be the callee's frame's address, past the VM's
-	// stack's top.
-	frame := func() {
-		c.a.Load(locals, a64Ctx, abi.OffStackTop)
-		c.a.Load(locals, locals, 0)
-		c.a.Load(tmp, a64Ctx, abi.OffStackBase)
-		c.a.AddLsl(locals, tmp, locals, 4)
-	}
 	// setup is amd64's: it keeps a64CallLink and a64D, the callee's entry.
 	setup := func(t *ssa.CallSite) {
 		if win {
-			frame()
+			c.callFrame(locals, tmp)
 			if t.Forward {
 				c.windowForward(t, locals, calleeCtx)
 			} else {
@@ -4421,7 +4396,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		if t.Forward {
 			// As amd64's: the frame's own arguments (forwardArgs).
 			argc = 0
-			frame()
+			c.callFrame(locals, tmp)
 			framed = true
 			if t.FrameArgs {
 				c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
@@ -4434,11 +4409,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 				continue
 			}
 			if !framed {
-				frame()
+				c.callFrame(locals, tmp)
 				framed = true
 			}
 			if i < argc {
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(locals, at+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -4467,7 +4442,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Store(calleeCtx, abi.OffArgc, top)
 			for i := range argc {
 				at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Num)), top)
 				c.a.Load(top, rb, rd)
@@ -4546,7 +4521,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
 		} else if (t.ThisSlot >= 0 || site.Method || t.Forward) && !direct {
-			nb, nd, rb, rd := words(this)
+			nb, nd, rb, rd := c.callWords(st, this)
 			c.a.Load(top, nb, nd)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Load(top, rb, rd)
@@ -4600,14 +4575,14 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			} else {
 				c.movImm(a64CallObject, uint64(t.Callee))
 			}
-			enter()
+			c.callEnter()
 		})
 		c.a.Bind(next)
 	}
 	if gen {
 		// As amd64's: its frame made as its link says.
 		setupGen := func() {
-			frame()
+			c.callFrame(locals, tmp)
 			if win {
 				// As amd64's (genWindowSetup).
 				c.genWindowSetup(site, locals, calleeCtx, top, tmp, high2)
@@ -4631,7 +4606,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 				c.a.Load(top, a64CallLink, c.enc.LinkParams)
 				c.a.CmpImm(top, int64(i), true)
 				c.a.BCond(arm64.LS, fill)
-				nb, nd, rb, rd := words(first + i)
+				nb, nd, rb, rd := c.callWords(st, first+i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -4660,7 +4635,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Tst(top, tmp, true)
 			c.a.BCond(arm64.NE, arrow)
 			if site.Method {
-				nb, nd, rb, rd := words(calleeSlot - 1)
+				nb, nd, rb, rd := c.callWords(st, calleeSlot-1)
 				c.a.Load(top, nb, nd)
 				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
@@ -4696,7 +4671,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Bind(none)
 			setupGen()
 			c.a.Load(a64CallObject, a64Ctx, abi.OffCallCallee)
-			enter()
+			c.callEnter()
 		})
 	}
 	// As amd64's: the callee returned, its result's words in a64RetNum and
@@ -4750,6 +4725,35 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	})
 	c.restoreSaves(v)
 	c.setG(v, a64RetNum)
+}
+
+// callWords locates a slot's words in the call's records or the frame.
+func (c *a64Compiler) callWords(st *abi.CallState, slot int) (nb arm64.Reg, nd int32, rb arm64.Reg, rd int32) {
+	for i := range st.Records {
+		if int(st.Records[i].Slot) == slot {
+			k := int32(i)
+			return a64Ctx, abi.OffRecord + k*32 + 16, a64Ctx, abi.OffRecordRef + k*8
+		}
+	}
+	nb, nd = c.slotAddr(slot, false, a64C)
+	rb, rd = c.slotAddr(slot, true, a64C)
+	return nb, nd, rb, rd
+}
+
+// callEnter branches to the shared fallback that enters a callee through Go.
+func (c *a64Compiler) callEnter() {
+	if !c.enterUsed {
+		c.enter, c.enterUsed = c.a.NewLabel(), true
+	}
+	c.a.B(c.enter)
+}
+
+// callFrame computes the callee's frame address past the stack's top.
+func (c *a64Compiler) callFrame(locals, tmp arm64.Reg) {
+	c.a.Load(locals, a64Ctx, abi.OffStackTop)
+	c.a.Load(locals, locals, 0)
+	c.a.Load(tmp, a64Ctx, abi.OffStackBase)
+	c.a.AddLsl(locals, tmp, locals, 4)
 }
 
 // restoreSaves is amd64's.

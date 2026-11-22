@@ -7,6 +7,7 @@ import (
 	jscompile "github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
@@ -75,3 +76,62 @@ func (arm64BenchFeedback) Generic(int) bool                  { return false }
 func (arm64BenchFeedback) EntryGeneric(int) bool             { return false }
 func (arm64BenchFeedback) Inline(int) (ssa.InlineSite, bool) { return ssa.InlineSite{}, false }
 func (arm64BenchFeedback) NativeCalls(int) []ssa.CallSite    { return nil }
+
+type nativeCallBenchFeedback struct {
+	arm64BenchFeedback
+	p *ir.Program
+}
+
+func (f nativeCallBenchFeedback) NativeCalls(pc int) []ssa.CallSite {
+	in := f.p.Code[pc]
+	if in.Op != ir.Host || !in.Window {
+		return nil
+	}
+	return []ssa.CallSite{{Callee: 0x10000, Closure: 0x20000, Entry: 0x30000,
+		Argc: in.Extra, Method: in.When, ThisSlot: -1, Window: in.Left.Slot + 1, LocalCount: 8}}
+}
+
+func BenchmarkCompileNativeCalls(b *testing.B) {
+	ast, err := parser.Parse(`function f(g,n){let s=0;for(let i=0;i<n;i++){`+
+		strings.Repeat(`s+=g(i);`, 16)+`}return s}`, parser.Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	fn, err := jscompile.Compile(ast, jscompile.Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	p, err := jitcompile.LowerReg(fn.Constants[0].Fn.RegCode(), fn.Constants[0].Fn)
+	if err != nil {
+		b.Fatal(err)
+	}
+	f, err := ssa.BuildWith(p, nativeCallBenchFeedback{p: p})
+	if err != nil {
+		b.Fatal(err)
+	}
+	ssa.Optimize(f)
+	for _, arch := range []string{"amd64", "arm64"} {
+		b.Run(arch, func(b *testing.B) {
+			compile := compileAMD64
+			if arch == "arm64" {
+				compile = compileARM64
+			}
+			var w Workspace
+			w.init()
+			enc, opts := abi.Encoding{ValueSize: 16, StoreRef: 1, CallGo: 1}, Settings()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				code, err := compile(&w, f, enc, opts)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(code.Calls) != 16 {
+					b.Fatalf("compiled %d native calls, want 16", len(code.Calls))
+				}
+				b.ReportMetric(float64(len(code.Bytes)), "code-B")
+				w.Rewind()
+			}
+		})
+	}
+}

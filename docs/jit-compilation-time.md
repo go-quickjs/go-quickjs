@@ -1,5 +1,118 @@
 # JIT compilation time
 
+## Call emission helpers
+
+A fresh TypeScript compilation profile at `bf53680f` identifies native-call
+emission as a large allocator. Each backend's call emitter creates small
+closures for finding argument words, loading the callee's frame address
+and entering the fallback. Deferred cold paths retain these helpers,
+so Go allocates their environments even for ordinary calls whose cold
+path does not need every helper.
+
+The helpers are now compiler methods with their inputs passed explicitly.
+The amd64 flag saying that the frame address is cached in an XMM register
+is named `frameInX`, distinct from a setup block's local flag saying that
+the frame address has been loaded. Label creation and instruction order
+are unchanged; the deferred emission closures remain where they were.
+
+`BenchmarkCompileNativeCalls` compiles a function with 16 native calls
+on both backends, checking that all 16 survived SSA building. Five
+fresh-process pairs, one second per case, randomized with seed 734,
+on darwin/arm64 and Go 1.27.3 give:
+
+| Backend | Before / after us | Before / after B | Before / after allocations | Code bytes |
+|---|---:|---:|---:|---:|
+| amd64 | 38.354 / 38.399 | 21,207 / 20,183 | 174 / 126 | 10,356 on both |
+| arm64 | 29.729 / 29.387 | 19,181 / 18,285 | 168 / 120 | 8,260 on both |
+
+This removes three allocation objects per native call. The timing gain
+is small on arm64, and there is no demonstrated amd64 timing gain in
+this fixture; both emitters are run by an arm64 host, not native amd64.
+Reproduce with:
+
+```sh
+go test ./internal/jit/mir -run '^$' \
+  -bench BenchmarkCompileNativeCalls -benchmem -count=5
+```
+
+Three fresh-process pairs per threading mode, 40 repetitions of each
+compile across all five required Octane workloads, give:
+
+| Workload | Default before / after ms | GOMAXPROCS=1 before / after ms |
+|---|---:|---:|
+| PdfJS | 27.66 / 27.33 | 33.53 / 34.10 |
+| Mandreel | 46.88 / 47.05 | 51.11 / 52.17 |
+| Gameboy | 38.73 / 38.75 | 44.30 / 43.14 |
+| zlib | 44.54 / 45.02 | 46.95 / 47.20 |
+| Typescript | 174.77 / 172.62 | 194.08 / 196.12 |
+
+Every default-thread phase is within the 10% threshold. Single-thread
+zlib's saves phase is initially 0.40 / 0.60 ms. An isolated sample of
+five randomized process pairs (seed 735), 150 repetitions, gives
+0.41 / 0.38 ms for saves and 44.62 / 44.74 ms total; no phase exceeds
+the 10% threshold. The initial outlier does not persist.
+
+TypeScript's default-thread compiler allocation objects fall from
+281,054 to 265,983 per repetition, but bytes are 55.65 / 56.32 MB;
+compilation counts and feedback differ among processes. Single-thread
+counts are 282,234 / 269,584, and bytes 56.30 / 56.85 MB. Process CPU,
+including collection and benchmark execution, is 8,151.9 / 8,187.6 ms
+at default threads and 8,616.8 / 8,703.5 ms at one thread. These samples
+establish fewer allocation objects, not an overall CPU or memory-volume
+gain in TypeScript.
+
+
+A longer isolated single-thread TypeScript sample uses five randomized
+fresh-process pairs (seed 735), 100 repetitions, normal collection and
+no concurrent builds or tests. Median total compilation is 193.93 /
+190.14 ms (2.0% less), and emission 33.24 / 32.14 ms (3.3% less).
+Every phase is within the 10% threshold. Allocation objects fall from
+274,817 to 257,471 (6.3%), and volume from 49.84 to 49.40 MB. Process
+CPU including collection and benchmark execution falls from 20,717.8
+to 20,337.1 ms (1.8%); elapsed time is 20,940.9 / 20,507.1 ms. This
+supports a modest TypeScript improvement in the longer sample, while
+the first sample's slower results remain recorded above.
+
+Actual background compilation, with `-jitbackground -n 3` and without
+`-jitcompile`, has these median elapsed times over three process pairs:
+
+| Workload | Before ms | After ms |
+|---|---:|---:|
+| PdfJS | 178.7 | 185.8 |
+| Mandreel | 681.8 | 685.7 |
+| Gameboy | 261.5 | 262.7 |
+| zlib | 489.9 | 486.5 |
+| Typescript | 1,382.5 | 1,329.2 |
+
+These include execution and scheduling; the small, mixed changes are not
+evidence of a general speedup.
+
+
+Full plain and JIT suites, the uncached JIT suite with `QJS_NONATIVE=1`,
+background stress and background race checks pass. Plain, debugger,
+standard JIT stress and background-stress test262 each pass 100,277
+variants, with zero failures and 42 existing skips. Go 1.24.13's full
+internal/jit tests and both encoder verifiers pass. Windows/amd64 and
+Linux/arm64 builds pass; the Linux/386 root test binary builds but is not
+executed on this host. Regeneration retains all eight layout targets,
+with four JIT package pads updated.
+
+Native output is compared for both backends: a temporary Go build
+overlay switches the diagnostic cross-compile from arm64 to amd64 and
+labels those records accordingly. The engine still runs arm64 code;
+this is not an amd64 execution test. Outside TypeScript, all 618 amd64
+compiles match, and 616 of 618 arm64 compiles match. Two arm64 compiles
+of Mandreel's largest function differ in instruction count; the baseline
+control differs in that function's address loads. Across all workloads,
+2,446 compiles match, 80 differ and 62 are present in only one run. The
+baseline control has 2,507 matches, 45 differences and 36 unmatched
+compiles. TypeScript remains variable against itself, so identity is
+not established for every compile.
+
+Linux/amd64 `hotdiff` finds the native handler blocks and hot Go function
+instruction counts unchanged. It reports differences in PC-relative
+data addresses; this is not a clean pass of that tool.
+
 ## Background snapshot method scan
 
 Background compilation first captures feedback on the runtime's goroutine.
