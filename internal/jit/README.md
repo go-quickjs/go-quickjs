@@ -2010,12 +2010,19 @@ live at once: Octane zlib's largest function, 47 loops entered by on-stack
 replacement and some 240 values live through each, had its phis each in a
 slot of its own though the groups shared what they could, and its edges
 copied them slot to slot, 70% of its 1.8 MB of code; with the classes, its
-code is 440 KB. The classes of a component of pairs -- the values one
-value's pairs reach -- are made only when the scan first spills one of its
-values, its pairs taken in their order, so they are the classes all the
-pairs make; a function whose phis keep their registers makes none. Made
-for every pair up front, they had made the allocator's hints four to six
-times as long in Octane's Mandreel and zlib.
+code is 440 KB. Nothing of the classes is made until the scan first
+spills a value of a pair. Then the pairs' components -- the values one
+value's pairs reach -- are found by union-find, and one walk of all their
+values in the dominator tree's order, bucketed by block with no sort,
+checks every component at once, each against the top of its own stack:
+most components (nine in ten, in Octane) have no two values live at once,
+and such a component is one class, which every merge would have made. Only
+a component with two values live at once has its pairs merged in their
+order, as above, so its classes are the ones all the pairs make. Made
+for every pair up front, the classes had made the allocator's hints four
+to six times as long in Octane's Mandreel and zlib; made so, hints and the
+scan take 10 to 23% longer than with no classes, the price of zlib's
+code, which runs in 38% less time with them.
 
 **Spill slots.** Nothing bounds how many a function takes: the free slots'
 lists grow, doubling, as the slots taken pass them, and the code says how
