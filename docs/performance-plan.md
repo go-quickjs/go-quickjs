@@ -673,10 +673,6 @@ should not be, or not where it should, or does not learn what it met.
   code is invalid are to spend its budget even where the call path answers
   them without a frame (`pureCall`). `plus` is not compiled again after
   three calls.
-- `TestJITPatternReadsLearnTheirMisses`: a pattern's read searches its
-  source's own table until it misses; the first miss is to deoptimize once
-  and make the site megamorphic. The read is not made megamorphic, and
-  there is no deoptimization.
 - `TestJITKeyedWrites`: an element's write to an object native code does not
   store to is to be Go's from native code (`ssa.GoKeyedWrite`). `fill` leaves
   its code 4 times.

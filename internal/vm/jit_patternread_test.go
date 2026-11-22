@@ -76,40 +76,49 @@ func TestJITPatternReadPending(t *testing.T) {
 	}
 }
 
-// An object pattern's read is compiled to search its source's own table
-// alone until it misses there: its first miss deoptimizes, once, and the
-// site looks in the megamorphic cache from then on, Go reading what that
-// has not (jitRegDeoptSeen, jitRegFeedback's Property). A read that never
-// misses
-// has no branch for Go -- microbench's local_destruct, compiled with one
-// at each of its eight reads, had taken 9% longer.
+// An object pattern's read compiled before it has run is compiled to
+// search its source's own table alone until it misses there: its first
+// miss deoptimizes, once, and the read learns the shape it missed in, as
+// V8's load of an absent property learns its map, Go reading nothing from
+// then on (jitRegDeoptSeen, jitRegFeedback's Property). A read that never
+// misses has no branch for Go -- microbench's local_destruct, compiled
+// with one at each of its eight reads, had taken 9% longer. The loop
+// before each pattern is what has its reads compiled before they run: run
+// by the interpreter first, a read's cache holds what it met, a miss
+// included, which the read is compiled for with no deoptimization.
 func TestJITPatternReadsLearnTheirMisses(t *testing.T) {
-	t.Skip("register JIT gap: a pattern's reads do not learn their misses: the read is not made megamorphic, with no deoptimization (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	both := jitBothForTest(t, `
-		function hits(o) { let s = 0; for (let i = 0; i < 4; i++) { const { a, b } = o; s += a + b } return s }
-		function misses(o) { let s = 0; for (let i = 0; i < 4; i++) { const { a, b = 2 } = o; s += a + b } return s }
-		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += hits({ a: i, b: 1 }) + misses({ a: i }); return s }`)
-	for range 3 {
-		both.agree(t, `run(300)`)
-	}
+		function hits(o, n) { let s = 0; for (let i = 0; i < n; i++) s = (s + i) | 0; const { a, b } = o; return s + a + b }
+		function misses(o, n) { let s = 0; for (let i = 0; i < n; i++) s = (s + i) | 0; const { a, b = 2 } = o; return s + a + b }
+		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += hits({ a: i, b: 1 }, 3) + misses({ a: i }, 3); return s }`)
+	// Compiled at their loops, before their patterns' reads have run.
+	both.agree(t, `hits({ a: 1, b: 1 }, 5000)`, `misses({ a: 1 }, 5000)`)
 	r := both.jit
+	for i := range 3 {
+		hosts, guards := r.jit.hosts, r.jit.guards
+		both.agree(t, `run(300)`)
+		if n, g := r.jit.hosts-hosts, r.jit.guards-guards; i > 0 && n+g != 0 {
+			t.Errorf("round %d: %d host exits, %d guards failed", i, n, g)
+		}
+	}
 	for _, c := range []struct {
-		name string
-		mega bool
-	}{{"hits", false}, {"misses", true}} {
+		name   string
+		deopts uint16
+	}{{"hits", 0}, {"misses", 1}} {
 		e := jitCodeNamedForTest(t, r, c.name).e
-		mega := false
+		mega, missed := false, 0
 		// The register form's sites are by register pc: the pattern's
 		// reads are the only property reads of hits and misses.
 		for i := range e.poly {
 			mega = mega || e.poly[i].mega
+			missed += len(e.poly[i].missed)
 		}
-		if mega != c.mega || e.deopts > 2 {
-			t.Errorf("%s: a pattern read megamorphic %v, want %v; %d deoptimizations (run inlines %v; sites %+v)", c.name, mega, c.mega, e.deopts, jitInlinedNamesForTest(r, "run"), e.poly)
+		if mega || e.deopts != c.deopts || missed != int(c.deopts) {
+			t.Errorf("%s: a pattern read megamorphic %v, %d shapes missed in, %d deoptimizations; want false, %d, %d (run inlines %v; sites %+v)", c.name, mega, missed, e.deopts, c.deopts, c.deopts, jitInlinedNamesForTest(r, "run"), e.poly)
 		}
 	}
 }
