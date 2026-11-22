@@ -669,11 +669,6 @@ in the interpreter.
 **Compiling again and learning.** The code is compiled again where it
 should not be, or not where it should, or does not learn what it met.
 
-- `TestJITSSAInlinedCalleeLearns`: a callee inlined before its property
-  sites' caches knew anything leaves at each such site; its caller is to be
-  compiled again once the caches have learned, as V8 optimizes again once
-  it has the feedback it lacked, without counting those exits against
-  inlining the callee. The caller is not compiled again.
 - `TestJITFramelessCallsSpendTheBudget`: invocations of a function whose
   code is invalid are to spend its budget even where the call path answers
   them without a frame (`pureCall`). `plus` is not compiled again after

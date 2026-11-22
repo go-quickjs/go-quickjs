@@ -10316,8 +10316,14 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 // (jitRegInlineLeft), and does not count those exits against inlining
 // the callee (jitRegShapeMiss): before, sixteen of them stopped it, and every
 // construction then left native code. Each answer is the interpreter's.
+//
+// Today this guards the learning at the construction's exit only: run is
+// compiled before any construction ran (run(0)), and the register JIT
+// inlines a construction only once its exit has learned the target, by
+// which time initialize's stores have filled their caches. An inlined
+// callee's exit at a site that learns (jitRegInlineLeft) is unreachable
+// until inlined callees can leave at such sites.
 func TestJITSSAInlinedCalleeLearns(t *testing.T) {
-	t.Skip("register JIT gap: an inlined callee's deoptimization does not have its caller compiled again for what it learned (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -10336,6 +10342,15 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
+	// Compiled before its loop has made a construction.
+	for range 8 {
+		if _, err := r.Run(compileForTest(t, `run(0)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if jitPortCode(r, cl) == nil {
+		t.Fatal("run(0) did not compile run")
+	}
 	start := r.jitState().reoptimized
 	for i := range 5 {
 		wv, err := want.Run(compileForTest(t, `String(run(300))`))
