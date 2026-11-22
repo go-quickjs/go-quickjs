@@ -1439,8 +1439,8 @@ var jitRefused = errors.New("jit: the program is refused")
 // of none -- the VM gives a small object a shape only when a cache asks --
 // are searched for the key.
 type jitFeedback struct {
-	// selfCalls are the PCs of the function's calls of itself, once
-	// Resumed asks (selfKnown).
+	// selfCalls are the PCs of the function's calls of itself, once live
+	// feedback or a snapshot asks (selfKnown).
 	selfCalls []int32
 	selfKnown bool
 	r         *Runtime

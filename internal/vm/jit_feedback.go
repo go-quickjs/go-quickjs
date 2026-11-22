@@ -677,15 +677,46 @@ func (f *jitRegFeedback) Resumed(rpc int) bool {
 	if slices.Contains(e.resumed, uint32(rpc)) {
 		return true
 	}
+	return slices.Contains(fb.selfCallPCs(), int32(rpc-1))
+}
+
+// selfCallPCs caches the native and inlined calls of this function itself.
+func (fb *jitFeedback) selfCallPCs() []int32 {
 	if !fb.selfKnown {
 		fb.selfKnown = true
-		for _, x := range jitTargets(e) {
+		for _, x := range jitTargets(fb.e) {
 			if x.cl != nil && x.cl.fn == fb.fn {
 				fb.selfCalls = append(fb.selfCalls, x.pc)
 			}
 		}
 	}
-	return slices.Contains(fb.selfCalls, int32(rpc-1))
+	return fb.selfCalls
+}
+
+// snapshotStatePCs visits the sparse lists backing the state questions.
+// Unlisted PCs already have false answers in jitRegSnapshot.get.
+func (fb *jitRegFeedback) snapshotStatePCs(s *jitSnapshot) {
+	e := fb.fb.e
+	if e == nil {
+		return
+	}
+	n := int64(len(fb.rc.Code))
+	for _, pc := range e.resumed {
+		if int64(pc) < n {
+			jitRegSnapAskResumed(s, fb, int(pc))
+		}
+	}
+	for _, call := range fb.fb.selfCallPCs() {
+		pc := int64(call) + 1
+		if pc >= 0 && pc < n {
+			jitRegSnapAskResumed(s, fb, int(pc))
+		}
+	}
+	for _, pc := range e.failedEntries {
+		if int64(pc) < n {
+			jitRegSnapAskEntryGeneric(s, fb, int(pc))
+		}
+	}
 }
 
 // EntryGeneric is ssa.Feedback's: an entry at register pc pc whose

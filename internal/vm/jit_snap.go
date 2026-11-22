@@ -18,13 +18,14 @@ import (
 type jitRegSnapshot struct {
 	s *jitSnapshot
 	// regs is how long the register code is: the methods asked by a
-	// state's PC, a register pc (jitRegSnapStatePC), are asked at each.
+	// state's PC, a register pc (jitRegSnapStatePC), default to false
+	// within this bound.
 	regs int
 }
 
 // jitRegSnapStatePC are the methods the build asks by a state's PC, which
 // in a register program is a register pc, not an instruction's (Resumed and
-// EntryGeneric): asked at every register pc.
+// EntryGeneric): only PCs with a true answer need to be captured.
 const jitRegSnapStatePC = 1<<snapResumed | 1<<snapEntryGeneric
 
 // get is the answer to a question, as jitSnapshot's get has it: one asked
@@ -83,7 +84,7 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 
 // askReg asks fb every question of p's: at each instruction, the methods
 // the register feedback has of its op (jitSnapAsks), Generic among them;
-// those asked by a state's PC at each register pc.
+// those asked by a state's PC at the learned and recursive-call PCs.
 func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	s.codeLen = len(p.Code)
 	s.ops = make([]ir.Op, len(p.Code))
@@ -100,13 +101,7 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 			}
 		}
 	}
-	for rpc := range fb.rc.Code {
-		for _, m := range [...]jitSnapMethod{snapResumed, snapEntryGeneric} {
-			if ask := jitRegSnapAskers[m]; ask != nil {
-				ask(s, fb, rpc)
-			}
-		}
-	}
+	fb.snapshotStatePCs(s)
 }
 
 // nestReg is site with its callee's register feedback a snapshot, asked

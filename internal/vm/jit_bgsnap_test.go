@@ -3,9 +3,89 @@
 package vm
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 )
+
+func TestJITBackgroundSnapshotStatePCs(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.SetJITBackground(false)
+	if _, err := r.Run(compileForTest(t, `function work(n) {
+		let s = 0; for (let i = 0; i < n; i++) s += i; return s;
+	} work(128)`)); err != nil {
+		t.Fatal(err)
+	}
+	j := jitRegJobForTest(t, r, jitGlobalClosureForTest(r, "work"))
+	defer jit.PutWorkspace(j.w)
+	n := len(j.cl.fn.RegCode().Code)
+	if n < 8 {
+		t.Fatalf("fixture has only %d register instructions", n)
+	}
+	for _, mode := range []string{"no-entry", "empty", "learned", "recursive", "cached"} {
+		t.Run(mode, func(t *testing.T) {
+			fb := r.jitRegFeedbackFor(j.cl, j.p)
+			e := &jitEntry{jitLearned: &jitLearned{}}
+			fb.fb.e = e
+			var resumed, generic []int
+			switch mode {
+			case "no-entry":
+				fb.fb.e = nil
+				fb.fb.selfKnown = true
+				fb.fb.selfCalls = []int32{1}
+			case "learned":
+				e.resumed = []uint32{0, 3, 3, uint32(n - 1), uint32(n), ^uint32(0)}
+				e.failedEntries = []uint32{3, 4, 4, uint32(n - 1), uint32(n), ^uint32(0)}
+				resumed, generic = []int{0, 3, n - 1}, []int{3, 4, n - 1}
+			case "recursive", "cached":
+				e.resumed = []uint32{2, 4}
+				e.failedEntries = []uint32{0, 4}
+				generic = []int{0, 4}
+				self := &closure{fn: j.cl.fn}
+				other := &closure{fn: &bytecode.Function{}}
+				e.nativeCalls = []jitInline{{pc: 1, cl: self}, {pc: 3, cl: other}, {pc: 4}, {pc: -1, cl: self}}
+				e.inlines = []jitInline{{pc: 5, cl: self}, {pc: 1, cl: self}, {pc: int32(n - 2), cl: self},
+					{pc: -2, cl: self}, {pc: int32(n - 1), cl: self}, {pc: 1<<31 - 1, cl: self}}
+				resumed = []int{0, 2, 4, 6, n - 1}
+				if mode == "cached" {
+					fb.fb.selfKnown = true
+					fb.fb.selfCalls = []int32{-1, 2, 2, int32(n - 2), -2, int32(n - 1), 1<<31 - 1}
+					resumed = []int{0, 2, 3, 4, n - 1}
+				}
+			}
+			snap := jitRegSnapshotOf(fb, j.p)
+			// Replace every source after capture, including the cached call PCs.
+			clear(e.resumed)
+			clear(e.failedEntries)
+			clear(e.nativeCalls)
+			clear(e.inlines)
+			clear(fb.fb.selfCalls)
+			for pc := range n {
+				if got, want := snap.Resumed(pc), slices.Contains(resumed, pc); got != want {
+					t.Errorf("Resumed(%d) = %v, want %v", pc, got, want)
+				}
+				if got, want := snap.EntryGeneric(pc), slices.Contains(generic, pc); got != want {
+					t.Errorf("EntryGeneric(%d) = %v, want %v", pc, got, want)
+				}
+			}
+			for _, pc := range []int{-1, n, int(^uint32(0))} {
+				for _, m := range []jitSnapMethod{snapResumed, snapEntryGeneric} {
+					func() {
+						defer func() {
+							if miss, ok := recover().(jitSnapMiss); !ok || miss != (jitSnapMiss{m, int64(pc), 0}) {
+								t.Errorf("out-of-range method %d at %d: got %#v", m, pc, miss)
+							}
+						}()
+						snap.get(m, int64(pc))
+					}()
+				}
+			}
+		})
+	}
+}
 
 // A compile in the background asks its snapshot nothing ahead of a callee
 // no site inlines (ssa.NeverInlined), whose feedback the build never asks

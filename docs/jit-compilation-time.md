@@ -1,5 +1,141 @@
 # JIT compilation time
 
+## Sparse state feedback for background compiles
+
+The background snapshot profile at `da485c30` shows time in the generated
+`Resumed` and `EntryGeneric` askers, including effect capture for their false answers.
+Snapshots previously asked both methods at every register instruction,
+although their answers come from the learned resume and failed-entry
+lists and from a cached list of recursive call sites. Unlisted positions
+already return false from the snapshot, within its register-code bound.
+
+Snapshot preparation now visits those sparse lists and asks the existing
+feedback methods at the positions they name. Recursive-call discovery is
+shared with live feedback and honors an already-filled cache. The worker
+still reads captured boolean answers, independent of later runtime changes;
+out-of-range state questions still miss. The enumeration helper lives beside
+the live state feedback in `jit_feedback.go`: putting it after the JIT leaf
+anchor exhausted the native-run pad in the configurations with WebAssembly.
+Regeneration preserves all eight configurations' recorded pages and offsets.
+
+Five fresh-process pairs, randomized with seed 736, one second per case,
+on darwin/arm64, Apple M5 Max and Go 1.27.3 give:
+
+| Benchmark | Before / after us | Before / after bytes | Before / after allocations |
+|---|---:|---:|---:|
+| Background snapshot | 3.563 / 3.219 | 6,592 / 6,592 | 61 / 61 |
+| Background worker | 22.595 / 22.646 | 7,816 / 7,816 | 63 / 63 |
+
+This is a 9.7% reduction in snapshot preparation in this fixture, with
+worker compilation essentially unchanged. Reproduce the focused benchmark
+with:
+
+```sh
+go test -tags quickjs_jit ./internal/vm -run '^$' \
+  -bench BenchmarkJITBackgroundCompile -benchmem
+```
+
+Three fresh-process pairs per threading mode, 40 repetitions per compile
+and randomized with seed 737, give these initial whole-compiler medians:
+
+| Workload | Default before / after ms | GOMAXPROCS=1 before / after ms |
+|---|---:|---:|
+| PdfJS | 26.84 / 26.71 | 33.72 / 34.61 |
+| Mandreel | 45.85 / 45.82 | 52.82 / 52.95 |
+| Gameboy | 38.17 / 38.94 | 44.40 / 45.46 |
+| zlib | 43.81 / 45.64 | 47.87 / 50.71 |
+| Typescript | 174.93 / 169.46 | 195.14 / 200.59 |
+
+These initial samples are mixed. Mandreel's default-thread interval phase
+is 0.28 / 0.32 ms. Single-thread phases over the 10% threshold are PdfJS's
+prepare (0.75 / 0.86 ms) and scan (1.87 / 2.07), Gameboy's saves
+(0.55 / 0.61), zlib's saves (0.55 / 0.62) and encode (0.15 / 0.22), and
+TypeScript's prepare (4.10 / 4.54) and intervals (0.74 / 1.07). These
+prompted longer isolated measurements with normal collection.
+
+The longer check fixes its sample size at five randomized process pairs
+per workload (seed 738), 150 repetitions per compile. Mandreel uses default
+threads; the other four use `GOMAXPROCS=1`. Total compile medians are
+46.86 / 46.26 ms for Mandreel, 29.98 / 30.19 for PdfJS, 43.79 / 43.70 for
+Gameboy, 46.95 / 47.81 for zlib, and 190.06 / 189.60 for TypeScript.
+Every phase is within the 10% threshold. The initially slower phases are:
+
+| Workload and phase | Before / after ms |
+|---|---:|
+| Mandreel intervals | 0.33 / 0.36 |
+| PdfJS prepare | 0.65 / 0.65 |
+| PdfJS scan | 1.76 / 1.87 |
+| Gameboy saves | 0.53 / 0.52 |
+| zlib saves | 0.41 / 0.41 |
+| zlib encode | 0.14 / 0.15 |
+| Typescript prepare | 4.03 / 4.14 |
+| Typescript intervals | 0.70 / 0.76 |
+
+Actual background mode omits `-jitcompile`, which repeats synchronous
+compiles even when `-jitbackground` is supplied. Three process pairs with
+`-jitbackground -mode fixed -n 3` give:
+
+| Workload | Before / after ms | Before / after process CPU ms |
+|---|---:|---:|
+| PdfJS | 186.4 / 184.5 | 295.8 / 291.6 |
+| Mandreel | 695.3 / 704.9 | 729.0 / 730.7 |
+| Gameboy | 271.4 / 265.8 | 337.5 / 375.2 |
+| zlib | 494.9 / 491.3 | 541.9 / 535.1 |
+| Typescript | 1396.2 / 1380.5 | 1971.2 / 1962.1 |
+
+Background scheduling changes which compiles finish during the measured
+run. These small wall-time differences and Gameboy's higher CPU do not
+establish a general workload speedup; the focused snapshot measurement
+isolates the work removed.
+
+The darwin/arm64 `v8bench` binary grows by 176 bytes, from 46,696,930
+to 46,697,106 bytes (`CGO_ENABLED=0`, `-buildvcs=false`). Median peak RSS
+in the initial five-workload batches is 852 / 850 MB at default threads,
+859 / 832 MB at one thread, and 746 / 771 MB in background mode.
+The background samples vary from 740-787 MB before and 727-774 MB after;
+this change does not demonstrate a reduction in peak memory.
+One isolated background-stress test262 pair also passes all variants on
+both builds, with peak RSS of 9.27 / 9.69 GB. That single pair does not
+establish a retention trend; the higher sample remains part of the result.
+
+A two-placement comparison, three rounds per placement using
+`placements compare -k 2 -rounds 3`, gives the following whole-workload
+changes. The background comparison also supplies `-jitbackground`.
+
+| Workload | Synchronous | Background |
+|---|---:|---:|
+| PdfJS | +0.0% | +0.1% |
+| Mandreel | +1.2% | +0.5% |
+| Gameboy | +1.6% | +0.8% |
+| zlib | -0.2% | -0.4% |
+| Typescript | +0.6% | -1.3% |
+
+No workload is 3% slower at both placements in either mode. This is an
+incremental two-placement check on arm64, not an eight-placement final
+branch comparison or an amd64 execution measurement.
+
+`TestJITBackgroundSnapshotStatePCs` checks empty and absent feedback,
+learned and recursive positions together, duplicate entries, non-self
+targets, an already-filled self-call cache, valid boundary positions,
+invalid positions and isolation from later mutation of every source list.
+Full plain and JIT-tagged suites, the uncached `QJS_NONATIVE=1` suite,
+background stress and background/snapshot race tests pass. Plain, debugger,
+JIT-stress and background-stress test262 each pass 100,277 variants with
+42 existing skips and zero failures. Go 1.24.13's JIT package tests and
+targeted background tests pass, as do both encoders' verifier tests and
+Windows amd64/Linux arm64 cross-builds. The Linux 386 root test binary
+builds but is not executed on this macOS host.
+
+Native comparison matches 1,234 of 1,236 non-TypeScript arm64 records,
+including the diagnostic cross-emission records. The two differences are
+address loads in Mandreel's large constraint solver, and the baseline
+self-control differs at those same loads. TypeScript varies against itself:
+the complete candidate comparison has 2,434 matching, 80 different and
+80 unmatched records, versus 2,334 / 82 / 152 in the baseline control.
+Linux amd64 `hotdiff` retains every hot function's instruction count and
+the exact native handler blocks, but exits 1 on changed PC-relative data
+addresses. These comparisons do not establish byte-for-byte identity.
+
 ## Call emission helpers
 
 A fresh TypeScript compilation profile at `bf53680f` identifies native-call

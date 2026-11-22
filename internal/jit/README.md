@@ -706,8 +706,10 @@ call of it through Go.
 (`jit_bg.go`): the runtime's goroutine lowers the code and asks its
 feedback ahead (`jitRegSnapshotOf`) -- every question the build may ask,
 at each instruction the methods the build asks of its op (`jitSnapOps`),
-those asked by a state's PC (`Resumed`, `EntryGeneric`) at each register
-pc, of the function and of the callees it may inline, each a snapshot of
+those asked by a state's PC (`Resumed`, `EntryGeneric`) at the learned
+resume and failed-entry positions and after cached recursive calls,
+with unlisted positions inside the register code answered false,
+of the function and of the callees it may inline, each a snapshot of
 its own, to `jitSnapDepth`, nothing of a callee no site inlines whatever its
 feedback (`ssa.NeverInlined`: too long, or of what `InlineCalls` refuses
 before it reads the callee's feedback) -- into a `jitRegSnapshot`, which has
