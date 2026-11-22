@@ -2595,6 +2595,14 @@ type GoOp uint8
 // buffer's bytes have moved or changed length, or been detached, since.
 // Go copies them anew, as of the epoch now, for native code to read them
 // again; it refuses only what is no typed array.
+//
+// GoIterClose closes a cursor OpIterClosed finds open, its one operand,
+// where closing it runs no script: a generator's of register code,
+// suspended at a yield no handler of its holds -- no finally clause, no
+// loop's iterator to close, no disposal -- whose return path returns at
+// once, its iterator's return the realm's own. Go finishes the generator
+// as the return would, and the cursor is done; it refuses any other, which
+// leaves for Go to close after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -2634,6 +2642,7 @@ const (
 	GoIterResult
 	GoTypedSeen
 	GoTypedView
+	GoIterClose
 )
 
 // GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the
@@ -8889,10 +8898,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// A cursor closed as a destructuring or a loop ends: nothing to do
 		// for one done, or for an array walked in place while nothing up
 		// its iterator's chain has a return method (WalkedCloseFeedback);
-		// Go closes any other.
+		// Go closes any other -- by a call of Go native code goes on after
+		// (GoIterClose, Index 1) where that runs no script, a generator's
+		// a destructuring left suspended, after an exit otherwise.
 		c := guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
 		if w, ok := b.fb.(WalkedCloseFeedback); ok {
 			c.Const.Bits = uint64(w.WalkedCloseCell())
+		}
+		if b.goCalls() {
+			c.Index = 1
 		}
 	case ir.Closure, ir.CloseUpvalues:
 		if tmpl := b.made[pc]; tmpl != 0 && in.Op == ir.Closure && b.cur == b.root {

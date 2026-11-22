@@ -354,6 +354,9 @@ const (
 	// destructuring done, or an array's walked in place (the VM's
 	// iterCloseNormal) while the cell at the word at Const's address is
 	// valid, which says no return method ends it (WalkedCloseFeedback).
+	// With Index 1, a cursor that has something to close is closed by a
+	// call of Go (GoIterClose), native code going on after it where Go
+	// closes it.
 	OpIterClosed // cursor -> none
 	// OpKeepRef is a tagged value's pointer word (Args[0]), read where it
 	// came from (origin.go), or 0 for a primitive's; 0 while the collector

@@ -8740,6 +8740,68 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 	})
 }
 
+// goLive calls Go, op, its operands in the context's GoArgs, for v, a
+// value whose operation calls Go out of line (core's goesLive): what lives
+// across v in registers saved and restored (savesOf), not every register,
+// through the VM's routine for calls of Go (GoFast), as mathCall's; the
+// budget a loop counts in a register stored back around it, as goCalling
+// does. If Go refuses, it goes to stub once it has restored them -- the
+// stub's part past the budget's store, the budget where Go left it. Where
+// there is no GoFast, it is goSaving.
+func (c *compiler) goLive(v *ssa.Value, op uint64, stub amd64.Label) {
+	if c.enc.GoFast == 0 || c.goCallBig {
+		c.goSaving(op, &stub)
+		return
+	}
+	st, _ := c.goState(op, 0, nil, nil)
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.spillStoreSD(sv.slot, amd64.XReg(sv.reg))
+		} else {
+			c.spillStore(sv.slot, amd64.Reg(sv.reg))
+		}
+	}
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		c.budgetFlush(amd64.Reg(reg))
+	}
+	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.LeaLabel(scratchA, back)
+	c.movImm(scratchB, c.enc.GoFast)
+	c.a.JmpReg(scratchB)
+	c.a.Bind(back)
+	restore := func(refused bool) {
+		c.a.Load(regLocals, regCtx, abi.OffLocals)
+		c.a.Load(regStack, regCtx, abi.OffStack)
+		for _, sv := range saves {
+			switch {
+			case sv.cold && !refused:
+				// What its state reads, read by its refusal's exit alone.
+			case sv.float:
+				c.spillLoadSD(amd64.XReg(sv.reg), sv.slot)
+			default:
+				c.spillLoad(amd64.Reg(sv.reg), sv.slot)
+			}
+		}
+	}
+	restore(false)
+	if reg >= 0 {
+		c.budgetStart(amd64.Reg(reg))
+	}
+	to := stub
+	if real, ok := c.budgetReal[to]; ok {
+		to = real
+	}
+	c.goFails = append(c.goFails, goFail{st, back, fail})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fail)
+		restore(true)
+		c.a.Jmp(to)
+	})
+}
+
 // liveCall is the routine of goCallingLive's calls: the description and
 // where the call goes on (GoSite) in the context, Go called -- through
 // target, CallGo or BigFast -- its return to the code's resumeLive -- the
@@ -11337,6 +11399,63 @@ func (c *compiler) freshCell(array *ssa.Value, fail guardTo) {
 // that exits to v's state.
 func (c *compiler) guardFor(v *ssa.Value) guardTo { return guardTo{c: c, v: v} }
 
+// iterClosed is OpIterClosed: the cursor's state, done, or an array's
+// walked in place while its chain's validity cell is valid. What it finds
+// open, with Index 1, Go closes where that runs no script
+// (ssa.GoIterClose), out of line, native code going on after it; what Go
+// refuses, and anything else, leaves.
+func (c *compiler) iterClosed(v *ssa.Value, guard guardTo) {
+	x, ok := v.Args[0], c.a.NewLabel()
+	if c.enc.IterState == 0 {
+		c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
+		return
+	}
+	closed := noLabel
+	if v.Index == 1 && c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+		open, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
+		closed = c.a.NewLabel()
+		c.cold = append(c.cold, func() {
+			c.a.Bind(open)
+			c.goArg(abi.OffGoArgs, x)
+			c.goLive(v, uint64(ssa.GoIterClose), stub)
+			c.a.Jmp(closed)
+		})
+		guard = guardLabel(c, open)
+	}
+	fail, _ := guard.label()
+	c.pointerWord(x, c.gpr(x, scratchA))
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	guard.jump(amd64.CondE)
+	c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassCursor, c.enc.IterState, guard)
+	c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondNE, ok)
+	c.a.Load(scratchC, scratchB, c.enc.IterArr)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	guard.jump(amd64.CondE)
+	// An array's, while nothing up its iterator's chain has a return
+	// method: the chain's validity cell, found at Const's address, is
+	// there and valid (ssa.WalkedCloseFeedback).
+	if v.Const.Bits == 0 {
+		// No cell: a done cursor's alone, which jumps to ok.
+		c.a.Jmp(fail)
+	} else {
+		c.movImm(scratchC, v.Const.Bits)
+		c.a.Load(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		guard.jump(amd64.CondE)
+		c.a.LoadU8(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		guard.jump(amd64.CondE)
+	}
+	c.a.Bind(ok)
+	c.iterRelease()
+	if closed != noLabel {
+		// A cursor Go closed is no array's, which iterRelease gives back.
+		c.a.Bind(closed)
+	}
+}
+
 // guardTo is where a guard that fails goes: v's exit (guardFor), a label
 // (guardLabel), or, the zero value, nowhere. It is a value rather than a
 // function because a guard is passed on at nearly every value and often
@@ -11659,41 +11778,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
 	case ssa.OpIterClosed:
-		// The cursor's state: done, or an array's walked in place.
-		x, ok := v.Args[0], c.a.NewLabel()
-		if c.enc.IterState == 0 {
-			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
-			break
-		}
-		c.pointerWord(x, c.gpr(x, scratchA))
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
-		guard.jump(amd64.CondE)
-		c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassCursor, c.enc.IterState, guard)
-		c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
-		c.a.Op(amd64.Test, scratchC, scratchC, false)
-		c.a.Jcc(amd64.CondNE, ok)
-		c.a.Load(scratchC, scratchB, c.enc.IterArr)
-		c.a.Op(amd64.Test, scratchC, scratchC, true)
-		guard.jump(amd64.CondE)
-		// An array's, while nothing up its iterator's chain has a return
-		// method: the chain's validity cell, found at Const's address, is
-		// there and valid (ssa.WalkedCloseFeedback).
-		if v.Const.Bits == 0 {
-			// No cell: a done cursor's alone, which jumps to ok.
-			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
-			c.a.Bind(ok)
-			c.iterRelease()
-			break
-		}
-		c.movImm(scratchC, v.Const.Bits)
-		c.a.Load(scratchC, scratchC, 0)
-		c.a.Op(amd64.Test, scratchC, scratchC, true)
-		guard.jump(amd64.CondE)
-		c.a.LoadU8(scratchC, scratchC, 0)
-		c.a.Op(amd64.Test, scratchC, scratchC, false)
-		guard.jump(amd64.CondE)
-		c.a.Bind(ok)
-		c.iterRelease()
+		c.iterClosed(v, guard)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.cmpWord(scratchC, v.Const.Bits)

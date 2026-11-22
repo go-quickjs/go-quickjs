@@ -2098,6 +2098,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		ctx.GoArgs[0].Num = math.Float64bits(n)
 		return true
+	case ssa.GoIterClose:
+		return r.jitIterClose(ctx)
 	case ssa.GoTypedSeen:
 		return r.jitTypedSeen(ctx)
 	case ssa.GoTypedView:

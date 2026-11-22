@@ -425,8 +425,8 @@ const (
 // it (callWord).
 //
 // cold marks, at a call of Go, a value only the call's refusal reads after
-// it: saved for that, restored only on its way (mir's goCallingLive), not
-// on the way the code goes on after the call.
+// it: saved for that, restored only on its way (mir's goCallingLive and
+// goLive), not on the way the code goes on after the call.
 type saved struct {
 	reg, slot int
 	float     bool
@@ -1094,7 +1094,8 @@ func (c *core) allocate() error {
 	}
 	start, end := c.ints(nb), c.ints(nb)
 	// callIn is, by block ID, the position of the last call in it that
-	// saves the registers it keeps (savingCall), or -1: a value read after
+	// saves the registers it keeps (savingCall), or of a value whose
+	// operation calls Go out of line (goesLive), or -1: a value read after
 	// one is not split.
 	callIn := c.ints(nb)
 	// Intervals, by value ID (v nil until made): each from its definition
@@ -1122,7 +1123,9 @@ func (c *core) allocate() error {
 			p := count
 			pos[v.ID] = p
 			count++
-			if savingCall(v) {
+			if savingCall(v) || goesLive(v) {
+				// A value read past one is not split: a split value's
+				// register is saved by no call.
 				callIn[b.ID] = p
 			}
 			if v.Op == ssa.OpPhi {
@@ -1489,6 +1492,10 @@ func (c *core) allocate() error {
 				if v.Op == ssa.OpKeep {
 					c.keepRunAt(b, i, v)
 				}
+			default:
+				if goesLive(v) {
+					kv = append(kv, v)
+				}
 			}
 			// A fused value is computed at its block's branch (findFused):
 			// what it reads is used there.
@@ -1541,7 +1548,7 @@ func (c *core) allocate() error {
 				}
 			}
 			again = false
-			if savingCall(v) {
+			if savingCall(v) || goesLive(v) {
 				lastCall = p
 			}
 			at := p
@@ -2594,10 +2601,11 @@ func (c *core) allocate() error {
 	open, next := c.intervalRefs(len(all))[:0], 0
 	{
 		for _, v := range kv {
-			if !savingCall(v) {
+			if !savingCall(v) && !goesLive(v) {
 				// A call, native or Go's; or a Math function's call of
 				// Go, which saves what lives across it too (mir's
-				// mathCall).
+				// mathCall); or a value whose operation calls Go out of
+				// line (goesLive).
 				continue
 			}
 			if v.Op == ssa.OpCall && iv[v.ID].v != nil && iv[v.ID].end == pos[v.ID] {
@@ -2625,8 +2633,15 @@ func (c *core) allocate() error {
 			}
 			kept := open[:0]
 			c.steps += len(open)
+			// A value that goes live (goesLive) saves too what ends at it:
+			// what its state reads, which its refusal's exit reads after Go
+			// has had the registers (saved's cold).
+			last := p
+			if goesLive(v) {
+				last = p - 1
+			}
 			for _, it := range open {
-				if it.end > p {
+				if it.end > last {
 					kept = append(kept, it)
 				} else if s := home[it.v.ID]; s != 0 {
 					free = append(free, s-1)
@@ -2656,6 +2671,11 @@ func (c *core) allocate() error {
 				sv := saved{reg: l.reg, slot: s, float: isFloat(it.v), id: it.v.ID}
 				if o, ok := c.frameResident(it.v, v); ok {
 					sv.frame = o + 1
+				}
+				if it.end <= p {
+					// Read after it by its refusal's exit alone: its own
+					// operands and state.
+					sv.cold = true
 				}
 				if r := &rec[it.v.ID]; len(v.Calls()) != 0 && v.Calls()[0].Go != 0 && it.v.Op != ssa.OpPhi && r.def == int32(v.Block.ID)+1 && it.end == p+1 && int(r.hot) <= p {
 					// A call of Go's, defined in the call's block before
@@ -3160,6 +3180,19 @@ func savingCall(v *ssa.Value) bool {
 	return v.Op == ssa.OpCall && v.Calls() != nil || v.Op == ssa.OpMathCall
 }
 
+// goesLive reports a value that is no call but whose operation calls Go out
+// of line, saving what lives across it in registers (savesOf), as a call
+// of Go does, and no other register (the backends' goLive): a cursor's
+// close by Go (ssa.GoIterClose). Its saves are made as a call's, and what
+// is read past it is not split, as past a call (useRec's slotFar): a split
+// value's register is saved by no call. Otherwise it is no call to the
+// allocation, which keeps the values live across it in registers as it
+// would. Its saves also hold what ends at it, which its refusal's exit
+// reads after Go has had the registers (saved's cold).
+func goesLive(v *ssa.Value) bool {
+	return v.Op == ssa.OpIterClosed && v.Index == 1 && exitKind(v.Aux) == abi.ExitHost
+}
+
 // remat reports a value an exit recomputes from its operands rather than
 // reads from its location. A poll exits on a back-edge, after the phi moves
 // and before the header runs again, so a box the header computed of a phi
@@ -3311,7 +3344,8 @@ const (
 	slotFloat
 	// slotFar marks a value that cannot be split (allocate's split): one
 	// that a use but a frame state's reads in another block than its own,
-	// or past a call after it that saves the registers (savingCall), or as
+	// or past a call after it that saves the registers (savingCall) or a
+	// value whose operation calls Go out of line (goesLive), or as
 	// an operand of a call that may read it again (callsAgain); or that
 	// its own state reads.
 	slotFar

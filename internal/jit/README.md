@@ -1917,10 +1917,16 @@ its loop's end (`regFinishCall`).
 for...of does: Go makes it, called from native code (`abi.GoCallForOf`).
 Each element is a step that goes on with undefined once the iterator is done
 (`ir.IterStep`'s `When`, `abi.GoCallFill`), native over an array walked in
-place and Go's otherwise, as a loop's step is. Its end closes the iterator
-natively where there is nothing to close -- the cursor done, or an array's
--- and by Go where a return method must be called (`ssa.OpIterClosed`); a
-for...of's break closes it so too. What is left, for a rest element, is
+place, a native resumption of a generator the step has met (learned at the
+step Go made, as a loop's step is, `jitRegGenStepSeen`), and Go's
+otherwise. Its end closes the iterator natively where there is nothing to
+close -- the cursor done, or an array's -- and by Go where a return method
+must be called (`ssa.OpIterClosed`): by a call of Go native code goes on
+after (`ssa.GoIterClose`, through `goLive`) where the close runs no script
+-- a generator the destructuring left suspended at a yield whose return
+path is a return alone, its return method the realm's -- and after an exit
+otherwise, which runs its finally clause, the loop it is in, or a return
+method of its own. A for...of's break closes it so too. What is left, for a rest element, is
 Go's. A for...in loop left early -- a break, a continue of an outer loop, a
 return -- marks its cursor done natively (`ir.IterClose`'s `When`,
 `ssa.OpForInDone`), as the interpreter's `iter_close` does, so that the

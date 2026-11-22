@@ -105,6 +105,68 @@ func TestJITGenDestructureResumesNatively(t *testing.T) {
 	}
 }
 
+// genCloseSetup's loops destructure fewer values than their generators
+// yield, so that each turn's destructuring closes a generator left
+// suspended: plain's returns at once; guarded's runs a finally clause,
+// inner's closes the loop it is suspended in, and overridden's iterator
+// has a return method of its own, each a close that runs script, logged.
+const genCloseSetup = `
+var log = []
+function* three(k) { yield k; yield k + 1; yield k + 2 }
+function* guarded(k) { try { yield k; yield k + 1 } finally { log.push('f' + k) } }
+function* inner(k) { for (const x of [k, k + 1, k + 2]) yield x }
+function* own(k) { yield k; yield k + 1 }
+own.prototype.return = function (v) { log.push('r'); return { value: v, done: true } }
+function plain(n) { let s = 0; for (let i = 0; i < n; i++) { const [a, b] = three(i); s += a + b * 2 } return s }
+function closes(n) { let s = 0; for (let i = 0; i < n; i++) { const [a] = guarded(i), [b] = inner(i), [c] = own(i); s += a + b + c } return s + ':' + log.length + ':' + log.slice(-3).join() }
+`
+
+// A destructuring that leaves its generator suspended closes it by a call
+// of Go native code goes on after (ssa.GoIterClose) where the close runs
+// no script -- its return path a return alone -- and leaves for Go to
+// close any other, which runs the generator's finally clause, closes the
+// loop it is in, or calls its own return method: each answer the
+// interpreter's, with the collector idle and marking. plain's 2,000 turns
+// leave native code next to never, where each turn's close had been an
+// exit.
+func TestJITGenDestructureCloses(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			var rounds []string
+			for range 6 {
+				rounds = append(rounds, "plain(300)", "closes(40)")
+			}
+			r := jitAgreesForTest(t, genCloseSetup, rounds...)
+			// closes' closes run script, and are Go's after an exit: its
+			// answers, the log's included, are the interpreter's.
+			jitNativeForTest(t, r, "closes")
+			jitNativeForTest(t, r, "plain")
+			e := jitRegLifeForTest(r, "plain")
+			hosts, in := e.ssaStats.hosts, jitGenInForTest(r, "three")
+			v, calls := jitCountGoCalls(t, r, "''+plain(2000)")
+			if got := v.String().Go(); got != "6001000" {
+				t.Fatalf("plain(2000) = %s, want 6001000", got)
+			}
+			if n := e.ssaStats.hosts - hosts; n > 2000/100 {
+				t.Errorf("2000 turns of plain left native code %d times", n)
+			}
+			if n := jitGenInForTest(r, "three") - in; n < 2*2000 {
+				t.Errorf("2000 turns of two steps resumed the generator natively %d times", n)
+			}
+			if calls > 2000+2000/50 {
+				t.Errorf("2000 turns made %d calls of Go, want about one a turn, its close", calls)
+			}
+		})
+	}
+}
+
 // A generator suspended in native code keeps what its frame holds --
 // objects its locals and the operands beneath its yield refer to, written
 // natively -- across collections, made while it is suspended and while a
