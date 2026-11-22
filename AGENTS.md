@@ -787,6 +787,32 @@ faster and Octane's total fell. `compilediff native` compares the code a
 compile makes, not what it took to make it, and `TestJITCompileLinear` a
 compile's growth with a function's size, not a constant factor.
 
+`TestJITCompileWork` (internal/vm/jit_work_test.go, skipped under
+`-short`) holds the compiler's work to a record, so that a jump of it
+fails in CI without anyone timing it. Its corpus is a function of each of
+`TestJITCompileLinear`'s shapes at 400 values and the micro-benchmarks'
+asm.js kernels, each compiled for amd64 and arm64 on any host from the
+same SSA. Its measures are work, not time: the bytes the SSA's build and
+Optimize allocate and the values and blocks Optimize leaves, and each
+backend phase's steps (`mir.Times`' Steps, the loops whose length is not
+the item's own) and bytes, with the collector off. A count of steps,
+values or blocks must be within 10% of the record either way, and one of
+bytes no more than 25% above it, in the build the record is made in: one
+with the verifier's tag, the race detector or checkptr's `-gcflags`
+allocates as it goes, and holds the steps alone. A change that means to move them writes
+the record anew, internal/vm/testdata/jit_work.txt, and says why in its
+message:
+
+```sh
+QUICKJS_JIT_WORK=update go test -tags quickjs_jit ./internal/vm -run '^TestJITCompileWork$'
+```
+
+With the spill classes made for every component at the hints, as
+ebe73f44 made them, it fails: the hints' bytes 1.4 times the record's,
+and steps where the record has none. A phase whose loops count no steps
+shows its growth only in its bytes; a loop that may grow faster than its
+item counts its steps (`core.steps`).
+
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async
