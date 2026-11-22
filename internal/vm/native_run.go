@@ -500,6 +500,9 @@ func (r *Runtime) initNativeCtx(ctx *nativeCtx, st *regState) {
 // grow gives the native frame stack twice the room, 8 records at first,
 // up to nativeMaxDepth.
 func (ctx *nativeCtx) grow() {
+	if jitBuilt && len(ctx.recs) != 0 && ctx.disp == nativeFeedback {
+		nativeGrowUncount(ctx)
+	}
 	n := min(max(2*len(ctx.recs), 8), nativeMaxDepth)
 	recs := make([]nativeRec, n)
 	copy(recs, ctx.recs)
@@ -508,6 +511,25 @@ func (ctx *nativeCtx) grow() {
 	ctx.recs, ctx.states = recs, states
 	ctx.frames = uintptr(unsafe.Pointer(&recs[0]))
 	ctx.cap = int64(n)
+}
+
+// nativeGrowUncount takes back the count of the call the frame stack had
+// no room for: the feedback dispatcher counted it where it dispatched it,
+// and counts it again as it dispatches it once the stack has grown, as
+// nativeCallMiss's call made again is (jitRegUncount), so that the site's
+// frequency, which the JIT inlines by, counts the call once. Only a build
+// with the JIT has it: grow, which calls it, is too large then to inline
+// into nativeDrive, which calls grow instead, and a build without keeps
+// grow inlined there as it was.
+//
+//go:noinline
+func nativeGrowUncount(ctx *nativeCtx) {
+	switch w := bytecode.RInstr(ctx.w); w.Op() {
+	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+		if s := ctx.top; jitBuilt && s != nil && s.cl != nil {
+			s.cl.closureCode.jitRegUncount(int(w.C()))
+		}
+	}
 }
 
 // nativeLeave ends nativeRun once the base frame has returned or thrown:

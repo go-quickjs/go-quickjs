@@ -95,3 +95,31 @@ func TestJITRegFrequency(t *testing.T) {
 		})
 	}
 }
+
+// A call the native frame stack has no room for is counted once: the
+// feedback dispatcher counts it where it dispatches it, the stack grows
+// (nativeCtx.grow), and the call dispatched again is counted again, the
+// first count taken back (nativeGrowUncount). A 100-deep recursion run
+// three times on one runtime counts its 303 runs and 299 calls, where it
+// had counted 308 calls, the stack growing from 8 records to 128. The
+// runtime runs the native handlers, whose feedback dispatcher counts,
+// whatever the build's default (a verifying build's is the Go table,
+// which counts nothing).
+func TestJITRegFrequencyPastFrameRoom(t *testing.T) {
+	r := newTestRuntime(t, Config{JIT: true}.withNative(true))
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitDefaultsForTest(r)
+	if _, err := r.Run(compileForTest(t, `function rec(n) { return n ? rec(n - 1) + 1 : 0 }`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := jitGlobalClosureForTest(r, "rec")
+	for range 3 {
+		v, err := r.Run(compileForTest(t, `rec(100)`))
+		if err != nil || v != Int(100) {
+			t.Fatalf("rec(100) = %v, %v", v, err)
+		}
+	}
+	if got := cl.closureCode.jitRegCounts; len(got) != 2 || got[0] != 303 || got[1] != 299 {
+		t.Fatalf("counts %v, want [303 299]", got)
+	}
+}

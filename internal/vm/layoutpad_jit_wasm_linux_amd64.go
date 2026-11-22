@@ -65,7 +65,7 @@ const (
 	layoutPadNN   = 50
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
-	layoutPadNP   = 0
+	layoutPadNP   = 86
 	layoutPadNGP  = -1
 	layoutPadNMP  = -1
 	layoutPadNQ   = 525
