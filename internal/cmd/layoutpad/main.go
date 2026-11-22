@@ -1303,7 +1303,7 @@ func solveCode(c *config, syms *symtab, v map[string]int, verbose bool) (bool, e
 		if delta%slot != 0 {
 			return false, fmt.Errorf("%s: anchor %s at %#x cannot reach %#x in steps of %d", c, it.a.symbol, it.at.addr, it.a.target, slot)
 		}
-		if delta == 0 {
+		if delta == 0 && (it.a.at == 0 || it.at.addr+shift == it.a.at) {
 			continue
 		}
 		if it.l.kind == 'a' {
@@ -1311,6 +1311,12 @@ func solveCode(c *config, syms *symtab, v map[string]int, verbose bool) (bool, e
 			// them, modulo 4 KB's worth, and at least one.
 			steps := uint64(codeMod / slot)
 			nk := (width/slot-1+delta/slot)%steps + 1
+			if exact := int64(width) + int64(it.a.at) - int64(it.at.addr+shift); it.a.at != 0 && exact >= slot {
+				nk = uint64(exact) / slot
+			}
+			if nk*slot == width {
+				continue
+			}
 			if verbose {
 				fmt.Printf("    %s: slots %d at %#x delta %d -> %d\n", it.l.name, width/slot, it.at.addr%codeMod, delta, nk)
 			}
@@ -1327,6 +1333,15 @@ func solveCode(c *config, syms *symtab, v map[string]int, verbose bool) (bool, e
 		base := int64(it.pad.size) - slot/2 - perStore*int64(k)
 		minWidth := roundUp(uint64(max(base, 1)), slot)
 		want := minWidth + (width+delta-minWidth)%codeMod
+		// Keep the recorded page when the pad can absorb the change.
+		// Wrapping a growing pad at 4 KB would move every later anchor
+		// back a page even though its original address is reachable.
+		if exact := int64(width) + int64(it.a.at) - int64(it.at.addr+shift); it.a.at != 0 && exact >= int64(minWidth) {
+			want = uint64(exact)
+		}
+		if want == width {
+			continue
+		}
 		nk := 0
 		if aim := int64(want) - slot/2 - base; aim > 0 {
 			nk = int((aim + perStore/2) / perStore)

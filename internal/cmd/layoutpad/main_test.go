@@ -260,3 +260,81 @@ func TestPageDriftTwoMoves(t *testing.T) {
 		t.Fatalf("got\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+// A pad that can take up a change keeps its anchor on its recorded
+// address: one that must grow past a page grows, and one a previous solve
+// wrapped grows back, a function pad by stores, an assembly pad by slots.
+func TestSolveCodeKeepsRecordedPage(t *testing.T) {
+	for _, tc := range []struct {
+		name, lever string
+		k           int
+		width, addr uint64
+		want        int
+	}{
+		{"growing-function", "J", 576, 4096, 0xfff20, 608},
+		{"wrapped-function", "J", 2, 32, 0xff000, 587},
+		{"growing-assembly", "H", 128, 4096, 0xfff20, 135},
+		{"wrapped-assembly", "H", 1, 32, 0xff000, 129},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clear(leverBefore)
+			l, _ := leverByName(tc.lever)
+			c := &config{anchors: []anchor{{lever: tc.lever, symbol: "anchor", at: 0x100000}}}
+			syms := &symtab{byName: map[string]symbol{
+				l.pad:    {addr: tc.addr - tc.width, size: tc.width},
+				"anchor": {addr: tc.addr},
+			}}
+			v := map[string]int{tc.lever: tc.k}
+			changed, err := solveCode(c, syms, v, false)
+			if err != nil || !changed || v[tc.lever] != tc.want {
+				t.Fatalf("changed %v, error %v, stores/slots %d, want %d", changed, err, v[tc.lever], tc.want)
+			}
+		})
+	}
+}
+
+// An anchor that no size of its pad brings back to its recorded address
+// is left where the solve modulo 4 KB puts it, and the page check reports
+// it.
+func TestSolveCodeCannotRecoverRecordedPage(t *testing.T) {
+	clear(leverBefore)
+	l, _ := leverByName("J")
+	c := &config{anchors: []anchor{{lever: "J", symbol: "anchor", at: 0x100000}}}
+	// Even an empty pad cannot move this anchor back to its recorded page.
+	syms := &symtab{byName: map[string]symbol{
+		l.pad:    {addr: 0x100fe0, size: 32},
+		"anchor": {addr: 0x101000},
+	}}
+	v := map[string]int{"J": 2}
+	changed, err := solveCode(c, syms, v, false)
+	if err != nil || changed || v["J"] != 2 {
+		t.Fatalf("changed %v, error %v, stores %d", changed, err, v["J"])
+	}
+	if len(pageDrift(c, syms)) != 1 {
+		t.Fatal("unrecoverable page move was not reported")
+	}
+}
+
+// A pad's growth moves the anchors after it in the same pass: the next
+// anchor, on its recorded address once the first pad has grown, leaves
+// its own pad as it is.
+func TestSolveCodeAccountsForEarlierPad(t *testing.T) {
+	clear(leverBefore)
+	j, _ := leverByName("J")
+	n, _ := leverByName("N")
+	c := &config{anchors: []anchor{
+		{lever: "J", symbol: "first", at: 0x100000},
+		{lever: "N", symbol: "next", at: 0x110000},
+	}}
+	syms := &symtab{byName: map[string]symbol{
+		j.pad:   {addr: 0xfef20, size: 4096},
+		"first": {addr: 0xfff20},
+		n.pad:   {addr: 0x10ff00, size: 32},
+		"next":  {addr: 0x10ff20},
+	}}
+	v := map[string]int{"J": 576, "N": 2}
+	changed, err := solveCode(c, syms, v, false)
+	if err != nil || !changed || v["J"] != 608 || v["N"] != 2 {
+		t.Fatalf("changed %v, error %v, stores %v", changed, err, v)
+	}
+}
