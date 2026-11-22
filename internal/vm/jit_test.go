@@ -5447,9 +5447,11 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 // subclass each overrides, had inlined one -- the entries for other shapes
 // were left out -- and left native code at each call of the other, the
 // interpreter finishing the invocation, until it was compiled again for
-// it. In the warm round no call leaves native code.
+// it. In the warm round no call leaves native code. At the runtime's own
+// thresholds, which the compile waits for: one at the first call -- the
+// tests' usual threshold -- has each of visible's caches hold the one
+// class it has met, which no seeding can tell of the other three.
 func TestJITSSASeedsPolymorphicMethodCalls(t *testing.T) {
-	t.Skip("register JIT gap: a polymorphic method call is not seeded with the receivers it met: visible is compiled again once more (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -5467,7 +5469,23 @@ func TestJITSSASeedsPolymorphicMethodCalls(t *testing.T) {
 		function visible(s) { const alias = s.isType() && s.flags == 2; if (s.isMember() || alias) { return s.n + 1 } return s.n }
 		function all(n) { let t = 0; for (let k = 0; k < n; k++) for (const s of syms) t = (t + visible(s)) | 0; return t }
 	`
-	r := jitAgreesForTest(t, setup, `all(1)`, `all(50)`, `all(50)`, `all(50)`)
+	want := newTestRuntime(t, Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.SetJITWarmUp(jitInvocationsForMaglev, jitInvocationsAfterICUpdate)
+	for _, src := range []string{setup, `all(1)`, `all(50)`, `all(50)`, `all(50)`} {
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gv.Number() != wv.Number() {
+			t.Fatalf("%s: got %v, interpreter %v", src, gv, wv)
+		}
+	}
 	cl := jitGlobalClosureForTest(r, "visible")
 	e := jitPortCode(r, cl)
 	if e == nil {

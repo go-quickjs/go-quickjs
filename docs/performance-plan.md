@@ -678,10 +678,6 @@ should not be, or not where it should, or does not learn what it met.
   compiled again once the caches have learned, as V8 optimizes again once
   it has the feedback it lacked, without counting those exits against
   inlining the callee. The caller is not compiled again.
-- `TestJITSSASeedsPolymorphicMethodCalls`: a method call whose read is
-  polymorphic is to be compiled to call natively each method the cache
-  found, its entries for other shapes and those it had before. `visible` is
-  compiled again once more.
 - `TestJITSSAKnownReceivers`: a method read whose cache has not filled is to
   be compiled for the object the instruction before gives where that is
   known -- a captured binding's object, a RegExp literal's prototype --
