@@ -3725,6 +3725,9 @@ func (r *Runtime) jitRegIterMade(ctx *abi.Context, idx int, run jitRegRun, rpc i
 	if w.Op() == bytecode.RIterRest {
 		v, err = r.iterRest(jitGoArg(ctx, 0))
 	} else {
+		// A step's over a generator native code may resume once compiled
+		// again, as a loop's is (jitRegGenStepSeen).
+		r.jitRegGenStepSeen(f, run.e, rpc, jitGoArg(ctx, 0))
 		v, err = r.iterStep(jitGoArg(ctx, 0))
 	}
 	s.ssaCtx = last

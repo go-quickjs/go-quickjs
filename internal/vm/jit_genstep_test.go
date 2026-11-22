@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"testing"
@@ -53,6 +54,54 @@ func TestJITGenStepCallsNoGo(t *testing.T) {
 	}
 	if n := jitGenInForTest(r, "count") - in; n < 10000 {
 		t.Errorf("10001 steps resumed the generator natively %d times", n)
+	}
+}
+
+// genDestructureSetup's loop destructures a generator's values, the
+// pattern as long as what it yields and one more, so that its last step
+// finishes the generator and nothing is left to close; mixed's gives it a
+// generator and an array in turn.
+const genDestructureSetup = `
+function* four(k) { yield k; yield k + 1; yield k + 2 }
+function unpack(n) { let s = 0; for (let i = 0; i < n; i++) { const [a, b, c, d] = four(i); s += a * 3 + b + c + (d === undefined ? 1 : 0) } return s }
+function mixed(n) { let s = 0; for (let i = 0; i < n; i++) { const [a, b, c, d] = i & 1 ? four(i) : [i, 1, 2]; s += a + b + c + (d === undefined ? 1 : 0) } return s }
+`
+
+// A destructuring's step over a generator learns it, as a loop's step does
+// (jitRegGenStepSeen), and its code, compiled again, resumes the generator
+// natively (ssa.CallSite's Gens with Fill): each answer the interpreter's,
+// with the collector idle and marking, and each of a turn's four steps a
+// native resumption, the loop making next to no calls of Go. Each step had
+// been Go's, the generator's code entered by Go and left at each yield, and
+// the loop and the generator both judged slow.
+func TestJITGenDestructureResumesNatively(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			var rounds []string
+			for range 6 {
+				rounds = append(rounds, "unpack(300)", "mixed(300)")
+			}
+			r := jitAgreesForTest(t, genDestructureSetup, rounds...)
+			jitNativeForTest(t, r, "unpack")
+			in := jitGenInForTest(r, "four")
+			v, calls := jitCountGoCalls(t, r, "''+unpack(2000)")
+			if got := v.String().Go(); got != "10003000" {
+				t.Fatalf("unpack(2000) = %s, want 10003000", got)
+			}
+			if n := jitGenInForTest(r, "four") - in; n < 4*2000 {
+				t.Errorf("2000 turns of four steps resumed the generator natively %d times", n)
+			}
+			if calls > 2000/20 {
+				t.Errorf("2000 turns made %d calls of Go", calls)
+			}
+		})
 	}
 }
 
