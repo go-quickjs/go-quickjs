@@ -728,7 +728,9 @@ func (f *jitRegFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 		a = f.askedOf(pc)
 		a.did |= askedInline
 		if ok {
-			a.site = &site
+			// Taking &site would allocate it even for a rejected inline.
+			a.site = new(ssa.InlineSite)
+			*a.site = site
 		}
 	}
 	if a.site == nil {

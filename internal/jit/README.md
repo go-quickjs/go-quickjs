@@ -2148,6 +2148,10 @@ into their arenas. Their helpers allocate separate storage only for builds
 without a workspace; returning the address of an input parameter would
 make Go allocate that input even on the arena path. `TestWorkspaceMetadata`
 checks that repeated requests allocate no heap objects after warm-up.
+The register feedback's inlining cache likewise allocates an `InlineSite`
+only for a successful answer; a rejected inline keeps just its asked bit.
+`TestJITRejectedInlineAllocations` checks that rejected probes allocate no
+site once the answer table has room.
 
 On arm64, the workspace also keeps the byte buffer the assembler's
 instruction words are encoded into (`FinishInto`). A workspace compile's

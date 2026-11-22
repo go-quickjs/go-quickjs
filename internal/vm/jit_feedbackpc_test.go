@@ -5,7 +5,50 @@ package vm
 import (
 	"runtime/debug"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
+
+// A forwarding call without its caller's arguments cannot be inlined.
+// Repeating a compile's first query must allocate no rejected InlineSite.
+func TestJITRejectedInlineAllocations(t *testing.T) {
+	f := rejectedInlineFeedback()
+	valid := true
+	allocs := testing.AllocsPerRun(100, func() {
+		if len(f.asked) != 0 {
+			f.asked[0].did = 0
+		}
+		_, ok := f.Inline(0)
+		valid = valid && !ok
+	})
+	if !valid || f.asked[0].site != nil || f.asked[0].did&askedInline == 0 {
+		t.Fatal("rejected inline was not cached as absent")
+	}
+	if allocs != 0 {
+		t.Fatalf("rejected inline allocated %g objects", allocs)
+	}
+}
+
+func BenchmarkJITRejectedInline(b *testing.B) {
+	f := rejectedInlineFeedback()
+	f.Inline(0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		f.asked[0].did = 0
+		if _, ok := f.Inline(0); ok {
+			b.Fatal("forwarding call inlined without its caller's arguments")
+		}
+	}
+}
+
+func rejectedInlineFeedback() jitRegFeedback {
+	return jitRegFeedback{
+		p:  &ir.Program{Code: []ir.Instruction{{Op: ir.Host, Window: true}}, Origin: []uint32{0}},
+		rc: &bytecode.RegCode{Code: []bytecode.RInstr{bytecode.MakeR(bytecode.RApplyArgs, 0, 0, 0, 0)}},
+	}
+}
 
 const feedbackPCSetup = `
 	function code(s, i) {
