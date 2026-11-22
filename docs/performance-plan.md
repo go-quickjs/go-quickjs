@@ -701,9 +701,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITSSAContextsGrow`: native calls that run out of contexts are to
   have more of them at once, up to as many as the VM's frames may take.
   A deep native recursion gets 256 contexts, not 8,192.
-- `TestJITSSAInlinedForwardingConstructions`: a forwarding constructor's
-  `initialize` is to be inlined with the construction's own arguments. By
-  the tenth round it is no longer inlined.
 
 **Tests ported, not skipped.** Of the tests that read the stack JIT's
 internals, four were ported to the register JIT's in the removal and run:

@@ -419,6 +419,13 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		// each call until the call was no longer inlined.
 		str := r.jitRegStringAddSeen(l, c, x.wb, pc)
 		seen := r.jitRegHostSeen(f, c, x.wb, pc)
+		// The function a forward calls, f of f.apply(x, arguments), before
+		// Go writes its register (jitRegLeft's).
+		var callee Value
+		forward := false
+		if w := regAt(c.code, pc); w.Op() == bytecode.RApplyArgs && x.wb+int(w.B())+2 < len(r.stack) {
+			callee, forward = r.stack[x.wb+int(w.B())], true
+		}
 		next, ran, err := r.regWhole(f, c, x.wb, pc)
 		if !ran {
 			break
@@ -426,6 +433,15 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		if seen.write && err == nil {
 			r.jitRegWriteSeen(f, c, owner, pc, seen)
 		}
+		// A forward to a function the inlined code was not compiled for,
+		// which Go made: its target learned for the callee, the owner
+		// compiled again for it (jitRegCallSeen), as at a forward of the
+		// owner's own. Not learned, a forwarding constructor inlined, its
+		// initialize replaced, left at each construction until the call was
+		// no longer inlined. Other calls are not: one an inlined callee
+		// leaves to Go -- throw new Error(...)'s, a call never seen made
+		// (InlineExit) -- is left so by design, and counts as it did.
+		called := forward && err == nil && r.jitRegCallSeen(f, c, owner, pc, callee)
 		// The site met what the code inlining it was not compiled for --
 		// its own code's to be compiled again for too (polyReopt) -- or
 		// a value not a number at a read the code takes for a number's
@@ -437,7 +453,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		// compile, jitLearnedMark), and counted so, each exit had the
 		// code inlining it compiled again for what the interpreter's run
 		// of the callee filled.
-		learned = !before && l.polyReopt || len(l.failed) != failed || seen.elem || str
+		learned = !before && l.polyReopt || len(l.failed) != failed || seen.elem || str || called
 		if err != nil {
 			x.threw = true
 			return Undefined, err, learned

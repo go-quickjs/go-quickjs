@@ -7369,7 +7369,6 @@ func TestJITSSAInlinedConstructions(t *testing.T) {
 // undefined; an error thrown from inside initialize has the interpreter's
 // stack, the constructor's frame in it. Each answer is the interpreter's.
 func TestJITSSAInlinedForwardingConstructions(t *testing.T) {
-	t.Skip("register JIT gap: forwarding constructions are no longer inlined by round 10 (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
