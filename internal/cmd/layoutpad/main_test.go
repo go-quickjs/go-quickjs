@@ -60,7 +60,9 @@ func TestStores(t *testing.T) {
 	if got := strings.Count(src, "layoutPadBytes["); got != maxStores {
 		t.Fatalf("%d stores, want %d", got, maxStores)
 	}
-	if strings.Contains(src, "layoutPadBytes[1]") || !strings.Contains(src, "layoutPadBytes[2044]") || strings.Contains(src, "layoutPadBytes[2046]") {
+	last := fmt.Sprintf("layoutPadBytes[%d]", 2*(maxStores-1))
+	past := fmt.Sprintf("layoutPadBytes[%d]", 2*maxStores)
+	if strings.Contains(src, "layoutPadBytes[1]") || !strings.Contains(src, last) || strings.Contains(src, past) {
 		t.Fatal("stores are not every other byte of the array")
 	}
 	if got := strings.Count(src, "if max(n, 0)&(1<<"); got != storeBits {

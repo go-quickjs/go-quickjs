@@ -139,9 +139,10 @@ const (
 	// maxStores is the most byte stores a pad has, storeBits the bits of
 	// its lever's constant, storesALine how many the source has on a line,
 	// and padBytes the bytes they store to: two a store. A store is 7
-	// bytes of code, and 4,096 bytes and a slot take 590.
+	// bytes of code, and 4,096 bytes and a slot take 590; a pad may hold
+	// 8 KB of reserve past a page's worth (reserve.go).
 	maxStores   = 1<<storeBits - 1
-	storeBits   = 10
+	storeBits   = 11
 	storesALine = 8
 	padBytes    = 2 * (maxStores + 1)
 	// perStore is a store's bytes of code, before a build measures it.
@@ -385,6 +386,7 @@ func main() {
 	hotRuns := flag.Int("hotruns", 10, "with -hot, the micro-benchmarks' runs")
 	hotShare := flag.Float64("hotshare", 0.002, "with -hot, the share of the samples that makes a function hot")
 	hotDist := flag.Int64("hotdist", 8192, "with -hot, the bytes past its range's anchor that a hot function may lie")
+	reserve := flag.String("reserve", "", "with -pages, the levers, comma-separated, whose pads take their reserve now, their anchors and every one after them recorded as many pages on as that needs (XJ,CZ)")
 	recordEq := flag.Bool("eq", false, "pad as by default, and record the builds' equality functions (type:.eq.*) in "+eqRel+", where a new one is meant")
 	flag.Parse()
 	root, err := repoRoot()
@@ -571,6 +573,15 @@ func main() {
 				eqFailed = eqFailed || failed
 			}
 			if *recordPages {
+				forced := map[string]bool{}
+				for _, name := range strings.Split(*reserve, ",") {
+					forced[name] = name != ""
+				}
+				if reservePages(c, syms, readValues(c), forced) {
+					if syms, err = solve(c, *verbose); err != nil {
+						fatal(err)
+					}
+				}
 				setPages(c, syms)
 				continue
 			}

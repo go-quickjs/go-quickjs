@@ -446,7 +446,16 @@ pad had, or the pad wrapped. Move what grew there out of the range, after
 the anchor, as `b5df63ea` did. A move that is meant -- code that grew by a
 page or more, where nothing can be moved back -- is recorded with
 `go run ./internal/cmd/layoutpad -pages`, which pads as `go generate`
-does and writes the new addresses; say so in the commit.
+does and writes the new addresses; say so in the commit. A regeneration
+puts each anchor on its recorded address while its pad can take up the
+change, past a page if need be, so an anchor only moves a
+page when the code before it grows past its pad's room. Where `-pages`
+records a lost page anew, it records the one that leaves the pad its
+reserve, 2 KB, and 8 KB for XJ and CZ, whose ranges -- the JIT's
+compiler, the native handlers' block -- grow in most rounds, and moves
+the anchors after it as far: the next such move is that much growth
+away. `-reserve XJ,CZ` gives the pads named their reserve where they
+have not lost a page.
 
 The lock as first made, against `db306c0e`'s layout and with the tree
 tier's anchors, was 49 KB of pads, 60 KB of binary.
