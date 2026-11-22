@@ -4,6 +4,7 @@ package vm
 
 import (
 	"slices"
+	"strings"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -305,11 +306,70 @@ func (r *Runtime) jitRegStringAddSeen(l *jitEntry, c *regCode, wb, rpc int) bool
 		if w.X()&bytecode.RStepAdd == 0 || bytecode.StepK(w.X()) < 0 || !str(w.A()) {
 			return false
 		}
+	case bytecode.RAddProp:
+		// o.name += x's addition, of a string x.
+		if !str(w.B()) {
+			return false
+		}
 	default:
 		return false
 	}
 	l.regHints.StringAdds = append(l.regHints.StringAdds, int32(rpc))
+	jitRegStringAddChain(l, c, rpc)
 	return true
+}
+
+// jitStringChainScan is how many register instructions after an addition
+// that met a string jitRegStringAddChain looks at for the additions of its
+// result.
+const jitStringChainScan = 32
+
+// jitRegStringAddChain learns, with the addition at register pc rpc of c
+// that met a string, the additions after it, in the straight line of code
+// that follows it, of its result or of theirs -- o.name += x's too: tag +
+// s(a) + s(b), whose first addition's result is a string, meets a string
+// at each. They are
+// Go's from the next lowering on too, as the first is
+// (jitRegStringAddSeen), where each had deoptimized in turn, a compile
+// after each: PDF.js's createTableEntry ran out of compiles so. A register
+// another instruction writes holds its result no more; a jump, a return
+// or a throw ends the line.
+func jitRegStringAddChain(l *jitEntry, c *regCode, rpc int) {
+	code := c.rc.Code
+	held := []uint16{code[rpc].A()}
+	holds := func(x uint16) bool { return slices.Contains(held, x) }
+	for pc := rpc + 1; pc < len(code) && pc <= rpc+jitStringChainScan && len(held) != 0; pc++ {
+		w := code[pc]
+		op := w.Op()
+		if n := op.String(); strings.HasPrefix(n, "j") || strings.Contains(n, "_j") {
+			return
+		}
+		switch op {
+		case bytecode.RRet, bytecode.RRetUndef, bytecode.RThrow, bytecode.RThrowRef, bytecode.RCallWT, bytecode.RCallMWT,
+			bytecode.RSwitch, bytecode.RSwitchTypeof, bytecode.RYield, bytecode.RYieldStar, bytecode.RAwait:
+			return
+		case bytecode.RAdd, bytecode.RAddI32:
+			if holds(w.B()) || holds(w.C()) {
+				if !slices.Contains(l.regHints.StringAdds, int32(pc)) {
+					l.regHints.StringAdds = append(l.regHints.StringAdds, int32(pc))
+				}
+				if !holds(w.A()) {
+					held = append(held, w.A())
+				}
+				continue
+			}
+		case bytecode.RAddProp:
+			// o.name += x of x a result: a string's addition too, which
+			// writes no register.
+			if holds(w.B()) && !slices.Contains(l.regHints.StringAdds, int32(pc)) {
+				l.regHints.StringAdds = append(l.regHints.StringAdds, int32(pc))
+			}
+			continue
+		}
+		if i := slices.Index(held, w.A()); i >= 0 {
+			held = slices.Delete(held, i, i+1)
+		}
+	}
 }
 
 // regElemPC is the register pc of the program's instruction pc, if it is
