@@ -1,5 +1,130 @@
 # JIT compilation time
 
+## Rejected trial: borrowing cached property descriptions
+
+A fresh TypeScript CPU profile at `8e5fbf65`, with 80 repeated compiles
+and no allocation profiling, puts about 16% of the sampled compile work
+in SSA planning. Determining whether a property needs a host exit reaches
+the builder's cached property and primitive-method descriptions. Returning
+these descriptions by value copies the whole structure even when the
+caller asks only whether feedback exists or reads one flag. A rejected
+primitive-method query also returns an entire zeroed structure.
+
+The trial made the builder borrow its cached descriptions. Planning read
+them directly; instruction lowering made a local copy before specializing
+a site's shape and index. The external feedback interfaces still returned
+values. The production change was rejected after longer measurements
+confirmed interval-phase regressions. The builder continues to return
+descriptions by value. `TestPropertyLoweringKeepsCachedFeedback` exercises
+lowering a write from its first polymorphic case and checks that the cached
+answer keeps its original shape and index, with and without a workspace.
+
+Five fresh-process pairs, randomized with seed 741, 500 ms per case,
+on darwin/arm64, Apple M5 Max and Go 1.27.3 give:
+
+| Cached query | Base / trial ns | Allocations |
+|---|---:|---:|
+| Property description | 8.771 / 2.362 | 0 / 0 |
+| Primitive-method description | 9.148 / 2.767 | 0 / 0 |
+| Absent primitive method | 7.891 / 1.870 | 0 / 0 |
+
+The same process pairs measure the existing build-and-optimize fixtures:
+
+| Fixture | Base / trial us | Base / trial allocations |
+|---|---:|---:|
+| Sum | 4.026 / 3.987 | 12 / 12 |
+| Closures | 127.442 / 124.568 | 420 / 420 |
+| Branches | 59.885 / 59.179 | 19 / 19 |
+| Calls | 32.328 / 31.718 | 23 / 23 |
+| Prototype reads | 20.960 / 19.134 | 13 / 13 |
+
+The trial's focused lookup reductions are about 70-76%; its prototype
+fixture improves 8.7%. Allocation volume is unchanged apart from rounding
+noise. The retained benchmark measures the original implementation:
+
+```sh
+go test ./internal/jit/ssa -run '^$' \
+  -bench 'Benchmark(PropertyFeedback|BuildOptimize)$' -benchmem
+```
+
+Five fresh-process pairs per threading mode, 60 repetitions per compile,
+randomized with seed 742 and with normal collection, give:
+
+| Workload | Default base / trial ms | GOMAXPROCS=1 base / trial ms |
+|---|---:|---:|
+| PdfJS | 26.27 / 26.29 | 31.91 / 31.94 |
+| Mandreel | 45.90 / 45.76 | 51.70 / 52.04 |
+| Gameboy | 38.13 / 37.79 | 44.18 / 44.69 |
+| zlib | 43.36 / 43.78 | 46.60 / 49.52 |
+| Typescript | 165.13 / 161.66 | 192.23 / 190.52 |
+
+TypeScript's build phase falls from 63.10 to 59.44 ms at default threads
+and from 75.10 to 71.08 ms at one thread (5.8% and 5.4%). Process CPU,
+including collection and the benchmark's execution, falls from 11,393.4
+to 11,172.2 ms and from 12,436.7 to 12,311.1 ms respectively. Other
+workloads are mixed, and single-thread zlib is initially 6.3% slower.
+
+The initial default-thread interval medians exceed the 10% threshold:
+PdfJS 0.14 / 0.18 ms, Mandreel 0.29 / 0.33, Gameboy 0.24 / 0.30,
+zlib 0.26 / 0.29, and TypeScript 0.68 / 0.75. At one thread, PdfJS's
+intervals (0.15 / 0.17) and encode (0.60 / 0.71), and zlib's optimize
+(14.58 / 16.13) and intervals (0.24 / 0.30) also exceed it. These results
+prompted isolated measurements. The MIR allocator's address moves by
+848 bytes on this arm64 build, but that alone does not establish why a
+phase changed.
+
+Five isolated process pairs, randomized with seed 743, 200 repetitions
+per compile, give 44.58 / 44.38 ms for single-thread zlib and
+26.39 / 26.28 ms for default-thread PdfJS. Every phase is within the
+10% threshold in these two checks: zlib's optimize is 14.05 / 13.90 ms
+and intervals 0.26 / 0.25, and PdfJS's intervals 0.14 / 0.15. The
+larger single-thread zlib slowdown does not persist in isolation.
+
+The remaining isolated checks use five randomized process pairs (seed
+744) and 150 repetitions per compile, with no concurrent builds or tests:
+
+| Workload | Threads | Total base / trial ms | Intervals base / trial ms |
+|---|---|---:|---:|
+| Mandreel | Default | 45.99 / 45.87 | 0.30 / 0.35 |
+| Gameboy | Default | 38.29 / 38.21 | 0.24 / 0.31 |
+| zlib | Default | 45.82 / 45.85 | 0.27 / 0.26 |
+| Typescript | Default | 161.81 / 158.54 | 0.76 / 0.69 |
+| PdfJS | One | 30.55 / 30.45 | 0.14 / 0.19 |
+
+TypeScript's build phase remains faster, 62.34 / 59.09 ms (5.2%), and
+its total compile time improves 2.0%. However, the interval regressions
+persist for Mandreel (16.7%), Gameboy (29.2%) and single-thread PdfJS
+(35.7%). Every other phase is within the threshold in these checks.
+The lookup gains do not justify landing the trial with these unresolved
+regressions. Its production changes are removed without proceeding to
+execution-placement or conformance-memory comparisons.
+
+Three actual-background process pairs (`-jitbackground -n 3`, without
+`-jitcompile`) give these initial medians:
+
+| Workload | Base / trial ms | Base / trial process CPU ms |
+|---|---:|---:|
+| PdfJS | 184.5 / 183.8 | 294.4 / 288.4 |
+| Mandreel | 699.8 / 689.9 | 734.0 / 728.4 |
+| Gameboy | 274.6 / 268.2 | 342.9 / 332.2 |
+| zlib | 499.7 / 517.2 | 542.2 / 553.2 |
+| Typescript | 1456.7 / 1364.3 | 2028.4 / 1939.0 |
+
+These include execution and background scheduling; they do not isolate
+the compiler's work. In particular, the TypeScript improvement here is
+not a claim of a general 6.3% speedup.
+
+The trial passed the full plain, JIT and Go-handler suites, background
+race and stress tests, encoder verification and all four test262 modes
+(100,277 passes and 42 existing skips each). Those checks establish
+correctness, not a compile-time improvement. Removing the lowering's local
+copy made the new cache-preservation test fail in both heap and workspace
+variants. The test and lookup benchmark are retained; the production
+change and its generated layout adjustments are removed.
+The retained SSA suite passes on Go 1.27.3 and Go 1.24.13 against the
+restored production code. Regeneration returns the pads to their original
+contents and verifies all eight layout configurations.
+
 ## Sparse state feedback for background compiles
 
 The background snapshot profile at `da485c30` shows time in the generated

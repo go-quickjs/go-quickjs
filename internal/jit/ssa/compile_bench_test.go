@@ -6,8 +6,45 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
+
+func BenchmarkPropertyFeedback(b *testing.B) {
+	for _, kind := range []string{"property", "primitive", "absent"} {
+		b.Run(kind, func(b *testing.B) {
+			fr := &frame{}
+			build := builder{f: &Func{}, cur: fr,
+				p:  &ir.Program{Code: []ir.Instruction{{Op: ir.ReferenceRead}}},
+				fb: propertyBenchFeedback{siteFeedback{PropertySite{Shape: 0x10000}}},
+			}
+			if kind == "absent" {
+				build.p.Code[0].Op = ir.PropertyRead
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if kind == "property" {
+					site, ok := build.property(0)
+					if !ok || site.Shape != 0x10000 {
+						b.Fatal("property feedback changed")
+					}
+				} else {
+					site, ok := build.stringProperty(0)
+					if ok != (kind == "primitive") || ok && site.Shape != 0x10000 {
+						b.Fatal("primitive feedback changed")
+					}
+				}
+			}
+		})
+	}
+}
+
+type propertyBenchFeedback struct{ siteFeedback }
+
+func (f propertyBenchFeedback) StringProperty(int) (PropertySite, bool) {
+	return f.site, true
+}
 
 func BenchmarkBuildOptimize(b *testing.B) {
 	for _, tc := range []struct {
