@@ -1466,7 +1466,12 @@ func (c *core) allocate() error {
 					continue
 				}
 				gm[ma].weight = max(gm[ma].weight, w)
-				if a != v && mv >= 0 && isFloat(a) == isFloat(v) {
+				// Repeated inputs still contribute each edge's uses and cost,
+				// but a pair need only be joined once: its classes only grow.
+				// Until the groups are filled, off remembers the last phi
+				// paired with this member, plus one.
+				if a != v && mv >= 0 && isFloat(a) == isFloat(v) && gm[ma].off != mv+1 {
+					gm[ma].off = mv + 1
 					pairs = append(pairs, mv, ma)
 				}
 			}

@@ -1986,7 +1986,12 @@ first to its last. So a phi and its arguments are also joined into spill
 classes (`spillClasses`) of every pair whose values are never live at once,
 their intervals meeting or not, as V8's allocator merges the spill ranges
 of a phi and its inputs where their use intervals, holes and all, do not
-meet; a value of a class of more than one is spilled to the class's own
+meet. Repeated inputs of one phi contribute every edge's use and cost,
+but only their first coalescing pair: a successful pair is already joined,
+and an interfering pair cannot become disjoint as its classes grow. The
+member's pool offset holds the last phi paired with it until the groups
+are filled, so recognizing repeats needs no additional table.
+A value of a class of more than one is spilled to the class's own
 slot, which no other value takes, and the group's slot and the free list
 are for the rest. Two values of strict SSA are live at once only if one's
 definition dominates the other's and it is live there (Budimlić et al.):

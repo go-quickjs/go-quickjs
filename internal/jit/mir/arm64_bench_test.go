@@ -26,6 +26,7 @@ func BenchmarkCompileARM64(b *testing.B) {
 			strings.Repeat(`s+=o.f(i);`, 8) + `}return s}`, nil},
 		{"properties", `function f(o,n){let s=0;for(let i=0;i<n;i++){` +
 			strings.Repeat(`s+=o.x;o=o.next;`, 8) + `}return s}`, arm64BenchFeedback{}},
+		{"repeated-phi-inputs", repeatedPhiSource(128, 32), nil},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			ast, err := parser.Parse(tc.src, parser.Options{})
