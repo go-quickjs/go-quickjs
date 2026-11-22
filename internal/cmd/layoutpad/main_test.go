@@ -89,7 +89,9 @@ func TestIsModule(t *testing.T) {
 // lever is left out, and amd64's alone.
 func TestAsmSource(t *testing.T) {
 	c := &config{goos: "linux", goarch: "amd64", jit: true}
-	src, err := asmSource(c, 3)
+	h, _ := asmPadOf("H")
+	hj, _ := asmPadOf("HJ")
+	src, err := asmSource(c, h, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +101,17 @@ func TestAsmSource(t *testing.T) {
 	if !strings.Contains(src, "//go:build quickjs_jit && !quickjs_wasm\n") || !strings.Contains(src, "TEXT ·layoutPadH(SB), NOSPLIT|NOFRAME, $0-0\n") {
 		t.Fatalf("source\n%s", src)
 	}
-	if src, err := asmSource(c, -1); err != nil || strings.Contains(src, "TEXT") {
+	if src, err := asmSource(c, h, -1); err != nil || strings.Contains(src, "TEXT") {
 		t.Fatalf("left out: %v\n%s", err, src)
 	}
-	if _, err := asmSource(&config{goos: "linux", goarch: "arm64"}, 1); err == nil {
+	if _, err := asmSource(&config{goos: "linux", goarch: "arm64"}, h, 1); err == nil {
 		t.Fatal("arm64 pad written")
 	}
-	if got := filepath.Base(asmFile(c)); got >= "native_amd64.s" || got <= "jit_leaffast_amd64.s" {
+	if got := filepath.Base(asmFile(c, h)); got >= "native_amd64.s" || got <= "jit_leaffast_amd64.s" {
 		t.Fatalf("%s does not sort between the JIT's assembly and the native handlers'", got)
+	}
+	if got := filepath.Base(asmFile(c, hj)); got >= "jit_leaffast_amd64.s" || got <= "jit_bigleaf_amd64.s" {
+		t.Fatalf("%s does not sort between the JIT's BigInt leaves and its leaf stubs", got)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -59,5 +60,41 @@ func TestEqCheck(t *testing.T) {
 	}
 	if got := symBefore(syms, 0x140001080); got != "github.com/x/vm.before" {
 		t.Fatalf("symBefore = %s", got)
+	}
+}
+
+// A new anchor is read as fresh, written back as new until recorded, and
+// then with its target and address.
+func TestFreshAnchor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	src := "toolchain go1.27.3\n\nconfig windows/amd64 jit\nanchor JS new github.com/x/vm.jitHostCall\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tg, err := readTargets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := tg.configs[0]
+	if a := c.anchors[0]; !a.fresh || a.lever != "JS" {
+		t.Fatalf("read %+v", a)
+	}
+	if lines := compare(c, parseNM([]byte("  140001000  64 T github.com/x/vm.jitHostCall\n"))); len(lines) != 1 || !strings.Contains(lines[0], "new") {
+		t.Fatalf("compare %q", lines)
+	}
+	if err := writeTargets(path, tg); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "anchor JS new github.com/x/vm.jitHostCall\n") {
+		t.Fatalf("written\n%s", b)
+	}
+	if !recordFresh(c, parseNM([]byte("  140001fa0  64 T github.com/x/vm.jitHostCall\n"))) {
+		t.Fatal("not recorded")
+	}
+	if err := writeTargets(path, tg); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "anchor JS 0x00fa0 @0x140001fa0 github.com/x/vm.jitHostCall\n") {
+		t.Fatalf("recorded\n%s", b)
 	}
 }

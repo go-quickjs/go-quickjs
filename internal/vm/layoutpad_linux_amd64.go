@@ -23,6 +23,15 @@ const (
 	layoutPadNJP  = 13
 	layoutPadNGJP = -1
 	layoutPadNMJP = -1
+	layoutPadNBM  = 0
+	layoutPadNGBM = -1
+	layoutPadNMBM = -1
+	layoutPadNTA  = 580
+	layoutPadNGTA = -1
+	layoutPadNMTA = -1
+	layoutPadNCB  = 584
+	layoutPadNGCB = -1
+	layoutPadNMCB = -1
 	layoutPadNC   = 415
 	layoutPadNGC  = -1
 	layoutPadNMC  = -1
@@ -32,15 +41,27 @@ const (
 	layoutPadNF   = 461
 	layoutPadNGF  = -1
 	layoutPadNMF  = -1
-	layoutPadNL   = 109
+	layoutPadNL   = 104
 	layoutPadNGL  = -1
 	layoutPadNML  = -1
 	layoutPadNB   = 493
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
+	layoutPadNJB  = -1
+	layoutPadNGJB = -1
+	layoutPadNMJB = -1
+	layoutPadNJU  = -1
+	layoutPadNGJU = -1
+	layoutPadNMJU = -1
 	layoutPadNJ   = -1
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
+	layoutPadNJN  = -1
+	layoutPadNGJN = -1
+	layoutPadNMJN = -1
+	layoutPadNJS  = -1
+	layoutPadNGJS = -1
+	layoutPadNMJS = -1
 	layoutPadNN   = 168
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
@@ -62,28 +83,50 @@ const (
 	layoutPadNV   = 8
 	layoutPadNGV  = -1
 	layoutPadNMV  = -1
-	layoutPadNK   = 456
-	layoutPadNGK  = -1
+	layoutPadNVT  = 0
+	layoutPadNGVT = -1
+	layoutPadNMVT = 0
+	layoutPadNK   = 436
+	layoutPadNGK  = 0
 	layoutPadNMK  = -1
+	layoutPadNVA  = 0
+	layoutPadNGVA = -1
+	layoutPadNMVA = -1
 	layoutPadNO   = 580
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
+	layoutPadNPR  = 0
+	layoutPadNGPR = -1
+	layoutPadNMPR = -1
+	layoutPadNSH  = 0
+	layoutPadNGSH = -1
+	layoutPadNMSH = -1
 	layoutPadNR   = 132
 	layoutPadNGR  = -1
 	layoutPadNMR  = -1
 	layoutPadNS   = 100
 	layoutPadNGS  = -1
 	layoutPadNMS  = -1
-	layoutPadNZ   = 392
+	layoutPadNZ   = 374
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
-	layoutPadNCZ  = 571
+	layoutPadNCZ  = 566
+	layoutPadNHJ  = -1
 	layoutPadNH   = 44
+	layoutPadNHT  = 1
 	layoutPadNDH  = 0
 	layoutPadNDW  = 3
 	layoutPadNDG  = 0
 )
 
-// layoutPadH is the assembly pad, in
+// layoutPadHJ is an assembly pad, in
+// jit_l_layoutpad_linux_amd64.s. It is never called.
+func layoutPadHJ()
+
+// layoutPadH is an assembly pad, in
 // native_a_layoutpad_linux_amd64.s. It is never called.
 func layoutPadH()
+
+// layoutPadHT is an assembly pad, in
+// native_ta_layoutpad_linux_amd64.s. It is never called.
+func layoutPadHT()

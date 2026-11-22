@@ -22,6 +22,15 @@ const (
 	layoutPadNJP  = -1
 	layoutPadNGJP = -1
 	layoutPadNMJP = -1
+	layoutPadNBM  = -1
+	layoutPadNGBM = -1
+	layoutPadNMBM = -1
+	layoutPadNTA  = -1
+	layoutPadNGTA = -1
+	layoutPadNMTA = -1
+	layoutPadNCB  = -1
+	layoutPadNGCB = -1
+	layoutPadNMCB = -1
 	layoutPadNC   = -1
 	layoutPadNGC  = -1
 	layoutPadNMC  = -1
@@ -37,9 +46,21 @@ const (
 	layoutPadNB   = -1
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
+	layoutPadNJB  = -1
+	layoutPadNGJB = -1
+	layoutPadNMJB = -1
+	layoutPadNJU  = -1
+	layoutPadNGJU = -1
+	layoutPadNMJU = -1
 	layoutPadNJ   = -1
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
+	layoutPadNJN  = -1
+	layoutPadNGJN = -1
+	layoutPadNMJN = -1
+	layoutPadNJS  = -1
+	layoutPadNGJS = -1
+	layoutPadNMJS = -1
 	layoutPadNN   = -1
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
@@ -61,12 +82,24 @@ const (
 	layoutPadNV   = -1
 	layoutPadNGV  = -1
 	layoutPadNMV  = -1
+	layoutPadNVT  = -1
+	layoutPadNGVT = -1
+	layoutPadNMVT = -1
 	layoutPadNK   = -1
 	layoutPadNGK  = -1
 	layoutPadNMK  = -1
+	layoutPadNVA  = -1
+	layoutPadNGVA = -1
+	layoutPadNMVA = -1
 	layoutPadNO   = -1
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
+	layoutPadNPR  = -1
+	layoutPadNGPR = -1
+	layoutPadNMPR = -1
+	layoutPadNSH  = -1
+	layoutPadNGSH = -1
+	layoutPadNMSH = -1
 	layoutPadNR   = -1
 	layoutPadNGR  = -1
 	layoutPadNMR  = -1
@@ -77,11 +110,19 @@ const (
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
 	layoutPadNCZ  = -1
+	layoutPadNHJ  = -1
 	layoutPadNH   = -1
+	layoutPadNHT  = -1
 	layoutPadNDH  = 0
 	layoutPadNDW  = 0
 	layoutPadNDG  = 0
 )
 
-// layoutPadH stands for the assembly pad, which this platform has not.
+// layoutPadHJ stands for an assembly pad, which this platform has not.
+func layoutPadHJ() {}
+
+// layoutPadH stands for an assembly pad, which this platform has not.
 func layoutPadH() {}
+
+// layoutPadHT stands for an assembly pad, which this platform has not.
+func layoutPadHT() {}

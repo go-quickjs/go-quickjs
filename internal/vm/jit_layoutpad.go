@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadJ is the layout lock's pad J, after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo (without the JIT, N and P hold what follows).
+// layoutPadJ is the layout lock's pad J, after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

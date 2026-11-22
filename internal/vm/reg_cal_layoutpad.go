@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadP is the layout lock's pad P, after reg_caches.go, before reg_call.go: without the JIT, the register interpreter's calls, regCall.
+// layoutPadP is the layout lock's pad P, after reg_caches.go, before reg_call.go: the register interpreter's calls, regCall.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

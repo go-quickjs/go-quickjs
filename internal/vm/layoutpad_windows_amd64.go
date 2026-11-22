@@ -23,6 +23,15 @@ const (
 	layoutPadNJP  = 9
 	layoutPadNGJP = -1
 	layoutPadNMJP = -1
+	layoutPadNBM  = 0
+	layoutPadNGBM = -1
+	layoutPadNMBM = -1
+	layoutPadNTA  = 576
+	layoutPadNGTA = -1
+	layoutPadNMTA = -1
+	layoutPadNCB  = 581
+	layoutPadNGCB = -1
+	layoutPadNMCB = -1
 	layoutPadNC   = 413
 	layoutPadNGC  = -1
 	layoutPadNMC  = -1
@@ -32,15 +41,27 @@ const (
 	layoutPadNF   = 459
 	layoutPadNGF  = -1
 	layoutPadNMF  = -1
-	layoutPadNL   = 107
+	layoutPadNL   = 102
 	layoutPadNGL  = -1
 	layoutPadNML  = -1
 	layoutPadNB   = 490
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
+	layoutPadNJB  = -1
+	layoutPadNGJB = -1
+	layoutPadNMJB = -1
+	layoutPadNJU  = -1
+	layoutPadNGJU = -1
+	layoutPadNMJU = -1
 	layoutPadNJ   = -1
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
+	layoutPadNJN  = -1
+	layoutPadNGJN = -1
+	layoutPadNMJN = -1
+	layoutPadNJS  = -1
+	layoutPadNGJS = -1
+	layoutPadNMJS = -1
 	layoutPadNN   = 166
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
@@ -62,28 +83,50 @@ const (
 	layoutPadNV   = 5
 	layoutPadNGV  = -1
 	layoutPadNMV  = -1
-	layoutPadNK   = 454
-	layoutPadNGK  = -1
+	layoutPadNVT  = 0
+	layoutPadNGVT = -1
+	layoutPadNMVT = 0
+	layoutPadNK   = 436
+	layoutPadNGK  = 0
 	layoutPadNMK  = -1
+	layoutPadNVA  = 0
+	layoutPadNGVA = -1
+	layoutPadNMVA = -1
 	layoutPadNO   = 576
 	layoutPadNGO  = -1
 	layoutPadNMO  = -1
+	layoutPadNPR  = 0
+	layoutPadNGPR = -1
+	layoutPadNMPR = -1
+	layoutPadNSH  = 0
+	layoutPadNGSH = -1
+	layoutPadNMSH = -1
 	layoutPadNR   = 130
 	layoutPadNGR  = -1
 	layoutPadNMR  = -1
 	layoutPadNS   = 96
 	layoutPadNGS  = -1
 	layoutPadNMS  = -1
-	layoutPadNZ   = 390
+	layoutPadNZ   = 372
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
-	layoutPadNCZ  = 568
+	layoutPadNCZ  = 563
+	layoutPadNHJ  = -1
 	layoutPadNH   = 44
+	layoutPadNHT  = 1
 	layoutPadNDH  = 4
 	layoutPadNDW  = 2
 	layoutPadNDG  = 2
 )
 
-// layoutPadH is the assembly pad, in
+// layoutPadHJ is an assembly pad, in
+// jit_l_layoutpad_windows_amd64.s. It is never called.
+func layoutPadHJ()
+
+// layoutPadH is an assembly pad, in
 // native_a_layoutpad_windows_amd64.s. It is never called.
 func layoutPadH()
+
+// layoutPadHT is an assembly pad, in
+// native_ta_layoutpad_windows_amd64.s. It is never called.
+func layoutPadHT()
