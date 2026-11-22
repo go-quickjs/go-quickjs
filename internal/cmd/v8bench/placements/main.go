@@ -736,8 +736,8 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 		cmd := exec.Command(exe, args...)
 		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1), "V8BENCH_JITLINE="+strconv.Itoa(jitLines[n%len(jitLines)]))
 		cmd.Env = append(cmd.Env, env...)
-		var outb bytes.Buffer
-		cmd.Stdout = &outb
+		var outb, errb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &outb, &errb
 		if cpus != nil {
 			cmd.Env = append(cmd.Env, "GOMAXPROCS="+strconv.Itoa(len(cpus)))
 			if err := cpuset.Start(cmd, cpus); err != nil {
@@ -747,7 +747,8 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 			return nil, fmt.Errorf("%s: %w", exe, err)
 		}
 		if err := cmd.Wait(); err != nil {
-			return nil, fmt.Errorf("%s: %w", exe, err)
+			// What the run printed before it failed says why.
+			return nil, fmt.Errorf("%s %s: %w\n%s", exe, strings.Join(args, " "), err, lastLines(errb.String(), 20))
 		}
 		var got []named
 		if micro {
@@ -925,4 +926,13 @@ func reportMicro(w io.Writer, labels [2]string, names []string, res [2][]map[str
 			fmt.Fprintf(w, "  %-28s %+6.1f%%\n", r.name, 100*(r.b-r.a)/r.a)
 		}
 	}
+}
+
+// lastLines is the last n lines of s.
+func lastLines(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
 }
