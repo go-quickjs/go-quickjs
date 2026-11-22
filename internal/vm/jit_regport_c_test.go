@@ -151,7 +151,7 @@ func regLoopHeaderForTest(r *Runtime, name string) int {
 // the background as jitRegCompile does, for jitRegSubmit to hand over:
 // lowered, its feedback asked ahead (jitRegSnapshotOf), to replace the
 // code the cache holds for the function at its install.
-func jitRegJobForTest(t *testing.T, r *Runtime, cl *closure) *jitRegJob {
+func jitRegJobForTest(t testing.TB, r *Runtime, cl *closure) *jitRegJob {
 	t.Helper()
 	// The register code the function's calls made, read as they read it:
 	// regOf writes the closure's, which a compile of it in the background

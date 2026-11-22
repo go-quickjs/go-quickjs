@@ -62,6 +62,60 @@ The standard stress setting, `threshold,budget=3,deopt=7`, passes all
 also pass with `QJS_NONATIVE=1`. `hotdiff` finds the interpreter's hot
 functions and native handler blocks identical on Linux/amd64.
 
+
+## Rejected sharing of native-call feedback
+
+Starting at `d08557da`, a trial made `NativeCalls` return read-only
+cached descriptions, including answers read from a background snapshot.
+The SSA builder copied only descriptions whose receiver coercion or
+BigInt leaf flag it could change. This removed a 576-byte allocation
+from each cached or snapshot lookup: the focused benchmarks took about
+71 to 1.6 ns and 75.5 to 9.9 ns respectively. The production change is not
+retained, because the compiler phase comparisons did not meet the
+regression threshold.
+
+On the same darwin/arm64 host and Go 1.27.3, three alternating process
+pairs, 40 compilation repetitions per workload, gave these medians:
+
+| Workload | Default before / trial ms | GOMAXPROCS=1 before / trial ms |
+|---|---:|---:|
+| PdfJS | 27.71 / 27.97 | 34.68 / 35.45 |
+| Mandreel | 47.67 / 47.80 | 52.80 / 52.06 |
+| Gameboy | 39.35 / 39.77 | 44.75 / 44.39 |
+| zlib | 47.92 / 47.10 | 48.52 / 48.16 |
+| Typescript | 179.69 / 175.13 | 193.74 / 199.17 |
+
+TypeScript's default-thread allocation volume fell from 56.70 to
+54.04 MB per repetition. However, intervals were 12-25% slower in four
+workloads; single-thread PdfJS's hints were 32.5% slower too. A longer
+comparison with randomized pair order (seed 731), 100 repetitions,
+confirmed interval regressions. Its first three complete pairs gave
+0.14 / 0.16 ms for PdfJS, 0.33 / 0.37 ms for Mandreel and 0.26 / 0.32 ms
+for Gameboy. Total compilation was 27.04 / 26.67, 47.20 / 47.32,
+39.11 / 38.93 and 181.20 / 177.64 ms for PdfJS, Mandreel, Gameboy and
+TypeScript. The longer batch was stopped after the rejection; further
+partial runs are not used here. These results do not establish why an
+unchanged interval-construction phase slows down, and do not justify
+accepting it on the strength of the TypeScript total alone.
+
+The ownership tests caught mutations in the old SSA builder and passed
+with the trial; background snapshot isolation and race checks passed.
+Native comparison found 2,460 compiles identical, 78 different and 40
+present in one run alone. Every differing compile was in TypeScript,
+which also varied in the baseline control (2,480 identical, 64 different,
+36 present in one run). This does not prove every TypeScript compile is
+unchanged.
+
+`BenchmarkJITCallFeedback` and `BenchmarkJITBackgroundCompile` are kept
+for subsequent work. The latter separates snapshot preparation on the
+runtime's goroutine from compilation using the captured snapshot. Its
+fixture contains JSON calls, since the initial Point/norm fixture inlined
+away the calls whose feedback this experiment was intended to measure.
+`TestJITCallFeedbackSnapshot` checks that a worker and workspace rewind
+leave captured answers intact after the runtime changes call targets.
+The layout generator fix discovered during this experiment is separate:
+it preserves recorded pages when shrinking code makes a pad cross 4 KB.
+
 ## Rejected closure-table reuse
 
 The next comparison starts at `cac452a9`. A TypeScript allocation profile
