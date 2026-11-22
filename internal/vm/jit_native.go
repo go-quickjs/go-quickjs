@@ -2891,17 +2891,24 @@ func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) boo
 	at := 0
 	this := Undefined
 	var callee, first Value
+	// A method call's operands begin with its receiver (abi.GoCallMethod):
+	// call_method_w's, and regexp_lit's, the literal's RegExp, the method
+	// its expansion read the function (compile's regexpLit). Read as a
+	// plain call's, by op.MethodCall(), a regexp_lit's call that was no
+	// leaf's -- RegExp.prototype's exec or test replaced, or the leaf
+	// refused -- called the RegExp, a TypeError.
+	method := kind == abi.GoCallMethod
 	if jitRegWideCall(w) {
 		// More operands than the context holds: native code wrote them to
 		// the callee's window past the stack's top (mir's windowGoCall),
 		// the frame the call is made of.
-		if op.MethodCall() {
+		if method {
 			this = r.stack[top+1]
 		}
 		callee, first = r.stack[top], r.stack[top+2]
 		r.stack[top+1] = this
 	} else {
-		if op.MethodCall() {
+		if method {
 			this, at = jitGoArg(ctx, 0), 1
 		}
 		callee = jitGoArg(ctx, at)
