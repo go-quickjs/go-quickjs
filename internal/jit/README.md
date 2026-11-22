@@ -836,7 +836,14 @@ interpreter would go on from in place Go makes at the code's exit instead
 (`regAwaitsInPlace`), native code going on at its next entry: the frame
 resumed by its await's job, the queue's last, the value awaited settled.
 Left to the interpreter, a busy loop's frame would run in the interpreter
-from its first settled await on. A delegation's step is left to the
+from its first settled await on. A throw a resumption injects -- a
+rejected `await`, a generator's `throw` -- that a handler of the frame's
+takes Go catches before the frame runs (`regGenCaught`), the value thrown
+in the handler's register as `regCatch` gives it, and the code is entered
+at the handler, where it has an entry as for a throw Go catches at an
+exit: left to `gen_entry`, the interpreter caught it and ran the rest of
+the frame, an async function's loop that awaits a promise that may reject
+natively in its first run alone. A delegation's step is left to the
 interpreter, which goes on with the frame there. A synchronous generator's
 code a loop's step or a call of `next` resumed natively suspends it at a
 `yield` itself (see [Control flow](#control-flow), "Generators' steps"). A

@@ -114,3 +114,87 @@ func TestJITRegSuspendedAndTopLevel(t *testing.T) {
 		})
 	}
 }
+
+// regThrownSrc's async functions await, in a try statement, a promise that
+// rejects at every fourth turn, and one that rejects with no handler; its
+// generator is thrown into at a yield in a try statement. Each throw
+// resumes the frame where it was suspended.
+const regThrownSrc = `
+async function fails(n) {
+	let s = 0;
+	for (let i = 0; i < n; i++) {
+		try { s += await (i % 4 ? i : Promise.reject(i)) } catch (e) { s -= e }
+	}
+	return s;
+}
+async function finished(n) {
+	let s = 0;
+	for (let i = 0; i < n; i++) {
+		try { s += await (i % 4 ? i : Promise.reject(i)) } finally { s++ }
+	}
+	return s;
+}
+function* catches(n) {
+	let s = 0;
+	for (let i = 0; i < n; i++) { try { s += yield i } catch (e) { s += 1000 } }
+	return s;
+}
+function injected(n) {
+	const g = catches(n); g.next(); let s = 0;
+	for (let i = 0; i < n; i++) { const r = i % 3 ? g.next(i) : g.throw(i); if (!r.done) s += r.value }
+	return s + ':' + g.return(7).value;
+}
+var out = [];
+function drive(n) { fails(n).then(v => out.push(v)); finished(n).then(v => out.push(v), e => out.push('e' + e)) }
+function take() { const o = out.join(); out = []; return o }
+`
+
+// A throw injected into a suspended frame of native code, which a handler
+// of the frame's takes -- a rejected await, a generator's throw -- resumes
+// the frame natively at the handler, the value thrown in its register, as
+// the interpreter's gen_entry throws it there: each answer the
+// interpreter's, with the collector idle and marking, and, once the code
+// is compiled, each such resumption an entry of it. Left to gen_entry, the
+// interpreter had caught it and run the rest of the frame: of the 21
+// throws a round injects, 7 resumptions had entered native code.
+func TestJITThrowResumesAtHandler(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			var rounds []string
+			for range 6 {
+				rounds = append(rounds, "(drive(40), 0)", "take()", "injected(30)")
+			}
+			r := jitAgreesForTest(t, regThrownSrc, rounds...)
+			for _, name := range []string{"fails", "finished", "catches"} {
+				jitNativeForTest(t, r, name)
+			}
+			// A round of a runtime whose code is compiled and not yet
+			// judged (jitRegStretchWork): every throw's resumption, fails'
+			// 10, finished's one and catches' 10, enters the code.
+			r = jitAgreesForTest(t, regThrownSrc, rounds[:3]...)
+			resumes := r.jit.regResumes
+			for _, rd := range [][2]string{{"(drive(40), 0)", "0"}, {"take()", "e0,420"}, {"injected(30)", "435:7"}} {
+				v, err := r.Run(compileForTest(t, "''+"+rd[0]))
+				if err == nil {
+					err = r.runMicrotasks()
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", rd[0], err)
+				}
+				if got := v.String().Go(); got != rd[1] {
+					t.Errorf("%s = %q, want %q", rd[0], got, rd[1])
+				}
+			}
+			if got := r.jit.regResumes - resumes; got < 21 {
+				t.Errorf("%d resumptions entered native code, want the round's 21 throws' at least", got)
+			}
+		})
+	}
+}

@@ -681,9 +681,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITExceptionHandlers`: a function with try statements, compiled with
   its handlers known at each instruction, is to be entered again once
   compiled again. `operation({}, 100)` runs in the interpreter.
-- `TestJITGenerators`: each resumption of a generator or an async function
-  is to enter native code at its pc. An async function with a try around
-  its awaits, `fails`, is entered natively 5 times, not at each resumption.
 
 **The code's shape.**
 
