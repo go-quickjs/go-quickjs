@@ -7821,11 +7821,17 @@ func (b *builder) fill(blk *Block) {
 	}
 	if d, ok := b.stepOn[blk]; ok {
 		// The register a register loop's step writes where the loop
-		// goes on (iterStep).
+		// goes on (iterStep). A captured one is stored to its cell,
+		// exiting to the root frame's state here (storeCaptured): the
+		// block's own, at its first instruction. The state the last
+		// instruction translated left was another block's -- the code
+		// past the loop, which is filled before the loop's body -- and
+		// named values that do not dominate the body.
 		delete(b.stepOn, blk)
 		if len(blk.Preds) != 1 {
 			panic("ssa: a register loop step's block is reached from elsewhere")
 		}
+		b.rootSt, b.rootBlk, b.rootPC = nil, blk, blk.PC
 		b.assign(d.slot, blk, d.v)
 	}
 	end := b.endOf[blk.ID]

@@ -97,6 +97,9 @@ func Check(f *Func) error {
 			return fmt.Errorf("ssa: %s has %d back-edge marks for %d predecessors", where, len(b.Backedge), len(b.Preds))
 		}
 	}
+	if err := checkDominance(f); err != nil {
+		return err
+	}
 	origins := Origins(f)
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
@@ -109,6 +112,93 @@ func Check(f *Func) error {
 			}
 			if o == OriginHeap && (v.Shadow == nil || v.Shadow != v.Args[0]) {
 				return fmt.Errorf("ssa: b%d %v is loaded from a cell it does not name", v.Block.ID, v)
+			}
+		}
+	}
+	return nil
+}
+
+// checkDominance verifies that f is strict: each value is made where it
+// dominates every use of it -- an operand or a shadow before its user in
+// their block, or in a block dominating the user's; a phi's operand by the
+// end of the predecessor it comes from; a frame state's slot where the
+// state is taken, a value's state at the value, a block's at its end, a
+// loop header's at its start but for its own block's boxes of its phis,
+// and an entry's after the loads it makes. The allocator's liveness takes a value live where it is
+// used as live everywhere between its definition and the use, and its
+// spill classes take two values live at once only where one's definition
+// dominates the other's.
+func checkDominance(f *Func) error {
+	d := dominators(f)
+	at := make(map[*Value]int)
+	for _, b := range f.Blocks {
+		for i, v := range b.Values {
+			at[v] = i
+		}
+	}
+	// made reports whether x is made before position i of block b: i is
+	// len(b.Values) for its end, -1 for its start, where its phis are.
+	made := func(x *Value, b *Block, i int) bool {
+		if x.Block == b {
+			return x.Op == OpPhi || at[x] < i
+		}
+		return d.dominates(x.Block, b)
+	}
+	state := func(where string, s *FrameState, b *Block, i int) error {
+		if s == nil {
+			return nil
+		}
+		for k, x := range s.All() {
+			if x != nil && !made(x, b, i) {
+				return fmt.Errorf("ssa: %s's state names %v of b%d in slot %d, which does not dominate it", where, x, x.Block.ID, k)
+			}
+		}
+		return nil
+	}
+	for _, b := range f.Blocks {
+		where := fmt.Sprintf("b%d", b.ID)
+		for i, v := range b.Values {
+			w := fmt.Sprintf("%s %v (%v)", where, v, v.Op)
+			if v.Op == OpPhi {
+				for k, x := range v.Args {
+					if p := b.Preds[k]; x != nil && !made(x, p, len(p.Values)) {
+						return fmt.Errorf("ssa: %s's operand %v of b%d does not dominate its predecessor b%d", w, x, x.Block.ID, p.ID)
+					}
+				}
+				if s := v.Shadow; s != nil && !made(s, b, -1) {
+					return fmt.Errorf("ssa: %s's shadow %v of b%d does not dominate it", w, s, s.Block.ID)
+				}
+				continue
+			}
+			for _, x := range v.Args {
+				if x != nil && !made(x, b, i) {
+					return fmt.Errorf("ssa: %s's operand %v of b%d does not dominate it", w, x, x.Block.ID)
+				}
+			}
+			if s := v.Shadow; s != nil && !made(s, b, i) {
+				return fmt.Errorf("ssa: %s's shadow %v of b%d does not dominate it", w, s, s.Block.ID)
+			}
+			if err := state(w, v.State, b, i); err != nil {
+				return err
+			}
+		}
+		if x := b.Control; x != nil && !made(x, b, len(b.Values)) {
+			return fmt.Errorf("ssa: %s's control %v of b%d does not dominate it", where, x, x.Block.ID)
+		}
+		if err := state(where, b.State, b, len(b.Values)); err != nil {
+			return err
+		}
+		switch {
+		case b.PC < 0:
+			if err := state(where+" entry", b.Header, b, len(b.Values)); err != nil {
+				return err
+			}
+		case b.LoopHeader:
+			// At its start, where it is taken, but naming its own block's
+			// boxes of its phis too, which Optimize's unboxing puts after
+			// them and the allocator makes where they are read.
+			if err := state(where+" header", b.Header, b, len(b.Values)); err != nil {
+				return err
 			}
 		}
 	}
