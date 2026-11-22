@@ -151,6 +151,44 @@ func (f *jitRegFeedback) regLitProperty(pc int, w bytecode.RInstr, op ir.Op) (rp
 	return rpc, key, c, false, true, false, true
 }
 
+// regKnownRead is a cache for the read of key at register pc rpc, whose own
+// cache never filled -- its instruction not reached when the function was
+// compiled -- filled from the object a captured binding holds now, which
+// the register instruction before it reads into the read's receiver
+// register (regDefined). The read's checks catch a receiver of another
+// shape, as a filled cache's would. It is kept with regexp_lit's caches
+// while the function's code lives (regLitReads). Without it, RegExp's
+// runBlock0, compiled in the first of its two dozen loops, had each later
+// loop's re.exec deoptimize until it had feedback, and was compiled again
+// once a loop. A global's, or a property's of one, is left to the read's
+// first run, as a site with no feedback is in V8: the reads of a branch
+// that opened after the compile are compiled for at once (feedReopt).
+func (f *jitRegFeedback) regKnownRead(rpc int, key Atom) (*propCache, bool) {
+	fb := f.fb
+	if fb.e == nil || rpc < 1 || rpc >= len(f.rc.Code) {
+		return nil, false
+	}
+	if op := f.rc.Code[rpc-1].Op(); op != bytecode.RGetUpval && op != bytecode.RGetUpvalCheck {
+		return nil, false
+	}
+	v, ok := f.regDefined(rpc, int(f.rc.Code[rpc].B()))
+	if !ok || !v.IsObject() {
+		return nil, false
+	}
+	o := v.Object()
+	// Filled by the first read, answered by the second.
+	c := new(propCache)
+	fb.r.cachedProp(c, o, key)
+	if _, found := fb.r.cachedProp(c, o, key); !found || c.getter {
+		return nil, false
+	}
+	if fb.e.regLitReads == nil {
+		fb.e.regLitReads = map[int32]*propCache{}
+	}
+	fb.e.regLitReads[int32(rpc)] = c
+	return c, true
+}
+
 // Property is ssa.Feedback's: the property site of a read or a write the
 // program's instruction pc makes (propertyAt): as its cache knows it, with
 // the cases the code met at its exits (jitRegDeoptSeen, jitRegHostSeen), a
@@ -173,6 +211,11 @@ func (f *jitRegFeedback) Property(pc int) (ssa.PropertySite, bool) {
 	}
 	if cache == nil {
 		return ssa.PropertySite{Key: uint32(key)}, true
+	}
+	if !write && (cache.shape == nil || cache.shape == noShape) && cache.fills == 0 {
+		if c, ok := f.regKnownRead(rpc, key); ok {
+			cache = c
+		}
 	}
 	fb := f.fb
 	site, ok := fb.siteOf(key, write, cache)

@@ -39,8 +39,9 @@ type jitLearned struct {
 	// its pool, kept across compiles (jitFeedback.Literal).
 	literals []jitLiteral
 	// regLitReads are, for register code, the caches of regexp_lit's
-	// reads of its method, by register pc (jitRegFeedback's
-	// regLitProperty).
+	// reads of its method, and of reads whose own caches never filled
+	// made for the object their receiver is known to be, by register pc
+	// (jitRegFeedback's regLitProperty, regKnownRead).
 	regLitReads map[int32]*propCache
 	// cellsPool is the pool the code takes its captured locals' cells
 	// from at its entries, kept across compiles (jitFeedback.CellsPool).

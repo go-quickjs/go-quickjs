@@ -8417,7 +8417,6 @@ func TestJITSSAMathPow(t *testing.T) {
 // or one with k of its own, misses the guess, which the read's checks
 // catch. Each answer is the interpreter's.
 func TestJITSSAKnownReceivers(t *testing.T) {
-	t.Skip("register JIT gap: reads of receivers known at compile time are learned from exits: blocks is compiled again once (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
