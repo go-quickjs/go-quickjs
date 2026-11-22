@@ -4896,6 +4896,9 @@ func jitSource(word *uint64) *Value {
 type jitSSAStats struct {
 	entries, hosts, guards, polls uint64
 	ended, work                   uint64
+	// resumed counts the entries that went on after a poll (jitRegGoOnAt),
+	// which goes on with the stretch it paused: no stretch of their own.
+	resumed uint64
 	// goCalls counts the calls native code had Go make (jitGoCall).
 	goCalls uint64
 	// calleeGoCalls counts those it made as a native callee

@@ -66,23 +66,37 @@ func TestJITGenericCalls(t *testing.T) {
 // natively, called by forEach's code through their links, not by Go. They
 // had left for Go at each call, and AWFY's DeltaBlue's planner ran its
 // constraints' callbacks in the interpreter.
+//
+// So too with QJS_JIT_STRESS's budget of three back edges, which polls at
+// every third turn of forEach's loop and at its callbacks' starts: a
+// poll's exit is the runtime's budget, not the code's cost, and is judged
+// as neither forEach's stretch (jitRegStretchWork) nor a callback's leaving
+// its native callers (jitRegUnwind). Counted as both, forEach ran natively
+// 0 times of 140 and its callbacks were each called through Go.
 func TestJITGenericCallsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	if jitStressDefault != (jitStressConfig{}) {
-		t.Skip("register JIT gap: under QJS_JIT_STRESS forEach's code is not run natively again, 0 times of 140, where the stack JIT's was (docs/performance-plan.md, the register JIT's remaining gaps)")
-	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := newTestRuntime(t, Config{JIT: true})
-	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-	jitFewCallsForTest(r)
 	// The register JIT compiles round, which calls f1 to f7
 	// natively, and they inline forEach, its callback with it: no
 	// generic call is left. Without inlining, forEach's own code makes
 	// them.
 	regNoInline(t)
+	t.Run("default", func(t *testing.T) { jitGenericCallsNative(t, nil) })
+	t.Run("budget=3", func(t *testing.T) { jitGenericCallsNative(t, &jitStressConfig{budget: 3}) })
+}
+
+// jitGenericCallsNative is TestJITGenericCallsNative in a runtime of the
+// process's stress settings, or of stress where it is not nil.
+func jitGenericCallsNative(t *testing.T, stress *jitStressConfig) {
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if stress != nil {
+		r.jitStress = *stress
+	}
+	jitFewCallsForTest(r)
 	const setup = `
 		function forEach(a, f) { for (let i = 0; i < a.length; i++) f(a[i]) }
 		const a = []

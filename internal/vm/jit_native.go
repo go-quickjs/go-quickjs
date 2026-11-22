@@ -274,7 +274,7 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 			// compiled again only to give up the entries kept for a frame
 			// (jitRegKeptGone) does as it did, and is judged by all of it.
 			st := &life.ssaStats
-			st.judged = st.entries + st.goCalls
+			st.judged = st.stretches()
 			st.workBase, st.stretchBase = st.work, st.judged
 			st.runGoCalls, st.runWork, st.osrStretches, st.osrWork = 0, 0, 0, 0
 		}
@@ -1760,6 +1760,11 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 		// below.
 		r.jitDrain()
 	}
+	// polled says the last stretch ended at a poll -- or, for a native call a
+	// poll paused (regPaused), the call -- which the run goes on after as
+	// the stretch it paused: no new one, nor one begun at the loop it polled
+	// at.
+	polled := resume == 0 && r.jit.regPaused == f
 	for {
 		ipc := 0
 		if resume == 0 && f.cl.reg == c {
@@ -1797,7 +1802,7 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 				return r.jitRegLeaveTo(f, c, e, rpc, loop), Undefined, false, nil
 			}
 		}
-		if !fixed && resume == 0 && ipc < len(e.p.Origin) && e.isLoop(int(e.p.Origin[ipc])) {
+		if !fixed && !polled && resume == 0 && ipc < len(e.p.Origin) && e.isLoop(int(e.p.Origin[ipc])) {
 			loop = true
 		}
 		ctx, ret, ok := r.jitRegStretch(f, c, e, wb, ipc, at, resume, loop)
@@ -1805,7 +1810,16 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 		if !ok {
 			return r.jitRegLeaveTo(f, c, e, rpc, loop), Undefined, false, nil
 		}
+		if polled {
+			e.life.ssaStats.resumed++
+		}
 		next, pc, v, done, err, native := r.jitRegLeft(f, c, e, wb, ctx, ret)
+		if s := r.jit; s.regPaused == f && ctx.ExitKind != abi.ExitPoll && ctx.ExitKind != abi.ExitReturn {
+			// A native call a poll paused (jitRegFinishLevel), left now.
+			s.regPaused = nil
+			r.jitRegUnwound(e)
+		}
+		polled = ctx.ExitKind == abi.ExitPoll
 		// The run's hold on e let go of (jitRegStretch): code the cache let
 		// go of while it was in it, closed now if no other run is; what
 		// goes on goes on in its replacement.
@@ -2457,6 +2471,19 @@ func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges
 		}
 	}
 	st.work += work
+	if ctx.ExitKind == abi.ExitPoll {
+		// The interrupt budget's poll, which the code goes on after at
+		// once: its work is the stretch's that goes on, and it judges
+		// nothing. How often a poll comes is the runtime's budget, the
+		// interpreter's checks as much as the code's: counted as stretches,
+		// a budget of three back edges (QJS_JIT_STRESS's budget=3) had
+		// made forEach's code a stretch of three turns, judged slow, never
+		// entered again.
+		if osr {
+			st.osrWork += work
+		}
+		return
+	}
 	if osr {
 		st.osrStretches++
 		st.osrWork += work
@@ -2464,7 +2491,7 @@ func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges
 			life.entrySlow, life.loopSlow = true, true
 		}
 	}
-	stretches := st.entries + st.goCalls
+	stretches := st.stretches()
 	if stretches-st.judged < jitSSAProbe {
 		return
 	}
@@ -2473,6 +2500,11 @@ func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges
 		life.entrySlow = true
 	}
 }
+
+// stretches is how many stretches the code's profit is judged by
+// (jitRegStretchWork): its entries and its calls of Go, but for the entries
+// that went on after a poll (resumed), each the stretch the poll paused.
+func (st *jitSSAStats) stretches() uint64 { return st.entries - st.resumed + st.goCalls }
 
 // jitRegRunWork is the work run's stretch has done natively so far, as
 // its end will count it (jitRegStretchWork): the back edges it has taken,
@@ -2590,7 +2622,7 @@ func (r *Runtime) jitRegRetrySlow(e *jitRegEntry) {
 	st := &life.ssaStats
 	life.entrySlow, life.loopSlow = false, false
 	life.slowSince, life.slowBackoff = life.slowCalls, min(life.slowBackoff+1, jitNativeBackoffs)
-	st.judged = st.entries + st.goCalls
+	st.judged = st.stretches()
 	st.workBase, st.stretchBase = st.work, st.judged
 	st.runGoCalls, st.runWork, st.osrStretches, st.osrWork = 0, 0, 0, 0
 }

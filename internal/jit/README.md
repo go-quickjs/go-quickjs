@@ -924,7 +924,7 @@ for the entry back. A caller compiled to call it natively, whose calls Go
 does not see, has it compiled so at once (`jitRegCalleesKeptNoEntries`).
 
 **Profit.** Each native stretch -- an entry, the code entered again after
-an exit or a poll, a call of Go -- costs what an exit and an entry would
+an exit, a call of Go -- costs what an exit and an entry would
 (`jitSSAMinWork`), against the work the stretch did (`jitRegStretchWork`):
 its back edges, at the mean length of the function's loops in the
 program's instructions (`irLoopMean`), and the distance to where it left.
@@ -2673,7 +2673,11 @@ its native callers' calls is compiled again while it learns, up to
 `jitUnwindReopts` times, then no longer called natively (`notNative`, its
 link cleared) until Go has made `jitNativeRetry` calls of it, doubled each
 time (`jitRegUnwound`, `jitRegRetryNative`): its native callers make a call
-of Go there rather than have Go finish their levels at each call. An exit
+of Go there rather than have Go finish their levels at each call. A poll
+that unwinds the call is not the callee leaving (see [Polls](#polls)): Go
+goes on with the callee in its code as the call it was, and counts it as
+leaving at the first exit after the poll that is no poll nor its return
+(`jitState`'s `regPaused`). An exit
 inside an inlined callee at a property's read or write whose site is not
 megamorphic is a map check's failure (`jitRegShapeMiss`): the site learns
 the shape as at a guard of the callee's own (`jitRegDeoptSeen`) and the code
@@ -2985,6 +2989,16 @@ calls check one. When the counter runs out, the code calls Go (or, under a
 stress budget, exits to it), which checks for cancellation, `Halt` and the
 memory limit, gives a new budget, and lets the code go on. The call is the
 budget's alone: the collector's marking changes nothing of it.
+
+A poll is a pause, not an exit, whether it calls Go or exits: how often one
+comes is the budget's, not the code's. The code entered again after a
+poll's exit goes on with the stretch the poll paused -- judged neither as a
+stretch of its own (`jitSSAStats`' `resumed`) nor as one begun at the loop
+it polled at -- an inlined callee's poll counts nothing against its
+inlining, and a native call a poll unwinds is not its callee leaving
+(`jitRegUnwind`, above). Counted as exits, a stress budget of three back
+edges had made `forEach`'s code stretches of three turns, judged slow, and
+its callbacks callees that left at every call, each called by Go.
 
 **Not a safe point.** Generated code is never a safe point. SIGURG, Windows'
 `SuspendThread` and SIGPROF see a PC outside Go's text:

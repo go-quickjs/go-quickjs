@@ -2187,6 +2187,7 @@ func (s *jitState) regLevelsIn(e *jitRegEntry, root, idx int) int {
 // callers' levels finished by Go each time: AWFY Havlak's size, at and
 // hashFn, a million times each.
 func (r *Runtime) jitRegUnwound(e *jitRegEntry) {
+	r.jit.callsLeft++
 	life := e.life
 	if life == nil || e.invalid {
 		return
@@ -2281,8 +2282,15 @@ func (r *Runtime) jitRegUnwind(idx int) (_ Value, _ error, gen bool) {
 	s.unwound += uint64(n)
 	if n != 0 {
 		// The innermost left native code: counted against its native
-		// callers' calling it (jitRegUnwound).
-		r.jitRegUnwound(levels[n-1].e)
+		// callers' calling it (jitRegUnwound) -- but not at a poll, which
+		// comes as often whatever the callee does: a pause, after which Go
+		// goes on with it in its code, and counted only if it leaves there
+		// (jitRegFinishLevel). Counted at the poll, QJS_JIT_STRESS's budget
+		// of three back edges had native callers call none of forEach's
+		// callbacks, each called through Go.
+		if s.ssaCtxs[levels[n-1].ctx].ExitKind != abi.ExitPoll {
+			r.jitRegUnwound(levels[n-1].e)
+		}
 		// A call from the last context, which the contexts, not the frames
 		// the VM allows, limited: more of them.
 		if l := &levels[n-1]; l.ctx == len(s.ssaCtxs)-1 && s.bounds.LevelLimit == uint64(len(s.ssaCtxs)) && s.ssaCtxs[l.ctx].ExitKind == abi.ExitHost {
@@ -2454,10 +2462,26 @@ func (r *Runtime) jitRegFinishLevel(f *frame, l *jitRegLevel, c *abi.Context) (V
 		s.ssaRecords += uint64(s.exitScratch.Apply(c))
 	}
 	r.jitRegApplyRecords(f, l.e.p, l.e.kinds, l.wb, c)
+	paused := s.regPaused
+	if c.ExitKind == abi.ExitPoll {
+		// A native call a poll unwound: paused, not left. Go goes on with it
+		// in its code as the call it was, judged as begun at its start
+		// (regGoOnRun), and it leaves its native callers at the first exit
+		// after the poll that is no poll nor its return (regPaused).
+		// Uncounted there, a callee that left at every call was never found
+		// to under QJS_JIT_STRESS's budget of three back edges, which, with
+		// its two-turn loop and its caller's one, polled at the start of
+		// every call: its host exits all came after the pause.
+		s.regPaused = f
+	}
 	next, pc, v, done, err, native := r.jitRegLeft(f, l.c, l.e, l.wb, c, Undefined)
 	if native {
+		if c.ExitKind == abi.ExitPoll {
+			s.regGoOnRun = 1
+		}
 		pc, v, done, err = r.jitRegGoOn(f, l.c, l.e, l.wb, next)
 	}
+	s.regPaused = paused
 	if err == nil && !done {
 		v, err = r.runRegFor(f, l.c, pc)
 	}

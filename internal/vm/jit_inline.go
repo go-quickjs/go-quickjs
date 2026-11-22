@@ -258,7 +258,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 					l.inlineReopt = false
 					r.jitRegReopt(cl, owner)
 				}
-			case atSite || x.threw || owner.life.reopt:
+			case atSite || x.threw || owner.life.reopt || x.kind == abi.ExitPoll:
 				// Left at a site of the callee's -- or by code to be
 				// compiled again, which may be what it leaves for -- not
 				// for being inlined; or left to throw, which the callee's
@@ -266,7 +266,8 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 				// the same: a read of null's property, at a site the
 				// callee's own code made megamorphic deoptimizing for it
 				// (jitDeoptSeenOp), had had constructs' Vs called natively
-				// after 16 throws.
+				// after 16 throws. Or at a poll, which comes as often
+				// whatever the callee does: a pause, not the inlining's cost.
 			default:
 				// Left with nothing to learn: counted against inlining the
 				// callee at the call (jitInlineLeft, jitInlineExits): past

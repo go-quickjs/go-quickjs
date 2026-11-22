@@ -38,7 +38,7 @@ func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, src)); err != nil {
 		t.Fatal(err)
 	}
-	unwound := r.jit.unwound
+	left := r.jit.callsLeft
 	v, err := r.Run(compileForTest(t, run))
 	if err != nil {
 		t.Fatal(err)
@@ -52,8 +52,18 @@ func TestJITInlinedExitsCompileNativeCalleeAgain(t *testing.T) {
 		t.Fatalf("move has no code: %+v", e)
 	}
 	// 200 calls of rec(10), each moving 1023 disks; without the compile,
-	// more than 500,000 exits.
-	if n := r.jit.unwound - unwound; n > 2000 {
+	// more than 500,000 exits. Counted are the calls that left native code
+	// (callsLeft), not those a poll paused (jitRegUnwind): under
+	// QJS_JIT_STRESS's budget of three back edges, 169,294 calls polled at
+	// their starts, which no compile changes.
+	//
+	// Today this guards that count only. The register JIT inlines a callee
+	// once its call has been seen to call it, its sites run, and compiles a
+	// site that never ran as a call of Go, not an exit: no path leads to an
+	// inlined callee's exit at a site that learns, which the scenario above
+	// needs. Plain, move is not compiled again (4 calls left); with the
+	// owner's learning at inlined exits removed, the test still passes.
+	if n := r.jit.callsLeft - left; n > 2000 {
 		t.Errorf("native calls left native code %d times in 204,600 moves", n)
 	}
 }

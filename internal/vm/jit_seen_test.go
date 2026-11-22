@@ -87,7 +87,10 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 // conversion may run anything, is Go's
 // at every call, which no compile changes, and native callers stop
 // calling it at once, not after three compiles of the same code. Each
-// answer is the interpreter's.
+// answer is the interpreter's. Under QJS_JIT_STRESS's budget of three back
+// edges -- w's two, run's one -- every native call of w polls at its start
+// and is unwound there, a pause, not its leaving: its host exits after
+// the poll are what its native callers count (jitRegFinishLevel).
 func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

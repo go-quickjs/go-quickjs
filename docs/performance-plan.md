@@ -665,10 +665,6 @@ in the interpreter.
   native code (`ssa.GoAdd`), which stays native, as V8's code calls its
   StringAdd. `tree`, a recursion like Splay's `GeneratePayloadTree`, is
   never called natively.
-- `TestJITGenericCallsNative`, under `QJS_JIT_STRESS` only: callbacks made
-  at more sites than a call calls natively are to be called by forEach's
-  code through their links. Under the stress settings forEach's code does
-  not run natively again, 0 times of 140.
 
 **Compiling again and learning.** The code is compiled again where it
 should not be, or not where it should, or does not learn what it met.

@@ -928,6 +928,12 @@ type jitState struct {
 	regForced   bool
 	regGoOnOSR  bool
 	regGoOnRun  uint8
+	// regPaused is the frame of a native call a poll unwound, which Go goes
+	// on with in its code (jitRegFinishLevel): a poll is a pause, and the
+	// call leaves native code, as its native callers count it
+	// (jitRegUnwound), at the first exit after it that is no poll nor its
+	// return.
+	regPaused *frame
 	// regKeptSeeding marks the compiles of register callees that give up
 	// the entries kept for a frame (jitRegCalleesKeptNoEntries), which ask
 	// for no more of them.
@@ -1073,9 +1079,11 @@ type jitState struct {
 	osrs        uint64
 	compiled    uint64
 	reoptimized uint64
-	// unwound counts the native calls whose callees left native code, which
-	// Go finished (jitRegUnwind).
-	unwound uint64
+	// unwound counts the native calls Go finished (jitRegUnwind) after their
+	// callees left native code or paused at a poll, and callsLeft those
+	// whose callees left it: at an exit, not a poll, or after a poll paused
+	// them (jitRegUnwound).
+	unwound, callsLeft uint64
 	// invalidated counts the codes invalidated (jitRegInvalidate).
 	invalidated uint64
 	// shapeDeopts counts the deoptimizations at property sites of code Go
