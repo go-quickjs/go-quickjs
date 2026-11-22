@@ -10490,12 +10490,17 @@ func (c *compiler) oddball(v *ssa.Value, fail guardTo) {
 	c.a.Jcc(amd64.CondE, zero)
 	c.cmpWord(r, c.enc.False)
 	if v.Index == 1 && c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
-		// Anything else -- a string -- converted by Go (ssa.GoNumber),
-		// out of line; what it refuses leaves.
+		// Anything else -- a string -- converted out of line: a string of
+		// a few decimal digits natively (digits), any other by Go
+		// (ssa.GoNumber); what it refuses leaves.
 		slow := c.a.NewLabel()
 		c.a.Jcc(amd64.CondNE, slow)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(slow)
+			other := c.a.NewLabel()
+			c.digits(v.Args[0], other)
+			c.a.Jmp(done)
+			c.a.Bind(other)
 			stub := c.stubLabel(v.State, exitKind(v.Aux))
 			c.goArg(abi.OffGoArgs, v.Args[0])
 			c.goSaving(uint64(ssa.GoNumber), &stub)
@@ -10511,6 +10516,101 @@ func (c *compiler) oddball(v *ssa.Value, fail guardTo) {
 	c.a.Bind(done)
 	c.setX(v, xScratch0)
 }
+
+// digits converts x, a value OpOddballF64 meets that is no number and no
+// constant, to its number in xScratch0 where it is a flat string of one
+// to maxDigits ASCII bytes, decimal digits with at most one decimal point
+// among them and a digit after it, which ToNumber reads as the number
+// they spell, leading zeros and all; and jumps to other for anything
+// else -- another string, a rope, a sign, a space, an exponent, an object
+// -- which Go converts. The digits make an integer m below 10^9, and k
+// after the point make the number m / 10^k, both exact doubles, whose
+// quotient the division rounds correctly (Clinger's fast path). It reads
+// the string where it is, as strictConst does: its pointer word from its
+// source, its halves, its ASCII flag, its length and its bytes. The end of
+// its bytes is kept in the context's SpillTemp, and where its point is in
+// its second GoArgs's word, which a call of Go writes before it reads
+// them. string_to_int's s | 0 had been a call of Go at every turn, three
+// quarters of its time.
+func (c *compiler) digits(x *ssa.Value, other amd64.Label) {
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		c.a.Jmp(other)
+		return
+	}
+	dot := abi.OffGoArgs + int32(unsafe.Sizeof(abi.GoArg{}))
+	c.cmpWord(c.gpr(x, scratchA), c.enc.String)
+	c.a.Jcc(amd64.CondNE, other)
+	c.sourceRef(x, guardLabel(c, other))
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, other)
+	c.a.Load(scratchA, scratchC, c.enc.StringLeft)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, other)
+	c.a.LoadU8(scratchA, scratchC, c.enc.StringASCII)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondE, other)
+	// One to maxDigits bytes: its length, less one, at most maxDigits-1
+	// unsigned.
+	c.a.Load(scratchA, scratchC, c.enc.StringLength)
+	c.a.OpImm(amd64.Sub, scratchA, 1, true)
+	c.a.OpImm(amd64.Cmp, scratchA, maxDigits-1, true)
+	c.a.Jcc(amd64.CondA, other)
+	c.a.Load(scratchB, scratchC, c.enc.StringData)
+	c.a.LeaIdx(scratchA, scratchB, scratchA, 1, 1)
+	c.a.Store(regCtx, abi.OffSpillTemp, scratchA)
+	c.movImm(scratchA, 0)
+	c.a.Store(regCtx, dot, scratchA)
+	loop, next, point := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.LoadU8(scratchC, scratchB, 0)
+	c.a.OpImm(amd64.Sub, scratchC, '0', false)
+	c.a.OpImm(amd64.Cmp, scratchC, 9, false)
+	c.a.Jcc(amd64.CondA, point)
+	// m = m*10 + d: m*5, then d + (m*5)*2.
+	c.a.LeaIdx(scratchA, scratchA, scratchA, 4, 0)
+	c.a.LeaIdx(scratchA, scratchC, scratchA, 2, 0)
+	c.a.Bind(next)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.CmpMem(scratchB, regCtx, abi.OffSpillTemp, true)
+	c.a.Jcc(amd64.CondB, loop)
+	c.a.Cvtsi2sd(xScratch0, scratchA, true)
+	// Past a point, k = the end less where the digits after it start, at
+	// least one: m / 10^k.
+	c.a.Load(scratchC, regCtx, dot)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	end := c.a.NewLabel()
+	c.a.Jcc(amd64.CondE, end)
+	c.a.Op(amd64.Sub, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondE, other)
+	c.movImm(scratchC, 1)
+	tens := c.a.NewLabel()
+	c.a.Bind(tens)
+	c.a.LeaIdx(scratchC, scratchC, scratchC, 4, 0)
+	c.a.Op(amd64.Add, scratchC, scratchC, true)
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Jcc(amd64.CondNE, tens)
+	c.a.Cvtsi2sd(xScratch1, scratchC, true)
+	c.a.SSEOp(amd64.DivSD, xScratch0, xScratch1)
+	c.a.Jmp(end)
+	// Not a digit: the first point, where the digits after it start
+	// recorded; anything else is Go's.
+	c.a.Bind(point)
+	c.a.OpImm(amd64.Cmp, scratchC, '.'-'0', false)
+	c.a.Jcc(amd64.CondNE, other)
+	c.a.Load(scratchC, regCtx, dot)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondNE, other)
+	c.a.Lea(scratchC, scratchB, 1)
+	c.a.Store(regCtx, dot, scratchC)
+	c.a.Jmp(next)
+	c.a.Bind(end)
+}
+
+// maxDigits is the most bytes digits converts natively: nine, of which
+// the digits make an integer below 10^9, which an int32 holds -- what
+// s | 0 wants -- and a double exactly, as it does 10^8, the most a point
+// among them divides by.
+const maxDigits = 9
 
 // freeze is ssa.OpFreeze: the building byte of the string v's operand is,
 // if it is one and the byte is set, cleared; nothing else is touched. A read

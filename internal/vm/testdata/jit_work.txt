@@ -40,7 +40,7 @@ blocks400 arm64 emit steps 3516
 blocks400 arm64 emit bytes 470904
 blocks400 arm64 encode steps 0
 blocks400 arm64 encode bytes 63232
-guards400 ssa build bytes 3082296
+guards400 ssa build bytes 3082344
 guards400 ssa optimize bytes 1611504
 guards400 ssa values 8044
 guards400 ssa blocks 5
@@ -80,7 +80,7 @@ guards400 arm64 emit steps 9
 guards400 arm64 emit bytes 4312600
 guards400 arm64 encode steps 0
 guards400 arm64 encode bytes 364560
-spill400 ssa build bytes 3696824
+spill400 ssa build bytes 3696872
 spill400 ssa optimize bytes 1688056
 spill400 ssa values 8911
 spill400 ssa blocks 188
@@ -120,7 +120,7 @@ spill400 arm64 emit steps 332
 spill400 arm64 emit bytes 907816
 spill400 arm64 encode steps 0
 spill400 arm64 encode bytes 101632
-loops400 ssa build bytes 4432648
+loops400 ssa build bytes 4432600
 loops400 ssa optimize bytes 4364712
 loops400 ssa values 16804
 loops400 ssa blocks 1202
@@ -219,9 +219,9 @@ asm_adler amd64 scan bytes 29968
 asm_adler amd64 saves steps 0
 asm_adler amd64 saves bytes 320
 asm_adler amd64 emit steps 5
-asm_adler amd64 emit bytes 22392
+asm_adler amd64 emit bytes 25464
 asm_adler amd64 encode steps 0
-asm_adler amd64 encode bytes 2496
+asm_adler amd64 encode bytes 3296
 asm_adler arm64 prepare steps 58
 asm_adler arm64 prepare bytes 7576
 asm_adler arm64 uses steps 7
@@ -237,9 +237,9 @@ asm_adler arm64 scan bytes 30192
 asm_adler arm64 saves steps 0
 asm_adler arm64 saves bytes 320
 asm_adler arm64 emit steps 9
-asm_adler arm64 emit bytes 20944
+asm_adler arm64 emit bytes 21968
 asm_adler arm64 encode steps 0
-asm_adler arm64 encode bytes 1680
+asm_adler arm64 encode bytes 2192
 asm_crc ssa build bytes 41696
 asm_crc ssa optimize bytes 39072
 asm_crc ssa values 114
@@ -259,9 +259,9 @@ asm_crc amd64 scan bytes 29544
 asm_crc amd64 saves steps 0
 asm_crc amd64 saves bytes 288
 asm_crc amd64 emit steps 2
-asm_crc amd64 emit bytes 22168
+asm_crc amd64 emit bytes 25240
 asm_crc amd64 encode steps 0
-asm_crc amd64 encode bytes 2448
+asm_crc amd64 encode bytes 3024
 asm_crc arm64 prepare steps 68
 asm_crc arm64 prepare bytes 7320
 asm_crc arm64 uses steps 6
@@ -277,9 +277,9 @@ asm_crc arm64 scan bytes 29768
 asm_crc arm64 saves steps 0
 asm_crc arm64 saves bytes 288
 asm_crc arm64 emit steps 2
-asm_crc arm64 emit bytes 20016
+asm_crc arm64 emit bytes 21552
 asm_crc arm64 encode steps 0
-asm_crc arm64 encode bytes 1664
+asm_crc arm64 encode bytes 2176
 asm_copy ssa build bytes 36440
 asm_copy ssa optimize bytes 16272
 asm_copy ssa values 87
@@ -299,9 +299,9 @@ asm_copy amd64 scan bytes 28104
 asm_copy amd64 saves steps 0
 asm_copy amd64 saves bytes 256
 asm_copy amd64 emit steps 5
-asm_copy amd64 emit bytes 27656
+asm_copy amd64 emit bytes 31752
 asm_copy amd64 encode steps 0
-asm_copy amd64 encode bytes 3024
+asm_copy amd64 encode bytes 4800
 asm_copy arm64 prepare steps 52
 asm_copy arm64 prepare bytes 6392
 asm_copy arm64 uses steps 7
@@ -317,9 +317,9 @@ asm_copy arm64 scan bytes 28328
 asm_copy arm64 saves steps 0
 asm_copy arm64 saves bytes 256
 asm_copy arm64 emit steps 5
-asm_copy arm64 emit bytes 23968
+asm_copy arm64 emit bytes 34592
 asm_copy arm64 encode steps 0
-asm_copy arm64 encode bytes 1936
+asm_copy arm64 encode bytes 2832
 asm_fnv ssa build bytes 39760
 asm_fnv ssa optimize bytes 16512
 asm_fnv ssa values 91
@@ -339,9 +339,9 @@ asm_fnv amd64 scan bytes 28296
 asm_fnv amd64 saves steps 0
 asm_fnv amd64 saves bytes 240
 asm_fnv amd64 emit steps 2
-asm_fnv amd64 emit bytes 22184
+asm_fnv amd64 emit bytes 25256
 asm_fnv amd64 encode steps 0
-asm_fnv amd64 encode bytes 2448
+asm_fnv amd64 encode bytes 3088
 asm_fnv arm64 prepare steps 52
 asm_fnv arm64 prepare bytes 6376
 asm_fnv arm64 uses steps 6
@@ -357,9 +357,9 @@ asm_fnv arm64 scan bytes 28520
 asm_fnv arm64 saves steps 0
 asm_fnv arm64 saves bytes 240
 asm_fnv arm64 emit steps 2
-asm_fnv arm64 emit bytes 20032
+asm_fnv arm64 emit bytes 21568
 asm_fnv arm64 encode steps 0
-asm_fnv arm64 encode bytes 1664
+asm_fnv arm64 encode bytes 2176
 asm_dot ssa build bytes 42328
 asm_dot ssa optimize bytes 45200
 asm_dot ssa values 125
@@ -379,9 +379,9 @@ asm_dot amd64 scan bytes 30848
 asm_dot amd64 saves steps 0
 asm_dot amd64 saves bytes 352
 asm_dot amd64 emit steps 5
-asm_dot amd64 emit bytes 28136
+asm_dot amd64 emit bytes 36328
 asm_dot amd64 encode steps 0
-asm_dot amd64 encode bytes 3296
+asm_dot amd64 encode bytes 4848
 asm_dot arm64 prepare steps 78
 asm_dot arm64 prepare bytes 7880
 asm_dot arm64 uses steps 9
@@ -397,9 +397,9 @@ asm_dot arm64 scan bytes 31072
 asm_dot arm64 saves steps 0
 asm_dot arm64 saves bytes 352
 asm_dot arm64 emit steps 5
-asm_dot arm64 emit bytes 24432
+asm_dot arm64 emit bytes 35056
 asm_dot arm64 encode steps 0
-asm_dot arm64 encode bytes 2240
+asm_dot arm64 encode bytes 2880
 asm_fib ssa build bytes 41200
 asm_fib ssa optimize bytes 17280
 asm_fib ssa values 79
@@ -421,7 +421,7 @@ asm_fib amd64 saves bytes 3696
 asm_fib amd64 emit steps 4
 asm_fib amd64 emit bytes 26312
 asm_fib amd64 encode steps 0
-asm_fib amd64 encode bytes 2416
+asm_fib amd64 encode bytes 2992
 asm_fib arm64 prepare steps 0
 asm_fib arm64 prepare bytes 3816
 asm_fib arm64 uses steps 4
@@ -437,9 +437,9 @@ asm_fib arm64 scan bytes 27200
 asm_fib arm64 saves steps 26
 asm_fib arm64 saves bytes 3696
 asm_fib arm64 emit steps 4
-asm_fib arm64 emit bytes 22592
+asm_fib arm64 emit bytes 26048
 asm_fib arm64 encode steps 0
-asm_fib arm64 encode bytes 2320
+asm_fib arm64 encode bytes 2576
 asm_callLeaf ssa build bytes 43104
 asm_callLeaf ssa optimize bytes 46704
 asm_callLeaf ssa values 117
@@ -459,9 +459,9 @@ asm_callLeaf amd64 scan bytes 27904
 asm_callLeaf amd64 saves steps 0
 asm_callLeaf amd64 saves bytes 240
 asm_callLeaf amd64 emit steps 5
-asm_callLeaf amd64 emit bytes 18504
+asm_callLeaf amd64 emit bytes 20552
 asm_callLeaf amd64 encode steps 0
-asm_callLeaf amd64 encode bytes 1664
+asm_callLeaf amd64 encode bytes 2016
 asm_callLeaf arm64 prepare steps 77
 asm_callLeaf arm64 prepare bytes 7816
 asm_callLeaf arm64 uses steps 6
@@ -477,9 +477,9 @@ asm_callLeaf arm64 scan bytes 28128
 asm_callLeaf arm64 saves steps 0
 asm_callLeaf arm64 saves bytes 240
 asm_callLeaf arm64 emit steps 5
-asm_callLeaf arm64 emit bytes 17120
+asm_callLeaf arm64 emit bytes 17632
 asm_callLeaf arm64 encode steps 0
-asm_callLeaf arm64 encode bytes 1376
+asm_callLeaf arm64 encode bytes 1632
 asm_table ssa build bytes 45672
 asm_table ssa optimize bytes 29720
 asm_table ssa values 113
@@ -499,9 +499,9 @@ asm_table amd64 scan bytes 29136
 asm_table amd64 saves steps 21
 asm_table amd64 saves bytes 4464
 asm_table amd64 emit steps 9
-asm_table amd64 emit bytes 37416
+asm_table amd64 emit bytes 42792
 asm_table amd64 encode steps 0
-asm_table amd64 encode bytes 4208
+asm_table amd64 encode bytes 4848
 asm_table arm64 prepare steps 31
 asm_table arm64 prepare bytes 4344
 asm_table arm64 uses steps 6

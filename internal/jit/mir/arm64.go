@@ -9290,11 +9290,16 @@ func (c *a64Compiler) oddball(v *ssa.Value, fail a64Guard) {
 	c.movImm(a64A, c.enc.False)
 	c.a.Cmp(r, a64A, true)
 	if v.Index == 1 && c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
-		// As amd64's: anything else converted by Go (ssa.GoNumber).
+		// As amd64's: a string of a few decimal digits converted natively
+		// (digits), anything else by Go (ssa.GoNumber).
 		slow := c.a.NewLabel()
 		c.a.BCond(arm64.NE, slow)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(slow)
+			other := c.a.NewLabel()
+			c.digits(v.Args[0], d, other)
+			c.a.B(done)
+			c.a.Bind(other)
 			stub := c.stubLabel(v.State, exitKind(v.Aux))
 			c.goArg(abi.OffGoArgs, v.Args[0])
 			c.goSaving(uint64(ssa.GoNumber), &stub)
@@ -9309,6 +9314,73 @@ func (c *a64Compiler) oddball(v *ssa.Value, fail a64Guard) {
 	c.a.FMovToF(d, a64A)
 	c.a.Bind(done)
 	c.setF(v, d)
+}
+
+// digits is amd64's, its number in d, the end of the string's bytes kept
+// in D. It uses A to D and F1.
+func (c *a64Compiler) digits(x *ssa.Value, d arm64.FReg, other arm64.Label) {
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		c.a.B(other)
+		return
+	}
+	dot := abi.OffGoArgs + int32(unsafe.Sizeof(abi.GoArg{}))
+	w := c.gpr(x, a64A)
+	c.movImm(a64B, c.enc.String)
+	c.a.Cmp(w, a64B, true)
+	c.a.BCond(arm64.NE, other)
+	c.sourceRef(x, a64GuardLabel(c, other))
+	c.a.Cbz(a64C, other, true)
+	c.a.Load(a64A, a64C, c.enc.StringLeft)
+	c.a.Cbnz(a64A, other, true)
+	c.a.LoadU8(a64A, a64C, c.enc.StringASCII)
+	c.a.Cbz(a64A, other, false)
+	c.a.Load(a64A, a64C, c.enc.StringLength)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.CmpImm(a64A, maxDigits-1, true)
+	c.a.BCond(arm64.HI, other)
+	c.a.Load(a64B, a64C, c.enc.StringData)
+	c.a.Op(arm64.Add, a64D, a64B, a64A, true)
+	c.a.AddImm(a64D, a64D, 1, true)
+	c.movImm(a64A, 0)
+	c.a.Store(a64Ctx, dot, a64A)
+	loop, next, point := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.LoadU8(a64C, a64B, 0)
+	c.a.AddImm(a64C, a64C, -'0', false)
+	c.a.CmpImm(a64C, 9, false)
+	c.a.BCond(arm64.HI, point)
+	// m = m*10 + d: m + m<<2, then d + that<<1.
+	c.a.AddLsl(a64A, a64A, a64A, 2)
+	c.a.AddLsl(a64A, a64C, a64A, 1)
+	c.a.Bind(next)
+	c.a.AddImm(a64B, a64B, 1, true)
+	c.a.Cmp(a64B, a64D, true)
+	c.a.BCond(arm64.LO, loop)
+	c.a.Scvtf(d, a64A, true)
+	end := c.a.NewLabel()
+	c.a.Load(a64C, a64Ctx, dot)
+	c.a.Cbz(a64C, end, true)
+	c.a.Op(arm64.Subs, a64B, a64B, a64C, true)
+	c.a.BCond(arm64.EQ, other)
+	c.movImm(a64C, 1)
+	tens := c.a.NewLabel()
+	c.a.Bind(tens)
+	c.a.AddLsl(a64C, a64C, a64C, 2)
+	c.a.AddLsl(a64C, a64C, a64C, 0)
+	c.a.SubsImm(a64B, a64B, 1, true)
+	c.a.BCond(arm64.NE, tens)
+	c.a.Scvtf(a64F1, a64C, true)
+	c.a.FArith(arm64.FDiv, d, d, a64F1)
+	c.a.B(end)
+	c.a.Bind(point)
+	c.a.CmpImm(a64C, '.'-'0', false)
+	c.a.BCond(arm64.NE, other)
+	c.a.Load(a64C, a64Ctx, dot)
+	c.a.Cbnz(a64C, other, true)
+	c.a.AddImm(a64C, a64B, 1, true)
+	c.a.Store(a64Ctx, dot, a64C)
+	c.a.B(next)
+	c.a.Bind(end)
 }
 
 // forInDone is ssa.OpForInDone, as amd64's. It uses A to C.
