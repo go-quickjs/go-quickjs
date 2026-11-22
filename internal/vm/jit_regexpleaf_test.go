@@ -19,9 +19,10 @@ import (
 // callee of escs's loop, are made through the VM's routine for leaves, with
 // the collector idle and while it marks, each answer the interpreter's and
 // Node's (regexpLeafTestWant). A literal's is a leaf's call too, which
-// gives its RegExp back to the literal's pool (jitRegExpLeafGive).
+// gives its RegExp back to the literal's pool (jitRegExpLeafGive): loop's
+// /ab/.test(w) is its third test, where the stack JIT's had stayed a call
+// of Go.
 func TestJITRegExpLeaves(t *testing.T) {
-	t.Skip("register JIT gap: exec and test calls are not the leaf calls they should be: 1 exec and 3 test, not 1 and 2 (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -40,7 +41,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 		for _, c := range []struct {
 			name        string
 			execs, test int
-		}{{"loop", 1, 2}, {"esc", 1, 0}} {
+		}{{"loop", 1, 3}, {"esc", 1, 0}} {
 			e := jitNativeCodeForTest(t, r, c.name)
 			execs, tests := 0, 0
 			for _, st := range e.code.GoCallStates() {

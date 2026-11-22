@@ -18,27 +18,31 @@ import (
 // &&'s, a ternary's -- and a literal's call of Go by the instruction after
 // it. Each answer is the interpreter's and Node's, with the collector idle
 // and while it marks, and the calls, made natively, gave back exec's dummy
-// for the array.
+// for the array. kWhile's exec, its loop's test, is in its code twice: the
+// lowering puts a copy of a loop's test in place of the jump to it, as
+// compilers rotate a loop (jitcompile's loopTest), and both are marked.
 func TestJITRegExpDeadExec(t *testing.T) {
-	t.Skip("register JIT gap: an exec whose result nothing reads is not dropped: kWhile's code keeps 2 leaf calls of it, not 1 (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	cases := []struct {
 		name, call, want string
 		leaf             bool
+		// copies is how many calls of exec the function's code makes of
+		// its one call site: a leaf's, each whose result nothing reads.
+		copies int
 	}{
-		{"kUp", "kUp('xab'), RegExp.lastMatch + RegExp.$2", "abb", true},
-		{"kGlobal", "kgre.lastIndex = 0, kGlobal('bxbb'), kgre.lastIndex + RegExp.leftContext", "4bxb", true},
-		{"kLocal", "kLocal('qab', /(q)(a)/), RegExp.$1 + RegExp.$2", "qa", true},
-		{"kProp", "kProp('cab', { re: /(c)/ }), RegExp.$1", "c", true},
-		{"kIf", "kIf('ab', /a/) + RegExp.lastMatch", "3a", true},
-		{"kWhile", "kWhile('a1a2a3', /a(.)/g) + RegExp.$1", "33", true},
-		{"kNot", "kNot('ab', /b/) + ',' + kNot('ab', /c/)", "0,3", true},
-		{"kAnd", "kAnd('ab', /b/) + ',' + kAnd('ab', /c/)", "3,0", true},
-		{"kTernary", "kTernary('ab', /b/) + ',' + kTernary('ab', /c/)", "6,3", true},
-		{"kLit", "kLit('zab'), RegExp.$1 + RegExp.leftContext", "az", false},
-		{"kLitG", "kLitG('zab'), RegExp.$2 + RegExp.rightContext", "b", false},
+		{"kUp", "kUp('xab'), RegExp.lastMatch + RegExp.$2", "abb", true, 1},
+		{"kGlobal", "kgre.lastIndex = 0, kGlobal('bxbb'), kgre.lastIndex + RegExp.leftContext", "4bxb", true, 1},
+		{"kLocal", "kLocal('qab', /(q)(a)/), RegExp.$1 + RegExp.$2", "qa", true, 1},
+		{"kProp", "kProp('cab', { re: /(c)/ }), RegExp.$1", "c", true, 1},
+		{"kIf", "kIf('ab', /a/) + RegExp.lastMatch", "3a", true, 1},
+		{"kWhile", "kWhile('a1a2a3', /a(.)/g) + RegExp.$1", "33", true, 2},
+		{"kNot", "kNot('ab', /b/) + ',' + kNot('ab', /c/)", "0,3", true, 1},
+		{"kAnd", "kAnd('ab', /b/) + ',' + kAnd('ab', /c/)", "3,0", true, 1},
+		{"kTernary", "kTernary('ab', /b/) + ',' + kTernary('ab', /c/)", "6,3", true, 1},
+		{"kLit", "kLit('zab'), RegExp.$1 + RegExp.leftContext", "az", false, 0},
+		{"kLitG", "kLitG('zab'), RegExp.$2 + RegExp.rightContext", "b", false, 0},
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
@@ -63,8 +67,8 @@ func TestJITRegExpDeadExec(t *testing.T) {
 					unused++
 				}
 			}
-			if c.leaf && unused != 1 {
-				t.Errorf("marking %v: %s's code has %d leaves' calls of exec whose result nothing reads, want 1", marking, c.name, unused)
+			if want := c.copies; c.leaf && unused != want {
+				t.Errorf("marking %v: %s's code has %d leaves' calls of exec whose result nothing reads, want %d", marking, c.name, unused, want)
 			}
 			regexpExecLeafForTest(r).dummy = nil
 			fast, entries := r.jit.leafFast, e.ssaStats.entries

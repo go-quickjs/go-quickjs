@@ -722,12 +722,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITGivenClosures`: a closure a function gives to a method calling it
   in a loop is to be inlined with the method within the size rule.
   `scaledBy` inlines its call past the rule and makes the closure.
-- `TestJITRegExpDeadExec`: an `exec` whose result nothing reads is to tell
-  the leaf so (`ssa.CallSite`'s `Unused`), and be made once. `kWhile`'s code
-  keeps 2 leaf calls of it, not 1.
-- `TestJITRegExpLeaves`: `exec` and `test` of a RegExp that is no literal's
-  are to be leaf calls (`ssa.GoLeaf`). The code makes 1 exec and 3 test,
-  not 1 and 2.
 - `TestJITSSAContextsGrow`: native calls that run out of contexts are to
   have more of them at once, up to as many as the VM's frames may take.
   A deep native recursion gets 256 contexts, not 8,192.
