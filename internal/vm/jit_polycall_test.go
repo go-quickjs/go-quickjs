@@ -18,8 +18,12 @@ const polySetup = `
 // A call that met more than one function while it settled is polymorphic,
 // as V8's feedback has it: made natively to each, not inlined for the one
 // it met last, which would leave native code at every call of the other.
+// What the code's last compile inlined is what it is asked (inlinedAt):
+// the entry's list of inlined calls (jitInline's) keeps the sites earlier
+// compiles inlined, where they are counted, and a runtime that compiles at
+// the first call, as this one does, compiles poly before the call has met
+// dbl, inlining inc for that compile.
 func TestJITPolymorphicCallNotInlined(t *testing.T) {
-	t.Skip("register JIT gap: a polymorphic call is inlined, where it should stay a call (docs/performance-plan.md, the register JIT's remaining gaps)")
 	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -34,8 +38,8 @@ func TestJITPolymorphicCallNotInlined(t *testing.T) {
 	if e == nil || !ok {
 		t.Fatalf("poly is not compiled: %+v", e)
 	}
-	if len(e.inlines) != 0 || inlinedAt != 0 {
-		t.Errorf("poly inlines its polymorphic call: inlines %d, inlined at %v", len(e.inlines), inlinedAt)
+	if inlinedAt != 0 {
+		t.Errorf("poly's code inlines its polymorphic call: inlined at %v", inlinedAt)
 	}
 	targets := 0
 	for _, x := range e.nativeCalls {

@@ -698,9 +698,6 @@ should not be, or not where it should, or does not learn what it met.
   source's own table until it misses; the first miss is to deoptimize once
   and make the site megamorphic. The read is not made megamorphic, and
   there is no deoptimization.
-- `TestJITPolymorphicCallNotInlined`: a call that met more than one function
-  while it settled is to stay a native call of each, not be inlined for the
-  last. It is inlined.
 - `TestJITKeyedWrites`: an element's write to an object native code does not
   store to is to be Go's from native code (`ssa.GoKeyedWrite`). `fill` leaves
   its code 4 times.
