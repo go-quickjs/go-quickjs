@@ -446,6 +446,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		switch {
 		case e.code == nil:
 			cc.jitRegRefused = cc.jitRegRefused || !e.hostOnly && !j.callee
+			s.regForgetTopLevel(e)
 		case !cc.jitRegRefused:
 			// The function's code from here, whatever it had: runs of
 			// that go on in this at their next exit (jitRegGoOnAt).

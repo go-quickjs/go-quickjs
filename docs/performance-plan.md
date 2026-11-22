@@ -616,7 +616,7 @@ the stack JIT lowered; their counts are from then.
 ## The register JIT's remaining gaps
 
 The JIT compiles register code alone since `388324de`. The stack JIT's
-tests were ported to it, and 29 of them hold only for what the stack JIT
+tests were ported to it, and some of them hold only for what the stack JIT
 did and the register JIT does not do yet: each is skipped by name with a
 `t.Skip` that says what falls short and points here (`grep -rn "register
 JIT gap:" internal/vm`). Each gap is closed by giving the register path
@@ -740,13 +740,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITSSAInlinedForwardingConstructions`: a forwarding constructor's
   `initialize` is to be inlined with the construction's own arguments. By
   the tenth round it is no longer inlined.
-
-**The code cache.**
-
-- `TestJITNoEntryForTopLevelCode`: top-level code is to be remembered only
-  while its script lives. A refusal of top-level code stays in the register
-  cache as an entry with no code after its script, 600 entries for 300
-  scripts until they age out.
 
 **Tests ported, not skipped.** Of the tests that read the stack JIT's
 internals, four were ported to the register JIT's in the removal and run:

@@ -2623,7 +2623,6 @@ func benchJITCacheIn(b *testing.B, cfg Config, source, call string) {
 // of top-level code is its closure's, and code compiled for a script goes
 // with it.
 func TestJITNoEntryForTopLevelCode(t *testing.T) {
-	t.Skip("register JIT gap: code-less entries: a refusal of top-level code stays in the register cache as an entry without code after its script (600 entries for 300 scripts, until aged out), where the stack JIT's cache held none (docs/performance-plan.md, the register JIT's remaining gaps)")
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for i := range 300 {
 		v, err := r.Run(compileForTest(t, fmt.Sprintf(`var c=0;for(let i=0;i<100;i++)c+=i*%d;c`, i)))

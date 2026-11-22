@@ -515,6 +515,7 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 		// a budget more is spent (jitRegCompile).
 		cc.jitRegRefused = !e.hostOnly
 		life.warming = false
+		r.jit.regForgetTopLevel(e)
 		return nil
 	}
 	cc.setJITReg(e)
@@ -1554,4 +1555,16 @@ func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 		return true
 	}
 	return r.jitRegLearnedDueWith(run.f.cl, e, limit, pending)
+}
+
+// regForgetTopLevel lets go of e, a refusal the cache holds, where its
+// function is top-level code. A refusal of top-level code is its
+// closure's (closureCode's jitRegRefused), not the cache's: a script's top
+// level runs once, and a loop evaluating thousands of scripts, as
+// test262's BMP tests do, had left as many entries with no code, each
+// scanned by every compile's room-making once the budget was full.
+func (s *jitState) regForgetTopLevel(e *jitRegEntry) {
+	if fn := e.key.Value(); fn != nil && fn.TopLevel && e.code == nil && s.regCache[e.key] == e {
+		s.dropReg(e.key, e)
+	}
 }
