@@ -47,7 +47,8 @@ func jitGoFastAddr() uintptr
 
 // jitGoDirect makes the call of Go st describes, as jit.goCall would --
 // the description read into ctx (jit.ExpandGoCall), the call made by
-// jitHostCall, or a +'s by jitGoAppend or jitGoAdd, its status -- and
+// jitHostCall, or a +'s by jitGoAppend or jitGoAdd and a call's or a
+// leaf's by what jitHostCall calls for them, its status -- and
 // returns back, where the call goes on, or where its refusal does
 // (GoCallState's Fail): what jit's callGo, its call of jit.HostCall's
 // function value and the code's routine of calls of Go, saved and resumed
@@ -71,6 +72,18 @@ func jitGoDirect(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 		ok = r.jitGoAppend(ctx)
 	case op == ssa.GoAdd:
 		ok = r.jitGoAdd(ctx)
+	case r.gcYield.on:
+		// A runtime that waits while the collector marks: jitHostCall
+		// asks first.
+		ok = jitHostCall(ctx)
+	case op == ssa.GoCall:
+		// The most frequent call of Go after those, made as jitHostCall
+		// makes it -- one that runs nothing without a frame -- without
+		// its dispatch's questions of every kind of call before it.
+		ok = r.jitMaybePlain(ctx) && r.jitGoCallPlain(ctx) || r.jitGoCall(ctx)
+	case op == ssa.GoLeaf:
+		// A leaf's call, its function checked by the code (jitLeafCall).
+		ok = r.jitLeafCall(ctx)
 	default:
 		ok = jitHostCall(ctx)
 	}
