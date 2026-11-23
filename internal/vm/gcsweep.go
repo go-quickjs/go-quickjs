@@ -93,6 +93,8 @@ func (r *Runtime) clearReturnedFrames() {
 		f.openUpvalues = f.openUpvalues[:0]
 	}
 	r.frameHigh = r.frameDepth
+	// Returned calls leave their saved arguments beyond the live prefix.
+	clear(r.argStack[len(r.argStack):cap(r.argStack)])
 	arraySamplesLetGo[struct{}](r)
 	r.regExtrasLetGo()
 }
