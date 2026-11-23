@@ -1741,10 +1741,12 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 	if resume == 0 && !r.jitRegThisBound(f, wb) {
 		return rpc, Undefined, false, nil
 	}
-	// Native code going on with the frame holds its locals where its slots
-	// cannot say: the arrays of exec's the slots hold are made no more in
-	// the memory of the last (execReuseForget).
-	execReuseForget[struct{}](r, wb, int(c.numRegs))
+	// A resumed frame may hold an exec array in a native register, beyond
+	// what its slots say. A fresh call has no live locals from the previous
+	// invocation and can keep the arrays owned by the same stack window.
+	if rpc != 0 || resume != 0 || run != 0 {
+		execReuseForget[struct{}](r, wb, int(c.numRegs))
+	}
 	// Whether the run began at a loop's header: its stretches after host
 	// exits are judged as on-stack replacement's (jitRegStretchWork). A run
 	// going on with a frame another run of the code left (jitRegLoop's
@@ -4060,6 +4062,7 @@ func (r *Runtime) RegNativeCall(fnv Value, args []Value, osr bool) RegNativeResu
 			if _, ok := e.loopEntry(int(at)); ok {
 				if seen[at] {
 					res.Entered, res.OSR = int(at), true
+					r.jit.regGoOnRun = 2
 					return r.jitRegRun(f, c, e, base, int(at))
 				}
 				seen[at] = true

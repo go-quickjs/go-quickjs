@@ -8,6 +8,90 @@ import (
 	"testing"
 )
 
+// A fresh invocation has no live locals from the previous invocation.
+// Its native exec site can keep the array owned by the same stack window:
+// each of eight fresh calls, entered natively, makes its match in the
+// array the call before made. Exec counts to n first, so that its code is
+// worth entering (jitSSAMinWork): without the loop it was judged slow
+// after its warm-up (entrySlow), the eight calls ran in the interpreter,
+// and the test checked a table entry they did not touch -- which the
+// interpreter's own site's entry replaced where the two shared a slot.
+func TestJITRegExpReuseFreshCalls(t *testing.T) {
+	for _, marking := range []bool{false, true} {
+		name := "idle"
+		if marking {
+			name = "marking"
+		}
+		t.Run(name, func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if _, err := r.Run(compileForTest(t, `
+				function Exec(re, s, n) {
+					var k = 0
+					for (var i = 0; i < n; i++) k = (k + i) | 0
+					var m = re.exec(s)
+					return m ? m.length + m[1].length + (k & 0) : 0
+				}
+				var re = /(a)(b)(c)/;
+			`)); err != nil {
+				t.Fatal(err)
+			}
+			fn := r.global.getOwn(r.atoms.intern("Exec")).value()
+			re := r.global.getOwn(r.atoms.intern("re")).value()
+			args := []Value{re, Str(NewString("abc")), Int32(64)}
+			call := func() {
+				v, err := r.Call(fn, Undefined, args)
+				if err != nil || !v.IsNumber() || v.Number() != 5 {
+					t.Fatalf("Exec: %v, %v; want 5", v, err)
+				}
+			}
+			for range 64 {
+				call()
+			}
+			jitNativeForTest(t, r, "Exec")
+			if !jitReuseNativeForTest(r, 4) {
+				t.Fatal("no native reusable array")
+			}
+			tb := execReuseLeaf[struct{}](r).reuseTable
+			var saved *execReuseEntry
+			for i := range tb.e {
+				if e := &tb.e[i]; e.site != nil && e.n == 4 {
+					own := false
+					for _, site := range fn.Object().fn().closure.reg.reuse {
+						own = own || e.site == site
+					}
+					if !own {
+						saved = e
+					}
+				}
+			}
+			if saved == nil {
+				t.Fatal("native site's entry not found")
+			}
+			site, arr := saved.site, saved.arr
+			life := jitRegLifeForTest(r, "Exec")
+			for i := range 8 {
+				entries := life.ssaStats.entries
+				call()
+				if life.ssaStats.entries != entries+1 {
+					t.Fatalf("call %d was not entered natively (slow %v)", i, life.entrySlow)
+				}
+				var now *execReuseEntry
+				for k := range tb.e {
+					if tb.e[k].site == site {
+						now = &tb.e[k]
+					}
+				}
+				if now == nil || now.arr != arr {
+					t.Fatalf("fresh call %d discarded its reusable array", i)
+				}
+			}
+		})
+	}
+}
+
 // Where a runtime runs the JIT, exec's leaf is told of the arrays it may
 // make again by native code's calls too (jit_regexpreuse.go), each array
 // made again only by the frame that made the last. The calls are made

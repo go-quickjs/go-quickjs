@@ -1102,6 +1102,11 @@ runs say nothing of its locals, so none is read -- its pieces only where
 the liveness says. The calls are told a site of their own, so that the
 arrays native frames made and the interpreter's are kept apart, and one
 whose site's last array another frame made forgets it, making a new one. A
+fresh invocation in the same stack window may reuse the previous invocation's
+array: none of that invocation's locals remain live. Entering native code
+partway through a frame, including a loop header at pc zero or a native
+call's continuation, still forgets arrays held in that frame's slots,
+because native registers may keep references the slots cannot show. A
 leaf's call of `exec` or `test` on a RegExp literal's RegExp -- a calling
 `regexp_lit`'s, or a `call_method_w` marked `RMarkLitRecv` after one that
 does not call -- is told the literal's pool (`CallSite`'s `Give`, from the
