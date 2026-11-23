@@ -91,7 +91,7 @@ func rsAddI32(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int
 		return pc + 1
 	}
 	st.at(pc)
-	v, err := st.r.add(regs[w.B()], regs[w.C()])
+	v, err := st.addSeen(pc, regs[w.B()], regs[w.C()])
 	v, err = regOrZero(st, pc, v, err)
 	return st.put(regs, w, v, err)
 }
@@ -120,7 +120,7 @@ func rsAddII32(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 	if w.X() == bytecode.RAddII32Sub {
 		v, err = st.r.regBinImm(bytecode.OpSub, regs[w.B()], -w.SC())
 	} else {
-		v, err = st.r.regBinImm(bytecode.OpAdd, regs[w.B()], w.SC())
+		v, err = st.addImmSeen(pc, bytecode.OpAdd, regs[w.B()], w.SC())
 	}
 	v, err = regOrZero(st, pc, v, err)
 	return st.put(regs, w, v, err)

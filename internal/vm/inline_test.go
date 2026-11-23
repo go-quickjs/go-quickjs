@@ -45,6 +45,7 @@ var intendedInlining = []string{
 	"(*propCache).own",
 	"(*propCache).holder",
 	"(*Runtime).tick",
+	"(*Runtime).jitOn",
 	"Value.IsObject",
 	"Value.Object",
 	"Obj",

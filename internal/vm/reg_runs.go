@@ -21,6 +21,43 @@ import (
 // BigInt, one on the heap; nil without the JIT.
 var regBigOf func(r *Runtime, c *regCode, pc int, a, b, v Value)
 
+// regStringAddOf records a string addition for the first JIT compile;
+// nil without the JIT. Only an addition's slow path calls it.
+var regStringAddOf func(c *regCode, pc int)
+
+// addSeen and addImmSeen are the slow paths' additions -- add's and
+// add_i32's, add_imm's and add_imm_i32's -- each marking, with the JIT
+// on, a result that is a string (regStringAddOf), in place of the call
+// its handler made; stringSeen marks an append's result (an error's is
+// undefined). They are calls of their own, not inlined, so that the
+// handlers that make them (reg_table.go's) keep their sizes, but for
+// rsAdd's call of stringSeen, and the handlers after them their places.
+//
+//go:noinline
+func (st *regState) addSeen(pc int, a, b Value) (Value, error) {
+	v, err := st.r.add(a, b)
+	if st.r.jitOn() && err == nil && v.IsString() {
+		regStringAddOf(st.c, pc)
+	}
+	return v, err
+}
+
+//go:noinline
+func (st *regState) stringSeen(pc int, v Value) {
+	if st.r.jitOn() && v.IsString() {
+		regStringAddOf(st.c, pc)
+	}
+}
+
+//go:noinline
+func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
+	v, err := st.r.regBinImm(op, a, imm)
+	if st.r.jitOn() && err == nil && v.IsString() {
+		regStringAddOf(st.c, pc)
+	}
+	return v, err
+}
+
 // regBinImm is bin_imm's slow path.
 func (r *Runtime) regBinImm(op bytecode.Op, a Value, imm int32) (Value, error) {
 	if op != bytecode.OpAdd && a.IsString() {

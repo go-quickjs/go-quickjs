@@ -124,6 +124,9 @@ type regCode struct {
 	// only a construction runs: a forwarder's method or an apply_args's
 	// target with it is called, and a class called throws.
 	initNew uint32
+	// stringAdds marks additions that produced strings in a runtime
+	// running the JIT. Shared code keeps only atomic speculation hints.
+	stringAdds atomic.Pointer[[]atomic.Uint32]
 }
 
 // runReg runs frame f as register code c, from instruction start, and

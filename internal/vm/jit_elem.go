@@ -3,8 +3,10 @@
 package vm
 
 import (
+	"math/bits"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -13,6 +15,23 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
+
+func init() {
+	regStringAddOf = func(c *regCode, pc int) {
+		marks := c.stringAdds.Load()
+		if marks == nil {
+			bits := make([]atomic.Uint32, (len(c.rc.Code)+31)/32)
+			marks = &bits
+			if !c.stringAdds.CompareAndSwap(nil, marks) {
+				marks = c.stringAdds.Load()
+			}
+		}
+		word, bit := &(*marks)[pc>>5], uint32(1)<<(pc&31)
+		if word.Load()&bit == 0 {
+			word.Or(bit)
+		}
+	}
+}
 
 // Elements' kinds learned at register code's exits (jitRegElemSeen,
 // jitRegStringAddSeen): an element read that met a typed array, a BigInt
@@ -42,7 +61,25 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 		// not the function's own register code, which no key names.
 		return jitRegLowerWith(rc, cl.fn, kind, jitcompile.Hints{KeepParams: r.nodeQuirks && !cl.fn.Strict})
 	}
-	l := s.regLowering(r.jitRegKeyOf(cl))
+	key := r.jitRegKeyOf(cl)
+	var marks *[]atomic.Uint32
+	if cl.reg != nil && cl.reg.rc == rc {
+		marks = cl.reg.stringAdds.Load()
+	}
+	if marks != nil {
+		// Take interpreter feedback before asking for a cached lowering:
+		// new hints invalidate it, including an inlined callee's.
+		learned := s.regLearnedOf(key)
+		for i := range *marks {
+			for word := (*marks)[i].Load(); word != 0; word &= word - 1 {
+				pc := int32(i*32 + bits.TrailingZeros32(word))
+				if !slices.Contains(learned.regHints.StringAdds, pc) {
+					learned.regHints.StringAdds = append(learned.regHints.StringAdds, pc)
+				}
+			}
+		}
+	}
+	l := s.regLowering(key)
 	if !l.done[kind] {
 		h := l.hints
 		h.KeepParams = r.nodeQuirks && !cl.fn.Strict

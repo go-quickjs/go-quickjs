@@ -532,11 +532,18 @@ code learned (`jitLearned`), beside its budget, deoptimizations and runs
   is made with from there (the hints, `jitLearned`'s `regHints`, by register
   pc, `jitRegLower`): the read made by its cell (ir's `Reference`), the
   addition Go's (`StringAdd`), the additions of an element read of strings
-  too (`stringConcats`). An addition the compiler marked an append to an
-  upvalue (`add`'s `RAddAppend`) is Go's with its result its own (`Owned`,
-  `abi.GoOpOwned`): Go grows the string the binding alone holds in place
-  (`jitStrAppend`), as the interpreter's `add` does, rather than making a
-  new string at each `s += x`.
+  too (`stringConcats`). The interpreter's slow paths also mark string
+  results of `add`, `add_imm` and their int32 forms, before the first
+  compile (`regCode.stringAdds`). They gate the feedback call with
+  `jitOn`, which inlines to false in a build without the JIT. The marks
+  are atomic and shared by runtimes running the same code. `jitRegLower`
+  takes them into the hints before lowering, including an inlined callee.
+  They select general addition without proving either operand's type, so later
+  numeric operands still add as numbers. An addition the compiler marked
+  an append to an upvalue (`add`'s `RAddAppend`) is Go's with its result
+  its own (`Owned`, `abi.GoOpOwned`): Go grows the string the binding alone
+  holds in place (`jitStrAppend`), as the interpreter's `add` does, rather
+  than making a new string at each `s += x`.
 
 A guard's failure invalidates the code; anything else learned marks it to
 be compiled again, valid meanwhile, without a deoptimization (see
