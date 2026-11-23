@@ -246,8 +246,11 @@ natively from what the feedback says (see [Calls of Go](#calls-of-go) and
 [Native calls](#native-calls)). So is a call in tail position
 (`tail_call_w`, `tail_call_method_w`, `ir.Instruction`'s `Tail`): made as
 the ordinary call while the stack is shallow, natively or by Go, as the VM's
-`rhCallWT` makes it, native code going on after it. Deeper, where the
-interpreter gives the frame to the callee in place (`regTailTo`), a call of
+`rhCallWT` makes it, native code going on after it. Its built-in target is
+read from the same call-site cache as an ordinary call's, so intrinsics
+and leaves use the same specialization and target guards in tail position.
+Deeper, where the interpreter gives the frame to the callee in place
+(`regTailTo`), a call of
 the closure the frame runs is a jump to the code's start (`ssa.OpTailSelf`,
 `ssa.TailWindow`): the window's function, receiver -- a method call's, an
 arrow's the this it captured, its register 1, undefined for a plain call --

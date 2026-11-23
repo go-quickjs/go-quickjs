@@ -589,7 +589,7 @@ func (f *jitRegFeedback) callTarget(pc int) (*Object, *closure, bool) {
 	if !ok || f.fb.cl == nil {
 		return nil, nil, false
 	}
-	switch w.Op() {
+	switch jitRegCallOp(w.Op()) {
 	case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW:
 	default:
 		return nil, nil, false
@@ -1325,8 +1325,8 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 }
 
 // Leaf is ssa.LeafFeedback's: the built-in the call at the program's
-// instruction pc -- call_w's or call_method_w's, not one in tail position
-// -- last called, as its site's cache holds it (regCalls), where that is a
+// instruction pc -- an ordinary call or one in tail position -- last
+// called, as its site's cache holds it (regCalls), where that is a
 // leaf of the realm's that native code calls without a frame (jitLeafOp):
 // answered from the interpreter's cache at the first compile.
 func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
@@ -1342,7 +1342,8 @@ func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
 		f.fb.keep().holders = append(f.fb.keep().holders, m)
 		return uintptr(unsafe.Pointer(m)), true
 	}
-	if !ok || op != ir.Host || !f.p.Code[pc].Window || w.Op() != bytecode.RCallW && w.Op() != bytecode.RCallMW {
+	call := jitRegCallOp(w.Op())
+	if !ok || op != ir.Host || !f.p.Code[pc].Window || call != bytecode.RCallW && call != bytecode.RCallMW {
 		return 0, false
 	}
 	var marks uint8
@@ -1378,7 +1379,7 @@ func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
 	// template is a string constant: a function's, which the leaf's check
 	// refuses, would leave native code at every call the call of Go makes
 	// now.
-	replace := callee == f.fb.r.strReplaceFn && w.Op() == bytecode.RCallMW && w.X() == 2 &&
+	replace := callee == f.fb.r.strReplaceFn && call == bytecode.RCallMW && w.X() == 2 &&
 		(marks&bytecode.RMarkLitArg == 0 || f.regStringBefore(int(f.p.Origin[pc]), int(w.A())+3))
 	// Array.prototype.push of other than one value: one value's push native
 	// code appends itself.
@@ -1411,7 +1412,7 @@ func (f *jitRegFeedback) regStringBefore(rpc, reg int) bool {
 }
 
 // methodCall is the built-in the call at the program's instruction pc --
-// call_w's, or call_method_w's where method says, not one in tail position
+// call_w's, or call_method_w's where method says, including tail position
 // -- last called, as its site's cache holds it (regCalls), and its argument
 // count.
 func (f *jitRegFeedback) methodCall(pc int, method bool) (*Object, int, bool) {
