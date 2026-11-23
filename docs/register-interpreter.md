@@ -1218,6 +1218,13 @@ pointed at the generator's copy on a suspension and back at the stack on a
 resumption (`regMoveUps`), so that two closures made in different
 resumptions share a binding.
 
+The generator and its saved values share one allocation for windows of
+up to eight values (`genAlloc`), with room for two, four, six or eight.
+The six-value case fits short generators with two parameters and their
+suspension registers without reserving eight. A function whose generators
+are stepped by loops also reserves the first loop's cursor in that same
+allocation; an async function reserves its promise pointer instead.
+
 - **Entry.** The code's first instruction is `gen_entry`, which a
   resumption that goes on skips. A generator's creation runs its
   parameters' binding up to `end_params`, which suspends it, so that a

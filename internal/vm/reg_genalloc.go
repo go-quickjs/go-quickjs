@@ -46,6 +46,9 @@ func init() {
 			case n <= 4:
 				o := &generatorLoopVals[[4]Value]{}
 				gl, vals = &o.generatorLoop, o.vals[:n]
+			case n <= 6:
+				o := &generatorLoopVals[[6]Value]{}
+				gl, vals = &o.generatorLoop, o.vals[:n]
 			case n <= 8:
 				o := &generatorLoopVals[[8]Value]{}
 				gl, vals = &o.generatorLoop, o.vals[:n]
@@ -62,6 +65,9 @@ func init() {
 			case n <= 4:
 				o := &asyncVals[[4]Value]{}
 				return &o.generatorObject, o.vals[:n]
+			case n <= 6:
+				o := &asyncVals[[6]Value]{}
+				return &o.generatorObject, o.vals[:n]
 			case n <= 8:
 				o := &asyncVals[[8]Value]{}
 				return &o.generatorObject, o.vals[:n]
@@ -74,6 +80,9 @@ func init() {
 			return &o.generatorObject, o.vals[:n]
 		case n <= 4:
 			o := &generatorVals[[4]Value]{}
+			return &o.generatorObject, o.vals[:n]
+		case n <= 6:
+			o := &generatorVals[[6]Value]{}
 			return &o.generatorObject, o.vals[:n]
 		case n <= 8:
 			o := &generatorVals[[8]Value]{}
