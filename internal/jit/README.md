@@ -2736,6 +2736,10 @@ calls](#allocation-and-escape-analysis)). A typed callee, a function of an
 asm.js module, is offered so too, and taken into typed code only (see
 [Typed code](#typed-code)).
 
+Native call descriptions are read-only, shared by repeated asks and builds,
+including from a background snapshot. The builder copies a description
+only where it omits an unneeded receiver coercion.
+
 **What the builder takes.** What a function inlines is bounded by size
 alone, as V8's JSInliningHeuristic bounds it, never by a count of calls: a
 callee's instructions, a budget of all a function inlines, which the calls

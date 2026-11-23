@@ -46,6 +46,7 @@ type Feedback interface {
 	Inline(pc int) (InlineSite, bool)
 	// NativeCalls are the functions the call at pc may call natively, if
 	// any: those the VM has seen it call, at most a few (see CallSite).
+	// The answer is read-only and may be shared by repeated builds.
 	NativeCalls(pc int) []CallSite
 }
 
@@ -9854,8 +9855,8 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 	}
 	generic := b.fb.Generic(pc)
 	var calls []*CallSite
-	// The feedback's answer is this call's own, so the sites are used where
-	// they are: each is 464 bytes.
+	// The feedback's sites are read-only; copy only a site whose coercion
+	// the call can omit.
 	sites := b.fb.NativeCalls(pc)
 	for i := range sites {
 		site := &sites[i]
@@ -9904,9 +9905,11 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 		if site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super && !site.PlainThis && !site.Forward {
 			continue
 		}
-		if site.ThisSlot < 0 && site.Window == 0 {
+		if site.ThisSlot < 0 && site.Window == 0 && site.Coerce {
 			// A receiver it never reads needs no coercing: register code's
 			// callee's is in its window, as the feedback says.
+			copy := *site
+			site = &copy
 			site.Coerce = false
 		}
 		calls = append(calls, site)

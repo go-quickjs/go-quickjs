@@ -345,7 +345,6 @@ func (q *jitRegSnapshot) NativeCalls(pc int) (r0 []ssa.CallSite) {
 		return
 	}
 	r0, _ = a[0].([]ssa.CallSite)
-	r0 = jitSnapCopy(r0)
 	return r0
 }
 

@@ -192,7 +192,8 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 		var rs []string
 		for i, t := range m.results {
 			fmt.Fprintf(b, "\tr%d, _ = a[%d].(%s)\n", i, i, t)
-			if strings.HasPrefix(t, "[]") {
+			// NativeCalls' descriptions are read-only, including across builds.
+			if strings.HasPrefix(t, "[]") && t != "[]ssa.CallSite" {
 				fmt.Fprintf(b, "\tr%d = jitSnapCopy(r%d)\n", i, i)
 			}
 			rs = append(rs, fmt.Sprintf("r%d", i))

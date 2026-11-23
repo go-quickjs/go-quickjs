@@ -1079,15 +1079,12 @@ func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
 		return f.nativeCalls(pc)
 	}
 	if a.did&askedCalls == 0 {
-		// The first ask is given the answer itself, the others copies of
-		// it: the builder changes what it is given only as each ask would
-		// (ssa's nativeCalls), and keeps the first's.
 		calls := f.nativeCalls(pc)
 		a = f.askedOf(pc)
 		a.calls, a.did = calls, a.did|askedCalls
 		return calls
 	}
-	return slices.Clone(a.calls)
+	return a.calls
 }
 
 // nativeCalls is NativeCalls' answer, found.
