@@ -131,6 +131,11 @@ type core struct {
 	steps int
 	// masks are loopMasks's.
 	masks valueSet
+	// rehomes are, by block ID, what a loop header's polls let Go write
+	// into the frame (findRehomes), nil where nothing; rehomeStack is
+	// rehomeFollow's.
+	rehomes     []*rehomePlan
+	rehomeStack []*ssa.Value
 }
 
 // budget is an innermost loop that calls nothing (findBudgets): its back
@@ -1643,6 +1648,9 @@ func (c *core) allocate() error {
 			floats++
 		}
 	}
+	// What the loops' polls let Go write into the frame (findRehomes), of
+	// what is live into their headers.
+	c.findRehomes(liveIn, lb, iv)
 	c.lap(PhaseLiveness)
 	// Each budget loop's register, from its header's start to the end of
 	// the last of its blocks laid out.

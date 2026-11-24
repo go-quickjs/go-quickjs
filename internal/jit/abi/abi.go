@@ -726,7 +726,41 @@ type GoCallState struct {
 	// ObjectPool, which Go gives the RegExp back to once the leaf has
 	// returned.
 	Give uintptr
+	// Rehome, for a poll at a loop's back edge (ssa.GoPoll) whose frame
+	// Go may bring up to date there, is what it writes; nil for any other
+	// call.
+	Rehome *Rehome
 }
+
+// Rehome is what Go writes into a frame at a poll of a loop's back edge
+// whose code goes on after it (ssa.GoPoll; jit.Rehome): the frame's
+// registers given the values the loop's header has in them, as an exit
+// to the header would write them (Desc, its state's description), where
+// no value native code still reads keeps its reference there. Native
+// code keeps a reference in the slot that held it when it was entered,
+// which it never writes before it exits: a loop that reassigns a
+// register kept the entry's object there, unreachable from anything
+// the loop reads, for as long as it ran natively.
+//
+// Marks says, for each of Slots, whether its value's source, known only
+// at run time and held by no value but such sources (a shadow phi, ssa's
+// origin.go), may be made the register's own address once Go has written
+// the register (RehomeRewire), so that the cell it came from -- an
+// object's, which may be collected now -- is read no more; and whether
+// Go leaves the register as it is (RehomePinned), a value live at the
+// poll and named by no register of the state reading its reference, or
+// the object it reads through, from there.
+type Rehome struct {
+	Desc  *ExitDescriptor
+	Slots []ExitSlot
+	Marks []uint8
+}
+
+// Rehome's Marks.
+const (
+	RehomeRewire uint8 = 1 << iota
+	RehomePinned
+)
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
 // at once. Its number word is, by Kind: GoArgNone, the one the call wrote

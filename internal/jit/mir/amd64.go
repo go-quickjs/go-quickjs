@@ -7696,7 +7696,7 @@ func (c *compiler) edge(from, to, next *ssa.Block) {
 			c.budgetStore(r)
 			if c.enc.CallGo != 0 {
 				stub := c.stubLabel(header, abi.ExitPoll)
-				c.goSaving(uint64(ssa.GoPoll), &stub)
+				c.goCalling(c.pollState(to, uint8(regLocals), uint8(regStack)), &stub)
 				c.budgetLoad(r)
 				c.a.Jmp(c.labels[to.ID])
 				return
@@ -7720,7 +7720,7 @@ func (c *compiler) edge(from, to, next *ssa.Block) {
 				// callee's poll had left native code, and Go finished every
 				// level of its callers.
 				stub := c.stubLabel(header, abi.ExitPoll)
-				c.goSaving(uint64(ssa.GoPoll), &stub)
+				c.goCalling(c.pollState(to, uint8(regLocals), uint8(regStack)), &stub)
 				c.a.Jmp(polled)
 				return
 			}

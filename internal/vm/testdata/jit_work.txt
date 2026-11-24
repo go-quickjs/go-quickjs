@@ -8,8 +8,8 @@ blocks400 amd64 prepare steps 8824
 blocks400 amd64 prepare bytes 551672
 blocks400 amd64 uses steps 422
 blocks400 amd64 uses bytes 1375816
-blocks400 amd64 liveness steps 5624
-blocks400 amd64 liveness bytes 452304
+blocks400 amd64 liveness steps 5632
+blocks400 amd64 liveness bytes 462032
 blocks400 amd64 intervals steps 0
 blocks400 amd64 intervals bytes 98304
 blocks400 amd64 hints steps 0
@@ -19,15 +19,15 @@ blocks400 amd64 scan bytes 905520
 blocks400 amd64 saves steps 0
 blocks400 amd64 saves bytes 40960
 blocks400 amd64 emit steps 1336
-blocks400 amd64 emit bytes 772112
+blocks400 amd64 emit bytes 772144
 blocks400 amd64 encode steps 0
 blocks400 amd64 encode bytes 55680
 blocks400 arm64 prepare steps 8824
 blocks400 arm64 prepare bytes 551672
 blocks400 arm64 uses steps 422
 blocks400 arm64 uses bytes 1375816
-blocks400 arm64 liveness steps 5624
-blocks400 arm64 liveness bytes 452304
+blocks400 arm64 liveness steps 5632
+blocks400 arm64 liveness bytes 462032
 blocks400 arm64 intervals steps 0
 blocks400 arm64 intervals bytes 98304
 blocks400 arm64 hints steps 0
@@ -37,10 +37,10 @@ blocks400 arm64 scan bytes 905744
 blocks400 arm64 saves steps 0
 blocks400 arm64 saves bytes 40960
 blocks400 arm64 emit steps 3516
-blocks400 arm64 emit bytes 470904
+blocks400 arm64 emit bytes 470936
 blocks400 arm64 encode steps 0
 blocks400 arm64 encode bytes 63232
-guards400 ssa build bytes 3082344
+guards400 ssa build bytes 3082296
 guards400 ssa optimize bytes 1611504
 guards400 ssa values 8044
 guards400 ssa blocks 5
@@ -48,8 +48,8 @@ guards400 amd64 prepare steps 7228
 guards400 amd64 prepare bytes 483176
 guards400 amd64 uses steps 1530
 guards400 amd64 uses bytes 780144
-guards400 amd64 liveness steps 20
-guards400 amd64 liveness bytes 164176
+guards400 amd64 liveness steps 30
+guards400 amd64 liveness bytes 206792
 guards400 amd64 intervals steps 0
 guards400 amd64 intervals bytes 65536
 guards400 amd64 hints steps 0
@@ -59,15 +59,15 @@ guards400 amd64 scan bytes 423304
 guards400 amd64 saves steps 0
 guards400 amd64 saves bytes 24576
 guards400 amd64 emit steps 9
-guards400 amd64 emit bytes 5074944
+guards400 amd64 emit bytes 5075040
 guards400 amd64 encode steps 0
 guards400 amd64 encode bytes 554880
 guards400 arm64 prepare steps 7228
 guards400 arm64 prepare bytes 483176
 guards400 arm64 uses steps 1530
 guards400 arm64 uses bytes 780144
-guards400 arm64 liveness steps 20
-guards400 arm64 liveness bytes 164176
+guards400 arm64 liveness steps 30
+guards400 arm64 liveness bytes 206792
 guards400 arm64 intervals steps 0
 guards400 arm64 intervals bytes 65536
 guards400 arm64 hints steps 0
@@ -77,10 +77,10 @@ guards400 arm64 scan bytes 423528
 guards400 arm64 saves steps 0
 guards400 arm64 saves bytes 24576
 guards400 arm64 emit steps 9
-guards400 arm64 emit bytes 4312600
+guards400 arm64 emit bytes 4312696
 guards400 arm64 encode steps 0
 guards400 arm64 encode bytes 364560
-spill400 ssa build bytes 3696872
+spill400 ssa build bytes 3696824
 spill400 ssa optimize bytes 1688056
 spill400 ssa values 8911
 spill400 ssa blocks 188
@@ -88,8 +88,8 @@ spill400 amd64 prepare steps 3363
 spill400 amd64 prepare bytes 213048
 spill400 amd64 uses steps 721
 spill400 amd64 uses bytes 2401936
-spill400 amd64 liveness steps 23876
-spill400 amd64 liveness bytes 411248
+spill400 amd64 liveness steps 23891
+spill400 amd64 liveness bytes 464568
 spill400 amd64 intervals steps 0
 spill400 amd64 intervals bytes 73728
 spill400 amd64 hints steps 0
@@ -99,15 +99,15 @@ spill400 amd64 scan bytes 553584
 spill400 amd64 saves steps 2699
 spill400 amd64 saves bytes 410464
 spill400 amd64 emit steps 344
-spill400 amd64 emit bytes 1207760
+spill400 amd64 emit bytes 1207856
 spill400 amd64 encode steps 0
 spill400 amd64 encode bytes 115968
 spill400 arm64 prepare steps 3363
 spill400 arm64 prepare bytes 213048
 spill400 arm64 uses steps 721
 spill400 arm64 uses bytes 2401936
-spill400 arm64 liveness steps 23876
-spill400 arm64 liveness bytes 411248
+spill400 arm64 liveness steps 23891
+spill400 arm64 liveness bytes 464568
 spill400 arm64 intervals steps 0
 spill400 arm64 intervals bytes 73728
 spill400 arm64 hints steps 0
@@ -117,10 +117,10 @@ spill400 arm64 scan bytes 553808
 spill400 arm64 saves steps 2758
 spill400 arm64 saves bytes 413792
 spill400 arm64 emit steps 332
-spill400 arm64 emit bytes 907816
+spill400 arm64 emit bytes 907912
 spill400 arm64 encode steps 0
 spill400 arm64 encode bytes 101632
-loops400 ssa build bytes 4432600
+loops400 ssa build bytes 4432664
 loops400 ssa optimize bytes 4364712
 loops400 ssa values 16804
 loops400 ssa blocks 1202
@@ -128,8 +128,8 @@ loops400 amd64 prepare steps 12000
 loops400 amd64 prepare bytes 1046600
 loops400 amd64 uses steps 3766
 loops400 amd64 uses bytes 2025288
-loops400 amd64 liveness steps 4409
-loops400 amd64 liveness bytes 445120
+loops400 amd64 liveness steps 5491
+loops400 amd64 liveness bytes 457408
 loops400 amd64 intervals steps 1202
 loops400 amd64 intervals bytes 139264
 loops400 amd64 hints steps 0
@@ -139,15 +139,15 @@ loops400 amd64 scan bytes 1234992
 loops400 amd64 saves steps 0
 loops400 amd64 saves bytes 65536
 loops400 amd64 emit steps 2800
-loops400 amd64 emit bytes 2433760
+loops400 amd64 emit bytes 2433792
 loops400 amd64 encode steps 0
 loops400 amd64 encode bytes 211456
 loops400 arm64 prepare steps 12000
 loops400 arm64 prepare bytes 1046600
 loops400 arm64 uses steps 3766
 loops400 arm64 uses bytes 2025288
-loops400 arm64 liveness steps 4409
-loops400 arm64 liveness bytes 445120
+loops400 arm64 liveness steps 5491
+loops400 arm64 liveness bytes 457408
 loops400 arm64 intervals steps 1202
 loops400 arm64 intervals bytes 139264
 loops400 arm64 hints steps 0
@@ -157,7 +157,7 @@ loops400 arm64 scan bytes 1235216
 loops400 arm64 saves steps 0
 loops400 arm64 saves bytes 65536
 loops400 arm64 emit steps 2800
-loops400 arm64 emit bytes 2453624
+loops400 arm64 emit bytes 2453656
 loops400 arm64 encode steps 0
 loops400 arm64 encode bytes 165120
 groups400 ssa build bytes 3388304
@@ -168,8 +168,8 @@ groups400 amd64 prepare steps 4016
 groups400 amd64 prepare bytes 424168
 groups400 amd64 uses steps 420
 groups400 amd64 uses bytes 979256
-groups400 amd64 liveness steps 20
-groups400 amd64 liveness bytes 205152
+groups400 amd64 liveness steps 28
+groups400 amd64 liveness bytes 214880
 groups400 amd64 intervals steps 0
 groups400 amd64 intervals bytes 81920
 groups400 amd64 hints steps 0
@@ -179,15 +179,15 @@ groups400 amd64 scan bytes 743168
 groups400 amd64 saves steps 0
 groups400 amd64 saves bytes 32768
 groups400 amd64 emit steps 920
-groups400 amd64 emit bytes 790920
+groups400 amd64 emit bytes 790952
 groups400 amd64 encode steps 0
 groups400 amd64 encode bytes 36112
 groups400 arm64 prepare steps 4016
 groups400 arm64 prepare bytes 424168
 groups400 arm64 uses steps 420
 groups400 arm64 uses bytes 979256
-groups400 arm64 liveness steps 20
-groups400 arm64 liveness bytes 205152
+groups400 arm64 liveness steps 28
+groups400 arm64 liveness bytes 214880
 groups400 arm64 intervals steps 0
 groups400 arm64 intervals bytes 81920
 groups400 arm64 hints steps 0
@@ -197,7 +197,7 @@ groups400 arm64 scan bytes 743392
 groups400 arm64 saves steps 0
 groups400 arm64 saves bytes 32768
 groups400 arm64 emit steps 4963
-groups400 arm64 emit bytes 420896
+groups400 arm64 emit bytes 420928
 groups400 arm64 encode steps 0
 groups400 arm64 encode bytes 71424
 asm_adler ssa build bytes 41600
@@ -219,7 +219,7 @@ asm_adler amd64 scan bytes 29968
 asm_adler amd64 saves steps 0
 asm_adler amd64 saves bytes 320
 asm_adler amd64 emit steps 5
-asm_adler amd64 emit bytes 25464
+asm_adler amd64 emit bytes 25496
 asm_adler amd64 encode steps 0
 asm_adler amd64 encode bytes 3296
 asm_adler arm64 prepare steps 58
@@ -237,7 +237,7 @@ asm_adler arm64 scan bytes 30192
 asm_adler arm64 saves steps 0
 asm_adler arm64 saves bytes 320
 asm_adler arm64 emit steps 9
-asm_adler arm64 emit bytes 21968
+asm_adler arm64 emit bytes 22000
 asm_adler arm64 encode steps 0
 asm_adler arm64 encode bytes 2192
 asm_crc ssa build bytes 41696
@@ -259,7 +259,7 @@ asm_crc amd64 scan bytes 29544
 asm_crc amd64 saves steps 0
 asm_crc amd64 saves bytes 288
 asm_crc amd64 emit steps 2
-asm_crc amd64 emit bytes 25240
+asm_crc amd64 emit bytes 25272
 asm_crc amd64 encode steps 0
 asm_crc amd64 encode bytes 3024
 asm_crc arm64 prepare steps 68
@@ -277,7 +277,7 @@ asm_crc arm64 scan bytes 29768
 asm_crc arm64 saves steps 0
 asm_crc arm64 saves bytes 288
 asm_crc arm64 emit steps 2
-asm_crc arm64 emit bytes 21552
+asm_crc arm64 emit bytes 21584
 asm_crc arm64 encode steps 0
 asm_crc arm64 encode bytes 2176
 asm_copy ssa build bytes 36440
@@ -299,7 +299,7 @@ asm_copy amd64 scan bytes 28104
 asm_copy amd64 saves steps 0
 asm_copy amd64 saves bytes 256
 asm_copy amd64 emit steps 5
-asm_copy amd64 emit bytes 31752
+asm_copy amd64 emit bytes 31784
 asm_copy amd64 encode steps 0
 asm_copy amd64 encode bytes 4800
 asm_copy arm64 prepare steps 52
@@ -317,7 +317,7 @@ asm_copy arm64 scan bytes 28328
 asm_copy arm64 saves steps 0
 asm_copy arm64 saves bytes 256
 asm_copy arm64 emit steps 5
-asm_copy arm64 emit bytes 34592
+asm_copy arm64 emit bytes 34624
 asm_copy arm64 encode steps 0
 asm_copy arm64 encode bytes 2832
 asm_fnv ssa build bytes 39760
@@ -339,7 +339,7 @@ asm_fnv amd64 scan bytes 28296
 asm_fnv amd64 saves steps 0
 asm_fnv amd64 saves bytes 240
 asm_fnv amd64 emit steps 2
-asm_fnv amd64 emit bytes 25256
+asm_fnv amd64 emit bytes 25288
 asm_fnv amd64 encode steps 0
 asm_fnv amd64 encode bytes 3088
 asm_fnv arm64 prepare steps 52
@@ -357,7 +357,7 @@ asm_fnv arm64 scan bytes 28520
 asm_fnv arm64 saves steps 0
 asm_fnv arm64 saves bytes 240
 asm_fnv arm64 emit steps 2
-asm_fnv arm64 emit bytes 21568
+asm_fnv arm64 emit bytes 21600
 asm_fnv arm64 encode steps 0
 asm_fnv arm64 encode bytes 2176
 asm_dot ssa build bytes 42328
@@ -379,7 +379,7 @@ asm_dot amd64 scan bytes 30848
 asm_dot amd64 saves steps 0
 asm_dot amd64 saves bytes 352
 asm_dot amd64 emit steps 5
-asm_dot amd64 emit bytes 36328
+asm_dot amd64 emit bytes 36360
 asm_dot amd64 encode steps 0
 asm_dot amd64 encode bytes 4848
 asm_dot arm64 prepare steps 78
@@ -397,7 +397,7 @@ asm_dot arm64 scan bytes 31072
 asm_dot arm64 saves steps 0
 asm_dot arm64 saves bytes 352
 asm_dot arm64 emit steps 5
-asm_dot arm64 emit bytes 35056
+asm_dot arm64 emit bytes 35088
 asm_dot arm64 encode steps 0
 asm_dot arm64 encode bytes 2880
 asm_fib ssa build bytes 41200
@@ -419,7 +419,7 @@ asm_fib amd64 scan bytes 26976
 asm_fib amd64 saves steps 26
 asm_fib amd64 saves bytes 3696
 asm_fib amd64 emit steps 4
-asm_fib amd64 emit bytes 26312
+asm_fib amd64 emit bytes 26344
 asm_fib amd64 encode steps 0
 asm_fib amd64 encode bytes 2992
 asm_fib arm64 prepare steps 0
@@ -437,7 +437,7 @@ asm_fib arm64 scan bytes 27200
 asm_fib arm64 saves steps 26
 asm_fib arm64 saves bytes 3696
 asm_fib arm64 emit steps 4
-asm_fib arm64 emit bytes 26048
+asm_fib arm64 emit bytes 26080
 asm_fib arm64 encode steps 0
 asm_fib arm64 encode bytes 2576
 asm_callLeaf ssa build bytes 43104
@@ -459,7 +459,7 @@ asm_callLeaf amd64 scan bytes 27904
 asm_callLeaf amd64 saves steps 0
 asm_callLeaf amd64 saves bytes 240
 asm_callLeaf amd64 emit steps 5
-asm_callLeaf amd64 emit bytes 20552
+asm_callLeaf amd64 emit bytes 20584
 asm_callLeaf amd64 encode steps 0
 asm_callLeaf amd64 encode bytes 2016
 asm_callLeaf arm64 prepare steps 77
@@ -477,7 +477,7 @@ asm_callLeaf arm64 scan bytes 28128
 asm_callLeaf arm64 saves steps 0
 asm_callLeaf arm64 saves bytes 240
 asm_callLeaf arm64 emit steps 5
-asm_callLeaf arm64 emit bytes 17632
+asm_callLeaf arm64 emit bytes 17664
 asm_callLeaf arm64 encode steps 0
 asm_callLeaf arm64 encode bytes 1632
 asm_table ssa build bytes 45672
@@ -499,7 +499,7 @@ asm_table amd64 scan bytes 29136
 asm_table amd64 saves steps 21
 asm_table amd64 saves bytes 4464
 asm_table amd64 emit steps 9
-asm_table amd64 emit bytes 42792
+asm_table amd64 emit bytes 42824
 asm_table amd64 encode steps 0
 asm_table amd64 encode bytes 4848
 asm_table arm64 prepare steps 31
@@ -517,6 +517,6 @@ asm_table arm64 scan bytes 28416
 asm_table arm64 saves steps 23
 asm_table arm64 saves bytes 4560
 asm_table arm64 emit steps 2
-asm_table arm64 emit bytes 35520
+asm_table arm64 emit bytes 35552
 asm_table arm64 encode steps 0
 asm_table arm64 encode bytes 3728

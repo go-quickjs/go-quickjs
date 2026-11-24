@@ -2,6 +2,7 @@ package jit
 
 import (
 	"math"
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -46,6 +47,10 @@ func RebaseExitLocals(ctx *abi.Context, from, to unsafe.Pointer) {
 // rest of the exit. A runtime keeps one.
 type ExitScratch struct {
 	writes []exitWrite
+	// rehomes and sources are Rehome's.
+	rehomes []rehomeEntry
+	sources []uintptr
+	keys    []uint64
 }
 
 // exitWrite is a slot an exit writes, and the words it writes.
@@ -324,6 +329,224 @@ func ExpandCall(ctx *abi.Context) {
 	n := uint64(len(st.Records))
 	ctx.Records, ctx.RecordHigh = n, max(ctx.RecordHigh, n)
 	ctx.ExitKind, ctx.ExitPC, ctx.ExitDepth, ctx.ExitSite = abi.ExitHost, uint64(st.PC), uint64(st.Depth), uint64(int64(st.Site))
+}
+
+// rehomeEntry is a slot of a poll's state (Rehome): where it is (at),
+// its value's number word, where its reference is read from (src, nil for
+// none), and where that is kept, if the code holds it in a register or a
+// spill slot (shadow); same if the slot holds the value already. num and
+// ref are the words written, read from src only for a slot Rehome writes
+// (loaded): a source is a cell anywhere in the heap, and reading each
+// state value's at every poll had cost more than the rest.
+type rehomeEntry struct {
+	slot         int32
+	at, src      unsafe.Pointer
+	num          uint64
+	ref          unsafe.Pointer
+	shadow       abi.ExitLoc
+	mark         uint8
+	same, loaded bool
+	// Not comparable: no equality function made for it, which would
+	// move the code after it (the layout lock).
+	_ [0]func()
+}
+
+// Rehome brings ctx's frame up to date at a poll of a loop's back edge
+// after which its code goes on (abi.GoCallState's Rehome, h), as an exit
+// to the loop's header would write it, but only where native code reads
+// nothing of what it overwrites: it writes a frame register the header's
+// value of, unless that is the slot's own -- unchanged since the code was
+// entered -- or another of the state's values reads its reference from
+// the slot, or the slot is pinned (h's Marks), which a value live there
+// reads through. For a register marked to be rewired, whose value's
+// source is known only at run time, the code's word for the source -- in
+// a register its call saved, or a spill slot -- is made the register's
+// own address once the register is written, so that the cell it came from,
+// which may be an object's nothing else reaches, is read no more; where
+// such a register cannot be written and its source is no slot of the VM's
+// stack nor a cell of the context, nothing is written at all. It returns
+// how many registers it wrote.
+//
+// Native code keeps a reference in the slot that held it when the code was
+// entered and writes the frame only at its exits: a loop that reassigns a
+// register kept the entry's object there, which nothing it reads reaches,
+// for as long as it ran natively. Go writes the frame here, with Go's
+// stores and their write barrier; what native code reads after it --
+// each reference through its source -- is the same value it read before.
+func (s *ExitScratch) Rehome(ctx *abi.Context, h *abi.Rehome) (written int) {
+	d := h.Desc
+	if d == nil || d.InlineN != 0 || d.Frame.Kinds != nil || len(h.Marks) != len(h.Slots) {
+		return 0
+	}
+	f := exitFrame{ctx: ctx, d: d.Frame, enc: d.Frame.Enc, locals: ctx.Locals, stack: ctx.Stack}
+	// Every slot's source found before any slot is written: a slot may be
+	// another's source.
+	es, srcs := s.rehomes[:0], s.sources[:0]
+	some := false
+	for i := range h.Slots {
+		x := f.rehomeOf(&h.Slots[i], h.Marks[i])
+		if x.src == nil && x.ref == nil && f.num(x.at) == x.num && f.ref(x.at) == nil {
+			// A primitive the slot holds already, as after the poll
+			// before: nothing to write, every poll of a loop whose
+			// registers hold numbers.
+			x.same = true
+		}
+		es = append(es, x)
+		if x.src != nil && !x.same {
+			srcs = append(srcs, uintptr(x.src))
+		}
+		some = some || x.mark&abi.RehomePinned == 0 && !x.same && x.slot < d.Frame.FrameLocals
+	}
+	s.rehomes, s.sources = es, srcs
+	if some {
+		slices.Sort(srcs)
+		if s.rehomeChecked(&f) {
+			for i := range es {
+				x := &es[i]
+				if !s.rehomeWritable(&f, x) {
+					continue
+				}
+				f.rehomeLoad(x)
+				if f.num(x.at) != x.num || f.ref(x.at) != x.ref {
+					f.write(x.at, x.num, x.ref)
+					written++
+				}
+				if x.shadow.Kind != abi.ExitNone {
+					w := uint64(uintptr(x.at))
+					if x.shadow.Kind == abi.ExitReg {
+						ctx.Regs[x.shadow.N] = w
+					} else {
+						*ctx.SpillAt(x.shadow.N) = w
+					}
+				}
+			}
+		}
+	}
+	// The scratch keeps no pointer past the poll.
+	clear(es)
+	s.rehomes, s.sources = es[:0], srcs[:0]
+	return written
+}
+
+// rehomeWritable reports whether Rehome writes x's slot: a frame register
+// whose value is not its own, nor an object the code does not make, from
+// which no value's reference is read (s.sources, in order), and not
+// pinned.
+func (s *ExitScratch) rehomeWritable(f *exitFrame, x *rehomeEntry) bool {
+	if x.same || x.slot < 0 || x.slot >= f.d.FrameLocals || x.mark&abi.RehomePinned != 0 {
+		return false
+	}
+	if _, _, virtual := abi.IsVirtualWord(x.num); virtual {
+		// An object the code does not make, which an exit makes.
+		return false
+	}
+	if len(s.sources) == 0 {
+		return true
+	}
+	_, read := slices.BinarySearch(s.sources, uintptr(x.at))
+	return !read
+}
+
+// rehomeChecked keeps, of Rehome's slots, the sources' words it makes the
+// slots' own -- those marked RehomeRewire whose source is in a register
+// or a spill slot -- and reports whether Rehome may write: not where a
+// value rewired stays where it is, its source no place that holds what it
+// held whatever Rehome writes (kept), which may be a cell of an object
+// only the slots written hold; nor where two values whose source is one
+// word are not the same value's words.
+func (s *ExitScratch) rehomeChecked(f *exitFrame) bool {
+	es := s.rehomes
+	vs := uintptr(f.enc.ValueSize)
+	locals := uintptr(f.locals)
+	frameEnd := locals + uintptr(f.d.FrameLocals)*vs
+	keys := s.keys[:0]
+	ok := true
+	for i := range es {
+		x := &es[i]
+		if x.mark&abi.RehomeRewire == 0 || x.src == nil || x.same ||
+			x.shadow.Kind != abi.ExitReg && x.shadow.Kind != abi.ExitSpill {
+			x.shadow = abi.ExitLoc{}
+			continue
+		}
+		if !s.rehomeWritable(f, x) && !f.kept(x.src, locals, frameEnd) {
+			ok = false
+			break
+		}
+		keys = append(keys, uint64(x.shadow.Kind)<<56|uint64(uint32(x.shadow.N))<<24|uint64(i))
+	}
+	if ok && len(keys) > 1 {
+		// By the word's place, then the slot: alike places side by side.
+		slices.Sort(keys)
+		for k := 1; k < len(keys); k++ {
+			if keys[k]>>24 != keys[k-1]>>24 {
+				continue
+			}
+			x, y := &es[keys[k]&(1<<24-1)], &es[keys[k-1]&(1<<24-1)]
+			f.rehomeLoad(x)
+			f.rehomeLoad(y)
+			if x.num != y.num || x.ref != y.ref {
+				ok = false
+				break
+			}
+		}
+	}
+	s.keys = keys[:0]
+	return ok
+}
+
+// rehomeOf is what Rehome finds of state slot e, as value finds it but
+// for the words at its source (rehomeLoad).
+func (f *exitFrame) rehomeOf(e *abi.ExitSlot, mark uint8) rehomeEntry {
+	x := rehomeEntry{slot: e.Slot, at: f.slot(e.Slot), mark: mark, loaded: true}
+	if big, _ := e.Value.IsBig(); big {
+		num, ref := f.big(e.Value)
+		x.num, x.ref = num, *(*unsafe.Pointer)(unsafe.Pointer(&ref))
+		return x
+	}
+	w := f.word(e.Value)
+	x.num = w
+	switch {
+	case e.Shadow.Kind != abi.ExitNone:
+		fw := f.word(e.Shadow)
+		from := asPointer(&fw)
+		x.src, x.shadow = from, e.Shadow
+		x.same = from == x.at
+		x.loaded = from == nil
+	case e.Origin >= 0:
+		o := f.slot(e.Origin)
+		if p := f.ref(o); p != nil && (e.Load || w == f.num(o)) {
+			x.src, x.num, x.ref = o, f.num(o), p
+			x.same = e.Origin == e.Slot
+		}
+	}
+	return x
+}
+
+// rehomeLoad reads the words x's value is where its source is, if it has
+// not: the reference there, if any, with its number word.
+func (f *exitFrame) rehomeLoad(x *rehomeEntry) {
+	if x.loaded {
+		return
+	}
+	x.loaded = true
+	if p := f.ref(x.src); p != nil {
+		x.num, x.ref = f.num(x.src), p
+	}
+}
+
+// kept reports whether p, a value's source, is where the collector keeps
+// what it holds whatever Rehome writes: a register of the frame, a slot
+// of the VM's stack, a cell of the context.
+func (f *exitFrame) kept(p unsafe.Pointer, locals, frameEnd uintptr) bool {
+	a := uintptr(p)
+	if a >= locals && a < frameEnd {
+		return true
+	}
+	if base := uintptr(f.ctx.StackBase); base != 0 && a >= base && a < base+uintptr(f.ctx.StackEnd)*uintptr(f.enc.ValueSize) {
+		return true
+	}
+	c := uintptr(unsafe.Pointer(f.ctx))
+	return a >= c && a < c+unsafe.Sizeof(*f.ctx)
 }
 
 // CallPC is the PC and depth of the native call ctx's code is making: its

@@ -2153,7 +2153,11 @@ func jitHostCall(ctx *abi.Context) bool {
 		r.backEdges = s.backEdgeBudget()
 		s.pollCredit += r.backEdges - old
 		s.budgets++
-		return r.checkInterruptPoll() == nil
+		if r.checkInterruptPoll() != nil {
+			return false
+		}
+		r.jitRegRehome(ctx)
+		return true
 	case ssa.GoRandom:
 		// Math.random's cache, found empty: filled again, its next number
 		// the result.

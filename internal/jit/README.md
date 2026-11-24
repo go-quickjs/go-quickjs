@@ -2224,8 +2224,53 @@ suspending function's, whose generator keeps the frame. Native code never
 reads such a register -- it loads none it was not entered with -- and the
 interpreter writes one before it reads it, as liveness says. A live
 register a loop reassigns, whose entry value's pointer word stays in its
-slot (a source of the loop's phi), is not dead there, and this does not
-reach it.
+slot (a source of the loop's phi), is not dead there; the loop's polls
+reach it (below).
+
+**Registers brought up to date at polls.** A live register a loop
+reassigns keeps, in its slot, the reference it held when native code was
+entered, which nothing the loop reads reaches once the register holds
+another: array_push_1m's `a = []` kept the last turn's array there until
+the loop ended. At a poll of a loop's back edge that Go answers with a new
+budget and native code goes on after (`ssa.GoPoll`), Go writes the
+header's state into the frame's registers where nothing native code still
+reads is overwritten (`jit.Rehome`, the VM's `jitRegRehome`), as an exit to
+the header would, and native code goes on with no exit. It does so at one
+such poll in sixteen of the runtime's (`jitRehomeEvery`), so a stale
+reference lasts at most sixteen budgets' run, some sixteen thousand back
+edges -- tens of microseconds in a tight loop, far short of a collector's
+cycle, which allocation paces. At every poll, some 150 ns each, it had
+cost forEach's callback loop, a few nanoseconds a turn, 7%. The poll's call of
+Go carries the header state's exit description (`abi.GoCallState`'s
+`Rehome`) -- of its slots, those whose values may be references or take
+one's place, a loop's counters left out, each marked as the compile
+found it (mir's `findRehomes`) -- and the registers the call's routine
+saved. Go finds every slot's source -- its shadow's word, or its
+origin's slot where the reference is taken from there -- before it
+writes any, and writes a frame register only where its value is not the
+slot's own, no other value's reference is read from the slot, and the
+compile did not pin it; it reads a source's words only for a register it
+writes, a heap cell's being the poll's dearest read. A value native code holds whose source is a shadow phi is
+*rewired*: once its register is written, the shadow's word -- in a saved
+register, which the routine puts back, or a spill slot -- is made the
+register's address, so that its reference is read from there and the cell
+it came from, which may be in an object only the old slot held (a list
+walked by `n = n.next`), is read no more; the shadow phis are what
+`shadowMerges` made, read only as sources, so the word means the same to
+every use. A rewired value whose register cannot be written, with a source
+outside the frame's registers, the VM's stack and the context, writes
+nothing at all. What the header's state does not name but is live at the
+poll -- a value made before the loop, held in a register of the
+allocation, an object's address or a cell read from it -- the compile
+follows back to what holds its objects: a frame register it reads
+through is pinned, never written; a value of the state, a keep cell, a
+global's, a closure's or the runtime's cell ends the way; and a phi the
+state does not name, any turn's value at run time, leaves the header's
+polls with nothing to write. Not inlined callees' frames, typed code, a
+generator's code, nor a native callee's frame. Go's stores, with Go's
+barrier: native code reads each reference through its source after it as
+before, the same value, and does the same work whether the collector
+marks or not.
 
 **The context block** (`abi.Context`) is what native code reaches through
 its context register. Go sets the frame's addresses before every entry;
@@ -3038,8 +3083,11 @@ call counts, above all -- as V8's prologue checks its interrupt budget:
 a recursion with no loop, run natively, is checked as the interpreter's
 calls check one. When the counter runs out, the code calls Go (or, under a
 stress budget, exits to it), which checks for cancellation, `Halt` and the
-memory limit, gives a new budget, and lets the code go on. The call is the
-budget's alone: the collector's marking changes nothing of it.
+memory limit, gives a new budget, and lets the code go on -- at a loop's
+back edge, once it has brought the frame's registers up to date (see
+[Native code on the register frame](#native-code-on-the-register-frame)).
+The call is the budget's alone: the collector's marking changes nothing of
+it.
 
 A poll is a pause, not an exit, whether it calls Go or exits: how often one
 comes is the budget's, not the code's. The code entered again after a

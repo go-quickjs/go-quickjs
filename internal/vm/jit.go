@@ -127,6 +127,14 @@ type jitTestConfig struct {
 	// typedViewMade, if set, is called at each view's copy jitTypedView
 	// makes.
 	typedViewMade func()
+	// pollMade, if set, is called at each of loops' polls Go gives a
+	// new budget and native code goes on after, once Go has brought the
+	// frame up to date there (jitRegRehome), with whether it had a
+	// description to do so by; noRehome has it bring none up to date.
+	pollMade func(described bool)
+	noRehome bool
+	// rehomeEvery, if not 0, is the runtime's jitRehomeEvery.
+	rehomeEvery int
 	// epochNow and flushNow, if set, stand in for the cache's clocks
 	// (epoch, flushNow); clocks, if set, for both where it says so --
 	// every test runtime's held but those a test lets run
@@ -1217,6 +1225,11 @@ type jitState struct {
 	regResumes uint64
 	ssaEntries uint64
 	ssaRecords uint64
+	// rehomed counts the registers Go brought up to date at loops' polls
+	// (jitRegRehome), and rehomeDue the polls that may to pass over before
+	// the next that does.
+	rehomed   uint64
+	rehomeDue int
 	// backendPanics counts the compiles a backend refused for panicking.
 	backendPanics uint64
 	// inlined counts the callees the code placed inlines, and inlinedCode

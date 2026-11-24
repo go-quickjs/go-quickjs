@@ -498,3 +498,49 @@ func (r *Runtime) jitRegClearDead(c *regCode, e *jitRegEntry, wb, ipc int) {
 		}
 	}
 }
+
+// jitRegRehome brings the frame of ctx's code up to date at a poll of a
+// loop's back edge that it goes on after, where the code described what
+// Go may write there (abi.Rehome, jit.Rehome): each register given the
+// value the loop's header has in it, where native code reads nothing of
+// what it held. Native code writes the frame only at its exits, and keeps
+// a reference in the slot that held it at its entry: a loop that
+// reassigns a register -- array_push_1m's a = [] -- kept the entry's
+// object there, unreachable from anything the loop reads, until the loop
+// ended, its 16 MB array alive past the next one's every growth. The
+// run's own frame only, not a native callee's, nor a suspending
+// function's, whose generator keeps its own copy of the frame.
+//
+// At every jitRehomeEvery'th of the runtime's polls that may: a poll
+// comes every thousand back edges or so, and a frame brought up to date
+// at each cost a loop of a few nanoseconds a turn -- forEach's callback
+// loop, array_for_of -- a twelfth of its time; one at every sixteenth
+// leaves a stale reference in the frame for at most sixteen budgets'
+// run, tens of microseconds in a tight loop, far less than the
+// collector's cycles, which allocation, not polls, paces.
+func (r *Runtime) jitRegRehome(ctx *abi.Context) {
+	s := r.jit
+	st := jitGoCallState(ctx)
+	h := (*abi.Rehome)(nil)
+	if st != nil {
+		h = st.Rehome
+	}
+	if h != nil && s.rehomeDue > 0 {
+		s.rehomeDue--
+	} else if h != nil && !r.jitTest.noRehome && ctx.Live == 0 {
+		s.rehomeDue = jitRehomeEvery - 1
+		if r.jitTest.rehomeEvery != 0 {
+			s.rehomeDue = r.jitTest.rehomeEvery - 1
+		}
+		if idx := int(ctx.Level); idx < len(s.regRuns) && s.regRuns[idx].f != nil && s.ssaCtxs[idx] == ctx && s.regRuns[idx].c != nil && !s.regRuns[idx].c.suspends {
+			s.rehomed += uint64(s.exitScratch.Rehome(ctx, h))
+		}
+	}
+	if hook := r.jitTest.pollMade; hook != nil {
+		hook(h != nil)
+	}
+}
+
+// jitRehomeEvery is how many of a runtime's polls that may bring a frame
+// up to date make one that does (jitRegRehome).
+const jitRehomeEvery = 16

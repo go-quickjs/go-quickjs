@@ -1438,7 +1438,7 @@ func (c *a64Compiler) edge(from, to, next *ssa.Block) {
 			c.budgetStore(r)
 			if c.enc.CallGo != 0 {
 				stub := c.stubLabel(header, abi.ExitPoll)
-				c.goSaving(uint64(ssa.GoPoll), &stub)
+				c.goCalling(c.pollState(to, uint8(a64Locals), uint8(a64Stack)), &stub)
 				c.budgetLoad(r)
 				c.a.B(c.labels[to.ID])
 				return
@@ -1462,7 +1462,7 @@ func (c *a64Compiler) edge(from, to, next *ssa.Block) {
 			if c.enc.CallGo != 0 {
 				// Go gives the loop another budget (ssa.GoPoll).
 				stub := c.stubLabel(header, abi.ExitPoll)
-				c.goSaving(uint64(ssa.GoPoll), &stub)
+				c.goCalling(c.pollState(to, uint8(a64Locals), uint8(a64Stack)), &stub)
 				c.a.B(polled)
 				return
 			}
