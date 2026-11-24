@@ -393,7 +393,8 @@ method made, as in `p.RejectError(rt.ThrowTypeError("not a file: %s", name))`.
 marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
 `OnUnhandledRejection` reports a promise nobody took, and
 `OnUncaughtException` an exception nothing in the script can catch: one a
-`queueMicrotask` or `FinalizationRegistry` callback throws.
+`queueMicrotask` or `FinalizationRegistry` callback throws, or a `Promise`
+subclass's resolve or reject when a `then` settles the subclass's promise.
 
 ### Typed arrays over Go memory
 

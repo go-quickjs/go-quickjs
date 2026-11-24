@@ -430,9 +430,10 @@ func (r *Runtime) OnUnhandledRejection(fn func(reason Value)) {
 }
 
 // OnUncaughtException installs what to call with an exception nothing in
-// the script can catch: one thrown by a queueMicrotask callback or by a
-// FinalizationRegistry's cleanup callback, each of which runs as a job of
-// its own, with no caller to throw at. The error is an *Error, as an
+// the script can catch: one thrown by a queueMicrotask callback, by a
+// FinalizationRegistry's cleanup callback, or by the resolve or reject of
+// a Promise subclass's promise that a then's reaction settles, each of
+// which runs as a job of its own, with no caller to throw at. The error is an *Error, as an
 // exception that reaches Go from Eval is. It is called as the job queue
 // drains, and the queue goes on after it.
 //

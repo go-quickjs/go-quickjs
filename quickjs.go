@@ -410,7 +410,10 @@ func WithLocale(tag string) Option {
 // date's: {year: 1000000000000004, monthCode: "M02", day: 29} is 02-28 where
 // the standard, which uses that year only to apply overflow, answers 02-29.
 // And DataView's byteLength and byteOffset throw for a view out of bounds of
-// its buffer, where the standard answers 0.
+// its buffer, where the standard answers 0. A Promise subclass's resolve
+// that throws when a then's reaction settles the subclass's promise is
+// followed by its reject, given the exception, where the standard hands
+// the exception to the host (OnUncaughtException).
 // The WebAssembly namespace wasm/wasmjs installs validates modules against
 // V8's limits rather than the WebAssembly JavaScript interface's: a memory64
 // may declare at most 262,144 pages, where the interface allows 2^37-1, and a

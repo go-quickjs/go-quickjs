@@ -1139,7 +1139,15 @@ Paths are relative to this repository; `go-intl:` paths are in
   `queueMicrotask(() => log.push("qm"))`; `log` is
   `qm,intrinsic,subclass`.
 - **Expected:** `qm,subclass,intrinsic`, as Node has it.
-- **Status:** open.
+- **Status:** fixed. The subclass's promise is now the reaction's result
+  capability, which the reaction's one job settles through the
+  capability's resolve and reject, as PerformPromiseThen has it, rather
+  than through a second `then` on an intrinsic promise. A resolve or
+  reject of the capability that throws is the job's exception, which
+  reaches the host (`OnUncaughtException`); under `WithNodeQuirks` a
+  resolve that throws is followed by the reject, as in Node.
+  - Test: `TestPromiseSubclassThenSettlesInItsTurn`,
+    `TestPromiseCapabilityResolveThrows`.
 
 ### KI-86 `yield*` takes a delegate's `return` that is not a function for none
 - **Where:** `internal/vm/iterate.go`, `iterResume`'s `resumeReturn`, which

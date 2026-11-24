@@ -39,6 +39,10 @@ type reaction struct {
 	onFulfilled Value
 	onRejected  Value
 	result      *Object
+	// cap, where it is set, is the result capability in place of result:
+	// a subclass's promise, which the job settles through its resolve and
+	// reject, as PerformPromiseThen does with any capability.
+	cap *promiseCapability
 	// ctx is the async context where the reaction was registered, which
 	// its job runs in, however the promise came to settle.
 	ctx Value
@@ -276,8 +280,9 @@ func (r *Runtime) OnUnhandledRejection(fn func(reason Value, promise Value)) {
 }
 
 // OnUncaughtException installs what to call with an exception nothing in
-// the script can catch: one a queueMicrotask callback or a finalization
-// callback throws. Without one, such an exception is dropped.
+// the script can catch: one a queueMicrotask callback, a finalization
+// callback, or a Promise subclass's resolve or reject called by a
+// reaction's job throws. Without one, such an exception is dropped.
 func (r *Runtime) OnUncaughtException(fn func(err error)) {
 	r.onUncaughtException = fn
 }
@@ -331,22 +336,57 @@ func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 		if !isCallable(handler) {
 			// Without a handler the outcome passes straight through, which is
 			// what makes a then chain propagate a rejection.
-			if state == promiseRejected {
-				r.rejectPromise(rc.result, value)
-			} else {
-				r.resolvePromise(rc.result, value)
-			}
+			r.settleReaction(&rc, value, state == promiseRejected, false)
 			return
 		}
 		res, err := r.call(handler, Undefined, []Value{value})
 		if err != nil {
 			// A handler that throws rejects the promise it resolves, rather
 			// than propagating out of the job queue.
-			r.rejectPromise(rc.result, thrownValue(err))
+			r.settleReaction(&rc, thrownValue(err), true, false)
 			return
 		}
-		r.resolvePromise(rc.result, res)
+		r.settleReaction(&rc, res, false, true)
 	})
+}
+
+// settleReaction settles what a reaction's job resolves with v, or rejects
+// with it: its promise, or its capability through the capability's own
+// functions. One of those that throws is the job's exception, which
+// nothing in the script can catch (OnUncaughtException).
+//
+// Under WithNodeQuirks a capability's resolve that throws is followed by
+// its reject, given the exception, and where the job's handler ran and
+// returned (ran), a reject that throws by its reject again, given that
+// exception: what reaches the host is the last one.
+func (r *Runtime) settleReaction(rc *reaction, v Value, rejected, ran bool) {
+	if rc.cap == nil {
+		if rejected {
+			r.rejectPromise(rc.result, v)
+		} else {
+			r.resolvePromise(rc.result, v)
+		}
+		return
+	}
+	var err error
+	if rejected {
+		_, err = r.call(rc.cap.reject, Undefined, []Value{v})
+	} else if _, err = r.call(rc.cap.resolve, Undefined, []Value{v}); r.nodeQuirks && isThrown(err) {
+		_, err = r.call(rc.cap.reject, Undefined, []Value{thrownValue(err)})
+		if ran && isThrown(err) {
+			_, err = r.call(rc.cap.reject, Undefined, []Value{thrownValue(err)})
+		}
+	}
+	if err != nil {
+		r.reportUncaught(err)
+	}
+}
+
+// isThrown reports whether err is an exception the script threw, rather
+// than what stops it: an interrupt, a limit.
+func isThrown(err error) bool {
+	_, ok := err.(*Thrown)
+	return ok
 }
 
 // thrownValue extracts the JavaScript value from an engine error, so that a Go
@@ -501,8 +541,12 @@ func (r *Runtime) promiseThenInto(o *Object, onFulfilled, onRejected Value, resu
 	if !ok {
 		return
 	}
-	rc := reaction{onFulfilled: onFulfilled, onRejected: onRejected, result: result, ctx: r.asyncCtx}
+	r.addReaction(p, reaction{onFulfilled: onFulfilled, onRejected: onRejected, result: result, ctx: r.asyncCtx})
+}
 
+// addReaction registers rc on p: it waits while p is pending, and its job
+// is queued at once if p has settled.
+func (r *Runtime) addReaction(p *promiseData, rc reaction) {
 	if p.state == promisePending {
 		p.reactions = append(p.reactions, rc)
 		return
@@ -600,7 +644,9 @@ func (r *Runtime) defSpecies(ctor *Object) *Object {
 }
 
 // promiseThenSpecies is then with the result built by the species constructor,
-// so that a subclass's then returns an instance of the subclass.
+// so that a subclass's then returns an instance of the subclass. That
+// promise is the reaction's capability, which its one job settles, so that
+// it settles in the same turn as an intrinsic promise would.
 func (r *Runtime) promiseThenSpecies(o *Object, onFulfilled, onRejected Value) (Value, error) {
 	ctor, err := r.speciesConstructor(o, r.promiseCtor)
 	if err != nil {
@@ -613,16 +659,11 @@ func (r *Runtime) promiseThenSpecies(o *Object, onFulfilled, onRejected Value) (
 	if err != nil {
 		return Undefined, err
 	}
-	// The intrinsic machinery settles an ordinary promise, whose outcome is
-	// then forwarded through the subclass's own resolvers.
-	inner := r.promiseThen(o, onFulfilled, onRejected)
-	r.promiseThen(inner,
-		Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			return rt.call(cap.resolve, Undefined, []Value{arg(a, 0)})
-		})),
-		Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			return rt.call(cap.reject, Undefined, []Value{arg(a, 0)})
-		})))
+	p, ok := o.dataOf().(*promiseData)
+	if !ok {
+		return Undefined, r.throwTypeError("Promise.prototype.then called on an uninitialized promise")
+	}
+	r.addReaction(p, reaction{onFulfilled: onFulfilled, onRejected: onRejected, cap: cap, ctx: r.asyncCtx})
 	return Obj(cap.promise), nil
 }
 
