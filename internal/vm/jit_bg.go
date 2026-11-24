@@ -420,6 +420,8 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 			// No room: asked again at a later sample.
 			s.bgDiscarded++
 			return
+		} else if h := r.jitTierHook(); h != nil {
+			r.jitTierPlaced(h, j.cl, j.c, e)
 		}
 	}
 	if j.osrAt != 0 {

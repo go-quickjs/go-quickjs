@@ -573,8 +573,9 @@ func (r *Runtime) jitRegWarmUp(cl *closure, c *regCode, life *jitEntry, work int
 // budget (jitRegWarmUp), what its caches learn meanwhile delaying the
 // compile. Runs of the code under way go on in it until they next leave it.
 // Past jitMaxDeopts deoptimizations the function is compiled no more, its
-// code let go of.
-func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry) {
+// code let go of. why is what failed, for the tier trace (JITTierEvent's
+// Reason).
+func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string) {
 	life := e.life
 	if life == nil || e.code == nil {
 		return
@@ -596,6 +597,9 @@ func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry) {
 		if c := cl.reg; c != nil {
 			life.invalid, life.warming, life.reopt, life.learning = true, true, false, false
 			life.tierBudget, life.tierMark = jitRegBudget(r.jitCallThreshold, c), jitFeedbackMark(cl)
+			if h := r.jitTierHook(); h != nil {
+				r.jitTierInvalidated(h, cl, c, e, why, life.tierBudget)
+			}
 		}
 	}
 	if life.deopts > jitMaxDeopts && cc != nil && !cc.jitRegRefused {
@@ -692,13 +696,26 @@ func (r *Runtime) jitRegLearnedDueWith(cl *closure, e *jitRegEntry, limit int, p
 // calleeWork), and the interpreter's in its loops before Go entered them
 // (jitEntry's osrWork).
 func (r *Runtime) jitRegSpent(c *regCode, e *jitRegEntry) int64 {
+	return r.jitRegSpentLen(len(c.rc.Code), e)
+}
+
+// jitRegSpentLen is jitRegSpent for a function of n register
+// instructions.
+func (r *Runtime) jitRegSpentLen(n int, e *jitRegEntry) int64 {
 	life := e.life
 	calls := life.starts + life.goOns + life.slowCalls
 	if l := r.jit.regLinkFor(e); l != nil {
 		calls += l.in
 	}
 	st := &life.ssaStats
-	return int64(calls)*int64(max(len(c.rc.Code), 1)) + int64(st.work+st.calleeWork) + life.osrWork
+	return int64(calls)*int64(max(n, 1)) + int64(st.work+st.calleeWork) + life.osrWork
+}
+
+// jitRegAge is the work e, cl's function's code c, has done since it was
+// placed (jitRegEntry's spentAt): its function's work since then
+// (jitRegSpent).
+func (r *Runtime) jitRegAge(c *regCode, e *jitRegEntry) int64 {
+	return max(r.jitRegSpent(c, e)-e.spentAt, 0)
 }
 
 // jitRegReoptimize compiles cl's function's register code c again for what

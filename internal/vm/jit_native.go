@@ -136,6 +136,11 @@ type jitRegEntry struct {
 	// was placed (jitTargetsOf), which it is compiled for
 	// (jitRegCallRepeats).
 	targets []jitTarget
+	// spentAt is its function's work (jitRegSpent) when the code was
+	// placed, from which its age is counted (jitRegAge); tier is what it
+	// was compiled for, which the tier trace says (jitTierReason).
+	spentAt int64
+	tier    uint8
 }
 
 // loopEntry is the entry, an instruction of the program, of the loop
@@ -319,6 +324,8 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 		// Valid code: no budget to spend before the next compile, nothing
 		// learned pending.
 		life.invalid, life.warming, life.reopt, life.learning = false, false, false, false
+		// Its age counted from here, past the counts begun afresh above.
+		e.spentAt = r.jitRegSpentLen(len(e.rc.Code), e)
 		if life.genLearned {
 			// Its loops' steps over generators resume them natively now,
 			// which each had been a call of Go: the loops it was judged
@@ -373,6 +380,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		return nil
 	}
 	e := &jitRegEntry{key: key, life: life, used: s.epoch()}
+	e.tier = jitTierReason(life, callee, osrAt != 0)
 	// Its state kept while the compile fills and counts it: the room made
 	// for the code would otherwise let go of the state of the very function
 	// it is made for (regLifeSpare), whose build then filled a state the
@@ -485,6 +493,9 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	}
 	if !r.jitRegPlace(e, c, rf, f, mc, looped, s.jitRegReplaced(key, osrAt)) {
 		return nil
+	}
+	if h := r.jitTierHook(); h != nil {
+		r.jitTierPlaced(h, cl, c, e)
 	}
 	if r.jitCompileRepeat() > 0 {
 		// In the workspace the compile used, given back: in another, of its
@@ -763,6 +774,9 @@ func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f 
 	if h := r.jitCodeHook(); h != nil {
 		// -jitcode's record of the code.
 		h(jitFunctionOf(c.fn), code.Text(), mc)
+	}
+	if e.life != nil {
+		e.spentAt = r.jitRegSpent(c, e)
 	}
 	return true
 }
@@ -1974,6 +1988,11 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 		s.guards++
 		e.life.ssaStats.guards++
 		r.jitRegMaterialize(f, e, wb)
+		why := "guard"
+		if r.jitTierHook() != nil {
+			// What its cache held before the failure taught it the shape.
+			why = r.jitTierDeoptWhy(f, c, wb, exitPC, int64(ctx.ExitSite))
+		}
 		if int64(ctx.ExitSite) < 0 {
 			// An entry's speculation, at a loop's header or the start: the
 			// entry's (EntryGeneric).
@@ -1983,7 +2002,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 			// compiled again makes it of them (jitBigIntNote).
 			r.jitRegDeoptSeen(f, c, e, wb, exitPC)
 		}
-		r.jitRegInvalidate(f.cl, e)
+		r.jitRegInvalidate(f.cl, e, why)
 		s.regEndWhy = "guard failed"
 		return 0, exitPC, Undefined, false, nil, false
 	case abi.ExitHost:
@@ -2070,7 +2089,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 					// of eight functions, four learned one at a time, had
 					// left at every other turn until its loop was judged
 					// slow for it.
-					r.jitRegInvalidate(f.cl, e)
+					r.jitRegInvalidate(f.cl, e, "call")
 				}
 				r.jitRegSuperSeen(f, c, e, exitPC)
 				if mcallee.IsObject() {

@@ -2220,8 +2220,13 @@ func (r *Runtime) jitRegRetryNative(e *jitRegEntry) {
 		return
 	}
 	life.notNative, life.nativeOut = false, 0
+	// The code's age (jitRegAge) kept past the counts begun afresh.
+	e.spentAt -= int64(life.ssaStats.calleeWork)
 	life.ssaStats.calleeGoCalls, life.ssaStats.calleeWork = 0, 0
 	if l := r.jit.regLinkFor(e); l != nil {
+		if e.rc != nil {
+			e.spentAt -= int64(l.in) * int64(max(len(e.rc.Code), 1))
+		}
 		l.in = 0
 		if r.jit.regCache[e.key] == e && e.code != nil && !e.invalid {
 			l.regSet(r.jit, e)

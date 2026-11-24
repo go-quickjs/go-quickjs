@@ -48,6 +48,7 @@ var (
 	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (8 MiB)")
 	jitHeldFlag   = flag.Bool("jitheld", false, "with -jitcode: hold the JIT's clocks and turn the collector off, but at a memory limit of 3 GiB where GOMEMLIMIT sets none, so that two builds' runs make the same compiles, for compilediff native")
 	jitCodeFlag   = flag.String("jitcode", "", "write each function's native code to this file as it is compiled, as JSON lines, for internal/jit/verify's jitprof (with -jit)")
+	jitTierFlag   = flag.String("jittier", "", "write the JIT's tier trace to this file, a line for each compile and each deoptimization that invalidates code, and print each benchmark's counts of them (with -jit)")
 	jitTimeFlag   = flag.Int("jitcompile", 0, "time the JIT's compiles phase by phase, each compile run this many times, and print the times per run after each benchmark (fixed and micro modes, with -jit)")
 	gcYieldFlag   = flag.Bool("gcyield", false, "make each runtime with WithGCYield, which waits while the collector marks when GOMAXPROCS is 1")
 )

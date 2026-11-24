@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"math"
 	"os"
 	"regexp"
@@ -63,6 +64,9 @@ func reportStart(r runtimeOf) {
 	}
 	if *jitCodeFlag != "" && vm.JITCodeHook == nil {
 		startCodeDump(*jitCodeFlag)
+	}
+	if *jitTierFlag != "" && vm.JITTierHook == nil {
+		startTierTrace(*jitTierFlag)
 	}
 	if *jitHeldFlag && vm.JITCompileRepeat == 0 {
 		// Held for the first runtime: the arm64 compiles are its repeats.
@@ -340,6 +344,7 @@ func startCodeDump(path string) *os.File {
 // is made of. A function is named by its script and line.
 func (r runtimeOf) Report(name string) {
 	reportTimes()
+	reportTier()
 	// The register tier's crossings, where QJS_REGREPORT asks for them.
 	vm.RegReport()
 	if !*jitReportFlag {
@@ -466,4 +471,72 @@ func (r runtimeOf) Report(name string) {
 	for _, f := range other {
 		fmt.Printf("    %-8s %s:%d %s: %s\n", f.Status, f.Script, f.Line, f.Name, f.Reason)
 	}
+}
+
+// tierCounts are the tier trace's counts since the last benchmark ended:
+// compiles by what they were for, deoptimizations, and those of code
+// younger than tierEarly invocations' worth.
+var tierCounts struct {
+	compiles map[string]int
+	deopts   map[string]int
+	early    int
+}
+
+// tierEarly is V8's invocation_count_for_maglev_with_delay: a
+// deoptimization of code that ran less is an early one.
+const tierEarly = 600
+
+// startTierTrace has the JIT write its tier trace to path, a line for each
+// compile and each deoptimization, tab-separated: C or D, the function,
+// the reason, its length, its invocations, then for a deoptimization the
+// code's age and the budget before the next compile, both in invocations'
+// worth, and last the function's deoptimizations and compiles so far.
+func startTierTrace(path string) {
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "v8bench:", err)
+		os.Exit(1)
+	}
+	w := bufio.NewWriter(f)
+	tierCounts.compiles, tierCounts.deopts = map[string]int{}, map[string]int{}
+	vm.JITTierHook = func(e vm.JITTierEvent) {
+		kind := "C"
+		if e.Deopt {
+			kind = "D"
+			tierCounts.deopts[e.Reason]++
+			if e.Age < tierEarly {
+				tierCounts.early++
+			}
+		} else {
+			tierCounts.compiles[e.Reason]++
+		}
+		fmt.Fprintf(w, "%s\t%s %s:%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n", kind, e.Func.Name, e.Func.Script, e.Func.Line,
+			e.Reason, e.Length, e.Invocations, e.Age, e.Budget, e.Deopts, e.Compiles)
+		// Flushed at each, as -jitcode's is.
+		w.Flush()
+	}
+}
+
+// reportTier prints, for -jittier, the compiles and deoptimizations since
+// the last benchmark, by reason.
+func reportTier() {
+	if vm.JITTierHook == nil || tierCounts.compiles == nil {
+		return
+	}
+	line := func(m map[string]int) (int, string) {
+		keys := slices.Sorted(maps.Keys(m))
+		total, s := 0, ""
+		for _, k := range keys {
+			total += m[k]
+			s += fmt.Sprintf(" %s %d", k, m[k])
+		}
+		return total, s
+	}
+	n, cs := line(tierCounts.compiles)
+	d, ds := line(tierCounts.deopts)
+	fmt.Printf("  jit tier: %d compiles:%s\n", n, cs)
+	fmt.Printf("  jit tier: %d deoptimizations, %d of code younger than %d invocations:%s\n", d, tierCounts.early, tierEarly, ds)
+	clear(tierCounts.compiles)
+	clear(tierCounts.deopts)
+	tierCounts.early = 0
 }

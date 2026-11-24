@@ -132,3 +132,199 @@ func jitFunctionOf(fn *bytecode.Function) JITFunction {
 	}
 	return f
 }
+
+// JITTierEvent is a line of the JIT's tier trace (JITTierHook), what V8's
+// --trace-opt and --trace-deopt print: a function's code placed, or its
+// code invalidated by a deoptimization.
+type JITTierEvent struct {
+	// Nothing compares events: comparable, the type had an equality
+	// function the compiler lays out among package vm's code.
+	_ [0]func()
+	// Func is the function, as JITReport names it.
+	Func JITFunction
+	// Deopt marks an invalidation; otherwise the event is a compile.
+	Deopt bool
+	// Reason is, for a compile, what it was for: first (the function's
+	// first code, for its calls and loops), callee (its first, for its
+	// native callers' calls), deopt (again, after an invalidation),
+	// learned (again, for what its code learned at its exits), flushed
+	// (again, after the cache let its code go), again (any other), with
+	// "+osr" for code compiled for a frame waiting at a loop. For a
+	// deoptimization, it is what failed: a property site by its kind --
+	// read, method, write, update -- and what its cache held then --
+	// unfed (no shape), mono, poly or mega (past what native code is
+	// compiled for) -- or the instruction's name; entry for an entry's
+	// speculation, call for a call of a target the code was not compiled
+	// for, inlined for a guard of an inlined callee's, loop for a loop of
+	// a built-in's call.
+	Reason string
+	// Length is the function's register code's length, the unit of its
+	// budget, which is counted in invocations of it.
+	Length int
+	// Invocations is how many times the function has run so far, in any
+	// tier, as its tier-up counts them (jitTierInvocations): the
+	// interpreter's runs its budget counted, and its code's since it was
+	// last placed.
+	Invocations int64
+	// Age is, for a deoptimization, the work the code did from its
+	// placing to its failure, in invocations' worth (jitRegSpent).
+	Age int64
+	// Budget is, for a deoptimization, the invocations' worth the
+	// interpreter spends on the function before it is compiled again.
+	Budget int64
+	// Deopts counts the function's deoptimizations so far, this one
+	// among them, and Compiles the compiles of it placed before this
+	// event's.
+	Deopts, Compiles int
+}
+
+// JITTierHook, if set, is called at each compile placed and each
+// deoptimization that invalidates code, with what they were for: the
+// tier trace, a host's debug option (v8bench's -jittier), which no hot
+// path reads. Set it before any runtime compiles; it is called on the
+// runtime's goroutine, for a compile in the background at its install.
+var JITTierHook func(JITTierEvent)
+
+// jitTierHook is the runtime's JITTierHook: the host's, or what a test
+// made the runtime with.
+func (r *Runtime) jitTierHook() func(JITTierEvent) {
+	if h := r.jitTest.tierHook; h != nil {
+		return h
+	}
+	return JITTierHook
+}
+
+// The reasons a compile is made for, which the tier trace says
+// (JITTierEvent's Reason): jitRegEntry's tier, jitTierOSR set beside one
+// for code compiled for a frame waiting at a loop.
+const (
+	jitTierFirst uint8 = iota
+	jitTierCallee
+	jitTierDeopt
+	jitTierLearned
+	jitTierFlushed
+	jitTierAgain
+	jitTierOSR = 0x80
+)
+
+var jitTierReasons = [...]string{"first", "callee", "deopt", "learned", "flushed", "again"}
+
+// jitTierReason is what a compile of the function whose state is life is
+// for, callee for its native callers, osr for a frame waiting at a loop.
+func jitTierReason(life *jitEntry, callee, osr bool) uint8 {
+	var t uint8
+	switch {
+	case life.invalid:
+		t = jitTierDeopt
+	case life.reoptPending():
+		t = jitTierLearned
+	case life.regFlushed:
+		t = jitTierFlushed
+	case life.ssaSerial != 0:
+		t = jitTierAgain
+	case callee:
+		t = jitTierCallee
+	}
+	if osr {
+		t |= jitTierOSR
+	}
+	return t
+}
+
+// jitTierInvocations is how many times cl's function, life its state, has
+// run so far, in any tier: in the interpreter (jitRegInvoked), Go's
+// entries of its code and the runs it went on with, the calls Go made
+// without entering it, and its native callers' calls since its code was
+// last placed.
+func (r *Runtime) jitTierInvocations(cl *closure, life *jitEntry) int64 {
+	n := jitRegInvoked(cl, life) + int64(life.starts+life.goOns+life.slowCalls)
+	if l := r.jit.regLinks[r.jitRegKeyOf(cl)]; l != nil {
+		n += int64(l.in)
+	}
+	return n
+}
+
+// jitTierPlaced tells the tier trace of e, the code of cl's function c,
+// placed.
+func (r *Runtime) jitTierPlaced(h func(JITTierEvent), cl *closure, c *regCode, e *jitRegEntry) {
+	life := e.life
+	why := jitTierReasons[e.tier&^jitTierOSR]
+	if e.tier&jitTierOSR != 0 {
+		why += "+osr"
+	}
+	h(JITTierEvent{Func: jitFunctionOf(cl.fn), Reason: why, Length: len(c.rc.Code),
+		Invocations: r.jitTierInvocations(cl, life), Deopts: int(life.deopts), Compiles: int(life.ssaSerial)})
+}
+
+// jitTierInvalidated tells the tier trace of e, the code of cl's function
+// c, invalidated for why, the interpreter to spend budget, in work, before
+// it is compiled again.
+func (r *Runtime) jitTierInvalidated(h func(JITTierEvent), cl *closure, c *regCode, e *jitRegEntry, why string, budget int64) {
+	life := e.life
+	n := int64(max(len(c.rc.Code), 1))
+	h(JITTierEvent{Func: jitFunctionOf(cl.fn), Deopt: true, Reason: why, Length: len(c.rc.Code),
+		Invocations: r.jitTierInvocations(cl, life), Age: r.jitRegAge(c, e) / n, Budget: budget / n,
+		Deopts: int(life.deopts), Compiles: int(life.ssaSerial)})
+}
+
+// jitTierDeoptWhy is what a guard that failed at register pc rpc of f's
+// code c, its window at wb, failed on, for the tier trace: a property
+// site by its kind and what its cache held, or the instruction; entry for
+// an entry's speculation (site < 0).
+func (r *Runtime) jitTierDeoptWhy(f *frame, c *regCode, wb, rpc int, site int64) string {
+	if site < 0 {
+		return "entry"
+	}
+	if rpc < 0 || rpc >= len(c.rc.Code) {
+		return "guard"
+	}
+	op, ok := r.jitRegPropOp(f, c, wb, rpc)
+	if !ok {
+		return c.rc.Code[rpc].Op().String()
+	}
+	kind := "read"
+	switch {
+	case op.write:
+		kind = "write"
+	case op.update:
+		kind = "update"
+	case op.method:
+		kind = "method"
+	}
+	x := op.c
+	if x == nil {
+		return kind + "/unfed"
+	}
+	// The shapes its cache holds but the receiver's, which a miss in Go
+	// may have filled before the guard's failure.
+	var recv *shape
+	if op.recv.IsObject() {
+		recv = op.recv.Object().shape
+	}
+	n := 0
+	other := func(c *propCache) {
+		if c.shape != nil && c.shape != noShape && c.shape != recv {
+			n++
+		}
+	}
+	other(x)
+	if x.poly != nil {
+		for i := range x.poly.n {
+			other(&x.poly.entries[i])
+		}
+	}
+	if sn := x.seenOf(); sn != nil {
+		for i := range sn.n {
+			other(&sn.entries[i])
+		}
+	}
+	switch {
+	case x.fills >= maxCacheFills || n > jitPropertyCases:
+		return kind + "/mega"
+	case n == 0:
+		return kind + "/unfed"
+	case n == 1:
+		return kind + "/mono"
+	}
+	return kind + "/poly"
+}

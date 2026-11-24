@@ -3956,5 +3956,14 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
   `verify`'s module) joins a CPU profile with the code, both from `v8bench
   -jitcode`'s file (AGENTS.md, "Validation"). The file is written by
   `vm.JITCodeHook`, which every compile calls.
+- `v8bench -jittier FILE` writes the tier trace, V8's `--trace-opt` and
+  `--trace-deopt`: a line for each compile placed, with what it was for
+  (first, callee, deopt, learned, flushed, again, `+osr`), and each
+  deoptimization that invalidates code, with what failed -- a property
+  site by its kind and what its cache held (unfed, mono, poly, mega), or
+  the instruction -- the code's age in invocations' worth (`jitRegAge`)
+  and the budget before the next compile; and prints each benchmark's
+  counts of them. `vm.JITTierHook` writes it, called at placing and at
+  `jitRegInvalidate`, never on a hot path.
 - arm64's backend is checked on CI's Linux and macOS arm64 jobs and under
   qemu (`GOARCH=arm64 go test -exec qemu-aarch64`).

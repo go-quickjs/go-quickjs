@@ -243,7 +243,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 				// at one of its own (jitRegLeft). So too a property site's
 				// shape the code was not compiled for, which the site's
 				// learning took (jitRegInlineLeft).
-				r.jitRegInvalidate(cl, owner)
+				r.jitRegInvalidate(cl, owner, "inlined")
 			case learned:
 				// The callee's feedback learned what the owner's code was
 				// not compiled for: compiled again for it (jitRegReopt).

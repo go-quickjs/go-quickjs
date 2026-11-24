@@ -148,6 +148,8 @@ type jitTestConfig struct {
 	compileRepeat int
 	codeHook      func(f JITFunction, text []byte, code *mir.Code)
 	crossHook     func(f JITFunction, code *mir.Code, err error)
+	// tierHook, where set, is the runtime's JITTierHook.
+	tierHook func(JITTierEvent)
 }
 
 // jitSetEncoding sets s's encoding and options as its runtime's test
