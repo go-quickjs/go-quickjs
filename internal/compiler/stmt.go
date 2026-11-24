@@ -825,7 +825,7 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	// Annex B's `for (var a = 0 in o)` assigns its initializer once, before
 	// the object is evaluated.
 	if vd, ok := n.Left.(*ast.VarDecl); ok && vd.Kind == ast.DeclVar && vd.Decls[0].Init != nil {
-		c.compileVarDecl(c.forInInit(vd))
+		c.compileForInInit(vd)
 	}
 	c.compileExpr(n.Right)
 	c.pushExit(exitCursor)
@@ -833,23 +833,35 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	c.popExit()
 }
 
-// forInInit is the declaration to walk for for-in head vd's Annex B
-// initializer. Where a with object or an eval's variable may answer the
-// name, the initializer's write, a reference resolved before its value
-// is made, and each turn's store are probed and stored differently, so
+// compileForInInit walks for-in head vd's Annex B initializer. Where a
+// with object or an eval's variable may answer the name, the initializer
+// resolves its reference before its value is made (B.3.5), and each turn's
+// store resolves it after: the two are probed and stored differently, so
 // the initializer is the write of an identifier of its own, which the
-// register form is told of (regcomp.Record.NoteForInInit).
-func (c *compiler) forInInit(vd *ast.VarDecl) *ast.VarDecl {
+// register form is told of (regcomp.Record.NoteForInInit). With
+// NodeQuirks the initializer resolves its name after its value is made,
+// as V8 does, and so is stored as each turn's value is, the identifier's
+// one write.
+func (c *compiler) compileForInInit(vd *ast.VarDecl) {
 	id, ok := vd.Decls[0].Target.(*ast.Ident)
 	if !ok || c.reg == nil || c.withLimit(id.Name) == 0 {
-		return vd
+		c.compileVarDecl(vd)
+		return
+	}
+	if c.opts.NodeQuirks {
+		if handsName(vd.Decls[0].Init) {
+			c.traceName = c.traceJoin("", id.Name)
+		}
+		c.compileExprNamed(vd.Decls[0].Init, id.Name)
+		c.initBinding(id, vd.Kind)
+		return
 	}
 	init := &ast.VarDecl{Kind: vd.Kind, Start: vd.Start, Decls: []ast.Declarator{{
 		Target: &ast.Ident{Name: id.Name, Start: id.Start},
 		Init:   vd.Decls[0].Init,
 	}}}
 	c.reg.NoteForInInit(vd, init)
-	return init
+	c.compileVarDecl(init)
 }
 
 // beginHeadScope puts a for-in or for-of head's lexical bindings in scope, in

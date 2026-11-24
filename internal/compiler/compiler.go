@@ -49,7 +49,8 @@ type Options struct {
 	// NodeQuirks compiles as V8 does where it departs from the standard.
 	// Annex B then hoists a block-level function named arguments over the
 	// arguments object, and one whose name a function in an enclosing block
-	// already binds.
+	// already binds; and a for-in head's initializer, for (var a = 0 in o),
+	// resolves its name after its value is made.
 	NodeQuirks bool
 	// Text is the original source, retained so that Function.prototype.toString
 	// can reproduce a function's text.

@@ -205,6 +205,16 @@ func TestNodeQuirksLanguage(t *testing.T) {
 		// them in the order they are written.
 		{`var v1; function fn1() {} var v2; function fn2() {}
 Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v1,v2", "v1,fn1,v2,fn2"},
+		// Annex B's for-in initializer resolves its name before its value
+		// is made (B.3.5); V8 resolves it after, so that under a with
+		// statement an initializer that deletes the property writes the
+		// var (KI-87). Each turn's store resolves the name anew in both.
+		{`var o = {d: 0}; with (o) { for (var d = (delete o.d, 5) in {}) ; } o.d + " " + typeof d`,
+			"5 undefined", "undefined number"},
+		{`var o = {d: 0}; with (o) { for (var d = 5 in {k: 1}) ; } o.d + " " + typeof d`, "k undefined", "k undefined"},
+		{`function g() { eval("for (var c = 3 in {}) ;"); return c } g()`, "3", "3"},
+		{`function g() { var c; with ({c: 0}) { for (var c = (log = typeof c, 4) in {}) ; } return log + " " + c } var log; g()`,
+			"number undefined", "number undefined"},
 		// Strict code assigning to a global asks a proxy on the global
 		// object's chain whether it has the name; V8 asks it nothing (KI-34).
 		{`Object.setPrototypeOf(globalThis, new Proxy(Object.getPrototypeOf(globalThis), {has(t, k) {
