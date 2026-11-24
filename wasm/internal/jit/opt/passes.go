@@ -32,7 +32,11 @@ func Optimize(f *Func, check func(pass string)) {
 	run("bce", PhaseBCE, bce)
 	run("split", PhaseSplit, splitCriticalEdges)
 	run("loops", PhaseLoops, func(f *Func) {
-		findLoops(f, dominators(f))
+		// What weighs the allocator's uses is the depths; the natural
+		// loops' headers are only printed, in a listing or a test's.
+		if f.listing || check != nil {
+			findLoops(f, dominators(f))
+		}
 		loopDepths(f)
 	})
 }

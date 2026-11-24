@@ -633,6 +633,9 @@ type Func struct {
 	// noForward says not to forward the globals (forwardGlobals), which
 	// forwarded says the pass did.
 	noForward, forwarded bool
+	// listing says the compile lists the function (Request.Marks), where
+	// each block's loop is printed.
+	listing bool
 }
 
 // NumValues is one past the highest value ID.

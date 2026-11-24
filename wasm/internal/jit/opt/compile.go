@@ -45,7 +45,7 @@ func compile(req *wjit.Request, forward bool) (code *wjit.Code, forwarded bool, 
 		ws.arrayClass = req.Layout.ArrayClass
 	}
 	f := build(ws, req.Module, req.Func)
-	f.noForward = !forward
+	f.noForward, f.listing = !forward, req.Marks
 	defer func() { forwarded = f.forwarded }()
 	Optimize(f, nil)
 	if err := checkLowerable(f); err != nil {
