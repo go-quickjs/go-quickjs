@@ -40,6 +40,9 @@ func encodeValue(rt *vm.Runtime, v any) (vm.Value, error) {
 	case nil:
 		return vm.Null, nil
 	case Value:
+		if x.foreign(rt) {
+			return vm.Undefined, ErrForeignValue
+		}
 		return x.v, nil
 	case bool:
 		return vm.Bool(x), nil
@@ -118,12 +121,12 @@ func encodeAt(rt *vm.Runtime, rv reflect.Value, depth int) (vm.Value, error) {
 	// Promise is the promise it stands for.
 	switch rv.Type() {
 	case valueType:
-		return rv.Interface().(Value).v, nil
+		return encodeValue(rt, rv.Interface().(Value))
 	case promiseType:
 		if rv.IsNil() {
 			return vm.Null, nil
 		}
-		return rv.Interface().(*Promise).Value().v, nil
+		return encodeValue(rt, rv.Interface().(*Promise).Value())
 	}
 	switch rv.Kind() {
 	case reflect.Pointer, reflect.Interface:

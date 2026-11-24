@@ -555,6 +555,16 @@ var ErrMemoryLimit = vm.ErrMemoryLimit
 // ErrClosed is returned by a Runtime that has been closed.
 var ErrClosed = errors.New("quickjs: runtime is closed")
 
+// ErrForeignValue is returned when a Value of one Runtime is handed to
+// another: to Set, Encode or NewArray, as a call's argument or receiver, to
+// Equal, SetModuleValues, Throw, DetachArrayBuffer or Serialize, or as what a
+// Go function returns, which the script calling it then throws. A runtime's
+// objects are read with its own shapes and atoms, and its functions run its
+// own closures on its own goroutine, so no other runtime may hold them: a
+// value moves between runtimes by being cloned, with Serialize and
+// Deserialize. The zero Value belongs to no runtime and is taken by any.
+var ErrForeignValue = errors.New("quickjs: a value of another runtime cannot be used here")
+
 // ErrInternal reports a bug in the engine itself, reached by running a script.
 //
 // A host embedding this package to run untrusted code must not be taken down by
@@ -834,6 +844,9 @@ func (r *Runtime) Set(name string, v any) error {
 func (r *Runtime) DetachArrayBuffer(v Value) error {
 	if r.closed {
 		return ErrClosed
+	}
+	if v.foreign(r.rt) {
+		return ErrForeignValue
 	}
 	return r.wrapError(r.rt.DetachArrayBuffer(v.v))
 }

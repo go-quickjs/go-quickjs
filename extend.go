@@ -84,7 +84,11 @@ func (r *Runtime) SetModuleValues(name string, exports map[string]Value) error {
 
 	out := make([]vm.NativeExport, 0, len(names))
 	for _, k := range names {
-		out = append(out, vm.NativeExport{Name: k, Value: exports[k].v})
+		v := exports[k]
+		if v.foreign(r.rt) {
+			return ErrForeignValue
+		}
+		out = append(out, vm.NativeExport{Name: k, Value: v.v})
 	}
 	r.rt.DefineNativeModule(name, out)
 	return nil
@@ -483,6 +487,9 @@ func (r *Runtime) OnImportMeta(fn func(specifier string, meta Value)) {
 func (r *Runtime) Throw(v Value) error {
 	if r.closed {
 		return ErrClosed
+	}
+	if v.foreign(r.rt) {
+		return ErrForeignValue
 	}
 	return r.rt.ThrowValue(v.v)
 }

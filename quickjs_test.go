@@ -1369,6 +1369,28 @@ func BenchmarkCallGoFunction(b *testing.B) {
 	}
 }
 
+// BenchmarkCallValue is a call from Go of a function the script made, given
+// one of its objects and a number: what a host's callback costs, from the
+// conversion of its arguments to the result.
+func BenchmarkCallValue(b *testing.B) {
+	rt := quickjs.New()
+	defer rt.Close()
+	fn, err := rt.Eval(`(function (o, n) { return o.k + n })`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	obj, err := rt.Eval(`({k: 1})`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := fn.Call(obj, 2); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestClasses(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ src, want string }{

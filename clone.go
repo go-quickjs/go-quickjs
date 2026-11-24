@@ -102,14 +102,17 @@ func (r *Runtime) Serialize(v Value, opts *CloneOptions) (*Serialized, error) {
 	if r.closed || r.rt == nil {
 		return nil, ErrClosed
 	}
-	if v.rt != nil && v.rt != r.rt {
-		return nil, errors.New("quickjs: a value of another runtime cannot be serialized here")
+	if v.foreign(r.rt) {
+		return nil, ErrForeignValue
 	}
 	var transfer []vm.Value
 	var codec *CloneCodec
 	if opts != nil {
 		transfer = make([]vm.Value, len(opts.Transfer))
 		for i, t := range opts.Transfer {
+			if t.foreign(r.rt) {
+				return nil, ErrForeignValue
+			}
 			transfer[i] = r.vmValue(t)
 		}
 		codec = opts.Codec

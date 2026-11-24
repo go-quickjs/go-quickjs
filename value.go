@@ -62,7 +62,8 @@ func (k Kind) String() string {
 
 // Value is a JavaScript value.
 //
-// A Value is only meaningful while the Runtime that produced it is open. Values
+// A Value is only meaningful while the Runtime that produced it is open, and
+// only to that Runtime: another refuses it with ErrForeignValue. Values
 // are compared with Equal and StrictEqual rather than ==, because JavaScript
 // equality is not Go equality.
 //
@@ -74,6 +75,10 @@ type Value struct {
 	v  vm.Value
 	rt *vm.Runtime
 }
+
+// foreign reports whether v belongs to a runtime other than rt, which must
+// not take it (ErrForeignValue).
+func (v Value) foreign(rt *vm.Runtime) bool { return v.rt != nil && v.rt != rt }
 
 // Kind returns the value's type, distinguishing arrays and functions from plain
 // objects because that is usually what a caller wants to branch on.
@@ -179,6 +184,8 @@ func (v Value) Equal(other Value) (bool, error) {
 		if rt = other.rt; rt == nil {
 			return true, nil
 		}
+	} else if other.foreign(rt) {
+		return false, ErrForeignValue
 	}
 	// Loose equality can call user code through valueOf, so it can fail.
 	res, err := rt.Call(rt.NewFunction("", 2, looseEqualsNative), vm.Undefined,
@@ -279,6 +286,9 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	}
 	if !vm.IsCallable(v.v) {
 		return Value{}, fmt.Errorf("quickjs: %s is not a function", v.Kind())
+	}
+	if this.foreign(v.rt) {
+		return Value{}, ErrForeignValue
 	}
 	vals := make([]vm.Value, len(args))
 	for i, a := range args {

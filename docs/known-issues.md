@@ -237,7 +237,14 @@ Paths are relative to this repository; `go-intl:` paths are in
   from both, under `-race`, races.
 - **Expected:** an error from `Set`, `Encode`, a call given a foreign
   argument, `Equal` and `SetModuleValues`, as clone gives one.
-- **Status:** open.
+- **Status:** fixed. A `Value` already carried its runtime; every entry that
+  takes one now compares it with the runtime it is handed to and returns
+  `ErrForeignValue` for another's: the encoder, which `Set`, `Encode`,
+  `NewArray`, a call's arguments, a promise's settling, `SetModule` and a Go
+  function's result go through, and a call's receiver, `Equal`,
+  `SetModuleValues`, `Throw`, `DetachArrayBuffer` and `Serialize` with its
+  transfer list. The zero `Value` is no runtime's and is taken by any.
+  - Test: `TestForeignValueRefused`, `TestForeignValueRefusedConcurrently`.
 
 ### KI-83 A rooted filesystem writes through a link out of its root
 - **Where:** `stdlib/fs.go`, `fsHost.resolve`. A path that exists is
