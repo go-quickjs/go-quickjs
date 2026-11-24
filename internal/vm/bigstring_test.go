@@ -10,10 +10,9 @@ import (
 // zeros not counted. A string past it is no BigInt, as a malformed one is
 // not.
 func TestBigIntStringLimit(t *testing.T) {
-	t.Parallel()
 	// Its digits' strings, at the limits, and their parses: 1.2 GB at
-	// its peak.
-	heavy(t)
+	// its peak, 2.4 GB on a 32-bit platform.
+	heavyAlone(t)
 	for _, c := range []struct {
 		prefix string
 		digit  string

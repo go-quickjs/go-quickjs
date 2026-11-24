@@ -9,12 +9,12 @@ import "testing"
 // down (KI-98). Under a limit the limit refuses it sooner
 // (TestTypedArrayIterableSources, in the root package).
 func TestTypedArrayFromEndlessIterable(t *testing.T) {
-	t.Parallel()
 	if testing.Short() {
 		t.Skip("the refusal only arrives after 2 GiB of values")
 	}
-	// 2 GiB of values, and the 1.6 GiB they were grown from.
-	heavy(t)
+	// 2 GiB of values, and the 1.6 GiB they were grown from; on a 32-bit
+	// platform 256 MiB of them, and the slices they were grown through.
+	heavyAlone(t)
 	const tooLarge = "RangeError: the typed array length is too large"
 	for _, src := range []string{
 		`new Uint8Array(endless)`,

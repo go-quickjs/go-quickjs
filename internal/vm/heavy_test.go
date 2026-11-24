@@ -20,9 +20,9 @@ var heavySlots = make(chan struct{}, heavyLimit())
 
 // heavyLimit is how many heavy tests run at once: QUICKJS_VM_HEAVY's
 // number, or 2 -- or 1 on a 32-bit platform, whose process has 4 GB of
-// address space, where TestTypedArrayFromEndlessIterable and
-// TestBigIntStringLimit each peak at 2.4 GB, and two of them at once ran
-// the package out of memory.
+// address space, and where the heavy tests that run in parallel there,
+// TestStrAppendRandom's seeds and TestStrAppend, take up to 0.9 GB each
+// beside the rest (the two largest run alone there, heavyAlone).
 func heavyLimit() int {
 	var n int
 	if _, err := fmt.Sscanf(os.Getenv("QUICKJS_VM_HEAVY"), "%d", &n); err == nil && n > 0 {
@@ -45,4 +45,22 @@ func heavy(t *testing.T) {
 	heavySlots <- struct{}{}
 	t.Cleanup(func() { <-heavySlots })
 	t.Cleanup(collector.enterHeavy(t.Name()))
+}
+
+// heavyAlone has t, a test whose blocks on a 32-bit platform take much of
+// the 4 GB of address space a process has there, run in parallel as a
+// heavy test on a 64-bit platform, and on a 32-bit one among the package's
+// serial tests, beside which no parallel test runs. TestBigIntStringLimit's
+// strings, 2.4 GB there, and TestTypedArrayFromEndlessIterable's slices,
+// each a block larger than the last, beside the parallel tests -- each
+// other kept apart by heavy -- had reached 3.6 to 4.1 GB in use, and the
+// package ran out of memory in one run of three. A test calls it in place
+// of t.Parallel, and nothing of it may assume it runs in parallel.
+func heavyAlone(t *testing.T) {
+	t.Helper()
+	if strconv.IntSize == 32 {
+		return
+	}
+	t.Parallel()
+	heavy(t)
 }
