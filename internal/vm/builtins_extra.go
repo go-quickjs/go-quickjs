@@ -64,7 +64,7 @@ func (r *Runtime) initArrayExtras2() {
 			if err != nil {
 				return Undefined, err
 			}
-			removeCount = int64(clampFloatIndex(c, int(a.n-start)))
+			removeCount = clampCount64(c, a.n-start)
 			inserted = args[2:]
 		}
 		if a.n+int64(len(inserted))-removeCount > maxArrayLength {
@@ -350,7 +350,7 @@ func (r *Runtime) initArrayExtras2() {
 			if err != nil {
 				return Undefined, err
 			}
-			removeCount = int64(clampFloatIndex(c, int(a.n-start)))
+			removeCount = clampCount64(c, a.n-start)
 			inserted = args[2:]
 		}
 		n := a.n + int64(len(inserted)) - removeCount

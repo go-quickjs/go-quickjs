@@ -359,3 +359,17 @@ func (r *Runtime) relativeIndex64(v Value, length, def int64) (int64, error) {
 	}
 	return int64(n), nil
 }
+
+// clampCount64 is f, an integer or an infinity, clamped to 0 through
+// size: a count of an array-like's elements, whose length may be past
+// what an int holds on a 32-bit platform, where clampFloatIndex's int had
+// cut 2^53 - 1 to -1.
+func clampCount64(f float64, size int64) int64 {
+	if !(f > 0) {
+		return 0
+	}
+	if f > float64(size) {
+		return size
+	}
+	return int64(f)
+}

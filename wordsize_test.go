@@ -25,8 +25,16 @@ func TestLengthsPastAnInt32(t *testing.T) {
 		`var r = /a/g; r.lastIndex = 2**32 + 1; r.exec("aaa"); r.lastIndex`:                                            "0",
 		`var q = /(?:)/g; q.lastIndex = 2**32 + 1; q[Symbol.replace]("aaa", ""); q.lastIndex`:                          "0",
 		`var p = {length: 2**31+2}; Array.prototype.splice.call(p, 2**31, 1); p.length`:                                "2147483649",
-		`try { new Uint8Array(new ArrayBuffer(8), 2**32) } catch (e) { e.name }`:                                       "RangeError",
-		`try { new Uint8Array(8).set([1], 2**32) } catch (e) { e.name }`:                                               "RangeError",
+		// A count past an int32, clamped to what is left of a length past
+		// one: 2^53 - 1 had been cut to -1 (test262's splice
+		// create-species-length-exceeding-integer-limit and toSpliced
+		// length-clamped-to-2pow53minus1).
+		`var o = {9007199254740989: 1, 9007199254740990: 2, length: 2**53+20}; Array.prototype.toSpliced.call(o, 0, 2**53-3).join()`: "1,2",
+		`var n, s = []; s.constructor = {[Symbol.species]: function (k) { n = k; throw "stop" }};
+		 try { Array.prototype.splice.call(new Proxy(s, {get: (t, k) => k === "length" ? 2**53+2 : t[k]}), 0, 2**53+4) } catch (e) {} n`: "9007199254740991",
+		`try { Array.prototype.splice.call({length: 2**32+3, get 1() { throw "stop" }}, 1, 2**32) } catch (e) { e === "stop" ? "stopped" : e.name }`: "RangeError",
+		`try { new Uint8Array(new ArrayBuffer(8), 2**32) } catch (e) { e.name }`:                                                                     "RangeError",
+		`try { new Uint8Array(8).set([1], 2**32) } catch (e) { e.name }`:                                                                             "RangeError",
 	} {
 		rt := quickjs.New()
 		v, err := rt.Eval(src)

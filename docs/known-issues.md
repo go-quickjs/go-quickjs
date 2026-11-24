@@ -447,6 +447,13 @@ Paths are relative to this repository; `go-intl:` paths are in
   longest there is V8's for 32 bits, 2^28 - 16. `sort` and `String.raw` of a
   length of 2^31 take long, but V8 runs out of memory on the first and grows
   without bound on the second.
+- **Found later, fixed:** `splice` and `toSpliced` on an array-like longer
+  than 2^31 cut what was left of it past `start` to an int before clamping
+  the count to delete, so a count of 2^53 - 1 became -1: `toSpliced` threw
+  "the result would be too long" for a result of two elements, `splice`
+  created its species of the wrong length, and a count of 2^32 removed 2
+  elements. Four test262 files failed on 386 for it. The count is clamped
+  as a 64-bit integer, and `TestLengthsPastAnInt32` pins the three cases.
 
 ### KI-65 A realm lives as long as its runtime
 - **Where:** `internal/vm/realm.go`, what the runtime keeps of a realm.
