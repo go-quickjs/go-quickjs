@@ -598,7 +598,12 @@ func TestJITArrayGrowthLimits(t *testing.T) {
 			cfg.MemoryLimit = 8 << 20
 		}
 		r := jitRuntimeForTest(t, cfg)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// With a memory limit, the limit stops the loop; the deadline
+		// only bounds a run that never meets it. Near the limit each
+		// allocation may wait on the collector, which under checkptr,
+		// beside the package's other tests on a loaded runner, took the
+		// run past 13 s, where 2 s had been given it.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if !memory {
 			// A second only bounds the endless loop: it must outlast the
 			// loop's first compile, which under checkptr on a loaded

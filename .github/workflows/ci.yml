@@ -189,7 +189,9 @@ jobs:
   native-boundary:
     name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The native execution lane's packages run one after another and take
+    # windows-latest's Go 1.24 job past 27 minutes; room until it is cut.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
