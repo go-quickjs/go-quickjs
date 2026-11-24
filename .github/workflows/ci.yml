@@ -189,9 +189,7 @@ jobs:
   native-boundary:
     name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
-    # The checkptr lane's internal/vm takes 18 of its 20 minutes on a
-    # windows-latest runner; these limits give it room until its cost is cut.
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -236,7 +234,11 @@ jobs:
       # taken slow runners past the job's 30 minutes. A lane stops at its
       # first failing command, as bash -e had the step stop; each lane's
       # output goes to a file, printed in full once both are done, so that
-      # a failure reads as it did.
+      # a failure reads as it did. The checkptr lane leaves out the vm
+      # tests whose cost is not native code's pointers -- the native
+      # handlers' generation, the compile's growth with a function's size,
+      # arm64's encoding of long code, the JIT's budget over many runtimes
+      # and realms -- which the native execution lane runs.
       - name: Exercise native execution, cross-check the compiler and native pointer lifetimes
         shell: bash
         run: |
@@ -249,7 +251,7 @@ jobs:
           }
           # Cancelled at the job's timeout, the lanes' output so far.
           trap 'show; exit 1' INT TERM
-          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=30m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower' > "$RUNNER_TEMP/checkptr.log" 2>&1 &
+          go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower' -skip 'TestRegNativeGenerated|TestJITCompileLinear|TestJITLongCodeCompilesARM64|TestJITLoweringsOnlyInRoom|TestJITRegRealmsWithinTheBudgetClocked' > "$RUNNER_TEMP/checkptr.log" 2>&1 &
           checkptr=$!
           if { (go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native') && go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'; } > "$RUNNER_TEMP/native.log" 2>&1; then native=0; else native=$?; fi
           if wait $checkptr; then lifetimes=0; else lifetimes=$?; fi
