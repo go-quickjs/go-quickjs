@@ -27,8 +27,8 @@ import "slices"
 // spillWhole spills w for its whole life, its holes gone.
 func (w *web) spillWhole() {
 	w.reg, w.spilled = -1, true
-	if w.full != nil {
-		w.ranges, w.holes, w.full = w.full, nil, nil
+	if sp := w.sp; sp != nil && sp.full != nil {
+		w.ranges, sp.holes, sp.full = sp.full, nil, nil
 	}
 }
 
@@ -224,12 +224,13 @@ func (al *Allocator) posWeight(x int32) float64 { return al.blockW[al.blockOf(x)
 // position, as events numbers them, and evW, the sums of the weights of
 // those before each and of all, the first time w needs them.
 func (al *Allocator) webEvents(w *web) {
-	if w.evW != nil {
+	sp := al.splitOf(w)
+	if sp.evW != nil {
 		return
 	}
 	if len(w.members) == 1 {
 		m := w.members[0]
-		w.ev = al.ev[al.evOff[m]:al.evOff[m+1]]
+		sp.ev = al.ev[al.evOff[m]:al.evOff[m+1]]
 	} else {
 		n := 0
 		for _, m := range w.members {
@@ -240,17 +241,17 @@ func (al *Allocator) webEvents(w *web) {
 			ev = append(ev, al.ev[al.evOff[m]:al.evOff[m+1]]...)
 		}
 		slices.Sort(ev)
-		w.ev = ev
+		sp.ev = ev
 	}
-	evW := append(al.f64s.take(len(w.ev)+1), 0)
-	for _, e := range w.ev {
+	evW := append(al.f64s.take(len(sp.ev)+1), 0)
+	for _, e := range sp.ev {
 		x := 0.0
 		if e&evFree == 0 {
 			x = al.posWeight(evPos(e))
 		}
 		evW = append(evW, evW[len(evW)-1]+x)
 	}
-	w.evW = evW
+	sp.evW = evW
 }
 
 // meetSpan is from the first position two lists of ranges both cover to
@@ -299,9 +300,10 @@ type hole struct {
 func (al *Allocator) plan(a, cur *web) hole {
 	al.events()
 	f := al.f
+	sp := al.splitOf(a)
 	full := a.ranges
-	if a.full != nil {
-		full = a.full
+	if sp.full != nil {
+		full = sp.full
 	}
 	c0, c1 := meetSpan(a.ranges, cur.ranges)
 	if c0 >= c1 {
@@ -310,7 +312,7 @@ func (al *Allocator) plan(a, cur *web) hole {
 	// The holes it has before and after the span, and its last use or
 	// definition before the span and its first after.
 	hp, hn := int32(-1), al.maxPos
-	for _, h := range a.holes {
+	for _, h := range sp.holes {
 		if h.to <= c0 {
 			hp = h.to
 		} else if h.from >= c1 {
@@ -320,12 +322,12 @@ func (al *Allocator) plan(a, cur *web) hole {
 	}
 	al.webEvents(a)
 	last, next := int32(-1), al.maxPos
-	i := firstEvent(a.ev, c0)
+	i := firstEvent(sp.ev, c0)
 	if i > 0 {
-		last = evPos(a.ev[i-1])
+		last = evPos(sp.ev[i-1])
 	}
-	if j := i + firstEvent(a.ev[i:], c1); j < len(a.ev) {
-		next = evPos(a.ev[j])
+	if j := i + firstEvent(sp.ev[i:], c1); j < len(sp.ev) {
+		next = evPos(sp.ev[j])
 	}
 	// The bounds: where the span begins and ends, or as far as the hole
 	// before or after where nothing of a's is between, else a block's
@@ -396,7 +398,7 @@ func (al *Allocator) plan(a, cur *web) hole {
 	// its holes' moves go: its holes, this one with them, must cost less
 	// than all of its uses. A hole over all that is left of its register
 	// is a spill too.
-	if s <= a.start() && e >= a.end() || a.holeW+a.moveW+cost >= a.weight && !al.stress {
+	if s <= a.start() && e >= a.end() || sp.holeW+sp.moveW+cost >= a.weight && !al.stress {
 		return hole{}
 	}
 	return hole{s: s, e: e, cost: cost}
@@ -404,36 +406,38 @@ func (al *Allocator) plan(a, cur *web) hole {
 
 // punch punches hole h in a's register.
 func (al *Allocator) punch(a *web, h hole) {
+	sp := a.sp
 	full := a.ranges
-	if a.full != nil {
-		full = a.full
+	if sp.full != nil {
+		full = sp.full
 	}
 	evW := al.eventWeight(a, h.s, h.e)
 	// A web punched before owns its holes and its ranges, which change in
 	// their arrays where those have room.
 	var holes, out []rng
-	if a.full == nil {
-		holes = al.rngs.take(len(a.holes) + 1)
-		holes = append(holes, a.holes...)
+	if sp.full == nil {
+		holes = al.rngs.take(len(sp.holes) + 1)
+		holes = append(holes, sp.holes...)
 	} else {
-		holes, out = a.holes, a.ranges
+		holes, out = sp.holes, a.ranges
 	}
 	holes = unionInto(&al.rngs, holes, []rng{{h.s, h.e}})
 	if cap(out) < len(full)+len(holes) {
 		out = al.rngs.take(len(full) + len(holes))
 	}
-	a.full, a.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
-	a.holeW += evW
-	a.moveW += h.cost - evW
+	sp.full, sp.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
+	sp.holeW += evW
+	sp.moveW += h.cost - evW
 	a.dense = 0
 }
 
 // eventWeight is the weight of a's uses and definitions in [s, e) but in
 // its holes.
 func (al *Allocator) eventWeight(a *web, s, e int32) float64 {
-	sum := func(s, e int32) float64 { return a.evW[firstEvent(a.ev, e)] - a.evW[firstEvent(a.ev, s)] }
+	sp := a.sp
+	sum := func(s, e int32) float64 { return sp.evW[firstEvent(sp.ev, e)] - sp.evW[firstEvent(sp.ev, s)] }
 	w := sum(s, e)
-	for _, h := range a.holes {
+	for _, h := range sp.holes {
 		if h.from < e && h.to > s {
 			w -= sum(max(h.from, s), min(h.to, e))
 		}
@@ -447,7 +451,8 @@ func (al *Allocator) eventWeight(a *web, s, e int32) float64 {
 func (al *Allocator) holeCost(a *web, full []rng, s, e int32) float64 {
 	f := al.f
 	in := func(x int32) bool { return x >= s && x < e }
-	old := func(x int32) bool { return inHoles(a.holes, x) }
+	holes := a.sp.holes
+	old := func(x int32) bool { return inHoles(holes, x) }
 	// move is the cost of a move from where a is at x0 to where it is at
 	// x1, w each.
 	move := func(in0, in1 bool, w float64) float64 {
@@ -526,15 +531,16 @@ func subtractInto(out, a, b []rng) []rng {
 // position before each, where it is stored, to the one past, where it is
 // loaded.
 func (al *Allocator) slotRanges(w *web) []rng {
+	sp := w.sp
 	switch {
-	case w.full == nil:
+	case sp == nil || sp.full == nil:
 		return w.ranges
 	case w.calls:
-		return w.full
+		return sp.full
 	}
-	out := al.rngs.take(len(w.full) + len(w.holes))
-	for _, r := range w.full {
-		for _, h := range w.holes {
+	out := al.rngs.take(len(sp.full) + len(sp.holes))
+	for _, r := range sp.full {
+		for _, h := range sp.holes {
 			lo, hi := max(r.from, h.from-1), min(r.to, h.to+1)
 			if lo >= hi {
 				continue
@@ -559,13 +565,14 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 	// Into and out of the holes within blocks, by the instruction's start
 	// times two, then the definitions, by it times two plus one.
 	for _, w := range list {
-		if len(w.holes) == 0 {
+		if len(w.holesOf()) == 0 {
 			continue
 		}
+		sp := w.sp
 		// At a bound within a block one member at most lives across it:
 		// the web's ranges say whether one does.
 		across := func(x int32) VReg {
-			if !al.isGap(x) || !liveAt(w.full, x-1) || !liveAt(w.full, x) {
+			if !al.isGap(x) || !liveAt(sp.full, x-1) || !liveAt(sp.full, x) {
 				return None
 			}
 			for _, m := range w.members {
@@ -575,7 +582,7 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 			}
 			return None
 		}
-		for _, h := range w.holes {
+		for _, h := range sp.holes {
 			if m := across(h.from); m != None {
 				keyed = append(keyed, keyedMove{[2]int32{2 * h.from}, Move{V: m, Reg: -1, Copy: !w.calls}})
 			}
@@ -605,7 +612,8 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 	// those that end past a block's end.
 	keyed, entries := keyed[:0], al.entries[:0]
 	for _, w := range list {
-		if len(w.holes) == 0 {
+		holes := w.holesOf()
+		if len(holes) == 0 {
 			continue
 		}
 		for _, m := range w.members {
@@ -618,10 +626,10 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 				if r.to != al.ends[b]+1 {
 					continue
 				}
-				in0 := inHoles(w.holes, al.ends[b])
+				in0 := inHoles(holes, al.ends[b])
 				for k, sc := range f.Blocks[b].Succs {
 					x := al.starts[sc]
-					if in0 == inHoles(w.holes, x) || !liveAt(rs, x) || slices.ContainsFunc(f.Blocks[sc].Phis, func(p Phi) bool { return p.Def == m }) {
+					if in0 == inHoles(holes, x) || !liveAt(rs, x) || slices.ContainsFunc(f.Blocks[sc].Phis, func(p Phi) bool { return p.Def == m }) {
 						continue
 					}
 					switch {
@@ -661,7 +669,7 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 
 // where is w's register at x, or -1 where x is in a hole.
 func (w *web) where(x int32) int16 {
-	if inHoles(w.holes, x) {
+	if inHoles(w.holesOf(), x) {
 		return -1
 	}
 	return int16(w.reg)

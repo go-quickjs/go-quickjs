@@ -92,18 +92,39 @@ type web struct {
 	// owned says ranges is its own, not a register's, and may grow in
 	// place.
 	owned bool
-	// holes are where it gives its register up for others and lives in
-	// its slot, apart and in order, past which ranges keeps what is left
-	// of full, its ranges as they were; holeW is the weight of its uses
-	// and definitions in them, moveW that of the moves into and out of
-	// them.
+	// sp is what splitting knows of it, once it is planned: nil before.
+	sp *webSplit
+}
+
+// webSplit is what splitting knows of a web. holes are where it gives its
+// register up for others and lives in its slot, apart and in order, past
+// which the web's ranges keep what is left of full, its ranges as they
+// were; holeW is the weight of its uses and definitions in them, moveW that
+// of the moves into and out of them. ev are its uses and definitions, evW
+// the sums of their weights (webEvents).
+type webSplit struct {
 	full         []rng
 	holes        []rng
 	holeW, moveW float64
-	// ev are its uses and definitions, evW the sums of their weights
-	// (webEvents).
-	ev  []int32
-	evW []float64
+	ev           []int32
+	evW          []float64
+}
+
+// holesOf is w's holes.
+func (w *web) holesOf() []rng {
+	if w.sp == nil {
+		return nil
+	}
+	return w.sp.holes
+}
+
+// splitOf is what splitting knows of w, made the first time.
+func (al *Allocator) splitOf(w *web) *webSplit {
+	if w.sp == nil {
+		w.sp = al.spPool.fill()
+		*w.sp = webSplit{}
+	}
+	return w.sp
 }
 
 func (w *web) start() int32 { return w.ranges[0].from }
@@ -218,6 +239,8 @@ type Allocator struct {
 	i32s  arena[int32]
 	f64s  arena[float64]
 	pool  chunks[web]
+	// spPool is the webs' webSplits.
+	spPool chunks[webSplit]
 }
 
 // keyedMove is a move of a split register and its key: a block and an
@@ -265,6 +288,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.i32s.reset()
 	al.f64s.reset()
 	al.pool.reset()
+	al.spPool.reset()
 	// Splitting needs a place for each edge's moves (Result.Edge): a
 	// function with a critical edge is allocated without.
 	al.f, al.evKnown = f, false
@@ -979,7 +1003,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			continue
 		}
 		rs := append(rngs.take(1), rng{0, w.arrive + 1})
-		if w.spilled || w.calls || len(w.holes) > 0 {
+		if w.spilled || w.calls || len(w.holesOf()) > 0 {
 			rs = unionInto(rngs, rs, al.slotRanges(w))
 			w.slot = w.fixed
 		}
@@ -988,7 +1012,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 	for _, w := range list {
-		if !(w.spilled || w.calls || len(w.holes) > 0) || w.slot >= 0 {
+		if !(w.spilled || w.calls || len(w.holesOf()) > 0) || w.slot >= 0 {
 			continue
 		}
 		rs := al.slotRanges(w)
@@ -1032,7 +1056,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		if w.calls && w.reg >= 0 {
 			fl = flagStored
 		}
-		if len(w.holes) > 0 {
+		if len(w.holesOf()) > 0 {
 			fl |= flagSplit
 			res.splits += len(w.members)
 		}
@@ -1048,7 +1072,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		// reload it.
 		for _, m := range w.members {
 			crossed(ranges[m], func(k int) {
-				if clobbers[k].call && !inHoles(w.holes, clobAt[k]) {
+				if clobbers[k].call && !inHoles(w.holesOf(), clobAt[k]) {
 					across = append(across, acrossEntry{int32(k), m})
 				}
 			})
@@ -1337,7 +1361,11 @@ func (w *web) density() float64 {
 		for _, r := range w.ranges {
 			n += r.to - r.from
 		}
-		w.dense = (w.weight - w.holeW) / float64(n)
+		holeW := 0.0
+		if w.sp != nil {
+			holeW = w.sp.holeW
+		}
+		w.dense = (w.weight - holeW) / float64(n)
 	}
 	return w.dense
 }
