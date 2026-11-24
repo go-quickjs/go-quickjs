@@ -1118,7 +1118,7 @@ Paths are relative to this repository; `go-intl:` paths are in
     object's property at the index `k` has in the prototype's table.
   - `k` the object's own and read-only, at v0.42.0 and before: the sum
     was written over it.
-- **Status:** fixed in d82a2f6c. `add_prop`'s site takes from its read
+- **Status:** fixed in 5ff0212e. `add_prop`'s site takes from its read
   only an entry that is the store's too, of a plain writable property the
   object has itself. Any other the store fills itself as it writes.
   Found by Octane's Box2D at 30 runs.
