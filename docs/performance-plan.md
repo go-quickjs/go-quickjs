@@ -682,12 +682,6 @@ should not be, or not where it should, or does not learn what it met.
   its handlers known at each instruction, is to be entered again once
   compiled again. `operation({}, 100)` runs in the interpreter.
 
-**The code's shape.**
-
-- `TestJITGivenClosures`: a closure a function gives to a method calling it
-  in a loop is to be inlined with the method within the size rule.
-  `scaledBy` inlines its call past the rule and makes the closure.
-
 **Tests ported, not skipped.** Of the tests that read the stack JIT's
 internals, four were ported to the register JIT's in the removal and run:
 `TestJITClosureCacheRelease`, `TestJITPropertyCallbackRelease`,

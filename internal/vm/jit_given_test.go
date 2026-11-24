@@ -20,8 +20,10 @@ import (
 // which the first build, leaving the call to an exit, did not see:
 // inlining the closure there would call it at every turn, so the second
 // build is refused (unmadeAlone). scaled's loop calls nothing it is
-// given, and passes' first forEach is given a function the caller does not
-// make: neither is inlined, the call of the loop made once for its turns.
+// given, and is inlined only as a small loop that leaves nothing to Go
+// (ssa's smallLoop), as it is; passes' first forEach is given a function
+// the caller does not make, and is not inlined, the call of the loop made
+// once for its turns.
 const givenSetup = `
 	class Vec {
 		constructor(n) { this.storage = []; this.firstIdx = 0; this.lastIdx = 0; for (let i = 0; i < n; i++) this.append(i) }
@@ -105,7 +107,6 @@ func sprintf2(format, a, b string) string {
 // interpreter's, whatever leaves native code inside the loop or the
 // closure, under budgets of polls and of finished invocations or not.
 func TestJITGivenClosures(t *testing.T) {
-	t.Skip("register JIT gap: a callee given a closure is inlined past the size rule: scaledBy inlines its call and makes the closure (docs/performance-plan.md, the register JIT's remaining gaps)")
 	built := jitBuiltIfRegForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -121,9 +122,13 @@ func TestJITGivenClosures(t *testing.T) {
 		// What the method calls is assigned after the call: neither the
 		// method nor the closures.
 		{"swaps", 0, 0},
-		// The loop calls nothing it is given: f's call alone, which the
-		// function makes and calls itself.
-		{"scaledBy", 0, 1},
+		// The loop calls nothing it is given, but is small and leaves
+		// nothing to Go: scaled is inlined by the small-loop rule
+		// (maxInlineLoop, 24 of inlining's units), and f, which the
+		// function makes and calls itself, at its call. scaled is 53 bytes
+		// of V8's bytecode, about 20.4 units at its 2.6 bytes a unit, and
+		// 16 of ours; the stack bytecode's count had it past 24.
+		{"scaledBy", 1, 1},
 		// The first forEach is given a function the caller does not make.
 		{"passes", 1, 1},
 		// A function's, its parameter read with another local
