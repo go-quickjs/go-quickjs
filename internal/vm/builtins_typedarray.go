@@ -1107,11 +1107,15 @@ type typedSource struct {
 }
 
 // maxTypedSourceLength is how many values a typedSource holds at most:
-// maxBufferLength bytes of them on a 64-bit platform, and a quarter of that
-// on a 32-bit one, whose address space could not hold 2 GiB of values beside
-// the slice they were grown from (3.6 GB), and the process would end there
-// instead.
-const maxTypedSourceLength = maxBufferLength >> ((8 - unsafe.Sizeof(uintptr(0))) / 2) / int64(unsafe.Sizeof(Value{}))
+// maxBufferLength bytes of them on a 64-bit platform, and an eighth of that
+// on a 32-bit one, whose 4 GB of address space could not hold 2 GiB of
+// values beside the slice they were grown from (3.6 GB), and the process
+// would end there instead. A quarter was not little enough: growing to
+// 512 MiB passes through slices of 406, 507 and 633 MB, each needing
+// address space of its own where an earlier one's is too short, and in a
+// process whose heap had held 2.4 GB before, the 633 found none
+// (TestTypedArrayFromEndlessIterable, in internal/vm's run).
+const maxTypedSourceLength = maxBufferLength >> ((8 - unsafe.Sizeof(uintptr(0))) * 3 / 4) / int64(unsafe.Sizeof(Value{}))
 
 func (r *Runtime) newTypedSource() *typedSource {
 	return &typedSource{meter: heldMeter{r: r}}

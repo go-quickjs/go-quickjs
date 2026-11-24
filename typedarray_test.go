@@ -296,7 +296,7 @@ func TestTypedArrayLengthIsTheBuffers(t *testing.T) {
 // from may give: as many values as Node takes, where the constructor had cut
 // them at 2**22, and under a memory limit no more than the limit, where
 // neither the constructor nor from had counted them (KI-98). Without a limit
-// one that never ends is refused at 2 GiB of values (512 MiB on a 32-bit
+// one that never ends is refused at 2 GiB of values (256 MiB on a 32-bit
 // platform), which
 // TestTypedArrayFromEndlessIterable, in internal/vm, pins.
 func TestTypedArrayIterableSources(t *testing.T) {

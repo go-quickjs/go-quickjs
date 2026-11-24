@@ -5,7 +5,7 @@ import "testing"
 // TestTypedArrayFromEndlessIterable pins that an iterable a typed array is
 // made from, which is not asked how long it is, is refused by the count of
 // what it has given -- at 2 GiB of values, as large as a buffer may be, on
-// a 64-bit platform and 512 MiB on a 32-bit one -- in a runtime without a memory limit too, rather than taking the process
+// a 64-bit platform and 256 MiB on a 32-bit one -- in a runtime without a memory limit too, rather than taking the process
 // down (KI-98). Under a limit the limit refuses it sooner
 // (TestTypedArrayIterableSources, in the root package).
 func TestTypedArrayFromEndlessIterable(t *testing.T) {

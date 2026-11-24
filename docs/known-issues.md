@@ -700,8 +700,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** fixed. Both collect into one collector (`typedSource`),
   charged to the limit as it grows, as a builder of the script's output is,
   and bounded as a buffer is, at 2 GiB of values (2^27 on a 64-bit
-  platform; on a 32-bit one a quarter of that, 512 MiB, which its address
-  space holds with the slice it grew from), past which it is a RangeError:
+  platform; on a 32-bit one an eighth of that, 256 MiB, which its address
+  space holds with the slices it grew through, even after the process's
+  heap has held gigabytes -- a quarter, 512 MiB, found no room for its last
+  slice in internal/vm's run on 386), past which it is a RangeError:
   a runtime without a limit meets that after 2 to 3 GiB where it had after
   64 MB. Tests:
   `TestTypedArrayIterableSources`, `TestTypedArrayFromEndlessIterable`.
