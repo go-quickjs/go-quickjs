@@ -105,30 +105,36 @@ func copyelim(f *Func) {
 	if !copies {
 		return
 	}
+	// One walk rewrites the uses and drops the copies from their blocks: a
+	// copy dropped keeps its argument, which a later use resolves through.
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
-			for i, a := range v.Args {
-				v.Args[i] = resolve(a)
-			}
+			resolveArgs(v.Args)
 		}
+		keep := b.Values[:0]
 		for _, v := range b.Values {
-			for i, a := range v.Args {
-				v.Args[i] = resolve(a)
+			resolveArgs(v.Args)
+			if v.Op != OpCopy {
+				keep = append(keep, v)
 			}
 		}
+		clear(b.Values[len(keep):])
+		b.Values = keep
 		if b.Control != nil {
 			b.Control = resolve(b.Control)
 		}
-		for i, a := range b.Results {
-			b.Results[i] = resolve(a)
-		}
-	}
-	for _, b := range f.Blocks {
-		b.Values = slices.DeleteFunc(b.Values, isCopy)
+		resolveArgs(b.Results)
 	}
 }
 
-func isCopy(v *Value) bool { return v.Op == OpCopy }
+// resolveArgs makes each of args that is a copy the value it copies.
+func resolveArgs(args []*Value) {
+	for i, a := range args {
+		if a.Op == OpCopy {
+			args[i] = resolve(a)
+		}
+	}
+}
 
 // dce removes the values nothing uses that have no effect, and the phis
 // only they use.

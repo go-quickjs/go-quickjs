@@ -822,7 +822,7 @@ func (g *gen) block(i int, b *Block) {
 		g.predMoves(b)
 	}
 	for _, p := range b.Phis {
-		if r := g.where[p.vreg]; r >= 0 && g.stores(p) && !g.inSlot(p) {
+		if r := g.where[p.vreg]; r >= 0 && g.stores(p) && !g.phiStore[p.vreg] {
 			g.done(p, int(r))
 		}
 	}

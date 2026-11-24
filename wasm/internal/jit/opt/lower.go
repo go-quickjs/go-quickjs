@@ -72,6 +72,12 @@ type lowering struct {
 	// calls are for their out-of-line code (keepWhere).
 	where []int16
 	whBuf []int16
+	// phiDst is where each phi is as its block begins, and phiStore
+	// whether a constant argument is stored into its slot on its edge
+	// (phiMoves), by its register's number: the edges into a block move
+	// into its phis' places, found once.
+	phiDst   []loc
+	phiStore []bool
 }
 
 // reset readies l, kept in a workspace, for function f, keeping the
@@ -82,7 +88,7 @@ func (l *lowering) reset(f *Func, req *wjit.Request) {
 	n := f.NumValues()
 	*l = lowering{f: f, req: req, fn: req.Func, index: grown(l.index, int(f.nextBlock)), inst: l.inst,
 		fused: grown(l.fused, n), byID: l.byID[:0], byVreg: l.byVreg[:0], marking: req.Marks, temps: l.temps[:0],
-		where: l.where[:0], whBuf: l.whBuf[:0]}
+		where: l.where[:0], whBuf: l.whBuf[:0], phiDst: l.phiDst, phiStore: l.phiStore}
 	clear(l.fused)
 }
 
@@ -469,6 +475,14 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	}
 	g.ra = ra
 	g.where = append(g.where[:0], ra.Reg...)
+	g.phiDst = grown(g.phiDst, n)
+	g.phiStore = grown(g.phiStore, n)
+	for i, b := range f.Blocks {
+		for _, p := range b.Phis {
+			g.phiDst[p.vreg] = g.phiLoc(p, i)
+			g.phiStore[p.vreg] = g.stores(p) && g.inSlot(p)
+		}
+	}
 }
 
 // smallCopy is the count of memory.copy v where it is a constant from 1 to
@@ -646,12 +660,11 @@ func (g *lowering) inSlot(p *Value) bool {
 // too, which the phi's block then does not store.
 func (g *lowering) phiMoves(moves []pmove, b, s *Block) []pmove {
 	k := s.predIndex(b)
-	si := int(g.index[s.ID])
 	for _, p := range s.Phis {
 		x := p.Args[k]
-		dst := g.phiLoc(p, si)
+		dst := g.phiDst[p.vreg]
 		moves = append(moves, pmove{dst: dst, src: g.locOf(x), t: p.Type})
-		if x.Op == OpConst && dst.kind != lSlot && g.stores(p) && g.inSlot(p) {
+		if x.Op == OpConst && dst.kind != lSlot && g.phiStore[p.vreg] {
 			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: g.ra.Slot[p.vreg]}, src: g.locOf(x), t: p.Type})
 		}
 	}
