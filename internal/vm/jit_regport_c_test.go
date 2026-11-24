@@ -79,7 +79,7 @@ func jitSiteMegamorphicForTest(t *testing.T, r *Runtime, cl *closure, e *jitEntr
 		if !slices.Contains(regOps, w.Op()) {
 			continue
 		}
-		if site := int(w.C()); site < len(cl.ic) && cl.ic[site].fills >= maxCacheFills {
+		if site := int(w.C()); site < len(cl.ic) && jitCacheMegamorphic(&cl.ic[site]) {
 			return true
 		}
 		if e != nil {

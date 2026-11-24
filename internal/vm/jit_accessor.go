@@ -216,13 +216,23 @@ func (fb *jitFeedback) accessorOf(pc int, c *propCache, key Atom, write bool) (s
 	return a, callee, cl, true
 }
 
+// jitCacheMegamorphic reports whether the site whose cache is c has met
+// more shapes than a polymorphic site is compiled for, as V8's inline
+// caches go megamorphic at their fifth map: the cache's entry and its
+// others (maxPolyEntries) hold four, and each fill past them was a shape
+// they did not hold. The interpreter's cache fills on, to maxCacheFills,
+// before it gives up itself; native code made for such a site reads the
+// receiver's own table and the megamorphic cache from its first compile,
+// rather than leave at each shape past its cases, compiled again for each.
+func jitCacheMegamorphic(c *propCache) bool { return int(c.fills) > 1+maxPolyEntries }
+
 // megamorphicOf is megamorphic's, of either form's code: the site at pc,
 // its cache c (nil for none), a write's or a read's.
 func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.PropertySite) bool {
 	if len(site.Cases)+len(site.Adds) >= jitPropertyCases {
 		return true
 	}
-	if c != nil && c.fills >= maxCacheFills {
+	if c != nil && jitCacheMegamorphic(c) {
 		// An inlined callee's write whose cache gave up for additions
 		// along chains deeper than it holds, which it noted, is compiled
 		// for them (jitSeenSite) -- an initializer a class and its subclasses

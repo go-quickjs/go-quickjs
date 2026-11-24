@@ -368,7 +368,7 @@ func (r *Runtime) jitRegShapeMiss(x *jitRegInlineLevel) bool {
 	default:
 		return false
 	}
-	if site := int(w.C()); site < len(x.cl.ic) && x.cl.ic[site].fills >= maxCacheFills {
+	if site := int(w.C()); site < len(x.cl.ic) && jitCacheMegamorphic(&x.cl.ic[site]) {
 		return false
 	}
 	l := r.jit.regLearnedOf(r.jitRegKeyOf(x.cl))

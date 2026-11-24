@@ -639,9 +639,10 @@ func (r *Runtime) jitRegReadSeen(f *frame, c *regCode, run jitRegRun, rpc int, r
 
 // jitRegSiteMegamorphic reports whether the property site of the register
 // instruction at rpc of c, cl's code, l what it learned, is megamorphic:
-// its cache gave up, or the code met more than its cases hold.
+// its cache met more shapes than a polymorphic site holds
+// (jitCacheMegamorphic), or the code met more than its cases hold.
 func (r *Runtime) jitRegSiteMegamorphic(cl *closure, c *regCode, l *jitEntry, rpc int) bool {
-	if site := int(c.rc.Code[rpc].C()); site < len(cl.ic) && cl.ic[site].fills >= maxCacheFills {
+	if site := int(c.rc.Code[rpc].C()); site < len(cl.ic) && jitCacheMegamorphic(&cl.ic[site]) {
 		return true
 	}
 	for i := range l.poly {
