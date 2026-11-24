@@ -301,6 +301,8 @@ func TestTypedArrayLengthIsTheBuffers(t *testing.T) {
 // TestTypedArrayFromEndlessIterable, in internal/vm, pins.
 func TestTypedArrayIterableSources(t *testing.T) {
 	t.Parallel()
+	// 0.5 GB at its peak on a 32-bit platform.
+	heavy(t)
 	checkEval(t, `var src = [], out = []
 		for (let i = 0; i < 5e6; i++) src.push(i / 2)
 		for (const make of [() => new Float64Array(src), () => Float64Array.from(src),

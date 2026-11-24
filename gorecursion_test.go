@@ -11,6 +11,8 @@ import (
 // Go's limit, which ends the process with nothing to recover (KI-04).
 func TestGoRecursionIsBounded(t *testing.T) {
 	t.Parallel()
+	// 1.3 GB of goroutine stack at its peak on a 32-bit platform.
+	heavy(t)
 	const rangeError = "RangeError: maximum call stack size exceeded"
 	catch := func(src string) string {
 		return `try { ` + src + `; "finished" } catch (e) { e.name + ": " + e.message }`

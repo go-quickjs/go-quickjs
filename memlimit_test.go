@@ -50,6 +50,8 @@ func TestMemoryLimit(t *testing.T) {
 // machine's memory.
 func TestMemoryLimitDoubling(t *testing.T) {
 	t.Parallel()
+	// 0.8 GB at its peak on a 32-bit platform.
+	heavy(t)
 	const limit = 16 << 20
 	loop := func(init, step, out string) string {
 		return fmt.Sprintf(`function f() { %s; for (var i = 0; i < 22; i++) { %s } return %s } f().length`, init, step, out)

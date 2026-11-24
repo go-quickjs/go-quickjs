@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 )
 
@@ -18,11 +19,17 @@ import (
 var heavySlots = make(chan struct{}, heavyLimit())
 
 // heavyLimit is how many heavy tests run at once: QUICKJS_VM_HEAVY's
-// number, or 2.
+// number, or 2 -- or 1 on a 32-bit platform, whose process has 4 GB of
+// address space, where TestTypedArrayFromEndlessIterable and
+// TestBigIntStringLimit each peak at 2.4 GB, and two of them at once ran
+// the package out of memory.
 func heavyLimit() int {
 	var n int
 	if _, err := fmt.Sscanf(os.Getenv("QUICKJS_VM_HEAVY"), "%d", &n); err == nil && n > 0 {
 		return n
+	}
+	if strconv.IntSize == 32 {
+		return 1
 	}
 	return 2
 }
