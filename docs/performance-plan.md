@@ -687,9 +687,6 @@ should not be, or not where it should, or does not learn what it met.
 - `TestJITGivenClosures`: a closure a function gives to a method calling it
   in a loop is to be inlined with the method within the size rule.
   `scaledBy` inlines its call past the rule and makes the closure.
-- `TestJITSSAContextsGrow`: native calls that run out of contexts are to
-  have more of them at once, up to as many as the VM's frames may take.
-  A deep native recursion gets 256 contexts, not 8,192.
 
 **Tests ported, not skipped.** Of the tests that read the stack JIT's
 internals, four were ported to the register JIT's in the removal and run:

@@ -6233,11 +6233,13 @@ func TestJITSSAProfitReturns(t *testing.T) {
 // many as there are -- up to as many as the VM's frames may take
 // (jitContextsMost), those in use left where they are: a recursion 40
 // deep, which ran out of the 4 at first, then 8, 16 and 32, Go finishing
-// every level, stays in native code once there are 64. One without end
-// takes them all, and throws the interpreter's RangeError. Each answer is
-// the interpreter's.
+// every level, stays in native code once there are 64, and one 6,000 deep
+// takes them all. A recursion without end throws the interpreter's
+// RangeError; it takes no context, since it never returns -- a function's
+// returns count its runs, as V8 spends a function's budget at its returns
+// and its loops -- and so is never compiled. Each answer is the
+// interpreter's.
 func TestJITSSAContextsGrow(t *testing.T) {
-	t.Skip("register JIT gap: native contexts do not grow with a deep native recursion: 256 contexts, not 8,192 (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -6248,7 +6250,8 @@ func TestJITSSAContextsGrow(t *testing.T) {
 		function forever(n){return forever(n+1)+1}
 		function tryForever(){try{return String(forever(0))}catch(e){return e.name}}`
 	rounds := []string{`String(drive(200,40))`, `String(drive(200,40))`, `String(drive(200,40))`, `String(drive(200,40))`,
-		`String(drive(200,40))`, `String(drive(50,150))`, `String(drive(200,40))`, `tryForever()`, `String(drive(200,40))`}
+		`String(drive(200,40))`, `String(drive(50,150))`, `String(drive(200,40))`, `tryForever()`, `String(drive(4,6000))`,
+		`String(drive(200,40))`}
 	want := newTestRuntime(t, Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -6270,10 +6273,10 @@ func TestJITSSAContextsGrow(t *testing.T) {
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
-		if i == 4 || i == 8 {
-			// Past round 7's recursion without end, as many as the VM's
+		if i == 4 || i == 9 {
+			// Past round 8's recursion 6,000 deep, as many as the VM's
 			// frames take.
-			if n, low, high := len(r.jit.ssaCtxs), map[int]int{4: 16 * jitContexts, 8: r.maxFrames}[i], map[int]int{4: 16 * jitContexts, 8: r.jitContextsMost()}[i]; n < low || n > high {
+			if n, low, high := len(r.jit.ssaCtxs), map[int]int{4: 16 * jitContexts, 9: r.maxFrames}[i], map[int]int{4: 16 * jitContexts, 9: r.jitContextsMost()}[i]; n < low || n > high {
 				t.Fatalf("round %d: %d contexts, want %d to %d", i, n, low, high)
 			}
 			if n := r.jit.unwound - unwound; n != 0 {
