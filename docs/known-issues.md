@@ -4,9 +4,9 @@ KI-01 to KI-60 were found by a review of the engine, the standard library and
 go-intl in September 2026, after v0.5.0, and were fixed in order of the harm
 they allow; later issues are numbered as they are found and filed under their
 severity. KI-81 to KI-96 were found by an engine review in November 2026, and
-KI-97 while its findings were reproduced. Each issue was reproduced unless it
-is marked *plausible*. The commit that fixes an issue names it:
-`git log --grep KI-01`.
+KI-97 and KI-99 while its findings were reproduced and fixed. Each issue was
+reproduced unless it is marked *plausible*. The commit that fixes an issue
+names it: `git log --grep KI-01`.
 
 - **P0**: a script can corrupt the engine, crash the host process, or reach
   past a boundary it should not.
@@ -1510,3 +1510,29 @@ Paths are relative to this repository; `go-intl:` paths are in
   waiting on the host, is reported once, as its rejection. A deferred
   namespace's read that throws the module's error no longer reports it as
   well (`TestModuleFailureIsNotAlsoUnhandled`, `TestModuleErrorIsReportedOnce`).
+
+### KI-99 A `v`-mode class takes a range or a string where the grammar does not
+- **Where:** `internal/regexp/classset.go`, `parseClassSetBody`, which took
+  any operand for `&&` and `--`, and the negations in `parseClassSet` and
+  `parseClassSetOperand`, which asked whether the class's value still held a
+  string after its operations rather than whether it was written with one.
+- **Effect:** two early errors were not made. A range was taken as an
+  operand of `&&` or `--`, though the grammar's operands of those
+  (ClassSetOperand) are a nested class, a `\q{...}` and a single character:
+  `/[a-z&&b]/v` and `/[b--a-z]/v` compiled. And a negated class written with
+  what may denote a string compiled where its operations left none:
+  `/[^\q{AB}--\q{AB}]/v` and `/[^\p{RGI_Emoji}--\p{RGI_Emoji}]/v` to a class
+  of every character, and `/[^\q{AB|c}--\q{ab}]/iv` once its operands were
+  folded. The specification decides this by the text: it is a Syntax Error
+  for a negated class if MayContainStrings of its contents is true, and
+  MayContainStrings of a ClassSubtraction is that of its first
+  ClassSetOperand, of a ClassIntersection true only if both operands' are
+  (ECMA-262, RegExp's early errors and MayContainStrings).
+- **Repro:** `new RegExp("[a-z&&b]", "v")` and
+  `new RegExp("[^\q{AB}--\q{AB}]", "v")` return a RegExp.
+- **Expected:** a SyntaxError for both, as Node throws. QuickJS throws for
+  the first and accepts the second.
+- **Status:** fixed. `parseClassSetOperand` reports whether it parsed a
+  range, which the operators refuse, and a class's value carries the
+  grammar's MayContainStrings, which the negations ask
+  (`TestClassSetEarlyErrors`).

@@ -30,6 +30,11 @@ type classSetValue struct {
 	// single-character sequence is a code point and joins set instead, which is
 	// what makes [\q{a}] and [a] the same class.
 	strings [][]rune
+	// mayStrings is the grammar's MayContainStrings: whether the expression
+	// is written with something that can denote a string, whatever the set
+	// operations leave of it. A negated class may not be, so that
+	// [^\q{ab}--\q{ab}] is a syntax error rather than everything.
+	mayStrings bool
 }
 
 func newClassSetValue() *classSetValue {
@@ -43,6 +48,7 @@ func (v *classSetValue) addString(s []rune) {
 		v.set.addChar(s[0])
 		return
 	}
+	v.mayStrings = true
 	for _, have := range v.strings {
 		if sameRunes(have, s) {
 			return
@@ -66,6 +72,7 @@ func sameRunes(a, b []rune) bool {
 // union adds everything in other.
 func (v *classSetValue) union(other *classSetValue) {
 	v.set.addSet(other.set)
+	v.mayStrings = v.mayStrings || other.mayStrings
 	for _, s := range other.strings {
 		v.addString(s)
 	}
@@ -85,9 +92,11 @@ func (v *classSetValue) intersect(other *classSetValue) {
 		}
 	}
 	v.strings = kept
+	v.mayStrings = v.mayStrings && other.mayStrings
 }
 
-// subtract removes everything in other.
+// subtract removes everything in other. What it may denote is still the
+// first operand's.
 func (v *classSetValue) subtract(other *classSetValue) {
 	v.set = setFromRanges(subtractRanges(v.set.positive(), other.set.positive()),
 		v.set.foldCase)
@@ -234,7 +243,7 @@ func (p *parser) parseClassSet() (node, error) {
 		return nil, p.errorf("unterminated character class")
 	}
 	if negated {
-		if len(v.strings) > 0 {
+		if v.mayStrings {
 			// There is no sensible "every string but these".
 			return nil, p.errorf("a negated class cannot contain a string")
 		}
@@ -249,7 +258,7 @@ func (p *parser) parseClassSetBody() (*classSetValue, error) {
 		return nil, err
 	}
 	defer p.unnest()
-	acc, err := p.parseClassSetOperand()
+	acc, accRange, err := p.parseClassSetOperand()
 	if err != nil {
 		return nil, err
 	}
@@ -258,38 +267,53 @@ func (p *parser) parseClassSetBody() (*classSetValue, error) {
 		return newClassSetValue(), nil
 	}
 
-	// The first operator fixes which one the rest of the body may use.
+	// The first operator fixes which one the rest of the body may use. Its
+	// operands are single characters, strings and nested classes: a range
+	// is written in a union, so that [a-z&&b] is not read as either of
+	// [a-[z&&b]] and [[a-z]&&b].
 	switch {
 	case p.peek() == '&' && p.peekAt(1) == '&':
+		if accRange {
+			return nil, p.errorf("a class range cannot be an operand of \"&&\"")
+		}
 		for p.peek() == '&' && p.peekAt(1) == '&' {
 			p.pos += 2
 			if p.peek() == '&' {
 				return nil, p.errorf("\"&&&\" is not a valid class operator")
 			}
-			rhs, err := p.parseClassSetOperand()
+			rhs, rhsRange, err := p.parseClassSetOperand()
 			if err != nil {
 				return nil, err
 			}
 			if rhs == nil {
 				return nil, p.errorf("\"&&\" needs an operand on both sides")
 			}
+			if rhsRange {
+				return nil, p.errorf("a class range cannot be an operand of \"&&\"")
+			}
 			acc.intersect(rhs)
 		}
 	case p.peek() == '-' && p.peekAt(1) == '-':
+		if accRange {
+			return nil, p.errorf("a class range cannot be an operand of \"--\"")
+		}
 		for p.peek() == '-' && p.peekAt(1) == '-' {
 			p.pos += 2
-			rhs, err := p.parseClassSetOperand()
+			rhs, rhsRange, err := p.parseClassSetOperand()
 			if err != nil {
 				return nil, err
 			}
 			if rhs == nil {
 				return nil, p.errorf("\"--\" needs an operand on both sides")
 			}
+			if rhsRange {
+				return nil, p.errorf("a class range cannot be an operand of \"--\"")
+			}
 			acc.subtract(rhs)
 		}
 	default:
 		for {
-			rhs, err := p.parseClassSetOperand()
+			rhs, _, err := p.parseClassSetOperand()
 			if err != nil {
 				return nil, err
 			}
@@ -306,18 +330,18 @@ func (p *parser) parseClassSetBody() (*classSetValue, error) {
 }
 
 // parseClassSetOperand parses one operand, returning nil at the end of the
-// class or before an operator.
-func (p *parser) parseClassSetOperand() (*classSetValue, error) {
+// class or before an operator, and whether it is a range.
+func (p *parser) parseClassSetOperand() (*classSetValue, bool, error) {
 	if p.atEnd() {
-		return nil, p.errorf("unterminated character class")
+		return nil, false, p.errorf("unterminated character class")
 	}
 	switch {
 	case p.peek() == ']':
-		return nil, nil
+		return nil, false, nil
 	case p.peek() == '&' && p.peekAt(1) == '&':
-		return nil, nil
+		return nil, false, nil
 	case p.peek() == '-' && p.peekAt(1) == '-':
-		return nil, nil
+		return nil, false, nil
 	case p.peek() == '[':
 		// A nested class, which is what makes the operators worth having.
 		v := newClassSetValue()
@@ -325,47 +349,50 @@ func (p *parser) parseClassSetOperand() (*classSetValue, error) {
 		inner := p.eat('^')
 		body, err := p.parseClassSetBody()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !p.eat(']') {
-			return nil, p.errorf("unterminated character class")
+			return nil, false, p.errorf("unterminated character class")
 		}
 		if inner {
-			if len(body.strings) > 0 {
-				return nil, p.errorf("a negated class cannot contain a string")
+			if body.mayStrings {
+				return nil, false, p.errorf("a negated class cannot contain a string")
 			}
 			body.complement()
 		}
 		v.union(body)
-		return v, nil
+		return v, false, nil
 	}
 
 	return p.parseClassSetChars()
 }
 
 // parseClassSetChars parses a single character, a shorthand or a \q{} string
-// list, plus the range that may follow a single character.
-func (p *parser) parseClassSetChars() (*classSetValue, error) {
+// list, plus the range that may follow a single character, and reports
+// whether it parsed a range.
+func (p *parser) parseClassSetChars() (*classSetValue, bool, error) {
 	lo, kind, set, strs, err := p.parseClassSetAtom()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	v := newClassSetValue()
 	switch kind {
 	case classAtomSet:
 		v.set.addSet(set)
-		return p.foldOperand(v), nil
+		return p.foldOperand(v), false, nil
 	case classAtomStringSet:
 		v.set.addSet(set)
 		for _, s := range strs {
 			v.addString(s)
 		}
-		return p.foldOperand(v), nil
+		// A property of strings may denote one, whatever it holds.
+		v.mayStrings = true
+		return p.foldOperand(v), false, nil
 	case classAtomStrings:
 		for _, s := range strs {
 			v.addString(s)
 		}
-		return p.foldOperand(v), nil
+		return p.foldOperand(v), false, nil
 	}
 
 	// A single `-` between two atoms is a range, exactly as under `u`. A
@@ -374,19 +401,19 @@ func (p *parser) parseClassSetChars() (*classSetValue, error) {
 		p.pos++
 		hi, hiKind, _, _, err := p.parseClassSetAtom()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if hiKind != classAtomChar {
-			return nil, p.errorf("a class range cannot end with a class")
+			return nil, false, p.errorf("a class range cannot end with a class")
 		}
 		if lo > hi {
-			return nil, p.errorf("range out of order in character class")
+			return nil, false, p.errorf("range out of order in character class")
 		}
 		v.set.addRange(lo, hi)
-		return p.foldOperand(v), nil
+		return p.foldOperand(v), true, nil
 	}
 	v.set.addChar(lo)
-	return p.foldOperand(v), nil
+	return p.foldOperand(v), false, nil
 }
 
 // foldsSets reports whether the i and v flags are both in force, where a

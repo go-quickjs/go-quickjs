@@ -447,6 +447,37 @@ func TestSyntaxErrors(t *testing.T) {
 	}
 }
 
+// TestClassSetEarlyErrors pins two of a v-mode class's early errors, as
+// Node has them. A range is an operand of a union alone: the operands of &&
+// and -- are characters, strings and nested classes, so that [a-z&&b] is a
+// syntax error while [[a-z]&&b] and [a-z[b]] are classes. And a negated class
+// may not be written with what may denote a string (MayContainStrings),
+// whatever the operations leave of it: a difference may if its first
+// operand may, an intersection if both do.
+func TestClassSetEarlyErrors(t *testing.T) {
+	for _, tt := range []struct{ pattern, flags string }{
+		{`[a-z&&b]`, "v"}, {`[b&&a-z]`, "v"}, {`[a-z--b]`, "v"}, {`[b--a-z]`, "v"},
+		{`[b--c--a-z]`, "v"}, {`[[b]&&c&&a-z]`, "v"},
+		{`[^\q{AB}--\q{AB}]`, "v"}, {`[^[\q{AB}--\q{AB}]]`, "v"}, {`[^[^\q{AB}--\q{AB}]]`, "v"},
+		{`[^\q{AB|c}--\q{ab}]`, "iv"}, {`[^\p{RGI_Emoji}--\p{RGI_Emoji}]`, "v"}, {`[^\q{}]`, "v"},
+		{`[^a\q{}]`, "v"},
+	} {
+		_, err := Compile(tt.pattern, tt.flags)
+		var se *SyntaxError
+		if !errors.As(err, &se) {
+			t.Errorf("/%s/%s: %v, want a syntax error", tt.pattern, tt.flags, err)
+		}
+	}
+	for _, pattern := range []string{
+		`[[a-z]&&b]`, `[b--[a-z]]`, `[a-z[b]]`, `[a-zb-c]`, `[a&&b]`,
+		`[^\q{AB}&&a]`, `[^[\q{AB}&&a]]`, `[^\q{a|b}]`, `[^\p{RGI_Emoji}&&a]`, `[^a&&\q{AB}]`,
+	} {
+		if _, err := Compile(pattern, "v"); err != nil {
+			t.Errorf("/%s/v: %v", pattern, err)
+		}
+	}
+}
+
 func TestLoneSurrogateInSubject(t *testing.T) {
 	// A pattern must be able to match a lone surrogate, since a JavaScript
 	// string may contain one.
