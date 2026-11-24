@@ -1,5 +1,7 @@
 package lsra
 
+import "unsafe"
+
 // arena hands out slices of one buffer, which an allocation empties for the
 // next: the many small lists an allocation makes -- ranges, members, hints
 // -- cost no allocation of their own once the buffer has grown to a
@@ -13,7 +15,7 @@ func (a *arena[T]) take(n int) []T {
 	if len(a.buf)+n > cap(a.buf) {
 		// The slices given out keep the old buffer; the next allocation
 		// begins in this one.
-		a.buf = make([]T, 0, max(2*cap(a.buf), n, 256))
+		a.buf = make([]T, 0, max(2*cap(a.buf), n, firstLen[T]()))
 	}
 	i := len(a.buf)
 	a.buf = a.buf[:i+n]
@@ -45,7 +47,14 @@ func (c *chunks[T]) new() *T {
 		c.i, c.n = c.i+1, 0
 	}
 	if c.i == len(c.bufs) {
-		c.bufs = append(c.bufs, make([]T, 256))
+		// The first chunk is a few kilobytes, each after it twice the one
+		// before up to 256 values: a small function's compile, in a
+		// workspace new to it, makes little.
+		n := firstLen[T]()
+		if c.i > 0 {
+			n = min(2*len(c.bufs[c.i-1]), max(n, 256))
+		}
+		c.bufs = append(c.bufs, make([]T, n))
 	}
 	p := &c.bufs[c.i][c.n]
 	c.n++
@@ -56,3 +65,10 @@ func (c *chunks[T]) new() *T {
 
 // reset empties the chunks for the next allocation.
 func (c *chunks[T]) reset() { c.i, c.n = 0, 0 }
+
+// firstLen is the length of an arena's first buffer, and of the first of
+// chunks', of T: about two kilobytes' worth, at least 8.
+func firstLen[T any]() int {
+	var z T
+	return max(8, 2048/max(int(unsafe.Sizeof(z)), 1))
+}

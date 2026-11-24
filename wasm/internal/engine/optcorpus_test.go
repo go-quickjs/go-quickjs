@@ -105,13 +105,24 @@ func TestOptCompileCorpus(t *testing.T) {
 		add(filepath.Base(src), bin)
 	}
 
-	// The first compile of each: its hash, or its refusal.
+	// The first compile of each: its hash, or its refusal. It is timed and
+	// what it allocates counted, its workspace growing to the functions'
+	// sizes as it goes: with WASM_OPT_ONLY naming one function, its first
+	// compile is in a workspace new to it (cold), the repeated ones in one
+	// grown (warm).
 	hashes := make(map[string]string, len(fns))
 	var ok []*corpusFunc
+	var first []int64
 	refused := map[string]int{}
 	codeBytes := 0
+	waitOptWorkers()
+	runtime.GC()
+	var f0, f1 runtime.MemStats
+	runtime.ReadMemStats(&f0)
 	for _, f := range fns {
+		c0 := v8bench.Clock()
 		code, err := wopt.Compile(f.req)
+		ct := int64(v8bench.Clock() - c0)
 		if err != nil {
 			r := err.(*wjit.Refusal)
 			refused[r.Reason]++
@@ -122,6 +133,7 @@ func TestOptCompileCorpus(t *testing.T) {
 			continue
 		}
 		ok = append(ok, f)
+		first = append(first, ct)
 		codeBytes += len(code.Bytes)
 		h := sha256.New()
 		h.Write(code.Bytes)
@@ -131,6 +143,15 @@ func TestOptCompileCorpus(t *testing.T) {
 		binary.LittleEndian.PutUint64(w[16:], uint64(code.ReturnStub))
 		h.Write(w[:])
 		hashes[f.key] = hex.EncodeToString(h.Sum(nil)[:12])
+	}
+	runtime.ReadMemStats(&f1)
+	var firstSum int64
+	for _, ct := range first {
+		firstSum += ct
+	}
+	if len(ok) > 0 {
+		t.Logf("first compiles: %.1f µs a function, %.0f bytes and %.0f objects a function",
+			float64(firstSum)/float64(len(ok))/1e3, float64(f1.TotalAlloc-f0.TotalAlloc)/float64(len(fns)), float64(f1.Mallocs-f0.Mallocs)/float64(len(fns)))
 	}
 	body, values, blocks := 0, 0, 0
 	for _, f := range ok {
@@ -236,8 +257,8 @@ func TestOptCompileCorpus(t *testing.T) {
 	sort.Slice(order, func(i, j int) bool { return each[order[i]] > each[order[j]] })
 	for _, i := range order[:min(10, len(order))] {
 		f := ok[i]
-		fmt.Fprintf(&sb, "  %-24s %8.1f µs, %6d bytes of body, %5.0f ns a byte\n", f.key,
-			float64(each[i])/float64(reps-1)/1e3, f.body, float64(each[i])/float64(reps-1)/float64(f.body))
+		fmt.Fprintf(&sb, "  %-24s %8.1f µs, %6d bytes of body, %5.0f ns a byte; first %8.1f µs\n", f.key,
+			float64(each[i])/float64(reps-1)/1e3, f.body, float64(each[i])/float64(reps-1)/float64(f.body), float64(first[i])/1e3)
 	}
 	t.Log("\n" + sb.String())
 }

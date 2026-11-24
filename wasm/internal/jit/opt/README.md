@@ -1137,6 +1137,35 @@ weights, at its first -- the result's moves 4 to 8, and the emission of
 them 22 to 27. 856 of the 3,011 functions change, their code 0.2% larger
 in all; the spec scripts' functions do not split, and cost what they did.
 
+A compile in a workspace its function outgrows -- a large function's
+first in a process, or one after the collector has emptied the pool --
+allocates what the workspace grows by, and that, more than its work,
+makes it dearer: gzip's function 2211 (17.7 KB of body) takes 14 ms at
+its first compile in a new process and 5.4 at the next, at GOMAXPROCS=1,
+allocating 23 MB against 1.6; 10.3 ms with the collector off, the rest
+the first touch of new memory. `TestOptCompileCorpus` logs the first
+compiles apart (with `WASM_OPT_ONLY` naming one function, its first
+compile is cold, the repeated ones warm). The lists made a block at a
+time come from arenas, each as long as it will be (the allocator's view
+of the blocks: their edges, phis and instructions); the parts of a web
+taken apart share one list of hints, where each had its own of all of
+them; a split web's holes and ranges change in their arrays; and an
+arena's or chunks' first buffer is a couple of kilobytes, not 256 values,
+each chunk after it twice the one before. 2211's first compile makes
+2,344 objects where it made 11,474 and the Go program's warm compiles
+113 a function where they made 119, their bytes 4% fewer and their time
+level.
+
+The Go program's tiered first runs at GOMAXPROCS=1, which compile on the
+program's goroutine, lose to the baseline's where they tier big
+functions up: json 82-88 ms against 64, gzip 65 against 52, interp 43
+against 40 (the others gain: sha256 64 against 84, sort 122 against 150,
+regexp 53 against 56). That is the compiles' own work more than their
+first touch: json's twenty tier-ups take 17.6 ms warm and 20.5 at their
+first, gzip's fifteen 13 to 16 ms, 190 ns a byte of body; the allocator's
+phases are a third of it, the jump threading, the build and the emission
+the rest, spread over the passes with no one hot spot.
+
 ## Refusals
 
 A function is refused -- it keeps its baseline code -- when it has:
@@ -1415,13 +1444,16 @@ registers the allocator gave out.
   (sha256's block function) runs its first call in the baseline code,
   and is optimized only for its next.
 - Splitting into another register: a split web keeps its one register
-  and gives it up over holes, so a value hot in one loop is in its slot
-  there where a denser value of that loop takes its register, even with
-  another free there (sort's loop counter is split, but in its slot in
-  its loops). A part re-allocated from where its hole ends, as Wimmer and
-  Mössenböck's splitting re-scans the part after a split, could take any
-  register free there. The holes' cost weighs a use from a slot as a
-  move; on amd64 most such uses are memory operands.
+  and gives it up over holes, and a web spilled whole is in its slot
+  everywhere. Over the Go program and the micro-benchmarks, of the
+  stretches in slots that hold uses weighing 8 or more (2,321, their uses
+  weighing 750,000), 85 have a register free over all of them in the
+  allocation as made (2.8% of the weight); within each block, where a
+  free register would take a load and save the uses after the first, it
+  is 12.8% of the weight. A part re-allocated from where its hole ends, as
+  Wimmer and Mössenböck's splitting re-scans the part after a split, would
+  reach those; the holes' cost weighs a use from a slot as a move, where
+  on amd64 most such uses are memory operands.
 - The compile's cost, 0.16 ms a Go function, now spread over its
   phases (The compile's cost): fewer passes over the IR -- copyelim
   runs five times, the dominator tree up to three -- and trivial phis

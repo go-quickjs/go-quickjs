@@ -403,11 +403,21 @@ func (al *Allocator) punch(a *web, h hole) {
 	if a.full != nil {
 		full = a.full
 	}
-	holes := al.rngs.take(len(a.holes) + 1)
-	holes = append(holes, a.holes...)
-	holes = unionInto(&al.rngs, holes, []rng{{h.s, h.e}})
 	evW := al.eventWeight(a, h.s, h.e)
-	a.full, a.holes, a.ranges = full, holes, subtract(&al.rngs, full, holes)
+	// A web punched before owns its holes and its ranges, which change in
+	// their arrays where those have room.
+	var holes, out []rng
+	if a.full == nil {
+		holes = al.rngs.take(len(a.holes) + 1)
+		holes = append(holes, a.holes...)
+	} else {
+		holes, out = a.holes, a.ranges
+	}
+	holes = unionInto(&al.rngs, holes, []rng{{h.s, h.e}})
+	if cap(out) < len(full)+len(holes) {
+		out = al.rngs.take(len(full) + len(holes))
+	}
+	a.full, a.holes, a.ranges = full, holes, subtractInto(out[:0], full, holes)
 	a.holeW += evW
 	a.moveW += h.cost - evW
 	a.dense = 0
@@ -484,9 +494,9 @@ func (al *Allocator) holeCost(a *web, full []rng, s, e int32) float64 {
 	return cost
 }
 
-// subtract is the ranges of a not in b, both in order, in the arena.
-func subtract(ar *arena[rng], a, b []rng) []rng {
-	out := ar.take(len(a) + len(b))
+// subtractInto appends to out the ranges of a not in b, both in order:
+// out has room for len(a)+len(b) more, and is neither's.
+func subtractInto(out, a, b []rng) []rng {
 	j := 0
 	for _, r := range a {
 		for j < len(b) && b[j].to <= r.from {

@@ -28,6 +28,10 @@ type allocScratch struct {
 	al    lsra.Allocator
 	lf    lsra.Func
 	vregs arena[lsra.VReg]
+	// The blocks' lists: their edges, phis and instructions.
+	edges arena[int]
+	phis  arena[lsra.Phi]
+	insts arena[lsra.Inst]
 }
 
 // lowering is what the lowering keeps of the function it lowers, on every
@@ -221,6 +225,9 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	}
 	f := g.f
 	ws.vregs.reset()
+	ws.edges.reset()
+	ws.phis.reset()
+	ws.insts.reset()
 	// The values the allocator sees are numbered densely, in the order of
 	// their IDs, so that it orders them as it would by ID: the constants
 	// are made where they are used, and the IDs of the values the passes
@@ -292,8 +299,27 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	}
 	for i, b := range f.Blocks {
 		lb := &lf.Blocks[i]
-		// The block's lists keep their arrays from the last function.
-		*lb = lsra.Block{Preds: lb.Preds[:0], Succs: lb.Succs[:0], Depth: int(b.Depth), Phis: lb.Phis[:0], Insts: lb.Insts[:0]}
+		// A comparison that is the block's last value and its branch's
+		// condition alone is made by the branch: an integer one, and a
+		// float one whose condition is one of the flags' (fusesFloat).
+		if b.Kind == BIf && len(b.Values) > 0 {
+			c := b.Control
+			last := b.Values[len(b.Values)-1]
+			if c == last && c.Uses == 1 && (c.Op == OpEqz || (c.Op >= OpEq && c.Op <= OpGeU) || fusesFloat(c.Op)) {
+				g.fused[c.ID] = true
+			}
+		}
+		// The block's lists are the arenas', each as long as it will be:
+		// an instruction for each value but constants, results and the
+		// fused comparison, and the block's end.
+		ninst := 1
+		for _, v := range b.Values {
+			if v.Op != OpConst && v.Op != OpResult && !g.fused[v.ID] {
+				ninst++
+			}
+		}
+		*lb = lsra.Block{Preds: ws.edges.take(len(b.Preds)), Succs: ws.edges.take(len(b.Succs)), Depth: int(b.Depth),
+			Phis: ws.phis.take(len(b.Phis)), Insts: ws.insts.take(ninst)}
 		for _, p := range b.Preds {
 			lb.Preds = append(lb.Preds, int(g.index[p.ID]))
 		}
@@ -308,16 +334,6 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				ph.Args = append(ph.Args, vreg(a))
 			}
 			lb.Phis = append(lb.Phis, ph)
-		}
-		// A comparison that is the block's last value and its branch's
-		// condition alone is made by the branch: an integer one, and a
-		// float one whose condition is one of the flags' (fusesFloat).
-		if b.Kind == BIf && len(b.Values) > 0 {
-			c := b.Control
-			last := b.Values[len(b.Values)-1]
-			if c == last && c.Uses == 1 && (c.Op == OpEqz || (c.Op >= OpEq && c.Op <= OpGeU) || fusesFloat(c.Op)) {
-				g.fused[c.ID] = true
-			}
 		}
 		for j := 0; j < len(b.Values); j++ {
 			v := b.Values[j]

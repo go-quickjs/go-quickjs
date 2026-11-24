@@ -774,8 +774,10 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				webs[m] = p
 				ps = append(ps, p)
 			}
+			// The parts share their hints, which nothing changes after.
+			hints := append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
 			for _, p := range ps {
-				p.hints = append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
+				p.hints = hints
 				heap.Push(&parts, p)
 			}
 			clear(ps)
