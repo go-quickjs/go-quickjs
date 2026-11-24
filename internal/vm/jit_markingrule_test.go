@@ -125,6 +125,11 @@ func jitMarkingCorpus(t *testing.T) (string, []string) {
 
 // jitMarkingRun warms each test up and counts what its next run does, in a
 // fresh runtime, native code seeing the collector marking if marking.
+// Under checkptr (CI's native boundary) it runs each test as long as
+// jitMarkingRegRun does, as two runs of 32 and one of 96 rather than
+// three of 64 and one of 256: the code is compiled at its first call
+// either way, and runs through the same paths, marking and not, for
+// fewer turns of its loops, which took 18 s of the lane there.
 func jitMarkingRun(t *testing.T, src string, names []string, marking bool) (map[string]jitMarkingWork, jitMarkingCache) {
 	t.Helper()
 	defer jitMarkingHeldForTest()()
@@ -141,9 +146,13 @@ func jitMarkingRun(t *testing.T, src string, names []string, marking bool) (map[
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	work := map[string]jitMarkingWork{}
+	warms, warm, counted := 3, "(64)", "(256)"
+	if !allocsOrdinary() {
+		warms, warm, counted = 2, "(32)", "(96)"
+	}
 	for _, name := range names {
-		for range 3 {
-			if _, err := r.Run(compileForTest(t, name+"(64)")); err != nil {
+		for range warms {
+			if _, err := r.Run(compileForTest(t, name+warm)); err != nil {
 				t.Fatalf("%s: %v", name, err)
 			}
 		}
@@ -151,7 +160,7 @@ func jitMarkingRun(t *testing.T, src string, names []string, marking bool) (map[
 		if r.jit != nil {
 			hosts0, interpreted0, records0 = r.jit.hosts, r.jit.interpreted, r.jit.ssaRecords
 		}
-		if _, err := r.Run(compileForTest(t, name+"(256)")); err != nil {
+		if _, err := r.Run(compileForTest(t, name+counted)); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		w := jitMarkingWork{calls: calls - calls0}
