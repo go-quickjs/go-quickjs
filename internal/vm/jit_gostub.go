@@ -32,43 +32,65 @@ import (
 // jitStubEnter is what each call through a routine of its own does before
 // its operation, as jitHostCall does before its: a runtime that waits while
 // the collector marks (WithGCYield) waits at the top of every call of Go
-// from native code; a test's work at each call of Go (jitTestConfig's
-// goCallWork) is done; the call is counted (jitState's goStub). Every
-// context's Host is its runtime (jitGrowContexts).
-func jitStubEnter(ctx *abi.Context) {
+// from native code, and a test's work at each call of Go (jitTestConfig's
+// goCallWork) is done, both out of line (jitStubRare); the call is counted
+// (jitState's goStub). It returns ctx's runtime -- every context's Host is
+// its runtime (jitGrowContexts) -- and whether jitStubRare has work to do,
+// which its caller calls: with no call in it, it inlines into each routine's
+// Go, whose own call is then the whole of what the call costs past the
+// operation.
+func jitStubEnter(ctx *abi.Context) (*Runtime, bool) {
 	r := (*Runtime)(ctx.Host)
+	r.jit.goStub++
+	return r, r.gcYield.on || r.jitTest.goCallWork != nil
+}
+
+// jitStubRare is what jitStubEnter and jitStubCall do only some calls: the
+// PC of a call whose description st says one, the wait while the collector
+// marks, the test's work.
+func jitStubRare(ctx *abi.Context, st *abi.GoCallState, r *Runtime) {
+	if st != nil && st.SetsPC {
+		ctx.ExitPC, ctx.ExitDepth = uint64(st.PC), uint64(st.Depth)
+	}
 	if r.gcYield.on && r.gcMarking() {
 		r.gcYieldNow()
 	}
 	if w := r.jitTest.goCallWork; w != nil {
 		w()
 	}
-	r.jit.goStub++
 }
 
 // jitPowGo is Math.pow(x, y) for its routine (abi.GoStubPow, jitPowStub).
 func jitPowGo(ctx *abi.Context, x, y float64) float64 {
-	jitStubEnter(ctx)
+	if r, rare := jitStubEnter(ctx); rare {
+		jitStubRare(ctx, nil, r)
+	}
 	return jsPow(x, y)
 }
 
 // jitModGo is x % y of numbers for its routine (abi.GoStubMod, jitModStub).
 func jitModGo(ctx *abi.Context, x, y float64) float64 {
-	jitStubEnter(ctx)
+	if r, rare := jitStubEnter(ctx); rare {
+		jitStubRare(ctx, nil, r)
+	}
 	return jsMod(x, y)
 }
 
 // jitAtan2Go is Math.atan2(x, y) for its routine (abi.GoStubAtan2,
 // jitAtan2Stub).
 func jitAtan2Go(ctx *abi.Context, x, y float64) float64 {
-	jitStubEnter(ctx)
+	if r, rare := jitStubEnter(ctx); rare {
+		jitStubRare(ctx, nil, r)
+	}
 	return fdlibm.Atan2(x, y)
 }
 
 // jitHypotGo is Math.hypot(x, y) for its routine (abi.GoStubHypot,
 // jitHypotStub).
 func jitHypotGo(ctx *abi.Context, x, y float64) float64 {
-	jitStubEnter(ctx)
+	if r, rare := jitStubEnter(ctx); rare {
+		jitStubRare(ctx, nil, r)
+	}
 	return jsHypot([]float64{x, y})
 }
 
@@ -77,7 +99,9 @@ func jitHypotGo(ctx *abi.Context, x, y float64) float64 {
 // compile took only of one unaryMath has (jitFeedback's mathIntrinsic,
 // jitRegFeedback's RawMath).
 func jitMathGo(ctx *abi.Context, x float64, fn uint64) float64 {
-	jitStubEnter(ctx)
+	if r, rare := jitStubEnter(ctx); rare {
+		jitStubRare(ctx, nil, r)
+	}
 	return unaryMath[fn](x)
 }
 
@@ -95,21 +119,13 @@ func jitMathGo(ctx *abi.Context, x float64, fn uint64) float64 {
 // operation and keep cell, the description as the last (GoLast, which Go
 // reads of a call it makes, and an exit of one it refused), a call's PC
 // where it says one -- but the operands, which the code wrote, and its
-// status 1, which the operation's success clears. It reports false, ctx
-// untouched, for a description of operands, which jitGoDirect reads: mir
-// sends no such call here (goStub).
-func jitStubCall(ctx *abi.Context, st *abi.GoCallState) bool {
-	if st.Args != nil {
-		return false
-	}
-	ctx.GoLast, ctx.GoState = uintptr(unsafe.Pointer(st)), 0
-	ctx.GoOp, ctx.GoKeep = st.Op, st.Keep
-	if st.SetsPC {
-		ctx.ExitPC, ctx.ExitDepth = uint64(st.PC), uint64(st.Depth)
-	}
-	ctx.GoStatus = 1
-	jitStubEnter(ctx)
-	return true
+// status 1, which the operation's success clears. A description of
+// operands, which jitGoDirect reads, mir sends no routine (goStub).
+func jitStubCall(ctx *abi.Context, st *abi.GoCallState) (*Runtime, bool) {
+	r := (*Runtime)(ctx.Host)
+	ctx.GoLast, ctx.GoState, ctx.GoOp, ctx.GoKeep, ctx.GoStatus = uintptr(unsafe.Pointer(st)), 0, st.Op, st.Keep, 1
+	r.jit.goStub++
+	return r, st.SetsPC || r.gcYield.on || r.jitTest.goCallWork != nil
 }
 
 // jitStubDone is where a routine's call goes on: back, its status cleared,
@@ -125,28 +141,31 @@ func jitStubDone(ctx *abi.Context, st *abi.GoCallState, back uintptr, ok bool) u
 // jitAppendGo is a loop's string builder's s += x for its routine
 // (abi.GoStubAppend, jitAppendStub).
 func jitAppendGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoAppend(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoAppend(ctx))
 }
 
 // jitAddGo is any other + Go makes for its routine (abi.GoStubAdd,
 // jitAddStub).
 func jitAddGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoAdd(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoAdd(ctx))
 }
 
 // jitConcatGo is a concatenation's parts joined for its routine
 // (abi.GoStubConcat, jitConcatStub).
 func jitConcatGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoConcat(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoConcat(ctx))
 }
 
 // jitGoConcat joins the parts of a template or a concatenation
@@ -209,38 +228,43 @@ func (r *Runtime) jitGoConcat(ctx *abi.Context) bool {
 // (GoStubIndexOf), a read and a write by a key (GoStubIndex,
 // GoStubKeyedWrite), the in operator (GoStubHas).
 func jitDeleteGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoDelete(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoDelete(ctx))
 }
 
 func jitIndexOfGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoIndexOf(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoIndexOf(ctx))
 }
 
 func jitIndexGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoIndex(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoIndex(ctx))
 }
 
 func jitKeyedWriteGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoKeyedWrite(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoKeyedWrite(ctx))
 }
 
 func jitHasGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoHas(ctx))
+	return jitStubDone(ctx, st, back, r.jitGoHas(ctx))
 }
 
 // The calls Go makes without a frame where it can (jitGoCallPlain), each of
@@ -252,42 +276,42 @@ func jitHasGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 // (jitGoCall), as jitGoDirect makes it, past its questions of every kind
 // of call.
 func jitSetGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	r := (*Runtime)(ctx.Host)
 	return jitStubDone(ctx, st, back, r.jitGoCallPlain(ctx) || r.jitGoCall(ctx))
 }
 
 func jitForOfGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	r := (*Runtime)(ctx.Host)
 	return jitStubDone(ctx, st, back, r.jitForOfPlain(ctx) || r.jitGoCall(ctx))
 }
 
 func jitRestGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	r := (*Runtime)(ctx.Host)
 	return jitStubDone(ctx, st, back, r.jitRestPlain(ctx) || r.jitGoCall(ctx))
 }
 
 func jitStepGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	r := (*Runtime)(ctx.Host)
 	return jitStubDone(ctx, st, back, r.jitStepPlain(ctx) || r.jitGoCall(ctx))
 }
 
 func jitForInGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
-	if !jitStubCall(ctx, st) {
-		return jitGoDirect(ctx, st, back)
+	r, rare := jitStubCall(ctx, st)
+	if rare {
+		jitStubRare(ctx, st, r)
 	}
-	r := (*Runtime)(ctx.Host)
 	return jitStubDone(ctx, st, back, r.jitForInPlain(ctx) || r.jitGoCall(ctx))
 }
 
