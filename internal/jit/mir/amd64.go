@@ -8728,13 +8728,20 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 		}
 	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
-	direct := c.enc.GoFast != 0 && !c.goCallBig
+	target := c.enc.GoFast
+	if s := c.goStub(st); s != 0 {
+		// The operation's own routine (abi.GoStub), which takes what
+		// GoFast takes.
+		target = s
+	}
+	direct := target != 0 && !c.goCallBig
 	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.LeaLabel(scratchA, back)
 	if direct {
 		// Through the VM's routine for calls of Go (abi.Encoding's
-		// GoFast), which comes straight back, as a leaf's does.
-		c.movImm(scratchB, c.enc.GoFast)
+		// GoFast, or the operation's own), which comes straight back, as a
+		// leaf's does.
+		c.movImm(scratchB, target)
 		c.a.JmpReg(scratchB)
 	} else {
 		if !c.liveUsed {

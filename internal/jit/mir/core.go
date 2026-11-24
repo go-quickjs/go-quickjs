@@ -4914,6 +4914,28 @@ func (c *core) mathStub(op ssa.GoOp) uint64 {
 	return 0
 }
 
+// goStub is where native code jumps for the call of Go st describes
+// through the operation's own routine (abi.Encoding's GoStubs), its
+// operands in the context's GoArgs, where the call writes them -- not
+// GoFast, whose Go reads the description and dispatches on every kind of
+// call -- or 0 for the general way: an operation with no routine, an
+// encoding without it, code that calls no Go, a description of operands
+// (the routine reads none), a keep cell past the context's.
+func (c *core) goStub(st *abi.GoCallState) uint64 {
+	if c.enc.CallGo == 0 || len(st.Args) != 0 || st.Keep >= abi.MaxKeeps {
+		return 0
+	}
+	switch ssa.GoOp(st.Op & 0xff) {
+	case ssa.GoAppend:
+		return c.enc.GoStubs[abi.GoStubAppend]
+	case ssa.GoAdd:
+		return c.enc.GoStubs[abi.GoStubAdd]
+	case ssa.GoConcat:
+		return c.enc.GoStubs[abi.GoStubConcat]
+	}
+	return 0
+}
+
 // lengthWrites reports whether a call of Go, site, of argc operands, is a
 // property's write of length (abi.Encoding's LengthKey), which native code
 // makes itself where it shortens an array (lengthWrite), the call Go's

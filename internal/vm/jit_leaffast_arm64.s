@@ -96,6 +96,28 @@ TEXT ·jitMathStub(SB), NOSPLIT|NOFRAME, $0-0
 	ADD $64, RSP
 	JMP (R15)
 
+// GO_STUB is amd64's: the description in R17, where the call goes on in
+// R15, the context in R0, the operands in its GoArgs.
+#define GO_STUB(name, fn) \
+TEXT name(SB), NOSPLIT|NOFRAME, $0-0; \
+	SUB $48, RSP; \
+	NO_LOCAL_POINTERS; \
+	MOVD R30, 0(RSP); \
+	MOVD R0, 40(RSP); \
+	MOVD R0, 8(RSP); \
+	MOVD R17, 16(RSP); \
+	MOVD R15, 24(RSP); \
+	BL fn(SB); \
+	MOVD 32(RSP), R15; \
+	MOVD 40(RSP), R0; \
+	MOVD 0(RSP), R30; \
+	ADD $48, RSP; \
+	JMP (R15)
+
+GO_STUB(·jitAppendStub, ·jitAppendGo)
+GO_STUB(·jitAddStub, ·jitAddGo)
+GO_STUB(·jitConcatStub, ·jitConcatGo)
+
 // STUB_ADDR is a routine's address.
 #define STUB_ADDR(name, stub) \
 TEXT name(SB), NOSPLIT, $0-8; \
@@ -108,3 +130,6 @@ STUB_ADDR(·jitModStubAddr, ·jitModStub)
 STUB_ADDR(·jitAtan2StubAddr, ·jitAtan2Stub)
 STUB_ADDR(·jitHypotStubAddr, ·jitHypotStub)
 STUB_ADDR(·jitMathStubAddr, ·jitMathStub)
+STUB_ADDR(·jitAppendStubAddr, ·jitAppendStub)
+STUB_ADDR(·jitAddStubAddr, ·jitAddStub)
+STUB_ADDR(·jitConcatStubAddr, ·jitConcatStub)

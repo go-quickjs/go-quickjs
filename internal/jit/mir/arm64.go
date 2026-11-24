@@ -2563,12 +2563,17 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 		}
 	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
-	direct := c.enc.GoFast != 0 && !c.goCallBig
+	target := c.enc.GoFast
+	if s := c.goStub(st); s != 0 {
+		target = s
+	}
+	direct := target != 0 && !c.goCallBig
 	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Adr(a64A, back)
 	if direct {
-		// As amd64's: through the VM's routine for calls of Go.
-		c.movImm(a64B, c.enc.GoFast)
+		// As amd64's: through the VM's routine for calls of Go, GoFast or
+		// the operation's own.
+		c.movImm(a64B, target)
 		c.a.Br(a64B)
 	} else {
 		if !c.liveUsed {

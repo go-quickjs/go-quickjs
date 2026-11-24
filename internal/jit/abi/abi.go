@@ -1798,6 +1798,17 @@ const (
 // its register; the result comes back in X0 or F0. GoStubPow is Math.pow's
 // (ssa.GoPow), GoStubMod a remainder of numbers (ssa.GoMod), GoStubAtan2
 // and GoStubHypot Math's functions of two (ssa.GoAtan2, ssa.GoHypot).
+//
+// The others take what LeafFast takes -- the call's description (a
+// *GoCallState that describes no operand) in amd64's RCX and arm64's R17,
+// where the call goes on in RAX and R15, the context in its register --
+// and their operands in the context's GoArgs, as the call's code writes
+// them: the routine reads no description of where they are. Each comes
+// back there, or Fail bytes past it where Go did nothing, the context then
+// as CallGo leaves it (GoOp, GoKeep, GoLast, GoStatus), and its result in
+// the call's keep cell. GoStubAppend is a loop's string builder's s += x
+// (ssa.GoAppend), GoStubAdd any other + Go makes (ssa.GoAdd), GoStubConcat
+// a template's or a concatenation's parts joined (ssa.GoConcat).
 type GoStub int
 
 const (
@@ -1806,6 +1817,9 @@ const (
 	GoStubMath
 	GoStubAtan2
 	GoStubHypot
+	GoStubAppend
+	GoStubAdd
+	GoStubConcat
 	// NumGoStubs is how many there are.
 	NumGoStubs
 )

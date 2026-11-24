@@ -1872,55 +1872,7 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoAppend:
 		return r.jitGoAppend(ctx)
 	case ssa.GoConcat:
-		// As concat joins its parts: primitives, converted without running
-		// anything, and nothing that throws -- the same refusals as GoAdd's.
-		n := int(ctx.GoOp>>abi.GoOpArgcShift) & 0xff
-		if n < 1 || n > abi.MaxGoArgs || r.meter != nil {
-			return false
-		}
-		var parts [abi.MaxGoArgs]Value
-		total := 0
-		for i := range n {
-			p := jitGoArg(ctx, i)
-			if p.IsBigInt() {
-				// Every part is joined to a string (the lowering's
-				// stringConcats), a BigInt too.
-				if !jitConcatOperand(p) {
-					return false
-				}
-			} else if !jitPlainOperand(p) {
-				return false
-			}
-			if !p.IsString() && !p.IsNumber() {
-				s, err := r.toString(p)
-				if err != nil {
-					return false
-				}
-				p = Str(s)
-			}
-			if p.IsString() {
-				if total += p.String().length; total > maxStringLength-64 {
-					return false
-				}
-			}
-			parts[i] = p
-		}
-		if n == 1 {
-			// A template's part converted (to_string), as the interpreter
-			// converts it: a string is itself, which a join had copied.
-			p := parts[0]
-			if p.IsNumber() {
-				p = Str(r.numberString(p.num))
-			}
-			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = p
-			return true
-		}
-		s, err := r.joinParts(parts[:n])
-		if err != nil || s.length > maxStringLength-64 {
-			return false
-		}
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Str(s)
-		return true
+		return r.jitGoConcat(ctx)
 	case ssa.GoRefill:
 		// The pool's address, a constant of the code's, which keeps it.
 		return r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))

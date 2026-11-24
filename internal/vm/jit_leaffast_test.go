@@ -348,9 +348,10 @@ function plain(n) { return mixedAdd([1.5, 'ab', 7n, true, null, -0, 123456789012
 function withSymbol(n) { try { return mixedAdd([1, 'x', Symbol('s')], n) } catch (e) { return e.constructor.name } }
 `
 
-// A + of Go that is no string builder's append goes from the VM's routine
-// for calls of Go (jitGoDirect) to jitGoAdd, past jitHostCall's dispatch:
-// each answer is Node's (v26.10.0), and the loops' calls are made so.
+// A + of Go that is no string builder's append goes through its own
+// routine (abi.GoStubAdd, jitAddGo) to jitGoAdd, past jitGoDirect's and
+// jitHostCall's dispatch: each answer is Node's (v26.10.0), and the loops'
+// calls are made so.
 func TestJITGoAddDirect(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -361,7 +362,7 @@ func TestJITGoAddDirect(t *testing.T) {
 		rounds = append(rounds, "prepend(40)", "plain(40)")
 	}
 	r := jitAgreesForTest(t, goAddSetup, rounds...)
-	fast := r.jit.goFast
+	stubs := r.jit.goStub
 	for _, rd := range [][2]string{
 		{"prepend(40)", "40:987654321098"},
 		{"plain(40)", "nulltrueab1.50nulltr:61728394506172839492"},
@@ -378,8 +379,8 @@ func TestJITGoAddDirect(t *testing.T) {
 	}
 	jitNativeForTest(t, r, "prepend")
 	jitNativeForTest(t, r, "mixedAdd")
-	if r.jit.goFast-fast < 3*40 {
-		t.Errorf("%d calls of Go through the routine in 160 turns, want at least one a turn", r.jit.goFast-fast)
+	if r.jit.goStub-stubs < 3*40 {
+		t.Errorf("%d calls of Go through their routines in 160 turns, want at least one a turn", r.jit.goStub-stubs)
 	}
 }
 

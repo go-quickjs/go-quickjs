@@ -2415,7 +2415,16 @@ allocation, which keeps what lives across it in registers, so its call --
 out of line, where its exact paths fail -- has every allocatable register
 saved around the routine (`stubSaving`), as `goSaving`'s are, but goes no
 other way; a Math function's call (`OpMathCall`) saves only what lives
-across it.
+across it. The other routines take what `GoFast` takes -- the call's
+description, which describes no operand, and where it goes on -- and their
+operands in the context's `GoArgs`, where the call's code writes them, so
+that a site differs from `GoFast`'s only in where it jumps (`goStub`): a
+string's `+` Go makes (`GoAppend`, `GoAdd`, `GoConcat`). Go gives the
+context what `ExpandGoCall` gives it but the operands (`jitStubCall`) and
+makes the operation with the function `jitHostCall`'s case calls; what that
+refuses goes on `Fail` bytes past, to the call's exit, as from `GoFast`.
+A convention of registers for the operands, as V8's descriptors have them,
+would change the sites and the routines' first instructions alone.
 
 **On the register frame.** A call Go makes for native code -- a call's site
 that has no native target, a construction, a getter or setter not inlined --

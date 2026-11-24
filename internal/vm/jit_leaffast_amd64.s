@@ -95,6 +95,28 @@ TEXT ·jitMathStub(SB), NOSPLIT|NOFRAME, $0-0
 	ADJSP $-48
 	JMP AX
 
+// GO_STUB is the routine of another call of Go with one of its own
+// (abi.GoStub): as jitGoFast, the call's description in CX and where it
+// goes on in AX, its operands in the context's GoArgs. It calls fn, the
+// operation's own Go, and goes where fn says, DI as it found it.
+#define GO_STUB(name, fn) \
+TEXT name(SB), NOSPLIT|NOFRAME, $0-0; \
+	ADJSP $40; \
+	NO_LOCAL_POINTERS; \
+	MOVQ DI, 32(SP); \
+	MOVQ DI, 0(SP); \
+	MOVQ CX, 8(SP); \
+	MOVQ AX, 16(SP); \
+	CALL fn(SB); \
+	MOVQ 24(SP), AX; \
+	MOVQ 32(SP), DI; \
+	ADJSP $-40; \
+	JMP AX
+
+GO_STUB(·jitAppendStub, ·jitAppendGo)
+GO_STUB(·jitAddStub, ·jitAddGo)
+GO_STUB(·jitConcatStub, ·jitConcatGo)
+
 // STUB_ADDR is a routine's address.
 #define STUB_ADDR(name, stub) \
 TEXT name(SB), NOSPLIT, $0-8; \
@@ -107,3 +129,6 @@ STUB_ADDR(·jitModStubAddr, ·jitModStub)
 STUB_ADDR(·jitAtan2StubAddr, ·jitAtan2Stub)
 STUB_ADDR(·jitHypotStubAddr, ·jitHypotStub)
 STUB_ADDR(·jitMathStubAddr, ·jitMathStub)
+STUB_ADDR(·jitAppendStubAddr, ·jitAppendStub)
+STUB_ADDR(·jitAddStubAddr, ·jitAddStub)
+STUB_ADDR(·jitConcatStubAddr, ·jitConcatStub)

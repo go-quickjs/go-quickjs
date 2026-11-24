@@ -106,3 +106,68 @@ func TestJITMathStubs(t *testing.T) {
 		}
 	}
 }
+
+// stringStubSetup's loops have Go make a string's + through the routines of
+// their own (abi.GoStubAppend, GoStubAdd, GoStubConcat): a builder's
+// s += x of strings, numbers, booleans and null, a prepend, a template of
+// four parts and a concatenation of three, with an int32 and a float live
+// across each; withSymbol's + of a symbol, which Go refuses, leaves for
+// the exit, which throws the interpreter's TypeError.
+const stringStubSetup = `
+const parts = ['ab', 7, 'c', true, null, -0, 1.5, 'xyz', 12345678901234567890n]
+function build(n) {
+	let s = '', p = '', t = '', k = 1, f = 0.5
+	for (let i = 0; i < n; i++) {
+		const x = parts[i % parts.length]
+		s += x; p = (i % 10) + p.slice(0, 20)
+		t = ` + "`" + `${x}-${k}:${f}|${i}` + "`" + ` + t.slice(0, 30)
+		k = (k * 5 + i) & 1023; f += 0.25
+	}
+	return s.length + ':' + s.slice(-40) + ':' + p + ':' + t + ':' + k + ':' + f
+}
+function withSymbol(n) {
+	let s = ''
+	try { for (let i = 0; i < n; i++) s += (i == n - 3 ? Symbol('q') : 'z') } catch (e) { return e.constructor.name + ':' + s.length }
+	return s
+}
+`
+
+// A string's + Go makes -- a builder's append, any other +, a template's
+// or a concatenation's parts joined -- goes through the operation's own
+// routine (abi.Encoding's GoStubs), its operands in the context's GoArgs,
+// past jitGoDirect's and jitHostCall's dispatch, with the interpreter's
+// answers, a refusal leaving for the exit, which throws as the interpreter
+// does; with collections at the calls and with the code compiled for a
+// collector that marks.
+func TestJITStringStubs(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range jitMarkingModes() {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		calls := 0
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%89 == 0 {
+					runtime.GC()
+				}
+			}
+		})
+		var rounds []string
+		for range 6 {
+			rounds = append(rounds, "build(300)", "withSymbol(40)")
+		}
+		r := jitAgreesForTest(t, stringStubSetup, rounds...)
+		jitNativeForTest(t, r, "build")
+		stubs := r.jit.goStub
+		if _, err := r.Run(compileForTest(t, "''+build(300)")); err != nil {
+			t.Fatal(err)
+		}
+		// An append, a + and a template's parts a turn, at least.
+		if got := r.jit.goStub - stubs; got < 3*300 {
+			t.Errorf("marking %v: %d calls of a string's + through their routines in 300 turns", marking, got)
+		}
+	}
+}
