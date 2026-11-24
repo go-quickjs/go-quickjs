@@ -1,6 +1,9 @@
 package quickjs_test
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 // TestBigIntSizeLimit pins V8's limit on a BigInt, 2^30 bits, and its
 // message, however a BigInt would grow past it: BigInt.asUintN with a width
@@ -26,15 +29,24 @@ func TestBigIntSizeLimit(t *testing.T) {
 // characters wrote all of them out again.
 func TestBigIntSizeLimitOfText(t *testing.T) {
 	t.Parallel()
-	checkEval(t, `const t = (f) => { try { return String(f()) } catch (e) { return e.name + (e.name === "SyntaxError" && e.message.startsWith("Max") ? ": " + e.message : "") } };
+	const helpers = `const t = (f) => { try { return String(f()) } catch (e) { return e.name + (e.name === "SyntaxError" && e.message.startsWith("Max") ? ": " + e.message : "") } };
 		const m = (s) => { try { BigInt(s) } catch (e) { return e.message } };
-		const over = "0x1" + "0".repeat(2 ** 28), face = String.fromCodePoint(0x1F600);
-		[m(over).length, m("1".repeat(999) + "x") === 'cannot convert "' + "1".repeat(999) + 'x" to a BigInt',
+		const face = String.fromCodePoint(0x1F600);
+		`
+	checkEval(t, helpers+`[m("1".repeat(999) + "x") === 'cannot convert "' + "1".repeat(999) + 'x" to a BigInt',
 		 m("1".repeat(1000) + "x") === 'cannot convert "' + "1".repeat(1000) + '…" to a BigInt',
 		 m(face.repeat(500) + "x") === 'cannot convert "' + face.repeat(500) + '…" to a BigInt',
-		 m("x" + face.repeat(500)) === 'cannot convert "x' + face.repeat(499) + '…" to a BigInt',
-		 t(() => BigInt(over)), t(() => over == 1n), t(() => over < 1n), t(() => ("0x" + "0".repeat(2 ** 28) + "1") == 1n),
+		 m("x" + face.repeat(500)) === 'cannot convert "x' + face.repeat(499) + '…" to a BigInt'].join()`,
+		"true,true,true,true")
+	if strconv.IntSize == 32 {
+		// A 32-bit platform's strings end at 2^28 - 16 code units, short
+		// of the 2^28 hex digits past 2^30 bits, and of every other base's
+		// digits past them: no text there is past the limit.
+		return
+	}
+	checkEval(t, helpers+`const over = "0x1" + "0".repeat(2 ** 28);
+		[m(over).length, t(() => BigInt(over)), t(() => over == 1n), t(() => over < 1n), t(() => ("0x" + "0".repeat(2 ** 28) + "1") == 1n),
 		 t(() => eval(over + "n")), t(() => Function("return -" + over + "n"))].join()`,
-		"1030,true,true,true,true,SyntaxError,false,false,true,"+
+		"1030,SyntaxError,false,false,true,"+
 			"SyntaxError: Maximum BigInt size exceeded (line 1, column 1),SyntaxError: Maximum BigInt size exceeded (line 3, column 9)")
 }

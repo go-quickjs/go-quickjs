@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs"
@@ -28,6 +29,12 @@ function run(f) {
 	return out[0] === out[1] && out[1] === out[2] ? out[0] : out.join(" | ");
 }
 `
+
+// toLongestPowerOfTwo is how many times a string of 2^20 code units doubles
+// to the longest a string may be that is a power of two: 2^28 code units
+// on a 64-bit platform, and 2^27 on a 32-bit one, whose strings end at
+// 2^28 - 16.
+var toLongestPowerOfTwo = strconv.Itoa(8 - (64-strconv.IntSize)/32)
 
 // stringBuiltinCases are expressions over String's methods and what Node
 // (v26.10.0) answers for each, as show writes it: the edges of what the
@@ -225,7 +232,9 @@ var stringBuiltinCases = []struct{ src, want string }{
 	{`(function () { var o = []; var r = "a".concat({ toString() { o.push(1); return "b" } }, { toString() { o.push(2); return "c" } }); return r + o })()`, `"abc1,2"`},
 	{`"a".concat(Symbol())`, `TypeError`},
 	{`String.prototype.concat.call(1, 2)`, `"12"`},
-	{`(function () { var s = "a".repeat(1 << 20); for (var i = 0; i < 8; i++) s += s; var o = []; try { s.concat(s, { toString() { o.push(1); return "" } }) } catch (e) { o.push(e.name) } return o.join() })()`, `"RangeError"`},
+	// A join past the longest string throws before the next argument is
+	// converted.
+	{`(function () { var s = "a".repeat(1 << 20); for (var i = 0; i < ` + toLongestPowerOfTwo + `; i++) s += s; var o = []; try { s.concat(s, { toString() { o.push(1); return "" } }) } catch (e) { o.push(e.name) } return o.join() })()`, `"RangeError"`},
 	// The positions and counts of numbers at ToIntegerOrInfinity's edges.
 	{`["abc".at(-0), "abc".at(-0.5), "abc".at(-(2 ** 63)), "abc".at(2 ** 63), "abc".at(2 ** 53)].join()`, `"a,a,,,"`},
 	{`["abc".slice(-0), "abc".slice(2 ** 64), "abc".slice(-(2 ** 63), -1), "abc".slice(1, 1e300), "abc".slice(-Infinity, NaN)].join()`, `"abc,,ab,bc,"`},
