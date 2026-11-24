@@ -681,7 +681,10 @@ func (m *memoryMeter) generic(v reflect.Value) {
 // string had been counted at its struct's and its text's sizes, which on a
 // 32-bit platform is seven tenths of what it takes.
 func stringBlock(s *String) int64 {
-	if n := len(s.s); n > 0 && n <= 80 && unsafe.StringData(s.s) == (*byte)(unsafe.Add(unsafe.Pointer(s), stringSize)) {
+	// The text's address is compared as a number: a pointer just past the
+	// String, where the text is not, points past its allocation, which
+	// checkptr refuses.
+	if n := len(s.s); n > 0 && n <= 80 && uintptr(unsafe.Pointer(unsafe.StringData(s.s))) == uintptr(unsafe.Pointer(s))+uintptr(stringSize) {
 		return int64(allocsize.Of(int(stringSize) + (n+15)&^15))
 	}
 	return int64(allocsize.Of(int(stringSize)) + len(s.s))
