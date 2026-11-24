@@ -104,3 +104,60 @@ func (m *u64map[V]) at(k uint64) V {
 	v, _ := m.get(k)
 	return v
 }
+
+// grid is a table of values by a block ID and a column below cols: an
+// array of a row for each block where the columns are few enough, its
+// entries those marked with its stamp, grown as the blocks' IDs do; else a
+// u64map. Kept in a workspace, it keeps its arrays for the next compile.
+type grid[V any] struct {
+	cols  int
+	vals  []V
+	stamp []uint32
+	gen   uint32
+	m     u64map[V]
+}
+
+// maxGridCols is the most columns a grid keeps in its array.
+const maxGridCols = 64
+
+// reset empties g for cols columns and about hint entries.
+func (g *grid[V]) reset(cols, hint int) {
+	g.cols = 0
+	if cols > maxGridCols {
+		g.m.reset(hint)
+		return
+	}
+	g.cols = max(cols, 1)
+	g.gen++
+	if g.gen == 0 {
+		clear(g.stamp)
+		g.gen = 1
+	}
+}
+
+// get returns the value at block b's column k, and whether it has one.
+func (g *grid[V]) get(b, k int32) (V, bool) {
+	if g.cols == 0 {
+		return g.m.get(uint64(uint32(b))<<32 | uint64(uint32(k)))
+	}
+	if i := int(b)*g.cols + int(k); i < len(g.stamp) && g.stamp[i] == g.gen {
+		return g.vals[i], true
+	}
+	var zero V
+	return zero, false
+}
+
+// set makes v the value at block b's column k.
+func (g *grid[V]) set(b, k int32, v V) {
+	if g.cols == 0 {
+		g.m.set(uint64(uint32(b))<<32|uint64(uint32(k)), v)
+		return
+	}
+	i := int(b)*g.cols + int(k)
+	if i >= len(g.stamp) {
+		n := max(2*len(g.stamp), i+1, 16*g.cols)
+		g.vals = append(g.vals, make([]V, n-len(g.vals))...)
+		g.stamp = append(g.stamp, make([]uint32, n-len(g.stamp))...)
+	}
+	g.vals[i], g.stamp[i] = v, g.gen
+}

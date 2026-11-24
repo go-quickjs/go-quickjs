@@ -24,8 +24,8 @@ type workspace struct {
 	types  arena[Type]
 	// incomplete are the blocks' incomplete phis.
 	incomplete arena[incompletePhi]
-	// defs are the locals' values at the blocks' ends, by defKey.
-	defs u64map[*Value]
+	// defs are the locals' values at the blocks' ends, by block and local.
+	defs grid[*Value]
 
 	// The control flow graph's: marks by block ID (blockMarks), a work
 	// list, a walk's frames, the dominator tree, the natural loops, and

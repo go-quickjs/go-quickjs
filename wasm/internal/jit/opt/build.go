@@ -217,8 +217,6 @@ func build(ws *workspace, m *module.Module, fn uint32) *Func {
 	bd := &ws.bd
 	bd.ws, bd.m, bd.f = ws, m, &ws.f
 	bd.f.ws = ws
-	// About an entry for every two bytes of the body.
-	ws.defs.reset(int(m.Functions[fn].Code.Len) / 2)
 	f := bd.build(fn)
 	lap(PhaseBuild)
 	return f
@@ -256,6 +254,9 @@ func (bd *builder) build(fn uint32) *Func {
 			place(t)
 		}
 	}
+	// A column for each local; about an entry for every two bytes of the
+	// body where they are too many for a grid.
+	bd.ws.defs.reset(len(bd.locals), int(code.Len)/2)
 	var rnum, rref int32
 	f.ResultSlots = bd.ws.i32.take(len(f.Results))
 	for _, t := range sig.Results {
@@ -318,15 +319,12 @@ func (bd *builder) build(fn uint32) *Func {
 
 // Variables: the locals, by index.
 
-// defKey is the workspace's key of local k's value at block b's end.
-func defKey(k int32, b *Block) uint64 { return uint64(b.ID)<<32 | uint64(uint32(k)) }
-
 func (bd *builder) writeVar(k int32, b *Block, v *Value) {
-	bd.ws.defs.set(defKey(k, b), v)
+	bd.ws.defs.set(b.ID, k, v)
 }
 
 func (bd *builder) readVar(k int32, b *Block) *Value {
-	if v, ok := bd.ws.defs.get(defKey(k, b)); ok {
+	if v, ok := bd.ws.defs.get(b.ID, k); ok {
 		return v
 	}
 	var v *Value
