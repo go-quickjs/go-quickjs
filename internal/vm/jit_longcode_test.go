@@ -70,11 +70,22 @@ func longCodeObject(r *Runtime, v, w Value) Value {
 // the body, each branching across all of it -- on arm64 through the
 // assembler's veneers and branches made of others. Each answer is an
 // ordinary call's.
+//
+// Under checkptr (CI's native boundary) the 3 MB function alone: the
+// 10 MB one has the same statements, exits and frame, which Go reads
+// the same way after its code as after the shorter one's, so checkptr
+// checks nothing more there. What its length adds -- the compile, the
+// placement, arm64's branches across it -- the ordinary builds check,
+// and under checkptr its two compiles took a fifth of the lane.
 func TestJITLongCode(t *testing.T) {
 	if !jitSSABackend || testing.Short() {
 		t.Skip("no SSA backend on this architecture, or short")
 	}
-	for _, size := range []int{3, 10} {
+	sizes := []int{3, 10}
+	if !allocsOrdinary() {
+		sizes = sizes[:1]
+	}
+	for _, size := range sizes {
 		n := size << 20 / 160
 		name := fmt.Sprintf("long%d", size)
 		src := longCodeSource(name, n)
