@@ -1465,7 +1465,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   while its runtime is open, so this is a host's mistake, but its answer
   should be the one `Call` gives.
 - **Expected:** `ErrClosed` from each method that returns an error.
-- **Status:** open.
+- **Status:** fixed. Each of a value's methods asks whether its runtime is
+  closed, as `Call` did, and returns `ErrClosed`; `Len`, `Keys`, `Bytes` and
+  `SetCloneBrand` find nothing. A host `Promise` settled after `Close`, which
+  dereferenced the runtime `Close` let go of and panicked, returns `ErrClosed`
+  too (`TestClosedRuntimesValues`).
 
 ### KI-96 qjs reports a module's exception twice
 - **Where:** `cmd/qjs/main.go`. The rejected promise of the module's

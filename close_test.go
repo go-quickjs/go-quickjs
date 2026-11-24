@@ -2,6 +2,8 @@ package quickjs_test
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +111,14 @@ func TestCloseFromInsideStopsTheScript(t *testing.T) {
 			_, err = fn.Call()
 			return err
 		}},
+		{"Value.New", func(rt *quickjs.Runtime) error {
+			fn, err := rt.Eval(`(function () { ` + tail + ` })`)
+			if err != nil {
+				return err
+			}
+			_, err = fn.New()
+			return err
+		}},
 		{"a job Eval drains", func(rt *quickjs.Runtime) error {
 			_, err := rt.Eval(`Promise.resolve().then(() => { ` + tail + ` })`)
 			return err
@@ -149,5 +159,115 @@ func TestCloseFromInsideStopsTheScript(t *testing.T) {
 				t.Errorf("after Close, Eval = %v, want ErrClosed", err)
 			}
 		})
+	}
+}
+
+// TestClosedRuntimesValues pins that a closed runtime's values and promises
+// answer as the runtime does, with ErrClosed from each method that returns
+// an error, and do nothing to its heap (KI-94). Only Call asked whether the
+// runtime was closed: Get, Set, Index, Equal and Decode worked on the closed
+// heap, Set writing, Len and Keys read it, New threw a RangeError, and a
+// Promise settled after Close dereferenced the runtime Close let go of.
+func TestClosedRuntimesValues(t *testing.T) {
+	t.Parallel()
+	rt := quickjs.New()
+	var ran []string
+	rt.Set("note", func(s string) { ran = append(ran, s) })
+	obj, err := rt.Eval(`({ a: 1,
+		toString() { note("toString"); return "s" },
+		valueOf() { note("valueOf"); return 7 } })`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr, _ := rt.Eval(`[1, 2, 3]`)
+	ctor, _ := rt.Eval(`(function F() { this.x = 1 })`)
+	buf, _ := rt.Eval(`new Uint8Array(4)`)
+	str, _ := rt.Eval(`"str"`)
+	num, _ := rt.Eval(`42`)
+	settled, _ := rt.Eval(`Promise.resolve(5)`)
+	p, q, r := rt.NewPromise(), rt.NewPromise(), rt.NewPromise()
+	_, thrown := rt.EvalFile("main.js", `function thrower() { throw new TypeError("bad") }; thrower()`)
+	rt.Close()
+
+	errs := map[string]error{}
+	_, errs["Get"] = obj.Get("a")
+	errs["Set"] = obj.Set("b", 2)
+	_, errs["Index"] = arr.Index(1)
+	_, errs["Equal"] = obj.Equal(num)
+	_, errs["Equal of another's"] = num.Equal(obj)
+	var decoded any
+	errs["Decode"] = obj.Decode(&decoded)
+	errs["Decode of a primitive"] = num.Decode(&decoded)
+	_, errs["Call"] = ctor.Call()
+	_, errs["New"] = ctor.New()
+	_, errs["Await"] = settled.Await(nil)
+	errs["Promise.Resolve"] = p.Resolve("a string")
+	errs["Promise.Reject"] = q.Reject(map[string]any{"a": 1})
+	for name, err := range errs {
+		if !errors.Is(err, quickjs.ErrClosed) {
+			t.Errorf("%s = %v, want ErrClosed", name, err)
+		}
+	}
+	r.RejectError(errors.New("after Close")) // nothing, and no panic
+	if decoded != nil {
+		t.Errorf("Decode wrote %v", decoded)
+	}
+	if n := arr.Len(); n != 0 {
+		t.Errorf("Len = %d, want 0", n)
+	}
+	if keys := obj.Keys(); keys != nil {
+		t.Errorf("Keys = %q, want none", keys)
+	}
+	if b, ok := buf.Bytes(); ok || b != nil {
+		t.Errorf("Bytes = %v, %v, want nothing", b, ok)
+	}
+	if obj.SetCloneBrand(quickjs.CloneHost) {
+		t.Error("SetCloneBrand branded a closed runtime's object")
+	}
+	if got := p.Value(); got.IsObject() {
+		t.Errorf("Promise.Value = %v, want the zero Value", got)
+	}
+	// A conversion of an object would run its script, which a closed
+	// runtime runs none of; a primitive's needs none.
+	if s := obj.String(); s != "<object>" {
+		t.Errorf("String = %q, want the placeholder", s)
+	}
+	if f := obj.Float(); !math.IsNaN(f) {
+		t.Errorf("Float = %v, want NaN", f)
+	}
+	if s, f := str.String(), num.Float(); s != "str" || f != 42 {
+		t.Errorf("String, Float of primitives = %q, %v", s, f)
+	}
+	if len(ran) != 0 {
+		t.Errorf("ran script after Close: %q", ran)
+	}
+	// What a host reports of an error once it has closed the runtime -- a
+	// deferred Close -- is still the error's.
+	var jsErr *quickjs.Error
+	if !errors.As(thrown, &jsErr) || jsErr.Error() != "TypeError: bad" ||
+		!strings.Contains(jsErr.Stack(), "at thrower (main.js:1:") {
+		t.Errorf("an error after Close = %v, stack %q", thrown, jsErr.Stack())
+	}
+
+	// Closed from inside, by a Go function the script called, the stack is
+	// still in use, and the script's functions are still there to run.
+	rt = quickjs.New()
+	ran = nil
+	rt.Set("note", func(s string) { ran = append(ran, s) })
+	var inner []string
+	rt.Set("closeAndUse", func(r *quickjs.Runtime, o quickjs.Value) {
+		r.Close()
+		_, err := o.Get("a")
+		inner = append(inner, fmt.Sprint(errors.Is(err, quickjs.ErrClosed)), o.String())
+	})
+	_, err = rt.Eval(`closeAndUse({ a: 1, toString() { note("toString"); return "s" } })`)
+	if !errors.Is(err, quickjs.ErrClosed) {
+		t.Errorf("closed from inside: %v, want ErrClosed", err)
+	}
+	if got := strings.Join(inner, ","); got != "true,<object>" || len(ran) != 0 {
+		t.Errorf("closed from inside: Get closed, String = %s; ran %q", got, ran)
+	}
+	if !obj.IsObject() || obj.Kind() != quickjs.KindObject || !arr.IsArray() || !obj.StrictEqual(obj) {
+		t.Error("a closed runtime's value lost what it is")
 	}
 }

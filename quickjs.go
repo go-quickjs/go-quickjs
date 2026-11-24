@@ -469,7 +469,8 @@ func New(opts ...Option) *Runtime {
 }
 
 // Close releases the runtime. Using a Runtime after Close returns ErrClosed
-// from every method.
+// from every method, and so does each method of its Values and Promises that
+// returns an error (Value has what the rest do).
 //
 // It may be called from inside the runtime's own script -- by a Go function
 // the script called, as process.exit is -- and then stops that script: it

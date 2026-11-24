@@ -415,6 +415,9 @@ func (v Value) Decode(dst any) error {
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("quickjs: Decode requires a non-nil pointer, got %T", dst)
 	}
+	if v.closed() {
+		return ErrClosed
+	}
 	return decodeInto(v.rt, v.v, rv.Elem())
 }
 

@@ -89,7 +89,7 @@ const (
 // reports whether it could: anything else -- a primitive, an array, a
 // function, an object of a built-in class -- cannot be branded.
 func (v Value) SetCloneBrand(b CloneBrand) bool {
-	if v.rt == nil || b < CloneHost || b > CloneTransferOnly {
+	if v.rt == nil || v.closed() || b < CloneHost || b > CloneTransferOnly {
 		return false
 	}
 	return v.rt.SetCloneBrand(v.v, vm.CloneBrand(b))

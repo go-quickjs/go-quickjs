@@ -63,7 +63,12 @@ func (k Kind) String() string {
 // Value is a JavaScript value.
 //
 // A Value is only meaningful while the Runtime that produced it is open, and
-// only to that Runtime: another refuses it with ErrForeignValue. Values
+// only to that Runtime: another refuses it with ErrForeignValue. Once the
+// Runtime is closed, each of the Value's methods that returns an error
+// returns ErrClosed, as the Runtime's do; Len, Keys and Bytes find nothing,
+// and SetCloneBrand brands nothing. String and Float run no script of a
+// closed runtime: an *Error's message stays readable, and an object whose
+// conversion is the script's gives the placeholder or NaN. Values
 // are compared with Equal and StrictEqual rather than ==, because JavaScript
 // equality is not Go equality.
 //
@@ -79,6 +84,16 @@ type Value struct {
 // foreign reports whether v belongs to a runtime other than rt, which must
 // not take it (ErrForeignValue).
 func (v Value) foreign(rt *vm.Runtime) bool { return v.rt != nil && v.rt != rt }
+
+// closed reports whether v belongs to a Runtime that has been closed, whose
+// heap a method of v must neither read nor write.
+func (v Value) closed() bool {
+	if v.rt == nil {
+		return false
+	}
+	host, _ := v.rt.Host.(*Runtime)
+	return host != nil && host.closed
+}
 
 // Kind returns the value's type, distinguishing arrays and functions from plain
 // objects because that is usually what a caller wants to branch on.
@@ -177,6 +192,9 @@ func (v Value) StrictEqual(other Value) bool { return v.v.StrictEquals(other.v) 
 // Equal reports whether two values are == to each other, applying the coercion
 // rules that the loose equality operator uses.
 func (v Value) Equal(other Value) (bool, error) {
+	if v.closed() || other.closed() {
+		return false, ErrClosed
+	}
 	rt := v.rt
 	if rt == nil {
 		// The zero Value is 0, compared in the other's runtime -- or with
@@ -204,7 +222,7 @@ func looseEqualsNative(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value
 
 // Get reads a property.
 func (v Value) Get(name string) (Value, error) {
-	if v.rt == nil {
+	if v.rt == nil || v.closed() {
 		return Value{}, ErrClosed
 	}
 	res, err := v.rt.GetProp(v.v, v.rt.Intern(name))
@@ -216,7 +234,7 @@ func (v Value) Get(name string) (Value, error) {
 
 // Set writes a property, converting the Go value with Encode's rules.
 func (v Value) Set(name string, val any) error {
-	if v.rt == nil {
+	if v.rt == nil || v.closed() {
 		return ErrClosed
 	}
 	encoded, err := encodeValue(v.rt, val)
@@ -228,7 +246,7 @@ func (v Value) Set(name string, val any) error {
 
 // Index reads an array element.
 func (v Value) Index(i int) (Value, error) {
-	if v.rt == nil {
+	if v.rt == nil || v.closed() {
 		return Value{}, ErrClosed
 	}
 	res, err := v.rt.GetProp(v.v, v.rt.Intern(fmt.Sprint(i)))
@@ -240,7 +258,7 @@ func (v Value) Index(i int) (Value, error) {
 
 // Len returns an array's length, or 0 for a value that is not array-like.
 func (v Value) Len() int {
-	if v.rt == nil || !v.v.IsObject() {
+	if v.rt == nil || !v.v.IsObject() || v.closed() {
 		return 0
 	}
 	n, err := v.rt.GetProp(v.v, v.rt.Intern("length"))
@@ -256,7 +274,7 @@ func (v Value) Len() int {
 
 // Keys returns an object's own enumerable string keys, in specification order.
 func (v Value) Keys() []string {
-	if v.rt == nil || !v.v.IsObject() {
+	if v.rt == nil || !v.v.IsObject() || v.closed() {
 		return nil
 	}
 	atoms := v.rt.OwnKeys(v.v.Object())
@@ -348,6 +366,10 @@ func (v Value) New(args ...any) (Value, error) {
 	if v.rt == nil {
 		return Value{}, ErrClosed
 	}
+	host, _ := v.rt.Host.(*Runtime)
+	if host != nil && host.closed {
+		return Value{}, ErrClosed
+	}
 	vals := make([]vm.Value, len(args))
 	for i, a := range args {
 		enc, err := encodeValue(v.rt, a)
@@ -358,6 +380,11 @@ func (v Value) New(args ...any) (Value, error) {
 	}
 	v.rt.ClearStop()
 	res, err := v.rt.Construct(v.v, vals)
+	if host != nil && host.closed {
+		// The constructor closed its Runtime, which stopped it.
+		v.rt.ReleaseClosed()
+		return Value{}, ErrClosed
+	}
 	if err != nil {
 		return Value{}, wrapThrown(v.rt, err)
 	}
@@ -410,9 +437,11 @@ func (e *Error) Unwrap() error {
 // what is reported for one; anything else thrown gets the frames recorded at
 // the throw.
 func (e *Error) Stack() string {
-	if len(e.stack) == 0 {
-		if v, err := e.value.Get("stack"); err == nil && !v.IsUndefined() {
-			return v.String()
+	if len(e.stack) == 0 && e.value.rt != nil {
+		// Read as Get would, but also once the runtime is closed: an error a
+		// host reports after closing it keeps its trace, as its message.
+		if v, err := e.value.rt.GetProp(e.value.v, e.value.rt.Intern("stack")); err == nil && !v.IsUndefined() {
+			return Value{v: v, rt: e.value.rt}.String()
 		}
 	}
 	var sb strings.Builder

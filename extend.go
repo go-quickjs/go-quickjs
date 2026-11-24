@@ -277,7 +277,7 @@ func (r *Runtime) NewBytes(b []byte) Value {
 // script is promised never change, must not be written, and those of a
 // resizable one are only its bytes until the script next resizes it.
 func (v Value) Bytes() ([]byte, bool) {
-	if v.rt == nil {
+	if v.rt == nil || v.closed() {
 		return nil, false
 	}
 	return v.rt.Bytes(v.v)
@@ -293,7 +293,9 @@ func (v Value) Bytes() ([]byte, bool) {
 // Settling it queues the reactions rather than running them, exactly as
 // settling a promise from script does: they run when the job queue is next
 // drained, which Eval does before returning and which RunJobs does on demand.
-// Settling twice does nothing, as in script.
+// Settling twice does nothing, as in script. Once the runtime is closed,
+// Resolve and Reject return ErrClosed, RejectError does nothing, and Value is
+// the zero Value.
 type Promise struct {
 	rt *Runtime
 	p  *vm.HostPromise
@@ -309,7 +311,7 @@ func (r *Runtime) NewPromise() *Promise {
 
 // Value is the promise itself, which is what the host hands to script.
 func (p *Promise) Value() Value {
-	if p.p == nil {
+	if p.p == nil || p.rt.closed {
 		return Value{}
 	}
 	return Value{v: p.p.Value(), rt: p.rt.rt}
@@ -318,7 +320,7 @@ func (p *Promise) Value() Value {
 // Resolve settles the promise with a value, converted as Set converts one. A
 // promise resolved with another promise follows it.
 func (p *Promise) Resolve(v any) error {
-	if p.p == nil {
+	if p.p == nil || p.rt.closed {
 		return ErrClosed
 	}
 	val, err := p.rt.encode(v)
@@ -331,7 +333,7 @@ func (p *Promise) Resolve(v any) error {
 
 // Reject settles the promise with a reason, converted as Set converts one.
 func (p *Promise) Reject(v any) error {
-	if p.p == nil {
+	if p.p == nil || p.rt.closed {
 		return ErrClosed
 	}
 	val, err := p.rt.encode(v)
@@ -350,7 +352,7 @@ func (p *Promise) Reject(v any) error {
 //
 //	p.RejectError(rt.ThrowRangeError("port %d is out of range", port))
 func (p *Promise) RejectError(err error) {
-	if p.p == nil {
+	if p.p == nil || p.rt.closed {
 		return
 	}
 	var thrown *vm.Thrown
