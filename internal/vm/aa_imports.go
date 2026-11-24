@@ -94,4 +94,6 @@ import (
 	_ "github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 
 	_ "maps"
+
+	_ "github.com/go-quickjs/go-quickjs/internal/allocsize"
 )

@@ -9,7 +9,11 @@ import (
 // script holds is close to what Go's heap holds for it, for each kind of
 // value a script can keep: a measure that undercounts one kind lets a script
 // holding that kind get past its limit by as much (KI-62: regular
-// expressions, whose compiled programs were not counted at all, and dates).
+// expressions, whose compiled programs were not counted at all, and dates),
+// and a measure of a struct's size where the allocator takes its size
+// class undercounts on a 32-bit platform, whose structs fall further below
+// their classes: short strings, BigInts and regular expressions were
+// counted at 0.76 to 0.85 of what they held there.
 // Each kind is built under a global, and the meter's walk and Go's live heap
 // after a full collection are compared before and after.
 func TestMemoryMeterAccuracy(t *testing.T) {

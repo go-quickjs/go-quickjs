@@ -3,6 +3,8 @@ package regexp
 import (
 	"sync"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/allocsize"
 )
 
 // A class of many ranges -- \p{L} has hundreds -- is a binary search over
@@ -111,5 +113,5 @@ func (s *charSet) bmpFootprint() int {
 	if t == nil || len(s.ranges) > 0 && unsafe.SliceData(s.ranges) == s.table {
 		return 0
 	}
-	return int(unsafe.Sizeof(*t)) + cap(t.blocks)*int(unsafe.Sizeof([4]uint64{}))
+	return allocsize.Of(int(unsafe.Sizeof(*t))) + allocsize.Of(cap(t.blocks)*int(unsafe.Sizeof([4]uint64{})))
 }

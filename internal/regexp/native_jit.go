@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/allocsize"
 )
 
 // Native code for a pattern, as V8's Irregexp makes it.
@@ -486,7 +488,7 @@ func (r *nativeRun) footprint() int {
 	if r == nil {
 		return 0
 	}
-	return int(unsafe.Sizeof(*r)) + cap(r.stack)*8
+	return allocsize.Of(int(unsafe.Sizeof(*r))) + allocsize.Of(cap(r.stack)*8)
 }
 
 // setStack points the context at the stack.

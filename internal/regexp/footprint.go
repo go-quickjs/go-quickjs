@@ -1,6 +1,10 @@
 package regexp
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/allocsize"
+)
 
 // Footprint reports the memory re takes, for a runtime's memory limit: its
 // core, which the clones of one pattern share and which prog identifies, so
@@ -10,14 +14,17 @@ import "unsafe"
 // match on a long subject leaves large. The Unicode property tables the
 // package shares between patterns are not any pattern's, and are not
 // counted, nor is the subject a matcher was last given, which is a
-// string's. lender is nil: a clone keeps nothing but the core.
+// string's. lender is nil: a clone keeps nothing but the core. Each
+// allocation is counted as the allocator rounds it (allocsize), which on a
+// 32-bit platform, whose structs fall below their size classes by more,
+// was up to a sixth more than their sizes.
 func (re *Regexp) Footprint() (prog unsafe.Pointer, progBytes, ownBytes int, lender *Regexp) {
-	ownBytes = int(unsafe.Sizeof(*re))
+	ownBytes = allocsize.Of(int(unsafe.Sizeof(*re)))
 	if m := re.scratch; m != nil {
 		ownBytes += m.footprint()
 	}
 	c := re.core
-	progBytes = int(unsafe.Sizeof(*c)) + len(c.source)
+	progBytes = allocsize.Of(int(unsafe.Sizeof(*c))) + allocsize.Of(len(c.source))
 	if c.prog != nil {
 		progBytes += c.prog.footprint()
 	}
@@ -25,7 +32,7 @@ func (re *Regexp) Footprint() (prog unsafe.Pointer, progBytes, ownBytes int, len
 		progBytes += m.footprint()
 	}
 	for name, slots := range c.groupNames {
-		progBytes += 48 + len(name) + cap(slots)*int(unsafe.Sizeof(0))
+		progBytes += 48 + len(name) + allocsize.Of(cap(slots)*int(unsafe.Sizeof(0)))
 	}
 	return unsafe.Pointer(c), progBytes, ownBytes, nil
 }
@@ -33,46 +40,56 @@ func (re *Regexp) Footprint() (prog unsafe.Pointer, progBytes, ownBytes int, len
 // footprint is what a program takes.
 func (p *program) footprint() int {
 	const word = int(unsafe.Sizeof(0))
-	n := int(unsafe.Sizeof(*p)) + cap(p.code)*int(unsafe.Sizeof(instr{}))
+	n := allocsize.Of(int(unsafe.Sizeof(*p))) + allocsize.Of(cap(p.code)*int(unsafe.Sizeof(instr{})))
 	if p.first != nil {
-		n += int(unsafe.Sizeof(*p.first))
+		n += allocsize.Of(int(unsafe.Sizeof(*p.first)))
 	}
 	if p.lit != nil {
-		n += int(unsafe.Sizeof(*p.lit)) + cap(p.lit.units)*2 + len(p.lit.ascii)
+		n += allocsize.Of(int(unsafe.Sizeof(*p.lit))) + p.lit.dataFootprint()
 	}
 	if p.litOnly != nil {
-		n += int(unsafe.Sizeof(*p.litOnly)) + cap(p.litOnly.units)*2 + len(p.litOnly.ascii)
+		n += p.litOnly.footprint()
 	}
 	if p.foldLit != nil {
-		n += int(unsafe.Sizeof(*p.foldLit)) + cap(p.foldLit.units)*2 + len(p.foldLit.ascii)
+		n += p.foldLit.footprint()
 	}
-	n += cap(p.firsts) * int(unsafe.Sizeof(firstUnits{}))
-	n += cap(p.runs) * word
+	n += allocsize.Of(cap(p.firsts) * int(unsafe.Sizeof(firstUnits{})))
+	n += allocsize.Of(cap(p.runs) * word)
 	for _, l := range p.runs {
-		n += int(unsafe.Sizeof(*l)) + cap(l.units)*2 + len(l.ascii)
+		n += l.footprint()
 	}
-	n += cap(p.classes) * word
+	n += allocsize.Of(cap(p.classes) * word)
 	for _, c := range p.classes {
 		n += c.footprint()
 	}
-	n += cap(p.asciiClasses) * int(unsafe.Sizeof([2]uint64{}))
-	n += cap(p.looks) * int(unsafe.Sizeof(lookProgram{}))
+	n += allocsize.Of(cap(p.asciiClasses) * int(unsafe.Sizeof([2]uint64{})))
+	n += allocsize.Of(cap(p.looks) * int(unsafe.Sizeof(lookProgram{})))
 	for _, l := range p.looks {
-		n += cap(l.code) * int(unsafe.Sizeof(instr{}))
+		n += allocsize.Of(cap(l.code) * int(unsafe.Sizeof(instr{})))
 	}
-	n += cap(p.refSets) * int(unsafe.Sizeof([]int(nil)))
+	n += allocsize.Of(cap(p.refSets) * int(unsafe.Sizeof([]int(nil))))
 	for _, s := range p.refSets {
-		n += cap(s) * word
+		n += allocsize.Of(cap(s) * word)
 	}
 	return n
+}
+
+// footprint is what a literal takes: itself and its units.
+func (l *literal) footprint() int {
+	return allocsize.Of(int(unsafe.Sizeof(*l))) + l.dataFootprint()
+}
+
+// dataFootprint is what a literal's units take, as code units and bytes.
+func (l *literal) dataFootprint() int {
+	return allocsize.Of(cap(l.units)*2) + allocsize.Of(len(l.ascii))
 }
 
 // footprint is what a class takes: its ranges, unless they are still a
 // shared property table's.
 func (s *charSet) footprint() int {
-	n := int(unsafe.Sizeof(*s))
+	n := allocsize.Of(int(unsafe.Sizeof(*s)))
 	if len(s.ranges) == 0 || unsafe.SliceData(s.ranges) != s.table {
-		n += cap(s.ranges) * int(unsafe.Sizeof(charRange{}))
+		n += allocsize.Of(cap(s.ranges) * int(unsafe.Sizeof(charRange{})))
 	}
 	return n + s.bmpFootprint()
 }
@@ -81,11 +98,11 @@ func (s *charSet) footprint() int {
 // an ASCII subject's bytes, which matches every ASCII string, and the
 // backtracking stacks of the native code each ran.
 func (m *matcher) footprint() int {
-	n := int(unsafe.Sizeof(*m)) +
+	n := allocsize.Of(int(unsafe.Sizeof(*m))) +
 		stacksFootprint(m.caps, m.trail, m.stack, m.counters, m.emptyMarks) +
 		m.native.footprint()
 	if a := m.bytes; a != nil {
-		n += int(unsafe.Sizeof(*a)) +
+		n += allocsize.Of(int(unsafe.Sizeof(*a))) +
 			stacksFootprint(a.caps, a.trail, a.stack, a.counters, a.emptyMarks) +
 			a.native.footprint()
 	}
@@ -96,9 +113,9 @@ func (m *matcher) footprint() int {
 // marks take.
 func stacksFootprint(caps []int, trail []capWrite, stack []frame, counters, marks []int) int {
 	const word = int(unsafe.Sizeof(0))
-	return cap(caps)*word +
-		cap(trail)*int(unsafe.Sizeof(capWrite{})) +
-		cap(stack)*int(unsafe.Sizeof(frame{})) +
-		cap(counters)*word +
-		cap(marks)*word
+	return allocsize.Of(cap(caps)*word) +
+		allocsize.Of(cap(trail)*int(unsafe.Sizeof(capWrite{}))) +
+		allocsize.Of(cap(stack)*int(unsafe.Sizeof(frame{}))) +
+		allocsize.Of(cap(counters)*word) +
+		allocsize.Of(cap(marks)*word)
 }

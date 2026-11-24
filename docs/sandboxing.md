@@ -80,7 +80,10 @@ fit 8 MB: it took 3,750 ms with the JIT under the default, 2,850 under
 Measured against Go's live heap after a full collection, the estimate is
 within 15% for every kind of value a script can hold -- objects, arrays,
 strings, Maps and Sets, typed arrays, closures, BigInts, dates and regular
-expressions -- and `TestMemoryMeterAccuracy` keeps it there. A regular
+expressions -- on 64-bit and 32-bit platforms alike, and
+`TestMemoryMeterAccuracy` keeps it there. Each allocation is counted as Go's
+allocator rounds it, to its size class, so a short string or a BigInt
+counts what it takes of the heap rather than its struct's size. A regular
 expression's compiled program is counted once however many RegExps share
 it.
 

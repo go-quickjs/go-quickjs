@@ -2,12 +2,14 @@ package vm
 
 import (
 	"errors"
+	"math/bits"
 	"reflect"
 	"runtime/metrics"
 	"unsafe"
 
 	"github.com/go-quickjs/go-intl/date"
 
+	"github.com/go-quickjs/go-quickjs/internal/allocsize"
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
@@ -520,9 +522,9 @@ func (m *memoryMeter) data(o *Object) {
 
 // string counts a string: a flat one's bytes, or a rope's nodes.
 func (m *memoryMeter) string(s *String) {
-	m.total += stringSize + int64(len(s.s))
+	m.total += stringBlock(s)
 	if s.units16() != nil {
-		m.total += int64(s.length) * 2
+		m.total += int64(allocsize.Of(s.length * 2))
 	}
 	m.addString(s.left)
 	if s.left != nil {
@@ -550,8 +552,7 @@ func (m *memoryMeter) generic(v reflect.Value) {
 		case runtimePtrType, meterPtrType, jitStatePtrType, jitEntryPtrType, jitRegEntryPtrType:
 			return
 		case bigIntPtrType:
-			b := (*BigInt)(v.UnsafePointer())
-			m.total += int64(unsafe.Sizeof(BigInt{})) + int64(b.digits())*int64(bigWordSize)
+			m.total += bigBlock((*BigInt)(v.UnsafePointer()))
 			return
 		case sharedMemoryPtrType:
 			// Other agents change it as it is read, so only its size is
@@ -670,6 +671,33 @@ func (m *memoryMeter) generic(v reflect.Value) {
 	case reflect.String:
 		m.total += int64(v.Len())
 	}
+}
+
+// stringBlock is what a string takes of its own and its text: the String
+// and the bytes newStringBytes made in the same allocation, which on a
+// 64-bit platform fill one of the allocator's size classes and on a 32-bit
+// one fall short of it by up to 20 bytes; or the String alone, as the
+// allocator rounds it, and bytes that may be another string's too. A short
+// string had been counted at its struct's and its text's sizes, which on a
+// 32-bit platform is seven tenths of what it takes.
+func stringBlock(s *String) int64 {
+	if n := len(s.s); n > 0 && n <= 80 && unsafe.StringData(s.s) == (*byte)(unsafe.Add(unsafe.Pointer(s), stringSize)) {
+		return int64(allocsize.Of(int(stringSize) + (n+15)&^15))
+	}
+	return int64(allocsize.Of(int(stringSize)) + len(s.s))
+}
+
+// bigBlock is what a BigInt on the heap takes: its header and the words of
+// its room, as the allocator rounds them. A 64-bit header holds the room;
+// a 32-bit one has no bits for it, and its room is taken to be a word past
+// its digits, what a result an operation made in place has for its carry
+// (bigInPlace).
+func bigBlock(b *BigInt) int64 {
+	room := b.digits() + 1
+	if bits.UintSize == 64 {
+		room = max(b.digits(), int(uint32(b.hdr>>bigCapShift)&bigLenMask))
+	}
+	return int64(allocsize.Of((1 + room) * int(bigWordSize)))
 }
 
 // has reports whether the walk has visited p, marking it visited.
