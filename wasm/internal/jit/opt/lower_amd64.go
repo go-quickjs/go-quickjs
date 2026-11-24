@@ -173,7 +173,9 @@ func (g *gen) loadRS() {
 // reset readies g, kept in a workspace, for function f, keeping the
 // memory of its lists and tables.
 func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
-	clear(g.ool[:cap(g.ool)])
+	// The out-of-line code is only appended to: what the last compile
+	// made is its length.
+	clear(g.ool)
 	g.traps.reset(64)
 	g.trapTo.reset(8)
 	g.polls.reset(8)

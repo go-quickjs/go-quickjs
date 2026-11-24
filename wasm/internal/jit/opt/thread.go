@@ -206,7 +206,7 @@ func evalOnEdge(ws *workspace, v *Value, h *Block, k int) *Value {
 		}
 		tmp.Args = append(tmp.Args, x)
 	}
-	foldValue(tmp)
+	foldValue(ws, tmp)
 	if tmp.Op != OpConst {
 		return nil
 	}

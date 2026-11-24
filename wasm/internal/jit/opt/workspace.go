@@ -40,10 +40,13 @@ type workspace struct {
 	scc      sccs
 	sccLists arena[[]*Block]
 
-	// The passes': gvn's table, and dce's dead values by ID and work list.
+	// The passes': gvn's table, dce's dead values by ID and work list, and
+	// bce's ends checked and what the walk changed of them.
 	gvn     gvnTable
 	dead    []bool
 	dceWork []*Value
+	checked u64map[uint64]
+	bceUndo [][2]uint64
 
 	// Jump threading's: the predecessors threaded, the threaded edges,
 	// the uses within a block of its values (marked with stamp), and

@@ -152,7 +152,10 @@ func dce(f *Func) {
 	clear(dead)
 	f.ws.dead = dead
 	ndead := 0
+	// high is the most the work list held, what is cleared after.
+	high := len(work)
 	for len(work) > 0 {
+		high = max(high, len(work))
 		v := work[len(work)-1]
 		work = work[:len(work)-1]
 		if dead[v.ID] {
@@ -192,7 +195,7 @@ func dce(f *Func) {
 			}
 		}
 	}
-	clear(work[:cap(work)])
+	clear(work[:high])
 	if ndead == 0 {
 		return
 	}
@@ -214,7 +217,7 @@ func fold(f *Func) {
 	for _, b := range f.Blocks {
 		for i := 0; i < len(b.Values); i++ {
 			v := b.Values[i]
-			foldValue(v)
+			foldValue(f.ws, v)
 			switch v.Op {
 			case OpWrap:
 				i += narrow(f, v, i)
@@ -286,14 +289,14 @@ func constIs(v *Value, c int64) bool {
 	return v.Aux == uint64(c)
 }
 
-// foldValue folds v if its arguments let it.
-func foldValue(v *Value) {
+// foldValue folds v if its arguments let it, any list it makes in ws.
+func foldValue(ws *workspace, v *Value) {
 	for i, a := range v.Args {
 		v.Args[i] = resolve(a)
 	}
 	switch len(v.Args) {
 	case 1:
-		foldUnary(v)
+		foldUnary(ws, v)
 	case 2:
 		if v.Commutes() && isConst(v.Args[0]) && !isConst(v.Args[1]) {
 			v.Args[0], v.Args[1] = v.Args[1], v.Args[0]
@@ -335,7 +338,10 @@ func narrow(f *Func, v *Value, i int) int {
 	default:
 		return 0
 	}
-	var args [2]*Value
+	// The constants made are in no block until the operation is narrowed:
+	// one made for the first operand keeps its ID where the second leaves
+	// the operation as it is.
+	var args, made [2]*Value
 	consts := 0
 	for k, x := range a.Args {
 		x = resolve(x)
@@ -343,32 +349,33 @@ func narrow(f *Func, v *Value, i int) int {
 		case OpExtendU, OpExtendS:
 			args[k] = x.Args[0]
 		case OpConst:
-			args[k] = &Value{ID: f.nextValue, Op: OpConst, Type: TI32, Aux: uint64(uint32(x.Aux)), Block: v.Block}
-			f.nextValue++
+			c := f.value(v.Block, OpConst, TI32, nil)
+			c.Aux = uint64(uint32(x.Aux))
+			args[k], made[consts] = c, c
 			consts++
 		default:
 			return 0
 		}
 	}
-	b := v.Block
-	var made []*Value
-	for _, x := range args {
-		if x.Op == OpConst && x.ID >= f.nextValue-int32(consts) {
-			made = append(made, x)
-		}
+	if b := v.Block; consts > 0 {
+		// The constants go before v, which is value i.
+		n := len(b.Values)
+		b.Values = appendA(&f.ws.vals, b.Values, made[:consts]...)
+		copy(b.Values[i+consts:], b.Values[i:n])
+		copy(b.Values[i:], made[:consts])
 	}
-	b.Values = append(b.Values[:i], append(made, b.Values[i:]...)...)
-	v.Op, v.Args = a.Op, []*Value{args[0], args[1]}
-	foldValue(v)
-	return len(made)
+	v.Op = a.Op
+	f.setArgs(v, args[0], args[1])
+	foldValue(f.ws, v)
+	return consts
 }
 
-func foldUnary(v *Value) {
+func foldUnary(ws *workspace, v *Value) {
 	a := v.Args[0]
 	if v.Op == OpEqz {
 		// eqz of an integer comparison is the comparison inverted.
 		if inv, ok := invertCmp[a.Op]; ok {
-			v.Op, v.Args = inv, slices.Clone(a.Args)
+			v.Op, v.Args = inv, append(ws.vals.take(len(a.Args)), a.Args...)
 			return
 		}
 	}
@@ -795,6 +802,10 @@ func gvn(f *Func) {
 				k.aux2 |= uint64(resolve(v.Args[0]).Type) << 56
 			}
 			if w := table.find(&k); w != nil {
+				if cap(v.Args) == 0 {
+					// A copy's argument is in the workspace too.
+					v.Args = f.ws.vals.take(1)
+				}
 				v.setCopy(w)
 				continue
 			}
@@ -976,16 +987,14 @@ func bce(f *Func) {
 	}
 	// checked is the end checked for each memory's address value, by the
 	// memory's index above the value's ID, and for constant addresses
-	// above -1.
-	checked := map[uint64]uint64{}
+	// above -1: 0, which no access's end is, where none is. undo is what
+	// each entry was before the blocks on the walk's path changed it.
+	checked := &f.ws.checked
+	checked.reset(64)
+	undo := f.ws.bceUndo[:0]
 	var walk func(b *Block)
 	walk = func(b *Block) {
-		type undo struct {
-			k   uint64
-			end uint64
-			had bool
-		}
-		var undos []undo
+		mark := len(undo)
 		for _, v := range b.Values {
 			if v.Op != OpLoad && v.Op != OpStore || v.Aux2&memShared != 0 {
 				continue
@@ -1010,25 +1019,22 @@ func bce(f *Func) {
 				id, end = -1, c+end
 			}
 			k := uint64(memIndex(v))<<32 | uint64(uint32(id))
-			old, had := checked[k]
-			if had && old >= end {
+			old := checked.at(k)
+			if old >= end {
 				v.NoCheck = true
 				continue
 			}
-			undos = append(undos, undo{k, old, had})
-			checked[k] = end
+			undo = append(undo, [2]uint64{k, old})
+			checked.set(k, end)
 		}
 		for _, c := range d.kids(b) {
 			walk(c)
 		}
-		for i := len(undos) - 1; i >= 0; i-- {
-			u := undos[i]
-			if u.had {
-				checked[u.k] = u.end
-			} else {
-				delete(checked, u.k)
-			}
+		for i := len(undo) - 1; i >= mark; i-- {
+			checked.set(undo[i][0], undo[i][1])
 		}
+		undo = undo[:mark]
 	}
 	walk(f.Entry)
+	f.ws.bceUndo = undo[:0]
 }
