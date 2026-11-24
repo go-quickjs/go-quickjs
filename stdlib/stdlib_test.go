@@ -2394,3 +2394,64 @@ func TestNodeModulesAreOneModule(t *testing.T) {
 		t.Errorf("got %q, want %q", out, want)
 	}
 }
+
+// TestLoopWaitsKeepNoTimers pins that a loop with a timer pending keeps
+// nothing for each time it wakes for something else (KI-95): each wait's
+// timer was stopped by a Stop deferred in Run's loop, which held it, some
+// 600 bytes, until Run returned, so that a server's loop woken by its
+// host's work grew without bound.
+func TestLoopWaitsKeepNoTimers(t *testing.T) {
+	for _, until := range []bool{false, true} {
+		name := "Run"
+		if until {
+			name = "RunUntil"
+		}
+		t.Run(name, func(t *testing.T) {
+			rt := quickjs.New()
+			defer rt.Close()
+			loop := stdlib.NewLoop(rt)
+			if err := stdlib.Install(rt, stdlib.Config{Loop: loop}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rt.Eval(`setTimeout(() => {}, 3600e3)`); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			ended := make(chan error, 1)
+			go func() {
+				if until {
+					ended <- loop.RunUntil(ctx, make(chan struct{}))
+				} else {
+					ended <- loop.Run(ctx)
+				}
+			}()
+			ran := make(chan struct{})
+			wake := func(n int) {
+				for i := 0; i < n; i++ {
+					loop.Post(func() { ran <- struct{}{} })
+					<-ran
+				}
+			}
+			live := func() uint64 {
+				runtime.GC()
+				var ms runtime.MemStats
+				runtime.ReadMemStats(&ms)
+				return ms.HeapAlloc
+			}
+			wake(1000)
+			before := live()
+			const wakes = 50000
+			wake(wakes)
+			after := live()
+			cancel()
+			if err := <-ended; !errors.Is(err, context.Canceled) {
+				t.Fatalf("loop: %v, want context.Canceled", err)
+			}
+			// Kept timers held 600 bytes a wake-up, 30 MB here; what is
+			// left is the collector's noise.
+			if after > before && after-before > 4<<20 {
+				t.Errorf("the live heap grew by %d bytes over %d wake-ups", after-before, wakes)
+			}
+		})
+	}
+}

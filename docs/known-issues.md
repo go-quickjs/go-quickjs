@@ -662,7 +662,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   live heap after a collection grows in proportion.
 - **Expected:** a heap that stays flat: each wait's timer stopped when its
   `select` returns.
-- **Status:** open.
+- **Status:** fixed. Both loops wait in one function of their own
+  (`Loop.wait`), whose deferred `Stop` runs when it returns, whichever case
+  won (`TestLoopWaitsKeepNoTimers`).
 
 ## P2: wrong results
 

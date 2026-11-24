@@ -262,24 +262,41 @@ func (l *Loop) Run(ctx context.Context) error {
 
 		// Nothing is ready, so the loop waits for whichever comes first: work
 		// from another goroutine, the next timer, or the context ending.
-		var wait <-chan time.Time
-		if next, ok := l.timers.next(); ok {
-			timer := time.NewTimer(max(0, time.Until(next)))
-			defer timer.Stop()
-			wait = timer.C
-		} else if !l.Pending() && !l.rt.Busy() {
+		if _, ok := l.timers.next(); !ok && !l.Pending() && !l.rt.Busy() {
 			// No timers, no host work, nothing queued: the program is over.
 			return nil
 		}
-
-		select {
-		case <-l.rt.Wake():
-		case <-l.wake:
-		case <-wait:
-		case <-ctx.Done():
-			return ctx.Err()
+		if _, err := l.wait(ctx, nil); err != nil {
+			return err
 		}
 	}
+}
+
+// wait blocks until the loop has something to look at: work from another
+// goroutine, the next timer due, done closed, or ctx ending. It reports
+// whether done was closed, and ctx's error if it ended.
+//
+// The timer it makes for the next one due is stopped before it returns,
+// whichever case won: a loop wakes far more often for work than for its
+// timers, and a timer kept to the end of Run for each wait -- a deferred
+// Stop in Run's loop -- held some 600 bytes a wake-up until Run returned.
+func (l *Loop) wait(ctx context.Context, done <-chan struct{}) (bool, error) {
+	var due <-chan time.Time
+	if next, ok := l.timers.next(); ok {
+		timer := time.NewTimer(max(0, time.Until(next)))
+		defer timer.Stop()
+		due = timer.C
+	}
+	select {
+	case <-l.rt.Wake():
+	case <-l.wake:
+	case <-due:
+	case <-done:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	return false, nil
 }
 
 // fatal reports whether an error a callback raised ends Run: any does,
@@ -317,20 +334,12 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 			}
 			continue
 		}
-		var wait <-chan time.Time
-		if next, ok := l.timers.next(); ok {
-			timer := time.NewTimer(max(0, time.Until(next)))
-			defer timer.Stop()
-			wait = timer.C
+		finished, err := l.wait(ctx, done)
+		if err != nil {
+			return err
 		}
-		select {
-		case <-l.rt.Wake():
-		case <-l.wake:
-		case <-wait:
-		case <-done:
+		if finished {
 			return l.rt.RunJobsContext(ctx)
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 }
