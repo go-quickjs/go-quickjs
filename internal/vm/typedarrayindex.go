@@ -212,7 +212,8 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 	// A numeric key that is not a non-negative integer in range names no
 	// element, but it is still the buffer's business: the write is dropped
 	// rather than becoming a property.
-	integral := f == math.Trunc(f) && !math.Signbit(f) && f >= 0 && f <= maxTypedArrayLength
+	// No view has more elements than its buffer has bytes.
+	integral := f == math.Trunc(f) && !math.Signbit(f) && f >= 0 && f <= maxBufferLength
 	if !integral {
 		return numericIndex{numeric: true}
 	}

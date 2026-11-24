@@ -1016,7 +1016,11 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			return Undefined, err
 		}
 		n := src.count()
-		t := r.allocTypedArray(o, kind, n)
+		// Its elements may be wider than the source's.
+		t, err := r.allocTypedArrayChecked(o, kind, int64(n))
+		if err != nil {
+			return Undefined, err
+		}
 		for i := 0; i < n; i++ {
 			if err := r.setElem(t, i, src.getElem(i)); err != nil {
 				return Undefined, err
@@ -1099,25 +1103,21 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 	}
 }
 
-// maxTypedArrayLength bounds how many elements a view may have.
-//
-// The specification allows up to 2**53-1, which no machine can hold. The point
-// of the bound is that an over-large request is refused before anything is
-// allocated, so a script asking for one gets a RangeError rather than taking
-// the process down with it.
-const maxTypedArrayLength = 1 << 28
-
 // An iterable is materialized as Values before its typed storage can be
 // allocated, as required by IterableToList. Values are much wider than the
-// smallest typed elements, so using maxTypedArrayLength here would consume
-// several gigabytes merely to discover that an endless iterable is too long.
+// smallest typed elements, so collecting as many as a view may have would
+// consume several gigabytes merely to discover that an endless iterable is
+// too long.
 const maxTypedArrayCollectedLength = 1 << 22
 
 // allocTypedArrayChecked allocates a view's buffer, refusing a length that
-// could not be held.
+// could not be held. A view made by its length is bounded as a buffer is,
+// at maxBufferLength bytes: the specification allows up to 2**53-1
+// elements, which no machine can hold, and a request past what a buffer
+// may be is refused before anything is allocated, so that a script asking
+// for one gets a RangeError rather than taking the process down with it.
 func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*typedArrayData, error) {
-	if n < 0 || n > maxTypedArrayLength ||
-		n*int64(elemInfos[kind].size) > maxTypedArrayLength*8 {
+	if n < 0 || n > maxBufferLength/int64(elemInfos[kind].size) {
 		return nil, r.throwRangeError("the typed array length is too large")
 	}
 	if err := r.reserveMemory(int(n) * elemInfos[kind].size); err != nil {

@@ -1,6 +1,8 @@
 package quickjs_test
 
 import (
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -236,6 +238,58 @@ func TestTypedArrayLengthLimits(t *testing.T) {
 		}
 		rt.Close()
 	}
+}
+
+// TestTypedArrayLengthIsTheBuffers pins that a view made by its length is
+// bounded as a buffer is, at 2 GiB of elements' bytes: one made by its length
+// had been held to 2**28 elements whatever their size, so that a byte array
+// past 256 MiB could be made over a buffer but not by asking for it (KI-88).
+// Under a memory limit, what is within the bound is the limit's to refuse.
+func TestTypedArrayLengthIsTheBuffers(t *testing.T) {
+	t.Parallel()
+	const tooLarge = "RangeError: the typed array length is too large"
+	rt := quickjs.New(quickjs.WithMemoryLimit(1 << 20))
+	defer rt.Close()
+	// B is the most bytes a buffer may have: 2**31, or on a 32-bit platform,
+	// where a slice holds no more, 2**31 - 1.
+	b := "2**31"
+	if strconv.IntSize == 32 {
+		b = "(2**31 - 1)"
+	}
+	for src, want := range map[string]string{
+		"new Uint8Array(B + 1)":                    tooLarge,
+		"new Int16Array(Math.floor(B / 2) + 1)":    tooLarge,
+		"new Float32Array(Math.floor(B / 4) + 1)":  tooLarge,
+		"new Float64Array(Math.floor(B / 8) + 1)":  tooLarge,
+		"new BigInt64Array(Math.floor(B / 8) + 1)": tooLarge,
+		"new Uint8Array({length: B + 1})":          tooLarge,
+		"new Uint8Array(2**28 + 1)":                "",
+		"new Uint8Array(B)":                        "",
+		"new Float64Array(Math.floor(B / 8))":      "",
+		"new Uint8Array({length: 2**28 + 1})":      "",
+	} {
+		v, err := rt.Eval(`var B = ` + b + `; try { ` + src + `; "made" } catch (e) { e.name + ": " + e.message }`)
+		if want == "" {
+			// Within the bound: the memory limit refuses it, which nothing
+			// in the script can catch.
+			if !errors.Is(err, quickjs.ErrMemoryLimit) {
+				t.Errorf("%s = %v, %v; want ErrMemoryLimit", src, v, err)
+			}
+			continue
+		}
+		if err != nil || v.String() != want {
+			t.Errorf("%s = %v, %v; want %s", src, v, err, want)
+		}
+	}
+	if testing.Short() || strconv.IntSize == 32 {
+		return
+	}
+	// Made, and a view of wider elements from it bounded as one made by its
+	// length is.
+	checkEval(t, `var a = new Uint8Array(2**28 + 1); a[2**28] = 7;
+		var r; try { new Float64Array(a) } catch (e) { r = e.name + ": " + e.message }
+		[a.length, a[2**28], a.byteLength, r].join()`,
+		"268435457,7,268435457,"+tooLarge)
 }
 
 // An iterable is never asked how long it is, so what refuses an over-long one

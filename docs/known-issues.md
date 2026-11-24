@@ -1420,7 +1420,15 @@ Paths are relative to this repository; `go-intl:` paths are in
   so the bound refuses only one way of asking. No document gives it.
 - **Expected:** Node makes it, of 268,435,457 elements, and a
   `Float64Array` of as many, 2 GiB.
-- **Status:** open.
+- **Status:** fixed. A view made by its length is bounded as a buffer is,
+  at 2 GiB of elements' bytes (`maxBufferLength`): 2^31 bytes, 2^30
+  16-bit elements, 2^29 32-bit and 2^28 64-bit ones, past which it is a
+  RangeError before anything is allocated, and within which the memory
+  limit decides. A view made from another of narrower elements is bounded
+  the same way, and reserved from the limit, where it had been neither. A
+  `Float64Array` of 2^28 + 1 elements stays refused, as a buffer of its 2
+  GiB and 8 bytes is; C QuickJS bounds both at 2^31 - 1 bytes, and Node at
+  what the machine can allocate. Test: `TestTypedArrayLengthIsTheBuffers`.
 
 ### KI-89 JSON nests at most 10,000 deep
 - **Where:** `internal/vm/builtins_json.go`, `jsonMaxDepth` (10000), the
