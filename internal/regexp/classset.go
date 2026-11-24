@@ -249,6 +249,10 @@ func (p *parser) parseClassSet() (node, error) {
 		}
 		v.complement()
 	}
+	if p.foldsSets() {
+		// Its operands were folded, which leaves the matcher nothing to fold.
+		v.set.exact = true
+	}
 	return v.node(), nil
 }
 
@@ -379,6 +383,10 @@ func (p *parser) parseClassSetChars() (*classSetValue, bool, error) {
 	switch kind {
 	case classAtomSet:
 		v.set.addSet(set)
+		if set.exact {
+			// What propertySet made under the quirks, folded as it is.
+			return v, false, nil
+		}
 		return p.foldOperand(v), false, nil
 	case classAtomStringSet:
 		v.set.addSet(set)
@@ -391,6 +399,13 @@ func (p *parser) parseClassSetChars() (*classSetValue, bool, error) {
 	case classAtomStrings:
 		for _, s := range strs {
 			v.addString(s)
+		}
+		if p.nodeQuirks && p.foldsSets() {
+			// A string of one character is its folding alone, not every
+			// code point that folds as it does (CompileNodeQuirks).
+			v.set = setFromRanges(foldedPoints(v.set.positive()), false)
+			v.strings = foldStrings(v.strings)
+			return v, false, nil
 		}
 		return p.foldOperand(v), false, nil
 	}
@@ -429,33 +444,65 @@ func (p *parser) foldsSets() bool {
 // one of its members -- rather than as the folded members alone. The closure
 // of a complement, a difference or an intersection of closures is that of
 // the folded sets', so the operations work on closures as they are, and the
-// matcher, which folds the character it reads, finds in a closure what the
-// folded set holds. A string is kept folded, so that two strings that differ
-// only in case are the same one.
+// matcher finds in a closure what the folded set holds, folding the
+// character it reads or, as the class is compiled, not (charSet.exact). A
+// string is kept folded, so that two strings that differ only in case are
+// the same one.
 func (p *parser) foldOperand(v *classSetValue) *classSetValue {
 	if !p.foldsSets() {
 		return v
 	}
 	v.set = setFromRanges(caseClosure(v.set.positive()), false)
-	if len(v.strings) > 0 {
-		strs := v.strings
-		v.strings = nil
-		for _, s := range strs {
-			folded := make([]rune, len(s))
-			for i, c := range s {
-				folded[i] = foldCase(c)
-			}
-			v.addString(folded)
+	v.strings = foldStrings(v.strings)
+	return v
+}
+
+// foldStrings is strs with each character folded (ucd.CaseFold), each
+// string once.
+func foldStrings(strs [][]rune) [][]rune {
+	if len(strs) == 0 {
+		return strs
+	}
+	var v classSetValue
+	v.set = newCharSet()
+	for _, s := range strs {
+		folded := make([]rune, len(s))
+		for i, c := range s {
+			folded[i] = ucd.CaseFold(c)
+		}
+		v.addString(folded)
+	}
+	return v.strings
+}
+
+// foldedPoints is the folding of each code point of rs, which are few: the
+// one-character strings of a \q{...}.
+func foldedPoints(rs []charRange) []charRange {
+	var out []charRange
+	for _, rg := range rs {
+		for c := rg.lo; c <= rg.hi; c++ {
+			f := ucd.CaseFold(c)
+			out = append(out, charRange{f, f})
 		}
 	}
-	return v
+	return normalizedRanges(out)
 }
 
 // propertySet is the set \p{name}, or with negate \P{name}, denotes. Where
 // foldsSets says operands are folded, \P{name} is the complement of the
 // property's case closure, not the closure of its complement: \P{Lu} under
 // the i and v flags leaves out "k", which folds as "K" does.
+//
+// Under CompileNodeQuirks \p{ASCII} and \P{ASCII} are not folded at all,
+// and are marked exact, which keeps them so.
 func (p *parser) propertySet(name string, negate bool) (*charSet, bool) {
+	if p.nodeQuirks && name == "ASCII" && p.foldsSets() {
+		set, ok := unicodeClass(name, negate)
+		if ok {
+			set.exact = true
+		}
+		return set, ok
+	}
 	if !negate || !p.foldsSets() {
 		return unicodeClass(name, negate)
 	}

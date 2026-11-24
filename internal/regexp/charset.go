@@ -29,6 +29,10 @@ type charSet struct {
 	// foldCase is set when the i flag applies, in which case membership is
 	// tested against the simple case folds of the character too.
 	foldCase bool
+	// exact marks a set whose ranges are already what the i flag makes of
+	// them -- a v-mode class's under it, whose operands were folded -- and
+	// which is matched as it is, the character read not folded.
+	exact bool
 	// table is the shared property table the ranges were taken from, if
 	// they were: ranges still in it are the package's, not the pattern's,
 	// which Footprint does not count.

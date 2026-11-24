@@ -1220,8 +1220,12 @@ Paths are relative to this repository; `go-intl:` paths are in
   matcher, folding what it reads, tests as it did. 3,000 random class
   expressions under `v` and `iv` answer as QuickJS does over 33 subjects;
   Node differs on 163 of them, where V8 leaves the Kelvin sign and the long
-  s out of `\p{ASCII}` folded and does not fold a `\q{...}` string of one
-  character, against the specification (`TestClassSetFoldsOperands`).
+  s out of `\p{ASCII}` folded and folds a `\q{...}` string of one character
+  to its folding alone, against the specification
+  (`TestClassSetFoldsOperands`).
+  `WithNodeQuirks` follows V8 in both (`regexp.CompileNodeQuirks`), and
+  answers as Node does on all 3,000, and on 3,000 more with more strings of
+  one character (`TestNodeQuirksRegExpFolding`).
 
 ### KI-97 `v = [v]` in a loop makes an array that holds itself, with the JIT
 - **Where:** the JIT's code for an array literal (`internal/jit/mir`'s

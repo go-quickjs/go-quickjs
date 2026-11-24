@@ -176,6 +176,8 @@ type compileOpts struct {
 	// noQuick quickFirst's splits; noGreedy opGreedy; noUnroll a repeat's
 	// iterations written out.
 	noAnchor, noRuns, noQuick, noGreedy, noUnroll bool
+	// nodeQuirks parses the pattern as CompileNodeQuirks does.
+	nodeQuirks bool
 }
 
 func compileNode(n node, flags Flags) *program {
@@ -268,7 +270,7 @@ func (c *compiler) compile(n node) {
 			// ASCII: \W does not match those, though \w does.
 			set = classNotFoldWord
 		}
-		if c.flags&FlagIgnoreCase != 0 && !set.foldCase {
+		if c.flags&FlagIgnoreCase != 0 && !set.foldCase && !set.exact {
 			set = set.folded()
 		}
 		c.emit(instr{op: opClass, arg: c.addClass(set), rev: c.reverse})

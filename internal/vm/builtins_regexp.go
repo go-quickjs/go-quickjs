@@ -243,7 +243,12 @@ func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
 	}
 	source, flags = r.ownText(source), r.ownText(flags)
 	key = regexpKey{source, flags}
-	re, err := regexp.Compile(source, flags)
+	compile := regexp.Compile
+	if r.nodeQuirks {
+		// V8 folds two of a v-mode class's operands its own way under i.
+		compile = regexp.CompileNodeQuirks
+	}
+	re, err := compile(source, flags)
 	if err != nil {
 		return nil, err
 	}

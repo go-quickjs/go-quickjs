@@ -39,7 +39,7 @@ func compileUTF8With(source, flags string, opts compileOpts) (*Regexp, error) {
 	if err != nil {
 		return nil, &SyntaxError{Msg: err.Error(), Pattern: source}
 	}
-	tree, groups, names, err := parse(source, f)
+	tree, groups, names, err := parse(source, f, opts.nodeQuirks)
 	if err != nil {
 		return nil, err
 	}

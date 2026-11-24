@@ -447,6 +447,38 @@ const Version = %q
 	}
 	fmt.Fprintf(w, "}\n\n")
 
+	// A code point's simple folding is mostly its lower case; these are
+	// the ones whose folding is not, a code point with a lower case and no
+	// folding among them, which folds to itself.
+	lowerOf := func(r rune) rune {
+		if l, ok := d.lower[r]; ok {
+			return l
+		}
+		return r
+	}
+	foldTo := map[rune]rune{}
+	for r, f := range d.fold {
+		if f != lowerOf(r) {
+			foldTo[r] = f
+		}
+	}
+	for r, l := range d.lower {
+		if _, ok := d.fold[r]; !ok && l != r {
+			foldTo[r] = r
+		}
+	}
+	var unlike []rune
+	for r := range foldTo {
+		unlike = append(unlike, r)
+	}
+	sort.Slice(unlike, func(i, j int) bool { return unlike[i] < unlike[j] })
+	fmt.Fprintf(w, "// foldNotLower is CaseFolding's simple folding of each code point whose\n"+
+		"// folding is not its simple lower case.\nvar foldNotLower = []foldPair{\n")
+	for _, r := range unlike {
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X},\n", r, foldTo[r])
+	}
+	fmt.Fprintf(w, "}\n\n")
+
 	for _, m := range []struct {
 		name, doc string
 		full      map[rune][]rune

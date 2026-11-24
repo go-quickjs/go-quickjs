@@ -413,7 +413,12 @@ func WithLocale(tag string) Option {
 // its buffer, where the standard answers 0. A Promise subclass's resolve
 // that throws when a then's reaction settles the subclass's promise is
 // followed by its reject, given the exception, where the standard hands
-// the exception to the host (OnUncaughtException).
+// the exception to the host (OnUncaughtException). A regular expression's
+// class under the i and v flags folds two of its operands as V8 does:
+// \p{ASCII} without the Kelvin sign and the long s, which fold into it, and
+// a \q{...} string of one character to its folding alone, so that
+// /\p{ASCII}/iv does not match "K" and /[\q{C}]/iv does not match "C",
+// where the standard matches both.
 // The WebAssembly namespace wasm/wasmjs installs validates modules against
 // V8's limits rather than the WebAssembly JavaScript interface's: a memory64
 // may declare at most 262,144 pages, where the interface allows 2^37-1, and a

@@ -57,9 +57,26 @@ func CompileFlags(source string, f Flags) (*Regexp, error) {
 	return compileFlagsWith(source, f, compileOpts{})
 }
 
+// CompileNodeQuirks is Compile for a runtime that follows Node where V8
+// departs from the standard. Under the i and v flags together a class's
+// operands are case-folded before its set operations, and V8 folds two of
+// them otherwise: \p{ASCII} is the 128 code points alone, without the
+// Kelvin sign and the long s, which fold into it, so that /\p{ASCII}/iv
+// does not match the Kelvin sign and /\P{ASCII}/iv does; and a \q{...}
+// string of one character is its simple case folding alone, so that
+// /[\q{C}]/iv matches "c" and not "C". A class under those flags is then
+// matched as the set it is, without folding the character it reads.
+func CompileNodeQuirks(source, flags string) (*Regexp, error) {
+	f, err := ParseFlags(flags)
+	if err != nil {
+		return nil, &SyntaxError{Msg: err.Error(), Pattern: source}
+	}
+	return compileFlagsWith(source, f, compileOpts{nodeQuirks: true})
+}
+
 // compileFlagsWith is CompileFlags, the forms opts leaves out left out.
 func compileFlagsWith(source string, f Flags, opts compileOpts) (*Regexp, error) {
-	tree, groups, names, err := parse(source, f)
+	tree, groups, names, err := parse(source, f, opts.nodeQuirks)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +101,7 @@ func Validate(source, flags string) error {
 	if err != nil {
 		return &SyntaxError{Msg: err.Error(), Pattern: source}
 	}
-	_, _, _, err = parse(source, f)
+	_, _, _, err = parse(source, f, false)
 	return err
 }
 

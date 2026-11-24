@@ -56,6 +56,8 @@ type parser struct {
 	// depth is how deeply the group or class being parsed is nested, which
 	// nest refuses past maxNesting.
 	depth int
+	// nodeQuirks folds a v-mode class's operands as CompileNodeQuirks says.
+	nodeQuirks bool
 }
 
 // maxNesting is how deeply groups and classes may nest. The parser, the
@@ -98,11 +100,12 @@ func patternUnits(pattern string) []rune {
 }
 
 // parse builds the syntax tree for a pattern.
-func parse(pattern string, flags Flags) (node, int, map[string][]int, error) {
+func parse(pattern string, flags Flags, nodeQuirks bool) (node, int, map[string][]int, error) {
 	p := &parser{
 		src:        patternUnits(pattern),
 		flags:      flags,
 		groupNames: make(map[string][]int),
+		nodeQuirks: nodeQuirks,
 	}
 	// Named groups have to be discovered before the body is parsed, because a
 	// reference may precede its definition and because the presence of any

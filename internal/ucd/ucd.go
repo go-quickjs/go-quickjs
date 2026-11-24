@@ -188,6 +188,26 @@ func SimpleFold(r rune) rune {
 	return r
 }
 
+// CaseFold is r's simple case folding, CaseFolding's common and simple
+// mapping of it, or r where it has none: the member of r's SimpleFold orbit
+// the orbit folds to.
+func CaseFold(r rune) rune {
+	c := uint32(r)
+	lo, hi := 0, len(foldNotLower)
+	for lo < hi {
+		m := int(uint(lo+hi) >> 1)
+		if foldNotLower[m].from < c {
+			lo = m + 1
+		} else {
+			hi = m
+		}
+	}
+	if lo < len(foldNotLower) && foldNotLower[lo].from == c {
+		return rune(foldNotLower[lo].to)
+	}
+	return ToLower(r)
+}
+
 // FoldRanges calls f with ranges of code points outside which every code
 // point is alone in its simple case folding orbit (SimpleFold(r) == r): the
 // ASCII letters, the case-mapped ranges and the orbits' own entries. A range

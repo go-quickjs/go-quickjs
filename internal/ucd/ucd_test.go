@@ -143,6 +143,38 @@ func TestCaseIgnorable(t *testing.T) {
 	}
 }
 
+// TestCaseFold holds CaseFold to what a simple case folding is: one member
+// of each SimpleFold orbit, which every member folds to and which folds to
+// itself; and to CaseFolding.txt where the lower case is not the folding.
+func TestCaseFold(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		f := CaseFold(r)
+		if CaseFold(f) != f {
+			t.Fatalf("CaseFold(U+%04X) = U+%04X, which folds to U+%04X", r, f, CaseFold(f))
+		}
+		in := f == r
+		for g := SimpleFold(r); g != r; g = SimpleFold(g) {
+			if CaseFold(g) != f {
+				t.Fatalf("U+%04X folds to U+%04X, U+%04X of its orbit to U+%04X", r, f, g, CaseFold(g))
+			}
+			in = in || g == f
+		}
+		if !in {
+			t.Fatalf("CaseFold(U+%04X) = U+%04X, outside its orbit", r, f)
+		}
+	}
+	for r, want := range map[rune]rune{
+		'A': 'a', 'k': 'k', 0x212A: 'k', 0x017F: 's', 0x1E9E: 0x00DF, 0x00DF: 0x00DF,
+		0x0130: 0x0130, 0x0131: 0x0131, 0x03C2: 0x03C3, 0x0345: 0x03B9, 0x1FBE: 0x03B9,
+		0xAB70: 0x13A0, 0x13A0: 0x13A0, 0x13F8: 0x13F0, 0x1FD3: 0x0390, 0xFB05: 0xFB06,
+		0x01C5: 0x01C6, 0x2126: 0x03C9,
+	} {
+		if got := CaseFold(r); got != want {
+			t.Errorf("CaseFold(U+%04X) = U+%04X, want U+%04X", r, got, want)
+		}
+	}
+}
+
 // TestFoldRanges holds FoldRanges to what it promises: every code point
 // SimpleFold takes elsewhere is in one of its ranges.
 func TestFoldRanges(t *testing.T) {
