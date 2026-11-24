@@ -326,10 +326,6 @@ func computeUses(f *Func) {
 	}
 }
 
-// cutKey is the key of the edge from one block to another among the edges
-// loopDepths has cut.
-func cutKey(from, to *Block) uint64 { return uint64(uint32(from.ID))<<32 | uint64(uint32(to.ID)) }
-
 // loopDepths sets each block's depth to the number of loops it is in, by
 // a loop nesting forest as Steensgaard's: a loop is a strongly connected
 // component of the control flow graph, its entries the blocks of it that
@@ -346,8 +342,18 @@ func loopDepths(f *Func) {
 	for _, b := range f.Blocks {
 		b.Depth = 0
 	}
-	cut := &ws.cut
-	cut.reset(16)
+	// cut marks the edges cut, by edgeOff[b.ID]+k for b's k-th successor:
+	// every edge from one block to another, where a block has several.
+	edgeOff := grown(ws.edgeOff, int(f.nextBlock))
+	nedges := 0
+	for _, b := range f.Blocks {
+		edgeOff[b.ID] = int32(nedges)
+		nedges += len(b.Succs)
+	}
+	cut := grown(ws.cut, nedges)
+	clear(cut)
+	ws.edgeOff, ws.cut = edgeOff, cut
+	cutAny := false
 	// member marks the blocks of the component being nested; inSCC those
 	// of a component found within it.
 	member := ws.blockMarks(f)
@@ -364,11 +370,13 @@ func loopDepths(f *Func) {
 			member[b.ID] = gen
 		}
 		g := gen
-		in := func(from, to *Block) bool {
-			return member[to.ID] == g && (cut.n == 0 || !cut.at(cutKey(from, to)))
+		// in reports whether from's k-th successor's edge is within the
+		// component.
+		in := func(from *Block, k int) bool {
+			return member[from.Succs[k].ID] == g && (!cutAny || !cut[int(edgeOff[from.ID])+k])
 		}
 		for _, scc := range sc.components(blocks, in) {
-			if len(scc) == 1 && !slices.ContainsFunc(scc[0].Succs, func(s *Block) bool { return s == scc[0] && in(s, s) }) {
+			if b := scc[0]; len(scc) == 1 && !slices.ContainsFunc(b.Succs, func(s *Block) bool { return s == b && in(b, slices.Index(b.Succs, b)) }) {
 				continue
 			}
 			sccGen++
@@ -400,7 +408,12 @@ func loopDepths(f *Func) {
 			for _, b := range entries {
 				for _, p := range b.Preds {
 					if inSCC[p.ID] == sccGen {
-						cut.set(cutKey(p, b), true)
+						for k, s := range p.Succs {
+							if s == b {
+								cut[int(edgeOff[p.ID])+k] = true
+								cutAny = true
+							}
+						}
 					}
 				}
 			}
@@ -443,7 +456,7 @@ func (s *sccs) reset(f *Func) {
 
 // components are the strongly connected components of the graph of blocks
 // and the edges in allows, by Tarjan's algorithm.
-func (s *sccs) components(blocks []*Block, in func(from, to *Block) bool) [][]*Block {
+func (s *sccs) components(blocks []*Block, in func(from *Block, k int) bool) [][]*Block {
 	ws := s.ws
 	for _, b := range blocks {
 		s.index[b.ID] = -1
@@ -456,8 +469,8 @@ func (s *sccs) components(blocks []*Block, in func(from, to *Block) bool) [][]*B
 		s.next++
 		s.stack = append(s.stack, b)
 		s.onStack[b.ID] = true
-		for _, c := range b.Succs {
-			if !in(b, c) {
+		for k, c := range b.Succs {
+			if !in(b, k) {
 				continue
 			}
 			if s.index[c.ID] < 0 {

@@ -35,7 +35,8 @@ type workspace struct {
 	frames   []orderFrame
 	dom      domTree
 	loops    []natLoop
-	cut      u64map[bool]
+	cut      []bool
+	edgeOff  []int32
 	inSCC    []int32
 	scc      sccs
 	sccLists arena[[]*Block]
