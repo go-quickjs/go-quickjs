@@ -970,6 +970,34 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Test: `TestBodyVarsShadowParameters`, `TestEvalVarsBesideParameters`,
     `TestDebuggerBodyEvalScope`.
 
+### KI-80 `o.k += v` wrote its sum over another of the object's properties
+- **Where:** the JIT's learning at a deoptimization, `internal/vm/jit_ssa.go`
+  (`jitDeoptSeenOp`). `o.k += v` and `o.k++` are register code's `add_prop`,
+  whose read and store share one site, the store's. Where native code left
+  at it for an object of a shape it was not compiled for, the instruction
+  was taken for a read, and the site was filled with what a read of `k` on
+  `o` would remember. The interpreter's store then took that entry for its
+  own, of the object's shape and with no transition, and wrote the sum at
+  the entry's index in the object's own table (`storeCached`).
+- **Effect:** with the JIT, and with no error of its own, the sum went over
+  another property, and `k` was never added:
+  - `k` on no object of the chain, since 6521aac5 (v0.43.0), which let
+    an entry for a key found nowhere take a site that held another
+    shape's: the sum, NaN, went into the object's first property. Octane's
+    Box2D, whose broadphase counts its proxies with `++this.m_proxyCount`
+    and never sets it in its constructor, wrote NaN over `m_tree` at a
+    world's first proxy. After 18 runs it stopped with `TypeError:
+    undefined is not a function` at `this.m_tree.CreateProxy`.
+  - `k` on a prototype, at v0.42.0 and before: the sum went into the
+    object's property at the index `k` has in the prototype's table.
+  - `k` the object's own and read-only, at v0.42.0 and before: the sum
+    was written over it.
+- **Status:** fixed in d82a2f6c. `add_prop`'s site takes from its read
+  only an entry that is the store's too, of a plain writable property the
+  object has itself. Any other the store fills itself as it writes.
+  Found by Octane's Box2D at 30 runs.
+  - Test: `TestJITAddPropAbsent`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details
