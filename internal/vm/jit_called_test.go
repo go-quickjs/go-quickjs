@@ -120,10 +120,10 @@ func TestJITCalledClosuresAllocate(t *testing.T) {
 	if n > 200 {
 		t.Errorf("drive(5000): %d allocations", n)
 	}
-	calls := 0
+	calls, every := 0, jitCollectEvery()
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {
-			if calls++; calls%3 == 0 {
+			if calls++; calls%every == 0 {
 				runtime.GC()
 			}
 		}

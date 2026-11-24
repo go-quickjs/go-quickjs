@@ -251,6 +251,24 @@ func jitCallbackMallocs(t *testing.T, r *Runtime, src string) uint64 {
 	return after.Mallocs - before.Mallocs
 }
 
+// jitCollectEvery is how many of native code's calls of Go pass from one
+// collection to the next in the tests that collect at them, to see that
+// the collector finds what the frames hold: every third. Each collection
+// marks the process's heap, some 2 ms of it in the package's run, and
+// their rounds make some 20,000 to 38,000 calls, so a test took 15 s in
+// any build. Under checkptr (CI's native boundary), every 31st: the
+// programs are the same, every exit and call of Go still made and every
+// read of what native code left still checked, and the collections at
+// every third are the ordinary builds' to make, which run these tests in
+// three lanes. 31 is a prime, so that the collections still fall at every
+// place in a round's calls that repeat, rather than at the same few.
+func jitCollectEvery() int {
+	if allocsOrdinary() {
+		return 3
+	}
+	return 31
+}
+
 // A loop's callback made at the call is inlined in the loop and never
 // made: the loop neither calls it natively nor leaves native code, and a
 // call of its maker allocates one object fewer than where the callback is
