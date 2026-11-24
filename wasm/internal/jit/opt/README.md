@@ -1089,61 +1089,90 @@ workspaces have grown to the functions' sizes a compile allocates little
 but its code; nothing of the workspace is in the code it returns, and
 compiles at once each have their own. Values, blocks and the builder's
 constructs come from chunks, and the small lists -- a value's arguments,
-a block's values, phis and edges, a switch's table -- from arenas
-(`arena.go`), both emptied for the next compile. What is by value or
-block is a table by ID; the maps that are left -- the locals' values at
-the blocks' ends, the values `repairPhis` finds, the edges `loopDepths`
-cuts, the lowering's trap stubs and poll exits -- are `u64map`s
-(`table.go`), open-addressed by a uint64 key, a slot an entry only while
-its stamp is the table's, so that emptying one is a new stamp where a Go
-map's clear costs its capacity. The allocator is an `lsra.Allocator`
-kept there, with its own tables and arenas, and the assembler.
+a block's values, phis and edges, a switch's table, the constants
+`narrow` makes, a copy's argument -- from arenas (`arena.go`), both
+emptied for the next compile. What is by value or block is a table by
+ID. The locals' values at the blocks' ends are a `grid` (`table.go`): a
+row of a column for each local for every block, its entries those marked
+with the compile's stamp -- the Go program's functions have fewer than 32
+locals and about 600 such pairs each; `repairPhis`' values of the
+threaded block's phis at the blocks' starts are an array of an entry for
+each phi and block, where they make 65,536 or fewer; the edges
+`loopDepths` cuts are marks by edge. The maps that are left -- those two
+where they would be too large, `bce`'s ends checked, the lowering's trap
+stubs and poll exits -- are `u64map`s, open-addressed by a uint64 key, a
+slot an entry only while its stamp is the table's, so that emptying one
+is a new stamp where a Go map's clear costs its capacity. The allocator
+is an `lsra.Allocator` kept there, with its own tables and arenas, and
+the assembler. A warm compile of the Go program makes 5 objects, its
+code's copy and its record among them.
 
 The passes walk what may change: the dominator tree is kept until the
 graph changes (`order`), its dominance a test of its walk's numbers;
 GVN's table is a hash table of chains whose entries are popped as the
 walk leaves their blocks; `copyelim` stops after the phis where no copy
-is left; `thread` removes the predecessors it threads together and
-counts the uses only where a block may thread; `dce` counts them again
-only after removing phis that only themselves used. The lowering numbers
-only the values the allocator sees, densely and in the order of their
-IDs (`Value.vreg`), so that the allocator decides as it would by ID, and
-its cold code is data (`stub`), not closures. The allocator's liveness
+is left, and rewrites the uses and drops the copies in one walk; `thread`
+removes the predecessors it threads together and counts the uses only
+where a block may thread; `dce` counts them again only after removing
+phis that only themselves used; the last pass finds the natural loops --
+over a dominator tree the split edges would have it compute again --
+only for a listing, which alone prints their headers: the allocator
+weighs uses by `loopDepths`' depths. The lowering numbers only the
+values the allocator sees, densely and in the order of their IDs
+(`Value.vreg`), so that the allocator decides as it would by ID; finds
+each phi's place once for the edges into its block (`phiDst`,
+`phiStore`); takes a block's split moves in order (`Result.GapsOf`); and
+its cold code is data (`stub`), not closures. An instruction the
+allocator sees is its registers in one list -- uses, definitions,
+temporaries -- a hint, a call flag and the index of its clobbers among
+the function's few (`lsra.Inst`, 40 bytes). The allocator's liveness
 follows the paths from the uses (Register allocation); what a register
-lives across is counted by sums over the clobbers, a few ranges are
-tested and merged against many by searches, and the webs and the pairs
-to coalesce are ordered by counting sorts.
+lives across is counted by sums over the clobbers, a table of the
+clobbers before each position giving each range's; a few ranges are
+tested and merged against many by searches; the webs and the pairs to
+coalesce are ordered by counting sorts; what splitting knows of a web --
+its ranges as they were, its holes, its events -- is apart from it
+(`webSplit`), made for the webs it plans holes in; and the events, each
+register's uses and definitions by position, are found in one walk and
+placed by a counting sort.
 
 `TestOptCompileCorpus` measures it (Validation). On the Go program
 `internal/cmd/wasmbench` builds -- 3,011 functions, 3.77 MB of body -- a
-compile takes 158 µs a function, 126 ns a byte of body (196 µs at
-GOMAXPROCS=1), and allocates 25 KB and 121 objects, 11 KB of it the
-code's copy; it took 398 µs (589 at GOMAXPROCS=1) and allocated 627 KB
-and 5,394 objects before. By phase, µs a function:
+compile takes 168 µs a function, 134 ns a byte of body, and allocates
+12.4 KB and 5 objects (over 40 repeated compiles; 11 KB of it the code's
+copy); a first compile, in a workspace still growing, 169 µs, 27 KB and
+8 objects. 7ca010e4, before splitting, took 167 and 170 µs and allocated
+21 KB and 115 objects, 49 KB and 149; 1bf325a3, which split, 191 and 190
+µs; before the compile's cost was first worked on it took 398 µs and
+allocated 627 KB and 5,394 objects. By phase, µs a function (in turns, on
+one machine):
 
-| build | passes | describe | liveness | ranges | webs | scan, slots | emit, encode |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 23 | 63 | 10 | 7 | 8 | 16 | 10 | 19 |
+| | build | passes | describe | liveness | ranges | webs | scan | slots | emit, encode |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7ca010e4 | 21 | 64 | 11 | 7 | 8 | 16 | 7 | 4 | 24 |
+| 1bf325a3 | 22 | 65 | 12 | 6 | 8 | 19 | 18 | 6 | 28 |
+| now | 20 | 55 | 9 | 6 | 9 | 15 | 17 | 6 | 27 |
 
--- the passes: copyelim 13 (five runs), gvn 13 (two), thread 16, loops
-6, dce 5, fold 4, bce 3. The largest functions cost the most a byte (225
-ns for one of 17 KB of body and 1,110 blocks).
+-- the passes now: thread 15, gvn 12 (two runs), copyelim 10 (five),
+dce 5, check 4, loops 3.5, bce 3, fold 3. The largest functions cost the
+most a byte (342 ns for one of 16 KB of body).
 
-Splitting (Register allocation) costs the Go program's compiles 15%, 172
+Splitting (Register allocation) cost the Go program's compiles 15%, 172
 to 198 µs a function: the scan 7 to 19 µs -- the holes' planning, with
 each register's uses and definitions by position found once, at a
 function's first eviction, and each split web's, with the sums of their
 weights, at its first -- the result's moves 4 to 8, and the emission of
 them 22 to 27. 856 of the 3,011 functions change, their code 0.2% larger
-in all; the spec scripts' functions do not split, and cost what they did.
+in all; the spec scripts' functions do not split, and cost what they
+did. The work above took the rest of the compile down by about as much,
+the splitting kept and the code the same, function by function.
 
 A compile in a workspace its function outgrows -- a large function's
 first in a process, or one after the collector has emptied the pool --
 allocates what the workspace grows by, and that, more than its work,
-makes it dearer: gzip's function 2211 (17.7 KB of body) takes 14 ms at
-its first compile in a new process and 5.4 at the next, at GOMAXPROCS=1,
-allocating 23 MB against 1.6; 10.3 ms with the collector off, the rest
-the first touch of new memory. `TestOptCompileCorpus` logs the first
+makes it dearer: gzip's function 2211 (17.7 KB of body) takes 11-13 ms at
+its first compile in a new process and 5-8 at the next, allocating 20 MB
+(23 before the locals' grid). `TestOptCompileCorpus` logs the first
 compiles apart (with `WASM_OPT_ONLY` naming one function, its first
 compile is cold, the repeated ones warm). The lists made a block at a
 time come from arenas, each as long as it will be (the allocator's view
@@ -1151,20 +1180,30 @@ of the blocks: their edges, phis and instructions); the parts of a web
 taken apart share one list of hints, where each had its own of all of
 them; a split web's holes and ranges change in their arrays; and an
 arena's or chunks' first buffer is a couple of kilobytes, not 256 values,
-each chunk after it twice the one before. 2211's first compile makes
-2,344 objects where it made 11,474 and the Go program's warm compiles
-113 a function where they made 119, their bytes 4% fewer and their time
-level.
+each chunk after it twice the one before. What is left of a large
+function's growth is mostly its liveness sets -- a block's live-in and
+live-out sets are bits for each register live across a block boundary,
+so blocks times such registers -- its ranges and its values. Kept across
+collections rather than in the pool, a workspace saves the Go program's
+first compiles little (27.0 KB a function, against 27.0 to 31.8 as the
+collections fall): their bytes are the workspace growing once to the
+largest function's size.
 
 The Go program's tiered first runs at GOMAXPROCS=1, which compile on the
 program's goroutine, lose to the baseline's where they tier big
-functions up: json 82-88 ms against 64, gzip 65 against 52, interp 43
-against 40 (the others gain: sha256 64 against 84, sort 122 against 150,
-regexp 53 against 56). That is the compiles' own work more than their
-first touch: json's twenty tier-ups take 17.6 ms warm and 20.5 at their
-first, gzip's fifteen 13 to 16 ms, 190 ns a byte of body; the allocator's
-phases are a third of it, the jump threading, the build and the emission
-the rest, spread over the passes with no one hot spot.
+functions up: json 84 ms against 68, gzip 62 against 53, interp 40
+against 39 (the others gain: sha256 63 against 85, sort 121 against 152,
+regexp 55 against 59; the fastest of four rounds in turns; json 83, gzip
+64 and interp 44 at 1bf325a3). That is the compiles: with the threshold
+out of reach the first runs are the baseline's (json 65-71 ms, gzip
+54-56, interp 41-42), so the counting of calls costs little, and json's
+twenty tier-ups and gzip's fifteen take 12-18 ms of the run. A threshold
+of 100,000 calls left json's and gzip's first runs level with the
+baseline's but took the compiles into their second runs -- gzip's 24 ms
+to 37-39, json's 33-40 to 45-56 -- so the threshold stays. At the default
+GOMAXPROCS, compiling in the background, every program's first run is
+the baseline's or faster (json 65 against 66, gzip 53 against 55, interp
+38 against 40, regexp 47 against 55).
 
 ## Refusals
 
@@ -1236,7 +1275,12 @@ encoding), and the bytes and objects they allocated per function.
 `WASM_OPT_HASHES=FILE` writes each function's code's hash, or its
 refusal, and `WASM_OPT_BASE=FILE` compares with a file so written: a change
 that should not change the code is checked by both, the base's hashes
-written at its parent. `WASM_OPT_ONLY` limits the corpus to the functions
+written at its parent. Hashed, the compiles are given the same addresses
+of the write barrier and its routine in every build, and the layout's
+addresses the code holds (the array classes' table, the i31s' word) are
+zeroed before the hash, so that two builds' hashes compare; built for
+linux/arm64 and run under QEMU, the test compares arm64's code the same
+way. `WASM_OPT_ONLY` limits the corpus to the functions
 it names, by the keys the test logs (`goprog.wasm#2211`), and the ten
 slowest are logged with their size. `-cpuprofile` and `-memprofile`
 profile the test.
@@ -1408,7 +1452,8 @@ segments -- memories other than an i32 one 514, offsets 14, atomics 80,
 the table instructions that allocate or copy 218, memory.init and
 data.drop 73 were refused -- and 3,914 before it took references and
 tail calls; in 32 to 54 ms, 5 to 8 µs a function (on a busy machine). The Go program's 3,011 functions
-compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
+compile in 0.17 ms each (0.40 before the compile's cost was worked
+on; the baseline's, 0.12 ms).
 
 On arm64 (GitHub's `ubuntu-24.04-arm` runner, Linux), measured when the
 tier was ported to it (954d9a4e; wasmbench's runs as above, but median
@@ -1454,11 +1499,18 @@ registers the allocator gave out.
   Wimmer and Mössenböck's splitting re-scans the part after a split, would
   reach those; the holes' cost weighs a use from a slot as a move, where
   on amd64 most such uses are memory operands.
-- The compile's cost, 0.16 ms a Go function, now spread over its
-  phases (The compile's cost): fewer passes over the IR -- copyelim
-  runs five times, the dominator tree up to three -- and trivial phis
-  the builder need not make. In the background it costs the first run
-  little, but it is CPU an embedder running a runtime on each core pays.
+- The compile's cost, 0.17 ms a Go function, spread over its phases
+  (The compile's cost), none above 15%: the holes' planning (the scan,
+  17 µs where it was 7 before splitting), copyelim's five runs, the
+  trivial phis the builder makes and the first pass removes (about a
+  fifth of the values built), and a range for every block a register is
+  live through -- the position between two blocks is in neither, so that
+  a register live across 100 blocks has 100 ranges, 42% of all, where
+  merged they would change the density the allocator decides by. A large
+  function's liveness sets are blocks times registers, most of its first
+  compile's growth. In the background the compile costs the first run
+  little, but it is CPU an embedder running a runtime on each core pays,
+  and at GOMAXPROCS=1 it is what json's and gzip's first runs lose.
 - Inlining of small callees.
 - v128 constants as values: a shuffle's mask and a constant operand are
   loaded from the pool where they are used, in every turn of a loop.
