@@ -332,7 +332,7 @@ func TestJITArrayPoolBlocks(t *testing.T) {
 		if _, err := refCall(t, inst, "fixed", Val{N: 20}); err != nil {
 			t.Fatal(err)
 		}
-		set := inst.jit.pools.free[0].set
+		set := inst.pools.free[0].set
 		pools := 0
 		for _, p := range set.all {
 			if p.class < 0 {
@@ -447,7 +447,7 @@ func TestJITArrayPoolsConcurrent(t *testing.T) {
 		for err := range errs {
 			t.Fatalf("opt %v: %v", opt, err)
 		}
-		if n := len(inst.jit.pools.free); n == 0 || n > jitPoolsKept {
+		if n := len(inst.pools.free); n == 0 || n > gcPoolsKept {
 			t.Fatalf("opt %v: the instance keeps %d tables", opt, n)
 		}
 	}
@@ -512,7 +512,7 @@ func TestJITArrayPoolsBudget(t *testing.T) {
 			}
 			if count {
 				b.recount(nil, 0)
-				inst.jit.pools.free[0].set.giveBack()
+				inst.pools.free[0].set.giveBack()
 				if got := b.Used(); got != 0 {
 					t.Fatalf("opt %v: %d bytes used after a count and the pools given back, want 0", opt, got)
 				}

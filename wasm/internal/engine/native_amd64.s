@@ -64,6 +64,46 @@ TEXT ·wasmNativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
 	ADJSP $-112
 	JMP AX
 
+// wasmNativeAlloc calls nativeAllocGo for native code, which jumps here
+// with the context in DI, the request in R8 and its way back in AX: it
+// leaves the answer in R8, every general register but AX, R8 and R9 as it
+// was. As wasmNativeCallH's, its frame is one the function that entered
+// the code called.
+TEXT ·wasmNativeAlloc(SB), NOSPLIT|NOFRAME, $0-0
+	ADJSP $112
+	NO_LOCAL_POINTERS
+	MOVQ DI, 0(SP)
+	MOVQ R8, 8(SP)
+	MOVQ AX, 24(SP)
+	MOVQ BX, 32(SP)
+	MOVQ CX, 40(SP)
+	MOVQ DX, 48(SP)
+	MOVQ SI, 56(SP)
+	MOVQ DI, 64(SP)
+	MOVQ R10, 72(SP)
+	MOVQ R11, 80(SP)
+	MOVQ R12, 88(SP)
+	MOVQ R13, 96(SP)
+	CALL ·nativeAllocGo(SB)
+	MOVQ 16(SP), R8
+	MOVQ 24(SP), AX
+	MOVQ 32(SP), BX
+	MOVQ 40(SP), CX
+	MOVQ 48(SP), DX
+	MOVQ 56(SP), SI
+	MOVQ 64(SP), DI
+	MOVQ 72(SP), R10
+	MOVQ 80(SP), R11
+	MOVQ 88(SP), R12
+	MOVQ 96(SP), R13
+	ADJSP $-112
+	JMP AX
+
+TEXT ·wasmNativeAllocAddr(SB), NOSPLIT, $0-8
+	LEAQ ·wasmNativeAlloc(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
 TEXT ·wasmNativeStoreRefAddr(SB), NOSPLIT, $0-8
 	LEAQ ·wasmNativeStoreRef(SB), AX
 	MOVQ AX, ret+0(FP)

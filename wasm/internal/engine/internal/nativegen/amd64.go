@@ -184,6 +184,8 @@ func emitAMD64() (*block, error) {
 	g.gc()
 	g.simd()
 	g.simdMemory()
+	// Last, so that adding them moved no handler.
+	g.alloc()
 
 	code, err := a.Finish()
 	if err != nil {

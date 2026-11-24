@@ -125,6 +125,24 @@ const (
 	XRefCast
 )
 
+// How native code stores a value into a new object (the engine's
+// natVal.kind): a number into a struct's cell's payload, all 64 bits (Nat64),
+// the low 32, 16 or 8 zero-extended (NatW32, NatW16, NatW8), or a v128 into
+// two cells' payloads (NatV128); a number into an array's element, of 8, 4,
+// 2 or 1 bytes (Nat64, NatE32, NatE16, NatE8); or a reference, the whole
+// slot (NatRef).
+const (
+	Nat64 = iota + 1
+	NatW32
+	NatW16
+	NatW8
+	NatV128
+	NatE32
+	NatE16
+	NatE8
+	NatRef
+)
+
 // How native code tests a reference (the engine's regGC.mode).
 const (
 	CastGo = iota
@@ -150,6 +168,15 @@ const (
 	XV128Store
 	XV128LoadLane
 	XV128StoreLane
+)
+
+// The allocations of the second table (the engine's xStructNew ...).
+const (
+	XStructNew        = 112
+	XStructNewDefault = 113
+	XArrayNew         = 116
+	XArrayNewDefault  = 117
+	XArrayNewFixed    = 118
 )
 
 // The native handlers' context (the engine's nativeCtx): the byte offset
@@ -221,6 +248,12 @@ const (
 	XCalls   = 104 // exec.calls
 	XPoll    = 128 // exec.poll, an int32
 	XFrames  = 192 // exec.frames
+	// exec.natPools, natClasses and natAlloc: the table of pools of new
+	// objects for the instance whose code runs, or 0; the classes of
+	// arrays' blocks by their elements' bytes; the allocation stub.
+	XNatPools   = 264
+	XNatClasses = 272
+	XNatAlloc   = 280
 
 	CallSiteOffset = 8  // callSite.offset
 	CallSiteSize   = 16 // a callSite
@@ -264,13 +297,28 @@ const (
 	MemoryBuf  = 0  // Memory.buf
 	MemoryIs64 = 40 // Memory.Is64, a bool
 
-	GCSize     = 160 // a regGC
+	GCSize     = 192 // a regGC
 	GCNullable = 132 // regGC.nullable
 	GCMode     = 144 // regGC.mode, a byte
 	GCDepth    = 148 // regGC.depth, a uint32
 	GCCanon    = 152 // regGC.canon, a uint32
-	RttSupers  = 16  // rtt.supers, a slice of uint32
-	ArrayElems = 16  // Array.e
-	ArrayLen   = 24  // Array.n
-	GlobalNum  = 0   // Global.Num
+	GCDst      = 8   // regGC.dst, a uint32
+	GCOps      = 16  // regGC.ops, a slice of uint32
+	GCNatTi    = 156 // regGC.natTi, a uint32
+	GCNatShift = 160 // regGC.natShift, a uint32
+	GCNatVals  = 168 // regGC.natVals, a slice of natVal
+
+	NatFrom = 0  // natVal.from
+	NatTo   = 4  // natVal.to
+	NatKind = 8  // natVal.kind
+	NatSize = 12 // a natVal
+
+	PoolCount = 0 // gcPool.n
+	PoolObjs  = 8 // gcPool.objs
+
+	ArrayBlockBytes = 480 // the most bytes of elements a pool's array has room for
+	RttSupers       = 16  // rtt.supers, a slice of uint32
+	ArrayElems      = 16  // Array.e
+	ArrayLen        = 24  // Array.n
+	GlobalNum       = 0   // Global.Num
 )

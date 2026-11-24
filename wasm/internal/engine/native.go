@@ -73,6 +73,9 @@ type instanceTest struct {
 	// simdTable, if not 0, is rSIMD's native table, in place of
 	// nativeSIMDTable.
 	simdTable uintptr
+	// allocHook, if set, is called by the allocation stub's Go
+	// (nativeAllocGo) as it begins.
+	allocHook func()
 }
 
 // regRun runs register code rc in frame f from pc until the frame returns:

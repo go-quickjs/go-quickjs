@@ -167,8 +167,6 @@ func (n *nativeFn) loopCode() *nativeFn {
 // addresses of its globals, of its functions and of its tables.
 type jitInstance struct {
 	globals, funcs, tables atomic.Pointer[[]uintptr]
-	// pools are the tables of pools of new structs no level holds.
-	pools jitPools
 }
 
 // jitLevel is one entry of native code from Go, and the native calls it

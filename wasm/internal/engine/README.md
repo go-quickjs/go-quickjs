@@ -637,11 +637,36 @@ storeRef, under the marking rule. `ref.test`, `ref.cast` and
 the object's type's supertype at the target's depth (`rtt.supers`), i31,
 struct, array and eq by what the reference points to, a top type as
 always true; a bottom type is Go's. A null where an object is needed, an
-index out of bounds and a failed cast exit to Go, which traps;
-allocations (`struct.new`, `array.new*`) stay in Go, an exit each.
-`TestNativeGC` holds every kind, the traps and the casts to the Go table
-with the marking flag read set and clear, and fails where a loop of them
-leaves to Go but for its allocations.
+index out of bounds and a failed cast exit to Go, which traps.
+
+**Allocations.** `struct.new`, `struct.new_default`, `array.new`,
+`array.new_default` and `array.new_fixed` (but of v128 elements) are
+native (native_gc.go, internal/nativegen's `*_alloc.go`): the object is
+taken from a pool of the exec's table for the instance -- the JIT's pools
+and tables (gcpool.go), a struct type's entry its pool, an array type's a
+table of pools by the class of its block, its address the exec's
+`natPools` while the instance's code runs -- and its values are stored by
+the record's `natVals` (a reference plainly, as a new object's field is;
+`array.new`'s value in a loop), then the object goes into its slot and its
+pool's word is cleared, both by storeRef. An empty pool, no table yet,
+and an array past the pools' 480 bytes of elements go to the allocation
+stub, `wasmNativeAlloc` (native_<arch>.s), a frame as
+`wasmNativeStoreRef`'s that calls `nativeAllocGo`: it fills the pool, or
+makes the array filled into its slot, and the handler takes again or goes
+on, without leaving native code. What Go cannot do there -- a trap, a
+charge the budget holds only once what is reachable is counted again --
+it declines, and the handler exits to the instruction's Go handler, which
+allocates as the Go table does. A fill is charged whole as it is made, as
+the JIT's are. `TestNativeGC` holds every kind, the traps and the casts to
+the Go table with the marking flag read set and clear, and fails where a
+loop of them leaves to Go but for an array of v128s; `TestNativeAlloc`
+every kind of allocation, lengths each side of the classes and past them,
+the traps, and no allocation leaving native code but a trapping one;
+`TestNativeAllocBudget` the budget; `TestNativeAllocConvention` the
+stub's frame. Interpreted, micro/gc went from 244-262 to 217-224 ms and
+micro/arrays from 67-71 to 63-66 (3 alternations); at GOMAXPROCS=1, where
+Go's allocation and collection are most of a run, gc was level (344-358
+and 329-358) and arrays 77-85 to 70-80.
 
 **Calls.** `call` enters its callee natively where Go's call would do no
 more than native code can: a function of the same instance with register
@@ -742,9 +767,7 @@ was padded to whole pages.
 
 ## Open work
 
-1. Native allocation of small structs and arrays, from a pool of the
-   context's, once the arrays and gc workloads show it worth more than
-   the exit each costs now.
+1. array.new_data and array.new_elem, and arrays of v128s, natively.
 2. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i

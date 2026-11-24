@@ -35,6 +35,11 @@ func wasmNativeStoreRefAddr() uintptr
 
 var nativeStoreRefAddr = wasmNativeStoreRefAddr()
 
+func wasmNativeAlloc()
+func wasmNativeAllocAddr() uintptr
+
+var nativeAllocAddr = wasmNativeAllocAddr()
+
 // nativeWB is the runtime's write-barrier flag, set while the collector
 // marks. The runtime keeps it for use outside by this linkname and
 // promises not to change its type (runtime/mgc.go, go.dev/issue/67401).
@@ -69,7 +74,13 @@ func nativeRun(f *frame, rc *regCode, pc int32) {
 			c.simdTable = t.simdTable
 		}
 	}
+	// The allocations' table is the instance's the code runs for, while
+	// it runs: an exit may run another instance's code on the exec.
+	x := f.x
+	pools := x.natPools
+	x.natPools, x.natClasses, x.natAlloc = x.poolsAddr(f.inst), uintptr(unsafe.Pointer(&arrayClassOf[0])), nativeAllocAddr
 	wasmNativeEnter(nativeEntry, unsafe.Pointer(c))
+	x.natPools = pools
 }
 
 // nativeExitTable is the exit stub's table of Go handlers: nativeExitRun

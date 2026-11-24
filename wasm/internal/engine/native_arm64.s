@@ -84,6 +84,57 @@ TEXT ·wasmNativeStoreRef(SB), NOSPLIT|NOFRAME, $0-0
 	ADD $160, RSP
 	JMP (R16)
 
+// wasmNativeAlloc calls nativeAllocGo for native code, which jumps here
+// with the context in R25, the request in R4 and its way back in R16: it
+// leaves the answer in R4, every general register native code uses but
+// R4, R6 and R16 as it was.
+TEXT ·wasmNativeAlloc(SB), NOSPLIT|NOFRAME, $0-0
+	SUB $160, RSP
+	NO_LOCAL_POINTERS
+	MOVD R30, 0(RSP)
+	MOVD R25, 8(RSP)
+	MOVD R4, 16(RSP)
+	MOVD R0, 32(RSP)
+	MOVD R1, 40(RSP)
+	MOVD R2, 48(RSP)
+	MOVD R3, 56(RSP)
+	MOVD R5, 64(RSP)
+	MOVD R7, 72(RSP)
+	MOVD R16, 80(RSP)
+	MOVD R17, 88(RSP)
+	MOVD R19, 96(RSP)
+	MOVD R20, 104(RSP)
+	MOVD R21, 112(RSP)
+	MOVD R22, 120(RSP)
+	MOVD R23, 128(RSP)
+	MOVD R24, 136(RSP)
+	MOVD R25, 144(RSP)
+	BL ·nativeAllocGo(SB)
+	MOVD 24(RSP), R4
+	MOVD 32(RSP), R0
+	MOVD 40(RSP), R1
+	MOVD 48(RSP), R2
+	MOVD 56(RSP), R3
+	MOVD 64(RSP), R5
+	MOVD 72(RSP), R7
+	MOVD 80(RSP), R16
+	MOVD 88(RSP), R17
+	MOVD 96(RSP), R19
+	MOVD 104(RSP), R20
+	MOVD 112(RSP), R21
+	MOVD 120(RSP), R22
+	MOVD 128(RSP), R23
+	MOVD 136(RSP), R24
+	MOVD 144(RSP), R25
+	MOVD 0(RSP), R30
+	ADD $160, RSP
+	JMP (R16)
+
+TEXT ·wasmNativeAllocAddr(SB), NOSPLIT, $0-8
+	MOVD $·wasmNativeAlloc(SB), R0
+	MOVD R0, ret+0(FP)
+	RET
+
 TEXT ·wasmNativeStoreRefAddr(SB), NOSPLIT, $0-8
 	MOVD $·wasmNativeStoreRef(SB), R0
 	MOVD R0, ret+0(FP)

@@ -3,6 +3,8 @@ package engine
 import (
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine/internal/regdef"
+
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -47,6 +49,58 @@ type regGC struct {
 	mode  uint8
 	depth uint32
 	canon module.CanonicalIndex
+	// What the native handlers allocate by (native_gc.go): natTi the
+	// type's index in the module plus 1, 0 where they leave the
+	// instruction to Go; natShift the log2 of an array's elements' bytes;
+	// natVals the values a struct.new, array.new_fixed or array.new
+	// stores, from their slots, into the object -- a struct's cells or an
+	// array's elements, at their offsets from its first -- and how.
+	natTi    uint32
+	natShift uint32
+	natVals  []natVal
+}
+
+// natVal is a value native code stores into a new object: from its slot,
+// numeric or reference, to the byte offset in the object's cells or
+// elements, by kind (regdef.Nat64 ...).
+type natVal struct {
+	from, to, kind uint32
+}
+
+// natCell is how a value of struct field type t is stored into its cell,
+// natively.
+func natCell(t module.ValueType) uint32 {
+	switch t.Kind {
+	case module.KindI8:
+		return regdef.NatW8
+	case module.KindI16:
+		return regdef.NatW16
+	case module.KindI32, module.KindF32:
+		return regdef.NatW32
+	case module.KindV128:
+		return regdef.NatV128
+	case module.KindRef:
+		return regdef.NatRef
+	}
+	return regdef.Nat64
+}
+
+// natElem is how a value of array element type t is stored, natively, and
+// the log2 of its bytes; false for a v128, which native code leaves to Go.
+func natElem(t module.ValueType) (kind, shift uint32, ok bool) {
+	switch t.Kind {
+	case module.KindI8:
+		return regdef.NatE8, 0, true
+	case module.KindI16:
+		return regdef.NatE16, 1, true
+	case module.KindI32, module.KindF32:
+		return regdef.NatE32, 2, true
+	case module.KindI64, module.KindF64:
+		return regdef.Nat64, 3, true
+	case module.KindRef:
+		return regdef.NatRef, 4, true
+	}
+	return 0, 0, false
 }
 
 // The GC operations of the second table.
@@ -105,7 +159,7 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 	switch op {
 	case opcode.StructNew, opcode.StructNewDefault:
 		ti := c.r.u32()
-		g := regGC{rt: rttOf(m.Canonical[ti])}
+		g := regGC{rt: rttOf(m.Canonical[ti]), natTi: ti + 1}
 		t := module.Ref(module.HeapIndex(ti))
 		if op == opcode.StructNewDefault {
 			c.gcResult(xStructNewDefault, t, len(c.stack), g)
@@ -115,7 +169,13 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		base := len(c.stack) - len(fields)
 		for i, e := range c.stack[base:] {
 			g.types = append(g.types, fields[i].Type)
-			g.vals = append(g.vals, regMove{from: uint32(c.slotOf(e, base+i)), k: kindOf(e.t)})
+			from := uint32(c.slotOf(e, base+i))
+			g.vals = append(g.vals, regMove{from: from, k: kindOf(e.t)})
+			to := uint32(16*g.rt.cells[i]) + 8
+			if fields[i].Type.IsRef() {
+				to -= 8
+			}
+			g.natVals = append(g.natVals, natVal{from: from, to: to, kind: natCell(fields[i].Type)})
 		}
 		c.stack = c.stack[:base]
 		c.gcResult(xStructNew, t, base, g)
@@ -154,14 +214,28 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		}
 		var h int
 		g.ops, h = c.operands(n)
+		if kind, shift, ok := natElem(g.et); ok {
+			g.natTi, g.natShift = ti+1, shift
+			if op == opcode.ArrayNew {
+				g.natVals = []natVal{{from: g.ops[0], kind: kind}}
+			}
+		}
 		c.gcResult(x, t, h, g)
 	case opcode.ArrayNewFixed:
 		ti := c.r.u32()
 		cnt := int(c.r.u32())
 		g := regGC{rt: rttOf(m.Canonical[ti]), et: m.Types[ti].Array.Elem.Type}
 		base := len(c.stack) - cnt
+		kind, shift, ok := natElem(g.et)
+		if ok && cnt<<shift <= arrayBlockBytes {
+			g.natTi, g.natShift = ti+1, shift
+		}
 		for i, e := range c.stack[base:] {
-			g.vals = append(g.vals, regMove{from: uint32(c.slotOf(e, base+i)), k: kindOf(e.t)})
+			from := uint32(c.slotOf(e, base+i))
+			g.vals = append(g.vals, regMove{from: from, k: kindOf(e.t)})
+			if g.natTi != 0 {
+				g.natVals = append(g.natVals, natVal{from: from, to: uint32(i) << shift, kind: kind})
+			}
 		}
 		c.stack = c.stack[:base]
 		c.gcResult(xArrayNewFixed, module.Ref(module.HeapIndex(ti)), base, g)

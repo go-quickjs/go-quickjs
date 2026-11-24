@@ -72,9 +72,24 @@ type exec struct {
 	// vals is a stack of the arguments of the host functions being called,
 	// each call's taken and given back around it (takeVals).
 	vals []Val
+	// natPools is the address of the exec's table of pools of new objects
+	// for the instance whose code the native handlers run (native_gc.go),
+	// or 0; natClasses the classes of arrays' blocks by their elements'
+	// bytes (arrayClassOf); natAlloc the allocation stub.
+	natPools, natClasses, natAlloc uintptr
 
 	// jit is the state of the native code running on the exec.
 	jit jitExec
+	// pools are the tables of pools of new objects the native handlers
+	// take from, one an instance (native_gc.go), given back as the exec's
+	// call ends.
+	pools []execPools
+}
+
+// execPools is an exec's table of pools for an instance.
+type execPools struct {
+	inst *Instance
+	p    *gcPools
 }
 
 type callSite struct {
@@ -218,6 +233,7 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 		x.vals = x.vals[:0]
 		x.tail = nil
 		x.setJITLevel(0)
+		x.dropPools()
 		x.nc, x.nsp, x.rc, x.rsp = 0, 0, 0, 0
 		x.ctx = nil
 		execPool.Put(x)

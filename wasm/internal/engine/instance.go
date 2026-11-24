@@ -115,6 +115,9 @@ type Instance struct {
 
 	// jit is what the instance's native code reads of it.
 	jit jitInstance
+	// pools are the instance's tables of pools of new objects no level or
+	// exec holds (gcpool.go).
+	pools gcPoolCache
 
 	// test is what a test runs the instance's native code with, nil but
 	// in a test's (instanceTest): after every field native code reads.
