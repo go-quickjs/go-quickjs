@@ -83,10 +83,25 @@ func TestArrayGrowth(t *testing.T) {
 }
 
 // A large array grows by half on every path that grows one by its own
-// operation: 30,000 elements end past Go's capacity of 37,376 by half and 16
-// from 18,432's.
+// operation: 30,000 elements end at the capacity growElems gives an array
+// grown an element at a time, not at Go's append's. Each is rounded to the
+// allocator's pages, which differ by the size of a Value: on a 64-bit
+// platform half again's is 47,104 and Go's 37,376, by half and 16 from
+// 18,432; on a 32-bit one, 30,720 and 31,402, from 19,114.
 func TestArrayGrowthRoom(t *testing.T) {
 	t.Parallel()
+	var byHalf, gos []Value
+	for range 30000 {
+		if len(byHalf) == cap(byHalf) {
+			byHalf = growElems[struct{}](byHalf, 1)
+		}
+		byHalf = append(byHalf, Value{})
+		gos = append(gos, Value{})
+	}
+	want := cap(byHalf)
+	if want == cap(gos) {
+		t.Fatalf("30,000 elements end at a capacity of %d both ways, which tells neither apart", want)
+	}
 	for _, src := range []string{
 		`var a = []; for (var i = 0; i < 30000; i++) a.push(i); a`,
 		`var a = []; for (var i = 0; i < 30000; i++) a[a.length] = i; a`,
@@ -101,8 +116,8 @@ func TestArrayGrowthRoom(t *testing.T) {
 		if n := len(els); n != 30000 || cap(els) > 2*n {
 			t.Errorf("%s: length %d, capacity %d", src, n, cap(els))
 		}
-		if cap(els) < 41000 {
-			t.Errorf("%s: capacity %d, not half again's", src, cap(els))
+		if cap(els) != want {
+			t.Errorf("%s: capacity %d, not half again's %d (Go's append's is %d)", src, cap(els), want, cap(gos))
 		}
 		r.Close()
 	}
