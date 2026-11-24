@@ -1415,7 +1415,7 @@ dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 ## Measurements
 
-`internal/cmd/wasmbench` at 257d4691, median of 5 fresh processes, each
+`internal/cmd/wasmbench` at ed2c6ec9, median of 5 fresh processes, each
 one run after one warm-up run, ms (Ryzen 9 9950X3D2, Windows, 32 threads;
 `jit-tiered`, wasmbench's default `jit` engine, is the baseline with the
 tier at `DefaultOptThreshold` in the background, `jit-opt` every
@@ -1426,43 +1426,44 @@ tier-ups are compiled on the spot.
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
-| micro/fib | 206 | 11.3 | 8.78 | 8.98 |
-| micro/loop | 223 | 14.1 | 14.1 | 14.4 |
-| micro/i64 | 269 | 20.3 | 19.7 | 19.7 |
-| micro/mandelbrot | 152 | 11.2 | 11.1 | 11.0 |
-| micro/nbody | 103 | 6.31 | 3.45 | 3.43 |
-| micro/bytes | 195 | 8.79 | 6.94 | 6.97 |
-| micro/bulk | 127 | 17.5 | 16.9 | 16.6 |
-| micro/indirect | 382 | 20.5 | 20.6 | 20.9 |
-| micro/brtable | 240 | 42.3 | 41.5 | 41.7 |
-| micro/globals | 174 | 26.7 | 26.7 | 27.1 |
-| micro/gc | 350 | 240 | 251 | 247 |
-| micro/simd | 75.1 | 2.94 | 2.94 | 2.94 |
-| programs/sha256 | 1921 | 65.4 (81.3) | 48.0 (63.5) | 48.3 (134) |
-| programs/sort | 1768 | 129 (147) | 108 (129) | 107 (211) |
-| programs/json | 884 | 35.8 (59.8) | 28.9 (59.0) | 25.1 (182) |
-| programs/regexp | 827 | 34.1 (53.5) | 28.8 (49.6) | 28.4 (140) |
-| programs/gzip | 479 | 24.9 (48.7) | 21.1 (48.3) | 20.2 (162) |
-| programs/interp | 504 | 22.8 (36.2) | 12.0 (37.9) | 12.1 (95.0) |
+| micro/fib | 113 | 11.7 | 4.63 | 4.65 |
+| micro/loop | 68.0 | 14.1 | 14.4 | 14.1 |
+| micro/i64 | 96.9 | 20.2 | 12.8 | 12.9 |
+| micro/mandelbrot | 93.6 | 11.3 | 10.5 | 10.5 |
+| micro/nbody | 64.7 | 6.34 | 3.43 | 3.41 |
+| micro/bytes | 81.6 | 8.76 | 5.52 | 5.52 |
+| micro/bulk | 102 | 17.2 | 11.0 | 10.9 |
+| micro/indirect | 189 | 20.6 | 16.8 | 17.1 |
+| micro/brtable | 113 | 42.3 | 42.2 | 42.4 |
+| micro/globals | 76.7 | 26.7 | 10.7 | 11.1 |
+| micro/gc | 228 | 83.8 | 96.6 | 97.2 |
+| micro/arrays | 61.5 | 27.7 | 32.5 | 33.0 |
+| micro/simd | 18.6 | 2.95 | 2.98 | 2.95 |
+| programs/sha256 | 791 | 67.6 (83.0) | 44.1 (62.2) | 43.3 (134) |
+| programs/sort | 690 | 128 (147) | 89.2 (113) | 88.8 (197) |
+| programs/json | 463 | 34.5 (58.6) | 26.9 (58.7) | 21.0 (179) |
+| programs/regexp | 305 | 35.0 (52.9) | 25.2 (45.2) | 24.2 (137) |
+| programs/gzip | 189 | 23.6 (46.0) | 19.1 (46.5) | 17.8 (160) |
+| programs/interp | 167 | 23.1 (36.9) | 9.79 (37.6) | 10.2 (93.7) |
 
 The Go programs' steady state, once every function that will be compiled
 is (`-warmup 15 -reps 10`, median of 3 processes, ms):
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
-| sha256 | 65.3 | 47.3 | 47.4 |
-| sort | 129 | 106 | 106 |
-| json | 35.4 | 25.2 | 24.6 |
-| regexp | 34.4 | 28.4 | 28.2 |
-| gzip | 24.5 | 20.0 | 19.7 |
-| interp | 21.7 | 11.7 | 11.5 |
+| sha256 | 65.3 | 42.0 | 41.8 |
+| sort | 129 | 89.2 | 89.4 |
+| json | 35.2 | 22.1 | 21.4 |
+| regexp | 35.1 | 24.5 | 23.8 |
+| gzip | 24.4 | 18.2 | 17.7 |
+| interp | 22.2 | 9.75 | 9.87 |
 
-The tier takes 15 to 46% off the baseline's steady state. The baseline's
+The tier takes 28 to 56% off the baseline's steady state. The baseline's
 own column is half or less of what it was in this README's earlier table
 for sha256, regexp and gzip (144, 70.8 and 53.0 ms), the baseline having
 since come to make calls through tables and references and the bulk
 memory instructions natively (1db2aac1, 5c074edf), as the tier did
-first. json's second run, 28.9 ms tiered, is not
+first. json's second run, 26.9 ms tiered, is not
 yet its steady state: tier-ups are still being compiled in the background
 then.
 
@@ -1483,8 +1484,8 @@ pools Go fills (8d179ac8, the baseline README's GC objects), 247 to 99 ms
 optimized and 240 to 82 in the baseline, the rest Go's allocation and
 collection; arrays, as `arrays` makes them, from pools by class too
 (9c416599, af732b61): 67 to 31 ms optimized, 65 to 26 in the baseline. The tiered first runs are the baseline's or better but
-interp's (+5%), the baseline code's counting of calls; json's is level
-(59.8 to 59.0 ms). Compiled on the program's goroutine they were +10% and
+interp's and gzip's (+2% and +1%), the baseline code's counting of calls;
+json's is level (58.6 to 58.7 ms). Compiled on the program's goroutine they were +10% and
 +4%, and +19% and +17% before the compile's cost was worked on (see
 Tier-up).
 
