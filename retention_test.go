@@ -86,10 +86,19 @@ func TestStaleStackSlotsAreSwept(t *testing.T) {
 		// stack than anything after it reaches, so nothing writes over it.
 		ignore(0, 0, 0, 0, new Array(2e6).fill(0));
 		// The collector runs, and then this frame runs on long enough for the
-		// interpreter to check in, which is when the slots are swept.
+		// interpreter to check in, which is when the slots are swept. The
+		// interpreter learns of the collection from a finalizer, which runs
+		// on a goroutine of its own and, on a loaded machine, can run after
+		// one loop of the frame's has ended: the frame runs on, checking in,
+		// until the array is gone or a hundred collections have passed.
 		liveMB();
-		for (var i = 0; i < 20000; i++) {}
-		liveMB() - before`)
+		var grown;
+		for (var k = 0; k < 100; k++) {
+			for (var i = 0; i < 20000; i++) {}
+			grown = liveMB() - before;
+			if (grown <= 8) break;
+		}
+		grown`)
 	if err != nil {
 		t.Fatal(err)
 	}
