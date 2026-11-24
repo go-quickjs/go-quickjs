@@ -82,7 +82,7 @@ func randomFunc(rng *rand.Rand) *Func {
 	}
 	nb0 := nb
 	nb = len(succs)
-	f := &Func{Blocks: make([]Block, nb)}
+	f := &Func{Blocks: make([]Block, nb), Clobbers: randomClobbers}
 	for i := range f.Blocks {
 		f.Blocks[i].Succs = succs[i]
 		for _, s := range succs[i] {
@@ -150,7 +150,7 @@ func randomFunc(rng *rand.Rand) *Func {
 		v := newV(int8(rng.IntN(2)))
 		f.FixedSlot[v] = slot
 		slot += int32(f.Width[v])
-		f.Blocks[0].Insts = append(f.Blocks[0].Insts, Inst{Defs: []VReg{v}, Hint: None})
+		f.Blocks[0].Insts = append(f.Blocks[0].Insts, mk(nil, []VReg{v}, None))
 		defs[0] = append(defs[0], v)
 	}
 	// dominating is what the blocks that strictly dominate b define.
@@ -213,32 +213,36 @@ func randomFunc(rng *rand.Rand) *Func {
 			n = rng.IntN(3)
 		}
 		for ; n > 0; n-- {
-			var in Inst
-			in.Hint = None
+			var uses, defs1, temps []VReg
+			hint := None
+			call, clob := false, int8(0)
 			from := append(dominating(i), defs[i]...)
 			for u := rng.IntN(3); u > 0; u-- {
 				if v := pick(from, int8(rng.IntN(2))); v != None {
-					in.Uses = append(in.Uses, v)
+					uses = append(uses, v)
 				}
 			}
 			switch rng.IntN(10) {
 			case 0:
-				in.Call = true
+				call = true
 			case 1:
-				in.Clobber = []uint64{1 << uint(rng.IntN(4)), 1 << uint(rng.IntN(3))}
+				// Each of the twelve masks of randomClobbers.
+				clob = int8(3*rng.IntN(4) + rng.IntN(3) + 1)
 			}
-			if !in.Call && rng.IntN(4) == 0 {
+			if !call && rng.IntN(4) == 0 {
 				for k := 1 + rng.IntN(2); k > 0; k-- {
-					in.Temps = append(in.Temps, newV(int8(rng.IntN(2))))
+					temps = append(temps, newV(int8(rng.IntN(2))))
 				}
 			}
 			for d := rng.IntN(3); d > 0; d-- {
-				in.Defs = append(in.Defs, newV(int8(rng.IntN(2))))
+				defs1 = append(defs1, newV(int8(rng.IntN(2))))
 			}
-			if len(in.Uses) > 0 && len(in.Defs) > 0 {
-				in.Hint = in.Uses[0]
+			if len(uses) > 0 && len(defs1) > 0 {
+				hint = uses[0]
 			}
-			defs[i] = append(defs[i], in.Defs...)
+			defs[i] = append(defs[i], defs1...)
+			in := NewInst(nil, uses, defs1, temps, hint)
+			in.Call, in.Clobber = call, clob
 			b.Insts = append(b.Insts, in)
 		}
 	}
@@ -278,11 +282,11 @@ func TestCoalesce(t *testing.T) {
 		Class:     []int8{0, 0, 0, 0},
 		FixedSlot: []int32{0, -1, -1, 1},
 		Blocks: []Block{
-			{Succs: []int{1}, Insts: []Inst{{Defs: []VReg{0}, Hint: None}, {Defs: []VReg{3}, Hint: None}}},
+			{Succs: []int{1}, Insts: []Inst{mk(nil, []VReg{0}, None), mk(nil, []VReg{3}, None)}},
 			{Preds: []int{0, 2}, Succs: []int{2, 3}, Depth: 1, Phis: []Phi{{Def: 1, Args: []VReg{0, 2}}},
-				Insts: []Inst{{Uses: []VReg{1, 3}, Defs: []VReg{2}, Hint: 1}, {Uses: []VReg{2}, Hint: None}}},
-			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{{Hint: None}}},
-			{Preds: []int{1}, Insts: []Inst{{Uses: []VReg{2, 3}, Hint: None}}},
+				Insts: []Inst{mk([]VReg{1, 3}, []VReg{2}, 1), mk([]VReg{2}, nil, None)}},
+			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{mk(nil, nil, None)}},
+			{Preds: []int{1}, Insts: []Inst{mk([]VReg{2, 3}, nil, None)}},
 		},
 	}
 	cfg := &Config{Classes: [][]int{{0, 1}}, NumSlots: 8}
@@ -463,12 +467,12 @@ func TestWeightOfStoredValues(t *testing.T) {
 		Class:     []int8{0, 0, 0, 0},
 		FixedSlot: []int32{-1, -1, -1, -1},
 		Blocks: []Block{
-			{Succs: []int{1}, Insts: []Inst{{Defs: []VReg{0}, Hint: None}, {Hint: None}}},
+			{Succs: []int{1}, Insts: []Inst{mk(nil, []VReg{0}, None), mk(nil, nil, None)}},
 			{Preds: []int{0, 2}, Succs: []int{2, 3}, Depth: 1, Phis: []Phi{{Def: 1, Args: []VReg{0, 2}}},
-				Insts: []Inst{{Uses: []VReg{1}, Defs: []VReg{2}, Hint: 1}, {Defs: []VReg{3}, Hint: None},
-					{Call: true, Hint: None}, {Uses: []VReg{2}, Hint: None}}},
-			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{{Hint: None}}},
-			{Preds: []int{1}, Insts: []Inst{{Uses: []VReg{3, 2}, Hint: None}}},
+				Insts: []Inst{mk([]VReg{1}, []VReg{2}, 1), mk(nil, []VReg{3}, None),
+					{Call: true, Hint: None}, mk([]VReg{2}, nil, None)}},
+			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{mk(nil, nil, None)}},
+			{Preds: []int{1}, Insts: []Inst{mk([]VReg{3, 2}, nil, None)}},
 		},
 	}
 	for _, cfg := range []*Config{
@@ -491,3 +495,18 @@ func TestWeightOfStoredValues(t *testing.T) {
 		}
 	}
 }
+
+// mk is an instruction of uses and defs with hint.
+func mk(uses, defs []VReg, hint VReg) Inst { return NewInst(nil, uses, defs, nil, hint) }
+
+// randomClobbers are the masks randomFunc's instructions clobber: of the
+// first class one of its first four registers, of the second one of its
+// first three.
+var randomClobbers = func() (m [][]uint64) {
+	for a := range 4 {
+		for b := range 3 {
+			m = append(m, []uint64{1 << uint(a), 1 << uint(b)})
+		}
+	}
+	return m
+}()

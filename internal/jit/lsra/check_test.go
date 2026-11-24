@@ -196,7 +196,7 @@ func checkResult(f *Func, cfg *Config, res *Result) error {
 			for _, m := range ms {
 				where[m.V] = m.Reg
 			}
-			for _, u := range inst.Uses {
+			for _, u := range inst.Uses() {
 				if u < 0 || f.Class[u] == NoClass {
 					continue
 				}
@@ -207,15 +207,15 @@ func checkResult(f *Func, cfg *Config, res *Result) error {
 					return false, fmt.Errorf("b%d.%d: v%d used from %d, which does not hold it", b, j, u, where[u])
 				}
 			}
-			for k, tv := range inst.Temps {
+			for k, tv := range inst.Temps() {
 				r := res.Reg[tv]
 				if r < 0 {
 					return false, fmt.Errorf("b%d.%d: temporary v%d has no register", b, j, tv)
 				}
-				if c := int(f.Class[tv]); c < len(inst.Clobber) && inst.Clobber[c]&(1<<r) != 0 {
+				if c := int(f.Class[tv]); c < len(f.ClobberOf(inst)) && f.ClobberOf(inst)[c]&(1<<r) != 0 {
 					return false, fmt.Errorf("b%d.%d: temporary v%d in register %d its instruction clobbers", b, j, tv, r)
 				}
-				others := append(append(slices.Clone(inst.Uses), inst.Defs...), inst.Temps[:k]...)
+				others := append(append(slices.Clone(inst.Uses()), inst.Defs()...), inst.Temps()[:k]...)
 				for _, o := range others {
 					if o >= 0 && f.Class[o] == f.Class[tv] && where[o] == r {
 						return false, fmt.Errorf("b%d.%d: temporary v%d shares register %d with v%d", b, j, tv, r, o)
@@ -226,8 +226,8 @@ func checkResult(f *Func, cfg *Config, res *Result) error {
 				var mask uint64
 				if inst.Call {
 					mask = ^uint64(0)
-				} else if c < len(inst.Clobber) {
-					mask = inst.Clobber[c]
+				} else if c < len(f.ClobberOf(inst)) {
+					mask = f.ClobberOf(inst)[c]
 				}
 				for k := 0; k < 64; k++ {
 					if mask&(1<<k) != 0 {
@@ -235,12 +235,12 @@ func checkResult(f *Func, cfg *Config, res *Result) error {
 					}
 				}
 			}
-			for _, tv := range inst.Temps {
+			for _, tv := range inst.Temps() {
 				for _, l := range locs(tv, res.Reg[tv]) {
 					st[l] = nothing
 				}
 			}
-			for _, d := range inst.Defs {
+			for _, d := range inst.Defs() {
 				if d < 0 || f.Class[d] == NoClass {
 					continue
 				}
@@ -366,20 +366,20 @@ func dump(f *Func, res *Result) string {
 				fmt.Fprintf(&sb, "  moves %v\n", ms)
 			}
 			fmt.Fprintf(&sb, "  %d:", j)
-			for _, d := range in.Defs {
+			for _, d := range in.Defs() {
 				sb.WriteString(" " + loc(d))
 			}
 			sb.WriteString(" =")
-			for _, u := range in.Uses {
+			for _, u := range in.Uses() {
 				fmt.Fprintf(&sb, " v%d", u)
 			}
 			if in.Call {
 				fmt.Fprintf(&sb, " call across %v", res.Across(i, j))
 			}
-			if len(in.Clobber) > 0 {
-				fmt.Fprintf(&sb, " clobber %v", in.Clobber)
+			if in.Clobber != 0 {
+				fmt.Fprintf(&sb, " clobber %v", f.ClobberOf(&in))
 			}
-			for _, t := range in.Temps {
+			for _, t := range in.Temps() {
 				sb.WriteString(" temp " + loc(t))
 			}
 			sb.WriteByte('\n')

@@ -186,12 +186,12 @@ func (al *Allocator) eventPass(pairs []evPair) []evPair {
 		for j := range b.Insts {
 			in := &b.Insts[j]
 			u := start + 2 + 2*int32(j)
-			for _, v := range in.Uses {
+			for _, v := range in.Uses() {
 				if v >= 0 && f.Class[v] != NoClass {
 					pairs = append(pairs, evPair{v, u << 2})
 				}
 			}
-			for _, d := range in.Defs {
+			for _, d := range in.Defs() {
 				if d >= 0 && f.Class[d] != NoClass {
 					e := (u+1)<<2 | evDef
 					if webs[d] != nil && webs[d].calls {

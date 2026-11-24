@@ -32,7 +32,19 @@ type allocScratch struct {
 	edges arena[int]
 	phis  arena[lsra.Phi]
 	insts arena[lsra.Inst]
+	// An instruction's uses, definitions and temporaries as found, which
+	// its registers in vregs are made of.
+	ubuf, dbuf, tbuf []lsra.VReg
 }
+
+// The clobbers' indices in the allocator's Func.Clobbers, plus one
+// (lsra.Inst.Clobber).
+const (
+	clobBulk int8 = iota + 1
+	clobDiv
+	clobShift
+	clobAtomic
+)
 
 // lowering is what the lowering keeps of the function it lowers, on every
 // architecture.
@@ -287,17 +299,22 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 		}
 		return lsra.VReg(v.vreg)
 	}
-	uses := func(vs []*Value) []lsra.VReg {
-		out := ws.vregs.take(len(vs))
+	usesOf := func(out []lsra.VReg, vs []*Value) []lsra.VReg {
 		for _, v := range vs {
 			if r := vreg(v); r != lsra.None {
 				out = append(out, r)
 			}
 		}
-		if len(out) == 0 {
-			return nil
-		}
 		return out
+	}
+	lf.Clobbers = append(lf.Clobbers[:0], cl.bulk, cl.div, cl.shift, cl.atomic)
+	// clob is clobber k where it writes a register: an architecture whose
+	// instructions take none fixed has none.
+	clob := func(k int8) int8 {
+		if len(lf.Clobbers[k-1]) == 0 {
+			return 0
+		}
+		return k
 	}
 	g.inst = grown(g.inst, n)
 	for i := range g.inst {
@@ -352,10 +369,11 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				wide(v)
 				continue
 			}
-			in := lsra.Inst{Uses: uses(v.Args), Hint: lsra.None}
+			uses, defs, temps := usesOf(ws.ubuf[:0], v.Args), ws.dbuf[:0], ws.tbuf[:0]
+			hint, call, clobber := lsra.None, false, int8(0)
 			if c := classOf(v.Type); c != lsra.NoClass {
 				lf.Class[v.vreg] = c
-				in.Defs = append(ws.vregs.take(1), lsra.VReg(v.vreg))
+				defs = append(defs, lsra.VReg(v.vreg))
 				wide(v)
 			}
 			switch v.Op {
@@ -364,19 +382,19 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 			case OpGoOp:
 				if v.BulkInCode() {
 					// The code copies or fills in registers of its own.
-					in.Clobber = cl.bulk
+					clobber = clob(clobBulk)
 					if k := copyTemps(v); k > 0 {
-						g.addTemps(lf, &in, &ws.vregs, v, k)
+						temps = g.addTemps(lf, temps, v, k)
 					}
 					break
 				}
 				fallthrough
 			case OpCall, OpCallIndirect, OpCallRef:
-				in.Call = true
+				call = true
 				for k := j + 1; k < len(b.Values) && b.Values[k].Op == OpResult && b.Values[k].Args[0] == v; k++ {
-					in.Defs = appendA(&ws.vregs, in.Defs, lsra.VReg(b.Values[k].vreg))
+					defs = append(defs, lsra.VReg(b.Values[k].vreg))
 				}
-				nargs, nres := len(v.Args), len(in.Defs)
+				nargs, nres := len(v.Args), len(defs)
 				if ft := g.sigOf(v); ft != nil {
 					nargs, nres = len(ft.Params)+extraArgs(v.Op), len(ft.Results)
 				} else {
@@ -390,26 +408,26 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				ft := g.sigOf(v)
 				area = max(area, 2*(len(ft.Params)+extraArgs(v.Op)))
 			case OpDivS, OpDivU, OpRemS, OpRemU, OpMulHU, OpMulHS:
-				in.Clobber = cl.div
+				clobber = clob(clobDiv)
 			case OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg, OpAtomicCmpxchg:
-				in.Clobber = cl.atomic
+				clobber = clob(clobAtomic)
 			case OpShl, OpShrS, OpShrU, OpRotl, OpRotr:
 				if v.Args[1].Op != OpConst {
-					in.Clobber = cl.shift
+					clobber = clob(clobShift)
 				}
 			case OpSIMD:
 				if simdExits(v) {
 					// Go runs it on its operands in the call area.
-					in.Call = true
+					call = true
 					area = max(area, 2*len(v.Args))
 					g.inst[v.vreg] = [2]int32{int32(i), int32(len(lb.Insts))}
 					break
 				}
 				if k := simdTemps(v); k > 0 {
-					g.addTemps(lf, &in, &ws.vregs, v, k)
+					temps = g.addTemps(lf, temps, v, k)
 				}
 				if a := v.Args[0]; a.Type == TV128 && v.Type == TV128 {
-					in.Hint = vreg(a)
+					hint = vreg(a)
 				}
 			}
 			switch v.Op {
@@ -417,25 +435,28 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				OpFAbs, OpFNeg, OpFSqrt, OpFCeil, OpFFloor, OpFTrunc, OpFNearest, OpPromote, OpDemote,
 				OpExtendS, OpExtendU, OpExtend8S, OpExtend16S, OpExtend32S, OpWrap:
 				if r := vreg(v.Args[0]); r != lsra.None && classOf(v.Args[0].Type) == classOf(v.Type) {
-					in.Hint = r
+					hint = r
 				}
 			}
+			in := lsra.NewInst(ws.vregs.take(len(uses)+len(defs)+len(temps)), uses, defs, temps, hint)
+			in.Call, in.Clobber = call, clobber
 			lb.Insts = append(lb.Insts, in)
+			ws.ubuf, ws.dbuf, ws.tbuf = uses[:0], defs[:0], temps[:0]
 		}
 		// The block's end: its branch's condition or its results.
-		var end lsra.Inst
-		end.Hint = lsra.None
+		uses := ws.ubuf[:0]
 		switch b.Kind {
 		case BIf, BSwitch:
 			if g.fused[b.Control.ID] {
-				end.Uses = uses(b.Control.Args)
-			} else {
-				end.Uses = uses([]*Value{b.Control})
+				uses = usesOf(uses, b.Control.Args)
+			} else if r := vreg(b.Control); r != lsra.None {
+				uses = append(uses, r)
 			}
 		case BReturn:
-			end.Uses = uses(b.Results)
+			uses = usesOf(uses, b.Results)
 		}
-		lb.Insts = append(lb.Insts, end)
+		lb.Insts = append(lb.Insts, lsra.NewInst(ws.vregs.take(len(uses)), uses, nil, nil, lsra.None))
+		ws.ubuf = uses[:0]
 		// A block in a loop that calls is taken as run a loop's depth less
 		// often than the loop: where a loop calls, it calls on a path most
 		// turns do not take, more often than not -- a Go program's calls of
@@ -500,23 +521,23 @@ func smallCopy(v *Value) (uint64, bool) {
 // by loads of them all then stores.
 const maxSmallCopy = 64
 
-// addTemps gives instruction in, value v's, k temporaries of the float
-// class, numbered after every value's register.
-func (g *lowering) addTemps(lf *lsra.Func, in *lsra.Inst, vregs *arena[lsra.VReg], v *Value, k int) {
+// addTemps appends to temps value v's k temporaries, of the float class,
+// numbered after every value's register.
+func (g *lowering) addTemps(lf *lsra.Func, temps []lsra.VReg, v *Value, k int) []lsra.VReg {
 	if len(g.temps) == 0 {
 		g.temps = append(g.temps[:0], make([]int32, len(g.byVreg))...)
 	}
 	first := len(lf.Class)
 	g.temps[v.vreg] = int32(first)
-	in.Temps = vregs.take(k)
 	for j := range k {
 		lf.Class = append(lf.Class, classXMM)
 		lf.FixedSlot = append(lf.FixedSlot, -1)
 		if lf.Width != nil {
 			lf.Width = append(lf.Width, 0)
 		}
-		in.Temps = append(in.Temps, lsra.VReg(first+j))
+		temps = append(temps, lsra.VReg(first+j))
 	}
+	return temps
 }
 
 // temp is the register of value v's k-th temporary.

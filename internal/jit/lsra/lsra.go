@@ -89,6 +89,18 @@ type Func struct {
 	Width []int8
 	// Blocks are the function's blocks in layout order, the entry first.
 	Blocks []Block
+	// Clobbers are the registers instructions write besides their Defs,
+	// which an instruction names by index (Inst.Clobber): for each class,
+	// as bits by register number.
+	Clobbers [][]uint64
+}
+
+// ClobberOf is what in clobbers besides its definitions, by class.
+func (f *Func) ClobberOf(in *Inst) []uint64 {
+	if in.Clobber == 0 {
+		return nil
+	}
+	return f.Clobbers[in.Clobber-1]
 }
 
 // Block is a basic block.
@@ -116,26 +128,46 @@ type Phi struct {
 	Args []VReg
 }
 
-// Inst is an instruction: it reads Uses, then writes Defs.
+// Inst is an instruction: it reads its uses, then writes its definitions.
+// Regs holds them, then its temporaries: NUses uses, NDefs definitions,
+// the rest temporaries (NewInst).
 type Inst struct {
-	Uses, Defs []VReg
-	// Clobber is, for each class, the registers it writes besides its
-	// Defs, as bits by register number: no interval live across it may
-	// be in them.
-	Clobber []uint64
+	Regs         []VReg
+	NUses, NDefs uint16
+	// Hint is a use whose register its first definition would like, the
+	// two operands of a two-address instruction: None for none.
+	Hint VReg
 	// Call says it clobbers every register: the intervals live across it
 	// in registers are stored at their definitions and loaded after it.
 	Call bool
-	// Hint is a use whose register Defs[0] would like, the two operands
-	// of a two-address instruction: None for none.
-	Hint VReg
-	// Temps are registers the instruction works in: each live from its
-	// reads to its writes, so that it is none of the instruction's Uses'
-	// or Defs' registers, nor of a register live across it. They are
-	// given registers ahead of anything they meet, and are defined and
-	// used nowhere else. An instruction with temporaries is not a call.
-	Temps []VReg
+	// Clobber is, plus one, the index in Func.Clobbers of the registers it
+	// writes besides its definitions, or 0 for none: no interval live
+	// across it may be in them.
+	Clobber int8
 }
+
+// NewInst is an instruction of uses, defs and temporaries temps, its
+// registers appended to regs, whose capacity past its length they should
+// fit (the client's arena), and its hint.
+//
+// Temporaries are registers the instruction works in: each live from its
+// reads to its writes, so that it is none of the instruction's uses' or
+// definitions' registers, nor of a register live across it. They are
+// given registers ahead of anything they meet, and are defined and used
+// nowhere else. An instruction with temporaries is not a call.
+func NewInst(regs, uses, defs, temps []VReg, hint VReg) Inst {
+	regs = append(append(append(regs, uses...), defs...), temps...)
+	return Inst{Regs: regs, NUses: uint16(len(uses)), NDefs: uint16(len(defs)), Hint: hint}
+}
+
+// Uses are the registers in reads.
+func (in *Inst) Uses() []VReg { return in.Regs[:in.NUses] }
+
+// Defs are the registers in writes.
+func (in *Inst) Defs() []VReg { return in.Regs[in.NUses : in.NUses+in.NDefs] }
+
+// Temps are in's temporaries.
+func (in *Inst) Temps() []VReg { return in.Regs[in.NUses+in.NDefs:] }
 
 // Config is the target's registers and slots.
 type Config struct {

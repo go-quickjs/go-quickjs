@@ -142,10 +142,11 @@ func (g *gen) keepRS() {
 			used |= 1 << g.ra.Reg[vr]
 		}
 	}
-	for _, b := range g.ws.lf.Blocks {
-		for _, in := range b.Insts {
-			if len(in.Clobber) > classGPR {
-				used |= in.Clobber[classGPR]
+	lf := &g.ws.lf
+	for _, b := range lf.Blocks {
+		for k := range b.Insts {
+			if m := lf.ClobberOf(&b.Insts[k]); len(m) > classGPR {
+				used |= m[classGPR]
 			}
 		}
 	}

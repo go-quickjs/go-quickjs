@@ -360,7 +360,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 		for j := range b.Insts {
-			for _, d := range b.Insts[j].Defs {
+			for _, d := range b.Insts[j].Defs() {
 				if alloc(d) {
 					define(d, i, j)
 				}
@@ -370,7 +370,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for j := range b.Insts {
-			for _, u := range b.Insts[j].Uses {
+			for _, u := range b.Insts[j].Uses() {
 				if alloc(u) && defBlock[u] != int32(i) {
 					mark(u)
 				}
@@ -470,14 +470,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		for j := len(b.Insts) - 1; j >= 0; j-- {
 			in := &b.Insts[j]
 			u := start + 2 + 2*int32(j)
-			for _, d := range in.Defs {
+			for _, d := range in.Defs() {
 				if alloc(d) {
 					weight[d] += w
 					defW[d] += w
 					def(d, u+1)
 				}
 			}
-			for _, v := range in.Uses {
+			for _, v := range in.Uses() {
 				if !alloc(v) {
 					continue
 				}
@@ -488,7 +488,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					opened = append(opened, v)
 				}
 			}
-			for _, t := range in.Temps {
+			for _, t := range in.Temps() {
 				// Live from the reads to the writes, and heavier than
 				// anything it meets, which gives way to it.
 				if alloc(t) {
@@ -496,8 +496,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					ranges[t] = appendA(rngs, ranges[t], rng{u, u + 2})
 				}
 			}
-			if in.Call || len(in.Clobber) > 0 {
-				clobbers = append(clobbers, clobber{at: u, masks: in.Clobber, call: in.Call, key: [2]int32{int32(i), int32(j)}, weight: w})
+			if in.Call || in.Clobber != 0 {
+				clobbers = append(clobbers, clobber{at: u, masks: f.ClobberOf(in), call: in.Call, key: [2]int32{int32(i), int32(j)}, weight: w})
 			}
 		}
 		for _, p := range b.Phis {
@@ -745,10 +745,10 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		for j := range b.Insts {
 			in := &b.Insts[j]
-			if in.Hint == None || len(in.Defs) == 0 {
+			if in.Hint == None || in.NDefs == 0 {
 				continue
 			}
-			if x, y := webOf(in.Defs[0]), webOf(in.Hint); x != nil && y != nil && x != y && x.cls == y.cls {
+			if x, y := webOf(in.Regs[in.NUses]), webOf(in.Hint); x != nil && y != nil && x != y && x.cls == y.cls {
 				x.hints = appendA(&al.hints, x.hints, y)
 			}
 		}
@@ -1159,7 +1159,7 @@ func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for j := range b.Insts {
-			for _, u := range b.Insts[j].Uses {
+			for _, u := range b.Insts[j].Uses() {
 				if u < 0 || f.Class[u] == NoClass || defBlock[u] == int32(i) && defInst[u] < int32(j) {
 					continue
 				}
@@ -1203,7 +1203,7 @@ func (al *Allocator) dataflow(f *Func, words int, gi func(VReg) int) {
 		g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
 		for j := len(b.Insts) - 1; j >= 0; j-- {
 			in := &b.Insts[j]
-			for _, d := range in.Defs {
+			for _, d := range in.Defs() {
 				if alloc(d) {
 					if x := gi(d); x >= 0 {
 						k[x/64] |= 1 << (x % 64)
@@ -1211,7 +1211,7 @@ func (al *Allocator) dataflow(f *Func, words int, gi func(VReg) int) {
 					}
 				}
 			}
-			for _, u := range in.Uses {
+			for _, u := range in.Uses() {
 				if alloc(u) {
 					if x := gi(u); x >= 0 {
 						g[x/64] |= 1 << (x % 64)
