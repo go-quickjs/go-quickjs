@@ -4932,6 +4932,16 @@ func (c *core) goStub(st *abi.GoCallState) uint64 {
 		return c.enc.GoStubs[abi.GoStubAdd]
 	case ssa.GoConcat:
 		return c.enc.GoStubs[abi.GoStubConcat]
+	case ssa.GoDelete, ssa.GoDeleteStrict:
+		return c.enc.GoStubs[abi.GoStubDelete]
+	case ssa.GoIndexOf:
+		return c.enc.GoStubs[abi.GoStubIndexOf]
+	case ssa.GoIndex:
+		return c.enc.GoStubs[abi.GoStubIndex]
+	case ssa.GoKeyedWrite:
+		return c.enc.GoStubs[abi.GoStubKeyedWrite]
+	case ssa.GoHas:
+		return c.enc.GoStubs[abi.GoStubHas]
 	}
 	return 0
 }

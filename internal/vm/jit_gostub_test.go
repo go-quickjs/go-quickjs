@@ -171,3 +171,83 @@ func TestJITStringStubs(t *testing.T) {
 		}
 	}
 }
+
+// keyedStubSetup's loops have Go make the keyed operations native code
+// leaves to it through their routines (abi.GoStubDelete, GoStubIndexOf,
+// GoStubIndex, GoStubKeyedWrite, GoStubHas): a property's delete, sloppy
+// and strict, a frozen object's in strict code throwing its TypeError
+// from the exit; a string's and an array's search, from a position too; a
+// read and a write by keys no array's index -- strings, a symbol, a number
+// past the elements -- and the in operator, a proxy's has trap among them,
+// which Go refuses, the exit running it.
+const keyedStubSetup = `
+const keys = ['a', 'b', 'length', 'x1', 'q', 'zz']
+const sym = Symbol('s')
+const handler = { has(t, k) { trapped++; return k === 'q' } }
+let trapped = 0
+function keyed(n) {
+	let h = 0, k = 7, f = 0.5
+	for (let i = 0; i < n; i++) {
+		const o = { a: 1, b: 2, x1: i, [sym]: 3 }
+		const key = keys[i % keys.length]
+		o[key + (i & 1)] = i; o[sym] = h
+		h = (h * 31 + (o[key] | 0) + (o['a' + (i & 1)] | 0) + ((key in o) ? 1 : 0)) | 0
+		delete o[key]; delete o.b
+		h = (h + Object.keys(o).length + ('hello world'.indexOf(key.charAt(0), i % 4)) + [3, 1, i, 4].indexOf(i, 1) + ('b' in o ? 1 : 0)) | 0
+		k = (k * 3 + i) & 255; f += 0.125
+	}
+	return h + ':' + k + ':' + f
+}
+function strictDelete(n) {
+	'use strict'
+	const frozen = Object.freeze({ a: 1, b: 2 })
+	let d = 0
+	try { for (let i = 0; i < n; i++) { const o = { a: i, b: 1 }; delete o[keys[i % 2]]; d += Object.keys(o).length; if (i == n - 2) delete frozen[keys[i % 2]] } } catch (e) { return e.constructor.name + ':' + d }
+	return 'no error:' + d
+}
+function proxied(n) {
+	trapped = 0
+	const p = new Proxy({}, handler)
+	let c = 0
+	for (let i = 0; i < n; i++) { const t = i % 5 == 4 ? p : { q: 1 }; if (keys[i % keys.length] in t) c++ }
+	return c + ':' + trapped
+}
+`
+
+// The keyed operations Go makes go through their own routines
+// (abi.Encoding's GoStubs), past jitGoDirect's and jitHostCall's dispatch,
+// with the interpreter's answers, what Go refuses -- a strict delete that
+// throws, a proxy's trap -- leaving for the exit, which makes it as the
+// interpreter does; with collections at the calls and with the code
+// compiled for a collector that marks.
+func TestJITKeyedStubs(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range jitMarkingModes() {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		calls := 0
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%83 == 0 {
+					runtime.GC()
+				}
+			}
+		})
+		var rounds []string
+		for range 6 {
+			rounds = append(rounds, "keyed(200)", "strictDelete(60)", "proxied(60)")
+		}
+		r := jitAgreesForTest(t, keyedStubSetup, rounds...)
+		jitNativeForTest(t, r, "keyed")
+		stubs := r.jit.goStub
+		if _, err := r.Run(compileForTest(t, "''+keyed(200)")); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.jit.goStub - stubs; got < 2*200 {
+			t.Errorf("marking %v: %d keyed calls of Go through their routines in 200 turns", marking, got)
+		}
+	}
+}

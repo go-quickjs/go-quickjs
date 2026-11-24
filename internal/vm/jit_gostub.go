@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // A call of Go from native code that has a routine of its own
@@ -203,6 +204,104 @@ func (r *Runtime) jitGoConcat(ctx *abi.Context) bool {
 	return true
 }
 
+// The keyed operations Go makes, each for its routine: a property's
+// delete (abi.GoStubDelete, strict or not), a string's or an array's search
+// (GoStubIndexOf), a read and a write by a key (GoStubIndex,
+// GoStubKeyedWrite), the in operator (GoStubHas).
+func jitDeleteGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoDelete(ctx))
+}
+
+func jitIndexOfGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoIndexOf(ctx))
+}
+
+func jitIndexGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoIndex(ctx))
+}
+
+func jitKeyedWriteGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoKeyedWrite(ctx))
+}
+
+func jitHasGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoHas(ctx))
+}
+
+// jitGoIndexOf is a search of a string or an array (ssa.GoIndexOf,
+// jitSearch) of what it searches for, and its position if the call gives
+// one, its result to the call's keep cell; it reports whether it made it.
+// jitIndexOfGo and jitHostCall call it, as the other keyed operations'.
+func (r *Runtime) jitGoIndexOf(ctx *abi.Context) bool {
+	form := int(ctx.GoOp >> abi.GoOpIndexShift)
+	argv := &r.jit.searchArgs
+	args := argv[:1]
+	argv[0] = jitGoArg(ctx, 1)
+	if form&ssa.IndexOfFrom != 0 {
+		args, argv[1] = argv[:2], jitGoArg(ctx, 2)
+	}
+	v, ok := r.jitSearch(form>>1, jitGoArg(ctx, 0), args)
+	*argv = [2]Value{}
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	}
+	return ok
+}
+
+// jitGoKeyedWrite is an element's write, of any receiver, by any key
+// (ssa.GoKeyedWrite, jitKeyedWrite): undefined, the call's result, which
+// nothing reads, as native code's store writes it (mir's keyedStore).
+func (r *Runtime) jitGoKeyedWrite(ctx *abi.Context) bool {
+	if !r.jitKeyedWrite(jitGoArg(ctx, 0), jitGoArg(ctx, 1), jitGoArg(ctx, 2), true) {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Undefined
+	return true
+}
+
+// jitGoIndex is a read by a key (ssa.GoIndex, jitKeyedRead).
+func (r *Runtime) jitGoIndex(ctx *abi.Context) bool {
+	v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	}
+	return ok
+}
+
+// jitGoHas is the in operator (ssa.GoHas, jitHas).
+func (r *Runtime) jitGoHas(ctx *abi.Context) bool {
+	has, ok := r.jitHas(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(has)
+	}
+	return ok
+}
+
+// jitGoDelete is a property's delete, strict or not (ssa.GoDelete,
+// GoDeleteStrict; jitDelete).
+func (r *Runtime) jitGoDelete(ctx *abi.Context) bool {
+	gone, ok := r.jitDelete(jitGoArg(ctx, 0), jitGoArg(ctx, 1), ssa.GoOp(ctx.GoOp&0xff) == ssa.GoDeleteStrict)
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(gone)
+	}
+	return ok
+}
+
 // The routines (jit_leaffast_*.s), and their addresses.
 func jitPowStub()
 func jitModStub()
@@ -212,6 +311,11 @@ func jitMathStub()
 func jitAppendStub()
 func jitAddStub()
 func jitConcatStub()
+func jitDeleteStub()
+func jitIndexOfStub()
+func jitIndexStub()
+func jitKeyedWriteStub()
+func jitHasStub()
 func jitPowStubAddr() uintptr
 func jitModStubAddr() uintptr
 func jitAtan2StubAddr() uintptr
@@ -220,6 +324,11 @@ func jitMathStubAddr() uintptr
 func jitAppendStubAddr() uintptr
 func jitAddStubAddr() uintptr
 func jitConcatStubAddr() uintptr
+func jitDeleteStubAddr() uintptr
+func jitIndexOfStubAddr() uintptr
+func jitIndexStubAddr() uintptr
+func jitKeyedWriteStubAddr() uintptr
+func jitHasStubAddr() uintptr
 
 // jitGoStubs is abi.Encoding's GoStubs: each routine's address.
 func jitGoStubs() (s [abi.MaxGoStubs]uint64) {
@@ -231,5 +340,10 @@ func jitGoStubs() (s [abi.MaxGoStubs]uint64) {
 	s[abi.GoStubAppend] = uint64(jitAppendStubAddr())
 	s[abi.GoStubAdd] = uint64(jitAddStubAddr())
 	s[abi.GoStubConcat] = uint64(jitConcatStubAddr())
+	s[abi.GoStubDelete] = uint64(jitDeleteStubAddr())
+	s[abi.GoStubIndexOf] = uint64(jitIndexOfStubAddr())
+	s[abi.GoStubIndex] = uint64(jitIndexStubAddr())
+	s[abi.GoStubKeyedWrite] = uint64(jitKeyedWriteStubAddr())
+	s[abi.GoStubHas] = uint64(jitHasStubAddr())
 	return s
 }

@@ -116,6 +116,11 @@ TEXT name(SB), NOSPLIT|NOFRAME, $0-0; \
 GO_STUB(·jitAppendStub, ·jitAppendGo)
 GO_STUB(·jitAddStub, ·jitAddGo)
 GO_STUB(·jitConcatStub, ·jitConcatGo)
+GO_STUB(·jitDeleteStub, ·jitDeleteGo)
+GO_STUB(·jitIndexOfStub, ·jitIndexOfGo)
+GO_STUB(·jitIndexStub, ·jitIndexGo)
+GO_STUB(·jitKeyedWriteStub, ·jitKeyedWriteGo)
+GO_STUB(·jitHasStub, ·jitHasGo)
 
 // STUB_ADDR is a routine's address.
 #define STUB_ADDR(name, stub) \
@@ -132,3 +137,8 @@ STUB_ADDR(·jitMathStubAddr, ·jitMathStub)
 STUB_ADDR(·jitAppendStubAddr, ·jitAppendStub)
 STUB_ADDR(·jitAddStubAddr, ·jitAddStub)
 STUB_ADDR(·jitConcatStubAddr, ·jitConcatStub)
+STUB_ADDR(·jitDeleteStubAddr, ·jitDeleteStub)
+STUB_ADDR(·jitIndexOfStubAddr, ·jitIndexOfStub)
+STUB_ADDR(·jitIndexStubAddr, ·jitIndexStub)
+STUB_ADDR(·jitKeyedWriteStubAddr, ·jitKeyedWriteStub)
+STUB_ADDR(·jitHasStubAddr, ·jitHasStub)

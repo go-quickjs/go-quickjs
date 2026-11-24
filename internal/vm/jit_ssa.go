@@ -1972,30 +1972,9 @@ func jitHostCall(ctx *abi.Context) bool {
 		s := *(**String)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return s != nil && r.jitStringAbsent(s, math.Float64frombits(ctx.GoArgs[1].Num))
 	case ssa.GoIndexOf:
-		// A search of a string or an array (jitSearch), what it searches
-		// for, and its position if the call gives one.
-		form := int(ctx.GoOp >> abi.GoOpIndexShift)
-		argv := &r.jit.searchArgs
-		args := argv[:1]
-		argv[0] = jitGoArg(ctx, 1)
-		if form&ssa.IndexOfFrom != 0 {
-			args, argv[1] = argv[:2], jitGoArg(ctx, 2)
-		}
-		v, ok := r.jitSearch(form>>1, jitGoArg(ctx, 0), args)
-		*argv = [2]Value{}
-		if ok {
-			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-		}
-		return ok
+		return r.jitGoIndexOf(ctx)
 	case ssa.GoKeyedWrite:
-		// An element's write, of any receiver, by any key (jitKeyedWrite):
-		// undefined, the call's result, which nothing reads, as native
-		// code's store writes it (mir's keyedStore).
-		if !r.jitKeyedWrite(jitGoArg(ctx, 0), jitGoArg(ctx, 1), jitGoArg(ctx, 2), true) {
-			return false
-		}
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Undefined
-		return true
+		return r.jitGoKeyedWrite(ctx)
 	case ssa.GoBigString:
 		// x.toString() of a BigInt, its radix if the call gives one.
 		var argv [1]Value
@@ -2009,11 +1988,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		return ok
 	case ssa.GoIndex:
-		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
-		if ok {
-			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-		}
-		return ok
+		return r.jitGoIndex(ctx)
 	case ssa.GoHost:
 		return false
 	case ssa.GoArgument:
@@ -2023,17 +1998,9 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		return ok
 	case ssa.GoHas:
-		has, ok := r.jitHas(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
-		if ok {
-			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(has)
-		}
-		return ok
+		return r.jitGoHas(ctx)
 	case ssa.GoDelete, ssa.GoDeleteStrict:
-		gone, ok := r.jitDelete(jitGoArg(ctx, 0), jitGoArg(ctx, 1), ssa.GoOp(ctx.GoOp&0xff) == ssa.GoDeleteStrict)
-		if ok {
-			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(gone)
-		}
-		return ok
+		return r.jitGoDelete(ctx)
 	case ssa.GoElemWrite:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))

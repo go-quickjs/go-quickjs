@@ -2419,7 +2419,11 @@ across it. The other routines take what `GoFast` takes -- the call's
 description, which describes no operand, and where it goes on -- and their
 operands in the context's `GoArgs`, where the call's code writes them, so
 that a site differs from `GoFast`'s only in where it jumps (`goStub`): a
-string's `+` Go makes (`GoAppend`, `GoAdd`, `GoConcat`). Go gives the
+string's `+` Go makes (`GoAppend`, `GoAdd`, `GoConcat`), and the keyed
+operations native code leaves to Go -- a property's delete, a string's or
+an array's search, a read and a write by a key, the in operator
+(`GoDelete`, `GoDeleteStrict`, `GoIndexOf`, `GoIndex`, `GoKeyedWrite`,
+`GoHas`). Go gives the
 context what `ExpandGoCall` gives it but the operands (`jitStubCall`) and
 makes the operation with the function `jitHostCall`'s case calls; what that
 refuses goes on `Fail` bytes past, to the call's exit, as from `GoFast`.

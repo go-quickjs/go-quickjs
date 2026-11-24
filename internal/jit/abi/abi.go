@@ -1808,7 +1808,11 @@ const (
 // as CallGo leaves it (GoOp, GoKeep, GoLast, GoStatus), and its result in
 // the call's keep cell. GoStubAppend is a loop's string builder's s += x
 // (ssa.GoAppend), GoStubAdd any other + Go makes (ssa.GoAdd), GoStubConcat
-// a template's or a concatenation's parts joined (ssa.GoConcat).
+// a template's or a concatenation's parts joined (ssa.GoConcat);
+// GoStubDelete a property's delete (ssa.GoDelete, GoDeleteStrict),
+// GoStubIndexOf a string's or an array's search (ssa.GoIndexOf), GoStubIndex
+// and GoStubKeyedWrite a read and a write by a key (ssa.GoIndex,
+// GoKeyedWrite), GoStubHas the in operator (ssa.GoHas).
 type GoStub int
 
 const (
@@ -1820,6 +1824,11 @@ const (
 	GoStubAppend
 	GoStubAdd
 	GoStubConcat
+	GoStubDelete
+	GoStubIndexOf
+	GoStubIndex
+	GoStubKeyedWrite
+	GoStubHas
 	// NumGoStubs is how many there are.
 	NumGoStubs
 )
