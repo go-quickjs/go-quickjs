@@ -342,6 +342,22 @@ func (r *Result) Moves(b, inst int) []Move {
 	return r.gap.find([2]int32{int32(b), int32(inst)})
 }
 
+// GapsOf is block b's gaps -- its instructions before which split
+// registers move -- from from to to, in the order of the instructions, as
+// Gap numbers them.
+func (r *Result) GapsOf(b int) (from, to int) {
+	if r.splits == 0 {
+		return 0, 0
+	}
+	return int(r.gap.block[b]), int(r.gap.block[b+1])
+}
+
+// Gap is gap k's instruction, by its index in its block, and its moves, as
+// Moves gives them.
+func (r *Result) Gap(k int) (inst int, moves []Move) {
+	return int(r.gap.key[k][1]), r.gap.mv[r.gap.off[k]:r.gap.off[k+1]]
+}
+
 // Entry is where each split register live into block b, and each of its
 // phis split, is where the block begins.
 func (r *Result) Entry(b int) []Move {

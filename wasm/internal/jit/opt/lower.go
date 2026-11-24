@@ -90,6 +90,9 @@ type lowering struct {
 	// into its phis' places, found once.
 	phiDst   []loc
 	phiStore []bool
+	// gapNext and gapEnd are the gaps of the block being lowered not yet
+	// reached (blockGaps).
+	gapNext, gapEnd int
 }
 
 // reset readies l, kept in a workspace, for function f, keeping the
@@ -574,6 +577,22 @@ func (g *lowering) regLoc(v *Value, r int16) loc {
 // stores reports whether v, defined in its register, is stored into its
 // slot too: one that lives across a call.
 func (g *lowering) stores(v *Value) bool { return g.ra.Stored(lsra.VReg(v.vreg)) }
+
+// blockGaps readies block i's gaps (lsra.Result.GapsOf) for a walk of its
+// instructions in order (gapAt).
+func (g *lowering) blockGaps(i int) { g.gapNext, g.gapEnd = g.ra.GapsOf(i) }
+
+// gapAt is the moves before instruction j, as the allocator numbers them,
+// of the block blockGaps readied: its instructions are asked for in order.
+func (g *lowering) gapAt(j int) []lsra.Move {
+	if g.gapNext < g.gapEnd {
+		if inst, ms := g.ra.Gap(g.gapNext); inst == j {
+			g.gapNext++
+			return ms
+		}
+	}
+	return nil
+}
 
 // blockWhere sets where the split values are as block i begins.
 func (g *lowering) blockWhere(i int) {

@@ -799,8 +799,10 @@ func (g *gen) predMoves(b *Block) {
 
 // gapMoves makes the moves of split values before instruction j, as the
 // allocator numbers them, of block i.
-func (g *gen) gapMoves(i, j int) {
-	ms := g.ra.Moves(i, j)
+func (g *gen) gapMoves(i, j int) { g.gap(g.ra.Moves(i, j)) }
+
+// gap makes ms, the moves of split values before an instruction.
+func (g *gen) gap(ms []lsra.Move) {
 	if len(ms) == 0 {
 		return
 	}
@@ -821,6 +823,7 @@ func (g *gen) block(i int, b *Block) {
 	if split {
 		g.blockWhere(i)
 		g.predMoves(b)
+		g.blockGaps(i)
 	}
 	for _, p := range b.Phis {
 		if r := g.where[p.vreg]; r >= 0 && g.stores(p) && !g.phiStore[p.vreg] {
@@ -834,7 +837,7 @@ func (g *gen) block(i int, b *Block) {
 			continue
 		}
 		if split {
-			g.gapMoves(i, inst)
+			g.gap(g.gapAt(inst))
 		}
 		inst++
 		if g.marking {
@@ -843,7 +846,7 @@ func (g *gen) block(i int, b *Block) {
 		g.value(v, b.Values[j+1:])
 	}
 	if split {
-		g.gapMoves(i, inst)
+		g.gap(g.gapAt(inst))
 	}
 	a := g.a
 	if g.marking {
