@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadJP is the layout lock's pad JP, after builtins_json.go, before builtins_json_parse.go: JSON.parse's parser, parseJSON first, and the built-ins after it up to C.
+// layoutPadJP is the layout lock's pad JP, after builtins_json_elements.go, before builtins_json_parse.go: JSON.parse's parser, parseJSON first, up to parseValueAt.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

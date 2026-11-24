@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadBM is the layout lock's pad BM, after builtins_json_parse.go, before builtins_map.go: a Map's and a Set's lookups, (*jsMap).find.
+// layoutPadBM is the layout lock's pad BM, after builtins_json_parse_object.go, before builtins_map.go: a Map's and a Set's lookups, (*jsMap).find.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

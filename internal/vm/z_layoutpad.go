@@ -627,8 +627,14 @@ func init() {
 		if layoutPadNT >= 0 {
 			layoutPadT()
 		}
+		if layoutPadNJE >= 0 {
+			layoutPadJE()
+		}
 		if layoutPadNJP >= 0 {
 			layoutPadJP()
+		}
+		if layoutPadNJO >= 0 {
+			layoutPadJO()
 		}
 		if layoutPadNBM >= 0 {
 			layoutPadBM()

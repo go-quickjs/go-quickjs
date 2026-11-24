@@ -19,9 +19,15 @@ const (
 	layoutPadNT   = -1
 	layoutPadNGT  = -1
 	layoutPadNMT  = -1
+	layoutPadNJE  = -1
+	layoutPadNGJE = -1
+	layoutPadNMJE = -1
 	layoutPadNJP  = -1
 	layoutPadNGJP = -1
 	layoutPadNMJP = -1
+	layoutPadNJO  = -1
+	layoutPadNGJO = -1
+	layoutPadNMJO = -1
 	layoutPadNBM  = -1
 	layoutPadNGBM = -1
 	layoutPadNMBM = -1
