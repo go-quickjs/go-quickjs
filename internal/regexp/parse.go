@@ -844,7 +844,7 @@ func (p *parser) parseUnicodeProperty(negate bool) (*charSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	set, ok := unicodeClass(name, negate)
+	set, ok := p.propertySet(name, negate)
 	if !ok {
 		// A property of strings is a property, but only under v and only where
 		// something that can match more than one character is allowed.

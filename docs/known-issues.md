@@ -1204,7 +1204,16 @@ Paths are relative to this repository; `go-intl:` paths are in
   as it should be.
 - **Expected:** `false` for all three, as Node answers. `/\P{Lu}/iu.test("K")`
   is `true` in both: the `u` flag folds after the complement.
-- **Status:** open.
+- **Status:** fixed. Under `iv` each operand of a class is now kept as its
+  case closure, every code point that folds as one of its members, before
+  any complement, difference or intersection is taken (`foldOperand`), and
+  `\P{...}` is the complement of the property's closure: the operations on
+  closures give the closure of the specification's folded sets, which the
+  matcher, folding what it reads, tests as it did. 3,000 random class
+  expressions under `v` and `iv` answer as QuickJS does over 33 subjects;
+  Node differs on 163 of them, where V8 leaves the Kelvin sign and the long
+  s out of `\p{ASCII}` folded and does not fold a `\q{...}` string of one
+  character, against the specification (`TestClassSetFoldsOperands`).
 
 ### KI-97 `v = [v]` in a loop makes an array that holds itself, with the JIT
 - **Where:** the JIT's code for an array literal (`internal/jit/mir`'s

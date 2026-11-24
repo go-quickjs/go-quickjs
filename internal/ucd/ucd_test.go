@@ -143,6 +143,22 @@ func TestCaseIgnorable(t *testing.T) {
 	}
 }
 
+// TestFoldRanges holds FoldRanges to what it promises: every code point
+// SimpleFold takes elsewhere is in one of its ranges.
+func TestFoldRanges(t *testing.T) {
+	in := make([]bool, unicode.MaxRune+1)
+	FoldRanges(func(lo, hi rune) {
+		for r := lo; r <= hi; r++ {
+			in[r] = true
+		}
+	})
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if SimpleFold(r) != r && !in[r] {
+			t.Fatalf("U+%04X folds to U+%04X and is in no range", r, SimpleFold(r))
+		}
+	}
+}
+
 // benchRunes are characters past ASCII from the scripts identifiers and
 // text are written in.
 var benchRunes = []rune("éßΣσπжЖשׁعदनाकि日本語한글ｱ\U00010D50\U00020000ǅ")

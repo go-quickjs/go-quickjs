@@ -188,6 +188,22 @@ func SimpleFold(r rune) rune {
 	return r
 }
 
+// FoldRanges calls f with ranges of code points outside which every code
+// point is alone in its simple case folding orbit (SimpleFold(r) == r): the
+// ASCII letters, the case-mapped ranges and the orbits' own entries. A range
+// may hold code points that are alone too; ranges may overlap and come in no
+// order.
+func FoldRanges(f func(lo, hi rune)) {
+	f('A', 'Z')
+	f('a', 'z')
+	for _, p := range caseOrbit {
+		f(rune(p.from), rune(p.from))
+	}
+	for i := range caseRanges {
+		f(rune(caseRanges[i].lo), rune(caseRanges[i].hi))
+	}
+}
+
 // FullUpper is r's language-independent upper-case mapping where it is not
 // the simple one: the sharp s's "SS", say. The context-sensitive and the
 // language-sensitive mappings are not here.

@@ -2,8 +2,11 @@ package regexp
 
 import (
 	"sort"
+	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/ucd"
 )
 
 // Class sets: the character-class syntax the `v` flag enables.
@@ -351,18 +354,18 @@ func (p *parser) parseClassSetChars() (*classSetValue, error) {
 	switch kind {
 	case classAtomSet:
 		v.set.addSet(set)
-		return v, nil
+		return p.foldOperand(v), nil
 	case classAtomStringSet:
 		v.set.addSet(set)
 		for _, s := range strs {
 			v.addString(s)
 		}
-		return v, nil
+		return p.foldOperand(v), nil
 	case classAtomStrings:
 		for _, s := range strs {
 			v.addString(s)
 		}
-		return v, nil
+		return p.foldOperand(v), nil
 	}
 
 	// A single `-` between two atoms is a range, exactly as under `u`. A
@@ -380,10 +383,83 @@ func (p *parser) parseClassSetChars() (*classSetValue, error) {
 			return nil, p.errorf("range out of order in character class")
 		}
 		v.set.addRange(lo, hi)
-		return v, nil
+		return p.foldOperand(v), nil
 	}
 	v.set.addChar(lo)
-	return v, nil
+	return p.foldOperand(v), nil
+}
+
+// foldsSets reports whether the i and v flags are both in force, where a
+// class's operands are case-folded before a complement, a difference or an
+// intersection is taken of them (MaybeSimpleCaseFolding).
+func (p *parser) foldsSets() bool {
+	return p.flags&(FlagIgnoreCase|FlagUnicodeSets) == FlagIgnoreCase|FlagUnicodeSets
+}
+
+// foldOperand is v case-folded where foldsSets says operands are.
+//
+// A folded set is kept as its case closure -- every code point that folds as
+// one of its members -- rather than as the folded members alone. The closure
+// of a complement, a difference or an intersection of closures is that of
+// the folded sets', so the operations work on closures as they are, and the
+// matcher, which folds the character it reads, finds in a closure what the
+// folded set holds. A string is kept folded, so that two strings that differ
+// only in case are the same one.
+func (p *parser) foldOperand(v *classSetValue) *classSetValue {
+	if !p.foldsSets() {
+		return v
+	}
+	v.set = setFromRanges(caseClosure(v.set.positive()), false)
+	if len(v.strings) > 0 {
+		strs := v.strings
+		v.strings = nil
+		for _, s := range strs {
+			folded := make([]rune, len(s))
+			for i, c := range s {
+				folded[i] = foldCase(c)
+			}
+			v.addString(folded)
+		}
+	}
+	return v
+}
+
+// propertySet is the set \p{name}, or with negate \P{name}, denotes. Where
+// foldsSets says operands are folded, \P{name} is the complement of the
+// property's case closure, not the closure of its complement: \P{Lu} under
+// the i and v flags leaves out "k", which folds as "K" does.
+func (p *parser) propertySet(name string, negate bool) (*charSet, bool) {
+	if !negate || !p.foldsSets() {
+		return unicodeClass(name, negate)
+	}
+	rs, ok := unicodePropertyRanges(name)
+	if !ok {
+		return nil, false
+	}
+	return &charSet{ranges: complementRanges(caseClosure(rs))}, true
+}
+
+// foldCandidates is ucd.FoldRanges' ranges, sorted and merged: every code
+// point that does not fold alone is in one of them.
+var foldCandidates = sync.OnceValue(func() []charRange {
+	var rs []charRange
+	ucd.FoldRanges(func(lo, hi rune) { rs = append(rs, charRange{lo, hi}) })
+	return normalizedRanges(rs)
+})
+
+// caseClosure is rs, sorted and merged, with every code point that folds as
+// one of its members.
+func caseClosure(rs []charRange) []charRange {
+	rs = normalizedRanges(rs)
+	out := rs
+	for _, rg := range intersectRanges(rs, foldCandidates()) {
+		for c := rg.lo; c <= rg.hi; c++ {
+			for f := ucd.SimpleFold(c); f != c; f = ucd.SimpleFold(f) {
+				out = append(out, charRange{f, f})
+			}
+		}
+	}
+	return normalizedRanges(out)
 }
 
 // classAtomKind says what parseClassSetAtom found.
@@ -448,7 +524,7 @@ func (p *parser) parseClassSetAtom() (rune, classAtomKind, *charSet, [][]rune, e
 			}
 			return 0, classAtomStringSet, v.set, v.strings, nil
 		}
-		set, ok := unicodeClass(name, negated)
+		set, ok := p.propertySet(name, negated)
 		if !ok {
 			return 0, 0, nil, nil, p.errorf("unknown Unicode property %q", name)
 		}
