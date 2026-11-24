@@ -67,7 +67,9 @@ func (r *Runtime) touchDeferredKeys(o *Object) error {
 
 // ensureDeferredEvaluation runs a module synchronously, for the deferred
 // namespace that stands for it. A module that ran and threw throws the same
-// error again.
+// error again. The evaluation's promise is then handled, as EvaluateModuleSync
+// marks it: its failure is the read's exception, which the script may catch,
+// not an unhandled rejection too.
 func (r *Runtime) ensureDeferredEvaluation(m *Module) error {
 	if !isModuleSCCEvaluated(m) && !r.readyForSyncExecution(m, map[*Module]bool{}) {
 		return r.throwTypeError("the deferred module %q cannot be evaluated now", m.Specifier)
@@ -77,6 +79,7 @@ func (r *Runtime) ensureDeferredEvaluation(m *Module) error {
 		return err
 	}
 	if p, ok := done.Object().dataOf().(*promiseData); ok && p.state == promiseRejected {
+		p.handled = true
 		return r.throw(p.value)
 	}
 	return nil

@@ -3,6 +3,7 @@ package quickjs_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -529,6 +530,85 @@ func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
 	if n != 1 {
 		t.Errorf("reported %d times after a late handler, want 1", n)
 	}
+}
+
+// TestModuleFailureIsNotAlsoUnhandled pins that a module that throws while
+// EvalModule waits for it is EvalModule's error alone, not an unhandled
+// rejection too (KI-96): its evaluation's promise was reported at the end of
+// the turn in which it rejected, before EvalModule took it, so that qjs
+// printed the error twice. One that fails after EvalModule has returned, as
+// it waits on something, is reported, once; and so is none that a deferred
+// namespace's read throws, which the read's caller catches.
+func TestModuleFailureIsNotAlsoUnhandled(t *testing.T) {
+	t.Parallel()
+	newRuntime := func(t *testing.T) (*quickjs.Runtime, *[]string) {
+		rt := quickjs.New()
+		t.Cleanup(func() { rt.Close() })
+		var seen []string
+		rt.OnUnhandledRejection(func(reason quickjs.Value) {
+			seen = append(seen, reason.String())
+		})
+		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+			if specifier == "dep.js" {
+				return `export const x = 1; throw new Error("from a dependency")`, specifier, nil
+			}
+			return "", "", fmt.Errorf("no module %q", specifier)
+		})
+		return rt, &seen
+	}
+	for _, c := range []struct{ name, src, want string }{
+		{"throws", `throw new Error("boom")`, "Error: boom"},
+		{"throws after an await", `await 1; throw new Error("late")`, "Error: late"},
+		{"its import throws", `import "dep.js"`, "Error: from a dependency"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt, seen := newRuntime(t)
+			_, err := rt.EvalModule("main.js", c.src)
+			var jsErr *quickjs.Error
+			if !errors.As(err, &jsErr) || jsErr.Error() != c.want {
+				t.Errorf("EvalModule = %v, want %s", err, c.want)
+			}
+			if len(*seen) != 0 {
+				t.Errorf("also reported as unhandled: %q", *seen)
+			}
+		})
+	}
+	t.Run("deferred", func(t *testing.T) {
+		rt, seen := newRuntime(t)
+		ns, err := rt.EvalModule("main.js", `import defer * as ns from "dep.js"
+			let caught = ""
+			try { ns.x } catch (e) { caught = e.message }
+			export { caught }`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if caught, _ := ns.Get("caught"); caught.String() != "from a dependency" {
+			t.Errorf("caught = %q", caught.String())
+		}
+		if len(*seen) != 0 {
+			t.Errorf("also reported as unhandled: %q", *seen)
+		}
+	})
+	t.Run("after returning", func(t *testing.T) {
+		rt, seen := newRuntime(t)
+		if _, err := rt.Eval(`let reject
+			globalThis.p = new Promise((_, r) => { reject = r })
+			globalThis.fail = () => reject(new Error("later"))`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rt.EvalModule("main.js", `await p`); err != nil {
+			t.Fatal(err)
+		}
+		if len(*seen) != 0 {
+			t.Fatalf("reported before it failed: %q", *seen)
+		}
+		if _, err := rt.Eval(`fail()`); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(*seen, ","); got != "Error: later" {
+			t.Errorf("reported %q, want the module's failure once", got)
+		}
+	})
 }
 
 // What a module is told about itself is the host's to decide, and it is told

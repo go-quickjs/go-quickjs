@@ -1475,4 +1475,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   `uncaught (in promise) Error: boom` and its stack, then `Error: boom` and
   its stack again. A script that throws prints it once.
 - **Expected:** once, as a script does here and as Node does.
-- **Status:** open.
+- **Status:** fixed. The evaluation's promise rejected with nothing yet
+  taking it, and was reported at the end of the turn before `EvalModule` took
+  it as its error. It is the host's while `EvalModule` waits on it
+  (`HoldModuleResult`); a module that fails after `EvalModule` has returned,
+  waiting on the host, is reported once, as its rejection. A deferred
+  namespace's read that throws the module's error no longer reports it as
+  well (`TestModuleFailureIsNotAlsoUnhandled`, `TestModuleErrorIsReportedOnce`).

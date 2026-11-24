@@ -820,6 +820,28 @@ func containsModule(list []*Module, m *Module) bool {
 	return false
 }
 
+// HoldModuleResult marks a promise from EvaluateModule as one the host is
+// waiting on, until the returned function is called: a rejection meanwhile is
+// the host's, which ModuleResult gives it as the evaluation's error, not one
+// for OnUnhandledRejection. Once released, a promise still pending is as any
+// other, reported if it rejects with nothing to take it.
+func (r *Runtime) HoldModuleResult(promise Value) (release func()) {
+	if !promise.IsObject() {
+		return func() {}
+	}
+	p, _ := promise.Object().dataOf().(*promiseData)
+	if p == nil {
+		return func() {}
+	}
+	was := p.handled
+	p.handled = true
+	return func() {
+		if p.state == promisePending {
+			p.handled = was
+		}
+	}
+}
+
 // ModuleResult reports what a promise from EvaluateModule has settled to: the
 // failure of a graph that failed, and nothing for one that finished or is still
 // waiting on the host.

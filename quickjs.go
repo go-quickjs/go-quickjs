@@ -1127,6 +1127,8 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	// here, which is what makes a module that awaits something already settled
 	// finish before this returns; one waiting on the host stays pending, and
 	// its failure -- if any -- surfaces as a rejection rather than being lost.
+	// A failure while this waits is its error, and so not an unhandled
+	// rejection too: the host would hear of it twice.
 	done, err := rt.EvaluateModule(mod)
 	if r.closed {
 		// The module closed the Runtime, which stopped it; the stack it ran
@@ -1137,7 +1139,9 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
+	release := rt.HoldModuleResult(done)
 	err = rt.DrainJobs()
+	release()
 	if r.closed {
 		rt.ReleaseClosed()
 		return Value{}, ErrClosed

@@ -797,6 +797,29 @@ func TestProcessEnding(t *testing.T) {
 	}
 }
 
+// TestModuleErrorIsReportedOnce pins that a module that throws, by -m or as
+// a .mjs file, is reported once, as a script that throws is and as node
+// reports it: its evaluation's rejection was reported as an unhandled one,
+// "uncaught (in promise) Error: boom" and its stack, and then as the
+// program's error (KI-96).
+func TestModuleErrorIsReportedOnce(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "m.mjs")
+	if err := os.WriteFile(file, []byte("await 1\nthrow new Error(\"boom\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{
+		{"-m", "-e", `throw new Error("boom")`},
+		{"-e", `throw new Error("boom")`},
+		{file},
+	} {
+		code, _, errOut := exec(t, "", argv...)
+		if code != 1 || strings.Count(errOut, "Error: boom") != 1 || strings.Contains(errOut, "uncaught") {
+			t.Errorf("%q: code=%d err=%q, want the error once", argv, code, errOut)
+		}
+	}
+}
+
 // TestFileAndDataURLs pins how qjs reads file and data URLs, as node's
 // fileURLToPath and import do, on Windows and elsewhere: localhost, in any
 // case, is no host; another host is a UNC server on Windows and refused
