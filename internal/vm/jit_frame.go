@@ -469,3 +469,32 @@ func jitArgumentOf(ctx *abi.Context, args []Value, fn *bytecode.Function) (Value
 	}
 	return Undefined, false
 }
+
+// jitRegClearDead writes undefined to the registers of the window at wb
+// that are dead at the program's instruction ipc, where Go enters e's code
+// on c's frame -- not the function's or the receiver's, nor a parameter,
+// which an arguments object may alias and legacy reflection reads, nor
+// one a closure captures, nor any of a suspending function's, whose
+// generator keeps its own copy of the frame -- before native code runs
+// there. Native code loads the registers live at its entry and writes the
+// frame again only at its exits, whose records write the registers live
+// there; a dead one's slot is no value of the frame's any more, but the
+// collector scans the VM's stack whole: what the interpreter had left in
+// it -- a call's window, a temporary -- stayed reachable for as long as
+// native code ran, a loop's 16 MB array that its push had made through a
+// call window kept alive past every growth after it. Native code never
+// reads such a slot -- it loads none it was not entered with -- and the
+// interpreter writes one before it reads it, as liveness says. Typed
+// code's raw slots are left as they are.
+func (r *Runtime) jitRegClearDead(c *regCode, e *jitRegEntry, wb, ipc int) {
+	p := e.p
+	if c.suspends || p.Live == nil || p.Kinds != nil || wb < 0 {
+		return
+	}
+	end := min(p.Regs, p.Live.N, len(r.stack)-wb)
+	for reg := 2 + int(c.params); reg < end; reg++ {
+		if v := &r.stack[wb+reg]; !v.IsUndefined() && !p.LiveAt(ipc, reg) && !p.IsCaptured(reg) {
+			*v = Undefined
+		}
+	}
+}

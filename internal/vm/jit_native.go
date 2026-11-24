@@ -1807,6 +1807,9 @@ func (r *Runtime) jitRegGoOnAt(f *frame, c *regCode, e *jitRegEntry, wb, rpc, at
 		if !fixed && !polled && resume == 0 && ipc < len(e.p.Origin) && e.isLoop(int(e.p.Origin[ipc])) {
 			loop = true
 		}
+		if resume == 0 && ipc != 0 {
+			r.jitRegClearDead(c, e, wb, ipc)
+		}
 		ctx, ret, ok := r.jitRegStretch(f, c, e, wb, ipc, at, resume, loop)
 		at, resume = -1, 0
 		if !ok {

@@ -2208,6 +2208,25 @@ what escape analysis leaves unmade has its homes past them, then its loops'
 slots (`HomesEnd`, `LoopsEnd`). The VM's stack's top covers them while the
 code runs.
 
+**Dead registers.** Native code loads the registers live at its entry and
+writes the frame again only at its exits, whose records write the
+registers live there; the collector scans the VM's stack whole, so what
+the interpreter left in a register dead at the entry -- a call's window, a
+temporary -- stayed reachable for as long as native code ran: a loop
+entered at its header kept the array a method call before it had in its
+window, 16 MB, past every growth of the next. Go writes undefined to the
+registers dead at the entry's instruction before it enters a loop or goes
+on after an exit (the VM's `jitRegClearDead`), as V8's stack slots dead at
+a safepoint are no roots: not the function's or the receiver's register,
+nor a parameter, which an arguments object may alias and legacy
+reflection reads, nor a register a closure captures, nor any of a
+suspending function's, whose generator keeps the frame. Native code never
+reads such a register -- it loads none it was not entered with -- and the
+interpreter writes one before it reads it, as liveness says. A live
+register a loop reassigns, whose entry value's pointer word stays in its
+slot (a source of the loop's phi), is not dead there, and this does not
+reach it.
+
 **The context block** (`abi.Context`) is what native code reaches through
 its context register. Go sets the frame's addresses before every entry;
 native code writes the exit record and spills, and, for a native call, the
