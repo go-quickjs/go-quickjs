@@ -119,6 +119,10 @@ type gen struct {
 	poll         arm64.Label
 	hasPoll      bool
 	usedG, usedX uint64
+	// wbG is the allocator's general registers the barrier routine keeps:
+	// those it gave out, and those a sequence took for its own while it
+	// may store through the barrier (freeGPR, clearRefs).
+	wbG uint64
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// wb is the function's barrier routine, which hasWB says is made;
@@ -189,6 +193,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 			}
 		}
 	}
+	g.wbG = g.usedG
 	a := g.a
 	g.mark("return stub")
 	retStub := a.Len()
@@ -1795,6 +1800,7 @@ func (g *gen) freeGPR(args []*Value, taken uint64) (arm64.Reg, bool) {
 	}
 	for _, r := range gprs {
 		if used&(1<<r) == 0 {
+			g.wbG |= 1 << r
 			return arm64.Reg(r), true
 		}
 	}

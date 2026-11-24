@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -130,6 +131,11 @@ func (s *inlineSites) outer(off uint32) uint32 {
 func (x *exec) rsEntries(lv *jitLevel, buf []int) []int {
 	rs := x.jit.rs
 	first, last := x.rsIndex(lv.rsBase), x.rsIndex(lv.ctx.RSP)
+	if last < first || last > len(rs) || (last-first)%wjit.RSEntryWords != 0 {
+		// Native code left a return stack entry that is not one of the
+		// level's: a broken invariant, which no walk of it may run on.
+		panic(fmt.Sprintf("wasm jit: the return stack's top at word %d, its level's first at %d, of %d", last, first, len(rs)))
+	}
 	buf = buf[:0]
 	if !lv.cj.inline.any() {
 		for i := first; i < last; i += wjit.RSEntryWords {
@@ -140,6 +146,9 @@ func (x *exec) rsEntries(lv *jitLevel, buf []int) []int {
 	for i := last - wjit.RSEntryWords; i >= first; {
 		buf = append(buf, i)
 		i -= wjit.RSEntryWords * (1 + lv.cj.inline.depth(uint32(rs[i+2])))
+	}
+	if len(buf) > 0 && buf[len(buf)-1] != first {
+		panic(fmt.Sprintf("wasm jit: the return stack's entries end at word %d, not at their level's first, %d", buf[len(buf)-1], first))
 	}
 	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
 		buf[i], buf[j] = buf[j], buf[i]

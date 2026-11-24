@@ -152,10 +152,18 @@ func (g *gen) emitWB(l arm64.Label) {
 	a.Load(s0, rCtx, offWBRet)
 	a.Br(s0)
 	a.Bind(store)
-	for i, r := range wbRegs() {
-		a.Store(rCtx, offSave+int32(8*i), r)
+	for i, r := range gprs {
+		if g.wbG&(1<<r) != 0 {
+			a.Store(rCtx, offSave+int32(8*i), arm64.Reg(r))
+		}
+	}
+	for i, r := range keptRegs {
+		a.Store(rCtx, offSave+int32(8*(len(gprs)+i)), r)
 	}
 	for i, x := range fprs {
+		if g.usedX&(1<<x) == 0 {
+			continue
+		}
 		if g.v128 {
 			a.StoreQ(rCtx, offSaveV+16*int32(x), arm64.FReg(x))
 			continue
@@ -169,10 +177,18 @@ func (g *gen) emitWB(l arm64.Label) {
 	a.MovImm(arm64.Reg(1), g.req.StoreRef)
 	a.Br(arm64.Reg(1))
 	a.Bind(back)
-	for i, r := range wbRegs() {
-		a.Load(r, rCtx, offSave+int32(8*i))
+	for i, r := range gprs {
+		if g.wbG&(1<<r) != 0 {
+			a.Load(arm64.Reg(r), rCtx, offSave+int32(8*i))
+		}
+	}
+	for i, r := range keptRegs {
+		a.Load(r, rCtx, offSave+int32(8*(len(gprs)+i)))
 	}
 	for i, x := range fprs {
+		if g.usedX&(1<<x) == 0 {
+			continue
+		}
 		if g.v128 {
 			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+16*int32(x))
 			continue
@@ -181,16 +197,6 @@ func (g *gen) emitWB(l arm64.Label) {
 	}
 	a.Load(s0, rCtx, offWBRet)
 	a.Br(s0)
-}
-
-// wbRegs are the general registers the barrier routine keeps: the
-// allocator's, then the ones the code keeps.
-func wbRegs() []arm64.Reg {
-	out := make([]arm64.Reg, 0, len(gprs)+len(keptRegs))
-	for _, r := range gprs {
-		out = append(out, arm64.Reg(r))
-	}
-	return append(out, keptRegs[:]...)
 }
 
 // clearRefs makes every reference slot of the frame but the parameters'
@@ -207,6 +213,8 @@ func (g *gen) clearRefs() {
 	// mark, the slots are cleared by plain stores, and while it marks each
 	// pointer word through the barrier.
 	p, n := arm64.Reg(1), arm64.Reg(2)
+	// The slow loop's registers are kept by the barrier routine.
+	g.wbG |= 1<<p | 1<<n
 	slow, done := a.NewLabel(), a.NewLabel()
 	a.MovImm(s0, g.req.WriteBarrier)
 	a.LoadU8(s0, s0, 0)

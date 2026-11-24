@@ -129,6 +129,11 @@ type gen struct {
 	// leaves unused (keepRS). Else the context's RSP holds it.
 	rs     amd64.Reg
 	rsKept bool
+	// wbG and wbX are the allocator's registers the barrier routine keeps:
+	// those the allocator gave a value, those a sequence took for its own
+	// while it may store through the barrier (freeGPR, clearRefs), and
+	// the one that keeps the return stack's entry.
+	wbG, wbX uint64
 }
 
 // keepRS chooses where the code keeps the return stack's next entry: in a
@@ -209,6 +214,19 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	}
 	g.allocate(&g.ws.allocScratch, classes, &amd64Clobbers)
 	g.keepRS()
+	for i, r := range g.ra.Reg {
+		// The temporaries past the values hold nothing across a store.
+		if r >= 0 && i < len(g.byVreg) {
+			if g.byVreg[i].Type.InFloatReg() {
+				g.wbX |= 1 << r
+			} else {
+				g.wbG |= 1 << r
+			}
+		}
+	}
+	if g.rsKept {
+		g.wbG |= 1 << g.rs
+	}
 	a := g.a
 	g.mark("return stub")
 	retStub := a.Len()
@@ -2129,6 +2147,7 @@ func (g *gen) freeGPR(args []*Value, taken uint64) (amd64.Reg, bool) {
 	}
 	for _, r := range gprs {
 		if used&(1<<r) == 0 {
+			g.wbG |= 1 << r
 			return amd64.Reg(r), true
 		}
 	}

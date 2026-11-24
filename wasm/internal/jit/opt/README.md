@@ -437,10 +437,16 @@ the instruction's code: no reference is in a register the allocator has,
 nor across a call, an exit or a poll. Every store of a pointer word tests
 the write barrier's flag and, while the collector marks, goes to the
 function's barrier routine, out of line, which saves every register the
-code may keep a value in -- the allocator's and the ones every native
+code may keep a value in -- of the allocator's those the function's
+values were given and those a sequence takes for its own while it may
+store (a call's callee entry and index, the entry's clearing loop, the
+register that keeps the return stack's entry), and the ones every native
 frame keeps -- around `internal/jit.StoreRef`, as the baseline's does
 (its README's References and the collector); the payload word is a plain
-store.
+store. Saving only those took micro/gc from 266 to 232 ms at GOMAXPROCS=1,
+where the collector marks for most of a run and its trees' pointers are
+stored through the routine (micro/arrays 83 to 74), and nothing at 32
+threads, where it marks a third of the time.
 
 A GC instruction on an object loads the object's pointer word from its
 slot into s1 (X17), tests it for null, and reads or writes the field or

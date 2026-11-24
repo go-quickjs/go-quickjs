@@ -26,7 +26,9 @@ var (
 
 // wbSaved are the general registers the barrier routine keeps across the
 // runtime's store, which keeps only DI: every register the code keeps a
-// value in, the scratch s1 among them. X0-X14 are kept too.
+// value in, the scratch s1 among them -- of the allocator's, those the
+// function uses (gen.wbG). X0-X14 are kept too, of the allocator's those
+// the function uses (gen.wbX).
 var wbSaved = [...]amd64.Reg{amd64.RAX, amd64.RCX, amd64.RDX, amd64.RBX, amd64.RSI,
 	amd64.R8, amd64.R9, amd64.R10, amd64.R12, amd64.R13, amd64.R15}
 
@@ -150,9 +152,14 @@ func (g *gen) emitWB(l amd64.Label) {
 	a.JmpMem(rCtx, offWBRet)
 	a.Bind(store)
 	for i, r := range wbSaved {
-		a.Store(rCtx, offSave+int32(8*i), r)
+		if g.wbKeeps(r) {
+			a.Store(rCtx, offSave+int32(8*i), r)
+		}
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
+		if !g.wbKeepsX(x) {
+			continue
+		}
 		if g.v128 {
 			a.StoreVec(rCtx, offSaveV+16*int32(x), x)
 			continue
@@ -167,9 +174,14 @@ func (g *gen) emitWB(l amd64.Label) {
 	a.JmpReg(amd64.RDX)
 	a.Bind(back)
 	for i, r := range wbSaved {
-		a.Load(r, rCtx, offSave+int32(8*i))
+		if g.wbKeeps(r) {
+			a.Load(r, rCtx, offSave+int32(8*i))
+		}
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
+		if !g.wbKeepsX(x) {
+			continue
+		}
 		if g.v128 {
 			a.LoadVec(x, rCtx, offSaveV+16*int32(x))
 			continue
@@ -177,6 +189,23 @@ func (g *gen) emitWB(l amd64.Label) {
 		a.LoadSD(x, rCtx, offSave+int32(8*(len(wbSaved)+int(x))))
 	}
 	a.JmpMem(rCtx, offWBRet)
+}
+
+// wbKeeps reports whether the barrier routine keeps general register r:
+// one the code keeps throughout, or one of the allocator's it uses.
+func (g *gen) wbKeeps(r amd64.Reg) bool {
+	for _, a := range gprs {
+		if amd64.Reg(a) == r {
+			return g.wbG&(1<<r) != 0
+		}
+	}
+	return true
+}
+
+// wbKeepsX reports whether the barrier routine keeps float register x:
+// one of the allocator's the function uses, or the scratch X14.
+func (g *gen) wbKeepsX(x amd64.XReg) bool {
+	return x == 14 || g.wbX&(1<<x) != 0
 }
 
 // clearRefs makes every reference slot of the frame but the parameters'
@@ -216,6 +245,8 @@ func (g *gen) clearRefs() {
 	}
 	a.Jmp(done)
 	a.Bind(slow)
+	// The loop's registers are kept by the barrier routine.
+	g.wbG |= 1<<amd64.RAX | 1<<amd64.RCX
 	a.Load(amd64.RAX, rCtx, offR)
 	a.OpImm(amd64.Add, amd64.RAX, int32(16*from), true)
 	a.MovImm(amd64.RCX, uint64(n))
