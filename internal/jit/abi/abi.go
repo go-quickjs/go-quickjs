@@ -1812,7 +1812,13 @@ const (
 // GoStubDelete a property's delete (ssa.GoDelete, GoDeleteStrict),
 // GoStubIndexOf a string's or an array's search (ssa.GoIndexOf), GoStubIndex
 // and GoStubKeyedWrite a read and a write by a key (ssa.GoIndex,
-// GoKeyedWrite), GoStubHas the in operator (ssa.GoHas).
+// GoKeyedWrite), GoStubHas the in operator (ssa.GoHas); and, of a call
+// (ssa.GoCall) of a kind Go makes without a frame where that runs nothing
+// and throws nothing, by its kind: a property's write (GoCallSet,
+// GoStubSet), a for...of's cursor (GoCallForOf, GoStubForOf), a
+// destructuring's rest (GoCallRest, GoStubRest), a loop's step
+// (GoCallStep, GoStubStep), a for...in's cursor (GoCallForIn, GoStubForIn),
+// each made with its frame where it cannot be without.
 type GoStub int
 
 const (
@@ -1829,6 +1835,11 @@ const (
 	GoStubIndex
 	GoStubKeyedWrite
 	GoStubHas
+	GoStubSet
+	GoStubForOf
+	GoStubRest
+	GoStubStep
+	GoStubForIn
 	// NumGoStubs is how many there are.
 	NumGoStubs
 )

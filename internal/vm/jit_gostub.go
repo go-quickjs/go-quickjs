@@ -243,6 +243,54 @@ func jitHasGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 	return jitStubDone(ctx, st, back, (*Runtime)(ctx.Host).jitGoHas(ctx))
 }
 
+// The calls Go makes without a frame where it can (jitGoCallPlain), each of
+// its kind for its routine: a property's write (abi.GoStubSet), a
+// for...of's cursor of an array (GoStubForOf, jitForOfPlain), a
+// destructuring's rest (GoStubRest, jitRestPlain), a loop's step
+// (GoStubStep, jitStepPlain), a for...in's cursor (GoStubForIn,
+// jitForInPlain) -- what it does not make so made with the frame
+// (jitGoCall), as jitGoDirect makes it, past its questions of every kind
+// of call.
+func jitSetGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	r := (*Runtime)(ctx.Host)
+	return jitStubDone(ctx, st, back, r.jitGoCallPlain(ctx) || r.jitGoCall(ctx))
+}
+
+func jitForOfGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	r := (*Runtime)(ctx.Host)
+	return jitStubDone(ctx, st, back, r.jitForOfPlain(ctx) || r.jitGoCall(ctx))
+}
+
+func jitRestGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	r := (*Runtime)(ctx.Host)
+	return jitStubDone(ctx, st, back, r.jitRestPlain(ctx) || r.jitGoCall(ctx))
+}
+
+func jitStepGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	r := (*Runtime)(ctx.Host)
+	return jitStubDone(ctx, st, back, r.jitStepPlain(ctx) || r.jitGoCall(ctx))
+}
+
+func jitForInGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	if !jitStubCall(ctx, st) {
+		return jitGoDirect(ctx, st, back)
+	}
+	r := (*Runtime)(ctx.Host)
+	return jitStubDone(ctx, st, back, r.jitForInPlain(ctx) || r.jitGoCall(ctx))
+}
+
 // jitGoIndexOf is a search of a string or an array (ssa.GoIndexOf,
 // jitSearch) of what it searches for, and its position if the call gives
 // one, its result to the call's keep cell; it reports whether it made it.
@@ -316,6 +364,11 @@ func jitIndexOfStub()
 func jitIndexStub()
 func jitKeyedWriteStub()
 func jitHasStub()
+func jitSetStub()
+func jitForOfStub()
+func jitRestStub()
+func jitStepStub()
+func jitForInStub()
 func jitPowStubAddr() uintptr
 func jitModStubAddr() uintptr
 func jitAtan2StubAddr() uintptr
@@ -329,6 +382,11 @@ func jitIndexOfStubAddr() uintptr
 func jitIndexStubAddr() uintptr
 func jitKeyedWriteStubAddr() uintptr
 func jitHasStubAddr() uintptr
+func jitSetStubAddr() uintptr
+func jitForOfStubAddr() uintptr
+func jitRestStubAddr() uintptr
+func jitStepStubAddr() uintptr
+func jitForInStubAddr() uintptr
 
 // jitGoStubs is abi.Encoding's GoStubs: each routine's address.
 func jitGoStubs() (s [abi.MaxGoStubs]uint64) {
@@ -345,5 +403,10 @@ func jitGoStubs() (s [abi.MaxGoStubs]uint64) {
 	s[abi.GoStubIndex] = uint64(jitIndexStubAddr())
 	s[abi.GoStubKeyedWrite] = uint64(jitKeyedWriteStubAddr())
 	s[abi.GoStubHas] = uint64(jitHasStubAddr())
+	s[abi.GoStubSet] = uint64(jitSetStubAddr())
+	s[abi.GoStubForOf] = uint64(jitForOfStubAddr())
+	s[abi.GoStubRest] = uint64(jitRestStubAddr())
+	s[abi.GoStubStep] = uint64(jitStepStubAddr())
+	s[abi.GoStubForIn] = uint64(jitForInStubAddr())
 	return s
 }

@@ -4942,6 +4942,21 @@ func (c *core) goStub(st *abi.GoCallState) uint64 {
 		return c.enc.GoStubs[abi.GoStubKeyedWrite]
 	case ssa.GoHas:
 		return c.enc.GoStubs[abi.GoStubHas]
+	case ssa.GoCall:
+		// Of the kinds Go makes without a frame where it can, by its kind,
+		// which the code knows.
+		switch st.Op >> abi.GoOpKindShift & 0xff {
+		case abi.GoCallSet:
+			return c.enc.GoStubs[abi.GoStubSet]
+		case abi.GoCallForOf:
+			return c.enc.GoStubs[abi.GoStubForOf]
+		case abi.GoCallRest:
+			return c.enc.GoStubs[abi.GoStubRest]
+		case abi.GoCallStep:
+			return c.enc.GoStubs[abi.GoStubStep]
+		case abi.GoCallForIn:
+			return c.enc.GoStubs[abi.GoStubForIn]
+		}
 	}
 	return 0
 }

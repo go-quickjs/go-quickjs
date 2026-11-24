@@ -251,3 +251,70 @@ func TestJITKeyedStubs(t *testing.T) {
 		}
 	}
 }
+
+// plainStubSetup's loops have Go make the calls it makes without a frame
+// through their routines, by kind (abi.GoStubSet, GoStubForOf, GoStubRest,
+// GoStubStep, GoStubForIn): a destructuring's rest of an array and a
+// for...of over one -- a hole's and a getter's element among them, which
+// the step makes with its frame -- a for...in over objects of several
+// layouts and a proxy's, which runs its trap with the frame, and writes of
+// many layouts' properties, a setter's among them, run with the frame.
+const plainStubSetup = `
+let got = 0
+const withGetter = [1, 2, 3]; Object.defineProperty(withGetter, 5, { get() { got++; return 9 } })
+const arrays = [[1, 2, 3, 4], [5, , 7], withGetter, [8]]
+const shapes = [{ a: 1 }, { b: 2, a: 3 }, { c: 4, d: 5, a: 6 }, { set a(v) { got += v } }, { e: 7 }]
+const prox = new Proxy({ p: 1, q: 2 }, { ownKeys(t) { got++; return Reflect.ownKeys(t) } })
+function plain(n) {
+	got = 0
+	let h = 0, k = 3, f = 0.25
+	for (let i = 0; i < n; i++) {
+		const [x, ...rest] = arrays[i % arrays.length]
+		for (const y of arrays[(i + 1) % arrays.length]) h = (h * 7 + (y | 0)) | 0
+		const o = shapes[i % shapes.length]
+		for (const key in (i % 9 == 8 ? prox : o)) h = (h + key.length) | 0
+		o.a = i
+		h = (h * 31 + (x | 0) + rest.length) | 0
+		k = (k * 5 + i) & 255; f += 0.5
+	}
+	return h + ':' + k + ':' + f + ':' + got
+}
+`
+
+// The calls Go makes without a frame where it can -- a property's write,
+// a for...of's cursor, a destructuring's rest, a loop's step, a for...in's
+// cursor -- go through their own routines by kind (abi.Encoding's
+// GoStubs), and with their frame where that does not make them, with the
+// interpreter's answers; with collections at the calls and with the code
+// compiled for a collector that marks.
+func TestJITPlainStubs(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range jitMarkingModes() {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		calls := 0
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%79 == 0 {
+					runtime.GC()
+				}
+			}
+		})
+		var rounds []string
+		for range 8 {
+			rounds = append(rounds, "plain(180)")
+		}
+		r := jitAgreesForTest(t, plainStubSetup, rounds...)
+		jitNativeForTest(t, r, "plain")
+		stubs := r.jit.goStub
+		if _, err := r.Run(compileForTest(t, "''+plain(180)")); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.jit.goStub - stubs; got < 2*180 {
+			t.Errorf("marking %v: %d calls of Go by kind through their routines in 180 turns", marking, got)
+		}
+	}
+}

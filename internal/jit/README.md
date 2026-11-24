@@ -2423,7 +2423,10 @@ string's `+` Go makes (`GoAppend`, `GoAdd`, `GoConcat`), and the keyed
 operations native code leaves to Go -- a property's delete, a string's or
 an array's search, a read and a write by a key, the in operator
 (`GoDelete`, `GoDeleteStrict`, `GoIndexOf`, `GoIndex`, `GoKeyedWrite`,
-`GoHas`). Go gives the
+`GoHas`) -- and the calls Go makes without a frame where it can, a routine
+for each kind the code knows (`GoCall`'s `GoCallSet`, `GoCallForOf`,
+`GoCallRest`, `GoCallStep`, `GoCallForIn`), which makes with the frame
+what it cannot without (`jitGoCall`), as `jitGoDirect` does. Go gives the
 context what `ExpandGoCall` gives it but the operands (`jitStubCall`) and
 makes the operation with the function `jitHostCall`'s case calls; what that
 refuses goes on `Fail` bytes past, to the call's exit, as from `GoFast`.
