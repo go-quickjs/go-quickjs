@@ -559,6 +559,12 @@ var ErrMemoryLimit = vm.ErrMemoryLimit
 // ErrClosed is returned by a Runtime that has been closed.
 var ErrClosed = errors.New("quickjs: runtime is closed")
 
+// ErrModuleExists is why EvalModule refuses a specifier: the runtime has a
+// module under that name already -- evaluated, failed, imported, or set by
+// SetModule. A module's name is fixed once the runtime has it, as a module
+// map's entries are; to load changed source, use a new name or a new Runtime.
+var ErrModuleExists = errors.New("quickjs: a module of that name exists already")
+
 // ErrForeignValue is returned when a Value of one Runtime is handed to
 // another: to Set, Encode or NewArray, as a call's argument or receiver, to
 // Equal, SetModuleValues, Throw, DetachArrayBuffer or Serialize, or as what a
@@ -1083,6 +1089,15 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 // Imports are resolved through the loader installed with SetModuleLoader; a
 // runtime without one rejects any import. The returned value is the module's
 // namespace, through which its exports can be read.
+//
+// specifier names the module, as a loader's resolved name does, and a
+// module's name is fixed once the runtime has it, as a module map's entries
+// are: imports of it that have been resolved keep it, as the language
+// requires. A specifier the runtime has a module under already -- evaluated,
+// failed, imported, or set by SetModule -- is an error wrapping
+// ErrModuleExists, and source is neither parsed nor compiled, the module the
+// name has unchanged. To load changed source, use a new name or a new
+// Runtime.
 func (r *Runtime) EvalModule(specifier, source string) (Value, error) {
 	return r.EvalModuleContext(context.Background(), specifier, source)
 }
@@ -1111,6 +1126,9 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	// The engine is held here: a loader, or a module, may close the Runtime,
 	// which lets go of it.
 	rt := r.rt
+	if rt.HasModule(specifier) {
+		return Value{}, fmt.Errorf("%w: %q", ErrModuleExists, specifier)
+	}
 	mod, err := r.compileAndRegisterModule(specifier, source)
 	if err != nil {
 		return Value{}, err

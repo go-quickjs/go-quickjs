@@ -1451,7 +1451,14 @@ Paths are relative to this repository; `go-intl:` paths are in
   gets stale code or a stale error.
 - **Expected:** the new source run, or an error that says the name is
   taken, and the comment to say which.
-- **Status:** open.
+- **Status:** fixed. A name stands for one module for the runtime's life,
+  as the module map does on the web and as the language requires of an
+  import resolved twice; the engine keeps each import's module, so that a
+  replaced entry would have run against its old imports. `EvalModule` under
+  a name the runtime has a module under -- evaluated, failed, imported or
+  set by the host -- is an error wrapping `ErrModuleExists`, and parses
+  nothing; its comment says so, and that changed source takes a new name or a
+  new runtime (`TestEvalModuleNameTaken`).
 
 ### KI-94 A closed runtime's values go on working
 - **Where:** `value.go`. `Close`'s comment (`quickjs.go`) says every method

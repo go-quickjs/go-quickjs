@@ -532,6 +532,92 @@ func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
 	}
 }
 
+// TestEvalModuleNameTaken pins that EvalModule under a specifier the runtime
+// has a module under already is ErrModuleExists, parsing nothing -- not an
+// import to load, not a syntax error -- and changing nothing of the module the
+// name has (KI-93): it compiled the new source, dropped it, and answered with
+// the module the name had -- `export const x = 2` a namespace whose x was 1,
+// and a corrected module the first one's error. A source that did not compile
+// took no name.
+func TestEvalModuleNameTaken(t *testing.T) {
+	t.Parallel()
+	rt := quickjs.New()
+	defer rt.Close()
+	asked := map[string]int{}
+	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		asked[specifier]++
+		switch specifier {
+		case "spy.js":
+			return `export const s = 1`, specifier, nil
+		case "b.js":
+			return "", specifier, nil
+		case "dep.js":
+			return `export const y = 1`, specifier, nil
+		case "a.js":
+			// Resolved to the module the runtime has under it.
+			return "", specifier, nil
+		}
+		return "", "", fmt.Errorf("no module %q", specifier)
+	})
+	if err := rt.SetModule("host", map[string]any{"z": 1}); err != nil {
+		t.Fatal(err)
+	}
+	ns, err := rt.EvalModule("a.js", `export const x = 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.EvalModule("b.js", `throw new Error("first")`); err == nil {
+		t.Fatal("b.js did not throw")
+	}
+	if _, err := rt.EvalModule("c.js", `export const x = (`); err == nil {
+		t.Fatal("c.js compiled")
+	}
+	if _, err := rt.EvalModule("d.js", `import { y } from "dep.js"; export { y }`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"a.js",   // evaluated
+		"b.js",   // threw
+		"dep.js", // imported
+		"host",   // set by the host
+	} {
+		// Each source would be noticed if it were looked at: one imports
+		// what the loader counts, the other does not parse.
+		for _, src := range []string{`import "spy.js"; export const x = 2`, `export const x = (`} {
+			_, err := rt.EvalModule(name, src)
+			if !errors.Is(err, quickjs.ErrModuleExists) || !strings.Contains(err.Error(), `"`+name+`"`) {
+				t.Errorf("EvalModule(%q, %q) again = %v, want ErrModuleExists naming it", name, src, err)
+			}
+		}
+	}
+	if asked["spy.js"] != 0 {
+		t.Error("a refused source's import was loaded")
+	}
+	if x, _ := ns.Get("x"); x.Int() != 1 {
+		t.Errorf("a.js's x = %v, want 1 still", x)
+	}
+	// b.js's error is still its own: an import of it throws it.
+	if _, err := rt.EvalModule("f.js", `import "b.js"`); err == nil || err.Error() != "Error: first" {
+		t.Errorf("an import of b.js = %v, want its first error", err)
+	}
+	// c.js's source did not compile, so the name is free.
+	ns, err = rt.EvalModule("c.js", `export const x = 3`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := ns.Get("x"); x.Int() != 3 {
+		t.Errorf("c.js's x = %v, want 3", x)
+	}
+	// What imports a.js gets the module the name has.
+	ns, err = rt.EvalModule("e.js", `import { x } from "a.js"; export { x }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := ns.Get("x"); x.Int() != 1 {
+		t.Errorf("an import of a.js has x = %v, want 1", x)
+	}
+}
+
 // TestModuleFailureIsNotAlsoUnhandled pins that a module that throws while
 // EvalModule waits for it is EvalModule's error alone, not an unhandled
 // rejection too (KI-96): its evaluation's promise was reported at the end of

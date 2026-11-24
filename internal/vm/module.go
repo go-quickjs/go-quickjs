@@ -820,6 +820,13 @@ func containsModule(list []*Module, m *Module) bool {
 	return false
 }
 
+// HasModule reports whether the runtime has a module under specifier: one
+// loaded, compiled, or defined by the host.
+func (r *Runtime) HasModule(specifier string) bool {
+	_, ok := r.modules[specifier]
+	return ok
+}
+
 // HoldModuleResult marks a promise from EvaluateModule as one the host is
 // waiting on, until the returned function is called: a rejection meanwhile is
 // the host's, which ModuleResult gives it as the evaluation's error, not one
