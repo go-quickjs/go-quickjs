@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +26,9 @@ const regLoopMaxBytes = 864
 // registers, the code and the state, is saved once, before the loop, and
 // only read back after each call. A value live across the call that it
 // stored at each dispatch would cost every instruction of every program.
+// Where Go passes a call's arguments on the stack, as on 386, the stores
+// of the handler's arguments to the bottom of the frame are the call's own,
+// which every call makes there, and are not counted (stackArgBytes).
 func TestRegLoopIsSmall(t *testing.T) { testRegLoopIsSmall(t, "reg_run.go", "runReg") }
 
 // TestRegTypedLoopIsSmall is TestRegLoopIsSmall for runRegTyped, the
@@ -86,6 +91,7 @@ func testRegLoopIsSmall(t *testing.T, file, name string) {
 	if err != nil {
 		t.Fatalf("objdump: %v\n%s", err, out)
 	}
+	args := stackArgBytes()
 	n := 0
 	for _, l := range strings.Split(string(out), "\n") {
 		f := strings.Fields(l)
@@ -100,7 +106,10 @@ func testRegLoopIsSmall(t *testing.T, file, name string) {
 		// An instruction of the loop that writes the stack: a move whose
 		// last operand, its destination, is a slot of the frame.
 		ops := strings.Split(strings.Join(f[3:], " "), ",")
-		if strings.HasPrefix(f[3], "MOV") && strings.Contains(ops[len(ops)-1], "(SP)") {
+		if dst := strings.TrimSpace(ops[len(ops)-1]); strings.HasPrefix(f[3], "MOV") && strings.Contains(dst, "(SP)") {
+			if off, err := strconv.ParseInt(strings.TrimSuffix(dst, "(SP)"), 0, 64); err == nil && off >= 0 && off < args {
+				continue
+			}
 			t.Errorf("%s's loop stores to the stack: %s", name, strings.TrimSpace(l))
 		}
 	}
@@ -108,4 +117,23 @@ func testRegLoopIsSmall(t *testing.T, file, name string) {
 		t.Fatalf("no instruction of %s:%d-%d in %s", file, first, last, name)
 	}
 	t.Logf("%s: %d bytes, %d instructions in its loop", name, size, n)
+}
+
+// stackArgBytes is the bytes of a handler's arguments at the bottom of
+// the caller's frame where Go's calls pass them on the stack: on every
+// architecture without Go's register ABI, which has no flag of its own to
+// ask. Where the ABI passes them in registers it is 0, and every store to
+// the frame counts.
+func stackArgBytes() int64 {
+	switch runtime.GOARCH {
+	case "amd64", "arm64", "loong64", "ppc64", "ppc64le", "riscv64":
+		return 0
+	}
+	var n int64
+	ft := reflect.TypeOf(regHandler(nil))
+	for i := range ft.NumIn() {
+		a := int64(ft.In(i).Align())
+		n = (n+a-1)/a*a + int64(ft.In(i).Size())
+	}
+	return n
 }
