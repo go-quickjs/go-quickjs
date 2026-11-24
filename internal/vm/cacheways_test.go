@@ -194,6 +194,11 @@ func TestMegaOwnFourWays(t *testing.T) {
 func megaOwnFourWays(t *testing.T, native bool) {
 	r := newTestRuntime(t, nativeConfig(native))
 	defer r.Close()
+	if native && !r.runNative {
+		// What it checks of the native handlers is not there to check:
+		// a build without them (386, QJS_NONATIVE) runs the Go table's.
+		t.Skip("no native handlers in this build")
+	}
 	if _, err := r.Run(compileForTest(t, waysCtors+`
 var objs = [];
 for (var i = 0; i < ctors.length; i++) { var o = new ctors[i](); o.y = i; objs.push(o) }
