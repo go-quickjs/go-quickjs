@@ -60,34 +60,35 @@ func endsAfter(a []rng, lo int, p int32) int {
 	return lo
 }
 
-// web is coalesced virtual registers, which share a location.
+// web is coalesced virtual registers, which share a location. The fields
+// the scan reads of every web it meets come first.
 type web struct {
+	ranges []rng
+	// cur is the scan's index into ranges: of the first range that does
+	// not end before the scan's position.
+	cur int
+	reg int
+	// dense is its density, once known.
+	dense   float64
 	members []VReg
-	cls     int8
-	ranges  []rng
 	// weight is its uses' and definitions' weight, callWeight that of the
 	// reloads after the calls it lives across.
 	weight, callWeight float64
-	calls              bool
 	// avoid is the registers of its class an instruction it lives across
 	// clobbers.
 	avoid uint64
+	hints []*web
 	// fixed is the slot a member arrives in, or -1, and arrive the
 	// position that member is defined at; width is the slots its members
 	// take (Func.Width).
 	fixed  int32
 	arrive int32
 	width  int32
-	hints  []*web
-	reg    int
 	slot   int32
-	// spilled says it lives in its slot; cur is the scan's index into
-	// ranges: of the first range that does not end before the scan's
-	// position.
+	cls    int8
+	calls  bool
+	// spilled says it lives in its slot.
 	spilled bool
-	cur     int
-	// dense is its density, once known.
-	dense float64
 	// owned says ranges is its own, not a register's, and may grow in
 	// place.
 	owned bool
@@ -174,6 +175,7 @@ type Allocator struct {
 	parts    []*web
 	next     []int32
 	clobAt   []int32
+	clobIdx  []int32
 	defInst  []int32
 	work     []int32
 	count    []int32
@@ -196,6 +198,7 @@ type Allocator struct {
 	ev       []int32
 	evOff    []int32
 	evNext   []int32
+	evPairs  []evPair
 	posBlock []int32
 	blockW   []float64
 
@@ -525,19 +528,20 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 	al.clobAt, al.callsTo, al.weightTo, al.masked = clobAt, callsTo, weightTo, masked
-	// firstAt is the first of the clobbers from lo on at or past p.
-	firstAt := func(lo int, p int32) int {
-		hi := len(clobAt)
-		for lo < hi {
-			m := int(uint(lo+hi) >> 1)
-			if clobAt[m] < p {
-				lo = m + 1
-			} else {
-				hi = m
+	// clobIdx is, at each position p, the number of clobbers before it:
+	// the first at or past p.
+	clobIdx := al.clobIdx[:0]
+	if len(clobAt) > 0 {
+		clobIdx = grown(clobIdx, int(pos)+1)
+		k := int32(0)
+		for p := range clobIdx {
+			for int(k) < len(clobAt) && clobAt[k] < int32(p) {
+				k++
 			}
+			clobIdx[p] = k
 		}
-		return lo
 	}
+	al.clobIdx = clobIdx
 	// crossed visits the clobbers a list of ranges lives across: those at
 	// a position p where it is live at p and p+1.
 	crossed := func(rs []rng, visit func(k int)) {
@@ -545,18 +549,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			return
 		}
 		for _, r := range rs {
-			// The first clobber at or past the range's start.
-			lo, hi := 0, len(clobAt)
-			for lo < hi {
-				m := int(uint(lo+hi) >> 1)
-				if clobAt[m] < r.from {
-					lo = m + 1
-				} else {
-					hi = m
-				}
-			}
-			for k := lo; k < len(clobAt) && clobAt[k] < r.to-1; k++ {
-				visit(k)
+			for k := clobIdx[r.from]; k < clobIdx[r.to-1]; k++ {
+				visit(int(k))
 			}
 		}
 	}
@@ -572,7 +566,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	vacr := grown(al.vacross, n)
 	al.vacross = vacr
 	single := func(v VReg) *web {
-		w := al.pool.new()
+		w := al.pool.fill()
 		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1,
 			width: widthOf(f, v)}
 		if f.FixedSlot[v] >= 0 {
@@ -595,10 +589,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			a := vacross{}
 			cls := int(f.Class[v])
 			if len(clobAt) > 0 {
-				lo, mi := 0, 0
+				mi := 0
 				for _, r := range ranges[v] {
-					lo = firstAt(lo, r.from)
-					hi := firstAt(lo, r.to-1)
+					lo, hi := int(clobIdx[r.from]), int(clobIdx[r.to-1])
 					if lo == hi {
 						continue
 					}
@@ -614,7 +607,6 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 							a.avoid |= c.masks[cls]
 						}
 					}
-					lo = hi
 				}
 			}
 			vacr[v] = a
@@ -662,7 +654,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		x.members = appendA(&al.vregs, x.members, y.members...)
 		if !x.owned {
-			x.ranges, x.owned = appendA(rngs, rngs.take(len(x.ranges)), x.ranges...), true
+			// Its own, with the room unionInto would take for the merge.
+			x.ranges, x.owned = append(rngs.take(max(2*len(x.ranges), len(x.ranges)+len(y.ranges))), x.ranges...), true
 		}
 		x.ranges = unionInto(rngs, x.ranges, y.ranges)
 		x.weight += y.weight

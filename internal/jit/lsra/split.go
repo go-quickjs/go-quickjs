@@ -127,26 +127,38 @@ func (al *Allocator) events() {
 	}
 	pb[len(pb)-1] = int32(len(f.Blocks) - 1)
 	al.posBlock, al.blockW = pb, bw
+	// The events in the order the pass finds them, then by register, in
+	// that order: a counting sort.
+	pairs := al.eventPass(al.evPairs[:0])
 	off := grown(al.evOff, n+1)
 	clear(off)
-	al.eventPass(off, nil)
+	for _, pr := range pairs {
+		off[pr.v+1]++
+	}
 	for v := range n {
 		off[v+1] += off[v]
 	}
 	ev := grown(al.ev, int(off[n]))
 	next := grown(al.evNext, n)
 	copy(next, off[:n])
-	al.eventPass(next, ev)
-	al.ev, al.evOff, al.evNext = ev, off, next
+	for _, pr := range pairs {
+		ev[next[pr.v]] = pr.e
+		next[pr.v]++
+	}
+	al.ev, al.evOff, al.evNext, al.evPairs = ev, off, next, pairs[:0]
 }
 
-// eventPass goes over each use and definition of a register in order of
-// position, as events -- a phi's at its block's start, an argument's use
+// evPair is an event and its register.
+type evPair struct {
+	v VReg
+	e int32
+}
+
+// eventPass appends to pairs each use and definition of a register in order
+// of position, as events -- a phi's at its block's start, an argument's use
 // at its edge's predecessor's end, an instruction's uses at its start and
-// its definitions one after -- free as the webs are when it runs. With ev
-// nil, it counts each register's in at[v+1]; else it puts each in ev at
-// at[v], and moves at[v] past it.
-func (al *Allocator) eventPass(at []int32, ev []int32) {
+// its definitions one after -- free as the webs are when it runs.
+func (al *Allocator) eventPass(pairs []evPair) []evPair {
 	f := al.f
 	webs := al.webs
 	// phiFree reports whether every argument of phi p is its web's.
@@ -159,24 +171,16 @@ func (al *Allocator) eventPass(at []int32, ev []int32) {
 		}
 		return x != nil && len(x.members) > 1
 	}
-	put := func(v VReg, p int32) {
-		if ev == nil {
-			at[v+1]++
-			return
-		}
-		ev[at[v]] = p
-		at[v]++
-	}
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		start := al.starts[i]
 		for k := range b.Phis {
 			if d := b.Phis[k].Def; d >= 0 && f.Class[d] != NoClass {
 				e := start<<2 | evDef
-				if ev != nil && phiFree(&b.Phis[k]) {
+				if phiFree(&b.Phis[k]) {
 					e |= evFree
 				}
-				put(d, e)
+				pairs = append(pairs, evPair{d, e})
 			}
 		}
 		for j := range b.Insts {
@@ -184,32 +188,33 @@ func (al *Allocator) eventPass(at []int32, ev []int32) {
 			u := start + 2 + 2*int32(j)
 			for _, v := range in.Uses {
 				if v >= 0 && f.Class[v] != NoClass {
-					put(v, u<<2)
+					pairs = append(pairs, evPair{v, u << 2})
 				}
 			}
 			for _, d := range in.Defs {
 				if d >= 0 && f.Class[d] != NoClass {
 					e := (u+1)<<2 | evDef
-					if ev != nil && webs[d] != nil && webs[d].calls {
+					if webs[d] != nil && webs[d].calls {
 						e |= evFree
 					}
-					put(d, e)
+					pairs = append(pairs, evPair{d, e})
 				}
 			}
 		}
-		for k, s := range b.Succs {
+		for k, sc := range b.Succs {
 			pi := al.predIdx[int(al.predOff[i])+k]
-			for _, ph := range f.Blocks[s].Phis {
+			for _, ph := range f.Blocks[sc].Phis {
 				if a := ph.Args[pi]; a >= 0 && f.Class[a] != NoClass {
 					e := al.ends[i] << 2
-					if ev != nil && webs[a] != nil && webs[a] == webs[ph.Def] {
+					if webs[a] != nil && webs[a] == webs[ph.Def] {
 						e |= evFree
 					}
-					put(a, e)
+					pairs = append(pairs, evPair{a, e})
 				}
 			}
 		}
 	}
+	return pairs
 }
 
 // posWeight is the weight of a use or a move at position x.

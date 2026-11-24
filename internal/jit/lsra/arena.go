@@ -41,8 +41,9 @@ type chunks[T any] struct {
 	i, n int
 }
 
-// new returns a zeroed value.
-func (c *chunks[T]) new() *T {
+// fill returns a value as an earlier allocation left it, for a caller
+// that sets the whole of it.
+func (c *chunks[T]) fill() *T {
 	if c.i < len(c.bufs) && c.n == len(c.bufs[c.i]) {
 		c.i, c.n = c.i+1, 0
 	}
@@ -58,8 +59,6 @@ func (c *chunks[T]) new() *T {
 	}
 	p := &c.bufs[c.i][c.n]
 	c.n++
-	var zero T
-	*p = zero
 	return p
 }
 
