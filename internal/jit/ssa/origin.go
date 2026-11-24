@@ -808,8 +808,12 @@ func liveAcrossSets(f *Func, how int) ([]*Value, [][]*Value) {
 	// words are no more than sixteen a value -- some 128 bytes, about what
 	// each value takes itself -- the walks past that. At a word a value,
 	// the walks had been taken for Typescript's larger functions, whose
-	// optimize took 3% longer for them.
-	if how == liveByBits || how == liveByCost && 5*nb*((len(cands)+63)/64) <= 16*values {
+	// optimize took 3% longer for them. Asked for the bitsets past that, as
+	// liveAcross's check asks for both, the walks answer: the bitsets'
+	// words are blocks by candidates, which the cost bounds here, and
+	// TestJITLongCode's longest function's had been 1.3 GB.
+	bits := 5*nb*((len(cands)+63)/64) <= 16*values
+	if bits && how != liveByWalks {
 		liveBits(f, sc, stores, cands, live)
 	} else {
 		liveWalks(f, sc, nb, stores, cands, live)

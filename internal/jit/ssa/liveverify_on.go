@@ -31,16 +31,26 @@ func liveAcrossRef(f *Func) ([]*Value, [][]*Value) {
 // liveAfterRef is, for each of points, the candidates live after it: used
 // after it, where reads, if not nil, says an operand's use reads its value
 // (an operand of user, its i'th).
+//
+// It takes the candidates one at a time, each from its uses back to where
+// it is defined, with marks by block stamped with the candidate's number
+// rather than a table of every candidate by every block: TestJITLongCode's
+// longest function has 45,880 candidates and 46,000 blocks, whose tables
+// had asked for 17 GB, where the function itself takes some hundreds of
+// megabytes. Its memory is the blocks', the values' and the points', and
+// what it returns; its time is each candidate's uses, the blocks it is
+// live through and the points in them.
 func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int) bool) [][]*Value {
 	stores := points
+	live := make([][]*Value, len(stores))
 	if len(stores) == 0 || len(cands) == 0 {
-		return make([][]*Value, len(stores))
+		return live
 	}
 	nb := 0
 	for _, b := range f.Blocks {
 		nb = max(nb, b.ID+1)
 	}
-	pos, cand := f.ints(f.nextID), f.ints(f.nextID)
+	pos, cand := make([]int, f.nextID), make([]int, f.nextID)
 	for _, b := range f.Blocks {
 		for i, v := range b.Values {
 			pos[v.ID] = i
@@ -49,64 +59,95 @@ func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int
 	for k, c := range cands {
 		cand[c.ID] = k + 1
 	}
-	// By candidate, then block ID: the last place in the block that uses
-	// the candidate -- a value's index, the block's length for its end, -1
-	// for its header -- or -2 for none; and whether it is live at the end.
-	last, out := f.ints(len(cands)*nb), f.bools(len(cands)*nb)
-	for i := range last {
-		last[i] = -2
+	// The points in each block, in their order there: a list by block ID
+	// (first), each point's next in its block (next), plus one, or 0.
+	first, next := make([]int, nb), make([]int, len(stores))
+	for i := len(stores) - 1; i >= 0; i-- {
+		b := stores[i].Block.ID
+		next[i], first[b] = first[b], i+1
 	}
-	use := func(a *Value, b *Block, at int) {
-		if a.ID < len(cand) && cand[a.ID] != 0 {
-			k := (cand[a.ID]-1)*nb + b.ID
-			last[k] = max(last[k], at)
+	// Each candidate's uses: the block, and the place in it -- a value's
+	// index, the block's length for its end, -1 for its header -- or, for a
+	// phi's argument, the predecessor it is used at the end of (end).
+	type use struct {
+		b        *Block
+		at, next int
+		end      bool
+	}
+	uses := []use{{}}
+	head := make([]int, len(cands))
+	add := func(a *Value, b *Block, at int, end bool) {
+		if a != nil && a.ID < len(cand) && cand[a.ID] != 0 {
+			k := cand[a.ID] - 1
+			uses = append(uses, use{b: b, at: at, end: end, next: head[k]})
+			head[k] = len(uses) - 1
 		}
 	}
 	for _, b := range f.Blocks {
 		if b.Header != nil {
 			for _, s := range b.Header.All() {
-				use(s, b, -1)
+				add(s, b, -1, false)
 			}
 		}
 		for i, v := range b.Values {
 			if v.Op == OpPhi {
 				// A phi's argument is used at the end of its predecessor.
 				for j, a := range v.Args {
-					if a.ID < len(cand) && cand[a.ID] != 0 {
-						out[(cand[a.ID]-1)*nb+b.Preds[j].ID] = true
-					}
+					add(a, b.Preds[j], 0, true)
 				}
 				continue
 			}
 			for j, a := range v.Args {
 				if reads == nil || reads(v, j) {
-					use(a, b, i)
+					add(a, b, i, false)
 				}
 			}
 			if v.State != nil {
 				for _, s := range v.State.All() {
-					use(s, b, i)
+					add(s, b, i, false)
 				}
 			}
 		}
 		if b.Control != nil {
-			use(b.Control, b, len(b.Values))
+			add(b.Control, b, len(b.Values), false)
 		}
 		if b.State != nil {
 			for _, s := range b.State.All() {
-				use(s, b, len(b.Values))
+				add(s, b, len(b.Values), false)
 			}
 		}
 	}
-	// A candidate is live at the end of a block if it is live at the start
-	// of a successor: anywhere but where it is defined, if that uses it or
-	// it is live at that one's end.
-	var work []*Block
+	// By block ID, stamped with the candidate's number plus one: the last
+	// place in the block that uses it (last, at lastAt), whether it is live
+	// at the block's end (out), and whether the block is listed (listed).
+	last, lastAt, out, listed := make([]int, nb), make([]int, nb), make([]int, nb), make([]int, nb)
+	var touched, work []*Block
 	for k, c := range cands {
-		row, uses := out[k*nb:(k+1)*nb], last[k*nb:(k+1)*nb]
-		liveIn := func(b *Block) bool { return b != c.Block && (uses[b.ID] != -2 || row[b.ID]) }
+		e := k + 1
+		touched = touched[:0]
+		list := func(b *Block) {
+			if listed[b.ID] != e {
+				listed[b.ID] = e
+				touched = append(touched, b)
+			}
+		}
+		for u := head[k]; u != 0; u = uses[u].next {
+			x := &uses[u]
+			if x.end {
+				out[x.b.ID] = e
+			} else if last[x.b.ID] != e {
+				last[x.b.ID], lastAt[x.b.ID] = e, x.at
+			} else {
+				lastAt[x.b.ID] = max(lastAt[x.b.ID], x.at)
+			}
+			list(x.b)
+		}
+		// A candidate is live at the end of a block if it is live at the
+		// start of a successor: anywhere but where it is defined, if that
+		// uses it or it is live at that one's end.
+		liveIn := func(b *Block) bool { return b != c.Block && (last[b.ID] == e || out[b.ID] == e) }
 		work = work[:0]
-		for _, b := range f.Blocks {
+		for _, b := range touched {
 			if liveIn(b) {
 				work = append(work, b)
 			}
@@ -115,26 +156,27 @@ func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int
 			b := work[len(work)-1]
 			work = work[:len(work)-1]
 			for _, p := range b.Preds {
-				if !row[p.ID] {
-					row[p.ID] = true
+				if out[p.ID] != e {
+					out[p.ID] = e
+					list(p)
 					if liveIn(p) {
 						work = append(work, p)
 					}
 				}
 			}
 		}
-	}
-	live := make([][]*Value, len(stores))
-	for i, s := range stores {
-		at := pos[s.ID]
-		for k, c := range cands {
-			if c.Block == s.Block && pos[c.ID] > at {
-				continue // defined after it
+		for _, b := range touched {
+			for i := first[b.ID]; i != 0; i = next[i-1] {
+				s := stores[i-1]
+				at := pos[s.ID]
+				if c.Block == b && pos[c.ID] > at {
+					continue // defined after it
+				}
+				if out[b.ID] != e && (last[b.ID] != e || lastAt[b.ID] <= at) {
+					continue // dead after it
+				}
+				live[i-1] = append(live[i-1], c)
 			}
-			if !out[k*nb+s.Block.ID] && last[k*nb+s.Block.ID] <= at {
-				continue // dead after it
-			}
-			live[i] = append(live[i], c)
 		}
 	}
 	return live
