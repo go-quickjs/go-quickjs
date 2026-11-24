@@ -16,7 +16,10 @@
 // inactive intervals, so that a web may take a register in another's
 // hole. Where a class's registers run out, the web scanned takes the
 // register whose webs in its way are least dense -- their uses' weight,
-// eight times each loop around them, over the positions they cover --
+// eight times each loop around them, over the positions they cover; a
+// use or a definition that costs the same wherever the web is -- a phi's
+// argument of its phi's web, a phi all of whose arguments are, and a
+// definition of a web stored where it is defined -- weighs nothing --
 // and each of those is split: it gives the register up over a hole in its
 // life, where it lives in its slot, where each one's holes would cost less
 // than its uses and all the new holes less than spilling the web scanned;
@@ -94,7 +97,9 @@ type Block struct {
 	// to it from each predecessor, in order, that no other block shares
 	// (no critical edges).
 	Preds, Succs []int
-	// Depth is the block's loop depth, which weighs its uses.
+	// Depth is the block's loop depth, which weighs its uses: a client
+	// may give a block it takes to run less often than its loop's other
+	// blocks a lower one.
 	Depth int
 	// Phis are defined at the block's start, each from Args[i] on the
 	// edge from Preds[i].

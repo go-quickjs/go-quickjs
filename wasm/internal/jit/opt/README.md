@@ -538,6 +538,28 @@ and those live across it, and heavier than anything they meet, which is
 displaced for them. A phi prefers its arguments' registers and they its,
 and a two-address operation's result its first operand's.
 
+A web's weight is what its register saves it: its uses and definitions,
+each eight times for each loop around it, but for those that cost the
+same wherever the web is -- a phi's argument of the phi's own web, which
+moves nowhere on its edge, a phi all of whose arguments are its web's,
+and the definitions of a web that lives across a call, stored where its
+registers are defined in a register or not -- which weigh nothing, in its
+weight as in its holes' cost. A block in a loop that calls weighs as if a
+loop less deep (`lsra.Block.Depth`, from the lowering): a loop calls, more
+often than not, on a path most of its turns do not take -- a Go program's
+calls of the runtime -- and a call costs more than reloading around it.
+Before, a web carried through a loop by phis weighed eight for each of
+its phis and arguments in the loop, and a value made and stored on every
+turn of a loop for a read past it weighed its definitions: in the Go
+program's sort, the loop counter gave its register up to such a flag,
+and in sha256 and interp the values their loops read went to slots for
+values the loops only carried. Weighed so, the steady state (`-warmup
+15 -reps 10`, the mean of 8 fresh processes' medians, in turns with the
+code before, the code placed at 4 offsets in its arena) took, ms: optimized, sha256 41.8
+where it took 47.5 and interp 9.8 where it took 10.4; tiered, sha256 42.4
+where 47.9 and interp 9.8 where 10.7; the other programs, the
+micro-benchmarks and the compiles' cost level.
+
 A hole covers where the split web and the one scanned are both live,
 widened, between the split web's last use before and its first after, to
 where a block of a lower loop depth begins or to a loop's header, or to a

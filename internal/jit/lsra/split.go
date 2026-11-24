@@ -79,9 +79,22 @@ func liveAt(rs []rng, x int32) bool {
 	return i < len(rs) && rs[i].from <= x
 }
 
+// An event is a use or a definition of a register: its position times
+// four, plus two for a definition, plus one where it weighs nothing -- a
+// phi's argument of its phi's web or a phi all of whose arguments are, which
+// move nowhere, or a definition of a web stored where its registers are
+// defined (Allocate's weights).
+const (
+	evDef  = 2
+	evFree = 1
+)
+
+// evPos is event e's position.
+func evPos(e int32) int32 { return e >> 2 }
+
 // firstEvent is the index of the first of evs at or past position x.
 func firstEvent(evs []int32, x int32) int {
-	k := x << 1
+	k := x << 2
 	lo, hi := 0, len(evs)
 	for lo < hi {
 		m := int(uint(lo+hi) >> 1)
@@ -128,13 +141,24 @@ func (al *Allocator) events() {
 }
 
 // eventPass goes over each use and definition of a register in order of
-// position: its position times two, plus one for a definition -- a phi's
-// at its block's start, an argument's use at its edge's predecessor's end,
-// an instruction's uses at its start and its definitions one after. With
-// ev nil, it counts each register's in at[v+1]; else it puts each in ev
-// at at[v], and moves at[v] past it.
+// position, as events -- a phi's at its block's start, an argument's use
+// at its edge's predecessor's end, an instruction's uses at its start and
+// its definitions one after -- free as the webs are when it runs. With ev
+// nil, it counts each register's in at[v+1]; else it puts each in ev at
+// at[v], and moves at[v] past it.
 func (al *Allocator) eventPass(at []int32, ev []int32) {
 	f := al.f
+	webs := al.webs
+	// phiFree reports whether every argument of phi p is its web's.
+	phiFree := func(p *Phi) bool {
+		x := webs[p.Def]
+		for _, a := range p.Args {
+			if a >= 0 && f.Class[a] != NoClass && webs[a] != x {
+				return false
+			}
+		}
+		return x != nil && len(x.members) > 1
+	}
 	put := func(v VReg, p int32) {
 		if ev == nil {
 			at[v+1]++
@@ -146,9 +170,13 @@ func (al *Allocator) eventPass(at []int32, ev []int32) {
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		start := al.starts[i]
-		for _, ph := range b.Phis {
-			if d := ph.Def; d >= 0 && f.Class[d] != NoClass {
-				put(d, start<<1|1)
+		for k := range b.Phis {
+			if d := b.Phis[k].Def; d >= 0 && f.Class[d] != NoClass {
+				e := start<<2 | evDef
+				if ev != nil && phiFree(&b.Phis[k]) {
+					e |= evFree
+				}
+				put(d, e)
 			}
 		}
 		for j := range b.Insts {
@@ -156,12 +184,16 @@ func (al *Allocator) eventPass(at []int32, ev []int32) {
 			u := start + 2 + 2*int32(j)
 			for _, v := range in.Uses {
 				if v >= 0 && f.Class[v] != NoClass {
-					put(v, u<<1)
+					put(v, u<<2)
 				}
 			}
 			for _, d := range in.Defs {
 				if d >= 0 && f.Class[d] != NoClass {
-					put(d, (u+1)<<1|1)
+					e := (u+1)<<2 | evDef
+					if ev != nil && webs[d] != nil && webs[d].calls {
+						e |= evFree
+					}
+					put(d, e)
 				}
 			}
 		}
@@ -169,7 +201,11 @@ func (al *Allocator) eventPass(at []int32, ev []int32) {
 			pi := al.predIdx[int(al.predOff[i])+k]
 			for _, ph := range f.Blocks[s].Phis {
 				if a := ph.Args[pi]; a >= 0 && f.Class[a] != NoClass {
-					put(a, al.ends[i]<<1)
+					e := al.ends[i] << 2
+					if ev != nil && webs[a] != nil && webs[a] == webs[ph.Def] {
+						e |= evFree
+					}
+					put(a, e)
 				}
 			}
 		}
@@ -202,8 +238,12 @@ func (al *Allocator) webEvents(w *web) {
 		w.ev = ev
 	}
 	evW := append(al.f64s.take(len(w.ev)+1), 0)
-	for _, x := range w.ev {
-		evW = append(evW, evW[len(evW)-1]+al.posWeight(x>>1))
+	for _, e := range w.ev {
+		x := 0.0
+		if e&evFree == 0 {
+			x = al.posWeight(evPos(e))
+		}
+		evW = append(evW, evW[len(evW)-1]+x)
 	}
 	w.evW = evW
 }
@@ -277,10 +317,10 @@ func (al *Allocator) plan(a, cur *web) hole {
 	last, next := int32(-1), al.maxPos
 	i := firstEvent(a.ev, c0)
 	if i > 0 {
-		last = a.ev[i-1] >> 1
+		last = evPos(a.ev[i-1])
 	}
 	if j := i + firstEvent(a.ev[i:], c1); j < len(a.ev) {
-		next = a.ev[j] >> 1
+		next = evPos(a.ev[j])
 	}
 	// The bounds: where the span begins and ends, or as far as the hole
 	// before or after where nothing of a's is between, else a block's
@@ -532,7 +572,7 @@ func (al *Allocator) splitMoves(res *Result, list []*web, ranges [][]rng) {
 			for _, ev := range al.ev[al.evOff[m]:al.evOff[m+1]] {
 				// An instruction's definition, at an odd position: a phi's
 				// is in Entry.
-				if x := ev >> 1; ev&1 != 0 && x&1 != 0 {
+				if x := evPos(ev); ev&evDef != 0 && x&1 != 0 {
 					keyed = append(keyed, keyedMove{[2]int32{2*(x-1) + 1}, Move{V: m, Reg: w.where(x)}})
 				}
 			}

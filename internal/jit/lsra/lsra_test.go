@@ -449,3 +449,45 @@ func TestCheckCatchesMutations(t *testing.T) {
 		}
 	}
 }
+
+// TestWeightOfStoredValues has a loop make two values before a call, one
+// register between them: x, which the loop carries and reads, and y, which
+// it makes anew each turn and only its exit reads. A value that lives
+// across a call is stored where it is made, in a register or not, so y's
+// register would save it its one read after the loop, less than its reload
+// after the call costs: it lives in its slot, and x keeps the register.
+func TestWeightOfStoredValues(t *testing.T) {
+	// v0: x's first value; v1 = phi(v0, v2); v2 = v1 + 1; v3 made anew;
+	// a call; the loop's test reads v2; its exit v3 and v2.
+	f := &Func{
+		Class:     []int8{0, 0, 0, 0},
+		FixedSlot: []int32{-1, -1, -1, -1},
+		Blocks: []Block{
+			{Succs: []int{1}, Insts: []Inst{{Defs: []VReg{0}, Hint: None}, {Hint: None}}},
+			{Preds: []int{0, 2}, Succs: []int{2, 3}, Depth: 1, Phis: []Phi{{Def: 1, Args: []VReg{0, 2}}},
+				Insts: []Inst{{Uses: []VReg{1}, Defs: []VReg{2}, Hint: 1}, {Defs: []VReg{3}, Hint: None},
+					{Call: true, Hint: None}, {Uses: []VReg{2}, Hint: None}}},
+			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{{Hint: None}}},
+			{Preds: []int{1}, Insts: []Inst{{Uses: []VReg{3, 2}, Hint: None}}},
+		},
+	}
+	for _, cfg := range []*Config{
+		{Classes: [][]int{{0}}, NumSlots: 8},
+		{Classes: [][]int{{0}}, NumSlots: 8, Displace: true},
+		{Classes: [][]int{{0}}, NumSlots: 8, NoSplit: true},
+	} {
+		res, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkAllocation(t, 0, f, cfg, res)
+		if res.Reg[3] >= 0 {
+			t.Errorf("%+v: y in register %d\n%s", *cfg, res.Reg[3], dump(f, res))
+		}
+		for _, v := range []VReg{0, 1, 2} {
+			if res.Reg[v] < 0 || res.Split(v) {
+				t.Errorf("%+v: x's v%d in register %d, split %v\n%s", *cfg, v, res.Reg[v], res.Split(v), dump(f, res))
+			}
+		}
+	}
+}

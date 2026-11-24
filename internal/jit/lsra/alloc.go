@@ -154,6 +154,7 @@ type Allocator struct {
 	live     []uint64
 	ranges   [][]rng
 	weight   []float64
+	defW     []float64
 	defAt    []int32
 	open     []int32
 	opened   []VReg
@@ -384,6 +385,10 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	weight := grown(al.weight, n)
 	clear(weight)
 	al.weight = weight
+	// defW is the part of weight that is the instructions' definitions.
+	defW := grown(al.defW, n)
+	clear(defW)
+	al.defW = defW
 	defAt := grown(al.defAt, n)
 	clear(defAt)
 	al.defAt = defAt
@@ -441,6 +446,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			for _, d := range in.Defs {
 				if alloc(d) {
 					weight[d] += w
+					defW[d] += w
 					def(d, u+1)
 				}
 			}
@@ -560,7 +566,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// where their lifetimes do not meet and their parameters' slots allow,
 	// the edges of the deepest blocks first.
 	// single is v's web of its own: the clobbers it lives across are
-	// found once, for its first, and kept for a web taken apart.
+	// found once, for its first, and kept for a web taken apart. A web
+	// that lives across a call is stored where each of its registers is
+	// defined, in its register or not: its definitions weigh nothing.
 	vacr := grown(al.vacross, n)
 	al.vacross = vacr
 	single := func(v VReg) *web {
@@ -571,6 +579,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
 		}
 		w.calls, w.callWeight, w.avoid = vacr[v].calls, vacr[v].weight, vacr[v].avoid
+		if w.calls {
+			w.weight -= defW[v]
+		}
 		return w
 	}
 	webs := grown(al.webs, n)
@@ -663,6 +674,38 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		for _, m := range y.members {
 			webs[m] = x
+		}
+	}
+	// What a web's register saves it is what weighs: a phi's argument of
+	// its phi's web moves nowhere on its edge, nor is a phi all of whose
+	// arguments are its web's defined anywhere, wherever the web is; and a
+	// web joined with one that lives across a call is stored where its
+	// registers are defined.
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		for _, p := range b.Phis {
+			x := webs[p.Def]
+			if x == nil || len(x.members) == 1 {
+				continue
+			}
+			all := true
+			for k, a := range p.Args {
+				switch {
+				case !alloc(a):
+				case webs[a] == x:
+					x.weight -= depthWeight(f.Blocks[b.Preds[k]].Depth)
+				default:
+					all = false
+				}
+			}
+			if all {
+				x.weight -= depthWeight(b.Depth)
+			}
+		}
+	}
+	for v, w := range webs {
+		if w != nil && w.calls && len(w.members) > 1 && !vacr[v].calls {
+			w.weight -= defW[v]
 		}
 	}
 	// Hints: a two-address definition wants its operand's register, a phi

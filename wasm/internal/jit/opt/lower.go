@@ -414,6 +414,17 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 			end.Uses = uses(b.Results)
 		}
 		lb.Insts = append(lb.Insts, end)
+		// A block in a loop that calls is taken as run a loop's depth less
+		// often than the loop: where a loop calls, it calls on a path most
+		// turns do not take, more often than not -- a Go program's calls of
+		// the runtime -- and a call costs more than the loads of what lives
+		// across it.
+		for k := range lb.Insts {
+			if lb.Depth > 0 && lb.Insts[k].Call {
+				lb.Depth--
+				break
+			}
+		}
 	}
 	// A landing pad finds its exception's numbers in the call area.
 	area = max(area, 2*f.exnArea)
