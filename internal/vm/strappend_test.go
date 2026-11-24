@@ -2,7 +2,9 @@ package vm
 
 import (
 	"fmt"
+	"math/bits"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -283,7 +285,8 @@ function outlives() {
   return hash(held) + hash(a.get()) + hash(b.get())
 }
 
-// One past the longest string: the binding keeps what it had.
+// One past the longest string: the binding keeps what it had. Its lengths
+// are a 64-bit platform's, which TestStrAppend fits to the platform's.
 function tooLong() {
   let s = 'x'.repeat(1 << 28)
   const add = x => { s += x }
@@ -704,14 +707,40 @@ func TestStrAppend(t *testing.T) {
 	// Its strings grow to 0.8 GB in each runtime.
 	heavy(t)
 	r := newTestRuntime(t, Config{})
-	v, err := r.Run(compileForTest(t, strAppendTestSrc))
+	src := atStringLimit(strAppendTestSrc,
+		"'x'.repeat(1 << 28)", "'x'.repeat("+strconv.Itoa(longestPowerOfTwo)+")",
+		"'y'.repeat((1 << 29) - 30)", "'y'.repeat("+strconv.Itoa(maxStringLength-6)+")")
+	want := atStringLimit(strAppendTestWant, "|RangeError268435458", "|RangeError"+strconv.Itoa(longestPowerOfTwo+2))
+	v, err := r.Run(compileForTest(t, src))
 	r.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.String().Go(); got != strAppendTestWant {
-		t.Errorf("\n%s", firstDifference(got, strAppendTestWant))
+	if got := v.String().Go(); got != want {
+		t.Errorf("\n%s", firstDifference(got, want))
 	}
+}
+
+// longestPowerOfTwo is the longest a string may be that is a power of two:
+// 2^28 code units on a 64-bit platform and 2^27 on a 32-bit one, whose
+// longest strings are half as long (maxStringLength).
+var longestPowerOfTwo = 1 << (bits.Len(maxStringLength) - 1)
+
+// atStringLimit is s, a test's source or Node's answer to it, which builds
+// strings to a 64-bit platform's longest, 2^29 - 24 code units, made for
+// this platform's: where the longest is shorter, on a 32-bit platform,
+// each of the pairs' old texts is replaced by its new, the lengths the
+// script builds and the answers they give fitted to maxStringLength.
+func atStringLimit(s string, oldnew ...string) string {
+	if maxStringLength == 1<<29-24 {
+		return s
+	}
+	for i := 0; i < len(oldnew); i += 2 {
+		if !strings.Contains(s, oldnew[i]) {
+			panic("atStringLimit: no " + oldnew[i])
+		}
+	}
+	return strings.NewReplacer(oldnew...).Replace(s)
 }
 
 // A declaration captures the binding just as a function expression does.

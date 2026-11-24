@@ -1,6 +1,9 @@
 package vm
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 // upvalueAddTestSrc adds to captured bindings, as values and as statements,
 // what an upvalue addition joins or adds itself -- strings, from a local
@@ -52,7 +55,9 @@ const res = out.join('|')
 res
 `
 
-// upvalueAddTestWant is Node's answer.
+// upvalueAddTestWant is Node's answer, a 64-bit platform's: the doubled
+// string throws at 2^28 code units, a 32-bit one's at 2^27
+// (longestPowerOfTwo).
 const upvalueAddTestWant = "<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|<x><x>é0é1é2😀|14|3|16|18|<x><x>é0é1é2😀y-7-|1|3.5|3.5s|3.5s1|2|2a|2a2|2a2O|bigint:3|string:3x|ac|o1|o1Symbol.iterator|undefinedu|undefinedu1|TypeError|RangeError|268435456|TypeError"
 
 // An addition to a captured binding answers as Node answers.
@@ -64,7 +69,8 @@ func TestTreeUpvalueAdd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.String().Go(); got != upvalueAddTestWant {
-		t.Errorf("got\n%s\nwant\n%s", got, upvalueAddTestWant)
+	want := atStringLimit(upvalueAddTestWant, "|RangeError|268435456|", "|RangeError|"+strconv.Itoa(longestPowerOfTwo)+"|")
+	if got := v.String().Go(); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }
