@@ -18,7 +18,7 @@ func TestJITLiteralsUpvalueAddsPushes(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	for _, marking := range []bool{false, true} {
+	for _, marking := range jitMarkingModes() {
 		// The string doubled past the longest would pass jitDifferential's
 		// memory limit first: doubled twelve times.
 		upvalues := strings.Replace(upvalueAddTestSrc, "i < 40", "i < 12", 1)

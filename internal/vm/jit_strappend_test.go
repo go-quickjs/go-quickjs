@@ -20,7 +20,7 @@ func TestJITStrAppend(t *testing.T) {
 	}
 	src := strings.Replace(strAppendTestSrc, "out.push(tooLong())\n", "", 1)
 	want := strAppendTestWant[:strings.LastIndexByte(strAppendTestWant, '|')]
-	for _, marking := range []bool{false, true} {
+	for _, marking := range jitMarkingModes() {
 		for _, c := range []jitStressConfig{
 			{},
 			{threshold: true},

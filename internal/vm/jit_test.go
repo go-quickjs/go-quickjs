@@ -3760,6 +3760,23 @@ func jitMarkingForTest(t *testing.T) *uint8 {
 	return marking
 }
 
+// jitMarkingModes are whether native code sees the collector marking
+// (jitMarkingForTest) in each of a test's runs: idle and marking. Under
+// checkptr (CI's native boundary), marking alone. The flag is native
+// code's only -- no Go reads it -- and by the marking rule, which
+// TestJITSameWorkWhileMarking holds in that lane too, native code leaves
+// and calls Go alike either way, so Go reads the same frames, records
+// and cells after the one run as after the other, and those reads are
+// what checkptr checks; the run marking adds the barrier's stores. The
+// idle runs are the ordinary builds'. Used by the tests whose runs under
+// checkptr are long.
+func jitMarkingModes() []bool {
+	if !allocsOrdinary() {
+		return []bool{true}
+	}
+	return []bool{false, true}
+}
+
 // jitClobberStoresForTest has the code the test compiles store pointer
 // words while the collector marks through jit.StoreRefClobber, which fills
 // every register native code may keep with junk first.

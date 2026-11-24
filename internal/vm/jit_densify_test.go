@@ -18,7 +18,7 @@ func TestJITDensify(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	for _, marking := range []bool{false, true} {
+	for _, marking := range jitMarkingModes() {
 		runtime.GC()
 		release := holdCollectorNow(t)
 		if marking {
