@@ -260,8 +260,7 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 	// start is each variable's value at a block's start, by variable and
 	// block ID.
 	start := &ws.start
-	start.reset(len(h.Phis) * 8)
-	startKey := func(i int, b *Block) uint64 { return uint64(i)<<32 | uint64(uint32(b.ID)) }
+	start.reset(len(h.Phis), int(f.nextBlock))
 	// The phis made, from ID n0 on: each one's variable, the phis made
 	// that use it, and the value it is forwarded to once found trivial.
 	made := ws.made[:0]
@@ -297,8 +296,8 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 		vi := info(v)
 		vi.fwd = same
 		forwarded++
-		if k := startKey(vi.v, v.Block); start.at(k) == v {
-			start.set(k, same)
+		if start.at(vi.v, v.Block) == v {
+			start.set(vi.v, v.Block, same)
 		}
 		for _, u := range vi.users {
 			if info(u).fwd == nil && u != v {
@@ -322,8 +321,7 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 		if b == h {
 			return h.Phis[i]
 		}
-		k := startKey(i, b)
-		if v := start.at(k); v != nil {
+		if v := start.at(i, b); v != nil {
 			return follow(v)
 		}
 		switch len(b.Preds) {
@@ -331,11 +329,11 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 			panic("wasm opt: a phi threaded past the entry")
 		case 1:
 			v := atEnd(i, b.Preds[0], b)
-			start.set(k, v)
+			start.set(i, b, v)
 			return v
 		}
 		v := f.newValue(b, OpPhi, h.Phis[i].Type)
-		start.set(k, v)
+		start.set(i, b, v)
 		made = append(made, madePhi{v: i})
 		v.Args = ws.vals.take(len(b.Preds))
 		for _, p := range b.Preds {
@@ -448,4 +446,57 @@ func (e *threadEnds) get(p *Block) (threadEnd, bool) {
 		return threadEnd{}, false
 	}
 	return e.end[p.ID], true
+}
+
+// startTable is repairPhis' values of variables at blocks' starts, by
+// variable and block ID: an array of an entry for each where that is not
+// too many, its entries those marked with its stamp, else a hash table.
+type startTable struct {
+	nb    int
+	vals  []*Value
+	stamp []uint32
+	gen   uint32
+	m     u64map[*Value]
+}
+
+// maxStartDense is the most entries a startTable keeps in its array.
+const maxStartDense = 1 << 16
+
+// reset empties t for vars variables over nb blocks.
+func (t *startTable) reset(vars, nb int) {
+	t.nb = 0
+	if n := vars * nb; n <= maxStartDense {
+		t.nb = nb
+		if len(t.vals) < n {
+			t.vals, t.stamp, t.gen = make([]*Value, n), make([]uint32, n), 0
+		}
+		t.gen++
+		if t.gen == 0 {
+			clear(t.stamp)
+			t.gen = 1
+		}
+		return
+	}
+	t.m.reset(vars * 8)
+}
+
+// at is variable i's value at b's start, or nil.
+func (t *startTable) at(i int, b *Block) *Value {
+	if t.nb > 0 {
+		if k := i*t.nb + int(b.ID); t.stamp[k] == t.gen {
+			return t.vals[k]
+		}
+		return nil
+	}
+	return t.m.at(uint64(i)<<32 | uint64(uint32(b.ID)))
+}
+
+// set makes v variable i's value at b's start.
+func (t *startTable) set(i int, b *Block, v *Value) {
+	if t.nb > 0 {
+		k := i*t.nb + int(b.ID)
+		t.vals[k], t.stamp[k] = v, t.gen
+		return
+	}
+	t.m.set(uint64(i)<<32|uint64(uint32(b.ID)), v)
 }

@@ -57,7 +57,7 @@ type workspace struct {
 	localMark []uint32
 	localUses []int32
 	vars      []int32
-	start     u64map[*Value]
+	start     startTable
 	made      []madePhi
 
 	// forwardGlobals' state, and the loops the builder made.
