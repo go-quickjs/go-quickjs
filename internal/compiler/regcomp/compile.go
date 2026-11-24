@@ -247,6 +247,8 @@ type gen struct {
 	// sharedCalls is each call operation's site where the sites are
 	// shared (sharedCallSite).
 	sharedCalls map[bytecode.ROp]uint16
+	// noChain is an addition stringChain need not look at (plusChain).
+	noChain *ast.Binary
 	// farJump is, by the order of the jumps of a 16-bit offset (shortJumps),
 	// those to make far (jump): each did not reach as a compile before
 	// made it. farNew are those that do not reach as this one makes them.
@@ -4162,6 +4164,19 @@ func (g *gen) key(t *ast.Member, k, o int) int {
 // next.
 const maxChainParts = 32
 
+// plusChain is the addition that is n's left operand, the chain of
+// additions n's is less its last, or nil. An addition chain stringChain
+// does not join -- one that starts at a template, has no string literal or
+// too few parts -- is a chain of those its left operand's is not joined
+// either, which the addition is compiled into next: the compile would look
+// at a chain of each addition of a long one, as long, without it.
+func plusChain(n *ast.Binary) *ast.Binary {
+	if l, ok := n.Left.(*ast.Binary); ok && l.Op == "+" {
+		return l
+	}
+	return nil
+}
+
 // stringChain compiles a + b + c + ..., once a string literal among its
 // operands has made every addition from there on a concatenation, as one
 // concat of the parts in consecutive registers, with each conversion
@@ -4172,6 +4187,10 @@ const maxChainParts = 32
 // number, which concat writes out itself. It reports false, having emitted
 // nothing, where the additions are compiled as additions.
 func (g *gen) stringChain(n *ast.Binary, dst int) (int, bool) {
+	if n == g.noChain {
+		g.noChain = plusChain(n)
+		return 0, false
+	}
 	var adds []*ast.Binary
 	for b := n; ; {
 		adds = append(adds, b)
@@ -4200,10 +4219,12 @@ func (g *gen) stringChain(n *ast.Binary, dst int) (int, bool) {
 		if _, ok := operand(i).(*ast.TemplateLit); ok && i == 0 {
 			// A chain that starts at a template is compiled as
 			// additions.
+			g.noChain = plusChain(n)
 			return 0, false
 		}
 	}
 	if first < 0 {
+		g.noChain = plusChain(n)
 		return 0, false
 	}
 	empty := func(e ast.Expr) bool {
@@ -4220,6 +4241,7 @@ func (g *gen) stringChain(n *ast.Binary, dst int) (int, bool) {
 		}
 	}
 	if parts < 3 {
+		g.noChain = plusChain(n)
 		return 0, false
 	}
 	w := g.top

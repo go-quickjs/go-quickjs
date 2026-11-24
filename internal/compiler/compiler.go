@@ -294,6 +294,9 @@ type compiler struct {
 	// class literal compiled (tracename.go), and traceIn the one the
 	// expression being compiled was handed.
 	traceName, traceIn string
+	// noChain is an addition compileStringChain need not look at
+	// (plusChain).
+	noChain *ast.Binary
 
 	// lazyArguments is set for a function whose arguments object is made
 	// only where a call of apply needs it, in lazyArgumentsSlot.
@@ -464,9 +467,8 @@ type compiler struct {
 	scratch *scratch
 	pool    *scratchPool
 
-	// recursionDepth bounds how deeply the compiler descends into the tree. The
-	// parser caps nesting too, but a function body nests independently of its
-	// caller's, so the limit is enforced on both sides.
+	// recursionDepth bounds how deeply the compiler descends into the tree
+	// (maxCompileDepth), behind the parser's bound of the tree's height.
 	recursionDepth int
 
 	// script is the source being compiled, shared by every function in it.
@@ -886,8 +888,12 @@ func exact[T any](s []T) []T {
 }
 
 // maxCompileDepth bounds recursion over the syntax tree. A goroutine stack
-// overflow cannot be caught, so deeply nested input is rejected instead.
-const maxCompileDepth = 1000
+// overflow cannot be caught, so deeply nested input is rejected instead. The
+// parser bounds a tree's height to 10,000 levels (parser.maxTreeHeight),
+// which every pass over it, this walk's included, recurses in proportion
+// to; this bound, well above what the walk descends for such a tree, keeps
+// the walk's recursion bounded whatever tree it is given.
+const maxCompileDepth = 40000
 
 // enter increases the recursion depth, failing if the tree is too deep.
 func (c *compiler) enter(pos int) {

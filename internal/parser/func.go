@@ -520,11 +520,14 @@ func (p *parser) tryParseAsyncParenArrow(start int) ast.Expr {
 	var items []ast.Expr
 	ok := func() (ok bool) {
 		savedAwait, savedParams := p.allowAwait, p.inParams
+		savedDepth, savedPeak := p.depth, p.peak
 		p.allowAwait, p.inParams = true, true
 		defer func() {
 			p.allowAwait, p.inParams = savedAwait, savedParams
 			if r := recover(); r != nil {
 				if _, isSyntax := r.(*Error); isSyntax {
+					// The parse is retried from here (enter).
+					p.depth, p.peak = savedDepth, savedPeak
 					ok = false
 					return
 				}
@@ -559,6 +562,13 @@ func (p *parser) tryParseAsyncParenArrow(start int) ast.Expr {
 // Classes
 // ---------------------------------------------------------------------------
 
+// parseHeritage parses a class's heritage, which may be a class with a
+// heritage of its own: a level of the parser's recursion.
+func (p *parser) parseHeritage() ast.Expr {
+	defer p.leave(p.enter())
+	return p.parseLeftHandSide()
+}
+
 // parseClass parses a class declaration or expression, with `class` as the
 // current token.
 func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
@@ -582,7 +592,7 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 		// one however it is written.
 		savedArrow := p.noArrow
 		p.noArrow = true
-		cls.Extends = p.parseLeftHandSide()
+		cls.Extends = p.parseHeritage()
 		p.noArrow = savedArrow
 	}
 

@@ -1509,7 +1509,21 @@ Paths are relative to this repository; `go-intl:` paths are in
   position is where the chain starts, not where the bound was passed.
 - **Expected:** Node parses all of them, 5,000 `.b` and 1,200 parentheses
   among them.
-- **Status:** open.
+- **Status:** fixed. The chains were the compiler's bound, not the parser's:
+  the parser builds a chain in a loop, but the walk recursed a level a link
+  and counted each against the 1,000 levels it allowed, and its analyses
+  before it, which counted nothing, overflowed the goroutine's stack at a few
+  million links (`a` and 3,000,000 `?.b`, or 20,000,000 `+a`), as the parser
+  itself did on prefix operators, `**`, `new new` and class heritage. The
+  parser now bounds the tree's height, which every pass recurses to, at
+  10,000 levels, a chain's link a level (`maxTreeHeight`), and its own
+  recursion, those four places included, at 2,000 (`maxNestingDepth`), each
+  a SyntaxError at the token past it; the walk's bound is above both. A chain
+  of additions compiled in time quadratic in its length, looking at its whole
+  chain again at each addition, and now does not (`plusChain`). Node's
+  limits, which are its stack's, are higher for a prefix operator (8,818), an
+  assignment chain (3,086) and nested arrays (2,287), and it has none for a
+  chain of additions; `TestNestingBounds`, `TestLongChains`.
 
 ### KI-93 `EvalModule` under a name already used runs the module it had
 - **Where:** `quickjs.go`, `EvalModuleContext` and

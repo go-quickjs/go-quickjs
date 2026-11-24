@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -630,6 +631,82 @@ func TestDeeplyNestedInputDoesNotHang(t *testing.T) {
 	src := strings.Repeat("(", 200) + "a" + strings.Repeat(")", 200)
 	if _, err := Parse(src, Options{}); err != nil {
 		t.Fatalf("deeply nested parentheses: %v", err)
+	}
+}
+
+// TestNestingBounds pins the parser's two bounds: nesting, its own
+// recursion (maxNestingDepth), and the tree's height (maxTreeHeight),
+// which a chain the parser builds in a loop -- a.b.c, f()(), a + b -- grows
+// a level a link, and which every pass after the parser recurses to. Each
+// is a SyntaxError where it is passed, never a stack overflow, which no
+// recover sees (KI-92).
+func TestNestingBounds(t *testing.T) {
+	r := strings.Repeat
+	ok := []struct{ name, src string }{
+		{"member chain", "a" + r(".b", 9000)},
+		{"call chain", "f" + r("()", 9000)},
+		{"index chain", "a" + r("[0]", 9000)},
+		{"tagged chain", "f" + r("``", 9000)},
+		{"optional chain", "a" + r("?.b", 9000)},
+		{"method chain", "a" + r(".b()", 4500)},
+		{"additions", "a" + r("+a", 9000)},
+		{"logical chain", "a" + r("&&a", 9000)},
+		{"folded additions", "1" + r("+1", 50000)},
+		{"comma list", "a" + r(",a", 50000)},
+		{"parentheses", r("(", 1990) + "a" + r(")", 1990)},
+		{"brackets", r("[", 1990) + r("]", 1990)},
+		{"blocks", r("{", 1990) + r("}", 1990)},
+		{"negations", r("!", 1990) + "a"},
+		// Chains side by side are each as tall as itself.
+		{"sibling chains", "[" + r("a"+r(".b", 6000)+",", 3) + "]"},
+		{"sibling statements", r("a"+r(".b", 6000)+";", 3)},
+		{"sibling operands", "a" + r(".b", 6000) + " + a" + r(".b", 6000)},
+	}
+	for _, tc := range ok {
+		if _, err := Parse(tc.src, Options{}); err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+	deep := []struct {
+		name, src string
+		col       int
+	}{
+		// Where the bound is passed: after the link that passes it, the
+		// statement and its expression two levels below the root, and at
+		// the parenthesis that does.
+		{"member chain", "a" + r(".b", 10001), 2*9999 + 2},
+		{"call chain", "f" + r("()", 10001), 2*9999 + 2},
+		{"additions", "a" + r("+a", 10001), 2*9999 + 2},
+		{"parentheses", r("(", 2001) + "a" + r(")", 2001), 2000},
+		// A chain in a link's arguments is under the links after it: the
+		// call a level above its 6,000, each .c one more.
+		{"chain in a chain", "f(a" + r(".b", 6000) + ")" + r(".c", 4000), len("f(a") + 2*6000 + 1 + 2*3997 + 1},
+		{"chain in parentheses", r("(", 1000) + "a" + r(".b", 9001), 1000 + 1 + 2*8999 + 1},
+	}
+	for _, tc := range deep {
+		_, err := Parse(tc.src, Options{})
+		var e *Error
+		if !errors.As(err, &e) || e.Msg != "the expression nests too deeply" || e.Line != 1 || e.Col != tc.col {
+			t.Errorf("%s: %v, want the expression nests too deeply at column %d", tc.name, err, tc.col)
+		}
+	}
+	// What the parser recursed on unbounded overflowed the goroutine's
+	// stack: prefix operators, an exponentiation's right operand, new's
+	// callee and a class's heritage.
+	for _, src := range []string{
+		r("!", 5_000_000) + "1",
+		r("- ", 4_000_000) + "1",
+		r("typeof ", 1_000_000) + "a",
+		"a" + r("**a", 3_000_000),
+		r("new ", 3_000_000) + "f",
+		"x = " + r("class extends ", 1_000_000) + "f" + r("{}", 1_000_000),
+		"a" + r("?.b", 3_000_000),
+		"a" + r("+a", 5_000_000),
+	} {
+		var e *Error
+		if _, err := Parse(src, Options{}); !errors.As(err, &e) || e.Msg != "the expression nests too deeply" {
+			t.Errorf("%.20q...: %v, want the expression nests too deeply", src, err)
+		}
 	}
 }
 

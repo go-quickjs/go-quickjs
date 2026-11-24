@@ -7,8 +7,7 @@ import (
 
 // parseStatement parses a single statement or declaration.
 func (p *parser) parseStatement() ast.Stmt {
-	p.enter()
-	defer p.leave()
+	defer p.leave(p.enter())
 
 	// The restriction applies to this statement and no further: a `let`
 	// declaration nested anywhere inside it is fine.

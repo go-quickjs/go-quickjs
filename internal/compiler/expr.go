@@ -420,6 +420,10 @@ const maxChainParts = 32
 // literal, or one that would join fewer than three parts, where a concat
 // saves nothing over the additions.
 func (c *compiler) compileStringChain(n *ast.Binary) bool {
+	if n == c.noChain {
+		c.noChain = plusChain(n)
+		return false
+	}
 	// The chain's additions, innermost first: adds[0].Left is its first
 	// operand, and adds[i].Right the one after.
 	var adds []*ast.Binary
@@ -456,6 +460,7 @@ func (c *compiler) compileStringChain(n *ast.Binary) bool {
 		}
 	}
 	if first < 0 {
+		c.noChain = plusChain(n)
 		return false
 	}
 	empty := func(e ast.Expr) bool {
@@ -472,6 +477,7 @@ func (c *compiler) compileStringChain(n *ast.Binary) bool {
 		}
 	}
 	if parts < 3 {
+		c.noChain = plusChain(n)
 		return false
 	}
 
@@ -507,6 +513,19 @@ func (c *compiler) compileStringChain(n *ast.Binary) bool {
 		part()
 	}
 	return true
+}
+
+// plusChain is the addition that is n's left operand, the chain of
+// additions n's is less its last, or nil. An addition chain that is not
+// joined -- it has no string literal, or too few parts -- is a chain of
+// those its left operand's is not joined either, which the addition is
+// compiled into next: the compile, and the register form's, would look at
+// a chain of each addition of a long one, as long, without it.
+func plusChain(n *ast.Binary) *ast.Binary {
+	if l, ok := n.Left.(*ast.Binary); ok && l.Op == "+" {
+		return l
+	}
+	return nil
 }
 
 // templateValid reports whether every part of a template has a cooked

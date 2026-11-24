@@ -94,8 +94,7 @@ func (p *parser) parseExprFrom(left ast.Expr) ast.Expr {
 
 // parseAssign parses an AssignmentExpression.
 func (p *parser) parseAssign() ast.Expr {
-	p.enter()
-	defer p.leave()
+	defer p.leave(p.enter())
 
 	// This is where an arrow function may begin, whatever position the
 	// assignment expression itself is in.
@@ -291,9 +290,14 @@ func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
 		var right ast.Expr
 		if op == "**" {
 			// Right-associative: recurse at one below its own precedence.
-			right = p.parseBinaryFrom(p.parseOperandAt(prec), prec-1)
+			right = p.parseExponent(prec)
 		} else {
+			// The operand's height is measured on its own, as a level
+			// below the node it joins left in.
+			peak := p.peak
+			p.peak = p.depth
 			right = p.parseBinaryFrom(p.parseOperandAt(prec), prec)
+			p.peak = max(p.peak, peak)
 		}
 
 		if cat != nil {
@@ -318,10 +322,22 @@ func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
 				p.checkNullishOperand(right, op)
 			}
 			left = p.nodes.logicalOp(op, left, right)
+			p.grow()
 		default:
 			left = p.binaryOf(op, left, right)
+			if _, folded := left.(*ast.NumberLit); !folded {
+				p.grow()
+			}
 		}
 	}
+}
+
+// parseExponent parses the right operand of **, of precedence prec, which
+// is right-associative: an exponentiation nests in its right operand,
+// a level of the parser's recursion.
+func (p *parser) parseExponent(prec int) ast.Expr {
+	defer p.leave(p.enter())
+	return p.parseBinaryFrom(p.parseOperandAt(prec), prec-1)
 }
 
 // checkNullishMix rejects an unparenthesized && or || as an operand of ??.
@@ -366,7 +382,7 @@ func (p *parser) parseUnary() ast.Expr {
 	case p.isPunct("!"), p.isPunct("~"), p.isPunct("+"), p.isPunct("-"):
 		op := p.tok.Value
 		p.next()
-		operand := p.parseOperand()
+		operand := p.parseUnaryOperand()
 		// `-2 ** 2` is a syntax error: the grammar refuses to guess whether the
 		// negation or the exponentiation binds tighter.
 		if p.isPunct("**") {
@@ -377,7 +393,7 @@ func (p *parser) parseUnary() ast.Expr {
 	case p.isKeyword("typeof"), p.isKeyword("void"), p.isKeyword("delete"):
 		op := p.tok.Value
 		p.next()
-		operand := p.parseOperand()
+		operand := p.parseUnaryOperand()
 		if p.isPunct("**") {
 			p.errorf("unary %q before \"**\" requires parentheses", op)
 		}
@@ -393,7 +409,7 @@ func (p *parser) parseUnary() ast.Expr {
 		op := p.tok.Value
 		opTok := p.tok
 		p.next()
-		operand := p.parseOperand()
+		operand := p.parseUnaryOperand()
 		p.checkSimpleAssignTarget(operand, opTok)
 		return p.nodes.updateOp(op, operand, true, start)
 
@@ -402,10 +418,17 @@ func (p *parser) parseUnary() ast.Expr {
 			p.errorf("\"await\" is not allowed in a parameter list")
 		}
 		p.next()
-		return &ast.Await{Arg: p.parseOperand(), Start: start}
+		return &ast.Await{Arg: p.parseUnaryOperand(), Start: start}
 	}
 
 	return p.parsePostfix()
+}
+
+// parseUnaryOperand parses the operand of a prefix operator, which nests
+// in it: a level of the parser's recursion.
+func (p *parser) parseUnaryOperand() ast.Expr {
+	defer p.leave(p.enter())
+	return p.parseOperand()
 }
 
 // parseOperand parses a UnaryExpression in a position where neither an arrow
@@ -477,7 +500,7 @@ func (p *parser) parseNew() ast.Expr {
 	// is `a.b`, and the argument list belongs to the `new`.
 	var callee ast.Expr
 	if p.isKeyword("new") {
-		callee = p.parseNew()
+		callee = p.parseNewCallee()
 	} else {
 		// import() is a syntactic form rather than a function, so there is
 		// nothing for new to construct. import.meta is an ordinary object,
@@ -496,7 +519,15 @@ func (p *parser) parseNew() ast.Expr {
 	}
 	n := p.nodes.news.alloc()
 	n.Callee, n.Args, n.Start = callee, args, start
+	p.grow()
 	return p.parseMemberTail(n, true)
+}
+
+// parseNewCallee parses the new expression that is the callee of another,
+// new new X, which nests in it: a level of the parser's recursion.
+func (p *parser) parseNewCallee() ast.Expr {
+	defer p.leave(p.enter())
+	return p.parseNew()
 }
 
 // parseMemberTail consumes property accesses and tagged templates. When
@@ -523,6 +554,7 @@ func (p *parser) parseMemberTailIn(expr ast.Expr, allowCall, inChain bool) ast.E
 				name := &ast.PrivateName{Name: p.tok.Value, Start: p.tok.Pos}
 				p.next()
 				expr = &ast.Member{Object: expr, Property: name, Start: int32(expr.Pos())}
+				p.grow()
 				continue
 			}
 			prop := p.parseIdentName()
@@ -548,6 +580,8 @@ func (p *parser) parseMemberTailIn(expr ast.Expr, allowCall, inChain bool) ast.E
 		default:
 			return expr
 		}
+		// Each link is a level above the chain before it (maxTreeHeight).
+		p.grow()
 		if !allowCall && p.isPunct("(") {
 			return expr
 		}
@@ -564,6 +598,7 @@ func (p *parser) parseCallTail(expr ast.Expr, allowCall bool) ast.Expr {
 			open := p.tok.Pos
 			args := p.parseArguments()
 			expr = p.nodes.callOf(expr, args, false, open)
+			p.grow()
 
 		case p.isPunct("?."):
 			optional = true
@@ -590,6 +625,7 @@ func (p *parser) parseCallTail(expr ast.Expr, allowCall bool) ast.Expr {
 				}
 				expr = p.nodes.memberOf(expr, prop, false, true)
 			}
+			p.grow()
 
 		case p.isPunct("."), p.isPunct("["), p.startsTemplate():
 			expr = p.parseMemberTailIn(expr, allowCall, optional)
@@ -597,6 +633,7 @@ func (p *parser) parseCallTail(expr ast.Expr, allowCall bool) ast.Expr {
 
 		default:
 			if optional {
+				p.grow()
 				return &ast.OptionalChain{Base: expr, Start: expr.Pos()}
 			}
 			return expr

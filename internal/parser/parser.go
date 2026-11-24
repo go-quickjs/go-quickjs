@@ -141,24 +141,69 @@ type parser struct {
 	// is a process-wide crash rather than a catchable error, so pathological
 	// input is rejected before it gets that far.
 	depth int
+	// peak bounds the tree's height, which every pass over it after the
+	// parser -- the compiler's analyses, its walk, the register backend --
+	// recurses in proportion to. A chain the parser builds in a loop, a.b.c,
+	// f()(), a + b + c, is as tall as it is long, its first link the
+	// deepest, though the parser's own recursion does not grow with it.
+	// peak is the highest level, counted from the root, that what has been
+	// parsed since the innermost production that entered (enter) reaches: a
+	// production that enters is at its depth, and a node a chain adds is a
+	// level above what it joins (grow), its earlier links and its operand.
+	peak int
 }
 
-// maxNestingDepth is the deepest expression or statement nesting accepted.
+// maxNestingDepth is the deepest expression or statement nesting accepted:
+// the parser's own recursion, a parenthesis, a bracket, a block, an operand
+// of a unary operator each a level.
 //
 // Real code never approaches this; generated or hostile input can. The figure
-// is well below where the Go stack would be exhausted, leaving room for the
-// compiler, which recurses over the same tree.
-const maxNestingDepth = 1000
+// is well below where the Go stack would be exhausted.
+const maxNestingDepth = 2000
 
-// enter increases the nesting depth, failing if the input is too deep.
-func (p *parser) enter() {
+// maxTreeHeight is the tallest tree accepted, nesting and the links of
+// chains: a + b + c and a.b.c are as tall as they are long. A pass over the
+// tree recurses to its height, using at most a few kilobytes of Go stack a
+// level.
+const maxTreeHeight = 10000
+
+// enter increases the nesting depth, failing if the input is too deep, and
+// begins the measure of what the production parses (peak), returning the
+// measure around it for leave to restore.
+func (p *parser) enter() (peak int) {
 	p.depth++
 	if p.depth > maxNestingDepth {
-		p.errorf("the expression nests too deeply")
+		p.tooDeep()
+	}
+	peak, p.peak = p.peak, p.depth
+	return peak
+}
+
+// leave ends the production enter began, whose height joins the measure
+// around it.
+func (p *parser) leave(peak int) {
+	p.depth--
+	p.peak = max(p.peak, peak)
+}
+
+// grow accounts for a node a chain adds above what it joins: its earlier
+// links and the operand or the arguments the node has, which the parser
+// has measured (peak).
+func (p *parser) grow() {
+	p.peak++
+	if p.peak > maxTreeHeight {
+		p.tooDeep()
 	}
 }
 
-func (p *parser) leave() { p.depth-- }
+// tooDeep reports that a bound of the parser's, maxNestingDepth's or
+// maxTreeHeight's, is passed here: apart, so that what checks it stays
+// small enough to inline.
+//
+//go:noinline
+func (p *parser) tooDeep() {
+	p.errorf("the expression nests too deeply")
+}
 
 // parserMark records a position the parser can return to. It is used only for
 // the few one-token lookaheads that the cover grammar cannot express, such as
