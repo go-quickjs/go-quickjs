@@ -13,6 +13,8 @@ type nativeRun struct{}
 
 func (r *nativeRun) large() bool { return false }
 
+func (r *nativeRun) footprint() int { return 0 }
+
 func (re *Regexp) nativeTick(bool) {}
 
 // attempt is the match of the pattern at pos.

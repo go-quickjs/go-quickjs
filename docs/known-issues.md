@@ -644,7 +644,15 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Repro:** with `--memory-limit 32m`,
   `var keep = [], subject = "a".repeat(4000); for (var i = 0; i < 500; i++) { var r = /(a|b)*c/; r.test(subject); keep.push(r); }`.
 - **Expected:** `ErrMemoryLimit`, as over a subject that is not ASCII.
-- **Status:** open.
+- **Status:** fixed. `matcher.footprint` now counts the stacks of the
+  matcher over bytes it holds and the backtracking stack of the native code
+  each ran (`nativeRun.footprint`). The repro stops with `ErrMemoryLimit`,
+  at a 74 MB peak with the interpreter and 61 MB with the JIT, and one
+  match of `/(a|b)*c/` over 20 million ASCII characters under a 64 MB limit,
+  which had ended the process in Go's `fatal error: out of memory`, stops
+  with it too (`TestMemoryLimitCountsRegExpStacks`,
+  `TestFootprintCountsTheMatcherOverBytes`,
+  `TestFootprintCountsTheNativeStacks`).
 
 ### KI-95 An event loop keeps a timer for every wait
 - **Where:** `stdlib/loop.go`, `Loop.Run` and `Loop.RunUntil`, which make a

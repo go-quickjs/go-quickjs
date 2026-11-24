@@ -481,6 +481,14 @@ type nativeRun struct {
 // large reports whether the stack has grown past what a lent matcher keeps.
 func (r *nativeRun) large() bool { return r != nil && len(r.stack) > 4*maxLentFrames }
 
+// footprint is what r takes, its stack the most of it.
+func (r *nativeRun) footprint() int {
+	if r == nil {
+		return 0
+	}
+	return int(unsafe.Sizeof(*r)) + cap(r.stack)*8
+}
+
 // setStack points the context at the stack.
 func (r *nativeRun) setStack(c *nativeCode) {
 	x := &r.ctx

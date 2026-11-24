@@ -77,13 +77,28 @@ func (s *charSet) footprint() int {
 	return n + s.bmpFootprint()
 }
 
-// footprint is what a matcher holds.
+// footprint is what a matcher holds: its stacks, those of its matcher over
+// an ASCII subject's bytes, which matches every ASCII string, and the
+// backtracking stacks of the native code each ran.
 func (m *matcher) footprint() int {
+	n := int(unsafe.Sizeof(*m)) +
+		stacksFootprint(m.caps, m.trail, m.stack, m.counters, m.emptyMarks) +
+		m.native.footprint()
+	if a := m.bytes; a != nil {
+		n += int(unsafe.Sizeof(*a)) +
+			stacksFootprint(a.caps, a.trail, a.stack, a.counters, a.emptyMarks) +
+			a.native.footprint()
+	}
+	return n
+}
+
+// stacksFootprint is what a matcher's captures, trail, stack, counters and
+// marks take.
+func stacksFootprint(caps []int, trail []capWrite, stack []frame, counters, marks []int) int {
 	const word = int(unsafe.Sizeof(0))
-	return int(unsafe.Sizeof(*m)) +
-		cap(m.caps)*word +
-		cap(m.trail)*int(unsafe.Sizeof(capWrite{})) +
-		cap(m.stack)*int(unsafe.Sizeof(frame{})) +
-		cap(m.counters)*word +
-		cap(m.emptyMarks)*word
+	return cap(caps)*word +
+		cap(trail)*int(unsafe.Sizeof(capWrite{})) +
+		cap(stack)*int(unsafe.Sizeof(frame{})) +
+		cap(counters)*word +
+		cap(marks)*word
 }

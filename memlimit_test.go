@@ -82,6 +82,40 @@ func TestMemoryLimitDoubling(t *testing.T) {
 	}
 }
 
+// TestMemoryLimitCountsRegExpStacks pins that the limit sees what the
+// regular expressions a script keeps hold of their matches: the stacks a
+// match leaves as large as it grew them, over an ASCII subject's bytes and
+// by native code as over code units (KI-84). Each pattern here keeps about
+// half a megabyte; uncounted over an ASCII subject, 500 of them took a
+// process past a 32 MB limit to 287 MB, with no ErrMemoryLimit. The inner
+// loop is there for the interrupt check, which measures the heap every few
+// thousand back edges.
+func TestMemoryLimitCountsRegExpStacks(t *testing.T) {
+	t.Parallel()
+	for _, jit := range []bool{false, true} {
+		for name, subject := range map[string]string{
+			"ascii": `"ab".repeat(2000) + "c"`,
+			"wide":  `"ab".repeat(2000) + "Āc"`,
+		} {
+			opts := []quickjs.Option{quickjs.WithMemoryLimit(16 << 20)}
+			if jit {
+				opts = append(opts, quickjs.WithJIT())
+			}
+			rt := quickjs.New(opts...)
+			v, err := rt.Eval(`var keep = [], s = ` + subject + `;
+				for (var i = 0; i < 500; i++) {
+					var r = /(a|b)*Ā?c/; r.test(s); keep.push(r)
+					for (var j = 0; j < 100; j++);
+				}
+				keep.length`)
+			if !errors.Is(err, quickjs.ErrMemoryLimit) {
+				t.Errorf("%s, jit %v: = %v, %v, want ErrMemoryLimit", name, jit, v, err)
+			}
+			rt.Close()
+		}
+	}
+}
+
 // TestMemoryLimitResultsCountedOnce pins that what a built-in returns is not
 // held against the limit twice when the script already holds it -- the array
 // sort returns, a string returned unchanged -- nor what it lets go of: a
