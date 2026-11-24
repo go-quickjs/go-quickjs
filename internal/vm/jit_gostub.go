@@ -350,6 +350,46 @@ func (r *Runtime) jitGoDelete(ctx *abi.Context) bool {
 	return ok
 }
 
+// jitViaLeaf is a method call register code made through the realm's
+// Function.prototype.call of a leaf (jitLearned's viaLeaves): its register
+// pc, and the leaf, G.
+type jitViaLeaf struct {
+	pc  int32
+	obj *Object
+}
+
+// jitViaLeafSeen learns, at a call jitPlainCall made of g, a leaf, through
+// the realm's Function.prototype.call -- g.call(x, ...), as
+// hasOwnProperty.call(o, k) -- in the code of the run ctx is the context
+// of, at its own level (no inlined callee's, no native callee's), that the
+// code compiled again calls g as a leaf's call (jitRegFeedback's ViaLeaf,
+// ssa's windowViaLeaf), as V8's code calls a builtin whose target it
+// knows: no call of Go's dispatch, nor the plain call's decode of the call,
+// at each. A site learns its first g only: another meets the call's check
+// and goes the way any call does.
+func (r *Runtime) jitViaLeafSeen(ctx *abi.Context, g *Object) {
+	s, idx := r.jit, int(ctx.Level)
+	if ctx.Live != 0 || !r.jitRegCodeIn(ctx, idx) || idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
+		return
+	}
+	if st := jitGoCallState(ctx); st == nil || st.Inline != 0 || !st.SetsPC {
+		return
+	}
+	run := s.regRuns[idx]
+	if run.e == nil || run.e.invalid {
+		return
+	}
+	l := r.jitRegLearnedFor(run.f, run.e)
+	rpc := int32(ctx.ExitPC)
+	for _, x := range l.viaLeaves {
+		if x.pc == rpc {
+			return
+		}
+	}
+	l.viaLeaves = append(l.viaLeaves, jitViaLeaf{pc: rpc, obj: g})
+	r.jitRegReopt(run.f.cl, run.e)
+}
+
 // The routines (jit_leaffast_*.s), and their addresses.
 func jitPowStub()
 func jitModStub()

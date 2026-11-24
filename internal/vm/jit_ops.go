@@ -189,6 +189,7 @@ var (
 	_ ssa.ClosureFeedback    = (*jitRegFeedback)(nil)
 	_ ssa.CellsFeedback      = (*jitRegFeedback)(nil)
 	_ ssa.PureBodyFeedback   = (*jitRegFeedback)(nil)
+	_ ssa.ViaLeafFeedback    = (*jitRegFeedback)(nil)
 )
 
 // jitRegCodeIn reports whether the code making the call of Go in ctx, in

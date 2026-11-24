@@ -1031,6 +1031,16 @@ type LeafFeedback interface {
 	Leaf(pc int) (fn uintptr, ok bool)
 }
 
+// ViaLeafFeedback is Feedback that knows the method call at a PC, register
+// code's, is G.call(x, ...) through the realm's Function.prototype.call, at
+// call, of a leaf G at fn, as V8's call reducer reduces a call of
+// Function.prototype.call whose target it knows: native code checks the
+// method is call and its receiver G, and makes G's call of x and the rest
+// as a leaf's call of Go (windowViaLeaf) -- hasOwnProperty.call(o, k).
+type ViaLeafFeedback interface {
+	ViaLeaf(pc int) (call, fn uintptr, ok bool)
+}
+
 // LeafKindFeedback is LeafFeedback that knows which of the leaves native
 // code makes itself where it can (LeafKind) the function at fn is, as V8's
 // call reducer knows a builtin by its id: leafCall makes those natively
@@ -1254,6 +1264,34 @@ func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite,
 	}
 	b.createPool(pc, fn, site)
 	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
+}
+
+// windowViaLeaf makes register code's method call at pc, in, c its call's
+// site, G.call(x, ...) of the leaf at fn through the realm's
+// Function.prototype.call at call (ViaLeafFeedback): the method, its
+// window's register 0, checked to be call, and its receiver, register 1,
+// G -- where either is not, a host exit has Go run the instruction whole --
+// then G's call, its receiver x, register 2, and the arguments from
+// register 3, made as windowLeaf makes a method call of the leaf: a call of
+// Go of its own (GoLeaf), or natively where native code makes the leaf
+// itself (leafMade), its result to the call's register.
+func (b *builder) windowViaLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite, call, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	a := in.Left.Slot
+	method := guard(OpObjectOf, Ptr, ir.HostExit, b.read(a, blk))
+	isCall := guard(OpSameObject, None, ir.HostExit, method)
+	isCall.Const = ir.Value{Bits: uint64(call)}
+	g := b.read(a+1, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, g)
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	args := []*Value{g, b.read(a+2, blk)}
+	for k := 1; k < c.Argc; k++ {
+		args = append(args, b.read(a+2+k, blk))
+	}
+	leaf := &CallSite{Argc: c.Argc - 1, Method: true}
+	site := &CallSite{Go: GoLeaf, Argc: c.Argc - 1, Method: true, ThisSlot: -1, Leaf: fn}
+	site.Unused = b.windowResultUnused(pc)
+	b.leafMade(blk, pc, fn, leaf, args, site, guard, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
 }
 
 // windowResultUnused is resultUnused of register code's call at pc, whose
@@ -9687,6 +9725,13 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 		if lf, ok := b.fb.(LeafFeedback); ok {
 			if fn, ok := lf.Leaf(pc); ok {
 				b.windowLeaf(blk, pc, in, c, fn, guard)
+				return
+			}
+		}
+		if vf, ok := b.fb.(ViaLeafFeedback); ok && c.Method && c.Argc >= 1 {
+			// G.call(x, ...) of a leaf G (ViaLeafFeedback).
+			if call, fn, ok := vf.ViaLeaf(pc); ok {
+				b.windowViaLeaf(blk, pc, in, c, call, fn, guard)
 				return
 			}
 		}

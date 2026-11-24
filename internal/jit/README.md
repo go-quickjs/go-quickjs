@@ -2433,6 +2433,19 @@ refuses goes on `Fail` bytes past, to the call's exit, as from `GoFast`.
 A convention of registers for the operands, as V8's descriptors have them,
 would change the sites and the routines' first instructions alone.
 
+**A leaf through call.** A method call of a leaf through the realm's
+`Function.prototype.call`, `G.call(x, ...)` -- `hasOwnProperty.call(o, k)`
+-- is a leaf's call of G, as V8's call reducer reduces a call of `call`
+whose target it knows: the code checks the method is `call` and its
+receiver G -- either not, a host exit -- and calls G with x for its
+receiver and the rest for its arguments through `LeafFast`, or makes G
+itself where native code makes the leaf (ssa's `windowViaLeaf`,
+`ViaLeafFeedback`). The call learns G at its plain call of Go, which
+applies G without a frame (the VM's `jitPlainCall`, `jitViaLeafSeen`,
+`jitLearned`'s `viaLeaves`), at the code's own level, its first G only;
+one that also called a function of the script's natively -- through
+`call` too, learned at its exits -- stays the general way.
+
 **On the register frame.** A call Go makes for native code -- a call's site
 that has no native target, a construction, a getter or setter not inlined --
 Go makes on the run's register frame (`jitState`'s `regRuns`,

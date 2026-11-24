@@ -1391,6 +1391,43 @@ func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
 	return uintptr(unsafe.Pointer(callee)), true
 }
 
+// ViaLeaf is ssa.ViaLeafFeedback's: for the method call at the program's
+// instruction pc, the realm's Function.prototype.call and the built-in G
+// the call was seen to call through it, G.call(x, ...) --
+// hasOwnProperty.call(o, k) -- where G is a leaf native code calls without
+// a frame (jitLeafOp), as its plain call learned it (jitViaLeafSeen), and
+// no function of the script's it calls natively.
+func (f *jitRegFeedback) ViaLeaf(pc int) (uintptr, uintptr, bool) {
+	w, op, ok := f.at(pc)
+	l, r := f.fb.e, f.fb.r
+	if !ok || op != ir.Host || !f.p.Code[pc].Window || l == nil || r.callFn == nil || jitRegCallOp(w.Op()) != bytecode.RCallMW || w.X() < 1 {
+		return 0, 0, false
+	}
+	rpc := int32(f.p.Origin[pc])
+	if int(rpc) < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+		return 0, 0, false
+	}
+	for _, x := range l.nativeCalls {
+		if x.pc == rpc {
+			// A call that met a function of the script's too, which its
+			// exits taught it: the general way, which makes both.
+			return 0, 0, false
+		}
+	}
+	for _, x := range l.viaLeaves {
+		if x.pc != rpc {
+			continue
+		}
+		fd := x.obj.fn()
+		if fd == nil || fd.native == nil || fd.bound || !jitLeafOp(fd.elemOp) || fd.realm != nil && fd.realm != r.Realm {
+			return 0, 0, false
+		}
+		f.fb.keep().holders = append(f.fb.keep().holders, r.callFn, x.obj)
+		return uintptr(unsafe.Pointer(r.callFn)), uintptr(unsafe.Pointer(x.obj)), true
+	}
+	return 0, 0, false
+}
+
 // regStringBefore reports whether the register instruction before
 // register pc rpc loads a string constant into register reg: a call's
 // last argument, made right before it.

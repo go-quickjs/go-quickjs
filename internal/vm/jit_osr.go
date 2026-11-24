@@ -98,6 +98,11 @@ type jitLearned struct {
 	// nativeCalls are the calls the code makes natively, or will when
 	// compiled again, each with the function it was seen to call.
 	nativeCalls []jitInline
+	// viaLeaves are the method calls the code made through the realm's
+	// Function.prototype.call of a leaf, G.call(x, ...) of a built-in --
+	// hasOwnProperty.call(o, k) -- each with G, which the code compiled
+	// again calls as a leaf's call (jitRegFeedback's ViaLeaf).
+	viaLeaves []jitViaLeaf
 	// inlines are the calls the code inlines, or will when compiled again,
 	// each with the function it was seen to call (jitRegCallSeen); notInline
 	// are those that stopped being: what the callee does kept leaving

@@ -168,9 +168,10 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in jitInstr, n int) (Value, boo
 	if !callee.IsObject() {
 		return Undefined, false
 	}
+	via := false
 	if callee.Object() == r.callFn && in.Op == bytecode.OpCallMethod && argc != 0 {
 		// G.call(recv, ...args): G the receiver, recv the first argument.
-		callee, this, first, argc = this, jitGoArg(ctx, first), first+1, argc-1
+		callee, this, first, argc, via = this, jitGoArg(ctx, first), first+1, argc-1, true
 		if !callee.IsObject() {
 			return Undefined, false
 		}
@@ -178,6 +179,11 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in jitInstr, n int) (Value, boo
 	fd := callee.Object().fn()
 	if fd == nil || !jitLeafOp(fd.elemOp) && (fd.elemOp != elemPush || argc == 1) || fd.realm != nil && fd.realm != r.Realm {
 		return Undefined, false
+	}
+	if via && jitLeafOp(fd.elemOp) {
+		// Learned, the code compiled again calls G as a leaf's call
+		// (jitViaLeafSeen).
+		r.jitViaLeafSeen(ctx, callee.Object())
 	}
 	// The arguments where native code put them, each a Value's words
 	// (jitGoArg), read in place: no leaf keeps them, and each operand's

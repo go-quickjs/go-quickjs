@@ -318,3 +318,80 @@ func TestJITPlainStubs(t *testing.T) {
 		}
 	}
 }
+
+// viaLeafSetup's loops call a leaf through Function.prototype.call --
+// hasOwnProperty.call(o, k) of a local, own and missing keys, an array's
+// index among them -- once of null, which throws the interpreter's
+// TypeError from the exit; ownsOf's call meets hasOwnProperty, then a
+// function of the script's, which its check sends the general way.
+const viaLeafSetup = `
+const objs = [{ a: 1, b: undefined }, [7, 8], { length: 0 }, Object.create({ a: 2 })]
+const ks = ['a', 'b', 0, 'length', 'toString', '1']
+function owns(n, bad) {
+	const own = Object.prototype.hasOwnProperty
+	let c = 0, h = 1
+	try {
+		for (let i = 0; i < n; i++) {
+			if (own.call(i == bad ? null : objs[i % objs.length], ks[i % ks.length])) c++
+			h = (h * 3 + c) & 1023
+		}
+	} catch (e) { return e.constructor.name + ':' + c }
+	return c + ':' + h
+}
+function ownsOf(n, own) {
+	let c = 0
+	for (let i = 0; i < n; i++) if (own.call(objs[i % objs.length], ks[i % ks.length])) c++
+	return c
+}
+`
+
+// A method call of a leaf through the realm's Function.prototype.call,
+// G.call(x, ...), learned at its plain call of Go (jitViaLeafSeen), is made
+// as a leaf's call of G once the code is compiled again (ssa's
+// windowViaLeaf, through abi.Encoding's LeafFast): no call of Go's
+// dispatch, nor the plain call's decode, at each; with the interpreter's
+// answers -- of null, which throws from the exit, and of a call that meets
+// another function, which its check sends the general way; with
+// collections at the calls and with the code compiled for a collector that
+// marks.
+func TestJITViaLeaf(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range jitMarkingModes() {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		calls := 0
+		jitTestSwitch(t, func(jc *jitTestConfig) {
+			jc.goCallWork = func() {
+				if calls++; calls%71 == 0 {
+					runtime.GC()
+				}
+			}
+		})
+		var rounds []string
+		for range 8 {
+			rounds = append(rounds, "owns(300, -1)", "ownsOf(200, Object.prototype.hasOwnProperty)")
+		}
+		rounds = append(rounds, "owns(300, 150)", "owns(300, -1)")
+		for range 4 {
+			rounds = append(rounds, "ownsOf(200, function (k) { return k === 'a' })", "ownsOf(200, Object.prototype.hasOwnProperty)")
+		}
+		r := jitAgreesForTest(t, viaLeafSetup, rounds...)
+		e := jitNativeForTest(t, r, "owns")
+		if len(e.viaLeaves) == 0 {
+			t.Errorf("marking %v: owns learned no leaf called through call", marking)
+		}
+		leaves, goFast, stubs := r.jit.leafFast, r.jit.goFast, r.jit.goStub
+		if _, err := r.Run(compileForTest(t, "''+owns(300, -1)")); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.jit.leafFast - leaves; got < 300 {
+			t.Errorf("marking %v: %d of 300 hasOwnProperty.call made as a leaf's call", marking, got)
+		}
+		if r.jit.goFast != goFast || r.jit.goStub-stubs > 2 {
+			t.Errorf("marking %v: %d calls through GoFast, %d through routines of their own", marking, r.jit.goFast-goFast, r.jit.goStub-stubs)
+		}
+	}
+}

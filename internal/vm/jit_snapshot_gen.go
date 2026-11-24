@@ -39,6 +39,7 @@ const (
 	snapNativeCalls
 	snapBigIntSole
 	snapLeaf
+	snapViaLeaf
 	snapCharCode
 	snapSubstring
 	snapFromCharCode
@@ -71,10 +72,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
@@ -366,6 +367,17 @@ func (q *jitRegSnapshot) Leaf(pc int) (r0 uintptr, r1 bool) {
 	r0, _ = a[0].(uintptr)
 	r1, _ = a[1].(bool)
 	return r0, r1
+}
+
+func (q *jitRegSnapshot) ViaLeaf(pc int) (r0 uintptr, r1 uintptr, r2 bool) {
+	a := q.get(snapViaLeaf, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].(uintptr)
+	r2, _ = a[2].(bool)
+	return r0, r1, r2
 }
 
 func (q *jitRegSnapshot) CharCode(pc int) (r0 bool) {
@@ -979,6 +991,15 @@ func jitRegSnapAskLeaf(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskViaLeaf(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1, r2 := fb.ViaLeaf(pc)
+	s.end(fb.fb, before, snapViaLeaf, int64(pc))
+	if jitSnapAnswered(r2) {
+		s.put(snapViaLeaf, int64(pc), r0, r1, r2)
+	}
+}
+
 func jitRegSnapAskCharCode(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	before := s.begin(fb.fb)
 	r0 := fb.CharCode(pc)
@@ -1164,6 +1185,7 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapNativeCalls |
 	1<<snapBigIntSole |
 	1<<snapLeaf |
+	1<<snapViaLeaf |
 	1<<snapCharCode |
 	1<<snapSubstring |
 	1<<snapFromCharCode |
@@ -1223,6 +1245,7 @@ func init() {
 		snapInline:         jitRegSnapAskInline,
 		snapNativeCalls:    jitRegSnapAskNativeCalls,
 		snapLeaf:           jitRegSnapAskLeaf,
+		snapViaLeaf:        jitRegSnapAskViaLeaf,
 		snapCharCode:       jitRegSnapAskCharCode,
 		snapSubstring:      jitRegSnapAskSubstring,
 		snapFromCharCode:   jitRegSnapAskFromCharCode,

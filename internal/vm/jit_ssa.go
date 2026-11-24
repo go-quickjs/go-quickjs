@@ -1404,7 +1404,7 @@ func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
 // learn more.
 func jitLearnedCount(e *jitEntry) int {
 	return len(e.failed) + len(e.failedEntries) + len(e.resumed) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
-		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
+		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.viaLeaves) + len(e.inlines) + len(e.notInline) +
 		len(e.literals)
 }
 
