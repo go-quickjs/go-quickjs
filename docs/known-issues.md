@@ -3,8 +3,10 @@
 KI-01 to KI-60 were found by a review of the engine, the standard library and
 go-intl in September 2026, after v0.5.0, and were fixed in order of the harm
 they allow; later issues are numbered as they are found and filed under their
-severity. Each issue was reproduced unless it is marked *plausible*. The
-commit that fixes an issue names it: `git log --grep KI-01`.
+severity. KI-81 to KI-96 were found by an engine review in November 2026, and
+KI-97 while its findings were reproduced. Each issue was reproduced unless it
+is marked *plausible*. The commit that fixes an issue names it:
+`git log --grep KI-01`.
 
 - **P0**: a script can corrupt the engine, crash the host process, or reach
   past a boundary it should not.
@@ -188,6 +190,72 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** fixed. The code keeps the template in a cell of its own, as it
   keeps string constants (`jitTemplateCell`, `jit_template.go`).
   - Test: `TestJITMadeTemplateOutlivesItsRun`.
+
+### KI-81 A counted quantifier nested in an optional one never ends
+- **Where:** `internal/regexp/exec.go`, the matcher's counted loops
+  (`opCounterInc`, `exitOfCounterLoop`) and its empty check
+  (`opEmptyCheck`), and the matchers made from it, `exec_ascii.go` and
+  `exec_utf8.go`; `compileRepeat` (`compile.go`) lays the loops out.
+  KI-39 guarded a counted quantifier's iterations past its minimum. A counted
+  quantifier whose body can match nothing, inside another whose minimum is 0,
+  still backtracks for good.
+- **Effect:** the match never ends, and its capture trail and backtracking
+  stack grow by gigabytes a second, which over an ASCII subject the memory
+  limit does not see (KI-84). A deadline stops it, holding what it grew by
+  then. Without one -- qjs, which can always be stopped by Ctrl-C and so has
+  no step budget, or a host whose context is only ever cancelled -- the
+  process ends in Go's `fatal error: out of memory`, which nothing can
+  recover: some 50 GB in, in one run. A host that cannot stop the script
+  gets KI-17's budget, `SyntaxError: regular expression is too complex`,
+  for a pattern whose answer is `null`.
+- **Repro:** `new RegExp("((a?){2}){0,2}x").exec("a")`; so
+  `((a?){2}){0,3}a` on `"aa"` and `(([a-z]?){2,}){0,3}[a-z]` on `"abc"`.
+  `((a?){2}){0,1}x` on `"a"` ends, with `null`. The same in the interpreter
+  and with the JIT.
+- **Expected:** `null`, `["aa","a",""]` and `["abc","ab","b"]` at once, as
+  Node answers.
+- **Status:** open.
+
+### KI-82 A Value of one runtime is taken by another
+- **Where:** `quickjs.go` (`Runtime.Set`), `marshal.go` (`encodeValue`,
+  which `Set`, `Encode` and a call's arguments go through), `value.go`
+  (`Call`, `Equal`) and `extend.go` (`SetModuleValues`). A `Value` holds its
+  runtime, but nothing compares it with the runtime it is handed to. Only
+  structured clone refuses a foreign value (`TestCloneRejectsForeign`), and
+  KI-09's fix a foreign exception.
+- **Effect:** the other runtime's object is read through the receiver's
+  shapes and atoms: a property it has is not found, and `JSON.stringify` of
+  it serializes something else. A function handed across runs its own
+  runtime's closure with the receiver's state, and called from both
+  runtimes, each on its own goroutine, races: the race detector reports
+  `regOf` (`internal/vm/reg_call.go`). A host that keeps runtimes side by
+  side -- a pool, plugins, a runtime for each request -- and passes a value
+  it kept from one to another corrupts both.
+- **Repro:** `v, _ := a.Eval("({a: 41})")`, then `b.Set("x", v)` returns nil;
+  in `b`, `x.a` is `undefined`, `Object.keys(x)` is `["x"]` and
+  `JSON.stringify(x)` is `{"x":41}`. A function of `a` set in `b` and called
+  from both, under `-race`, races.
+- **Expected:** an error from `Set`, `Encode`, a call given a foreign
+  argument, `Equal` and `SetModuleValues`, as clone gives one.
+- **Status:** open.
+
+### KI-83 A rooted filesystem writes through a link out of its root
+- **Where:** `stdlib/fs.go`, `fsHost.resolve`. A path that exists is
+  resolved with `EvalSymlinks` and checked again. One that does not is
+  checked as written, on the reasoning that it cannot be a link; but its
+  parent can.
+- **Effect:** with `FS.Root` set and a link inside the root to a directory
+  outside it, reading through the link is refused, but writing, making a
+  directory and renaming through it reach outside the root.
+- **Repro:** `root/link` pointing at `../outside`.
+  `fs.readFileSync("link/secret.txt")` throws `link/secret.txt leads outside
+  the permitted root`; `fs.writeFileSync("link/pwned.txt", "x")`,
+  `fs.mkdirSync("link/newdir")` and
+  `fs.renameSync("inside.txt", "link/moved.txt")` succeed, and all three
+  are made in `outside`.
+- **Expected:** each refused: the nearest ancestor that exists resolved and
+  checked, then the rest of the path joined to it.
+- **Status:** open.
 
 ## P1: limits, hangs, leaks
 
@@ -537,6 +605,44 @@ Paths are relative to this repository; `go-intl:` paths are in
     Function holds its source at no count, as it did (KI-62's rule for what is
     the program's). A host function that cuts a Go string it was given and
     returns the piece holds the whole, as anything a host holds does.
+
+### KI-84 The memory limit does not see a match's stacks over an ASCII subject
+- **Where:** `internal/regexp/footprint.go`, `matcher.footprint`, which
+  KI-62 added. It counts the matcher's captures, trail, stack and counters,
+  but not those of the matcher over an ASCII subject's bytes
+  (`matcher.bytes`, `exec_ascii.go`), which matches every ASCII string, nor
+  what a native matcher holds.
+- **Effect:** a RegExp keeps its matcher's stacks as large as its longest
+  match left them, and over an ASCII subject none of it is counted. Under a
+  32 MB limit, 500 kept regular expressions, each matched once against 4,000
+  `a`s, took the process to 287 MB with the interpreter, and to 317 MB and
+  the end of the script with the JIT, with no `ErrMemoryLimit`. Over the same
+  subject with one character past ASCII the script stopped with
+  `ErrMemoryLimit` at 75 MB. One match's growth goes unseen too: KI-81's
+  pattern passes a 64 MB limit by gigabytes over `"a"`, and is stopped by it
+  over `"aĀ"`.
+- **Repro:** with `--memory-limit 32m`,
+  `var keep = [], subject = "a".repeat(4000); for (var i = 0; i < 500; i++) { var r = /(a|b)*c/; r.test(subject); keep.push(r); }`.
+- **Expected:** `ErrMemoryLimit`, as over a subject that is not ASCII.
+- **Status:** open.
+
+### KI-95 An event loop keeps a timer for every wait
+- **Where:** `stdlib/loop.go`, `Loop.Run` and `Loop.RunUntil`, which make a
+  timer for the next one due each time they wait and `defer timer.Stop()`
+  inside their loop: the deferred call, and the timer it holds, stay until
+  `Run` returns, and the timer is not stopped when another case of the
+  `select` wins.
+- **Effect:** a loop with a timer pending grows by about 600 bytes each time
+  it wakes for anything else: work a host posts, a promise settled on
+  another goroutine, a message. 700,000 wake-ups held 401 MB, all let go
+  when `Run` returned. A server's loop that runs for days leaks without
+  bound.
+- **Repro:** `setTimeout(() => {}, 3600e3)`, then `Run` on one goroutine and,
+  on another, `Post` a function and wait for it to run, 700,000 times; the
+  live heap after a collection grows in proportion.
+- **Expected:** a heap that stays flat: each wait's timer stopped when its
+  `select` returns.
+- **Status:** open.
 
 ## P2: wrong results
 
@@ -998,6 +1104,89 @@ Paths are relative to this repository; `go-intl:` paths are in
   Found by Octane's Box2D at 30 runs.
   - Test: `TestJITAddPropAbsent`.
 
+### KI-85 A subclass's promise from `then` settles a turn late
+- **Where:** `internal/vm/promise.go`, `promiseThenSpecies`. The derived
+  promise is made by one `then` and settled through a second, where
+  PerformPromiseThen takes the species' promise as the result capability
+  and settles it in the one reaction job.
+- **Effect:** a promise of a subclass of `Promise` that `then` made settles a
+  microtask after an intrinsic one made at the same time, and a chain of
+  them drifts further: a subclass's `finally` is two turns late. The same
+  with the JIT and with `WithNodeQuirks`.
+- **Repro:** `class P extends Promise {}`, then
+  `P.resolve(1).then(v => v).then(() => log.push("subclass"))`,
+  `Promise.resolve(1).then(v => v).then(() => log.push("intrinsic"))` and
+  `queueMicrotask(() => log.push("qm"))`; `log` is
+  `qm,intrinsic,subclass`.
+- **Expected:** `qm,subclass,intrinsic`, as Node has it.
+- **Status:** open.
+
+### KI-86 `yield*` takes a delegate's `return` that is not a function for none
+- **Where:** `internal/vm/iterate.go`, `iterResume`'s `resumeReturn`, which
+  takes any `return` that cannot be called for an absent one. GetMethod
+  throws a `TypeError` for anything but `undefined` and `null` that cannot
+  be called.
+- **Effect:** a generator's `return(v)` delegated to an iterator whose
+  `return` is `42`, `"s"` or `{}` completes with `{value: v, done: true}`,
+  and a `catch` written for the `TypeError` never runs.
+- **Repro:** `function* o() { yield* { [Symbol.iterator]() { return { next() { return { value: 1, done: false }; }, return: 42 }; } }; }`,
+  then `const it = o(); it.next(); it.return("v")` gives
+  `{"value":"v","done":true}`.
+- **Expected:** `TypeError: number 42 is not a function` (Node), and the
+  same for `"s"` and `{}`; `null` and `undefined` complete as now.
+- **Status:** open.
+
+### KI-87 `for (var i = 0 in o)` under `with` or in an eval has no register code
+- **Where:** `internal/compiler/regcomp/record.go` (`NoteWrite`, which bails
+  when one identifier is written two ways), `internal/compiler/regrecord.go`
+  and `internal/vm/reg_entry.go` (`errNoRegCode`). Annex B's initializer in a
+  for-in head writes the binding there and again on each turn. Where the name
+  resolves through a `with` object or an eval's var scope the two writes
+  resolve differently, the record bails, and the function has no register
+  code, which nothing else can run.
+- **Effect:** valid sloppy code fails with `internal error: <main> has no
+  register code` (`anonymous` for a `Function`'s), which no `catch` sees:
+  `Eval` returns it and qjs exits with it. The runtime stays usable.
+- **Repro:** `with ({}) { for (var i = 0 in {}) {} }`;
+  `new Function("with({}){for(var i=0 in {}){}}")()`; and
+  `function g() { eval("for (var j = 0 in {}) {}") } g()`. Without `with`
+  or the eval, and with `let` or no initializer, the loop runs.
+- **Expected:** all three run, as in Node.
+- **Status:** open.
+
+### KI-90 A `v`-mode class under `i` is complemented before it is folded
+- **Where:** `internal/regexp/classset.go`, `classSetValue.complement`, which
+  complements the set's own ranges, keeps `foldCase` and folds the
+  character matched against it afterwards. With the `v` flag a class's
+  operands are case-folded before a complement, a difference or an
+  intersection is taken (MaybeSimpleCaseFolding).
+- **Effect:** under `iv`, a negated class or a difference keeps what folding
+  should have taken out of it.
+- **Repro:** `/[^k]/iv.test("K")`, `/\P{Lu}/iv.test("K")` and
+  `/[\p{Lu}--K]/iv.test("k")` are `true`. `/[^k]/iu.test("K")` is `false`,
+  as it should be.
+- **Expected:** `false` for all three, as Node answers. `/\P{Lu}/iu.test("K")`
+  is `true` in both: the `u` flag folds after the complement.
+- **Status:** open.
+
+### KI-97 `v = [v]` in a loop makes an array that holds itself, with the JIT
+- **Where:** the JIT's code for a loop's `new_array` whose element is the
+  value the binding it is assigned to had before (`internal/vm/jit_*.go`,
+  `internal/jit/mir`). The register code is right
+  (`move r5, r3; new_array r6, r5 x1; move r3, r6`) and both interpreters
+  answer right; the cause is not yet found.
+- **Effect:** once the function is compiled, the new array's element is the
+  new array itself, and the array it should hold is lost. `v = [v, i]` and
+  `const old = v; v = [old]` do the same; `v = {p: v}` and `v = Array.of(v)`
+  do not. A 5,000-deep array built so made `JSON.stringify` throw
+  `TypeError: converting a circular structure to JSON`, which is how it was
+  found. v0.40.0, v0.42.0 and v0.43.0 do the same.
+- **Repro:** `function f(d) { let v = []; for (let i = 0; i < d; i++) v = [v]; return v }`
+  with `--jit`, background compiles or not: `const a = f(1000); a[0] === a` is
+  `true`; `f(500)` is right; and of 5,000 calls of `f(3)`, 4,742 are wrong.
+- **Expected:** `false`, as without the JIT and in Node.
+- **Status:** open.
+
 ## P3: small divergences
 
 ### KI-56 Intl details
@@ -1154,3 +1343,92 @@ Paths are relative to this repository; `go-intl:` paths are in
   `Symbol.for` and `Symbol.keyFor` came after them, too, where Node has them
   first.
 - **Status:** fixed: Node's order. Test: `TestSymbolPropertyOrder`.
+
+### KI-88 A typed array made by length is held to 2^28 elements
+- **Where:** `internal/vm/builtins_typedarray.go`, `maxTypedArrayLength`
+  (`1 << 28`), checked against the length a constructor is given, so that a
+  request no machine can hold is refused before anything is allocated.
+- **Effect:** `new Uint8Array(2**28 + 1)` throws `RangeError: the typed
+  array length is too large`: a byte array past 256 MiB cannot be made by
+  its length. A buffer that size can, and a view over it
+  (`new Uint8Array(new ArrayBuffer(2**28 + 8))` has 268,435,464 elements),
+  so the bound refuses only one way of asking. No document gives it.
+- **Expected:** Node makes it, of 268,435,457 elements, and a
+  `Float64Array` of as many, 2 GiB.
+- **Status:** open.
+
+### KI-89 JSON nests at most 10,000 deep
+- **Where:** `internal/vm/builtins_json.go`, `jsonMaxDepth` (10000), the
+  bound of `JSON.parse`, the reviver's walk and `JSON.stringify`, which
+  recurse; KI-04 put a bound there for the Go stack's sake.
+- **Effect:** `JSON.parse` of arrays nested 10,001 deep throws `RangeError:
+  JSON nests too deeply to be parsed`, and `JSON.stringify` of an array
+  nested 10,000 deep `RangeError: a structure nested this deeply cannot be
+  serialized` (9,999 is serialized). Generated trees and serialized ASTs go
+  deeper, and no document gives the number.
+- **Expected:** Node parses and serializes arrays nested 100,000 deep.
+- **Status:** open.
+
+### KI-91 TextDecoder replaces bad UTF-8 by the wrong number of characters
+- **Where:** `stdlib/webapis.go`, `TextDecoder.decode`, which reads a
+  sequence's length from its lead byte and replaces either all of it or one
+  byte, not the Encoding Standard's maximal subpart, and does not hold the
+  byte after `E0`, `ED`, `F0` and `F4` to its narrower range.
+- **Effect:** the number of U+FFFD, here and in Node, which has the
+  standard's:
+  - `ED A0 80` (a surrogate): 1, Node 3; `E0 80 80`: 1, Node 3;
+    `F4 90 80 80`: 1, Node 4; `C0 80`: 1, Node 2.
+  - `F0 9F 98` at the end: 3, Node 1; `F0 9F 98 41`: 3 and `A`, Node 1 and
+    `A`; `E2 82 41`: 2 and `A`, Node 1 and `A`.
+- **Expected:** Node's counts.
+- **Status:** open.
+
+### KI-92 The parser counts a flat chain as nesting
+- **Where:** `internal/parser/parser.go`, `maxNestingDepth` (1000), which
+  `enter` counts for each member access or call of a chain as for each
+  parenthesis.
+- **Effect:** `a` followed by 999 `.b`, `f` followed by 2,000 `()`, and 999
+  nested parentheses are rejected with `SyntaxError: the expression nests
+  too deeply`; 998 `.b` parse, as does `1+1+…` 10,000 long. The error's
+  position is where the chain starts, not where the bound was passed.
+- **Expected:** Node parses all of them, 5,000 `.b` and 1,200 parentheses
+  among them.
+- **Status:** open.
+
+### KI-93 `EvalModule` under a name already used runs the module it had
+- **Where:** `quickjs.go`, `EvalModuleContext` and
+  `compileAndRegisterModule`; `internal/vm/module.go`, `LoadModule`, which
+  returns the module a specifier has, with its state, evaluated or thrown.
+- **Effect:** a second `EvalModule` under one specifier parses and compiles
+  the new source, then drops it and answers with the first module:
+  `export const x = 2` gives a namespace whose `x` is 1. A module that threw
+  throws again: its corrected source gives the first error. The method's
+  comment says neither, so that a host rebuilding a module under one name
+  gets stale code or a stale error.
+- **Expected:** the new source run, or an error that says the name is
+  taken, and the comment to say which.
+- **Status:** open.
+
+### KI-94 A closed runtime's values go on working
+- **Where:** `value.go`. `Close`'s comment (`quickjs.go`) says every method
+  of a closed runtime returns `ErrClosed`, and the runtime's own do. A
+  value's methods check only `v.rt == nil`, which `Close` does not clear,
+  and `Call` alone asks whether the runtime is closed.
+- **Effect:** after `Close`, a value's `Get`, `Set`, `Index`, `Len`, `Keys`,
+  `Equal` and `Decode` work on the closed runtime's heap, `Set` writing, and
+  give no error; `Call` returns `ErrClosed`, and `New` `RangeError: maximum
+  call stack size exceeded`. `Value`'s comment calls a value meaningful only
+  while its runtime is open, so this is a host's mistake, but its answer
+  should be the one `Call` gives.
+- **Expected:** `ErrClosed` from each method that returns an error.
+- **Status:** open.
+
+### KI-96 qjs reports a module's exception twice
+- **Where:** `cmd/qjs/main.go`. The rejected promise of the module's
+  evaluation is reported as an unhandled rejection, and the error is then
+  reported as the program's.
+- **Effect:** a module, by `-m` or a `.mjs` file, that throws prints
+  `uncaught (in promise) Error: boom` and its stack, then `Error: boom` and
+  its stack again. A script that throws prints it once.
+- **Expected:** once, as a script does here and as Node does.
+- **Status:** open.
