@@ -239,7 +239,12 @@ const (
 	opHalt // stop; the result is local 0
 )
 
-type instr struct{ op, arg int }
+// instr is an instruction; its operand and the machine's values are of 64
+// bits, so that the sum is the same on a 32-bit platform as in WebAssembly.
+type instr struct {
+	op  int
+	arg int64
+}
 
 // interp runs, on a stack machine, a program that sums i*i%7 + i%3 for i
 // below n, and checks the sum against the same computed in Go.
@@ -249,7 +254,7 @@ func interp(n int) {
 		{opPush, 0}, {opStore, sum},
 		{opPush, 0}, {opStore, i},
 		// 4: loop head
-		{opLoad, i}, {opPush, n}, {opLt, 0}, {opJz, 25},
+		{opLoad, i}, {opPush, int64(n)}, {opLt, 0}, {opJz, 25},
 		{opLoad, sum},
 		{opLoad, i}, {opLoad, i}, {opMul, 0}, {opPush, 7}, {opMod, 0}, {opAdd, 0},
 		{opLoad, i}, {opPush, 3}, {opMod, 0}, {opAdd, 0},
@@ -259,8 +264,8 @@ func interp(n int) {
 		// 25:
 		{opHalt, 0},
 	}
-	var locals [2]int
-	stack := make([]int, 0, 16)
+	var locals [2]int64
+	stack := make([]int64, 0, 16)
 	steps := 0
 	for pc := 0; ; pc++ {
 		steps++
@@ -276,7 +281,7 @@ func interp(n int) {
 		case opAdd, opSub, opMul, opMod, opLt:
 			a, b := stack[len(stack)-2], stack[len(stack)-1]
 			stack = stack[:len(stack)-2]
-			var v int
+			var v int64
 			switch in.op {
 			case opAdd:
 				v = a + b
@@ -296,13 +301,13 @@ func interp(n int) {
 			v := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
 			if v == 0 {
-				pc = in.arg - 1
+				pc = int(in.arg) - 1
 			}
 		case opJmp:
-			pc = in.arg - 1
+			pc = int(in.arg) - 1
 		case opHalt:
-			want := 0
-			for k := range n {
+			var want int64
+			for k := range int64(n) {
 				want += k*k%7 + k%3
 			}
 			if locals[sum] != want {
