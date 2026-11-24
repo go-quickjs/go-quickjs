@@ -4,7 +4,7 @@ KI-01 to KI-60 were found by a review of the engine, the standard library and
 go-intl in September 2026, after v0.5.0, and were fixed in order of the harm
 they allow; later issues are numbered as they are found and filed under their
 severity. KI-81 to KI-96 were found by an engine review in November 2026, and
-KI-97 and KI-99 while its findings were reproduced and fixed. Each issue was
+KI-97 to KI-99 while its findings were reproduced and fixed. Each issue was
 reproduced unless it is marked *plausible*. The commit that fixes an issue
 names it: `git log --grep KI-01`.
 
@@ -673,6 +673,31 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** fixed. Both loops wait in one function of their own
   (`Loop.wait`), whose deferred `Stop` runs when it returns, whichever case
   won (`TestLoopWaitsKeepNoTimers`).
+
+### KI-98 A typed array's iterable source is not counted, and is cut at 2^22 values
+- **Where:** `internal/vm/builtins_typedarray.go`: the TypedArray
+  constructors and `%TypedArray%.from` collect what an iterable gives into a
+  Go slice before the view is made, as IterableToList says, which the memory
+  limit's walk does not see and nothing charged; the constructor refused a
+  source past 2^22 values (`maxTypedArrayCollectedLength`), `from` none.
+- **Effect:** under a 32 MB limit, `Uint8Array.from` of an iterator of 30
+  million steps took the process to 1.6 GB and finished; one that never
+  ends takes the process down whatever the limit. And `new
+  Float64Array(new Array(5e6).fill(1))` threw `RangeError: the typed array
+  length is too large`, where `Float64Array.from` of the same array, and
+  Node, make 5,000,000 elements.
+- **Repro:** `qjs --memory-limit 32m` of `let n = 0;
+  Uint8Array.from({[Symbol.iterator]: () => ({next: () => (++n > 3e7 ?
+  {done: true} : {value: 0, done: false})})})`.
+- **Expected:** `ErrMemoryLimit` under a limit; Node's 5,000,000 elements.
+- **Status:** fixed. Both collect into one collector (`typedSource`),
+  charged to the limit as it grows, as a builder of the script's output is,
+  and bounded as a buffer is, at 2 GiB of values (2^27 on a 64-bit
+  platform; on a 32-bit one a quarter of that, 512 MiB, which its address
+  space holds with the slice it grew from), past which it is a RangeError:
+  a runtime without a limit meets that after 2 to 3 GiB where it had after
+  64 MB. Tests:
+  `TestTypedArrayIterableSources`, `TestTypedArrayFromEndlessIterable`.
 
 ## P2: wrong results
 

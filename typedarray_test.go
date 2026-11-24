@@ -292,25 +292,39 @@ func TestTypedArrayLengthIsTheBuffers(t *testing.T) {
 		"268435457,7,268435457,"+tooLarge)
 }
 
-// An iterable is never asked how long it is, so what refuses an over-long one
-// is the count of what it has produced -- which means the refusal arrives only
-// after a great many elements, and has to arrive rather than not.
-func TestTypedArrayFromEndlessIterable(t *testing.T) {
+// TestTypedArrayIterableSources pins what an iterable a typed array is made
+// from may give: as many values as Node takes, where the constructor had cut
+// them at 2**22, and under a memory limit no more than the limit, where
+// neither the constructor nor from had counted them (KI-98). Without a limit
+// one that never ends is refused at 2 GiB of values (512 MiB on a 32-bit
+// platform), which
+// TestTypedArrayFromEndlessIterable, in internal/vm, pins.
+func TestTypedArrayIterableSources(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("the refusal only arrives after the element limit is reached")
-	}
-	rt := quickjs.New()
-	defer rt.Close()
+	checkEval(t, `var src = [], out = []
+		for (let i = 0; i < 5e6; i++) src.push(i / 2)
+		for (const make of [() => new Float64Array(src), () => Float64Array.from(src),
+				() => new Float64Array(src.values())]) {
+			const a = make()
+			let same = a.length === src.length
+			for (let i = 0; same && i < src.length; i++) same = a[i] === src[i]
+			out.push(a.length + " " + same)
+		}
+		out.join()`, "5000000 true,5000000 true,5000000 true")
 
-	_, err := rt.Eval(`new Uint8Array({[Symbol.iterator]: () => ({
-	  next: () => ({value: 0, done: false}),
-	})})`)
-	if err == nil {
-		t.Fatal("an endless source should have been refused")
-	}
-	if !strings.Contains(err.Error(), "RangeError") {
-		t.Errorf("got %v, want RangeError", err)
+	endless := `({[Symbol.iterator]: () => ({next: () => step})})`
+	for _, src := range []string{
+		`new Uint8Array(` + endless + `)`,
+		`Uint8Array.from(` + endless + `)`,
+		`Float64Array.from(` + endless + `, x => x + 1)`,
+	} {
+		rt := quickjs.New(quickjs.WithMemoryLimit(8 << 20))
+		v, err := rt.Eval(`var step = {value: 0, done: false}
+			try { ` + src + `; "made" } catch (e) { e.name + ": " + e.message }`)
+		if !errors.Is(err, quickjs.ErrMemoryLimit) {
+			t.Errorf("%s = %v, %v; want ErrMemoryLimit", src, v, err)
+		}
+		rt.Close()
 	}
 }
 

@@ -1031,7 +1031,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 	case first.IsObject():
 		// From an iterable when it has one, and from the array-like protocol
 		// otherwise -- the same order Array.from uses.
-		var items []Value
+		items := r.newTypedSource()
 		method, err := r.getValueProp(first, r.atoms.internSymbol(r.wellKnown.iterator))
 		if err != nil {
 			return Undefined, err
@@ -1043,17 +1043,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			return Undefined, r.throwTypeError("the source's Symbol.iterator is not a function")
 		}
 		if isCallable(method) {
-			if err := r.iterateWith(first, method, func(v Value) error {
-				// The iterable is not asked how long it is, so the refusal has
-				// to come from the count: collecting more than could ever be
-				// allocated is how a four-billion-element source takes the
-				// process down instead of throwing.
-				if len(items) >= maxTypedArrayCollectedLength {
-					return r.throwRangeError("the typed array length is too large")
-				}
-				items = append(items, v)
-				return nil
-			}); err != nil {
+			if err := r.iterateWith(first, method, items.add); err != nil {
 				return Undefined, err
 			}
 		} else {
@@ -1080,11 +1070,11 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			}
 			return Obj(o), nil
 		}
-		t, err := r.allocTypedArrayChecked(o, kind, int64(len(items)))
+		t, err := r.allocTypedArrayChecked(o, kind, int64(len(items.vals)))
 		if err != nil {
 			return Undefined, err
 		}
-		for i, v := range items {
+		for i, v := range items.vals {
 			if err := r.setElem(t, i, v); err != nil {
 				return Undefined, err
 			}
@@ -1103,12 +1093,38 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 	}
 }
 
-// An iterable is materialized as Values before its typed storage can be
-// allocated, as required by IterableToList. Values are much wider than the
-// smallest typed elements, so collecting as many as a view may have would
-// consume several gigabytes merely to discover that an endless iterable is
-// too long.
-const maxTypedArrayCollectedLength = 1 << 22
+// typedSource collects the values an iterable gives a typed array before
+// the view is made, as IterableToList does: the constructor's and from's.
+// They are a Go slice, which the memory limit's walk cannot see, so it is
+// charged to the limit as it grows; and it is bounded as a buffer is, at
+// maxBufferLength bytes of values (maxTypedSourceLength), so that an iterable that never ends is
+// a RangeError in a runtime without a limit too, rather than the end of
+// the process. The iterable is not asked how long it is: the refusal has
+// to come from the count.
+type typedSource struct {
+	vals  []Value
+	meter heldMeter
+}
+
+// maxTypedSourceLength is how many values a typedSource holds at most:
+// maxBufferLength bytes of them on a 64-bit platform, and a quarter of that
+// on a 32-bit one, whose address space could not hold 2 GiB of values beside
+// the slice they were grown from (3.6 GB), and the process would end there
+// instead.
+const maxTypedSourceLength = maxBufferLength >> ((8 - unsafe.Sizeof(uintptr(0))) / 2) / int64(unsafe.Sizeof(Value{}))
+
+func (r *Runtime) newTypedSource() *typedSource {
+	return &typedSource{meter: heldMeter{r: r}}
+}
+
+// add appends v, the iterable's next value.
+func (c *typedSource) add(v Value) error {
+	if int64(len(c.vals)) >= maxTypedSourceLength {
+		return c.meter.r.throwRangeError("the typed array length is too large")
+	}
+	c.vals = append(c.vals, v)
+	return c.meter.charge(int(min(int64(cap(c.vals))*valueSize, math.MaxInt)))
+}
 
 // allocTypedArrayChecked allocates a view's buffer, refusing a length that
 // could not be held. A view made by its length is bounded as a buffer is,
@@ -2043,7 +2059,7 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			var vals []Value
+			items := rt.newTypedSource()
 			for {
 				v, ok, err := rt.stepIterator(iter, next)
 				if err != nil {
@@ -2052,8 +2068,14 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 				if !ok {
 					break
 				}
-				vals = append(vals, v)
+				if err := items.add(v); err != nil {
+					// The iterator is closed, as an error of the body's
+					// closes it.
+					rt.closeIterator(iter)
+					return Undefined, err
+				}
 			}
+			vals := items.vals
 			res, t, err := rt.typedArrayResultFor(this, int64(len(vals)))
 			if err != nil {
 				return Undefined, err
