@@ -807,7 +807,7 @@ func (r *Runtime) jitRegPropOp(f *frame, c *regCode, wb, rpc int) (jitPropOp, bo
 	case bytecode.RSetProp:
 		op.write, recv = true, int(w.A())
 	case bytecode.RAddProp, bytecode.RAddPropI:
-		recv = int(w.A())
+		op.update, recv = true, int(w.A())
 	default:
 		return jitPropOp{}, false
 	}

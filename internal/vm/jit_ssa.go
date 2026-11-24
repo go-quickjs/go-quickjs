@@ -360,12 +360,13 @@ const jitPropertyCases = 4
 // jitPropOp is a named property's operation as what the JIT learns at its
 // exits sees it, of either form's code: its key, its receiver, its site's
 // cache (nil where it has none), and whether it is a write or a method's
-// read (get_prop_this's, get_method's).
+// read (get_prop_this's, get_method's), or add_prop's read (update), whose
+// site is its store's.
 type jitPropOp struct {
-	key           Atom
-	recv          Value
-	c             *propCache
-	write, method bool
+	key                   Atom
+	recv                  Value
+	c                     *propCache
+	write, method, update bool
 }
 
 // plain reports whether op is a plain read: get_prop's, not a method's.
@@ -598,8 +599,24 @@ func (r *Runtime) jitDeoptSeenOp(e *jitEntry, pc int, op jitPropOp, serial uint3
 	// would teach it (ownScan, cachedGet): the interpreter,
 	// which makes the read after, reads an object's small table without
 	// it (plainOwn).
-	if c.holder(o) == nil {
+	if c.holder(o) == nil && !op.update {
 		r.fillPropCache(c, o, key, op.plain())
+	} else if c.holder(o) == nil {
+		// add_prop's read, whose site is its store's: the store, at its
+		// shape, writes the entry's index in o's own table
+		// (storeCached), so the site takes only an entry that is the
+		// store's too, of a plain writable property o has itself. A
+		// prototype's, a getter's, or one of a key nothing has -- which
+		// had written o.n++'s NaN over o's first property, Box2D's
+		// broadphase's m_tree at its first proxy -- the store fills as
+		// it adds the property.
+		n := *c
+		n.poly = nil
+		r.fillPropCache(&n, o, key, op.plain())
+		if n.shape == o.shape && n.fills > c.fills && ownOf(&n) == n.shape && n.idx < n.shape.n &&
+			n.shape.keys[n.idx].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			c.refill(propCache{shape: n.shape, idx: n.idx, fills: n.fills}, jitBuilt && r.jitOn())
+		}
 	}
 	if c.fills >= maxCacheFills {
 		return
