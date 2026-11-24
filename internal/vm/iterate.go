@@ -1437,7 +1437,9 @@ func (r *Runtime) arrayIterNoReturn() bool {
 // return for a forced return. A delegate that has no throw is closed and the
 // delegation fails, since there is no way to deliver the exception; one that
 // has no return simply ends, which is what lets `yield*` work over an iterator
-// that never expected to be abandoned.
+// that never expected to be abandoned. Either method is absent only when it
+// is undefined or null; any other value that cannot be called is a TypeError,
+// and the delegate is left as it is.
 //
 // The bool reports that the delegation ended with a return the delegate could
 // not take, which the outer generator turns into a return of its own.
@@ -1460,7 +1462,13 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 		if err != nil {
 			return Undefined, false, err
 		}
-		if !isCallable(method) {
+		if !method.IsNullish() && !isCallable(method) {
+			// GetMethod: a throw that is there must be callable, and the
+			// delegate is not closed for one that is not.
+			return Undefined, false, r.throwTypeError(
+				"the iterator's throw is not a function")
+		}
+		if method.IsNullish() {
 			// The delegate is told the delegation is over before the failure
 			// is reported, which is what gives a generator its finally -- and
 			// a failure there is what the delegation fails with, since the
@@ -1486,8 +1494,13 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 		if err != nil {
 			return Undefined, false, err
 		}
-		if !isCallable(method) {
+		if method.IsNullish() {
 			return sent, true, nil
+		}
+		if !isCallable(method) {
+			// GetMethod: only undefined and null are no return at all.
+			return Undefined, false, r.throwTypeError(
+				"the iterator's return is not a function")
 		}
 		res, err := r.call(method, st.iter, []Value{sent})
 		if err != nil {

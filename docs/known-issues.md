@@ -1154,7 +1154,14 @@ Paths are relative to this repository; `go-intl:` paths are in
   `{"value":"v","done":true}`.
 - **Expected:** `TypeError: number 42 is not a function` (Node), and the
   same for `"s"` and `{}`; `null` and `undefined` complete as now.
-- **Status:** open.
+- **Status:** fixed. `iterResume` took any `return`, and any `throw`, that
+  could not be called for an absent one; it now takes only `undefined` and
+  `null` so, and throws GetMethod's `TypeError` for the rest without
+  closing the delegate, in generators and async generators alike. Node 26
+  closes the delegate of an async generator's `throw` here; the
+  specification and C QuickJS leave it open, as the engine now does.
+  - Test: `TestGeneratorProtocol`'s `yieldStarReturnNotCallable`,
+    `yieldStarThrowNotCallable` and their async generators' cases.
 
 ### KI-87 `for (var i = 0 in o)` under `with` or in an eval has no register code
 - **Where:** `internal/compiler/regcomp/record.go` (`NoteWrite`, which bails

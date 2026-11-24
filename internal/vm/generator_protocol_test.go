@@ -153,6 +153,19 @@ var generatorCases = []struct{ name, want, src string }{
 		`function* inner() { try { yield 1 } catch (e) { yield 'inner caught ' + e } } function* outer() { yield* inner() } var it = outer(); it.next(); JSON.stringify([it.throw('x'), it.next()])`},
 	{"yieldStarNoThrow", `closed,TypeError`,
 		`var log = []; var inner = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, return() { log.push('closed'); return {} } }; function* outer() { yield* inner } var it = outer(); it.next(); try { it.throw('x') } catch (e) { log.push(e.constructor.name) } log.join()`},
+	// A delegate's return or throw that is there but cannot be called is a
+	// TypeError (GetMethod), not an absent one, and the delegate is not
+	// closed for it; undefined and null are absent (KI-86).
+	{"yieldStarReturnNotCallable", `TypeError: the iterator's return is not a function,fin;TypeError: the iterator's return is not a function,fin;TypeError: the iterator's return is not a function,fin;TypeError: the iterator's return is not a function,fin;fin,{"value":"v","done":true};fin,{"value":"v","done":true}`,
+		`var out = []; for (var rv of [42, 's', {}, true, null, undefined]) { var log = []; var d = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, return: rv }; function* o() { try { yield* d } finally { log.push('fin') } } var it = o(); it.next(); try { log.push(JSON.stringify(it.return('v'))) } catch (e) { log.unshift(e.constructor.name + ': ' + e.message) } out.push(log.join()) } out.join(';')`},
+	{"yieldStarThrowNotCallable", `TypeError: the iterator's throw is not a function closed 0,caught,{"value":2,"done":false};TypeError: the iterator's throw is not a function closed 0,caught,{"value":2,"done":false};TypeError closed 1,caught,{"value":2,"done":false}`,
+		`var out = []; for (var tv of [42, {}, null]) { var closed = 0; var d = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, throw: tv, return() { closed++; return {} } }; function* o() { try { yield* d } catch (e) { out.push(e.constructor.name + (e.message.indexOf('no throw') < 0 ? ': ' + e.message : '') + ' closed ' + closed); out.push('caught'); yield 2 } } var it = o(); it.next(); try { out.push(JSON.stringify(it.throw('x'))) } catch (e) { out.push(e.constructor.name + ' closed ' + closed) } out.push(';') } out.join().replace(/,;,?/g, ';').replace(/;$/, '')`},
+	{"asyncGenYieldStarReturnNotCallable", `TypeError: the iterator's return is not a function;{"value":"v","done":true}`,
+		`var out = 'pending'; var res = []; (async () => { for (var rv of [42, null]) { var d = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, return: rv }; async function* o() { yield* d } var it = o(); await it.next(); try { res.push(JSON.stringify(await it.return('v'))) } catch (e) { res.push(e.constructor.name + ': ' + e.message) } } out = res.join(';') })(); out`},
+	// The specification's answer and C QuickJS's: GetMethod's TypeError
+	// leaves the delegate as it is. Node 26 closes it (closed 1).
+	{"asyncGenYieldStarThrowNotCallable", `TypeError: the iterator's throw is not a function closed 0`,
+		`var out = 'pending'; var closed = 0; var d = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, throw: 42, return() { closed++; return {} } }; async function* o() { yield* d } var it = o(); it.next().then(() => it.throw('x')).catch(e => { out = e.constructor.name + ': ' + e.message + ' closed ' + closed }); out`},
 	{"yieldStarSent", `1,11,{"value":30,"done":true}`,
 		`function* inner() { var a = yield 1; var b = yield a + 1; return a + b } function* outer() { return yield* inner() } var it = outer(); [it.next().value, it.next(10).value, JSON.stringify(it.next(20))].join()`},
 	{"yieldStarRaw", `true,value,done,extra`,
