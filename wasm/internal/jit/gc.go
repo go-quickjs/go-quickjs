@@ -82,6 +82,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 			c.arrayNewLength(ti, at)
 			break
 		}
+		if op == opcode.ArrayNew && lengthPooled(m, l, ti) && c.refSlotOff(len(c.stack)-1)/16 < AllocLength {
+			c.arrayNewFill(ti, at)
+			break
+		}
 		c.goOp(op, at, uint64(ti), 0)
 	case opcode.ArrayNewFixed:
 		ti, n := c.r.u32(), c.r.u32()
@@ -347,6 +351,80 @@ func (c *compiler) arrayNewLength(ti uint32, at uint32) {
 		resume := c.a.NewLabel()
 		c.exitAlloc(resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
 		c.resumeAt(resume)
+		c.jmp(done)
+	})
+	c.pushRef()
+}
+
+// arrayNewFill compiles array.new of type ti of a length not constant, or
+// past what arrayNew stores one by one: the array taken from the pool of
+// its class as arrayNewLength takes one, or, longer, made by the engine
+// into the length's position's reference slot (ExitAlloc, AllocMake) and
+// moved to the value's after; then the value stored into each element in
+// a loop -- a reference plainly, as a new struct's field is -- before the
+// array is in its slot. Every entry is in its slot or a constant across
+// the exits.
+func (c *compiler) arrayNewFill(ti uint32, at uint32) {
+	l := c.req.Layout
+	et := c.m.Types[ti].Array.Elem.Type
+	base := len(c.stack) - 2
+	for h := range c.stack {
+		if c.stack[h].k != kConst {
+			c.spill(h)
+		}
+	}
+	val, length := c.stack[base], c.stack[base+1]
+	c.stack = c.stack[:base]
+	slot := uint64(c.refSlotOff(base+1) / 16)
+	p := c.allocG(0)
+	q := c.allocG(1 << p)
+	k := c.allocG(1<<p | 1<<q)
+	e := c.allocG(1<<p | 1<<q | 1<<k)
+	retry, slow, big, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	size := int32(elemSize(et.Kind))
+	// fillElems stores the value into each of the k elements of array p.
+	fillElems := func() {
+		c.loadWord(e, mem{p, l.ArrayElems})
+		c.fillLoop(e, k, size, func() {
+			if et.IsRef() {
+				src := c.refOf(val)
+				c.copyWord(mem{e, 0}, src)
+				c.copyWord(mem{e, 8}, mem{src.base, src.off + 8})
+			} else {
+				c.storeField(et.Kind, val, e, 0, false)
+			}
+		})
+	}
+	c.a.Bind(retry)
+	c.loadLength(k, length, true)
+	c.arrayClassAt(k, uint8(bits.TrailingZeros(uint(size))), big)
+	c.poolTakeClass(p, q, k, ti, slow)
+	c.loadLength(k, length, false)
+	c.storeReg(p, l.ArrayLen, k)
+	fillElems()
+	c.refPut(c.refPos(base), regWord(p), immWord(0))
+	c.ptrPut(mem{q, 0}, immWord(0))
+	c.a.Bind(done)
+	c.freeG(p)
+	c.freeG(q)
+	c.freeG(k)
+	c.freeG(e)
+	c.later(func() {
+		c.a.Bind(slow)
+		resume := c.a.NewLabel()
+		c.exitAlloc(resume, uint64(ti)|AllocLength<<32, uint64(at))
+		c.resumeAt(resume)
+		c.jmp(retry)
+	})
+	c.later(func() {
+		c.a.Bind(big)
+		resume := c.a.NewLabel()
+		c.exitAlloc(resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
+		c.resumeAt(resume)
+		c.loadWord(p, c.refPos(base+1))
+		c.loadLength(k, length, false)
+		fillElems()
+		c.refCopy(c.refPos(base), c.refPos(base+1))
 		c.jmp(done)
 	})
 	c.pushRef()

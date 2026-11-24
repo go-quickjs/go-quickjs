@@ -260,6 +260,20 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 			bd.pushRef()
 			break
 		}
+		if op == opcode.ArrayNew && len(bd.ws.arrayClass) > 0 &&
+			m.Types[ti].Array.Elem.Type.Kind != module.KindV128 && bd.rpos(h-1) < wjit.AllocLength {
+			// Of a length not constant, or past what is stored one by one:
+			// the value stored in a loop, the array made past the pools
+			// into the length's position's slot.
+			length, val := bd.pop(), bd.pop()
+			args := []*Value{length}
+			if !bd.isRef(val) {
+				args = []*Value{val, length}
+			}
+			bd.refOp(bd.b, refArrayNew, bd.rpos(h-2), bd.rpos(h-2), uint64(ti)|arrayLength<<32|arrayFill<<48, TNone, at, args...)
+			bd.pushRef()
+			break
+		}
 		bd.gcGo(op, ti, 0, at)
 	case opcode.ArrayNewFixed:
 		ti, n := r.u32(), r.u32()
@@ -392,9 +406,19 @@ const (
 	arrayFill
 )
 
-// arrayLength is refArrayNew's length for array.new_default of a length
-// not constant, its argument.
+// arrayLength is refArrayNew's length for array.new_default and array.new
+// of a length not constant, its last argument.
 const arrayLength = 0xffff
+
+// fillsArray reports whether v is refArrayNew of a length not constant
+// that stores its value into each element, in a loop.
+func fillsArray(v *Value) bool {
+	if v.Op != OpRef || v.Aux&0xff != refArrayNew {
+		return false
+	}
+	idx := v.Aux >> 8
+	return idx>>32&0xffff == arrayLength && idx>>48 == arrayFill
+}
 
 // arrayNewMost is the most elements array.new stores natively, its value
 // stored into each in turn.

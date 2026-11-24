@@ -1061,6 +1061,7 @@ WASI:
 
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
-- array.new of a length not constant, or of more than 16 elements, still
-  exits to Go (about 45 ns an array of a few elements, against 16 to 21
-  ns one from a pool): native code would fill it in a loop.
+- array.new_fixed of more than 480 bytes of elements, array.new_data and
+  array.new_elem still exit to Go; array.new of any length is native, its
+  value stored in a loop (20 ns an array of 8 i32s, where the exit took
+  56).

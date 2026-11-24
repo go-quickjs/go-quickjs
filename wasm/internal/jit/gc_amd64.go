@@ -62,7 +62,11 @@ func (c *compiler) poolTakeClass(p, q, k amd64.Reg, ti uint32, slow amd64.Label)
 // its slot, zero-extended; first says it is the site's first load, which
 // leaves it in the context's Arg2 for the exits too.
 func (c *compiler) loadLength(r amd64.Reg, v value, first bool) {
-	c.a.LoadU32(r, rL, v.off)
+	if v.k == kConst {
+		c.a.MovImm(r, uint64(uint32(v.c)))
+	} else {
+		c.a.LoadU32(r, rL, v.off)
+	}
 	if first {
 		c.a.Store(rCtx, offArg0+16, r)
 	}
@@ -84,6 +88,20 @@ func (c *compiler) arrayClassAt(r amd64.Reg, shift uint8, big amd64.Label) {
 	a.MovImm(rTmp, uint64(uintptr(unsafe.Pointer(&l.ArrayClass[0]))))
 	a.Op(amd64.Add, r, rTmp, true)
 	a.LoadU8(r, r, 0)
+}
+
+// fillLoop runs body for each of the n elements of size bytes from e, e
+// moving past each. n and e are lost.
+func (c *compiler) fillLoop(e, n amd64.Reg, size int32, body func()) {
+	a := c.a
+	loop, done := a.NewLabel(), a.NewLabel()
+	a.Bind(loop)
+	c.jumpZero(n, done)
+	body()
+	a.OpImm(amd64.Add, e, size, true)
+	a.OpImm(amd64.Sub, n, 1, true)
+	a.Jmp(loop)
+	a.Bind(done)
 }
 
 // storeReg stores r at [base + off].

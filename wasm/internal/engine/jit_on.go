@@ -1233,8 +1233,11 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		x.poll = int32(ctx.Poll)
 		if t := cj.test; t != nil && t.counts != nil {
 			t.counts.exits.Add(1)
-			if ctx.Exit == wjit.ExitAlloc {
+			switch ctx.Exit {
+			case wjit.ExitAlloc:
 				t.counts.allocs.Add(1)
+			case wjit.ExitOp:
+				t.counts.ops.Add(1)
 			}
 		}
 		var next *nativeFn

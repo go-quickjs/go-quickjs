@@ -276,7 +276,7 @@ func (g *gen) arrayNew(v *Value, dst int32) {
 	ti, n, mode := uint32(idx), uint32(idx>>32&0xffff), idx>>48
 	et := m.Types[ti].Array.Elem.Type
 	if n == arrayLength {
-		g.arrayNewLength(v, dst, ti, et.Kind)
+		g.arrayNewLength(v, dst, ti, et.Kind, mode == arrayFill)
 		return
 	}
 	class, _ := arrayPooled(m, lay.ArrayClass, ti, n, false)
@@ -341,15 +341,23 @@ func (g *gen) arrayNew(v *Value, dst int32) {
 // past the instruction) -- the array taken from the pool of its class, as
 // arrayNew does, its pool's word's address kept in Arg3 until the word is
 // cleared, and its length stored.
-func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind) {
+func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind, fill bool) {
 	a := g.a
 	lay := g.req.Layout
 	retry, slow, big, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | wjit.AllocLength<<32, at: v.At})
-	g.ool = append(g.ool, stub{kind: stubAlloc, l: big, to: done, code: uint64(ti) | uint64(wjit.AllocMake|uint32(dst/16))<<32, at: v.At})
+	if fill {
+		// The engine makes the array into the length's position's slot,
+		// the value's being the value's until the fill has read it.
+		made := a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubAlloc, l: big, to: made, code: uint64(ti) | uint64(wjit.AllocMake|uint32(dst/16+1))<<32, at: v.At},
+			stub{kind: stubFill, l: made, to: done, v: v, off: dst, code: uint64(ti)})
+	} else {
+		g.ool = append(g.ool, stub{kind: stubAlloc, l: big, to: done, code: uint64(ti) | uint64(wjit.AllocMake|uint32(dst/16))<<32, at: v.At})
+	}
 	a.Bind(retry)
-	g.mark("array.new_default %d", ti)
-	g.movG(s0, v.Args[0])
+	g.mark("array.new %d", ti)
+	g.movG(s0, v.Args[len(v.Args)-1])
 	a.MovRR32(s0, s0)
 	a.Store(rCtx, offArg0+16, s0)
 	if shift := uint8(bits.TrailingZeros(uint(elemSize(t)))); shift > 0 {
@@ -378,6 +386,9 @@ func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind) {
 	a.Load(s1, s1, 0)
 	a.Load(s0, rCtx, offArg0+16)
 	a.Store(s1, lay.ArrayLen, s0)
+	if fill {
+		g.fillArray(v, dst, ti)
+	}
 	a.FMovToF(x0, s1)
 	a.Load(s0, rCtx, offR)
 	a.Store(s0, dst+8, arm64.ZR)
@@ -386,6 +397,50 @@ func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind) {
 	a.FMovToF(x0, arm64.ZR)
 	g.barrierStore(s1, 0, s0)
 	a.Bind(done)
+}
+
+// fillArray stores refArrayNew v's value into each element of the array in
+// s1, of the length in s0, through its two temporaries: a reference from
+// its slot at dst from R, plainly, as a new struct's field. s1 is kept.
+func (g *gen) fillArray(v *Value, dst int32, ti uint32) {
+	a := g.a
+	lay := g.req.Layout
+	et := g.req.Module.Types[ti].Array.Elem.Type
+	size := int64(elemSize(et.Kind))
+	e, n := arm64.Reg(g.temp(v, 0)), arm64.Reg(g.temp(v, 1))
+	g.mark("array fill")
+	a.Load(e, s1, lay.ArrayElems)
+	a.MovRR(n, s0)
+	loop, end := a.NewLabel(), a.NewLabel()
+	a.Bind(loop)
+	a.Cbz(n, end, true)
+	if et.IsRef() {
+		a.Load(s0, rCtx, offR)
+		a.LoadF(x0, s0, dst)
+		a.StoreF(e, 0, x0)
+		a.LoadF(x0, s0, dst+8)
+		a.StoreF(e, 8, x0)
+	} else {
+		g.storeNum(v.Args[0], e, 0, et.Kind, false)
+	}
+	a.AddImm(e, e, size, true)
+	a.SubsImm(n, n, 1, true)
+	a.B(loop)
+	a.Bind(end)
+}
+
+// fillMade fills the array the engine made into the slot past dst for
+// refArrayNew v, then stores it into dst through the barrier.
+func (g *gen) fillMade(v *Value, dst int32, ti uint32) {
+	a := g.a
+	a.Load(s0, rCtx, offR)
+	a.Load(s1, s0, dst+16)
+	a.Load(s0, rCtx, offArg0+16)
+	g.fillArray(v, dst, ti)
+	a.FMovToF(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.Store(s0, dst+8, arm64.ZR)
+	g.barrierStore(s0, dst, s1)
 }
 
 // taken loads into s1 the address of the word of the level's pool of

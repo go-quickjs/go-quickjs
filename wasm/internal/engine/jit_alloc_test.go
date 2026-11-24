@@ -85,6 +85,10 @@ func BenchmarkJITAlloc(b *testing.B) {
   (func (export "arrays") (param $n i32) (param $len i32)
     (loop $l
       (drop (array.new_default $a (local.get $len)))
+      (br_if $l (local.tee $n (i32.sub (local.get $n) (i32.const 1))))))
+  (func (export "fills") (param $n i32) (param $len i32)
+    (loop $l
+      (drop (array.new $a (local.get $n) (local.get $len)))
       (br_if $l (local.tee $n (i32.sub (local.get $n) (i32.const 1)))))))`
 	for _, tier := range []struct {
 		name string
@@ -94,14 +98,18 @@ func BenchmarkJITAlloc(b *testing.B) {
 			for _, w := range []struct {
 				name string
 				args []Val
-			}{{"struct", []Val{{N: 1000}}}, {"array8", []Val{{N: 1000}, {N: 8}}}, {"array1k", []Val{{N: 1000}, {N: 256}}}} {
+			}{{"struct", []Val{{N: 1000}}}, {"array8", []Val{{N: 1000}, {N: 8}}}, {"array1k", []Val{{N: 1000}, {N: 256}}},
+				{"fill8", []Val{{N: 1000}, {N: 8}}}, {"fill1k", []Val{{N: 1000}, {N: 256}}}} {
 				b.Run(tier.name+"/"+w.name+"/"+path, func(b *testing.B) {
 					if path == "exit" {
 						codeSwitch(b, func(c *codeTest) { c.jit.noAllocStub = true })
 					}
 					inst := tier.inst(b, src)
 					fn := "structs"
-					if len(w.args) > 1 {
+					switch {
+					case strings.HasPrefix(w.name, "fill"):
+						fn = "fills"
+					case len(w.args) > 1:
 						fn = "arrays"
 					}
 					ext, _ := inst.Export(fn)

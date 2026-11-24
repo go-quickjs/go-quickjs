@@ -826,10 +826,21 @@ ns either way, its fills a hundredth of its takes.
 `WASM_JIT_BARRIER=clobber` and the tests' clobbering mode give the code a
 stub that leaves junk in every register but those.
 
+array.new of a length not constant, or of a constant past what is stored
+one by one (16), is native too, in both tiers: the array is taken from the
+pool of its class as array.new_default's is, or, past the pools, made by
+the stub into the length's position's reference slot -- the value's slot
+holding a reference value until the fill has read it -- and its elements
+are stored in a loop, a reference plainly as a new struct's field, before
+the array goes into the value's position's slot through the barrier (the
+optimizing tier's loop walks and counts in two registers of the
+allocator's that the instruction takes, `lsra.Inst.Temps`). An array of 8
+i32s took 20 ns where Go's ExitOp took 56, one of 256 268 ns where it took
+450 (`BenchmarkJITAlloc`'s fills).
+
 What else allocates -- struct.new of a type with v128 fields, array.new,
-array.new_default and array.new_fixed of v128s, array.new_fixed and
-array.new of elements past 480 bytes, array.new of more than 16 or of a
-length not constant, array.new_data, array.new_elem -- and
+array.new_default and array.new_fixed of v128s, array.new_fixed of
+elements past 480 bytes, array.new_data, array.new_elem -- and
 array.fill, array.copy, array.init_data and array.init_elem run in Go
 (`ExitOp`): the engine's routines make the objects, charging the
 instance's budget as the interpreter's do, with the native frames'

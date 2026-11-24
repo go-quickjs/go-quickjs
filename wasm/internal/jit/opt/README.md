@@ -134,8 +134,10 @@ of the arrays the baseline takes from pools (`refArrayNew`): the type,
 the length and what the elements are -- the operands, the operand in
 each, or zero -- in the immediate, the numbers their arguments, the
 references in their positions' slots; array.new_default's length, where
-it is not constant, its argument. What else allocates -- array.new,
-array.new_default and array.new_fixed of other arrays, array.new_data,
+it is not constant, its argument, and array.new's, where it is not or is
+past 16, its last, the value in each element stored by a loop in two
+temporaries of the instruction's (the baseline README's GC objects). What
+else allocates -- array.new_fixed of other arrays, array.new_data,
 array.new_elem, struct.new_default of a type with v128 fields -- and
 array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
 their references in their positions' slots from `Pos` and the object made

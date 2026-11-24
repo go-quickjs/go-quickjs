@@ -69,10 +69,11 @@ type codeTest struct {
 	jit codeJITTest
 }
 
-// jitExitCounts counts native code's exits, and of them its ExitAllocs,
-// and its calls of the allocation stub (jit_alloc.go), which are not exits.
+// jitExitCounts counts native code's exits, and of them its ExitAllocs and
+// ExitOps, and its calls of the allocation stub (jit_alloc.go), which are
+// not exits.
 type jitExitCounts struct {
-	exits, allocs, stubs atomic.Int64
+	exits, allocs, ops, stubs atomic.Int64
 }
 
 // NewCode returns the engine's code of module m.
