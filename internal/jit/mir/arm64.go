@@ -100,6 +100,9 @@ type a64Compiler struct {
 	// shares (goSaving), if any makes one.
 	saving     arm64.Label
 	savingUsed bool
+	// stubSaving and stubSavingUsed are amd64's.
+	stubSaving     arm64.Label
+	stubSavingUsed bool
 	// refStoring is the routine of the stores storeRef makes (refStore).
 	refStoring     arm64.Label
 	refStoringUsed bool
@@ -322,7 +325,11 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	}
 	if c.savingUsed {
 		c.a.Bind(c.saving)
-		c.savingCall()
+		c.savingCall(false)
+	}
+	if c.stubSavingUsed {
+		c.a.Bind(c.stubSaving)
+		c.savingCall(true)
 	}
 	if c.tailUsed {
 		// As amd64's: past every other routine.
@@ -3222,8 +3229,9 @@ func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail a64Guar
 }
 
 // savingCall is the routine the code's calls of Go that save every register
-// share, as amd64's.
-func (c *a64Compiler) savingCall() {
+// share, as amd64's; with stub, stubSaving, the routine's address in B,
+// its return in A.
+func (c *a64Compiler) savingCall(stub bool) {
 	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
 	}
@@ -3232,9 +3240,13 @@ func (c *a64Compiler) savingCall() {
 	}
 	back := c.a.NewLabel()
 	c.a.Adr(a64A, back)
-	c.a.Store(a64Ctx, abi.OffGoResume, a64A)
-	c.movImm(a64A, c.enc.CallGo)
-	c.a.Br(a64A)
+	if stub {
+		c.a.Br(a64B)
+	} else {
+		c.a.Store(a64Ctx, abi.OffGoResume, a64A)
+		c.movImm(a64A, c.enc.CallGo)
+		c.a.Br(a64A)
+	}
 	c.a.Bind(back)
 	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
 	c.a.Load(a64Stack, a64Ctx, abi.OffStack)
@@ -8675,7 +8687,24 @@ func (c *a64Compiler) remainder(v *ssa.Value, guard a64Guard) {
 	x, y := c.fpr(v.Args[0], a64F0), c.fpr(v.Args[1], a64F1)
 	zero, done := c.a.NewLabel(), c.a.NewLabel()
 	divisor := c.stubLabel(v.State, exitKind(v.Aux))
-	if c.enc.CallGo != 0 {
+	if stub := c.mathStub(ssa.GoMod); stub != 0 {
+		// As amd64's: through the remainder's own routine, the operands in
+		// F0 and F1 from the registers the checks below leave as they are
+		// -- y is never in F0, nor x in F1.
+		slow := c.a.NewLabel()
+		guard, divisor = a64GuardLabel(c, slow), slow
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			if x != a64F0 {
+				c.a.FMov(a64F0, x)
+			}
+			if y != a64F1 {
+				c.a.FMov(a64F1, y)
+			}
+			c.mathStubSaving(stub)
+			c.a.B(done)
+		})
+	} else if c.enc.CallGo != 0 {
 		// What is not integers Go computes (ssa.GoMod), the operands' bits
 		// in the context's GoArgs, from registers the checks below leave as
 		// they are.
@@ -8750,6 +8779,23 @@ func (c *a64Compiler) sign(v *ssa.Value) {
 
 // mathCall has Go compute a Math function of numbers, as amd64's does.
 func (c *a64Compiler) mathCall(v *ssa.Value) {
+	if stub := c.mathStub(ssa.GoOp(v.Index)); stub != 0 {
+		// As amd64's: the operands in F0 and F1, the result in F0.
+		if x := c.fpr(v.Args[0], a64F0); x != a64F0 {
+			c.a.FMov(a64F0, x)
+		}
+		if len(v.Args) > 1 {
+			if y := c.fpr(v.Args[1], a64F1); y != a64F1 {
+				c.a.FMov(a64F1, y)
+			}
+		}
+		if ssa.GoOp(v.Index) == ssa.GoMath {
+			c.movImm(a64C, uint64(v.Aux))
+		}
+		c.mathStubLive(v, stub)
+		c.setF(v, a64F0)
+		return
+	}
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	for i, x := range v.Args {
 		c.a.FMovFromF(a64A, c.fpr(x, a64F0))
@@ -8799,6 +8845,58 @@ func (c *a64Compiler) mathCall(v *ssa.Value) {
 	c.setF(v, a64F0)
 }
 
+// mathStubLive is amd64's: the operands in F0 and F1, which function in C
+// for ssa.GoMath, where to come back in A, the routine's address in B; the
+// result comes back in F0.
+func (c *a64Compiler) mathStubLive(v *ssa.Value, stub uint64) {
+	for _, sv := range c.savesOf(v) {
+		switch {
+		case sv.frame != 0, sv.cold:
+		case sv.float:
+			c.spillStoreF(sv.slot, arm64.FReg(sv.reg))
+		default:
+			c.spillStore(sv.slot, arm64.Reg(sv.reg))
+		}
+	}
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		// Its store uses B, which takes the routine's address after.
+		c.budgetFlush(arm64.Reg(reg))
+	}
+	back := c.a.NewLabel()
+	c.a.Adr(a64A, back)
+	c.movImm(a64B, stub)
+	c.a.Br(a64B)
+	c.a.Bind(back)
+	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+	c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+	c.restoreSavesOf(v, false)
+	if reg >= 0 {
+		c.budgetStart(arm64.Reg(reg))
+	}
+}
+
+// mathStubSaving is amd64's: every allocatable register saved around the
+// routine, by stubSaving.
+func (c *a64Compiler) mathStubSaving(stub uint64) {
+	if !c.stubSavingUsed {
+		c.stubSaving, c.stubSavingUsed = c.a.NewLabel(), true
+	}
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		c.budgetFlush(arm64.Reg(reg))
+	}
+	back := c.a.NewLabel()
+	c.a.Adr(a64A, back)
+	c.a.Store(a64Ctx, abi.OffGoSite, a64A)
+	c.movImm(a64B, stub)
+	c.a.B(c.stubSaving)
+	c.a.Bind(back)
+	if reg >= 0 {
+		c.budgetStart(arm64.Reg(reg))
+	}
+}
+
 // random is Math.random(), as amd64's is.
 func (c *a64Compiler) random(v *ssa.Value) {
 	fill, done := c.a.NewLabel(), c.a.NewLabel()
@@ -8835,7 +8933,24 @@ func (c *a64Compiler) power(v *ssa.Value, guard a64Guard) {
 	c.a.FArith(arm64.FMul, a64F0, a64F0, a64F0)
 	c.a.B(done)
 	c.a.Bind(general)
-	if c.enc.CallGo != 0 {
+	if stub := c.mathStub(ssa.GoPow); stub != 0 {
+		// As amd64's: through pow's own routine, the operands in F0 and F1,
+		// read back from the context's GoArgs.
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.FMovFromF(a64A, a64F0)
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.NumOffset, a64A)
+		c.a.FMovFromF(a64A, a64F1)
+		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+		slow := c.a.NewLabel()
+		guard = a64GuardLabel(c, slow)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.LoadF(a64F1, a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset)
+			c.mathStubSaving(stub)
+			c.a.B(done)
+		})
+	} else if c.enc.CallGo != 0 {
 		// What is not exact Go computes (ssa.GoPow).
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.FMovFromF(a64A, a64F0)

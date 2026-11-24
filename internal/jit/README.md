@@ -2388,6 +2388,35 @@ constant, the frame -- which Go reads only when it needs them
 (`jit.ExpandGoCall`): a site writes little more than the description's
 address.
 
+**Routines of their own.** A call of Go that has a routine of its own
+(`abi.Encoding`'s `GoStubs`, `abi.GoStub`) is made as V8's code calls a
+builtin at its own entry with its descriptor's registers, rather than through
+one entry that decodes the call: native code jumps to the operation's
+routine (the VM's `jit_leaffast_*.s`) with what the call passes in that
+operation's registers, and the routine calls the operation's own Go
+(`jit_gostub.go`) and jumps straight back -- no description read, no
+dispatch of every kind of call of Go (`jitGoDirect`, `jitHostCall`), and
+none of `jitHostCall`'s frame, made for every case's locals at every call,
+which had been the largest part of a small call's way to Go. Each routine
+is, as `callGo` is, a function the Go function that entered the code
+called: native code moves no SP and makes no call instruction, and what the
+routine calls is ordinary Go. It does what `jitHostCall` does before any
+operation (`jitStubEnter`): a runtime made `WithGCYield` waits while the
+collector marks, a test's work at each call of Go is done. The site saves
+what lives across it, as a leaf's does, and stores a loop's budget its
+register counts back around it. The Math functions Go computes -- pow and
+a remainder of numbers where native code's exact paths do not answer
+(`power`, `remainder`), and `ssa.OpMathCall`'s functions -- take their
+operands in amd64's X0 and X1 or arm64's F0 and F1, which of `unaryMath`'s
+functions in RCX or R17, and give their result in X0 or F0, as V8's code
+calls its ieee754 functions: Go refuses none, so the call has no
+description and no refusal. A power or a remainder is no call to the
+allocation, which keeps what lives across it in registers, so its call --
+out of line, where its exact paths fail -- has every allocatable register
+saved around the routine (`stubSaving`), as `goSaving`'s are, but goes no
+other way; a Math function's call (`OpMathCall`) saves only what lives
+across it.
+
 **On the register frame.** A call Go makes for native code -- a call's site
 that has no native target, a construction, a getter or setter not inlined --
 Go makes on the run's register frame (`jitState`'s `regRuns`,

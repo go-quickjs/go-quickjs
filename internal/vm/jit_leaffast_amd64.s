@@ -51,3 +51,59 @@ TEXT ·jitGoFastAddr(SB), NOSPLIT, $0-8
 	LEAQ ·jitGoFast(SB), AX
 	MOVQ AX, ret+0(FP)
 	RET
+
+// MATH_STUB is the routine of a Math function's call of Go
+// (abi.Encoding's GoStubs, abi.GoStub): its operands in X0 and X1, where
+// the call goes on in AX, its context in DI. To the Go runtime it is, as
+// jitLeafFast is, a function the Go function that entered the code called.
+// It calls fn and goes back, the result in X0 and DI as it found it.
+#define MATH_STUB(name, fn) \
+TEXT name(SB), NOSPLIT|NOFRAME, $0-0; \
+	ADJSP $48; \
+	NO_LOCAL_POINTERS; \
+	MOVQ DI, 40(SP); \
+	MOVQ AX, 32(SP); \
+	MOVQ DI, 0(SP); \
+	MOVSD X0, 8(SP); \
+	MOVSD X1, 16(SP); \
+	CALL fn(SB); \
+	MOVSD 24(SP), X0; \
+	MOVQ 32(SP), AX; \
+	MOVQ 40(SP), DI; \
+	ADJSP $-48; \
+	JMP AX
+
+MATH_STUB(·jitPowStub, ·jitPowGo)
+MATH_STUB(·jitModStub, ·jitModGo)
+MATH_STUB(·jitAtan2Stub, ·jitAtan2Go)
+MATH_STUB(·jitHypotStub, ·jitHypotGo)
+
+// jitMathStub is MATH_STUB's for Math's function of one (abi.GoStubMath),
+// which function in CX.
+TEXT ·jitMathStub(SB), NOSPLIT|NOFRAME, $0-0
+	ADJSP $48
+	NO_LOCAL_POINTERS
+	MOVQ DI, 40(SP)
+	MOVQ AX, 32(SP)
+	MOVQ DI, 0(SP)
+	MOVSD X0, 8(SP)
+	MOVQ CX, 16(SP)
+	CALL ·jitMathGo(SB)
+	MOVSD 24(SP), X0
+	MOVQ 32(SP), AX
+	MOVQ 40(SP), DI
+	ADJSP $-48
+	JMP AX
+
+// STUB_ADDR is a routine's address.
+#define STUB_ADDR(name, stub) \
+TEXT name(SB), NOSPLIT, $0-8; \
+	LEAQ stub(SB), AX; \
+	MOVQ AX, ret+0(FP); \
+	RET
+
+STUB_ADDR(·jitPowStubAddr, ·jitPowStub)
+STUB_ADDR(·jitModStubAddr, ·jitModStub)
+STUB_ADDR(·jitAtan2StubAddr, ·jitAtan2Stub)
+STUB_ADDR(·jitHypotStubAddr, ·jitHypotStub)
+STUB_ADDR(·jitMathStubAddr, ·jitMathStub)

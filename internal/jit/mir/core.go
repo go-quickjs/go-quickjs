@@ -4890,6 +4890,30 @@ func leafFast(site *ssa.CallSite, enc abi.Encoding) bool {
 	return site.Go == ssa.GoLeaf && site.Leaf != 0 && enc.LeafFast != 0
 }
 
+// mathStub is where native code jumps for op, a Math function Go computes
+// (ssa.GoPow, GoMod, GoMath, GoAtan2, GoHypot), through its own routine
+// (abi.Encoding's GoStubs): its operands and result in the floating-point
+// registers abi.GoStub says, no description, never refused. 0 sends it the
+// general way: an encoding without the routine, or code that calls no Go.
+func (c *core) mathStub(op ssa.GoOp) uint64 {
+	if c.enc.CallGo == 0 {
+		return 0
+	}
+	switch op {
+	case ssa.GoPow:
+		return c.enc.GoStubs[abi.GoStubPow]
+	case ssa.GoMod:
+		return c.enc.GoStubs[abi.GoStubMod]
+	case ssa.GoMath:
+		return c.enc.GoStubs[abi.GoStubMath]
+	case ssa.GoAtan2:
+		return c.enc.GoStubs[abi.GoStubAtan2]
+	case ssa.GoHypot:
+		return c.enc.GoStubs[abi.GoStubHypot]
+	}
+	return 0
+}
+
 // lengthWrites reports whether a call of Go, site, of argc operands, is a
 // property's write of length (abi.Encoding's LengthKey), which native code
 // makes itself where it shortens an array (lengthWrite), the call Go's

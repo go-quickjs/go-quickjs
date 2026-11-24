@@ -393,11 +393,11 @@ function onlySin(n) { let s = 0; for (let i = 0; i < n; i++) s += Math.sin(i); r
 `
 
 // A Math function's call of Go saves only what lives across it (savesOf),
-// not every register the code uses, and goes through the VM's routine for
-// calls of Go (abi.Encoding's GoFast), the loop's budget in a register
-// stored back around it: each answer is Node's (v26.10.0), also with a
-// collection in the middle of the calls (jitGoCallWork) and with the code
-// compiled for a collector that marks.
+// not every register the code uses, and goes through the function's own
+// routine (abi.Encoding's GoStubs, jit_gostub.go), the loop's budget in a
+// register stored back around it: each answer is Node's (v26.10.0), also
+// with a collection in the middle of the calls (jitGoCallWork) and with the
+// code compiled for a collector that marks.
 func TestJITMathCallsSaveLive(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -419,7 +419,7 @@ func TestJITMathCallsSaveLive(t *testing.T) {
 			rounds = append(rounds, "trig(100)", "onlySin(1000)")
 		}
 		r := jitAgreesForTest(t, mathSetup, rounds...)
-		fast := r.jit.goFast
+		stubs := r.jit.goStub
 		for _, rd := range [][2]string{
 			{"trig(100)", "5167.733570685861:0.6000000000000001:3"},
 			{"onlySin(1000)", "-0.012909906458837123"},
@@ -436,8 +436,8 @@ func TestJITMathCallsSaveLive(t *testing.T) {
 		for _, name := range []string{"trig", "onlySin"} {
 			jitNativeForTest(t, r, name)
 		}
-		if got := r.jit.goFast - fast; got < 4*100+1000 {
-			t.Errorf("marking %v: %d calls of Math's functions through the routine, want 1400", marking, got)
+		if got := r.jit.goStub - stubs; got < 4*100+1000 {
+			t.Errorf("marking %v: %d calls of Math's functions through their routines, want 1400", marking, got)
 		}
 	}
 }

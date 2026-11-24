@@ -116,6 +116,11 @@ type compiler struct {
 	// shares (goSaving), if any makes one.
 	saving     amd64.Label
 	savingUsed bool
+	// stubSaving is saving for the calls of Go through a routine of their
+	// own (abi.Encoding's GoStubs) that save every register (stubSaving's
+	// callers), if any makes one.
+	stubSaving     amd64.Label
+	stubSavingUsed bool
 	// refStoring is the routine of the stores of pointer words storeRef
 	// makes (refStore).
 	refStoring     amd64.Label
@@ -393,7 +398,12 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	if c.savingUsed {
 		c.a.Bind(c.saving)
 		c.mark("routine saving")
-		c.savingCall()
+		c.savingCall(false)
+	}
+	if c.stubSavingUsed {
+		c.a.Bind(c.stubSaving)
+		c.mark("routine stubSaving")
+		c.savingCall(true)
 	}
 	if c.tailUsed {
 		// Past every routine the code runs while the collector does not
@@ -8850,8 +8860,12 @@ func (c *compiler) liveCall(target uint64) {
 // share (goSaving): every allocatable register saved in the context's
 // register area, which only an exit uses; Go called (callGo), which comes
 // back to it; the frame's registers read again, and every allocatable one
-// restored; then back to the call, at GoSite.
-func (c *compiler) savingCall() {
+// restored; then back to the call, at GoSite. With stub, it is stubSaving,
+// which calls Go through the routine whose address is in scratchB, its
+// return in scratchA (abi.Encoding's GoStubs), the scratch registers its
+// operands and result are in left as they are: no allocatable register is
+// one.
+func (c *compiler) savingCall(stub bool) {
 	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(regCtx, abi.OffRegs+int32(r)*8, amd64.Reg(r))
 	}
@@ -8860,9 +8874,13 @@ func (c *compiler) savingCall() {
 	}
 	back := c.a.NewLabel()
 	c.a.LeaLabel(scratchA, back)
-	c.a.Store(regCtx, abi.OffGoResume, scratchA)
-	c.movImm(scratchA, c.enc.CallGo)
-	c.a.JmpReg(scratchA)
+	if stub {
+		c.a.JmpReg(scratchB)
+	} else {
+		c.a.Store(regCtx, abi.OffGoResume, scratchA)
+		c.movImm(scratchA, c.enc.CallGo)
+		c.a.JmpReg(scratchA)
+	}
 	c.a.Bind(back)
 	c.a.Load(regLocals, regCtx, abi.OffLocals)
 	c.a.Load(regStack, regCtx, abi.OffStack)
@@ -9718,7 +9736,17 @@ func (c *compiler) remainder(v *ssa.Value, guard guardTo) {
 		c.a.SSEOp(amd64.MovAPD, xScratch1, y)
 	}
 	zero, done := c.a.NewLabel(), c.a.NewLabel()
-	if c.enc.CallGo != 0 {
+	if stub := c.mathStub(ssa.GoMod); stub != 0 {
+		// Through the remainder's own routine (abi.GoStub), the operands in
+		// the scratch registers the guards below leave as they are.
+		slow := c.a.NewLabel()
+		guard = guardLabel(c, slow)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			c.mathStubSaving(stub)
+			c.a.Jmp(done)
+		})
+	} else if c.enc.CallGo != 0 {
 		// The operands' bits in the context's GoArgs, from the scratch
 		// registers the guards below leave as they are.
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
@@ -9881,6 +9909,24 @@ func (c *compiler) random(v *ssa.Value) {
 // context's GoArgs and, for ssa.GoMath, which function in the second's
 // number word; the result in the first's. Go refuses none.
 func (c *compiler) mathCall(v *ssa.Value) {
+	if stub := c.mathStub(ssa.GoOp(v.Index)); stub != 0 {
+		// Through the function's own routine (abi.GoStub): the operands in
+		// xScratch0 and xScratch1, the result in xScratch0.
+		if x := c.xmm(v.Args[0], xScratch0); x != xScratch0 {
+			c.a.SSEOp(amd64.MovAPD, xScratch0, x)
+		}
+		if len(v.Args) > 1 {
+			if y := c.xmm(v.Args[1], xScratch1); y != xScratch1 {
+				c.a.SSEOp(amd64.MovAPD, xScratch1, y)
+			}
+		}
+		if ssa.GoOp(v.Index) == ssa.GoMath {
+			c.movImm(scratchC, uint64(v.Aux))
+		}
+		c.mathStubLive(v, stub)
+		c.setX(v, xScratch0)
+		return
+	}
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	for i, x := range v.Args {
 		c.a.MovQFromX(scratchA, c.xmm(x, xScratch0))
@@ -9931,6 +9977,70 @@ func (c *compiler) mathCall(v *ssa.Value) {
 	c.setX(v, xScratch0)
 }
 
+// mathStubLive calls Go's Math function for v, a Math function's call
+// (ssa.OpMathCall), through the function's own routine, stub (abi.GoStub):
+// its operands already in xScratch0 and xScratch1 -- and which function in
+// scratchC, for ssa.GoMath -- what lives across v in registers saved and
+// restored (savesOf), and a budget a loop counts in a register stored back
+// around it, as goLive's. It jumps there with where to come back in
+// scratchA; the result comes back in xScratch0. Go refuses none, so no
+// description is made, and nothing is saved for a refusal (saved's cold).
+func (c *compiler) mathStubLive(v *ssa.Value, stub uint64) {
+	for _, sv := range c.savesOf(v) {
+		switch {
+		case sv.frame != 0, sv.cold:
+			// Read back from the frame's slot, which holds it; or read by
+			// a refusal alone, which there is none of.
+		case sv.float:
+			c.spillStoreSD(sv.slot, amd64.XReg(sv.reg))
+		default:
+			c.spillStore(sv.slot, amd64.Reg(sv.reg))
+		}
+	}
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		// Its store uses scratchB, which takes the routine's address after.
+		c.budgetFlush(amd64.Reg(reg))
+	}
+	back := c.a.NewLabel()
+	c.a.LeaLabel(scratchA, back)
+	c.movImm(scratchB, stub)
+	c.a.JmpReg(scratchB)
+	c.a.Bind(back)
+	c.a.Load(regLocals, regCtx, abi.OffLocals)
+	c.a.Load(regStack, regCtx, abi.OffStack)
+	c.restoreSavesOf(v, false)
+	if reg >= 0 {
+		c.budgetStart(amd64.Reg(reg))
+	}
+}
+
+// mathStubSaving is mathStubLive for an operation that is no call to the
+// allocation, which keeps what lives across it in registers it does not
+// save (power's and remainder's calls of Go, out of line): every
+// allocatable register saved and restored around the routine, by the
+// routine the code's such calls share (stubSaving), as goSaving's are, but
+// Go reached through stub with nothing else on the way. The operands are in
+// xScratch0 and xScratch1, the result comes back in xScratch0.
+func (c *compiler) mathStubSaving(stub uint64) {
+	if !c.stubSavingUsed {
+		c.stubSaving, c.stubSavingUsed = c.a.NewLabel(), true
+	}
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		c.budgetFlush(amd64.Reg(reg))
+	}
+	back := c.a.NewLabel()
+	c.a.LeaLabel(scratchA, back)
+	c.a.Store(regCtx, abi.OffGoSite, scratchA)
+	c.movImm(scratchB, stub)
+	c.a.Jmp(c.stubSaving)
+	c.a.Bind(back)
+	if reg >= 0 {
+		c.budgetStart(amd64.Reg(reg))
+	}
+}
+
 // power is Math.pow(x, y) where its answer is exact (ssa.ExactPow): x*x
 // for y 2; an integer x to an integer power from 0 to 64 by repeated
 // squaring, its result at most 2**53. Anything else Go computes, called
@@ -9952,7 +10062,27 @@ func (c *compiler) power(v *ssa.Value, guard guardTo) {
 	c.a.SSEOp(amd64.MulSD, xScratch0, xScratch0)
 	c.a.Jmp(done)
 	c.a.Bind(general)
-	if c.enc.CallGo != 0 {
+	if stub := c.mathStub(ssa.GoPow); stub != 0 {
+		// What is not exact Go computes through pow's own routine
+		// (abi.GoStub), as V8's code calls its ieee754 pow: the operands in
+		// xScratch0 and xScratch1, read back from the context's GoArgs,
+		// where they are kept from here -- the last guard below is past the
+		// squarings, which overwrite x.
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.MovQFromX(scratchA, xScratch0)
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchA)
+		c.a.MovQFromX(scratchA, xScratch1)
+		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+		slow := c.a.NewLabel()
+		guard = guardLabel(c, slow)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.LoadSD(xScratch1, regCtx, abi.OffGoArgs+size+c.enc.NumOffset)
+			c.mathStubSaving(stub)
+			c.a.Jmp(done)
+		})
+	} else if c.enc.CallGo != 0 {
 		// What is not exact Go computes (ssa.GoPow), as V8's code calls
 		// its ieee754 pow: the operands' bits in the context's GoArgs.
 		size := int32(unsafe.Sizeof(abi.GoArg{}))

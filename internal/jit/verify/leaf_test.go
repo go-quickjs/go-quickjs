@@ -149,6 +149,7 @@ func TestMirLeafCalls(t *testing.T) {
 var mathCorpus = []string{
 	`function f(n){let s=0,t=0.5,k=3;for(let i=0;i<n;i++){s+=Math.sin(i*t)*k+Math.atan2(i,k);t+=0.001;k^=i&1}return s+t}`,
 	`function f(x,y){const a=Math.sin(x),b=Math.hypot(x,y);return a*b+x-y}`,
+	`function f(x,y,n){let a=+x,b=+y,s=0,k=1;for(let i=0;i<n;i++){s+=a**b+a%b*k;k^=i;a+=0.5}return s+k}`,
 }
 
 // maths is globals whose method calls of one argument are Math.sin's, of
@@ -179,19 +180,29 @@ func (m maths) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	return ssa.Intrinsic{}, false
 }
 
-// Math's calls of Go save what lives across them and go through the VM's
-// routine for calls of Go where the encoding has it (GoFast), through
-// CallGo saving every register where it has not, by code that keeps the
-// rules on both targets.
+// Math's calls of Go save what lives across them and go through each
+// function's own routine where the encoding has them (GoStubs), the VM's
+// routine for calls of Go where it has that (GoFast), through CallGo saving
+// every register where it has neither -- pow's and %'s, which no call is
+// to the allocation, every register saved around either routine -- by code
+// that keeps the rules on both targets.
 func TestMirMathCalls(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
 		Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000, CallGo: 0x72000}
-	for _, fast := range []uint64{0x74000, 0} {
+	var stubs [abi.MaxGoStubs]uint64
+	for i := range stubs {
+		stubs[i] = 0x76000 + uint64(i)*0x100
+	}
+	for _, c := range []struct {
+		fast  uint64
+		stubs [abi.MaxGoStubs]uint64
+	}{{0x74000, stubs}, {0x74000, [abi.MaxGoStubs]uint64{}}, {0, [abi.MaxGoStubs]uint64{}}} {
+		fast := c.fast
 		e := enc
-		e.GoFast = fast
-		calls := 0
+		e.GoFast, e.GoStubs = fast, c.stubs
+		calls, others := 0, 0
 		for _, src := range mathCorpus {
 			for i, p := range lowered(t, src) {
 				f, err := ssa.BuildWith(p, maths{p: p})
@@ -203,8 +214,11 @@ func TestMirMathCalls(t *testing.T) {
 				ssa.Optimize(f)
 				for _, b := range f.Blocks {
 					for _, v := range b.Values {
-						if v.Op == ssa.OpMathCall {
+						switch v.Op {
+						case ssa.OpMathCall:
 							calls++
+						case ssa.OpPowF64, ssa.OpModF64:
+							others++
 						}
 					}
 				}
@@ -213,7 +227,7 @@ func TestMirMathCalls(t *testing.T) {
 					if arch == "arm64" {
 						compile = mir.CompileARM64
 					}
-					name := fmt.Sprintf("%s (%d, GoFast %#x), %s", src, i, fast, arch)
+					name := fmt.Sprintf("%s (%d, GoFast %#x, GoStubs %v), %s", src, i, fast, c.stubs[0] != 0, arch)
 					mc, err := compile(f, e)
 					if err != nil {
 						t.Fatalf("%s: %v", name, err)
@@ -224,8 +238,8 @@ func TestMirMathCalls(t *testing.T) {
 				}
 			}
 		}
-		if calls < len(mathCorpus) {
-			t.Errorf("GoFast %#x: %d Math calls built", fast, calls)
+		if calls < len(mathCorpus)-1 || others < 2 {
+			t.Errorf("GoFast %#x: %d Math calls built, %d powers and remainders", fast, calls, others)
 		}
 	}
 }

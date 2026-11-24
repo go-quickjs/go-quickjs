@@ -1312,6 +1312,10 @@ const (
 // Encoding is how the VM represents a value in memory: a number word (a
 // float64, or a NaN-boxed tag) and a pointer word.
 type Encoding struct {
+	// Nothing compares encodings: without the field, the compiler made the
+	// type an equality function, laid out among the code before the layout
+	// lock's anchor XJ, which every field added had grown or moved.
+	_ [0]func()
 	// ValueSize is the bytes per slot; NumOffset and RefOffset locate the
 	// number and pointer words in a slot.
 	ValueSize, NumOffset, RefOffset int32
@@ -1649,6 +1653,17 @@ type Encoding struct {
 	// stack's clobbered. Its inputs are LeafFast's. 0 sends every such call
 	// to CallGo.
 	GoFast uint64
+	// GoStubs are where native code jumps for the calls of Go that have a
+	// routine of their own (GoStub), as V8's code calls a builtin at its own
+	// entry with its descriptor's registers rather than one runtime entry
+	// that decodes the call: each the VM's routine that calls the
+	// operation's own Go, with no description to read nor dispatch of every
+	// kind of call of Go. To the Go runtime each is, as CallGo is, a function
+	// the Go function that entered the code called; each comes back with
+	// every register but the context's and the stack's clobbered (and
+	// arm64's link register kept). What each takes is its GoStub's. 0 sends
+	// its calls the general way, GoFast or CallGo.
+	GoStubs [MaxGoStubs]uint64
 	// StoreRef is where native code jumps to store a pointer word while
 	// the collector marks, as V8's code calls its write barrier: the
 	// address of jit's storeRef, which, as callGo, is to the Go runtime a
@@ -1771,6 +1786,36 @@ const (
 	GoCallStepResult = 16
 	GoClosurePool    = 1
 )
+
+// GoStub is a call of Go native code makes through a routine of its own
+// (Encoding's GoStubs), with what it takes in registers of its own.
+//
+// The Math functions Go computes take no description of the call and are
+// never refused, as V8's code calls its ieee754 functions: the operands in
+// amd64's X0 and X1 and arm64's F0 and F1 -- one for GoStubMath, which
+// function of unaryMath's in amd64's RCX and arm64's R17 (ssa.GoMath's
+// operand) -- where to go on in amd64's RAX and arm64's R15, the context in
+// its register; the result comes back in X0 or F0. GoStubPow is Math.pow's
+// (ssa.GoPow), GoStubMod a remainder of numbers (ssa.GoMod), GoStubAtan2
+// and GoStubHypot Math's functions of two (ssa.GoAtan2, ssa.GoHypot).
+type GoStub int
+
+const (
+	GoStubPow GoStub = iota
+	GoStubMod
+	GoStubMath
+	GoStubAtan2
+	GoStubHypot
+	// NumGoStubs is how many there are.
+	NumGoStubs
+)
+
+// MaxGoStubs is the room Encoding's GoStubs has, past NumGoStubs, so that a
+// routine added changes neither the encoding's size nor the comparison the
+// compiler makes of it.
+const MaxGoStubs = 32
+
+var _ [MaxGoStubs - NumGoStubs]struct{}
 
 // The VM's object spreads by layout (its copies, the VM's jitCopyFast),
 // which native code reads, never writes, before it calls Go for one

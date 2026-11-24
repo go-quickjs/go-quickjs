@@ -1243,8 +1243,9 @@ type jitState struct {
 	// routine for them (jitLeafGo), leafRefused those it left to an exit.
 	leafFast, leafRefused uint64
 	// goFast counts the other calls of Go native code made through the
-	// VM's routine for them (jitGoDirect).
-	goFast uint64
+	// VM's routine for them (jitGoDirect), goStub those made through a
+	// routine of their own (abi.Encoding's GoStubs, jit_gostub.go).
+	goFast, goStub uint64
 	// ssaKeeps is the most keep cells (abi.Context.Keep) any code compiled
 	// uses: what Go clears in a native callee's context.
 	ssaKeeps int
