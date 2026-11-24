@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -15,8 +14,7 @@ import (
 func jitFreqBothForTest(t *testing.T, setup string) jitBoth {
 	t.Helper()
 	runtime.GC()
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	jitNoInlineForTest(t, "pick")
 	both := jitBothForTest(t, setup)
 	jitDefaultsForTest(both.jit)

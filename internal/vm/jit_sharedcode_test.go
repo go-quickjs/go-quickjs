@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -78,7 +77,7 @@ func TestJITClosuresShareCode(t *testing.T) {
 	}
 	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	each := jitNativeForTest(t, r, "each")
 	before := make([]uint64, len(arrows))
 	for i, a := range arrows {
@@ -140,7 +139,7 @@ func TestJITSlowLoopGoesBackNative(t *testing.T) {
 		t.Fatalf("each was not judged slow at its short entries: %+v", each.ssaStats)
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	osrs, work := r.jit.osrs, each.ssaStats.work
 	if v, err := r.Run(compileForTest(t, `''+long(dbl)`)); err != nil || v.String().Go() != "12735920" {
 		t.Fatalf("long(dbl) = %v, %v; want 12735920", v, err)

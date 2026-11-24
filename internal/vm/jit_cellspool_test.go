@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -42,7 +41,7 @@ func TestJITCellsFromPools(t *testing.T) {
 	// The collector marking would have Go make the calls, and the cells:
 	// not counted here (TestJITCellsFromPoolsMarking).
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitAgreesForTest(t, cellsSetup, rounds...)
 	before := calls
 	if v, err := r.Run(compileForTest(t, `drive(300)+bumps(300)`)); err != nil || v.Number() != 226650 {

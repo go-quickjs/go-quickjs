@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -22,7 +21,7 @@ func TestJITCallsPastDeepestContext(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function depth(n, o) { if (n === 0) return o.v; return (depth(n - 1, o) + n * o.v) | 0 }
 		function drive(k, n) { const o = { v: 3 }; let s = 0; for (let i = 0; i < k; i++) s = (s + depth(n, o)) | 0; return s }`
 	r := jitAgreesForTest(t, setup, `drive(50, 300)`, `drive(50, 300)`, `drive(50, 300)`, `drive(50, 300)`)

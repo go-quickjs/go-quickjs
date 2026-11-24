@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 	"unsafe"
 )
@@ -88,7 +87,7 @@ func TestJITPrologueCallees(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// Native calls are Go's while the collector marks.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	jitNoInlineForTest(t, "wide")
 	both := jitBothForTest(t, prologueCallSetup)
@@ -132,7 +131,7 @@ func TestJITPrologueEnter(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "wide17")
 	both := jitBothForTest(t, prologueCallSetup)
 	both.agree(t, `wides17(300, { x: 2 })`, `wides17(300, { x: 2 })`)
@@ -189,7 +188,7 @@ func TestJITPrologueArgsFromState(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		function junk() { with ({}) {} return [9, 9, 9, 9, 9, 9, 9, 9, 9, 9].length }
 		function pick(a, b = a * 2, { x, y = b } = { x: a }, c = y + 1) { return a * 1000 + b * 100 + x * 10 + y + c / 100 }
@@ -226,7 +225,7 @@ func TestJITPrologueGenericCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		var visitors = [
 			function (n, k = 1) { return n * k },

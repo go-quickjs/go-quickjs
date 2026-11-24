@@ -7,7 +7,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -417,7 +416,7 @@ func TestJITDerivedConstructor(t *testing.T) {
 	// marked, and A, B's native callee by its super(), leaving at one it
 	// was not compiled for is counted as B's leaving.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	rounds := []string{}
 	for range 10 {
 		rounds = append(rounds, `make(500)`)
@@ -652,7 +651,7 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	// With the collector off, which the count is not about: CI's checkptr
 	// run, under a collector marking often, once resumed no level.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitAgreesForTest(t, setup, rounds...)
 	// Register code is one for Go and native callers alike (no
 	// ssaCallee): called natively, its captured locals in cells.

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -91,7 +90,7 @@ func TestJITCalleeArguments(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// Each loop's callee called natively at each call, the loop making no
 	// call of Go: D's code too, its super() of the call's arguments Go's.
 	for _, c := range []struct {

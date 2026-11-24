@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -63,7 +62,7 @@ func TestJITRecursiveCompiledAgain(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	for _, how := range []string{"native", "applied", "leaving"} {
 		t.Run(how, func(t *testing.T) {
 			var rounds []string

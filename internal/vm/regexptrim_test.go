@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -40,14 +39,15 @@ const regexpTrimTestWant = `"","<>",2,0,0:0,0,[""] "","< ><>",4,0,0:1,0,[" ",""]
 // Node's, with the collector idle and running.
 func TestRegExpTrimReplace(t *testing.T) {
 	for _, idle := range []bool{true, false} {
+		release := func() {}
 		if idle {
 			runtime.GC()
-			debug.SetGCPercent(-1)
+			release = holdCollectorNow(t)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpTrimTestSrc))
 		r.Close()
-		debug.SetGCPercent(100)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

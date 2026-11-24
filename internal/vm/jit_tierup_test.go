@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -249,7 +248,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 	}
 	// No collection meanwhile, which the budget is not about.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "plus")
 	r, run := jitTierRuntimeForTest(t, 4, `var m=(function(){
 			function V(x){this.x=x}
@@ -1161,7 +1160,7 @@ func TestJITInlinedLiterals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r, run := jitTierRuntimeForTest(t, 1, `function Sink(){this.errors=[];this.box={}}
 		Sink.prototype.reset=function(){this.errors=[];this.box={};return this.errors};
 		var s=new Sink;

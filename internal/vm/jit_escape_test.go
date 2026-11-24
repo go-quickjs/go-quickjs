@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -188,7 +187,7 @@ func TestJITEscapeAllocates(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitAgreesForTestWith(t, jitStressConfig{}, escapeSetup, `literal(50)`, `literal(50)`, `construct(50)`, `construct(50)`, `nested(50)`, `nested(50)`, `dots(50)`, `dots(50)`)
 	for _, src := range []string{`literal(20000)`, `construct(20000)`, `nested(20000)`, `dots(20000)`} {
 		jitCallbackMallocs(t, r, src)
@@ -209,7 +208,7 @@ func TestJITEscapeCollector(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	calls := 0
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {

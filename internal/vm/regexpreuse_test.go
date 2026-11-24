@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -154,14 +153,15 @@ const regexpReuseTestWant = `-384824464 -384824464 -384824464 85/28.23.7.4.16.1.
 // returned or handed to a getter left as they were.
 func TestRegExpReuse(t *testing.T) {
 	for _, idle := range []bool{true, false} {
+		release := func() {}
 		if idle {
 			runtime.GC()
-			debug.SetGCPercent(-1)
+			release = holdCollectorNow(t)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpReuseTestSrc))
 		r.Close()
-		debug.SetGCPercent(100)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

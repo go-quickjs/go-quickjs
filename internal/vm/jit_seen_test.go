@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -24,7 +23,7 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 	// Native code adds no property while the collector marks, leaving the
 	// add to Go, which would count as its exits.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function K0(){} function K1(){} K1.prototype=Object.create(K0.prototype);
 		function K2(){} K2.prototype=Object.create(K1.prototype);
 		function K3(){} K3.prototype=Object.create(K2.prototype);
@@ -100,7 +99,7 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var o={};function w(x){let s=0;for(let i=0;i<2;i++)s+=(o+"").length*x;return s}
 		function run(n){let t=0;for(let i=0;i<n;i++)t+=w(i+0.25);return t}`
 	want := newTestRuntime(t, Config{})

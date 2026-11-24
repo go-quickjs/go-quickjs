@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -164,7 +163,7 @@ func TestJITDerivedNativeConstruct(t *testing.T) {
 	m := jitNativeForTest(t, r, "make")
 	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	bIn, cIn, fIn, goCalls := jitDerivedCalls(b), jitDerivedCalls(c), jitDerivedCalls(f), m.ssaStats.goCalls
 	v, err := r.Run(compileForTest(t, `''+make(500)`))
 	if err != nil || v.String().Go() != "253000" {
@@ -246,7 +245,7 @@ func TestJITDerivedNativeErrors(t *testing.T) {
 	// the constructions while it marked, and under GOGC=5 it marked
 	// through every one of Early's.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, k := range names {
 		v, err := r.Run(compileForTest(t, `''+errs`+k+`(50)`))
@@ -370,7 +369,7 @@ func TestJITDerivedNativeSuper(t *testing.T) {
 		t.Fatal("Abs has no entry")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	absIn, binIn, unIn := jitDerivedCalls(abs), jitDerivedCalls(bin), jitDerivedCalls(un)
 	goCalls := []uint64{eq.ssaStats.goCalls, bin.ssaStats.goCalls, un.ssaStats.goCalls}
 	v, err := r.Run(compileForTest(t, `chain(300)`))
@@ -441,7 +440,7 @@ func TestJITDerivedNativeSuperTwice(t *testing.T) {
 	jitNativeCountsForTest(t)
 	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `
 		class Abs { constructor(s) { this.strength = s; this.k = s.length } }
 		class Twice extends Abs { constructor(n) { let err = ''; for (let i = 0; i < n; i++) { try { super('a' + i) } catch (e) { err = e.name + ': ' + e.message } } this.err = err } }
@@ -662,7 +661,7 @@ func TestJITDerivedNativeConstructArrows(t *testing.T) {
 	b, c := jitDerivedForTest(t, r, "B"), jitDerivedForTest(t, r, "C")
 	m := jitNativeForTest(t, r, "make")
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	bIn, cIn, goCalls := jitDerivedCalls(b), jitDerivedCalls(c), m.ssaStats.goCalls
 	if v, err := r.Run(compileForTest(t, `''+make(300)`)); err != nil || v.String().Go() != "45750" {
 		t.Fatalf("make(300) = %s, %v; want 45750", v.String().Go(), err)
@@ -727,7 +726,7 @@ func TestJITArrowSharedBindingCalled(t *testing.T) {
 	}
 	m := jitNativeForTest(t, r, "callAll")
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	goCalls := m.ssaStats.goCalls
 	if v, err := r.Run(compileForTest(t, `''+callAll(20)`)); err != nil || v.String().Go() != "70000" {
 		t.Fatalf("callAll(20) = %s, %v; want 70000", v.String().Go(), err)

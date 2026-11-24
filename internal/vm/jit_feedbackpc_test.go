@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -74,8 +73,7 @@ func TestJITFeedbackByPCInlinedCopies(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	setClock := jitFlushForTest(t)
 	want := newTestRuntime(t, Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })

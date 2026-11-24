@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -33,7 +32,7 @@ func TestJITNumberConcat(t *testing.T) {
 	all := "(function () { var o = []; for (var k = 1; k <= 12; k++) o.push(join(k)); return o.join(' ') })()"
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -53,6 +52,6 @@ func TestJITNumberConcat(t *testing.T) {
 		if e.ssaStats.ended != ended {
 			t.Errorf("marking %v: join left native code %d times", marking, e.ssaStats.ended-ended)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

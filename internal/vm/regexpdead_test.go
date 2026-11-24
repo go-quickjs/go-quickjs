@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -120,12 +119,12 @@ func regexpExecLeafForTest(r *Runtime) *regexpLeaf[struct{}] {
 // statics and lastIndex as any other: each answer is Node's, with the
 // collector idle.
 func TestRegExpDeadExec(t *testing.T) {
-	gc := debug.SetGCPercent(-1)
+	release := holdCollectorNow(t)
 	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, regexpDeadTestSrc))
 	dummy := regexpExecLeafForTest(r).dummy
 	r.Close()
-	debug.SetGCPercent(gc)
+	release()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,11 +334,11 @@ function rTpl(s, re, n) { for (var i = 0; i < n; i++) s.replace(re, '[$1]') }
 // statics and lastIndex as any other, and calls a replacement function as
 // it would: each answer is Node's, with the collector idle.
 func TestRegExpDeadReplace(t *testing.T) {
-	gc := debug.SetGCPercent(-1)
+	release := holdCollectorNow(t)
 	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, regexpDeadReplaceTestSrc))
 	r.Close()
-	debug.SetGCPercent(gc)
+	release()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +545,7 @@ var regexpDeadTruth = []struct{ call, want string }{
 // Node's. The subject had stood for the string, and 'a'.replace(/a/g, "")
 // been true.
 func TestRegExpDeadReplaceTruth(t *testing.T) {
-	gc := debug.SetGCPercent(-1)
+	release := holdCollectorNow(t)
 	r := newTestRuntime(t, Config{})
 	if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
 		t.Fatal(err)
@@ -563,5 +562,5 @@ func TestRegExpDeadReplaceTruth(t *testing.T) {
 		}
 	}
 	r.Close()
-	debug.SetGCPercent(gc)
+	release()
 }

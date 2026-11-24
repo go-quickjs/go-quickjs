@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 	"unsafe"
 
@@ -28,7 +27,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -75,7 +74,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 				t.Errorf("marking %v: %s made %d leaves' calls through the routine, want at least %d", marking, c.src, got, c.leaves)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 
@@ -162,7 +161,7 @@ function frozen() { var f = Object.freeze(/a/g), w = /a/y; Object.defineProperty
 function costly() { var g = /(a+)+b/g; try { return Exec(g, 'a'.repeat(30) + 'c') } catch (e) { return e.name + ':' + g.lastIndex } }`
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -183,7 +182,7 @@ function costly() { var g = /(a+)+b/g; try { return Exec(g, 'a'.repeat(30) + 'c'
 		if got := r.jit.leafFast - fast; got < 20000 {
 			t.Errorf("marking %v: %d leaves' calls through the routine, want 20,000", marking, got)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 	if testing.Short() {
 		return

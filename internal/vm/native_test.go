@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,8 +89,7 @@ func nativeKernelSource(t testing.TB, names ...string) string {
 func nativeCounting(t testing.TB) {
 	c := new(nativeCounters)
 	setTestSwitch(t, func(s *testConfig) { s.counters = c })
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 }
 
 // nativeCountsOf is the counters t's runtimes count into (nativeCounting).

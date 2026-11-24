@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -24,7 +23,7 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `function long(x) {
 			let s = x
 			s = (s * 3 + 1) | 0; s = (s ^ (s >>> 3)) | 0; s = (s * 5 + 7) | 0; s = (s ^ (s >>> 5)) | 0

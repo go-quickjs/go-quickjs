@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 	"unsafe"
@@ -70,7 +69,7 @@ func TestJITRegExpReplaceLeaf(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -105,7 +104,7 @@ func TestJITRegExpReplaceLeaf(t *testing.T) {
 				t.Errorf("marking %v: %s made %d leaves' calls through the routine, want at least %d", marking, c.call, got, c.leaves)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 

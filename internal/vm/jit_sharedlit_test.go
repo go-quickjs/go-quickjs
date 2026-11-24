@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -23,8 +22,7 @@ func TestJITWritesSharedLiteral(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	ops := map[string]string{
 		"storeAny":  `a[i] = 'x'`,
 		"storeNum":  `a[i] = i * 10`,
@@ -96,8 +94,7 @@ func TestJITMakesSharedLiteral(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	const setup = `
 		function mk() { return [1, 2.5, 'x', true, null, 7]; }
 		function reads() { var s = 0; for (var i = 0; i < 3000; i++) { var a = mk(); s += a.length + a[5] + (a[i % 6] === null ? 1 : 0); } return s; }
@@ -162,8 +159,7 @@ func TestJITSortsSharedLiteral(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	var src strings.Builder
 	src.WriteString("var lits = [")
 	for k := range 200 {
@@ -216,8 +212,7 @@ func TestJITKeyedStoreSharedLiteral(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	var src strings.Builder
 	src.WriteString("var lits = [")
 	for k := range 60 {

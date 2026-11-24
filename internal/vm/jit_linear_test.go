@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -145,7 +144,7 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 	runtime.GC()
 	start := time.Now()
 	func() {
-		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		defer holdCollectorNow(t)()
 		for k := range 3 {
 			a0 := alloc()
 			q, err := jitcompile.LowerRegCold(cl.reg.rc, cl.fn)
@@ -182,7 +181,7 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 	// was the collector's time, not the compiler's.
 	runtime.GC()
 	func() {
-		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+		defer holdCollectorNow(t)()
 		for k := range 3 {
 			t0 := time.Now()
 			if _, err := mir.CompileWith(new(mir.Workspace), f, jitEncoding, opts); err != nil {

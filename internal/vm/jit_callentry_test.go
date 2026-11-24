@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -21,7 +20,7 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// Native calls are Go's while the collector marks.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		function g(a, b, c) { return a + b + c }
 		function f(a, b) { for (;;) { if (b) return y; var y = a; b = 1 } }
@@ -123,7 +122,7 @@ func TestJITCallStateRebuildsTheFrame(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		var holder = {p: {v: 1}, tag: "h"}, other = {tag: "m"}
 		function thrower(x, h) {

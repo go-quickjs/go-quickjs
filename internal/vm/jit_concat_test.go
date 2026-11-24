@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -61,7 +60,7 @@ func TestJITLongConcats(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	rounds := [][2]string{
 		{"chains(30)", "-1566992171|: 7px: 7px: 7px: 7px: 7px"},
 		{"templates(30)", "-303875368|long string here-29-14.5-a-long string here-29-14.5-a-long string here-29-14.5-a-long string here-29-14.5-a-long string here-29-14.5-a-"},

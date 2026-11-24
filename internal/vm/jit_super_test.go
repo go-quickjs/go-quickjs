@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -57,7 +56,7 @@ func TestJITSuperReferences(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, superSetup)
 	for range 3 {
 		both.agree(t, `run(200)`, `nul()`, `out.length + ':' + out.slice(-3).join()`)
@@ -136,7 +135,7 @@ func TestJITDefinitionCallees(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "point")
 	inlined := jitRegInlinedForTest(t)
 	both := jitBothForTest(t, definitionSetup)
@@ -197,7 +196,7 @@ func TestJITSuperReferencesCalledNatively(t *testing.T) {
 	r := jitAgreesForTest(t, setup, `loop(200)`, `selfs(200)`, `loop(200)`, `selfs(200)`, `loop(200)`, `loop(200)`, `loop(200)`)
 	m := jitNativeForTest(t, r, "loop")
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// Each callee's link, the register form's where it runs register
 	// code (regLinks).
 	var callees []*jitLink

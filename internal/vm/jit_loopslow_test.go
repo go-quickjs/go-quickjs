@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -49,7 +48,7 @@ func TestJITCallsOfGoAtLoops(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r, want := jitAnswersWithForTest(t, `function integers(n) { let s = 0; for (let i = 0; i < n; i++) s += framedCall('xy', i & 1) === 120 ? 1 : 2; return s }`, jitFramedCallForTest)
 	want(`integers(200000)`, "300000")
 	e := jitNativeForTest(t, r, "integers")
@@ -83,7 +82,7 @@ func TestJITLoopExitsAtEachTurn(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r, want := jitAnswersForTest(t, `
 		function viaUsing(n) {
 			const res = { n: 0, [Symbol.dispose]() { this.n++ } }
@@ -128,7 +127,7 @@ func TestJITSlowResumptionsLookSeldom(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r, want := jitAnswersForTest(t, `
 		function* count(n) { for (let i = 0; i < n; i++) yield i; return () => n }
 		function total(n) { let s = 0; for (const v of count(n)) s = (s + v * 3) | 0; return s }`)

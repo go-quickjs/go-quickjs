@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -22,7 +21,7 @@ func TestJITLearnedCalleeCompiledAgain(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `class Counter { #n = 3; #get() { return this.#n } sum(n) { var j, s = 0; for (j = 0; j < n; j++) s = (s + this.#get()) | 0; return s } }
 		function method(n) { return new Counter().sum(n) }`
 	var srcs []string

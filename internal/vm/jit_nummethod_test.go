@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -59,7 +58,7 @@ func TestJITNumberMethods(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	warm := []string{"nums(28)", "scaled(30)", "bools(6)", "mixLoop([1.5, -0, 3], 6)", "describeLoop([1.25, -2, NaN], 6)", "ownLoop([1.25, -0, 3], 9)"}
 	var rounds []string
 	for range 12 {

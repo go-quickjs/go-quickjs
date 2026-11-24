@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 	"unsafe"
 
@@ -76,7 +75,7 @@ func TestJITElementStoresNative(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		function Disk(size) { this.size = size; this.next = null }
 		const piles = [null, null, null]
@@ -123,7 +122,7 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// Not inlined: its x is a parameter's.
 	jitNoInlineForTest(t, "put")
 	r := jitAgreesForTest(t, `

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -40,7 +39,7 @@ func TestJITInlinedArgumentReads(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	var rounds []string
 	for range 4 {
 		rounds = append(rounds, `sum(300)`, `odd(300)`)

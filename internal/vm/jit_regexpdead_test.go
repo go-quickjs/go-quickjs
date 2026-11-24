@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 	"unsafe"
@@ -46,7 +45,7 @@ func TestJITRegExpDeadExec(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -105,7 +104,7 @@ func TestJITRegExpDeadExec(t *testing.T) {
 		if jitNativeForTest(t, r, "blk"); regexpExecLeafForTest(r).dummy == nil {
 			t.Errorf("marking %v: all()'s calls made exec's arrays", marking)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 
@@ -120,7 +119,7 @@ func TestJITRegExpDeadReplaceTruth(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -139,7 +138,7 @@ func TestJITRegExpDeadReplaceTruth(t *testing.T) {
 				t.Errorf("marking %v: %s did not run natively", marking, c.call)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 
@@ -155,7 +154,7 @@ func TestJITRegExpDeadReplace(t *testing.T) {
 	names := []string{"rUp", "rGlobal", "rLocal", "rProp", "rLit", "rIf", "rSticky", "rTpl"}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -194,7 +193,7 @@ func TestJITRegExpDeadReplace(t *testing.T) {
 			t.Errorf("marking %v: all() differs from Node's:\ngot  %s\nwant %s", marking, got, regexpDeadReplaceTestWant)
 		}
 		jitNativeForTest(t, r, "blk")
-		debug.SetGCPercent(gc)
+		release()
 	}
 
 }

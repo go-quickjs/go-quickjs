@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -23,7 +22,7 @@ func TestJITDataViewLeaves(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -54,6 +53,6 @@ func TestJITDataViewLeaves(t *testing.T) {
 			t.Errorf("marking %v: mix(mv, 200) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want at least 2200, at most 4",
 				marking, got, r.jit.leafRefused-refused, e.ssaStats.goCalls-calls)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

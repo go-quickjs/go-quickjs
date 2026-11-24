@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -21,7 +20,7 @@ func TestJITRegExpExecDirect(t *testing.T) {
 	setup := src[:strings.LastIndex(src, "\n")]
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -38,6 +37,6 @@ func TestJITRegExpExecDirect(t *testing.T) {
 		if got := v.String().Go(); got != regexpExecDirectTestWant {
 			t.Errorf("marking %v:\ngot  %s\nwant %s", marking, got, regexpExecDirectTestWant)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

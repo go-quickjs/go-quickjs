@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -55,7 +54,7 @@ func TestJITLoopEntriesSpendTheBudget(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `class Counter { #n = 0; add(n) { var j; for (j = 0; j < n; j++) this.#n = (this.#n + j) | 0; return this.#n } }
 		function field(n) { return new Counter().add(n) }`
 	var srcs []string

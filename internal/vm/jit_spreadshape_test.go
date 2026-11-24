@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func TestJITSpreadByLayout(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -30,6 +29,6 @@ func TestJITSpreadByLayout(t *testing.T) {
 		if got := v.String().Go(); got != spreadShapeWant {
 			t.Errorf("marking %v:\ngot  %s\nwant %s", marking, got, spreadShapeWant)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

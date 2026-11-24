@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestJITRegExpMatchResults(t *testing.T) {
 	want := strings.Fields(matchResultTestWant)
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -43,6 +42,6 @@ func TestJITRegExpMatchResults(t *testing.T) {
 		if got := r.jit.leafFast - fast; got < 4000 {
 			t.Errorf("marking %v: %d leaves' calls through the routine, want at least 4,000", marking, got)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

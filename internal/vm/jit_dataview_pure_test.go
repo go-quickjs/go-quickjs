@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func TestJITDataViewSetterInPureBody(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -36,6 +35,6 @@ func TestJITDataViewSetterInPureBody(t *testing.T) {
 		if jitSSACodeForTest(r, "kUint8") == nil {
 			t.Errorf("marking %v: kUint8 was not compiled", marking)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

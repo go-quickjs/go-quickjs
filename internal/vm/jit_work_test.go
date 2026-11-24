@@ -53,8 +53,7 @@ func TestJITCompileWork(t *testing.T) {
 	if !jitSSABackend || testing.Short() {
 		t.Skip("no SSA backend on this architecture, or short")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	got := map[string]int64{}
 	var order []string
 	put := func(item, what string, n int64) {

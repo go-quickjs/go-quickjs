@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -22,7 +21,7 @@ func TestJITLongLoopCompiledAgain(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var global_res
 		function long(n) { function f(a) { return 1 } var j, sum = 0; for (j = 0; j < n; j++) { sum += f(j); sum += f(j); sum += f(j); sum += f(j) } global_res = sum; return n * 4 }`
 	want := newTestRuntime(t, Config{})

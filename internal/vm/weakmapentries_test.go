@@ -3,7 +3,6 @@ package vm
 import (
 	"math/rand/v2"
 	"runtime"
-	"runtime/debug"
 	"testing"
 	"time"
 )
@@ -120,7 +119,7 @@ func TestWeakMapKeyEntriesInOrder(t *testing.T) {
 // runs does not look through them for any it has taken (weakMapState.pruned):
 // it had, at each doubling, found none gone.
 func TestWeakMapPrunesOnlyAfterCollection(t *testing.T) {
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// A collection that ran before has its count still to come, which a
 	// collection now and the wait for its count settle.
 	e := gcEpoch.Load()

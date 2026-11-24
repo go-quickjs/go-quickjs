@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -129,8 +128,7 @@ func TestJITSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	inlined := jitInlinedForTest(t)
 	listings, locations := map[string]string{}, map[string]string{}
 	jitTestSwitch(t, func(jc *jitTestConfig) { jc.annotate = switchOn })

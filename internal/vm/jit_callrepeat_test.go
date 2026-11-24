@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -22,7 +21,7 @@ func TestJITCallRepeatsInvalidate(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `function A(k) { this.k = k }
 		A.prototype.step = function (i) { let s = 0; for (let j = 0; j < 3; j++) s = (s + i * this.k + j) | 0; return s }
 		function B(k) { this.k = k; this.z = 1 }

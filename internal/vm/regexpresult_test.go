@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -90,14 +89,16 @@ const matchResultTestWant = "2661856178 3081 1410175481 853667658"
 // each answer is Node's, with the collector idle and running.
 func TestRegExpMatchResults(t *testing.T) {
 	for _, idle := range []bool{true, false} {
-		gc := debug.SetGCPercent(-1)
-		if !idle {
-			debug.SetGCPercent(1)
+		var release func()
+		if idle {
+			release = holdCollectorNow(t)
+		} else {
+			release = paceCollectorNow(t, 1)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, matchResultTestSrc))
 		r.Close()
-		debug.SetGCPercent(gc)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

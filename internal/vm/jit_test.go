@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -1026,7 +1025,7 @@ func TestJITSSACellsUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	defer paceCollectorNow(t, 1)()
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -1835,7 +1834,7 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var str='abcdefgh';
 		function builtins(n){let s=0;for(let i=0;i<n;i++)s=(s+framedCall(str,'q')+framedCall(str,'c'))|0;return s}
 		function mixed(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+framedCall(str,'c'))|0}return s}
@@ -2441,7 +2440,7 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	epoch := uint64(0)
 	jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
 	const chains = 30
@@ -2697,7 +2696,7 @@ func TestJITMemoryLimitKeepsEighth(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	for _, cfg := range []Config{{JIT: true, MemoryLimit: 16 << 20}, {JIT: true, JITMemoryLimit: 2 << 20}, {JIT: true, MemoryLimit: 1 << 30, JITMemoryLimit: 2 << 20}} {
 		epoch := uint64(0)
 		jitTestSwitch(t, func(jc *jitTestConfig) { jc.epochNow = func() uint64 { return epoch } })
@@ -2756,7 +2755,7 @@ func TestJITCallersCountedAsTheyJoin(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, jitChurnSource(6, 4))); err != nil {
 		t.Fatal(err)
@@ -3528,7 +3527,7 @@ func TestJITSSAReferenceStores(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function list(k){let h=null;for(let i=0;i<k;i++)h={v:i,next:h};return h}
 		function walk(h){let s=0,n=h,i=1;while(n&&i<1000){s+=n.v*i;i++;n=n.next}return s}
 		function rev(h){let p=null,n=h;while(n){const x=n.next;n.next=p;p=n;n=x}return p}
@@ -3582,7 +3581,7 @@ func TestJITSSAReferenceStoresUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	defer paceCollectorNow(t, 1)()
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -3817,8 +3816,7 @@ func jitTestSwitch(t testing.TB, set func(*jitTestConfig)) {
 func jitCollectorHeldForTest(t *testing.T) {
 	t.Helper()
 	jitEpochOnce.Do(jitArmEpoch)
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	for epoch := jitGCEpoch.Load(); jitGCEpoch.Load() == epoch; {
 		runtime.GC()
 		time.Sleep(time.Millisecond)
@@ -3969,7 +3967,7 @@ func TestJITSSAInlineEffects(t *testing.T) {
 				var hosts uint64
 				if i == 2 {
 					runtime.GC()
-					defer debug.SetGCPercent(debug.SetGCPercent(-1))
+					defer holdCollectorNow(t)()
 					hosts = entry("run").ssaStats.hosts
 				}
 				if i == 3 && marking == 3 {
@@ -4037,7 +4035,7 @@ func TestJITSSANestedInline(t *testing.T) {
 		return proto.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
 	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// What run's last compile inlined (ssa.Func's Inlined), which register
 	// code's entry does not keep.
 	var inlined []uintptr
@@ -4136,7 +4134,7 @@ func TestJITSSANativeConstruct(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	entry := func(name string) *jitEntry {
 		return jitClosureCodeForTest(r, r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure)
 	}
@@ -4210,7 +4208,7 @@ func TestJITSSANativeArrayConstruct(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	cl := r.global.getOwn(r.atoms.intern("arrays")).value().Object().fn().closure
 	checked := false
 	for i := range 6 {
@@ -4277,7 +4275,7 @@ func TestJITSSANativeCallThroughCall(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	entry := func(name string) *jitEntry {
 		return jitFunctionCodeForTest(r, r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure)
 	}
@@ -4344,7 +4342,7 @@ func TestJITSSANativePop(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	cl := r.global.getOwn(r.atoms.intern("drain")).value().Object().fn().closure
 	var builds map[*bytecode.Function]jitBuildForTest
 	builds = jitBuildsForTest(t)
@@ -4434,7 +4432,7 @@ func TestJITSSANativePush(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	var builds map[*bytecode.Function]jitBuildForTest
 	builds = jitBuildsForTest(t)
 	run := func(name, src string) {
@@ -4586,7 +4584,7 @@ func TestJITSSANativeAppend(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	run := func(name, src string) {
 		t.Helper()
 		wv, err := want.Run(compileForTest(t, src))
@@ -4755,7 +4753,7 @@ func TestJITSSAPropertyAdds(t *testing.T) {
 		}
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	run := func(name, src string) {
 		t.Helper()
 		wv, err := want.Run(compileForTest(t, src))
@@ -4810,7 +4808,7 @@ func TestJITSSASharedContextsFollowDepth(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -4857,7 +4855,7 @@ func TestJITSSACallsSettleLate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	var hosts uint64
 	for m := range 9 {
 		src := fmt.Sprintf("String(run(%d,400))", min(m, 7))
@@ -4902,7 +4900,7 @@ func TestJITSSAPolymorphicReads(t *testing.T) {
 	// While the collector marks, Go makes native calls, and a function all
 	// of whose calls Go then makes is rightly demoted: not here.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function A(){this.a=1}A.prototype.k=1;A.prototype.m=function(){return 10};
 		function B(){this.b=2;this.a=0}B.prototype.k=2;B.prototype.m=function(){return 20};
 		function C(){}C.prototype=Object.create({k:3,m(){return 30}});
@@ -4964,7 +4962,7 @@ func TestJITSSAStoreOverLiveCell(t *testing.T) {
 	// While the collector marks, Go makes native calls, and a function all
 	// of whose calls Go then makes is rightly demoted: not here.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function L(v){this.v=v;this.link=null}
 		L.prototype.append=function(queue){this.link=null;if(queue==null)return this;var peek,next=queue;while((peek=next.link)!=null)next=peek;next.link=this;return queue};
 		var append=L.prototype.append;
@@ -5077,7 +5075,7 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 	// While the collector marks, Go makes native calls, and a function all
 	// of whose calls Go then makes is rightly demoted: not here.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var A={v:3},B={v:5},o={p:A},c={n:0},L={get n(){return String(c.n).length}};
 		function tick(){c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return L.n;return c.n&3}
 		function zero(){let z=0;for(let j=0;j<1;j++)z=tick();return z}
@@ -5130,7 +5128,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var A={v:3},B={v:5},o={p:A},c={n:0},L={get n(){return String(c.n).length}};
 		function tick(){let k=0;for(let j=0;j<1;j++)k++;c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return (L+"").length+k;return (c.n&3)+k}
 		function f(n){let s=0.5,t=0,p=o.p;for(let i=0;i<n;i++){s=s*1.0001+tick();t=(t+p.v)|0;s+=i*0.5}return [s,t,p.v,c.n].join()}
@@ -5186,7 +5184,7 @@ func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var A={v:3},B={v:5},L={a:0,get n(){return String(this.a).length}};
 		function put(a,i){a[0]=(i&1)?B:A;L.a=i;return (L+String(L.a)).length&1}
 		function f(a,n){let t=0;for(let i=0;i<n;i++){const x=a[0];t=(t+put(a,i))|0;t=(t*3+x.v)|0}return t}
@@ -5245,7 +5243,7 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var mode=0,L={a:0,get n(){return String(this.a).length}};
 		function leaf(a){if(mode)return (a*3)|0;L.a=a;return L.n}
 		function other(n){let t=0;for(let i=0;i<n;i++)t=(t+leaf(i))|0;return t}
@@ -5306,7 +5304,7 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const sites, kinds = 12, 4
 	var b strings.Builder
 	for k := 0; k < sites*kinds; k++ {
@@ -5373,7 +5371,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function A(){};A.prototype.v=1;function B(){};B.prototype.v=2;
 		function C(){};C.prototype.v=3;function D(){};D.prototype.v=4;
 		var one=[new A()],four=[new A(),new B(),new C(),new D()];
@@ -5456,7 +5454,7 @@ func TestJITSSASeedsPolymorphicMethodCalls(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `
 		class Sym { constructor(n) { this.n = n; this.flags = n & 3 } isType() { return false } isMember() { return false } }
 		class Inf extends Sym { constructor(n) { super(n); this.i = 0 } }
@@ -5527,7 +5525,7 @@ func TestJITSSALearnsSeenCallTargets(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `
 		class Sym { constructor(n) { this.n = n } kind() { return 1 } }
 		class A extends Sym { kind() { return 2 } }
@@ -5743,7 +5741,7 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function V(x){this.x=x;this.y=x+1}
 		function mk1(n){let t=0;for(let i=0;i<n;i++){const v=new V(i);t=(t+v.y)|0}return t}
 		function mk2(n){let t=0;for(let i=0;i<n;i++){const v=new V(i&15);t=(t*3+v.x)|0}return t}`
@@ -5795,7 +5793,7 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function P(x){this.x=x}
 		P.prototype.big=function(n){let s=0;for(let i=0;i<n;i++)s=(s+i*this.x)|0;return s};
 		function heavy(n){let s=1;for(let i=0;i<n;i++)s=(s*3+i)|0;return s}
@@ -5894,7 +5892,7 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// eq's own code, entered or called natively, compares: inlined in its
 	// callers' loops, as the register form's would be, its comparisons
 	// are theirs, which leave for their pushes and joins.
@@ -5958,7 +5956,7 @@ func TestJITSSAAssignsGlobals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var count=0;let lex=0;function P(x){this.x=x}
 		function bump(n){for(let i=0;i<n;i++){count=count+1;lex=lex+2;made=new P(i)}return [count,lex,made.x].join()}
 		function sbump(n){'use strict';let s=0;for(let i=0;i<n;i++){const c=count+3,l=lex-1;count=c;lex=l;s=(s+c)|0}return (s*7+count*3+lex)|0}
@@ -6008,7 +6006,7 @@ func TestJITSSAWritesGlobals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var g=0,h=1,o={v:1};globalThis.cur=o;globalThis.late=0;globalThis.gone=0;
 		function w(n){for(let i=0;i<n;i++){g=g+1;h=g*2;cur=o}return [g,h,cur.v].join()}
 		function sw(n){'use strict';let s=0;for(let i=0;i<n;i++){const old=g;g=old+1;s=(s+old*3+g)|0}return s}
@@ -6080,7 +6078,7 @@ func TestJITSSAResumesEveryLevel(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// leaf leaves native code at an addition of an object, whose
 	// conversion Go makes, in either form: a getter's read, which it had
 	// left at, the register form's code makes a call of Go.
@@ -6179,7 +6177,7 @@ func TestJITSSAProfitReturns(t *testing.T) {
 	// The collector off after one collection, which the judgments are not
 	// about: stretches its marking ended had not been judged.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// Go calls bump, which has a with statement native code makes none of,
 	// and step, through apply with an array: native code calls neither.
 	setup := `function T(){this.n=0;this.v=1}T.prototype.bump=function(){with(this){}this.n+=arguments.length+1};
@@ -6244,7 +6242,7 @@ func TestJITSSAContextsGrow(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function depth(n){if(n===0)return 0;return (depth(n-1)+n)|0}
 		function drive(k,n){let s=0;for(let i=0;i<k;i++)s=(s+depth(n))|0;return s}
 		function forever(n){return forever(n+1)+1}
@@ -6303,7 +6301,7 @@ func TestJITSSANativeCalls(t *testing.T) {
 	// While the collector marks, Go makes native calls, and a function all
 	// of whose calls Go then makes is rightly demoted: not here.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+(b===undefined?5:b))|0;return s}
 		function P(v){this.v=v}P.prototype.m=function(k){let s=this.v;for(let i=0;i<2;i++)s=(s+k*i)|0;return s};
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3}return t}
@@ -6382,7 +6380,7 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	defer paceCollectorNow(t, 1)()
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -6583,7 +6581,7 @@ func TestJITSSAMarkingUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	defer paceCollectorNow(t, 1)()
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -6756,7 +6754,7 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 	// While the collector marks, Go makes native calls, and a function all
 	// of whose calls Go then makes is rightly demoted: not here.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function A(v){this.v=v}A.prototype.get=function(k){this.n=k;return this.v+k};
 		function B(v){this.w=v;this.v=v*2}B.prototype.get=function(k){this.n=k;return this.v*k};
 		function C(v){this.v=v}C.prototype.get=function(k){return (this.v^k)+this.v};
@@ -6869,7 +6867,7 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	// Native calls are Go's while the collector marks.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function leaf(x,o){let s=x;for(let i=0;i<2;i++)s=(s*3+o.k)|0;return s}
 		function M(k){this.k=k}
 		M.prototype.m=function(x){let s=x;for(let i=0;i<2;i++)s=(s+this.k)|0;return s};
@@ -6960,7 +6958,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "leaf")
 	setup := `var leaf=(function(){let k=3;return function leaf(x){x.c=(x.c+k)|0;return x.c}})();
 		function useLeaf(o,n){let t=0;for(let i=0;i<n;i++)t=(t+leaf(o))|0;return t}
@@ -7020,7 +7018,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 	// Native calls are Go's while the collector marks: it does not, so that
 	// what the test counts is the calls'.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function h(x){return String(x).length+x}
 		function M(k){this.k=k}
 		M.prototype.m=function(x){return String(x).length+this.k}
@@ -7110,7 +7108,7 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 // on so (inUse).
 func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 	// Native calls are Go's while the collector marks.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	for _, tc := range []struct{ name, setup, run, last string }{
 		// The callee leaves at an addition of an object, whose conversion
 		// Go makes, and the interpreter, finishing it, calls host, which
@@ -7209,7 +7207,7 @@ func TestJITSSACalleeContextsKeepNothing(t *testing.T) {
 
 func jitCalleeContextsKeepNothing(t *testing.T) {
 	// The collector held off: only the flag says it marks.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function M(k){this.k=k;this.q={k:k}}
 		M.prototype.g=function(){let r=null;for(let j=0;j<2;j++)r=this.q;return r};
 		M.prototype.m=function(x){let t=0;for(let j=0;j<2;j++)t+=x+this.g().k;return t};
@@ -7260,7 +7258,7 @@ func TestJITSSAStringConstantsAndThrows(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function scale(v,n){if(v===undefined)throw "need a number, n="+n;const sep=",;";let s=0;for(let i=0;i<n;i++)s=(s+v*i)|0;return s*sep.length+n}
 		function guarded(v,n){try{return scale(v,n)}catch(e){return "caught "+e}}`
 	rounds := []string{`String(scale(3,300))`, `String(scale(3,300))`, `String(scale(5,300))`, `guarded(undefined,7)`, `String(guarded(2,300))`, `String(scale(7,300))`}
@@ -7311,7 +7309,7 @@ func TestJITSSAInlinedConstructions(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function W(x){this.a=x;this.b=x*2}
 		W.prototype.sum=function(){return this.a+this.b};
 		function build(xs,n){let s=0,w;for(let i=0;i<n;i++){w=new W(xs[i%xs.length]);s=(s+w.b)|0}return [s,w.sum(),Object.getPrototypeOf(w)===W.prototype].join()}
@@ -7376,7 +7374,7 @@ func TestJITSSAInlinedForwardingConstructions(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
 		var V=Class.create();V.prototype={initialize:function(x,y){this.x=x;this.y=y},len:function(){return this.x+this.y}};
 		var C=Class.create(),stats={n:0};C.prototype={initialize:function(r){stats.n=stats.n+1;this.r=r*2}};
@@ -7447,7 +7445,7 @@ func TestJITSSAMathIntrinsics(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function mag(v){return Math.sqrt(v.x*v.x+v.y*v.y)}
 		function sum(n,vs){let s=0,z=0;for(let i=0;i<n;i++){const v=vs[i%vs.length];s+=mag(v)+Math.abs(v.x-3);z=Math.abs(-0*v.y)}return [s,1/z,Math.sqrt(-1)].join()}
 		var vs=[{x:3,y:4},{x:-1,y:2},{x:0,y:0},{x:-0,y:-0}],odd=[{x:3,y:4},{x:"9",y:0},{x:-4,y:3}]`
@@ -7508,7 +7506,8 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(1))
+	releasePace := paceCollectorNow(t, 1)
+	defer func() { releasePace() }()
 	calls, collect := 0, true
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {
@@ -7543,16 +7542,18 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 	syms := r.global.getOwn(r.atoms.intern("syms")).value().Object().fn().closure
 	rounds := []string{`cat(300)`, `cat(300)`, `cat(300)`, `cat(300)`, `String(walk(40))`, `String(walk(40))`, `String(walk(40))`,
 		`String(walk(40))`, `odd(300,obj)`, `odd(300,obj)`, `odd(300,obj)`, `[sym(),sym(),sym()].join()`, `big()`, `big()`, `cat(300)`}
+	releasePace()
 	for i, src := range rounds {
 		// walk's rounds collect only as they need to: a native call
 		// leaves for Go while the collector marks, which it would do much
 		// of the time, and tree be called natively seldom.
 		collect = i < 4 || i > 7
+		pace := 100
 		if collect {
-			debug.SetGCPercent(1)
-		} else {
-			debug.SetGCPercent(100)
+			pace = 1
 		}
+		releasePace()
+		releasePace = paceCollectorNow(t, pace)
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
@@ -7627,7 +7628,7 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 	// The collector runs only when the calls of Go run it, and has done
 	// marking when they return: one that marked through a round, as it
 	// may with two CPUs, had its constructions and literals leave.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	calls := 0
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {
@@ -7710,7 +7711,7 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 	// add to Go: a marking that spans the counted round, as under checkptr at
 	// GOMAXPROCS=1, would count as the adds' exits.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function mk(k,i){if(k==0)return {a:i};if(k==1)return {b:i,a:i};if(k==2)return {c:i};return {d:i,e:i}}
 		function adds(n){let t=0;for(let i=0;i<n;i++){const o=mk(i&3,i);o.s=i;t=(t+o.s)|0}return t}
 		function big(k){const o={p0:0,p1:1,p2:2,p3:3,p4:4,p5:5,p6:6,p7:7,p8:8};if(k)o.q=1;return o}
@@ -7800,7 +7801,7 @@ func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 	// pointer then): a marking that spans the counted round, as at
 	// GOMAXPROCS=1, would count as the calls' exits.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function f0(x) { return ((x + 1) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
 		function f1(x) { return ((x * 2) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
 		function f2(x) { return ((x - 3) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
@@ -7875,7 +7876,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	calls := 0
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {
@@ -8226,7 +8227,7 @@ func TestJITSSAReadsDropSupersededShapes(t *testing.T) {
 	// spans the last round, as under checkptr at GOMAXPROCS=1, would count
 	// as its reads' exits.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `function A(){this.v=1}A.prototype.m=function(i){this.n=i;return this.v+i};
 		function B(){this.v=2;this.w=0}B.prototype.m=function(i){this.n=i;return this.v*i};
 		function C(){this.u=0;this.v=3}C.prototype.m=function(i){this.n=i;return this.v^i};
@@ -8352,7 +8353,7 @@ func TestJITSSAMathPow(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function pw(n){let s=0;for(let i=0;i<n;i++){const k=i%9;s+=Math.pow(10,k)+Math.pow(-3,k)+Math.pow(i%7-3.5,2)+Math.pow(k,0)+Math.pow(2,53+k%2-1)/1e15+Math.abs(k-4)}return s}
 		function odd(n){let r;for(let i=0;i<n;i++){r=[Math.pow(10,23),Math.pow(17,13),Math.pow(0.3,3),Math.pow(2,-1),Math.pow(NaN,0),Math.pow(1,Infinity),1/Math.pow(-0,3),Math.pow(-2,2.5),Math.pow('3',2),Math.max(2,3),Math.pow(i%3,0),Math.pow(-2,63)]}return r.join()}
 		function one(x,y,n){let r=0;for(let i=0;i<n;i++)r=Math.pow(x,y);return r}
@@ -8427,7 +8428,7 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function P(){} P.prototype.k=7;
 		function Q(){this.z=1} Q.prototype.k=11;
 		function mk(){var re=/b+/,obj=new P();
@@ -8529,7 +8530,7 @@ func TestJITSSARemainder(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function wrap(t){t=t%2.0;if(t<-1)t+=2.0;if(t>=1)t-=2.0;return t}
 		function col(n){let s=0;for(let i=0;i<n;i++){s+=wrap(i*0.37-40)*wrap(i*0.11)}return s}
 		function sh(x){return Object.is(x,-0)?'-0':String(x)}
@@ -8600,7 +8601,7 @@ func TestJITSSAReadsWhatIsNotANumber(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function Eng(){this.options={w:"5",h:3};this.canvas=null}
 		Eng.prototype.sp=function(x,y){var pxW=this.options.w;var pxH=this.options.h;if(this.canvas){return x*pxW+y*pxH}return x+y+pxH};
 		var eng=new Eng();
@@ -8674,7 +8675,7 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var c={n:0,mode:0};
 		function inner(x){let s=x;for(let j=0;j<1;j++)s=s*2+1;if(c.n++%50===0)s+=probe(x);return s+escape(x).length}
 		function mid(x){let s=0;for(let j=0;j<1;j++)s=inner(x)+1;return s}
@@ -8780,7 +8781,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var c={n:0,last:''};
 		function cb(m){c.last=new Error('cb '+m).stack;return m.toUpperCase()}
 		function one(s){let r='';for(let j=0;j<1;j++)r=s.replace('b',cb);if(c.n++%25===0)r+=hook('one');return r.length}
@@ -8880,7 +8881,7 @@ func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function work(i){let w=i;for(let j=0;j<40;j++)w=(w*31+j)^(w>>>3);return w}
 		function fa(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i)+probe(i+1))|0;return s}
 		function fb(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i)*2)|0;return s}
@@ -8963,7 +8964,7 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function work(i){let w=i;for(let j=0;j<40;j++)w=(w*31+j)^(w>>>3);return w}
 		function d7(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i))|0;return s}
 		function e7(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i)*3)|0;return s}
@@ -9046,7 +9047,7 @@ func TestJITSSABuiltinCallsAsCallDirect(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var bi=String.prototype.indexOf.bind('zzc');
 		function body(i,k){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);
 			return (w+'x'.repeat(70000).length+Math.max(i,3)+String.prototype.indexOf.call('abc','c')+bi('c')+'a'.repeat(k).length)|0}
@@ -9105,7 +9106,7 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	var many, live strings.Builder
 	many.WriteString("var str='abcdefgh';function many(n){let t=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<40;j++)w=(w*31+j)^(w>>>3);t=(t+w)|0;")
 	live.WriteString("function live(n){let t=0;for(let i=0;i<n;i++){")
@@ -9179,7 +9180,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var k={mode:0};
 		function loop(n){let s=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);s=(s+w+framedCall('abc','c')+again(i,k.mode))|0;s=(s*3+i)|0}return s}
 		function run(n){try{return loop(n)}catch(e){return e.message}}`
@@ -9262,7 +9263,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var d={k:0};
 		function leaf(s){let r=0;for(let j=0;j<1;j++)r=s.length;if(d.k)r+=again(d.k===2).length;return r}
 		function root(n){let t=0;for(let i=0;i<n;i++){const m=i%10;d.k=m===1?1:m===3?2:0;t=(t*3+leaf('ab'+i))|0;if(m===2)t=(t+again(true).length)|0}return t}`
@@ -9352,7 +9353,7 @@ func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
 	// While the collector marks, Go makes native calls, which would count
 	// as calls leaving native code.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var c={n:0};
 		function leaf(n){let s=0;for(let i=0;i<n;i++){s=(s*3+i)|0;c.n++}return s}
 		function mid(n){let t=0;for(let j=0;j<8;j++){if(j===5&&n<0)cancel();t=(t+leaf(n<0?-n:n))|0}return t}`
@@ -9429,7 +9430,7 @@ func TestJITSSAElementStoresGrow(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function fill(a,n){let i=n;while(--i>=0)a[i]=i*2;for(i=0;i<n;i++)a[n+i]=i+0.5;return a}
 		function sum(a){let s=0;for(let i=0;i<a.length;i++)s+=a[i];return s}
 		function run(k){let t=0;for(let j=0;j<k;j++)t+=sum(fill([],20+(j&3)));return t}
@@ -9485,7 +9486,7 @@ func TestJITSSACharCodeAtInNativeCallees(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var T=[];for(var k=48;k<58;k++)T[k]=k-48;
 		function intAt(s,i){var c=T[s.charCodeAt(i)];return (c==null)?-1:c}
 		function parse(s){let t=0;for(let i=0;i<s.length;i++){t=(t*7+intAt(s,i))|0}return t}
@@ -9561,7 +9562,7 @@ func TestJITSSAAbsentElementsAreUndefined(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var T=[];for(var k=48;k<58;k++)T[k]=k-48;
 		function look(s,i){let c=0;for(let j=0;j<1;j++)c=T[s.charCodeAt(i)];return (c==null)?-1:c}
 		function scan(s){let t=0;for(let i=0;i<s.length;i++){t=(t*7+look(s,i))|0;t=(t+(T[i+70]===undefined?1:2))|0}return t}
@@ -9785,7 +9786,7 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
 		var NS={};NS.B=Class.create();NS.B.prototype={initialize:function(x,y){this.x=x;this.y=y}};
 		NS.A=Class.create();NS.A.prototype={hit:false,initialize:function(){this.c=new NS.B(1,2)}};
@@ -9846,7 +9847,7 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function mk(x,y){return {a:x,b:y,c:x+y}}
 		function run(n){let s=0;for(let i=0;i<n;i++){const o=mk(i,1),p={q:{r:i},t:o.c};s=(s+o.a+o.b+o.c+p.q.r+p.t)|0}return s}
 		function odd(n){let s=[];for(let i=0;i<n;i++){const k='k'+(i&1),src={z:i};
@@ -9924,7 +9925,7 @@ func TestJITSSAStringConstants(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var o={k:''};function same(a,b){return a===b?1:0}
 		function run(xs,n){let s=0,last;for(let i=0;i<n;i++){const x=xs[i%xs.length];
 			s=(s+(x==='abc'?1:0)+same(x,'xyz')*10)|0;o.k='set';last=['p','q',x]}return [s,o.k,last.join(''),'end'].join()}
@@ -9981,7 +9982,7 @@ func TestJITSSACapturedBindings(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "")
 	setup := `var rnd=(function(){var seed=49734321;return function(){
 			seed=((seed+0x7ed55d16)+(seed<<12))&0xffffffff;seed=((seed^0xc761c23c)^(seed>>>19))&0xffffffff;
@@ -10069,7 +10070,7 @@ func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function sub(v,w){if(!w||!v)throw 'Vectors ['+v+','+w+']';return v.x-w.x}
 		function run(n){let s=0;const a={x:5},b={x:2};for(let i=0;i<n;i++)s=(s+sub.call(undefined,a,b)+i)|0;return s}
 		function bad(){try{return sub({x:1},undefined)}catch(e){return e}}
@@ -10139,7 +10140,7 @@ func TestJITSSAArrayLiterals(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var o={k:1},str='s';
 		function mk(x){return [x,x+1,str,o,[x],[],null,undefined,true,1.5]}
 		function run(n){let s=0;for(let i=0;i<n;i++){const a=mk(i),b=[i,2];s=(s+a[0]+a[1]+a.length+a[4][0]+a[5].length+b[1]+(a[3]===o?1:0))|0}return s}
@@ -10202,7 +10203,7 @@ func TestJITSSAMegamorphicOwnReads(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var P={x:50},objs=[Object.create(P),{x:1},{y:2,x:3},{z:4,x:5},{w:6,x:7},{v:8,x:9},{u:10,x:11},{t:12,s:13,x:14}];
 		function sum(a,n){let s=0;for(let i=0;i<n;i++){s=(s+a[i%a.length].x)|0}return s}
 		var odd=objs.concat([Object.create({x:100}),{q:1}])`
@@ -10258,7 +10259,7 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function V(x){this.x=x} V.prototype={add(a,b){return (a+b)|0}};
 		function W(){} var NS={V:V,W:W};
 		function run(n){let s=0;for(let i=0;i<n;i++){s=NS.V.prototype.add(s,i)}return s}
@@ -10330,7 +10331,7 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
 		var Ray=Class.create();Ray.prototype={position:null,direction:null,initialize:function(pos,dir){this.position=pos;this.direction=dir}};
 		var NS={Ray:Ray},d={x:2};
@@ -10450,7 +10451,7 @@ func TestJITSSAInstanceOf(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function P(a){this.a=a}function Q(){}
 		function isP(x){return x instanceof P}
 		function count(xs,n){let c=0;for(let i=0;i<n;i++){const x=xs[i%xs.length];if(isP(x))c++;if(x instanceof Q)c+=10}return c}
@@ -10511,7 +10512,7 @@ func TestJITSSATypeOf(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	setup := `function isNum(x){return typeof x==="number"}
 		function kinds(xs,n){let c=0;for(let i=0;i<n;i++){const x=xs[i%xs.length];if(isNum(x))c+=1;if(typeof x==="string")c+=10;
 			if(typeof x!=="boolean")c+=100;if(typeof x=="undefined")c+=1000;c+=(typeof x==="function")?10000:0}return [c,typeof xs[2]].join()}

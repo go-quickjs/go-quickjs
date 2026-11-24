@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -24,8 +23,7 @@ func TestJITGlobalEpoch(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	const setup = `
 		// k configurable, as an assignment makes it, which a delete takes and
 		// a later script's let may shadow.
@@ -88,8 +86,7 @@ func TestJITGlobalEpochPaths(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	const setup = `
 		globalThis.k = 3; var step = 1;
 		(0, eval)('var ev = 4; function fe(x) { return x + 1 }');
@@ -166,8 +163,7 @@ func TestJITGlobalEpochWhole(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	both := jitBothForTest(t, `
 		globalThis.k = 3;
 		function hot(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + i * k) | 0; return s; }`)
@@ -192,8 +188,7 @@ func TestJITGlobalEpochRealms(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	const setup = `
 		globalThis.k = 3;
 		function hot(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + i * k) | 0; return s; }`

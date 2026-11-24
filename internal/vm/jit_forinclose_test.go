@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -60,12 +59,12 @@ func TestJITForInClose(t *testing.T) {
 		st := e.ssaStats
 		prog := compileForTest(t, "''+brk(1000)")
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
 		v, err = r.Run(prog)
 		runtime.ReadMemStats(&m1)
-		debug.SetGCPercent(gc)
+		release()
 		if err != nil || v.String().Go() != "1000" {
 			t.Fatalf("marking %v: brk(1000) = %v, %v", marking, v, err)
 		}

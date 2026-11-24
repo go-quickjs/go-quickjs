@@ -31,9 +31,11 @@ func heavyLimit() int {
 // it until t and its cleanups are done. A test calls it after t.Parallel
 // and holds the slot for its own work: its subtests, if any, run in its
 // body, not in parallel, so that none waits for a -parallel slot that a
-// test waiting for a heavy slot holds.
+// test waiting for a heavy slot holds. It runs while no other test holds
+// the collector off (collector), whose holds wait for it in turn.
 func heavy(t *testing.T) {
 	t.Helper()
 	heavySlots <- struct{}{}
 	t.Cleanup(func() { <-heavySlots })
+	t.Cleanup(collector.enterHeavy(t.Name()))
 }

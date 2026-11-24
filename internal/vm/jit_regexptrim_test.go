@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestJITRegExpTrimReplace(t *testing.T) {
 	want := strings.Split(regexpTrimTestWant, " # ")[0]
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -35,6 +34,6 @@ func TestJITRegExpTrimReplace(t *testing.T) {
 		if got := v.String().Go(); got != want {
 			t.Errorf("marking %v:\ngot  %s\nwant %s", marking, got, want)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

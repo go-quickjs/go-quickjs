@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -78,14 +77,16 @@ const replaceFlatTestWant = "2637138712 3380 TypeError TypeError3 aa sub:aab bbb
 // idle and running.
 func TestRegExpReplaceFlat(t *testing.T) {
 	for _, idle := range []bool{true, false} {
-		gc := debug.SetGCPercent(-1)
-		if !idle {
-			debug.SetGCPercent(1)
+		var release func()
+		if idle {
+			release = holdCollectorNow(t)
+		} else {
+			release = paceCollectorNow(t, 1)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, replaceFlatTestSrc))
 		r.Close()
-		debug.SetGCPercent(gc)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

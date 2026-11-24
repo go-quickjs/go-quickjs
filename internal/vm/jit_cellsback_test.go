@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -54,7 +53,7 @@ func TestJITCellsBack(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	calls := 0
 	jitTestSwitch(t, func(jc *jitTestConfig) {
 		jc.goCallWork = func() {

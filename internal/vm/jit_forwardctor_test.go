@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"testing"
 
@@ -67,7 +66,7 @@ func TestJITForwardingConstructors(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// Each class constructed once, as a program's setup does, before
 	// build's loop is compiled: a forwarding constructor is inlined once
 	// its code has run.

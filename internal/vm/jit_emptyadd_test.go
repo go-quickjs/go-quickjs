@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -33,7 +32,7 @@ func TestJITEmptyStringAdd(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -67,6 +66,6 @@ func TestJITEmptyStringAdd(t *testing.T) {
 		}
 		jitNativeForTest(t, r, "mixed")
 		jitNativeForTest(t, r, "inl")
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

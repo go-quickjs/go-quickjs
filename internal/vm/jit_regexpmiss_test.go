@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestJITRegExpLeafMisses(t *testing.T) {
 	want := regexpMissTestWant[strings.LastIndex(regexpMissTestWant[:strings.LastIndex(regexpMissTestWant, " | ")], " | ")+3:]
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -51,6 +50,6 @@ func TestJITRegExpLeafMisses(t *testing.T) {
 		if got, want := v.String().Go(), regexpMissTestWant[:strings.Index(regexpMissTestWant, " | ")]; got != want {
 			t.Errorf("marking %v: misses:\ngot  %s\nwant %s", marking, got, want)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 	"time"
 	"weak"
@@ -154,7 +153,7 @@ func TestWeakMapSparesGoAfterCollection(t *testing.T) {
 	// quickjs_verify): one finished first, and none started until the
 	// test's.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := newTestRuntime(t, Config{})
 	q := r.weakMapRegistry()
 	e := gcEpoch.Load()

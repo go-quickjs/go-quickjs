@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -55,7 +54,7 @@ func TestJITLeafFast(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitLeafFastForTest(t)
 	code := jitNativeCodeForTest(t, r, "leafTurns")
 	e := code.e

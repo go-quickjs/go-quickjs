@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -24,7 +23,7 @@ func TestJITSSAReadsKeepLiveAncestorShapes(t *testing.T) {
 	// While the collector marks, native calls leave for Go: held off, so
 	// that the rounds' counts are their reads'.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `function S(){this.a=1;this.b=2;this.c=3}
 		var old=[new S,new S,new S,new S], neu=[new S,new S,new S,new S];
 		for (const o of neu) o.d=4;

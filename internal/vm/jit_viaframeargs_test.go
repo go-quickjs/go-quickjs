@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"testing"
 )
@@ -67,8 +66,7 @@ func TestJITCallThroughCallFrameArguments(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	for _, marking := range []bool{false, true} {
 		if marking {
 			jitMarkingForTest(t)
@@ -149,8 +147,7 @@ func TestJITApplyFrameArguments(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	for _, marking := range []bool{false, true} {
 		if marking {
 			jitMarkingForTest(t)

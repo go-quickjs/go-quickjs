@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"runtime/debug"
 	"testing"
 )
 
@@ -65,8 +64,7 @@ func TestJITRegWideCallsOfGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			if marking {

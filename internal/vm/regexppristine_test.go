@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -176,11 +175,11 @@ func regexpPristineCheck(t *testing.T, r *Runtime, c regexpPristineCase, where s
 // longer pristine.
 func TestRegExpPristine(t *testing.T) {
 	for _, c := range regexpPristineCases {
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		r := newTestRuntime(t, Config{})
 		regexpPristineCheck(t, r, c, "tree tier")
 		r.Close()
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 

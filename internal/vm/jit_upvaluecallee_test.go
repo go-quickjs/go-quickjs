@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -21,7 +20,7 @@ func TestJITCapturedCalleeSeeded(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `var run = (function () {
 			function leaf(x) { return x * 2 + 1 }
 			function twice(x) { return leaf(x) + leaf(x + 1) }

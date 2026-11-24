@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -37,14 +36,15 @@ const regexpRareUnitTestWant = `11374 {"Q":"‰","QQ":"Q\"","x"#,"Qngr":"\/Qngr"
 // finds Node's matches, with the collector idle and running.
 func TestRegExpRareUnit(t *testing.T) {
 	for _, idle := range []bool{true, false} {
+		release := func() {}
 		if idle {
 			runtime.GC()
-			debug.SetGCPercent(-1)
+			release = holdCollectorNow(t)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpRareUnitTestSrc+"run() + ' # ' + run()"))
 		r.Close()
-		debug.SetGCPercent(100)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

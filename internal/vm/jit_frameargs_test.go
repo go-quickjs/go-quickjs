@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -53,7 +52,7 @@ func TestJITFrameArguments(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, frameArgsSetup)
 	for range 3 {
 		both.agree(t, `run(300)`)
@@ -177,8 +176,7 @@ func TestJITMappedArgumentsSeeIndexUpdate(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	for _, marking := range []bool{false, true} {
 		if marking {
 			jitMarkingForTest(t)

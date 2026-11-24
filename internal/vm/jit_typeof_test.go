@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -64,7 +63,7 @@ func TestJITTypeofNative(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			runtime.GC()
-			defer debug.SetGCPercent(debug.SetGCPercent(-1))
+			defer holdCollectorNow(t)()
 			want := newTestRuntime(t, Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
 			r := jitRuntimeForTest(t, Config{JIT: true})

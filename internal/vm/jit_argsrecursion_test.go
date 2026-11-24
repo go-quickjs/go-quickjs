@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -42,7 +41,7 @@ func TestJITArgumentsInRecursion(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, argsRecursionSetup)
 	for range 30 {
 		both.agree(t, `run(20)`)

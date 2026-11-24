@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -74,7 +73,7 @@ func TestJITBigTypedArrays(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -105,7 +104,7 @@ func TestJITBigTypedArrays(t *testing.T) {
 				t.Errorf("marking %v: %s left native code %d times, made %d calls of Go", marking, name, e.ssaStats.ended-ended, e.ssaStats.goCalls-calls)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }
 
@@ -143,8 +142,8 @@ func TestJITBigTypedWrites(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
-		t.Cleanup(func() { debug.SetGCPercent(gc) })
+		release := holdCollectorNow(t)
+		t.Cleanup(release)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -178,6 +177,6 @@ func TestJITBigTypedWrites(t *testing.T) {
 					calls, e.ssaStats.hosts-st.hosts, e.ssaStats.guards-st.guards, e.ssaStats.ended-st.ended)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

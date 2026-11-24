@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -265,7 +264,7 @@ func TestJITRegExpNativeSearch(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -286,6 +285,6 @@ func TestJITRegExpNativeSearch(t *testing.T) {
 		if ascii < 15 || wide < 4 {
 			t.Errorf("marking %v: %d patterns have native code over bytes, %d over UTF-16", marking, ascii, wide)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

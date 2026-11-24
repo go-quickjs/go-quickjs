@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -116,7 +115,7 @@ func TestJITOSRCodeApart(t *testing.T) {
 	// The objects unmade again at the calls after it, in the function's
 	// code, which Go enters.
 	starts, learned := life.starts, r.jit.osrLearned
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	runtime.GC()
 	jitCallbackMallocs(t, r, `sum(1000, -1)`)
 	if n := jitCallbackMallocs(t, r, `sum(20000, -1)`); n > 200 {

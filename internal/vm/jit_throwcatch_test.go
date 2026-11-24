@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -63,7 +62,7 @@ func TestJITThrowsCaughtNatively(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	rounds := []string{}
 	for range 3 {
 		rounds = append(rounds, `primitives(300)`, `values(300)`, `nested(300)`, `noBinding(300)`, `finallyToo(300)`, `rethrows(300)`, `caller(300)`)

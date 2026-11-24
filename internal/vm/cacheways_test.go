@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 	"unsafe"
 )
@@ -34,8 +33,7 @@ function adds(picks, n) { for (var r = 0; r < n; r++) for (var i = 0; i < picks.
 // sites' caches and the cache of additions start again.
 func deepProbe(t *testing.T, r *Runtime) (changes func() int, reset func()) {
 	runtime.GC()
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	var last deepAdds
 	n := 0
 	probe := r.NewFunction("probe", 0, func(r *Runtime, this Value, args []Value) (Value, error) {

@@ -225,3 +225,51 @@ func TestNoTestSetsAProcessSwitch(t *testing.T) {
 		t.Errorf("a test sets a package variable every runtime reads: %s", s)
 	}
 }
+
+// collectorHelpers are the test files that may set the process's
+// collector's percent: internal/vm's collector gate, whose holds and paces
+// every other test goes through.
+var collectorHelpers = map[string]bool{
+	"internal/vm/collector_test.go": true,
+}
+
+// TestNoTestSetsTheCollectorPercent fails where a test calls
+// debug.SetGCPercent but through the collector gate (internal/vm's
+// collector_test.go: holdCollector, paceCollector): saved and restored by
+// each of two overlapping tests on its own, the percent had been left off
+// for the rest of the package, and its heavy tests' garbage ran the
+// process out of memory.
+func TestNoTestSetsTheCollectorPercent(t *testing.T) {
+	t.Parallel()
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); path != "." && (strings.HasPrefix(name, ".") || name == "testdata" || strings.HasPrefix(name, "zz")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") || collectorHelpers[filepath.ToSlash(path)] {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if s, ok := c.Fun.(*ast.SelectorExpr); ok && s.Sel.Name == "SetGCPercent" {
+					t.Errorf("%s: SetGCPercent outside the collector gate: hold or pace the collector through it (holdCollector, paceCollector)", fset.Position(c.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

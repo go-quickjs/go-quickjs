@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"slices"
 	"testing"
 )
@@ -20,7 +19,7 @@ func TestJITResumeEntriesOnDemand(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		function g(x) { let s = 0; for (let i = 0; i < 3; i++) s += x; return s }
 		function g2(x) { let s = 1; for (let i = 0; i < 2; i++) s += x; return s }
@@ -99,7 +98,7 @@ func TestJITEntriesAfterInlinedCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		var Q = class {
 			constructor() { this.rows = [true, true, true, true, true, true, true, true]; this.maxs = []; this.mins = []; for (let i = 0; i < 16; i++) { this.maxs[i] = true; this.mins[i] = true } }

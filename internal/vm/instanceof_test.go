@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 	"unsafe"
 )
@@ -113,7 +112,7 @@ not callable=TypeError`
 func TestInstanceOfKnown(t *testing.T) {
 	// The entries are forgotten each time the collector has run, which a
 	// collection during the run would do before they are counted.
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := newTestRuntime(t, Config{})
 	v, err := r.Run(compileForTest(t, instanceOfChangesSrc))
 	if err != nil {
@@ -141,7 +140,7 @@ func TestInstanceOfKnownEntry(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) == 8 && unsafe.Sizeof(propCache{}) != 80 {
 		t.Fatalf("property cache grew to %d bytes", unsafe.Sizeof(propCache{}))
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function F() {}; const o = new F(); for (let i = 0; i < 3; i++) o instanceof F; F`))

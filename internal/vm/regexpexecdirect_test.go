@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -62,14 +61,15 @@ const regexpExecDirectTestWant = "4:4,3,1, 4:2,1,1, 4:1,-,1, 7:-,-,-, 0:null 2:2
 func TestRegExpExecDirect(t *testing.T) {
 	want := regexpExecDirectTestWant + " # " + regexpExecDirectTestWant
 	for _, idle := range []bool{true, false} {
+		release := func() {}
 		if idle {
 			runtime.GC()
-			debug.SetGCPercent(-1)
+			release = holdCollectorNow(t)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpExecDirectTestSrc))
 		r.Close()
-		debug.SetGCPercent(100)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

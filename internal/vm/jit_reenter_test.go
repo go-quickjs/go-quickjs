@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -336,7 +335,7 @@ func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	// had made one of its calls Go's, and the round not counted -- three
 	// of four on a CI runner.
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	// A number's property written, at a site megamorphic for it, is left
 	// to Go at an exit with no entry after it (jitStressConfig's
 	// primLeave).

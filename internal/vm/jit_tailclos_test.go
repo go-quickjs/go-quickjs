@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -151,14 +150,14 @@ func TestJITRegTailCalledClosures(t *testing.T) {
 				// made at each of its 20,000 calls where it is not
 				// inlined: none, what the script's own compile takes
 				// apart.
-				gc := debug.SetGCPercent(-1)
+				release := holdCollectorNow(t)
 				prog := compileForTest(t, loop1000("has(bag, i % 13)"))
 				var before, after runtime.MemStats
 				runtime.GC()
 				runtime.ReadMemStats(&before)
 				v, err := r.Run(prog)
 				runtime.ReadMemStats(&after)
-				debug.SetGCPercent(gc)
+				release()
 				if got := regNativeShow(r, v, err); got != "14" {
 					t.Errorf("has(bag, i %% 13) = %q, want 14", got)
 				}

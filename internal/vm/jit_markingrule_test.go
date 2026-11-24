@@ -6,7 +6,6 @@ import (
 	"os"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"testing"
@@ -244,12 +243,12 @@ const jitMarkingAllocLimit = 8 << 30
 // from the middle of the run on, typed_sort's among them.
 func jitMarkingHeldForTest() (restore func()) {
 	jitEpochOnce.Do(jitArmEpoch)
-	gc := debug.SetGCPercent(-1)
+	release := holdCollectorNow(nil)
 	for epoch := jitGCEpoch.Load(); jitGCEpoch.Load() == epoch; {
 		runtime.GC()
 		time.Sleep(time.Millisecond)
 	}
-	return func() { debug.SetGCPercent(gc) }
+	return release
 }
 
 // jitMarkingBudget is the JIT's memory for jitMarkingRun's runtimes. The

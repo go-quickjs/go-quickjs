@@ -593,13 +593,20 @@ ten minutes, the standard library rebuilt):
 go run ./internal/cmd/hoistcheck
 ```
 
-A test that turns the collector off restores it in its cleanup, as
-`gc := debug.SetGCPercent(-1); t.Cleanup(func() { debug.SetGCPercent(gc) })`.
-`defer debug.SetGCPercent(debug.SetGCPercent(-1))` is right in a defer,
-whose arguments are evaluated at once, but wrapped in a closure for
-`t.Cleanup` it turns the collector off again at the end: every JIT test after
-one such cleanup ran without a collection, which kept the crash above out of
-CI for as long as it was there.
+A test that turns the collector off does it through internal/vm's
+collector gate (`collector_test.go`): `holdCollector(t)` holds it off until
+the test's cleanups, `defer holdCollectorNow(t)()` for a function's run,
+and `paceCollector(t, 1)` runs it at a percent while nothing holds it. The
+gate counts its holds -- the first turns the collector off, the last gives
+it back the percent the first found -- where each test saving and
+restoring the percent on its own could leave it off: of two overlapping
+holds the first saved 100, the second -1, the first restored 100 and the
+second -1, and every test after ran with no collection, the package's
+process past 77 GB under `QJS_JIT_STRESS`. Before it, a cleanup of
+`func() { debug.SetGCPercent(debug.SetGCPercent(-1)) }` turned the
+collector off again at its end, which kept the crash above out of CI for as
+long as it was there. `TestNoTestSetsTheCollectorPercent` (the root
+package) fails on any other call of `debug.SetGCPercent` in a test.
 
 How a test picks a mode: it makes its runtimes in it, never sets a
 package variable, which every other runtime in the process would see.
@@ -630,10 +637,11 @@ assigns a package variable of the module's code outside an `init`; its
 allowlist says why for each it still lets a test set.
 
 What still keeps a test from running in parallel is what is the
-process's by nature: the collector's percent (`debug.SetGCPercent`,
+process's by nature: the collector's percent (the collector gate's,
 which `nativeCounting`, `jitCollectorHeldForTest` and the tests that
-count allocations or exits hold off: another test's restore turns it on
-again), the Go handler tables `runReg`'s loop indexes directly
+count allocations or exits hold off: a hold lasts until the last holder
+lets go, and no memory-heavy test (`heavy`) runs while one does, nor one
+begins while a heavy test runs), the Go handler tables `runReg`'s loop indexes directly
 (`regTable`, which the operation-mix tests wrap), the write-barrier flag
 and the CPU's features.
 

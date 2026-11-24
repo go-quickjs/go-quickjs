@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -20,7 +19,7 @@ func TestJITPatternReadsAbsent(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		function opts(a, o) { let s = 0; for (let i = 0; i < 4; i++) { const { x, y = 2, z = 'z' } = o; s += a + x + y + z.length } return s }
 		function run(n, o) { let s = 0; for (let i = 0; i < n; i++) s += opts(i, o); return s }
@@ -62,7 +61,7 @@ func TestJITPatternReadPending(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "w")
 	both := jitBothForTest(t, `
 		function w(a, { x, y = 2 } = { x: a + 1 }) { return a + x + y }
@@ -90,7 +89,7 @@ func TestJITPatternReadsLearnTheirMisses(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		function hits(o, n) { let s = 0; for (let i = 0; i < n; i++) s = (s + i) | 0; const { a, b } = o; return s + a + b }
 		function misses(o, n) { let s = 0; for (let i = 0; i < n; i++) s = (s + i) | 0; const { a, b = 2 } = o; return s + a + b }

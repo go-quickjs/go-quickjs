@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -180,8 +179,7 @@ func TestJITTypedLayout(t *testing.T) {
 	for _, marking := range []bool{false, true} {
 		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
 			runtime.GC()
-			gc := debug.SetGCPercent(-1)
-			t.Cleanup(func() { debug.SetGCPercent(gc) })
+			holdCollector(t)
 			if marking {
 				jitMarkingForTest(t)
 			}
@@ -321,8 +319,7 @@ func TestJITTypedChangedByCallee(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	const setup = `
 		function fill(a) { for (let i = 0; i < a.length; i++) a[i] = i + 1; return a }
 		var s = 0

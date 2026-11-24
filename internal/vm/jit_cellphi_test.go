@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -59,8 +58,7 @@ func TestJITCellPhisSeeStores(t *testing.T) {
 	}
 	for _, mode := range []string{"inlined", "called"} {
 		t.Run(mode, func(t *testing.T) {
-			gc := debug.SetGCPercent(-1)
-			t.Cleanup(func() { debug.SetGCPercent(gc) })
+			holdCollector(t)
 			if mode == "called" {
 				jitNoInlineForTest(t, "")
 			}

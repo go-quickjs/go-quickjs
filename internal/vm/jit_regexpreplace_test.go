@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestJITRegExpReplaceFlat(t *testing.T) {
 	want := strings.Fields(replaceFlatTestWant)
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -40,6 +39,6 @@ func TestJITRegExpReplaceFlat(t *testing.T) {
 				t.Errorf("marking %v: %s = %s, want Node's %s", marking, c.src, got, c.want)
 			}
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

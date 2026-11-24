@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -40,7 +39,7 @@ func TestJITMathPlainCall(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	rounds := [][2]string{{"capLoop(300)", "14383.235880500726"}, {"globalLoop(300)", "26952"}, {"idLoop(300)", "15728760"}}
 	var srcs []string
 	for range 6 {

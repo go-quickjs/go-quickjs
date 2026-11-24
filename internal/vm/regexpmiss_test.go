@@ -2,7 +2,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -69,14 +68,15 @@ const regexpMissTestWant = `null,0,false,0,ba, 0:ba:1,0,true,0,ba, null,0,false,
 // running.
 func TestRegExpLeafMisses(t *testing.T) {
 	for _, idle := range []bool{true, false} {
+		release := func() {}
 		if idle {
 			runtime.GC()
-			debug.SetGCPercent(-1)
+			release = holdCollectorNow(t)
 		}
 		r := newTestRuntime(t, Config{})
 		v, err := r.Run(compileForTest(t, regexpMissTestSrc))
 		r.Close()
-		debug.SetGCPercent(100)
+		release()
 		if err != nil {
 			t.Fatal(err)
 		}

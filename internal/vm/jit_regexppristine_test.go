@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -25,7 +24,7 @@ func TestJITRegExpPristine(t *testing.T) {
 		where := map[bool]string{false: "marking false", true: "marking true"}[marking]
 		for _, c := range regexpPristineCases {
 			runtime.GC()
-			gc := debug.SetGCPercent(-1)
+			release := holdCollectorNow(t)
 			if marking {
 				jitMarkingForTest(t)
 			}
@@ -34,7 +33,7 @@ func TestJITRegExpPristine(t *testing.T) {
 			for _, f := range []string{"work", "prep", "mputs", "kputs"} {
 				jitNativeForTest(t, r, f)
 			}
-			debug.SetGCPercent(gc)
+			release()
 		}
 	}
 }

@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"slices"
 	"testing"
 
@@ -114,7 +113,7 @@ func TestJITCallsOfNotNativeCalleesAreGos(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	const setup = `
 		function leaf(x) { return String(x).length + x }
 		function mid(x) { let s = 0; for (let j = 0; j < 2; j++) s = (s + leaf(x + j)) | 0; return s }
@@ -267,7 +266,7 @@ func TestJITKnownNotNativeCalleeCounted(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	jitNoInlineForTest(t, "leaf")
 	const setup = `
 		function leaf(x) { return String(x).length + x }

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -31,7 +30,7 @@ func TestJITBigIntInlined(t *testing.T) {
 	jitNativeCountsForTest(t)
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -52,6 +51,6 @@ func TestJITBigIntInlined(t *testing.T) {
 		if inlined < 3 || e.ssaStats.ended != ended || e.ssaStats.goCalls-calls > 1 {
 			t.Errorf("marking %v: run inlined %d callees, left native code %d times, made %d calls of Go", marking, inlined, e.ssaStats.ended-ended, e.ssaStats.goCalls-calls)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

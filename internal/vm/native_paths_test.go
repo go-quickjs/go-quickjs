@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -793,8 +792,7 @@ func TestRegNativeClosures(t *testing.T) {
 // the Go table with the collector running all the time (GOGC=1), so that
 // it marks while the closures and their upvalues are made and closed.
 func TestRegNativeClosuresCollecting(t *testing.T) {
-	gc := debug.SetGCPercent(1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	paceCollector(t, 1)
 	want := nativeRunSrc(t, nativeClosuresSrc, false)
 	for range 3 {
 		if got := nativeRunSrc(t, nativeClosuresSrc, true); got != want {
@@ -1148,8 +1146,7 @@ func TestRegNativePolyStores(t *testing.T) {
 // TestRegNativeLiteralsCollecting makes them while the collector runs
 // all along (GOGC=1).
 func TestRegNativeLiteralsCollecting(t *testing.T) {
-	gc := debug.SetGCPercent(1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	paceCollector(t, 1)
 	want := nativeRunSrc(t, nativeLitSrc, false)
 	for range 3 {
 		if got := nativeRunSrc(t, nativeLitSrc, true); got != want {

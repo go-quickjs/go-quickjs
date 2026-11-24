@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -113,7 +112,7 @@ func TestJITCalledClosuresAllocate(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	r := jitAgreesForTestWith(t, jitStressConfig{}, calledSetup, `drive(50)`, `drive(50)`, `drive(50)`)
 	jitCallbackMallocs(t, r, `drive(5000)`)
 	n := jitCallbackMallocs(t, r, `drive(5000)`)

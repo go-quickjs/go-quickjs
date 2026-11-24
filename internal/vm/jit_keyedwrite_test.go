@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -159,7 +158,7 @@ func TestJITKeyedWritesToArrays(t *testing.T) {
 func jitCountGoCalls(t *testing.T, r *Runtime, src string) (Value, int) {
 	t.Helper()
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	calls := 0
 	jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = func() { calls++ } })
 	defer jitTestSwitch(t, func(jc *jitTestConfig) { jc.goCallWork = nil })

@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -104,7 +103,7 @@ func TestJITInlinesColdThrows(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	var rounds []string
 	for range 4 {
@@ -210,7 +209,7 @@ func TestJITInlinedCalleeKeepsItsFailures(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, `
 		function D(v) { this.v = v; this.next = null }
@@ -257,7 +256,7 @@ func TestJITInlinesGlobalReads(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, `
 		var K = 3; let L = 4; const C = 5; globalThis.M = 1
@@ -341,7 +340,7 @@ func TestJITInlinesCapturedBindings(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, inlineUpvaluesSetup)
 	for range 3 {
@@ -431,7 +430,7 @@ func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, `
 		class S {
@@ -484,7 +483,7 @@ func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		// A module's class, which its methods read as a captured binding.
 		var Item = (function () {
@@ -526,7 +525,7 @@ func TestJITInlinesConstructionsFirst(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	// Nine methods of 25 instructions each, more than the budget.
 	both := jitBothForTest(t, `
@@ -592,7 +591,7 @@ func TestJITInlinesBySize(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, `
 		function V(x, y, z) { this.x = x; this.y = y; this.z = z }

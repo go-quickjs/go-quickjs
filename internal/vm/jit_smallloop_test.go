@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"testing"
 )
@@ -21,8 +20,7 @@ func TestJITInlinesSmallLoop(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	inlined := jitInlinedForTest(t)
 	const setup = `
 		function P(car, cdr) { this.car = car; this.cdr = cdr; }
@@ -73,8 +71,7 @@ func TestJITInlinesSmallLoopBesideGiven(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	inlined := jitInlinedForTest(t)
 	const setup = `
 		function N(v, next) { this.v = v; this.next = next; }
@@ -181,8 +178,7 @@ func TestJITInlinedSmallLoopFrames(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	inlined := jitInlinedForTest(t)
 	for _, marking := range []bool{false, true} {
 		if marking {
@@ -234,8 +230,7 @@ func TestJITInlinedSmallLoopPolls(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	gc := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	holdCollector(t)
 	inlined := jitInlinedForTest(t)
 	// A callee of each kind runs a loop of n turns, each counted in c.n.
 	const setup = `var c = { n: 0 };

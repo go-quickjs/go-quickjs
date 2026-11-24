@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func TestJITRegExpRareUnit(t *testing.T) {
 	}
 	for _, marking := range []bool{false, true} {
 		runtime.GC()
-		gc := debug.SetGCPercent(-1)
+		release := holdCollectorNow(t)
 		if marking {
 			jitMarkingForTest(t)
 		}
@@ -31,6 +30,6 @@ func TestJITRegExpRareUnit(t *testing.T) {
 		if got := v.String().Go(); got != regexpRareUnitTestWant {
 			t.Errorf("marking %v:\ngot  %s\nwant %s", marking, got, regexpRareUnitTestWant)
 		}
-		debug.SetGCPercent(gc)
+		release()
 	}
 }

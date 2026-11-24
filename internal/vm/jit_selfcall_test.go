@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -22,7 +21,7 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	src := `function Walker(k) { this.k = k; this.n = 0 }
 		Walker.prototype.walk = function (t, d) {
 			if (t === null) { this.n = (this.n + 1) | 0; return (d * this.k) | 0 }

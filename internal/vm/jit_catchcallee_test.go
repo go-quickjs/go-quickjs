@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"runtime/debug"
 	"testing"
 )
 
@@ -47,7 +46,7 @@ func TestJITCatchCallees(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, catchCalleeSetup)
 	for range 3 {
 		both.agree(t, `run(200)`)
@@ -94,7 +93,7 @@ func TestJITReturnThroughFinally(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer holdCollectorNow(t)()
 	both := jitBothForTest(t, `
 		var count = 0, log = []
 		function find(a, k) { for (let i = 0; i < a.length; i++) { try { if (a[i] === k) return i } finally { count++ } } return -1 }
