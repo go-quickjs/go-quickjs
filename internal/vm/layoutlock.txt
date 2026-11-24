@@ -117,7 +117,15 @@
 # with the JIT too. GK and MVT hold two groups of generics, the string
 # appends (strAppend) and the regular expression leaves
 # ((*regexpLeaf).match), where layoutpad -show -all -generics found a
-# generic pad landing right before them.
+# generic pad landing right before them. JE and JO are positions after
+# the JSON code that changes grow or shrink: the encoder after
+# encodeObject, encodeElements first, with the escapers jsonEscapeASCII
+# and jsonEscapeWide after it, and the parser after parseValueAt,
+# parseObject first, held at c906a894's layout. A first form of KI-89's
+# nesting count, 96 bytes more of parseValueAt and 64 less of
+# encodeObject, moved the code after them, and a build that moved only
+# that code, the rest of it c906a894's, was 10% slower on json_stringify_unicode and 4% on json_parse_decimals
+# at every placement.
 #
 # The wasm and jit+wasm configurations are v8bench built with the
 # quickjs_wasm tag (and quickjs_jit), which links the WebAssembly engine
@@ -141,7 +149,9 @@ anchor A  0x00cc0 @0x1402e6cc0 github.com/go-quickjs/go-quickjs/internal/vm.join
 anchor I  0x004c0 @0x1402ea4c0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x008c0 @0x1402f68c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00960 @0x140317960 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00760 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00de0 @0x14031cde0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00800 @0x140343800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 @0x14034ea80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00420 @0x140353420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -181,7 +191,9 @@ anchor A  0x004c0 @0x1405d04c0 github.com/go-quickjs/go-quickjs/internal/vm.join
 anchor I  0x00e00 @0x1405d4e00 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x000c0 @0x1405e20c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x000e0 @0x1406030e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00ee0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00560 @0x140608560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00f40 @0x14062ff40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x001c0 @0x14063c1c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00b20 @0x140640b20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -228,7 +240,9 @@ anchor A  0x00f40 @0x6ddf40 github.com/go-quickjs/go-quickjs/internal/vm.joinSiz
 anchor I  0x00700 @0x6e1700 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00b40 @0x6edb40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00ba0 @0x70eba0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x009a0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00020 @0x714020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00a40 @0x73aa40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 @0x745cc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00660 @0x74a660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -268,7 +282,9 @@ anchor A  0x003c0 @0x99b3c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSiz
 anchor I  0x00cc0 @0x99fcc0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00fc0 @0x9acfc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00fa0 @0x9cdfa0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00420 @0x9d3420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00e00 @0x9fae00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00080 @0xa07080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x009e0 @0xa0b9e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -315,7 +331,9 @@ anchor A  0x00cc0 @0x1402e6cc0 github.com/go-quickjs/go-quickjs/internal/vm.join
 anchor I  0x004c0 @0x1402ea4c0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x008c0 @0x1402f68c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00960 @0x140317960 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00760 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00de0 @0x14031cde0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00800 @0x140343800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 @0x14034ea80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00420 @0x140353420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -355,7 +373,9 @@ anchor A  0x004c0 @0x1405d94c0 github.com/go-quickjs/go-quickjs/internal/vm.join
 anchor I  0x00e00 @0x1405dde00 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x000c0 @0x1405eb0c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x000e0 @0x14060c0e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00ee0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00560 @0x140611560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00f40 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00f40 @0x140638f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x001c0 @0x1406451c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00b20 @0x140649b20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -402,7 +422,9 @@ anchor A  0x00f40 @0x6ddf40 github.com/go-quickjs/go-quickjs/internal/vm.joinSiz
 anchor I  0x00700 @0x6e1700 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00b40 @0x6edb40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00ba0 @0x70eba0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x009a0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00020 @0x714020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00a40 @0x73aa40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 @0x745cc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00660 @0x74a660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
@@ -442,7 +464,9 @@ anchor A  0x003c0 @0x9a43c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSiz
 anchor I  0x00cc0 @0x9a8cc0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
 anchor E  0x00fc0 @0x9b5fc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
 anchor T  0x00fa0 @0x9d6fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
 anchor JP 0x00420 @0x9dc420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
 anchor C  0x00e00 @0xa03e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00080 @0xa10080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x009e0 @0xa149e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
