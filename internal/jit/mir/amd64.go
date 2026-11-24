@@ -10765,11 +10765,17 @@ func (c *compiler) stringUnitPast(v, str, key *ssa.Value, guard, past guardTo) b
 // index converts an element's key, a double, to an index in scratchA,
 // failing unless it is an integer in [0, 2**32): truncation and back must
 // give the key (NaN and anything past 2**63 do not), and the top half must
-// be clear. Negative zero is index 0. It uses scratchB and xScratch1.
+// be clear. Negative zero is index 0. A constant that is such an integer
+// is the index itself (constIndex), with nothing to check. It uses scratchB
+// and xScratch1.
 func (c *compiler) index(key *ssa.Value, fail guardTo) {
 	if key.Type == ssa.Int32 {
 		// An int32 (ssa's truncInts): an index unless negative.
 		c.intIndex(key)
+		return
+	}
+	if i, ok := constIndex(key); ok {
+		c.movImm(scratchA, i)
 		return
 	}
 	k := c.xmm(key, xScratch0)
@@ -10895,7 +10901,10 @@ func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail guardTo,
 	// The key an integer -- not NaN, which converts to 1<<63 -- below the
 	// length, compared unsigned: a negative one is past it. An int32 key
 	// is one if not negative.
-	if key.Type == ssa.Int32 {
+	if i, ok := constIndex(key); ok {
+		// A constant index, nothing to check (index's).
+		c.movImm(scratchA, i)
+	} else if key.Type == ssa.Int32 {
 		c.intIndex(key)
 	} else {
 		k := c.xmm(key, xScratch0)

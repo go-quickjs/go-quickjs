@@ -9557,6 +9557,11 @@ func (c *a64Compiler) index(key *ssa.Value, guard a64Guard) {
 		c.a.Sxtw(a64A, c.gpr(key, a64A))
 		return
 	}
+	if i, ok := constIndex(key); ok {
+		// As amd64's: a constant index, nothing to check.
+		c.movImm(a64A, i)
+		return
+	}
 	k := c.fpr(key, a64F0)
 	c.a.Fcvtzs(a64A, k)
 	c.a.Scvtf(a64F1, a64A, true)
@@ -9657,7 +9662,10 @@ func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Gu
 	c.typedView(a64C, a64B, a64D, stale, fail)
 	// The key an integer -- FCMP of NaN is unordered, not equal -- below
 	// the length, compared unsigned.
-	if key.Type == ssa.Int32 {
+	if i, ok := constIndex(key); ok {
+		// A constant index, nothing to check (index's).
+		c.movImm(a64A, i)
+	} else if key.Type == ssa.Int32 {
 		c.a.Sxtw(a64A, c.gpr(key, a64A))
 	} else {
 		k := c.fpr(key, a64F0)

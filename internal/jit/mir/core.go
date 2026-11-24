@@ -4408,6 +4408,21 @@ type callRecord struct {
 // every word of the slots from operands on, if not -1, which the call
 // reads its callee's arguments from. Those whose pointer words it writes
 // come first.
+// constIndex is the index an element's key is where it is a constant
+// number (ssa.OpConstF64) that is an integer in [0, 2**32), as index
+// would find it as the code runs: tab[3]'s key had been converted and
+// checked at every access.
+func constIndex(key *ssa.Value) (uint64, bool) {
+	if key.Op != ssa.OpConstF64 {
+		return 0, false
+	}
+	f := math.Float64frombits(key.Const.Bits)
+	if f != math.Trunc(f) || !(f >= 0 && f < 1<<32) {
+		return 0, false
+	}
+	return uint64(f), true
+}
+
 // pushGrows reports whether a push of t's values, made natively, has its
 // array grown by push's leaf where it has no room for them (mir's
 // pushGrow): of as many values as a leaf's call takes.
