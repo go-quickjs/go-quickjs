@@ -1446,7 +1446,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `F0 9F 98` at the end: 3, Node 1; `F0 9F 98 41`: 3 and `A`, Node 1 and
     `A`; `E2 82 41`: 2 and `A`, Node 1 and `A`.
 - **Expected:** Node's counts.
-- **Status:** open.
+- **Status:** fixed. The decoder is the Encoding Standard's: a lead byte
+  gives the range of the byte after it, a byte out of range ends the
+  sequence, whose start is one U+FFFD, and is read again as a lead; a
+  stream's byte order mark may be split across chunks too. Test:
+  `TestTextDecoderMaximalSubpart`.
 
 ### KI-92 The parser counts a flat chain as nesting
 - **Where:** `internal/parser/parser.go`, `maxNestingDepth` (1000), which

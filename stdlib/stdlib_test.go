@@ -553,6 +553,56 @@ func TestTextCodec(t *testing.T) {
 	}
 }
 
+// TestTextDecoderMaximalSubpart holds the decoder to the Encoding Standard's
+// UTF-8 decoder, whose answers Node gives: each maximal start of a character
+// that is not completed is one U+FFFD, the byte after E0, ED, F0 and F4 has a
+// narrower range, and the byte that ends a bad sequence is read again (KI-91).
+func TestTextDecoderMaximalSubpart(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const hex = s => Array.from(s, c => c.codePointAt(0).toString(16)).join(" ")
+		for (const bytes of [
+			[0xed, 0xa0, 0x80], [0xe0, 0x80, 0x80], [0xf4, 0x90, 0x80, 0x80],
+			[0xc0, 0x80], [0xf0, 0x80, 0x80, 0x80], [0xf5, 0x80],
+			[0xf0, 0x9f, 0x98], [0xf0, 0x9f, 0x98, 0x41], [0xe2, 0x82, 0x41],
+			[0xe0, 0xa0], [0xc2],
+			[0xef, 0xbf, 0xbf], [0xf4, 0x8f, 0xbf, 0xbf],
+			[0xef, 0xbb, 0xbf, 0xef, 0xbb, 0xbf, 0x41],
+		]) console.log(hex(new TextDecoder().decode(new Uint8Array(bytes))))
+		// A stream keeps a character's start for the next chunk, the byte
+		// order mark's too, and the end replaces what was never completed.
+		const d = new TextDecoder()
+		console.log(JSON.stringify([[0xef], [0xbb], [0xbf, 0xf0], [0x9f],
+			[0x98, 0x80, 0xf0, 0x9f], [0x41], [0xf0, 0x9f]].map(
+				b => hex(d.decode(new Uint8Array(b), {stream: true}))).concat(hex(d.decode()))))
+		// A whole decode after it starts anew.
+		console.log(hex(d.decode(new Uint8Array([0xef, 0xbb, 0xbf, 0x41]))))
+		try { new TextDecoder("utf-8", {fatal: true}).decode(new Uint8Array([0xf0, 0x9f, 0x98])) }
+		catch (e) { console.log("fatal: " + e.constructor.name) }
+	`)
+	want := strings.Join([]string{
+		"fffd fffd fffd",
+		"fffd fffd fffd",
+		"fffd fffd fffd fffd",
+		"fffd fffd",
+		"fffd fffd fffd fffd",
+		"fffd fffd",
+		"fffd",
+		"fffd 41",
+		"fffd 41",
+		"fffd",
+		"fffd",
+		"ffff",
+		"10ffff",
+		"feff 41",
+		`["","","","","1f600","fffd 41","","fffd"]`,
+		"41",
+		"fatal: TypeError",
+	}, "\n")
+	if out != want {
+		t.Errorf("decoded =\n%s\nwant\n%s", out, want)
+	}
+}
+
 func TestCryptoAndClone(t *testing.T) {
 	out, _ := run(t, stdlib.Config{}, `
 		;(async () => {

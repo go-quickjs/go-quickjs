@@ -219,21 +219,25 @@ const webAPIsJS = `(function (host) {
       this._bom = !options.ignoreBOM;
       // What a chunk ended in the middle of, kept for the next one.
       this._pending = null;
+      // Whether the stream has given a character yet: only its first can be
+      // a byte order mark.
       this._started = false;
+      // Whether the last call was a stream's, whose state the next continues.
+      this._streaming = false;
     }
     get encoding() { return "utf-8"; }
     get fatal() { return this._fatal; }
     get ignoreBOM() { return !this._bom; }
     decode(input, options = {}) {
       const streaming = !!options.stream;
-      if (input === undefined) {
-        // The end of a stream: whatever was left over was never completed.
-        const left = this._pending;
+      if (!this._streaming) {
+        // A call after a whole decode, or the first, starts a stream anew.
         this._pending = null;
         this._started = false;
-        return left && !streaming ? this._bad() : "";
       }
-      let bytes = input instanceof Uint8Array ? input
+      this._streaming = streaming;
+      let bytes = input === undefined ? new Uint8Array(0)
+        : input instanceof Uint8Array ? input
         : ArrayBuffer.isView(input)
           ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
           : new Uint8Array(input);
@@ -244,49 +248,50 @@ const webAPIsJS = `(function (host) {
         bytes = joined;
         this._pending = null;
       }
+      // The Encoding Standard's UTF-8 decoder: a lead byte says how many
+      // continuation bytes follow and the range of the first, which is
+      // narrower after E0, ED, F0 and F4 so that no overlong form, surrogate
+      // or value past U+10FFFF is begun. A byte out of its range ends the
+      // sequence: what came before it -- the longest start of a character --
+      // is one U+FFFD, and the byte is read again as the next one's lead.
       let out = "";
       let i = 0;
-      if (this._bom && !this._started && bytes.length >= 3 &&
-          bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
-        i = 3;
-      }
-      while (i < bytes.length) {
+      const n = bytes.length;
+      while (i < n) {
         const b = bytes[i];
-        let c, need;
-        if (b < 0x80) { c = b; need = 0; }
-        else if ((b & 0xe0) === 0xc0) { c = b & 0x1f; need = 1; }
-        else if ((b & 0xf0) === 0xe0) { c = b & 0x0f; need = 2; }
-        else if ((b & 0xf8) === 0xf0) { c = b & 0x07; need = 3; }
-        else { out += this._bad(); i++; continue; }
-        if (i + need >= bytes.length) {
-          // The chunk ended in the middle of a character. In a stream the rest
-          // of it is in the next chunk; otherwise there is no rest.
-          if (streaming && need > 0) { this._pending = bytes.slice(i); break; }
-          out += this._bad(); i++; continue;
-        }
-        let ok = true;
-        for (let k = 1; k <= need; k++) {
-          const cont = bytes[i + k];
-          if ((cont & 0xc0) !== 0x80) { ok = false; break; }
+        if (b < 0x80) { out += String.fromCharCode(b); i++; continue; }
+        let c, need, lower = 0x80, upper = 0xbf;
+        if (b >= 0xc2 && b <= 0xdf) { c = b & 0x1f; need = 1; }
+        else if (b >= 0xe0 && b <= 0xef) {
+          if (b === 0xe0) lower = 0xa0;
+          else if (b === 0xed) upper = 0x9f;
+          c = b & 0x0f; need = 2;
+        } else if (b >= 0xf0 && b <= 0xf4) {
+          if (b === 0xf0) lower = 0x90;
+          else if (b === 0xf4) upper = 0x8f;
+          c = b & 0x07; need = 3;
+        } else { out += this._bad(); i++; continue; }
+        let j = i + 1;
+        while (j <= i + need && j < n) {
+          const cont = bytes[j];
+          if (cont < lower || cont > upper) break;
+          lower = 0x80; upper = 0xbf;
           c = (c << 6) | (cont & 63);
+          j++;
         }
-        if (!ok) { out += this._bad(); i++; continue; }
-        i += need + 1;
-        // An overlong form, a surrogate or a value past the last code point is
-        // not a character, whatever its bytes say.
-        if (c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff) ||
-            (need === 1 && c < 0x80) || (need === 2 && c < 0x800) ||
-            (need === 3 && c < 0x10000)) {
-          out += this._bad();
-          continue;
+        if (j === i + need + 1) { out += String.fromCodePoint(c); i = j; continue; }
+        if (j === n && streaming) {
+          // The chunk ended in the middle of a character, whose rest is in
+          // the next one.
+          this._pending = bytes.slice(i);
+          break;
         }
-        out += String.fromCodePoint(c);
+        out += this._bad();
+        i = j;
       }
-      this._started = true;
-      if (!streaming) {
-        // A one-shot decode keeps nothing: the next call starts over.
-        this._pending = null;
-        this._started = false;
+      if (out.length > 0 && !this._started) {
+        this._started = true;
+        if (this._bom && out.charCodeAt(0) === 0xfeff) out = out.slice(1);
       }
       return out;
     }
