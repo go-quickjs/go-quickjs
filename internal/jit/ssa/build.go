@@ -6643,8 +6643,10 @@ func (b *builder) plan() error {
 	b.unmakeCalled()
 	// Go goes on natively after what it ran where it is sure to run it:
 	// an instruction left to Go whole; a call, which leaves while the
-	// collector marks; and an element's write, which leaves past the
-	// elements, as an array that grows is written. Anywhere else an exit
+	// collector marks. An element's write, which leaves only where Go
+	// refuses it -- an append is a call of Go that goes on -- has an entry
+	// after it only once Go has gone on there, as a call of a function
+	// has (below). Anywhere else an exit
 	// is a guard's, which seldom fails, and the interpreter runs on from
 	// there, as from V8's deoptimizations: an entry is a block whose loads
 	// merge with what native code computed, in phis, and in shadows, at
@@ -6789,7 +6791,21 @@ func (b *builder) plan() error {
 			// An object it cannot tell exits at the typeof, which Go makes;
 			// the interpreter goes on, the boolean not where the typeof's
 			// string was (compile's lowering of RJTypeof): no entry after it.
-		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
+		case ir.ArrayWrite:
+			// What native code does not store, Go does after an exit, which
+			// seldom comes: an append is a call of Go that goes on (GoElemWrite,
+			// GoElemStore). So, as after a call of a function (below), there
+			// is no entry until Go has gone on there (ResumeFeedback), the
+			// code compiled again with it then (Func's Unresumed). An entry
+			// after each write had cut a loop of element updates, tab[k] += j
+			// ten times a turn, into ten blocks joined by phis of every value
+			// it carried, each reading the array's checks anew.
+			if b.resumed(pc + 1) {
+				entries[pc+1] = true
+			} else {
+				b.f.Unresumed = append(b.f.Unresumed, int(p.Maps[pc+1].PC))
+			}
+		case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
 			ir.ArrayLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
 			ir.DeleteProperty, ir.ArgumentRead:

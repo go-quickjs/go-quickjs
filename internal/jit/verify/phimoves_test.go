@@ -146,7 +146,17 @@ func TestMirPhisCoalesced(t *testing.T) {
 	// of Go, across which its values -- the array, the cursor, the
 	// cursor's call's cell and the constants' source among them, all
 	// phis there -- outlive the call, in more registers than are free.
-	if total > 108 || loops > 70 || spills > 12 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 108, 70, 12", total, loops, spills)
+	// With no entry after an element's write until Go goes on there
+	// (ssa's plan), array_write's loops and the loop of s += a[i]*b[i],
+	// a[i] += 1, b[i] -= a[i] are each one block, no longer a block for
+	// each write joined with its entry: the same moves a turn, one and
+	// two, made on the back edge into the header instead of an edge
+	// within the loop, and in each lowering, so 6 more into headers, at
+	// 106 in all as before. The loops run fewer instructions a turn
+	// with them -- array_write's inner loop 302 where it ran 419, one
+	// check that tab is an array where it made ten; the other 248 where
+	// it ran 270 -- and have no entries' blocks: 106, 76, 12.
+	if total > 108 || loops > 76 || spills > 12 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 108, 76, 12", total, loops, spills)
 	}
 }

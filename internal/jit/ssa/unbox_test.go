@@ -474,12 +474,19 @@ func TestBuildEntriesLeaveCapturedBindingsInCells(t *testing.T) {
 	}
 }
 
+// resumedFeedback knows nothing but that Go has gone on after every
+// instruction (ResumeFeedback): the code has an entry after each that has
+// one only once Go went on there, an element's write among them.
+type resumedFeedback struct{ knowsNothing }
+
+func (resumedFeedback) Resumed(int) bool { return true }
+
 // A chain of phis that only merge -- a loop's numbers at the entry after
 // each of hundreds of element writes, which native code goes on past and
-// Go after -- is unboxed when the last of them has
-// an unboxed use: the evidence flows back through every one (unboxPhis's
-// worklist), where a pass over the phis until none grew took a pass a
-// phi.
+// Go after, once it has gone on there -- is unboxed when the last of them
+// has an unboxed use: the evidence flows back through every one
+// (unboxPhis's worklist), where a pass over the phis until none grew took
+// a pass a phi.
 func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 	var src strings.Builder
 	src.WriteString("function f(g,n){let s=0;for(let i=0;i<n;i++){")
@@ -492,7 +499,7 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := BuildWith(p, nil)
+	f, err := BuildWith(p, resumedFeedback{})
 	if err != nil {
 		t.Fatal(err)
 	}

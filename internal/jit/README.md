@@ -518,8 +518,8 @@ code learned (`jitLearned`), beside its budget, deoptimizations and runs
   Values, which the native handlers make themselves, is marked so too: in
   a runtime that runs the JIT, the feedback dispatcher's handler of it
   leaves such a site to Go until it has a mark (below);
-- the register pcs after calls Go went on at, which the code had been built
-  with no entry at (`Resumed`, `jitRegResumeSeen`);
+- the register pcs after calls and element writes Go went on at, which the
+  code had been built with no entry at (`Resumed`, `jitRegResumeSeen`);
 -  the elements' kinds (`jitRegElemSeen`, jit_elem.go): at a host
   exit, an element read by its cell that met a typed array's, a BigInt typed
   array's or a string's element, or an object's property by its name
@@ -810,9 +810,14 @@ code's to learn of. Top-level code is compiled on the spot.
   that the new code has the entries they go on at, as V8's compile for a
   frame carries its bytecode offset: the call the frame waits after is often
   the one just learned, which the new code makes natively, with no entry
-  after it. Where Go goes on after a call the code was built with no entry
-  after (`unresumed`) all the same, the code is compiled again at once with
-  the entry and goes on in it (`jitRegResumeSeen`). A recompile refused
+  after it. Where Go goes on after a call or an element's write the code
+  was built with no entry after (`unresumed`) all the same, the code is
+  compiled again at once with the entry and goes on in it
+  (`jitRegResumeSeen`). An element's write leaves only where Go refuses it
+  -- an append is a call of Go that goes on -- so, as V8's code is entered
+  only at a function's start and its loops, it has no entry after it until
+  Go has gone on there: an entry after each had cut a loop of element
+  updates into a block a write, joined by phis. A recompile refused
   keeps the code it has.
 
 A change of a function's caches' feedback alone has its code compiled
