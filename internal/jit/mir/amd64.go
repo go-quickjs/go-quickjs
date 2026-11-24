@@ -4574,16 +4574,16 @@ func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 }
 
 // genMakeMarking is genMake's taking of the generator while the collector
-// marks, its checks made: the pool's cell cleared with Go's write barrier
-// (poolTakeMarking), which shades the generator, and the receiver's and
-// the arguments' pointer words written into it with the barrier
-// (refStore), as an array literal's elements are -- the generator
-// outlives the frame they come from. refStore keeps no scratch register,
-// so the generator is read again from the call's keep cell at each.
+// marks, its checks made: the receiver's and the arguments' pointer words
+// written into it with the barrier (refStore), as an array literal's
+// elements are -- the generator outlives the frame they come from -- while
+// the pool still holds it, then the pool's cell cleared with Go's write
+// barrier (poolTakeMarking), which shades the generator. refStore keeps no
+// scratch register, so the generator is read again from the pool at each.
+// Kept in the call's keep cell only once every operand is read, as an
+// array literal's array is (arrayLiteral): an operand may be kept there.
 func (c *compiler) genMakeMarking(v *ssa.Value) {
 	site := v.Calls()[0]
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.poolTakeMarking(v, site)
 	genMakeArgs(v, c.enc, func(x *ssa.Value, off int32, vals bool) {
 		r := c.gpr(x, scratchA)
 		if c.scalar(x) {
@@ -4591,15 +4591,19 @@ func (c *compiler) genMakeMarking(v *ssa.Value) {
 		} else {
 			c.pointerWord(x, r)
 		}
-		c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+		c.a.MovQToX(xScratch0, r)
+		c.a.MovQToX(xScratch1, scratchB)
+		c.poolNext(site.Pool)
 		if vals {
 			c.a.Load(scratchC, scratchC, c.enc.GenObject+c.enc.GenVals)
 		}
-		c.a.Store(scratchC, off+c.enc.NumOffset, r)
+		c.a.MovQFromX(scratchB, xScratch0)
+		c.a.Store(scratchC, off+c.enc.NumOffset, scratchB)
 		c.a.Lea(scratchA, scratchC, off+c.enc.RefOffset)
-		c.a.MovRR(scratchC, scratchB)
+		c.a.MovQFromX(scratchC, xScratch1)
 		c.refStore()
 	})
+	c.poolTakeMarking(v, site)
 }
 
 // genNext makes v, a method call Go would make (ssa.CallSite's Gens on a
@@ -6206,8 +6210,8 @@ func (c *compiler) callGo(v *ssa.Value, op uint64, keep int) {
 // next object (poolTake, arrayLiteral), which stores pointers -- the
 // pool's cell cleared, the object kept, an array literal's elements --
 // with no write barrier: while the collector marks, the take is made with
-// one (poolTakeMarking, arrayElements), and native code goes on at the
-// label returned, which the caller binds after its take.
+// one (arrayElements, then poolTakeMarking), and native code goes on at
+// the label returned, which the caller binds after its take.
 func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) amd64.Label {
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.TestMem8(scratchB, 0, 0xFF)
@@ -6215,10 +6219,10 @@ func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) amd64.Label {
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.poolTakeMarking(v, site)
 		if site.Literal && site.Argc != 0 {
-			c.arrayElements(v, true)
+			c.arrayElements(v, site, true)
 		}
+		c.poolTakeMarking(v, site)
 		c.a.Jmp(join)
 	})
 	return join
@@ -6553,7 +6557,9 @@ func (c *compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard guardTo) {
 // arrayLiteral makes an array literal's array: the pool's next, whose room
 // holds the elements, the call's operands (arrayElements). The array is
 // fresh, so nothing else sees it meanwhile, and the collector is not
-// marking.
+// marking. It is kept in the call's keep cell only once every operand is
+// read: an operand's pointer word may be read from that very cell, where
+// the literal kept the array it made before -- v = [v] in a loop.
 func (c *compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 	vs := int32(c.enc.ValueSize)
 	if vs != 16 {
@@ -6568,22 +6574,29 @@ func (c *compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
 	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
+	c.a.MovQToX(xScratch0, scratchC)
+	c.arrayElements(v, site, false)
+	c.a.MovQFromX(scratchC, xScratch0)
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
-	c.storeImm(regCtx, at+c.enc.NumOffset, c.enc.Object, scratchA)
-	c.arrayElements(v, false)
+	c.movImm(scratchA, c.enc.Object)
+	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
+	c.setG(v, scratchA)
 }
 
 // arrayElements writes an array literal's elements, the call's operands,
-// into its array, kept in the call's keep cell, both words of each, and
-// sets its length; viaGo, while the collector marks, each with Go's write
-// barrier (valueStore). The result is set last: its register may be an
-// operand's.
-func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
+// into its array, both words of each, and sets its length: the array in
+// xScratch0, taken from its pool; viaGo, while the collector marks, the
+// pool's next, which the pool still holds, each with Go's write barrier
+// (valueStore), which keeps no scratch register, so the array is read
+// again from the pool at each. Either way the array is not yet in the
+// call's keep cell, which an operand's pointer word may be read from
+// (arrayLiteral). The caller keeps the array and sets the result: its
+// register may be an operand's.
+func (c *compiler) arrayElements(v *ssa.Value, site *ssa.CallSite, viaGo bool) {
 	vs := int32(c.enc.ValueSize)
-	at := abi.OffKeep + int32(v.Index)*vs
 	for i, x := range v.Args {
-		// The element's words: its number word in xScratch0, its pointer
-		// word in xScratch1, as push has them.
+		// The element's words: its number word in w, its pointer word in
+		// scratchB.
 		var w amd64.Reg
 		if remat(x) {
 			c.materialize(x, scratchA)
@@ -6591,7 +6604,6 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 		} else {
 			w = c.gpr(x, scratchA)
 		}
-		c.a.MovQToX(xScratch0, w)
 		number, have := c.a.NewLabel(), c.a.NewLabel()
 		if x.Shadow != nil || c.origin.At(x) >= 0 {
 			c.cmpWord(w, abi.NumberLimit)
@@ -6602,26 +6614,39 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 		c.a.Bind(number)
 		c.movImm(scratchB, 0)
 		c.a.Bind(have)
-		c.a.MovQToX(xScratch1, scratchB)
-		c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
-		c.a.Load(scratchA, scratchC, c.enc.ObjectElems)
 		if viaGo {
 			// The cell's address in scratchA, the words in xScratch0 and
 			// scratchC.
+			c.a.MovQToX(xScratch0, w)
+			c.a.MovQToX(xScratch1, scratchB)
+			c.poolNext(site.Pool)
+			c.a.Load(scratchA, scratchC, c.enc.ObjectElems)
 			c.a.OpImm(amd64.Add, scratchA, int32(i)*vs, true)
 			c.a.MovQFromX(scratchC, xScratch1)
 			c.valueStore()
 			continue
 		}
-		c.a.MovQFromX(scratchB, xScratch0)
-		c.a.Store(scratchA, int32(i)*vs+c.enc.NumOffset, scratchB)
-		c.a.MovQFromX(scratchB, xScratch1)
-		c.a.Store(scratchA, int32(i)*vs+c.enc.RefOffset, scratchB)
+		c.a.MovQFromX(scratchC, xScratch0)
+		c.a.Load(scratchC, scratchC, c.enc.ObjectElems)
+		c.a.Store(scratchC, int32(i)*vs+c.enc.NumOffset, w)
+		c.a.Store(scratchC, int32(i)*vs+c.enc.RefOffset, scratchB)
 	}
-	c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
+	if viaGo {
+		c.poolNext(site.Pool)
+	} else {
+		c.a.MovQFromX(scratchC, xScratch0)
+	}
 	c.storeImm(scratchC, c.enc.ObjectElems+8, uint64(len(v.Args)), scratchB)
-	c.movImm(scratchA, c.enc.Object)
-	c.setG(v, scratchA)
+}
+
+// poolNext loads into scratchC the next object of the pool at pool, which
+// the pool still holds: it has one. It uses scratchB.
+func (c *compiler) poolNext(pool uintptr) {
+	c.movImm(scratchC, uint64(pool))
+	c.a.Load(scratchB, scratchC, abi.OffPoolCount)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchC, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects-8)
 }
 
 // poolTake has a call's result be its pool's last object, its cell

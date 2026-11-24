@@ -3388,17 +3388,22 @@ on natively, whether the collector marks or not.
 **What moves a pointer into what outlives it** does so through `storeRef`
 while the collector marks: an object taken from a pool has its pool's cell
 cleared through it, which shades the object, or, a construction's receiver,
-is shaded in its pool before the call takes it; what native code then writes
-into it -- an array literal's elements, a closure's captured cells, the
-arguments in an entry's cells -- and a value pushed or popped go through it
-too, as do the pointer words of the calls of Go native code makes itself,
-made alike whether the collector marks or not (mir's `byMarking`): an object
-spread by layout and a literal's field along its shape's transition -- the
-values, the shape, the result -- an array spread and an element appended --
-the elements, the result -- an array's length written shorter, whose
-elements past it are cleared so, which shades what they held, and a
-for...in's cursor taken again -- the keys, their atoms, the object, its
-layout, the cursor to its keep cell (mir's `forInStart`).
+is shaded in its pool before the call takes it; what native code writes
+into it -- an array literal's elements and a generator's arguments, written
+while the pool still holds it, a closure's captured cells, the arguments in
+an entry's cells -- and a value pushed or popped go through it too, as do
+the pointer words of the calls of Go native code makes itself, made alike
+whether the collector marks or not (mir's `byMarking`): an object spread by
+layout and a literal's field along its shape's transition -- the values,
+the shape, the result -- an array spread and an element appended -- the
+elements, the result -- an array's length written shorter, whose elements
+past it are cleared so, which shades what they held, and a for...in's
+cursor taken again -- the keys, their atoms, the object, its layout, the
+cursor to its keep cell (mir's `forInStart`). Marking or not, an object a
+call takes goes to the call's keep cell only once every operand is read, as
+a call's result does: an operand's pointer word may be read from that very
+cell, where the call kept the object it made the turn before -- `v = [v]`
+in a loop (mir's `arrayLiteral`, `genMakeMarking`).
 
 **A loop's step** copies a pointer into a keep cell with no barrier, by that
 same rule read the other way: an array's element, a Map entry's, a

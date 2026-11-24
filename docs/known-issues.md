@@ -1190,11 +1190,15 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** open.
 
 ### KI-97 `v = [v]` in a loop makes an array that holds itself, with the JIT
-- **Where:** the JIT's code for a loop's `new_array` whose element is the
-  value the binding it is assigned to had before (`internal/vm/jit_*.go`,
-  `internal/jit/mir`). The register code is right
-  (`move r5, r3; new_array r6, r5 x1; move r3, r6`) and both interpreters
-  answer right; the cause is not yet found.
+- **Where:** the JIT's code for an array literal (`internal/jit/mir`'s
+  `arrayLiteral` and `arrayElements`, amd64's and arm64's). The register code
+  is right (`move r5, r3; new_array r6, r5 x1; move r3, r6`) and both
+  interpreters answer right. The literal is a call whose array goes to its
+  keep cell, and the code wrote the array there before it read the
+  elements' pointer words; in the loop the element is the array the same
+  literal made the turn before, whose pointer word is read from that very
+  cell, so it read the new array instead. A generator's arguments, written
+  while the collector marks (`genMakeMarking`), did the same: `v = g(v)`.
 - **Effect:** once the function is compiled, the new array's element is the
   new array itself, and the array it should hold is lost. `v = [v, i]` and
   `const old = v; v = [old]` do the same; `v = {p: v}` and `v = Array.of(v)`
@@ -1205,7 +1209,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   with `--jit`, background compiles or not: `const a = f(1000); a[0] === a` is
   `true`; `f(500)` is right; and of 5,000 calls of `f(3)`, 4,742 are wrong.
 - **Expected:** `false`, as without the JIT and in Node.
-- **Status:** open.
+- **Status:** fixed. The array, and the generator, go to the keep cell only
+  once every operand is read: held in a register meanwhile, or, while the
+  collector marks, written into while its pool still holds it
+  (`TestJITLiteralHoldsWhatItReplaces`).
 
 ## P3: small divergences
 

@@ -3519,8 +3519,10 @@ func (c *a64Compiler) stringBytes(exit, yes, no arm64.Label) {
 // call calls natively the function a call calls, as amd64's does. Once the
 // state is recorded and what is live across the call saved, the frame is
 // made in registers the allocator gives values, X3 to X8.
-// arrayLiteral is amd64's: the pool's next array, the operands written in
-// as its elements, its length set, the result set last.
+// arrayLiteral is amd64's: the pool's next array, held in F2, the operands
+// written in as its elements, its length set, then the array kept in the
+// call's keep cell, which an operand's pointer word may be read from, and
+// the result set last.
 func (c *a64Compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 	vs := int32(c.enc.ValueSize)
 	if vs != 16 {
@@ -3535,17 +3537,20 @@ func (c *a64Compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 	c.a.Load(a64C, a64B, abi.OffPoolObjects)
 	c.a.Store(a64B, abi.OffPoolObjects, arm64.ZR)
+	c.a.FMovToF(a64F2, a64C)
+	c.arrayElements(v, site, false)
+	c.a.FMovFromF(a64C, a64F2)
 	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64C)
 	c.movImm(a64A, c.enc.Object)
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
-	c.arrayElements(v, false)
+	c.setG(v, a64A)
 }
 
-// arrayElements is amd64's: the elements written, by Go while the
-// collector marks (viaGo), the length set, the result set last.
-func (c *a64Compiler) arrayElements(v *ssa.Value, viaGo bool) {
+// arrayElements is amd64's: the elements written into the array in F2,
+// or, by Go while the collector marks (viaGo), into the pool's next, read
+// again from the pool at each, and the length set.
+func (c *a64Compiler) arrayElements(v *ssa.Value, site *ssa.CallSite, viaGo bool) {
 	vs := int32(c.enc.ValueSize)
-	at := abi.OffKeep + int32(v.Index)*vs
 	for i, x := range v.Args {
 		var w arm64.Reg
 		if remat(x) {
@@ -3569,23 +3574,36 @@ func (c *a64Compiler) arrayElements(v *ssa.Value, viaGo bool) {
 		if viaGo {
 			// valueStore's: the cell's address in A, the words in F0 and C.
 			c.a.FMovToF(a64F0, a64D)
-			c.a.MovRR(a64C, a64B)
-			c.a.Load(a64A, a64Ctx, at+c.enc.RefOffset)
-			c.a.Load(a64A, a64A, c.enc.ObjectElems)
+			c.a.MovRR(a64D, a64B)
+			c.poolNext(site.Pool)
+			c.a.Load(a64A, a64C, c.enc.ObjectElems)
 			c.a.AddImm(a64A, a64A, int64(int32(i)*vs), true)
+			c.a.MovRR(a64C, a64D)
 			c.valueStore()
 			continue
 		}
-		c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
+		c.a.FMovFromF(a64C, a64F2)
 		c.a.Load(a64A, a64C, c.enc.ObjectElems)
 		c.a.Store(a64A, int32(i)*vs+c.enc.NumOffset, a64D)
 		c.a.Store(a64A, int32(i)*vs+c.enc.RefOffset, a64B)
 	}
-	c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
+	if viaGo {
+		c.poolNext(site.Pool)
+	} else {
+		c.a.FMovFromF(a64C, a64F2)
+	}
 	c.movImm(a64B, uint64(len(v.Args)))
 	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
-	c.movImm(a64A, c.enc.Object)
-	c.setG(v, a64A)
+}
+
+// poolNext is amd64's: the next object of the pool at pool, which the pool
+// still holds, into C. It uses B.
+func (c *a64Compiler) poolNext(pool uintptr) {
+	c.movImm(a64C, uint64(pool))
+	c.a.Load(a64B, a64C, abi.OffPoolCount)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64C, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects-8)
 }
 
 // poolTake is amd64's: the pool's last object is the result.
@@ -6347,14 +6365,12 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	})
 }
 
-// genMakeMarking is amd64's: the generator taken while the collector
-// marks (poolTakeMarking), the receiver's and the arguments' pointer words
-// written into it with Go's write barrier (refStore), the generator read
-// again from the keep cell at each.
+// genMakeMarking is amd64's: the receiver's and the arguments' pointer
+// words written with Go's write barrier (refStore) into the generator
+// while the pool still holds it, read again from the pool at each, then
+// the generator taken (poolTakeMarking) and kept.
 func (c *a64Compiler) genMakeMarking(v *ssa.Value) {
 	site := v.Calls()[0]
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.poolTakeMarking(v, site)
 	genMakeArgs(v, c.enc, func(x *ssa.Value, off int32, vals bool) {
 		r := c.gpr(x, a64A)
 		if c.scalar(x) {
@@ -6362,15 +6378,18 @@ func (c *a64Compiler) genMakeMarking(v *ssa.Value) {
 		} else {
 			c.pointerWord(x, r)
 		}
-		c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+		c.a.MovRR(a64D, r)
+		c.a.FMovToF(a64F0, a64B)
+		c.poolNext(site.Pool)
 		if vals {
 			c.a.Load(a64C, a64C, c.enc.GenObject+c.enc.GenVals)
 		}
-		c.a.Store(a64C, off+c.enc.NumOffset, r)
+		c.a.Store(a64C, off+c.enc.NumOffset, a64D)
 		c.a.AddImm(a64A, a64C, int64(off+c.enc.RefOffset), true)
-		c.a.MovRR(a64C, a64B)
+		c.a.FMovFromF(a64C, a64F0)
 		c.refStore()
 	})
+	c.poolTakeMarking(v, site)
 }
 
 // genNext is amd64's: a call of the realm's generators' next on a generator
@@ -8361,8 +8380,8 @@ func (c *a64Compiler) callGo(v *ssa.Value, op uint64, keep int) {
 }
 
 // markingTake is amd64's: while the collector marks, the take with Go's
-// write barrier (poolTakeMarking, arrayElements); native code goes on at
-// the label returned.
+// write barrier (arrayElements, then poolTakeMarking); native code goes on
+// at the label returned.
 func (c *a64Compiler) markingTake(v *ssa.Value, site *ssa.CallSite) arm64.Label {
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
@@ -8370,10 +8389,10 @@ func (c *a64Compiler) markingTake(v *ssa.Value, site *ssa.CallSite) arm64.Label 
 	c.a.Cbnz(a64B, marked, false)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.poolTakeMarking(v, site)
 		if site.Literal && site.Argc != 0 {
-			c.arrayElements(v, true)
+			c.arrayElements(v, site, true)
 		}
+		c.poolTakeMarking(v, site)
 		c.a.B(join)
 	})
 	return join
