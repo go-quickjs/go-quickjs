@@ -57,7 +57,8 @@ func TestRehomeFollow(t *testing.T) {
 	for _, tc := range cases {
 		stamp := make([]int32, len(all))
 		stamp[state.ID] = 2
-		pinned, ok := c.rehomeFollow(tc.u, stamp, 1, nil)
+		var reached []int32
+		pinned, ok := c.rehomeFollow(tc.u, stamp, 1, nil, &reached)
 		if ok != tc.ok || ok && !slices.Equal(sortedSlots(pinned), tc.pinned) {
 			t.Errorf("%s: pinned %v, %v; want %v, %v", tc.name, pinned, ok, tc.pinned, tc.ok)
 		}

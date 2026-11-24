@@ -2271,11 +2271,22 @@ follows back to what holds its objects: a frame register it reads
 through is pinned, never written; a value of the state, a keep cell, a
 global's, a closure's or the runtime's cell ends the way; and a phi the
 state does not name, any turn's value at run time, leaves the header's
-polls with nothing to write. Not inlined callees' frames, typed code, a
-generator's code, nor a native callee's frame. Go's stores, with Go's
-barrier: native code reads each reference through its source after it as
-before, the same value, and does the same work whether the collector
-marks or not.
+polls with nothing to write. The same polls empty the keep cells no value
+live there reads (`abi.Rehome`'s `DeadKeeps`, mir's `rehomeDeadKeeps`):
+of the cells the allocation gave (`colorKeeps`), those that no value the
+state does not name is followed back to -- the follow above, which
+reaches every such value's sources or leaves no plan -- and, at run time
+(`jit.Rehome`), that no slot of the state takes its reference from: a
+loop-carried result not made yet may name, through its shadow phi, a
+cell another keep was given before its own write. A call's result made
+before the loop and dropped -- `a = f()`, then `a = null` -- had kept its
+object in its cell for as long as the loop ran, once no exit at the
+loop's pushes ended the run. Not where the code makes loops of
+built-ins' calls, whose loops keep cells of their own. Not inlined
+callees' frames, typed code, a generator's code, nor a native callee's
+frame. Go's stores, with Go's barrier: native code reads each reference
+through its source after it as before, the same value, and does the same
+work whether the collector marks or not.
 
 **The context block** (`abi.Context`) is what native code reaches through
 its context register. Go sets the frame's addresses before every entry;

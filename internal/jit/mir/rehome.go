@@ -11,9 +11,15 @@ import (
 
 // rehomePlan is what a loop header's polls let Go write into the frame
 // (abi.Rehome): the registers whose values' sources it may make their own
-// (rewire), and those it leaves as they are (pinned), each in order.
+// (rewire), and those it leaves as they are (pinned), each in order; the
+// keep cells a value live at the poll that the state does not name reads
+// its objects from (reached, the build's numbers), and those that no value
+// live there reads (dead, the context's, once colorKeeps has numbered
+// them; abi.Rehome's DeadKeeps).
 type rehomePlan struct {
 	rewire, pinned []int32
+	reached        []int32
+	dead           []uint16
 }
 
 // findRehomes finds, for each loop header, whether the polls of its back
@@ -87,10 +93,10 @@ func (c *core) findRehomes(liveIn []ir.LiveSet, lb *ir.LiveBuilder, iv []interva
 		// Every other value live at the poll: the header's phis, and what
 		// is live into it -- a value made in the loop is live into its
 		// header only as a phi's argument, so these are made before it.
-		var pinned []int32
+		var pinned, reached []int32
 		ok := true
 		follow := func(u *ssa.Value) bool {
-			p, ok := c.rehomeFollow(u, stamp, gen, pinned)
+			p, ok := c.rehomeFollow(u, stamp, gen, pinned, &reached)
 			pinned = p
 			return ok
 		}
@@ -115,7 +121,7 @@ func (c *core) findRehomes(liveIn []ir.LiveSet, lb *ir.LiveBuilder, iv []interva
 		if c.rehomes == nil {
 			c.rehomes = make([]*rehomePlan, numBlocks(f))
 		}
-		c.rehomes[b.ID] = &rehomePlan{rewire: rewire, pinned: sortedSlots(pinned)}
+		c.rehomes[b.ID] = &rehomePlan{rewire: rewire, pinned: sortedSlots(pinned), reached: sortedSlots(reached)}
 	}
 }
 
@@ -172,10 +178,11 @@ func hasBackedge(b *ssa.Block) bool {
 
 // rehomeFollow follows u, a value live at a loop header's poll, back to
 // what holds the objects it reads (findRehomes), adding to pinned each
-// frame register that does, and reports whether it could: stamp has, at
-// 2*gen, the header's state's values and their shadow phis, which need
-// no following, and at 2*gen+1 the values followed.
-func (c *core) rehomeFollow(u *ssa.Value, stamp []int32, gen int32, pinned []int32) ([]int32, bool) {
+// frame register that does, and to reached each keep cell, and reports
+// whether it could: stamp has, at 2*gen, the header's state's values and
+// their shadow phis, which need no following, and at 2*gen+1 the values
+// followed.
+func (c *core) rehomeFollow(u *ssa.Value, stamp []int32, gen int32, pinned []int32, reached *[]int32) ([]int32, bool) {
 	stack := append(c.rehomeStack[:0], u)
 	defer func() { c.rehomeStack = stack[:0] }()
 	for len(stack) > 0 {
@@ -214,8 +221,18 @@ func (c *core) rehomeFollow(u *ssa.Value, stamp []int32, gen int32, pinned []int
 				pinned = append(pinned, int32(x.Aux))
 			}
 			continue
+		case ssa.OpKeep:
+			// A keep cell, which its keep writes: kept.
+			*reached = append(*reached, int32(x.Index))
+			continue
+		case ssa.OpCallCell, ssa.OpBigCell:
+			// A call's result's cell, or a BigInt's: kept.
+			if w := x.Args[0]; w.WritesKeepCell() {
+				*reached = append(*reached, int32(w.Index))
+			}
+			continue
 		case ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell,
-			ssa.OpHolderCell, ssa.OpKeep, ssa.OpCallCell, ssa.OpBigCell, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr,
+			ssa.OpHolderCell, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr,
 			ssa.OpSubstringChar, ssa.OpStringAtOr, ssa.OpTypeofCell, ssa.OpStringMethod, ssa.OpStringProp, ssa.OpHeapBase, ssa.OpHeapLen:
 			// A cell the runtime, a closure or the context keeps, or one of
 			// an object the code was compiled for.
@@ -283,6 +300,11 @@ func (c *core) pollState(h *ssa.Block, localsReg, stackReg uint8) *abi.GoCallSta
 		slots = append(slots, *e)
 	})
 	if len(slots) == 0 {
+		if len(plan.dead) != 0 {
+			// Keep cells to empty alone, checked against the state's
+			// sources (jit's emptyKeeps).
+			st.Rehome = &abi.Rehome{Desc: d, DeadKeeps: plan.dead}
+		}
 		return st
 	}
 	marks := make([]uint8, len(slots))
@@ -294,6 +316,55 @@ func (c *core) pollState(h *ssa.Block, localsReg, stackReg uint8) *abi.GoCallSta
 			marks[i] |= abi.RehomePinned
 		}
 	}
-	st.Rehome = &abi.Rehome{Desc: d, Slots: slots, Marks: marks}
+	st.Rehome = &abi.Rehome{Desc: d, Slots: slots, Marks: marks, DeadKeeps: plan.dead}
 	return st
+}
+
+// rehomeDeadKeeps finds, for each loop header whose polls have a plan
+// (findRehomes), the keep cells that no value live at its polls may read
+// its reference from (rehomePlan's dead), of the cells colorKeeps gave
+// (phys, by keep): those no keep of which a value live there that the
+// header's state does not name was followed back to (reached). The
+// follow is the one the rehome's registers rely on: it reaches every
+// such value's sources or there is no plan. A state's value, or its
+// shadow phi, may name a cell another keep was given before its own
+// write -- a loop-carried result not yet made, its cell still holding
+// what an earlier keep put there -- so which cells the state's values
+// read Go finds at run time, and a cell one does is not emptied
+// (jit.Rehome). None where the code makes loops of built-ins' calls
+// (ssa.Func's Loops), whose loops keep cells of their own.
+func (c *core) rehomeDeadKeeps(phys []int) {
+	if c.rehomes == nil || c.f.Loops || len(phys) == 0 {
+		return
+	}
+	var live, given [(abi.MaxKeeps + 63) / 64]uint64
+	for _, p := range phys {
+		if p < abi.MaxKeeps {
+			given[p/64] |= 1 << (p % 64)
+		}
+	}
+	for _, plan := range c.rehomes {
+		if plan == nil {
+			continue
+		}
+		live = [len(live)]uint64{}
+		ok := true
+		for _, k := range plan.reached {
+			if k < 0 || int(k) >= len(phys) {
+				ok = false
+				break
+			}
+			if p := phys[k]; p < abi.MaxKeeps {
+				live[p/64] |= 1 << (p % 64)
+			}
+		}
+		if !ok {
+			continue
+		}
+		for w := range given {
+			for m := given[w] &^ live[w]; m != 0; m &= m - 1 {
+				plan.dead = append(plan.dead, uint16(w*64+bits.TrailingZeros64(m)))
+			}
+		}
+	}
 }

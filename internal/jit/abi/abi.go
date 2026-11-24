@@ -750,10 +750,16 @@ type GoCallState struct {
 // Go leaves the register as it is (RehomePinned), a value live at the
 // poll and named by no register of the state reading its reference, or
 // the object it reads through, from there.
+//
+// DeadKeeps are the context's keep cells (Context.Keep) that no value
+// live at the poll reads a reference from, which Go empties there: a
+// call's result, made before the loop and dropped, had kept its object
+// in its cell for as long as the loop ran natively.
 type Rehome struct {
-	Desc  *ExitDescriptor
-	Slots []ExitSlot
-	Marks []uint8
+	Desc      *ExitDescriptor
+	Slots     []ExitSlot
+	Marks     []uint8
+	DeadKeeps []uint16
 }
 
 // Rehome's Marks.

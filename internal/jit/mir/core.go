@@ -2961,6 +2961,7 @@ func (c *core) colorKeeps(iv []interval, pos []int, kv []*ssa.Value) error {
 			i = up
 		}
 	}
+	c.rehomeDeadKeeps(phys)
 	for _, v := range kv {
 		if writes(v) {
 			v.Index = phys[v.Index]

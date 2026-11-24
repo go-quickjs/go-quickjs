@@ -46,7 +46,10 @@ func RebaseExitLocals(ctx *abi.Context, from, to unsafe.Pointer) {
 // each exit as Go clears any memory that holds pointers, cost more than the
 // rest of the exit. A runtime keeps one.
 type ExitScratch struct {
-	writes []exitWrite
+	// keepSources are the sources of a poll's state's slots, which
+	// emptyKeeps checks the keep cells against.
+	keepSources []uintptr
+	writes      []exitWrite
 	// rehomes and sources are Rehome's.
 	rehomes []rehomeEntry
 	sources []uintptr
@@ -351,6 +354,36 @@ type rehomeEntry struct {
 	_ [0]func()
 }
 
+// emptyKeeps empties, of the keep cells the compile found no value live
+// at the poll reads unless a value of the header's state does (h's
+// DeadKeeps), those no slot of the state takes its reference from now --
+// a loop-carried result not made yet names, through its shadow phi, a
+// cell another keep was given before, which still holds what that keep
+// put there -- with Go's write barrier, and returns how many it emptied.
+// Without the state's description, none.
+func (s *ExitScratch) emptyKeeps(ctx *abi.Context, h *abi.Rehome) (emptied int) {
+	d := h.Desc
+	if len(h.DeadKeeps) == 0 || d == nil || d.InlineN != 0 {
+		return 0
+	}
+	f := exitFrame{ctx: ctx, d: d.Frame, enc: d.Frame.Enc, locals: ctx.Locals, stack: ctx.Stack}
+	srcs := s.keepSources[:0]
+	d.Slots(func(e *abi.ExitSlot) {
+		if e.Shadow.Kind != abi.ExitNone {
+			srcs = append(srcs, uintptr(f.word(e.Shadow)))
+		}
+	})
+	s.keepSources = srcs
+	for _, k := range h.DeadKeeps {
+		if int(k) >= len(ctx.Keep) || ctx.Keep[k].Ref == nil || slices.Contains(srcs, uintptr(unsafe.Pointer(&ctx.Keep[k]))) {
+			continue
+		}
+		ctx.Keep[k] = abi.Slot{}
+		emptied++
+	}
+	return emptied
+}
+
 // Rehome brings ctx's frame up to date at a poll of a loop's back edge
 // after which its code goes on (abi.GoCallState's Rehome, h), as an exit
 // to the loop's header would write it, but only where native code reads
@@ -364,8 +397,10 @@ type rehomeEntry struct {
 // own address once the register is written, so that the cell it came from,
 // which may be an object's nothing else reaches, is read no more; where
 // such a register cannot be written and its source is no slot of the VM's
-// stack nor a cell of the context, nothing is written at all. It returns
-// how many registers it wrote.
+// stack nor a cell of the context, nothing is written at all. It empties
+// the keep cells the compile found no value live at the poll reads (h's
+// DeadKeeps) first, whatever else it writes. It returns how many
+// registers and cells it wrote.
 //
 // Native code keeps a reference in the slot that held it when the code was
 // entered and writes the frame only at its exits: a loop that reassigns a
@@ -374,6 +409,7 @@ type rehomeEntry struct {
 // stores and their write barrier; what native code reads after it --
 // each reference through its source -- is the same value it read before.
 func (s *ExitScratch) Rehome(ctx *abi.Context, h *abi.Rehome) (written int) {
+	written += s.emptyKeeps(ctx, h)
 	d := h.Desc
 	if d == nil || d.InlineN != 0 || d.Frame.Kinds != nil || len(h.Marks) != len(h.Slots) {
 		return 0
