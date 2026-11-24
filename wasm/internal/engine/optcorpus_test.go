@@ -4,6 +4,7 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
@@ -70,6 +72,10 @@ func TestOptCompileCorpus(t *testing.T) {
 			only[k] = true
 		}
 	}
+	// Hashed, the compiles are given the same addresses of the process's
+	// write barrier and barrier routine in every build, which their code
+	// holds, so that two builds' hashes compare: the code is not run.
+	fixed := os.Getenv("WASM_OPT_HASHES") != "" || os.Getenv("WASM_OPT_BASE") != ""
 	add := func(name string, bin []byte) {
 		lim := decoder.CoreLimits()
 		m, derr := decoder.Decode(bin, lim)
@@ -89,8 +95,12 @@ func TestOptCompileCorpus(t *testing.T) {
 				continue
 			}
 			cd := c.get(uint32(i))
+			req := request(c, uint32(i), cd, 0)
+			if fixed {
+				req.WriteBarrier, req.StoreRef = 0x1000, 0x2000
+			}
 			fns = append(fns, &corpusFunc{key: key, code: c, idx: uint32(i),
-				body: int(m.Functions[i].Code.Len), req: request(c, uint32(i), cd, 0)})
+				body: int(m.Functions[i].Code.Len), req: req})
 		}
 	}
 	for _, src := range strings.Split(corpus, ",") {
@@ -136,7 +146,7 @@ func TestOptCompileCorpus(t *testing.T) {
 		first = append(first, ct)
 		codeBytes += len(code.Bytes)
 		h := sha256.New()
-		h.Write(code.Bytes)
+		h.Write(unaddressed(code.Bytes, f.req))
 		var w [24]byte
 		binary.LittleEndian.PutUint64(w[0:], uint64(code.GoEntry))
 		binary.LittleEndian.PutUint64(w[8:], uint64(code.Entry))
@@ -261,6 +271,29 @@ func TestOptCompileCorpus(t *testing.T) {
 			float64(each[i])/float64(reps-1)/1e3, f.body, float64(each[i])/float64(reps-1)/float64(f.body), float64(first[i])/1e3)
 	}
 	t.Log("\n" + sb.String())
+}
+
+// unaddressed is code with the addresses of req's layout, which the code
+// may hold as immediates and which move from one build to the next -- the
+// table of array classes and the i31s' pointer word -- as zeros, so that
+// two builds' hashes compare.
+func unaddressed(code []byte, req *wjit.Request) []byte {
+	lay := req.Layout
+	if lay == nil {
+		return code
+	}
+	addrs := []uint64{lay.I31Mark}
+	if len(lay.ArrayClass) > 0 {
+		addrs = append(addrs, uint64(uintptr(unsafe.Pointer(&lay.ArrayClass[0]))))
+	}
+	for _, x := range addrs {
+		var a [8]byte
+		binary.LittleEndian.PutUint64(a[:], x)
+		if x != 0 && bytes.Contains(code, a[:]) {
+			code = bytes.ReplaceAll(code, a[:], make([]byte, 8))
+		}
+	}
+	return code
 }
 
 // addSpec adds every module of the spec scripts in WASM_SPEC_DIR.
