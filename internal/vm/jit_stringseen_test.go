@@ -118,3 +118,40 @@ func TestInterpreterStringAddsWithoutJIT(t *testing.T) {
 		t.Fatal("runtime without the JIT allocated string-add feedback")
 	}
 }
+
+// o.name += x of a string x is marked as add's additions are, so that the
+// first compile makes it Go's rather than deoptimize at it.
+func TestJITInterpreterStringAddProps(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native=%v", native), func(t *testing.T) {
+			nativeForTest(t, native)
+			r, run := jitTierRuntimeForTest(t, 8, `
+function f(o,a,n){for(let i=0;i<n;i++)o.t+=a;return o.t}`)
+			run(`f({t:""},"x",2)`)
+			fn, _ := r.GetProp(Obj(r.Global()), r.Intern("f"))
+			cl := fn.Object().fn().closure
+			if jitHasCodeOfForTest(r, cl) {
+				t.Fatal("compiled before interpreter feedback was inspected")
+			}
+			marks := cl.reg.stringAdds.Load()
+			found := false
+			for pc, w := range cl.reg.rc.Code {
+				if w.Op() == bytecode.RAddProp {
+					found = true
+					if marks == nil || (*marks)[pc>>5].Load()&(uint32(1)<<(pc&31)) == 0 {
+						t.Fatalf("add_prop at %d has no string feedback", pc)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("no add_prop in f")
+			}
+			for range 20 {
+				run(`f({t:""},"x",2)`)
+			}
+			if e := jitNativeForTest(t, r, "f"); e.deopts != 0 || len(e.failedEntries) != 0 {
+				t.Fatalf("%d deoptimizations; entry failures %v", e.deopts, e.failedEntries)
+			}
+		})
+	}
+}

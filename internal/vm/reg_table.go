@@ -1366,7 +1366,7 @@ func rsAddProp(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 	if w.Op() == bytecode.RAddProp {
 		b = regs[w.B()]
 	}
-	return st.done(st.r.regAddProp(st.cl, st.c, w, regs[w.A()], b))
+	return st.done(st.addPropSeen(pc, w, regs[w.A()], b))
 }
 
 func rhAddIndexK(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {

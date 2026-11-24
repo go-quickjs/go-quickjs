@@ -141,10 +141,11 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 }
 
 // A chain of additions whose first meets a string -- tag + s(a) + s(b) +
-// s(c), each a string -- is learned whole at that first failure: the
-// additions of its result after it, which meet strings as surely, are
-// Go's in the code compiled next too (jitRegStringAddSeen), not each
-// learned at a deoptimization of its own and a compile after it. PDF.js's
+// s(c), each a string, then file.text += e -- is learned whole, not each
+// addition at a deoptimization of its own and a compile after it: each
+// is marked where the interpreter makes it of a string (regCode's
+// stringAdds), the rest of the chain after the first one's failure in
+// compiled code too, which the interpreter runs. PDF.js's
 // createTableEntry had run out of compiles so. Each answer is the
 // interpreter's.
 func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {

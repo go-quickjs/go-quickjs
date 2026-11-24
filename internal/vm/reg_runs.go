@@ -29,7 +29,8 @@ var regStringAddOf func(c *regCode, pc int)
 // add_i32's, add_imm's and add_imm_i32's -- each marking, with the JIT
 // on, a result that is a string (regStringAddOf), in place of the call
 // its handler made; stringSeen marks an append's result (an error's is
-// undefined). They are calls of their own, not inlined, so that the
+// undefined), and addPropSeen is add_prop's, marking an addition of a
+// string. They are calls of their own, not inlined, so that the
 // handlers that make them (reg_table.go's) keep their sizes, but for
 // rsAdd's call of stringSeen, and the handlers after them their places.
 //
@@ -56,6 +57,15 @@ func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Valu
 		regStringAddOf(st.c, pc)
 	}
 	return v, err
+}
+
+//go:noinline
+func (st *regState) addPropSeen(pc int, w bytecode.RInstr, obj, b Value) error {
+	if st.r.jitOn() && w.Op() == bytecode.RAddProp && b.IsString() {
+		// o.name += x of a string x: a string's addition.
+		regStringAddOf(st.c, pc)
+	}
+	return st.r.regAddProp(st.cl, st.c, w, obj, b)
 }
 
 // regBinImm is bin_imm's slow path.
