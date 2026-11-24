@@ -825,12 +825,31 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	// Annex B's `for (var a = 0 in o)` assigns its initializer once, before
 	// the object is evaluated.
 	if vd, ok := n.Left.(*ast.VarDecl); ok && vd.Kind == ast.DeclVar && vd.Decls[0].Init != nil {
-		c.compileVarDecl(vd)
+		c.compileVarDecl(c.forInInit(vd))
 	}
 	c.compileExpr(n.Right)
 	c.pushExit(exitCursor)
 	c.compileForBody(n.Left, n.Body)
 	c.popExit()
+}
+
+// forInInit is the declaration to walk for for-in head vd's Annex B
+// initializer. Where a with object or an eval's variable may answer the
+// name, the initializer's write, a reference resolved before its value
+// is made, and each turn's store are probed and stored differently, so
+// the initializer is the write of an identifier of its own, which the
+// register form is told of (regcomp.Record.NoteForInInit).
+func (c *compiler) forInInit(vd *ast.VarDecl) *ast.VarDecl {
+	id, ok := vd.Decls[0].Target.(*ast.Ident)
+	if !ok || c.reg == nil || c.withLimit(id.Name) == 0 {
+		return vd
+	}
+	init := &ast.VarDecl{Kind: vd.Kind, Start: vd.Start, Decls: []ast.Declarator{{
+		Target: &ast.Ident{Name: id.Name, Start: id.Start},
+		Init:   vd.Decls[0].Init,
+	}}}
+	c.reg.NoteForInInit(vd, init)
+	return init
 }
 
 // beginHeadScope puts a for-in or for-of head's lexical bindings in scope, in

@@ -317,6 +317,22 @@ func TestAnnexBForInInitializer(t *testing.T) {
 			try { new Function(src); errs.push("ok") } catch (e) { errs.push(e.constructor.name) }
 		}
 		errs.join()`, "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError"},
+		// Under a with statement and in eval code, where an object or the
+		// eval's variables may answer the name, the initializer and each
+		// turn's store are two writes of one name (KI-87).
+		{`with ({}) { for (var c = 1 in {}) ; } c`, "1"},
+		{`new Function("with ({}) { for (var c = 2 in {}) ; } return c")()`, "2"},
+		{`function g() { eval("for (var c = 3 in {}) ;"); return c } g()`, "3"},
+		{`function g() { eval("for (var c = 3 in {k: 1}) ;"); return c } g()`, "k"},
+		{`function g() { var c; with ({c: 0}) { for (var c = 4 in {k: 1}) ; } return c } String(g())`, "undefined"},
+		// The initializer writes through the object its reference named
+		// before the value was made, deleted or not (B.3.5's ResolveBinding
+		// before the Initializer, as test262's
+		// statements/variable/binding-resolution.js has it of a var
+		// statement; Node writes the var, "undefined number"); each turn
+		// resolves the name anew.
+		{`var o = {d: 0}; with (o) { for (var d = (delete o.d, 5) in {}) ; } o.d + " " + typeof d`, "5 undefined"},
+		{`var p = {e: 0}; with (p) { for (var e = 6 in {k: 1, l: 1}) delete p.e; } p.e + " " + e`, "undefined l"},
 	})
 }
 

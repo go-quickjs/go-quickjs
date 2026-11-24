@@ -537,8 +537,9 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 			panic("regcomp: a for-of or for-in head's declaration")
 		}
 		if l.Decls[0].Init != nil {
-			// Assigned once, before the object is evaluated.
-			g.varDecl(l)
+			// Assigned once, before the object is evaluated: as the write
+			// of an identifier of its own where the walk made one.
+			g.varDecl(g.rec.ForInInit(l))
 		}
 		target, lexical = l.Decls[0].Target, l.Kind != ast.DeclVar
 		if l.Kind.IsUsing() {

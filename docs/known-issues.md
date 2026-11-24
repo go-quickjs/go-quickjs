@@ -1222,7 +1222,12 @@ Paths are relative to this repository; `go-intl:` paths are in
   `function g() { eval("for (var j = 0 in {}) {}") } g()`. Without `with`
   or the eval, and with `let` or no initializer, the loop runs.
 - **Expected:** all three run, as in Node.
-- **Status:** open.
+- **Status:** fixed. The initializer resolves its name before its value is
+  made and writes through that reference, and each turn's store resolves the
+  name anew: a probed name's two writes, which the record could not hold for
+  one identifier. The walk now walks the initializer as the write of an
+  identifier of its own and tells the register form of it
+  (`Record.NoteForInInit`); `TestAnnexBForInInitializer`.
 
 ### KI-90 A `v`-mode class under `i` is complemented before it is folded
 - **Where:** `internal/regexp/classset.go`, `classSetValue.complement`, which

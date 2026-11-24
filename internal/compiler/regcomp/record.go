@@ -207,6 +207,11 @@ type recordRare struct {
 	// bodyScope says the body has a scope of its own for what a direct
 	// eval in it declares (the walk's bodyEvalScope).
 	bodyScope bool
+	// forInInits are the Annex B initializers, for (var a = 0 in o), of
+	// a name a with object or an eval's variable may answer, each the
+	// declaration of an identifier of its own that the walk walked in
+	// its place (ForInInit).
+	forInInits map[*ast.VarDecl]*ast.VarDecl
 }
 
 // rareOf is r's rare part, made on its first use.
@@ -233,6 +238,34 @@ func (r *Record) Self() []uint32 {
 		return nil
 	}
 	return r.rare.self
+}
+
+// NoteForInInit records that the walk walked init, a declaration of an
+// identifier of its own, in place of for-in head d's Annex B
+// initializer: the initializer resolves its name before its value is
+// made and writes through that reference once, each turn's store
+// resolves the name anew, and a probed name's two writes, the same
+// identifier's, would be one name probed two ways.
+func (r *Record) NoteForInInit(d, init *ast.VarDecl) {
+	if r == nil || r.quiet > 0 {
+		return
+	}
+	rare := r.rareOf()
+	if rare.forInInits == nil {
+		rare.forInInits = map[*ast.VarDecl]*ast.VarDecl{}
+	}
+	rare.forInInits[d] = init
+}
+
+// ForInInit is the declaration the walk walked in place of for-in head
+// d's initializer (NoteForInInit), or d where it walked d's own.
+func (r *Record) ForInInit(d *ast.VarDecl) *ast.VarDecl {
+	if r.rare != nil {
+		if init := r.rare.forInInits[d]; init != nil {
+			return init
+		}
+	}
+	return d
 }
 
 // NoteParamCopy records that the body's var in slot to starts with the
