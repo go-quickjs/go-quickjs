@@ -241,15 +241,53 @@ func (f *fsHost) resolve(p string) (string, error) {
 		return "", fmt.Errorf("%s is outside the permitted root", p)
 	}
 	// A link is followed and the result checked again, so that a link inside
-	// the root pointing outside it is refused rather than obeyed. A path that
-	// does not exist yet cannot be a link, and is checked as written.
+	// the root pointing outside it is refused rather than obeyed.
 	if real, err := filepath.EvalSymlinks(clean); err == nil {
 		if !within(root, real) {
 			return "", fmt.Errorf("%s leads outside the permitted root", p)
 		}
 		return real, nil
 	}
-	return clean, nil
+	return resolveMissing(root, clean, p)
+}
+
+// resolveMissing resolves a path that does not exist, or not all of which
+// does: what a write, a mkdir or a rename is about to make. Its last
+// component is not a link, but a directory above it can be, so the nearest
+// ancestor that exists is resolved and checked, and the rest of the path is
+// joined to what it resolved to. A component of that rest that exists all
+// the same is one whose links lead nowhere -- a dangling link, a loop -- and
+// following it would make whatever it names, wherever that is: it is
+// refused.
+func resolveMissing(root, clean, p string) (string, error) {
+	var rest []string
+	for dir := clean; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("%s leads outside the permitted root", p)
+		}
+		rest = append(rest, filepath.Base(dir))
+		dir = parent
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			continue
+		}
+		if !within(root, real) {
+			return "", fmt.Errorf("%s leads outside the permitted root", p)
+		}
+		out := real
+		for i := len(rest) - 1; i >= 0; i-- {
+			name := rest[i]
+			if name == ".." || name == "." {
+				return "", fmt.Errorf("%s leads outside the permitted root", p)
+			}
+			out = filepath.Join(out, name)
+			if _, err := os.Lstat(out); err == nil {
+				return "", fmt.Errorf("%s goes through a link that cannot be followed", p)
+			}
+		}
+		return out, nil
+	}
 }
 
 // within reports whether a path is the root or inside it.

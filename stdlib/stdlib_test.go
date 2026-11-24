@@ -329,6 +329,97 @@ func TestFilesRootConfines(t *testing.T) {
 	}
 }
 
+// A path that does not exist yet -- what a write, a mkdir or a rename makes --
+// is confined as one that exists is: a link above it that leads out of the
+// root is refused, and so is a link that leads nowhere, which would make
+// whatever it names (KI-83).
+func TestFilesRootConfinesWrites(t *testing.T) {
+	cases := []struct {
+		name string
+		js   string
+		// made is the path, relative to the root's parent, that the
+		// operation makes when it is allowed; empty when it is refused.
+		made string
+	}{
+		{"write through link", `fs.writeFileSync("link/pwned.txt", "x")`, ""},
+		{"mkdir through link", `fs.mkdirSync("link/newdir")`, ""},
+		{"recursive mkdir through link", `fs.mkdirSync("link/newdir/deeper", {recursive: true})`, ""},
+		{"write under a new dir through link", `fs.writeFileSync("link/newdir/file", "x")`, ""},
+		{"rename through link", `fs.renameSync("inside.txt", "link/moved.txt")`, ""},
+		{"copy through link", `fs.copyFileSync("inside.txt", "link/copied.txt")`, ""},
+		{"append through link", `fs.appendFileSync("link/pwned.txt", "x")`, ""},
+		{"write through a link to a link", `fs.writeFileSync("link2/pwned.txt", "x")`, ""},
+		{"mkdir through a link to a link", `fs.mkdirSync("link2/newdir")`, ""},
+		{"write a dangling link", `fs.writeFileSync("dangling", "x")`, ""},
+		{"rename onto a dangling link", `fs.renameSync("inside.txt", "dangling/x")`, ""},
+		{"read through link", `fs.readFileSync("link/secret.txt", "utf8")`, ""},
+		{"write through a link to the root", `fs.writeFileSync("self/file.txt", "x")`, "root/file.txt"},
+		{"mkdir through a link to the root", `fs.mkdirSync("self/newdir")`, "root/newdir"},
+		{"rename through a link to the root", `fs.renameSync("inside.txt", "self/moved.txt")`, "root/moved.txt"},
+		{"write a new file", `fs.writeFileSync("new/../plain.txt", "x")`, "root/plain.txt"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			root := filepath.Join(dir, "root")
+			outside := filepath.Join(dir, "outside")
+			for _, d := range []string{root, outside} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, f := range []string{filepath.Join(outside, "secret.txt"), filepath.Join(root, "inside.txt")} {
+				if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			links := [][2]string{
+				{outside, "link"},
+				{filepath.Join(root, "link"), "link2"},
+				{filepath.Join(outside, "missing"), "dangling"},
+				{root, "self"},
+			}
+			for _, l := range links {
+				if err := os.Symlink(l[0], filepath.Join(root, l[1])); err != nil {
+					// Windows makes a link only with developer mode or
+					// the privilege to; CI's Linux and macOS jobs run this.
+					t.Skipf("this OS refuses to make a symbolic link: %v", err)
+				}
+			}
+
+			out, _ := run(t, stdlib.Config{FS: &stdlib.FS{Root: root}}, `
+				import("fs").then(({default: fs}) => {
+					try { `+c.js+`; console.log("done") }
+					catch (e) { console.log("refused: " + e.message) }
+				})
+			`)
+			if c.made == "" {
+				if !strings.HasPrefix(out, "refused: ") || !strings.Contains(out, "permitted root") && !strings.Contains(out, "cannot be followed") {
+					t.Errorf("%s = %q, want it refused", c.js, out)
+				}
+			} else {
+				if out != "done" {
+					t.Errorf("%s = %q, want done", c.js, out)
+				}
+				if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(c.made))); err != nil {
+					t.Errorf("%s made nothing at %s: %v", c.js, c.made, err)
+				}
+			}
+			entries, err := os.ReadDir(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != "secret.txt" {
+				var names []string
+				for _, e := range entries {
+					names = append(names, e.Name())
+				}
+				t.Errorf("%s changed the directory outside the root: %v", c.js, names)
+			}
+		})
+	}
+}
+
 func TestFilesReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "r.txt"), []byte("readable"), 0o644); err != nil {

@@ -255,7 +255,12 @@ Paths are relative to this repository; `go-intl:` paths are in
   are made in `outside`.
 - **Expected:** each refused: the nearest ancestor that exists resolved and
   checked, then the rest of the path joined to it.
-- **Status:** open.
+- **Status:** fixed. A path that does not resolve has its nearest ancestor
+  that does resolved and checked, and the rest joined to what it resolved
+  to (`resolveMissing`); a `..` in the rest, or a component of it that
+  exists all the same -- a dangling link, a loop -- is refused. A link to
+  the root itself still leads into the root.
+  - Test: `TestFilesRootConfinesWrites`.
 
 ## P1: limits, hangs, leaks
 
