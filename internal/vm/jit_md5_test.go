@@ -3,15 +3,12 @@
 package vm
 
 import (
-	"context"
 	"crypto/md5"
 	_ "embed"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 //go:embed testdata/md5.js
@@ -71,12 +68,11 @@ func TestJITStringArrayGrowth(t *testing.T) {
 func TestJITArrayGrowthCancellation(t *testing.T) {
 	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	r.SetContext(ctx)
-	_, err := r.Run(compileForTest(t, `function pack(s){let a=[];for(let i=0;;i=(i+1)&15)a[i]=s.charCodeAt(i);return a}pack('A'.repeat(16))`))
-	if !errors.Is(err, context.DeadlineExceeded) || r.jit == nil || r.jit.budgets == 0 {
-		t.Fatalf("bounded growth cancellation: %v", err)
+	entries, hosts, budgets := jitCancelledNativeForTest(t, r,
+		`function pack(s,n){let a=[];for(let i=0,k=0;k!==n;k++,i=(i+1)&15)a[i]=s.charCodeAt(i);return a}`,
+		`pack('A'.repeat(16),1000)`, `pack('A'.repeat(16),-1)`)
+	if entries == 0 || budgets == 0 {
+		t.Fatalf("bounded growth cancellation: %d entries, %d host exits, %d budgets", entries, hosts, budgets)
 	}
 }
 

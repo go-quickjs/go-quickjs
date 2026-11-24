@@ -600,8 +600,11 @@ func TestJITArrayGrowthLimits(t *testing.T) {
 		r := jitRuntimeForTest(t, cfg)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		if !memory {
+			// A second only bounds the endless loop: it must outlast the
+			// loop's first compile, which under checkptr on a loaded
+			// runner took more than 30 ms (jitCancelledNativeForTest).
 			cancel()
-			ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 		}
 		defer cancel()
 		r.SetContext(ctx)
@@ -1418,13 +1421,11 @@ func TestJITReferenceCallbackRelease(t *testing.T) {
 func TestJITReferenceCancellation(t *testing.T) {
 	t.Parallel()
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	p := compileForTest(t, `function forever(o){let s=0;for(;;)s+=o.array[0]}forever({array:[1]})`)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	r.SetContext(ctx)
-	_, err := r.Run(p)
-	if !errors.Is(err, context.DeadlineExceeded) || r.jit == nil || r.jit.entries == 0 || r.jit.budgets == 0 || r.jit.hosts != 0 {
-		t.Fatalf("reference loop cancellation: %v", err)
+	entries, hosts, budgets := jitCancelledNativeForTest(t, r,
+		`function sum(o,n){let s=0;for(let i=0;i!==n;i++)s+=o.array[0];return s}`,
+		`sum({array:[1]},1000)`, `sum({array:[1]},-1)`)
+	if entries == 0 || budgets == 0 || hosts != 0 {
+		t.Fatalf("reference loop cancellation: %d entries, %d host exits, %d budgets", entries, hosts, budgets)
 	}
 }
 
@@ -2978,7 +2979,10 @@ func TestJITLoopPromotionCancellation(t *testing.T) {
 			r := newTestRuntime(t, Config{JIT: true})
 			jitDefaultsForTest(r)
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			// The first call must promote its loop, so the deadline cannot
+			// wait for code as jitCancelledNativeForTest's does; a second
+			// outlasts the compile and only bounds the endless loop.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			r.SetContext(ctx)
 			_, err := r.Run(compileForTest(t, "function f() { "+keyword+" i=0; for(;;) i++ } f()"))
