@@ -3170,8 +3170,8 @@ func (c *core) frameSize() int {
 
 // callsAgain reports a call that may read its operands, and its state's
 // values, after Go has had the registers: a call of Go, which Go may
-// refuse, the call exiting after it; a push of several values, whose
-// growth is push's leaf, which may refuse it too (pushGrow); or a call
+// refuse, the call exiting after it; a push, whose growth is push's leaf,
+// which may refuse it too (pushGrow); or a call
 // whose pool Go fills, made again from its start (ssa.RefillsPools). What
 // it reads lives across it, saved and restored (allocate's saves).
 func callsAgain(v *ssa.Value) bool {
@@ -3179,7 +3179,7 @@ func callsAgain(v *ssa.Value) bool {
 		return false
 	}
 	c := v.Calls()[0]
-	return c.Go != 0 || c.Push && c.Argc > 1 || ssa.RefillsPools(v)
+	return c.Go != 0 || c.Push && c.Argc >= 1 || ssa.RefillsPools(v)
 }
 
 // savingCall reports a call that saves the registers live across it, and
@@ -4410,9 +4410,9 @@ type callRecord struct {
 // come first.
 // pushGrows reports whether a push of t's values, made natively, has its
 // array grown by push's leaf where it has no room for them (mir's
-// pushGrow): of several values, as many as a leaf's call takes.
+// pushGrow): of as many values as a leaf's call takes.
 func pushGrows(t *ssa.CallSite, enc abi.Encoding) bool {
-	return t.Argc > 1 && 2+t.Argc <= abi.MaxGoArgs && enc.LeafFast != 0
+	return t.Argc >= 1 && 2+t.Argc <= abi.MaxGoArgs && enc.LeafFast != 0
 }
 
 // windowCallees is, for register code's native call of sites (ssa.CallSite's

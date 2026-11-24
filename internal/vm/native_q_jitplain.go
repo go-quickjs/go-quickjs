@@ -61,18 +61,21 @@ func (r *Runtime) iterRestDense(st *iterState) (Value, bool) {
 // jitLiteralArraySource is a pool's source for the empty array literal at
 // register pc pc of cl's code, with the capacity the interpreter's site
 // confirmed at a turn's end before the literal reached native code
-// (arrayRoom's confirmed). Only that: a hint taken within a turn may be
-// an array a callback is still growing, and left several callbacks 7 to
-// 18% slower (docs/performance-plan.md, F3). The pc, unlike the site's
-// ordinal, also names a literal in an inlined callee. The pool is kept
-// weakly, so that this list keeps neither it nor code that has been thrown
-// away.
+// (arrayRoom's confirmed). Only that, of the interpreter's: a hint taken
+// within a turn may be an array a callback is still growing, and left
+// several callbacks 7 to 18% slower (docs/performance-plan.md, F3); the
+// pool learns a large room of its own arrays, two in a row that agree
+// (jitFillLiteral), as the interpreter's site learns its. The pc, unlike
+// the site's ordinal, also names a literal in an inlined callee. The pool
+// is kept weakly, so that this list keeps neither it nor code that has
+// been thrown away.
 func jitLiteralArraySource(r *Runtime, cl *closure, pool *abi.ObjectPool, pc, n int) *jitPoolSource {
 	s := &jitPoolSource{array: true, n: n}
 	for _, a := range cl.arraySites() {
 		if a != nil && a.pc == int32(pc) && a.confirmed >= arrayRoomLeast && a.confirmed <= arrayRoomLimit {
 			s.room = int(a.confirmed)
 			if r.jit != nil && pool != nil {
+				s.listed = true
 				r.jit.arrayRooms = append(r.jit.arrayRooms, jit.WeakPool(pool))
 			}
 			break

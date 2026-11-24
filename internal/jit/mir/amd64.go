@@ -1769,7 +1769,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		}
 		if t.Push {
 			// Array.prototype.push, its fast path's; an array with no room
-			// for several values grown by push's leaf (pushGrow).
+			// for its values grown by push's leaf (pushGrow).
 			room := guard
 			if pushGrows(t, c.enc) {
 				grow, growUsed = c.a.NewLabel(), true
@@ -2857,13 +2857,14 @@ func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 	c.leafCallOf(v, st, v.Args)
 }
 
-// pushGrow is the call of a push of several values whose array has no room
-// for them (pushGuards' room): push's leaf, the realm's Array.prototype.push
-// at the site's Callee (the VM's jitLeafGo), which grows the array as the
+// pushGrow is the call of a push whose array has no room for its values
+// (pushGuards' room): push's leaf, the realm's Array.prototype.push at the
+// site's Callee (the VM's jitLeafGo), which grows the array as the
 // built-in does, and goes on after it, the receiver and the values written
 // where a leaf's call writes them; refused, the call's exit. A push of one
-// leaves native code for its growth, which has the interpreter make the
-// literal's arrays with the room it learned (arrayEmptyNode).
+// had left native code for its growth, for the interpreter to learn the
+// room of the literal the array came from; native code's literal learns it
+// itself (the VM's jitFillLiteral).
 func (c *compiler) pushGrow(v *ssa.Value, site *ssa.CallSite) {
 	st, _ := c.goState(goOpWord(&ssa.CallSite{Go: ssa.GoLeaf, Argc: site.Argc, Method: true}), v.Index, v, nil)
 	st.Leaf, st.Unused, st.Give = site.Callee, false, 0

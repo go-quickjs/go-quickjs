@@ -1206,7 +1206,8 @@ type jitLiteral struct {
 }
 
 // jitLiteralRoom bounds the room learned from one array result. Larger
-// buffers inherit the interpreter's confirmed length (jitLiteralArrayRoom).
+// buffers take two results that agree, or the interpreter's confirmed
+// length (jitLiteralArrayRoom).
 const jitLiteralRoom = 64
 
 // jitObjectLiteral is the object literal at pc of cl's code, of either
@@ -1303,6 +1304,26 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 		return
 	}
 	if src != nil {
+		if s := src.sample; s != nil {
+			// What the last array the pool gave came to: two in a row past
+			// arrayRoomLeast, the smaller is the room, as the interpreter's
+			// site learns it (arrayObserve) -- a literal native code makes
+			// from its first turn on, the interpreter had never run, and
+			// each of its arrays grew from nothing through Go, where the
+			// interpreter's were made with the room at once.
+			length := len(s.elemsOf())
+			if length > arrayRoomLimit {
+				length = 0
+			}
+			if src.room < arrayRoomLeast && length >= arrayRoomLeast && src.previous >= arrayRoomLeast {
+				src.room = min(length, src.previous)
+				if r.jit != nil && !src.listed {
+					src.listed = true
+					r.jit.arrayRooms = append(r.jit.arrayRooms, jit.WeakPool(pool))
+				}
+			}
+			src.previous = length
+		}
 		if s := src.sample; s != nil && len(s.elemsOf()) > n {
 			// The last array the pool gave grew past the literal's
 			// elements -- a spread's, an append's -- as the next will:
@@ -2537,6 +2558,13 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
 		o.ownElems()
 		o.extOf().elems[i] = v
+		return true
+	}
+	if uint(i) == uint(len(o.elemsOf())) && appendElem(o, n, v) {
+		// At the length, grown as the interpreter's assignment grows it
+		// (growElems): Go's append, which setElem takes, grows a large
+		// array by a quarter, and each tier had grown the same array
+		// through different capacities.
 		return true
 	}
 	const want = objExtensible | objArrayLengthWritable
@@ -4044,10 +4072,12 @@ type jitPoolSource struct {
 	// array marks an array literal's pool; results, a call of next's pool
 	// of result objects (jitFillResults); sharedPC, with sharedOf, register
 	// code's new_array_k of constants whose arrays share them, made whole,
-	// sharedPC its site's index in sharedOf's caches (jitRegSharedLiteral).
-	// The three share a word.
+	// sharedPC its site's index in sharedOf's caches (jitRegSharedLiteral);
+	// listed says an array literal's pool is in the JIT's arrayRooms. The
+	// four share a word.
 	array    bool
 	results  bool
+	listed   bool
 	sharedPC int32
 	lit      *bytecode.Constant
 	// A closure's (jitFillClosures): its template, the function it is made
@@ -4057,9 +4087,11 @@ type jitPoolSource struct {
 	env  *Object
 	// room is how many elements an array literal's arrays are made with
 	// room for, past its own, learned of sample, the last array of the
-	// pool's last filling (jitFillLiteral).
-	room   int
-	sample *Object
+	// pool's last filling (jitFillLiteral); previous is the length the
+	// sample before it came to, which a large room needs it to agree with,
+	// as an interpreter's site's two samples do (arrayObserve).
+	room, previous int
+	sample         *Object
 	// gen is the generator function a call's pool of generators is of
 	// (jitFillGens).
 	gen *Object

@@ -148,23 +148,33 @@ func TestJITDeleteGoCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
-		name, warm string
-		want       float64
-		deletes    int
+		name, prep, warm string
+		want             float64
+		deletes          int
 	}{
 		// Every key of the three objects is gone after, and nc's x stays.
-		{"count", `count(fresh(),keys)`, 8 + 8 + 8 + 7, 4 * 8},
-		{"scount", `scount(fresh().slice(0,3),keys)`, 8 + 8 + 8, 3 * 8},
+		{"count", ``, `count(fresh(),keys)`, 8 + 8 + 8 + 7, 4 * 8},
+		{"scount", ``, `scount(fresh().slice(0,3),keys)`, 8 + 8 + 8, 3 * 8},
 		// The values read from the properties deleted, used after: kept
 		// first (ssa's allocOnly), as a call's are. Their sum, 2 times
-		// the sum of 0 to 7.
-		{"kept", `kept(triples(8),new Array(24).fill(0))`, 56, 3 * 8},
+		// the sum of 0 to 7. The objects are made in a run of their own,
+		// whose pushes grow their array by calls of Go too.
+		{"kept", `var ts=triples(8)`, `kept(ts,new Array(24).fill(0))`, 56, 3 * 8},
 	} {
+		prep := func() {
+			if c.prep != "" {
+				if _, err := r.Run(compileForTest(t, c.prep)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		for i := 0; i < 8; i++ {
+			prep()
 			if _, err := r.Run(compileForTest(t, c.warm)); err != nil {
 				t.Fatal(err)
 			}
 		}
+		prep()
 		code := jitNativeCodeForTest(t, r, c.name)
 		e := code.e
 		calls := 0

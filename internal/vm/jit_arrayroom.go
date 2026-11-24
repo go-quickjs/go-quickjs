@@ -9,10 +9,11 @@ import (
 // jitLiteralArrayRoom is the capacity pool's next arrays are made with, the
 // literal's n elements at least. A pool with a large hint holds one array: a
 // batch would retain unused buffers and delay observing a changed length.
-// Native code may shrink a hint, but only the interpreter's two samples may
-// establish a large one. It is given its sample's length before the sample
-// goes: past the limit, or short, the room falls back to what a small literal
-// learns.
+// A large hint is the interpreter's confirmed room, or two of the pool's
+// own samples in a row that agree, as the interpreter's site's do
+// (jitFillLiteral); native code shrinks it. It is given its sample's
+// length before the sample goes: past the limit, or short, the room falls
+// back to what a small literal learns.
 func jitLiteralArrayRoom[_ any](pool *abi.ObjectPool, n int) int {
 	src := (*jitPoolSource)(pool.Source)
 	if src == nil {
@@ -61,14 +62,17 @@ func jitLiteralArraySweep[_ any](s *jitState) {
 			continue
 		}
 		src := (*jitPoolSource)(pool.Source)
-		if src == nil || src.room < arrayRoomLeast {
+		if src == nil {
 			continue
 		}
-		if pool.Count == 0 {
+		if src.room >= arrayRoomLeast && pool.Count == 0 {
 			jitLiteralArrayRoom[struct{}](pool, src.n)
 		}
 		if src.room >= arrayRoomLeast {
 			keep = append(keep, w)
+		} else {
+			// Listed again once it learns a large room anew.
+			src.listed = false
 		}
 	}
 	clear(s.arrayRooms[len(keep):])

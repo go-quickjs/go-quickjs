@@ -331,7 +331,9 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 		f := leafOps[op]
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return f(r, this, args, true) }
 	case op == elemPush:
-		// Of other than one value (jitPlainCall), as jitLeafApply makes it.
+		// Of other than one value (jitPlainCall), or of any whose array
+		// native code had no room for (mir's pushGrow), as jitLeafApply
+		// makes it.
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return r.jitLeafApply(fd, this, args) }
 	default:
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return r.collectionOp(op, this, args, true) }

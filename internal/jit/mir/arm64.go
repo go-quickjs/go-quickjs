@@ -4153,7 +4153,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			continue
 		}
 		if t.Push {
-			// As amd64's: no room for several values, push's leaf.
+			// As amd64's: no room for its values, push's leaf.
 			room := guard
 			if pushGrows(t, c.enc) {
 				grow, growUsed = c.a.NewLabel(), true
@@ -5725,7 +5725,7 @@ func (c *a64Compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 	c.leafCallOf(v, st, v.Args)
 }
 
-// pushGrow is amd64's: a push of several values with no room, push's leaf.
+// pushGrow is amd64's: a push with no room for its values, push's leaf.
 func (c *a64Compiler) pushGrow(v *ssa.Value, site *ssa.CallSite) {
 	st, _ := c.goState(goOpWord(&ssa.CallSite{Go: ssa.GoLeaf, Argc: site.Argc, Method: true}), v.Index, v, nil)
 	st.Leaf, st.Unused, st.Give = site.Callee, false, 0
