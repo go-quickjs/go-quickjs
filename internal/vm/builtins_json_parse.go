@@ -32,9 +32,9 @@ type jsonParser struct {
 	rt  *Runtime
 	src string
 	pos int
-	// depth is how deeply the parser has descended, which is bounded: the
-	// stack it recurses on cannot grow for ever.
-	depth int
+	// room is how many levels more the parser may descend, which is
+	// bounded: the stack it recurses on cannot grow for ever (parseJSON).
+	room int
 	// scratch collects the elements of the arrays and the values of the
 	// objects being parsed, each above its parent's. Each is copied out at
 	// exactly its own length when it closes, so growing this one buffer
@@ -128,6 +128,10 @@ func (r *Runtime) jsonCaches() *jsonState {
 func (r *Runtime) parseJSON(src string, records bool, doc *String) (Value, *jsonRecord, error) {
 	st := r.jsonCaches()
 	p := jsonParser{rt: r, src: src, st: st, records: records, scratch: st.values, strRoom: len(src), doc: doc}
+	// No script runs while the text is parsed, so the levels the parser may
+	// enter are known when it starts: jsonLevelsPerNest to each level of the
+	// Go recursion left, past which nest would refuse the next.
+	p.room = (maxGoRecursion - r.nesting) * jsonLevelsPerNest
 	st.values = nil
 	if !records {
 		if root := rootFor(ClassObject, r.proto.object); root != nil && !root.unique && !root.loose && root.tree != nil {
@@ -210,11 +214,11 @@ func (p *jsonParser) parseValueAt() (Value, error) {
 	case '"':
 		return p.parseStringValue()
 	case '{', '[':
-		if p.depth >= jsonMaxDepth {
-			return Undefined, p.rt.throwRangeError(
-				"JSON nests too deeply to be parsed")
+		if p.room <= 0 {
+			// nest's error, the error of runaway recursion.
+			return Undefined, p.rt.throwRangeError("maximum call stack size exceeded")
 		}
-		p.depth++
+		p.room--
 		var v Value
 		var err error
 		if c == '{' {
@@ -222,7 +226,7 @@ func (p *jsonParser) parseValueAt() (Value, error) {
 		} else {
 			v, err = p.parseArray()
 		}
-		p.depth--
+		p.room++
 		return v, err
 	case 't':
 		if strings.HasPrefix(p.src[p.pos:], "true") {

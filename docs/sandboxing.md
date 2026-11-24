@@ -119,7 +119,9 @@ Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same
 reason — a goroutine stack overflow cannot be caught, so it would take the host
 down — and so is deeply nested JSON, which `JSON.parse`, `JSON.stringify` and a
-reviver all walk by recursion. A panic anywhere inside the engine is caught at
+reviver all walk by recursion: a document may nest 100,000 deep on a 64-bit
+platform and 50,000 on a 32-bit one, and one deeper throws the `RangeError` of
+runaway recursion. A panic anywhere inside the engine is caught at
 the `Eval` boundary and returned as `ErrInternal`: a host running untrusted code
 must not be taken down by the code it is sandboxing.
 

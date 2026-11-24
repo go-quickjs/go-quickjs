@@ -481,18 +481,15 @@ func (r *Runtime) seesThirdArg(fn Value) bool {
 }
 
 // reviveJSONAt is reviveJSON with the depth it has reached, which is bounded
-// for the same reason the parser's is, and with k, the atom of key.
+// for the same reason the parser's is (jsonLevelsPerNest), and with k, the
+// atom of key.
 func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver *jsonReviver, rec *jsonRecord, depth int) (Value, error) {
-	if depth >= jsonMaxDepth {
-		return Undefined, r.throwRangeError(
-			"a structure nested this deeply cannot be revived")
+	if depth%jsonLevelsPerNest == 0 {
+		if err := r.nest(); err != nil {
+			return Undefined, err
+		}
+		defer r.unnest()
 	}
-	// A reviver may parse again, and revive that, which the depth above
-	// does not see.
-	if err := r.nest(); err != nil {
-		return Undefined, err
-	}
-	defer r.unnest()
 	val, err := r.getProp(holder, k, Obj(holder))
 	if err != nil {
 		return Undefined, err
@@ -708,12 +705,11 @@ func (e *jsonEncoder) encodeObject(buf []byte, v Value) ([]byte, bool, error) {
 	if e.entered(o) {
 		return buf, false, e.rt.throwTypeError("converting a circular structure to JSON")
 	}
-	if e.depth >= jsonMaxDepth {
-		return buf, false, e.rt.throwRangeError(
-			"a structure nested this deeply cannot be serialized")
-	}
-	if err := e.rt.nest(); err != nil {
-		return buf, false, err
+	// The walk's levels are bounded as the parser's are (jsonLevelsPerNest).
+	if e.depth%jsonLevelsPerNest == 0 {
+		if err := e.rt.nest(); err != nil {
+			return buf, false, err
+		}
 	}
 	e.enter(o)
 	var err error
@@ -734,7 +730,9 @@ func (e *jsonEncoder) encodeObject(buf []byte, v Value) ([]byte, bool, error) {
 		return buf, false, err
 	}
 	e.leave(o)
-	e.rt.unnest()
+	if e.depth%jsonLevelsPerNest == 0 {
+		e.rt.unnest()
+	}
 	return buf, true, nil
 }
 
@@ -1358,11 +1356,18 @@ func jsonEscapeWide(s string, i int) int {
 	return n
 }
 
-// jsonMaxDepth bounds how deeply JSON may nest.
+// jsonLevelsPerNest is how many levels of JSON's nesting count as one level
+// of the engine's recursion in Go (nest), which bounds them.
 //
 // Parsing, serializing and reviving all walk the structure by recursion, and
 // the goroutine stack a deep enough document would exhaust cannot be grown for
 // ever -- nor can its exhaustion be caught, which would take the host down
-// rather than the script. Real documents nest tens deep; this is the point past
-// which one is no longer data.
-const jsonMaxDepth = 10000
+// rather than the script. So the walks count their levels against the limit
+// sized to the Go stack, maxGoRecursion, which a reviver or a toJSON that
+// parses or serializes again, a proxy or a call in between share: past it is
+// a RangeError, as past the stack is in V8. A level of a walk holds a third
+// to two thirds of a kilobyte of the stack (an object's parse the most), a
+// few times less than a call does, so that two count as one: a document may
+// nest 100,000 deep on a 64-bit platform and 50,000 on a 32-bit one, in some
+// 70 MB of stack at the most.
+const jsonLevelsPerNest = 2

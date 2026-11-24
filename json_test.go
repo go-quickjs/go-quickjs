@@ -1,6 +1,8 @@
 package quickjs_test
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -355,31 +357,55 @@ func TestJSONLoneSurrogateRoundTrip(t *testing.T) {
 // TestJSONNestingIsBounded covers the depth limit. Parsing, serializing and
 // reviving all walk the structure by recursion, and the stack a deep enough
 // document would exhaust cannot be grown for ever -- nor can its exhaustion be
-// caught, which would take the host down rather than the script.
+// caught, which would take the host down rather than the script. The bound is
+// the Go stack's, which every recursion the engine does in Go shares: 100,000
+// levels on a 64-bit platform and 50,000 on a 32-bit one, where it had been
+// 10,000 of a limit of JSON's own (KI-89).
 func TestJSONNestingIsBounded(t *testing.T) {
 	t.Parallel()
+	deepest := 100000
+	if strconv.IntSize == 32 {
+		deepest = 50000
+	}
+	const overflow = "RangeError: maximum call stack size exceeded"
+	d, past := strconv.Itoa(deepest), strconv.Itoa(deepest+1)
+	walks := `
+		function deepArray(n) { let v = []; for (let i = 1; i < n; i++) v = [v]; return v }
+		function deepObject(n) { let v = {}; for (let i = 1; i < n; i++) v = {a: v}; return v }
+		var arrays = n => "[".repeat(n) + "]".repeat(n)
+		var objects = n => '{"a":'.repeat(n - 1) + "{}" + "}".repeat(n - 1)
+		function walks(n) {
+			const s = arrays(n), o = objects(n), out = []
+			for (const f of [
+				() => JSON.parse(s) !== undefined,
+				() => JSON.parse(o) !== undefined,
+				() => JSON.stringify(deepArray(n)) === s,
+				() => JSON.stringify(deepObject(n)) === o,
+				() => JSON.stringify(deepObject(n), (k, v) => v) === o,
+				() => JSON.stringify(deepObject(n), ["a"]) === o,
+				() => JSON.parse(s, (k, v) => v) !== undefined,
+				() => JSON.parse(o, (k, v, context) => v) !== undefined,
+			]) {
+				try { out.push(String(f())) } catch (e) { out.push(e.name + ": " + e.message) }
+			}
+			return out.join("|")
+		}`
 	cases := []struct{ src, want string }{
 		// Ordinary depth is unaffected.
 		{`JSON.parse("[".repeat(100) + "]".repeat(100)).length`, "1"},
 		{`JSON.stringify(JSON.parse("[".repeat(500) + "]".repeat(500))).length`, "1000"},
 
-		// Past the limit it is an error a script can catch, rather than the
-		// end of the process.
+		// Every walk goes as deep as the stack allows, and past it is an
+		// error a script can catch, rather than the end of the process.
+		{walks + `; walks(` + d + `)`, strings.Repeat("true|", 7) + "true"},
+		{walks + `; walks(` + past + `)`, strings.Repeat(overflow+"|", 7) + overflow},
 		{`var deep = "[".repeat(3000000) + "]".repeat(3000000)
-		  try { JSON.parse(deep); "parsed" } catch (e) { e.constructor.name }`, "RangeError"},
-		{`var deep = "{\"a\":".repeat(200000) + "1" + "}".repeat(200000)
-		  try { JSON.parse(deep); "parsed" } catch (e) { e.constructor.name }`, "RangeError"},
-		// The same for building one and serializing it.
-		{`var o = [], t = o
-		  for (var i = 0; i < 200000; i++) { var n = []; t.push(n); t = n }
-		  try { JSON.stringify(o); "ok" } catch (e) { e.constructor.name }`, "RangeError"},
-		// And for reviving one, which walks it again.
-		{`var text = "[".repeat(20000) + "]".repeat(20000)
-		  try { JSON.parse(text, function (k, v) { return v }); "ok" }
-		  catch (e) { e.constructor.name }`, "RangeError"},
-		// A structure just inside the limit still works.
-		{`var text = "[".repeat(9000) + "]".repeat(9000)
-		  JSON.stringify(JSON.parse(text)).length`, "18000"},
+		  try { JSON.parse(deep); "parsed" } catch (e) { e.name + ": " + e.message }`, overflow},
+		// The levels of a parse or a serialization a reviver or a toJSON
+		// begins count with those it is in.
+		{`var text = "[".repeat(60000) + "1" + "]".repeat(60000), again = true
+		  try { JSON.parse(text, function (k, v) { if (v === 1 && again) { again = false; JSON.parse(text) } return v }); "ok" }
+		  catch (e) { e.name + ": " + e.message }`, overflow},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

@@ -1432,7 +1432,16 @@ Paths are relative to this repository; `go-intl:` paths are in
   serialized` (9,999 is serialized). Generated trees and serialized ASTs go
   deeper, and no document gives the number.
 - **Expected:** Node parses and serializes arrays nested 100,000 deep.
-- **Status:** open.
+- **Status:** fixed. The walks had a bound of their own beside the one
+  KI-04 sized to the Go stack (`maxGoRecursion`), which they also counted
+  each level against; now they count against that one alone, two levels
+  as one, since a level holds a few times less of the stack than a call:
+  100,000 levels on a 64-bit platform and 50,000 on a 32-bit one, then
+  `RangeError: maximum call stack size exceeded`, the error of runaway
+  recursion, which docs/sandboxing.md gives. Node's parse and stringify
+  are not recursive, and take any depth; its reviver and a replacer
+  function stop short of 100,000, and C QuickJS short of 10,000. Test:
+  `TestJSONNestingIsBounded`.
 
 ### KI-91 TextDecoder replaces bad UTF-8 by the wrong number of characters
 - **Where:** `stdlib/webapis.go`, `TextDecoder.decode`, which reads a
