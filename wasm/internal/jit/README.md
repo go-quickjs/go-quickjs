@@ -291,7 +291,12 @@ and X0 on arm64:
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
   next entry, which a register holds in native code and an exit stores,
   and its end -- or, if that is before, the entry at which a call would
-  pass `MaxCallDepth`.
+  pass `MaxCallDepth`; `DepthEnd` that entry alone, which the optimizing
+  tier's inlined calls check (`opt/README.md`, Inlining). A call the
+  optimizing tier makes from an inlined body has its entry past the
+  unwritten ones of the frames the inlined calls would have made, and an
+  offset past the module's bytes that says them: Go walks a level's
+  entries from the last (`rsEntries`).
 - `Poll`: the poll counter, the exec's, which a register holds in native
   code: copied in at entry and out at every exit.
 - The exit record: `Exit`, `Arg0`-`Arg4`, `ExitFn`, `ExitAddr`, and

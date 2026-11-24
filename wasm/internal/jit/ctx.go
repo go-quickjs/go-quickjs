@@ -108,6 +108,11 @@ type Ctx struct {
 	// staying in Save. It is at a multiple of 16 bytes from the context's
 	// start, which arm64's 16-byte loads and stores scale their offsets by.
 	SaveV [2 * 32]uint64
+	// DepthEnd is where on the return stack the call depth would pass its
+	// limit: RSEnd, unless the stack's end is before it. The optimizing
+	// tier's code enters an inlined callee only where a call of it would be
+	// within the limit (Site).
+	DepthEnd uintptr
 }
 
 // RArgsBias is what Ctx.RArgs adds to its offset, which may be negative,
@@ -124,8 +129,26 @@ const RSEntryWords = 3
 // (Ctx.Mems).
 const MemEntryWords = 3
 
+// InlineFrame is a frame an inlined call would have made: the function
+// called, and the offset of the call in its caller.
+type InlineFrame struct {
+	Fn, Call uint32
+}
+
+// InlineBase is the first offset Request.InlineSite gives for a module of
+// n bytes: no instruction is at it or past it.
+func InlineBase(n int) uint32 { return uint32(n) }
+
 // Site is a return stack entry's third word, for a callee and the offset of
 // the call in its caller.
+//
+// A call the optimizing tier's code makes from a body it inlined, k calls
+// deep, has an offset past the module's bytes (Request.InlineSite), which
+// says the k frames the inlined calls would have made, and its entry is k
+// entries past the next one: those frames' entries, unwritten, so that the
+// return stack's depth is the calls'. The engine walks the entries from
+// the last, each entry's offset saying how many unwritten ones are below
+// it.
 func Site(callee, offset uint32) uint64 { return uint64(callee)<<32 | uint64(offset) }
 
 // The exits. Each says what Ctx's Arg words hold.
@@ -209,4 +232,5 @@ const (
 	TrapNullDereference      = 13
 	TrapIllegalCast          = 14
 	TrapArrayOutOfBounds     = 15
+	TrapStackOverflow        = 18
 )

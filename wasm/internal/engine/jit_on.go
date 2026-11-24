@@ -100,6 +100,9 @@ type codeJIT struct {
 	fns         []*fnJIT
 	reclaimedAt uint64
 	dropped     atomic.Int64
+	// inline is the sites of the calls the optimizing tier inlined
+	// (jit_inline.go).
+	inline inlineSites
 }
 
 // optPollWeight is how many calls a poll exit of a function's baseline
@@ -275,6 +278,8 @@ type jitExec struct {
 	levels []*jitLevel
 	n      int // the number of levels running
 	rs     []uint64
+	// entries is jitSync's list of a level's return stack entries.
+	entries []int
 	// codes are the exec's chains of the levels of each Code it entered
 	// lately (codeLevels), which a pass of a Code that drops code reads
 	// (codeJIT.pins), and last the one entered last.
@@ -531,6 +536,7 @@ func (c *Code) enableJIT(threshold int) bool {
 	n := max(len(c.Module.Functions), 1)
 	cj := &codeJIT{test: c.test, id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), rframes: make([]uint64, n), counters: make([]int64, n),
 		fns: make([]*fnJIT, n), tableBytes: tableBytes(n)}
+	cj.inline.base = wjit.InlineBase(len(c.Module.Bytes))
 	cj.joinBudget(NewJITBudget(jitMemEnv))
 	cj.optThreshold.Store(-1)
 	if wopt.Available {
@@ -687,7 +693,7 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		return nil
 	}
 	start := time.Now()
-	code, err := wopt.Compile(request(c, idx, cd, 0))
+	code, err := wopt.Compile(optRequest(c, cj, idx, cd))
 	countTime(&jitStats.optTime, start)
 	if err != nil {
 		reason := "internal"
@@ -881,6 +887,16 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		TierCounter:    counter,
 		Marks:          jitCode != nil,
 	}
+}
+
+// optRequest is the request to compile function idx with the optimizing
+// tier, which may inline calls, the Code giving their sites' offsets.
+func optRequest(c *Code, cj *codeJIT, idx uint32, cd *compiled) *wjit.Request {
+	req := request(c, idx, cd, 0)
+	if jitInline {
+		req.InlineSite = cj.inline.site
+	}
+	return req
 }
 
 // calleeFrame is the numeric slots of function f's frame, and the
@@ -1097,6 +1113,7 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 		lv.rsBase = lv.rsBase - old + start
 		lv.ctx.RSP = lv.ctx.RSP - old + start
 		lv.ctx.RSEnd = min(newEnd, lv.rsBase+lv.rsDepth)
+		lv.ctx.DepthEnd = lv.rsBase + lv.rsDepth
 	}
 	return from - old + start
 }
@@ -1168,6 +1185,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	lv.rsBase = from
 	lv.rsDepth = uintptr(max(MaxCallDepth-x.depth+1, 1)) * rsEntryBytes
 	ctx.RSEnd = min(x.rsStart()+uintptr(len(x.jit.rs))*8, from+lv.rsDepth)
+	ctx.DepthEnd = from + lv.rsDepth
 	i := x.rsIndex(from)
 	x.jit.rs[i] = uint64(nat.retStub)
 	x.jit.rs[i+1] = 0
@@ -1272,7 +1290,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 			slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
 		}
 		x.jitSync(lv, at)
-		callee := x.jitCallee(lv, &f, ft, slot, at)
+		callee := x.jitCallee(lv, &f, ft, slot, lv.cj.inline.leaf(at))
 		x.jitCall(lv, callee, ft, &f, slot)
 		x.jitUnsync(lv)
 	case wjit.ExitTailCall, wjit.ExitTailIndirect, wjit.ExitTailRef:
@@ -1290,7 +1308,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 				slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
 			}
 			x.jitSync(lv, at)
-			callee = x.jitCallee(lv, &f, ft, slot, at)
+			callee = x.jitCallee(lv, &f, ft, slot, lv.cj.inline.leaf(at))
 			x.jitUnsync(lv)
 		}
 		if n, o, done := x.jitTail(lv, callee, ft, &f, slot, at); done {
@@ -1302,7 +1320,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg1))
 		x.takeFrom(lv, &f)
-		x.jitAlloc(lv, ctx.Arg0, ctx.Arg2, &f, uint32(ctx.Arg1))
+		x.jitAlloc(lv, ctx.Arg0, ctx.Arg2, &f, lv.cj.inline.leaf(uint32(ctx.Arg1)))
 		x.jitUnsync(lv)
 	case wjit.ExitSIMD:
 		f := x.exitFrame(lv)
@@ -1313,7 +1331,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg4))
 		x.takeFrom(lv, &f)
-		x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, &f, int(ctx.Arg3), uint32(ctx.Arg4))
+		x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, &f, int(ctx.Arg3), lv.cj.inline.leaf(uint32(ctx.Arg4)))
 		x.jitUnsync(lv)
 	default:
 		panic(fmt.Sprintf("wasm jit: exit %d", ctx.Exit))
@@ -1414,20 +1432,20 @@ func (x *exec) takeFrom(lv *jitLevel, f *exitFrame) {
 // a trap to report.
 func (x *exec) jitSync(lv *jitLevel, offset uint32) {
 	rs := x.jit.rs
-	first, last := x.rsIndex(lv.rsBase), x.rsIndex(lv.ctx.RSP)
 	x.calls = x.calls[:lv.calls]
-	for i := first; i < last; i += wjit.RSEntryWords {
+	x.jit.entries = x.rsEntries(lv, x.jit.entries)
+	for k, i := range x.jit.entries {
 		site := rs[i+2]
 		callee := lv.inst.Funcs[site>>32]
-		if i == first {
+		if k == 0 {
 			x.calls[len(x.calls)-1].fn = callee
 			continue
 		}
-		x.calls[len(x.calls)-1].offset = uint32(site)
+		x.syncAt(lv, uint32(site))
 		x.calls = append(x.calls, callSite{fn: callee})
 	}
-	x.calls[len(x.calls)-1].offset = offset
-	x.depth = lv.depth + (last-first)/wjit.RSEntryWords - 1
+	x.syncAt(lv, offset)
+	x.depth = lv.depth + len(x.calls) - lv.calls
 }
 
 // jitUnsync puts the exec's state back as the level found it.

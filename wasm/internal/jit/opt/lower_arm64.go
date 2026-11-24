@@ -74,6 +74,7 @@ var (
 	offChunkEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.ChunkEnd))
 	offRSP       = int32(unsafe.Offsetof(wjit.Ctx{}.RSP))
 	offRSEnd     = int32(unsafe.Offsetof(wjit.Ctx{}.RSEnd))
+	offDepthEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.DepthEnd))
 	offPoll      = int32(unsafe.Offsetof(wjit.Ctx{}.Poll))
 	offR         = int32(unsafe.Offsetof(wjit.Ctx{}.R))
 	offRChunkEnd = int32(unsafe.Offsetof(wjit.Ctx{}.RChunkEnd))
@@ -1278,6 +1279,17 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.atomic(v)
 	case OpExnVal:
 		g.exnVal(v)
+	case OpDepth:
+		// The inlined call's frame would be the entry Aux-1 past the next
+		// one: within the depth's limit, or the call traps.
+		rs := rRS
+		if k := int64(v.Aux) - 1; k > 0 {
+			a.AddImm(s0, rRS, k*rsEntry, true)
+			rs = s0
+		}
+		a.Load(s1, rCtx, offDepthEnd)
+		a.Cmp(rs, s1, true)
+		a.BCond(arm64.HS, g.trap(wjit.TrapStackOverflow, v.At))
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1662,18 +1674,22 @@ func (g *gen) stage(args []*Value, base int) {
 // pushReturn pushes the return stack's entry of a native call -- the
 // address ret, the caller's L, and site in s1, or Site(idx, at) -- and
 // moves L to the callee's frame.
-func (g *gen) pushReturn(ret arm64.Label, site uint64, siteInS1 bool) {
+func (g *gen) pushReturn(ret arm64.Label, site uint64, siteInS1 bool, k int64) {
 	a := g.a
+	e := int32(k * rsEntry)
 	a.Adr(s0, ret)
-	a.Store(rRS, 0, s0)
-	a.Store(rRS, 8, rL)
+	a.Store(rRS, e, s0)
+	a.Store(rRS, e+8, rL)
 	if !siteInS1 {
 		a.MovImm(s1, site)
 	}
-	a.Store(rRS, 16, s1)
-	a.AddImm(rRS, rRS, wjit.RSEntryWords*8, true)
+	a.Store(rRS, e+16, s1)
+	a.AddImm(rRS, rRS, (k+1)*rsEntry, true)
 	a.AddImm(rL, rL, int64(8*g.req.FrameSlots), true)
 }
+
+// rsEntry is the bytes of a return stack entry.
+const rsEntry = wjit.RSEntryWords * 8
 
 // call lowers a call of a function: natively where the callee has native
 // code and there is room, else through Go.
@@ -1699,6 +1715,9 @@ func (g *gen) call(v *Value, rest []*Value) {
 	// the allocator's no argument is in: at a call every other value of
 	// the function is in its slot or dead.
 	self := idx == g.fn
+	// A call made k inlined calls deep has its entry k entries past the
+	// next one, those of the frames the inlined calls would have made.
+	k := int64(v.Aux2)
 	link, kept := g.freeGPR(v.Args, 0)
 	if !self {
 		if !kept {
@@ -1720,7 +1739,12 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.BCond(arm64.HI, slow)
 	}
 	a.Load(s1, rCtx, offRSEnd)
-	a.Cmp(rRS, s1, true)
+	if k > 0 {
+		a.AddImm(s0, rRS, k*rsEntry, true)
+		a.Cmp(s0, s1, true)
+	} else {
+		a.Cmp(rRS, s1, true)
+	}
 	a.BCond(arm64.HS, slow)
 	if g.sigHasRefs(v) {
 		g.refArgs(v, g.adv())
@@ -1734,7 +1758,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	}
 	g.advanceR()
 	ret := a.NewLabel()
-	g.pushReturn(ret, wjit.Site(idx, v.At), false)
+	g.pushReturn(ret, wjit.Site(idx, v.At), false, k)
 	switch {
 	case self:
 		a.B(g.entry)
@@ -1746,6 +1770,10 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.Br(s0)
 	}
 	a.Bind(ret)
+	if k > 0 {
+		// The callee returned with the entry it popped.
+		a.AddImm(rRS, rRS, -k*rsEntry, true)
+	}
 	g.restoreR()
 	if g.sigHasRefs(v) {
 		g.refResults(v, g.adv())
@@ -1859,7 +1887,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 		a.MovImm(s0, uint64(v.At))
 		a.Op(arm64.Orr, s1, s1, s0, true)
 	}
-	g.pushReturn(ret, 0, true)
+	g.pushReturn(ret, 0, true, 0)
 	if kept {
 		a.Br(link)
 	} else {

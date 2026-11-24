@@ -53,11 +53,13 @@ func TestBuildSpec(t *testing.T) {
 			if m == nil {
 				continue
 			}
-			for fn := range m.Functions {
+			for k := range 2 * len(m.Functions) {
+				// Each function built, then built inlining what it calls.
+				fn, inline := k/2, int32(k%2)*inlineDepth
 				if m.Functions[fn].Imported {
 					continue
 				}
-				f, err := Build(m, uint32(fn))
+				f, err := buildInlining(m, uint32(fn), inline)
 				if err != nil {
 					var r *wjit.Refusal
 					if !errors.As(err, &r) {

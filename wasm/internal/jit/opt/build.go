@@ -107,6 +107,9 @@ type ctl struct {
 	dead bool
 	// try is a try_table's or a legacy try's handlers (exn.go).
 	try *tryCtl
+	// inl says it is an inlined call's body (inline.go), whose label is
+	// where the call returns.
+	inl bool
 }
 
 func (t *ctl) labelTypes() []Type {
@@ -156,6 +159,8 @@ type builder struct {
 	// reference, which is in its position's reference slot (rpos), never a
 	// value.
 	refMark Value
+	// inl is the inliner's state (inline.go).
+	inl inliner
 }
 
 // globalFact is that global g holds val.
@@ -172,9 +177,10 @@ func (bd *builder) reset() {
 	clear(bd.mem[:cap(bd.mem)])
 	clear(bd.globalAddrs)
 	clear(bd.args[:cap(bd.args)])
+	bd.inl.reset()
 	*bd = builder{locals: bd.locals[:0], stack: bd.stack[:0], ctrl: bd.ctrl[:0], globals: bd.globals[:0], mem: bd.mem[:0],
 		globalAddrs: bd.globalAddrs, depths: bd.depths[:0], succOf: bd.succOf[:0], slots: bd.slots[:0],
-		refResults: bd.refResults[:0], args: bd.args[:0]}
+		refResults: bd.refResults[:0], args: bd.args[:0], inl: bd.inl}
 	bd.refMark.Type = TRef
 }
 
@@ -192,7 +198,11 @@ type memFact struct {
 
 // Build builds function fn of a validated module as SSA, or refuses it
 // with a *jit.Refusal.
-func Build(m *module.Module, fn uint32) (f *Func, err error) {
+func Build(m *module.Module, fn uint32) (f *Func, err error) { return buildInlining(m, fn, 0) }
+
+// buildInlining builds function fn as Build does, inlining calls up to
+// inline calls deep.
+func buildInlining(m *module.Module, fn uint32, inline int32) (f *Func, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			if r, ok := p.(*wjit.Refusal); ok {
@@ -202,12 +212,12 @@ func Build(m *module.Module, fn uint32) (f *Func, err error) {
 			panic(p)
 		}
 	}()
-	return build(new(workspace), m, fn), nil
+	return build(new(workspace), m, fn, inline), nil
 }
 
 // build builds function fn of a validated module as SSA in workspace ws,
-// or panics with a *jit.Refusal.
-func build(ws *workspace, m *module.Module, fn uint32) *Func {
+// inlining calls up to inline calls deep, or panics with a *jit.Refusal.
+func build(ws *workspace, m *module.Module, fn uint32, inline int32) *Func {
 	if m.Functions[fn].Imported {
 		refuse(RefuseOther, "an imported function")
 	}
@@ -217,6 +227,10 @@ func build(ws *workspace, m *module.Module, fn uint32) *Func {
 	bd := &ws.bd
 	bd.ws, bd.m, bd.f = ws, m, &ws.f
 	bd.f.ws = ws
+	if inline > 0 {
+		bd.inl.on, bd.inl.depth, bd.inl.budget = true, inline, inlineBudget
+		bd.inl.base = wjit.InlineBase(len(m.Bytes))
+	}
 	f := bd.build(fn)
 	lap(PhaseBuild)
 	return f
@@ -660,6 +674,13 @@ func (bd *builder) end() {
 	bd.seal(t.label)
 	bd.stack = bd.stack[:t.base]
 	if len(t.label.Preds) == 0 {
+		if t.inl {
+			// The inlined callee never returns: the caller's reader, which
+			// its reader replaces, skips what follows the call
+			// (inlineCall).
+			bd.b = nil
+			return
+		}
 		bd.deadAfter()
 		return
 	}
@@ -678,7 +699,8 @@ func (bd *builder) deadAfter() {
 // instr builds one instruction.
 func (bd *builder) instr() {
 	r := &bd.r
-	at := uint32(r.pc)
+	pc := uint32(r.pc)
+	at := bd.at(pc)
 	op := r.opcode()
 	switch op {
 	case opcode.Unreachable:
@@ -726,11 +748,16 @@ func (bd *builder) instr() {
 	case opcode.BrTable:
 		bd.brTable()
 	case opcode.Return:
-		bd.branch(len(bd.ctrl) - 1)
+		bd.branch(len(bd.ctrl) - 1 - bd.bodyCtl())
 		bd.markDead()
 	case opcode.CallFunction:
 		idx := r.u32()
-		bd.call(OpCall, bd.m.FuncType(idx), uint64(idx), 0, at, 0)
+		if bd.inlines(idx) {
+			bd.inlineCall(idx, pc)
+			break
+		}
+		// Aux2 is how many inlined calls deep the call is.
+		bd.call(OpCall, bd.m.FuncType(idx), uint64(idx), uint64(bd.inl.level()), at, 0)
 	case opcode.CallIndirect:
 		typeIndex := r.u32()
 		table := r.u32()
@@ -768,7 +795,7 @@ func (bd *builder) instr() {
 		}
 		bd.push(bd.value(OpSelect, x.Type, x, y, cond))
 	case opcode.LocalGet:
-		k := int32(r.u32())
+		k := int32(r.u32()) + bd.localBase()
 		if bd.locals[k] == TRef {
 			bd.refOp(bd.b, refCopy, bd.rpos(len(bd.stack)), uint32(bd.slots[k]), 0, TNone, 0)
 			bd.pushRef()
@@ -776,7 +803,7 @@ func (bd *builder) instr() {
 		}
 		bd.push(bd.readVar(k, bd.b))
 	case opcode.LocalSet, opcode.LocalTee:
-		k := int32(r.u32())
+		k := int32(r.u32()) + bd.localBase()
 		h := len(bd.stack) - 1
 		v := bd.stack[h]
 		if op == opcode.LocalSet {

@@ -86,6 +86,9 @@ func TestOptCompileCorpus(t *testing.T) {
 			return
 		}
 		c := testCode(t, &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))})
+		// The calls are inlined as the engine's compiles inline them, the
+		// module's sites its own.
+		sites := &inlineSites{base: wjit.InlineBase(len(m.Bytes))}
 		for i := range m.Functions {
 			if m.Functions[i].Imported {
 				continue
@@ -98,6 +101,9 @@ func TestOptCompileCorpus(t *testing.T) {
 			req := request(c, uint32(i), cd, 0)
 			if fixed {
 				req.WriteBarrier, req.StoreRef = 0x1000, 0x2000
+			}
+			if jitInline {
+				req.InlineSite = sites.site
 			}
 			fns = append(fns, &corpusFunc{key: key, code: c, idx: uint32(i),
 				body: int(m.Functions[i].Code.Len), req: req})

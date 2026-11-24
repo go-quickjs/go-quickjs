@@ -64,6 +64,14 @@ type Request struct {
 	// Marks asks the compiler for its code's marks and listing (Code.Marks,
 	// Code.Listing), which a profile's samples in the code are read by.
 	Marks bool
+	// InlineSite, where it is not nil, lets the optimizing tier inline
+	// calls: it returns the offset an instruction of an inlined body
+	// reports -- a trap's, an exit's, a return stack entry's -- for the
+	// frames the calls would have made, the outermost first, and the
+	// instruction's offset in the innermost callee. The offset is past the
+	// module's bytes (InlineBase), and the engine reads the frames back
+	// from it. It reports false where it has no more such offsets.
+	InlineSite func(frames []InlineFrame, at uint32) (uint32, bool)
 }
 
 // Mark says what the code from offset Off, up to the next mark, was

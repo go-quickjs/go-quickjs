@@ -75,9 +75,9 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*na
 	ctx := &lv.ctx
 	code := lv.inst.Code
 	rs := x.jit.rs
-	first := x.rsIndex(lv.rsBase)
-	n := (x.rsIndex(ctx.RSP) - first) / wjit.RSEntryWords
-	entry := func(k int) int { return first + k*wjit.RSEntryWords }
+	entries := x.rsEntries(lv, nil)
+	n := len(entries)
+	entry := func(k int) int { return entries[k] }
 	// Each frame's reference slots: the first's where Go entered it, and
 	// each one's past its caller's if that holds references.
 	rbase := make([]uintptr, n)
@@ -98,6 +98,8 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*na
 		if k < n-1 {
 			off, l, addr = uint32(rs[entry(k+1)+2]), uintptr(rs[entry(k+1)+1]), uintptr(rs[entry(k+1)])
 		}
+		// An inlined body is in no construct that catches.
+		off = lv.cj.inline.outer(off)
 		cd := code.get(fn)
 		nat := cd.native.Load().holding(addr)
 		// A delegate passes its body's exceptions to the constructs at its
@@ -138,7 +140,7 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*na
 				}
 				lv.cj.run.RLock()
 				ctx.L, ctx.R = l, rbase[k]
-				ctx.RSP = lv.rsBase + uintptr(k+1)*rsEntryBytes
+				ctx.RSP = x.rsStart() + uintptr(entry(k))*8 + rsEntryBytes
 				return nat, cl.Pad, true
 			}
 		}

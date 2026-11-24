@@ -105,10 +105,12 @@ func (m *u64map[V]) at(k uint64) V {
 	return v
 }
 
-// grid is a table of values by a block ID and a column below cols: an
-// array of a row for each block where the columns are few enough, its
-// entries those marked with its stamp, grown as the blocks' IDs do; else a
-// u64map. Kept in a workspace, it keeps its arrays for the next compile.
+// grid is a table of values by a block ID and a column: an array of a row
+// of cols columns for each block where the columns are few enough, its
+// entries those marked with its stamp, grown as the blocks' IDs do; else,
+// and for a column past cols -- an inlined callee's locals, numbered after
+// the function's own -- a u64map. Kept in a workspace, it keeps its arrays
+// for the next compile.
 type grid[V any] struct {
 	cols  int
 	vals  []V
@@ -127,6 +129,7 @@ func (g *grid[V]) reset(cols, hint int) {
 		g.m.reset(hint)
 		return
 	}
+	g.m.reset(0)
 	g.cols = max(cols, 1)
 	g.gen++
 	if g.gen == 0 {
@@ -137,7 +140,7 @@ func (g *grid[V]) reset(cols, hint int) {
 
 // get returns the value at block b's column k, and whether it has one.
 func (g *grid[V]) get(b, k int32) (V, bool) {
-	if g.cols == 0 {
+	if g.cols == 0 || int(k) >= g.cols {
 		return g.m.get(uint64(uint32(b))<<32 | uint64(uint32(k)))
 	}
 	if i := int(b)*g.cols + int(k); i < len(g.stamp) && g.stamp[i] == g.gen {
@@ -149,7 +152,7 @@ func (g *grid[V]) get(b, k int32) (V, bool) {
 
 // set makes v the value at block b's column k.
 func (g *grid[V]) set(b, k int32, v V) {
-	if g.cols == 0 {
+	if g.cols == 0 || int(k) >= g.cols {
 		g.m.set(uint64(uint32(b))<<32|uint64(uint32(k)), v)
 		return
 	}

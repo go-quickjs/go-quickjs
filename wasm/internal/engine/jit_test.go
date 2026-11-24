@@ -352,6 +352,11 @@ func TestJITTrapCodes(t *testing.T) {
 		{wjit.TrapDivUnrepresentable, TrapDivUnrepresentable},
 		{wjit.TrapRemByZero, TrapRemByZero},
 		{wjit.TrapFloatUnrepresentable, TrapFloatUnrepresentable},
+		{wjit.TrapTableOutOfBounds, TrapTableOutOfBounds},
+		{wjit.TrapNullDereference, TrapNullDereference},
+		{wjit.TrapIllegalCast, TrapIllegalCast},
+		{wjit.TrapArrayOutOfBounds, TrapArrayOutOfBounds},
+		{wjit.TrapStackOverflow, TrapStackOverflow},
 	} {
 		if TrapCode(c.jit) != c.trap {
 			t.Errorf("jit trap %d is %v, want %d", c.jit, c.trap, c.trap)

@@ -72,6 +72,7 @@ var (
 	offChunkEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.ChunkEnd))
 	offRSP       = int32(unsafe.Offsetof(wjit.Ctx{}.RSP))
 	offRSEnd     = int32(unsafe.Offsetof(wjit.Ctx{}.RSEnd))
+	offDepthEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.DepthEnd))
 	offPoll      = int32(unsafe.Offsetof(wjit.Ctx{}.Poll))
 	offR         = int32(unsafe.Offsetof(wjit.Ctx{}.R))
 	offRChunkEnd = int32(unsafe.Offsetof(wjit.Ctx{}.RChunkEnd))
@@ -1241,6 +1242,16 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.simd(v, rest)
 	case OpExnVal:
 		g.exnVal(v)
+	case OpDepth:
+		// The inlined call's frame would be the entry Aux-1 past the next
+		// one: within the depth's limit, or the call traps.
+		rs := g.rsInto()
+		if k := int32(v.Aux) - 1; k > 0 {
+			a.Lea(s0, rs, k*rsEntry)
+			rs = s0
+		}
+		a.CmpMem(rs, rCtx, offDepthEnd, true)
+		a.Jcc(amd64.CondAE, g.trap(wjit.TrapStackOverflow, v.At))
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1981,6 +1992,9 @@ func (g *gen) call(v *Value, rest []*Value) {
 	// the allocator's no argument is in: at a call every other value of
 	// the function is in its slot or dead.
 	self := idx == g.fn
+	// A call made k inlined calls deep has its entry k entries past the
+	// next one, those of the frames the inlined calls would have made.
+	k := int32(v.Aux2)
 	link, kept := g.freeGPR(v.Args, 0)
 	if !self {
 		if !kept {
@@ -2000,7 +2014,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.CmpMem(s0, rCtx, offRChunkEnd, true)
 		a.Jcc(amd64.CondA, slow)
 	}
-	rs := g.checkRS(slow)
+	rs := g.checkRS(slow, k)
 	if g.sigHasRefs(v) {
 		// The copies take s1, which is R10.
 		g.refArgs(v, g.adv())
@@ -2015,12 +2029,13 @@ func (g *gen) call(v *Value, rest []*Value) {
 	}
 	g.advanceR()
 	ret := a.NewLabel()
+	e := k * rsEntry
 	a.LeaLabel(s0, ret)
-	a.Store(rs, 0, s0)
-	a.Store(rs, 8, rL)
+	a.Store(rs, e, s0)
+	a.Store(rs, e+8, rL)
 	a.MovImm(s0, wjit.Site(idx, v.At))
-	a.Store(rs, 16, s0)
-	g.pushRS()
+	a.Store(rs, e+16, s0)
+	g.pushRS(k)
 	a.OpImm(amd64.Add, rL, frame, true)
 	switch {
 	case self:
@@ -2033,7 +2048,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.JmpReg(s0)
 	}
 	a.Bind(ret)
-	g.poppedRS()
+	g.poppedRS(k)
 	g.restoreR()
 	g.refResults(v, g.adv())
 	g.takeResults(res, int32(g.req.FrameSlots))
@@ -2042,12 +2057,20 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res, wh: g.keepWhere(v, res)})
 }
 
-// checkRS goes to slow where the return stack has no room for an entry,
-// and returns the register that holds its next entry: the one that keeps
-// it, or R10 loaded from the context.
-func (g *gen) checkRS(slow amd64.Label) amd64.Reg {
+// rsEntry is the bytes of a return stack entry.
+const rsEntry = wjit.RSEntryWords * 8
+
+// checkRS goes to slow where the return stack has no room for an entry k
+// entries past the next one, and returns the register that holds its next
+// entry: the one that keeps it, or R10 loaded from the context.
+func (g *gen) checkRS(slow amd64.Label, k int32) amd64.Reg {
 	rs := g.rsInto()
-	g.a.CmpMem(rs, rCtx, offRSEnd, true)
+	at := rs
+	if k > 0 {
+		g.a.Lea(s0, rs, k*rsEntry)
+		at = s0
+	}
+	g.a.CmpMem(at, rCtx, offRSEnd, true)
 	g.a.Jcc(amd64.CondAE, slow)
 	return rs
 }
@@ -2063,22 +2086,30 @@ func (g *gen) rsInto() amd64.Reg {
 }
 
 // pushRS leaves in R10 the return stack's next entry past the one a call
-// wrote, as the callee takes it.
-func (g *gen) pushRS() {
+// wrote k entries past the next, as the callee takes it.
+func (g *gen) pushRS(k int32) {
 	if g.rsKept {
-		g.a.Lea(rRS, g.rs, wjit.RSEntryWords*8)
+		g.a.Lea(rRS, g.rs, (k+1)*rsEntry)
 		return
 	}
-	g.a.OpImm(amd64.Add, rRS, wjit.RSEntryWords*8, true)
+	g.a.OpImm(amd64.Add, rRS, (k+1)*rsEntry, true)
 }
 
 // poppedRS keeps the return stack's next entry a native callee returned
-// with in R10: in the register that keeps it, or in the context, where an
-// exit of the callee left another.
-func (g *gen) poppedRS() {
+// with in R10, the entry k entries past it that the call wrote: in the
+// register that keeps it, or in the context, where an exit of the callee
+// left another.
+func (g *gen) poppedRS(k int32) {
 	if g.rsKept {
+		if k > 0 {
+			g.a.Lea(g.rs, rRS, -k*rsEntry)
+			return
+		}
 		g.a.MovRR(g.rs, rRS)
 		return
+	}
+	if k > 0 {
+		g.a.Lea(rRS, rRS, -k*rsEntry)
 	}
 	g.a.Store(rCtx, offRSP, rRS)
 }
@@ -2170,7 +2201,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	idx, keptIdx := g.freeGPR(v.Args, 1<<link)
 	kept = kept && keptIdx
 	g.indirectCallee(v, frame, g.adv(), slow, link, kept)
-	rs := g.checkRS(slow)
+	rs := g.checkRS(slow, 0)
 	if kept {
 		a.MovRR(idx, s0)
 	} else {
@@ -2195,7 +2226,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 		a.OpImm(amd64.Or, s0, int32(v.At), true)
 		a.Store(rs, 16, s0)
 	}
-	g.pushRS()
+	g.pushRS(0)
 	a.OpImm(amd64.Add, rL, frame, true)
 	if kept {
 		a.JmpReg(link)
@@ -2207,7 +2238,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 		a.JmpReg(s0)
 	}
 	a.Bind(ret)
-	g.poppedRS()
+	g.poppedRS(0)
 	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)

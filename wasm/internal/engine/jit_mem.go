@@ -379,8 +379,16 @@ func (cj *codeJIT) pins() []uintptr {
 				if lv.rsBase < start || lv.ctx.RSP < lv.rsBase {
 					continue
 				}
-				first, last := int((lv.rsBase-start)/8), min(int((lv.ctx.RSP-start)/8), len(rs))
-				for i := first; i < last; i += wjit.RSEntryWords {
+				first, last := int((lv.rsBase-start)/8), int((lv.ctx.RSP-start)/8)
+				if last > len(rs) {
+					// Every entry's word, and those of the unwritten entries
+					// between (wjit.Site), which keep code at most.
+					for i := first; i < len(rs); i += wjit.RSEntryWords {
+						pins = append(pins, uintptr(rs[i]))
+					}
+					continue
+				}
+				for _, i := range x.rsEntries(lv, nil) {
 					pins = append(pins, uintptr(rs[i]))
 				}
 			}

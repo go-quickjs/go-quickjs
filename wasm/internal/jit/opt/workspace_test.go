@@ -57,7 +57,7 @@ func TestWorkspaceReuse(t *testing.T) {
 	want := make([][]byte, n)
 	for fn := range n - 1 {
 		ws := new(workspace)
-		f := build(ws, m, fn)
+		f := build(ws, m, fn, 0)
 		Optimize(f, nil)
 		want[fn] = lower(f, testRequest(m, fn), ws).Bytes
 	}

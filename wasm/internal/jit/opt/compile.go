@@ -14,20 +14,50 @@ import (
 // entries and exits, so that it replaces the baseline code in the link
 // table and the tiers call each other.
 //
-// Forwarding the globals (forwardGlobals) keeps values live that were
-// loaded where used: a function whose frame then has too few slots for
-// its spills is compiled again without it.
+// Inlining calls (inline.go) and forwarding the globals (forwardGlobals)
+// keep values live that were made where used: a function whose frame then
+// has too few slots for its spills is compiled again inlining less deep,
+// then without forwarding the globals. One whose code inlining made too
+// large is compiled again without inlining.
 func Compile(req *wjit.Request) (*wjit.Code, error) {
-	code, forwarded, err := compile(req, true)
-	if r, ok := err.(*wjit.Refusal); ok && r.Reason == RefuseFrame && forwarded {
-		code, _, err = compile(req, false)
+	inline := int32(0)
+	if req.InlineSite != nil {
+		inline = inlineDepth
 	}
-	return code, err
+	forward := true
+	for {
+		code, used, err := compile(req, forward, inline)
+		r, ok := err.(*wjit.Refusal)
+		switch {
+		case !ok:
+			return code, err
+		case used.inlined && (r.Reason == RefuseFrame || r.Reason == RefuseSize || r.Reason == refuseInline):
+			inline = min(inline, used.depth) - 1
+			if r.Reason != RefuseFrame {
+				inline = 0
+			}
+		case r.Reason == RefuseFrame && used.forwarded:
+			forward = false
+		default:
+			return code, err
+		}
+	}
+}
+
+// refuseInline is the refusal of a compile whose inlined bodies have more
+// sites than the engine gives offsets for, compiled again without inlining.
+const refuseInline = "inline"
+
+// compileUse is what a compile did that may cost a function its compile:
+// whether it forwarded a global's read and inlined a call, and how deep.
+type compileUse struct {
+	forwarded, inlined bool
+	depth              int32
 }
 
 // compile compiles req's function, forwarding the globals if forward says
-// so, and reports whether it forwarded any read.
-func compile(req *wjit.Request, forward bool) (code *wjit.Code, forwarded bool, err error) {
+// so and inlining calls up to inline calls deep, and reports what it did.
+func compile(req *wjit.Request, forward bool, inline int32) (code *wjit.Code, used compileUse, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			if r, ok := p.(*wjit.Refusal); ok {
@@ -44,12 +74,17 @@ func compile(req *wjit.Request, forward bool) (code *wjit.Code, forwarded bool, 
 	if req.Layout != nil {
 		ws.arrayClass = req.Layout.ArrayClass
 	}
-	f := build(ws, req.Module, req.Func)
+	f := build(ws, req.Module, req.Func, inline)
 	f.noForward, f.listing = !forward, req.Marks
-	defer func() { forwarded = f.forwarded }()
+	used.inlined = ws.bd.inl.used
+	used.depth = ws.bd.inl.maxLevel
+	defer func() { used.forwarded = f.forwarded }()
 	Optimize(f, nil)
 	if err := checkLowerable(f); err != nil {
 		panic(err)
 	}
-	return lower(f, req, ws), false, nil
+	if !ws.bd.resolveInline(f, req.InlineSite) {
+		refuse(refuseInline, "more inlined sites than offsets")
+	}
+	return lower(f, req, ws), used, nil
 }

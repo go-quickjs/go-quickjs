@@ -124,6 +124,9 @@ func TestOptTierUp(t *testing.T) {
 	// compile.
 	inst = tierInstance(t, src, 0)
 	check(inst, "run", 50)
+	// run's optimized code may inline leaf, which its own first call
+	// compiles.
+	check(inst, "leaf", 7)
 	if !optimized(inst, "leaf") || !optimized(inst, "run") {
 		t.Fatal("not optimized at the first compile")
 	}

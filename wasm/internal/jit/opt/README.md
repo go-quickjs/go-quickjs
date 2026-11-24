@@ -15,6 +15,7 @@ default (see Tier-up).
 |---|---|
 | `ir.go` | the IR: types, operations, values, blocks |
 | `build.go` | what the tier refuses, and the SSA builder |
+| `inline.go` | the calls inlined: which, their bodies built into the caller, their sites |
 | `cfg.go` | the control flow graph: reachability, order, critical edges, dominators, natural loops, loop depths |
 | `passes.go` | the optimizations |
 | `bounds.go` | the bounds of addresses bce proves accesses within the memory by |
@@ -230,6 +231,61 @@ flow graph: the dominators, the passes and liveness see them, so that what
 a pad's label reads is live across the site's call -- and so in its slot
 when the exception comes (Register allocation) -- and no pass moves a site,
 a call or a throw having effects. Nothing jumps to a pad: Go enters it.
+
+### Inlining
+
+A direct call of a function of the module is built into its caller
+(`inline.go`) where the callee is small -- its body, its locals'
+declarations included, at most 64 bytes -- holds only numbers (its
+parameters, results, locals, the globals it reads and writes and the
+signatures of the calls it makes), and its instructions are control,
+locals, globals, numbers, memory accesses, memory.size, memory.grow and
+direct calls: nothing that holds a reference, throws or catches, makes a
+tail call, or that Go runs by its offset (a SIMD exit). Calls are inlined
+three deep at most -- a recursion inlines itself so, its body eight times
+over -- and 1,024 bytes of bodies into a function at most, and not where a
+construct around the call may catch what it throws: Go finds a handler by
+a call's offset in its function. The builder reads the callee's body where
+the call is, its parameters variables holding the call's arguments, its
+locals new variables holding zeros, its body a block whose label -- where
+`return` and the body's end go -- is where the call returns, its results
+that label's phis. The call made inlined is no call: it forgets nothing of
+memory and the globals, and the passes see across it.
+
+An inlined body makes no frame, and what its instructions report is the
+frames the calls would have made. Each instruction of one that may report
+an offset -- a trap, an exit, a call's return stack entry -- has, in place
+of its offset, one past the module's bytes that the engine gives
+(`wjit.Request.InlineSite`): an inlined site, which says the calls around
+it, the outermost first, each a function and the offset of its call, and
+the instruction's offset in the innermost. The builder numbers them as it
+reads the bodies, and once the passes are done, what is left of them is
+given the engine's (`resolveInline`). Where the engine makes the call
+stack of native frames (`jitSync`) it adds the inlined frames, so that a
+trap's frames are those the calls would have had.
+
+The call depth is the calls' too. An inlined call begins with `OpDepth`,
+which traps at the callee's start, as a call that cannot be made does,
+where the return stack entry the call would have pushed is past the depth's
+limit (`Ctx.DepthEnd`): k calls deep, the entry k-1 past the next. A call
+made k calls deep pushes its entry k entries past the next (Aux2 of
+`OpCall`), leaving the k frames' entries unwritten, and takes the
+return stack's register back from the entry it returns with less those k:
+the return stack's depth is the calls' depth, its end checked as any
+call's. The engine walks a level's entries from the last, each entry's
+offset saying how many unwritten ones are below it (`rsEntries`).
+
+A function whose frame inlining leaves too few spill slots is compiled
+again inlining one call less deep, down to none; one whose code it made
+too large, without inlining. `WASM_JIT_INLINE=off` turns inlining off.
+
+micro/fib, whose calls were a third of its instructions and whose returns,
+indirect jumps, its mispredicted branches, went from 8.1 to 4.7 ms (median
+of 6 processes; inlining two calls deep, 4.9, four, 4.3, its code twice as
+large again). The Go programs' functions, Go's own compiler having inlined
+what is small, have few such calls: json went from 24.0 to 22.8-23.9 ms,
+sha256 from 49.2 to 47.7-48.1, the others level; their compiles took 2%
+longer and their code 0.8% larger.
 
 ## The passes
 
@@ -1511,7 +1567,8 @@ registers the allocator gave out.
   compile's growth. In the background the compile costs the first run
   little, but it is CPU an embedder running a runtime on each core pays,
   and at GOMAXPROCS=1 it is what json's and gzip's first runs lose.
-- Inlining of small callees.
+- Inlining of callees that hold references, as micro/gc's tree walk's
+  are, and of calls through tables and references whose callee is known.
 - v128 constants as values: a shuffle's mask and a constant operand are
   loaded from the pool where they are used, in every turn of a loop.
 - Bounds checks: hoisting a loop's checks of an induction variable whose

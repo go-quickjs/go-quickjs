@@ -276,7 +276,7 @@ func (cj *codeJIT) compileInBackground(idx uint32) {
 		return
 	}
 	start := time.Now()
-	code, err := wopt.Compile(request(c, idx, cd, 0))
+	code, err := wopt.Compile(optRequest(c, cj, idx, cd))
 	countTime(&jitStats.optTime, start)
 	if err != nil {
 		reason := "internal"

@@ -440,7 +440,7 @@ func checkTypes(v *Value) error {
 			}
 		}
 		return addrType(v)
-	case OpFence:
+	case OpFence, OpDepth:
 		return arity(0)
 	case OpExnVal:
 		if err := arity(0); err != nil {
