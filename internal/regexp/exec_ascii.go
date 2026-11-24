@@ -354,7 +354,10 @@ func (m *matcherASCII) run(code []instr, pos int) (bool, error) {
 			}
 			pc++
 		case opCounterInit:
-			m.counters[in.arg] = 0
+			if cur := m.counters[in.arg]; cur != 0 {
+				m.push(frame{pc: -1, counterIdx: int32(in.arg), counterVal: int32(cur), pos: int32(pos), capsLen: int32(len(m.trail)), emptyIdx: -1})
+				m.counters[in.arg] = 0
+			}
 			pc++
 		case opCounterInc:
 			min, max := in.arg2, int(in.r)

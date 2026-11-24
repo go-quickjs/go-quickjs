@@ -680,7 +680,21 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pc++
 
 		case opCounterInit:
-			m.counters[in.arg] = 0
+			// A counted loop inside another loop is entered afresh at each
+			// of the outer one's iterations, each with a count of its own.
+			// The count the loop had is put back when backtracking undoes
+			// the entry: otherwise a choice point left inside an earlier
+			// iteration's loop resumes with the later one's count, runs
+			// iterations it has run already, and leaves the same choice
+			// point again, for ever. A loop entered for the first time
+			// has the 0 it had at the start, which needs no putting back.
+			if cur := m.counters[in.arg]; cur != 0 {
+				m.push(frame{
+					pc: -1, counterIdx: int32(in.arg), counterVal: int32(cur),
+					pos: int32(pos), capsLen: int32(len(m.trail)), emptyIdx: -1,
+				})
+				m.counters[in.arg] = 0
+			}
 			pc++
 
 		case opCounterInc:

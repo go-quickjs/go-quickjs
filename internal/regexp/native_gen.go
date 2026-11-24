@@ -184,6 +184,7 @@ func (g *nativeGen) check() (int, bool) {
 			if in.arg < 0 || in.arg >= g.prog.counters {
 				return 0, false
 			}
+			push = 2
 		case opCounterInc:
 			if in.arg < 0 || in.arg >= g.prog.counters || !fits(in.arg2) || !target(pc+2) ||
 				!target((*matcher)(nil).exitOfCounterLoop(code, pc)) {
@@ -1019,8 +1020,18 @@ func (g *nativeGen) instr(pc int) {
 		g.backref(pc, in)
 
 	case opCounterInit:
+		// A count left by an earlier entry of the loop, inside another
+		// loop, is put back when backtracking undoes this one, as the
+		// matcher puts it back.
+		k := in.arg
+		fresh := a.NewLabel()
 		a.Load(rC, rCtx, offCounters)
-		a.StoreImm(rC, int32(in.arg*8), 0)
+		a.Load(rA, rC, int32(k*8))
+		a.OpImm(aluCmp, rA, 0, true)
+		a.Jcc(condE, fresh)
+		g.saveOld(rC, k, g.undo(g.undoCtrs, k, offCounters))
+		a.StoreImm(rC, int32(k*8), 0)
+		a.Bind(fresh)
 
 	case opCounterInc:
 		// The counter, and the bounds: min in arg2, max in r.

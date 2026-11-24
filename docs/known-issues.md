@@ -214,7 +214,15 @@ Paths are relative to this repository; `go-intl:` paths are in
   and with the JIT.
 - **Expected:** `null`, `["aa","a",""]` and `["abc","ab","b"]` at once, as
   Node answers.
-- **Status:** open.
+- **Status:** fixed. The cause was not the empty check but the inner loop's
+  count: `opCounterInit` set it to 0 at each of the outer loop's iterations
+  without keeping the count it had, so that backtracking into an earlier
+  iteration's inner loop resumed with a later one's count, ran iterations
+  it had run, and left the same choice point again. The entry now keeps a
+  count it replaces for backtracking to put back, in the matcher and in
+  native code (`native_gen.go`); a loop entered for the first time has 0
+  and keeps nothing. 55 nested cases agree with Node in each matcher, in
+  native code, and under the step budget.
 
 ### KI-82 A Value of one runtime is taken by another
 - **Where:** `quickjs.go` (`Runtime.Set`), `marshal.go` (`encodeValue`,
