@@ -353,11 +353,11 @@ func WithLocale(tag string) Option {
 // the standard's %ThrowTypeError% there and gives a sloppy ordinary function
 // an own caller accessor instead, which the standard permits, and no
 // arguments; and Date.prototype.setYear reads the date's time value after
-// converting the year, where the standard reads it first; and Annex B's
-// initializer of a for-in head, for (var a = 0 in o), resolves its name
-// after its value is made, so that inside a with statement an initializer
-// that deletes the object's property writes the var, where the standard
-// resolves the name first and writes the object.
+// converting the year, where the standard reads it first; and a var
+// statement's initializer, and Annex B's of a for-in head, for (var a = 0
+// in o), resolve the name after the value is made, so that inside a with
+// statement an initializer that deletes the object's property writes the
+// var, where the standard resolves the name first and writes the object.
 // Error instances have an own stack accessor accepting any assigned value,
 // where the standard inherits Error.prototype.stack and its setter requires
 // a string and creates an own data property.

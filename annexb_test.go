@@ -213,6 +213,13 @@ Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v
 			"5 undefined", "undefined number"},
 		{`var o = {d: 0}; with (o) { for (var d = 5 in {k: 1}) ; } o.d + " " + typeof d`, "k undefined", "k undefined"},
 		{`function g() { eval("for (var c = 3 in {}) ;"); return c } g()`, "3", "3"},
+		// So does a var statement's (test262's
+		// statements/variable/binding-resolution.js has the standard's).
+		{`var o = {k: 0}; with (o) { var k = (delete o.k, 5); } o.k + " " + typeof k`, "5 undefined", "undefined number"},
+		{`function g() { var o = {k: 0}; with (o) { var k = (delete o.k, 5); } return o.k + " " + k } g()`,
+			"5 undefined", "undefined 5"},
+		{`var o = {k: 0}; with (o) { var k = 6; } o.k + " " + typeof k`, "6 undefined", "6 undefined"},
+		{`function g() { eval("var e = (delete e, 7)"); return e } var e = 1; g()`, "7", "7"},
 		{`function g() { var c; with ({c: 0}) { for (var c = (log = typeof c, 4) in {}) ; } return log + " " + c } var log; g()`,
 			"number undefined", "number undefined"},
 		// Strict code assigning to a global asks a proxy on the global

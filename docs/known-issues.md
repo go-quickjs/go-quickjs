@@ -1228,9 +1228,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   one identifier. The walk now walks the initializer as the write of an
   identifier of its own and tells the register form of it
   (`Record.NoteForInInit`); `TestAnnexBForInInitializer`. With
-  `WithNodeQuirks` the initializer resolves its name after its value is
-  made, as V8 does, and writes the var where it deleted the with object's
-  property (`TestNodeQuirksLanguage`).
+  `WithNodeQuirks` the initializer, as a var statement's, resolves its name
+  after its value is made, as V8 does, and writes the var where it deleted
+  the with object's property (`TestNodeQuirksLanguage`).
 
 ### KI-90 A `v`-mode class under `i` is complemented before it is folded
 - **Where:** `internal/regexp/classset.go`, `classSetValue.complement`, which

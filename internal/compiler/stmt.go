@@ -488,12 +488,14 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			continue
 		}
 		if id, ok := d.Target.(*ast.Ident); ok && n.Kind == ast.DeclVar &&
-			c.withLimit(id.Name) > 0 {
+			!c.opts.NodeQuirks && c.withLimit(id.Name) > 0 {
 			// A var's initializer is an assignment, and inside a `with` body
 			// an assignment resolves its name before it evaluates its value:
 			// an initializer that deletes the property still writes to the
 			// object the name named. The value the store leaves is the
-			// declaration's, which nothing reads.
+			// declaration's, which nothing reads. With NodeQuirks the name
+			// is resolved after the value is made, as V8 does: the store
+			// below, a binding's.
 			c.resolveWithRef(id)
 			if handsName(d.Init) {
 				c.traceName = c.traceJoin("", id.Name)
@@ -839,21 +841,13 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 // store resolves it after: the two are probed and stored differently, so
 // the initializer is the write of an identifier of its own, which the
 // register form is told of (regcomp.Record.NoteForInInit). With
-// NodeQuirks the initializer resolves its name after its value is made,
-// as V8 does, and so is stored as each turn's value is, the identifier's
-// one write.
+// NodeQuirks a var's initializer resolves its name after its value is
+// made, as V8 does (compileVarDecl), and so is stored as each turn's
+// value is, the identifier's one write.
 func (c *compiler) compileForInInit(vd *ast.VarDecl) {
 	id, ok := vd.Decls[0].Target.(*ast.Ident)
-	if !ok || c.reg == nil || c.withLimit(id.Name) == 0 {
+	if !ok || c.reg == nil || c.opts.NodeQuirks || c.withLimit(id.Name) == 0 {
 		c.compileVarDecl(vd)
-		return
-	}
-	if c.opts.NodeQuirks {
-		if handsName(vd.Decls[0].Init) {
-			c.traceName = c.traceJoin("", id.Name)
-		}
-		c.compileExprNamed(vd.Decls[0].Init, id.Name)
-		c.initBinding(id, vd.Kind)
 		return
 	}
 	init := &ast.VarDecl{Kind: vd.Kind, Start: vd.Start, Decls: []ast.Declarator{{
