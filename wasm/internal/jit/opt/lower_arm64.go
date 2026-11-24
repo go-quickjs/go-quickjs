@@ -582,7 +582,7 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold alloc exit")
 		a.Store(rCtx, offResume, s0)
 		g.saveAll()
-		g.exit(wjit.ExitAlloc, a.NewLabel())
+		g.exitAlloc(a.NewLabel())
 		g.restoreAll()
 		a.Load(s0, rCtx, offResume)
 		a.Br(s0)
@@ -685,6 +685,36 @@ func (g *gen) exit(kind uint64, resume arm64.Label, args ...uint64) {
 	g.storeCtx(offExitFn, uint64(g.fn))
 	a.Adr(s0, resume)
 	a.Store(rCtx, offExitAddr, s0)
+	a.Ret()
+	a.Bind(resume)
+	g.loadKept()
+}
+
+// exitAlloc is exit's ExitAlloc, its arguments stored, by way of the
+// allocation stub where the request has one (wjit.Request.AllocStub): the
+// exit's record stored, the code jumps to the stub, which keeps only the
+// context and the link register, and goes on at resume where the engine
+// made the object, else takes the exit.
+func (g *gen) exitAlloc(resume arm64.Label) {
+	stub := g.req.AllocStub
+	if stub == 0 {
+		g.exit(wjit.ExitAlloc, resume)
+		return
+	}
+	a := g.a
+	a.Store(rCtx, offL, rL)
+	a.Store(rCtx, offPoll, rPoll)
+	a.Store(rCtx, offRSP, rRS)
+	g.storeCtx(offExit, wjit.ExitAlloc)
+	g.storeCtx(offExitFn, uint64(g.fn))
+	a.Adr(s0, resume)
+	a.Store(rCtx, offExitAddr, s0)
+	back := a.NewLabel()
+	a.Adr(s0, back)
+	a.MovImm(s1, stub)
+	a.Br(s1)
+	a.Bind(back)
+	a.Cbnz(s1, resume, true)
 	a.Ret()
 	a.Bind(resume)
 	g.loadKept()

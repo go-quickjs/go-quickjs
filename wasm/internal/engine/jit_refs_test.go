@@ -187,6 +187,7 @@ func jitMarkingForTest(t *testing.T, clobber bool) {
 		c.jit.writeBarrier = uint64(uintptr(unsafe.Pointer(flag)))
 		if clobber {
 			c.jit.storeRef = ijit.StoreRefClobber()
+			c.jit.allocStub = uint64(wasmJITAllocClobberAddr())
 		}
 	})
 	t.Cleanup(func() { runtime.KeepAlive(flag) })

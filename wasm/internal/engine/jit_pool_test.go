@@ -139,7 +139,13 @@ func TestJITPools(t *testing.T) {
 				inst := poolInstance(t, 0, opt)
 				var got [][]Val
 				var gerr []error
-				alloc, all := countAllocExits(t, func() { got, gerr = runCases(t, inst, poolCases()) })
+				stubs, exits, all := countAllocs(t, func() { got, gerr = runCases(t, inst, poolCases()) })
+				// The pools are filled by the allocation stub, without
+				// leaving native code.
+				if stubs == 0 || exits != 0 {
+					t.Fatalf("%d fills by the allocation stub, %d by exits", stubs, exits)
+				}
+				alloc := stubs
 				sameOutcomes(t, tier, poolCases(), want, werr, got, gerr)
 				if mode == "idle" {
 					idleExits = [2]int64{alloc, all}

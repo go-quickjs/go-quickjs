@@ -475,9 +475,11 @@ context's Arg2 and Arg3 while s0 and s1 are taken, and an array past the
 pools' goes to an exit site of its own (`AllocMake`), which goes on past
 the instruction. An empty pool goes out of line to the function's
 exit for it, which keeps every register the allocator has in the
-context's save area, as a poll's, exits with `ExitAlloc` and goes back to
-take again (a site leaves its type, an array's class, and its offset in
-the exit's arguments and where to go back in s0). On arm64 an index not in a register
+context's save area, as a poll's, exits with `ExitAlloc` -- by way of the
+allocation stub where the request has one, the exit taken only where the
+engine's Go declines (the baseline README's GC objects) -- and goes back
+to take again (a site leaves its type, an array's class, and its offset
+in the exit's arguments and where to go back in s0). On arm64 an index not in a register
 of its own is compared with the length while the array's address waits in
 D31. An instruction Go runs for objects stages its numeric operands in the
 call area, each at its place among the operands, and sets `RArgs` to its

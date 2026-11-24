@@ -158,6 +158,32 @@ func (b *Budget) chargeGC(x *exec, n int64) {
 	}
 }
 
+// tryChargeGC counts a GC object of n bytes as chargeGC does where that
+// needs no count of what is reachable and no charge of the outer meter,
+// reporting whether it counted it: else nothing is counted.
+func (b *Budget) tryChargeGC(n int64) bool {
+	if b == nil {
+		return true
+	}
+	if b.outer != nil {
+		for {
+			pending := b.gcNew.Load()
+			if pending+n >= outerChunk {
+				return false
+			}
+			if b.gcNew.CompareAndSwap(pending, pending+n) {
+				return true
+			}
+		}
+	}
+	newBytes := b.gcNew.Add(n)
+	if newBytes+b.gcLive.Load()+b.fixed.Load() <= b.limit || newBytes < b.limit/16 {
+		return true
+	}
+	b.gcNew.Add(-n)
+	return false
+}
+
 // gcEpoch returns what giveBackGC is given of a charge made after it.
 func (b *Budget) gcEpoch() uint64 {
 	if b == nil {

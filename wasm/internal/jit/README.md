@@ -808,6 +808,24 @@ budget, unless the budget counted what is reachable since the fill
 a constant across the exit; the optimizing tier keeps every register
 across it, as a poll's exit does.
 
+The code makes what such an `ExitAlloc` asks for without leaving: where
+the request has an allocation stub (`Request.AllocStub`, the engine's
+`wasmJITAlloc`), the code stores the exit's record and what it keeps, as
+for the exit, and jumps to the stub, which -- a function, to the Go
+runtime, that the Go function that entered the code called, as
+`StoreRef` is -- calls the engine's Go to fill the pool or make the array
+into its slot, keeps only the context (and the link register), and comes
+back with 1 where Go did it: the code reloads what it keeps, as at the
+exit's resumption, and goes on. What Go cannot do without leaving -- a
+trap, a charge the budget holds only once what is reachable has been
+counted again, which reads the native frames as an exit makes them -- it
+declines with 0, and the code takes the exit whose record it stored. A
+1 KiB array, past the pools, took 200 to 230 ns through the stub and 220
+to 250 through the exit (`BenchmarkJITAlloc`); a pool's object 16 to 20
+ns either way, its fills a hundredth of its takes.
+`WASM_JIT_BARRIER=clobber` and the tests' clobbering mode give the code a
+stub that leaves junk in every register but those.
+
 What else allocates -- struct.new of a type with v128 fields, array.new,
 array.new_default and array.new_fixed of v128s, array.new_fixed and
 array.new of elements past 480 bytes, array.new of more than 16 or of a

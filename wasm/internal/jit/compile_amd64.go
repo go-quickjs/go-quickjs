@@ -166,6 +166,39 @@ func (c *compiler) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	a.Ret()
 }
 
+// exitAlloc is exit's ExitAlloc by way of the allocation stub, where the
+// request has one (Request.AllocStub): the exit's record stored, the code
+// jumps to the stub, which keeps only the context, and goes on at resume,
+// which reloads what the code keeps, where the engine made the object,
+// else takes the exit.
+func (c *compiler) exitAlloc(resume amd64.Label, args ...uint64) {
+	stub := c.req.AllocStub
+	if stub == 0 {
+		c.exit(ExitAlloc, resume, args...)
+		return
+	}
+	a := c.a
+	c.saveHomes()
+	a.Store(rCtx, offL, rL)
+	a.Store(rCtx, offPoll, rPoll)
+	a.Store(rCtx, offRSP, rRS)
+	c.storeCtx(offExit, ExitAlloc)
+	for i, v := range args {
+		c.storeCtx(offArg0+int32(8*i), v)
+	}
+	c.storeCtx(offExitFn, uint64(c.fn))
+	a.LeaLabel(rTmp, resume)
+	a.Store(rCtx, offExitAddr, rTmp)
+	back := a.NewLabel()
+	a.LeaLabel(amd64.R11, back)
+	a.MovImm(amd64.RAX, stub)
+	a.JmpReg(amd64.RAX)
+	a.Bind(back)
+	a.Op(amd64.Test, amd64.RAX, amd64.RAX, true)
+	a.Jcc(amd64.CondNE, resume)
+	a.Ret()
+}
+
 // resumeAt binds l, where the engine resumes the code, and reloads the
 // registers an exit loses that the code keeps.
 func (c *compiler) resumeAt(l amd64.Label) {

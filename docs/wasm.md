@@ -461,7 +461,11 @@ heap with what its WebAssembly holds in it.
   and 16 KiB at a time: a fill is counted whole as it is made, and what a
   pool still holds when Go collects it is given back unless what is
   reachable was counted again since. An array is counted as its 32-byte
-  header and its elements.
+  header and its elements. Native code has Go fill a pool, or make an array
+  past the pools', through a stub it calls without leaving (the JIT's
+  README, GC objects); an allocation that would trap, or that the budget
+  holds only once what is reachable is counted again, leaves native code
+  for the engine to make it.
 - What a closed module held is given back once Go collects it.
 - Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
   each WebAssembly object it reaches what it holds, and a memory's buffer is

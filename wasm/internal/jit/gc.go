@@ -265,7 +265,7 @@ func (c *compiler) structNew(ti uint32, fields bool, at uint32) {
 	c.later(func() {
 		c.a.Bind(slow)
 		resume := c.a.NewLabel()
-		c.exit(ExitAlloc, resume, uint64(ti), uint64(at))
+		c.exitAlloc(resume, uint64(ti), uint64(at))
 		c.resumeAt(resume)
 		c.jmp(retry)
 	})
@@ -338,14 +338,14 @@ func (c *compiler) arrayNewLength(ti uint32, at uint32) {
 	c.later(func() {
 		c.a.Bind(slow)
 		resume := c.a.NewLabel()
-		c.exit(ExitAlloc, resume, uint64(ti)|AllocLength<<32, uint64(at))
+		c.exitAlloc(resume, uint64(ti)|AllocLength<<32, uint64(at))
 		c.resumeAt(resume)
 		c.jmp(retry)
 	})
 	c.later(func() {
 		c.a.Bind(big)
 		resume := c.a.NewLabel()
-		c.exit(ExitAlloc, resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
+		c.exitAlloc(resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
 		c.resumeAt(resume)
 		c.jmp(done)
 	})
@@ -416,7 +416,7 @@ func (c *compiler) arrayNew(op opcode.Opcode, ti, n uint32, class int, at uint32
 	c.later(func() {
 		c.a.Bind(slow)
 		resume := c.a.NewLabel()
-		c.exit(ExitAlloc, resume, uint64(ti)|uint64(class+1)<<32, uint64(at))
+		c.exitAlloc(resume, uint64(ti)|uint64(class+1)<<32, uint64(at))
 		c.resumeAt(resume)
 		c.jmp(retry)
 	})

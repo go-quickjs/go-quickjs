@@ -178,6 +178,8 @@ type jitLevel struct {
 	ctx  wjit.Ctx
 	inst *Instance
 	cj   *codeJIT
+	// x is the exec the level runs on, for the allocation stub's Go.
+	x *exec
 	// chain is the exec's chain of cj's levels the level is in, and below
 	// the level of it the level was entered above, nil for the first.
 	chain *codeLevels
@@ -267,9 +269,15 @@ type codeJITTest struct {
 	// writeBarrier and storeRef, if not 0, are the write barrier's flag
 	// and store the code is compiled with (jitWriteBarrier, jitStoreRef);
 	// layout, if set, is where the engine's objects keep what it reads
-	// (jitLayout).
-	writeBarrier, storeRef uint64
-	layout                 *wjit.Layout
+	// (jitLayout); allocStub, if not 0, the allocation stub's address
+	// (jitAllocStubAddr).
+	writeBarrier, storeRef, allocStub uint64
+	layout                            *wjit.Layout
+	// allocHook, if set, is called by the allocation stub's Go
+	// (jitAllocStub) as it begins; noAllocStub compiles code that exits
+	// for what the stub makes.
+	allocHook   func()
+	noAllocStub bool
 }
 
 // jitExec is an exec's native state: the levels entered, and the native
@@ -330,7 +338,7 @@ func (x *exec) endLevels(n int) {
 // pushLevel begins lv as the innermost level, of cj's, in the exec's chain
 // ch of cj's levels. cj's run lock is held for reading.
 func (x *exec) pushLevel(lv *jitLevel, cj *codeJIT, ch *codeLevels) {
-	lv.cj, lv.chain, lv.below = cj, ch, ch.top
+	lv.cj, lv.chain, lv.below, lv.x = cj, ch, ch.top, x
 	ch.top = lv
 	x.jit.n++
 }
@@ -858,13 +866,19 @@ func compileNative(c *Code, idx uint32, cd *compiled, counter uint64) (code *wji
 
 // request is the request to compile function idx.
 func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
-	wb, sr, lay := jitWriteBarrier, jitStoreRef, jitLayout
+	wb, sr, lay, as := jitWriteBarrier, jitStoreRef, jitLayout, jitAllocStubAddr
 	if t := c.test; t != nil {
 		if t.jit.writeBarrier != 0 {
 			wb = t.jit.writeBarrier
 		}
 		if t.jit.storeRef != 0 {
 			sr = t.jit.storeRef
+		}
+		if t.jit.allocStub != 0 {
+			as = t.jit.allocStub
+		}
+		if t.jit.noAllocStub {
+			as = 0
 		}
 		if t.jit.layout != nil {
 			lay = t.jit.layout
@@ -882,6 +896,7 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		FrameRefLocals: cd.rlocals,
 		WriteBarrier:   wb,
 		StoreRef:       sr,
+		AllocStub:      as,
 		Layout:         lay,
 		CaughtSlot:     cd.caught,
 		TierCounter:    counter,

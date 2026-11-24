@@ -607,7 +607,7 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold alloc exit")
 		a.Store(rCtx, offResume, s0)
 		g.saveAll()
-		g.exit(wjit.ExitAlloc, a.NewLabel())
+		g.exitAlloc(a.NewLabel())
 		g.restoreAll()
 		a.JmpMem(rCtx, offResume)
 	case stubCall, stubCallIndirect, stubCallRef:
@@ -693,6 +693,44 @@ func (g *gen) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	g.storeCtx(offExitFn, uint64(g.fn))
 	a.LeaLabel(s0, resume)
 	a.Store(rCtx, offExitAddr, s0)
+	a.Ret()
+	a.Bind(resume)
+	a.Load(rL, rCtx, offL)
+	a.Load(rMem, rCtx, offMemBase)
+	a.Load(rPoll, rCtx, offPoll)
+	if g.rsKept {
+		a.Load(g.rs, rCtx, offRSP)
+	}
+}
+
+// exitAlloc is exit's ExitAlloc, its arguments stored, by way of the
+// allocation stub where the request has one (wjit.Request.AllocStub): the
+// exit's record stored, the code jumps to the stub, which keeps only the
+// context, and goes on at resume where the engine made the object, else
+// takes the exit.
+func (g *gen) exitAlloc(resume amd64.Label) {
+	stub := g.req.AllocStub
+	if stub == 0 {
+		g.exit(wjit.ExitAlloc, resume)
+		return
+	}
+	a := g.a
+	a.Store(rCtx, offL, rL)
+	a.Store(rCtx, offPoll, rPoll)
+	if g.rsKept {
+		a.Store(rCtx, offRSP, g.rs)
+	}
+	g.storeCtx(offExit, wjit.ExitAlloc)
+	g.storeCtx(offExitFn, uint64(g.fn))
+	a.LeaLabel(s0, resume)
+	a.Store(rCtx, offExitAddr, s0)
+	back := a.NewLabel()
+	a.LeaLabel(s0, back)
+	a.MovImm(amd64.RAX, stub)
+	a.JmpReg(amd64.RAX)
+	a.Bind(back)
+	a.Op(amd64.Test, amd64.RAX, amd64.RAX, true)
+	a.Jcc(amd64.CondNE, resume)
 	a.Ret()
 	a.Bind(resume)
 	a.Load(rL, rCtx, offL)

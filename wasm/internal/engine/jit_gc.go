@@ -281,13 +281,35 @@ func (lv *jitLevel) dropPools() {
 // elements is made into here. The objects are charged to the instance's
 // budget, the native frames' references counted with the rest.
 func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint32) {
+	x.allocFor(lv, what, length, f, at, false)
+}
+
+// allocFor is jitAlloc's work, which the allocation stub's Go does too
+// (jitAllocStub), reporting whether it was done: where try, it does nothing
+// that would trap or that the budget holds only once what is reachable is
+// counted again, which the exit, its frames as Go sees them, does.
+func (x *exec) allocFor(lv *jitLevel, what, length uint64, f *exitFrame, at uint32, try bool) bool {
 	ti, hi := uint32(what), uint32(what>>32)
 	class := int(hi) - 1
+	b := lv.inst.budget
 	switch {
 	case hi&wjit.AllocMake != 0:
-		a := newArray(lv.inst.Code.typeRTT(ti), uint32(length), lv.inst.budget, x, uint64(at))
+		t := lv.inst.Code.typeRTT(ti)
+		var a *Array
+		if try {
+			size := t.elemSize
+			if t.refElems {
+				size = 8
+			}
+			if length > uint64(maxArrayLength(size)) || !b.tryChargeGC(arraySize(t, uint32(length))) {
+				return false
+			}
+			a = makeArray(t, int(length))
+		} else {
+			a = newArray(t, uint32(length), b, x, uint64(at))
+		}
 		f.r[hi&^wjit.AllocMake] = ArrayRef(a)
-		return
+		return true
 	case hi == wjit.AllocLength:
 		class = arrayClass(int(length) * lv.inst.Code.typeRTT(ti).elemBytes())
 	}
@@ -297,9 +319,10 @@ func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint
 	set := lv.pools.set
 	p := set.pool(lv.inst.Code, ti, class)
 	if p.n > 0 {
-		return
+		return true
 	}
 	set.held -= p.made
+	p.made = 0
 	n := min(p.size, max(int(gcPoolBytes/p.each), 1))
 	if int64(n)*p.each > gcPoolsHeld-set.held {
 		// The last fills may have been taken since: what the pools hold
@@ -309,10 +332,14 @@ func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint
 	if room := (gcPoolsHeld - set.held) / p.each; int64(n) > room {
 		n = int(max(room, 1))
 	}
-	b := lv.inst.budget
 	epoch := b.gcEpoch()
-	p.made = 0
-	b.chargeGC(x, int64(n)*p.each)
+	if try {
+		if !b.tryChargeGC(int64(n) * p.each) {
+			return false
+		}
+	} else {
+		b.chargeGC(x, int64(n)*p.each)
+	}
 	if p.class < 0 {
 		for i := range n {
 			p.objs[i] = newStruct(p.rt).p
@@ -325,6 +352,7 @@ func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint
 	p.n, p.epoch, p.made = uint64(n), epoch, int64(n)*p.each
 	set.held += p.made
 	p.size = min(2*n, gcPoolCap)
+	return true
 }
 
 // recount makes what the table's pools are taken to hold what they hold:

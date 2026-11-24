@@ -51,6 +51,13 @@ type Request struct {
 	// collector marks, and StoreRef where native code jumps to store a
 	// pointer word then (internal/jit's).
 	WriteBarrier, StoreRef uint64
+	// AllocStub is where native code jumps to have the engine make the
+	// object of an ExitAlloc record it stored -- a pool filled, or an array
+	// made into its reference slot -- without leaving: its context in DI
+	// (X0), where to go on in R11 (X16). It leaves 1 in AX (X17) where the
+	// engine made it, else 0, and the code then takes the exit; it keeps
+	// the context (and the link register) alone. 0 is none: the code exits.
+	AllocStub uint64
 	// Layout is where the engine's objects keep what native code reads.
 	Layout *Layout
 	// CaughtSlot is the first of the reference slots the engine's frame

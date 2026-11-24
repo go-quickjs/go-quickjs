@@ -124,13 +124,21 @@ func countExits(t testing.TB, f func()) int64 {
 	return c.exits.Load() - before
 }
 
-// countAllocExits returns the ExitAllocs the native code of t's Codes
-// takes while f runs, and all its exits.
+// countAllocExits returns the allocations the native code of t's Codes
+// leaves to Go while f runs -- its calls of the allocation stub and its
+// ExitAllocs -- and all its exits.
 func countAllocExits(t testing.TB, f func()) (alloc, all int64) {
+	stubs, exits, all := countAllocs(t, f)
+	return stubs + exits, all
+}
+
+// countAllocs returns the calls of the allocation stub the native code of
+// t's Codes makes while f runs, its ExitAllocs, and all its exits.
+func countAllocs(t testing.TB, f func()) (stubs, allocs, all int64) {
 	c := &codeTestChain(t)[0].counts
-	a := c.allocs.Load()
+	s, a := c.stubs.Load(), c.allocs.Load()
 	all = countExits(t, f)
-	return c.allocs.Load() - a, all
+	return c.stubs.Load() - s, c.allocs.Load() - a, all
 }
 
 // TestCodeSwitchesAreTheTests checks that a switch a test sets reaches the
