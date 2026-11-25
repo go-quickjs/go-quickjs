@@ -1776,6 +1776,20 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 		r.fillDictCache(c, o, key)
 		return
 	}
+	if o.class == ClassTypedArray {
+		// A typed array's method or property its prototypes answer,
+		// which no cache holds: noted for the JIT's code
+		// (jitNoteDeepRead), as a read past what a cache holds is, so
+		// that code compiled for the site reads it natively from the
+		// first, as V8's feedback names a typed array's map at a load.
+		// Each such site had been learned at a deoptimization of its
+		// own: a function calling eight of a BigInt64Array's methods,
+		// one a run.
+		if jitBuilt && r.jitOn() {
+			r.jitNoteDeepRead(c, o, key)
+		}
+		return
+	}
 	if r.ensureShape(o) == nil {
 		return
 	}

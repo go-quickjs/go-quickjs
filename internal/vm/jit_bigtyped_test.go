@@ -180,3 +180,31 @@ func TestJITBigTypedWrites(t *testing.T) {
 		release()
 	}
 }
+
+// A typed array's methods, which no cache of the interpreter's holds, are
+// noted at the interpreter's reads for the code compiled for their sites
+// (fillPropCache, jitNoteDeepRead), as V8's feedback names a typed array's
+// map at a load: a function calling five of a Float64Array's methods,
+// compiled at its first call, is compiled once and leaves its code once,
+// where it had left at each of its sites in turn, one a run, to be
+// compiled again for each, and deoptimized. Each answer is the
+// interpreter's.
+func TestJITTypedArrayMethodsNoted(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 10 {
+		rounds = append(rounds, "f(ta, 50)")
+	}
+	r := jitAgreesForTest(t, `var ta = new Float64Array([1, 2, 3, 4])
+		function f(t, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) s += t.indexOf(3) + t.lastIndexOf(1) + t.at(-1) + (t.includes(2) ? 1 : 0) + t.join('-').length
+			return s
+		}`, rounds...)
+	if e := jitNativeForTest(t, r, "f"); e.ssaSerial > 1 || e.ssaStats.hosts+e.ssaStats.guards > 1 {
+		t.Errorf("f was compiled %d times and left its code %d times", e.ssaSerial, e.ssaStats.hosts+e.ssaStats.guards)
+	}
+}
