@@ -3574,12 +3574,19 @@ compiler's barrier shades the pointer it overwrites and the one it writes. A
 routine each code shares saves the registers the code allocates and restores
 them after; `storeRef` keeps only the context's register (amd64: the word's
 address in AX, the pointer in CX, where to go on in R11, the context in DI;
-arm64: R15, R17, R16 and R0, with the link register). A pointer stored
-over itself -- a nil over a nil, a primitive's over a primitive's, an
-object's pointer stored back where it was -- has nothing to write or to
-shade: the slot holds the same reference before and after, so no edge of
-the heap is made or broken, and the routine goes straight back from it,
-nothing saved. Shading is skipped only
+arm64: R15, R17, R16 and R0, with the link register). A nil over a nil,
+a primitive's over a primitive's, has nothing to write or to shade, and
+the routine goes straight back from it, nothing saved. An object's
+pointer stored back where it already is goes through the barrier all the
+same: native code writes some pointer words with no barrier by design --
+a native call's operands into its callee's frame, a loop's step into a
+keep cell (below) -- so a slot's holding a pointer says nothing of
+whether the collector has seen it, and what native code holds where the
+collector does not look, an exit's records among them, is shaded by the
+barrier's store of it (below, "Shading first"), even into a slot that
+holds it already. Skipping those stores left objects of AWFY's Havlak
+reachable only from the VM's stack, already scanned, which the collector
+freed. Shading is skipped only
 for what is known to be shaded in this cycle, and Go tells native code
 nothing of that: a stale answer frees a live object. The flag cannot change
 between the test and the write: Go sets it only with the world stopped,

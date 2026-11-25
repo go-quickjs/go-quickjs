@@ -294,6 +294,24 @@ func storeRefClobberAddr() uintptr
 // that did not save one it keeps across the store goes wrong.
 func StoreRefClobber() uint64 { return uint64(storeRefClobberAddr()) }
 
+// storeRefCounting is storeRef, counted in storeRefCalls first, and
+// storeRefCountingAddr its address.
+func storeRefCounting()
+func storeRefCountingAddr() uintptr
+
+// storeRefCalls is how many stores storeRefCounting has passed on to
+// storeRef: native code's, on the goroutine that runs it.
+var storeRefCalls uint64
+
+// StoreRefCounting is StoreRef for tests: what native code jumps to there
+// is counted (StoreRefCalls) before it stores, so that a test sees which
+// of the code's stores reach Go's write barrier.
+func StoreRefCounting() uint64 { return uint64(storeRefCountingAddr()) }
+
+// StoreRefCalls is how many stores have gone through StoreRefCounting in
+// the process so far; read on the goroutine that ran the code.
+func StoreRefCalls() uint64 { return storeRefCalls }
+
 // storeRefGo is what storeRef calls: the store, which compiled Go makes
 // with its write barrier while the collector marks -- the old pointer and
 // the new shaded, as the hybrid barrier does. It never grows the stack,

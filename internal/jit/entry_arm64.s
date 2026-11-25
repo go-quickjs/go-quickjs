@@ -129,6 +129,21 @@ TEXT ·storeRefClobberAddr(SB), NOSPLIT, $0-8
 	MOVD R0, ret+0(FP)
 	RET
 
+// storeRefCounting is amd64's: storeRef, counted in storeRefCalls first,
+// with R1 and R2, which storeRef's call of Go may change too.
+TEXT ·storeRefCounting(SB), NOSPLIT|NOFRAME, $0-0
+	MOVD $·storeRefCalls(SB), R1
+	MOVD (R1), R2
+	ADD $1, R2
+	MOVD R2, (R1)
+	JMP ·storeRef(SB)
+
+// storeRefCountingAddr is storeRefCounting's address.
+TEXT ·storeRefCountingAddr(SB), NOSPLIT, $0-8
+	MOVD $·storeRefCounting(SB), R0
+	MOVD R0, ret+0(FP)
+	RET
+
 // framePointer is its caller's frame pointer, R29: a frameless function's
 // is its caller's.
 TEXT ·framePointer(SB), NOSPLIT|NOFRAME, $0-8

@@ -102,6 +102,20 @@ TEXT ·storeRefClobberAddr(SB), NOSPLIT, $0-8
 	MOVQ AX, ret+0(FP)
 	RET
 
+// storeRefCounting is storeRef, counted in storeRefCalls first, which a
+// test gives native code (StoreRefCounting) to see which stores reach Go's
+// write barrier. It changes only the flags, which storeRef's call of Go
+// does too.
+TEXT ·storeRefCounting(SB), NOSPLIT|NOFRAME, $0-0
+	INCQ ·storeRefCalls(SB)
+	JMP ·storeRef(SB)
+
+// storeRefCountingAddr is storeRefCounting's address.
+TEXT ·storeRefCountingAddr(SB), NOSPLIT, $0-8
+	LEAQ ·storeRefCounting(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET
+
 // callGoAddr is callGo's address (abi.Encoding's CallGo).
 TEXT ·callGoAddr(SB), NOSPLIT, $0-8
 	LEAQ ·callGo(SB), AX

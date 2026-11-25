@@ -2391,15 +2391,16 @@ func (c *a64Compiler) refStore() {
 	c.a.Bind(back)
 }
 
-// refStoringCall is amd64's: back to the site at once for a pointer over
-// itself; or
-// every allocatable register saved, storeRef called, which comes back where B
-// says, with the link register; the frame's registers read again, every
-// allocatable one restored, and back to the site.
+// refStoringCall is amd64's: back to the site at once for a nil over a nil
+// alone -- a pointer stored over itself goes through the barrier, which may
+// be what shades it (amd64's refStoringCall says why); or every allocatable
+// register saved, storeRef called, which comes back where B says, with the
+// link register; the frame's registers read again, every allocatable one
+// restored, and back to the site.
 func (c *a64Compiler) refStoringCall() {
 	none := c.a.NewLabel()
 	c.a.Load(a64B, a64A, 0)
-	c.a.Op(arm64.Eor, a64B, a64B, a64C, true)
+	c.a.Op(arm64.Orr, a64B, a64B, a64C, true)
 	c.a.Cbz(a64B, none, true)
 	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
