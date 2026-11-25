@@ -119,11 +119,18 @@ func jitSnapBuildForTest(t *testing.T, j *jitRegJob, fb ssa.Feedback) (listing s
 // constructor called natively from a loop had waited for a check with its
 // compile done, its Vector making 7,000 arrays through Go meanwhile: the
 // suite's time 1.24 times the foreground's.
+//
+// Each compile handed to the workers is waited for as it is handed over
+// (jitTestConfig's bgDone), so that what is made through Go is what waits
+// for the install and the run's leaving, not for the workers: on arm64's
+// runners, their queue shared with the package's other tests, a compile
+// had taken long enough for 9,000 to 100,000 constructions through Go.
 func TestJITBackgroundRunsGoOnInTheirNewCode(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.bgDone = true })
 	cases := []struct {
 		name, src, op string
 		n             uint64

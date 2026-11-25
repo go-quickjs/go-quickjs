@@ -150,6 +150,10 @@ type jitTestConfig struct {
 	crossHook     func(f JITFunction, code *mir.Code, err error)
 	// tierHook, where set, is the runtime's JITTierHook.
 	tierHook func(JITTierEvent)
+	// bgDone has each compile handed to the workers waited for as it is
+	// handed over (jitRegSubmit): done at once, it is installed at the
+	// checks after, as any is, however long the workers would have taken.
+	bgDone bool
 }
 
 // jitSetEncoding sets s's encoding and options as its runtime's test

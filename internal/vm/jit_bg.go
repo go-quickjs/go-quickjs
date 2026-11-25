@@ -187,6 +187,9 @@ func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 	}
 	s.bgSubmitted++
 	jitWorkers.submit(j)
+	if r.jitTest.bgDone {
+		<-j.done
+	}
 	if r.jitStress.background && r.jitStress.checks == 0 {
 		r.jitDrain()
 	}
