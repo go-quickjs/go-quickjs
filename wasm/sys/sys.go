@@ -81,8 +81,16 @@ type Walltime func() (sec int64, nsec int32)
 // time with. It never decreases.
 type Nanotime func() int64
 
-// Nanosleep sleeps for at least ns nanoseconds.
-type Nanosleep func(ns int64)
+// Nanosleep sleeps for at least ns nanoseconds, or until ctx, the context
+// of the call that sleeps, is done, whichever comes first.
+//
+// The engine ends the sleep when ctx is done whether or not the sleeper
+// watches it: a sleeper the host gives runs on a goroutine of its own, which
+// the call stops waiting for, leaving the sleeper to return when it will.
+// So a sleeper may still run while the module goes on, or sleeps again, and
+// must be safe to call from several goroutines at once; one that returns
+// when ctx is done leaves nothing running.
+type Nanosleep func(ctx context.Context, ns int64)
 
 // Osyield yields the processor, as a spin-wait loop does.
 type Osyield func()

@@ -12,6 +12,7 @@
 package sysctx
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -58,6 +59,10 @@ type Context struct {
 	// Nanosleep and Osyield return at once unless configured.
 	Nanosleep sys.Nanosleep
 	Osyield   sys.Osyield
+	// OwnSleep says Nanosleep is the engine's own -- the system's sleep or
+	// the default -- which returns once the call's context is done, and is
+	// called on the call's goroutine; a host's runs on one of its own.
+	OwnSleep bool
 
 	// RandSource reads random bytes: a fixed, deterministic sequence
 	// unless configured.
@@ -79,6 +84,7 @@ type Config struct {
 	Nanotime   sys.Nanotime
 	NanotimeRe sys.ClockResolution
 	Nanosleep  sys.Nanosleep
+	OwnSleep   bool
 	Osyield    sys.Osyield
 	RandSource io.Reader
 }
@@ -106,6 +112,7 @@ func New(c *Config) (*Context, error) {
 		Walltime:   c.Walltime,
 		Nanotime:   c.Nanotime,
 		Nanosleep:  c.Nanosleep,
+		OwnSleep:   c.OwnSleep,
 		Osyield:    c.Osyield,
 		RandSource: c.RandSource,
 
@@ -160,7 +167,8 @@ func New(c *Config) (*Context, error) {
 		sc.NanotimeResolution = 1
 	}
 	if sc.Nanosleep == nil {
-		sc.Nanosleep = func(int64) {}
+		sc.Nanosleep = func(context.Context, int64) {}
+		sc.OwnSleep = true
 	}
 	if sc.Osyield == nil {
 		sc.Osyield = func() {}

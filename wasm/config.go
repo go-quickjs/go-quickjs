@@ -371,9 +371,17 @@ type ModuleConfig interface {
 	WithSysNanotime() ModuleConfig
 
 	// WithNanosleep sets how to sleep. The default returns at once.
+	//
+	// The call's context ends a sleep, as it ends the call's code, and the
+	// call returns what the engine's own check of the context would
+	// (RuntimeConfig.WithCloseOnContextDone). nanosleep is given the
+	// context to return early by, and is cut off if it does not: it runs
+	// on a goroutine of its own, which the call stops waiting for (see
+	// sys.Nanosleep).
 	WithNanosleep(nanosleep sys.Nanosleep) ModuleConfig
 
-	// WithSysNanosleep sleeps with time.Sleep.
+	// WithSysNanosleep sleeps for as long as the system's clock says, or
+	// until the call's context is done, as WithNanosleep says.
 	WithSysNanosleep() ModuleConfig
 
 	// WithOsyield sets how to yield the processor. The default returns at
@@ -492,11 +500,26 @@ func (c *moduleConfig) WithSysNanotime() ModuleConfig {
 func (c *moduleConfig) WithNanosleep(nanosleep sys.Nanosleep) ModuleConfig {
 	r := c.clone()
 	r.sys.Nanosleep = nanosleep
+	r.sys.OwnSleep = false
 	return r
 }
 
 func (c *moduleConfig) WithSysNanosleep() ModuleConfig {
-	return c.WithNanosleep(func(ns int64) { time.Sleep(time.Duration(ns)) })
+	r := c.clone()
+	r.sys.Nanosleep = sysNanosleep
+	r.sys.OwnSleep = true
+	return r
+}
+
+// sysNanosleep sleeps for ns nanoseconds of the system's clock, or until
+// ctx is done.
+func sysNanosleep(ctx context.Context, ns int64) {
+	t := time.NewTimer(time.Duration(ns))
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 func (c *moduleConfig) WithOsyield(osyield sys.Osyield) ModuleConfig {

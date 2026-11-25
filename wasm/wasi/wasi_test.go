@@ -85,8 +85,14 @@ func wrapper(defs map[string]api.FunctionDefinition) string {
 
 func newHarness(t *testing.T, cfg wasm.ModuleConfig) *harness {
 	t.Helper()
+	return newHarnessIn(t, wasm.NewRuntimeConfig(), cfg)
+}
+
+// newHarnessIn is newHarness in a runtime of rcfg.
+func newHarnessIn(t *testing.T, rcfg wasm.RuntimeConfig, cfg wasm.ModuleConfig) *harness {
+	t.Helper()
 	ctx := context.Background()
-	r := wasm.NewRuntime(ctx)
+	r := wasm.NewRuntimeWithConfig(ctx, rcfg)
 	t.Cleanup(func() { r.Close(ctx) })
 	closer, err := wasi.Instantiate(ctx, r)
 	if err != nil {
@@ -923,7 +929,7 @@ func TestPollOneoff(t *testing.T) {
 	var slept []int64
 	cfg := wasm.NewModuleConfig().
 		WithNanotime(func() int64 { return 1000 }, 1).
-		WithNanosleep(func(ns int64) { slept = append(slept, ns) })
+		WithNanosleep(func(_ context.Context, ns int64) { slept = append(slept, ns) })
 	h := newHarness(t, cfg)
 	sub := func(i uint32, userdata uint64, typ byte, a uint32, timeout uint64, flags uint16) {
 		b := make([]byte, 48)

@@ -1,6 +1,7 @@
 package wasi
 
 import (
+	"context"
 	"io"
 	"math"
 
@@ -91,7 +92,7 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 	}
 	if nevents == 0 {
 		if minDelay > 0 {
-			c.sc.Nanosleep(minDelay)
+			c.sleep(minDelay)
 		}
 		for i := uint32(0); i < nsubs; i++ {
 			if delays[i] >= 0 && delays[i] <= minDelay {
@@ -101,6 +102,45 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 	}
 	c.putU32(neventsPtr, nevents)
 	return 0
+}
+
+// sleep sleeps for ns nanoseconds, or until the call's context is done,
+// which then ends the call as the engine's check of the context does,
+// with the context's error. The engine's own sleepers return when the
+// context is done and run on the call's goroutine. A host's runs on one
+// of its own, which the call stops waiting for when the context is done,
+// leaving the sleeper to return when it will, so that one that does not
+// watch the context cannot hold the call; a panic in it is the call's for
+// as long as the call waits.
+func (c *call) sleep(ns int64) {
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := ctx.Done()
+	if done == nil || c.sc.OwnSleep {
+		c.sc.Nanosleep(ctx, ns)
+		if err := ctx.Err(); err != nil {
+			panic(err)
+		}
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		panic(err)
+	}
+	slept := make(chan any, 1)
+	go func() {
+		defer func() { slept <- recover() }()
+		c.sc.Nanosleep(ctx, ns)
+	}()
+	select {
+	case p := <-slept:
+		if p != nil {
+			panic(p)
+		}
+	case <-done:
+		panic(ctx.Err())
+	}
 }
 
 // readable returns the bytes a read of e's file would find, for an event of

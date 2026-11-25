@@ -40,7 +40,8 @@
 // descriptor is ready at once, as reads and writes of files and of the
 // streams never report EAGAIN; one of a descriptor that is not open is
 // ready with EBADF. The call sleeps, with the module's Nanosleep, only when
-// no subscription is ready: until the earliest clock.
+// no subscription is ready: until the earliest clock, or until the call's
+// context is done, which ends the call.
 //
 // # What it does not do
 //
