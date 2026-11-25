@@ -230,6 +230,10 @@ file IDs, so that `d_ino` matches the inode a stat reports.
 - There are no sockets: the `sock_*` functions fail with `EBADF` for a
   descriptor that is not open and `ENOTSOCK` for one that is.
 - `fd_pwrite` on a file in append mode writes at the offset it is given.
+- A read or a write takes as many iovecs as its memory holds, with no
+  `IOV_MAX`, and `poll_oneoff` as many subscriptions: each is read where it
+  lies in the module's memory, so that their count costs the host no memory
+  of its own.
 - `path_link` links a symbolic link itself, and fails with `EINVAL` if asked
   to follow it.
 

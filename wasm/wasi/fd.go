@@ -322,21 +322,71 @@ func fdFilestatSetTimes(c *call, p []uint64) sysfs.Errno {
 	return e.FS.Utimes(e.Path, t, true)
 }
 
-// iovecs returns the count iovecs at off, each a buffer of memory.
-func (c *call) iovecs(off, count uint32) ([][]byte, sysfs.Errno) {
+// iovecs is the count iovecs at off, each a buffer of memory. It is read
+// where it lies, so that the count costs the host nothing of its own.
+type iovecs struct {
+	c   *call
+	arr []byte // the iovecs, 8 bytes each
+}
+
+// iovecsAt returns the count iovecs at off, or EFAULT if the array or a
+// buffer one names is out of memory's range.
+func (c *call) iovecsAt(off, count uint32) (iovecs, sysfs.Errno) {
 	b, ok := c.array(off, count, 8)
 	if !ok {
-		return nil, sysfs.EFAULT
+		return iovecs{}, sysfs.EFAULT
 	}
-	bufs := make([][]byte, count)
-	for i := range bufs {
-		buf, ok := c.bytes(le.Uint32(b[8*i:]), le.Uint32(b[8*i+4:]))
-		if !ok {
-			return nil, sysfs.EFAULT
+	v := iovecs{c, b}
+	for i := range v.len() {
+		if _, ok := v.buf(i); !ok {
+			return iovecs{}, sysfs.EFAULT
 		}
-		bufs[i] = buf
 	}
-	return bufs, 0
+	return v, 0
+}
+
+func (v iovecs) len() int { return len(v.arr) / 8 }
+
+// buf returns iovec i's buffer, and false if it is out of memory's range,
+// which a shared memory's iovec may be by the time it is read again.
+func (v iovecs) buf(i int) ([]byte, bool) {
+	return v.c.bytes(le.Uint32(v.arr[8*i:]), le.Uint32(v.arr[8*i+4:]))
+}
+
+// transfer moves the iovecs' bytes with move, which is given each buffer
+// and the count moved before it, until a buffer is not moved whole, and
+// returns the count moved. An error ends the transfer; it is returned if
+// nothing was moved.
+func (v iovecs) transfer(move func(b []byte, done int64) (int, sysfs.Errno)) (int64, sysfs.Errno) {
+	var total int64
+	for i := range v.len() {
+		b, ok := v.buf(i)
+		if !ok {
+			if total == 0 {
+				return 0, sysfs.EFAULT
+			}
+			break
+		}
+		if len(b) == 0 {
+			continue
+		}
+		b = b[:min(int64(len(b)), maxTransfer-total)]
+		if len(b) == 0 {
+			break
+		}
+		n, errno := move(b, total)
+		total += int64(n)
+		if errno != 0 {
+			if total == 0 {
+				return 0, errno
+			}
+			break
+		}
+		if n < len(b) {
+			break
+		}
+	}
+	return total, 0
 }
 
 // maxTransfer is the most bytes a read or a write moves in one call: the
@@ -356,30 +406,15 @@ func (c *call) readv(fd uint64, iovs, count, resultPtr uint32, read func(f sysfs
 	if e.IsDir {
 		return sysfs.EISDIR
 	}
-	bufs, errno := c.iovecs(iovs, count)
+	v, errno := c.iovecsAt(iovs, count)
 	if errno != 0 {
 		return errno
 	}
-	var total int64
-	for _, b := range bufs {
-		if len(b) == 0 {
-			continue
-		}
-		b = b[:min(int64(len(b)), maxTransfer-total)]
-		if len(b) == 0 {
-			break
-		}
-		n, errno := read(e.File, b, total)
-		total += int64(n)
-		if errno != 0 {
-			if total == 0 {
-				return errno
-			}
-			break
-		}
-		if n < len(b) {
-			break
-		}
+	total, errno := v.transfer(func(b []byte, done int64) (int, sysfs.Errno) {
+		return read(e.File, b, done)
+	})
+	if errno != 0 {
+		return errno
 	}
 	if !c.putU32(resultPtr, uint32(total)) {
 		return sysfs.EFAULT
@@ -396,30 +431,15 @@ func (c *call) writev(fd uint64, iovs, count, resultPtr uint32, write func(f sys
 	if e.IsDir {
 		return sysfs.EBADF
 	}
-	bufs, errno := c.iovecs(iovs, count)
+	v, errno := c.iovecsAt(iovs, count)
 	if errno != 0 {
 		return errno
 	}
-	var total int64
-	for _, b := range bufs {
-		if len(b) == 0 {
-			continue
-		}
-		b = b[:min(int64(len(b)), maxTransfer-total)]
-		if len(b) == 0 {
-			break
-		}
-		n, errno := write(e.File, b, total)
-		total += int64(n)
-		if errno != 0 {
-			if total == 0 {
-				return errno
-			}
-			break
-		}
-		if n < len(b) {
-			break
-		}
+	total, errno := v.transfer(func(b []byte, done int64) (int, sysfs.Errno) {
+		return write(e.File, b, done)
+	})
+	if errno != 0 {
+		return errno
 	}
 	e.Lock()
 	sync := e.Flags&(fdflagDsync|fdflagSync) != 0

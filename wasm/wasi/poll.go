@@ -41,8 +41,8 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 		return sysfs.EFAULT
 	}
 
-	// An event of each subscription ready now; the clocks' delays, for
-	// waiting if none is.
+	// An event of each subscription ready now, and the earliest clock's
+	// delay, for waiting if none is.
 	nevents := uint32(0)
 	emit := func(sub []byte, errno sysfs.Errno, nbytes uint64) {
 		ev := events[nevents*eventSize : (nevents+1)*eventSize]
@@ -53,32 +53,18 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 		le.PutUint64(ev[16:], nbytes)
 		nevents++
 	}
-	delays := make([]int64, nsubs)
+	sc := subClocks{c: c}
 	minDelay := int64(math.MaxInt64)
 	for i := uint32(0); i < nsubs; i++ {
 		sub := subs[i*subscriptionSize : (i+1)*subscriptionSize]
-		delays[i] = -1
 		switch sub[8] {
 		case eventClock:
-			id, timeout, flags := le.Uint32(sub[16:]), le.Uint64(sub[24:]), le.Uint16(sub[40:])
-			if flags&^subclockAbstime != 0 {
-				emit(sub, sysfs.EINVAL, 0)
+			delay, errno := sc.delay(sub)
+			if errno != 0 {
+				emit(sub, errno, 0)
 				continue
 			}
-			delay := int64(min(timeout, math.MaxInt64))
-			if flags&subclockAbstime != 0 {
-				now, errno := c.now(id)
-				if errno != 0 {
-					emit(sub, errno, 0)
-					continue
-				}
-				delay -= now
-			} else if id != clockRealtime && id != clockMonotonic {
-				emit(sub, sysfs.EINVAL, 0)
-				continue
-			}
-			delays[i] = max(delay, 0)
-			minDelay = min(minDelay, delays[i])
+			minDelay = min(minDelay, delay)
 		case eventFdRead, eventFdWrite:
 			e, errno := c.file(uint64(le.Uint32(sub[16:])))
 			if errno != 0 {
@@ -95,13 +81,48 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 			c.sleep(minDelay)
 		}
 		for i := uint32(0); i < nsubs; i++ {
-			if delays[i] >= 0 && delays[i] <= minDelay {
-				emit(subs[i*subscriptionSize:(i+1)*subscriptionSize], 0, 0)
+			sub := subs[i*subscriptionSize : (i+1)*subscriptionSize]
+			if sub[8] != eventClock {
+				continue
+			}
+			if delay, errno := sc.delay(sub); errno == 0 && delay <= minDelay {
+				emit(sub, 0, 0)
 			}
 		}
 	}
 	c.putU32(neventsPtr, nevents)
 	return 0
+}
+
+// subClocks finds clock subscriptions' delays, reading each clock once for
+// a call, so that a subscription looked at again has the delay it had: the
+// subscriptions are read where they lie in memory, and the host keeps
+// nothing of its own for each.
+type subClocks struct {
+	c    *call
+	now  [2]int64 // the real-time and monotonic clocks' readings
+	read [2]bool
+}
+
+// delay returns the nanoseconds until clock subscription sub is due, zero
+// if it is, or the errno of its event if it is not valid.
+func (sc *subClocks) delay(sub []byte) (int64, sysfs.Errno) {
+	id, timeout, flags := le.Uint32(sub[16:]), le.Uint64(sub[24:]), le.Uint16(sub[40:])
+	if flags&^subclockAbstime != 0 || id != clockRealtime && id != clockMonotonic {
+		return 0, sysfs.EINVAL
+	}
+	delay := int64(min(timeout, math.MaxInt64))
+	if flags&subclockAbstime != 0 {
+		if !sc.read[id] {
+			now, errno := sc.c.now(id)
+			if errno != 0 {
+				return 0, errno
+			}
+			sc.now[id], sc.read[id] = now, true
+		}
+		delay -= sc.now[id]
+	}
+	return max(delay, 0), 0
 }
 
 // sleep sleeps for ns nanoseconds, or until the call's context is done,
