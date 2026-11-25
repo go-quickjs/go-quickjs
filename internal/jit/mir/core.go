@@ -481,12 +481,14 @@ func (c *core) frameResident(x, v *ssa.Value) (int, bool) {
 
 // schedule is phiSchedule's lists.
 type schedule struct {
-	moves  []phiMove
-	steps  []phiStep
-	parked []*ssa.Value
+	moves []phiMove
+	steps []phiStep
 	// readers counts, by location (locKey), the pending moves that read
-	// it: all 0 between edges.
-	readers []int32
+	// it; writers and reading are the first of the moves that write it and
+	// read it: all 0 between edges.
+	readers, writers, reading []int32
+	// ahead and behind are the heaps of the moves that may be made.
+	ahead, behind []int32
 }
 
 // prepare checks that f is one the backends compile, and analyses and
@@ -3555,6 +3557,14 @@ func (sc *spillClasses) prepare() {
 			c.steps++
 			r = comp[r]
 		}
+		// Every member on the way points at the root now, so that no
+		// member's way is walked twice: a loop's phis each joined to the
+		// one before, a chain the pairs' links make in their order, had
+		// been walked again from each of its members, n²/2 steps.
+		for x := comp[i]; x != r; {
+			c.steps++
+			x, comp[x] = comp[x], r
+		}
 		comp[i] = r
 		b := sc.rec[id].def - 1
 		p := sc.pos[id]
@@ -3886,11 +3896,15 @@ type phiStep struct {
 	parked         bool
 }
 
-// phiSchedule orders the parallel move of an edge's phi arguments into the
-// phis' locations: a move once no pending move still reads its destination,
-// and a cycle broken by parking one source in scratch.
-// phiMove is a move phiSchedule orders.
-type phiMove struct{ dst, src *ssa.Value }
+// phiMove is a move phiSchedule orders, with its locations (locKey) and
+// the next of the moves writing its destination and reading its source,
+// plus 1.
+type phiMove struct {
+	dst, src     *ssa.Value
+	dkey, skey   int32
+	wnext, rnext int32
+	done, parked bool
+}
 
 // locKey is v's location as an index, its class's apart: phiSchedule's
 // readers'. It is -1 for a value with no location of its own, which no
@@ -3911,8 +3925,63 @@ func (c *core) locKey(v *ssa.Value) int {
 	return k
 }
 
+// pushMove adds move i to the heap h of moves that may be made.
+func (c *core) pushMove(h []int32, i int32) []int32 {
+	h = append(h, i)
+	for k := len(h) - 1; k > 0; {
+		p := (k - 1) / 2
+		if h[p] <= h[k] {
+			break
+		}
+		c.steps++
+		h[p], h[k] = h[k], h[p]
+		k = p
+	}
+	return h
+}
+
+// popMove takes the first of the moves in the heap h.
+func (c *core) popMove(h []int32) (int32, []int32) {
+	i, n := h[0], len(h)-1
+	h[0] = h[n]
+	h = h[:n]
+	for k := 0; ; {
+		l := 2*k + 1
+		if l >= n {
+			break
+		}
+		if r := l + 1; r < n && h[r] < h[l] {
+			l = r
+		}
+		if h[k] <= h[l] {
+			break
+		}
+		c.steps++
+		h[k], h[l] = h[l], h[k]
+		k = l
+	}
+	return i, h
+}
+
+// phiSchedule orders the parallel move of an edge's phi arguments into the
+// phis' locations: a move once no pending move still reads its destination,
+// and a cycle broken by parking one source in scratch.
+//
+// The order is that of passes over the pending moves, in the phis' order,
+// each making every move it meets that no pending move waits on, a pass
+// that makes none parking the value that blocks the first. Made so, a pass
+// at a time, it had taken as many steps as moves for each pass and for
+// each move made (its removal from the list), and a pass for each move of
+// a chain listed against its order: n²/2 steps for a loop's n variables
+// each given the one before's value. The passes are followed instead by
+// what may be made, the moves no pending move waits on: those still ahead
+// of the pass in one heap, those behind it, for the next pass, in another.
+// A move becomes one when the last move reading its destination is made,
+// or reads it from scratch: counted by location, and the moves found by
+// location, so that telling takes no search.
 func (c *core) phiSchedule(to *ssa.Block, idx int) []phiStep {
-	moves := c.sched.moves[:0]
+	sc := c.sched
+	moves := sc.moves[:0]
 	for _, phi := range to.Values {
 		if phi.Op != ssa.OpPhi {
 			break
@@ -3924,82 +3993,130 @@ func (c *core) phiSchedule(to *ssa.Block, idx int) []phiStep {
 		if !c.isLazy(src) && c.locAt(src) == c.locAt(phi) {
 			continue
 		}
-		moves = append(moves, phiMove{phi, src})
+		moves = append(moves, phiMove{dst: phi, src: src, dkey: int32(c.locKey(phi)), skey: int32(c.locKey(src))})
 	}
+	steps := sc.steps[:0]
+	if len(moves) == 0 {
+		sc.moves, sc.steps = moves, steps
+		return steps
+	}
+	// By location: readers counts the pending moves that read it, their
+	// source not parked; writers and reading are the first of the moves
+	// that write it and of those that read it, plus 1, the rest linked
+	// through the moves (wnext, rnext), the readers in the moves' order.
 	// Locations of different classes never coincide: R10 is not X10.
-	same := func(a, b *ssa.Value) bool {
-		if c.isLazy(a) || c.isLazy(b) || isFloat(a) != isFloat(b) {
-			return false
-		}
-		return c.locAt(a) == c.locAt(b)
+	if n := 2 * (64 + max(abi.SpillSlots, c.spills)); len(sc.readers) < n {
+		sc.readers, sc.writers, sc.reading = make([]int32, n), make([]int32, n), make([]int32, n)
 	}
-	steps := c.sched.steps[:0]
-	c.sched.parked = c.sched.parked[:0]
-	isParked := func(v *ssa.Value) bool { return slices.Contains(c.sched.parked, v) }
-	// A move waits while a pending move, its source not parked, reads its
-	// destination: counted by location, so that telling takes no search.
-	if n := 2 * (64 + max(abi.SpillSlots, c.spills)); len(c.sched.readers) < n {
-		c.sched.readers = make([]int32, n)
-	}
-	readers := c.sched.readers
-	for _, m := range moves {
-		if k := c.locKey(m.src); k >= 0 {
+	readers, writers, reading := sc.readers, sc.writers, sc.reading
+	c.steps += len(moves)
+	for i := len(moves) - 1; i >= 0; i-- {
+		m := &moves[i]
+		if k := m.skey; k >= 0 {
 			readers[k]++
+			m.rnext, reading[k] = reading[k], int32(i)+1
+		}
+		if k := m.dkey; k >= 0 {
+			m.wnext, writers[k] = writers[k], int32(i)+1
 		}
 	}
-	for len(moves) > 0 {
-		progress := false
-		c.steps += len(moves)
-		for i := 0; i < len(moves); i++ {
-			m := moves[i]
-			if k := c.locKey(m.dst); k >= 0 && readers[k] > 0 {
+	// ahead are the moves that may be made past the pass's last, behind
+	// those before it; first is the first pending; parked counts, by
+	// class, the pending moves that read scratch.
+	ahead, behind := sc.ahead[:0], sc.behind[:0]
+	for i := range moves {
+		if k := moves[i].dkey; k < 0 || readers[k] == 0 {
+			ahead = append(ahead, int32(i))
+		}
+	}
+	at, first, pending, progress := int32(-1), 0, len(moves), false
+	var parked [2]int
+	// free is a location no pending move reads any more: the moves that
+	// write it may be made, in this pass if they are past its last.
+	free := func(k int32) {
+		for w := writers[k]; w != 0; w = moves[w-1].wnext {
+			c.steps++
+			if moves[w-1].done {
 				continue
 			}
-			parked := isParked(m.src)
-			if k := c.locKey(m.src); k >= 0 && !parked {
-				readers[k]--
-			}
-			steps = append(steps, phiStep{dst: m.dst, src: m.src, parked: parked})
-			c.steps += len(moves) - i
-			moves = append(moves[:i], moves[i+1:]...)
-			i--
-			progress = true
-		}
-		if !progress {
-			// Every move is blocked, so they form cycles. Park the value
-			// that blocks the first move -- the one in its destination -- in
-			// scratch, which frees that destination. Its own move then reads
-			// scratch. The cycle unwinds before another needs scratch.
-			var blocker *ssa.Value
-			for _, o := range moves {
-				if same(o.src, moves[0].dst) && !isParked(o.src) {
-					blocker = o.src
-					break
-				}
-			}
-			if blocker == nil {
-				panic("phi moves: blocked without a blocker")
-			}
-			// One scratch register per class: a second value parked while
-			// another of its class still waits would overwrite it. A cycle
-			// unwinds before the next needs scratch, so this cannot happen;
-			// if it did, the function is refused, never miscompiled.
-			for _, o := range moves {
-				if isParked(o.src) && isFloat(o.src) == isFloat(blocker) {
-					panic("phi moves: scratch already holds a parked value")
-				}
-			}
-			steps = append(steps, phiStep{park: blocker})
-			c.sched.parked = append(c.sched.parked, blocker)
-			// A parked source is read from scratch, not its location.
-			for _, o := range moves {
-				if o.src == blocker {
-					readers[c.locKey(blocker)]--
-				}
+			if w-1 > at {
+				ahead = c.pushMove(ahead, w-1)
+			} else {
+				behind = c.pushMove(behind, w-1)
 			}
 		}
 	}
-	c.sched.moves, c.sched.steps = moves[:0], steps
+	for pending > 0 {
+		if len(ahead) > 0 {
+			var i int32
+			i, ahead = c.popMove(ahead)
+			m := &moves[i]
+			m.done, at, progress = true, i, true
+			pending--
+			if m.parked {
+				parked[b2i(isFloat(m.src))]--
+			} else if k := m.skey; k >= 0 {
+				if readers[k]--; readers[k] == 0 {
+					free(k)
+				}
+			}
+			steps = append(steps, phiStep{dst: m.dst, src: m.src, parked: m.parked})
+			continue
+		}
+		at = -1
+		if progress {
+			// The next pass.
+			ahead, behind, progress = behind, ahead, false
+			continue
+		}
+		// A pass made none: every move is blocked, so they form cycles.
+		// Park the value that blocks the first move -- the one in its
+		// destination -- in scratch, which frees that destination. Its own
+		// move then reads scratch. The cycle unwinds before another needs
+		// scratch.
+		for moves[first].done {
+			first++
+		}
+		k := moves[first].dkey
+		for k >= 0 && reading[k] != 0 && (moves[reading[k]-1].done || moves[reading[k]-1].parked) {
+			c.steps++
+			reading[k] = moves[reading[k]-1].rnext
+		}
+		if k < 0 || reading[k] == 0 {
+			panic("phi moves: blocked without a blocker")
+		}
+		blocker := moves[reading[k]-1].src
+		// One scratch register per class: a second value parked while
+		// another of its class still waits would overwrite it. A cycle
+		// unwinds before the next needs scratch, so this cannot happen;
+		// if it did, the function is refused, never miscompiled.
+		cls := b2i(isFloat(blocker))
+		if parked[cls] > 0 {
+			panic("phi moves: scratch already holds a parked value")
+		}
+		steps = append(steps, phiStep{park: blocker})
+		// A parked source is read from scratch, not its location.
+		for r := reading[k]; r != 0; r = moves[r-1].rnext {
+			c.steps++
+			if o := &moves[r-1]; !o.done && o.src == blocker {
+				o.parked = true
+				parked[cls]++
+				readers[k]--
+			}
+		}
+		if readers[k] == 0 {
+			free(k)
+		}
+	}
+	for i := range moves {
+		if k := moves[i].skey; k >= 0 {
+			reading[k] = 0
+		}
+		if k := moves[i].dkey; k >= 0 {
+			writers[k] = 0
+		}
+	}
+	sc.moves, sc.steps, sc.ahead, sc.behind = moves[:0], steps, ahead[:0], behind[:0]
 	return steps
 }
 

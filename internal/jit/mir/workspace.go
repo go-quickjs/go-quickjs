@@ -154,7 +154,7 @@ func (w *Workspace) Bytes() int {
 		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes() +
 		w.liveOps.Bytes() + w.liveSets.Bytes() + w.live.Bytes()
 	n += capBytes(w.calls.refs) + capBytes(w.calls.rest) + capBytes(w.calls.out) + capBytes(w.calls.refRecs) + capBytes(w.calls.restRecs) + capBytes(w.calls.records)
-	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
+	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.readers) + capBytes(w.sched.writers) + capBytes(w.sched.reading) + capBytes(w.sched.ahead) + capBytes(w.sched.behind) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold) + capBytes(w.amd64.pool) + capBytes(w.amd64.poolTab)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.code) + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
 	n += capBytes(w.arm64.goFails)

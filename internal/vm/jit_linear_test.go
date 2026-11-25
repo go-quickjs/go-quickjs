@@ -37,6 +37,57 @@ func linearBlocksSource(name string, n int) string {
 	return b.String()
 }
 
+// linearStoresSource is n property reads, each kept tagged, each stored
+// into an array on a branch of its own and into a property after it:
+// values read from cells live across a store or two, as TestJITLongCode's
+// reads of o.v are, in a function of n stores and 2n blocks. What is live
+// across the stores (ssa's liveAcross) is linear in it; the check of it
+// against its reference, which the quickjs_verify build makes, had taken
+// a table of every candidate by every block, quadratic.
+func linearStoresSource(name string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "function %s(a, rounds) {\nvar o = {p: 1, q: 0}, arr = [0, 0, 0, 0, 0, 0, 0, 0], s = 0;\n", name)
+	b.WriteString("for (var r = 0; r < rounds; r++) {\n")
+	for i := range n {
+		fmt.Fprintf(&b, "var v%d = o.p;\nif (a > %d) { arr[%d] = v%d; }\no.q = v%d;\n", i, i%7, i%8, i, i)
+	}
+	b.WriteString("s = s + arr[r % 8] + o.q;\n}\nreturn s;\n}\n")
+	return b.String()
+}
+
+// linearRotateSource is n variables a loop carries, each given the
+// next's value every turn (back, the one before's): the loop's back edge
+// moves every phi's location into another's.
+func linearRotateSource(back bool) func(string, int) string {
+	return func(name string, n int) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "function %s(a, rounds) {\n", name)
+		for i := range n {
+			fmt.Fprintf(&b, "var v%d = a + %d;\n", i, i)
+		}
+		b.WriteString("for (var r = 0; r < rounds; r++) {\n")
+		if back {
+			fmt.Fprintf(&b, "var t = v%d;\n", n-1)
+			for i := n - 1; i > 0; i-- {
+				fmt.Fprintf(&b, "v%d = v%d;\n", i, i-1)
+			}
+			b.WriteString("v0 = t + r;\n")
+		} else {
+			b.WriteString("var t = v0;\n")
+			for i := 0; i < n-1; i++ {
+				fmt.Fprintf(&b, "v%d = v%d;\n", i, i+1)
+			}
+			fmt.Fprintf(&b, "v%d = t + r;\n", n-1)
+		}
+		b.WriteString("}\nvar s = 0;\n")
+		for i := range n {
+			fmt.Fprintf(&b, "s = s + v%d;\n", i)
+		}
+		b.WriteString("return s;\n}\n")
+		return b.String()
+	}
+}
+
 // linearLoopsSource is n loops one after another, each its own budget
 // loop: what is found for each loop must take the loop's own blocks, not
 // the function's.
@@ -234,7 +285,14 @@ func linearCompileOf(t *testing.T, src, name string, args func(*Runtime) []Value
 // (mir's blockLiveness); and n loops one after another (loops) had each
 // cleared a table of every block and looked at every block, to find its
 // own and to give its budget register an interval, n² steps (findBudgets).
-// The work, not the time: the work is linear, and its time is not where
+// n variables a loop carries, each given the next's value every turn or
+// the one before's (rotate, rotateback), had their back edge's parallel
+// move made a pass over the pending moves at a time, a pass for each move
+// of the chain listed against its order and a removal from the list for
+// each move made, n² steps (mir's phiSchedule); and the one before's had
+// the phis' spill classes walk each member's way to its component's root
+// again, a chain the pairs' links make in their order, n²/2 steps
+// (spillClasses.prepare). The work, not the time: the work is linear, and its time is not where
 // the larger function leaves the caches -- a pass over every value of the
 // blocks' shape took 0.66 ns a value at 1,000 values and 4.78 at 8,000 --
 // nor where the machine is busy, where the ratio had been 29 to 39 times.
@@ -257,6 +315,9 @@ func TestJITCompileLinear(t *testing.T) {
 		}},
 		{"loops", linearLoopsSource, plain},
 		{"groups", linearGroupsSource, plain},
+		{"stores", linearStoresSource, plain},
+		{"rotate", linearRotateSource(false), plain},
+		{"rotateback", linearRotateSource(true), plain},
 	}
 	const small, big = 1000, 8000
 	for _, sh := range shapes {
