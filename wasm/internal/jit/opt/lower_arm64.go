@@ -493,7 +493,7 @@ func (g *gen) trap(code uint64, at uint32) arm64.Label {
 }
 
 // stub is out-of-line code, emitted after the blocks: the exit of a trap
-// with a code, a trap's site, its offset stored before it goes there, a
+// with a code, a trap's site, which leaves its offset in s0 for it, a
 // poll's site, the function's poll exit, and a call's poll and its call
 // through Go.
 type stub struct {
@@ -547,6 +547,7 @@ func (g *gen) stub(st *stub) {
 	case stubTrapCode:
 		a.Bind(st.to)
 		g.mark("cold trap")
+		a.Store(rCtx, offArg0+8, s0)
 		a.Store(rCtx, offL, rL)
 		a.Store(rCtx, offRSP, rRS)
 		g.storeCtx(offExit, wjit.ExitTrap)
@@ -556,7 +557,7 @@ func (g *gen) stub(st *stub) {
 	case stubTrapSite:
 		a.Bind(st.l)
 		g.mark("cold trap")
-		g.storeCtx(offArg0+8, uint64(st.at))
+		a.MovImm(s0, uint64(st.at))
 		a.B(st.to)
 	case stubTrapWide:
 		a.Bind(st.l)

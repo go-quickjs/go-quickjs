@@ -407,6 +407,58 @@ func TestOptWideChecks(t *testing.T) {
 	}
 }
 
+// A function of many accesses of addresses apart, and divisions between
+// them, each with its own trap site out of line, which the sites after it
+// reach the code that traps by (the opt README's Lowering, trap sites):
+// whichever access or division traps first, the optimized code traps with
+// its code at its offset, as the interpreter does.
+func TestOptTrapSites(t *testing.T) {
+	const n = 48
+	var b strings.Builder
+	b.WriteString("(module\n  (memory 1)\n")
+	b.WriteString("  (func (export \"run\") (param $p i32) (param $d i32) (param $k i32) (result i64)\n    (local $acc i64)\n")
+	for i := range n {
+		fmt.Fprintf(&b, "    (local.set $acc (i64.add (local.get $acc) (i64.load32_u offset=%d (i32.add (local.get $p) (i32.const %d)))))\n", i%3*8, 1000*i)
+		if i%5 == 4 {
+			fmt.Fprintf(&b, "    (local.set $acc (i64.add (local.get $acc) (i64.extend_i32_u (i32.div_u (i32.const %d) (i32.sub (local.get $d) (i32.const %d))))))\n", i, i)
+		}
+		if i%7 == 6 {
+			fmt.Fprintf(&b, "    (i32.store offset=4 (i32.add (local.get $k) (i32.const %d)) (local.get $d))\n", 1000*i)
+		}
+	}
+	b.WriteString("    (local.get $acc)))\n")
+	src := b.String()
+	nat := tierInstance(t, src, 0)
+	in := interpretedInstance(t, src)
+	for i := range n {
+		for _, args := range [][3]uint64{
+			// The i-th load is the first past the memory's end.
+			{uint64(65536 - 1000*i - i%3*8 - 3), 1 << 20, 0},
+			// The i-th division by zero, the accesses in bounds.
+			{0, uint64(i), 0},
+			// The i-th store past the end.
+			{0, 1 << 20, uint64(65536 - 1000*i - 7)},
+		} {
+			rn, en := call(t, nat, "run", args[0], args[1], args[2])
+			ri, ei := call(t, in, "run", args[0], args[1], args[2])
+			if !sameJITOutcome(rn, en, ri, ei) {
+				t.Fatalf("run%v: optimized %v %v, interpreted %v %v", args, rn, en, ri, ei)
+			}
+			if en != nil {
+				var tn, ti *Trap
+				errors.As(en, &tn)
+				errors.As(ei, &ti)
+				if len(tn.Frames) == 0 || len(ti.Frames) == 0 || tn.Frames[0].Offset != ti.Frames[0].Offset {
+					t.Fatalf("run%v: optimized trapped at %v, interpreted at %v", args, tn.Frames, ti.Frames)
+				}
+			}
+		}
+	}
+	if !optimized(nat, "run") {
+		t.Fatal("run not optimized")
+	}
+}
+
 // Random loops whose address is a phi of a constant -- the entry's -- and
 // of addresses the loop accesses on some of its paths, as a Go program's
 // dispatch loops' are: the optimizing tier leaves unchecked the accesses

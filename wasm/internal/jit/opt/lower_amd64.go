@@ -108,6 +108,8 @@ type gen struct {
 	traps  u64map[amd64.Label]
 	trapTo u64map[amd64.Label]
 	polls  u64map[amd64.Label]
+	// hubs are the jumps to the codes that trap that sites jump to.
+	hubs []trapHub
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// wb is the function's barrier routine, which hasWB says is made;
@@ -197,7 +199,7 @@ func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	g.polls.reset(8)
 	g.lowering.reset(f, req)
 	*g = gen{lowering: g.lowering, ws: ws, a: &ws.asm, labels: g.labels[:0], ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo,
-		polls: g.polls, moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0], vpool: g.vpool.reset()}
+		polls: g.polls, hubs: g.hubs[:0], moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0], vpool: g.vpool.reset()}
 	ws.asm.Reset()
 }
 
@@ -535,22 +537,81 @@ func (g *gen) trap(code uint64, at uint32) amd64.Label {
 	if l, ok := g.traps.get(k); ok {
 		return l
 	}
-	a := g.a
-	l := a.NewLabel()
+	l := g.a.NewLabel()
 	g.traps.set(k, l)
-	to, ok := g.trapTo.get(code)
-	if !ok {
-		to = a.NewLabel()
-		g.trapTo.set(code, to)
-		g.ool = append(g.ool, stub{kind: stubTrapCode, to: to, code: code})
-	}
-	g.ool = append(g.ool, stub{kind: stubTrapSite, l: l, to: to, at: at})
+	g.ool = append(g.ool, stub{kind: stubTrapSite, l: l, to: g.trapCode(code), code: code, at: at})
 	return l
 }
 
+// trapCode returns the label of the code that traps with code, at the
+// offset in s0, made after the blocks with its first site.
+func (g *gen) trapCode(code uint64) amd64.Label {
+	to, ok := g.trapTo.get(code)
+	if !ok {
+		to = g.a.NewLabel()
+		g.trapTo.set(code, to)
+		g.ool = append(g.ool, stub{kind: stubTrapCode, to: to, code: code})
+	}
+	return to
+}
+
+// trapHub is the last jump to to, the code that traps with code, or that
+// code itself, bound at l, at pos: a trap's site after it within a byte's
+// displacement jumps to it.
+type trapHub struct {
+	code  uint64
+	to, l amd64.Label
+	pos   int
+}
+
+// hubReach is how far past a trap's hub, in bytes as emitted, a site
+// jumps to it: a jump's byte displacement reaches 126 bytes back from its
+// start, and Finish only shortens the code between (amd64.Asm.JmpNear).
+const hubReach = 126
+
+// trapAt traps from here with code at offset at: the offset into s0, and
+// a jump to the code that traps, by way of the last jump to it where that
+// is near -- two bytes, where the code is out of a byte's reach.
+func (g *gen) trapAt(code uint64, at uint32) {
+	a := g.a
+	a.MovImm(s0, uint64(at))
+	to := g.trapCode(code)
+	for i := range g.hubs {
+		h := &g.hubs[i]
+		if h.code != code {
+			continue
+		}
+		if a.Len()-h.pos <= hubReach {
+			a.JmpNear(h.l)
+			return
+		}
+		h.l, h.pos = a.NewLabel(), a.Len()
+		a.Bind(h.l)
+		a.Jmp(to)
+		return
+	}
+	l := a.NewLabel()
+	g.hubs = append(g.hubs, trapHub{code: code, to: to, l: l, pos: a.Len()})
+	a.Bind(l)
+	a.Jmp(to)
+}
+
+// trapHere makes the code that traps with code, bound at to, the hub of
+// its sites after it.
+func (g *gen) trapHere(code uint64, to amd64.Label) {
+	for i := range g.hubs {
+		if g.hubs[i].code == code {
+			g.hubs[i].l, g.hubs[i].pos = to, g.a.Len()
+			return
+		}
+	}
+	g.hubs = append(g.hubs, trapHub{code: code, to: to, l: to, pos: g.a.Len()})
+}
+
 // stub is out-of-line code, emitted after the blocks: the exit of a trap
-// with a code, a trap's site, its offset stored before it goes there, a
-// poll's exit, and a call's poll and its call through Go.
+// with a code, a trap's site, which leaves its offset in s0 for it, a
+// poll's site, the function's poll exit, and a call's poll and its call
+// through Go.
 type stub struct {
 	kind uint8
 	// l is the stub's label, to where a trap's site goes, or a poll where
@@ -595,7 +656,8 @@ const (
 	stubTrapWide
 	// stubCheck is the exact check of access v, whose address is in dst,
 	// where the address is past the memory's limit (Ctx.MemLimit): it
-	// traps as v's check does, or goes back to the access at to.
+	// goes back to the access at to, or traps as v's check does, its
+	// trap's site its own end.
 	stubCheck
 )
 
@@ -605,7 +667,9 @@ func (g *gen) stub(st *stub) {
 	switch st.kind {
 	case stubTrapCode:
 		a.Bind(st.to)
+		g.trapHere(st.code, st.to)
 		g.mark("cold trap")
+		a.Store(rCtx, offArg0+8, s0)
 		a.Store(rCtx, offL, rL)
 		if g.rsKept {
 			a.Store(rCtx, offRSP, g.rs)
@@ -617,8 +681,7 @@ func (g *gen) stub(st *stub) {
 	case stubTrapSite:
 		a.Bind(st.l)
 		g.mark("cold trap")
-		g.storeCtx(offArg0+8, uint64(st.at))
-		a.Jmp(st.to)
+		g.trapAt(st.code, st.at)
 	case stubCheck:
 		a.Bind(st.l)
 		g.mark("cold check")
@@ -630,12 +693,13 @@ func (g *gen) stub(st *stub) {
 			a.Lea(s0, st.dst, int32(w[len(w)-1].end))
 			a.CmpMem(s0, rCtx, offMemSize, true)
 			a.Jcc(amd64.CondA, wide)
+			a.Jmp(st.to)
 		} else {
 			a.Lea(s0, st.dst, int32(v.Aux+uint64(v.Size)))
 			a.CmpMem(s0, rCtx, offMemSize, true)
-			a.Jcc(amd64.CondA, g.trap(wjit.TrapMemOutOfBounds, v.At))
+			a.Jcc(amd64.CondBE, st.to)
+			g.trapAt(wjit.TrapMemOutOfBounds, v.At)
 		}
-		a.Jmp(st.to)
 	case stubTrapWide:
 		a.Bind(st.l)
 		g.mark("cold trap")
@@ -645,9 +709,12 @@ func (g *gen) stub(st *stub) {
 			a.Lea(s0, s0, int32(c.end-at))
 			at = c.end
 			a.CmpMem(s0, rCtx, offMemSize, true)
-			a.Jcc(amd64.CondA, g.trap(wjit.TrapMemOutOfBounds, c.v.At))
+			next := a.NewLabel()
+			a.Jcc(amd64.CondBE, next)
+			g.trapAt(wjit.TrapMemOutOfBounds, c.v.At)
+			a.Bind(next)
 		}
-		a.Jmp(g.trap(wjit.TrapMemOutOfBounds, w[len(w)-1].v.At))
+		g.trapAt(wjit.TrapMemOutOfBounds, w[len(w)-1].v.At)
 	case stubPoll:
 		a.Bind(st.l)
 		g.mark("cold poll")

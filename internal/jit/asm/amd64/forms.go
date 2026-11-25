@@ -123,6 +123,17 @@ func (a *Asm) JmpLong(l Label) {
 	a.imm32(0)
 }
 
+// JmpNear jumps to l with a byte's displacement, which Finish patches and
+// never lengthens: l is within a byte's displacement of the jump's end as
+// the code is emitted, and Finish only shortens the code between, else
+// Finish fails. The jump is no candidate for Finish's rounds, which a jump
+// of 32 bits that would be shortened is.
+func (a *Asm) JmpNear(l Label) {
+	a.emit(0xEB)
+	a.fix(l, fixJmp8, 0)
+	a.emit(0)
+}
+
 // Nop emits one NOP of n bytes, n at most 9: padding that keeps the
 // entries of a table of jumps the same length.
 func (a *Asm) Nop(n int) { a.buf = append(a.buf, nops[n]...) }

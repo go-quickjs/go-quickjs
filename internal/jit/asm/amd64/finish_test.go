@@ -172,3 +172,40 @@ func TestFinishRandomCode(t *testing.T) {
 		}
 	}
 }
+
+// A near jump back over code whose jumps Finish shortens reaches its label
+// where the label went, in its two bytes; one whose label is out of a
+// byte's reach fails Finish.
+func TestFinishJmpNear(t *testing.T) {
+	for _, between := range []int{0, 1, 40, 100, 122} {
+		var a Asm
+		far, to := a.NewLabel(), a.NewLabel()
+		a.Bind(to)
+		a.Jmp(far) // shortened: far is near
+		for range between {
+			a.buf = append(a.buf, 0x41)
+		}
+		at := a.Len()
+		a.JmpNear(to)
+		a.Bind(far)
+		a.Ret()
+		code, err := a.Finish()
+		if err != nil {
+			t.Fatalf("%d bytes between: %v", between, err)
+		}
+		j := a.Moved(at)
+		if code[j] != 0xEB || j+2+int(int8(code[j+1])) != a.Offset(to) {
+			t.Fatalf("%d bytes between: % x at %d, to %d", between, code[j:j+2], j, a.Offset(to))
+		}
+	}
+	var a Asm
+	to := a.NewLabel()
+	a.Bind(to)
+	for range 200 {
+		a.buf = append(a.buf, 0x41)
+	}
+	a.JmpNear(to)
+	if _, err := a.Finish(); err == nil {
+		t.Fatal("a near jump 200 bytes back finished")
+	}
+}

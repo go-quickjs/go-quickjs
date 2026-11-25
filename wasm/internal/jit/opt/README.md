@@ -827,6 +827,19 @@ arm64 the address plus the offset is made in X17, in 64 bits, where the
 offset is not 0, the end in X16 and compared with X21, and the access is
 `[X20 + X17]`.
 
+A trap's site, out of line, leaves its offset in R11 (X16) and jumps to
+the function's code for the trap's code, which stores the offset in the
+exit's record and exits. On amd64 that is a move of 6 bytes and a jump,
+to the last such jump before it where that is within a byte's
+displacement (`trapAt`), so that most sites' jumps are 2 bytes -- made so
+(`amd64.Asm.JmpNear`), not 5 that Finish would shorten, whose rounds had
+taken 15% longer for them; the
+exact check out of line goes back on its one condition and is its
+access's trap site from there. A site was the store of the offset into
+the context, 11 bytes past a byte's displacement, and a jump, and the
+exact check a jump back and a jump to its site: the Go program's code
+went from 24.1 to 22.0 MB.
+
 Any other access (`memory_GOARCH.go`) reads its memory's size where the
 baseline reads it (its README's Memory), at each access: memory 0's from
 the context (X21 on arm64), a shared one's through the address of its

@@ -119,17 +119,19 @@ func (f fixup) align() uint8 { return uint8(f.kn >> 8) }
 // code so far.
 func (a *Asm) fix(l Label, kind, n uint8) {
 	at := len(a.buf)
-	a.fixups = append(a.fixups, fixup{start: int32(at - int(opLens[kind&3])), at: int32(at), label: int32(l), kn: uint16(kind) | uint16(n)<<8})
+	a.fixups = append(a.fixups, fixup{start: int32(at - int(opLens[kind&7])), at: int32(at), label: int32(l), kn: uint16(kind) | uint16(n)<<8})
 }
 
-// The fixups' kinds: a lea's displacement, which stays 32 bits, and a
-// jump's or a conditional jump's, which Finish shortens where it can --
-// to two bytes from five and from six.
+// The fixups' kinds: a lea's displacement, which stays 32 bits, a jump's
+// or a conditional jump's, which Finish shortens where it can -- to two
+// bytes from five and from six -- an alignment's padding, and a jump's of
+// a byte's displacement from the first (JmpNear).
 const (
 	fixLea uint8 = iota
 	fixJmp
 	fixJcc
 	fixAlign
+	fixJmp8
 )
 
 // shortened is how many bytes a fixup of kind k's jump loses shortened.
@@ -146,7 +148,7 @@ func shortened(k uint8) int {
 // opLens is how many bytes precede a fixup's displacement, by its kind, for
 // fix: a table, which costs the inliner less than a switch would, as a
 // jump's emission, which calls fix, is inlined where it is emitted.
-var opLens = [4]uint8{fixLea: 3, fixJmp: 1, fixJcc: 2, fixAlign: 0}
+var opLens = [8]uint8{fixLea: 3, fixJmp: 1, fixJcc: 2, fixAlign: 0, fixJmp8: 1}
 
 // Len is the number of bytes emitted so far.
 func (a *Asm) Len() int { return len(a.buf) }
@@ -274,7 +276,7 @@ func (a *Asm) Finish() ([]byte, error) {
 		}
 		past := a.labels[f.label].first
 		a.candPast[i] = int32(len(cand))
-		if f.kind() == fixLea || f.kind() == fixAlign {
+		if k := f.kind(); k == fixLea || k == fixAlign || k == fixJmp8 {
 			continue
 		}
 		d, between := at-(int(f.start)+2), int(past)-i-1
@@ -363,6 +365,14 @@ func (a *Asm) Finish() ([]byte, error) {
 		if f.kind() != fixAlign && !a.short[i] {
 			at := int(f.at)
 			to := a.movedLabel(a.labels[f.label])
+			if f.kind() == fixJmp8 {
+				d := to - (a.movedPast(at, i) + 1)
+				if d < -128 || d > 127 {
+					return nil, fmt.Errorf("amd64: a near jump's label %d bytes away", d)
+				}
+				buf[at] = byte(int8(d))
+				continue
+			}
 			binary.LittleEndian.PutUint32(buf[at:], uint32(int32(to-(a.movedPast(at, i)+4))))
 			continue
 		}
