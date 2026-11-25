@@ -348,7 +348,48 @@ func (f *jitRegFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	if site, ok := f.accessorInline(callee, cl, write); ok {
 		a.Inline = &site
 	}
+	// Its native call, where the builder does not inline it -- past the
+	// inlining's budget, a getter's loop among them.
+	if site, ok := f.accessorCall(callee, cl, write); ok {
+		a.Call = &site
+	}
 	return a, true
+}
+
+// accessorCall is the native call of the getter or setter callee, cl's
+// function object, a register read or write makes where it is not inlined
+// (AccessorSite's Call), through its function's link, as a method's call
+// of it is (regCallSite): register code native callers may call, not an
+// arrow. The read or write has no window of its registers; the call makes
+// its callee's past the VM's stack's top, as every register call does --
+// the function in its register 0 where it reads it, the receiver in 1, a
+// setter's value in 2 (mir's windowAccessor) -- Window marking it register
+// code's. A callee with no code native callers may call yet Go runs from
+// native code at each call (the link's entry 0) and compiles for them
+// (jitRegKnownCallee), as it does a call's callee.
+func (f *jitRegFeedback) accessorCall(callee *Object, cl *closure, write bool) (ssa.CallSite, bool) {
+	r := f.fb.r
+	argc := jitB2i(write)
+	if cl.reg == nil || !r.jitRegCallable(callee, cl, cl.reg, argc) || callee.fn().arrow {
+		return ssa.CallSite{}, false
+	}
+	rc := cl.reg
+	l := r.jitState().regLinkOf(cl, rc)
+	k := f.fb.keep()
+	k.links = append(k.links, l)
+	k.holders = append(k.holders, callee)
+	site := ssa.CallSite{
+		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
+		Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
+		Argc: argc, Method: true, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
+		Window: 1, FrameArgs: rc.args, ReadsFunction: jitFrameCallee(cl.fn),
+	}
+	if cl.fn.HasTailCall {
+		// As a method call's: its calls in tail position may give its
+		// frame up.
+		site.Tail, site.TailFrame = true, true
+	}
+	return site, true
 }
 
 // accessorInline is the getter or setter callee, cl's function object, of

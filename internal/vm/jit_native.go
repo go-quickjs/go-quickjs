@@ -2918,6 +2918,13 @@ func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) boo
 			// (jitRegReadSeen).
 			r.jitRegReadSeen(f, c, run, rpc, recv)
 		}
+		if err == nil && !run.e.invalid && int(w.C()) < len(f.cl.ic) && f.cl.ic[w.C()].getter {
+			// A site whose cache holds an accessor, asked before the call:
+			// made at every read and write Go makes for native code, a
+			// number's o.a = 1 at most turns of carried_every_2's loop,
+			// the call cost those loops 4 to 6%.
+			r.jitRegAccessorSeen(f, w, op == bytecode.RSetProp)
+		}
 		if s.ssaSharedGen != shared {
 			r.jitShareContexts(idx, f)
 		}
@@ -3763,6 +3770,29 @@ func (r *Runtime) jitRegPropertyMade(f *frame, w bytecode.RInstr, key Atom, obj,
 		}
 	}
 	return r.getValueProp(obj, key)
+}
+
+// jitRegAccessorSeen asks, after Go made for f's native code the read or
+// the write w, for code native callers may call of the getter or setter
+// its site's cache holds, written in script (jitRegKnownCallee), as a
+// call's callee is asked for: the read's native call of it
+// (ssa.AccessorSite's Call) is Go's while its link has no code, and its
+// runs by Go, which run it in the interpreter, count no native caller's.
+// Only one a native call was compiled for, which made its link: a
+// megamorphic site's misses, which Go reads, call no accessor natively.
+func (r *Runtime) jitRegAccessorSeen(f *frame, w bytecode.RInstr, write bool) {
+	site := int(w.C())
+	if site >= len(f.cl.ic) {
+		return
+	}
+	a, ok := jitCacheAccessor(&f.cl.ic[site], write)
+	if !ok {
+		return
+	}
+	if fd := a.fn.fn(); fd != nil && fd.closure != nil && fd.closure.reg != nil && fd.native == nil && r.jit.regLinks[r.jitRegKeyOf(fd.closure)] != nil {
+		r.jitRegKnownCallee(fd.closure, f.cl)
+		r.jitState().regLinkIfCached(fd.closure)
+	}
 }
 
 // jitRegIterMade makes a destructuring's step or rest element, at register

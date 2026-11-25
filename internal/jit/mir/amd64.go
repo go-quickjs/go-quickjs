@@ -2004,6 +2004,13 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			for i := range site.Argc {
 				c.directOperand(v, v.Args[1+i], true, int32(2+i)*vs, &inC)
 			}
+		case site.Accessor != ssa.AccessorNone:
+			// A getter's or a setter's (ssa.AccessorSite's Call), of a
+			// read or a write, which has no window of its own: the
+			// function, where the callee reads it, the site's, the
+			// receiver the read's or the write's object, a setter's value
+			// its argument (windowAccessor).
+			c.windowAccessor(v, site, callees == nil, &inC)
 		default:
 			if site.Method {
 				m = 1
@@ -6948,6 +6955,29 @@ func (c *compiler) windowSetup(t *ssa.CallSite, locals, a, b amd64.Reg) {
 	default:
 		c.storeImm(locals, vs+c.enc.NumOffset, c.enc.Undefined, a)
 		c.storeImm(locals, vs+c.enc.RefOffset, 0, a)
+	}
+}
+
+// windowAccessor writes the window of register code's native call v of a
+// getter or a setter, site (ssa.CallSite's Accessor and Window), past the
+// VM's stack's top, its address in scratchC where *inC says so and in
+// xScratch2: the accessor's function in its register 0, where fn says the
+// callee reads it -- the site's, which the read's or the write's guards
+// found -- the receiver in 1, a setter's value in 2, as a method call's
+// window has them. It uses every scratch register.
+func (c *compiler) windowAccessor(v *ssa.Value, site *ssa.CallSite, fn bool, inC *bool) {
+	vs := int32(c.enc.ValueSize)
+	if fn {
+		if !*inC {
+			c.a.MovQFromX(scratchC, xScratch2)
+			*inC = true
+		}
+		c.storeImm(scratchC, c.enc.NumOffset, c.enc.Object, scratchA)
+		c.storeImm(scratchC, c.enc.RefOffset, uint64(site.Callee), scratchA)
+	}
+	c.directOperand(v, v.Args[0], true, vs, inC)
+	if site.Argc == 1 {
+		c.directOperand(v, v.Args[1], true, 2*vs, inC)
 	}
 }
 

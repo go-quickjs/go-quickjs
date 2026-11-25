@@ -175,7 +175,6 @@ func TestJITAccessorThrows(t *testing.T) {
 // small getter and setter are inlined, no call of Go made; a built-in's
 // getter is called by Go from native code, which goes on after it.
 func TestJITAccessorsNative(t *testing.T) {
-	t.Skip("register JIT gap: accessor calls are Go's: selves(ps, 4000) does not run natively, and sums makes some 2,000 calls of Go (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

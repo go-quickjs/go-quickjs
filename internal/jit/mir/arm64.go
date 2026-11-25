@@ -4357,6 +4357,20 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			for i := range site.Argc {
 				c.directOperand(v, v.Args[1+i], a64D, int32(2+i)*vs)
 			}
+		case site.Accessor != ssa.AccessorNone:
+			// As amd64's (windowAccessor): a getter's or a setter's, the
+			// function, where the callee reads it, the site's, the
+			// receiver in 1, a setter's value in 2.
+			if callees == nil {
+				c.movImm(a64A, c.enc.Object)
+				c.a.Store(a64D, c.enc.NumOffset, a64A)
+				c.movImm(a64A, uint64(site.Callee))
+				c.a.Store(a64D, c.enc.RefOffset, a64A)
+			}
+			c.directOperand(v, v.Args[0], a64D, vs)
+			if site.Argc == 1 {
+				c.directOperand(v, v.Args[1], a64D, 2*vs)
+			}
 		default:
 			if site.Method {
 				m = 1

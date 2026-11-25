@@ -1363,10 +1363,23 @@ redefinition changes the pair in place), and the accessor inlined (see
 from native code (`abi.GoCallGet`, `GoCallSet`), through the site's cache as
 the interpreter does, native code going on after it. The receiver is the
 getter's this; a setter's result is dropped. Frames Go makes for such a call
-show the accessor as the interpreter's do. Register code makes no native
-call of an accessor: one not inlined -- a built-in's, a bound function's, a
-callee past inlining's bounds -- is a call of Go on the register frame
-(`jitRegGoCallOn`, `jitRegPropertyMade`). A read at a megamorphic site
+show the accessor as the interpreter's do. A register read or write calls
+an accessor it does not inline -- one past inlining's bounds, a getter's
+loop -- natively through its function's link (`AccessorSite`'s `Call`,
+`jitRegFeedback`'s `accessorCall`), as any register call is made: the
+read or write has no window of its own registers, so the call makes its
+callee's past the VM's stack's top, as every register call's window is
+made there -- the function in its register 0 where the callee reads it,
+the receiver in 1, a setter's value in 2 (`mir`'s `windowAccessor`), the
+rest as a method call's (`windowSetup`, `windowArgs`) -- on both backends.
+Go finds a level's function, one that reads none, in the call's state
+(`windowCallees`), and finishes the read or the write with the callee's
+answer where the callee leaves (`regFinishCall`). While the accessor's
+link has no code, the call is Go's from native code, which asks for code
+native callers may call (`jitRegAccessorSeen`, `jitRegKnownCallee`), as a
+call of Go asks for its callee's. One that is not register code of the
+realm -- a built-in's, a bound function's -- is a call of Go on the
+register frame (`jitRegGoCallOn`, `jitRegPropertyMade`). A read at a megamorphic site
 whose misses Go reads from native code (see Megamorphic reads above) is no
 accessor's (`ssa`'s `megamorphicByGo`): Go calls the getter at the miss,
 as V8's megamorphic loads call the runtime for an accessor they meet.
