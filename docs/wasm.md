@@ -460,7 +460,9 @@ hold together, and `quickjs.WithMemoryLimit` bounds a JavaScript runtime's
 heap with what its WebAssembly holds in it.
 
 - Linear memories and tables are counted exactly, as they are made and
-  grown. A `memory.grow` or `table.grow` past the limit returns -1, and
+  grown, and charged before they are allocated: one that does not fit is
+  refused before any of it is allocated or reserved. A `memory.grow` or
+  `table.grow` past the limit returns -1, and
   `Memory.prototype.grow` throws its RangeError, "Unable to grow instance
   memory", as when the memory cannot be had. A module whose memories do not
   fit fails to instantiate with "Out of memory: Cannot allocate Wasm memory

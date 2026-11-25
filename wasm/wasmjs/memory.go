@@ -148,8 +148,8 @@ func (a *api) newMemory(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	if shared && !hasMax {
 		return vm.Undefined, t.typeError("If shared is true, maximum property should be defined.")
 	}
-	mem := engine.NewMemory(initial, maximum, hasMax, is64, shared)
-	if mem == nil || !mem.SetBudget(a.budget) {
+	mem, _ := engine.NewMemoryBudget(initial, maximum, hasMax, is64, shared, a.budget)
+	if mem == nil {
 		return vm.Undefined, t.rangeError("could not allocate memory")
 	}
 	return vm.Obj(a.memoryObject(mem, proto)), nil

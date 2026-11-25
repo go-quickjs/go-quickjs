@@ -111,22 +111,34 @@ func (m *Memory) Drop() {
 	}
 }
 
-// SetBudget charges the memory, and its growth from now on, to b,
-// reporting false, and charging nothing, if its present size does not fit.
-func (m *Memory) SetBudget(b *Budget) bool {
-	// A shared memory that is a Go slice was made at its maximum.
-	n := int64(m.Size())
-	if m.Shared && m.reservation == nil {
-		n = int64(len(m.buf))
+// NewMemoryBudget makes a memory as NewMemory does, charged to b -- its
+// size, and its growth from then on -- charging b first, so that a memory
+// that does not fit is refused before any of it is allocated or reserved:
+// it returns nil and false then, and nil and true for a memory that cannot
+// be allocated.
+func NewMemoryBudget(initial, max uint64, hasMax, is64, shared bool, b *Budget) (*Memory, bool) {
+	n := int64(initial * PageSize)
+	if mx := memoryMax(max, hasMax, is64); shared && !reserved(mx, shared) {
+		// A shared memory that is a Go slice is made at its maximum.
+		n = int64(mx * PageSize)
 	}
-	c, ok := newCharge(m, b, n)
+	c, ok := reserveCharge(b, n)
+	if !ok {
+		return nil, false
+	}
+	m := NewMemory(initial, max, hasMax, is64, shared)
+	if m == nil {
+		c.drop()
+		return nil, true
+	}
 	m.charge = c
-	return ok
+	keepCharge(c, m)
+	return m, true
 }
 
-// NewMemory makes a memory of initial pages, growable to max pages. It
-// returns nil if the memory cannot be allocated.
-func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
+// memoryMax is the maximum in pages of a memory declaring max, or none: the
+// engine's limit at most.
+func memoryMax(max uint64, hasMax, is64 bool) uint64 {
 	limit := MaxMemory32Pages
 	if is64 {
 		limit = MaxMemory64Pages
@@ -134,16 +146,29 @@ func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
 	if !hasMax || max > limit {
 		max = limit
 	}
+	return max
+}
+
+// reserved reports whether a memory of max pages is made in a reservation
+// of the OS's address space. On a 32-bit platform a reservation of each
+// memory's maximum would soon fill the address space, so an unshared memory
+// is a Go slice there. A shared one is made at its maximum either way, and a
+// reservation that cannot be had fails, where a Go allocation that cannot be
+// had ends the process. A memory that can have no pages has nothing to
+// reserve.
+func reserved(max uint64, shared bool) bool {
+	return canReserve && max > 0 && (bits.UintSize == 64 || shared)
+}
+
+// NewMemory makes a memory of initial pages, growable to max pages. It
+// returns nil if the memory cannot be allocated.
+func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
+	max = memoryMax(max, hasMax, is64)
 	if initial > max {
 		return nil
 	}
 	m := &Memory{Max: max, Is64: is64, Shared: shared, HasMax: hasMax}
-	// On a 32-bit platform a reservation of each memory's maximum would soon
-	// fill the address space, so an unshared memory is a Go slice there. A
-	// shared one is made at its maximum either way, and a reservation that
-	// cannot be had fails, where a Go allocation that cannot be had ends the
-	// process. A memory that can have no pages has nothing to reserve.
-	if canReserve && max > 0 && (bits.UintSize == 64 || shared) {
+	if reserved(max, shared) {
 		r, err := reserve(max * PageSize)
 		if err == nil {
 			if err := commit(r, 0, initial*PageSize); err != nil {

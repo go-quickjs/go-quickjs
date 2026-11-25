@@ -376,9 +376,11 @@ type charge struct {
 	n atomic.Int64
 }
 
-// newCharge charges owner's n bytes to b, returning the charge it is to keep,
-// nil for no budget, and whether they fit.
-func newCharge[T any](owner *T, b *Budget, n int64) (*charge, bool) {
+// reserveCharge charges b n bytes for an object yet to be made, so that
+// one that does not fit is refused before it is allocated, returning the
+// charge, nil for no budget, and whether they fit. The object made keeps
+// the charge (keepCharge); one that cannot be made gives it back (drop).
+func reserveCharge(b *Budget, n int64) (*charge, bool) {
 	if b == nil {
 		return nil, true
 	}
@@ -387,8 +389,21 @@ func newCharge[T any](owner *T, b *Budget, n int64) (*charge, bool) {
 	}
 	c := &charge{b: b}
 	c.n.Store(n)
-	runtime.AddCleanup(owner, func(c *charge) { c.b.release(c.n.Swap(0)) }, c)
 	return c, true
+}
+
+// keepCharge gives c back when owner is collected.
+func keepCharge[T any](c *charge, owner *T) {
+	if c != nil {
+		runtime.AddCleanup(owner, func(c *charge) { c.b.release(c.n.Swap(0)) }, c)
+	}
+}
+
+// drop gives back the charge of an object that was not made.
+func (c *charge) drop() {
+	if c != nil {
+		c.b.release(c.n.Swap(0))
+	}
 }
 
 // take charges n more bytes, reporting whether they fit; a nil charge takes

@@ -31,12 +31,19 @@ type Table struct {
 // refBytes is what an element of a table takes.
 const refBytes = int64(unsafe.Sizeof(Ref{}))
 
-// SetBudget charges the table, and its growth from now on, to b, reporting
-// false, and charging nothing, if its present size does not fit.
-func (t *Table) SetBudget(b *Budget) bool {
-	c, ok := newCharge(t, b, int64(len(t.Elems))*refBytes)
-	t.charge = c
-	return ok
+// NewTableBudget makes a table as NewTable does, charged to b -- its
+// elements, and its growth from then on -- charging b first, so that a
+// table that does not fit is refused, returning nil and false, before its
+// elements are allocated.
+func NewTableBudget(t module.ValueType, m *module.Module, initial, max uint64, hasMax, is64 bool, init Ref, b *Budget) (*Table, bool) {
+	c, ok := reserveCharge(b, int64(initial)*refBytes)
+	if !ok {
+		return nil, false
+	}
+	tab := NewTable(t, m, initial, max, hasMax, is64, init)
+	tab.charge = c
+	keepCharge(c, tab)
+	return tab, true
 }
 
 // NewTable makes a table of initial elements, each init.

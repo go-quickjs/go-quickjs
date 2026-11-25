@@ -233,12 +233,13 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 			continue
 		}
 		l := mem.Limits
-		inst.Memories[i] = NewMemory(l.Initial, l.Max, l.HasMax, l.Is64, mem.Shared)
+		var fits bool
+		inst.Memories[i], fits = NewMemoryBudget(l.Initial, l.Max, l.HasMax, l.Is64, mem.Shared, b)
+		if !fits {
+			return nil, &AllocError{Msg: "Out of memory: Cannot allocate Wasm memory for new instance", Err: ErrMemoryLimit}
+		}
 		if inst.Memories[i] == nil {
 			return nil, &AllocError{Msg: "Out of memory: Cannot allocate Wasm memory for new instance"}
-		}
-		if !inst.Memories[i].SetBudget(b) {
-			return nil, &AllocError{Msg: "Out of memory: Cannot allocate Wasm memory for new instance", Err: ErrMemoryLimit}
 		}
 	}
 	if len(inst.Memories) > 0 {
@@ -269,10 +270,11 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 		if l.Initial > MaxTableSize {
 			return nil, &AllocError{Msg: fmt.Sprintf("table %d: initial size %d exceeds the maximum table size", i, l.Initial)}
 		}
-		inst.Tables[i] = NewTable(t.Type, m, l.Initial, l.Max, l.HasMax, l.Is64, init)
-		if !inst.Tables[i].SetBudget(b) {
+		tab, fits := NewTableBudget(t.Type, m, l.Initial, l.Max, l.HasMax, l.Is64, init, b)
+		if !fits {
 			return nil, b.exceeded()
 		}
+		inst.Tables[i] = tab
 	}
 	inst.elems = make([][]Ref, len(m.Elems))
 	for i, seg := range m.Elems {

@@ -2,6 +2,7 @@ package wasm_test
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/wasm"
@@ -49,5 +50,27 @@ func TestMemoryLimitOneBigObject(t *testing.T) {
 			(array.len (array.new_default $a (i32.const 130000000)))))`)
 	if _, err := mod.ExportedFunction("big").Call(ctx); !errors.Is(err, wasm.ErrMemoryLimit) {
 		t.Fatalf("got %v; want ErrMemoryLimit", err)
+	}
+}
+
+// TestMemoryLimitBeforeAllocating checks that a table or a memory past the
+// limit is refused before it is allocated, not after.
+func TestMemoryLimitBeforeAllocating(t *testing.T) {
+	ctx, r := newRuntime(t, wasm.NewRuntimeConfig().WithMemoryLimit(64<<20))
+	for _, src := range []string{
+		`(module (table 10000000 funcref))`,
+		`(module (memory 16384))`, // 1 GiB, within every platform's limit
+	} {
+		bin := compile(t, src)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := r.Instantiate(ctx, bin)
+		runtime.ReadMemStats(&after)
+		if !errors.Is(err, wasm.ErrMemoryLimit) {
+			t.Fatalf("%s: got %v; want ErrMemoryLimit", src, err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 8<<20 {
+			t.Errorf("%s: %d bytes allocated before the limit refused it", src, n)
+		}
 	}
 }
