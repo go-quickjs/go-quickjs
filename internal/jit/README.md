@@ -731,7 +731,9 @@ with unlisted positions inside the register code answered false,
 of the function and of the callees it may inline, each a snapshot of
 its own, to `jitSnapDepth`, nothing of a callee no site inlines whatever its
 feedback (`ssa.NeverInlined`: too long, or of what `InlineCalls` refuses
-before it reads the callee's feedback) -- into a `jitRegSnapshot`, which has
+before it reads the callee's feedback), and of each leaf an answer names its
+kind and, at its call, its pool and its array made again (`askLeafCalls`) --
+into a `jitRegSnapshot`, which has
 `jitRegFeedback`'s methods alone, generated from them (`snapgen`,
 `jit_snapshot_gen.go`), so that the build finds the same optional
 interfaces it would; a worker builds, optimizes and compiles from it
@@ -739,7 +741,9 @@ interfaces it would; a worker builds, optimizes and compiles from it
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile
 pending (`jitRegEnter`), or a native caller's ask for a callee's code whose
-compile is done (`jitRegForAs`, outside `QJS_JIT_STRESS`'s schedule): a
+compile is done (`jitRegForAs`, outside `QJS_JIT_STRESS`'s schedule), or a
+call of Go the function's own code makes with its compile done
+(`jitRegCompileDueNow`, outside that schedule too): a
 compile handed to the workers marks its function's closure (`closureCode`'s
 `jitEnters`) so that its calls go to the JIT, and a call of code compiled again in the background installs the
 replacement as one of its first code does -- putting back what the questions
@@ -756,7 +760,14 @@ call of it below, is due for it (`jitRegCompileDueNow`), the run leaving and
 its exit installing it (`jitRegGoOnAt`), as for a compile due on the spot. A function with a compile under way or waiting is not asked for
 another (`jitRegCompile`). Meanwhile the function runs in the
 interpreter, or in the code the compile replaces, valid and called by its
-native callers, and is not compiled again (`regPendingJobs`). A compile of
+native callers, and is not compiled again (`regPendingJobs`). A run of the
+code an install replaced leaves it at its next call of Go
+(`jitRegCompileDueNow`'s `jitRegRunReplaced`), where no native call of that
+code below it is under way, and its exit goes on in the new code
+(`jitRegGoOnAt`), as it goes on in a compile made on the spot at its leaving
+for one due. So a compile in the background makes the code the compile on
+the spot makes from the same feedback, and the frames that ran the code it
+replaces go on in it where they would have gone on in that. A compile of
 a function deoptimized since it was prepared is thrown away at the install
 (`jitRegJob`'s `deopts`), and so is one whose code in the cache a native
 call still runs (`jitRegEntry`'s `levels`), that code asked to be compiled

@@ -9263,13 +9263,11 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 		if i == 3 {
-			// Compiled again under the call at 100: the interpreter ran the
-			// rest of that iteration once, native code the other 299. The
-			// register form's run goes on in the code it was in, replaced,
-			// until it next leaves (jitRegCompileFor), which it does not.
-			went := uint64(1)
-			went = 0
-			if n := r.jit.interpreted - interpreted; recompiled != 1 || n != went {
+			// Compiled again under the call at 100: the run, its code
+			// replaced, leaves at that call of Go (jitRegCompileDueNow's
+			// jitRegRunReplaced), the interpreter running the rest of that
+			// iteration once, native code the other 299 in the new code.
+			if n := r.jit.interpreted - interpreted; recompiled != 1 || n != 1 {
 				t.Fatalf("loop compiled again %d times, the interpreter went on %d times", recompiled, n)
 			}
 			if n := r.jit.goCalls - goCalls; n < 2*390 {

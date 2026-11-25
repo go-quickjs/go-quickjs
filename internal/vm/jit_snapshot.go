@@ -278,10 +278,12 @@ func jitSnapCopy[T any](s []T) []T { return slices.Clone(s) }
 
 // jitSnapOps are the ops the build asks each method of a PC at, as the
 // VM's tests and the ssr and V8 workloads have it ask them, plain and
-// under QJS_JIT_STRESS (QJS_JIT_SNAPOPS writes what a run asked): asked at
-// any other op, a question misses, and the compile is built on the
-// runtime's goroutine (jitSnapMiss). Generic, EntryGeneric and Resumed,
-// asked at most ops, are asked at every one.
+// under QJS_JIT_STRESS: asked at any other op, a question misses, and the
+// compile is built on the runtime's goroutine (jitSnapMiss). Generic,
+// EntryGeneric and Resumed, asked at most ops, are asked at every one. A
+// method of a PC the register feedback has is listed here
+// (TestJITSnapshotAsksEveryPCMethod): KeyedStore and ViaLeaf, not, had
+// been a miss at every compile that asked them.
 //
 // It is an array, which the linker lays out as data, not a map: a map
 // literal this long is filled by a function the compiler lays out before
@@ -314,6 +316,8 @@ var jitSnapOps = [...][]ir.Op{
 	snapBigIntFailed:   {ir.Binary},
 	snapSubstring:      {ir.Host},
 	snapKeyedWrite:     {ir.ArrayWrite},
+	snapKeyedStore:     {ir.ArrayWrite, ir.Host},
+	snapViaLeaf:        {ir.Host},
 	snapIntrinsic:      {ir.Host},
 	snapFromCharCode:   {ir.Host},
 	snapInline:         {ir.Host},

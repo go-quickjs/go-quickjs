@@ -4,6 +4,7 @@ package vm
 
 import (
 	"math/bits"
+	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -58,8 +59,14 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
 	for _, c := range append([]*jitSnapshot{s}, mapValues(s.callees)...) {
 		for k, a := range c.answers {
-			if k.method == snapLeaf {
+			switch k.method {
+			case snapLeaf:
 				if fn, ok := a[0].(uintptr); ok && fn != 0 {
+					fns[fn] = true
+				}
+			case snapViaLeaf:
+				// G.call(x, ...)'s G, a leaf (ViaLeaf's fn).
+				if fn, ok := a[1].(uintptr); ok && fn != 0 {
 					fns[fn] = true
 				}
 			}
@@ -102,6 +109,34 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 		}
 	}
 	fb.snapshotStatePCs(s)
+	s.askLeafCalls(fb)
+}
+
+// askLeafCalls asks fb, at each PC its Leaf answered, the questions of the
+// leaf's call that take the leaf as their second argument and are answered
+// by their PC: its pool of objects (CreatePool) and whether its array is
+// made again (ExecReuse). Not asked ahead, each was a miss wherever a leaf
+// was called -- Object.create, a RegExp's exec -- the compile built on the
+// runtime's goroutine at its install, from feedback asked then.
+func (s *jitSnapshot) askLeafCalls(fb *jitRegFeedback) {
+	var pcs []int
+	for k := range s.answers {
+		if k.method == snapLeaf {
+			pcs = append(pcs, int(k.arg))
+		}
+	}
+	slices.Sort(pcs)
+	for _, pc := range pcs {
+		fn, _ := s.answers[jitSnapKey{snapLeaf, int64(pc)}][0].(uintptr)
+		before := s.begin(fb.fb)
+		pool := fb.CreatePool(pc, fn)
+		s.end(fb.fb, before, snapCreatePool, int64(pc))
+		s.put(snapCreatePool, int64(pc), pool)
+		before = s.begin(fb.fb)
+		reuse := fb.ExecReuse(pc, fn)
+		s.end(fb.fb, before, snapExecReuse, int64(pc))
+		s.put(snapExecReuse, int64(pc), reuse)
+	}
 }
 
 // nestReg is site with its callee's register feedback a snapshot, asked

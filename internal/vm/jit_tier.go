@@ -1573,7 +1573,7 @@ func (e *jitRegEntry) findReturns(rc *bytecode.RegCode) {
 // been compiled again: neither sampled nor entered by Go, nor leaving.
 func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 	e := run.e
-	if e == nil || e.life == nil || !e.life.reopt {
+	if e == nil || e.life == nil {
 		return false
 	}
 	limit, pending := idx, r.jitRegRunWork(run)
@@ -1581,6 +1581,33 @@ func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 		// A native callee's: the calling level, and those below it of the
 		// call's, from the run's context on, which its leaving unwinds.
 		limit, pending = run.root, 0
+	}
+	if s := r.jit; len(s.regPendingJobs) != 0 && !r.jitStress.background {
+		if j := s.regPendingJobs[e.key]; j != nil && !j.waiting && j.state.Load() == jitJobDone {
+			// Compiled again in the background, and done: installed now,
+			// a check, as a native caller's ask for a callee's code is
+			// (jitRegForAs) -- outside QJS_JIT_STRESS's schedule of checks
+			// -- waiting where the run's code is under way (below). Its
+			// install had waited for a check the run's calls of Go made
+			// none of: AWFY DeltaBlue's Vector made 7,000 arrays through Go
+			// with its compile for them done, its code called natively
+			// from a loop.
+			r.jitDrain()
+		}
+	}
+	if r.jitRegRunReplaced(run, e) && !r.jit.regCalledBelow(e, limit) {
+		// Replaced meanwhile: the function's code is another now, a
+		// compile in the background installed at a check while this run
+		// went on in the code it replaced. The run leaves for it, and its
+		// exit goes on in the new code (jitRegGoOnAt), as it goes on in the
+		// code compiled on the spot at its leaving for a compile due: a
+		// loop run once had gone on in its first code to its end, AWFY
+		// DeltaBlue's chainTest making 12,000 constructions through Go its
+		// code compiled again made natively.
+		return true
+	}
+	if !e.life.reopt {
+		return false
 	}
 	if j := r.jit.regPendingJobs[e.key]; j != nil && j.waiting && !e.invalid && e.code != nil && !r.jit.regCalledBelow(e, limit) {
 		// Compiled again in the background, the install waiting for the
@@ -1594,6 +1621,19 @@ func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 		return true
 	}
 	return r.jitRegLearnedDueWith(run.f.cl, e, limit, pending)
+}
+
+// jitRegRunReplaced reports whether run's code e is no longer its
+// function's: the closure's code is another, valid, which the run's exit
+// goes on in (jitRegGoOnAt) -- not the function's code that e, code kept
+// for a loop, was compiled beside (jitRegLoopCode).
+func (r *Runtime) jitRegRunReplaced(run *jitRegRun, e *jitRegEntry) bool {
+	f := run.f
+	if f == nil || f.cl == nil || f.cl.reg != run.c || f.cl.closureCode == nil {
+		return false
+	}
+	ne := f.cl.closureCode.jitReg
+	return ne != nil && ne != e && ne != e.osrOf && !ne.invalid && ne.code != nil
 }
 
 // regForgetTopLevel lets go of e, a refusal the cache holds, where its
