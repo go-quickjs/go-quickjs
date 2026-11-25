@@ -116,9 +116,12 @@ type gen struct {
 	hasWB       bool
 	argSlotsBuf []int32
 	// alloc is the function's exit for an empty pool of new structs,
-	// which hasAlloc says is made.
+	// which hasAlloc says is made; poll its exit for a poll, which its
+	// back edges and calls share, made with the first (hasPoll).
 	alloc    amd64.Label
 	hasAlloc bool
+	poll     amd64.Label
+	hasPoll  bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[amd64.Label]
 	// entry is the code's native entry, where a call of the function by
@@ -134,6 +137,9 @@ type gen struct {
 	// while it may store through the barrier (freeGPR, clearRefs), and
 	// the one that keeps the return stack's entry.
 	wbG, wbX uint64
+	// usedG and usedX are the registers the allocator gave a value, which
+	// a poll's and an allocation's exits keep.
+	usedG, usedX uint64
 }
 
 // keepRS chooses where the code keeps the return stack's next entry: in a
@@ -227,6 +233,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 			}
 		}
 	}
+	g.usedG, g.usedX = g.wbG, g.wbX
 	if g.rsKept {
 		g.wbG |= 1 << g.rs
 	}
@@ -568,6 +575,7 @@ const (
 	stubTrapCode = iota
 	stubTrapSite
 	stubPoll
+	stubPollExit
 	stubCall
 	stubCallIndirect
 	stubCallRef
@@ -643,10 +651,19 @@ func (g *gen) stub(st *stub) {
 	case stubPoll:
 		a.Bind(st.l)
 		g.mark("cold poll")
+		a.LeaLabel(s0, st.to)
+		a.Jmp(g.pollExit())
+	case stubPollExit:
+		// The function's poll exit: every register the allocator gave out
+		// kept in the context's save area across it, and the code goes on
+		// where its site left in s0.
+		a.Bind(st.l)
+		g.mark("cold poll exit")
+		a.Store(rCtx, offResume, s0)
 		g.saveAll()
 		g.exit(wjit.ExitPoll, a.NewLabel())
 		g.restoreAll()
-		a.Jmp(st.to)
+		a.JmpMem(rCtx, offResume)
 	case stubAlloc:
 		// An empty pool of new structs of type code: the function's exit
 		// for it, to take from it again at to.
@@ -676,10 +693,8 @@ func (g *gen) stub(st *stub) {
 		v := st.v
 		a.Bind(st.l)
 		g.mark("cold call")
-		g.saveAll()
-		g.exit(wjit.ExitPoll, a.NewLabel())
-		g.restoreAll()
-		a.Jmp(st.start)
+		a.LeaLabel(s0, st.start)
+		a.Jmp(g.pollExit())
 		a.Bind(st.slow)
 		g.putWhere(v, st.res, st.wh)
 		g.exitCall(v, st.res)
@@ -803,41 +818,44 @@ func (g *gen) exitAlloc(resume amd64.Label) {
 	}
 }
 
-// saveAll and restoreAll keep every allocatable register in the context's
-// save area across an exit that is not a call: a poll's. A function with
-// v128 values keeps its SSE registers whole (Ctx.SaveV).
+// saveAll and restoreAll keep every register the allocator gave out in the
+// context's save area across an exit that is not a call: a poll's, an
+// allocation's. A function with v128 values keeps its SSE registers whole
+// (Ctx.SaveV). The register that keeps the return stack's entry is not
+// among them: the exit stores it, and its resumption loads it.
 func (g *gen) saveAll() {
 	a := g.a
 	for i, r := range gprs {
-		if g.rsKept && amd64.Reg(r) == g.rs {
-			continue
+		if g.usedG&(1<<r) != 0 {
+			a.Store(rCtx, offSave+int32(8*i), amd64.Reg(r))
 		}
-		a.Store(rCtx, offSave+int32(8*i), amd64.Reg(r))
 	}
 	for i, x := range xmms {
-		if g.v128 {
+		switch {
+		case g.usedX&(1<<x) == 0:
+		case g.v128:
 			a.StoreVec(rCtx, offSaveV+16*int32(x), amd64.XReg(x))
-			continue
+		default:
+			a.StoreSD(rCtx, offSave+int32(8*(len(gprs)+i)), amd64.XReg(x))
 		}
-		a.StoreSD(rCtx, offSave+int32(8*(len(gprs)+i)), amd64.XReg(x))
 	}
 }
 
 func (g *gen) restoreAll() {
 	a := g.a
 	for i, r := range gprs {
-		if g.rsKept && amd64.Reg(r) == g.rs {
-			// The exit's resumption loaded it.
-			continue
+		if g.usedG&(1<<r) != 0 {
+			a.Load(amd64.Reg(r), rCtx, offSave+int32(8*i))
 		}
-		a.Load(amd64.Reg(r), rCtx, offSave+int32(8*i))
 	}
 	for i, x := range xmms {
-		if g.v128 {
+		switch {
+		case g.usedX&(1<<x) == 0:
+		case g.v128:
 			a.LoadVec(amd64.XReg(x), rCtx, offSaveV+16*int32(x))
-			continue
+		default:
+			a.LoadSD(amd64.XReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 		}
-		a.LoadSD(amd64.XReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 	}
 }
 
@@ -852,12 +870,24 @@ func (g *gen) allocExit() amd64.Label {
 	return g.alloc
 }
 
-// pollExit is out-of-line code that exits for a poll, every register kept,
-// and goes to back.
-func (g *gen) pollExit(back amd64.Label) amd64.Label {
+// pollSite is out-of-line code that exits for a poll, every register
+// kept, and goes to back: it leaves back in s0 and goes to the function's
+// poll exit.
+func (g *gen) pollSite(back amd64.Label) amd64.Label {
 	l := g.a.NewLabel()
 	g.ool = append(g.ool, stub{kind: stubPoll, l: l, to: back})
 	return l
+}
+
+// pollExit returns the label of the function's poll exit, which its sites
+// go to with where to go on in s0.
+func (g *gen) pollExit() amd64.Label {
+	if !g.hasPoll {
+		g.hasPoll = true
+		g.poll = g.a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubPollExit, l: g.poll})
+	}
+	return g.poll
 }
 
 // jump goes from block i to its successor s: a back edge counts down the
@@ -873,7 +903,7 @@ func (g *gen) jump(i int, s *Block) {
 	}
 	l, ok := g.polls.get(uint64(j))
 	if !ok {
-		l = g.pollExit(g.labels[j])
+		l = g.pollSite(g.labels[j])
 		g.polls.set(uint64(j), l)
 	}
 	g.mark("poll %v", s)

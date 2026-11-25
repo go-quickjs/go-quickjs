@@ -451,10 +451,10 @@ the points where something else reads them:
   `nslots` less twice the most operands or results of any of them), and
   leave their results there; their references stay in their positions'
   slots, where `Ctx.RArgs` says (below).
-- A poll's exit keeps every register in the context's save area
-  (`Ctx.Save`): nothing in the level runs while Go polls. A function with
-  v128 values keeps its float registers whole, 16 bytes each, in
-  `Ctx.SaveV`, and its barrier routine likewise.
+- A poll's exit keeps every register the allocator gave a value in the
+  context's save area (`Ctx.Save`): nothing in the level runs while Go
+  polls. A function with v128 values keeps its float registers whole, 16
+  bytes each, in `Ctx.SaveV`, and its barrier routine likewise.
 - A trap reads nothing of the frame.
 
 Every other slot below `argBase` is the allocator's spill slot, a v128's
@@ -872,9 +872,13 @@ is MFENCE or DMB ISH.
 
 A back edge -- a jump to a block at or before its own in the layout,
 reverse postorder -- counts down the poll counter and exits for a poll
-when it runs out. On arm64 the exit is the function's own, which its sites
-share: a site leaves where to go on in X16 and jumps to it, and it keeps
-in the context's save area only the registers the allocator gave out. A call counts it down too, then checks, as the baseline
+when it runs out. The exit is the function's own, which its sites share,
+back edges' and calls' alike: a site leaves where to go on in R11 (X16)
+and jumps to it, and it keeps in the context's save area only the
+registers the allocator gave out, then jumps to where the site left
+(`Ctx.Resume`). Each site had its own on amd64, every register saved and
+loaded again: 490 bytes for each call of the Go program's, 12 now, and
+its code went from 36.0 to 24.1 MB. A call counts it down too, then checks, as the baseline
 does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
 Go (`ExitCall`), out of line. The callee's entry, read from the link
@@ -1658,8 +1662,8 @@ their edges (Register allocation; medians of three medians of
 
 The 8,764 functions `TestOptCompileCorpus` compiles of the Go program and
 the spec scripts lower to 19.3 MB of arm64 code, where amd64's are 34.9
-MB: on arm64 a function's polls share one exit, which keeps only the
-registers the allocator gave out.
+MB, when on amd64 each poll had an exit of its own, which kept every
+register (a function's polls share one exit now, as on arm64).
 
 ## Next
 

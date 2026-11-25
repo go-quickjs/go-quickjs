@@ -778,7 +778,10 @@ func TestJITBudgetShared(t *testing.T) {
 // is refused for the budget and asked again later, not left uncounted; and the
 // results are the same throughout.
 func TestJITDropWithBackgroundTierUps(t *testing.T) {
-	const n = 24
+	// More functions than an optimizing compile's work has room for the
+	// optimized code of: with every poll's site sharing its function's
+	// exit, 24 had fit, and no code was dropped.
+	const n = 48
 	unit, tables := unitSize(t, n)
 	// Room for ten functions' code, and for what an optimizing compile of
 	// one works in, which the limit bounds too.
@@ -831,12 +834,12 @@ func TestJITDropWithBackgroundTierUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	code.waitOptBackground()
-	// Then on one goroutine, the last twelve functions, for which the code
-	// of the first twelve, old by then, is dropped whatever the workers
+	// Then on one goroutine, the last half of the functions, for which the
+	// code of the first half, old by then, is dropped whatever the workers
 	// did meanwhile.
 	inst := instantiateCode(t, code, hostH(func(context.Context, uint64) uint64 { return 0 }))
-	for i := 0; i < 200; i++ {
-		k := uint64(12 + i%12)
+	for i := 0; i < 400; i++ {
+		k := uint64(n/2 + i%(n/2))
 		if res, err := call(t, inst, fmt.Sprintf("f%d", k), 9); err != nil || res[0].N != fk(k, 9) {
 			t.Fatalf("f%d(9) = %v, %v", k, res, err)
 		}
