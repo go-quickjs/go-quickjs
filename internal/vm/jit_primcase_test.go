@@ -152,3 +152,120 @@ func jitCollectionsForTest(r *Runtime) [2]uint64 {
 	runtime.ReadMemStats(&m)
 	return [2]uint64{uint64(m.NumGC), r.jit.megaGC}
 }
+
+// A primitive's method that a prototype of its prototype has -- a
+// number's, a string's or a boolean's hasOwnProperty, Object.prototype's
+// -- read at a site that has met primitives alone, or objects of a dozen
+// shapes first (a megamorphic site), is a case of the site as a method
+// its own prototype has is: read off Object.prototype natively, the
+// kind's prototype checked on the way, as V8 reads it along the HeapNumber
+// map's prototype chain; and the call is hasOwnProperty's leaf, which
+// answers a primitive's without a frame. Before, the read learned nothing
+// at its exits, the site made megamorphic at the first deoptimization:
+// every number's left native code (get_method_w), 5,000 in the first call
+// of 5,000 numbers after objects and 64 in every second or third call
+// after it, each invocation finished in the interpreter; and with the read
+// made, every call of the leaf, whose check took only objects. Each
+// answer is the interpreter's.
+func TestJITPrimitiveCaseInherited(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		const objs = []
+		for (let k = 0; k < 12; k++) { const o = {}; o["p" + k] = k; objs.push(o) }
+		const strs = ["x", "yy", "zzz"], keys = ["p0", "0", "length"]
+		function f(x, k) { return x.hasOwnProperty(k) }
+		function run(kind) {
+			let n = 0
+			for (let i = 0; i < 5000; i++) {
+				let x
+				switch (kind === 4 ? i % 4 : kind) {
+				case 0: x = objs[i % 12]; break
+				case 1: x = i; break
+				case 2: x = strs[i % 3]; break
+				case 3: x = i % 2 === 0; break
+				}
+				if (f(x, keys[i % 3])) n += i % 3 + 1
+			}
+			return n
+		}`
+	// first's receivers, then then's: 0 objects, 1 numbers, 2 strings, 3
+	// booleans, 4 all four in turn.
+	for _, tc := range []struct{ first, then int }{{1, 1}, {2, 2}, {3, 3}, {0, 1}, {0, 2}, {0, 3}, {0, 4}} {
+		for _, inline := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%d-then-%d/inline=%v", tc.first, tc.then, inline), func(t *testing.T) {
+				if !inline {
+					jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "f" } })
+				}
+				holdCollector(t)
+				r, run := jitTierRuntimeForTest(t, jitInvocationsForFeedback, setup)
+				for range 3 {
+					run(fmt.Sprintf("run(%d)", tc.first))
+				}
+				src := fmt.Sprintf("run(%d)", tc.then)
+				run(src)
+				run(src)
+				for i := range 4 {
+					st, gcs := r.RegNativeStats(), jitCollectionsForTest(r)
+					run(src)
+					after := r.RegNativeStats()
+					if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest(r) {
+						t.Errorf("warm call %d of %s: %d exits to Go (%v), %d invocations finished in the interpreter", i, src, hosts, after.HostOps, ended)
+					}
+				}
+				native := uint64(0)
+				for _, fn := range r.JITReport() {
+					if strings.HasPrefix(fn.Name, "f ") || strings.HasPrefix(fn.Name, "run ") {
+						native += fn.Native
+					}
+				}
+				if native == 0 {
+					t.Errorf("%s never ran natively", src)
+				}
+			})
+		}
+	}
+}
+
+// A number's method read off Object.prototype past Number.prototype, beside
+// the objects' cases, is the one a read finds when either prototype
+// changes: one put on Number.prototype that shadows it, taken off again,
+// Object.prototype's replaced, Number.prototype given another prototype
+// and its own back. Each answer is the interpreter's.
+func TestJITPrimitiveCaseInheritedReplaced(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		const objs = []
+		for (let k = 0; k < 12; k++) { const o = {}; o["p" + k] = k; objs.push(o) }
+		const own = Object.prototype.hasOwnProperty
+		function has(x) { return x.hasOwnProperty("p0") }
+		function run(prim) {
+			let n = 0
+			for (let i = 0; i < 5000; i++) n += String(has(prim ? i : objs[i % 12])).length
+			return n
+		}`
+	holdCollector(t)
+	r, run := jitTierRuntimeForTest(t, jitInvocationsForFeedback, setup)
+	for range 3 {
+		run(`run(false)`)
+	}
+	run(`run(true)`)
+	run(`run(true)`)
+	st, gcs := r.RegNativeStats(), jitCollectionsForTest(r)
+	run(`run(true)`)
+	if after := r.RegNativeStats(); after.Hosts != st.Hosts && gcs == jitCollectionsForTest(r) {
+		t.Errorf("warm, run(true) left native code %d times (%v)", after.Hosts-st.Hosts, after.HostOps)
+	}
+	run(`Number.prototype.hasOwnProperty = function () { return "number" }, run(true)`)
+	run(`run(true) + run(false)`)
+	run(`delete Number.prototype.hasOwnProperty, run(true)`)
+	run(`Object.prototype.hasOwnProperty = function () { return "object" }, run(true) + run(false)`)
+	run(`Object.prototype.hasOwnProperty = own, run(true)`)
+	run(`Object.setPrototypeOf(Number.prototype, {hasOwnProperty() { return "other" }}), run(true) + run(false)`)
+	run(`Object.setPrototypeOf(Number.prototype, Object.prototype), run(true)`)
+}

@@ -10794,7 +10794,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpStringProp:
 		// As amd64's: a string's method where String.prototype has it, its
 		// shape the one the code was compiled for; or a BigInt's, a
-		// number's or a boolean's.
+		// number's or a boolean's; or one a prototype of the kind's has.
+		var chain []ssa.Holder
+		if h := v.Holders(); h != nil {
+			chain = h.List()
+		}
 		switch w := c.gpr(arg(0), a64A); v.Primitive() {
 		case ssa.PrimitiveBigInt:
 			c.movImm(a64B, c.enc.HeapBigTag)
@@ -10817,11 +10821,14 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.movImm(a64B, c.enc.String)
 			c.a.Cmp(w, a64B, true)
 			guard.jump(arm64.NE)
-			c.a.Load(a64A, a64Ctx, abi.OffStringMethods)
-			c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
+			if len(chain) == 0 {
+				c.a.Load(a64A, a64Ctx, abi.OffStringMethods)
+				c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
+			}
 		}
-		if h := v.Holders(); v.Primitive() != ssa.PrimitiveString {
-			c.movImm(a64A, uint64(h.Holders[0].Object))
+		if len(chain) != 0 {
+			c.protoChain(chain[:len(chain)-1], guard, false)
+			c.movImm(a64A, uint64(chain[len(chain)-1].Object))
 		}
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, v.Const.Bits)

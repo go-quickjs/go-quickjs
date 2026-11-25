@@ -483,11 +483,11 @@ func (r *Runtime) jitPolySeenOp(e *jitEntry, pc int, op jitPropOp) {
 // jitPrimitiveSeen notes in e the method read in at pc, of f's function,
 // as one that met recv, a number or a boolean, and reports whether it did:
 // one whose key the prototype the realm fixed for recv's kind,
-// Number.prototype or Boolean.prototype, has as a plain data property,
-// which the code compiled again reads off that prototype, as a string's
-// off String.prototype (jitFeedback's StringProperty), beside the other
-// kinds and the objects the site has met; a method the prototype does not
-// have, Go reads (jitPolySeenOp).
+// Number.prototype or Boolean.prototype, or a prototype of its, has as a
+// plain data property (jitPrimitiveChain), which the code compiled again
+// reads off that prototype, as a string's off String.prototype
+// (jitFeedback's StringProperty), beside the other kinds and the objects
+// the site has met; a method none of them has, Go reads (jitPolySeenOp).
 func (r *Runtime) jitPrimitiveSeen(e *jitEntry, pc int, op *jitPropOp) bool {
 	var sites *[]uint32
 	var proto *Object
@@ -506,9 +506,7 @@ func (r *Runtime) jitPrimitiveSeen(e *jitEntry, pc int, op *jitPropOp) bool {
 	if slices.Contains(*sites, at) {
 		return false
 	}
-	key := op.key
-	i := proto.findOwn(key)
-	if key.IsIndex() || i < 0 || proto.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+	if _, _, ok := r.jitPrimitiveChain(proto, op.key); !ok {
 		return false
 	}
 	*sites = append(*sites, at)
@@ -4621,27 +4619,70 @@ func (fb *jitFeedback) stringPropertyOf(pc int, c *propCache, key Atom, big bool
 }
 
 // primitiveSiteOf is the read of key off the prototype the realm fixed for
-// a primitive of kind: String.prototype, BigInt.prototype,
-// Number.prototype, Boolean.prototype, which has it as its own data, a
-// BigInt's, a number's and a boolean's naming the prototype as its holder.
+// a primitive of kind -- String.prototype, BigInt.prototype,
+// Number.prototype, Boolean.prototype -- or off a prototype of its, where
+// one has it as its own data (jitPrimitiveChain): Shape and Index are the
+// one that has it, a BigInt's, a number's and a boolean's naming the
+// prototypes from the kind's on as its holders, a string's too where
+// String.prototype has it not, each with the shape it has. A number's
+// hasOwnProperty, Object.prototype's, is read so as V8 reads it off the
+// HeapNumber map's prototype chain, the chain's objects checked.
 func (fb *jitFeedback) primitiveSiteOf(kind ssa.Primitive, key Atom) (ssa.PropertySite, bool) {
 	proto := fb.r.jitPrimitiveProto(kind)
 	if proto == nil {
 		return ssa.PropertySite{}, false
 	}
-	sh := fb.r.ensureProtoShape(proto)
-	i := proto.findOwn(key)
-	if sh == nil || sh == noShape || i < 0 || proto.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+	chain, i, ok := fb.r.jitPrimitiveChain(proto, key)
+	if !ok {
 		return ssa.PropertySite{}, false
 	}
+	sh := chain[len(chain)-1].shape
 	k := fb.keep()
-	k.shapes = append(k.shapes, remember(sh))
 	site := ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(sh)), Index: i, Primitive: kind}
-	if kind != ssa.PrimitiveString {
-		k.holders = append(k.holders, proto)
-		site.Holders[0] = ssa.Holder{Object: uintptr(unsafe.Pointer(proto)), Shape: site.Shape}
+	if kind == ssa.PrimitiveString && len(chain) == 1 {
+		// String.prototype's own, which native code finds where Go put
+		// it before the entry (abi.Context's StringMethods).
+		k.shapes = append(k.shapes, remember(sh))
+		return site, true
+	}
+	for j, p := range chain {
+		k.holders, k.shapes = append(k.holders, p), append(k.shapes, remember(p.shape))
+		h := ssa.Holder{Object: uintptr(unsafe.Pointer(p)), Shape: uintptr(unsafe.Pointer(p.shape))}
+		if j < len(site.Holders) {
+			site.Holders[j] = h
+		} else {
+			site.More = append(site.More, h)
+		}
 	}
 	return site, true
+}
+
+// jitPrimitiveChain is where a read of key finds it from proto, the
+// prototype the realm fixed for a primitive's kind: the prototypes from
+// proto up to the first that has it, as its own plain data at index idx
+// of its table -- Number.prototype's toString, or Object.prototype's
+// hasOwnProperty, past Number.prototype -- each given a shape a cache may
+// hold (ensureProtoShape), of a class whose table is all there is to it
+// for the key (String.prototype, a String wrapper, answers only
+// indices and length itself), up to jitAddDepth of them; or false.
+func (r *Runtime) jitPrimitiveChain(proto *Object, key Atom) (chain []*Object, idx int32, ok bool) {
+	if key.IsIndex() || key == atomLength {
+		return nil, 0, false
+	}
+	for p := proto; p != nil; p = p.proto() {
+		if sh := r.ensureProtoShape(p); len(chain) == jitAddDepth || sh == nil || sh == noShape ||
+			!shapeClass(p.class) && p.class != ClassStringWrapper || synthesized(p.class, key) {
+			return nil, 0, false
+		}
+		chain = append(chain, p)
+		if i := p.findOwn(key); i >= 0 {
+			if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return nil, 0, false
+			}
+			return chain, i, true
+		}
+	}
+	return nil, 0, false
 }
 
 // jitPrimitiveProto is the prototype the realm fixed for a primitive of

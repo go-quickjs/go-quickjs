@@ -12193,7 +12193,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		// one the code was compiled for, which says where; or another
 		// primitive's where the prototype the realm fixed for it has it: a
 		// BigInt's, its number word from HeapBigTag up; a number's, below
-		// NumberLimit; a boolean's, true's or false's.
+		// NumberLimit; a boolean's, true's or false's. Where a prototype of
+		// the kind's has it, the holders from the kind's prototype on are
+		// checked as a read's are (protoChain), the last's table read.
+		var chain []ssa.Holder
+		if h := v.Holders(); h != nil {
+			chain = h.List()
+		}
 		switch w := c.gpr(arg(0), scratchA); v.Primitive() {
 		case ssa.PrimitiveBigInt:
 			c.cmpWord(w, c.enc.HeapBigTag)
@@ -12211,12 +12217,15 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		default:
 			c.cmpWord(w, c.enc.String)
 			guard.jump(amd64.CondNE)
-			c.a.Load(scratchA, regCtx, abi.OffStringMethods)
-			c.a.Op(amd64.Test, scratchA, scratchA, true)
-			guard.jump(amd64.CondE)
+			if len(chain) == 0 {
+				c.a.Load(scratchA, regCtx, abi.OffStringMethods)
+				c.a.Op(amd64.Test, scratchA, scratchA, true)
+				guard.jump(amd64.CondE)
+			}
 		}
-		if h := v.Holders(); v.Primitive() != ssa.PrimitiveString {
-			c.movImm(scratchA, uint64(h.Holders[0].Object))
+		if len(chain) != 0 {
+			c.protoChain(chain[:len(chain)-1], guard, false)
+			c.movImm(scratchA, uint64(chain[len(chain)-1].Object))
 		}
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, v.Const.Bits)

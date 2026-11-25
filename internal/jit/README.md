@@ -1265,7 +1265,13 @@ numbers or booleans reads the method off the prototype the realm fixed for
 the kind, where that has it as its own data (`OpStringProp`,
 `ssa.PropertySite`'s `Primitive`; the VM's `jitPrimitiveSeen` learns a kind
 at the exit or the deoptimization that met it), as V8 reads a number's off
-the HeapNumber map's prototype. Each kind is one more case of the site, as a
+the HeapNumber map's prototype -- or off a prototype of that one's, a
+number's `hasOwnProperty` off `Object.prototype`, the site's holders the
+prototypes from the kind's on (the VM's `jitPrimitiveChain`), each checked
+by its shape as a read's holders are, as V8 checks the HeapNumber map's
+prototype chain. Such a method had made the site megamorphic at its first
+deoptimization, and every receiver of the kind left native code there, the
+exit teaching nothing. Each kind is one more case of the site, as a
 V8 IC keeps the HeapNumber or the String map among an object's maps: a site
 that has met several kinds, or objects too -- a shape its cache holds, the
 cases, deep reads or a megamorphic cache the code met at its exits -- tells
@@ -1472,7 +1478,8 @@ their edges with the instruction and without it.
 **Leaves.** A built-in that runs no script where its check passes -- a leaf:
 String's methods, Number's, a Map's or a Set's operations, `Date.now`,
 `Object.prototype.hasOwnProperty` and `Array.isArray` of what is neither a
-proxy nor a module namespace, `Object.create` of a prototype alone, an
+proxy nor a module namespace (`hasOwnProperty` of a primitive too, but
+undefined or null, which throws), `Object.create` of a prototype alone, an
 array's `push` off its fast path,
 `RegExp.prototype.exec` and `test` -- that a call has been seen to call is a
 call of Go of its own (`ssa.GoLeaf`), checked to call that function, as V8's

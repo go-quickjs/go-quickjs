@@ -3245,7 +3245,10 @@ type PropertySite struct {
 	Scan bool
 	// Primitive, for a read StringFeedback knows, is the kind of its
 	// receivers: a string's, whose method String.prototype has, or
-	// another's, whose method the prototype at Holders[0] has.
+	// another's, whose method the prototype at Holders[0] has; or, for
+	// either, one a prototype of the kind's has, Holders and More the
+	// prototypes from the kind's up to that one, which Shape and Index
+	// are of (OpStringProp).
 	// PrimitiveCases are the other kinds it has met, each a site as this
 	// one is, of a kind of its own: the read tells them apart by the
 	// receiver's word, as it tells them from the objects' cases.
@@ -8717,9 +8720,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 				}
 				cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
 				cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(k.Shape)}, int(k.Index), k.Key
-				if k.Primitive != PrimitiveString {
+				if k.Primitive != PrimitiveString || k.Holders[0].Object != 0 {
 					c := f.cache(cell)
-					c.Holders, c.Primitive = b.f.holderChain(HolderChain{Holders: k.Holders}), k.Primitive
+					c.Holders, c.Primitive = b.f.holderChain(HolderChain{Holders: k.Holders, More: k.More}), k.Primitive
 				}
 				v := f.newValue(blk, OpLoadCell, Tagged, cell)
 				v.Shadow = cell

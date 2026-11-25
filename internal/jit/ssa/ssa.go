@@ -177,7 +177,11 @@ const (
 	// compiled for, and the entry at Index is Key's. Another primitive's
 	// (the IC's Primitive) -- a BigInt's, a number's, a boolean's -- is
 	// so where the prototype the realm fixed for it, the first of the IC's
-	// Holders, has it, if the operand is one.
+	// Holders, has it, if the operand is one. Where the IC's Holders are
+	// more than one -- the kind's prototype, then its prototypes up to the
+	// one that has the property, a string's too -- each has the shape it
+	// had, and the last's table, of Const's shape, has the property at
+	// Index: a number's hasOwnProperty, Object.prototype's.
 	OpStringProp // tagged -> source
 	OpStringCode // tagged callee, tagged string, f64 index -> f64
 	// OpStringChar is s[i], an element read of a string: the cell of the

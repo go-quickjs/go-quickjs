@@ -13,10 +13,13 @@ package vm
 //
 // The check passes where the receiver is an object, neither a proxy, whose
 // getOwnPropertyDescriptor trap would run, nor a module namespace, whose
-// bindings may be uninitialized, which throws; and the key is no object,
-// which ToPropertyKey converts by calling its toString or valueOf. A
-// primitive receiver is the built-in's own call: its ToObject makes a
-// wrapper.
+// bindings may be uninitialized, which throws; or a primitive but undefined
+// and null, whose ToObject throws: its wrapper, which ToObject makes, runs
+// nothing, as V8's builtin answers a number's or a string's without a
+// frame -- a number's x.hasOwnProperty(k), whose method native code reads
+// off Object.prototype, had left native code at each call. And the key is
+// no object, which ToPropertyKey converts by calling its toString or
+// valueOf.
 //
 // As regexpLeaves' are, the functions are generic, instantiated with
 // struct{} alone, and the check a method of a generic type used as a
@@ -50,8 +53,11 @@ type hasOwnLeaf[_ any] struct{}
 // check reports whether hasOwnProperty, called on this with args, runs no
 // script and cannot throw.
 func (hasOwnLeaf[_]) check(_ *Runtime, this Value, args []Value) bool {
-	if !this.IsObject() || len(args) != 0 && args[0].IsObject() {
+	if len(args) != 0 && args[0].IsObject() {
 		return false
+	}
+	if !this.IsObject() {
+		return !this.IsNullish()
 	}
 	o := this.Object()
 	return proxyOf(o) == nil && o.class != ClassModuleNamespace

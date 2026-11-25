@@ -4,14 +4,15 @@ import "testing"
 
 // Object.prototype.hasOwnProperty is a native leaf (hasownleaf.go):
 // called without a frame where its receiver is an object, no proxy nor
-// module namespace, and its key no object, and as the built-in otherwise.
-// A hot loop asks it of each kind -- an object's own and inherited keys, a
-// number, a symbol, an array's index and length, a function's lazy name,
-// through hasOwnProperty.call and as a method -- and of what the leaf
-// refuses: a proxy, whose trap runs each time; a key that is an object,
-// whose toString runs each time; a string, whose ToObject has its index
-// and length; null, which throws a TypeError. Each answer is Node's
-// (v26.12.1).
+// module namespace, or a primitive but undefined and null, and its key no
+// object, and as the built-in otherwise. A hot loop asks it of each kind --
+// an object's own and inherited keys, a number, a symbol, an array's index
+// and length, a function's lazy name, a string's index and length, whose
+// ToObject has them, a number's, a boolean's and a symbol's, whose
+// wrappers have none, through hasOwnProperty.call and as a method -- and of
+// what the leaf refuses: a proxy, whose trap runs each time; a key that is
+// an object, whose toString runs each time; null, which throws a
+// TypeError. Each answer is Node's (v26.12.1).
 func TestHasOwnPropertyLeaf(t *testing.T) {
 	t.Parallel()
 	r := newTestRuntime(t, Config{})
@@ -31,7 +32,7 @@ func TestHasOwnPropertyLeaf(t *testing.T) {
 			n += hop.call(o, "own") + 2 * hop.call(o, "inherited") + 4 * o.hasOwnProperty(7) + 8 * hop.call(o, sym)
 			n += 16 * [1, 2].hasOwnProperty(1) + 32 * [1, 2].hasOwnProperty("length") + 64 * hop.call(f, "name")
 			n += 128 * hop.call(p, "x") + 256 * hop.call(o, key) + 512 * hop.call("abc", 1) + 1024 * hop.call("abc", "length")
-			n += 2048 * hop.call(o, "missing")
+			n += 2048 * hop.call(o, "missing") + 4096 * (5).hasOwnProperty("toFixed") + 8192 * hop.call(true, "valueOf") + 16384 * hop.call(sym, "description")
 		}
 		try { hop.call(null, "x") } catch (e) { out = e.constructor.name }
 		[n, traps, strings, out].join()`))
