@@ -376,7 +376,12 @@ What each lever cannot move:
   `aa_imports_jit.go`, which sort before every other file and hold no
   code, import vm's packages in the order its files did before the
   renames, which keeps that order on Windows and Linux amd64; a package
-  vm newly imports comes after them. In another
+  vm newly imports comes after them. The functions that fill vm's long
+  map literals (`map.init.N`) are laid out before A's pad too, with the
+  code no pad of vm's moves: `jitSnapOps`, a map of 4,352 bytes of such
+  code in the builds with the JIT, is an array for that, and the room it
+  gave back put A's range on its page again after `internal/jit/compile`
+  had grown past A's pad. In another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
 - **The WebAssembly engine.** A build with it is laid out anew: the

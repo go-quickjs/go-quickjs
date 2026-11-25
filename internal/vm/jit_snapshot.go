@@ -282,7 +282,14 @@ func jitSnapCopy[T any](s []T) []T { return slices.Clone(s) }
 // any other op, a question misses, and the compile is built on the
 // runtime's goroutine (jitSnapMiss). Generic, EntryGeneric and Resumed,
 // asked at most ops, are asked at every one.
-var jitSnapOps = map[jitSnapMethod][]ir.Op{
+//
+// It is an array, which the linker lays out as data, not a map: a map
+// literal this long is filled by a function the compiler lays out before
+// every function of the package, ahead of the layout lock's first pad, A,
+// whose room the JIT's compiler, linked before package vm, grows into; its
+// 4 KB there had put A's range a page on (docs/optimizing.md, "The layout
+// lock").
+var jitSnapOps = [...][]ir.Op{
 	snapNativeCalls:    {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.BindingRead, ir.ReferenceRead, ir.BindingWrite, ir.FieldDefine, ir.Rethrow, ir.IterStep},
 	snapBigInt:         {ir.Binary, ir.Unary, ir.Branch, ir.StringAdd},
 	snapFrequency:      {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},
