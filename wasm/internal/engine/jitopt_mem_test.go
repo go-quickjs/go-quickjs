@@ -521,3 +521,46 @@ func TestOptZeroExtendMasks(t *testing.T) {
 	}
 	optSameAsInterpreter(t, b.String(), calls)
 }
+
+// A global.set another of the same global follows with nothing between
+// that could see the global goes; the global holds the interpreter's
+// value at every trap, a read between keeps the first.
+func TestOptGlobalSetsOverwritten(t *testing.T) {
+	const src = `(module
+  (memory 1)
+  (global $g (mut i32) (i32.const 0))
+  (global $h (mut i64) (i64.const 0))
+  (func (export "g") (result i32) (global.get $g))
+  (func (export "h") (result i64) (global.get $h))
+  (func (export "run") (param $p i32) (param $q i32)
+    (global.set $g (i32.const 1))
+    (global.set $h (i64.const 7))
+    (global.set $g (i32.const 2))
+    (drop (i32.load (local.get $p)))
+    (global.set $g (i32.const 3))
+    (global.set $g (i32.add (global.get $g) (i32.const 10)))
+    (global.set $h (i64.extend_i32_u (local.get $q)))
+    (global.set $h (i64.const 8))
+    (drop (i32.load offset=4 (local.get $q)))
+    (global.set $g (i32.const 5))
+    (global.set $g (i32.const 6))))`
+	nat := tierInstance(t, src, 0)
+	in := interpretedInstance(t, src)
+	for _, pq := range [][2]uint64{{0, 0}, {65535, 0}, {0, 65533}, {0, 65532}, {70000, 70000}} {
+		_, en := call(t, nat, "run", pq[0], pq[1])
+		_, ei := call(t, in, "run", pq[0], pq[1])
+		if (en == nil) != (ei == nil) {
+			t.Fatalf("run%v: optimized %v, interpreted %v", pq, en, ei)
+		}
+		for _, name := range []string{"g", "h"} {
+			gn, _ := call(t, nat, name)
+			gi, _ := call(t, in, name)
+			if gn[0].N != gi[0].N {
+				t.Fatalf("run%v: global %s %d, interpreted %d", pq, name, gn[0].N, gi[0].N)
+			}
+		}
+	}
+	if !optimized(nat, "run") {
+		t.Fatal("run not optimized")
+	}
+}

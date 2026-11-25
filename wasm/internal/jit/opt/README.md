@@ -311,7 +311,7 @@ inlines a call four deep.
 | `thread` | jump threading (below), then `copyelim` |
 | `gvn` again, `copyelim` | |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
-| `dce` | values without uses or effects, and phis only themselves use |
+| `dce` | values without uses or effects, and phis only themselves use; and a global.set another of the same global follows in its block, nothing between reading the global, having an effect or able to trap (a Go function's return moves its stack pointer twice) |
 | `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value -- or of the i64 an i32 address wraps -- checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked, nor one whose address is a phi each of whose arguments is in bounds on its edge; and an access's check covers those of its address after it in its block that nothing between could tell apart (below) |
 | `split` | every critical edge gets a block, where its phis' moves go |
 | `loops` | natural loops, and each block's depth (below) |

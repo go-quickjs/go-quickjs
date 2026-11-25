@@ -141,7 +141,10 @@ func resolveArgs(args []*Value) {
 }
 
 // dce removes the values nothing uses that have no effect, and the phis
-// only they use.
+// only they use, and a global.set another of the same global follows in
+// its block with nothing between that reads the global, has an effect or
+// may trap: the global holds what the interpreter's does wherever anything
+// could see it. Go's code's returns move its stack pointer twice.
 func dce(f *Func) {
 	computeUses(f)
 	work := f.ws.dceWork[:0]
@@ -151,9 +154,22 @@ func dce(f *Func) {
 				work = append(work, v)
 			}
 		}
+		// set is the block's last global.set that nothing after it has
+		// read the global or could see it since: another of the same
+		// global then makes it dead.
+		var set *Value
 		for _, v := range b.Values {
 			if v.Uses == 0 && !v.HasEffect() {
 				work = append(work, v)
+			}
+			switch {
+			case v.Op == OpGlobalSet:
+				if set != nil && set.Aux == v.Aux {
+					work = append(work, set)
+				}
+				set = v
+			case v.Op == OpGlobalGet || v.HasEffect():
+				set = nil
 			}
 		}
 	}
