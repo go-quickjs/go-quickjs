@@ -879,7 +879,10 @@ func (md *moduleDecoder) decodeGlobalSection() {
 func (md *moduleDecoder) decodeExportSection() {
 	m := md.m
 	count := md.consumeCount("exports count", md.lim.Exports)
-	names := make([]module.Range, 0, count)
+	// An export takes three bytes at least, its name's length, its kind and
+	// its index: room for as many as the section can hold, not for a count
+	// it cannot.
+	names := make([]module.Range, 0, min(int(count), (md.end-md.pc)/3))
 	for i := uint32(0); md.ok() && i < count; i++ {
 		name := consumeString(&md.Decoder, true, "field name")
 		kindPos := md.pc
