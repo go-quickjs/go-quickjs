@@ -41,8 +41,8 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 		return sysfs.EFAULT
 	}
 
-	// An event of each subscription ready now, and the earliest clock's
-	// delay, for waiting if none is.
+	// An event of each subscription ready now, a clock already due among
+	// them, and the earliest clock's delay, for waiting if none is.
 	nevents := uint32(0)
 	emit := func(sub []byte, errno sysfs.Errno, nbytes uint64) {
 		ev := events[nevents*eventSize : (nevents+1)*eventSize]
@@ -60,9 +60,11 @@ func pollOneoff(c *call, p []uint64) sysfs.Errno {
 		switch sub[8] {
 		case eventClock:
 			delay, errno := sc.delay(sub)
-			if errno != 0 {
+			switch {
+			case errno != 0:
 				emit(sub, errno, 0)
-				continue
+			case delay == 0:
+				emit(sub, 0, 0)
 			}
 			minDelay = min(minDelay, delay)
 		case eventFdRead, eventFdWrite:

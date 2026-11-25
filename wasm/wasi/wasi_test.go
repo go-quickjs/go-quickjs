@@ -1003,6 +1003,42 @@ func TestPollOneoff(t *testing.T) {
 	}
 }
 
+// TestPollReportsEveryReadySubscription checks that poll_oneoff reports
+// every subscription ready when it is called: a clock already due is
+// reported beside a descriptor ready at once, and one not yet due is not
+// waited for.
+func TestPollReportsEveryReadySubscription(t *testing.T) {
+	var slept []int64
+	cfg := wasm.NewModuleConfig().
+		WithNanotime(func() int64 { return 1000 }, 1).
+		WithNanosleep(func(_ context.Context, ns int64) { slept = append(slept, ns) })
+	h := newHarness(t, cfg)
+	sub := func(i uint32, userdata uint64, typ byte, a uint32, timeout uint64, flags uint16) {
+		b := make([]byte, 48)
+		le.PutUint64(b, userdata)
+		b[8] = typ
+		le.PutUint32(b[16:], a)
+		le.PutUint64(b[24:], timeout)
+		le.PutUint16(b[40:], flags)
+		h.mem.Write(scratch+48*i, b)
+	}
+	sub(0, 40, 0, 1, 0, 0)    // relative, due now
+	sub(1, 41, 1, 1, 0, 0)    // stdout, ready
+	sub(2, 42, 0, 1, 900, 1)  // absolute, past
+	sub(3, 43, 0, 1, 5000, 0) // relative, not due
+	sub(4, 44, 0, 9, 0, 0)    // an unknown clock
+	h.expect("ESUCCESS", "poll_oneoff", scratch, out, 5, out+0x1000)
+	var got []string
+	for i := uint32(0); i < h.u32(out+0x1000); i++ {
+		b := h.bytes(out+32*i, 32)
+		got = append(got, fmt.Sprintf("%d:%d:%d", le.Uint64(b), b[10], le.Uint16(b[8:])))
+	}
+	want := []string{"40:0:0", "41:1:0", "42:0:0", "44:0:28"}
+	if fmt.Sprint(got) != fmt.Sprint(want) || len(slept) != 0 {
+		t.Errorf("events (userdata:type:errno) %v, want %v; slept %v", got, want, slept)
+	}
+}
+
 func TestPollReadable(t *testing.T) {
 	dir, h := mountDir(t)
 	os.WriteFile(filepath.Join(dir, "f"), []byte("0123456789"), 0o644)

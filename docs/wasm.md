@@ -221,7 +221,9 @@ file IDs, so that `d_ino` matches the inode a stat reports.
   context is done, which ends the call: a sleeper of the host's is given
   the context, and is cut off if it does not return when it is done. A subscription to reading
   or writing a descriptor is ready at once; one of a descriptor that is not
-  open is ready with `EBADF`. Go programs' goroutines and timers run on it.
+  open is ready with `EBADF`. A call reports every subscription ready when
+  it is made, a clock already due beside a ready descriptor. Go programs'
+  goroutines and timers run on it.
 - Rights are reported, and enforced once a module drops some with
   `fd_fdstat_set_rights`: what needs a dropped right fails with
   `ENOTCAPABLE`.
