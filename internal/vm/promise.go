@@ -319,6 +319,11 @@ func (r *Runtime) scheduleReactions(p *promiseData) {
 }
 
 // enqueueReaction queues one reaction against a settled promise.
+//
+// The job's function holds only what it reads -- the handler the outcome
+// picks, the promise or capability it settles and the outcome -- rather
+// than the reaction, and settles an intrinsic promise in place: only a
+// subclass's capability is settled through functions, out of line.
 func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 	state, value := p.state, p.value
 	if state == promiseRejected {
@@ -328,53 +333,60 @@ func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 		r.enqueueAwait(rc.ctx, rc.gen, rc.resume, value, state == promiseRejected)
 		return
 	}
+	rejected, handler, result, cap := state == promiseRejected, rc.onFulfilled, rc.result, rc.cap
+	if rejected {
+		handler = rc.onRejected
+	}
 	r.enqueueJobIn(rc.ctx, func() {
-		handler := rc.onFulfilled
-		if state == promiseRejected {
-			handler = rc.onRejected
-		}
 		if !isCallable(handler) {
 			// Without a handler the outcome passes straight through, which is
 			// what makes a then chain propagate a rejection.
-			r.settleReaction(&rc, value, state == promiseRejected, false)
+			switch {
+			case cap != nil:
+				r.settleCapability(cap, value, rejected, false)
+			case rejected:
+				r.rejectPromise(result, value)
+			default:
+				r.resolvePromise(result, value)
+			}
 			return
 		}
 		res, err := r.call(handler, Undefined, []Value{value})
 		if err != nil {
 			// A handler that throws rejects the promise it resolves, rather
 			// than propagating out of the job queue.
-			r.settleReaction(&rc, thrownValue(err), true, false)
+			if cap != nil {
+				r.settleCapability(cap, thrownValue(err), true, false)
+			} else {
+				r.rejectPromise(result, thrownValue(err))
+			}
 			return
 		}
-		r.settleReaction(&rc, res, false, true)
+		if cap != nil {
+			r.settleCapability(cap, res, false, true)
+		} else {
+			r.resolvePromise(result, res)
+		}
 	})
 }
 
-// settleReaction settles what a reaction's job resolves with v, or rejects
-// with it: its promise, or its capability through the capability's own
-// functions. One of those that throws is the job's exception, which
-// nothing in the script can catch (OnUncaughtException).
+// settleCapability settles a reaction's capability, a subclass's promise,
+// through the capability's own functions: resolve with v, or reject with
+// it. One of those that throws is the job's exception, which nothing in
+// the script can catch (OnUncaughtException).
 //
-// Under WithNodeQuirks a capability's resolve that throws is followed by
-// its reject, given the exception, and where the job's handler ran and
-// returned (ran), a reject that throws by its reject again, given that
-// exception: what reaches the host is the last one.
-func (r *Runtime) settleReaction(rc *reaction, v Value, rejected, ran bool) {
-	if rc.cap == nil {
-		if rejected {
-			r.rejectPromise(rc.result, v)
-		} else {
-			r.resolvePromise(rc.result, v)
-		}
-		return
-	}
+// Under WithNodeQuirks a resolve that throws is followed by the reject,
+// given the exception, and where the job's handler ran and returned
+// (ran), a reject that throws by the reject again, given that exception:
+// what reaches the host is the last one.
+func (r *Runtime) settleCapability(cap *promiseCapability, v Value, rejected, ran bool) {
 	var err error
 	if rejected {
-		_, err = r.call(rc.cap.reject, Undefined, []Value{v})
-	} else if _, err = r.call(rc.cap.resolve, Undefined, []Value{v}); r.nodeQuirks && isThrown(err) {
-		_, err = r.call(rc.cap.reject, Undefined, []Value{thrownValue(err)})
+		_, err = r.call(cap.reject, Undefined, []Value{v})
+	} else if _, err = r.call(cap.resolve, Undefined, []Value{v}); r.nodeQuirks && isThrown(err) {
+		_, err = r.call(cap.reject, Undefined, []Value{thrownValue(err)})
 		if ran && isThrown(err) {
-			_, err = r.call(rc.cap.reject, Undefined, []Value{thrownValue(err)})
+			_, err = r.call(cap.reject, Undefined, []Value{thrownValue(err)})
 		}
 	}
 	if err != nil {
