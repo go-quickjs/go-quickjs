@@ -20,8 +20,8 @@ import "slices"
 func thread(f *Func) {
 	ws := f.ws
 	changed := false
-	// The uses are counted where a block may be threadable, again after a
-	// block is threaded.
+	// The uses are counted where a block may be threadable and an edge
+	// into it would be threaded, again after a block is threaded.
 	counted := false
 	// The blocks do not change while threading: repairPhis makes values
 	// only.
@@ -30,6 +30,9 @@ func thread(f *Func) {
 			continue
 		}
 		if !counted {
+			if !threadsAny(f, h) {
+				continue
+			}
 			computeUses(f)
 			counted = true
 		}
@@ -46,15 +49,8 @@ func thread(f *Func) {
 		threaded := false
 		ends := ws.threadEnds(f)
 		for k, p := range h.Preds {
-			if p == h || count[p.ID] != 1 {
-				continue
-			}
-			c := evalOnEdge(ws, h.Control, h, k)
-			if c == nil {
-				continue
-			}
-			t := branchTarget(h, c)
-			if t == h || slices.Contains(p.Succs, t) || countOf(h.Succs, t) != 1 {
+			t := threadTarget(ws, h, k, count)
+			if t == nil {
 				continue
 			}
 			// What H's phis are at p's end. The target's phis read on the
@@ -86,6 +82,41 @@ func thread(f *Func) {
 	if changed {
 		removeUnreachable(f)
 	}
+}
+
+// threadTarget is the block the edge from h's predecessor k would be
+// threaded to, or nil where it would not be. count is how many times each
+// block is h's predecessor.
+func threadTarget(ws *workspace, h *Block, k int, count []int32) *Block {
+	p := h.Preds[k]
+	if p == h || count[p.ID] != 1 {
+		return nil
+	}
+	c := evalOnEdge(ws, h.Control, h, k)
+	if c == nil {
+		return nil
+	}
+	t := branchTarget(h, c)
+	if t == h || slices.Contains(p.Succs, t) || countOf(h.Succs, t) != 1 {
+		return nil
+	}
+	return t
+}
+
+// threadsAny reports whether thread would thread an edge into h, its
+// uses aside: the first it threads, found changing nothing.
+func threadsAny(f *Func, h *Block) bool {
+	ws := f.ws
+	count := ws.blockMarks(f)
+	for _, p := range h.Preds {
+		count[p.ID]++
+	}
+	for k := range h.Preds {
+		if threadTarget(ws, h, k, count) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // removePreds removes b's predecessors at the indices gone, in order, and
