@@ -981,8 +981,9 @@ natively -- of a run begun at a loop (`jitRegRunGoProfit`), unless the code
 calls functions natively (`jitRegCodeCallsNatively`): judged slow there,
 the run leaves once that call is made (`jitRegRun`'s `leave`). A native
 callee's calls of Go are judged too, beyond its native callers' calls in
-(`jitRegCalleeProfit`): code that does not pay is neither entered nor
-called natively (`notNative`). Go
+(`jitRegCalleeProfit`), unless it calls functions natively, as for a run:
+code that does not pay is neither entered nor called natively
+(`notNative`). Go
 enters such code again after `jitNativeRetry` calls of it, doubled each
 time (`jitRegRetrySlow`), a loop's checks of code judged slow at loops
 counting as such calls. Native

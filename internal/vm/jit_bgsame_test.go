@@ -189,3 +189,59 @@ func TestJITSnapshotAsksEveryPCMethod(t *testing.T) {
 		}
 	}
 }
+
+// A native callee that calls functions natively is not judged by its calls
+// of Go alone (jitRegCalleeProfit), as a run is not (jitRegRunGoProfit):
+// the work of the functions it calls natively, which its calls of Go are
+// measured against, is not counted in its own. A loop over a callback's
+// calls whose callbacks were called through Go while they warmed up again
+// after a deoptimization -- AWFY DeltaBlue's Vector.forEach -- was judged
+// not to pay at each such spell, its native callers calling it through Go
+// and the interpreter running it: 9,000 calls on the spot, up to 54,000 in
+// the background.
+func TestJITCalleeCallingNativelyIsNotJudgedByItsCallsOfGo(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	src := `
+		class Vec {
+			constructor() { this.s = []; this.n = 0 }
+			push(x) { this.s[this.n++] = x }
+			forEach(fn) { for (let i = 0; i < this.n; i++) fn(this.s[i]) }
+		}
+		function make(k) {
+			const v = new Vec()
+			for (let i = 0; i < 6; i++) {
+				const o = {a: i, m() { return this.a + k }}
+				for (let j = 0; j < k; j++) o["p" + j] = j
+				v.push(o)
+			}
+			return v
+		}
+		function sum(v, k) { let s = 0; v.forEach((o) => { s += o.m() + k }); return s }
+		function xor(v) { let s = 0; v.forEach((o) => { s ^= o.a }); return s }
+		function count(v) { let s = 0; v.forEach((o) => { if (o.m() > 2) s++ }); return s }
+		let total = 0
+		for (let k = 0; k < 8; k++) {
+			const v = make(k)
+			for (let r = 0; r < 10000; r++) total += sum(v, r) + xor(v) + count(v)
+		}`
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
+			t.Parallel()
+			r := newTestRuntime(t, Config{JIT: true})
+			r.jitStress = jitStressConfig{}
+			r.SetJITBackground(background)
+			r.SetJITReport(true)
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			// Before, 820 on the spot and 1,025 in the background: the
+			// retry after a judgment (jitNativeRetry).
+			if n := r.RegNativeStats().GoCallOps["call_method_w->function with code"]; n > 100 {
+				t.Errorf("forEach called through Go %d times of 240,000, its code native callers may call", n)
+			}
+		})
+	}
+}

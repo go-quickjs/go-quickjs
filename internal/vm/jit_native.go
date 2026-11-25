@@ -2603,7 +2603,15 @@ type jitRegGoMark struct {
 // last call, at a later pc in the same stretch -- beyond its native
 // callers' calls (its link's in), which pay no entry. Code that does not
 // pay Go no longer enters and native callers no longer call (notNative)
-// until retried (jitRegRetryNative).
+// until retried (jitRegRetryNative) -- unless it calls functions natively
+// (jitRegCodeCallsNatively), whose work the back edges count only in part,
+// as a run's calls of Go are judged (jitRegRunGoProfit). Judged by its
+// calls of Go alone, a loop over its callback's calls -- AWFY DeltaBlue's
+// Vector.forEach, its callbacks called natively but through Go while each
+// warmed up after a deoptimization -- was judged not to pay at each such
+// spell, and its native callers called it through Go, the interpreter
+// running it, for 9,000 calls on the spot and up to 54,000 in the
+// background.
 func (r *Runtime) jitRegCalleeProfit(e *jitRegEntry, rpc int) {
 	s := r.jit
 	life := e.life
@@ -2627,7 +2635,7 @@ func (r *Runtime) jitRegCalleeProfit(e *jitRegEntry, rpc int) {
 	if st.calleeGoCalls%jitSSAProbe != 0 || st.calleeGoCalls <= in {
 		return
 	}
-	if st.calleeWork < (st.calleeGoCalls-in)*jitSSAMinWork {
+	if st.calleeWork < (st.calleeGoCalls-in)*jitSSAMinWork && !e.jitRegCodeCallsNatively() {
 		life.entrySlow = true
 		life.notNative, life.nativeRetry = true, 0
 		if l != nil {
