@@ -89,6 +89,13 @@ var intendedInlining = []string{
 	"(*regState).done",
 	"(*Runtime).regEnter",
 	"(*Runtime).regLeave",
+	// An addition's slow path, its call of add or of the mark's form
+	// that calls add: inlined, the handler makes one call as it did
+	// before there were marks.
+	"(*regState).addSeen",
+	"(*regState).stringSeen",
+	"(*regState).addImmSeen",
+	"(*regState).addPropSeen",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with

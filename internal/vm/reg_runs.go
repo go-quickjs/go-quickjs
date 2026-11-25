@@ -30,12 +30,41 @@ var regStringAddOf func(c *regCode, pc int)
 // on, a result that is a string (regStringAddOf), in place of the call
 // its handler made; stringSeen marks an append's result (an error's is
 // undefined), and addPropSeen is add_prop's, marking an addition of a
-// string. They are calls of their own, not inlined, so that the
+// string. In a build without the JIT nothing is marked, and each is
+// inlined to the call its handler made before there were marks. In a
+// build with it each is inlined to a call of its marking form (addMark,
+// addImmMark, stringMark, addPropMark), out of line, so that the
 // handlers that make them (reg_table.go's) keep their sizes, but for
 // rsAdd's call of stringSeen, and the handlers after them their places.
-//
-//go:noinline
 func (st *regState) addSeen(pc int, a, b Value) (Value, error) {
+	if jitBuilt {
+		return st.addMark(pc, a, b)
+	}
+	return st.r.add(a, b)
+}
+
+func (st *regState) stringSeen(pc int, v Value) {
+	if jitBuilt {
+		st.stringMark(pc, v)
+	}
+}
+
+func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
+	if jitBuilt {
+		return st.addImmMark(pc, op, a, imm)
+	}
+	return st.r.regBinImm(op, a, imm)
+}
+
+func (st *regState) addPropSeen(pc int, w bytecode.RInstr, obj, b Value) error {
+	if jitBuilt {
+		return st.addPropMark(pc, w, obj, b)
+	}
+	return st.r.regAddProp(st.cl, st.c, w, obj, b)
+}
+
+//go:noinline
+func (st *regState) addMark(pc int, a, b Value) (Value, error) {
 	v, err := st.r.add(a, b)
 	if st.r.jitOn() && err == nil && v.IsString() {
 		regStringAddOf(st.c, pc)
@@ -44,14 +73,14 @@ func (st *regState) addSeen(pc int, a, b Value) (Value, error) {
 }
 
 //go:noinline
-func (st *regState) stringSeen(pc int, v Value) {
+func (st *regState) stringMark(pc int, v Value) {
 	if st.r.jitOn() && v.IsString() {
 		regStringAddOf(st.c, pc)
 	}
 }
 
 //go:noinline
-func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
+func (st *regState) addImmMark(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
 	v, err := st.r.regBinImm(op, a, imm)
 	if st.r.jitOn() && err == nil && v.IsString() {
 		regStringAddOf(st.c, pc)
@@ -60,7 +89,7 @@ func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Valu
 }
 
 //go:noinline
-func (st *regState) addPropSeen(pc int, w bytecode.RInstr, obj, b Value) error {
+func (st *regState) addPropMark(pc int, w bytecode.RInstr, obj, b Value) error {
 	if st.r.jitOn() && w.Op() == bytecode.RAddProp && b.IsString() {
 		// o.name += x of a string x: a string's addition.
 		regStringAddOf(st.c, pc)
