@@ -237,10 +237,22 @@ func (al *Allocator) webEvents(w *web) {
 			n += int(al.evOff[m+1] - al.evOff[m])
 		}
 		ev := al.i32s.take(n)
+		runs := al.runs[:0]
+		sorted := true
 		for _, m := range w.members {
-			ev = append(ev, al.ev[al.evOff[m]:al.evOff[m+1]]...)
+			run := al.ev[al.evOff[m]:al.evOff[m+1]]
+			sorted = sorted && slices.IsSorted(run)
+			ev = append(ev, run...)
+			runs = append(runs, int32(len(ev)))
 		}
-		slices.Sort(ev)
+		if sorted {
+			// Each member's are in order, found by the pass in order of
+			// position: merged, two runs at a time.
+			ev = al.mergeRuns(ev, runs)
+		} else {
+			slices.Sort(ev)
+		}
+		al.runs = runs
 		sp.ev = ev
 	}
 	evW := append(al.f64s.take(len(sp.ev)+1), 0)
@@ -252,6 +264,47 @@ func (al *Allocator) webEvents(w *web) {
 		evW = append(evW, evW[len(evW)-1]+x)
 	}
 	sp.evW = evW
+}
+
+// mergeRuns sorts ev, which is runs in order, each ending where runs
+// says, by merging them two at a time, and returns it: in its own memory
+// or the arena's.
+func (al *Allocator) mergeRuns(ev []int32, runs []int32) []int32 {
+	if len(runs) < 2 {
+		return ev
+	}
+	tmp := al.i32s.take(len(ev))[:len(ev)]
+	for len(runs) > 1 {
+		k, lo := 0, int32(0)
+		for i := 0; i < len(runs); i += 2 {
+			if i+1 == len(runs) {
+				copy(tmp[lo:], ev[lo:runs[i]])
+				runs[k] = runs[i]
+				k++
+				break
+			}
+			mid, hi := runs[i], runs[i+1]
+			a, b, o := lo, mid, lo
+			for a < mid && b < hi {
+				if ev[b] < ev[a] {
+					tmp[o] = ev[b]
+					b++
+				} else {
+					tmp[o] = ev[a]
+					a++
+				}
+				o++
+			}
+			o += int32(copy(tmp[o:], ev[a:mid]))
+			copy(tmp[o:], ev[b:hi])
+			runs[k] = hi
+			k++
+			lo = hi
+		}
+		runs = runs[:k]
+		ev, tmp = tmp, ev
+	}
+	return ev
 }
 
 // meetSpan is from the first position two lists of ranges both cover to

@@ -214,12 +214,14 @@ type Allocator struct {
 	// The split registers' moves as found (keyed, entries), and their uses and
 	// definitions by position (events): ev from evOff[v] to evOff[v+1] are
 	// v's, each its position times two, plus one for a definition.
-	keyed    []keyedMove
-	entries  []keyedMove
-	ev       []int32
-	evOff    []int32
-	evNext   []int32
-	evPairs  []evPair
+	keyed   []keyedMove
+	entries []keyedMove
+	ev      []int32
+	evOff   []int32
+	evNext  []int32
+	evPairs []evPair
+	// runs are where each member's events end in a web's (webEvents).
+	runs     []int32
 	posBlock []int32
 	blockW   []float64
 
