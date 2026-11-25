@@ -1871,7 +1871,16 @@ A call of a closure that captures bindings checks the function the callee
 runs, in its environment and realm, not the object (`ssa.CallSite`'s
 `ByCode`), and gives the callee the closure it finds, as V8 checks a call's
 code: a callback made anew at each call of its maker is a new object, the
-same function. A closure is inlined where its call checks its object, which
+same function. A call of a closure of one of the caller's own templates --
+one its code makes, anew at each invocation -- in a caller that recurses
+(a call cache of its own code has met it) is checked by its code from the
+first compile (`jitRegMadeBy`), as V8's call feedback holds a closure's
+feedback cell and its graph knows a call's target the code made by its
+`SharedFunctionInfo`: checked by its object, it met another at every
+level but the one learned, a recursion leaving native code at every
+level. Outside a recursion an invocation's own run of the code calls the
+closure it made, which a check of its object holds for, and which
+inlining needs. A closure is inlined where its call checks its object, which
 fixes its closure and so the cells of its captured bindings: an inlined
 frame reads and assigns them there (`ssa.InlineSite`'s `Upvalues`), as V8's
 inlined code reads a context it knows, and an assignment has the caller read

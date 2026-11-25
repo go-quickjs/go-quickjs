@@ -37,7 +37,6 @@ const argsRecursionSetup = `
 // 3,000 times a run, the interpreter finishing over 200 invocations. Each
 // mechanism alone undone has this leave 16 to 130 times.
 func TestJITArgumentsInRecursion(t *testing.T) {
-	t.Skip("register JIT gap: a recursion that reads its arguments finishes in the interpreter 30 times and leaves for Go 85 times (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

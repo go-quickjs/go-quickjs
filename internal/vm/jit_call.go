@@ -306,9 +306,12 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 	unfilled := !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) >= uint(len(calls))
 	if !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) < uint(len(calls)) {
 		if e := &calls[w.C()]; jitRegCallKind(e) {
-			f.regAddTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, false, false)
+			// A closure the code makes itself is called by its code
+			// (jitRegMadeBy).
+			byCode := jitRegMadeBy(f.fb.cl, e.cl)
+			f.regAddTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, byCode, false)
 			if t.n != 0 && l != nil && !jitRegCallKnown(l, rpc, e.callee) {
-				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee})
+				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee, byCode: byCode})
 			}
 		} else if e.kind&regCallThrough != 0 && method && argc >= 1 && e.cl != nil && e.rc != nil && l != nil {
 			// G.call(x, ...), which the interpreter makes entering G, its
@@ -522,6 +525,40 @@ const jitRegSeenReach = 32
 // function in the same environment and realm.
 func jitRegSameClosureCode(a, b *closure) bool {
 	return a.fn == b.fn && a.env == b.env && a.realm == b.realm
+}
+
+// jitRegMadeBy reports whether cl is a closure of one of caller's own
+// templates, of its realm, and caller recurses -- a call of it its caches
+// have seen: a function caller's code makes (closure_w), a new object at
+// each of its invocations, which nest. A call of one is checked by its
+// code (a site's ByCode), as V8's call feedback holds a closure's feedback
+// cell once its site has met more than one closure of it: checked by its
+// object, it met another object at every level but the one learned, and a
+// recursion's every level left native code at the call at once, each then
+// finished by the interpreter, as AWFY's Havlak and EarleyBoyer recurse
+// over the callbacks they make. Outside a recursion an invocation's own
+// run of the code, a loop's, calls the closure it made, which a check of
+// the object -- and inlining it, which needs one -- holds for.
+func jitRegMadeBy(caller, cl *closure) bool {
+	if caller == nil || cl == nil || cl.realm != caller.realm || cl.closureCode == nil {
+		return false
+	}
+	made := false
+	for _, k := range caller.consts {
+		if t := k.template(); t != nil && t.closureCode == cl.closureCode {
+			made = true
+			break
+		}
+	}
+	if !made {
+		return false
+	}
+	for i := range caller.regCalls {
+		if c := caller.regCalls[i].cl; c != nil && c.fn == caller.fn {
+			return true
+		}
+	}
+	return false
 }
 
 // jitRegSameCode reports whether site, checked by its function's code,
@@ -739,7 +776,8 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 		}
 		return false
 	}
-	x := jitInline{pc: int32(rpc), cl: cl, obj: o, parent: parent}
+	// One the code makes itself, by its code from the first (jitRegMadeBy).
+	x := jitInline{pc: int32(rpc), cl: cl, obj: o, parent: parent, byCode: w.Op() != bytecode.RNewW && jitRegMadeBy(f.cl, cl)}
 	if n == 0 && w.Op() != bytecode.RNewW {
 		// A call that has learned no function yet: settling, the functions
 		// it meets in its first jitCallsToInline calls of Go are decided
