@@ -2561,7 +2561,15 @@ again. Which instructions are whole Hosts the registers each reads and
 writes say (compile's `RegAccess`): a using declaration's
 `new_dispose_capability`, `add_disposable` and `dispose` among them,
 whose disposal may run script, which would otherwise be host exits at every
-turn of a loop with a using declaration.
+turn of a loop with a using declaration. So is an arithmetic operator --
+`+`, `-`, `*`, `/`, `%`, `**`, the bitwise ones, the comparisons `bin`
+makes -- that met an object at an exit or a deoptimization (the VM's
+`jitRegObjectArithSeen`, compile's `Hints`' `WholeOps`): its conversion
+(ToPrimitive, a `valueOf`) may run script, so the lowering makes it a whole
+Host from then on, as V8's code calls its Add, Subtract or Multiply builtin
+for feedback any and goes on after it. Each had left native code at every
+turn -- `s += o`, `new Date() - start`, `o * 2` -- 64 exits, the loop then
+run in the interpreter.
 
 **On the frame's own state.** What reads only its operands and the frame --
 a `new.target`, a rest parameter's array and an unmapped arguments object of

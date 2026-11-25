@@ -110,7 +110,7 @@ func (s *jitState) regLowering(key jitKey) *jitLowering {
 		s.regLowered[key] = l
 		s.lowerBytes += l.bytes
 	} else if len(l.hints.StringAdds) != len(h.StringAdds) || len(l.hints.ElementReads) != len(h.ElementReads) ||
-		len(l.hints.StringReads) != len(h.StringReads) {
+		len(l.hints.StringReads) != len(h.StringReads) || len(l.hints.WholeOps) != len(h.WholeOps) {
 		s.relower(l)
 	}
 	// The learned lists themselves, which their entry owns and counts:
@@ -351,6 +351,42 @@ func (r *Runtime) jitRegStringAddSeen(l *jitEntry, c *regCode, wb, rpc int) bool
 		return false
 	}
 	l.regHints.StringAdds = append(l.regHints.StringAdds, int32(rpc))
+	return true
+}
+
+// jitRegObjectArithSeen learns, at a deoptimization or a host exit of
+// register code at register pc rpc of c, whose frame's window at wb holds
+// the state at the instruction's start, an arithmetic operator that met an
+// object -- add's, sub's, mul's, their immediates', the other binary
+// operators', a local's append -- whose conversion may run script: every lowering from here
+// has Go run it whole on the register frame (Hints' WholeOps), native code
+// going on after it. It reports whether it learned one.
+func (r *Runtime) jitRegObjectArithSeen(l *jitEntry, c *regCode, wb, rpc int) bool {
+	if rpc < 0 || rpc >= len(c.rc.Code) || slices.Contains(l.regHints.WholeOps, int32(rpc)) {
+		return false
+	}
+	w := c.rc.Code[rpc]
+	object := func(n uint16) bool { return wb+int(n) < len(r.stack) && r.stack[wb+int(n)].IsObject() }
+	switch w.Op() {
+	case bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
+		bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
+		if !object(w.B()) && !object(w.C()) {
+			return false
+		}
+	case bytecode.RAddI, bytecode.RSubI, bytecode.RMulI,
+		bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI:
+		if !object(w.B()) {
+			return false
+		}
+	case bytecode.RAppend:
+		// A local's s += x, a string's addition from the start.
+		if !object(w.A()) && !object(w.B()) {
+			return false
+		}
+	default:
+		return false
+	}
+	l.regHints.WholeOps = append(l.regHints.WholeOps, int32(rpc))
 	return true
 }
 

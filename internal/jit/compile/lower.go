@@ -81,9 +81,16 @@ func HostOnly(err error) bool {
 // (stringConcats): learned one at a time, a read and then each addition of
 // it, a function's compiles for what failed had run out before its last,
 // btoa's, of a table of characters, which then left native code at every
-// call.
+// call. WholeOps are the PCs of arithmetic operators -- +, -, *, /, %, **,
+// the bitwise ones -- that have met an object, whose conversion
+// (ToPrimitive, valueOf) may run script: each is Go's, run whole on the
+// register frame (ir's Whole), native code going on after it, as V8's code
+// calls its Add, Subtract or Multiply builtin for an operation whose
+// feedback is any. Go had made each at an exit: s += o, d - o of a Date, o
+// * 2, their loops left native code at every turn until the code was
+// entered no more.
 type Hints struct {
-	StringAdds, ElementReads, StringReads []int32
+	StringAdds, ElementReads, StringReads, WholeOps []int32
 	// KeepParams keeps parameter values in frame states for legacy
 	// Function.arguments, which can observe them without a local read.
 	KeepParams bool

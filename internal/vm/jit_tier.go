@@ -894,6 +894,7 @@ func (r *Runtime) jitRegDeoptSeen(f *frame, c *regCode, e *jitRegEntry, wb, rpc 
 	// too.
 	r.jitRegElemSeen(l, c, wb, rpc, false)
 	r.jitRegStringAddSeen(l, c, wb, rpc)
+	r.jitRegObjectArithSeen(l, c, wb, rpc)
 	if op, ok := r.jitRegPropOp(f, c, wb, rpc); ok {
 		r.jit.shapeDeopts++
 		r.jitDeoptSeenOp(l, rpc, op, e.serial)

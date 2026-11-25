@@ -2034,6 +2034,11 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 				// lowering on.
 				r.jitRegReopt(f.cl, e)
 			}
+			if r.jitRegObjectArithSeen(r.jitRegLearnedFor(f, e), c, wb, exitPC) {
+				// An operator that met an object, run whole by Go from the
+				// next lowering on.
+				r.jitRegReopt(f.cl, e)
+			}
 			seen := r.jitRegHostSeen(f, c, wb, exitPC)
 			r.jitRegPrivateSeen(f, c, e, wb, exitPC)
 			r.jitRegCallMissed(f, c, e, wb, exitPC)

@@ -82,6 +82,13 @@ func LowerRegInlineWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (*
 // is one of pcs, a hint's register pcs.
 func regHinted(pcs []int32, rpc uint32) bool { return slices.Contains(pcs, int32(rpc)) }
 
+// regSoleOrigin reports whether p's instruction pc is the only one its
+// register instruction was lowered to (ir.Program's Origin).
+func regSoleOrigin(p *ir.Program, pc int) bool {
+	o := p.Origin
+	return (pc == 0 || o[pc-1] != o[pc]) && (pc+1 == len(o) || o[pc+1] != o[pc])
+}
+
 // regHints applies h, by register pc, to p: an addition that met a
 // string Go's, before the reads it takes are decided; then, after
 // them (selectNumericProperties), an element read that met what is no
@@ -100,6 +107,12 @@ func regHints(rc *bytecode.RegCode, p *ir.Program, h Hints, after bool) []int32 
 		}
 		rpc := p.Origin[pc]
 		switch {
+		case !after && (in.Op == ir.Binary || in.Op == ir.StringAdd) && regHinted(h.WholeOps, rpc) && regSoleOrigin(p, pc):
+			// An operator that met an object (Hints' WholeOps): run whole,
+			// a string's addition among them -- append's too.
+			if host := regHostAt(rc, int(rpc)); host.Whole {
+				*in = host
+			}
 		case !after && in.Op == ir.Binary && in.Operator == ir.Add && regHinted(h.StringAdds, rpc):
 			w := rc.Code[rpc]
 			*in = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest, Generic: in.Generic,
@@ -1784,15 +1797,18 @@ func regWrapOperator(rc *bytecode.RegCode, pc int) (ir.Operator, bool) {
 // to an exit otherwise. A return, a suspension, a call in tail position
 // and a throw, which end the frame's flow or are the interpreter's alone,
 // leave.
-func (l *regLowering) hostAt(pc int) ir.Instruction {
-	switch l.rc.Code[pc].Op() {
+func (l *regLowering) hostAt(pc int) ir.Instruction { return regHostAt(l.rc, pc) }
+
+// regHostAt is hostAt of rc's instruction pc.
+func regHostAt(rc *bytecode.RegCode, pc int) ir.Instruction {
+	switch rc.Code[pc].Op() {
 	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield, bytecode.RCallWT, bytecode.RCallMWT, bytecode.RAwait,
 		bytecode.RYieldStar, bytecode.REndParams, bytecode.RGenEntry, bytecode.RIterResume, bytecode.RThrow,
 		bytecode.RCheckThis, bytecode.RDeleteSuper, bytecode.RSuperCall, bytecode.RSuperForward, bytecode.RSuperSpread, bytecode.RDerivedRet:
 		// Or reads the frame's this binding, which no operand names.
 		return ir.Instruction{Op: ir.Host}
 	}
-	reads, writes, all := RegAccess(l.rc, pc)
+	reads, writes, all := RegAccess(rc, pc)
 	if all || len(reads) > 3 || len(writes) > 1 {
 		return ir.Instruction{Op: ir.Host}
 	}
@@ -2217,6 +2233,18 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		// What a derived constructor returns: its operand, or the frame's
 		// this binding.
 		return []int{a}, []int{a}, false
+	case bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
+		bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
+		// A binary operator run whole (Hints' WholeOps): its operands'
+		// registers, its result's.
+		return []int{b, c}, []int{a}, false
+	case bytecode.RAppend:
+		// R[A] += R[B].
+		return []int{a, b}, []int{a}, false
+	case bytecode.RAddI, bytecode.RSubI, bytecode.RMulI,
+		bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI:
+		// One of an immediate: its operand's register, its result's.
+		return []int{b}, []int{a}, false
 	case bytecode.RTypeof:
 		return []int{b}, []int{a}, false
 	case bytecode.RUnary:
