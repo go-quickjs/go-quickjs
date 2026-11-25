@@ -25,7 +25,8 @@ import (
 // the interpreter finishing each invocation; with the read made natively,
 // the call left at each number, 64 times a call, the exit teaching
 // nothing. Each answer is the interpreter's. The collector is held, and
-// a call beside which another test forced a collection is not counted: a
+// a call beside which the collector ran -- another test forced it, or the
+// process's memory limit (heavyMemoryLimit) -- is not counted: a
 // collection empties caches the code reads, which a few reads then learn
 // again.
 func TestJITPrimitiveCaseAtObjectSite(t *testing.T) {
@@ -84,10 +85,10 @@ func TestJITPrimitiveCaseAtObjectSite(t *testing.T) {
 					run(src)
 					run(src)
 					for i := range 4 {
-						st, gcs := r.RegNativeStats(), jitCollectionsForTest()
+						st, gcs := r.RegNativeStats(), jitCollectionsForTest(r)
 						run(src)
 						after := r.RegNativeStats()
-						if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest() {
+						if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest(r) {
 							t.Errorf("warm call %d of %s: %d exits to Go (%v), %d invocations finished in the interpreter", i, src, hosts, after.HostOps, ended)
 						}
 					}
@@ -131,9 +132,9 @@ func TestJITPrimitiveCaseReplaced(t *testing.T) {
 	}
 	run(`run(true)`)
 	run(`run(true)`)
-	st, gcs := r.RegNativeStats(), jitCollectionsForTest()
+	st, gcs := r.RegNativeStats(), jitCollectionsForTest(r)
 	run(`run(true)`)
-	if after := r.RegNativeStats(); after.Hosts != st.Hosts && gcs == jitCollectionsForTest() {
+	if after := r.RegNativeStats(); after.Hosts != st.Hosts && gcs == jitCollectionsForTest(r) {
 		t.Errorf("warm, run(true) left native code %d times (%v)", after.Hosts-st.Hosts, after.HostOps)
 	}
 	run(`Number.prototype.toString = function () { return "nn" }, run(true)`)
@@ -141,9 +142,13 @@ func TestJITPrimitiveCaseReplaced(t *testing.T) {
 	run(`delete Number.prototype.toString, run(true)`)
 }
 
-// jitCollectionsForTest is how many collections the process has made.
-func jitCollectionsForTest() uint32 {
+// jitCollectionsForTest is how many collections the process has made, and
+// the one r's megamorphic cache was last emptied at (jitState.megaGC): the
+// cache is emptied at r's next look (flush) after a collection ends, which
+// for one that ended between two calls is in the second, where the
+// process's count does not change.
+func jitCollectionsForTest(r *Runtime) [2]uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return m.NumGC
+	return [2]uint64{uint64(m.NumGC), r.jit.megaGC}
 }

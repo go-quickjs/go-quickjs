@@ -58,10 +58,10 @@ func TestJITArithmeticOnObjects(t *testing.T) {
 					run(src)
 				}
 				for i := range 3 {
-					st, gcs := r.RegNativeStats(), jitCollectionsForTest()
+					st, gcs := r.RegNativeStats(), jitCollectionsForTest(r)
 					run(src)
 					after := r.RegNativeStats()
-					if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest() {
+					if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest(r) {
 						t.Errorf("warm call %d of %s: %d exits to Go (%v), %d invocations finished in the interpreter", i, src, hosts, after.HostOps, ended)
 					}
 					if after.GoCalls == st.GoCalls {
