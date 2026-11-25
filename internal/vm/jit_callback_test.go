@@ -256,14 +256,17 @@ func jitCallbackMallocs(t *testing.T, r *Runtime, src string) uint64 {
 // the collector finds what the frames hold: every third. Each collection
 // marks the process's heap, some 2 ms of it in the package's run, and
 // their rounds make some 20,000 to 38,000 calls, so a test took 15 s in
-// any build. Under checkptr (CI's native boundary), every 31st: the
-// programs are the same, every exit and call of Go still made and every
-// read of what native code left still checked, and the collections at
-// every third are the ordinary builds' to make, which run these tests in
-// three lanes. 31 is a prime, so that the collections still fall at every
-// place in a round's calls that repeat, rather than at the same few.
+// any build. Under checkptr and with the quickjs_verify tag (CI's native
+// boundary), every 31st: the programs and their compiles are the same,
+// every exit and call of Go still made, every read of what native code
+// left still checked by checkptr and every compile by the cross-checks,
+// neither of which learns anything from the collections; those at every
+// third are the ordinary builds' to make, which run these tests in two
+// lanes, native execution and the Test jobs. 31 is a prime, so that the
+// collections still fall at every place in a round's calls that repeat,
+// rather than at the same few.
 func jitCollectEvery() int {
-	if allocsOrdinary() {
+	if allocsOrdinary() && !verifyShapes {
 		return 3
 	}
 	return 31
