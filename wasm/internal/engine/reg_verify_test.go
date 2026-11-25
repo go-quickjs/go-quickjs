@@ -139,3 +139,83 @@ func TestRegVerifierRejects(t *testing.T) {
 		}
 	}
 }
+
+// TestRegVerifierGCRecordKinds checks that the verifier checks the slots a
+// GC instruction's record names by their kinds: a reference operand or
+// result against the reference slots, a number against the numeric ones,
+// so that a slot of one kind past its frame is refused though it is within
+// the other kind's.
+func TestRegVerifierGCRecordKinds(t *testing.T) {
+	inst := instantiateReg(t, `(module
+	  (type $a (array (mut i32)))
+	  (type $v (array (mut v128)))
+	  (func (export "nums") (param i32) (result i32)
+	    (local $x (ref null $a)) (local i64 i64 i64 i64 i64 i64 i64 i64)
+	    (local.set $x (array.new $a (i32.const 1) (local.get 0)))
+	    (array.fill $a (local.get $x) (i32.const 0) (i32.const 7) (local.get 0))
+	    (array.len (local.get $x)))
+	  (func (export "refs") (param i32) (result i32)
+	    (local anyref anyref anyref anyref anyref anyref anyref anyref anyref anyref anyref anyref)
+	    (array.len (array.new $a (i32.const 1) (local.get 0))))
+	  (func (export "vecs") (param i32) (result i32)
+	    (array.len (array.new $v (v128.const i64x2 1 2) (local.get 0)))))`)
+	for _, name := range []string{"nums", "refs", "vecs"} {
+		if _, err := call(t, inst, name, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := inst.Code.Module
+	// mutate returns whether the verifier accepts name's code with its
+	// first GC record of operation ops operands changed by f.
+	mutate := func(name string, ops int, f func(g *regGC, p *compiled)) error {
+		ext, _ := inst.Export(name)
+		p := inst.Code.fns[ext.Func.Index].Load()
+		rc := *p.reg
+		rc.gc = append([]regGC(nil), rc.gc...)
+		for i := range rc.gc {
+			if len(rc.gc[i].ops) == ops {
+				rc.gc[i].ops = append([]uint32(nil), rc.gc[i].ops...)
+				f(&rc.gc[i], p)
+				return rc.verify(m, p.nslots, p.rslots)
+			}
+		}
+		t.Fatalf("%s has no GC record of %d operands", name, ops)
+		return nil
+	}
+	for _, name := range []string{"nums", "refs", "vecs"} {
+		if err := mutate(name, 2, func(*regGC, *compiled) {}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, c := range []struct {
+		what string
+		name string
+		ops  int
+		f    func(g *regGC, p *compiled)
+	}{
+		{"a reference operand past the reference slots", "nums", 4, func(g *regGC, p *compiled) {
+			if p.rslots >= p.nslots {
+				t.Fatalf("%d reference slots, %d numeric", p.rslots, p.nslots)
+			}
+			g.ops[0] = uint32(p.rslots)
+		}},
+		{"a reference result past the reference slots", "nums", 2, func(g *regGC, p *compiled) {
+			g.dst = uint32(p.rslots)
+		}},
+		{"a numeric operand past the numeric slots", "refs", 2, func(g *regGC, p *compiled) {
+			if p.nslots >= p.rslots {
+				t.Fatalf("%d numeric slots, %d reference", p.nslots, p.rslots)
+			}
+			g.ops[1] = uint32(p.nslots)
+		}},
+		{"a v128 operand past the numeric slots", "vecs", 2, func(g *regGC, p *compiled) {
+			g.ops[0] = uint32(p.nslots - 1)
+		}},
+	} {
+		if err := mutate(c.name, c.ops, c.f); err == nil {
+			t.Errorf("%s: verified", c.what)
+		} else {
+			t.Logf("%s: %v", c.what, err)
+		}
+	}
+}

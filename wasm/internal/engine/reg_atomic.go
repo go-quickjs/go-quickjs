@@ -47,7 +47,7 @@ func (c *regCompiler) atomicOp(op opcode.Opcode) bool {
 			n = 3
 		}
 	}
-	ops, h := c.operands(n)
+	ops, _, h := c.operands(n)
 	ops = append(ops, 0, 0)
 	dst := uint64(c.numSlot(h))
 	c.emit(rExt, xAtomic, 0, 0, 0, uint64(mem)|uint64(op)<<32, off, dst|uint64(ops[0])<<32, uint64(ops[1])|uint64(ops[2])<<32)

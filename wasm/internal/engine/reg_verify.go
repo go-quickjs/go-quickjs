@@ -184,14 +184,20 @@ func (v *regVerifier) run() error {
 			}
 		}
 	}
-	for _, g := range v.rc.gc {
-		for _, s := range g.ops {
-			v.anySlot(-1, int(s))
+	for i := range v.rc.gc {
+		g := &v.rc.gc[i]
+		if len(g.ops) > 8 {
+			v.fail(-1, "a GC record of %d operands", len(g.ops))
+		}
+		for j, s := range g.ops {
+			v.recSlot(g.opKind(j), s)
 		}
 		for _, mv := range g.vals {
 			v.move(-1, mv.k, mv.from)
 		}
-		v.anySlot(-1, int(g.dst))
+		if g.dstk != 0 {
+			v.recSlot(g.dstk-1, g.dst)
+		}
 	}
 	for _, t := range v.targets {
 		if t < 0 || t >= len(code) || !v.starts[t] {
@@ -223,11 +229,13 @@ func (v *regVerifier) slotIn(pc int, k byte, s, nslots, rslots int) {
 	}
 }
 
-// anySlot checks a slot a record names, of a kind its use says.
-func (v *regVerifier) anySlot(pc, s int) {
-	if s >= max(v.nslots, v.rslots) {
-		v.fail(pc, "slot %d past the frame's", s)
+// recSlot checks a slot a record names, of kind k (vkNum ...).
+func (v *regVerifier) recSlot(k uint8, s uint32) {
+	if k > vkRef {
+		v.fail(-1, "a record's slot %d of kind %d", s, k)
+		return
 	}
+	v.move(-1, k, s)
 }
 
 // move checks the frame's end of a move of kind k.

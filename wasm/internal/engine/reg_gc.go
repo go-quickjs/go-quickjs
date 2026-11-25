@@ -19,8 +19,13 @@ import (
 type regGC struct {
 	rt *rtt
 	// dst is the result's slot, a numeric slot or a reference slot by the
-	// result's type.
-	dst uint32
+	// result's type, whose kind (vkNum ...) plus 1 dstk is, 0 for an
+	// instruction without a result. opk are the kinds of ops, two bits an
+	// operand from the lowest (opKind). Both are in what dst leaves of a
+	// word, where they move no field native code reads.
+	dst  uint32
+	dstk uint8
+	opk  uint16
 	// ops are the operands' slots, in the instruction's order; vals the
 	// values a struct.new or array.new_fixed stores, with their kinds.
 	ops  []uint32
@@ -133,22 +138,27 @@ func (c *regCompiler) gcRec(g regGC) uint32 {
 	return uint32(len(c.out.gc) - 1)
 }
 
-// operands pops n operands and returns their slots, bottom first, and the
-// position they began at.
-func (c *regCompiler) operands(n int) ([]uint32, int) {
+// operands pops n operands and returns their slots, bottom first, their
+// kinds as a record's opk, and the position they began at.
+func (c *regCompiler) operands(n int) ([]uint32, uint16, int) {
 	base := len(c.stack) - n
 	ops := make([]uint32, n)
+	var kinds uint16
 	for i, e := range c.stack[base:] {
 		ops[i] = uint32(c.slotOf(e, base+i))
+		kinds |= uint16(kindOf(e.t)) << (2 * i)
 	}
 	c.stack = c.stack[:base]
-	return ops, base
+	return ops, kinds, base
 }
+
+// opKind is the kind (vkNum ...) of record g's operand i.
+func (g *regGC) opKind(i int) uint8 { return uint8(g.opk>>(2*i)) & 3 }
 
 // gcResult emits GC operation x of record g writing a value of type t at
 // position h, and pushes it.
 func (c *regCompiler) gcResult(x uint8, t module.ValueType, h int, g regGC) {
-	g.dst = uint32(c.posSlot(t, h))
+	g.dst, g.dstk = uint32(c.posSlot(t, h)), kindOf(t)+1
 	rec := c.gcRec(g)
 	c.push(rentry{t: t, slot: int(g.dst), local: -1, def: c.emitBC(rExt, x, 0, rec), rec: int(rec) + 1})
 }
@@ -184,24 +194,24 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		fi := c.r.u32()
 		rt := rttOf(m.Canonical[ti])
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		ops, h := c.operands(1)
+		ops, kinds, h := c.operands(1)
 		t := ft.Unpacked()
 		if cell := rt.cells[fi]; cell <= 0xffff {
 			c.fastResult(xSGet8S+gcGetKind(ft, op == opcode.StructGetS), t, h, rf(int(ops[0])), uint64(cell))
 			return true
 		}
-		c.gcResult(xStructGet, t, h, regGC{ops: ops, cell: rt.cells[fi], read: cellToVal(ft, op == opcode.StructGetS), k: kindOf(t)})
+		c.gcResult(xStructGet, t, h, regGC{ops: ops, opk: kinds, cell: rt.cells[fi], read: cellToVal(ft, op == opcode.StructGetS), k: kindOf(t)})
 	case opcode.StructSet:
 		ti := c.r.u32()
 		fi := c.r.u32()
 		rt := rttOf(m.Canonical[ti])
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		ops, _ := c.operands(2)
+		ops, kinds, _ := c.operands(2)
 		if cell := rt.cells[fi]; cell <= 0xffff {
 			c.emit(rExt, uint8(xSSet8+gcSetKind(ft)), rf(int(ops[0])), field(ft.Unpacked(), int(ops[1])), uint64(cell))
 			return true
 		}
-		c.emitBC(rExt, xStructSet, 0, c.gcRec(regGC{ops: ops, cell: rt.cells[fi], et: ft, k: kindOf(ft.Unpacked())}))
+		c.emitBC(rExt, xStructSet, 0, c.gcRec(regGC{ops: ops, opk: kinds, cell: rt.cells[fi], et: ft, k: kindOf(ft.Unpacked())}))
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
 		ti := c.r.u32()
 		g := regGC{rt: rttOf(m.Canonical[ti]), et: m.Types[ti].Array.Elem.Type}
@@ -213,7 +223,7 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 			g.k = kindOf(c.stack[len(c.stack)-2].t)
 		}
 		var h int
-		g.ops, h = c.operands(n)
+		g.ops, g.opk, h = c.operands(n)
 		if kind, shift, ok := natElem(g.et); ok {
 			g.natTi, g.natShift = ti+1, shift
 			if op == opcode.ArrayNew {
@@ -243,42 +253,42 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		ti := c.r.u32()
 		g := regGC{rt: rttOf(m.Canonical[ti]), seg: c.r.u32(), data: op == opcode.ArrayNewData}
 		var h int
-		g.ops, h = c.operands(2)
+		g.ops, g.opk, h = c.operands(2)
 		c.gcResult(xArrayNewSegment, module.Ref(module.HeapIndex(ti)), h, g)
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
 		ti := c.r.u32()
 		et := m.Types[ti].Array.Elem.Type
-		ops, h := c.operands(2)
+		ops, _, h := c.operands(2)
 		t := et.Unpacked()
 		c.fastResult(xAGet8S+gcGetKind(et, op == opcode.ArrayGetS), t, h, rf(int(ops[0])), ns(int(ops[1])))
 	case opcode.ArraySet:
 		ti := c.r.u32()
 		et := m.Types[ti].Array.Elem.Type
-		ops, _ := c.operands(3)
+		ops, _, _ := c.operands(3)
 		c.emit(rExt, uint8(xASet8+gcSetKind(et)), rf(int(ops[0])), ns(int(ops[1])), field(et.Unpacked(), int(ops[2])))
 	case opcode.ArrayLen:
-		ops, h := c.operands(1)
+		ops, _, h := c.operands(1)
 		c.fastResult(xALen, module.I32, h, rf(int(ops[0])), 0)
 	case opcode.ArrayFill:
 		ti := c.r.u32()
 		et := m.Types[ti].Array.Elem.Type
-		ops, _ := c.operands(4)
-		c.emitBC(rExt, xArrayFill, 0, c.gcRec(regGC{ops: ops, et: et, k: kindOf(et.Unpacked())}))
+		ops, kinds, _ := c.operands(4)
+		c.emitBC(rExt, xArrayFill, 0, c.gcRec(regGC{ops: ops, opk: kinds, et: et, k: kindOf(et.Unpacked())}))
 	case opcode.ArrayCopy:
 		dti := c.r.u32()
 		c.r.u32()
-		ops, _ := c.operands(5)
-		c.emitBC(rExt, xArrayCopy, 0, c.gcRec(regGC{ops: ops, et: m.Types[dti].Array.Elem.Type}))
+		ops, kinds, _ := c.operands(5)
+		c.emitBC(rExt, xArrayCopy, 0, c.gcRec(regGC{ops: ops, opk: kinds, et: m.Types[dti].Array.Elem.Type}))
 	case opcode.ArrayInitData, opcode.ArrayInitElem:
 		ti := c.r.u32()
 		g := regGC{et: m.Types[ti].Array.Elem.Type, seg: c.r.u32(), data: op == opcode.ArrayInitData}
-		g.ops, _ = c.operands(4)
+		g.ops, g.opk, _ = c.operands(4)
 		c.emitBC(rExt, xArrayInit, 0, c.gcRec(g))
 	case opcode.RefI31:
-		ops, h := c.operands(1)
+		ops, _, h := c.operands(1)
 		c.fastResult(xRefI31F, module.Ref(module.HeapI31), h, ns(int(ops[0])), 0)
 	case opcode.I31GetS, opcode.I31GetU:
-		ops, h := c.operands(1)
+		ops, _, h := c.operands(1)
 		x := xI31GetU
 		if op == opcode.I31GetS {
 			x = xI31GetS
@@ -300,7 +310,7 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		c.castTarget(&g, hp)
 		if op == opcode.RefTest || op == opcode.RefTestNull {
 			var h int
-			g.ops, h = c.operands(1)
+			g.ops, g.opk, h = c.operands(1)
 			if n := len(c.out.gc); n <= 0xffff {
 				c.fastResult(xRefTestF, module.I32, h, rf(int(g.ops[0])), uint64(c.gcRec(g)))
 				return true
@@ -311,7 +321,7 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 		e := c.pop()
 		h := len(c.stack)
 		s := c.slotOf(e, h)
-		g.ops = []uint32{uint32(s)}
+		g.ops, g.opk = []uint32{uint32(s)}, uint16(vkRef)
 		if n := len(c.out.gc); n <= 0xffff {
 			c.emit(rExt, uint8(xRefCastF), rf(s), 0, uint64(c.gcRec(g)))
 		} else {
