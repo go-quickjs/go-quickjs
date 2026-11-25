@@ -281,6 +281,21 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 		}
 		inst.Tables[i] = tab
 	}
+	// The segments' references are charged before they are made, and
+	// given back as each segment is dropped: by an active segment's
+	// initialization, as a declarative one, or by elem.drop.
+	var elemBytes int64
+	for _, seg := range m.Elems {
+		if seg.Mode != module.ElemDeclarative {
+			elemBytes += int64(len(seg.Elems)) * refBytes
+		}
+	}
+	c, fits := reserveCharge(b, elemBytes)
+	if !fits {
+		return nil, b.exceeded()
+	}
+	inst.elemCharge = c
+	keepCharge(c, inst)
 	inst.elems = make([][]Ref, len(m.Elems))
 	for i, seg := range m.Elems {
 		if seg.Mode == module.ElemDeclarative {
@@ -311,11 +326,11 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 			return inst, &Trap{Code: TrapTableOutOfBounds}
 		}
 		copy(t.Elems[off:], refs)
-		inst.elems[i] = nil
+		inst.dropElem(uint32(i))
 	}
 	for i := range m.Elems {
 		if m.Elems[i].Mode == module.ElemDeclarative {
-			inst.elems[i] = nil
+			inst.dropElem(uint32(i))
 		}
 	}
 	for i, seg := range m.Datas {

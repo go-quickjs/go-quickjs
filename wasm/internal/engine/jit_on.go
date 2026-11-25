@@ -1664,7 +1664,7 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		checkRange(src, cnt, uint64(len(elems)), TrapElementSegmentOutOfBounds, uint64(at))
 		copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 	case opcode.ElemDrop:
-		inst.elems[a] = nil
+		inst.dropElem(a)
 	case opcode.TableCopy:
 		d64, s64 := tab64(a), tab64(b)
 		dst, src, cnt := arg(0, d64), arg(1, s64), arg(2, d64 && s64)

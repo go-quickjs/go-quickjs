@@ -127,4 +127,16 @@ type Instance struct {
 	// last count of its budget's that walked it, under the budget's mu:
 	// what a count that cannot walk it counts for it (Budget.recount).
 	budgetLive int64
+	// elemCharge is what the element segments' references hold of the
+	// budget, given back as each is dropped (dropElem).
+	elemCharge *charge
+}
+
+// dropElem drops element segment i, giving back what it held of the
+// instance's budget.
+func (inst *Instance) dropElem(i uint32) {
+	if e := inst.elems[i]; e != nil {
+		inst.elemCharge.giveBack(int64(len(e)) * refBytes)
+		inst.elems[i] = nil
+	}
 }

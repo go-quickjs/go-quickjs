@@ -468,6 +468,9 @@ heap with what its WebAssembly holds in it.
   fit fails to instantiate with "Out of memory: Cannot allocate Wasm memory
   for new instance", which unwraps to `wasm.ErrMemoryLimit` in Go; a
   `WebAssembly.Memory` that does not fit throws "could not allocate memory".
+- Element segments are counted as their references are made at
+  instantiation, 16 bytes each, and given back as each is dropped; a module
+  whose segments do not fit fails to instantiate with `ErrMemoryLimit`.
 - GC structs and arrays are counted as they are allocated. When the count
   would pass the limit, what is still reachable is counted again -- from the
   modules' globals, tables and segments and the running call's frames -- and

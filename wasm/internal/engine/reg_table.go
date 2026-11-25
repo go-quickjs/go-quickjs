@@ -259,7 +259,7 @@ func rhTableInit(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
 }
 
 func rhElemDrop(l unsafe.Pointer, w uint64, pc int32, f *frame) int32 {
-	f.inst.elems[uint32(w>>32)] = nil
+	f.inst.dropElem(uint32(w >> 32))
 	return pc + 1
 }
 
