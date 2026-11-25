@@ -397,11 +397,16 @@ func TestStrAppendRandom(t *testing.T) {
 	// each of -parallel's seeds, seeds 382 and 388 met with their six
 	// runtimes at once: the package's process peaked at 16 GB on a machine
 	// of 32 CPUs, and ran a runner of 16 GB out of memory beside the root
-	// package's tests.
+	// package's tests. Seeds 382 and 388 hold every slot (heavyOnly): under
+	// the JIT's stress 388 beside another seed had 7.3 GB live.
 	for seed := first; seed < first+count; seed++ {
 		t.Run(strconv.Itoa(seed), func(t *testing.T) {
 			t.Parallel()
-			heavy(t)
+			if seed == 382 || seed == 388 {
+				heavyOnly(t)
+			} else {
+				heavy(t)
+			}
 			src := strFuzzSource(seed)
 			var want string
 			if !t.Run("ref", func(t *testing.T) {
