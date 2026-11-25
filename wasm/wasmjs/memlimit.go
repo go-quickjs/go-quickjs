@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
 
 // Memory limits.
@@ -59,6 +60,53 @@ func (s *funcSlot) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	return size
 }
 
+// MemoryFootprint returns what the module holds: its copy of the module's
+// bytes, which its code, data and custom sections are ranges of, and the
+// records decoding made of the rest, once for each decoded module however
+// many objects stand for it. The register code its functions are compiled
+// to as they first run is not counted.
+func (md *moduleData) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
+	m := md.m
+	size := int64(unsafe.Sizeof(moduleData{})) + int64(cap(md.builtins))*int64(unsafe.Sizeof(builtin(0)))
+	if m == nil || has(unsafe.Pointer(m)) {
+		return size
+	}
+	size += int64(unsafe.Sizeof(module.Module{}))
+	if b := unsafe.SliceData(m.Bytes); b != nil && !has(unsafe.Pointer(b)) {
+		size += int64(cap(m.Bytes))
+	}
+	size += sliceBytes(m.Types) + sliceBytes(m.Canonical) + sliceBytes(m.Imports) +
+		sliceBytes(m.Functions) + sliceBytes(m.Tables) + sliceBytes(m.Memories) +
+		sliceBytes(m.Globals) + sliceBytes(m.Tags) + sliceBytes(m.Exports) +
+		sliceBytes(m.Elems) + sliceBytes(m.Datas) + sliceBytes(m.Customs)
+	for _, t := range m.Types {
+		switch {
+		case t.Func != nil:
+			size += int64(unsafe.Sizeof(*t.Func)) + sliceBytes(t.Func.Params) + sliceBytes(t.Func.Results)
+		case t.Struct != nil:
+			size += int64(unsafe.Sizeof(*t.Struct)) + sliceBytes(t.Struct.Fields)
+		case t.Array != nil:
+			size += int64(unsafe.Sizeof(*t.Array))
+		}
+	}
+	for _, e := range m.Elems {
+		size += sliceBytes(e.Elems)
+	}
+	for _, i := range m.Imports {
+		size += int64(len(i.Module) + len(i.Name))
+	}
+	for _, e := range m.Exports {
+		size += int64(len(e.Name))
+	}
+	return size
+}
+
+// sliceBytes returns what the backing array of s takes.
+func sliceBytes[T any](s []T) int64 {
+	var zero T
+	return int64(cap(s)) * int64(unsafe.Sizeof(zero))
+}
+
 func (d *instanceData) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	return d.inst.MemoryFootprint(has)
 }
@@ -85,6 +133,7 @@ func (d *exceptionData) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 
 var (
 	_ vm.HostSized = (*funcSlot)(nil)
+	_ vm.HostSized = (*moduleData)(nil)
 	_ vm.HostSized = (*instanceData)(nil)
 	_ vm.HostSized = (*memoryData)(nil)
 	_ vm.HostSized = (*tableData)(nil)

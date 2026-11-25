@@ -4,6 +4,7 @@ package wasmjs_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs"
@@ -130,5 +131,35 @@ func TestMemoryLimitTable(t *testing.T) {
 	_, err := rt.Eval(`try { new WebAssembly.Table({element: "externref", initial: 5000000}); } catch {}`)
 	if !errors.Is(err, quickjs.ErrMemoryLimit) {
 		t.Fatalf("got %v, want ErrMemoryLimit", err)
+	}
+}
+
+// TestMemoryLimitCountsModules checks that the meter's walk counts what a
+// WebAssembly.Module holds -- its copy of the module's bytes among it -- so
+// that a script holding modules under a limit is stopped as one holding
+// any other memory is: 64 modules of 1 MiB each, under a limit of 32 MiB,
+// were never counted. One that lets them go runs.
+func TestMemoryLimitCountsModules(t *testing.T) {
+	const script = `
+		const n = 1 << 20, leb = [];
+		for (let v = n + 2; ; v >>>= 7) { if (v < 128) { leb.push(v); break; } leb.push(v & 127 | 128); }
+		// A module of a custom section named "x" of n bytes.
+		const bytes = new Uint8Array(8 + 1 + leb.length + 2 + n);
+		bytes.set([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 0, ...leb, 1, 0x78]);
+		let modules = [];
+		for (let i = 0; i < 64; i++) {
+			const m = new WebAssembly.Module(bytes);
+			if (KEEP) modules.push(m);
+			for (let j = 0; j < 2000; j++) modules.length;
+			new Array(1000).fill(i);
+		}
+		modules.length`
+	rt := newRuntime(t, quickjs.WithMemoryLimit(32<<20))
+	if _, err := rt.Eval(strings.Replace(script, "KEEP", "true", 1)); !errors.Is(err, quickjs.ErrMemoryLimit) {
+		t.Fatalf("holding 64 MiB of modules: got %v, want ErrMemoryLimit", err)
+	}
+	rt = newRuntime(t, quickjs.WithMemoryLimit(32<<20))
+	if v, err := rt.Eval(strings.Replace(script, "KEEP", "false", 1)); err != nil || v.String() != "0" {
+		t.Fatalf("letting the modules go: got %v, %v; want 0", v, err)
 	}
 }

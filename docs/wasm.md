@@ -519,7 +519,10 @@ heap with what its WebAssembly holds in it.
 - Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
   each WebAssembly object it reaches what it holds, and a memory's buffer is
   counted by the memory's size, not the address space reserved for it. A
-  `WebAssembly.Table` that does not fit stops the script, as an allocation of
+  `WebAssembly.Module` counts its copy of the module's bytes and what
+  decoding made of them, once however many objects stand for the same
+  compiled module; the register code its functions are compiled to as
+  they first run is not counted. A `WebAssembly.Table` that does not fit stops the script, as an allocation of
   a size the script chose does. A shared memory another runtime can grow --
   one cloned to it, or one whose growable buffer was made, which can be --
   is no longer charged as it grows, since its grows run on that runtime's
