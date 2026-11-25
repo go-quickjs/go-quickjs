@@ -3737,7 +3737,16 @@ func (r *Runtime) jitRegPropertyMade(f *frame, w bytecode.RInstr, key Atom, obj,
 		if v, ok := plainOwn(o, key); ok {
 			return v, nil
 		}
-		if v, ok, err := r.cachedGet(c, o, key); ok {
+		if op := w.Op(); op == bytecode.RGetMethod || op == bytecode.RGetMethodW {
+			// A method's read, as the interpreter's (regGetMethod), by
+			// cachedProp, whose entries are data: cachedGet fills the cache
+			// with a getter's entry, which the interpreter's get_method_w
+			// then took for the method itself -- the getter's pair, called:
+			// "object is not a function".
+			if v, ok := r.cachedProp(c, o, key); ok {
+				return v, nil
+			}
+		} else if v, ok, err := r.cachedGet(c, o, key); ok {
 			return v, err
 		}
 	}

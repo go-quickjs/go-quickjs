@@ -1092,9 +1092,18 @@ speculation failed before (the builder's `generic`) only where what came
 before it in its origin committed as built: after a read built to call
 nothing, `add_prop`'s addition speculates on numbers, its exit running the
 instruction again from its start. So that it may, a read its origin goes on
-after is never built to call Go at a megamorphic site's miss, but leaves for
-Go there (the builder's `originGoesOn`): built to call, its addition would
-have been Go's, which may leave, and the program refused.
+after with an instruction that may leave is never built to call Go at a
+megamorphic site's miss, but leaves for Go there (the builder's
+`originGoesOn`): built to call, its addition would have been Go's, which may
+leave, and the program refused. Copies never leave: `get_method_w`'s read,
+which the method's and the receiver's copies into the call's window follow,
+calls Go at its miss as a `get_prop`'s does, Go reading the method as the
+interpreter's method read does, through the site's cache by its data
+entries (the VM's `jitRegPropertyMade`, `cachedProp`) -- a getter's entry
+there the interpreter would take for the method itself. Each such miss had
+left native code: Octane's Typescript, reading `typeCheck`, `emit` and
+`isClass` of AST nodes of more shapes than the megamorphic cache kept,
+about 330 times a run.
 
 **Windows.** A call, `call_w`'s, `call_method_w`'s or `new_w`'s, and a
 `typeof` read their operands from the window's registers, in order -- the

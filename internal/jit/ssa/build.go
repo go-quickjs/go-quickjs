@@ -8141,17 +8141,28 @@ func (b *builder) atomicInstruction(blk *Block, pc int) {
 	b.atomic = false
 }
 
-// originGoesOn reports whether the instruction at pc is not the last of
-// its register instruction's (ir.Program's Origin) -- add_prop's read,
-// which its addition and its write follow. Such a read is not built to
-// call Go at a megamorphic site's miss, which would commit it
-// (commitsBuilt), the addition after it then generic, Go's, which may
+// originGoesOn reports whether the instruction at pc is followed, within
+// its register instruction's (ir.Program's Origin), by one that may leave
+// -- add_prop's read, which its addition and its write follow. Such a read
+// is not built to call Go at a megamorphic site's miss, which would commit
+// it (commitsBuilt), the addition after it then generic, Go's, which may
 // leave, and the program refused for an exit after a commit (atomicErr):
 // it leaves for Go at the miss instead, before anything committed, as a
-// site Go's calls may not serve does.
+// site Go's calls may not serve does. Copies, which never leave, are no
+// such instruction: get_method_w's read, which the method's and the
+// receiver's copies into the call's window follow, calls Go at its miss
+// as a get_prop's does.
 func (b *builder) originGoesOn(pc int) bool {
 	o := b.p.Origin
-	return o != nil && pc+1 < len(o) && o[pc+1] == o[pc]
+	if o == nil {
+		return false
+	}
+	for q := pc + 1; q < len(o) && o[q] == o[pc]; q++ {
+		if b.p.Code[q].Op != ir.Copy {
+			return true
+		}
+	}
+	return false
 }
 
 // readCalled notes that the read at pc of the frame being translated, of
