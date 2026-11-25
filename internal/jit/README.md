@@ -211,6 +211,15 @@ property reads, each with its own origin, feedback site and frame state.
 Their combined dispatch and omitted intermediate store belong to the
 native interpreter; an exit from compiled code can resume at either read.
 
+A property's value is read as a number where what uses it asks for one --
+arithmetic, a comparison, an element's index -- which the lowering finds
+by a scan back over the code (`selectNumericProperties`), and as a
+reference, tagged, elsewhere. A store, an element's as a property's, takes
+its value as it is: a property read only stored stays tagged, where read
+for a number it would leave native code at every other value it met. An
+element read only stored keeps its numeric read, which reads the element
+by its cell once its guard has failed (ssa's `referenceReads`).
+
 Where a register instruction's operands are a run of registers that is not
 where its result goes -- `new_array`'s elements, `concat`'s parts -- they
 are copied to scratch slots first, which the operation reads as a run of

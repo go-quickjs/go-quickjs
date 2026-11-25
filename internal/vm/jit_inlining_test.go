@@ -199,11 +199,11 @@ func (b jitBoth) agree(t *testing.T, rounds ...string) {
 // An inlined callee's speculations are those its own code learned: a
 // failure its own code met is built generic where it is inlined too, as
 // it is in its own code (jitRegFeedback's Generic, regLearned). take's
-// read of
-// t.next, an object stored as an element, had been read for a number in
-// every caller that inlined take, though take's own code had learned it
-// was not one: each call left native code, until the call was no longer
-// inlined -- AWFY Towers' popDiskFrom.
+// read of t.bump, a string it reads for a number (| 0), fails in its own
+// code: had every caller that inlined take read it for a number still,
+// each call would leave native code until the call was no longer inlined
+// -- AWFY Towers' popDiskFrom, whose read of an object stored as an
+// element had been read for a number so.
 func TestJITInlinedCalleeKeepsItsFailures(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -212,9 +212,9 @@ func TestJITInlinedCalleeKeepsItsFailures(t *testing.T) {
 	defer holdCollectorNow(t)()
 	inlined := jitInlinedForTest(t)
 	both := jitBothForTest(t, `
-		function D(v) { this.v = v; this.next = null }
+		function D(v) { this.v = v; this.next = null; this.bump = "0" }
 		function Q() { this.slots = [null, null] }
-		Q.prototype.take = function (i) { const t = this.slots[i]; this.slots[i] = t.next; t.next = null; return t }
+		Q.prototype.take = function (i) { const t = this.slots[i]; i += t.bump | 0; this.slots[i] = t.next; t.next = null; return t }
 		Q.prototype.put = function (i, d) { d.next = this.slots[i]; this.slots[i] = d }
 		function own(q, n) { const take = Q.prototype.take; let s = 0; for (let k = 0; k < n; k++) { const d = take.call(q, 0); s += d.v; q.put(0, d) } return s }
 		function cycle(q, n) { let s = 0; for (let k = 0; k < n; k++) { q.put(1, q.take(0)); q.put(0, q.take(1)); s += q.slots[0].v } return s }

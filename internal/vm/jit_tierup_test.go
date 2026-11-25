@@ -1184,3 +1184,37 @@ func TestJITInlinedLiterals(t *testing.T) {
 		t.Errorf("each left native code %d times", n)
 	}
 }
+
+// An element's store takes a property's value as it is: the read stays
+// tagged and native whatever it finds -- a string, null, undefined, a
+// boolean, a number or an object -- where read for a number it had
+// speculated on one and left native code at every other value. With the
+// collector idle and marking; each answer the interpreter's.
+func TestJITPropertyStoredAsElement(t *testing.T) {
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r, run := jitTierRuntimeForTest(t, 8, `
+				var o = { x: "5" }, a = [0, 0, 0, 0];
+				function store(o, a) {
+					for (let i = 0; i < 4; i++) a[i] = o.x;
+					return a[0] === o.x && a[3] === o.x;
+				}`)
+			for range 32 {
+				run(`store(o, a)`)
+			}
+			e := jitNativeForTest(t, r, "store")
+			if e.deopts != 0 {
+				t.Fatalf("the store deoptimized %d times", e.deopts)
+			}
+			for _, value := range []string{`"7"`, `null`, `undefined`, `true`, `42`, `{valueOf(){throw new RangeError("coerce")}}`} {
+				run(`(o.x = ` + value + `, store(o, a))`)
+				if e.deopts != 0 {
+					t.Fatalf("storing %s deoptimized %d times", value, e.deopts)
+				}
+			}
+		})
+	}
+}

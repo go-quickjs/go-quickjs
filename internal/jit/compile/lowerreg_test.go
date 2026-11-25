@@ -290,3 +290,46 @@ function sw(x) { switch (x) { case 1: return 10; case 2: case 3: return 20; defa
 		}
 	}
 }
+
+// An element's store takes its value as it is, as a property's does: a
+// property read only stored is read as a reference, not for a number it
+// need not be, and one that arithmetic or an index uses for a number; an
+// element read only stored keeps its numeric read, which its feedback
+// makes a reference once its guard has failed (ssa's referenceReads).
+func TestLowerRegStoredValues(t *testing.T) {
+	fns := regCompiled(t, `
+		function property(a, o) { let x = o.x; a[0] = x }
+		function numeric(a, o) { a[0] = o.x * 2 }
+		function index(a, o) { a[o.x] = 1 }
+		function element(a, b) { let x = b[0]; a[0] = x }`)
+	for _, tt := range []struct {
+		name string
+		op   ir.Op
+	}{
+		{"property", ir.ReferenceRead},
+		{"numeric", ir.PropertyRead},
+		{"index", ir.PropertyRead},
+		{"element", ir.ArrayRead},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := fns[tt.name]
+			p, err := LowerReg(fn.RegCode(), fn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := 0
+			for _, in := range p.Code {
+				if in.Op != ir.PropertyRead && in.Op != ir.ReferenceRead && in.Op != ir.ArrayRead {
+					continue
+				}
+				reads++
+				if in.Op != tt.op || in.Reference {
+					t.Errorf("read = %v, reference %v; want %v, not a reference", in.Op, in.Reference, tt.op)
+				}
+			}
+			if reads != 1 {
+				t.Fatalf("%d reads, want 1", reads)
+			}
+		})
+	}
+}

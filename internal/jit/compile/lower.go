@@ -179,7 +179,9 @@ func paramCaptured(fn *bytecode.Function) bool {
 // which Go takes from the frame -- stays native there, as a global's cell or
 // a reference, rather than add an exit.
 func selectNumericProperties(p *ir.Program, cells bool) {
-	const number, reference uint8 = 1, 2
+	// What a slot's value is read for after: a number, a receiver, or
+	// only to be stored as an element.
+	const number, reference, stored uint8 = 1, 2, 4
 	// On the stack for a function of up to 256 slots, as nearly all are.
 	var room [256]uint8
 	needed := room[:]
@@ -254,7 +256,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 				read(in.Left, number)
 			}
 		case ir.ArrayRead, ir.ArrayUpdate, ir.ArrayLength:
-			if kind := take(in.Dest); cells && in.Op != ir.ArrayLength && kind&number == 0 {
+			if kind := take(in.Dest); cells && in.Op != ir.ArrayLength && kind&(number|stored) == 0 {
 				in.Reference = true
 				p.Code[pc] = in
 			}
@@ -269,7 +271,17 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			read(in.Left, reference)
 			read(in.Right, number)
 			if in.Op == ir.ArrayWrite {
-				read(in.Third, number)
+				if cells {
+					// The new pipeline stores any value, as a property's
+					// store does: a property read only stored is read as a
+					// reference, not for a number it need not be, and an
+					// element read only stored keeps its numeric read, which
+					// its feedback makes a reference once its guard has
+					// failed (ssa's referenceReads).
+					read(in.Third, stored)
+				} else {
+					read(in.Third, number)
+				}
 			}
 		case ir.PropertyWrite:
 			read(in.Left, reference)
