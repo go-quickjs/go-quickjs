@@ -569,6 +569,32 @@ func (r *Runtime) jitRegCallSeen(f *frame, c *regCode, e *jitRegEntry, rpc int, 
 	return r.jitRegCallSeenOf(f, c, e, rpc, callee, false)
 }
 
+// jitRegSharedArrow is callee, the function a call of argc arguments
+// called, and its closure, where it is an arrow that shares a derived
+// constructor's this binding (funcExtra's lexThisRef), bound, which native
+// callers may call: no site's cache holds one -- what it gives as this is
+// the binding's, not a value the cache keeps (regCallKind) -- and the call
+// path runs it by callDirect, which counts no budget of its. A native call
+// gives it the binding's value, checked bound at each call (mir's
+// arrowBound), so the call learns it from the function it called, as V8's
+// call feedback holds the closure whatever its context; nil for any
+// other.
+func (r *Runtime) jitRegSharedArrow(callee Value, argc int) (*Object, *closure) {
+	if !callee.IsObject() {
+		return nil, nil
+	}
+	o := callee.Object()
+	fd := o.fn()
+	if fd == nil || !fd.arrow || fd.closure == nil || fd.extra == nil || fd.extra.lexThisRef == nil || !fd.extra.lexThisRef.init {
+		return nil, nil
+	}
+	cl := fd.closure
+	if cl.reg == nil || !r.jitRegCallable(o, cl, cl.reg, argc) {
+		return nil, nil
+	}
+	return o, cl
+}
+
 // jitRegCallSeenOf is jitRegCallSeen, where applied says the call, an
 // apply_args, was through the realm's apply, as its call of Go checked
 // (jitRegForwardMade): its window's registers native code may not have
@@ -600,7 +626,10 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 		}
 		ce := &calls[w.C()]
 		if !jitRegCallKind(ce) || ce.rc != ce.cl.reg || !r.jitRegCallable(ce.callee, ce.cl, ce.rc, int(w.X())) {
-			return false
+			if o, cl = r.jitRegSharedArrow(callee, int(w.X())); o == nil {
+				return false
+			}
+			break
 		}
 		o, cl = ce.callee, ce.cl
 	case bytecode.RApplyArgs:

@@ -1724,17 +1724,30 @@ func (l *regLowering) lowerCold(pc int, w bytecode.RInstr) {
 		// register 1's and the this slot's from here.
 		l.emit(ir.Instruction{Op: ir.Host, Window: true, Extra: int(b), Left: reg(w.C()), Dest: int(a)}, false)
 	case bytecode.RThis, bytecode.RCheckThis:
-		if l.this < 0 {
+		this := l.this
+		if this < 0 && l.fn.Kind == bytecode.KindArrow {
+			// An arrow of a derived constructor's, which shares its this
+			// binding or captured its value: its register 1, the value
+			// bound, wherever its code runs -- Go enters it only once the
+			// binding it shares is bound, writing the value there
+			// (jitRegThisBound), and a native call only so, giving it the
+			// value (mir's arrowBound) -- and a bound binding changes no
+			// more. Checked all the same, as V8's code checks the hole of
+			// the this its context holds.
+			this = 1
+		}
+		if this < 0 {
 			l.emit(l.hostAt(pc), false)
 			break
 		}
-		// A derived constructor's this binding, the this slot: checked
-		// bound, Go's where not, which throws (ssa's this check).
+		// A derived constructor's this binding, the this slot, or an
+		// arrow's register 1: checked bound, Go's where not, which throws
+		// (ssa's this check).
 		dest := int(a)
 		if sub == bytecode.RCheckThis {
 			dest = l.temp()
 		}
-		l.emit(ir.Instruction{Op: ir.Copy, Dest: dest, Left: ir.Slot(l.this), Check: true, CheckSlot: l.this}, false)
+		l.emit(ir.Instruction{Op: ir.Copy, Dest: dest, Left: ir.Slot(this), Check: true, CheckSlot: this}, false)
 	case bytecode.RDerivedRet:
 		if l.this < 0 || !l.undefinedAt(pc, int(a)) {
 			// Anything but undefined returned -- an object, or what the

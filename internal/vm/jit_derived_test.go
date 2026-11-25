@@ -691,7 +691,6 @@ func TestJITDerivedNativeConstructArrows(t *testing.T) {
 // answer is the interpreter's, and the loop calling the bound arrows makes
 // no call of Go.
 func TestJITArrowSharedBindingCalled(t *testing.T) {
-	t.Skip("register JIT gap: arrows sharing a binding are called through Go: callAll makes 548 calls of Go a round, not none (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -735,4 +734,61 @@ func TestJITArrowSharedBindingCalled(t *testing.T) {
 		t.Errorf("callAll made %d calls of Go in a round, want none", d)
 	}
 	jitDifferential(t, setup+`; [callAll(10), us(80), callAll(10), drive(10), early(5), drive(5)].join()`)
+}
+
+// An arrow a derived constructor made in a frame of the VM's, sharing
+// its this binding, bound, is learned at a native call from the function
+// called, which no site's cache holds (jitRegSharedArrow), given code for
+// its native callers (jitRegKnownCallee), and called natively; its own
+// code reads this by this_bound as its register 1, which holds the value
+// bound wherever the code runs -- Go enters it only once the binding is
+// bound, writing the value there (jitRegThisBound), a native call only so
+// (mir's arrowBound) -- checked, Go throwing where it is not, as V8's
+// code checks the hole of the this its context holds. Before, a call of
+// one was Go's at every call: its site learned nothing, and its code,
+// called natively, left native code at every read of this (jitRegWhole
+// leaves a level's this to the exit), judged to leave too often. Every
+// answer is the interpreter's, one read before super() throwing its
+// ReferenceError, and each call of the loop's is native.
+func TestJITArrowSharedBindingNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A { constructor(x) { this.x = x } }
+		class H extends A { constructor(x) { super(x); this.h = () => this.x * 2 } }
+		class E extends A { constructor(x) { const f = () => this.x; f(); super(x) } }
+		// Made in the interpreter (with is no native code's), whose arrows
+		// share the binding.
+		function mk(i) { with ({}) { return new H(i) } }
+		var hs = []
+		for (let i = 0; i < 40; i++) hs.push(mk(i))
+		function callAll(n) { let s = 0; for (let k = 0; k < n; k++) for (let j = 0; j < hs.length; j++) s += hs[j].h(); return s }
+		function early() { try { with ({}) new E(1) } catch (e) { return e.constructor.name } }`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `callAll(20)`, `early()`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	v, err := r.Run(compileForTest(t, `hs[0].h`))
+	if err != nil || !v.IsObject() || v.Object().fn() == nil {
+		t.Fatalf("hs[0].h: %v, %v", v, err)
+	}
+	cl := v.Object().fn().closure
+	m := jitNativeForTest(t, r, "callAll")
+	runtime.GC()
+	defer holdCollectorNow(t)()
+	in, goCalls := jitLinkInForTest(r, cl), m.ssaStats.goCalls
+	if v, err := r.Run(compileForTest(t, `''+callAll(20)`)); err != nil || v.String().Go() != "31200" {
+		t.Fatalf("callAll(20) = %s, %v; want 31200", v.String().Go(), err)
+	}
+	if d := jitLinkInForTest(r, cl) - in; d != 800 {
+		t.Errorf("the arrows were called natively %d times in a round of 800", d)
+	}
+	if d := m.ssaStats.goCalls - goCalls; d != 0 {
+		t.Errorf("callAll made %d calls of Go in a round, want none", d)
+	}
+	if v, err := r.Run(compileForTest(t, `early()`)); err != nil || v.String().Go() != "ReferenceError" {
+		t.Errorf("early() = %s, %v; want ReferenceError", v.String().Go(), err)
+	}
 }

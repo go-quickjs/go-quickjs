@@ -1858,7 +1858,14 @@ An arrow made from its pool takes its maker's register 1 as its this
 constructor's this binding (`funcExtra`'s `lexThisRef`) runs natively only
 once the binding is bound (`jitRegThisBound`), its register 1 made the
 value bound: bound, the binding is fixed -- a second `super()` throws --
-so capturing its value is exact.
+so capturing its value is exact. Such an arrow's own `this_bound` and
+`check_this_init` read its register 1, checked bound, Go throwing the
+`ReferenceError` where it is not: wherever its code runs, register 1 is
+the value bound -- Go enters it so, and a native call of it, which no
+site's cache holds and the call learns from the function it called
+(`jitRegSharedArrow`), gives it the value once the binding is bound
+(`mir`'s `arrowBound`) -- as V8's code checks the hole of the this its
+context holds.
 
 A call of a closure that captures bindings checks the function the callee
 runs, in its environment and realm, not the object (`ssa.CallSite`'s
