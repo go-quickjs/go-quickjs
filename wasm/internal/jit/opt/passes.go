@@ -249,6 +249,8 @@ func fold(f *Func) {
 				i += narrow(f, v, i)
 			case OpDivS, OpDivU, OpRemS, OpRemU:
 				i += divConst(f, v, i)
+			case OpEqz:
+				i += eqzEqz(f, v, i)
 			}
 		}
 	}
@@ -342,6 +344,28 @@ func foldValue(ws *workspace, v *Value) {
 			v.setCopy(y)
 		}
 	}
+}
+
+// eqzEqz makes eqz of an eqz of x -- Go's code's test of a bool it made
+// from a comparison with zero -- x != 0, a comparison that a branch on it
+// fuses with, where it was two tests and two SETcc. v is block's value i;
+// eqzEqz returns the number of values it puts before it, the zero it
+// makes.
+func eqzEqz(f *Func, v *Value, i int) int {
+	a := resolve(v.Args[0])
+	if a.Op != OpEqz {
+		return 0
+	}
+	x := resolve(a.Args[0])
+	b := v.Block
+	c := f.value(b, OpConst, x.Type, nil)
+	n := len(b.Values)
+	b.Values = appendA(&f.ws.vals, b.Values, c)
+	copy(b.Values[i+1:], b.Values[i:n])
+	b.Values[i] = c
+	v.Op = OpNe
+	f.setArgs(v, x, c)
+	return 1
 }
 
 // narrow makes i32.wrap_i64 of a 64-bit operation of extended i32s and

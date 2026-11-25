@@ -564,3 +564,29 @@ func TestOptGlobalSetsOverwritten(t *testing.T) {
 		t.Fatal("run not optimized")
 	}
 }
+
+// An eqz of an eqz is the value's comparison with zero, as a value and as
+// a branch's condition, of i32s and i64s.
+func TestOptEqzEqz(t *testing.T) {
+	const src = `(module
+  (func (export "v32") (param $x i32) (result i32) (i32.eqz (i32.eqz (local.get $x))))
+  (func (export "v64") (param $x i64) (result i32) (i32.eqz (i64.eqz (local.get $x))))
+  (func (export "both") (param $x i64) (result i32)
+    (local $z i32)
+    (local.set $z (i64.eqz (local.get $x)))
+    (i32.add (local.get $z) (i32.eqz (local.get $z))))
+  (func (export "br") (param $x i64) (param $y i32) (result i32)
+    (if (result i32) (i32.eqz (i64.eqz (local.get $x)))
+      (then (if (result i32) (i32.eqz (i32.eqz (local.get $y))) (then (i32.const 3)) (else (i32.const 2))))
+      (else (i32.const 1)))))`
+	var calls []jitCall
+	for _, x := range []uint64{0, 1, 0xffffffff, 0x1_0000_0000, ^uint64(0)} {
+		calls = append(calls,
+			jitCall{name: "v32", args: []uint64{x}},
+			jitCall{name: "v64", args: []uint64{x}},
+			jitCall{name: "both", args: []uint64{x}},
+			jitCall{name: "br", args: []uint64{x, x >> 32}},
+			jitCall{name: "br", args: []uint64{x, x}})
+	}
+	optSameAsInterpreter(t, src, calls)
+}
