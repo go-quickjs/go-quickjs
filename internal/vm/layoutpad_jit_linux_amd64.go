@@ -8,7 +8,7 @@ package vm
 // stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a
 // data lever's variables.
 const (
-	layoutPadNA   = 630
+	layoutPadNA   = 607
 	layoutPadNGA  = -1
 	layoutPadNMA  = -1
 	layoutPadNI   = 854
@@ -20,7 +20,7 @@ const (
 	layoutPadNT   = 525
 	layoutPadNGT  = -1
 	layoutPadNMT  = -1
-	layoutPadNJE  = 594
+	layoutPadNJE  = 8
 	layoutPadNGJE = -1
 	layoutPadNMJE = -1
 	layoutPadNJP  = 598
@@ -35,7 +35,7 @@ const (
 	layoutPadNTA  = 575
 	layoutPadNGTA = -1
 	layoutPadNMTA = -1
-	layoutPadNCB  = 351
+	layoutPadNCB  = 342
 	layoutPadNGCB = -1
 	layoutPadNMCB = -1
 	layoutPadNC   = 406
@@ -53,25 +53,25 @@ const (
 	layoutPadNB   = 484
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
-	layoutPadNJB  = 543
+	layoutPadNJB  = 534
 	layoutPadNGJB = -1
 	layoutPadNMJB = -1
 	layoutPadNJU  = 4
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
-	layoutPadNJ   = 260
+	layoutPadNJ   = 754
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNJN  = 228
+	layoutPadNJN  = 690
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 36
+	layoutPadNJS  = 360
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNN   = 461
+	layoutPadNN   = 840
 	layoutPadNGN  = -1
 	layoutPadNMN  = -1
-	layoutPadNP   = 484
+	layoutPadNP   = 488
 	layoutPadNGP  = -1
 	layoutPadNMP  = -1
 	layoutPadNQ   = 456
@@ -89,7 +89,7 @@ const (
 	layoutPadNV   = 594
 	layoutPadNGV  = -1
 	layoutPadNMV  = -1
-	layoutPadNVT  = 4
+	layoutPadNVT  = 589
 	layoutPadNGVT = -1
 	layoutPadNMVT = 589
 	layoutPadNK   = 409
@@ -107,20 +107,20 @@ const (
 	layoutPadNSH  = 589
 	layoutPadNGSH = -1
 	layoutPadNMSH = -1
-	layoutPadNR   = 699
+	layoutPadNR   = 114
 	layoutPadNGR  = -1
 	layoutPadNMR  = -1
 	layoutPadNS   = 630
 	layoutPadNGS  = -1
 	layoutPadNMS  = -1
-	layoutPadNZ   = 360
+	layoutPadNZ   = 356
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
 	layoutPadNCZ  = 850
-	layoutPadNHJ  = 303
+	layoutPadNHJ  = 299
 	layoutPadNH   = 116
 	layoutPadNHT  = 129
-	layoutPadNDH  = 2
+	layoutPadNDH  = 4
 	layoutPadNDW  = 1
 	layoutPadNDG  = 0
 )
