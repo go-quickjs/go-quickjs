@@ -306,7 +306,9 @@ and messages of V8 (Node 26), word for word, prefixes included
   `WebAssembly.promising`. A promising call's wasm runs on a goroutine of its
   own; script runs only on the runtime's goroutine, which serves the wasm
   goroutine's imports and suspensions, so that one of the two runs at a time.
-  A call suspended for good ends its goroutine once nothing holds what would
+  An error such a call throws before it first suspends -- an import's, a
+  trap, the stack's exhaustion -- shows its wasm frames in its `stack`, as a
+  direct call's does. A call suspended for good ends its goroutine once nothing holds what would
   resume it, and `Close` ends every suspended call's before it returns;
 - structured cloning, by `postMessage` to a worker and by `structuredClone`:
   a `Module` clones as a `Module` of the same compiled code, which the

@@ -120,6 +120,9 @@ type jspiStack struct {
 	// behalf has made and that are running, which a suspension cannot
 	// suspend through.
 	jsFrames int
+	// act is the call's activation: the frames its trace gives while it
+	// runs, and those a trap left.
+	act *activation
 	// handle is what the reactions waiting on a suspension hold: once
 	// nothing does, the stack can never resume, and its goroutine is ended.
 	handle *stackHandle
@@ -252,17 +255,20 @@ func (a *api) promising(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 		return vm.Undefined, t.typeError("Argument 0 must be a WebAssembly exported function")
 	}
 	f := s.fn
+	ps := &funcSlot{fn: f, promising: true, a: a}
 	o := rt.NewFunc(strconv.FormatUint(uint64(f.Index), 10), len(f.Sig.Params),
 		func(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
-			return a.callPromising(f, args)
+			return a.callPromising(ps, args)
 		})
-	vm.HostSetSlot(rt, o, &funcSlot{fn: f, promising: true, a: a})
+	vm.HostSetSlot(rt, o, ps)
 	return vm.Obj(o), nil
 }
 
-// callPromising calls f on a stack of its own and returns the promise of
-// its result.
-func (a *api) callPromising(f *engine.Function, args []vm.Value) (vm.Value, error) {
+// callPromising calls fs's function on a stack of its own and returns the
+// promise of its result. Until the call suspends or ends, it is one of
+// fs's running calls, whose wasm frames a stack trace shows.
+func (a *api) callPromising(fs *funcSlot, args []vm.Value) (vm.Value, error) {
+	f := fs.fn
 	sig := f.Sig
 	if !jsCompatible(sig) {
 		return vm.Undefined, a.rt.ThrowTypeError("%s", msgJSType)
@@ -275,8 +281,14 @@ func (a *api) callPromising(f *engine.Function, args []vm.Value) (vm.Value, erro
 		}
 		vals[i] = v
 	}
+	act := &activation{}
+	fs.calls = append(fs.calls, act)
+	defer func() {
+		fs.calls[len(fs.calls)-1] = nil
+		fs.calls = fs.calls[:len(fs.calls)-1]
+	}()
 	s := &jspiStack{a: a, sig: sig, result: a.rt.NewHostPromise(),
-		toJS: make(chan stackMsg), toWasm: make(chan error)}
+		toJS: make(chan stackMsg), toWasm: make(chan error), act: act}
 	life := &stackLife{canceled: make(chan struct{}), ended: make(chan struct{})}
 	ctx := &stackContext{r: a.rt, toJS: s.toJS, toWasm: s.toWasm, canceled: life.canceled}
 	s.handle = &stackHandle{s: s}
@@ -285,7 +297,7 @@ func (a *api) callPromising(f *engine.Function, args []vm.Value) (vm.Value, erro
 	a.jspi.started(a.qrt, life)
 	go func() {
 		defer a.jspi.ended(life)
-		res, err := engine.Invoke(ctx, f, vals)
+		res, err := engine.InvokeTraced(ctx, f, vals, &act.trace)
 		select {
 		case ctx.toJS <- stackMsg{done: true, results: res, err: err}:
 		case <-ctx.canceled:
@@ -323,6 +335,15 @@ func (a *api) service(s *jspiStack) error {
 			return nil
 		default:
 			if m.err != nil {
+				if t, ok := m.err.(*engine.Trap); ok {
+					// The error is made while the call may still be
+					// its function's: its trace shows the frames the
+					// trap left.
+					s.act.trapped = t.Frames
+					if s.act.trapped == nil {
+						s.act.trapped = []engine.Frame{}
+					}
+				}
 				err := a.runError(m.err)
 				if v, ok := thrownValue(err); ok {
 					s.result.Reject(v)

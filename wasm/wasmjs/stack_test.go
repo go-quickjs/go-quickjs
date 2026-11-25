@@ -84,3 +84,50 @@ func TestStackTrapFrames(t *testing.T) {
 		t.Fatalf("stack:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestStackPromisingFrames pins that a call through WebAssembly.promising
+// shows its wasm frames in a stack trace as a direct call does: an error an
+// import throws, a trap, and the stack's exhaustion, each before the call
+// suspends. Node 26 prints the same lines for the same script.
+func TestStackPromisingFrames(t *testing.T) {
+	rt := newRuntime(t)
+	bytes := watBytes(t, `(module $mod
+		(import "e" "f" (func $f))
+		(func $inner (export "inner") call $f)
+		(func $trap (export "trap") unreachable)
+		(func $deep (export "deep") call $deep))`)
+	got := eval(t, rt, promisingFramesScript(bytes))
+	want := `inner: TypeError: from f | at f (script) | at mod.inner (wasm://wasm/mod-0f7e68ce:wasm-function[1]:0x3b)
+trap: RuntimeError: unreachable | at mod.trap (wasm://wasm/mod-0f7e68ce:wasm-function[2]:0x40)
+deep: RangeError: Maximum call stack size exceeded | at mod.deep (wasm://wasm/mod-0f7e68ce:wasm-function[3]:0x43) | at mod.deep (wasm://wasm/mod-0f7e68ce:wasm-function[3]:0x44)`
+	if got != want {
+		t.Fatalf("stacks:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// promisingFramesScript is a script that calls each of the exports inner,
+// trap and deep of the module of bytes through WebAssembly.promising and
+// sets out to the head of each rejection's stack -- its message and the
+// frames down to the first that is neither the import's nor wasm's --
+// noting where it differs from a direct call's.
+func promisingFramesScript(bytes string) string {
+	return `
+		const bytes = ` + bytes + `;
+		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes),
+			{e: {f() { throw new TypeError("from f"); }}}).exports;
+		const head = x => {
+			const ls = x.stack.split("\n").map(l => l.trim().replace(/^at f \(.*\)$/, "at f (script)"));
+			const n = ls.findIndex((l, i) => i > 0 && !l.includes("wasm://") && l !== "at f (script)");
+			return ls.slice(0, Math.min(n < 0 ? ls.length : n, 3)).join(" | ");
+		};
+		const lines = [];
+		for (const name of ["inner", "trap", "deep"]) {
+			let direct;
+			try { e[name](); } catch (x) { direct = head(x); }
+			WebAssembly.promising(e[name])().catch(x => {
+				const h = head(x);
+				lines.push(name + ": " + h + (h === direct ? "" : " (direct: " + direct + ")"));
+			});
+		}
+		Promise.resolve().then(() => {}).then(() => { globalThis.out = lines.join("\n"); });`
+}
