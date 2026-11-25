@@ -26,12 +26,17 @@ func (a *arena[T]) take(n int) []T {
 func (a *arena[T]) reset() { a.buf = a.buf[:0] }
 
 // appendA appends xs to s, moving it within the arena where it is full.
+// The elements go one at a time, but for a long list's move: most lists
+// are short, and an append of a slice is a call of the runtime's copy.
 func appendA[T any](a *arena[T], s []T, xs ...T) []T {
 	if len(s)+len(xs) > cap(s) {
 		ns := a.take(max(2*cap(s), len(s)+len(xs), 4))
 		s = append(ns, s...)
 	}
-	return append(s, xs...)
+	for _, x := range xs {
+		s = append(s, x)
+	}
+	return s
 }
 
 // chunks hands out values of a type one at a time from chunks it keeps,

@@ -157,7 +157,17 @@ type Inst struct {
 // given registers ahead of anything they meet, and are defined and used
 // nowhere else. An instruction with temporaries is not a call.
 func NewInst(regs, uses, defs, temps []VReg, hint VReg) Inst {
-	regs = append(append(append(regs, uses...), defs...), temps...)
+	// One at a time: the lists are a few registers each, and an append of
+	// a slice is a call of the runtime's copy.
+	for _, r := range uses {
+		regs = append(regs, r)
+	}
+	for _, r := range defs {
+		regs = append(regs, r)
+	}
+	for _, r := range temps {
+		regs = append(regs, r)
+	}
 	return Inst{Regs: regs, NUses: uint16(len(uses)), NDefs: uint16(len(defs)), Hint: hint}
 }
 
