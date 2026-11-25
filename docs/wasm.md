@@ -299,7 +299,11 @@ and messages of V8 (Node 26), word for word, prefixes included
   `catch_all` and by a `catch` of `WebAssembly.JSTag`, and comes out the
   same value; a wasm exception in JavaScript is a `WebAssembly.Exception`.
   A trap is a `RuntimeError`, the stack's exhaustion a `RangeError`, and
-  neither is caught by wasm, even through JavaScript;
+  neither is caught by wasm, even through JavaScript, nor is the runtime's
+  own exhaustion of the stack in a function wasm called. Each is told by a
+  mark the error is made with, not by its name or message: a `RangeError`
+  a script makes with the same message is caught, and no property of what
+  is thrown is read to decide;
 - the JS String Builtins (`builtins: ["js-string"]`) and
   `importedStringConstants`;
 - the JS Promise Integration, `WebAssembly.Suspending` and

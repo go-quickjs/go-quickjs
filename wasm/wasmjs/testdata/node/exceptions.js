@@ -88,6 +88,9 @@ p("JS throws an Exception of another tag", () => { fImpl = () => { throw new W.E
 p("Exception through JSTag catch", () => { fImpl = () => { throw new W.Exception(e.tag, [3]) }; try { return fmt(e.catchJS()) } catch (x) { return "escaped " + x.getArg(e.tag, 0) } });
 p("trap through JS is not caught", () => { fImpl = () => e.throw2 ? 0 : (() => { const tb = new WasmModuleBuilder(); tb.addFunction("u", kSig_v_v).addBody([kExprUnreachable]).exportFunc(); return tb.instantiate().exports.u(); })(); return e.catchAll(); });
 p("RuntimeError from JS is caught", () => { fImpl = () => { throw new W.RuntimeError("js") }; return e.catchAll(); });
+p("RangeError of the stack's message from JS is caught", () => { fImpl = () => { throw new RangeError("Maximum call stack size exceeded") }; return e.catchAll(); });
+p("thrown object's getters are not read", () => { let reads = 0; fImpl = () => { throw { get name() { reads++; return "RangeError" }, get message() { reads++; return "Maximum call stack size exceeded" } } }; return e.catchAll() + " " + reads; });
+p("JS stack overflow is not caught", () => { const deep = () => deep(); fImpl = deep; try { return e.catchAll() } catch (x) { return x instanceof RangeError } });
 p("rethrow keeps the exception", () => { let inner; fImpl = () => e.throw(5); gImpl = () => {}; try { e.rethrow() } catch (x) { inner = x } return [inner instanceof W.Exception, inner.getArg(e.tag, 0)].join(); });
 p("g throws instead", () => { fImpl = () => { throw 1 }; gImpl = () => { throw 2 }; try { e.rethrow() } catch (x) { return x } });
 // Legacy try/catch, delegate and rethrow.

@@ -131,3 +131,43 @@ func promisingFramesScript(bytes string) string {
 		}
 		Promise.resolve().then(() => {}).then(() => { globalThis.out = lines.join("\n"); });`
 }
+
+// TestCatchableByIdentity pins which values a JavaScript function wasm
+// calls throws a wasm catch_all catches: the runtime's own exhaustion of
+// the stack is not caught, told by a mark the runtime gives the error it
+// throws; a RangeError a script makes with the same message is, as is an
+// object whose name and message getters say the same, which are not read.
+func TestCatchableByIdentity(t *testing.T) {
+	rt := newRuntime(t)
+	bytes := watBytes(t, `(module
+		(import "m" "f" (func $f))
+		(func (export "catchAll") (result i32)
+			(block (try_table (catch_all 0) (call $f)) (return (i32.const 0)))
+			(i32.const 1)))`)
+	got := eval(t, rt, `
+		let fImpl;
+		const e = new WebAssembly.Instance(new WebAssembly.Module(`+bytes+`), {m: {f: () => fImpl()}}).exports;
+		const run = () => { try { return String(e.catchAll()); } catch (x) { return "uncaught " + x.name + ": " + x.message; } };
+		const lines = [];
+		fImpl = () => { throw new RangeError("Maximum call stack size exceeded"); };
+		lines.push("made: " + run());
+		fImpl = () => { throw new RangeError("maximum call stack size exceeded"); };
+		lines.push("made, lower case: " + run());
+		let reads = 0;
+		fImpl = () => { throw { get name() { reads++; return "RangeError"; }, get message() { reads++; return "Maximum call stack size exceeded"; } }; };
+		lines.push("getters: " + run() + ", " + reads + " reads");
+		fImpl = () => { throw { get name() { throw new Error("name"); } }; };
+		lines.push("a getter that throws: " + run());
+		const deep = () => deep();
+		fImpl = deep;
+		lines.push("overflow: " + run());
+		globalThis.out = lines.join("\n");`)
+	want := `made: 1
+made, lower case: 1
+getters: 1, 0 reads
+a getter that throws: 1
+overflow: uncaught RangeError: maximum call stack size exceeded`
+	if got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}

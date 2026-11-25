@@ -5,7 +5,6 @@ package wasmjs
 import (
 	"context"
 	"strconv"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -236,20 +235,13 @@ func (a *api) throwException(e *engine.Exception) error {
 }
 
 // catchable reports whether a wasm handler may catch v, a value JavaScript
-// threw: anything but the error of a trap or of the stack's exhaustion.
+// threw: anything but the error of a trap or of the stack's exhaustion,
+// wasm's or the runtime's, each told by the mark it was made with. No
+// script runs to tell: the value's properties are not read.
 func (a *api) catchable(v vm.Value) bool {
-	if !v.IsObject() {
-		return true
-	}
-	if _, ok := vm.HostSlot(a.rt, v).(uncatchable); ok {
+	switch vm.HostSlot(a.rt, v).(type) {
+	case uncatchable, vm.HostStackOverflow:
 		return false
-	}
-	// The runtime's own stack overflow is a RangeError of this message.
-	if name, err := a.rt.GetProp(v, a.rt.Intern("name")); err == nil && name.IsString() && name.String().Go() == "RangeError" {
-		if msg, err := a.rt.GetProp(v, a.rt.Intern("message")); err == nil && msg.IsString() &&
-			strings.EqualFold(msg.String().Go(), "Maximum call stack size exceeded") {
-			return false
-		}
 	}
 	return true
 }

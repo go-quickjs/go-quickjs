@@ -188,6 +188,11 @@ var (
 // HostSized holds, and walks anything else.
 var meterData func(m *memoryMeter, d any)
 
+// HostStackOverflow is the data (HostSlot) of the RangeError the runtime
+// throws when a call would exhaust the stack: what tells that error from
+// one a script makes with the same message, without running script.
+type HostStackOverflow struct{}
+
 // hostSlotSymbol is the key of the data HostSetSlot attaches.
 var hostSlotSymbol = NewSymbol("host slot", true)
 

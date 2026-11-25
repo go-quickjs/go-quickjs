@@ -1152,8 +1152,18 @@ func (r *Runtime) throwError(kind errorKind, format string, args ...any) error {
 	if len(args) > 0 || strings.IndexByte(format, '%') >= 0 {
 		msg = fmt.Sprintf(format, args...)
 	}
-	return r.throw(Obj(r.newError(kind, msg)))
+	o := r.newError(kind, msg)
+	if kind == errRange && msg == msgStackOverflow {
+		// The stack's exhaustion carries a mark a host tells it by, which
+		// no error script makes has.
+		HostSetSlot(r, o, HostStackOverflow{})
+	}
+	return r.throw(Obj(o))
 }
+
+// msgStackOverflow is the message of the RangeError the runtime throws when
+// a call would exhaust the stack.
+const msgStackOverflow = "maximum call stack size exceeded"
 
 func (r *Runtime) throwTypeError(format string, args ...any) error {
 	return r.throwError(errType, format, args...)

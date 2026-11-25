@@ -412,3 +412,29 @@ func TestHostDefineLazyGlobal(t *testing.T) {
 		t.Fatalf("built %d times", built)
 	}
 }
+
+// TestHostStackOverflow checks that the RangeError the runtime throws when
+// the stack is exhausted carries the HostStackOverflow mark, and that a
+// RangeError script makes with the same message does not.
+func TestHostStackOverflow(t *testing.T) {
+	rt, r := hostRuntime(t)
+	for _, tc := range []struct {
+		src  string
+		want bool
+	}{
+		{`(() => { const d = () => d(); try { d(); } catch (e) { return e; } })()`, true},
+		{`(() => { const d = () => [d()]; try { JSON.stringify(d()); } catch (e) { return e; } })()`, true},
+		{`new RangeError("maximum call stack size exceeded")`, false},
+		{`new RangeError("Maximum call stack size exceeded")`, false},
+	} {
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.src, err)
+		}
+		e := hostaccess.Unwrap(v)
+		_, got := vm.HostSlot(r, e).(vm.HostStackOverflow)
+		if got != tc.want {
+			t.Errorf("%s: marked %v, want %v", tc.src, got, tc.want)
+		}
+	}
+}
