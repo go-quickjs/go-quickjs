@@ -310,9 +310,12 @@ What each lever cannot move:
   pin them: a closure pad put in a position's file is laid out with the
   closures of the other pads, not before those of the file after it (a
   trial with one at every position put them all together, by
-  `initTemporalPlainMonthDay`'s closures), so the typed arrays' callback
-  closures (`defineTypedArrayMethods.func17` and `func18`, 0.5% of the
-  plain build's samples, 82 KB past Z) are held by nothing. The package's
+  `initTemporalPlainMonthDay`'s closures). Hot code in a closure is held by
+  nothing, so it goes in a named function the closure calls: the typed
+  arrays' callback methods, 0.5% and 0.2% of the plain build's samples,
+  lay 82 KB past Z as `defineTypedArrayMethods.func17` and `func18`, any
+  closure before them moving them, and are `typedArrayCallback` and
+  `typedArrayReduce` in TA's range now, after `setElem`. The package's
   assembly -- the native handlers' block, its entry and exit stubs, the
   JIT's leaf stubs -- is laid out after the closures, so a closure added
   moves it, which H takes up.

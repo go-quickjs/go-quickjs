@@ -451,6 +451,186 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	return nil
 }
 
+// The kinds of typedArrayCallback's methods.
+const (
+	tcForEach = iota
+	tcMap
+	tcFilter
+	tcFind
+	tcFindIndex
+	tcFindLast
+	tcFindLastIndex
+	tcSome
+	tcEvery
+)
+
+// typedArrayCallback runs the typed arrays' methods that take a callback but
+// reduce: forEach, map, filter, find, findIndex, findLast, findLastIndex,
+// some and every, by kind, method being its name and full its name on the
+// prototype. They are named functions rather than the closures that call
+// them so that the layout lock holds their loops with the element reads
+// (TA's range, docs/optimizing.md): the closures are laid out after every
+// function, and any closure added before them had moved them.
+//
+// The methods that take a callback are written against the view directly
+// rather than delegated to the Array versions. The callback receives the
+// view as its third argument and, with no thisArg, as nothing else -- a
+// temporary array standing in for it would be observable, and is what
+// several hundred tests check.
+//
+// The length is read once, as everywhere else: an element the callback
+// writes is seen, but the view cannot grow underneath the loop.
+//
+// The callback is called as Array.prototype's forEach and the others call
+// theirs, by callDirect, its arguments in one list made once rather than
+// per element: a callee may not keep it, any more than it may keep the
+// interpreter's own stack. Each element had been called through call,
+// with a list of its own.
+func (rt *Runtime) typedArrayCallback(this Value, args []Value, kind int, method, full string) (Value, error) {
+	t, err := rt.typedArrayOf(this, full)
+	if err != nil {
+		return Undefined, err
+	}
+	cb := arg(args, 0)
+	if !isCallable(cb) {
+		return Undefined, rt.throwTypeError("%s requires a function", method)
+	}
+	thisArg := arg(args, 1)
+	n := t.count()
+
+	var kept []Value
+	// map builds its result before it runs anything: the species is
+	// consulted first, so a constructor that refuses stops the mapping
+	// before the callback is called even once. filter is the other way
+	// round -- it cannot know how long its result is until it has run.
+	var mapped Value
+	var mappedArr *typedArrayData
+	if kind == tcMap {
+		var err error
+		mapped, mappedArr, err = rt.newTypedArrayLike(this, t, n)
+		if err != nil {
+			return Undefined, err
+		}
+	}
+	backwards := kind == tcFindLast || kind == tcFindLastIndex
+	var argv [3]Value
+	ready := rt.regCallbackOf(cb, thisArg)
+	if ready != nil {
+		defer ready.end()
+	}
+	for k := 0; k < n; k++ {
+		i := k
+		if backwards {
+			i = n - 1 - k
+		}
+		el := t.getElem(i)
+		argv[0], argv[1], argv[2] = el, Int(i), this
+		var res Value
+		var err error
+		if ready != nil {
+			res, err = ready.call(argv[:])
+		} else {
+			res, err = rt.callDirect(cb, thisArg, argv[:])
+		}
+		if err != nil {
+			return Undefined, err
+		}
+		switch kind {
+		case tcMap:
+			// A write past the end of a result that has since shrunk
+			// is dropped, as any such write is.
+			if err := rt.setElem(mappedArr, i, res); err != nil {
+				return Undefined, err
+			}
+		case tcFilter:
+			if res.Truthy() {
+				kept = append(kept, el)
+			}
+		case tcFind, tcFindLast:
+			if res.Truthy() {
+				return el, nil
+			}
+		case tcFindIndex, tcFindLastIndex:
+			if res.Truthy() {
+				return Int(i), nil
+			}
+		case tcSome:
+			if res.Truthy() {
+				return True, nil
+			}
+		case tcEvery:
+			if !res.Truthy() {
+				return False, nil
+			}
+		}
+	}
+	switch kind {
+	case tcMap:
+		return mapped, nil
+	case tcFilter:
+		return rt.fillTypedArrayLike(this, t, kept)
+	case tcSome:
+		return False, nil
+	case tcEvery:
+		return True, nil
+	case tcFindIndex, tcFindLastIndex:
+		return Int(-1), nil
+	}
+	return Undefined, nil
+}
+
+// typedArrayReduce runs reduce and, reversed, reduceRight, name being the
+// method's name and full its name on the prototype; a named function for
+// the reason typedArrayCallback is.
+func (rt *Runtime) typedArrayReduce(this Value, args []Value, reversed bool, name, full string) (Value, error) {
+	t, err := rt.typedArrayOf(this, full)
+	if err != nil {
+		return Undefined, err
+	}
+	cb := arg(args, 0)
+	if !isCallable(cb) {
+		return Undefined, rt.throwTypeError("%s requires a function", name)
+	}
+	n := t.count()
+	k := 0
+	var acc Value
+	seeded := len(args) > 1
+	if seeded {
+		acc = args[1]
+	} else {
+		if n == 0 {
+			return Undefined, rt.throwTypeError(
+				"%s of an empty typed array with no initial value", name)
+		}
+		i := 0
+		if reversed {
+			i = n - 1
+		}
+		acc, k = t.getElem(i), 1
+	}
+	var argv [4]Value
+	ready := rt.regCallbackOf(cb, Undefined)
+	if ready != nil {
+		defer ready.end()
+	}
+	for ; k < n; k++ {
+		i := k
+		if reversed {
+			i = n - 1 - k
+		}
+		argv[0], argv[1], argv[2], argv[3] = acc, t.getElem(i), Int(i), this
+		if ready != nil {
+			acc, err = ready.call(argv[:])
+		} else {
+			acc, err = rt.callDirect(cb, Undefined, argv[:])
+		}
+		if err != nil {
+			return Undefined, err
+		}
+	}
+	return acc, nil
+}
+
 // toInt32Wrap converts a number to a 32-bit value with the wrapping the
 // integer element types use.
 // It is ToInt32, whose low bits are what every narrower type keeps.
@@ -1648,128 +1828,15 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		p.setOwnRaw(atomToString, fn.value(), propWritable|propConfigurable)
 	}
 
-	// The callback-taking methods.
-	// The methods that take a callback are written against the view directly
-	// rather than delegated to the Array versions. The callback receives the
-	// view as its third argument and, with no thisArg, as nothing else -- a
-	// temporary array standing in for it would be observable, and is what
-	// several hundred tests check.
-	//
-	// The length is read once, as everywhere else: an element the callback
-	// writes is seen, but the view cannot grow underneath the loop.
-	//
-	// The callback is called as Array.prototype's forEach and the others call
-	// theirs, by callDirect, its arguments in one list made once rather than
-	// per element: a callee may not keep it, any more than it may keep the
-	// interpreter's own stack. Each element had been called through call,
-	// with a list of its own.
-	const (
-		tcForEach = iota
-		tcMap
-		tcFilter
-		tcFind
-		tcFindIndex
-		tcFindLast
-		tcFindLastIndex
-		tcSome
-		tcEvery
-	)
+	// The methods that take a callback, typedArrayCallback and
+	// typedArrayReduce: each closure here only names its method.
 	for kind, method := range []string{
 		tcForEach: "forEach", tcMap: "map", tcFilter: "filter", tcFind: "find", tcFindIndex: "findIndex",
 		tcFindLast: "findLast", tcFindLastIndex: "findLastIndex", tcSome: "some", tcEvery: "every",
 	} {
 		full := "TypedArray.prototype." + method
 		r.defMethod(p, method, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.typedArrayOf(this, full)
-			if err != nil {
-				return Undefined, err
-			}
-			cb := arg(args, 0)
-			if !isCallable(cb) {
-				return Undefined, rt.throwTypeError("%s requires a function", method)
-			}
-			thisArg := arg(args, 1)
-			n := t.count()
-
-			var kept []Value
-			// map builds its result before it runs anything: the species is
-			// consulted first, so a constructor that refuses stops the mapping
-			// before the callback is called even once. filter is the other way
-			// round -- it cannot know how long its result is until it has run.
-			var mapped Value
-			var mappedArr *typedArrayData
-			if kind == tcMap {
-				var err error
-				mapped, mappedArr, err = rt.newTypedArrayLike(this, t, n)
-				if err != nil {
-					return Undefined, err
-				}
-			}
-			backwards := kind == tcFindLast || kind == tcFindLastIndex
-			var argv [3]Value
-			ready := rt.regCallbackOf(cb, thisArg)
-			if ready != nil {
-				defer ready.end()
-			}
-			for k := 0; k < n; k++ {
-				i := k
-				if backwards {
-					i = n - 1 - k
-				}
-				el := t.getElem(i)
-				argv[0], argv[1], argv[2] = el, Int(i), this
-				var res Value
-				var err error
-				if ready != nil {
-					res, err = ready.call(argv[:])
-				} else {
-					res, err = rt.callDirect(cb, thisArg, argv[:])
-				}
-				if err != nil {
-					return Undefined, err
-				}
-				switch kind {
-				case tcMap:
-					// A write past the end of a result that has since shrunk
-					// is dropped, as any such write is.
-					if err := rt.setElem(mappedArr, i, res); err != nil {
-						return Undefined, err
-					}
-				case tcFilter:
-					if res.Truthy() {
-						kept = append(kept, el)
-					}
-				case tcFind, tcFindLast:
-					if res.Truthy() {
-						return el, nil
-					}
-				case tcFindIndex, tcFindLastIndex:
-					if res.Truthy() {
-						return Int(i), nil
-					}
-				case tcSome:
-					if res.Truthy() {
-						return True, nil
-					}
-				case tcEvery:
-					if !res.Truthy() {
-						return False, nil
-					}
-				}
-			}
-			switch kind {
-			case tcMap:
-				return mapped, nil
-			case tcFilter:
-				return rt.fillTypedArrayLike(this, t, kept)
-			case tcSome:
-				return False, nil
-			case tcEvery:
-				return True, nil
-			case tcFindIndex, tcFindLastIndex:
-				return Int(-1), nil
-			}
-			return Undefined, nil
+			return rt.typedArrayCallback(this, args, kind, method, full)
 		})
 	}
 
@@ -1781,52 +1848,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		}
 		full := "TypedArray.prototype." + name
 		r.defMethod(p, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.typedArrayOf(this, full)
-			if err != nil {
-				return Undefined, err
-			}
-			cb := arg(args, 0)
-			if !isCallable(cb) {
-				return Undefined, rt.throwTypeError("%s requires a function", name)
-			}
-			n := t.count()
-			k := 0
-			var acc Value
-			seeded := len(args) > 1
-			if seeded {
-				acc = args[1]
-			} else {
-				if n == 0 {
-					return Undefined, rt.throwTypeError(
-						"%s of an empty typed array with no initial value", name)
-				}
-				i := 0
-				if reversed {
-					i = n - 1
-				}
-				acc, k = t.getElem(i), 1
-			}
-			var argv [4]Value
-			ready := rt.regCallbackOf(cb, Undefined)
-			if ready != nil {
-				defer ready.end()
-			}
-			for ; k < n; k++ {
-				i := k
-				if reversed {
-					i = n - 1 - k
-				}
-				argv[0], argv[1], argv[2], argv[3] = acc, t.getElem(i), Int(i), this
-				if ready != nil {
-					acc, err = ready.call(argv[:])
-				} else {
-					acc, err = rt.callDirect(cb, Undefined, argv[:])
-				}
-				if err != nil {
-					return Undefined, err
-				}
-			}
-			return acc, nil
+			return rt.typedArrayReduce(this, args, reversed, name, full)
 		})
 	}
 
