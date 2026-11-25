@@ -76,13 +76,17 @@ func longCodeObject(r *Runtime, v, w Value) Value {
 // the same way after its code as after the shorter one's, so checkptr
 // checks nothing more there. What its length adds -- the compile, the
 // placement, arm64's branches across it -- the ordinary builds check,
-// and under checkptr its two compiles took a fifth of the lane.
+// and under checkptr its two compiles took a fifth of the lane. With
+// the quickjs_verify tag too, whose cross-checks of the compiler's
+// analyses meet in the 10 MB function the blocks and values of the 3 MB
+// one, more of them: there its two runs took 27 of the test's 33 s
+// on a Windows runner, and took the process to some 9 GB.
 func TestJITLongCode(t *testing.T) {
 	if !jitSSABackend || testing.Short() {
 		t.Skip("no SSA backend on this architecture, or short")
 	}
 	sizes := []int{3, 10}
-	if !allocsOrdinary() {
+	if !allocsOrdinary() || verifyShapes {
 		sizes = sizes[:1]
 	}
 	for _, size := range sizes {

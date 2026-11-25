@@ -82,7 +82,8 @@ const rehomeSetup = `
 func rehomeRuntime(t *testing.T, jit, noRehome bool, every int, made *[]weak.Pointer[Object], check *bool, kept *int) *Runtime {
 	t.Helper()
 	pool := new(int)
-	r := newTestRuntime(t, Config{JIT: jit})
+	// A stack of collectingStack's size, which each collection marks.
+	r := newTestRuntime(t, Config{JIT: jit, StackSize: collectingStack})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if jit {
 		jitDefaultsForTest(r)

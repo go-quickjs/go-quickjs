@@ -4,6 +4,7 @@ package vm
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -151,9 +152,32 @@ func TestJITEscapeAnalysis(t *testing.T) {
 // with the JIT before anything runs.
 func jitAgreesForTestWith(t *testing.T, c jitStressConfig, setup string, rounds ...string) *Runtime {
 	t.Helper()
-	want := newTestRuntime(t, Config{})
+	return jitAgreesForTestIn(t, Config{}, c, setup, rounds...)
+}
+
+// collectingStack is the stack, in values, of the runtimes of a test that
+// runs the collector at every few calls of Go or polls, rather than the
+// 256K values (4 MB) of a runtime's own: a collection marks every live
+// runtime's stack whole, its unused slots as much as its frames, and with
+// a few runtimes alive that marking was most of each collection's time.
+// TestJITArrowThisAllocate and TestJITGivenClosuresAllocate, some 15,000
+// collections each, took 132 and 102 s on a 4-CPU Windows runner beside
+// the checkptr lane; on a Windows Ryzen 9 9950X3D2 held to 4 CPUs beside
+// a checkptr run of the package, 25 to 33 and 16 to 20 s with their own
+// stacks, 7.2 to 7.5 and 4.5 to 6.2 s with this. The frames these tests
+// make fit in it many times over; a stack too small for them throws,
+// which jitAgreesForTestIn fails on rather than finding the two runtimes
+// agree.
+const collectingStack = 1 << 14
+
+// jitAgreesForTestIn is jitAgreesForTestWith with both runtimes made with
+// cfg's stack size (collectingStack, say). On a stack of its own size, a
+// round that runs out of stack fails the test.
+func jitAgreesForTestIn(t *testing.T, cfg Config, c jitStressConfig, setup string, rounds ...string) *Runtime {
+	t.Helper()
+	want := newTestRuntime(t, Config{StackSize: cfg.StackSize})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
-	r := jitRuntimeForTest(t, Config{JIT: true})
+	r := jitRuntimeForTest(t, Config{JIT: true, StackSize: cfg.StackSize})
 	r.jitStress = c
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -166,6 +190,9 @@ func jitAgreesForTestWith(t *testing.T, c jitStressConfig, setup string, rounds 
 		gv, gerr := r.Run(compileForTest(t, src))
 		if (werr == nil) != (gerr == nil) {
 			t.Fatalf("%+v round %d (%s): error %v, interpreter's %v", c, i, src, gerr, werr)
+		}
+		if cfg.StackSize > 0 && werr != nil && strings.Contains(werr.Error(), "maximum call stack size exceeded") {
+			t.Fatalf("%+v round %d (%s): out of a stack of %d values", c, i, src, cfg.StackSize)
 		}
 		if werr != nil {
 			if got, want := gerr.Error(), werr.Error(); got != want {

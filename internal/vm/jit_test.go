@@ -7929,9 +7929,10 @@ func TestJITSSAGoCalls(t *testing.T) {
 		function deeper(d){var k=arguments.length,o={};o['w'+d]=d;o.v=d+k;return rec(o,d-1)}
 		function held(o,n){let s=0;for(let i=0;i<40;i++){s=(s+o.v*i)|0;if(i==20)s=(s+away(n))|0}return s}
 		function away(n){if(arguments.length&&n)drop(n);return n}`
-	want := newTestRuntime(t, Config{})
+	// Stacks of collectingStack's size, which each collection marks.
+	want := newTestRuntime(t, Config{StackSize: collectingStack})
 	defer func() { want.Close(); want.ReleaseClosed() }()
-	r := jitRuntimeForTest(t, Config{JIT: true})
+	r := jitRuntimeForTest(t, Config{JIT: true, StackSize: collectingStack})
 	entry := func(name string) *jitEntry {
 		return jitPortCode(r, jitPortNamed(r, name))
 	}
@@ -7983,6 +7984,9 @@ func TestJITSSAGoCalls(t *testing.T) {
 		}
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d, %s: got\n%s\ninterpreter\n%s", i, src, got, want)
+		}
+		if strings.Contains(wv.String().Go(), "maximum call stack size exceeded") {
+			t.Fatalf("round %d, %s: out of a stack of %d values", i, src, collectingStack)
 		}
 		if i == 3 {
 			// 300 iterations, each with six calls Go makes.

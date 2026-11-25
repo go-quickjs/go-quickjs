@@ -163,7 +163,8 @@ func TestJITGivenClosuresAllocate(t *testing.T) {
 	}
 	runtime.GC()
 	defer holdCollectorNow(t)()
-	r := jitAgreesForTestWith(t, jitStressConfig{}, givenSetup, `drive(50, vec, 4)`, `drive(50, vec, 4)`, `drive(50, vec, 4)`)
+	stack := Config{StackSize: collectingStack}
+	r := jitAgreesForTestIn(t, stack, jitStressConfig{}, givenSetup, `drive(50, vec, 4)`, `drive(50, vec, 4)`, `drive(50, vec, 4)`)
 	jitCallbackMallocs(t, r, `drive(5000, vec, 4)`)
 	n := jitCallbackMallocs(t, r, `drive(5000, vec, 4)`)
 	t.Logf("drive(5000): %d allocations", n)
@@ -178,7 +179,7 @@ func TestJITGivenClosuresAllocate(t *testing.T) {
 			}
 		}
 	})
-	jitAgreesForTestWith(t, jitStressConfig{threshold: true, budget: 2, deopt: 3}, givenSetup, givenRounds(true)...)
+	jitAgreesForTestIn(t, stack, jitStressConfig{threshold: true, budget: 2, deopt: 3}, givenSetup, givenRounds(true)...)
 	if calls == 0 {
 		t.Error("no call of Go")
 	}
