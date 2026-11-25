@@ -172,10 +172,11 @@ func dce(f *Func) {
 			}
 		}
 	}
-	// dead is each value's, by ID.
+	// dead is each value's, by ID; hit counts each block's dead values.
 	dead := grown(f.ws.dead, f.NumValues())
 	clear(dead)
 	f.ws.dead = dead
+	hit := f.ws.blockMarks(f)
 	ndead := 0
 	// high is the most the work list held, what is cleared after.
 	high := len(work)
@@ -187,6 +188,7 @@ func dce(f *Func) {
 			continue
 		}
 		dead[v.ID] = true
+		hit[v.Block.ID]++
 		ndead++
 		for _, a := range v.Args {
 			if a == v {
@@ -215,6 +217,7 @@ func dce(f *Func) {
 			}
 			if self == v.Uses {
 				dead[v.ID] = true
+				hit[b.ID]++
 				ndead++
 				cycles = true
 			}
@@ -224,16 +227,29 @@ func dce(f *Func) {
 	if ndead == 0 {
 		return
 	}
-	isDead := func(v *Value) bool { return dead[v.ID] }
 	for _, b := range f.Blocks {
-		b.Phis = slices.DeleteFunc(b.Phis, isDead)
-		b.Values = slices.DeleteFunc(b.Values, isDead)
+		if hit[b.ID] != 0 {
+			b.Phis = dropDead(b.Phis, dead)
+			b.Values = dropDead(b.Values, dead)
+		}
 	}
 	// The values the work list removed took their uses with them; the
 	// phis only themselves used did not.
 	if cycles {
 		computeUses(f)
 	}
+}
+
+// dropDead is vs without the values dead says are, the rest cleared.
+func dropDead(vs []*Value, dead []bool) []*Value {
+	keep := vs[:0]
+	for _, v := range vs {
+		if !dead[v.ID] {
+			keep = append(keep, v)
+		}
+	}
+	clear(vs[len(keep):])
+	return keep
 }
 
 // fold folds constants, simplifies identities, and branches on constants,
