@@ -64,6 +64,9 @@ type Runtime interface {
 
 	// CloseWithExitCode closes every module the runtime instantiated, with
 	// exitCode, and the runtime: it compiles and instantiates nothing more.
+	// The views api.Memory.Read gave out of the modules' memories are
+	// invalid from then on. A runtime dropped without being closed keeps
+	// its modules' memories for as long as the process runs.
 	CloseWithExitCode(ctx context.Context, exitCode uint32) error
 
 	// Module returns the module instantiated under moduleName, or nil.
@@ -390,11 +393,14 @@ func (r *runtime) instantiate(ctx context.Context, cc *compiledCode, name string
 			mem.ReserveCapacity(mem.Max)
 		}
 	}
+	mod.holdMemories()
 	r.register(mod)
 	if cc.hasStart {
 		if _, err := mod.call(ctx, inst.Funcs[cc.start], nil); err != nil {
 			r.unregister(mod)
-			mod.closed.Store(1)
+			if mod.closed.CompareAndSwap(0, 1) {
+				mod.dropMemories()
+			}
 			return nil, err
 		}
 	}

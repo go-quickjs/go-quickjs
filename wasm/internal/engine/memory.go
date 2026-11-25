@@ -42,7 +42,8 @@ func init() {
 // at once.
 //
 // A reserved memory returns its reservation to the OS when the Memory is
-// collected, so whatever holds its bytes must keep the Memory reachable.
+// collected, so whatever holds its bytes must keep the Memory reachable,
+// or hold the memory (Hold) while it uses them.
 type Memory struct {
 	// buf is the memory's bytes. For an unshared memory len(buf) is its size;
 	// for a shared one buf spans the maximum and size holds the size, which
@@ -75,6 +76,39 @@ type Memory struct {
 	// of the memory's new size, under mu, before Grow returns.
 	hostView  any
 	hostGrown func(newBytes uint64)
+
+	// cleanup returns the reservation to the OS when the Memory is
+	// collected, unless a host holds the memory; holds counts the hosts'
+	// holds (Hold), under mu.
+	cleanup runtime.Cleanup
+	holds   int
+}
+
+// Hold takes a host's hold on the memory: while one is held, the
+// memory's bytes are not released, even once the Memory is collected, so
+// that a view of them the host gave out cannot outlive them while the
+// host is still using the memory. Drop gives a hold back; once the last is
+// given back the bytes go when the Memory is collected, as they would have
+// without a hold. A host that never gives a hold back keeps the bytes for
+// as long as the process runs.
+func (m *Memory) Hold() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.holds++
+	if m.holds == 1 {
+		m.cleanup.Stop()
+		m.cleanup = runtime.Cleanup{}
+	}
+}
+
+// Drop gives back a hold Hold took.
+func (m *Memory) Drop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.holds--
+	if m.holds == 0 && m.reservation != nil {
+		m.cleanup = runtime.AddCleanup(m, release, m.reservation)
+	}
 }
 
 // SetBudget charges the memory, and its growth from now on, to b,
@@ -123,7 +157,7 @@ func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
 				m.buf = r[:initial*PageSize]
 			}
 			m.size.Store(initial * PageSize)
-			runtime.AddCleanup(m, release, r)
+			m.cleanup = runtime.AddCleanup(m, release, r)
 			return m
 		}
 		if shared {

@@ -101,7 +101,20 @@ module's imports against the modules it holds, host modules included.
 type -- functions, host values as externrefs, and the structs, arrays and
 exceptions wasm makes, as opaque `api.Reference`s. `api.Memory` reads and
 writes a memory's bytes; `Size64`, `Grow64`, `Read64` and `Write64` reach a
-memory64's past 4 GiB. `wasm/wat.Compile` turns the text format into a binary,
+memory64's past 4 GiB.
+
+`Memory.Read` returns a view of the bytes, not a copy, and on 64-bit hosts
+those bytes are the OS's, reserved outside the Go heap, so a view does not
+keep them alive. A module holds the memories it defines and imports while it
+is open: their bytes stay, whatever the collector does, until the module and
+every other module holding them are closed. After that they go back to the
+OS once nothing reaches the memory -- the `api.Memory`, a running call, a
+reference to the module's functions -- and a view used then ends the
+process with a fault that `recover` cannot catch. So copy what must outlive
+`Close`, or keep the `api.Memory` reachable while its views are used. A
+runtime dropped without `Close` keeps its modules' memories until the
+process exits: close runtimes. The JavaScript namespace's `ArrayBuffer`s
+and `SharedArrayBuffer`s over a memory keep it alive themselves. `wasm/wat.Compile` turns the text format into a binary,
 which is how the package's examples (`wasm/example_test.go`) write their
 modules.
 

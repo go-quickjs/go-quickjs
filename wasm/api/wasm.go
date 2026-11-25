@@ -207,6 +207,9 @@ type Module interface {
 	//
 	// It may be called from a host function, to exit. Closing a closed
 	// module does nothing and returns nil.
+	//
+	// A view Memory.Read gave out of a memory the module holds is invalid
+	// once the module is closed (see Read).
 	CloseWithExitCode(ctx context.Context, exitCode uint32) error
 
 	// Closer closes the module with exit code zero.
@@ -477,9 +480,22 @@ type Memory interface {
 	// Linux, macOS, the BSDs and Windows); elsewhere a grow may move the
 	// memory, unless the runtime is configured WithMemoryCapacityFromMax
 	// and the memory has a maximum.
+	//
+	// The view is valid for as long as the memory's module is open. Once
+	// it is closed -- by Close, by its runtime's, or as WithCloseOnContextDone
+	// closes it -- and every other module holding the memory (one that
+	// imports it) is too, the engine returns the memory's bytes to the OS as
+	// soon as nothing reaches the memory: neither this Memory, nor a call
+	// running in it, nor a reference to its module's functions. A view used
+	// after that ends the process with a fault, which recover cannot catch.
+	// Copy what must outlive Close, or keep this Memory reachable
+	// (runtime.KeepAlive) for as long as the view is used. A runtime
+	// dropped without being closed keeps its modules' memories, and so
+	// their views, for as long as the process runs.
 	Read(offset, byteCount uint32) ([]byte, bool)
 
-	// Read64 is Read for any offset and length.
+	// Read64 is Read for any offset and length, and its view lives as
+	// Read's does.
 	Read64(offset, byteCount uint64) ([]byte, bool)
 
 	// WriteUint8 writes a byte at offset, or returns false if it is out of

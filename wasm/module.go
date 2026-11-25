@@ -165,7 +165,31 @@ func (m *moduleInstance) CloseWithExitCode(ctx context.Context, exitCode uint32)
 		(*cancel)()
 	}
 	m.mu.Unlock()
+	m.dropMemories()
 	return nil
+}
+
+// holdMemories holds the memories the module defines and imports, so that
+// none of their bytes are released while it is open, even once nothing
+// else reaches them: a view Memory.Read gave out stays valid for as long
+// as the module is. A module never closed holds them for good.
+func (m *moduleInstance) holdMemories() {
+	for _, mem := range m.inst.Memories {
+		mem.Hold()
+	}
+}
+
+// dropMemories gives back the module's holds as it closes. A memory whose
+// last hold is given back is released once nothing reaches it, as any
+// other object is collected: a call running in it, or a reference to one
+// of its module's functions or to the memory, keeps it.
+func (m *moduleInstance) dropMemories() {
+	if m.inst == nil {
+		return
+	}
+	for _, mem := range m.inst.Memories {
+		mem.Drop()
+	}
 }
 
 // enter begins a call of one of the module's functions under ctx, returning
