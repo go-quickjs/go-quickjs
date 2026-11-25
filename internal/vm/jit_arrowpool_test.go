@@ -85,3 +85,63 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 		}
 	}
 }
+
+// A closure native code takes from its pool, made unplanned, is planned
+// at its first use as a built-in's callback (regCallbackOf): a sort calls
+// it kept ready (regCallback), as it calls one the interpreter made.
+// Unplanned, the comparator a loop running natively made at each turn and
+// gave a BigInt64Array's sort -- Go's sort -- was called through
+// callDirect and regEnterW at every comparison, to code judged slow and
+// declined there: typed_i64_sort a third slower once its loop ran
+// natively.
+func TestJITPooledClosuresPlanned(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function sorts(n) {
+			var r = new BigInt64Array(16), s = 0n
+			for (var i = 0; i < n; i++) {
+				for (var k = 0; k < 16; k++) r[k] = BigInt((k * 7) % 16)
+				r.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+				s += r[0] + r[15]
+			}
+			return s
+		}
+	`
+	rounds := []string{}
+	for range 8 {
+		rounds = append(rounds, `sorts(200)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	re := jitRegEntryNamedForTest(r, "sorts")
+	if re == nil || re.life == nil {
+		t.Fatal("sorts has no code")
+	}
+	pools, checked := 0, 0
+	for _, l := range re.life.literals {
+		if l.tmpl.template() == nil {
+			continue
+		}
+		pools++
+		if l.pool.Size <= abi.PoolSize {
+			t.Errorf("the comparators were not taken from their pool: its size is %d", l.pool.Size)
+		}
+		for i := range int(l.pool.Count) {
+			o := (*Object)(l.pool.Objects[i])
+			cb := r.regCallbackOf(Obj(o), Undefined)
+			if cb == nil {
+				t.Fatalf("pooled comparator %d is not called kept ready: %+v", i, o.fn())
+			}
+			cb.end()
+			if fd := o.fn(); !fd.planned || fd.regCall == nil {
+				t.Fatalf("pooled comparator %d unplanned after its use: %+v", i, fd)
+			}
+			checked++
+		}
+	}
+	if pools == 0 || checked == 0 {
+		t.Errorf("sorts makes no comparator from a pool: %d pools, %d comparators in them", pools, checked)
+	}
+}

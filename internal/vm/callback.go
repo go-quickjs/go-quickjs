@@ -56,6 +56,16 @@ func (r *Runtime) regCallbackOf(fn, this Value) *regCallback {
 	}
 	o := fn.Object()
 	fd := o.fn()
+	if fd != nil && !fd.planned && fd.closure != nil {
+		// A closure made unplanned -- native code's, taken from its pool
+		// (jitFillClosures), or one made before its function's code was
+		// built -- is planned at its first use as a callback, as
+		// callObject plans one after its first call. Unplanned, a sort's
+		// comparator native code made had every comparison go through
+		// callDirect and regEnterW, to code judged slow and declined
+		// there: typed_i64_sort a third slower once its loop ran natively.
+		planCall(fd)
+	}
 	if fd == nil || fd.regCall == nil || fd.closure.realm != r.Realm {
 		return nil
 	}
