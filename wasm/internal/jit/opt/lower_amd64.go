@@ -183,7 +183,10 @@ func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	// The out-of-line code is only appended to: what the last compile
 	// made is its length.
 	clear(g.ool)
-	g.traps.reset(64)
+	// The table is made for the function's trap sites at once, where it
+	// had grown to them in steps: the Go program's functions have one for
+	// about every eight of their values, most of them accesses' checks.
+	g.traps.reset(max(64, f.NumValues()/8))
 	g.trapTo.reset(8)
 	g.polls.reset(8)
 	g.lowering.reset(f, req)
