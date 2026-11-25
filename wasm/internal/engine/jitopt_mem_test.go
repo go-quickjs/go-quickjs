@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -318,4 +319,177 @@ func TestOptGoOps(t *testing.T) {
 		calls = append(calls, tc, uc)
 	}
 	optSameAsInterpreter(t, goOpsWAT, calls)
+}
+
+// Random runs of accesses of one address in a block, whose checks the
+// optimizing tier makes one check of their farthest end (the opt README's
+// passes, bce), among loads of another address, stores and global.sets,
+// trap where the interpreter's do -- at the same instruction -- and leave
+// the memory and the global as they do.
+func TestOptWideChecks(t *testing.T) {
+	rng := rand.New(rand.NewPCG(5, 6))
+	loads := []struct {
+		op   string
+		size uint64
+	}{
+		{"i64.load", 8}, {"i64.load32_u", 4}, {"i64.load16_s", 2}, {"i64.load8_u", 1},
+	}
+	for iter := range 80 {
+		var b strings.Builder
+		b.WriteString("(module\n  (memory 1 2)\n  (global $g (mut i64) (i64.const 0))\n")
+		b.WriteString("  (func (export \"grow\") (result i32) (memory.grow (i32.const 1)))\n")
+		b.WriteString("  (func (export \"g\") (result i64) (global.get $g))\n")
+		b.WriteString("  (func (export \"run\") (param $p i32) (param $q i32) (result i64)\n    (local $acc i64)\n")
+		for range 3 + rng.IntN(10) {
+			off := rng.IntN(64)
+			switch k := rng.IntN(12); {
+			case k < 8:
+				l := loads[rng.IntN(len(loads))]
+				fmt.Fprintf(&b, "    (local.set $acc (i64.add (i64.rotl (local.get $acc) (i64.const 7)) (%s offset=%d (local.get $p))))\n", l.op, off)
+			case k == 8:
+				fmt.Fprintf(&b, "    (local.set $acc (i64.xor (local.get $acc) (i64.load offset=%d (local.get $q))))\n", off)
+			case k == 9:
+				fmt.Fprintf(&b, "    (i64.store offset=%d (local.get $p) (local.get $acc))\n", off)
+			case k == 10:
+				fmt.Fprintf(&b, "    (i64.store8 offset=%d (local.get $q) (local.get $acc))\n", off)
+			default:
+				b.WriteString("    (global.set $g (local.get $acc))\n")
+			}
+		}
+		b.WriteString("    (local.get $acc)))\n")
+		src := b.String()
+		nat := tierInstance(t, src, 0)
+		in := interpretedInstance(t, src)
+		for _, grow := range []bool{false, true} {
+			if grow {
+				for _, inst := range []*Instance{nat, in} {
+					if _, err := call(t, inst, "grow"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			end := uint64(65536)
+			if grow {
+				end = 131072
+			}
+			for range 24 {
+				p := end - uint64(rng.IntN(80))
+				q := end - uint64(rng.IntN(80))
+				if rng.IntN(3) == 0 {
+					q = uint64(rng.IntN(1000))
+				}
+				rn, en := call(t, nat, "run", p, q)
+				ri, ei := call(t, in, "run", p, q)
+				if !sameJITOutcome(rn, en, ri, ei) {
+					t.Fatalf("%d: run(%d, %d): optimized %v %v, interpreted %v %v\n%s", iter, p, q, rn, en, ri, ei, src)
+				}
+				if en != nil {
+					var tn, ti *Trap
+					errors.As(en, &tn)
+					errors.As(ei, &ti)
+					if len(tn.Frames) == 0 || len(ti.Frames) == 0 || tn.Frames[0].Offset != ti.Frames[0].Offset {
+						t.Fatalf("%d: run(%d, %d): optimized trapped at %v, interpreted at %v\n%s", iter, p, q, tn.Frames, ti.Frames, src)
+					}
+				}
+				if string(nat.Memories[0].Bytes()) != string(in.Memories[0].Bytes()) {
+					t.Fatalf("%d: run(%d, %d): memory differs\n%s", iter, p, q, src)
+				}
+				gn, _ := call(t, nat, "g")
+				gi, _ := call(t, in, "g")
+				if gn[0].N != gi[0].N {
+					t.Fatalf("%d: run(%d, %d): global %d, interpreted %d\n%s", iter, p, q, gn[0].N, gi[0].N, src)
+				}
+			}
+		}
+		if !optimized(nat, "run") {
+			t.Fatal("run not optimized")
+		}
+	}
+}
+
+// Random loops whose address is a phi of a constant -- the entry's -- and
+// of addresses the loop accesses on some of its paths, as a Go program's
+// dispatch loops' are: the optimizing tier leaves unchecked the accesses
+// every path to them has made in bounds (the opt README's passes, bce),
+// and traps where the interpreter does on the others.
+func TestOptPhiChecks(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 8))
+	for iter := range 60 {
+		var b strings.Builder
+		b.WriteString("(module\n  (memory 1 2)\n")
+		b.WriteString("  (func (export \"run\") (param $p i32) (param $q i32) (param $n i32) (result i64)\n")
+		b.WriteString("    (local $a i32) (local $b i64) (local $acc i64)\n")
+		// The entry's constants, within the memory or near its end.
+		init := func() int {
+			if rng.IntN(4) == 0 {
+				return 65536 - rng.IntN(64)
+			}
+			return rng.IntN(64)
+		}
+		fmt.Fprintf(&b, "    (local.set $a (i32.const %d))\n", init())
+		fmt.Fprintf(&b, "    (local.set $b (i64.const %d))\n", init())
+		b.WriteString("    (block $out (loop $top\n")
+		access := func(addr string) {
+			off := rng.IntN(48)
+			switch rng.IntN(4) {
+			case 0:
+				fmt.Fprintf(&b, "      (i64.store offset=%d %s (local.get $acc))\n", off, addr)
+			default:
+				fmt.Fprintf(&b, "      (local.set $acc (i64.add (i64.rotl (local.get $acc) (i64.const 3)) (i64.load offset=%d %s)))\n", off, addr)
+			}
+		}
+		for range 2 + rng.IntN(6) {
+			switch rng.IntN(5) {
+			case 0:
+				access("(local.get $a)")
+			case 1:
+				access("(i32.wrap_i64 (local.get $b))")
+			case 2:
+				b.WriteString("      (if (i32.and (local.get $n) (i32.const 1)) (then\n")
+				access("(local.get $p)")
+				b.WriteString("      (local.set $a (local.get $p))))\n")
+			case 3:
+				b.WriteString("      (if (i32.and (local.get $n) (i32.const 2)) (then\n")
+				access("(local.get $q)")
+				b.WriteString("      (local.set $b (i64.extend_i32_u (local.get $q)))) (else\n")
+				access("(local.get $p)")
+				b.WriteString("      (local.set $b (i64.extend_i32_u (local.get $p)))))\n")
+			default:
+				access("(local.get $p)")
+			}
+		}
+		b.WriteString("      (local.set $n (i32.sub (local.get $n) (i32.const 1)))\n")
+		b.WriteString("      (br_if $top (i32.gt_s (local.get $n) (i32.const 0)))))\n")
+		b.WriteString("    (local.get $acc)))\n")
+		src := b.String()
+		nat := tierInstance(t, src, 0)
+		in := interpretedInstance(t, src)
+		for range 24 {
+			p := 65536 - uint64(rng.IntN(80))
+			q := 65536 - uint64(rng.IntN(80))
+			if rng.IntN(3) == 0 {
+				p = uint64(rng.IntN(1000))
+			}
+			n := uint64(rng.IntN(6))
+			rn, en := call(t, nat, "run", p, q, n)
+			ri, ei := call(t, in, "run", p, q, n)
+			if !sameJITOutcome(rn, en, ri, ei) {
+				t.Fatalf("%d: run(%d, %d, %d): optimized %v %v, interpreted %v %v\n%s", iter, p, q, n, rn, en, ri, ei, src)
+			}
+			if en != nil {
+				var tn, ti *Trap
+				errors.As(en, &tn)
+				errors.As(ei, &ti)
+				if len(tn.Frames) == 0 || len(ti.Frames) == 0 || tn.Frames[0].Offset != ti.Frames[0].Offset {
+					t.Fatalf("%d: run(%d, %d, %d): optimized trapped at %v, interpreted at %v\n%s", iter, p, q, n, tn.Frames, ti.Frames, src)
+				}
+			}
+			if string(nat.Memories[0].Bytes()) != string(in.Memories[0].Bytes()) {
+				t.Fatalf("%d: run(%d, %d, %d): memory differs\n%s", iter, p, q, n, src)
+			}
+		}
+		if !optimized(nat, "run") {
+			t.Fatal("run not optimized")
+		}
+	}
 }

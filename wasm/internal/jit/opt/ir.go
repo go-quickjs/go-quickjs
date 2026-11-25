@@ -457,6 +457,10 @@ type Value struct {
 	// vreg is the lowering's number of the value among those it gives the
 	// allocator.
 	vreg int32
+	// Wide, where not 0, says a memory access checks an end past its own,
+	// that of the accesses of its address after it the check covers,
+	// whose list is at Wide-1 in the workspace's (wideCheck).
+	Wide int32
 }
 
 func (v *Value) String() string { return fmt.Sprintf("v%d", v.ID) }
@@ -767,6 +771,9 @@ func (v *Value) long() string {
 		s += fmt.Sprintf(" size %d", v.Size)
 		if v.NoCheck {
 			s += " nocheck"
+		}
+		if v.Wide != 0 {
+			s += " wide"
 		}
 	}
 	return s

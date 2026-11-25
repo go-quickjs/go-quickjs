@@ -312,7 +312,7 @@ inlines a call four deep.
 | `gvn` again, `copyelim` | |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
 | `dce` | values without uses or effects, and phis only themselves use |
-| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked (below) |
+| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value -- or of the i64 an i32 address wraps -- checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked, nor one whose address is a phi each of whose arguments is in bounds on its edge; and an access's check covers those of its address after it in its block that nothing between could tell apart (below) |
 | `split` | every critical edge gets a block, where its phis' moves go |
 | `loops` | natural loops, and each block's depth (below) |
 
@@ -337,6 +337,40 @@ is, and traps where the interpreter's does. micro/bytes' loops, over a
 memory of exactly the size they cover, went from 7.3 to 5.5 ms; the Go
 program's code is 0.5% smaller, its accesses at constant addresses and of
 masked indices within the minimum its memory declares.
+
+### Checks across phis and through a block
+
+Go's code runs a loop's every value through a phi of the dispatch
+switch's blocks (Jump threading, below), and the switch enters each of
+those blocks from the function's entry too, where the locals hold their
+first values: a pointer the loop carries is a phi of a constant and of
+the value the loop brings, block after block, and its accesses in one
+block are not dominated by those of the same pointer in the block
+before. An access of memory 0 whose address (or the i64 it wraps) is a
+phi is in bounds where every argument is: a constant whose access is
+within the memory's least size, or a value an access reached as far on
+every path to the end of the argument's predecessor -- an access in that
+block or one dominating it, back to the value's own block, or, where the
+value is a phi again, its arguments in turn (`bcePaths`; six phis deep
+and 64 blocks a search at most, a phi's farthest end found and nearest
+failed kept). An access before it in time, on every path, reached as
+far, and the memory never shrinks.
+
+An access's check is widened (`widen`) to cover the accesses of its
+address after it in its block, up to the first value with an effect or
+that may trap -- but a load checked as far already -- and up to a store
+among them, which is covered and ends the run: nothing between could
+tell at which of them the check was made. The access checks the
+farthest end, and where that fails its cold code takes the end back to
+each covered access's in order, and traps at the first past the memory,
+as the accesses one by one would have. Go's code reads a frame's
+arguments and saved values at rising offsets from one stack pointer.
+
+The two take 6,600 of the Go program's 177,800 checks away (4,290
+checks widened), 20 KB of its 33 MB of code; json's steady state went from 21.3 to 21.0 ms optimized (22.0 to
+21.7 tiered), regexp's from 23.9 to 23.3 (24.3 to 23.7), gzip's and
+interp's from 18.4 and 10.2 to 17.9 and 9.6, sha256 and sort level; the
+pass takes 4.3 µs a function where it took 3.0 (the compile 0.7% longer).
 
 ### Jump threading
 
@@ -1595,8 +1629,10 @@ registers the allocator gave out.
   loaded from the pool where they are used, in every turn of a loop.
 - Bounds checks: hoisting a loop's checks of an induction variable whose
   bound is not a constant (a guarded loop without checks, the checked
-  one its fallback), and a block's checks of one base at its widest where
-  nothing between can be observed.
+  one its fallback). The Go program's code still checks 171,000 of its
+  221,000 accesses of memory 0 after bce, a sixth of json's and regexp's samples: most are the first
+  access of a value in a block, a stack pointer read again after each
+  call or a pointer loaded from memory.
 - In the code what Go runs for it now, as the baseline makes them:
   memory.size, memory.copy and memory.fill of memories other than an
   unshared i32 memory 0, and table.fill, through the barrier.

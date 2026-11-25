@@ -996,26 +996,42 @@ func bce(f *Func) {
 		ub.reset(f.NumValues())
 	}
 	// checked is the end checked for each memory's address value, by the
-	// memory's index above the value's ID, and for constant addresses
-	// above -1: 0, which no access's end is, where none is. undo is what
-	// each entry was before the blocks on the walk's path changed it.
+	// memory's index above the value's ID (addrBase), and for constant
+	// addresses above -1: 0, which no access's end is, where none is.
+	// undo is what each entry was before the blocks on the walk's path
+	// changed it.
 	checked := &f.ws.checked
 	checked.reset(64)
 	undo := f.ws.bceUndo[:0]
+	pa := &f.ws.bcePaths
+	pa.ready = false
+	// quiet reports whether value w neither has an effect nor may trap:
+	// a load is quiet where an access dominating it checked as far.
+	quiet := func(w *Value) bool {
+		if !w.HasEffect() {
+			return true
+		}
+		if w.Op != OpLoad || w.Aux2&memShared != 0 || w.Args[0].Op == OpConst {
+			return false
+		}
+		end := w.Aux + uint64(w.Size)
+		return end >= w.Aux && checked.at(uint64(memIndex(w))<<32|uint64(uint32(addrBase(w).ID))) >= end
+	}
 	var walk func(b *Block)
 	walk = func(b *Block) {
 		mark := len(undo)
-		for _, v := range b.Values {
+		for i, v := range b.Values {
 			if v.Op != OpLoad && v.Op != OpStore || v.Aux2&memShared != 0 {
 				continue
 			}
 			addr := v.Args[0]
-			id, end := addr.ID, v.Aux+uint64(v.Size)
+			id, end := addrBase(v).ID, v.Aux+uint64(v.Size)
 			if end < v.Aux {
 				// An i64 memory's offset whose end carries: the access traps.
 				continue
 			}
-			if f.memMin > 0 && plainAccess(v) && ub.upper(addr)+end <= f.memMin {
+			plain := plainAccess(v)
+			if f.memMin > 0 && plain && ub.upper(addr)+end <= f.memMin {
 				// Within the memory's least size, whatever the address.
 				v.NoCheck = true
 				continue
@@ -1034,6 +1050,13 @@ func bce(f *Func) {
 				v.NoCheck = true
 				continue
 			}
+			if plain && id >= 0 {
+				if pa.phiChecked(f, d, addrBase(v), end) {
+					v.NoCheck = true
+				} else {
+					end = widen(f, b.Values[i+1:], v, end, quiet)
+				}
+			}
 			undo = append(undo, [2]uint64{k, old})
 			checked.set(k, end)
 		}
@@ -1045,6 +1068,221 @@ func bce(f *Func) {
 		}
 		undo = undo[:mark]
 	}
+	f.ws.wide = f.ws.wide[:0]
 	walk(f.Entry)
 	f.ws.bceUndo = undo[:0]
+}
+
+// addrBase is what memory access v's checks are known by: its address,
+// or, where that is an i64 wrapped for a memory of i32 addresses, the
+// i64, whose low half each such wrap of it is.
+func addrBase(v *Value) *Value {
+	a := v.Args[0]
+	if a.Op == OpWrap && v.Aux2&memWide == 0 {
+		return a.Args[0]
+	}
+	return a
+}
+
+// widenScan is how many values after an access widen looks through.
+const widenScan = 32
+
+// widen makes the check of plain load v, whose end is end, cover the
+// accesses of its address among the values after it in its block, next,
+// up to the first value that has an effect or may trap but those
+// accesses, a store among them the last covered: nothing between v and
+// them could tell that their ends were checked at v. It returns the end
+// v is to check. Where that check fails, the code finds the first of
+// them whose own end is past the memory's and traps there (wideCheck),
+// so that the trap is the one the accesses in order make. A store's
+// check is not widened: it stores once its check passes.
+func widen(f *Func, next []*Value, v *Value, end uint64, quiet func(*Value) bool) uint64 {
+	if v.Op == OpStore {
+		return end
+	}
+	base := addrBase(v)
+	ws := f.ws
+	start := len(ws.wide)
+	far := end
+	for n, w := range next {
+		if n == widenScan {
+			break
+		}
+		if (w.Op == OpLoad || w.Op == OpStore) && w.Args[0].Op != OpConst && addrBase(w) == base && plainAccess(w) {
+			if e := w.Aux + uint64(w.Size); e > far {
+				if len(ws.wide) == start {
+					ws.wide = append(ws.wide, wideCheck{v: v, end: end})
+				}
+				ws.wide = append(ws.wide, wideCheck{v: w, end: e})
+				far = e
+			}
+			if w.Op == OpStore {
+				break
+			}
+			continue
+		}
+		if !quiet(w) {
+			break
+		}
+	}
+	if far == end {
+		return end
+	}
+	ws.wide = append(ws.wide, wideCheck{})
+	v.Wide = int32(start + 1)
+	return far
+}
+
+// wideCheck is an access a widened check covers and its end. A widened
+// check's are in order from its access's Value.Wide-1: the access, then
+// each after it whose end is past those before it, the last the end
+// checked, then an entry of none.
+type wideCheck struct {
+	v   *Value
+	end uint64
+}
+
+// bcePaths finds the accesses of memory 0 in bounds on every path to
+// them though no access dominating them checked as far: those of an
+// address that is a phi -- each of a Go program's loop's values, whose
+// dispatch switch enters each of its blocks from the function's entry
+// too, is a phi of a constant and what the loop brings -- whose every
+// argument is a constant within the memory's least size, or a value
+// accessed as far on every path to the end of the argument's
+// predecessor: through an access on that predecessor's dominators, or,
+// where the argument is a phi again, through its arguments in turn. An
+// access is in bounds where an access before it, in time, of the same
+// address was: the memory never shrinks.
+type bcePaths struct {
+	// acc is the plain accesses of addresses not constant of each block
+	// a search has met, from span[b.ID][0] to span[b.ID][1]; a block not
+	// met yet has span[b.ID][1] -1.
+	acc  []bceAccess
+	span []bceSpan
+	// steps counts a search's blocks, against bceSteps.
+	steps int
+	// memo is, by a phi's ID, the farthest end found checked on every
+	// path and the nearest found not to be, 0 where none is.
+	memo []bceMemo
+	// stamp marks the entries of span and memo that are the function's;
+	// ready says it is the function's.
+	stamp uint32
+	ready bool
+}
+
+type bceSpan struct {
+	stamp  uint32
+	lo, hi int32
+}
+
+type bceMemo struct {
+	stamp          uint32
+	proven, failed uint32
+}
+
+// bceAccess is a plain access's address base and end.
+type bceAccess struct {
+	base *Value
+	end  uint64
+}
+
+const (
+	// bceDepth is how many phis deep, and bceSteps how many blocks in all,
+	// an access's search goes.
+	bceDepth = 6
+	bceSteps = 64
+)
+
+// of returns block b's plain accesses of addresses not constant.
+func (p *bcePaths) of(b *Block) []bceAccess {
+	s := &p.span[b.ID]
+	if s.stamp != p.stamp {
+		s.stamp, s.lo = p.stamp, int32(len(p.acc))
+		for _, v := range b.Values {
+			if (v.Op == OpLoad || v.Op == OpStore) && v.Aux2&memShared == 0 && v.Args[0].Op != OpConst && plainAccess(v) {
+				p.acc = append(p.acc, bceAccess{addrBase(v), v.Aux + uint64(v.Size)})
+			}
+		}
+		s.hi = int32(len(p.acc))
+	}
+	return p.acc[s.lo:s.hi]
+}
+
+// phiChecked reports whether every path to a use of phi base -- an
+// address base -- has made an access of it as far as end, or brings a
+// constant whose access is within the memory's least size.
+func (p *bcePaths) phiChecked(f *Func, d *domTree, base *Value, end uint64) bool {
+	if f.memMin == 0 || base.Op != OpPhi {
+		return false
+	}
+	if !p.ready {
+		p.acc = p.acc[:0]
+		p.span = grown(p.span, int(f.nextBlock))
+		p.memo = grown(p.memo, f.NumValues())
+		if p.stamp++; p.stamp == 0 {
+			clear(p.span[:cap(p.span)])
+			clear(p.memo[:cap(p.memo)])
+			p.stamp = 1
+		}
+		p.ready = true
+	}
+	m := &p.memo[base.ID]
+	if m.stamp != p.stamp {
+		*m = bceMemo{stamp: p.stamp}
+	}
+	if end <= uint64(m.proven) {
+		return true
+	}
+	if m.failed != 0 && end >= uint64(m.failed) {
+		return false
+	}
+	p.steps = 0
+	ok := p.phi(f, d, base, end, 0)
+	if ok {
+		m.proven = uint32(end)
+	} else {
+		m.failed = uint32(end)
+	}
+	return ok
+}
+
+func (p *bcePaths) phi(f *Func, d *domTree, phi *Value, end uint64, depth int) bool {
+	if phi.Op != OpPhi || depth == bceDepth {
+		return false
+	}
+	h := phi.Block
+	for i, a := range phi.Args {
+		if a.Op == OpWrap && phi.Type == TI32 {
+			a = a.Args[0]
+		}
+		if a.Op == OpConst {
+			if uint64(uint32(a.Aux))+end > f.memMin {
+				return false
+			}
+			continue
+		}
+		if !p.at(f, d, a, end, h.Preds[i], depth) {
+			return false
+		}
+	}
+	return true
+}
+
+// at reports whether base has been accessed as far as end on every path
+// to the end of block x, which base's block dominates.
+func (p *bcePaths) at(f *Func, d *domTree, base *Value, end uint64, x *Block, depth int) bool {
+	for b := x; ; b = d.idom[b.ID] {
+		if p.steps++; p.steps > bceSteps {
+			return false
+		}
+		for _, c := range p.of(b) {
+			if c.base == base && c.end >= end {
+				return true
+			}
+		}
+		if b == base.Block || b == f.Entry {
+			break
+		}
+	}
+	return p.phi(f, d, base, end, depth+1)
 }

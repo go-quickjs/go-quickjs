@@ -531,6 +531,10 @@ const (
 	// refArrayNew v, into the slot past off from R, as code's type, and
 	// goes on at to.
 	stubFill
+	// stubTrapWide is where the widened check of access v fails, s0
+	// the farthest end it checked: it traps at the first of the accesses
+	// the check covers whose end is past the memory's.
+	stubTrapWide
 )
 
 // stub emits out-of-line code.
@@ -551,6 +555,18 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold trap")
 		g.storeCtx(offArg0+8, uint64(st.at))
 		a.B(st.to)
+	case stubTrapWide:
+		a.Bind(st.l)
+		g.mark("cold trap")
+		w := wideChecks(g.f, st.v)
+		at := w[len(w)-1].end
+		for _, c := range w[:len(w)-1] {
+			a.AddImm(s0, s0, int64(c.end)-int64(at), true)
+			at = c.end
+			a.Cmp(s0, rMemSize, true)
+			a.BCond(arm64.HI, g.trap(wjit.TrapMemOutOfBounds, c.v.At))
+		}
+		a.B(g.trap(wjit.TrapMemOutOfBounds, w[len(w)-1].v.At))
 	case stubPoll:
 		a.Bind(st.l)
 		g.mark("cold poll")
@@ -1579,7 +1595,16 @@ func (g *gen) address(v *Value) arm64.Reg {
 		a.AddImm(s1, r, off, true)
 		r = s1
 	}
-	if !v.NoCheck {
+	if v.Wide != 0 {
+		// The check of the accesses after it too: s0 their farthest end,
+		// which the stub takes back to each's.
+		w := wideChecks(g.f, v)
+		l := a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubTrapWide, l: l, v: v})
+		a.AddImm(s0, r, int64(w[len(w)-1].end)-off, true)
+		a.Cmp(s0, rMemSize, true)
+		a.BCond(arm64.HI, l)
+	} else if !v.NoCheck {
 		a.AddImm(s0, r, size, true)
 		a.Cmp(s0, rMemSize, true)
 		a.BCond(arm64.HI, g.trap(wjit.TrapMemOutOfBounds, v.At))

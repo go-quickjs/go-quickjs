@@ -21,6 +21,18 @@ import (
 // trapKey is a trap stub's key: its code and its offset.
 func trapKey(code uint64, at uint32) uint64 { return code<<32 | uint64(at) }
 
+// wideChecks returns the accesses the widened check of access v covers,
+// v first, each with its end, the last's the end v checks (widen).
+func wideChecks(f *Func, v *Value) []wideCheck {
+	w := f.ws.wide[v.Wide-1:]
+	for i, c := range w {
+		if c.v == nil {
+			return w[:i]
+		}
+	}
+	return w
+}
+
 // allocScratch is the allocator's part of a workspace: the allocator, its
 // description of the function, and the lists of its instructions'
 // registers.

@@ -48,6 +48,9 @@ type workspace struct {
 	dceWork []*Value
 	checked u64map[uint64]
 	bceUndo [][2]uint64
+	// wide is the accesses the widened checks cover (Value.Wide).
+	wide     []wideCheck
+	bcePaths bcePaths
 
 	// Jump threading's: the predecessors threaded, the threaded edges,
 	// the uses within a block of its values (marked with stamp), and
