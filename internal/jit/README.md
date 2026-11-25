@@ -3073,7 +3073,11 @@ and counts them alone, no object made, no parameter aliased
 (`jitRegReadsArguments`, `ssa.InlineSite`'s `ReadsArguments`), reads the
 call's: `arguments[k]` of a constant k below their count is the call's
 argument k, `arguments.length` their count, as V8 eliminates the arguments
-object; any other key deoptimizes, Go's from the next compile on. One that
+object; a key no constant, of up to eight arguments, is checked to be an
+integer below the count and picks its argument by compares of it with
+each index (`argumentSelect`), as V8 reads the elements of an inlined
+frame's arguments that escape analysis replaced by the call's values; any
+other key leaves native code, Go's from the next compile on. One that
 hands them on, `f.apply(x, arguments)` (`jitRegForwards`), lowered so that
 its `apply_args` is the inliner's (`compile`'s `LowerRegForwardWith`, no
 `Forwards`), is inlined with them (`Arguments`), each `apply_args` in it

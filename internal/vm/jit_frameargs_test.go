@@ -46,19 +46,28 @@ const frameArgsSetup = `
 // callee's context (ssa.CallSite's FrameArgs), from which Go makes the
 // array and the object, and reads arguments[k] and arguments.length, and,
 // for a mapped object, which names it, its function object (Function):
-// each is called natively, at its call entry. Each answer is the
-// interpreter's.
+// each is called natively, at its call entry -- or inlined, its reads the
+// call's arguments (ssa.InlineSite's ReadsArguments), as count and
+// strictArgs are since their reads by a loop's index are picked natively
+// (ssa's argumentSelect). Each answer is the interpreter's.
 func TestJITFrameArguments(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	defer holdCollectorNow(t)()
+	inlined := jitRegInlinedForTest(t)
 	both := jitBothForTest(t, frameArgsSetup)
 	for range 3 {
 		both.agree(t, `run(300)`)
 	}
 	r := both.jit
 	for _, name := range []string{"sum", "rest", "count", "strictArgs", "mapped", "noParams"} {
+		if jitRegInlinesForTest(t, r, inlined, "run", name) {
+			// Inlined, as V8 inlines a callee that reads its arguments,
+			// its reads the call's (ssa.InlineSite's ReadsArguments, ssa's
+			// argumentSelect): none of its calls a native call.
+			continue
+		}
 		v := jitCodeNamedForTest(t, r, name)
 		if v.code.CallEntry() == 0 {
 			t.Errorf("%s has no call entry", name)

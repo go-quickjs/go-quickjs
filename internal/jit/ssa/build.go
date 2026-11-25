@@ -5499,6 +5499,55 @@ func (b *builder) windowForwardCall(blk *Block, a int, fn *Value, fr *frame, gua
 	}
 }
 
+// maxArgumentSelect is the most arguments of an inlined call that
+// argumentSelect picks among by a chain of compares of the key: past it a
+// read of a key no constant leaves native code, as one past the count
+// does.
+const maxArgumentSelect = 8
+
+// argumentSelect makes arguments[key] of an inlined call (InlineSite's
+// ReadsArguments), in, a key not a constant: its argument of that index,
+// the key checked to be a number, an integer below the call's count of
+// them, as V8's code reads the elements of an inlined frame's arguments
+// object, which escape analysis replaced by the call's values -- anything
+// else leaves native code, as a constant past the count does, Go reading
+// it in the callee's frame. The argument is
+// picked by compares of the key with each index but the last's, each
+// assigning its argument on a block of its own, the last's the value
+// otherwise: EarleyBoyer's sc_list reads its arguments so, `var a =
+// arguments; ... a[i]`, which had left native code in each call inlined.
+// What aliases a parameter is never read so: a sloppy callee's arguments
+// object of parameters is not inlined as one that reads it.
+func (b *builder) argumentSelect(blk *Block, in ir.Instruction, key *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	f := b.f
+	args := b.cur.args
+	n := len(args)
+	constF := func(x float64) *Value {
+		c := f.newValue(blk, OpConstF64, Float64)
+		c.Const = ir.Float(x)
+		return c
+	}
+	k := guard(OpUnboxF64, Float64, ir.GuardExit, key)
+	check := func(c *Value) { guard(OpCheckTrue, None, ir.GuardExit, f.newValue(blk, OpBoxBool, Tagged, c)) }
+	whole := f.newValue(blk, OpCmpF64, Bool, k, f.newValue(blk, OpTruncF64, Float64, k))
+	whole.Aux = int(ir.Eq)
+	check(whole)
+	lo := f.newValue(blk, OpCmpF64, Bool, k, constF(0))
+	lo.Aux = int(ir.Ge)
+	check(lo)
+	hi := f.newValue(blk, OpCmpF64, Bool, k, constF(float64(n)))
+	hi.Aux = int(ir.Lt)
+	check(hi)
+	b.assign(in.Dest, blk, args[n-1])
+	for j := range n - 1 {
+		is := f.newValue(blk, OpCmpF64, Bool, k, constF(float64(j)))
+		is.Aux = int(ir.Eq)
+		yes, cont := b.splitOn(blk, is)
+		b.assign(in.Dest, yes, args[j])
+		blk = cont
+	}
+}
+
 // constIndex is v as an array index, if it is a constant one: a number that
 // is a non-negative integer, as a key that names an element.
 func constIndex(v *Value) (int, bool) {
@@ -9244,6 +9293,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if k, ok := constIndex(operand(in.Left)); ok && k < len(b.cur.args) {
 			b.assign(in.Dest, blk, b.cur.args[k])
+			break
+		}
+		if n := len(b.cur.args); n > 0 && n <= maxArgumentSelect {
+			b.argumentSelect(blk, in, operand(in.Left), guard)
 			break
 		}
 		no := f.newValue(blk, OpConst, Tagged)
