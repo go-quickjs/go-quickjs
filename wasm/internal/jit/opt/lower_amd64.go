@@ -2413,10 +2413,14 @@ func (g *gen) bulk(v *Value) {
 		// Destination, value, count.
 		g.parallel([]pmove{in(si, v.Args[0]), in(ax, v.Args[1]), in(cx, v.Args[2])})
 		check(si)
+		long, done := a.NewLabel(), a.NewLabel()
+		g.fillShort(long, done)
+		a.Bind(long)
 		a.MovRR(s0, rCtx)
 		a.LeaIdx(rCtx, si, rMem, 1, 0)
 		a.RepStosb()
 		a.MovRR(rCtx, s0)
+		a.Bind(done)
 		return
 	}
 	if n, ok := smallCopy(v); ok {
@@ -2427,7 +2431,9 @@ func (g *gen) bulk(v *Value) {
 	g.parallel([]pmove{in(ax, v.Args[0]), in(si, v.Args[1]), in(cx, v.Args[2])})
 	check(si)
 	check(ax)
-	up, done := a.NewLabel(), a.NewLabel()
+	up, done, long := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.copyShort(long, done)
+	a.Bind(long)
 	a.Op(amd64.Cmp, ax, si, true)
 	a.Jcc(amd64.CondBE, up)
 	a.LeaIdx(s0, si, cx, 1, 0)
@@ -2459,6 +2465,107 @@ func (g *gen) bulk(v *Value) {
 	a.RepMovsb()
 	a.MovRR(rCtx, s0)
 	a.Bind(done)
+}
+
+// copyShort copies a memory.copy's count of at most 32 bytes, its
+// destination in AX, its source in SI and the count in CX, both ends
+// checked, and goes to done; a longer count goes to long. As copySmall's,
+// the copy is two pieces of the widest width within the count, one at
+// each end, both loaded before either is stored, so that it is right
+// however the source and the destination overlap: REP MOVSB takes tens of
+// cycles to start, more than the copies of a few bytes Go's code makes
+// most take whole.
+func (g *gen) copyShort(long, done amd64.Label) {
+	a := g.a
+	const ax, cx, si = amd64.RAX, amd64.RCX, amd64.RSI
+	a.OpImm(amd64.Cmp, cx, 32, true)
+	a.Jcc(amd64.CondA, long)
+	next := a.NewLabel()
+	a.OpImm(amd64.Cmp, cx, 16, true)
+	a.Jcc(amd64.CondB, next)
+	a.LeaIdx(s0, si, cx, 1, 0)
+	a.LoadVecIdx(x0, rMem, si, 0)
+	a.LoadVecIdx(x1, rMem, s0, -16)
+	a.LeaIdx(s0, ax, cx, 1, 0)
+	a.StoreVecIdx(rMem, ax, 0, x0)
+	a.StoreVecIdx(rMem, s0, -16, x1)
+	a.Jmp(done)
+	for _, w := range []int32{8, 4, 2} {
+		a.Bind(next)
+		next = a.NewLabel()
+		a.OpImm(amd64.Cmp, cx, w, true)
+		a.Jcc(amd64.CondB, next)
+		a.LeaIdx(s0, si, cx, 1, 0)
+		switch w {
+		case 8:
+			a.LoadIdx(s1, rMem, si, 1, 0)
+			a.LoadIdx(s0, rMem, s0, 1, -w)
+			a.StoreIdx(rMem, ax, 1, 0, s1)
+			a.LeaIdx(s1, ax, cx, 1, 0)
+			a.StoreIdx(rMem, s1, 1, -w, s0)
+		case 4:
+			a.LoadU32Idx(s1, rMem, si, 0)
+			a.LoadU32Idx(s0, rMem, s0, -w)
+			a.Store32Idx(rMem, ax, 0, s1)
+			a.LeaIdx(s1, ax, cx, 1, 0)
+			a.Store32Idx(rMem, s1, -w, s0)
+		default:
+			a.LoadU16Idx(s1, rMem, si, 0)
+			a.LoadU16Idx(s0, rMem, s0, -w)
+			a.Store16Idx(rMem, ax, 0, s1)
+			a.LeaIdx(s1, ax, cx, 1, 0)
+			a.Store16Idx(rMem, s1, -w, s0)
+		}
+		a.Jmp(done)
+	}
+	a.Bind(next)
+	a.Op(amd64.Test, cx, cx, true)
+	a.Jcc(amd64.CondE, done)
+	a.LoadU8Idx(s1, rMem, si, 0)
+	a.Store8Idx(rMem, ax, 0, s1)
+	a.Jmp(done)
+}
+
+// fillShort fills a memory.fill's count of at most 16 bytes, its
+// destination in SI, its byte in AX and the count in CX, the end
+// checked, and goes to done; a longer count goes to long: two pieces of
+// the widest width within the count, one at each end, of the byte
+// repeated.
+func (g *gen) fillShort(long, done amd64.Label) {
+	a := g.a
+	const ax, cx, si = amd64.RAX, amd64.RCX, amd64.RSI
+	a.OpImm(amd64.Cmp, cx, 16, true)
+	a.Jcc(amd64.CondA, long)
+	a.MovZX8(s1, ax)
+	a.MovImm(s0, 0x0101010101010101)
+	a.Imul(s1, s0)
+	next := a.NewLabel()
+	for _, w := range []int32{8, 4, 2} {
+		if w != 8 {
+			a.Bind(next)
+			next = a.NewLabel()
+		}
+		a.OpImm(amd64.Cmp, cx, w, true)
+		a.Jcc(amd64.CondB, next)
+		a.LeaIdx(s0, si, cx, 1, 0)
+		switch w {
+		case 8:
+			a.StoreIdx(rMem, si, 1, 0, s1)
+			a.StoreIdx(rMem, s0, 1, -w, s1)
+		case 4:
+			a.Store32Idx(rMem, si, 0, s1)
+			a.Store32Idx(rMem, s0, -w, s1)
+		default:
+			a.Store16Idx(rMem, si, 0, s1)
+			a.Store16Idx(rMem, s0, -w, s1)
+		}
+		a.Jmp(done)
+	}
+	a.Bind(next)
+	a.Op(amd64.Test, cx, cx, true)
+	a.Jcc(amd64.CondE, done)
+	a.Store8Idx(rMem, si, 0, s1)
+	a.Jmp(done)
 }
 
 // copyTemps is the number of float temporaries memory.copy v copies in: a

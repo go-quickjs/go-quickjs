@@ -925,7 +925,16 @@ ending at the count's end, or, below 16 bytes, two pieces of the widest
 word within the count through CX and R11, one at each end -- the
 operands still in AX and SI and both ends checked first. micro/bulk's
 16,384 copies of 64 bytes a round took 43% of its samples on REP MOVSB's
-start; the round went from 16.8 to 10.5 ms. On arm64 the operands go into
+start; the round went from 16.8 to 10.5 ms. A count not constant of 32
+bytes or fewer, and a fill's of 16 or fewer, are done so too, after
+both ends' checks (`copyShort`, `fillShort`): two pieces of the widest
+width within the count, one at each end -- 16 bytes through X15 and X14,
+8, 4 or 2 through R10 and R11, or a byte -- both loaded before either is
+stored; a fill's byte is repeated through a word by a multiplication.
+REP MOVSB was a third of regexp's and json's samples in Go's memmove,
+whose copies are mostly of a few bytes: regexp's steady state went from
+23.4 to 22.3 ms optimized (23.8 to 22.8 tiered), json's from 21.4 to
+20.7 (22.0 to 21.7), interp's 1% slower, the others level. On arm64 the operands go into
 X13, X14 and X15, and the code loops over blocks of 32 bytes in Q31 and
 Q30 (LDP and STP, the address moving past each block), then of 8 in X16,
 then bytes -- a copy to a higher address that overlaps its source from

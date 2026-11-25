@@ -287,8 +287,14 @@ func TestOptBulkMemory(t *testing.T) {
 	}
 	same("init", 65536)
 	const size = 65536
-	for _, n := range []uint64{0, 1, 3, 7, 8, 9, 15, 16, 17, 100, 1000, 4097} {
-		for _, d := range []int64{-9, -8, -1, 0, 1, 7, 8, 9, 64} {
+	// Every count to 40 -- each width of the short copies and fills and
+	// its ends -- and longer ones.
+	var counts []uint64
+	for n := range uint64(41) {
+		counts = append(counts, n)
+	}
+	for _, n := range append(counts, 63, 64, 65, 100, 1000, 4097) {
+		for _, d := range []int64{-33, -17, -16, -9, -8, -4, -2, -1, 0, 1, 2, 4, 7, 8, 9, 16, 17, 33, 64} {
 			same("copy", uint64(1000+d), 1000, n)
 			same("copy", 1000, uint64(1000+d), n)
 		}
