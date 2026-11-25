@@ -122,4 +122,9 @@ type Instance struct {
 	// test is what a test runs the instance's native code with, nil but
 	// in a test's (instanceTest): after every field native code reads.
 	test *instanceTest
+
+	// budgetLive is the bytes of GC objects the instance reached at the
+	// last count of its budget's that walked it, under the budget's mu:
+	// what a count that cannot walk it counts for it (Budget.recount).
+	budgetLive int64
 }

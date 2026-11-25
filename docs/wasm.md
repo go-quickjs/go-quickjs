@@ -495,7 +495,11 @@ heap with what its WebAssembly holds in it.
 
 The count of GC objects is an estimate: the Go API's may pass the limit by a
 sixteenth of it before it is found, and what only a call running on another
-goroutine holds is counted at that call's own next count.
+goroutine holds is counted at that call's own next count. A count never
+reads a module another goroutine may be changing: while another goroutine
+runs a call, instantiates a module or changes a global or a table through
+the API, a count walks only the modules of its own goroutine's calls, and
+counts each other module by what it held when a count last walked it.
 
 The JIT's memory -- the modules' native code and what describes it -- is
 never counted by those limits, so a program fails with `ErrMemoryLimit` the

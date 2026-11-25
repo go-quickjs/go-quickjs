@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -20,6 +21,16 @@ import (
 // budget's roots are counted again, since the collector may have freed the
 // rest: if they and what is wanted are over the limit, execution stops
 // with ErrMemoryLimit, which no wasm handler catches.
+//
+// A budget that counts itself is shared by instances that run on several
+// goroutines at once, and a count must not read the globals and tables of
+// an instance another goroutine is changing. So the goroutines using its
+// instances -- a call, an instantiation, a host changing a global or a
+// table -- each take a turn (Enter), and a count walks every instance only
+// while no other goroutine holds one; else it walks the instances of the
+// calls running on its own goroutine, and what only the others reach is
+// counted at a later count, low by that as a count is already for what
+// the frames of other goroutines hold.
 //
 // A budget may instead leave the counting to an outer meter -- a
 // JavaScript runtime's, which measures its whole heap, wasm's included --
@@ -60,6 +71,11 @@ type Budget struct {
 	// counts is how many counts of the reachable GC objects have been
 	// made: a charge made since the last is still in gcNew.
 	counts atomic.Uint64
+	// busy is how many goroutines hold a turn (Enter); walking is set,
+	// under mu, while a count walks every instance, which a turn begun
+	// meanwhile waits out.
+	busy    atomic.Int32
+	walking atomic.Bool
 
 	mu sync.Mutex
 	// insts are the instances charged to a budget that counts itself, whose
@@ -82,6 +98,32 @@ func (b *Budget) track(inst *Instance) {
 	b.mu.Lock()
 	b.insts = append(b.insts, weak.Make(inst))
 	b.mu.Unlock()
+}
+
+// Enter takes a turn using the budget's instances -- running their code,
+// instantiating one, or changing a global or a table of theirs from the
+// host -- for a budget that counts itself, waiting out a count walking
+// every instance; Exit gives it back. A call back into wasm that a host
+// function makes with the context it was given is part of the call's turn
+// and takes none of its own: a host that hands that context to another
+// goroutine, which calls into wasm while the call runs, runs it outside
+// any turn.
+func (b *Budget) Enter() {
+	if b == nil || b.outer != nil {
+		return
+	}
+	b.busy.Add(1)
+	for b.walking.Load() {
+		b.mu.Lock()
+		b.mu.Unlock()
+	}
+}
+
+// Exit gives back a turn Enter took.
+func (b *Budget) Exit() {
+	if b != nil && b.outer == nil {
+		b.busy.Add(-1)
+	}
 }
 
 // NewOuterBudget returns a budget that charges outer.
@@ -220,11 +262,25 @@ func (b *Budget) giveBackGC(epoch uint64, n int64) {
 // instances running on other goroutines are not seen: what only their
 // frames hold is counted at their own next count, so the total is an
 // estimate, low by that.
+//
+// While another goroutine holds a turn (Enter) no instance it may be
+// changing is read: the count walks the instances of the calls running on
+// x alone, and each other instance counts what it held at the last count
+// that walked it (Instance.budgetLive), an estimate of what it holds now.
 func (b *Budget) recount(x *exec, need int64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// The count's own goroutine holds one turn. walking is set before busy
+	// is read, and a turn sets busy before it reads walking: a turn begun
+	// as the count decides either is seen by it or waits for it.
+	b.walking.Store(true)
+	all := b.busy.Load() <= 1
+	if all {
+		defer b.walking.Store(false)
+	} else {
+		b.walking.Store(false)
+	}
 	seen := map[unsafe.Pointer]struct{}{}
-	var live int64
 	var work []Ref
 	visit := func(r Ref) {
 		if r.p == nil || r.IsI31() {
@@ -241,22 +297,46 @@ func (b *Budget) recount(x *exec, need int64) bool {
 		seen[r.p] = struct{}{}
 		work = append(work, r)
 	}
+	// drain counts what the references visited so far reach.
+	drain := func() int64 {
+		var n int64
+		for len(work) > 0 {
+			r := work[len(work)-1]
+			work = work[:len(work)-1]
+			n += objectSize(r, visit)
+		}
+		return n
+	}
+	// mine are the instances of the calls running on x, which a count
+	// walks whoever else holds a turn.
+	var mine []*Instance
+	if x != nil && !all {
+		for _, c := range x.calls {
+			if c.fn != nil && c.fn.Inst != nil && c.fn.Inst.budget == b && !slices.Contains(mine, c.fn.Inst) {
+				mine = append(mine, c.fn.Inst)
+			}
+		}
+	}
+	var live int64
 	kept := b.insts[:0]
 	for _, w := range b.insts {
-		if inst := w.Value(); inst != nil {
-			inst.visitRoots(visit)
-			kept = append(kept, w)
+		inst := w.Value()
+		if inst == nil {
+			continue
 		}
+		kept = append(kept, w)
+		if all || slices.Contains(mine, inst) {
+			// Each object is the first walked instance's to reach it.
+			inst.visitRoots(visit)
+			inst.budgetLive = drain()
+		}
+		live += inst.budgetLive
 	}
 	clear(b.insts[len(kept):])
 	b.insts = kept
 	if x != nil {
 		x.visitFrames(visit)
-	}
-	for len(work) > 0 {
-		r := work[len(work)-1]
-		work = work[:len(work)-1]
-		live += objectSize(r, visit)
+		live += drain()
 	}
 	b.gcLive.Store(live)
 	b.gcNew.Store(0)

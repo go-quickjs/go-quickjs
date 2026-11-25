@@ -93,6 +93,9 @@ type exec struct {
 	// hctx is the context the exec's host functions are given, made for
 	// the first of them.
 	hctx *hostCtx
+	// budget is the budget of the instance whose function the exec's call
+	// entered, if any.
+	budget *Budget
 }
 
 // execPools is an exec's table of pools for an instance.
@@ -226,13 +229,22 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 	x := execPool.Get().(*exec)
 	x.ctx = ctx
 	x.maxDepth = MaxCallDepth
+	x.budget = nil
+	if fn.Inst != nil {
+		x.budget = fn.Inst.budget
+	}
+	turn := x.budget
 	if ctx != nil {
 		if h, ok := ctx.Value(hostCtxKey{}).(*hostCtx); ok {
 			if room := h.room.Load(); room >= 0 {
 				x.maxDepth = int(room)
+				if h.budget == x.budget {
+					turn = nil
+				}
 			}
 		}
 	}
+	turn.Enter()
 	x.poll = pollEvery
 	if t != nil {
 		t.x = x
@@ -250,6 +262,8 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 		if outer != nil {
 			outer.leave(x)
 		}
+		turn.Exit()
+		x.budget = nil
 		if t != nil {
 			t.x = nil
 		}
@@ -289,6 +303,9 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 type hostCtx struct {
 	context.Context
 	room atomic.Int64
+	// budget is the exec's: a call back into wasm of the same budget is
+	// part of the call's turn (Budget.Enter).
+	budget *Budget
 }
 
 type hostCtxKey struct{}
@@ -307,7 +324,7 @@ func (x *exec) hostContext() *hostCtx {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		x.hctx = &hostCtx{Context: ctx}
+		x.hctx = &hostCtx{Context: ctx, budget: x.budget}
 	}
 	return x.hctx
 }

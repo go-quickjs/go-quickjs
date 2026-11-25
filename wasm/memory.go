@@ -180,7 +180,11 @@ func (t *table) Grow(delta uint64, init api.Value) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Grow and Set change the table in a turn of the runtime's budget, as
+	// the module's globals do.
+	t.r.budget.Enter()
 	old := t.t.Grow(delta, ref)
+	t.r.budget.Exit()
 	if old < 0 {
 		return 0, fmt.Errorf("table of %d elements cannot grow by %d", t.t.Size(), delta)
 	}
@@ -202,6 +206,8 @@ func (t *table) Set(index uint64, v api.Value) error {
 	if err != nil {
 		return err
 	}
+	t.r.budget.Enter()
 	t.t.Elems[index] = ref
+	t.r.budget.Exit()
 	return nil
 }

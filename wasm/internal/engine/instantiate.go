@@ -185,6 +185,11 @@ func InstantiateBudget(ctx context.Context, code *Code, imports []Extern, b *Bud
 func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (*Instance, error) {
 	m := code.Module
 	inst := &Instance{Module: m, Code: code, budget: b}
+	// The instance is built in a turn of its budget's (Budget.Enter),
+	// given back before the start function, whose call takes its own.
+	turn := b
+	turn.Enter()
+	defer func() { turn.Exit() }()
 	b.track(inst)
 	// Memories are linked first, then the other imports in order.
 	for i, imp := range m.Imports {
@@ -331,6 +336,8 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 		copy(b[off:], data)
 		inst.datas[i] = nil
 	}
+	turn.Exit()
+	turn = nil
 	if m.HasStart {
 		if _, err := Invoke(ctx, inst.Funcs[m.Start], nil); err != nil {
 			return inst, err

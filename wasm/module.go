@@ -419,7 +419,12 @@ func (g *global) String() string {
 // mutableGlobal is an api.MutableGlobal.
 type mutableGlobal struct{ *global }
 
+// Set and SetValue change the global in a turn of the runtime's budget
+// (engine.Budget.Enter), so that no count of what the budget's modules
+// hold reads it as it changes.
 func (g *mutableGlobal) Set(v uint64) {
+	g.r.budget.Enter()
+	defer g.r.budget.Exit()
 	t := g.g.Type
 	switch t.Kind {
 	case module.KindRef:
@@ -437,6 +442,8 @@ func (g *mutableGlobal) SetValue(v api.Value) error {
 	if err != nil {
 		return err
 	}
+	g.r.budget.Enter()
 	g.g.Num, g.g.Hi, g.g.Ref = val.N, val.Hi, val.R
+	g.r.budget.Exit()
 	return nil
 }

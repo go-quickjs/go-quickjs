@@ -1,11 +1,15 @@
 package wasm_test
 
 import (
+	"context"
 	"errors"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/wasm"
+	"github.com/go-quickjs/go-quickjs/wasm/api"
 )
 
 // TestMemoryLimitInGlobalInit checks that a global's initializer that
@@ -72,5 +76,82 @@ func TestMemoryLimitBeforeAllocating(t *testing.T) {
 		if n := after.TotalAlloc - before.TotalAlloc; n > 8<<20 {
 			t.Errorf("%s: %d bytes allocated before the limit refused it", src, n)
 		}
+	}
+}
+
+// TestMemoryLimitCountWhileOthersRun runs, on goroutines of their own, a
+// module that sets its globals and grows and sets its table and a module
+// that allocates past the limit's sixteenth over and over, so that its
+// allocations count what is reachable again and again while the first
+// changes what it holds. Under the race detector this checks that a count
+// does not read the globals and tables of instances in use on other
+// goroutines; without it, that the counts neither crash nor stop either
+// module.
+func TestMemoryLimitCountWhileOthersRun(t *testing.T) {
+	ctx, r := newRuntime(t, wasm.NewRuntimeConfig().WithMemoryLimit(32<<20))
+	holder := instantiate(t, ctx, r, `(module (type $a (array i64))
+		(global $g (mut (ref null $a)) (ref.null $a))
+		(table $t 1 (ref null $a))
+		(func (export "churn") (param i32)
+			(loop $l
+				(global.set $g (array.new_default $a (i32.const 4)))
+				(drop (table.grow $t (global.get $g) (i32.const 8)))
+				(table.set $t (i32.const 0) (global.get $g))
+				(br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1)))))))`)
+	allocator := instantiate(t, ctx, r, `(module (type $a (array i64))
+		(func (export "garbage") (param i32)
+			(loop $l
+				(drop (array.new_default $a (i32.const 65536)))
+				(br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1)))))))`)
+	// A third module's table and global, which the host changes.
+	other := instantiate(t, ctx, r, `(module (type $a (array i64))
+		(global (export "g") (mut (ref null $a)) (ref.null $a))
+		(table (export "t") 1 (ref null $a)))`)
+	tab := other.ExportedTable("t")
+	g := other.ExportedGlobal("g").(api.MutableGlobal)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for range 20000 {
+			if _, err := tab.Grow(1, api.Value{}); err != nil {
+				errs <- err
+				return
+			}
+			if err := tab.Set(0, api.Value{}); err != nil {
+				errs <- err
+				return
+			}
+			if err := g.SetValue(api.Value{Type: g.Type()}); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			if _, err := holder.ExportedFunction("churn").Call(ctx, 2000); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 20 {
+			if _, err := allocator.ExportedFunction("garbage").Call(ctx, 200); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
