@@ -271,6 +271,32 @@ func TestJITSpreadFrameless(t *testing.T) {
 	}
 }
 
+// A literal's field that no transition of its object's layout answers --
+// one after a __proto__ of a prototype the site had not met, whose objects
+// are of a layout of their own -- Go defines from native code without a
+// frame (jitRegFrameless), as V8's code calls its DefineNamedOwn IC's
+// runtime: a run on each new prototype makes no call of Go with a frame,
+// where each had made one, and every answer is the interpreter's.
+func TestJITLiteralFieldsFrameless(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, want := jitAnswersForTest(t, `
+		function protos(n, p) { let s = 0; for (let i = 0; i < n; i++) { const q = { __proto__: p, f: i, g: 2 }; s += q.f + q.g } return s }`)
+	for range 8 {
+		want(`protos(300, {})`, "45450")
+	}
+	e := jitNativeForTest(t, r, "protos")
+	calls := e.ssaStats.goCalls
+	for range 4 {
+		want(`protos(300, {})`, "45450")
+	}
+	if made := e.ssaStats.goCalls - calls; made != 0 {
+		t.Errorf("protos made %d calls of Go with a frame in 4 runs", made)
+	}
+}
+
 // A loop of object spreads Go makes with the frame -- a getter's source --
 // and of little else, entered at its header by on-stack replacement, is
 // judged not to pay as its calls are made (jitRegRunGoProfit): the code

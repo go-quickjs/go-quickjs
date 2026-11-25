@@ -525,6 +525,13 @@ func (r *Runtime) jitRegFrameless(ctx *abi.Context, cl *closure, c *regCode, rpc
 		in.Op = bytecode.OpDefineIndex
 	case bytecode.RToPropertyKey:
 		in.Op = bytecode.OpToPropertyKey
+	case bytecode.RDefineField:
+		// A literal's field its transition did not answer natively
+		// (DefineNext): its key the instruction's name.
+		if cl == nil {
+			return false
+		}
+		in.Op, in.A = bytecode.OpDefineField, uint32(regName(cl, c, rpc, regAt(c.code, rpc).C()))
 	default:
 		return false
 	}
