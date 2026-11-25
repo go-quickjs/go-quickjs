@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -56,20 +57,24 @@ func deepProbe(t *testing.T, r *Runtime) (changes func() int, reset func()) {
 
 // The realm's cache of additions (deepAdds) holds four to a set: four
 // additions whose shapes and keys share a set -- the layouts picked so,
-// from 600 -- keep their entries, each found and none made again,
-// however many times they are made in turn, where five in turn displace
-// one another, each made again. Each addition is made as a write at a
+// from those made until five share one -- keep their entries, each found
+// and none made again, however many times they are made in turn, where
+// five in turn displace one another, each made again. Each addition is made as a write at a
 // site that has given up makes it (setPropCached): looked up
 // (deepStore), and where it is not found made and remembered
 // (fillDeepStore).
 func TestDeepAddsFourWays(t *testing.T) {
 	t.Parallel()
-	src := "var ctors = [];\n"
-	for i := range 600 {
-		src += fmt.Sprintf("ctors.push(function () { this.k%d = 0 });\n", i)
-	}
-	src += `var made = ctors.map(function (C) { return new C() });
+	src := `var ctors = [], made = [];
 function batch(picks, n) { var out = []; for (var r = 0; r < n; r++) for (var i = 0; i < picks.length; i++) out.push(new ctors[picks[i]]()); return out }`
+	// more makes the layouts from..from+599, each a constructor's.
+	more := func(from int) string {
+		var b strings.Builder
+		for i := from; i < from+600; i++ {
+			fmt.Fprintf(&b, "ctors.push(function () { this.k%d = 0 }); made.push(new ctors[%d]());\n", i, i)
+		}
+		return b.String()
+	}
 	r := newTestRuntime(t, Config{})
 	defer r.Close()
 	run := func(src string) Value {
@@ -81,19 +86,28 @@ function batch(picks, n) { var out = []; for (var r = 0; r < n; r++) for (var i 
 		return v
 	}
 	run(src)
-	// The layouts by the set their addition of x is in.
+	// The layouts by the set their addition of x is in, made 600 at a time
+	// until five share one: the sets are hashed from the shapes' addresses,
+	// the heap's. Of 4,000 runtimes' first 600 layouts, the fullest set
+	// held exactly five in some 2%, so that now and then a heap put no five
+	// in one; up to 4,800 make the chance of none nil.
 	x := r.atoms.intern("x")
 	sets := map[uintptr][]int{}
 	var five []int
-	for i, v := range r.global.getOwn(r.atoms.intern("made")).value().Object().elemsOf() {
-		set := deepSetOf(v.Object().shape, x)
-		if sets[set] = append(sets[set], i); len(sets[set]) == deepWays+1 {
-			five = sets[set]
-			break
+	made := 0
+	for five == nil && made < 4800 {
+		run(more(made))
+		elems := r.global.getOwn(r.atoms.intern("made")).value().Object().elemsOf()
+		for i := made; i < len(elems) && five == nil; i++ {
+			set := deepSetOf(elems[i].Object().shape, x)
+			if sets[set] = append(sets[set], i); len(sets[set]) == deepWays+1 {
+				five = sets[set]
+			}
 		}
+		made = len(elems)
 	}
 	if five == nil {
-		t.Fatal("no five of 600 layouts whose additions share a set")
+		t.Fatalf("no five of %d layouts whose additions share a set", made)
 	}
 	// adds makes the additions of x to objects of picks' layouts, n
 	// rounds of them, and returns how many were not found.
