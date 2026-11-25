@@ -272,6 +272,8 @@ func (c *compiler) endLabel(label string) {
 }
 
 func (c *compiler) flatBlock(f *funcCtx, tok Token) *node {
+	c.enter(tok)
+	defer c.leave()
 	n := &node{kind: nBlock, tok: tok, op: blockOps[tok.Text]}
 	label := c.blockLabel()
 	n.bt = c.blockType()
@@ -362,6 +364,8 @@ func (c *compiler) folded(f *funcCtx) *node {
 	if tok.Kind != Keyword || !instrNames[tok.Text] {
 		c.unexpected(tok)
 	}
+	c.enter(tok)
+	defer c.leave()
 	var n *node
 	switch tok.Text {
 	case "block", "loop":

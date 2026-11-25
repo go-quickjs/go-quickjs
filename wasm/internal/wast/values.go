@@ -283,6 +283,8 @@ func nanKind(t text.Token) NaNKind {
 
 // result parses a result pattern.
 func (p *parser) result() Result {
+	p.enter(p.peek())
+	defer p.leave()
 	p.lparen()
 	kw := p.next()
 	if kw.Kind != text.Keyword {

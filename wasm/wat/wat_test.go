@@ -410,3 +410,44 @@ func TestCompileErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestNestingLimit checks that instructions nest up to 10,000 deep, in the
+// flat form, folded blocks and folded operands, and that one level more is
+// an *Error at the instruction past the bound rather than a stack overflow.
+func TestNestingLimit(t *testing.T) {
+	const max = 10_000
+	forms := []struct {
+		name string
+		src  func(n int) string
+		col  int // the column of the instruction past the bound
+	}{
+		{"flat", func(n int) string {
+			return "(module (func " + strings.Repeat("block ", n) + strings.Repeat("end ", n) + "))"
+		}, len("(module (func ") + 6*max + 1},
+		{"folded", func(n int) string {
+			return "(module (func " + strings.Repeat("(block ", n) + strings.Repeat(")", n) + "))"
+		}, len("(module (func ") + 7*max + 2},
+		{"operands", func(n int) string {
+			return "(module (func (result i32) " + strings.Repeat("(i32.eqz ", n-1) + "(i32.const 0)" + strings.Repeat(")", n-1) + "))"
+		}, len("(module (func (result i32) ") + 9*max + 2},
+		{"if", func(n int) string {
+			return "(module (func " + strings.Repeat("(if (then ", n) + strings.Repeat("))", n) + "))"
+		}, len("(module (func ") + 10*max + 2},
+	}
+	for _, f := range forms {
+		t.Run(f.name, func(t *testing.T) {
+			if _, err := Compile([]byte(f.src(max))); err != nil {
+				t.Fatalf("%d levels: %v", max, err)
+			}
+			_, err := Compile([]byte(f.src(max + 1)))
+			var e *Error
+			if !errors.As(err, &e) {
+				t.Fatalf("%d levels: error %v, want an *Error", max+1, err)
+			}
+			want := fmt.Sprintf("1:%d: instructions nest more than %d deep", f.col, max)
+			if e.Error() != want {
+				t.Errorf("%d levels: %q, want %q", max+1, e.Error(), want)
+			}
+		})
+	}
+}

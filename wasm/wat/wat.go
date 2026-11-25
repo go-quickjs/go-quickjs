@@ -21,6 +21,10 @@
 //
 // Compile neither decodes nor validates the binary: a module that parses is
 // encoded even if it is invalid.
+//
+// Instructions nest at most 10,000 deep: a block, loop, if, try or
+// try_table in another, or a folded instruction an operand of another, is a
+// level. Deeper text is an *Error.
 package wat
 
 import "github.com/go-quickjs/go-quickjs/wasm/internal/text"

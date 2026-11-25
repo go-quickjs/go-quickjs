@@ -455,6 +455,12 @@ What the engine can make bounds every preset:
   into wasm from a host function counts against what the call that made it
   has left, 16 calls deep a round trip. Under a smaller memory limit the
   frames take that limit at most (below).
+- In the text format (`wasm/wat`, and a script's modules), instructions
+  nest 10,000 deep -- a block, loop, if, try or try_table in another, or a
+  folded instruction an operand of another, is a level -- and a script's
+  commands and results as deep. Deeper text is a `wat.Error`, "instructions
+  nest more than 10000 deep", rather than a parse whose recursion overflows
+  the Go stack; the binary format has no such bound.
 - A GC array may be as large as 2^30-1 bytes with its header.
 
 ### Memory limits

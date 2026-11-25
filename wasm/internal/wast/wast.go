@@ -244,7 +244,22 @@ type parser struct {
 	annots []text.Annot
 	src    []byte
 	p      int
+	// depth is how deeply the command or result being parsed nests: a
+	// thread's commands and an either's results nest.
+	depth int
 }
+
+// enter begins a command or a result a level deeper, at t, failing past
+// text.MaxNesting, the bound of the text format's nesting, so that what
+// parses it recursing does not overflow the stack; leave ends it.
+func (p *parser) enter(t text.Token) {
+	p.depth++
+	if p.depth > text.MaxNesting {
+		p.fail(t, "commands or results nest more than %d deep", text.MaxNesting)
+	}
+}
+
+func (p *parser) leave() { p.depth-- }
 
 func (p *parser) fail(t text.Token, format string, args ...any) {
 	panic(&text.Error{Line: t.Line, Col: t.Col, Msg: fmt.Sprintf(format, args...)})
@@ -323,6 +338,8 @@ func (p *parser) name() string {
 
 func (p *parser) command() Command {
 	open := p.lparen()
+	p.enter(open)
+	defer p.leave()
 	kw := p.next()
 	if kw.Kind != text.Keyword {
 		p.unexpected(kw)

@@ -2,8 +2,13 @@ package wast
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/wasm/internal/text"
 )
 
 const sample = `;; A script with every kind of command.
@@ -185,5 +190,41 @@ func TestParseErrors(t *testing.T) {
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("Parse(%q) succeeded", src)
 		}
+	}
+}
+
+// TestParseNestingLimit checks that a script's results and commands nest
+// up to text.MaxNesting deep, and that one level more is a *text.Error
+// rather than a stack overflow.
+func TestParseNestingLimit(t *testing.T) {
+	const max = text.MaxNesting
+	// The command is a level, each either one, and the value it holds one.
+	either := func(n int) string {
+		return `(assert_return (invoke "f") ` + strings.Repeat("(either ", n-2) + "(i32.const 0)" + strings.Repeat(")", n-2) + ")"
+	}
+	thread := func(n int) string {
+		return strings.Repeat("(thread $t ", n) + strings.Repeat(")", n)
+	}
+	for _, c := range []struct {
+		name string
+		src  func(n int) string
+		want string
+	}{
+		{"either", either, fmt.Sprintf(`1:%d: commands or results nest more than %d deep`, len(`(assert_return (invoke "f") `)+len("(either ")*(max-1)+1, max)},
+		{"thread", thread, fmt.Sprintf(`1:%d: commands or results nest more than %d deep`, len("(thread $t ")*max+1, max)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := Parse([]byte(c.src(max))); err != nil {
+				t.Fatalf("%d levels: %v", max, err)
+			}
+			_, err := Parse([]byte(c.src(max + 1)))
+			var e *text.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("%d levels: error %v, want a *text.Error", max+1, err)
+			}
+			if e.Error() != c.want {
+				t.Errorf("%d levels: %q, want %q", max+1, e.Error(), c.want)
+			}
+		})
 	}
 }

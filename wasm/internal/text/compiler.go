@@ -73,7 +73,30 @@ type compiler struct {
 	tagAnnots       map[uint32]string
 	customs         []custom
 	exportNames     map[string]bool
+
+	// depth is how deeply the instruction being parsed nests (enter).
+	depth int
 }
+
+// MaxNesting is the deepest instructions may nest in the text format: a
+// block, loop, if, try or try_table in another, or a folded instruction an
+// operand of another, is a level. Parsing an instruction, and each pass
+// over what it parses, recurses as deeply as it nests, using about a
+// kilobyte of Go stack a level, and a goroutine's stack overflowing is a
+// crash of the process rather than an error; past this the text is
+// rejected instead.
+const MaxNesting = 10_000
+
+// enter begins an instruction a level deeper, at t, failing past
+// MaxNesting; leave ends it.
+func (c *compiler) enter(t Token) {
+	c.depth++
+	if c.depth > MaxNesting {
+		c.fail(t, "instructions nest more than %d deep", MaxNesting)
+	}
+}
+
+func (c *compiler) leave() { c.depth-- }
 
 // localNames are a function's local identifiers, by local index.
 type localNames struct {
