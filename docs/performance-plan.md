@@ -616,71 +616,34 @@ the stack JIT lowered; their counts are from then.
 ## The register JIT's remaining gaps
 
 The JIT compiles register code alone since `388324de`. The stack JIT's
-tests were ported to it, and some of them hold only for what the stack JIT
-did and the register JIT does not do yet: each is skipped by name with a
-`t.Skip` that says what falls short and points here (`grep -rn "register
-JIT gap:" internal/vm`). Each gap is closed by giving the register path
-the mechanism the test describes -- the stack JIT had it, and its test's
-comment says what it was -- never by loosening the test, and the skip goes
-with the fix. None of them is a wrong answer: every skipped test's answers
-are the interpreter's; what differs is how much runs natively, how often
-code is compiled, and the shape of the code.
+tests were ported to it, and some of them held only for what the stack
+JIT did and the register JIT did not yet: each was skipped by name, with a
+`t.Skip` that said what fell short. Each gap was closed by giving the
+register path the mechanism its test describes, never by loosening the
+test, the skip going with the fix; none of them had been a wrong answer.
+No skip remains (`grep -rn "register JIT gap:" internal/vm` finds none).
+What closed them:
 
-**Native calls and entries.** Code that should run natively runs in Go or
-in the interpreter.
-
-- `TestJITAccessorsNative`: a small getter and setter read in a loop are to
-  be inlined, and a built-in's getter called by Go from native code, which
-  goes on after it. `selves(ps, 4000)` does not run natively, and `sums`
-  makes some 2,000 calls of Go.
-- `TestJITPropertyReleaseAndGC`: after a getter's `a.push`, the run finishes
-  in the interpreter rather than going on natively after the call of Go, so
-  that the later callbacks run with no native run under way.
-- `TestJITArgumentsInRecursion`: a recursion that reads its arguments, as
-  EarleyBoyer's `sc_list` does, is to read `arguments[i]` of an arguments
-  object that aliases nothing by a call of Go from native code, and to
-  leave code that is due to be compiled again only where the compile can
-  be made then. It finishes in the interpreter 30 times and leaves for Go
-  85 times.
-- `TestJITArrowSharedBindingCalled`: arrows a derived constructor made
-  share its this binding, and a native call of one is to give it the
-  binding's value, checking at each call that it is bound (mir's
-  `arrowBound`). `callAll` makes 548 calls of Go a round, not none.
-- `TestJITDerivedNativeConstructArrows`: a derived constructor whose arrows
-  all come after its `super()` is to be constructed natively, Go binding the
-  frame's this as that `super()` bound it (`jitBindThis`). `B`'s and `C`'s
-  code is never called natively.
-- `TestJITCatchCallees`: a callee with exception handlers is to be called
-  natively, a frame Go makes of it having the handlers in force there.
-  `parse` never is.
-- `TestJITSuperReferences`: a super reference's read or write is to be
-  Go's from native code on the frame Go entered the code with, a native
-  call writing its function object to its callee's context for the home
-  object. `B.prototype.w` leaves native code 145 times.
-- `TestJITSpreadFrameless`: spreads and rests of plain objects and dense
-  arrays, and computed keys that are strings, are to be made without a
-  frame. A spread call of a frameless callee calls Go with a frame 3
-  times.
-- `TestJITSSAStringAddCallsGo`: a `+` with a string is to be Go's from
-  native code (`ssa.GoAdd`), which stays native, as V8's code calls its
-  StringAdd. `tree`, a recursion like Splay's `GeneratePayloadTree`, is
-  never called natively.
-
-**Compiling again and learning.** The code is compiled again where it
-should not be, or not where it should, or does not learn what it met.
-
-- `TestJITKeyedWrites`: an element's write to an object native code does not
-  store to is to be Go's from native code (`ssa.GoKeyedWrite`). `fill` leaves
-  its code 4 times.
-
-**Exits.**
-
-- `TestJITBigTypedArrays`: loops over BigInt typed arrays are to run natively
-  and leave nowhere. Over arrays past 2 GiB they leave native code once and
-  make 3 calls of Go.
-- `TestJITExceptionHandlers`: a function with try statements, compiled with
-  its handlers known at each instruction, is to be entered again once
-  compiled again. `operation({}, 100)` runs in the interpreter.
+- `TestJITKeyedWrites`, `TestJITSSAStringAddCallsGo`,
+  `TestJITSpreadFrameless`, `TestJITBigTypedArrays`,
+  `TestJITPropertyReleaseAndGC`: Go's calls from native code on the
+  register frame -- a literal's field, a generic BigInt operator in an
+  inlined callee, a receiver's own accessor -- and their tests' setups.
+- `TestJITSuperReferences`: `super_set_index` run whole, a whole Host's
+  fourth read (`ir.Instruction`'s `Fourth`).
+- `TestJITArrowSharedBindingCalled`, `TestJITDerivedNativeConstructArrows`:
+  an arrow sharing a bound derived constructor's this learned from the
+  function a call called, its `this_bound` its register 1; a closure that
+  captures none of a native callee's registers made on its level.
+- `TestJITArgumentsInRecursion`: an inlined call's arguments read by a key
+  no constant picked natively (ssa's `argumentSelect`); a closure the
+  caller's own code makes called by its code from the first compile.
+- `TestJITAccessorsNative`: register code's reference reads find their
+  accessors; an accessor not inlined called natively, its window made
+  past the VM's stack's top (mir's `windowAccessor`).
+- `TestJITExceptionHandlers`, `TestJITCatchCallees`: a throw from a call of
+  Go goes on at its handler in native code (`abi.GoCallState`'s `Catch`,
+  mir's `catchStub`).
 
 **Tests ported, not skipped.** Of the tests that read the stack JIT's
 internals, four were ported to the register JIT's in the removal and run:
