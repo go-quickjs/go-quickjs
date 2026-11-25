@@ -892,6 +892,9 @@ func gvn(f *Func) {
 type gvnTable struct {
 	heads   []int32
 	entries []gvnEntry
+	// dirty says heads may hold entries: done, popping them all, leaves
+	// every head -1 for the next function.
+	dirty bool
 }
 
 type gvnEntry struct {
@@ -907,10 +910,15 @@ func (t *gvnTable) reset(n int) {
 	for size < 2*n {
 		size *= 2
 	}
-	t.heads = grown(t.heads, size)
-	for i := range t.heads {
-		t.heads[i] = -1
+	if cap(t.heads) < size || t.dirty {
+		t.heads = grown(t.heads, size)
+		h := t.heads[:cap(t.heads)]
+		for i := range h {
+			h[i] = -1
+		}
 	}
+	t.heads = t.heads[:size]
+	t.dirty = true
 	t.entries = t.entries[:0]
 }
 
@@ -952,7 +960,10 @@ func (t *gvnTable) pop(mark int) {
 }
 
 // done drops the table's values.
-func (t *gvnTable) done() { t.pop(0) }
+func (t *gvnTable) done() {
+	t.pop(0)
+	t.dirty = false
+}
 
 // licm moves the pure values of each loop that makes no call whose
 // arguments are defined outside it to the loop's preheader -- its header's
@@ -1125,6 +1136,7 @@ func bce(f *Func) {
 	}
 	f.ws.wide = f.ws.wide[:0]
 	walk(f.Entry)
+	checked.clean()
 	f.ws.bceUndo = undo[:0]
 }
 
@@ -1134,14 +1146,23 @@ func bce(f *Func) {
 type bceEnds struct {
 	mem0  []uint64
 	other u64map[uint64]
+	// dirty says mem0 may hold ends: bce's walk, which puts back what it
+	// changes, leaves it all 0 for the next function (clean).
+	dirty bool
 }
 
 // reset empties e for a function of n values.
 func (e *bceEnds) reset(n int) {
+	if e.dirty {
+		clear(e.mem0[:cap(e.mem0)])
+	}
 	e.mem0 = grown(e.mem0, n+1)
-	clear(e.mem0)
+	e.dirty = true
 	e.other.reset(8)
 }
+
+// clean notes that e's walk has put back every end it changed.
+func (e *bceEnds) clean() { e.dirty = false }
 
 // at is key k's end, 0 where none is.
 func (e *bceEnds) at(k uint64) uint64 {
