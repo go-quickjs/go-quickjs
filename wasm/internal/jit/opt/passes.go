@@ -162,13 +162,12 @@ func dce(f *Func) {
 			if v.Uses == 0 && !v.HasEffect() {
 				work = append(work, v)
 			}
-			switch {
-			case v.Op == OpGlobalSet:
+			if v.Op == OpGlobalSet {
 				if set != nil && set.Aux == v.Aux {
 					work = append(work, set)
 				}
 				set = v
-			case v.Op == OpGlobalGet || v.HasEffect():
+			} else if set != nil && (v.Op == OpGlobalGet || v.HasEffect()) {
 				set = nil
 			}
 		}
