@@ -36,17 +36,17 @@ func (d *dirFS) inParent(p string, fn func(dirfd int, base string) error) Errno 
 	return ToErrno(opErr)
 }
 
-func (d *dirFS) rename(from, to string) Errno {
+func (d *dirFS) rename(from string, n *dirFS, to string) Errno {
 	return d.inParent(from, func(ofd int, obase string) error {
-		return d.inParent(to, func(nfd int, nbase string) error {
+		return n.inParent(to, func(nfd int, nbase string) error {
 			return unix.Renameat(ofd, obase, nfd, nbase)
 		})
 	})
 }
 
-func (d *dirFS) link(from, to string) Errno {
+func (d *dirFS) link(from string, n *dirFS, to string) Errno {
 	return d.inParent(from, func(ofd int, obase string) error {
-		return d.inParent(to, func(nfd int, nbase string) error {
+		return n.inParent(to, func(nfd int, nbase string) error {
 			return unix.Linkat(ofd, obase, nfd, nbase, 0)
 		})
 	})

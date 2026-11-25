@@ -2,8 +2,11 @@
 
 package sysfs
 
-func (d *dirFS) rename(from, to string) Errno { return d.resolvedRename(from, to) }
-func (d *dirFS) link(from, to string) Errno   { return d.resolvedLink(from, to) }
+func (d *dirFS) rename(from string, n *dirFS, to string) Errno {
+	return d.resolvedRename(from, n, to)
+}
+
+func (d *dirFS) link(from string, n *dirFS, to string) Errno { return d.resolvedLink(from, n, to) }
 
 func (d *dirFS) symlink(target, p string) Errno { return d.resolvedSymlink(target, p) }
 

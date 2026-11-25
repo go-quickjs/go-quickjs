@@ -198,15 +198,21 @@ Every mount is a sandbox, on Windows as on Unix:
 - A path is relative to a directory descriptor and cleaned as a string,
   `a/../b` being `b`. An absolute path, or one leading above the directory it
   is relative to, fails with `EPERM`.
-- Symbolic links are followed within the mount only: an absolute link, or
-  one whose target is outside the mount, fails with `EPERM`, and a module
-  cannot make an absolute one.
-- A mounted directory is an `os.Root`, which keeps opens, stats, `mkdir` and
-  removals in it. What `os.Root` lacks in Go 1.24 -- rename, link, symlink,
-  readlink and setting times -- runs as the `*at` system calls on a parent
-  directory the root opened, on Linux, macOS and the BSDs; on Windows and
-  other systems it resolves the path within the mount, then acts on the host
-  path.
+- A directory descriptor holds its directory, not the path it was opened
+  by: its paths resolve from the directory wherever it has been moved since,
+  by the module or by anyone else, and `fd_filestat_set_times` sets the
+  times of the file a descriptor holds.
+- Symbolic links are followed within the directory a path is relative to --
+  for a mount's own descriptor the mount, for a directory a module opened
+  that directory: an absolute link, or one whose target is outside it, fails
+  with `EPERM`, and a module cannot make an absolute one.
+- A mounted directory, and each directory a module opens, is an `os.Root`
+  of its own, which keeps opens, stats, `mkdir` and removals in it. What
+  `os.Root` lacks in Go 1.24 -- rename, link, symlink, readlink and setting
+  times -- runs as the `*at` system calls on a parent directory the root
+  opened, on Linux, macOS and the BSDs; on Windows it resolves the path from
+  where the directory's handle finds it now, then acts on the host path,
+  and on other systems from where the directory was when it was opened.
 
 What the host answers is mapped to the closest WASI errno. On Windows, the
 package checks what POSIX would before renaming and removing, so that a
@@ -1108,8 +1114,10 @@ The `WebAssembly` namespace:
 
 WASI:
 
-- `fd_filestat_set_times` sets the times of the path a file was opened by,
-  so a file renamed or removed since is not reached.
+- On macOS and the BSDs, `fd_filestat_set_times` on a file other than a
+  directory sets its times by its name in the directory it was opened in,
+  and fails with `ENOENT` once that name no longer names it; on Linux and
+  Windows it sets them by the descriptor.
 - Where the platform has no `*at` calls -- Windows among them -- rename,
   link, symlink, readlink and setting times check a path and then act on it:
   a directory swapped for a symbolic link between the two, by another

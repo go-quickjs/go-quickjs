@@ -1,24 +1,39 @@
 package sysfs
 
 import (
+	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
 
 // maxSymlinks is how many symbolic links a path may pass through.
 const maxSymlinks = 40
 
-// dirFS is a host directory mounted for a module. Everything it does stays
-// in the directory: an os.Root opens its files, and the operations os.Root
-// lacks resolve their paths within it.
+// dirFS is a host directory mounted for a module, or a directory of a mount
+// a module opened. Everything it does stays in the directory: an os.Root
+// opens its files, and the operations os.Root lacks resolve their paths
+// within it. The root is a handle of the directory, so that a directory a
+// module opened is the one its paths resolve from wherever it is moved.
 type dirFS struct {
 	root     *os.Root
-	dir      string // the directory's absolute host path
+	dir      string // the directory's absolute host path when it was opened
 	readOnly bool
+	// mount is the mount's own dirFS: d itself for a mount.
+	mount *dirFS
+	// handle, for a directory a module opened on Windows, is a file of
+	// it, which finds where it is now (base), paths being resolved by name
+	// there.
+	handle *os.File
+	// refs counts what keeps a directory a module opened open: its
+	// descriptor's file and the files opened from it. The last to close
+	// closes its root.
+	refs atomic.Int32
 }
 
 // OpenDir mounts host directory dir, read-only if readOnly is true.
@@ -31,10 +46,69 @@ func OpenDir(dir string, readOnly bool) (FS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &dirFS{root: root, dir: abs, readOnly: readOnly}, nil
+	d := &dirFS{root: root, dir: abs, readOnly: readOnly}
+	d.mount = d
+	return d, nil
 }
 
 func (d *dirFS) Close() error { return d.root.Close() }
+
+// acquire and release count a use of a directory a module opened; a mount
+// is closed with its table instead.
+func (d *dirFS) acquire() {
+	if d.mount != d {
+		d.refs.Add(1)
+	}
+}
+
+func (d *dirFS) release() {
+	if d.mount != d && d.refs.Add(-1) == 0 {
+		d.root.Close()
+		closeIf(d.handle)
+	}
+}
+
+// closeIf closes f if it is not nil.
+func closeIf(f *os.File) {
+	if f != nil {
+		f.Close()
+	}
+}
+
+// openDir opens the directory at p as a dirFS of its own, which resolves
+// its paths from the directory itself, and returns a file of it, opened
+// from the same handle, whose file system the dirFS is (DirFS).
+func (d *dirFS) openDir(p string) (*osFile, Errno) {
+	r, err := d.root.OpenRoot(p)
+	if err != nil {
+		return nil, ToErrno(err)
+	}
+	var h *os.File
+	if runtime.GOOS == "windows" {
+		// Only Windows resolves paths by name (base).
+		if h, err = r.Open("."); err != nil {
+			r.Close()
+			return nil, ToErrno(err)
+		}
+	}
+	f, err := r.Open(".")
+	if err != nil {
+		closeIf(h)
+		r.Close()
+		return nil, ToErrno(err)
+	}
+	of, e := newOSFile(f, true, false)
+	if e != 0 {
+		closeIf(h)
+		r.Close()
+		return nil, e
+	}
+	sub := &dirFS{root: r, dir: filepath.Join(d.dir, filepath.FromSlash(p)), readOnly: d.readOnly, mount: d.mount, handle: h}
+	sub.refs.Store(1)
+	d.acquire()
+	of.sub, of.parent, of.name, of.readOnly = sub, d, p, d.readOnly
+	return of, 0
+}
 
 // check returns EPERM for a path that names something other than a file
 // below the root: on Windows, a reserved device name such as NUL, a drive or
@@ -99,6 +173,13 @@ func (d *dirFS) OpenFile(p string, fl OpenFlags) (File, Errno) {
 		of.Close()
 		return nil, ENOTDIR
 	}
+	if of.isDir {
+		// A directory is opened again as a root of its own.
+		of.Close()
+		return d.openDir(p)
+	}
+	d.acquire()
+	of.parent, of.name, of.readOnly = d, p, d.readOnly
 	return of, 0
 }
 
@@ -176,11 +257,14 @@ func (d *dirFS) Unlink(p string) Errno {
 	return ToErrno(d.root.Remove(p))
 }
 
-func (d *dirFS) Rename(from, to string) Errno {
+func (d *dirFS) Rename(from, to string) Errno { return d.renameTo(from, d, to) }
+
+// renameTo renames from, in d, to to, in n, a directory of the same mount.
+func (d *dirFS) renameTo(from string, n *dirFS, to string) Errno {
 	if e := d.check(from); e != 0 {
 		return e
 	}
-	if e := d.check(to); e != 0 {
+	if e := n.check(to); e != 0 {
 		return e
 	}
 	if d.readOnly {
@@ -197,7 +281,7 @@ func (d *dirFS) Rename(from, to string) Errno {
 		if err != nil {
 			return ToErrno(err)
 		}
-		if nfi, err := d.root.Lstat(to); err == nil {
+		if nfi, err := n.root.Lstat(to); err == nil {
 			switch {
 			case os.SameFile(ofi, nfi):
 				return 0
@@ -206,23 +290,26 @@ func (d *dirFS) Rename(from, to string) Errno {
 			case !ofi.IsDir() && nfi.IsDir():
 				return EISDIR
 			case ofi.IsDir():
-				if err := d.root.Remove(to); err != nil {
+				if err := n.root.Remove(to); err != nil {
 					return ToErrno(err)
 				}
 			}
 		}
-		if ofi.IsDir() && strings.HasPrefix(to+"/", from+"/") {
+		if ofi.IsDir() && n == d && strings.HasPrefix(to+"/", from+"/") {
 			return EINVAL
 		}
 	}
-	return d.rename(from, to)
+	return d.rename(from, n, to)
 }
 
-func (d *dirFS) Link(from, to string) Errno {
+func (d *dirFS) Link(from, to string) Errno { return d.linkTo(from, d, to) }
+
+// linkTo links from, in d, at to, in n, a directory of the same mount.
+func (d *dirFS) linkTo(from string, n *dirFS, to string) Errno {
 	if e := d.check(from); e != 0 {
 		return e
 	}
-	if e := d.check(to); e != 0 {
+	if e := n.check(to); e != 0 {
 		return e
 	}
 	if d.readOnly {
@@ -235,10 +322,38 @@ func (d *dirFS) Link(from, to string) Errno {
 	if fi.IsDir() {
 		return EPERM
 	}
-	if _, err := d.root.Lstat(to); err == nil {
+	if _, err := n.root.Lstat(to); err == nil {
 		return EEXIST
 	}
-	return d.link(from, to)
+	return d.link(from, n, to)
+}
+
+// Rename renames from, in ffs, to to, in tfs: the same file system, or
+// directories of the same mount. Any other two fail with EXDEV.
+func Rename(ffs FS, from string, tfs FS, to string) Errno {
+	if ffs == tfs {
+		return ffs.Rename(from, to)
+	}
+	d, ok := ffs.(*dirFS)
+	n, ok2 := tfs.(*dirFS)
+	if !ok || !ok2 || d.mount != n.mount {
+		return EXDEV
+	}
+	return d.renameTo(from, n, to)
+}
+
+// Link makes a hard link at to, in tfs, of the file at from, in ffs, as
+// Rename renames.
+func Link(ffs FS, from string, tfs FS, to string) Errno {
+	if ffs == tfs {
+		return ffs.Link(from, to)
+	}
+	d, ok := ffs.(*dirFS)
+	n, ok2 := tfs.(*dirFS)
+	if !ok || !ok2 || d.mount != n.mount {
+		return EXDEV
+	}
+	return d.linkTo(from, n, to)
 }
 
 func (d *dirFS) Symlink(target, p string) Errno {
@@ -302,4 +417,28 @@ func tidy(p string) string {
 		return "."
 	}
 	return strings.Join(parts, "/")
+}
+
+// readdir lists the directory f, a file of d's own directory, looking each
+// entry up through d's root. File.Readdir looks them up by the file's name,
+// which for a root opened within another is, before Go 1.25, the path
+// relative to that one: from the process's directory it names nothing,
+// and Readdir drops every entry it cannot find.
+func (d *dirFS) readdir(f *os.File) ([]Dirent, Errno) {
+	names, err := f.Readdirnames(-1)
+	if err != nil && err != io.EOF {
+		return nil, ToErrno(err)
+	}
+	ds := make([]Dirent, 0, len(names))
+	for _, name := range names {
+		fi, err := d.root.Lstat(name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // removed since it was listed
+			}
+			return nil, ToErrno(err)
+		}
+		ds = append(ds, direntOf(fi))
+	}
+	return ds, 0
 }

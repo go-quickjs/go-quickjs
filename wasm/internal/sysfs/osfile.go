@@ -16,6 +16,27 @@ type osFile struct {
 	append      atomic.Bool
 	// appendMu keeps an append's seek to the end and its write together.
 	appendMu sync.Mutex
+	// parent is the directory the file was opened in, which the file keeps
+	// open, and name its path there; readOnly says the mount is.
+	parent   *dirFS
+	name     string
+	readOnly bool
+	// sub, for a directory, is the file system its paths resolve in.
+	sub *dirFS
+}
+
+// DirFile is the File of a directory whose paths resolve from the
+// directory itself, wherever it is moved: DirFS returns its file system,
+// or nil where its paths resolve by name.
+type DirFile interface {
+	DirFS() FS
+}
+
+func (o *osFile) DirFS() FS {
+	if o.sub == nil {
+		return nil
+	}
+	return o.sub
 }
 
 func newOSFile(f *os.File, read, write bool) (*osFile, Errno) {
@@ -117,6 +138,9 @@ func (o *osFile) Readdir() ([]Dirent, Errno) {
 	if _, err := o.f.Seek(0, io.SeekStart); err != nil {
 		return nil, ToErrno(err)
 	}
+	if o.sub != nil {
+		return o.sub.readdir(o.f)
+	}
 	fis, err := o.f.Readdir(-1)
 	if err != nil && err != io.EOF {
 		return nil, ToErrno(err)
@@ -159,4 +183,50 @@ func (o *osFile) SetAppend(on bool) Errno {
 	return 0
 }
 
-func (o *osFile) Close() Errno { return ToErrno(o.f.Close()) }
+func (o *osFile) Close() Errno {
+	err := o.f.Close()
+	if o.sub != nil {
+		o.sub.release()
+	}
+	if o.parent != nil {
+		o.parent.release()
+	}
+	return ToErrno(err)
+}
+
+// SetTimes sets the times of the file itself, whatever its name now: by its
+// handle, or, where the system sets a regular file's times by a name only,
+// while its name in the directory it was opened in still names it.
+func (o *osFile) SetTimes(t Times) Errno {
+	if o.readOnly {
+		return EROFS
+	}
+	cur, e := o.Stat()
+	if e != 0 {
+		return e
+	}
+	if !t.SetAtim {
+		t.Atim = cur.Atim
+	}
+	if !t.SetMtim {
+		t.Mtim = cur.Mtim
+	}
+	return o.setTimes(t, &cur)
+}
+
+// setTimesByName sets the times of the file by its name in the directory
+// it was opened in, if that still names the file st describes, and fails
+// with ENOENT otherwise.
+func (o *osFile) setTimesByName(t Times, st *Stat) Errno {
+	if o.parent == nil {
+		return ENOTSUP
+	}
+	now, e := o.parent.Stat(o.name, true)
+	if e != 0 {
+		return e
+	}
+	if now.Dev != st.Dev || now.Ino != st.Ino {
+		return ENOENT
+	}
+	return o.parent.Utimes(o.name, t, true)
+}

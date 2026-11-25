@@ -15,8 +15,10 @@ import (
 // the resolution and the operation is not seen.
 
 // resolve returns the host path of p, its symbolic links followed, the last
-// element's only if followLast is true.
+// element's only if followLast is true. It is resolved from where the
+// directory is now (base).
 func (d *dirFS) resolve(p string, followLast bool) (string, Errno) {
+	base := d.base()
 	todo := strings.Split(p, "/")
 	var done []string
 	links := 0
@@ -33,7 +35,7 @@ func (d *dirFS) resolve(p string, followLast bool) (string, Errno) {
 			done = done[:len(done)-1]
 			continue
 		}
-		host := filepath.Join(append([]string{d.dir}, append(done, e)...)...)
+		host := filepath.Join(append([]string{base}, append(done, e)...)...)
 		last := len(todo) == 0
 		if last && !followLast {
 			done = append(done, e)
@@ -66,27 +68,34 @@ func (d *dirFS) resolve(p string, followLast bool) (string, Errno) {
 		}
 		done = append(done, e)
 	}
-	return filepath.Join(append([]string{d.dir}, done...)...), 0
+	return filepath.Join(append([]string{base}, done...)...), 0
 }
 
-func (d *dirFS) resolvedRename(from, to string) Errno {
+func (d *dirFS) resolvedRename(from string, nd *dirFS, to string) Errno {
 	o, e := d.resolve(from, false)
 	if e != 0 {
 		return e
 	}
-	n, e := d.resolve(to, false)
+	n, e := nd.resolve(to, false)
 	if e != 0 {
 		return e
+	}
+	if nd != d {
+		// A directory is not moved into itself.
+		sep := string(filepath.Separator)
+		if fi, err := os.Lstat(o); err == nil && fi.IsDir() && strings.HasPrefix(n+sep, o+sep) {
+			return EINVAL
+		}
 	}
 	return ToErrno(os.Rename(o, n))
 }
 
-func (d *dirFS) resolvedLink(from, to string) Errno {
+func (d *dirFS) resolvedLink(from string, nd *dirFS, to string) Errno {
 	o, e := d.resolve(from, false)
 	if e != 0 {
 		return e
 	}
-	n, e := d.resolve(to, false)
+	n, e := nd.resolve(to, false)
 	if e != 0 {
 		return e
 	}

@@ -25,6 +25,8 @@ type target struct {
 	fs sysfs.FS
 	// p is the path within fs: clean, and "." for its root.
 	p string
+	// mount is the mount fs is of, the directory's entry's.
+	mount sysfs.FS
 	// slash reports a path that ended in a slash, which must name a
 	// directory.
 	slash bool
@@ -63,7 +65,15 @@ func (c *call) path(fd uint64, ptr, n uint32, right uint64) (target, sysfs.Errno
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return target{}, sysfs.EPERM
 	}
-	return target{fs: e.FS, p: path.Join(e.Path, clean), slash: strings.HasSuffix(s, "/")}, 0
+	slash := strings.HasSuffix(s, "/")
+	if df, ok := e.File.(sysfs.DirFile); ok {
+		if fs := df.DirFS(); fs != nil {
+			// The directory's own file system: the path is resolved from
+			// the directory the descriptor holds, wherever it is now.
+			return target{fs: fs, p: clean, mount: e.FS, slash: slash}, 0
+		}
+	}
+	return target{fs: e.FS, p: path.Join(e.Path, clean), mount: e.FS, slash: slash}, 0
 }
 
 // isDir reports whether t names a directory, following a symbolic link at
@@ -141,7 +151,7 @@ func pathLink(c *call, p []uint64) sysfs.Errno {
 	if errno != 0 {
 		return errno
 	}
-	if from.fs != to.fs {
+	if from.mount != to.mount {
 		return sysfs.EXDEV
 	}
 	if uint32(p[1]) != 0 {
@@ -161,7 +171,7 @@ func pathLink(c *call, p []uint64) sysfs.Errno {
 		}
 		return sysfs.ENOENT
 	}
-	return from.fs.Link(from.p, to.p)
+	return sysfs.Link(from.fs, from.p, to.fs, to.p)
 }
 
 func pathOpen(c *call, p []uint64) sysfs.Errno {
@@ -240,7 +250,7 @@ func pathOpen(c *call, p []uint64) sysfs.Errno {
 		}
 	}
 	e := &sysfs.Entry{
-		File: f, FS: t.fs, Path: t.p, IsDir: isDir,
+		File: f, FS: t.mount, Path: t.p, IsDir: isDir,
 		Flags:      uint16(fdflags),
 		RightsBase: rb, RightsInheriting: ri, RightsSet: true,
 	}
@@ -304,7 +314,7 @@ func pathRename(c *call, p []uint64) sysfs.Errno {
 	if errno != 0 {
 		return errno
 	}
-	if from.fs != to.fs {
+	if from.mount != to.mount {
 		return sysfs.EXDEV
 	}
 	if from.slash || to.slash {
@@ -316,7 +326,7 @@ func pathRename(c *call, p []uint64) sysfs.Errno {
 			return sysfs.ENOTDIR
 		}
 	}
-	return from.fs.Rename(from.p, to.p)
+	return sysfs.Rename(from.fs, from.p, to.fs, to.p)
 }
 
 func pathSymlink(c *call, p []uint64) sysfs.Errno {

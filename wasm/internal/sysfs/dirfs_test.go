@@ -55,8 +55,14 @@ type ops struct {
 
 func variants(d *dirFS) map[string]ops {
 	return map[string]ops{
-		"platform": {d.rename, d.link, d.symlink, d.readlink, d.utimes},
-		"resolved": {d.resolvedRename, d.resolvedLink, d.resolvedSymlink, d.resolvedReadlink, d.resolvedUtimes},
+		"platform": {
+			func(from, to string) Errno { return d.rename(from, d, to) },
+			func(from, to string) Errno { return d.link(from, d, to) },
+			d.symlink, d.readlink, d.utimes},
+		"resolved": {
+			func(from, to string) Errno { return d.resolvedRename(from, d, to) },
+			func(from, to string) Errno { return d.resolvedLink(from, d, to) },
+			d.resolvedSymlink, d.resolvedReadlink, d.resolvedUtimes},
 	}
 }
 

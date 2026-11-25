@@ -313,11 +313,18 @@ func fdFilestatSetTimes(c *call, p []uint64) sysfs.Errno {
 	if errno != 0 {
 		return errno
 	}
+	if !t.SetAtim && !t.SetMtim {
+		if e.FS == nil {
+			return sysfs.ENOTSUP
+		}
+		return 0
+	}
+	if f, ok := e.File.(interface{ SetTimes(sysfs.Times) sysfs.Errno }); ok {
+		// The file the descriptor holds, whatever its name now.
+		return f.SetTimes(t)
+	}
 	if e.FS == nil {
 		return sysfs.ENOTSUP
-	}
-	if !t.SetAtim && !t.SetMtim {
-		return 0
 	}
 	return e.FS.Utimes(e.Path, t, true)
 }
