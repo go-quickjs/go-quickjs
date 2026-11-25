@@ -1339,6 +1339,9 @@ func (g *gen) alu(v *Value, op amd64.ALU) {
 	a := g.a
 	wide := v.Type == TI64
 	x, y := v.Args[0], v.Args[1]
+	if v.Op == OpAnd && g.maskLow(v) {
+		return
+	}
 	t := g.defG(v)
 	if l := g.locOf(y); l.kind == lGPR && amd64.Reg(l.r) == t && x != y {
 		if v.Commutes() {
@@ -1354,6 +1357,46 @@ func (g *gen) alu(v *Value, op amd64.ALU) {
 	g.movG(t, x)
 	g.aluOperand(op, t, y, wide)
 	g.done(v, int(t))
+}
+
+// maskLow lowers and v of a mask of a value's low byte, or of an
+// i64's low half, as a zero-extending move from the value's register or
+// slot, which needs neither a copy of the value nor the mask in a
+// register (0xffffffff is no instruction's immediate), and reports
+// whether it did.
+func (g *gen) maskLow(v *Value) bool {
+	x, y := v.Args[0], v.Args[1]
+	if x.Op == OpConst {
+		x, y = y, x
+	}
+	if y.Op != OpConst {
+		return false
+	}
+	c := y.Aux
+	if v.Type == TI32 {
+		c = uint64(uint32(c))
+	}
+	if c != 0xff && (c != 0xffffffff || v.Type != TI64) {
+		return false
+	}
+	l := g.locOf(x)
+	if l.kind != lGPR && l.kind != lSlot {
+		return false
+	}
+	a := g.a
+	t := g.defG(v)
+	switch {
+	case c == 0xff && l.kind == lGPR:
+		a.MovZX8(t, amd64.Reg(l.r))
+	case c == 0xff:
+		a.LoadU8(t, rL, slotOff(l.slot))
+	case l.kind == lGPR:
+		a.MovRR32(t, amd64.Reg(l.r))
+	default:
+		a.LoadU32(t, rL, slotOff(l.slot))
+	}
+	g.done(v, int(t))
+	return true
 }
 
 // aluOperand is t op= y.

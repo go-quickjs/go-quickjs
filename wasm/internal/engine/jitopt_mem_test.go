@@ -493,3 +493,31 @@ func TestOptPhiChecks(t *testing.T) {
 		}
 	}
 }
+
+// The masks of a value's low byte and of an i64's low half, which the
+// optimizing tier makes zero-extending moves on amd64, of values in
+// registers and in slots, the mask either operand.
+func TestOptZeroExtendMasks(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("(module\n  (func (export \"run\") (param $x i64) (param $y i32) (result i64)\n")
+	for k := range 12 {
+		fmt.Fprintf(&b, "    (local $l%d i64)\n", k)
+	}
+	for k := range 12 {
+		fmt.Fprintf(&b, "    (local.set $l%d (i64.mul (local.get $x) (i64.const %d)))\n", k, 2*k+3)
+	}
+	b.WriteString("    (i64.add (i64.and (local.get $x) (i64.const 0xffffffff))\n")
+	b.WriteString("    (i64.add (i64.and (i64.const 0xff) (local.get $l3))\n")
+	b.WriteString("    (i64.add (i64.extend_i32_u (i32.and (local.get $y) (i32.const 0xff)))\n")
+	b.WriteString("    (i64.add (i64.extend_i32_u (i32.and (i32.const -1) (local.get $y)))\n")
+	b.WriteString("             (i64.and (local.get $l7) (i64.const 0xffffffff))))))\n")
+	for k := range 12 {
+		fmt.Fprintf(&b, "    (local.get $l%d) (i64.and (i64.const 0xffffffff)) (i64.add)\n", k)
+	}
+	b.WriteString("  ))\n")
+	var calls []jitCall
+	for _, x := range []uint64{0, 1, 0xff, 0x1ff, 0xffffffff, 0x1_0000_0000, 0xdead_beef_cafe_f00d, ^uint64(0)} {
+		calls = append(calls, jitCall{name: "run", args: []uint64{x, x >> 7}})
+	}
+	optSameAsInterpreter(t, b.String(), calls)
+}

@@ -779,6 +779,12 @@ them false and their inverses true; on arm64 every one, after FCMP; eq
 and ne on amd64, which need the parity flag besides, are made into a
 register and tested.
 
+On amd64 an and of a mask of a value's low byte, or of an i64's low half
+-- Go's code's conversions to uint8 and uint32 -- is a zero-extending
+move from the value's register or slot (MOVZX, MOV of 32 bits), where it
+was a copy and an AND, 0xffffffff, no instruction's immediate, moved into
+R10 first.
+
 On amd64 a float constant other than zero, and fabs's and fneg's masks,
 are loaded from the code's pool of constants after it, RIP-relative, as a
 v128's are (below): one load, where a move of the bits into R11 and from
