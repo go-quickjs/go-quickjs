@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -220,13 +221,13 @@ func TestJITSpreadOperations(t *testing.T) {
 // copied with the frame, in the same call, and leaves neither, in a loop
 // whose native work pays for them.
 func TestJITSpreadFrameless(t *testing.T) {
-	t.Skip("register JIT gap: a spread call of a frameless callee calls Go with a frame 3 times (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `
+		var proto = {}
 		function plain(n, o, a, k, p) {
 			let s = 0;
 			for (let i = 0; i < n; i++) {
@@ -257,9 +258,9 @@ func TestJITSpreadFrameless(t *testing.T) {
 		}
 		return jitNativeForTest(t, r, src[:strings.IndexByte(src, '(')])
 	}
-	e := run(`plain(100, {b: 1, c: 2}, [1, 2], 'key', {})`, "15450")
+	e := run(`plain(100, {b: 1, c: 2}, [1, 2], 'key', proto)`, "15450")
 	hosts, guards, goCalls := e.ssaStats.hosts, e.ssaStats.guards, e.ssaStats.goCalls
-	run(`plain(1000, {b: 1, c: 2}, [1, 2], 'key', {})`, "1504500")
+	run(`plain(1000, {b: 1, c: 2}, [1, 2], 'key', proto)`, "1504500")
 	if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards || e.ssaStats.goCalls != goCalls {
 		t.Errorf("plain: %d exits, %d guards, %d calls of Go with a frame", e.ssaStats.hosts-hosts, e.ssaStats.guards-guards, e.ssaStats.goCalls-goCalls)
 	}
@@ -294,6 +295,48 @@ func TestJITLiteralFieldsFrameless(t *testing.T) {
 	}
 	if made := e.ssaStats.goCalls - calls; made != 0 {
 		t.Errorf("protos made %d calls of Go with a frame in 4 runs", made)
+	}
+}
+
+// A read of a literal's field made on a new prototype at each run
+// deoptimizes once a run until its site is megamorphic, then never: an
+// object's prototype is its layout's, as V8's map holds its prototype, so
+// that each run's q = {__proto__: p, f: i} of a new p is of a layout of its
+// own, which the read's site had not met, as V8's code deoptimizes at a map
+// its feedback had not named. The code compiled at the first run reads the
+// first layout; the next three runs each deoptimize once at q.f, each
+// compiled again with one layout more, until the site has met more than
+// native code is compiled for (jitPropertyCases) and its code reads it
+// megamorphic: no run after that deoptimizes, nor compiles it again. Each
+// answer is the interpreter's (and Node's).
+func TestJITPrototypeLayoutsUntilMegamorphic(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function protos(n, p) { let s = 0; for (let i = 0; i < n; i++) { const q = { __proto__: p, f: i }; s += q.f } return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	var guards []uint64
+	var last uint64
+	for range 10 {
+		if v, err := r.Run(compileForTest(t, `''+protos(1000, {})`)); err != nil || v.String().Go() != "499500" {
+			t.Fatalf("protos(1000, {}) = %v, %v; want 499500", v, err)
+		}
+		e := jitRegLifeForTest(r, "protos")
+		if e == nil {
+			t.Fatal("protos was not compiled")
+		}
+		guards = append(guards, e.ssaStats.guards-last)
+		last = e.ssaStats.guards
+	}
+	if got, w := fmt.Sprint(guards), "[0 1 1 1 0 0 0 0 0 0]"; got != w {
+		t.Errorf("deoptimizations by run %s, want %s", got, w)
+	}
+	if e := jitRegLifeForTest(r, "protos"); e.ssaSerial != 4 {
+		t.Errorf("protos compiled %d times, want 4", e.ssaSerial)
 	}
 }
 
