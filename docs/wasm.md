@@ -449,8 +449,12 @@ What the engine can make bounds every preset:
   `WithMemoryLimitPages`, so a module declaring more fails to compile.
 - A table holds at most 10,000,000 elements; a larger initial size fails at
   instantiation.
-- Calls nest 30,000 deep (`engine.MaxCallDepth`), past which a call traps
-  with "Maximum call stack size exceeded".
+- Calls nest 30,000 deep (`engine.MaxCallDepth`), and their frames take 64
+  MiB at most, a function's locals and operand stack included, past either
+  of which a call traps with "Maximum call stack size exceeded". A call back
+  into wasm from a host function counts against what the call that made it
+  has left, 16 calls deep a round trip. Under a smaller memory limit the
+  frames take that limit at most (below).
 - A GC array may be as large as 2^30-1 bytes with its header.
 
 ### Memory limits
@@ -471,6 +475,9 @@ heap with what its WebAssembly holds in it.
 - Element segments are counted as their references are made at
   instantiation, 16 bytes each, and given back as each is dropped; a module
   whose segments do not fit fails to instantiate with `ErrMemoryLimit`.
+- A call's frames are not counted with what the modules hold, but take no
+  more than the limit, if it is under 64 MiB: a call past it traps with
+  "Maximum call stack size exceeded"
 - GC structs and arrays are counted as they are allocated. When the count
   would pass the limit, what is still reachable is counted again -- from the
   modules' globals, tables and segments and the running call's frames -- and

@@ -218,7 +218,7 @@ func (x *exec) hostCall(fn *Function, args []Val) []Val {
 	own, top := x.takeVals(len(args))
 	copy(own, args)
 	h := x.hostContext()
-	room := h.room.Swap(int64(max(x.maxDepth-x.depth-reentryDepth, 0)))
+	room := h.room.Swap(packRoom(x.maxDepth-x.depth-reentryDepth, x.stackRoom-x.stackHeld))
 	err := fn.Host(h, caller, own, res)
 	h.room.Store(room)
 	x.vals = x.vals[:top]

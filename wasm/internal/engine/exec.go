@@ -96,6 +96,49 @@ type exec struct {
 	// budget is the budget of the instance whose function the exec's call
 	// entered, if any.
 	budget *Budget
+	// stackRoom is how many bytes the exec's frames may take
+	// (maxStackBytes, or a budget's limit if smaller, less what the call
+	// whose host function made this one held: hostCtx); stackHeld is what
+	// they took when a frame last needed a new chunk, counting the chunks
+	// below it whole (holdStack).
+	stackRoom, stackHeld int64
+}
+
+// maxStackBytes is the most the frames of a chain of calls -- a call and
+// the calls back into wasm its host functions make -- may take of the
+// exec's stacks, or a memory limit's bytes if fewer, past which a call
+// traps as a call past MaxCallDepth does. Depth alone does not bound them: a function may have 50,000
+// locals, some 400 KB a frame, which at MaxCallDepth would be 12 GB.
+const maxStackBytes = 64 << 20
+
+// holdStack makes n bytes what the exec's frames take, trapping if they
+// pass its room.
+//
+// The frames are bounded, not charged to a budget: what they take is
+// counted only as a frame needs a new chunk, and an exec from the pool
+// may still hold chunks enough, so a charge would depend on what earlier
+// calls left there, and a budget sized to its memories exactly would
+// fail a grow by a call's frames or not as the pool fell. A budget's
+// limit bounds them instead, where it is the smaller.
+func (x *exec) holdStack(n int64) {
+	if n > x.stackRoom {
+		trap(TrapStackOverflow)
+	}
+	x.stackHeld = n
+}
+
+// stackUse is what the exec's frames take with nused slots of numeric
+// chunk nc and rused of reference chunk rc in use: the chunks below them
+// whole, since a frame that did not fit one took the next.
+func (x *exec) stackUse(nc, nused, rc, rused int) int64 {
+	var n int64
+	for _, c := range x.nchunks[:min(nc, len(x.nchunks))] {
+		n += int64(len(c)) * 8
+	}
+	for _, c := range x.rchunks[:min(rc, len(x.rchunks))] {
+		n += int64(len(c)) * refBytes
+	}
+	return n + int64(nused)*8 + int64(rused)*refBytes
 }
 
 // execPools is an exec's table of pools for an instance.
@@ -148,6 +191,7 @@ func (x *exec) takeNum(n int) ([]uint64, int, int) {
 	if x.nc >= len(x.nchunks) {
 		next = 0
 	}
+	x.holdStack(x.stackUse(next, n, x.rc, x.rsp))
 	if next >= len(x.nchunks) || len(x.nchunks[next]) < n {
 		c := make([]uint64, max(chunkSlots, n))
 		if next >= len(x.nchunks) {
@@ -180,6 +224,7 @@ func (x *exec) takeRef(n int) ([]Ref, int, int) {
 	if x.rc >= len(x.rchunks) {
 		next = 0
 	}
+	x.holdStack(x.stackUse(x.nc, x.nsp, next, n))
 	if next >= len(x.rchunks) || len(x.rchunks[next]) < n {
 		c := make([]Ref, max(chunkSlots, n))
 		if next >= len(x.rchunks) {
@@ -228,7 +273,7 @@ func InvokeTraced(ctx context.Context, fn *Function, args []Val, t *Trace) ([]Va
 func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []Val, err error) {
 	x := execPool.Get().(*exec)
 	x.ctx = ctx
-	x.maxDepth = MaxCallDepth
+	x.maxDepth, x.stackRoom = MaxCallDepth, maxStackBytes
 	x.budget = nil
 	if fn.Inst != nil {
 		x.budget = fn.Inst.budget
@@ -237,12 +282,15 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 	if ctx != nil {
 		if h, ok := ctx.Value(hostCtxKey{}).(*hostCtx); ok {
 			if room := h.room.Load(); room >= 0 {
-				x.maxDepth = int(room)
+				x.maxDepth, x.stackRoom = unpackRoom(room)
 				if h.budget == x.budget {
 					turn = nil
 				}
 			}
 		}
+	}
+	if b := x.budget; b != nil && b.outer == nil && b.limit < x.stackRoom {
+		x.stackRoom = b.limit
 	}
 	turn.Enter()
 	x.poll = pollEvery
@@ -263,6 +311,7 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 			outer.leave(x)
 		}
 		turn.Exit()
+		x.stackHeld = 0
 		x.budget = nil
 		if t != nil {
 			t.x = nil
@@ -288,9 +337,9 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 }
 
 // hostCtx is the context a host function is given: the call's own, and the
-// room the call stack has left below the host function, which a call it
-// makes back into wasm with this context, or with one made from it, starts
-// with. MaxCallDepth then bounds a chain of calls that goes back and forth
+// room the call stack has left below the host function, in calls and in
+// the bytes of its frames (packRoom), which a call it makes back into wasm
+// with this context, or with one made from it, starts with. MaxCallDepth then bounds a chain of calls that goes back and forth
 // between wasm and the host as it bounds wasm's own recursion, where each
 // call starting at depth 0 would let the chain run until Go's stack ran out.
 //
@@ -309,6 +358,18 @@ type hostCtx struct {
 }
 
 type hostCtxKey struct{}
+
+// packRoom packs the room a host function's call stack has left, depth
+// calls and stack bytes of frames, into a hostCtx's room: the depth in the
+// upper half, the bytes in KiB in the lower.
+func packRoom(depth int, stack int64) int64 {
+	return int64(max(depth, 0))<<32 | max(stack, 0)>>10
+}
+
+// unpackRoom returns the depth and the stack bytes packRoom packed.
+func unpackRoom(room int64) (depth int, stack int64) {
+	return int(room >> 32), (room & (1<<32 - 1)) << 10
+}
 
 func (c *hostCtx) Value(key any) any {
 	if key == (hostCtxKey{}) {

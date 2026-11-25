@@ -234,7 +234,15 @@ func (d *differ) module(c *wast.ModuleCommand) {
 				d.fail("%s: interpreter %v %v, native %v %v", what, ri, ei, rj, ej)
 				return
 			}
-			if fi, fj := trapFrames(ei, interp), trapFrames(ej, jit); !slices.Equal(fi, fj) {
+			fi, fj := trapFrames(ei, interp), trapFrames(ej, jit)
+			if isStackOverflow(ei) {
+				// Where the stack runs out depends on what each tier's
+				// frames take, which no program sees: the frames are
+				// compared from the outermost in, as far as both go.
+				k := min(len(fi), len(fj))
+				fi, fj = fi[len(fi)-k:], fj[len(fj)-k:]
+			}
+			if !slices.Equal(fi, fj) {
 				d.fail("%s: %v: frames %v interpreted, %v natively", what, ei, fi, fj)
 				return
 			}
@@ -382,6 +390,13 @@ func (d *differ) value(k module.Kind) uint64 {
 		}
 	}
 	return v
+}
+
+// isStackOverflow reports whether err is the trap of a call stack that ran
+// out.
+func isStackOverflow(err error) bool {
+	var tr *engine.Trap
+	return errors.As(err, &tr) && tr.Code == engine.TrapStackOverflow
 }
 
 // trapFrames returns the frames of the trap err is, if it is one, each as
