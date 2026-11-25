@@ -15,11 +15,13 @@ import (
 // keep cells a value live at the poll that the state does not name reads
 // its objects from (reached, the build's numbers), and those that no value
 // live there reads (dead, the context's, once colorKeeps has numbered
-// them; abi.Rehome's DeadKeeps).
+// them; abi.Rehome's DeadKeeps). keepsOnly says the header has no
+// register to write, only keep cells to empty.
 type rehomePlan struct {
 	rewire, pinned []int32
 	reached        []int32
 	dead           []uint16
+	keepsOnly      bool
 }
 
 // findRehomes finds, for each loop header, whether the polls of its back
@@ -41,6 +43,12 @@ type rehomePlan struct {
 // -- a phi the state does not name, whose value at run time may be any
 // turn's -- leaves the header with no plan. Typed code's raw slots, an
 // inlined callee's frame and a generator's are left to the exits.
+//
+// A header with no register to write -- a loop of numbers -- still has
+// a plan where the code has keep cells and makes no loops of built-ins'
+// calls (rehomeDeadKeeps): a call's result made before the loop and
+// dropped stays in its cell, which nothing writes again, for as long as
+// the loop runs natively, unless its polls empty it.
 func (c *core) findRehomes(liveIn []ir.LiveSet, lb *ir.LiveBuilder, iv []interval) {
 	c.rehomes = nil
 	f := c.f
@@ -62,14 +70,15 @@ func (c *core) findRehomes(liveIn []ir.LiveSet, lb *ir.LiveBuilder, iv []interva
 		// slot holds, and may be a reference or the slot may hold one:
 		// found of the states' shared nodes, each once.
 		root, h := s.Tree()
-		if root == nil {
-			continue
-		}
-		if done == nil {
+		keepsOnly := false
+		if root != nil && done == nil {
 			done, has = c.bools(f.NumSlotNodes()), c.bools(f.NumSlotNodes())
 		}
-		if !c.rehomeTrigger(root, h, 0, done, has) {
-			continue
+		if root == nil || !c.rehomeTrigger(root, h, 0, done, has) {
+			if f.Keeps == 0 || f.Loops {
+				continue
+			}
+			keepsOnly = true
 		}
 		if stamp == nil {
 			stamp = c.int32s(nv)
@@ -120,6 +129,10 @@ func (c *core) findRehomes(liveIn []ir.LiveSet, lb *ir.LiveBuilder, iv []interva
 		}
 		if c.rehomes == nil {
 			c.rehomes = make([]*rehomePlan, numBlocks(f))
+		}
+		if keepsOnly {
+			c.rehomes[b.ID] = &rehomePlan{reached: sortedSlots(reached), keepsOnly: true}
+			continue
 		}
 		c.rehomes[b.ID] = &rehomePlan{rewire: rewire, pinned: sortedSlots(pinned), reached: sortedSlots(reached)}
 	}
@@ -278,8 +291,17 @@ func (c *core) pollState(h *ssa.Block, localsReg, stackReg uint8) *abi.GoCallSta
 		return st
 	}
 	plan := c.rehomes[h.ID]
+	if plan.keepsOnly && len(plan.dead) == 0 {
+		return st
+	}
 	d := c.exitDescriptor(h.Header, abi.ExitPoll, localsReg, stackReg)
 	if d == nil {
+		return st
+	}
+	if plan.keepsOnly {
+		// Keep cells to empty alone, checked against the state's sources
+		// (jit's emptyKeeps).
+		st.Rehome = &abi.Rehome{Desc: d, DeadKeeps: plan.dead}
 		return st
 	}
 	// The slots whose values may be references (abi.Rehome's Slots): of

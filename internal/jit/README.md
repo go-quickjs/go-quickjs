@@ -2281,7 +2281,10 @@ loop-carried result not made yet may name, through its shadow phi, a
 cell another keep was given before its own write. A call's result made
 before the loop and dropped -- `a = f()`, then `a = null` -- had kept its
 object in its cell for as long as the loop ran, once no exit at the
-loop's pushes ended the run. Not where the code makes loops of
+loop's pushes ended the run. A header whose state has no register to
+write -- a loop of numbers -- has polls that do this alone, where the code
+has keep cells: `consume(big())` before such a loop had kept big's array
+in its call's cell to the loop's end. Not where the code makes loops of
 built-ins' calls, whose loops keep cells of their own. Not inlined
 callees' frames, typed code, a generator's code, nor a native callee's
 frame. Go's stores, with Go's barrier: native code reads each reference
