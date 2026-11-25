@@ -68,7 +68,6 @@ var keyedWriteRounds = [][2]string{
 // interpreter's, and fill, whose stores Go makes so, never leaves its
 // code.
 func TestJITKeyedWrites(t *testing.T) {
-	t.Skip("register JIT gap: keyed writes leave native code: fill leaves its code 4 times (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
