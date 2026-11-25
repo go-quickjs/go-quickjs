@@ -1836,33 +1836,78 @@ func (f *jitRegFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 		return nil, false
 	}
 	keys := f.rc.ObjKeys[f.rc.Aux[f.p.Origin[pc]]]
-	i := pc - first - 1
-	if i < 0 || i >= len(keys) {
-		return nil, false
-	}
-	for _, k := range keys[:i+1] {
-		if int(k) >= len(cl.names) {
-			return nil, false
-		}
-	}
-	s := l.root
-	for _, k := range keys[:i] {
-		if s.next == nil || s.nextEdge() != (shapeEdge{cl.names[k], propDefault}) {
-			return nil, false
-		}
-		s = s.next
-	}
-	key := cl.names[keys[i]]
-	if s.next == nil || s.nextEdge() != (shapeEdge{key, propDefault}) {
+	s, key, ok := regLiteralField(cl, keys, l.root, pc-first-1)
+	if !ok {
 		return nil, false
 	}
 	next := s.next
-	if next.index == nil && int(next.n) > linearScanLimit {
-		return nil, false
-	}
 	k := f.fb.keep()
 	k.shapes = append(k.shapes, remember(s), remember(next))
 	return &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(s)), Next: uintptr(unsafe.Pointer(next)), Flags: uint8(next.flags), Define: true, Key: uint32(key)}, true
+}
+
+// regLiteralField is the shape from which field i of an object literal of
+// cl's keys, its objects of root, adds its key -- the fields before it, in
+// the literal's order, each a step along the shapes' first transitions --
+// and that key, which Define plans the field's definition along: ok only
+// where an object has taken every transition to the field's, the field's
+// own among them.
+func regLiteralField(cl *closure, keys []uint32, root *shape, i int) (s *shape, key Atom, ok bool) {
+	if root == nil || i < 0 || i >= len(keys) {
+		return nil, 0, false
+	}
+	for _, k := range keys[:i+1] {
+		if int(k) >= len(cl.names) {
+			return nil, 0, false
+		}
+	}
+	s = root
+	for _, k := range keys[:i] {
+		if s.next == nil || s.nextEdge() != (shapeEdge{cl.names[k], propDefault}) {
+			return nil, 0, false
+		}
+		s = s.next
+	}
+	key = cl.names[keys[i]]
+	if s.next == nil || s.nextEdge() != (shapeEdge{key, propDefault}) {
+		return nil, 0, false
+	}
+	if next := s.next; next.index == nil && int(next.n) > linearScanLimit {
+		return nil, 0, false
+	}
+	return s, key, true
+}
+
+// jitRegLiteralSeen learns, at a host exit of e's code at site of its
+// program, a field of an object literal (new_object_lit) whose definition
+// the code was compiled without, no object having taken its transition
+// then (Define), and which Go, running the literal whole at the exit, has
+// now defined: it reports whether the code compiled again plans that
+// definition, which leaves native code no more. Not learned, Splay's
+// GeneratePayloadTree, compiled at its first call before any of its
+// inner literals had made an object, had left at every call, and was then
+// found not to pay for its exits.
+func (r *Runtime) jitRegLiteralSeen(f *frame, e *jitRegEntry, site int) bool {
+	p := e.p
+	if site < 0 || p == nil || e.life == nil || site >= len(p.Code) || site >= len(p.Origin) || p.Code[site].Op != ir.FieldDefine {
+		return false
+	}
+	rpc := int(p.Origin[site])
+	rc := e.rc
+	if rc == nil || rpc >= len(rc.Code) || rc.Code[rpc].Op() != bytecode.RNewObjectLit || rpc >= len(rc.Aux) || int(rc.Aux[rpc]) >= len(rc.ObjKeys) {
+		return false
+	}
+	first := site
+	for first > 0 && p.Origin[first-1] == p.Origin[site] {
+		first--
+	}
+	for i := range e.life.literals {
+		if l := &e.life.literals[i]; int(l.pc) == rpc && l.fn == f.cl.fn {
+			_, _, ok := regLiteralField(f.cl, rc.ObjKeys[rc.Aux[rpc]], l.root, site-first-1)
+			return ok
+		}
+	}
+	return false
 }
 
 // LeafKind is ssa.LeafKindFeedback's, jitFeedback's.

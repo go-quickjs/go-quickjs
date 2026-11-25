@@ -2100,6 +2100,11 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 					r.jitRegInvalidate(f.cl, e, "call")
 				}
 				r.jitRegSuperSeen(f, c, e, exitPC)
+				if !e.invalid && r.jitRegLiteralSeen(f, e, int(int64(ctx.ExitSite))) {
+					// A literal's field defined by Go along a transition the
+					// code was compiled before: planned once compiled again.
+					r.jitRegReopt(f.cl, e)
+				}
 				if mcallee.IsObject() {
 					r.jitRegViaSeen(f, e, exitPC, mcallee, mrecv, int(w.X()))
 					r.jitRegForEachSeen(f, e, exitPC, mcallee, mrecv, mcb, int(w.X()))

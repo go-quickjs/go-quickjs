@@ -7527,7 +7527,6 @@ func TestJITSSAMathIntrinsics(t *testing.T) {
 // garbage now and then); a string too long throws its RangeError. Each
 // answer is the interpreter's.
 func TestJITSSAStringAddCallsGo(t *testing.T) {
-	t.Skip("register JIT gap: a function whose string additions call Go is not called natively: tree never is (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
