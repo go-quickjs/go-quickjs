@@ -163,9 +163,11 @@ func (r *Runtime) jitRegFrameOp(ctx *abi.Context) bool {
 		if ctx.Cells == nil {
 			// Code whose captured registers are the frame's own slots,
 			// which closures' upvalues are open on: the run's own frame's
-			// closure_w or close_regs, as the interpreter makes it there.
+			// closure_w or close_regs, as the interpreter makes it there;
+			// on a native callee's level, a closure that captures none of
+			// them.
 			if level {
-				return false
+				return r.jitRegLevelClosure(ctx, f, c, wb)
 			}
 			return r.jitRegFrameWhole(ctx, f, c, wb)
 		}
@@ -221,6 +223,48 @@ func (r *Runtime) jitRegFrameWhole(ctx *abi.Context, f *frame, c *regCode, wb in
 		return true
 	}
 	return false
+}
+
+// jitRegLevelClosure is closure_w at ctx's register pc on a native callee's
+// level, f its stand-in and wb its window, for code whose captured
+// registers are the window's slots, where native code makes none -- its
+// pool run out, or none given: a closure that captures none of them -- its
+// upvalues its maker's own, or none, as an arrow a callback is made of so
+// often has -- which Go makes as the interpreter does. It shares no
+// register, so that no upvalue is opened on a window no frame of the VM's
+// closes. One that captures a register, or reads what the stand-in has
+// not of its maker (jitNeedsMaker), or a derived constructor's arrow made
+// before super() bound its this, is left to the exit, where Go makes the
+// level's frame.
+func (r *Runtime) jitRegLevelClosure(ctx *abi.Context, f *frame, c *regCode, wb int) bool {
+	rpc := int(ctx.ExitPC)
+	if ssa.GoOp(ctx.GoOp&0xff) != ssa.GoClosure || rpc >= len(c.rc.Code) {
+		return false
+	}
+	w := regAt(c.code, rpc)
+	if w.Op() != bytecode.RClosureW || int(w.BC()) >= len(f.cl.consts) {
+		return false
+	}
+	tmpl := f.cl.consts[w.BC()]
+	t := tmpl.template()
+	if t == nil || jitNeedsMaker(tmpl) {
+		return false
+	}
+	for _, u := range t.fn.Upvalues {
+		if u.FromParent {
+			return false
+		}
+	}
+	f.this = r.stack[wb+1]
+	if f.cl.fn.Kind == bytecode.KindDerivedConstructor && t.fn.Kind == bytecode.KindArrow {
+		this := *(*Value)(unsafe.Pointer(&ctx.This))
+		if this.IsUninitialized() {
+			return false
+		}
+		f.this = this
+	}
+	keepClosure(ctx, Obj(regMadeClosure(r.newClosureIn(f, tmpl, nil))))
+	return true
 }
 
 // jitRegCapturedRegs are the registers of p closures capture (ir.Program's
