@@ -74,15 +74,15 @@ type Asm struct {
 	// bytes the fixups before each, and it, removed (Moved).
 	short   []bool
 	removed []int
-	// bound are the labels in the order they were bound, which is their
-	// positions' order.
-	bound []Label
 	// open are the fixups whose jumps Finish may shorten, in order; openQ
 	// those of them it may yet, by place in open, candPast how many of them
 	// are before each's label, and sums what those before each remove.
 	open, openQ, candPast, sums []int32
 	// aligned says the code has alignments (Align).
 	aligned bool
+	// finished says Finish has made the code: a label's place is then
+	// where movedLabel says.
+	finished bool
 }
 
 // label is a label's place: its offset, or -1 while unbound, and the
@@ -154,22 +154,22 @@ func (a *Asm) Len() int { return len(a.buf) }
 // Reset empties the assembler for the next function, keeping its memory.
 func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
-	a.short, a.removed, a.bound = a.short[:0], a.removed[:0], a.bound[:0]
+	a.short, a.removed = a.short[:0], a.removed[:0]
 	a.open, a.openQ, a.candPast, a.sums = a.open[:0], a.openQ[:0], a.candPast[:0], a.sums[:0]
-	a.aligned = false
+	a.aligned, a.finished = false, false
 }
 
 // Bytes is the memory the assembler keeps for the next function.
 func (a *Asm) Bytes() int {
 	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(label{})) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		cap(a.short) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.bound)*int(unsafe.Sizeof(Label(0))) +
+		cap(a.short) + cap(a.removed)*int(unsafe.Sizeof(0)) +
 		(cap(a.open)+cap(a.openQ)+cap(a.candPast)+cap(a.sums))*4
 }
 
 // Used is what of Bytes the last function used: its tables' lengths.
 func (a *Asm) Used() int {
 	return len(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + len(a.labels)*int(unsafe.Sizeof(label{})) + len(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		len(a.short) + len(a.removed)*int(unsafe.Sizeof(0)) + len(a.bound)*int(unsafe.Sizeof(Label(0))) +
+		len(a.short) + len(a.removed)*int(unsafe.Sizeof(0)) +
 		(len(a.open)+len(a.openQ)+len(a.candPast)+len(a.sums))*4
 }
 
@@ -187,7 +187,6 @@ func (a *Asm) Bind(l Label) {
 	// The first fixup at or past it is the next one made: fixups are made
 	// in their positions' order, each past the labels bound before it.
 	a.labels[l] = label{pos: int32(len(a.buf)), first: int32(len(a.fixups))}
-	a.bound = append(a.bound, l)
 }
 
 // Align pads the code to the next multiple of n bytes, n a power of two
@@ -226,8 +225,13 @@ func pad(b []byte) {
 	}
 }
 
-// Offset is a bound label's position.
-func (a *Asm) Offset(l Label) int { return int(a.labels[l].pos) }
+// Offset is a bound label's position: after Finish, in the code it made.
+func (a *Asm) Offset(l Label) int {
+	if a.finished {
+		return a.movedLabel(a.labels[l])
+	}
+	return int(a.labels[l].pos)
+}
 
 // Finish patches every branch and returns the code. A jump whose label is
 // within a byte's displacement of it is shortened, as an assembler relaxes
@@ -349,13 +353,17 @@ func (a *Asm) Finish() ([]byte, error) {
 	// a jump's own bytes are read before they are written over.
 	// Until the first jump shortened or padding cut, the code is where it
 	// was, and is not copied onto itself. Only the jumps shortened and the
-	// paddings remove bytes: the code is moved in stretches between them,
-	// and every other fixup's displacement written after, where its code
-	// has gone -- moved past each fixup, seven in ten of which keep their
-	// length, a copy's call had moved some seventeen bytes each.
+	// paddings remove bytes: the code is moved in stretches between them
+	// -- moved past each fixup, seven in ten of which keep their length, a
+	// copy's call had moved some seventeen bytes each. Every other fixup's
+	// displacement, of 32 bits, is written where it is before its stretch
+	// moves, which takes it along: nothing has been written there yet.
 	buf, w, last := a.buf, 0, 0
 	for i, f := range a.fixups {
 		if f.kind() != fixAlign && !a.short[i] {
+			at := int(f.at)
+			to := a.movedLabel(a.labels[f.label])
+			binary.LittleEndian.PutUint32(buf[at:], uint32(int32(to-(a.movedPast(at, i)+4))))
 			continue
 		}
 		start := int(f.start)
@@ -386,23 +394,7 @@ func (a *Asm) Finish() ([]byte, error) {
 	} else {
 		w = len(buf)
 	}
-	// The displacements kept 32 bits, each where the bytes removed before
-	// its fixup moved it.
-	for i, f := range a.fixups {
-		if f.kind() == fixAlign || a.short[i] {
-			continue
-		}
-		at := int(f.at)
-		if i > 0 {
-			at -= a.removed[i-1]
-		}
-		to := a.movedLabel(a.labels[f.label])
-		binary.LittleEndian.PutUint32(buf[at:], uint32(int32(to-(at+4))))
-	}
-	for _, l := range a.bound {
-		a.labels[l].pos = int32(a.movedLabel(a.labels[l]))
-	}
-	a.buf = buf[:w]
+	a.buf, a.finished = buf[:w], true
 	return a.buf, nil
 }
 
