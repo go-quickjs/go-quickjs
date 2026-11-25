@@ -115,15 +115,19 @@ func copyelim(f *Func) {
 		for _, v := range b.Phis {
 			resolveArgs(v.Args)
 		}
-		keep := b.Values[:0]
-		for _, v := range b.Values {
+		// The values are moved down only from the block's first copy on.
+		vs, n := b.Values, 0
+		for i, v := range vs {
 			resolveArgs(v.Args)
 			if v.Op != OpCopy {
-				keep = append(keep, v)
+				if n != i {
+					vs[n] = v
+				}
+				n++
 			}
 		}
-		clear(b.Values[len(keep):])
-		b.Values = keep
+		clear(vs[n:])
+		b.Values = vs[:n]
 		if b.Control != nil {
 			b.Control = resolve(b.Control)
 		}
