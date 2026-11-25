@@ -1172,6 +1172,14 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 	if site, ok := f.regAllocSite(rpc, w, argc); ok && !wide {
 		return []ssa.CallSite{site}
 	}
+	if l := f.fb.e; w.Op() == bytecode.RNewW && !wide && l != nil && slices.Contains(l.genericCalls, int32(rpc)) {
+		// A construction that met more functions than it constructs with
+		// natively (jitRegGenericNew) -- classes a loop makes anew, each
+		// with a prototype of its own -- is Go's from native code, whatever
+		// it constructs with, as V8's code constructs through its generic
+		// Construct builtin.
+		return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, New: true, ThisSlot: -1}}
+	}
 	if sites := f.regCallSites(pc, w, argc, method); len(sites) != 0 {
 		if l := f.fb.e; w.Op() != bytecode.RNewW && l != nil && (jitCountAt(l.nativeCalls, rpc) >= jitCallTargets || slices.Contains(l.genericCalls, int32(rpc))) {
 			// As many as it calls natively: any other function it calls

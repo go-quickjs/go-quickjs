@@ -109,11 +109,83 @@ func TestJITMegamorphicMethodMissByGo(t *testing.T) {
 // jitMegaMethodNative is how many times TestJITMegamorphicMethodMissByGo's
 // functions have run natively.
 func jitMegaMethodNative(r *Runtime) uint64 {
+	return jitNativeOfForTest(r, "call", "run")
+}
+
+// jitNativeOfForTest is how many times r's functions of the names given
+// have run natively (JITReport's Native).
+func jitNativeOfForTest(r *Runtime, names ...string) uint64 {
 	n := uint64(0)
 	for _, fn := range r.JITReport() {
-		if strings.HasPrefix(fn.Name, "call ") || strings.HasPrefix(fn.Name, "run ") {
-			n += fn.Native
+		for _, name := range names {
+			if strings.HasPrefix(fn.Name, name+" ") {
+				n += fn.Native
+			}
 		}
 	}
 	return n
+}
+
+// A construction that has met more functions than it constructs with
+// natively -- a class a loop makes at each turn, each with a prototype of
+// its own, which no pool's objects have -- is Go's from native code from
+// then on, whatever it constructs with (the VM's jitRegGenericNew), as
+// V8's code constructs through its generic Construct builtin, and learns
+// nothing more there (jitRegCallUnsettled): each such construction had
+// left native code past the site's four targets, 64 times a call of 64
+// classes, the exit teaching nothing. A class whose constructor does
+// more, a derived one, and one whose instances' method the loop reads
+// and calls, as microbench's class_factory and subclass_fresh do. Each
+// answer is the interpreter's, with the collector idle and marking.
+func TestJITGenericConstruction(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		class Base { constructor(a) { this.a = a } }
+		function plain(n) {
+			let s = 0
+			for (let j = 0; j < n; j++) {
+				const C = class { constructor(a) { this.a = a } get() { return this.a } }
+				const o = new C(j)
+				s += o.get()
+			}
+			return s
+		}
+		function derived(n) {
+			let s = 0
+			for (let j = 0; j < n; j++) {
+				const D = class extends Base { constructor(a) { super(a); this.b = 1 } }
+				const o = new D(j)
+				s += o.a + o.b
+			}
+			return s
+		}`
+	for _, marking := range []bool{false, true} {
+		for _, fn := range []string{"plain", "derived"} {
+			t.Run(fmt.Sprintf("%s/marking=%v", fn, marking), func(t *testing.T) {
+				if marking {
+					jitMarkingForTest(t)
+				}
+				holdCollector(t)
+				r, run := jitTierRuntimeForTest(t, jitInvocationsForFeedback, setup)
+				src := fmt.Sprintf("%s(2000)", fn)
+				for range 6 {
+					run(src)
+				}
+				for i := range 4 {
+					st, gcs, native := r.RegNativeStats(), jitCollectionsForTest(r), jitNativeOfForTest(r, fn)
+					run(src)
+					after := r.RegNativeStats()
+					if hosts, ended := after.Hosts-st.Hosts, after.Interpreted-st.Interpreted; (hosts != 0 || ended != 0) && gcs == jitCollectionsForTest(r) {
+						t.Errorf("call %d of %s: %d exits to Go (%v), %d invocations finished in the interpreter", i, src, hosts, after.HostOps, ended)
+					}
+					if jitNativeOfForTest(r, fn) == native {
+						t.Errorf("call %d of %s did not run natively", i, src)
+					}
+				}
+			})
+		}
+	}
 }

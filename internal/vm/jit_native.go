@@ -3443,12 +3443,18 @@ func (r *Runtime) jitRegViaCall(op bytecode.ROp, callee, this Value) bool {
 // jitRegCallUnsettled reports whether the learning of a call of Go
 // (jitRegCallSeen and the rest) has anything to note of the call op at
 // register pc rpc of e's code: not once the call is settled as one Go makes
-// (jitCallDone, jitRegCallSettle), unless it constructs -- a pool to fill.
+// (jitCallDone, jitRegCallSettle), unless it constructs -- a pool to fill,
+// but for a construction Go makes whatever it constructs with
+// (jitRegGenericNew), which has neither pool nor target to learn: a class a
+// loop makes at each turn had had its every construction learned of.
 // Most calls of Go are such, a built-in's: asked here, they cost no
 // learning.
 func jitRegCallUnsettled(e *jitRegEntry, rpc int, op bytecode.ROp) bool {
-	if op == bytecode.RNewW || e == nil || e.life == nil {
+	if e == nil || e.life == nil {
 		return true
+	}
+	if op == bytecode.RNewW {
+		return !slices.Contains(e.life.genericCalls, int32(rpc))
 	}
 	sites := e.life.callSites
 	return uint(rpc) >= uint(len(sites)) || sites[rpc] != jitCallDone

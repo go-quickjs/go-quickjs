@@ -688,6 +688,17 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 		}
 	}
 	if n >= jitCallTargets {
+		if w.Op() == bytecode.RNewW && jitRegGenericNew(l, rpc) {
+			// A construction past the functions it constructs natively
+			// -- classes a loop makes anew at each turn, each with a
+			// prototype of its own, no pool's -- is Go's from native code
+			// from now on, whatever it constructs with (jitRegFeedback's
+			// nativeCalls), as V8's code constructs through its generic
+			// Construct builtin. Each other one had left native code, the
+			// exit teaching nothing.
+			r.jitRegReopt(f.cl, e)
+			return true
+		}
 		if w.Op() != bytecode.RNewW {
 			// Past the functions it calls natively, one a generic call
 			// calls through its link (ssa.CallSite's Generic), which it
@@ -736,6 +747,18 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 		return false
 	}
 	r.jitRegReopt(f.cl, e)
+	return true
+}
+
+// jitRegGenericNew learns in l that the construction at register pc rpc,
+// past the functions it constructs natively (jitCallTargets), is generic:
+// Go makes it from native code, whatever it constructs with
+// (jitRegFeedback's nativeCalls). It reports whether it had not known it.
+func jitRegGenericNew(l *jitEntry, rpc int) bool {
+	if l == nil || slices.Contains(l.genericCalls, int32(rpc)) {
+		return false
+	}
+	l.genericCalls = append(l.genericCalls, int32(rpc))
 	return true
 }
 
