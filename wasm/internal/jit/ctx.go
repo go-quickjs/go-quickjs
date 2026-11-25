@@ -41,10 +41,11 @@ type Ctx struct {
 	// frame must end at or before it.
 	ChunkEnd uintptr
 	// RSP and RSEnd are the native return stack's next free entry, stored
-	// at every exit, and its end, or where the call depth would pass its
-	// limit if that is before. An entry is three words: the address to
-	// return to, the caller's L, and the callee's function index above the
-	// call's offset in the caller (Site).
+	// at every exit, and its end, or, if that is before, the entry of the
+	// first call whose callee's calls InlineDepth deep would pass the call
+	// depth's limit. An entry is three words: the address to return to, the
+	// caller's L, and the callee's function index above the call's offset
+	// in the caller (Site).
 	RSP, RSEnd uintptr
 	// Poll counts down to the next poll; native code exits when it runs
 	// out.
@@ -108,12 +109,14 @@ type Ctx struct {
 	// staying in Save. It is at a multiple of 16 bytes from the context's
 	// start, which arm64's 16-byte loads and stores scale their offsets by.
 	SaveV [2 * 32]uint64
-	// DepthEnd is where on the return stack the call depth would pass its
-	// limit: RSEnd, unless the stack's end is before it. The optimizing
-	// tier's code enters an inlined callee only where a call of it would be
-	// within the limit (Site).
-	DepthEnd uintptr
 }
+
+// InlineDepth is how many calls deep the optimizing tier inlines calls at
+// most. Native code runs only in a frame whose calls that many deep are
+// within the call depth's limit (RSEnd): the engine runs a frame nearer
+// the limit in the interpreter, so that an inlined call never passes it
+// and checks nothing.
+const InlineDepth = 3
 
 // RArgsBias is what Ctx.RArgs adds to its offset, which may be negative,
 // so that a word that is not 0 says the offset is set.

@@ -266,11 +266,13 @@ given the engine's (`resolveInline`). Where the engine makes the call
 stack of native frames (`jitSync`) it adds the inlined frames, so that a
 trap's frames are those the calls would have had.
 
-The call depth is the calls' too. An inlined call begins with `OpDepth`,
-which traps at the callee's start, as a call that cannot be made does,
-where the return stack entry the call would have pushed is past the depth's
-limit (`Ctx.DepthEnd`): k calls deep, the entry k-1 past the next. A call
-made k calls deep pushes its entry k entries past the next (Aux2 of
+The call depth is the calls' too. The engine runs the code only in a
+frame whose calls `wjit.InlineDepth` deep are within the depth's limit --
+a native call's return stack ends where its callee's would not be, and a
+frame nearer runs in the interpreter (the baseline README's Calls) -- so
+an inlined call is never one that would pass it, and checks nothing. Each
+had checked it, three instructions an inlined call, until fib's code went
+from 3.87 to 3.63 ms without them. A call made k calls deep pushes its entry k entries past the next (Aux2 of
 `OpCall`), leaving the k frames' entries unwritten, and takes the
 return stack's register back from the entry it returns with less those k:
 the return stack's depth is the calls' depth, its end checked as any

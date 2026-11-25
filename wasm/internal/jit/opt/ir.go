@@ -228,11 +228,6 @@ const (
 	// first, each at its place among the tag's values.
 	OpExnVal
 
-	// OpDepth enters a call this function's code makes inlined, Aux calls
-	// deep: it traps at At, the callee's start, where the call would pass
-	// the call depth's limit (wjit.Ctx.DepthEnd), as the call would.
-	OpDepth
-
 	numOps
 )
 
@@ -426,7 +421,6 @@ var opInfos = [numOps]opInfo{
 	OpAtomicCmpxchg: {"atomic.cmpxchg", fEffect | fTrap},
 	OpFence:         {"fence", fEffect},
 	OpExnVal:        {"exn.val", 0},
-	OpDepth:         {"depth", fEffect | fTrap},
 }
 
 func (o Op) String() string { return opInfos[o].name }

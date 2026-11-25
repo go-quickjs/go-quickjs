@@ -74,7 +74,6 @@ var (
 	offChunkEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.ChunkEnd))
 	offRSP       = int32(unsafe.Offsetof(wjit.Ctx{}.RSP))
 	offRSEnd     = int32(unsafe.Offsetof(wjit.Ctx{}.RSEnd))
-	offDepthEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.DepthEnd))
 	offPoll      = int32(unsafe.Offsetof(wjit.Ctx{}.Poll))
 	offR         = int32(unsafe.Offsetof(wjit.Ctx{}.R))
 	offRChunkEnd = int32(unsafe.Offsetof(wjit.Ctx{}.RChunkEnd))
@@ -1322,17 +1321,6 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.atomic(v)
 	case OpExnVal:
 		g.exnVal(v)
-	case OpDepth:
-		// The inlined call's frame would be the entry Aux-1 past the next
-		// one: within the depth's limit, or the call traps.
-		rs := rRS
-		if k := int64(v.Aux) - 1; k > 0 {
-			a.AddImm(s0, rRS, k*rsEntry, true)
-			rs = s0
-		}
-		a.Load(s1, rCtx, offDepthEnd)
-		a.Cmp(rs, s1, true)
-		a.BCond(arm64.HS, g.trap(wjit.TrapStackOverflow, v.At))
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}

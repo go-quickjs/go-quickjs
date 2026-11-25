@@ -120,7 +120,7 @@ const (
 	layoutPadNHJ  = 299
 	layoutPadNH   = 116
 	layoutPadNHT  = 129
-	layoutPadNDH  = 3
+	layoutPadNDH  = 0
 	layoutPadNDW  = 2
 	layoutPadNDG  = 0
 )

@@ -20,7 +20,7 @@ import (
 // at most, and inlineBudget bytes of bodies in a function.
 const (
 	inlineBodyBytes = 64
-	inlineDepth     = 3
+	inlineDepth     = wjit.InlineDepth
 	inlineBudget    = 1024
 )
 
@@ -232,10 +232,8 @@ func (bd *builder) inlineCall(idx, pc uint32) {
 		maxHeight: bd.f.MaxHeight}
 	in.cur = fr
 	in.maxLevel = max(in.maxLevel, fr.level)
-	d := bd.value(OpDepth, TNone)
-	d.Aux = uint64(fr.level)
-	// The call that cannot be made traps at its callee's start.
-	d.At = bd.at(code.Offset)
+	// The call is within the call depth's limit: the code runs only in a
+	// frame whose calls inlineDepth deep are (wjit.InlineDepth).
 
 	n := len(ft.Params)
 	args := bd.stack[len(bd.stack)-n:]

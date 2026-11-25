@@ -290,9 +290,9 @@ and X0 on arm64:
   slots' in its high one.
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
   next entry, which a register holds in native code and an exit stores,
-  and its end -- or, if that is before, the entry at which a call would
-  pass `MaxCallDepth`; `DepthEnd` that entry alone, which the optimizing
-  tier's inlined calls check (`opt/README.md`, Inlining). A call the
+  and its end -- or, if that is before, the entry at which a call's
+  callee would have no room for the calls the optimizing tier inlines
+  (`InlineDepth`, Calls) within `MaxCallDepth`. A call the
   optimizing tier makes from an inlined body has its entry past the
   unwritten ones of the frames the inlined calls would have made, and an
   offset past the module's bytes that says them: Go walks a level's
@@ -373,9 +373,15 @@ with the rest.
 A call of a function defined in the module is made natively when the callee
 has native code (its link entry is not 0), its frame has room in the chunk,
 and the return stack has room for an entry; otherwise it is an `ExitCall`.
-Native code keeps no depth: the return stack ends, for it, where the next
-call would pass the limit, so that call goes through Go, whose depth check
-traps, and the depth Go sees is the level's at entry plus its entries. The
+Native code keeps no depth: the return stack ends, for it, where the
+callee's calls `InlineDepth` (3) deep would pass the limit, so that call
+goes through Go, whose depth check traps where the call itself passes it,
+and the depth Go sees is the level's at entry plus its entries. Go runs a
+frame that near the limit in the interpreter, whether it is a call's, a
+tail call's or one an OSR would enter (`nearDepthLimit`): native code runs
+only where the calls the optimizing tier inlines are within the limit, so
+that an inlined call checks nothing, and a frame within three calls of the
+limit, a stack overflow's last, runs its few calls in the interpreter. The
 call first counts down the poll counter, as the interpreter's `run` does.
 With every entry and the written locals' homes stored, the caller copies
 the arguments into the parameters of the callee's frame, at its own

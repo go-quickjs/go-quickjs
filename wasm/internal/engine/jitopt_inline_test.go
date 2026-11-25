@@ -135,3 +135,45 @@ func TestOptInlineStackOverflow(t *testing.T) {
 	}
 	matchOpt(t, src, cases)
 }
+
+// TestOptInlineDepthReserve checks the frames near the call depth's limit,
+// which run in the interpreter where the calls the optimizing tier inlines
+// into their code could pass it: reached by native calls, by calls through
+// Go, by a tail call and a tail call through a table, each traps where the
+// interpreter does, with its frames, or returns what it does.
+func TestOptInlineDepthReserve(t *testing.T) {
+	src := `(module
+  (type $t (func (param i32) (result i32)))
+  (table 1 funcref)
+  (elem (i32.const 0) $a)
+  (func $a (param i32) (result i32) (i32.add (call $b (local.get 0)) (i32.const 1)))
+  (func $b (param i32) (result i32) (i32.add (call $c (local.get 0)) (i32.const 1)))
+  (func $c (param i32) (result i32)
+    (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0))
+      (else (call $a (i32.sub (local.get 0) (i32.const 1))))))
+  (func $down (export "f") (param $n i32) (param $k i32) (result i32)
+    (if (result i32) (i32.eqz (local.get $n))
+      (then (return_call $a (local.get $k)))
+      (else (i32.add (call $down (i32.sub (local.get $n) (i32.const 1)) (local.get $k)) (i32.const 1)))))
+  (func $downInd (export "g") (param $n i32) (param $k i32) (result i32)
+    (if (result i32) (i32.eqz (local.get $n))
+      (then (return_call_indirect (type $t) (local.get $k) (i32.const 0)))
+      (else (i32.add (call $downInd (i32.sub (local.get $n) (i32.const 1)) (local.get $k)) (i32.const 1)))))
+  (func (export "h") (param $n i32) (param $k i32) (result i32)
+    (i32.add (call $down (local.get $n) (local.get $k)) (call $a (local.get $k)))))`
+	var cases []struct {
+		name string
+		args []uint64
+	}
+	for _, name := range []string{"f", "g", "h"} {
+		for n := uint64(MaxCallDepth) - 14; n <= uint64(MaxCallDepth); n++ {
+			for _, k := range []uint64{0, 1, 2, 3, 4, 7} {
+				cases = append(cases, struct {
+					name string
+					args []uint64
+				}{name, []uint64{n, k}})
+			}
+		}
+	}
+	matchOpt(t, src, cases)
+}

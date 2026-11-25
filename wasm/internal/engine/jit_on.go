@@ -972,7 +972,7 @@ func (cd *compiled) nativeRefSlots() int {
 // sigTail with the exec's tail call set.
 func (x *exec) runNative(fn *Function, code *compiled, l []uint64, r []Ref) (int32, bool) {
 	cj := fn.Inst.Code.jit.Load()
-	if cj == nil {
+	if cj == nil || x.nearDepthLimit(x.depth) {
 		return 0, false
 	}
 	nat := cj.native(fn.Inst.Code, fn.Index, code)
@@ -981,6 +981,14 @@ func (x *exec) runNative(fn *Function, code *compiled, l []uint64, r []Ref) (int
 	}
 	return x.enterNative(cj, fn, nat, l, r, nat.goEntry)
 }
+
+// nearDepthLimit reports whether a frame at call depth d is too near the
+// exec's limit for native code: its calls wjit.InlineDepth deep would pass
+// it. The optimizing tier's code makes the calls it inlines without
+// checking the depth, so a frame runs natively only where they are within
+// the limit, and the interpreter runs it otherwise, trapping where a call
+// passes it.
+func (x *exec) nearDepthLimit(d int) bool { return d+wjit.InlineDepth > x.maxDepth }
 
 // osrBudget is the number of back edges a call of the function whose body
 // is cd runs in the interpreter before it goes on in native code: none if
@@ -1011,7 +1019,7 @@ func osrBudget(c *Code, cd *compiled) int32 {
 func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 	code := f.inst.Code
 	cj := code.jit.Load()
-	if cj == nil {
+	if cj == nil || x.nearDepthLimit(x.depth) {
 		return 0, false
 	}
 	cd := code.get(idx)
@@ -1134,7 +1142,6 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 		lv.rsBase = lv.rsBase - old + start
 		lv.ctx.RSP = lv.ctx.RSP - old + start
 		lv.ctx.RSEnd = min(newEnd, lv.rsBase+lv.rsDepth)
-		lv.ctx.DepthEnd = lv.rsBase + lv.rsDepth
 	}
 	return from - old + start
 }
@@ -1201,12 +1208,13 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		panic("wasm jit: a frame's references outside the exec's chunk")
 	}
 	// A native call at entry j of the level is at depth x.depth+j: the
-	// entries end where that would pass the exec's maxDepth, and a call
-	// there goes through Go, whose depth check traps.
+	// entries end where the callee's calls wjit.InlineDepth deep would
+	// pass the exec's maxDepth, and a call there goes through Go, which
+	// traps where the call itself passes it and runs it in the interpreter
+	// where its calls may (nearDepthLimit).
 	lv.rsBase = from
-	lv.rsDepth = uintptr(max(x.maxDepth-x.depth+1, 1)) * rsEntryBytes
+	lv.rsDepth = uintptr(max(x.maxDepth-x.depth+1-wjit.InlineDepth, 1)) * rsEntryBytes
 	ctx.RSEnd = min(x.rsStart()+uintptr(len(x.jit.rs))*8, from+lv.rsDepth)
-	ctx.DepthEnd = from + lv.rsDepth
 	i := x.rsIndex(from)
 	x.jit.rs[i] = uint64(nat.retStub)
 	x.jit.rs[i+1] = 0
@@ -1549,7 +1557,10 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 	if x.poll--; x.poll <= 0 {
 		x.pollContext()
 	}
-	if fn.Inst == lv.inst && fn.Host == nil {
+	// The frame's depth: the level's, and an entry each for the frames
+	// above the one Go entered.
+	depth := x.depth + int((ctx.RSP-lv.rsBase)/rsEntryBytes) - 1
+	if fn.Inst == lv.inst && fn.Host == nil && !x.nearDepthLimit(depth) {
 		cd := lv.inst.Code.get(fn.Index)
 		start, rstart := f.top-len(f.l), f.rtop-len(f.r)
 		nchunk, rchunk := x.nchunks[lv.nc], x.rchunks[lv.rc]
