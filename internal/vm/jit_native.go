@@ -3560,8 +3560,9 @@ func (r *Runtime) jitRegWhole(ctx *abi.Context, idx int, run jitRegRun, rpc int)
 		// turn had been the one the frame held when native code entered.
 		r.jitRegReopenCells(f, e, wb, ctx, true)
 	}
-	var regs [4]int
-	var saved [4]Value
+	// The registers it reads, up to four, and the one it writes.
+	var regs [5]int
+	var saved [5]Value
 	n := 0
 	for i := 0; i <= argc; i++ {
 		reg := dest

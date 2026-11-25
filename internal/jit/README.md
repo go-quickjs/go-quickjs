@@ -231,11 +231,13 @@ primitive, which the concat converts the same, not a call of Go of its own.
 What the lowering leaves to Go whole -- a call, a cold operation
 -- is one `Host`, alone in its origin: Go runs the whole register
 instruction. Where Go can run it on the frame and the registers it reads
-and writes are known (`compile.RegAccess`: up to three read, one written;
-a plain call's receiver register written by the call, not read)
+and writes are known (`compile.RegAccess`: up to four read, the fourth at
+`ir.Instruction`'s `Fourth`, one written; a plain call's receiver register
+written by the call, not read)
 -- a for...in's or a for...of's cursor, an object's or an array's spread, a
 spread call, a computed key's definition, `#x in o`, super's reads and
-writes by name and super's base (their receiver register 1), a derived
+writes by name and by a computed key and super's base (their receiver
+register 1), a derived
 constructor's result -- it is a whole Host (`ir.Instruction`'s `Whole`), its
 operands the registers it reads and its result the one it writes, which
 native code calls Go for and goes on after (see [Calls of

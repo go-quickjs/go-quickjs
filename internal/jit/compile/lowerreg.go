@@ -1792,7 +1792,7 @@ func regWrapOperator(rc *bytecode.RegCode, pc int) (ir.Operator, bool) {
 
 // hostAt is the Host of the register instruction at pc, which Go runs
 // whole: called from native code where Go may run it on the frame and the
-// registers it reads and writes are known (RegAccess) -- up to three read,
+// registers it reads and writes are known (RegAccess) -- up to four read,
 // one written -- the code going on after it (ir.Instruction's Whole); left
 // to an exit otherwise. A return, a suspension, a call in tail position
 // and a throw, which end the frame's flow or are the interpreter's alone,
@@ -1809,12 +1809,16 @@ func regHostAt(rc *bytecode.RegCode, pc int) ir.Instruction {
 		return ir.Instruction{Op: ir.Host}
 	}
 	reads, writes, all := RegAccess(rc, pc)
-	if all || len(reads) > 3 || len(writes) > 1 {
+	if all || len(reads) > 4 || len(writes) > 1 {
 		return ir.Instruction{Op: ir.Host}
 	}
 	in := ir.Instruction{Op: ir.Host, Whole: true, Extra: len(reads), Dest: -1}
 	ops := []*ir.Operand{&in.Left, &in.Right, &in.Third}
 	for i, r := range reads {
+		if i == 3 {
+			in.Fourth = int32(r)
+			continue
+		}
 		*ops[i] = ir.Slot(r)
 	}
 	if len(writes) == 1 {
@@ -2229,6 +2233,9 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return []int{a, 1}, nil, false
 	case bytecode.RSuperGetIndex:
 		return []int{b, c, 1}, []int{a}, false
+	case bytecode.RSuperSetIndex:
+		// super[R[B]] = R[C] on the base R[A], this the receiver.
+		return []int{a, b, c, 1}, nil, false
 	case bytecode.RDerivedRet:
 		// What a derived constructor returns: its operand, or the frame's
 		// this binding.

@@ -6056,7 +6056,7 @@ func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operan
 // nativeHost reports whether native code makes the host operation at pc
 // itself: an intrinsic call or instanceof the VM knows.
 func (b *builder) nativeHost(pc int) bool {
-	if in := b.p.Code[pc]; (in.Frame || in.Whole && in.Extra <= 3) && b.cur == b.root && b.goCalls() {
+	if in := b.p.Code[pc]; (in.Frame || in.Whole && in.Extra <= 4) && b.cur == b.root && b.goCalls() {
 		// Go's from native code (GoHost).
 		return true
 	}

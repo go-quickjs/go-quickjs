@@ -387,8 +387,13 @@ const (
 // the callee from Left, the string receiver from Right and the index from Third.
 // Failed string permissions take an uncommitted Host exit.
 type Instruction struct {
-	Op        Op
-	Operator  Operator
+	Op       Op
+	Operator Operator
+	// Fourth is a whole Host's fourth register read, where Extra is 4
+	// (Whole): super_set_index's this, past its object, key and value.
+	// It sits in the room Op and Operator leave before Left, so that it
+	// grows no instruction.
+	Fourth    int32
 	Left      Operand
 	Right     Operand
 	Third     Operand
@@ -466,7 +471,8 @@ type Instruction struct {
 	// Whole marks a Host of register code that Go runs whole on the
 	// register frame, called from native code (ssa's GoCall, Whole), which
 	// goes on after it: the registers it reads, Extra of them, at Left,
-	// Right and Third in order, and the one it writes at Dest, or -1.
+	// Right, Third and Fourth in order, and the one it writes at Dest, or
+	// -1.
 	Whole bool
 	// Generic marks a component of a register instruction's expansion
 	// (Program's Origin) that follows one that may have committed: it never
@@ -595,14 +601,14 @@ func (in *Instruction) Writes() (int, int) {
 // last, in, delete --
 // a literal operand being the instruction's immediate; ok is false for any other, or for a slot past the regs
 // registers.
-func (in *Instruction) WholeOperands(regs int) (reads [3]int, n int, dest int, ok bool) {
+func (in *Instruction) WholeOperands(regs int) (reads [4]int, n int, dest int, ok bool) {
 	// The operands' slots, -1 for a literal: no Operand copied, as Go asks
 	// at each such call.
-	slots := [3]int{in.Left.Slot, in.Right.Slot, in.Third.Slot}
+	slots := [4]int{in.Left.Slot, in.Right.Slot, in.Third.Slot, int(in.Fourth)}
 	dest = -1
 	switch {
 	case in.Op == Host && in.Whole:
-		if in.Extra > 3 {
+		if in.Extra > 4 {
 			return reads, 0, -1, false
 		}
 		n, dest = in.Extra, in.Dest
@@ -610,7 +616,7 @@ func (in *Instruction) WholeOperands(regs int) (reads [3]int, n int, dest int, o
 		n = 2
 	case (in.Op == PropertyRead || in.Op == ReferenceRead) && in.Private && !in.When:
 		// A private member's read: its object and its key's register.
-		slots, n, dest = [3]int{in.Left.Slot, in.Third.Slot}, 2, in.Dest
+		slots, n, dest = [4]int{in.Left.Slot, in.Third.Slot}, 2, in.Dest
 	case in.Op == PropertyWrite && in.Private:
 		n = 3
 	case in.Op == ArrayWrite:

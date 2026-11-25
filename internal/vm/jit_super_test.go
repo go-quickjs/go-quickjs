@@ -52,7 +52,6 @@ const superSetup = `
 // entries (TestJITSuperReferencesCalledNatively). Each answer is the
 // interpreter's, the throws included.
 func TestJITSuperReferences(t *testing.T) {
-	t.Skip("register JIT gap: super property references leave native code: B.prototype.w leaves it 145 times (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -232,4 +231,52 @@ func TestJITSuperReferencesCalledNatively(t *testing.T) {
 		t.Fatal("selfs never ran natively")
 	}
 	jitDifferential(t, setup+`; [loop(100), selfs(100), loop(50)].join()`)
+}
+
+// A computed super assignment, super[k] = v, reads four registers -- the
+// reference's base, its key, the value and this, the receiver -- which Go
+// runs whole from native code (ir.Instruction's Fourth), the loop going on
+// natively after it: a setter on the prototype is called with this, a
+// write the base's property refuses throws in strict code, as a method's
+// is, and a base of null throws. Read three at most, it had left native
+// code at each assignment. Each answer is the interpreter's, and the
+// loops leave native code at none of their assignments.
+func TestJITSuperSetIndexWhole(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A { set s(v) { this.seen = v * 2 } }
+		Object.defineProperty(A.prototype, 'ro', { value: 1, writable: false })
+		class B extends A {
+			w(n) { let t = 0; for (let i = 0; i < n; i++) { super['p' + (i & 3)] = i; t += this['p' + (i & 3)] } return t }
+			s(n) { let t = 0; const k = 's'; for (let i = 0; i < n; i++) { super[k] = i; t += this.seen } return t }
+			ro(n) { try { for (let i = 0; i < n; i++) super[i < n - 1 ? 'x' : 'ro'] = i } catch (e) { return e.constructor.name + this.x } }
+		}
+		const lit = { __proto__: null, w(n) { try { for (let i = 0; i < n; i++) super[i] = i } catch (e) { return e.constructor.name + ': ' + e.message } } }
+		var b = new B()
+		function run(n) { return b.w(n) + ':' + b.s(n) + ':' + b.ro(n) + ':' + lit.w(n) }`
+	defer holdCollectorNow(t)()
+	both := jitBothForTest(t, setup)
+	for range 4 {
+		both.agree(t, `run(100)`)
+	}
+	r := both.jit
+	for _, src := range []string{`B.prototype.w`, `B.prototype.s`} {
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil || !v.IsObject() || v.Object().fn() == nil {
+			t.Fatalf("%s: %v, %v", src, v, err)
+		}
+		cl := v.Object().fn().closure
+		cv, ok := jitViewByFnForTest(r, cl)
+		if !ok || cv.e.ssaStats.entries == 0 && jitLinkInForTest(r, cl) == 0 {
+			t.Fatalf("%s never ran natively: %+v", src, cv.e)
+		}
+		hosts := cv.e.ssaStats.hosts
+		both.agree(t, `run(200)`)
+		if n := cv.e.ssaStats.hosts - hosts; n != 0 {
+			t.Errorf("%s left native code %d times", src, n)
+		}
+	}
+	jitAgreesForTest(t, setup, `run(20)`, `run(30)`, `run(50)`)
 }
