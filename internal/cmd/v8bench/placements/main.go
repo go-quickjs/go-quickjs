@@ -707,6 +707,7 @@ var freshCopy bool
 // GOMAXPROCS as many.
 func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
 	exe, env := labelExe(out, label, n)
+	built := exe
 	run := func(reps int, only string) ([]named, error) {
 		exe := exe
 		if freshCopy {
@@ -747,8 +748,11 @@ func runPlacement(label, out, dir, bench, suite string, n int, jitEnabled, jitBa
 			return nil, fmt.Errorf("%s: %w", exe, err)
 		}
 		if err := cmd.Wait(); err != nil {
-			// What the run printed before it failed says why.
-			return nil, fmt.Errorf("%s %s: %w\n%s", exe, strings.Join(args, " "), err, lastLines(errb.String(), 20))
+			// What the run printed before it failed says why: a panic's
+			// value is on the first lines of what it printed, the
+			// stack on the rest, so the error shows both ends and the
+			// whole of both streams is kept beside the build.
+			return nil, fmt.Errorf("%s %s: %w\n%s", exe, strings.Join(args, " "), err, failureReport(built, outb.String(), errb.String()))
 		}
 		var got []named
 		if micro {
@@ -928,11 +932,32 @@ func reportMicro(w io.Writer, labels [2]string, names []string, res [2][]map[str
 	}
 }
 
-// lastLines is the last n lines of s.
-func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+// failureReport keeps a failed run's whole stdout and stderr in a file
+// beside its build, exe, and returns the first and last lines of its
+// stderr with the file's name.
+func failureReport(exe, stdout, stderr string) string {
+	report := endLines(stderr, 10, 20)
+	f, err := os.CreateTemp(filepath.Dir(exe), strings.TrimSuffix(filepath.Base(exe), ".exe")+"-fail-*.txt")
+	if err != nil {
+		return report + "\n(the run's output was not kept: " + err.Error() + ")"
 	}
-	return strings.Join(lines, "\n")
+	_, err = fmt.Fprintf(f, "stderr:\n%s\nstdout:\n%s", stderr, stdout)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return report + "\n(the run's output was not kept: " + err.Error() + ")"
+	}
+	return report + "\n(the run's whole output: " + f.Name() + ")"
+}
+
+// endLines is the first head and the last tail lines of s, all of it if it
+// has no more than head+tail.
+func endLines(s string, head, tail int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) <= head+tail {
+		return strings.Join(lines, "\n")
+	}
+	skipped := fmt.Sprintf("... %d lines ...", len(lines)-head-tail)
+	return strings.Join(slices.Concat(lines[:head], []string{skipped}, lines[len(lines)-tail:]), "\n")
 }
