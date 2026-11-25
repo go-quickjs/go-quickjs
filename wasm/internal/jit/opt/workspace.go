@@ -46,7 +46,7 @@ type workspace struct {
 	gvn     gvnTable
 	dead    []bool
 	dceWork []*Value
-	checked u64map[uint64]
+	checked bceEnds
 	bceUndo [][2]uint64
 	// wide is the accesses the widened checks cover (Value.Wide).
 	wide     []wideCheck

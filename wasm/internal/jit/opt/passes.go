@@ -1040,7 +1040,7 @@ func bce(f *Func) {
 	// undo is what each entry was before the blocks on the walk's path
 	// changed it.
 	checked := &f.ws.checked
-	checked.reset(64)
+	checked.reset(f.NumValues())
 	undo := f.ws.bceUndo[:0]
 	pa := &f.ws.bcePaths
 	pa.ready = false
@@ -1110,6 +1110,38 @@ func bce(f *Func) {
 	f.ws.wide = f.ws.wide[:0]
 	walk(f.Entry)
 	f.ws.bceUndo = undo[:0]
+}
+
+// bceEnds is bce's ends checked, by a key of a memory's index above an
+// address's ID (or -1, the constant addresses'): memory 0's in an array by
+// the ID plus one, the other memories' in a table.
+type bceEnds struct {
+	mem0  []uint64
+	other u64map[uint64]
+}
+
+// reset empties e for a function of n values.
+func (e *bceEnds) reset(n int) {
+	e.mem0 = grown(e.mem0, n+1)
+	clear(e.mem0)
+	e.other.reset(8)
+}
+
+// at is key k's end, 0 where none is.
+func (e *bceEnds) at(k uint64) uint64 {
+	if k>>32 == 0 {
+		return e.mem0[int(int32(uint32(k)))+1]
+	}
+	return e.other.at(k)
+}
+
+// set makes x key k's end.
+func (e *bceEnds) set(k, x uint64) {
+	if k>>32 == 0 {
+		e.mem0[int(int32(uint32(k)))+1] = x
+		return
+	}
+	e.other.set(k, x)
 }
 
 // addrBase is what memory access v's checks are known by: its address,
