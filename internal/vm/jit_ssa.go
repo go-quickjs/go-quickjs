@@ -596,6 +596,16 @@ func (r *Runtime) jitDeoptSeenOp(e *jitEntry, pc int, op jitPropOp, serial uint3
 		jitAddAccessorCase(p, a)
 		return
 	}
+	if i := o.findOwn(key); i >= 0 && o.shape != nil && int(i) < int(o.shape.n) && o.shape.keys[i].flags&propAccessor != 0 {
+		// An accessor the receiver has itself -- an object literal's get
+		// x() -- which no cache holds: read or written by Go from native
+		// code once compiled again, its getter or setter called there on
+		// the frame, the run going on natively after it, as V8's
+		// megamorphic loads and stores call the runtime for an accessor
+		// they meet. It had left native code at each.
+		p.mega = true
+		return
+	}
 	c := op.c
 	if write || c.fills >= maxCacheFills {
 		// A write's cache learns as the interpreter writes -- an own

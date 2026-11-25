@@ -1554,26 +1554,44 @@ func TestJITHostReleaseAndGC(t *testing.T) {
 	}
 }
 
+// A getter's and a setter's callbacks, called from native code, release
+// the JIT's code and collect garbage while the native run that called them
+// is under way, which goes on natively with the state its contexts and
+// pins are in: each answer the interpreter's, every callback run under the
+// native run, and the JIT's state kept. The accessors' sites are fed
+// first, by a run in the interpreter with the callbacks idle: compiled
+// before the getter's a.push had run, the code inlining the getter
+// deoptimized there, as V8's code does at a site with no feedback, and
+// the callbacks after it ran with no native run under way.
 func TestJITPropertyReleaseAndGC(t *testing.T) {
-	t.Skip("register JIT gap: accessor calls leave native code: after the getter's a.push the run finishes in the interpreter, so later callbacks run with no native run under way (docs/performance-plan.md, the register JIT's remaining gaps)")
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	calls := 0
+	calls, armed := 0, false
+	var native []bool
 	r.global.setOwnRaw(r.atoms.intern("host"), r.NewFunction("host", 0,
 		func(rt *Runtime, _ Value, _ []Value) (Value, error) {
+			if !armed {
+				return Undefined, nil
+			}
 			calls++
 			if rt.jit == nil {
-				t.Fatal("property callback retained native roots")
+				t.Fatalf("property callback retained native roots, callback %d", calls)
 			}
+			native = append(native, rt.jit.ctxTop != 0)
 			rt.releaseJIT()
 			runtime.GC()
 			return Undefined, nil
 		}), propDefault)
-	v, err := jitRunFirstSourceForTest(t, r, `
+	jitWarmForTest(t, r, `
 		function f(a,o){let s=0;for(let i=0;i<3;i++){s+=o.plain+a[0];o.x=s;s+=o.x}return s+a.length}
 		let a=[1],o={plain:0,get x(){host();a.push(8);return a[0]},set x(v){host();a[0]=v+1}};
-		f(a,o)`)
+		f(a,o)`)()
+	armed = true
+	v, err := jitRunFirstSourceForTest(t, r, `a=[1]; f(a,o)`)
 	if err != nil || !v.IsNumber() || v.Number() != 39 || calls != 6 || r.jit == nil {
 		t.Fatalf("result %v err %v property callbacks %d", v, err, calls)
+	}
+	if got := fmt.Sprint(native); got != "[true true true true true true]" {
+		t.Errorf("callbacks under a native run: %s", got)
 	}
 }
 

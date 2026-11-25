@@ -259,6 +259,17 @@ func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.
 			// did for the fresh prototypes' layouts such writes then met.
 			return true
 		}
+		if c.getter && c.p1 == nil && c.cell == nil && c.shape != nil && c.shape != noShape && c.shape != dictShape {
+			// An accessor the receiver has itself -- an object literal's
+			// get x() or set x(v), which each object may have its own of,
+			// no AccessorSite's -- the interpreter's cache remembers:
+			// read or written by Go from native code, its getter or
+			// setter called there on the frame, the run going on natively
+			// after it, as V8's megamorphic loads and stores call the
+			// runtime for an accessor they meet. It had deoptimized at its
+			// first compile, and left native code at each since.
+			return true
+		}
 		if c.shape == dictShape || c.cell != nil {
 			// A cache of dictionary objects (dictShape), or of a chain's
 			// cell (protoCell) -- a property up a long chain, or one
