@@ -153,9 +153,12 @@ func (b *Budget) chargeGC(x *exec, n int64) {
 	if newBytes+b.gcLive.Load()+b.fixed.Load() <= b.limit || newBytes < b.limit/16 {
 		return
 	}
-	if !b.recount(x, 0) {
+	// The object being made is not reachable yet, so the count does not
+	// see it: it must fit beside what is, and it is charged again after.
+	if !b.recount(x, n) {
 		panic(hostError{ErrMemoryLimit})
 	}
+	b.gcNew.Add(n)
 }
 
 // tryChargeGC counts a GC object of n bytes as chargeGC does where that
@@ -341,12 +344,19 @@ func (x *exec) visitFrames(visit func(Ref)) {
 }
 
 // visitRoots visits the references an instance holds outside GC objects:
-// its globals, its tables and its element segments.
+// its globals, its tables and its element segments. An instance being
+// instantiated has those made so far: a global's or a table's initializer
+// that allocates may count what is reachable before the rest exist.
 func (inst *Instance) visitRoots(visit func(Ref)) {
 	for _, g := range inst.Globals {
-		visit(g.Ref)
+		if g != nil {
+			visit(g.Ref)
+		}
 	}
 	for _, t := range inst.Tables {
+		if t == nil {
+			continue
+		}
 		for _, r := range t.Elems {
 			visit(r)
 		}
