@@ -19,7 +19,8 @@ import (
 // code of functions not called for a while, whose next call compiles them
 // again -- and only where that does not make the room refuses the compile:
 // the function runs in the interpreter, and its compile is tried again
-// later (jit_mem.go has the policy and why dropping is safe).
+// later (jit_mem.go has the policy and why dropping is safe). The limit
+// bounds what a compile works in too (workBytes, workRoom).
 
 // JITBudget bounds the memory the JIT holds for the Codes charged to it
 // (Code.SetJITBudget). It is safe for concurrent use.

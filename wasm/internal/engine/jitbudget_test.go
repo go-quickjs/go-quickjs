@@ -759,7 +759,16 @@ func TestJITBudgetShared(t *testing.T) {
 func TestJITDropWithBackgroundTierUps(t *testing.T) {
 	const n = 24
 	unit, tables := unitSize(t, n)
-	b := NewJITBudget(tables + 10*unit)
+	// Room for ten functions' code, and for what an optimizing compile of
+	// one works in, which the limit bounds too.
+	// The limit bounds what an optimizing compile works in too: room for
+	// that, about as much as eleven functions' code, of which a few
+	// functions' baseline and optimized code fill what a compile leaves.
+	probe := budgetCode(t, manyWAT(n), NewJITBudget(0))
+	f0, _ := instantiateCode(t, probe, hostH(func(context.Context, uint64) uint64 { return 0 })).Export("f0")
+	work := workBytes(probe.Module.Functions[f0.Func.Index].Code.Len, true)
+	t.Logf("a function's code and record %d bytes, an optimizing compile's work %d", unit, work)
+	b := NewJITBudget(tables + work)
 	slowClock(t, 100)
 	code := budgetCode(t, manyWAT(n), b)
 	code.setOptBackground(true)
@@ -856,5 +865,81 @@ func TestJITExecsSwept(t *testing.T) {
 	jitExecs.mu.Unlock()
 	if n > 20000 {
 		t.Fatalf("%d execs listed after 200,000 made and collected", n)
+	}
+}
+
+// blocksWAT is a module whose function f, of n blocks in a row, each
+// branching out on its argument, has a block for each and a value of the
+// argument live across each, so that the optimizing tier's liveness sets
+// grow with n squared.
+func blocksWAT(n int) string {
+	return `(module (func (export "f") (param i32) (result i32)` +
+		strings.Repeat(`(block (br_if 0 (i32.eqz (local.get 0))) (local.set 0 (i32.add (local.get 0) (i32.const 1))))`, n) +
+		`(local.get 0)))`
+}
+
+// A compile's working sets are charged to the budget while it runs: an
+// optimizing compile whose register allocator's liveness sets would take
+// more than the budget has left is refused for want of room, as one whose
+// code does not fit, and the function runs its baseline code, without the
+// compile allocating them.
+func TestJITBudgetBoundsCompileWork(t *testing.T) {
+	const n = 8000
+	b := NewJITBudget(16 << 20)
+	code := budgetCode(t, blocksWAT(n), b)
+	code.SetOptThreshold(0)
+	code.SetOptBackground(false)
+	inst := instantiateCode(t, code)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	res, err := call(t, inst, "f", 1)
+	runtime.ReadMemStats(&after)
+	if err != nil || res[0].N != n+1 {
+		t.Fatalf("f(1) = %v, %v; want %d", res, err, n+1)
+	}
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("the first call allocated %d bytes", allocated)
+	cd := code.get(0)
+	nat := cd.native.Load()
+	if nat == nil || nat.opt {
+		t.Fatalf("native code %+v, want the baseline's", nat)
+	}
+	if need := cd.roomNeed[tierOf(true)]; need <= b.Limit() {
+		t.Fatalf("the optimizing tier's compile needs %d, within the limit %d", need, b.Limit())
+	}
+	if allocated > 64<<20 {
+		t.Fatalf("the first call allocated %d bytes under a budget of %d", allocated, b.Limit())
+	}
+	if held := b.Held(); held > b.Limit() {
+		t.Fatalf("holds %d past the limit %d", held, b.Limit())
+	}
+	checkAccounting(t, code, b)
+}
+
+// What a compile is charged while it runs is given back: a budget too small
+// for a function's compile refuses it for want of room, and holds nothing
+// of it after.
+func TestJITBudgetRefusesLargeCompile(t *testing.T) {
+	const n = 8000
+	b := NewJITBudget(2 << 20)
+	code := budgetCode(t, blocksWAT(n), b)
+	code.SetOptThreshold(0)
+	code.SetOptBackground(false)
+	inst := instantiateCode(t, code)
+	before := ReadJITStats()
+	res, err := call(t, inst, "f", 1)
+	if err != nil || res[0].N != n+1 {
+		t.Fatalf("f(1) = %v, %v; want %d", res, err, n+1)
+	}
+	after := ReadJITStats()
+	if code.get(0).native.Load() != nil {
+		t.Fatal("compiled within a budget smaller than its compile's work")
+	}
+	if after.Refused[RefuseBudget]-before.Refused[RefuseBudget] == 0 {
+		t.Fatal("nothing refused for want of room")
+	}
+	if m := checkAccounting(t, code, b); b.Held() != m.Tables {
+		t.Fatalf("holds %d, its tables %d", b.Held(), m.Tables)
 	}
 }

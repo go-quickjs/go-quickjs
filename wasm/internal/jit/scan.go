@@ -12,6 +12,8 @@ import (
 type Refusal struct {
 	Reason string
 	Detail string
+	// Need is the bytes a compile refused with RefuseWork needed.
+	Need int64
 }
 
 func (r *Refusal) Error() string {
@@ -32,6 +34,9 @@ const (
 	RefuseFrame   = "frame"
 	RefuseSize    = "size"
 	RefuseOther   = "other"
+	// RefuseWork is the refusal of a compile whose working sets would
+	// take more than Request.MaxWorkBytes.
+	RefuseWork = "work"
 )
 
 func refuse(reason, format string, args ...any) {

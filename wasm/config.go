@@ -63,9 +63,11 @@ type RuntimeConfig interface {
 	// tier replaced, and the code of functions not called for 100 ms or
 	// more, which their next call compiles again -- and where that is not
 	// enough runs the function in the interpreter for now, compiling it
-	// once there is room. Results are the same whatever the limit; a limit
-	// smaller than what a program's hot functions need makes it slower, as
-	// far as the interpreter's speed.
+	// once there is room. The limit bounds what a compile works in too: a
+	// function whose compile would work in more is not compiled by that
+	// tier. Results are the same whatever the limit; a limit smaller than
+	// what a program's hot functions need makes it slower, as far as the
+	// interpreter's speed.
 	//
 	// The default, DefaultJITMemoryLimit, is 64 MiB, which holds every
 	// function of a large program compiled by both tiers: a Go program of

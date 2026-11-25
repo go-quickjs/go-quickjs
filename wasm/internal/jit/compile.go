@@ -37,6 +37,12 @@ type Request struct {
 	FrameSlotsOf func(fn uint32) int
 	// MaxCodeBytes bounds the code; 0 is no bound.
 	MaxCodeBytes int
+	// MaxWorkBytes bounds what the optimizing tier's working sets that grow
+	// faster than the function's body take -- the register allocator's
+	// liveness sets, a set for each block -- refusing the function with
+	// RefuseWork, the bytes they would take its Refusal's Need, past it; 0
+	// is no bound.
+	MaxWorkBytes int64
 	// FrameRefSlots is the number of reference slots of the function's
 	// frame native code uses: the engine's, or 0 for a function that holds
 	// no reference, whose code neither reads nor writes them. RefSlotsOf

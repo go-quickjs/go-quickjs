@@ -495,11 +495,14 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	}
 	lap(PhaseDescribe)
 	cfg := lsra.Config{Classes: classes, NumSlots: g.argBase, NoSplit: splitMode == "off", StressSplit: splitMode == "stress",
-		Displace: displace && splitMode != "nodisplace"}
+		Displace: displace && splitMode != "nodisplace", MaxLiveBytes: g.req.MaxWorkBytes}
 	if Timing != nil {
 		cfg.Lap = lsraLap
 	}
 	ra, err := ws.al.Allocate(lf, &cfg)
+	if e, ok := err.(*lsra.LiveSetsError); ok {
+		panic(&wjit.Refusal{Reason: wjit.RefuseWork, Detail: e.Error(), Need: e.Need})
+	}
 	if err != nil {
 		refuse(RefuseFrame, "%v: %d slots", err, g.argBase)
 	}

@@ -536,8 +536,17 @@ code the optimizing tier replaced, and the code of functions not called for
 100 ms or more, whose next call compiles them again. Where that is not
 enough, the function runs in the interpreter, and is compiled once there is
 room, from the JIT clock's next 50 ms epoch; a tier-up so refused is tried again after
-as many calls again. `engine.ReadJITStats` counts the refusals as `budget`
-and the functions dropped. Results are the same whatever the limit, but a
+as many calls again. The limit bounds what a compile works in as it runs
+too: a tier does not compile a function whose working set, estimated at 64
+bytes a byte of body for the baseline and 128 for the optimizing tier,
+would pass the limit -- under the JavaScript runtime's default 8 MB, the
+optimizing tier compiles bodies of up to about 64 KB, the baseline up to
+about 128 KB -- and the optimizing tier's liveness sets, which grow with
+the square of a function of many blocks, get what the code held leaves of
+the limit, the compile refused where they need more. So what a compile
+works in is of the order of the limit, beside the code the budget holds.
+`engine.ReadJITStats` counts the refusals as `budget` and the functions
+dropped. Results are the same whatever the limit, but a
 limit below what a program's hot code needs makes it slower, down to the
 interpreter's speed: on amd64, with three runs each, under 4 MiB sort's
 steady runs take 118 ms against 108 unbounded, gzip's 95 against 21 and

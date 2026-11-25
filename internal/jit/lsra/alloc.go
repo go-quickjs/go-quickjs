@@ -388,6 +388,9 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	if !once {
 		stride = 4
 	}
+	if need := int64(stride) * int64(nb) * int64(words) * 8; cfg.MaxLiveBytes > 0 && need > cfg.MaxLiveBytes {
+		return nil, &LiveSetsError{Need: need}
+	}
 	live := grown(al.live, stride*nb*words)
 	clear(live)
 	al.live = live

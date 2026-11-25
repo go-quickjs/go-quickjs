@@ -189,18 +189,53 @@ func leastBytes(size uint32) int64 {
 	return int64(alignCode(int(size))) + nativeRecordBytes
 }
 
+// What a compile works in -- the IR, the analyses' tables, the register
+// allocator's, the code as it is assembled -- is bounded by the budget's
+// limit too, though it is not held past the compile. Its size is estimated
+// from the body's: about baselineWorkBytes for each byte of body for the
+// baseline, and optWorkBytes for the optimizing tier, whose working sets
+// measure up to a few hundred bytes a byte of body in Go's heap, counting
+// the growth of what they append to; a tier does not compile a function
+// whose estimate, with its code, is past the limit. The optimizing tier's
+// register allocator has liveness sets that grow with the product of the
+// function's blocks and the values live across them, which no estimate
+// from the size bounds: the compile is given what the code held leaves of
+// the limit for them (wjit.Request.MaxWorkBytes), and is refused where they
+// would take more. Either refusal is one for want of room, counted as
+// RefuseBudget. What a compile works in is thus of the order of the limit,
+// beside the code the budget holds.
+const (
+	baselineWorkBytes = 64
+	optWorkBytes      = 128
+)
+
+// workBytes is the estimate of what a compile of a body of size bytes
+// works in, by the optimizing tier if opt says.
+func workBytes(size uint32, opt bool) int64 {
+	if opt {
+		return optWorkBytes * int64(size)
+	}
+	return baselineWorkBytes * int64(size)
+}
+
 // mayFit reports whether a compile of function idx, whose record is cd, by
 // the optimizing tier if opt says, may find room in the budget, making room
 // for the least it needs if it must -- leastBytes, or what the tier's code
-// needed when it last found no room -- so that a compile whose code could
-// not be placed is mostly not made: where all the code is in use, or the
-// budget is too small for the function. cj.mu is held.
+// or working sets needed when it last found no room -- so that a compile
+// whose code could not be placed is mostly not made: where all the code is
+// in use, or the budget is too small for the function. A compile whose
+// work (workBytes) with that least is past the budget's limit does not
+// fit. cj.mu is held.
 func (cj *codeJIT) mayFit(c *Code, idx uint32, cd *compiled, opt bool) bool {
 	b := cj.budget
 	if b.limit <= 0 {
 		return true
 	}
-	least := max(leastBytes(c.Module.Functions[idx].Code.Len), cd.roomNeed[tierOf(opt)])
+	size := c.Module.Functions[idx].Code.Len
+	least := max(leastBytes(size), cd.roomNeed[tierOf(opt)])
+	if least+workBytes(size, opt) > b.limit {
+		return false
+	}
 	if b.fits(least) {
 		return true
 	}
@@ -209,6 +244,24 @@ func (cj *codeJIT) mayFit(c *Code, idx uint32, cd *compiled, opt bool) bool {
 	}
 	b.release(least)
 	return true
+}
+
+// workRoom is what the budget's limit leaves of the code it holds, which a
+// compile's working sets that grow faster than its body are given
+// (wjit.Request.MaxWorkBytes): none where it has no limit, and at least a
+// byte where it has one.
+func (cj *codeJIT) workRoom() int64 {
+	b := cj.budget
+	if b.limit <= 0 {
+		return 0
+	}
+	return max(b.limit-b.Held(), 1)
+}
+
+// refusedWork is the room a compile refused with wjit.RefuseWork needs, its
+// working sets' beside its least: what the next compile makes room for.
+func refusedWork(c *Code, idx uint32, r *wjit.Refusal) int64 {
+	return leastBytes(c.Module.Functions[idx].Code.Len) + r.Need
 }
 
 // tierOf is the index of a tier in fnJIT.roomNeed.

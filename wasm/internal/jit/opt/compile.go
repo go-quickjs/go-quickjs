@@ -17,8 +17,9 @@ import (
 // Inlining calls (inline.go) and forwarding the globals (forwardGlobals)
 // keep values live that were made where used: a function whose frame then
 // has too few slots for its spills is compiled again inlining less deep,
-// then without forwarding the globals. One whose code inlining made too
-// large is compiled again without inlining.
+// then without forwarding the globals. One whose code, or whose working
+// sets (Request.MaxWorkBytes), inlining made too large is compiled again
+// without inlining.
 func Compile(req *wjit.Request) (*wjit.Code, error) {
 	inline := int32(0)
 	if req.InlineSite != nil {
@@ -31,7 +32,7 @@ func Compile(req *wjit.Request) (*wjit.Code, error) {
 		switch {
 		case !ok:
 			return code, err
-		case used.inlined && (r.Reason == RefuseFrame || r.Reason == RefuseSize || r.Reason == refuseInline):
+		case used.inlined && (r.Reason == RefuseFrame || r.Reason == RefuseSize || r.Reason == refuseInline || r.Reason == wjit.RefuseWork):
 			inline = min(inline, used.depth) - 1
 			if r.Reason != RefuseFrame {
 				inline = 0

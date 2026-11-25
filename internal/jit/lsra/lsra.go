@@ -60,6 +60,7 @@ package lsra
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 )
 
@@ -192,6 +193,11 @@ type Config struct {
 	// takes a register from those in its way however dense they are, and
 	// they give it up over holes whatever the holes cost.
 	StressSplit bool
+	// MaxLiveBytes, if not 0, bounds the bytes of the liveness sets: a set
+	// of the registers live across a block's boundary for each block, which
+	// grow with the product of the two. Past it Allocate returns a
+	// *LiveSetsError before it allocates them.
+	MaxLiveBytes int64
 	// Lap, if not nil, is called at the end of each of the allocator's
 	// phases, for a client that times its compiles.
 	Lap func(Phase)
@@ -384,3 +390,11 @@ func (r *Result) Edge(b, k int) []Move {
 // ErrSlots is the error of a function whose spills need more slots than
 // Config.NumSlots.
 var ErrSlots = errors.New("lsra: not enough spill slots")
+
+// LiveSetsError is the error of a function whose liveness sets would take
+// more than Config.MaxLiveBytes: Need bytes.
+type LiveSetsError struct{ Need int64 }
+
+func (e *LiveSetsError) Error() string {
+	return fmt.Sprintf("lsra: liveness sets of %d bytes", e.Need)
+}

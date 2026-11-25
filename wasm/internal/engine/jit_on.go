@@ -698,12 +698,20 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		cj.noRoom(cd, true, 0)
 		return nil
 	}
+	req := optRequest(c, cj, idx, cd)
+	req.MaxWorkBytes = cj.workRoom()
 	start := time.Now()
-	code, err := wopt.Compile(optRequest(c, cj, idx, cd))
+	code, err := wopt.Compile(req)
 	countTime(&jitStats.optTime, start)
 	if err != nil {
 		reason := "internal"
 		if r, ok := err.(*wjit.Refusal); ok {
+			if r.Reason == wjit.RefuseWork {
+				// No room for its working sets: as for its code.
+				cd.optDone.Store(false)
+				cj.noRoom(cd, true, refusedWork(c, idx, r))
+				return nil
+			}
 			reason = r.Reason
 		}
 		countOptRefused(reason)

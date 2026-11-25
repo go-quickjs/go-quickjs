@@ -967,8 +967,23 @@ when it is placed, the batch's codes each, under the compile lock, from a
 worker's goroutine; one that finds none is refused so, and one finished
 for a Code given back gives back its room. Before
 compiling, a compile takes room for the least it could need -- a byte of
-code for each byte of body, or what the tier's code needed when it last
-found no room -- so that one bound to be refused is mostly not made again.
+code for each byte of body, or what the tier's code or working sets needed
+when it last found no room -- so that one bound to be refused is mostly not
+made again.
+
+The limit bounds what a compile works in too, though the budget holds it
+only while the compile runs. A tier does not compile a function whose
+working set, estimated from its body's size (`workBytes`: 64 bytes a byte
+of body for the baseline, 128 for the optimizing tier), would with its
+least be past the limit. The optimizing tier's register allocator has
+liveness sets, one for each block of the registers live across blocks,
+which grow with the product of the two and which no estimate from the
+size bounds: the compile is given what the code the budget holds leaves of
+the limit (`Request.MaxWorkBytes`, `lsra.Config.MaxLiveBytes`), and is
+refused (`RefuseWork`) before it allocates more, compiled again without
+inlining where it inlined. Either is a refusal for want of room, counted
+as `budget`, and the room its working sets needed is what its next compile
+makes room for.
 
 No frame can be in code a pass drops. The pass holds the run lock for
 writing, so every native frame of the Code is in a level (`jitLevel`) that
