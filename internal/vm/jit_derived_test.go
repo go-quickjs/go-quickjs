@@ -616,7 +616,6 @@ func TestJITDerivedSuperNotInlined(t *testing.T) {
 // of the classes whose arrows come after super() are native calls, with
 // no call of Go of the constructing function's.
 func TestJITDerivedNativeConstructArrows(t *testing.T) {
-	t.Skip("register JIT gap: derived constructors that make arrows are not constructed natively: B's and C's code is never called natively (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
