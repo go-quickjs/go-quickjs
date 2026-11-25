@@ -11,9 +11,12 @@ func (b *builder) accessor(pc int) (*AccessorSite, bool) {
 	if in.Op != ir.PropertyRead && in.Op != ir.PropertyWrite && in.Op != ir.ReferenceRead || in.Private || b.fb == nil {
 		return nil, false
 	}
-	if in.Op == ir.ReferenceRead && in.Dest != in.Left.Slot {
-		// A method's read, which keeps its receiver below the value
-		// (get_prop_this): an accessor is a read's that replaces it.
+	if in.Op == ir.ReferenceRead && in.Dest != in.Left.Slot && b.p.Origin == nil {
+		// A slot program's method read, which keeps its receiver below the
+		// value (get_prop_this): an accessor is a read's that replaces it.
+		// Register code's reads, a plain one whose value no number
+		// operation takes among them (compile's selectNumericProperties),
+		// write their own register, the receiver's left as it is.
 		return nil, false
 	}
 	fr := b.cur
