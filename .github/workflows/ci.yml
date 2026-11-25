@@ -363,6 +363,16 @@ jobs:
       QUICKJS_REQUIRE_JIT: "1"
       QJS_JIT_STRESS: threshold,budget=3,deopt=7
     steps:
+      # The machine, as the native boundary's jobs print it: a crash on a
+      # Windows runner here is told from a change's by its CPU.
+      - name: Machine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Get-CimInstance Win32_Processor
+          "CPU: " + $p.Name + " | " + $p.Caption
+          "OS: " + (Get-CimInstance Win32_OperatingSystem).Version
+
       # test262 counts a source's bytes and line terminators: keep its LFs on
       # Windows.
       - name: Keep line endings
