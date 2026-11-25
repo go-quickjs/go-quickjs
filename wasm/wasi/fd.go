@@ -339,6 +339,12 @@ func (c *call) iovecs(off, count uint32) ([][]byte, sysfs.Errno) {
 	return bufs, 0
 }
 
+// maxTransfer is the most bytes a read or a write moves in one call: the
+// count it reports is a u32, and iovecs, which may overlap, can together
+// name more. A call that would move more moves this much, as a short read
+// or write, which the caller continues.
+const maxTransfer = 1<<32 - 1
+
 // readv reads into the iovecs at iovs with read, which is given each
 // buffer and the count read before it, and writes the count read at
 // resultPtr.
@@ -358,6 +364,10 @@ func (c *call) readv(fd uint64, iovs, count, resultPtr uint32, read func(f sysfs
 	for _, b := range bufs {
 		if len(b) == 0 {
 			continue
+		}
+		b = b[:min(int64(len(b)), maxTransfer-total)]
+		if len(b) == 0 {
+			break
 		}
 		n, errno := read(e.File, b, total)
 		total += int64(n)
@@ -394,6 +404,10 @@ func (c *call) writev(fd uint64, iovs, count, resultPtr uint32, write func(f sys
 	for _, b := range bufs {
 		if len(b) == 0 {
 			continue
+		}
+		b = b[:min(int64(len(b)), maxTransfer-total)]
+		if len(b) == 0 {
+			break
 		}
 		n, errno := write(e.File, b, total)
 		total += int64(n)
