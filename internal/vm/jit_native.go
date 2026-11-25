@@ -2540,8 +2540,10 @@ func (r *Runtime) jitRegStretchWork(e *jitRegEntry, ctx *abi.Context, ipc, edges
 
 // stretches is how many stretches the code's profit is judged by
 // (jitRegStretchWork): its entries and its calls of Go, but for the entries
-// that went on after a poll (resumed), each the stretch the poll paused.
-func (st *jitSSAStats) stretches() uint64 { return st.entries - st.resumed + st.goCalls }
+// that went on after a poll (resumed), each the stretch the poll paused,
+// and the calls whose throw native code took at the frame's handler
+// (caught), whose cost is the throw's, which the interpreter pays alike.
+func (st *jitSSAStats) stretches() uint64 { return st.entries - st.resumed + st.goCalls - st.caught }
 
 // jitRegRunWork is the work run's stretch has done natively so far, as
 // its end will count it (jitRegStretchWork): the back edges it has taken,
@@ -2748,6 +2750,15 @@ func (r *Runtime) jitRegGoCall(ctx *abi.Context, idx int) bool {
 	judged := run.osr && run.e != nil && run.e.life != nil && r.jitRegGoSettled(ctx, run.c, rpc)
 	run.leave = judged && r.jitRegRunGoProfit(run.e, run, rpc)
 	ok := r.jitRegGoCallOn(ctx, idx, *run)
+	if judged && !ok && ctx.GoStatus == abi.GoCaught {
+		// What it threw native code takes at the frame's handler
+		// (jitRegCaughtValue): what it cost is the throw's, which the
+		// interpreter pays alike, not a call of Go the run's work is
+		// judged against (jitRegRunGoProfit). Counted, a loop whose every
+		// turn's read threw and was caught was judged slow, and run by the
+		// interpreter from then on.
+		run.e.life.ssaStats.runGoCalls--
+	}
 	if s := r.jit; judged && idx < len(s.regRuns) {
 		// The work the next call is judged against starts here: what this
 		// one ran, which the interpreter would run alike, is none of it.
@@ -2928,6 +2939,9 @@ func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) boo
 		if s.ssaSharedGen != shared {
 			r.jitShareContexts(idx, f)
 		}
+		if err != nil && r.jitRegCaught(ctx, &run, idx, rpc, err) {
+			return false
+		}
 		if err != nil || r.stopped != nil || run.e.invalid || run.leave {
 			s.regPending = jitGoPending{set: true, pc: rpc, ctx: idx, v: v, err: err}
 			return false
@@ -2947,6 +2961,9 @@ func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) boo
 		s.ssaCtx = last
 		if s.ssaSharedGen != shared {
 			r.jitShareContexts(idx, f)
+		}
+		if err != nil && r.jitRegCaught(ctx, &run, idx, rpc, err) {
+			return false
 		}
 		if err != nil || r.stopped != nil || run.e.invalid || run.leave {
 			s.regPending = jitGoPending{set: true, pc: rpc, ctx: idx, v: Bool(yes), err: err}
@@ -3099,6 +3116,9 @@ func (r *Runtime) jitRegGoCallMade(ctx *abi.Context, idx int, run jitRegRun) boo
 		// A loop's built-in's call whose callback threw, learned all the
 		// same.
 		r.jitRegForEachSeen(f, run.e, rpc, callee, this, first, argc)
+	}
+	if err != nil && r.jitRegCaught(ctx, &run, idx, rpc, err) {
+		return false
 	}
 	if err != nil || r.stopped != nil || run.e.invalid || run.leave || r.jitRegCompileDueNow(&run, idx) {
 		s.regPending = jitGoPending{set: true, pc: rpc, ctx: idx, v: v, err: err}
@@ -3604,6 +3624,15 @@ func (r *Runtime) jitRegWhole(ctx *abi.Context, idx int, run jitRegRun, rpc int)
 		// Done: the loop's end is next, its register as it was.
 		v, done = uninitialized, true
 	}
+	if err == nil && h != nil && next == int(h.To) && !done && r.jitRegCaughtValue(ctx, &run, idx, rpc, r.stack[wb+int(h.Reg)]) {
+		// Caught by the frame's handler, which native code goes on at
+		// (jitRegCaughtValue): the frame's registers as the code found
+		// them, which its continuation writes.
+		for i := range n {
+			r.stack[wb+regs[i]] = saved[i]
+		}
+		return false
+	}
 	if err != nil || next != after && !done || r.stopped != nil || e.invalid || run.leave {
 		// Left at the call's exit, whose records write the frame as it was
 		// before the instruction: then the register it wrote, or the
@@ -3626,6 +3655,49 @@ func (r *Runtime) jitRegWhole(ctx *abi.Context, idx int, run jitRegRun, rpc int)
 		r.stack[wb+regs[i]] = saved[i]
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitRegCaught reports whether err, which the call of Go ctx makes at
+// register pc rpc of run's frame threw, goes to the frame's handler in
+// native code (jitRegCaughtValue): a throw the handler in force there
+// takes, as regCatch takes it.
+func (r *Runtime) jitRegCaught(ctx *abi.Context, run *jitRegRun, idx, rpc int, err error) bool {
+	th, ok := err.(*Thrown)
+	return ok && rpc < len(run.c.rc.Code) && run.c.rc.HandlerAt(rpc) != nil && r.jitRegCaughtValue(ctx, run, idx, rpc, th.Value)
+}
+
+// jitRegCaughtValue reports whether native code takes v, what the call of
+// Go ctx makes at register pc rpc of run's frame threw, at the frame's
+// handler in force there itself, never leaving (abi.GoCallState's Catch):
+// where the call has a continuation there (mir's catchStub) and nothing
+// else has the code leave -- the runtime stopped, the code found invalid,
+// the run judged to leave, a compile due at the call, a debugger. Then v
+// is the call's keep cell's and ctx's status abi.GoCaught: the
+// continuation writes the frame as it was at the call, gives the handler's
+// register v, as regCatch gives it, and goes on at the handler's entry, as
+// V8's optimized code goes on at the handler its handler table names. The
+// call then reports that Go did not make it (its callers return false), so
+// that the status is looked at only where Go did nothing (jitGoDirect,
+// jitStubDone, jit's goCall): a call Go makes pays nothing for the
+// continuation -- asked at every call's return, it had cost
+// string_build1x's appends 6%. A throw from a call of Go had left native
+// code, Go catching it at the exit and entering the code again at the
+// handler; such runs, short, were judged slow, and the interpreter ran the
+// function from then on.
+func (r *Runtime) jitRegCaughtValue(ctx *abi.Context, run *jitRegRun, idx, rpc int, v Value) bool {
+	if ctx.GoLast == 0 || r.stopped != nil || r.debug != nil || run.e == nil || run.e.invalid || run.leave {
+		return false
+	}
+	st := (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast)))
+	if st.Catch == 0 || st.Inline != 0 || r.jitRegCompileDueNow(run, idx) {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	ctx.GoStatus = abi.GoCaught
+	if run.e.life != nil {
+		run.e.life.ssaStats.caught++
+	}
 	return true
 }
 

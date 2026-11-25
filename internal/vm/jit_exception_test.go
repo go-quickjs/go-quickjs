@@ -66,7 +66,6 @@ func jitNativeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 // and finally clauses run on every completion -- normal, a return, a
 // throw, a break -- with the value each leaves.
 func TestJITExceptionHandlers(t *testing.T) {
-	t.Skip("register JIT gap: code compiled again with exception handlers is not entered: operation({}, 100) runs in the interpreter (docs/performance-plan.md, the register JIT's remaining gaps)")
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -169,14 +168,18 @@ func TestJITExceptionHandlers(t *testing.T) {
 	// empty object, which nothing on its chain has, is answered natively
 	// once its cache remembers it by the chain's cell, and q's read off
 	// undefined then deoptimizes once, and is compiled again megamorphic:
-	// the runs until no code is compiled again.)
-	for i := 0; i < 4; i++ {
+	// the runs until no code is compiled again: three runs in a row that
+	// compile nothing, since the compile for what the runs learned waits
+	// for the code to have spent an invocation budget since, which takes
+	// a few runs (jitRegLearnedDue): with two, the third compiled it, the
+	// run measured below.)
+	for i, quiet := 0, 0; i < 10 && quiet < 3; i++ {
 		reoptimized := r.jit.reoptimized
 		if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
 			t.Fatal(err)
 		}
-		if i > 0 && r.jit.reoptimized == reoptimized {
-			break
+		if quiet++; r.jit.reoptimized != reoptimized {
+			quiet = 0
 		}
 	}
 	for _, c := range []struct {

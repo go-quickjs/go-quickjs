@@ -1042,7 +1042,7 @@ func (l *regLowering) handlers(p *ir.Program, start []int, reach []bool) {
 				}
 			}
 		}
-		p.Handlers[k-1-i] = ir.Handler{PC: uint32(start[h.To]), Outer: outer, Finally: !h.Catches}
+		p.Handlers[k-1-i] = ir.Handler{PC: uint32(start[h.To]), Outer: outer, Reg: int32(h.Reg), Finally: !h.Catches}
 	}
 	p.HandlerAt = make([]int32, len(p.Code))
 	for i := range p.Code {

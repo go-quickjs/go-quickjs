@@ -3446,7 +3446,8 @@ type calledPlan struct {
 // code to run. p is checked (ir.Program's Validate) by its caller.
 func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Func, calledPlan, bool, error) {
 	p = referenceReads(p, fb)
-	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w, Kinds: p.Kinds}
+	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w, Kinds: p.Kinds,
+		Handlers: p.Handlers, HandlerAt: p.HandlerAt}
 	if kf, ok := fb.(KeepFeedback); ok {
 		f.KeepLimit = kf.KeepLimit()
 	}

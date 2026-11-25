@@ -42,7 +42,6 @@ const catchCalleeSetup = `
 // own code native callers could take, 43 of Octane's -- had been Go's to
 // call. Each answer, the stacks included, is the interpreter's.
 func TestJITCatchCallees(t *testing.T) {
-	t.Skip("register JIT gap: a callee with a catch clause is not called natively: parse never is (docs/performance-plan.md, the register JIT's remaining gaps)")
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

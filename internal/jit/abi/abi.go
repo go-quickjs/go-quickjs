@@ -486,7 +486,10 @@ type Context struct {
 	// (ssa's keeps) -- and GoResume is where the code goes on. Go writes
 	// the result to Keep[GoKeep], with its write barrier, and GoStatus 0,
 	// or 1 when it did nothing: the code then leaves for Go to make the
-	// operation. Host is the runtime the context belongs to. For a call
+	// operation; 2 says Go did not make it either, because what the call
+	// threw is the frame's handler's, the code going on there
+	// (GoCallState's Catch).
+	// Host is the runtime the context belongs to. For a call
 	// (GoOpCall), GoOp's low byte is the operation, the next its
 	// arguments' count, and the next its kind (GoCallMethod, GoCallNew):
 	// what Go would otherwise read from the bytecode at the call.
@@ -657,6 +660,12 @@ type GoArg struct {
 // takes nine, had left native code at every call with eight.
 const MaxGoArgs = 16
 
+// GoCaught is the GoStatus Go gives a call of Go whose throw the frame's
+// handler takes, while it runs it, reporting that it did not make the
+// call: the call goes on at its catch continuation (GoCallState's Catch),
+// what was thrown in its keep cell. A call Go makes is never asked it.
+const GoCaught = 2
+
 // GoCallState is a call of Go from native code as data (Context.GoState):
 // its GoOp and GoKeep; for a call (GoCall), the exit's PC and depth it
 // had written (SetsPC); and its operands, which Go reads into GoArgs as
@@ -666,7 +675,13 @@ const MaxGoArgs = 16
 // those Args says the call wrote itself (GoCallArg). If Go does nothing
 // (GoStatus 1) and Fail is not 0, the call goes on Fail bytes past where
 // it would have (GoSite): at its refusal's code, so that the call tests
-// nothing. NumOffset, RefOffset and UpvalueSlot are the encoding's, and
+// nothing. Where what the call ran threw and the frame's handler in force
+// at the call takes it -- Go says so with GoStatus 2, what was thrown in
+// the call's keep cell -- and Catch is not 0, the call goes on Catch bytes
+// past where it would have: at its code's continuation at the handler
+// (mir's catchStub), which writes the frame, gives the handler's register
+// what was thrown and goes on at the handler's entry, never leaving
+// native code. NumOffset, RefOffset and UpvalueSlot are the encoding's, and
 // True, False and NaN its words for booleans and the canonical NaN, for
 // Go to read the operands with no more than the description.
 type GoCallState struct {
@@ -674,6 +689,7 @@ type GoCallState struct {
 	PC, Depth uint32
 	SetsPC    bool
 	Fail      int32
+	Catch     int32
 	// Enc is the encoding the code was compiled for, shared by its calls
 	// and exits (ExitFrame's Enc): Go reads the operands' words by it. A
 	// call's state had kept its offsets and constant words, 36 of its 144

@@ -368,6 +368,11 @@ type jitPropOp struct {
 	recv                  Value
 	c                     *propCache
 	write, method, update bool
+	// caught marks an operation a handler of its frame is in force at,
+	// which takes what it throws: of undefined or null too, Go's from
+	// native code, whose throw native code goes on at the handler with
+	// (jitRegCaughtValue).
+	caught bool
 }
 
 // plain reports whether op is a plain read: get_prop's, not a method's.
@@ -397,11 +402,13 @@ func (r *Runtime) jitPolySeenOp(e *jitEntry, pc int, op jitPropOp) {
 		return
 	}
 	if !recv.IsObject() {
-		if !recv.IsObject() && !recv.IsNullish() && op.plain() {
+		if !recv.IsObject() && (!recv.IsNullish() || op.caught) && op.plain() {
 			// A string's, a number's, a boolean's: Go reads it from
 			// native code once the code is compiled again (prim) -- an
 			// element type, React's createElement's a.defaultProps of
-			// "div" -- where it had left native code at each.
+			// "div" -- where it had left native code at each. Of
+			// undefined or null where a handler takes the TypeError it
+			// throws, which native code then goes on at (catchStub).
 			if p := jitPolySiteAt(e, pc); !p.prim {
 				p.prim = true
 				e.polyReopt = true
@@ -561,7 +568,7 @@ func (r *Runtime) jitDeoptSeenOp(e *jitEntry, pc int, op jitPropOp, serial uint3
 	}
 	if !recv.IsObject() || op.c == nil {
 		p.mega = true
-		if !recv.IsObject() && !recv.IsNullish() && (op.plain() || write && !r.jitStress.primLeave) {
+		if !recv.IsObject() && (!recv.IsNullish() || op.caught) && (op.plain() || write && !r.jitStress.primLeave) {
 			// A primitive's read or write, Go's from native code in the
 			// code compiled again (jitPolySite's prim): one compile, not
 			// one to be megamorphic and another for the primitive.
@@ -4980,8 +4987,10 @@ type jitSSAStats struct {
 	// resumed counts the entries that went on after a poll (jitRegGoOnAt),
 	// which goes on with the stretch it paused: no stretch of their own.
 	resumed uint64
-	// goCalls counts the calls native code had Go make (jitGoCall).
-	goCalls uint64
+	// goCalls counts the calls native code had Go make (jitGoCall), and
+	// caught those of them whose throw native code took at the frame's
+	// handler (jitRegCaughtValue).
+	goCalls, caught uint64
 	// calleeGoCalls counts those it made as a native callee
 	// (jitRegGoCallNested), and calleeWork the work it did natively before
 	// each, as jitRegStretchWork counts a stretch's (jitRegCalleeProfit),

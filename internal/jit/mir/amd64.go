@@ -99,6 +99,14 @@ type compiler struct {
 	calling     amd64.Label
 	callingUsed bool
 	goFails     []goFail
+	// goCatch is, while a call of Go whose throw the frame's handler
+	// takes is emitted, its continuation there (catchStub), 0 otherwise;
+	// goCatches are those calls, whose catches Go sends to their
+	// continuations (abi.GoCallState's Catch), and catches the
+	// continuations, emitted with the exits.
+	goCatch   amd64.Label
+	goCatches []goFail
+	catches   []catchStub
 	// probe is the megamorphic probe of the code's reads, and of its
 	// writes, which its sites share (megaProbe), if any uses one.
 	probe     [2]amd64.Label
@@ -166,6 +174,18 @@ type compiler struct {
 type goFail struct {
 	st       *abi.GoCallState
 	back, to amd64.Label
+}
+
+// catchStub is the continuation of a call of Go at its state, whose throw
+// the frame's handler takes, at label: the frame written as the state
+// has it, what was thrown, in the call's keep cell keep, given to the
+// handler's register reg, and the code going on at the handler's entry,
+// the block to.
+type catchStub struct {
+	state     *ssa.FrameState
+	label     amd64.Label
+	keep, reg int
+	to        *ssa.Block
 }
 
 type stub struct {
@@ -317,6 +337,13 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 		c.coldPath(i)
 	}
 	c.tagCold()
+	// The continuations of calls of Go at handlers (catchStub), the cold
+	// code's among them.
+	for _, k := range c.catches {
+		c.a.Bind(k.label)
+		c.mark("catch")
+		c.catchTo(k)
+	}
 	// Cold code's guards' exits.
 	for i := stubs; i < len(c.stubFor); i++ {
 		s := c.stubFor[i]
@@ -440,6 +467,9 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	for _, g := range c.goFails {
 		// Finish moved the labels where the code has them.
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
+	}
+	for _, g := range c.goCatches {
+		g.st.Catch = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
 	if resumeAt >= 0 {
 		resumeAt = c.a.Moved(resumeAt)
@@ -5356,11 +5386,13 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard guardTo, saving bool)
 	}
 	// Refused, it leaves, as its guard does: Go sends it there.
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goCatch = c.catchStub(v)
 	if saving {
 		c.goCalling(st, &stub)
 	} else {
 		c.goCallingLive(v, st, stub)
 	}
+	c.goCatch = 0
 	c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 	c.setG(v, scratchA)
 }
@@ -5390,7 +5422,9 @@ func (c *compiler) goCallWindow(v *ssa.Value, op uint64, guard guardTo) {
 	for i, x := range v.Args {
 		c.directOperand(v, x, true, windowGoDisp(i, method, vs), &inC)
 	}
+	c.goCatch = c.catchStub(v)
 	c.goCalling(st, &stub)
+	c.goCatch = 0
 	c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*vs+c.enc.NumOffset)
 	c.setG(v, scratchA)
 }
@@ -8751,6 +8785,11 @@ func (c *compiler) goCalling(st *abi.GoCallState, stub *amd64.Label) {
 		}
 		c.goFails = append(c.goFails, goFail{st, back, to})
 	}
+	if c.goCatch != 0 {
+		// A throw the frame's handler takes Go sends to its continuation,
+		// the routine having restored the registers.
+		c.goCatches = append(c.goCatches, goFail{st, back, c.goCatch})
+	}
 }
 
 // goCallingLive calls Go as st describes it, for call v, whose state's
@@ -8820,6 +8859,92 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 		restore(true)
 		c.a.Jmp(stub)
 	})
+	if catch := c.goCatch; catch != 0 {
+		// A throw the frame's handler takes, its registers restored as a
+		// refusal's, to its continuation (catchStub).
+		at := c.a.NewLabel()
+		c.goCatches = append(c.goCatches, goFail{st, back, at})
+		c.cold = append(c.cold, func() {
+			c.a.Bind(at)
+			restore(true)
+			c.a.Jmp(catch)
+		})
+	}
+}
+
+// catchStub is the continuation of v, a call of Go of the code's own frame
+// -- no inlined callee's -- where the frame's handler in force at it takes
+// what it threw (abi.GoCallState's Catch), as V8's optimized code goes on
+// at the handler its handler table names for a call that throws; 0 where
+// there is none: no handler there, none with an entry of the code's, code
+// that does not make some of its objects or closures, which an exit
+// leaves Go to make (escape.go, calledClosures), or code whose captured
+// registers are in cells of their own, which Go opens on the frame at an
+// exit (the VM's jitRegReopenCells) and the handler's entry makes anew. In a loop that counts its
+// budget in a register, it stores the budget back first, as an exit's stub
+// does (stubLabel).
+func (c *compiler) catchStub(v *ssa.Value) amd64.Label {
+	f, s := c.f, v.State
+	if s == nil || s.Inline != nil || s.Site < 0 || s.Site >= len(f.HandlerAt) || f.HandlerAt[s.Site] == 0 ||
+		f.Virtuals != 0 || f.Unmade != 0 || f.Called != 0 || f.Kinds != nil || f.Cells {
+		return 0
+	}
+	h := f.Handlers[f.HandlerAt[s.Site]-1]
+	var to *ssa.Block
+	for _, e := range f.Entries {
+		if e.PC == int(h.PC) {
+			to = e.Block
+			break
+		}
+	}
+	if to == nil || h.Reg < 0 || int(h.Reg) >= f.FrameLocals {
+		return 0
+	}
+	l := c.a.NewLabel()
+	c.catches = append(c.catches, catchStub{state: s, label: l, keep: v.Index, reg: int(h.Reg), to: to})
+	if c.budget < 0 {
+		return l
+	}
+	flush, reg := c.a.NewLabel(), amd64.Reg(c.budgetReg(c.budget))
+	c.cold = append(c.cold, func() {
+		c.a.Bind(flush)
+		c.budgetFlush(reg)
+		c.a.Jmp(l)
+	})
+	return flush
+}
+
+// catchTo is k's continuation (catchStub): the frame written as an exit at
+// its state writes it, its records applied natively (exitThen); what was
+// thrown, in the call's keep cell, stored to the handler's register, its
+// pointer word with Go's write barrier while the collector marks, as the
+// interpreter's regCatch gives it; and the code going on at the handler's
+// entry, which reads the frame's registers, as Go's going on there after
+// an exit would.
+func (c *compiler) catchTo(k catchStub) {
+	then := c.a.NewLabel()
+	c.exitThen(k.state, abi.ExitHost, &then)
+	c.a.Bind(then)
+	keep := abi.OffKeep + int32(k.keep)*int32(c.enc.ValueSize)
+	c.a.Load(scratchB, regCtx, keep+c.enc.NumOffset)
+	base, disp := c.slotAddr(k.reg, false, scratchA)
+	c.a.Store(base, disp, scratchB)
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.TestMem8(scratchA, 0, 0xFF)
+	c.a.Jcc(amd64.CondNE, marked)
+	for _, marking := range []bool{false, true} {
+		if marking {
+			c.a.Bind(marked)
+		}
+		c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+		base, disp := c.slotAddr(k.reg, true, scratchA)
+		c.a.Lea(scratchA, base, disp)
+		c.ptrStore(marking)
+		c.a.Jmp(done)
+	}
+	c.a.Bind(done)
+	c.a.Jmp(c.labels[k.to.ID])
 }
 
 // goLive calls Go, op, its operands in the context's GoArgs, for v, a

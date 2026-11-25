@@ -866,11 +866,14 @@ func (p *Program) IsAssigned(i int) bool { return i >= 0 && i < len(p.Assigned) 
 // Handler is an exception handler, as push_catch or push_finally registers
 // it: the clause at PC, entered with the operand stack cut to Depth, a
 // finally clause's if Finally, and Outer the handler in force around it, 1
-// plus its index in Program.Handlers, 0 for none.
+// plus its index in Program.Handlers, 0 for none. Reg is, for register
+// code's program, the register the handler is given what was thrown in
+// (bytecode.RHandler's Reg).
 type Handler struct {
 	PC      uint32
 	Depth   int32
 	Outer   int32
+	Reg     int32
 	Finally bool
 }
 

@@ -1165,6 +1165,12 @@ type Func struct {
 	// which its exits write raw slots by (abi.ExitFrame's Kinds); nil
 	// otherwise.
 	Kinds []uint8
+	// Handlers and HandlerAt are the program's exception handlers and,
+	// by the program's instruction, the one in force there (ir.Program's):
+	// a call of Go whose throw the handler takes goes on natively at the
+	// handler's entry (mir's catchStub).
+	Handlers  []ir.Handler
+	HandlerAt []int32
 	// Blocks are every block an entry reaches, in reverse post-order from
 	// the entries -- a block after its dominator, a loop's body after its
 	// header -- and numbered so (Build).

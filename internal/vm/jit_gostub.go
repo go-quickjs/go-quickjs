@@ -129,11 +129,19 @@ func jitStubCall(ctx *abi.Context, st *abi.GoCallState) (*Runtime, bool) {
 }
 
 // jitStubDone is where a routine's call goes on: back, its status cleared,
-// where Go made it; Fail bytes past, where it did not.
+// where Go made it; Catch bytes past, where it did not because what it ran
+// threw to the frame's handler (abi.GoCaught); Fail bytes past, where it
+// did not otherwise.
 func jitStubDone(ctx *abi.Context, st *abi.GoCallState, back uintptr, ok bool) uintptr {
 	if ok {
 		ctx.GoStatus = 0
 		return back
+	}
+	if ctx.GoStatus == abi.GoCaught {
+		// What it threw is the frame's handler's (abi.GoCallState's
+		// Catch), asked only of a call Go did not make.
+		ctx.GoStatus = 0
+		return back + uintptr(int64(st.Catch))
 	}
 	return back + uintptr(int64(st.Fail))
 }

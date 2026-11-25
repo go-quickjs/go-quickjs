@@ -1907,7 +1907,33 @@ native code registers none: wherever Go takes the frame at an exit it gives
 it those handlers. A throw from what Go does there -- a call, an operation,
 a throw statement -- is unwound to its handler as the interpreter unwinds it
 (on a register frame, `regCatch`), and native code goes on at the handler,
-an entry of its own, as V8's code goes on at a handler. A finally clause's
+an entry of its own, as V8's code goes on at a handler. A throw from a call
+of Go the code's own frame makes -- a call Go makes, a property read or
+write, an instruction run whole, the frame's or a native callee's -- never
+leaves native code where the handler in force at the call takes it: the
+call's description has the offset of its continuation there
+(`abi.GoCallState`'s `Catch`, mir's `catchStub`), Go puts what was thrown
+in the call's keep cell and reports that it did not make the call, with
+`GoStatus` `abi.GoCaught` (`jitRegCaughtValue`) -- the status is asked only
+of a call Go did not make, so that the calls it makes pay nothing for the
+continuation -- and the call goes on at the continuation, which
+writes the frame as an exit at the call's state would (`exitThen`, its
+records applied natively), gives the handler's register what was thrown,
+its pointer word with Go's write barrier while the collector marks, and
+jumps to the handler's entry, which reads the frame's registers -- on both
+backends, as V8's optimized code goes on at the handler its handler table
+names for a call that throws. Code that leaves an object or a closure
+unmade (escape analysis, `calledClosures`), code whose captured registers
+are in cells of their own (`ir.Program`'s `Cells`), typed code, and a call
+inside an inlined callee have no continuation, and leave at the call as before; so
+does a call Go would otherwise leave at -- the runtime stopped, the code
+invalid, a compile due, a debugger. Such a call, its cost the throw's,
+which the interpreter pays alike, counts in no judgment of the code's
+profit (`jitSSAStats`' `caught`, `jitRegRunGoProfit`'s calls): counted, a
+loop whose every turn's read threw was judged slow and left to the
+interpreter. A read of undefined or null where a handler is in force is
+Go's from native code, as a primitive's is (`jitPropOp`'s `caught`), its
+TypeError caught so. A finally clause's
 normal completion goes on natively, and so does a return, where no other
 finally clause is in force around it and no loop's cursor is beneath the
 completion record (`ir`'s `Rethrow`, `When`); any other (a throw)

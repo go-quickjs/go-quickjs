@@ -338,6 +338,12 @@ func goCall(ctx *abi.Context) uintptr {
 	ctx.GoStatus = 1
 	if HostCall != nil && HostCall(ctx) {
 		ctx.GoStatus = 0
+	} else if ctx.GoStatus == abi.GoCaught && ctx.GoLast != 0 {
+		// What it threw is the frame's handler's: on at the call's
+		// continuation there, asked only of a call Go did not make.
+		st := (*abi.GoCallState)(asPointer((*uint64)(unsafe.Pointer(&ctx.GoLast))))
+		ctx.GoSite += uintptr(int64(st.Catch))
+		ctx.GoStatus = 0
 	} else if fail != 0 {
 		// Where the call goes if Go did nothing, its code testing nothing.
 		ctx.GoSite += uintptr(int64(fail))

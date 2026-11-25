@@ -87,10 +87,13 @@ type a64Compiler struct {
 	// retTail is amd64's (returnFast).
 	retTail     arm64.Label
 	retTailUsed bool
-	// calling and goFails are amd64's.
+	// calling, goFails, goCatch, goCatches and catches are amd64's.
 	calling     arm64.Label
 	callingUsed bool
 	goFails     []a64GoFail
+	goCatch     arm64.Label
+	goCatches   []a64GoFail
+	catches     []a64CatchStub
 	live        arm64.Label
 	liveUsed    bool
 	// bigLive, bigLiveUsed and goCallBig are amd64's.
@@ -131,6 +134,14 @@ type a64Compiler struct {
 type a64GoFail struct {
 	st       *abi.GoCallState
 	back, to arm64.Label
+}
+
+// a64CatchStub is amd64's catchStub.
+type a64CatchStub struct {
+	state     *ssa.FrameState
+	label     arm64.Label
+	keep, reg int
+	to        *ssa.Block
 }
 
 type a64Stub struct {
@@ -259,6 +270,11 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	for i := 0; i < len(c.cold); i++ {
 		c.coldPath(i)
 	}
+	// As amd64's: the continuations of calls of Go at handlers.
+	for _, k := range c.catches {
+		c.a.Bind(k.label)
+		c.catchTo(k)
+	}
 	// Cold code's guards' exits.
 	for i := stubs; i < len(c.stubFor); i++ {
 		s := c.stubFor[i]
@@ -343,6 +359,9 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	}
 	for _, g := range c.goFails {
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
+	}
+	for _, g := range c.goCatches {
+		g.st.Catch = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
 	c.lap(PhaseEmit)
 	var dst []byte
@@ -2613,6 +2632,17 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 		restore(true)
 		c.a.B(stub)
 	})
+	if catch := c.goCatch; catch != 0 {
+		// As amd64's: a throw the frame's handler takes, the registers
+		// restored, to its continuation.
+		at := c.a.NewLabel()
+		c.goCatches = append(c.goCatches, a64GoFail{st, back, at})
+		c.cold = append(c.cold, func() {
+			c.a.Bind(at)
+			restore(true)
+			c.a.B(catch)
+		})
+	}
 }
 
 // goLive is amd64's: Go called for v, what lives across it saved.
@@ -2715,6 +2745,73 @@ func (c *a64Compiler) goCalling(st *abi.GoCallState, stub *arm64.Label) {
 		}
 		c.goFails = append(c.goFails, a64GoFail{st, back, to})
 	}
+	if c.goCatch != 0 {
+		// As amd64's: a throw the frame's handler takes to its
+		// continuation, the routine having restored the registers.
+		c.goCatches = append(c.goCatches, a64GoFail{st, back, c.goCatch})
+	}
+}
+
+// catchStub is amd64's: the continuation of v, a call of Go of the code's
+// own frame, at the handler in force at it, or 0.
+func (c *a64Compiler) catchStub(v *ssa.Value) arm64.Label {
+	f, s := c.f, v.State
+	if s == nil || s.Inline != nil || s.Site < 0 || s.Site >= len(f.HandlerAt) || f.HandlerAt[s.Site] == 0 ||
+		f.Virtuals != 0 || f.Unmade != 0 || f.Called != 0 || f.Kinds != nil || f.Cells {
+		return 0
+	}
+	h := f.Handlers[f.HandlerAt[s.Site]-1]
+	var to *ssa.Block
+	for _, e := range f.Entries {
+		if e.PC == int(h.PC) {
+			to = e.Block
+			break
+		}
+	}
+	if to == nil || h.Reg < 0 || int(h.Reg) >= f.FrameLocals {
+		return 0
+	}
+	l := c.a.NewLabel()
+	c.catches = append(c.catches, a64CatchStub{state: s, label: l, keep: v.Index, reg: int(h.Reg), to: to})
+	if c.budget < 0 {
+		return l
+	}
+	flush, reg := c.a.NewLabel(), arm64.Reg(c.budgetReg(c.budget))
+	c.cold = append(c.cold, func() {
+		c.a.Bind(flush)
+		c.budgetFlush(reg)
+		c.a.B(l)
+	})
+	return flush
+}
+
+// catchTo is amd64's: k's continuation, the frame written (exitThen), what
+// was thrown stored to the handler's register, its pointer word with Go's
+// write barrier while the collector marks, and on at the handler's entry.
+func (c *a64Compiler) catchTo(k a64CatchStub) {
+	then := c.a.NewLabel()
+	c.exitThen(k.state, abi.ExitHost, &then)
+	c.a.Bind(then)
+	keep := abi.OffKeep + int32(k.keep)*int32(c.enc.ValueSize)
+	c.a.Load(a64B, a64Ctx, keep+c.enc.NumOffset)
+	base, disp := c.slotAddr(k.reg, false, a64A)
+	c.a.Store(base, disp, a64B)
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, marked, false)
+	for _, marking := range []bool{false, true} {
+		if marking {
+			c.a.Bind(marked)
+		}
+		c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+		base, disp := c.slotAddr(k.reg, true, a64A)
+		c.a.AddImm(a64A, base, int64(disp), true)
+		c.ptrStore(marking)
+		c.a.B(done)
+	}
+	c.a.Bind(done)
+	c.a.B(c.labels[k.to.ID])
 }
 
 // byCode is amd64's: the callee's function checked, its pointer word in C,
@@ -8344,11 +8441,13 @@ func (c *a64Compiler) goCallOp(v *ssa.Value, op uint64, saving bool) {
 		c.goArg(abi.OffGoArgs+int32(i)*size, x)
 	}
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goCatch = c.catchStub(v)
 	if saving {
 		c.goCalling(st, &stub)
 	} else {
 		c.goCallingLive(v, st, stub)
 	}
+	c.goCatch = 0
 	c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 	c.setG(v, a64A)
 }
@@ -8376,7 +8475,9 @@ func (c *a64Compiler) goCallWindow(v *ssa.Value, op uint64) {
 	for i, x := range v.Args {
 		c.directOperand(v, x, a64D, windowGoDisp(i, method, vs))
 	}
+	c.goCatch = c.catchStub(v)
 	c.goCalling(st, &stub)
+	c.goCatch = 0
 	c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*vs+c.enc.NumOffset)
 	c.setG(v, a64A)
 }

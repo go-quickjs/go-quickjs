@@ -91,6 +91,14 @@ func jitGoDirect(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 		ctx.GoStatus = 0
 		return back
 	}
+	if ctx.GoStatus == abi.GoCaught {
+		// What it threw is the frame's handler's: on at the call's
+		// continuation there (abi.GoCallState's Catch). Asked only of a
+		// call Go did not make, so that the calls it makes pay nothing
+		// for it.
+		ctx.GoStatus = 0
+		return back + uintptr(int64(st.Catch))
+	}
 	return back + uintptr(int64(fail))
 }
 

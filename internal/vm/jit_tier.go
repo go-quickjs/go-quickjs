@@ -836,6 +836,7 @@ func (r *Runtime) jitRegPropOp(f *frame, c *regCode, wb, rpc int) (jitPropOp, bo
 	if site < len(f.cl.ic) {
 		op.c = &f.cl.ic[site]
 	}
+	op.caught = c.rc.HandlerAt(rpc) != nil
 	return op, true
 }
 
