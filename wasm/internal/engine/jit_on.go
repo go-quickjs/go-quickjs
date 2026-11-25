@@ -1193,10 +1193,10 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		panic("wasm jit: a frame's references outside the exec's chunk")
 	}
 	// A native call at entry j of the level is at depth x.depth+j: the
-	// entries end where that would pass MaxCallDepth, and a call there
-	// goes through Go, whose depth check traps.
+	// entries end where that would pass the exec's maxDepth, and a call
+	// there goes through Go, whose depth check traps.
 	lv.rsBase = from
-	lv.rsDepth = uintptr(max(MaxCallDepth-x.depth+1, 1)) * rsEntryBytes
+	lv.rsDepth = uintptr(max(x.maxDepth-x.depth+1, 1)) * rsEntryBytes
 	ctx.RSEnd = min(x.rsStart()+uintptr(len(x.jit.rs))*8, from+lv.rsDepth)
 	ctx.DepthEnd = from + lv.rsDepth
 	i := x.rsIndex(from)

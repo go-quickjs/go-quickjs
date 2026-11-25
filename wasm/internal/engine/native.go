@@ -27,7 +27,7 @@ type nativeCtx struct {
 	// r is the frame's reference slots; x the exec; inst the instance;
 	// funcs, fns and sites the first of the instance's functions, the
 	// Code's records and the code's sites; calls says native code may
-	// call a function itself (nativeCall); maxDepth is MaxCallDepth;
+	// call a function itself (nativeCall); maxDepth is the exec's;
 	// storeRef the barrier routine and wb the collector's marking flag's
 	// address (nativeStoreRef).
 	r, x, inst, funcs, fns, sites uintptr
@@ -118,7 +118,7 @@ func nativeSet(f *frame, rc *regCode, pc int32) *nativeCtx {
 	if nativeCall(inst.Code) {
 		c.calls = 1
 	}
-	c.maxDepth = uintptr(MaxCallDepth)
+	c.maxDepth = uintptr(f.x.maxDepth)
 	c.caller = 0
 	return c
 }

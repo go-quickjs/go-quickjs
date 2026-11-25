@@ -202,7 +202,7 @@ const (
 	CtxFns       = 136 // the Code's records' first
 	CtxSites     = 144 // the code's sites' first
 	CtxCalls     = 152 // not 0 where native code calls functions itself
-	CtxMaxDepth  = 160 // MaxCallDepth
+	CtxMaxDepth  = 160 // the exec's maxDepth
 	CtxStoreRef  = 168 // the barrier routine
 	CtxWB        = 176 // the collector's marking flag's address
 	CtxCaller    = 184 // the calling frame's context, or 0

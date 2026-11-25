@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 // The interpreter runs a function's register code (README.md) in a frame,
@@ -84,6 +85,14 @@ type exec struct {
 	// take from, one an instance (native_gc.go), given back as the exec's
 	// call ends.
 	pools []execPools
+
+	// Past the fields native code reads at fixed offsets (regdef):
+	// maxDepth is how deep the exec's calls may nest: MaxCallDepth, less
+	// the depth of the call whose host function made this one (hostCtx).
+	maxDepth int
+	// hctx is the context the exec's host functions are given, made for
+	// the first of them.
+	hctx *hostCtx
 }
 
 // execPools is an exec's table of pools for an instance.
@@ -100,6 +109,15 @@ type callSite struct {
 // MaxCallDepth is how deep wasm calls may nest before the call stack is
 // exhausted.
 var MaxCallDepth = 30_000
+
+// reentryDepth is what a call back into wasm from a host function counts
+// for beyond the host function's own level (hostCtx). Crossing from wasm
+// to Go and back takes 4 to 6 KB of Go stack on 64-bit hosts and an exec
+// of its own, many times a wasm call's, so a chain of them counted as two
+// levels a round trip reached 15,000 round trips, some 90 MB of stack and
+// 100 MB of heap, more than a 32-bit host can give. At 16 levels a round
+// trip a chain ends after about 1,875, some 11 MB of stack.
+const reentryDepth = 14
 
 const (
 	chunkSlots = 1 << 14
@@ -207,6 +225,14 @@ func InvokeTraced(ctx context.Context, fn *Function, args []Val, t *Trace) ([]Va
 func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []Val, err error) {
 	x := execPool.Get().(*exec)
 	x.ctx = ctx
+	x.maxDepth = MaxCallDepth
+	if ctx != nil {
+		if h, ok := ctx.Value(hostCtxKey{}).(*hostCtx); ok {
+			if room := h.room.Load(); room >= 0 {
+				x.maxDepth = int(room)
+			}
+		}
+	}
 	x.poll = pollEvery
 	if t != nil {
 		t.x = x
@@ -228,6 +254,10 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 			t.x = nil
 		}
 		x.depth = 0
+		if x.hctx != nil {
+			x.hctx.room.Store(-1)
+			x.hctx = nil
+		}
 		x.calls = x.calls[:0]
 		x.caught = x.caught[:0]
 		x.vals = x.vals[:0]
@@ -241,6 +271,45 @@ func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []
 	results = make([]Val, len(fn.Sig.Results))
 	x.callGeneric(fn, args, results)
 	return results, nil
+}
+
+// hostCtx is the context a host function is given: the call's own, and the
+// room the call stack has left below the host function, which a call it
+// makes back into wasm with this context, or with one made from it, starts
+// with. MaxCallDepth then bounds a chain of calls that goes back and forth
+// between wasm and the host as it bounds wasm's own recursion, where each
+// call starting at depth 0 would let the chain run until Go's stack ran out.
+//
+// The room is the innermost running host function's, set as it is called
+// and set back as it returns. An exception thrown through a host function
+// leaves it the smaller room of that deeper call until the next host call
+// sets it: a bound never looser than the depth's. It is -1, no bound of its
+// own, once the call that made the context has returned. It is atomic since
+// a host function may hand its context to other goroutines.
+type hostCtx struct {
+	context.Context
+	room atomic.Int64
+}
+
+type hostCtxKey struct{}
+
+func (c *hostCtx) Value(key any) any {
+	if key == (hostCtxKey{}) {
+		return c
+	}
+	return c.Context.Value(key)
+}
+
+// hostContext returns the context the exec's host functions are given.
+func (x *exec) hostContext() *hostCtx {
+	if x.hctx == nil {
+		ctx := x.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		x.hctx = &hostCtx{Context: ctx}
+	}
+	return x.hctx
 }
 
 // hostError carries a host function's error out through wasm frames.

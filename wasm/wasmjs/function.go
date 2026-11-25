@@ -277,7 +277,7 @@ func (a *api) wasmError(err error) error {
 func (a *api) hostFunction(callable vm.Value, c module.CanonicalIndex, index uint32) *engine.Function {
 	sig := module.Canonical(c).Func
 	fn := engine.NewHostFunction(c, "", func(ctx context.Context, caller *engine.Instance, args, results []engine.Val) error {
-		if sc, ok := ctx.(*stackContext); ok {
+		if sc := stackOf(ctx); sc != nil {
 			// Wasm running on a suspendable stack calls out through the
 			// runtime's goroutine, which alone runs script.
 			return sc.callOut(stackMsg{run: func() error { return a.callImport(callable, sig, args, results) }})

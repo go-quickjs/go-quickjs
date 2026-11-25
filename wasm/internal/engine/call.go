@@ -21,7 +21,7 @@ func codeOf(fn *Function) *compiled { return fn.Inst.Code.get(fn.Index) }
 // position (nc, nsp, rc, rsp), where a tail call takes its callee's.
 func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, rc, rsp int) {
 	x.depth++
-	if x.depth > MaxCallDepth {
+	if x.depth > x.maxDepth {
 		x.stackOverflow(fn)
 	}
 	if x.poll--; x.poll <= 0 {
@@ -201,7 +201,7 @@ func (x *exec) hostCall(fn *Function, args []Val) []Val {
 		caller = x.calls[n-1].fn.Inst
 	}
 	x.depth++
-	if x.depth > MaxCallDepth {
+	if x.depth > x.maxDepth {
 		x.depth--
 		trap(TrapStackOverflow)
 	}
@@ -217,7 +217,10 @@ func (x *exec) hostCall(fn *Function, args []Val) []Val {
 	x.hostResults = nil
 	own, top := x.takeVals(len(args))
 	copy(own, args)
-	err := fn.Host(x.ctx, caller, own, res)
+	h := x.hostContext()
+	room := h.room.Swap(int64(max(x.maxDepth-x.depth-reentryDepth, 0)))
+	err := fn.Host(h, caller, own, res)
+	h.room.Store(room)
 	x.vals = x.vals[:top]
 	x.hostResults = res
 	if err != nil {

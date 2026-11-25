@@ -161,7 +161,25 @@ type stackContext struct {
 
 func (*stackContext) Deadline() (time.Time, bool) { return time.Time{}, false }
 func (c *stackContext) Done() <-chan struct{}     { return c.canceled }
-func (*stackContext) Value(any) any               { return nil }
+
+// Value answers stackKey with the context itself: the context a host
+// function is given is made from the call's, so the host finds the stack
+// it runs on through Value (stackOf).
+func (c *stackContext) Value(key any) any {
+	if key == (stackKey{}) {
+		return c
+	}
+	return nil
+}
+
+type stackKey struct{}
+
+// stackOf returns the stack the context of a host function's call runs on,
+// or nil.
+func stackOf(ctx context.Context) *stackContext {
+	sc, _ := ctx.Value(stackKey{}).(*stackContext)
+	return sc
+}
 
 // Err reports why the runtime has been stopped, while its goroutine is
 // blocked servicing this one.
@@ -370,8 +388,8 @@ func (a *api) await(s *jspiStack, su *suspension, ret vm.Value) error {
 func (a *api) suspendingFunction(d *suspendingData, c module.CanonicalIndex, index uint32) *engine.Function {
 	sig := module.Canonical(c).Func
 	fn := engine.NewHostFunction(c, "", func(ctx context.Context, caller *engine.Instance, args, results []engine.Val) error {
-		sc, ok := ctx.(*stackContext)
-		if !ok {
+		sc := stackOf(ctx)
+		if sc == nil {
 			msg := "trying to suspend without WebAssembly.promising"
 			if cur := a.jspi.current; cur != nil && cur.jsFrames > 0 {
 				msg = "trying to suspend JS frames"
