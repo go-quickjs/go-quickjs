@@ -374,13 +374,13 @@ A call of a function defined in the module is made natively when the callee
 has native code (its link entry is not 0), its frame has room in the chunk,
 and the return stack has room for an entry; otherwise it is an `ExitCall`.
 Native code keeps no depth: the return stack ends, for it, where the
-callee's calls `InlineDepth` (3) deep would pass the limit, so that call
+callee's calls `InlineDepth` (4) deep would pass the limit, so that call
 goes through Go, whose depth check traps where the call itself passes it,
 and the depth Go sees is the level's at entry plus its entries. Go runs a
 frame that near the limit in the interpreter, whether it is a call's, a
 tail call's or one an OSR would enter (`nearDepthLimit`): native code runs
 only where the calls the optimizing tier inlines are within the limit, so
-that an inlined call checks nothing, and a frame within three calls of the
+that an inlined call checks nothing, and a frame within four calls of the
 limit, a stack overflow's last, runs its few calls in the interpreter. The
 call first counts down the poll counter, as the interpreter's `run` does.
 With every entry and the written locals' homes stored, the caller copies

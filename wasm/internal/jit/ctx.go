@@ -116,7 +116,7 @@ type Ctx struct {
 // within the call depth's limit (RSEnd): the engine runs a frame nearer
 // the limit in the interpreter, so that an inlined call never passes it
 // and checks nothing.
-const InlineDepth = 3
+const InlineDepth = 4
 
 // RArgsBias is what Ctx.RArgs adds to its offset, which may be negative,
 // so that a word that is not 0 says the offset is set.

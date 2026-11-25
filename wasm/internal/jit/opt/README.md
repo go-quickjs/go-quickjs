@@ -244,8 +244,9 @@ signatures of the calls it makes), and its instructions are control,
 locals, globals, numbers, memory accesses, memory.size, memory.grow and
 direct calls: nothing that holds a reference, throws or catches, makes a
 tail call, or that Go runs by its offset (a SIMD exit). Calls are inlined
-three deep at most -- a recursion inlines itself so, its body eight times
-over -- and 1,024 bytes of bodies into a function at most, and not where a
+four deep at most (`wjit.InlineDepth`) -- a recursion inlines itself so,
+its body sixteen times over -- and 1,024 bytes of bodies into a function
+at most, and not where a
 construct around the call may catch what it throws: Go finds a handler by
 a call's offset in its function. The builder reads the callee's body where
 the call is, its parameters variables holding the call's arguments, its
@@ -272,8 +273,8 @@ a native call's return stack ends where its callee's would not be, and a
 frame nearer runs in the interpreter (the baseline README's Calls) -- so
 an inlined call is never one that would pass it, and checks nothing. Each
 had checked it, three instructions an inlined call, until fib's code went
-from 3.87 to 3.63 ms without them. A call made k calls deep pushes its entry k entries past the next (Aux2 of
-`OpCall`), leaving the k frames' entries unwritten, and takes the
+from 3.87 to 3.63 ms without them. A call made k calls deep pushes its
+entry k entries past the next (Aux2 of `OpCall`), leaving the k frames' entries unwritten, and takes the
 return stack's register back from the entry it returns with less those k:
 the return stack's depth is the calls' depth, its end checked as any
 call's. The engine walks a level's entries from the last, each entry's
@@ -289,7 +290,13 @@ of 6 processes; inlining two calls deep, 4.9, four, 4.3, its code twice as
 large again). The Go programs' functions, Go's own compiler having inlined
 what is small, have few such calls: json went from 24.0 to 22.8-23.9 ms,
 sha256 from 49.2 to 47.7-48.1, the others level; their compiles took 2%
-longer and their code 0.8% larger.
+longer and their code 0.8% larger. Inlining four deep rather than three,
+once the inlined calls no longer checked the depth, took fib from 3.87 to
+3.20 ms tiered and from 3.72 to 3.47 optimized (the mean over four
+placements of its code), its code 10 to 20 KB; five deep, which the
+budget cuts short, ran slower again (3.55 tiered). It changes none of the
+Go program's functions: their small callees are not recursive, and none
+inlines a call four deep.
 
 ## The passes
 
