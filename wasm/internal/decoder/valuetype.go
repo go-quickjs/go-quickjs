@@ -185,13 +185,19 @@ func readValueType(d *Decoder, pos int, det *detected, l *Limits) (module.ValueT
 
 // validateHeapType checks that a heap type read at pos names a type of m.
 func validateHeapType(d *Decoder, pos int, m *module.Module, h module.HeapType) bool {
+	return validateHeapTypeIn(d, pos, uint32(len(m.Types)), h)
+}
+
+// validateHeapTypeIn checks that a heap type read at pos names one of
+// numTypes types.
+func validateHeapTypeIn(d *Decoder, pos int, numTypes uint32, h module.HeapType) bool {
 	if h == module.HeapBottom {
 		return false
 	}
 	if !h.IsIndex() {
 		return true
 	}
-	if h.Index() >= uint32(len(m.Types)) {
+	if h.Index() >= numTypes {
 		d.errorf(pos, "Type index %d is out of bounds", h.Index())
 		return false
 	}

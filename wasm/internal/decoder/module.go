@@ -3,6 +3,7 @@ package decoder
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"unicode/utf8"
 
@@ -225,6 +226,15 @@ type moduleDecoder struct {
 	numDeclaredData      uint32
 	customs              []module.CustomSection
 	lim                  *Limits
+	// pendingTypes counts the types of the recursion group being read that
+	// are not yet in m.Types: they are visible to the group's definitions.
+	pendingTypes uint32
+}
+
+// numTypes is the count of types a type index may name while the module is
+// read: those of m.Types and the rest of the group being read.
+func (md *moduleDecoder) numTypes() uint32 {
+	return uint32(len(md.m.Types)) + md.pendingTypes
 }
 
 // Decode decodes the module in b and validates everything but its function
@@ -424,14 +434,16 @@ func memories(n int) string {
 
 func (md *moduleDecoder) consumeValueType() module.ValueType {
 	t, length := readValueType(&md.Decoder, md.pc, &md.det, md.lim)
-	validateValueType(&md.Decoder, md.pc, md.m, t)
+	if t.Kind == module.KindRef {
+		validateHeapTypeIn(&md.Decoder, md.pc, md.numTypes(), t.Heap)
+	}
 	md.consumeBytes(uint32(length))
 	return t
 }
 
 func (md *moduleDecoder) consumeHeapType() module.HeapType {
 	h, length := readHeapType(&md.Decoder, md.pc, &md.det, md.lim)
-	validateHeapType(&md.Decoder, md.pc, md.m, h)
+	validateHeapTypeIn(&md.Decoder, md.pc, md.numTypes(), h)
 	md.consumeBytes(uint32(length))
 	return h
 }
@@ -475,10 +487,13 @@ func (md *moduleDecoder) consumeStruct() *module.StructType {
 	if md.failed() {
 		return nil
 	}
-	fields := make([]module.FieldType, count)
+	// A field takes two bytes at least, its type and its mutability: room
+	// for as many as the section's remaining bytes can hold.
+	fields := make([]module.FieldType, 0, min(int(count), (md.end-md.pc)/2))
 	for i := uint32(0); md.ok() && i < count; i++ {
-		fields[i].Type = md.consumeStorageType()
-		fields[i].Mutable = md.consumeMutability()
+		t := md.consumeStorageType()
+		mut := md.consumeMutability()
+		fields = append(fields, module.FieldType{Type: t, Mutable: mut})
 	}
 	if md.failed() {
 		return nil
@@ -580,18 +595,24 @@ func (md *moduleDecoder) decodeTypeSection() {
 			md.errorf(md.pc, "Type definition count exceeds maximum %d", md.lim.Types)
 			return
 		}
-		// The group's types are visible to its definitions.
-		for j := uint32(0); j < groupSize; j++ {
-			m.Types = append(m.Types, module.TypeDef{})
-			m.Canonical = append(m.Canonical, 0)
-		}
+		// The group's types are visible to its definitions, which are added
+		// as they are read: a definition takes two bytes at least, its form
+		// and a count or a type, so the room made beforehand is for what the
+		// section's remaining bytes can hold, not for a size they cannot.
+		room := min(int(groupSize), (md.end-md.pc)/2)
+		m.Types = slices.Grow(m.Types, room)
+		m.Canonical = slices.Grow(m.Canonical, room)
+		md.pendingTypes = groupSize
 		for j := uint32(0); j < groupSize; j++ {
 			t, ok := md.consumeSubtypeDefinition(initial + j)
 			if !ok || md.failed() {
+				md.pendingTypes = 0
 				return
 			}
 			t.RecStart, t.RecSize = initial, groupSize
-			m.Types[initial+j] = t
+			m.Types = append(m.Types, t)
+			m.Canonical = append(m.Canonical, 0)
+			md.pendingTypes--
 		}
 		md.finalizeRecGroup(initial, groupSize)
 	}
