@@ -1573,6 +1573,22 @@ level, both tiers, on the code splitting was first written on. The optimized fir
 runs, which pay every compile at once, are 4 to 9% slower (The compile's
 cost); the tiered ones, compiling in the background, level.
 
+The checks and code of Go's memory accesses (Checks across phis and
+through a block, Lowering: the limit, the short copies, the masks, the
+overwritten global.sets, eqz of eqz) took, against bed71e54, the median
+of 3 rounds of 5 fresh processes in turns, on CPUs 0-15 of the machine
+above, ms -- second run, tiered then optimized: json 27.4 to 26.4 and
+21.2 to 19.1, regexp 25.1 to 21.8 and 23.8 to 20.2, sha256 41.9 to 37.9
+and 42.3 to 37.4, sort 89.0 to 85.1 and 89.3 to 84.5, gzip 18.8 to 17.9
+and 17.8 to 16.4, interp 10.1 to 8.5 and 9.8 to 8.6; steady state
+(`-warmup 15 -reps 10`), json 21.8 to 19.8 and 20.9 to 18.9, regexp 24.0
+to 20.4 and 23.6 to 19.9; first runs and the baseline's level, the
+micro-benchmarks level. Node 26 on the same CPUs: json 20.4 (TurboFan
+alone 18.6), steady 17.3; regexp 23.3 (21.9), steady 21.3. The Go
+program's code is 9% larger (36.1 MB), most of it each check's exact
+check out of line, and its compiles 3% longer, bce's 4.3 µs a function
+where it was 3.0.
+
 `BenchmarkOptMemories` (`wasm/internal/engine`) times ten passes over
 64 KiB of a memory -- a load, a store and a load at offset 4 every 8 bytes
 -- in the baseline code and optimized, µs: memory 1 61 and 54, an i64
