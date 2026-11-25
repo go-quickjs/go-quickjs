@@ -545,6 +545,5 @@ func (g *gen) exitTail(v *Value) {
 	}
 	a.Load(rRS, rCtx, offRSP)
 	a.OpImm(amd64.Sub, rRS, wjit.RSEntryWords*8, true)
-	a.Load(rL, rRS, 8)
 	a.JmpMem(rRS, 0)
 }

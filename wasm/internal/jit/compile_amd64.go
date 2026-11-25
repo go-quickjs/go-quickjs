@@ -107,12 +107,12 @@ func (c *compiler) zeroLocals() {
 }
 
 // returnSequence binds the return label: it pops the return stack's entry
-// and goes where it says, the caller's L restored.
+// and goes where it says, with L still this frame's, which the caller's
+// return site takes back by its own frame's size.
 func (c *compiler) returnSequence() {
 	a := c.a
 	a.Bind(c.retL)
 	a.OpImm(amd64.Sub, rRS, RSEntryWords*8, true)
-	a.Load(rL, rRS, 8)
 	a.JmpMem(rRS, 0)
 }
 
@@ -460,6 +460,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 	a.OpImm(amd64.Add, rL, frame, true)
 	a.JmpReg(amd64.RAX)
 	a.Bind(ret)
+	a.OpImm(amd64.Sub, rL, frame, true)
 	if c.refs {
 		c.restoreR()
 	}

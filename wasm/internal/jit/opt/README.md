@@ -523,7 +523,9 @@ allocator gives AX, CX and DX last, so that most of a Go program's
 functions, whose values take the other four, keep it in DX (503 of the
 789 json optimizes, 33 when only R13, R9 and R8 could). The
 return sequence takes it from there, pops the entry and jumps to its
-address with BX the caller's L, as the baseline's does. A native call
+address with BX still the function's L, as the baseline's does, and the
+caller takes its own back by subtracting its frame's size (the baseline
+README's Calls). A native call
 pushes its entry from where the code keeps it and leaves R10 past it for
 the callee, which returns with R10 as the call found it; the code keeps
 it again, where an exit of the callee may have left another in the

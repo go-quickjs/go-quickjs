@@ -382,8 +382,17 @@ the arguments into the parameters of the callee's frame, at its own
 frame's end (`L + nslots`), pushes the return stack entry -- the return
 address, its own L, the callee's index above the call's offset -- moves L
 and jumps through the link table. The callee's return sequence pops the
-entry, restores L and jumps back; the caller loads its locals' homes and
-copies the results from the callee's frame into its stack positions.
+entry and jumps back with L still the callee's, which the caller takes
+back by subtracting its own frame's size: it is the L the call made, as a
+tail call reuses the frame in place and an exit's resumption loads L
+again. The caller then loads its locals' homes and copies the results from
+the callee's frame into its stack positions. The entry keeps the caller's
+L for Go, which walks the frames by it (an exception's search); restoring
+L from it at the return put a load and the store it forwards from on the
+path of everything after every return -- the caller's loads and stores
+and its next call all address the frame through L -- where a subtraction
+is a cycle: micro/fib went from 12.0 to 10.2 ms in the baseline code and
+from 4.6 to 3.9 tiered.
 
 A callee that holds references has its reference slots past its caller's
 too: a caller that holds references copies the reference arguments to

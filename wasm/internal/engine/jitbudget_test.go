@@ -235,6 +235,27 @@ func unitSize(t *testing.T, n int) (unit, tables int64) {
 	return m.Code + m.Records, m.Tables
 }
 
+// limitFor is limit for a budget of manyWAT(n)'s functions, unit bytes
+// each compiled, or, where it is more, what a baseline compile of one of
+// them needs with what it works in, which the limit bounds too (mayFit):
+// below that a compile is refused whatever the code held, and a function
+// whose code is a cache line smaller can take a limit of k units below it.
+// The test fails where it would make room for a unit more of code than
+// limit does.
+func limitFor(t *testing.T, n int, limit, unit int64) int64 {
+	t.Helper()
+	probe := budgetCode(t, manyWAT(n), NewJITBudget(0))
+	f0, _ := instantiateCode(t, probe, hostH(func(context.Context, uint64) uint64 { return 0 })).Export("f0")
+	need := unit + workBytes(probe.Module.Functions[f0.Func.Index].Code.Len, false)
+	if need <= limit {
+		return limit
+	}
+	if need >= limit+unit {
+		t.Fatalf("a compile works in %d bytes, past a limit of %d and a function's code (%d bytes) more", need, limit, unit)
+	}
+	return need
+}
+
 func hostH(fn func(ctx context.Context, k uint64) uint64) Extern {
 	host := NewHostFunction(module.CanonicalFunc(&module.FuncType{Params: []module.ValueType{module.I32}, Results: []module.ValueType{module.I32}}), "h",
 		func(ctx context.Context, _ *Instance, args, results []Val) error {
@@ -252,7 +273,7 @@ func hostH(fn func(ctx context.Context, k uint64) uint64) Extern {
 func TestJITDropsAndRefuses(t *testing.T) {
 	const n = 24
 	unit, tables := unitSize(t, n)
-	b := NewJITBudget(tables + 4*unit + unit/2)
+	b := NewJITBudget(limitFor(t, n, tables+4*unit+unit/2, unit))
 	code := budgetCode(t, manyWAT(n), b)
 	inst := instantiateCode(t, code, hostH(func(context.Context, uint64) uint64 { return 0 }))
 
@@ -314,7 +335,7 @@ func TestJITDropsAndRefuses(t *testing.T) {
 func TestJITDropKeepsFrames(t *testing.T) {
 	const n = 24
 	unit, tables := unitSize(t, n)
-	b := NewJITBudget(tables + 4*unit)
+	b := NewJITBudget(limitFor(t, n, tables+4*unit, unit))
 	steppingClock(t)
 	var inst *Instance
 	callAll := func(ctx context.Context) uint64 {
@@ -360,7 +381,7 @@ func TestJITDropKeepsFrames(t *testing.T) {
 	}
 	// A host call suspended on another goroutine while this one drops.
 	entered, release := make(chan struct{}), make(chan struct{})
-	b2 := NewJITBudget(tables + 4*unit)
+	b2 := NewJITBudget(limitFor(t, n, tables+4*unit, unit))
 	code2 := budgetCode(t, manyWAT(n), b2)
 	inst2 := instantiateCode(t, code2, hostH(func(ctx context.Context, k uint64) uint64 {
 		close(entered)

@@ -535,7 +535,6 @@ func (g *gen) exitTail(v *Value) {
 		g.exit(wjit.ExitTailRef, a.NewLabel(), v.Aux, base, at)
 	}
 	a.AddImm(rRS, rRS, -wjit.RSEntryWords*8, true)
-	a.Load(rL, rRS, 8)
 	a.Load(s0, rRS, 0)
 	a.Br(s0)
 }

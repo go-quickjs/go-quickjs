@@ -123,6 +123,7 @@ func (c *compiler) indirectNative(d *indirect, poll, slow amd64.Label) {
 	a.OpImm(amd64.Add, rL, frame, true)
 	a.JmpReg(ax)
 	a.Bind(ret)
+	a.OpImm(amd64.Sub, rL, frame, true)
 	if c.refs {
 		c.restoreR()
 	}

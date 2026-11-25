@@ -134,6 +134,7 @@ func (c *compiler) indirectNative(d *indirect, poll, slow arm64.Label) {
 	a.AddImm(rL, rL, int64(frame), true)
 	a.Br(rEntry)
 	a.Bind(ret)
+	a.AddImm(rL, rL, -int64(frame), true)
 	if c.refs {
 		c.restoreR()
 	}

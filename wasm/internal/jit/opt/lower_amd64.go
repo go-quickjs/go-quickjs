@@ -954,7 +954,6 @@ func (g *gen) block(i int, b *Block) {
 			a.Load(rRS, rCtx, offRSP)
 			a.OpImm(amd64.Sub, rRS, wjit.RSEntryWords*8, true)
 		}
-		a.Load(rL, rRS, 8)
 		a.JmpMem(rRS, 0)
 	case BTrap:
 		a.Jmp(g.trap(wjit.TrapUnreachable, b.At))
@@ -2113,6 +2112,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.JmpReg(s0)
 	}
 	a.Bind(ret)
+	a.OpImm(amd64.Sub, rL, frame, true)
 	g.poppedRS(k)
 	g.restoreR()
 	g.refResults(v, g.adv())
@@ -2304,6 +2304,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 		a.JmpReg(s0)
 	}
 	a.Bind(ret)
+	a.OpImm(amd64.Sub, rL, frame, true)
 	g.poppedRS(0)
 	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))

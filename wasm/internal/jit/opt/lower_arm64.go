@@ -943,7 +943,6 @@ func (g *gen) block(i int, b *Block) {
 		g.parallel(moves)
 		g.moves = moves[:0]
 		a.AddImm(rRS, rRS, -wjit.RSEntryWords*8, true)
-		a.Load(rL, rRS, 8)
 		a.Load(s0, rRS, 0)
 		a.Br(s0)
 	case BTrap:
@@ -1732,6 +1731,12 @@ func (g *gen) pushReturn(ret arm64.Label, site uint64, siteInS1 bool, k int64) {
 	a.AddImm(rL, rL, int64(8*g.req.FrameSlots), true)
 }
 
+// returnedL takes L back from the callee's frame, where a native callee
+// returns with it, to this one's.
+func (g *gen) returnedL() {
+	g.a.AddImm(rL, rL, -int64(8*g.req.FrameSlots), true)
+}
+
 // rsEntry is the bytes of a return stack entry.
 const rsEntry = wjit.RSEntryWords * 8
 
@@ -1814,6 +1819,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.Br(s0)
 	}
 	a.Bind(ret)
+	g.returnedL()
 	if k > 0 {
 		// The callee returned with the entry it popped.
 		a.AddImm(rRS, rRS, -k*rsEntry, true)
@@ -1943,6 +1949,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 		a.Br(s1)
 	}
 	a.Bind(ret)
+	g.returnedL()
 	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
