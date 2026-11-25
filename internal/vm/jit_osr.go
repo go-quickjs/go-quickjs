@@ -98,6 +98,11 @@ type jitLearned struct {
 	// nativeCalls are the calls the code makes natively, or will when
 	// compiled again, each with the function it was seen to call.
 	nativeCalls []jitInline
+	// genericCalls are the calls, by register pc, that met at an exit a
+	// function native callers never call -- a built-in, a bound function
+	// -- past those they call natively: Go calls such a function from
+	// native code once compiled again (jitRegGenericSeen).
+	genericCalls []int32
 	// viaLeaves are the method calls the code made through the realm's
 	// Function.prototype.call of a leaf, G.call(x, ...) of a built-in --
 	// hasOwnProperty.call(o, k) -- each with G, which the code compiled

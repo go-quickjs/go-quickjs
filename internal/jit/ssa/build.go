@@ -1626,6 +1626,20 @@ const (
 	PrimitiveBoolean
 )
 
+// primitiveType is the type typeof answers for a primitive of kind k
+// (OpTypeIs's Index).
+func primitiveType(k Primitive) int {
+	switch k {
+	case PrimitiveBigInt:
+		return ir.TypeBigInt
+	case PrimitiveNumber:
+		return ir.TypeNumber
+	case PrimitiveBoolean:
+		return ir.TypeBoolean
+	}
+	return ir.TypeString
+}
+
 // ElementFeedback is Feedback that knows the element reads whose receivers
 // have been typed arrays (TypedRead): a read whose result no native
 // operation takes as a number (ir.Instruction's Reference) is made there
@@ -3232,7 +3246,11 @@ type PropertySite struct {
 	// Primitive, for a read StringFeedback knows, is the kind of its
 	// receivers: a string's, whose method String.prototype has, or
 	// another's, whose method the prototype at Holders[0] has.
-	Primitive Primitive
+	// PrimitiveCases are the other kinds it has met, each a site as this
+	// one is, of a kind of its own: the read tells them apart by the
+	// receiver's word, as it tells them from the objects' cases.
+	Primitive      Primitive
+	PrimitiveCases []PropertySite
 }
 
 // unfed reports whether the property operation at pc has a site that
@@ -8665,16 +8683,59 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// primitive's -- a BigInt's, a number's, a boolean's -- where
 			// the prototype the realm fixed for it, the site's holder, has
 			// it, as V8 reads a number's off the HeapNumber map's.
-			cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
-			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(s.Shape)}, int(s.Index), s.Key
-			if s.Primitive != PrimitiveString {
-				c := f.cache(cell)
-				c.Holders, c.Primitive = b.f.holderChain(HolderChain{Holders: s.Holders}), s.Primitive
+			//
+			// A site that has met objects too, or primitives of several
+			// kinds: each primitive's kind is a case beside the others',
+			// told by the receiver's word (OpTypeIs, which exits for none
+			// of these kinds), as a V8 IC keeps the HeapNumber map or the
+			// String map among the objects' maps. Each kind's read is made
+			// on a branch of its own, the objects' on the last, as the
+			// site's object cases have it; all go on where they meet. A
+			// read of the last kind with no objects beside it checks the
+			// kind itself, any other receiver leaving for Go. Each
+			// receiver of a case the site did not compile had left native
+			// code, which taught the code nothing.
+			site, fed := b.property(pc)
+			objects := fed && !in.Private && !unfedSite(site)
+			var cont *Block
+			for i := range len(s.PrimitiveCases) + 1 {
+				k := s
+				if i > 0 {
+					k = s.PrimitiveCases[i-1]
+				}
+				var no *Block
+				if i < len(s.PrimitiveCases) || objects {
+					is := f.newValue(blk, OpTypeIs, Bool, operand(in.Left))
+					is.Index, is.Aux, is.State = primitiveType(k.Primitive), int(ir.HostExit), state()
+					is.State.addUse()
+					var yes, c *Block
+					yes, no, c = b.split(blk, is, true)
+					if cont == nil {
+						cont = c
+					}
+					blk = yes
+				}
+				cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
+				cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(k.Shape)}, int(k.Index), k.Key
+				if k.Primitive != PrimitiveString {
+					c := f.cache(cell)
+					c.Holders, c.Primitive = b.f.holderChain(HolderChain{Holders: k.Holders}), k.Primitive
+				}
+				v := f.newValue(blk, OpLoadCell, Tagged, cell)
+				v.Shadow = cell
+				b.assign(in.Dest, blk, v)
+				if no != nil {
+					blk = no
+				}
 			}
-			v := f.newValue(blk, OpLoadCell, Tagged, cell)
-			v.Shadow = cell
-			b.assign(in.Dest, blk, v)
-			break
+			if cont != nil {
+				// The rest goes on where the ways meet, past any the
+				// objects' read makes of its own.
+				defer func() { b.next = cont }()
+			}
+			if !objects {
+				break
+			}
 		}
 		site, ok := b.property(pc)
 		if !ok {

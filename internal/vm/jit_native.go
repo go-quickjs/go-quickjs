@@ -2057,6 +2057,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 			if w.Op() == bytecode.RCallMW && w.X() >= 1 && wb+int(w.A())+2 < len(r.stack) {
 				mcallee, mrecv, mcb = r.stack[wb+int(w.A())], r.stack[wb+int(w.A())+1], r.stack[wb+int(w.A())+2]
 			}
+			called := r.jitRegCallee(c, wb, exitPC)
 			next, ran, err = r.regWhole(f, c, wb, exitPC)
 			if err != nil && mcallee.IsObject() && !e.invalid {
 				// A loop's built-in's call whose callback threw: learned
@@ -2079,7 +2080,9 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 				// called by its code from here, as at a call of Go; and a
 				// super()'s parent.
 				repeats := r.jitRegCallRepeats(f, c, e, exitPC, callee)
-				r.jitRegCallSeen(f, c, e, exitPC, callee)
+				if !r.jitRegCallSeen(f, c, e, exitPC, callee) && called != nil && !e.invalid && jitRegGenericSeen(r.jitRegLearnedFor(f, e), exitPC, called) {
+					r.jitRegReopt(f.cl, e)
+				}
 				if repeats {
 					// What it learned there, it learned at an earlier exit:
 					// invalidated, as V8's code deoptimizes at a call of a

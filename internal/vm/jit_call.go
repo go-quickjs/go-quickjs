@@ -739,6 +739,41 @@ func (r *Runtime) jitRegCallSeenOf(f *frame, c *regCode, e *jitRegEntry, rpc int
 	return true
 }
 
+// jitRegCallee is the function the call at register pc rpc of c, whose
+// window starts at wb, calls, read before Go makes the call, which writes
+// its result over it: call_w's and call_method_w's, nil for any other.
+func (r *Runtime) jitRegCallee(c *regCode, wb, rpc int) *Object {
+	if rpc >= len(c.rc.Code) {
+		return nil
+	}
+	switch w := regAt(c.code, rpc); w.Op() {
+	case bytecode.RCallW, bytecode.RCallMW:
+		if i := wb + int(w.A()); i < len(r.stack) && r.stack[i].IsObject() {
+			return r.stack[i].Object()
+		}
+	}
+	return nil
+}
+
+// jitRegGenericSeen learns in l, after Go made the call at register pc rpc
+// that native code left to it at an exit, that the call met o, a function
+// native callers never call -- a built-in, a bound function -- and reports
+// whether it had not known it: the code compiled again calls any function
+// none of the call's sites is through its link or, for such a one, by Go
+// from native code (ssa.CallSite's Generic), as V8's code makes a call
+// whose feedback met a built-in through the generic Call builtin. A call
+// that learns no function to call natively there had left native code at
+// each such call, the exit teaching nothing: x.toString() of objects and
+// numbers, at every number. A call whose sites are none is Go's already.
+func jitRegGenericSeen(l *jitEntry, rpc int, o *Object) bool {
+	fd := o.fn()
+	if l == nil || fd == nil || fd.closure != nil && !fd.bound || slices.Contains(l.genericCalls, int32(rpc)) {
+		return false
+	}
+	l.genericCalls = append(l.genericCalls, int32(rpc))
+	return true
+}
+
 // jitRegCallRepeats reports whether the call at register pc rpc of c, which
 // e's code left to Go at a host exit, Go having made it -- callee the
 // function a construction constructed with -- calls a target an earlier

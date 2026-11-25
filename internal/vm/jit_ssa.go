@@ -409,20 +409,23 @@ func (r *Runtime) jitPolySeenOp(e *jitEntry, pc int, op jitPropOp) {
 		}
 		return
 	}
-	if op.method && op.c != nil && !slices.Contains(e.strSites, uint32(pc)) {
-		if c := op.c; (c.shape == nil || c.shape == noShape) && c.fills == 0 && r.proto.str != nil && r.proto.str.findOwn(op.key) >= 0 {
-			// An object's method, at a read the code took for a string's
-			// (jitFeedback's StringProperty), its cache knowing nothing: a
-			// function run once leaves no read in the interpreter's cache. The
-			// cache takes the receiver, as the interpreter's read would
-			// have, and the code is compiled again for its shape; it had
-			// left there at every entry, and was judged slow for it.
+	// At a read that learned a primitive's method (jitFeedback's
+	// StringProperty), or one the code may have taken for a string's.
+	if took := jitPrimitiveLearned(e, pc) || r.proto.str != nil && r.proto.str.findOwn(op.key) >= 0; op.method && op.c != nil && took {
+		if c := op.c; (c.shape == nil || c.shape == noShape) && c.fills == 0 {
+			// An object's method, at a read the code took for a
+			// primitive's, its cache knowing nothing: a function run once
+			// leaves no read in the interpreter's cache, nor does one of
+			// primitives. The cache takes the receiver, as the
+			// interpreter's read would have, and the code is compiled
+			// again for its shape beside the primitives'; it had left
+			// there at every entry, and was judged slow for it.
 			r.fillPropCache(c, recv.Object(), op.key, false)
 			if c.shape != nil && c.shape != noShape {
 				e.polyReopt = true
 				return
 			}
-		} else if c.shape != nil && c.shape != noShape && c.shape == recv.Object().shape && r.proto.str != nil && r.proto.str.findOwn(op.key) >= 0 {
+		} else if c.shape != nil && c.shape != noShape && c.shape == recv.Object().shape {
 			// So too where the interpreter filled the cache between the
 			// compile and this exit, with the receiver's shape: the code
 			// still takes the read for a string's, and had left at every
@@ -482,10 +485,9 @@ func (r *Runtime) jitPolySeenOp(e *jitEntry, pc int, op jitPropOp) {
 // one whose key the prototype the realm fixed for recv's kind,
 // Number.prototype or Boolean.prototype, has as a plain data property,
 // which the code compiled again reads off that prototype, as a string's
-// off String.prototype (jitFeedback's StringProperty). A site that has met
-// another primitive already is read as StringProperty takes it, the other
-// kinds' receivers left to Go; a method the prototype does not have, Go
-// reads.
+// off String.prototype (jitFeedback's StringProperty), beside the other
+// kinds and the objects the site has met; a method the prototype does not
+// have, Go reads (jitPolySeenOp).
 func (r *Runtime) jitPrimitiveSeen(e *jitEntry, pc int, op *jitPropOp) bool {
 	var sites *[]uint32
 	var proto *Object
@@ -501,7 +503,7 @@ func (r *Runtime) jitPrimitiveSeen(e *jitEntry, pc int, op *jitPropOp) bool {
 		return false
 	}
 	at := uint32(pc)
-	if slices.Contains(e.strSites, at) || slices.Contains(e.bigSites, at) || slices.Contains(e.numSites, at) || slices.Contains(e.boolSites, at) {
+	if slices.Contains(*sites, at) {
 		return false
 	}
 	key := op.key
@@ -511,6 +513,14 @@ func (r *Runtime) jitPrimitiveSeen(e *jitEntry, pc int, op *jitPropOp) bool {
 	}
 	*sites = append(*sites, at)
 	return true
+}
+
+// jitPrimitiveLearned reports whether e's method read at pc learned a
+// primitive's receivers, read off its prototype (jitFeedback's
+// StringProperty).
+func jitPrimitiveLearned(e *jitEntry, pc int) bool {
+	at := uint32(pc)
+	return slices.Contains(e.strSites, at) || slices.Contains(e.bigSites, at) || slices.Contains(e.numSites, at) || slices.Contains(e.boolSites, at)
 }
 
 // jitPolyPrim reports whether e's read at pc met a primitive receiver
@@ -1404,7 +1414,7 @@ func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
 // learn more.
 func jitLearnedCount(e *jitEntry) int {
 	return len(e.failed) + len(e.failedEntries) + len(e.resumed) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
-		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.viaLeaves) + len(e.inlines) + len(e.notInline) +
+		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.genericCalls) + len(e.viaLeaves) + len(e.inlines) + len(e.notInline) +
 		len(e.literals)
 }
 
@@ -4561,31 +4571,62 @@ func (fb *jitFeedback) lexGlobal(name Atom, env *Object, write bool) (ssa.Global
 }
 
 // stringPropertyOf is StringProperty's: the method read at pc, its cache
-// c, of key; big says the interpreter saw it meet a BigInt.
+// c, of key; big says the interpreter saw it meet a BigInt. Its receivers'
+// kinds are those it learned at its exits (jitPrimitiveSeen,
+// jitPolySeenOp) -- a string's first, then a BigInt's, a number's, a
+// boolean's, the others the site's PrimitiveCases -- each read off its
+// prototype where that has the method; or, at a read that learned none,
+// a string's, guessed where the cache knows nothing. A read that has met
+// objects too -- its cache holds a shape, or the code met others at its
+// exits -- answers only for what it learned: the primitives' cases beside
+// the objects', which the code tells apart by the receiver's word, as
+// V8's load ICs keep the HeapNumber map or the String map among an
+// object's maps.
 func (fb *jitFeedback) stringPropertyOf(pc int, c *propCache, key Atom, big bool) (ssa.PropertySite, bool) {
 	e := fb.e
-	if c.shape != nil && c.shape != noShape || slices.ContainsFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc }) {
+	at := uint32(pc)
+	// By kind, in ssa.Primitive's order.
+	learned := [...]bool{
+		ssa.PrimitiveString:  slices.Contains(e.strSites, at),
+		ssa.PrimitiveBigInt:  big || slices.Contains(e.bigSites, at),
+		ssa.PrimitiveNumber:  slices.Contains(e.numSites, at),
+		ssa.PrimitiveBoolean: slices.Contains(e.boolSites, at),
+	}
+	if key.IsIndex() || key == atomLength {
 		return ssa.PropertySite{}, false
 	}
-	proto, kind := fb.r.proto.str, ssa.PrimitiveString
-	str := slices.Contains(e.strSites, uint32(pc))
-	switch {
-	case str:
-	case slices.Contains(e.bigSites, uint32(pc)) || big:
-		// A read that met BigInt receivers and no string: off
-		// BigInt.prototype, which the site names (Holders).
-		proto, kind = fb.r.proto.bigint, ssa.PrimitiveBigInt
-	case slices.Contains(e.numSites, uint32(pc)):
-		// Numbers: off Number.prototype so.
-		proto, kind = fb.r.proto.number, ssa.PrimitiveNumber
-	case slices.Contains(e.boolSites, uint32(pc)):
-		proto, kind = fb.r.proto.boolean, ssa.PrimitiveBoolean
+	if learned == [len(learned)]bool{} {
+		if c.shape != nil && c.shape != noShape || c.fills != 0 || slices.ContainsFunc(e.poly, func(p jitPolySite) bool { return p.pc == at }) ||
+			fb.r.proto.object == nil || fb.r.proto.object.findOwn(key) >= 0 {
+			return ssa.PropertySite{}, false
+		}
+		return fb.primitiveSiteOf(ssa.PrimitiveString, key)
 	}
-	if key.IsIndex() || key == atomLength || proto == nil {
-		return ssa.PropertySite{}, false
+	var site ssa.PropertySite
+	ok := false
+	for kind, met := range learned {
+		if !met {
+			continue
+		}
+		k, kok := fb.primitiveSiteOf(ssa.Primitive(kind), key)
+		switch {
+		case !kok:
+		case !ok:
+			site, ok = k, true
+		default:
+			site.PrimitiveCases = append(site.PrimitiveCases, k)
+		}
 	}
-	if kind == ssa.PrimitiveString && !str &&
-		(c.fills != 0 || fb.r.proto.object == nil || fb.r.proto.object.findOwn(key) >= 0) {
+	return site, ok
+}
+
+// primitiveSiteOf is the read of key off the prototype the realm fixed for
+// a primitive of kind: String.prototype, BigInt.prototype,
+// Number.prototype, Boolean.prototype, which has it as its own data, a
+// BigInt's, a number's and a boolean's naming the prototype as its holder.
+func (fb *jitFeedback) primitiveSiteOf(kind ssa.Primitive, key Atom) (ssa.PropertySite, bool) {
+	proto := fb.r.jitPrimitiveProto(kind)
+	if proto == nil {
 		return ssa.PropertySite{}, false
 	}
 	sh := fb.r.ensureProtoShape(proto)
@@ -4601,6 +4642,20 @@ func (fb *jitFeedback) stringPropertyOf(pc int, c *propCache, key Atom, big bool
 		site.Holders[0] = ssa.Holder{Object: uintptr(unsafe.Pointer(proto)), Shape: site.Shape}
 	}
 	return site, true
+}
+
+// jitPrimitiveProto is the prototype the realm fixed for a primitive of
+// kind, nil while it has none.
+func (r *Runtime) jitPrimitiveProto(kind ssa.Primitive) *Object {
+	switch kind {
+	case ssa.PrimitiveBigInt:
+		return r.proto.bigint
+	case ssa.PrimitiveNumber:
+		return r.proto.number
+	case ssa.PrimitiveBoolean:
+		return r.proto.boolean
+	}
+	return r.proto.str
 }
 
 // writeCases are what the write at pc met at objects of shapes other than

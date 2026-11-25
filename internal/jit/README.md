@@ -1248,6 +1248,25 @@ callee, whose exits all leave their operation to Go, such an exit has the
 code that inlined it compiled again so, and is not counted as the callee's
 leaving.
 
+**Primitive cases.** A method read whose receivers have been strings, BigInts,
+numbers or booleans reads the method off the prototype the realm fixed for
+the kind, where that has it as its own data (`OpStringProp`,
+`ssa.PropertySite`'s `Primitive`; the VM's `jitPrimitiveSeen` learns a kind
+at the exit or the deoptimization that met it), as V8 reads a number's off
+the HeapNumber map's prototype. Each kind is one more case of the site, as a
+V8 IC keeps the HeapNumber or the String map among an object's maps: a site
+that has met several kinds, or objects too -- a shape its cache holds, the
+cases, deep reads or a megamorphic cache the code met at its exits -- tells
+them apart by the receiver's word (`OpTypeIs`, which exits for none of
+these kinds), each kind's read on a branch of its own
+(`PropertySite.PrimitiveCases`), the objects' on the last, all going on
+where they meet. An object met at a read compiled for primitives alone is learned so too,
+its cache filled, the code compiled again with the objects' case. Each
+receiver of a case the code had no read for had left native code at every
+read, the exit teaching nothing once the site had met objects: a number's
+`x.toString()` at a site of a dozen object shapes, 128 exits in every other
+call of 5,000.
+
 **Megamorphic reads.** Only at a site whose cache is megamorphic -- it gave
 up (`maxCacheFills`), its cases are full, or it met what no case holds --
 does a receiver of another shape have its own table searched and look in the
@@ -2689,7 +2708,14 @@ and realm whose template's hint names its function's register link
 `LinkParams` says how many, made undefined, a plain call's receiver
 undefined, an arrow's its captured this. Such a callee is
 given a link and compiled for native callers at the first call Go makes of
-it past the call's targets; one with no code is Go's call. A construction
+it past the call's targets; one with no code is Go's call. A call that met,
+at an exit, a function native callers never call -- a built-in, a bound
+function -- past the functions it calls natively is generic so too
+(`jitRegGenericSeen`, the VM's `jitLearned`'s `genericCalls`), and is
+inlined no more: Go calls such a function from native code, as V8's code
+makes a call whose feedback met a built-in through its generic Call
+builtin. Learned at no exit, `x.toString()` of objects and numbers left at
+every number's call. A construction
 (`new_w`) of a base constructor that does not read `new.target` -- a plain
 function, or a class's constructor with no field to initialize -- is made so
 too, with the constructions its code learned: its receiver taken from a pool

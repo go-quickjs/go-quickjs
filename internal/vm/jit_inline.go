@@ -426,6 +426,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		if w := regAt(c.code, pc); w.Op() == bytecode.RApplyArgs && x.wb+int(w.B())+2 < len(r.stack) {
 			callee, forward = r.stack[x.wb+int(w.B())], true
 		}
+		fn := r.jitRegCallee(c, x.wb, pc)
 		next, ran, err := r.regWhole(f, c, x.wb, pc)
 		if !ran {
 			break
@@ -442,6 +443,10 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		// leaves to Go -- throw new Error(...)'s, a call never seen made
 		// (InlineExit) -- is left so by design, and counts as it did.
 		called := forward && err == nil && r.jitRegCallSeen(f, c, owner, pc, callee)
+		// A call of a function native callers never call, which Go calls
+		// from native code once the owner is compiled again
+		// (jitRegGenericSeen): it had left at each.
+		called = called || err == nil && fn != nil && jitRegGenericSeen(l, pc, fn)
 		// The site met what the code inlining it was not compiled for --
 		// its own code's to be compiled again for too (polyReopt) -- or
 		// a value not a number at a read the code takes for a number's

@@ -905,7 +905,11 @@ func (f *jitRegFeedback) inline(pc int) (ssa.InlineSite, bool) {
 		return ssa.InlineSite{}, false
 	}
 	l := f.fb.e
-	if l != nil && slices.Contains(l.notInline, rpc) {
+	if l != nil && (slices.Contains(l.notInline, rpc) || slices.Contains(l.genericCalls, rpc)) {
+		// Nor one that met a function native callers never call
+		// (jitRegGenericSeen), which an inlined call leaves native code
+		// for: called natively, Go calling that one from native code
+		// (ssa.CallSite's Generic).
 		return ssa.InlineSite{}, false
 	}
 	argc := int(w.X())
@@ -1169,11 +1173,14 @@ func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 		return []ssa.CallSite{site}
 	}
 	if sites := f.regCallSites(pc, w, argc, method); len(sites) != 0 {
-		if l := f.fb.e; w.Op() != bytecode.RNewW && l != nil && jitCountAt(l.nativeCalls, rpc) >= jitCallTargets {
+		if l := f.fb.e; w.Op() != bytecode.RNewW && l != nil && (jitCountAt(l.nativeCalls, rpc) >= jitCallTargets || slices.Contains(l.genericCalls, int32(rpc))) {
 			// As many as it calls natively: any other function it calls
 			// through its link (ssa.CallSite's Generic) -- where Go had
 			// made every call past them, AWFY's Richards' tasks' functions,
-			// which each run makes anew.
+			// which each run makes anew. So too a call that met a function
+			// native callers never call (jitRegGenericSeen), which Go calls
+			// from native code: x.toString() of objects and numbers, where
+			// each number's call had left native code.
 			sites[0].Generic = true
 			sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(f.fb.cl.env)), uintptr(unsafe.Pointer(f.fb.cl.realm))
 			// Typed code's call through a function table: any of its
