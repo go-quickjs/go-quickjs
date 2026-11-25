@@ -21,13 +21,19 @@ func thread(f *Func) {
 	ws := f.ws
 	changed := false
 	// The uses are counted where a block may be threadable and an edge
-	// into it would be threaded, again after a block is threaded.
+	// into it would be threaded, and again where a block is threadable
+	// whose values a threading since may have given uses or taken them
+	// from (stale).
 	counted := false
+	ws.newStale()
 	// The blocks do not change while threading: repairPhis makes values
 	// only.
 	for _, h := range f.Blocks {
 		if h.dead || (h.Kind != BIf && h.Kind != BSwitch) || len(h.Phis) == 0 || !allPure(h) {
 			continue
+		}
+		if counted && ws.anyStale(h.Values) {
+			counted = false
 		}
 		if !counted {
 			if !threadsAny(f, h) {
@@ -35,6 +41,7 @@ func thread(f *Func) {
 			}
 			computeUses(f)
 			counted = true
+			ws.newStale()
 		}
 		if !threadable(f, h) {
 			continue
@@ -59,10 +66,12 @@ func thread(f *Func) {
 			at := ws.vals.take(len(h.Phis))
 			for _, phi := range h.Phis {
 				at = append(at, phi.Args[k])
+				ws.markStale(f, phi.Args[k])
 			}
 			hi := t.predIndex(h)
 			for _, phi := range t.Phis {
 				f.addArg(phi, phi.Args[hi])
+				ws.markStale(f, phi.Args[hi])
 			}
 			p.Succs[slices.Index(p.Succs, h)] = t
 			t.Preds = appendA(&ws.blks, t.Preds, p)
@@ -77,11 +86,42 @@ func thread(f *Func) {
 		removePreds(h, gone)
 		changed = true
 		repairPhis(f, h, ends)
-		counted = false
 	}
 	if changed {
 		removeUnreachable(f)
 	}
+}
+
+// A threading changes the uses of the values its threaded edges bring
+// into H's phis -- which H's phis lose and the uses repairPhis makes of
+// them, and of phis, gain -- and of those the target's phis read on the
+// edge from H, which they read on the new edges too: those it marks
+// stale. No other value but phis gains or loses a use.
+
+// newStale marks no value stale.
+func (ws *workspace) newStale() {
+	if ws.staleStamp++; ws.staleStamp == 0 {
+		clear(ws.stale)
+		ws.staleStamp = 1
+	}
+}
+
+// markStale marks v stale.
+func (ws *workspace) markStale(f *Func, v *Value) {
+	if n := f.NumValues(); len(ws.stale) < n {
+		ws.stale = append(ws.stale, make([]uint32, n-len(ws.stale))...)
+	}
+	ws.stale[v.ID] = ws.staleStamp
+}
+
+// anyStale reports whether any of vs is stale.
+func (ws *workspace) anyStale(vs []*Value) bool {
+	for _, v := range vs {
+		if int(v.ID) < len(ws.stale) && ws.stale[v.ID] == ws.staleStamp {
+			return true
+		}
+	}
+	return false
 }
 
 // threadTarget is the block the edge from h's predecessor k would be

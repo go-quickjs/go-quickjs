@@ -53,16 +53,20 @@ type workspace struct {
 	bcePaths bcePaths
 
 	// Jump threading's: the predecessors threaded, the threaded edges,
-	// the uses within a block of its values (marked with stamp), and
-	// repairPhis' variables, values at blocks' starts and phis made.
-	gone      []int32
-	ends      threadEnds
-	stamp     uint32
-	localMark []uint32
-	localUses []int32
-	vars      []int32
-	start     startTable
-	made      []madePhi
+	// the uses within a block of its values (marked with stamp), the
+	// values whose uses may have changed since they were counted (marked
+	// with staleStamp), and repairPhis' variables, values at blocks'
+	// starts and phis made.
+	gone       []int32
+	ends       threadEnds
+	stamp      uint32
+	localMark  []uint32
+	localUses  []int32
+	stale      []uint32
+	staleStamp uint32
+	vars       []int32
+	start      startTable
+	made       []madePhi
 
 	// forwardGlobals' state, and the loops the builder made.
 	fw         fwState
