@@ -1552,8 +1552,10 @@ name is made nowhere but at an exit, which makes the value of the unboxed
 BigInt (`abi.ExitLoc`'s `IsBig`), as V8's deoptimizer materializes one.
 
 The rest -- BigInts on the heap -- Go makes from native code
-(`ssa.GoArith`), giving back what the interpreter would of its operands'
-blocks (`ssa.CallSite`'s `Release`). A sum, a difference, a product, a
+(`ssa.GoArith`), in the root or in a callee inlined -- a pure body's
+operator of an operand native code unboxed among them, once its
+speculation has failed -- giving back what the interpreter would of the
+root's operands' blocks (`ssa.CallSite`'s `Release`). A sum, a difference, a product, a
 quotient or a remainder is made first by the VM's leaf (`abi.Encoding`'s
 `BigFast`, `jitBigLeaf`), in fewer steps than Go's call: native code reaches
 it as it reaches `callGo`, through a routine the Go runtime sees as

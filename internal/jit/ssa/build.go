@@ -5634,12 +5634,21 @@ func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Opera
 	return r
 }
 
-// goArithAt reports whether the root's operator op at pc met BigInts
-// (BigIntFeedback) and is generic, or has no native form for BigInts held
-// in their values (bigNative): Go makes it from native code (GoArith). A
-// generic addition is GoAdd's, a comparison GoCompare's.
-func (b *builder) goArithAt(pc int, op ir.Operator) bool {
-	switch op {
+// goArithAt reports whether in, the operator at pc of the frame being
+// built -- the root's, or a callee's inlined, whose own feedback the
+// builder asks -- met BigInts (BigIntFeedback) and is generic, or has no
+// native form for BigInts held in their values (bigNative): Go makes it
+// from native code (GoArith), which gives back no block of an inlined
+// callee's (bigRelease). In a pure body, whose sites the interpreter never
+// marks, an operand native code has unboxed already, a BigInt typed
+// array's element, is a BigInt whatever the site met, as for bigNative:
+// map's (x) => x * 2n over a BigInt64Array, inlined in map's loop, had
+// left native code at its first product past the int64 range at every
+// call once its speculation failed, as V8's code calls its BigInt
+// multiply once its feedback is no BigInt64's. A generic addition is
+// GoAdd's, a comparison GoCompare's.
+func (b *builder) goArithAt(pc int, in ir.Instruction, operand func(ir.Operand) *Value) bool {
+	switch op := in.Operator; op {
 	case ir.Sub, ir.Mul:
 		if !b.generic(pc) {
 			return false
@@ -5649,7 +5658,11 @@ func (b *builder) goArithAt(pc int, op ir.Operator) bool {
 		return false
 	}
 	fb, ok := b.fb.(BigIntFeedback)
-	return ok && b.cur == b.root && fb.BigInt(pc) && b.goCalls()
+	if !ok || !b.goCalls() {
+		return false
+	}
+	return fb.BigInt(pc) || b.pureBody() && in.Left.Slot >= 0 && in.Right.Slot >= 0 &&
+		(boxedBig(operand(in.Left)) != nil || boxedBig(operand(in.Right)) != nil)
 }
 
 // goArith makes in, at a site goArithAt names, by a call of Go from native
@@ -8347,7 +8360,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, v)
 			break
 		}
-		if b.goArithAt(pc, in.Operator) {
+		if b.goArithAt(pc, in, operand) {
 			b.assign(in.Dest, blk, b.goArith(blk, in, operand, guard))
 			break
 		}
