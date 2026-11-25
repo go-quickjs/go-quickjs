@@ -64,6 +64,7 @@ var (
 	offLinks     = int32(unsafe.Offsetof(wjit.Ctx{}.Links))
 	offMemBase   = int32(unsafe.Offsetof(wjit.Ctx{}.MemBase))
 	offMemSize   = int32(unsafe.Offsetof(wjit.Ctx{}.MemSize))
+	offMemLimit  = int32(unsafe.Offsetof(wjit.Ctx{}.MemLimit))
 	offGlobals   = int32(unsafe.Offsetof(wjit.Ctx{}.Globals))
 	offTables    = int32(unsafe.Offsetof(wjit.Ctx{}.Tables))
 	offInst      = int32(unsafe.Offsetof(wjit.Ctx{}.Inst))
@@ -496,6 +497,19 @@ func (g *gen) done(v *Value, r int) {
 	g.move(loc{kind: lSlot, slot: s}, src, v.Type)
 }
 
+// checkEnd is the end plain access v checks past its address, the
+// farthest of a widened check's, or 0 where it checks none.
+func (g *gen) checkEnd(v *Value) uint64 {
+	if v.Wide != 0 {
+		w := wideChecks(g.f, v)
+		return w[len(w)-1].end
+	}
+	if v.NoCheck {
+		return 0
+	}
+	return v.Aux + uint64(v.Size)
+}
+
 // imm32 reports whether constant c is an immediate of a 32-bit operation,
 // or, wide, of a 64-bit one, which sign-extends it.
 func imm32(c uint64, wide bool) (int32, bool) {
@@ -568,6 +582,10 @@ const (
 	// the farthest end it checked: it traps at the first of the accesses
 	// the check covers whose end is past the memory's.
 	stubTrapWide
+	// stubCheck is the exact check of access v, whose address is in dst,
+	// where the address is past the memory's limit (Ctx.MemLimit): it
+	// traps as v's check does, or goes back to the access at to.
+	stubCheck
 )
 
 // stub emits out-of-line code.
@@ -589,6 +607,23 @@ func (g *gen) stub(st *stub) {
 		a.Bind(st.l)
 		g.mark("cold trap")
 		g.storeCtx(offArg0+8, uint64(st.at))
+		a.Jmp(st.to)
+	case stubCheck:
+		a.Bind(st.l)
+		g.mark("cold check")
+		v := st.v
+		if v.Wide != 0 {
+			w := wideChecks(g.f, v)
+			wide := a.NewLabel()
+			g.ool = append(g.ool, stub{kind: stubTrapWide, l: wide, v: v})
+			a.Lea(s0, st.dst, int32(w[len(w)-1].end))
+			a.CmpMem(s0, rCtx, offMemSize, true)
+			a.Jcc(amd64.CondA, wide)
+		} else {
+			a.Lea(s0, st.dst, int32(v.Aux+uint64(v.Size)))
+			a.CmpMem(s0, rCtx, offMemSize, true)
+			a.Jcc(amd64.CondA, g.trap(wjit.TrapMemOutOfBounds, v.At))
+		}
 		a.Jmp(st.to)
 	case stubTrapWide:
 		a.Bind(st.l)
@@ -1952,7 +1987,15 @@ func (g *gen) address(v *Value) amd64.Reg {
 		return s1
 	}
 	r = g.intoG(addr, s1)
-	if v.Wide != 0 {
+	if far := g.checkEnd(v); far != 0 && far <= wjit.MemLimitSlack {
+		// The address against the memory's size less the slack: one
+		// comparison, the exact check out of line where it fails.
+		l, back := a.NewLabel(), a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubCheck, l: l, to: back, v: v, dst: r})
+		a.CmpMem(r, rCtx, offMemLimit, true)
+		a.Jcc(amd64.CondG, l)
+		a.Bind(back)
+	} else if v.Wide != 0 {
 		// The check of the accesses after it too: s0 their farthest end,
 		// which the stub takes back to each's.
 		w := wideChecks(g.f, v)

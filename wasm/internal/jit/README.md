@@ -262,7 +262,8 @@ and X0 on arm64:
 - `L`: the running frame's slots, set before entry and stored at every exit.
 - `Links`: the Code's link table, each function index's native entry or 0.
 - `MemBase`, `MemSize`: memory 0's first byte and size, set before every
-  entry; a shared memory's size is read through `MemSizePtr` at each
+  entry, with `MemLimit`, the size less `MemLimitSlack` (4,096 bytes),
+  which the optimizing tier's code compares an address with; a shared memory's size is read through `MemSizePtr` at each
   access, as other threads grow it. Only Go grows a memory, so the code
   reloads the base after every exit and reads the size from the context
   (amd64) or reloads it with the base (arm64).

@@ -809,7 +809,19 @@ register forms.
 An access of memory 0, unshared and of i32 addresses (`plainAccess`),
 computes its end, `address + offset + size`, in R11 and compares it with
 the context's memory size, unless `NoCheck`, where the offset plus the
-size is within 2^31-1. The access is `[R15 + address + offset]`,
+size is within 2^31-1. Where that end past the address -- the offset
+plus the size, or a widened check's farthest -- is 4,096 bytes or less
+(`wjit.MemLimitSlack`), the address itself is compared with the
+context's `MemLimit`, the memory's size less 4,096, signed, so that a
+memory smaller than that fails it: one comparison of a register with
+the context, CMP and JG; past the limit, out of line
+(`stubCheck`), the end is made and checked exactly and the code goes
+back to the access, or traps as the check does. Nearly every access of
+the Go program's is within 4,096 bytes of its address; their checks were
+a sixth of json's and regexp's samples, and with the end no longer made
+in R11 before each the steady state went, optimized, ms: json 20.5 to
+19.5, regexp 22.0 to 20.7, sha256 41.6 to 37.4, gzip 17.5 to 16.7,
+interp 9.9 to 9.6, sort 88.9 to 87.0. The access is `[R15 + address + offset]`,
 the address in a register (an i32 there has its upper half clear). On
 arm64 the address plus the offset is made in X17, in 64 bits, where the
 offset is not 0, the end in X16 and compared with X21, and the access is

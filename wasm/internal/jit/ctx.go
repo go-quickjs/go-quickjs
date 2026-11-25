@@ -109,7 +109,16 @@ type Ctx struct {
 	// staying in Save. It is at a multiple of 16 bytes from the context's
 	// start, which arm64's 16-byte loads and stores scale their offsets by.
 	SaveV [2 * 32]uint64
+	// MemLimit is memory 0's size less MemLimitSlack, negative where the
+	// memory is smaller, set with MemSize: an i32 address at or below it
+	// is that of an access of MemLimitSlack bytes or fewer within the
+	// memory, which the optimizing tier's code tests with one comparison.
+	MemLimit int64
 }
+
+// MemLimitSlack is the most bytes past its address an access may reach
+// for the test against Ctx.MemLimit to be enough.
+const MemLimitSlack = 4096
 
 // InlineDepth is how many calls deep the optimizing tier inlines calls at
 // most. Native code runs only in a frame whose calls that many deep are

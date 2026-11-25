@@ -1230,6 +1230,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			m := inst.Memories[0]
 			ctx.MemBase = uintptr(m.Base())
 			ctx.MemSize = m.Size()
+			ctx.MemLimit = int64(ctx.MemSize) - wjit.MemLimitSlack
 			ctx.MemSizePtr = uintptr(unsafe.Pointer(&m.size))
 			if len(inst.Memories) > 1 {
 				ctx.Mems = lv.memTable(inst.Memories)
