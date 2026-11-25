@@ -514,7 +514,7 @@ func TestFileIO(t *testing.T) {
 	h.expect("ESUCCESS", "fd_fdstat_set_rights", fd, 0, 0)
 	h.expect("ENOTCAPABLE", "fd_read", fd, scratch, 0, out)
 	// A directory's rights restrict the paths under it.
-	dfd, _ := h.open(preopen, ".", oDirectory, 0, 0)
+	dfd, _ := h.open(preopen, ".", oDirectory, ^uint64(rightWrite), 0)
 	h.expect("ESUCCESS", "fd_fdstat_get", dfd, out)
 	h.expect("ESUCCESS", "fd_fdstat_set_rights", dfd, h.u64(out+8)&^(1<<19), h.u64(out+16))
 	if _, errno := h.open(dfd, "f.txt", oTrunc, rightRead|rightWrite, 0); errno != "ENOTCAPABLE" {
@@ -922,6 +922,68 @@ func TestReadOnlyFS(t *testing.T) {
 		t.Errorf("open b.txt from dir: %s", errno)
 	} else if errno, s := h.read(fd, 10); errno != "ESUCCESS" || s != "beta" {
 		t.Errorf("read b.txt: %s %q", errno, s)
+	}
+}
+
+// TestPathOpenGrantsRightsAsked checks that a descriptor path_open makes
+// has the rights it was asked for, but for those that do not apply to the
+// type of the file opened, and that a directory asked to be opened for
+// writing fails with EISDIR.
+func TestPathOpenGrantsRightsAsked(t *testing.T) {
+	dir, h := mountDir(t)
+	os.WriteFile(filepath.Join(dir, "f"), []byte("data"), 0o644)
+	os.Mkdir(filepath.Join(dir, "d"), 0o755)
+	const (
+		fdSeek    = 1 << 2
+		fdReaddir = 1 << 14
+		pathOpen  = 1 << 13
+		all       = 1<<30 - 1
+	)
+	open := func(path string, oflags, base, inheriting uint64) (uint64, string) {
+		t.Helper()
+		p, n := h.str(scratch, path)
+		errno := h.call("path_open", preopen, 1, p, n, oflags, base, inheriting, 0, out)
+		return uint64(h.u32(out)), errno
+	}
+	rights := func(fd uint64) (uint64, uint64) {
+		t.Helper()
+		h.expect("ESUCCESS", "fd_fdstat_get", fd, out)
+		return h.u64(out + 8), h.u64(out + 16)
+	}
+	for _, c := range []struct {
+		path              string
+		oflags            uint64
+		base, inheriting  uint64
+		wantBase, wantInh uint64
+		wantBaseNot       uint64
+	}{
+		{"f", 0, rightRead | fdSeek, 0, rightRead | fdSeek, 0, 0},
+		{"f", 0, rightRead | fdSeek | pathOpen | fdReaddir, all, rightRead | fdSeek, 0, 0},
+		{"f", 0, 0, 0, 0, 0, 0},
+		{"d", oDirectory, rightRead | fdSeek | fdReaddir | pathOpen, rightRead, fdReaddir | pathOpen, rightRead, 0},
+	} {
+		fd, errno := open(c.path, c.oflags, c.base, c.inheriting)
+		if errno != "ESUCCESS" {
+			t.Errorf("open %s with %#x: %s", c.path, c.base, errno)
+			continue
+		}
+		if b, i := rights(fd); b != c.wantBase || i != c.wantInh {
+			t.Errorf("open %s with %#x, %#x: rights %#x, %#x; want %#x, %#x", c.path, c.base, c.inheriting, b, i, c.wantBase, c.wantInh)
+		}
+		h.call("fd_close", fd)
+	}
+	// Rights reported are not enforced until the module drops some: a file
+	// opened with none still reads.
+	fd, _ := open("f", 0, 0, 0)
+	if errno, s := h.read(fd, 4); errno != "ESUCCESS" || s != "data" {
+		t.Errorf("read of a file opened with no rights: %s %q", errno, s)
+	}
+	h.call("fd_close", fd)
+	// A directory is not opened for writing, with O_DIRECTORY or without.
+	for _, oflags := range []uint64{oDirectory, 0} {
+		if _, errno := open("d", oflags, rightRead|rightWrite, 0); errno != "EISDIR" {
+			t.Errorf("open a directory with oflags %d for writing: %s, want EISDIR", oflags, errno)
+		}
 	}
 }
 

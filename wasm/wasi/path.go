@@ -165,7 +165,7 @@ func pathLink(c *call, p []uint64) sysfs.Errno {
 }
 
 func pathOpen(c *call, p []uint64) sysfs.Errno {
-	dirflags, oflags, base, fdflags := uint32(p[1]), uint32(p[4]), p[5], uint32(p[7])
+	dirflags, oflags, base, inheriting, fdflags := uint32(p[1]), uint32(p[4]), p[5], p[6], uint32(p[7])
 	right := uint64(rightPathOpen)
 	if oflags&oflagCreat != 0 {
 		right |= rightPathCreateFile
@@ -226,7 +226,11 @@ func pathOpen(c *call, p []uint64) sysfs.Errno {
 			return errno
 		}
 	}
+	// The descriptor has the rights asked for, but for those that do not
+	// apply to the type of the file opened.
 	rb, ri := defaultRights(filetype(st.Mode))
+	rb &= base
+	ri &= inheriting
 	if !isDir {
 		if !fl.Read {
 			rb &^= rightFdRead

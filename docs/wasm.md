@@ -226,7 +226,11 @@ file IDs, so that `d_ino` matches the inode a stat reports.
   goroutines and timers run on it.
 - Rights are reported, and enforced once a module drops some with
   `fd_fdstat_set_rights`: what needs a dropped right fails with
-  `ENOTCAPABLE`.
+  `ENOTCAPABLE`. `path_open` grants the rights asked for, but those that do
+  not apply to the type of the file opened. A directory asked to be opened
+  with `FD_WRITE` fails with `EISDIR`, with `O_DIRECTORY` or without, as
+  POSIX's `open` does and wasi-testsuite expects of a host other than
+  Windows.
 - The clocks of process and thread CPU time fail with `EINVAL`, and
   `proc_raise` with `ENOSYS`.
 - There are no sockets: the `sock_*` functions fail with `EBADF` for a
