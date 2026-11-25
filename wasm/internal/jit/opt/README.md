@@ -1230,15 +1230,23 @@ constructs come from chunks, and the small lists -- a value's arguments,
 a block's values, phis and edges, a switch's table, the constants
 `narrow` makes, a copy's argument -- from arenas (`arena.go`), both
 emptied for the next compile. What is by value or block is a table by
-ID. The locals' values at the blocks' ends are a `grid` (`table.go`): a
+ID, and the lists a compile makes are copied an element at a time: a
+copy of a slice of pointers, or an append of one, is a call of the
+runtime's copy, which a list of a few costs more than its stores. The
+locals' values at the blocks' ends are a `grid` (`table.go`): a
 row of a column for each local for every block, its entries those marked
 with the compile's stamp -- the Go program's functions have fewer than 32
 locals and about 600 such pairs each; `repairPhis`' values of the
 threaded block's phis at the blocks' starts are an array of an entry for
 each phi and block, where they make 65,536 or fewer; the edges
-`loopDepths` cuts are marks by edge. The maps that are left -- those two
-where they would be too large, `bce`'s ends checked, the lowering's trap
-stubs and poll exits -- are `u64map`s, open-addressed by a uint64 key, a
+`loopDepths` cuts are marks by edge; `bce`'s ends checked of memory 0's
+addresses are an array by ID. A table a pass leaves as it found it --
+GVN's heads, popped as its walk leaves their blocks, and `bce`'s ends,
+put back as its walk does -- is not emptied again for the next compile.
+The maps that are left -- those two where they would be too large, `bce`'s
+ends of the other memories, the lowering's trap stubs, made for the
+function's values at once, and poll exits -- are `u64map`s,
+open-addressed by a uint64 key, a
 slot an entry only while its stamp is the table's, so that emptying one
 is a new stamp where a Go map's clear costs its capacity. The allocator
 is an `lsra.Allocator` kept there, with its own tables and arenas, and
@@ -1250,8 +1258,12 @@ graph changes (`order`), its dominance a test of its walk's numbers;
 GVN's table is a hash table of chains whose entries are popped as the
 walk leaves their blocks; `copyelim` stops after the phis where no copy
 is left, and rewrites the uses and drops the copies in one walk; `thread`
-removes the predecessors it threads together and counts the uses only
-where a block may thread; `dce` counts them again only after removing
+removes the predecessors it threads together, counts the uses only where
+a block may thread and an edge into it would be threaded, and after a
+threading counts them again only where a block's values are among those
+it gave uses or took them from -- the arguments its edges brought into H's
+phis and the target's phis read; `dce` drops values only from the blocks
+it found dead ones in, and counts the uses again only after removing
 phis that only themselves used; the last pass finds the natural loops --
 over a dominator tree the split edges would have it compute again --
 only for a listing, which alone prints their headers: the allocator
@@ -1270,9 +1282,12 @@ clobbers before each position giving each range's; a few ranges are
 tested and merged against many by searches; the webs and the pairs to
 coalesce are ordered by counting sorts; what splitting knows of a web --
 its ranges as they were, its holes, its events -- is apart from it
-(`webSplit`), made for the webs it plans holes in; and the events, each
+(`webSplit`), made for the webs it plans holes in; the events, each
 register's uses and definitions by position, are found in one walk and
-placed by a counting sort.
+placed by a counting sort, and a web's merged from its members' runs.
+The assembler writes each jump's displacement that keeps 32 bits as it
+moves the code down over what the shortened ones remove, and a label's
+place in the code made when it is asked for.
 
 `TestOptCompileCorpus` measures it (Validation). On the Go program
 `internal/cmd/wasmbench` builds -- 3,011 functions, 3.77 MB of body -- a
@@ -1586,8 +1601,16 @@ to 20.4 and 23.6 to 19.9; first runs and the baseline's level, the
 micro-benchmarks level. Node 26 on the same CPUs: json 20.4 (TurboFan
 alone 18.6), steady 17.3; regexp 23.3 (21.9), steady 21.3. The Go
 program's code is 9% larger (36.1 MB), most of it each check's exact
-check out of line, and its compiles 3% longer, bce's 4.3 µs a function
-where it was 3.0.
+check out of line, and its compiles were 2% longer, bce's 4.35 µs a
+function where it was 3.14, encode's 4.09 where it was 3.32. The compile's
+cost worked on after (The compile's cost: the arenas' copies, bce's ends,
+the threading's and dce's counts, the assembler's displacements), they
+take 167.9 µs a function where bed71e54's took 174.0 (the median of 5
+runs of each in turns, `TestOptCompileCorpus`, 10 compiles of each
+function): build 21.0 to 19.1, thread 14.8 to 12.5, describe 10.5 to
+9.8, loops 3.5 to 3.0, scan 17.0 to 16.5, bce 3.14 to 3.22, emit 24.9 to
+25.4, encode 3.32 to 3.43, the others within 2%; the code is the same,
+function by function.
 
 `BenchmarkOptMemories` (`wasm/internal/engine`) times ten passes over
 64 KiB of a memory -- a load, a store and a load at offset 4 every 8 bytes
