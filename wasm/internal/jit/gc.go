@@ -534,10 +534,7 @@ const (
 func (c *compiler) heapTestOf(h module.HeapType) (test heapTest, canon uint32, depth int) {
 	if h.IsIndex() {
 		ci := c.m.Canonical[h.Index()]
-		for s := module.Canonical(ci).Super; s != module.NoCanonical; s = module.Canonical(s).Super {
-			depth++
-		}
-		return testIndex, uint32(ci), depth
+		return testIndex, uint32(ci), int(module.Canonical(ci).Depth)
 	}
 	switch h {
 	case module.HeapAny, module.HeapExtern, module.HeapFunc, module.HeapExn:

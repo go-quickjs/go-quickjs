@@ -620,15 +620,18 @@ func (md *moduleDecoder) decodeTypeSection() {
 
 func (md *moduleDecoder) finalizeRecGroup(start, size uint32) {
 	m := md.m
+	// A supertype comes before its subtypes, so the group's types are
+	// linked in order, each before a check that may compare them.
+	for i := start; i < start+size; i++ {
+		module.LinkSupertype(m, i)
+	}
 	module.Canonicalize(m, start, size)
 	for i := start; md.ok() && i < start+size; i++ {
 		t := &m.Types[i]
 		if t.Super == module.NoSuper {
 			continue
 		}
-		depth := m.Types[t.Super].Depth + 1
-		t.Depth = depth
-		if depth > md.lim.SubtypingDepth {
+		if t.Depth > md.lim.SubtypingDepth {
 			md.errorf(md.pc, "type %d: subtyping depth is greater than allowed", i)
 			return
 		}

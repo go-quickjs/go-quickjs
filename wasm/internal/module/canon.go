@@ -17,10 +17,12 @@ const NoCanonical = ^CanonicalIndex(0)
 // CanonicalType is a canonical type definition. The heap types of the
 // references in it are canonical indices.
 type CanonicalType struct {
-	Kind   TypeKind
-	Final  bool
-	Super  CanonicalIndex
-	Depth  uint32
+	Kind  TypeKind
+	Final bool
+	Super CanonicalIndex
+	Depth uint32
+	// jump is a type of the chain of supertypes, as TypeDef.Jump is.
+	jump   CanonicalIndex
 	Func   *FuncType
 	Struct *StructType
 	Array  *ArrayType
@@ -50,12 +52,20 @@ func IsCanonicalSubtype(sub, super CanonicalIndex) bool {
 	}
 	canon.RLock()
 	defer canon.RUnlock()
-	for i := canon.types[sub].Super; i != NoCanonical; i = canon.types[i].Super {
-		if i == super {
-			return true
+	d := canon.types[super].Depth
+	i := sub
+	if canon.types[i].Depth <= d {
+		return false
+	}
+	for canon.types[i].Depth > d {
+		t := &canon.types[i]
+		if canon.types[t.jump].Depth >= d {
+			i = t.jump
+		} else {
+			i = t.Super
 		}
 	}
-	return false
+	return i == super
 }
 
 // keyWriter encodes a recursion group so that two groups have the same key
@@ -154,10 +164,30 @@ func Canonicalize(m *Module, start, size uint32) {
 		canon.groups[key] = base
 		for i := start; i < start+size; i++ {
 			canon.types = append(canon.types, canonicalDef(m, &m.Types[i], start, base))
+			linkCanonicalSupertype(CanonicalIndex(len(canon.types) - 1))
 		}
 	}
 	for i := uint32(0); i < size; i++ {
 		m.Canonical[start+i] = base + CanonicalIndex(i)
+	}
+}
+
+// linkCanonicalSupertype sets the depth and the jump of canonical type c,
+// whose supertype's are set, as LinkSupertype does a module's type's. The
+// canonicalizer's lock is held.
+func linkCanonicalSupertype(c CanonicalIndex) {
+	t := &canon.types[c]
+	if t.Super == NoCanonical {
+		t.Depth, t.jump = 0, c
+		return
+	}
+	p := &canon.types[t.Super]
+	t.Depth, t.jump = p.Depth+1, t.Super
+	if p.Depth > 0 {
+		j := &canon.types[p.jump]
+		if p.Depth-j.Depth == j.Depth-canon.types[j.jump].Depth {
+			t.jump = j.jump
+		}
 	}
 }
 

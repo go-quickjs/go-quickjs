@@ -11,6 +11,54 @@ package module
 // canonical index, so that types of different recursion groups or modules
 // that are the same type are related as one.
 
+// A chain of declared supertypes is as long as a module's types are many,
+// so a subtype check does not walk it a link at a time: each type has, with
+// its depth, a jump to a type of its chain, the jumps laid as a skew-binary
+// ladder, which finds the type of the chain at a depth in steps logarithmic
+// in the depth. Two types of the same canonical index have chains of the
+// same canonical indices, so a type is a subtype of another exactly when
+// the type of its chain at the other's depth has the other's canonical
+// index.
+
+// LinkSupertype sets the depth and the jump of type i of m, whose
+// supertype's are set. The jump is the supertype, or, when the spans of the
+// supertype's jump and of its jump's are of one length, the end of the two:
+// each jump then spans 2^k-1 links for some k, and a chain is crossed in a
+// logarithmic number of them.
+func LinkSupertype(m *Module, i uint32) {
+	t := &m.Types[i]
+	if t.Super == NoSuper {
+		t.Depth, t.Jump = 0, i
+		return
+	}
+	p := &m.Types[t.Super]
+	t.Depth, t.Jump = p.Depth+1, t.Super
+	if p.Depth > 0 {
+		j := &m.Types[p.Jump]
+		jj := p.Jump
+		if j.Depth > 0 {
+			jj = j.Jump
+		}
+		if p.Depth-j.Depth == j.Depth-m.Types[jj].Depth {
+			t.Jump = jj
+		}
+	}
+}
+
+// ancestor returns the type of m at depth d of type i's chain of declared
+// supertypes, d at most i's depth.
+func ancestor(m *Module, i, d uint32) uint32 {
+	for m.Types[i].Depth > d {
+		t := &m.Types[i]
+		if m.Types[t.Jump].Depth >= d {
+			i = t.Jump
+		} else {
+			i = t.Super
+		}
+	}
+	return i
+}
+
 // upcast returns the abstract heap type a heap type is a subtype of
 // directly: struct, array or func for an index, the heap type itself
 // otherwise.
@@ -74,17 +122,11 @@ func IsHeapSubtype(sub, super HeapType, subMod, superMod *Module) bool {
 			}
 			return abstractSubtype(sub, upcast(super, superMod))
 		}
-		want := superMod.Canonical[super]
-		i := uint32(sub)
-		for {
-			if subMod.Canonical[i] == want {
-				return true
-			}
-			i = subMod.Types[i].Super
-			if i == NoSuper {
-				return false
-			}
+		d := superMod.Types[super].Depth
+		if subMod.Types[sub].Depth < d {
+			return false
 		}
+		return subMod.Canonical[ancestor(subMod, uint32(sub), d)] == superMod.Canonical[super]
 	}
 	return abstractSubtype(upcast(sub, subMod), super)
 }
@@ -260,11 +302,22 @@ func commonAncestor(h1, h2 HeapType, m *Module) (HeapType, bool) {
 		return h1, true
 	}
 	if h1.IsIndex() && h2.IsIndex() {
-		// Walk h1's chain of supertypes for the first one above h2.
-		for i := m.Types[h1].Super; i != NoSuper; i = m.Types[i].Super {
-			if IsHeapSubtypeOf(h2, HeapType(i), m) {
-				return HeapType(i), true
+		// The deepest type of h1's chain that is h2's at its depth: a type
+		// of the chains' common part has the common part above it.
+		match := func(d uint32) bool {
+			return m.Canonical[ancestor(m, uint32(h1), d)] == m.Canonical[ancestor(m, uint32(h2), d)]
+		}
+		if match(0) {
+			lo, hi := uint32(0), min(m.Types[h1].Depth, m.Types[h2].Depth)
+			for lo < hi {
+				mid := hi - (hi-lo)/2
+				if match(mid) {
+					lo = mid
+				} else {
+					hi = mid - 1
+				}
 			}
+			return HeapType(ancestor(m, uint32(h1), lo)), true
 		}
 	}
 	a1, a2 := upcast(h1, m), upcast(h2, m)

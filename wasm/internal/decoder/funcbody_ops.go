@@ -940,15 +940,30 @@ func (v *funcValidator) decodeBrTable() int {
 	if !v.validateBrTableCount(v.pc+1, count) {
 		return 0
 	}
-	ctrlDepth := uint32(len(v.ctrl))
-	var seen []bool
-	var seenBuf [32]bool
-	if ctrlDepth <= 32 {
-		seen = seenBuf[:ctrlDepth]
-	} else {
-		seen = make([]bool, ctrlDepth)
+	p, ok := v.brTableTargets(v.pc+1+n, count)
+	// The depths named are marked reached, and their marks cleared.
+	for _, d := range v.brTargets {
+		v.brSeen[d] = false
+		if ok && v.reachableOK {
+			v.controlAt(d).brMerge().reached = true
+		}
 	}
-	p := v.pc + 1 + n
+	v.brTargets = v.brTargets[:0]
+	if !ok {
+		return 0
+	}
+	v.endControl()
+	return p - v.pc
+}
+
+// brTableTargets checks the count+1 targets of a br_table read from p,
+// each depth once, and returns where they end and whether they are valid.
+// It marks the depths it checks in v.brSeen and lists them in v.brTargets.
+func (v *funcValidator) brTableTargets(p int, count uint32) (int, bool) {
+	ctrlDepth := uint32(len(v.ctrl))
+	if uint32(len(v.brSeen)) < ctrlDepth {
+		v.brSeen = make([]bool, max(ctrlDepth, 2*uint32(len(v.brSeen)), 32))
+	}
 	arity := uint32(0)
 	for i := uint32(0); v.ok() && i <= count; i++ {
 		pos := p
@@ -959,32 +974,25 @@ func (v *funcValidator) decodeBrTable() int {
 		}
 		if target >= ctrlDepth {
 			v.errorf(pos, "invalid branch depth: %d", target)
-			return 0
+			return p, false
 		}
-		if seen[target] {
+		if v.brSeen[target] {
 			continue
 		}
-		seen[target] = true
+		v.brSeen[target] = true
+		v.brTargets = append(v.brTargets, target)
 		c := v.controlAt(target)
 		if i == 0 {
 			arity = c.brMerge().arity
 		} else if c.brMerge().arity != arity {
 			v.errorf(pos, "br_table: label arity inconsistent with previous arity %d", arity)
-			return 0
+			return p, false
 		}
 		if !v.typeCheckBranch(c, false, false) {
-			return 0
+			return p, false
 		}
 	}
-	if v.reachableOK {
-		for d := uint32(0); d < ctrlDepth; d++ {
-			if seen[d] {
-				v.controlAt(d).brMerge().reached = true
-			}
-		}
-	}
-	v.endControl()
-	return p - v.pc
+	return p, true
 }
 
 func (v *funcValidator) decodeBrOnNull() int {

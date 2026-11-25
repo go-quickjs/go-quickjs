@@ -347,6 +347,9 @@ type TypeDef struct {
 	RecStart, RecSize uint32
 	// Depth is the length of the chain of declared supertypes above the type.
 	Depth uint32
+	// Jump is a type of that chain from which the type of any depth of it
+	// is found in steps logarithmic in its length (LinkSupertype).
+	Jump uint32
 }
 
 // Name returns a type definition kind's name.

@@ -80,8 +80,12 @@ func JSAPILimits() *Limits {
 // CoreLimits returns limits for the core specification alone, which has
 // none of the interface's: counts up to 1<<27, memories and tables up to the
 // largest their address types allow, a module up to what its offsets
-// address (MaxModuleSize). The bounds on a function body stay
-// those of V8Limits, since they also bound what validating a function costs.
+// address (MaxModuleSize). The bounds on a function -- its size, its
+// locals, its parameters and results -- stay those of V8Limits, since they
+// also bound what validating a function costs. The counts raised cost what
+// the bytes that declare them do: a br_table's targets, a struct's fields
+// and array.new_fixed's operands are each read from the module, and a check
+// against a chain of supertypes takes steps logarithmic in its length.
 func CoreLimits() *Limits {
 	const count = 1 << 27
 	l := V8Limits()

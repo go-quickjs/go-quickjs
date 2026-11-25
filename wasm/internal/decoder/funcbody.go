@@ -144,9 +144,16 @@ type funcValidator struct {
 
 	// maxStack is the most operands after an instruction of code that is
 	// not unreachable; refs says a reference was pushed, and tries is the
-	// deepest nesting of legacy trys (module.FrameBound).
-	maxStack, tries int
-	refs            bool
+	// deepest nesting of legacy trys (module.FrameBound), openTries how many
+	// are open.
+	maxStack, tries, openTries int
+	refs                       bool
+
+	// brSeen marks the depths a br_table has named so far, brTargets lists
+	// them, so that only those are cleared after it: both are kept from one
+	// br_table to the next.
+	brSeen    []bool
+	brTargets []uint32
 }
 
 type localDecl struct {
@@ -165,7 +172,7 @@ func (v *funcValidator) reset(b []byte, pc, end int) {
 	v.reachableOK = true
 	v.endFound = false
 	v.hasNonDefaultable = false
-	v.maxStack, v.tries, v.refs = 0, 0, false
+	v.maxStack, v.tries, v.openTries, v.refs = 0, 0, 0, false
 }
 
 // ValidateFunctions validates the bodies of m's defined functions in order,
@@ -852,13 +859,8 @@ func (v *funcValidator) pushControl(kind controlKind, bt *blockType) *control {
 	startAt := uint32(len(v.merges))
 	v.merges = append(v.merges, v.stack[base:]...)
 	if kind == ctrlTry {
-		n := 1
-		for i := range v.ctrl {
-			if v.ctrl[i].isTry() {
-				n++
-			}
-		}
-		v.tries = max(v.tries, n)
+		v.openTries++
+		v.tries = max(v.tries, v.openTries)
 	}
 	v.ctrl = append(v.ctrl, control{
 		kind: kind, reach: reach, pc: pc,
@@ -893,6 +895,9 @@ func (v *funcValidator) popControl() {
 	parentReached := c.reach == reachable || c.end.reached || c.kind == ctrlIf
 	v.merges = v.merges[:c.mergeBase]
 	v.catches = v.catches[:c.catchAt]
+	if c.isTry() {
+		v.openTries--
+	}
 	v.ctrl = v.ctrl[:len(v.ctrl)-1]
 	if !parentReached {
 		v.setSucceedingCodeDynamicallyUnreachable()
