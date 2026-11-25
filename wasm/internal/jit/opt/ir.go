@@ -658,7 +658,7 @@ func (f *Func) value(b *Block, op Op, t Type, args []*Value) *Value {
 	v := f.ws.values.new()
 	v.ID, v.Op, v.Type, v.Block = f.nextValue, op, t, b
 	if len(args) > 0 {
-		v.Args = append(f.ws.vals.take(len(args)), args...)
+		v.Args = copyA(&f.ws.vals, args)
 	}
 	f.nextValue++
 	return v
@@ -679,7 +679,7 @@ func (f *Func) addArg(v, a *Value) { v.Args = appendA(&f.ws.vals, v.Args, a) }
 
 // setArgs makes v's arguments args, in the workspace.
 func (f *Func) setArgs(v *Value, args ...*Value) {
-	v.Args = append(f.ws.vals.take(len(args)), args...)
+	v.Args = copyA(&f.ws.vals, args)
 }
 
 func (f *Func) addEdge(from, to *Block) {

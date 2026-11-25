@@ -26,12 +26,30 @@ func (a *arena[T]) take(n int) []T {
 func (a *arena[T]) reset() { a.buf = a.buf[:0] }
 
 // appendA appends xs to s, moving it within the arena where it is full.
+// The elements go one at a time: the lists are short, and an append or a
+// copy of a slice of pointers is a call of the runtime's copy, each store
+// here a store and the write barrier's test.
 func appendA[T any](a *arena[T], s []T, xs ...T) []T {
 	if len(s)+len(xs) > cap(s) {
-		ns := a.take(max(2*cap(s), len(s)+len(xs), 4))
-		s = append(ns, s...)
+		ns := a.take(max(2*cap(s), len(s)+len(xs), 4))[:len(s)]
+		for i, x := range s {
+			ns[i] = x
+		}
+		s = ns
 	}
-	return append(s, xs...)
+	for _, x := range xs {
+		s = append(s, x)
+	}
+	return s
+}
+
+// copyA is a copy of xs in the arena, its capacity its length.
+func copyA[T any](a *arena[T], xs []T) []T {
+	s := a.take(len(xs))[:len(xs)]
+	for i, x := range xs {
+		s[i] = x
+	}
+	return s
 }
 
 // chunks hands out values of a type one at a time from chunks it keeps,
