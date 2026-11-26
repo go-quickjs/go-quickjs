@@ -994,18 +994,24 @@ cgo is to be verified, not assumed.
 
 What the work found that the architecture above does not yet place.
 
-- **Native await.** An async function's frame suspended at an `await`
-  and resumed without leaving native code. Each `await` is an exit to Go
-  today, which suspends the frame (`jitRegSuspend`), and the resumption,
-  its job run from the queue, enters the code again
-  (internal/jit/README.md); so a loop that awaits at each turn leaves
-  native code at each. Stage 1's operand lattice found it: `async_await`
-  is +4.9% with the JIT at every placement, the feedback handlers'
-  recording in a loop the JIT cannot keep. Native await needs the
-  suspension written into the frame by native code, the promise's
-  reaction made there, and the resumption entered from the job at the pc
-  past the `await` without Go between them. No stage covers it yet;
-  where it goes is the maintainer's to decide.
+- **Native await.** Done. Stage 1's operand lattice found it:
+  `async_await` +4.9% with the JIT at every placement, the feedback
+  handlers' recording in a loop that stayed interpreted because each
+  `await` left native code. An async function's await that the
+  interpreter goes on past in place -- the frame resumed by its await's
+  job, no job queued, the value settled -- native code goes on past in
+  place too, with no exit (ssa's `OpAwaitReady`, `GoAwait`;
+  internal/jit/README.md, "What is entered where"), and an async
+  function's call is a settled call of Go to the profit model. A
+  suspension that waits still returns to Go's job queue, whose promise
+  side stays Go's. Measured with the JIT at `-k 2`: `async_await` 20.35
+  to 4.70 ns (-76.9%), `async_busy` 5.94 to 4.33 (-27.1%), the other
+  async and generator rows level, the micro set's geomean 0.998, Octane
+  +0.2% and ssr +0.1% (none awaits), compiles unchanged. Projected:
+  `async_await` -71 to -83%, `async_busy` -16 to -18%, `async_call` -7
+  to -13%, which measured level, its loop judged slow for its calls of
+  the async callee. Suspensions made by Go at once, and for await's and
+  yield*'s steps as calls of Go, measured within 1.3% and were left out.
 
 ## The stages
 
@@ -1246,11 +1252,12 @@ is under [The projection](#the-projection).
   slower a compile -- Mandreel's build is +10.7% a run over 84 compiles
   where the base makes 78, the lattice's compiles for what its host
   exits taught (11 against 4), +2.8% a compile.
-- **Open:** `async_await` +4.9% with the JIT at all four of `-k 4`'s
-  placements (+5.7% integrated, slower at three): the lattice's
+- **Closed since:** `async_await` +4.9% with the JIT at all four of
+  `-k 4`'s placements (+5.7% integrated, slower at three): the lattice's
   recording, the feedback handlers' test of each site's byte, in a loop
-  that stays interpreted because each await leaves native code (native
-  await, under the architecture's open items).
+  that stayed interpreted because each await left native code. Native
+  await (the architecture's open items) runs that loop natively: 20.35 to
+  4.70 ns.
 
 ### Stage 2: compile speed
 
