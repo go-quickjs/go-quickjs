@@ -182,6 +182,10 @@ type jitTestConfig struct {
 	// placeAtInstall has each placed by its install, not its worker.
 	workspaceBack  func(*jitRegJob)
 	placeAtInstall bool
+	// bgReplayed, where set, is called by the worker with each compile in
+	// the background once it has put back what its snapshot's questions
+	// took back (workRecovering's replay).
+	bgReplayed func(*jitRegJob)
 	// snapAsked, where set, is called with each question a snapshot asks
 	// ahead (jitRegSnapshotOf), its results as the feedback gave them, and
 	// whether they answer something.

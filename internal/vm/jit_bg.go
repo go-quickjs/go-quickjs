@@ -86,6 +86,10 @@ type jitRegJob struct {
 	p    *ir.Program
 	rf   *jitRegFeedback
 	snap *jitRegSnapshot
+	// links are the links rf's keep held as it was handed over, which,
+	// with those its snapshot's questions took back, are all its worker
+	// puts back (holdsLink, replay).
+	links []*jitLink
 	// arena is the runtime's arena, which the worker places the code in,
 	// apart from the code running meanwhile (jit.NewSSACodeApart), placed
 	// the code placed there.
@@ -95,12 +99,13 @@ type jitRegJob struct {
 	// f the function built in it, enc and opts the encoding and the
 	// backend's switches as they were when it was prepared. backHook is
 	// the test's hook of the workspace's give-back (jitTestConfig's
-	// workspaceBack).
-	w        *jit.Workspace
-	backHook func(*jitRegJob)
-	f        *ssa.Func
-	enc      abi.Encoding
-	opts     mir.Options
+	// workspaceBack), replayHook its hook of the replay (bgReplayed).
+	w          *jit.Workspace
+	backHook   func(*jitRegJob)
+	replayHook func(*jitRegJob)
+	f          *ssa.Func
+	enc        abi.Encoding
+	opts       mir.Options
 	// looped are the register pcs of the loops' headers the build has
 	// entries at (jitRegShape).
 	looped map[uint32]bool
@@ -396,6 +401,17 @@ func (j *jitRegJob) workRecovering() {
 	}
 	f.FrameAt = j.frameAt
 	j.f = f
+	// What the build's questions appended to the feedback's lists, taken
+	// back, put back here as the build from the feedback would have left
+	// them: the compile's own feedback, the root's, its keep's and its
+	// callees', which the runtime's goroutine does not read until the
+	// install (holdsLink reads the links it held at the hand-over). At
+	// the install, it had been about 12 of the 40 us it took on Octane's
+	// Typescript.
+	j.snap.s.replay()
+	if h := j.replayHook; h != nil {
+		h(j)
+	}
 	j.looped = jitRegShape(f, j.p, j.cl, j.c)
 	ssa.Optimize(f)
 	j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)
@@ -551,11 +567,11 @@ func (s *jitState) jitRegAbandonJobs() {
 	s.regAhead, s.regAheadRoots = nil, nil
 }
 
-// jitRegInstall is j's install on the runtime's goroutine: what the
-// snapshot's questions appended to the feedback's lists put back, as the
-// build from the feedback would have left them, and the code placed, as
-// the compile on the spot places it (jitRegPlace); a build that missed is
-// made here, from the feedback as it is now. The function's closure takes
+// jitRegInstall is j's install on the runtime's goroutine: the code
+// placed, as the compile on the spot places it (jitRegPlace), with the
+// feedback's lists as the build from the feedback would have left them,
+// which its worker put back (workRecovering); a build that missed is made
+// here, from the feedback as it is now. The function's closure takes
 // the code, as jitRegHot gives it, where it has none meanwhile.
 func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	s := r.jit
@@ -649,8 +665,6 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		s.compileEnd()
 	case j.buildErr != nil:
 		e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.buildErr)
-	default:
-		j.snap.s.replay()
 	}
 	if e.refusal == "" && errors.Is(j.err, mir.ErrKeeps) {
 		// As on the spot (jitRegCompile): built again here, its keep cells

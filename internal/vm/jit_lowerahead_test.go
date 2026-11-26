@@ -5,6 +5,8 @@ package vm
 import (
 	"fmt"
 	"reflect"
+	"slices"
+	"sync"
 	"testing"
 )
 
@@ -190,5 +192,87 @@ func TestJITLowerAheadTakeBack(t *testing.T) {
 	j.run()
 	if j.state.Load() != jitJobTaken || j.items[0].got.done[jitLowerSSA] {
 		t.Fatalf("state %d after a worker's run: want it left as taken", j.state.Load())
+	}
+}
+
+// regReplaySrc has work call big natively, through a link (too long to
+// inline), and norm inlined.
+const regReplaySrc = `
+function Point(x, y) { this.x = x; this.y = y }
+function norm(p) { return p.x * p.x + p.y * p.y }
+function big(a) {
+	let s = a;
+	for (let i = 0; i < 3; i++) { s = (s * 31 + i) % 1000003; s = (s ^ (s >> 3)) % 1000003; s = (s + a * i) % 1000003;
+		s = (s * 7 + 1) % 1000003; s = (s ^ (s << 2)) % 1000003; s = (s + 11) % 1000003; s = (s * 13) % 1000003 }
+	return s
+}
+function work(n) {
+	let s = 0;
+	for (let i = 0; i < n; i++) {
+		const p = new Point(i, i + 1);
+		s = (s + norm(p) + big(i)) % 1000003;
+	}
+	return s;
+}
+`
+
+// A compile's worker puts back what its snapshot's questions took back
+// (workRecovering's replay), and the runtime's goroutine, which may unlink
+// a link meanwhile (regUnlink), finds every link the replay puts in the
+// compile's keep among those it reads (holdsLink): those the keep held at
+// the hand-over and those the questions took back -- links are made only
+// on the goroutine, never by a worker.
+func TestJITReplayLinksHeldAtHandOver(t *testing.T) {
+	t.Parallel()
+	prog := compileForTest(t, regReplaySrc)
+	want := ""
+	{
+		r := newTestRuntime(t, Config{})
+		t.Cleanup(r.Close)
+		if _, err := r.Run(prog); err != nil {
+			t.Fatal(err)
+		}
+		fn, _ := r.GetProp(Obj(r.Global()), r.Intern("work"))
+		for range 6 {
+			v, err := r.Call(fn, Undefined, []Value{Float(500)})
+			want += regNativeShow(r, v, err) + ";"
+		}
+	}
+	var mu sync.Mutex
+	replays, links := 0, 0
+	jitTestSwitch(t, func(c *jitTestConfig) {
+		c.bgReplayed = func(j *jitRegJob) {
+			mu.Lock()
+			defer mu.Unlock()
+			replays++
+			for _, l := range j.rf.fb.keep().links {
+				links++
+				if !slices.Contains(j.links, l) && !slices.Contains(j.snap.s.gained.links, l) {
+					t.Errorf("%s: the replay put a link in its keep that the goroutine does not see", j.cl.fn.Name)
+				}
+			}
+		}
+	})
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(r.Close)
+	r.SetJITWarmUp(1, 1)
+	r.SetJITBackground(true)
+	r.jitStress.background, r.jitStress.checks = true, 1
+	if _, err := r.Run(prog); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := r.GetProp(Obj(r.Global()), r.Intern("work"))
+	got := ""
+	for range 6 {
+		v, err := r.Call(fn, Undefined, []Value{Float(500)})
+		got += regNativeShow(r, v, err) + ";"
+	}
+	if got != want {
+		t.Fatalf("got %q, want the interpreter's %q", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if replays == 0 || links == 0 {
+		t.Fatalf("%d replays, %d links in their keeps: want some of each", replays, links)
 	}
 }

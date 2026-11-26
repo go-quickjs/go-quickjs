@@ -497,7 +497,8 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
 			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
-				enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack}
+				enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack, replayHook: r.jitTest.bgReplayed,
+				links: slices.Clone(rf.fb.keep().links)}
 			if r.jitTest.placeAtInstall {
 				// Placed by the install, from the backend's code in the
 				// workspace, as where the worker cannot place it.
@@ -1098,11 +1099,12 @@ func (s *jitState) regUnlink(l *jitLink) {
 }
 
 // holdsLink reports whether j, a compile in the background, may call
-// through l once installed: its feedback asked for l, which its keep holds
-// or its snapshot's questions took back, to be put back at the install
-// (jitSnapshot's effects).
+// through l once installed: its feedback asked for l, which its keep held
+// as it was handed over (jitRegJob's links) or its snapshot's questions
+// took back, to be put back by its worker (jitSnapshot's effects, replay).
+// Not its keep's links as they are, which the worker appends to meanwhile.
 func (j *jitRegJob) holdsLink(l *jitLink) bool {
-	if j.rf != nil && slices.Contains(j.rf.fb.keep().links, l) {
+	if slices.Contains(j.links, l) {
 		return true
 	}
 	if j.snap == nil {

@@ -938,10 +938,17 @@ call of Go the function's own code makes with its compile done
 (`jitRegCompileDueNow`, outside that schedule too): a
 compile handed to the workers marks its function's closure (`closureCode`'s
 `jitEnters`) so that its calls go to the JIT, and a call of code compiled again in the background installs the
-replacement as one of its first code does -- putting back what the questions
-appended to the feedback's lists (`replay`) and taking the code its worker
+replacement as one of its first code does, taking the code its worker
 placed into the cache as the compile on the spot does its own
-(`jitRegPlaceWith`, below). A question the snapshot was not asked
+(`jitRegPlaceWith`, below). What the questions the build asked appended to
+the feedback's lists, taken back, the worker puts back once it has built
+(`replay`): the lists are the compile's own feedback's, its root's, its
+keep's and its callees', which the runtime's goroutine reads nothing of
+until the install but the links a compile under way holds (`holdsLink`,
+`regUnlink`), and those it reads as the keep held them at the hand-over
+(`jitRegJob`'s `links`) and as the questions took them back -- a link is
+made on the goroutine alone, never by a derivation. Put back at the
+install, they had been about 12 of its 40 us on Octane's Typescript. A question the snapshot was not asked
 is a miss (`jitSnapMiss`): the compile is built at the install instead
 (`regSnapMisses` counts them). A compile done while the code it replaces is
 run by a native call under way waits (`jitRegInstallWaits`): kept, no
