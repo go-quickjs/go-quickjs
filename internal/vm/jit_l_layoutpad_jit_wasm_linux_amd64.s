@@ -5,14 +5,9 @@
 #include "textflag.h"
 
 // layoutPadHJ is the layout lock's assembly pad HJ for linux/amd64 jit+wasm:
-// 162 slots of 32 bytes (layoutlock.txt). It is never called: see
+// 157 slots of 32 bytes (layoutlock.txt). It is never called: see
 // internal/cmd/layoutpad.
 TEXT ·layoutPadHJ(SB), NOSPLIT|NOFRAME, $0-0
-	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
-	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
-	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
-	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
-	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
 	QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc; QUAD $0xcccccccccccccccc
