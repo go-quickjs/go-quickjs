@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
+	"time"
 	"unsafe"
 	"weak"
 
@@ -352,7 +353,7 @@ func startCodeDump(path string) *os.File {
 // is made of. A function is named by its script and line.
 func (r runtimeOf) Report(name string) {
 	reportTimes()
-	reportTier()
+	reportTier(r)
 	// The register tier's crossings, where QJS_REGREPORT asks for them.
 	vm.RegReport()
 	if !*jitReportFlag {
@@ -577,6 +578,7 @@ func startTierTrace(path string) {
 	w := bufio.NewWriter(f)
 	tierCounts.compiles, tierCounts.deopts = map[string]int{}, map[string]int{}
 	tierCounts.byFunc, tierCounts.bySite = map[string]int{}, map[string]map[string]int{}
+	vm.JITCompileClock = v8bench.Clock
 	vm.JITTierHook = func(e vm.JITTierEvent) {
 		fn := fmt.Sprintf("%s %s:%d", e.Func.Name, e.Func.Script, e.Func.Line)
 		kind, site := "C", ""
@@ -617,8 +619,9 @@ func startTierTrace(path string) {
 }
 
 // reportTier prints, for -jittier, the compiles and deoptimizations since
-// the last benchmark, by reason.
-func reportTier() {
+// the last benchmark, by reason, and the runtime goroutine's part of the
+// compiles (vm.JITGoroutineTimes).
+func reportTier(r runtimeOf) {
 	if vm.JITTierHook == nil || tierCounts.compiles == nil {
 		return
 	}
@@ -635,6 +638,17 @@ func reportTier() {
 	d, ds := line(tierCounts.deopts)
 	fmt.Printf("  jit tier: %d compiles:%s\n", n, cs)
 	fmt.Printf("  jit tier: %d deoptimizations, %d of code younger than %d invocations:%s\n", d, tierCounts.early, tierEarly, ds)
+	gt := hostaccess.VM(r.rt).TakeJITGoroutineTimes()
+	ms := func(t time.Duration) float64 { return float64(t.Microseconds()) / 1e3 }
+	each := func(t time.Duration, n int) float64 {
+		if n == 0 {
+			return 0
+		}
+		return float64(t.Microseconds()) / float64(n)
+	}
+	fmt.Printf("  jit tier: the runtime goroutine's part: %d compiles on the spot %.1f ms (%.0f us each); in the background %d prepared %.1f ms (%.0f us each), %d installed %.1f ms (%.0f us each), %d taken back %.1f ms\n",
+		gt.Spots, ms(gt.Spot), each(gt.Spot, gt.Spots), gt.Prepares, ms(gt.Prepared), each(gt.Prepared, gt.Prepares),
+		gt.Installs, ms(gt.Installed), each(gt.Installed, gt.Installs), gt.TakeBacks, ms(gt.TakenBack))
 	most := func(m map[string]int) (string, int) {
 		k, n := "", 0
 		for _, x := range slices.Sorted(maps.Keys(m)) {

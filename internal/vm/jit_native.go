@@ -368,8 +368,27 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 // concurrent: the frame goes on in the interpreter until it is installed
 // (jitRegInstall). Where it is 0, it is the loop a frame of the function
 // waits at for this compile, if any (jitRegFrameAt).
-func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool, frameAt int) *jitRegEntry {
+func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool, frameAt int) (made *jitRegEntry) {
 	s := r.jit
+	if clock := r.jitCompileClock(); clock != nil && !s.timingGoroutine {
+		// The runtime goroutine's part of it, for the tier trace
+		// (JITGoroutineTimes): a compile within it is part of it, and a
+		// refusal of its lowering no compile.
+		s.timingGoroutine = true
+		from, submitted := clock(), s.bgSubmitted
+		defer func() {
+			s.timingGoroutine = false
+			t := &s.goroutineTimes
+			switch d := clock() - from; {
+			case s.bgSubmitted != submitted:
+				t.Prepared += d
+				t.Prepares++
+			case made != nil && made.p != nil:
+				t.Spot += d
+				t.Spots++
+			}
+		}()
+	}
 	osrAt := frameAt
 	if frameAt == 0 {
 		frameAt = r.jitRegFrameAt(cl)

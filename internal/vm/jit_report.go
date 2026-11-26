@@ -5,6 +5,7 @@ package vm
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
@@ -196,6 +197,48 @@ type JITTierEvent struct {
 // path reads. Set it before any runtime compiles; it is called on the
 // runtime's goroutine, for a compile in the background at its install.
 var JITTierHook func(JITTierEvent)
+
+// JITCompileClock, if set, is the clock the runtime goroutine's part of
+// each compile is timed by (JITGoroutineTimes): a host's debug option, as
+// the tier trace is (v8bench's -jittier); while it is nil nothing is
+// timed. Set it before any runtime compiles.
+var JITCompileClock func() time.Duration
+
+// JITGoroutineTimes is the runtime goroutine's part of its compiles, as
+// JITCompileClock times them: what a compile in the background leaves on
+// the program's time. Spot is the time of the compiles made on the spot,
+// Spots how many there were; Prepared that of the compiles handed to the
+// background -- their lowering, their feedback asked ahead, their hand-over
+// -- Prepares how many; Installed that of their installs, Installs how
+// many; and TakenBack that of the builds of those taken back to the
+// runtime's goroutine (jitRegTakeBack), TakeBacks how many. A compile made
+// within another, a callee's, is the other's.
+type JITGoroutineTimes struct {
+	Spot, Prepared, Installed, TakenBack time.Duration
+	Spots, Prepares, Installs, TakeBacks int
+}
+
+// jitCompileClock is the runtime's JITCompileClock: the host's, or what a
+// test made the runtime with.
+func (r *Runtime) jitCompileClock() func() time.Duration {
+	if c := r.jitTest.compileClock; c != nil {
+		return c
+	}
+	return JITCompileClock
+}
+
+// TakeJITGoroutineTimes is the runtime goroutine's part of its compiles
+// since the last call (JITGoroutineTimes), timed while JITCompileClock is
+// set.
+func (r *Runtime) TakeJITGoroutineTimes() JITGoroutineTimes {
+	s := r.jit
+	if s == nil {
+		return JITGoroutineTimes{}
+	}
+	t := s.goroutineTimes
+	s.goroutineTimes = JITGoroutineTimes{}
+	return t
+}
 
 // jitTierHook is the runtime's JITTierHook: the host's, or what a test
 // made the runtime with.

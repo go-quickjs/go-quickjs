@@ -377,7 +377,14 @@ func (r *Runtime) jitRegTakeBack(j *jitRegJob) bool {
 	s := r.jit
 	s.bgTakenBack++
 	s.compileBegin()
-	j.workRecovering()
+	if clock := r.jitCompileClock(); clock != nil && !s.timingGoroutine {
+		from := clock()
+		j.workRecovering()
+		s.goroutineTimes.TakenBack += clock() - from
+		s.goroutineTimes.TakeBacks++
+	} else {
+		j.workRecovering()
+	}
 	s.compileEnd()
 	// Done, which a worker coming to it after leaves as it is.
 	j.state.Store(jitJobDone)
@@ -422,7 +429,18 @@ func (r *Runtime) jitRegDrainJobs(stress bool, k int) {
 		}
 		prev := r.Realm
 		r.Realm = j.realm
-		r.jitRegInstall(j)
+		if clock := r.jitCompileClock(); clock != nil && !s.timingGoroutine {
+			// The runtime goroutine's part of it (JITGoroutineTimes), the
+			// compiles the install makes among it.
+			s.timingGoroutine = true
+			from := clock()
+			r.jitRegInstall(j)
+			s.goroutineTimes.Installed += clock() - from
+			s.goroutineTimes.Installs++
+			s.timingGoroutine = false
+		} else {
+			r.jitRegInstall(j)
+		}
 		r.Realm = prev
 	}
 }

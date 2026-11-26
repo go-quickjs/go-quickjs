@@ -162,8 +162,10 @@ type jitTestConfig struct {
 	compileRepeat int
 	codeHook      func(f JITFunction, text []byte, code *mir.Code)
 	crossHook     func(f JITFunction, code *mir.Code, err error)
-	// tierHook, where set, is the runtime's JITTierHook.
-	tierHook func(JITTierEvent)
+	// tierHook, where set, is the runtime's JITTierHook, and compileClock
+	// its JITCompileClock.
+	tierHook     func(JITTierEvent)
+	compileClock func() time.Duration
 	// bgDone has each compile handed to the workers waited for as it is
 	// handed over (jitRegSubmit): done at once, it is installed at the
 	// checks after, as any is, however long the workers would have taken.
@@ -1427,6 +1429,11 @@ type jitState struct {
 	// their functions gone unused (jitRegDropStale), and jobsTick is the
 	// flush's tick that last looked for them.
 	bgDropped, jobsTick uint64
+	// goroutineTimes is the runtime goroutine's part of its compiles,
+	// timed while JITCompileClock is set, timingGoroutine while one is
+	// being timed (JITGoroutineTimes).
+	goroutineTimes  JITGoroutineTimes
+	timingGoroutine bool
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.
 	arrayRooms []weak.Pointer[abi.ObjectPool]
