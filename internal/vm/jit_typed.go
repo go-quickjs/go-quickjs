@@ -4,6 +4,7 @@ package vm
 
 import (
 	"unsafe"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -124,9 +125,18 @@ func (r *Runtime) jitTypedLinked(cl *closure, t *regCode) {
 
 // asmHeapKeep keeps h current as its buffer's bytes move or go
 // (bufferChanged): native code reads its cell with no check of the epoch.
+// The runtime holds h weakly: what native code reads h for is its typed
+// code's, which holds it (typedExt's heap), as the code compiled from it
+// holds the twin. Held strongly, every module a runtime had linked kept
+// its heap for the runtime's life -- Octane's zlib its 128 MB buffer,
+// long after the program had let it go and its code had been flushed.
 func (r *Runtime) asmHeapKeep(h *asmHeap) {
 	h.at(r)
-	r.asmHeaps = append(r.asmHeaps, h)
+	if len(r.asmHeaps) == cap(r.asmHeaps) {
+		// The heaps collected let go of before the list grows.
+		r.asmHeapsAt()
+	}
+	r.asmHeaps = append(r.asmHeaps, weak.Make(h))
 }
 
 // Heap is typed code's heap (ssa.HeapFeedback): its abi.HeapCell's

@@ -401,8 +401,10 @@ type Runtime struct {
 	// code (typedFrame).
 	typedRuns []typedRun
 	// asmHeaps are the heaps of typed code native code reads, which
-	// bufferChanged keeps current (asmHeapKeep).
-	asmHeaps []*asmHeap
+	// bufferChanged keeps current (asmHeapKeep), held weakly: a heap lives
+	// as long as its typed code does (regCode's typedExt), and its view and
+	// buffer with it.
+	asmHeaps []weak.Pointer[asmHeap]
 	// gcYield is Config.GCYield's state (writebarrier.go), after every field the
 	// interpreter reads, so that it moves none of them.
 	gcYield gcYieldState

@@ -40,11 +40,19 @@ func (r *Runtime) bufferChanged() {
 	}
 }
 
-// asmHeapsAt makes the heaps native code reads current (asmHeapKeep).
+// asmHeapsAt makes the heaps native code reads current (asmHeapKeep), and
+// lets go of those collected.
 //
 //go:noinline
 func (r *Runtime) asmHeapsAt() {
-	for _, h := range r.asmHeaps {
-		h.at(r)
+	n := 0
+	for _, w := range r.asmHeaps {
+		if h := w.Value(); h != nil {
+			h.at(r)
+			r.asmHeaps[n] = w
+			n++
+		}
 	}
+	clear(r.asmHeaps[n:])
+	r.asmHeaps = r.asmHeaps[:n]
 }
