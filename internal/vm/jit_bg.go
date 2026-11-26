@@ -40,8 +40,12 @@ type jitRegJob struct {
 	callee bool
 	// deopts is the function's deoptimizations when it was prepared: a
 	// compile its function deoptimized since is thrown away, what that
-	// taught asked for anew.
+	// taught asked for anew. asks is its marks to be compiled again for
+	// what it learned (jitEntry's reoptAsks) when its feedback was asked,
+	// ahead or at the install: one marked since was built without what it
+	// learned, and is compiled again for it (jitRegInstall).
 	deopts uint16
+	asks   uint32
 	// frameAt is the loop's header a frame waits at for the compile
 	// (jitRegFrameAt), whose entry escape analysis keeps. osrAt, where not
 	// 0, is that header for code kept for a loop (jitRegLoopCode), to be
@@ -391,7 +395,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		s.regSnapMisses++
 		s.compileBegin()
 		limit := j.rf.fb.keepLimit
-		j.rf = r.jitRegFeedbackFor(j.cl, j.p)
+		j.rf, j.asks = r.jitRegFeedbackFor(j.cl, j.p), e.life.reoptAsks
 		j.rf.fb.keepLimit = limit
 		f, err := ssa.BuildIn(&j.w.SSA, j.p, j.rf)
 		if err != nil {
@@ -414,8 +418,13 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		// limited to the context's.
 		s.compileBegin()
 		j.rf, j.f, j.looped, j.mc, j.err = r.jitRegBuild(j.w, j.cl, j.c, j.p, abi.MaxKeeps, j.frameAt)
+		j.asks = e.life.reoptAsks
 		s.compileEnd()
 	}
+	// Marked to be compiled again for what it learned since its feedback
+	// was asked: what the old code met while this was compiled, which the
+	// code installed was not built for.
+	learned := e.life.reoptAsks != j.asks
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
@@ -438,11 +447,21 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	}
 	if e.code == nil && old != nil && old.code != nil && !old.invalid {
 		// A refusal replaces no valid code (jitRegCompileFor), asked
-		// again for nothing it has learned so far.
-		old.life.reopt, old.life.learning = false, false
+		// again for nothing it learned before its feedback was asked.
+		old.life.reopt, old.life.learning = learned, false
 		return
 	}
 	r.jitRegCached(j.key, e)
+	if learned && e.code != nil {
+		// Compiled again once it has spent a budget, as code that learned
+		// is (jitRegLearnedDue): React's createElement, compiled again in
+		// the background, had met "div" at its read of a.defaultProps
+		// meanwhile, learned for good (jitPolySite's prim), and its new
+		// code, built without it, left native code at every such read --
+		// ssr's Render 348,000 times, the rest of each invocation run in
+		// the interpreter -- learning nothing more.
+		e.life.reopt = true
+	}
 	// No more than the budget held after, as after a compile on the spot
 	// (jitRegCompileFor): what the code describes, and what its callees
 	// learned of it as callers joined them, count past the room it asked.

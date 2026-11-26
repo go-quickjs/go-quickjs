@@ -4,10 +4,13 @@ package vm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -250,5 +253,105 @@ func TestJITCalleeCallingNativelyIsNotJudgedByItsCallsOfGo(t *testing.T) {
 				t.Errorf("forEach called through Go %d times of 240,000, its code native callers may call", n)
 			}
 		})
+	}
+}
+
+// A compile in the background is built from feedback asked when it was
+// prepared; what the code it replaces learns meanwhile at its exits it was
+// not built for, and its install leaves the function marked to be
+// compiled again for it (jitRegJob's asks), as code that learned is. React's
+// createElement, compiled again in the background, met "div" at its read
+// of a.defaultProps while the compile was under way: its site learned the
+// primitive for good (jitPolySite's prim), the install cleared the mark,
+// and its new code, built without the primitive, left native code at every
+// such read and learned nothing more -- ssr's Render 348,000 host exits
+// at get_prop in one run of three, each invocation finished in the
+// interpreter, the run 1.43 times the one on the spot.
+func TestJITBackgroundInstallKeepsWhatTheOldCodeLearned(t *testing.T) {
+	t.Parallel()
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.noInline = func(fn *bytecode.Function) bool { return fn.Name == "el" } })
+	r := newTestRuntime(t, Config{JIT: true})
+	r.jitStress = jitStressConfig{}
+	r.SetJITBackground(false)
+	r.SetJITReport(true)
+	src := `
+		const types = []
+		for (let k = 0; k < 12; k++) { const o = {}; o["p" + k] = k; if (k & 1) o.defaultProps = {k}; types.push(o) }
+		const ones = new Array(32).fill(1)
+		function el(a, xs, n) {
+			for (let i = 0; i < xs.length; i++) n += xs[i]
+			if (a && a.defaultProps) n++
+			return n
+		}
+		function objects(n) { let s = 0; for (let i = 0; i < n; i++) s = el(types[i % 12], ones, s); return s }
+		function strings(n) { let s = 0; for (let i = 0; i < n; i++) s = el("div", ones, s); return s }
+		for (let k = 0; k < 20; k++) objects(1200)`
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	cl := jitGlobalClosureForTest(r, "el")
+	e := jitRegOfForTest(r, cl)
+	if e == nil || e.code == nil || e.invalid {
+		t.Fatalf("el has no valid code: %+v", e)
+	}
+	// Compiled again in the background, its install held off.
+	r.SetJITBackground(true)
+	r.jitStress = jitStressConfig{background: true, checks: 1000}
+	if ne := r.jitRegReoptimize(cl, r.regOf(cl), e, -1); ne != nil {
+		t.Fatal("compiled again on the spot")
+	}
+	j := r.jit.regPendingJobs[e.key]
+	if j == nil {
+		t.Fatal("not compiled again in the background")
+	}
+	// The snapshot answers as the feedback does when it is asked. Asked
+	// once its worker is done with it, and the questions it notes the
+	// build asked (jitSnapshot's uses) left as the worker's build left
+	// them, for the install's replay.
+	<-j.done
+	uses := len(j.snap.s.uses)
+	if snap, live := jitSnapBuildForTest(t, j, j.snap), jitSnapBuildForTest(t, j, r.jitRegFeedbackFor(cl, j.p)); snap != live {
+		t.Fatalf("built from the snapshot:\n%s\nfrom the feedback:\n%s", snap, live)
+	}
+	j.snap.s.uses = j.snap.s.uses[:uses]
+	// The code it replaces meets a string at a.defaultProps, and learns it.
+	jitCallForTest(t, r, `strings(50)`, 50*32)
+	if r.jit.regPendingJobs[e.key] != j || jitRegOfForTest(r, cl) != e {
+		t.Fatal("installed before its Kth check")
+	}
+	if e.life.reoptAsks == j.asks {
+		t.Fatal("the old code learned nothing from a string at a.defaultProps")
+	}
+	// A compile on the spot reads it as a primitive's too, which the
+	// snapshot, asked before, does not.
+	read := slices.IndexFunc(j.p.Code, func(in ir.Instruction) bool { return in.Op == ir.PropertyRead || in.Op == ir.ReferenceRead })
+	if read < 0 {
+		t.Fatal("el reads no property")
+	}
+	if site, _ := r.jitRegFeedbackFor(cl, j.p).Property(read); !site.Primitives {
+		t.Fatal("the feedback does not answer the primitive the old code met at a.defaultProps")
+	}
+	if site, _ := j.snap.Property(read); site.Primitives {
+		t.Fatal("the snapshot answers what the old code learned after it was asked")
+	}
+	j.snap.s.uses = j.snap.s.uses[:uses]
+	// Installed at the next check, it is compiled again for the string.
+	r.jitStress.checks = 1
+	jitCallForTest(t, r, `objects(12)`, 12*32+6)
+	ne := jitRegOfForTest(r, cl)
+	if r.jit.regPendingJobs[e.key] != nil || ne == e || ne == nil || ne.code == nil {
+		t.Fatalf("not installed: pending %v, entry %p, was %p", r.jit.regPendingJobs[e.key] != nil, ne, e)
+	}
+	if !ne.life.reopt {
+		t.Error("installed with no mark to be compiled again for what the old code learned meanwhile")
+	}
+	before := r.RegNativeStats().HostOps["get_prop"]
+	const calls = 20000
+	jitCallForTest(t, r, fmt.Sprintf(`strings(%d)`, calls), calls*32)
+	if n := r.RegNativeStats().HostOps["get_prop"] - before; n > calls/10 {
+		t.Errorf("%d host exits at get_prop of %d reads of a string's a.defaultProps", n, calls)
 	}
 }

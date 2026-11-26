@@ -439,7 +439,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// Asked ahead here, built on a worker (jit_bg.go).
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
-			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, frameAt: frameAt,
+			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
 				w: jit.GetWorkspace(), enc: s.enc, opts: s.opts, miss: r.jitStress.miss}
 			if osrAt != 0 {
 				// The code kept beside the cache's for a loop

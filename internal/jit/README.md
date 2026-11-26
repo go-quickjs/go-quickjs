@@ -769,8 +769,13 @@ code below it is under way, and its exit goes on in the new code
 (`jitRegGoOnAt`), as it goes on in a compile made on the spot at its leaving
 for one due. So a compile in the background makes the code the compile on
 the spot makes from the same feedback, and the frames that ran the code it
-replaces go on in it where they would have gone on in that. A compile of
-a function deoptimized since it was prepared is thrown away at the install
+replaces go on in it where they would have gone on in that. What the code
+it replaces learned at its exits meanwhile, after the feedback was asked,
+the new code was not built for, and its exits there learn nothing more,
+the learning done: the install leaves the function marked to be compiled
+again for it (`jitRegJob`'s `asks`, `jitEntry`'s `reoptAsks`), as code
+that learned is once it has spent a budget (`jitRegLearnedDue`). A compile
+of a function deoptimized since it was prepared is thrown away at the install
 (`jitRegJob`'s `deopts`), and so is one whose code in the cache a native
 call still runs (`jitRegEntry`'s `levels`), that code asked to be compiled
 again. Code for a frame waiting at a loop whose entry escape analysis

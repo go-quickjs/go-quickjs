@@ -1017,7 +1017,23 @@ is under [The projection](#the-projection).
   and "The JIT's Go side past JN" (d).
 - **Status:** started. (a) is fixed by `0905382a`, Go leaving a native
   level's receiver as native code left it, with its regression test, its
-  pads in `379a60ad`. (b) to (g) not started.
+  pads in `379a60ad`. (b) is fixed by the install of a compile in the
+  background leaving its function marked to be compiled again for what
+  the code it replaces learned meanwhile (`jitRegJob`'s `asks`): the
+  snapshot was right -- a build from it the same as one on the spot at
+  each of more than 2,100 compiles in the background of ssr, Are We Fast
+  Yet and Octane -- but React's createElement met "div" at
+  `a.defaultProps` while it was compiled, and the install cleared the
+  mark. ssr's Render at `-n 10` in the background, five runs: 41,238 to
+  43,770 exits to Go, 662 to 2,700 finished in the interpreter, at most 88
+  `get_prop` host exits (two runs of three had made 437,000 to 450,000,
+  357,000 and 348,000; the foreground makes 41,139, 686 and none). Under
+  `QJS_JIT_STRESS` `background=K` at `-n 5`, K = 1, 32 and 512 had made
+  172,431 `get_prop` host exits; now none at K from 1 to 512. On a Ryzen
+  5 3600 Render in the background runs 1,670 to 1,738 ms, five runs, where
+  the storm had made it 2,213 to 2,246 in four of five; on the spot 1,704
+  to 1,742. (c) to (g)
+  not started.
 
 ### Stage 1: tiering and background compiles
 

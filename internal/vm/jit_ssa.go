@@ -4254,10 +4254,12 @@ func jitBigIntNote(e *jitEntry, key int32, in ir.Instruction, operand func(ir.Op
 		}
 		e.bigwide = append(e.bigwide, key)
 		e.reopt = true
+		e.reoptAsks++
 		return true
 	}
 	e.bigints = append(e.bigints, key)
 	e.reopt = true
+	e.reoptAsks++
 	if !native {
 		return false
 	}

@@ -176,7 +176,7 @@ func jitRegJobForTest(t testing.TB, r *Runtime, cl *closure) *jitRegJob {
 	if snap.s.bad {
 		t.Fatal("the snapshot's questions took back what they cannot")
 	}
-	return &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, e: e, p: p, rf: rf, snap: snap, deopts: life.deopts,
+	return &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, e: e, p: p, rf: rf, snap: snap, deopts: life.deopts, asks: life.reoptAsks,
 		w: jit.GetWorkspace(), enc: r.jit.enc, opts: r.jit.opts}
 }
 

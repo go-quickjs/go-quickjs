@@ -692,6 +692,11 @@ type jitEntry struct {
 	ssaStats jitSSAStats
 	reopt    bool
 	reopts   uint8
+	// reoptAsks counts the times the code was marked to be compiled again
+	// for what it learned (jitRegReopt): a compile in the background
+	// prepared before the last of them (jitRegJob's asks) was built from
+	// feedback asked ahead of it, and its install leaves the mark set.
+	reoptAsks uint32
 	// ssaHostsLeft are the PCs of the host operations of its own the code
 	// leaves to Go (ssa.Func's HostsLeft): a call there its code has never
 	// been seen to make is one seldom made (jitRegFeedback's InlineExit).

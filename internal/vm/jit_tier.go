@@ -623,6 +623,7 @@ func (r *Runtime) jitRegReopt(cl *closure, e *jitRegEntry) {
 		return
 	}
 	e.life.reopt = true
+	e.life.reoptAsks++
 }
 
 // jitRegLearnedDue reports whether e's code, cl's function's, valid, is due

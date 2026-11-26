@@ -1162,6 +1162,7 @@ func (r *Runtime) jitRegCallersReopt(l *jitEntry, depth int) {
 		if ce.life.upgradeReopts < jitInlineReoptimizations {
 			ce.life.upgradeReopts++
 			ce.life.reopt = true
+			ce.life.reoptAsks++
 		}
 		r.jitRegCallersReopt(ce.life, depth-1)
 	}
