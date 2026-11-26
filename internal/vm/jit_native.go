@@ -375,11 +375,11 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// (JITGoroutineTimes): a compile within it is part of it, and a
 		// refusal of its lowering no compile.
 		s.timingGoroutine = true
-		from, submitted := clock(), s.bgSubmitted
+		from, submitted, hooks := clock(), s.bgSubmitted, s.hookTime
 		defer func() {
 			s.timingGoroutine = false
 			t := &s.goroutineTimes
-			switch d := clock() - from; {
+			switch d := clock() - from - (s.hookTime - hooks); {
 			case s.bgSubmitted != submitted:
 				t.Prepared += d
 				t.Prepares++

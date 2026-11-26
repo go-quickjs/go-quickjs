@@ -232,10 +232,20 @@ func (r *Runtime) jitCompileRepeat() int {
 }
 
 func (r *Runtime) jitCodeHook() func(f JITFunction, text []byte, code *mir.Code) {
-	if h := r.jitTest.codeHook; h != nil {
+	h := r.jitTest.codeHook
+	if h == nil {
+		h = JITCodeHook
+	}
+	if h == nil || r.jit == nil || !r.jit.timingGoroutine {
 		return h
 	}
-	return JITCodeHook
+	// The host's, timed apart from the compile it is called in
+	// (jitHookTimed).
+	s := r.jit
+	return func(f JITFunction, text []byte, code *mir.Code) {
+		defer s.jitHookTimed(r.jitCompileClock())()
+		h(f, text, code)
+	}
 }
 
 func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) {
@@ -1454,6 +1464,9 @@ type jitState struct {
 	// being timed (JITGoroutineTimes).
 	goroutineTimes  JITGoroutineTimes
 	timingGoroutine bool
+	// hookTime is the time the host's hooks took while a compile was
+	// timed (jitHookTimed), which its time leaves out.
+	hookTime time.Duration
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.
 	arrayRooms []weak.Pointer[abi.ObjectPool]

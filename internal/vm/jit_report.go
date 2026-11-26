@@ -212,11 +212,13 @@ var JITCompileClock func() time.Duration
 // -- Prepares how many; Installed that of their installs, Installs how
 // many; and TakenBack that of the builds of those taken back to the
 // runtime's goroutine (jitRegTakeBack), TakeBacks how many. A compile made
-// within another, a callee's, is the other's. FinishDerives counts the
-// compiles in the background thrown away before a worker derived their
-// snapshot's answers, derived on the runtime's goroutine for what their
-// asking appends to the function's learning (jitSnapshot's finish),
-// counted whether JITCompileClock is set or not.
+// within another, a callee's, is the other's. The times leave out those of
+// the host's hooks called meanwhile (JITTierHook, JITCodeHook), which are
+// the host's. FinishDerives counts the compiles in the background thrown
+// away before a worker derived their snapshot's answers, derived on the
+// runtime's goroutine for what their asking appends to the function's
+// learning (jitSnapshot's finish), counted whether JITCompileClock is set
+// or not.
 type JITGoroutineTimes struct {
 	Spot, Prepared, Installed, TakenBack time.Duration
 	Spots, Prepares, Installs, TakeBacks int
@@ -248,10 +250,30 @@ func (r *Runtime) TakeJITGoroutineTimes() JITGoroutineTimes {
 // jitTierHook is the runtime's JITTierHook: the host's, or what a test
 // made the runtime with.
 func (r *Runtime) jitTierHook() func(JITTierEvent) {
-	if h := r.jitTest.tierHook; h != nil {
+	h := r.jitTest.tierHook
+	if h == nil {
+		h = JITTierHook
+	}
+	if h == nil || r.jit == nil || !r.jit.timingGoroutine {
 		return h
 	}
-	return JITTierHook
+	// The host's, timed apart from the compile it is called in
+	// (jitHookTimed).
+	s := r.jit
+	return func(e JITTierEvent) {
+		defer s.jitHookTimed(r.jitCompileClock())()
+		h(e)
+	}
+}
+
+// jitHookTimed times, by clock, a host's hook called in a compile being
+// timed (JITGoroutineTimes), its time the host's, not the compile's: the
+// tier trace's hook, which writes a line of the trace and flushes it, a
+// system call, had been part of each compile's install on the program's
+// time. It returns the function that ends the timing.
+func (s *jitState) jitHookTimed(clock func() time.Duration) func() {
+	from := clock()
+	return func() { s.hookTime += clock() - from }
 }
 
 // The reasons a compile is made for, which the tier trace says

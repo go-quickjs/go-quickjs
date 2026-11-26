@@ -484,9 +484,9 @@ func (r *Runtime) jitRegDrainJobs(stress bool, k int) {
 			// The runtime goroutine's part of it (JITGoroutineTimes), the
 			// compiles the install makes among it.
 			s.timingGoroutine = true
-			from := clock()
+			from, hooks := clock(), s.hookTime
 			r.jitRegInstall(j)
-			s.goroutineTimes.Installed += clock() - from
+			s.goroutineTimes.Installed += clock() - from - (s.hookTime - hooks)
 			s.goroutineTimes.Installs++
 			s.timingGoroutine = false
 		} else {
