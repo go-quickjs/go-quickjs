@@ -153,41 +153,6 @@ func (r *reader) heapTypeOf() module.HeapType {
 	return h
 }
 
-// checkGC refuses GC instruction op, its immediates read, where this tier
-// does not build it: one past the GC proposal's, or an access of a v128
-// field or element.
-func checkGC(m *module.Module, r *reader, op opcode.Opcode) {
-	if op < opcode.StructNew || op > opcode.I31GetU {
-		refuse(RefuseGC, "%s", op.Name())
-	}
-	switch op {
-	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU, opcode.StructSet:
-		ti := r.u32()
-		if m.Types[ti].Struct.Fields[r.u32()].Type.Kind == module.KindV128 {
-			refuse(RefuseSIMD, "%s of a v128 field", op.Name())
-		}
-	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU, opcode.ArraySet:
-		if m.Types[r.u32()].Array.Elem.Type.Kind == module.KindV128 {
-			refuse(RefuseSIMD, "%s of v128 elements", op.Name())
-		}
-	case opcode.StructNew:
-		for _, f := range m.Types[r.u32()].Struct.Fields {
-			if f.Type.Kind == module.KindV128 {
-				refuse(RefuseSIMD, "%s of a v128 field", op.Name())
-			}
-		}
-	case opcode.ArrayNew, opcode.ArrayNewFixed, opcode.ArrayFill:
-		if m.Types[r.u32()].Array.Elem.Type.Kind == module.KindV128 {
-			refuse(RefuseSIMD, "%s of v128 elements", op.Name())
-		}
-		if op == opcode.ArrayNewFixed {
-			r.u32()
-		}
-	default:
-		r.skipGC(op)
-	}
-}
-
 // skipGC skips GC instruction op's immediates.
 func (r *reader) skipGC(op opcode.Opcode) {
 	switch op {
@@ -222,6 +187,12 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructNew, opcode.StructNewDefault:
 		ti := r.u32()
 		if !pooled(m, ti) {
+			if op == opcode.StructNew {
+				// Of a type with v128 fields: the interpreter's code takes
+				// them as its operands.
+				bd.goInstr(bd.pc, at)
+				break
+			}
 			bd.gcGo(op, ti, 0, at)
 			break
 		}
@@ -246,6 +217,10 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.pushRef()
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
 		ti := r.u32()
+		if op == opcode.ArrayNew && m.Types[ti].Array.Elem.Type.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		if n := bd.stack[h-1]; n.Op == OpConst {
 			if _, ok := arrayPooled(m, bd.ws.arrayClass, ti, uint32(n.Aux), op == opcode.ArrayNew); ok {
 				bd.arrayNew(op, ti, uint32(n.Aux), at)
@@ -278,9 +253,18 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 			bd.arrayNew(op, ti, n, at)
 			break
 		}
+		if m.Types[ti].Array.Elem.Type.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		bd.gcGo(op, ti, n, at)
 	case opcode.ArrayFill:
-		bd.gcGo(op, r.u32(), 0, at)
+		ti := r.u32()
+		if m.Types[ti].Array.Elem.Type.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
+		bd.gcGo(op, ti, 0, at)
 	case opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
 		opcode.ArrayInitData, opcode.ArrayInitElem:
 		x := r.u32()
@@ -288,6 +272,10 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
 		ti, fi := r.u32(), r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
+		if ft.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		aux := gcAux(cellOf(m, ti, fi), ft.Kind, op == opcode.StructGetS)
 		bd.pop()
 		if ft.IsRef() {
@@ -299,6 +287,10 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructSet:
 		ti, fi := r.u32(), r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
+		if ft.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		aux := gcAux(cellOf(m, ti, fi), ft.Kind, false)
 		v := bd.pop()
 		bd.pop()
@@ -309,6 +301,10 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.refOp(bd.b, refStructSet, bd.rpos(h-2), 0, aux, TNone, at, v)
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
 		et := m.Types[r.u32()].Array.Elem.Type
+		if et.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		aux := gcAux(0, et.Kind, op == opcode.ArrayGetS)
 		idx := bd.pop()
 		bd.pop()
@@ -320,6 +316,10 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.push(bd.refOp(bd.b, refArrayGet, 0, bd.rpos(h-2), aux, typeOf(et.Unpacked(), "element"), at, idx))
 	case opcode.ArraySet:
 		et := m.Types[r.u32()].Array.Elem.Type
+		if et.Kind == module.KindV128 {
+			bd.goInstr(bd.pc, at)
+			break
+		}
 		aux := gcAux(0, et.Kind, false)
 		v := bd.pop()
 		idx := bd.pop()

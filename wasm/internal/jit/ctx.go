@@ -200,10 +200,14 @@ const (
 	// Arg1 and the reference after them; Arg2 is the call's offset. To
 	// resume is to return.
 	ExitTailRef
-	// ExitSIMD: run the SIMD instruction at offset Arg0 of the module as
-	// the interpreter does, its operands in the frame's slots from Arg1, two
-	// slots apart, its result left in the first's.
-	ExitSIMD
+	// ExitInstr: run the instruction at offset Arg0 as the interpreter's
+	// code for it does (Effect), its numeric operands in the frame's slots
+	// from Arg1, two slots apart, its references in their stack positions'
+	// reference slots -- or where Ctx.RArgs says -- its result left in the
+	// first operand's slot or reference slot. Arg0 is an offset as the
+	// code reports one: an inlined site's (Request.InlineSite) stands for
+	// the instruction in the innermost callee.
+	ExitInstr
 	// ExitTierUp: the function's baseline code, at its entry, counted
 	// enough calls for the optimizing tier: the engine compiles it and
 	// enters the optimized code with the frame as the call made it, or

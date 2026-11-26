@@ -7,6 +7,9 @@ import "github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 // goCount is the number of operands of instruction Go runs v, which its
 // staging in the call area takes.
 func (g *lowering) goCount(v *Value) int {
+	if isInterp(v) {
+		return len(g.interpOperands(v))
+	}
 	if isGCGo(v) {
 		n, _ := gcOperandCount(g.req.Module, opcode.Opcode(v.Aux), uint32(v.Aux2), uint32(v.Aux2>>32))
 		return n

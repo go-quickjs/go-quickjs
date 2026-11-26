@@ -132,15 +132,11 @@ func simdShape(op opcode.Opcode) (params []Type, result Type) {
 	return params, kindType(sig.Results[0].Kind)
 }
 
-// checkSIMD refuses SIMD instruction op, its immediates read from r, if
-// the tier does not compile it: any on a CPU without the SIMD the code
-// takes, and a half-precision one.
+// checkSIMD refuses SIMD instruction op, its immediates read from r, on a
+// CPU without the SIMD the tier's code takes.
 func checkSIMD(m *module.Module, r *reader, op opcode.Opcode) {
-	switch {
-	case !hasSIMD():
-		refuse(RefuseSIMD, "%s without the CPU's SIMD", op.Name())
-	case opcode.IsFP16SIMD(op):
-		refuse(RefuseSIMD, "%s, of half precision", op.Name())
+	if !hasSIMD() {
+		refuse(RefuseV128, "%s without the CPU's SIMD", op.Name())
 	}
 	r.skipSIMD(op)
 }
@@ -276,3 +272,91 @@ func splat16(h uint16) uint64 { return uint64(h) * 0x0001000100010001 }
 func splat32(w uint32) uint64 { return uint64(w) * 0x0000000100000001 }
 func f32s(f float32) uint64   { return splat32(math.Float32bits(f)) }
 func f64s(f float64) uint64   { return math.Float64bits(f) }
+
+// checkNoV128 refuses function fn if it has a v128 value anywhere -- a
+// parameter, a result, a local, a construct's, a call's, a global's, a
+// field's or an element's, an exception's, a SIMD instruction's -- for a
+// CPU without the SIMD the tier's code takes them with. The baseline's
+// code runs such a function, its SIMD instructions in Go.
+func checkNoV128(m *module.Module, fn uint32) {
+	v128 := func(ts []module.ValueType, what string) {
+		for _, t := range ts {
+			if t.Kind == module.KindV128 {
+				refuse(RefuseV128, "%s of type v128 without the CPU's SIMD", what)
+			}
+		}
+	}
+	one := func(t module.ValueType, what string) { v128([]module.ValueType{t}, what) }
+	ft := m.FuncType(fn)
+	v128(ft.Params, "parameter")
+	v128(ft.Results, "result")
+	code := m.Functions[fn].Code
+	r := reader{b: m.Bytes, pc: int(code.Offset)}
+	for n := r.u32(); n > 0; n-- {
+		r.u32()
+		one(r.valueType(), "local")
+	}
+	end := int(code.End())
+	for r.pc < end {
+		op := r.opcode()
+		switch op.Prefix() {
+		case opcode.PrefixSIMD:
+			refuse(RefuseV128, "%s without the CPU's SIMD", op.Name())
+		case opcode.PrefixGC:
+			switch op {
+			case opcode.StructNew, opcode.StructNewDefault:
+				for _, f := range m.Types[r.u32()].Struct.Fields {
+					one(f.Type, "field")
+				}
+				continue
+			case opcode.StructGet, opcode.StructGetS, opcode.StructGetU, opcode.StructSet:
+				ti := r.u32()
+				one(m.Types[ti].Struct.Fields[r.u32()].Type, "field")
+				continue
+			case opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem,
+				opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU, opcode.ArraySet, opcode.ArrayFill,
+				opcode.ArrayCopy, opcode.ArrayInitData, opcode.ArrayInitElem:
+				at := r.pc
+				one(m.Types[r.u32()].Array.Elem.Type, "element")
+				r.pc = at
+			}
+			r.skipGC(op)
+			continue
+		}
+		switch op {
+		case opcode.Block, opcode.Loop, opcode.If, opcode.Try, opcode.TryTable:
+			params, results := r.blockType(m)
+			v128(params, "block parameter")
+			v128(results, "block result")
+			if op == opcode.TryTable {
+				r.clauses(func(tag uint32) { v128(m.TagType(tag).Params, "tag parameter") })
+			}
+			continue
+		case opcode.Catch, opcode.Throw:
+			v128(m.TagType(r.u32()).Params, "tag parameter")
+			continue
+		case opcode.CallFunction, opcode.ReturnCall:
+			ft := m.FuncType(r.u32())
+			v128(ft.Params, "callee parameter")
+			v128(ft.Results, "callee result")
+			continue
+		case opcode.CallIndirect, opcode.ReturnCallIndirect, opcode.CallRef, opcode.ReturnCallRef:
+			ft := m.Types[r.u32()].Func
+			if op == opcode.CallIndirect || op == opcode.ReturnCallIndirect {
+				r.u32()
+			}
+			v128(ft.Params, "callee parameter")
+			v128(ft.Results, "callee result")
+			continue
+		case opcode.GlobalGet, opcode.GlobalSet:
+			one(m.Globals[r.u32()].Type, "global")
+			continue
+		case opcode.SelectWithType:
+			for n := r.u32(); n > 0; n-- {
+				one(r.valueType(), "select")
+			}
+			continue
+		}
+		r.skipImmediates(op)
+	}
+}

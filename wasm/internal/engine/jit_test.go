@@ -423,9 +423,9 @@ func TestJITLocalsAcrossCalls(t *testing.T) {
 // Tail calls run in constant stack across the tiers: between native
 // functions, and between a native one and one the JIT refuses.
 func TestJITTailCalls(t *testing.T) {
+	codeSwitch(t, func(c *codeTest) { c.refuse = func(fn uint32) bool { return fn == 3 } })
 	inst := nativeInstance(t, `(module
   (type $t (func (param i32) (result i32)))
-  (type $v (struct (field v128)))
   (table funcref (elem $even $odd $odd_interp))
   (func $even (export "even") (param i32) (result i32)
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1))
@@ -436,10 +436,8 @@ func TestJITTailCalls(t *testing.T) {
   (func $even2 (export "even2") (param i32) (result i32)
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1))
       (else (return_call $odd_interp (i32.sub (local.get 0) (i32.const 1))))))
-  ;; A read of a v128 field, which the JIT refuses, keeps this one
-  ;; interpreted.
+  ;; Refused, by the test's switch: interpreted.
   (func $odd_interp (param i32) (result i32)
-    (if (i32.const 0) (then (drop (struct.get $v 0 (ref.null $v)))))
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0))
       (else (return_call $even2 (i32.sub (local.get 0) (i32.const 1)))))))`)
 	for _, name := range []string{"even", "even2"} {

@@ -103,6 +103,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
 		ti, fi := c.r.u32(), c.r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
+		if ft.Kind == module.KindV128 {
+			c.goInstr(at)
+			break
+		}
 		off := c.cellOf(ti, fi)
 		p := c.nonNull(c.pop(), at, 0)
 		if ft.IsRef() {
@@ -116,6 +120,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	case opcode.StructSet:
 		ti, fi := c.r.u32(), c.r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
+		if ft.Kind == module.KindV128 {
+			c.goInstr(at)
+			break
+		}
 		off := c.cellOf(ti, fi)
 		v := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(v))
@@ -128,6 +136,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		c.freeG(p)
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
 		et := m.Types[c.r.u32()].Array.Elem.Type
+		if et.Kind == module.KindV128 {
+			c.goInstr(at)
+			break
+		}
 		idx := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(idx))
 		i := c.intoG(idx, 1<<p)
@@ -146,6 +158,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		c.freeG(p)
 	case opcode.ArraySet:
 		et := m.Types[c.r.u32()].Array.Elem.Type
+		if et.Kind == module.KindV128 {
+			c.goInstr(at)
+			break
+		}
 		v := c.pop()
 		idx := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(v)|c.regsOf(idx))

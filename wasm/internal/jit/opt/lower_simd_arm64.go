@@ -132,6 +132,9 @@ func (g *gen) emitVConsts() {
 // every A64 processor's.
 func hasSIMD() bool { return true }
 
+// cpuFeatures are the CPU's features the code may use.
+func cpuFeatures() wjit.Features { return wjit.CPU }
+
 // simdExits reports whether OpSIMD v is left to Go: none is on arm64.
 func simdExits(v *Value) bool { return false }
 

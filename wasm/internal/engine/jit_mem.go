@@ -86,15 +86,15 @@ type placedCode struct {
 
 // The records' sizes, as charged: a record (nativeFn) and its code's
 // (placedCode, ijit.RawCode); each loop entry, an entry of a map; each
-// catch clause, and each try_table or try; and the code of a SIMD
-// instruction native code leaves to Go, a few closures.
+// catch clause, and each try_table or try; and the code of an
+// instruction native code leaves to Go (instrExit).
 const (
 	nativeRecordBytes = int64(unsafe.Sizeof(nativeFn{}) + unsafe.Sizeof(placedCode{}) + 3*unsafe.Sizeof(uintptr(0)))
 	loopMapBytes      = 48
 	loopEntryBytes    = 24
 	handlerBytes      = int64(unsafe.Sizeof(wjit.Handler{}))
 	clauseBytes       = int64(unsafe.Sizeof(wjit.Clause{}))
-	simdExitBytes     = 256
+	instrExitBytes    = 256
 )
 
 // recordBytes is what the record of a code with loops' entries loops and

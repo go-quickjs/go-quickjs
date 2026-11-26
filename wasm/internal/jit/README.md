@@ -22,7 +22,8 @@ This package compiles; the engine places, enters and handles exits:
 | File | |
 |---|---|
 | `ctx.go` | the context block and the exits: the contract between the two |
-| `scan.go` | the refusals: what the compiler leaves to the interpreter |
+| `scan.go` | the locals and their uses, and the refusals |
+| `effect.go` | what an instruction takes and leaves, for the exit that runs it in Go (Instructions in Go) |
 | `reader.go` | the interpreter's body reader, which this package cannot import |
 | `compile.go` | the front end every backend shares: constructs, branches, locals, calls through the engine |
 | `stack.go` | the operand stack's entries and its register cache |
@@ -34,7 +35,7 @@ This package compiles; the engine places, enters and handles exits:
 | `indirect.go`, `indirect_GOARCH.go` | calls through a table or a reference, and their tail calls |
 | `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
 | `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts, structs taken from the engine's pools |
-| `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const, their types and the exit through the interpreter, and a backend's code for them |
+| `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const and their types, and a backend's code for them |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 | `opt/` | the optimizing tier (`opt/README.md`) |
 | `engine/jit_gc.go` | the GC instructions Go runs for native code, and the pools of new structs |
@@ -354,7 +355,7 @@ of a Go program's code.
 | `ExitCallRef` | a call_ref not made natively (Calls): calls the reference's function |
 | `ExitTailRef` | a return_call_ref not made natively, as `ExitTailIndirect` |
 | `ExitOp` | memory.grow, memory.init, data.drop, table.grow, table.init, table.copy, elem.drop, struct.new of a type with v128 fields (and struct.new_default of one, the optimizing tier's), the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
-| `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
+| `ExitInstr` | an instruction native code does not do itself (Instructions in Go): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.instrs`), run on the operands in the frame's slots from `Arg1` |
 | `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
 | `ExitAlloc` | a struct.new or struct.new_default found its type's pool empty, or the level without pools (see GC objects): the engine fills the pool -- taking the level's table first -- charging the instance's budget, with the native frames' references counted among what is live; the code takes from it again |
 
@@ -587,7 +588,8 @@ On amd64:
 - add, sub, mul, div, sqrt, and the conversions between f32 and f64: the
   SSE instruction, its first operand the destination.
 - ceil, floor, trunc, nearest: ROUNDSS and ROUNDSD, which quiet a NaN as the
-  interpreter's `a + a` does; SSE4.1 is checked (`x/sys/cpu`).
+  interpreter's `a + a` does; without SSE4.1 (`x/sys/cpu`) they run in Go
+  (Instructions in Go).
 - min, max: a NaN operand gives the sum, the rule's NaN; equal operands the
   OR (min) or AND (max) of their bits, so that -0 is below +0.
 - abs, neg, copysign: masks of the sign bit, never arithmetic.
@@ -599,7 +601,8 @@ On amd64:
   bit kept as a sticky bit, then doubled: one rounding, as the interpreter's
   `u64ToF32` and `u64ToF64`.
 
-clz and ctz are BSR and BSF with a CMOV for 0; popcnt is POPCNT, checked.
+clz and ctz are BSR and BSF with a CMOV for 0; popcnt is POPCNT, or,
+without it, run in Go.
 
 On arm64, with the FPCR Go leaves (no default NaN, no flush to zero, no
 alternate handling):
@@ -646,15 +649,16 @@ loads read 8 bytes and widen (PMOVSX, PMOVZX; SXTL, UXTL); the splatting
 loads, the loads of a lane and the stores of one go through a general
 register (PINSR and PEXTR; INS and UMOV).
 
-On amd64 the code uses SSE2, SSSE3, SSE4.1 and SSE4.2, none VEX-encoded:
-a function with a v128 or a SIMD instruction is refused (`cpu`) on a CPU
-without all three. arm64's ASIMD is every A64 processor's.
+On amd64 the SIMD instructions use SSE2, SSSE3, SSE4.1 and SSE4.2, none
+VEX-encoded; v128 values move, are stored and loaded, selected and made
+constant with SSE2's alone. On a CPU without all three every SIMD
+instruction but v128.const runs in Go (Instructions in Go), and the
+function's v128 values live where they do on any other. arm64's ASIMD is
+every A64 processor's.
 
-A SIMD instruction the backend does not compile is an exit (`ExitSIMD`)
-that runs the interpreter's own code for it: the engine compiles the one
-instruction as the interpreter compiles it, over operands read from the
-frame's slots, and keeps that code by the instruction's offset, so that its
-result is the interpreter's by construction. The backends compile natively:
+A SIMD instruction the backend does not compile runs in Go too
+(`ExitInstr`), its result the interpreter's by construction. The backends
+compile natively:
 
 | | |
 |---|---|
@@ -733,25 +737,72 @@ each choice amd64's CPUs make, the interpreter's made alike;
 `TestJITSIMDValues` holds many v128s live at once, in homes across calls,
 through globals, select, blocks, br_table and a loop.
 
+## Instructions in Go
+
+An instruction the backend does not do natively is not a reason to leave
+the function to the interpreter: it is an exit (`ExitInstr`) that runs the
+interpreter's own code for that one instruction and resumes native code
+after it. The frames are the interpreter's, so the instruction's operands
+are where its code reads them: every stack entry is stored into its slot
+before the exit, as for any exit -- a number at its position's slot, a
+reference in its position's reference slot already -- and the result is
+left where the interpreter leaves it, in the first operand's slot, or
+reference slot, which the compiler pushes as an entry in its slot after
+the resumption. The engine (`engine/jit_instr.go`) compiles the
+instruction to register code with the register compiler itself, its
+stack's positions those of the frame from the exit's slot, keeps the code
+by the instruction's offset and the slots (`codeJIT.instrs`, charged to the
+Code's JIT memory), and runs it with the Go table's handlers in the frame
+that exited. So the result, the trap and its code are the interpreter's by
+construction; a trap of the code reports the instruction's offset, the
+exec's call stack made the native frames' first (`jitSync`), as for
+`ExitOp`. An instruction that can neither trap nor allocate (a SIMD one
+not of memory, popcnt, a rounding) runs without that.
+
+What an instruction takes and leaves is `Effect`'s (`effect.go`), from its
+opcode and immediates and the module's types: every instruction validation
+takes but those of control (blocks, branches, calls, returns, throws), the
+locals' and the constants, which the compiler does itself, and the untyped
+select, whose operands' type only the stack says. Native code takes the
+exit for:
+
+| Instruction | |
+|---|---|
+| relaxed_madd, relaxed_nmadd | fused, on amd64 (SIMD) |
+| struct.get, struct.set, array.get, array.set of a v128 field or element | |
+| popcnt | on an amd64 CPU without POPCNT |
+| ceil, floor, trunc, nearest | on an amd64 CPU without SSE4.1 |
+| every SIMD instruction but v128.const | on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 |
+
+The CPU's features are the process's (`CPU`) unless the request gives
+fewer (`Request.Features`): `WASM_JIT_CPU=base`, for tests, compiles for a
+CPU without the three, on any machine. `Request.ExitAll`
+(`WASM_JIT_EXITS=all`) has every instruction `Effect` takes run in Go, so
+that the spec and the differential test take the exit for every kind of
+instruction: 8,357 instructions of the spec run so, every assertion
+passing.
+
 ## Refusals
 
-A function is refused whole when it has:
+A function is refused whole, and stays in the interpreter, when it has:
 
 | Reason | What |
 |---|---|
-| `simd` | struct.get, struct.set, array.get or array.set of a v128 field or element |
-| `gc` | a GC instruction past the GC proposal's: custom descriptors, strings, ref.i31_shared |
-| `atomics` | the struct and array atomic instructions |
-| `asmjs` | V8's asm.js opcodes |
-| `f16` | f32.load_f16, f32.store_f16 |
-| `cpu` | popcnt without POPCNT, rounding without SSE4.1, a v128 value or a SIMD instruction without SSSE3, SSE4.1 and SSE4.2 (amd64) |
 | `frame` | an operand stack deeper than the interpreter's frame for it |
 | `size` | code past `MaxCodeBytes`, a megabyte |
+| `other` | an instruction neither the backend nor an exit runs: none validation takes |
 | `internal` | a panic of the compiler's |
 | `unplaced` | code the arena could not place |
+| `budget` | no room in the Code's JIT budget (Concurrency and memory) |
 
-`engine.ReadJITStats` counts compiles and refusals by reason; `TestSpec`
-logs them when `WASM_JIT` is set.
+The instructions validation rejects -- custom descriptors, strings,
+ref.i31_shared, the struct and array atomics, f32.load_f16 and
+f32.store_f16, the asm.js opcodes -- the interpreter does not run either.
+`engine.ReadJITStats` counts compiles and refusals by reason, and the
+instructions that ran in Go (`InstrExits`); `TestSpec` logs them when
+`WASM_JIT` is set. With every function compiled at its first call the spec
+compiles 6,842 functions and refuses none, where it refused 2, for reads of
+v128 fields.
 
 ## GC objects
 
@@ -1100,6 +1151,10 @@ WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=osr \
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_BARRIER=clobber \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_EXITS=all \
+  go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run 'TestSpec$|TestJITDifferential' -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_CPU=base \
+  go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run 'TestSpec$|TestJITDifferential' -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_MEMLIMIT=8192 WASM_JIT_CLOCK=step \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run 'TestSpec$|TestJITDifferential' -v
 go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'

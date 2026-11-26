@@ -1938,9 +1938,12 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 	resume := a.NewLabel()
 	base := uint64(g.argBase)
 	{
-		op := opcode.Opcode(v.Aux)
-		x, y := g.imms(v)
-		g.exit(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
+		if isInterp(v) {
+			g.exit(wjit.ExitInstr, resume, uint64(v.At), base)
+		} else {
+			x, y := g.imms(v)
+			g.exit(wjit.ExitOp, resume, uint64(opcode.Opcode(v.Aux)), x, y, base, uint64(v.At))
+		}
 		if v.Type != TNone {
 			dst := g.locOf(v)
 			g.move(dst, loc{kind: lSlot, slot: int32(g.argBase)}, v.Type)

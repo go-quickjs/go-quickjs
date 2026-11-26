@@ -85,6 +85,22 @@ type Request struct {
 	// module's bytes (InlineBase), and the engine reads the frames back
 	// from it. It reports false where it has no more such offsets.
 	InlineSite func(frames []InlineFrame, at uint32) (uint32, bool)
+	// Features, where it is not nil, are the CPU's features the code may
+	// use in place of the process's (CPU): fewer, for a test of the code
+	// a CPU without them gets.
+	Features *Features
+	// ExitAll, for tests, has every instruction an exit can run (Effect)
+	// run by the interpreter's code (ExitInstr), not natively, so that the
+	// exit is taken by every kind of instruction.
+	ExitAll bool
+}
+
+// CPUFeatures are the CPU's features req's code may use.
+func (req *Request) CPUFeatures() Features {
+	if req.Features != nil {
+		return *req.Features
+	}
+	return CPU
 }
 
 // Mark says what the code from offset Off, up to the next mark, was
@@ -358,6 +374,12 @@ type compiler struct {
 	resume    asmLabel
 	hasResume bool
 
+	// feat are the CPU's features the code may use (Request.Features).
+	feat Features
+	// effParams is Effect's list of operands' types, kept for the next
+	// instruction.
+	effParams []module.ValueType
+
 	stack []value
 	ctrl  []*ctl
 	gused regMask
@@ -425,7 +447,7 @@ func (ws *workspace) compiler(req *Request) *compiler {
 	clear(old.loops)
 	clear(old.vconsts)
 	ws.c = compiler{
-		a: &ws.a, req: req, m: req.Module, fn: req.Func, sig: req.Module.FuncType(req.Func), frameSlots: req.FrameSlots,
+		a: &ws.a, req: req, m: req.Module, fn: req.Func, sig: req.Module.FuncType(req.Func), frameSlots: req.FrameSlots, feat: req.CPUFeatures(), effParams: old.effParams[:0],
 		locals: old.locals[:0], use: old.use, home: old.home[:0], slots: old.slots[:0], results: old.results[:0],
 		handlers: old.handlers[:0], stack: old.stack[:0], ctrl: old.ctrl[:0], ool: old.ool[:0],
 		traps: old.traps[:0], loops: old.loops, vconsts: old.vconsts, vconstOrder: old.vconstOrder[:0],
@@ -461,7 +483,7 @@ func Compile(req *Request) (code *Code, err error) {
 	ws := workspaces.Get().(*workspace)
 	defer workspaces.Put(ws)
 	c := ws.compiler(req)
-	c.locals, c.use = scan(m, req.Func, CPU, c.locals, c.use)
+	c.locals, c.use = scan(m, req.Func, c.locals, c.use)
 	c.layout()
 	if c.nlocals != req.FrameLocals || c.rlocals != req.FrameRefLocals {
 		panic("wasm jit: the frame's locals are not the engine's")
@@ -808,6 +830,9 @@ func (c *compiler) instr() {
 	a := c.a
 	at := uint32(c.r.pc)
 	op := c.r.opcode()
+	if (c.req.ExitAll || c.cpuExit(op)) && c.goInstr(at) {
+		return
+	}
 	switch op {
 	case opcode.Unreachable:
 		c.jmp(c.trap(TrapUnreachable, at))
@@ -935,7 +960,58 @@ func (c *compiler) instr() {
 		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) || c.gcOp(op, at) || c.simd(op, at) {
 			return
 		}
-		refuse(RefuseOther, "%s", op.Name())
+		// What no backend compiles natively runs in Go, if an exit can run
+		// it: every instruction validation takes but those of control, of
+		// locals and the constants, which the compiler does itself.
+		if !c.goInstr(at) {
+			refuse(RefuseOther, "%s", op.Name())
+		}
+	}
+}
+
+// goInstr compiles the instruction at offset at as an exit that runs the
+// interpreter's code for it (instrExit), reporting whether an exit can
+// run it (Effect).
+func (c *compiler) goInstr(at uint32) bool {
+	e, ok := Effect(c.m, at, c.effParams[:0])
+	if !ok {
+		return false
+	}
+	c.effParams = e.Params
+	c.instrExit(e, at)
+	return true
+}
+
+// cpuExit reports whether instruction op needs a feature the CPU has not
+// (Request.Features), and so runs in Go: popcnt without POPCNT, a rounding
+// without SSE4.1, a SIMD instruction but v128.const without the SIMD the
+// backend's code takes.
+func (c *compiler) cpuExit(op opcode.Opcode) bool {
+	switch op {
+	case opcode.I32Popcnt, opcode.I64Popcnt:
+		return !c.feat.Popcnt
+	case opcode.F32Ceil, opcode.F32Floor, opcode.F32Trunc, opcode.F32NearestInt,
+		opcode.F64Ceil, opcode.F64Floor, opcode.F64Trunc, opcode.F64NearestInt:
+		return !c.feat.Round
+	}
+	return !c.feat.SIMD && op.Prefix() == opcode.PrefixSIMD
+}
+
+// instrExit compiles the instruction of effect e at offset at as an exit
+// that runs the interpreter's code for it (ExitInstr): every entry stored
+// in its slot, its operands' too -- a reference is in its position's
+// reference slot already -- and its result left in the first operand's
+// slot, or its reference slot. The reader goes on past the instruction.
+func (c *compiler) instrExit(e Instr, at uint32) {
+	c.r.pc = e.End
+	c.spillAll()
+	base := len(c.stack) - len(e.Params)
+	c.truncate(base)
+	resume := c.a.NewLabel()
+	c.exit(ExitInstr, resume, uint64(at), c.slotIndex(base))
+	c.resumeAt(resume)
+	if e.HasResult() {
+		c.pushSlot(e.Result.Kind)
 	}
 }
 

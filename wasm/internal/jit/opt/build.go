@@ -9,17 +9,12 @@ import (
 )
 
 // The reasons this tier refuses a function, which then keeps its baseline
-// code.
+// code (README, Refusals).
 const (
-	RefuseV128       = "v128"
-	RefuseSIMD       = "simd"
-	RefuseAtomics    = "atomics"
-	RefuseGC         = "gc"
-	RefuseExceptions = "exceptions"
-	RefuseMemory     = "memory"
-	RefuseOther      = "other"
-	RefuseFrame      = "frame"
-	RefuseSize       = "size"
+	RefuseV128  = "v128"
+	RefuseOther = "other"
+	RefuseFrame = "frame"
+	RefuseSize  = "size"
 )
 
 func refuse(reason, format string, args ...any) {
@@ -161,6 +156,9 @@ type builder struct {
 	refMark Value
 	// inl is the inliner's state (inline.go).
 	inl inliner
+	// pc is the offset of the instruction being built in the module's
+	// bytes.
+	pc uint32
 }
 
 // globalFact is that global g holds val.
@@ -221,7 +219,7 @@ func build(ws *workspace, m *module.Module, fn uint32, inline int32) *Func {
 	if m.Functions[fn].Imported {
 		refuse(RefuseOther, "an imported function")
 	}
-	check(m, fn)
+	check(m, fn, ws.features())
 	lap(PhaseCheck)
 	ws.reset()
 	bd := &ws.bd
@@ -702,6 +700,10 @@ func (bd *builder) instr() {
 	pc := uint32(r.pc)
 	at := bd.at(pc)
 	op := r.opcode()
+	bd.pc = pc
+	if (bd.ws.exitAll || bd.cpuExit(op)) && bd.goInstr(pc, at) {
+		return
+	}
 	switch op {
 	case opcode.Unreachable:
 		bd.b.Kind = BTrap
@@ -871,7 +873,11 @@ func (bd *builder) instr() {
 		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) || bd.simd(op, at) || bd.gcInstr(op, at) {
 			return
 		}
-		refuse(RefuseOther, "%s", op.Name())
+		// What the tier does not build natively the interpreter's code
+		// runs, if an exit can run it.
+		if !bd.goInstr(pc, at) {
+			refuse(RefuseOther, "%s", op.Name())
+		}
 	}
 }
 
@@ -1405,9 +1411,12 @@ var numerics1 = func() (t [256]numericOp) {
 	return t
 }()
 
-// check refuses function fn if its body has an instruction this tier does
-// not build, or a memory access it does not compile.
-func check(m *module.Module, fn uint32) {
+// check refuses function fn if its body has a v128 value where the CPU has
+// not the SIMD the tier's code takes them with (feat, hasSIMD).
+func check(m *module.Module, fn uint32, feat wjit.Features) {
+	if !feat.SIMD {
+		checkNoV128(m, fn)
+	}
 	code := m.Functions[fn].Code
 	r := reader{b: m.Bytes, pc: int(code.Offset)}
 	for n := r.u32(); n > 0; n-- {
@@ -1421,20 +1430,9 @@ func check(m *module.Module, fn uint32) {
 		case opcode.PrefixSIMD:
 			checkSIMD(m, &r, op)
 			continue
-		case opcode.PrefixAtomic:
-			switch op {
-			case opcode.AtomicFence, opcode.Pause, opcode.AtomicNotify, opcode.I32AtomicWait, opcode.I64AtomicWait:
-			default:
-				if _, width, _ := atomicAccess(op); width == 0 {
-					// The struct and array atomic instructions.
-					refuse(RefuseAtomics, "%s", op.Name())
-				}
-			}
 		case opcode.PrefixGC:
-			checkGC(m, &r, op)
+			r.skipGC(op)
 			continue
-		case opcode.PrefixAsmJS:
-			refuse(RefuseOther, "%s", op.Name())
 		}
 		switch op {
 		case opcode.TryTable:
@@ -1443,8 +1441,6 @@ func check(m *module.Module, fn uint32) {
 		case opcode.Catch, opcode.Throw:
 			checkValues(m.TagType(r.u32()).Params, op, true, "tag parameter")
 			continue
-		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
-			refuse(RefuseOther, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
 			params, results := r.blockType(m)
 			checkValues(params, op, true, "parameter")

@@ -5,6 +5,10 @@ package opt
 // one with a reference operand, tells the engine where the references are
 // (Ctx.RArgs): in their positions' reference slots.
 func (g *gen) stageGo(v *Value) {
+	if isInterp(v) {
+		g.stageInterp(v)
+		return
+	}
 	if isGCGo(v) {
 		g.stageGC(v)
 		return

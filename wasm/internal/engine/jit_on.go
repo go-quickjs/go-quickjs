@@ -68,10 +68,10 @@ type codeJIT struct {
 	// raws are the codes placed, which the Code holds until they are
 	// dropped or it is collected.
 	raws []*placedCode
-	// simd holds the code of each SIMD instruction native code leaves to
-	// Go, by its offset in the module and its operands' slots
-	// (simdExitKey, simdExitFn).
-	simd sync.Map
+	// instrs holds the code of each instruction native code leaves to Go
+	// (ExitInstr), by its offset in the module and its operands' slots
+	// (instrExitKey, instrExit).
+	instrs sync.Map
 	// catches says a function of the code has catch clauses: exits are
 	// handled under a recover that takes exceptions to them.
 	catches atomic.Bool
@@ -198,7 +198,7 @@ type jitLevel struct {
 	// mems is the table of the instance's memories native code reads
 	// (Ctx.Mems), filled before every entry.
 	mems []uint64
-	// frame is the frame a SIMD exit runs the interpreter's code in.
+	// frame is the frame an ExitInstr runs the interpreter's code in.
 	frame frame
 	// rargs is the exit's Ctx.RArgs, taken when Go begins its work.
 	rargs uint64
@@ -249,6 +249,23 @@ var jitWriteBarrier, jitStoreRef = func() (uint64, uint64) {
 	return ijit.WriteBarrier(), ijit.StoreRef()
 }()
 
+// jitExitAll and jitFeatures are what the process's code is compiled with,
+// for tests: WASM_JIT_EXITS=all has native code run every instruction an
+// exit can run in Go (wjit.Request.ExitAll), and WASM_JIT_CPU=base has it
+// compiled for a CPU without POPCNT, SSE4.1 and the SIMD its vectors take
+// (wjit.Request.Features).
+var (
+	jitExitAll  = os.Getenv("WASM_JIT_EXITS") == "all"
+	jitFeatures = func() *wjit.Features {
+		if os.Getenv("WASM_JIT_CPU") != "base" {
+			return nil
+		}
+		f := wjit.CPU
+		f.Popcnt, f.Round, f.SIMD = false, false, false
+		return &f
+	}()
+)
+
 // jitAlwaysMarking is a write barrier's flag that is always set.
 var jitAlwaysMarking uint8 = 1
 
@@ -276,6 +293,11 @@ type codeJITTest struct {
 	// for what the stub makes.
 	allocHook   func()
 	noAllocStub bool
+	// exitAll has the code run every instruction an exit can run in Go
+	// (wjit.Request.ExitAll); features, if set, are the CPU's features the
+	// code is compiled for (wjit.Request.Features).
+	exitAll  bool
+	features *wjit.Features
 }
 
 // jitExec is an exec's native state: the levels entered, and the native
@@ -867,13 +889,21 @@ func compileNative(c *Code, idx uint32, cd *compiled, counter uint64) (code *wji
 	if !c.withinBound(idx, cd) {
 		return nil, &wjit.Refusal{Reason: wjit.RefuseFrame, Detail: "a frame larger than validation's bound"}
 	}
+	if t := c.test; t != nil && t.refuse != nil && t.refuse(idx) {
+		return nil, &wjit.Refusal{Reason: refuseTest}
+	}
 	return wjit.Compile(request(c, idx, cd, counter))
 }
 
 // request is the request to compile function idx.
 func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 	wb, sr, lay, as := jitWriteBarrier, jitStoreRef, jitLayout, jitAllocStubAddr
+	exitAll, feat := jitExitAll, jitFeatures
 	if t := c.test; t != nil {
+		exitAll = exitAll || t.jit.exitAll
+		if t.jit.features != nil {
+			feat = t.jit.features
+		}
 		if t.jit.writeBarrier != 0 {
 			wb = t.jit.writeBarrier
 		}
@@ -907,6 +937,8 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		CaughtSlot:     cd.caught,
 		TierCounter:    counter,
 		Marks:          jitCode != nil,
+		ExitAll:        exitAll,
+		Features:       feat,
 	}
 }
 
@@ -1253,6 +1285,8 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 				t.counts.allocs.Add(1)
 			case wjit.ExitOp:
 				t.counts.ops.Add(1)
+			case wjit.ExitInstr:
+				t.counts.instrs.Add(1)
 			}
 		}
 		var next *nativeFn
@@ -1289,7 +1323,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 	inst := lv.inst
 	lv.rargs, ctx.RArgs = ctx.RArgs, 0
 	switch ctx.Exit {
-	case wjit.ExitCall, wjit.ExitCallIndirect, wjit.ExitCallRef, wjit.ExitOp:
+	case wjit.ExitCall, wjit.ExitCallIndirect, wjit.ExitCallRef, wjit.ExitOp, wjit.ExitInstr:
 		lv.cj.sample(inst.Code, uint32(ctx.ExitFn), 1)
 	}
 	switch ctx.Exit {
@@ -1355,11 +1389,8 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		x.takeFrom(lv, &f)
 		x.jitAlloc(lv, ctx.Arg0, ctx.Arg2, &f, lv.cj.inline.leaf(uint32(ctx.Arg1)))
 		x.jitUnsync(lv)
-	case wjit.ExitSIMD:
-		f := x.exitFrame(lv)
-		lv.frame.l, lv.frame.inst = f.l, inst
-		lv.cj.simdExit(inst.Code, uint32(ctx.Arg0), int(ctx.Arg1))(&lv.frame)
-		lv.frame.l = nil
+	case wjit.ExitInstr:
+		x.jitInstr(lv)
 	case wjit.ExitOp:
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg4))

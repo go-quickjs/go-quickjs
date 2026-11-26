@@ -122,8 +122,11 @@ func (g *gen) emitVConsts() {
 }
 
 // hasSIMD reports whether the CPU has the SIMD the code takes: SSSE3,
-// SSE4.1 and SSE4.2, as the baseline requires (its "cpu" refusal).
+// SSE4.1 and SSE4.2, which the baseline's vector instructions take too.
 func hasSIMD() bool { return wjit.CPU.SIMD }
+
+// cpuFeatures are the CPU's features the code may use.
+func cpuFeatures() wjit.Features { return wjit.CPU }
 
 // simdExits reports whether OpSIMD v is left to Go: relaxed_madd and
 // relaxed_nmadd where they fuse, which the code would need VEX encodings
@@ -435,12 +438,12 @@ func (g *gen) simd(v *Value, rest []*Value) {
 	}
 }
 
-// simdGo runs OpSIMD v in Go (wjit.ExitSIMD): its operands staged in the
+// simdGo runs OpSIMD v in Go (wjit.ExitInstr): its operands staged in the
 // call area two slots apart, where the interpreter's code for the
 // instruction at its offset leaves its result in the first's.
 func (g *gen) simdGo(v *Value) {
 	g.stage(v.Args, g.argBase)
-	g.exit(wjit.ExitSIMD, g.a.NewLabel(), uint64(v.At), uint64(g.argBase))
+	g.exit(wjit.ExitInstr, g.a.NewLabel(), uint64(v.At), uint64(g.argBase))
 	dst := g.locOf(v)
 	g.move(dst, loc{kind: lSlot, slot: int32(g.argBase)}, v.Type)
 	if dst.kind != lSlot {

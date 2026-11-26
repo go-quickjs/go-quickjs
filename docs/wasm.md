@@ -43,19 +43,19 @@ records a set but turns nothing off.
 | WebAssembly 1.0, mutable globals | yes | yes |
 | Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; `memory.init`, `data.drop`, `table.init`, `table.copy` and `elem.drop` in Go |
 | Reference types | yes | yes; `table.grow` in Go |
-| Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2 |
+| Fixed-width SIMD | yes | yes; on amd64 without SSSE3, SSE4.1 and SSE4.2, each instruction in Go |
 | Tail calls | yes | yes |
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | yes |
-| Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
+| Memory64 and table64 | yes | yes |
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes |
-| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; refused for a v128 field or element read or written |
+| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; a v128 field or element read or written in Go |
 | Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; a fused `relaxed_madd` and `relaxed_nmadd` in Go |
-| Threads: shared memories, atomics, `wait` and `notify` | yes | refused for the atomics |
+| Threads: shared memories, atomics, `wait` and `notify` | yes | yes; `wait` and `notify` in Go |
 
-A refused function stays in the interpreter; the rest of its module may run
-natively. The relaxed SIMD operators give the result the host's vector
+What native code leaves to Go is one instruction at a time: the rest of the
+function runs natively around it. The relaxed SIMD operators give the result the host's vector
 instructions give -- `pshufb`, `cvttps2dq`, `blendvps` and the rest on amd64
 and 386, NEON's on arm64 and every other architecture -- so that the
 interpreter, the JIT and Node agree on one machine (`TestRelaxedMatchesNode`).
@@ -751,17 +751,23 @@ are FMLA on arm64; on amd64 with FMA3, where the interpreter fuses them,
 they return to Go, which runs the interpreter's own code for them, so that
 the result is the interpreter's bit for bit, and resumes.
 
-A function is refused whole, and stays in the interpreter, when it has:
+An instruction native code does not do itself returns to Go, which runs
+the interpreter's own code for that one instruction on the frame's slots,
+so that its result and its trap are the interpreter's, and native code
+resumes after it: `struct.get`, `struct.set`, `array.get` and `array.set`
+of a v128 field or element, and on amd64 `popcnt` without POPCNT, the
+roundings without SSE4.1 and every SIMD instruction without SSSE3, SSE4.1
+and SSE4.2 (the optimizing tier leaves a function with v128 values on such
+a CPU to the baseline). A function is refused whole, and stays in the
+interpreter, only for an operand stack deeper than the interpreter's frame
+(`frame`), code past the JIT's size limit (`size`), or for want of room in
+its JIT budget (`budget`).
 
-| Reason | What |
-|---|---|
-| `simd` | `struct.get`, `struct.set`, `array.get` or `array.set` of a v128 field or element |
-| `atomics` | the struct and array atomic instructions |
-| `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1, a v128 or a SIMD instruction without SSSE3, SSE4.1 and SSE4.2 |
-| `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
-
-With every function compiled at its first call, the spec suite compiles 6,840
-functions and refuses 2, for reading v128 fields.
+With every function compiled at its first call, the spec suite compiles 6,842
+functions and refuses none; it refused 2, for reading v128 fields, before
+such an instruction ran in Go. `WASM_JIT_EXITS=all` has every instruction
+that can run so run in Go, for tests, and `WASM_JIT_CPU=base` compiles for
+an amd64 CPU without the optional features.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -1098,7 +1104,8 @@ run as they do with workers.
 
 The engine:
 
-- The JIT refuses the functions listed under [The JIT](#the-jit).
+- The JIT refuses the functions listed under [The JIT](#the-jit), and runs
+  some instructions in Go.
 
 The `WebAssembly` namespace:
 
@@ -1129,8 +1136,8 @@ WASI:
 
 ## Follow-ups
 
-- Native code for the v128 fields and elements of GC objects, which the
-  JIT refuses.
+- Native code for the v128 fields and elements of GC objects, which run
+  in Go.
 - array.new_fixed of more than 480 bytes of elements, array.new_data and
   array.new_elem still exit to Go; array.new of any length is native, its
   value stored in a loop (20 ns an array of 8 i32s, where the exit took

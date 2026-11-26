@@ -140,6 +140,9 @@ type JITStats struct {
 	// compiled, and InterpTime the time it took.
 	Interpreted int
 	InterpTime  time.Duration
+	// InstrExits is the number of instructions native code left to Go that
+	// ran there: the interpreter's code made for each (wjit.ExitInstr).
+	InstrExits int
 }
 
 // RefuseBudget is the reason JITStats counts a compile refused for want of
@@ -160,6 +163,7 @@ var jitStats struct {
 	interpTime        atomic.Int64
 	dropped           atomic.Int64
 	droppedReplaced   atomic.Int64
+	instrExits        atomic.Int64
 }
 
 // ReadJITStats returns the JIT's counts so far.
@@ -171,7 +175,8 @@ func ReadJITStats() JITStats {
 		BaselineTime: time.Duration(jitStats.baseTime.Load()), OptTime: time.Duration(jitStats.optTime.Load()),
 		PlaceTime:   time.Duration(jitStats.placeTime.Load()),
 		Interpreted: int(jitStats.interpreted.Load()), InterpTime: time.Duration(jitStats.interpTime.Load()),
-		Dropped: int(jitStats.dropped.Load()), DroppedReplaced: int(jitStats.droppedReplaced.Load())}
+		Dropped: int(jitStats.dropped.Load()), DroppedReplaced: int(jitStats.droppedReplaced.Load()),
+		InstrExits: int(jitStats.instrExits.Load())}
 }
 
 func countOptimized() {

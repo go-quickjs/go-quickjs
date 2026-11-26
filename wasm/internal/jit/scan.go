@@ -25,15 +25,15 @@ func (r *Refusal) Error() string {
 
 // The reasons a function is refused.
 const (
-	RefuseSIMD    = "simd"
-	RefuseAtomics = "atomics"
-	RefuseGC      = "gc"
-	RefuseAsmJS   = "asmjs"
-	RefuseF16     = "f16"
-	RefuseCPU     = "cpu"
-	RefuseFrame   = "frame"
-	RefuseSize    = "size"
-	RefuseOther   = "other"
+	// RefuseFrame is the refusal of a function whose operand stack would
+	// be deeper than its frame.
+	RefuseFrame = "frame"
+	// RefuseSize is the refusal of a function whose code would be past
+	// Request.MaxCodeBytes.
+	RefuseSize = "size"
+	// RefuseOther is the refusal of an instruction neither the compiler
+	// nor an exit (Effect) runs: one validation does not take.
+	RefuseOther = "other"
 	// RefuseWork is the refusal of a compile whose working sets would
 	// take more than Request.MaxWorkBytes.
 	RefuseWork = "work"
@@ -41,30 +41,6 @@ const (
 
 func refuse(reason, format string, args ...any) {
 	panic(&Refusal{Reason: reason, Detail: fmt.Sprintf(format, args...)})
-}
-
-// checkType refuses a function with a value of type t where the CPU has
-// not the instructions vectors need.
-func checkType(t module.ValueType, what string, feat Features) {
-	if t.Kind == module.KindV128 && !feat.SIMD {
-		refuse(RefuseCPU, "%s of type v128 without SSE4.2", what)
-	}
-}
-
-func checkTypes(ts []module.ValueType, what string, feat Features) {
-	for _, t := range ts {
-		checkType(t, what, feat)
-	}
-}
-
-// checkBlockTypes checks a construct's parameters and results, naming
-// what it refuses only where it refuses one.
-func checkBlockTypes(op opcode.Opcode, params, results []module.ValueType, feat Features) {
-	if feat.SIMD {
-		return
-	}
-	checkTypes(params, op.Name()+" parameter", feat)
-	checkTypes(results, op.Name()+" result", feat)
 }
 
 // Features are the CPU's optional instructions the code may use, and the
@@ -91,22 +67,18 @@ type localUse struct {
 	loops []bool
 }
 
-// scan reads function fn's body, past its locals, and refuses it if any
-// instruction is one the compiler does not compile. It returns the body's
+// scan reads function fn's body, past its locals. It returns the body's
 // local types, the parameters first, and their uses, in the memory of
 // locals and use where it has room.
-func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType, use localUse) ([]module.ValueType, localUse) {
+func scan(m *module.Module, fn uint32, locals []module.ValueType, use localUse) ([]module.ValueType, localUse) {
 	f := &m.Functions[fn]
 	sig := m.Types[f.TypeIndex].Func
-	checkTypes(sig.Params, "parameter", feat)
-	checkTypes(sig.Results, "result", feat)
 	r := reader{b: m.Bytes, pc: int(f.Code.Offset)}
 	end := int(f.Code.End())
 	locals = append(locals[:0], sig.Params...)
 	for n := r.u32(); n > 0; n-- {
 		count := r.u32()
 		t := r.valueType()
-		checkType(t, "local", feat)
 		for j := uint32(0); j < count; j++ {
 			locals = append(locals, t)
 		}
@@ -118,9 +90,9 @@ func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType,
 	defer func() { use.loops = loops }()
 	depth := 0
 	for r.pc < end {
-		// The instructions scan only skips -- the numeric ones but those
-		// that need a CPU's feature, constants, memory accesses, branches
-		// -- and the locals' are read by their first byte's kind.
+		// The instructions scan only skips -- the numeric ones, constants,
+		// memory accesses, branches -- and the locals' are read by their
+		// first byte's kind.
 		switch k := scanKinds[r.b[r.pc]]; k {
 		case scanSlow:
 		case scanLocal:
@@ -150,49 +122,16 @@ func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType,
 			continue
 		}
 		op := r.opcode()
-		switch op.Prefix() {
-		case opcode.PrefixSIMD:
-			if !feat.SIMD {
-				refuse(RefuseCPU, "%s without SSE4.2", op.Name())
-			}
-		case opcode.PrefixAtomic:
-			if op >= opcode.StructAtomicGet {
-				refuse(RefuseAtomics, "%s", op.Name())
-			}
-		case opcode.PrefixGC:
-			if op < opcode.StructNew || op > opcode.I31GetU {
-				refuse(RefuseGC, "%s", op.Name())
-			}
-			switch op {
-			case opcode.StructGet, opcode.StructGetS, opcode.StructGetU, opcode.StructSet:
-				ti := r.u32()
-				if m.Types[ti].Struct.Fields[r.u32()].Type.Kind == module.KindV128 {
-					refuse(RefuseSIMD, "%s of a v128 field", op.Name())
-				}
-				continue
-			case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU, opcode.ArraySet:
-				if m.Types[r.u32()].Array.Elem.Type.Kind == module.KindV128 {
-					refuse(RefuseSIMD, "%s of v128 elements", op.Name())
-				}
-				continue
-			}
-		case opcode.PrefixAsmJS:
-			refuse(RefuseAsmJS, "%s", op.Name())
-		}
 		switch op {
-		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
-			refuse(RefuseF16, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
-			params, results := r.blockType(m)
-			checkBlockTypes(op, params, results, feat)
+			r.blockType(m)
 			loops = append(loops, op == opcode.Loop)
 			if op == opcode.Loop {
 				depth++
 			}
 			continue
 		case opcode.TryTable:
-			params, results := r.blockType(m)
-			checkBlockTypes(op, params, results, feat)
+			r.blockType(m)
 			for n := r.u32(); n > 0; n-- {
 				if kind := r.byte(); kind < 2 {
 					r.u32()
@@ -217,34 +156,6 @@ func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType,
 				use.written[k] = true
 			}
 			continue
-		case opcode.SelectWithType:
-			for n := r.u32(); n > 0; n-- {
-				checkType(r.valueType(), "select", feat)
-			}
-			continue
-		case opcode.CallFunction, opcode.ReturnCall:
-			callee := m.FuncType(r.u32())
-			checkTypes(callee.Params, "callee parameter", feat)
-			checkTypes(callee.Results, "callee result", feat)
-			continue
-		case opcode.CallIndirect, opcode.ReturnCallIndirect:
-			ft := m.Types[r.u32()].Func
-			r.u32()
-			checkTypes(ft.Params, "callee parameter", feat)
-			checkTypes(ft.Results, "callee result", feat)
-			continue
-		case opcode.GlobalGet, opcode.GlobalSet:
-			checkType(m.Globals[r.u32()].Type, "global", feat)
-			continue
-		case opcode.I32Popcnt, opcode.I64Popcnt:
-			if !feat.Popcnt {
-				refuse(RefuseCPU, "%s without POPCNT", op.Name())
-			}
-		case opcode.F32Ceil, opcode.F32Floor, opcode.F32Trunc, opcode.F32NearestInt,
-			opcode.F64Ceil, opcode.F64Floor, opcode.F64Trunc, opcode.F64NearestInt:
-			if !feat.Round {
-				refuse(RefuseCPU, "%s without SSE4.1", op.Name())
-			}
 		}
 		r.skipImmediates(op)
 	}
@@ -268,12 +179,6 @@ const (
 // scanKinds is the kind of each first byte (scanSlow for a prefix's).
 var scanKinds = func() (k [256]uint8) {
 	for op := opcode.I32Eqz; op <= opcode.I64SExtendI32; op++ {
-		switch op {
-		case opcode.I32Popcnt, opcode.I64Popcnt,
-			opcode.F32Ceil, opcode.F32Floor, opcode.F32Trunc, opcode.F32NearestInt,
-			opcode.F64Ceil, opcode.F64Floor, opcode.F64Trunc, opcode.F64NearestInt:
-			continue
-		}
 		k[op] = scanNone
 	}
 	for _, op := range []opcode.Opcode{opcode.Nop, opcode.Drop, opcode.Select, opcode.Return} {

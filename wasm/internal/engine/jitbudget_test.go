@@ -97,7 +97,7 @@ func checkAccounting(t *testing.T, code *Code, b *JITBudget) JITMemory {
 		}
 	}
 	cj.mu.Unlock()
-	cj.simd.Range(func(any, any) bool { records += simdExitBytes; return true })
+	cj.instrs.Range(func(any, any) bool { records += instrExitBytes; return true })
 	if code2 != mem.Code || records != mem.Records {
 		t.Fatalf("the functions' codes are %d bytes and their records %d, JITMemory says %d and %d", code2, records, mem.Code, mem.Records)
 	}

@@ -67,13 +67,20 @@ type codeTest struct {
 	counts *jitExitCounts
 	// jit is the JIT's own (codeJITTest).
 	jit codeJITTest
+	// refuse, if set, has the JIT refuse the functions it reports true of,
+	// as refuseTest, for a test of what a refusal does.
+	refuse func(fn uint32) bool
 }
 
-// jitExitCounts counts native code's exits, and of them its ExitAllocs and
-// ExitOps, and its calls of the allocation stub (jit_alloc.go), which are
-// not exits.
+// refuseTest is the reason the JIT refuses a function a test's switch
+// (codeTest.refuse) has it refuse.
+const refuseTest = "test"
+
+// jitExitCounts counts native code's exits, and of them its ExitAllocs,
+// ExitOps and ExitInstrs, and its calls of the allocation stub
+// (jit_alloc.go), which are not exits.
 type jitExitCounts struct {
-	exits, allocs, ops, stubs atomic.Int64
+	exits, allocs, ops, instrs, stubs atomic.Int64
 }
 
 // NewCode returns the engine's code of module m.

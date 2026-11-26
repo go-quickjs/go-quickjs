@@ -596,6 +596,9 @@ func logJIT(t *testing.T) {
 	for _, r := range reasons {
 		t.Logf("jit: %6d refused: %s", st.Refused[r], r)
 	}
+	if st.InstrExits != 0 {
+		t.Logf("jit: %d instructions native code left to Go ran there", st.InstrExits)
+	}
 	if st.Dropped != 0 || st.DroppedReplaced != 0 {
 		t.Logf("jit: %d functions' code dropped to make room, and %d codes the optimizing tier replaced", st.Dropped, st.DroppedReplaced)
 	}

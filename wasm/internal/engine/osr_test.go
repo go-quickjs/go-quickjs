@@ -149,13 +149,12 @@ func TestOSRLoopParamsResults(t *testing.T) {
 	}
 }
 
-// A function the JIT refuses -- here for a read of a v128 field -- stays
-// in the interpreter, compiled once, and its loops stop asking.
+// A function the JIT refuses -- here by the test's switch -- stays in the
+// interpreter, compiled once, and its loops stop asking.
 func TestOSRRefusedStaysInterpreted(t *testing.T) {
+	codeSwitch(t, func(c *codeTest) { c.refuse = func(uint32) bool { return true } })
 	src := `(module
-  (type $v (struct (field v128)))
   (func (export "f") (param $n i32) (result i32) (local $i i32) (local $acc i32)
-    (if (i32.const 0) (then (drop (struct.get $v 0 (ref.null $v)))))
     (block $h (result i32)
       (loop $l
         (local.set $acc (i32.add (local.get $acc) (local.get $i)))
@@ -166,14 +165,14 @@ func TestOSRRefusedStaysInterpreted(t *testing.T) {
       (local.set $i (i32.sub (local.get $i) (i32.const 1)))
       (br_if $m (i32.gt_s (local.get $i) (i32.const 0))))
     (i32.add (local.get $i))))`
-	before := ReadJITStats().Refused["simd"]
+	before := ReadJITStats().Refused[refuseTest]
 	for k := 0; k < 3; k++ {
 		if n := checkOSR(t, src, "f", 4950, 100); n != 0 {
 			t.Fatalf("%d calls went on natively, want 0", n)
 		}
 	}
 	// One instance a check: each asked once, in the call that ran first.
-	if got := ReadJITStats().Refused["simd"] - before; got != 3 {
+	if got := ReadJITStats().Refused[refuseTest] - before; got != 3 {
 		t.Fatalf("%d refusals, want 3", got)
 	}
 	inst := osrInstance(t, src, math.MaxInt32, 0)
@@ -182,7 +181,7 @@ func TestOSRRefusedStaysInterpreted(t *testing.T) {
 			t.Fatalf("f(100) = %v, %v", res, err)
 		}
 	}
-	if got := ReadJITStats().Refused["simd"] - before; got != 4 {
+	if got := ReadJITStats().Refused[refuseTest] - before; got != 4 {
 		t.Fatalf("%d refusals after 4 more calls, want 4: the function was asked for again", got)
 	}
 	if nativeRan(inst, "f") {

@@ -9,7 +9,7 @@ import (
 
 // The SIMD instructions' front end: v128.const, the instructions' operand
 // and result types, and the exit through the interpreter for what a
-// backend leaves to it (simdNative, in simd_GOARCH.go).
+// backend leaves to it (simdNative, in simd_GOARCH.go; goInstr).
 
 const v128 = module.KindV128
 
@@ -26,78 +26,13 @@ func (c *compiler) simd(op opcode.Opcode, at uint32) bool {
 		c.push(value{t: v128, k: kConst, c: lo, hi: hi})
 		return true
 	}
-	pc := c.r.pc
 	if c.simdNative(op, at) {
 		return true
 	}
-	c.r.pc = pc
-	c.simdExit(op, at)
+	if !c.goInstr(at) {
+		panic("wasm jit: no exit for " + op.Name())
+	}
 	return true
-}
-
-// simdExit runs the SIMD instruction op at offset at in Go: every entry
-// stored in its slot, the operands' too, its result left in the first's.
-func (c *compiler) simdExit(op opcode.Opcode, at uint32) {
-	params, result := simdSig(op)
-	c.r.skipSIMD(op)
-	c.spillAll()
-	base := len(c.stack) - len(params)
-	c.truncate(base)
-	resume := c.a.NewLabel()
-	c.exit(ExitSIMD, resume, uint64(at), c.slotIndex(base))
-	c.resumeAt(resume)
-	c.pushSlot(result)
-}
-
-// simdSig returns the operand types and the result type of SIMD
-// instruction op, which is not a load or a store.
-func simdSig(op opcode.Opcode) (params []module.Kind, result module.Kind) {
-	switch {
-	case op == opcode.I8x16Shuffle:
-		return []module.Kind{v128, v128}, v128
-	case isLaneOp(op):
-		k := laneKind(op)
-		if isReplaceLane(op) {
-			return []module.Kind{v128, k}, v128
-		}
-		return []module.Kind{v128}, k
-	}
-	sig := opcode.Signature(op)
-	if sig == nil || len(sig.Results) != 1 {
-		panic("wasm jit: no signature for " + op.Name())
-	}
-	for _, t := range sig.Params {
-		params = append(params, t.Kind)
-	}
-	return params, sig.Results[0].Kind
-}
-
-// isLaneOp reports whether op is an extract_lane or a replace_lane.
-func isLaneOp(op opcode.Opcode) bool {
-	return op >= opcode.I8x16ExtractLaneS && op <= opcode.F64x2ReplaceLane
-}
-
-func isReplaceLane(op opcode.Opcode) bool {
-	switch op {
-	case opcode.I8x16ReplaceLane, opcode.I16x8ReplaceLane, opcode.I32x4ReplaceLane,
-		opcode.I64x2ReplaceLane, opcode.F32x4ReplaceLane, opcode.F64x2ReplaceLane:
-		return true
-	}
-	return false
-}
-
-// laneKind is the type of the scalar an extract_lane or replace_lane takes
-// or gives.
-func laneKind(op opcode.Opcode) module.Kind {
-	switch op {
-	case opcode.I64x2ExtractLane, opcode.I64x2ReplaceLane:
-		return module.KindI64
-	case opcode.F32x4ExtractLane, opcode.F32x4ReplaceLane:
-		return module.KindF32
-	case opcode.F64x2ExtractLane, opcode.F64x2ReplaceLane:
-		return module.KindF64
-	}
-	return module.KindI32
 }
 
 // laneBytes is the width in bytes of the lanes an extract_lane or

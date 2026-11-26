@@ -75,6 +75,7 @@ func compile(req *wjit.Request, forward bool, inline int32) (code *wjit.Code, us
 	if req.Layout != nil {
 		ws.arrayClass = req.Layout.ArrayClass
 	}
+	ws.feat, ws.exitAll = req.Features, req.ExitAll
 	f := build(ws, req.Module, req.Func, inline)
 	f.noForward, f.listing = !forward, req.Marks
 	used.inlined = ws.bd.inl.used

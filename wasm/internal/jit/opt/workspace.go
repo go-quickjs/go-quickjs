@@ -1,6 +1,11 @@
 package opt
 
-import "sync"
+import (
+	"sync"
+
+	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
+)
 
 // workspace is what a compile works in -- the IR's values and blocks, the
 // passes' tables, the allocator's and the lowering's -- kept for the next
@@ -14,6 +19,14 @@ type workspace struct {
 	// request (Layout.ArrayClass), nil where arrays are not made from
 	// pools.
 	arrayClass []uint8
+	// feat are the CPU's features the compile's code may use, nil for the
+	// process's, and exitAll its request's ExitAll (Request.Features,
+	// Request.ExitAll).
+	feat    *wjit.Features
+	exitAll bool
+	// effParams is wjit.Effect's list of operands' types, kept for the
+	// next instruction the interpreter's code runs (goInstr).
+	effParams []module.ValueType
 
 	values chunks[Value]
 	blocks chunks[Block]
@@ -101,4 +114,12 @@ func (ws *workspace) blockMarks(f *Func) []int32 {
 	ws.marks = grown(ws.marks, int(f.nextBlock))
 	clear(ws.marks)
 	return ws.marks
+}
+
+// features are the CPU's features the compile's code may use.
+func (ws *workspace) features() wjit.Features {
+	if ws.feat != nil {
+		return *ws.feat
+	}
+	return cpuFeatures()
 }

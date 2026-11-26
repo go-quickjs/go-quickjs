@@ -98,7 +98,8 @@ func (bd *builder) atomicOp(op opcode.Opcode, at uint32) bool {
 	}
 	o, width, t := atomicAccess(op)
 	if width == 0 {
-		refuse(RefuseAtomics, "%s", op.Name())
+		// None validation takes: the builder refuses it.
+		return false
 	}
 	mem, off := r.memarg()
 	var v *Value

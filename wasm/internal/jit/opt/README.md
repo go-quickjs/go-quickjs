@@ -33,6 +33,7 @@ default (see Tier-up).
 | `simd.go` | the SIMD instructions' values: what the tier refuses of them and what the builder makes |
 | `lower_simd_amd64.go`, `lower_simdf_amd64.go`, `lower_simd_arm64.go` | the SIMD instructions' lowering |
 | `gc.go`, `gc_lower.go`, `gc_amd64.go`, `gc_arm64.go` | the GC instructions: their building, the instructions Go runs for them, their lowering |
+| `interp.go`, `interp_lower.go` | the instructions the interpreter's code runs for the tier's (Instructions in Go) |
 | `exn.go`, `exn_lower.go`, `exn_amd64.go`, `exn_arm64.go` | the exceptions: the sites, their landing pads and the records Go finds them by |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
@@ -61,7 +62,9 @@ through a reference (`call_ref`), whose numeric results `result` values
 read, `goop`, an instruction Go runs (memory.size, memory.grow,
 memory.copy, memory.fill, memory.init, data.drop, table.init, table.copy,
 elem.drop, table.grow, table.fill, memory.atomic.wait32, wait64 and
-notify; `goops.go`) -- but memory.copy and memory.fill of memory 0
+notify; `goops.go`; or, marked `goInterp`, any instruction the
+interpreter's code runs for the tier's, Instructions in Go) -- but
+memory.copy and memory.fill of memory 0
 where it is neither shared nor of i64 addresses, which the code does
 itself and which are not calls (`InCode`, `BulkInCode`) --
 `ref`, a reference instruction (below), the tail calls (`return_call`,
@@ -243,7 +246,10 @@ parameters, results, locals, the globals it reads and writes and the
 signatures of the calls it makes), and its instructions are control,
 locals, globals, numbers, memory accesses, memory.size, memory.grow and
 direct calls: nothing that holds a reference, throws or catches, makes a
-tail call, or that Go runs by its offset (a SIMD exit). Calls are inlined
+tail call, or that Go runs by its offset (`ExitInstr`) but where the CPU
+or a test has it so (Instructions in Go): the exit then names the inlined
+site, and the engine reads the instruction's own offset back from it.
+Calls are inlined
 four deep at most (`wjit.InlineDepth`) -- a recursion inlines itself so,
 its body sixteen times over -- and 1,024 bytes of bodies into a function
 at most, and not where a
@@ -1051,7 +1057,7 @@ clears the rest, then widen or splat.
 
 relaxed_madd and relaxed_nmadd, where the interpreter fuses them (amd64
 with FMA3 and AVX), would need VEX encodings: as in the baseline, Go runs
-the interpreter's own code for them (`ExitSIMD`, `simdExits`), their
+the interpreter's own code for them (`ExitInstr`, `simdExits`), their
 operands staged in the call area two slots apart and the result read from
 the first's, the instruction a call to the allocator. The engine keeps an
 exit's code by the instruction's offset and its operands' slots, which the
@@ -1397,19 +1403,49 @@ GOMAXPROCS, compiling in the background, every program's first run is
 the baseline's or faster (json 65 against 66, gzip 53 against 55, interp
 38 against 40, regexp 47 against 55).
 
+## Instructions in Go
+
+What the tier does not build natively does not keep a function's baseline
+code: the interpreter's code runs the instruction, as the baseline's exit
+runs it (the baseline README's Instructions in Go), and the function is
+optimized all the same. The builder makes it an `OpGoOp` marked
+`goInterp` (`goInstr`), its numeric operands its arguments, its offset in
+the module's bytes in `Aux2` -- an inlined body's instruction reports an
+inlined site, which the engine reads the offset back from too (`leaf`) --
+and it is lowered as the other instructions Go runs, a call to the
+allocator: its numeric operands staged in the call area, each at its place
+among its operands (`stageInterp`), `RArgs` set where it takes or leaves a
+reference, which stays in its position's reference slot, then
+`ExitInstr`, its number read back from the call area's first slot. What
+it writes -- memory, a global, a table -- the builder forgets it knows.
+`wjit.Effect` says what it takes and leaves. The tier runs so:
+
+| Instruction | |
+|---|---|
+| struct.get, struct.set, array.get, array.set of a v128 field or element; struct.new of a type with v128 fields; array.new, array.new_fixed, array.fill of v128 elements | |
+| popcnt | on an amd64 CPU without POPCNT (`Request.Features`) |
+| ceil, floor, trunc, nearest | on an amd64 CPU without SSE4.1 |
+| every instruction `Effect` takes | under `Request.ExitAll`, for tests (`WASM_JIT_EXITS=all`) |
+
 ## Refusals
 
 A function is refused -- it keeps its baseline code -- when it has:
 
 | Reason | What |
 |---|---|
-| `v128` | a v128 value on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 (the baseline's `cpu`) |
-| `simd` | a SIMD instruction there, or a half-precision one; a struct.get, struct.set, array.get or array.set of a v128 field or element, or a struct.new, array.new, array.new_fixed or array.fill of one |
-| `atomics` | a struct or array atomic instruction |
-| `gc` | a GC instruction past the GC proposal's |
+| `v128` | a v128 value, or a SIMD instruction, on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 (below) |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `MaxCodeBytes` (wasm/internal/jit, a megabyte), or, on arm64, past a branch's reach |
+| `other` | an instruction neither the tier nor an exit runs: none validation takes |
 | `internal` | a panic of the compiler's |
+
+A function with v128 values on a CPU without the three is the baseline's:
+its vector registers' moves, constants and parallel copies are SSE2's, but
+every SIMD instruction it has would be a call to Go, which the baseline
+code runs as well, and the tier would gain only around them. `checkNoV128`
+refuses it before it is built, by the request's features
+(`WASM_JIT_CPU=base` has the spec run so on any machine); the process's CPU
+is checked again wherever a v128 is typed (`typeOf`).
 
 `engine.ReadJITStats` counts what the tier compiled and refused, by
 reason, and the time each tier spent compiling; `TestSpec` logs them.
@@ -1660,8 +1696,10 @@ memory's accesses each read its size through its address and are never
 taken as checked, and the atomics are bound by their locked instructions,
 as the baseline's are.
 
-On the spec scripts the tier compiles 6,840 functions and refuses 2
-(reads of v128 fields, which the baseline refuses too), where it compiled 6,547 before it took the GC instructions
+On the spec scripts (`WASM_JIT=opt`) the tier compiles 6,756 functions
+and refuses none, where it compiled 6,754 and refused 2 (reads of v128
+fields) before it ran the instructions it does not build in Go; it
+compiled 6,547 before it took the GC instructions
 (188 refused) and the exceptions (107); 5,048 before it took SIMD and
 v128s (1,499 refused); 4,149 before it took every memory,
 every offset, the atomics and the instructions Go runs for tables and

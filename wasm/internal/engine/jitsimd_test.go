@@ -506,7 +506,7 @@ func binaryInstance(t testing.TB, b []byte, threshold int) *Instance {
 // requires the same bits of every result, and of every lane with a NaN
 // operand the NaN rule's (nan.go, ruleLanes), in the baseline code and in
 // the optimizing tier's. It reports which instructions native code leaves
-// to Go (ExitSIMD).
+// to Go (ExitInstr).
 func TestJITSIMDBits(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
@@ -611,8 +611,8 @@ func simdBits(t *testing.T, keep func(simdFunc) bool, opt bool) (n, calls int, e
 	// exits' code is kept by.
 	cj := native.Code.jit.Load()
 	names := map[string]bool{}
-	cj.simd.Range(func(k, _ any) bool {
-		at := k.(simdExitKey).at
+	cj.instrs.Range(func(k, _ any) bool {
+		at := k.(instrExitKey).at
 		for i, f := range native.Code.Module.Functions {
 			if at >= f.Code.Offset && at < f.Code.End() {
 				names[fns[i].op.Name()] = true

@@ -98,8 +98,8 @@ func TestFirstCallsAtOnce(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
 	}
+	codeSwitch(t, func(c *codeTest) { c.refuse = func(fn uint32) bool { return fn == 2 } })
 	b, err := wat.Compile([]byte(`(module
-		(type $v (struct (field v128)))
 		(func $leaf (param i32) (result i32) (i32.mul (local.get 0) (i32.const 3)))
 		(func $loop (param i32) (result i32) (local i32)
 			(block $out (loop $l
@@ -108,9 +108,8 @@ func TestFirstCallsAtOnce(t *testing.T) {
 				(local.set 0 (i32.sub (local.get 0) (i32.const 1)))
 				(br $l)))
 			(i32.add (local.get 1) (call $refused (local.get 1))))
-		;; A read of a v128 field, which the JIT refuses.
+		;; Refused, by the test's switch.
 		(func $refused (param i32) (result i32)
-			(if (i32.const 0) (then (drop (struct.get $v 0 (ref.null $v)))))
 			(i32.and (local.get 0) (i32.const 7)))
 		(func (export "run") (param i32) (result i32) (call $loop (local.get 0))))`))
 	if err != nil {
@@ -163,7 +162,7 @@ func TestFirstCallsAtOnce(t *testing.T) {
 			}
 		}
 		after := ReadJITStats()
-		refused := after.Refused["simd"] - before.Refused["simd"]
+		refused := after.Refused[refuseTest] - before.Refused[refuseTest]
 		if c, i := after.Compiled-before.Compiled, after.Interpreted-before.Interpreted; c != 3 || refused != 1 || i != 1 {
 			t.Fatalf("round %d: %d functions compiled, %d refused, %d bodies built for the interpreter; want 3, 1 and 1", round, c, refused, i)
 		}

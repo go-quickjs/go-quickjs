@@ -141,6 +141,15 @@ func countOps(t testing.TB, f func()) int64 {
 	return c.ops.Load() - o
 }
 
+// countInstrs returns the ExitInstrs the native code of t's Codes takes
+// while f runs: the instructions whose interpreter's code it runs in Go.
+func countInstrs(t testing.TB, f func()) int64 {
+	c := &codeTestChain(t)[0].counts
+	n := c.instrs.Load()
+	f()
+	return c.instrs.Load() - n
+}
+
 // countAllocs returns the calls of the allocation stub the native code of
 // t's Codes makes while f runs, its ExitAllocs, and all its exits.
 func countAllocs(t testing.TB, f func()) (stubs, allocs, all int64) {
