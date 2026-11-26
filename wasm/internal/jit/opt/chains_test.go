@@ -59,3 +59,21 @@ func TestForwardChains(t *testing.T) {
 		})
 	}
 }
+
+// A phi the second gvn makes trivial is rewritten before the chains are
+// forwarded: x+0 and x*1, which the first gvn finds apart, fold to x, and
+// the second finds the two sums of one, the arms' values of a local, one
+// value. The verifier between the passes sees no use of the phi, which no
+// list holds once it is a copy.
+func TestPhiTrivialAfterSecondGVN(t *testing.T) {
+	f := buildText(t, `(module (func (param i32 i32) (result i32) (local i32)
+		(local.set 2 (i32.add (i32.add (local.get 0) (i32.const 0)) (i32.const 1)))
+		(if (local.get 1)
+			(then (local.set 2 (i32.add (i32.mul (local.get 0) (i32.const 1)) (i32.const 1)))))
+		(local.get 2)))`, 0)
+	for _, b := range f.Blocks {
+		if len(b.Phis) > 0 {
+			t.Errorf("%v keeps its phis\n%v", b, f)
+		}
+	}
+}

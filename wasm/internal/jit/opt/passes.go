@@ -28,21 +28,22 @@ func Optimize(f *Func, check func(pass string)) {
 	run("gvn", PhaseGVN, gvn)
 	// The uses of the copies gvn made are rewritten with those of the
 	// copies forwardChains makes, in one walk: forwardChains sees through
-	// copies (resolve), and needs only the phis they made trivial gone.
-	pending := false
-	run("copyelim", PhaseCopyelim, func(f *Func) { pending = trivialPhis(f) })
+	// copies (resolve), and needs only the phis they made trivial gone. A
+	// phi made a copy, which is in no list, has its uses rewritten at
+	// once, and gvn's with them (copyelimPhis).
+	run("copyelim", PhaseCopyelim, copyelimPhis)
 	run("chains", PhaseChains, func(f *Func) {
 		// forwardChains resolves the values' arguments and drops the
 		// copies as it walks them; a phi its copies make trivial may be
 		// any value's argument.
 		walked, changed, dropped := forwardChains(f)
 		if changed && trivialPhis(f) {
-			walked, pending = false, true
+			walked = false
 		}
 		switch {
-		case walked && (pending || dropped):
+		case walked && dropped:
 			rewriteCopies(f, true)
-		case !walked && (pending || anyCopy(f)):
+		case !walked && (changed || anyCopy(f)):
 			rewriteCopies(f, false)
 		}
 	})
@@ -93,6 +94,16 @@ func resolve(v *Value) *Value {
 // that value, removing them.
 func copyelim(f *Func) {
 	if trivialPhis(f) || anyCopy(f) {
+		rewriteCopies(f, false)
+	}
+}
+
+// copyelimPhis is copyelim where the copies among the values are left for
+// a later rewrite: it rewrites the uses only where it made a phi a copy,
+// which is in no list -- the function would refer to a value not in it,
+// which the verifier between the passes rejects.
+func copyelimPhis(f *Func) {
+	if trivialPhis(f) {
 		rewriteCopies(f, false)
 	}
 }
