@@ -2958,13 +2958,18 @@ is in use (`regInUse`), the native calls of it Go knows nothing of until
 they leave: the cache's flush lets it be. Code let go of while in use -- for
 room, compiled again once invalid -- is kept, not closed (`regRetired`),
 where a level running it still finds it, and closed once nothing uses it
-(`jitRegCloseRetired`). A frame Go makes of a level, or of an inlined
-callee, a plain call called, is given the receiver the interpreter's call
-gives it (`jitRegPlainReceiver`), which native code writes only for a callee
-that reads it and a stack trace reads. The levels and frames of a call of Go
-are on stacks of the JIT's state (`regNestLevels`, `regLazyLevels`), each
-call's past those of the calls under way below it. Both backends make such a
-call natively, the same way (`mir`'s `call`, `windowSetup`).
+(`jitRegCloseRetired`). A frame Go makes of an inlined callee a plain call
+called is given the receiver the interpreter's call gives it
+(`jitRegPlainReceiver`), which the inlined frame holds only for a callee that
+reads it and a stack trace reads. A frame Go makes of a native level keeps
+the receiver in its window's register 1 (`jitRegConstructs`): the plain
+call's, which the call writes for every callee (`windowSetup`), or the one a
+call in tail position gave the frame since, deep in the stack -- a method's,
+which the plain call's written over it had lost. The levels and frames of a
+call of Go are on stacks of the JIT's state (`regNestLevels`,
+`regLazyLevels`), each call's past those of the calls under way below it.
+Both backends make such a call natively, the same way (`mir`'s `call`,
+`windowSetup`).
 
 A callee that leaves native code on more than one in `jitUnwindShare` of
 its native callers' calls is compiled again while it learns, up to

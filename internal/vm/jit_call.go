@@ -1727,8 +1727,18 @@ type jitRegLevel struct {
 // jitRegConstructs marks l, the level whose caller's code c makes the call
 // at register pc rpc, a construction's where that is new_w or super_call:
 // its receiver the one the call gave its context (abi.Context's This).
-// A plain call's receiver is written for the frame Go makes of the level
-// (jitRegPlainReceiver).
+// A plain call's level has its function written to its window's register 0
+// (jitRegLevelCallee). Its receiver, register 1, is the one native code
+// wrote there, which Go leaves as it is: the plain call's -- undefined, the
+// global object, an arrow's captured this (mir's windowSetup and
+// genWindowSetup write it for every callee) -- or, deep in the stack, the one
+// a call in tail position gave the frame since (mir's tailSelf and
+// windowTailJump), a method's receiver. Written over with the plain call's,
+// as an inlined callee's is (jitRegPlainReceiver), the frame Go made of the
+// level at an exit after such a call had lost the method's receiver: in
+// Babel's parser, the closure allowInAnd calls plainly calls
+// r.parseExpressionBase(t) in tail position, and parseExpressionBase, its
+// code left at a call, went on in the interpreter with this undefined.
 func (r *Runtime) jitRegConstructs(l *jitRegLevel, c *regCode, rpc int) {
 	if rpc >= len(c.rc.Code) {
 		return
@@ -1739,7 +1749,6 @@ func (r *Runtime) jitRegConstructs(l *jitRegLevel, c *regCode, rpc int) {
 	case bytecode.RCallW, bytecode.RCallWT:
 		if l.wb+1 < len(r.stack) {
 			r.jitRegLevelCallee(l)
-			r.jitRegPlainReceiver(r.stack[l.wb], l.cl, l.wb)
 		}
 	}
 }
@@ -1771,10 +1780,11 @@ func (r *Runtime) jitRegLevelCallee(l *jitRegLevel) *Object {
 // closure cl that callee, its function object, is called by a plain call
 // in, the receiver the interpreter's call gives it (regCallKind):
 // undefined, the global object for a sloppy callee, an arrow's captured
-// this. A native call, or a callee inlined, writes it only for a callee
-// that reads it, and the frame Go makes of the level reads it for a
-// stack trace: left as the window held it, the trace named the frame a
-// method of whatever was there, "String.boom".
+// this. A callee inlined holds it only where the callee reads it
+// (ssa.InlineSite's ThisCell), and the frame Go makes of the level reads it
+// for a stack trace: left as the window held it, the trace named the frame
+// a method of whatever was there, "String.boom". A native callee's level
+// has the one its call wrote (jitRegConstructs).
 func (r *Runtime) jitRegPlainReceiver(callee Value, cl *closure, wb int) {
 	if !callee.IsObject() || cl == nil || cl.reg == nil {
 		return
