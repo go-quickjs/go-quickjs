@@ -161,6 +161,12 @@ func (r *Runtime) jitRegLowerAhead(cl *closure, c *regCode, callee bool) (bool, 
 		// lowered as it is asked for.
 		return true, nil
 	}
+	if j := s.regAheadRoots[r.jitRegKeyOf(cl)]; j != nil && j.state.Load() != jitJobDone {
+		// Its lowering ahead under way: waited for, as below, before the
+		// hints are taken -- a scan of the function's marks and of the
+		// operand lattice, about 4 us an ask on Octane's Typescript.
+		return r.jitAheadPending(j, c), j
+	}
 	key, l, h := r.jitRegLowering(cl, c.rc)
 	if l == nil {
 		return true, nil
@@ -197,12 +203,7 @@ func (r *Runtime) jitRegLowerAhead(cl *closure, c *regCode, callee bool) (bool, 
 		return true, s.regAheadRoots[key]
 	}
 	if pend != nil {
-		// Waited for: taken back where no worker has begun it in time.
-		root := s.regAheadRoots[key]
-		if pend.waited.Load() >= jitTakeBackAsks*jitRegBudget(r.jitCallThreshold, c) && pend.state.CompareAndSwap(jitJobQueued, jitJobTaken) {
-			return true, root
-		}
-		return r.jitAheadWait(pend), root
+		return r.jitAheadPending(pend, c), s.regAheadRoots[key]
 	}
 	j := &jitAheadJob{root: key, done: make(chan struct{})}
 	j.items = []jitAheadItem{{at: jitAheadKey{key, jitLowerSSA}, kind: jitLowerSSA, rc: c.rc, fn: cl.fn, h: h}}
@@ -224,6 +225,17 @@ func (r *Runtime) jitRegLowerAhead(cl *closure, c *regCode, callee bool) (bool, 
 		jitWorkers.submit(j)
 	}
 	return r.jitAheadWait(j), j
+}
+
+// jitAheadPending reports whether the compile of c's function, which j's
+// lowering ahead is under way for, may go on: j done (jitAheadWait), or
+// taken back where no worker has begun it by the time the function has
+// spent jitTakeBackAsks budgets waiting, lowered as it is asked for.
+func (r *Runtime) jitAheadPending(j *jitAheadJob, c *regCode) bool {
+	if j.waited.Load() >= jitTakeBackAsks*jitRegBudget(r.jitCallThreshold, c) && j.state.CompareAndSwap(jitJobQueued, jitJobTaken) {
+		return true
+	}
+	return r.jitAheadWait(j)
 }
 
 // jitAheadWait reports whether j is done, waiting for it under
