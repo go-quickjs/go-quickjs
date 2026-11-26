@@ -79,18 +79,65 @@ func (f *jitRegFeedback) name(rpc int, n uint16) (Atom, bool) {
 }
 
 // propertyAt is the property site the program's instruction pc reads or
+// writes, of the heap as it is (jitPropCode's propertyAt).
+func (f *jitRegFeedback) propertyAt(pc int) (rpc int, key Atom, c *propCache, write, method, plain, ok bool) {
+	code := f.propCode()
+	return code.propertyAt(pc, jitPropLive{f: f, r: f.fb.r})
+}
+
+// propCode is f's function as a property site's question is decoded from
+// it (jitPropCode).
+func (f *jitRegFeedback) propCode() jitPropCode {
+	code := jitPropCode{rc: f.rc, p: f.p}
+	if cl := f.fb.cl; cl != nil {
+		code.names, code.cl = cl.names, true
+	}
+	return code
+}
+
+// jitPropCode is what of a function a property site's question is decoded
+// from: its register code, the program LowerReg made of it, and its
+// closure's names, none of which changes once made, so that a worker may
+// decode it as the runtime's goroutine does (jit_snapprop.go).
+type jitPropCode struct {
+	rc    *bytecode.RegCode
+	p     *ir.Program
+	names []Atom
+	// cl says the feedback has a closure, whose names these are.
+	cl bool
+}
+
+// at is the register instruction of the program's instruction pc, and what
+// that instruction is.
+func (c *jitPropCode) at(pc int) (bytecode.RInstr, ir.Op, bool) {
+	if pc < 0 || pc >= len(c.p.Code) || int(c.p.Origin[pc]) >= len(c.rc.Code) {
+		return 0, 0, false
+	}
+	return c.rc.Code[c.p.Origin[pc]], c.p.Code[pc].Op, true
+}
+
+// propertyAt is the property site the program's instruction pc reads or
 // writes -- get_prop's, get_method's, get_method_w's, set_prop's, or
 // add_prop's read or store, which share the store's site -- its register
-// pc, its key, its cache by the register instruction's C (nil past the
-// closure's caches), and whether it is a write, a method's read, or a
-// plain read (get_prop's).
-func (f *jitRegFeedback) propertyAt(pc int) (rpc int, key Atom, c *propCache, write, method, plain, ok bool) {
-	w, op, ok := f.at(pc)
-	if !ok || f.fb.cl == nil {
+// pc, its key, its cache by the register instruction's C, as src has it
+// (nil past the closure's caches), and whether it is a write, a method's
+// read, or a plain read (get_prop's).
+func (c *jitPropCode) propertyAt(pc int, src jitPropSrc) (rpc int, key Atom, cache *propCache, write, method, plain, ok bool) {
+	w, op, ok := c.at(pc)
+	if !ok || !c.cl {
 		return
 	}
 	if w.Op() == bytecode.RLit {
-		return f.regLitProperty(pc, w, op)
+		// regexp_lit's read of its method (regLitCache).
+		if op != ir.ReferenceRead {
+			return 0, 0, nil, false, false, false, false
+		}
+		rpc = int(c.p.Origin[pc])
+		key, cache, ok = src.litRead(rpc, w)
+		if !ok {
+			return 0, 0, nil, false, false, false, false
+		}
+		return rpc, key, cache, false, true, false, true
 	}
 	switch w.Op() {
 	case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RSetProp, bytecode.RAddProp, bytecode.RAddPropI:
@@ -101,32 +148,30 @@ func (f *jitRegFeedback) propertyAt(pc int) (rpc int, key Atom, c *propCache, wr
 		return 0, 0, nil, false, false, false, false
 	}
 	site := int(w.C())
-	if site >= len(f.rc.SiteName) || int(f.rc.SiteName[site]) >= len(f.fb.cl.names) {
+	if site >= len(c.rc.SiteName) || int(c.rc.SiteName[site]) >= len(c.names) {
 		return 0, 0, nil, false, false, false, false
 	}
-	key = f.fb.cl.names[f.rc.SiteName[site]]
-	if site < len(f.fb.cl.ic) {
-		c = &f.fb.cl.ic[site]
-	}
+	key = c.names[c.rc.SiteName[site]]
+	cache = src.cache(site)
 	write = op == ir.PropertyWrite
 	method = w.Op() == bytecode.RGetMethod || w.Op() == bytecode.RGetMethodW
 	plain = w.Op() == bytecode.RGetProp || w.Op() == bytecode.RGetPropNext
-	return int(f.p.Origin[pc]), key, c, write, method, plain, true
+	return int(c.p.Origin[pc]), key, cache, write, method, plain, true
 }
 
-// regLitProperty is propertyAt's for regexp_lit's read of its method, exec
-// or test, of its literal's RegExp (compile's regexpLit), which no cache of
-// the interpreter's has: a cache of the code's own, filled by a read of the
-// method off a RegExp of the literal -- or none where it is found an
-// accessor, which a read would call before the call it ends in (ir's
-// windowLast).
-func (f *jitRegFeedback) regLitProperty(pc int, w bytecode.RInstr, op ir.Op) (rpc int, key Atom, c *propCache, write, method, plain, ok bool) {
+// regLitCache is the cache of regexp_lit's read of its method, exec or
+// test, of its literal's RegExp (compile's regexpLit), the register
+// instruction w at register pc rpc, which no cache of the interpreter's
+// has: a cache of the code's own, filled by a read of the method off a
+// RegExp of the literal -- or none where it is found an accessor, which a
+// read would call before the call it ends in (ir's windowLast) -- and the
+// method's key.
+func (f *jitRegFeedback) regLitCache(rpc int, w bytecode.RInstr) (key Atom, c *propCache, ok bool) {
 	fb, r := f.fb, f.fb.r
 	consts, k := regConsts(fb.cl.fn, f.rc), int(w.C())
-	if op != ir.ReferenceRead || fb.e == nil || !f.regLitFed(pc) || k >= len(consts) {
-		return 0, 0, nil, false, false, false, false
+	if fb.e == nil || !f.regLitFedAt(rpc) || k >= len(consts) {
+		return 0, nil, false
 	}
-	rpc = int(f.p.Origin[pc])
 	key = atomExec
 	if w.X()&bytecode.RLitTest != 0 {
 		key = r.atoms.intern("test")
@@ -138,17 +183,17 @@ func (f *jitRegFeedback) regLitProperty(pc int, w bytecode.RInstr, op ir.Op) (rp
 	if c == nil {
 		lit, err := r.newRegExpLiteral(&consts[k])
 		if err != nil || !lit.IsObject() {
-			return 0, 0, nil, false, false, false, false
+			return 0, nil, false
 		}
 		// Filled by the first read, answered by the second.
 		c = new(propCache)
 		r.cachedProp(c, lit.Object(), key)
 		if _, found := r.cachedProp(c, lit.Object(), key); !found || c.getter {
-			return 0, 0, nil, false, false, false, false
+			return 0, nil, false
 		}
 		fb.e.regLitReads[int32(rpc)] = c
 	}
-	return rpc, key, c, false, true, false, true
+	return key, c, true
 }
 
 // regKnownRead is a cache for the read of key at register pc rpc, whose own
@@ -165,10 +210,7 @@ func (f *jitRegFeedback) regLitProperty(pc int, w bytecode.RInstr, op ir.Op) (rp
 // that opened after the compile are compiled for at once (feedReopt).
 func (f *jitRegFeedback) regKnownRead(rpc int, key Atom) (*propCache, bool) {
 	fb := f.fb
-	if fb.e == nil || rpc < 1 || rpc >= len(f.rc.Code) {
-		return nil, false
-	}
-	if op := f.rc.Code[rpc-1].Op(); op != bytecode.RGetUpval && op != bytecode.RGetUpvalCheck {
+	if fb.e == nil || !jitKnownReadAt(f.rc, rpc) {
 		return nil, false
 	}
 	v, ok := f.regDefined(rpc, int(f.rc.Code[rpc].B()))
@@ -189,58 +231,87 @@ func (f *jitRegFeedback) regKnownRead(rpc int, key Atom) (*propCache, bool) {
 	return c, true
 }
 
-// Property is ssa.Feedback's: the property site of a read or a write the
-// program's instruction pc makes (propertyAt): as its cache knows it, with
-// the cases the code met at its exits (jitRegDeoptSeen, jitRegHostSeen), a
-// read's past what a cache holds, or a write's additions. A cache that gave
-// up, or holds dictionary objects or a chain's cell, or a site that met
-// more than its cases hold, is megamorphic; a read whose cache never filled
-// searches the receiver's own table (Scan).
-func (f *jitRegFeedback) Property(pc int) (ssa.PropertySite, bool) {
-	if w, op, ok := f.at(pc); ok && (w.Op() == bytecode.RGetPrivate || w.Op() == bytecode.RSetPrivate) && f.p.Code[pc].Private {
-		return f.privateProperty(pc, op)
+// jitKnownReadAt reports whether the read at register pc rpc of rc reads
+// what the register instruction before it reads of a captured binding, as
+// regKnownRead asks.
+func jitKnownReadAt(rc *bytecode.RegCode, rpc int) bool {
+	if rpc < 1 || rpc >= len(rc.Code) {
+		return false
 	}
-	rpc, key, cache, write, _, plain, ok := f.propertyAt(pc)
+	op := rc.Code[rpc-1].Op()
+	return op == bytecode.RGetUpval || op == bytecode.RGetUpvalCheck
+}
+
+// jitKnownReadWanted reports whether a read whose cache is c, a write's
+// where write says, is answered by a cache of its own (regKnownRead): a
+// read whose cache never filled.
+func jitKnownReadWanted(c *propCache, write bool) bool {
+	return !write && (c.shape == nil || c.shape == noShape) && c.fills == 0
+}
+
+// Property is ssa.Feedback's: the property site of a read or a write the
+// program's instruction pc makes (jitPropertyOf), of the heap as it is.
+func (f *jitRegFeedback) Property(pc int) (ssa.PropertySite, bool) {
+	code := f.propCode()
+	return jitPropertyOf(&code, pc, jitPropLive{f: f, r: f.fb.r}, f.fb)
+}
+
+// jitPropertyOf is Property's answer at the program's instruction pc of
+// code, from what src has of the caches, of what the code learned and of
+// the heap, what it keeps appended to fb's lists: the property site of a
+// read or a write (propertyAt), as its cache knows it, with the cases the
+// code met at its exits (jitRegDeoptSeen, jitRegHostSeen), a read's past
+// what a cache holds, or a write's additions. A cache that gave up, or
+// holds dictionary objects or a chain's cell, or a site that met more than
+// its cases hold, is megamorphic; a read whose cache never filled searches
+// the receiver's own table (Scan). The feedback derives it so from the
+// live caches, a snapshot's worker from their copy (jit_snapprop.go).
+func jitPropertyOf(code *jitPropCode, pc int, src jitPropSrc, fb *jitFeedback) (ssa.PropertySite, bool) {
+	if w, op, ok := code.at(pc); ok && (w.Op() == bytecode.RGetPrivate || w.Op() == bytecode.RSetPrivate) && code.p.Code[pc].Private {
+		return jitPrivatePropertyOf(code, pc, op, src, fb)
+	}
+	rpc, key, cache, write, _, plain, ok := code.propertyAt(pc, src)
 	if !ok {
 		return ssa.PropertySite{}, false
 	}
-	if f.fwd != nil && f.fwd.ctor != nil && !write {
-		if site, ok := f.forwardProperty(rpc, key); ok {
+	if !write {
+		if site, ok := src.forward(rpc, key); ok {
 			return site, true
 		}
 	}
 	if cache == nil {
 		return ssa.PropertySite{Key: uint32(key)}, true
 	}
-	if !write && (cache.shape == nil || cache.shape == noShape) && cache.fills == 0 {
-		if c, ok := f.regKnownRead(rpc, key); ok {
+	if jitKnownReadWanted(cache, write) {
+		if c, ok := src.knownRead(rpc, key); ok {
 			cache = c
 		}
 	}
-	fb := f.fb
-	site, ok := fb.siteOf(key, write, cache)
+	x := src.ctx()
+	site, ok := fb.siteFrom(key, write, cache, src)
 	if !ok {
 		return site, false
 	}
+	p := src.polyAt(rpc)
 	deep := false
 	if !write && site.Shape == 0 && site.Holders[0].Object == 0 && (cache.shape == nil || cache.shape == noShape || cache.cell != nil) {
 		// A read its cache could not hold, the property past the two
 		// prototypes it holds: compiled for the first of the shapes it
 		// met, the others its cases.
-		if cases := fb.deepCasesOf(rpc, cache); len(cases) != 0 {
+		if cases := fb.deepCasesOf(&x, p, cache); len(cases) != 0 {
 			k := cases[0]
 			site.Shape, site.Index, site.Holders, site.More, site.Cases = k.Shape, k.Index, k.Holders, k.More, cases[1:]
 			deep = true
 		}
 	}
 	if write {
-		site.Cases, site.Adds = fb.writeCases(rpc, site)
+		site.Cases, site.Adds = fb.writeCases(p, site, src)
 	} else if site.Shape != 0 && !deep {
-		site.Cases = fb.cases(rpc, site.Shape)
+		site.Cases = fb.cases(p, site.Shape)
 	}
-	site.Megamorphic = fb.megamorphicOf(rpc, cache, write, site)
-	site.Primitives = jitPolyPrim(fb.e, rpc)
-	if write && cache.jitPrimWriteSeen() && !fb.r.jitStress.primLeave {
+	site.Megamorphic = megamorphicOf(&x, p, cache, write, site)
+	site.Primitives = p != nil && p.prim
+	if write && cache.jitPrimWriteSeen() && !x.primLeave {
 		// A write the interpreter has seen make of a primitive's property
 		// (jitNotePrimWrite): Go's from native code, as one the code met
 		// at an exit is (jitRegHostSeen). Learned only at exits, each site
@@ -255,27 +326,53 @@ func (f *jitRegFeedback) Property(pc int) (ssa.PropertySite, bool) {
 	return site, true
 }
 
-// privateProperty is Property's site for get_private's or set_private's
-// read or write, the program's instruction pc, lowered to op: the property
-// of the key its site's cache (Aux's high 16 bits) met it under -- a symbol
-// each evaluation of the class mints, which the code checks the key's
-// register holds (ssa.PropertySite's Private) -- in the objects of the
-// shapes the cache holds of it, each an own data property, a write's
-// writable: the entry's first, the rest its cases. A cache that holds none
-// -- or whose first is another evaluation's key's -- answers nothing, and
-// the site is Go's, whose read or write fills the cache (regGetPrivate,
-// regSetPrivate) for the code compiled next.
-func (f *jitRegFeedback) privateProperty(pc int, op ir.Op) (ssa.PropertySite, bool) {
-	fb := f.fb
-	rpc := int(f.p.Origin[pc])
-	if fb.cl == nil || rpc >= len(f.rc.Aux) {
+// jitPrivatePropertyOf is Property's site for get_private's or
+// set_private's read or write, the program's instruction pc of code,
+// lowered to op: the property of the key its site's cache (Aux's high 16
+// bits) met it under -- a symbol each evaluation of the class mints, which
+// the code checks the key's register holds (ssa.PropertySite's Private) --
+// in the objects of the shapes the cache holds of it, each an own data
+// property, a write's writable: the entry's first, the rest its cases. A
+// cache that holds none -- or whose first is another evaluation's key's --
+// answers nothing, and the site is Go's, whose read or write fills the
+// cache (regGetPrivate, regSetPrivate) for the code compiled next.
+func jitPrivatePropertyOf(code *jitPropCode, pc int, op ir.Op, src jitPropSrc, fb *jitFeedback) (ssa.PropertySite, bool) {
+	rpc := int(code.p.Origin[pc])
+	if !code.cl || rpc >= len(code.rc.Aux) {
 		return ssa.PropertySite{}, false
 	}
-	site := int(f.rc.Aux[rpc] >> 16)
-	if site == 0 || site >= len(fb.cl.ic) {
+	site := int(code.rc.Aux[rpc] >> 16)
+	c := src.cache(site)
+	if site == 0 || c == nil {
 		return ssa.PropertySite{}, false
 	}
-	write := op == ir.PropertyWrite
+	cases, atom, ok := jitPrivateCases(c, op == ir.PropertyWrite)
+	if !ok {
+		return ssa.PropertySite{}, false
+	}
+	sym := src.symbol(atom)
+	if sym == nil {
+		return ssa.PropertySite{}, false
+	}
+	ps := ssa.PropertySite{Key: uint32(atom), Private: uintptr(unsafe.Pointer(sym))}
+	k := fb.keep()
+	for i, c := range cases {
+		k.shapes = append(k.shapes, src.keep(c.shape))
+		if i == 0 {
+			ps.Shape, ps.Index = uintptr(unsafe.Pointer(c.shape)), c.idx
+			continue
+		}
+		ps.Cases = append(ps.Cases, ssa.PropertyCase{Shape: uintptr(unsafe.Pointer(c.shape)), Index: c.idx})
+	}
+	return ps, true
+}
+
+// jitPrivateCases are the entries of a private member's site, its cache c,
+// a write's or a read's, that jitPrivatePropertyOf compiles for, and the
+// key of the first: those of an own data property, a write's writable, of
+// that key -- an object of another evaluation's shape is Go's, whose brand
+// check throws.
+func jitPrivateCases(c *propCache, write bool) ([]propCache, Atom, bool) {
 	var cases []propCache
 	own := func(e *propCache) {
 		sh := e.shape
@@ -287,7 +384,6 @@ func (f *jitRegFeedback) privateProperty(pc int, op ir.Op) (ssa.PropertySite, bo
 		}
 		cases = append(cases, propCache{shape: sh, idx: e.idx})
 	}
-	c := &fb.cl.ic[site]
 	own(c)
 	if p := c.poly; p != nil {
 		for i := range p.n {
@@ -295,27 +391,11 @@ func (f *jitRegFeedback) privateProperty(pc int, op ir.Op) (ssa.PropertySite, bo
 		}
 	}
 	if len(cases) == 0 {
-		return ssa.PropertySite{}, false
+		return nil, 0, false
 	}
 	atom := cases[0].shape.keys[cases[0].idx].key
-	sym := fb.r.atoms.symbol(atom)
-	if sym == nil {
-		return ssa.PropertySite{}, false
-	}
-	// Of the first's key alone: an object of another evaluation's shape is
-	// Go's, whose brand check throws.
 	cases = slices.DeleteFunc(cases, func(c propCache) bool { return c.shape.keys[c.idx].key != atom })
-	ps := ssa.PropertySite{Key: uint32(atom), Private: uintptr(unsafe.Pointer(sym))}
-	k := fb.keep()
-	for i, c := range cases {
-		k.shapes = append(k.shapes, remember(c.shape))
-		if i == 0 {
-			ps.Shape, ps.Index = uintptr(unsafe.Pointer(c.shape)), c.idx
-			continue
-		}
-		ps.Cases = append(ps.Cases, ssa.PropertyCase{Shape: uintptr(unsafe.Pointer(c.shape)), Index: c.idx})
-	}
-	return ps, true
+	return cases, atom, true
 }
 
 // StringProperty is ssa.StringPropertyFeedback's: a method's read whose
@@ -751,7 +831,12 @@ func (f *jitRegFeedback) Generic(pc int) bool {
 // from which on the builder leaves the instruction to Go whole at its
 // start -- a literal, a read or a call it is not fed for is an exit there.
 func (f *jitRegFeedback) regLitFed(pc int) bool {
-	return f.fb.e == nil || !slices.Contains(f.fb.e.failed, int32(f.p.Origin[pc]))
+	return f.regLitFedAt(int(f.p.Origin[pc]))
+}
+
+// regLitFedAt is regLitFed's of register pc rpc.
+func (f *jitRegFeedback) regLitFedAt(rpc int) bool {
+	return f.fb.e == nil || !slices.Contains(f.fb.e.failed, int32(rpc))
 }
 
 // Resumed is ssa.ResumeFeedback's: Go has gone on at register pc rpc, after

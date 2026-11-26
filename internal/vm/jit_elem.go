@@ -542,7 +542,7 @@ func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
 			return
 		}
 		if e.next != nil {
-			add := fb.add(e)
+			add := fb.add(e, jitPropLive{r: fb.r})
 			if add == nil {
 				return
 			}

@@ -226,9 +226,10 @@ func (fb *jitFeedback) accessorOf(pc int, c *propCache, key Atom, write bool) (s
 // rather than leave at each shape past its cases, compiled again for each.
 func jitCacheMegamorphic(c *propCache) bool { return int(c.fills) > 1+maxPolyEntries }
 
-// megamorphicOf is megamorphic's, of either form's code: the site at pc,
-// its cache c (nil for none), a write's or a read's.
-func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.PropertySite) bool {
+// megamorphicOf is megamorphic's, of either form's code: the site whose
+// learned site is p (nil for none), its cache c (nil for none), a write's
+// or a read's, of a feedback as x has it.
+func megamorphicOf(x *jitPropCtx, p *jitPolySite, c *propCache, write bool, site ssa.PropertySite) bool {
 	if len(site.Cases)+len(site.Adds) >= jitPropertyCases {
 		return true
 	}
@@ -279,22 +280,14 @@ func (fb *jitFeedback) megamorphicOf(pc int, c *propCache, write bool, site ssa.
 			return true
 		}
 	}
-	e := fb.e
-	if fb.root != nil && (e == nil || !e.reg) {
+	if x.callee && !x.reg {
 		// An inlined callee's whose feedback holds no register entry:
 		// nothing its own code learned. A register callee's holds what
 		// its code learned (regLearned), which a deoptimization of the
 		// code inlining it learns in too.
 		return false
 	}
-	if e != nil {
-		for i := range e.poly {
-			if p := &e.poly[i]; int(p.pc) == pc && p.mega {
-				return true
-			}
-		}
-	}
-	return false
+	return x.learned && p != nil && p.mega
 }
 
 // dataSeen reports whether the property site at pc, its cache c, has met

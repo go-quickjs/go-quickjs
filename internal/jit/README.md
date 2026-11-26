@@ -842,8 +842,18 @@ the asked ones are. A derivation reads only the copy and what does not
 change once made -- the register code, the closure's names, the fields of a
 shape a cache remembered or of a shared one -- writes nothing of the
 runtime's, and is the feedback's own: the feedback on the spot derives from
-the live caches as the worker does from their copy. A worker builds, optimizes
-and compiles from the snapshot
+the live caches as the worker does from their copy. `Property` is derived so
+(`jit_snapprop.go`): its gather copies the closure's caches whole, each
+one's earlier entries with it, and what the code learned of its sites,
+makes the caches the feedback makes of its own -- a `regexp_lit`'s, a
+known read's -- and copies them, and asks the heap the little the answers
+need of it: a private key's symbol, whether an addition's next shape wants
+its index built, a chain cell's addition; it remembers the prototypes'
+shapes a learned addition along a chain names, which may be unique and
+changed in place until remembered. Every other shape an answer names a
+cache remembered when it filled, or is shared, so the worker reads its
+fields as they are (`jitPropSrc`, live on the spot and copied in the
+snapshot). A worker builds, optimizes and compiles from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile

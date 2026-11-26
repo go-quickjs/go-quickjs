@@ -45,6 +45,8 @@ type jitSnapData struct {
 	// does (heard): the gather's copy of it, of a runtime's fixed
 	// configuration.
 	asked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
+	// prop is the property sites' (jit_snapprop.go).
+	prop jitPropData
 }
 
 // jitSnapDerived are the methods whose answers a snapshot derives on the

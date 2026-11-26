@@ -518,17 +518,6 @@ func jitPrimitiveLearned(e *jitEntry, pc int) bool {
 	return slices.Contains(e.strSites, at) || slices.Contains(e.bigSites, at) || slices.Contains(e.numSites, at) || slices.Contains(e.boolSites, at)
 }
 
-// jitPolyPrim reports whether e's read at pc met a primitive receiver
-// whose read does not throw (jitPolySite's prim).
-func jitPolyPrim(e *jitEntry, pc int) bool {
-	for i := range e.poly {
-		if p := &e.poly[i]; int(p.pc) == pc {
-			return p.prim
-		}
-	}
-	return false
-}
-
 // jitDeoptSeenOp is what jitRegDeoptSeen learns in e: the operation op at
 // pc, which deoptimized in the code of compile serial, before the
 // interpreter makes it.
@@ -4715,16 +4704,14 @@ func (r *Runtime) jitPrimitiveProto(kind ssa.Primitive) *Object {
 	return r.proto.str
 }
 
-// writeCases are what the write at pc met at objects of shapes other than
-// site's (jitPolyWriteSeenOp): an own property it wrote, or a transition it
-// added the property along (fb.add), which the code tries in turn.
-func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.PropertyCase, []*ssa.PropertyAdd) {
+// writeCases are what the write whose learned site is p (nil for none)
+// met at objects of shapes other than site's (jitPolyWriteSeenOp): an own
+// property it wrote, or a transition it added the property along (fb.add),
+// which the code tries in turn.
+func (fb *jitFeedback) writeCases(p *jitPolySite, site ssa.PropertySite, src jitPropSrc) ([]ssa.PropertyCase, []*ssa.PropertyAdd) {
 	var cases []ssa.PropertyCase
 	var adds []*ssa.PropertyAdd
-	for _, p := range fb.e.poly {
-		if int(p.pc) != pc {
-			continue
-		}
+	if p != nil {
 		for i := range p.cases {
 			c := &p.cases[i]
 			from := uintptr(unsafe.Pointer(c.shape))
@@ -4732,14 +4719,14 @@ func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.Property
 				continue
 			}
 			if c.next != nil {
-				if a := fb.add(c); a != nil {
+				if a := fb.add(c, src); a != nil {
 					adds = append(adds, a)
 				}
 				continue
 			}
 			if c.p1 == nil && c.idx >= 0 && c.idx < c.shape.n {
 				k := fb.keep()
-				k.shapes = append(k.shapes, remember(c.shape))
+				k.shapes = append(k.shapes, src.keep(c.shape))
 				cases = append(cases, ssa.PropertyCase{Shape: from, Index: c.idx})
 			}
 		}
@@ -4747,7 +4734,7 @@ func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.Property
 			if from := uintptr(unsafe.Pointer(d.from)); from == site.Shape || site.Add != nil && from == site.Add.From {
 				continue
 			}
-			if a := fb.deepAdd(d); a != nil {
+			if a := fb.deepAdd(d, src); a != nil {
 				adds = append(adds, a)
 			}
 		}
@@ -4759,16 +4746,16 @@ func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.Property
 // holds, as ssa.PropertyAdd has it, the code keeping its shapes and
 // prototypes; or nil where its next shape wants its table's index built,
 // as fb.add leaves to Go.
-func (fb *jitFeedback) deepAdd(d jitDeepAdd) *ssa.PropertyAdd {
-	if d.next.index == nil && int(d.next.n) > linearScanLimit {
+func (fb *jitFeedback) deepAdd(d jitDeepAdd, src jitPropSrc) *ssa.PropertyAdd {
+	if src.unindexed(d.next) {
 		return nil
 	}
 	k := fb.keep()
-	k.shapes = append(k.shapes, remember(d.from), remember(d.next))
+	k.shapes = append(k.shapes, src.keep(d.from), src.keep(d.next))
 	a := &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(d.from)), Next: uintptr(unsafe.Pointer(d.next)), Flags: uint8(d.next.flags)}
 	for j, up := range d.up {
 		h := ssa.Holder{Object: uintptr(unsafe.Pointer(up)), Shape: uintptr(unsafe.Pointer(d.shapes[j]))}
-		k.shapes, k.holders = append(k.shapes, remember(d.shapes[j])), append(k.holders, up)
+		k.shapes, k.holders = append(k.shapes, src.keep(d.shapes[j])), append(k.holders, up)
 		if j < len(a.Protos) {
 			a.Protos[j] = h
 		} else {
@@ -4778,14 +4765,12 @@ func (fb *jitFeedback) deepAdd(d jitDeepAdd) *ssa.PropertyAdd {
 	return a
 }
 
-// cases are the shapes other than first the read at pc met (jitPolySeenOp),
-// as ssa.PropertyCase has them: the code keeps them and their holders.
-func (fb *jitFeedback) cases(pc int, first uintptr) []ssa.PropertyCase {
+// cases are the shapes other than first the read whose learned site is p
+// (nil for none) met (jitPolySeenOp), as ssa.PropertyCase has them: the
+// code keeps them and their holders.
+func (fb *jitFeedback) cases(p *jitPolySite, first uintptr) []ssa.PropertyCase {
 	var cases []ssa.PropertyCase
-	for _, p := range fb.e.poly {
-		if int(p.pc) != pc {
-			continue
-		}
+	if p != nil {
 		for _, c := range p.cases {
 			if uintptr(unsafe.Pointer(c.shape)) == first {
 				continue
@@ -4831,13 +4816,14 @@ func (fb *jitFeedback) deepCase(d *jitDeepRead) ssa.PropertyCase {
 	return k
 }
 
-// deepCasesOf is the cases of the read at pc, its cache c (nil for none),
-// whose property is past the two prototypes a cache holds: those the code
-// met at its exits, and those the cache's reads met.
-func (fb *jitFeedback) deepCasesOf(pc int, c *propCache) []ssa.PropertyCase {
+// deepCasesOf is the cases of the read whose learned site is p (nil for
+// none), its cache c (nil for none), whose property is past the two
+// prototypes a cache holds: those the code met at its exits, and those the
+// cache's reads met.
+func (fb *jitFeedback) deepCasesOf(x *jitPropCtx, p *jitPolySite, c *propCache) []ssa.PropertyCase {
 	var cases []ssa.PropertyCase
-	if fb.e != nil && fb.root == nil {
-		cases = fb.cases(pc, 0)
+	if x.learned && !x.callee {
+		cases = fb.cases(p, 0)
 	}
 	if c != nil && c.seenOf() != nil {
 		reads := c.seenOf().reads
@@ -4851,12 +4837,18 @@ func (fb *jitFeedback) deepCasesOf(pc int, c *propCache) []ssa.PropertyCase {
 	return cases
 }
 
-// siteOf is the site of a read of key, or a write, as cache c knows it.
+// siteOf is the site of a read of key, or a write, as cache c knows it,
+// the heap as it is.
 func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertySite, bool) {
+	return fb.siteFrom(key, write, c, jitPropLive{r: fb.r})
+}
+
+// siteFrom is siteOf's, of the heap as src has it (jitPropSrc).
+func (fb *jitFeedback) siteFrom(key Atom, write bool, c *propCache, src jitPropSrc) (ssa.PropertySite, bool) {
 	site := ssa.PropertySite{Key: uint32(key)}
 	k := fb.keep()
 	if write && c.next != nil && c.next != setterNext && !c.getter {
-		site.Add = fb.add(c)
+		site.Add = fb.add(c, src)
 		return site, true
 	}
 	if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.cell != nil || c.getter || c.next != nil || c.idx < 0 {
@@ -4867,7 +4859,7 @@ func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertyS
 	}
 	if c.p1 == nil {
 		if c.idx < c.shape.n {
-			k.shapes = append(k.shapes, remember(c.shape))
+			k.shapes = append(k.shapes, src.keep(c.shape))
 			site.Shape, site.Index = uintptr(unsafe.Pointer(c.shape)), c.idx
 		}
 		return site, true
@@ -4883,11 +4875,11 @@ func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertyS
 	if write || c.s1 == nil || c.s1 == noShape || c.p2 != nil && (c.s2 == nil || c.s2 == noShape) || c.idx >= last.n {
 		return site, true
 	}
-	k.shapes = append(k.shapes, remember(c.shape), remember(c.s1))
+	k.shapes = append(k.shapes, src.keep(c.shape), src.keep(c.s1))
 	k.holders = append(k.holders, c.p1)
 	site.Holders[0] = ssa.Holder{Object: uintptr(unsafe.Pointer(c.p1)), Shape: uintptr(unsafe.Pointer(c.s1))}
 	if c.p2 != nil {
-		k.shapes = append(k.shapes, remember(c.s2))
+		k.shapes = append(k.shapes, src.keep(c.s2))
 		k.holders = append(k.holders, c.p2)
 		site.Holders[1] = ssa.Holder{Object: uintptr(unsafe.Pointer(c.p2)), Shape: uintptr(unsafe.Pointer(c.s2))}
 	}
@@ -4899,20 +4891,17 @@ func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertyS
 // as ssa.PropertyAdd has it, or nil for one native code leaves to Go: one
 // whose next shape wants its table's index built (appendTransition). The
 // code keeps the shapes and prototypes it compares.
-func (fb *jitFeedback) add(c *propCache) *ssa.PropertyAdd {
+func (fb *jitFeedback) add(c *propCache, src jitPropSrc) *ssa.PropertyAdd {
 	next := c.next
-	if c.shape == nil || c.shape == noShape || next.index == nil && int(next.n) > linearScanLimit {
+	if c.shape == nil || c.shape == noShape || src.unindexed(next) {
 		return nil
 	}
 	if c.cell != nil {
 		// An addition past a chain longer than the entry holds, which it
 		// checks by the chain's cell (fillChainStore): compiled as the
 		// additions along such chains are, for each prototype as it is.
-		if !c.cell.valid {
-			return nil
-		}
-		if d, ok := fb.r.jitDeepAddFrom(c.shape, next, c.p1, next.key); ok {
-			return fb.deepAdd(d)
+		if d, ok := src.cellAdd(c); ok {
+			return fb.deepAdd(d, src)
 		}
 		return nil
 	}
@@ -4930,13 +4919,13 @@ func (fb *jitFeedback) add(c *propCache) *ssa.PropertyAdd {
 		add.Protos[i] = ssa.Holder{Object: uintptr(unsafe.Pointer(h.p)), Shape: uintptr(unsafe.Pointer(h.s))}
 	}
 	k := fb.keep()
-	k.shapes = append(k.shapes, remember(c.shape), remember(next))
+	k.shapes = append(k.shapes, src.keep(c.shape), src.keep(next))
 	for i, h := range [2]struct {
 		p *Object
 		s *shape
 	}{{c.p1, c.s1}, {c.p2, c.s2}} {
 		if add.Protos[i].Object != 0 {
-			k.shapes, k.holders = append(k.shapes, remember(h.s)), append(k.holders, h.p)
+			k.shapes, k.holders = append(k.shapes, src.keep(h.s)), append(k.holders, h.p)
 		}
 	}
 	return add
