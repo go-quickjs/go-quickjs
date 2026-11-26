@@ -1276,6 +1276,50 @@ is under [The projection](#the-projection).
   native` the same code for every compile, since the stage changes how
   code is made, not what.
 - **Status:** not started.
+- **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
+  was run beside mir's scan on every compile, given the same function: an
+  instruction for each value and the block's end, the frame states' uses
+  as mir's use walk finds them (each value's last in each block), the
+  phis, the hints, and no clobbering calls, since mir's saves keep what
+  lives across a call. Its result was thrown away, and its time was a
+  phase of its own. The table gives ms per run of all compiles, measured
+  with `-jitcompile 2` or `3` on the Ryzen 5 3600 while another job ran
+  (rough). mir is its liveness, intervals, hints and scan, the phases
+  lsra would replace; lsra is its own phases, and in brackets with
+  building its function:
+
+  | Program | mir | lsra |
+  |---|---:|---:|
+  | Typescript | 45.5 | 63.6 (76.5) |
+  | zlib | 28.8 | 82.3 (91.7) |
+  | Mandreel | 8.0 | 12.1 (14.8) |
+  | PdfJS | 10.7 | 13.1 (15.5) |
+  | Gameboy | 7.6 | 15.5 (19.2) |
+
+  That is 1.45 to 3.2 times as long, before its locations are mapped
+  back, with mir's uses and saves still needed. Projected: allocation
+  20 to 40% down. lsra's liveness and scan are cheaper than mir's
+  (Typescript 11.8 against 18.6 ms, 16.8 against 21.7). Its range lists
+  and its webs' coalescing are not: each register gets a range a block
+  it is live in, built from dense live-out sets, and each web is
+  checked against another's lists. Together they take 28 ms where
+  mir's single-span intervals and hints take 5.2. On zlib, its slot scan
+  with holes alone takes 21.6 ms. Its liveness sets are dense, blocks
+  times registers live across a boundary, which the WebAssembly
+  optimizer bounds by refusing past `MaxLiveBytes`. The JIT refuses no
+  function for its size, so mir's scan would have to stay behind it as
+  a fallback. In code, weighing each spilled value by mir's cost in a
+  slot, lsra without splitting spills about as much on Typescript
+  (+0.8%), more on PdfJS (+19%), Mandreel (+32%) and zlib (+3%), and
+  less on Gameboy (-28%).
+- **Lead, for stage 7b:** in the same comparison, lsra's phi
+  coalescing leaves 78 to 96% fewer weighted edge moves than mir's
+  hints and groups: an edge whose phi and argument differ in location,
+  weighed as the edge runs. That holds on Typescript (2.40M to 0.53M),
+  Mandreel (10.6M to 0.37M), PdfJS (0.40M to 0.07M) and Gameboy (82K to
+  5K), but not on zlib (0.64M to 2.24M), where mir's spill classes share
+  the phis' slots. The lead is mir's own coalescing, as part of the
+  backend's work, not lsra.
 
 ### Stage 3: closures and cells natively
 
