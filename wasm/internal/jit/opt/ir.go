@@ -595,6 +595,9 @@ type Block struct {
 	outer *Block
 	// dead says the block was removed.
 	dead bool
+	// copied says a value of the block was made a copy since the copies'
+	// uses were last rewritten (setCopy, rewriteCopies).
+	copied bool
 	// The builder's state: sealed says every predecessor is known;
 	// incomplete are the phis of locals made before it was sealed. The
 	// locals' values at its end are the workspace's (workspace.defs).

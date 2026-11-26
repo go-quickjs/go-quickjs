@@ -42,9 +42,11 @@ func Optimize(f *Func, check func(pass string)) {
 		}
 		switch {
 		case walked && dropped:
-			rewriteCopies(f, true)
-		case !walked && (changed || anyCopy(f)):
-			rewriteCopies(f, false)
+			rewriteCopies(f, len(f.Blocks))
+		case !walked:
+			if from := firstCopied(f); from >= 0 {
+				rewriteCopies(f, from)
+			}
 		}
 	})
 	run("licm", PhaseLICM, licm)
@@ -93,8 +95,9 @@ func resolve(v *Value) *Value {
 // trivial phi -- one whose arguments are all one value, or itself -- by
 // that value, removing them.
 func copyelim(f *Func) {
-	if trivialPhis(f) || anyCopy(f) {
-		rewriteCopies(f, false)
+	trivialPhis(f)
+	if from := firstCopied(f); from >= 0 {
+		rewriteCopies(f, from)
 	}
 }
 
@@ -104,7 +107,7 @@ func copyelim(f *Func) {
 // which the verifier between the passes rejects.
 func copyelimPhis(f *Func) {
 	if trivialPhis(f) {
-		rewriteCopies(f, false)
+		rewriteCopies(f, firstCopied(f))
 	}
 }
 
@@ -153,38 +156,42 @@ func trivialPhis(f *Func) bool {
 	return copies
 }
 
-// anyCopy reports whether a copy is among f's values. Without one, or a phi
-// trivialPhis made one, there is nothing to rewrite: a value refers to a
-// copy only while the copy is in its block's values, or is such a phi.
-func anyCopy(f *Func) bool {
-	for _, b := range f.Blocks {
-		for _, v := range b.Values {
-			if v.Op == OpCopy {
-				return true
-			}
+// firstCopied is the index among f's blocks of the first that holds a
+// copy (Block.copied), among its values or its phis trivialPhis made
+// copies, or -1 for none. Before it there is nothing to rewrite: the
+// blocks are as order lays them out, each after its dominators, and a
+// value refers to a copy, but in a phi, only in the copy's block or one
+// after it.
+func firstCopied(f *Func) int {
+	for i, b := range f.Blocks {
+		if b.copied {
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // rewriteCopies rewrites the uses of copies and drops the copies from their
 // blocks, in one walk: a copy dropped keeps its argument, which a later use
-// resolves through. walked says a walk of the values (forwardChains) has
-// resolved their arguments and dropped the copies already, and only the
-// phis', the branches' and the results' arguments are left.
-func rewriteCopies(f *Func, walked bool) {
-	for _, b := range f.Blocks {
+// resolves through. The values are walked from the block of index from
+// on, before which none refers to a copy (firstCopied), or none of them
+// where a walk of them (forwardChains) has resolved their arguments and
+// dropped the copies already; the phis', the branches' and the results'
+// arguments are rewritten in every block.
+func rewriteCopies(f *Func, from int) {
+	for i, b := range f.Blocks {
+		b.copied = false
 		for _, v := range b.Phis {
 			resolveArgs(v.Args)
 		}
-		if !walked {
+		if i >= from {
 			// The values are moved down only from the block's first copy
 			// on.
 			vs, n := b.Values, 0
-			for i, v := range vs {
+			for j, v := range vs {
 				resolveArgs(v.Args)
 				if v.Op != OpCopy {
-					if n != i {
+					if n != j {
 						vs[n] = v
 					}
 					n++
@@ -385,9 +392,13 @@ func (v *Value) setConst(bits uint64) {
 }
 
 // setCopy makes v a copy of a, in its arguments' array where it has
-// room: a value's arguments are its own.
+// room: a value's arguments are its own. Its block is marked as holding a
+// copy (Block.copied).
 func (v *Value) setCopy(a *Value) {
 	v.Op, v.Args, v.Aux, v.Aux2 = OpCopy, append(v.Args[:0], a), 0, 0
+	if b := v.Block; b != nil {
+		b.copied = true
+	}
 }
 
 func isConst(v *Value) bool { return v.Op == OpConst }
