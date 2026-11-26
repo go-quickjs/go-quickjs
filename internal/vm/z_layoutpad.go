@@ -654,6 +654,9 @@ func init() {
 		if layoutPadNF >= 0 {
 			layoutPadF()
 		}
+		if layoutPadNIN >= 0 {
+			layoutPadIN()
+		}
 		if layoutPadNL >= 0 {
 			layoutPadL()
 		}
@@ -675,8 +678,20 @@ func init() {
 		if layoutPadNJS >= 0 {
 			layoutPadJS()
 		}
+		if layoutPadNKO >= 0 {
+			layoutPadKO()
+		}
+		if layoutPadNCC >= 0 {
+			layoutPadCC()
+		}
 		if layoutPadNN >= 0 {
 			layoutPadN()
+		}
+		if layoutPadNBU >= 0 {
+			layoutPadBU()
+		}
+		if layoutPadNCN >= 0 {
+			layoutPadCN()
 		}
 		if layoutPadNP >= 0 {
 			layoutPadP()
@@ -686,6 +701,12 @@ func init() {
 		}
 		if layoutPadNW >= 0 {
 			layoutPadW()
+		}
+		if layoutPadNWE >= 0 {
+			layoutPadWE()
+		}
+		if layoutPadNLR >= 0 {
+			layoutPadLR()
 		}
 		if layoutPadNU >= 0 {
 			layoutPadU()

@@ -634,13 +634,13 @@ eq type:.eq.SSIM32
 eq type:.eq.SSIS
 eq type:.eq.SSM1
 eq type:.eq.SSM16
+eq type:.eq.SSM16SSM64
 eq type:.eq.SSM1K7M16[2M12K4M8I]
 eq type:.eq.SSM1K7M8
 eq type:.eq.SSM2
 eq type:.eq.SSM7K1S
 eq type:.eq.SSM8
 eq type:.eq.SSM8SM2
-eq type:.eq.SSM8SSM64
 eq type:.eq.SSM8SSSS
 eq type:.eq.SSM8SSSSSSM2
 eq type:.eq.SSM9
@@ -1320,6 +1320,7 @@ eq type:.eq.SSIM32
 eq type:.eq.SSIS
 eq type:.eq.SSM1
 eq type:.eq.SSM16
+eq type:.eq.SSM16SSM64
 eq type:.eq.SSM1K7M16[2M12K4M8I]
 eq type:.eq.SSM1K7M8
 eq type:.eq.SSM2
@@ -1327,7 +1328,6 @@ eq type:.eq.SSM4K4I
 eq type:.eq.SSM7K1S
 eq type:.eq.SSM8
 eq type:.eq.SSM8SM2
-eq type:.eq.SSM8SSM64
 eq type:.eq.SSM8SSSS
 eq type:.eq.SSM8SSSSSSM2
 eq type:.eq.SSM9
@@ -2116,6 +2116,7 @@ eq type:.eq.SSIM32
 eq type:.eq.SSIS
 eq type:.eq.SSM1
 eq type:.eq.SSM16
+eq type:.eq.SSM16SSM64
 eq type:.eq.SSM1K3M8
 eq type:.eq.SSM1K7M16[2M12K4M8I]
 eq type:.eq.SSM1K7M8
@@ -2123,7 +2124,6 @@ eq type:.eq.SSM2
 eq type:.eq.SSM7K1S
 eq type:.eq.SSM8
 eq type:.eq.SSM8SM2
-eq type:.eq.SSM8SSM64
 eq type:.eq.SSM8SSSS
 eq type:.eq.SSM8SSSSSSM2
 eq type:.eq.SSM9
@@ -2907,6 +2907,7 @@ eq type:.eq.SSIM32
 eq type:.eq.SSIS
 eq type:.eq.SSM1
 eq type:.eq.SSM16
+eq type:.eq.SSM16SSM64
 eq type:.eq.SSM1K3M8
 eq type:.eq.SSM1K7M16[2M12K4M8I]
 eq type:.eq.SSM1K7M8
@@ -2915,7 +2916,6 @@ eq type:.eq.SSM4K4I
 eq type:.eq.SSM7K1S
 eq type:.eq.SSM8
 eq type:.eq.SSM8SM2
-eq type:.eq.SSM8SSM64
 eq type:.eq.SSM8SSSS
 eq type:.eq.SSM8SSSSSSM2
 eq type:.eq.SSM9
