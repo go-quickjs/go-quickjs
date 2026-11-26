@@ -990,6 +990,23 @@ stages 7 to 9 weigh more there. Hardened darwin processes stay
 interpreted; a path through libSystem's JIT write-protect toggle without
 cgo is to be verified, not assumed.
 
+### Open items
+
+What the work found that the architecture above does not yet place.
+
+- **Native await.** An async function's frame suspended at an `await`
+  and resumed without leaving native code. Each `await` is an exit to Go
+  today, which suspends the frame (`jitRegSuspend`), and the resumption,
+  its job run from the queue, enters the code again
+  (internal/jit/README.md); so a loop that awaits at each turn leaves
+  native code at each. Stage 1's operand lattice found it: `async_await`
+  is +4.9% with the JIT at every placement, the feedback handlers'
+  recording in a loop the JIT cannot keep. Native await needs the
+  suspension written into the frame by native code, the promise's
+  reaction made there, and the resumption entered from the job at the pc
+  past the `await` without Go between them. No stage covers it yet;
+  where it goes is the maintainer's to decide.
+
 ## The stages
 
 Each stage is a round of its own: one integration, one CI run, its own
@@ -1149,71 +1166,91 @@ is under [The projection](#the-projection).
   trace; the warm-up at GOMAXPROCS 1 back to synchronous; Are We Fast Yet
   and ssr no slower in the background (today +2% and Render +14%);
   differential fuzzing with background installs.
-- **Status:** in progress. The operand lattice is built (internal/jit/
-  README.md, "Feedback"): the feedback dispatcher ORs each arithmetic,
-  comparison and bitwise site's operand kinds into its byte on both
-  architectures, and the builder speculates on it -- a string or an
-  object generic and Go's from the first compile, a site that met
-  nothing left to Go at a host exit that invalidates nothing, BigInts by
-  their marks, which know the results. Oddballs beside numbers are still
-  learned at a guard: built generic, the sums of native loops' booleans
-  had been Go's, and the loops with them. A site that met nothing counts
-  only once the interpreter has run its function to a return 8 times
-  before any compile, V8's feedback point. Measured with the JIT against
-  9d14b87b: Octane -1.0% (Mandreel -1.8%, EarleyBoyer -1.3%, PdfJS
-  -1.2%, Typescript -1.0%; Ryzen 5 3600, -k 2); the micro-benchmarks'
-  geometric mean +0.2%. A handler tests the byte before it stores, as
-  V8's feedback update does (a stable site's compare-and-branch 30
-  instructions, not 12, no store); `async_await` is +4.9% at all of -k
-  4's placements, its loop interpreted because an await leaves native
-  code at each turn, which no stage yet makes native. Deopts (the tier trace): Octane 344 to
-  338, its compiles after deopts 263 to 256 (projected -10 to 25%),
-  PdfJS 37 to 31 and its compiles 142 to 131; Are We Fast Yet 78 to 74;
-  the V8 suite 9 and EarleyBoyer 4, unchanged; Typescript 193 to 194,
-  its deopts property sites', which the per-site marks and stage 5 are
-  for. The build (`-jitcompile 10`): -3.3 to -4.7% on Typescript,
-  Mandreel, PdfJS and Gameboy, zlib level (projected +1 to 3%), no phase
-  10% slower.
-  The deoptimization discipline's first half done:
-  `jitMaxDeopts` removed, no function refused for its deoptimizations;
-  each site's deoptimizations counted, and at the eighth
-  (`jitSiteDeopts`), past every site's ladder, the site built at its
-  top, so that a function's are at most eight times its sites
-  (`TestJITDeoptsBoundedBySites`: 96 deoptimizations of one function at
-  24 sites, which the cap had refused at 65). Measured, -n 5 with the
-  JIT on the Ryzen 9 9950X3D2: no function of the V8 suite, Octane, Are
-  We Fast Yet or ssr was near the cap -- the most 14 of one function,
-  Typescript's, 3 at one site -- and none reaches the bound after;
-  Typescript's compiles 768 (201 after a deoptimization) and its
-  deoptimizations 214, against 768 (202) and 215 before: as projected,
-  the cap's removal costs nothing, and the recompiles' fall is the
-  lattice's.
-  The background default is built: `WithJIT` compiles in the background where
-  GOMAXPROCS is more than 1 and on the spot where it is 1, decided at each
-  compile, `WithJITBackground(false)` the opt-out and `true` the
+- **Status:** done but the residue under Open. The operand lattice
+  is built (internal/jit/README.md, "Feedback"): the feedback dispatcher
+  ORs each arithmetic, comparison and bitwise site's operand kinds into
+  its byte on both architectures, and the builder speculates on it -- a
+  string or an object generic and Go's from the first compile, a site
+  that met nothing left to Go at a host exit that invalidates nothing,
+  BigInts by their marks, which know the results; a guard's failure at
+  such a site widens its byte before the interpreter runs it. Oddballs
+  beside numbers are still learned at a guard: built generic, the sums
+  of native loops' booleans had been Go's, and the loops with them. A
+  site that met nothing counts only once the interpreter has run its
+  function to a return 8 times before any compile, V8's feedback point.
+  A handler tests the byte before it stores, as V8's feedback update
+  does (a stable site's compare-and-branch 30 instructions, not 12, no
+  store). Measured with the JIT against 9d14b87b: Octane -1.0%
+  (Mandreel -1.8%, EarleyBoyer -1.3%, PdfJS -1.2%, Typescript -1.0%;
+  Ryzen 5 3600, -k 2); the micro-benchmarks' geometric mean +0.2%.
+  Deopts (the tier trace): Octane 344 to 338, its compiles after deopts
+  263 to 256 (projected -10 to 25%), PdfJS 37 to 31 and its compiles 142
+  to 131; Are We Fast Yet 78 to 74; the V8 suite 9 and EarleyBoyer 4,
+  unchanged; Typescript 193 to 194, its deopts property sites', which
+  the per-site marks and stage 5 are for. The build (`-jitcompile 10`):
+  -3.3 to -4.7% on Typescript, Mandreel, PdfJS and Gameboy, zlib level
+  (projected +1 to 3%), no phase 10% slower.
+  The deoptimization discipline's first half: `jitMaxDeopts` removed, no
+  function refused for its deoptimizations; each site's deoptimizations
+  counted, and at the eighth (`jitSiteDeopts`), past every site's
+  ladder, the site built at its top, so that a function's are at most
+  eight times its sites (`TestJITDeoptsBoundedBySites`: 96
+  deoptimizations of one function at 24 sites, which the cap had refused
+  at 65). Measured, -n 5 with the JIT on the Ryzen 9 9950X3D2: no
+  function of the V8 suite, Octane, Are We Fast Yet or ssr was near the
+  cap -- the most 14 of one function, Typescript's, 3 at one site -- and
+  none reaches the bound after; Typescript's compiles 768 (201 after a
+  deoptimization) and its deoptimizations 214, against 768 (202) and 215
+  before: as projected, the cap's removal costs nothing, and the
+  recompiles' fall is the lattice's.
+  The background default: `WithJIT` compiles in the background where
+  GOMAXPROCS is more than 1 and on the spot where it is 1, decided at
+  each compile, `WithJITBackground(false)` the opt-out and `true` the
   background at any GOMAXPROCS; `qjs --jit` takes the default,
-  `--no-jit-background` the spot; v8bench, placements and the conformance
-  runner keep the spot unless `-jitbackground`. A function waiting for its
-  compile counts a budget between its asks, where each of its back edges
-  had been a call of Go; the queue serves the job whose function did most
-  work waiting, and a job unbegun whose function did none from one flush
-  tick to the next is dropped; a job no worker began by its function's
-  second ask is taken back (the *estimate* kept at two asks, each a
-  budget); the workers place their code apart (`NewSSACodeApart`), the
-  install a store. `QJS_JIT_STRESS`'s `takeback` gives no compile to a
-  worker, each taken back, which the differential tests run among their
-  settings. Ryzen 5 3600, medians of five fresh processes: Typescript in
-  the background 1,715 to 1,642 ms (projected 1,600 to 1,680), on the spot
-  1,927 and 1,932; at GOMAXPROCS 1 the default is the spot's 2,459 ms
-  (2,475 at the base) where the background took 3,239 (projected back to
-  2,573 from 3,278), and the background forced there takes 2,914 with the
-  take-back. The V8 suite's five runs at GOMAXPROCS 1: 1,330 ms in the
-  background at the base, 935 by default now (899 on the spot at the
-  base), 1,072 in the background forced. `placements -k 2 -jit`, in the
-  background, base to change: Are We Fast Yet 4,954 to 4,914 ms, on the
-  spot 4,917 to 4,887 (the background +0.6%, from +0.8% at the base and
-  +2% when this plan was made; DeltaBlue +2.7%, Sieve +2.0% the most); ssr's Render 170.4
-  to 170.5 ms against 174.4 on the spot, FirstRender 48.7 against 54.9.
+  `--no-jit-background` the spot; v8bench, placements and the
+  conformance runner keep the spot unless `-jitbackground`. A function
+  waiting for its compile counts a budget between its asks, where each
+  of its back edges had been a call of Go; the queue serves the job
+  whose function did most work waiting, and a job unbegun whose function
+  did none from one flush tick to the next is dropped; a job no worker
+  began by its function's second ask is taken back (the *estimate* kept
+  at two asks, each a budget); the workers place their code apart
+  (`NewSSACodeApart`), the install a store. `QJS_JIT_STRESS`'s
+  `takeback` gives no compile to a worker, each taken back, which the
+  differential tests run among their settings. Ryzen 5 3600, medians of
+  five fresh processes: Typescript in the background 1,715 to 1,642 ms
+  (projected 1,600 to 1,680), on the spot 1,927 and 1,932; at GOMAXPROCS
+  1 the default is the spot's 2,459 ms (2,475 at the base) where the
+  background took 3,239 (projected back to 2,573 from 3,278), and the
+  background forced there takes 2,914 with the take-back. The V8 suite's
+  five runs at GOMAXPROCS 1: 1,330 ms in the background at the base, 935
+  by default now (899 on the spot at the base), 1,072 in the background
+  forced. `placements -k 2 -jit`, in the background, base to change: Are
+  We Fast Yet 4,954 to 4,914 ms, on the spot 4,917 to 4,887 (the
+  background +0.6%, from +0.8% at the base and +2% when this plan was
+  made; DeltaBlue +2.7%, Sieve +2.0% the most); ssr's Render 170.4 to
+  170.5 ms against 174.4 on the spot, FirstRender 48.7 against 54.9.
+  The three together, with the JIT against 984acb8a (Ryzen 5 3600):
+  Octane -0.3% at -k 4 (Mandreel -1.9%, Typescript -0.1%; -0.0% at -k 2,
+  and -0.7% for the lattice alone there, against the -1.0% it measured
+  on 9d14b87b: within the runs' spread); the micro-benchmarks' geometric
+  mean 1.002 at -k 2, and of its seven tests 3% or more slower at both
+  placements none 3% or more slower at all four of -k 4's;
+  `typed_i64_map` is slower at all four (+2.1 to +9.2%), but its JIT
+  work is the same in both builds (the report's compiles, exits and
+  calls of Go) and it is level, +0.6%, in the lock's own builds:
+  placement. The interpreter: plain against plain 1.000 at -k 2; the JIT
+  built in and off against plain 1.003, 1.004 at the base. The build
+  (`-jitcompile 10`, two runs each, a run's total): Typescript -1.0%,
+  Mandreel -3.2%, zlib -3.6%, PdfJS -3.8%, Gameboy -3.3%; no phase 10%
+  slower a compile -- Mandreel's build is +10.7% a run over 84 compiles
+  where the base makes 78, the lattice's compiles for what its host
+  exits taught (11 against 4), +2.8% a compile.
+- **Open:** `async_await` +4.9% with the JIT at all four of `-k 4`'s
+  placements (+5.7% integrated, slower at three): the lattice's
+  recording, the feedback handlers' test of each site's byte, in a loop
+  that stays interpreted because each await leaves native code (native
+  await, under the architecture's open items).
 
 ### Stage 2: compile speed
 
