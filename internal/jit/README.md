@@ -1478,10 +1478,9 @@ or kept in a global's or a closure's binding and called plainly (`P =
 Math.clz32; P(x)`), a string's `charCodeAt`, `String.fromCharCode`, a
 one-character `substring`, `slice`, `substr` or `charAt`, `parseInt` of a
 number, an array's `push` of any number of values and its `pop` on their
-fast paths -- an array with no room for several values grown by `push`'s
-leaf (below), native code going on after it, one with no room for one left
-to Go, whose interpreter makes the literal's arrays with the room it
-learned -- and `new Array()` or `new Array(n)` from a pool. Strings' and arrays' `indexOf`, `lastIndexOf`
+fast paths -- an array with no room for the values, one or several, grown
+by `push`'s leaf (below), native code going on after it (`a7abd0b4`) --
+and `new Array()` or `new Array(n)` from a pool. Strings' and arrays' `indexOf`, `lastIndexOf`
 and `includes` are a call of Go of their own (`ssa.GoIndexOf`), which
 answers where the built-in runs nothing. Anything else such a call meets is
 Go's.

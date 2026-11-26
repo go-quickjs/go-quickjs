@@ -16,7 +16,7 @@
 # moved, its pad and the anchor before it: move what grew in that pad's
 # range out of it, after its anchor, as b5df63ea did; where the move is
 # meant -- code that grew by a page or more -- layoutpad -pages records
-# the new addresses. The targets are the layout at db306c0e, before
+# the new addresses. The targets are the layout at 6022049a, before
 # the slowdowns of the rounds after it; W's, regCallW's, now rhCallW,, the layout at
 # 679d54b3. Q anchors the register interpreter's loop, runReg, and W the
 # call path after it; its handlers follow (reg_table*.go). X is the one

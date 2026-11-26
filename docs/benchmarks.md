@@ -65,7 +65,9 @@ CPU log ran throughout; another process took more than half a CPU in the
 ten seconds around the first compiler round and around the first load
 round, and the five compiler rounds and the first load round were run
 again. All other samples are included, including the first. The previous
-figures, at `0c0bac44` on the same machine, were 20.58 and 54.20 ms to
+figures, at `0c0bac44` on the same machine (on main as `77a851ee`, the
+same production code but for a test's switch, `bgDone`, off outside
+tests, and the layout lock's pads it moved), were 20.58 and 54.20 ms to
 compile, 63.00 and 406.56 ms to load first, 5.03 and 13.27 compiler MB/op,
 19.24 and 86.31 load MB/op and 36.59 and 103.88 MiB at the peak; the
 compiler test binary is the same bytes at both revisions.
@@ -230,7 +232,8 @@ experimental and optional, compiles a hot function's register code to
 native code that runs on the interpreter's own frame, and an asm.js
 module's typed code at its link, with no speculation (see its [design
 notes](../internal/jit/README.md); `5ae2317e`). The page's previous
-figures, at `0c0bac44`, whose code v0.45.0 is, were of the same design
+figures, at `0c0bac44`, on main as `77a851ee`, v0.45.0's code, the same
+but for a test's switch, were of the same design
 before the changes below, which are mostly the JIT's: what its code had
 left to Go at an exit it now does natively or by a call of Go it goes on
 after -- a megamorphic method read's miss, a construction past the
@@ -310,7 +313,7 @@ native handler reads it rather than looking the property up (`32036a73`).
 Those are the plain interpreter's handlers: a runtime with the JIT calls
 through its own, which keep the frames.
 v0.38.0 (`440db6bd`), the last release of the stack interpreter, measured
-in `3ecb8200`'s session, took 0.51 and 0.23 times QuickJS's time.
+in `913095f4`'s session, took 0.51 and 0.23 times QuickJS's time.
 
 The two kinds of figure time different things, which is why they do not
 agree on how far ahead go-quickjs is:
@@ -457,7 +460,7 @@ matrix, during which no other process took more than a sixth of a CPU.
   number its type says, unchecked (`a4bfc824`): `asm_call_leaf`, a call of
   a small function a turn, takes 5.67 ns with the JIT, where it took 13.3
   in v0.39.0. The stack JIT of v0.38.0 took 2,027 ms, measured in
-  `3ecb8200`'s session.
+  `913095f4`'s session.
 - Mandreel, compiled from C++ too, is not asm.js and runs as ordinary
   register code: 2,470 ms, 0.74 times QuickJS's time, and 794 with the
   JIT (2,488 and 803 at `0c0bac44`). Its largest function is
@@ -553,7 +556,7 @@ a change to any of them invalidates (`18acbcb9`).
 A render helper's `return element(...)` is a callback that
 returns a call in tail position, which a built-in enters directly
 (`400fc19c`). v0.38.0, the stack design, took 0.85 and 0.58 times, and
-FirstRender 197 and 366 ms, in `3ecb8200`'s session. React writes a page
+FirstRender 197 and 366 ms, in `913095f4`'s session. React writes a page
 as thousands of short
 chunks appended to a string a closure holds, and an append grows that
 string where it is, when nothing else can see it (`00ce03b5`). An empty
@@ -586,7 +589,7 @@ runners' micro mode does this, from a copy of the file kept in `internal/v8bench
 the matrix above runs it. `sort_bench` is left out: it reports a run's time
 over its fastest sort, not the time of an operation. Over the other 71 tests
 go-quickjs takes 0.49 times QuickJS's time by the geometric mean, as it
-did at `0c0bac44`, and v0.38.0, the stack design, 0.79 in `3ecb8200`'s
+did at `0c0bac44`, and v0.38.0, the stack design, 0.79 in `913095f4`'s
 session: it is slower on 6, faster on 62, and within 5% on the other
 three. With the JIT it takes 0.24 times QuickJS's time, as at `0c0bac44`,
 slower on 2, faster on 67 and within 5% on 2.
@@ -616,7 +619,7 @@ The table has the interpreter's largest gaps either way:
 | `prop_clone` | 10.7 ns | 9.39 ns | 72.8 ns | 0.15x | 0.13x |
 
 Of the gaps the stack design had, the largest are gone: in v0.38.0,
-measured in `3ecb8200`'s session, `array_prop_create` took 2.25 times
+measured in `913095f4`'s session, `array_prop_create` took 2.25 times
 QuickJS's time and takes 0.95, `global_read` 1.79 and 0.84, `array_read`
 1.41 and 0.86, `empty_do_loop` 1.34 and 0.52.
 
@@ -1027,7 +1030,7 @@ Where go-quickjs is ahead by most:
   natively, where the target is an initializer, without entering either
   frame (`746d9438`, `bdab5ba4`): `forward_construct` takes 0.20 times
   QuickJS's time, and 0.02 with the JIT. It took 0.54 at `258b4e96`, 0.23
-  at `3ecb8200`, 0.32 at `2f05d3fc`, 0.25 at `c2dae008`, 0.24 at
+  at `913095f4`, 0.32 at `2f05d3fc`, 0.25 at `c2dae008`, 0.24 at
   `b8c2c45f` and `b5df63ea`, 0.20 at `7f8205ec`, 0.19 at `2c758a33` and
   0.21 at `0c0bac44`, level over four placements of each build since.
 

@@ -47,10 +47,9 @@ import (
 // asked of them (leafFns, jitPlainSet): a RegExp literal's call, whose
 // RegExp the call of Go gives back to the literal once it returns
 // (regMarkedCall), must go on being made there. A call of exec or test
-// whose site's cache holds the built-in at the compile is to be compiled a
-// leaf's call of Go of its own (ssa.GoLeaf, jitRegFeedback's Leaf); the
-// register JIT does not yet make every such call one, a gap
-// docs/performance-plan.md lists (TestJITRegExpLeaves, skipped).
+// whose site's cache holds the built-in at the compile is compiled to a
+// leaf's call of Go of its own (ssa.GoLeaf, jitRegFeedback's Leaf), as
+// TestJITRegExpLeaves counts in the register code's calls.
 //
 // The functions are generic, each instantiated with struct{} alone: Go lays a
 // generic function's instantiations out after every function and closure of
