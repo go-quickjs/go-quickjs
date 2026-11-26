@@ -824,8 +824,9 @@ call of Go the function's own code makes with its compile done
 compile handed to the workers marks its function's closure (`closureCode`'s
 `jitEnters`) so that its calls go to the JIT, and a call of code compiled again in the background installs the
 replacement as one of its first code does -- putting back what the questions
-appended to the feedback's lists (`replay`) and placing the code as the
-compile on the spot (`jitRegPlace`). A question the snapshot was not asked
+appended to the feedback's lists (`replay`) and taking the code its worker
+placed into the cache as the compile on the spot does its own
+(`jitRegPlaceWith`, below). A question the snapshot was not asked
 is a miss (`jitSnapMiss`): the compile is built at the install instead
 (`regSnapMisses` counts them). A compile done while the code it replaces is
 run by a native call under way waits (`jitRegInstallWaits`): kept, no
@@ -884,7 +885,13 @@ and installed at once, a worker that comes to it after leaving it as it is.
 A compile takes about as long as the interpreter spends on two or three of
 its function's budgets, so that a process whose cores are all busy -- a
 host running a runtime on each -- waits for its code no longer than about
-twice what compiling on the spot costs.
+twice what compiling on the spot costs. A worker places the code it compiled
+(`jit.NewSSACodeApart`), apart from the code the runtime's goroutine runs
+meanwhile: on pages none of the arena's code was ever in or ran from
+(`PlaceRawApart`'s rule), so that the install takes it as placed
+(`jitRegPlaceWith`), its pages sealed and the instruction cache flushed off
+the program's time; an install that throws the compile away, or has no room
+for it, closes it.
 
 **Compiling again.** Code is compiled again, in place, when:
 
@@ -3567,11 +3574,15 @@ executable memory, the runtime marks the JIT unavailable for good.
   once, and published code is never patched. Other code in those pages does
   not run meanwhile: an arena is one runtime's, and its native code always
   returns to Go before Go compiles anything.
-- `PlaceRawApart` places code while other code of the arena runs on other
-  threads, for the WebAssembly JIT's compiles in the background: from a
-  page boundary past everything placed in the last chunk, or in a new
-  chunk, on pages no code is in and none was ever executable, the codes
-  of one call together; code placed after packs after them as usual.
+- `PlaceRawApart` and `NewSSACodeApart` place code while other code of the
+  arena runs on other threads, for the WebAssembly JIT's compiles in the
+  background and the workers' of register code: from a page boundary past
+  everything placed in the last chunk, or in a new chunk, on pages no code
+  is in and none was ever executable, the codes of one call together;
+  code placed after packs after them as usual. Under `LayoutSeed` a
+  batch begins a drawn offset under 4 KiB past its page boundary, as a
+  chunk's first code does, so that a benchmark's placements move the code
+  compiled in the background too.
 - A chunk is unmapped when the last function in it is released. The arena
   locks, since a finalizer can release code on another goroutine.
 - Windows flushes the instruction cache with `FlushInstructionCache`.

@@ -48,6 +48,24 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	return newSSACode(a, code, c), nil
+}
+
+// NewSSACodeApart publishes compiled code in a as NewSSACode does, on pages
+// no code placed before it shares and that were never executable
+// (PlaceRawApart), so that the arena's other code may run on other threads
+// meanwhile: a compile in the background is placed so by its worker, while
+// the runtime's goroutine runs on.
+func NewSSACodeApart(a *Arena, c *mir.Code) (*SSACode, error) {
+	placed, err := a.placeApart([][]byte{c.Bytes})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return newSSACode(a, placed[0], c), nil
+}
+
+// newSSACode is the SSACode of c, placed in a as code.
+func newSSACode(a *Arena, code []byte, c *mir.Code) *SSACode {
 	n := 0
 	for pc := range c.Entries {
 		n = max(n, pc+1)
@@ -63,7 +81,7 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 		calls: c.Calls, goCalls: c.GoCalls, callRefs: c.CallRefs}
 	s.footprint = footprint(len(code), cap(entries), c)
 	runtime.SetFinalizer(s, func(s *SSACode) { _ = s.Close() })
-	return s, nil
+	return s
 }
 
 // Text is the code where it runs, its constants past its instructions

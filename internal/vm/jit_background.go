@@ -15,12 +15,12 @@ import (
 // (internal/jit/README.md, "Tier-up and on-stack replacement"). A compile is a jitRegJob
 // (jit_bg.go) in three steps: the runtime's goroutine lowers the
 // function's register code and asks its feedback ahead
-// (jitRegSnapshotOf); a worker of the process's builds, optimizes it and
-// runs the backend (jitRegJob.run), touching nothing of the runtime's; and
-// the runtime's goroutine installs it at a later check (jitDrain,
-// jitRegInstall), placing its code as the compile made on the spot would
-// have. Meanwhile the function runs in the interpreter, or in its code,
-// still valid, that the compile replaces.
+// (jitRegSnapshotOf); a worker of the process's builds, optimizes it, runs
+// the backend and places the code apart (jitRegJob.run), touching nothing
+// else of the runtime's; and the runtime's goroutine installs it at a later
+// check (jitDrain, jitRegInstall), taking the code into its cache as the
+// compile made on the spot would have. Meanwhile the function runs in the
+// interpreter, or in its code, still valid, that the compile replaces.
 //
 // The runtime asks it with JITBackground, or QJS_JIT_STRESS's background
 // does, which a test that sets its own stress (jitStress) leaves out, as

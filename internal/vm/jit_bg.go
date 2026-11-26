@@ -19,18 +19,20 @@ import (
 // Register code compiled in the background (jit_background.go): the
 // runtime's goroutine lowers the function's register code and asks its
 // feedback ahead (jitRegSnapshotOf); a worker of the process's builds the
-// function from the snapshot, optimizes it and runs the backend
-// (jitRegJob.run), touching nothing of the runtime's; and the runtime's
-// goroutine installs it at a later check (jitDrain), at a sample of the
-// register tier's (jitRegHot), placing its code as the compile made on the
-// spot would have. Meanwhile the function runs in the interpreter, or in
-// its code that the compile replaces, which goes on running, valid, called
-// by its native callers, as V8's does; a compile of a function deoptimized
-// since is thrown away (jitRegJob's deopts). Code for a frame waiting at a
-// loop (jitRegLoopCode) is compiled so too, and kept beside the function's
-// code at its install (jitRegInstall's osrAt). A build that asked what the
-// snapshot was not asked (a miss), or whose questions took back what they
-// cannot, is built on the runtime's goroutine at the install instead.
+// function from the snapshot, optimizes it, runs the backend and places
+// the code apart from the code running meanwhile (jitRegJob.run), touching
+// nothing else of the runtime's; and the runtime's goroutine installs it at
+// a later check (jitDrain), at a sample of the register tier's (jitRegHot),
+// taking the code placed into its cache as the compile made on the spot
+// would have (jitRegPlaceWith). Meanwhile the function runs in the
+// interpreter, or in its code that the compile replaces, which goes on
+// running, valid, called by its native callers, as V8's does; a compile of
+// a function deoptimized since is thrown away (jitRegJob's deopts). Code
+// for a frame waiting at a loop (jitRegLoopCode) is compiled so too, and
+// kept beside the function's code at its install (jitRegInstall's osrAt).
+// A build that asked what the snapshot was not asked (a miss), or whose
+// questions took back what they cannot, is built on the runtime's
+// goroutine at the install instead.
 
 // jitRegJob is a register compile in the background.
 type jitRegJob struct {
@@ -83,6 +85,11 @@ type jitRegJob struct {
 	p    *ir.Program
 	rf   *jitRegFeedback
 	snap *jitRegSnapshot
+	// arena is the runtime's arena, which the worker places the code in,
+	// apart from the code running meanwhile (jit.NewSSACodeApart), placed
+	// the code placed there.
+	arena  *jit.Arena
+	placed *jit.SSACode
 	// w is the compile's workspace, f the function built in it, enc and
 	// opts the encoding and the backend's switches as they were when it
 	// was prepared.
@@ -293,11 +300,16 @@ func (j *jitRegJob) run() {
 	}
 }
 
-// letGo gives back what j holds that no install took: its workspace.
+// letGo gives back what j holds that no install took: its workspace, and
+// the code its worker placed.
 func (j *jitRegJob) letGo() {
 	if j.w != nil {
 		jit.PutWorkspace(j.w)
 		j.w = nil
+	}
+	if j.placed != nil {
+		j.placed.Close()
+		j.placed = nil
 	}
 }
 
@@ -332,6 +344,14 @@ func (j *jitRegJob) workRecovering() {
 	j.looped = jitRegShape(f, j.p, j.cl, j.c)
 	ssa.Optimize(f)
 	j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)
+	if j.err == nil && j.arena != nil {
+		// Placed here, apart from the code the runtime's goroutine runs
+		// meanwhile: its install no more than a store of the code. Placed
+		// there, each compile had sealed its pages, a few system calls, on
+		// the program's time. Where it cannot be placed, the install
+		// places it, as on the spot.
+		j.placed, _ = jit.NewSSACodeApart(j.arena, j.mc)
+	}
 }
 
 // jitTakeBackAsks is how many times a function asks for its compile again,
@@ -364,6 +384,14 @@ func (r *Runtime) jitRegTakeBack(j *jitRegJob) bool {
 	close(j.done)
 	r.jitDrain()
 	return true
+}
+
+// takePlaced is the code j's worker placed for j.mc, which j no longer
+// holds from then on, or nil for none.
+func (j *jitRegJob) takePlaced() *jit.SSACode {
+	p := j.placed
+	j.placed = nil
+	return p
 }
 
 // jitRegDrainJobs installs the register compiles in the background that are
@@ -471,6 +499,8 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 			// Its calls enter it if it has code, installed or not.
 			cc.jitEnters = cc.jitReg != nil
 		}
+		// What the install took not: the workspace, and the code placed
+		// where the install threw it away or built it again.
 		j.letGo()
 	}()
 	e := j.e
@@ -552,7 +582,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
-		} else if !r.jitRegPlace(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, j.osrAt)) {
+		} else if !r.jitRegPlaceWith(e, j.c, j.rf, j.f, j.mc, j.looped, s.jitRegReplaced(j.key, j.osrAt), j.takePlaced()) {
 			// No room: asked again at a later sample.
 			s.bgDiscarded++
 			return

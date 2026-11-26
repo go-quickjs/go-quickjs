@@ -458,7 +458,7 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
 			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
-				w: jit.GetWorkspace(), enc: s.enc, opts: s.opts, miss: r.jitStress.miss}
+				w: jit.GetWorkspace(), enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena}
 			if osrAt != 0 {
 				// The code kept beside the cache's for a loop
 				// (jitRegLoopCode), installed beside that code if it is
@@ -685,6 +685,13 @@ func (s *jitState) regRoomFor(old *jitRegEntry, need int) bool {
 // no room for it now, or the host places no code. old, where not nil, is
 // the code e replaces once placed (jitRegReplaced).
 func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f *ssa.Func, mc *mir.Code, looped map[uint32]bool, old *jitRegEntry) bool {
+	return r.jitRegPlaceWith(e, c, rf, f, mc, looped, old, nil)
+}
+
+// jitRegPlaceWith is jitRegPlace of code a compile in the background
+// placed already, if placed is not nil (jitRegJob's placed): taken as it
+// is, or closed where there is no room for it.
+func (r *Runtime) jitRegPlaceWith(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f *ssa.Func, mc *mir.Code, looped map[uint32]bool, old *jitRegEntry, placed *jit.SSACode) bool {
 	s := r.jit
 	p := e.p
 	// The contexts' room for its spill slots, which they keep (spillsFor).
@@ -715,10 +722,16 @@ func (r *Runtime) jitRegPlace(e *jitRegEntry, c *regCode, rf *jitRegFeedback, f 
 		if l := s.regLowered[e.key]; l != nil {
 			s.dropRegLowering(e.key, l)
 		}
+		if placed != nil {
+			placed.Close()
+		}
 		return false
 	}
 	e.life.deferred, e.life.reoptRoom = false, 0
-	code, err := jit.NewSSACode(s.arena, mc)
+	code, err := placed, error(nil)
+	if code == nil {
+		code, err = jit.NewSSACode(s.arena, mc)
+	}
 	if err != nil {
 		// The host places no code (jit.ErrUnavailable), which is the
 		// only failure: code of any length is placed.

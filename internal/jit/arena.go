@@ -39,9 +39,10 @@ type Arena struct {
 	// open is the chunk code is packed into, the last mapped that is not a
 	// function's own, or nil.
 	open *chunk
-	// mapped and placed count the chunks mapped and the functions placed,
-	// which choose LayoutSeed's offsets.
-	mapped, placed uint64
+	// mapped, placed and batches count the chunks mapped, the functions
+	// placed and the batches placed apart, which choose LayoutSeed's
+	// offsets.
+	mapped, placed, batches uint64
 	// reuse says code is placed in the space released code left in a
 	// chunk, as well as past what the chunk handed out (NewReusingArena).
 	reuse bool
@@ -288,6 +289,7 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 	if a.line != 0 && !a.reuse {
 		shift = a.lineShift()
 	}
+	a.batches++
 	page := os.Getpagesize()
 	// A segment is the run of the batch's codes in one chunk, written
 	// through its pages at once.
@@ -324,9 +326,10 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 		if k := len(segs); k > 0 && !segs[k-1].c.own && segs[k-1].c.used+n <= len(segs[k-1].c.mem) {
 			c = segs[k-1].c
 			start = c.used
-		} else if o := a.open; o != nil && alignUp(o.used, page)+n <= len(o.mem) {
+		} else if o := a.open; o != nil && alignUp(o.used, page)+a.apartPad(n, len(o.mem)-alignUp(o.used, page))+n <= len(o.mem) {
 			c = o
 			start = alignUp(c.used, page)
+			start += a.apartPad(n, len(c.mem)-start)
 			if a.reuse && start > c.used {
 				// The rest of the page before, for code placed later.
 				c.release(c.used, start-c.used)
@@ -340,6 +343,8 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 			c = &chunk{mem: mem, own: len(mem) > chunkBytes}
 			if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) && !a.reuse {
 				c.used = pad
+			} else if len(a.chunks) > 0 {
+				c.used = a.apartPad(n, len(mem))
 			}
 			a.chunks = append(a.chunks, c)
 			if !c.own {
@@ -375,6 +380,23 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// apartPad is the offset past its page boundary that placeApart begins a
+// batch at, of n bytes first, with room bytes from that boundary to its
+// chunk's end: 0, or under LayoutSeed's draw of under 4 KiB, as place
+// varies where a chunk's code begins, so that a benchmark's placements
+// move the code compiled in the background as they move the rest: drawn
+// once for each batch (batches).
+func (a *Arena) apartPad(n, room int) int {
+	if a.seed == 0 || a.reuse {
+		return 0
+	}
+	pad := int(a.layoutDraw(3, a.batches)%layoutChunkSpan) / codeAlign * codeAlign
+	if pad+n > room {
+		return 0
+	}
+	return pad
 }
 
 // chunkOf is the chunk holding code.

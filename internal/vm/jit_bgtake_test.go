@@ -169,3 +169,33 @@ func TestJITBackgroundDropsStale(t *testing.T) {
 		t.Fatalf("submitted %d: want 2", r.jit.bgSubmitted)
 	}
 }
+
+// A compile in the background is placed by its worker, apart from the code
+// the runtime runs meanwhile, and installed as that code; one thrown away
+// at its install has it closed.
+func TestJITBackgroundPlacesOnTheWorker(t *testing.T) {
+	t.Parallel()
+	r := jitBackgroundForTest(t, 1)
+	e, j := jitRegPendingRecompileForTest(t, r)
+	cl := jitGlobalClosureForTest(r, "sum")
+	<-j.done
+	placed := j.placed
+	if placed == nil || len(placed.Text()) == 0 {
+		t.Fatalf("placed %v: want the code placed by its worker (err %v)", placed != nil, j.err)
+	}
+	jitCallForTest(t, r, `sum(10)`, 45)
+	if ne := jitRegOfForTest(r, cl); ne == e || ne == nil || ne.code != placed || j.placed != nil {
+		t.Fatalf("installed %v, its code the worker's %v: want the placed code installed", ne != e, ne != nil && ne.code == placed)
+	}
+	_, j = jitRegPendingRecompileForTest(t, r)
+	<-j.done
+	placed = j.placed
+	if placed == nil {
+		t.Fatal("not placed by its worker")
+	}
+	jitRegOfForTest(r, cl).life.deopts++
+	jitCallForTest(t, r, `sum(10)`, 45)
+	if r.jit.bgDiscarded != 1 || len(placed.Text()) != 0 {
+		t.Fatalf("discarded %d, placed code open %v: want it thrown away and closed", r.jit.bgDiscarded, len(placed.Text()) != 0)
+	}
+}
