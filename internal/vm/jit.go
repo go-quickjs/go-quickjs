@@ -152,6 +152,8 @@ type jitTestConfig struct {
 	// (jit_clocks_test.go).
 	epochNow, flushNow func() uint64
 	clocks             func(s *jitState) (uint64, bool)
+	// parkNow, if set, stands in for parking's clock (parkClock).
+	parkNow func() time.Duration
 	// flushAge, if not 0, is the runtime's jitFlushAge.
 	flushAge uint64
 	// compileRepeat, codeHook and crossHook, where set, are the runtime's
@@ -242,9 +244,10 @@ func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) 
 //	           (jitSnapMiss), for the runtime's goroutine to build at its
 //	           install, so that the path a miss takes is taken by every one
 //	park       park the code as the runtime returns to its host every time,
-//	           not once a flush age (jitReturned), so that code is
-//	           unparked, or let go of for an object that died, at the first
-//	           use after every host's call
+//	           not once its running has paid for it (jitReturned), and let
+//	           go of the code still parked then, so that code is unparked,
+//	           or let go of for an object that died or for going unused,
+//	           at the first use after every host's call
 //
 // It is read once, as QJS_NONATIVE is, and each runtime takes a copy.
 type jitStressConfig struct {
@@ -1347,10 +1350,14 @@ type jitState struct {
 	enc  abi.Encoding
 	opts mir.Options
 	// regParked is the code parked as the runtime returned to its host,
-	// out of regCache, by its function's key (jitRegPark), and parkedAt the
-	// flush's tick of the last parking.
-	regParked map[jitKey]*jitRegEntry
-	parkedAt  uint64
+	// out of regCache, by its function's key (jitRegPark), and parkedOldest
+	// no later than the flush's tick the oldest of it was parked at
+	// (regAgeParked).
+	regParked    map[jitKey]*jitRegEntry
+	parkedOldest uint64
+	// parkRun is parking's clock (parkClock) as the last parking ended,
+	// and parkCost what it and the unparkings since cost by it (parkDue).
+	parkRun, parkCost time.Duration
 	// parkedPools are the object pools of parked code, each with what its
 	// source holds weakly (jitParked's pools).
 	parkedPools map[*abi.ObjectPool]*jitParked
@@ -2046,6 +2053,8 @@ func (r *Runtime) jitState() *jitState {
 	if r.jit == nil {
 		r.jit = &jitState{rt: r, arena: jit.NewArena(), stressBudget: int(r.jitStress.budget)}
 		r.jit.jitSetEncoding()
+		// Parking's period begins with the state (parkDue).
+		r.jit.parkRun = r.jit.parkClock()
 		jitEpochOnce.Do(jitArmEpoch)
 	}
 	return r.jit

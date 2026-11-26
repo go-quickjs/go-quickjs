@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"time"
 	"unsafe"
 	"weak"
 
@@ -35,6 +36,10 @@ import (
 type jitRegEntry struct {
 	p    *ir.Program
 	code *jit.SSACode
+	// took is what compiling its code took, on the runtime's goroutine
+	// and a worker's: what letting the code go costs again, which parking
+	// counts as its own where it does (parkCost).
+	took time.Duration
 	// kinds are, for typed code, the kinds of its code's slots (ssa.Func's
 	// Kinds): its program's, and its inlined typed callees' past them,
 	// which its native calls' records write raw (jitRegApplyRecords).
@@ -471,6 +476,8 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 	}()
 	s.compileBegin()
 	defer s.compileEnd()
+	from := time.Now()
+	defer func() { e.took += time.Since(from) }()
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}

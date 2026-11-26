@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 	"weak"
 )
@@ -352,5 +353,130 @@ func TestJITParkStaticsListed(t *testing.T) {
 				t.Errorf("%s's static object %d is not jitParkStatic's", name, i)
 			}
 		}
+	}
+}
+
+// jitParkClockForTest has parking's clock of the runtimes the test makes
+// (parkClock) go by step at each read, the cost of what a parking or an
+// unparking does between two reads, and by what the returned function
+// adds, a turn's running; the flush's clocks stay held, so that no flush
+// age goes by.
+func jitParkClockForTest(t *testing.T, step time.Duration) (run func(time.Duration), now func() time.Duration) {
+	t.Helper()
+	var clock time.Duration
+	jitTestSwitch(t, func(jc *jitTestConfig) {
+		jc.parkNow = func() time.Duration { clock += step; return clock }
+	})
+	return func(d time.Duration) { clock += d }, func() time.Duration { return clock }
+}
+
+// The code a program's last turn compiled is parked as the turn returns,
+// once the turn has run long enough to pay for the parking, however few of
+// the flush's ticks have gone by since the last parking -- none here -- and
+// what only that code held is collected: f's code, compiled in the turn to
+// call g natively, held g and through it a 16 MB array, which the turn let
+// go of. Parked once a flush age of the program's running, after Octane in
+// one runtime the code Typescript compiled after the last parking had kept
+// some 190 MB of its heap.
+func TestJITLastTurnParked(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	run, _ := jitParkClockForTest(t, time.Microsecond)
+	jitNoInlineForTest(t, "g")
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	var probe weak.Pointer[Object]
+	keep := r.NewFunction("keep", 1, func(r *Runtime, this Value, args []Value) (Value, error) {
+		probe = weak.Make(args[0].Object())
+		return Undefined, nil
+	})
+	if err := r.SetProp(Obj(r.Global()), r.Intern("keep"), keep); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(compileForTest(t, `
+		function make(k) {
+			var bytes = new Uint8Array(16 << 20);
+			for (var i = 0; i < 1024; i++) bytes[i] = (i * k) & 255;
+			keep(bytes);
+			return function g(i) { return bytes[i & 1023] + i };
+		}
+		function f(g, n) { var s = 0; for (var i = 0; i < n; i++) s = (s + g(i)) | 0; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	run(time.Second)
+	if _, err := r.Run(compileForTest(t, `0`)); err != nil {
+		t.Fatal(err)
+	}
+	parkings := r.jitState().parkings
+	// The last turn: f made hot and compiled to call g natively, then g
+	// let go of.
+	run(time.Second)
+	v, err := r.Run(compileForTest(t, `
+		var g = make(7), s = 0;
+		for (var k = 0; k < 300; k++) s = f(g, 100);
+		g = null;
+		s`))
+	if err != nil || v.Number() != jitParkWant {
+		t.Fatalf("%v, %v", v, err)
+	}
+	if r.jit.parkings == parkings {
+		t.Fatal("not parked as the last turn returned")
+	}
+	e := r.jit.regParked[r.jitRegKeyOf(jitGlobalClosure(r, "f"))]
+	if e == nil || e.parked == nil || !e.callsNative {
+		t.Fatalf("f's code, calling g natively, not parked: %+v", e)
+	}
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	if probe.Value() != nil {
+		t.Fatal("the array g read is alive, kept by the code the last turn compiled")
+	}
+}
+
+// Parking costs at most a jitParkPays'th of the program's running: a host
+// whose calls return thousands of times parks only as often as the
+// running since the last parking pays for what it and the unparkings since
+// cost -- each read of parking's clock here a microsecond of it, each turn
+// a microsecond besides -- and a turn too short to measure parks nothing.
+func TestJITParkingsBounded(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const step = time.Microsecond
+	run, now := jitParkClockForTest(t, step)
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `function f(n) { var s = 0; for (var i = 0; i < n; i++) s += i; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	prog := compileForTest(t, `f(10)`)
+	const turns = 5000
+	s := r.jitState()
+	from, parkings, unparked := now(), s.parkings, s.unparked
+	for i := 0; i < turns; i++ {
+		run(step)
+		if v, err := r.Run(prog); err != nil || v.Number() != 45 {
+			t.Fatalf("turn %d: %v, %v", i, v, err)
+		}
+	}
+	n, ran := r.jit.parkings-parkings, now()-from
+	t.Logf("%d turns: %d parkings, %d unparkings, %v of parking's clock", turns, n, r.jit.unparked-unparked, ran)
+	// Each parking costs at least a step, the two reads around it.
+	if n == 0 || n > uint64(ran/(jitParkPays*step))+1 {
+		t.Fatalf("%d parkings in %v of running, each costing a step or more", n, ran)
+	}
+	if r.jit.unparked == unparked {
+		t.Fatal("f's code, parked, was never put back")
+	}
+	// A turn that runs nothing by the clock parks nothing.
+	jitTestSwitch(t, func(jc *jitTestConfig) { jc.parkNow = func() time.Duration { return 0 } })
+	parkings = r.jit.parkings
+	for i := 0; i < 100; i++ {
+		if _, err := r.Run(prog); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r.jit.parkings != parkings {
+		t.Fatalf("%d parkings of turns that ran nothing", r.jit.parkings-parkings)
 	}
 }

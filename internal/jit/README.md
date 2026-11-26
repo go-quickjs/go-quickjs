@@ -3609,9 +3609,12 @@ finalizer runs after the collector found the object dead, on another
 goroutine, by which time a sweep may have given the object's memory to a
 new object that code comparing the old address would take for it. So code
 holds its objects strongly while it may run and weakly only while it
-cannot. As the runtime returns to its host with no frame running, at most
-once a flush age of the program's running (`jitReturned`, the first a
-flush age after the runtime's first return), the cache parks its code no
+cannot. As the runtime returns to its host with no frame running, once
+the program has run, since the last parking ended, 200 times what that
+parking, the unparkings since and the compiles again of the code it lost
+cost (`jitReturned`, `parkDue`, `jitParkPays`: what parking costs besides
+came to some one and a half times that, so parking's share of the running
+is some 1 to 2%; and a turn too short to measure parks nothing), the cache parks its code no
 run, native call or compile uses, valid or invalidated: out of the cache
 (`regParked`), its link cleared, so that native callers call Go, its entry
 marked not cached, so that its templates' calls take the path code let go
@@ -3622,8 +3625,7 @@ into the structures the entry owns alone (`jitParkInto`) and no other --
 but for the package's own static objects, the caches' sentinels and
 `absentHolder` (`jitParkStatic`), which are the binary's data rather than
 the heap's, which a weak pointer cannot be made to, and never die: their
-slots keep them;
-its pools are emptied of the objects made for them, filled again from
+slots keep them; its pools are emptied of the objects made for them, filled again from
 their sources when the code next runs out, and its function's learned
 state, which other functions' compiles read, is a copy that holds no
 object meanwhile (`regForgotten`). No compile is under way then: the
@@ -3637,15 +3639,21 @@ are written back, the learned state too with what the copy learned
 meanwhile (`regRemembered`), and the code goes back into the cache with
 its link, no compile made; one dead, the code is let go of as the flush
 lets code go, and the function warms up anew. No comparison against an
-address an object no longer has is made. Code still parked at the next
-parking, unused a flush age, is let go of then, but the callees of the
-cache's code (its keeps' `inlined` and `links`), as the flush keeps them;
-and parked code is the first `makeRoom` takes. Active code pays nothing:
+address an object no longer has is made. Code parked a flush age and
+unused is let go of at the next return (`regAgeParked`), however many
+parkings came between, but the callees of the cache's code (its keeps'
+`inlined` and `links`), as the flush keeps them, parked another flush age;
+and parked code is the first `makeRoom` takes. The cadence is parking's
+cost, not the flush age: parked once a flush age of the program's running,
+the code a program's last turn compiled had stayed held when the turn
+ended within a flush age of the last parking -- after Octane, Typescript's
+code and some 190 MB of its heap, in most runs on one machine and none on
+another. Active code pays nothing:
 its entries are tested as before, and a parked one takes paths code let go
 of took already, once. The parking also drops `makeRoom`'s list of
 victims, an epoch's, which had kept the entries it listed past the turn.
 After Octane in one runtime the JIT's live heap is the interpreter's and
-some 50 MB, against 250 to 280 MB more before.
+some 50 MB in every run, against 250 to 280 MB more before.
 
 **Making room** (`makeRoom`). A compile asks for room for what its entry
 will hold before its code is placed. The cache reclaims, in this order, each

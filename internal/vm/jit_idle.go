@@ -5,6 +5,7 @@ package vm
 import (
 	"math"
 	"reflect"
+	"time"
 	"unsafe"
 	"weak"
 
@@ -18,10 +19,11 @@ import (
 // since the last such return go (jit.DropIdleWorkspaces); the cache looks
 // to flush (flush): an idle runtime, which takes no back edge's check nor
 // compiles, had kept all its code and what that holds until it ran again;
-// and, once a flush age of the program's running since it last did, it
-// parks its code (jitRegPark). The look is the flush's own, which drops only what has
-// gone unused for the flush's age, so most of a host's short calls pay a
-// clock's read.
+// the code parked a flush age goes (regAgeParked); and, once the program
+// has run long enough since the last parking to pay for it (parkDue), the
+// cache parks its code (jitRegPark). The looks are the flush's own and a
+// comparison of times, so most of a host's short calls pay two clocks'
+// reads.
 func jitReturned(r *Runtime) {
 	s := r.jit
 	if s == nil {
@@ -32,17 +34,60 @@ func jitReturned(r *Runtime) {
 		return
 	}
 	s.flush()
-	switch tick := s.flushNow(); {
-	case r.jitStress.park:
+	s.regAgeParked(s.flushNow(), r.jitStress.park)
+	if r.jitStress.park || s.parkDue() {
 		// QJS_JIT_STRESS's park: at every return.
 		s.jitRegPark()
-	case s.parkedAt == 0:
-		// The first return: the period begins.
-		s.parkedAt = max(tick, 1)
-	case tick >= s.parkedAt+s.flushAge():
-		s.parkedAt = tick
-		s.jitRegPark()
 	}
+}
+
+// jitParkPays is how many times what parking costs -- a parking's walk of
+// the code it parks, the unparkings of that code its uses take after, and
+// the compiles again of the code it lost, whose objects died while it
+// was parked -- the program must have run since the last parking before
+// it parks again (parkDue). That cost is what parking measures; what it
+// costs besides -- native callers leaving for Go to unpark a callee, the
+// pools filled anew, the learned state copied -- came to some one and a
+// half times as much again where a host's calls return every few
+// milliseconds (the fresh suite's runs again of a kept runtime's code,
+// 3 to 5% slower at 50 against parking once a flush age, 1 to 2% at
+// 200). So some 1 to 2% of the running goes to parking however often a
+// host's calls return, and the code a turn compiled is parked at the
+// first return that has paid for it, not a flush age after the last
+// parking, which a program's last turn may never reach: Octane's
+// Typescript, run after a parking, had kept its code and through it some
+// 190 MB of its heap after the run.
+const jitParkPays = 200
+
+// parkDue reports whether the program has run jitParkPays times what the
+// last parking and the unparkings since cost (parkCost) since it ended
+// (parkRun). A turn too short to measure has run nothing.
+func (s *jitState) parkDue() bool {
+	ran := s.parkClock() - s.parkRun
+	return ran > 0 && ran >= jitParkPays*s.parkCost
+}
+
+// parkClock is parking's clock: the program's time (running), which a
+// parking and an unparking also measure their cost by; where a test set
+// the cache's clocks, the time of their ticks (jitTestConfig's parkNow,
+// flushNow and clocks), and held, none goes by.
+func (s *jitState) parkClock() time.Duration {
+	t := &s.rt.jitTest
+	if f := t.parkNow; f != nil {
+		return f()
+	}
+	if f := t.flushNow; f != nil {
+		return time.Duration(f()) * jitEpochTime
+	}
+	if c := t.clocks; c != nil {
+		if tick, ok := c(s); ok {
+			return time.Duration(tick) * jitEpochTime
+		}
+	}
+	if jitClocksHeld.Load() {
+		return 0
+	}
+	return s.running()
 }
 
 // Parking. Native code reads by address what it was compiled against --
@@ -70,9 +115,10 @@ func jitReturned(r *Runtime) {
 // a shape check for the wrong layout. So the code holds its objects
 // strongly while it may run, and weakly only while it cannot: parked.
 //
-// As the runtime returns to its host with no frame running, at most once
-// a flush age of the program's running (jitReturned), the cache parks the
-// code no run, native call or compile uses: it takes the entry out of the
+// As the runtime returns to its host with no frame running, once the
+// program has run 200 times what parking costs since it last did
+// (jitReturned, jitParkPays), the cache parks the code no run, native
+// call or compile uses: it takes the entry out of the
 // cache (regParked), clears its link, so that native callers call Go, and
 // marks it not cached, so that its templates' calls take the path for
 // code let go of; and it turns every pointer the entry and its function's
@@ -88,9 +134,9 @@ func jitReturned(r *Runtime) {
 // written back and the code goes back into the cache, its link set, with
 // no compile; any dead, the code is let go of as the flush lets go of
 // code, and the function warms up again. So no comparison against an
-// address an object no longer has is ever made. Code parked and not used
-// by the next parking, a flush age later, is let go of then. Active code
-// pays nothing: its entries are tested as before, and a parked entry
+// address an object no longer has is ever made. Code parked a flush age
+// and not used is let go of at the next return (regAgeParked), however
+// many parkings came between. Active code pays nothing: its entries are tested as before, and a parked entry
 // takes paths code let go of took already, once.
 
 // jitParked is what a parked entry holds weakly (jitRegPark): each slot
@@ -98,6 +144,8 @@ func jitReturned(r *Runtime) {
 // state of its function, its slots among these, while the function's life
 // holds a copy that holds no object (regForgotten).
 type jitParked struct {
+	// at is the flush's tick the entry was parked at (regAgeParked).
+	at      uint64
 	slots   []jitParkSlot
 	learned *jitLearned
 	// pools are the object pools the entry's code and state take from,
@@ -339,51 +387,81 @@ func regRemembered(o, f *jitLearned) {
 	o.regHints = f.regHints
 }
 
-// jitRegPark lets go of the code still parked since the last parking,
-// unused a flush age, and parks the code no run, native call or compile
-// uses (see Parking above).
+// regAgeParked lets go of the code parked a flush age before tick, as
+// the flush lets go of code unused that long, or, for QJS_JIT_STRESS's
+// park (all), of all the code parked, so that its next use takes the
+// path of code let go of. The callees of the code in the cache stay
+// parked another flush age.
+func (s *jitState) regAgeParked(tick uint64, all bool) {
+	if len(s.regParked) == 0 {
+		// What is left are pools whose sources' objects died, which no
+		// parked code takes from any longer (regUnparkFailed).
+		if len(s.parkedPools) != 0 {
+			clear(s.parkedPools)
+		}
+		return
+	}
+	age := s.flushAge()
+	if !all && tick < s.parkedOldest+age {
+		return
+	}
+	// The callees of the code in the cache -- inlined there, or called
+	// natively -- are used where it is, though their own uses do not count
+	// those runs, as the flush counts them (regFlush): kept parked, for
+	// what their state teaches the caller's next compile.
+	callees := map[jitKey]bool{}
+	for _, e := range s.regCache {
+		for _, fb := range [2]*jitFeedback{e.keep, osrKeep(e)} {
+			if fb == nil {
+				continue
+			}
+			for _, cl := range fb.inlined {
+				if cl != nil {
+					callees[s.regKeyOfClosure(cl)] = true
+				}
+			}
+			for _, l := range fb.links {
+				callees[l.key] = true
+			}
+		}
+	}
+	oldest := tick
+	for key, e := range s.regParked {
+		p := e.parked
+		switch {
+		case !all && tick < p.at+age:
+		case !callees[key]:
+			s.regUnparkFailed(key, e)
+			continue
+		default:
+			p.at = tick
+		}
+		oldest = min(oldest, p.at)
+	}
+	s.parkedOldest = oldest
+	if len(s.regParked) == 0 {
+		clear(s.parkedPools)
+	}
+}
+
+// jitRegPark parks the code no run, native call or compile uses (see
+// Parking above), and measures what that cost (parkDue).
 func (s *jitState) jitRegPark() {
+	if s.inFlight() || len(s.regBuilds) != 0 {
+		// A compile under way reads the feedback of the functions it
+		// inlines and calls, which a parked entry's state is not: the
+		// next return tries again.
+		return
+	}
+	from := s.parkClock()
 	s.parkings++
 	// makeRoom's list of what it may reclaim, an epoch's, is made again at
 	// its next look: kept, it held the entries it listed and what they
 	// hold, dropped since or not.
 	s.victims, s.victimsAt, s.victimPos, s.victimLeft = nil, 0, 0, 0
-	if len(s.regParked) != 0 {
-		// The callees of the code in the cache -- inlined there, or called
-		// natively -- are used where it is, though their own uses do not
-		// count those runs, as the flush counts them (regFlush): kept
-		// parked, for what their state teaches the caller's next compile.
-		callees := map[jitKey]bool{}
-		for _, e := range s.regCache {
-			for _, fb := range [2]*jitFeedback{e.keep, osrKeep(e)} {
-				if fb == nil {
-					continue
-				}
-				for _, cl := range fb.inlined {
-					if cl != nil {
-						callees[s.regKeyOfClosure(cl)] = true
-					}
-				}
-				for _, l := range fb.links {
-					callees[l.key] = true
-				}
-			}
-		}
-		for key, e := range s.regParked {
-			if !callees[key] {
-				s.regUnparkFailed(key, e)
-			}
-		}
-	}
+	tick := s.flushNow()
 	if len(s.regParked) == 0 {
-		// What is left are pools whose sources' objects died, which no
-		// parked code takes from any longer (regUnparkFailed).
-		clear(s.parkedPools)
-	}
-	if s.inFlight() || len(s.regBuilds) != 0 {
-		// A compile under way reads the feedback of the functions it
-		// inlines and calls, which a parked entry's state is not.
-		return
+		s.parkedOldest = tick
 	}
 	called := s.regCalledFns()
 	for key, e := range s.regCache {
@@ -391,12 +469,14 @@ func (s *jitState) jitRegPark() {
 			e == s.regGoOnFrom || e == s.regGoMark.e || e.osrJob != nil {
 			continue
 		}
-		s.regParkEntry(key, e)
+		s.regParkEntry(key, e, tick)
 	}
+	s.parkRun = s.parkClock()
+	s.parkCost = s.parkRun - from
 }
 
 // regParkEntry parks e, the code of the function whose key is key.
-func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry) {
+func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry, tick uint64) {
 	if o := e.osr; o != nil {
 		// Its code for on-stack replacement goes, as with its entry
 		// (dropReg).
@@ -405,7 +485,7 @@ func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry) {
 		o.dropped = true
 		s.regClose(o)
 	}
-	p := &jitParked{s: s}
+	p := &jitParked{s: s, at: tick}
 	if e.keep != nil {
 		p.walk(reflect.ValueOf(e.keep).Elem())
 	}
@@ -431,13 +511,28 @@ func (s *jitState) regParkEntry(key jitKey, e *jitRegEntry) {
 // is alive, and reports whether it does; it lets the code go otherwise
 // (see Parking above).
 func (s *jitState) jitRegUnpark(e *jitRegEntry) bool {
-	p := e.parked
-	if p == nil || s.regParked[e.key] != e {
+	if e.parked == nil || s.regParked[e.key] != e {
 		return false
 	}
-	if !p.alive() || !p.poolsAlive() || e.life != nil && s.regLearned[e.key] != e.life {
+	// What it costs is parking's (parkDue).
+	from := s.parkClock()
+	ok := s.regUnpark(e)
+	s.parkCost += s.parkClock() - from
+	return ok
+}
+
+// regUnpark is jitRegUnpark's work, for e parked.
+func (s *jitState) regUnpark(e *jitRegEntry) bool {
+	p := e.parked
+	if lost := !p.alive() || !p.poolsAlive(); lost || e.life != nil && s.regLearned[e.key] != e.life {
 		// An object it held died, or its function's state was let go of
-		// meanwhile, a realm's whose functions all went unused.
+		// meanwhile, a realm's whose functions all went unused. Code that
+		// parking lost so, which held it alive and might have run on, is
+		// compiled again once its function is hot again: what that costs
+		// is parking's too.
+		if lost {
+			s.parkCost += e.took
+		}
 		s.regUnparkFailed(e.key, e)
 		return false
 	}

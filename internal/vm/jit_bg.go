@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -89,6 +90,9 @@ type jitRegJob struct {
 	missed   bool
 	panicked bool
 	allocErr *mir.AllocationError
+	// took is what the worker's build and compile took (jitRegEntry's
+	// took).
+	took time.Duration
 	// state hands the job between its worker and the runtime's goroutine
 	// (jitJobQueued ...), done is closed once the worker is finished with
 	// it, checks counts the checks it has waited (jitDrain).
@@ -216,6 +220,8 @@ func (j *jitRegJob) run() {
 // workRecovering is work, a panic its refusal and a snapshot's miss its
 // mark (missed).
 func (j *jitRegJob) workRecovering() {
+	from := time.Now()
+	defer func() { j.took = time.Since(from) }()
 	defer func() {
 		if v := recover(); v != nil {
 			if _, ok := v.(jitSnapMiss); ok {
@@ -351,6 +357,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		}
 	}()
 	e := j.e
+	e.took += j.took
 	old := s.regCache[j.key]
 	if j.osrAt != 0 {
 		if b := j.osrBeside; b.osrJob == j {
