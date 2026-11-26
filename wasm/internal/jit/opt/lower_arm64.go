@@ -144,6 +144,11 @@ type gen struct {
 	// entry is the code's native entry, where a call of the function by
 	// itself goes.
 	entry arm64.Label
+	// lim, where limKept, is a register of the allocator's that no value
+	// was given, which holds memory 0's size less wjit.MemLimitSlack
+	// (keepLimit).
+	lim     arm64.Reg
+	limKept bool
 }
 
 // reset readies g, kept in a workspace, for function f, keeping the
@@ -201,7 +206,11 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 			}
 		}
 	}
+	g.keepLimit()
 	g.wbG = g.usedG
+	if g.limKept {
+		g.wbG |= 1 << g.lim
+	}
 	a := g.a
 	g.mark("return stub")
 	retStub := a.Len()
@@ -218,6 +227,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	if g.holdsRefs() {
 		g.clearRefs()
 	}
+	g.setLimit()
 	for range f.Blocks {
 		g.labels = append(g.labels, a.NewLabel())
 	}
@@ -256,6 +266,87 @@ func (g *gen) loadKept() {
 	a.Load(rMemSize, rCtx, offMemSize)
 	a.Load(rPoll, rCtx, offPoll)
 	a.Load(rRS, rCtx, offRSP)
+	g.setLimit()
+}
+
+// keepLimit decides whether the function keeps memory 0's limit in a
+// register (lim), for the checks of its plain accesses (address): where
+// the allocator left a register free that no sequence takes for its own --
+// X1 and X2 are a call through Go's, X13 to X15 memory.copy's,
+// memory.fill's and the atomics' -- and its accesses that compare their
+// addresses with the limit outweigh its calls, after each of which the
+// limit is made again, each weighed by its loop depth. An access compares
+// its address with the register, where it would make its end and compare
+// that with the size: one instruction fewer.
+func (g *gen) keepLimit() {
+	// The instructions' temporaries, past the values, of either class.
+	taken := g.usedG
+	for _, r := range g.ra.Reg[len(g.byVreg):] {
+		if r >= 0 {
+			taken |= 1 << r
+		}
+	}
+	lim := arm64.Reg(0)
+	for _, r := range [...]arm64.Reg{26, 25, 24, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3} {
+		if taken&(1<<r) == 0 {
+			lim = r
+			break
+		}
+	}
+	if lim == 0 {
+		return
+	}
+	checks, calls := 0.0, 0.0
+	for _, b := range g.f.Blocks {
+		w := 1.0
+		for d := b.Depth; d > 0 && w < 1e6; d-- {
+			w *= 8
+		}
+		for _, v := range b.Values {
+			switch {
+			case limitCheck(g, v):
+				checks += w
+			case callLike(v):
+				calls += w
+			}
+		}
+	}
+	if checks > calls+1 {
+		g.lim, g.limKept = lim, true
+	}
+}
+
+// limitCheck reports whether v is a plain access whose check compares its
+// address with memory 0's limit (address).
+func limitCheck(g *gen, v *Value) bool {
+	if (v.Op != OpLoad && v.Op != OpStore) || !plainAccess(v) || v.Args[0].Op == OpConst {
+		return false
+	}
+	far := g.checkEnd(v)
+	return far != 0 && far <= wjit.MemLimitSlack
+}
+
+// callLike reports whether v is an instruction the allocator takes for a
+// call: every register of its may hold something else after it.
+func callLike(v *Value) bool {
+	switch v.Op {
+	case OpCall, OpCallIndirect, OpCallRef:
+		return true
+	case OpGoOp:
+		return !v.BulkInCode()
+	case OpSIMD:
+		return simdExits(v)
+	}
+	return false
+}
+
+// setLimit makes the limit in lim from memory 0's size, where the function
+// keeps it: as the code begins and after anything that may change the size
+// or the register.
+func (g *gen) setLimit() {
+	if g.limKept {
+		g.a.AddImm(g.lim, rMemSize, -wjit.MemLimitSlack, true)
+	}
 }
 
 // The moves between locations, of a value of type t. A slot's word holds
@@ -498,6 +589,29 @@ func (g *gen) trap(code uint64, at uint32) arm64.Label {
 	return l
 }
 
+// trapHere traps with code at at from here: the trap's site, made here
+// where no other code has made it yet, else a jump to it.
+func (g *gen) trapHere(code uint64, at uint32) {
+	a := g.a
+	k := trapKey(code, at)
+	if l, ok := g.traps.get(k); ok {
+		a.B(l)
+		return
+	}
+	to, ok := g.trapTo.get(code)
+	if !ok {
+		to = a.NewLabel()
+		g.trapTo.set(code, to)
+		g.ool = append(g.ool, stub{kind: stubTrapCode, to: to, code: code})
+	}
+	l := a.NewLabel()
+	g.traps.set(k, l)
+	a.Bind(l)
+	g.mark("cold trap")
+	a.MovImm(s0, uint64(at))
+	a.B(to)
+}
+
 // stub is out-of-line code, emitted after the blocks: the exit of a trap
 // with a code, a trap's site, which leaves its offset in s0 for it, a
 // poll's site, the function's poll exit, and a call's poll and its call
@@ -548,6 +662,10 @@ const (
 	// the farthest end it checked: it traps at the first of the accesses
 	// the check covers whose end is past the memory's.
 	stubTrapWide
+	// stubCheck is the exact check of access v, whose address plus its
+	// offset is in dst, where it is past memory 0's limit (lim): it goes
+	// back to the access at to, or traps as v's check does.
+	stubCheck
 )
 
 // stub emits out-of-line code.
@@ -569,6 +687,23 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold trap")
 		a.MovImm(s0, uint64(st.at))
 		a.B(st.to)
+	case stubCheck:
+		a.Bind(st.l)
+		g.mark("cold check")
+		v := st.v
+		if v.Wide != 0 {
+			// Where it fails, the code that finds the access that traps.
+			w := wideChecks(g.f, v)
+			a.AddImm(s0, st.dst, int64(w[len(w)-1].end)-int64(v.Aux), true)
+			a.Cmp(s0, rMemSize, true)
+			a.BCond(arm64.LS, st.to)
+			g.stub(&stub{kind: stubTrapWide, l: a.NewLabel(), v: v})
+		} else {
+			a.AddImm(s0, st.dst, int64(v.Size), true)
+			a.Cmp(s0, rMemSize, true)
+			a.BCond(arm64.LS, st.to)
+			g.trapHere(wjit.TrapMemOutOfBounds, v.At)
+		}
 	case stubTrapWide:
 		a.Bind(st.l)
 		g.mark("cold trap")
@@ -858,6 +993,7 @@ func (g *gen) restoreAll() {
 			a.LoadF(arm64.FReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 		}
 	}
+	g.setLimit()
 }
 
 // jump goes from block i to its successor s: a back edge counts down the
@@ -982,6 +1118,9 @@ func (g *gen) block(i int, b *Block) {
 			g.mark("%v %v %v", v, v.Op, v.Type)
 		}
 		g.value(v, b.Values[j+1:])
+		if callLike(v) {
+			g.setLimit()
+		}
 	}
 	if split {
 		g.gap(g.gapAt(inst))
@@ -1672,7 +1811,15 @@ func (g *gen) address(v *Value) arm64.Reg {
 		a.AddImm(s1, r, off, true)
 		r = s1
 	}
-	if v.Wide != 0 {
+	if far := g.checkEnd(v); g.limKept && far != 0 && far <= wjit.MemLimitSlack {
+		// The address against the memory's size less the slack: one
+		// comparison, the exact check out of line where it fails.
+		l, back := a.NewLabel(), a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubCheck, l: l, to: back, v: v, dst: r})
+		a.Cmp(r, g.lim, true)
+		a.BCond(arm64.GT, l)
+		a.Bind(back)
+	} else if v.Wide != 0 {
 		// The check of the accesses after it too: s0 their farthest end,
 		// which the stub takes back to each's.
 		w := wideChecks(g.f, v)

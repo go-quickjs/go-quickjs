@@ -517,19 +517,6 @@ func (g *gen) done(v *Value, r int) {
 	g.move(loc{kind: lSlot, slot: s}, src, v.Type)
 }
 
-// checkEnd is the end plain access v checks past its address, the
-// farthest of a widened check's, or 0 where it checks none.
-func (g *gen) checkEnd(v *Value) uint64 {
-	if v.Wide != 0 {
-		w := wideChecks(g.f, v)
-		return w[len(w)-1].end
-	}
-	if v.NoCheck {
-		return 0
-	}
-	return v.Aux + uint64(v.Size)
-}
-
 // imm32 reports whether constant c is an immediate of a 32-bit operation,
 // or, wide, of a 64-bit one, which sign-extends it.
 func imm32(c uint64, wide bool) (int32, bool) {

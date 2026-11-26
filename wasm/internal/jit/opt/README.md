@@ -639,6 +639,7 @@ On arm64:
 | X16, X17 | general scratch registers |
 | D31, D30 | float scratch registers; Q31 and Q30, whole, memory.copy's and memory.fill's |
 | X27 | the encoder's temporary, and a remainder's quotient |
+| one of X26, X25, X24, X12-X3 | memory 0's size less 4,096, where the function keeps it in a register the allocator gave nothing (Lowering) |
 | X1-X12, X24-X26, X13-X15 | the allocator's general registers, X13-X15 last (memory.copy's and memory.fill's, and an atomic store's, read-modify-write's and compare-and-exchange's) |
 | D0-D29 | the allocator's float registers: f32s, f64s and, whole, v128s |
 | SP, X18, X28, X29, X30 | never written |
@@ -906,7 +907,25 @@ interp 9.9 to 9.6, sort 88.9 to 87.0. The access is `[R15 + address + offset]`,
 the address in a register (an i32 there has its upper half clear). On
 arm64 the address plus the offset is made in X17, in 64 bits, where the
 offset is not 0, the end in X16 and compared with X21, and the access is
-`[X20 + X17]`.
+`[X20 + X17]`. Where the function keeps memory 0's limit in a register
+(`keepLimit`), an access whose end past its address is 4,096 bytes or less
+compares the address plus the offset with it instead, signed, the exact
+check out of line as on amd64 (`stubCheck`), the trap's site after it: the
+end is no longer made in X16, one instruction fewer an access. The
+register is one of the allocator's that it gave no value or temporary --
+X26, X25, X24, then X12 down to X3; X1 and X2 are a call through Go's, X13
+to X15 memory.copy's, memory.fill's and the atomics' -- made from X21, the
+size less 4,096 (`SUB`), where the code begins and after every call,
+exit, poll and landing pad, where Go or a callee may have changed the
+register or the size, and kept by the barrier routine. A function keeps it
+where its accesses so checked outweigh its calls, each weighed by its loop
+depth. Of the Go program's 3,011 functions 2,935 have such a register and
+2,838 keep the limit in it; 154,758 of their accesses compare with it, one
+instruction fewer each, and the code makes the limit in 42,017 places.
+Its arm64 code is 9.0% larger (15.65 to 17.05 MB), the exact checks out of
+line, as amd64's was for its limit; with the trap's site its own jump away
+it was 12.9%. Timing it needs an arm64 machine: CI's `ubuntu-24.04-arm`
+runners or a Mac.
 
 A trap's site, out of line, leaves its offset in R11 (X16) and jumps to
 the function's code for the trap's code, which stores the offset in the

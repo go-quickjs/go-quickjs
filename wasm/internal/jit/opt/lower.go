@@ -18,6 +18,19 @@ import (
 // the function, where each value is, and the listing. Each architecture's
 // gen embeds a lowering.
 
+// checkEnd is the end plain access v checks past its address, the
+// farthest of a widened check's, or 0 where it checks none.
+func (g *lowering) checkEnd(v *Value) uint64 {
+	if v.Wide != 0 {
+		w := wideChecks(g.f, v)
+		return w[len(w)-1].end
+	}
+	if v.NoCheck {
+		return 0
+	}
+	return v.Aux + uint64(v.Size)
+}
+
 // trapKey is a trap stub's key: its code and its offset.
 func trapKey(code uint64, at uint32) uint64 { return code<<32 | uint64(at) }
 
