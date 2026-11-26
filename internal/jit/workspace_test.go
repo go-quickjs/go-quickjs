@@ -48,6 +48,30 @@ func TestWorkspaceAged(t *testing.T) {
 	}
 }
 
+// The pooled workspaces go as a runtime returns to its host
+// (DropIdleWorkspaces), and the pool's bytes with them; one a compile is
+// using stays its.
+func TestWorkspaceDroppedIdle(t *testing.T) {
+	busy := GetWorkspace()
+	w := GetWorkspace()
+	PutWorkspace(w)
+	if !pooled(w) {
+		t.Fatal("not pooled")
+	}
+	DropIdleWorkspaces()
+	if pooled(w) {
+		t.Fatal("an idle workspace kept")
+	}
+	PutWorkspace(busy)
+	if !pooled(busy) {
+		t.Fatal("the workspace in use was not given back")
+	}
+	DropIdleWorkspaces()
+	if pooled(busy) || workIdle.Load() != 0 {
+		t.Fatalf("%d workspaces kept", workIdle.Load())
+	}
+}
+
 // Runtimes on goroutines of their own compile at once, each in a
 // workspace no other uses meanwhile.
 func TestWorkspaceConcurrent(t *testing.T) {

@@ -43,8 +43,10 @@ var (
 		sync.Mutex
 		free []*Workspace
 	}
-	// workPooled is what workPool's workspaces keep, in bytes.
+	// workPooled is what workPool's workspaces keep, in bytes, and
+	// workIdle how many it holds.
 	workPooled atomic.Int64
+	workIdle   atomic.Int64
 	// workCycle counts the collector's cycles, from the first workspace
 	// given back (workArm).
 	workCycle atomic.Uint64
@@ -61,6 +63,7 @@ func GetWorkspace() *Workspace {
 		workPool.free[n-1] = nil
 		workPool.free = workPool.free[:n-1]
 		workPooled.Add(-int64(w.bytes))
+		workIdle.Add(-1)
 		return w
 	}
 	return &Workspace{}
@@ -77,7 +80,28 @@ func PutWorkspace(w *Workspace) {
 	workPool.Lock()
 	workPool.free = append(workPool.free, w)
 	workPooled.Add(int64(w.bytes))
+	workIdle.Add(1)
 	workPool.Unlock()
+}
+
+// DropIdleWorkspaces lets go of the pooled workspaces, which no compile is
+// using, as a runtime returns to its host: a program that has stopped
+// compiling, and may run again much later or never, keeps none of its
+// compiles' working memory, which had been tens of megabytes after a large
+// function's compile -- 32 MB after Octane, two of the collector's cycles
+// past its last compile, which a host's one collection does not reach.
+// A compile under way, its workspace out of the pool, keeps it; the
+// compiles a runtime makes within a turn share one as before.
+func DropIdleWorkspaces() {
+	if workIdle.Load() == 0 {
+		return
+	}
+	workPool.Lock()
+	defer workPool.Unlock()
+	clear(workPool.free)
+	workPool.free = workPool.free[:0]
+	workPooled.Store(0)
+	workIdle.Store(0)
 }
 
 // PooledWorkspaceBytes is what the process's pooled workspaces keep: the
@@ -113,6 +137,7 @@ func workAge(cycle uint64) {
 	if n == 0 {
 		return
 	}
+	workIdle.Add(-int64(n))
 	rest := copy(workPool.free, workPool.free[n:])
 	clear(workPool.free[rest:])
 	workPool.free = workPool.free[:rest]

@@ -1827,6 +1827,7 @@ const jitNativeCallers = 8
 func init() {
 	jit.HostCall = jitHostCall
 	jitStackHighLowered = jitForgetHighSeen
+	jitReturnedToHost = jitReturned
 }
 
 // jitHostCall is Go's side of a call of Go from native code (jit.HostCall,

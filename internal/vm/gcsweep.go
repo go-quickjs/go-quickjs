@@ -75,6 +75,11 @@ func (r *Runtime) sweepStaleSlots(sp int) {
 // must never be above it, where Go has lowered it.
 var jitStackHighLowered func(r *Runtime)
 
+// jitReturnedToHost, in a build with the JIT, is what the JIT does as a
+// turn ends with no frame running, control back with the host
+// (jitReturned).
+var jitReturnedToHost func(r *Runtime)
+
 // clearReturnedFrames lets go of what the frames of the calls that have
 // returned still hold. A frame is left as it was when its call returns, so
 // that the next call at its depth reuses its slices, and so it still holds
