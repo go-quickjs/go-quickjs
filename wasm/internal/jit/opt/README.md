@@ -1695,10 +1695,20 @@ their edges (Register allocation; medians of three medians of
 | gzip | 64.3 (106) | 41.2 (100) | 37.3 (308) |
 | interp | 50.0 (76.1) | 19.4 (79.2) | 19.0 (179) |
 
-The 8,764 functions `TestOptCompileCorpus` compiles of the Go program and
-the spec scripts lower to 19.3 MB of arm64 code, where amd64's are 34.9
-MB, when on amd64 each poll had an exit of its own, which kept every
-register (a function's polls share one exit now, as on arm64).
+The 11,904 functions `TestOptCompileCorpus` compiles of the Go program
+and the spec scripts lower to 20.6 MB of amd64 code and 17.2 MB of
+arm64's, where they were 38.0 and 19.6 MB before the polls' and the
+calls' exits were shared, the trap sites' offsets left in a register,
+`MemLimit` within a byte's displacement and the switches' tables made
+of jumps to their targets (each in Lowering); the Go program's 3,011
+alone, 36.0 to 18.9 MB on amd64 (11,972 to 6,282 bytes a function) and
+18.1 to 15.7 on arm64. The steady state and the first runs, tiered and
+optimized, and the compile's every phase stayed level with them --
+interp's steady state aside, which is bimodal by where its hot loop
+falls in its 64-byte line (0.8x to 1.3x), the code's being no worse over
+the placements. A longer scan for widening (`widenScan` 256) took 7 of
+the Go program's 170,660 checks away, 100 bytes: what ends a run is an
+effect, not the scan's length.
 
 ## Next
 
