@@ -41,17 +41,24 @@ func forwardChains(f *Func) bool {
 			}
 		}
 		for _, v := range b.Values {
-			switch {
-			case v.Op == OpGlobalGet && v.Aux2 != 1:
+			switch chainOps[v.Op] {
+			case chainGet:
+				if v.Aux2 == 1 {
+					// An immutable global's.
+					continue
+				}
 				if k := fc.global(v.Aux); k != nil && k.val != v {
 					v.setCopy(k.val)
 					changed = true
 					continue
 				}
 				fc.know(v.Aux, v)
-			case v.Op == OpGlobalSet:
+			case chainSet:
 				fc.know(v.Aux, resolve(v.Args[1]))
-			case v.Op == OpLoad && v.Aux2&memShared == 0:
+			case chainLoad:
+				if v.Aux2&memShared != 0 {
+					continue
+				}
 				addr := resolve(v.Args[0])
 				if k := fc.load(addr, v); k != nil {
 					v.setCopy(k)
@@ -59,9 +66,9 @@ func forwardChains(f *Func) bool {
 					continue
 				}
 				fc.remember(memFact{addr: addr, mem: v.Aux2, off: v.Aux, size: v.Size, signed: v.Signed, typ: v.Type, val: v})
-			case v.Op == OpStore:
+			case chainStore:
 				fc.stored(resolve(v.Args[0]), v.Aux2, v.Aux, v.Size, resolve(v.Args[1]))
-			case v.IsCall() || v.Op == OpGoOp || isAtomic(v.Op) || v.Op == OpFence:
+			case chainKill:
 				fc.g, fc.m = fc.g[:0], fc.m[:0]
 			}
 		}
@@ -86,6 +93,38 @@ func forwardChains(f *Func) bool {
 	f.forwarded = f.forwarded || changed
 	return changed
 }
+
+// What forwardChains does at an operation (chainOps): knows a global's
+// value or reads it, knows a load's or a store's, or forgets it all at a
+// call, an instruction Go runs -- a memory.copy or a memory.fill the code
+// does itself among them -- an atomic access or a fence.
+const (
+	chainNone = iota
+	chainGet
+	chainSet
+	chainLoad
+	chainStore
+	chainKill
+)
+
+// chainOps is what forwardChains does at each operation, by Op.
+var chainOps = func() (t [numOps]uint8) {
+	for op := range Op(numOps) {
+		switch {
+		case op == OpGlobalGet:
+			t[op] = chainGet
+		case op == OpGlobalSet:
+			t[op] = chainSet
+		case op == OpLoad:
+			t[op] = chainLoad
+		case op == OpStore:
+			t[op] = chainStore
+		case opInfos[op].flags&fCall != 0 || op == OpGoOp || isAtomic(op) || op == OpFence:
+			t[op] = chainKill
+		}
+	}
+	return t
+}()
 
 // The most facts of each kind a block carries: the oldest go first.
 const (
@@ -117,12 +156,13 @@ func (fc *fcState) reset(f *Func) {
 	clear(fc.ends)
 }
 
-// done drops the values the lists hold, for the collector.
+// done drops the values the lists hold, for the collector: the saved
+// lists only grow in a walk, and are clear past their ends.
 func (fc *fcState) done() {
 	clear(fc.g[:cap(fc.g)])
 	clear(fc.m[:cap(fc.m)])
-	clear(fc.savedG[:cap(fc.savedG)])
-	clear(fc.savedM[:cap(fc.savedM)])
+	clear(fc.savedG)
+	clear(fc.savedM)
 }
 
 // global is what global g is known to hold, or nil.
