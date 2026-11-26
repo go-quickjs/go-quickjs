@@ -6,22 +6,11 @@ import "slices"
 // edges to the blocks it does, with the phis' arguments for those edges.
 // The blocks left are in reverse postorder (order).
 func removeUnreachable(f *Func) {
-	ws := f.ws
-	reach := ws.blockMarks(f)
-	reach[f.Entry.ID] = 1
-	work := append(ws.work[:0], f.Entry)
-	for len(work) > 0 {
-		b := work[len(work)-1]
-		work = work[:len(work)-1]
-		for _, s := range b.Succs {
-			if reach[s.ID] == 0 {
-				reach[s.ID] = 1
-				work = append(work, s)
-			}
-		}
-	}
-	ws.work = work
-	for _, b := range f.Blocks {
+	// The walk that orders the blocks reaches them: those it does not are
+	// removed after, which changes no successor of one it does.
+	blocks := f.Blocks
+	reach := orderBy(f, false)
+	for _, b := range blocks {
 		if reach[b.ID] == 0 {
 			b.dead = true
 			continue
@@ -33,7 +22,6 @@ func removeUnreachable(f *Func) {
 			}
 		}
 	}
-	order(f)
 }
 
 // removePred removes b's predecessor i, and its phis' argument i.
@@ -73,8 +61,9 @@ func order(f *Func) { orderBy(f, false) }
 // A turn of the loop then takes no branch but its back edge's.
 func layout(f *Func) { orderBy(f, true) }
 
-// orderBy is order, or, with deeper, layout.
-func orderBy(f *Func, deeper bool) {
+// orderBy is order, or, with deeper, layout. It returns a mark for each
+// block, by ID, 1 for those reached, the workspace's (blockMarks).
+func orderBy(f *Func, deeper bool) []int32 {
 	ws := f.ws
 	f.dom = nil
 	seen := ws.blockMarks(f)
@@ -105,6 +94,7 @@ func orderBy(f *Func, deeper bool) {
 	ws.frames = stack[:0]
 	slices.Reverse(post)
 	f.Blocks = post
+	return seen
 }
 
 // splitCriticalEdges puts a block on every edge from a block with more
