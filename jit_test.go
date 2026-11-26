@@ -45,6 +45,13 @@ func TestJITOption(t *testing.T) {
 	}
 }
 
+// jitOnTheSpot is the JIT compiling on the spot, for the tests that
+// count what ran natively: in the background, the default where GOMAXPROCS
+// is more than 1, a compile may land after the few runs such a test makes,
+// and nothing has run natively by its end. QJS_JIT_STRESS's background
+// still compiles them in the background, each installed at its Kth check.
+var jitOnTheSpot = []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false)}
+
 // jitHotFunctions is a program with n hot functions, each run in turn, and
 // its answer.
 func jitHotFunctions(n int) string {
@@ -77,10 +84,10 @@ func TestJITMemoryLimitOption(t *testing.T) {
 		opts  []quickjs.Option
 		limit int64
 	}{
-		{"jit 256K", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(256 << 10)}, 256 << 10},
-		{"jit 1M", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(1 << 20)}, 1 << 20},
-		{"jit 4M over a memory limit", []quickjs.Option{quickjs.WithJIT(), quickjs.WithMemoryLimit(64 << 20), quickjs.WithJITMemoryLimit(4 << 20)}, 4 << 20},
-		{"jit default", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(0)}, 64 << 20},
+		{"jit 256K", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false), quickjs.WithJITMemoryLimit(256 << 10)}, 256 << 10},
+		{"jit 1M", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false), quickjs.WithJITMemoryLimit(1 << 20)}, 1 << 20},
+		{"jit 4M over a memory limit", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false), quickjs.WithMemoryLimit(64 << 20), quickjs.WithJITMemoryLimit(4 << 20)}, 4 << 20},
+		{"jit default", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false), quickjs.WithJITMemoryLimit(0)}, 64 << 20},
 		{"no jit", []quickjs.Option{quickjs.WithJITMemoryLimit(256 << 10)}, 0},
 	} {
 		r := quickjs.New(tc.opts...)
@@ -217,7 +224,7 @@ func TestJITImport(t *testing.T) {
 		return v.String() + " | " + strings.Join(got, ", "), hostaccess.VM(rt).JITStats()
 	}
 	want, _ := run()
-	got, st := run(quickjs.WithJIT())
+	got, st := run(jitOnTheSpot...)
 	if got != want {
 		t.Errorf("jit: %s\ninterpreter: %s", got, want)
 	}
@@ -254,7 +261,7 @@ func TestJITNullish(t *testing.T) {
 				return v.String(), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -304,7 +311,7 @@ func TestJITDestructuring(t *testing.T) {
 				return v.String(), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -354,7 +361,7 @@ func TestJITPrivateMembers(t *testing.T) {
 				return v.String(), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -411,7 +418,7 @@ func TestJITTailCalls(t *testing.T) {
 				return v.String(), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -572,7 +579,7 @@ func TestJITTopLevel(t *testing.T) {
 				return evalString(t, r, "String(out)"), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -611,7 +618,7 @@ func TestJITUpvalueAfterIteratorStep(t *testing.T) {
 	if want != "358,479,24437,479494" {
 		t.Fatalf("interpreter: %s", want)
 	}
-	got, st := run(quickjs.WithJIT())
+	got, st := run(jitOnTheSpot...)
 	if got != want {
 		t.Fatalf("jit: %s, interpreter: %s", got, want)
 	}
@@ -728,7 +735,7 @@ func TestJITCapturedLocals(t *testing.T) {
 				return evalString(t, r, "String(r)"), hostaccess.VM(r).JITStats()
 			}
 			want, _ := run()
-			got, st := run(quickjs.WithJIT())
+			got, st := run(jitOnTheSpot...)
 			if got != want {
 				t.Fatalf("jit: %s, interpreter: %s", got, want)
 			}
@@ -762,7 +769,7 @@ function F() {
 }
 const h = new H(), f = new F();
 [h.viaEval(), h.viaNested(), f.e, f.n].join()`
-	r := quickjs.New(quickjs.WithJIT())
+	r := quickjs.New(jitOnTheSpot...)
 	defer r.Close()
 	hostaccess.VM(r).SetJITWarmUp(8, 8)
 	if got, want := evalString(t, r, src), "2000,2000,2000,2000"; got != want {
