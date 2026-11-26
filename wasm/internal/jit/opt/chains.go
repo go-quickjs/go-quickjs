@@ -16,15 +16,17 @@ package opt
 // begins knowing nothing: no value is carried around a loop, nor past a
 // merge.
 //
-// It reports whether it resolved every value's arguments, which it does as
-// it walks them -- a value's arguments but a phi's come before it in the
-// walk, as order lays the blocks out -- and whether it made a read a copy.
-// A function whose frame the values it keeps live leave too few spill
-// slots is compiled again without it (noForward), as without
-// forwardGlobals.
-func forwardChains(f *Func) (resolved, changed bool) {
+// As it walks the values it resolves their arguments -- a value's
+// arguments but a phi's come before it in the walk, as order lays the
+// blocks out -- and drops the copies from the blocks, gvn's and its own:
+// what is left of copyelim's rewrite is the phis', the branches' and the
+// results' arguments (rewriteCopies). It reports whether it walked them,
+// whether it made a read a copy, and whether it dropped a copy. A function
+// whose frame the values it keeps live leave too few spill slots is
+// compiled again without it (noForward), as without forwardGlobals.
+func forwardChains(f *Func) (walked, changed, dropped bool) {
 	if f.noForward {
-		return false, false
+		return false, false, false
 	}
 	ws := f.ws
 	fc := &ws.fc
@@ -42,38 +44,49 @@ func forwardChains(f *Func) (resolved, changed bool) {
 				}
 			}
 		}
-		for _, v := range b.Values {
+		// The values are moved down only from the block's first copy on.
+		vs, n := b.Values, 0
+		for j, v := range vs {
 			resolveArgs(v.Args)
 			switch chainOps[v.Op] {
 			case chainGet:
-				if v.Aux2 == 1 {
-					// An immutable global's.
-					continue
+				// But an immutable global's.
+				if v.Aux2 != 1 {
+					if k := fc.global(v.Aux); k != nil && k.val != v {
+						v.setCopy(k.val)
+						changed = true
+					} else {
+						fc.know(v.Aux, v)
+					}
 				}
-				if k := fc.global(v.Aux); k != nil && k.val != v {
-					v.setCopy(k.val)
-					changed = true
-					continue
-				}
-				fc.know(v.Aux, v)
 			case chainSet:
 				fc.know(v.Aux, resolve(v.Args[1]))
 			case chainLoad:
-				if v.Aux2&memShared != 0 {
-					continue
+				if v.Aux2&memShared == 0 {
+					addr := resolve(v.Args[0])
+					if k := fc.load(addr, v); k != nil {
+						v.setCopy(k)
+						changed = true
+					} else {
+						fc.remember(memFact{addr: addr, mem: v.Aux2, off: v.Aux, size: v.Size, signed: v.Signed, typ: v.Type, val: v})
+					}
 				}
-				addr := resolve(v.Args[0])
-				if k := fc.load(addr, v); k != nil {
-					v.setCopy(k)
-					changed = true
-					continue
-				}
-				fc.remember(memFact{addr: addr, mem: v.Aux2, off: v.Aux, size: v.Size, signed: v.Signed, typ: v.Type, val: v})
 			case chainStore:
 				fc.stored(resolve(v.Args[0]), v.Aux2, v.Aux, v.Size, resolve(v.Args[1]))
 			case chainKill:
 				fc.g, fc.m = fc.g[:0], fc.m[:0]
 			}
+			if v.Op != OpCopy {
+				if n != j {
+					vs[n] = v
+				}
+				n++
+			}
+		}
+		if n < len(vs) {
+			dropped = true
+			clear(vs[n:])
+			b.Values = vs[:n]
 		}
 		// Kept for its successors of one predecessor but the next block,
 		// if it knows anything.
@@ -94,7 +107,7 @@ func forwardChains(f *Func) (resolved, changed bool) {
 	}
 	fc.done()
 	f.forwarded = f.forwarded || changed
-	return true, changed
+	return true, changed, dropped
 }
 
 // What forwardChains does at an operation (chainOps): knows a global's

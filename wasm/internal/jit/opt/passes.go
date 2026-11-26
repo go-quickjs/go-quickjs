@@ -32,15 +32,18 @@ func Optimize(f *Func, check func(pass string)) {
 	pending := false
 	run("copyelim", PhaseCopyelim, func(f *Func) { pending = trivialPhis(f) })
 	run("chains", PhaseChains, func(f *Func) {
-		// forwardChains resolves the values' arguments as it walks them;
-		// a phi its copies make trivial may be any value's argument.
-		resolved, changed := forwardChains(f)
-		if changed {
-			resolved = resolved && !trivialPhis(f)
-			pending = true
+		// forwardChains resolves the values' arguments and drops the
+		// copies as it walks them; a phi its copies make trivial may be
+		// any value's argument.
+		walked, changed, dropped := forwardChains(f)
+		if changed && trivialPhis(f) {
+			walked, pending = false, true
 		}
-		if pending || anyCopy(f) {
-			rewriteCopies(f, resolved)
+		switch {
+		case walked && (pending || dropped):
+			rewriteCopies(f, true)
+		case !walked && (pending || anyCopy(f)):
+			rewriteCopies(f, false)
 		}
 	})
 	run("licm", PhaseLICM, licm)
@@ -155,28 +158,30 @@ func anyCopy(f *Func) bool {
 
 // rewriteCopies rewrites the uses of copies and drops the copies from their
 // blocks, in one walk: a copy dropped keeps its argument, which a later use
-// resolves through. resolved says the values' arguments are resolved
-// already, and only the phis', the branches' and the results' are left.
-func rewriteCopies(f *Func, resolved bool) {
+// resolves through. walked says a walk of the values (forwardChains) has
+// resolved their arguments and dropped the copies already, and only the
+// phis', the branches' and the results' arguments are left.
+func rewriteCopies(f *Func, walked bool) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
 			resolveArgs(v.Args)
 		}
-		// The values are moved down only from the block's first copy on.
-		vs, n := b.Values, 0
-		for i, v := range vs {
-			if !resolved {
+		if !walked {
+			// The values are moved down only from the block's first copy
+			// on.
+			vs, n := b.Values, 0
+			for i, v := range vs {
 				resolveArgs(v.Args)
-			}
-			if v.Op != OpCopy {
-				if n != i {
-					vs[n] = v
+				if v.Op != OpCopy {
+					if n != i {
+						vs[n] = v
+					}
+					n++
 				}
-				n++
 			}
+			clear(vs[n:])
+			b.Values = vs[:n]
 		}
-		clear(vs[n:])
-		b.Values = vs[:n]
 		if b.Control != nil {
 			b.Control = resolve(b.Control)
 		}
