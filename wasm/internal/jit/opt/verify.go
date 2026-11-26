@@ -378,7 +378,8 @@ func checkTypes(v *Value) error {
 			return fmt.Errorf("a result of %s", c.long())
 		}
 	case OpRef:
-		if v.Type != TNone && !v.Type.IsInt() && !v.Type.IsFloat() {
+		// A struct field's or an array element's value may be a v128.
+		if v.Type != TNone && !v.Type.IsInt() && !v.Type.IsFloat() && v.Type != TV128 {
 			return fmt.Errorf("of type %v", v.Type)
 		}
 	case OpTail, OpTailIndirect, OpTailRef:
