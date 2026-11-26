@@ -477,9 +477,13 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 					hint = r
 				}
 			}
-			in := lsra.NewInst(ws.vregs.take(len(uses)+len(defs)+len(temps)), uses, defs, temps, hint)
+			// Made in place in the block's instructions, whose array has
+			// room for them all.
+			k := len(lb.Insts)
+			lb.Insts = lb.Insts[:k+1]
+			in := &lb.Insts[k]
+			in.Set(ws.vregs.take(len(uses)+len(defs)+len(temps)), uses, defs, temps, hint)
 			in.Call, in.Clobber = call, clobber
-			lb.Insts = append(lb.Insts, in)
 			ws.ubuf, ws.dbuf, ws.tbuf = uses[:0], defs[:0], temps[:0]
 		}
 		// The block's end: its branch's condition or its results.
@@ -494,7 +498,9 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 		case BReturn:
 			uses = usesOf(uses, b.Results)
 		}
-		lb.Insts = append(lb.Insts, lsra.NewInst(ws.vregs.take(len(uses)), uses, nil, nil, lsra.None))
+		k := len(lb.Insts)
+		lb.Insts = lb.Insts[:k+1]
+		lb.Insts[k].Set(ws.vregs.take(len(uses)), uses, nil, nil, lsra.None)
 		ws.ubuf = uses[:0]
 		// A block in a loop that calls is taken as run a loop's depth less
 		// often than the loop: where a loop calls, it calls on a path most
