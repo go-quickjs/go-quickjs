@@ -932,9 +932,11 @@ starts at a line, and its branches within their lines and 32-byte fetch
 windows. Each is 0, and production code unchanged, outside the tool. A JIT
 change that moves code within its lines is judged over those offsets: one
 slower at offset 0 alone, where every placement had put each loop, is
-placement. `-jitbackground` runs the code the way `qjs --jit` does, its
-compiles in the background; a change to how a compile is asked for is
-compared both ways.
+placement. `-jitbackground` runs the code the way `qjs --jit` does where
+GOMAXPROCS is more than 1, its compiles in the background (whatever
+GOMAXPROCS is: `WithJITBackground(true)`); without it the runners compile
+on the spot, as every figure taken with `-jit` was. A change to how a
+compile is asked for is compared both ways.
 
 ```sh
 go run ./internal/cmd/v8bench/placements compare -parallel -k 4 -micro base change

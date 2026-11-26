@@ -335,11 +335,11 @@ func TestJITBackgroundSnapshotMiss(t *testing.T) {
 	r := jitBackgroundForTest(t, 0)
 	cl := jitGlobalClosureForTest(r, "sum")
 	stress := r.jitStress
-	r.jitBackground, r.jitStress = false, jitStressConfig{}
+	r.jitBackground, r.jitStress = jitOnSpot, jitStressConfig{}
 	for range 2 {
 		jitCallForTest(t, r, `sum(10)`, 45)
 	}
-	r.jitBackground, r.jitStress = true, stress
+	r.jitBackground, r.jitStress = jitInWorkers, stress
 	old := jitRegOfForTest(r, cl)
 	if old == nil || old.code == nil {
 		t.Fatalf("sum has no code: %+v", old)

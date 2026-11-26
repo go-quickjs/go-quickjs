@@ -797,8 +797,19 @@ entries at its start, its link's calls and Go's calls of it
 Mandreel's is, is compiled once its runs have spent its budget, not at every
 call of it through Go.
 
-**Compiling in the background.** A runtime made `WithJITBackground`, or
-`QJS_JIT_STRESS`'s `background=K`, compiles register code in three steps
+**Compiling in the background.** A runtime made `WithJIT` compiles in the
+background by default where GOMAXPROCS is more than 1, and on the spot where
+it is 1 (`SetJITBackgroundAuto`, `jitBackgroundNow`, decided at each compile):
+with one P a worker runs only when the runtime's goroutine is preempted,
+which native code never is, and the code came late -- Typescript 27% slower,
+the V8 suite's first runs 1.5 to 4.8 times as long -- as the WebAssembly
+engine's optimizing tier decides too. `WithJITBackground(true)` compiles in
+the background whatever GOMAXPROCS is, `WithJITBackground(false)` always on
+the spot, which keeps a run's tiering the same from one run to the next, as
+a `vm.Runtime` New makes does unless told otherwise: the VM's tests, and the
+tools, `v8bench` without `-jitbackground`, `-jitcompile`, `-jitheld`,
+`compilediff native`, compile so. Such a runtime, or `QJS_JIT_STRESS`'s
+`background=K`, compiles register code in three steps
 (`jit_bg.go`): the runtime's goroutine lowers the code and asks its
 feedback ahead (`jitRegSnapshotOf`) -- every question the build may ask,
 at each instruction the methods the build asks of its op (`jitSnapOps`),

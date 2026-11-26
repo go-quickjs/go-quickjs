@@ -127,7 +127,10 @@ fresh copy of it, as under [Compared with C
 QuickJS](#compared-with-c-quickjs). JIT off was built without the
 `quickjs_jit` tag. JIT on compiles
 synchronously; JIT background enables the JIT and compiles in the background
-with `-jit -jitbackground`. Both use the same binary built with
+with `-jit -jitbackground`. The runners keep these meanings now that `WithJIT`
+and `qjs --jit` compile in the background by default where GOMAXPROCS is more
+than 1: `-jit` alone compiles on the spot (`WithJITBackground(false)`), and
+`-jitbackground` in the background whatever GOMAXPROCS is. Both use the same binary built with
 `-tags quickjs_jit` and the runner's 32 MiB JIT budget rather than the
 runtime's default, then 8 MiB. This revision uses the register interpreter and
 register JIT by default.
@@ -565,8 +568,9 @@ takes the last loop's cursor once that loop has finished (`5326a3f8`).
 
 QuickJS's runner loads a script once, so it has no FirstRender. A fresh
 runtime's render is where the JIT costs most: these compiles are made on
-the runtime's goroutine, which waits for each, as a runtime made without
-`WithJITBackground` does; `qjs --jit` compiles in the background. Since
+the runtime's goroutine, which waits for each, as a runtime made
+`WithJITBackground(false)` does; `qjs --jit`, as `WithJIT` by default,
+compiles in the background where GOMAXPROCS is more than 1. Since
 v0.39.0 a compile made in the background is installed once the native
 calls of the code it replaces are done, where it was thrown away
 (`7812928f`), a native caller's ask installs a callee's finished compile

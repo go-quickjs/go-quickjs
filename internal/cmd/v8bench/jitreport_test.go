@@ -102,7 +102,7 @@ func TestJITReportCountsEachBenchmark(t *testing.T) {
 			return s
 		}`
 	newRuntime := func() *quickjs.Runtime {
-		rt := quickjs.New(quickjs.WithJIT(), quickjs.WithJITBackground())
+		rt := quickjs.New(quickjs.WithJIT(), quickjs.WithJITBackground(true))
 		t.Cleanup(func() { rt.Close() })
 		reportStart(runtimeOf{rt})
 		if _, err := rt.Eval(work); err != nil {

@@ -101,6 +101,10 @@ func (*Runtime) SetJITWarmUp(int, int) {}
 // background.
 func (*Runtime) SetJITBackground(bool) {}
 
+// SetJITBackgroundAuto does nothing: there is no JIT to compile in the
+// background.
+func (*Runtime) SetJITBackgroundAuto() {}
+
 // JITBackground is false: there is no JIT to compile in the background.
 func (*Runtime) JITBackground() bool { return false }
 

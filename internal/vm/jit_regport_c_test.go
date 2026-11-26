@@ -187,11 +187,11 @@ func jitRegPendingRecompileForTest(t *testing.T, r *Runtime) (*jitRegEntry, *jit
 	t.Helper()
 	cl := jitGlobalClosureForTest(r, "sum")
 	stress := r.jitStress
-	r.jitBackground, r.jitStress = false, jitStressConfig{}
+	r.jitBackground, r.jitStress = jitOnSpot, jitStressConfig{}
 	for range 2 {
 		jitCallForTest(t, r, `sum(10)`, 45)
 	}
-	r.jitBackground, r.jitStress = true, stress
+	r.jitBackground, r.jitStress = jitInWorkers, stress
 	e := jitRegOfForTest(r, cl)
 	if e == nil || e.code == nil || e.invalid {
 		t.Fatalf("sum has no code: %+v", e)

@@ -199,3 +199,27 @@ func TestJITBackgroundPlacesOnTheWorker(t *testing.T) {
 		t.Fatalf("discarded %d, placed code open %v: want it thrown away and closed", r.jit.bgDiscarded, len(placed.Text()) != 0)
 	}
 }
+
+// A runtime that compiles in the background where GOMAXPROCS is more than 1
+// (SetJITBackgroundAuto, WithJIT's default) compiles on the spot where it is
+// 1, decided at each compile: with one P, a worker runs only when the
+// runtime's goroutine is preempted, which native code never is.
+func TestJITBackgroundAutoOneP(t *testing.T) {
+	t.Parallel()
+	for _, procs := range []int{1, 4} {
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		r.SetJITBackgroundAuto()
+		r.jitTest.procs = procs
+		if _, err := r.Run(compileForTest(t, `function loop(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}`)); err != nil {
+			t.Fatal(err)
+		}
+		cl := jitGlobalClosureForTest(r, "loop")
+		jitCallForTest(t, r, `loop(1000)`, 499500)
+		if got, want := r.JITBackground(), procs > 1; got != want || r.jit.bgSubmitted == 0 != !want {
+			t.Fatalf("GOMAXPROCS %d: in the background %v, handed over %d: want %v", procs, got, r.jit.bgSubmitted, want)
+		}
+		if procs == 1 && !jitHasCodeOfForTest(r, cl) {
+			t.Fatalf("GOMAXPROCS 1: no code compiled on the spot (%s)", jitBackgroundStateForTest(r, cl))
+		}
+	}
+}

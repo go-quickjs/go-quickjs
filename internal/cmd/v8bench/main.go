@@ -44,7 +44,7 @@ type engine struct{}
 var (
 	jitFlag       = flag.Bool("jit", false, "enable the optional JIT (WithJIT)")
 	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed and micro modes, with -jit)")
-	jitBgFlag     = flag.Bool("jitbackground", false, "with -jit, compile in the background (WithJITBackground), as qjs --jit does; compiles timed by -jitcompile stay on the runtime's goroutine")
+	jitBgFlag     = flag.Bool("jitbackground", false, "with -jit, compile in the background (WithJITBackground(true)) whatever GOMAXPROCS is, rather than on the spot; qjs --jit does so where GOMAXPROCS is more than 1; compiles timed by -jitcompile stay on the runtime's goroutine")
 	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (64 MiB)")
 	jitHeldFlag   = flag.Bool("jitheld", false, "with -jitcode: hold the JIT's clocks and turn the collector off, but at a memory limit of 3 GiB where GOMEMLIMIT sets none, so that two builds' runs make the same compiles, for compilediff native")
 	jitCodeFlag   = flag.String("jitcode", "", "write each function's native code to this file as it is compiled, as JSON lines, for internal/jit/verify's jitprof (with -jit)")
@@ -95,9 +95,12 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 		// compare (NAME@V8BENCH_NOJIT=1): the JIT's build running its
 		// interpreter alone, against the same build with the JIT.
 		opts = append(opts, quickjs.WithJIT())
-		if *jitBgFlag {
-			opts = append(opts, quickjs.WithJITBackground())
-		}
+		// On the spot unless -jitbackground says otherwise, which code
+		// runs the same from one run to the next, as every figure taken
+		// with -jit was; -jitbackground compiles in the background
+		// whatever GOMAXPROCS is, as it always has. Neither is WithJIT's
+		// default, which compiles on the spot at GOMAXPROCS 1.
+		opts = append(opts, quickjs.WithJITBackground(*jitBgFlag))
 		if *jitMemFlag > 0 {
 			opts = append(opts, quickjs.WithJITMemoryLimit(int64(*jitMemFlag)<<20))
 		}

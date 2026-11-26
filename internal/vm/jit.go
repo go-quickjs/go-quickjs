@@ -68,10 +68,11 @@ const jitBuilt = true
 
 type jitFields struct {
 	jitEnabled bool
-	// jitBackground is SetJITBackground's: compiles made on the process's
-	// workers (jitRegSubmit), as under QJS_JIT_STRESS's background
-	// (jitInBackground).
-	jitBackground bool
+	// jitBackground is SetJITBackground's and SetJITBackgroundAuto's:
+	// whether compiles are made on the process's workers (jitRegSubmit),
+	// as under QJS_JIT_STRESS's background (jitInBackground) --
+	// jitOnSpot, jitInWorkers or jitInWorkersAuto.
+	jitBackground uint8
 	// jitCallThreshold is how many invocations' worth of a function's
 	// budget the interpreter spends before it is compiled, or compiled
 	// again (jitInvocationsForMaglev), and jitICThreshold what a change of
@@ -171,6 +172,9 @@ type jitTestConfig struct {
 	// workers (jitRegSubmit): queued, no worker begins it, as where every
 	// worker is busy.
 	bgUnstarted bool
+	// procs, if not 0, stands in for GOMAXPROCS where the runtime's mode
+	// asks it (jitBackgroundNow).
+	procs int
 }
 
 // jitSetEncoding sets s's encoding and options as its runtime's test
@@ -326,17 +330,59 @@ func (r *Runtime) JITStats() JITStats {
 		Parkings: s.parkings, Parked: s.parkedCount, Unparked: s.unparked}
 }
 
+// The runtime's modes of compiling (jitBackground): on the spot, the
+// runtime's goroutine waiting for each compile; on the process's workers;
+// and on the workers where the process has more than one P, on the spot
+// where it has one (jitBackgroundNow).
+const (
+	jitOnSpot uint8 = iota
+	jitInWorkers
+	jitInWorkersAuto
+)
+
 // SetJITBackground has the JIT compile on the process's workers, the
 // runtime's goroutine running on meanwhile, and install the code once it is
-// done; otherwise the runtime waits for each compile. It is set before the
+// done, whatever GOMAXPROCS is; or, off, the runtime wait for each compile,
+// which is the default of a Runtime New makes. It is set before the
 // runtime runs anything. It is not a field of Config: a field more there
 // changes New's code, and package vm's every function after it moves.
-func (r *Runtime) SetJITBackground(on bool) { r.jitBackground = on }
+func (r *Runtime) SetJITBackground(on bool) {
+	r.jitBackground = jitOnSpot
+	if on {
+		r.jitBackground = jitInWorkers
+	}
+}
+
+// SetJITBackgroundAuto has the JIT compile on the process's workers where
+// GOMAXPROCS is more than 1, and on the spot where it is 1, as decided at
+// each compile (jitBackgroundNow).
+func (r *Runtime) SetJITBackgroundAuto() { r.jitBackground = jitInWorkersAuto }
+
+// jitBackgroundNow reports whether the runtime's mode has its compiles made
+// on the workers now. With one P, a worker runs only when the runtime's
+// goroutine is preempted, which native code never is, so that a compile
+// handed over waits for a time slice, the function running in the
+// interpreter meanwhile: at GOMAXPROCS 1 the V8 suite's first runs took 1.5
+// to 4.8 times as long as on the spot, Octane's Typescript 27% longer. The
+// WebAssembly engine's optimizing tier decides so too.
+func (r *Runtime) jitBackgroundNow() bool {
+	switch r.jitBackground {
+	case jitInWorkers:
+		return true
+	case jitInWorkersAuto:
+		if n := r.jitTest.procs; n != 0 {
+			return n > 1
+		}
+		return runtime.GOMAXPROCS(0) > 1
+	}
+	return false
+}
 
 // JITBackground reports whether this runtime runs the JIT and compiles in
-// the background (SetJITBackground, QJS_JIT_STRESS's background).
+// the background now (SetJITBackground, SetJITBackgroundAuto,
+// QJS_JIT_STRESS's background).
 func (r *Runtime) JITBackground() bool {
-	return r.jitEnabled && (r.jitBackground || r.jitStress.background)
+	return r.jitEnabled && (r.jitBackgroundNow() || r.jitStress.background)
 }
 
 // jitScheduled reports whether QJS_JIT_STRESS's background schedules the

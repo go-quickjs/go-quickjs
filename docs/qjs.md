@@ -95,7 +95,11 @@ serve({port: 8080}, async (request) => {
 ```
 
 The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
-`--no-code-generation` — and `--check` parses without running. `--inspect`,
+`--no-code-generation` — and `--check` parses without running. `--jit` (in a
+`qjs` built with `-tags quickjs_jit`) compiles hot functions in the
+background, as Node does, where GOMAXPROCS is more than 1, and on the spot
+where it is 1; `--no-jit-background` has it wait for each compile, which
+code runs then the same from one run to the next. `--inspect`,
 `--inspect-wait` and `--inspect-brk` let Chrome's DevTools or VS Code attach,
 as Node's do, and `--enable-source-maps` writes an error's stack in the source
 a script was compiled from; see [Debugging](debugging.md). The prompt keeps

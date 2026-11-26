@@ -38,7 +38,7 @@ import (
 
 var (
 	jitFlag    = flag.Bool("conformance.jit", false, "enable the optional JIT (WithJIT)")
-	jitBgFlag  = flag.Bool("conformance.jitbackground", false, "with -conformance.jit, compile in the background (WithJITBackground)")
+	jitBgFlag  = flag.Bool("conformance.jitbackground", false, "with -conformance.jit, compile in the background (WithJITBackground(true)) rather than on the spot")
 	reportPath = flag.String("conformance.report", "",
 		"write the list of failing tests to this file")
 	subdirFlag = flag.String("conformance.dir", "",
@@ -340,9 +340,8 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		}
 		if *jitFlag {
 			opts = append(opts, quickjs.WithJIT())
-			if *jitBgFlag {
-				opts = append(opts, quickjs.WithJITBackground())
-			}
+			// On the spot unless told otherwise, as before.
+			opts = append(opts, quickjs.WithJITBackground(*jitBgFlag))
 		}
 		return quickjs.New(opts...)
 	}

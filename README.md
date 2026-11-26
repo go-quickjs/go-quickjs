@@ -79,6 +79,11 @@ It needs both a build with `-tags quickjs_jit` and a runtime made with
 rt := quickjs.New(quickjs.WithJIT())
 ```
 
+It compiles in the background where GOMAXPROCS is more than 1, the
+runtime running on meanwhile, and on the runtime's goroutine where it is 1;
+`WithJITBackground(false)` always compiles there, which code runs then the
+same from one run to the next.
+
 What the JIT holds is bounded by `WithJITMemoryLimit` -- by default 64 MiB,
 or an eighth of `WithMemoryLimit` when that is set, and as much again for
 the runtime's WebAssembly code -- and never counts against

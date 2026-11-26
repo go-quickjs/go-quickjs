@@ -22,11 +22,13 @@ import (
 // compile made on the spot would have. Meanwhile the function runs in the
 // interpreter, or in its code, still valid, that the compile replaces.
 //
-// The runtime asks it with JITBackground, or QJS_JIT_STRESS's background
-// does, which a test that sets its own stress (jitStress) leaves out, as
-// it leaves out the budgets and deoptimizations; otherwise it waits for each
-// compile, and its tiering is reproducible, which the tests counting
-// compiles, the differential fuzzer and the placements need.
+// The runtime asks it with SetJITBackground or SetJITBackgroundAuto (where
+// GOMAXPROCS is more than 1, jitBackgroundNow), or QJS_JIT_STRESS's
+// background does, which a test that sets its own stress (jitStress)
+// leaves out, as it leaves out the budgets and deoptimizations; otherwise
+// it waits for each compile, and its tiering is reproducible, which the
+// tests counting compiles, the differential fuzzer and the placements
+// need.
 
 // jitJobsMax is how many compiles a runtime has in the background at once,
 // as V8 queues at most eight of an isolate's: past it, a function due to be
@@ -56,7 +58,7 @@ const (
 // finds the runtime with as many in the background as it may (jobsFull)
 // waits, asked again at a later check, rather than be made on the spot.
 func (r *Runtime) jitInBackground(fn *bytecode.Function) bool {
-	return (r.jitBackground || r.jitStress.background) && !fn.TopLevel && r.jit != nil && r.jit.compiling == 0 && !r.jit.onSpot &&
+	return (r.jitStress.background || r.jitBackgroundNow()) && !fn.TopLevel && r.jit != nil && r.jit.compiling == 0 && !r.jit.onSpot &&
 		mir.Timing == nil && r.jitCompileRepeat() == 0 && r.jitTest.ssaOptimized == nil
 }
 

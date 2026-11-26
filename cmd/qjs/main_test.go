@@ -873,8 +873,9 @@ func TestJITFlag(t *testing.T) {
 	}
 }
 
-// --jit compiles in the background, as the command line's default, and
-// --no-jit-background waits for each compile instead -- unless
+// --jit compiles in the background, as WithJIT does by default where
+// GOMAXPROCS is more than 1, and --no-jit-background waits for each compile
+// instead -- unless
 // QJS_JIT_STRESS's background has every JIT runtime compile so.
 func TestJITBackgroundFlag(t *testing.T) {
 	stressed := strings.Contains(os.Getenv("QJS_JIT_STRESS"), "background")
@@ -882,7 +883,7 @@ func TestJITBackgroundFlag(t *testing.T) {
 		args       []string
 		background bool
 	}{
-		{[]string{"--jit", "-e", "1"}, jit.Supported()},
+		{[]string{"--jit", "-e", "1"}, jit.Supported() && (runtime.GOMAXPROCS(0) > 1 || stressed)},
 		{[]string{"--jit", "--no-jit-background", "-e", "1"}, jit.Supported() && stressed},
 		{[]string{"--no-jit-background", "-e", "1"}, false},
 	} {

@@ -118,8 +118,10 @@ type Runtime struct {
 type Option func(*config)
 
 type config struct {
-	jit              bool
-	jitBackground    bool
+	jit bool
+	// jitBackground is WithJITBackground's: 0 for none, the default, 1
+	// for true and -1 for false.
+	jitBackground    int8
 	jitMemoryLimit   int64
 	moduleFetchLimit int
 	memoryLimit      int64
@@ -146,24 +148,55 @@ type config struct {
 // sustained looping; native execution and speedup are not guaranteed.
 // Runtimes made with WithDebugger run their code in the interpreter.
 // This is independent of WithoutCodeGeneration.
+//
+// The JIT compiles in the background by default, where GOMAXPROCS is more
+// than 1, the Runtime running on meanwhile, so which code runs, and how
+// fast, may differ from one run to the next; WithJITBackground(false) has
+// it compile on the Runtime's goroutine, the same on every run.
 func WithJIT() Option { return func(c *config) { c.jit = true } }
 
-// WithJITBackground has the JIT (WithJIT) compile on goroutines of the
-// process's, at most a quarter of GOMAXPROCS, which the process's runtimes
-// share, while the Runtime goes on running: a function due to be compiled
-// runs in the interpreter until its code is done, and code compiled
-// again runs on until its replacement is, as V8 compiles concurrently.
-// Without it, the Runtime waits for each compile, the time the JIT spends
-// compiling spent on its goroutine. The results a script computes are the
-// same either way; with it, when code is installed depends on how fast the
-// compiles finish, so which code runs, and how fast, may differ from one
-// run to the next. A Runtime has at most four compiles in the background
-// at once, and installs finished ones only as it runs: at a function's
-// entry or a loop's check, so a Runtime that is not running holds its
-// finished compiles until it runs again or is closed. What a compile works
-// in is the process's, not counted by WithJITMemoryLimit. It does nothing
-// in a build without the JIT, or a runtime without WithJIT.
-func WithJITBackground() Option { return func(c *config) { c.jitBackground = true } }
+// WithJITBackground says where the JIT (WithJIT) compiles. By default it
+// compiles in the background where GOMAXPROCS is more than 1 and on the
+// spot where it is 1, decided at each compile; true compiles in the
+// background whatever GOMAXPROCS is, and false always on the spot. The
+// default was on the spot before, when WithJITBackground took no argument
+// and meant true.
+//
+// In the background, compiles are made on goroutines of the process's, at
+// most a quarter of GOMAXPROCS, which the process's runtimes share, while
+// the Runtime goes on running: a function due to be compiled runs in the
+// interpreter until its code is done, and code compiled again runs on until
+// its replacement is, as V8 compiles concurrently. The workers take the
+// compiles whose functions ran most while they waited first, and drop
+// those whose functions went unused for 50 ms or more of the program's
+// running; a
+// compile no worker has begun by the time its function has run for about
+// as long again as it took to become hot is made on the spot, so that a
+// process whose cores are all busy -- a runtime on each -- waits for its
+// code no longer than about twice what compiling on the spot costs. With
+// one P a worker would run only when the Runtime's goroutine is preempted,
+// which native code never is, and code came late: Octane's Typescript took
+// 27% longer at GOMAXPROCS 1 in the background, the V8 suite's first runs
+// 1.5 to 4.8 times as long. With cores to spare Typescript runs 13% faster
+// in the background.
+//
+// On the spot, the Runtime waits for each compile, the time the JIT spends
+// compiling spent on its goroutine, and which code runs is the same on
+// every run: for tests and hosts that compare runs. The results a script
+// computes are the same either way. A Runtime has at most four compiles in
+// the background at once, and installs finished ones only as it runs: at a
+// function's entry or a loop's check, so a Runtime that is not running
+// holds its finished compiles until it runs again or is closed. What a
+// compile works in is the process's, not counted by WithJITMemoryLimit. It
+// does nothing in a build without the JIT, or a runtime without WithJIT.
+func WithJITBackground(on bool) Option {
+	return func(c *config) {
+		c.jitBackground = -1
+		if on {
+			c.jitBackground = 1
+		}
+	}
+}
 
 // WithJITMemoryLimit bounds the memory the JIT (WithJIT) holds for the
 // Runtime: its machine code and all that describes it, what it has learned
@@ -460,7 +493,10 @@ func New(opts ...Option) *Runtime {
 		GCYield:        c.gcYield,
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration,
 		moduleFetchLimit: c.moduleFetchLimit, debug: c.debug}
-	if c.jitBackground {
+	switch c.jitBackground {
+	case 0:
+		r.rt.SetJITBackgroundAuto()
+	case 1:
 		r.rt.SetJITBackground(true)
 	}
 	if c.moduleFetchLimit == 0 {

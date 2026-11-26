@@ -4216,7 +4216,7 @@ func (r *Runtime) RegNativeCall(fnv Value, args []Value, osr bool) RegNativeResu
 	// Compiled here, on the spot: the call runs the code it asks for,
 	// whatever the runtime's compiles in the background.
 	bg, stressBg := r.jitBackground, r.jitStress.background
-	r.jitBackground, r.jitStress.background = false, false
+	r.jitBackground, r.jitStress.background = jitOnSpot, false
 	e := r.jitRegFor(cl, c)
 	r.jitBackground, r.jitStress.background = bg, stressBg
 	switch {

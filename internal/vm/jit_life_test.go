@@ -208,7 +208,7 @@ function g(n) { return f(n) }
 	rts := regNativeRuntimes(t, src)
 	r := rts[0]
 	r.jitStress = jitStressConfig{}
-	r.jitBackground = true
+	r.jitBackground = jitInWorkers
 	fv, _ := r.GetProp(Obj(r.Global()), r.Intern("f"))
 	cl := fv.Object().fn().closure
 	c := cl.reg

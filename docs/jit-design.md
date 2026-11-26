@@ -708,7 +708,7 @@ left in anything native code touches.
 ### Background compilation as the default
 
 `WithJITBackground` becomes the default, `WithJITBackground(false)` the
-opt-out (D3).
+opt-out (D3); built in stage 1, with the measurements in its status.
 
 - **The one-P policy, the WebAssembly engine's**
   (wasm/internal/jit/opt/README.md, "In the background"): at GOMAXPROCS 1
@@ -1187,7 +1187,33 @@ is under [The projection](#the-projection).
   Typescript's compiles 768 (201 after a deoptimization) and its
   deoptimizations 214, against 768 (202) and 215 before: as projected,
   the cap's removal costs nothing, and the recompiles' fall is the
-  lattice's. The background default is open.
+  lattice's.
+  The background default is built: `WithJIT` compiles in the background where
+  GOMAXPROCS is more than 1 and on the spot where it is 1, decided at each
+  compile, `WithJITBackground(false)` the opt-out and `true` the
+  background at any GOMAXPROCS; `qjs --jit` takes the default,
+  `--no-jit-background` the spot; v8bench, placements and the conformance
+  runner keep the spot unless `-jitbackground`. A function waiting for its
+  compile counts a budget between its asks, where each of its back edges
+  had been a call of Go; the queue serves the job whose function did most
+  work waiting, and a job unbegun whose function did none from one flush
+  tick to the next is dropped; a job no worker began by its function's
+  second ask is taken back (the *estimate* kept at two asks, each a
+  budget); the workers place their code apart (`NewSSACodeApart`), the
+  install a store. `QJS_JIT_STRESS`'s `takeback` gives no compile to a
+  worker, each taken back, which the differential tests run among their
+  settings. Ryzen 5 3600, medians of five fresh processes: Typescript in
+  the background 1,715 to 1,642 ms (projected 1,600 to 1,680), on the spot
+  1,927 and 1,932; at GOMAXPROCS 1 the default is the spot's 2,459 ms
+  (2,475 at the base) where the background took 3,239 (projected back to
+  2,573 from 3,278), and the background forced there takes 2,914 with the
+  take-back. The V8 suite's five runs at GOMAXPROCS 1: 1,330 ms in the
+  background at the base, 935 by default now (899 on the spot at the
+  base), 1,072 in the background forced. `placements -k 2 -jit`, in the
+  background, base to change: Are We Fast Yet 4,954 to 4,914 ms, on the
+  spot 4,917 to 4,887 (the background +0.6%, from +0.8% at the base and
+  +2% when this plan was made; DeltaBlue +2.7%, Sieve +2.0% the most); ssr's Render 170.4
+  to 170.5 ms against 174.4 on the spot, FirstRender 48.7 against 54.9.
 
 ### Stage 2: compile speed
 

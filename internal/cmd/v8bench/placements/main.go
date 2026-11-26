@@ -522,7 +522,7 @@ func compareCmd(args []string) error {
 	suite := fs.String("suite", "", "comma-separated suites to run, all by default")
 	bench := fs.String("bench", "", "the benchmark collection, as v8bench's -bench: v8 by default, octane, awfy, ssr, fresh")
 	jitEnabled := fs.Bool("jit", false, "enable the optional native tier in both tagged builds")
-	jitBackground := fs.Bool("jitbackground", false, "with -jit, compile in the background, as qjs --jit does")
+	jitBackground := fs.Bool("jitbackground", false, "with -jit, compile in the background whatever GOMAXPROCS is (v8bench -jitbackground), as qjs --jit does where it is more than 1")
 	parallel := fs.Bool("parallel", false, "run both labels at once, each on a group of CPUs (-cpus)")
 	cpus := fs.String("cpus", "auto", "the groups of CPUs -parallel runs on: auto, halves, or lists separated by ';' (0-5;6-11)")
 	verbose := fs.Bool("v", false, "print each placement's figure")

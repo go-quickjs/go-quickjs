@@ -230,10 +230,11 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 	rtOpts := []quickjs.Option{}
 	if opts.jit {
 		rtOpts = append(rtOpts, quickjs.WithJIT())
-		if !opts.jitSync {
-			// The command line compiles in the background unless told
-			// not to: a script's run does not wait for its compiles.
-			rtOpts = append(rtOpts, quickjs.WithJITBackground())
+		if opts.jitSync {
+			// The command line compiles as WithJIT does by default, in
+			// the background where GOMAXPROCS is more than 1, unless told
+			// to wait for each compile.
+			rtOpts = append(rtOpts, quickjs.WithJITBackground(false))
 		}
 	}
 	if opts.memoryLimit > 0 {
@@ -1458,7 +1459,7 @@ bounds:
       --stack-size N      value slots for all call frames
       --timeout D         stop after a duration such as 5s
       --jit               enable the optional JIT (quickjs_jit build),
-                          compiling in the background
+                          compiling in the background with more than one P
       --no-jit-background with --jit, wait for each compile instead
       --no-code-generation   remove eval and the Function constructor
 

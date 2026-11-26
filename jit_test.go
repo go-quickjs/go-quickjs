@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -122,10 +123,12 @@ func TestJITMemoryLimitOption(t *testing.T) {
 	}
 }
 
-// WithJITBackground has the JIT compile in the background, and does
-// nothing without WithJIT or in a build without the JIT; the answers are
-// those of a runtime that waits for its compiles. QJS_JIT_STRESS's
-// background has every JIT runtime compile so.
+// WithJIT compiles in the background by default where GOMAXPROCS is more
+// than 1, WithJITBackground(true) whatever it is, and
+// WithJITBackground(false) on the spot; WithJITBackground does nothing
+// without WithJIT or in a build without the JIT; the answers are those of
+// a runtime that waits for its compiles. QJS_JIT_STRESS's background has
+// every JIT runtime compile so.
 func TestJITBackgroundOption(t *testing.T) {
 	t.Parallel()
 	src := jitHotFunctions(50)
@@ -138,10 +141,11 @@ func TestJITBackgroundOption(t *testing.T) {
 		opts       []quickjs.Option
 		background bool
 	}{
-		{"jit in the background", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground()}, jit.Supported()},
-		{"jit", []quickjs.Option{quickjs.WithJIT()}, jit.Supported() && stressed},
-		{"background without jit", []quickjs.Option{quickjs.WithJITBackground()}, false},
-		{"jit in the background, debugger", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(), quickjs.WithDebugger()}, false},
+		{"jit in the background", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(true)}, jit.Supported()},
+		{"jit", []quickjs.Option{quickjs.WithJIT()}, jit.Supported() && (runtime.GOMAXPROCS(0) > 1 || stressed)},
+		{"jit on the spot", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(false)}, jit.Supported() && stressed},
+		{"background without jit", []quickjs.Option{quickjs.WithJITBackground(true)}, false},
+		{"jit in the background, debugger", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(true), quickjs.WithDebugger()}, false},
 	} {
 		r := quickjs.New(tc.opts...)
 		if got := hostaccess.VM(r).JITBackground(); got != tc.background {
