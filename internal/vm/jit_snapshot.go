@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 
@@ -24,11 +25,16 @@ import (
 // answers are values, and addresses the VM keeps alive with the compile,
 // as the feedback's own are.
 type jitSnapshot struct {
-	// answers are the questions answered with something: one of a PC,
-	// asked at every PC of the program's codeLen, that answered nothing --
-	// not ok, or no calls -- is not kept, and answers nothing again.
-	answers map[jitSnapKey][]any
+	// a are the questions answered with something, each method's results
+	// in a table of its own by argument (jit_snapshot_gen.go): one of a
+	// PC, asked at every PC of the program's codeLen, that answered
+	// nothing -- not ok, or no calls -- is not kept, and answers nothing
+	// again. Kept boxed in a map by method and argument, the answers'
+	// keeping had been about half of the snapshot's time.
+	a       jitSnapAnswers
 	codeLen int
+	// room is how many PCs ask each method, the most its table holds.
+	room [len(jitSnapNames)]int32
 	// ops are the ops of the program's instructions, by PC.
 	ops []ir.Op
 	// root is the snapshot of the compile's own function, whose callees'
@@ -39,13 +45,18 @@ type jitSnapshot struct {
 	depth   int
 	// fb is the feedback this one was asked of, and effects what each
 	// question appended to its lists and its keep's (jitSnapLists), which
-	// the asking took back: they are the build's only where it asks the
-	// question, as often as it does (uses, the root's, in the order the
-	// build asked them), and the install puts them back so (replay). bad,
-	// the root's, marks a question whose lists shrank, which the capture
-	// cannot take back: such a compile is built on the runtime's goroutine.
+	// the asking took back, each question's by its index past 0 (its
+	// answer's eff): they are the build's only where it asks the question,
+	// as often as it does (uses, the root's, in the order the build asked
+	// them), and the install puts them back so (replay). gained, the
+	// root's, holds what the effects took back, and spans, the root's,
+	// the runs of it each effect is. bad, the root's, marks a question
+	// whose lists shrank, which the capture cannot take back: such a
+	// compile is built on the runtime's goroutine.
 	fb      *jitFeedback
-	effects map[jitSnapKey]*jitSnapEffect
+	effects []jitSnapEffect
+	gained  jitSnapLists
+	spans   []jitSnapSpan
 	uses    []jitSnapUse
 	bad     bool
 	// reg is the snapshot as register code's feedback answers, where it
@@ -74,24 +85,132 @@ func jitSnapLensOf(f *jitFeedback) jitSnapLens {
 }
 
 // jitSnapEffect is what a question appended to the asked feedback's lists
-// (own) and to its keep's (kept), where that is another.
+// and to its keep's, where that is another: the runs of the root's spans
+// from its from to its to, each a run of the root's gained lists.
 type jitSnapEffect struct {
-	own, kept jitSnapLists
+	from, to int32
 }
 
-// jitSnapUse is a question the build asked, of a snapshot.
+// jitSnapSpan is a run of a list a question appended to (list, a list of
+// jitSnapLists by its index in jitSnapLens; kept, of the keep's, not the
+// asked feedback's own), from:to of the root's gained list of it.
+type jitSnapSpan struct {
+	list     uint8
+	kept     bool
+	from, to int32
+}
+
+// jitSnapSame reports whether two feedbacks' lengths are the same, as ==
+// would, without the call of the runtime's comparison of memory it makes
+// of an array this long: it had been a tenth of the snapshot's time.
+func jitSnapSame(a, b *jitSnapLens) bool {
+	return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3] &&
+		a[4] == b[4] && a[5] == b[5] && a[6] == b[6] && a[7] == b[7]
+}
+
+// jitSnapUse is a question the build asked of a snapshot that had an
+// effect: the effect's index past 0 (jitSnapEntry's eff).
 type jitSnapUse struct {
 	s   *jitSnapshot
-	key jitSnapKey
+	eff int32
 }
 
 // jitSnapMethod is a method of jitFeedback's, numbered (jitSnapNames).
 type jitSnapMethod uint8
 
-// jitSnapKey is a question: its method and its argument, a PC mostly.
-type jitSnapKey struct {
-	method jitSnapMethod
-	arg    int64
+// jitSnapEntry is a method's answer to a question, as its snapshot keeps
+// it: the question's argument, a PC mostly; its effect's index past 0, or
+// 0 for none; and its results, v, if it answered something -- a question
+// of a PC that answered nothing is kept only for its effect.
+type jitSnapEntry[T any] struct {
+	arg      int64
+	eff      int32
+	answered bool
+	v        T
+}
+
+// jitSnapTable is a method's answers, by argument: put in the order they
+// were asked, their PCs' mostly, which unsorted marks they were not, until
+// seal sorts them.
+type jitSnapTable[T any] struct {
+	e        []jitSnapEntry[T]
+	unsorted bool
+}
+
+// put keeps an answer to the question of arg as a map by question would:
+// a later answer to the same question replacing an earlier and a later
+// effect an earlier, and the question asked again with no answer, or no
+// effect, leaving what was kept of it.
+func (t *jitSnapTable[T]) put(arg int64, eff int32, answered bool, v T) {
+	if n := len(t.e); n > 0 {
+		if last := &t.e[n-1]; last.arg == arg {
+			last.merge(eff, answered, v)
+			return
+		} else if arg < last.arg {
+			t.unsorted = true
+		}
+	}
+	t.e = append(t.e, jitSnapEntry[T]{arg: arg, eff: eff, answered: answered, v: v})
+}
+
+// merge is e's question asked again, as put keeps it.
+func (e *jitSnapEntry[T]) merge(eff int32, answered bool, v T) {
+	if answered {
+		e.answered, e.v = true, v
+	}
+	if eff != 0 {
+		e.eff = eff
+	}
+}
+
+// seal sorts t's answers by argument where they were put out of that
+// order, those to one question merged in the order they were put.
+func (t *jitSnapTable[T]) seal() {
+	if !t.unsorted {
+		return
+	}
+	t.unsorted = false
+	slices.SortStableFunc(t.e, func(a, b jitSnapEntry[T]) int { return cmp.Compare(a.arg, b.arg) })
+	out := t.e[:0]
+	for _, e := range t.e {
+		if n := len(out); n > 0 && out[n-1].arg == e.arg {
+			out[n-1].merge(e.eff, e.answered, e.v)
+			continue
+		}
+		out = append(out, e)
+	}
+	clear(t.e[len(out):])
+	t.e = out
+}
+
+// reserve makes t room for n answers at its first, the most its method
+// may answer: the PCs it is asked at. A table grown an answer at a time
+// had copied its answers each time it grew, a property site's two
+// hundred bytes, a fifth of what the snapshot allocated.
+func (t *jitSnapTable[T]) reserve(n int) {
+	if t.e == nil && n > 1 {
+		t.e = make([]jitSnapEntry[T], 0, n)
+	}
+}
+
+// find is the answer to the question of arg, nil for none.
+func (t *jitSnapTable[T]) find(arg int64) *jitSnapEntry[T] {
+	i, ok := slices.BinarySearchFunc(t.e, arg, func(e jitSnapEntry[T], arg int64) int { return cmp.Compare(e.arg, arg) })
+	if !ok {
+		return nil
+	}
+	return &t.e[i]
+}
+
+// answered counts the questions t answered.
+func (t *jitSnapTable[T]) answered() int {
+	n := 0
+	for i := range t.e {
+		if t.e[i].answered {
+			n++
+		}
+	}
+	return n
 }
 
 // jitSnapCallee is what makes a callee's feedback answer as it does: its
@@ -121,43 +240,22 @@ func (m jitSnapMiss) Error() string {
 	return fmt.Sprintf("jit: the snapshot has no %s(%d), %d callees deep", jitSnapNames[m.method], m.arg, m.depth)
 }
 
-// get is the answer to a question; nil for one of a PC, asked there, that
-// answered nothing, which its method answers with its results' zero
-// values; or a miss, which the worker's build recovers (jitRegJob.run): a
-// question of a PC whose op the method is not asked at (jitSnapOpMethods)
-// is a miss too.
-func (s *jitSnapshot) get(m jitSnapMethod, arg int64) []any {
-	key := jitSnapKey{m, arg}
-	if _, ok := s.effects[key]; ok {
-		s.root.uses = append(s.root.uses, jitSnapUse{s, key})
+// absent is the answer to a question the snapshot kept no answer to: none,
+// for one of a PC asked there, which its method answers with its results'
+// zero values; or a miss, which the worker's build recovers
+// (jitRegJob.run): a question of a PC whose op the method is not asked at
+// (jitSnapOps) is a miss too.
+func (s *jitSnapshot) absent(m jitSnapMethod, arg int64) {
+	if jitSnapAtPC[m] && arg >= 0 && arg < int64(s.codeLen) && jitSnapAsks[s.ops[arg]]&(1<<m) != 0 {
+		return
 	}
-	a, ok := s.answers[key]
-	if !ok {
-		if jitSnapAtPC[m] && arg >= 0 && arg < int64(s.codeLen) && jitSnapAsks[s.ops[arg]]&(1<<m) != 0 {
-			return nil
-		}
-		panic(jitSnapMiss{m, arg, s.depth})
-	}
-	return a
+	panic(jitSnapMiss{m, arg, s.depth})
 }
 
-// jitSnapAnswered reports whether a question of a PC answered something,
-// by its last result: ok, or a list with something in it.
-func jitSnapAnswered(last any) bool {
-	switch x := last.(type) {
-	case bool:
-		return x
-	case []ssa.GenStep:
-		return len(x) != 0
-	case []ssa.CallSite:
-		return len(x) != 0
-	}
-	return true
-}
-
-// put keeps an answer.
-func (s *jitSnapshot) put(m jitSnapMethod, arg int64, results ...any) {
-	s.answers[jitSnapKey{m, arg}] = results
+// used notes the build's asking of a question whose effect is eff, an
+// index past 0, which the install replays.
+func (s *jitSnapshot) used(eff int32) {
+	s.root.uses = append(s.root.uses, jitSnapUse{s, eff})
 }
 
 // begin is the lengths of the lists of fb and of its keep, before a
@@ -166,58 +264,102 @@ func (s *jitSnapshot) begin(fb *jitFeedback) [2]jitSnapLens {
 	return [2]jitSnapLens{jitSnapLensOf(fb), jitSnapLensOf(fb.keep())}
 }
 
-// end takes back what the question key appended to fb's lists and its
-// keep's since begin, keeping it as the question's effect. A question that
-// changed no length -- most of them -- has none, and its lists are left as
-// they are: their slices written back, each a pointer stored through the
-// collector's write barrier, the capture had cost two fifths of the
-// snapshot's time.
-func (s *jitSnapshot) end(fb *jitFeedback, before [2]jitSnapLens, m jitSnapMethod, arg int64) {
+// end takes back what the question asked since begin appended to fb's
+// lists and its keep's, keeping it as the question's effect, whose index
+// past 0 it is, or 0 for none. A question that changed no length -- most
+// of them -- has none, and its lists are left as they are: their slices
+// written back, each a pointer stored through the collector's write
+// barrier, the capture had cost two fifths of the snapshot's time.
+func (s *jitSnapshot) end(fb *jitFeedback, before [2]jitSnapLens) int32 {
 	k := fb.keep()
-	ownMoved := jitSnapLensOf(fb) != before[0]
-	keptMoved := k != fb && jitSnapLensOf(k) != before[1]
-	if !ownMoved && !keptMoved {
-		return
+	now := jitSnapLensOf(fb)
+	ownMoved := !jitSnapSame(&now, &before[0])
+	keptMoved := false
+	if k != fb {
+		kn := jitSnapLensOf(k)
+		keptMoved = !jitSnapSame(&kn, &before[1])
 	}
-	var own, kept jitSnapLists
+	if !ownMoved && !keptMoved {
+		return 0
+	}
+	root := s.root
+	from := len(root.spans)
 	if ownMoved {
-		own = jitSnapTake(fb, before[0], &s.root.bad)
+		root.take(fb, before[0], false)
 	}
 	if keptMoved {
-		kept = jitSnapTake(k, before[1], &s.root.bad)
+		root.take(k, before[1], true)
 	}
-	if own.empty() && kept.empty() {
-		return
+	if len(root.spans) == from {
+		return 0
 	}
-	s.effects[jitSnapKey{m, arg}] = &jitSnapEffect{own: own, kept: kept}
+	s.effects = append(s.effects, jitSnapEffect{int32(from), int32(len(root.spans))})
+	return int32(len(s.effects))
 }
 
-// jitSnapTake is what f's lists gained past the lengths before, copied, and
-// f's lists cut back to them; a list shorter than it was sets bad.
-func jitSnapTake(f *jitFeedback, before jitSnapLens, bad *bool) jitSnapLists {
-	var d jitSnapLists
-	d.shapes, f.shapes = jitSnapGained(f.shapes, before[0], bad)
-	d.holders, f.holders = jitSnapGained(f.holders, before[1], bad)
-	d.cells, f.cells = jitSnapGained(f.cells, before[2], bad)
-	d.links, f.links = jitSnapGained(f.links, before[3], bad)
-	d.inlined, f.inlined = jitSnapGained(f.inlined, before[4], bad)
-	d.made, f.made = jitSnapGained(f.made, before[5], bad)
-	d.linked, f.linked = jitSnapGained(f.linked, before[6], bad)
-	d.pools, f.pools = jitSnapGained(f.pools, before[7], bad)
-	return d
+// take is what f's lists gained past the lengths before, copied to the
+// ends of the root's gained lists, a span of each, and f's lists cut back
+// to them; a list shorter than it was sets bad.
+func (root *jitSnapshot) take(f *jitFeedback, before jitSnapLens, kept bool) {
+	g := &root.gained
+	f.shapes = jitSnapGained(root, 0, kept, f.shapes, before[0], &g.shapes)
+	f.holders = jitSnapGained(root, 1, kept, f.holders, before[1], &g.holders)
+	f.cells = jitSnapGained(root, 2, kept, f.cells, before[2], &g.cells)
+	f.links = jitSnapGained(root, 3, kept, f.links, before[3], &g.links)
+	f.inlined = jitSnapGained(root, 4, kept, f.inlined, before[4], &g.inlined)
+	f.made = jitSnapGained(root, 5, kept, f.made, before[5], &g.made)
+	f.linked = jitSnapGained(root, 6, kept, f.linked, before[6], &g.linked)
+	f.pools = jitSnapGained(root, 7, kept, f.pools, before[7], &g.pools)
 }
 
-// jitSnapGained is what now has past its first n, copied, and now cut back
-// to n.
-func jitSnapGained[T any](now []T, n int, bad *bool) (gained, back []T) {
+// jitSnapGained is now cut back to its first n, what it has past them
+// copied to the end of into, a span of root's: an effect's lists are runs
+// of the snapshot's, not lists of their own, a few allocations a snapshot
+// rather than a few a question.
+func jitSnapGained[T any](root *jitSnapshot, list uint8, kept bool, now []T, n int, into *[]T) []T {
 	if len(now) < n {
-		*bad = true
-		return nil, now
+		root.bad = true
+		return now
 	}
 	if len(now) == n {
-		return nil, now
+		return now
 	}
-	return slices.Clone(now[n:]), now[:n]
+	from := len(*into)
+	*into = append(*into, now[n:]...)
+	root.spans = append(root.spans, jitSnapSpan{list: list, kept: kept, from: int32(from), to: int32(len(*into))})
+	return now[:n]
+}
+
+// lists is e's effect as the lists it appended to the asked feedback's
+// (own) and to its keep's (kept), each a slice of the root's gained lists.
+func (root *jitSnapshot) lists(e jitSnapEffect) (own, kept jitSnapLists) {
+	g := &root.gained
+	for _, sp := range root.spans[e.from:e.to] {
+		l := &own
+		if sp.kept {
+			l = &kept
+		}
+		a, b := sp.from, sp.to
+		switch sp.list {
+		case 0:
+			l.shapes = g.shapes[a:b:b]
+		case 1:
+			l.holders = g.holders[a:b:b]
+		case 2:
+			l.cells = g.cells[a:b:b]
+		case 3:
+			l.links = g.links[a:b:b]
+		case 4:
+			l.inlined = g.inlined[a:b:b]
+		case 5:
+			l.made = g.made[a:b:b]
+		case 6:
+			l.linked = g.linked[a:b:b]
+		case 7:
+			l.pools = g.pools[a:b:b]
+		}
+	}
+	return own, kept
 }
 
 func (l *jitSnapLists) empty() bool {
@@ -264,10 +406,10 @@ func jitSnapAppendNew[T comparable](list, add []T) []T {
 // as the build from the feedback would have left them.
 func (s *jitSnapshot) replay() {
 	for _, u := range s.uses {
-		e := u.s.effects[u.key]
-		e.own.apply(u.s.fb)
+		own, kept := s.lists(u.s.effects[u.eff-1])
+		own.apply(u.s.fb)
 		if k := u.s.fb.keep(); k != u.s.fb {
-			e.kept.apply(k)
+			kept.apply(k)
 		}
 	}
 }
@@ -348,9 +490,9 @@ var jitSnapAsks = func() (t [ir.LastOp + 1]uint64) {
 	return t
 }()
 
-// jitSnapPools adds to pools every pool an answer names: a literal's, a
-// closure's, an inline site's, a call's -- an accessor's and a loop's
-// among them.
+// jitSnapPools adds to pools every pool an answer's result x names, a
+// pointer to the result: a literal's, a closure's, an inline site's, a
+// call's -- an accessor's and a loop's among them.
 func jitSnapPools(x any, pools map[uintptr]bool) {
 	add := func(p uintptr) {
 		if p != 0 {
@@ -358,24 +500,24 @@ func jitSnapPools(x any, pools map[uintptr]bool) {
 		}
 	}
 	switch v := x.(type) {
-	case ssa.LiteralSite:
+	case *ssa.LiteralSite:
 		add(v.Pool)
-	case ssa.ClosureSite:
+	case *ssa.ClosureSite:
 		add(v.Pool)
-	case ssa.InlineSite:
+	case *ssa.InlineSite:
 		add(v.Pool)
-	case []ssa.CallSite:
-		for i := range v {
-			add(v[i].Pool)
+	case *[]ssa.CallSite:
+		for i := range *v {
+			add((*v)[i].Pool)
 		}
-	case ssa.AccessorSite:
+	case *ssa.AccessorSite:
 		if v.Call != nil {
 			add(v.Call.Pool)
 		}
 		if v.Inline != nil {
 			add(v.Inline.Pool)
 		}
-	case ssa.ForEachSite:
+	case *ssa.ForEachSite:
 		add(v.Callback.Pool)
 		if v.Inline != nil {
 			add(v.Inline.Pool)

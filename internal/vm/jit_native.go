@@ -1086,15 +1086,9 @@ func (j *jitRegJob) holdsLink(l *jitLink) bool {
 	if j.snap == nil {
 		return false
 	}
-	root := j.snap.s
-	for _, s := range append([]*jitSnapshot{root}, mapValues(root.callees)...) {
-		for _, x := range s.effects {
-			if slices.Contains(x.own.links, l) || slices.Contains(x.kept.links, l) {
-				return true
-			}
-		}
-	}
-	return false
+	// What every question's effect took back, the root's and its
+	// callees' snapshots' alike.
+	return slices.Contains(j.snap.s.gained.links, l)
 }
 
 // regBuilding notes *rf, the feedback of a register compile under way,

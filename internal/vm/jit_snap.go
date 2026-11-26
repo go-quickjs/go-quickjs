@@ -4,7 +4,6 @@ package vm
 
 import (
 	"math/bits"
-	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -24,23 +23,12 @@ type jitRegSnapshot struct {
 	regs int
 }
 
-// jitRegSnapStatePC are the methods the build asks by a state's PC, which
-// in a register program is a register pc, not an instruction's (Resumed and
-// EntryGeneric): only PCs with a true answer need to be captured.
-const jitRegSnapStatePC = 1<<snapResumed | 1<<snapEntryGeneric
-
-// get is the answer to a question, as jitSnapshot's get has it: one asked
-// by a state's PC answered nothing where it is not kept, if the register
-// code has that pc.
-func (q *jitRegSnapshot) get(m jitSnapMethod, arg int64) []any {
-	if jitRegSnapStatePC&(1<<m) == 0 {
-		return q.s.get(m, arg)
-	}
-	if a, ok := q.s.answers[jitSnapKey{m, arg}]; ok {
-		return a
-	}
+// absent is the answer to a question asked by a state's PC that the
+// snapshot kept no answer to: none, if the register code has that pc, or
+// a miss.
+func (q *jitRegSnapshot) absent(m jitSnapMethod, arg int64) {
 	if arg >= 0 && arg < int64(q.regs) {
-		return nil
+		return
 	}
 	panic(jitSnapMiss{m, arg, q.s.depth})
 }
@@ -49,7 +37,7 @@ func (q *jitRegSnapshot) get(m jitSnapMethod, arg int64) []any {
 // lowered: every question asked ahead, the callees' of the inline sites
 // its answers name to jitSnapDepth, and the kinds of the leaves they name.
 func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
-	s := &jitSnapshot{answers: map[jitSnapKey][]any{}, callees: map[jitSnapCallee]*jitSnapshot{}, fb: fb.fb, effects: map[jitSnapKey]*jitSnapEffect{}}
+	s := &jitSnapshot{callees: map[jitSnapCallee]*jitSnapshot{}, fb: fb.fb}
 	s.root = s
 	s.reg = &jitRegSnapshot{s: s, regs: len(fb.rc.Code)}
 	s.askReg(fb, p)
@@ -57,34 +45,40 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 	// leaves' kinds, and how Go makes the pools' objects escape analysis
 	// may leave unmade.
 	fns, pools := map[uintptr]bool{}, map[uintptr]bool{}
-	for _, c := range append([]*jitSnapshot{s}, mapValues(s.callees)...) {
-		for k, a := range c.answers {
-			switch k.method {
-			case snapLeaf:
-				if fn, ok := a[0].(uintptr); ok && fn != 0 {
-					fns[fn] = true
-				}
-			case snapViaLeaf:
-				// G.call(x, ...)'s G, a leaf (ViaLeaf's fn).
-				if fn, ok := a[1].(uintptr); ok && fn != 0 {
-					fns[fn] = true
-				}
-			}
-			for _, x := range a {
-				jitSnapPools(x, pools)
+	all := append([]*jitSnapshot{s}, mapValues(s.callees)...)
+	for _, c := range all {
+		for i := range c.a.Leaf.e {
+			if e := &c.a.Leaf.e[i]; e.answered && e.v.r0 != 0 {
+				fns[e.v.r0] = true
 			}
 		}
+		for i := range c.a.ViaLeaf.e {
+			// G.call(x, ...)'s G, a leaf (ViaLeaf's fn).
+			if e := &c.a.ViaLeaf.e[i]; e.answered && e.v.r1 != 0 {
+				fns[e.v.r1] = true
+			}
+		}
+		c.a.pools(pools)
 	}
 	for pool := range pools {
 		shape, proto, ok := fb.VirtualRoot(pool)
-		s.put(snapVirtualRoot, int64(pool), shape, proto, ok)
+		if h := fb.fb.r.jitTest.snapAsked; h != nil {
+			h(s, snapVirtualRoot, int64(pool), true, []any{shape, proto, ok})
+		}
+		s.a.VirtualRoot.put(int64(pool), 0, true, jitSnapAnsVirtualRoot{shape, proto, ok})
 	}
 	for fn := range fns {
 		k := fb.LeafKind(fn)
-		s.put(snapLeafKind, int64(fn), k)
-		for _, c := range s.callees {
-			c.put(snapLeafKind, int64(fn), k)
+		h := fb.fb.r.jitTest.snapAsked
+		for _, c := range all {
+			if h != nil {
+				h(c, snapLeafKind, int64(fn), true, []any{k})
+			}
+			c.a.LeafKind.put(int64(fn), 0, true, jitSnapAnsLeafKind{k})
 		}
+	}
+	for _, c := range all {
+		c.a.seal()
 	}
 	return s.reg
 }
@@ -95,10 +89,15 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	s.codeLen = len(p.Code)
 	s.ops = make([]ir.Op, len(p.Code))
-	s.askOnceReg(fb)
 	for pc := range p.Code {
 		op := p.Code[pc].Op
 		s.ops[pc] = op
+		for asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC; asks != 0; asks &= asks - 1 {
+			s.room[bits.TrailingZeros64(asks)]++
+		}
+	}
+	s.askOnceReg(fb)
+	for pc, op := range s.ops {
 		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC
 		for asks != 0 {
 			m := jitSnapMethod(bits.TrailingZeros64(asks))
@@ -119,23 +118,29 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 // was called -- Object.create, a RegExp's exec -- the compile built on the
 // runtime's goroutine at its install, from feedback asked then.
 func (s *jitSnapshot) askLeafCalls(fb *jitRegFeedback) {
-	var pcs []int
-	for k := range s.answers {
-		if k.method == snapLeaf {
-			pcs = append(pcs, int(k.arg))
+	s.a.Leaf.seal()
+	var leaves []jitSnapEntry[jitSnapAnsLeaf]
+	for _, e := range s.a.Leaf.e {
+		if e.answered {
+			leaves = append(leaves, e)
 		}
 	}
-	slices.Sort(pcs)
-	for _, pc := range pcs {
-		fn, _ := s.answers[jitSnapKey{snapLeaf, int64(pc)}][0].(uintptr)
+	for _, e := range leaves {
+		pc, fn := int(e.arg), e.v.r0
 		before := s.begin(fb.fb)
 		pool := fb.CreatePool(pc, fn)
-		s.end(fb.fb, before, snapCreatePool, int64(pc))
-		s.put(snapCreatePool, int64(pc), pool)
+		eff := s.end(fb.fb, before)
+		if h := fb.fb.r.jitTest.snapAsked; h != nil {
+			h(s, snapCreatePool, int64(pc), true, []any{pool})
+		}
+		s.a.CreatePool.put(int64(pc), eff, true, jitSnapAnsCreatePool{pool})
 		before = s.begin(fb.fb)
 		reuse := fb.ExecReuse(pc, fn)
-		s.end(fb.fb, before, snapExecReuse, int64(pc))
-		s.put(snapExecReuse, int64(pc), reuse)
+		eff = s.end(fb.fb, before)
+		if h := fb.fb.r.jitTest.snapAsked; h != nil {
+			h(s, snapExecReuse, int64(pc), true, []any{reuse})
+		}
+		s.a.ExecReuse.put(int64(pc), eff, true, jitSnapAnsExecReuse{reuse})
 	}
 }
 
@@ -153,7 +158,7 @@ func (s *jitSnapshot) nestReg(site ssa.InlineSite) ssa.InlineSite {
 		site.Feedback = c.reg
 		return site
 	}
-	c := &jitSnapshot{answers: map[jitSnapKey][]any{}, root: root, depth: s.depth + 1, fb: f.fb, effects: map[jitSnapKey]*jitSnapEffect{}}
+	c := &jitSnapshot{root: root, depth: s.depth + 1, fb: f.fb}
 	c.reg = &jitRegSnapshot{s: c, regs: len(f.rc.Code)}
 	root.callees[key] = c
 	if c.depth < jitSnapDepth && site.Program != nil && !ssa.NeverInlined(site.Program) {

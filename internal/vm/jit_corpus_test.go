@@ -58,91 +58,7 @@ func TestJITRegCompileCorpus(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	files := []string{"base.js", "richards.js", "deltablue.js", "crypto.js", "raytrace.js",
-		"earley-boyer.js", "regexp.js", "splay.js", "navier-stokes.js", "pdfjs.js",
-		"box2d.js",
-		"typescript.js", "typescript-input.js", "typescript-compiler.js"}
-	r := newTestRuntime(t, Config{JIT: true})
-	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-	// The interpreter alone: the caches learn, and nothing is compiled.
-	r.jitState().unavailable = true
-	run := func(name, src string) {
-		t.Helper()
-		prog, err := parser.Parse(src, parser.Options{})
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src})
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if _, err := r.Run(fn); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	run("host.js", `var print = function () {}, alert = function () {};`)
-	for _, f := range files {
-		src, err := os.ReadFile(filepath.Join(dir, f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		run(f, string(src))
-	}
-	suites := os.Getenv("QUICKJS_JIT_CORPUS_SUITES")
-	run("warmup.js", fmt.Sprintf(`(() => {
-		const only = %q;
-		for (const s of BenchmarkSuite.suites) {
-			if (only !== "" && !(","+only+",").includes(","+s.name+",")) continue;
-			if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
-			for (const b of s.benchmarks) {
-				b.Setup();
-				for (let i = 0; i < 2; i++) b.run();
-				b.TearDown();
-			}
-		}
-	})()`, suites))
-	// The functions the global object reaches, through properties, prototypes
-	// and functions' own properties: what the warm-up ran is among them.
-	run("collect.js", `var __corpus = (() => {
-		const seen = new Set(), fns = [], todo = [globalThis];
-		while (todo.length) {
-			const o = todo.shift();
-			if (o === null || (typeof o !== "object" && typeof o !== "function") || seen.has(o)) continue;
-			seen.add(o);
-			if (typeof o === "function") fns.push(o);
-			let names;
-			try { names = Object.getOwnPropertyNames(o); } catch (e) { continue; }
-			for (const k of names) {
-				let d;
-				try { d = Object.getOwnPropertyDescriptor(o, k); } catch (e) { continue; }
-				if (d && "value" in d) todo.push(d.value);
-			}
-			todo.push(Object.getPrototypeOf(o));
-		}
-		return fns;
-	})();`)
-	arr := r.global.getOwn(r.atoms.intern("__corpus")).value().Object()
-	var cls []*closure
-	seen := map[*bytecode.Function]bool{}
-	for _, v := range arr.elemsOf() {
-		if !v.IsObject() {
-			continue
-		}
-		fd := v.Object().fn()
-		if fd == nil || fd.closure == nil {
-			continue
-		}
-		cl := fd.closure
-		fn := cl.fn
-		if seen[fn] || fn.TopLevel || fn.Script == nil || fn.Script.Name == "collect.js" {
-			continue
-		}
-		seen[fn] = true
-		cls = append(cls, cl)
-	}
-	slices.SortFunc(cls, func(a, b *closure) int {
-		return cmp.Or(strings.Compare(a.fn.Script.Name, b.fn.Script.Name), cmp.Compare(a.fn.Start, b.fn.Start))
-	})
+	r, cls := jitOctaneCorpusForTest(t, dir)
 	// The programs, each function's register code lowered as the JIT
 	// lowers it (jitRegLower), for Go to enter or, where that is refused,
 	// for native callers.
@@ -452,4 +368,98 @@ func jitHashValue(h hash.Hash, v reflect.Value, id func(uint64) uint64, seen map
 	default:
 		panic(errors.New("jitHashValue: " + v.Kind().String()))
 	}
+}
+
+// jitOctaneCorpusForTest is a runtime that has run Octane's benchmarks, from
+// the files in dir, in the interpreter alone -- QUICKJS_JIT_CORPUS_SUITES
+// names those to warm up, or all of them -- and the functions the global
+// object reaches, by script and position: their caches learned, nothing
+// compiled.
+func jitOctaneCorpusForTest(t *testing.T, dir string) (*Runtime, []*closure) {
+	files := []string{"base.js", "richards.js", "deltablue.js", "crypto.js", "raytrace.js",
+		"earley-boyer.js", "regexp.js", "splay.js", "navier-stokes.js", "pdfjs.js",
+		"box2d.js",
+		"typescript.js", "typescript-input.js", "typescript-compiler.js"}
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	// The interpreter alone: the caches learn, and nothing is compiled.
+	r.jitState().unavailable = true
+	run := func(name, src string) {
+		t.Helper()
+		prog, err := parser.Parse(src, parser.Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := r.Run(fn); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	run("host.js", `var print = function () {}, alert = function () {};`)
+	for _, f := range files {
+		src, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		run(f, string(src))
+	}
+	suites := os.Getenv("QUICKJS_JIT_CORPUS_SUITES")
+	run("warmup.js", fmt.Sprintf(`(() => {
+		const only = %q;
+		for (const s of BenchmarkSuite.suites) {
+			if (only !== "" && !(","+only+",").includes(","+s.name+",")) continue;
+			if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
+			for (const b of s.benchmarks) {
+				b.Setup();
+				for (let i = 0; i < 2; i++) b.run();
+				b.TearDown();
+			}
+		}
+	})()`, suites))
+	// The functions the global object reaches, through properties, prototypes
+	// and functions' own properties: what the warm-up ran is among them.
+	run("collect.js", `var __corpus = (() => {
+		const seen = new Set(), fns = [], todo = [globalThis];
+		while (todo.length) {
+			const o = todo.shift();
+			if (o === null || (typeof o !== "object" && typeof o !== "function") || seen.has(o)) continue;
+			seen.add(o);
+			if (typeof o === "function") fns.push(o);
+			let names;
+			try { names = Object.getOwnPropertyNames(o); } catch (e) { continue; }
+			for (const k of names) {
+				let d;
+				try { d = Object.getOwnPropertyDescriptor(o, k); } catch (e) { continue; }
+				if (d && "value" in d) todo.push(d.value);
+			}
+			todo.push(Object.getPrototypeOf(o));
+		}
+		return fns;
+	})();`)
+	arr := r.global.getOwn(r.atoms.intern("__corpus")).value().Object()
+	var cls []*closure
+	seen := map[*bytecode.Function]bool{}
+	for _, v := range arr.elemsOf() {
+		if !v.IsObject() {
+			continue
+		}
+		fd := v.Object().fn()
+		if fd == nil || fd.closure == nil {
+			continue
+		}
+		cl := fd.closure
+		fn := cl.fn
+		if seen[fn] || fn.TopLevel || fn.Script == nil || fn.Script.Name == "collect.js" {
+			continue
+		}
+		seen[fn] = true
+		cls = append(cls, cl)
+	}
+	slices.SortFunc(cls, func(a, b *closure) int {
+		return cmp.Or(strings.Compare(a.fn.Script.Name, b.fn.Script.Name), cmp.Compare(a.fn.Start, b.fn.Start))
+	})
+	return r, cls
 }

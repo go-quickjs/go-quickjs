@@ -18,7 +18,8 @@ func BenchmarkJITCallFeedback(b *testing.B) {
 				p:     &ir.Program{Code: []ir.Instruction{{Op: ir.Host}}},
 				asked: []jitRegAsked{{calls: sites, did: askedCalls}}, askedAt: []int32{1},
 			}
-			s := &jitSnapshot{answers: map[jitSnapKey][]any{{snapNativeCalls, 0}: {sites}}}
+			s := &jitSnapshot{}
+			s.a.NativeCalls.put(0, 0, true, jitSnapAnsNativeCalls{sites})
 			s.root = s
 			var fb ssa.Feedback = f
 			if mode == "snapshot" {
@@ -57,7 +58,7 @@ work(128)`)); err != nil {
 		for range b.N {
 			fb := r.jitRegFeedbackFor(j.cl, j.p)
 			s := jitRegSnapshotOf(fb, j.p)
-			if s.s.bad || len(s.s.answers) == 0 {
+			if s.s.bad || s.s.a.answered() == 0 {
 				b.Fatal("invalid snapshot")
 			}
 		}

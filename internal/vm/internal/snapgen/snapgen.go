@@ -164,21 +164,92 @@ func Generate(dir string) (snapshot []byte, err error) {
 	return snapshot, nil
 }
 
+// stateMethods are the methods the build asks by a state's PC, a register
+// pc, not a program's instruction's (jitRegSnapStatePC): their answers
+// default to none within the register code, and record no use.
+var stateMethods = map[string]bool{"Resumed": true, "EntryGeneric": true}
+
+// poolTypes are the results' types an answer names pools of objects in
+// (jitSnapPools), which the snapshot asks the roots of.
+var poolTypes = map[string]bool{
+	"ssa.LiteralSite": true, "ssa.ClosureSite": true, "ssa.InlineSite": true,
+	"[]ssa.CallSite": true, "ssa.AccessorSite": true, "ssa.ForEachSite": true,
+}
+
+// answered is the test of whether a question of a PC answered something,
+// by its last result r of type t: ok, or a list with something in it.
+func answered(t, r string) string {
+	switch t {
+	case "bool":
+		return r
+	case "[]ssa.GenStep", "[]ssa.CallSite":
+		return "len(" + r + ") != 0"
+	}
+	return "true"
+}
+
 // registerSnapshot writes the register snapshot's answers, numbered as
 // jitFeedback's methods of the same names, and its askers, of regs,
 // jitRegFeedback's methods: each a method of jitFeedback's, which the
-// build asks of either form's feedback alike.
+// build asks of either form's feedback alike. Each method's answers are
+// kept as its results, in a table by argument (jitSnapTable), not boxed.
 func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 	known := map[string]bool{}
 	for _, m := range ms {
 		known[m.name] = true
 	}
-	b.WriteString("\n// The register snapshot's answers: jitRegFeedback's methods, numbered as\n" +
-		"// jitFeedback's of the same names.\n\n")
+	b.WriteString("// jitRegSnapStatePC are the methods the build asks by a state's PC, which\n" +
+		"// in a register program is a register pc, not an instruction's (Resumed and\n" +
+		"// EntryGeneric): only PCs with a true answer need to be captured.\n" +
+		"const jitRegSnapStatePC uint64 = 0")
+	for _, m := range regs {
+		if stateMethods[m.name] {
+			fmt.Fprintf(b, " | 1<<snap%s", m.name)
+		}
+	}
+	b.WriteString("\n\n// The answers' results, by method.\n")
 	for _, m := range regs {
 		if !known[m.name] {
 			return fmt.Errorf("jitRegFeedback's %s is no method of jitFeedback's", m.name)
 		}
+		fmt.Fprintf(b, "type jitSnapAns%s struct {\n", m.name)
+		for i, t := range m.results {
+			fmt.Fprintf(b, "\tr%d %s\n", i, t)
+		}
+		b.WriteString("}\n\n")
+	}
+	b.WriteString("// jitSnapAnswers are a snapshot's answers, a table of each method's by\n// their argument.\ntype jitSnapAnswers struct {\n")
+	for _, m := range regs {
+		fmt.Fprintf(b, "\t%s jitSnapTable[jitSnapAns%s]\n", m.name, m.name)
+	}
+	b.WriteString("}\n\n// seal sorts the tables put out of their arguments' order.\nfunc (a *jitSnapAnswers) seal() {\n")
+	for _, m := range regs {
+		fmt.Fprintf(b, "\ta.%s.seal()\n", m.name)
+	}
+	b.WriteString("}\n\n// answered counts the questions answered.\nfunc (a *jitSnapAnswers) answered() int {\n\treturn 0")
+	for _, m := range regs {
+		fmt.Fprintf(b, " +\n\t\ta.%s.answered()", m.name)
+	}
+	b.WriteString("\n}\n\n// pools adds to pools every pool an answer names (jitSnapPools).\nfunc (a *jitSnapAnswers) pools(pools map[uintptr]bool) {\n")
+	for _, m := range regs {
+		var named []int
+		for i, t := range m.results {
+			if poolTypes[t] {
+				named = append(named, i)
+			}
+		}
+		if len(named) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "\tfor i := range a.%s.e {\n\t\tif e := &a.%s.e[i]; e.answered {\n", m.name, m.name)
+		for _, i := range named {
+			fmt.Fprintf(b, "\t\t\tjitSnapPools(&e.v.r%d, pools)\n", i)
+		}
+		b.WriteString("\t\t}\n\t}\n")
+	}
+	b.WriteString("}\n\n// The register snapshot's answers: jitRegFeedback's methods, numbered as\n" +
+		"// jitFeedback's of the same names.\n\n")
+	for _, m := range regs {
 		key := "0"
 		if len(m.pnames) > 0 {
 			key = "int64(" + m.pnames[0] + ")"
@@ -188,10 +259,16 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			named = append(named, fmt.Sprintf("r%d %s", i, t))
 		}
 		fmt.Fprintf(b, "func (q *jitRegSnapshot) %s(%s) (%s) {\n", m.name, m.params, strings.Join(named, ", "))
-		fmt.Fprintf(b, "\ta := q.get(snap%s, %s)\n\tif a == nil {\n\t\treturn\n\t}\n", m.name, key)
+		fmt.Fprintf(b, "\te := q.s.a.%s.find(%s)\n", m.name, key)
+		if stateMethods[m.name] {
+			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.absent(snap%s, %s)\n\t\treturn\n\t}\n", m.name, key)
+		} else {
+			fmt.Fprintf(b, "\tif e != nil && e.eff != 0 {\n\t\tq.s.used(e.eff)\n\t}\n")
+			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.s.absent(snap%s, %s)\n\t\treturn\n\t}\n", m.name, key)
+		}
 		var rs []string
 		for i, t := range m.results {
-			fmt.Fprintf(b, "\tr%d, _ = a[%d].(%s)\n", i, i, t)
+			fmt.Fprintf(b, "\tr%d = e.v.r%d\n", i, i)
 			// NativeCalls' descriptions are read-only, including across builds.
 			if strings.HasPrefix(t, "[]") && t != "[]ssa.CallSite" {
 				fmt.Fprintf(b, "\tr%d = jitSnapCopy(r%d)\n", i, i)
@@ -206,7 +283,9 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			continue
 		}
 		rs := results(m)
-		fmt.Fprintf(b, "\t{\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\ts.end(fb.fb, before, snap%s, 0)\n\t\ts.put(snap%s, 0, %s)\n\t}\n", rs, m.name, m.name, m.name, rs)
+		fmt.Fprintf(b, "\t{\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", rs, m.name)
+		fmt.Fprintf(b, "\t\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\t\th(s, snap%s, 0, true, []any{%s})\n\t\t}\n", m.name, rs)
+		fmt.Fprintf(b, "\t\ts.a.%s.put(0, eff, true, jitSnapAns%s{%s})\n\t}\n", m.name, m.name, rs)
 	}
 	b.WriteString("}\n\n// The askers of the register feedback's methods of a PC, as\n" +
 		"// jitSnapAskers's, the callees of the inline sites it names asked in turn\n" +
@@ -216,7 +295,7 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			continue
 		}
 		rs := results(m)
-		fmt.Fprintf(b, "func jitRegSnapAsk%s(s *jitSnapshot, fb *jitRegFeedback, pc int) {\n\tbefore := s.begin(fb.fb)\n\t%s := fb.%s(pc)\n\ts.end(fb.fb, before, snap%s, int64(pc))\n", m.name, rs, m.name, m.name)
+		fmt.Fprintf(b, "func jitRegSnapAsk%s(s *jitSnapshot, fb *jitRegFeedback, pc int) {\n\tbefore := s.begin(fb.fb)\n\t%s := fb.%s(pc)\n\teff := s.end(fb.fb, before)\n", m.name, rs, m.name)
 		for i, t := range m.results {
 			switch t {
 			case "ssa.InlineSite":
@@ -225,7 +304,10 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 				fmt.Fprintf(b, "\tif r%d.Inline != nil {\n\t\tnested := s.nestReg(*r%d.Inline)\n\t\tr%d.Inline = &nested\n\t}\n", i, i, i)
 			}
 		}
-		fmt.Fprintf(b, "\tif jitSnapAnswered(r%d) {\n\t\ts.put(snap%s, int64(pc), %s)\n\t}\n}\n\n", len(m.results)-1, m.name, rs)
+		last := len(m.results) - 1
+		fmt.Fprintf(b, "\tok := %s\n", answered(m.results[last], fmt.Sprintf("r%d", last)))
+		fmt.Fprintf(b, "\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\th(s, snap%s, int64(pc), ok, []any{%s})\n\t}\n", m.name, rs)
+		fmt.Fprintf(b, "\tif ok || eff != 0 {\n\t\ts.a.%s.reserve(int(s.room[snap%s]))\n\t\ts.a.%s.put(int64(pc), eff, ok, jitSnapAns%s{%s})\n\t}\n}\n\n", m.name, m.name, m.name, m.name, rs)
 	}
 	b.WriteString("// jitRegSnapAskers are the register askers by method, nil for one the\n" +
 		"// register feedback has not or of another argument.\n" +

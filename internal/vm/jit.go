@@ -179,6 +179,10 @@ type jitTestConfig struct {
 	// placeAtInstall has each placed by its install, not its worker.
 	workspaceBack  func(*jitRegJob)
 	placeAtInstall bool
+	// snapAsked, where set, is called with each question a snapshot asks
+	// ahead (jitRegSnapshotOf), its results as the feedback gave them, and
+	// whether they answer something.
+	snapAsked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
 	// procs, if not 0, stands in for GOMAXPROCS where the runtime's mode
 	// asks it (jitBackgroundNow).
 	procs int

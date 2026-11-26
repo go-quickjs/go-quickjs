@@ -824,7 +824,14 @@ kind and, at its call, its pool and its array made again (`askLeafCalls`) --
 into a `jitRegSnapshot`, which has
 `jitRegFeedback`'s methods alone, generated from them (`snapgen`,
 `jit_snapshot_gen.go`), so that the build finds the same optional
-interfaces it would; a worker builds, optimizes and compiles from it
+interfaces it would. Each method's answers are kept as its results, unboxed,
+in a table of its own by argument (`jitSnapTable`, put in the order of the
+PCs and searched by halves, the questions put out of order sorted once the
+asking is done), and what a question appended to the feedback's lists, taken
+back, is a slice of the snapshot's own lists (`jitSnapshot`'s `gained`),
+found by its index in the answer; boxed in a map by question, an answer's
+keeping had cost about as much as its asking. A worker builds, optimizes
+and compiles from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile

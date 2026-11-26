@@ -27,9 +27,9 @@ func TestJITCallFeedbackSnapshot(t *testing.T) {
 	var answers []answer
 	snapshots := append([]*jitSnapshot{j.snap.s}, mapValues(j.snap.s.callees)...)
 	for _, s := range snapshots {
-		for key, a := range s.answers {
-			if key.method == snapNativeCalls {
-				sites := a[0].([]ssa.CallSite)
+		for _, e := range s.a.NativeCalls.e {
+			if e.answered {
+				sites := e.v.r0
 				answers = append(answers, answer{sites, slices.Clone(sites)})
 			}
 		}

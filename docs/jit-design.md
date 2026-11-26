@@ -1275,39 +1275,38 @@ is under [The projection](#the-projection).
   phase slower; `TestJITCompileWork` rewritten downwards; `compilediff
   native` the same code for every compile, since the stage changes how
   code is made, not what.
-- **Status:** under way. The workspace discipline has landed; the
-  snapshot as data and the lowering on the worker have not.
-- **Workspace discipline in ssa and mir:** landed. Measured compiles
-  1.2 to 3.2% faster, against the 5 to 15% projected, and garbage down by
-  40 to 85% (`-jitcompile 10`, three alternated rounds, Ryzen 5 3600):
-
-  | Program | ms per run | heap per run, MB |
-  |---|---:|---:|
-  | Typescript | 390.8 -> 384.9 | 60.3 -> 35.6 |
-  | Mandreel | 82.2 -> 79.6 | 12.7 -> 7.6 |
-  | zlib | 131.3 -> 127.2 | 19.7 -> 3.2 |
-  | PdfJS | 78.8 -> 77.7 | 11.3 -> 8.2 |
-  | Gameboy | 77.9 -> 76.9 | 11.4 -> 8.6 |
-
-  No phase is slower. Most of the garbage was the workspaces making their
-  tables again. A trim counted by jobs gave back a big compile's chunks as
-  it ended, and the next compile as big made them again. The arenas and
-  mir's scratch tables now keep what the compiles of the collector's
-  current and last cycle needed, as `sync.Pool` does. A pooled workspace
-  still goes whole when idle. Typescript's plain run allocates 611-659 ->
-  512-529 MB, one collector cycle fewer; its wall time is level. What was
-  saved was mostly bytes, which cost the collector more than the compile
-  does; that is why the time gain is smaller than projected. Beside that:
-  the builder's guards are a method rather than a closure, so their
-  arguments stay off the heap, and a compile's lists are in its
-  workspace. TestJITCompileWork measures each compile in warm workspaces
-  too. What is left of Typescript's garbage is the code's own
-  descriptions (about 12 MB of `-jitcompile 3`'s 34.5), the feedback's
-  answers (about 8 MB and 64k objects, the snapshot's to remove), and
-  mir's cold code as closures (about 50k objects, for stage 6's shared
-  routines). `compilediff native` gives the same code for every compile
-  (V8 suite, AWFY; Octane with `-any`, within a base-against-base
-  control).
+- **Status:** under way. The goroutine's part of a compile in the
+  background is measured now (`JITCompileClock`, `-jittier`'s line):
+  on Octane's Typescript, 620 compiles, 256 µs each prepared and 76
+  installed at the base (Ryzen 5 3600, medians of three to four runs),
+  of the preparation about 27 µs the lowering, 195 the snapshot (145
+  the function's questions, 25 of them its callees' lowerings, 48 its
+  callees'), 5 the hand-over. Two steps so far: the workspace taken
+  and given back on the workers, its rewind off the goroutine, an
+  install 76 to 40 µs; and the snapshot's answers kept as their
+  methods' results in tables by argument, their effects as spans of one
+  list, no map, no boxing, no table grown an answer at a time, the
+  snapshot's allocation 172 to 79 KB and the preparation 256 to 214 µs.
+  So 332 µs a compile to 254, projected 30 to 60; Typescript in the
+  background 1,643 to 1,598 ms at `-k 2` (-2.7%), projected 1,470 to
+  1,600 for the stage. What is left is the feedback's own work, which
+  runs on the goroutine because it reads the live heap and writes the
+  runtime's state: of a snapshot's 111 µs, made again warm, `Inline`
+  43% (its callees' questions 27), the property sites' 23%,
+  `NativeCalls` 15%, the rest small methods and allocation. The
+  snapshot as a copy of the caches' data, the methods split into what
+  they read, copied ahead, and what they derive, on the worker, their
+  writes deferred to the install, is the next step, method by method in
+  that order, then the lowering on the worker (*estimate*: 4 to 6
+  weeks, 3,000 to 5,000 lines). What each must copy rather than read
+  on the worker: the caches, which the interpreter writes; what the
+  code learned, which the goroutine writes at exits; the fields of the
+  shapes the answers name -- a unique shape is changed in place until a
+  cache or a compile remembers it, and a shape's index is built when
+  first needed -- and what the methods write besides their lists
+  (`remember`, the learned lists, the literals' and known reads' caches,
+  atoms, a callee's register code, cells and pools), deferred to the
+  install or made ahead.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
@@ -1352,6 +1351,37 @@ is under [The projection](#the-projection).
   5K), but not on zlib (0.64M to 2.24M), where mir's spill classes share
   the phis' slots. The lead is mir's own coalescing, as part of the
   backend's work, not lsra.
+- **Workspace discipline in ssa and mir:** landed. Measured compiles
+  1.2 to 3.2% faster, against the 5 to 15% projected, and garbage down by
+  40 to 85% (`-jitcompile 10`, three alternated rounds, Ryzen 5 3600):
+
+  | Program | ms per run | heap per run, MB |
+  |---|---:|---:|
+  | Typescript | 390.8 -> 384.9 | 60.3 -> 35.6 |
+  | Mandreel | 82.2 -> 79.6 | 12.7 -> 7.6 |
+  | zlib | 131.3 -> 127.2 | 19.7 -> 3.2 |
+  | PdfJS | 78.8 -> 77.7 | 11.3 -> 8.2 |
+  | Gameboy | 77.9 -> 76.9 | 11.4 -> 8.6 |
+
+  No phase is slower. Most of the garbage was the workspaces making their
+  tables again. A trim counted by jobs gave back a big compile's chunks as
+  it ended, and the next compile as big made them again. The arenas and
+  mir's scratch tables now keep what the compiles of the collector's
+  current and last cycle needed, as `sync.Pool` does. A pooled workspace
+  still goes whole when idle. Typescript's plain run allocates 611-659 ->
+  512-529 MB, one collector cycle fewer; its wall time is level. What was
+  saved was mostly bytes, which cost the collector more than the compile
+  does; that is why the time gain is smaller than projected. Beside that:
+  the builder's guards are a method rather than a closure, so their
+  arguments stay off the heap, and a compile's lists are in its
+  workspace. TestJITCompileWork measures each compile in warm workspaces
+  too. What is left of Typescript's garbage is the code's own
+  descriptions (about 12 MB of `-jitcompile 3`'s 34.5), the feedback's
+  answers (about 8 MB and 64k objects, the snapshot's to remove), and
+  mir's cold code as closures (about 50k objects, for stage 6's shared
+  routines). `compilediff native` gives the same code for every compile
+  (V8 suite, AWFY; Octane with `-any`, within a base-against-base
+  control).
 
 ### Stage 3: closures and cells natively
 

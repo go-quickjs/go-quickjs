@@ -79,7 +79,11 @@ func TestJITBackgroundSnapshotStatePCs(t *testing.T) {
 								t.Errorf("out-of-range method %d at %d: got %#v", m, pc, miss)
 							}
 						}()
-						snap.get(m, int64(pc))
+						if m == snapResumed {
+							snap.Resumed(pc)
+						} else {
+							snap.EntryGeneric(pc)
+						}
 					}()
 				}
 			}
@@ -123,7 +127,7 @@ func TestJITBackgroundSnapshotSkipsLongCallees(t *testing.T) {
 	asked := map[string]int{}
 	for k, c := range j.snap.s.callees {
 		if k.cl != nil {
-			asked[k.cl.fn.Name] = len(c.answers)
+			asked[k.cl.fn.Name] = c.a.answered()
 		}
 	}
 	if n, ok := asked["small"]; !ok || n == 0 {

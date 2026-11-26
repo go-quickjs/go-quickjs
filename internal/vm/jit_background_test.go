@@ -346,7 +346,7 @@ func TestJITBackgroundSnapshotMiss(t *testing.T) {
 	}
 	j := jitRegJobForTest(t, r, cl)
 	// Every build asks it.
-	delete(j.snap.s.answers, jitSnapKey{snapKeepLimit, 0})
+	j.snap.s.a.KeepLimit = jitSnapTable[jitSnapAnsKeepLimit]{}
 	r.jitRegSubmit(j)
 	if !j.missed || r.jit.regSnapMisses != 1 || r.jit.regPendingJobs[j.key] != nil || jitRegOfForTest(r, cl) == old {
 		t.Fatalf("missed %v, counted %d, pending %v, same code %v: want it built on the runtime's goroutine and installed",
