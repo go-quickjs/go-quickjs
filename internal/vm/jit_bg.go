@@ -5,7 +5,6 @@ package vm
 import (
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -322,11 +321,12 @@ func (j *jitRegJob) run() {
 	}
 }
 
-// letGo gives back what j holds that no install took: its workspace, and
-// the code its worker placed.
+// letGo gives back what j holds that no install took: its workspace,
+// unrewound, for its next taker to rewind (jit.ReturnWorkspace), and the
+// code its worker placed.
 func (j *jitRegJob) letGo() {
 	if j.w != nil {
-		jit.PutWorkspace(j.w)
+		jit.ReturnWorkspace(j.w)
 		j.w = nil
 	}
 	j.closePlaced()
@@ -335,17 +335,20 @@ func (j *jitRegJob) letGo() {
 // letGoApart is letGo at the install, on the runtime's goroutine, once
 // nothing built in the workspace is used -- the function, the backend's
 // code, whose bytes on arm64 are the workspace's until placed: the code
-// placed and the entry made of it, or thrown away. The workspace is given
-// back by a worker (jitWorkspaceBack), which rewinds it: the rewind, a
+// placed and the entry made of it, or thrown away. The workspace goes back
+// to the pool unrewound (jit.ReturnWorkspace), and a worker taking it for
+// its next compile rewinds it (jit.GetWorkspaceOnWorker): the rewind, a
 // clear of what the compile built, had been more than half of an
-// install's time, 37 of 72 us a compile of Octane's Typescript.
+// install's time, 37 of 72 us a compile of Octane's Typescript, and
+// handed to a worker as a task of its own, a task queued and often a
+// worker started, 3.6 of the 14.5 us left.
 func (j *jitRegJob) letGoApart() {
 	if w := j.w; w != nil {
 		if h := j.backHook; h != nil {
 			h(j)
 		}
 		j.w = nil
-		jitWorkers.submit(jitWorkspaceBack{w})
+		jit.ReturnWorkspace(w)
 	}
 	j.closePlaced()
 }
@@ -358,15 +361,6 @@ func (j *jitRegJob) closePlaced() {
 		j.placed = nil
 	}
 }
-
-// jitWorkspaceBack is a workspace a compile in the background is done
-// with, which a worker gives back to the process's pool (jit.PutWorkspace)
-// before any compile queued: the pool has it for the next compile, which
-// would otherwise make one anew.
-type jitWorkspaceBack struct{ w *jit.Workspace }
-
-func (b jitWorkspaceBack) run()              { jit.PutWorkspace(b.w) }
-func (b jitWorkspaceBack) waitedWork() int64 { return math.MaxInt64 }
 
 // workRecovering is work, a panic its refusal and a snapshot's miss its
 // mark (missed).
@@ -387,7 +381,7 @@ func (j *jitRegJob) workRecovering() {
 	if j.w == nil {
 		// Taken here, on the worker or on the runtime's goroutine that
 		// took the compile back (jitRegTakeBack), not as it was prepared.
-		j.w = jit.GetWorkspace()
+		j.w = jit.GetWorkspaceOnWorker()
 	}
 	if j.miss {
 		// Left as a miss (QJS_JIT_STRESS's miss).

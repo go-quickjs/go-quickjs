@@ -130,3 +130,44 @@ func pooled(w *Workspace) bool {
 	}
 	return false
 }
+
+// A workspace given back unrewound (ReturnWorkspace) is kept, aged and let
+// go of as one given back rewound is, a worker's ask takes it first and
+// rewinds it (GetWorkspaceOnWorker), and an ask on the spot takes one
+// rewound first (GetWorkspace): an idle process holds none of either.
+func TestWorkspaceReturnedUnrewound(t *testing.T) {
+	clean, dirty := GetWorkspace(), GetWorkspace()
+	PutWorkspace(clean)
+	ReturnWorkspace(dirty)
+	if !pooled(clean) || !pooled(dirty) || !dirty.dirty || clean.dirty {
+		t.Fatal("not pooled as given back")
+	}
+	if w := GetWorkspace(); w != clean {
+		t.Fatal("the spot's ask did not take the rewound one first")
+	} else {
+		PutWorkspace(w)
+	}
+	if w := GetWorkspaceOnWorker(); w != dirty || w.dirty {
+		t.Fatalf("the worker's ask took %p (dirty %v), want %p rewound", w, w.dirty, dirty)
+	} else {
+		ReturnWorkspace(w)
+	}
+	// Aged by the collector's cycles, as a rewound one is.
+	cycle := dirty.cycle
+	workAge(cycle + workspaceAge - 1)
+	if !pooled(dirty) {
+		t.Fatalf("let go %d cycles after it was given back", workspaceAge-1)
+	}
+	workAge(cycle + workspaceAge)
+	if pooled(dirty) || pooled(clean) {
+		t.Fatalf("kept %d cycles after it was given back", workspaceAge)
+	}
+	// And at two returns to the host with no compile.
+	w := GetWorkspace()
+	ReturnWorkspace(w)
+	DropIdleWorkspaces()
+	DropIdleWorkspaces()
+	if pooled(w) || workIdle.Load() != 0 || PooledWorkspaceBytes() != 0 {
+		t.Fatalf("%d workspaces, %d bytes kept idle", workIdle.Load(), PooledWorkspaceBytes())
+	}
+}

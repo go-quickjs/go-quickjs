@@ -2615,9 +2615,15 @@ A compile in the background takes its workspace on its worker, where it
 is built (or on the runtime's goroutine, where the compile is taken back),
 and gives it back once nothing built in it is used: after its install has
 placed the code and made its entry of it, or thrown the compile away. The
-install hands it to the workers (`jitWorkspaceBack`, served before any
-compile queued), which rewind it into the pool: the rewind had been more
-than half of an install's time on the runtime's goroutine.
+install gives it back unrewound (`jit.ReturnWorkspace`), and the worker
+that takes it for its next compile rewinds it (`GetWorkspaceOnWorker`,
+which takes such a workspace first; `GetWorkspace`, a compile on the spot's,
+takes one rewound first): the rewind had been more than half of an
+install's time on the runtime's goroutine, and handing it to a worker as a
+task of its own -- the queue's lock, often a worker started -- a quarter of
+what was left. A workspace given back unrewound is kept, aged and let go of
+as one rewound is (the collector's last two cycles, a runtime's return to
+its host).
 `TestJITRegWorkspaceBackAfterPlace` holds the order, with the code placed by
 the worker and by the install from the backend's bytes, arm64's buffer.
 

@@ -32,6 +32,9 @@ type Workspace struct {
 	cycle uint64
 	turn  uint64
 	bytes int
+	// dirty marks one given back unrewound (ReturnWorkspace), which its
+	// next taker rewinds, bytes what it kept when last rewound.
+	dirty bool
 }
 
 // workspaceAge is how many of the collector's cycles a pooled workspace
@@ -61,19 +64,52 @@ var (
 )
 
 // GetWorkspace is a workspace for one compile, the caller's until it
-// gives it back (PutWorkspace): the one given back last, or a new one.
-func GetWorkspace() *Workspace {
+// gives it back (PutWorkspace, ReturnWorkspace): of those given back, the
+// last one rewound, or else the last one, rewound here; or a new one.
+func GetWorkspace() *Workspace { return getWorkspace(false) }
+
+// GetWorkspaceOnWorker is GetWorkspace for a compile in the background's
+// worker, which takes the last workspace given back unrewound
+// (ReturnWorkspace) first, rewound here: the rewind is the worker's, not
+// that of a runtime's goroutine compiling on the spot.
+func GetWorkspaceOnWorker() *Workspace { return getWorkspace(true) }
+
+// getWorkspace takes from the pool the last workspace given back that is
+// dirty as dirty says, or else the last one, rewound if need be.
+func getWorkspace(dirty bool) *Workspace {
 	workPool.Lock()
-	defer workPool.Unlock()
-	if n := len(workPool.free); n > 0 {
-		w := workPool.free[n-1]
-		workPool.free[n-1] = nil
-		workPool.free = workPool.free[:n-1]
-		workPooled.Add(-int64(w.bytes))
-		workIdle.Add(-1)
-		return w
+	n := len(workPool.free)
+	if n == 0 {
+		workPool.Unlock()
+		return &Workspace{}
 	}
-	return &Workspace{}
+	i := n - 1
+	for j := n - 1; j >= 0; j-- {
+		if workPool.free[j].dirty == dirty {
+			i = j
+			break
+		}
+	}
+	w := workPool.free[i]
+	copy(workPool.free[i:], workPool.free[i+1:])
+	workPool.free[n-1] = nil
+	workPool.free = workPool.free[:n-1]
+	workPooled.Add(-int64(w.bytes))
+	workIdle.Add(-1)
+	workPool.Unlock()
+	if w.dirty {
+		w.rewind()
+	}
+	return w
+}
+
+// rewind clears what the last compile built in w, at the collector's
+// cycle it ended in (workStamp), and measures what it keeps.
+func (w *Workspace) rewind() {
+	w.SSA.RewindAt(w.cycle)
+	w.MIR.RewindAt(w.cycle)
+	w.bytes = w.SSA.Bytes() + w.MIR.Bytes()
+	w.dirty = false
 }
 
 // PutWorkspace gives back w, rewound: nothing built in it may be used
@@ -81,11 +117,35 @@ func GetWorkspace() *Workspace {
 // the one before needed (ssa's and mir's RewindAt), as the pool keeps a
 // workspace given back for workspaceAge cycles.
 func PutWorkspace(w *Workspace) {
+	workStamp(w)
+	w.rewind()
+	workGiveBack(w)
+}
+
+// ReturnWorkspace gives back w as it is, its next taker rewinding it
+// (GetWorkspace, GetWorkspaceOnWorker): nothing built in it may be used
+// after. Kept, aged and let go of as one rewound is, its bytes counted as
+// it kept them when last rewound, and rewound at the cycle it was given
+// back in. A compile in the background's install gives its workspace
+// back so, on the runtime's goroutine: rewound there, a clear of what the
+// compile built had been more than half of an install's time, and handed
+// to a worker to rewind -- a task queued, a worker started -- about a
+// quarter of what was left.
+func ReturnWorkspace(w *Workspace) {
+	workStamp(w)
+	w.dirty = true
+	workGiveBack(w)
+}
+
+// workStamp records in w the collector's cycle its compile ended in,
+// which its rewind and its age are counted from.
+func workStamp(w *Workspace) {
 	workOnce.Do(workArm)
 	w.cycle = workCycle.Load()
-	w.SSA.RewindAt(w.cycle)
-	w.MIR.RewindAt(w.cycle)
-	w.bytes = w.SSA.Bytes() + w.MIR.Bytes()
+}
+
+// workGiveBack puts w in the pool, the last given back.
+func workGiveBack(w *Workspace) {
 	workPool.Lock()
 	w.turn = workTurn
 	workPool.free = append(workPool.free, w)
