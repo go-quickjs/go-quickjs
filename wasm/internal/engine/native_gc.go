@@ -5,8 +5,9 @@ import (
 )
 
 // The native handlers' allocations. struct.new, struct.new_default,
-// array.new, array.new_default and array.new_fixed of the types they take
-// (regGC.natTi) take the object from a pool of the exec's table for the
+// array.new, array.new_default, array.new_fixed, array.new_data and
+// array.new_elem of the types they take (regGC.natTi) take the object from
+// a pool of the exec's table for the
 // instance (execPools), as the JIT's code takes from its level's -- the
 // same tables (gcpool.go) -- and store its values by the record's natVals.
 // An empty pool, a frame without the table, and an array past the pools go
@@ -15,7 +16,11 @@ import (
 // pool, or makes the array, filled, into its slot, without leaving native
 // code. What it cannot do so -- a trap, a charge the budget holds only once
 // what is reachable is counted again -- it leaves to the instruction's Go
-// handler, the exit, which allocates as the Go table does.
+// handler, the exit, which allocates as the Go table does. array.new_data
+// and array.new_elem check the segment's range first, leaving a range past
+// it to the Go handler, which traps, and copy the segment's bytes or
+// references into the array before it goes into its slot; an array past
+// the pools the stub makes and fills from the segment.
 
 // The allocation stub's requests (nativeAllocGo's req, the record's index
 // above): a struct's pool filled, an array's of the class of its length,
@@ -68,6 +73,15 @@ func (x *exec) dropPools() {
 	x.natPools = 0
 }
 
+// segInRange reports whether n elements of array.new_data's or
+// array.new_elem's segment from src are within it, as record g reads it.
+func segInRange(inst *Instance, g *regGC, src, n uint32) bool {
+	if g.data {
+		return uint64(src)+uint64(n)*uint64(g.rt.elemSize) <= uint64(len(inst.datas[g.seg]))
+	}
+	return uint64(src)+uint64(n) <= uint64(len(inst.elems[g.seg]))
+}
+
 // nativeAllocGo does what the allocation stub asks for the instruction of
 // record req>>8 of the frame of context c, answering what the code does
 // next (allocExit ...).
@@ -108,10 +122,26 @@ func nativeAllocGo(c *nativeCtx, req uintptr) uintptr {
 		if g.rt.refElems {
 			size = 8
 		}
+		var src uint32
+		if g.natSeg {
+			// array.new_data's or array.new_elem's range, which the
+			// handler checked, and which the Go handler traps past.
+			src = uint32(num(l, g.ops[0]))
+			if !segInRange(inst, g, src, n) {
+				return allocExit
+			}
+		}
 		if n > uint32(maxArrayLength(size)) || !inst.budget.tryChargeGC(arraySize(g.rt, n)) {
 			return allocExit
 		}
 		a := makeArray(g.rt, int(n))
+		if g.natSeg {
+			if g.data {
+				copy(a.bytes(), inst.datas[g.seg][src:])
+			} else {
+				copy(a.refs(), inst.elems[g.seg][src:])
+			}
+		}
 		if len(g.natVals) > 0 {
 			v := getVal(l, f, g.k, g.ops[0])
 			for i := 0; i < a.n; i++ {

@@ -200,26 +200,7 @@ func (g *armGen) alloc() {
 			retry, slow, big := a.NewLabel(), a.NewLabel(), a.NewLabel()
 			g.allocRecord()
 			a.Bind(retry)
-			g.arrayLength()
-			a.LoadU32(a8, aC, rd.GCNatShift)
-			a.ShiftReg(Lsl, a9, a9, a8, true)
-			a.CmpImm(a9, rd.ArrayBlockBytes, true)
-			a.BCond(HI, big)
-			a.AddImm(a9, a9, 15, true)
-			a.ShiftImm(Lsr, a9, a9, 4, true)
-			a.Load(a8, aCtx, rd.CtxX)
-			a.Load(a8, a8, rd.XNatClasses)
-			a.LoadU8Idx(a9, a8, a9)
-			a.Load(a8, aCtx, rd.CtxX)
-			a.Load(a8, a8, rd.XNatPools)
-			a.Cbz(a8, slow, true)
-			a.AddLsl(a8, a8, aD, 3)
-			a.Load(a8, a8, -8)
-			a.Cbz(a8, slow, true)
-			a.LoadIdx(a8, a8, a9, true)
-			g.poolTake(slow)
-			g.arrayLength()
-			a.Store(aS, rd.ArrayLen, a9)
+			g.arrayTake(slow, big)
 			switch x {
 			case rd.XArrayNewFixed:
 				a.Load(aK, aS, rd.ArrayElems)
@@ -234,6 +215,127 @@ func (g *armGen) alloc() {
 			g.allocStub(3, retry)
 		})
 	}
+	g.hx(rd.XArrayNewSegment, "ArrayNewSegment", func() {
+		retry, slow, big, out := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+		g.allocRecord()
+		a.Bind(retry)
+		g.segRange(out)
+		g.arrayTake(slow, big)
+		g.segCopy()
+		g.putNew()
+		a.Bind(slow)
+		g.allocStub(2, retry)
+		a.Bind(big)
+		g.allocStub(3, retry)
+		// Past the segment: the Go handler traps.
+		a.Bind(out)
+		a.Load(aW, aIP, 0)
+		a.B(g.exit)
+	})
+}
+
+// arrayTake is amd64's (amd64_alloc.go): the array into R3, R7 its pool's
+// word's address, its length stored and left in R5.
+func (g *armGen) arrayTake(slow, big Label) {
+	a := g.a
+	g.arrayLength()
+	a.LoadU32(a8, aC, rd.GCNatShift)
+	a.ShiftReg(Lsl, a9, a9, a8, true)
+	a.CmpImm(a9, rd.ArrayBlockBytes, true)
+	a.BCond(HI, big)
+	a.AddImm(a9, a9, 15, true)
+	a.ShiftImm(Lsr, a9, a9, 4, true)
+	a.Load(a8, aCtx, rd.CtxX)
+	a.Load(a8, a8, rd.XNatClasses)
+	a.LoadU8Idx(a9, a8, a9)
+	a.Load(a8, aCtx, rd.CtxX)
+	a.Load(a8, a8, rd.XNatPools)
+	a.Cbz(a8, slow, true)
+	a.AddLsl(a8, a8, aD, 3)
+	a.Load(a8, a8, -8)
+	a.Cbz(a8, slow, true)
+	a.LoadIdx(a8, a8, a9, true)
+	g.poolTake(slow)
+	g.arrayLength()
+	a.Store(aS, rd.ArrayLen, a9)
+}
+
+// segEntry puts in R4 the address of the entry of array.new_data's or
+// array.new_elem's segment, and in R0 the offset, zero-extended, as
+// amd64's. R5 and R6 are lost.
+func (g *armGen) segEntry() {
+	a := g.a
+	elems, join := a.NewLabel(), a.NewLabel()
+	a.Load(a8, aC, rd.GCOps)
+	a.LoadU32(a9, a8, 0)
+	a.AddLsl(a9, aL, a9, 3)
+	a.LoadU32(aW, a9, 0)
+	a.Load(a8, aCtx, rd.CtxInst)
+	a.LoadU8(aT, aC, rd.GCData)
+	a.Cbz(aT, elems, false)
+	a.Load(a8, a8, rd.InstDatas)
+	a.B(join)
+	a.Bind(elems)
+	a.Load(a8, a8, rd.InstElems)
+	a.Bind(join)
+	a.LoadU32(aT, aC, rd.GCSeg)
+	a.AddLsl(aT, aT, aT, 1)
+	a.AddLsl(a8, a8, aT, 3)
+}
+
+// segRange goes to out past the segment, as amd64's. R0, R4, R5, R6, R16
+// and R17 are lost.
+func (g *armGen) segRange(out Label) {
+	a := g.a
+	elems := a.NewLabel()
+	g.arrayLength()
+	a.MovRR(aK, a9)
+	g.segEntry()
+	a.LoadU8(aT, aC, rd.GCData)
+	a.Cbz(aT, elems, false)
+	a.LoadU32(aT, aC, rd.GCNatShift)
+	a.ShiftReg(Lsl, aK, aK, aT, true)
+	a.Bind(elems)
+	a.Op(Add, aK, aK, aW, true)
+	a.Load(aT, a8, rd.SliceLen)
+	a.Cmp(aK, aT, true)
+	a.BCond(HI, out)
+}
+
+// segCopy copies the segment's elements into the array in R3, as many as
+// R5 holds, as amd64's. R7 is kept; R0, R2, R4, R5, R6 and R17 are lost.
+func (g *armGen) segCopy() {
+	a := g.a
+	data, words, bytes, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.MovRR(aK, a9)
+	g.segEntry()
+	a.Load(a8, a8, 0)
+	a.LoadU8(aT, aC, rd.GCData)
+	a.Cbnz(aT, data, false)
+	a.ShiftImm(Lsl, aW, aW, 4, true)
+	a.Bind(data)
+	a.Op(Add, a8, a8, aW, true)
+	a.Load(aD, aS, rd.ArrayElems)
+	a.LoadU32(aT, aC, rd.GCNatShift)
+	a.ShiftReg(Lsl, aK, aK, aT, true)
+	a.Bind(words)
+	a.CmpImm(aK, 8, true)
+	a.BCond(LO, bytes)
+	a.Load(aT, a8, 0)
+	a.Store(aD, 0, aT)
+	a.AddImm(a8, a8, 8, true)
+	a.AddImm(aD, aD, 8, true)
+	a.AddImm(aK, aK, -8, true)
+	a.B(words)
+	a.Bind(bytes)
+	a.Cbz(aK, done, true)
+	a.LoadU8(aT, a8, 0)
+	a.Store8(aD, 0, aT)
+	a.AddImm(a8, a8, 1, true)
+	a.AddImm(aD, aD, 1, true)
+	a.AddImm(aK, aK, -1, true)
+	a.B(bytes)
+	a.Bind(done)
 }
 
 // fillElems stores array.new's value into each element of the array in

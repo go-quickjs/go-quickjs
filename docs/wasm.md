@@ -1149,5 +1149,4 @@ WASI:
 - array.new_fixed of more than 480 bytes of elements is made by Go from
   the JIT's allocation stub, without an exit; array.new_data,
   array.new_elem, arrays of v128s and structs with v128 fields are native
-  in both tiers. The interpreter's native handlers still leave
-  array.new_data and array.new_elem to their Go handlers.
+  in both tiers and in the interpreter's native handlers.

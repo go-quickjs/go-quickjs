@@ -254,3 +254,153 @@ func TestNativeAllocConvention(t *testing.T) {
 		t.Fatalf("%d calls; %s", calls, strings.Join(bad[:min(len(bad), 5)], "; "))
 	}
 }
+
+// nativeSegSrc makes arrays from a data segment, of every number element
+// type, and from an element segment, of offsets and lengths given at run
+// time, each read back whole; and from segments dropped.
+var nativeSegSrc = func() string {
+	var b strings.Builder
+	b.WriteString(`(module
+  (type $box (struct (field i32)))
+  (type $i8 (array (mut i8)))
+  (type $i16 (array (mut i16)))
+  (type $i32 (array (mut i32)))
+  (type $i64 (array (mut i64)))
+  (type $f64 (array (mut f64)))
+  (type $v128 (array (mut v128)))
+  (type $ref (array (mut anyref)))
+  (global $keep (mut anyref) (ref.null any))
+  (data $d "`)
+	for i := range 700 {
+		fmt.Fprintf(&b, `\%02x`, (i*37+11)&0xff)
+	}
+	b.WriteString(`")
+  (data $gone "dropped")
+  (elem $e anyref`)
+	for i := range 40 {
+		switch i % 3 {
+		case 0:
+			fmt.Fprintf(&b, " (item (ref.i31 (i32.const %d)))", i)
+		case 1:
+			b.WriteString(" (item (ref.null any))")
+		default:
+			fmt.Fprintf(&b, " (item (struct.new $box (i32.const %d)))", 100+i)
+		}
+	}
+	b.WriteString(`)
+  (elem $dead anyref (item (ref.i31 (i32.const 1))))
+  (func (export "dropData") (data.drop $gone))
+  (func (export "dropElem") (elem.drop $dead))
+  (func (export "gone") (param $o i32) (param $n i32) (result i32)
+    (array.len (array.new_data $i8 $gone (local.get $o) (local.get $n))))
+  (func (export "dead") (param $o i32) (param $n i32) (result i32)
+    (array.len (array.new_elem $ref $dead (local.get $o) (local.get $n))))
+  (func (export "elems") (param $o i32) (param $n i32) (result i64)
+    (local $a (ref null $ref)) (local $i i32) (local $s i64) (local $x anyref)
+    (local.set $a (array.new_elem $ref $e (local.get $o) (local.get $n)))
+    (global.set $keep (local.get $a))
+    (local.set $s (i64.extend_i32_u (array.len (local.get $a))))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (array.len (local.get $a))))
+      (local.set $x (array.get $ref (local.get $a) (local.get $i)))
+      (local.set $s (i64.add (i64.mul (local.get $s) (i64.const 31))
+        (if (result i64) (ref.is_null (local.get $x)) (then (i64.const 7))
+          (else (if (result i64) (ref.test (ref i31) (local.get $x))
+            (then (i64.extend_i32_u (i31.get_u (ref.cast (ref i31) (local.get $x)))))
+            (else (i64.extend_i32_u (struct.get $box 0 (ref.cast (ref $box) (local.get $x))))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $s))
+`)
+	for _, t := range []struct{ name, get string }{
+		{"i8", "(i64.extend_i32_s (array.get_s $i8 (local.get $a) (local.get $i)))"},
+		{"i16", "(i64.extend_i32_u (array.get_u $i16 (local.get $a) (local.get $i)))"},
+		{"i32", "(i64.extend_i32_s (array.get $i32 (local.get $a) (local.get $i)))"},
+		{"i64", "(array.get $i64 (local.get $a) (local.get $i))"},
+		{"f64", "(i64.reinterpret_f64 (array.get $f64 (local.get $a) (local.get $i)))"},
+		{"v128", "(i64.add (i64x2.extract_lane 0 (array.get $v128 (local.get $a) (local.get $i))) (i64.rotl (i64x2.extract_lane 1 (array.get $v128 (local.get $a) (local.get $i))) (i64.const 7)))"},
+	} {
+		fmt.Fprintf(&b, `  (func (export "%[1]s") (param $o i32) (param $n i32) (result i64)
+    (local $a (ref null $%[1]s)) (local $i i32) (local $s i64)
+    (local.set $a (array.new_data $%[1]s $d (local.get $o) (local.get $n)))
+    (global.set $keep (local.get $a))
+    (local.set $s (i64.extend_i32_u (array.len (local.get $a))))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (array.len (local.get $a))))
+      (local.set $s (i64.add (i64.mul (local.get $s) (i64.const 31)) %[2]s))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.get $s))
+`, t.name, t.get)
+	}
+	b.WriteString(")")
+	return b.String()
+}()
+
+// nativeSegCalls are nativeSegSrc's calls: offsets and lengths within the
+// segments, at their ends, past them, and past the pools' 480 bytes; and
+// the dropped segments before and after their drops.
+func nativeSegCalls() []regCall {
+	var calls []regCall
+	sizes := map[string]uint64{"i8": 1, "i16": 2, "i32": 4, "i64": 8, "f64": 8, "v128": 16}
+	for _, name := range []string{"i8", "i16", "i32", "i64", "f64", "v128"} {
+		s := sizes[name]
+		for _, c := range [][2]uint64{{0, 0}, {0, 1}, {3, 5}, {1, 480 / s}, {0, 480/s + 1}, {9, 600 / s},
+			{700 - s, 1}, {700 - s + 1, 1}, {700, 0}, {701, 0}, {0, 700/s + 1}, {0xffffffff, 1}, {1, 0xffffffff}} {
+			calls = append(calls, regCall{name, []Val{{N: c[0]}, {N: c[1]}}})
+		}
+	}
+	for _, c := range [][2]uint64{{0, 0}, {0, 1}, {2, 9}, {0, 30}, {0, 31}, {5, 35}, {39, 1}, {40, 0}, {39, 2},
+		{41, 0}, {0xffffffff, 1}} {
+		calls = append(calls, regCall{"elems", []Val{{N: c[0]}, {N: c[1]}}})
+	}
+	calls = append(calls, regCall{"gone", []Val{{N: 0}, {N: 7}}}, regCall{"gone", []Val{{N: 7}, {N: 1}}},
+		regCall{"dropData", nil}, regCall{"gone", []Val{{N: 0}, {N: 0}}}, regCall{"gone", []Val{{N: 0}, {N: 1}}},
+		regCall{"dead", []Val{{N: 0}, {N: 1}}}, regCall{"dropElem", nil}, regCall{"dead", []Val{{N: 0}, {N: 0}}},
+		regCall{"dead", []Val{{N: 1}, {N: 0}}})
+	return calls
+}
+
+// TestNativeAllocSegments checks the native handlers' array.new_data and
+// array.new_elem against the Go table, with the collector's flag read set
+// and clear -- the results, and the traps' codes and offsets past a segment
+// -- and that they leave native code for no array but a trapping one.
+func TestNativeAllocSegments(t *testing.T) {
+	nativeOnly(t)
+	calls := nativeSegCalls()
+	marked, unmarked := matchNative(t, nativeSegSrc, calls)
+	if marked == 0 || unmarked != 0 {
+		t.Fatalf("the barrier routine stored %d times marking and %d not, want some and none", marked, unmarked)
+	}
+	inst := instantiateReg(t, nativeSegSrc)
+	native := 0
+	for _, c := range calls {
+		var err error
+		var exits []nativeExit
+		withNative(inst, true, func() {
+			exits = logNativeExits(inst, func() {
+				ext, _ := inst.Export(c.name)
+				_, err = Invoke(context.Background(), ext.Func, c.args)
+			})
+		})
+		want := 0
+		var tr *Trap
+		if errors.As(err, &tr) {
+			want = 1
+		} else if c.args != nil {
+			native++
+		}
+		var segs []nativeExit
+		for _, e := range exits {
+			if e.op == uint8(rExt) && e.x == uint8(xArrayNewSegment) {
+				segs = append(segs, e)
+			}
+		}
+		if n, all := exitsBut(segs, exitRoom); n != want {
+			t.Errorf("%s%v left native code %d times for its array, want %d:%s", c.name, c.args, n, want, all)
+		}
+	}
+	if native < 50 {
+		t.Fatalf("%d arrays made natively", native)
+	}
+}

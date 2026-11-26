@@ -640,14 +640,24 @@ always true; a bottom type is Go's. A null where an object is needed, an
 index out of bounds and a failed cast exit to Go, which traps.
 
 **Allocations.** `struct.new`, `struct.new_default`, `array.new`,
-`array.new_default` and `array.new_fixed` are native (native_gc.go, internal/nativegen's `*_alloc.go`): the object is
+`array.new_default`, `array.new_fixed`, `array.new_data` and
+`array.new_elem` are native (native_gc.go, internal/nativegen's `*_alloc.go`): the object is
 taken from a pool of the exec's table for the instance -- the JIT's pools
 and tables (gcpool.go), a struct type's entry its pool, an array type's a
 table of pools by the class of its block, its address the exec's
 `natPools` while the instance's code runs -- and its values are stored by
 the record's `natVals` (a reference plainly, as a new object's field is;
 `array.new`'s value in a loop), then the object goes into its slot and its
-pool's word is cleared, both by storeRef. An empty pool, no table yet,
+pool's word is cleared, both by storeRef. `array.new_data` and
+`array.new_elem` check the segment's range first -- the offset and the
+length's elements, in bytes for data, in references for elements --
+against its length, read through the instance's `datas` and `elems` (0
+once dropped), and exit to the Go handler past it, which traps with the
+Go table's code and offset; then they take the array as the others do
+and copy the segment's bytes or references into it, eight bytes at a time
+-- a reference plainly, as a new object's field, the segment holding it
+meanwhile -- before it goes into its slot; past the pools the stub makes
+the array and fills it from the segment. An empty pool, no table yet,
 and an array past the pools' 480 bytes of elements go to the allocation
 stub, `wasmNativeAlloc` (native_<arch>.s), a frame as
 `wasmNativeStoreRef`'s that calls `nativeAllocGo`: it fills the pool, or
@@ -768,12 +778,11 @@ was padded to whole pages.
 
 ## Open work
 
-1. array.new_data and array.new_elem natively, as the JIT makes them.
-2. Forms with a 32-bit immediate in the word after the instruction for the
+1. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i
    1048576` in bytes.wat).
-3. Fused forms of a global's read, operation and write, once a profile
+2. Fused forms of a global's read, operation and write, once a profile
    with the native handlers shows they matter.
-4. The verifier always on, should its cost on first runs come down: it
+3. The verifier always on, should its cost on first runs come down: it
    adds 0.7 - 3% to a large program's first run today.

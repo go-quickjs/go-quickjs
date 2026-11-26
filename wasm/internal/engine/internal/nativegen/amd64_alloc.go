@@ -216,32 +216,7 @@ func (g *gen) alloc() {
 			retry, slow, big := a.NewLabel(), a.NewLabel(), a.NewLabel()
 			g.allocRecord()
 			a.Bind(retry)
-			// The class: the elements' bytes, 16 a unit, at most the
-			// pools' arrays'.
-			g.arrayLength()
-			a.LoadU32(R8, RCX, rd.GCNatShift)
-			a.Store(RDI, rd.CtxFn, RCX)
-			a.MovRR(RCX, R8)
-			a.ShiftCL(Shl, R9, true)
-			a.Load(RCX, RDI, rd.CtxFn)
-			a.OpImm(Cmp, R9, rd.ArrayBlockBytes, true)
-			a.Jcc(CondA, big)
-			a.OpImm(Add, R9, 15, true)
-			a.ShiftImm(Shr, R9, 4, true)
-			a.Load(R8, RDI, rd.CtxX)
-			a.Load(R8, R8, rd.XNatClasses)
-			a.LoadU8Idx(R9, R8, R9, 0)
-			a.Load(R8, RDI, rd.CtxX)
-			a.Load(R8, R8, rd.XNatPools)
-			a.Op(Test, R8, R8, true)
-			a.Jcc(CondE, slow)
-			a.LoadIdx(R8, R8, RDX, 8, -8)
-			a.Op(Test, R8, R8, true)
-			a.Jcc(CondE, slow)
-			a.LoadIdx(R8, R8, R9, 8, 0)
-			g.poolTake(slow)
-			g.arrayLength()
-			a.Store(RSI, rd.ArrayLen, R9)
+			g.arrayTake(slow, big)
 			switch x {
 			case rd.XArrayNewFixed:
 				// The elements' first, plus each value's offset.
@@ -258,6 +233,151 @@ func (g *gen) alloc() {
 			g.allocStub(3, retry)
 		})
 	}
+	g.hx(rd.XArrayNewSegment, "ArrayNewSegment", func() {
+		retry, slow, big, out := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+		g.allocRecord()
+		a.Bind(retry)
+		g.segRange(out)
+		g.arrayTake(slow, big)
+		g.segCopy()
+		g.putNew()
+		a.Bind(slow)
+		g.allocStub(2, retry)
+		a.Bind(big)
+		g.allocStub(3, retry)
+		// Past the segment: the Go handler traps.
+		a.Bind(out)
+		a.Load(RAX, RBX, 0)
+		a.Jmp(g.exit)
+	})
+}
+
+// arrayTake takes the record's array from the pool of its class into RSI,
+// R10 the address of its pool's word, and stores its length, which it
+// leaves in R9; it goes to slow where the pool is empty or the exec has no
+// table, and to big past the pools' 480 bytes of elements.
+func (g *gen) arrayTake(slow, big Label) {
+	a := g.a
+	// The class: the elements' bytes, 16 a unit, at most the
+	// pools' arrays'.
+	g.arrayLength()
+	a.LoadU32(R8, RCX, rd.GCNatShift)
+	a.Store(RDI, rd.CtxFn, RCX)
+	a.MovRR(RCX, R8)
+	a.ShiftCL(Shl, R9, true)
+	a.Load(RCX, RDI, rd.CtxFn)
+	a.OpImm(Cmp, R9, rd.ArrayBlockBytes, true)
+	a.Jcc(CondA, big)
+	a.OpImm(Add, R9, 15, true)
+	a.ShiftImm(Shr, R9, 4, true)
+	a.Load(R8, RDI, rd.CtxX)
+	a.Load(R8, R8, rd.XNatClasses)
+	a.LoadU8Idx(R9, R8, R9, 0)
+	a.Load(R8, RDI, rd.CtxX)
+	a.Load(R8, R8, rd.XNatPools)
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, slow)
+	a.LoadIdx(R8, R8, RDX, 8, -8)
+	a.Op(Test, R8, R8, true)
+	a.Jcc(CondE, slow)
+	a.LoadIdx(R8, R8, R9, 8, 0)
+	g.poolTake(slow)
+	g.arrayLength()
+	a.Store(RSI, rd.ArrayLen, R9)
+}
+
+// segEntry puts in R8 the address of the entry of array.new_data's or
+// array.new_elem's segment (the instance's datas or elems, an entry a
+// slice), and in RAX the offset, its first operand, zero-extended. R9 is
+// lost.
+func (g *gen) segEntry() {
+	a := g.a
+	elems, join := a.NewLabel(), a.NewLabel()
+	a.Load(R8, RCX, rd.GCOps)
+	a.LoadU32(R9, R8, 0)
+	a.LeaIdx(R9, R12, R9, 8, 0)
+	a.LoadU32(RAX, R9, 0)
+	a.Load(R8, RDI, rd.CtxInst)
+	a.LoadU8(R9, RCX, rd.GCData)
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondE, elems)
+	a.Load(R8, R8, rd.InstDatas)
+	a.Jmp(join)
+	a.Bind(elems)
+	a.Load(R8, R8, rd.InstElems)
+	a.Bind(join)
+	a.LoadU32(R9, RCX, rd.GCSeg)
+	a.LeaIdx(R9, R9, R9, 2, 0)
+	a.LeaIdx(R8, R8, R9, 8, 0)
+}
+
+// segRange goes to out where array.new_data's or array.new_elem's range
+// -- the offset and its length's elements, in bytes for data, in
+// references for elements -- passes its segment's length (0 once dropped).
+// RAX, R8, R9 and R10 are lost.
+func (g *gen) segRange(out Label) {
+	a := g.a
+	elems := a.NewLabel()
+	g.arrayLength()
+	a.MovRR(R10, R9)
+	g.segEntry()
+	a.LoadU8(R9, RCX, rd.GCData)
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondE, elems)
+	a.Store(RDI, rd.CtxFn, RCX)
+	a.LoadU32(RCX, RCX, rd.GCNatShift)
+	a.ShiftCL(Shl, R10, true)
+	a.Load(RCX, RDI, rd.CtxFn)
+	a.Bind(elems)
+	a.Op(Add, R10, RAX, true)
+	a.CmpMem(R10, R8, rd.SliceLen, true)
+	a.Jcc(CondA, out)
+}
+
+// segCopy copies the segment's elements from the offset into the elements
+// of the array in RSI, as many as R9 holds: eight bytes at a time, then
+// the bytes left -- a reference plainly, as a new object's field is, the
+// segment holding it meanwhile. R10 is kept, in the context's cd word
+// across the copy; RAX, RDX, R8 and R9 are lost.
+func (g *gen) segCopy() {
+	a := g.a
+	data, words, bytes, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Store(RDI, rd.CtxCd, R10)
+	a.MovRR(R10, R9)
+	g.segEntry()
+	a.Load(R8, R8, 0)
+	a.LoadU8(R9, RCX, rd.GCData)
+	a.Op(Test, R9, R9, false)
+	a.Jcc(CondNE, data)
+	a.ShiftImm(Shl, RAX, 4, true)
+	a.Bind(data)
+	a.Op(Add, R8, RAX, true)
+	a.Load(RDX, RSI, rd.ArrayElems)
+	a.MovRR(R9, R10)
+	a.Store(RDI, rd.CtxFn, RCX)
+	a.LoadU32(RCX, RCX, rd.GCNatShift)
+	a.ShiftCL(Shl, R9, true)
+	a.Load(RCX, RDI, rd.CtxFn)
+	a.Bind(words)
+	a.OpImm(Cmp, R9, 8, true)
+	a.Jcc(CondB, bytes)
+	a.Load(RAX, R8, 0)
+	a.Store(RDX, 0, RAX)
+	a.OpImm(Add, R8, 8, true)
+	a.OpImm(Add, RDX, 8, true)
+	a.OpImm(Sub, R9, 8, true)
+	a.Jmp(words)
+	a.Bind(bytes)
+	a.Op(Test, R9, R9, true)
+	a.Jcc(CondE, done)
+	a.LoadU8(RAX, R8, 0)
+	a.Store8(RDX, 0, RAX)
+	a.OpImm(Add, R8, 1, true)
+	a.OpImm(Add, RDX, 1, true)
+	a.OpImm(Sub, R9, 1, true)
+	a.Jmp(bytes)
+	a.Bind(done)
+	a.Load(R10, RDI, rd.CtxCd)
 }
 
 // storeElems stores array.new_fixed's values into the elements of the

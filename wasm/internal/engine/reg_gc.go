@@ -39,9 +39,11 @@ type regGC struct {
 	k      uint8
 	cell   int
 	read   func(c *Ref) Val
-	// seg is a segment; data says it is a data segment.
-	seg  uint32
-	data bool
+	// seg is a segment; data says it is a data segment; natSeg says the
+	// native handlers make the array from it (natTi, natShift).
+	seg    uint32
+	data   bool
+	natSeg bool
 	// h and nullable are a test's or a cast's target; m the module whose
 	// types h names.
 	h        module.HeapType
@@ -254,6 +256,9 @@ func (c *regCompiler) gcOp(op opcode.Opcode) bool {
 	case opcode.ArrayNewData, opcode.ArrayNewElem:
 		ti := c.r.u32()
 		g := regGC{rt: rttOf(m.Canonical[ti]), seg: c.r.u32(), data: op == opcode.ArrayNewData}
+		if _, shift, ok := natElem(m.Types[ti].Array.Elem.Type); ok {
+			g.natTi, g.natShift, g.natSeg = ti+1, shift, true
+		}
 		var h int
 		g.ops, g.opk, h = c.operands(2)
 		c.gcResult(xArrayNewSegment, module.Ref(module.HeapIndex(ti)), h, g)

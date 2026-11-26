@@ -178,6 +178,7 @@ const (
 	XArrayNew         = 116
 	XArrayNewDefault  = 117
 	XArrayNewFixed    = 118
+	XArrayNewSegment  = 119
 )
 
 // The native handlers' context (the engine's nativeCtx): the byte offset
@@ -284,8 +285,10 @@ const (
 	SiteWant    = 72 // regSite.want
 	SiteSize    = 80 // a regSite
 
-	InstTables = 40 // Instance.Tables
-	TableElems = 0  // Table.Elems
+	InstTables = 40  // Instance.Tables
+	InstDatas  = 152 // Instance.datas, a slice of the data segments
+	InstElems  = 176 // Instance.elems, a slice of the element segments
+	TableElems = 0   // Table.Elems
 
 	MoveFrom = 0  // regMove.from
 	MoveTo   = 4  // regMove.to
@@ -308,6 +311,8 @@ const (
 	GCNatTi    = 156 // regGC.natTi, a uint32
 	GCNatShift = 160 // regGC.natShift, a uint32
 	GCNatVals  = 168 // regGC.natVals, a slice of natVal
+	GCSeg      = 120 // regGC.seg, a uint32
+	GCData     = 124 // regGC.data, a bool
 
 	NatFrom = 0  // natVal.from
 	NatTo   = 4  // natVal.to
