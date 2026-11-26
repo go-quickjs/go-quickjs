@@ -417,7 +417,16 @@ func jitPrivateCases(c *propCache, write bool) ([]propCache, Atom, bool) {
 // stringPropertyOf).
 func (f *jitRegFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 	rpc, key, cache, _, method, _, ok := f.propertyAt(pc)
-	if !ok || !method || cache == nil || f.fb.e == nil {
+	if !ok || !method || cache == nil {
+		return ssa.PropertySite{}, false
+	}
+	return f.stringPropertyAt(rpc, key, cache)
+}
+
+// stringPropertyAt is StringProperty's answer for the method's read of key
+// at register pc rpc, its cache cache, as accessorAt is Accessor's.
+func (f *jitRegFeedback) stringPropertyAt(rpc int, key Atom, cache *propCache) (ssa.PropertySite, bool) {
+	if f.fb.e == nil {
 		return ssa.PropertySite{}, false
 	}
 	return f.fb.stringPropertyOf(rpc, cache, key, false)
@@ -433,6 +442,13 @@ func (f *jitRegFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	if !ok || cache == nil || !write && !plain {
 		return ssa.AccessorSite{}, false
 	}
+	return f.accessorAt(rpc, key, cache, write)
+}
+
+// accessorAt is Accessor's answer for the read or write of key at register
+// pc rpc, its cache cache: of the register code, which a snapshot's
+// gather asks it by (gatherPropertyAsked).
+func (f *jitRegFeedback) accessorAt(rpc int, key Atom, cache *propCache, write bool) (ssa.AccessorSite, bool) {
 	a, callee, cl, ok := f.fb.accessorOf(rpc, cache, key, write)
 	if !ok || cl == nil {
 		return a, ok

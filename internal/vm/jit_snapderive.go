@@ -37,10 +37,11 @@ package vm
 // its derivations.
 type jitSnapData struct {
 	// gathered marks a snapshot whose gathers have run, which its
-	// derivations derive from; derived, the root's, a compile whose
+	// derivations derive from; bound, one whose gathers' answers are put at
+	// its program's PCs (bind); derived, the root's, a compile whose
 	// derivations have run; finished, the root's, one whose finishes have
 	// (finish).
-	gathered, derived, finished bool
+	gathered, bound, derived, finished bool
 	// nodes, the root's, are the snapshots whose gathers ran, the root's
 	// first, in the order they ran: what finish goes through, in an order
 	// of the program's, not a map's.
@@ -169,6 +170,30 @@ var (
 // have had.
 var jitSnapFinishers []func(s *jitSnapshot)
 
+// jitSnapBinders are the families' bindings of what their gathers took,
+// keyed by register pc, to the PCs of the program the function is lowered
+// to (s's p): the answers a gather asked of the heap at a register pc,
+// put into their tables at each PC lowered of it whose op asks them. Each
+// runs once a snapshot, once both are done -- on the goroutine where the
+// program is lowered there, on the worker otherwise -- before the
+// derivations (bind). A family appends its own in an init of its file.
+//
+// A gather reads the register code (s.rc), never the program (s.p, s.ops):
+// a callee's snapshot may be gathered before anything lowers it, its
+// lowering made on the worker.
+var jitSnapBinders []func(s *jitSnapshot)
+
+// bind runs the families' bindings of s, gathered, to its program, once.
+func (s *jitSnapshot) bind() {
+	if s.d.bound || !s.d.gathered || s.p == nil {
+		return
+	}
+	s.d.bound = true
+	for _, b := range jitSnapBinders {
+		b(s)
+	}
+}
+
 // gather runs the families' gathers of s, fb's snapshot.
 func (s *jitSnapshot) gather(fb *jitRegFeedback) {
 	s.d.gathered, s.d.asked, s.d.rt = true, fb.fb.r.jitTest.snapAsked, fb.fb.r
@@ -197,6 +222,7 @@ func (s *jitSnapshot) derive() {
 			// A callee asked nothing (nestReg).
 			continue
 		}
+		c.bind()
 		for _, d := range jitSnapDerivers {
 			d(c)
 		}

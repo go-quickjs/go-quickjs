@@ -101,6 +101,7 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	}
 	r.jitState().unavailable = false
 	compared, functions := 0, 0
+	unbound := map[jitSnapMethod]int{}
 	for _, cl := range cls {
 		c := r.regOf(cl)
 		if c == nil {
@@ -119,6 +120,22 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 		// The answers the worker derives, as it does before its build.
 		snap.s.derive()
 		functions++
+		// The register sites asked by register pc (gatherPropertyAsked)
+		// that no PC of the program asks the method at, by method: an ask
+		// the feedback's asking at the PCs had not made, which may have
+		// remembered a shape (primitiveSiteOf, accessorOf).
+		for _, s := range append([]*jitSnapshot{snap.s}, mapValues(snap.s.callees)...) {
+			for _, a := range s.d.prop.accessors {
+				if !a.bound {
+					unbound[snapAccessor]++
+				}
+			}
+			for _, a := range s.d.prop.strings {
+				if !a.bound {
+					unbound[snapStringProperty]++
+				}
+			}
+		}
 		answered := map[*jitSnapshot]int{}
 		for _, q := range order {
 			h := asked[q]
@@ -164,5 +181,6 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 	if functions == 0 || compared == 0 {
 		t.Fatalf("%d functions, %d answers compared", functions, compared)
 	}
-	t.Logf("%d functions, %d questions compared", functions, compared)
+	t.Logf("%d functions, %d questions compared; asked by register pc at no PC: %d Accessor, %d StringProperty",
+		functions, compared, unbound[snapAccessor], unbound[snapStringProperty])
 }

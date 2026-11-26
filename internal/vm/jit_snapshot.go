@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
@@ -69,7 +70,12 @@ type jitSnapshot struct {
 	sink *jitFeedback
 	// rf is the register feedback askReg asked, nil where none was: the
 	// gathers' and the runtime goroutine's, never read by a derivation.
+	// rc is its register code, which the gathers are keyed by, and p the
+	// program lowered of it, which the questions are asked by: bound once
+	// it is lowered (bindProgram), on the goroutine or on the worker.
 	rf *jitRegFeedback
+	rc *bytecode.RegCode
+	p  *ir.Program
 }
 
 // jitSnapLists are what a question may append to of a feedback's: what the

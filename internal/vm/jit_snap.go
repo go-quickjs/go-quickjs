@@ -92,20 +92,13 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 // the register feedback has of its op (jitSnapAsks), Generic among them;
 // those asked by a state's PC at the learned and recursive-call PCs.
 func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
-	s.codeLen = len(p.Code)
-	s.rf = fb
-	s.ops = make([]ir.Op, len(p.Code))
-	for pc := range p.Code {
-		op := p.Code[pc].Op
-		s.ops[pc] = op
-		for asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC; asks != 0; asks &= asks - 1 {
-			s.room[bits.TrailingZeros64(asks)]++
-		}
-	}
+	s.rf, s.rc = fb, fb.rc
+	s.bindProgram(p)
 	s.askOnceReg(fb)
 	// The methods the worker derives are gathered, not asked
-	// (jit_snapderive.go).
+	// (jit_snapderive.go): of the register code, not of p.
 	s.gather(fb)
+	s.bind()
 	for pc, op := range s.ops {
 		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC &^ jitSnapDerived
 		for asks != 0 {
@@ -118,6 +111,21 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	}
 	fb.snapshotStatePCs(s)
 	s.askLeafCalls(fb)
+}
+
+// bindProgram makes p, the function's register code lowered, the program
+// s answers the questions of: its ops by PC (ops), and the room each
+// method's table is made at its first answer (room).
+func (s *jitSnapshot) bindProgram(p *ir.Program) {
+	s.p, s.codeLen = p, len(p.Code)
+	s.ops = make([]ir.Op, len(p.Code))
+	for pc := range p.Code {
+		op := p.Code[pc].Op
+		s.ops[pc] = op
+		for asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC; asks != 0; asks &= asks - 1 {
+			s.room[bits.TrailingZeros64(asks)]++
+		}
+	}
 }
 
 // askLeafCalls asks fb, at each PC its Leaf answered, the questions of the
