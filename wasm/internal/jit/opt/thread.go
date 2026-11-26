@@ -312,164 +312,199 @@ func branchTarget(h *Block, c *Value) *Block {
 // forwarded, and the phis made that use it tried again.
 func repairPhis(f *Func, h *Block, ends *threadEnds) {
 	ws := f.ws
-	// vars is each of h's phis' variable, by value ID, or -1.
+	// vars is each of h's phis' variable, by value ID, or -1: the
+	// workspace's are all -1 between calls, h's phis' set back when it
+	// returns, so that a call costs h's phis, not every value.
 	n0 := f.nextValue
-	vars := grown(ws.vars, int(n0))
-	for i := range vars {
-		vars[i] = -1
-	}
-	ws.vars = vars
-	for i, phi := range h.Phis {
-		vars[phi.ID] = int32(i)
-	}
-	varOf := func(v *Value) (int, bool) {
-		if v == nil || v.ID >= n0 || vars[v.ID] < 0 {
-			return 0, false
+	if n := len(ws.vars); n < int(n0) {
+		ws.vars = append(ws.vars, make([]int32, int(n0)-n)...)
+		for i := n; i < len(ws.vars); i++ {
+			ws.vars[i] = -1
 		}
-		return int(vars[v.ID]), true
+	}
+	r := repair{f: f, h: h, ends: ends, n0: n0, vars: ws.vars, start: &ws.start, made: ws.made[:0]}
+	for i, phi := range h.Phis {
+		r.vars[phi.ID] = int32(i)
 	}
 	// start is each variable's value at a block's start, by variable and
 	// block ID.
-	start := &ws.start
-	start.reset(len(h.Phis), int(f.nextBlock))
-	// The phis made, from ID n0 on: each one's variable, the phis made
-	// that use it, and the value it is forwarded to once found trivial.
-	made := ws.made[:0]
+	r.start.reset(len(h.Phis), int(f.nextBlock))
+	phis := h.Phis
 	defer func() {
-		clear(made)
-		ws.made = made[:0]
+		clear(r.made)
+		ws.made = r.made[:0]
+		for _, phi := range phis {
+			r.vars[phi.ID] = -1
+		}
 	}()
-	info := func(v *Value) *madePhi { return &made[v.ID-n0] }
-	isMade := func(v *Value) bool { return v.ID >= n0 }
-	forwarded := 0
-	follow := func(v *Value) *Value {
-		for isMade(v) && info(v).fwd != nil {
-			v = info(v).fwd
-		}
-		return v
-	}
-	var tryRemove func(v *Value) *Value
-	tryRemove = func(v *Value) *Value {
-		var same *Value
-		for _, a := range v.Args {
-			a = follow(a)
-			if a == v || a == same {
-				continue
-			}
-			if same != nil {
-				return v
-			}
-			same = a
-		}
-		if same == nil {
-			return v
-		}
-		vi := info(v)
-		vi.fwd = same
-		forwarded++
-		if start.at(vi.v, v.Block) == v {
-			start.set(vi.v, v.Block, same)
-		}
-		for _, u := range vi.users {
-			if info(u).fwd == nil && u != v {
-				tryRemove(u)
-			}
-		}
-		return same
-	}
-	var atStart func(i int, b *Block) *Value
-	atEnd := func(i int, b, s *Block) *Value {
-		e, ok := ends.get(b)
-		if !ok || e.to != s {
-			return atStart(i, b)
-		}
-		if j, ok := varOf(e.vals[i]); ok {
-			return atStart(j, b)
-		}
-		return e.vals[i]
-	}
-	atStart = func(i int, b *Block) *Value {
-		if b == h {
-			return h.Phis[i]
-		}
-		if v := start.at(i, b); v != nil {
-			return follow(v)
-		}
-		switch len(b.Preds) {
-		case 0:
-			panic("wasm opt: a phi threaded past the entry")
-		case 1:
-			v := atEnd(i, b.Preds[0], b)
-			start.set(i, b, v)
-			return v
-		}
-		v := f.newValue(b, OpPhi, h.Phis[i].Type)
-		start.set(i, b, v)
-		made = append(made, madePhi{v: i})
-		v.Args = ws.vals.take(len(b.Preds))
-		for _, p := range b.Preds {
-			a := atEnd(i, p, b)
-			v.Args = append(v.Args, a)
-			if isMade(a) {
-				ai := info(a)
-				ai.users = appendA(&ws.vals, ai.users, v)
-			}
-		}
-		return tryRemove(v)
-	}
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
-			if isMade(v) {
+			if r.isMade(v) {
 				continue
 			}
 			for j, a := range v.Args {
-				if i, ok := varOf(a); ok {
-					v.Args[j] = atEnd(i, b.Preds[j], b)
+				if i, ok := r.varOf(a); ok {
+					v.Args[j] = r.atEnd(i, b.Preds[j], b)
 				}
 			}
 		}
 		for _, v := range b.Values {
 			for j, a := range v.Args {
-				if i, ok := varOf(a); ok {
-					v.Args[j] = atStart(i, b)
+				if i, ok := r.varOf(a); ok {
+					v.Args[j] = r.atStart(i, b)
 				}
 			}
 		}
-		if i, ok := varOf(b.Control); ok {
-			b.Control = atStart(i, b)
+		if i, ok := r.varOf(b.Control); ok {
+			b.Control = r.atStart(i, b)
 		}
 		for j, a := range b.Results {
-			if i, ok := varOf(a); ok {
-				b.Results[j] = atStart(i, b)
+			if i, ok := r.varOf(a); ok {
+				b.Results[j] = r.atStart(i, b)
 			}
 		}
 	}
-	if forwarded == 0 {
+	if r.forwarded == 0 {
 		return
 	}
 	// The uses of the phis made that turned out trivial take the values
 	// they are, and the phis go.
 	for _, b := range f.Blocks {
 		if len(b.Phis) > 0 {
-			b.Phis = slices.DeleteFunc(b.Phis, func(v *Value) bool { return isMade(v) && info(v).fwd != nil })
+			b.Phis = slices.DeleteFunc(b.Phis, func(v *Value) bool { return r.isMade(v) && r.info(v).fwd != nil })
 		}
 		for _, v := range b.Phis {
 			for j, a := range v.Args {
-				v.Args[j] = follow(a)
+				v.Args[j] = r.follow(a)
 			}
 		}
 		for _, v := range b.Values {
 			for j, a := range v.Args {
-				v.Args[j] = follow(a)
+				v.Args[j] = r.follow(a)
 			}
 		}
 		if b.Control != nil {
-			b.Control = follow(b.Control)
+			b.Control = r.follow(b.Control)
 		}
 		for j, a := range b.Results {
-			b.Results[j] = follow(a)
+			b.Results[j] = r.follow(a)
 		}
 	}
+}
+
+// repair is repairPhis' state: the function, h, its threaded edges, the
+// first ID of the phis it makes (n0), h's phis' variables by value ID
+// (vars), each variable's value at blocks' starts, the phis made -- each
+// one's variable, the phis made that use it, and the value it is forwarded
+// to once found trivial -- and how many were.
+type repair struct {
+	f         *Func
+	h         *Block
+	ends      *threadEnds
+	n0        int32
+	vars      []int32
+	start     *startTable
+	made      []madePhi
+	forwarded int
+}
+
+// varOf is the variable v is, if it is one of h's phis.
+func (r *repair) varOf(v *Value) (int, bool) {
+	if v == nil || v.ID >= r.n0 || r.vars[v.ID] < 0 {
+		return 0, false
+	}
+	return int(r.vars[v.ID]), true
+}
+
+// isMade reports whether v is a phi repairPhis made.
+func (r *repair) isMade(v *Value) bool { return v.ID >= r.n0 }
+
+// info is what is known of phi v, which repairPhis made.
+func (r *repair) info(v *Value) *madePhi { return &r.made[v.ID-r.n0] }
+
+// follow is v, or the value it is forwarded to where it is a phi made
+// that turned out trivial.
+func (r *repair) follow(v *Value) *Value {
+	for r.isMade(v) && r.info(v).fwd != nil {
+		v = r.info(v).fwd
+	}
+	return v
+}
+
+// tryRemove forwards phi v, which repairPhis made, to the value it is if
+// it is trivial, and tries again the phis made that use it.
+func (r *repair) tryRemove(v *Value) *Value {
+	var same *Value
+	for _, a := range v.Args {
+		a = r.follow(a)
+		if a == v || a == same {
+			continue
+		}
+		if same != nil {
+			return v
+		}
+		same = a
+	}
+	if same == nil {
+		return v
+	}
+	vi := r.info(v)
+	vi.fwd = same
+	r.forwarded++
+	if r.start.at(vi.v, v.Block) == v {
+		r.start.set(vi.v, v.Block, same)
+	}
+	for _, u := range vi.users {
+		if r.info(u).fwd == nil && u != v {
+			r.tryRemove(u)
+		}
+	}
+	return same
+}
+
+// atEnd is variable i's value at the end of b, on its edge to s.
+func (r *repair) atEnd(i int, b, s *Block) *Value {
+	e, ok := r.ends.get(b)
+	if !ok || e.to != s {
+		return r.atStart(i, b)
+	}
+	if j, ok := r.varOf(e.vals[i]); ok {
+		return r.atStart(j, b)
+	}
+	return e.vals[i]
+}
+
+// atStart is variable i's value at b's start.
+func (r *repair) atStart(i int, b *Block) *Value {
+	h := r.h
+	if b == h {
+		return h.Phis[i]
+	}
+	if v := r.start.at(i, b); v != nil {
+		return r.follow(v)
+	}
+	switch len(b.Preds) {
+	case 0:
+		panic("wasm opt: a phi threaded past the entry")
+	case 1:
+		v := r.atEnd(i, b.Preds[0], b)
+		r.start.set(i, b, v)
+		return v
+	}
+	ws := r.f.ws
+	v := r.f.newValue(b, OpPhi, h.Phis[i].Type)
+	r.start.set(i, b, v)
+	r.made = append(r.made, madePhi{v: i})
+	v.Args = ws.vals.take(len(b.Preds))
+	for _, p := range b.Preds {
+		a := r.atEnd(i, p, b)
+		v.Args = append(v.Args, a)
+		if r.isMade(a) {
+			ai := r.info(a)
+			ai.users = appendA(&ws.vals, ai.users, v)
+		}
+	}
+	return r.tryRemove(v)
 }
 
 // madePhi is what repairPhis knows of a phi it made: its variable, the
