@@ -74,7 +74,7 @@ func orderBy(f *Func, deeper bool) []int32 {
 		t := &stack[len(stack)-1]
 		if t.i == 0 {
 			post = appendA(&ws.blks, post, t.b)
-			stack = stack[:len(stack)-1]
+			stack[len(stack)-1].b, stack = nil, stack[:len(stack)-1]
 			continue
 		}
 		t.i--
@@ -90,7 +90,7 @@ func orderBy(f *Func, deeper bool) []int32 {
 			stack = append(stack, orderFrame{s, len(s.Succs)})
 		}
 	}
-	clear(stack[:cap(stack)])
+	// Each frame was cleared as it was popped.
 	ws.frames = stack[:0]
 	slices.Reverse(post)
 	f.Blocks = post
@@ -536,7 +536,7 @@ func (s *sccs) reset(f *Func) {
 	s.low = grown(s.low, n)
 	s.onStack = grown(s.onStack, n)
 	clear(s.onStack)
-	clear(s.stack[:cap(s.stack)])
+	// Each entry was cleared as it was popped.
 	s.stack = s.stack[:0]
 	s.cutAny, s.gen, s.sccGen = false, 0, 0
 }
@@ -583,7 +583,7 @@ func (s *sccs) components(blocks []*Block) [][]*Block {
 			}
 			// b's walk is done: it closes its component if it is its
 			// root, and its caller takes its low.
-			frames = frames[:len(frames)-1]
+			frames[len(frames)-1].b, frames = nil, frames[:len(frames)-1]
 			if s.low[b.ID] == s.index[b.ID] {
 				out = s.close(b, out)
 			}
@@ -593,7 +593,7 @@ func (s *sccs) components(blocks []*Block) [][]*Block {
 			}
 		}
 	}
-	clear(frames[:cap(frames)])
+	// Each frame was cleared as it was popped.
 	s.frames = frames[:0]
 	return out
 }
@@ -611,7 +611,7 @@ func (s *sccs) open(b *Block) {
 func (s *sccs) close(b *Block, out [][]*Block) [][]*Block {
 	ws := s.ws
 	if w := s.stack[len(s.stack)-1]; w == b {
-		s.stack = s.stack[:len(s.stack)-1]
+		s.stack[len(s.stack)-1], s.stack = nil, s.stack[:len(s.stack)-1]
 		s.onStack[b.ID] = false
 		if k := slices.Index(b.Succs, b); k < 0 || !s.in(b, k) {
 			return out
@@ -621,7 +621,7 @@ func (s *sccs) close(b *Block, out [][]*Block) [][]*Block {
 	scc := ws.blks.take(0)
 	for {
 		w := s.stack[len(s.stack)-1]
-		s.stack = s.stack[:len(s.stack)-1]
+		s.stack[len(s.stack)-1], s.stack = nil, s.stack[:len(s.stack)-1]
 		s.onStack[w.ID] = false
 		scc = appendA(&ws.blks, scc, w)
 		if w == b {
