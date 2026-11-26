@@ -116,6 +116,8 @@ func TestJITSnapshotAnswersAsAsked(t *testing.T) {
 		order = order[:0]
 		r.jitRegSeenFeedback(cl, c)
 		snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
+		// The answers the worker derives, as it does before its build.
+		snap.s.derive()
 		functions++
 		answered := map[*jitSnapshot]int{}
 		for _, q := range order {

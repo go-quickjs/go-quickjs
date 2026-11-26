@@ -613,6 +613,7 @@ func (a *jitSnapAnswers) pools(pools map[uintptr]bool) {
 // jitFeedback's of the same names.
 
 func (q *jitRegSnapshot) BigInt(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.BigInt.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -626,6 +627,7 @@ func (q *jitRegSnapshot) BigInt(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) BigIntWide(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.BigIntWide.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -639,6 +641,7 @@ func (q *jitRegSnapshot) BigIntWide(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) BigIntFailed(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.BigIntFailed.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -652,6 +655,7 @@ func (q *jitRegSnapshot) BigIntFailed(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) InlineExit(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.InlineExit.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -665,6 +669,7 @@ func (q *jitRegSnapshot) InlineExit(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) KeepLimit() (r0 int) {
+	q.s.ready()
 	e := q.s.a.KeepLimit.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -678,6 +683,7 @@ func (q *jitRegSnapshot) KeepLimit() (r0 int) {
 }
 
 func (q *jitRegSnapshot) CreatePool(pc int, fn uintptr) (r0 uintptr) {
+	q.s.ready()
 	e := q.s.a.CreatePool.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -691,6 +697,7 @@ func (q *jitRegSnapshot) CreatePool(pc int, fn uintptr) (r0 uintptr) {
 }
 
 func (q *jitRegSnapshot) StringRead(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.StringRead.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -704,6 +711,7 @@ func (q *jitRegSnapshot) StringRead(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) TypedRead(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.TypedRead.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -717,6 +725,7 @@ func (q *jitRegSnapshot) TypedRead(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) TypedBigRead(pc int) (r0 bool, r1 bool) {
+	q.s.ready()
 	e := q.s.a.TypedBigRead.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -731,6 +740,7 @@ func (q *jitRegSnapshot) TypedBigRead(pc int) (r0 bool, r1 bool) {
 }
 
 func (q *jitRegSnapshot) KeyedRead(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.KeyedRead.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -744,6 +754,7 @@ func (q *jitRegSnapshot) KeyedRead(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) KeyedWrite(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.KeyedWrite.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -757,6 +768,7 @@ func (q *jitRegSnapshot) KeyedWrite(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) UpvalueTyped(pc int) (r0 uint8, r1 bool) {
+	q.s.ready()
 	e := q.s.a.UpvalueTyped.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -771,6 +783,7 @@ func (q *jitRegSnapshot) UpvalueTyped(pc int) (r0 uint8, r1 bool) {
 }
 
 func (q *jitRegSnapshot) KeyedStore(pc int) (r0 ssa.KeyedStoreSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.KeyedStore.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -785,6 +798,7 @@ func (q *jitRegSnapshot) KeyedStore(pc int) (r0 ssa.KeyedStoreSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Property(pc int) (r0 ssa.PropertySite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Property.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -799,6 +813,7 @@ func (q *jitRegSnapshot) Property(pc int) (r0 ssa.PropertySite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) StringProperty(pc int) (r0 ssa.PropertySite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.StringProperty.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -813,6 +828,7 @@ func (q *jitRegSnapshot) StringProperty(pc int) (r0 ssa.PropertySite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Accessor(pc int) (r0 ssa.AccessorSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Accessor.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -827,6 +843,7 @@ func (q *jitRegSnapshot) Accessor(pc int) (r0 ssa.AccessorSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Global(pc int) (r0 ssa.GlobalSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Global.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -841,6 +858,7 @@ func (q *jitRegSnapshot) Global(pc int) (r0 ssa.GlobalSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) CallShape(pc int) (r0 int, r1 bool, r2 bool) {
+	q.s.ready()
 	e := q.s.a.CallShape.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -856,6 +874,7 @@ func (q *jitRegSnapshot) CallShape(pc int) (r0 int, r1 bool, r2 bool) {
 }
 
 func (q *jitRegSnapshot) CalledClosure(pc int) (r0 ssa.MadeCallback, r1 ssa.InlineSite, r2 bool) {
+	q.s.ready()
 	e := q.s.a.CalledClosure.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -871,6 +890,7 @@ func (q *jitRegSnapshot) CalledClosure(pc int) (r0 ssa.MadeCallback, r1 ssa.Inli
 }
 
 func (q *jitRegSnapshot) StringCell(pc int) (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.StringCell.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -885,6 +905,7 @@ func (q *jitRegSnapshot) StringCell(pc int) (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) StringContent(pc int) (r0 string, r1 bool) {
+	q.s.ready()
 	e := q.s.a.StringContent.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -899,6 +920,7 @@ func (q *jitRegSnapshot) StringContent(pc int) (r0 string, r1 bool) {
 }
 
 func (q *jitRegSnapshot) BigIntCell(pc int) (r0 uintptr, r1 uint64, r2 int, r3 bool) {
+	q.s.ready()
 	e := q.s.a.BigIntCell.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -915,6 +937,7 @@ func (q *jitRegSnapshot) BigIntCell(pc int) (r0 uintptr, r1 uint64, r2 int, r3 b
 }
 
 func (q *jitRegSnapshot) Generic(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.Generic.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -928,6 +951,7 @@ func (q *jitRegSnapshot) Generic(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) Resumed(rpc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.Resumed.find(int64(rpc))
 	if e == nil || !e.answered {
 		q.absent(snapResumed, int64(rpc))
@@ -938,6 +962,7 @@ func (q *jitRegSnapshot) Resumed(rpc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) EntryGeneric(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.EntryGeneric.find(int64(pc))
 	if e == nil || !e.answered {
 		q.absent(snapEntryGeneric, int64(pc))
@@ -948,6 +973,7 @@ func (q *jitRegSnapshot) EntryGeneric(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) Inline(pc int) (r0 ssa.InlineSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Inline.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -962,6 +988,7 @@ func (q *jitRegSnapshot) Inline(pc int) (r0 ssa.InlineSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) GoCalls() (r0 bool) {
+	q.s.ready()
 	e := q.s.a.GoCalls.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -975,6 +1002,7 @@ func (q *jitRegSnapshot) GoCalls() (r0 bool) {
 }
 
 func (q *jitRegSnapshot) NativeCalls(pc int) (r0 []ssa.CallSite) {
+	q.s.ready()
 	e := q.s.a.NativeCalls.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -988,6 +1016,7 @@ func (q *jitRegSnapshot) NativeCalls(pc int) (r0 []ssa.CallSite) {
 }
 
 func (q *jitRegSnapshot) BigIntSole() (r0 uint64, r1 bool) {
+	q.s.ready()
 	e := q.s.a.BigIntSole.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1002,6 +1031,7 @@ func (q *jitRegSnapshot) BigIntSole() (r0 uint64, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Leaf(pc int) (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Leaf.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1016,6 +1046,7 @@ func (q *jitRegSnapshot) Leaf(pc int) (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) ViaLeaf(pc int) (r0 uintptr, r1 uintptr, r2 bool) {
+	q.s.ready()
 	e := q.s.a.ViaLeaf.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1031,6 +1062,7 @@ func (q *jitRegSnapshot) ViaLeaf(pc int) (r0 uintptr, r1 uintptr, r2 bool) {
 }
 
 func (q *jitRegSnapshot) CharCode(pc int) (r0 bool) {
+	q.s.ready()
 	e := q.s.a.CharCode.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1044,6 +1076,7 @@ func (q *jitRegSnapshot) CharCode(pc int) (r0 bool) {
 }
 
 func (q *jitRegSnapshot) Substring(pc int) (r0 uintptr, r1 int, r2 bool) {
+	q.s.ready()
 	e := q.s.a.Substring.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1059,6 +1092,7 @@ func (q *jitRegSnapshot) Substring(pc int) (r0 uintptr, r1 int, r2 bool) {
 }
 
 func (q *jitRegSnapshot) FromCharCode(pc int) (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.FromCharCode.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1073,6 +1107,7 @@ func (q *jitRegSnapshot) FromCharCode(pc int) (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Intrinsic(pc int) (r0 ssa.Intrinsic, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Intrinsic.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1087,6 +1122,7 @@ func (q *jitRegSnapshot) Intrinsic(pc int) (r0 ssa.Intrinsic, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Literal(pc int) (r0 ssa.LiteralSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Literal.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1101,6 +1137,7 @@ func (q *jitRegSnapshot) Literal(pc int) (r0 ssa.LiteralSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Define(pc int) (r0 *ssa.PropertyAdd, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Define.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1115,6 +1152,7 @@ func (q *jitRegSnapshot) Define(pc int) (r0 *ssa.PropertyAdd, r1 bool) {
 }
 
 func (q *jitRegSnapshot) LeafKind(fn uintptr) (r0 ssa.LeafKind) {
+	q.s.ready()
 	e := q.s.a.LeafKind.find(int64(fn))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1128,6 +1166,7 @@ func (q *jitRegSnapshot) LeafKind(fn uintptr) (r0 ssa.LeafKind) {
 }
 
 func (q *jitRegSnapshot) ArrayProtos() (r0 [2]ssa.Holder, r1 bool) {
+	q.s.ready()
 	e := q.s.a.ArrayProtos.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1142,6 +1181,7 @@ func (q *jitRegSnapshot) ArrayProtos() (r0 [2]ssa.Holder, r1 bool) {
 }
 
 func (q *jitRegSnapshot) GenNext() (r0 uintptr) {
+	q.s.ready()
 	e := q.s.a.GenNext.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1155,6 +1195,7 @@ func (q *jitRegSnapshot) GenNext() (r0 uintptr) {
 }
 
 func (q *jitRegSnapshot) GenSteps(pc int) (r0 []ssa.GenStep) {
+	q.s.ready()
 	e := q.s.a.GenSteps.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1169,6 +1210,7 @@ func (q *jitRegSnapshot) GenSteps(pc int) (r0 []ssa.GenStep) {
 }
 
 func (q *jitRegSnapshot) HasCache() (r0 uintptr) {
+	q.s.ready()
 	e := q.s.a.HasCache.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1182,6 +1224,7 @@ func (q *jitRegSnapshot) HasCache() (r0 uintptr) {
 }
 
 func (q *jitRegSnapshot) KeyAtoms() (r0 uintptr, r1 uintptr) {
+	q.s.ready()
 	e := q.s.a.KeyAtoms.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1196,6 +1239,7 @@ func (q *jitRegSnapshot) KeyAtoms() (r0 uintptr, r1 uintptr) {
 }
 
 func (q *jitRegSnapshot) MapNexts() (r0 [2]uintptr) {
+	q.s.ready()
 	e := q.s.a.MapNexts.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1209,6 +1253,7 @@ func (q *jitRegSnapshot) MapNexts() (r0 [2]uintptr) {
 }
 
 func (q *jitRegSnapshot) TypeofCells() (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.TypeofCells.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1223,6 +1268,7 @@ func (q *jitRegSnapshot) TypeofCells() (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) WalkedCloseCell() (r0 uintptr) {
+	q.s.ready()
 	e := q.s.a.WalkedCloseCell.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1236,6 +1282,7 @@ func (q *jitRegSnapshot) WalkedCloseCell() (r0 uintptr) {
 }
 
 func (q *jitRegSnapshot) TypedKind(pc int) (r0 ssa.TypedSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.TypedKind.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1250,6 +1297,7 @@ func (q *jitRegSnapshot) TypedKind(pc int) (r0 ssa.TypedSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Frequency(pc int) (r0 float64, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Frequency.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1264,6 +1312,7 @@ func (q *jitRegSnapshot) Frequency(pc int) (r0 float64, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Operands(pc int) (r0 ssa.Operands, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Operands.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1278,6 +1327,7 @@ func (q *jitRegSnapshot) Operands(pc int) (r0 ssa.Operands, r1 bool) {
 }
 
 func (q *jitRegSnapshot) ForEach(pc int) (r0 ssa.ForEachSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.ForEach.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1292,6 +1342,7 @@ func (q *jitRegSnapshot) ForEach(pc int) (r0 ssa.ForEachSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) InstanceOf(pc int) (r0 ssa.InstanceOfSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.InstanceOf.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1306,6 +1357,7 @@ func (q *jitRegSnapshot) InstanceOf(pc int) (r0 ssa.InstanceOfSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) IndexOf(pc int) (r0 uintptr, r1 int, r2 bool) {
+	q.s.ready()
 	e := q.s.a.IndexOf.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1321,6 +1373,7 @@ func (q *jitRegSnapshot) IndexOf(pc int) (r0 uintptr, r1 int, r2 bool) {
 }
 
 func (q *jitRegSnapshot) ParseInt(pc int) (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.ParseInt.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1335,6 +1388,7 @@ func (q *jitRegSnapshot) ParseInt(pc int) (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) BigString(pc int) (r0 uintptr, r1 bool) {
+	q.s.ready()
 	e := q.s.a.BigString.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1349,6 +1403,7 @@ func (q *jitRegSnapshot) BigString(pc int) (r0 uintptr, r1 bool) {
 }
 
 func (q *jitRegSnapshot) Closure(pc int) (r0 ssa.ClosureSite, r1 bool) {
+	q.s.ready()
 	e := q.s.a.Closure.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1363,6 +1418,7 @@ func (q *jitRegSnapshot) Closure(pc int) (r0 ssa.ClosureSite, r1 bool) {
 }
 
 func (q *jitRegSnapshot) CellsPool() (r0 uintptr, r1 []int32, r2 bool) {
+	q.s.ready()
 	e := q.s.a.CellsPool.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1379,6 +1435,7 @@ func (q *jitRegSnapshot) CellsPool() (r0 uintptr, r1 []int32, r2 bool) {
 }
 
 func (q *jitRegSnapshot) PureBody() (r0 bool) {
+	q.s.ready()
 	e := q.s.a.PureBody.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1392,6 +1449,7 @@ func (q *jitRegSnapshot) PureBody() (r0 bool) {
 }
 
 func (q *jitRegSnapshot) ExecReuse(pc int, fn uintptr) (r0 uint32) {
+	q.s.ready()
 	e := q.s.a.ExecReuse.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1405,6 +1463,7 @@ func (q *jitRegSnapshot) ExecReuse(pc int, fn uintptr) (r0 uint32) {
 }
 
 func (q *jitRegSnapshot) Heap() (r0 uintptr) {
+	q.s.ready()
 	e := q.s.a.Heap.find(0)
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1418,6 +1477,7 @@ func (q *jitRegSnapshot) Heap() (r0 uintptr) {
 }
 
 func (q *jitRegSnapshot) RawMath(pc int) (r0 ssa.Intrinsic, r1 bool) {
+	q.s.ready()
 	e := q.s.a.RawMath.find(int64(pc))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1432,6 +1492,7 @@ func (q *jitRegSnapshot) RawMath(pc int) (r0 ssa.Intrinsic, r1 bool) {
 }
 
 func (q *jitRegSnapshot) VirtualRoot(pool uintptr) (r0 uintptr, r1 uintptr, r2 bool) {
+	q.s.ready()
 	e := q.s.a.VirtualRoot.find(int64(pool))
 	if e != nil && e.eff != 0 {
 		q.s.used(e.eff)
@@ -1448,7 +1509,7 @@ func (q *jitRegSnapshot) VirtualRoot(pool uintptr) (r0 uintptr, r1 uintptr, r2 b
 
 // askOnceReg asks fb the questions of no argument.
 func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
-	{
+	if jitSnapDerived&(1<<snapKeepLimit) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.KeepLimit()
 		eff := s.end(fb.fb, before)
@@ -1457,7 +1518,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.KeepLimit.put(0, eff, true, jitSnapAnsKeepLimit{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapGoCalls) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.GoCalls()
 		eff := s.end(fb.fb, before)
@@ -1466,7 +1527,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.GoCalls.put(0, eff, true, jitSnapAnsGoCalls{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapBigIntSole) == 0 {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.BigIntSole()
 		eff := s.end(fb.fb, before)
@@ -1475,7 +1536,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.BigIntSole.put(0, eff, true, jitSnapAnsBigIntSole{r0, r1})
 	}
-	{
+	if jitSnapDerived&(1<<snapArrayProtos) == 0 {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.ArrayProtos()
 		eff := s.end(fb.fb, before)
@@ -1484,7 +1545,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.ArrayProtos.put(0, eff, true, jitSnapAnsArrayProtos{r0, r1})
 	}
-	{
+	if jitSnapDerived&(1<<snapGenNext) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.GenNext()
 		eff := s.end(fb.fb, before)
@@ -1493,7 +1554,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.GenNext.put(0, eff, true, jitSnapAnsGenNext{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapHasCache) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.HasCache()
 		eff := s.end(fb.fb, before)
@@ -1502,7 +1563,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.HasCache.put(0, eff, true, jitSnapAnsHasCache{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapKeyAtoms) == 0 {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.KeyAtoms()
 		eff := s.end(fb.fb, before)
@@ -1511,7 +1572,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.KeyAtoms.put(0, eff, true, jitSnapAnsKeyAtoms{r0, r1})
 	}
-	{
+	if jitSnapDerived&(1<<snapMapNexts) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.MapNexts()
 		eff := s.end(fb.fb, before)
@@ -1520,7 +1581,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.MapNexts.put(0, eff, true, jitSnapAnsMapNexts{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapTypeofCells) == 0 {
 		before := s.begin(fb.fb)
 		r0, r1 := fb.TypeofCells()
 		eff := s.end(fb.fb, before)
@@ -1529,7 +1590,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.TypeofCells.put(0, eff, true, jitSnapAnsTypeofCells{r0, r1})
 	}
-	{
+	if jitSnapDerived&(1<<snapWalkedCloseCell) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.WalkedCloseCell()
 		eff := s.end(fb.fb, before)
@@ -1538,7 +1599,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.WalkedCloseCell.put(0, eff, true, jitSnapAnsWalkedCloseCell{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapCellsPool) == 0 {
 		before := s.begin(fb.fb)
 		r0, r1, r2 := fb.CellsPool()
 		eff := s.end(fb.fb, before)
@@ -1547,7 +1608,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.CellsPool.put(0, eff, true, jitSnapAnsCellsPool{r0, r1, r2})
 	}
-	{
+	if jitSnapDerived&(1<<snapPureBody) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.PureBody()
 		eff := s.end(fb.fb, before)
@@ -1556,7 +1617,7 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		}
 		s.a.PureBody.put(0, eff, true, jitSnapAnsPureBody{r0})
 	}
-	{
+	if jitSnapDerived&(1<<snapHeap) == 0 {
 		before := s.begin(fb.fb)
 		r0 := fb.Heap()
 		eff := s.end(fb.fb, before)

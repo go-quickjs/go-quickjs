@@ -259,7 +259,8 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			named = append(named, fmt.Sprintf("r%d %s", i, t))
 		}
 		fmt.Fprintf(b, "func (q *jitRegSnapshot) %s(%s) (%s) {\n", m.name, m.params, strings.Join(named, ", "))
-		fmt.Fprintf(b, "\te := q.s.a.%s.find(%s)\n", m.name, key)
+		// The answers derived first, where the worker has not (ready).
+		fmt.Fprintf(b, "\tq.s.ready()\n\te := q.s.a.%s.find(%s)\n", m.name, key)
 		if stateMethods[m.name] {
 			fmt.Fprintf(b, "\tif e == nil || !e.answered {\n\t\tq.absent(snap%s, %s)\n\t\treturn\n\t}\n", m.name, key)
 		} else {
@@ -283,7 +284,9 @@ func registerSnapshot(b *bytes.Buffer, ms, regs []method) error {
 			continue
 		}
 		rs := results(m)
-		fmt.Fprintf(b, "\t{\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", rs, m.name)
+		// Not a method the worker derives (jitSnapDerived), whose gather
+		// copies what its answer is made of instead.
+		fmt.Fprintf(b, "\tif jitSnapDerived&(1<<snap%s) == 0 {\n\t\tbefore := s.begin(fb.fb)\n\t\t%s := fb.%s()\n\t\teff := s.end(fb.fb, before)\n", m.name, rs, m.name)
 		fmt.Fprintf(b, "\t\tif h := fb.fb.r.jitTest.snapAsked; h != nil {\n\t\t\th(s, snap%s, 0, true, []any{%s})\n\t\t}\n", m.name, rs)
 		fmt.Fprintf(b, "\t\ts.a.%s.put(0, eff, true, jitSnapAns%s{%s})\n\t}\n", m.name, m.name, rs)
 	}

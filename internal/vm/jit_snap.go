@@ -88,6 +88,7 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 // those asked by a state's PC at the learned and recursive-call PCs.
 func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 	s.codeLen = len(p.Code)
+	s.rf = fb
 	s.ops = make([]ir.Op, len(p.Code))
 	for pc := range p.Code {
 		op := p.Code[pc].Op
@@ -97,8 +98,11 @@ func (s *jitSnapshot) askReg(fb *jitRegFeedback, p *ir.Program) {
 		}
 	}
 	s.askOnceReg(fb)
+	// The methods the worker derives are gathered, not asked
+	// (jit_snapderive.go).
+	s.gather(fb)
 	for pc, op := range s.ops {
-		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC
+		asks := jitSnapAsks[op] & jitRegSnapMethods &^ jitRegSnapStatePC &^ jitSnapDerived
 		for asks != 0 {
 			m := jitSnapMethod(bits.TrailingZeros64(asks))
 			asks &= asks - 1

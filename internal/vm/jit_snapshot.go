@@ -62,6 +62,14 @@ type jitSnapshot struct {
 	// reg is the snapshot as register code's feedback answers, where it
 	// was asked of that (jit_snap.go).
 	reg *jitRegSnapshot
+	// d is what the gathers copied for the answers the worker derives,
+	// and sink the feedback their effects are appended to
+	// (jit_snapderive.go).
+	d    jitSnapData
+	sink *jitFeedback
+	// rf is the register feedback askReg asked, nil where none was: the
+	// gathers' and the runtime goroutine's, never read by a derivation.
+	rf *jitRegFeedback
 }
 
 // jitSnapLists are what a question may append to of a feedback's: what the

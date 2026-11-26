@@ -830,7 +830,19 @@ PCs and searched by halves, the questions put out of order sorted once the
 asking is done), and what a question appended to the feedback's lists, taken
 back, is a slice of the snapshot's own lists (`jitSnapshot`'s `gained`),
 found by its index in the answer; boxed in a map by question, an answer's
-keeping had cost about as much as its asking. A worker builds, optimizes
+keeping had cost about as much as its asking. A method may instead be
+derived on the worker (`jitSnapDerived`, `jit_snapderive.go`): the
+goroutine does not ask it at the PCs, but gathers once a snapshot -- the
+function's and each callee's -- a copy of what its answers are made of that
+the interpreter or the goroutine may change meanwhile (the caches, what the
+code learned), and the worker, before it builds, derives the answers from
+that copy into the same tables, their effects appended to a feedback of no
+runtime's (the snapshot's sink) so that they are put back at the install as
+the asked ones are. A derivation reads only the copy and what does not
+change once made -- the register code, the closure's names, the fields of a
+shape a cache remembered or of a shared one -- writes nothing of the
+runtime's, and is the feedback's own: the feedback on the spot derives from
+the live caches as the worker does from their copy. A worker builds, optimizes
 and compiles from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call

@@ -376,6 +376,9 @@ func (j *jitRegJob) workRecovering() {
 		j.missed = true
 		return
 	}
+	// The answers derived from what the snapshot gathered, here, off the
+	// runtime's goroutine (jit_snapderive.go).
+	j.snap.s.derive()
 	f, err := ssa.BuildIn(&j.w.SSA, j.p, j.snap)
 	if err != nil {
 		j.buildErr = err
