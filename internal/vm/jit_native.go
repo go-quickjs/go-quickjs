@@ -370,6 +370,7 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 // waits at for this compile, if any (jitRegFrameAt).
 func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool, frameAt int) (made *jitRegEntry) {
 	s := r.jit
+	defer s.jitHintsOnce()()
 	// ahead marks a compile asked for again once its program is lowered
 	// ahead (jitRegLowerAhead).
 	ahead := false

@@ -1122,6 +1122,10 @@ type jitState struct {
 	// waits for them (jit_lowerahead.go).
 	regAhead      map[jitAheadKey]*jitAheadJob
 	regAheadRoots map[jitKey]*jitAheadJob
+	// hintsTaken are the closures whose functions' hints the compiles under
+	// way, hintsDepth of them, have taken (jitHintsOnce).
+	hintsTaken []*closure
+	hintsDepth int
 	// aheadJobs counts the lowerings ahead handed to the workers,
 	// aheadTaken the programs taken of them.
 	aheadJobs, aheadTaken uint64

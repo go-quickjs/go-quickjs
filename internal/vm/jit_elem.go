@@ -93,6 +93,14 @@ func (r *Runtime) jitRegLowering(cl *closure, rc *bytecode.RegCode) (jitKey, *ji
 		return jitKey{}, nil, jitcompile.Hints{KeepParams: r.nodeQuirks && !cl.fn.Strict}
 	}
 	key := r.jitRegKeyOf(cl)
+	if s.hintsDepth != 0 {
+		// Taken once a compile (jitState's hintsTaken): nothing runs
+		// between its asks that marks the code.
+		if slices.Contains(s.hintsTaken, cl) {
+			return r.jitRegLowered(key, cl)
+		}
+		s.hintsTaken = append(s.hintsTaken, cl)
+	}
 	var marks *[]atomic.Uint32
 	if cl.reg != nil && cl.reg.rc == rc {
 		marks = cl.reg.stringAdds.Load()
@@ -116,10 +124,35 @@ func (r *Runtime) jitRegLowering(cl *closure, rc *bytecode.RegCode) (jitKey, *ji
 		// run whole, from the first lowering on.
 		jitLatticeHints(&s.regLearnedOf(key).regHints, rc, cl.jitRegOps)
 	}
-	l := s.regLowering(key)
+	return r.jitRegLowered(key, cl)
+}
+
+// jitRegLowered is jitRegLowering of the function whose key is key, cl's,
+// its hints taken already.
+func (r *Runtime) jitRegLowered(key jitKey, cl *closure) (jitKey, *jitLowering, jitcompile.Hints) {
+	l := r.jit.regLowering(key)
 	h := l.hints
 	h.KeepParams = r.nodeQuirks && !cl.fn.Strict
 	return key, l, h
+}
+
+// jitHintsOnce has the hints of each function a compile asks the lowering
+// of taken at its first ask alone (jitRegLowering), until the function it
+// returns is called, as the compile ends. Nothing runs between a compile's
+// asks that marks the code -- the interpreter's marks and its operand
+// lattice, which the hints are taken from, are written as the code runs --
+// so the asks after the first, each a scan of both, the register code's
+// length, would take nothing: the root's twice a compile in the
+// background, at its ask (jitRegLowerAhead) and at its lowering, and a
+// callee's at each of its calls the snapshot asks to inline.
+func (s *jitState) jitHintsOnce() func() {
+	s.hintsDepth++
+	return func() {
+		if s.hintsDepth--; s.hintsDepth == 0 {
+			clear(s.hintsTaken)
+			s.hintsTaken = s.hintsTaken[:0]
+		}
+	}
 }
 
 // regLowering is the register lowering of the function whose key is key,

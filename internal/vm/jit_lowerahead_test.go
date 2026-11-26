@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // A compile in the background takes its programs lowered ahead by a worker
@@ -274,5 +276,52 @@ func TestJITReplayLinksHeldAtHandOver(t *testing.T) {
 	defer mu.Unlock()
 	if replays == 0 || links == 0 {
 		t.Fatalf("%d replays, %d links in their keeps: want some of each", replays, links)
+	}
+}
+
+// A compile takes its function's hints at the ask where it goes on, not at
+// the ask that handed its lowering over (jitHintsOnce holds them within
+// one ask's compile alone): a mark the interpreter adds between the two
+// leaves the worker's program, lowered without it, untaken, and the
+// compile is made from the program the goroutine lowers with the mark,
+// as it would have been made with no lowering ahead.
+func TestJITLowerAheadHintsAtTheAskThatGoesOn(t *testing.T) {
+	t.Parallel()
+	r, cl, key := jitAheadForTest(t)
+	j := jitAheadPendingForTest(t, r, cl, key)
+	j.run()
+	if j.state.Load() != jitJobDone || j.items[0].got.progs[jitLowerSSA] == nil {
+		t.Fatalf("the worker lowered no program (state %d)", j.state.Load())
+	}
+	add := -1
+	for pc, w := range cl.reg.rc.Code {
+		switch w.Op() {
+		case bytecode.RAdd, bytecode.RAddI, bytecode.RAddI32, bytecode.RAddII32:
+			add = pc
+		}
+	}
+	if add < 0 {
+		t.Fatalf("no addition in loop's register code:\n%s", cl.reg.rc)
+	}
+	// Met a string meanwhile, as the interpreter's slow path marks it.
+	regStringAddOf(cl.reg, add)
+	for call := 1; r.jit.bgSubmitted == 0; call++ {
+		if call > 100 {
+			t.Fatalf("never handed over (%s)", jitBackgroundStateForTest(r, cl))
+		}
+		jitCallForTest(t, r, `loop(200)`, 19900)
+	}
+	l := r.jit.regLowered[key]
+	if l == nil || !slices.Contains(l.hints.StringAdds, int32(add)) {
+		t.Fatalf("hints %+v: want the addition at %d taken", l, add)
+	}
+	if p := l.progs[jitLowerSSA]; p == nil || p == j.items[0].got.progs[jitLowerSSA] || r.jit.aheadTaken != 0 {
+		t.Fatalf("taken %d: want the worker's program, lowered without the mark, left", r.jit.aheadTaken)
+	}
+	h := l.hints
+	h.KeepParams = r.nodeQuirks && !cl.fn.Strict
+	want, err := jitRegLowerWith(cl.reg.rc, cl.fn, jitLowerSSA, h)
+	if err != nil || !reflect.DeepEqual(l.progs[jitLowerSSA], want) {
+		t.Fatalf("the program compiled is not the goroutine's lowering with the mark (%v)", err)
 	}
 }
