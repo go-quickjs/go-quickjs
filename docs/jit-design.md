@@ -1096,7 +1096,30 @@ is under [The projection](#the-projection).
   whose Go code is at plain's offsets. What moves them is what the layout
   lock holds no position for: the closures after the JIT's files'
   closures, the groups of generics the JIT's code instantiates first, and
-  the read-only data.
+  the read-only data. With the JIT on, the three changes together against
+  806bfca5 had 10 micro-benchmarks 3% or more slower at both of
+  `placements -micro -jit -k 2`'s placements; at `-k 4`, base against
+  change at each placement in ns, none is 3% or more slower at all four:
+  `map_set_bigint` 111.41/117.34, 110.10/113.80, 112.19/117.12,
+  112.42/114.88; `string_trim` 54.83/61.30, 56.81/64.95, 67.96/59.72,
+  55.41/70.72; `array_every_upvalue` 7.75/8.20, 8.03/8.04, 7.82/8.21,
+  7.78/8.26; `regexp_property` 262.05/274.69, 268.68/276.43,
+  256.98/253.56, 250.21/263.25; `array_some` 9.24/9.71, 9.58/9.67,
+  9.01/9.65, 9.49/9.61; `map_set_int` 111.31/118.01, 110.45/117.55,
+  115.31/114.50, 120.35/114.56; `array_indexOf` 90.47/106.96,
+  89.50/99.09, 93.52/90.69, 111.10/90.36; `dataview_write` 52.48/57.20,
+  52.06/52.77, 53.30/53.28, 52.71/50.48; `json_stringify_strings`
+  30.27/30.67, 31.61/31.99, 30.78/31.28, 30.47/30.90; `asm_adler`
+  1.81/1.76, 1.66/1.66, 1.84/1.80, 1.86/1.82. All but `map_set_bigint`
+  are level at some placement: placement. `map_set_bigint`, more than 2%
+  slower at all four (+2.2 to +5.3%), is layout: the JIT does the same
+  work in both builds (`-jitreport`'s exits and the allocations the
+  same), and the Go code it runs is the same code moved to plain's
+  offsets modulo 4 KB, as goal 4 asks of the JIT's configurations --
+  `jsMap`'s `set`, `find`, `add`, `lookup` and `rebuild` each 0x780 on
+  (`set` 0x880 to 0x100, `find` 0xe60 to 0x6e0), where the plain build
+  has them; `trimString` 0x5c0 to 0xea0 (plain's 0xe80) and
+  `arrayIndexOf` 0x540 to 0xd40 (plain's) the same.
 
 ### Stage 1: tiering and background compiles
 
