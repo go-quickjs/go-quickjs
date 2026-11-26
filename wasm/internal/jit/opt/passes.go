@@ -27,6 +27,11 @@ func Optimize(f *Func, check func(pass string)) {
 	run("copyelim", PhaseCopyelim, copyelim)
 	run("gvn", PhaseGVN, gvn)
 	run("copyelim", PhaseCopyelim, copyelim)
+	run("chains", PhaseChains, func(f *Func) {
+		if forwardChains(f) {
+			copyelim(f)
+		}
+	})
 	run("licm", PhaseLICM, licm)
 	run("dce", PhaseDCE, dce)
 	run("bce", PhaseBCE, bce)

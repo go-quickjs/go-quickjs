@@ -1215,25 +1215,7 @@ func (bd *builder) memAux(mem uint32) uint64 {
 func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
 	keep := bd.mem[:0]
 	for _, k := range bd.mem {
-		// Accesses of other memories, accesses at one address value, the
-		// offsets apart, and accesses at constant addresses whose bytes
-		// are are disjoint.
-		disjoint := false
-		switch {
-		case k.mem != mx:
-			disjoint = true
-		case k.addr == addr:
-			disjoint = k.off+uint64(k.size) <= off || off+uint64(size) <= k.off
-		case k.addr.Op == OpConst && addr.Op == OpConst:
-			a, b := constAddr(k.addr), constAddr(addr)
-			// The sums are taken where neither carries: past that the
-			// access traps.
-			if a+k.off >= a && b+off >= b {
-				a, b = a+k.off, b+off
-				disjoint = a+uint64(k.size) <= b || b+uint64(size) <= a
-			}
-		}
-		if disjoint {
+		if disjointAccess(k.addr, k.mem, k.off, k.size, addr, mx, off, size) {
 			keep = append(keep, k)
 		}
 	}
@@ -1243,6 +1225,27 @@ func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
 	if full && mx&memShared == 0 {
 		bd.mem = append(bd.mem, memFact{addr: addr, mem: mx, off: off, size: size, typ: v.Type, val: v})
 	}
+}
+
+// disjointAccess reports whether two accesses' bytes are apart: those of
+// memories other than each other, those at one address value whose offsets
+// keep them apart, and those at constant addresses whose bytes are.
+func disjointAccess(addr1 *Value, mx1, off1 uint64, size1 uint8, addr2 *Value, mx2, off2 uint64, size2 uint8) bool {
+	switch {
+	case mx1 != mx2:
+		return true
+	case addr1 == addr2:
+		return off1+uint64(size1) <= off2 || off2+uint64(size2) <= off1
+	case addr1.Op == OpConst && addr2.Op == OpConst:
+		a, b := constAddr(addr1), constAddr(addr2)
+		// The sums are taken where neither carries: past that the access
+		// traps.
+		if a+off1 >= a && b+off2 >= b {
+			a, b = a+off1, b+off2
+			return a+uint64(size1) <= b || b+uint64(size2) <= a
+		}
+	}
+	return false
 }
 
 // constAddr is constant address c's value: an i32's zero-extended.

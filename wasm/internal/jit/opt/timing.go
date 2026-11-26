@@ -17,6 +17,7 @@ const (
 	PhaseGVN
 	PhaseFold
 	PhaseThread
+	PhaseChains
 	PhaseLICM
 	PhaseDCE
 	PhaseBCE
@@ -33,7 +34,7 @@ const (
 	NumPhases
 )
 
-var phaseNames = [NumPhases]string{"check", "build", "globals", "copyelim", "gvn", "fold", "thread", "licm", "dce", "bce", "split",
+var phaseNames = [NumPhases]string{"check", "build", "globals", "copyelim", "gvn", "fold", "thread", "chains", "licm", "dce", "bce", "split",
 	"loops", "describe", "liveness", "ranges", "webs", "scan", "slots", "emit", "encode"}
 
 // String is the phase's name.

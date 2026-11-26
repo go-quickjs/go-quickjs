@@ -214,6 +214,30 @@ micro/globals' kernel, whose i32, i64 and f64 globals each made a chain
 of a load, an operation and a store across the loop's turns, went from
 27.9 to 11.9 ms.
 
+`chains` (`chains.go`) carries what the builder knows of the globals and
+memory within a block from a block to each successor of which it is the
+one predecessor, along such chains: a read of a global or a load whose
+value the predecessor knew at its end -- what the last write or read of the
+global was, the last load of the same memory, address value, offset, width
+and type, or what a store of a whole value there wrote -- becomes that
+value. It runs after jump threading, which takes Go's code's edges out of
+its dispatch loop straight from a block to the one that goes on, so that a
+block reads back the stack pointer its predecessor wrote to a global and
+the words it stored into its frame. A call, an instruction Go runs, an
+atomic access and a fence forget it all, a store what it may overlap, as
+in the builder; a block of several predecessors, a loop's header among
+them, knows nothing, so nothing is carried around a loop or past a merge,
+and a load it takes away was checked as far by the access whose value it
+takes. A block carries 16 globals and 32 accesses at most. A function the
+values it keeps live leave too few spill slots is compiled again without
+it, as without `globals`. It changes 1,651 of the Go program's 3,011
+functions, its code level (1 KB smaller), and takes 4.0 µs a function
+(2.4% of a compile). The steady state, optimized, with the layout and the
+holes over calls (Register allocation) and against them alone (the mean
+over two placements of the medians of 3 processes in 3 rounds in turns),
+ms: interp 8.27 to 7.80, json 17.95 to 17.85, sort 85.75 to 85.30,
+regexp, gzip and the micro-benchmarks level, sha256 38.75 to 39.05.
+
 The phis a lookup made that turn out trivial -- every argument one value,
 or the phi itself -- are removed by the first pass.
 
@@ -321,6 +345,7 @@ inlines a call four deep.
 | `fold` | constant folding and identities (x+0, x*1, x&-1, x-x, x==x ...), the comparisons' inversion under eqz, an eqz of an eqz, or of its widening to an i64, made the comparison with zero (Go's code's test of a bool it made with eqz, two SETcc where a branch now fuses with one comparison), `i32.wrap_i64` of a 64-bit operation of extended i32s and constants narrowed to the 32-bit operation, the divisions and remainders by constants made of multiplications and shifts (below), a float's product with 2 made its sum with itself (below), select on a constant or of one value, and the branches and switches on constants, whose dead blocks go |
 | `thread` | jump threading (below), then `copyelim` |
 | `gvn` again, `copyelim` | |
+| `chains` | what the builder knows within a block -- the globals' values, the last loads, the values stores wrote -- carried along the chains of blocks of one predecessor (below), then `copyelim` |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
 | `dce` | values without uses or effects, and phis only themselves use; and a global.set another of the same global follows in its block, nothing between reading the global, having an effect or able to trap (a Go function's return moves its stack pointer twice) |
 | `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value -- or of the i64 an i32 address wraps -- checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked, nor one whose address is a phi each of whose arguments is in bounds on its edge; and an access's check covers those of its address after it in its block that nothing between could tell apart (below) |

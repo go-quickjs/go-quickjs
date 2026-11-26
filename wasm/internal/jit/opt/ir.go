@@ -641,8 +641,9 @@ type Func struct {
 	// memMin is memory 0's least size in bytes where it is unshared and of
 	// i32 addresses, else 0.
 	memMin uint64
-	// noForward says not to forward the globals (forwardGlobals), which
-	// forwarded says the pass did.
+	// noForward says not to forward the globals and memory's values
+	// across blocks (forwardGlobals, forwardChains), which forwarded says a
+	// pass did.
 	noForward, forwarded bool
 	// listing says the compile lists the function (Request.Marks), where
 	// each block's loop is printed.

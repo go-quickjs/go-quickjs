@@ -83,6 +83,7 @@ type workspace struct {
 
 	// forwardGlobals' state, and the loops the builder made.
 	fw         fwState
+	fc         fcState
 	ub         ubState
 	loopRanges []loopRange
 
