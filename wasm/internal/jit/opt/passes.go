@@ -1039,8 +1039,16 @@ func (t *gvnTable) find(k *gvnKey) *Value {
 
 func (t *gvnTable) add(k *gvnKey, v *Value) {
 	h := uint32(k.hash() & uint64(len(t.heads)-1))
-	t.entries = append(t.entries, gvnEntry{key: *k, v: v, next: t.heads[h], h: h})
-	t.heads[h] = int32(len(t.entries) - 1)
+	// The entry's fields set in place: a literal is made aside and copied.
+	n := len(t.entries)
+	if n == cap(t.entries) {
+		t.entries = append(t.entries, gvnEntry{})
+	} else {
+		t.entries = t.entries[:n+1]
+	}
+	e := &t.entries[n]
+	e.key, e.v, e.next, e.h = *k, v, t.heads[h], h
+	t.heads[h] = int32(n)
 }
 
 // mark is where the entries end, to pop back to.
