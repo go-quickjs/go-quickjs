@@ -277,6 +277,11 @@ func (r *Runtime) jitRegDropStale() {
 		if cc := j.cl.closureCode; cc != nil {
 			cc.jitEnters = cc.jitReg != nil
 		}
+		if j.snap != nil && !j.key.gone() {
+			// Dropped, no worker having begun it: derived here for what its
+			// asking appends to the function's learning (finish).
+			j.snap.s.finish()
+		}
 		if j.unstarted {
 			j.letGo()
 			close(j.done)
@@ -568,6 +573,12 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	}()
 	e := j.e
 	e.took += j.took
+	if j.snap != nil && !j.key.gone() {
+		// What its derivations deferred of the function's learning, written
+		// whatever comes of the compile, as the asking had written it
+		// when the compile was prepared (jitSnapFinishers).
+		j.snap.s.finish()
+	}
 	old := s.regCache[j.key]
 	if j.osrAt != 0 {
 		if b := j.osrBeside; b.osrJob == j {

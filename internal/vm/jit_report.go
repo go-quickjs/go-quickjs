@@ -212,10 +212,15 @@ var JITCompileClock func() time.Duration
 // -- Prepares how many; Installed that of their installs, Installs how
 // many; and TakenBack that of the builds of those taken back to the
 // runtime's goroutine (jitRegTakeBack), TakeBacks how many. A compile made
-// within another, a callee's, is the other's.
+// within another, a callee's, is the other's. FinishDerives counts the
+// compiles in the background thrown away before a worker derived their
+// snapshot's answers, derived on the runtime's goroutine for what their
+// asking appends to the function's learning (jitSnapshot's finish),
+// counted whether JITCompileClock is set or not.
 type JITGoroutineTimes struct {
 	Spot, Prepared, Installed, TakenBack time.Duration
 	Spots, Prepares, Installs, TakeBacks int
+	FinishDerives                        int
 }
 
 // jitCompileClock is the runtime's JITCompileClock: the host's, or what a

@@ -38,8 +38,13 @@ package vm
 type jitSnapData struct {
 	// gathered marks a snapshot whose gathers have run, which its
 	// derivations derive from; derived, the root's, a compile whose
-	// derivations have run.
-	gathered, derived bool
+	// derivations have run; finished, the root's, one whose finishes have
+	// (finish).
+	gathered, derived, finished bool
+	// nodes, the root's, are the snapshots whose gathers ran, the root's
+	// first, in the order they ran: what finish goes through, in an order
+	// of the program's, not a map's.
+	nodes []*jitSnapshot
 	// asked is the runtime's test hook of the questions a snapshot asks
 	// (jitTestConfig's snapAsked), which a derivation calls as an asker
 	// does (heard): the gather's copy of it, of a runtime's fixed
@@ -152,9 +157,22 @@ var (
 	jitSnapDerivers      []func(s *jitSnapshot)
 )
 
+// jitSnapFinishers are the families' finishes of a snapshot whose
+// derivations ran, each run once a snapshot, on the runtime's goroutine,
+// when its compile is done with: installed, thrown away, or built again
+// from the feedback asked anew (jitRegInstall). What a derivation could not
+// write of the runtime's -- what the asking appends to the lists of what a
+// function's code learned (jitLearned's nativeCalls, inlines) -- it keeps
+// in its snapshot, and its family's finish writes it, as a concurrent
+// compile writes no feedback until it is done: the asking had written it
+// as the compile was prepared, which the finish puts in the place it would
+// have had.
+var jitSnapFinishers []func(s *jitSnapshot)
+
 // gather runs the families' gathers of s, fb's snapshot.
 func (s *jitSnapshot) gather(fb *jitRegFeedback) {
 	s.d.gathered, s.d.asked, s.d.rt = true, fb.fb.r.jitTest.snapAsked, fb.fb.r
+	s.root.d.nodes = append(s.root.d.nodes, s)
 	for _, g := range jitSnapFuncGatherers {
 		g(s, fb)
 	}
@@ -183,6 +201,35 @@ func (s *jitSnapshot) derive() {
 			d(c)
 		}
 		c.a.seal()
+	}
+}
+
+// finish runs the families' finishes (jitSnapFinishers) of s, a
+// compile's root, and of each snapshot of it whose gathers ran, in the
+// order they ran, once, on the runtime's goroutine. A compile whose
+// derivations have not run -- one thrown away before a worker came to it --
+// derives here first (JITGoroutineTimes' FinishDerives counts them): what
+// the asking appended as the compile was prepared is the function's
+// whatever came of the compile, and the compiles after it are made from
+// it.
+func (s *jitSnapshot) finish() {
+	if s.d.finished || !s.d.gathered {
+		return
+	}
+	s.d.finished = true
+	if len(jitSnapFinishers) == 0 {
+		return
+	}
+	if !s.d.derived {
+		s.derive()
+		if r := s.d.rt; r != nil && r.jit != nil {
+			r.jit.goroutineTimes.FinishDerives++
+		}
+	}
+	for _, c := range s.d.nodes {
+		for _, f := range jitSnapFinishers {
+			f(c)
+		}
 	}
 }
 

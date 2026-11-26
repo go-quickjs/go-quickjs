@@ -298,18 +298,26 @@ type jitRegTargets struct {
 // regCallTargets is regCallSites with each site's function object and
 // closure, in t.
 func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RInstr, argc int, method bool) {
-	l := f.fb.e
-	rpc := int32(f.p.Origin[pc])
+	q := f.callCtx()
+	q.callTargets(t, pc, w, argc, method)
+}
+
+// callTargets is regCallTargets' answer, of q's source (jitCallSrc): the
+// live state's, or a snapshot's copy of it.
+func (q *jitCallCtx) callTargets(t *jitRegTargets, pc int, w bytecode.RInstr, argc int, method bool) {
+	src := q.src
+	l := src.learned()
+	rpc := int32(q.p.Origin[pc])
 	newW := w.Op() == bytecode.RNewW
-	calls := f.fb.r.regCallsRestored(f.fb.cl, int(w.C()))
+	calls := src.calls(int(w.C()))
 	// A site whose cache the interpreter has not filled, or not made yet.
 	unfilled := !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) >= uint(len(calls))
 	if !newW && w.Op() != bytecode.RApplyArgs && uint(w.C()) < uint(len(calls)) {
 		if e := &calls[w.C()]; jitRegCallKind(e) {
 			// A closure the code makes itself is called by its code
 			// (jitRegMadeBy).
-			byCode := jitRegMadeBy(f.fb.cl, e.cl)
-			f.regAddTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, byCode, false)
+			byCode := jitRegMadeByIn(q.cl, e.cl, calls)
+			q.addTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, byCode, false)
 			if t.n != 0 && l != nil && !jitRegCallKnown(l, rpc, e.callee) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee, byCode: byCode})
 			}
@@ -320,7 +328,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 			// (jitRegViaSeen) -- what a site the interpreter had made the
 			// call's own (callThrough) taught.
 			n := t.n
-			f.regAddTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, false, true)
+			q.addTarget(t, pc, argc, method, e.callee, e.cl, e.rc, nil, nil, false, true)
 			if t.n > n && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc && x.obj == e.callee && x.via }) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: e.cl, obj: e.callee, via: true})
 			}
@@ -328,19 +336,22 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 			unfilled = e.callee == nil
 		}
 	}
-	f.regTableTargets(t, pc, w, rpc, argc, method)
+	if q.rc != nil && q.rc.Typed {
+		q.mustLive().regTableTargets(t, pc, w, rpc, argc, method)
+	}
 	if unfilled && method && l != nil && argc >= 1 && !slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return x.pc == rpc }) {
 		// G.call(x, ...) the interpreter has not made yet, G the binding the
 		// method's read read -- _super.call(this, ...) of a class compiled
 		// to ES5 -- called natively through Function.prototype.call from
 		// the first compile.
+		f := q.mustLive()
 		if g, cl := f.regViaNow(int(rpc), int(w.A())); cl != nil {
 			rc := cl.reg
 			if rc == nil {
 				rc = f.fb.r.regOf(cl)
 			}
 			if n := t.n; rc != nil {
-				f.regAddTarget(t, pc, argc, method, g, cl, rc, nil, nil, false, true)
+				q.addTarget(t, pc, argc, method, g, cl, rc, nil, nil, false, true)
 				if t.n > n {
 					l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: cl, obj: g, via: true})
 				}
@@ -356,6 +367,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 		// compiled while its first loop ran made each call of its later
 		// loops by Go, and was compiled again for each -- RegExp's
 		// runBlock0, whose loops each call Exec.
+		f := q.mustLive()
 		if o := f.regConstructorNow(int(rpc), int(w.A())); o != nil {
 			if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound && fd.native == nil {
 				cl := fd.closure
@@ -363,13 +375,13 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 				if rc == nil {
 					rc = f.fb.r.regOf(cl)
 				}
-				if f.rc.Typed {
+				if q.rc.Typed {
 					// Typed code calls the module's functions' typed code,
 					// their twins' (asmTwin), or Go calls them.
 					cl, rc = jitTypedCallee(cl)
 				}
 				if n := t.n; rc != nil {
-					f.regAddTarget(t, pc, argc, method, o, cl, rc, nil, nil, false, false)
+					q.addTarget(t, pc, argc, method, o, cl, rc, nil, nil, false, false)
 					if t.n > n {
 						l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: cl, obj: o})
 					}
@@ -377,7 +389,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 			}
 		}
 	}
-	if method && l != nil && f.rc != nil {
+	if method && l != nil && q.rc != nil {
 		// The other functions the call's method read has met, of the other
 		// shapes its cache saw, each called natively from the first compile
 		// and learned so (jitRegSeenCallees): left to the site's cache's
@@ -386,12 +398,13 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 		// V8's Richards' TaskControlBlock.run, compiled for its native
 		// callers knowing one of its four tasks' run, left native code at
 		// most of its first run's calls.
-		for _, c := range f.fb.r.jitRegSeenCallees(f.fb.cl, f.rc, int(rpc), w) {
-			if c.cl.reg == nil {
+		for _, c := range src.seenCallees(int(rpc), w) {
+			rc := src.reg(c.cl)
+			if rc == nil {
 				continue
 			}
 			n := t.n
-			f.regAddTarget(t, pc, argc, method, c.o, c.cl, c.cl.reg, nil, nil, false, false)
+			q.addTarget(t, pc, argc, method, c.o, c.cl, rc, nil, nil, false, false)
 			if t.n > n && !jitRegCallKnown(l, rpc, c.o) {
 				l.nativeCalls = append(l.nativeCalls, jitInline{pc: rpc, cl: c.cl, obj: c.o})
 			}
@@ -405,6 +418,7 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 		// callee inlined, whose own code may never be compiled. Learned
 		// only at calls of Go, a callee inlined from the first made each of
 		// its constructions by Go until one left the code that inlined it.
+		f := q.mustLive()
 		if o := f.regConstructorNow(int(rpc), int(w.A())); o != nil {
 			f.fb.r.jitRegSeedConstruct(l, rpc, o, argc)
 		}
@@ -418,18 +432,25 @@ func (f *jitRegFeedback) regCallTargets(t *jitRegTargets, pc int, w bytecode.RIn
 			// (CallShape's notInline). Asked for a native call of a nil
 			// object, the compile had panicked.
 			if x.pc == rpc && (x.pool != nil) == newW && !x.forEach && x.cl != nil && x.obj != nil && x.active == nil {
-				f.regAddTarget(t, pc, argc, method, x.obj, x.cl, x.cl.reg, x.pool, x.parent, x.byCode && !x.via, x.via)
+				q.addTarget(t, pc, argc, method, x.obj, x.cl, src.reg(x.cl), x.pool, x.parent, x.byCode && !x.via, x.via)
 			}
 		}
 	}
 }
 
 // regAddTarget adds to t the native call of o, cl's, running rc, at the
-// program's instruction pc (regCallSite), unless t has it: the same object
-// called by its object, or the same function's code called by its code, or
-// one called through Function.prototype.call where the other is not (via).
-// A call by code takes the place of one of an object of the same function.
+// program's instruction pc (regCallSite), unless t has it (addTarget).
 func (f *jitRegFeedback) regAddTarget(t *jitRegTargets, pc, argc int, method bool, o *Object, cl *closure, rc *regCode, pool *abi.ObjectPool, parent *Object, byCode, via bool) {
+	q := f.callCtx()
+	q.addTarget(t, pc, argc, method, o, cl, rc, pool, parent, byCode, via)
+}
+
+// addTarget is regAddTarget's, of q's source: unless t has it -- the same
+// object called by its object, or the same function's code called by its
+// code, or one called through Function.prototype.call where the other is
+// not (via). A call by code takes the place of one of an object of the
+// same function.
+func (q *jitCallCtx) addTarget(t *jitRegTargets, pc, argc int, method bool, o *Object, cl *closure, rc *regCode, pool *abi.ObjectPool, parent *Object, byCode, via bool) {
 	for i := 0; i < t.n; i++ {
 		s := &t.sites[i]
 		if s.ByCode != 0 && jitRegSameCode(*s, cl) || s.Callee == uintptr(unsafe.Pointer(o)) && !byCode || (s.Via != 0) != via {
@@ -447,7 +468,7 @@ func (f *jitRegFeedback) regAddTarget(t *jitRegTargets, pc, argc int, method boo
 		}
 	}
 	if t.n < jitCallTargets {
-		if site, ok := f.regCallSite(pc, o, cl, rc, argc, method, pool, parent, byCode, via); ok {
+		if site, ok := q.callSite(pc, o, cl, rc, argc, method, pool, parent, byCode, via); ok {
 			t.sites[t.n], t.objs[t.n], t.cls[t.n] = site, o, cl
 			t.n++
 		}
@@ -540,6 +561,15 @@ func jitRegSameClosureCode(a, b *closure) bool {
 // run of the code, a loop's, calls the closure it made, which a check of
 // the object -- and inlining it, which needs one -- holds for.
 func jitRegMadeBy(caller, cl *closure) bool {
+	if caller == nil {
+		return false
+	}
+	return jitRegMadeByIn(caller, cl, caller.regCalls)
+}
+
+// jitRegMadeByIn is jitRegMadeBy of calls, caller's call caches as the
+// question finds them: live, or a snapshot's copy.
+func jitRegMadeByIn(caller, cl *closure, calls []regCallCache) bool {
 	if caller == nil || cl == nil || cl.realm != caller.realm || cl.closureCode == nil {
 		return false
 	}
@@ -553,8 +583,8 @@ func jitRegMadeBy(caller, cl *closure) bool {
 	if !made {
 		return false
 	}
-	for i := range caller.regCalls {
-		if c := caller.regCalls[i].cl; c != nil && c.fn == caller.fn {
+	for i := range calls {
+		if c := calls[i].cl; c != nil && c.fn == caller.fn {
 			return true
 		}
 	}
@@ -1343,8 +1373,7 @@ func (r *Runtime) jitRegCallable(o *Object, cl *closure, rc *regCode, argc int) 
 // (jitRegCallable, jitRegConstructable).
 func (r *Runtime) jitRegTarget(o *Object, cl *closure, rc *regCode, argc int) bool {
 	fd := o.fn()
-	if fd == nil || fd.closure != cl && !jitTypedTwinOf(fd.closure, cl) || fd.bound || cl.realm != r.Realm || rc == nil || rc != cl.reg || !jitRegCalled(cl, rc) ||
-		cl.fn.HasDirectEval {
+	if fd == nil || !r.jitRegTargetFree(fd, cl, rc) {
 		return false
 	}
 	if rc.args && argc > abi.MaxGoArgs {
@@ -1355,10 +1384,17 @@ func (r *Runtime) jitRegTarget(o *Object, cl *closure, rc *regCode, argc int) bo
 		// argumentsOwn).
 		return false
 	}
-	if cc := cl.closureCode; cc == nil || cc.jitRegRefused {
+	return !r.nodeQuirks || argc <= int(rc.keep)
+}
+
+// jitRegTargetFree is jitRegTarget's checks that no argument count
+// decides, of fd, o's function data (jitCallFacts' ok).
+func (r *Runtime) jitRegTargetFree(fd *funcData, cl *closure, rc *regCode) bool {
+	if fd.closure != cl && !jitTypedTwinOf(fd.closure, cl) || fd.bound || cl.realm != r.Realm || rc == nil || rc != cl.reg || !jitRegCalled(cl, rc) ||
+		cl.fn.HasDirectEval {
 		return false
 	}
-	if r.nodeQuirks && argc > int(rc.keep) {
+	if cc := cl.closureCode; cc == nil || cc.jitRegRefused {
 		return false
 	}
 	if x := fd.extra; x != nil && (!fd.arrow || x.rare != nil || x.lexThisRef != nil && cl.fn.UsesThis && !x.lexThisRef.init) {
@@ -1381,8 +1417,14 @@ func (r *Runtime) jitRegTarget(o *Object, cl *closure, rc *regCode, argc int) bo
 // JIT does not compile, or past the arguments a sloppy callee's frame keeps
 // for f.arguments.
 func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode, argc int, method bool, pool *abi.ObjectPool, parent *Object, byCode, via bool) (ssa.CallSite, bool) {
-	fb := f.fb
-	r := fb.r
+	q := f.callCtx()
+	return q.callSite(pc, o, cl, rc, argc, method, pool, parent, byCode, via)
+}
+
+// callSite is regCallSite's, of q's source.
+func (q *jitCallCtx) callSite(pc int, o *Object, cl *closure, rc *regCode, argc int, method bool, pool *abi.ObjectPool, parent *Object, byCode, via bool) (ssa.CallSite, bool) {
+	src := q.src
+	realm := src.realm()
 	if via {
 		// G.call(x, ...) through the realm's Function.prototype.call, a
 		// method call's (ssa.CallSite's Via): G called natively with x its
@@ -1390,19 +1432,22 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		// arguments given them past the receiver in its context (FrameArgs,
 		// mir's windowArgs) -- not an arrow reading its this, nor a
 		// construction.
-		if !method || argc < 1 || pool != nil || byCode || r.callFn == nil || o.fn().arrow && cl.fn.UsesThis ||
-			!r.jitRegCallable(o, cl, rc, argc-1) {
+		if !method || argc < 1 || pool != nil || byCode || realm.callFn == nil {
 			return ssa.CallSite{}, false
 		}
-		l := r.jitState().regLinkOf(cl, rc)
-		k := fb.keep()
+		facts := src.target(o, cl, rc)
+		if facts.arrow && cl.fn.UsesThis || !facts.callable(cl, rc, argc-1, realm.quirks) {
+			return ssa.CallSite{}, false
+		}
+		l := src.link(cl, rc)
+		k := src.keep()
 		k.links = append(k.links, l)
-		k.holders = append(k.holders, o, r.callFn)
+		k.holders = append(k.holders, o, realm.callFn)
 		site := ssa.CallSite{
 			Callee: uintptr(unsafe.Pointer(o)), Closure: uintptr(unsafe.Pointer(cl)),
 			Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
 			Argc: argc, Method: true, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
-			Window: f.p.Code[pc].Left.Slot + 1, Via: uintptr(unsafe.Pointer(r.callFn)),
+			Window: q.p.Code[pc].Left.Slot + 1, Via: uintptr(unsafe.Pointer(realm.callFn)),
 			// x may be a primitive, which a sloppy G's this is coerced
 			// from by Go.
 			Coerce:    rc.coerceThis,
@@ -1414,36 +1459,40 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		return site, true
 	}
 	forward := false
-	if w, _, ok := f.at(pc); ok && w.Op() == bytecode.RApplyArgs {
+	if w, _, ok := jitRegAt(q.p, q.rc, pc); ok && w.Op() == bytecode.RApplyArgs {
 		// f.apply(x, arguments) (ssa.CallSite's Forward): f's receiver x,
 		// as a method call's; its arguments the frame's, as many as its
 		// context holds (mir's checks), none known here.
 		forward, method, argc = true, true, 0
 	}
-	if pool == nil && !r.jitRegCallable(o, cl, rc, argc) {
-		return ssa.CallSite{}, false
-	}
-	if pool != nil {
+	var facts jitCallFacts
+	if pool == nil {
+		if facts = src.target(o, cl, rc); !facts.callable(cl, rc, argc, realm.quirks) {
+			return ssa.CallSite{}, false
+		}
+	} else {
 		// Its pool empty or not: run out, the code has Go fill it again
 		// (ssa's GoRefill): the site is given its pool whatever it holds.
 		// Refused a site for a pool its callers had just run out, a
 		// construction was compiled as a call of Go, which fills no pool,
 		// for good: RayTrace's IntersectionInfo's, by the hundred thousand
 		// in a run, at random runs.
+		r := q.mustLive().fb.r
 		if tc, tp, ok := r.jitRegConstructTarget(o, argc); !ok || tc != cl || tp != parent || rc != cl.reg {
 			return ssa.CallSite{}, false
 		}
+		facts = r.jitRegFactsOf(o, cl, rc)
 	}
-	arrow, this := o.fn().arrow, cl.fn.UsesThis
-	l := r.jitState().regLinkOf(cl, rc)
-	k := fb.keep()
+	arrow, this := facts.arrow, cl.fn.UsesThis
+	l := src.link(cl, rc)
+	k := src.keep()
 	k.links = append(k.links, l)
 	k.holders = append(k.holders, o)
 	site := ssa.CallSite{
 		Callee: uintptr(unsafe.Pointer(o)), Closure: uintptr(unsafe.Pointer(cl)),
 		Entry: uintptr(unsafe.Pointer(&l.entry)), Count: uintptr(unsafe.Pointer(&l.in)),
 		Argc: argc, Method: method, Params: 2 + int(rc.params), LocalCount: int(rc.numRegs), ThisSlot: -1,
-		Window: f.p.Code[pc].Left.Slot + 1,
+		Window: q.p.Code[pc].Left.Slot + 1,
 		// A callee that keeps its arguments -- reads arguments, has a rest
 		// parameter -- is given all of them and their count in its context
 		// (abi.Context's Args), which the frames Go makes of its level have
@@ -1461,8 +1510,8 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		site.ByCode, site.Env, site.Realm = uintptr(unsafe.Pointer(cl.fn)), uintptr(unsafe.Pointer(cl.env)), uintptr(unsafe.Pointer(cl.realm))
 	}
 	if forward {
-		site.Argc, site.Forward, site.Apply = 2, true, uintptr(unsafe.Pointer(r.applyFn))
-		k.holders = append(k.holders, r.applyFn)
+		site.Argc, site.Forward, site.Apply = 2, true, uintptr(unsafe.Pointer(realm.applyFn))
+		k.holders = append(k.holders, realm.applyFn)
 	}
 	if cl.fn.HasTailCall {
 		// Whether its calls of itself in tail position may give its frame
@@ -1471,8 +1520,7 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		// construction's, as the interpreter gives up one (regTailTo) -- an
 		// arrow's sharing a derived constructor's this is no callee of a
 		// native call (jitRegTarget).
-		fd := o.fn()
-		site.Tail, site.TailFrame = true, pool == nil && (!fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
+		site.Tail, site.TailFrame = true, pool == nil && (!facts.arrow || !facts.sharesThis)
 	}
 	if pool != nil {
 		// A construction: its receiver from the pool, made as regConstruct
@@ -1503,10 +1551,10 @@ func (f *jitRegFeedback) regCallSite(pc int, o *Object, cl *closure, rc *regCode
 		// Undefined, or, sloppy, the global object (regCallSlow).
 		site.PlainThis = true
 		if rc.coerceThis {
-			if !r.globalThis.IsObject() {
+			g := realm.global
+			if g == nil {
 				return ssa.CallSite{}, false
 			}
-			g := r.globalThis.Object()
 			site.Global = uintptr(unsafe.Pointer(g))
 			k.holders = append(k.holders, g)
 		}

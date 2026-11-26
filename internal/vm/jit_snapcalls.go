@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -442,4 +443,156 @@ func (c *jitRealmCallees) mathIntrinsic(o *Object, n int, plain bool, k *jitFeed
 	}
 	k.holders = append(k.holders, o)
 	return in, true
+}
+
+// jitCallSrc is what a call's native targets (jitCallCtx's callTargets,
+// regCallSites) are derived from besides the function's code: what the
+// code learned of its calls, the closure's call caches, what of the
+// targets they name native callers' calls depend on, the targets' links,
+// and the realm's built-ins -- the live state, on the runtime's goroutine
+// (jitCallLive), or a snapshot's copy of it, which the worker derives from
+// (jitCallsData). One implementation of the answer reads either.
+type jitCallSrc interface {
+	// learned is what the function's code learned at its exits, nil for
+	// nothing: the live entry, or the snapshot's copy of its lists'
+	// headers, which only grow (TestJITLearnedListsPersist), each cut to
+	// its length so that an append makes a list of its own. An answer
+	// appends to its nativeCalls and inlines as before: live, or, in the
+	// copy, kept for the compile's finish to write (jitSnapFinishers). A
+	// derivation reads of it only what no exit writes in place: the
+	// lists, not callSites, settling, regLitReads or an element's exits.
+	learned() *jitEntry
+	// calls is the closure's call caches, as an ask of site finds them
+	// (regCallsRestored).
+	calls(site int) []regCallCache
+	// target is what of o, cl's function object, whose register code is
+	// rc, native callers' calls of it depend on that the heap holds
+	// (jitCallFacts).
+	target(o *Object, cl *closure, rc *regCode) jitCallFacts
+	// reg is cl's register code, nil for none yet (closure's reg).
+	reg(cl *closure) *regCode
+	// link is the link native callers call cl's code rc through
+	// (regLinkOf): made by the runtime's goroutine, a snapshot's from what
+	// its gather made.
+	link(cl *closure, rc *regCode) *jitLink
+	// seenCallees is jitRegSeenCallees' answer for the method call w at
+	// register pc rpc.
+	seenCallees(rpc int, w bytecode.RInstr) []jitCallee
+	// realm is the realm's built-ins a call is compared with.
+	realm() jitCallRealm
+	// keep is the feedback an answer's effects -- what the code keeps
+	// alive, its links -- are appended to: the asked feedback's keep, or
+	// a snapshot's sink's.
+	keep() *jitFeedback
+	// live is the asked feedback where the source is the live state, nil
+	// in a snapshot's derivation: the answers that read the heap or make
+	// what the runtime keeps -- a binding's value, a pool, register code
+	// -- which a snapshot's gather asks on the runtime's goroutine.
+	live() *jitRegFeedback
+}
+
+// jitCallFacts is what of a function object o, cl's, whose register code is
+// rc, native callers' calls of it depend on that is not fixed when they
+// are made: whether jitRegTarget's checks that no argument count decides
+// pass (ok), whether o is an arrow, and whether it shares a derived
+// constructor's this binding (sharesThis).
+type jitCallFacts struct {
+	ok, arrow, sharesThis bool
+}
+
+// callable is jitRegCallable's answer for a call of argc arguments of the
+// function whose facts f are, cl's, of register code rc; quirks says
+// whether the runtime runs with WithNodeQuirks.
+func (f jitCallFacts) callable(cl *closure, rc *regCode, argc int, quirks bool) bool {
+	return !isClassConstructorKind(cl.fn.Kind) && f.target(rc, argc, quirks)
+}
+
+// target is jitRegTarget's answer for argc arguments, of register code rc.
+func (f jitCallFacts) target(rc *regCode, argc int, quirks bool) bool {
+	return f.ok && !(rc.args && argc > abi.MaxGoArgs) && !(quirks && argc > int(rc.keep))
+}
+
+// jitCallRealm is the realm's built-ins a call's native targets are
+// compared with: its Function.prototype.call and apply, its global object
+// (nil where globalThis is none), and whether the runtime runs with
+// WithNodeQuirks.
+type jitCallRealm struct {
+	callFn, applyFn, global *Object
+	quirks                  bool
+}
+
+// jitCallCtx is a question of a call's native targets: the function's
+// register code lowered (p, rc), its function and closure, and what the
+// answer is derived from (src).
+type jitCallCtx struct {
+	p   *ir.Program
+	rc  *bytecode.RegCode
+	fn  *bytecode.Function
+	cl  *closure
+	src jitCallSrc
+}
+
+// callCtx is f's question of its calls' targets, of the live state.
+func (f *jitRegFeedback) callCtx() jitCallCtx {
+	return jitCallCtx{p: f.p, rc: f.rc, fn: f.fb.fn, cl: f.fb.cl, src: jitCallLive{f}}
+}
+
+// mustLive is the live feedback of q's source, for an answer that reads
+// the heap, which a snapshot's gather asks on the runtime's goroutine: a
+// derivation that comes to one is a gather's mistake.
+func (q *jitCallCtx) mustLive() *jitRegFeedback {
+	f := q.src.live()
+	if f == nil {
+		panic("jit: a snapshot's derivation of a call came to what its gather asks")
+	}
+	return f
+}
+
+// jitCallLive is the live state of f's function, as the runtime's
+// goroutine reads it (jitCallSrc).
+type jitCallLive struct{ f *jitRegFeedback }
+
+func (l jitCallLive) learned() *jitEntry { return l.f.fb.e }
+
+func (l jitCallLive) calls(site int) []regCallCache {
+	return l.f.fb.r.regCallsRestored(l.f.fb.cl, site)
+}
+
+func (l jitCallLive) target(o *Object, cl *closure, rc *regCode) jitCallFacts {
+	return l.f.fb.r.jitRegFactsOf(o, cl, rc)
+}
+
+func (l jitCallLive) reg(cl *closure) *regCode { return cl.reg }
+
+func (l jitCallLive) link(cl *closure, rc *regCode) *jitLink {
+	return l.f.fb.r.jitState().regLinkOf(cl, rc)
+}
+
+func (l jitCallLive) seenCallees(rpc int, w bytecode.RInstr) []jitCallee {
+	return l.f.fb.r.jitRegSeenCallees(l.f.fb.cl, l.f.rc, rpc, w)
+}
+
+func (l jitCallLive) realm() jitCallRealm { return l.f.fb.r.jitCallRealmNow() }
+
+func (l jitCallLive) keep() *jitFeedback { return l.f.fb.keep() }
+
+func (l jitCallLive) live() *jitRegFeedback { return l.f }
+
+// jitCallRealmNow is r's built-ins a call is compared with, now.
+func (r *Runtime) jitCallRealmNow() jitCallRealm {
+	c := jitCallRealm{callFn: r.callFn, applyFn: r.applyFn, quirks: r.nodeQuirks}
+	if r.globalThis.IsObject() {
+		c.global = r.globalThis.Object()
+	}
+	return c
+}
+
+// jitRegFactsOf is o's facts (jitCallFacts), cl's function object, whose
+// register code is rc, as they are now.
+func (r *Runtime) jitRegFactsOf(o *Object, cl *closure, rc *regCode) jitCallFacts {
+	fd := o.fn()
+	if fd == nil {
+		return jitCallFacts{}
+	}
+	return jitCallFacts{ok: r.jitRegTargetFree(fd, cl, rc), arrow: fd.arrow, sharesThis: fd.extra != nil && fd.extra.lexThisRef != nil}
 }
