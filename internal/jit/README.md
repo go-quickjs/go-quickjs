@@ -862,6 +862,22 @@ code (`regKeepOSR`) -- or throws it away where the function deoptimized or
 its code was compiled again or let go of since, its loops then the new
 code's to learn of. Top-level code is compiled on the spot.
 
+While a function's compile waits, its budget begins anew (`jitRegHot`), as
+V8 begins a function's interrupt budget anew while its compile is under way:
+its loops' back edges count it down, the interrupt budget's checks and its
+calls installing the code meanwhile, and the next ask comes a budget later.
+Its budget left spent, each back edge had been a check, a call of Go, the
+waiting slower than the interpreter. A function the background had no room
+for (`jobsFull`) keeps its budget spent and asks again at the interrupt
+budget's checks (`jitRegArmEdges`). A compile no worker has begun by its function's second ask,
+two budgets of the interpreter's work after it was handed over, is taken
+back (`jitRegTakeBack`, `jitTakeBackAsks`): made on the runtime's goroutine
+and installed at once, a worker that comes to it after leaving it as it is.
+A compile takes about as long as the interpreter spends on two or three of
+its function's budgets, so that a process whose cores are all busy -- a
+host running a runtime on each -- waits for its code no longer than about
+twice what compiling on the spot costs.
+
 **Compiling again.** Code is compiled again, in place, when:
 
 - a guard failed: the code is invalidated (`jitRegInvalidate`): its link
@@ -4270,7 +4286,10 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
   K checks after it was handed over: the window between build and install,
   the same in every run; `miss` with it has every register compile's worker
   leave its build as one that asked what its snapshot was not asked, built
-  on the runtime's goroutine at its install, from feedback asked anew. The
+  on the runtime's goroutine at its install, from feedback asked anew;
+  `takeback` with it gives no compile to a worker, in place of the schedule,
+  each taken back at its function's second ask, the path every compile takes
+  where every worker is busy. The
   differential tests run so among their settings, and the background tests
   under `-race` (`-run 'Background|Differential'`).
 - `compilediff native` compares two builds' compiles, and `jitprof` (in

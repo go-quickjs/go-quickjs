@@ -167,6 +167,10 @@ type jitTestConfig struct {
 	// handed over (jitRegSubmit): done at once, it is installed at the
 	// checks after, as any is, however long the workers would have taken.
 	bgDone bool
+	// bgUnstarted keeps each compile handed to the background from the
+	// workers (jitRegSubmit): queued, no worker begins it, as where every
+	// worker is busy.
+	bgUnstarted bool
 }
 
 // jitSetEncoding sets s's encoding and options as its runtime's test
@@ -243,6 +247,11 @@ func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) 
 //	           its build, as one that asked what its snapshot was not asked
 //	           (jitSnapMiss), for the runtime's goroutine to build at its
 //	           install, so that the path a miss takes is taken by every one
+//	takeback   with background, give no compile to a worker, in place of
+//	           its schedule: each is taken back at its function's second
+//	           ask and made on the spot (jitRegTakeBack), so that the path
+//	           a compile takes where every worker is busy is taken by every
+//	           one
 //	park       park the code as the runtime returns to its host every time,
 //	           not once its running has paid for it (jitReturned), and let
 //	           go of the code still parked then, so that code is unparked,
@@ -266,6 +275,8 @@ type jitStressConfig struct {
 	primLeave bool
 	// park is QJS_JIT_STRESS's park.
 	park bool
+	// takeBack is QJS_JIT_STRESS's takeback.
+	takeBack bool
 }
 
 var jitStressDefault = parseJITStress(os.Getenv("QJS_JIT_STRESS"))
@@ -290,6 +301,8 @@ func parseJITStress(spec string) jitStressConfig {
 			c.miss = true
 		case "park":
 			c.park = true
+		case "takeback":
+			c.takeBack = true
 		}
 	}
 	return c
@@ -323,6 +336,13 @@ func (r *Runtime) SetJITBackground(on bool) { r.jitBackground = on }
 // the background (SetJITBackground, QJS_JIT_STRESS's background).
 func (r *Runtime) JITBackground() bool {
 	return r.jitEnabled && (r.jitBackground || r.jitStress.background)
+}
+
+// jitScheduled reports whether QJS_JIT_STRESS's background schedules the
+// installs, each at its Kth check: not with takeback, whose compiles no
+// worker begins.
+func (r *Runtime) jitScheduled() bool {
+	return r.jitStress.background && !r.jitStress.takeBack
 }
 
 // JITCacheCounts reports what the JIT's cache dropped in this runtime: the
@@ -1353,6 +1373,9 @@ type jitState struct {
 	// background has no room for (jitTypedLinked).
 	onSpot                   bool
 	bgSubmitted, bgDiscarded uint64
+	// bgTakenBack counts the compiles in the background taken back to be
+	// made on the spot, no worker having begun them (jitRegTakeBack).
+	bgTakenBack uint64
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.
 	arrayRooms []weak.Pointer[abi.ObjectPool]

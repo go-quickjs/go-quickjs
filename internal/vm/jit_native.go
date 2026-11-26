@@ -205,7 +205,7 @@ func (r *Runtime) jitRegForAs(cl *closure, c *regCode, callee bool) *jitRegEntry
 		// ask here and enter no code of the callee's: Are We Fast Yet's
 		// DeltaBlue called markUnsatisfied through Go 11,000 times with
 		// its compile done, between the checks that installed it.
-		if j.state.Load() != jitJobDone || r.jitStress.background {
+		if j.state.Load() != jitJobDone || r.jitScheduled() {
 			return nil
 		}
 		r.jitDrain()

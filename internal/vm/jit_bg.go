@@ -58,6 +58,13 @@ type jitRegJob struct {
 	// miss has the worker leave the build as a miss (QJS_JIT_STRESS's
 	// miss), built on the runtime's goroutine at the install.
 	miss bool
+	// unstarted marks a job no worker is given (jitTestConfig's
+	// bgUnstarted, QJS_JIT_STRESS's takeback).
+	unstarted bool
+	// asked counts the times its function asked for it again, each a
+	// budget after the last (jitRegHot), which take it back at
+	// jitTakeBackAsks if no worker has begun it (jitRegTakeBack).
+	asked int
 	// waiting marks a job done whose install waits for the native calls
 	// under way of the code it replaces (jitRegInstallWaits): kept, and
 	// installed at a check after they are done, it is no longer one of
@@ -194,26 +201,47 @@ func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 		}
 	}
 	s.bgSubmitted++
-	jitWorkers.submit(j)
+	// Under QJS_JIT_STRESS's takeback, no worker is given a compile its
+	// function waits for in the interpreter, which it takes back
+	// (jitRegTakeBack); one of code that runs meanwhile, compiled again,
+	// is the workers'.
+	old := s.regCache[j.key]
+	waits := j.osrAt == 0 && (old == nil || old.invalid || old.code == nil)
+	if j.unstarted = r.jitTest.bgUnstarted || r.jitStress.background && r.jitStress.takeBack && waits; !j.unstarted {
+		jitWorkers.submit(j)
+	}
 	if r.jitTest.bgDone {
 		<-j.done
 	}
-	if r.jitStress.background && r.jitStress.checks == 0 {
+	if r.jitScheduled() && r.jitStress.checks == 0 {
 		r.jitDrain()
 	}
 }
 
 // run is j's work on a worker: the build from the snapshot, the
-// optimization and the backend, a panic of any a refusal.
+// optimization and the backend, a panic of any a refusal. A job its
+// runtime abandoned meanwhile gives its workspace back; one it took back
+// (jitRegTakeBack) is the runtime's.
 func (j *jitRegJob) run() {
-	defer close(j.done)
 	if !j.state.CompareAndSwap(jitJobQueued, jitJobWorking) {
-		jit.PutWorkspace(j.w)
+		if j.state.Load() == jitJobAbandoned {
+			j.letGo()
+			close(j.done)
+		}
 		return
 	}
+	defer close(j.done)
 	j.workRecovering()
 	if !j.state.CompareAndSwap(jitJobWorking, jitJobDone) {
+		j.letGo()
+	}
+}
+
+// letGo gives back what j holds that no install took: its workspace.
+func (j *jitRegJob) letGo() {
+	if j.w != nil {
 		jit.PutWorkspace(j.w)
+		j.w = nil
 	}
 }
 
@@ -248,6 +276,38 @@ func (j *jitRegJob) workRecovering() {
 	j.looped = jitRegShape(f, j.p, j.cl, j.c)
 	ssa.Optimize(f)
 	j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)
+}
+
+// jitTakeBackAsks is how many times a function asks for its compile again,
+// each after a budget more spent in the interpreter (jitRegHot), before a
+// compile no worker has begun is taken back (jitRegTakeBack). A compile
+// takes about as long as the interpreter spends on two or three of its
+// function's budgets, so that the wait is bounded by what the compile on
+// the spot costs: no worker free -- every core busy, a host running a
+// runtime on each -- costs no more than about twice what compiling on the
+// runtime's goroutine would.
+const jitTakeBackAsks = 2
+
+// jitRegTakeBack compiles j, a compile in the background that no worker has
+// begun, on the runtime's goroutine, and installs it at once, as the
+// compile on the spot would be: it reports whether it took it. A worker
+// that comes to it after leaves it (run). Not under QJS_JIT_STRESS's
+// background, whose installs come at the checks it says, nor for code kept
+// for a loop (jitRegLoopCode), whose frame goes on in the interpreter.
+func (r *Runtime) jitRegTakeBack(j *jitRegJob) bool {
+	if j.osrAt != 0 || r.jitScheduled() || !j.state.CompareAndSwap(jitJobQueued, jitJobTaken) {
+		return false
+	}
+	s := r.jit
+	s.bgTakenBack++
+	s.compileBegin()
+	j.workRecovering()
+	s.compileEnd()
+	// Done, which a worker coming to it after leaves as it is.
+	j.state.Store(jitJobDone)
+	close(j.done)
+	r.jitDrain()
+	return true
 }
 
 // jitRegDrainJobs installs the register compiles in the background that are
@@ -315,11 +375,15 @@ func (s *jitState) jitRegAbandonJobs() {
 		for {
 			st := j.state.Load()
 			if st == jitJobDone {
-				jit.PutWorkspace(j.w)
-				j.w = nil
+				j.letGo()
 				break
 			}
 			if j.state.CompareAndSwap(st, jitJobAbandoned) {
+				if j.unstarted {
+					// No worker will see it.
+					j.letGo()
+					close(j.done)
+				}
 				break
 			}
 		}
@@ -351,10 +415,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 			// Its calls enter it if it has code, installed or not.
 			cc.jitEnters = cc.jitReg != nil
 		}
-		if j.w != nil {
-			jit.PutWorkspace(j.w)
-			j.w = nil
-		}
+		j.letGo()
 	}()
 	e := j.e
 	e.took += j.took

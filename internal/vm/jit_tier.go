@@ -162,8 +162,15 @@ func (r *Runtime) jitRegArmEdges(cl *closure, c *regCode) {
 		switch {
 		case cc.jitReg != nil && !cc.jitReg.invalid:
 			left = jitRegCounted
+		case (life.warming || life.invalid) && life.tierBudget > 0:
+			left = life.tierBudget
 		case life.warming || life.invalid:
-			left = max(life.tierBudget, 1)
+			// Spent, and not compiled: waiting for room in the
+			// background (jobsFull). Its back edges count a budget, the
+			// interrupt budget's checks asking for the compile again
+			// meanwhile, as V8's ticks do while its queue is full; armed
+			// with 1, every back edge had been a call of Go.
+			left = jitRegBudget(r.jitCallThreshold, c)
 		default:
 			left = jitRegBudget(r.jitCallThreshold, c)
 		}
@@ -545,6 +552,10 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 		cc.jitRegRefused = true
 		return nil
 	}
+	var submitted uint64
+	if r.jit != nil {
+		submitted = r.jit.bgSubmitted
+	}
 	e := r.jitRegFor(cl, c)
 	switch {
 	case e == nil:
@@ -558,8 +569,31 @@ func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 			life.tierBudget, life.tierMark = jitRegBudget(r.jitCallThreshold, c), jitFeedbackMark(cl)
 			return nil
 		}
-		// Compiled in the background: installed at a later check, asked
-		// again at the next sample, the budget spent.
+		if j := r.jit.regPendingJobs[r.jitRegKeyOf(cl)]; j != nil {
+			if r.jit.bgSubmitted == submitted {
+				// Asked for again, a budget more spent waiting: taken back,
+				// made here, at the second ask if no worker has begun it.
+				if j.asked++; j.asked >= jitTakeBackAsks && r.jitRegTakeBack(j) {
+					if e := cc.jitReg; e != nil && !e.invalid && e.code != nil {
+						return e
+					}
+					return nil
+				}
+			}
+			// Compiled in the background: installed at a later check --
+			// any call of it, the interrupt budget's checks of its loops,
+			// any other function's -- and asked for again once it has
+			// spent a budget more, as V8 begins a function's interrupt
+			// budget anew while its compile is under way. Its budget left
+			// spent, each of its loops' back edges had been a check, a
+			// call of Go, until the code was installed: the waiting
+			// slower than the interpreter.
+			life.tierBudget, life.tierMark = jitRegBudget(r.jitCallThreshold, c), jitFeedbackMark(cl)
+		}
+		// Or not handed over, the background with as many compiles as it
+		// may have (jobsFull): asked for again at the next sample, the
+		// budget spent -- its loops' at the interrupt budget's checks
+		// (jitRegArmEdges).
 		return nil
 	case e.code == nil:
 		// Refused for good, but for host operations alone, asked again once
@@ -1726,7 +1760,7 @@ func (r *Runtime) jitRegCompileDueNow(run *jitRegRun, idx int) bool {
 		// call's, from the run's context on, which its leaving unwinds.
 		limit, pending = run.root, 0
 	}
-	if s := r.jit; len(s.regPendingJobs) != 0 && !r.jitStress.background {
+	if s := r.jit; len(s.regPendingJobs) != 0 && !r.jitScheduled() {
 		if j := s.regPendingJobs[e.key]; j != nil && !j.waiting && j.state.Load() == jitJobDone {
 			// Compiled again in the background, and done: installed now,
 			// a check, as a native caller's ask for a callee's code is

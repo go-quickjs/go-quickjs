@@ -35,13 +35,15 @@ import (
 const jitJobsMax = 4
 
 // A background compile's state (jitRegJob), which hands it between its worker and the runtime's
-// goroutine: queued for a worker, being worked, done, or abandoned by its
-// runtime, whose worker then gives its workspace back (jitRegJob.run).
+// goroutine: queued for a worker, being worked, done, abandoned by its
+// runtime, whose worker then gives its workspace back (jitRegJob.run), or
+// taken back by its runtime before any worker began it (jitRegTakeBack).
 const (
 	jitJobQueued int32 = iota
 	jitJobWorking
 	jitJobDone
 	jitJobAbandoned
+	jitJobTaken
 )
 
 // jitInBackground reports whether r compiles fn in the background: a
@@ -94,7 +96,7 @@ func (r *Runtime) jitDrain() {
 	// which this drain takes in turn, not one within it.
 	s.draining = true
 	defer func() { s.draining = false }()
-	stress, k := r.jitStress.background, int(r.jitStress.checks)
+	stress, k := r.jitScheduled(), int(r.jitStress.checks)
 	r.jitRegDrainJobs(stress, k)
 }
 

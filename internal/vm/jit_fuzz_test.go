@@ -231,6 +231,11 @@ func jitDifferentialIn(t *testing.T, src string, generated bool) JITStats {
 		// four after it was handed over (QJS_JIT_STRESS's background).
 		{threshold: true, background: true, checks: 1},
 		{threshold: true, background: true, checks: 4, budget: 3, deopt: 7},
+		// Compiled in the background with no worker free, each compile
+		// taken back at its function's second ask (QJS_JIT_STRESS's
+		// takeback).
+		{threshold: true, background: true, takeBack: true},
+		{threshold: true, background: true, takeBack: true, budget: 3, deopt: 7},
 	}
 	// The interpreter's run and the JIT's.
 	interp, within := jitTestWindow, jitTestWindow
