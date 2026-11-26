@@ -235,7 +235,11 @@ the evidence.
   their distance. Baseline code counts the same way, inline, and leaves
   to tier up as the WebAssembly baseline does (`ExitTierUp`), at its entry
   and at its poll. `jitBudgetForFeedback`'s 940 becomes V8 14.6's unit, 8
-  invocations of the function's length.
+  invocations of the function's length, with the baseline tier (stage 5)
+  and not before: in V8 that point starts a cheap baseline compile, and
+  without one it would only start the optimizing tier's on-stack compiles
+  sooner, synchronously, which the earlier trial of V8's budgets without
+  its tiers showed loses time.
 - **Deopts resume in baseline code.** Baseline code has an entry at every
   register pc, through a pc map of 4 bytes an instruction, as V8's offset
   table is. A deopt writes the window as today, and Go goes on in baseline
@@ -956,7 +960,7 @@ is under [The projection](#the-projection).
 | d | the parity items 1 to 3 and their gate | micro-benchmarks plain against tagged and off: string appends, BigInts and generators within 2% |
 | e | the JIT's live heap, 384 MB against the interpreter's 110 after Octane | the live heap after Octane at most the interpreter's plus 64 MiB; Typescript's collector CPU measured before and after |
 | f | the budget: 64 MiB by default, `WithJITMemoryLimit`'s documentation (its 3,750 ms at 8 MiB is out of date), the flush when control returns to the host | the memory table again at the default; the RSS of 100 idle runtimes |
-| g | `jitBudgetForFeedback`'s 940 becomes 8 x length | Typescript's and the V8 suite's tier traces |
+| g | `jitBudgetForFeedback`'s comment: it cites a V8 flag 14.6 no longer has; it says what the constant does here, when a loop's back-edge budget starts, and keeps 940 (its value moves with the baseline tier, stage 5) | the comment; no change of behaviour |
 
 - **Gain:** the composite 0. Typescript nothing at 32 MiB, but at the
   default it stops losing 1% (one run) to 34% (three runs). Goals 4 and
@@ -1066,7 +1070,8 @@ and 2.
   record designed once for both tiers, which stage 6's call convention
   uses; deopts and host exits resuming in baseline code; OSR from the
   interpreter to the baseline; the budget and the flush counting baseline
-  code. The estimate is wide for the exits' correctness at every pc Go
+  code; `jitBudgetForFeedback`'s 940 made 8 x length, the baseline's entry
+  point, as V8's feedback allocation starts Sparkplug. The estimate is wide for the exits' correctness at every pc Go
   returns to, and for generators.
 - **Gain:** Typescript about 1,530 to 1,330 ms (1,220 to 1,450): the
   interpreted share's 150 to 230 ms recovered at 1.5 to 2x, and runs after
@@ -1082,7 +1087,9 @@ and 2.
   register operation in baseline code against the handlers, on both
   architectures; test262 with `-conformance.jit`, every function
   baseline-compiled at its first call; Typescript's, ssr's and Octane's
-  first runs; the interpreter no slower.
+  first runs; the interpreter no slower; the 8 x length entry point timed
+  against 940 on those first runs and the suites, since it moves when
+  every loop's budget starts.
 - **Status:** not started.
 
 ### Stage 6: the call path
