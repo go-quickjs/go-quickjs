@@ -111,7 +111,12 @@ func (s *jitState) abandonJobs() {
 // jitWorkers are the process's compile workers, shared by its runtimes:
 // at most a quarter of GOMAXPROCS, at least one, each started when a
 // compile is handed over and none is free, each ending once none is
-// queued, so that an idle process runs none.
+// queued, so that an idle process runs none. A worker takes the queued
+// compile whose function did most work in the interpreter since it was
+// handed over, as HotSpot's compile queue serves the method invoked most
+// since it was queued: one no longer run waits behind those that are, and
+// its runtime drops it once it has gone unused for an epoch
+// (jitRegDropStale).
 var jitWorkers jitWorkerPool
 
 type jitWorkerPool struct {
@@ -120,8 +125,13 @@ type jitWorkerPool struct {
 	running int
 }
 
-// jitTask is what a worker runs: a compile's work (jitRegJob).
-type jitTask interface{ run() }
+// jitTask is what a worker runs: a compile's work (jitRegJob), and the
+// work its function has done waiting for it (jitRegJob's waited), which
+// orders the queue.
+type jitTask interface {
+	run()
+	waitedWork() int64
+}
 
 // jitWorkerLimit is how many workers compile at once.
 func jitWorkerLimit() int { return max(1, runtime.GOMAXPROCS(0)/4) }
@@ -140,7 +150,8 @@ func (p *jitWorkerPool) submit(j jitTask) {
 	}
 }
 
-// work runs the queued compiles, first queued first, until none is left.
+// work runs the queued compiles, until none is left: of those queued, the
+// one whose function did most work waiting (next).
 func (p *jitWorkerPool) work() {
 	for {
 		p.mu.Lock()
@@ -149,12 +160,26 @@ func (p *jitWorkerPool) work() {
 			p.mu.Unlock()
 			return
 		}
-		j := p.queue[0]
-		p.queue[0] = nil
-		p.queue = p.queue[1:]
+		j := p.next()
 		p.mu.Unlock()
 		j.run()
 	}
+}
+
+// next takes the compile to run next, p.mu held: the one whose function did
+// most work waiting for it, the first queued of those that did as much.
+func (p *jitWorkerPool) next() jitTask {
+	best, most := 0, p.queue[0].waitedWork()
+	for i := 1; i < len(p.queue); i++ {
+		if w := p.queue[i].waitedWork(); w > most {
+			best, most = i, w
+		}
+	}
+	j := p.queue[best]
+	copy(p.queue[best:], p.queue[best+1:])
+	p.queue[len(p.queue)-1] = nil
+	p.queue = p.queue[:len(p.queue)-1]
+	return j
 }
 
 // jitWorkerPanics counts the panics the process's workers made refusals

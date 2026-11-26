@@ -65,6 +65,12 @@ type jitRegJob struct {
 	// budget after the last (jitRegHot), which take it back at
 	// jitTakeBackAsks if no worker has begun it (jitRegTakeBack).
 	asked int
+	// waited is the work its function did in the interpreter since it
+	// was handed over, its samples' (jitRegHot), which the workers' queue
+	// is served by (jitWorkerPool's next); seen is waited at the last tick
+	// the runtime looked (jitRegDropStale), -1 before it first did.
+	waited atomic.Int64
+	seen   int64
 	// waiting marks a job done whose install waits for the native calls
 	// under way of the code it replaces (jitRegInstallWaits): kept, and
 	// installed at a check after they are done, it is no longer one of
@@ -201,6 +207,7 @@ func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 		}
 	}
 	s.bgSubmitted++
+	j.seen = -1
 	// Under QJS_JIT_STRESS's takeback, no worker is given a compile its
 	// function waits for in the interpreter, which it takes back
 	// (jitRegTakeBack); one of code that runs meanwhile, compiled again,
@@ -215,6 +222,55 @@ func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 	}
 	if r.jitScheduled() && r.jitStress.checks == 0 {
 		r.jitDrain()
+	}
+}
+
+// waitedWork is the work j's function did waiting for it (jitTask).
+func (j *jitRegJob) waitedWork() int64 { return j.waited.Load() }
+
+// jitRegWaited counts work, the work of a sample of cl's function, toward
+// its compile in the background, if one is queued (jitRegJob's waited).
+func (r *Runtime) jitRegWaited(cl *closure, work int64) {
+	if j := r.jit.regPendingJobs[r.jitRegKeyOf(cl)]; j != nil {
+		j.waited.Add(work)
+	}
+}
+
+// jitRegDropStale drops the runtime's compiles in the background that no
+// worker has begun and whose functions did no work since the last tick
+// it looked (flush), an epoch of the program's running or more, as
+// HotSpot's compile queue drops a method no longer invoked: what the
+// workers would compile is what runs. Each asks for its compile again once
+// it has spent a budget, as before it was compiled. Not under
+// QJS_JIT_STRESS's background, whose installs come at the checks it says,
+// nor code for a loop (jitRegLoopCode), which its function's code waits
+// for.
+func (r *Runtime) jitRegDropStale() {
+	s := r.jit
+	if r.jitScheduled() || s.draining {
+		// Nor in an install, whose drain goes through the jobs.
+		return
+	}
+	for i := 0; i < len(s.regJobs); {
+		j := s.regJobs[i]
+		w := j.waited.Load()
+		if j.osrAt != 0 || j.seen < 0 || w != j.seen || !j.state.CompareAndSwap(jitJobQueued, jitJobAbandoned) {
+			j.seen = w
+			i++
+			continue
+		}
+		s.regJobs = slices.Delete(s.regJobs, i, i+1)
+		if s.regPendingJobs[j.key] == j {
+			delete(s.regPendingJobs, j.key)
+		}
+		if cc := j.cl.closureCode; cc != nil {
+			cc.jitEnters = cc.jitReg != nil
+		}
+		if j.unstarted {
+			j.letGo()
+			close(j.done)
+		}
+		s.bgDropped++
 	}
 }
 

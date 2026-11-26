@@ -503,8 +503,10 @@ func (r *Runtime) jitRegArm(cl *closure, c *regCode) {
 func (r *Runtime) jitRegHot(cl *closure, c *regCode, work int64) *jitRegEntry {
 	if r.jit != nil && r.jit.inFlight() {
 		// A check: compiles in the background that are done installed
-		// (jitDrain).
+		// (jitDrain), and the sample's work counted toward the function's
+		// if one waits (jitRegWaited).
 		r.jitDrain()
+		r.jitRegWaited(cl, work)
 	}
 	cc := cl.closureCode
 	if cc.jitRegRefused {

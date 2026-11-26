@@ -869,7 +869,15 @@ calls installing the code meanwhile, and the next ask comes a budget later.
 Its budget left spent, each back edge had been a check, a call of Go, the
 waiting slower than the interpreter. A function the background had no room
 for (`jobsFull`) keeps its budget spent and asks again at the interrupt
-budget's checks (`jitRegArmEdges`). A compile no worker has begun by its function's second ask,
+budget's checks (`jitRegArmEdges`). The work a function does waiting, its
+samples' and its native callers' asks, is its job's (`jitRegJob`'s
+`waited`), and the process's workers take the queued compile whose function
+did most (`jitWorkerPool`'s `next`), as HotSpot's compile queue serves the
+method invoked most since it was queued: one no longer run waits behind
+those that are, and once it has done no work from one of the flush's ticks
+to the next, an epoch or more of the program's running, its runtime drops
+it unbegun (`jitRegDropStale`), as HotSpot drops stale tasks; it asks again
+once hot again. A compile no worker has begun by its function's second ask,
 two budgets of the interpreter's work after it was handed over, is taken
 back (`jitRegTakeBack`, `jitTakeBackAsks`): made on the runtime's goroutine
 and installed at once, a worker that comes to it after leaving it as it is.

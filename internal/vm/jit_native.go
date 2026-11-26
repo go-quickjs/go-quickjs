@@ -204,7 +204,11 @@ func (r *Runtime) jitRegForAs(cl *closure, c *regCode, callee bool) *jitRegEntry
 		// schedule of checks. Native callers' calls of a callee Go makes
 		// ask here and enter no code of the callee's: Are We Fast Yet's
 		// DeltaBlue called markUnsatisfied through Go 11,000 times with
-		// its compile done, between the checks that installed it.
+		// its compile done, between the checks that installed it. A
+		// native caller's ask is a call's work toward it (jitRegWaited).
+		if callee {
+			j.waited.Add(int64(max(len(c.rc.Code), 1)))
+		}
 		if j.state.Load() != jitJobDone || r.jitScheduled() {
 			return nil
 		}

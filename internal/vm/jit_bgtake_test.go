@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -95,4 +96,76 @@ func TestJITBackgroundTakeBack(t *testing.T) {
 		t.Fatalf("submitted %d, jobs %d, pending %d, compiled %d: want 1, 0, 0, 1", s.bgSubmitted, len(s.regJobs), len(s.regPendingJobs), s.compiled)
 	}
 	jitCallForTest(t, r, `loop(100)`, 4950)
+}
+
+// jitTaskForTest is a queued compile whose function did waited work.
+type jitTaskForTest struct {
+	waited int64
+	ran    *[]int64
+}
+
+func (j jitTaskForTest) run()              { *j.ran = append(*j.ran, j.waited) }
+func (j jitTaskForTest) waitedWork() int64 { return j.waited }
+
+// The workers take the queued compile whose function did most work waiting
+// for it, the first queued of those that did as much, so that one no longer
+// run waits behind those that are.
+func TestJITBackgroundQueueMostWorkFirst(t *testing.T) {
+	t.Parallel()
+	var ran []int64
+	p := &jitWorkerPool{running: 1}
+	for _, w := range []int64{3, 0, 9, 9, 1} {
+		p.queue = append(p.queue, jitTaskForTest{waited: w, ran: &ran})
+	}
+	p.work()
+	if want := []int64{9, 9, 3, 1, 0}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v: want %v", ran, want)
+	}
+	if p.running != 0 || len(p.queue) != 0 {
+		t.Fatalf("running %d, queued %d after: want none", p.running, len(p.queue))
+	}
+}
+
+// A compile no worker has begun whose function went unused for an epoch,
+// from one of the flush's ticks to the next, is dropped, and asked for
+// again once the function is hot again; one whose function ran meanwhile
+// stays queued.
+func TestJITBackgroundDropsStale(t *testing.T) {
+	t.Parallel()
+	r := jitUnstartedForTest(t)
+	tick := uint64(0)
+	r.jitTest.flushNow = func() uint64 { return tick }
+	cl := jitGlobalClosureForTest(r, "loop")
+	key := r.jitRegKeyOf(cl)
+	for call := 1; r.jit == nil || r.jit.regPendingJobs[key] == nil; call++ {
+		if call > 100 {
+			t.Fatalf("no compile pending (%s)", jitBackgroundStateForTest(r, cl))
+		}
+		jitCallForTest(t, r, `loop(200)`, 19900)
+	}
+	j := r.jit.regPendingJobs[key]
+	look := func() {
+		tick++
+		r.jit.flush()
+	}
+	look()
+	jitCallForTest(t, r, `loop(200)`, 19900)
+	look()
+	if r.jit.regPendingJobs[key] != j || r.jit.bgDropped != 0 {
+		t.Fatalf("pending %v, dropped %d: want the compile of a function run meanwhile kept", r.jit.regPendingJobs[key] == j, r.jit.bgDropped)
+	}
+	look()
+	if r.jit.regPendingJobs[key] != nil || len(r.jit.regJobs) != 0 || r.jit.bgDropped != 1 || j.state.Load() != jitJobAbandoned || cl.closureCode.jitEnters {
+		t.Fatalf("pending %v, jobs %d, dropped %d, state %d, enters %v: want the compile dropped",
+			r.jit.regPendingJobs[key] != nil, len(r.jit.regJobs), r.jit.bgDropped, j.state.Load(), cl.closureCode.jitEnters)
+	}
+	for call := 1; r.jit.regPendingJobs[key] == nil; call++ {
+		if call > 100 {
+			t.Fatal("not handed over again")
+		}
+		jitCallForTest(t, r, `loop(200)`, 19900)
+	}
+	if r.jit.bgSubmitted != 2 {
+		t.Fatalf("submitted %d: want 2", r.jit.bgSubmitted)
+	}
 }

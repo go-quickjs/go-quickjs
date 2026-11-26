@@ -249,7 +249,8 @@ func (r *Runtime) jitCrossHook() func(f JITFunction, code *mir.Code, err error) 
 //	           install, so that the path a miss takes is taken by every one
 //	takeback   with background, give no compile to a worker, in place of
 //	           its schedule: each is taken back at its function's second
-//	           ask and made on the spot (jitRegTakeBack), so that the path
+//	           ask and made on the spot (jitRegTakeBack), or dropped once
+//	           its function goes unused (jitRegDropStale), so that the path
 //	           a compile takes where every worker is busy is taken by every
 //	           one
 //	park       park the code as the runtime returns to its host every time,
@@ -1376,6 +1377,10 @@ type jitState struct {
 	// bgTakenBack counts the compiles in the background taken back to be
 	// made on the spot, no worker having begun them (jitRegTakeBack).
 	bgTakenBack uint64
+	// bgDropped counts the compiles in the background dropped unbegun,
+	// their functions gone unused (jitRegDropStale), and jobsTick is the
+	// flush's tick that last looked for them.
+	bgDropped, jobsTick uint64
 	// arrayRooms are pools with large inherited hints. The weak list
 	// releases completed samples without keeping discarded code's pools.
 	arrayRooms []weak.Pointer[abi.ObjectPool]
@@ -1780,6 +1785,14 @@ func (s *jitState) flush() {
 		}
 	}
 	tick := s.flushNow()
+	if tick != s.jobsTick {
+		// An epoch's tick: compiles in the background whose functions went
+		// unused since the last dropped, unbegun.
+		s.jobsTick = tick
+		if s.inFlight() {
+			s.rt.jitRegDropStale()
+		}
+	}
 	if tick < s.flushedAt+s.flushAge() {
 		return
 	}
