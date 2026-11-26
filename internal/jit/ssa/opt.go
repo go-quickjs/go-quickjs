@@ -1160,7 +1160,7 @@ func rematerializeUpvalues(f *Func) bool {
 			v.Op, v.Args, v.Shadow, v.ID, v.Uses = OpLoadCell, f.refsOf(1), cell, f.nextID, 0
 			f.nextID++
 			v.Args[0] = cell
-			reads = append(reads, cell, v)
+			reads = f.appendValue(f.appendValue(reads, cell), v)
 		}
 		if len(reads) == 0 {
 			continue

@@ -250,9 +250,18 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 		clear(g.stubs)
 		c.a, c.stubs, c.stubFor, c.cold, c.pool, c.poolTab = &g.a, g.stubs, g.stubFor[:0], g.cold[:0], g.pool[:0], g.poolTab[:0]
 		c.coldBudget = g.coldBudget[:0]
+		c.goFails, c.exits = g.goFails[:0], g.exits[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
 		defer func() {
 			g.labels, g.stubFor, g.cold, g.pool, g.poolTab, g.coldBudget = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.pool[:0], c.poolTab[:0], c.coldBudget[:0]
+			// The calls' states and the exits' descriptions they point
+			// to, which the code keeps, are not the workspace's to keep
+			// alive; the calls' length is what the workspace counts as
+			// used (scratchUsed).
+			clear(c.goFails)
+			g.goFails = c.goFails
+			clear(c.exits)
+			g.exits = c.exits[:0]
 		}()
 	} else {
 		c.a, c.stubs = &amd64.Asm{}, map[stubKey]amd64.Label{}
@@ -486,7 +495,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	if t := c.opts.Timing; t != nil {
 		t.Compiles++
 	}
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, TailEntry: tailAt, Text: c.a.Moved(text), Exits: c.exits,
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, TailEntry: tailAt, Text: c.a.Moved(text), Exits: keptExits(c.exits, w != nil),
 		Calls: c.calls, CallRefs: c.callRefs(), Spills: c.spills, GoCalls: c.goCalls, Marks: marks, Listing: listing, core: c.core}, nil
 }
 
@@ -9829,7 +9838,10 @@ func (c *compiler) holder(v *ssa.Value, guard guardTo) {
 	if v.Holders() != nil {
 		first = *v.Holders()
 	}
-	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
+	// The cases: the value's own, then the rest it met (v.Cases), taken
+	// in turn rather than listed anew, which allocated at every read.
+	rest := v.Cases()
+	ncases := 1 + len(rest)
 	// At a megamorphic site (ssa.Value's Megamorphic), a receiver of a
 	// shape not among the cases has its own table searched (scan), as V8's
 	// megamorphic loads look further rather than deoptimize, and leaves
@@ -9867,12 +9879,16 @@ func (c *compiler) holder(v *ssa.Value, guard guardTo) {
 			guard.jump(amd64.CondNE)
 		}
 	}
-	for i, k := range cases {
+	for i := range ncases {
+		k := ssa.PropertyCase{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}
+		if i > 0 {
+			k = rest[i-1]
+		}
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(k.Shape))
-		if i == len(cases)-1 {
+		if i == ncases-1 {
 			miss(scan)
 		} else {
 			c.a.Jcc(amd64.CondNE, next)
@@ -9904,7 +9920,7 @@ func (c *compiler) holder(v *ssa.Value, guard guardTo) {
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
 		c.a.OpImm(amd64.Add, scratchA, k.Index*c.enc.ValueSize, true)
-		if i < len(cases)-1 {
+		if i < ncases-1 {
 			c.a.Jmp(done)
 			c.a.Bind(next)
 		}

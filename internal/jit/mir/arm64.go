@@ -205,12 +205,14 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 		clear(g.stubs)
 		c.a, c.stubs, c.stubFor, c.cold = &g.a, g.stubs, g.stubFor[:0], g.cold[:0]
 		c.coldBudget = g.coldBudget[:0]
-		c.goFails = g.goFails[:0]
+		c.goFails, c.exits = g.goFails[:0], g.exits[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
 		defer func() {
 			g.labels, g.stubFor, g.cold, g.coldBudget = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.coldBudget[:0]
 			clear(c.goFails)
 			g.goFails = c.goFails
+			clear(c.exits)
+			g.exits = c.exits[:0]
 		}()
 	} else {
 		c.a, c.stubs = &arm64.Asm{}, map[stubKey]arm64.Label{}
@@ -380,7 +382,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	if t := c.opts.Timing; t != nil {
 		t.Compiles++
 	}
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, TailEntry: tailAt, Text: len(bytes), Exits: c.exits,
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, TailEntry: tailAt, Text: len(bytes), Exits: keptExits(c.exits, w != nil),
 		Calls: c.calls, CallRefs: c.callRefs(), Spills: c.spills, GoCalls: c.goCalls, core: c.core}, nil
 }
 

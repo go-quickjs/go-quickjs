@@ -2823,7 +2823,7 @@ func (c *core) colorKeeps(iv []interval, pos []int, kv []*ssa.Value) error {
 					cell[v.ID] = w.Index + 1
 				}
 			case v.Op == ssa.OpPhi && v.Type == ssa.Source:
-				phis = append(phis, v)
+				phis = c.appendValue(phis, v)
 			}
 		}
 	}
@@ -2844,7 +2844,7 @@ func (c *core) colorKeeps(iv []interval, pos []int, kv []*ssa.Value) error {
 				for _, a := range p.Args {
 					add := func(k int) {
 						if !slices.Contains(merged[i], k) {
-							merged[i] = append(merged[i], k)
+							merged[i] = c.appendInt(merged[i], k)
 							grew = true
 						}
 					}
@@ -4852,6 +4852,16 @@ func (c *core) finishExits() {
 		}
 		f.Slots, f.Tree, f.Words, f.Inlines = exact(f.Slots), exact(f.Tree), exact(f.Words), exact(f.Inlines)
 	}
+}
+
+// keptExits is the code's exits' descriptions, exits: a copy of their
+// length where they were listed in the workspace (inWorkspace), which the
+// next compile lists its own in.
+func keptExits(exits []*abi.ExitDescriptor, inWorkspace bool) []*abi.ExitDescriptor {
+	if inWorkspace {
+		return exact(exits)
+	}
+	return exits
 }
 
 // exact is s in an array of its length, or nil for none.

@@ -32,6 +32,7 @@ type Workspace struct {
 	accessors  arena.Arena[AccessorSite]
 	answers    arena.Arena[siteAnswer]
 	callLists  arena.Arena[[]*CallSite]
+	siteRefs   arena.Arena[*CallSite]
 	holders    arena.Arena[HolderChain]
 	inlines    arena.Arena[InlineState]
 	frames     arena.Arena[frame]
@@ -64,6 +65,7 @@ func (w *Workspace) init() {
 	w.accessors.KeepBig()
 	w.answers.KeepBig()
 	w.callLists.KeepBig()
+	w.siteRefs.KeepBig()
 	w.holders.KeepBig()
 	w.inlines.KeepBig()
 	w.frames.KeepBig()
@@ -77,7 +79,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 func (w *Workspace) arenaBytes() int {
 	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.int32s.Bytes() + w.slotNodes.Bytes() + w.slotKids.Bytes() + w.lastStates.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
-		w.answers.Bytes() + w.callLists.Bytes() + w.holders.Bytes() + w.inlines.Bytes() + w.frames.Bytes()
+		w.answers.Bytes() + w.callLists.Bytes() + w.siteRefs.Bytes() + w.holders.Bytes() + w.inlines.Bytes() + w.frames.Bytes()
 }
 
 // scratchBytes is what the passes' scratch tables keep.
@@ -131,6 +133,7 @@ func (w *Workspace) RewindAt(cycle uint64) {
 	w.accessors.RewindAt(cycle)
 	w.answers.RewindAt(cycle)
 	w.callLists.RewindAt(cycle)
+	w.siteRefs.RewindAt(cycle)
 	w.holders.RewindAt(cycle)
 	w.inlines.RewindAt(cycle)
 	w.frames.RewindAt(cycle)
@@ -210,6 +213,15 @@ func (f *Func) callLists(n int) [][]*CallSite {
 		return f.ws.callLists.Make(n)
 	}
 	return make([][]*CallSite, n)
+}
+
+// appendSite is append(s, c), growing s in the workspace if there is
+// one.
+func (f *Func) appendSite(s []*CallSite, c *CallSite) []*CallSite {
+	if f.ws != nil {
+		return f.ws.siteRefs.Append(s, c)
+	}
+	return append(s, c)
 }
 
 // holderChain is h in the workspace, if the Func has one.

@@ -87,6 +87,8 @@ type Workspace struct {
 		coldBudget []int
 		pool       []poolConst
 		poolTab    []int32
+		goFails    []goFail
+		exits      []*abi.ExitDescriptor
 	}
 	arm64 struct {
 		c          a64Compiler
@@ -98,6 +100,7 @@ type Workspace struct {
 		cold       []func()
 		coldBudget []int
 		goFails    []a64GoFail
+		exits      []*abi.ExitDescriptor
 	}
 	// findBudgets' tables, kept from compile to compile: its walk's stack,
 	// a loop's blocks, the loops it finds and the values their registers
@@ -158,7 +161,7 @@ func (w *Workspace) Bytes() int {
 	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.readers) + capBytes(w.sched.writers) + capBytes(w.sched.reading) + capBytes(w.sched.ahead) + capBytes(w.sched.behind) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold) + capBytes(w.amd64.pool) + capBytes(w.amd64.poolTab)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.code) + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
-	n += capBytes(w.arm64.goFails)
+	n += capBytes(w.arm64.goFails) + capBytes(w.amd64.goFails) + capBytes(w.amd64.exits) + capBytes(w.arm64.exits)
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
 	n += len(w.exitWords) * 12
@@ -226,7 +229,8 @@ func (w *Workspace) RewindAt(cycle uint64) {
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold, w.amd64.pool, w.amd64.poolTab = amd64.Asm{}, nil, nil, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
 		w.arm64.code = nil
-		w.arm64.goFails = nil
+		w.arm64.goFails, w.arm64.exits = nil, nil
+		w.amd64.goFails, w.amd64.exits = nil, nil
 	}
 }
 
@@ -238,8 +242,8 @@ func (w *Workspace) scratchUsed() int {
 	n -= w.amd64.a.Bytes() + w.arm64.a.Bytes() + capBytes(w.arm64.code) + capBytes(w.xuses) + capBytes(w.gpool)
 	n += w.amd64.a.Used() + w.arm64.a.Used() + len(w.arm64.code)
 	n += w.xusesUsed*int(unsafe.Sizeof(xuse{})) + w.gpoolUsed*8
-	n -= capBytes(w.arm64.goFails)
-	n += len(w.arm64.goFails) * int(unsafe.Sizeof(a64GoFail{}))
+	n -= capBytes(w.arm64.goFails) + capBytes(w.amd64.goFails)
+	n += len(w.arm64.goFails)*int(unsafe.Sizeof(a64GoFail{})) + len(w.amd64.goFails)*int(unsafe.Sizeof(goFail{}))
 	return n
 }
 
@@ -343,6 +347,22 @@ func (c *core) words(n int) valueSet {
 		return c.ws.words.Make(n)
 	}
 	return make(valueSet, n)
+}
+
+// appendInt and appendValue are append(s, x), growing s in the workspace
+// if there is one.
+func (c *core) appendInt(s []int, x int) []int {
+	if c.ws != nil {
+		return c.ws.ints.Append(s, x)
+	}
+	return append(s, x)
+}
+
+func (c *core) appendValue(s []*ssa.Value, v *ssa.Value) []*ssa.Value {
+	if c.ws != nil {
+		return c.ws.values.Append(s, v)
+	}
+	return append(s, v)
 }
 
 func (c *core) valueList(n int) []*ssa.Value {

@@ -10001,7 +10001,8 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 		}
 	}
 	f, a := b.f, in.Left.Slot
-	args := make([]*Value, 0, in.Extra+2)
+	// The call's arguments, which its value copies (newValue).
+	args := f.refsOf(in.Extra + 2)[:0]
 	if calls[0].Forward {
 		// f.apply(x, arguments) (CallSite's Forward): f, apply and x, its
 		// window's first three registers; the realm's apply checked, any
@@ -10237,7 +10238,7 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 			site = &copy
 			site.Coerce = false
 		}
-		calls = append(calls, site)
+		calls = b.f.appendSite(calls, site)
 	}
 	return calls
 }
