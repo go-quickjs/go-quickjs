@@ -168,12 +168,17 @@ func (d *domTree) compute(f *Func) {
 		d.rpo[b.ID] = int32(i)
 	}
 	d.idom[f.Entry.ID] = f.Entry
-	for changed := true; changed; {
+	// A first walk that finds every predecessor's dominator known where it
+	// asks -- the blocks' order a topological one -- finds each as the next
+	// walk would, and is the last.
+	for first, changed := true, true; changed; first = false {
 		changed = false
+		later := false
 		for _, b := range f.Blocks[1:] {
 			var nd *Block
 			for _, p := range b.Preds {
 				if d.idom[p.ID] == nil {
+					later = true
 					continue
 				}
 				if nd == nil {
@@ -186,6 +191,9 @@ func (d *domTree) compute(f *Func) {
 				d.idom[b.ID] = nd
 				changed = true
 			}
+		}
+		if first && !later {
+			break
 		}
 	}
 	// The children, counted by parent, then placed in the blocks' order.
