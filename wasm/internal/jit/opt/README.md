@@ -1541,7 +1541,7 @@ dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 ## Measurements
 
-`internal/cmd/wasmbench` at ed2c6ec9, median of 5 fresh processes, each
+`internal/cmd/wasmbench` at 3e0c4fec, median of 5 fresh processes, each
 one run after one warm-up run, ms (Ryzen 9 9950X3D2, Windows, 32 threads;
 `jit-tiered`, wasmbench's default `jit` engine, is the baseline with the
 tier at `DefaultOptThreshold` in the background, `jit-opt` every
@@ -1552,44 +1552,44 @@ tier-ups are compiled on the spot.
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
-| micro/fib | 113 | 11.7 | 4.63 | 4.65 |
-| micro/loop | 68.0 | 14.1 | 14.4 | 14.1 |
-| micro/i64 | 96.9 | 20.2 | 12.8 | 12.9 |
-| micro/mandelbrot | 93.6 | 11.3 | 10.5 | 10.5 |
-| micro/nbody | 64.7 | 6.34 | 3.43 | 3.41 |
-| micro/bytes | 81.6 | 8.76 | 5.52 | 5.52 |
-| micro/bulk | 102 | 17.2 | 11.0 | 10.9 |
-| micro/indirect | 189 | 20.6 | 16.8 | 17.1 |
-| micro/brtable | 113 | 42.3 | 42.2 | 42.4 |
-| micro/globals | 76.7 | 26.7 | 10.7 | 11.1 |
-| micro/gc | 228 | 83.8 | 96.6 | 97.2 |
-| micro/arrays | 61.5 | 27.7 | 32.5 | 33.0 |
-| micro/simd | 18.6 | 2.95 | 2.98 | 2.95 |
-| programs/sha256 | 791 | 67.6 (83.0) | 44.1 (62.2) | 43.3 (134) |
-| programs/sort | 690 | 128 (147) | 89.2 (113) | 88.8 (197) |
-| programs/json | 463 | 34.5 (58.6) | 26.9 (58.7) | 21.0 (179) |
-| programs/regexp | 305 | 35.0 (52.9) | 25.2 (45.2) | 24.2 (137) |
-| programs/gzip | 189 | 23.6 (46.0) | 19.1 (46.5) | 17.8 (160) |
-| programs/interp | 167 | 23.1 (36.9) | 9.79 (37.6) | 10.2 (93.7) |
+| micro/fib | 114 | 9.95 | 3.17 | 3.45 |
+| micro/loop | 67.2 | 14.2 | 14.1 | 14.1 |
+| micro/i64 | 97.7 | 19.7 | 12.6 | 12.5 |
+| micro/mandelbrot | 93.2 | 11.3 | 10.6 | 10.6 |
+| micro/nbody | 64.3 | 6.39 | 3.37 | 3.40 |
+| micro/bytes | 77.5 | 8.76 | 5.43 | 5.73 |
+| micro/bulk | 101 | 16.9 | 11.2 | 10.9 |
+| micro/indirect | 196 | 20.4 | 15.9 | 15.8 |
+| micro/brtable | 113 | 42.8 | 42.6 | 42.1 |
+| micro/globals | 77.0 | 26.5 | 11.0 | 10.9 |
+| micro/gc | 217 | 80.1 | 90.9 | 89.7 |
+| micro/arrays | 60.2 | 25.9 | 31.4 | 31.0 |
+| micro/simd | 18.6 | 2.92 | 2.92 | 2.91 |
+| programs/sha256 | 780 | 63.9 (79.4) | 38.1 (55.5) | 37.4 (121) |
+| programs/sort | 679 | 127 (143) | 86.0 (109) | 85.2 (185) |
+| programs/json | 461 | 34.6 (58.6) | 25.3 (58.2) | 18.4 (167) |
+| programs/regexp | 303 | 33.9 (52.5) | 21.1 (41.3) | 19.7 (126) |
+| programs/gzip | 191 | 23.8 (46.0) | 17.5 (45.5) | 16.3 (149) |
+| programs/interp | 164 | 22.4 (35.9) | 8.32 (34.7) | 8.67 (87.7) |
 
 The Go programs' steady state, once every function that will be compiled
 is (`-warmup 15 -reps 10`, median of 3 processes, ms):
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
-| sha256 | 65.3 | 42.0 | 41.8 |
-| sort | 129 | 89.2 | 89.4 |
-| json | 35.2 | 22.1 | 21.4 |
-| regexp | 35.1 | 24.5 | 23.8 |
-| gzip | 24.4 | 18.2 | 17.7 |
-| interp | 22.2 | 9.75 | 9.87 |
+| sha256 | 64.4 | 37.0 | 37.1 |
+| sort | 126 | 85.7 | 85.1 |
+| json | 34.3 | 19.2 | 17.9 |
+| regexp | 33.7 | 19.9 | 19.5 |
+| gzip | 23.5 | 16.4 | 16.0 |
+| interp | 21.9 | 8.49 | 8.30 |
 
-The tier takes 28 to 56% off the baseline's steady state. The baseline's
+The tier takes 32 to 62% off the baseline's steady state. The baseline's
 own column is half or less of what it was in this README's earlier table
 for sha256, regexp and gzip (144, 70.8 and 53.0 ms), the baseline having
 since come to make calls through tables and references and the bulk
 memory instructions natively (1db2aac1, 5c074edf), as the tier did
-first. json's second run, 26.9 ms tiered, is not
+first. json's second run, 25.3 ms tiered, is not
 yet its steady state: tier-ups are still being compiled in the background
 then.
 
