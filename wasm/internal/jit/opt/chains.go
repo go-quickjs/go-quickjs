@@ -16,17 +16,19 @@ package opt
 // begins knowing nothing: no value is carried around a loop, nor past a
 // merge.
 //
-// It reports whether it made a read a copy. A function whose frame the
-// values it keeps live leave too few spill slots is compiled again without
-// it (noForward), as without forwardGlobals.
-func forwardChains(f *Func) bool {
+// It reports whether it resolved every value's arguments, which it does as
+// it walks them -- a value's arguments but a phi's come before it in the
+// walk, as order lays the blocks out -- and whether it made a read a copy.
+// A function whose frame the values it keeps live leave too few spill
+// slots is compiled again without it (noForward), as without
+// forwardGlobals.
+func forwardChains(f *Func) (resolved, changed bool) {
 	if f.noForward {
-		return false
+		return false, false
 	}
 	ws := f.ws
 	fc := &ws.fc
 	fc.reset(f)
-	changed := false
 	for i, b := range f.Blocks {
 		// A block whose one predecessor is the block before it carries
 		// what that one knew at its end, as it is: the facts are saved
@@ -41,6 +43,7 @@ func forwardChains(f *Func) bool {
 			}
 		}
 		for _, v := range b.Values {
+			resolveArgs(v.Args)
 			switch chainOps[v.Op] {
 			case chainGet:
 				if v.Aux2 == 1 {
@@ -91,7 +94,7 @@ func forwardChains(f *Func) bool {
 	}
 	fc.done()
 	f.forwarded = f.forwarded || changed
-	return changed
+	return true, changed
 }
 
 // What forwardChains does at an operation (chainOps): knows a global's

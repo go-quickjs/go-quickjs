@@ -32,12 +32,15 @@ func Optimize(f *Func, check func(pass string)) {
 	pending := false
 	run("copyelim", PhaseCopyelim, func(f *Func) { pending = trivialPhis(f) })
 	run("chains", PhaseChains, func(f *Func) {
-		if forwardChains(f) {
-			trivialPhis(f)
+		// forwardChains resolves the values' arguments as it walks them;
+		// a phi its copies make trivial may be any value's argument.
+		resolved, changed := forwardChains(f)
+		if changed {
+			resolved = resolved && !trivialPhis(f)
 			pending = true
 		}
 		if pending || anyCopy(f) {
-			rewriteCopies(f)
+			rewriteCopies(f, resolved)
 		}
 	})
 	run("licm", PhaseLICM, licm)
@@ -87,7 +90,7 @@ func resolve(v *Value) *Value {
 // that value, removing them.
 func copyelim(f *Func) {
 	if trivialPhis(f) || anyCopy(f) {
-		rewriteCopies(f)
+		rewriteCopies(f, false)
 	}
 }
 
@@ -152,8 +155,9 @@ func anyCopy(f *Func) bool {
 
 // rewriteCopies rewrites the uses of copies and drops the copies from their
 // blocks, in one walk: a copy dropped keeps its argument, which a later use
-// resolves through.
-func rewriteCopies(f *Func) {
+// resolves through. resolved says the values' arguments are resolved
+// already, and only the phis', the branches' and the results' are left.
+func rewriteCopies(f *Func, resolved bool) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
 			resolveArgs(v.Args)
@@ -161,7 +165,9 @@ func rewriteCopies(f *Func) {
 		// The values are moved down only from the block's first copy on.
 		vs, n := b.Values, 0
 		for i, v := range vs {
-			resolveArgs(v.Args)
+			if !resolved {
+				resolveArgs(v.Args)
+			}
 			if v.Op != OpCopy {
 				if n != i {
 					vs[n] = v
