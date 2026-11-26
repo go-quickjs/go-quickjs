@@ -1251,41 +1251,80 @@ func (q *jitCallCtx) genAt(rpc int) bool {
 // code. It answers from the copy as nativeCalls would, and says yes
 // wherever that may come to mustLive: never too seldom, a derivation that
 // came to one would panic.
-func (q *jitCallCtx) callsLive(pc int) bool {
+func (q *jitCallCtx) callsLive(pc int) bool { return q.callsLiveKind(pc) != jitLiveNone }
+
+// jitLiveKind is why NativeCalls' answer at a PC asks the live feedback
+// (callsLiveKind).
+type jitLiveKind uint8
+
+const (
+	jitLiveNone     jitLiveKind = iota
+	jitLiveTyped                // typed code: its tables (regTableTargets)
+	jitLiveStep                 // a loop's step (regStepSites)
+	jitLiveWhole                // an instruction Go runs whole (regWholeSite)
+	jitLiveSuper                // super() (regSuperSites)
+	jitLiveLit                  // regexp_lit's call (regLitPool)
+	jitLiveApply                // f.apply(x, arguments)
+	jitLiveNew                  // a construction: pools (regAllocSite, jitRegSeedConstruct)
+	jitLiveUnfilled             // a site the interpreter has not filled: the binding now
+	jitLiveBuiltin              // a built-in's call (regBuiltinSite)
+	jitLiveLitMark              // a call that gives a RegExp literal back (regLitPool)
+	jitLiveGen                  // generators resumed or made (regGenNextSite, regGenMakeSite)
+	jitLiveKinds
+)
+
+// callsLiveKind is why NativeCalls' answer at the program's instruction pc
+// asks the live feedback (callsLive), jitLiveNone where it does not.
+func (q *jitCallCtx) callsLiveKind(pc int) jitLiveKind {
 	w, op, ok := jitRegAt(q.p, q.rc, pc)
 	if !ok {
-		return false
+		return jitLiveNone
 	}
 	if q.rc.Typed {
-		// Typed code's calls read its tables (regTableTargets).
-		return true
+		return jitLiveTyped
 	}
 	c := &q.p.Code[pc]
-	if op == ir.IterStep && w.Op() == bytecode.RIterNext && !c.When && !c.Rest ||
-		op == ir.Host && c.Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField {
-		return true
+	switch {
+	case op == ir.IterStep && w.Op() == bytecode.RIterNext && !c.When && !c.Rest:
+		return jitLiveStep
+	case op == ir.Host && c.Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField:
+		return jitLiveWhole
 	}
 	if op != ir.Host || !c.Window {
-		return false
+		return jitLiveNone
 	}
 	switch w.Op() {
 	case bytecode.RTypeof, bytecode.RInstanceOf, bytecode.RInstanceOfNext:
-		return false
-	case bytecode.RSuperCall, bytecode.RLit, bytecode.RApplyArgs, bytecode.RNewW:
-		return true
+		return jitLiveNone
+	case bytecode.RSuperCall:
+		return jitLiveSuper
+	case bytecode.RLit:
+		return jitLiveLit
+	case bytecode.RApplyArgs:
+		return jitLiveApply
+	case bytecode.RNewW:
+		return jitLiveNew
 	}
 	rpc := int(q.p.Origin[pc])
 	if rpc < len(q.rc.Marks) && q.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
-		return false
+		return jitLiveNone
 	}
 	calls := q.src.calls(int(w.C()))
 	if uint(w.C()) >= uint(len(calls)) || calls[w.C()].callee == nil {
 		// Unfilled: the binding read before it holds the function now
 		// (regViaNow, regConstructorNow).
-		return true
+		return jitLiveUnfilled
 	}
 	method := w.Op().MethodCall()
-	return q.builtinAt(w, method) || method && q.litAt(rpc, w) || q.genAt(rpc)
+	switch {
+	case q.builtinAt(w, method):
+		return jitLiveBuiltin
+	case method && q.litAt(rpc, w):
+		return jitLiveLitMark
+	case q.genAt(rpc):
+		return jitLiveGen
+	}
+	return jitLiveNone
 }
 
 // regBuiltinSite is the call of a built-in native code makes itself whose
