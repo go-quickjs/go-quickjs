@@ -39,7 +39,14 @@ func thread(f *Func) {
 			if !threadsAny(f, h) {
 				continue
 			}
-			computeUses(f)
+			// Before the first threading the blocks are in order's order;
+			// a threading changes the graph, and its dominators, but not
+			// the order.
+			if changed {
+				computeUses(f)
+			} else {
+				computeUsesInOrder(f)
+			}
 			counted = true
 			ws.newStale()
 		}

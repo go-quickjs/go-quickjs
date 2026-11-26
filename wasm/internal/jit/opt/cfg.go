@@ -300,6 +300,39 @@ func findLoops(f *Func, d *domTree) {
 	ws.loops = loops[:0]
 }
 
+// computeUsesInOrder counts each value's uses as computeUses does, where
+// the blocks are in an order that puts each after its dominators, as
+// order's: a value's uses but phis' are then in its block after it or in
+// blocks after its, and one walk counts them as it clears each value's
+// count, before any use of it; the phis' arguments, which may come before
+// it, are counted after.
+func computeUsesInOrder(f *Func) {
+	for _, b := range f.Blocks {
+		for _, v := range b.Phis {
+			v.Uses = 0
+		}
+		for _, v := range b.Values {
+			v.Uses = 0
+			for _, a := range v.Args {
+				a.Uses++
+			}
+		}
+		if b.Control != nil {
+			b.Control.Uses++
+		}
+		for _, a := range b.Results {
+			a.Uses++
+		}
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Phis {
+			for _, a := range v.Args {
+				a.Uses++
+			}
+		}
+	}
+}
+
 // computeUses counts each value's uses.
 func computeUses(f *Func) {
 	for _, b := range f.Blocks {

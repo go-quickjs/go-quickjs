@@ -193,7 +193,9 @@ func resolveArgs(args []*Value) {
 // may trap: the global holds what the interpreter's does wherever anything
 // could see it. Go's code's returns move its stack pointer twice.
 func dce(f *Func) {
-	computeUses(f)
+	// The graph is as order left it: licm, since, moves values only into
+	// the preheaders their arguments dominate.
+	computeUsesInOrder(f)
 	work := f.ws.dceWork[:0]
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
