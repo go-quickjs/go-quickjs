@@ -79,7 +79,7 @@ func TestJITMemoryLimitOption(t *testing.T) {
 		{"jit 256K", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(256 << 10)}, 256 << 10},
 		{"jit 1M", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(1 << 20)}, 1 << 20},
 		{"jit 4M over a memory limit", []quickjs.Option{quickjs.WithJIT(), quickjs.WithMemoryLimit(64 << 20), quickjs.WithJITMemoryLimit(4 << 20)}, 4 << 20},
-		{"jit default", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(0)}, 8 << 20},
+		{"jit default", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITMemoryLimit(0)}, 64 << 20},
 		{"no jit", []quickjs.Option{quickjs.WithJITMemoryLimit(256 << 10)}, 0},
 	} {
 		r := quickjs.New(tc.opts...)

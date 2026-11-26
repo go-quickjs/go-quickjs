@@ -156,8 +156,19 @@ func (r *Runtime) jitRegArmEdges(cl *closure, c *regCode) {
 	cc.jitRegEdges, cc.jitRegEdgesSet = left, left
 }
 
-// jitBudgetForFeedback is V8's interrupt_budget_for_feedback_allocation:
-// the work a function's loops do before its budget begins (jitRegLoop).
+// jitBudgetForFeedback is the work, in back edges' distances, that a
+// function's loops do before its budget to be compiled begins
+// (jitRegLoop). The first back-edge check of a function with no code and
+// no state arms its back edges with this much, or with its whole budget
+// where that is less (a runtime that compiles at once). Only once that is
+// spent is the function's state made and its back edges armed with the
+// budget (jitRegArmEdges), so that a loop's back-edge budget starts after
+// this work and its caches hold more than one turn's feedback when it is
+// compiled. A function its loops never warm this far has no state. The
+// value is an older V8's budget for allocating a function's feedback
+// vector; V8 14.6 counts that point as 8 invocations of the function's
+// length, and the value moves to that unit with the baseline tier, whose
+// compile that point starts.
 const jitBudgetForFeedback = 940
 
 // jitRegCounted is the work a function's back edges count from where its

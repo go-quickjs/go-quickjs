@@ -3395,8 +3395,8 @@ functions, 421 at the 99th percentile. A function whose estimate is past
 the budget is not compiled; like a deferred one, it warms up again and is
 asked for again once each budget is spent. The budget bounds what the JIT
 holds, not a compile's working memory, which is linear in the function's
-size as what it holds is (`TestJITCompileLinear`): some 16,000
-instructions are compiled at the default budget, 65,000 at 32 MiB,
+size as what it holds is (`TestJITCompileLinear`): some 131,000
+instructions are compiled at the default budget, 16,000 at 8 MiB,
 whatever their slots. The estimate counts the register code's
 instructions, scaled as inlining's bounds are (`jitRegInlineSize`) to the
 unit the shares were measured in, and its registers.
@@ -3465,8 +3465,12 @@ tier has no `MAP_JIT` path. Linux has no policy of its own to ask
 **Not the script's memory.** The memory meter never counts the JIT, so a
 script's measure, and whether it fails with `ErrMemoryLimit`, is the same
 with the JIT on and off. The JIT has a budget of its own (`jitBudget`):
-`WithJITMemoryLimit`'s if one is given; else 8 MiB, or an eighth of the
-runtime's memory limit where that is smaller.
+`WithJITMemoryLimit`'s if one is given; else 64 MiB, or an eighth of the
+runtime's memory limit where that is smaller. Every program measured fits
+the default -- Octane's Typescript peaks at 21 MiB, Octane run whole in
+one runtime at 44 -- and the WebAssembly engine's is the same. It is a
+ceiling: the flush gives back what has gone unused, while the runtime runs
+and as it returns to its host.
 
 **The budget bounds all the JIT holds** (`jitState.held`), as V8 bounds its
 code and what describes it by memory, not by a count of functions:
@@ -3490,7 +3494,11 @@ it went on in, native callers' calls -- date it (`regAge`), and a compile
 makes it young (`jitRegEntry`'s `used`, its epoch); `makeRoom` reclaims it
 with theirs, refusals first, then code unused this epoch and the one before,
 least recently used first (`regVictims`, `regReclaim`); and `flush` drops
-code unused between two of its looks (`regFlush`) -- code used is code that
+code unused between two of its looks (`regFlush`), a flush age of the
+program's running apart (`jitFlushAge`, `flushNow`), which it takes at a
+back edge's check, before a compile and as the runtime returns to its host
+with no frame running (`jitReturned`, from `endTurn`), so that an idle
+runtime gives back what it no longer runs -- code used is code that
 ran, and the callees of code used, inlined there (its keep's `inlined`, what
 it learned of its calls) or called natively (its keep's `links`), whose own
 uses do not count those runs.

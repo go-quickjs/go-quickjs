@@ -79,7 +79,7 @@ It needs both a build with `-tags quickjs_jit` and a runtime made with
 rt := quickjs.New(quickjs.WithJIT())
 ```
 
-What the JIT holds is bounded by `WithJITMemoryLimit` -- by default 8 MB,
+What the JIT holds is bounded by `WithJITMemoryLimit` -- by default 64 MiB,
 or an eighth of `WithMemoryLimit` when that is set, and as much again for
 the runtime's WebAssembly code -- and never counts against
 `WithMemoryLimit`. A function it cannot compile, a runtime made

@@ -16,7 +16,7 @@ type Config struct {
 	// and all that describes it, what it has learned, the programs it
 	// lowered, the contexts its code runs in, not its compiler's working
 	// memory -- apart from MemoryLimit, which never counts it. Zero or less
-	// selects the default: 8 MB, or an eighth of MemoryLimit when that is
+	// selects the default: 64 MiB, or an eighth of MemoryLimit when that is
 	// set.
 	JITMemoryLimit int64
 	// MemoryLimit caps the bytes the runtime may account for, or 0 for no

@@ -169,7 +169,7 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 // Runtime: its machine code and all that describes it, what it has learned
 // of the functions it compiled, the programs it lowered and the contexts
 // its code runs in. It is apart from WithMemoryLimit, which never counts
-// the JIT's memory. Zero or less keeps the default: 8 MB, or an eighth of
+// the JIT's memory. Zero or less keeps the default: 64 MiB, or an eighth of
 // WithMemoryLimit when that is set. It does nothing in a build without the
 // JIT, or a runtime without WithJIT.
 //
@@ -189,11 +189,16 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 // thousands of instructions is compiled -- and lets one go once nothing
 // has compiled in it for two of the collector's cycles.
 //
-// When the JIT's memory is full, it drops the code that has gone longest
-// unused, once it is old -- not used within the last two collections or
-// 100 ms -- to make room, as V8 flushes old code; while all of it is in
-// use, a function newly hot is not compiled, and runs in the interpreter,
-// until some is old.
+// The limit is a ceiling, not a reservation: a runtime holds what its
+// program's hot code takes. Code unused for about a second of the
+// program's running is dropped whatever room there is, as the runtime runs
+// and as control returns to the host, as V8 flushes old code, so a
+// runtime that has gone idle, or moved on to other work, gives back what
+// it no longer runs. When the JIT's memory is full, it drops the code that
+// has gone longest unused, once it is old -- not used within the last two
+// collections or 100 ms -- to make room; while all of it is in use, a
+// function newly hot is not compiled, and runs in the interpreter, until
+// some is old.
 //
 // A lower limit makes the JIT slower: with less room, hot code is dropped
 // and compiled again more often, or refused and interpreted, so a program
@@ -204,15 +209,15 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 // 512 KB, against 2.9 times without the JIT. Lower it to run many runtimes
 // in one process, or where memory is tight.
 //
-// The default may not be enough for a real-world application. It suits a
-// program with a few hundred hot functions; a large one -- a compiler, a
-// framework, a bundle of thousands of functions -- can need several times
-// more, and with too little the JIT spends its time dropping code and
-// compiling it again, which can make the program slower than without the
-// JIT. Octane's Typescript, the TypeScript compiler compiling itself, does
-// not fit 8 MB: it took 3,750 ms with the JIT under the default, 2,850 under
-// 32 MB, and 2,830 without the JIT. Time such a program under a larger limit
-// -- 32 or 64 MB -- and keep the one past which it runs no faster.
+// The default holds every program measured: Octane's Typescript, the
+// TypeScript compiler compiling itself, holds at most 21 MB, the whole of
+// Octane run in one runtime 44 MB, the V8 suite 8 MB, a server rendering
+// React 2 MB. With too little room the JIT spends its time dropping code
+// and compiling it again: under 8 MB Typescript has 907 functions' code
+// dropped and 608 compiles refused in a run, and compiles 2.7 times as
+// often over three. A program larger than these -- a framework, a bundle
+// of thousands of functions -- may need more: time it under a larger
+// limit and keep the one past which it runs no faster.
 func WithJITMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.jitMemoryLimit = bytes }
 }

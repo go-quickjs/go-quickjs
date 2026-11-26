@@ -551,7 +551,7 @@ of a 3,028-function Go program compiled by both tiers (23 MB by the
 baseline, 34 MB by the optimizing tier), while a run of one of the
 benchmarks' Go programs holds 3.9 to 8.2 MB. Runtimes sharing a
 compilation cache share the limit too. A `quickjs.Runtime` made `WithJIT`
-bounds its WebAssembly's code by its `WithJITMemoryLimit` -- 8 MB by
+bounds its WebAssembly's code by its `WithJITMemoryLimit` -- 64 MiB by
 default, or an eighth of `WithMemoryLimit` -- in a budget of that size of
 its own, apart from its JavaScript code's, so that the two together hold at
 most twice it.
@@ -564,9 +564,10 @@ room, from the JIT clock's next 50 ms epoch; a tier-up so refused is tried again
 as many calls again. The limit bounds what a compile works in as it runs
 too: a tier does not compile a function whose working set, estimated at 64
 bytes a byte of body for the baseline and 128 for the optimizing tier,
-would pass the limit -- under the JavaScript runtime's default 8 MB, the
-optimizing tier compiles bodies of up to about 64 KB, the baseline up to
-about 128 KB -- and the optimizing tier's liveness sets, which grow with
+would pass the limit -- under 8 MB, the optimizing tier compiles bodies of
+up to about 64 KB, the baseline up to about 128 KB, and under the
+JavaScript runtime's default, 64 MiB, eight times those -- and the
+optimizing tier's liveness sets, which grow with
 the square of a function of many blocks, get what the code held leaves of
 the limit, the compile refused where they need more. So what a compile
 works in is of the order of the limit, beside the code the budget holds.

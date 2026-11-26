@@ -26,9 +26,15 @@ import (
 
 // jitCacheBytes is the JIT's budget (jitBudget) in a runtime without a
 // memory limit, and maxJITBudget the most a JIT memory limit gives it,
-// which no sum of what it holds overflows.
+// which no sum of what it holds overflows. 64 MiB holds every program
+// measured -- Octane's Typescript peaks at 21 MiB, Octane run whole in one
+// runtime at 44 -- with room for larger ones, and is the WebAssembly
+// engine's default too (wasm.DefaultJITMemoryLimit). It is a ceiling, not
+// a reservation: a runtime holds what its program's code takes, and the
+// flush gives back what has gone unused, as the runtime runs and as it
+// returns to its host (jitReturned).
 const (
-	jitCacheBytes = 8 << 20
+	jitCacheBytes = 64 << 20
 	maxJITBudget  = 1 << 50
 )
 
@@ -1676,7 +1682,8 @@ func (s *jitState) flushNow() uint64 {
 // entry whose code runs, or young (jitCodeAge), stays (regFlush). What
 // its code learned of its sites is kept (regLearned), and the function is
 // compiled again once it is hot again. It looks at a back-edge check
-// (backEdgeBudget) and before a compile (age).
+// (backEdgeBudget), before a compile (age) and as the runtime returns to
+// its host (jitReturned).
 func (s *jitState) flush() {
 	if g := jitGCEpoch.Load(); g != s.megaGC {
 		// A collection ended since the last look: the megamorphic cache

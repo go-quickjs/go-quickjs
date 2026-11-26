@@ -1040,8 +1040,13 @@ is under [The projection](#the-projection).
   counted over its compiles, its link's count begun afresh at each
   (`jitEntry`'s `calledIn`). No count is negative over Octane, the V8
   suite, Are We Fast Yet, ssr and fresh at `-n 3`, on the spot and in the
-  background (5 in Octane and 18 in fresh before). (d) to (g) not
-  started.
+  background (5 in Octane and 18 in fresh before). (f): the default is
+  64 MiB, `WithJITMemoryLimit`'s documentation and the docs that cited
+  8 MiB say so with today's figures, and the cache looks to flush as the
+  runtime returns to its host; its memory table and the RSS of idle
+  runtimes are measured with (e). (g): `jitBudgetForFeedback`'s comment
+  says what the constant does and when a loop's back-edge budget starts,
+  940 kept. (d) and (e) not done.
 
 ### Stage 1: tiering and background compiles
 

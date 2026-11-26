@@ -57,7 +57,7 @@ runtime with a limit makes a cut a little more slowly:
 The optional JIT (`WithJIT`) holds memory of its own -- its machine code
 and all that describes it -- which the script's limit never counts, so a
 script fails with `ErrMemoryLimit` the same with the JIT on and off.
-`WithJITMemoryLimit` bounds it: 8 MB by default, or an eighth of the
+`WithJITMemoryLimit` bounds it: 64 MiB by default, or an eighth of the
 memory limit when one is set; the runtime's WebAssembly code has a budget
 of that size of its own (docs/wasm.md, Memory limits). When it is full, the JIT drops the code that
 has gone longest unused, once it is old; while all of it is in use, a
@@ -67,15 +67,17 @@ took 2 times as long under 2 MB and 2.5 times under 1 MB, against 2.9 times
 without the JIT. Lower it to run many runtimes in one process, or where
 memory is tight.
 
-The default may not be enough for a real-world application. It suits a
-program with a few hundred hot functions; a large one -- a compiler, a
-framework, a bundle of thousands of functions -- can need several times
-more, and with too little the JIT spends its time dropping code and
-compiling it again, which can leave the program slower than without the
-JIT. Octane's Typescript, the TypeScript compiler compiling itself, does not
-fit 8 MB: it took 3,750 ms with the JIT under the default, 2,850 under
-32 MB, and 2,830 without the JIT. Time such a program under a larger limit
--- 32 or 64 MB -- and keep the one past which it runs no faster.
+The limit is a ceiling, not a reservation: a runtime holds what its
+program's hot code takes, and code unused for about a second of the
+program's running is given back, as the runtime runs and as it returns to
+its host. Every program measured fits the default: Octane's Typescript, the
+TypeScript compiler compiling itself, holds at most 21 MB, the whole of
+Octane in one runtime 44 MB. A larger program -- a framework, a bundle of
+thousands of functions -- may need more; with too little room the JIT
+spends its time dropping code and compiling it again (under 8 MB
+Typescript has 907 functions' code dropped and 608 compiles refused in a
+run). Time such a program under a larger limit and keep the one past which
+it runs no faster.
 
 Measured against Go's live heap after a full collection, the estimate is
 within 15% for every kind of value a script can hold -- objects, arrays,

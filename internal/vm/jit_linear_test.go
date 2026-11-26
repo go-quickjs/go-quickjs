@@ -366,8 +366,8 @@ func TestJITCompileLinear(t *testing.T) {
 // hold (jitCompileBytes) is linear in the function's instructions and
 // slots, and no less than what the compile of each shape below holds,
 // nor more than eight times it. It had been a word for each slot at each
-// instruction, of 256 slots at least, and refused these at the default
-// budget: 3,000 locals of a few instructions each, and a loop of 1,000
+// instruction, of 256 slots at least, and refused these at 8 MiB, the
+// default budget then: 3,000 locals of a few instructions each, and a loop of 1,000
 // values in blocks of their own, some 10,000 instructions. Each answer is
 // the interpreter's.
 func TestJITCompileEstimateLinear(t *testing.T) {
@@ -397,7 +397,7 @@ func TestJITCompileEstimateLinear(t *testing.T) {
 			fn, _ := r.GetProp(Obj(r.Global()), r.Intern(sh.name))
 			cl := fn.Object().fn().closure
 			est := jitCompileBytes(cl.fn)
-			if o := old(cl.fn); o <= int64(jitCacheBytes) {
+			if o := old(cl.fn); o <= 8<<20 {
 				t.Fatalf("%d instructions of %d slots: the old estimate, %d, compiled it already", len(firstReg(cl.fn).rc.Code), firstReg(cl.fn).rc.NumRegs, o)
 			}
 			res := r.RegNativeCall(fn, sh.args(r), false)

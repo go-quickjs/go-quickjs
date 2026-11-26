@@ -353,9 +353,8 @@ func TestJITBigLeafOwn(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := newTestRuntime(t, Config{JIT: true})
-	if r.jit == nil {
-		r.jit = &jitState{}
-	}
+	// The runtime's JIT state, which the leaves' calls of Go take.
+	r.jitState()
 	r.bigFree = new(bigFreeList)
 	run := func(src string) Value {
 		v, err := r.Run(compileForTest(t, src))
@@ -440,9 +439,8 @@ func TestJITBigLeafLeavesLongOperations(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := newTestRuntime(t, Config{JIT: true})
-	if r.jit == nil {
-		r.jit = &jitState{}
-	}
+	// The runtime's JIT state, which the leaves' calls of Go take.
+	r.jitState()
 	run := func(src string) Value {
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {

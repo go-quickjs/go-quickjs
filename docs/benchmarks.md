@@ -129,7 +129,7 @@ QuickJS](#compared-with-c-quickjs). JIT off was built without the
 synchronously; JIT background enables the JIT and compiles in the background
 with `-jit -jitbackground`. Both use the same binary built with
 `-tags quickjs_jit` and the runner's 32 MiB JIT budget rather than the
-runtime's default 8 MiB. This revision uses the register interpreter and
+runtime's default, then 8 MiB. This revision uses the register interpreter and
 register JIT by default.
 Higher suite scores are better; the relative columns divide each
 go-quickjs score by goja's.

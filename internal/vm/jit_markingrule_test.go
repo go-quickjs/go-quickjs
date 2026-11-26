@@ -248,7 +248,7 @@ const jitMarkingAllocLimit = 8 << 30
 // marking against 371, every other count the same; a flush forced into
 // typed_sort's warm-up in one run makes it 374. With the clocks held no
 // code ages, and the runtimes' JIT memory (jitMarkingBudget) holds all the
-// tests compile: at the default 8 MiB the cache, full, refused compiles
+// tests compile: at 8 MiB, the default then, the cache, full, refused compiles
 // from the middle of the run on, typed_sort's among them.
 func jitMarkingHeldForTest() (restore func()) {
 	jitEpochOnce.Do(jitArmEpoch)

@@ -45,7 +45,7 @@ var (
 	jitFlag       = flag.Bool("jit", false, "enable the optional JIT (WithJIT)")
 	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed and micro modes, with -jit)")
 	jitBgFlag     = flag.Bool("jitbackground", false, "with -jit, compile in the background (WithJITBackground), as qjs --jit does; compiles timed by -jitcompile stay on the runtime's goroutine")
-	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (8 MiB)")
+	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (64 MiB)")
 	jitHeldFlag   = flag.Bool("jitheld", false, "with -jitcode: hold the JIT's clocks and turn the collector off, but at a memory limit of 3 GiB where GOMEMLIMIT sets none, so that two builds' runs make the same compiles, for compilediff native")
 	jitCodeFlag   = flag.String("jitcode", "", "write each function's native code to this file as it is compiled, as JSON lines, for internal/jit/verify's jitprof (with -jit)")
 	jitTierFlag   = flag.String("jittier", "", "write the JIT's tier trace to this file, a line for each compile and each deoptimization that invalidates code, and print each benchmark's counts of them (with -jit)")

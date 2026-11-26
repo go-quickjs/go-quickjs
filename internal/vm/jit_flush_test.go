@@ -337,3 +337,47 @@ func TestJITClocksLeaveOutCompiles(t *testing.T) {
 		}
 	}
 }
+
+// The cache looks to flush as the runtime returns to its host: a runtime
+// that has gone idle, which takes no back edge's check nor compiles,
+// gives back code unused for the flush's age once the host's next call
+// of it returns, not only once it runs a loop again. Its answers are the
+// interpreter's, before and after.
+func TestJITFlushesAtReturnToHost(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setEpoch := jitFlushForTest(t)
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function f(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + (i * 7) % 13) | 0; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		// Node: f(1000)
+		if v, err := r.Run(compileForTest(t, `f(1000)`)); err != nil || v.Number() != 6000 {
+			t.Fatalf("f(1000): %v, %v", v, err)
+		}
+	}
+	if _, code := jitCachedForTest(r, "f"); !code {
+		t.Fatal("f not compiled")
+	}
+	idle := compileForTest(t, `0`)
+	// Two of the host's calls, jitFlushAge epochs apart, neither running
+	// f nor any loop.
+	for _, e := range []uint64{1000 + jitFlushAge, 1000 + 2*jitFlushAge} {
+		setEpoch(e)
+		if _, err := r.Run(idle); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e, _ := jitCachedForTest(r, "f"); e != nil {
+		t.Fatalf("f's unused code was not flushed as the runtime returned to its host: %+v", e)
+	}
+	if err := regLinksHeldForTest(r.jit); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := r.Run(compileForTest(t, `f(1000)`)); err != nil || v.Number() != 6000 {
+		t.Fatalf("after the flush, f(1000): %v, %v", v, err)
+	}
+}

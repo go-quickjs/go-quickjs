@@ -688,12 +688,12 @@ v0.45.1, its figures being the stack JIT's unless dated later.
   address is reused, so a weak target needs code that checks it is alive
   before it is entered. Octane's Typescript kept about 110 MB more than the
   interpreter while it ran (stack JIT).
-- **The default room for code** *(JIT project)*. The runtime's default is 8
-  MiB (`jitCacheBytes`), and v8bench runs with 32 MiB: on the stack JIT
+- **The default room for code** *(JIT project, done)*. The runtime's
+  default was 8 MiB (`jitCacheBytes`), and v8bench runs with 32 MiB: on the stack JIT
   Octane's Typescript took 3,750 ms under the default against 2,850 under
   32 MiB (`WithJITMemoryLimit`'s documentation). More room must never be
   slower, and before the flush was: with 16 MB Typescript took 18% longer
-  than with 8. The JIT project makes the default 64 MiB. A stretch
+  than with 8. Stage 0 made the default 64 MiB. A stretch
   of native code is judged by 20 instructions of work against an exit
   (`jitSSAMinWork`), far less than an exit costs. Taken up by
   [stage 0](jit-design.md#stage-0-correctness-and-hygiene).
