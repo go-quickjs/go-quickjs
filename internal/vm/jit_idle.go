@@ -14,12 +14,12 @@ import (
 )
 
 // jitReturned is jitReturnedToHost: what the JIT does as r's turn ends
-// with no frame running. The process's idle workspaces go
-// (jit.DropIdleWorkspaces); the cache looks to flush (flush): an idle
-// runtime, which takes no back edge's check nor compiles, had kept all
-// its code and what that holds until it ran again; and, once a flush age
-// of the program's running since it last did, it parks its code
-// (jitRegPark). The look is the flush's own, which drops only what has
+// with no frame running. The process's workspaces no compile has used
+// since the last such return go (jit.DropIdleWorkspaces); the cache looks
+// to flush (flush): an idle runtime, which takes no back edge's check nor
+// compiles, had kept all its code and what that holds until it ran again;
+// and, once a flush age of the program's running since it last did, it
+// parks its code (jitRegPark). The look is the flush's own, which drops only what has
 // gone unused for the flush's age, so most of a host's short calls pay a
 // clock's read.
 func jitReturned(r *Runtime) {

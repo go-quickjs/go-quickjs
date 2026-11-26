@@ -1071,8 +1071,8 @@ is under [The projection](#the-projection).
   kept the heap was the runtime's asm.js heaps (zlib's 128 MB buffer),
   the idle compile workspaces (32 MB) and the code cache, whose code and
   feedback held the objects their code was compiled against; asm.js
-  heaps are held weakly, idle workspaces go as the runtime returns to
-  its host, and code is parked then, its objects held weakly and checked
+  heaps are held weakly, the workspaces no compile used in a turn go as
+  the runtime returns to its host, and code is parked then, its objects held weakly and checked
   alive at its next use (internal/jit/README.md, "Parking"). The live
   heap after Octane fixed -n 1 with the JIT is 156 to 161 MB against the
   interpreter's 107 (Ryzen 9 9950X3D2), from 357 to 390; projected, the
