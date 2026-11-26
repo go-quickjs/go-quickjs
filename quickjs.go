@@ -300,9 +300,9 @@ func WithGCYield() Option { return func(c *config) { c.gcYield = true } }
 // -- which it walks from its roots when the process has allocated a quarter
 // of the limit since it last did, and whenever what the engine has made
 // for the script since would take it over: an allocation whose size the
-// script chose is charged before it is made, a join, a template, JSON text
-// or a spread as it is written, and what a built-in returns once it is
-// made.
+// script chose is charged before it is made, a join, a template, JSON text,
+// a spread or an array filled from an iterator as it is written, and what
+// a built-in returns once it is made.
 //
 // What is limited is what the script holds -- what it can still reach --
 // not what it has allocated over its life, which may be any amount, nor what

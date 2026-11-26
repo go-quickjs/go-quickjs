@@ -117,12 +117,16 @@ func (r *Runtime) measureMemory(need int64) error {
 // at the script's bidding is charged as it is made, in three ways:
 //
 //   - An allocation whose size the script chose -- a buffer, a repeated
-//     string, a join -- is reserved before it is made (reserveMemory).
+//     string, a join -- is reserved before it is made (reserveMemory), and
+//     so are the elements of an array a built-in writes as many of as a
+//     length the script gave says -- Array.from of an array-like, fill,
+//     the change-by-copy methods (reserveElems).
 //   - A builder, whose output can be far larger than the memory its inputs
 //     hold -- a join or a template repeating one string, JSON of an array
 //     holding one object many times -- reserves as it writes, in chunks,
 //     everything it holds (heldMeter), since nothing the walk can reach
-//     holds it yet.
+//     holds it yet; and an array a built-in fills from an iterator, whose
+//     count it cannot know before, is charged as it grows (chargeElems).
 //   - What a built-in returns is charged by its size once it is made
 //     (chargeResult), and so is what a spread appends to an array
 //     (chargeGrowth): an output no more than a few times its inputs cannot
@@ -150,6 +154,54 @@ func (r *Runtime) reserveMemory(n int) error {
 	}
 	// What was reserved may since have been let go of.
 	return r.measureMemory(int64(n))
+}
+
+// reserveElems is reserveMemory for n elements of an array a built-in is
+// about to write, n a count the script chose. Under a 16 MB limit,
+// Array.from({length: 2e8}) had made its 3.2 GB of elements, and a
+// 32-bit process run out of address space, before its result was charged.
+// What they take is reckoned in 64 bits: a length runs to 2^53, past what
+// an int holds on a 32-bit platform.
+func (r *Runtime) reserveElems(n int64) error {
+	m := r.meter
+	if m == nil || n <= 0 {
+		return nil
+	}
+	need := n * valueSize
+	if m.live+need <= m.limit {
+		m.live += need
+		return nil
+	}
+	return r.measureMemory(need)
+}
+
+// elemsCharged is what chargeElems has charged of a result: its first n
+// elements, as of the measurement of the heap numbered epoch.
+type elemsCharged struct {
+	n     int64
+	epoch uint16
+}
+
+// chargeElems charges the elements a built-in has written to o, a result
+// it is filling from an iterator, whose count it cannot know before: n
+// written, c what was charged of them. Each builderChunk more is charged;
+// a measurement made for it adds all n where the walk does not reach o,
+// which only the built-in holds. A measurement made since, by the
+// interrupt check, did not reach o either, and let go of what had been
+// charged for it, which is charged again: forgotten so, Array.from of an
+// array's keys had run to 5 million elements under a 16 MB limit.
+func (r *Runtime) chargeElems(o *Object, n int64, c *elemsCharged) error {
+	m := r.meter
+	if m == nil || (n-c.n)*valueSize < builderChunk {
+		return nil
+	}
+	from := c.n
+	if c.epoch != m.epoch && !m.reached(Obj(o)) {
+		from = 0
+	}
+	err := r.chargeValue(Obj(o), (n-from)*valueSize, n*valueSize)
+	c.n, c.epoch = n, m.epoch
+	return err
 }
 
 // heldMeter is what a builder of the script's output keeps to charge what
@@ -208,7 +260,7 @@ func (r *Runtime) chargeResult(v Value) error {
 	if n < builderChunk {
 		return nil
 	}
-	return r.chargeValue(v, n)
+	return r.chargeValue(v, n, n)
 }
 
 // chargeGrowth charges n bytes an array has grown by in one step, as a
@@ -217,13 +269,14 @@ func (r *Runtime) chargeGrowth(o *Object, n int64) error {
 	if n < builderChunk {
 		return nil
 	}
-	return r.chargeValue(Obj(o), n)
+	return r.chargeValue(Obj(o), n, n)
 }
 
-// chargeValue adds n bytes that v holds to the estimate, measuring the heap
-// if that takes it over the limit. A v the walk reaches is counted by the
-// walk; one it does not, a result not yet stored anywhere, is added to it.
-func (r *Runtime) chargeValue(v Value, n int64) error {
+// chargeValue adds n more bytes that v holds to the estimate, measuring the
+// heap if that takes it over the limit. A v the walk reaches is counted by
+// the walk; one it does not, a result not yet stored anywhere, is added to
+// it at held, all that it holds.
+func (r *Runtime) chargeValue(v Value, n, held int64) error {
 	m := r.meter
 	if m.live+n <= m.limit {
 		m.live += n
@@ -232,7 +285,7 @@ func (r *Runtime) chargeValue(v Value, n int64) error {
 	m.allocsAt = m.allocated()
 	m.live = max(0, m.walk(r)-m.baseline)
 	if !m.reached(v) {
-		m.live += n
+		m.live += held
 	}
 	if m.live > m.limit {
 		return r.stop(ErrMemoryLimit)

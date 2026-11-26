@@ -281,7 +281,8 @@ func (r *Runtime) initArrayExtras2() {
 	// The change-by-copy methods all read through the view and write a fresh
 	// plain array -- deliberately plain, since the point of them is to leave
 	// the receiver alone, and a species that did something else would defeat
-	// that.
+	// that. Each writes every element of the length it was given, which it
+	// reserves under a memory limit before writing them (reserveElems).
 	r.defMethod(p, "toReversed", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
@@ -289,6 +290,9 @@ func (r *Runtime) initArrayExtras2() {
 		}
 		out, err := rt.arrayCreate(a.n)
 		if err != nil {
+			return Undefined, err
+		}
+		if err := rt.reserveElems(a.n); err != nil {
 			return Undefined, err
 		}
 		for i := int64(0); i < a.n; i++ {
@@ -311,6 +315,9 @@ func (r *Runtime) initArrayExtras2() {
 		}
 		out, err := rt.arrayCreate(a.n)
 		if err != nil {
+			return Undefined, err
+		}
+		if err := rt.reserveElems(a.n); err != nil {
 			return Undefined, err
 		}
 		for i := int64(0); i < a.n; i++ {
@@ -361,6 +368,9 @@ func (r *Runtime) initArrayExtras2() {
 		if err != nil {
 			return Undefined, err
 		}
+		if err := rt.reserveElems(n); err != nil {
+			return Undefined, err
+		}
 		for i := int64(0); i < start; i++ {
 			v, err := a.get(rt, i)
 			if err != nil {
@@ -396,6 +406,9 @@ func (r *Runtime) initArrayExtras2() {
 		}
 		out, err := rt.arrayCreate(a.n)
 		if err != nil {
+			return Undefined, err
+		}
+		if err := rt.reserveElems(a.n); err != nil {
 			return Undefined, err
 		}
 		for k := int64(0); k < a.n; k++ {

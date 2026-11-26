@@ -1383,7 +1383,14 @@ Paths are relative to this repository; `go-intl:` paths are in
     repeated past the limit;
   - a charge that takes the estimate over the limit measures the heap, and
     a result the script already held is not counted twice.
-  - Tests: `TestMemoryLimitDoubling`, `TestMemoryLimitResultsCountedOnce`.
+  - A built-in writing as many elements as a length the script gave --
+    `Array.from` of an array-like, `fill`, the change-by-copy methods --
+    reserves them before it writes them, and `Array.from` of an iterator
+    charges its result as it grows. They had been charged by their result
+    once it was made: `Array.from({length: 2e8})` under a 16 MB limit
+    allocated 12.8 GB before it was stopped.
+  - Tests: `TestMemoryLimitDoubling`, `TestMemoryLimitResultsCountedOnce`,
+    `TestMemoryLimitBeforeTheElements`.
 
 ### KI-62 The memory limit undercounts regular expressions and dates
 - **Where:** `internal/vm/memory.go`. The walk counts only the engine's own

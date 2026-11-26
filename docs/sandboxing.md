@@ -28,10 +28,10 @@ The runtime measures its own heap by walking it, as QuickJS does, once the
 process has allocated a quarter of the limit since it last did. Between
 walks, what the engine makes for the script is charged as it is made -- an
 allocation whose size the script chose before it is made, a join, a
-template, JSON text or a spread as it is written, a built-in's result once
-it is made -- and a charge that would cross the limit measures the heap at
-once. So a value doubled a few times over in a short loop is stopped as
-surely as one grown a little at a time.
+template, JSON text, a spread or an array filled from an iterator as it is
+written, a built-in's result once it is made -- and a charge that would
+cross the limit measures the heap at once. So a value doubled a few times
+over in a short loop is stopped as surely as one grown a little at a time.
 
 What the limit counts is what the script holds: the objects, strings, arrays
 and buffers it can still reach, each counted once, at the sizes the engine

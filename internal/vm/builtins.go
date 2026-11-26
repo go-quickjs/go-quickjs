@@ -1039,6 +1039,7 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			a := arrayLike{o: o}
 			k := int64(0)
+			var charged elemsCharged
 			var argv [2]Value
 			err = rt.iterateWith(src, method, func(v Value) error {
 				if mapping {
@@ -1053,7 +1054,10 @@ func (r *Runtime) initArrayBuiltins() {
 					return err
 				}
 				k++
-				return nil
+				// An iterator says nothing of how many elements it has, and
+				// the result, which only this call holds, is not what a
+				// measurement of the heap reaches.
+				return rt.chargeElems(o, k, &charged)
 			})
 			if err != nil {
 				return Undefined, err
@@ -1070,6 +1074,10 @@ func (r *Runtime) initArrayBuiltins() {
 		}
 		o, err := build(from.n)
 		if err != nil {
+			return Undefined, err
+		}
+		// Every index below the length is defined, a hole read as undefined.
+		if err := rt.reserveElems(from.n); err != nil {
 			return Undefined, err
 		}
 		a := arrayLike{o: o}
@@ -3452,8 +3460,13 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 		return start, nil
 	}
 	// Grown once, to what is filled: appended one at a time, a slice grows
-	// and is copied a dozen times on its way to thousands of elements.
-	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.arrayExt().arrayLen))-start))
+	// and is copied a dozen times on its way to thousands of elements. As
+	// many as the script's end says, which are reserved first.
+	grow := min(end, int64(o.arrayExt().arrayLen)) - start
+	if err := r.reserveElems(grow); err != nil {
+		return start, err
+	}
+	o.extOf().elems = slices.Grow(elems, int(grow))
 	for ; start < end && start < int64(o.arrayExt().arrayLen); start++ {
 		if err := r.tick(); err != nil {
 			return start, err

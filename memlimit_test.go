@@ -3,6 +3,7 @@ package quickjs_test
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -81,6 +82,49 @@ func TestMemoryLimitDoubling(t *testing.T) {
 			t.Errorf("%s: = %v, %v, want ErrMemoryLimit", name, v, err)
 		}
 		rt.Close()
+	}
+}
+
+// TestMemoryLimitBeforeTheElements pins that a built-in writing as many
+// elements as a length the script gave -- Array.from of an array-like,
+// fill, the change-by-copy methods -- is stopped before it writes them,
+// and Array.from of an iterator as its result grows, not once its result
+// is made. Under a 16 MB limit each of these had allocated 300 MB to 1.7
+// GB of elements before it was stopped, Array.from({length: 2e8}) 12.8
+// GB, and windows/386, whose process has 2 GB of address space, ran out
+// of memory in TestMemoryLimitDoubling.
+//
+// It is not parallel: what it measures is the process's allocations, which
+// a test running beside it would add to. They are held to eight times the
+// limit: an array grown to the limit element by element allocates about
+// five times it on the way, each larger block copied from the last.
+func TestMemoryLimitBeforeTheElements(t *testing.T) {
+	const limit = 16 << 20
+	for name, src := range map[string]string{
+		"Array.from a length":    `Array.from({length: 2e7}).length`,
+		"Array.from mapped":      `Array.from({length: 2e7}, () => 1).length`,
+		"Array.from an iterator": `Array.from(Array(2e7).keys()).length`,
+		"Array.from a generator": `Array.from(function* () { for (let i = 0; i < 2e7; i++) yield 1 }()).length`,
+		"fill":                   `new Array(2e7).fill(0).length`,
+		"toReversed":             `Array.prototype.toReversed.call({length: 2e7}).length`,
+		"toSorted":               `Array.prototype.toSorted.call({length: 2e7}).length`,
+		"toSpliced":              `Array.prototype.toSpliced.call({length: 2e7}).length`,
+		"with":                   `Array.prototype.with.call({length: 2e7}, 0, 1).length`,
+		"an array's toReversed":  `Array(2e7).toReversed().length`,
+		"past what an int holds": `Array.from.call(function () {}, {length: 2 ** 40}).length`,
+	} {
+		rt := quickjs.New(quickjs.WithMemoryLimit(limit))
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		v, err := rt.Eval(src)
+		runtime.ReadMemStats(&after)
+		rt.Close()
+		if !errors.Is(err, quickjs.ErrMemoryLimit) {
+			t.Errorf("%s: = %v, %v, want ErrMemoryLimit", name, v, err)
+		}
+		if n := after.TotalAlloc - before.TotalAlloc; n > 8*limit {
+			t.Errorf("%s: %d MB allocated under a limit of %d MB", name, n>>20, limit>>20)
+		}
 	}
 }
 
