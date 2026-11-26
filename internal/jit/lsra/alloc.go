@@ -211,6 +211,9 @@ type Allocator struct {
 	// the holes planned in them.
 	victims []*web
 	holes   []hole
+	// callRun is the calls a web lives across, each with the index of its
+	// first event after it (callHoles).
+	callRun []int32
 	// The split registers' moves as found (keyed, entries), and their uses and
 	// definitions by position (events): ev from evOff[v] to evOff[v+1] are
 	// v's, each its position times two, plus one for a definition.
@@ -814,13 +817,26 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				cur = queue[qi]
 				qi++
 			}
-			if cur.calls && cur.callWeight >= cur.weight {
-				// Its reloads after the calls it lives across would cost
-				// more than its uses gain: it lives in its slot.
-				if !apart(cur) {
-					cur.spilled = true
+			if cur.calls {
+				// Where its reloads after the calls it lives across would
+				// cost as much as its uses gain, it gives its register up
+				// over the calls where holes there cost less than the
+				// reloads (callHoles; under StressSplit wherever it can).
+				// If its reloads after the other calls and its holes
+				// still would, it lives in its slot.
+				cost := cur.callWeight
+				if al.split && (cost >= cur.weight || al.stress) {
+					cost = al.callHoles(cur)
 				}
-				continue
+				if sp := cur.sp; sp != nil {
+					cost += sp.holeW + sp.moveW
+				}
+				if cost >= cur.weight {
+					if !apart(cur) {
+						cur.spillWhole()
+					}
+					continue
+				}
 			}
 			p := cur.start()
 			back := al.back[:0]
@@ -907,7 +923,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 				if best < 0 {
 					if !apart(cur) {
-						cur.spilled = true
+						cur.spillWhole()
 					}
 					continue
 				}
@@ -944,7 +960,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 							clear(victims)
 							al.victims, al.holes = victims[:0], holes[:0]
 							if !apart(cur) {
-								cur.spilled = true
+								cur.spillWhole()
 							}
 							continue
 						}

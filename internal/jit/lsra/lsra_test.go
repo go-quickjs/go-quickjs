@@ -496,6 +496,59 @@ func TestWeightOfStoredValues(t *testing.T) {
 	}
 }
 
+// TestCallHoles has values that live across calls give their register up
+// over the calls, where holes there cost less than reloading them after
+// each call: x is read, then three calls, then read twice -- reloaded after
+// each call its reloads would weigh as much as its reads, and it lived in
+// its slot -- and y, made before a loop that calls, is read twice after
+// it, where a reload after the call weighs eight times a read. Each is in
+// its register where it is read, loaded once from its slot after the
+// calls, and no call reloads it.
+func TestCallHoles(t *testing.T) {
+	call := Inst{Call: true, Hint: None}
+	f := &Func{
+		Class:     []int8{0, 0},
+		FixedSlot: []int32{-1, -1},
+		Blocks: []Block{
+			{Succs: []int{1}, Insts: []Inst{mk(nil, []VReg{0}, None), mk([]VReg{0}, nil, None), call, call, call,
+				mk([]VReg{0}, nil, None), mk([]VReg{0}, nil, None), mk(nil, []VReg{1}, None)}},
+			{Preds: []int{0, 2}, Succs: []int{2, 3}, Depth: 1, Insts: []Inst{call, mk(nil, nil, None)}},
+			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{mk(nil, nil, None)}},
+			{Preds: []int{1}, Insts: []Inst{mk([]VReg{1}, nil, None), mk([]VReg{1}, nil, None)}},
+		},
+	}
+	for _, cfg := range []*Config{
+		{Classes: [][]int{{0, 1}}, NumSlots: 8},
+		{Classes: [][]int{{0, 1}}, NumSlots: 8, Displace: true},
+	} {
+		res, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkAllocation(t, 0, f, cfg, res)
+		for _, v := range []VReg{0, 1} {
+			if res.Reg[v] < 0 || !res.Split(v) {
+				t.Errorf("%+v: v%d in register %d, split %v\n%s", *cfg, v, res.Reg[v], res.Split(v), dump(f, res))
+			}
+		}
+		for _, c := range [][2]int{{0, 2}, {0, 3}, {0, 4}, {1, 0}} {
+			if a := res.Across(c[0], c[1]); len(a) > 0 {
+				t.Errorf("%+v: the call at b%d.%d reloads %v\n%s", *cfg, c[0], c[1], a, dump(f, res))
+			}
+		}
+	}
+	// Without splitting, both live in their slots, as before holes.
+	cfg := &Config{Classes: [][]int{{0, 1}}, NumSlots: 8, NoSplit: true}
+	res, err := Allocate(f, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkAllocation(t, 0, f, cfg, res)
+	if res.Reg[0] >= 0 || res.Reg[1] >= 0 {
+		t.Errorf("without splitting: v0 in %d, v1 in %d, the loop's call reloads %v\n%s", res.Reg[0], res.Reg[1], res.Across(1, 0), dump(f, res))
+	}
+}
+
 // mk is an instruction of uses and defs with hint.
 func mk(uses, defs []VReg, hint VReg) Inst { return NewInst(nil, uses, defs, nil, hint) }
 

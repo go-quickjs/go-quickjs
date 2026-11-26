@@ -457,6 +457,75 @@ func (al *Allocator) plan(a, cur *web) hole {
 	return hole{s: s, e: e, cost: cost}
 }
 
+// callHoles punches holes in w, which lives across calls, before it is
+// scanned: over each run of the calls it lives across with none of its
+// uses and definitions between them, from its last use or definition
+// before the run to its first after, where the hole costs less than
+// reloading it after each call of the run. A call clobbers every register,
+// so the register holds nothing of w's there; its slot holds it, w being
+// stored where it is defined, and the hole costs only the loads where it
+// ends (holeCost). w then is in its register only where it is used between
+// calls, and loaded once before the first use after a run of calls, which
+// may be past a loop that makes them, rather than after each call. It
+// returns the weight of the reloads after the calls left out of its holes.
+func (al *Allocator) callHoles(w *web) float64 {
+	al.events()
+	al.webEvents(w)
+	sp := w.sp
+	ev := sp.ev
+	// The calls it lives across, in order, each with the index of its
+	// first use or definition after it: punching changes the ranges.
+	calls := al.callRun[:0]
+	for _, r := range w.ranges {
+		for k := al.clobIdx[r.from]; k < al.clobIdx[r.to-1]; k++ {
+			if al.clobbers[k].call {
+				calls = append(calls, k, int32(firstEvent(ev, al.clobAt[k]+1)))
+			}
+		}
+	}
+	al.callRun = calls
+	left := 0.0
+	for j := 0; j < len(calls); {
+		// A run: the calls with the same use or definition after them.
+		i := int(calls[j+1])
+		first, weight := j, 0.0
+		for ; j < len(calls) && int(calls[j+1]) == i; j += 2 {
+			weight += al.clobbers[calls[j]].weight
+		}
+		last := calls[j-2]
+		// The bounds: past the use or definition before, and up to the one
+		// after. A call that reads w, whose read is that use, is left out:
+		// it reloads w after it, as before.
+		if i == 0 {
+			left += weight
+			continue
+		}
+		s := al.ceilBound(evPos(ev[i-1]) + 1)
+		for ; first < j && al.clobAt[calls[first]] < s; first += 2 {
+			weight -= al.clobbers[calls[first]].weight
+			left += al.clobbers[calls[first]].weight
+		}
+		e := al.maxPos
+		if i < len(ev) {
+			e = al.floorBound(evPos(ev[i]))
+		}
+		if first == j || e < al.clobAt[last]+2 || s >= e {
+			left += weight
+			continue
+		}
+		full := w.ranges
+		if sp.full != nil {
+			full = sp.full
+		}
+		if cost := al.holeCost(w, full, s, e); cost < weight || al.stress {
+			al.punch(w, hole{s: s, e: e, cost: cost})
+		} else {
+			left += weight
+		}
+	}
+	return left
+}
+
 // punch punches hole h in a's register.
 func (al *Allocator) punch(a *web, h hole) {
 	sp := a.sp

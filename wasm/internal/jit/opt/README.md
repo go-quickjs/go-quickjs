@@ -685,8 +685,30 @@ for an atomic store, read-modify-write and compare-and-exchange; on arm64
 X13-X15 for memory.copy, memory.fill and those atomics) is not given to a
 web live across it. A web in a register that lives across a call is
 stored into its slot where each of its values is defined and loaded again
-after each call it crosses in its register; one whose reloads would weigh
-as much as its uses lives in its slot instead. Slots are given by a
+after each call it crosses in its register. One whose reloads would weigh
+as much as its uses gives its register up over the calls instead
+(`callHoles`): a hole over each run of calls with none of its uses
+between them, from its last use or definition before the run to its first
+after, where the hole -- a load where it ends, the web's slot holding it
+already -- costs less than the reloads; it is then in its register where
+it is used between calls, and loaded once before the first use after a
+run, or past a loop that calls, rather than after each call. Where its
+holes and the reloads after the other calls would still weigh as much as
+its uses, it lives in its slot: of the Go program's 13,757 webs that live
+across calls, 1,260 weighed so, and 274 of them are now in registers.
+micro/fib's inlined calls' `n - 1`, read by the tests and the calls below
+it, had lived in its slot, stored, reloaded and stored again by each; it
+now stays in its register to its first call, and fib is level all the
+same (3.43 ms): its time is its calls' returns, an indirect jump each. The
+steady state, optimized, with the layout and `chains` and against them
+alone (the mean over two placements of the medians of 3 processes in 3
+rounds in turns), ms: interp 8.34 to 7.80, sha256 38.65 to 39.05 within
+its noise, the others level. The scan takes 18.0 µs a function where it
+took 16.4 (the events' table, once a function has such a web, and the
+holes' costs), 1% of a compile; the code is 3 KB smaller. Holes over the
+calls of every web that lives across them, each reloaded after its calls
+before, changed the code of 253 functions, 2 KB, and nothing measured
+but interp, for a scan of 23.3 µs. Slots are given by a
 second scan over the ranges, holes included, a web with a parameter
 keeping the slot it arrives in, and a register wider than a slot
 (`Func.Width`, a v128's two) taking consecutive ones. An instruction's

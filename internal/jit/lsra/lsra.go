@@ -44,8 +44,12 @@
 // register that is live across a call (Inst.Call) is kept in a slot too,
 // stored where each of its registers is defined and loaded again after
 // each call it crosses in its register (Result.Across); a call clobbers
-// every register, and a web whose reloads would weigh as much as its uses
-// lives in its slot. An instruction's fixed clobbers (Inst.Clobber) keep
+// every register. A web whose reloads would weigh as much as its uses
+// gives its register up over the calls instead, where that costs less: a
+// hole over each run of calls between two of its uses, which costs the
+// load where it ends; and where its holes and its reloads after the other
+// calls would still weigh as much, it lives in its slot. An instruction's
+// fixed clobbers (Inst.Clobber) keep
 // the registers they name from the webs live across it, and its
 // temporaries (Inst.Temps) are registers apart from its operands and
 // results. Slots are given by a second scan, with holes too, a web with a
