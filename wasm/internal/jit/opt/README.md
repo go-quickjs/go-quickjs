@@ -318,7 +318,7 @@ inlines a call four deep.
 | `globals` | the globals' values forwarded across blocks and carried by loops that change none (below) |
 | `copyelim` | copy propagation: each use of a copy, and of a trivial phi, becomes the value copied |
 | `gvn` | global value numbering: a pure value a dominating one computes the same way -- operation, type, arguments (commutative ones in order), immediates -- becomes a copy of it, by a walk of the dominator tree |
-| `fold` | constant folding and identities (x+0, x*1, x&-1, x-x, x==x ...), the comparisons' inversion under eqz, an eqz of an eqz made the comparison with zero (Go's code's test of a bool it made with eqz, two SETcc where a branch now fuses with one comparison), `i32.wrap_i64` of a 64-bit operation of extended i32s and constants narrowed to the 32-bit operation, the divisions and remainders by constants made of multiplications and shifts (below), select on a constant or of one value, and the branches and switches on constants, whose dead blocks go |
+| `fold` | constant folding and identities (x+0, x*1, x&-1, x-x, x==x ...), the comparisons' inversion under eqz, an eqz of an eqz made the comparison with zero (Go's code's test of a bool it made with eqz, two SETcc where a branch now fuses with one comparison), `i32.wrap_i64` of a 64-bit operation of extended i32s and constants narrowed to the 32-bit operation, the divisions and remainders by constants made of multiplications and shifts (below), a float's product with 2 made its sum with itself (below), select on a constant or of one value, and the branches and switches on constants, whose dead blocks go |
 | `thread` | jump threading (below), then `copyelim` |
 | `gvn` again, `copyelim` | |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
@@ -426,6 +426,15 @@ amd64, which the allocator keeps free as a division's; UMULH or SMULH on
 arm64); a remainder is the dividend less the quotient times the divisor.
 micro/i64's kernel, a remainder by 1,000,003 in a loop that was 78% the
 division, went from 20.0 to 13.1 ms.
+
+A float times 2 -- either operand the constant -- is the float plus
+itself: both exact, overflowing to the same infinity, and, where the float
+is a NaN, the same NaN, its payload kept and made quiet, on amd64 and arm64
+alike, so the result is the interpreter's bit for bit; an add's latency is
+less than a multiply's. micro/mandelbrot, whose inner loop carries
+`(2*zr)*zi + ci` from turn to turn, went from 11.0 to 10.6 ms optimized
+(10.9 to 10.4 tiered; the mean over four placements of the code of the
+medians of 3 processes in two rounds).
 
 Folding is exact: integers as WebAssembly defines them, a division only
 where it cannot trap; floats only where no NaN is involved (add, sub,

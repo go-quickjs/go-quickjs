@@ -597,6 +597,19 @@ func foldBinary(v *Value) {
 		}
 		return
 	}
+	if v.Op == OpFMul && isConst(x) != isConst(y) {
+		// x*2 is x+x: both exact, the same infinities, zeros and, where x is
+		// a NaN, the same NaN, x's made quiet. The add takes fewer cycles,
+		// on the chain of a loop that carries x from turn to turn.
+		if isConst(x) {
+			x, y = y, x
+		}
+		if two := uint64(0x4000000000000000); t == TF32 && uint32(y.Aux) == 0x40000000 || t == TF64 && y.Aux == two {
+			v.Op = OpFAdd
+			v.Args[0], v.Args[1] = x, x
+		}
+		return
+	}
 	if !t.IsFloat() || !isConst(x) || !isConst(y) {
 		return
 	}

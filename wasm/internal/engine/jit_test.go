@@ -340,6 +340,48 @@ func TestJITFloatBits(t *testing.T) {
 	}
 }
 
+// The optimizing tier's x*2 and 2*x, which it makes x+x, give the
+// interpreter's bits: zeros, infinities, the largest finite numbers, whose
+// double is infinite, subnormals, and NaNs quiet and signalling, each
+// payload kept.
+func TestOptFloatTimesTwo(t *testing.T) {
+	src := `(module
+  (func (export "f32.x2") (param f32) (result f32) (f32.mul (local.get 0) (f32.const 2)))
+  (func (export "f32.2x") (param f32) (result f32) (f32.mul (f32.const 2) (local.get 0)))
+  (func (export "f64.x2") (param f64) (result f64) (f64.mul (local.get 0) (f64.const 2)))
+  (func (export "f64.2x") (param f64) (result f64) (f64.mul (f64.const 2) (local.get 0))))`
+	f32s := []uint64{0, 0x80000000, 0x3f800000, 0xbfc00000, 0x7f800000, 0xff800000, 0x7fc00000,
+		0xffc00000, 0x7f800001, 0x7fa00005, 0xff812345, 0x7fc12345, 1, 0x80000001, 0x7f7fffff, 0xff7fffff}
+	f64s := []uint64{0, 1 << 63, 0x3ff0000000000000, 0xbff8000000000000, 0x7ff0000000000000,
+		0xfff0000000000000, 0x7ff8000000000000, 0xfff8000000000000, 0x7ff0000000000001,
+		0x7ff4000000000005, 0xfff0000000012345, 0x7ff8000000012345, 1, 0x8000000000000001,
+		0x7fefffffffffffff, 0xffefffffffffffff}
+	interp := interpretedInstance(t, src)
+	native := nativeInstance(t, src)
+	native.Code.setOSRCalls(0)
+	native.Code.SetOptThreshold(0)
+	native.Code.SetOptBackground(false)
+	for _, name := range []string{"f32.x2", "f32.2x", "f64.x2", "f64.2x"} {
+		in := f64s
+		if strings.HasPrefix(name, "f32") {
+			in = f32s
+		}
+		for _, x := range in {
+			want, err := call(t, interp, name, x)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := call(t, native, name, x)
+			if err != nil || got[0].N != want[0].N {
+				t.Errorf("%s(%#x) = %#x, %v optimized, %#x interpreted", name, x, got, err, want[0].N)
+			}
+		}
+		if !nativeRan(native, name) {
+			t.Fatalf("%s: no native code", name)
+		}
+	}
+}
+
 // The trap codes native code reports are the engine's.
 func TestJITTrapCodes(t *testing.T) {
 	for _, c := range []struct {
