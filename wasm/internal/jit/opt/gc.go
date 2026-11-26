@@ -272,10 +272,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
 		ti, fi := r.u32(), r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		if ft.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
-			break
-		}
 		aux := gcAux(cellOf(m, ti, fi), ft.Kind, op == opcode.StructGetS)
 		bd.pop()
 		if ft.IsRef() {
@@ -287,10 +283,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructSet:
 		ti, fi := r.u32(), r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		if ft.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
-			break
-		}
 		aux := gcAux(cellOf(m, ti, fi), ft.Kind, false)
 		v := bd.pop()
 		bd.pop()
@@ -301,10 +293,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.refOp(bd.b, refStructSet, bd.rpos(h-2), 0, aux, TNone, at, v)
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
 		et := m.Types[r.u32()].Array.Elem.Type
-		if et.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
-			break
-		}
 		aux := gcAux(0, et.Kind, op == opcode.ArrayGetS)
 		idx := bd.pop()
 		bd.pop()
@@ -316,10 +304,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.push(bd.refOp(bd.b, refArrayGet, 0, bd.rpos(h-2), aux, typeOf(et.Unpacked(), "element"), at, idx))
 	case opcode.ArraySet:
 		et := m.Types[r.u32()].Array.Elem.Type
-		if et.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
-			break
-		}
 		aux := gcAux(0, et.Kind, false)
 		v := bd.pop()
 		idx := bd.pop()

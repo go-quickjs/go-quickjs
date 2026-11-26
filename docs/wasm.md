@@ -50,7 +50,7 @@ records a set but turns nothing off.
 | Memory64 and table64 | yes | yes |
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes |
-| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; a v128 field or element read or written in Go |
+| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go |
 | Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; a fused `relaxed_madd` and `relaxed_nmadd` in Go |
 | Threads: shared memories, atomics, `wait` and `notify` | yes | yes; `wait` and `notify` in Go |
 
@@ -754,18 +754,17 @@ the result is the interpreter's bit for bit, and resumes.
 An instruction native code does not do itself returns to Go, which runs
 the interpreter's own code for that one instruction on the frame's slots,
 so that its result and its trap are the interpreter's, and native code
-resumes after it: `struct.get`, `struct.set`, `array.get` and `array.set`
-of a v128 field or element, and on amd64 `popcnt` without POPCNT, the
-roundings without SSE4.1 and every SIMD instruction without SSSE3, SSE4.1
-and SSE4.2 (the optimizing tier leaves a function with v128 values on such
-a CPU to the baseline). A function is refused whole, and stays in the
+resumes after it: on amd64 `popcnt` without POPCNT, the roundings without
+SSE4.1 and every SIMD instruction without SSSE3, SSE4.1 and SSE4.2 (the
+optimizing tier leaves a function with v128 values on such a CPU to the
+baseline), and the fused `relaxed_madd` and `relaxed_nmadd`. A function is refused whole, and stays in the
 interpreter, only for an operand stack deeper than the interpreter's frame
 (`frame`), code past the JIT's size limit (`size`), or for want of room in
 its JIT budget (`budget`).
 
 With every function compiled at its first call, the spec suite compiles 6,842
-functions and refuses none; it refused 2, for reading v128 fields, before
-such an instruction ran in Go. `WASM_JIT_EXITS=all` has every instruction
+functions and refuses none; it refused 2, for reading v128 fields, which
+native code reads and writes now. `WASM_JIT_EXITS=all` has every instruction
 that can run so run in Go, for tests, and `WASM_JIT_CPU=base` compiles for
 an amd64 CPU without the optional features.
 
@@ -1136,8 +1135,6 @@ WASI:
 
 ## Follow-ups
 
-- Native code for the v128 fields and elements of GC objects, which run
-  in Go.
 - array.new_fixed of more than 480 bytes of elements, array.new_data and
   array.new_elem still exit to Go; array.new of any length is native, its
   value stored in a loop (20 ns an array of 8 i32s, where the exit took

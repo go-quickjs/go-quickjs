@@ -102,6 +102,36 @@ func (g *gen) storeNum(x *Value, base arm64.Reg, off int32, storage module.Kind,
 	}
 }
 
+// loadV128 makes v the v128 at [base + off]: a struct's field, in cells,
+// its low half there and its high half 16 bytes on; else an array's
+// element, its 16 bytes whole. s0 is lost.
+func (g *gen) loadV128(v *Value, base arm64.Reg, off int32, cells bool) {
+	a := g.a
+	t := g.defX(v)
+	if cells {
+		a.LoadF(t, base, off)
+		a.Load(s0, base, off+16)
+		a.InsG(arm64.V64, t, 1, s0)
+	} else {
+		a.LoadQ(t, base, off)
+	}
+	g.done(v, int(t))
+}
+
+// storeV128 stores v128 x at [base + off], base not s0, as loadV128 reads
+// it. s0 is lost.
+func (g *gen) storeV128(x *Value, base arm64.Reg, off int32, cells bool) {
+	a := g.a
+	xr := g.intoX(x, x0)
+	if cells {
+		a.StoreF(base, off, xr)
+		a.Umov(arm64.V64, s0, xr, 1)
+		a.Store(base, off+16, s0)
+	} else {
+		a.StoreQ(base, off, xr)
+	}
+}
+
 // element leaves in s1 the address of element v.Args[0] of the array whose
 // pointer word is in s1, of storage type t, trapping past its length; s0
 // and D31 are lost.
@@ -127,7 +157,7 @@ func (g *gen) element(v *Value, t module.Kind) {
 	}
 	a.Load(s1, s1, lay.ArrayElems)
 	shift := uint8(4)
-	if t != module.KindRef {
+	if t != module.KindRef && t != module.KindV128 {
 		shift = map[int]uint8{1: 0, 2: 1, 4: 2, 8: 3}[storageSize(t)]
 	}
 	a.AddLsl(s1, s1, i, shift)
@@ -147,11 +177,19 @@ func (g *gen) gcRef(v *Value) bool {
 			g.refMove(s0, dst, s1, gcOff(idx))
 			break
 		}
+		if gcStorage(idx) == module.KindV128 {
+			g.loadV128(v, s1, gcOff(idx)+8, true)
+			break
+		}
 		g.loadNum(v, s1, gcOff(idx)+8, gcStorage(idx), gcSigned(idx))
 	case refStructSet:
 		g.object(dst, v.At)
 		if gcStorage(idx) == module.KindRef {
 			g.refMove(s1, gcOff(idx), s0, src)
+			break
+		}
+		if gcStorage(idx) == module.KindV128 {
+			g.storeV128(v.Args[0], s1, gcOff(idx)+8, true)
 			break
 		}
 		g.storeNum(v.Args[0], s1, gcOff(idx)+8, gcStorage(idx), true)
@@ -163,6 +201,10 @@ func (g *gen) gcRef(v *Value) bool {
 			g.refMove(s0, dst, s1, 0)
 			break
 		}
+		if gcStorage(idx) == module.KindV128 {
+			g.loadV128(v, s1, 0, false)
+			break
+		}
 		g.loadNum(v, s1, 0, gcStorage(idx), gcSigned(idx))
 	case refArraySet:
 		g.object(dst, v.At)
@@ -170,6 +212,10 @@ func (g *gen) gcRef(v *Value) bool {
 		if gcStorage(idx) == module.KindRef {
 			a.Load(s0, rCtx, offR)
 			g.refMove(s1, 0, s0, src)
+			break
+		}
+		if gcStorage(idx) == module.KindV128 {
+			g.storeV128(v.Args[1], s1, 0, false)
 			break
 		}
 		g.storeNum(v.Args[1], s1, 0, gcStorage(idx), false)

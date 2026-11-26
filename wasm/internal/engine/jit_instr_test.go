@@ -95,6 +95,7 @@ func TestJITInstrExitTraps(t *testing.T) {
 		{"exits", false, func(c *codeJITTest) { c.exitAll = true }},
 		{"opt exits", true, func(c *codeJITTest) { c.exitAll = true }},
 		{"base cpu", false, func(c *codeJITTest) { c.features = baseCPU() }},
+		{"baseline", false, nil},
 		{"opt", true, nil},
 	}
 	for _, c := range cases {
@@ -139,10 +140,11 @@ func TestJITInstrExitInlined(t *testing.T) {
 	}
 }
 
-// The v128 fields and elements of GC objects, and on a CPU without the
-// features the code takes popcnt, the roundings and the SIMD instructions,
-// run in Go in both tiers, the rest of each function natively: no function
-// is refused, and the results are the interpreter's.
+// The v128 fields and elements of GC objects are read and written natively
+// in both tiers, and on a CPU without the features the code takes popcnt,
+// the roundings and the SIMD instructions run in Go, the rest of each
+// function natively: no function is refused, and the results are the
+// interpreter's.
 func TestJITInstrExitResults(t *testing.T) {
 	src := `(module
   (type $v (struct (field (mut v128)) (field i32) (field (mut v128))))
@@ -194,8 +196,10 @@ func TestJITInstrExitResults(t *testing.T) {
 					}
 				}
 			})
-			if n == 0 {
-				t.Fatal("no instruction ran in Go")
+			// The v128 accesses are native; on the base CPU the vectors'
+			// instructions, popcnt and the roundings run in Go.
+			if base := m.feat != nil; base != (n > 0) && !(m.opt && !base) {
+				t.Fatalf("%d instructions ran in Go", n)
 			}
 			for _, name := range names {
 				if !nativeRan(inst, name) {

@@ -354,3 +354,24 @@ func (c *compiler) vload(op opcode.Opcode, at uint32) {
 	c.freeBase(base)
 	c.pushReg(v128, uint8(x))
 }
+
+// loadCells loads into x the v128 a struct keeps in two cells: its low
+// half at [base + off], its high half at [base + off + 16].
+func (c *compiler) loadCells(x arm64.FReg, base arm64.Reg, off int32) {
+	c.a.LoadF(x, base, off)
+	c.a.Load(rTmp, base, off+16)
+	c.a.InsG(arm64.V64, x, 1, rTmp)
+}
+
+// storeCells stores x as a struct keeps a v128 in two cells: its low half
+// at [base + off], its high half at [base + off + 16].
+func (c *compiler) storeCells(base arm64.Reg, off int32, x arm64.FReg) {
+	c.a.StoreF(base, off, x)
+	c.a.Umov(arm64.V64, rTmp, x, 1)
+	c.a.Store(base, off+16, rTmp)
+}
+
+// loadVecAt and storeVecAt load x from the 16 bytes at [base + off], and
+// store it there.
+func (c *compiler) loadVecAt(x arm64.FReg, base arm64.Reg, off int32)  { c.a.LoadQ(x, base, off) }
+func (c *compiler) storeVecAt(base arm64.Reg, off int32, x arm64.FReg) { c.a.StoreQ(base, off, x) }

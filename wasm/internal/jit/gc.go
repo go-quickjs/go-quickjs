@@ -103,12 +103,15 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
 		ti, fi := c.r.u32(), c.r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		if ft.Kind == module.KindV128 {
-			c.goInstr(at)
-			break
-		}
 		off := c.cellOf(ti, fi)
 		p := c.nonNull(c.pop(), at, 0)
+		if ft.Kind == module.KindV128 {
+			x := c.allocX(0)
+			c.loadCells(x, p, off+8)
+			c.freeG(p)
+			c.pushReg(v128, uint8(x))
+			return true
+		}
 		if ft.IsRef() {
 			c.refCopy(c.refPos(len(c.stack)), mem{p, off})
 			c.freeG(p)
@@ -120,14 +123,14 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	case opcode.StructSet:
 		ti, fi := c.r.u32(), c.r.u32()
 		ft := m.Types[ti].Struct.Fields[fi].Type
-		if ft.Kind == module.KindV128 {
-			c.goInstr(at)
-			break
-		}
 		off := c.cellOf(ti, fi)
 		v := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(v))
-		if ft.IsRef() {
+		if ft.Kind == module.KindV128 {
+			x := c.intoX(v)
+			c.storeCells(p, off+8, x)
+			c.freeX(x)
+		} else if ft.IsRef() {
 			c.refCopy(mem{p, off}, c.refOf(v))
 		} else {
 			// The payload word holds the value zero-extended.
@@ -136,14 +139,20 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		c.freeG(p)
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
 		et := m.Types[c.r.u32()].Array.Elem.Type
-		if et.Kind == module.KindV128 {
-			c.goInstr(at)
-			break
-		}
 		idx := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(idx))
 		i := c.intoG(idx, 1<<p)
 		oob := c.trap(TrapArrayOutOfBounds, at)
+		if et.Kind == module.KindV128 {
+			// A v128 takes 16 bytes, as a reference does.
+			c.elemAddr(p, i, l.ArrayElems, oob)
+			c.freeG(i)
+			x := c.allocX(0)
+			c.loadVecAt(x, p, 0)
+			c.freeG(p)
+			c.pushReg(v128, uint8(x))
+			return true
+		}
 		if et.IsRef() {
 			c.elemAddr(p, i, l.ArrayElems, oob)
 			c.freeG(i)
@@ -158,16 +167,18 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		c.freeG(p)
 	case opcode.ArraySet:
 		et := m.Types[c.r.u32()].Array.Elem.Type
-		if et.Kind == module.KindV128 {
-			c.goInstr(at)
-			break
-		}
 		v := c.pop()
 		idx := c.pop()
 		p := c.nonNull(c.pop(), at, c.regsOf(v)|c.regsOf(idx))
 		i := c.intoG(idx, 1<<p|c.regsOf(v))
 		oob := c.trap(TrapArrayOutOfBounds, at)
-		if et.IsRef() {
+		if et.Kind == module.KindV128 {
+			c.elemAddr(p, i, l.ArrayElems, oob)
+			c.freeG(i)
+			x := c.intoX(v)
+			c.storeVecAt(p, 0, x)
+			c.freeX(x)
+		} else if et.IsRef() {
 			c.elemAddr(p, i, l.ArrayElems, oob)
 			c.freeG(i)
 			c.refCopy(mem{p, 0}, c.refOf(v))

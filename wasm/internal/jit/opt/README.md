@@ -505,7 +505,9 @@ element in place at the engine's offsets (`Layout`), as the baseline does
 (its README's GC objects): a struct's field in its cell's second word,
 zero-extended, an array's index compared with its length, a number loaded
 into the value's register or stored from its location -- a packed one
-sign- or zero-extended, an f32 as its word -- and a reference copied
+sign- or zero-extended, an f32 as its word, a v128 field's halves from
+and to its two cells' payload words, a v128 element's 16 bytes whole
+(`loadV128`, `storeV128`) -- and a reference copied
 between the object and its position's slot through the barrier, s0 (X16)
 holding R, the index or a number on its way. ref.i31 stores the mark and
 the low 31 bits; the tests compare the mark, the header's kind byte, and
@@ -1422,7 +1424,7 @@ it writes -- memory, a global, a table -- the builder forgets it knows.
 
 | Instruction | |
 |---|---|
-| struct.get, struct.set, array.get, array.set of a v128 field or element; struct.new of a type with v128 fields; array.new, array.new_fixed, array.fill of v128 elements | |
+| struct.new of a type with v128 fields; array.new, array.new_fixed, array.fill of v128 elements | |
 | popcnt | on an amd64 CPU without POPCNT (`Request.Features`) |
 | ceil, floor, trunc, nearest | on an amd64 CPU without SSE4.1 |
 | every instruction `Effect` takes | under `Request.ExitAll`, for tests (`WASM_JIT_EXITS=all`) |

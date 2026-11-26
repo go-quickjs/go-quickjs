@@ -769,7 +769,6 @@ exit for:
 | Instruction | |
 |---|---|
 | relaxed_madd, relaxed_nmadd | fused, on amd64 (SIMD) |
-| struct.get, struct.set, array.get, array.set of a v128 field or element | |
 | popcnt | on an amd64 CPU without POPCNT |
 | ceil, floor, trunc, nearest | on an amd64 CPU without SSE4.1 |
 | every SIMD instruction but v128.const | on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 |
@@ -802,7 +801,8 @@ f32.store_f16, the asm.js opcodes -- the interpreter does not run either.
 instructions that ran in Go (`InstrExits`); `TestSpec` logs them when
 `WASM_JIT` is set. With every function compiled at its first call the spec
 compiles 6,842 functions and refuses none, where it refused 2, for reads of
-v128 fields.
+v128 fields, which are native now; 14 of its instructions run in Go, the
+fused relaxed_madd and relaxed_nmadd on an amd64 CPU with FMA3.
 
 ## GC objects
 
@@ -816,9 +816,14 @@ the same block for an array of up to 480 bytes of them, and for any
 array of references. struct.get, struct.set, array.get, array.set and array.len are
 native: the reference's pointer word tested for null (a trap), an array's
 index against its length (a trap), the field or element loaded or stored
-as its storage type, a reference through the barrier. ref.i31 stores the
-i31 mark's address and the value's low 31 bits; i31.get reads the
-payload. any.convert_extern and extern.convert_any are nothing.
+as its storage type, a reference through the barrier. A v128 field's halves
+are the payload words of its two cells, loaded into an XMM (V) register's
+halves (MOVSD and MOVLHPS; LDR D and INS) and stored from them (MOVSD and
+MOVHLPS; STR D and UMOV), SSE2's alone; a v128 element's 16 bytes are the
+element's whole, as a reference's are, loaded and stored whole (MOVDQU;
+LDR and STR Q). A v128 holds no pointer, so it takes no barrier. ref.i31
+stores the i31 mark's address and the value's low 31 bits; i31.get reads
+the payload. any.convert_extern and extern.convert_any are nothing.
 
 ref.test, ref.cast, br_on_cast and br_on_cast_fail are native too: null
 matches a nullable type; a top type (any, extern, func, exn) any
