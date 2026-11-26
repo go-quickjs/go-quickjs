@@ -25,8 +25,8 @@ marked v0.39.0 are from the comparison at `913095f4` on a Ryzen 5 3600
 (benchmarks.md).
 
 Items marked *(JIT project)* belong to the JIT's next project, whose
-design is still being worked out; they are kept here until it takes them
-up, and are not to be taken up apart from it.
+plan is [jit-design.md](jit-design.md); each says which of its stages
+takes it up, and is not to be taken up apart from it.
 
 ## How an item is measured
 
@@ -398,7 +398,8 @@ in the register JIT's code at v0.45.1.
   Bounce 13% and RayTrace 3%, but Box2D 2.4 to 4.9% more, its allocation
   18% more (escape analysis on larger graphs), and compiles 3 to 8% more.
   Box2D's allocations come first, then both together with the tests that
-  rely on the sizes rebuilt and the compiles timed per phase.
+  rely on the sizes rebuilt and the compiles timed per phase. Taken up by
+  [stage 4](jit-design.md#stage-4-inlining-loops-and-redundancy).
 - **Strict equality with a literal** is the operand's word, length and
   bytes against immediates for an ASCII literal of up to 64 bytes
   (`100eb7f3`). A longer or non-ASCII literal, and loose equality, take the
@@ -415,7 +416,8 @@ in the register JIT's code at v0.45.1.
   1,135, at all four placements, the price of its loop running natively
   (benchmarks.md). The way is V8's generic construction: the object made
   natively from the constructor's initial layout, its root dynamic, and
-  the body called by its code.
+  the body called by its code. Taken up by
+  [stage 6](jit-design.md#stage-6-the-call-path).
 - **Calls of Go.**
   - A leaf's Go side is about a hundred instructions besides the leaf's
     own: the routine and the ABI0 wrapper (27), `jitLeafGo`'s frame and its
@@ -454,7 +456,8 @@ in the register JIT's code at v0.45.1.
     splits intervals at each stub's use, which the spill classes, the
     frame states and the exit descriptions would have to follow, or the
     scan prefers the fixed registers by a hint and the moves left are
-    resolved at the site (2026-11-24, deferred).
+    resolved at the site (2026-11-24, deferred). Taken up by
+    [stage 6](jit-design.md#stage-6-the-call-path).
 - **Register allocation and the code**, each found on the stack JIT's
   code, its count from then:
   - A native call's state could be found from its return address, as V8's
@@ -638,7 +641,9 @@ v0.45.1, its figures being the stack JIT's unless dated later.
   the budget at a cache's change would have waited for. They are parked
   until a baseline tier and fast calls of Go from native code exist; a
   later first compile like V8's top tier's was dropped (Rejected, "A later
-  tier-up").
+  tier-up"). Taken up by stages
+  [0](jit-design.md#stage-0-correctness-and-hygiene) and
+  [1](jit-design.md#stage-1-tiering-and-background-compiles).
 - **Where a compile's time and memory go.** `-jitcompile N` times each
   phase (`mir.Times`); the shares measured before the phases were split --
   `allocate` 14% of a compile, the build's `plan` 15% (most of it the
@@ -688,9 +693,10 @@ v0.45.1, its figures being the stack JIT's unless dated later.
   Octane's Typescript took 3,750 ms under the default against 2,850 under
   32 MiB (`WithJITMemoryLimit`'s documentation). More room must never be
   slower, and before the flush was: with 16 MB Typescript took 18% longer
-  than with 8. A default of 32 or 64 MiB is being looked into. A stretch
+  than with 8. The JIT project makes the default 64 MiB. A stretch
   of native code is judged by 20 instructions of work against an exit
-  (`jitSSAMinWork`), far less than an exit costs.
+  (`jitSSAMinWork`), far less than an exit costs. Taken up by
+  [stage 0](jit-design.md#stage-0-correctness-and-hygiene).
 - **The profit model is parked.** `a21df702`, never merged, has a
   calibration (`TestJITCalibration`, `QUICKJS_JIT_CALIBRATE=1`) and charges
   a callee's exits to the callee; Splay, Json and RegExp were slower with
@@ -727,7 +733,8 @@ v0.45.1, its figures being the stack JIT's unless dated later.
   `jitForwardPlain` 2,976). Two positions at the base's offsets recovered
   part of it (`array_indexOf` 4.2%, `forward_array` 2.6%, `array_pop`
   3.1%, `array_slice` 4.5% slower at one placement) and were not taken
-  (2026-11-25). Accepted as layout.
+  (2026-11-25). Accepted as layout. Taken up by
+  [stage 0](jit-design.md#stage-0-correctness-and-hygiene).
 - **What the placements do not vary.** Read-only data and Go's type
   descriptors: two builds of the same code, their type descriptors 32
   bytes apart, took 211 and 192 ms on `string_template` (2026-11-04), and

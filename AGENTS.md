@@ -204,6 +204,10 @@ concurrently.
   the inliner takes, how registers are allocated and spilled, what a frame
   state or an exit holds, a new kind of native path -- updates it in the same
   commit, saying how the JIT works now rather than how it came to.
+  docs/jit-design.md is the JIT project's plan: the architecture it builds
+  towards and its stages. A change that lands a stage, or part of one,
+  updates the stage's status there, with what it measured beside what was
+  projected.
 - A path the native interpreter adds to run a function's body without its
   frame -- a leaf, an initializer, a forwarder -- is native handler code
   that nativegen generates, from a plan the register compiler decides
