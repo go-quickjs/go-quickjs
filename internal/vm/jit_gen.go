@@ -425,3 +425,42 @@ func (r *Runtime) regGenCaught(f *frame, c *regCode) int {
 	f.savedSP = 0
 	return int(h.To)
 }
+
+// Awaits that go on in place, natively (ssa.OpAwaitReady, GoAwait).
+//
+// An async function resumed by its await's job, no job queued, goes on in
+// place at an await of a settled value, as the interpreter's await does
+// (regSuspend): the job the await would queue would be the queue's next,
+// resuming the frame with what the value settled to at once. Native code
+// asks the same at the await -- the frame's kind, which Go gives each run
+// of an async function's code (abi.Context's AwaitJob), and the queue,
+// whose next job's index and length it reads where the runtime keeps them
+// (JobHead, JobCount) -- and goes on with the value where it is no object,
+// and with what Go finds it settled to where it is (jitAwaitSettled); it
+// leaves at the await otherwise, where Go suspends the frame.
+
+// jitAwaitJob is the context's AwaitJob for a run of f, an async
+// function's frame: 1 where its await's job resumed it.
+func jitAwaitJob(f *frame) uint64 {
+	if f.regKind == regFrameAwaitJob {
+		return 1
+	}
+	return 0
+}
+
+// jitJobCount is where r keeps its job queue's length, the word of its
+// slice's header after the pointer (abi.Context's JobCount).
+func jitJobCount(r *Runtime) *int {
+	return (*int)(unsafe.Add(unsafe.Pointer(&r.microtasks), unsafe.Sizeof(uintptr(0))))
+}
+
+// jitAwaitSettled is GoAwait: what an await of the object its operand is
+// goes on with in place, as the interpreter's await finds it (regSettled),
+// to the call's keep cell, or false where the frame is to suspend.
+func (r *Runtime) jitAwaitSettled(ctx *abi.Context) bool {
+	v, ok := r.regSettled(jitGoArg(ctx, 0))
+	if ok {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	}
+	return ok
+}

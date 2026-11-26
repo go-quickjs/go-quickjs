@@ -663,6 +663,15 @@ type Context struct {
 	// function table of typed code calls (ssa's OpTableCallee), which the
 	// call's checks read (ssa.CallSite's Table).
 	CallTable uintptr
+	// AwaitJob is 1 where the frame Go entered the code with is an async
+	// function's its await's job resumed, 0 otherwise: Go sets it before
+	// every run of an async function's code, the only code that reads it
+	// (ssa.OpAwaitReady). JobHead and JobCount are the VM's job queue's
+	// next job's index and its length, which no job is queued while they
+	// are equal.
+	AwaitJob uint64
+	JobHead  *int
+	JobCount *int
 }
 
 // SpillAt is the address of spill slot n: in Spill, or past it in
@@ -1212,6 +1221,9 @@ var (
 	OffBounds      = int32(unsafe.Offsetof(Context{}.Bounds))
 	OffTailFrame   = int32(unsafe.Offsetof(Context{}.TailFrame))
 	OffFrameThis   = int32(unsafe.Offsetof(Context{}.FrameThis))
+	OffAwaitJob    = int32(unsafe.Offsetof(Context{}.AwaitJob))
+	OffJobHead     = int32(unsafe.Offsetof(Context{}.JobHead))
+	OffJobCount    = int32(unsafe.Offsetof(Context{}.JobCount))
 	OffStackBase   = int32(unsafe.Offsetof(Context{}.StackBase))
 	OffStackEnd    = int32(unsafe.Offsetof(Context{}.StackEnd))
 	OffStackTop    = int32(unsafe.Offsetof(Context{}.StackTop))

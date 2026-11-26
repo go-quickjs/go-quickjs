@@ -206,7 +206,9 @@ func TestJITExceptionHandlers(t *testing.T) {
 // A generator's or an async function's body is compiled, and each
 // resumption enters native code at its pc: the first after the
 // parameters, or the one after the yield or the await it was suspended
-// at, with the value sent in. A suspension leaves the frame as the
+// at, with the value sent in -- an await of a settled value its await's
+// job resumed the frame for going on in place natively, with no
+// resumption. A suspension leaves the frame as the
 // interpreter's does, and what a resumption injects -- a throw, a return
 // -- is unwound to the body's handlers.
 func TestJITGenerators(t *testing.T) {
@@ -248,13 +250,26 @@ func TestJITGenerators(t *testing.T) {
 		`(adds(30).then(v => out = v), 0)`, `out`, `(adds(40).then(v => out = v), 0)`, `out`,
 		`(fails(30).then(v => out = v), 0)`, `out`, `(fails(30).then(v => out = v), 0)`, `out`,
 	)
-	for _, name := range []string{"evens", "echo", "catches", "adds", "fails"} {
+	// adds' awaits after its first, of numbers, its await's job resuming
+	// the frame and no job queued, go on in place natively (ssa's await):
+	// one resumption runs its loop to its end.
+	jitNativeForTest(t, r, "adds")
+	if n := r.RegNativeStats().HostOps["await"]; n > 40 {
+		t.Fatalf("Go made %d awaits at exits; want adds' first and fails' rejected ones", n)
+	}
+	for _, name := range []string{"evens", "echo", "catches", "fails"} {
 		// Entered at each resumption, not once: under the register JIT
 		// by Go, or by a native step through its link (jitGenInForTest).
 		e := jitNativeForTest(t, r, name)
 		n := e.ssaStats.entries
 		n += jitGenInForTest(r, name)
-		if n < 30 {
+		least := uint64(30)
+		if name == "fails" {
+			// Resumed at each of its runs' 8 rejected awaits; its others
+			// go on in place.
+			least = 16
+		}
+		if n < least {
 			t.Fatalf("%s entered natively %d times", name, n)
 		}
 	}

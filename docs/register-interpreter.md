@@ -1278,7 +1278,8 @@ allocation; an async function reserves its promise pointer instead.
   or of a fulfilled promise of the realm's constructor, where no job is
   waiting: the job the await would queue would be the next to run, with
   that value. The first run of an async function, which its caller's code
-  follows, never does.
+  follows, never does. The JIT's code goes on in place at the same awaits,
+  with no exit (internal/jit/README.md, "What is entered where").
 
 ## Closures and upvalues
 

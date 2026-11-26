@@ -2078,6 +2078,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoIterClose:
 		return r.jitIterClose(ctx)
+	case ssa.GoAwait:
+		return r.jitAwaitSettled(ctx)
 	case ssa.GoTypedSeen:
 		return r.jitTypedSeen(ctx)
 	case ssa.GoTypedView:
@@ -5098,6 +5100,7 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 		c.StackBase, c.StackEnd = sh.stackBase, sh.stackEnd
 		c.StackTop, c.StackHigh = &r.stackTop, &r.stackHigh
 		c.BackEdges, c.GlobalEpoch, c.TypedEpoch = &r.backEdges, &r.shapes.globalEpoch, &r.typedEpoch
+		c.JobHead, c.JobCount = &r.jobHead, jitJobCount(r)
 		c.Global, c.LexNames, c.GlobalLex, c.StringMethods = sh.global, sh.lexNames, sh.globalLex, sh.strMethods
 		*(*Value)(unsafe.Pointer(&c.CharCodeAt)) = Value{}
 		if sh.charCodeAt != nil {

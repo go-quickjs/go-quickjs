@@ -350,6 +350,15 @@ const (
 	// the deadline and the memory limit and gives a new budget, or the
 	// code exits to State (abi.ExitPoll).
 	OpPoll // -> none
+	// OpAwaitReady is an async function's await of its operand where the
+	// frame goes on past it in place, as the interpreter's await does (the
+	// VM's regSuspend): it exits to State unless the frame is one its
+	// await's job resumed (abi.Context's AwaitJob) and no job is queued
+	// (JobHead, JobCount), read where the await is -- a call before it
+	// may queue one, so that two of them are never one (readsMemory) --
+	// and is whether the operand is an object, whose settled value Go
+	// tells (GoAwait); any other value is its own.
+	OpAwaitReady // tagged -> bool
 	// OpSameSymbol guards that a value is the symbol at Const's address: a
 	// private member's key, which each evaluation of its class mints
 	// anew, the one its code was compiled for (ir.Instruction's Private).
@@ -717,7 +726,7 @@ var opNames = [...]string{
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpClz32: "clz32", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
 	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi", OpCmpI32: "cmpi", OpCheckI32: "checki",
-	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpPoll: "poll", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
+	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpPoll: "poll", OpAwaitReady: "awaitready", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
@@ -789,7 +798,7 @@ func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpBigElemRead, OpBigElemWrite, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
-		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpPoll, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs, OpPrimitive,
+		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpPoll, OpAwaitReady, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs, OpPrimitive,
 		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
 		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64,
 		OpHolderCell, OpChainCheck, OpProtoIs, OpCheckI32:
@@ -807,7 +816,7 @@ func (o Op) isGuard() bool {
 func (o Op) readsMemory() bool {
 	return o == OpElemRead || o == OpBigElemRead || o == OpBigElemWrite || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
 		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength ||
-		o == OpAccessorIs || o == OpHolderCell || o == OpChainCheck || o == OpProtoIs
+		o == OpAccessorIs || o == OpHolderCell || o == OpChainCheck || o == OpProtoIs || o == OpAwaitReady
 }
 
 // Value is one SSA value.

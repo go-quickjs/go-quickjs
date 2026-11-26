@@ -1030,6 +1030,9 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 						return exit(v.State, ir.BudgetExit)
 					}
 				}
+			case OpAwaitReady:
+				// The model has no job queue: the frame suspends, Go's.
+				return exit(v.State, ir.ExitKind(v.Aux))
 			case OpSameSymbol:
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
 			case OpKeyIs:

@@ -1541,6 +1541,14 @@ func (l *regLowering) lower(pc int) {
 		// next resumed natively, suspends it natively (ir.Instruction's
 		// Suspend), its value R[B].
 		l.emit(ir.Instruction{Op: ir.Host, Suspend: fn.Generator && !fn.Async, Left: reg(b)}, false)
+	case bytecode.RAwait:
+		// Go's where the frame suspends, its resumption entering the code
+		// past it. An async function's, which the interpreter goes on past
+		// in place where its await's job resumed the frame, no job waits
+		// and the value is settled (the VM's regSuspend), native code goes
+		// on past in place the same way (ir.Instruction's Await): an async
+		// generator's never does.
+		l.emit(ir.Instruction{Op: ir.Host, Await: fn.Async && !fn.Generator, Left: reg(b), Dest: int(a)}, false)
 	case bytecode.RCallWT, bytecode.RCallMWT:
 		// A call in tail position: made as the ordinary call while the
 		// stack is shallow, natively or by Go, as the interpreter's

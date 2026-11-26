@@ -124,11 +124,12 @@ function interleave() { order = []; tick("a", 5000); tick("b", 3000); Promise.re
 
 // TestJITRegSettledAwaitGoesOn runs an async function whose loop awaits a
 // settled value, the job queue otherwise empty, and checks that its
-// native code goes on after each such await: Go makes the await in place
-// at the code's exit, as the interpreter's await would (regAwaitsInPlace),
-// and no run of the code ends in the interpreter there. Before, Go left
-// the await to the interpreter, which went on in place and ran the rest of
-// the frame, every turn of the loop to its end.
+// native code goes on past each such await in place, as the interpreter's
+// await would (ssa's await, OpAwaitReady), with no exit there: only each
+// run's first await, which the call's run makes and which suspends, is
+// Go's. No run of the code ends in the interpreter there. Before, Go made
+// each await in place at an exit (regAwaitsInPlace), and before that left
+// it to the interpreter, which ran the rest of the frame.
 func TestJITRegSettledAwaitGoesOn(t *testing.T) {
 	t.Parallel()
 	regBothMarking(t, func(t *testing.T) {
@@ -138,8 +139,10 @@ func TestJITRegSettledAwaitGoesOn(t *testing.T) {
 		r.SetJITWarmUp(2, 2)
 		r.SetJITReport(true)
 		var got [2]string
+		var busyHosts uint64
 		for i, rt := range rts {
 			fn, _ := rt.GetProp(Obj(rt.Global()), rt.Intern("drive"))
+			before := r.RegNativeStats().HostOps["await"]
 			for range 20 {
 				if _, err := rt.Call(fn, Undefined, []Value{Float(20000)}); err != nil {
 					t.Fatal(err)
@@ -147,6 +150,9 @@ func TestJITRegSettledAwaitGoesOn(t *testing.T) {
 				if err := rt.DrainJobs(); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if rt == r {
+				busyHosts = r.RegNativeStats().HostOps["await"] - before
 			}
 			v, _ := rt.GetProp(Obj(rt.Global()), rt.Intern("out"))
 			s, _ := rt.GetProp(v, rt.Intern("length"))
@@ -177,8 +183,13 @@ func TestJITRegSettledAwaitGoesOn(t *testing.T) {
 				t.Errorf("%d runs ended in the interpreter at a settled await: %s", n, k)
 			}
 		}
-		if hosts := r.RegNativeStats().HostOps["await"]; hosts < 1000 {
-			t.Errorf("native code made %d awaits; want each of the loop's after its first runs", hosts)
+		// 20 runs of 79 awaits each: the first of each suspends, and the
+		// loop runs natively across the rest.
+		if e := jitNativeForTest(t, r, "busy"); e.ssaStats.work < 1_000_000 {
+			t.Errorf("busy did %d work natively; want most of its 400,000 turns'", e.ssaStats.work)
+		}
+		if busyHosts > 40 {
+			t.Errorf("Go made %d of the busy loop's awaits at exits; want only each run's first", busyHosts)
 		}
 	})
 }

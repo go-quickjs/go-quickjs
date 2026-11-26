@@ -2286,6 +2286,11 @@ func (r *Runtime) jitRegStretch(f *frame, c *regCode, e *jitRegEntry, wb, ipc, a
 		ctx.Cells, ctx.Loop = nil, 0
 	}
 	ctx.Open = uint64(len(f.openUpvalues))
+	if fn := f.cl.fn; fn.Async && !fn.Generator {
+		// An async function's awaits go on in place natively where its
+		// await's job resumed the frame (ssa.OpAwaitReady, jitAwaitJob).
+		ctx.AwaitJob = jitAwaitJob(f)
+	}
 	if f.cl.fn.HasTailCall {
 		// Its calls of itself in tail position, deep in the stack, give
 		// the frame to the call in place natively where the interpreter
@@ -2829,7 +2834,7 @@ func (r *Runtime) jitRegPlainWhole(ctx *abi.Context, cl *closure, c *regCode) bo
 // jitRegGoSettled reports whether the call of Go ctx makes at register pc
 // rpc of c is one Go makes for good, which jitRegRunGoProfit judges: not
 // a call of a function, which the code may make natively once it has
-// learned the call (jitRegCallSeen).
+// learned the call (jitRegCallSeen), but for an async function's.
 func (r *Runtime) jitRegGoSettled(ctx *abi.Context, c *regCode, rpc int) bool {
 	if rpc >= len(c.rc.Code) {
 		return false
@@ -2855,7 +2860,20 @@ func (r *Runtime) jitRegGoSettled(ctx *abi.Context, c *regCode, rpc int) bool {
 			return true
 		}
 		fd := callee.Object().fn()
-		return fd == nil || fd.native != nil
+		if fd == nil || fd.native != nil {
+			return true
+		}
+		// An async function's or an async generator function's call, which
+		// makes its promise or its generator by Go and which native code
+		// never makes natively -- neither is entered by calls
+		// (jitRegCalled), nor made from a pool (jitRegGenMakeable) -- is
+		// settled too. Judged as a call of script, which code compiled
+		// again might make natively, an async function's loop calling
+		// another at each turn, its awaits gone on past in place, ran
+		// natively at the cost of a call of Go a turn (async_call, 1.8
+		// times the interpreter's time).
+		cl := fd.closure
+		return cl != nil && cl.fn != nil && cl.fn.Async
 	}
 	return true
 }

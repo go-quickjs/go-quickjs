@@ -990,12 +990,29 @@ whole (`regWholeRuns`). At a `yield`, an `await`, a `yield*` or the
 parameters' end, Go suspends the frame itself (`jitRegSuspend`), as the
 interpreter would: the pc past it
 kept for the resumption, the run not ended in the interpreter, so that a
-`yield` of a generator Go resumed does not end a run there. An `await` the
-interpreter would go on from in place Go makes at the code's exit instead
-(`regAwaitsInPlace`), native code going on at its next entry: the frame
-resumed by its await's job, the queue's last, the value awaited settled.
-Left to the interpreter, a busy loop's frame would run in the interpreter
-from its first settled await on. A throw a resumption injects -- a
+`yield` of a generator Go resumed does not end a run there. An async
+function's `await` the interpreter would go on from in place -- the frame
+resumed by its await's job, no job queued, the value awaited settled, so
+that the job the await would queue would be the queue's next, resuming the
+frame with what the value settled to at once (the VM's `regSuspend`) --
+native code goes on from in place too, with no exit (ir's `Await`, ssa's
+`await`): `ssa.OpAwaitReady` reads the frame's kind, which Go gives each
+run of an async function's code (`abi.Context`'s `AwaitJob`), and the job
+queue's next index and length where the VM keeps them (`JobHead`,
+`JobCount`), at the await -- a call before it may queue a job, so no two
+are merged -- and exits to the await's state where the frame is to
+suspend; a value no object is its own, and an object's is what Go finds it
+settled to (`ssa.GoAwait`, the VM's `regSettled`), a fulfilled promise of
+the realm's constructor's value, Go refusing anything else, which leaves
+at the await. The interpreter's interrupt check there is its budget's;
+native code's loops poll at their back edges. An async generator's awaits
+never go on in place, the interpreter's rule. Go made each such await at
+an exit before (`regAwaitsInPlace`, which an exit at one still asks), an
+exit and an entry some 25 times the interpreter's await: `async_await`'s
+loop, an await at every turn, was judged slow for its exits and left to
+the interpreter, at 20.4 ns a turn with the JIT on a Ryzen 5 3600, and
+runs natively now at 4.7; `async_busy`'s, an await every 256 turns, 5.9 to
+4.3. A throw a resumption injects -- a
 rejected `await`, a generator's `throw` -- that a handler of the frame's
 takes Go catches before the frame runs (`regGenCaught`), the value thrown
 in the handler's register as `regCatch` gives it, and the code is entered
@@ -1101,7 +1118,8 @@ run's stretches after its host exits, where native code goes on at once,
 a run that left at a
 loop judged slow leaving to the interpreter after the instruction Go ran
 -- and so are the settled calls of Go -- not a call of a function it may come to call
-natively -- of a run begun at a loop (`jitRegRunGoProfit`), unless the code
+natively, but an async function's, which native code never calls
+(`jitRegGoSettled`) -- of a run begun at a loop (`jitRegRunGoProfit`), unless the code
 calls functions natively (`jitRegCodeCallsNatively`): judged slow there,
 the run leaves once that call is made (`jitRegRun`'s `leave`). A native
 callee's calls of Go are judged too, beyond its native callers' calls in
@@ -2546,6 +2564,7 @@ field at its offset (`abi.Off*`), never by the VM's types.
 | `Next`, `Prev`, `Live`, `Level`, `Base`, `Closure`, `Function`, `NewTarget`, `ReturnTo`, `Args` | Native calls: the callee's context, which runs a call's callee or describes an inlined frame (`LiveCall`, `LiveInline`), its window, closure and function object, where it returns to, the arguments its frame keeps. |
 | `StackBase`, `StackEnd`, `StackTop`, `StackHigh`, `HighSeen` | The VM's stack, for the room a callee's frame needs. |
 | `Global`, `GlobalLex`, `LexNames`, `GlobalEpoch` | A script's global and lexical bindings, and the count of changes to the global object's table. |
+| `AwaitJob`, `JobHead`, `JobCount` | Whether an async function's frame is one its await's job resumed, and the VM's job queue's next index and length, which an await that goes on in place reads (`ssa.OpAwaitReady`). |
 | `TypedEpoch`, `Mega`, `Hints`, `Loop`, `Shade`, `Bounds`, `TailFrame` | The typed arrays' epoch, the megamorphic cache, the hint table, an array loop's index, the marking's shading cell, the levels' limits (`abi.Bounds`' `LevelLimit`, `TailLevel`), and a frame a tail call gives up. |
 
 The contexts are the runtime's, a native call's callee in the next, as V8's

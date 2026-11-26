@@ -5834,6 +5834,26 @@ func (c *compiler) entryPoll(v *ssa.Value) {
 	c.a.Bind(polled)
 }
 
+// awaitReady is an async function's await that goes on in place
+// (ssa.OpAwaitReady): an exit to v's state unless the frame is one its
+// await's job resumed (abi.Context's AwaitJob) and the VM's job queue is
+// empty (JobHead, JobCount), then whether the operand is an object, whose
+// number word is every object's.
+func (c *compiler) awaitReady(v *ssa.Value, guard guardTo) {
+	c.a.Load(scratchA, regCtx, abi.OffAwaitJob)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	guard.jump(amd64.CondE)
+	c.a.Load(scratchA, regCtx, abi.OffJobHead)
+	c.a.Load(scratchA, scratchA, 0)
+	c.a.Load(scratchB, regCtx, abi.OffJobCount)
+	c.a.CmpMem(scratchA, scratchB, 0, true)
+	guard.jump(amd64.CondNE)
+	c.cmpWord(c.gpr(v.Args[0], scratchB), c.enc.Object)
+	c.a.Setcc(amd64.CondE, scratchA)
+	c.a.MovZX8(scratchA, scratchA)
+	c.setG(v, scratchA)
+}
+
 // tailJump is tailSelf's call of t, its n arguments, and its receiver if
 // this, in the context's operands: its code, which native callers may call,
 // is entered at its start (its link's body, past its call entry) with its
@@ -12222,6 +12242,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 	case ssa.OpPoll:
 		c.entryPoll(v)
+	case ssa.OpAwaitReady:
+		c.awaitReady(v, guard)
 	case ssa.OpTailRoom:
 		c.a.Load(scratchA, regCtx, abi.OffLevel)
 		if v.Index != 0 {

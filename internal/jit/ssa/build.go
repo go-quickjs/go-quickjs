@@ -2656,6 +2656,13 @@ type GoOp uint8
 // once, its iterator's return the realm's own. Go finishes the generator
 // as the return would, and the cursor is done; it refuses any other, which
 // leaves for Go to close after an exit.
+//
+// GoAwait is what an async function's await of an object, its one
+// operand, goes on with in place (OpAwaitReady): a fulfilled promise of
+// the realm's own constructor's value, as the interpreter's await finds it
+// (the VM's regSettled), which Go writes to the call's keep cell. It runs
+// no script, and refuses anything else, which leaves for Go to suspend the
+// frame at the await after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -2696,6 +2703,7 @@ const (
 	GoTypedSeen
 	GoTypedView
 	GoIterClose
+	GoAwait
 )
 
 // GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the
@@ -6119,6 +6127,10 @@ func (b *builder) nativeHost(pc int) bool {
 		// Go's from native code (GoHost).
 		return true
 	}
+	if b.awaitAt(pc) {
+		// An await native code goes on past in place (await).
+		return true
+	}
 	if _, ok := b.intrinsic(pc); ok {
 		return true
 	}
@@ -6129,6 +6141,52 @@ func (b *builder) nativeHost(pc int) bool {
 		return true
 	}
 	return b.charCode(pc)
+}
+
+// awaitAt reports whether the instruction at pc is an async function's
+// await (ir.Instruction's Await) that native code goes on past in place
+// where the interpreter would (await): in the function's own frame, where
+// Go may be called from native code.
+func (b *builder) awaitAt(pc int) bool {
+	in := &b.p.Code[pc]
+	return in.Op == ir.Host && in.Await && b.cur == b.root && b.goCalls() && in.Left.Slot >= 0 && in.Dest >= 0 &&
+		pc+1 < len(b.p.Code) && reachable(b.p, pc+1)
+}
+
+// await makes in, an async function's await at pc (awaitAt), as the
+// interpreter's await (the VM's regSuspend) makes it: where the frame is
+// one its await's job resumed and no job is queued (OpAwaitReady), the
+// job the await would queue would be the queue's next, which would resume
+// the frame with what the value settled to at once, so the frame goes on
+// in place with that -- the value itself where it is not an object, and,
+// where it is, what Go finds it settled to (GoAwait), a fulfilled promise
+// of the realm's constructor's value -- native code going on after it on
+// either branch (split). Anything else leaves at the await's state, where
+// Go suspends the frame, as the interpreter would. The interpreter's
+// interrupt check there is its budget's; native code's loops poll at
+// their back edges. Left to Go, each in-place await was a host exit that
+// Go made in place: async_await's loop, an await at each turn, was judged
+// slow for its exits and ran in the interpreter.
+func (b *builder) await(blk *Block, pc int, in ir.Instruction) {
+	f := b.f
+	x := b.read(in.Left.Slot, blk)
+	st := b.state(blk, pc)
+	obj := f.newValue(blk, OpAwaitReady, Bool, x)
+	obj.Aux, obj.State = int(ir.HostExit), st
+	st.addUse()
+	yes, no, _ := b.split(blk, obj, true)
+	b.assign(in.Dest, no, x)
+	call := f.newValue(yes, OpCall, Tagged, x)
+	if f.Keeps < f.keepLimit() {
+		f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAwait, ThisSlot: -1}}, f.Keeps
+		f.Keeps++
+	}
+	call.Aux, call.State = int(ir.HostExit), st
+	st.addUse()
+	kept := f.newValue(yes, OpCallCell, Source, call)
+	r := f.newValue(yes, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.assign(in.Dest, yes, r)
 }
 
 // fromCharCode is the address of String.fromCharCode if the method call of
@@ -9520,6 +9578,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.assign(in.Dest, blk, boxB(v))
 	case ir.Host, ir.Call:
+		if in.Op == ir.Host && b.awaitAt(pc) {
+			b.await(blk, pc, in)
+			break
+		}
 		if in.Op == ir.Host && in.Frame && b.cur == b.root && b.goCalls() {
 			// Go makes it from native code, on the frame it entered the code
 			// with (GoHost), and native code goes on after it.

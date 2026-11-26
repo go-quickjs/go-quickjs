@@ -8327,6 +8327,26 @@ func (c *a64Compiler) windowTailJump(t *ssa.CallSite, n int, fn, this bool, guar
 	c.a.Br(a64A)
 }
 
+// awaitReady is amd64's: an async function's await that goes on in place
+// (ssa.OpAwaitReady).
+func (c *a64Compiler) awaitReady(v *ssa.Value, guard a64Guard) {
+	c.a.Load(a64A, a64Ctx, abi.OffAwaitJob)
+	c.a.CmpImm(a64A, 0, true)
+	guard.jump(arm64.EQ)
+	c.a.Load(a64A, a64Ctx, abi.OffJobHead)
+	c.a.Load(a64A, a64A, 0)
+	c.a.Load(a64B, a64Ctx, abi.OffJobCount)
+	c.a.Load(a64B, a64B, 0)
+	c.a.Cmp(a64A, a64B, true)
+	guard.jump(arm64.NE)
+	w := c.gpr(v.Args[0], a64B)
+	c.movImm(a64A, c.enc.Object)
+	c.a.Cmp(w, a64A, true)
+	d := c.gdst(v)
+	c.a.Cset(d, arm64.EQ)
+	c.setG(v, d)
+}
+
 // entryPoll is register code's poll at its start (ssa.OpPoll), as
 // amd64's.
 func (c *a64Compiler) entryPoll(v *ssa.Value) {
@@ -10730,6 +10750,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 	case ssa.OpPoll:
 		c.entryPoll(v)
+	case ssa.OpAwaitReady:
+		c.awaitReady(v, guard)
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		if v.Index != 0 {

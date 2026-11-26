@@ -69,7 +69,7 @@ func shapeSafeGo(op GoOp) bool {
 	switch op {
 	case GoAdd, GoRefill, GoPow, GoMath, GoAtan2, GoHypot, GoMod, GoTypedRead, GoElemCell, GoStringAbsent, GoConcat, GoIndex, GoAppend,
 		GoCompare, GoRandom, GoNumber, GoEqual, GoCells, GoHas, GoClosure, GoIndexOf, GoNewArray, GoArith, GoBigString, GoArgument,
-		GoTypedView, GoIterClose:
+		GoTypedView, GoIterClose, GoAwait:
 		return true
 	}
 	return false

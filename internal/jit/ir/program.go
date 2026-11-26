@@ -448,6 +448,11 @@ type Instruction struct {
 	// step resumed natively makes itself, returning the value to the step
 	// (ssa.Block's Yield), and Go makes otherwise.
 	Suspend bool
+	// Await marks a Host that is an async function's await, R[Dest] what
+	// R[Left] settles to, which native code goes on past in place where
+	// the interpreter's await would (ssa's await), and leaves at to
+	// suspend the frame otherwise.
+	Await bool
 	// Rest marks a destructuring's step (IterStep, When) that is its rest
 	// element, iter_rest: an array of what the cursor has left.
 	Rest bool
