@@ -607,13 +607,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	vacr := grown(al.vacross, n)
 	al.vacross = vacr
 	single := func(v VReg) *web {
+		// Every field set in place: a literal is made aside and copied.
 		w := al.pool.fill()
-		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1,
-			width: widthOf(f, v)}
+		a := &vacr[v]
+		w.ranges, w.cur, w.reg, w.dense = ranges[v], 0, -1, 0
+		w.members = append(al.vregs.take(1), v)
+		w.weight, w.callWeight, w.avoid = weight[v], a.weight, a.avoid
+		w.hints = nil
+		w.fixed, w.arrive, w.width, w.slot = -1, 0, widthOf(f, v), -1
+		w.cls, w.calls, w.spilled, w.owned = f.Class[v], a.calls, false, false
+		w.sp = nil
 		if f.FixedSlot[v] >= 0 {
 			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
 		}
-		w.calls, w.callWeight, w.avoid = vacr[v].calls, vacr[v].weight, vacr[v].avoid
 		if w.calls {
 			w.weight -= defW[v]
 		}
