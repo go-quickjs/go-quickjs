@@ -1336,20 +1336,33 @@ is under [The projection](#the-projection).
   calls, the finish writes once the compile is done with, as V8's
   concurrent compiles write no feedback. *Measured*: with the gate's
   `compilediff` and the goroutine's part, to come.
-  Lowering ahead, on a worker: a compile in the background whose
-  function's program is not lowered for its hints hands the lowering,
-  and its callees' that the call sites' caches name, to the workers and
-  is asked for again a quarter of a budget later, taking the workers'
-  programs, the same ones, at its next ask (`jit_lowerahead.go`).
-  Projected 50 µs a compile off the goroutine (27 the root's, 25 the
-  callees', of which a scan of the caches finds about 80%); *measured*:
-  pending.
-  One lowering a function: an entry's, a hot function's and a callee's
-  programs differ only in what they refuse, so a function is lowered once
-  for the three (`LowerRegKindsWith`) and the kinds share the program, its
-  bytes counted once. Of the lowerings Typescript made in the background,
-  about half were a second kind of a function lowered before (86 of the
-  compiles' own, 154 of the callees'); *measured*: pending.
+  The goroutine's times leave out the host's hooks (the tier trace's
+  line and its flush, `-jitcode`'s record), which had been part of each
+  install. Lowering ahead, on a worker: a compile in the background
+  whose function's program is not lowered for its hints hands the
+  lowering, and its callees' that the call sites' caches name, to the
+  workers and is asked for again a quarter of a budget later, taking the
+  workers' programs, the same ones, at its next ask
+  (`jit_lowerahead.go`); projected 50 µs a compile off the goroutine (27
+  the root's, 25 the callees', of which a scan of the caches finds about
+  80%). One lowering a function: an entry's, a hot function's and a
+  callee's programs differ only in what they refuse, so a function is
+  lowered once for the three (`LowerRegKindsWith`) and the kinds share
+  the program, its bytes counted once; of the lowerings Typescript made
+  in the background, about half had been a second kind of a function
+  lowered before (86 of the compiles' own, 154 of the callees'). The
+  feedback's lists put back on the worker (`replay`), not at the
+  install; projected 12 µs of the install. *Measured* (Ryzen 5 3600,
+  Typescript in the background, hooks left out on both sides, µs a
+  compile, median and mean of 620): the four on the snapshot's
+  scaffolding alone, preparation 101 and 207 to 77 and 174, with about
+  5 µs a compile of asks waiting for a lowering ahead beside it; install
+  13.1 and 29 to 10.8 and 16; Typescript 1,618 to 1,579 ms. With the
+  property sites', the learned methods' and the built-in calls'
+  derivations (the stack, three runs each): preparation 101 and 207 to
+  60 and 130, install 13.1 and 29 to 10.5 and 15.8, Typescript 1,618 to
+  1,561 ms (-3.5%), ssr's FirstRender 235.5 to 230.3 ms (-2.2%). The
+  goal is preparation 15 and 30, install 10 median.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses
