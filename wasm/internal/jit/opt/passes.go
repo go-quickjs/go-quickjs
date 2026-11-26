@@ -26,10 +26,18 @@ func Optimize(f *Func, check func(pass string)) {
 	run("thread", PhaseThread, thread)
 	run("copyelim", PhaseCopyelim, copyelim)
 	run("gvn", PhaseGVN, gvn)
-	run("copyelim", PhaseCopyelim, copyelim)
+	// The uses of the copies gvn made are rewritten with those of the
+	// copies forwardChains makes, in one walk: forwardChains sees through
+	// copies (resolve), and needs only the phis they made trivial gone.
+	pending := false
+	run("copyelim", PhaseCopyelim, func(f *Func) { pending = trivialPhis(f) })
 	run("chains", PhaseChains, func(f *Func) {
 		if forwardChains(f) {
-			copyelim(f)
+			trivialPhis(f)
+			pending = true
+		}
+		if pending || anyCopy(f) {
+			rewriteCopies(f)
 		}
 	})
 	run("licm", PhaseLICM, licm)
@@ -78,6 +86,14 @@ func resolve(v *Value) *Value {
 // trivial phi -- one whose arguments are all one value, or itself -- by
 // that value, removing them.
 func copyelim(f *Func) {
+	if trivialPhis(f) || anyCopy(f) {
+		rewriteCopies(f)
+	}
+}
+
+// trivialPhis makes each trivial phi a copy of the value it is, removing
+// it from its block's phis, and reports whether it made one.
+func trivialPhis(f *Func) bool {
 	copies := false
 	for changed := true; changed; {
 		changed = false
@@ -105,7 +121,7 @@ func copyelim(f *Func) {
 			if made {
 				changed, copies = true, true
 				// A phi made a copy leaves the phis: its uses are
-				// rewritten below, and it is in no list.
+				// rewritten by rewriteCopies, and it is in no list.
 				keep := b.Phis[:0]
 				for _, p := range b.Phis {
 					if p.Op == OpPhi {
@@ -117,25 +133,27 @@ func copyelim(f *Func) {
 			}
 		}
 	}
-	// Without a copy among the values or the phis there is nothing to
-	// rewrite: a value refers to a copy only while the copy is in its
-	// block's values, or is a phi this pass made one.
+	return copies
+}
+
+// anyCopy reports whether a copy is among f's values. Without one, or a phi
+// trivialPhis made one, there is nothing to rewrite: a value refers to a
+// copy only while the copy is in its block's values, or is such a phi.
+func anyCopy(f *Func) bool {
 	for _, b := range f.Blocks {
-		if copies {
-			break
-		}
 		for _, v := range b.Values {
 			if v.Op == OpCopy {
-				copies = true
-				break
+				return true
 			}
 		}
 	}
-	if !copies {
-		return
-	}
-	// One walk rewrites the uses and drops the copies from their blocks: a
-	// copy dropped keeps its argument, which a later use resolves through.
+	return false
+}
+
+// rewriteCopies rewrites the uses of copies and drops the copies from their
+// blocks, in one walk: a copy dropped keeps its argument, which a later use
+// resolves through.
+func rewriteCopies(f *Func) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
 			resolveArgs(v.Args)
