@@ -15,6 +15,12 @@ func overlap(a, b []rng) bool {
 	if len(a) < len(b) {
 		a, b = b, a
 	}
+	// Lists one of which ends before the other begins never meet, as a web
+	// in a hole at the scan's position and one that ends before the hole
+	// does, found without a walk.
+	if len(b) == 0 || a[len(a)-1].to <= b[0].from || b[len(b)-1].to <= a[0].from {
+		return false
+	}
 	if len(b)*8 < len(a) {
 		// Few ranges against many: each found in the many by a search,
 		// from where the last was.
