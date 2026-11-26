@@ -174,6 +174,9 @@ type jitTestConfig struct {
 	// workers (jitRegSubmit): queued, no worker begins it, as where every
 	// worker is busy.
 	bgUnstarted bool
+	// aheadUnstarted keeps each lowering ahead from the workers
+	// (jitRegLowerAhead): queued, no worker begins it, nor is it waited for.
+	aheadUnstarted bool
 	// workspaceBack, where set, is called with each compile in the
 	// background as its install hands its workspace back (letGoApart);
 	// placeAtInstall has each placed by its install, not its worker.
@@ -1110,6 +1113,14 @@ type jitState struct {
 	// regLowered are the programs of functions' register code, by the
 	// function's key (jitRegLower).
 	regLowered map[jitKey]*jitLowering
+	// regAhead are the lowerings ahead under way or done, not taken yet,
+	// by what they lower, regAheadRoots by the function whose compile
+	// waits for them (jit_lowerahead.go).
+	regAhead      map[jitAheadKey]*jitAheadJob
+	regAheadRoots map[jitKey]*jitAheadJob
+	// aheadJobs counts the lowerings ahead handed to the workers,
+	// aheadTaken the programs taken of them.
+	aheadJobs, aheadTaken uint64
 	// regLowerLook is the cache's age (agedAt) at the flush's last look at
 	// regLowered, before which a program not asked for since is let go of
 	// (regFlush).
@@ -1877,6 +1888,9 @@ func (s *jitState) flush() {
 		s.jobsTick = tick
 		if s.inFlight() {
 			s.rt.jitRegDropStale()
+		}
+		if len(s.regAheadRoots) != 0 {
+			s.regAheadTick()
 		}
 	}
 	if tick < s.flushedAt+s.flushAge() {

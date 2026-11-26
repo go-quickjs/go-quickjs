@@ -1336,6 +1336,14 @@ is under [The projection](#the-projection).
   calls, the finish writes once the compile is done with, as V8's
   concurrent compiles write no feedback. *Measured*: with the gate's
   `compilediff` and the goroutine's part, to come.
+  Lowering ahead, on a worker: a compile in the background whose
+  function's program is not lowered for its hints hands the lowering,
+  and its callees' that the call sites' caches name, to the workers and
+  is asked for again a quarter of a budget later, taking the workers'
+  programs, the same ones, at its next ask (`jit_lowerahead.go`).
+  Projected 50 µs a compile off the goroutine (27 the root's, 25 the
+  callees', of which a scan of the caches finds about 80%); *measured*:
+  pending.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

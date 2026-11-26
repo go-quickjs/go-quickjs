@@ -370,6 +370,9 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 // waits at for this compile, if any (jitRegFrameAt).
 func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool, frameAt int) (made *jitRegEntry) {
 	s := r.jit
+	// ahead marks a compile asked for again once its program is lowered
+	// ahead (jitRegLowerAhead).
+	ahead := false
 	if clock := r.jitCompileClock(); clock != nil && !s.timingGoroutine {
 		// The runtime goroutine's part of it, for the tier trace
 		// (JITGoroutineTimes): a compile within it is part of it, and a
@@ -386,6 +389,9 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 			case made != nil && made.p != nil:
 				t.Spot += d
 				t.Spots++
+			case ahead:
+				t.Ahead += d
+				t.Aheads++
 			}
 		}()
 	}
@@ -415,6 +421,20 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		// code go since (jitRegPlace).
 		s.refusedRoom++
 		return nil
+	}
+	if background {
+		// Its program, and its callees', lowered ahead on a worker
+		// (jit_lowerahead.go), not here: asked for again at a later sample
+		// until they are. What of them the compile does not take is let go
+		// of once it is made.
+		ok, j := r.jitRegLowerAhead(cl, c, callee)
+		if !ok {
+			ahead = true
+			return nil
+		}
+		if j != nil {
+			defer s.regAheadEnd(j)
+		}
 	}
 	e := &jitRegEntry{key: key, life: life, used: s.epoch()}
 	e.tier = jitTierReason(life, callee, osrAt != 0)

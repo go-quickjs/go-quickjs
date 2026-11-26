@@ -245,6 +245,10 @@ func (r *Runtime) jitRegWaited(cl *closure, work int64) {
 	if j := r.jit.regPendingJobs[r.jitRegKeyOf(cl)]; j != nil {
 		j.waited.Add(work)
 	}
+	if j := r.jit.regAheadRoots[r.jitRegKeyOf(cl)]; j != nil {
+		// Or its lowering ahead (jitRegLowerAhead).
+		j.waited.Add(work)
+	}
 }
 
 // jitRegDropStale drops the runtime's compiles in the background that no
@@ -542,6 +546,9 @@ func (s *jitState) jitRegAbandonJobs() {
 		}
 	}
 	s.regJobs, s.regPendingJobs = nil, nil
+	// The lowerings ahead, which hold nothing of the runtime's: their
+	// workers make them for none.
+	s.regAhead, s.regAheadRoots = nil, nil
 }
 
 // jitRegInstall is j's install on the runtime's goroutine: what the

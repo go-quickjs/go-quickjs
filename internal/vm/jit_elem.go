@@ -56,11 +56,37 @@ func regStringAddOf(c *regCode, pc int) {
 // lowered, its error the lowering's: checked at every ask, the checks of
 // the callees inlined were a sixth of the build's time.
 func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKind) (*ir.Program, error) {
+	key, l, h := r.jitRegLowering(cl, rc)
+	if l == nil {
+		return jitRegLowerWith(rc, cl.fn, kind, h)
+	}
+	if !l.done[kind] {
+		s := r.jit
+		// Lowered ahead by a worker, if it was (jit_lowerahead.go): the same
+		// program.
+		p, err, ok := s.regTakeAhead(jitAheadKey{key, kind}, rc, &h)
+		if !ok {
+			p, err = jitRegLowerWith(rc, cl.fn, kind, h)
+		}
+		l.progs[kind], l.errs[kind] = p, err
+		l.done[kind] = true
+		n := l.progs[kind].Footprint()
+		l.bytes += n
+		s.lowerBytes += n
+	}
+	return l.progs[kind], l.errs[kind]
+}
+
+// jitRegLowering is the register lowering of cl's function, its key key,
+// for its register code rc (regLowering), with the hints its code has
+// learned taken into it, and those hints, which its programs are lowered
+// with; or, before the runtime has any state, which no compile is, or for
+// code not the function's own register code, which no key names, no
+// lowering, and the hints such code is lowered with.
+func (r *Runtime) jitRegLowering(cl *closure, rc *bytecode.RegCode) (jitKey, *jitLowering, jitcompile.Hints) {
 	s := r.jit
 	if s == nil || rc == nil || rc != cl.fn.RegCompiled() {
-		// Before the runtime has any state, which no compile is, or code
-		// not the function's own register code, which no key names.
-		return jitRegLowerWith(rc, cl.fn, kind, jitcompile.Hints{KeepParams: r.nodeQuirks && !cl.fn.Strict})
+		return jitKey{}, nil, jitcompile.Hints{KeepParams: r.nodeQuirks && !cl.fn.Strict}
 	}
 	key := r.jitRegKeyOf(cl)
 	var marks *[]atomic.Uint32
@@ -87,16 +113,9 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 		jitLatticeHints(&s.regLearnedOf(key).regHints, rc, cl.jitRegOps)
 	}
 	l := s.regLowering(key)
-	if !l.done[kind] {
-		h := l.hints
-		h.KeepParams = r.nodeQuirks && !cl.fn.Strict
-		l.progs[kind], l.errs[kind] = jitRegLowerWith(rc, cl.fn, kind, h)
-		l.done[kind] = true
-		n := l.progs[kind].Footprint()
-		l.bytes += n
-		s.lowerBytes += n
-	}
-	return l.progs[kind], l.errs[kind]
+	h := l.hints
+	h.KeepParams = r.nodeQuirks && !cl.fn.Strict
+	return key, l, h
 }
 
 // regLowering is the register lowering of the function whose key is key,

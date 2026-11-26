@@ -810,8 +810,8 @@ a `vm.Runtime` New makes does unless told otherwise: the VM's tests, and the
 tools, `v8bench` without `-jitbackground`, `-jitcompile`, `-jitheld`,
 `compilediff native`, compile so. Such a runtime, or `QJS_JIT_STRESS`'s
 `background=K`, compiles register code in three steps
-(`jit_bg.go`): the runtime's goroutine lowers the code and asks its
-feedback ahead (`jitRegSnapshotOf`) -- every question the build may ask,
+(`jit_bg.go`): the runtime's goroutine takes the code's program, lowered
+ahead on a worker (below), and asks its feedback ahead (`jitRegSnapshotOf`) -- every question the build may ask,
 at each instruction the methods the build asks of its op (`jitSnapOps`),
 those asked by a state's PC (`Resumed`, `EntryGeneric`) at the learned
 resume and failed-entry positions and after cached recursive calls,
@@ -999,6 +999,34 @@ meanwhile: on pages none of the arena's code was ever in or ran from
 (`jitRegPlaceWith`), its pages sealed and the instruction cache flushed off
 the program's time; an install that throws the compile away, or has no room
 for it, closes it.
+
+A compile in the background lowers nothing on the runtime's goroutine
+where it can help it (`jit_lowerahead.go`). A lowering is a function of the
+register code, which is never rewritten, the function, the kind of program
+and the hints the code learned, whose lists only grow; so a worker makes the
+program the goroutine would. A compile whose function's program is not
+lowered for its hints as they are hands the lowering to the workers
+(`jitAheadJob`, before any compile queued), with the inline lowerings of
+the callees its call sites' caches, what its code learned it calls and the
+closures it makes name, to a depth of two (`jitRegAheadCallees`: what
+`Inline` asks to lower, mostly), and is asked for again after a quarter of
+its budget (`jitAheadBudgetPart`, about what the lowering takes there).
+Asked again, `jitRegLower` takes each program a worker made of the same
+register code and hints (`regTakeAhead`) in place of lowering it, and keeps
+and counts it as it would one it lowered then; what the compile does not
+take is let go of once it is made (`regAheadEnd`), and what no compile
+comes for within two of the flush's ticks (`regAheadTick`). A callee the
+scan missed, or whose hints grew since, is lowered as `Inline` asks, as
+before. A lowering ahead no worker has begun once its function has spent
+`jitTakeBackAsks` budgets waiting is taken back, lowered as asked for, as a
+compile is. Under `QJS_JIT_STRESS`'s background, and in the tests that wait
+for the background, the lowering is waited for, so that the compile is made
+where it would have been, from the workers' programs. Typed code's
+lowering is not handed over: its link asks for its code once
+(`jitTypedLinked`). On Octane's Typescript, the root's lowering and its
+callees' had been about 50 of the 254 us a compile in the background spent
+on the goroutine; three in four compiles there lowered their function's
+program, and almost every callee's lowering was in one of those.
 
 **Compiling again.** Code is compiled again, in place, when:
 

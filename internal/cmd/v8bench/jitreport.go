@@ -646,9 +646,9 @@ func reportTier(r runtimeOf) {
 		}
 		return float64(t.Microseconds()) / float64(n)
 	}
-	fmt.Printf("  jit tier: the runtime goroutine's part: %d compiles on the spot %.1f ms (%.0f us each); in the background %d prepared %.1f ms (%.0f us each), %d installed %.1f ms (%.0f us each), %d taken back %.1f ms, %d derived there when thrown away\n",
+	fmt.Printf("  jit tier: the runtime goroutine's part: %d compiles on the spot %.1f ms (%.0f us each); in the background %d prepared %.1f ms (%.0f us each), %d installed %.1f ms (%.0f us each), %d taken back %.1f ms, %d derived there when thrown away, %d asked again for their lowering ahead %.1f ms\n",
 		gt.Spots, ms(gt.Spot), each(gt.Spot, gt.Spots), gt.Prepares, ms(gt.Prepared), each(gt.Prepared, gt.Prepares),
-		gt.Installs, ms(gt.Installed), each(gt.Installed, gt.Installs), gt.TakeBacks, ms(gt.TakenBack), gt.FinishDerives)
+		gt.Installs, ms(gt.Installed), each(gt.Installed, gt.Installs), gt.TakeBacks, ms(gt.TakenBack), gt.FinishDerives, gt.Aheads, ms(gt.Ahead))
 	most := func(m map[string]int) (string, int) {
 		k, n := "", 0
 		for _, x := range slices.Sorted(maps.Keys(m)) {
