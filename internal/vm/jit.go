@@ -174,6 +174,11 @@ type jitTestConfig struct {
 	// workers (jitRegSubmit): queued, no worker begins it, as where every
 	// worker is busy.
 	bgUnstarted bool
+	// workspaceBack, where set, is called with each compile in the
+	// background as its install hands its workspace back (letGoApart);
+	// placeAtInstall has each placed by its install, not its worker.
+	workspaceBack  func(*jitRegJob)
+	placeAtInstall bool
 	// procs, if not 0, stands in for GOMAXPROCS where the runtime's mode
 	// asks it (jitBackgroundNow).
 	procs int

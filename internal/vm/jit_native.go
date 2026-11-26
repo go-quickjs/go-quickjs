@@ -477,7 +477,12 @@ func (r *Runtime) jitRegCompile(cl *closure, c *regCode, key jitKey, callee bool
 		snap := jitRegSnapshotOf(rf, p)
 		if !snap.s.bad {
 			j := &jitRegJob{cl: cl, c: c, key: key, realm: r.Realm, callee: callee, e: e, p: p, rf: rf, snap: snap, deopts: e.life.deopts, asks: e.life.reoptAsks, frameAt: frameAt,
-				w: jit.GetWorkspace(), enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena}
+				enc: s.enc, opts: s.opts, miss: r.jitStress.miss, arena: s.arena, backHook: r.jitTest.workspaceBack}
+			if r.jitTest.placeAtInstall {
+				// Placed by the install, from the backend's code in the
+				// workspace, as where the worker cannot place it.
+				j.arena = nil
+			}
 			if osrAt != 0 {
 				// The code kept beside the cache's for a loop
 				// (jitRegLoopCode), installed beside that code if it is

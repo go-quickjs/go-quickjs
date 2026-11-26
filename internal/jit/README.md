@@ -2471,6 +2471,16 @@ without a workspace returns independent bytes.
 The arm64 table used to patch Go calls' failure branches is scratch too;
 it drops its pointers to the calls' descriptions when the compile ends.
 
+A compile in the background takes its workspace on its worker, where it
+is built (or on the runtime's goroutine, where the compile is taken back),
+and gives it back once nothing built in it is used: after its install has
+placed the code and made its entry of it, or thrown the compile away. The
+install hands it to the workers (`jitWorkspaceBack`, served before any
+compile queued), which rewind it into the pool: the rewind had been more
+than half of an install's time on the runtime's goroutine.
+`TestJITRegWorkspaceBackAfterPlace` holds the order, with the code placed by
+the worker and by the install from the backend's bytes, arm64's buffer.
+
 ## Native code on the register frame
 
 **The frame.** The backend sees the register frame as its locals:

@@ -5,6 +5,7 @@ package vm
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -90,13 +91,16 @@ type jitRegJob struct {
 	// the code placed there.
 	arena  *jit.Arena
 	placed *jit.SSACode
-	// w is the compile's workspace, f the function built in it, enc and
-	// opts the encoding and the backend's switches as they were when it
-	// was prepared.
-	w    *jit.Workspace
-	f    *ssa.Func
-	enc  abi.Encoding
-	opts mir.Options
+	// w is the compile's workspace, taken by its worker (workRecovering),
+	// f the function built in it, enc and opts the encoding and the
+	// backend's switches as they were when it was prepared. backHook is
+	// the test's hook of the workspace's give-back (jitTestConfig's
+	// workspaceBack).
+	w        *jit.Workspace
+	backHook func(*jitRegJob)
+	f        *ssa.Func
+	enc      abi.Encoding
+	opts     mir.Options
 	// looped are the register pcs of the loops' headers the build has
 	// entries at (jitRegShape).
 	looped map[uint32]bool
@@ -307,11 +311,44 @@ func (j *jitRegJob) letGo() {
 		jit.PutWorkspace(j.w)
 		j.w = nil
 	}
+	j.closePlaced()
+}
+
+// letGoApart is letGo at the install, on the runtime's goroutine, once
+// nothing built in the workspace is used -- the function, the backend's
+// code, whose bytes on arm64 are the workspace's until placed: the code
+// placed and the entry made of it, or thrown away. The workspace is given
+// back by a worker (jitWorkspaceBack), which rewinds it: the rewind, a
+// clear of what the compile built, had been more than half of an
+// install's time, 37 of 72 us a compile of Octane's Typescript.
+func (j *jitRegJob) letGoApart() {
+	if w := j.w; w != nil {
+		if h := j.backHook; h != nil {
+			h(j)
+		}
+		j.w = nil
+		jitWorkers.submit(jitWorkspaceBack{w})
+	}
+	j.closePlaced()
+}
+
+// closePlaced lets go of the code j's worker placed, which no install
+// took.
+func (j *jitRegJob) closePlaced() {
 	if j.placed != nil {
 		j.placed.Close()
 		j.placed = nil
 	}
 }
+
+// jitWorkspaceBack is a workspace a compile in the background is done
+// with, which a worker gives back to the process's pool (jit.PutWorkspace)
+// before any compile queued: the pool has it for the next compile, which
+// would otherwise make one anew.
+type jitWorkspaceBack struct{ w *jit.Workspace }
+
+func (b jitWorkspaceBack) run()              { jit.PutWorkspace(b.w) }
+func (b jitWorkspaceBack) waitedWork() int64 { return math.MaxInt64 }
 
 // workRecovering is work, a panic its refusal and a snapshot's miss its
 // mark (missed).
@@ -329,6 +366,11 @@ func (j *jitRegJob) workRecovering() {
 			jitWorkerPanics.Add(1)
 		}
 	}()
+	if j.w == nil {
+		// Taken here, on the worker or on the runtime's goroutine that
+		// took the compile back (jitRegTakeBack), not as it was prepared.
+		j.w = jit.GetWorkspace()
+	}
 	if j.miss {
 		// Left as a miss (QJS_JIT_STRESS's miss).
 		j.missed = true
@@ -519,7 +561,7 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		}
 		// What the install took not: the workspace, and the code placed
 		// where the install threw it away or built it again.
-		j.letGo()
+		j.letGoApart()
 	}()
 	e := j.e
 	e.took += j.took
