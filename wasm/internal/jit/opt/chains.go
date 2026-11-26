@@ -210,13 +210,7 @@ func (fc *fcState) remember(k memFact) {
 // plus off may write, and knows what a store of a whole value wrote, as the
 // builder's stored does.
 func (fc *fcState) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
-	keep := fc.m[:0]
-	for _, k := range fc.m {
-		if disjointAccess(k.addr, k.mem, k.off, k.size, addr, mx, off, size) {
-			keep = append(keep, k)
-		}
-	}
-	fc.m = keep
+	fc.m = forgetStored(fc.m, addr, mx, off, size)
 	full := (v.Type == TI32 || v.Type == TF32) && size == 4 || (v.Type == TI64 || v.Type == TF64) && size == 8 ||
 		v.Type == TV128 && size == 16
 	if full && mx&memShared == 0 {

@@ -1213,13 +1213,7 @@ func (bd *builder) memAux(mem uint32) uint64 {
 // same bytes, as the same type, reads v -- but in a shared memory, which
 // another thread may store into.
 func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
-	keep := bd.mem[:0]
-	for _, k := range bd.mem {
-		if disjointAccess(k.addr, k.mem, k.off, k.size, addr, mx, off, size) {
-			keep = append(keep, k)
-		}
-	}
-	bd.mem = keep
+	bd.mem = forgetStored(bd.mem, addr, mx, off, size)
 	full := (v.Type == TI32 || v.Type == TF32) && size == 4 || (v.Type == TI64 || v.Type == TF64) && size == 8 ||
 		v.Type == TV128 && size == 16
 	if full && mx&memShared == 0 {
@@ -1227,25 +1221,34 @@ func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
 	}
 }
 
-// disjointAccess reports whether two accesses' bytes are apart: those of
-// memories other than each other, those at one address value whose offsets
-// keep them apart, and those at constant addresses whose bytes are.
-func disjointAccess(addr1 *Value, mx1, off1 uint64, size1 uint8, addr2 *Value, mx2, off2 uint64, size2 uint8) bool {
-	switch {
-	case mx1 != mx2:
-		return true
-	case addr1 == addr2:
-		return off1+uint64(size1) <= off2 || off2+uint64(size2) <= off1
-	case addr1.Op == OpConst && addr2.Op == OpConst:
-		a, b := constAddr(addr1), constAddr(addr2)
-		// The sums are taken where neither carries: past that the access
-		// traps.
-		if a+off1 >= a && b+off2 >= b {
-			a, b = a+off1, b+off2
-			return a+uint64(size1) <= b || b+uint64(size2) <= a
+// forgetStored is mem, in its array, without the facts of the bytes a store
+// of size bytes into memory mx at addr plus off may write: it keeps those
+// whose bytes are apart from them -- of other memories, at one address
+// value whose offsets keep them apart, and at constant addresses whose
+// bytes are. The test is the loop's own, not a call for each fact.
+func forgetStored(mem []memFact, addr *Value, mx, off uint64, size uint8) []memFact {
+	keep := mem[:0]
+	for _, k := range mem {
+		disjoint := false
+		switch {
+		case k.mem != mx:
+			disjoint = true
+		case k.addr == addr:
+			disjoint = k.off+uint64(k.size) <= off || off+uint64(size) <= k.off
+		case k.addr.Op == OpConst && addr.Op == OpConst:
+			a, b := constAddr(k.addr), constAddr(addr)
+			// The sums are taken where neither carries: past that the
+			// access traps.
+			if a+k.off >= a && b+off >= b {
+				a, b = a+k.off, b+off
+				disjoint = a+uint64(k.size) <= b || b+uint64(size) <= a
+			}
+		}
+		if disjoint {
+			keep = append(keep, k)
 		}
 	}
-	return false
+	return keep
 }
 
 // constAddr is constant address c's value: an i32's zero-extended.
