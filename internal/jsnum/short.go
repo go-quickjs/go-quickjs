@@ -1,3 +1,7 @@
+// scaledDecimal and shortPowers are derived from the Eisel-Lemire
+// implementation in Go's strconv package (eisel_lemire.go), Copyright 2020
+// The Go Authors, under the BSD license in GO_LICENSE.
+
 package jsnum
 
 import (

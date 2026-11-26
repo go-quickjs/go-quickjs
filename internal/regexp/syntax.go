@@ -18,6 +18,11 @@
 // native_jit.go): the same search, the same results and the same step counts
 // as the matcher's, which matches what the code refuses. Without the tag,
 // native_off.go leaves the matcher alone. internal/jit/README.md describes it.
+//
+// The property escapes' tables (unicodetables.go) are generated from
+// test262's generated tests, whose sets are the Unicode Character
+// Database's: UNICODE_LICENSE holds the Unicode License v3 they are used
+// under, and the repository's NOTICE test262's license.
 package regexp
 
 import (

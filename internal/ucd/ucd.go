@@ -10,6 +10,11 @@
 // folds together. The tables are generated (tables.go, by
 // internal/regexp/internal/unicodegen); the functions here read them the way
 // the unicode package reads its own.
+//
+// The tables' data is the Unicode Character Database's, and that of
+// test262's generated property-escape tests: UNICODE_LICENSE holds the
+// Unicode License v3 it is used under, and the repository's NOTICE
+// test262's license.
 package ucd
 
 // range16 and range32 are an inclusive range of code points, in the Basic

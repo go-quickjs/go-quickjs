@@ -161,14 +161,28 @@ and arm64 (macOS and Linux), with `-tags quickjs_jit` and
 
 ## License
 
-MIT, the license of QuickJS-NG, where the engine began.
+go-quickjs is licensed under the [MIT license](LICENSE).
 
-`internal/fdlibm`, which computes `Math`, is ported from other code under
-its own terms, kept in [its LICENSE](internal/fdlibm/LICENSE): fdlibm, by way
-of V8's `src/base/ieee754.cc` (the fdlibm notice and V8's BSD license), and
-the `pow` of [Arm's Optimized Routines][arm-aor] (MIT).
+| Component | Derived from | License | Notice |
+|---|---|---|---|
+| `internal/fdlibm/fdlibm.go`: `Math`'s functions | [fdlibm], by way of [V8]'s `src/base/ieee754.cc` | SunPro, BSD-3-Clause | [internal/fdlibm/LICENSE](internal/fdlibm/LICENSE) |
+| `internal/fdlibm/pow.go`, `powdata.go`: `Math.pow` | [Arm Optimized Routines][arm-aor] | MIT | [internal/fdlibm/LICENSE](internal/fdlibm/LICENSE) |
+| `wasm/internal/decoder`, `wasm/internal/opcode`: the decoder's checks and messages, the opcode tables; the messages of traps and of `WebAssembly`'s, `Intl`'s and `Temporal`'s errors | [V8] | BSD-3-Clause | [wasm/internal/decoder/V8_LICENSE](wasm/internal/decoder/V8_LICENSE) |
+| `internal/ucd`, `internal/regexp`: the generated Unicode tables | [Unicode Character Database][ucd] | Unicode-3.0 | [internal/ucd/UNICODE_LICENSE](internal/ucd/UNICODE_LICENSE) |
+| the same tables' property sets | [test262] | BSD-3-Clause | [NOTICE](NOTICE) |
+| `internal/jsnum/short.go`: Eisel-Lemire parsing | [Go]'s `strconv` | BSD-3-Clause | [internal/jsnum/GO_LICENSE](internal/jsnum/GO_LICENSE) |
+| `stdlib/path.go`: the `path` module | [Node.js]'s `lib/path.js` | MIT | [stdlib/NODE_LICENSE](stdlib/NODE_LICENSE) |
+| `internal/v8bench/microbench.js` | [QuickJS]'s `tests/microbench.js` | MIT | [the file's header](internal/v8bench/microbench.js) |
+
+The full license texts are in [NOTICE](NOTICE) and the files it names.
 
 [QuickJS-NG]: https://github.com/quickjs-ng/quickjs
 [test262]: https://github.com/tc39/test262
 [go-intl]: https://github.com/go-quickjs/go-intl
 [arm-aor]: https://github.com/ARM-software/optimized-routines
+[fdlibm]: https://www.netlib.org/fdlibm/
+[V8]: https://v8.dev
+[ucd]: https://www.unicode.org/ucd/
+[Go]: https://go.dev
+[Node.js]: https://github.com/nodejs/node
+[QuickJS]: https://github.com/bellard/quickjs

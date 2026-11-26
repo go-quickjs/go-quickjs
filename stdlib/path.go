@@ -1,3 +1,7 @@
+// pathJS is a port of Node.js's lib/path.js, Copyright Node.js contributors
+// and Joyent, Inc. and other Node contributors, under the MIT license in
+// NODE_LICENSE.
+
 package stdlib
 
 import (

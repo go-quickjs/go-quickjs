@@ -1,0 +1,198 @@
+go-quickjs
+Copyright (c) 2026 The go-quickjs Authors
+
+go-quickjs is licensed under the MIT license in LICENSE. Some of its files
+are derived from the projects below and remain under their licenses. Each
+section names a project, says what in this repository comes from it, and
+gives or points to its license text.
+
+A binary built from this repository also contains its Go module
+dependencies, whose licenses travel with their modules: see "Dependencies"
+at the end.
+
+========================================================================
+QuickJS
+https://bellard.org/quickjs/ (https://github.com/bellard/quickjs)
+MIT
+========================================================================
+
+internal/v8bench/microbench.js is QuickJS's tests/microbench.js, unchanged,
+with its copyright and license notice in its header. A few of its test
+functions are quoted in tests (internal/jit/verify/phimoves_test.go, and
+tests in internal/vm that name microbench.js), and
+internal/v8bench/microbench_extra.js is written in its form.
+
+go-quickjs began as a reimplementation of QuickJS-NG
+(https://github.com/quickjs-ng/quickjs), QuickJS's fork, and keeps its
+name and its qjs command; none of its code is derived from QuickJS's or
+QuickJS-NG's.
+
+  Copyright (c) 2017-2019 Fabrice Bellard
+  Copyright (c) 2017-2019 Charlie Gordon
+
+  Permission is hereby granted, free of charge, to any person obtaining a
+  copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to permit
+  persons to whom the Software is furnished to do so, subject to the
+  following conditions:
+
+  The above copyright notice and this permission notice shall be included
+  in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+  OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+  NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+  USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+========================================================================
+fdlibm
+SunPro (Sun Microsystems' notice)
+========================================================================
+
+internal/fdlibm/fdlibm.go, which computes Math's functions, is a port of
+fdlibm by way of V8's src/base/ieee754.cc. The notices are in
+internal/fdlibm/LICENSE.
+
+========================================================================
+Arm Optimized Routines
+https://github.com/ARM-software/optimized-routines
+MIT
+========================================================================
+
+internal/fdlibm/pow.go and powdata.go are a port of its double-precision
+pow (math/pow.c, math/pow_log_data.c, math/exp_data.c). The notice is in
+internal/fdlibm/LICENSE.
+
+========================================================================
+V8
+https://v8.dev (https://chromium.googlesource.com/v8/v8)
+BSD-3-Clause
+========================================================================
+
+From V8 come:
+
+  - internal/fdlibm/fdlibm.go, as above (its notice in
+    internal/fdlibm/LICENSE);
+  - the WebAssembly decoder's and validator's checks, their order and
+    their error messages (wasm/internal/decoder), from
+    src/wasm/module-decoder-impl.h and function-body-decoder-impl.h;
+  - the opcode tables, wasm/internal/opcode/tables.go, generated from
+    src/wasm/wasm-opcodes.h;
+  - the texts of error messages: the WebAssembly traps
+    (wasm/internal/engine), the WebAssembly namespace's errors
+    (wasm/wasmjs), and Intl's and Temporal's errors (internal/vm), from
+    src/common/message-template.h, src/wasm/wasm-js.cc and V8's Intl and
+    Temporal code.
+
+The license is in wasm/internal/decoder/V8_LICENSE.
+
+========================================================================
+The Go programming language
+https://go.dev
+BSD-3-Clause
+========================================================================
+
+scaledDecimal and shortPowers in internal/jsnum/short.go are derived from
+the Eisel-Lemire implementation in Go's strconv package (eisel_lemire.go).
+The short-key string hash in internal/vm/builtins_map.go follows the
+runtime's memhashFallback. The license is in internal/jsnum/GO_LICENSE.
+
+========================================================================
+Node.js
+https://nodejs.org (https://github.com/nodejs/node)
+MIT
+========================================================================
+
+The path module's script in stdlib/path.go is a port of Node.js's
+lib/path.js. The node modules in stdlib and cmd/qjs give Node's error codes
+and messages. The license is in stdlib/NODE_LICENSE.
+
+========================================================================
+Unicode Character Database
+https://www.unicode.org/ucd/
+Unicode-3.0
+========================================================================
+
+internal/ucd/tables.go (identifiers, spaces, case mappings and foldings)
+and internal/regexp/unicodetables.go (the property escapes' sets) are
+generated by internal/regexp/internal/unicodegen from the Unicode
+Character Database's UnicodeData.txt, CaseFolding.txt and
+SpecialCasing.txt, and from test262's generated property-escape tests,
+whose sets are the database's. The Unicode License v3 is in
+internal/ucd/UNICODE_LICENSE and internal/regexp/UNICODE_LICENSE.
+
+========================================================================
+test262
+https://github.com/tc39/test262
+BSD-3-Clause
+========================================================================
+
+The Unicode property sets above are read from test262's generated
+property-escape tests (test/built-ins/RegExp/property-escapes/generated,
+by https://github.com/mathiasbynens/unicode-property-escapes-tests). The
+conformance runner runs a test262 checkout, which is not part of this
+repository.
+
+  Test262: ECMAScript Test Suite ("Software") is protected by copyright and
+  is being made available under the "BSD License", included below. This
+  Software may be subject to third party rights (rights from parties other
+  than Ecma International), including patent rights, and no licenses under
+  such third party rights are granted under this license even if the third
+  party concerned is a member of Ecma International. SEE THE ECMA CODE OF
+  CONDUCT IN PATENT MATTERS AVAILABLE AT https://www.ecma-international.org/ipr
+  FOR INFORMATION REGARDING THE LICENSING OF PATENT CLAIMS THAT ARE
+  REQUIRED TO IMPLEMENT ECMA INTERNATIONAL STANDARDS*.
+
+  Copyright (C) 2012 Ecma International
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+  1. Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution.
+  3. Neither the name of the authors nor Ecma International may be used to
+     endorse or promote products derived from this software without
+     specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE ECMA INTERNATIONAL "AS IS" AND ANY
+  EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL ECMA INTERNATIONAL BE LIABLE FOR ANY
+  DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+  STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+  ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  POSSIBILITY OF SUCH DAMAGE.
+
+  * Ecma International Standards hereafter means Ecma International
+  Standards as well as Ecma Technical Reports
+
+========================================================================
+Dependencies
+========================================================================
+
+The module's dependencies are not part of this repository, and their
+licenses are in their modules; a binary built from it, such as qjs,
+contains them:
+
+  - github.com/go-quickjs/go-intl, Unicode-3.0, whose data is generated
+    from CLDR, the Unicode Character Database and ICU's data, as its
+    LICENSE says;
+  - golang.org/x/sys and golang.org/x/term, BSD-3-Clause;
+  - the Go standard library, BSD-3-Clause.
+
+The modules of tools that are not part of the engine have their own:
+internal/jit/verify (golang.org/x/arch, BSD-3-Clause),
+internal/cmd/v8bench/goja (github.com/dop251/goja, MIT) and
+internal/cmd/wasmbench/wazero (github.com/tetratelabs/wazero, Apache-2.0).

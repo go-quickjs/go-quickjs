@@ -275,4 +275,7 @@ the pattern.
 
 ## License
 
-MIT, as go-quickjs is: see [LICENSE](../LICENSE).
+MIT, as go-quickjs is: see [LICENSE](../LICENSE). The property escapes'
+Unicode tables are the Unicode Character Database's, under the Unicode
+License v3 in [UNICODE_LICENSE](../internal/regexp/UNICODE_LICENSE); the
+repository's [NOTICE](../NOTICE) lists them with the rest.
