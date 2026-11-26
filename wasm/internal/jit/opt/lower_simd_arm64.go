@@ -114,19 +114,19 @@ func (g *gen) loadVConst(x arm64.FReg, lo, hi uint64) {
 		g.a.V3(arm64.VEor, arm64.V8, x, x, x)
 		return
 	}
-	g.a.LoadQLabel(x, g.vpool.label(lo, hi, g.a.NewLabel))
+	g.a.LoadQTable(x, g.vpool.label(lo, hi, func() arm64.Label {
+		b := make([]byte, 16)
+		binary.LittleEndian.PutUint64(b, lo)
+		binary.LittleEndian.PutUint64(b[8:], hi)
+		return g.a.Table(b)
+	}))
 }
 
-// emitVConsts emits the pool of v128 constants, after the code.
-func (g *gen) emitVConsts() {
-	var b [16]byte
-	for i, k := range g.vpool.keys {
-		g.a.Bind(g.vpool.labels[i])
-		binary.LittleEndian.PutUint64(b[:], k[0])
-		binary.LittleEndian.PutUint64(b[8:], k[1])
-		g.a.Data(b[:])
-	}
-}
+// emitVConsts places the v128 constants no pool has placed, after the
+// code, in the order they were first used: each is a table of the
+// assembler's, which it places in a pool near its loads where the code is
+// longer than a literal load reaches (LoadQTable).
+func (g *gen) emitVConsts() { g.a.Tables() }
 
 // hasSIMD reports whether the CPU has the SIMD the code takes: ASIMD,
 // every A64 processor's.

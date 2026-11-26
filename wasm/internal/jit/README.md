@@ -638,7 +638,11 @@ register (arm64) of the cache or of a local's home, the whole register, or
 in the two slots of its stack position or its local. A constant entry
 carries both halves, and a constant loaded into a register comes from the
 code's pool of them, after the code (`vconst`), RIP-relative on amd64 and
-PC-relative (LDR literal) on arm64; zeros are made. A v128 moves between
+PC-relative (LDR literal) on arm64; zeros are made. On arm64 a constant is
+a table of the assembler's (`LoadQTable`), which it places after the code,
+or, in code longer than a literal load reaches (a megabyte), in a pool
+near the loads that come to need it, as it does a branch's veneer; a load
+behind past the reach builds the address. A v128 moves between
 slots, frames and globals 16 bytes at a time (MOVDQU, LDR and STR Q);
 a call copies a v128 argument or result as two slots.
 
@@ -788,11 +792,26 @@ A function is refused whole, and stays in the interpreter, when it has:
 | Reason | What |
 |---|---|
 | `frame` | an operand stack deeper than the interpreter's frame for it |
-| `size` | code past `MaxCodeBytes`, a megabyte |
+| `size` | an address the arm64 assembler cannot keep in reach |
 | `other` | an instruction neither the backend nor an exit runs: none validation takes |
 | `internal` | a panic of the compiler's |
 | `unplaced` | code the arena could not place |
 | `budget` | no room in the Code's JIT budget (Concurrency and memory) |
+
+Neither of the first two is met. The frame a function is compiled for is
+validation's bound or the interpreter's compile, which counts the operand
+stack as the compiler does (`TestFrameBound` holds the bound to the
+interpreter's frame): the check stays, as the check that holds native code
+to its frame. And the code's length has no bound of its own -- a Code's JIT
+budget bounds what its functions' code takes together (Concurrency and
+memory) -- where it had a megabyte's (`MaxCodeBytes`): amd64's branches and
+RIP-relative loads reach 2 GB, and arm64's assembler keeps its branches,
+its tables' addresses and the v128 constants in reach in code of any
+length (`internal/jit/asm/arm64`'s pools); what it could not keep, a
+forward ADR of a label more than a megabyte on, the backends make only of
+labels a few instructions on. `TestJITLargeFunction` compiles a function
+of 3.9 MB of baseline code and 2.3 MB optimized, on both, which runs as
+the interpreter does.
 
 The instructions validation rejects -- custom descriptors, strings,
 ref.i31_shared, the struct and array atomics, f32.load_f16 and

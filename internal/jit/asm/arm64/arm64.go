@@ -154,6 +154,7 @@ const (
 	fixCond           // imm19 at bit 5
 	fixAdr            // ADR's imm21, of bytes: immhi at bit 5, immlo (0) at 29
 	fixAdrJump        // fixAdr's, of an address only jumped to (AdrJump)
+	fixLit            // a literal load's imm19 at bit 5, of a Table (LoadQTable)
 )
 
 // Len is the bytes emitted so far.
@@ -227,6 +228,11 @@ func (a *Asm) FinishInto(dst []byte) ([]byte, error) {
 				return nil, fmt.Errorf("arm64: address out of range")
 			}
 			a.buf[f.at] |= (uint32(d) & (1<<19 - 1)) << 5
+		case fixLit:
+			if d < -a.nearReach() || d >= a.nearReach() {
+				return nil, fmt.Errorf("arm64: literal out of range")
+			}
+			a.buf[f.at] |= (uint32(d) & (1<<19 - 1)) << 5
 		}
 	}
 	out := slices.Grow(dst[:0], 4*len(a.buf))[:4*len(a.buf)]
@@ -269,8 +275,9 @@ func (a *Asm) Data(b []byte) {
 }
 
 // Table makes a label for b, data of a whole number of words, which the
-// assembler places itself: in the first pool an Adr of the label needs it
-// in, or at Tables. Only Adr refers to the label.
+// assembler places itself: in the first pool an Adr or a LoadQTable of the
+// label needs it in, or at Tables. Only Adr and LoadQTable refer to the
+// label.
 func (a *Asm) Table(b []byte) Label {
 	if len(b)%4 != 0 {
 		panic("arm64: table not a whole number of words")
@@ -318,7 +325,7 @@ func (a *Asm) branch(w uint32, l Label, kind int) {
 			a.unblock()
 			return
 		}
-	} else if kind != fixAdr || a.isTable(l) {
+	} else if kind != fixAdr && kind != fixLit || a.isTable(l) {
 		due := len(a.buf) + a.farDue()
 		if kind != fixB {
 			a.near = append(a.near, len(a.fixups))

@@ -21,10 +21,6 @@ import (
 // numeric and memory instructions, and the moves between registers, slots
 // and constants.
 
-// MaxCodeBytes is the most code the engine has a function compiled to: a
-// function past it is refused (size) and runs in the interpreter.
-const MaxCodeBytes = 1 << 20
-
 // Request is a function to compile.
 type Request struct {
 	Module *module.Module
@@ -35,7 +31,8 @@ type Request struct {
 	// FrameSlotsOf returns FrameSlots of another defined function of the
 	// module, for its frame made by a native call.
 	FrameSlotsOf func(fn uint32) int
-	// MaxCodeBytes bounds the code; 0 is no bound.
+	// MaxCodeBytes bounds the code; 0 is no bound, the engine's: a
+	// function's code is bounded by its Code's JIT budget alone.
 	MaxCodeBytes int
 	// MaxWorkBytes bounds what the optimizing tier's working sets that grow
 	// faster than the function's body take -- the register allocator's
@@ -521,11 +518,8 @@ func Compile(req *Request) (code *Code, err error) {
 	}
 	out, ferr := a.Finish()
 	if ferr != nil {
-		// A branch out of its range is code too large.
-		if req.MaxCodeBytes > 0 && a.Len() > req.MaxCodeBytes {
-			refuse(RefuseSize, "%d bytes of code", a.Len())
-		}
-		panic(ferr)
+		// What the assembler cannot keep in reach.
+		refuse(RefuseSize, "%d bytes of code: %v", a.Len(), ferr)
 	}
 	if req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes {
 		refuse(RefuseSize, "%d bytes of code", len(out))

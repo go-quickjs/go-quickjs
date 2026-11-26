@@ -66,6 +66,10 @@ func (c *compiler) loadVConst(x amd64.XReg, lo, hi uint64) {
 	}
 }
 
+// newVConst makes the label of the constant v128 lo, hi, which
+// emitVConsts binds after the code.
+func (c *compiler) newVConst(lo, hi uint64) amd64.Label { return c.a.NewLabel() }
+
 // emitVConsts emits the pool of v128 constants, after the code.
 func (c *compiler) emitVConsts() {
 	for _, k := range c.vconstOrder {

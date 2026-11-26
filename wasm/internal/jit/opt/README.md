@@ -1052,7 +1052,8 @@ addend, a lane's replacement, narrow, i64x2.mul) or computes in a
 temporary (pmin, pmax, the dot products). A v128 constant is made where it
 is used: zeros and, on amd64, ones of registers alone, any other loaded
 from the code's pool of them after the code, RIP-relative (LDR literal on
-arm64). select of v128s is a branch around a move, as of floats on amd64;
+arm64, of a table of the assembler's that it places in a pool near the
+loads in code longer than a literal reaches, `LoadQTable`). select of v128s is a branch around a move, as of floats on amd64;
 arm64 has no vector CSEL. The loads' scalars move into the
 vector register whole (`MOVQ`, `MOVD`; `FMOV` of the D or S view), which
 clears the rest, then widen or splat.
@@ -1437,7 +1438,7 @@ A function is refused -- it keeps its baseline code -- when it has:
 |---|---|
 | `v128` | a v128 value, or a SIMD instruction, on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 (below) |
 | `frame` | more spill slots than its frame has below the call area |
-| `size` | code past `MaxCodeBytes` (wasm/internal/jit, a megabyte), or, on arm64, past a branch's reach |
+| `size` | an address the arm64 assembler cannot keep in reach (the baseline README's Refusals): none the tier makes |
 | `other` | an instruction neither the tier nor an exit runs: none validation takes |
 | `internal` | a panic of the compiler's |
 
@@ -1448,6 +1449,17 @@ code runs as well, and the tier would gain only around them. `checkNoV128`
 refuses it before it is built, by the request's features
 (`WASM_JIT_CPU=base` has the spec run so on any machine); the process's CPU
 is checked again wherever a v128 is typed (`typeOf`).
+
+A function refused for its frame keeps its native baseline code; one
+that inlined or forwarded globals is compiled again without (Compile).
+The frame is the engine's, sized before any code calls the function: a
+native caller checks its callee's room by the size it was compiled with,
+and Go makes the frames of the calls it makes for the code past it. An
+optimized function with spill slots of its own past it would need every
+caller compiled before it, and Go, to know of them, so the tier takes the
+frame as it is. The spec's functions and the programs' fit it; with every
+instruction run in Go (`WASM_JIT_EXITS=all`), every value live across an
+instruction spilled, three of the spec's do not.
 
 `engine.ReadJITStats` counts what the tier compiled and refused, by
 reason, and the time each tier spent compiling; `TestSpec` logs them.

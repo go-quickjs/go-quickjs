@@ -3,9 +3,14 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 )
@@ -213,5 +218,67 @@ func TestJITInstrExitResults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// bigFunctionWAT is a module whose export "f" is one function of n turns
+// of memory accesses, a call, a trap's site, a v128 constant and a branch
+// over a call through Go, whose code is past a megabyte for n of some
+// thousands: its v128 constants, after its code, are far from their
+// loads, and its exits' and traps' stubs far from their sites.
+func bigFunctionWAT(n int) string {
+	var b strings.Builder
+	b.WriteString(`(module
+  (import "env" "g" (func $host (param i32) (result i32)))
+  (memory 1)
+  (func $g (param i32) (result i32) (i32.add (local.get 0) (i32.const 3)))
+  (func (export "f") (param $p i32) (result i32) (local $a i32) (local $v v128)
+`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, `    (local.set $a (i32.add (local.get $a) (i32.load offset=%d (local.get $p))))
+    (i32.store offset=%d (local.get $p) (i32.div_u (local.get $a) (i32.const %d)))
+    (local.set $v (i32x4.add (local.get $v) (v128.const i32x4 %d 1 2 3)))
+    (if (i32.eqz (local.get $a)) (then (local.set $a (call $host (call $g (local.get $a))))))
+`, 4*(i%1000), 4*(i%1000+1), i+1, i)
+	}
+	b.WriteString(`    (i32.add (local.get $a) (i32.add (i32x4.extract_lane 0 (local.get $v)) (i32x4.extract_lane 3 (local.get $v))))))`)
+	return b.String()
+}
+
+// A function whose code is past a megabyte is compiled, in both tiers,
+// and runs as the interpreter does.
+func TestJITLargeFunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("a large function's compiles")
+	}
+	src := bigFunctionWAT(8000)
+	host := NewHostFunction(module.CanonicalFunc(&module.FuncType{Params: []module.ValueType{module.I32}, Results: []module.ValueType{module.I32}}), "g",
+		func(_ context.Context, _ *Instance, args, results []Val) error {
+			results[0] = Val{N: uint64(uint32(args[0].N) + 1)}
+			return nil
+		})
+	interp := thresholdInstance(t, src, math.MaxInt32, Extern{Kind: module.ExternFunc, Func: host})
+	for _, opt := range []bool{false, true} {
+		inst := thresholdInstance(t, src, 0, Extern{Kind: module.ExternFunc, Func: host})
+		inst.Code.setOSRCalls(0)
+		if opt {
+			inst.Code.SetOptThreshold(0)
+			inst.Code.SetOptBackground(false)
+		} else {
+			inst.Code.SetOptThreshold(-1)
+		}
+		for _, arg := range []uint64{0, 64, 65536 - 4004, 65536} {
+			sameOutcome(t, interp, inst, "f", arg)
+		}
+		ext, _ := inst.Export("f")
+		nat := inst.Code.get(ext.Func.Index).native.Load()
+		if nat == nil || nat.opt != opt {
+			t.Fatalf("opt %v: f's native code %v", opt, nat)
+		}
+		size := nat.end - nat.base
+		t.Logf("opt %v: %d bytes of code", opt, size)
+		if size <= 1<<20 {
+			t.Fatalf("f's code is %d bytes, want past a megabyte", size)
+		}
 	}
 }

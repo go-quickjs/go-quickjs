@@ -247,3 +247,72 @@ func TestNoPoolInShortCode(t *testing.T) {
 		}
 	}
 }
+
+// LoadQTable's loads read their tables' bytes in code longer than a
+// literal's reach: each table placed in the pool ahead of its first load,
+// or after the code, and loaded again from behind, past the reach through
+// the temporary.
+func TestLoadQTable(t *testing.T) {
+	for _, narrow := range []uint{8, 4, 0} {
+		a := Asm{narrow: narrow}
+		const tables = 40
+		labels := make([]Label, tables)
+		want := make([][]byte, tables)
+		for i := range labels {
+			b := make([]byte, 16)
+			binary.LittleEndian.PutUint64(b, uint64(i)*0x0101010101010101)
+			binary.LittleEndian.PutUint64(b[8:], ^uint64(i))
+			labels[i], want[i] = a.Table(b), b
+		}
+		type use struct{ at, table int }
+		var uses []use
+		r := rand.New(rand.NewSource(int64(narrow)))
+		total := 3 * a.nearReach()
+		for len(a.buf) < total {
+			i := r.Intn(tables)
+			uses = append(uses, use{len(a.buf), i})
+			a.LoadQTable(FReg(r.Intn(32)), labels[i])
+			for range r.Intn(a.nearReach() / 8) {
+				a.MovRR(X1, X2)
+			}
+		}
+		a.Tables()
+		b, err := a.Finish()
+		if err != nil {
+			t.Fatalf("narrow %d: %v", narrow, err)
+		}
+		code := make([]uint32, len(b)/4)
+		for i := range code {
+			code[i] = binary.LittleEndian.Uint32(b[4*i:])
+		}
+		sext := func(v uint32, bits uint) int { return int(int32(v<<(32-bits)) >> (32 - bits)) }
+		far := 0
+		for _, u := range uses {
+			pc := u.at
+			var addr int
+			switch w := code[pc]; {
+			case w&0xFF000000 == 0x9C000000:
+				addr = 4*pc + 4*sext(w>>5&(1<<19-1), 19)
+			case w&0x9F00001F == 0x1000001B:
+				// ADR of X27, the subtractions, then LDR Q from X27.
+				far++
+				addr = 4*pc + 4*sext(w>>5&(1<<19-1), 19)
+				for pc++; code[pc]&0xFFC003FF == 0xD140037B; pc++ {
+					addr -= 4096 * int(code[pc]>>10&0xFFF)
+				}
+				if code[pc]&0xFFFFFFE0 != 0x3DC00360 {
+					t.Fatalf("narrow %d: a far load's word %#08x at %d", narrow, code[pc], pc)
+				}
+			default:
+				t.Fatalf("narrow %d: word %#08x at %d, not a load", narrow, w, pc)
+			}
+			if addr < 0 || addr+16 > len(b) || !slices.Equal(b[addr:addr+16], want[u.table]) {
+				t.Fatalf("narrow %d: the load at %d reads %d, not table %d's bytes", narrow, u.at, addr, u.table)
+			}
+		}
+		if narrow > 0 && far == 0 {
+			t.Fatalf("narrow %d: no load from behind past the reach", narrow)
+		}
+		t.Logf("narrow %d: %d words, %d loads, %d from behind past the reach", narrow, len(code), len(uses), far)
+	}
+}

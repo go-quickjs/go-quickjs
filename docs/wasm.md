@@ -757,10 +757,12 @@ so that its result and its trap are the interpreter's, and native code
 resumes after it: on amd64 `popcnt` without POPCNT, the roundings without
 SSE4.1 and every SIMD instruction without SSSE3, SSE4.1 and SSE4.2 (the
 optimizing tier leaves a function with v128 values on such a CPU to the
-baseline), and the fused `relaxed_madd` and `relaxed_nmadd`. A function is refused whole, and stays in the
-interpreter, only for an operand stack deeper than the interpreter's frame
-(`frame`), code past the JIT's size limit (`size`), or for want of room in
-its JIT budget (`budget`).
+baseline), and the fused `relaxed_madd` and `relaxed_nmadd`. A function
+is refused whole, and stays in the interpreter, only for want of room in
+its JIT budget (`budget`), which bounds its code's length too, or for an
+operand stack deeper than its frame or an address the arm64 assembler
+cannot keep in reach, neither of which a function meets (`frame`,
+`size`).
 
 With every function compiled at its first call, the spec suite compiles 6,842
 functions and refuses none; it refused 2, for reading v128 fields, which

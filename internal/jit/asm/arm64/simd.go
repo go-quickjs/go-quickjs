@@ -260,3 +260,22 @@ func (a *Asm) LoadQLabel(d FReg, l Label) {
 	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixCond})
 	a.emit(0x9C000000 | uint32(d))
 }
+
+// LoadQTable is Vd = the first 16 bytes of table l (Table), in code of any
+// length: an LDR literal, the table placed, where l is not yet, in the
+// pool that would take a branch made here, or after the code (Tables),
+// as an Adr's table is; bound behind past the literal's reach, the
+// table's address built in the temporary (farAdr) and loaded from.
+func (a *Asm) LoadQTable(d FReg, l Label) {
+	if !a.isTable(l) {
+		panic("arm64: LoadQTable of a label not a table's")
+	}
+	if to := a.labels[l]; to >= 0 && to-len(a.buf) < -a.nearReach() {
+		a.block()
+		a.farAdr(tmp, l)
+		a.LoadQ(d, tmp, 0)
+		a.unblock()
+		return
+	}
+	a.branch(0x9C000000|uint32(d), l, fixLit)
+}

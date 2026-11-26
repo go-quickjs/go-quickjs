@@ -925,7 +925,6 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		Func:           idx,
 		FrameSlots:     cd.nslots,
 		FrameSlotsOf:   func(f uint32) int { n, _ := c.calleeFrame(f); return n },
-		MaxCodeBytes:   wjit.MaxCodeBytes,
 		FrameRefSlots:  cd.nativeRefSlots(),
 		RefSlotsOf:     func(f uint32) int { _, n := c.calleeFrame(f); return n },
 		FrameLocals:    cd.nlocals,

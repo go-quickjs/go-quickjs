@@ -75,13 +75,13 @@ func hasV128(ts []module.ValueType) bool {
 }
 
 // vconst returns the label of the constant v128 lo, hi in the code's pool
-// of them, which the backend emits after the code (emitVConsts).
+// of them, which the backend places (newVConst, emitVConsts).
 func (c *compiler) vconst(lo, hi uint64) asmLabel {
 	k := [2]uint64{lo, hi}
 	if l, ok := c.vconsts[k]; ok {
 		return l
 	}
-	l := c.a.NewLabel()
+	l := c.newVConst(lo, hi)
 	if c.vconsts == nil {
 		c.vconsts = map[[2]uint64]asmLabel{}
 	}

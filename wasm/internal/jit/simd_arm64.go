@@ -55,25 +55,32 @@ func (c *compiler) loadVec(x arm64.FReg, v value) {
 }
 
 // loadVConst loads the v128 lo, hi into x: zeros made, any other from the
-// code's pool.
+// code's pool, in reach of the load however long the code is
+// (LoadQTable).
 func (c *compiler) loadVConst(x arm64.FReg, lo, hi uint64) {
 	if lo == 0 && hi == 0 {
 		c.a.V3(arm64.VEor, arm64.V8, x, x, x)
 		return
 	}
-	c.a.LoadQLabel(x, c.vconst(lo, hi))
+	c.a.LoadQTable(x, c.vconst(lo, hi))
 }
 
-// emitVConsts emits the pool of v128 constants, after the code.
-func (c *compiler) emitVConsts() {
-	var b [16]byte
-	for _, k := range c.vconstOrder {
-		c.a.Bind(c.vconsts[k])
-		binary.LittleEndian.PutUint64(b[:], k[0])
-		binary.LittleEndian.PutUint64(b[8:], k[1])
-		c.a.Data(b[:])
-	}
+// newVConst makes the label of the constant v128 lo, hi: a table of the
+// assembler's, which it places in a pool near its loads, or after the
+// code (emitVConsts).
+func (c *compiler) newVConst(lo, hi uint64) arm64.Label { return c.a.Table(v128Bytes(lo, hi)) }
+
+// v128Bytes is the 16 bytes of the v128 lo, hi.
+func v128Bytes(lo, hi uint64) []byte {
+	b := make([]byte, 16)
+	binary.LittleEndian.PutUint64(b, lo)
+	binary.LittleEndian.PutUint64(b[8:], hi)
+	return b
 }
+
+// emitVConsts places the v128 constants no pool has placed, after the
+// code, in the order they were first used.
+func (c *compiler) emitVConsts() { c.a.Tables() }
 
 // vtemp returns a free V register for an instruction's own use, to give
 // back with freeX.
