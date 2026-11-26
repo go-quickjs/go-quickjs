@@ -326,7 +326,8 @@ feedback variant and in baseline code alone:
    and objects by exits (`StringAdd`, `regBigOf`'s marks, `Generic`), so
    that the first compile is right by construction.
 2. **Deopt memory on the template:** a delay bit, V8's kDelayMaglev, and
-   a count of deopts that backs the budget off.
+   a count of deopts that backs the budget off -- with the baseline tier
+   (stage 5), not before (below).
 3. **Allocation-site survival:** a count a pool's refill keeps, which
    sizes the next refill, pretenuring's counterpart.
 
@@ -356,15 +357,27 @@ data.
 - **Per site:** the `Generic` mark, V8's disallowed speculation; the
   operand lattice widening; property cases widening to megamorphic.
   JavaScriptCore's exit flags are the same idea.
-- **Per function:** a deopt resets the budget, as now. A deopt of code
-  younger than 600 invocations sets the template's delay bit, and its
-  next compile waits for 1,100 invocations' worth, as V8's does; each
-  further deopt doubles the wait, as JavaScriptCore's 2^R does, up to
-  2^6.
-- A cache's change during warm-up raises what is left to 500 x length
-  from the first runs on, which keeps RayTrace's `testIntersection` from
-  compiling at its 166th invocation on feedback still changing
-  (performance-plan.md, "The tier-up's budgets").
+- **Per function, until the baseline tier:** a deopt resets the budget,
+  as now. The cap's work of ending a deopt loop is done by the per-site
+  marks: each deopt widens what it failed on, so a function's deopts are
+  bounded by its sites.
+- **Per function, with the baseline tier (stage 5):** V8's and
+  JavaScriptCore's tier-up policy. A deopt of code younger than 600
+  invocations sets the template's delay bit, and its next compile waits
+  for 1,100 invocations' worth, as V8's does; each further deopt doubles
+  the wait, as JavaScriptCore's 2^R does, up to 2^6. A cache's change
+  during warm-up raises what is left to 500 x length from the first runs
+  on, which keeps RayTrace's `testIntersection` from compiling at its
+  166th invocation on feedback still changing (performance-plan.md, "The
+  tier-up's budgets"); and the feedback point becomes 8 x length.
+- **Why that waits for a good baseline.** Each of those delays an
+  optimizing compile, and V8 can afford them because the code waits in
+  Sparkplug, natively. Here it would wait in the interpreter, and the
+  trial of V8's budgets without its tiers lost time (RayTrace 1.066,
+  Octane -n 20 0.986). So they switch on only once the baseline passes
+  its gate below -- its compile speed, and its code at least 1.5x the
+  interpreter's on the first runs -- each timed against the policy
+  before it.
 - With the baseline, a deopt costs a frame conversion and the function
   runs on natively; only the recompile remains, in the background.
 - Refusal is for bailouts alone: a compiler panic, `abi.MaxSlot`, the
@@ -978,23 +991,23 @@ is under [The projection](#the-projection).
 4 to 6 weeks, 4,000 to 6,000 lines, medium risk. Depends on stage 0.
 
 - **Builds:** the operand-type lattice in the feedback variant on both
-  architectures and the builder speculating on it; the deopt discipline,
-  the cap removed, the delay bit, the back-off and the raise at a cache's
-  change from the first runs; the background default with the one-P
+  architectures and the builder speculating on it; the deopt discipline's
+  first half, the cap removed and the per-site marks ending deopt loops
+  (the delay bit, the back-off and the raise wait for the baseline tier,
+  stage 5); the background default with the one-P
   policy, the most-called-first queue with its stale drop, placement
   apart and the take-back.
 - **Gain:** the composite +0 to 2% (EarleyBoyer's 29 deopts and Earley's
   86 runs finished in the interpreter fall); Typescript in the background
   1,713 to 1,600-1,680 ms, and at GOMAXPROCS 1 back to the synchronous
   2,573 ms from 3,278. It is the prerequisite of stage 7's int32 work.
-- **Compile time:** recompiles after deopts -15 to 30%; the build +1 to
-  3% for the lattice's questions.
+- **Compile time:** recompiles after deopts -10 to 25% (an estimate:
+  the lattice's right first compiles and the per-site marks); the build +1
+  to 3% for the lattice's questions.
 - **Gate:** Typescript's compiles, deopts and recompiles from the tier
   trace; the warm-up at GOMAXPROCS 1 back to synchronous; Are We Fast Yet
   and ssr no slower in the background (today +2% and Render +14%);
   differential fuzzing with background installs.
-- **Takes up:** performance-plan.md's "The tier-up's budgets", with
-  stage 0's (g).
 - **Status:** not started.
 
 ### Stage 2: compile speed
@@ -1070,8 +1083,10 @@ and 2.
   record designed once for both tiers, which stage 6's call convention
   uses; deopts and host exits resuming in baseline code; OSR from the
   interpreter to the baseline; the budget and the flush counting baseline
-  code; `jitBudgetForFeedback`'s 940 made 8 x length, the baseline's entry
-  point, as V8's feedback allocation starts Sparkplug. The estimate is wide for the exits' correctness at every pc Go
+  code; then, once the baseline passes its gate, V8's tier-up policy:
+  `jitBudgetForFeedback`'s 940 made 8 x length, the baseline's entry
+  point, as V8's feedback allocation starts Sparkplug, the delay bit, the
+  back-off and the raise at a cache's change. The estimate is wide for the exits' correctness at every pc Go
   returns to, and for generators.
 - **Gain:** Typescript about 1,530 to 1,330 ms (1,220 to 1,450): the
   interpreted share's 150 to 230 ms recovered at 1.5 to 2x, and runs after
@@ -1087,9 +1102,12 @@ and 2.
   register operation in baseline code against the handlers, on both
   architectures; test262 with `-conformance.jit`, every function
   baseline-compiled at its first call; Typescript's, ssr's and Octane's
-  first runs; the interpreter no slower; the 8 x length entry point timed
-  against 940 on those first runs and the suites, since it moves when
-  every loop's budget starts.
+  first runs; the interpreter no slower. The baseline's code at least
+  1.5x the interpreter's on those first runs before the tier-up policy
+  switches on; then each of its parts -- 8 x length, the delay, the
+  back-off, the raise -- timed against what was before it on the first
+  runs and the suites, and kept only where it gains.
+- **Takes up:** performance-plan.md's "The tier-up's budgets".
 - **Status:** not started.
 
 ### Stage 6: the call path

@@ -641,9 +641,9 @@ v0.45.1, its figures being the stack JIT's unless dated later.
   the budget at a cache's change would have waited for. They are parked
   until a baseline tier and fast calls of Go from native code exist; a
   later first compile like V8's top tier's was dropped (Rejected, "A later
-  tier-up"). Taken up by stages
-  [0](jit-design.md#stage-0-correctness-and-hygiene) and
-  [1](jit-design.md#stage-1-tiering-and-background-compiles).
+  tier-up"). Taken up by
+  [stage 5](jit-design.md#stage-5-the-baseline-tier), once the baseline
+  tier runs well enough that delaying an optimizing compile costs little.
 - **Where a compile's time and memory go.** `-jitcompile N` times each
   phase (`mir.Times`); the shares measured before the phases were split --
   `allocate` 14% of a compile, the build's `plan` 15% (most of it the
