@@ -37,11 +37,14 @@ func jitSnapMayInline(cl *closure) bool {
 // jitSnapCalleeWalk is the closures a compile of root's function may
 // inline, root's own excepted: each its function's state names
 // (jitSnapCalleesOf) that may be inlined (jitSnapMayInline), and those
-// theirs name, to jitSnapDepth.
-func (r *Runtime) jitSnapCalleeWalk(root *closure) map[*closure]int {
+// theirs name, to jitSnapDepth, by the level each is first named at. Each
+// closure walked is copied (d's closureCopy, d the compile's root's data):
+// its calls are read of the copy, which the snapshot's families derive
+// from, not copied again.
+func (r *Runtime) jitSnapCalleeWalk(d *jitSnapData, root *closure) map[*closure]int {
 	set := map[*closure]int{}
 	level := []*closure{root}
-	for d := 0; d < jitSnapDepth && len(level) != 0; d++ {
+	for lv := 0; lv < jitSnapDepth && len(level) != 0; lv++ {
 		var next []*closure
 		var add func(c *closure, o *Object)
 		add = func(c *closure, o *Object) {
@@ -57,11 +60,11 @@ func (r *Runtime) jitSnapCalleeWalk(root *closure) map[*closure]int {
 			if c == root || set[c] != 0 {
 				return
 			}
-			set[c] = d + 1
+			set[c] = lv + 1
 			next = append(next, c)
 		}
 		for _, cl := range level {
-			r.jitSnapCalleesOf(cl, add)
+			r.jitSnapCalleesOf(d, cl, add)
 		}
 		level = next
 	}
@@ -90,22 +93,22 @@ func (r *Runtime) jitSnapForwardsTo(cl *closure, o *Object, add func(*closure, *
 
 // jitSnapCalleesOf calls add with each closure cl's state names as one it
 // calls or makes, with the function object it is where known: its calls'
-// caches' (regCalls, as a snapshot copies them), the functions its calls'
+// caches' (regCalls, of the compile's copy, d's), the functions its calls'
 // bindings hold now and the methods its method calls' reads found on
 // prototypes, those its code learned it calls natively or inlines, the
 // templates of the closures it makes (its constants), and the getters and
 // setters its property caches found on prototypes, now and before, and
 // those its code met at its exits.
-func (r *Runtime) jitSnapCalleesOf(cl *closure, add func(*closure, *Object)) {
+func (r *Runtime) jitSnapCalleesOf(d *jitSnapData, cl *closure, add func(*closure, *Object)) {
 	rc := cl.fn.RegCompiled()
 	if rc == nil {
 		// Never called, nor made for a call's asking: it has no caches,
 		// and names nothing it calls.
 		return
 	}
-	// As a snapshot copies them (jitCallsCopy), restored where a turn's
-	// end let them go.
-	for _, c := range jitCallsCopy(r, cl) {
+	// As the compile's copy has them (jitCallsCopy), restored where a
+	// turn's end let them go.
+	for _, c := range d.closureCopy(cl).calls {
 		add(c.cl, c.callee)
 	}
 	for i := range cl.consts {

@@ -109,7 +109,7 @@ func TestJITSnapshotCalleeWalk(t *testing.T) {
 			continue
 		}
 		r.jitRegSeenFeedback(cl, c)
-		walk := r.jitSnapCalleeWalk(cl)
+		walk := r.jitSnapCalleeWalk(&jitSnapData{rt: r}, cl)
 		snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
 		functions++
 		walked += len(walk)
