@@ -814,7 +814,9 @@ plus the size, or a widened check's farthest -- is 4,096 bytes or less
 (`wjit.MemLimitSlack`), the address itself is compared with the
 context's `MemLimit`, the memory's size less 4,096, signed, so that a
 memory smaller than that fails it: one comparison of a register with
-the context, CMP and JG; past the limit, out of line
+the context, CMP and JG, 4 bytes and 6 (the field within a byte's
+displacement of the context's start, where it had taken 7 and the Go
+program's code 0.5 MB more); past the limit, out of line
 (`stubCheck`), the end is made and checked exactly and the code goes
 back to the access, or traps as the check does. Nearly every access of
 the Go program's is within 4,096 bytes of its address; their checks were

@@ -19,11 +19,14 @@ type Ctx struct {
 	// address of its native entry, or 0.
 	Links uintptr
 	// MemBase and MemSize are memory 0's first byte and size in bytes, set
-	// before every entry; MemSizePtr is the address of a shared memory's
-	// size, which other threads change, read at each access.
-	MemBase    uintptr
-	MemSize    uint64
-	MemSizePtr uintptr
+	// before every entry. MemLimit is the size less MemLimitSlack,
+	// negative where the memory is smaller, set with MemSize: an i32
+	// address at or below it is that of an access of MemLimitSlack bytes
+	// or fewer within the memory, which the optimizing tier's code tests
+	// with one comparison, its offset within a byte's displacement.
+	MemBase  uintptr
+	MemSize  uint64
+	MemLimit int64
 	// Mems is the instance's table of its memories, MemEntryWords words
 	// each -- the first byte, the size in bytes, and the address of the
 	// size a shared memory's grows store -- set before every entry where
@@ -109,11 +112,9 @@ type Ctx struct {
 	// staying in Save. It is at a multiple of 16 bytes from the context's
 	// start, which arm64's 16-byte loads and stores scale their offsets by.
 	SaveV [2 * 32]uint64
-	// MemLimit is memory 0's size less MemLimitSlack, negative where the
-	// memory is smaller, set with MemSize: an i32 address at or below it
-	// is that of an access of MemLimitSlack bytes or fewer within the
-	// memory, which the optimizing tier's code tests with one comparison.
-	MemLimit int64
+	// MemSizePtr is the address of a shared memory 0's size, which other
+	// threads change, read at each access.
+	MemSizePtr uintptr
 }
 
 // MemLimitSlack is the most bytes past its address an access may reach
