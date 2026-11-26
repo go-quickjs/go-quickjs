@@ -73,8 +73,9 @@ func TestOptCompileCorpus(t *testing.T) {
 		}
 	}
 	// Hashed, the compiles are given the same addresses of the process's
-	// write barrier and barrier routine in every build, which their code
-	// holds, so that two builds' hashes compare: the code is not run.
+	// write barrier, barrier routine and allocation stub in every build,
+	// which their code holds, so that two builds' hashes compare: the code
+	// is not run.
 	fixed := os.Getenv("WASM_OPT_HASHES") != "" || os.Getenv("WASM_OPT_BASE") != ""
 	add := func(name string, bin []byte) {
 		lim := decoder.CoreLimits()
@@ -101,6 +102,9 @@ func TestOptCompileCorpus(t *testing.T) {
 			req := request(c, uint32(i), cd, 0)
 			if fixed {
 				req.WriteBarrier, req.StoreRef = 0x1000, 0x2000
+				if req.AllocStub != 0 {
+					req.AllocStub = 0x3000
+				}
 			}
 			if jitInline {
 				req.InlineSite = sites.site
