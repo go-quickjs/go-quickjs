@@ -325,7 +325,7 @@ inlines a call four deep.
 | `dce` | values without uses or effects, and phis only themselves use; and a global.set another of the same global follows in its block, nothing between reading the global, having an effect or able to trap (a Go function's return moves its stack pointer twice) |
 | `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value -- or of the i64 an i32 address wraps -- checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked, nor one whose address is a phi each of whose arguments is in bounds on its edge; and an access's check covers those of its address after it in its block that nothing between could tell apart (below) |
 | `split` | every critical edge gets a block, where its phis' moves go |
-| `loops` | natural loops, and each block's depth (below) |
+| `loops` | natural loops, each block's depth (below), and the layout: reverse postorder again, of an if's two successors the deeper first (`layout`, Lowering) |
 
 ### Bounds from values
 
@@ -916,6 +916,24 @@ read-modify-write in X15 and of a compare-and-exchange in X16, the
 replacement in X15, the expected value masked to 8 or 16 bits, the
 exclusive store's status in X17; the loop holds no other access. A fence
 is MFENCE or DMB ISH.
+
+The blocks are laid out in reverse postorder, of an if's two successors
+the one of the deeper loop first (`layout`): the test that leaves a loop
+falls through into its body, and the code after the loop comes after the
+body, so that a turn of the loop takes no branch but its back edge, where
+an exit laid out before the body had the test jump over it into the body
+on every turn (micro/mandelbrot's inner loop took three branches a turn).
+The steady state (`-warmup 15 -reps 10`, optimized, the mean over two
+placements of the code of the medians of 3 processes in 2 to 3 rounds in
+turns with the code before) went, ms: interp 8.37 to 7.67, sort 87.3 to
+85.1, sha256 37.95 to 37.32, micro/i64 13.12 to 12.90, micro/mandelbrot
+10.53 to 10.28; json, regexp, bytes and fib level, gzip 16.38 to 16.60.
+The Go program's code is 20 KB larger (18.87 MB) and the `loops` phase
+takes 3.96 µs a function where it took 3.00, 0.6% of a compile. Starting
+each loop's code at a 64-byte line besides, as the JavaScript JIT does,
+gained bytes 5% at one placement and cost interp 25% at every one (8.36
+to 10.43 ms), loops that call left unaligned and all: its padding is run
+on every entry into a loop, and it was dropped.
 
 A back edge -- a jump to a block at or before its own in the layout,
 reverse postorder -- counts down the poll counter and exits for a poll

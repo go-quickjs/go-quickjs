@@ -64,7 +64,17 @@ type orderFrame struct {
 // branch before its else: every block after its dominators, a loop's body
 // after its header. The control flow graph has changed: the dominators
 // known are no longer.
-func order(f *Func) {
+func order(f *Func) { orderBy(f, false) }
+
+// layout lays the blocks out in reverse postorder once their depths are
+// known (loopDepths), as order does but that, of an if's two successors,
+// one deeper than the other comes first: a loop's body follows the test
+// that leaves the loop, and the code that leaves it comes after the loop.
+// A turn of the loop then takes no branch but its back edge's.
+func layout(f *Func) { orderBy(f, true) }
+
+// orderBy is order, or, with deeper, layout.
+func orderBy(f *Func, deeper bool) {
 	ws := f.ws
 	f.dom = nil
 	seen := ws.blockMarks(f)
@@ -81,7 +91,11 @@ func order(f *Func) {
 		t.i--
 		// The successors are visited last first, so that the first comes
 		// first in reverse postorder.
-		s := t.b.Succs[t.i]
+		k := t.i
+		if b := t.b; deeper && b.Kind == BIf && b.Succs[1].Depth > b.Succs[0].Depth {
+			k = 1 - k
+		}
+		s := t.b.Succs[k]
 		if seen[s.ID] == 0 {
 			seen[s.ID] = 1
 			stack = append(stack, orderFrame{s, len(s.Succs)})

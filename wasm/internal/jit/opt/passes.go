@@ -38,6 +38,7 @@ func Optimize(f *Func, check func(pass string)) {
 			findLoops(f, dominators(f))
 		}
 		loopDepths(f)
+		layout(f)
 	})
 }
 
