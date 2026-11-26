@@ -599,8 +599,9 @@ func (bd *builder) brTable() {
 // enter begins a construct whose label is label, with phis of types for
 // its values.
 func (bd *builder) enter(op opcode.Opcode, params, results []Type, label *Block) *ctl {
+	// The rest of the construct, new, is zero.
 	t := bd.ws.ctls.new()
-	*t = ctl{op: op, base: len(bd.stack) - len(params), params: params, results: results, label: label}
+	t.op, t.base, t.params, t.results, t.label = op, len(bd.stack)-len(params), params, results, label
 	if lts := t.labelTypes(); len(lts) > 0 {
 		t.phis = bd.ws.vals.take(len(lts))
 		for _, lt := range lts {
