@@ -108,8 +108,8 @@ type gen struct {
 	traps  u64map[amd64.Label]
 	trapTo u64map[amd64.Label]
 	polls  u64map[amd64.Label]
-	// hubs are the jumps to the codes that trap that sites jump to.
-	hubs []trapHub
+	// hubs are the jumps to shared cold code that sites jump to.
+	hubs []hub
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// wb is the function's barrier routine, which hasWB says is made;
@@ -124,6 +124,10 @@ type gen struct {
 	hasAlloc bool
 	poll     amd64.Label
 	hasPoll  bool
+	// callExit is the function's exit for a call of a function through
+	// Go, which its sites share, made with the first (hasCallExit).
+	callExit    amd64.Label
+	hasCallExit bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[amd64.Label]
 	// entry is the code's native entry, where a call of the function by
@@ -555,30 +559,34 @@ func (g *gen) trapCode(code uint64) amd64.Label {
 	return to
 }
 
-// trapHub is the last jump to to, the code that traps with code, or that
-// code itself, bound at l, at pos: a trap's site after it within a byte's
-// displacement jumps to it.
-type trapHub struct {
-	code  uint64
+// hub is the last jump to cold code shared by sites out of line -- a trap's
+// code, the function's exit for a call through Go -- or that code itself,
+// to, bound at l, at pos: a site after it within a byte's displacement
+// jumps to it.
+type hub struct {
 	to, l amd64.Label
 	pos   int
 }
 
-// hubReach is how far past a trap's hub, in bytes as emitted, a site
-// jumps to it: a jump's byte displacement reaches 126 bytes back from its
-// start, and Finish only shortens the code between (amd64.Asm.JmpNear).
+// hubReach is how far past a hub, in bytes as emitted, a site jumps to
+// it: a jump's byte displacement reaches 126 bytes back from its start,
+// and Finish only shortens the code between (amd64.Asm.JmpNear).
 const hubReach = 126
 
 // trapAt traps from here with code at offset at: the offset into s0, and
-// a jump to the code that traps, by way of the last jump to it where that
-// is near -- two bytes, where the code is out of a byte's reach.
+// a jump to the code that traps (jmpHub).
 func (g *gen) trapAt(code uint64, at uint32) {
+	g.a.MovImm(s0, uint64(at))
+	g.jmpHub(g.trapCode(code))
+}
+
+// jmpHub jumps from out-of-line code to to, by way of the last jump to it
+// where that is near -- two bytes, where to is out of a byte's reach.
+func (g *gen) jmpHub(to amd64.Label) {
 	a := g.a
-	a.MovImm(s0, uint64(at))
-	to := g.trapCode(code)
 	for i := range g.hubs {
 		h := &g.hubs[i]
-		if h.code != code {
+		if h.to != to {
 			continue
 		}
 		if a.Len()-h.pos <= hubReach {
@@ -591,21 +599,21 @@ func (g *gen) trapAt(code uint64, at uint32) {
 		return
 	}
 	l := a.NewLabel()
-	g.hubs = append(g.hubs, trapHub{code: code, to: to, l: l, pos: a.Len()})
+	g.hubs = append(g.hubs, hub{to: to, l: l, pos: a.Len()})
 	a.Bind(l)
 	a.Jmp(to)
 }
 
-// trapHere makes the code that traps with code, bound at to, the hub of
-// its sites after it.
-func (g *gen) trapHere(code uint64, to amd64.Label) {
+// hubHere makes to, bound here, the hub of the sites after it that jump
+// to it.
+func (g *gen) hubHere(to amd64.Label) {
 	for i := range g.hubs {
-		if g.hubs[i].code == code {
+		if g.hubs[i].to == to {
 			g.hubs[i].l, g.hubs[i].pos = to, g.a.Len()
 			return
 		}
 	}
-	g.hubs = append(g.hubs, trapHub{code: code, to: to, l: to, pos: g.a.Len()})
+	g.hubs = append(g.hubs, hub{to: to, l: to, pos: g.a.Len()})
 }
 
 // stub is out-of-line code, emitted after the blocks: the exit of a trap
@@ -637,6 +645,7 @@ const (
 	stubTrapSite
 	stubPoll
 	stubPollExit
+	stubCallExit
 	stubCall
 	stubCallIndirect
 	stubCallRef
@@ -667,7 +676,7 @@ func (g *gen) stub(st *stub) {
 	switch st.kind {
 	case stubTrapCode:
 		a.Bind(st.to)
-		g.trapHere(st.code, st.to)
+		g.hubHere(st.to)
 		g.mark("cold trap")
 		a.Store(rCtx, offArg0+8, s0)
 		a.Store(rCtx, offL, rL)
@@ -756,6 +765,34 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold array fill")
 		g.fillMade(st.v, st.off, uint32(st.code))
 		a.Jmp(st.to)
+	case stubCallExit:
+		// The function's exit for a call of a function through Go
+		// (ExitCall): the callee's index and the call's offset in the
+		// registers callRegs names, the code goes on where its site left
+		// in s0 once the exit's resumption has loaded the registers the
+		// code keeps.
+		a.Bind(st.l)
+		g.hubHere(st.l)
+		g.mark("cold call exit")
+		idx, at := g.callRegs()
+		a.Store(rCtx, offResume, s0)
+		a.Store(rCtx, offL, rL)
+		a.Store(rCtx, offPoll, rPoll)
+		if g.rsKept {
+			a.Store(rCtx, offRSP, g.rs)
+		}
+		g.storeCtx(offExit, wjit.ExitCall)
+		a.Store(rCtx, offArg0, idx)
+		g.storeCtx(offArg0+8, uint64(g.argBase))
+		a.Store(rCtx, offArg0+16, at)
+		g.storeCtx(offExitFn, uint64(g.fn))
+		resume := a.NewLabel()
+		a.LeaLabel(s0, resume)
+		a.Store(rCtx, offExitAddr, s0)
+		a.Ret()
+		a.Bind(resume)
+		g.loadKept()
+		a.JmpMem(rCtx, offResume)
 	case stubCall, stubCallIndirect, stubCallRef:
 		v := st.v
 		a.Bind(st.l)
@@ -839,12 +876,60 @@ func (g *gen) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	a.Store(rCtx, offExitAddr, s0)
 	a.Ret()
 	a.Bind(resume)
+	g.loadKept()
+}
+
+// loadKept loads the registers the code keeps from the context, where an
+// exit's resumption finds them: L, memory 0's base, the poll counter and
+// the return stack's entry where a register keeps it.
+func (g *gen) loadKept() {
+	a := g.a
 	a.Load(rL, rCtx, offL)
 	a.Load(rMem, rCtx, offMemBase)
 	a.Load(rPoll, rCtx, offPoll)
 	if g.rsKept {
 		a.Load(g.rs, rCtx, offRSP)
 	}
+}
+
+// callRegs are the registers a call of a function through Go leaves the
+// callee's index and its offset in for the function's exit for it: two of
+// the allocator's, which hold nothing across a call, but the one that
+// keeps the return stack's entry, which the exit stores.
+func (g *gen) callRegs() (idx, at amd64.Reg) {
+	var r [2]amd64.Reg
+	n := 0
+	for _, x := range [...]amd64.Reg{amd64.RAX, amd64.RCX, amd64.RDX} {
+		if n < 2 && !(g.rsKept && x == g.rs) {
+			r[n] = x
+			n++
+		}
+	}
+	return r[0], r[1]
+}
+
+// exitCallFn calls function idx through Go from offset at, its arguments
+// in the call area: the index and the offset into callRegs, where to go
+// on into s0, and a jump to the function's exit for it -- from out of
+// line (cold), by way of a jump to it near (jmpHub).
+func (g *gen) exitCallFn(idx, at uint32, cold bool) {
+	a := g.a
+	ri, ra := g.callRegs()
+	a.MovImm(ri, uint64(idx))
+	a.MovImm(ra, uint64(at))
+	back := a.NewLabel()
+	a.LeaLabel(s0, back)
+	if !g.hasCallExit {
+		g.hasCallExit = true
+		g.callExit = a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubCallExit, l: g.callExit})
+	}
+	if cold {
+		g.jmpHub(g.callExit)
+	} else {
+		a.Jmp(g.callExit)
+	}
+	a.Bind(back)
 }
 
 // exitAlloc is exit's ExitAlloc, its arguments stored, by way of the
@@ -877,12 +962,7 @@ func (g *gen) exitAlloc(resume amd64.Label) {
 	a.Jcc(amd64.CondNE, resume)
 	a.Ret()
 	a.Bind(resume)
-	a.Load(rL, rCtx, offL)
-	a.Load(rMem, rCtx, offMemBase)
-	a.Load(rPoll, rCtx, offPoll)
-	if g.rsKept {
-		a.Load(g.rs, rCtx, offRSP)
-	}
+	g.loadKept()
 }
 
 // saveAll and restoreAll keep every register the allocator gave out in the
@@ -2239,7 +2319,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	after := a.NewLabel()
 	if m.Functions[idx].Imported {
 		g.stage(v.Args, g.argBase)
-		g.exit(wjit.ExitCall, a.NewLabel(), uint64(idx), uint64(g.argBase), uint64(v.At))
+		g.exitCallFn(idx, v.At, false)
 		g.takeResults(res, int32(g.argBase))
 		g.reload(v)
 		return

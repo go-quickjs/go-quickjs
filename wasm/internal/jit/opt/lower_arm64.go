@@ -115,8 +115,12 @@ type gen struct {
 	// poll is the function's poll exit, which its sites share, made by the
 	// first (hasPoll); usedG and usedX are the registers the allocator gave
 	// out, which it keeps across the exit.
-	poll         arm64.Label
-	hasPoll      bool
+	poll    arm64.Label
+	hasPoll bool
+	// callExit is the function's exit for a call of a function through
+	// Go, which its sites share, made with the first (hasCallExit).
+	callExit     arm64.Label
+	hasCallExit  bool
 	usedG, usedX uint64
 	// wbG is the allocator's general registers the barrier routine keeps:
 	// those it gave out, and those a sequence took for its own while it
@@ -521,6 +525,7 @@ const (
 	stubTrapSite
 	stubPoll
 	stubPollExit
+	stubCallExit
 	stubCall
 	stubCallIndirect
 	stubCallRef
@@ -576,6 +581,31 @@ func (g *gen) stub(st *stub) {
 		g.mark("cold poll")
 		a.Adr(s0, st.to)
 		a.B(g.pollExit())
+	case stubCallExit:
+		// The function's exit for a call of a function through Go
+		// (ExitCall): the callee's index and the call's offset in
+		// callIdx and callAt, and the code goes on where its site left in
+		// s0 once the exit's resumption has loaded the registers the code
+		// keeps.
+		a.Bind(st.l)
+		g.mark("cold call exit")
+		a.Store(rCtx, offResume, s0)
+		a.Store(rCtx, offL, rL)
+		a.Store(rCtx, offPoll, rPoll)
+		a.Store(rCtx, offRSP, rRS)
+		g.storeCtx(offExit, wjit.ExitCall)
+		a.Store(rCtx, offArg0, callIdx)
+		g.storeCtx(offArg0+8, uint64(g.argBase))
+		a.Store(rCtx, offArg0+16, callAt)
+		g.storeCtx(offExitFn, uint64(g.fn))
+		resume := a.NewLabel()
+		a.Adr(s0, resume)
+		a.Store(rCtx, offExitAddr, s0)
+		a.Ret()
+		a.Bind(resume)
+		g.loadKept()
+		a.Load(s0, rCtx, offResume)
+		a.Br(s0)
 	case stubPollExit:
 		// The function's poll exit: every register the allocator gave out
 		// kept in the context's save area across it, and the code goes on
@@ -676,6 +706,32 @@ func (g *gen) stub(st *stub) {
 		a.BCond(arm64.HI, st.slow)
 		a.B(st.to)
 	}
+}
+
+// callIdx and callAt are the registers a call of a function through Go
+// leaves the callee's index and its offset in for the function's exit for
+// it: the allocator's, which hold nothing across a call.
+const (
+	callIdx = arm64.Reg(1)
+	callAt  = arm64.Reg(2)
+)
+
+// exitCallFn calls function idx through Go from offset at, its arguments
+// in the call area: the index and the offset into callIdx and callAt,
+// where to go on into s0, and a branch to the function's exit for it.
+func (g *gen) exitCallFn(idx, at uint32) {
+	a := g.a
+	a.MovImm(callIdx, uint64(idx))
+	a.MovImm(callAt, uint64(at))
+	back := a.NewLabel()
+	a.Adr(s0, back)
+	if !g.hasCallExit {
+		g.hasCallExit = true
+		g.callExit = a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubCallExit, l: g.callExit})
+	}
+	a.B(g.callExit)
+	a.Bind(back)
 }
 
 // pollExit returns the label of the function's poll exit, which its sites

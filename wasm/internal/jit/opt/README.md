@@ -896,7 +896,17 @@ loaded again: 490 bytes for each call of the Go program's, 12 now, and
 its code went from 36.0 to 24.1 MB. A call counts it down too, then checks, as the baseline
 does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
-Go (`ExitCall`), out of line. The callee's entry, read from the link
+Go (`ExitCall`), out of line. A call of a function through Go, there or
+of an import, leaves the callee's index and its offset in two of the
+allocator's registers, which hold nothing across a call (RAX and RCX, or
+RDX for the one that keeps the return stack's entry; X1 and X2), and
+where to go on in R11 (X16), and jumps to the function's exit for it,
+which stores them with the rest of the exit's record, and, resumed,
+loads the registers the code keeps and jumps to where the site left
+(`Ctx.Resume`, which the callee leaves alone: Go runs it in a level of
+its own). Each site had made its exit whole: a call's out-of-line code,
+its poll's site, its arguments' moves and its results' included, went
+from 124 bytes to 54 on amd64. The callee's entry, read from the link
 table for the check, waits for the jump in a register of the allocator's
 that no argument is in -- at a call every other value is in its slot or
 dead -- rather than being read again. A call of the function by itself

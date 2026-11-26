@@ -307,7 +307,7 @@ func (g *gen) exitCall(v *Value, res []*Value) {
 	base, at := uint64(g.argBase), uint64(v.At)
 	switch v.Op {
 	case OpCall:
-		g.exit(wjit.ExitCall, a.NewLabel(), uint64(uint32(v.Aux)), base, at)
+		g.exitCallFn(uint32(v.Aux), v.At)
 	case OpCallIndirect:
 		g.exit(wjit.ExitCallIndirect, a.NewLabel(), v.Aux, v.Aux2, base, at)
 	case OpCallRef:
