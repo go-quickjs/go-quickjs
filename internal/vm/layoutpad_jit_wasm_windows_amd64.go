@@ -8,7 +8,7 @@ package vm
 // stores (the assembly pad's 32-byte slots), -1 for a pad left out, or a
 // data lever's variables.
 const (
-	layoutPadNA   = 1071
+	layoutPadNA   = 1002
 	layoutPadNGA  = -1
 	layoutPadNMA  = -1
 	layoutPadNI   = 230
@@ -47,7 +47,7 @@ const (
 	layoutPadNF   = 445
 	layoutPadNGF  = -1
 	layoutPadNMF  = -1
-	layoutPadNIN  = 439
+	layoutPadNIN  = 453
 	layoutPadNGIN = -1
 	layoutPadNMIN = -1
 	layoutPadNL   = 418
@@ -56,22 +56,22 @@ const (
 	layoutPadNB   = 485
 	layoutPadNGB  = -1
 	layoutPadNMB  = -1
-	layoutPadNJB  = 358
+	layoutPadNJB  = 559
 	layoutPadNGJB = -1
 	layoutPadNMJB = -1
-	layoutPadNJU  = 0
+	layoutPadNJU  = 585
 	layoutPadNGJU = -1
 	layoutPadNMJU = -1
-	layoutPadNJ   = 617
+	layoutPadNJ   = 655
 	layoutPadNGJ  = -1
 	layoutPadNMJ  = -1
-	layoutPadNJN  = 585
+	layoutPadNJN  = 509
 	layoutPadNGJN = -1
 	layoutPadNMJN = -1
-	layoutPadNJS  = 313
+	layoutPadNJS  = 665
 	layoutPadNGJS = -1
 	layoutPadNMJS = -1
-	layoutPadNKO  = 453
+	layoutPadNKO  = 828
 	layoutPadNGKO = -1
 	layoutPadNMKO = -1
 	layoutPadNCC  = 549
@@ -89,7 +89,7 @@ const (
 	layoutPadNP   = 385
 	layoutPadNGP  = -1
 	layoutPadNMP  = -1
-	layoutPadNQ   = 820
+	layoutPadNQ   = 235
 	layoutPadNGQ  = -1
 	layoutPadNMQ  = -1
 	layoutPadNW   = 361
@@ -114,7 +114,7 @@ const (
 	layoutPadNGVT = -1
 	layoutPadNMVT = 494
 	layoutPadNK   = 103
-	layoutPadNGK  = 165
+	layoutPadNGK  = 750
 	layoutPadNMK  = -1
 	layoutPadNVA  = 544
 	layoutPadNGVA = -1
@@ -138,10 +138,10 @@ const (
 	layoutPadNGZ  = -1
 	layoutPadNMZ  = -1
 	layoutPadNCZ  = 1405
-	layoutPadNHJ  = 185
+	layoutPadNHJ  = 186
 	layoutPadNH   = 323
-	layoutPadNHT  = 110
-	layoutPadNDH  = 3
+	layoutPadNHT  = 141
+	layoutPadNDH  = 0
 	layoutPadNDW  = 4
 	layoutPadNDG  = 0
 )
