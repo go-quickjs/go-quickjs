@@ -402,3 +402,26 @@ func (r *Runtime) jitRegResumed(cl *closure, c *regCode) {
 	}
 	r.jitRegHot(cl, c, int64(work))
 }
+
+// regGenCaught catches, for f's native code, a throw injected into f, a
+// suspended frame of register code c, at its suspension (f.savedSP, which
+// gen_entry throws at), where a handler of the frame's takes it: the value
+// thrown given to the handler's register, as regCatch gives it, and the
+// register pc the frame resumes at, the handler's, where its native code
+// has an entry (ir.Program's handlers) -- f.savedSP cleared. Where no
+// handler takes it, it returns 0, the throw gen_entry's. Left to gen_entry,
+// a rejected await in a try statement had the interpreter catch it and run
+// the rest of the frame, its later awaits gone on from in place: an async
+// function's loop awaiting a promise that may reject, natively in its
+// first run alone.
+func (r *Runtime) regGenCaught(f *frame, c *regCode) int {
+	at := -f.savedSP - 1
+	h := c.rc.HandlerAt(at)
+	if h == nil {
+		return 0
+	}
+	wb := f.base - int(c.locals)
+	r.stack[wb+int(h.Reg)] = r.stack[wb+int(regAt(c.code, at).A())]
+	f.savedSP = 0
+	return int(h.To)
+}

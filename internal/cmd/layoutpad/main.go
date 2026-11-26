@@ -49,8 +49,8 @@
 //     slots (HT, before the typed code's handlers, and HJ, before the
 //     JIT's leaf stubs, are the same): package vm's assembly is laid out after every closure of its
 //     named functions, so that any closure's growth moves the native
-//     handlers' block (nativeEnter, nativeCallH, the feedback handlers and
-//     regNativeHandlers), which no Go pad can reach without moving the
+//     handlers' block (nativeEnter, nativeCallH and regNativeHandlers,
+//     the feedback handlers after it), which no Go pad can reach without moving the
 //     closures. The pad moves that block, and the package's init and the
 //     closures of generics after it, which CZ absorbs.
 //
@@ -172,6 +172,7 @@ var positions = []position{
 	{"C", "calls_layoutpad.go", "after callbound.go, before callsite.go: the case conversion's memo, asciiCaseMemo"},
 	{"D", "defg_layoutpad.go", "after deferred.go, before define.go: the files after the built-ins"},
 	{"F", "generato_layoutpad.go", "after generate.go, before generator.go: an iterator's results, iterResult"},
+	{"IN", "ins_layoutpad.go", "after init.go, before instanceof.go: instanceof, the Intl bindings and the iteration of a for-of (iterate.go), past New, which is longer with the JIT built in"},
 	{"L", "vl_layoutpad.go", "after value.go, before vm.go: the arithmetic in Go, add and arith"},
 	{"B", "vm_b_layoutpad.go", "after vm_amath.go, before vm_call.go: callObject, callDirect, runFD"},
 	{"JB", "jit_bi_layoutpad.go", "after jit_bg.go, before jit_bigint.go: the JIT's BigInt leaves, jitBigLeafMake"},
@@ -179,10 +180,16 @@ var positions = []position{
 	{"J", "jit_layoutpad.go", "after jit_keyedwrite.go, before jit_lazyframes.go and jit_leaffast.go: the JIT's leaf calls, jitLeafGo"},
 	{"JN", "jit_na_layoutpad.go", "after jit_loop.go, before jit_native.go: native code's entries and its calls of Go with a frame, jitRegWhole and jitRegGoCall"},
 	{"JS", "jit_ss_layoutpad.go", "after jit_snapshot_gen.go, before jit_ssa.go: native code's calls of host functions, jitHostCall"},
+	{"KO", "keyo_layoutpad.go", "after jit_virtual.go, the JIT's last file (jit_disabled.go without the JIT), before keyorder.go: what follows the JIT's files, reserveFunctionProtoKeys first, at the same offsets in every build -- a string's concatenation (memory.go's concat), the native leaves (native_leaf.go)"},
+	{"CC", "mem_layoutpad.go", "after localecase.go, before memory.go: a string's concatenation, concat, past the memory meter's walk of the frames, whose frameAt with the JIT built in tests for frames a call of Go put off"},
 	{"N", "native_r_layoutpad.go", "after native_predicate.go, before native_run.go: the native dispatcher's Go side, nativeRun first, and its calls of Go, nativeApply, nativeNew and nativeBuiltin"},
+	{"BU", "native_run_b_layoutpad.go", "after native_run.go, before native_run_builtin.go: the native dispatcher's calls of built-ins, nativeBuiltin first, past what the JIT's hooks add to native_run.go"},
+	{"CN", "native_run_n_layoutpad.go", "after native_run_builtin.go, before native_run_new.go: the native dispatcher's constructions and applies, nativeNew first, nativeApply, past what the JIT's hooks add to native_run_builtin.go"},
 	{"P", "reg_cal_layoutpad.go", "after reg_caches.go, before reg_call.go: the register interpreter's calls, regCall"},
 	{"Q", "reg_ru_layoutpad.go", "after reg_report.go, before reg_run.go: the register interpreter's loop, runReg"},
 	{"W", "reg_run_a_layoutpad.go", "after reg_run.go, before reg_run_call.go: the register interpreter's calls after its loop, rhCallW first"},
+	{"WE", "reg_run_call_e_layoutpad.go", "after reg_run_call.go, before reg_run_call_enter.go: the frames rhCallW enters, regEnterW, past rhCallW's test of the JIT's entry"},
+	{"LR", "reg_run_call_l_layoutpad.go", "after reg_run_call_enter.go, before reg_run_call_leaf.go: a direct call's frame and the leaf calls, regDirect, regNative and regLeafRun, past regEnterW's test of the JIT's entry"},
 	{"U", "reg_runr_layoutpad.go", "after reg_run_call.go, before reg_runs.go: the register interpreter's operations in Go, regBinImm first, regBinary"},
 	{"Y", "reg_gene_layoutpad.go", "after reg_genalloc.go, before reg_generator.go: generators and async functions, regGenOf first, regAsyncStart and regAsyncRun"},
 	{"V", "reg_sw_layoutpad.go", "after reg_slow.go, before reg_switch.go: the register handlers, newRegSwitchTable first, reg_table*.go, at 2f05d3fc's layout"},

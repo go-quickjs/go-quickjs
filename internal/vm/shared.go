@@ -3,7 +3,6 @@ package vm
 import (
 	"encoding/binary"
 	"math"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -235,16 +234,4 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		return v, err
 	}
 	return r.call(Obj(o), this, args)
-}
-
-// makeClosure builds a closure from a nested function template
-// (newClosure), and plans its calls (planCall) where its function's
-// register code is built: what planCall asks of it is settled when it is
-// made.
-func (r *Runtime) makeClosure(f *frame, c Value) *Object {
-	o := r.newClosure(f, c)
-	if fd := o.fn(); fd != nil && atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
-		planCall(fd)
-	}
-	return o
 }

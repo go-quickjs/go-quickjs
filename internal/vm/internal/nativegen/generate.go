@@ -51,10 +51,20 @@ type arch struct {
 	words           bool
 }
 
-// file is the name of v's file for ar: the handlers' file for plain.
+// file is the name of v's file for ar: the handlers' file for plain, and
+// the feedback dispatcher's sorted right after it. Package vm's assembly is
+// laid out in file order, and the feedback handlers, which only a build
+// with the JIT has, had sorted before plain's (native_feedback_<arch>.s),
+// between them and the entry and exit stubs before them (nativeEnter,
+// nativeCallH, native_<arch>.s), which every exit to Go runs: they lay
+// 4.6 KB further from the handlers with the JIT built in, on other sets of
+// the op cache, whether the JIT ran or not.
 func (ar *arch) file(v *variant) string {
-	if v == plain {
+	switch v {
+	case plain:
 		return "native_handlers_" + ar.goarch + ".s"
+	case variants[1]:
+		return "native_handlers_feedback_" + ar.goarch + ".s"
 	}
 	return "native_" + v.name + "_" + ar.goarch + ".s"
 }

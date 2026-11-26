@@ -89,13 +89,9 @@ var intendedInlining = []string{
 	"(*regState).done",
 	"(*Runtime).regEnter",
 	"(*Runtime).regLeave",
-	// An addition's slow path, its call of add or of the mark's form
-	// that calls add: inlined, the handler makes one call as it did
-	// before there were marks.
-	"(*regState).addSeen",
+	// An append's mark, its test of the JIT inline and its call behind
+	// it: inlined, a runtime without the JIT makes no call for it.
 	"(*regState).stringSeen",
-	"(*regState).addImmSeen",
-	"(*regState).addPropSeen",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with

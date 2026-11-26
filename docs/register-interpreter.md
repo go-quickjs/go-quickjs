@@ -859,7 +859,9 @@ builds with it. `feedback`, in JIT builds alone, is a runtime's that runs
 the JIT ([Inline caches and feedback](#inline-caches-and-feedback)): its own
 handlers record what the JIT needs and then go on in plain's handler, so
 that plain's code has no part of it. A variant's block holds only the
-handlers it overrides (`native_feedback_<arch>.s`), its table
+handlers it overrides (`native_handlers_feedback_<arch>.s`, sorted after
+plain's block so that the stubs before plain's lie where they do without
+the JIT), its table
 pointing at plain's for every other operation. `TestRegNativePlainSameWithJIT`
 checks that plain's block is the same with and without the JIT, and
 `TestRegNativeFeedbackSelected` that a runtime picks its table. The

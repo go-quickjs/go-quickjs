@@ -942,7 +942,11 @@ type propSeen struct {
 }
 
 // jitNotePrimWrite marks c, a write's site, as one the interpreter has
-// seen write a primitive's property (propSeen's prim).
+// seen write a primitive's property (propSeen's prim). Out of line, so that
+// regSetProp, which calls it where the JIT runs, is as long as it is in a
+// build without the JIT but for its test and this call.
+//
+//go:noinline
 func (c *propCache) jitNotePrimWrite() {
 	s := c.seenOf()
 	if s == nil {
@@ -5539,3 +5543,28 @@ func jitForgetHighSeen(r *Runtime) {
 // code's close writes it (abi.IterReleased).
 var _ [unsafe.Offsetof(iterState{}.released) - unsafe.Offsetof(iterState{}.done) - abi.IterReleased]struct{}
 var _ [abi.IterReleased - (unsafe.Offsetof(iterState{}.released) - unsafe.Offsetof(iterState{}.done))]struct{}
+
+// makeClosure builds a closure from a nested function template
+// (newClosure), and plans its calls (planCall) where its function's
+// register code is built: what planCall asks of it is settled when it is
+// made.
+func (r *Runtime) makeClosure(f *frame, c Value) *Object {
+	o := r.newClosure(f, c)
+	if fd := o.fn(); fd != nil && atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
+		planCall(fd)
+	}
+	return o
+}
+
+// typedWrite stores the number v in element i of a typed array of a fixed
+// length that is inside its buffer, straight into the buffer, or reports
+// false where setElem has to: a view that tracks its buffer's length, one
+// whose buffer has been detached or has shrunk past its end, an index past
+// its own end, a value that is not a number, a BigInt or Float16 element, an
+// immutable buffer. It asks the object's data for the view, which is the
+// class check too. A number
+// converts without running code, so nothing can change the view between the
+// check and the store.
+func typedWrite(o *Object, i uint32, v Value) bool {
+	return typedStore(Obj(o), float64(i), v)
+}

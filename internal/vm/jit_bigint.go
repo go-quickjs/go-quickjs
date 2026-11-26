@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"math/bits"
 	"slices"
 	"sync/atomic"
 
@@ -24,28 +25,32 @@ import (
 // others, on the heap -- and the feedback answers from the marks as from
 // what exits learned.
 
-func init() {
-	regBigOf = func(r *Runtime, c *regCode, pc int, a, b, v Value) {
-		if !r.jitEnabled || !a.IsBigInt() || !b.IsBigInt() {
-			return
-		}
-		// From 0 to 2^64-1: held in its value, of no sign but zero's.
-		unsigned := func(v Value) bool {
-			if !v.isShortBig() {
-				return false
-			}
-			neg, mag := v.shortBigParts()
-			return !neg || mag == 0
-		}
-		kind := func(s *bigSeenMarks) []atomic.Uint32 { return s.heap }
-		switch {
-		case a.isInt64Big() && b.isInt64Big() && v.isInt64Big():
-			kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.bigs }
-		case unsigned(a) && unsigned(b) && unsigned(v):
-			kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.wide }
-		}
-		regBigMark(c, pc, kind)
+// regBigOf marks the operator at register pc of c whose operands a and b
+// met BigInts, and whose result was v (regCode's bigSeen), for the register
+// form's feedback (jitRegFeedback's BigInt): one in the int64 range, one
+// from 0 to 2^64-1, or another -- a v that is no BigInt, one on the heap.
+// The slow paths call it where r runs the JIT (jitOn), which they test
+// before the call, so that a runtime without the JIT makes none.
+func (r *Runtime) regBigOf(c *regCode, pc int, a, b, v Value) {
+	if !a.IsBigInt() || !b.IsBigInt() {
+		return
 	}
+	// From 0 to 2^64-1: held in its value, of no sign but zero's.
+	unsigned := func(v Value) bool {
+		if !v.isShortBig() {
+			return false
+		}
+		neg, mag := v.shortBigParts()
+		return !neg || mag == 0
+	}
+	kind := func(s *bigSeenMarks) []atomic.Uint32 { return s.heap }
+	switch {
+	case a.isInt64Big() && b.isInt64Big() && v.isInt64Big():
+		kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.bigs }
+	case unsigned(a) && unsigned(b) && unsigned(v):
+		kind = func(s *bigSeenMarks) []atomic.Uint32 { return s.wide }
+	}
+	regBigMark(c, pc, kind)
 }
 
 // regBigMark marks register pc of c in the marks kind picks of its bigSeen,
@@ -188,4 +193,63 @@ func (r *Runtime) jitRegOperand(p *ir.Program, wb int, o ir.Operand) Value {
 		return r.stack[wb+o.Slot]
 	}
 	return Undefined
+}
+
+// bigRelease gives back a's and b's blocks, those of a and b that flags
+// marks as fresh (treeFreshA, treeFreshB) -- each a result of arithmetic
+// that an operator of two BigInts has just taken, and
+// nothing else has seen -- and old's, the value of the local v is about
+// to be stored to, where flags says the local holds its values alone
+// (treeOwnRes) and old is one such a store kept (bigSoleBit), for
+// bigInPlace to make another result in, but for one that is v, the
+// operator's result; and marks v as its local's alone. A 32-bit machine's
+// BigInts have no room in their header for their room, and are not given
+// back.
+func (r *Runtime) bigRelease(v, a, b, old Value, flags int) {
+	if bits.UintSize != 64 {
+		return
+	}
+	if flags&treeFreshA != 0 && a.isHeapBig() && a.ref != v.ref {
+		r.bigGive((*BigInt)(a.ref))
+	}
+	if flags&treeFreshB != 0 && b.isHeapBig() && b.ref != v.ref && b.ref != a.ref {
+		r.bigGive((*BigInt)(b.ref))
+	}
+	if flags&treeOwnRes != 0 {
+		if old.isHeapBig() && old.ref != v.ref && (*BigInt)(old.ref).hdr&bigSoleBit != 0 &&
+			(flags&treeFreshA == 0 || old.ref != a.ref) && (flags&treeFreshB == 0 || old.ref != b.ref) {
+			r.bigGive((*BigInt)(old.ref))
+		}
+		if v.isHeapBig() {
+			(*BigInt)(v.ref).hdr |= bigSoleBit
+		}
+	}
+}
+
+// regColdWrapJIT is what regColdWrap's wrapped operator does for the JIT,
+// out of line, so that a build with the JIT has the operator as a build
+// without it does but for a test and this call, which a runtime without the
+// JIT never makes: the call it
+// passed over, cw of the function fd, its site's cache filled as the call
+// would fill it -- made here where no call has made it (regCallSlow) -- for
+// the JIT, which makes the call natively (jitRegFeedback's Intrinsic), and
+// the operator's mark (regBigOf).
+//
+//go:noinline
+func (r *Runtime) regColdWrapJIT(cl *closure, c *regCode, k *regKept, cw bytecode.RInstr, fo *Object, fd *funcData, op bytecode.Op, a, b Value) {
+	if cl.regCalls == nil && c.rc.CallSites > 0 {
+		cl.regCalls = r.newRegCallsCounted(cl.closureCode, c.rc.CallSites)
+	}
+	if !cl.regCallsHeld {
+		r.regCallsHold(cl.closureCode)
+	}
+	regCallSiteNative(cl, cw, fo, fd, r.Realm)
+	if !isBitwise(op) {
+		// The operator's mark: in the int64 range, or another.
+		x, ok := shortArith(op, a, b)
+		if !ok {
+			x = Undefined
+		}
+		r.regBigOf(c, k.pc-2, a, b, x)
+	}
 }

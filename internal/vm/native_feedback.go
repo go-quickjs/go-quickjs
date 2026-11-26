@@ -6,7 +6,7 @@ package vm
 // (nativeDispatch): its handlers that record the JIT's feedback OR the
 // kinds of value they met into the function's feedback slot (ctx.fv),
 // every other handler plain's. Its table and its own handlers are
-// generated (native_feedback_<arch>.s), in builds with the JIT
+// generated (native_handlers_feedback_<arch>.s), in builds with the JIT
 // alone, and not in the build that reads the package's layout for the
 // generator (native_layout.go), which must not need them.
 var nativeFeedback = newNativeTable(nativeFeedbackTableAddr())

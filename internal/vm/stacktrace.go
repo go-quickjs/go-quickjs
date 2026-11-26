@@ -728,7 +728,13 @@ func (r *Runtime) writeLocation(b *strings.Builder, fr *stackFrame) {
 // is in.
 // activeReferrer is what an import() the running code makes is resolved
 // against: the referrer of the script or module of the innermost frame running
-// JavaScript, or empty when none is.
+// JavaScript, or empty when none is. Out of line in every build: with the
+// JIT built in, its loop's frameAt, which tests for frames a call of Go put
+// off, makes it too large to inline, and a build without the JIT had it
+// inlined into its callers, an eval's and an import()'s, which were then
+// as much longer there.
+//
+//go:noinline
 func (r *Runtime) activeReferrer() string {
 	for i := r.frameDepth - 1; i >= 0; i-- {
 		if f := r.frameAt(i); f.cl != nil {

@@ -143,37 +143,6 @@ const (
 	bigFreeDepth = 4
 )
 
-// bigRelease gives back a's and b's blocks, those of a and b that flags
-// marks as fresh (treeFreshA, treeFreshB) -- each a result of arithmetic
-// that an operator of two BigInts has just taken, and
-// nothing else has seen -- and old's, the value of the local v is about
-// to be stored to, where flags says the local holds its values alone
-// (treeOwnRes) and old is one such a store kept (bigSoleBit), for
-// bigInPlace to make another result in, but for one that is v, the
-// operator's result; and marks v as its local's alone. A 32-bit machine's
-// BigInts have no room in their header for their room, and are not given
-// back.
-func (r *Runtime) bigRelease(v, a, b, old Value, flags int) {
-	if bits.UintSize != 64 {
-		return
-	}
-	if flags&treeFreshA != 0 && a.isHeapBig() && a.ref != v.ref {
-		r.bigGive((*BigInt)(a.ref))
-	}
-	if flags&treeFreshB != 0 && b.isHeapBig() && b.ref != v.ref && b.ref != a.ref {
-		r.bigGive((*BigInt)(b.ref))
-	}
-	if flags&treeOwnRes != 0 {
-		if old.isHeapBig() && old.ref != v.ref && (*BigInt)(old.ref).hdr&bigSoleBit != 0 &&
-			(flags&treeFreshA == 0 || old.ref != a.ref) && (flags&treeFreshB == 0 || old.ref != b.ref) {
-			r.bigGive((*BigInt)(old.ref))
-		}
-		if v.isHeapBig() {
-			(*BigInt)(v.ref).hdr |= bigSoleBit
-		}
-	}
-}
-
 // bigGiveable reports whether b's room is one of the list's, which
 // bigGive keeps.
 func bigGiveable(b *BigInt) bool {

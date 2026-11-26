@@ -15,20 +15,22 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
-func init() {
-	regStringAddOf = func(c *regCode, pc int) {
-		marks := c.stringAdds.Load()
-		if marks == nil {
-			bits := make([]atomic.Uint32, (len(c.rc.Code)+31)/32)
-			marks = &bits
-			if !c.stringAdds.CompareAndSwap(nil, marks) {
-				marks = c.stringAdds.Load()
-			}
+// regStringAddOf records a string addition at register pc of c for the
+// first compile (regCode's stringAdds). Only the slow paths' marking forms
+// call it (addMark, stringMark, addImmMark, addPropMark), which they call
+// where the JIT runs.
+func regStringAddOf(c *regCode, pc int) {
+	marks := c.stringAdds.Load()
+	if marks == nil {
+		bits := make([]atomic.Uint32, (len(c.rc.Code)+31)/32)
+		marks = &bits
+		if !c.stringAdds.CompareAndSwap(nil, marks) {
+			marks = c.stringAdds.Load()
 		}
-		word, bit := &(*marks)[pc>>5], uint32(1)<<(pc&31)
-		if word.Load()&bit == 0 {
-			word.Or(bit)
-		}
+	}
+	word, bit := &(*marks)[pc>>5], uint32(1)<<(pc&31)
+	if word.Load()&bit == 0 {
+		word.Or(bit)
 	}
 }
 
@@ -569,4 +571,49 @@ func (f *jitRegFeedback) KeyedStore(pc int) (ssa.KeyedStoreSite, bool) {
 		}
 	}
 	return site, len(site.Keys) != 0
+}
+
+// addMark, stringMark, addImmMark and addPropMark are the slow paths'
+// additions' marking forms (reg_runs.go's stringSeen), which they call
+// where the JIT runs: here, with the JIT's files, so that none lies among
+// the interpreter's code in a build with the JIT. addMark is a + b,
+// marked: a string's result, and, if big, a BigInt's (regBigOf), add's;
+// add_i32's marks no BigInt, which its | 0 throws for.
+//
+//go:noinline
+func (st *regState) addMark(pc int, a, b Value, big bool) (Value, error) {
+	v, err := st.r.add(a, b)
+	if err == nil {
+		if v.IsString() {
+			regStringAddOf(st.c, pc)
+		} else if big && v.IsBigInt() {
+			st.r.regBigOf(st.c, pc, a, b, v)
+		}
+	}
+	return v, err
+}
+
+//go:noinline
+func (st *regState) stringMark(pc int, v Value) {
+	if v.IsString() {
+		regStringAddOf(st.c, pc)
+	}
+}
+
+//go:noinline
+func (st *regState) addImmMark(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
+	v, err := st.r.regBinImm(op, a, imm)
+	if err == nil && v.IsString() {
+		regStringAddOf(st.c, pc)
+	}
+	return v, err
+}
+
+//go:noinline
+func (st *regState) addPropMark(pc int, w bytecode.RInstr, obj, b Value) error {
+	if w.Op() == bytecode.RAddProp && b.IsString() {
+		// o.name += x of a string x: a string's addition.
+		regStringAddOf(st.c, pc)
+	}
+	return st.r.regAddProp(st.cl, st.c, w, obj, b)
 }

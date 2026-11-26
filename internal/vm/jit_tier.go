@@ -107,6 +107,21 @@ func regEdgeTick(st *regState, off int32) {
 	}
 }
 
+// regBackEdgeJIT is regBackEdge's for the JIT, at the end of a back edge's
+// check of st's frame, jumping to target: with the JIT on, a sample of the
+// back edges, the loop's function's hotness, and its native code entered at
+// the loop's header (jitRegLoop); off, the Go table's jumps count the
+// function's budget no more (regEdgesOff, regEdgeTick).
+//
+//go:noinline
+func (r *Runtime) regBackEdgeJIT(st *regState, target int) int {
+	if r.jitOn() {
+		return r.jitRegLoop(st, target)
+	}
+	regEdgesOff(st.f.cl)
+	return target
+}
+
 // regEdgesOff has the back edges of cl's function's frames count nothing
 // more of its budget, in a runtime that runs no JIT, whose Go table's
 // jumps count it all the same (regEdgeTick): its first back edge's check
@@ -1667,4 +1682,14 @@ func (s *jitState) regForgetTopLevel(e *jitRegEntry) {
 	if fn := e.key.Value(); fn != nil && fn.TopLevel && e.code == nil && s.regCache[e.key] == e {
 		s.dropReg(e.key, e)
 	}
+}
+
+// runRegFor runs frame f's code c from start by the table of its kind:
+// typed code's or the ordinary code's -- for what goes on in the
+// interpreter after native code, which runs both (asmTwin).
+func (r *Runtime) runRegFor(f *frame, c *regCode, start int) (Value, error) {
+	if c.typed {
+		return r.runRegTyped(f, c, start)
+	}
+	return r.runReg(f, c, start)
 }

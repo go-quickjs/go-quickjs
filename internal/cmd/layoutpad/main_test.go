@@ -345,3 +345,65 @@ func TestSolveCodeAccountsForEarlierPad(t *testing.T) {
 		t.Fatalf("changed %v, error %v, stores %v", changed, err, v)
 	}
 }
+
+// TestJITConfigsAtPlainTargets checks the parity rule of the targets file:
+// a build with the JIT, run with the JIT off, must be no slower than one
+// without it, so the configurations with the JIT put the interpreter's code
+// and the runtime's data where those without it do. Each code anchor
+// plain has has its target in jit and in jit+wasm (whose code anchors are
+// plain's, as wasm's are), and each of plain's data anchors in jit. The
+// WebAssembly builds' runtime data is laid out anew, and a data target
+// plain's of theirs cannot reach is the nearest that holds (linux/amd64
+// jit+wasm keeps its own); the JIT's own anchors -- its leaves, its native
+// entries, its compiler -- are its alone.
+// With targets of their own, the JIT's configurations had run the same
+// handlers' bytes on other sets of the op cache, and string appends and
+// BigInts were 7 to 16% slower at every placement with the JIT built in
+// and off.
+func TestJITConfigsAtPlainTargets(t *testing.T) {
+	tg, err := readTargets(filepath.Join("..", "..", "vm", "layoutlock.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func(goos, goarch, kind string) *config {
+		for _, c := range tg.configs {
+			if c.goos == goos && c.goarch == goarch && c.kind() == kind {
+				return c
+			}
+		}
+		return nil
+	}
+	checked := 0
+	for _, c := range tg.configs {
+		if !c.jit {
+			continue
+		}
+		base := find(c.goos, c.goarch, "plain")
+		if base == nil {
+			t.Errorf("%s: no plain configuration to take its targets from", c)
+			continue
+		}
+		for _, b := range base.anchors {
+			if c.wasm && modOf(b.lever) != codeMod {
+				continue
+			}
+			found := false
+			for _, a := range c.anchors {
+				if a.lever != b.lever {
+					continue
+				}
+				found = true
+				if a.symbol != b.symbol || a.target != b.target {
+					t.Errorf("%s: anchor %s is %s at %#x, plain's %s at %#x", c, a.lever, a.symbol, a.target, b.symbol, b.target)
+				}
+			}
+			if !found {
+				t.Errorf("%s: no anchor %s, which plain has", c, b.lever)
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no configuration with the JIT")
+	}
+}

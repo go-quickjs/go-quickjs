@@ -55,19 +55,6 @@ func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
 	return t, int(i), ok
 }
 
-// typedWrite stores the number v in element i of a typed array of a fixed
-// length that is inside its buffer, straight into the buffer, or reports
-// false where setElem has to: a view that tracks its buffer's length, one
-// whose buffer has been detached or has shrunk past its end, an index past
-// its own end, a value that is not a number, a BigInt or Float16 element, an
-// immutable buffer. It asks the object's data for the view, which is the
-// class check too. A number
-// converts without running code, so nothing can change the view between the
-// check and the store.
-func typedWrite(o *Object, i uint32, v Value) bool {
-	return typedStore(Obj(o), float64(i), v)
-}
-
 // typedStore is typedWrite of key, a number, into obj, any value: false for
 // what is no typed array, or a key that is no index, its checks its own as
 // typedRead's are.

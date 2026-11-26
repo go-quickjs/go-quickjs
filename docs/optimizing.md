@@ -219,6 +219,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 | A I E T JP C D F L B J N P | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `bigParts` (`bigint.go`, the BigInts' arithmetic), `firstElem` (`builtins*.go`), the JSON encoder's `encode` (`builtins_json.go`, T), JSON.parse's parser, `parseJSON` (`builtins_json_parse.go`, JP), `asciiCaseMemo` (`callsite.go` and `casetables.go`), `descriptorObject` (`define.go` on), `iterResult` (`generator.go`), `add` (`vm.go`'s arithmetic, `arith`), `callObject` (with `callDirect` and `runFD` after it), with the JIT `jitLeafGo` (J), `nativeRun` (`native_run.go`: `nativeApply`, `nativeNew`, `nativeBuiltin`), and `regCall` (P: the register calls' entries, `regCallSlow` and `regRunFD`) |
 | BM TA CB JB JU JN JS VT VA PR SH | the same, positions the hot-function rule (below) asked for | every function after it to the next position | a Map's and a Set's lookups, `(*jsMap).find` (`builtins_map.go`, BM), a typed array's element reads, `(*typedArrayData).getElem` (`builtins_typedarray.go`, TA), the array methods' calls of their callbacks, `(*regCallback).call` (`callback.go`, CB), with the JIT its BigInt leaves, `jitBigLeafMake` (`jit_bigint.go` on, JB), a string builder's appends, `jitAppend` (`jit_builder.go`, JU), native code's entries and its framed calls of Go, `jitRegWhole` and `jitRegGoCall` (`jit_native.go`, JN), and its calls of host functions, `jitHostCall` (`jit_ssa.go`, JS), the register handlers in Go, `rsAdd` (`reg_table.go`, VT), a value's tests and accessors where they are not inlined (`value.go`, VA), a property's read, `getProp` (`vm_property.go`, PR), and a shape's root, `rootFor` (`vm_shape.go`, SH) |
 | JE JO | `layoutPadX`, the same, after a JSON function that changes grow or shrink | every function after it to the next position | the JSON encoder after `encodeObject`, `(*jsonEncoder).encodeElements` first, with `encodeProps`, `writeKeys` and the escapers `jsonEscapeASCII` and `jsonEscapeWide` after it (`builtins_json_elements.go`, JE), and the parser after `parseValueAt`, `(*jsonParser).parseObject` first, with `parseArray`, the strings and `parseNumber` after it (`builtins_json_parse_object.go`, JO), at `c906a894`'s layout: a first form of KI-89's nesting count, 96 bytes more of `parseValueAt` and 64 less of `encodeObject`, moved the code after them, and a build that moved only that code was 10% slower on `json_stringify_unicode` and 4% on `json_parse_decimals` at every placement |
+| KO CC BU CN WE | `layoutPadX`, the same, after the JIT's files (`keyo_layoutpad.go`, before `keyorder.go`), before `memory.go` (`mem_layoutpad.go`), and in the files the native dispatcher's Go side and the call path were split into for them (`native_run_b_layoutpad.go` before `native_run_builtin.go`, `native_run_n_layoutpad.go` before `native_run_new.go`, `reg_run_call_e_layoutpad.go` before `reg_run_call_enter.go`) | every function after it to the next position | what follows the JIT's files, `reserveFunctionProtoKeys` first; a string's concatenation, `concat`, past the memory meter's walk of the frames; the native dispatcher's calls of built-ins, `nativeBuiltin`, and its constructions and applies, `nativeNew` and `nativeApply`; the frames `rhCallW` enters, `regEnterW` and `regLeafRun`: at the offsets of a build without the JIT in every configuration, so that the JIT's files and the code its hooks add before them move none of it (docs/jit-design.md, "The JIT built in and off: parity held by test") |
 | Q W U V | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the register interpreter's loop, `runReg` (Q), the call path after it, `rhCallW` (W), its operations in Go, `regBinImm` and `regBinary` (`reg_runs.go`, U), and its handlers, `newRegSwitchTable` (`reg_switch.go` and `reg_table*.go`, V, at `2f05d3fc`'s layout) |
 | Y K | `layoutPadX`, the same, in the register interpreter's files | every function after it to the next position | the generators and async functions, `regGenOf` (`reg_generator.go`, Y: `regAsyncStart`, `regAsyncRun`), and the cold handlers, `regColdInit` (`reg_table_cold.go`, K: await's `rhAwait`), at `16f8b5e9`'s layout |
 | O | `layoutPadO`, before `vm_object.go` | `vm_object.go` and every function after it | what follows the literal constructors, `newErrorObject`, and with it the property definitions after it (`setOwnRaw`, `appendProp`, `setArrayLength`, `vm_property.go`, `vm_shape.go`), at `16f8b5e9`'s layout; the functions before the constructors in `vm_object.go` (`newObject`) move with the pad |
@@ -228,9 +229,9 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 | DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
 | X | `layoutPadX`, a function in `internal/regexp/aa_layoutpad.go`, its constant in that package's own configuration files | every function of package regexp, and what follows it up to vm, whose levers absorb it | the matcher, `(*matcherASCII).run`, and with it its `search` and the searches for a unit (`indexUnit`, `skipUnitsASCII`) |
 | XJ | `layoutPadXJ`, a function in `internal/jit/aa_layoutpad.go`, its constant in that package's own configuration files | every function of package jit, and what follows it up to vm, whose levers absorb it | native code's calls of Go, `ExpandGoCall`, at `8097c77b`'s layout, in the builds with the JIT |
-| H | `layoutPadH`, an assembly function of whole 32-byte slots of int3 bytes in `native_a_layoutpad_*.s`, one file a configuration, sorted after the JIT's assembly and before `native_<arch>.s` | the native handlers' block, and vm's `init` and the closures of generics after it, which CZ absorbs | `regNativeHandlers`, and with it `nativeEnter`, `nativeCallH` and, in a build with the JIT, the feedback handlers before it |
+| H | `layoutPadH`, an assembly function of whole 32-byte slots of int3 bytes in `native_a_layoutpad_*.s`, one file a configuration, sorted after the JIT's assembly and before `native_<arch>.s` | the native handlers' block, and vm's `init` and the closures of generics after it, which CZ absorbs | `regNativeHandlers`, and with it `nativeEnter` and `nativeCallH` before it, at the same distance in every build: the feedback handlers, in a build with the JIT, come after it (`native_handlers_feedback_<arch>.s`) |
 | HJ | `layoutPadHJ`, the same in `jit_l_layoutpad_*.s`, sorted after the JIT's BigInt leaves' assembly and before `jit_leaffast_<arch>.s`, in the builds with the JIT | the JIT's leaf stubs and the assembly after them up to H | `jitLeafFast` and `jitGoFast`, native code's leaf and Go call stubs, which every closure added had moved |
-| HT | `layoutPadHT`, the same in `native_ta_layoutpad_*.s`, sorted after `native_handlers_<arch>.s` and before `native_typed_<arch>.s` | the typed code's handlers and what follows them up to CZ | `regNativeTypedHandlers`, which lay 98 KB past H, after the whole native handlers' block |
+| HT | `layoutPadHT`, the same in `native_ta_layoutpad_*.s`, sorted after `native_handlers_<arch>.s` and, with the JIT, `native_handlers_feedback_<arch>.s`, and before `native_typed_<arch>.s` | the typed code's handlers and what follows them up to CZ | `regNativeTypedHandlers`, which lay 98 KB past H, after the whole native handlers' block |
 
 What each lever cannot move:
 
@@ -398,6 +399,18 @@ What each lever cannot move:
   WebAssembly build where it took 37 without, the same code at other
   offsets. A data target such a build cannot reach is the nearest one
   that holds (`layoutlock.txt` says which).
+- **The JIT.** The configurations with the JIT take plain's targets the
+  same way, every code anchor plain has and, for jit, its data anchors
+  (`TestJITConfigsAtPlainTargets`), and add their own for the JIT's code
+  (J, JB, JU, JN, JS, XJ, HJ): a build with the JIT runs the interpreter,
+  the JIT off, on the sets a build without it does. With targets of their
+  own, string appends and BigInts were 7 to 16% and generators 4 to 9%
+  slower with the JIT built in and off, at every placement. What the JIT
+  adds is kept out of the interpreter's ranges: its files sort together,
+  KO holds what follows them, a function only the JIT calls lives in its
+  files (`bigRelease`, the marking forms of the slow paths' additions) or
+  where a range ends, and a hook is a test and a call, not a body inlined.
+  `hotdiff -parity` checks the result.
 - **Assembly** is laid out after the closures of the named functions and
   before vm's `init` and the generics' closures, in file order. The
   register interpreter's native handlers are one assembly block
@@ -405,9 +418,12 @@ What each lever cannot move:
   added or grown anywhere in the package moved all of them: one round's
   closures moved the block 672 bytes (608 in one of its branches, which
   made Octane's RegExp and the generator tests slower). H pins
-  `regNativeHandlers`; between it and its pad are only `nativeEnter`,
-  `nativeCallH` and, with the JIT, the feedback handlers, whose size
-  nativegen's changes move. The pad is a whole number of slots, at least
+  `regNativeHandlers`; between it and its pad are only `nativeEnter` and
+  `nativeCallH`, which every exit to Go runs. The feedback handlers, which
+  a build with the JIT alone has, sort after the plain handlers, in HT's
+  range: before them, they had put the two stubs 4.6 KB further from the
+  handlers with the JIT built in than without, on other sets of the op
+  cache. The pad is a whole number of slots, at least
   one, so a target the block is already at costs 4 KB of pad. It is
   written for amd64 alone, as the targets are.
 - **Native code**, which the JIT lays out at run time, is not affected; its

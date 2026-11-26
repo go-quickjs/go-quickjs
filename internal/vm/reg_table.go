@@ -833,9 +833,12 @@ func rsAdd(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 		st.stringSeen(pc, v)
 		return st.put(regs, w, v, err)
 	}
-	v, err := st.addSeen(pc, regs[w.B()], regs[w.C()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	var v Value
+	var err error
+	if st.r.jitOn() {
+		v, err = st.addMark(pc, regs[w.B()], regs[w.C()], true)
+	} else {
+		v, err = st.r.add(regs[w.B()], regs[w.C()])
 	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
@@ -860,8 +863,8 @@ func rsSub(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpSub, regs[w.B()], regs[w.C()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.C()], v)
 	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
@@ -886,8 +889,8 @@ func rsMul(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpMul, regs[w.B()], regs[w.C()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.C()], v)
 	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
@@ -912,8 +915,8 @@ func rsInc(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.regStep(regs[w.B()], 1)
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.B()], v)
 	}
 	return st.put(regs, w, v, err)
 }
@@ -935,8 +938,8 @@ func rsDec(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.regStep(regs[w.B()], -1)
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.B()], v)
 	}
 	return st.put(regs, w, v, err)
 }
@@ -957,7 +960,13 @@ func rsAddI(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 		return pc + 1
 	}
 	st.at(pc)
-	v, err := st.addImmSeen(pc, bytecode.OpAdd, regs[w.B()], w.SC())
+	var v Value
+	var err error
+	if st.r.jitOn() {
+		v, err = st.addImmMark(pc, bytecode.OpAdd, regs[w.B()], w.SC())
+	} else {
+		v, err = st.r.regBinImm(bytecode.OpAdd, regs[w.B()], w.SC())
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -1227,8 +1236,8 @@ func rhUShr(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 func rsBitwise(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regBinary(regStackOp[w.Op()], regs[w.B()], regs[w.C()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.C()], v)
 	}
 	return st.put(regs, w, v, err)
 }
@@ -1281,8 +1290,8 @@ func rsPostStep(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 	if err != nil {
 		return st.fail(err)
 	}
-	if regBigOf != nil && next.IsBigInt() {
-		regBigOf(st.r, st.c, pc, old, old, next)
+	if st.r.jitOn() && next.IsBigInt() {
+		st.r.regBigOf(st.c, pc, old, old, next)
 	}
 	regs[w.A()] = old
 	regs[w.B()] = next
@@ -1366,7 +1375,13 @@ func rsAddProp(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 	if w.Op() == bytecode.RAddProp {
 		b = regs[w.B()]
 	}
-	return st.done(st.addPropSeen(pc, w, regs[w.A()], b))
+	var err error
+	if st.r.jitOn() {
+		err = st.addPropMark(pc, w, regs[w.A()], b)
+	} else {
+		err = st.r.regAddProp(st.cl, st.c, w, regs[w.A()], b)
+	}
+	return st.done(err)
 }
 
 func rhAddIndexK(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
@@ -1795,9 +1810,9 @@ func rsCompare(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 	if err != nil {
 		return st.fail(err)
 	}
-	if regBigOf != nil && b.IsBigInt() {
+	if st.r.jitOn() && b.IsBigInt() {
 		// A comparison's, of the operands.
-		regBigOf(st.r, st.c, pc, regs[w.A()], b, regs[w.A()])
+		st.r.regBigOf(st.c, pc, regs[w.A()], b, regs[w.A()])
 	}
 	if res != k.not {
 		return regJumpSlow(st, pc, w.SC())
@@ -2062,8 +2077,8 @@ func rsNewArray(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 func rsBin(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regBinary(bytecode.Op(w.X()), regs[w.B()], regs[w.C()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.C()], v)
 	}
 	return st.put(regs, w, v, err)
 }
@@ -2071,8 +2086,8 @@ func rsBin(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 func rsUnary(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regUnary(bytecode.Op(w.X()), regs[w.B()])
-	if regBigOf != nil && err == nil && v.IsBigInt() {
-		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	if st.r.jitOn() && err == nil && v.IsBigInt() {
+		st.r.regBigOf(st.c, pc, regs[w.B()], regs[w.B()], v)
 	}
 	return st.put(regs, w, v, err)
 }

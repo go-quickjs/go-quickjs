@@ -34,6 +34,18 @@ import (
 // compiler reads its feedback after its tier-up budget, rarely so few.
 var jitCountsEnough = uint32(math.Ceil(math.Log(0.05) / math.Log(1-ssa.MinInliningFrequency)))
 
+// newRegCallsCounted is newRegCalls with, where the runtime runs the JIT,
+// the counts of cc's calls and runs (jitRegCountsMake): what a first call
+// makes of its function's caches (regCallsMake) in one call, as a build
+// without the JIT makes them.
+//
+//go:noinline
+func (r *Runtime) newRegCallsCounted(cc *closureCode, n int) []regCallCache {
+	calls := r.newRegCalls(cc, n)
+	r.jitRegCountsMake(cc, n)
+	return calls
+}
+
 // jitRegCountsMake makes cc's counts for its register code's calls sites
 // sites calls, where the runtime runs the JIT: from its call sites' first
 // caches on, both its calls and its runs.
@@ -101,4 +113,27 @@ func jitCountedCallee(cl *closure) bool {
 		return true
 	}
 	return false
+}
+
+// nativeGrowUncount takes back the count of the call the frame stack had
+// no room for: the feedback dispatcher counted it where it dispatched it,
+// and counts it again as it dispatches it once the stack has grown, as
+// nativeCallMiss's call made again is (jitRegUncount), so that the site's
+// frequency, which the JIT inlines by, counts the call once; nothing where
+// the plain dispatcher, which counts nothing, runs. Only a build with the
+// JIT has it, and nativeDrive calls it before grow, the dispatcher's test
+// here: called from grow, it made grow too large to inline there, and
+// nativeDrive another function with the JIT built in than without it.
+//
+//go:noinline
+func nativeGrowUncount(ctx *nativeCtx) {
+	if len(ctx.recs) == 0 || ctx.disp != nativeFeedback {
+		return
+	}
+	switch w := bytecode.RInstr(ctx.w); w.Op() {
+	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
+		if s := ctx.top; jitBuilt && s != nil && s.cl != nil {
+			s.cl.closureCode.jitRegUncount(int(w.C()))
+		}
+	}
 }

@@ -25,7 +25,7 @@
 # the searches for a unit) at bef551a1's layout; internal/bytecode's growth
 # had moved it 3,520 bytes and made the V8 suite's RegExp 3.5% slower.
 # H is the assembly pad before the native handlers' block (nativeEnter,
-# nativeCallH, the feedback handlers, regNativeHandlers), which package
+# nativeCallH, regNativeHandlers, the feedback handlers after it), which package
 # vm's assembly puts after every closure of its named functions: it
 # anchors regNativeHandlers at fba9570a's layout: the closures one round
 # added moved it 672 bytes (608 in one of its branches, which made
@@ -142,6 +142,22 @@
 # it is at 0x010 without the engine -- 16 bytes off, the nearest place
 # that keeps gcController at its target. jit+wasm has both of its jit
 # configuration's.
+#
+# The jit and jit+wasm configurations have plain's targets for every code
+# anchor plain has, and jit plain's data targets, so that a build with the
+# JIT runs the interpreter, with the JIT off, on the op cache's sets a
+# build without it does (docs/jit-design.md, "The JIT built in and off:
+# parity held by test"; layoutpad's TestJITConfigsAtPlainTargets). With
+# targets of their own -- regNativeHandlers at 0x060 against plain's 0xa40
+# on Windows -- string appends and BigInts were 7 to 16% and generators 4
+# to 9% slower with the JIT built in and off than without it, at every
+# placement. linux/amd64 jit+wasm keeps its own data targets, which plain's
+# cannot be reached from there (DW 0x010 or wasm's 0x020 with DG at its
+# target). KO, before keyorder.go, the first file after the JIT's, holds
+# what follows them at the offsets a build without them has it at, and CC,
+# before memory.go, a string's concatenation (concat), past the memory
+# meter's walk of the frames, whose frameAt is longer with the JIT built in:
+# both recorded where their pads, at their least, left them.
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -155,84 +171,98 @@ anchor JO 0x007c0 @0x1403237c0 github.com/go-quickjs/go-quickjs/internal/vm.(*js
 anchor C  0x00800 @0x14034b800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 @0x140356a80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00420 @0x14035b420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00300 @0x140413300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00ae0 @0x140417ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor N  0x00ce0 @0x140386ce0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor P  0x00580 @0x140396580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor Q  0x00d80 @0x1403add80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00c80 @0x1403aec80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00bc0 @0x1403b2bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x00060 @0x1403b7060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x003e0 @0x1403a63e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00000 @0x1403c8000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00e20 @0x140421e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00420 @0x1403e1420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x004e0 @0x1403f54e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00ae0 @0x140436ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor IN 0x00ac0 @0x14035fac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00300 @0x140414300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00ae0 @0x140418ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor KO 0x00ac0 @0x140378ac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00600 @0x14037c600 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00ce0 @0x140387ce0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00400 @0x14038b400 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x003e0 @0x14038c3e0 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor P  0x00580 @0x140397580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor Q  0x00d80 @0x1403aed80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00c80 @0x1403afc80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00d00 @0x1403b0d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00300 @0x1403b2300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00bc0 @0x1403b3bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x00060 @0x1403b8060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x003e0 @0x1403a73e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 @0x1403c9000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00e20 @0x140422e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00420 @0x1403e2420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x004e0 @0x1403f64e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00ae0 @0x140437ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x00f20 @0x140250f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
-anchor H  0x00a40 @0x1404aba40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00c80 @0x1404d2c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor H  0x00a40 @0x1404aca40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00c80 @0x1404d3c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor BM 0x006e0 @0x1403286e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
 anchor TA 0x00b00 @0x140342b00 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
 anchor CB 0x00fc0 @0x140348fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00720 @0x1403bf720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x009e0 @0x14040c9e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x000c0 @0x1404270c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00320 @0x14042d320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x009c0 @0x1404c49c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x004c0 @0x1404d64c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x008e0 @0x1404ee8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor VT 0x00720 @0x1403c0720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x009e0 @0x14040d9e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x000c0 @0x1404280c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00320 @0x14042e320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x009c0 @0x1404c59c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x004c0 @0x1404d74c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x008e0 @0x1404ef8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
 
 config windows/amd64 jit
-anchor A  0x004c0 @0x1405dc4c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
-anchor I  0x00e00 @0x1405e0e00 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
-anchor E  0x000c0 @0x1405ee0c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
-anchor T  0x000e0 @0x14060f0e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
-anchor JE 0x00ee0 @0x140610ee0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
-anchor JP 0x00560 @0x140615560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
-anchor JO 0x00f40 @0x140616f40 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
-anchor C  0x00f40 @0x14063ef40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
-anchor D  0x001c0 @0x14064a1c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
-anchor F  0x00b20 @0x14064eb20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00940 @0x1407a0940 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x000e0 @0x1407a50e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor J  0x00fa0 @0x1406a7fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
-anchor N  0x005c0 @0x1407135c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor Q  0x000e0 @0x14073b0e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00fe0 @0x14073bfe0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00fe0 @0x14073ffe0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x004e0 @0x1407444e0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00020 @0x140733020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00000 @0x140756000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x005c0 @0x1407af5c0 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x009c0 @0x14076e9c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00aa0 @0x140782aa0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00460 @0x1407c4460 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
-anchor X  0x00680 @0x1402cb680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
+anchor A  0x00cc0 @0x1405dccc0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor I  0x004c0 @0x1405e04c0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
+anchor E  0x008c0 @0x1405ee8c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00960 @0x14060f960 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00760 @0x140610760 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
+anchor JP 0x00de0 @0x140615de0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x007c0 @0x1406177c0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
+anchor C  0x00800 @0x14063f800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
+anchor D  0x00a80 @0x14064aa80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor F  0x00420 @0x14064f420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
+anchor IN 0x00ac0 @0x140654ac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00300 @0x1407a6300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00ae0 @0x1407aaae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor J  0x00fa0 @0x1406a9fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor KO 0x00ac0 @0x140705ac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00600 @0x140709600 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00ce0 @0x140715ce0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00400 @0x14071a400 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x003e0 @0x14071c3e0 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor Q  0x00d80 @0x14073fd80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00c80 @0x140740c80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00d00 @0x140742d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00300 @0x140745300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00bc0 @0x140746bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x00060 @0x14074a060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x003e0 @0x1407373e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 @0x14075c000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00e20 @0x1407b4e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00420 @0x140775420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x004e0 @0x1407894e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00ae0 @0x1407c9ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor X  0x00f20 @0x1402cbf20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor XJ 0x00280 @0x14052a280 github.com/go-quickjs/go-quickjs/internal/jit.ExpandGoCall
-anchor H  0x00060 @0x14083e060 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00f40 @0x140868f40 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
-anchor BM 0x00e60 @0x14061be60 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
-anchor TA 0x00240 @0x140636240 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
-anchor CB 0x00740 @0x14063c740 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00fa0 @0x14074cfa0 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00040 @0x14079a040 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00860 @0x1407b4860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00ac0 @0x1407baac0 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00fe0 @0x140856fe0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x002c0 @0x14086d2c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x008e0 @0x1408848e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
-anchor JB 0x00560 @0x140677560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
-anchor JU 0x009a0 @0x1406799a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
-anchor JN 0x009e0 @0x1406c09e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
-anchor JS 0x00500 @0x1406ea500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
-anchor P  0x000a0 @0x1407230a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor HJ 0x00940 @0x14083b940 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
+anchor H  0x00a40 @0x140843a40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00c80 @0x140870c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor BM 0x006e0 @0x14061b6e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
+anchor TA 0x00b00 @0x140636b00 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
+anchor CB 0x00fc0 @0x14063cfc0 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
+anchor VT 0x00720 @0x140752720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x009e0 @0x14079f9e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x000c0 @0x1407b90c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00320 @0x1407bf320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x009c0 @0x14085d9c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x004c0 @0x1408744c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x008e0 @0x14088b8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor JB 0x00560 @0x140679560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
+anchor JU 0x009a0 @0x14067b9a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JN 0x009e0 @0x1406c19e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
+anchor JS 0x00500 @0x1406eb500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
+anchor P  0x00580 @0x140727580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor HJ 0x00940 @0x140840940 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
 anchor DH 0x000 runtime.mheap_
-anchor DW 0x000 runtime.writeBarrier
+anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
 
 config linux/amd64 plain
@@ -246,85 +276,99 @@ anchor JO 0x00a00 @0x71aa00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonP
 anchor C  0x00a40 @0x742a40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 @0x74dcc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00660 @0x752660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00540 @0x80a540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00d20 @0x80ed20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor N  0x00f20 @0x77df20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor P  0x007c0 @0x78d7c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor Q  0x00fc0 @0x7a4fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00ec0 @0x7a5ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00e00 @0x7a9e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x002a0 @0x7ae2a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00620 @0x79d620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00240 @0x7bf240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00060 @0x819060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00660 @0x7d8660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00720 @0x7ec720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00d20 @0x82dd20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor IN 0x00d00 @0x756d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00540 @0x80b540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00d20 @0x80fd20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor KO 0x00d00 @0x76fd00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00840 @0x773840 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00f20 @0x77ef20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00620 @0x782620 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x00600 @0x783600 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor P  0x007c0 @0x78e7c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor Q  0x00fc0 @0x7a5fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00ec0 @0x7a6ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00f40 @0x7a7f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00540 @0x7a9540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00e00 @0x7aae00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x002a0 @0x7af2a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00620 @0x79e620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00240 @0x7c0240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00060 @0x81a060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00660 @0x7d9660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00720 @0x7ed720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00d20 @0x82ed20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x009a0 @0x6489a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
-anchor H  0x00c80 @0x8a2c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00ec0 @0x8c9ec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor H  0x00c80 @0x8a3c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00ec0 @0x8caec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor BM 0x00920 @0x71f920 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
 anchor TA 0x00d40 @0x739d40 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
 anchor CB 0x00200 @0x740200 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00960 @0x7b6960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00c20 @0x803c20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00300 @0x81e300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00560 @0x824560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00c00 @0x8bbc00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x00700 @0x8cd700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x00b80 @0x8e5b80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor VT 0x00960 @0x7b7960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x00c20 @0x804c20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x00300 @0x81f300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00560 @0x825560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x00c00 @0x8bcc00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x00700 @0x8ce700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x00b80 @0x8e6b80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x000 runtime.gcController
 
 config linux/amd64 jit
-anchor A  0x003c0 @0x9a73c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
-anchor I  0x00cc0 @0x9abcc0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
-anchor E  0x00fc0 @0x9b8fc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
-anchor T  0x00fa0 @0x9d9fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
-anchor JE 0x00da0 @0x9dada0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
-anchor JP 0x00420 @0x9e0420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
-anchor JO 0x00e00 @0x9e1e00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
-anchor C  0x00e00 @0xa09e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
-anchor D  0x00080 @0xa15080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
-anchor F  0x009e0 @0xa199e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00800 @0xb6b800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00fa0 @0xb6ffa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor J  0x00e60 @0xa72e60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
-anchor N  0x00480 @0xade480 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor Q  0x00fa0 @0xb05fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00ea0 @0xb06ea0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00ea0 @0xb0aea0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x003a0 @0xb0f3a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00ec0 @0xafdec0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00ec0 @0xb20ec0 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00480 @0xb7a480 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00880 @0xb39880 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00960 @0xb4d960 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00320 @0xb8f320 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
-anchor X  0x009e0 @0x6c39e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
+anchor A  0x00f40 @0x9a7f40 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor I  0x00700 @0x9ab700 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
+anchor E  0x00b40 @0x9b8b40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00ba0 @0x9d9ba0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x009a0 @0x9da9a0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
+anchor JP 0x00020 @0x9e0020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00a00 @0x9e1a00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
+anchor C  0x00a40 @0xa0aa40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
+anchor D  0x00cc0 @0xa15cc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor F  0x00660 @0xa1a660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
+anchor IN 0x00d00 @0xa1fd00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00540 @0xb71540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00d20 @0xb75d20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor J  0x00e60 @0xa75e60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor KO 0x00d00 @0xad0d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00840 @0xad4840 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00f20 @0xae0f20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00620 @0xae5620 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x00600 @0xae7600 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor Q  0x00fc0 @0xb0afc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00ec0 @0xb0bec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00f40 @0xb0df40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00540 @0xb10540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00e00 @0xb11e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x002a0 @0xb152a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00620 @0xb02620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00240 @0xb27240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00060 @0xb80060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00660 @0xb40660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00720 @0xb54720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00d20 @0xb95d20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor X  0x009a0 @0x6c39a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor XJ 0x001c0 @0x8f51c0 github.com/go-quickjs/go-quickjs/internal/jit.ExpandGoCall
-anchor H  0x00f20 @0xc08f20 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00de0 @0xc33de0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
-anchor BM 0x00d20 @0x9e6d20 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
-anchor TA 0x00100 @0xa01100 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
-anchor CB 0x00600 @0xa07600 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00e60 @0xb17e60 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00f00 @0xb64f00 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00720 @0xb7f720 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00980 @0xb85980 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00ea0 @0xc21ea0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x00160 @0xc38160 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x007e0 @0xc4f7e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
-anchor JB 0x00420 @0xa42420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
-anchor JU 0x00860 @0xa44860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
-anchor JN 0x008a0 @0xa8b8a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
-anchor JS 0x003c0 @0xab53c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
-anchor P  0x00f40 @0xaedf40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor HJ 0x00800 @0xc06800 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
+anchor H  0x00c80 @0xc0ec80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00ec0 @0xc39ec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor BM 0x00920 @0x9e6920 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
+anchor TA 0x00d40 @0xa01d40 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
+anchor CB 0x00200 @0xa08200 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
+anchor VT 0x00960 @0xb1d960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x00c20 @0xb6ac20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x00300 @0xb85300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00560 @0xb8b560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x00c00 @0xc28c00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x00700 @0xc3e700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x00b80 @0xc55b80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor JB 0x00420 @0xa44420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
+anchor JU 0x00860 @0xa47860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JN 0x008a0 @0xa8d8a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
+anchor JS 0x003c0 @0xab73c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
+anchor P  0x007c0 @0xaf27c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor HJ 0x00800 @0xc0c800 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
 anchor DH 0x000 runtime.mheap_
-anchor DW 0x030 runtime.writeBarrier
-anchor DG 0x020 runtime.gcController
+anchor DW 0x010 runtime.writeBarrier
+anchor DG 0x000 runtime.gcController
 
 config windows/amd64 wasm
 anchor A  0x00cc0 @0x1402eacc0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
@@ -337,84 +381,98 @@ anchor JO 0x007c0 @0x1403247c0 github.com/go-quickjs/go-quickjs/internal/vm.(*js
 anchor C  0x00800 @0x14034c800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00a80 @0x140357a80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00420 @0x14035c420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00300 @0x140414300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00ae0 @0x140418ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor N  0x00ce0 @0x140387ce0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor P  0x00580 @0x140397580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor Q  0x00d80 @0x1403aed80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00c80 @0x1403afc80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00bc0 @0x1403b3bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x00060 @0x1403b8060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x003e0 @0x1403a73e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00000 @0x1403c9000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00e20 @0x140422e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00420 @0x1403e2420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x004e0 @0x1403f64e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00ae0 @0x140437ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor IN 0x00ac0 @0x140361ac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00300 @0x140419300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00ae0 @0x14041dae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor KO 0x00ac0 @0x14037aac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00600 @0x14037e600 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00ce0 @0x14038ace0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00400 @0x14038f400 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x003e0 @0x1403913e0 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor P  0x00580 @0x14039c580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor Q  0x00d80 @0x1403b3d80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00c80 @0x1403b4c80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00d00 @0x1403b6d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00300 @0x1403b8300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00bc0 @0x1403b9bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x00060 @0x1403bd060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x003e0 @0x1403ac3e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 @0x1403ce000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00e20 @0x140427e20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00420 @0x1403e7420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x004e0 @0x1403fb4e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00ae0 @0x14043cae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x00f20 @0x140251f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
-anchor H  0x00a40 @0x1404aca40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00c80 @0x1404d3c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor H  0x00a40 @0x1404b1a40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00c80 @0x1404d8c80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor BM 0x006e0 @0x1403296e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
 anchor TA 0x00b00 @0x140343b00 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
 anchor CB 0x00fc0 @0x140349fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00720 @0x1403c0720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x009e0 @0x14040d9e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x000c0 @0x1404280c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00320 @0x14042e320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x009c0 @0x1404c59c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x004c0 @0x1404d74c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x008e0 @0x1404ef8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor VT 0x00720 @0x1403c5720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x009e0 @0x1404129e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x000c0 @0x14042d0c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00320 @0x140433320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x009c0 @0x1404ca9c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x004c0 @0x1404dc4c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x008e0 @0x1404f48e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x020 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
 
 config windows/amd64 jit+wasm
-anchor A  0x004c0 @0x1405e64c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
-anchor I  0x00e00 @0x1405eae00 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
-anchor E  0x000c0 @0x1405f80c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
-anchor T  0x000e0 @0x1406190e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
-anchor JE 0x00ee0 @0x14061aee0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
-anchor JP 0x00560 @0x14061f560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
-anchor JO 0x00f40 @0x140620f40 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
-anchor C  0x00f40 @0x140648f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
-anchor D  0x001c0 @0x1406551c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
-anchor F  0x00b20 @0x140659b20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00940 @0x1407ab940 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x000e0 @0x1407b00e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor J  0x00fa0 @0x1406b2fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
-anchor N  0x005c0 @0x14071e5c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor Q  0x000e0 @0x1407460e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00fe0 @0x140746fe0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00fe0 @0x14074afe0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x004e0 @0x14074f4e0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00020 @0x14073e020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00000 @0x140761000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x005c0 @0x1407ba5c0 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x009c0 @0x1407799c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00aa0 @0x14078daa0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00460 @0x1407cf460 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
-anchor X  0x00680 @0x1402d3680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
+anchor A  0x00cc0 @0x1405e6cc0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor I  0x004c0 @0x1405ea4c0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
+anchor E  0x008c0 @0x1405f88c0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00960 @0x140619960 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x00760 @0x14061a760 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
+anchor JP 0x00de0 @0x14061fde0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x007c0 @0x1406217c0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
+anchor C  0x00800 @0x140649800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
+anchor D  0x00a80 @0x140655a80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor F  0x00420 @0x14065a420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
+anchor IN 0x00ac0 @0x14065fac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00300 @0x1407b1300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00ae0 @0x1407b5ae0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor J  0x00fa0 @0x1406b4fa0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor KO 0x00ac0 @0x140710ac0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00600 @0x140714600 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00ce0 @0x140720ce0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00400 @0x140725400 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x003e0 @0x1407273e0 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor Q  0x00d80 @0x14074ad80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00c80 @0x14074bc80 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00d00 @0x14074dd00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00300 @0x140750300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00bc0 @0x140751bc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x00060 @0x140755060 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x003e0 @0x1407423e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00000 @0x140767000 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00e20 @0x1407bfe20 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00420 @0x140780420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x004e0 @0x1407944e0 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00ae0 @0x1407d4ae0 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor X  0x00f20 @0x1402d3f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor XJ 0x00280 @0x140533280 github.com/go-quickjs/go-quickjs/internal/jit.ExpandGoCall
-anchor H  0x00060 @0x140849060 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00f40 @0x140873f40 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
-anchor BM 0x00e60 @0x140625e60 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
-anchor TA 0x00240 @0x140640240 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
-anchor CB 0x00740 @0x140646740 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00fa0 @0x140757fa0 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00040 @0x1407a5040 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00860 @0x1407bf860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00ac0 @0x1407c5ac0 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00fe0 @0x140861fe0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x002c0 @0x1408782c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x008e0 @0x14088e8e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
-anchor JB 0x00560 @0x140682560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
-anchor JU 0x009a0 @0x1406849a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
-anchor JN 0x009e0 @0x1406cb9e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
-anchor JS 0x00500 @0x1406f5500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
-anchor P  0x000a0 @0x14072e0a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor HJ 0x00940 @0x140846940 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
+anchor H  0x00a40 @0x14084ea40 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00c80 @0x14087bc80 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor BM 0x006e0 @0x1406256e0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
+anchor TA 0x00b00 @0x140640b00 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
+anchor CB 0x00fc0 @0x140646fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
+anchor VT 0x00720 @0x14075d720 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x009e0 @0x1407aa9e0 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x000c0 @0x1407c40c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00320 @0x1407ca320 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x009c0 @0x1408689c0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x004c0 @0x14087f4c0 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x008e0 @0x1408968e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor JB 0x00560 @0x140684560 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
+anchor JU 0x009a0 @0x1406869a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JN 0x009e0 @0x1406cc9e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
+anchor JS 0x00500 @0x1406f6500 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
+anchor P  0x00580 @0x140732580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor HJ 0x00940 @0x14084b940 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
 anchor DH 0x000 runtime.mheap_
-anchor DW 0x000 runtime.writeBarrier
+anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
 
 config linux/amd64 wasm
@@ -428,82 +486,96 @@ anchor JO 0x00a00 @0x71ba00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonP
 anchor C  0x00a40 @0x743a40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
 anchor D  0x00cc0 @0x74ecc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
 anchor F  0x00660 @0x753660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00540 @0x80b540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00d20 @0x80fd20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor N  0x00f20 @0x77ef20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor P  0x007c0 @0x78e7c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor Q  0x00fc0 @0x7a5fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00ec0 @0x7a6ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00e00 @0x7aae00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x002a0 @0x7af2a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00620 @0x79e620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00240 @0x7c0240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00060 @0x81a060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00660 @0x7d9660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00720 @0x7ed720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00d20 @0x82ed20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor IN 0x00d00 @0x758d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00540 @0x810540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00d20 @0x814d20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor KO 0x00d00 @0x771d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00840 @0x775840 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00f20 @0x781f20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00620 @0x786620 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x00600 @0x788600 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor P  0x007c0 @0x7937c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor Q  0x00fc0 @0x7aafc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00ec0 @0x7abec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00f40 @0x7adf40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00540 @0x7af540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00e00 @0x7b0e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x002a0 @0x7b42a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00620 @0x7a3620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00240 @0x7c5240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00060 @0x81f060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00660 @0x7de660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00720 @0x7f2720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00d20 @0x833d20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
 anchor X  0x009a0 @0x6499a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
-anchor H  0x00c80 @0x8a3c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00ec0 @0x8caec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor H  0x00c80 @0x8a8c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00ec0 @0x8cfec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
 anchor BM 0x00920 @0x720920 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
 anchor TA 0x00d40 @0x73ad40 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
 anchor CB 0x00200 @0x741200 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00960 @0x7b7960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00c20 @0x804c20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00300 @0x81f300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00560 @0x825560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00c00 @0x8bcc00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x00700 @0x8ce700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x00b80 @0x8e6b80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor VT 0x00960 @0x7bc960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x00c20 @0x809c20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x00300 @0x824300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00560 @0x82a560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x00c00 @0x8c1c00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x00700 @0x8d3700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x00b80 @0x8ebb80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x020 runtime.writeBarrier
 anchor DG 0x000 runtime.gcController
 
 config linux/amd64 jit+wasm
-anchor A  0x003c0 @0x9b03c0 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
-anchor I  0x00cc0 @0x9b4cc0 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
-anchor E  0x00fc0 @0x9c1fc0 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
-anchor T  0x00fa0 @0x9e2fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
-anchor JE 0x00da0 @0x9e4da0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
-anchor JP 0x00420 @0x9e9420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
-anchor JO 0x00e00 @0x9eae00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
-anchor C  0x00e00 @0xa12e00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
-anchor D  0x00080 @0xa1e080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
-anchor F  0x009e0 @0xa229e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
-anchor L  0x00800 @0xb74800 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
-anchor B  0x00fa0 @0xb78fa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
-anchor J  0x00e60 @0xa7ce60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
-anchor N  0x00480 @0xae8480 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
-anchor Q  0x00fa0 @0xb0ffa0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
-anchor W  0x00ea0 @0xb10ea0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
-anchor U  0x00ea0 @0xb14ea0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
-anchor V  0x003a0 @0xb193a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
-anchor Y  0x00ec0 @0xb07ec0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
-anchor K  0x00ec0 @0xb29ec0 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
-anchor O  0x00480 @0xb83480 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
-anchor R  0x00880 @0xb42880 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
-anchor S  0x00960 @0xb56960 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
-anchor Z  0x00320 @0xb98320 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
-anchor X  0x009e0 @0x6cb9e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
+anchor A  0x00f40 @0x9b0f40 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor I  0x00700 @0x9b4700 github.com/go-quickjs/go-quickjs/internal/vm.bigParts
+anchor E  0x00b40 @0x9c1b40 github.com/go-quickjs/go-quickjs/internal/vm.firstElem
+anchor T  0x00ba0 @0x9e2ba0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encode
+anchor JE 0x009a0 @0x9e49a0 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonEncoder).encodeElements
+anchor JP 0x00020 @0x9e9020 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).parseJSON
+anchor JO 0x00a00 @0x9eaa00 github.com/go-quickjs/go-quickjs/internal/vm.(*jsonParser).parseObject
+anchor C  0x00a40 @0xa13a40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).asciiCaseMemo
+anchor D  0x00cc0 @0xa1ecc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor F  0x00660 @0xa23660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).iterResult
+anchor IN 0x00d00 @0xa28d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).instanceOfKnown
+anchor L  0x00540 @0xb7a540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).add
+anchor B  0x00d20 @0xb7ed20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor J  0x00e60 @0xa7de60 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor KO 0x00d00 @0xad9d00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).reserveFunctionProtoKeys
+anchor CC 0x00840 @0xadd840 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).concat
+anchor N  0x00f20 @0xae9f20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).nativeRun
+anchor BU 0x00620 @0xaee620 github.com/go-quickjs/go-quickjs/internal/vm.nativeBuiltin
+anchor CN 0x00600 @0xaf0600 github.com/go-quickjs/go-quickjs/internal/vm.nativeNew
+anchor Q  0x00fc0 @0xb13fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runReg
+anchor W  0x00ec0 @0xb14ec0 github.com/go-quickjs/go-quickjs/internal/vm.rhCallW
+anchor WE 0x00f40 @0xb16f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regEnterW
+anchor LR 0x00540 @0xb19540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regLeafRun
+anchor U  0x00e00 @0xb1ae00 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regBinImm
+anchor V  0x002a0 @0xb1e2a0 github.com/go-quickjs/go-quickjs/internal/vm.newRegSwitchTable
+anchor Y  0x00620 @0xb0b620 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regGenOf
+anchor K  0x00240 @0xb30240 github.com/go-quickjs/go-quickjs/internal/vm.regColdInit
+anchor O  0x00060 @0xb89060 github.com/go-quickjs/go-quickjs/internal/vm.newErrorObject
+anchor R  0x00660 @0xb49660 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regExpReplaceIn
+anchor S  0x00720 @0xb5d720 github.com/go-quickjs/go-quickjs/internal/vm.(*partsBuilder).WriteString
+anchor Z  0x00d20 @0xb9ed20 github.com/go-quickjs/go-quickjs/internal/vm.init.func1
+anchor X  0x009a0 @0x6cb9a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor XJ 0x001c0 @0x8fe1c0 github.com/go-quickjs/go-quickjs/internal/jit.ExpandGoCall
-anchor H  0x00f20 @0xc11f20 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
-anchor CZ 0x00de0 @0xc3cde0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
-anchor BM 0x00d20 @0x9efd20 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
-anchor TA 0x00100 @0xa0a100 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
-anchor CB 0x00600 @0xa10600 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
-anchor VT 0x00e60 @0xb20e60 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
-anchor VA 0x00f00 @0xb6df00 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
-anchor PR 0x00720 @0xb88720 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
-anchor SH 0x00980 @0xb8e980 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
-anchor HT 0x00ea0 @0xc2aea0 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
-anchor GK 0x00160 @0xc41160 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
-anchor MVT 0x007e0 @0xc577e0 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
-anchor JB 0x00420 @0xa4b420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
-anchor JU 0x00860 @0xa4e860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
-anchor JN 0x008a0 @0xa958a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
-anchor JS 0x003c0 @0xabf3c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
-anchor P  0x00f40 @0xaf7f40 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
-anchor HJ 0x00800 @0xc0f800 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
+anchor H  0x00c80 @0xc17c80 github.com/go-quickjs/go-quickjs/internal/vm.regNativeHandlers.abi0
+anchor CZ 0x00ec0 @0xc42ec0 github.com/go-quickjs/go-quickjs/internal/vm.appendGrown[go.shape.struct {}]
+anchor BM 0x00920 @0x9ef920 github.com/go-quickjs/go-quickjs/internal/vm.(*jsMap).find
+anchor TA 0x00d40 @0xa0ad40 github.com/go-quickjs/go-quickjs/internal/vm.(*typedArrayData).getElem
+anchor CB 0x00200 @0xa11200 github.com/go-quickjs/go-quickjs/internal/vm.(*regCallback).call
+anchor VT 0x00960 @0xb26960 github.com/go-quickjs/go-quickjs/internal/vm.rsAdd
+anchor VA 0x00c20 @0xb73c20 github.com/go-quickjs/go-quickjs/internal/vm.Value.IsNumber
+anchor PR 0x00300 @0xb8e300 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).getProp
+anchor SH 0x00560 @0xb94560 github.com/go-quickjs/go-quickjs/internal/vm.rootFor
+anchor HT 0x00c00 @0xc31c00 github.com/go-quickjs/go-quickjs/internal/vm.regNativeTypedHandlers
+anchor GK 0x00700 @0xc47700 github.com/go-quickjs/go-quickjs/internal/vm.strAppend[go.shape.struct {}]
+anchor MVT 0x00b80 @0xc5eb80 github.com/go-quickjs/go-quickjs/internal/vm.(*regexpLeaf[go.shape.struct {}]).match
+anchor JB 0x00420 @0xa4d420 github.com/go-quickjs/go-quickjs/internal/vm.jitBigLeafMake
+anchor JU 0x00860 @0xa4f860 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitAppend
+anchor JN 0x008a0 @0xa968a0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).jitRegWhole
+anchor JS 0x003c0 @0xac03c0 github.com/go-quickjs/go-quickjs/internal/vm.jitHostCall
+anchor P  0x007c0 @0xafb7c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).regCall
+anchor HJ 0x00800 @0xc15800 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafFast.abi0
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x030 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController

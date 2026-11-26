@@ -114,16 +114,6 @@ func (r *Runtime) framePC(f *frame, i int) uint32 {
 	return pc
 }
 
-// runRegFor runs frame f's code c from start by the table of its kind:
-// typed code's or the ordinary code's -- for what goes on in the
-// interpreter after native code, which runs both (asmTwin).
-func (r *Runtime) runRegFor(f *frame, c *regCode, start int) (Value, error) {
-	if c.typed {
-		return r.runRegTyped(f, c, start)
-	}
-	return r.runReg(f, c, start)
-}
-
 // regEnterTyped is regEnter's state for frame f running typed code c,
 // from the typed states' list.
 func (r *Runtime) regEnterTyped(f *frame, c *regCode) *regState {

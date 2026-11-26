@@ -794,31 +794,48 @@ compile leaves the function in baseline code.
 
 ### The JIT built in and off: parity held by test
 
-1. **The slow paths' hooks tested before the call.** `addSeen`'s
-   `addMark` and `stringSeen` stop being noinline frames testing
-   `jitOn()` inside; `regBigOf` stops being a closure called on every
-   BigInt result; `regSetProp` loses its `jitNotePrimWrite` test. Each
-   becomes an inline test of a per-runtime field the JIT sets, the call
-   behind it, and a note that is the JIT's alone moves into the feedback
-   dispatcher's handler, where the operand lattice goes.
-2. **`closureCode`'s hot fields first.** `jitCodeFields`' 96 bytes move
-   after the fields the call path reads, so that `rhCallW`,
-   `regCallSlow`, `regRunFD` and `nativeLoop` read them at plain's offsets
-   (0x70 became 0xd0); `TestJITFieldLayout` gains the template's offsets.
-3. **Plain's layout-lock targets for the JIT's configurations,** as the
-   WebAssembly configurations have, with positions after the JIT's Go
-   holding what follows at plain's offsets (performance-plan.md, "The
-   JIT's Go side past JN").
-4. **The gate.** `hotdiff` between an untagged and a tagged build compares
-   the hot functions' instructions and their offsets modulo 4 KB, and the
-   slow functions that carry hooks (`regSetProp`, `regGenRun`, the add and
-   append slow paths, the BigInt operators) within a few instructions;
-   `placements -micro`, plain against tagged with the JIT off, runs at
-   each stage's end and each release, no micro-benchmark 3% or more
-   slower at both placements.
+Stage 0's (d) built these; what each stage adds keeps them.
 
-The 4 to 16% families have exactly these causes; the native handlers are
-not among them, the same 22,151 instructions in both builds.
+1. **The slow paths' hooks tested before the call.** Each is an inline
+   test of the runtime's `jitOn` and a call behind it, never the JIT's
+   body inlined: the additions' marks (`addMark`, `stringMark`,
+   `addImmMark`, `addPropMark`, which no longer test the JIT themselves),
+   the BigInt operators' `regBigOf` (a method, no longer a closure called
+   on every BigInt result), `regSetProp`'s `jitNotePrimWrite`,
+   `regColdWrap`'s `regColdWrapJIT`, a back edge's `regBackEdgeJIT`, a
+   first call's `newRegCallsCounted`, a resumption's count, the native
+   frame stack's `nativeGrowUncount`. A note that is the JIT's alone moves
+   into the feedback dispatcher's handlers with the operand lattice
+   (stage 1).
+2. **What only the JIT calls lives in its files,** or where a range ends,
+   so that it moves none of the interpreter's code: `bigRelease`, which
+   had been 1,376 bytes among the BigInt operators, the marking forms,
+   `regGenCaught`, `runRegFor`, `makeClosure`, `typedWrite`, the host
+   hooks' init (`jit_hosthooks.go`), and the feedback dispatcher's
+   handlers, after plain's (`native_handlers_feedback_<arch>.s`), not
+   between them and the stubs every exit runs. `frameAt` and `topFrame`
+   inline with the JIT built in as without it.
+3. **`closureCode`'s hot fields first.** `jitCodeFields` is second to
+   last, so that `rhCallW`, `regCallSlow`, `regRunFD` and `nativeLoop`
+   read the call path's fields at plain's offsets (`reg` had been at 0xd0,
+   not 0x70); `TestJITFieldLayout` holds it.
+4. **Plain's layout-lock targets for the JIT's configurations,** as the
+   WebAssembly configurations have (`TestJITConfigsAtPlainTargets`), with
+   positions where the JIT's code before them had moved the interpreter's:
+   KO after the JIT's files, IN after `New`, CC at `concat`, BU and CN in
+   the native dispatcher's Go side, WE and LR in the call path.
+5. **The gate.** `hotdiff -parity` between an untagged and a tagged build
+   compares the hot set's instructions (but for the JIT's entry from a
+   call), its and the parity rows' Go functions' offsets modulo 4 KB, and
+   the slow functions that carry hooks within 96 instructions;
+   `placements -micro`, plain against tagged with the JIT off, runs at
+   each stage's end and each release, no micro-benchmark 3% or more slower
+   at both placements.
+
+What the lock holds no position for still differs: the closures after the
+JIT's files' closures, the groups of generics the JIT's code instantiates
+first, and the Go table's handlers after `rsAdd`, each hook in them a
+test and a call longer.
 
 ### Inlining, loops and redundancy
 
@@ -1015,53 +1032,71 @@ is under [The projection](#the-projection).
   compiles keep.
 - **Takes up:** performance-plan.md's "The default room for code" (f)
   and "The JIT's Go side past JN" (d).
-- **Status:** started. (a) is fixed by `0905382a`, Go leaving a native
-  level's receiver as native code left it, with its regression test, its
-  pads in `379a60ad`. (b) is fixed by the install of a compile in the
-  background leaving its function marked to be compiled again for what
-  the code it replaces learned meanwhile (`jitRegJob`'s `asks`): the
-  snapshot was right -- a build from it the same as one on the spot at
-  each of more than 2,100 compiles in the background of ssr, Are We Fast
-  Yet and Octane -- but React's createElement met "div" at
-  `a.defaultProps` while it was compiled, and the install cleared the
-  mark. ssr's Render at `-n 10` in the background, five runs: 41,238 to
-  43,770 exits to Go, 662 to 2,700 finished in the interpreter, at most 88
-  `get_prop` host exits (two runs of three had made 437,000 to 450,000,
-  357,000 and 348,000; the foreground makes 41,139, 686 and none). Under
-  `QJS_JIT_STRESS` `background=K` at `-n 5`, K = 1, 32 and 512 had made
-  172,431 `get_prop` host exits; now none at K from 1 to 512. On a Ryzen
-  5 3600 Render in the background runs 1,670 to 1,738 ms, five runs, where
-  the storm had made it 2,213 to 2,246 in four of five; on the spot 1,704
-  to 1,742. (c) is fixed in the report and in what it reads: a benchmark
-  in a runtime of its own, as ssr's and fresh's are, is counted from
-  nothing, not from the last one's runtime; functions are told apart by
-  their column, a line's "(anonymous)" ones each measured against
-  another's counts before; and a function's native callers' calls are
-  counted over its compiles, its link's count begun afresh at each
-  (`jitEntry`'s `calledIn`). No count is negative over Octane, the V8
-  suite, Are We Fast Yet, ssr and fresh at `-n 3`, on the spot and in the
-  background (5 in Octane and 18 in fresh before). (f): the default is
-  64 MiB, `WithJITMemoryLimit`'s documentation and the docs that cited
-  8 MiB say so with today's figures, and the cache looks to flush as the
-  runtime returns to its host; its memory table and the RSS of idle
-  runtimes are measured with (e). (g): `jitBudgetForFeedback`'s comment
-  says what the constant does and when a loop's back-edge budget starts,
-  940 kept. (e): what kept the heap was the runtime's asm.js heaps
-  (zlib's 128 MB buffer), the idle compile workspaces (32 MB) and the
-  code cache, whose code and feedback held the objects their code was
-  compiled against; asm.js heaps are held weakly, idle workspaces go as
-  the runtime returns to its host, and code is parked then, its objects
-  held weakly and checked alive at its next use (internal/jit/README.md,
-  "Parking"). The live heap after Octane fixed -n 1 with the JIT is 156
-  to 161 MB against the interpreter's 107 (Ryzen 9 9950X3D2), from 357
-  to 390; projected, the interpreter's plus 64 MiB. At the default
-  budget (Ryzen 5 3600, -n 3, one runtime): Octane 10,618 to 8,681 ms,
-  live 422 to 152 MB, peak RSS 839 to 618 MB; Typescript 5,438 to 4,183
-  ms, live 288 to 148 MB, its collector's CPU 1,469 to 1,138 ms; 30 idle
-  runtimes that ran the V8 suite 697 MB live and a 922 MB working set,
-  from 792 and 999. Active code's speed, -k 2 with the JIT against
-  895edca5: micro-benchmarks' geometric mean 1.001, Octane +0.3%, ssr
-  +1.0%, fresh +0.4%. (d) not done.
+- **Status:** done but (d)'s residue, which is open. (a) is fixed by
+  `0905382a`, Go leaving a native level's receiver as native code left
+  it, with its regression test, its pads in `379a60ad`. (b) is fixed by
+  the install of a compile in the background leaving its function marked
+  to be compiled again for what the code it replaces learned meanwhile
+  (`jitRegJob`'s `asks`): the snapshot was right -- a build from it the
+  same as one on the spot at each of more than 2,100 compiles in the
+  background of ssr, Are We Fast Yet and Octane -- but React's
+  createElement met "div" at `a.defaultProps` while it was compiled, and
+  the install cleared the mark. ssr's Render at `-n 10` in the
+  background, five runs: 41,238 to 43,770 exits to Go, 662 to 2,700
+  finished in the interpreter, at most 88 `get_prop` host exits (two runs
+  of three had made 437,000 to 450,000, 357,000 and 348,000; the
+  foreground makes 41,139, 686 and none). Under `QJS_JIT_STRESS`
+  `background=K` at `-n 5`, K = 1, 32 and 512 had made 172,431 `get_prop`
+  host exits; now none at K from 1 to 512. On a Ryzen 5 3600 Render in
+  the background runs 1,670 to 1,738 ms, five runs, where the storm had
+  made it 2,213 to 2,246 in four of five; on the spot 1,704 to 1,742.
+  (c) is fixed in the report and in what it reads: a benchmark in a
+  runtime of its own, as ssr's and fresh's are, is counted from nothing,
+  not from the last one's runtime; functions are told apart by their
+  column, a line's "(anonymous)" ones each measured against another's
+  counts before; and a function's native callers' calls are counted over
+  its compiles, its link's count begun afresh at each (`jitEntry`'s
+  `calledIn`). No count is negative over Octane, the V8 suite, Are We
+  Fast Yet, ssr and fresh at `-n 3`, on the spot and in the background
+  (5 in Octane and 18 in fresh before). (d) is built (the parity items,
+  "The JIT built in and off: parity held by test"), its gate `hotdiff
+  -parity` passing; plain against tagged and off, `placements -micro -k
+  2` on the Ryzen 5 3600: the geometric mean 1.003 (1.007 before), 18
+  tests 3% or more slower at both placements (35 before). String appends
+  are all within 2% (7 to 16% before); BigInts within 2.2% but
+  `bigint64_divmod` +4.6% and `bigint1024_arith` +7.1% (`xorshift`
+  +1.9%, `fnv1a` +2.2%, from +16% and +10%); `forward_call2` and `6` -4
+  to -5% (+11%). The plain build against the base: 0.999, `asm_table`
+  +7.8% and `object_create_fresh` +3.5% at both placements. (e): what
+  kept the heap was the runtime's asm.js heaps (zlib's 128 MB buffer),
+  the idle compile workspaces (32 MB) and the code cache, whose code and
+  feedback held the objects their code was compiled against; asm.js
+  heaps are held weakly, idle workspaces go as the runtime returns to
+  its host, and code is parked then, its objects held weakly and checked
+  alive at its next use (internal/jit/README.md, "Parking"). The live
+  heap after Octane fixed -n 1 with the JIT is 156 to 161 MB against the
+  interpreter's 107 (Ryzen 9 9950X3D2), from 357 to 390; projected, the
+  interpreter's plus 64 MiB. At the default budget (Ryzen 5 3600, -n 3,
+  one runtime): Octane 10,618 to 8,681 ms, live 422 to 152 MB, peak RSS
+  839 to 618 MB; Typescript 5,438 to 4,183 ms, live 288 to 148 MB, its
+  collector's CPU 1,469 to 1,138 ms; 30 idle runtimes that ran the V8
+  suite 697 MB live and a 922 MB working set, from 792 and 999. Active
+  code's speed, -k 2 with the JIT against 895edca5: micro-benchmarks'
+  geometric mean 1.001, Octane +0.3%, ssr +1.0%, fresh +0.4%. (f): the
+  default is 64 MiB, `WithJITMemoryLimit`'s documentation and the docs
+  that cited 8 MiB say so with today's figures, and the cache looks to
+  flush as the runtime returns to its host; its memory table and the RSS
+  of idle runtimes are measured with (e). (g): `jitBudgetForFeedback`'s
+  comment says what the constant does and when a loop's back-edge budget
+  starts, 940 kept.
+- **Open:** (d)'s residue, tagged and off against plain at both
+  placements: generators +5 to +10% (`generator_objects` +10.4%,
+  `generator_create` +6.1%, `generator_for_of` +5.4%), `dataview_read`
+  +16.6%, `array_reduce_upvalue` +14.7% and `has_own_method_hit` +9.6%,
+  whose Go code is at plain's offsets. What moves them is what the layout
+  lock holds no position for: the closures after the JIT's files'
+  closures, the groups of generics the JIT's code instantiates first, and
+  the read-only data.
 
 ### Stage 1: tiering and background compiles
 

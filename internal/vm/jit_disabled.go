@@ -41,6 +41,37 @@ func (*Runtime) recordJITSubstrings()             {}
 
 func (*Runtime) jitOn() bool { return false }
 
+// regBigOf marks nothing: no JIT reads the marks. The slow paths call it
+// only where jitOn, which is false here, as they call the rest of these
+// JIT's hooks: none is ever called.
+func (*Runtime) regBigOf(*regCode, int, Value, Value, Value) {}
+
+func (*Runtime) regColdWrapJIT(*closure, *regCode, *regKept, bytecode.RInstr, *Object, *funcData, bytecode.Op, Value, Value) {
+}
+
+func (st *regState) addMark(pc int, a, b Value, big bool) (Value, error) { return st.r.add(a, b) }
+func (*regState) stringMark(int, Value)                                  {}
+func (st *regState) addImmMark(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
+	return st.r.regBinImm(op, a, imm)
+}
+func (st *regState) addPropMark(pc int, w bytecode.RInstr, obj, b Value) error {
+	return st.r.regAddProp(st.cl, st.c, w, obj, b)
+}
+
+// newRegCallsCounted is newRegCalls: there are no counts to make.
+func (r *Runtime) newRegCallsCounted(cc *closureCode, n int) []regCallCache {
+	return r.newRegCalls(cc, n)
+}
+
+// regGenCaught catches nothing: there is no native code to resume.
+func (*Runtime) regGenCaught(*frame, *regCode) int { return 0 }
+
+// regBackEdgeJIT is the jump: no JIT samples it.
+func (*Runtime) regBackEdgeJIT(_ *regState, target int) int { return target }
+
+// nativeGrowUncount takes nothing back: no feedback dispatcher counts.
+func nativeGrowUncount(*nativeCtx) {}
+
 // Typed code has no native code (jit_typed.go).
 func (*Runtime) jitTypedLinked(*closure, *regCode) {}
 
@@ -75,8 +106,12 @@ func (*Runtime) JITBackground() bool { return false }
 func (*Runtime) initJIT(bool, int64) {}
 func (*Runtime) releaseJIT()         {}
 
-// jitFramesDue makes no frames: no native code puts one off.
-func (r *Runtime) jitFramesDue(i int) {}
+// frameAt is the frame at a depth, counting from the bottom: no native
+// code puts one off (jit_lazyframes.go's has them made first).
+func (r *Runtime) frameAt(i int) *frame {
+	u := uint(i)
+	return &r.frames[u/frameBlockSize][u%frameBlockSize]
+}
 
 // regTickRet counts nothing: there is no budget.
 func regTickRet(*closureCode) {}

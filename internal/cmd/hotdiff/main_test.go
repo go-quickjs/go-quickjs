@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -15,8 +16,12 @@ func TestNormalize(t *testing.T) {
 		"  f.go:6\t0x100c\t\tc3\t\tRET\t\n" +
 		"  f.go:6\t0x100d\t\tcc\t\tINT $0x3\t\n")
 	want := function{"MOVQ 0x18(SP), CX", "JNE @3", "LEAQ DATA(SB), AX", "RET"}
-	if got := parse(out)["example.com/internal/vm.(*Runtime).f"]; !reflect.DeepEqual(got, want) {
+	bin := parse(out)
+	if got := bin.funcs["example.com/internal/vm.(*Runtime).f"]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalized %q, want %q", got, want)
+	}
+	if a := bin.addr["example.com/internal/vm.(*Runtime).f"]; a != 0x1000 {
+		t.Fatalf("address %#x, want 0x1000", a)
 	}
 }
 
@@ -30,5 +35,39 @@ func TestFindABI0(t *testing.T) {
 	}
 	if got := find(funcs, "internal/vm.nativeExit"); got != nil {
 		t.Fatalf("absent function found as %q", got)
+	}
+}
+
+// -parity passes a hot function within its slack at the same offset, and
+// fails one placed elsewhere modulo 4 KB, or a hook's slow function past
+// its slack.
+func TestParityCheck(t *testing.T) {
+	fn := func(n int) function {
+		f := make(function, n)
+		for i := range f {
+			f[i] = "NOP"
+		}
+		return f
+	}
+	base := &binary{funcs: map[string]function{}, addr: map[string]uint64{}}
+	head := &binary{funcs: map[string]function{}, addr: map[string]uint64{}}
+	sym := func(name string) string { return "example.com/" + name }
+	for i, name := range append(append([]string(nil), hot...), paritySlow...) {
+		base.funcs[sym(name)], head.funcs[sym(name)] = fn(10), fn(10)
+		base.addr[sym(name)] = 0x401000 + uint64(i)*0x40
+		head.addr[sym(name)] = 0x801000 + uint64(i)*0x40
+	}
+	head.funcs[sym("internal/vm.rhCallW")] = fn(10 + parityHotSlack["internal/vm.rhCallW"])
+	if lines, failed := parityCheck(base, head, 96); failed {
+		t.Fatalf("failed within the slack:\n%s", strings.Join(lines, "\n"))
+	}
+	head.addr[sym("internal/vm.(*Runtime).runReg")] += 0x20
+	if _, failed := parityCheck(base, head, 96); !failed {
+		t.Fatal("passed runReg 32 bytes on")
+	}
+	head.addr[sym("internal/vm.(*Runtime).runReg")] -= 0x20
+	base.funcs[sym("internal/vm.rsSub")], head.funcs[sym("internal/vm.rsSub")] = fn(100), fn(197)
+	if _, failed := parityCheck(base, head, 96); !failed {
+		t.Fatal("passed a slow function 97 instructions longer")
 	}
 }

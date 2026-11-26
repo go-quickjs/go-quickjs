@@ -470,9 +470,12 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 //
 //go:noinline
 func (r *Runtime) regCallsMake(cl *closure, c *regCode) {
-	cl.regCalls = r.newRegCalls(cl.closureCode, c.rc.CallSites)
 	if jitBuilt {
-		r.jitRegCountsMake(cl.closureCode, c.rc.CallSites)
+		// With the counts of the feedback dispatcher's calls, where the
+		// JIT runs (newRegCallsCounted): one call, as without the JIT.
+		cl.regCalls = r.newRegCallsCounted(cl.closureCode, c.rc.CallSites)
+	} else {
+		cl.regCalls = r.newRegCalls(cl.closureCode, c.rc.CallSites)
 	}
 }
 

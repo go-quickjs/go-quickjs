@@ -305,10 +305,10 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 	if r.frameDepth >= r.maxFrames {
 		return Undefined, nil, r.throwRangeError("maximum call stack size exceeded")
 	}
-	if jitBuilt && !r.jitRegHas(g.cl) {
-		// A resumption Go makes of code that has none native: counted
-		// towards compiling it, one of no loop among them
-		// (jitRegResumed).
+	if r.jitOn() && !r.jitRegHas(g.cl) {
+		// A resumption Go makes of code that has none native, where the
+		// JIT runs: counted towards compiling it, one of no loop among
+		// them (jitRegResumed).
 		r.jitRegResumed(g.cl, c)
 	}
 	n := int(c.numRegs)
@@ -401,29 +401,6 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 	r.frameDepth--
 	r.stackTop = base
 	return v, sig, err
-}
-
-// regGenCaught catches, for f's native code, a throw injected into f, a
-// suspended frame of register code c, at its suspension (f.savedSP, which
-// gen_entry throws at), where a handler of the frame's takes it: the value
-// thrown given to the handler's register, as regCatch gives it, and the
-// register pc the frame resumes at, the handler's, where its native code
-// has an entry (ir.Program's handlers) -- f.savedSP cleared. Where no
-// handler takes it, it returns 0, the throw gen_entry's. Left to gen_entry,
-// a rejected await in a try statement had the interpreter catch it and run
-// the rest of the frame, its later awaits gone on from in place: an async
-// function's loop awaiting a promise that may reject, natively in its
-// first run alone.
-func (r *Runtime) regGenCaught(f *frame, c *regCode) int {
-	at := -f.savedSP - 1
-	h := c.rc.HandlerAt(at)
-	if h == nil {
-		return 0
-	}
-	wb := f.base - int(c.locals)
-	r.stack[wb+int(h.Reg)] = r.stack[wb+int(regAt(c.code, at).A())]
-	f.savedSP = 0
-	return int(h.To)
 }
 
 // regCapsFrame reports whether a closure rc makes captures the callee's
@@ -731,7 +708,7 @@ func (r *Runtime) regAsyncRun(o *Object, cl *closure, c *regCode, this Value, ba
 		r.rejectPromise(p, thrownValue(r.throwRangeError("maximum call stack size exceeded")))
 		return Obj(p)
 	}
-	if jitBuilt && !r.jitRegHas(cl) {
+	if r.jitOn() && !r.jitRegHas(cl) {
 		// A run Go makes of code that has none native, as regGenRun's.
 		r.jitRegResumed(cl, c)
 	}

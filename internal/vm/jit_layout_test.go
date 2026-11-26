@@ -23,6 +23,12 @@ func TestJITFieldLayout(t *testing.T) {
 	}{
 		{reflect.TypeOf(Runtime{}), "jitFields"},
 		{reflect.TypeOf(Realm{}), "jitRealmFields"},
+		// A template's: the call path's fields -- reg, regCalls, the
+		// caches, jitEnters -- at the offsets a build without the JIT
+		// reads them at. They had come after the JIT's 96 bytes, which
+		// moved them 0x60 on in every function that reads them
+		// (rhCallW, regCallSlow, regRunFD, nativeLoop).
+		{reflect.TypeOf(closureCode{}), "jitCodeFields"},
 	} {
 		f, ok := tc.typ.FieldByName(tc.field)
 		if !ok || len(f.Index) != 1 || f.Index[0] != tc.typ.NumField()-2 {

@@ -809,9 +809,6 @@ type wellKnownSymbols struct {
 
 // closureCode is the part of a closure its template's closures share.
 type closureCode struct {
-	// jitCodeFields is what the JIT keeps for the template's closures
-	// alike: the hint of the code their function has.
-	jitCodeFields
 	// names maps the template's name table to atoms, resolved once when the
 	// template is first used so that property access needs no interning.
 	names []Atom
@@ -886,6 +883,12 @@ type closureCode struct {
 	// them by without checking each; nil for any other. Last, so that no
 	// field before it moves.
 	ctorInit *initCache
+	// jitCodeFields is what the JIT keeps for the template's closures
+	// alike: the hint of the code their function has. Second to last, so
+	// that every field before it, which the calls read, is where it is in
+	// a build without the JIT, and the last field keeps the struct from a
+	// zero-sized end's padding there (TestJITFieldLayout).
+	jitCodeFields
 	// env is the environment an unqualified name resolves against, bound
 	// as the template is prepared and shared by every closure made from it
 	// and its nested templates. It is nil for a script, whose names resolve

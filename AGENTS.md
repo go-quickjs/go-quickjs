@@ -90,11 +90,16 @@ concurrently.
   `jit_bu_layoutpad.go` before `jit_builder.go`,
   `jit_layoutpad.go` before `jit_leaffast.go`,
   `jit_na_layoutpad.go` before `jit_native.go`,
-  `jit_ss_layoutpad.go` before `jit_ssa.go`, `native_r_layoutpad.go`
-  before `native_run.go`, `reg_cal_layoutpad.go` before `reg_call.go`,
+  `jit_ss_layoutpad.go` before `jit_ssa.go`, `keyo_layoutpad.go`
+  before `keyorder.go`, the first file after the JIT's,
+  `mem_layoutpad.go` before `memory.go`, `native_r_layoutpad.go`
+  before `native_run.go`, `native_run_b_layoutpad.go` before
+  `native_run_builtin.go`, `native_run_n_layoutpad.go` before
+  `native_run_new.go`, `reg_cal_layoutpad.go` before `reg_call.go`,
   `reg_gene_layoutpad.go` before `reg_generator.go`,
   `reg_ru_layoutpad.go` and `reg_run_a_layoutpad.go` around
-  `reg_run.go`, `reg_runr_layoutpad.go` before `reg_runs.go`,
+  `reg_run.go`, `reg_run_call_e_layoutpad.go` before
+  `reg_run_call_enter.go`, `reg_runr_layoutpad.go` before `reg_runs.go`,
   `reg_sw_layoutpad.go` before `reg_switch.go`,
   `reg_tab_layoutpad.go` before `reg_table.go`,
   `reg_table_c_layoutpad.go` before `reg_table_cold.go`,
@@ -268,7 +273,9 @@ Do not manually edit generated files or their binary companions:
   `TestSnapshotGenerated` fails while the file is out of date.
 - `internal/vm/native_handlers_amd64.s`, `native_handlers_arm64.s`,
   `native_typed_amd64.s`, `native_typed_arm64.s`,
-  `native_feedback_amd64.s` and `native_feedback_arm64.s`, the register
+  `native_handlers_feedback_amd64.s` and `native_handlers_feedback_arm64.s`,
+  sorted after the plain handlers so that a build with the JIT has the
+  stubs before them where a build without does, the register
   interpreter's native handlers on each architecture with their plain
   table, the typed code's table, and the feedback dispatcher's table and
   own handlers, built with the JIT alone: machine
@@ -404,9 +411,10 @@ design, which a change to that design updates in the same commit.
   `host_hooks_modules.go` for WebAssembly modules in the module graph and
   for the opaque objects JSON and structured clone meet -- so that it adds
   no function among the package's (see the layout rules above);
-  `HostJITEnabled` is set in `host_hooks_jit.go`, built with the JIT. wazero is a benchmark
-  baseline only, in a module of its own: `TestNoWazeroDependency` fails if
-  it reaches `go.mod` or `go.sum`.
+  `HostJITEnabled` is set in `jit_hosthooks.go`, built with the JIT and
+  sorted among the JIT's files, so that its init lies with their code.
+  wazero is a benchmark baseline only, in a module of its own:
+  `TestNoWazeroDependency` fails if it reaches `go.mod` or `go.sum`.
 - What a module is told is V8's, word for word: the decoder's and the
   validator's errors, in V8's order of checks and at its offsets, the link
   errors, the trap messages, and the namespace's errors with their

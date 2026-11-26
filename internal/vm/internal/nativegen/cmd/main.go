@@ -1,7 +1,7 @@
 // Command cmd writes internal/vm's native handlers' files: each
 // architecture's handlers and plain table (native_handlers_amd64.s)
 // and each other variant's table and handlers
-// (native_feedback_amd64.s). It is run by go generate in
+// (native_handlers_feedback_amd64.s). It is run by go generate in
 // internal/vm, whose layout it reads by building and running the helper
 // nativegen/cmd/layout. Each file is written to a temporary file and
 // moved into place, so that a failed run leaves the committed one.

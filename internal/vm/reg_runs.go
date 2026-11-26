@@ -14,87 +14,22 @@ import (
 // operators' slow paths, the miss paths and what an iteration runs
 // (docs/register-interpreter.md, "The loop").
 
-// regBigOf marks, where r runs the JIT, the operator at register pc of c
-// whose operands a and b met BigInts, and whose result was v (regCode's
-// bigSeen), for the register form's feedback (jitRegFeedback's BigInt): one
-// in the int64 range, one from 0 to 2^64-1, or another -- a v that is no
-// BigInt, one on the heap; nil without the JIT.
-var regBigOf func(r *Runtime, c *regCode, pc int, a, b, v Value)
-
-// regStringAddOf records a string addition for the first JIT compile;
-// nil without the JIT. Only an addition's slow path calls it.
-var regStringAddOf func(c *regCode, pc int)
-
-// addSeen and addImmSeen are the slow paths' additions -- add's and
-// add_i32's, add_imm's and add_imm_i32's -- each marking, with the JIT
-// on, a result that is a string (regStringAddOf), in place of the call
-// its handler made; stringSeen marks an append's result (an error's is
-// undefined), and addPropSeen is add_prop's, marking an addition of a
-// string. In a build without the JIT nothing is marked, and each is
-// inlined to the call its handler made before there were marks. In a
-// build with it each is inlined to a call of its marking form (addMark,
-// addImmMark, stringMark, addPropMark), out of line, so that the
-// handlers that make them (reg_table.go's) keep their sizes, but for
-// rsAdd's call of stringSeen, and the handlers after them their places.
-func (st *regState) addSeen(pc int, a, b Value) (Value, error) {
-	if jitBuilt {
-		return st.addMark(pc, a, b)
-	}
-	return st.r.add(a, b)
-}
-
+// The slow paths' additions -- add's and add_i32's, add_imm's and
+// add_imm_i32's, add_prop's -- mark, with the JIT on, a result that is a
+// string, or add_prop's addition of a string (regStringAddOf), for its
+// first compile; stringSeen marks an append's result (an error's is
+// undefined). Each slow path tests jitOn inline, before any call, so that
+// a runtime without the JIT -- in a build with it, too -- pays a
+// predictable branch and makes the call it made before there were marks,
+// and only one that runs the JIT calls the marking form out of line
+// (addMark, addImmMark, addPropMark, stringMark, jit_elem.go's, and a
+// build without the JIT's stubs), which makes that call too. The test is written at each slow path, not in a function of its
+// own: one that made either call would be too large to inline. In a build
+// without the JIT the test is false and nothing else is left.
 func (st *regState) stringSeen(pc int, v Value) {
-	if jitBuilt {
+	if st.r.jitOn() {
 		st.stringMark(pc, v)
 	}
-}
-
-func (st *regState) addImmSeen(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
-	if jitBuilt {
-		return st.addImmMark(pc, op, a, imm)
-	}
-	return st.r.regBinImm(op, a, imm)
-}
-
-func (st *regState) addPropSeen(pc int, w bytecode.RInstr, obj, b Value) error {
-	if jitBuilt {
-		return st.addPropMark(pc, w, obj, b)
-	}
-	return st.r.regAddProp(st.cl, st.c, w, obj, b)
-}
-
-//go:noinline
-func (st *regState) addMark(pc int, a, b Value) (Value, error) {
-	v, err := st.r.add(a, b)
-	if st.r.jitOn() && err == nil && v.IsString() {
-		regStringAddOf(st.c, pc)
-	}
-	return v, err
-}
-
-//go:noinline
-func (st *regState) stringMark(pc int, v Value) {
-	if st.r.jitOn() && v.IsString() {
-		regStringAddOf(st.c, pc)
-	}
-}
-
-//go:noinline
-func (st *regState) addImmMark(pc int, op bytecode.Op, a Value, imm int32) (Value, error) {
-	v, err := st.r.regBinImm(op, a, imm)
-	if st.r.jitOn() && err == nil && v.IsString() {
-		regStringAddOf(st.c, pc)
-	}
-	return v, err
-}
-
-//go:noinline
-func (st *regState) addPropMark(pc int, w bytecode.RInstr, obj, b Value) error {
-	if st.r.jitOn() && w.Op() == bytecode.RAddProp && b.IsString() {
-		// o.name += x of a string x: a string's addition.
-		regStringAddOf(st.c, pc)
-	}
-	return st.r.regAddProp(st.cl, st.c, w, obj, b)
 }
 
 // regBinImm is bin_imm's slow path.
@@ -411,15 +346,12 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 	// value a call's window was given stays there until the window is
 	// used again.
 	r.sweepStaleSlots(f.base - int(c.locals) + c.rc.LiveAt(pc))
-	if jitBuilt && r.jitOn() {
-		// A sample of the back edges: the loop's function's hotness, and
-		// its native code entered at the loop's header (jitRegLoop).
-		return r.jitRegLoop(st, target)
-	}
 	if jitBuilt {
-		// No JIT runs: the Go table's jumps count its function's budget
-		// no more (regEdgeTick).
-		regEdgesOff(f.cl)
+		// A sample of the back edges where the JIT runs, or, where none
+		// does, the Go table's jumps counting no more of its function's
+		// budget (regBackEdgeJIT): one call, out of line, so that the
+		// code after it here lies where it does without the JIT.
+		return r.regBackEdgeJIT(st, target)
 	}
 	return target
 }

@@ -131,23 +131,18 @@ func (r *Runtime) seekFrameBlock() {
 	r.frameBase = int(b) * frameBlockSize
 }
 
-// frameAt is the frame at a depth, counting from the bottom.
-func (r *Runtime) frameAt(i int) *frame {
-	if jitBuilt {
-		// One of the native levels whose frames a call of Go put off, made
-		// first (jitLazyLevels).
-		r.jitFramesDue(i)
-	}
-	u := uint(i)
-	return &r.frames[u/frameBlockSize][u%frameBlockSize]
-}
-
-// topFrame is the frame being executed, or nil when nothing is.
+// topFrame is the frame being executed, or nil when nothing is. It is
+// never one of the frames a call of Go put off: the calling level's frame
+// is pushed above the room left for them, and their depth is set and
+// cleared while it is there (jitRegGoCallNested). So it is read without
+// frameAt's test of them, which, with the JIT built in, would make
+// topFrame too large to inline where a build without the JIT inlines it.
 func (r *Runtime) topFrame() *frame {
 	if r.frameDepth == 0 {
 		return nil
 	}
-	return r.frameAt(r.frameDepth - 1)
+	u := uint(r.frameDepth - 1)
+	return &r.frames[u/frameBlockSize][u%frameBlockSize]
 }
 
 // popFrameOf releases the frame f's stack window, f the top one, closing any

@@ -96,6 +96,11 @@ type jitFields struct {
 	// jit), which the test may change while the runtime lives: zero but in
 	// a test's runtime.
 	jitTest jitTestConfig
+	// jitLazyTop is the depth below which the native levels whose frames
+	// calls of Go put off are (jitState's lazy), 0 for none: the
+	// Runtime's, not the JIT state's, so that frameAt's test of it is one
+	// load and frameAt stays small enough to inline.
+	jitLazyTop int
 }
 
 // jitTestConfig is what a test makes a runtime's JIT with, and may change
@@ -1175,10 +1180,9 @@ type jitState struct {
 	// callee's code made (jitRegCalleeProfit).
 	regGoMark jitRegGoMark
 	// lazy are the native levels whose frames calls of Go put off, the
-	// innermost call's last, and lazyTop the depth below which they are
-	// (jitLazyLevels).
-	lazy    []jitLazyLevels
-	lazyTop int
+	// innermost call's last; the Runtime's jitLazyTop is the depth below
+	// which they are (jitLazyLevels).
+	lazy []jitLazyLevels
 	// lazyCalls counts the calls that put frames off, lazyMade the times
 	// frames put off were made, and lazyHeld the codes not closed for them.
 	lazyCalls, lazyMade, lazyHeld uint64

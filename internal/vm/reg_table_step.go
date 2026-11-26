@@ -157,8 +157,8 @@ func rsStep(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	switch {
 	case w.X()&bytecode.RStepAdd == 0:
 		v, err = st.r.regStep(a, float64(k))
-		if regBigOf != nil && err == nil && v.IsBigInt() {
-			regBigOf(st.r, st.c, pc, a, a, v)
+		if st.r.jitOn() && err == nil && v.IsBigInt() {
+			st.r.regBigOf(st.c, pc, a, a, v)
 		}
 	case k > 0:
 		v, err = st.r.regBinImm(bytecode.OpAdd, a, k)

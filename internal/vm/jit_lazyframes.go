@@ -25,12 +25,18 @@ type jitLazyLevels struct {
 	from  int
 }
 
-// jitFramesDue makes the frames calls of Go put off (jitLazyLevels), if
-// frame i is one of them.
-func (r *Runtime) jitFramesDue(i int) {
-	if s := r.jit; s != nil && i < s.lazyTop {
+// frameAt is the frame at a depth, counting from the bottom, made first
+// if it is one of the native levels whose frames a call of Go put off
+// (jitLazyLevels). It is a build without the JIT's (jit_disabled.go) and
+// that test, which reads the Runtime's jitLazyTop, not the JIT state's, so
+// that it stays small enough to inline (TestIntendedInlining): it was a
+// call in every caller in a build with the JIT, where a build without has
+// it inline, the code of those callers that much shorter than there.
+func (r *Runtime) frameAt(i int) *frame {
+	if i < r.jitLazyTop {
 		r.jitMakeLazyFrames()
 	}
+	return &r.frames[uint(i)/frameBlockSize][uint(i)%frameBlockSize]
 }
 
 // jitMakeLazyFrames makes the frames every call of Go under way put off,
@@ -44,7 +50,7 @@ func (r *Runtime) jitMakeLazyFrames() {
 	// contexts, the stack and an accessor's property, none of which reads a
 	// frame or meters memory. A change that has it read one -- a stack
 	// trace, the memory meter's walk -- must fill them first.
-	s.lazyTop = 0
+	r.jitLazyTop = 0
 	s.lazyMade++
 	saved := r.frameDepth
 	for j := range s.lazy {
@@ -67,10 +73,10 @@ func (r *Runtime) jitLazyDone() {
 	s := r.jit
 	s.lazy[len(s.lazy)-1] = jitLazyLevels{}
 	s.lazy = s.lazy[:len(s.lazy)-1]
-	s.lazyTop = 0
+	r.jitLazyTop = 0
 	if n := len(s.lazy); n != 0 && !s.lazy[n-1].made {
 		lz := s.lazy[n-1]
-		s.lazyTop = lz.depth + lz.idx - lz.root - 1
+		r.jitLazyTop = lz.depth + lz.idx - lz.root - 1
 	}
 }
 
