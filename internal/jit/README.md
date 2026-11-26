@@ -853,7 +853,13 @@ shapes a learned addition along a chain names, which may be unique and
 changed in place until remembered. Every other shape an answer names a
 cache remembered when it filled, or is shared, so the worker reads its
 fields as they are (`jitPropSrc`, live on the spot and copied in the
-snapshot). A worker builds, optimizes and compiles from the snapshot
+snapshot). `Accessor` and `StringProperty`, whose answers read the heap --
+the accessors' pairs, a getter's code and its lowering, the primitives'
+prototypes -- are asked on the goroutine still, but by the family's gather
+and only at the PCs the copy says may answer (`jitSnapAskedAtGather`): an
+accessor's site whose cache, its earlier entries or what the code learned
+holds an accessor, a method's read that learned primitives or knows
+nothing; every other PC's answer is none, as the asking gave it. A worker builds, optimizes and compiles from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile

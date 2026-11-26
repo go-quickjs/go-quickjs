@@ -50,8 +50,12 @@ type jitSnapData struct {
 }
 
 // jitSnapDerived are the methods whose answers a snapshot derives on the
-// worker (a bit by jitSnapMethod), which askReg does not ask.
-var jitSnapDerived uint64
+// worker (a bit by jitSnapMethod), which askReg does not ask; of them,
+// jitSnapAskedAtGather are those the family's gather asks itself, on the
+// goroutine, at the PCs the copy says may answer -- the rest answer
+// nothing, as the feedback would -- where the answer reads the heap, the
+// worker deriving none of them.
+var jitSnapDerived, jitSnapAskedAtGather uint64
 
 // jitSnapFuncGatherers are the gathers of the derived methods' families, each
 // run once a snapshot, on the runtime's goroutine, before its PCs are

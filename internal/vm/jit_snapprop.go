@@ -207,8 +207,9 @@ func (d *jitPropData) keep(s *shape) *shape { return s }
 func (d *jitPropData) ctx() jitPropCtx { return d.x }
 
 func init() {
-	jitSnapDerived |= 1 << snapProperty
-	jitSnapFuncGatherers = append(jitSnapFuncGatherers, gatherProperty)
+	jitSnapDerived |= 1<<snapProperty | 1<<snapAccessor | 1<<snapStringProperty
+	jitSnapAskedAtGather |= 1<<snapAccessor | 1<<snapStringProperty
+	jitSnapFuncGatherers = append(jitSnapFuncGatherers, gatherProperty, gatherPropertyAsked)
 	jitSnapDerivers = append(jitSnapDerivers, deriveProperty)
 }
 
@@ -438,4 +439,82 @@ func deriveProperty(s *jitSnapshot) {
 			s.a.Property.put(int64(pc), eff, ok, jitSnapAnsProperty{site, ok})
 		}
 	}
+}
+
+// gatherPropertyAsked asks fb, for s, Accessor and StringProperty at the
+// PCs whose sites, as gatherProperty copied them, may answer: an accessor's
+// read or write whose cache, its earlier entries or what the code learned
+// there holds an accessor (accessorOf's cases); a method's read of a
+// primitive's prototype whose code learned the primitives it met, or whose
+// cache knows nothing (stringPropertyOf). Every other PC's answer is none,
+// with no effect, as the feedback's asking gives it: most of the PCs these
+// methods are asked at, which cost the goroutine the asking. Their answers
+// read the heap -- the accessors' pairs, the prototypes, a getter's
+// register code and its lowering -- and are asked so, on the goroutine. A
+// forwarded callee's are asked at every PC (gatherProperty).
+func gatherPropertyAsked(s *jitSnapshot, fb *jitRegFeedback) {
+	d := &s.d.prop
+	const asked = 1<<snapAccessor | 1<<snapStringProperty
+	var poly []jitPolySite
+	e := fb.fb.e
+	if e != nil {
+		poly = e.poly
+	}
+	for pc, op := range s.ops {
+		asks := jitSnapAsks[op] & asked
+		if asks == 0 {
+			continue
+		}
+		if d.eager {
+			if asks&(1<<snapAccessor) != 0 {
+				jitRegSnapAskAccessor(s, fb, pc)
+			}
+			if asks&(1<<snapStringProperty) != 0 {
+				jitRegSnapAskStringProperty(s, fb, pc)
+			}
+			continue
+		}
+		rpc, _, c, write, method, plain, ok := d.code.propertyAt(pc, d)
+		if !ok || c == nil {
+			continue
+		}
+		if asks&(1<<snapAccessor) != 0 && (write || plain) && jitAccessorMaybe(&d.x, c, jitPolyAt(poly, rpc)) {
+			jitRegSnapAskAccessor(s, fb, pc)
+		}
+		if asks&(1<<snapStringProperty) != 0 && method && e != nil && jitStringPropertyMaybe(e, rpc, c, poly) {
+			jitRegSnapAskStringProperty(s, fb, pc)
+		}
+	}
+}
+
+// jitAccessorMaybe reports whether accessorOf may find an accessor for a
+// site whose cache is c and whose learned site is p (nil for none), of a
+// feedback as x has it: its cache's entry or one of its earlier ones is an
+// accessor's, of either a read or a write, or the code met one there.
+func jitAccessorMaybe(x *jitPropCtx, c *propCache, p *jitPolySite) bool {
+	maybe := func(c *propCache) bool {
+		return c.getter && c.shape != nil && c.shape != noShape && c.idx >= 0 && c.p1 != nil && (c.next == nil || c.next == setterNext)
+	}
+	if maybe(c) {
+		return true
+	}
+	if seen := c.seenOf(); seen != nil {
+		for i := range seen.entries[:seen.n] {
+			if maybe(&seen.entries[i]) {
+				return true
+			}
+		}
+	}
+	return x.learned && !x.callee && p != nil && len(p.accessors) != 0
+}
+
+// jitStringPropertyMaybe reports whether stringPropertyOf may answer for
+// the method's read at register pc rpc of e's code, its cache c: the code
+// learned the primitives it met there, or neither the cache nor the code
+// knows anything of it.
+func jitStringPropertyMaybe(e *jitEntry, rpc int, c *propCache, poly []jitPolySite) bool {
+	if jitPrimitiveLearned(e, rpc) {
+		return true
+	}
+	return (c.shape == nil || c.shape == noShape) && c.fills == 0 && jitPolyAt(poly, rpc) == nil
 }

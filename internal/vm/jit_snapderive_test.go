@@ -84,7 +84,7 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	if jitSnapDerived == 0 {
+	if jitSnapDerived&^jitSnapAskedAtGather == 0 {
 		t.Skip("no method is derived on the worker")
 	}
 	var r *Runtime
@@ -151,7 +151,7 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 			}
 			for m := range jitSnapNames {
 				m := jitSnapMethod(m)
-				if jitSnapDerived&(1<<m) == 0 || jitRegSnapMethods&(1<<m) == 0 || jitRegSnapStatePC&(1<<m) != 0 {
+				if (jitSnapDerived&^jitSnapAskedAtGather)&(1<<m) == 0 || jitRegSnapMethods&(1<<m) == 0 || jitRegSnapStatePC&(1<<m) != 0 {
 					continue
 				}
 				if !jitSnapAtPC[m] {
