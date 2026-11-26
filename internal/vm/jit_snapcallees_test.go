@@ -3,8 +3,10 @@
 package vm
 
 import (
+	"fmt"
 	"os"
 	"testing"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -68,4 +70,98 @@ func TestJITLowerRegAnInstructionAPC(t *testing.T) {
 		t.Fatal("nothing lowered")
 	}
 	t.Logf("%d lowerings of %d functions", lowered, len(cls))
+}
+
+// TestJITSnapshotCalleeWalk holds the walk of the callees a compile may
+// inline (jitSnapCalleeWalk), made before the snapshot's questions are
+// asked, to the callees the snapshot then asks: each one whose feedback it
+// asks -- one the answers name as inlined, short enough for the inliner
+// to take -- is one the walk found, so that a snapshot copying the walk's
+// callees' state has every one the worker's inliner may take. The
+// functions are jitSnapAskedSrc's, and with QUICKJS_JIT_CORPUS, Octane's.
+func TestJITSnapshotCalleeWalk(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var r *Runtime
+	var cls []*closure
+	if dir := os.Getenv("QUICKJS_JIT_CORPUS"); dir != "" {
+		r, cls = jitOctaneCorpusForTest(t, dir)
+	} else {
+		r = jitRuntimeForTest(t, Config{JIT: true})
+		r.jitState().unavailable = true
+		if _, err := r.Run(compileForTest(t, jitSnapAskedSrc)); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"work", "make", "add", "Point"} {
+			cls = append(cls, jitGlobalClosureForTest(r, name))
+		}
+	}
+	r.jitState().unavailable = false
+	functions, asked, walked, missed := 0, 0, 0, 0
+	for _, cl := range cls {
+		c := r.regOf(cl)
+		if c == nil {
+			continue
+		}
+		p, err := r.jitRegLower(cl, c.rc, jitLowerSSA)
+		if err != nil {
+			continue
+		}
+		r.jitRegSeenFeedback(cl, c)
+		walk := r.jitSnapCalleeWalk(cl)
+		snap := jitRegSnapshotOf(r.jitRegFeedbackFor(cl, p), p)
+		functions++
+		walked += len(walk)
+		for k, s := range snap.s.callees {
+			if s.rf == nil || k.cl == nil || k.cl == cl {
+				continue
+			}
+			asked++
+			if walk[k.cl] == 0 {
+				missed++
+				if missed <= 20 {
+					t.Errorf("%s: callee %s, %d deep, asked but not walked%s", cl.fn.Name, k.cl.fn.Name, s.depth, jitSnapNamedBy(snap.s, k.cl))
+				}
+			}
+		}
+	}
+	if functions == 0 {
+		t.Fatal("nothing compiled")
+	}
+	t.Logf("%d functions: %d callees asked, %d walked, %d asked not walked", functions, asked, walked, missed)
+}
+
+// jitSnapNamedBy says which answers of the snapshots of root's compile
+// name cl's closure as a callee to inline, for a test's message.
+func jitSnapNamedBy(root *jitSnapshot, cl *closure) string {
+	at := uintptr(unsafe.Pointer(cl))
+	out := ""
+	for _, s := range append([]*jitSnapshot{root}, mapValues(root.callees)...) {
+		name := "?"
+		if s.fb != nil && s.fb.fn != nil {
+			name = s.fb.fn.Name
+		}
+		for _, e := range s.a.Inline.e {
+			if e.answered && e.v.r0.Closure == at {
+				out += fmt.Sprintf("; Inline(%d) of %s", e.arg, name)
+			}
+		}
+		for _, e := range s.a.CalledClosure.e {
+			if e.answered && e.v.r1.Closure == at {
+				out += fmt.Sprintf("; CalledClosure(%d) of %s", e.arg, name)
+			}
+		}
+		for _, e := range s.a.Accessor.e {
+			if e.answered && e.v.r0.Inline != nil && e.v.r0.Inline.Closure == at {
+				out += fmt.Sprintf("; Accessor(%d) of %s", e.arg, name)
+			}
+		}
+		for _, e := range s.a.ForEach.e {
+			if e.answered && e.v.r0.Inline != nil && e.v.r0.Inline.Closure == at {
+				out += fmt.Sprintf("; ForEach(%d) of %s", e.arg, name)
+			}
+		}
+	}
+	return out
 }

@@ -1106,8 +1106,9 @@ func jitNoteSeen(p *propPoly, old, n propCache) *propPoly {
 }
 
 // jitSeenSite is what jitRegSeenFeedback learns in e: the site at pc, its
-// cache, a write's or a read's, of key where named.
-func (r *Runtime) jitSeenSite(e *jitEntry, pc int, cache *propCache, write bool, key Atom, named bool) {
+// cache, a write's or a read's, of key where named, the additions along
+// chains deeper than a cache holds made by deep (jitDeepAddFrom's).
+func jitSeenSite(e *jitEntry, pc int, cache *propCache, write bool, key Atom, named bool, deep func(from, next *shape, proto *Object, key Atom) (jitDeepAdd, bool)) {
 	if cache.poly == nil {
 		return
 	}
@@ -1155,7 +1156,7 @@ func (r *Runtime) jitSeenSite(e *jitEntry, pc int, cache *propCache, write bool,
 		if len(p.cases)+len(p.adds) >= jitPropertyCases || slices.ContainsFunc(p.adds, func(k jitDeepAdd) bool { return k.from == d.from }) {
 			continue
 		}
-		if a, ok := r.jitDeepAddFrom(d.from, d.next, d.proto, key); ok {
+		if a, ok := deep(d.from, d.next, d.proto, key); ok {
 			p.adds = append(p.adds, a)
 		}
 	}

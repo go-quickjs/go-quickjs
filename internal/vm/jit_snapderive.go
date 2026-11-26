@@ -103,7 +103,8 @@ func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
 
 // jitCopyCaches is a copy of ic, each entry's earlier entries (propPoly) a
 // copy of its own, their earlier entries (propSeen) with them, of what an
-// answer reads of them: the interpreter changes them in place. The copy is
+// answer or a callee's seen feedback (jitSeenFeedbackInto) reads of them:
+// the interpreter changes them in place. The copy is
 // ic's bulk; the earlier entries, which only polymorphic sites have, one
 // allocation more.
 func jitCopyCaches(ic []propCache) (out []propCache, polys []jitCopiedPoly) {
@@ -129,10 +130,9 @@ func jitCopyCaches(ic []propCache) (out []propCache, polys []jitCopiedPoly) {
 		q.p = *p
 		q.p.mega = nil
 		if p.seen != nil {
-			q.s = *p.seen
 			// The interpreter appends to reads and deep, never writing
-			// what they hold; deep no answer reads.
-			q.s.deep = nil
+			// what they hold: the copy shares what they held.
+			q.s = *p.seen
 			q.p.seen = &q.s
 		}
 		out[i].poly = &q.p

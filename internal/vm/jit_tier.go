@@ -907,7 +907,15 @@ func (r *Runtime) jitRegPropOp(f *frame, c *regCode, wb, rpc int) (jitPropOp, bo
 // time.
 func (r *Runtime) jitRegSeenFeedback(cl *closure, c *regCode) {
 	l := r.jitState().regLearnedOf(r.jitRegKeyOf(cl))
-	for rpc, w := range c.rc.Code {
+	jitSeenFeedbackInto(l, c.rc, cl.ic, cl.names, r.jitDeepAddFrom)
+}
+
+// jitSeenFeedbackInto is jitRegSeenFeedback's, into l, of register code
+// rc whose closure's caches are ic and names names -- the live ones, or a
+// snapshot's copy of them -- the additions along chains deeper than a
+// cache holds made by deep as jitDeepAddFrom does.
+func jitSeenFeedbackInto(l *jitEntry, rc *bytecode.RegCode, ic []propCache, names []Atom, deep func(from, next *shape, proto *Object, key Atom) (jitDeepAdd, bool)) {
+	for rpc, w := range rc.Code {
 		write := false
 		switch w.Op() {
 		case bytecode.RGetProp, bytecode.RGetPropNext, bytecode.RGetMethod, bytecode.RGetMethodW:
@@ -918,10 +926,10 @@ func (r *Runtime) jitRegSeenFeedback(cl *closure, c *regCode) {
 			continue
 		}
 		site := int(w.C())
-		if site >= len(cl.ic) || site >= len(c.rc.SiteName) || int(c.rc.SiteName[site]) >= len(cl.names) {
+		if site >= len(ic) || site >= len(rc.SiteName) || int(rc.SiteName[site]) >= len(names) {
 			continue
 		}
-		r.jitSeenSite(l, rpc, &cl.ic[site], write, cl.names[c.rc.SiteName[site]], true)
+		jitSeenSite(l, rpc, &ic[site], write, names[rc.SiteName[site]], true, deep)
 	}
 }
 
