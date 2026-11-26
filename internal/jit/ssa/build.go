@@ -999,13 +999,13 @@ func (b *builder) indexOfAt(pc int) (fn uintptr, kind int, ok bool) {
 // it, a call of Go (GoIndexOf) whose result is the call's, kept where the
 // call's would be. Go refuses a receiver or an argument the built-in would
 // run anything for; those leave for Go to make the call after an exit.
-func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, gd *guarder) {
 	f := b.f
 	argc := b.callsAt(pc)[0].Argc
 	cs, _ := b.callSlotsOf(pc, argc, true)
 	recv, callee := b.read(cs.recv, blk), b.read(cs.fn, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{recv}
 	for k := range argc {
@@ -1015,7 +1015,7 @@ func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard fu
 	if argc == 2 {
 		site.Argc |= IndexOfFrom
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
@@ -1143,7 +1143,7 @@ func (b *builder) leafAt(pc int) (uintptr, bool) {
 // call of Go (GoLeaf) of the function, the receiver of a method call and
 // the arguments, whose result is the call's, kept where the call's would
 // be.
-func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) leafCall(blk *Block, pc int, fn uintptr, gd *guarder) {
 	c := b.callsAt(pc)[0]
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	base := sp - c.Argc - 1
@@ -1156,8 +1156,8 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 		recv, at = b.read(base, blk), base+1
 	}
 	callee := b.read(at, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{callee}
 	if c.Method {
@@ -1168,7 +1168,7 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 	}
 	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn, Unused: b.resultUnused(pc, base)}
 	b.createPool(pc, fn, site)
-	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.write(base, blk, v) })
+	b.leafMade(blk, pc, fn, c, args, site, gd, func(blk *Block, v *Value) { b.write(base, blk, v) })
 }
 
 // ExecReuseFeedback is Feedback that knows, for register code's call at a
@@ -1211,7 +1211,7 @@ func (b *builder) createPool(pc int, fn uintptr, site *CallSite) {
 // arguments -- the function checked to be the leaf: natively where native
 // code makes the leaf itself (leafKind), a call of Go (GoLeaf, site)
 // otherwise, its result given to put, in the block it is made in.
-func (b *builder) leafMade(blk *Block, pc int, fn uintptr, c *CallSite, args []*Value, site *CallSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, put func(*Block, *Value)) {
+func (b *builder) leafMade(blk *Block, pc int, fn uintptr, c *CallSite, args []*Value, site *CallSite, gd *guarder, put func(*Block, *Value)) {
 	f := b.f
 	if kind := b.leafKind(fn); kind != LeafOther && c.Argc == 1 && (c.Method || !kind.reads()) {
 		if kind >= LeafNumberIsNaN {
@@ -1224,7 +1224,7 @@ func (b *builder) leafMade(blk *Block, pc int, fn uintptr, c *CallSite, args []*
 		b.leafNative(blk, pc, kind, args, site, put)
 		return
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
@@ -1238,11 +1238,11 @@ func (b *builder) leafMade(blk *Block, pc int, fn uintptr, c *CallSite, args []*
 // the arguments -- the function checked to be the leaf (a host exit, where
 // it is not, has Go run the instruction whole), its result to the call's
 // register.
-func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite, fn uintptr, gd *guarder) {
 	a := in.Left.Slot
 	callee := b.read(a, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{callee}
 	if c.Method {
@@ -1263,7 +1263,7 @@ func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite,
 		site.Give = c.Give
 	}
 	b.createPool(pc, fn, site)
-	b.leafMade(blk, pc, fn, c, args, site, guard, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
+	b.leafMade(blk, pc, fn, c, args, site, gd, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
 }
 
 // windowViaLeaf makes register code's method call at pc, in, c its call's
@@ -1275,14 +1275,14 @@ func (b *builder) windowLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite,
 // register 3, made as windowLeaf makes a method call of the leaf: a call of
 // Go of its own (GoLeaf), or natively where native code makes the leaf
 // itself (leafMade), its result to the call's register.
-func (b *builder) windowViaLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite, call, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) windowViaLeaf(blk *Block, pc int, in ir.Instruction, c *CallSite, call, fn uintptr, gd *guarder) {
 	a := in.Left.Slot
-	method := guard(OpObjectOf, Ptr, ir.HostExit, b.read(a, blk))
-	isCall := guard(OpSameObject, None, ir.HostExit, method)
+	method := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(a, blk))
+	isCall := gd.guard(OpSameObject, None, ir.HostExit, method)
 	isCall.Const = ir.Value{Bits: uint64(call)}
 	g := b.read(a+1, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, g)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, g)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{g, b.read(a+2, blk)}
 	for k := 1; k < c.Argc; k++ {
@@ -1291,7 +1291,7 @@ func (b *builder) windowViaLeaf(blk *Block, pc int, in ir.Instruction, c *CallSi
 	leaf := &CallSite{Argc: c.Argc - 1, Method: true}
 	site := &CallSite{Go: GoLeaf, Argc: c.Argc - 1, Method: true, ThisSlot: -1, Leaf: fn}
 	site.Unused = b.windowResultUnused(pc)
-	b.leafMade(blk, pc, fn, leaf, args, site, guard, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
+	b.leafMade(blk, pc, fn, leaf, args, site, gd, func(blk *Block, v *Value) { b.assign(in.Dest, blk, v) })
 }
 
 // windowResultUnused is resultUnused of register code's call at pc, whose
@@ -1432,19 +1432,19 @@ func (b *builder) bigStringAt(pc int) (uintptr, bool) {
 // bigStringCall makes x.toString() or x.toString(radix), the call at pc of
 // the function at fn: checked to call it, a call of Go (GoBigString) whose
 // result is the call's, kept where the call's would be.
-func (b *builder) bigStringCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) bigStringCall(blk *Block, pc int, fn uintptr, gd *guarder) {
 	f := b.f
 	argc := b.callsAt(pc)[0].Argc
 	cs, _ := b.callSlotsOf(pc, argc, true)
 	recv, callee := b.read(cs.recv, blk), b.read(cs.fn, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{recv}
 	for k := range argc {
 		args = append(args, b.read(cs.arg+k, blk))
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{{Go: GoBigString, Argc: argc, ThisSlot: -1}}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
@@ -1488,13 +1488,13 @@ func (b *builder) parseIntAt(pc int) (uintptr, bool) {
 // string "0.5" or "0" parses. Any other number -- NaN, an infinity, one
 // of an exponent, one in (-1, 0), which parses as -0 -- and any other
 // argument or function, are Go's call.
-func (b *builder) parseIntCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+func (b *builder) parseIntCall(blk *Block, pc int, fn uintptr, gd *guarder, boxF func(*Value) *Value) {
 	f := b.f
 	cs, _ := b.callSlotsOf(pc, 1, false)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(cs.fn, blk))
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(cs.fn, blk))
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
-	x := guard(OpUnboxF64, Float64, ir.HostExit, b.read(cs.arg, blk))
+	x := gd.guard(OpUnboxF64, Float64, ir.HostExit, b.read(cs.arg, blk))
 	constant := func(c float64) *Value {
 		v := f.newValue(blk, OpConstF64, Float64)
 		v.Const = ir.Float(c)
@@ -1507,10 +1507,10 @@ func (b *builder) parseIntCall(blk *Block, pc int, fn uintptr, guard func(Op, Ty
 	}
 	number := func(test *Value) *Value { return f.newValue(blk, OpBoolToF64, Float64, test) }
 	a := f.newValue(blk, OpAbsF64, Float64, x)
-	guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Lt, a, constant(1e21))))
+	gd.guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Lt, a, constant(1e21))))
 	some := f.newValue(blk, OpMaxF64, Float64, number(cmp(ir.Ge, a, constant(1))),
 		f.newValue(blk, OpMaxF64, Float64, number(cmp(ir.Eq, x, constant(0))), number(cmp(ir.Ge, x, constant(1e-6)))))
-	guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Gt, some, constant(0))))
+	gd.guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Gt, some, constant(0))))
 	// The integer part, a zero's +0: the only number left whose integer
 	// part is -0 is -0 itself.
 	r := f.newValue(blk, OpAddF64, Float64, f.newValue(blk, OpTruncF64, Float64, x), constant(0))
@@ -5299,15 +5299,15 @@ func (b *builder) inlineBlocks(fr *frame, from, to *Block) {
 // inlineCall checks the call at pc calls the function inlined there, and
 // gives the callee's start its slots: its arguments, past which undefined,
 // its receiver, and undefined in every other.
-func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, state func() *FrameState) {
+func (b *builder) inlineCall(blk *Block, pc int, fr *frame, gd *guarder, state func() *FrameState) {
 	site := fr.site
 	if site.Window {
-		b.inlineWindowCall(blk, pc, fr, guard, state)
+		b.inlineWindowCall(blk, pc, fr, gd, state)
 		return
 	}
 	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
 	if site.Forward {
-		b.forwardCall(blk, pc, sp, fr, guard)
+		b.forwardCall(blk, pc, sp, fr, gd)
 		return
 	}
 	// Another callee is called by Go, from the call's state, as a call that
@@ -5315,8 +5315,8 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	// closure the function makes, which the call calls (calledSite), no
 	// object until an exit makes it.
 	if site.Callee != 0 {
-		object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-1, blk))
-		same := guard(OpSameObject, None, ir.HostExit, object)
+		object := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-1, blk))
+		same := gd.guard(OpSameObject, None, ir.HostExit, object)
 		same.Const = ir.Value{Bits: uint64(site.Callee)}
 	} else if fr.given {
 		// What the call calls, which the build checks is the closure it
@@ -5325,12 +5325,12 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	}
 	if site.Coerce && site.ThisSlot >= 0 {
 		// A receiver that is not an object is coerced, which Go does.
-		guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-2, blk))
+		gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-2, blk))
 	}
 	// Room past the operands for the callee's frame, which an exit inside
 	// it writes there, and a context for Go to make it from, and one for
 	// each inlined caller it is in.
-	room := guard(OpFrameRoom, None, ir.HostExit)
+	room := gd.guard(OpFrameRoom, None, ir.HostExit)
 	room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
 	room.Const = ir.Value{Bits: uint64(fr.depth)}
 	fr.call = state()
@@ -5341,7 +5341,7 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 		for i := range args {
 			args[i] = b.read(sp-site.Argc-1+i, blk)
 		}
-		call := guard(OpCall, Tagged, ir.HostExit, args...)
+		call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 		b.f.cache(call).Calls = []*CallSite{{Callee: site.Callee, Argc: site.Argc, ThisSlot: -1, Pool: site.Pool,
 			ProtoIndex: site.ProtoIndex, ProtoKey: site.ProtoKey, Receiver: true}}
 		call.Index = fr.keep
@@ -5400,17 +5400,17 @@ func returnsWindowReceiver(p *ir.Program) bool {
 // inside it writes there; a construction's receiver from its pool, kept in
 // a cell; and the callee's start given its window -- the function, the
 // receiver, the arguments, past which undefined.
-func (b *builder) inlineWindowCall(blk *Block, pc int, fr *frame, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, state func() *FrameState) {
+func (b *builder) inlineWindowCall(blk *Block, pc int, fr *frame, gd *guarder, state func() *FrameState) {
 	site, in := fr.site, b.p.Code[pc]
 	a := b.cur.base + in.Left.Slot
 	fn := b.read(a, blk)
 	if site.Forward {
-		b.windowForwardCall(blk, a, fn, fr, guard, state)
+		b.windowForwardCall(blk, a, fn, fr, gd, state)
 		return
 	}
 	if site.Callee != 0 {
-		object := guard(OpObjectOf, Ptr, ir.HostExit, fn)
-		same := guard(OpSameObject, None, ir.HostExit, object)
+		object := gd.guard(OpObjectOf, Ptr, ir.HostExit, fn)
+		same := gd.guard(OpSameObject, None, ir.HostExit, object)
 		same.Const = ir.Value{Bits: uint64(site.Callee)}
 	} else if fr.given {
 		// What the call calls, which the build checks is the closure it
@@ -5423,10 +5423,10 @@ func (b *builder) inlineWindowCall(blk *Block, pc int, fr *frame, guard func(Op,
 		this = b.read(a+1, blk)
 		if site.Coerce {
 			// A receiver that is not an object is coerced, which Go does.
-			guard(OpObjectOf, Ptr, ir.HostExit, this)
+			gd.guard(OpObjectOf, Ptr, ir.HostExit, this)
 		}
 	}
-	room := guard(OpFrameRoom, None, ir.HostExit)
+	room := gd.guard(OpFrameRoom, None, ir.HostExit)
 	room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
 	room.Const = ir.Value{Bits: uint64(fr.depth)}
 	fr.call = state()
@@ -5438,7 +5438,7 @@ func (b *builder) inlineWindowCall(blk *Block, pc int, fr *frame, guard func(Op,
 		for i := range site.Argc {
 			args[1+i] = b.read(a+2+i, blk)
 		}
-		call := guard(OpCall, Tagged, ir.HostExit, args...)
+		call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 		b.f.cache(call).Calls = []*CallSite{{Callee: site.Callee, Argc: site.Argc, ThisSlot: -1, Pool: site.Pool,
 			ProtoIndex: site.ProtoIndex, ProtoKey: site.ProtoKey, Receiver: true}}
 		call.Index = fr.keep
@@ -5485,20 +5485,20 @@ func (b *builder) inlineWindowCall(blk *Block, pc int, fr *frame, guard func(Op,
 // receiver, checked to be an object where the callee would coerce it;
 // and the callee's window its function, x and the arguments the frame
 // forwarding them was given, as V8 eliminates the arguments object.
-func (b *builder) windowForwardCall(blk *Block, a int, fn *Value, fr *frame, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, state func() *FrameState) {
+func (b *builder) windowForwardCall(blk *Block, a int, fn *Value, fr *frame, gd *guarder, state func() *FrameState) {
 	site := fr.site
-	object := guard(OpObjectOf, Ptr, ir.HostExit, fn)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, fn)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(site.Callee)}
-	apply := guard(OpObjectOf, Ptr, ir.HostExit, b.read(a+1, blk))
-	same = guard(OpSameObject, None, ir.HostExit, apply)
+	apply := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(a+1, blk))
+	same = gd.guard(OpSameObject, None, ir.HostExit, apply)
 	same.Const = ir.Value{Bits: uint64(site.Apply)}
 	this := b.read(a+2, blk)
 	if site.Coerce {
 		// A receiver that is not an object is coerced, which Go does.
-		guard(OpObjectOf, Ptr, ir.HostExit, this)
+		gd.guard(OpObjectOf, Ptr, ir.HostExit, this)
 	}
-	room := guard(OpFrameRoom, None, ir.HostExit)
+	room := gd.guard(OpFrameRoom, None, ir.HostExit)
 	room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
 	room.Const = ir.Value{Bits: uint64(fr.depth)}
 	fr.call = state()
@@ -5536,7 +5536,7 @@ const maxArgumentSelect = 8
 // arguments; ... a[i]`, which had left native code in each call inlined.
 // What aliases a parameter is never read so: a sloppy callee's arguments
 // object of parameters is not inlined as one that reads it.
-func (b *builder) argumentSelect(blk *Block, in ir.Instruction, key *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) argumentSelect(blk *Block, in ir.Instruction, key *Value, gd *guarder) {
 	f := b.f
 	args := b.cur.args
 	n := len(args)
@@ -5545,8 +5545,8 @@ func (b *builder) argumentSelect(blk *Block, in ir.Instruction, key *Value, guar
 		c.Const = ir.Float(x)
 		return c
 	}
-	k := guard(OpUnboxF64, Float64, ir.GuardExit, key)
-	check := func(c *Value) { guard(OpCheckTrue, None, ir.GuardExit, f.newValue(blk, OpBoxBool, Tagged, c)) }
+	k := gd.guard(OpUnboxF64, Float64, ir.GuardExit, key)
+	check := func(c *Value) { gd.guard(OpCheckTrue, None, ir.GuardExit, f.newValue(blk, OpBoxBool, Tagged, c)) }
 	whole := f.newValue(blk, OpCmpF64, Bool, k, f.newValue(blk, OpTruncF64, Float64, k))
 	whole.Aux = int(ir.Eq)
 	check(whole)
@@ -5613,7 +5613,7 @@ func (b *builder) goCalls() bool {
 // goAdd makes in, an addition, by a call of Go from native code (GoAdd),
 // as V8's code calls its StringAdd builtin: what Go refuses leaves for Go to
 // make after an exit.
-func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
 	release, old := b.bigRelease(blk, b.herePC, in)
 	args := []*Value{operand(in.Left), operand(in.Right)}
 	if old == nil && b.emptyAdd(blk, in, args) {
@@ -5622,7 +5622,7 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	if old != nil {
 		args = append(args, old)
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
 		fb := b.bigFeedback()
 		big := fb != nil && b.cur == b.root && fb.BigInt(b.herePC)
@@ -5689,8 +5689,8 @@ func emptyStringConst(v *Value) bool {
 
 // goCompare is in, a relational comparison whose guard has failed, by a
 // call of Go from native code (GoCompare): its result, a boolean.
-func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 	if b.f.Keeps < b.f.keepLimit() {
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCompare, Argc: int(in.Operator), ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
@@ -5734,13 +5734,13 @@ func (b *builder) goArithAt(pc int, in ir.Instruction, operand func(ir.Operand) 
 
 // goArith makes in, at a site goArithAt names, by a call of Go from native
 // code (GoArith), as goCompare makes a comparison.
-func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	release, old := b.bigRelease(blk, b.herePC, in)
 	args := []*Value{operand(in.Left), operand(in.Right)}
 	if old != nil {
 		args = append(args, old)
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
 		big := in.Operator == ir.Add || in.Operator == ir.Sub || in.Operator == ir.Mul || in.Operator == ir.Div || in.Operator == ir.Mod
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1, Release: release, Big: big}}, b.f.Keeps
@@ -5754,8 +5754,8 @@ func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand
 
 // goHas makes in, the in operator, by a call of Go from native code
 // (GoHas), as goIndex makes an element's read: its result, a boolean.
-func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 	if b.f.Keeps < b.f.keepLimit() {
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHas, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
@@ -5780,8 +5780,8 @@ func capturesLocals(caps []int32) bool {
 // goDelete makes in, the delete operator, by a call of Go from native code
 // (GoDelete, or GoDeleteStrict in strict code), as goHas makes in: its
 // result, a boolean.
-func (b *builder) goDelete(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+func (b *builder) goDelete(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 	if b.f.Keeps < b.f.keepLimit() {
 		op := GoDelete
 		if in.Strict {
@@ -5803,8 +5803,8 @@ func relational(op ir.Operator) bool {
 
 // goIndex makes in, an element read as it is, by a call of Go from native
 // code (GoIndex), as goAdd makes an addition.
-func (b *builder) goIndex(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+func (b *builder) goIndex(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 	if b.f.Keeps < b.f.keepLimit() {
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoIndex, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
@@ -5870,8 +5870,8 @@ func (b *builder) mapNexts() [2]uintptr {
 // for Go to store after an exit, native code going on after it. Each such
 // write had left native code: microbench's prop_create, obj[i] = i of an
 // object's own index properties, at every store.
-func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right), operand(in.Third))
+func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right), operand(in.Third))
 	if b.f.Keeps < b.f.keepLimit() {
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoKeyedWrite, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
@@ -5883,7 +5883,7 @@ func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Op
 // loop's body four times over -- and ends blk with the branch on its answer: the uninitialized value,
 // which no step yields, for a cursor done, any other its next value. What
 // Go refuses leaves for Go to make after an exit.
-func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
 	// Where the loop goes on, read before a guard splits blk, which gives
 	// its successors to the block it goes on in.
 	var on *Block
@@ -5893,7 +5893,7 @@ func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(i
 	if b.userStep(blk, pc, in, on, operand) {
 		return
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
+	call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 	if b.f.Keeps < b.f.keepLimit() && in.Rest {
 		// A rest element's: no step natively, which takes one value.
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Rest: true, ThisSlot: -1}}, b.f.Keeps
@@ -5930,7 +5930,7 @@ func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(i
 	done := b.f.newValue(blk, OpConst, Tagged)
 	done.Const = ir.Value{Kind: ir.Uninitialized}
 	// Never left: the constant is no string (OpEqTagged).
-	is := guard(OpEqTagged, Bool, ir.HostExit, r, done)
+	is := gd.guard(OpEqTagged, Bool, ir.HostExit, r, done)
 	is.Index = 1
 	blk.Control = is
 	is.Uses++
@@ -6045,8 +6045,8 @@ func (b *builder) userStep(blk *Block, pc int, in ir.Instruction, on *Block, ope
 // captured locals are where the frame has them, as native code assigns
 // them there (storeCaptured). What Go refuses -- a frame it has none of,
 // as a native callee's -- leaves for Go to make after an exit.
-func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit)
+func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, gd *guarder) {
+	call := gd.guard(OpCall, Tagged, ir.HostExit)
 	site := &CallSite{Go: GoClosure, Argc: int(in.Key), ThisSlot: -1}
 	if in.Op == ir.CloseUpvalues {
 		site.Go, site.Closes = GoClose, in.Extra
@@ -6092,7 +6092,7 @@ func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, 
 // goConcat makes in, a concat, by a call of Go from native code (GoConcat),
 // its parts the call's operands: what Go refuses leaves for Go to make
 // after an exit.
-func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) {
 	// A call's operands at a time (abi.MaxGoArgs), each call's string the
 	// next one's first part, as the compiler joins a chain past its 32: a
 	// concat of more had left native code at every turn -- a template's,
@@ -6108,7 +6108,7 @@ func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operan
 		for ; at < in.Extra && len(parts) < abi.MaxGoArgs; at++ {
 			parts = append(parts, operand(ir.Slot(in.Dest+at)))
 		}
-		call := guard(OpCall, Tagged, ir.HostExit, parts...)
+		call := gd.guard(OpCall, Tagged, ir.HostExit, parts...)
 		if b.f.Keeps < b.f.keepLimit() {
 			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
 			b.f.Keeps++
@@ -6217,17 +6217,17 @@ func (b *builder) fromCharCode(pc int) (uintptr, bool) {
 // of its own (split), native code going on after either. Leaving there,
 // PDF.js's Font.charToGlyph, whose characters are past 255, left native
 // code at each call, the interpreter finishing the rest of each.
-func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, gd *guarder) {
 	s, _ := b.callSlotsOf(pc, 1, true)
 	callee := b.read(s.fn, blk)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	x := b.read(s.arg, blk)
-	code := guard(OpUnboxF64, Float64, ir.HostExit, x)
+	code := gd.guard(OpUnboxF64, Float64, ir.HostExit, x)
 	keep, kept := b.callKept(pc)
 	if b.cur != b.root || !kept || !b.goCalls() {
-		cell := guard(OpCodeChar, Source, ir.HostExit, code)
+		cell := gd.guard(OpCodeChar, Source, ir.HostExit, code)
 		v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
 		v.Shadow = cell
 		b.assign(s.dest, blk, v)
@@ -6374,7 +6374,7 @@ func (b *builder) substring(pc int) (fn uintptr, kind int, ok bool) {
 // nothing made, as V8 makes a one-character string from its table of
 // them; any other, a call of Go (the site's GoCall) makes, on a branch of
 // its own (split), native code going on after it.
-func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, gd *guarder) {
 	f := b.f
 	argc := 2
 	if kind == SubstrAt {
@@ -6388,12 +6388,12 @@ func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard 
 		operands = append(operands, b.read(s.arg+k, blk))
 	}
 	recv, callee := operands[0], operands[1]
-	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
 	args := []*Value{recv}
 	for _, x := range operands[2:] {
-		args = append(args, guard(OpUnboxF64, Float64, ir.HostExit, x))
+		args = append(args, gd.guard(OpUnboxF64, Float64, ir.HostExit, x))
 	}
 	cell := f.newValue(blk, OpSubstringChar, Source, args...)
 	cell.Aux = kind
@@ -6476,10 +6476,10 @@ func (b *builder) charCode(pc int) bool {
 // receiver a flat string, its argument an integer below its length, and
 // its function the intrinsic (OpStringCode), the code unit there is its
 // result, in the call's result slot; anything else leaves for Go.
-func (b *builder) charCodeCall(blk *Block, pc int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+func (b *builder) charCodeCall(blk *Block, pc int, gd *guarder, boxF func(*Value) *Value) {
 	s, _ := b.callSlotsOf(pc, 1, true)
-	key := guard(OpUnboxF64, Float64, ir.HostExit, b.read(s.arg, blk))
-	code := guard(OpStringCode, Float64, ir.HostExit, b.read(s.fn, blk), b.read(s.recv, blk), key)
+	key := gd.guard(OpUnboxF64, Float64, ir.HostExit, b.read(s.arg, blk))
+	code := gd.guard(OpStringCode, Float64, ir.HostExit, b.read(s.fn, blk), b.read(s.recv, blk), key)
 	b.assign(s.dest, blk, boxF(code))
 }
 
@@ -6514,7 +6514,7 @@ func (b *builder) instanceOf(pc int) (InstanceOfSite, bool) {
 // through its shape and Function.prototype's, and whose prototype property,
 // read through its shape, is an object, the answer is found along the
 // value's prototypes -- any check failing, Go makes it.
-func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxB func(*Value) *Value) {
+func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, gd *guarder, boxB func(*Value) *Value) {
 	f := b.f
 	// Its operands, the value and the constructor, and its result:
 	// register code's in its registers, a slot program's on the operand
@@ -6524,11 +6524,11 @@ func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, guard func(
 	if in := &b.p.Code[pc]; in.Window {
 		value, ctorSlot, dest = b.cur.base+in.Left.Slot, b.cur.base+in.Right.Slot, b.cur.base+in.Dest
 	}
-	ctor := guard(OpObjectOf, Ptr, ir.HostExit, b.read(ctorSlot, blk))
-	same := guard(OpSameObject, None, ir.HostExit, ctor)
+	ctor := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(ctorSlot, blk))
+	same := gd.guard(OpSameObject, None, ir.HostExit, ctor)
 	same.Const = ir.Value{Bits: uint64(k.Ctor)}
 	read := func(site PropertySite) *Value {
-		cell := guard(OpPropCell, Source, ir.HostExit, ctor)
+		cell := gd.guard(OpPropCell, Source, ir.HostExit, ctor)
 		cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 		if site.Holders[0].Object != 0 {
 			b.f.cache(cell).Holders = b.f.holderChain(HolderChain{Holders: site.Holders, More: site.More})
@@ -6537,11 +6537,11 @@ func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, guard func(
 		v.Shadow = cell
 		return v
 	}
-	has := guard(OpObjectOf, Ptr, ir.HostExit, read(k.HasInstance))
-	fn := guard(OpSameObject, None, ir.HostExit, has)
+	has := gd.guard(OpObjectOf, Ptr, ir.HostExit, read(k.HasInstance))
+	fn := gd.guard(OpSameObject, None, ir.HostExit, has)
 	fn.Const = ir.Value{Bits: uint64(k.HasInstanceFn)}
-	proto := guard(OpObjectOf, Ptr, ir.HostExit, read(k.Prototype))
-	yes := guard(OpInstanceOf, Bool, ir.HostExit, b.read(value, blk), proto)
+	proto := gd.guard(OpObjectOf, Ptr, ir.HostExit, read(k.Prototype))
+	yes := gd.guard(OpInstanceOf, Bool, ir.HostExit, b.read(value, blk), proto)
 	b.assign(dest, blk, boxB(yes))
 }
 
@@ -6604,28 +6604,28 @@ func (k Intrinsic) args() int {
 // intrinsicCall makes the intrinsic call at pc (Intrinsic): checked to call
 // the function, its argument a number -- either not, Go makes the call --
 // its result is computed, in the call's result slot.
-func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, gd *guarder, boxF func(*Value) *Value) {
 	switch k.Op {
 	case OpZextW, OpSextW:
-		b.asNCall(blk, pc, k, guard)
+		b.asNCall(blk, pc, k, gd)
 		return
 	case OpBigOfF64:
-		b.bigOfCall(blk, pc, k, guard)
+		b.bigOfCall(blk, pc, k, gd)
 		return
 	}
 	n := k.args()
 	s, _ := b.callSlotsOf(pc, n, !k.Plain)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(s.fn, blk))
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(s.fn, blk))
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(k.Callee)}
 	var xs [maxIntrinsicArgs]*Value
 	for i := range n {
-		xs[i] = guard(OpUnboxF64, Float64, ir.HostExit, b.read(s.arg+i, blk))
+		xs[i] = gd.guard(OpUnboxF64, Float64, ir.HostExit, b.read(s.arg+i, blk))
 	}
 	var r *Value
 	switch k.Op {
 	case OpPowF64:
-		r = guard(OpPowF64, Float64, ir.HostExit, xs[0], xs[1])
+		r = gd.guard(OpPowF64, Float64, ir.HostExit, xs[0], xs[1])
 	case OpMulI32:
 		// Math.imul: each number's ToInt32, and their product's low half,
 		// signed.
@@ -6660,19 +6660,19 @@ func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, 
 // undefined, its receiver, and undefined in every other. The call's state,
 // where the frames of an exit inside the callee go on, is the frame's at
 // the call, not its call's: the frame is made there.
-func (b *builder) forwardCall(blk *Block, pc, sp int, fr *frame, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) forwardCall(blk *Block, pc, sp int, fr *frame, gd *guarder) {
 	site := fr.site
-	target := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-3, blk))
-	same := guard(OpSameObject, None, ir.HostExit, target)
+	target := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-3, blk))
+	same := gd.guard(OpSameObject, None, ir.HostExit, target)
 	same.Const = ir.Value{Bits: uint64(site.Callee)}
-	apply := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
-	same = guard(OpSameObject, None, ir.HostExit, apply)
+	apply := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
+	same = gd.guard(OpSameObject, None, ir.HostExit, apply)
 	same.Const = ir.Value{Bits: uint64(site.Apply)}
 	if site.Coerce && site.ThisSlot >= 0 {
 		// A receiver that is not an object is coerced, which Go does.
-		guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-1, blk))
+		gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-1, blk))
 	}
-	room := guard(OpFrameRoom, None, ir.HostExit)
+	room := gd.guard(OpFrameRoom, None, ir.HostExit)
 	room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
 	room.Const = ir.Value{Bits: uint64(fr.depth)}
 	fr.call = b.frameState(blk, pc)
@@ -6730,8 +6730,8 @@ func (s GlobalSite) cell() Op {
 
 // globalCell is the guard that finds the site's binding, exiting as kind
 // says where it is not there.
-func (b *builder) globalCell(site GlobalSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, kind ir.ExitKind) *Value {
-	cell := guard(site.cell(), Source, kind)
+func (b *builder) globalCell(site GlobalSite, gd *guarder, kind ir.ExitKind) *Value {
+	cell := gd.guard(site.cell(), Source, kind)
 	cell.Index, cell.Key = int(site.Index), site.Key
 	if site.Holder != 0 {
 		cell.Const, cell.Global = ir.Value{Bits: uint64(site.Holder)}, site.Shadowable
@@ -7600,14 +7600,14 @@ func (b *builder) constIn(blk *Block, c ir.Value) *Value {
 // equality is an Eq or Ne as a bool, of any two values: with null or
 // undefined (nullish), or as OpEqTagged compares them. It returns nil for
 // any other operation.
-func (b *builder) equality(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) equality(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	if in.Operator != ir.Eq && in.Operator != ir.Ne {
 		return nil
 	}
-	if c := b.nullish(blk, in, operand, guard); c != nil {
+	if c := b.nullish(blk, in, operand, gd); c != nil {
 		return c
 	}
-	c := guard(OpEqTagged, Bool, ir.HostExit, operand(in.Left), operand(in.Right))
+	c := gd.guard(OpEqTagged, Bool, ir.HostExit, operand(in.Left), operand(in.Right))
 	if in.Strict {
 		c.Index = 1
 	}
@@ -7620,7 +7620,7 @@ func (b *builder) equality(blk *Block, in ir.Instruction, operand func(ir.Operan
 // nullish is an Eq or Ne with null or undefined, as a bool, whatever the
 // other operand is: compared natively, rather than taken for a number.
 // It returns nil for any other comparison.
-func (b *builder) nullish(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) nullish(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	if in.Operator != ir.Eq && in.Operator != ir.Ne {
 		return nil
 	}
@@ -7641,7 +7641,7 @@ func (b *builder) nullish(blk *Block, in ir.Instruction, operand func(ir.Operand
 			c.Aux = 1
 		}
 	} else {
-		c = guard(OpLooseNullish, Bool, ir.HostExit, x)
+		c = gd.guard(OpLooseNullish, Bool, ir.HostExit, x)
 	}
 	if in.Operator == ir.Ne {
 		c = b.f.newValue(blk, OpNot, Bool, c)
@@ -8335,6 +8335,62 @@ func (b *builder) commitsBuilt(pc int) bool {
 	return a >= 0 && a < b.p.Regs || c >= 0 && c < b.p.Regs
 }
 
+// A guarder makes an instruction's guards: values that exit as their
+// kinds say, in the instruction's frame state (state), in the block the
+// instruction's code is at. A method of a type, where it had been a
+// closure the instruction gave its helpers, so that a guard's arguments
+// stay on the stack: a variadic call through a func value puts them on
+// the heap, some ten thousand lists of one or two values a run of
+// Typescript's compiles. Its state is its own for the same reason: the
+// instruction's closure, kept in it, put the instruction's block and
+// state on the heap.
+type guarder struct {
+	b *builder
+	// blk is the instruction's block, which the instruction sets again
+	// as its code goes on in another; pc is the instruction's, and root
+	// whether it is the root frame's.
+	blk  *Block
+	pc   int
+	root bool
+	// st is an inlined callee's instruction's state, made once asked for.
+	st *FrameState
+}
+
+// state is the instruction's frame state: the root frame's, the builder's,
+// which an assignment to a captured local shares (storeCaptured); an
+// inlined callee's, this call's.
+func (g *guarder) state() *FrameState {
+	b := g.b
+	if g.root && b.region != nil {
+		// Inside BigInt operators made on their low bits (wraps): the
+		// state before the first of them, which nothing since has changed
+		// but those operators, which Go makes over again.
+		return b.region
+	}
+	if g.root {
+		return b.rootState()
+	}
+	if g.st == nil {
+		g.st = b.state(g.blk, g.pc)
+	}
+	return g.st
+}
+
+// guard is a value of op, of type t, of args, that exits as kind -- or to
+// Go, inside an inlined callee, where Go does the operation in the
+// callee's frame and native code goes on where it can.
+func (g *guarder) guard(op Op, t Type, kind ir.ExitKind, args ...*Value) *Value {
+	b := g.b
+	if b.cur != b.root {
+		kind = ir.HostExit
+	}
+	v := b.f.newValue(g.blk, op, t, args...)
+	v.Aux = int(kind)
+	v.State = g.state()
+	v.State.addUse()
+	return v
+}
+
 func (b *builder) instruction(blk *Block, pc int) {
 	f, in := b.f, b.p.Code[pc]
 	if b.cur != b.root {
@@ -8347,22 +8403,8 @@ func (b *builder) instruction(blk *Block, pc int) {
 	if root {
 		b.rootSt, b.rootBlk, b.rootPC = nil, blk, pc
 	}
-	var st *FrameState
-	state := func() *FrameState {
-		if root && b.region != nil {
-			// Inside BigInt operators made on their low bits (wraps): the
-			// state before the first of them, which nothing since has
-			// changed but those operators, which Go makes over again.
-			return b.region
-		}
-		if root {
-			return b.rootState()
-		}
-		if st == nil {
-			st = b.state(blk, pc)
-		}
-		return st
-	}
+	gd := &guarder{b: b, blk: blk, pc: pc, root: root}
+	state := gd.state
 	b.here, b.herePC = blk, pc
 	operand := func(o ir.Operand) *Value {
 		if o.Slot < 0 {
@@ -8372,25 +8414,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		return b.read(o.Slot, blk)
 	}
-	guard := func(op Op, t Type, kind ir.ExitKind, args ...*Value) *Value {
-		if b.cur != b.root {
-			// Inside an inlined callee Go does the operation, in the
-			// callee's frame, and native code goes on where it can.
-			kind = ir.HostExit
-		}
-		v := f.newValue(blk, op, t, args...)
-		v.Aux = int(kind)
-		v.State = state()
-		v.State.addUse()
-		return v
-	}
 	number := func(o ir.Operand, kind ir.ExitKind) *Value {
 		if o.Slot < 0 && o.Literal.Kind == ir.Number {
 			v := f.newValue(blk, OpConstF64, Float64)
 			v.Const = o.Literal
 			return v
 		}
-		return guard(OpUnboxF64, Float64, kind, operand(o))
+		return gd.guard(OpUnboxF64, Float64, kind, operand(o))
 	}
 	// numberOf is number, but for an operand that a comparison or a Not
 	// wrote (ir.Instruction's Bools), a boolean: its number.
@@ -8415,7 +8445,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if o.Slot < 0 && o.Literal.Kind == ir.Number {
 			return number(o, ir.HostExit)
 		}
-		v := guard(OpOddballF64, Float64, ir.HostExit, operand(o))
+		v := gd.guard(OpOddballF64, Float64, ir.HostExit, operand(o))
 		if b.goCalls() {
 			// A string's number by Go (GoNumber): an arithmetic operator's
 			// operand, as a relational one is compared by Go here.
@@ -8432,11 +8462,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 	}
 
 	if in.Check {
-		guard(OpCheckInit, None, b.thisCheckKind(in.CheckSlot), b.read(in.CheckSlot, blk))
+		gd.guard(OpCheckInit, None, b.thisCheckKind(in.CheckSlot), b.read(in.CheckSlot, blk))
 	}
 	if in.Raw != ir.RawNone {
 		// Typed code's (raw.go).
-		b.rawInstruction(blk, pc, in, operand, number, guard)
+		b.rawInstruction(blk, pc, in, operand, number, gd)
 		return
 	}
 	if b.unseen(pc) {
@@ -8478,15 +8508,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.assign(n+1, blk, x)
 		b.assign(n+2, blk, y)
 	case ir.Binary:
-		if c := b.equality(blk, in, operand, guard); c != nil {
+		if c := b.equality(blk, in, operand, gd); c != nil {
 			b.assign(in.Dest, blk, boxB(c))
 			break
 		}
 		if b.wraps(pc) {
-			b.wrapOp(blk, pc, in, guard)
+			b.wrapOp(blk, pc, in, gd)
 			break
 		}
-		if v := b.bigNative(blk, pc, in, operand, guard); v != nil {
+		if v := b.bigNative(blk, pc, in, operand, gd); v != nil {
 			if v.Type == Bool {
 				v = boxB(v)
 			}
@@ -8494,17 +8524,17 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if b.goArithAt(pc, in, operand) {
-			b.assign(in.Dest, blk, b.goArith(blk, in, operand, guard))
+			b.assign(in.Dest, blk, b.goArith(blk, in, operand, gd))
 			break
 		}
 		if in.Operator == ir.Add && b.generic(pc) && b.goCalls() {
 			// An addition whose operands were not numbers: Go makes it, as
 			// a string's (ir.StringAdd).
-			b.goAdd(blk, in, operand, guard)
+			b.goAdd(blk, in, operand, gd)
 			break
 		}
 		if relational(in.Operator) && b.generic(pc) && b.goCalls() {
-			b.assign(in.Dest, blk, b.goCompare(blk, in, operand, guard))
+			b.assign(in.Dest, blk, b.goCompare(blk, in, operand, gd))
 			break
 		}
 		kind := ir.GuardExit
@@ -8521,22 +8551,22 @@ func (b *builder) instruction(blk *Block, pc int) {
 			x, y = numberOf(in.Left, kind, in.Bools&1 != 0), numberOf(in.Right, kind, in.Bools&2 != 0)
 		}
 		if in.Operator == ir.Mod {
-			b.assign(in.Dest, blk, boxF(guard(OpModF64, Float64, ir.HostExit, x, y)))
+			b.assign(in.Dest, blk, boxF(gd.guard(OpModF64, Float64, ir.HostExit, x, y)))
 			break
 		}
 		if in.Operator == ir.Pow {
 			// As Math.pow's, where exact, and Go's at an exit otherwise.
-			b.assign(in.Dest, blk, boxF(guard(OpPowF64, Float64, ir.HostExit, x, y)))
+			b.assign(in.Dest, blk, boxF(gd.guard(OpPowF64, Float64, ir.HostExit, x, y)))
 			break
 		}
 		b.assign(in.Dest, blk, b.binary(blk, in.Operator, x, y, boxF, boxB))
 	case ir.Unary:
 		if in.Operator == ir.Not {
-			t := guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
+			t := gd.guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
 			b.assign(in.Dest, blk, boxB(f.newValue(blk, OpNot, Bool, t)))
 			break
 		}
-		if v := b.bigUnary(blk, pc, in, operand, guard); v != nil {
+		if v := b.bigUnary(blk, pc, in, operand, gd); v != nil {
 			b.assign(in.Dest, blk, v)
 			break
 		}
@@ -8577,18 +8607,18 @@ func (b *builder) instruction(blk *Block, pc int) {
 	case ir.Branch:
 		var c *Value
 		if in.Operator == ir.Truth {
-			c = guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
+			c = gd.guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
 		} else if in.Operator == ir.Nullish {
 			// ?? and ?.: null or undefined, no conversion.
 			c = f.newValue(blk, OpStrictNullish, Bool, operand(in.Left))
 			c.Aux = 2
-		} else if n := b.equality(blk, in, operand, guard); n != nil {
+		} else if n := b.equality(blk, in, operand, gd); n != nil {
 			c = n
-		} else if v := b.relationalBig(blk, pc, in, operand, guard); v != nil {
+		} else if v := b.relationalBig(blk, pc, in, operand, gd); v != nil {
 			c = v
 		} else if relational(in.Operator) && b.generic(pc) && b.goCalls() {
 			// Go's comparison's boolean, which native code branches on.
-			c = guard(OpTruth, Bool, ir.GuardExit, b.goCompare(blk, in, operand, guard))
+			c = gd.guard(OpTruth, Bool, ir.GuardExit, b.goCompare(blk, in, operand, gd))
 		} else {
 			kind := ir.GuardExit
 			if in.Operator == ir.Eq || in.Operator == ir.Ne || b.generic(pc) {
@@ -8607,7 +8637,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		c.Uses++
 	case ir.Return:
 		v := operand(in.Left)
-		guard(OpCheckInit, None, ir.GuardExit, v)
+		gd.guard(OpCheckInit, None, ir.GuardExit, v)
 		if b.cur != b.root {
 			// The call's result, and on after it: a construction's, its
 			// receiver.
@@ -8633,7 +8663,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// which native code makes only while any is open). Always:
 			// with the keep cells all taken, a callee that had made a
 			// closure before returned with it open on its dead frame.
-			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, guard)
+			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, gd)
 		}
 		blk.Control = v
 		v.Uses++
@@ -8650,7 +8680,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if in.Op != ir.ArrayUpdate {
 				return number(in.Right, kind), nil
 			}
-			old := guard(OpUnboxF64, Float64, kind, operand(in.Right))
+			old := gd.guard(OpUnboxF64, Float64, kind, operand(in.Right))
 			op := OpAddF64
 			if in.Operator == ir.Sub {
 				op = OpSubF64
@@ -8665,7 +8695,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// A string's element, a string of one ASCII character, as the
 			// runtime has it; Go reads any other's.
 			key, _ := keyOf(ir.HostExit)
-			cell := guard(OpStringChar, Source, ir.HostExit, operand(in.Left), key)
+			cell := gd.guard(OpStringChar, Source, ir.HostExit, operand(in.Left), key)
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)
@@ -8674,16 +8704,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if t, ok := b.typedBigRead(pc); ok && in.Reference && in.Op == ir.ArrayRead {
 			// A BigInt64Array's or a BigUint64Array's element, a BigInt
 			// held in its value; Go reads any other's.
-			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
+			array := gd.guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 			key, _ := keyOf(ir.HostExit)
-			b.assign(in.Dest, blk, b.bigBoxed(blk, guard(OpBigElemRead, t, ir.HostExit, array, key)))
+			b.assign(in.Dest, blk, b.bigBoxed(blk, gd.guard(OpBigElemRead, t, ir.HostExit, array, key)))
 			break
 		}
 		if in.Reference && in.Op == ir.ArrayRead && b.typedReceiver(pc, operand(in.Left)) {
 			// A typed array's number; Go reads any other's.
-			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
+			array := gd.guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 			key, _ := keyOf(ir.HostExit)
-			elem := guard(OpElemRead, Float64, ir.HostExit, array, key)
+			elem := gd.guard(OpElemRead, Float64, ir.HostExit, array, key)
 			b.typedSite(pc, elem)
 			b.assign(in.Dest, blk, boxF(elem))
 			break
@@ -8691,16 +8721,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Reference && in.Op == ir.ArrayRead && b.keyedRead(pc) {
 			// Any receiver's, by Go from native code; what Go does not read
 			// leaves, and native code goes on after it.
-			b.goIndex(blk, in, operand, guard)
+			b.goIndex(blk, in, operand, gd)
 			break
 		}
 		if in.Reference {
 			// Whatever the element holds, by its cell; Go reads the rest,
 			// and makes an update's of its key. An update's key, a[i++],
 			// is written once the read has succeeded, before the element.
-			array := guard(OpArrayOf, Ptr, ir.HostExit, operand(in.Left))
+			array := gd.guard(OpArrayOf, Ptr, ir.HostExit, operand(in.Left))
 			key, updated := keyOf(ir.HostExit)
-			cell := guard(OpElemCell, Source, ir.HostExit, array, key)
+			cell := gd.guard(OpElemCell, Source, ir.HostExit, array, key)
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			if updated != nil {
@@ -8713,9 +8743,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// order is free; the key's update is written only once the read
 		// has succeeded, before the element, which wins if both name one
 		// slot.
-		array := guard(OpIndexedOf, Ptr, ir.GuardExit, operand(in.Left))
+		array := gd.guard(OpIndexedOf, Ptr, ir.GuardExit, operand(in.Left))
 		key, updated := keyOf(ir.GuardExit)
-		elem := guard(OpElemRead, Float64, ir.GuardExit, array, key)
+		elem := gd.guard(OpElemRead, Float64, ir.GuardExit, array, key)
 		b.typedSite(pc, elem)
 		if updated != nil {
 			b.assign(in.Extra, blk, boxF(updated))
@@ -8731,7 +8761,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		kind := ir.GuardExit
 		if b.fb != nil && b.fb.Generic(pc) {
 			kind = ir.HostExit
-			if b.p.Origin != nil && b.whole(blk, pc, in, guard) {
+			if b.p.Origin != nil && b.whole(blk, pc, in, gd) {
 				// Register code's: get_length run whole on the register
 				// frame (CallSite's Whole), where a slot program's GoHost
 				// below runs it on the frame's operands -- an arguments
@@ -8743,7 +8773,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// Go reads it from native code, on the frame (GoHost), as
 				// the interpreter does: an arguments object's, EarleyBoyer's
 				// sc_list's, had left native code at every call.
-				call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
+				call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 				b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHost, Argc: 1, ThisSlot: -1}}, b.f.Keeps
 				b.f.Keeps++
 				b.f.HostsLeft = append(b.f.HostsLeft, pc)
@@ -8757,26 +8787,27 @@ func (b *builder) instruction(blk *Block, pc int) {
 				break
 			}
 		}
-		b.assign(in.Dest, blk, boxF(guard(OpLength, Float64, kind, operand(in.Left))))
+		b.assign(in.Dest, blk, boxF(gd.guard(OpLength, Float64, kind, operand(in.Left))))
 	case ir.ArrayKey:
-		guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
-		guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
+		gd.guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
+		gd.guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
 	case ir.ArrayWrite:
 		if site, ok := b.keyedStore(pc); ok && !site.Define {
 			blk = b.keyedStores(blk, site, operand(in.Left), operand(in.Right), operand(in.Third), b.fb.Generic(pc), state)
+			gd.blk = blk
 		}
 		if b.keyedWrite(pc) {
 			// Any receiver's, by Go from native code; what Go does not
 			// store leaves, and native code goes on after it.
-			b.goKeyedWrite(blk, in, operand, guard)
+			b.goKeyedWrite(blk, in, operand, gd)
 			break
 		}
 		// Any value, by its words; a number's, once it is known to be one,
 		// as a number (simplify). Go stores what native code does not.
-		array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
+		array := gd.guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 		key := number(in.Right, ir.HostExit)
 		if o := in.Third; o.Slot < 0 && o.Literal.Kind == ir.Number {
-			b.typedSite(pc, guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit)))
+			b.typedSite(pc, gd.guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit)))
 			break
 		}
 		if unsigned, ok := b.typedBigWrite(pc); ok {
@@ -8785,20 +8816,20 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// (OpBigLow), stored as its type's word, as V8's keyed store
 			// stores a BigInt64Array's element as a machine word; anything
 			// else Go stores after the exit.
-			w := guard(OpBigElemWrite, None, ir.HostExit, array, key, guard(OpBigLow, Uint64, ir.HostExit, operand(in.Third)))
+			w := gd.guard(OpBigElemWrite, None, ir.HostExit, array, key, gd.guard(OpBigLow, Uint64, ir.HostExit, operand(in.Third)))
 			if unsigned {
 				w.Index = 1
 			}
 			break
 		}
-		b.typedSite(pc, guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third)))
+		b.typedSite(pc, gd.guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third)))
 	case ir.StringMethod:
-		cell := guard(OpStringMethod, Source, ir.HostExit, operand(in.Left))
+		cell := gd.guard(OpStringMethod, Source, ir.HostExit, operand(in.Left))
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)
 		v.Shadow = cell
 		b.assign(in.Dest, blk, v)
 	case ir.StringCode:
-		code := guard(OpStringCode, Float64, ir.HostExit, operand(in.Left), operand(in.Right), number(in.Third, ir.HostExit))
+		code := gd.guard(OpStringCode, Float64, ir.HostExit, operand(in.Left), operand(in.Right), number(in.Third, ir.HostExit))
 		b.assign(in.Dest, blk, boxF(code))
 	case ir.BindingRead:
 		site, ok := b.global(pc)
@@ -8812,7 +8843,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if site.Fixed {
 			kind = ir.GuardExit
 		}
-		cell := b.globalCell(site, guard, kind)
+		cell := b.globalCell(site, gd, kind)
 		if site.Fixed {
 			k := f.newValue(blk, OpConst, Tagged)
 			k.Const = site.Constant
@@ -8874,8 +8905,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 						cont = c
 					}
 					blk = yes
+					gd.blk = blk
 				}
-				cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
+				cell := gd.guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
 				cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(k.Shape)}, int(k.Index), k.Key
 				if k.Primitive != PrimitiveString || k.Holders[0].Object != 0 {
 					c := f.cache(cell)
@@ -8886,6 +8918,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				b.assign(in.Dest, blk, v)
 				if no != nil {
 					blk = no
+					gd.blk = blk
 				}
 			}
 			if cont != nil {
@@ -8899,7 +8932,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		site, ok := b.property(pc)
 		if !ok {
-			if in.Private && b.whole(blk, pc, in, guard) {
+			if in.Private && b.whole(blk, pc, in, gd) {
 				// Register code's private member Go reads or writes from
 				// native code, which goes on after it: a site whose cache
 				// holds no own field of its key.
@@ -8931,10 +8964,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Private {
 			// The key this evaluation of the class minted, the one the
 			// site's shapes have.
-			k := guard(OpSameSymbol, None, ir.HostExit, operand(in.Third))
+			k := gd.guard(OpSameSymbol, None, ir.HostExit, operand(in.Third))
 			k.Const = ir.Value{Bits: uint64(site.Private)}
 		}
-		object := guard(OpObjectOf, Ptr, kind, operand(in.Left))
+		object := gd.guard(OpObjectOf, Ptr, kind, operand(in.Left))
 		// A read the receiver's prototypes answered checks them too; a
 		// write, which makes a property of the receiver's own, never meets
 		// one.
@@ -8964,7 +8997,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Private && in.When {
 			// #x in o: true where the read finds the member -- an object of
 			// a shape the site has met -- and Go's answer elsewhere.
-			cell := guard(OpPropCell, Source, kind, object)
+			cell := gd.guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
 			k := f.newValue(blk, OpConst, Tagged)
@@ -8998,7 +9031,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				object.Index = ObjectOfTry
 			}
 			b.readCalled(pc)
-			cell := guard(OpPropCell, Source, kind, object)
+			cell := gd.guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
 			f.cache(cell).Mega, f.cache(cell).Try = true, true
@@ -9033,7 +9066,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// unbox it (Feedback's Generic); or one of no shape that looks
 			// in the megamorphic cache, an object pattern's in an inlined
 			// callee, whose values are anything.
-			cell := guard(OpPropCell, Source, kind, object)
+			cell := gd.guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
 			if site.Megamorphic {
@@ -9048,7 +9081,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if in.Op == ir.PropertyRead {
-			v := guard(OpPropRead, Float64, kind, object)
+			v := gd.guard(OpPropRead, Float64, kind, object)
 			v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(v, holders, cases, nil, nil)
 			if site.Megamorphic {
@@ -9060,7 +9093,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxF(v))
 			break
 		}
-		v := guard(OpPropWrite, None, kind, object, operand(in.Right))
+		v := gd.guard(OpPropWrite, None, kind, object, operand(in.Right))
 		v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 		// A property the write adds, as V8's stores do along a map's
 		// transition; or, to an object that has it, stores: of any of the
@@ -9131,8 +9164,8 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		cell := b.globalCell(site, guard, ir.HostExit)
-		w := guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
+		cell := b.globalCell(site, gd, ir.HostExit)
+		w := gd.guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
 		w.Key, w.Global = site.Key, true
 	case ir.BindingCheck:
 		// The name resolves: its binding's cell is there.
@@ -9143,13 +9176,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.globalCell(site, guard, ir.HostExit)
+		b.globalCell(site, gd, ir.HostExit)
 		k := f.newValue(blk, OpConst, Tagged)
 		k.Const = ir.Bool(true)
 		b.assign(in.Dest, blk, k)
 	case ir.IterStep:
 		if b.host(pc) {
-			if b.whole(blk, pc, in, guard) {
+			if b.whole(blk, pc, in, gd) {
 				break
 			}
 			blk.ExitKind = ir.HostExit
@@ -9157,7 +9190,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.iterStep(blk, pc, in, operand, guard)
+		b.iterStep(blk, pc, in, operand, gd)
 	case ir.StringFreeze:
 		// A string only: what is known to be anything else has nothing to
 		// freeze. It is a store, so that removeDead keeps it, and exits to
@@ -9177,7 +9210,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// Go closes any other -- by a call of Go native code goes on after
 		// (GoIterClose, Index 1) where that runs no script, a generator's
 		// a destructuring left suspended, after an exit otherwise.
-		c := guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
+		c := gd.guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
 		if w, ok := b.fb.(WalkedCloseFeedback); ok {
 			c.Const.Bits = uint64(w.WalkedCloseCell())
 		}
@@ -9204,7 +9237,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goFrame(blk, pc, in, guard)
+		b.goFrame(blk, pc, in, gd)
 	case ir.Rethrow:
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
@@ -9224,7 +9257,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		is := f.newValue(blk, OpCmpF64, Bool, kind, normal)
 		is.Aux = int(ir.Eq)
 		if !in.When || b.cur != b.root {
-			guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
+			gd.guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
 			break
 		}
 		ret, cont := b.blockAfter(blk), b.blockAfter(blk)
@@ -9239,16 +9272,17 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.splits = append(b.splits, ret, cont)
 		b.next = cont
 		blk = ret
+		gd.blk = blk
 		two := f.newValue(blk, OpConstF64, Float64)
 		two.Const = ir.Float(ir.RethrowReturn)
 		returns := f.newValue(blk, OpCmpF64, Bool, kind, two)
 		returns.Aux = int(ir.Eq)
-		guard(OpCheckTrue, None, ir.GuardExit, boxB(returns))
+		gd.guard(OpCheckTrue, None, ir.GuardExit, boxB(returns))
 		v := operand(ir.Slot(in.Left.Slot - 1))
-		guard(OpCheckInit, None, ir.GuardExit, v)
+		gd.guard(OpCheckInit, None, ir.GuardExit, v)
 		if b.p.Captured != nil && !b.p.Cells {
 			// Closed before it returns, as a return closes them.
-			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, guard)
+			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, gd)
 		}
 		blk.Control = v
 		v.Uses++
@@ -9279,11 +9313,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// exit at the check.
 		nullish := f.newValue(blk, OpStrictNullish, Bool, operand(in.Left))
 		nullish.Aux = 2
-		guard(OpCheckTrue, None, ir.HostExit, boxB(f.newValue(blk, OpNot, Bool, nullish)))
+		gd.guard(OpCheckTrue, None, ir.HostExit, boxB(f.newValue(blk, OpNot, Bool, nullish)))
 	case ir.Resolved:
 		// True where native code checked; Go's answer, after an exit,
 		// checked here, and Go throws for an unresolved name.
-		guard(OpCheckTrue, None, ir.HostExit, operand(in.Left))
+		gd.guard(OpCheckTrue, None, ir.HostExit, operand(in.Left))
 		b.assign(in.Dest, blk, operand(in.Right))
 	case ir.ObjectLiteral, ir.ArrayLiteral:
 		// The pool's next object, kept in a cell as a construction's
@@ -9303,7 +9337,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				elems[i] = operand(ir.Slot(in.Dest + i))
 			}
 		}
-		call := guard(OpCall, Tagged, ir.HostExit, elems...)
+		call := gd.guard(OpCall, Tagged, ir.HostExit, elems...)
 		b.f.cache(call).Calls = []*CallSite{{Pool: site.Pool, Alloc: true, Literal: true, Argc: len(elems), ThisSlot: -1,
 			Shared: in.Op == ir.ArrayLiteral && site.Shared}}
 		call.Index = keep
@@ -9318,7 +9352,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goAdd(blk, in, operand, guard)
+		b.goAdd(blk, in, operand, gd)
 	case ir.HasProperty:
 		if !b.goCalls() {
 			blk.ExitKind = ir.HostExit
@@ -9326,7 +9360,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goHas(blk, in, operand, guard)
+		b.goHas(blk, in, operand, gd)
 	case ir.ArgumentRead:
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
@@ -9353,7 +9387,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				}
 				argc += b.p.ArgumentParams
 			}
-			call := guard(OpCall, Tagged, ir.HostExit, args...)
+			call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArgument, Argc: argc, ThisSlot: -1}}, b.f.Keeps
 			b.f.Keeps++
 			cell := f.newValue(blk, OpCallCell, Source, call)
@@ -9380,12 +9414,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if n := len(b.cur.args); n > 0 && n <= maxArgumentSelect {
-			b.argumentSelect(blk, in, operand(in.Left), guard)
+			b.argumentSelect(blk, in, operand(in.Left), gd)
 			break
 		}
 		no := f.newValue(blk, OpConst, Tagged)
 		no.Const = ir.Bool(false)
-		guard(OpCheckTrue, None, ir.GuardExit, no)
+		gd.guard(OpCheckTrue, None, ir.GuardExit, no)
 		b.assign(in.Dest, blk, operand(in.Left))
 	case ir.DeleteProperty:
 		if !b.goCalls() {
@@ -9394,7 +9428,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goDelete(blk, in, operand, guard)
+		b.goDelete(blk, in, operand, gd)
 	case ir.StringPart:
 		// A part's conversion the concat that reads it makes (compile's
 		// regStringParts): checked to be a primitive that converts calling
@@ -9407,11 +9441,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 				blk.State.addUse()
 				break
 			}
-			b.goConcat(blk, ir.Instruction{Op: ir.StringConcat, Dest: in.Dest, Extra: 1}, func(ir.Operand) *Value { return operand(in.Left) }, guard)
+			b.goConcat(blk, ir.Instruction{Op: ir.StringConcat, Dest: in.Dest, Extra: 1}, func(ir.Operand) *Value { return operand(in.Left) }, gd)
 			break
 		}
 		v := operand(in.Left)
-		guard(OpPrimitive, None, ir.GuardExit, v)
+		gd.guard(OpPrimitive, None, ir.GuardExit, v)
 		b.assign(in.Dest, blk, v)
 	case ir.StringConcat:
 		if !b.goCalls() {
@@ -9420,7 +9454,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goConcat(blk, in, operand, guard)
+		b.goConcat(blk, in, operand, gd)
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		if b.cur != b.root && b.cur.site.Captured != nil && int(in.Key) < len(b.cur.site.Captured) {
 			// A callback the root never made (InlineSite's Captured): its
@@ -9432,7 +9466,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if in.Op == ir.UpvalueRead || in.Check {
 				v := b.read(slot, blk)
 				if in.Check {
-					guard(OpCheckInit, None, ir.GuardExit, v)
+					gd.guard(OpCheckInit, None, ir.GuardExit, v)
 				}
 				if in.Op == ir.UpvalueRead {
 					b.assign(in.Dest, blk, v)
@@ -9440,7 +9474,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				}
 			}
 			x := operand(in.Left)
-			w := guard(OpPropWrite, None, ir.HostExit, b.cellOf(blk, slot), x)
+			w := gd.guard(OpPropWrite, None, ir.HostExit, b.cellOf(blk, slot), x)
 			w.Key, w.Upvalue = localKey(slot), true
 			if b.root.p.Cells || slot >= b.root.p.UpvalueBase {
 				w.Key = upvalueKey
@@ -9457,7 +9491,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				v := f.newValue(blk, OpLoadCell, Tagged, cell)
 				v.Shadow = cell
 				if in.Check {
-					guard(OpCheckInit, None, ir.GuardExit, v)
+					gd.guard(OpCheckInit, None, ir.GuardExit, v)
 				}
 				if in.Op == ir.UpvalueRead {
 					b.typedUpvalue(pc, v)
@@ -9469,7 +9503,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// be one the function's code reads -- a binding both captured, a
 			// local of its own the callee captured -- whose value it has
 			// read before, which it reads again (reloadUpvalues).
-			w := guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
+			w := gd.guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
 			w.Key, w.Upvalue = upvalueKey, true
 			b.reloadUpvalues(blk)
 			break
@@ -9484,19 +9518,19 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Op == ir.UpvalueRead {
 			v := b.read(slot, blk)
 			if in.Check {
-				guard(OpCheckInit, None, ir.GuardExit, v)
+				gd.guard(OpCheckInit, None, ir.GuardExit, v)
 			}
 			b.typedUpvalue(pc, v)
 			b.assign(in.Dest, blk, v)
 			break
 		}
 		if in.Check {
-			guard(OpCheckInit, None, ir.GuardExit, b.read(slot, blk))
+			gd.guard(OpCheckInit, None, ir.GuardExit, b.read(slot, blk))
 		}
 		cell := f.newValue(blk, OpUpvalueCell, Source)
 		cell.Index = int(in.Key)
 		x := operand(in.Left)
-		w := guard(OpPropWrite, None, ir.HostExit, cell, x)
+		w := gd.guard(OpPropWrite, None, ir.HostExit, cell, x)
 		w.Key, w.Upvalue = upvalueKey, true
 		b.write(slot, blk, x)
 	case ir.StringConst:
@@ -9547,7 +9581,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// past a spread, a computed key or __proto__ -- as V8's code
 			// calls its DefineKeyedOwnIC's runtime. Each had left native
 			// code.
-			call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+			call := gd.guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 			b.f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 			cell := f.newValue(blk, OpCallCell, Source, call)
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
@@ -9559,7 +9593,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if !ok {
-			if b.whole(blk, pc, in, guard) {
+			if b.whole(blk, pc, in, gd) {
 				break
 			}
 			blk.ExitKind = ir.HostExit
@@ -9567,11 +9601,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		object := guard(OpObjectOf, Ptr, ir.HostExit, operand(in.Left))
-		w := guard(OpPropWrite, None, ir.HostExit, object, operand(in.Right))
+		object := gd.guard(OpObjectOf, Ptr, ir.HostExit, operand(in.Left))
+		w := gd.guard(OpPropWrite, None, ir.HostExit, object, operand(in.Right))
 		w.Key, b.f.cache(w).Add = add.Key, add
 	case ir.TypeTest:
-		v := guard(OpTypeIs, Bool, ir.HostExit, operand(in.Left))
+		v := gd.guard(OpTypeIs, Bool, ir.HostExit, operand(in.Left))
 		v.Index = int(in.Key)
 		if !in.When {
 			v.Const = ir.Value{Bits: 1}
@@ -9590,7 +9624,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			for i := range args {
 				args[i] = b.read(sp-in.Extra+i, blk)
 			}
-			call := guard(OpCall, Tagged, ir.HostExit, args...)
+			call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHost, Argc: in.Extra, ThisSlot: -1}}, b.f.Keeps
 			b.f.Keeps++
 			b.f.HostsLeft = append(b.f.HostsLeft, pc)
@@ -9611,10 +9645,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if site, ok := b.keyedStore(pc); ok && site.Define {
 				if reads, n, _, _ := in.WholeOperands(b.p.Regs); n == 3 {
 					blk = b.keyedStores(blk, site, b.read(reads[0], blk), b.read(reads[1], blk), b.read(reads[2], blk), b.fb.Generic(pc), state)
+					gd.blk = blk
 				}
 			}
 		}
-		if in.Op == ir.Host && in.Whole && b.whole(blk, pc, in, guard) {
+		if in.Op == ir.Host && in.Whole && b.whole(blk, pc, in, gd) {
 			break
 		}
 		if in.Tail && in.Window {
@@ -9648,7 +9683,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				for i := range in.Extra {
 					args = append(args, b.read(a+2+i, blk))
 				}
-				v := guard(OpTailSelf, None, ir.HostExit, args...)
+				v := gd.guard(OpTailSelf, None, ir.HostExit, args...)
 				v.Index, v.Const = p.ParamBase+p.Params, ir.Value{Bits: uint64(p.Regs)}
 				v.Key = TailWindow
 				if p.Origin != nil && !looped(p, 0) {
@@ -9663,7 +9698,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 					b.f.cache(v).Calls = calls
 				}
 			} else {
-				room := guard(OpTailRoom, None, ir.HostExit)
+				room := gd.guard(OpTailRoom, None, ir.HostExit)
 				room.Index = b.cur.depth
 			}
 		} else if in.Tail {
@@ -9688,7 +9723,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 					}
 					args = append(args, this)
 				}
-				v := guard(OpTailSelf, None, ir.HostExit, args...)
+				v := gd.guard(OpTailSelf, None, ir.HostExit, args...)
 				v.Index, v.Const = p.Params, ir.Value{Bits: uint64(p.UpvalueBase)}
 				if in.When || p.This {
 					v.Key |= 1
@@ -9703,20 +9738,20 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// An inlined callee's frame is not a level of its own: the
 				// frames it is inlined in count, as the interpreter's
 				// frames would (OpTailRoom's Index).
-				room := guard(OpTailRoom, None, ir.HostExit)
+				room := gd.guard(OpTailRoom, None, ir.HostExit)
 				room.Index = b.cur.depth
 			}
 		}
 		if k, ok := b.intrinsic(pc); ok && in.Op == ir.Host {
-			b.intrinsicCall(blk, pc, k, guard, boxF)
+			b.intrinsicCall(blk, pc, k, gd, boxF)
 			break
 		}
 		if in.Op == ir.Host && b.charCode(pc) {
-			b.charCodeCall(blk, pc, guard, boxF)
+			b.charCodeCall(blk, pc, gd, boxF)
 			break
 		}
 		if fn, ok := b.fromCharCode(pc); ok && in.Op == ir.Host {
-			b.fromCharCodeCall(blk, pc, fn, guard)
+			b.fromCharCodeCall(blk, pc, fn, gd)
 			break
 		}
 		if fp, ok := b.forEaches[pc]; ok && in.Op == ir.Host && b.cur == b.root {
@@ -9728,27 +9763,27 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if fn, ok := b.parseIntAt(pc); ok && in.Op == ir.Host {
-			b.parseIntCall(blk, pc, fn, guard, boxF)
+			b.parseIntCall(blk, pc, fn, gd, boxF)
 			break
 		}
 		if fn, kind, ok := b.indexOfAt(pc); ok && in.Op == ir.Host {
-			b.indexOfCall(blk, pc, fn, kind, guard)
+			b.indexOfCall(blk, pc, fn, kind, gd)
 			break
 		}
 		if fn, ok := b.leafAt(pc); ok && in.Op == ir.Host {
-			b.leafCall(blk, pc, fn, guard)
+			b.leafCall(blk, pc, fn, gd)
 			break
 		}
 		if fn, ok := b.bigStringAt(pc); ok && in.Op == ir.Host {
-			b.bigStringCall(blk, pc, fn, guard)
+			b.bigStringCall(blk, pc, fn, gd)
 			break
 		}
 		if fn, kind, ok := b.substring(pc); ok && in.Op == ir.Host {
-			b.substringCall(blk, pc, fn, kind, guard)
+			b.substringCall(blk, pc, fn, kind, gd)
 			break
 		}
 		if k, ok := b.instanceOf(pc); ok && in.Op == ir.Host {
-			b.instanceOfOp(blk, pc, k, guard, boxB)
+			b.instanceOfOp(blk, pc, k, gd, boxB)
 			break
 		}
 		if cells, ok := b.typeofAt(pc); ok && in.Op == ir.Host {
@@ -9756,11 +9791,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if fr := b.inlinedAt(pc); fr != nil {
-			b.inlineCall(blk, pc, fr, guard, state)
+			b.inlineCall(blk, pc, fr, gd, state)
 			break
 		}
 		if calls := b.callsAt(pc); calls != nil && b.cur == b.root && in.Window {
-			b.windowCall(blk, pc, in, calls, guard)
+			b.windowCall(blk, pc, in, calls, gd)
 			break
 		}
 		if calls := b.callsAt(pc); calls != nil && b.cur == b.root {
@@ -9796,11 +9831,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// f.apply(x, arguments) of the realm's apply, which the
 				// call makes (CallSite's Forward); any other apply is the
 				// interpreter's, which makes the arguments object.
-				apply := guard(OpObjectOf, Ptr, ir.HostExit, args[1])
-				same := guard(OpSameObject, None, ir.HostExit, apply)
+				apply := gd.guard(OpObjectOf, Ptr, ir.HostExit, args[1])
+				same := gd.guard(OpSameObject, None, ir.HostExit, apply)
 				same.Const = ir.Value{Bits: uint64(calls[0].Apply)}
 			}
-			call := guard(OpCall, Tagged, ir.HostExit, args...)
+			call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 			if calls[0].Go == GoCall {
 				// Go makes it, which counts it as an exit's would.
@@ -9854,7 +9889,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 // does not go on to the next instruction -- a throw, code found invalid --
 // leaves at the call, Go finishing it there. It reports whether it made
 // the call.
-func (b *builder) whole(blk *Block, pc int, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) bool {
+func (b *builder) whole(blk *Block, pc int, in ir.Instruction, gd *guarder) bool {
 	if !b.wholeAt(pc) {
 		return false
 	}
@@ -9877,7 +9912,7 @@ func (b *builder) whole(blk *Block, pc int, in ir.Instruction, guard func(Op, Ty
 	for i := range args {
 		args[i] = b.read(reads[i], blk)
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{site}, f.Keeps
 	f.Keeps++
 	f.HostsLeft = append(f.HostsLeft, pc)
@@ -9944,23 +9979,23 @@ func (b *builder) wholeAt(pc int) bool {
 // function and arguments, register 1 of the window being no operand of
 // theirs; a typeof's operand; an instanceof's object and constructor --
 // and its result, kept in its cell, written to its register.
-func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*CallSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*CallSite, gd *guarder) {
 	if calls[0].Super {
-		b.superCall(blk, pc, in, calls, guard)
+		b.superCall(blk, pc, in, calls, gd)
 		return
 	}
 	if c := calls[0]; len(calls) == 1 && c.Go == GoCall && !c.New && !c.InstanceOf && !c.TypeOf && c.Argc <= abi.MaxGoArgs-2 && b.goCalls() && !b.fb.Generic(pc) {
 		// A leaf's call (LeafFeedback).
 		if lf, ok := b.fb.(LeafFeedback); ok {
 			if fn, ok := lf.Leaf(pc); ok {
-				b.windowLeaf(blk, pc, in, c, fn, guard)
+				b.windowLeaf(blk, pc, in, c, fn, gd)
 				return
 			}
 		}
 		if vf, ok := b.fb.(ViaLeafFeedback); ok && c.Method && c.Argc >= 1 {
 			// G.call(x, ...) of a leaf G (ViaLeafFeedback).
 			if call, fn, ok := vf.ViaLeaf(pc); ok {
-				b.windowViaLeaf(blk, pc, in, c, call, fn, guard)
+				b.windowViaLeaf(blk, pc, in, c, call, fn, gd)
 				return
 			}
 		}
@@ -9972,10 +10007,10 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 		// window's first three registers; the realm's apply checked, any
 		// other the interpreter's.
 		args = append(args, b.read(a, blk), b.read(a+1, blk), b.read(a+2, blk))
-		apply := guard(OpObjectOf, Ptr, ir.HostExit, args[1])
-		same := guard(OpSameObject, None, ir.HostExit, apply)
+		apply := gd.guard(OpObjectOf, Ptr, ir.HostExit, args[1])
+		same := gd.guard(OpSameObject, None, ir.HostExit, apply)
 		same.Const = ir.Value{Bits: uint64(calls[0].Apply)}
-		call := guard(OpCall, Tagged, ir.HostExit, args...)
+		call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 		f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 		cell := f.newValue(blk, OpCallCell, Source, call)
 		r := f.newValue(blk, OpKept, Tagged, cell, call)
@@ -10013,7 +10048,7 @@ func (b *builder) windowCall(blk *Block, pc int, in ir.Instruction, calls []*Cal
 	if calls[0].Table != 0 {
 		calls = b.tableCall(blk, calls, b.read(a, blk))
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 	if !calls[0].InstanceOf && !calls[0].TypeOf {
 		call.IC.Consumed = b.windowConsumed(pc, in)
@@ -10076,7 +10111,7 @@ func (b *builder) windowConsumed(pc int, in ir.Instruction) uint64 {
 // Left; the this it binds, its result, kept in its cell, is R[Dest]'s,
 // register 1's -- as the interpreter's super_call writes them -- and the
 // this slot's from here, which the call stores in the context's This.
-func (b *builder) superCall(blk *Block, pc int, in ir.Instruction, calls []*CallSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) superCall(blk *Block, pc int, in ir.Instruction, calls []*CallSite, gd *guarder) {
 	f, p := b.f, b.p
 	this := p.UpvalueBase + p.Upvalues
 	args := make([]*Value, 0, in.Extra+1)
@@ -10084,7 +10119,7 @@ func (b *builder) superCall(blk *Block, pc int, in ir.Instruction, calls []*Call
 	for i := range in.Extra {
 		args = append(args, b.read(in.Left.Slot+i, blk))
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	call := gd.guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 	if calls[0].Go == GoCall {
 		// Go makes it, which counts it as an exit's would.

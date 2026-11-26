@@ -2453,7 +2453,10 @@ being made again, and go once a whole cycle has passed with none as big.
 goes whole after two idle cycles, or at the return after a turn that left
 it unused (`DropIdleWorkspaces`). Counted by jobs, the last sixteen, a big
 compile's chunks had gone as it ended, and the next as big made them
-again: half of the garbage Typescript's compiles made.
+again: half of the garbage Typescript's compiles made. The builder
+makes an instruction's guards with a method of a value on the stack
+(`ssa`'s `guarder`), not a closure it gives its helpers: a variadic call
+through a func value puts its arguments on the heap.
 
 On arm64, the workspace also keeps the byte buffer the assembler's
 instruction words are encoded into (`FinishInto`). A workspace compile's

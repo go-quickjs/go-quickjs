@@ -36,7 +36,7 @@ type RawMathFeedback interface {
 // rawInstruction builds the raw instruction in, at pc in blk, a Branch's
 // compare included; number is instruction's unboxing of an operand.
 func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value,
-	number func(ir.Operand, ir.ExitKind) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	number func(ir.Operand, ir.ExitKind) *Value, gd *guarder) {
 	f := b.f
 	val := func(op Op, t Type, args ...*Value) *Value { return f.newValue(blk, op, t, args...) }
 	fl := func(o ir.Operand) *Value { return number(o, ir.GuardExit) }
@@ -141,7 +141,7 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 	case ir.RawFDiv:
 		setF(val(OpDivF64, Float64, fl(in.Left), fl(in.Right)))
 	case ir.RawFMod:
-		setF(guard(OpModF64, Float64, ir.HostExit, fl(in.Left), fl(in.Right)))
+		setF(gd.guard(OpModF64, Float64, ir.HostExit, fl(in.Left), fl(in.Right)))
 	case ir.RawFMin:
 		setF(val(OpMinF64, Float64, fl(in.Left), fl(in.Right)))
 	case ir.RawFMax:
@@ -167,7 +167,7 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 		}
 		switch {
 		case ok && k.Op == OpPowF64:
-			setF(guard(OpPowF64, Float64, ir.HostExit, fl(in.Left), fl(in.Right)))
+			setF(gd.guard(OpPowF64, Float64, ir.HostExit, fl(in.Left), fl(in.Right)))
 		case ok && k.Op == OpMathCall && b.goCalls():
 			args := []*Value{fl(in.Left)}
 			if k.Go != GoMath {
@@ -201,7 +201,7 @@ func (b *builder) rawInstruction(blk *Block, pc int, in ir.Instruction, operand 
 			// declared type by validation: its number word, unchecked.
 			n = val(OpNumberF64, Float64, x)
 		} else {
-			n = guard(OpOddballF64, Float64, ir.HostExit, x)
+			n = gd.guard(OpOddballF64, Float64, ir.HostExit, x)
 			if b.goCalls() {
 				n.Index = 1
 			}

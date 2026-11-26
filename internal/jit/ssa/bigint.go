@@ -125,17 +125,17 @@ func bigType(wide bool, xs ...*Value) Type {
 // bigAs is x, a BigInt, unboxed as t: a box's value, checked to be in
 // t's range where it is of the other type; a constant's bits; or any
 // other value's guarded unboxing, which exits as kind says.
-func (b *builder) bigAs(blk *Block, x *Value, t Type, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) bigAs(blk *Block, x *Value, t Type, gd *guarder) *Value {
 	if u := boxedBig(x); u != nil {
 		if u.Type == t {
 			return u
 		}
-		return guard(OpBigSign, t, ir.GuardExit, u)
+		return gd.guard(OpBigSign, t, ir.GuardExit, u)
 	}
 	if t == Uint64 {
-		return guard(OpBigUnboxU64, Uint64, ir.GuardExit, x)
+		return gd.guard(OpBigUnboxU64, Uint64, ir.GuardExit, x)
 	}
-	return guard(OpBigUnbox, Int64, ir.GuardExit, x)
+	return gd.guard(OpBigUnbox, Int64, ir.GuardExit, x)
 }
 
 // bigBoxed is x, an unboxed BigInt, as a value: boxed in a keep cell of
@@ -169,7 +169,7 @@ func bigCount(y *Value) int {
 // boxed, which exits where it is outside its type's range, a shift by a
 // constant from 0 to 63, a division by none but zero; or a comparison's
 // boolean. It is nil for any other, which goArith makes, or the number's.
-func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	op := in.Operator
 	native, arith := bigOperator(op)
 	fb := b.bigFeedback()
@@ -210,7 +210,7 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	if t == None || op == ir.Pow && t != Int64 {
 		return nil
 	}
-	xi := b.bigAs(blk, x, t, guard)
+	xi := b.bigAs(blk, x, t, gd)
 	if op == ir.Shl || op == ir.Shr {
 		var r *Value
 		switch {
@@ -219,29 +219,29 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 		case op == ir.Shr:
 			r = f.newValue(blk, OpSarW, t, xi)
 		case t == Uint64:
-			r = guard(OpShlU64, t, ir.GuardExit, xi)
+			r = gd.guard(OpShlU64, t, ir.GuardExit, xi)
 		default:
-			r = guard(OpShlI64, t, ir.GuardExit, xi)
+			r = gd.guard(OpShlI64, t, ir.GuardExit, xi)
 		}
 		r.Index = count
 		return b.bigBoxed(blk, r)
 	}
-	yi := b.bigAs(blk, y, t, guard)
+	yi := b.bigAs(blk, y, t, gd)
 	var r *Value
 	signed := t == Int64
 	switch op {
 	case ir.Add:
-		r = guard(pick(signed, OpAddI64, OpAddU64), t, ir.GuardExit, xi, yi)
+		r = gd.guard(pick(signed, OpAddI64, OpAddU64), t, ir.GuardExit, xi, yi)
 	case ir.Sub:
-		r = guard(pick(signed, OpSubI64, OpSubU64), t, ir.GuardExit, xi, yi)
+		r = gd.guard(pick(signed, OpSubI64, OpSubU64), t, ir.GuardExit, xi, yi)
 	case ir.Mul:
-		r = guard(pick(signed, OpMulI64, OpMulU64), t, ir.GuardExit, xi, yi)
+		r = gd.guard(pick(signed, OpMulI64, OpMulU64), t, ir.GuardExit, xi, yi)
 	case ir.Div:
-		r = guard(pick(signed, OpDivI64, OpDivU64), t, ir.GuardExit, xi, yi)
+		r = gd.guard(pick(signed, OpDivI64, OpDivU64), t, ir.GuardExit, xi, yi)
 	case ir.Mod:
-		r = guard(pick(signed, OpModI64, OpModU64), t, ir.GuardExit, xi, yi)
+		r = gd.guard(pick(signed, OpModI64, OpModU64), t, ir.GuardExit, xi, yi)
 	case ir.Pow:
-		r = guard(OpPowI64, t, ir.GuardExit, xi, yi)
+		r = gd.guard(OpPowI64, t, ir.GuardExit, xi, yi)
 	case ir.BitAnd:
 		r = f.newValue(blk, OpAndW, t, xi, yi)
 	case ir.BitOr:
@@ -261,18 +261,18 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 // BigInt unboxed as an Int64 where the site met BigInts held in their
 // values (BigIntFeedback) and its speculation has not failed: -x exits for
 // the most negative int64, ~x nowhere; or nil.
-func (b *builder) bigUnary(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) bigUnary(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	fb := b.bigFeedback()
 	if in.Operator != ir.Neg && in.Operator != ir.BitNot || fb == nil || b.generic(pc) || !fb.BigInt(pc) ||
 		b.f.Keeps >= b.f.keepLimit() || in.Left.Slot < 0 {
 		return nil
 	}
 	f := b.f
-	x := b.bigAs(blk, operand(in.Left), Int64, guard)
+	x := b.bigAs(blk, operand(in.Left), Int64, gd)
 	c := f.newValue(blk, OpConstI64, Int64)
 	var r *Value
 	if in.Operator == ir.Neg {
-		r = guard(OpSubI64, Int64, ir.GuardExit, c, x)
+		r = gd.guard(OpSubI64, Int64, ir.GuardExit, c, x)
 	} else {
 		c.Const = ir.Value{Bits: ^uint64(0)}
 		r = f.newValue(blk, OpXorW, Int64, x, c)
@@ -281,11 +281,11 @@ func (b *builder) bigUnary(blk *Block, pc int, in ir.Instruction, operand func(i
 }
 
 // relationalBig is bigNative's comparison, for a branch on one, or nil.
-func (b *builder) relationalBig(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) relationalBig(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, gd *guarder) *Value {
 	if !relational(in.Operator) {
 		return nil
 	}
-	return b.bigNative(blk, pc, in, operand, guard)
+	return b.bigNative(blk, pc, in, operand, gd)
 }
 
 // pick is a if signed, b if not.
@@ -478,18 +478,18 @@ func (b *builder) asN(pc int) (Intrinsic, bool) {
 
 // wordOf is the word of a wrapped operator's operand x: the word the
 // operator before it made, or its low 64 bits, guarded to be a BigInt's.
-func (b *builder) wordOf(x *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+func (b *builder) wordOf(x *Value, gd *guarder) *Value {
 	if w := b.words[x]; w != nil {
 		return w
 	}
-	return guard(OpBigLow, Uint64, ir.GuardExit, x)
+	return gd.guard(OpBigLow, Uint64, ir.GuardExit, x)
 }
 
 // wrapOp makes in, at pc, a wrapped operator (wraps), of its operands'
 // words: its slot holds a placeholder no state may name until the
 // operator or the call that takes it does (frameState). The first of a
 // region's begins it, its state the one its guards and the call's exit to.
-func (b *builder) wrapOp(blk *Block, pc int, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) wrapOp(blk *Block, pc int, in ir.Instruction, gd *guarder) {
 	f := b.f
 	if b.region == nil {
 		b.region = b.rootState()
@@ -497,13 +497,13 @@ func (b *builder) wrapOp(blk *Block, pc int, in ir.Instruction, guard func(Op, T
 	if b.words == nil {
 		b.words = map[*Value]*Value{}
 	}
-	x := b.wordOf(b.read(in.Left.Slot, blk), guard)
+	x := b.wordOf(b.read(in.Left.Slot, blk), gd)
 	var w *Value
 	if in.Operator == ir.Shl {
 		w = f.newValue(blk, OpShlW, Uint64, x)
 		w.Index = b.wrapCount(pc, in.Right.Slot)
 	} else {
-		y := b.wordOf(b.read(in.Right.Slot, blk), guard)
+		y := b.wordOf(b.read(in.Right.Slot, blk), gd)
 		op := OpAddW
 		switch in.Operator {
 		case ir.Sub:
@@ -529,7 +529,7 @@ func (b *builder) wrapOp(blk *Block, pc int, in ir.Instruction, guard func(Op, T
 // V8 reduces it: checked to call the function, x's low bits -- a wrapped
 // operator's word, or x's, guarded to be a BigInt -- cut to the width,
 // boxed. It ends a region of wrapped operators (wraps).
-func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, gd *guarder) {
 	f := b.f
 	cs, _ := b.callSlotsOf(pc, 2, true)
 	x := b.read(cs.arg+1, blk)
@@ -541,11 +541,11 @@ func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, 
 		// the function it calls now.
 		kind = ir.GuardExit
 	}
-	object := guard(OpObjectOf, Ptr, kind, b.read(cs.fn, blk))
-	same := guard(OpSameObject, None, kind, object)
+	object := gd.guard(OpObjectOf, Ptr, kind, b.read(cs.fn, blk))
+	same := gd.guard(OpSameObject, None, kind, object)
 	same.Const = ir.Value{Bits: uint64(k.Callee)}
 	if w == nil {
-		w = guard(OpBigLow, Uint64, ir.HostExit, x)
+		w = gd.guard(OpBigLow, Uint64, ir.HostExit, x)
 	}
 	b.region, b.words = nil, nil
 	var r *Value
@@ -565,13 +565,13 @@ func (b *builder) asNCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, 
 // bigOfCall makes BigInt(x), the call at pc, of a number, as V8 reduces
 // it: checked to call the function, x checked to be an integer in the
 // int64 range (OpBigOfF64), boxed; any other x is Go's call.
-func (b *builder) bigOfCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) bigOfCall(blk *Block, pc int, k Intrinsic, gd *guarder) {
 	cs, _ := b.callSlotsOf(pc, 1, false)
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(cs.fn, blk))
-	same := guard(OpSameObject, None, ir.HostExit, object)
+	object := gd.guard(OpObjectOf, Ptr, ir.HostExit, b.read(cs.fn, blk))
+	same := gd.guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(k.Callee)}
-	x := guard(OpUnboxF64, Float64, ir.HostExit, b.read(cs.arg, blk))
-	r := guard(OpBigOfF64, Int64, ir.HostExit, x)
+	x := gd.guard(OpUnboxF64, Float64, ir.HostExit, b.read(cs.arg, blk))
+	r := gd.guard(OpBigOfF64, Int64, ir.HostExit, x)
 	b.assign(cs.dest, blk, b.bigBoxed(blk, r))
 }
 
