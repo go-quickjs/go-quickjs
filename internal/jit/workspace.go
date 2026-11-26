@@ -77,13 +77,15 @@ func GetWorkspace() *Workspace {
 }
 
 // PutWorkspace gives back w, rewound: nothing built in it may be used
-// after.
+// after. Its tables keep what the compiles of the collector's cycle and
+// the one before needed (ssa's and mir's RewindAt), as the pool keeps a
+// workspace given back for workspaceAge cycles.
 func PutWorkspace(w *Workspace) {
-	w.SSA.Rewind()
-	w.MIR.Rewind()
-	w.bytes = w.SSA.Bytes() + w.MIR.Bytes()
 	workOnce.Do(workArm)
 	w.cycle = workCycle.Load()
+	w.SSA.RewindAt(w.cycle)
+	w.MIR.RewindAt(w.cycle)
+	w.bytes = w.SSA.Bytes() + w.MIR.Bytes()
 	workPool.Lock()
 	w.turn = workTurn
 	workPool.free = append(workPool.free, w)

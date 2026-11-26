@@ -111,49 +111,63 @@ func TestKeepBig(t *testing.T) {
 	}
 }
 
-// TestKeepBigTrims pins what an arena that keeps big requests keeps: a job
-// bigger than every recent one before it gives its chunks back as it is
-// rewound, down to what those needed; jobs as big that come among the
-// recent ones keep them.
+// TestKeepBigTrims pins what an arena that keeps big requests keeps: what
+// the most demanding of the jobs that ended in the collector's cycle and
+// the one before it reached. A big job keeps its chunks, so that the next
+// as big allocates nothing, through the rest of its cycle and the next,
+// and gives them back at the first job to end after that.
 func TestKeepBigTrims(t *testing.T) {
-	small := func(a *Arena[int]) {
+	small := func(a *Arena[int], cycle uint64) {
 		a.Make(10)
 		a.Make(500)
-		a.Rewind()
+		a.RewindAt(cycle)
 	}
-	big := func(a *Arena[int]) {
+	big := func(a *Arena[int], cycle uint64) {
 		a.Make(10)
 		a.Make(1 << 20)
-		a.Rewind()
+		a.RewindAt(cycle)
 	}
 	var a Arena[int]
 	a.KeepBig()
-	small(&a)
+	small(&a, 1)
 	usual := a.Cap()
-	big(&a)
-	if a.Cap() > usual {
-		t.Fatalf("a big job's chunks kept: %d slots, %d after the usual job", a.Cap(), usual)
+	big(&a, 1)
+	if a.Cap() < 1<<20 {
+		t.Fatalf("a big job did not keep its chunks: %d slots", a.Cap())
 	}
-	small(&a)
-	if n := testing.AllocsPerRun(10, func() { small(&a) }); n != 0 {
+	if n := testing.AllocsPerRun(10, func() { big(&a, 1) }); n != 0 {
+		t.Fatalf("a big job like one of its cycle allocated %v times", n)
+	}
+	// Small jobs after it, in its cycle and the next, keep its chunks and
+	// allocate nothing; and so does Rewind, in the cycle of the last job.
+	for _, c := range []uint64{1, 2, 2, 2} {
+		small(&a, c)
+	}
+	a.Make(10)
+	a.Rewind()
+	if a.Cap() < 1<<20 {
+		t.Fatalf("a big job of the cycle before did not keep its chunks: %d slots", a.Cap())
+	}
+	if n := testing.AllocsPerRun(10, func() { big(&a, 2) }); n != 0 {
+		t.Fatalf("a big job like one of the cycle before allocated %v times", n)
+	}
+	// Two cycles on with none as big, the first job to end gives them back.
+	small(&a, 3)
+	if a.Cap() < 1<<20 {
+		t.Fatalf("a big job of the cycle before did not keep its chunks: %d slots", a.Cap())
+	}
+	small(&a, 4)
+	if a.Cap() > usual {
+		t.Fatalf("a big job two cycles back kept its chunks: %d slots, %d after the usual job", a.Cap(), usual)
+	}
+	if n := testing.AllocsPerRun(10, func() { small(&a, 4) }); n != 0 {
 		t.Fatalf("the usual job allocated %v times after a big one", n)
 	}
-	// A big job among the recent ones: the next as big allocates nothing.
-	big(&a)
-	big(&a)
-	if a.Cap() < 1<<20 {
-		t.Fatalf("a big job among the recent ones did not keep its chunks: %d slots", a.Cap())
-	}
-	if n := testing.AllocsPerRun(10, func() { big(&a) }); n != 0 {
-		t.Fatalf("a big job like a recent one allocated %v times", n)
-	}
-	// Once the big jobs are past the recent ones, the next big one goes.
-	for range recentJobs {
-		small(&a)
-	}
-	big(&a)
+	// A job some cycles after the last keeps only what it reached itself.
+	big(&a, 4)
+	small(&a, 9)
 	if a.Cap() > usual {
-		t.Fatalf("a big job past the recent ones kept its chunks: %d slots", a.Cap())
+		t.Fatalf("a big job cycles back kept its chunks: %d slots, %d after the usual job", a.Cap(), usual)
 	}
 }
 
@@ -162,21 +176,23 @@ func TestKeepBigTrims(t *testing.T) {
 // down to the slots it used, a job like it cut its last request from a new
 // chunk after every trim.
 func TestKeepBigKeepsReach(t *testing.T) {
-	usual := func(a *Arena[int]) {
+	usual := func(a *Arena[int], cycle uint64) {
 		// The second request does not fit in the first chunk, nor the third
 		// in the second, which the second fills.
 		a.Make(10)
 		a.Make(100)
 		a.Make(10)
-		a.Rewind()
+		a.RewindAt(cycle)
 	}
 	var a Arena[int]
 	a.KeepBig()
-	usual(&a)
+	usual(&a, 0)
 	reach := a.Cap()
 	a.Make(10)
 	a.Make(1 << 20)
-	a.Rewind()
+	a.RewindAt(0)
+	usual(&a, 1)
+	usual(&a, 2)
 	// What the usual job reached is kept, so that it allocates nothing
 	// again (AllocsPerRun's first run, not counted, would hide the one
 	// chunk it made).

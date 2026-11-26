@@ -2442,6 +2442,19 @@ only for a successful answer; a rejected inline keeps just its asked bit.
 `TestJITRejectedInlineAllocations` checks that rejected probes allocate no
 site once the answer table has room.
 
+A workspace keeps what the compiles of the collector's current and last
+cycle needed, as `sync.Pool` keeps what was put in it for a cycle more.
+Each arena keeps chunks for the most any of those compiles reached
+(`arena.RewindAt`), and `mir`'s scratch tables -- the assemblers', the
+move schedule's, the exits' -- go once they hold more than twice the most
+any of them used. So a big compile's tables serve the next as big without
+being made again, and go once a whole cycle has passed with none as big.
+`jit.PutWorkspace` passes the pool's count of cycles. A pooled workspace
+goes whole after two idle cycles, or at the return after a turn that left
+it unused (`DropIdleWorkspaces`). Counted by jobs, the last sixteen, a big
+compile's chunks had gone as it ended, and the next as big made them
+again: half of the garbage Typescript's compiles made.
+
 On arm64, the workspace also keeps the byte buffer the assembler's
 instruction words are encoded into (`FinishInto`). A workspace compile's
 bytes hold until its next compile;

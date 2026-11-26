@@ -37,6 +37,8 @@ type Workspace struct {
 	frames     arena.Arena[frame]
 	scratch    scratch
 	ready      bool
+	// cycle is the collector's cycle the last compile ended in (RewindAt).
+	cycle uint64
 }
 
 // init has the workspace's arenas keep the big tables a compile makes.
@@ -102,28 +104,36 @@ func capBytes[T any](s []T) int {
 	return cap(s) * int(unsafe.Sizeof(t))
 }
 
-// Rewind takes back everything built in the workspace.
-func (w *Workspace) Rewind() {
-	w.values.Rewind()
-	w.refs.Rewind()
-	w.states.Rewind()
-	w.int32s.Rewind()
-	w.slotNodes.Rewind()
-	w.slotKids.Rewind()
-	w.lastStates.Rewind()
-	w.blocks.Rewind()
-	w.blockRefs.Rewind()
-	w.refLists.Rewind()
-	w.bools.Rewind()
-	w.bytes.Rewind()
-	w.ints.Rewind()
-	w.caches.Rewind()
-	w.accessors.Rewind()
-	w.answers.Rewind()
-	w.callLists.Rewind()
-	w.holders.Rewind()
-	w.inlines.Rewind()
-	w.frames.Rewind()
+// Rewind takes back everything built in the workspace: RewindAt in the
+// collector's cycle of the last compile.
+func (w *Workspace) Rewind() { w.RewindAt(w.cycle) }
+
+// RewindAt takes back everything built in the workspace by a compile that
+// ended in the collector's cycle cycle, which the caller counts: the
+// arenas keep what the compiles of this cycle and the one before needed
+// (arena's RewindAt).
+func (w *Workspace) RewindAt(cycle uint64) {
+	w.cycle = cycle
+	w.values.RewindAt(cycle)
+	w.refs.RewindAt(cycle)
+	w.states.RewindAt(cycle)
+	w.int32s.RewindAt(cycle)
+	w.slotNodes.RewindAt(cycle)
+	w.slotKids.RewindAt(cycle)
+	w.lastStates.RewindAt(cycle)
+	w.blocks.RewindAt(cycle)
+	w.blockRefs.RewindAt(cycle)
+	w.refLists.RewindAt(cycle)
+	w.bools.RewindAt(cycle)
+	w.bytes.RewindAt(cycle)
+	w.ints.RewindAt(cycle)
+	w.caches.RewindAt(cycle)
+	w.accessors.RewindAt(cycle)
+	w.answers.RewindAt(cycle)
+	w.callLists.RewindAt(cycle)
+	w.holders.RewindAt(cycle)
+	w.inlines.RewindAt(cycle)
+	w.frames.RewindAt(cycle)
 	// The tables that hold what the compile's frames point to, which the
 	// workspace is not to keep alive.
 	clear(w.scratch.frameOf[:cap(w.scratch.frameOf)])
@@ -136,7 +146,7 @@ func (w *Workspace) Rewind() {
 		// to keep alive.
 		m.Block = nil
 	}
-	// The arenas keep what the recent compiles needed (arena's Rewind);
+	// The arenas keep what the recent compiles needed (arena's RewindAt);
 	// the scratch tables, grown by value ID, the most any compile has. Once
 	// they hold more than the arenas, a compile bigger than the recent
 	// ones grew them, and they go with its chunks: what the workspace

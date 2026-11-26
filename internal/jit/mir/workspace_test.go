@@ -72,20 +72,23 @@ func TestWorkspaceARM64GoFailsTrim(t *testing.T) {
 	if got, want := w.scratchUsed()-used, int(unsafe.Sizeof(a64GoFail{})); got != want {
 		t.Fatalf("counts %d bytes used, want %d", got, want)
 	}
-	for range len(w.needs) {
-		w.Rewind()
+	// The compiles of the large one's cycle and of the next keep it; the
+	// first of the cycle after lets it go.
+	for _, c := range []uint64{0, 1, 1} {
+		w.RewindAt(c)
 		if w.arm64.goFails == nil {
 			t.Fatal("discarded a table a recent compile needed")
 		}
 	}
-	w.Rewind()
+	w.RewindAt(2)
 	if w.arm64.goFails != nil || w.Bytes() != before {
 		t.Fatalf("keeps %d bytes after the large compile aged out", w.Bytes()-before)
 	}
 }
 
 // The encoded arm64 buffer is scratch memory, counted at its capacity
-// while kept, and trimmed once the recent compiles no longer need it.
+// while kept, and trimmed once no compile of the collector's cycle or the
+// one before needs it.
 func TestWorkspaceARM64Code(t *testing.T) {
 	var w Workspace
 	before, used := w.Bytes(), w.scratchUsed()
@@ -101,13 +104,13 @@ func TestWorkspaceARM64Code(t *testing.T) {
 	if got := w.scratchUsed() - used; got != 16 {
 		t.Fatalf("counts %d bytes used, want 16", got)
 	}
-	for range len(w.needs) {
-		w.Rewind()
+	for _, c := range []uint64{0, 1, 1} {
+		w.RewindAt(c)
 		if w.arm64.code == nil {
 			t.Fatal("discarded a buffer a recent compile needed")
 		}
 	}
-	w.Rewind()
+	w.RewindAt(2)
 	if w.arm64.code != nil || w.Bytes() != before {
 		t.Fatalf("keeps %d bytes after the large compile aged out", w.Bytes()-before)
 	}

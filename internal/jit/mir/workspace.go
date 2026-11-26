@@ -55,12 +55,13 @@ type Workspace struct {
 	kv                   []*ssa.Value
 	gpool                []uint64
 	xusesUsed, gpoolUsed int
-	// needs are what each of the recent compiles used of the scratch
-	// tables (scratchUsed), the next to replace at needs[next]: the
-	// tables keep what those needed, as the arenas keep theirs.
-	needs       [16]int
-	next, known int
-	ready       bool
+	// need is the most the compiles that ended in the collector's cycle
+	// cycle used of the scratch tables (scratchUsed), and needBefore the
+	// most of those of the cycle before: the tables keep what those
+	// needed, as the arenas keep theirs (arena's RewindAt).
+	need, needBefore int
+	cycle            uint64
+	ready            bool
 	// What a compile's exit descriptions share (abi.ExitFrame) is built
 	// here, then copied out once at its length (core's finishExits).
 	exitWords    map[uint64]int32
@@ -171,39 +172,50 @@ func capBytes[T any](s []T) int {
 	return cap(s) * int(unsafe.Sizeof(t))
 }
 
-// Rewind takes back everything a compile in the workspace used.
-func (w *Workspace) Rewind() {
-	w.bools.Rewind()
-	w.ints.Rewind()
-	w.int32s.Rewind()
-	w.words.Rewind()
-	w.sets.Rewind()
-	w.values.Rewind()
-	w.blocks.Rewind()
-	w.intervals.Rewind()
-	w.recs.Rewind()
-	w.gms.Rewind()
-	w.ivRefs.Rewind()
-	w.locs.Rewind()
-	w.saved.Rewind()
-	w.exitNodes.Rewind()
-	w.asks.Rewind()
-	w.liveOps.Rewind()
-	w.liveSets.Rewind()
+// Rewind takes back everything a compile in the workspace used: RewindAt
+// in the collector's cycle of the last compile.
+func (w *Workspace) Rewind() { w.RewindAt(w.cycle) }
+
+// RewindAt takes back everything a compile in the workspace used, which
+// ended in the collector's cycle cycle, which the caller counts: the
+// arenas and the scratch tables keep what the compiles of this cycle and
+// the one before needed.
+func (w *Workspace) RewindAt(cycle uint64) {
+	w.bools.RewindAt(cycle)
+	w.ints.RewindAt(cycle)
+	w.int32s.RewindAt(cycle)
+	w.words.RewindAt(cycle)
+	w.sets.RewindAt(cycle)
+	w.values.RewindAt(cycle)
+	w.blocks.RewindAt(cycle)
+	w.intervals.RewindAt(cycle)
+	w.recs.RewindAt(cycle)
+	w.gms.RewindAt(cycle)
+	w.ivRefs.RewindAt(cycle)
+	w.locs.RewindAt(cycle)
+	w.saved.RewindAt(cycle)
+	w.exitNodes.RewindAt(cycle)
+	w.asks.RewindAt(cycle)
+	w.liveOps.RewindAt(cycle)
+	w.liveSets.RewindAt(cycle)
 	w.core, w.amd64.c, w.arm64.c = core{}, compiler{}, a64Compiler{}
 	// The scratch tables -- the move schedule's, the uses', the groups',
 	// the exit descriptions' and the assemblers' -- go once they hold more
-	// than twice what any of the recent compiles used of them, as the
-	// arenas keep what those compiles used: a compile bigger than they
-	// grew them. (Compared with what the arenas keep, they went with every
-	// compile whose tables had grown as the arenas' shrank.)
-	used := w.scratchUsed()
-	keep := used
-	for _, n := range w.needs[:w.known] {
-		keep = max(keep, n)
+	// than twice what any of the compiles of this cycle and the one before
+	// used of them, as the arenas keep what those compiles used: a compile
+	// bigger than they grew them. (Compared with what the arenas keep,
+	// they went with every compile whose tables had grown as the arenas'
+	// shrank; with what the last sixteen compiles used, with every big
+	// compile sixteen after the last as big.)
+	if cycle != w.cycle {
+		w.needBefore = 0
+		if cycle == w.cycle+1 {
+			w.needBefore = w.need
+		}
+		w.need, w.cycle = 0, cycle
 	}
-	w.needs[w.next], w.next, w.known = used, (w.next+1)%len(w.needs), min(w.known+1, len(w.needs))
-	if w.Bytes()-w.arenaBytes() > 2*keep {
+	w.need = max(w.need, w.scratchUsed())
+	if w.Bytes()-w.arenaBytes() > 2*max(w.need, w.needBefore) {
 		w.sched, w.xuses, w.states, w.kv, w.gpool, w.xusesUsed, w.gpoolUsed = schedule{}, nil, nil, nil, nil, 0, 0
 		w.calls = callScratch{}
 		w.live = ir.LiveBuilder{}
