@@ -59,8 +59,10 @@ func (r *Runtime) jitLatticeMake(cc *closureCode, c *regCode) {
 // them in the lattice from then on, so that a site the interpreter never
 // ran may since have run natively. V8 compiles only a function whose
 // feedback the interpreter has had a budget to fill.
-func jitLatticeRan(cl *closure) bool {
-	ops := cl.jitRegOps
+func jitLatticeRan(cl *closure) bool { return jitLatticeRanOps(cl.jitRegOps) }
+
+// jitLatticeRanOps is jitLatticeRan of a lattice, ops.
+func jitLatticeRanOps(ops []uint8) bool {
 	return len(ops) >= 2 && ops[len(ops)-1] >= abi.OperandRuns && ops[len(ops)-2] == 0
 }
 
@@ -186,18 +188,9 @@ func (r *Runtime) jitLatticeAny(cl *closure, rpc int) bool {
 // feedback dispatcher never sees: its sites have met numbers, whatever
 // else its byte says.
 func (f *jitRegFeedback) Operands(pc int) (ssa.Operands, bool) {
-	if pc < 0 || pc >= len(f.p.Origin) {
-		return 0, false
-	}
-	k, ok := jitLatticeAt(f.fb.cl, f.rc, int(f.p.Origin[pc]))
-	if ok && f.rc.Leaf == bytecode.LeafPure {
-		k |= abi.OperandNumber
-	}
-	if ok && k == 0 && !jitLatticeRan(f.fb.cl) {
-		// Met nothing, but before the function ran to its end: known no
-		// more than without a lattice, and so from now on.
+	k, ok, unknown := f.native().operands(pc)
+	if unknown {
 		jitLatticeUnknown(f.fb.cl)
-		return 0, false
 	}
 	return k, ok
 }

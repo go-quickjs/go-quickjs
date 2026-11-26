@@ -858,8 +858,19 @@ the accessors' pairs, a getter's code and its lowering, the primitives'
 prototypes -- are asked on the goroutine still, but by the family's gather
 and only at the PCs the copy says may answer (`jitSnapAskedAtGather`): an
 accessor's site whose cache, its earlier entries or what the code learned
-holds an accessor, a method's read that learned primitives or knows
-nothing; every other PC's answer is none, as the asking gave it. A worker builds, optimizes and compiles from the snapshot
+holds an accessor, a method's read that learned primitives or knows nothing;
+every other PC's answer is none, as the asking gave it. The methods that
+answer from what the code learned at its exits and from what the interpreter
+marks of its code (`jit_snapnative.go`: `Generic`, the BigInt and
+element-read methods, `CallShape`, `Frequency`, `Operands`, `InlineExit`,
+`BigIntSole`, `PureBody`, `GoCalls`) are derived so, from a gather that
+takes each list of the learning by its header, an O(1) copy that is the list
+as it was: a list of it only grows, appended past every header taken, or is
+made anew -- `ssaHostsLeft` at each install, `regCallsMade` at a pc's first
+call -- never written within a header's length
+(`TestJITLearnedListsPersist`); and copies whole what the interpreter writes
+in place, the operators' BigInt marks, the operands' lattice and the calls'
+counts. A worker builds, optimizes and compiles from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile

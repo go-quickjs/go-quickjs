@@ -2639,29 +2639,7 @@ func (r *Runtime) jitRegFinishLevel(f *frame, l *jitRegLevel, c *abi.Context) (V
 // natively; a callee with such a path had been called natively, never
 // inlined.
 func (f *jitRegFeedback) InlineExit(pc int) bool {
-	w, _, ok := f.at(pc)
-	if !ok || f.fb.root == nil {
-		return false
-	}
-	rpc := int(f.p.Origin[pc])
-	l := f.fb.e
-	made := l != nil && jitRegCallMadeIn(l.regCallsMade, rpc)
-	switch jitRegCallOp(w.Op()) {
-	case bytecode.RThrow, bytecode.RThrowRef:
-		return true
-	case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW:
-		next := rpc + 1
-		if next < len(f.rc.Code) && f.rc.Code[next].Op() == bytecode.RThrow && f.rc.Code[next].A() == w.B() {
-			// What it makes is thrown: as seldom as the throw, unless its
-			// own code has been seen to make it, a throw taken often.
-			return !made
-		}
-		// A call its own code leaves to Go (HostsLeft) and has never been
-		// seen to make in runs enough to tell (jitRegCodeRan), as V8's
-		// code deoptimizes at a call that has no feedback.
-		return l != nil && !made && slices.Contains(l.ssaHostsLeft, int32(rpc)) && f.fb.r.jitRegCodeRan(f.fb.cl, l)
-	}
-	return false
+	return f.native().inlineExit(pc)
 }
 
 // regCallMade marks register pc rpc of e's register code, n instructions

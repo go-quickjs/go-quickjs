@@ -667,8 +667,7 @@ func (r *Runtime) jitRegSiteMegamorphic(cl *closure, c *regCode, l *jitEntry, rp
 // native code already holds as a BigInt makes the operator one of BigInts
 // there.
 func (f *jitRegFeedback) PureBody() bool {
-	fn := f.fb.fn
-	return fn != nil && f.rc.Leaf == bytecode.LeafPure && !fn.Generator && !fn.Async
+	return f.native().pureBody()
 }
 
 // jitRegGenMakeable reports whether register code of cl's may make the

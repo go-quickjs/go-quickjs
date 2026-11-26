@@ -1306,7 +1306,14 @@ is under [The projection](#the-projection).
   first needed -- and what the methods write besides their lists
   (`remember`, the learned lists, the literals' and known reads' caches,
   atoms, a callee's register code, cells and pools), deferred to the
-  install or made ahead.
+  install or made ahead. The methods that answer from what the code
+  learned and the interpreter's marks are derived on the worker: 16 of
+  them, about 240,000 of the 597,000 questions a snapshot asks over
+  Octane's functions (`Generic` alone, asked at every PC, 118,000), and
+  about an eighth of a snapshot's time in a profile of it made twenty
+  times over (projected 15 to 25 µs of the goroutine's part); the
+  goroutine copies their lists' headers and the interpreter's marks once
+  a snapshot. *Measured*: with the stage's next steps.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

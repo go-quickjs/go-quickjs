@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -75,24 +74,7 @@ func (cc *closureCode) jitRegUncount(site int) {
 // an async function's, whose runs end at suspensions as well; nor a
 // construction's, which Go makes.
 func (f *jitRegFeedback) Frequency(pc int) (float64, bool) {
-	fn, cl := f.fb.fn, f.fb.cl
-	if f.rc.Leaf != bytecode.LeafNone || fn.Generator || fn.Async || cl == nil || cl.closureCode == nil {
-		return 0, false
-	}
-	w, op, ok := f.at(pc)
-	if !ok || op != ir.Host || !f.p.Code[pc].Window {
-		return 0, false
-	}
-	switch w.Op() {
-	case bytecode.RCallW, bytecode.RCallMW, bytecode.RCallWT, bytecode.RCallMWT:
-	default:
-		return 0, false
-	}
-	counts := cl.jitRegCounts
-	if len(counts) == 0 || counts[0] < uint64(jitCountsEnough) || 1+int(w.C()) >= len(counts) {
-		return 0, false
-	}
-	return float64(counts[1+int(w.C())]) / float64(counts[0]), true
+	return f.native().frequency(pc)
 }
 
 // jitFramed reports whether the interpreter counts every call of x's

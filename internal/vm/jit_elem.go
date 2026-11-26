@@ -409,36 +409,31 @@ func (f *jitRegFeedback) regElemPC(pc int, op ir.Op) (int32, bool) {
 
 // StringRead is ssa.StringElementFeedback's (jitRegIndexSeen).
 func (f *jitRegFeedback) StringRead(pc int) bool {
-	rpc, ok := f.regElemPC(pc, ir.ArrayRead)
-	return ok && slices.Contains(f.fb.e.stringReads, rpc)
+	d := f.native()
+	return d.elemIn(pc, ir.ArrayRead, d.stringReads)
 }
 
 // TypedRead is ssa.ElementFeedback's (jitRegIndexSeen).
 func (f *jitRegFeedback) TypedRead(pc int) bool {
-	rpc, ok := f.regElemPC(pc, ir.ArrayRead)
-	return ok && slices.Contains(f.fb.e.typedReads, rpc)
+	d := f.native()
+	return d.elemIn(pc, ir.ArrayRead, d.typedReads)
 }
 
 // TypedBigRead is ssa.BigElementFeedback's (jitRegIndexSeen).
 func (f *jitRegFeedback) TypedBigRead(pc int) (unsigned, ok bool) {
-	rpc, ok := f.regElemPC(pc, ir.ArrayRead)
-	if !ok {
-		return false, false
-	}
-	m := jitBigReadAt(f.fb.e.typedReads, int(rpc))
-	return m&jitBigReadUnsigned != 0, m != 0
+	return f.native().typedBigRead(pc)
 }
 
 // KeyedRead is ssa.KeyedFeedback's (jitRegIndexSeen).
 func (f *jitRegFeedback) KeyedRead(pc int) bool {
-	rpc, ok := f.regElemPC(pc, ir.ArrayRead)
-	return ok && slices.Contains(f.fb.e.keyedReads, rpc)
+	d := f.native()
+	return d.elemIn(pc, ir.ArrayRead, d.keyedReads)
 }
 
 // KeyedWrite is ssa.KeyedWriteFeedback's (jitRegElemSeen).
 func (f *jitRegFeedback) KeyedWrite(pc int) bool {
-	rpc, ok := f.regElemPC(pc, ir.ArrayWrite)
-	return ok && slices.Contains(f.fb.e.keyedWrites, rpc)
+	d := f.native()
+	return d.elemIn(pc, ir.ArrayWrite, d.keyedWrites)
 }
 
 // UpvalueTyped is ssa.UpvalueTypedFeedback's: whether the captured binding

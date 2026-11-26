@@ -101,34 +101,19 @@ func regBigSeen(cl *closure, rc *bytecode.RegCode, rpc int) (big, wide, heap boo
 // instruction pc met BigInts at an exit of code compiled before
 // (jitRegBigIntSeen).
 func (f *jitRegFeedback) BigInt(pc int) bool {
-	if pc < 0 || pc >= len(f.p.Origin) {
-		return false
-	}
-	if l := f.fb.e; l != nil && slices.Contains(l.bigints, int32(f.p.Origin[pc])) {
-		return true
-	}
-	big, _, _ := f.regBigSeenAt(int(f.p.Origin[pc]))
-	return big
+	return f.native().bigInt(pc)
 }
 
 // BigIntWide is ssa.BigIntFeedback's: the operator of the program's
 // instruction pc met BigInts from 0 to 2^64-1, some past the int64 range.
 func (f *jitRegFeedback) BigIntWide(pc int) bool {
-	if pc < 0 || pc >= len(f.p.Origin) {
-		return false
-	}
-	if l := f.fb.e; l != nil && slices.Contains(l.bigwide, int32(f.p.Origin[pc])) {
-		return true
-	}
-	_, wide, _ := f.regBigSeenAt(int(f.p.Origin[pc]))
-	return wide
+	return f.native().bigIntWide(pc)
 }
 
 // BigIntFailed is ssa.BigIntFeedback's: a guard of the operator of the
 // program's instruction pc failed in code compiled before.
 func (f *jitRegFeedback) BigIntFailed(pc int) bool {
-	l := f.fb.e
-	return l != nil && pc >= 0 && pc < len(f.p.Origin) && slices.Contains(l.failed, int32(f.p.Origin[pc]))
+	return f.native().bigIntFailed(pc)
 }
 
 // jitRegBigIntSeen learns, of e's code, f's register code run in the window

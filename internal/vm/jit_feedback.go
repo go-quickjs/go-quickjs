@@ -41,6 +41,9 @@ type jitRegFeedback struct {
 	// indexes by the program's instruction (askedOf).
 	asked   []jitRegAsked
 	askedAt []int32
+	// nat is the record of its function's learning and the interpreter's
+	// marks the methods that read them answer from (native).
+	nat *jitNativeData
 }
 
 // jitRegFeedbackFor is cl's register code's feedback for p, the program
@@ -56,10 +59,16 @@ func (r *Runtime) jitRegFeedbackFor(cl *closure, p *ir.Program) *jitRegFeedback 
 // at is the register instruction of the program's instruction pc, and what
 // that instruction is.
 func (f *jitRegFeedback) at(pc int) (bytecode.RInstr, ir.Op, bool) {
-	if pc < 0 || pc >= len(f.p.Code) || int(f.p.Origin[pc]) >= len(f.rc.Code) {
+	return jitRegAt(f.p, f.rc, pc)
+}
+
+// jitRegAt is the register instruction of the program p's instruction pc,
+// p lowered from rc, and what that instruction is (jitRegFeedback's at).
+func jitRegAt(p *ir.Program, rc *bytecode.RegCode, pc int) (bytecode.RInstr, ir.Op, bool) {
+	if pc < 0 || pc >= len(p.Code) || int(p.Origin[pc]) >= len(rc.Code) {
 		return 0, 0, false
 	}
-	return f.rc.Code[f.p.Origin[pc]], f.p.Code[pc].Op, true
+	return rc.Code[p.Origin[pc]], p.Code[pc].Op, true
 }
 
 // name is the atom of the register instruction w's name operand n, at
@@ -546,25 +555,7 @@ func (f *jitRegFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 // and call_method_w's, not one in tail position, nor, in the function's own
 // code, one whose inlining left native code too often (jitInlineLeft).
 func (f *jitRegFeedback) CallShape(pc int) (int, bool, bool) {
-	w, _, ok := f.at(pc)
-	if !ok {
-		return 0, false, false
-	}
-	rpc := int(f.p.Origin[pc])
-	if rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
-		return 0, false, false
-	}
-	if l := f.fb.e; f.fb.root == nil && l != nil && slices.Contains(l.notInline, int32(rpc)) {
-		// Its inlining left native code too often (jitInlineLeft).
-		return 0, false, false
-	}
-	switch w.Op() {
-	case bytecode.RCallW:
-		return int(w.X()), false, true
-	case bytecode.RCallMW:
-		return int(w.X()), true, true
-	}
-	return 0, false, false
+	return f.native().callShape(pc)
 }
 
 // CalledClosure is ssa.CalledClosureFeedback's: the closure closure_w makes
@@ -809,21 +800,7 @@ func (f *jitRegFeedback) BigIntCell(pc int) (uintptr, uint64, int, bool) {
 // (jitState's regLearned): built generic, what it did not expect is Go's to
 // make.
 func (f *jitRegFeedback) Generic(pc int) bool {
-	if f.fb.e == nil || pc < 0 || pc >= len(f.p.Origin) {
-		return false
-	}
-	if w, _, ok := f.at(pc); ok && w.Op() == bytecode.RLit {
-		// Its expansion, the call's last, which a read built generic
-		// would commit before (regLitFed): fed no more instead.
-		return false
-	}
-	if slices.Contains(f.fb.e.failed, int32(f.p.Origin[pc])) {
-		return true
-	}
-	// Arithmetic the interpreter saw meet or make a BigInt on the heap,
-	// which Go makes from native code (ssa.GoArith).
-	_, _, heap := f.regBigSeenAt(int(f.p.Origin[pc]))
-	return heap
+	return f.native().generic(pc)
 }
 
 // regLitFed reports whether the program's instruction pc, of regexp_lit's
@@ -1196,7 +1173,7 @@ func jitRegCallOp(op bytecode.ROp) bytecode.ROp {
 // Go, which makes what needs no frame of the VM's from what the code passes
 // it, and a call on the register frame (jitRegGoCall); what needs more, a
 // call of Go refuses, and the code leaves there.
-func (f *jitRegFeedback) GoCalls() bool { return true }
+func (f *jitRegFeedback) GoCalls() bool { return f.native().goCalls() }
 
 // NativeCalls is ssa.Feedback's: a call -- call_w's, call_method_w's or
 // new_w's, of any number of operands -- of the function
@@ -1398,11 +1375,7 @@ func (f *jitRegFeedback) regBuiltinSite(w bytecode.RInstr, argc int, method bool
 // that hold their values alone (regSoleRegisters), and whether the code may
 // give BigInts' blocks back at all: a function's that does not suspend.
 func (f *jitRegFeedback) BigIntSole() (uint64, bool) {
-	fn := f.fb.fn
-	if bits.UintSize != 64 || fn.Generator || fn.Async {
-		return 0, false
-	}
-	return regSoleRegisters(fn, f.rc, f.p), true
+	return f.native().bigIntSole()
 }
 
 // regSoleRegisters is the registers of rc, fn's register code lowered to p,

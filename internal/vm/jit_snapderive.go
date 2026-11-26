@@ -47,6 +47,8 @@ type jitSnapData struct {
 	asked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
 	// prop is the property sites' (jit_snapprop.go).
 	prop jitPropData
+	// native is the learning's methods' (jit_snapnative.go).
+	native jitNativeData
 	// copies, the root's, are the closures' copies its compile's gathers
 	// made (closureCopy).
 	copies map[*closure]*jitClosureCopy
