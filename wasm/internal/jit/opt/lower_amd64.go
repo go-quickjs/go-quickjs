@@ -110,6 +110,8 @@ type gen struct {
 	polls  u64map[amd64.Label]
 	// hubs are the jumps to shared cold code that sites jump to.
 	hubs []hub
+	// switchTargets is a switch's targets' labels, by successor.
+	switchTargets []amd64.Label
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// wb is the function's barrier routine, which hasWB says is made;
@@ -203,7 +205,7 @@ func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	g.polls.reset(8)
 	g.lowering.reset(f, req)
 	*g = gen{lowering: g.lowering, ws: ws, a: &ws.asm, labels: g.labels[:0], ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo,
-		polls: g.polls, hubs: g.hubs[:0], moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0], vpool: g.vpool.reset()}
+		polls: g.polls, hubs: g.hubs[:0], switchTargets: g.switchTargets[:0], moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0], vpool: g.vpool.reset()}
 	ws.asm.Reset()
 }
 
@@ -1192,7 +1194,9 @@ func (g *gen) block(i int, b *Block) {
 	}
 }
 
-// switchTable jumps through a table of jumps, each to its target's stub.
+// switchTable jumps through a table of jumps, 5 bytes each: a forward
+// target's straight to its block, a back edge's to the stub that counts
+// the poll down.
 func (g *gen) switchTable(i int, b *Block) {
 	a := g.a
 	n := len(b.Table) - 1
@@ -1202,25 +1206,28 @@ func (g *gen) switchTable(i int, b *Block) {
 	a.Cmov(amd64.CondAE, s0, s1, false)
 	table := a.NewLabel()
 	a.LeaLabel(s1, table)
-	a.LeaIdx(s1, s1, s0, 8, 0)
+	a.LeaIdx(s0, s0, s0, 4, 0)
+	a.LeaIdx(s1, s1, s0, 1, 0)
 	a.JmpReg(s1)
 	a.Bind(table)
-	stubs := make([]amd64.Label, len(b.Succs))
-	for k := range stubs {
-		stubs[k] = a.NewLabel()
+	targets := g.switchTargets[:0]
+	for _, s := range b.Succs {
+		if j := int(g.index[s.ID]); j > i {
+			targets = append(targets, g.labels[j])
+		} else {
+			targets = append(targets, a.NewLabel())
+		}
 	}
 	for _, k := range b.Table {
-		a.JmpLong(stubs[k])
-		a.Nop(3)
+		a.JmpLong(targets[k])
 	}
 	for k, s := range b.Succs {
-		a.Bind(stubs[k])
-		if j := int(g.index[s.ID]); j > i {
-			a.Jmp(g.labels[j])
-		} else {
+		if j := int(g.index[s.ID]); j <= i {
+			a.Bind(targets[k])
 			g.jump(i, s)
 		}
 	}
+	g.switchTargets = targets[:0]
 }
 
 // condition sets the flags for the branch on c and returns the condition

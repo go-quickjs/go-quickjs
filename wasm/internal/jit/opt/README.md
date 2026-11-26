@@ -792,6 +792,16 @@ there into the register took two instructions and a general register.
 micro/mandelbrot's inner loop multiplies by 2 and compares with 4: 11.0
 to 10.6 ms (median of 7 processes).
 
+On amd64 a switch's index, held to its table's last entry, picks a jump
+of 5 bytes in a table after the code's jump to it: straight to its
+target block, or, for a back edge, to the code that counts the poll
+down. Each entry had been a jump of 5 bytes and a NOP of 3, to a jump
+to the target: the Go program's switches went from 499 bytes each to
+249, its code from 19.6 to 18.9 MB. A table of 4-byte displacements
+from the end of each, loaded and added, made them 210 bytes, but
+micro/brtable 13% slower (42.1 to 47.4 ms) at every placement: the
+target is a load away from the index where it was arithmetic.
+
 On arm64 the instructions are three-address, and a result is computed in
 its register from its operands' wherever they are. The floats are the
 baseline's arm64 sequences: FMIN and FMAX, FRINT's roundings, FCVTZS and
