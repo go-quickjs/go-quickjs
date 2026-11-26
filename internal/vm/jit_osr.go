@@ -25,6 +25,10 @@ type jitLearned struct {
 	// entries, by PC, whose speculation failed in the code (jitRegDeoptSeen).
 	failed        []int32
 	failedEntries []uint32
+	// siteDeopts counts the deoptimizations of the function's code at each
+	// site (jitRegSiteDeopted): at jitSiteDeopts the site is built at the
+	// top of its ladder, generic.
+	siteDeopts []jitSiteDeopt
 	// bigints are the sites, by slot IR PC, of arithmetic and comparisons
 	// whose guard failed at BigInts in the int64 range: the code compiled
 	// again makes them on those natively (jitRegBigIntSeen), until that

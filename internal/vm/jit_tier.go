@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"fmt"
 	"math"
 	"slices"
 	"unsafe"
@@ -28,8 +27,9 @@ import (
 // counted (jitRegLoop). A function's first check begins its budget, and a
 // change of its caches' feedback meanwhile delays the compile
 // (jitRegWarmUp), as V8's NotifyICChanged does. Code a guard of which
-// failed is invalidated and compiled again on a fresh budget, up to
-// jitMaxDeopts times (jitRegInvalidate); code that learned at its exits
+// failed is invalidated and compiled again on a fresh budget
+// (jitRegInvalidate), the site it failed at widened (jitRegSiteDeopted);
+// code that learned at its exits
 // runs on, valid, and is compiled again once it has spent a budget itself
 // with nothing more learned (jitRegLearnedDue).
 //
@@ -293,8 +293,7 @@ func (r *Runtime) jitRegNativeCalleeN(cl *closure, c *regCode, calls int64, call
 		// TestJITFramelessCallsSpendTheBudget was compiled again after
 		// three calls of a budget of four. Not a leaf's, which the
 		// interpreter's calls answer without a frame, sampling none: it is
-		// compiled again at its native callers' next ask, its
-		// deoptimizations counted all the same (jitMaxDeopts).
+		// compiled again at its native callers' next ask.
 		runs := max(calls, jitRegTicked(cc))
 		if !r.jitRegWarmUp(cl, c, life, runs*int64(max(len(c.rc.Code), 1))) {
 			r.jitRegArm(cl, c)
@@ -585,8 +584,9 @@ func jitRegBudget(calls uint16, c *regCode) int64 {
 // invalidated (jitRegInvalidate). It reports whether the budget is spent
 // with the function's caches' feedback unchanged since it began -- a change
 // raises what is left to jitICThreshold invocations' worth, as V8's
-// NotifyICChanged does -- and the function deoptimized no more than
-// jitMaxDeopts times.
+// NotifyICChanged does. However often the function deoptimized, it is
+// compiled again: what ends a loop of deoptimizations is each one's
+// widening of the site it failed at (jitRegSiteDeopted).
 func (r *Runtime) jitRegWarmUp(cl *closure, c *regCode, life *jitEntry, work int64) bool {
 	if life.tierBudget -= work; life.tierBudget > 0 {
 		return false
@@ -595,7 +595,7 @@ func (r *Runtime) jitRegWarmUp(cl *closure, c *regCode, life *jitEntry, work int
 		life.tierBudget, life.tierMark = max(life.tierBudget, jitRegBudget(r.jitICThreshold, c)), m
 		return false
 	}
-	return life.deopts <= jitMaxDeopts
+	return true
 }
 
 // jitRegInvalidate invalidates e, cl's function's code, after a
@@ -603,9 +603,8 @@ func (r *Runtime) jitRegWarmUp(cl *closure, c *regCode, life *jitEntry, work int
 // link), and the interpreter runs the function until it has spent a fresh
 // budget (jitRegWarmUp), what its caches learn meanwhile delaying the
 // compile. Runs of the code under way go on in it until they next leave it.
-// Past jitMaxDeopts deoptimizations the function is compiled no more, its
-// code let go of. why is what failed, and at where, for the tier trace
-// (JITTierEvent's Reason, At and PC).
+// why is what failed, and at where, for the tier trace (JITTierEvent's
+// Reason, At and PC).
 func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string, at jitTierSite) {
 	life := e.life
 	if life == nil || e.code == nil {
@@ -631,13 +630,6 @@ func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string, at j
 			if h := r.jitTierHook(); h != nil {
 				r.jitTierInvalidated(h, cl, c, e, why, at, life.tierBudget)
 			}
-		}
-	}
-	if life.deopts > jitMaxDeopts && cc != nil && !cc.jitRegRefused {
-		cc.jitRegRefused = true
-		if s.regCache[e.key] == e {
-			s.regCache[e.key] = &jitRegEntry{key: e.key, life: life, refusal: fmt.Sprintf("deoptimized more than %d times", jitMaxDeopts)}
-			s.dropReg(e.key, e)
 		}
 	}
 }
@@ -947,6 +939,122 @@ func (r *Runtime) jitRegEntrySeen(f *frame, rpc int) {
 	l := r.jit.regLearnedOf(r.jitRegKeyOf(f.cl))
 	if !slices.Contains(l.failedEntries, uint32(rpc)) {
 		l.failedEntries = append(l.failedEntries, uint32(rpc))
+	}
+}
+
+// jitSiteDeopts is how many times one site of a function -- an instruction,
+// by its register pc, or an entry, at a loop's header or the start --
+// deoptimizes the function's code before the site is built at the top of
+// its ladder, generic, from then on (jitRegSiteTop), as V8's deoptimizer
+// disallows a site's speculation. Each deoptimization widens what it failed
+// on, and each site's widening ends: a property site's shapes, one more
+// than its cases hold (jitMissedShapes), then megamorphic; an operator's
+// BigInts, then generic; a call's targets (jitCallTargets); an entry's
+// speculation and any other guard's, generic at the first. The bound is
+// past each of those ladders, so it decides only for a site that goes on
+// failing past its widening -- what a site learned forgotten while its
+// code was parked (regForget), say -- and it makes a function's
+// deoptimizations at most jitSiteDeopts times its sites, those of the
+// callees inlined in it among them: with no limit on a function's own,
+// as V8 sets none, it is what ends a loop of deoptimizations.
+const jitSiteDeopts = 8
+
+// jitSiteDeopt is a site's count of the deoptimizations of its function's
+// code (jitLearned's siteDeopts): at is an instruction's register pc, or
+// the complement of an entry's.
+type jitSiteDeopt struct {
+	at int32
+	n  uint8
+}
+
+// The kinds of site a deoptimization counts at (jitRegSiteDeopted): an
+// instruction whose guard failed, an entry whose speculation did, and a
+// call that met a target the code was not compiled for (jitRegCallRepeats).
+const (
+	jitSiteGuard = iota
+	jitSiteEntry
+	jitSiteCall
+)
+
+// jitSiteDeoptsAt is l's count at site at, nil where it has none.
+func jitSiteDeoptsAt(l *jitEntry, at int32) *jitSiteDeopt {
+	for i := range l.siteDeopts {
+		if l.siteDeopts[i].at == at {
+			return &l.siteDeopts[i]
+		}
+	}
+	return nil
+}
+
+// jitRegSiteAtTop reports whether l's instruction at register pc rpc has
+// deoptimized jitSiteDeopts times, built at the top of its ladder.
+func jitRegSiteAtTop(l *jitEntry, rpc int) bool {
+	d := jitSiteDeoptsAt(l, int32(rpc))
+	return d != nil && d.n >= jitSiteDeopts
+}
+
+// jitRegSiteDeopted counts a deoptimization of e's code at register pc rpc
+// of c, f's function's register code -- e's own, or a callee's inlined in
+// it -- the site's kind kind, f's window at wb holding the state at the
+// instruction's start for a guard's or an entry's, before the interpreter
+// runs it. An operator's operand lattice learns what its operands are
+// (jitLatticeWiden), whether or not the deoptimization invalidates e; one
+// that does counts at the site, in what f's function learned, and at the
+// jitSiteDeopts'th the site is built at the top of its ladder from then on
+// (jitRegSiteTop). One past that, at a site already at its top, which
+// widened nothing, counts in topDeopts.
+func (r *Runtime) jitRegSiteDeopted(f *frame, c *regCode, e *jitRegEntry, wb, rpc, kind int) {
+	if kind == jitSiteGuard {
+		r.jitLatticeWiden(f.cl, c, wb, rpc)
+	}
+	if e == nil || e.invalid || rpc < 0 || rpc >= len(c.rc.Code) {
+		return
+	}
+	l := r.jitRegLearnedFor(f, e)
+	at := int32(rpc)
+	if kind == jitSiteEntry {
+		at = ^at
+	}
+	d := jitSiteDeoptsAt(l, at)
+	if d == nil {
+		l.siteDeopts = append(l.siteDeopts, jitSiteDeopt{at: at})
+		d = &l.siteDeopts[len(l.siteDeopts)-1]
+	}
+	r.jit.siteTop = d.n >= jitSiteDeopts
+	if r.jit.siteTop {
+		r.jit.topDeopts++
+	} else {
+		d.n++
+	}
+	if d.n >= jitSiteDeopts {
+		r.jitRegSiteTop(f, c, l, wb, rpc, kind)
+	}
+}
+
+// jitRegSiteTop builds the site of kind kind at register pc rpc of c, f's
+// function's register code, its window at wb, generic in the code compiled
+// from what l, the function's, learned: an entry loads its registers as
+// they are (EntryGeneric); an instruction is built generic (Generic), a
+// property site megamorphic besides (jitPolySite's mega), its misses Go's
+// from native code, and a loop of a built-in's call is Go's call (ForEach);
+// a call's targets met past those the code was compiled for no longer
+// invalidate it (jitRegCallRepeats), as V8's megamorphic call feedback
+// calls through the generic Call builtin.
+func (r *Runtime) jitRegSiteTop(f *frame, c *regCode, l *jitEntry, wb, rpc, kind int) {
+	switch kind {
+	case jitSiteEntry:
+		if !slices.Contains(l.failedEntries, uint32(rpc)) {
+			l.failedEntries = append(l.failedEntries, uint32(rpc))
+		}
+		return
+	case jitSiteCall:
+		return
+	}
+	if !slices.Contains(l.failed, int32(rpc)) {
+		l.failed = append(l.failed, int32(rpc))
+	}
+	if _, ok := r.jitRegPropOp(f, c, wb, rpc); ok {
+		jitPolySiteAt(l, rpc).mega = true
 	}
 }
 

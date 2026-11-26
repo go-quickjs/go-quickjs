@@ -551,6 +551,9 @@ var tierCounts struct {
 	// kept as a function's counts begin again.
 	mostSite int
 	mostAt   string
+	// top counts the deoptimizations at a site already at the top of its
+	// ladder (JITTierEvent's Top), which none should be.
+	top int
 }
 
 // tierEarly is V8's invocation_count_for_maglev_with_delay: a
@@ -563,7 +566,8 @@ const tierEarly = 600
 // code's age and the budget before the next compile, both in invocations'
 // worth, the function's deoptimizations and compiles so far, and last, for
 // a deoptimization, the function whose instruction failed -- its own or a
-// callee inlined in its code -- and that instruction's register pc.
+// callee inlined in its code -- and that instruction's register pc, with
+// "top" after them where the site was at the top of its ladder.
 func startTierTrace(path string) {
 	f, err := os.Create(path)
 	if err != nil {
@@ -583,6 +587,9 @@ func startTierTrace(path string) {
 				tierCounts.early++
 			}
 			site = fmt.Sprintf("\t%s %s:%d\t%d", e.At.Name, e.At.Script, e.At.Line, e.PC)
+			if e.Top {
+				site += "\ttop"
+			}
 			// A function by where it starts, which tells apart those of
 			// one name on a line.
 			key := fmt.Sprintf("%s:%d", fn, e.Func.Column)
@@ -592,6 +599,9 @@ func startTierTrace(path string) {
 				tierCounts.bySite[key] = sites
 			}
 			tierCounts.byFunc[key] = max(tierCounts.byFunc[key], e.Deopts)
+			if e.Top {
+				tierCounts.top++
+			}
 			at := fmt.Sprintf("%s, %s:%d:%d at %d", key, e.At.Name, e.At.Line, e.At.Column, e.PC)
 			if sites[at]++; sites[at] > tierCounts.mostSite {
 				tierCounts.mostSite, tierCounts.mostAt = sites[at], at
@@ -635,11 +645,11 @@ func reportTier() {
 		return k, n
 	}
 	if fn, n := most(tierCounts.byFunc); n > 0 {
-		fmt.Printf("  jit tier: most deoptimizations of a function %d (%s), at a site %d (%s)\n", n, fn, tierCounts.mostSite, tierCounts.mostAt)
+		fmt.Printf("  jit tier: most deoptimizations of a function %d (%s), at a site %d (%s); %d at a site at its top\n", n, fn, tierCounts.mostSite, tierCounts.mostAt, tierCounts.top)
 	}
 	clear(tierCounts.compiles)
 	clear(tierCounts.deopts)
 	clear(tierCounts.byFunc)
 	clear(tierCounts.bySite)
-	tierCounts.early, tierCounts.mostSite, tierCounts.mostAt = 0, 0, ""
+	tierCounts.early, tierCounts.mostSite, tierCounts.mostAt, tierCounts.top = 0, 0, "", 0
 }

@@ -766,9 +766,10 @@ type jitEntry struct {
 	// function up again. tierMark is the function's caches' feedback
 	// (jitFeedbackMark) when the budget began: a change since delays the
 	// compile by another budget, as V8's NotifyICChanged does. deopts
-	// counts the code's eager deoptimizations, compiles apart: past
-	// jitMaxDeopts the function is compiled no more, as V8 gives up
-	// optimizing one that keeps deoptimizing.
+	// counts the code's eager deoptimizations, compiles apart, with no
+	// limit, as V8 sets none: each widens the site it failed at
+	// (jitRegSiteDeopted), so that they are bounded by the function's
+	// sites.
 	invalid    bool
 	tierBudget int64
 	tierMark   uint64
@@ -1139,8 +1140,14 @@ type jitState struct {
 	// whose callees left it: at an exit, not a poll, or after a poll paused
 	// them (jitRegUnwound).
 	unwound, callsLeft uint64
-	// invalidated counts the codes invalidated (jitRegInvalidate).
-	invalidated uint64
+	// invalidated counts the codes invalidated (jitRegInvalidate), and
+	// topDeopts those invalidated at a site already built at the top of its
+	// ladder (jitRegSiteDeopted), which widens it no further: none should
+	// be, and the tests that run code deoptimizing over and over check it.
+	// siteTop says the deoptimization counted last was such a one, for the
+	// tier trace's (JITTierEvent's Top).
+	invalidated, topDeopts uint64
+	siteTop                bool
 	// shapeDeopts counts the deoptimizations at property sites of code Go
 	// entered, for a shape the code was not compiled for or a site that
 	// knew none (jitRegDeoptSeen), and shapeHosts such exits inside
@@ -1428,7 +1435,7 @@ func jitCapBytes[T any](s []T) int {
 // more shapes, and the object pools of its literals and constructions,
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
-	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.resumed) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
+	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.siteDeopts) + jitCapBytes(e.resumed) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.bigSites) + jitCapBytes(e.numSites) + jitCapBytes(e.boolSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.genericCalls) + jitCapBytes(e.viaLeaves) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.regCallers) + jitCapBytes(e.callSites) + jitCapBytes(e.settling)
 	for i := range e.poly {

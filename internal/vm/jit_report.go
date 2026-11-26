@@ -184,6 +184,10 @@ type JITTierEvent struct {
 	// counted by them.
 	At JITFunction
 	PC int
+	// Top marks a deoptimization at a site already built at the top of its
+	// ladder, generic, which widens it no further: a loop of
+	// deoptimizations there, which none should be.
+	Top bool
 }
 
 // JITTierHook, if set, is called at each compile placed and each
@@ -276,7 +280,8 @@ func (r *Runtime) jitTierInvalidated(h func(JITTierEvent), cl *closure, c *regCo
 	}
 	h(JITTierEvent{Func: jitFunctionOf(cl.fn), Deopt: true, Reason: why, Length: len(c.rc.Code),
 		Invocations: r.jitTierInvocations(cl, life), Age: r.jitRegAge(c, e) / n, Budget: budget / n,
-		Deopts: int(life.deopts), Compiles: int(life.ssaSerial), At: jitFunctionOf(fn), PC: at.pc})
+		Deopts: int(life.deopts), Compiles: int(life.ssaSerial), At: jitFunctionOf(fn), PC: at.pc, Top: r.jit.siteTop})
+	r.jit.siteTop = false
 }
 
 // jitTierSite is where a deoptimization failed, for the tier trace

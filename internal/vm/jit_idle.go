@@ -373,7 +373,7 @@ func (p *jitParked) restore() {
 // regForgotten is a copy of o that holds no object: what regForget keeps.
 func regForgotten(o *jitLearned) *jitLearned {
 	return &jitLearned{reg: o.reg, regLink: o.regLink,
-		failed: o.failed, failedEntries: o.failedEntries, bigints: o.bigints, bigwide: o.bigwide, resumed: o.resumed,
+		failed: o.failed, failedEntries: o.failedEntries, siteDeopts: o.siteDeopts, bigints: o.bigints, bigwide: o.bigwide, resumed: o.resumed,
 		typedReads: o.typedReads, stringReads: o.stringReads, keyedReads: o.keyedReads, keyedWrites: o.keyedWrites,
 		regHints: o.regHints}
 }
@@ -382,7 +382,7 @@ func regForgotten(o *jitLearned) *jitLearned {
 // the copy, f, learned of what holds no object while o was parked.
 func regRemembered(o, f *jitLearned) {
 	o.reg, o.regLink = f.reg, f.regLink
-	o.failed, o.failedEntries, o.bigints, o.bigwide, o.resumed = f.failed, f.failedEntries, f.bigints, f.bigwide, f.resumed
+	o.failed, o.failedEntries, o.siteDeopts, o.bigints, o.bigwide, o.resumed = f.failed, f.failedEntries, f.siteDeopts, f.bigints, f.bigwide, f.resumed
 	o.typedReads, o.stringReads, o.keyedReads, o.keyedWrites = f.typedReads, f.stringReads, f.keyedReads, f.keyedWrites
 	o.regHints = f.regHints
 }

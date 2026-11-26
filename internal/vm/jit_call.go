@@ -906,7 +906,10 @@ func (r *Runtime) jitRegCallRepeats(f *frame, c *regCode, e *jitRegEntry, rpc in
 		return int(p) == rpc && (obj == o || byCode && tcl != nil && jitRegSameClosureCode(tcl, cl))
 	}
 	l := r.jitRegLearnedFor(f, e)
-	return l != nil && slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return is(x.pc, x.byCode, x.obj, x.cl) }) &&
+	// Not at a call that has invalidated the code jitSiteDeopts times
+	// (jitRegSiteTop): its targets met past those compiled for are Go's to
+	// call, the code compiled again for them once due, valid meanwhile.
+	return l != nil && !jitRegSiteAtTop(l, rpc) && slices.ContainsFunc(l.nativeCalls, func(x jitInline) bool { return is(x.pc, x.byCode, x.obj, x.cl) }) &&
 		!slices.ContainsFunc(e.targets, func(t jitTarget) bool { return is(t.pc, t.byCode, t.obj, t.cl) })
 }
 

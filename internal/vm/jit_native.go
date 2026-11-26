@@ -1447,7 +1447,7 @@ func regForget(l *jitEntry) {
 		return
 	}
 	l.jitLearned = &jitLearned{reg: o.reg, regLink: o.regLink,
-		failed: o.failed, failedEntries: o.failedEntries, bigints: o.bigints, bigwide: o.bigwide, resumed: o.resumed,
+		failed: o.failed, failedEntries: o.failedEntries, siteDeopts: o.siteDeopts, bigints: o.bigints, bigwide: o.bigwide, resumed: o.resumed,
 		typedReads: o.typedReads, stringReads: o.stringReads, keyedReads: o.keyedReads, keyedWrites: o.keyedWrites,
 		regHints: o.regHints}
 }
@@ -2018,8 +2018,9 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 		if int64(ctx.ExitSite) < 0 {
 			// An entry's speculation, at a loop's header or the start: the
 			// entry's (EntryGeneric).
+			r.jitRegSiteDeopted(f, c, e, wb, exitPC, jitSiteEntry)
 			r.jitRegEntrySeen(f, exitPC)
-		} else if !r.jitRegBigIntSeen(f, e, wb, int(int64(ctx.ExitSite))) {
+		} else if r.jitRegSiteDeopted(f, c, e, wb, exitPC, jitSiteGuard); !r.jitRegBigIntSeen(f, e, wb, int(int64(ctx.ExitSite))) {
 			// An operator of BigInts it learned is not generic: the code
 			// compiled again makes it of them (jitBigIntNote).
 			r.jitRegDeoptSeen(f, c, e, wb, exitPC)
@@ -2126,6 +2127,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 					// of eight functions, four learned one at a time, had
 					// left at every other turn until its loop was judged
 					// slow for it.
+					r.jitRegSiteDeopted(f, c, e, wb, exitPC, jitSiteCall)
 					r.jitRegInvalidate(f.cl, e, "call", jitTierSite{nil, exitPC})
 				}
 				r.jitRegSuperSeen(f, c, e, exitPC)

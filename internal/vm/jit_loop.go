@@ -121,6 +121,11 @@ func (f *jitRegFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 	}
 	r := f.fb.r
 	rpc := int32(f.p.Origin[pc])
+	if jitRegSiteAtTop(l, int(rpc)) {
+		// A loop whose checks kept failing, at the top of its ladder
+		// (jitRegSiteTop): Go's call.
+		return ssa.ForEachSite{}, false
+	}
 	for _, x := range l.nativeCalls {
 		if x.pc != rpc || !x.forEach || x.cb == nil {
 			continue
@@ -375,6 +380,8 @@ func (r *Runtime) jitRegLoopLeft(f *frame, c *regCode, e *jitRegEntry, wb int, c
 	case abi.ExitDeopt:
 		s.guards++
 		e.life.ssaStats.guards++
+		// A check of the loop's: at its site's top, Go's call (ForEach).
+		r.jitRegSiteDeopted(f, c, e, wb, exitPC, jitSiteGuard)
 		r.jitRegInvalidate(f.cl, e, "loop", jitTierSite{nil, exitPC})
 	case abi.ExitPoll:
 		s.budgets++

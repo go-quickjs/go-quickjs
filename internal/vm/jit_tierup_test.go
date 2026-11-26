@@ -176,11 +176,14 @@ func TestJITFeedbackChangeDelaysTierUp(t *testing.T) {
 	}
 }
 
-// A function that keeps deoptimizing is compiled no more past jitMaxDeopts
-// eager deoptimizations, as V8 gives up optimizing one: f, at the limit,
-// deoptimizes once more, and the interpreter runs it from then on, however
-// many budgets it spends.
-func TestJITDeoptLimit(t *testing.T) {
+// A site that keeps deoptimizing is built at the top of its ladder once it
+// has deoptimized jitSiteDeopts times (jitRegSiteTop), and the function is
+// never refused for it, as V8 refuses none for deoptimizations: f's read of
+// o.x, its count put one short of the bound, deoptimizes at b's shape and is
+// made megamorphic, so that c's and d's shapes, which a polymorphic read
+// would deoptimize at, are read natively and from Go, its code valid and
+// native throughout.
+func TestJITSiteDeoptsForceTheTop(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -190,16 +193,110 @@ func TestJITDeoptLimit(t *testing.T) {
 		run(`f(a,10)`)
 	}
 	e := jitNativeForTest(t, r, "f")
-	e.deopts = jitMaxDeopts
+	fcl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	read := -1
+	for pc, w := range fcl.reg.rc.Code {
+		if w.Op() == bytecode.RGetProp {
+			read = pc
+		}
+	}
+	if read < 0 {
+		t.Fatal("f has no read")
+	}
+	e.siteDeopts = append(e.siteDeopts, jitSiteDeopt{at: int32(read), n: jitSiteDeopts - 1})
 	run(`f(b,10)`)
-	if !e.invalid || e.deopts != jitMaxDeopts+1 {
-		t.Fatalf("f's deoptimization past the limit: invalid %v, deopts %d", e.invalid, e.deopts)
+	if !e.invalid || e.deopts != 1 || !jitRegSiteAtTop(e, read) || !slices.Contains(e.failed, int32(read)) || !jitPolySiteAt(e, read).mega {
+		t.Fatalf("f's read at the bound: invalid %v, deopts %d, at its top %v, failed %v", e.invalid, e.deopts, jitRegSiteAtTop(e, read), e.failed)
 	}
 	for k := 0; k < 40; k++ {
-		run(fmt.Sprintf(`f(%c,10)`, "ab"[k&1]))
+		run(fmt.Sprintf(`f(%c,10)`, "abcd"[k&3]))
 	}
-	if e.ssaSerial != 1 || !e.invalid {
-		t.Fatalf("f compiled again past the deoptimization limit: compiled %d times, invalid %v", e.ssaSerial, e.invalid)
+	if e.invalid || e.deopts != 1 || e.ssaSerial != 2 || r.jit.topDeopts != 0 || fcl.closureCode.jitRegRefused {
+		t.Fatalf("f after its read went megamorphic: invalid %v, deopts %d, compiled %d times, deopts at a top %d", e.invalid, e.deopts, e.ssaSerial, r.jit.topDeopts)
+	}
+}
+
+// A function's deoptimizations are bounded by its sites, not by a count of
+// its own: sum's 24 reads each meet five shapes after the one it was
+// compiled for, one phase at a time, and each new shape deoptimizes at most
+// once, the read's cases widened by it -- a shape met while the code waits
+// to be compiled again is learned without one -- past the 64
+// deoptimizations after which the function had been refused for good, and
+// no site more than for its shapes. The function is compiled again after
+// each, and runs natively, valid, once its phases end. Its answers are the
+// interpreter's.
+func TestJITDeoptsBoundedBySites(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer holdCollectorNow(t)()
+	const sites, kinds = 24, 6
+	var b strings.Builder
+	for k := 0; k < sites*kinds; k++ {
+		fmt.Fprintf(&b, "function C%d(){}; C%d.prototype.v = %d;\n", k, k, k)
+	}
+	b.WriteString("var objs = [")
+	for j := 0; j < sites; j++ {
+		fmt.Fprintf(&b, "new C%d(),", j*kinds)
+	}
+	b.WriteString("];\nfunction sum(n) { let t = 0; for (let i = 0; i < n; i++) t = (t * 3")
+	for j := 0; j < sites; j++ {
+		fmt.Fprintf(&b, " + objs[%d].v", j)
+	}
+	b.WriteString(") | 0; return t }\n")
+	// A phase gives one read a shape it has not met, then runs.
+	b.WriteString(`function phase(j, k) { objs[j] = new globalThis["C" + k](); let t = 0; for (let i = 0; i < 30; i++) t = (t + sum(40)) | 0; return t }`)
+	want := newTestRuntime(t, Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, b.String())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runPhase := func(src string) {
+		t.Helper()
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("%s: got %s, interpreter %s", src, got, want)
+		}
+	}
+	for phase := 0; phase < sites*(kinds-1); phase++ {
+		runPhase(fmt.Sprintf("''+phase(%d, %d)", phase%sites, phase%sites*kinds+1+phase/sites))
+	}
+	e := jitNativeForTest(t, r, "sum")
+	guards := r.jit.guards
+	for range 4 {
+		runPhase("''+phase(0, 5)")
+	}
+	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
+	if e.invalid || cl.closureCode.jitRegRefused || r.jit.guards != guards {
+		t.Fatalf("sum after its phases: invalid %v, refused %v, guards failed since %d", e.invalid, cl.closureCode.jitRegRefused, r.jit.guards-guards)
+	}
+	t.Logf("%d deoptimizations at %d sites", e.deopts, len(e.siteDeopts))
+	if e.deopts <= 64 || int(e.deopts) > sites*(kinds-1) {
+		t.Errorf("deoptimized %d times for %d new shapes", e.deopts, sites*(kinds-1))
+	}
+	if len(e.siteDeopts) > sites || r.jit.topDeopts != 0 {
+		t.Errorf("deoptimized at %d sites, %d at a site at its top", len(e.siteDeopts), r.jit.topDeopts)
+	}
+	for _, d := range e.siteDeopts {
+		if d.n > kinds-1 {
+			t.Errorf("site %d deoptimized %d times for %d shapes", d.at, d.n, kinds-1)
+		}
 	}
 }
 

@@ -3346,9 +3346,9 @@ func TestJITStressDifferential(t *testing.T) {
 // them as they are. The loop then stays native, and no guard fails again.
 // A function whose speculations keep failing somewhere new -- each call
 // once, before its loop -- has each failure noted, as V8's feedback widens,
-// and is compiled again for them all, within its deoptimizations' limit
-// (jitMaxDeopts). Each answer, and each valueOf call, is the
-// interpreter's.
+// and is compiled again for them all, each site deoptimizing once, generic
+// from then on (jitRegSiteDeopted). Each answer, and each valueOf call, is
+// the interpreter's.
 func TestJITSSAReoptimize(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -3406,15 +3406,27 @@ func TestJITSSAReoptimize(t *testing.T) {
 		// the code compiled last would have left it invalid.
 		guards := e.ssaStats.guards
 		guards -= uint64(e.deopts)
-		if e == nil || e.reopts == 0 || e.deopts > jitMaxDeopts || e.invalid || name == "scale" && e.entrySlow ||
+		if e == nil || e.reopts == 0 || e.invalid || name == "scale" && e.entrySlow ||
 			e.ssaStats.entries == 0 || guards != 0 {
 			t.Fatalf("%s was not compiled again to run without failing: %+v", name, e)
 		}
 	}
 	// Its six multiplications' failures, each noted: four had been, the
-	// compiles for failed speculations capped.
-	if e := entry("many"); e == nil || len(e.failed) < 6 || e.deopts > jitMaxDeopts {
+	// compiles for failed speculations capped. No site failed twice, each
+	// generic once it had.
+	e := entry("many")
+	if e == nil || len(e.failed) < 6 {
 		t.Fatalf("many's failures were not all noted: %+v", e)
+	}
+	for _, name := range []string{"scale", "cmp", "many"} {
+		for _, d := range entry(name).siteDeopts {
+			if d.n > 1 {
+				t.Errorf("%s's site %d deoptimized %d times", name, d.at, d.n)
+			}
+		}
+	}
+	if r.jit.topDeopts != 0 {
+		t.Errorf("%d deoptimizations at a site at its top", r.jit.topDeopts)
 	}
 }
 
@@ -5355,8 +5367,8 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 // again only once the interpreter has spent its budget, its caches'
 // feedback settled meanwhile (jitRegWarmUp): at most once a phase, however
 // many of the phase's calls meet the new shape, and still native after
-// its 36 phases, within its deoptimizations' limit (jitMaxDeopts). Its
-// answers are the interpreter's.
+// its 36 phases, at most once a site and a shape. Its answers are the
+// interpreter's.
 func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

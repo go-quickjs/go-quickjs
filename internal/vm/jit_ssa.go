@@ -219,16 +219,6 @@ var jitEncoding = abi.Encoding{
 	FlagLengthWritable: uint8(objArrayLengthWritable),
 }
 
-// jitMaxDeopts is how many eager deoptimizations a function's code makes,
-// each invalidating it (jitRegInvalidate), before the function is compiled
-// no more and runs in the interpreter for good, as V8 gives up optimizing
-// a function that keeps deoptimizing. Each compile meanwhile waits for the
-// interpreter's budget, and for its caches' feedback to have settled
-// (jitRegWarmUp): a function whose feedback has settled deoptimizes no more,
-// and one meeting new shapes in phases -- a compiler's walking a syntax
-// tree of new kinds of node -- deoptimizes about once a phase.
-const jitMaxDeopts = 64
-
 // jitPolySite is a read that met objects of shapes the code was not
 // compiled for (jitEntry.poly): where each had the property, as a cache
 // filled for it has it (fillPropCache).

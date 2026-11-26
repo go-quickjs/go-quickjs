@@ -401,8 +401,10 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 	case abi.ExitDeopt:
 		s.guards++
 		if x.site < 0 {
+			r.jitRegSiteDeopted(f, c, owner, x.wb, pc, jitSiteEntry)
 			r.jitRegEntrySeen(f, pc)
 		} else {
+			r.jitRegSiteDeopted(f, c, owner, x.wb, pc, jitSiteGuard)
 			r.jitRegDeoptSeen(f, c, owner, x.wb, pc)
 		}
 		learned = true
@@ -415,6 +417,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 			// Learned as a guard's failure at the site, before Go makes the
 			// read or the write, which fills its cache.
 			s.shapeHosts++
+			r.jitRegSiteDeopted(f, c, owner, x.wb, pc, jitSiteGuard)
 			r.jitRegDeoptSeen(f, c, owner, x.wb, pc)
 		}
 		l := s.regLearnedOf(r.jitRegKeyOf(x.cl))
