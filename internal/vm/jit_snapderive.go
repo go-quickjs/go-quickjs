@@ -47,8 +47,13 @@ type jitSnapData struct {
 	asked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
 	// prop is the property sites' (jit_snapprop.go).
 	prop jitPropData
-	// native is the learning's methods' (jit_snapnative.go).
+	// native is the learning's methods' (jit_snapnative.go), calls the
+	// calls' (jit_snapcalls.go).
 	native jitNativeData
+	calls  jitCallsData
+	// rt is the runtime the gathers ran on, the root's: the closures'
+	// copies' (closureCopy).
+	rt *Runtime
 	// copies, the root's, are the closures' copies its compile's gathers
 	// made (closureCopy).
 	copies map[*closure]*jitClosureCopy
@@ -83,6 +88,7 @@ func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
 	}
 	c := &jitClosureCopy{}
 	c.ic, c.polys = jitCopyCaches(cl.ic)
+	c.calls = jitCallsCopy(d.rt, cl)
 	if d.copies == nil {
 		d.copies = map[*closure]*jitClosureCopy{}
 	}
@@ -148,7 +154,7 @@ var (
 
 // gather runs the families' gathers of s, fb's snapshot.
 func (s *jitSnapshot) gather(fb *jitRegFeedback) {
-	s.d.gathered, s.d.asked = true, fb.fb.r.jitTest.snapAsked
+	s.d.gathered, s.d.asked, s.d.rt = true, fb.fb.r.jitTest.snapAsked, fb.fb.r
 	for _, g := range jitSnapFuncGatherers {
 		g(s, fb)
 	}

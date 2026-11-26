@@ -870,7 +870,15 @@ made anew -- `ssaHostsLeft` at each install, `regCallsMade` at a pc's first
 call -- never written within a header's length
 (`TestJITLearnedListsPersist`); and copies whole what the interpreter writes
 in place, the operators' BigInt marks, the operands' lattice and the calls'
-counts. A worker builds, optimizes and compiles from the snapshot
+counts. The methods that compare a call's callee, as its site's cache holds
+it, with the realm's built-ins (`jit_snapcalls.go`: `CharCode`, `Substring`,
+`FromCharCode`, `Intrinsic`, `IndexOf`, `ParseInt`, `BigString`) are derived
+from the closure's call caches copied whole once a compile, in its copy
+(`jitClosureCopy`'s `calls`, restored first where a site is empty, as
+`regCallsRestored` restores them), and the realm's built-ins, a few words
+copied once a snapshot; a native function's data, which the answers read of
+a callee, is fixed when it is made. A worker builds, optimizes and compiles
+from the snapshot
 (`jitRegJob`), touching nothing of the runtime's; and the runtime's
 goroutine installs it at a later check -- a sample (`jitRegHot`), at a call
 or a back edge, or any call Go makes of a function with code or a compile

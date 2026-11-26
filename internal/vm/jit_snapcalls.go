@@ -1,0 +1,445 @@
+//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || ((darwin || linux) && arm64))
+
+package vm
+
+import (
+	"math"
+	"slices"
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+)
+
+// The calls' family of a snapshot's derived methods (jit_snapderive.go):
+// the methods that answer from the call caches the interpreter fills
+// (regCalls) and the realm's built-ins a call there is compared with. The
+// caches are copied whole once a compile, each closure's in its copy
+// (jitClosureCopy's calls), as regCallsRestored would have restored them;
+// the realm's built-ins, a few words, once a snapshot. The built-ins a
+// cache names are read as they are: what a native function's data says of
+// it is fixed when it is made. The feedback answers from the same record
+// of the live caches and the realm, made at its first question (callsData):
+// one implementation.
+
+// jitCallsData is what the calls' methods answer from: the function's
+// register code lowered (p, rc), its closure's call caches -- live, through
+// regCallsRestored, or copied -- the realm's built-ins (jitRealmCallees),
+// and whether the feedback is a callee's (root).
+type jitCallsData struct {
+	p        *ir.Program
+	rc       *bytecode.RegCode
+	gathered bool
+	cl       *closure
+	// r is the runtime whose live caches the feedback's own record reads,
+	// nil in a snapshot's copy, whose calls are copied.
+	r      *Runtime
+	copied []regCallCache
+	realm  jitRealmCallees
+}
+
+// jitRealmCallees are the realm's built-ins the calls' methods compare a
+// call's callee with (jitRealmFields, the Runtime's), and the cache of
+// Math.random's numbers native code reads (mathRandom), made where a call
+// may read it.
+type jitRealmCallees struct {
+	callFn, parseInt, bigToString     *Object
+	randomFn, powFn, atan2Fn, hypotFn *Object
+	charCodeAt, fromCharCode          Value
+	substring, slice, substr, charAt  Value
+	searches                          [jitSearchKinds]*Object
+	random                            *mathRandom
+}
+
+// jitCallsMethods are the methods answered from a jitCallsData.
+const jitCallsMethods uint64 = 1<<snapCharCode | 1<<snapSubstring | 1<<snapFromCharCode | 1<<snapIntrinsic |
+	1<<snapIndexOf | 1<<snapParseInt | 1<<snapBigString
+
+func init() {
+	jitSnapDerived |= jitCallsMethods
+	jitSnapFuncGatherers = append(jitSnapFuncGatherers, jitCallsGather)
+	jitSnapDerivers = append(jitSnapDerivers, jitCallsDerive)
+}
+
+// realmCallees is r's built-ins the calls' methods compare with, now.
+func (r *Runtime) realmCallees() jitRealmCallees {
+	return jitRealmCallees{
+		callFn: r.callFn, parseInt: r.jitParseInt, bigToString: r.jitBigToString,
+		randomFn: r.randomFn, powFn: r.powFn, atan2Fn: r.atan2Fn, hypotFn: r.hypotFn,
+		charCodeAt: r.jitCharCodeAt, fromCharCode: r.jitFromCharCode,
+		substring: r.jitSubstring, slice: r.jitSlice, substr: r.jitSubstr, charAt: r.jitCharAt,
+		searches: r.jitSearches, random: r.rnd,
+	}
+}
+
+// callsData is f's record of its closure's call caches and the realm's
+// built-ins, the live state's: made at its first question; its caches read
+// live at each (regCallsRestored), its realm's as they were then, which no
+// compile changes.
+func (f *jitRegFeedback) callsData() *jitCallsData {
+	if f.calls == nil {
+		r := f.fb.r
+		f.calls = &jitCallsData{p: f.p, rc: f.rc, gathered: true, cl: f.fb.cl, r: r, realm: r.realmCallees()}
+	}
+	return f.calls
+}
+
+// jitCallsGather is the family's gather of s, fb's snapshot: the closure's
+// call caches, by its copy, and the realm's built-ins; and Math.random's
+// cache made where a call's cache holds Math.random, as the question of
+// its call makes it.
+func jitCallsGather(s *jitSnapshot, fb *jitRegFeedback) {
+	d := &s.d.calls
+	r := fb.fb.r
+	*d = jitCallsData{p: fb.p, rc: fb.rc, gathered: true, cl: fb.fb.cl, realm: r.realmCallees()}
+	if d.cl == nil {
+		return
+	}
+	d.copied = s.root.d.closureCopy(d.cl).calls
+	if d.realm.random == nil && d.realm.randomFn != nil &&
+		slices.ContainsFunc(d.copied, func(c regCallCache) bool { return c.callee == d.realm.randomFn }) {
+		d.realm.random = r.mathRandom()
+	}
+}
+
+// jitCallsCopy is cl's call caches copied whole (jitClosureCopy's calls),
+// restored first from what a turn's end kept of them (regCallsRestored)
+// where a call site the snapshot asks is empty, as the asking would have
+// restored them.
+func jitCallsCopy(r *Runtime, cl *closure) []regCallCache {
+	calls := cl.regCalls
+	if rc := cl.fn.RegCode(); cl.regSeen != nil && rc != nil {
+		for _, w := range rc.Code {
+			switch w.Op() {
+			case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW, bytecode.RCallWT, bytecode.RCallMWT, bytecode.RApplyArgs:
+				if i := int(w.C()); i < len(calls) && calls[i].callee == nil {
+					calls = r.regCallsRestored(cl, i)
+				}
+			}
+			if cl.regSeen == nil {
+				break
+			}
+		}
+	}
+	return slices.Clone(calls)
+}
+
+// calls is the closure's call caches, as an ask of site finds them.
+func (d *jitCallsData) calls(site int) []regCallCache {
+	if d.r != nil {
+		return d.r.regCallsRestored(d.cl, site)
+	}
+	return d.copied
+}
+
+// jitCallsDerive puts s's answers of the calls' methods, at every PC whose
+// op asks each, from what the gather took; their effects, the built-ins
+// the code keeps, appended to the snapshot's sink.
+func jitCallsDerive(s *jitSnapshot) {
+	d := &s.d.calls
+	if !d.gathered {
+		return
+	}
+	nd := &s.d.native
+	sink := s.sinkOf()
+	a := &s.a
+	for pc, op := range s.ops {
+		asks := jitSnapAsks[op] & jitCallsMethods
+		if asks == 0 {
+			continue
+		}
+		at := int64(pc)
+		if asks&(1<<snapCharCode) != 0 {
+			r0 := d.charCode(pc)
+			s.heard(snapCharCode, at, r0, r0)
+			if r0 {
+				a.CharCode.reserve(int(s.room[snapCharCode]))
+				a.CharCode.put(at, 0, true, jitSnapAnsCharCode{r0})
+			}
+		}
+		if asks&(1<<snapSubstring) != 0 {
+			r0, r1, r2 := d.substring(pc)
+			s.heard(snapSubstring, at, r2, r0, r1, r2)
+			if r2 {
+				a.Substring.reserve(int(s.room[snapSubstring]))
+				a.Substring.put(at, 0, true, jitSnapAnsSubstring{r0, r1, r2})
+			}
+		}
+		if asks&(1<<snapFromCharCode) != 0 {
+			r0, r1 := d.fromCharCode(pc)
+			s.heard(snapFromCharCode, at, r1, r0, r1)
+			if r1 {
+				a.FromCharCode.reserve(int(s.room[snapFromCharCode]))
+				a.FromCharCode.put(at, 0, true, jitSnapAnsFromCharCode{r0, r1})
+			}
+		}
+		if asks&(1<<snapIntrinsic) != 0 {
+			before := s.begin(sink)
+			r0, r1 := d.intrinsic(pc, sink.keep())
+			eff := s.endDerived(sink, before)
+			s.heard(snapIntrinsic, at, r1, r0, r1)
+			if r1 || eff != 0 {
+				a.Intrinsic.reserve(int(s.room[snapIntrinsic]))
+				a.Intrinsic.put(at, eff, r1, jitSnapAnsIntrinsic{r0, r1})
+			}
+		}
+		if asks&(1<<snapIndexOf) != 0 {
+			before := s.begin(sink)
+			r0, r1, r2 := d.indexOf(pc, sink.keep())
+			eff := s.endDerived(sink, before)
+			s.heard(snapIndexOf, at, r2, r0, r1, r2)
+			if r2 || eff != 0 {
+				a.IndexOf.reserve(int(s.room[snapIndexOf]))
+				a.IndexOf.put(at, eff, r2, jitSnapAnsIndexOf{r0, r1, r2})
+			}
+		}
+		if asks&(1<<snapParseInt) != 0 {
+			before := s.begin(sink)
+			r0, r1 := d.parseInt(pc, nd, sink.keep())
+			eff := s.endDerived(sink, before)
+			s.heard(snapParseInt, at, r1, r0, r1)
+			if r1 || eff != 0 {
+				a.ParseInt.reserve(int(s.room[snapParseInt]))
+				a.ParseInt.put(at, eff, r1, jitSnapAnsParseInt{r0, r1})
+			}
+		}
+		if asks&(1<<snapBigString) != 0 {
+			before := s.begin(sink)
+			r0, r1 := d.bigString(pc, sink.keep())
+			eff := s.endDerived(sink, before)
+			s.heard(snapBigString, at, r1, r0, r1)
+			if r1 || eff != 0 {
+				a.BigString.reserve(int(s.room[snapBigString]))
+				a.BigString.put(at, eff, r1, jitSnapAnsBigString{r0, r1})
+			}
+		}
+	}
+}
+
+// callTarget is the function the call at the program's instruction pc --
+// call_w's, call_method_w's or new_w's, or a call in tail position --
+// last called, as its site's cache holds it, and its closure where it is
+// one of register code's (jitRegFeedback's callTarget).
+func (d *jitCallsData) callTarget(pc int) (*Object, *closure, bool) {
+	w, _, ok := jitRegAt(d.p, d.rc, pc)
+	if !ok || d.cl == nil {
+		return nil, nil, false
+	}
+	switch jitRegCallOp(w.Op()) {
+	case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW:
+	default:
+		return nil, nil, false
+	}
+	calls := d.calls(int(w.C()))
+	if int(w.C()) >= len(calls) || calls[w.C()].callee == nil {
+		return nil, nil, false
+	}
+	k := &calls[w.C()]
+	if k.kind&regCallThrough != 0 {
+		// f.call(t, ...), whose cache the interpreter makes f's, entering f
+		// one register on (regCallThrough): the call's function, in the
+		// window, is the realm's Function.prototype.call -- taken for a
+		// call of f, a leaf's check of f failed at every call
+		// (hasOwnProperty.call(o, k)).
+		return d.realm.callFn, nil, d.realm.callFn != nil
+	}
+	return k.callee, k.cl, true
+}
+
+// methodCall is the built-in the call at the program's instruction pc --
+// call_w's, or call_method_w's where method says, including tail position
+// -- last called, as its site's cache holds it, and its argument count
+// (jitRegFeedback's methodCall).
+func (d *jitCallsData) methodCall(pc int, method bool) (*Object, int, bool) {
+	w, op, ok := jitRegAt(d.p, d.rc, pc)
+	want, tail := bytecode.RCallW, bytecode.RCallWT
+	if method {
+		want, tail = bytecode.RCallMW, bytecode.RCallMWT
+	}
+	if !ok || op != ir.Host || !d.p.Code[pc].Window || w.Op() != want && w.Op() != tail {
+		return nil, 0, false
+	}
+	if rpc := int(d.p.Origin[pc]); rpc < len(d.rc.Marks) && d.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+		return nil, 0, false
+	}
+	callee, cl, ok := d.callTarget(pc)
+	if !ok || cl != nil {
+		return nil, 0, false
+	}
+	return callee, int(w.X()), true
+}
+
+// charCode is CharCode's answer.
+func (d *jitCallsData) charCode(pc int) bool {
+	o, n, ok := d.methodCall(pc, true)
+	return ok && n == 1 && d.realm.charCodeAt.IsObject() && o == d.realm.charCodeAt.Object()
+}
+
+// substringOf is which of the realm's String.prototype substring, slice,
+// substr and charAt o is (jitSubstringOf).
+func (c *jitRealmCallees) substringOf(o *Object) (kind int, ok bool) {
+	for _, m := range [...]struct {
+		v    Value
+		kind int
+	}{{c.substring, 0}, {c.slice, 0}, {c.substr, ssa.SubstrLength}, {c.charAt, ssa.SubstrAt}} {
+		if m.v.IsObject() && m.v.Object() == o {
+			return m.kind, true
+		}
+	}
+	return 0, false
+}
+
+// substring is Substring's answer.
+func (d *jitCallsData) substring(pc int) (uintptr, int, bool) {
+	o, n, ok := d.methodCall(pc, true)
+	if !ok {
+		return 0, 0, false
+	}
+	kind, ok := d.realm.substringOf(o)
+	if !ok || (kind == ssa.SubstrAt) != (n == 1) || n < 1 || n > 2 {
+		return 0, 0, false
+	}
+	return uintptr(unsafe.Pointer(o)), kind, true
+}
+
+// fromCharCode is FromCharCode's answer.
+func (d *jitCallsData) fromCharCode(pc int) (uintptr, bool) {
+	o, n, ok := d.methodCall(pc, true)
+	if !ok || n != 1 || !d.realm.fromCharCode.IsObject() || o != d.realm.fromCharCode.Object() {
+		return 0, false
+	}
+	return uintptr(unsafe.Pointer(o)), true
+}
+
+// indexOf is IndexOf's answer, the search kept by k.
+func (d *jitCallsData) indexOf(pc int, k *jitFeedback) (uintptr, int, bool) {
+	o, n, ok := d.methodCall(pc, true)
+	if !ok || n != 1 && n != 2 || o == nil {
+		return 0, 0, false
+	}
+	kind := slices.Index(d.realm.searches[:], o)
+	if kind < 0 {
+		return 0, 0, false
+	}
+	k.holders = append(k.holders, o)
+	return uintptr(unsafe.Pointer(o)), kind, true
+}
+
+// parseInt is ParseInt's answer, the function kept by k; nd says where the
+// code built a site generic.
+func (d *jitCallsData) parseInt(pc int, nd *jitNativeData, k *jitFeedback) (uintptr, bool) {
+	o, n, ok := d.methodCall(pc, false)
+	if !ok || n != 1 || o == nil || o != d.realm.parseInt || nd.generic(pc) {
+		// Not where its argument was met not a number (jitRegCallMissed): a
+		// call of Go there, which had been a host exit at every call --
+		// parseInt('7').
+		return 0, false
+	}
+	k.holders = append(k.holders, o)
+	return uintptr(unsafe.Pointer(o)), true
+}
+
+// bigString is BigString's answer, the function kept by k.
+func (d *jitCallsData) bigString(pc int, k *jitFeedback) (uintptr, bool) {
+	o, n, ok := d.methodCall(pc, true)
+	if !ok || n > 1 || o == nil || o != d.realm.bigToString {
+		return 0, false
+	}
+	k.holders = append(k.holders, o)
+	return uintptr(unsafe.Pointer(o)), true
+}
+
+// intrinsic is Intrinsic's answer, the function kept by k.
+func (d *jitCallsData) intrinsic(pc int, k *jitFeedback) (ssa.Intrinsic, bool) {
+	o, n, ok := d.methodCall(pc, true)
+	plain := false
+	if !ok {
+		if o, n, ok = d.methodCall(pc, false); !ok {
+			return ssa.Intrinsic{}, false
+		}
+		plain = true
+	}
+	if n > jitMathArgs {
+		return ssa.Intrinsic{}, false
+	}
+	fd := o.fn()
+	if fd == nil || fd.native == nil {
+		return ssa.Intrinsic{}, false
+	}
+	if fd.mathOp == mathBigInt || fd.mathOp == mathAsIntN || fd.mathOp == mathAsUintN {
+		// BigInt's that native code makes (bigint.go in ssa): BigInt(x) of
+		// one argument, plain; BigInt.asUintN(n, x) or asIntN's whose width
+		// n the window's register is given as a constant from 0 to 64
+		// before the call, on the way to it alone (regConstOperand).
+		in := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o))}
+		switch {
+		case plain:
+			if fd.mathOp != mathBigInt || n != 1 {
+				return ssa.Intrinsic{}, false
+			}
+			in.Op, in.Plain = ssa.OpBigOfF64, true
+		case n == 2 && fd.mathOp != mathBigInt:
+			width, ok := regConstOperand(d.p, pc, d.p.Code[pc].Left.Slot+2)
+			if !ok || width != math.Trunc(width) || width < 0 || width > 64 {
+				return ssa.Intrinsic{}, false
+			}
+			in.Op, in.Fn = ssa.OpZextW, int(width)
+			if fd.mathOp == mathAsIntN {
+				in.Op = ssa.OpSextW
+			}
+		default:
+			return ssa.Intrinsic{}, false
+		}
+		k.holders = append(k.holders, o)
+		return in, true
+	}
+	if d.r != nil && n == 0 && o == d.realm.randomFn && d.realm.random == nil {
+		// Made now, as the live question makes it.
+		d.realm.random = d.r.mathRandom()
+	}
+	return d.realm.mathIntrinsic(o, n, plain, k)
+}
+
+// mathIntrinsic is the intrinsic of a call of o, the realm's Math
+// function, of n arguments, plain or a method's (jitFeedback's
+// mathIntrinsic), the function kept by k.
+func (c *jitRealmCallees) mathIntrinsic(o *Object, n int, plain bool, k *jitFeedback) (ssa.Intrinsic, bool) {
+	in := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o)), Plain: plain}
+	fd := o.fn()
+	switch {
+	case n == 0:
+		// Only Math.random takes none: the next number of the runtime's
+		// cache, which the code reads, made where a call's cache holds it
+		// (jitCallsGather, mathRandom).
+		if o != c.randomFn || c.random == nil {
+			return ssa.Intrinsic{}, false
+		}
+		in.Op, in.Random = ssa.OpRandomF64, uintptr(unsafe.Pointer(c.random))
+	case o == c.powFn && n == 2:
+		in.Op = ssa.OpPowF64
+	case o == c.atan2Fn && n == 2:
+		in.Op, in.Go = ssa.OpMathCall, ssa.GoAtan2
+	case o == c.hypotFn && n == 2:
+		in.Op, in.Go = ssa.OpMathCall, ssa.GoHypot
+	case fd == nil || fd.native == nil:
+		return ssa.Intrinsic{}, false
+	case fd.mathOp == mathMax:
+		in.Op, in.Args = ssa.OpMaxF64, n
+	case fd.mathOp == mathMin:
+		in.Op, in.Args = ssa.OpMinF64, n
+	case fd.mathOp == mathImul && n == 2:
+		in.Op = ssa.OpMulI32
+	case fd.mathOp == mathClz32 && n == 1:
+		in.Op = ssa.OpClz32
+	case fd.mathOp != 0 && int(fd.mathOp) < len(unaryMath) && n == 1:
+		in.Op = jitUnaryMath(unaryMathName(fd.mathOp))
+		if in.Op == ssa.OpMathCall {
+			in.Go, in.Fn = ssa.GoMath, int(fd.mathOp)
+		}
+	default:
+		return ssa.Intrinsic{}, false
+	}
+	k.holders = append(k.holders, o)
+	return in, true
+}

@@ -1577,43 +1577,11 @@ type jitFeedback struct {
 // abs, imul and clz32 by instructions of their own; every other by Go
 // called from there, the VM's very function.
 func (fb *jitFeedback) mathIntrinsic(o *Object, n int, plain bool) (ssa.Intrinsic, bool) {
-	k := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o)), Plain: plain}
-	fd := o.fn()
-	switch {
-	case n == 0:
-		// Only Math.random takes none: the next number of the runtime's
-		// cache, which the code reads, made now if it is not yet.
-		if o != fb.r.randomFn {
-			return ssa.Intrinsic{}, false
-		}
-		k.Op, k.Random = ssa.OpRandomF64, uintptr(unsafe.Pointer(fb.r.mathRandom()))
-	case o == fb.r.powFn && n == 2:
-		k.Op = ssa.OpPowF64
-	case o == fb.r.atan2Fn && n == 2:
-		k.Op, k.Go = ssa.OpMathCall, ssa.GoAtan2
-	case o == fb.r.hypotFn && n == 2:
-		k.Op, k.Go = ssa.OpMathCall, ssa.GoHypot
-	case fd == nil || fd.native == nil:
-		return ssa.Intrinsic{}, false
-	case fd.mathOp == mathMax:
-		k.Op, k.Args = ssa.OpMaxF64, n
-	case fd.mathOp == mathMin:
-		k.Op, k.Args = ssa.OpMinF64, n
-	case fd.mathOp == mathImul && n == 2:
-		k.Op = ssa.OpMulI32
-	case fd.mathOp == mathClz32 && n == 1:
-		k.Op = ssa.OpClz32
-	case fd.mathOp != 0 && int(fd.mathOp) < len(unaryMath) && n == 1:
-		k.Op = jitUnaryMath(unaryMathName(fd.mathOp))
-		if k.Op == ssa.OpMathCall {
-			k.Go, k.Fn = ssa.GoMath, int(fd.mathOp)
-		}
-	default:
-		return ssa.Intrinsic{}, false
+	c := fb.r.realmCallees()
+	if n == 0 && o == c.randomFn {
+		c.random = fb.r.mathRandom()
 	}
-	keep := fb.keep()
-	keep.holders = append(keep.holders, o)
-	return k, true
+	return c.mathIntrinsic(o, n, plain, fb.keep())
 }
 
 // jitMathArgs is the most arguments a call of Math.max or Math.min is made

@@ -99,43 +99,21 @@ func (f *jitRegFeedback) InstanceOf(pc int) (ssa.InstanceOfSite, bool) {
 // it from native code (ssa.GoIndexOf), and leaves what would run script to
 // the call after an exit.
 func (f *jitRegFeedback) IndexOf(pc int) (uintptr, int, bool) {
-	o, n, ok := f.methodCall(pc, true)
-	if !ok || n != 1 && n != 2 {
-		return 0, 0, false
-	}
-	k := f.fb.r.jitSearchKind(o)
-	if k < 0 {
-		return 0, 0, false
-	}
-	f.fb.keep().holders = append(f.fb.keep().holders, o)
-	return uintptr(unsafe.Pointer(o)), k, true
+	return f.callsData().indexOf(pc, f.fb.keep())
 }
 
 // ParseInt is ssa.ParseIntFeedback's: the realm's parseInt, which the plain
 // call of one argument at the program's instruction pc last called
 // (methodCall), made of a number natively.
 func (f *jitRegFeedback) ParseInt(pc int) (uintptr, bool) {
-	o, n, ok := f.methodCall(pc, false)
-	if !ok || n != 1 || o == nil || o != f.fb.r.jitParseInt || f.Generic(pc) {
-		// Not where its argument was met not a number (jitRegCallMissed): a
-		// call of Go there, which had been a host exit at every call --
-		// parseInt('7').
-		return 0, false
-	}
-	f.fb.keep().holders = append(f.fb.keep().holders, o)
-	return uintptr(unsafe.Pointer(o)), true
+	return f.callsData().parseInt(pc, f.native(), f.fb.keep())
 }
 
 // BigString is ssa.BigStringFeedback's: BigInt.prototype.toString, the
 // realm's own, which the method call at the program's instruction pc last
 // called (methodCall), Go's from native code.
 func (f *jitRegFeedback) BigString(pc int) (uintptr, bool) {
-	o, n, ok := f.methodCall(pc, true)
-	if !ok || n > 1 || o == nil || o != f.fb.r.jitBigToString {
-		return 0, false
-	}
-	f.fb.keep().holders = append(f.fb.keep().holders, o)
-	return uintptr(unsafe.Pointer(o)), true
+	return f.callsData().bigString(pc, f.fb.keep())
 }
 
 // jitRegCallMissed learns from a host exit of e's code at register pc

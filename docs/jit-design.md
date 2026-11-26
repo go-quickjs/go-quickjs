@@ -1313,7 +1313,11 @@ is under [The projection](#the-projection).
   about an eighth of a snapshot's time in a profile of it made twenty
   times over (projected 15 to 25 µs of the goroutine's part); the
   goroutine copies their lists' headers and the interpreter's marks once
-  a snapshot. *Measured*: with the stage's next steps.
+  a snapshot. *Measured*: with the stage's next steps. So are the seven
+  methods that compare a call's cached callee with the realm's built-ins
+  (`CharCode`, `Substring`, `IndexOf` and the like, 71,000 questions, a
+  few hundred answered), from the closures' call caches copied whole
+  once a compile, which `NativeCalls` and `Inline` read next.
 - **lsra for mir:** tried, and it does not land. `internal/jit/lsra`
   was run beside mir's scan on every compile, given the same function: an
   instruction for each value and the block's end, the frame states' uses

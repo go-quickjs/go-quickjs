@@ -44,6 +44,9 @@ type jitRegFeedback struct {
 	// nat is the record of its function's learning and the interpreter's
 	// marks the methods that read them answer from (native).
 	nat *jitNativeData
+	// calls is the record of its closure's call caches and the realm's
+	// built-ins the calls' methods answer from (callsData).
+	calls *jitCallsData
 }
 
 // jitRegFeedbackFor is cl's register code's feedback for p, the program
@@ -697,30 +700,7 @@ func (f *jitRegFeedback) madeInline(t *closure) (ssa.InlineSite, bool) {
 // holds it: a monomorphic target from the first compile. Its closure is nil
 // for a built-in.
 func (f *jitRegFeedback) callTarget(pc int) (*Object, *closure, bool) {
-	w, _, ok := f.at(pc)
-	if !ok || f.fb.cl == nil {
-		return nil, nil, false
-	}
-	switch jitRegCallOp(w.Op()) {
-	case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW:
-	default:
-		return nil, nil, false
-	}
-	calls := f.fb.r.regCallsRestored(f.fb.cl, int(w.C()))
-	if int(w.C()) >= len(calls) || calls[w.C()].callee == nil {
-		return nil, nil, false
-	}
-	k := &calls[w.C()]
-	if k.kind&regCallThrough != 0 {
-		// f.call(t, ...), whose cache the interpreter makes f's, entering f
-		// one register on (regCallThrough): the call's function, in the
-		// window, is the realm's Function.prototype.call -- taken for a
-		// call of f, a leaf's check of f failed at every call
-		// (hasOwnProperty.call(o, k)).
-		r := f.fb.r
-		return r.callFn, nil, r.callFn != nil
-	}
-	return k.callee, k.cl, true
+	return f.callsData().callTarget(pc)
 }
 
 // constant is the constant a StringConst or a BigIntConst at the
@@ -1574,53 +1554,28 @@ func (f *jitRegFeedback) regStringBefore(rpc, reg int) bool {
 // -- last called, as its site's cache holds it (regCalls), and its argument
 // count.
 func (f *jitRegFeedback) methodCall(pc int, method bool) (*Object, int, bool) {
-	w, op, ok := f.at(pc)
-	want, tail := bytecode.RCallW, bytecode.RCallWT
-	if method {
-		want, tail = bytecode.RCallMW, bytecode.RCallMWT
-	}
-	if !ok || op != ir.Host || !f.p.Code[pc].Window || w.Op() != want && w.Op() != tail {
-		return nil, 0, false
-	}
-	if rpc := int(f.p.Origin[pc]); rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
-		return nil, 0, false
-	}
-	callee, cl, ok := f.callTarget(pc)
-	if !ok || cl != nil {
-		return nil, 0, false
-	}
-	return callee, int(w.X()), true
+	return f.callsData().methodCall(pc, method)
 }
 
 // CharCode is ssa.CharCodeFeedback's: the method call of one argument at
 // the program's instruction pc calls String.prototype.charCodeAt, the
 // realm's own (methodCall).
 func (f *jitRegFeedback) CharCode(pc int) bool {
-	o, n, ok := f.methodCall(pc, true)
-	return ok && n == 1 && f.fb.r.jitCharCodeAt.IsObject() && o == f.fb.r.jitCharCodeAt.Object()
+	return f.callsData().charCode(pc)
 }
 
 // Substring is ssa.SubstringFeedback's: String.prototype's substring,
 // slice, substr or charAt, the realm's own, which the method call at the
 // program's instruction pc calls (methodCall), and which it is.
 func (f *jitRegFeedback) Substring(pc int) (uintptr, int, bool) {
-	o, n, ok := f.methodCall(pc, true)
-	if !ok || !f.fb.r.jitIsSubstring(o, n) {
-		return 0, 0, false
-	}
-	kind, _ := f.fb.r.jitSubstringOf(o)
-	return uintptr(unsafe.Pointer(o)), kind, true
+	return f.callsData().substring(pc)
 }
 
 // FromCharCode is ssa.FromCharCodeFeedback's: String.fromCharCode, the
 // realm's own, which the method call of one argument at the program's
 // instruction pc calls (methodCall).
 func (f *jitRegFeedback) FromCharCode(pc int) (uintptr, bool) {
-	o, n, ok := f.methodCall(pc, true)
-	if !ok || n != 1 || !f.fb.r.jitFromCharCode.IsObject() || o != f.fb.r.jitFromCharCode.Object() {
-		return 0, false
-	}
-	return uintptr(unsafe.Pointer(o)), true
+	return f.callsData().fromCharCode(pc)
 }
 
 // Intrinsic is ssa.IntrinsicFeedback's: the realm's Math function a call at
@@ -1628,49 +1583,7 @@ func (f *jitRegFeedback) FromCharCode(pc int) (uintptr, bool) {
 // of the function read before -- calls (methodCall), made natively or by Go
 // called from native code (jitFeedback's mathIntrinsic).
 func (f *jitRegFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
-	o, n, ok := f.methodCall(pc, true)
-	plain := false
-	if !ok {
-		if o, n, ok = f.methodCall(pc, false); !ok {
-			return ssa.Intrinsic{}, false
-		}
-		plain = true
-	}
-	if n > jitMathArgs {
-		return ssa.Intrinsic{}, false
-	}
-	fd := o.fn()
-	if fd == nil || fd.native == nil {
-		return ssa.Intrinsic{}, false
-	}
-	if fd.mathOp == mathBigInt || fd.mathOp == mathAsIntN || fd.mathOp == mathAsUintN {
-		// BigInt's that native code makes (bigint.go in ssa): BigInt(x) of
-		// one argument, plain; BigInt.asUintN(n, x) or asIntN's whose width
-		// n the window's register is given as a constant from 0 to 64
-		// before the call, on the way to it alone (regConstOperand).
-		k := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o))}
-		switch {
-		case plain:
-			if fd.mathOp != mathBigInt || n != 1 {
-				return ssa.Intrinsic{}, false
-			}
-			k.Op, k.Plain = ssa.OpBigOfF64, true
-		case n == 2 && fd.mathOp != mathBigInt:
-			width, ok := regConstOperand(f.p, pc, f.p.Code[pc].Left.Slot+2)
-			if !ok || width != math.Trunc(width) || width < 0 || width > 64 {
-				return ssa.Intrinsic{}, false
-			}
-			k.Op, k.Fn = ssa.OpZextW, int(width)
-			if fd.mathOp == mathAsIntN {
-				k.Op = ssa.OpSextW
-			}
-		default:
-			return ssa.Intrinsic{}, false
-		}
-		f.fb.keep().holders = append(f.fb.keep().holders, o)
-		return k, true
-	}
-	return f.fb.mathIntrinsic(o, n, plain)
+	return f.callsData().intrinsic(pc, f.fb.keep())
 }
 
 // regConstOperand is the number p's instruction pc, a window's call, finds
