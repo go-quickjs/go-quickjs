@@ -65,8 +65,9 @@ var known = map[string]string{
 	"internal/vm/builtins_extra.go|(*Runtime).initArrayExtras2.func|out.extOf().elems = append(out.elemsOf(), v)":            "out is the array arrayCreate made",
 	"internal/vm/builtins_extra.go|(*Runtime).initArrayExtras2.func|out.extOf().elems = append(out.elemsOf(), arg(args, 1))": "out is the array arrayCreate made",
 	"internal/vm/iterate.go|(*Runtime).iterRest|out.extOf().elems = append(out.elemsOf(), v)":                                "out is the array newObject made",
-	"internal/vm/iterate.go|(*Runtime).iterToArray|for want == bytecode.IterAll || uint32(len(out.elemsOf())) < want {":      "out is the array newObject made",
-	"internal/vm/iterate.go|(*Runtime).iterToArray|out.extOf().elems = append(out.elemsOf(), v)":                             "out is the array newObject made",
+	// The runtime, which the method reads before the loop (r.proto) wherever
+	// the loop is entered: the job queue's length word is a field of it.
+	"internal/vm/jit_ssa.go|(*Runtime).jitShareContexts|c.JobHead, c.JobCount = &r.jobHead, jitJobCount(r)": "r is the receiver, read before the loop",
 	// An array, which the function checked before the loop.
 	"internal/vm/iterate.go|elemKeysOnly|if holeAt(&o.extOf().elems[i]) {": "o is a ClassArray",
 	// An object setElem's callers give it with side fields; one without
