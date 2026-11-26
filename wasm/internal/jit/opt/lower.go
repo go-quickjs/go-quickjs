@@ -741,7 +741,12 @@ func (g *lowering) phiMoves(moves []pmove, b, s *Block) []pmove {
 	for _, p := range s.Phis {
 		x := p.Args[k]
 		dst := g.phiDst[p.vreg]
-		moves = append(moves, pmove{dst: dst, src: g.locOf(x), t: p.Type})
+		// A move of a value where it is already moves nothing (parallel):
+		// it is left out but for a v128's, which decides how the moves
+		// are ordered (hasV128).
+		if src := g.locOf(x); p.Type == TV128 || src != dst {
+			moves = append(moves, pmove{dst: dst, src: src, t: p.Type})
+		}
 		if x.Op == OpConst && dst.kind != lSlot && g.phiStore[p.vreg] {
 			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: g.ra.Slot[p.vreg]}, src: g.locOf(x), t: p.Type})
 		}
