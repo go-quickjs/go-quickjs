@@ -80,6 +80,12 @@ func (r *Runtime) jitRegLower(cl *closure, rc *bytecode.RegCode, kind jitLowerKi
 			}
 		}
 	}
+	if cl.reg != nil && cl.reg.rc == rc && cl.jitRegOps != nil {
+		// What the operand lattice met, taken as the marks are: an
+		// addition that met a string Go's, an operator that met an object
+		// run whole, from the first lowering on.
+		jitLatticeHints(&s.regLearnedOf(key).regHints, rc, cl.jitRegOps)
+	}
 	l := s.regLowering(key)
 	if !l.done[kind] {
 		h := l.hints

@@ -57,6 +57,7 @@ const (
 	snapWalkedCloseCell
 	snapTypedKind
 	snapFrequency
+	snapOperands
 	snapForEach
 	snapInstanceOf
 	snapIndexOf
@@ -72,10 +73,10 @@ const (
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, true, true, true, true, true, true, true, false, false, false, true, false, false, false, false, false, true, true, true, true, true, true, true, true, true, false, false, false, false, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
+var jitSnapNames = [...]string{"BigInt", "BigIntWide", "BigIntFailed", "InlineExit", "KeepLimit", "CreatePool", "StringRead", "TypedRead", "TypedBigRead", "KeyedRead", "KeyedWrite", "UpvalueTyped", "KeyedStore", "Property", "StringProperty", "Accessor", "Global", "CallShape", "CalledClosure", "StringCell", "StringContent", "BigIntCell", "Generic", "Resumed", "EntryGeneric", "Inline", "GoCalls", "NativeCalls", "BigIntSole", "Leaf", "ViaLeaf", "CharCode", "Substring", "FromCharCode", "Intrinsic", "Literal", "Define", "LeafKind", "ArrayProtos", "GenNext", "GenSteps", "HasCache", "KeyAtoms", "MapNexts", "TypeofCells", "WalkedCloseCell", "TypedKind", "Frequency", "Operands", "ForEach", "InstanceOf", "IndexOf", "ParseInt", "BigString", "Closure", "CellsPool", "PureBody", "ExecReuse", "Heap", "RawMath", "VirtualRoot"}
 
 // The register snapshot's answers: jitRegFeedback's methods, numbered as
 // jitFeedback's of the same names.
@@ -541,6 +542,16 @@ func (q *jitRegSnapshot) Frequency(pc int) (r0 float64, r1 bool) {
 		return
 	}
 	r0, _ = a[0].(float64)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) Operands(pc int) (r0 ssa.Operands, r1 bool) {
+	a := q.get(snapOperands, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.Operands)
 	r1, _ = a[1].(bool)
 	return r0, r1
 }
@@ -1081,6 +1092,15 @@ func jitRegSnapAskFrequency(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskOperands(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.Operands(pc)
+	s.end(fb.fb, before, snapOperands, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapOperands, int64(pc), r0, r1)
+	}
+}
+
 func jitRegSnapAskForEach(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	before := s.begin(fb.fb)
 	r0, r1 := fb.ForEach(pc)
@@ -1203,6 +1223,7 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapWalkedCloseCell |
 	1<<snapTypedKind |
 	1<<snapFrequency |
+	1<<snapOperands |
 	1<<snapForEach |
 	1<<snapInstanceOf |
 	1<<snapIndexOf |
@@ -1255,6 +1276,7 @@ func init() {
 		snapGenSteps:       jitRegSnapAskGenSteps,
 		snapTypedKind:      jitRegSnapAskTypedKind,
 		snapFrequency:      jitRegSnapAskFrequency,
+		snapOperands:       jitRegSnapAskOperands,
 		snapForEach:        jitRegSnapAskForEach,
 		snapInstanceOf:     jitRegSnapAskInstanceOf,
 		snapIndexOf:        jitRegSnapAskIndexOf,

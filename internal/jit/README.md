@@ -560,6 +560,60 @@ A guard's failure invalidates the code; anything else learned marks it to
 be compiled again, valid meanwhile, without a deoptimization (see
 [Tier-up](#tier-up-and-on-stack-replacement)).
 
+**The operand lattice.** What the interpreter saw an arithmetic,
+comparison or bitwise site's operands be -- the byte the feedback
+dispatcher ORs into the function's lattice (below, "The feedback
+dispatcher"; jit_lattice.go) -- is `Operands` (`ssa.OperandFeedback`), by
+the program's instruction, for an operator but `==` and `!=`, a
+relational comparison or branch, an update and a unary operator but `!`;
+where the function has no lattice (the Go table runs it) or the site is
+none of the lattice's, it knows nothing, and the builder speculates as
+before. Where it knows, the builder speculates exactly what was met, as
+V8's optimizer does on its BinaryOperation and CompareOperation hints:
+
+- **nothing** -- the site never ran: its block ends at it with a host
+  exit (`unseen`, which `unfed` takes in), Go making the instruction whole
+  and the interpreter going on to the next loop header, as V8's code
+  deoptimizes softly for insufficient feedback, with no invalidation;
+  the host exit ORs what Go meets there into the lattice
+  (`jitLatticeWiden`) and marks the code to be compiled again
+  (`jitRegReopt`), an inlined callee's its owner's. Only the first
+  instruction of its register instruction, and none after a commit;
+- **numbers** -- numbers, guarded, as before;
+- **numbers and oddballs** -- numbers, as before, an oddball learned at
+  a guard's failure: the oddballs are booleans as often as not, which the
+  code makes numbers of natively where it knows them for booleans, and
+  built generic, the sums of native loops' booleans (`some`, `every`) had
+  been Go's, the loops with them;
+- **BigInts**, alone or beside numbers and oddballs -- what the BigInt
+  feedback says, below, which knows the operation's results;
+- **a string or anything else** -- an object, a symbol
+  (`abi.Operands.Generic`) -- generic (`generic`), Go making what native
+  code does not, an addition by `GoAdd`, a comparison by `GoCompare`.
+
+A pure body's runs pureCall answers without a frame, numbers alone,
+which the dispatcher never sees: its sites answer numbers besides what
+their bytes hold. The BigInt marks (below) stay beside the lattice: they
+know the operation's result, as V8's BigInt64 hint does, where the
+lattice knows its operands only. A lowering takes the lattice's strings
+and objects as hints too (`jitLatticeHints`): an addition that met a
+string Go's (`StringAdds`), an operator that met an object run whole
+(`WholeOps`), as the interpreter's marks and the exits had taught them.
+
+A compile made before the interpreter has run the function to a return
+`abi.OperandRuns` (8) times -- at an early call, entered at a loop of its
+first, inside a recursion's first run -- takes a site that met nothing for
+one it knows nothing of, numbers, as without a lattice; and from then on
+every compile does, since that code runs those sites natively and records
+nothing of them (`jitLatticeRan`, the lattice's two bytes past its
+instructions': the runs the dispatcher's returns count, and the one such
+a compile sets). V8 compiles only a
+function whose feedback the interpreter has had a budget to fill.
+`TestJITLatticeSpeculates` compiles functions whose operators met
+strings and objects, which run with no deoptimization, and one whose
+arithmetic met nothing, whose first run is a host exit that
+invalidates nothing and teaches the lattice.
+
 **What it answers.** `jitRegFeedback` answers every question the builder
 asks; nine of its answers it takes from the shared state's own methods
 (`jitFeedback`'s `ArrayProtos`, `GenNext`, `HasCache`, `KeyAtoms`,
@@ -578,6 +632,7 @@ speculates nothing: it builds the site generically, or leaves it to Go.
 | constants | `StringCell`, `StringContent`, `BigIntCell`, `BigIntSole` |
 | call frequencies | `Frequency` |
 | what exits taught | `Generic`, `EntryGeneric`, `Resumed` |
+| what an arithmetic, comparison or bitwise site's operands met (the operand lattice) | `Operands` |
 | steps, `in`, `typeof`, scopes' ends, typed arrays' kinds | `GenNext`, `MapNexts`, `KeyAtoms`, `HasCache`, `TypeofCells`, `WalkedCloseCell`, `TypedKind` |
 | elements' kinds learned at exits, captured typed arrays | `TypedRead`, `TypedBigRead`, `KeyedRead`, `KeyedWrite`, `StringRead`, `UpvalueTyped` |
 | a pure body (`bytecode.LeafPure`, the compiler's fact), whose operators take BigInts native code holds as such | `PureBody` |
@@ -639,7 +694,15 @@ code's `jitRegOps`, jit_lattice.go; nativegen's lattice.go), made at the
 template's first run where the runtime runs the JIT on the native
 handlers: an int32's number (not -0), another number, an oddball, a
 BigInt in the int64 range, another BigInt, a string, anything else
-(`abi.Operands`), an immediate an int32's. It is reached through the
+(`abi.Operands`), an immediate an int32's. As V8's feedback update, a
+handler tests the byte for each operand's kind and branches past the
+store where it has it, a kind it lacks learned out of line: a stable
+site costs a load, a test and a branch an operand, never a store
+(`feedback`'s `jnlt` on two int32s 30 instructions, plain's 12). A
+number is in the byte where it has any number's bit, so that only a
+site's first number is converted to tell an int32; an int32's site that
+meets a double later learns it at the deoptimization that follows
+(`jitLatticeWiden`, which classifies exactly). It is reached through the
 frame's cc, as the counts are, not a pinned register: the native
 context's `fv` and the register kept for it (amd64's R14, arm64's R15) stay
 for a vector pinned where no plain variant has to switch it, baseline

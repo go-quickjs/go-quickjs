@@ -4,9 +4,12 @@ package vm
 
 import (
 	"math"
+	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // The operand lattice: the JIT's operand-type feedback, V8's
@@ -174,4 +177,57 @@ func (r *Runtime) jitLatticeAny(cl *closure, rpc int) bool {
 	}
 	k, ok := jitLatticeAt(cl, cl.reg.rc, rpc)
 	return ok && k.Generic()
+}
+
+// Operands is ssa.OperandFeedback's: what the operands of the register
+// instruction of the program's instruction pc met (jitRegOps), but
+// nothing where the function has not run to a return (jitLatticeRan). A pure
+// body's runs pureCall answers without a frame, numbers alone, which the
+// feedback dispatcher never sees: its sites have met numbers, whatever
+// else its byte says.
+func (f *jitRegFeedback) Operands(pc int) (ssa.Operands, bool) {
+	if pc < 0 || pc >= len(f.p.Origin) {
+		return 0, false
+	}
+	k, ok := jitLatticeAt(f.fb.cl, f.rc, int(f.p.Origin[pc]))
+	if ok && f.rc.Leaf == bytecode.LeafPure {
+		k |= abi.OperandNumber
+	}
+	if ok && k == 0 && !jitLatticeRan(f.fb.cl) {
+		// Met nothing, but before the function ran to its end: known no
+		// more than without a lattice, and so from now on.
+		jitLatticeUnknown(f.fb.cl)
+		return 0, false
+	}
+	return k, ok
+}
+
+// jitLatticeHints adds to h what the lattice ops of register code rc met
+// that a lowering takes as hints, as exits and the interpreter's marks
+// had taught them: an addition that met a string, Go's addition
+// (StringAdds, which an append to an upvalue makes in place); an operator
+// that met an object, run whole by Go (WholeOps, as jitRegObjectArithSeen
+// learns at a host exit). The hints only grow, and a lowering made before
+// they grew is made again (regLowering).
+func jitLatticeHints(h *jitcompile.Hints, rc *bytecode.RegCode, ops []uint8) {
+	for rpc, k := range ops {
+		if k&uint8(abi.OperandString|abi.OperandOther) == 0 || rpc >= len(rc.Code) {
+			continue
+		}
+		switch rc.Code[rpc].Op() {
+		case bytecode.RAdd, bytecode.RAddI, bytecode.RAddI32, bytecode.RAddII32:
+			if k&uint8(abi.OperandString) != 0 && !slices.Contains(h.StringAdds, int32(rpc)) {
+				h.StringAdds = append(h.StringAdds, int32(rpc))
+			}
+		}
+		switch rc.Code[rpc].Op() {
+		case bytecode.RAdd, bytecode.RSub, bytecode.RMul, bytecode.RBin,
+			bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr,
+			bytecode.RAddI, bytecode.RSubI, bytecode.RMulI,
+			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI:
+			if k&uint8(abi.OperandOther) != 0 && !slices.Contains(h.WholeOps, int32(rpc)) {
+				h.WholeOps = append(h.WholeOps, int32(rpc))
+			}
+		}
+	}
 }

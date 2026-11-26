@@ -1149,7 +1149,31 @@ is under [The projection](#the-projection).
   trace; the warm-up at GOMAXPROCS 1 back to synchronous; Are We Fast Yet
   and ssr no slower in the background (today +2% and Render +14%);
   differential fuzzing with background installs.
-- **Status:** not started.
+- **Status:** in progress. The operand lattice is built (internal/jit/
+  README.md, "Feedback"): the feedback dispatcher ORs each arithmetic,
+  comparison and bitwise site's operand kinds into its byte on both
+  architectures, and the builder speculates on it -- a string or an
+  object generic and Go's from the first compile, a site that met
+  nothing left to Go at a host exit that invalidates nothing, BigInts by
+  their marks, which know the results. Oddballs beside numbers are still
+  learned at a guard: built generic, the sums of native loops' booleans
+  had been Go's, and the loops with them. A site that met nothing counts
+  only once the interpreter has run its function to a return 8 times
+  before any compile, V8's feedback point. Measured with the JIT against
+  9d14b87b: Octane -1.0% (Mandreel -1.8%, EarleyBoyer -1.3%, PdfJS
+  -1.2%, Typescript -1.0%; Ryzen 5 3600, -k 2); the micro-benchmarks'
+  geometric mean +0.2%. A handler tests the byte before it stores, as
+  V8's feedback update does (a stable site's compare-and-branch 30
+  instructions, not 12, no store); `async_await` is +4.9% at all of -k
+  4's placements, its loop interpreted because an await leaves native
+  code at each turn, which no stage yet makes native. Deopts (the tier trace): Octane 344 to
+  338, its compiles after deopts 263 to 256 (projected -10 to 25%),
+  PdfJS 37 to 31 and its compiles 142 to 131; Are We Fast Yet 78 to 74;
+  the V8 suite 9 and EarleyBoyer 4, unchanged; Typescript 193 to 194,
+  its deopts property sites', which the per-site marks and stage 5 are
+  for. The build (`-jitcompile 10`): -3.3 to -4.7% on Typescript,
+  Mandreel, PdfJS and Gameboy, zlib level (projected +1 to 3%), no phase
+  10% slower. The deopt discipline and the background default are open.
 
 ### Stage 2: compile speed
 

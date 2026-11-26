@@ -3264,6 +3264,10 @@ type PropertySite struct {
 func (b *builder) unfed(pc int) bool {
 	switch b.p.Code[pc].Op {
 	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:
+	case ir.Binary, ir.Branch, ir.Unary, ir.Update:
+		// An operator whose operands met nothing (unseen): left to Go at
+		// a host exit, with no entry after it.
+		return b.unseen(pc)
 	default:
 		return false
 	}
@@ -4202,7 +4206,7 @@ func (b *builder) generic(pc int) bool {
 		// a property's read built to call nothing, add_prop's addition
 		// speculates as an add does, and its exit runs the instruction
 		// again from its start, the read with it.
-		return in.Generic && b.atomic || b.fb != nil && b.fb.Generic(pc)
+		return in.Generic && b.atomic || b.fb != nil && b.fb.Generic(pc) || b.operandsGeneric(pc)
 	}
 	return false
 }
@@ -5084,6 +5088,9 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 		blk := fr.blockAt[pc]
 		end := b.endOf[blk.ID]
 		switch last := p.Code[end]; {
+		case b.unseen(end):
+			// An operator whose operands met nothing, left to Go.
+			blk.Kind = BlockExit
 		case last.Op == ir.Jump:
 			blk.Kind = BlockPlain
 			b.edge(blk, fr.blockAt[last.Target])
@@ -5134,6 +5141,8 @@ func (b *builder) returnsNatively(fr *frame) bool {
 			switch in := p.Code[pc]; {
 			case in.Op == ir.Return:
 				return true
+			case b.unseen(pc):
+				return false
 			case fr.inlined[pc] != nil:
 				if !b.returnsNatively(fr.inlined[pc]) {
 					return false
@@ -7062,6 +7071,12 @@ func (b *builder) plan() error {
 		blk := b.blockAt[pc]
 		b.endOf[blk.ID] = end
 		last := p.Code[end]
+		if b.unseen(end) {
+			// An operator whose operands met nothing: Go makes it at a
+			// host exit, a branch's too, the interpreter going on.
+			blk.Kind = BlockExit
+			continue
+		}
 		switch last.Op {
 		case ir.Jump:
 			blk.Kind = BlockPlain
@@ -8364,6 +8379,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 	if in.Raw != ir.RawNone {
 		// Typed code's (raw.go).
 		b.rawInstruction(blk, pc, in, operand, number, guard)
+		return
+	}
+	if b.unseen(pc) {
+		// A site whose operands met nothing, as V8's code deoptimizes
+		// softly for insufficient feedback: Go makes the instruction at a
+		// host exit, which invalidates nothing, and the lattice learns
+		// what it met there (OperandFeedback).
+		blk.ExitKind = ir.HostExit
+		blk.State = state()
+		blk.State.addUse()
 		return
 	}
 	switch in.Op {

@@ -52,9 +52,12 @@ function f(a,b,n){let s;for(let i=0;i<n;i++)s=`+tc.expr+`;return s}`)
 					}
 					e := jitNativeForTest(t, r, "f")
 					wantDeopts := uint16(0)
-					if tc.op == bytecode.RAddI32 || tc.op == bytecode.RAddII32 {
-						// The fused form still learns its string's ToInt32
-						// conversion separately from the addition.
+					if (tc.op == bytecode.RAddI32 || tc.op == bytecode.RAddII32) && !r.runNative {
+						// The fused form learns its string's ToInt32
+						// conversion separately from the addition where no
+						// operand lattice says the instruction met a string
+						// (the Go table's): with one, the conversion is
+						// generic from the first compile.
 						wantDeopts = 1
 					}
 					if e.deopts != wantDeopts || len(e.failedEntries) != 0 {

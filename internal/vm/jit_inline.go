@@ -418,6 +418,9 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		// Not learned, a closure's s += x inlined had left native code at
 		// each call until the call was no longer inlined.
 		str := r.jitRegStringAddSeen(l, c, x.wb, pc)
+		// An operator whose operands met what the callee's lattice had not
+		// (ssa.OperandFeedback), learned before Go makes it.
+		widened := r.jitLatticeWiden(x.cl, c, x.wb, pc)
 		seen := r.jitRegHostSeen(f, c, x.wb, pc)
 		// The function a forward calls, f of f.apply(x, arguments), before
 		// Go writes its register (jitRegLeft's).
@@ -458,7 +461,7 @@ func (r *Runtime) jitRegInlineLeft(f *frame, x *jitRegInlineLevel, owner *jitReg
 		// compile, jitLearnedMark), and counted so, each exit had the
 		// code inlining it compiled again for what the interpreter's run
 		// of the callee filled.
-		learned = !before && l.polyReopt || len(l.failed) != failed || seen.elem || str || called
+		learned = !before && l.polyReopt || len(l.failed) != failed || seen.elem || str || called || widened
 		if err != nil {
 			x.threw = true
 			return Undefined, err, learned

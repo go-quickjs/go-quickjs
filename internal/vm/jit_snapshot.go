@@ -295,6 +295,7 @@ var jitSnapOps = [...][]ir.Op{
 	snapNativeCalls:    {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.BindingRead, ir.ReferenceRead, ir.BindingWrite, ir.FieldDefine, ir.Rethrow, ir.IterStep},
 	snapBigInt:         {ir.Binary, ir.Unary, ir.Branch, ir.StringAdd},
 	snapFrequency:      {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},
+	snapOperands:       {ir.Binary, ir.Unary, ir.Branch, ir.Update},
 	snapProperty:       {ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},
 	snapAccessor:       {ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},
 	snapGlobal:         {ir.BindingRead, ir.BindingWrite, ir.BindingCheck},

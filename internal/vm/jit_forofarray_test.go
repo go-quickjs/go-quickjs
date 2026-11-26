@@ -638,9 +638,13 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// deep leaves native code at each call: a delete of a proxy's
+	// property is Go's, whatever the code learns. (An object's addition,
+	// which it had left at, Go makes from native code once the operand
+	// lattice has met an object, from the first compile.)
 	setup := `
-		var weird = { get g() { return { valueOf() { return 3 } } } }
-		function deep(i) { return weird.g + i }
+		var px = new Proxy({}, {})
+		function deep(i) { return (delete px.y ? 3 : 0) + i }
 		function mid(i) { let x = i; const get = () => x; x += deep(i); x++; return get() * 2 + x }
 		function midding(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + mid(k)) | 0; return s }
 	`

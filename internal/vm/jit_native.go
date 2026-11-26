@@ -2051,6 +2051,13 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 			}
 		} else {
 			s.noteRegHost(c, exitPC)
+			if r.jitLatticeWiden(f.cl, c, wb, exitPC) {
+				// An operator whose operands met what the code was not
+				// compiled for -- nothing, at a site left to Go for it
+				// (ssa.OperandFeedback) -- learned in its lattice before
+				// Go makes it: compiled again for it, no deoptimization.
+				r.jitRegReopt(f.cl, e)
+			}
 			if r.jitRegStringAddSeen(r.jitRegLearnedFor(f, e), c, wb, exitPC) {
 				// An addition that met a string, Go's from the next
 				// lowering on.

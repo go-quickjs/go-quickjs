@@ -18,7 +18,10 @@ import (
 // package vm's jitLatticeKind finds it: a number below the least tag,
 // an int32 where truncating it to one and back gives it, but -0; a BigInt
 // from heapBigBits up, in the int64 range from shortIntBase up; a tag's
-// kind otherwise. Where the frame's cc has no lattice -- nil, its length 0
+// kind otherwise. The handler tests the byte for the kind before it
+// stores, as V8's feedback update does, and a number is in it where the
+// byte has any number's bit: whether a number is an int32 is found only
+// the first time the site meets a number (latticeAMD64). Where the frame's cc has no lattice -- nil, its length 0
 // -- nothing is recorded. Plain's handlers have no part of it.
 
 // latticeForm is where in the instruction word op's registers are, by its

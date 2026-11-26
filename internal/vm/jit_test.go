@@ -4128,8 +4128,22 @@ func TestJITSSANestedInline(t *testing.T) {
 				t.Fatalf("an exit inside mark made %d frames, not three", r.jit.unwound-unwound)
 			}
 		case 5:
-			// Left too often, outer is called natively instead, not by Go:
-			// the code's last compile does not inline outer, and calls it
+			if r.runNative {
+				// The operand lattice (ssa.OperandFeedback): mark's | met
+				// a string in round 4, and the code compiled again for it
+				// has it generic, outer inlined still, which leaves native
+				// code no more.
+				if e = jitClosureCodeForTest(r, cl); e == nil {
+					t.Fatal("run has no code")
+				}
+				if !slices.Contains(inlined, uintptr(unsafe.Pointer(method("outer")))) || e.ssaStats.hosts != hosts {
+					t.Fatalf("run's code: inlines %#x, left native code %d times", inlined, e.ssaStats.hosts-hosts)
+				}
+				break
+			}
+			// Without a lattice, the code learns at its exits: left too
+			// often, outer is called natively instead, not by Go: the
+			// code's last compile does not inline outer, and calls it
 			// through its link.
 			if slices.Contains(inlined, uintptr(unsafe.Pointer(method("outer")))) || jitLinkCallsForTest(r, method("outer")) == outerIn {
 				t.Fatalf("run's call to outer: inlines %#x, outer called natively %d times", inlined, jitLinkCallsForTest(r, method("outer"))-outerIn)
@@ -10161,7 +10175,22 @@ func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 				t.Fatalf("sub's speculation failed: %+v", s)
 			}
 		}
-		if i == 7 {
+		if i == 7 && r.runNative {
+			// What failed in dbl, a string at x*1, its operand lattice
+			// learned as the interpreter ran it after the deoptimization
+			// (ssa.OperandFeedback), and mix is compiled again with dbl
+			// inlined generic there: it fails no more.
+			dbl, mix := clOf("dbl"), jitPortCode(r, clOf("mix"))
+			k := abi.Operands(0)
+			for pc, w := range dbl.reg.rc.Code {
+				if w.Op() == bytecode.RMulI {
+					k = abi.Operands(dbl.jitRegOps[pc])
+				}
+			}
+			if k&abi.OperandString == 0 || mix == nil || mix.reopts == 0 || mix.invalid {
+				t.Fatalf("dbl's multiplication learned %#x, mix compiled again: %+v", k, mix)
+			}
+		} else if i == 7 {
 			// At its first failure, not once Go enters it for leaving too
 			// often (notNative), which a callee native code calls never is
 			// until then.

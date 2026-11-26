@@ -170,3 +170,130 @@ func TestJITLatticeKind(t *testing.T) {
 		}
 	}
 }
+
+// latticeSpecSrc's functions are compiled after runs that met strings,
+// oddballs beside numbers and, for rare's arithmetic, nothing.
+const latticeSpecSrc = `
+function strs(a, b) { let r = a + b; return r }
+function odd(a) { let r = (a | 0) + 1; return r }
+function oadd(a, b) { let r = a + b; return r }
+function olt(a, b) { let r = 0; if (a < b) r = 1; return r }
+function obj(a, b) { let r = a * b; return r }
+var ov = { valueOf() { return 3 } };
+function rare(a, flag) { let r = a; if (flag) r = a * 3 - 1; return r }
+function drive(n, f, x, y) { let t; for (let i = 0; i < n; i++) t = f(x, y); return t }
+function warm() {
+	for (let k = 0; k < 4; k++) {
+		drive(1000, strs, "a", "b"); drive(1000, strs, "a", 1);
+		drive(1000, odd, undefined); drive(1000, odd, 2.5); drive(1000, odd, null);
+		drive(1000, oadd, undefined, 1); drive(1000, oadd, 1.5, 2);
+		drive(1000, olt, undefined, 1); drive(1000, olt, 1.5, 2);
+		drive(1000, obj, ov, 2); drive(1000, obj, 2, 2);
+		drive(3000, rare, 2, false);
+	}
+}
+`
+
+// TestJITLatticeSpeculates checks the builder speculates what the lattice
+// met (ssa.OperandFeedback): an addition that met strings is generic from
+// the first compile, and runs on strings with no deoptimization; an
+// operator that met an object is generic from the first compile, with no
+// exit at each object and no deoptimization; operators that met oddballs
+// beside numbers still give the interpreter's answers; and arithmetic that
+// met nothing, left to Go, makes
+// its first run at a host exit that invalidates nothing, the lattice
+// learning what it met and the code marked to be compiled again for it.
+func TestJITLatticeSpeculates(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	t.Parallel()
+	r := newTestRuntime(t, Config{JIT: true})
+	t.Cleanup(r.Close)
+	// The JIT's own budgets, not QJS_JIT_STRESS's, at which a function is
+	// compiled before the lattice has seen it run (jitLatticeRan).
+	jitDefaultsForTest(r)
+	if _, err := r.Run(compileForTest(t, latticeSpecSrc)); err != nil {
+		t.Fatal(err)
+	}
+	// rare's first runs from a loop of the interpreter's, so that the
+	// lattice has seen it run to its end before any compile asks it
+	// (jitLatticeRan).
+	if _, err := r.Run(compileForTest(t, "for (let q = 0; q < 20; q++) rare(2, false)")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(compileForTest(t, "warm()")); err != nil {
+		t.Fatal(err)
+	}
+	run := func(src, want string) {
+		t.Helper()
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := fmt.Sprint(v.Number())
+		if v.IsString() {
+			got = `"` + v.String().Go() + `"`
+		}
+		if got != want {
+			t.Fatalf("%s = %s, want %s", src, got, want)
+		}
+	}
+	if !regNativeDefault {
+		// No lattice: what the code learns, it learns at exits.
+		run(`drive(10, rare, 2, true)`, "5")
+		return
+	}
+	for _, name := range []string{"strs", "odd", "oadd", "olt", "obj", "rare"} {
+		if e := jitCodeForTest(r, name); e == nil || e.invalid {
+			t.Fatalf("%s has no code", name)
+		}
+	}
+	run(`drive(100, odd, undefined) + drive(100, odd, 7.5) + drive(100, odd, true)`, "11")
+	for _, c := range []struct{ name, src, want string }{
+		{"strs", `drive(100, strs, "x", "y") + drive(100, strs, "x", 2)`, `"xyx2"`},
+	} {
+		e := jitCodeForTest(r, c.name)
+		run(c.src, c.want)
+		if e.invalid || e.deopts != 0 || len(e.failed) != 0 {
+			t.Errorf("%s: invalid %v, %d deoptimizations, failed at %v", c.name, e.invalid, e.deopts, e.failed)
+		}
+	}
+	// Oddballs beside numbers, taken for numbers as without the lattice,
+	// and then a string: concatenated, and compared as a string.
+	run(`drive(100, oadd, null, 2) + drive(100, oadd, true, 0.5)`, "3.5")
+	run(`drive(100, olt, null, 1) + drive(100, olt, 2, 1)`, "1")
+	run(`drive(10, oadd, "s", 1)`, `"s1"`)
+	run(`drive(10, olt, "a", "b") + drive(10, olt, "b", "a") + drive(10, olt, "10", "9")`, "2")
+	// An operator that met an object is generic from the first compile:
+	// no deoptimization, and no exit at each object.
+	if e := jitCodeForTest(r, "obj"); e != nil {
+		hosts := e.ssaStats.hosts
+		run(`drive(100, obj, ov, 2) + drive(100, obj, 2, 5)`, "16")
+		if e.ssaStats.hosts != hosts || e.invalid || e.deopts != 0 {
+			t.Errorf("obj: %d host exits, invalid %v, %d deoptimizations", e.ssaStats.hosts-hosts, e.invalid, e.deopts)
+		}
+	}
+	e := jitCodeForTest(r, "rare")
+	cl := r.global.getOwn(r.atoms.intern("rare")).value().Object().fn().closure
+	mul := -1
+	for pc, w := range cl.reg.rc.Code {
+		if w.Op() == bytecode.RMulI {
+			mul = pc
+		}
+	}
+	if mul < 0 || cl.jitRegOps[mul] != 0 {
+		t.Fatalf("rare's multiplication at %d, its lattice %v: want one that met nothing", mul, cl.jitRegOps)
+	}
+	hosts, asks := e.ssaStats.hosts, e.reoptAsks
+	run(`rare(2, true)`, "5")
+	if e.invalid || e.deopts != 0 {
+		t.Errorf("rare: invalid %v, %d deoptimizations at a site that met nothing", e.invalid, e.deopts)
+	}
+	if e.ssaStats.hosts == hosts || e.reoptAsks == asks {
+		t.Errorf("rare: %d host exits, %d asks to compile again", e.ssaStats.hosts-hosts, e.reoptAsks-asks)
+	}
+	if got := abi.Operands(cl.jitRegOps[mul]); got != abi.OperandInt32 {
+		t.Errorf("rare's multiplication learned %#x at its host exit, want an int32's", got)
+	}
+}
