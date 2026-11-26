@@ -27,12 +27,17 @@ func forwardChains(f *Func) bool {
 	fc := &ws.fc
 	fc.reset(f)
 	changed := false
-	for _, b := range f.Blocks {
-		fc.g, fc.m = fc.g[:0], fc.m[:0]
-		if len(b.Preds) == 1 {
-			if e := fc.ends[b.Preds[0].ID]; e.saved {
-				fc.g = append(fc.g, fc.savedG[e.g0:e.g1]...)
-				fc.m = append(fc.m, fc.savedM[e.m0:e.m1]...)
+	for i, b := range f.Blocks {
+		// A block whose one predecessor is the block before it carries
+		// what that one knew at its end, as it is: the facts are saved
+		// only for the other successors of one predecessor.
+		if i == 0 || len(b.Preds) != 1 || b.Preds[0] != f.Blocks[i-1] || f.Blocks[i-1].Kind == BInvoke {
+			fc.g, fc.m = fc.g[:0], fc.m[:0]
+			if len(b.Preds) == 1 {
+				if e := fc.ends[b.Preds[0].ID]; e.saved {
+					fc.g = append(fc.g, fc.savedG[e.g0:e.g1]...)
+					fc.m = append(fc.m, fc.savedM[e.m0:e.m1]...)
+				}
 			}
 		}
 		for _, v := range b.Values {
@@ -60,12 +65,13 @@ func forwardChains(f *Func) bool {
 				fc.g, fc.m = fc.g[:0], fc.m[:0]
 			}
 		}
-		// Kept for its successors of one predecessor, if it knows anything.
+		// Kept for its successors of one predecessor but the next block,
+		// if it knows anything.
 		if len(fc.g)+len(fc.m) == 0 || b.Kind == BInvoke {
 			continue
 		}
 		for _, s := range b.Succs {
-			if len(s.Preds) == 1 {
+			if len(s.Preds) == 1 && (i+1 == len(f.Blocks) || s != f.Blocks[i+1]) {
 				e := &fc.ends[b.ID]
 				e.saved = true
 				e.g0, e.m0 = int32(len(fc.savedG)), int32(len(fc.savedM))
