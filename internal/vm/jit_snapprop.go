@@ -123,7 +123,7 @@ func jitPolyAt(poly []jitPolySite, rpc int) *jitPolySite {
 // jitPropData is a snapshot's copy of what its function's property sites'
 // answers are made of (jitPropSrc), which its gather made on the runtime's
 // goroutine: the closure's caches, each one's earlier entries a copy of its
-// own; what the code learned of its sites; the caches the feedback makes
+// own (its closure's copy, jitClosureCopy); what the code learned of its sites; the caches the feedback makes
 // of its own (regLitCache, regKnownRead), copied; and what of the heap the
 // derivation asks -- the symbols of private members' keys, the shapes
 // whose index an addition wants built, the additions of chains' cells. A
@@ -131,10 +131,8 @@ func jitPolyAt(poly []jitPolySite, rpc int) *jitPolySite {
 // whose fields the worker reads as they are: no change of an object's
 // layout changes it (remember).
 type jitPropData struct {
-	code  jitPropCode
-	ic    []propCache
-	polys []propPoly
-	seens []propSeen
+	code jitPropCode
+	ic   []propCache
 	// lit and known are the caches of regexp_lit's reads and of known
 	// reads, by register pc, copied with their keys.
 	lit, known map[int32]jitPropCopied
@@ -239,7 +237,7 @@ func gatherProperty(s *jitSnapshot, fb *jitRegFeedback) {
 	if cl == nil {
 		return
 	}
-	d.ic, d.polys, d.seens = jitPropCopyCaches(cl.ic)
+	d.ic = s.root.d.closureCopy(cl).ic
 	if e := f.e; e != nil {
 		d.poly = jitPolyCopy(e.poly)
 	}
@@ -346,49 +344,10 @@ func (d *jitPropData) deep(live jitPropLive, a jitDeepAdd) {
 	}
 }
 
-// jitPropCopyCaches is a copy of ic, each entry's earlier entries
-// (propPoly) a copy of its own, their earlier entries (propSeen) too, of
-// what a property site's answer reads of them: the interpreter changes
-// them in place.
-func jitPropCopyCaches(ic []propCache) (out []propCache, polys []propPoly, seens []propSeen) {
-	np, ns := 0, 0
-	for i := range ic {
-		if p := ic[i].poly; p != nil {
-			np++
-			if p.seen != nil {
-				ns++
-			}
-		}
-	}
-	out = append([]propCache(nil), ic...)
-	if np == 0 {
-		return out, nil, nil
-	}
-	polys, seens = make([]propPoly, 0, np), make([]propSeen, 0, ns)
-	for i := range out {
-		p := out[i].poly
-		if p == nil {
-			continue
-		}
-		polys = append(polys, *p)
-		q := &polys[len(polys)-1]
-		q.mega = nil
-		if p.seen != nil {
-			seens = append(seens, *p.seen)
-			sn := &seens[len(seens)-1]
-			// The interpreter appends to reads and deep, never writing
-			// what they hold; deep no answer reads.
-			sn.deep = nil
-			q.seen = sn
-		}
-		out[i].poly = q
-	}
-	return out, polys, seens
-}
-
-// jitPropCopyCache is a copy of c, as jitPropCopyCaches copies a cache.
+// jitPropCopyCache is a copy of c, as a closure's copy copies its caches
+// (jitCopyCaches).
 func jitPropCopyCache(c *propCache) *propCache {
-	out, _, _ := jitPropCopyCaches([]propCache{*c})
+	out, _ := jitCopyCaches([]propCache{*c})
 	return &out[0]
 }
 

@@ -47,6 +47,84 @@ type jitSnapData struct {
 	asked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
 	// prop is the property sites' (jit_snapprop.go).
 	prop jitPropData
+	// copies, the root's, are the closures' copies its compile's gathers
+	// made (closureCopy).
+	copies map[*closure]*jitClosureCopy
+}
+
+// jitClosureCopy is what of a closure's state a compile's gathers copy, on
+// the runtime's goroutine, for the worker to derive answers from: its
+// property sites' caches (ic), each one's earlier entries a copy of its
+// own (jitCopiedPoly), and its calls' caches (calls, the calls family's).
+// The interpreter writes them in place as it runs; a copy is made once a
+// compile, of the function's closure and of each callee's, whichever
+// snapshot asks it first, and read by every snapshot of the compile that
+// names the closure.
+type jitClosureCopy struct {
+	ic    []propCache
+	polys []jitCopiedPoly
+	calls []regCallCache
+}
+
+// jitCopiedPoly is a cache's earlier entries copied (propPoly), with
+// theirs (propSeen): copied together, each closure's are one allocation.
+type jitCopiedPoly struct {
+	p propPoly
+	s propSeen
+}
+
+// closureCopy is cl's copy (jitClosureCopy), of d, the compile's root's
+// data: made at its first ask, its caches copied whole.
+func (d *jitSnapData) closureCopy(cl *closure) *jitClosureCopy {
+	if c := d.copies[cl]; c != nil {
+		return c
+	}
+	c := &jitClosureCopy{}
+	c.ic, c.polys = jitCopyCaches(cl.ic)
+	if d.copies == nil {
+		d.copies = map[*closure]*jitClosureCopy{}
+	}
+	d.copies[cl] = c
+	return c
+}
+
+// jitCopyCaches is a copy of ic, each entry's earlier entries (propPoly) a
+// copy of its own, their earlier entries (propSeen) with them, of what an
+// answer reads of them: the interpreter changes them in place. The copy is
+// ic's bulk; the earlier entries, which only polymorphic sites have, one
+// allocation more.
+func jitCopyCaches(ic []propCache) (out []propCache, polys []jitCopiedPoly) {
+	out = append([]propCache(nil), ic...)
+	np := 0
+	for i := range out {
+		if out[i].poly != nil {
+			np++
+		}
+	}
+	if np == 0 {
+		return out, nil
+	}
+	polys = make([]jitCopiedPoly, np)
+	k := 0
+	for i := range out {
+		p := out[i].poly
+		if p == nil {
+			continue
+		}
+		q := &polys[k]
+		k++
+		q.p = *p
+		q.p.mega = nil
+		if p.seen != nil {
+			q.s = *p.seen
+			// The interpreter appends to reads and deep, never writing
+			// what they hold; deep no answer reads.
+			q.s.deep = nil
+			q.p.seen = &q.s
+		}
+		out[i].poly = &q.p
+	}
+	return out, polys
 }
 
 // jitSnapDerived are the methods whose answers a snapshot derives on the
