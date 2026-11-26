@@ -270,6 +270,7 @@ func (r *Runtime) jitRegCached(key jitKey, e *jitRegEntry) {
 		// -- so Go enters it and native callers call it until the new code
 		// is found not to pay in turn; its backoffs stay.
 		if l := s.regLinks[key]; l != nil {
+			life.calledIn += l.in
 			l.in = 0
 		}
 		life.nativeOut, life.notNative, life.nativeRetry, life.entrySlow = 0, false, 0, false
@@ -1060,6 +1061,9 @@ func (s *jitState) regDropLink(l *jitLink) {
 	s.regUnhint(l)
 	if s.regLinks[l.key] == l {
 		delete(s.regLinks, l.key)
+		if life := s.regLearned[l.key]; life != nil {
+			life.calledIn += l.in
+		}
 	}
 	if life := s.regLearned[l.key]; life != nil && life.regLink == l {
 		life.regLink = nil

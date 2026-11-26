@@ -11,8 +11,8 @@ import (
 )
 
 // JITFunction is what the JIT did with one function, as JITReport lists
-// it: what a run's coverage is made of. Script and Line say where the
-// function is; Status is native (its code runs), slow (it has code, which
+// it: what a run's coverage is made of. Script, Line and Column say where
+// the function starts; Status is native (its code runs), slow (it has code, which
 // Go stopped entering: its exits cost more than it saved), invalid (its
 // code was invalidated by a deoptimization), refused (the JIT does not
 // compile it, for Reason) or skipped (never tried, for Reason).
@@ -24,10 +24,11 @@ import (
 // failed guard, and finished in the interpreter; GoCalls the calls of Go
 // it made; Work the work done natively, in instructions, as the JIT
 // estimates it; and Reopts the times it was compiled again for what it
-// learned.
+// learned. The counts only grow while the JIT keeps what it learned of the
+// function, over its compiles; one whose state it let go of counts afresh.
 type JITFunction struct {
 	Name, Script                                          string
-	Line                                                  int
+	Line, Column                                          int
 	Status                                                string
 	Reason                                                string
 	Native, Declined, Hosts, Guards, Ended, GoCalls, Work uint64
@@ -101,7 +102,7 @@ func (r *Runtime) JITReport() []JITFunction {
 			// callers' calls through its link; its exits; its compiles
 			// again.
 			st := &l.ssaStats
-			f.Native = l.starts + st.entries
+			f.Native = l.starts + st.entries + l.calledIn
 			if link := s.regLinks[k]; link != nil {
 				f.Native += link.in
 			}
@@ -127,8 +128,8 @@ func jitFunctionOf(fn *bytecode.Function) JITFunction {
 	}
 	if fn.Script != nil {
 		f.Script = fn.Script.Name
-		line, _ := fn.Script.Position(fn.Start)
-		f.Line = int(line)
+		line, col := fn.Script.Position(fn.Start)
+		f.Line, f.Column = int(line), int(col)
 	}
 	return f
 }

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"unsafe"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
@@ -44,8 +45,15 @@ func init() {
 const jitHeldLimit = 3 << 30
 
 // jitReport is the report's state: what the JIT had done when the last
-// benchmark ended, the counters and each function's.
-var jitReport struct {
+// benchmark ended, the counters and each function's, in the runtime it ran
+// in (rt). A benchmark run in another runtime -- ssr's Render and fresh's
+// benchmarks each make their own -- is counted from nothing: counted from
+// what the last one's runtime had done, its counters had come out negative,
+// ssr's Render's host exits at get_prop -24 after FirstRender.
+var jitReport jitReportState
+
+type jitReportState struct {
+	rt                 weak.Pointer[vm.Runtime]
 	stats              vm.JITStats
 	flushed            uint64
 	funcs              map[string]vm.JITFunction
@@ -352,6 +360,11 @@ func (r runtimeOf) Report(name string) {
 	}
 	v := hostaccess.VM(r.rt)
 	st := v.JITStats()
+	if was := jitReport.stats; jitReport.rt.Value() != v || st.Compiled < was.Compiled || st.Entries < was.Entries {
+		// Another runtime, or one whose JIT was let go of and made
+		// again: counted from nothing.
+		jitReport = jitReportState{rt: weak.Make(v)}
+	}
 	was := jitReport.stats
 	fmt.Printf("  jit: %d compiled, %d compiled again, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
 		st.Compiled-was.Compiled, st.Reoptimized-was.Reoptimized, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
@@ -437,19 +450,18 @@ func (r runtimeOf) Report(name string) {
 		fmt.Println()
 	}
 	var used, other []vm.JITFunction
-	now := map[string]vm.JITFunction{}
-	for _, f := range v.JITReport() {
-		key := fmt.Sprintf("%s:%d %s", f.Script, f.Line, f.Name)
-		now[key] = f
+	now, keys := reportFunctions(v.JITReport())
+	for _, key := range keys {
+		f := now[key]
 		before, seen := jitReport.funcs[key]
 		switch {
 		case f.Status == "native" || f.Status == "slow":
-			if f.Native+f.Declined > before.Native+before.Declined || !seen || before.Status != f.Status {
-				f.Native -= before.Native
-				f.Declined -= before.Declined
-				f.Hosts -= before.Hosts
-				f.Guards -= before.Guards
-				f.Ended -= before.Ended
+			f.Native = countSince(f.Native, before.Native)
+			f.Declined = countSince(f.Declined, before.Declined)
+			if f.Native+f.Declined > 0 || !seen || before.Status != f.Status {
+				f.Hosts = countSince(f.Hosts, before.Hosts)
+				f.Guards = countSince(f.Guards, before.Guards)
+				f.Ended = countSince(f.Ended, before.Ended)
 				used = append(used, f)
 			}
 		case !seen || before.Status != f.Status:
@@ -471,6 +483,49 @@ func (r runtimeOf) Report(name string) {
 	for _, f := range other {
 		fmt.Printf("    %-8s %s:%d %s: %s\n", f.Status, f.Script, f.Line, f.Name, f.Reason)
 	}
+}
+
+// reportFunctions are the functions of a JITReport by where they start
+// and their names, in its order (keys): the functions of one source -- a
+// script run again, a realm's copy -- summed, as one, and described by the
+// busiest. Named by their line alone, the functions of a minified line --
+// Box2D's, each "(anonymous)" -- had each been measured against another's
+// counts at the last report, whichever the map met last.
+func reportFunctions(fs []vm.JITFunction) (map[string]vm.JITFunction, []string) {
+	now := map[string]vm.JITFunction{}
+	var keys []string
+	for _, f := range fs {
+		key := fmt.Sprintf("%s:%d:%d %s", f.Script, f.Line, f.Column, f.Name)
+		g, seen := now[key]
+		if !seen {
+			now[key] = f
+			keys = append(keys, key)
+			continue
+		}
+		if f.Native+f.Declined > g.Native+g.Declined {
+			g.Status, g.Reason = f.Status, f.Reason
+		}
+		g.Native += f.Native
+		g.Declined += f.Declined
+		g.Hosts += f.Hosts
+		g.Guards += f.Guards
+		g.Ended += f.Ended
+		g.GoCalls += f.GoCalls
+		g.Work += f.Work
+		g.Reopts += f.Reopts
+		now[key] = g
+	}
+	return now, keys
+}
+
+// countSince is a function's count n since the last report, which counted
+// before: all of n where it is less, the JIT having let go of what it
+// learned of the function since and counted afresh (vm.JITFunction).
+func countSince(n, before uint64) uint64 {
+	if n < before {
+		return n
+	}
+	return n - before
 }
 
 // tierCounts are the tier trace's counts since the last benchmark ended:

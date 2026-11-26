@@ -1032,8 +1032,16 @@ is under [The projection](#the-projection).
   172,431 `get_prop` host exits; now none at K from 1 to 512. On a Ryzen
   5 3600 Render in the background runs 1,670 to 1,738 ms, five runs, where
   the storm had made it 2,213 to 2,246 in four of five; on the spot 1,704
-  to 1,742. (c) to (g)
-  not started.
+  to 1,742. (c) is fixed in the report and in what it reads: a benchmark
+  in a runtime of its own, as ssr's and fresh's are, is counted from
+  nothing, not from the last one's runtime; functions are told apart by
+  their column, a line's "(anonymous)" ones each measured against
+  another's counts before; and a function's native callers' calls are
+  counted over its compiles, its link's count begun afresh at each
+  (`jitEntry`'s `calledIn`). No count is negative over Octane, the V8
+  suite, Are We Fast Yet, ssr and fresh at `-n 3`, on the spot and in the
+  background (5 in Octane and 18 in fresh before). (d) to (g) not
+  started.
 
 ### Stage 1: tiering and background compiles
 

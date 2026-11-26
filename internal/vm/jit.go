@@ -692,6 +692,11 @@ type jitEntry struct {
 	ssaStats jitSSAStats
 	reopt    bool
 	reopts   uint8
+	// calledIn counts native callers' calls of the code that its links
+	// counted (jitLink's in) before they counted afresh or were let go
+	// of: the calls its report counts (JITReport's Native) went down at
+	// each, -jitreport's figures for the function negative.
+	calledIn uint64
 	// reoptAsks counts the times the code was marked to be compiled again
 	// for what it learned (jitRegReopt): a compile in the background
 	// prepared before the last of them (jitRegJob's asks) was built from

@@ -2337,6 +2337,7 @@ func (r *Runtime) jitRegUnwound(e *jitRegEntry) {
 	}
 	if life.unwindReopts < jitUnwindReopts && jitLearning(life) {
 		life.unwindReopts++
+		life.calledIn += l.in
 		l.in, life.nativeOut = 0, 0
 		life.ssaStats.calleeGoCalls, life.ssaStats.calleeWork = 0, 0
 		return
@@ -2363,6 +2364,7 @@ func (r *Runtime) jitRegRetryNative(e *jitRegEntry) {
 		if e.rc != nil {
 			e.spentAt -= int64(l.in) * int64(max(len(e.rc.Code), 1))
 		}
+		life.calledIn += l.in
 		l.in = 0
 		if r.jit.regCache[e.key] == e && e.code != nil && !e.invalid {
 			l.regSet(r.jit, e)
