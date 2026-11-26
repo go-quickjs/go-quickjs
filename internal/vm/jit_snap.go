@@ -77,8 +77,13 @@ func jitRegSnapshotOf(fb *jitRegFeedback, p *ir.Program) *jitRegSnapshot {
 			c.a.LeafKind.put(int64(fn), 0, true, jitSnapAnsLeafKind{k})
 		}
 	}
+	keep := fb.fb.r.jitTest.snapKeepsFeedback
 	for _, c := range all {
 		c.a.seal()
+		if !keep {
+			// The asking is done: what a derivation reads is the copies.
+			c.rf = nil
+		}
 	}
 	return s.reg
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 )
 
 // jitSnapScribblers are the derived methods' families' scribblers: each
@@ -87,6 +89,8 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 	if jitSnapDerived&^jitSnapAskedAtGather == 0 {
 		t.Skip("no method is derived on the worker")
 	}
+	// The feedback each snapshot was asked of, asked again here.
+	jitTestSwitch(t, func(c *jitTestConfig) { c.snapKeepsFeedback = true })
 	var r *Runtime
 	var cls []*closure
 	if dir := os.Getenv("QUICKJS_JIT_CORPUS"); dir != "" {
@@ -218,4 +222,86 @@ func TestJITSnapshotDerivesFromItsCopy(t *testing.T) {
 		t.Fatalf("%d functions, %d answers compared", functions, compared)
 	}
 	t.Logf("%d functions, %d questions compared", functions, compared)
+}
+
+// A compile in the background installed keeps no snapshot: its copies and
+// answers are done with at the install, whatever keeps the job.
+func TestJITBackgroundInstallDropsSnapshot(t *testing.T) {
+	r := jitBackgroundForTest(t, 0)
+	cl := jitGlobalClosureForTest(r, "sum")
+	stress := r.jitStress
+	r.jitBackground, r.jitStress = jitOnSpot, jitStressConfig{}
+	for range 2 {
+		jitCallForTest(t, r, `sum(10)`, 45)
+	}
+	r.jitBackground, r.jitStress = jitInWorkers, stress
+	old := jitRegOfForTest(r, cl)
+	j := jitRegJobForTest(t, r, cl)
+	r.jitRegSubmit(j)
+	if r.jit.regPendingJobs[j.key] != nil || jitRegOfForTest(r, cl) == old {
+		t.Fatalf("pending %v, same code %v: want it installed", r.jit.regPendingJobs[j.key] != nil, jitRegOfForTest(r, cl) == old)
+	}
+	if j.snap != nil {
+		t.Fatal("the installed job keeps its snapshot")
+	}
+	jitCallForTest(t, r, `sum(100)`, 4950)
+}
+
+// TestJITSnapshotBuildsTheSame holds a compile in the background to one
+// answer for one state: two snapshots of a function asked back to back,
+// nothing run between them, build the same function, again and again --
+// no order of a map's or of the asking's that varies from one to the next
+// decides what is built. The functions are jitSnapAskedSrc's, and with
+// QUICKJS_JIT_CORPUS, Octane's.
+func TestJITSnapshotBuildsTheSame(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var r *Runtime
+	var cls []*closure
+	if dir := os.Getenv("QUICKJS_JIT_CORPUS"); dir != "" {
+		r, cls = jitOctaneCorpusForTest(t, dir)
+	} else {
+		r = jitRuntimeForTest(t, Config{JIT: true})
+		r.jitState().unavailable = true
+		if _, err := r.Run(compileForTest(t, jitSnapAskedSrc)); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"work", "make", "add", "Point"} {
+			cls = append(cls, jitGlobalClosureForTest(r, name))
+		}
+	}
+	r.jitState().unavailable = false
+	built, differ := 0, 0
+	for _, cl := range cls {
+		c := r.regOf(cl)
+		if c == nil {
+			continue
+		}
+		if _, err := r.jitRegLower(cl, c.rc, jitLowerSSA); err != nil {
+			continue
+		}
+		var first string
+		for i := range 4 {
+			j := jitRegJobForTest(t, r, cl)
+			listing := jitSnapBuildForTest(t, j, j.snap)
+			jit.PutWorkspace(j.w)
+			if i == 0 {
+				first = listing
+				continue
+			}
+			if listing != first {
+				differ++
+				if differ <= 5 {
+					t.Errorf("%s: build %d differs from the first:\n%s\nfirst:\n%s", cl.fn.Name, i, listing, first)
+				}
+				break
+			}
+		}
+		built++
+	}
+	if built == 0 {
+		t.Fatal("nothing built")
+	}
+	t.Logf("%d functions built four times each, %d differed", built, differ)
 }

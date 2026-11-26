@@ -282,6 +282,7 @@ func (r *Runtime) jitRegDropStale() {
 			// asking appends to the function's learning (finish).
 			j.snap.s.finish()
 		}
+		j.snap = nil
 		if j.unstarted {
 			j.letGo()
 			close(j.done)
@@ -570,6 +571,9 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		// What the install took not: the workspace, and the code placed
 		// where the install threw it away or built it again.
 		j.letGoApart()
+		// Nor the snapshot, its copies and its answers, done with: a job
+		// a runtime's state keeps past its install keeps no more of it.
+		j.snap = nil
 	}()
 	e := j.e
 	e.took += j.took

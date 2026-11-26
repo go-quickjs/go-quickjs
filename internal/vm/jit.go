@@ -183,6 +183,10 @@ type jitTestConfig struct {
 	// ahead (jitRegSnapshotOf), its results as the feedback gave them, and
 	// whether they answer something.
 	snapAsked func(s *jitSnapshot, m jitSnapMethod, arg int64, answered bool, results []any)
+	// snapKeepsFeedback has a snapshot keep the register feedback it was
+	// asked of (jitSnapshot's rf) past its asking, for a test to ask it
+	// again.
+	snapKeepsFeedback bool
 	// procs, if not 0, stands in for GOMAXPROCS where the runtime's mode
 	// asks it (jitBackgroundNow).
 	procs int

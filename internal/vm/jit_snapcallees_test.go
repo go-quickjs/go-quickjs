@@ -114,7 +114,7 @@ func TestJITSnapshotCalleeWalk(t *testing.T) {
 		functions++
 		walked += len(walk)
 		for k, s := range snap.s.callees {
-			if s.rf == nil || k.cl == nil || k.cl == cl {
+			if !s.d.gathered || k.cl == nil || k.cl == cl {
 				continue
 			}
 			asked++
