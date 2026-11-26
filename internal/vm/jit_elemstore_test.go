@@ -173,12 +173,16 @@ func TestJITBooleansAsNumbers(t *testing.T) {
 // Comparisons combined by | and &, as Emscripten's code combines them,
 // run natively: the operator's operands, booleans, are taken as numbers
 // in its code, not by Go at an exit (TestJITBooleansAsNumbers' answers).
+// At the JIT's own thresholds, whatever QJS_JIT_STRESS says: compiled at
+// its first back edge, the calling loop would call f from its native
+// code, whose calls f's entries do not count.
 func TestJITBooleansAsNumbersNative(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := newTestRuntime(t, Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		function f(a, b, c, d) { let n = 0; for (let i = 0; i < 100; i++) n = (n + ((a | 0) < (i | 0) | (c | 0) > (d | 0)) + ((a === i) & (c !== d))) | 0; return n }`
@@ -263,12 +267,16 @@ func TestJITTypedReferenceReads(t *testing.T) {
 }
 
 // The reads run natively once learned: Go reads none of a typed array's.
+// At the JIT's own thresholds, whatever QJS_JIT_STRESS says: compiled at
+// its first back edge, the calling loop would inline count, whose code
+// then neither runs nor counts the reads.
 func TestJITTypedReferenceReadsNative(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := newTestRuntime(t, Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		const h = new Int32Array(256)
