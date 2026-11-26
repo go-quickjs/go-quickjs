@@ -42,9 +42,28 @@ func Optimize(f *Func, check func(pass string)) {
 		if f.listing || check != nil {
 			findLoops(f, dominators(f))
 		}
-		loopDepths(f)
-		layout(f)
+		// The blocks are as order laid them out, the graph unchanged
+		// since: layout lays them out otherwise only past an if whose
+		// second successor is deeper.
+		if loopDepths(f) {
+			layout(f)
+		} else {
+			f.dom = nil
+			if check != nil {
+				checkLaidOut(f)
+			}
+		}
 	})
+}
+
+// checkLaidOut panics unless f's blocks are as layout would lay them out,
+// a test's check of the loops pass's skipping it.
+func checkLaidOut(f *Func) {
+	was := slices.Clone(f.Blocks)
+	layout(f)
+	if !slices.Equal(was, f.Blocks) {
+		panic("wasm opt: the blocks not as layout lays them out")
+	}
 }
 
 // resolve follows v's copies to the value it is.

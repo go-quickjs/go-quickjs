@@ -351,10 +351,34 @@ func computeUses(f *Func) {
 // The edges of a switch of more than two targets enter a loop only where
 // nothing else does: a dispatch loop's switch, threaded past, enters each
 // case, and a loop of cases is entered too from the cases before it.
-func loopDepths(f *Func) {
+//
+// It reports whether an if's second successor is deeper than its first,
+// which is where layout lays the blocks out other than order does.
+func loopDepths(f *Func) bool {
 	ws := f.ws
 	for _, b := range f.Blocks {
 		b.Depth = 0
+	}
+	// A graph whose every edge goes forward in the blocks' order has no
+	// loop: each block's depth is 0.
+	at := ws.blockMarks(f)
+	for i, b := range f.Blocks {
+		at[b.ID] = int32(i)
+	}
+	cyclic := false
+	for i, b := range f.Blocks {
+		for _, s := range b.Succs {
+			if int(at[s.ID]) <= i {
+				cyclic = true
+				break
+			}
+		}
+		if cyclic {
+			break
+		}
+	}
+	if !cyclic {
+		return false
 	}
 	// cut marks the edges cut, by edgeOff[b.ID]+k for b's k-th successor:
 	// every edge from one block to another, where a block has several.
@@ -367,7 +391,6 @@ func loopDepths(f *Func) {
 	cut := grown(ws.cut, nedges)
 	clear(cut)
 	ws.edgeOff, ws.cut = edgeOff, cut
-	cutAny := false
 	// member marks the blocks of the component being nested; inSCC those
 	// of a component found within it.
 	member := ws.blockMarks(f)
@@ -376,65 +399,68 @@ func loopDepths(f *Func) {
 	ws.inSCC = inSCC
 	sc := &ws.scc
 	sc.reset(f)
-	gen, sccGen := int32(0), int32(0)
-	var nest func(blocks []*Block)
-	nest = func(blocks []*Block) {
-		gen++
-		for _, b := range blocks {
-			member[b.ID] = gen
+	sc.member, sc.cut, sc.edgeOff = member, cut, edgeOff
+	sc.nest(f.Blocks)
+	sc.member, sc.cut, sc.edgeOff = nil, nil, nil
+	for _, b := range f.Blocks {
+		if b.Kind == BIf && b.Succs[1].Depth > b.Succs[0].Depth {
+			return true
 		}
-		g := gen
-		// in reports whether from's k-th successor's edge is within the
-		// component.
-		in := func(from *Block, k int) bool {
-			return member[from.Succs[k].ID] == g && (!cutAny || !cut[int(edgeOff[from.ID])+k])
+	}
+	return false
+}
+
+// nest counts the loops of the component of blocks, and of those within
+// them, in their blocks' depths (loopDepths).
+func (s *sccs) nest(blocks []*Block) {
+	ws := s.ws
+	member, cut, edgeOff, inSCC := s.member, s.cut, s.edgeOff, ws.inSCC
+	s.gen++
+	for _, b := range blocks {
+		member[b.ID] = s.gen
+	}
+	for _, scc := range s.components(blocks) {
+		s.sccGen++
+		sccGen := s.sccGen
+		for _, b := range scc {
+			inSCC[b.ID] = sccGen
+			b.Depth++
 		}
-		for _, scc := range sc.components(blocks, in) {
-			if b := scc[0]; len(scc) == 1 && !slices.ContainsFunc(b.Succs, func(s *Block) bool { return s == b && in(b, slices.Index(b.Succs, b)) }) {
-				continue
-			}
-			sccGen++
-			for _, b := range scc {
-				inSCC[b.ID] = sccGen
-				b.Depth++
-			}
-			entries, switched := ws.blks.take(0), ws.blks.take(0)
-			for _, b := range scc {
-				plain, sw := false, false
-				for _, p := range b.Preds {
-					switch {
-					case inSCC[p.ID] == sccGen:
-					case fromSwitch(p):
-						sw = true
-					default:
-						plain = true
-					}
-				}
-				if plain {
-					entries = appendA(&ws.blks, entries, b)
-				} else if sw {
-					switched = appendA(&ws.blks, switched, b)
+		entries, switched := ws.blks.take(0), ws.blks.take(0)
+		for _, b := range scc {
+			plain, sw := false, false
+			for _, p := range b.Preds {
+				switch {
+				case inSCC[p.ID] == sccGen:
+				case fromSwitch(p):
+					sw = true
+				default:
+					plain = true
 				}
 			}
-			if len(entries) == 0 {
-				entries = switched
+			if plain {
+				entries = appendA(&ws.blks, entries, b)
+			} else if sw {
+				switched = appendA(&ws.blks, switched, b)
 			}
-			for _, b := range entries {
-				for _, p := range b.Preds {
-					if inSCC[p.ID] == sccGen {
-						for k, s := range p.Succs {
-							if s == b {
-								cut[int(edgeOff[p.ID])+k] = true
-								cutAny = true
-							}
+		}
+		if len(entries) == 0 {
+			entries = switched
+		}
+		for _, b := range entries {
+			for _, p := range b.Preds {
+				if inSCC[p.ID] == sccGen {
+					for k, c := range p.Succs {
+						if c == b {
+							cut[int(edgeOff[p.ID])+k] = true
+							s.cutAny = true
 						}
 					}
 				}
 			}
-			nest(scc)
 		}
+		s.nest(scc)
 	}
-	nest(f.Blocks)
 }
 
 // fromSwitch reports whether an edge from p is a switch's of more than two
@@ -446,14 +472,29 @@ func fromSwitch(p *Block) bool {
 	return p.Kind == BSwitch && len(p.Succs) > 2
 }
 
-// sccs is Tarjan's algorithm's state, by block ID, kept in the workspace.
+// sccs is Tarjan's algorithm's state, by block ID, kept in the workspace,
+// and loopDepths' nesting's: the component being nested is the blocks
+// whose member is gen, its edges those not cut.
 type sccs struct {
 	ws      *workspace
 	index   []int32
 	low     []int32
 	onStack []bool
 	stack   []*Block
+	frames  []sccFrame
 	next    int32
+
+	member      []int32
+	cut         []bool
+	edgeOff     []int32
+	cutAny      bool
+	gen, sccGen int32
+}
+
+// sccFrame is the walk's visit of block b, at its successor k.
+type sccFrame struct {
+	b *Block
+	k int
 }
 
 // reset readies s for f's blocks.
@@ -466,54 +507,97 @@ func (s *sccs) reset(f *Func) {
 	clear(s.onStack)
 	clear(s.stack[:cap(s.stack)])
 	s.stack = s.stack[:0]
+	s.cutAny, s.gen, s.sccGen = false, 0, 0
 }
 
-// components are the strongly connected components of the graph of blocks
-// and the edges in allows, by Tarjan's algorithm.
-func (s *sccs) components(blocks []*Block, in func(from *Block, k int) bool) [][]*Block {
+// in reports whether from's k-th successor's edge is within the component
+// being nested.
+func (s *sccs) in(from *Block, k int) bool {
+	return s.member[from.Succs[k].ID] == s.gen && (!s.cutAny || !s.cut[int(s.edgeOff[from.ID])+k])
+}
+
+// components are the strongly connected components of the component being
+// nested, of blocks, by Tarjan's algorithm, but for those of a block alone
+// without an edge to itself, which are no loop.
+func (s *sccs) components(blocks []*Block) [][]*Block {
 	ws := s.ws
 	for _, b := range blocks {
 		s.index[b.ID] = -1
 	}
 	s.next = 0
 	out := ws.sccLists.take(0)
-	var visit func(b *Block)
-	visit = func(b *Block) {
-		s.index[b.ID], s.low[b.ID] = s.next, s.next
-		s.next++
-		s.stack = append(s.stack, b)
-		s.onStack[b.ID] = true
-		for k, c := range b.Succs {
-			if !in(b, k) {
+	frames := s.frames[:0]
+	for _, root := range blocks {
+		if s.index[root.ID] >= 0 {
+			continue
+		}
+		s.open(root)
+		frames = append(frames, sccFrame{root, 0})
+		for len(frames) > 0 {
+			t := &frames[len(frames)-1]
+			b := t.b
+			if k := t.k; k < len(b.Succs) {
+				t.k++
+				if !s.in(b, k) {
+					continue
+				}
+				c := b.Succs[k]
+				if s.index[c.ID] < 0 {
+					s.open(c)
+					frames = append(frames, sccFrame{c, 0})
+				} else if s.onStack[c.ID] {
+					s.low[b.ID] = min(s.low[b.ID], s.index[c.ID])
+				}
 				continue
 			}
-			if s.index[c.ID] < 0 {
-				visit(c)
-				s.low[b.ID] = min(s.low[b.ID], s.low[c.ID])
-			} else if s.onStack[c.ID] {
-				s.low[b.ID] = min(s.low[b.ID], s.index[c.ID])
+			// b's walk is done: it closes its component if it is its
+			// root, and its caller takes its low.
+			frames = frames[:len(frames)-1]
+			if s.low[b.ID] == s.index[b.ID] {
+				out = s.close(b, out)
+			}
+			if len(frames) > 0 {
+				p := frames[len(frames)-1].b
+				s.low[p.ID] = min(s.low[p.ID], s.low[b.ID])
 			}
 		}
-		if s.low[b.ID] == s.index[b.ID] {
-			scc := ws.blks.take(0)
-			for {
-				w := s.stack[len(s.stack)-1]
-				s.stack = s.stack[:len(s.stack)-1]
-				s.onStack[w.ID] = false
-				scc = appendA(&ws.blks, scc, w)
-				if w == b {
-					break
-				}
-			}
-			out = appendA(&ws.sccLists, out, scc)
-		}
 	}
-	for _, b := range blocks {
-		if s.index[b.ID] < 0 {
-			visit(b)
-		}
-	}
+	clear(frames[:cap(frames)])
+	s.frames = frames[:0]
 	return out
+}
+
+// open numbers b, found by the walk, and pushes it.
+func (s *sccs) open(b *Block) {
+	s.index[b.ID], s.low[b.ID] = s.next, s.next
+	s.next++
+	s.stack = append(s.stack, b)
+	s.onStack[b.ID] = true
+}
+
+// close pops the component b is the root of, and appends it to out if it
+// is a loop.
+func (s *sccs) close(b *Block, out [][]*Block) [][]*Block {
+	ws := s.ws
+	if w := s.stack[len(s.stack)-1]; w == b {
+		s.stack = s.stack[:len(s.stack)-1]
+		s.onStack[b.ID] = false
+		if k := slices.Index(b.Succs, b); k < 0 || !s.in(b, k) {
+			return out
+		}
+		return appendA(&ws.sccLists, out, append(ws.blks.take(1), b))
+	}
+	scc := ws.blks.take(0)
+	for {
+		w := s.stack[len(s.stack)-1]
+		s.stack = s.stack[:len(s.stack)-1]
+		s.onStack[w.ID] = false
+		scc = appendA(&ws.blks, scc, w)
+		if w == b {
+			break
+		}
+	}
+	return appendA(&ws.sccLists, out, scc)
 }
 
 // grown returns s with length n, its contents not kept, reusing its array
