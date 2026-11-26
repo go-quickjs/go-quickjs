@@ -1111,7 +1111,11 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 	base := len(c.stack) - nargs
 	c.truncate(base)
 	resume := c.a.NewLabel()
-	c.exit(ExitOp, resume, uint64(op), x, y, c.slotIndex(base), uint64(at))
+	if StubOp(op) {
+		c.exitStub(ExitOp, resume, uint64(op), x, y, c.slotIndex(base), uint64(at))
+	} else {
+		c.exit(ExitOp, resume, uint64(op), x, y, c.slotIndex(base), uint64(at))
+	}
 	c.resumeAt(resume)
 	if result != 0 {
 		c.pushSlot(result)

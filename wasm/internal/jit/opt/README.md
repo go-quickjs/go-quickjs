@@ -1458,7 +1458,7 @@ it writes -- memory, a global, a table -- the builder forgets it knows.
 
 | Instruction | |
 |---|---|
-| struct.new of a type with v128 fields; array.new, array.new_fixed, array.fill of v128 elements | |
+| array.fill of v128 elements | |
 | popcnt | on an amd64 CPU without POPCNT (`Request.Features`) |
 | ceil, floor, trunc, nearest | on an amd64 CPU without SSE4.1 |
 | every instruction `Effect` takes | under `Request.ExitAll`, for tests (`WASM_JIT_EXITS=all`) |

@@ -78,9 +78,10 @@ const refuseTest = "test"
 
 // jitExitCounts counts native code's exits, and of them its ExitAllocs,
 // ExitOps and ExitInstrs, and its calls of the allocation stub
-// (jit_alloc.go), which are not exits.
+// (jit_alloc.go), which are not exits: stubs for an ExitAlloc's record,
+// opStubs for an ExitOp's.
 type jitExitCounts struct {
-	exits, allocs, ops, instrs, stubs atomic.Int64
+	exits, allocs, ops, instrs, stubs, opStubs atomic.Int64
 }
 
 // NewCode returns the engine's code of module m.

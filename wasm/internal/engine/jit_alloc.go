@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // The allocation stub. Where a pool of new objects is empty, or an array is
@@ -44,16 +45,30 @@ var jitAllocStubAddr = func() uint64 {
 }()
 
 // jitAllocStub makes the object of the ExitAlloc record ctx's level holds,
-// reporting whether it did: else the code takes the exit.
+// or runs the instruction of its ExitOp record, one that makes an object
+// (wjit.StubOp), reporting whether it did: else the code takes the exit.
 func jitAllocStub(ctx *wjit.Ctx) uintptr {
 	lv := (*jitLevel)(unsafe.Pointer(ctx))
 	if t := lv.cj.test; t != nil {
-		if t.counts != nil {
-			t.counts.stubs.Add(1)
+		if c := t.counts; c != nil && ctx.Exit == wjit.ExitOp {
+			c.opStubs.Add(1)
+		} else if c != nil {
+			c.stubs.Add(1)
 		}
 		if t.jit.allocHook != nil {
 			t.jit.allocHook()
 		}
+	}
+	if ctx.Exit == wjit.ExitOp {
+		// Where its references are, as the exit reads them (jitExit), and
+		// cleared where the code goes on: an exit after it sets its own.
+		lv.rargs = ctx.RArgs
+		f := lv.x.exitFrame(lv)
+		if !lv.x.jitNew(lv.inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), uint32(ctx.Arg2), &f, int(ctx.Arg3), uint32(ctx.Arg4), true) {
+			return 0
+		}
+		ctx.RArgs = 0
+		return 1
 	}
 	f := lv.x.exitFrame(lv)
 	if lv.x.allocFor(lv, ctx.Arg0, ctx.Arg2, &f, uint32(ctx.Arg1), true) {

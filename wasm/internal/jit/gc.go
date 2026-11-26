@@ -13,10 +13,11 @@ import (
 // in its second word, the first cell its header; an array is a header, its
 // length, and its elements, packed numbers or references, in memory of
 // their own (Layout). Native code reads and writes fields and elements,
-// tests and casts, makes i31s, and makes structs from the pools the engine
-// fills (structNew); what else allocates, and what copies or fills
-// ranges, runs in Go (ExitOp), whose allocations charge the instance's
-// budget as the interpreter's do.
+// tests and casts, makes i31s, and makes structs and arrays from the pools
+// the engine fills (structNew, arrayNew); what else allocates runs in Go
+// from the allocation stub (StubOp), and what copies or fills ranges in Go
+// (ExitOp), whose allocations charge the instance's budget as the
+// interpreter's do.
 
 // cellOf returns the offset of the cell of field fi of struct type ti
 // from the struct's start: the header's cell first, a v128 taking two.
@@ -232,6 +233,20 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		return false
 	}
 	return true
+}
+
+// StubOp reports whether the engine runs instruction op, which native
+// code leaves to Go (ExitOp), from the allocation stub where it can
+// (Request.AllocStub): the instructions that make an object, whose only
+// traps are of a length or a segment's range, which the engine checks
+// before it makes the object, leaving those to the exit.
+func StubOp(op opcode.Opcode) bool {
+	switch op {
+	case opcode.StructNew, opcode.StructNewDefault, opcode.ArrayNew, opcode.ArrayNewDefault,
+		opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem:
+		return true
+	}
+	return false
 }
 
 // pooled reports whether native code makes the structs of type ti from

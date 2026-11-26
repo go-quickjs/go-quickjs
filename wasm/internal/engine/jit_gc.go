@@ -28,60 +28,11 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		}
 		return asArray(r)
 	}
-	ref := module.Ref(module.HeapIndex(a))
+	if wjit.StubOp(op) {
+		x.jitNew(inst, op, a, b, f, slot, at, false)
+		return true
+	}
 	switch op {
-	case opcode.StructNew, opcode.StructNewDefault:
-		rt := inst.Code.typeRTT(a)
-		inst.budget.chargeGC(x, structSize(rt))
-		r := newStruct(rt)
-		if op == opcode.StructNew {
-			for i, fl := range m.Types[a].Struct.Fields {
-				valToCell(fl.Type, cellAt(r.p, rt.cells[i]), get(i, fl.Type.Unpacked()))
-			}
-		}
-		f.put(ref, slot, Val{R: r})
-	case opcode.ArrayNew, opcode.ArrayNewDefault:
-		rt := inst.Code.typeRTT(a)
-		et := m.Types[a].Array.Elem.Type
-		if op == opcode.ArrayNewDefault {
-			f.put(ref, slot, Val{R: ArrayRef(newArray(rt, u32(0), inst.budget, x, uint64(at)))})
-			return true
-		}
-		val := get(0, et.Unpacked())
-		ar := newArray(rt, u32(1), inst.budget, x, uint64(at))
-		for i := 0; i < ar.n; i++ {
-			arraySet(ar, et, i, val)
-		}
-		f.put(ref, slot, Val{R: ArrayRef(ar)})
-	case opcode.ArrayNewFixed:
-		rt := inst.Code.typeRTT(a)
-		et := m.Types[a].Array.Elem.Type
-		// The operands stay in their slots until the result is put.
-		ar := newArray(rt, b, inst.budget, x, uint64(at))
-		for i := range int(b) {
-			arraySet(ar, et, i, get(i, et.Unpacked()))
-		}
-		f.put(ref, slot, Val{R: ArrayRef(ar)})
-	case opcode.ArrayNewData, opcode.ArrayNewElem:
-		rt := inst.Code.typeRTT(a)
-		src, cnt := u32(0), u32(1)
-		if op == opcode.ArrayNewData {
-			d := inst.datas[b]
-			if uint64(src)+uint64(cnt)*uint64(rt.elemSize) > uint64(len(d)) {
-				trapAt(TrapDataSegmentOutOfBounds, uint64(at))
-			}
-			ar := newArray(rt, cnt, inst.budget, x, uint64(at))
-			copy(ar.bytes(), d[src:])
-			f.put(ref, slot, Val{R: ArrayRef(ar)})
-			return true
-		}
-		e := inst.elems[b]
-		if uint64(src)+uint64(cnt) > uint64(len(e)) {
-			trapAt(TrapElementSegmentOutOfBounds, uint64(at))
-		}
-		ar := newArray(rt, cnt, inst.budget, x, uint64(at))
-		copy(ar.refs(), e[src:])
-		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayFill:
 		et := m.Types[a].Array.Elem.Type
 		ar := arr(0)
@@ -125,6 +76,116 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		copy(ar.refs()[dst:dst+cnt], e[src:src+cnt])
 	default:
 		return false
+	}
+	return true
+}
+
+// jitNew runs instruction op, one that makes an object (wjit.StubOp), for
+// native code, as jitGCOp does, with immediates a and b, its operands in
+// the stack positions of the exited frame from the one whose numeric slot
+// is slot, the object left in the first. Where try -- for the allocation
+// stub (jit_alloc.go) -- it does nothing where the instruction would trap
+// or the budget holds the charge only once what is reachable is counted
+// again, which the exit does, and reports whether it made the object.
+func (x *exec) jitNew(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFrame, slot int, at uint32, try bool) bool {
+	m := inst.Module
+	get := func(i int, t module.ValueType) Val { return f.get(t, slot+2*i) }
+	u32 := func(i int) uint32 { return uint32(f.l[slot+2*i]) }
+	rt := inst.Code.typeRTT(a)
+	// charge charges n bytes, or, where try, reports whether the budget
+	// holds them as they are.
+	charge := func(n int64) bool {
+		if try {
+			return inst.budget.tryChargeGC(n)
+		}
+		inst.budget.chargeGC(x, n)
+		return true
+	}
+	// array makes an array of n elements, nil where try declines it.
+	array := func(n uint32) *Array {
+		if !try {
+			return newArray(rt, n, inst.budget, x, uint64(at))
+		}
+		size := rt.elemSize
+		if rt.refElems {
+			size = 8
+		}
+		if uint64(n) > uint64(maxArrayLength(size)) || !inst.budget.tryChargeGC(arraySize(rt, n)) {
+			return nil
+		}
+		return makeArray(rt, int(n))
+	}
+	ref := module.Ref(module.HeapIndex(a))
+	switch op {
+	case opcode.StructNew, opcode.StructNewDefault:
+		if !charge(structSize(rt)) {
+			return false
+		}
+		r := newStruct(rt)
+		if op == opcode.StructNew {
+			for i, fl := range m.Types[a].Struct.Fields {
+				valToCell(fl.Type, cellAt(r.p, rt.cells[i]), get(i, fl.Type.Unpacked()))
+			}
+		}
+		f.put(ref, slot, Val{R: r})
+	case opcode.ArrayNew, opcode.ArrayNewDefault:
+		n := u32(0)
+		if op == opcode.ArrayNew {
+			n = u32(1)
+		}
+		ar := array(n)
+		if ar == nil {
+			return false
+		}
+		if op == opcode.ArrayNew {
+			et := m.Types[a].Array.Elem.Type
+			val := get(0, et.Unpacked())
+			for i := 0; i < ar.n; i++ {
+				arraySet(ar, et, i, val)
+			}
+		}
+		f.put(ref, slot, Val{R: ArrayRef(ar)})
+	case opcode.ArrayNewFixed:
+		et := m.Types[a].Array.Elem.Type
+		// The operands stay in their slots until the result is put.
+		ar := array(b)
+		if ar == nil {
+			return false
+		}
+		for i := range int(b) {
+			arraySet(ar, et, i, get(i, et.Unpacked()))
+		}
+		f.put(ref, slot, Val{R: ArrayRef(ar)})
+	case opcode.ArrayNewData:
+		src, cnt := u32(0), u32(1)
+		d := inst.datas[b]
+		if uint64(src)+uint64(cnt)*uint64(rt.elemSize) > uint64(len(d)) {
+			if try {
+				return false
+			}
+			trapAt(TrapDataSegmentOutOfBounds, uint64(at))
+		}
+		ar := array(cnt)
+		if ar == nil {
+			return false
+		}
+		copy(ar.bytes(), d[src:])
+		f.put(ref, slot, Val{R: ArrayRef(ar)})
+	case opcode.ArrayNewElem:
+		src, cnt := u32(0), u32(1)
+		e := inst.elems[b]
+		if uint64(src)+uint64(cnt) > uint64(len(e)) {
+			if try {
+				return false
+			}
+			trapAt(TrapElementSegmentOutOfBounds, uint64(at))
+		}
+		ar := array(cnt)
+		if ar == nil {
+			return false
+		}
+		copy(ar.refs(), e[src:])
+		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	}
 	return true
 }

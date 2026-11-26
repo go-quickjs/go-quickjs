@@ -935,14 +935,18 @@ func (g *gen) exitCallFn(idx, at uint32, cold bool) {
 }
 
 // exitAlloc is exit's ExitAlloc, its arguments stored, by way of the
-// allocation stub where the request has one (wjit.Request.AllocStub): the
-// exit's record stored, the code jumps to the stub, which keeps only the
-// context, and goes on at resume where the engine made the object, else
-// takes the exit.
-func (g *gen) exitAlloc(resume amd64.Label) {
+// allocation stub where the request has one (exitStub).
+func (g *gen) exitAlloc(resume amd64.Label) { g.exitStub(wjit.ExitAlloc, resume) }
+
+// exitStub is exit for kind, an ExitAlloc or the ExitOp of an instruction
+// that allocates (wjit.StubOp), by way of the allocation stub where the
+// request has one (wjit.Request.AllocStub): the exit's record stored, the
+// code jumps to the stub, which keeps only the context, and goes on at
+// resume where the engine made the object, else takes the exit.
+func (g *gen) exitStub(kind uint64, resume amd64.Label, args ...uint64) {
 	stub := g.req.AllocStub
 	if stub == 0 {
-		g.exit(wjit.ExitAlloc, resume)
+		g.exit(kind, resume, args...)
 		return
 	}
 	a := g.a
@@ -951,7 +955,10 @@ func (g *gen) exitAlloc(resume amd64.Label) {
 	if g.rsKept {
 		a.Store(rCtx, offRSP, g.rs)
 	}
-	g.storeCtx(offExit, wjit.ExitAlloc)
+	g.storeCtx(offExit, kind)
+	for i, v := range args {
+		g.storeCtx(offArg0+int32(8*i), v)
+	}
 	g.storeCtx(offExitFn, uint64(g.fn))
 	a.LeaLabel(s0, resume)
 	a.Store(rCtx, offExitAddr, s0)
@@ -2505,7 +2512,11 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 			g.exit(wjit.ExitInstr, resume, uint64(v.At), base)
 		} else {
 			x, y := g.imms(v)
-			g.exit(wjit.ExitOp, resume, uint64(opcode.Opcode(v.Aux)), x, y, base, uint64(v.At))
+			if op := opcode.Opcode(v.Aux); wjit.StubOp(op) {
+				g.exitStub(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
+			} else {
+				g.exit(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
+			}
 		}
 		if v.Type != TNone {
 			dst := g.locOf(v)

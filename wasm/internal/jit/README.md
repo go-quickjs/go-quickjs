@@ -933,12 +933,23 @@ i32s took 20 ns where Go's ExitOp took 56, one of 256 268 ns where it took
 
 What else allocates -- struct.new of a type with v128 fields, array.new,
 array.new_default and array.new_fixed of v128s, array.new_fixed of
-elements past 480 bytes, array.new_data, array.new_elem -- and
-array.fill, array.copy, array.init_data and array.init_elem run in Go
-(`ExitOp`): the engine's routines make the objects, charging the
-instance's budget as the interpreter's do, with the native frames'
-reference slots counted among what is live, and leave the result in its
-stack position's reference slot.
+elements past 480 bytes, array.new_data, array.new_elem (`StubOp`) -- runs
+in Go from the allocation stub, in both tiers: the code stores the
+instruction's `ExitOp` record, its operands in their slots as for the
+exit, and jumps to the stub, whose Go (`jitNew`) makes the object as the
+interpreter does and leaves it in the first operand's position's
+reference slot, without leaving native code. What would trap -- a
+segment's range passed, an array past the most it may hold -- or a charge
+the budget holds only once what is reachable is counted again, it
+declines, and the code takes the exit, whose Go traps, or charges with
+the native frames' reference slots counted among what is live. On
+`micro/literals` (strings from data segments, arrays from an element
+segment, long literal arrays, arrays of v128s), whose 800,000
+instructions a run were each an exit (`ExitOp`, or `ExitInstr` in the
+optimizing tier for the v128s), they are none: the baseline 96.5 to 83.3
+ms, tiered 117 to 85.9, optimized 115 to 84.1 (the median of 5 rounds of
+3 processes, CPUs 0-15). array.fill, array.copy, array.init_data and
+array.init_elem run in Go (`ExitOp`).
 
 ## Exceptions
 

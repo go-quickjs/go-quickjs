@@ -10,12 +10,13 @@ import (
 // written in place, by reference instructions (OpRef) on the slot that
 // holds the object: a number read is a value, a reference read goes into
 // its position's slot, as every reference does. The tests and casts read
-// the slot too. What allocates, and array.fill, array.copy and the
-// array.init instructions, run in Go (OpGoOp), whose allocations charge the
-// instance's budget: their numeric operands are staged in the call area,
-// each at its place among the operands, their references stay in their
-// positions' slots (Ctx.RArgs), and a new object is left in the first
-// operand's position's slot.
+// the slot too. What allocates other than from the pools, and array.fill,
+// array.copy and the array.init instructions, run in Go (OpGoOp) -- what
+// allocates from the allocation stub (wjit.StubOp) -- whose allocations
+// charge the instance's budget: their numeric operands are staged in the
+// call area, each at its place among the operands, a v128 in two slots,
+// their references stay in their positions' slots (Ctx.RArgs), and a new
+// object is left in the first operand's position's slot.
 
 // gcAux is the index (Aux above the kind) of a field's or an element's
 // access: the offset of a struct field's cell, its storage type, and
@@ -187,12 +188,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	case opcode.StructNew, opcode.StructNewDefault:
 		ti := r.u32()
 		if !pooled(m, ti) {
-			if op == opcode.StructNew {
-				// Of a type with v128 fields: the interpreter's code takes
-				// them as its operands.
-				bd.goInstr(bd.pc, at)
-				break
-			}
 			bd.gcGo(op, ti, 0, at)
 			break
 		}
@@ -217,10 +212,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.pushRef()
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
 		ti := r.u32()
-		if op == opcode.ArrayNew && m.Types[ti].Array.Elem.Type.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
-			break
-		}
 		if n := bd.stack[h-1]; n.Op == OpConst {
 			if _, ok := arrayPooled(m, bd.ws.arrayClass, ti, uint32(n.Aux), op == opcode.ArrayNew); ok {
 				bd.arrayNew(op, ti, uint32(n.Aux), at)
@@ -251,10 +242,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		ti, n := r.u32(), r.u32()
 		if _, ok := arrayPooled(m, bd.ws.arrayClass, ti, n, false); ok {
 			bd.arrayNew(op, ti, n, at)
-			break
-		}
-		if m.Types[ti].Array.Elem.Type.Kind == module.KindV128 {
-			bd.goInstr(bd.pc, at)
 			break
 		}
 		bd.gcGo(op, ti, n, at)

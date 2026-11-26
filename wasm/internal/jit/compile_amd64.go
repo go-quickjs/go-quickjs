@@ -167,14 +167,21 @@ func (c *compiler) exit(kind uint64, resume amd64.Label, args ...uint64) {
 }
 
 // exitAlloc is exit's ExitAlloc by way of the allocation stub, where the
-// request has one (Request.AllocStub): the exit's record stored, the code
-// jumps to the stub, which keeps only the context, and goes on at resume,
-// which reloads what the code keeps, where the engine made the object,
-// else takes the exit.
+// request has one (exitStub).
 func (c *compiler) exitAlloc(resume amd64.Label, args ...uint64) {
+	c.exitStub(ExitAlloc, resume, args...)
+}
+
+// exitStub is exit for kind, an ExitAlloc or the ExitOp of an instruction
+// that allocates (StubOp), by way of the allocation stub, where the request
+// has one (Request.AllocStub): the exit's record stored, the code jumps to
+// the stub, which keeps only the context, and goes on at resume, which
+// reloads what the code keeps, where the engine made the object, else
+// takes the exit.
+func (c *compiler) exitStub(kind uint64, resume amd64.Label, args ...uint64) {
 	stub := c.req.AllocStub
 	if stub == 0 {
-		c.exit(ExitAlloc, resume, args...)
+		c.exit(kind, resume, args...)
 		return
 	}
 	a := c.a
@@ -182,7 +189,7 @@ func (c *compiler) exitAlloc(resume amd64.Label, args ...uint64) {
 	a.Store(rCtx, offL, rL)
 	a.Store(rCtx, offPoll, rPoll)
 	a.Store(rCtx, offRSP, rRS)
-	c.storeCtx(offExit, ExitAlloc)
+	c.storeCtx(offExit, kind)
 	for i, v := range args {
 		c.storeCtx(offArg0+int32(8*i), v)
 	}
