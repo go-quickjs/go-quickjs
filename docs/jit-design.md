@@ -663,10 +663,11 @@ built to serve both engines:
   object passed as `externref` are references in one heap, not handles
   between two.
 
-WebAssembly GC objects are the easier first user: typed, with exact roots
-and a contained barrier, and the gap there is the collector's alone, where
-JavaScript's also needs the value representation. Stage 10's spike may
-prove the collector on them first (decision D13).
+The JavaScript engine adopts it first, and the WebAssembly engine after
+(D13): the heap matters far more to JavaScript, and little real-world
+WebAssembly depends on the GC proposal yet. The collector is designed for
+both from the start, so that the WebAssembly engine's adoption is a
+follow-up, not a redesign.
 
 **External arrays under the engine heap.** An ArrayBuffer's object lives
 in the engine heap; its bytes stay where they are -- the host's shared
@@ -1395,7 +1396,7 @@ The maintainer took these on 2026-11-26.
 | D10 | The order as listed, the baseline moved up to follow stage 2 if stage 2 leaves goal 2 unmet | goal 2 may be met by stage 2, and the baseline is the largest risk |
 | D11 | The maintainer runs the V8 suite on the M5 Max at each composite stage's end, the per-suite ratios against the table under The goals | timing stays on the Ryzen, and the M5 Max's Go-bound suites weigh differently |
 | D12 | CacheIR-style feedback and trial inlining are the next project's | the snapshot as data takes CacheIR's cheap half now, and trial inlining needs the baseline first |
-| D13 | *Open:* whether stage 10's spike proves the collector on WebAssembly GC objects first | they are typed, with exact roots and a contained barrier, and their 8 to 10x gap to Node is the collector's alone; the WebAssembly engine is otherwise out of this project's scope |
+| D13 | The JavaScript engine adopts the collector first; the WebAssembly engine's GC objects follow, after this project | the heap matters far more to JavaScript, and little real-world WebAssembly depends on the GC proposal yet; the collector is designed for both, so the follow-up needs no redesign |
 
 ## The risks
 
