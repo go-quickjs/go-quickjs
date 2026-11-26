@@ -942,8 +942,10 @@ than wins:
   (`call_indirect`), `brtable` (unpredictable `br_table`), `globals`,
   `gc` (binary trees of structs, arrays of i32), `arrays` (short arrays
   of f64s, i32s, i16s and references, as a GC language's compiler makes
-  them, and a list's backing array doubled by copies) and `simd`
-  (i32x4). A
+  them, and a list's backing array doubled by copies), `literals` (arrays
+  made from constants: strings and tables from data segments, arrays of
+  i31s from an element segment, literal arrays past a short array's block,
+  arrays of v128s) and `simd` (i32x4). A
   kernel is a function called many times in a run.
 - `programs`, a Go program built for `GOOS=wasip1` when first needed and
   cached in the user cache directory by its source's hash and the Go
@@ -959,7 +961,8 @@ depends on wazero (`TestNoWazeroDependency`). Node runs `node_worker.mjs`,
 the programs on `node:wasi`. The Go runners time with the performance
 counter on Windows and take CPU time from the process's cycles; Node's CPU
 time on Windows moves in ticks of 15.6 ms, so its column is coarse there.
-wazero has no GC proposal, so its `gc` and `arrays` cells are n/a.
+wazero has no GC proposal, so its `gc`, `arrays` and `literals` cells are
+n/a.
 
 On the machine below, `-n 5` over all nine engines takes eight minutes, most
 of it the two interpreters on the programs, and the time grows with `-n` and
