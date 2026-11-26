@@ -231,8 +231,9 @@ and a load it takes away was checked as far by the access whose value it
 takes. A block carries 16 globals and 32 accesses at most. A function the
 values it keeps live leave too few spill slots is compiled again without
 it, as without `globals`. It changes 1,651 of the Go program's 3,011
-functions, its code level (1 KB smaller), and takes 4.0 µs a function
-(2.4% of a compile). The steady state, optimized, with the layout and the
+functions, its code level (1 KB smaller), and takes 3.4 µs a function
+(2.2% of a compile), its walk resolving the values' arguments and
+dropping the copies, gvn's and its own, for the copyelim after it. The steady state, optimized, with the layout and the
 holes over calls (Register allocation) and against them alone (the mean
 over two placements of the medians of 3 processes in 3 rounds in turns),
 ms: interp 8.27 to 7.80, json 17.95 to 17.85, sort 85.75 to 85.30,
@@ -350,7 +351,7 @@ inlines a call four deep.
 | `dce` | values without uses or effects, and phis only themselves use; and a global.set another of the same global follows in its block, nothing between reading the global, having an effect or able to trap (a Go function's return moves its stack pointer twice) |
 | `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value -- or of the i64 an i32 address wraps -- checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked, nor one whose address is a phi each of whose arguments is in bounds on its edge; and an access's check covers those of its address after it in its block that nothing between could tell apart (below) |
 | `split` | every critical edge gets a block, where its phis' moves go |
-| `loops` | natural loops, each block's depth (below), and the layout: reverse postorder again, of an if's two successors the deeper first (`layout`, Lowering) |
+| `loops` | natural loops, each block's depth (below), and the layout: reverse postorder again, of an if's two successors the deeper first (`layout`, Lowering), where an if's second successor is the deeper -- elsewhere the blocks are as `order` left them |
 
 ### Bounds from values
 
@@ -995,7 +996,8 @@ turns with the code before) went, ms: interp 8.37 to 7.67, sort 87.3 to
 85.1, sha256 37.95 to 37.32, micro/i64 13.12 to 12.90, micro/mandelbrot
 10.53 to 10.28; json, regexp, bytes and fib level, gzip 16.38 to 16.60.
 The Go program's code is 20 KB larger (18.87 MB) and the `loops` phase
-takes 3.96 µs a function where it took 3.00, 0.6% of a compile. Starting
+took 3.96 µs a function where it took 3.00; laid out again only where an
+if's second successor is the deeper, it takes 2.5. Starting
 each loop's code at a 64-byte line besides, as the JavaScript JIT does,
 gained bytes 5% at one placement and cost interp 25% at every one (8.36
 to 10.43 ms), loops that call left unaligned and all: its padding is run
@@ -1433,10 +1435,22 @@ the assembler. A warm compile of the Go program makes 5 objects, its
 code's copy and its record among them.
 
 The passes walk what may change: the dominator tree is kept until the
-graph changes (`order`), its dominance a test of its walk's numbers;
-GVN's table is a hash table of chains whose entries are popped as the
-walk leaves their blocks; `copyelim` stops after the phis where no copy
-is left, and rewrites the uses and drops the copies in one walk; `thread`
+graph changes (`order`), its dominance a test of its walk's numbers, and
+its iteration stops after a first walk that found every predecessor's
+dominator known; GVN's table is a hash table of chains whose entries are
+popped as the walk leaves their blocks; `copyelim` stops after the phis
+where no copy is left, and rewrites the uses and drops the copies in one
+walk, of the values from the first block a value was made a copy in
+(`Block.copied`) -- each block is after its dominators, and a value's
+arguments but a phi's in its block or before it; after the second gvn it
+leaves gvn's copies to `chains`, whose walk resolves the values'
+arguments and drops the copies as it goes, so that what is left is the
+phis', branches' and results' arguments; the uses are counted in one walk
+where the blocks are as `order` left them, each value's count cleared
+before any use of it is counted (`computeUsesInOrder`); `removeUnreachable`
+removes what `order`'s walk did not reach; the walks' stacks are cleared
+as they pop, not to their capacities, which a large function's compile
+grows for every compile after it; `thread`
 removes the predecessors it threads together, counts the uses only where
 a block may thread and an edge into it would be threaded, and after a
 threading counts them again only where a block's values are among those
@@ -1446,20 +1460,28 @@ it found dead ones in, and counts the uses again only after removing
 phis that only themselves used; the last pass finds the natural loops --
 over a dominator tree the split edges would have it compute again --
 only for a listing, which alone prints their headers: the allocator
-weighs uses by `loopDepths`' depths. The lowering numbers only the
+weighs uses by `loopDepths`' depths, which are all 0, without a
+component found, where every edge goes forward in the blocks' order. The
+lowering numbers only the
 values the allocator sees, densely and in the order of their IDs
 (`Value.vreg`), so that the allocator decides as it would by ID; finds
 each phi's place once for the edges into its block (`phiDst`,
-`phiStore`); takes a block's split moves in order (`Result.GapsOf`); and
-its cold code is data (`stub`), not closures. An instruction the
+`phiStore`), and leaves out a phi's move of a value where it already is;
+takes a block's split moves in order (`Result.GapsOf`); and its cold code
+is data (`stub`), not closures. What is made many times a compile -- an
+allocator's block and instruction (`lsra.Inst.Set`), a register's web, a
+construct of the builder, an entry of GVN's table -- is set field by
+field in place: a composite literal is built aside and copied in. An instruction the
 allocator sees is its registers in one list -- uses, definitions,
 temporaries -- a hint, a call flag and the index of its clobbers among
 the function's few (`lsra.Inst`, 40 bytes). The allocator's liveness
 follows the paths from the uses (Register allocation); what a register
 lives across is counted by sums over the clobbers, a table of the
 clobbers before each position giving each range's; a few ranges are
-tested and merged against many by searches; the webs and the pairs to
-coalesce are ordered by counting sorts; what splitting knows of a web --
+tested and merged against many by searches, and lists one of which ends
+before the other begins found apart from their bounds; the webs and the
+pairs to coalesce are ordered by counting sorts, the webs once where the
+scan takes none apart and moves no start; what splitting knows of a web --
 its ranges as they were, its holes, its events -- is apart from it
 (`webSplit`), made for the webs it plans holes in; the events, each
 register's uses and definitions by position, are found in one walk and
@@ -1488,6 +1510,19 @@ one machine):
 -- the passes now: thread 15, gvn 12 (two runs), copyelim 10 (five),
 dce 5, check 4, loops 3.5, bce 3, fold 3. The largest functions cost the
 most a byte (342 ns for one of 16 KB of body).
+
+The chains, the layout and the holes over calls made the compile 6%
+slower, 163 to 173 µs a function: `chains` 4.0, `loops` 3.0 to 3.9, the
+scan 16.4 to 18.1 -- the holes over calls find the events in functions
+that evict nothing. The work on the walks above -- the values rewritten
+from the first block a copy was made in, the chains' walk doing the
+copies' rewrite, the layout and the loops' components skipped where
+nothing needs them, the stacks cleared as they pop, and what is made many
+times a compile set in place -- took it to 159 µs, below what it was
+before them, the code the same, function by function, on amd64 and
+arm64: copyelim 10.1 to 8.0, webs 15.4 to 13.7, describe 9.8 to 8.4,
+slots 5.9 to 4.9, loops 3.9 to 2.5, gvn 12.9 to 11.6, thread 12.5 to
+11.2, `chains` 4.0 to 3.4, the scan 18.1 to 17.2.
 
 Splitting (Register allocation) cost the Go program's compiles 15%, 172
 to 198 µs a function: the scan 7 to 19 µs -- the holes' planning, with
