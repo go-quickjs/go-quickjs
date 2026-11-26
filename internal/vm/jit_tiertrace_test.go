@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // jitTierTraceForTest records the tier trace (JITTierHook) of the runtimes
@@ -70,5 +72,10 @@ func TestJITTierTrace(t *testing.T) {
 	}
 	if again.Deopts != 1 || again.Compiles != 1 {
 		t.Errorf("compile after it: %+v", again)
+	}
+	// Where it failed: f's read of o.x, by its register pc.
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	if deopt.At.Name != "f" || deopt.PC < 0 || deopt.PC >= len(cl.reg.rc.Code) || regAt(cl.reg.code, deopt.PC).Op() != bytecode.RGetProp {
+		t.Errorf("deoptimization's site: %s at %d, not f's read", deopt.At.Name, deopt.PC)
 	}
 }

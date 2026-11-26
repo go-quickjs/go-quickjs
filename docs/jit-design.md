@@ -1173,7 +1173,21 @@ is under [The projection](#the-projection).
   its deopts property sites', which the per-site marks and stage 5 are
   for. The build (`-jitcompile 10`): -3.3 to -4.7% on Typescript,
   Mandreel, PdfJS and Gameboy, zlib level (projected +1 to 3%), no phase
-  10% slower. The deopt discipline and the background default are open.
+  10% slower.
+  The deoptimization discipline's first half done:
+  `jitMaxDeopts` removed, no function refused for its deoptimizations;
+  each site's deoptimizations counted, and at the eighth
+  (`jitSiteDeopts`), past every site's ladder, the site built at its
+  top, so that a function's are at most eight times its sites
+  (`TestJITDeoptsBoundedBySites`: 96 deoptimizations of one function at
+  24 sites, which the cap had refused at 65). Measured, -n 5 with the
+  JIT on the Ryzen 9 9950X3D2: no function of the V8 suite, Octane, Are
+  We Fast Yet or ssr was near the cap -- the most 14 of one function,
+  Typescript's, 3 at one site -- and none reaches the bound after;
+  Typescript's compiles 768 (201 after a deoptimization) and its
+  deoptimizations 214, against 768 (202) and 215 before: as projected,
+  the cap's removal costs nothing, and the recompiles' fall is the
+  lattice's. The background default is open.
 
 ### Stage 2: compile speed
 

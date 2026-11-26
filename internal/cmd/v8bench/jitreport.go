@@ -537,6 +537,20 @@ var tierCounts struct {
 	compiles map[string]int
 	deopts   map[string]int
 	early    int
+	// byFunc and bySite count the deoptimizations of each function and
+	// at each of its sites, an instruction of it or of a callee inlined
+	// in it by its register pc, whose largest the report prints: each
+	// deoptimization widens what it failed on, so that a site's are
+	// bounded by how far it can widen. Both count from a function's first
+	// deoptimization in what the JIT learned of it (JITTierEvent's Deopts
+	// 1), so that runtimes made one after another -- ssr's FirstRender's
+	// -- count apart.
+	byFunc map[string]int
+	bySite map[string]map[string]int
+	// mostSite and mostAt are the largest of bySite's counts and its site,
+	// kept as a function's counts begin again.
+	mostSite int
+	mostAt   string
 }
 
 // tierEarly is V8's invocation_count_for_maglev_with_delay: a
@@ -547,7 +561,9 @@ const tierEarly = 600
 // compile and each deoptimization, tab-separated: C or D, the function,
 // the reason, its length, its invocations, then for a deoptimization the
 // code's age and the budget before the next compile, both in invocations'
-// worth, and last the function's deoptimizations and compiles so far.
+// worth, the function's deoptimizations and compiles so far, and last, for
+// a deoptimization, the function whose instruction failed -- its own or a
+// callee inlined in its code -- and that instruction's register pc.
 func startTierTrace(path string) {
 	f, err := os.Create(path)
 	if err != nil {
@@ -556,19 +572,35 @@ func startTierTrace(path string) {
 	}
 	w := bufio.NewWriter(f)
 	tierCounts.compiles, tierCounts.deopts = map[string]int{}, map[string]int{}
+	tierCounts.byFunc, tierCounts.bySite = map[string]int{}, map[string]map[string]int{}
 	vm.JITTierHook = func(e vm.JITTierEvent) {
-		kind := "C"
+		fn := fmt.Sprintf("%s %s:%d", e.Func.Name, e.Func.Script, e.Func.Line)
+		kind, site := "C", ""
 		if e.Deopt {
 			kind = "D"
 			tierCounts.deopts[e.Reason]++
 			if e.Age < tierEarly {
 				tierCounts.early++
 			}
+			site = fmt.Sprintf("\t%s %s:%d\t%d", e.At.Name, e.At.Script, e.At.Line, e.PC)
+			// A function by where it starts, which tells apart those of
+			// one name on a line.
+			key := fmt.Sprintf("%s:%d", fn, e.Func.Column)
+			sites := tierCounts.bySite[key]
+			if sites == nil || e.Deopts == 1 {
+				sites = map[string]int{}
+				tierCounts.bySite[key] = sites
+			}
+			tierCounts.byFunc[key] = max(tierCounts.byFunc[key], e.Deopts)
+			at := fmt.Sprintf("%s, %s:%d:%d at %d", key, e.At.Name, e.At.Line, e.At.Column, e.PC)
+			if sites[at]++; sites[at] > tierCounts.mostSite {
+				tierCounts.mostSite, tierCounts.mostAt = sites[at], at
+			}
 		} else {
 			tierCounts.compiles[e.Reason]++
 		}
-		fmt.Fprintf(w, "%s\t%s %s:%d\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n", kind, e.Func.Name, e.Func.Script, e.Func.Line,
-			e.Reason, e.Length, e.Invocations, e.Age, e.Budget, e.Deopts, e.Compiles)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d%s\n", kind, fn,
+			e.Reason, e.Length, e.Invocations, e.Age, e.Budget, e.Deopts, e.Compiles, site)
 		// Flushed at each, as -jitcode's is.
 		w.Flush()
 	}
@@ -593,7 +625,21 @@ func reportTier() {
 	d, ds := line(tierCounts.deopts)
 	fmt.Printf("  jit tier: %d compiles:%s\n", n, cs)
 	fmt.Printf("  jit tier: %d deoptimizations, %d of code younger than %d invocations:%s\n", d, tierCounts.early, tierEarly, ds)
+	most := func(m map[string]int) (string, int) {
+		k, n := "", 0
+		for _, x := range slices.Sorted(maps.Keys(m)) {
+			if m[x] > n {
+				k, n = x, m[x]
+			}
+		}
+		return k, n
+	}
+	if fn, n := most(tierCounts.byFunc); n > 0 {
+		fmt.Printf("  jit tier: most deoptimizations of a function %d (%s), at a site %d (%s)\n", n, fn, tierCounts.mostSite, tierCounts.mostAt)
+	}
 	clear(tierCounts.compiles)
 	clear(tierCounts.deopts)
-	tierCounts.early = 0
+	clear(tierCounts.byFunc)
+	clear(tierCounts.bySite)
+	tierCounts.early, tierCounts.mostSite, tierCounts.mostAt = 0, 0, ""
 }

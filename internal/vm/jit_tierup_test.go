@@ -273,7 +273,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 		t.Fatalf("plus has no valid code for its native caller: compiled %v", pe != nil && jitHasCodeOfForTest(r, pcl))
 	}
 	serial := pe.ssaSerial
-	r.jitRegInvalidate(pcl, jitRegOfForTest(r, pcl), "test")
+	r.jitRegInvalidate(pcl, jitRegOfForTest(r, pcl), "test", jitTierSite{nil, -1})
 	run(`loop(3)`)
 	if !pe.invalid || pe.ssaSerial != serial {
 		t.Fatalf("plus compiled again after three calls: invalid %v, compiles %d", pe.invalid, pe.ssaSerial-serial)

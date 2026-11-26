@@ -375,7 +375,7 @@ func (r *Runtime) jitRegLoopLeft(f *frame, c *regCode, e *jitRegEntry, wb int, c
 	case abi.ExitDeopt:
 		s.guards++
 		e.life.ssaStats.guards++
-		r.jitRegInvalidate(f.cl, e, "loop")
+		r.jitRegInvalidate(f.cl, e, "loop", jitTierSite{nil, exitPC})
 	case abi.ExitPoll:
 		s.budgets++
 		r.backEdges = s.backEdgeBudget()

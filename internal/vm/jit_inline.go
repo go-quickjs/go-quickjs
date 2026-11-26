@@ -234,6 +234,12 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 			// it finds empty.
 			atSite := r.jitRegLeftAtSite(x)
 			miss := r.jitRegShapeMiss(x)
+			why := "inlined"
+			if (x.kind == abi.ExitDeopt || miss) && r.jitTierHook() != nil {
+				// What the callee's instruction failed on, before Go runs
+				// it: the tier trace's.
+				why += "/" + r.jitTierDeoptWhy(f, x.cl.reg, x.wb, x.pc, 0)
+			}
 			var learned bool
 			v, err, learned = r.jitRegInlineLeft(f, x, owner, miss)
 			l := s.regLearnedOf(r.jitRegKeyOf(cl))
@@ -243,7 +249,7 @@ func (r *Runtime) jitRegInlined(idx int, f *frame, owner *jitRegEntry, at, wb in
 				// at one of its own (jitRegLeft). So too a property site's
 				// shape the code was not compiled for, which the site's
 				// learning took (jitRegInlineLeft).
-				r.jitRegInvalidate(cl, owner, "inlined")
+				r.jitRegInvalidate(cl, owner, why, jitTierSite{x.cl, x.pc})
 			case learned:
 				// The callee's feedback learned what the owner's code was
 				// not compiled for: compiled again for it (jitRegReopt).

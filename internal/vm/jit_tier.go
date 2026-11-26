@@ -604,9 +604,9 @@ func (r *Runtime) jitRegWarmUp(cl *closure, c *regCode, life *jitEntry, work int
 // budget (jitRegWarmUp), what its caches learn meanwhile delaying the
 // compile. Runs of the code under way go on in it until they next leave it.
 // Past jitMaxDeopts deoptimizations the function is compiled no more, its
-// code let go of. why is what failed, for the tier trace (JITTierEvent's
-// Reason).
-func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string) {
+// code let go of. why is what failed, and at where, for the tier trace
+// (JITTierEvent's Reason, At and PC).
+func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string, at jitTierSite) {
 	life := e.life
 	if life == nil || e.code == nil {
 		return
@@ -629,7 +629,7 @@ func (r *Runtime) jitRegInvalidate(cl *closure, e *jitRegEntry, why string) {
 			life.invalid, life.warming, life.reopt, life.learning = true, true, false, false
 			life.tierBudget, life.tierMark = jitRegBudget(r.jitCallThreshold, c), jitFeedbackMark(cl)
 			if h := r.jitTierHook(); h != nil {
-				r.jitTierInvalidated(h, cl, c, e, why, life.tierBudget)
+				r.jitTierInvalidated(h, cl, c, e, why, at, life.tierBudget)
 			}
 		}
 	}

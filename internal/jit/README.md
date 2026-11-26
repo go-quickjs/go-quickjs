@@ -873,9 +873,9 @@ code's to learn of. Top-level code is compiled on the spot.
   invocation each (`jitRegNativeCalleeN`), a loop of a built-in's call an
   invocation for each element; a leaf's, which the interpreter's calls
   answer without a frame and so never sample, is compiled again at its
-  native callers' next ask. Past `jitMaxDeopts` (64) deoptimizations the
-  function is refused, its code let go of (`deoptimized more than 64
-  times`);
+  native callers' next ask. However often a function deoptimizes, it is
+  compiled again, as V8 limits no function's deoptimizations: each widens
+  the site it failed at (below, "Deoptimizations end at their sites");
 - its exits learned what it is to be compiled for -- a call's target, a
   site's case, a callee to inline, a loop of a built-in's call, an entry
   after a call: the code is marked (`jitRegReopt`, `reoptPending`) with
@@ -3333,6 +3333,39 @@ teaches the code something it was not compiled for, it is to be compiled
 again (`jitRegReopt`). See [Feedback](#feedback) and
 [Tier-up](#tier-up-and-on-stack-replacement) for what follows.
 
+**Deoptimizations end at their sites.** A deoptimization widens what it
+failed on, as V8's feedback widens at its deoptimizations: a property
+site's cases take the receiver's shape, up to one more than they hold
+(`jitMissedShapes`), and the site is megamorphic past it or at a shape met
+again after a compile; an operator's BigInts are made natively, then the
+operator is generic; a call's targets join those it is compiled for, up
+to `jitCallTargets`; an entry is entered generic, and any other guard's
+instruction built generic (`Generic`), at the first failure. An
+operator's operand lattice learns the kinds it met (`jitLatticeWiden`).
+Each of those ladders ends, so a site deoptimizes a bounded number of
+times; and lest one go on past its ladder -- what a site learned forgotten
+while its code was parked (`regForget`), say -- each site's
+deoptimizations are counted by register pc, an entry's apart, in what its
+function learned (`jitLearned`'s `siteDeopts`, `jitRegSiteDeopted`): one
+that invalidates the code counts at the site of the function whose
+instruction failed, an inlined callee's in the callee's, and at
+`jitSiteDeopts` (8), past every ladder, the site is built at its top from
+then on (`jitRegSiteTop`) -- an instruction generic and a property site
+megamorphic too, a loop of a built-in's call Go's call, an entry generic,
+and a call's targets met past those compiled for no longer invalidating
+the code (`jitRegCallRepeats`), as V8's megamorphic calls go through its
+generic Call builtin. A function's deoptimizations are so at most
+`jitSiteDeopts` times its sites, its inlined callees' among them, which is
+what ends a loop of deoptimizations: there is no limit on a function's
+own, as V8 has none for JavaScript, and refusal is for bailouts alone --
+a compiler's panic, `abi.MaxSlot`, the debugger. A deoptimization at a site
+already at its top widens nothing and counts in `topDeopts`, and the tier
+trace marks it (`JITTierEvent`'s `Top`); none should be, and the tests
+that deoptimize a function over and over check it
+(`TestJITDeoptsBoundedBySites`, `TestJITSiteDeoptsForceTheTop`). In the
+V8 suite, Octane, Are We Fast Yet and ssr, no site reaches the bound: the
+most deoptimizations at one site are 3, of one function 14 (Typescript's).
+
 **How many slots.** Nothing bounds a function's slots -- its registers, its
 captured bindings and its scratch slots -- but what names a slot by its
 number: a record's or a run-time source's word below the code's slots is a
@@ -3459,8 +3492,10 @@ compile was short of (`reoptRoom`). Placed, the code takes the room of the
 code it replaces -- the cache's, with the code kept beside it for a loop, or
 that loop's code -- as given back, that code held meanwhile (`busy`,
 `regRoomFor`), so that a large function's code is not counted twice and its
-compile again refused for the room its own old code holds. Past
-`jitMaxDeopts` deoptimizations a function is refused too.
+compile again refused for the room its own old code holds. No function is
+refused for its deoptimizations (see [Exits and
+deoptimization](#exits-and-deoptimization), "Deoptimizations end at their
+sites").
 
 **What a compile will hold.** The VM weighs it before it asks for a
 compile (`jitCompiles`, `jitCompileBytes`): 512 bytes an instruction and 64
@@ -4247,9 +4282,12 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
   (first, callee, deopt, learned, flushed, again, `+osr`), and each
   deoptimization that invalidates code, with what failed -- a property
   site by its kind and what its cache held (unfed, mono, poly, mega), or
-  the instruction -- the code's age in invocations' worth (`jitRegAge`)
-  and the budget before the next compile; and prints each benchmark's
-  counts of them. `vm.JITTierHook` writes it, called at placing and at
+  the instruction -- the code's age in invocations' worth (`jitRegAge`),
+  the budget before the next compile, and where it failed, the function's
+  own instruction or an inlined callee's by its register pc (`top` where
+  the site was at its ladder's top already); and prints each benchmark's
+  counts of them, with the most deoptimizations of one function and at
+  one site. `vm.JITTierHook` writes it, called at placing and at
   `jitRegInvalidate`, never on a hot path.
 - arm64's backend is checked on CI's Linux and macOS arm64 jobs and under
   qemu (`GOARCH=arm64 go test -exec qemu-aarch64`).

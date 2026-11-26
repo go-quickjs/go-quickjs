@@ -69,7 +69,7 @@ func TestJITRegInlinedByCodeReplaced(t *testing.T) {
 					return Undefined, nil
 				}
 				hostsBefore = e.life.ssaStats.hosts + e.life.ssaStats.guards
-				rt.jitRegInvalidate(fd.closure, e, "test")
+				rt.jitRegInvalidate(fd.closure, e, "test", jitTierSite{nil, -1})
 				invalidated = true
 				return Undefined, nil
 			})), propDefault)

@@ -177,6 +177,13 @@ type JITTierEvent struct {
 	// among them, and Compiles the compiles of it placed before this
 	// event's.
 	Deopts, Compiles int
+	// At is, for a deoptimization, the function whose instruction failed
+	// -- Func, or a callee inlined in its code -- and PC that
+	// instruction's register pc, -1 where none is known: a site's
+	// deoptimizations, each of which widens what it failed on, are
+	// counted by them.
+	At JITFunction
+	PC int
 }
 
 // JITTierHook, if set, is called at each compile placed and each
@@ -258,14 +265,26 @@ func (r *Runtime) jitTierPlaced(h func(JITTierEvent), cl *closure, c *regCode, e
 }
 
 // jitTierInvalidated tells the tier trace of e, the code of cl's function
-// c, invalidated for why, the interpreter to spend budget, in work, before
-// it is compiled again.
-func (r *Runtime) jitTierInvalidated(h func(JITTierEvent), cl *closure, c *regCode, e *jitRegEntry, why string, budget int64) {
+// c, invalidated for why, at at, the interpreter to spend budget, in work,
+// before it is compiled again.
+func (r *Runtime) jitTierInvalidated(h func(JITTierEvent), cl *closure, c *regCode, e *jitRegEntry, why string, at jitTierSite, budget int64) {
 	life := e.life
 	n := int64(max(len(c.rc.Code), 1))
+	fn := cl.fn
+	if at.cl != nil {
+		fn = at.cl.fn
+	}
 	h(JITTierEvent{Func: jitFunctionOf(cl.fn), Deopt: true, Reason: why, Length: len(c.rc.Code),
 		Invocations: r.jitTierInvocations(cl, life), Age: r.jitRegAge(c, e) / n, Budget: budget / n,
-		Deopts: int(life.deopts), Compiles: int(life.ssaSerial)})
+		Deopts: int(life.deopts), Compiles: int(life.ssaSerial), At: jitFunctionOf(fn), PC: at.pc})
+}
+
+// jitTierSite is where a deoptimization failed, for the tier trace
+// (JITTierEvent's At and PC): the register pc pc of cl's code, cl nil for
+// the code's own function's, pc -1 where it is not known.
+type jitTierSite struct {
+	cl *closure
+	pc int
 }
 
 // jitTierDeoptWhy is what a guard that failed at register pc rpc of f's

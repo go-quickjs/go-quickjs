@@ -115,7 +115,7 @@ func TestJITRegReoptimizeRoom(t *testing.T) {
 	}
 	// Room for the new code in place of the old, not beside it.
 	r.jitMemoryLimit = int64(s.held() + old.bytes/2)
-	r.jitRegInvalidate(cl, old, "test")
+	r.jitRegInvalidate(cl, old, "test", jitTierSite{nil, -1})
 	refused, life := s.refusedRoom, old.life
 	ne := r.jitRegCompileFor(cl, cl.reg, key, false)
 	if ne == nil || ne.code == nil {

@@ -64,7 +64,7 @@ var one = make(1), all = make(40);
 				t.Fatal("the exits do not take the site for megamorphic")
 			}
 			e := jitNativeForTest(t, r, "read")
-			r.jitRegInvalidate(cl, r.jitRegFor(cl, cl.reg), "test")
+			r.jitRegInvalidate(cl, r.jitRegFor(cl, cl.reg), "test", jitTierSite{nil, -1})
 			for range 16 {
 				run(`read(one, 1)`)
 			}

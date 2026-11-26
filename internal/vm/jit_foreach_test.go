@@ -158,7 +158,7 @@ func TestJITForEachAfterCallback(t *testing.T) {
 				for k, x := range rt.jit.regCache {
 					if fn := k.Value(); fn != nil && len(args) == 1 && fn.Name == args[0].String().Go() && x.code != nil {
 						fd := rt.global.getOwn(rt.atoms.intern(fn.Name)).value().Object().fn()
-						rt.jitRegInvalidate(fd.closure, x, "test")
+						rt.jitRegInvalidate(fd.closure, x, "test", jitTierSite{nil, -1})
 					}
 				}
 				return Undefined, nil

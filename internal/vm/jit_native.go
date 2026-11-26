@@ -2024,7 +2024,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 			// compiled again makes it of them (jitBigIntNote).
 			r.jitRegDeoptSeen(f, c, e, wb, exitPC)
 		}
-		r.jitRegInvalidate(f.cl, e, why)
+		r.jitRegInvalidate(f.cl, e, why, jitTierSite{nil, exitPC})
 		s.regEndWhy = "guard failed"
 		return 0, exitPC, Undefined, false, nil, false
 	case abi.ExitHost:
@@ -2126,7 +2126,7 @@ func (r *Runtime) jitRegLeft(f *frame, c *regCode, e *jitRegEntry, wb int, ctx *
 					// of eight functions, four learned one at a time, had
 					// left at every other turn until its loop was judged
 					// slow for it.
-					r.jitRegInvalidate(f.cl, e, "call")
+					r.jitRegInvalidate(f.cl, e, "call", jitTierSite{nil, exitPC})
 				}
 				r.jitRegSuperSeen(f, c, e, exitPC)
 				if !e.invalid && r.jitRegLiteralSeen(f, e, int(int64(ctx.ExitSite))) {
