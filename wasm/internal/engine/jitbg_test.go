@@ -328,3 +328,47 @@ func TestOptBackgroundCodeCollected(t *testing.T) {
 		t.Fatalf("a collected Code's arena maps %d bytes, %d live", mapped, live)
 	}
 }
+
+// By default a function is optimized after DefaultOptBackgroundThreshold
+// calls where its Code compiles in the background, and after
+// DefaultOptThreshold where it compiles on the spot; a threshold set is
+// both.
+func TestOptThresholdByMode(t *testing.T) {
+	if optEnv != -2 {
+		t.Skip("WASM_JIT_OPT sets the threshold")
+	}
+	src := `(module
+  (func $leaf (export "leaf") (param i32) (result i32)
+    (i32.add (i32.mul (local.get 0) (i32.const 3)) (i32.const 1)))
+  (func (export "run") (param $n i32) (result i32)
+    (local $i i32) (local $acc i32)
+    (loop $l
+      (local.set $acc (i32.xor (local.get $acc) (call $leaf (local.get $i))))
+      (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (local.get $n))))
+    (local.get $acc)))`
+	calls := uint64(DefaultOptBackgroundThreshold + 1000)
+	for _, bg := range []bool{true, false} {
+		inst := thresholdInstance(t, src, 0)
+		inst.Code.setOSRCalls(0)
+		inst.Code.SetOptBackground(bg)
+		cj := inst.Code.jit.Load()
+		want := int64(DefaultOptThreshold)
+		if bg {
+			want = DefaultOptBackgroundThreshold
+		}
+		if got := cj.optCount(); got != want {
+			t.Fatalf("background %v: a countdown of %d, want %d", bg, got, want)
+		}
+		if _, err := call(t, inst, "run", calls); err != nil {
+			t.Fatal(err)
+		}
+		waitOpt(t, inst.Code)
+		if optimized(inst, "leaf") != bg {
+			t.Fatalf("background %v: leaf optimized %v after %d calls", bg, !bg, calls)
+		}
+		inst.Code.SetOptThreshold(70)
+		if got := cj.optCount(); got != 70 {
+			t.Fatalf("background %v: a countdown of %d once set to 70", bg, got)
+		}
+	}
+}

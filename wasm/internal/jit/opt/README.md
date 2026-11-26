@@ -1126,6 +1126,38 @@ run (62 and 36 ms where 1,000 calls gives 29 and 18, against the
 baseline's 840 and 139). A function whose loops run long is counted by
 its polls: 30,000 calls are 120 polls, about half a million back edges.
 
+A compile in the background is counted to `DefaultOptBackgroundThreshold`,
+5,000 calls (20 polls), instead: the program does not wait for it, so what
+the count weighs is the CPU the compile takes, which has fallen to a
+quarter of what it was when 30,000 was chosen (0.17 ms a Go function, The
+compile's cost). The countdown a function's baseline code starts from is
+the one of the mode its Code compiles tier-ups in when it is compiled
+(`codeJIT.optCount`); `SetOptThreshold` and `WASM_JIT_OPT=N` set both
+counts. At 30,000, json's functions crossed the count run by run, from
+the calls each run added -- 19, 17, 25, 20, 12 and 8 functions optimized
+in its first six runs, each compiled within a few milliseconds of being
+queued -- so that its second run was still 6 ms from its steady state
+with no compile waiting for a worker. At 5,000 (the median of 7 rounds of
+fresh processes in turns on CPUs 0-15 of the machine below, 16 runs each,
+ms -- first run, its CPU time, second run, steady state, all the runs' CPU
+time, peak RSS in MiB):
+
+| program | first | CPU | second | steady | CPU in all | RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| json | 58.9 -> 53.0 | 89.8 -> 130 | 26.0 -> 20.9 | 19.9 -> 19.1 | 482 -> 478 | 158 -> 178 |
+| gzip | 45.8 -> 45.5 | 68.8 -> 72.7 | 17.7 -> 16.9 | 16.6 -> 16.5 | 333 -> 342 | 151 -> 152 |
+| regexp | 42.4 -> 43.6 | 48.9 -> 67.7 | 21.8 -> 21.0 | 20.2 -> 19.7 | 389 -> 395 | 108 -> 118 |
+| sha256 | 55.8 -> 54.9 | 58.3 -> 58.1 | 38.3 -> 37.5 | 37.7 -> 37.6 | 635 -> 629 | 98 -> 85 |
+| sort | 110 -> 110 | 115 -> 116 | 86.1 -> 86.5 | 86.4 -> 86.0 | 1423 -> 1433 | 159 -> 169 |
+| interp | 34.8 -> 35.4 | 37.6 -> 38.4 | 9.3 -> 8.7 | 8.9 -> 8.5 | 178 -> 180 | 86 -> 88 |
+
+json's second run is Node's (20.6); its first run's CPU time is 40 ms
+more, the compiles of later runs made in the first, and the CPU of all
+its runs level. Counted to 10,000 its second run was 24.0 ms, to 3,000
+21.6 and to 1,000 20.3, the first run's CPU time 118, 161 and 166 ms. On
+the spot (GOMAXPROCS 1) nothing changed: sha256, regexp and gzip, 7
+rounds, level within 1% but gzip's first run, 66.6 to 62.7 ms.
+
 On-stack replacement enters baseline code: the optimized code has no
 loop entries. A call running in the interpreter of a function whose
 native code is optimized enters the loops of the baseline code it
@@ -1139,8 +1171,9 @@ process's workers (`engine/jit_bg.go`), the program running its baseline
 code meanwhile; the baseline's first-call compile stays on the calling
 goroutine, which needs the code at once.
 
-**Scheduling.** The exit, or Go's count of the baseline code's polls and
-exits (`codeJIT.sample`), queues the function once (`tierUpLater`: its
+**Scheduling.** The exit -- the baseline code having counted
+`DefaultOptBackgroundThreshold` calls (Tier-up) -- or Go's count of the
+baseline code's polls and exits (`codeJIT.sample`), queues the function once (`tierUpLater`: its
 `optDone` set by a compare-and-swap) and sets its countdown to
 `math.MaxInt64`, so that its baseline code exits no more; every later ask
 stores it again, since a call's decrement racing with the store may undo

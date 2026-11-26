@@ -131,7 +131,7 @@ func (cj *codeJIT) tierUpLater(idx uint32, cd *compiled) {
 	if cj.waitsForRoom(cd) {
 		// Refused for want of room in this epoch: asked again after as
 		// many calls again.
-		atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
+		atomic.StoreInt64(&cj.counters[idx], cj.optCount())
 		return
 	}
 	atomic.StoreInt64(&cj.counters[idx], math.MaxInt64)
@@ -386,7 +386,7 @@ func (cj *codeJIT) placeReady() {
 func (cj *codeJIT) refuseOptRoom(idx uint32, cd *compiled, need int64) {
 	cd.optDone.Store(false)
 	cj.noRoom(cd, true, need)
-	atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
+	atomic.StoreInt64(&cj.counters[idx], cj.optCount())
 }
 
 // waitOptBackground waits until no function of the code is queued, being

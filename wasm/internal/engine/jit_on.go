@@ -77,12 +77,15 @@ type codeJIT struct {
 	catches atomic.Bool
 	// optThreshold is the number of calls of a function's baseline code
 	// -- a poll its code exits for counting optPollWeight of them -- after
-	// which the optimizing tier compiles it; 0 has the optimizing tier
-	// compile each function it accepts in the baseline's place, and a
-	// negative one turns it off. counters are the functions' countdowns,
-	// which their baseline code decrements at its entry; they never move.
-	optThreshold atomic.Int32
-	counters     []int64
+	// which the optimizing tier compiles it on the spot; 0 has the
+	// optimizing tier compile each function it accepts in the baseline's
+	// place, and a negative one turns it off. optBgThreshold is the number
+	// for a compile in the background (optCount). counters are the
+	// functions' countdowns, which their baseline code decrements at its
+	// entry; they never move.
+	optThreshold   atomic.Int32
+	optBgThreshold atomic.Int32
+	counters       []int64
 	// bg is the state of the optimizing tier's compiles in the background
 	// (jit_bg.go).
 	bg optBackground
@@ -103,6 +106,18 @@ type codeJIT struct {
 	// inline is the sites of the calls the optimizing tier inlined
 	// (jit_inline.go).
 	inline inlineSites
+}
+
+// optCount is the countdown a function's baseline code starts from, or is
+// set to again where its tier-up found no room: the count for a compile in
+// the background where the code's tier-ups are made there now
+// (inBackground), else on the spot.
+func (cj *codeJIT) optCount() int64 {
+	t := cj.optThreshold.Load()
+	if t > 0 && cj.inBackground() {
+		t = cj.optBgThreshold.Load()
+	}
+	return int64(max(t, 1))
 }
 
 // optPollWeight is how many calls a poll exit of a function's baseline
@@ -447,22 +462,20 @@ func (l *jitCodeLog) log(fn uint32, tier string, raw *ijit.RawCode, code *wjit.C
 }
 
 // optEnv is the optimizing tier's threshold WASM_JIT_OPT sets -- a number
-// of calls, "on" for DefaultOptThreshold, "eager" for 0, "off" for -1 --
-// or WASM_JIT=opt, which has every function compiled by it at its first
-// call; -2 is none.
+// of calls, both on the spot and in the background, "eager" for 0, "off"
+// for -1 -- or WASM_JIT=opt, which has every function compiled by it at
+// its first call; -2 is none, the defaults, which "on" asks for.
 var optEnv = func() int {
 	if os.Getenv("WASM_JIT") == "opt" {
 		return 0
 	}
 	switch v := os.Getenv("WASM_JIT_OPT"); v {
-	case "":
+	case "", "on":
 		return -2
 	case "off":
 		return -1
 	case "eager":
 		return 0
-	case "on":
-		return DefaultOptThreshold
 	default:
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
@@ -533,7 +546,9 @@ func (c *Code) setOSRCalls(mode int8) {
 
 func (c *Code) setOptThreshold(n int) {
 	if cj := c.jit.Load(); cj != nil && wopt.Available {
-		cj.optThreshold.Store(int32(max(min(n, math.MaxInt32), -1)))
+		n = max(min(n, math.MaxInt32), -1)
+		cj.optThreshold.Store(int32(n))
+		cj.optBgThreshold.Store(int32(n))
 	}
 }
 
@@ -569,9 +584,11 @@ func (c *Code) enableJIT(threshold int) bool {
 	cj.optThreshold.Store(-1)
 	if wopt.Available {
 		cj.optThreshold.Store(DefaultOptThreshold)
+		cj.optBgThreshold.Store(DefaultOptBackgroundThreshold)
 	}
 	if optEnv >= -1 && wopt.Available {
 		cj.optThreshold.Store(int32(optEnv))
+		cj.optBgThreshold.Store(int32(optEnv))
 	}
 	cj.osrThreshold.Store(DefaultOSRThreshold)
 	if osrEnv >= 0 {
@@ -639,7 +656,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	}
 	var counter uint64
 	if t := cj.optThreshold.Load(); t > 0 && !cd.optDone.Load() {
-		atomic.StoreInt64(&cj.counters[idx], int64(t))
+		atomic.StoreInt64(&cj.counters[idx], cj.optCount())
 		counter = uint64(uintptr(unsafe.Pointer(&cj.counters[idx])))
 	}
 	start := time.Now()
@@ -810,7 +827,7 @@ func (cj *codeJIT) tierUp(c *Code, idx uint32, cd *compiled) *nativeFn {
 		if !cd.optDone.Load() {
 			// No room for it now: tried again once it has counted as many
 			// calls again.
-			n = int64(max(cj.optThreshold.Load(), 1))
+			n = cj.optCount()
 		}
 		atomic.StoreInt64(&cj.counters[idx], n)
 	}

@@ -650,8 +650,9 @@ call crosses between the tiers in either direction. Where the JIT runs, it
 compiles a function at its first call, its frame sized by validation's
 bound, and the interpreter's compile of the body is never made unless a
 call runs there. An optimizing tier (`wasm/internal/jit/opt`) recompiles a
-function whose baseline code was called 30,000 times, or whose loops ran
-long, from SSA with a register allocator, in the baseline code's place;
+function whose baseline code was called 5,000 times where the compile
+runs in the background, 30,000 where it runs on the spot, or whose loops
+ran long, from SSA with a register allocator, in the baseline code's place;
 `WASM_JIT_OPT=off` turns it off. Its compiles run on background workers
 shared by the process, at most a quarter of GOMAXPROCS, the program running
 the baseline code until the optimized code is placed -- on pages no running
@@ -904,7 +905,7 @@ Flags:
 
 - `-engine`: any of `interp`; `jit`, the JIT as a runtime of
   `NewRuntimeConfigCompiler` runs it -- the baseline at a function's first
-  call, the optimizing tier at 30,000 calls, in the background -- which
+  call, the optimizing tier at 5,000 calls, in the background -- which
   needs a build with `-tags quickjs_jit` on amd64 Linux or Windows or arm64
   macOS or Linux; `jit-base`, the baseline alone (`WASM_JIT_OPT=off`);
   `jit-tiered`, the default named (`WASM_JIT_OPT=on`); `jit-opt`, every
@@ -1079,7 +1080,12 @@ What they show:
 - The second run is not quite steady for json, whose tier-ups are still
   being compiled in the background: its CPU time, 37.1 ms against 25.3 of
   wall time, counts the workers', and with 15 warmup runs and 10 timed ones
-  its median is 19.2 ms tiered and 17.9 optimized.
+  its median is 19.2 ms tiered and 17.9 optimized. Its functions then
+  crossed the count of 30,000 calls run by run -- some 20 of them in each
+  of its first six runs -- rather than waiting for the workers; counted to
+  5,000 in the background (`DefaultOptBackgroundThreshold`), most cross it
+  in the first run, and its second run is 20.9 ms where it was 26.0
+  (measured again on CPUs 0-15; `wasm/internal/jit/opt/README.md`, Tier-up).
 - Peak RSS of a program's process: go-quickjs's interpreter 46 to 62 MiB,
   the baseline 49 to 67, tiered 50 to 83 (json, its compiles in flight),
   optimizing 67 to 91; Node 84 to 102; wazero's compiler 122 to 167 and its

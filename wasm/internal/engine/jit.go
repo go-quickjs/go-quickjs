@@ -54,20 +54,29 @@ import (
 const DefaultJITThreshold = 0
 
 // DefaultOptThreshold is the number of calls of a function's baseline code
-// after which the optimizing tier compiles it, unless SetOptThreshold gives
-// another. A poll the baseline code exits for -- every 4,096 loop back
-// edges and calls -- counts for 250 calls, and a call or an instruction Go
-// makes for it for one, so that a function whose loops run long is
-// compiled too, for its later calls. The count weighs the
-// tier's compile against what it saves (wasm/internal/jit/opt/README.md,
+// after which the optimizing tier compiles it on the spot, on the goroutine
+// that counted them (where GOMAXPROCS is 1, or SetOptBackground(false)),
+// unless SetOptThreshold gives another. A poll the baseline code exits for
+// -- every 4,096 loop back edges and calls -- counts for 250 calls, and a
+// call or an instruction Go makes for it for one, so that a function whose
+// loops run long is compiled too, for its later calls. The count weighs
+// the tier's compile against what it saves (wasm/internal/jit/opt/README.md,
 // Tier-up).
 const DefaultOptThreshold = 30000
+
+// DefaultOptBackgroundThreshold is DefaultOptThreshold for a function
+// compiled by the process's workers, the program running its baseline code
+// meanwhile: a compile there costs the program no time of its own, so the
+// count weighs only the CPU it takes against what the code saves.
+const DefaultOptBackgroundThreshold = 5000
 
 // SetOptThreshold sets the number of calls of a function's baseline code
 // after which the optimizing tier compiles it in the baseline's place: 0
 // has the optimizing tier compile each function it accepts at its first
 // compile, and the baseline only those it refuses; a negative n turns the
-// tier off. By default it is DefaultOptThreshold, or what WASM_JIT_OPT says.
+// tier off. By default it is DefaultOptThreshold for the compiles on the
+// spot and DefaultOptBackgroundThreshold for those in the background
+// (SetOptBackground), or what WASM_JIT_OPT says; n set here is both.
 // It applies once EnableJIT has turned the JIT on, to the functions
 // compiled after it. The optimizing tier is built wherever the JIT is.
 func (c *Code) SetOptThreshold(n int) { c.setOptThreshold(n) }
