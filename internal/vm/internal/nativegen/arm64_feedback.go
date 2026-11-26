@@ -33,6 +33,23 @@ func feedbackARM64(v *variant) (*block, error) {
 		if jumps, bc := feedbackJumps(op); jumps {
 			feedbackEdgeARM64(a, bc)
 		}
+		if latticeRecords(op) {
+			var numbers *Label
+			big, _ := feedbackMarksBig(op)
+			if big {
+				l := a.NewLabel()
+				numbers = &l
+			}
+			tail := latticeARM64(a, op, numbers)
+			if big, ab := feedbackMarksBig(op); big {
+				feedbackBigARM64(a, v, op, ab)
+				a.Bind(*numbers)
+			}
+			a.Load(rJ, rTab, 8*int32(v.slotPlain(op)))
+			a.Br(rJ)
+			tail()
+			continue
+		}
 		if big, ab := feedbackMarksBig(op); big {
 			feedbackBigARM64(a, v, op, ab)
 			continue
@@ -72,6 +89,8 @@ func feedbackARM64(v *variant) (*block, error) {
 			a.MovImm(rD, 1)
 			a.Store8(r9, enters, rD)
 			a.Bind(left)
+			// The lattice's last byte: the function has run to a return.
+			latticeRanARM64(a)
 		}
 		a.Load(rJ, rTab, 8*int32(v.slotPlain(op)))
 		a.Br(rJ)

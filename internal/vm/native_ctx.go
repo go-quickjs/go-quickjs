@@ -150,12 +150,14 @@ type nativeCtx struct {
 	// instruction's Go handler: the call handler's callee other than its
 	// site cached.
 	miss uintptr
-	// fv is the top frame's feedback vector, a slot a site into which a
-	// handler ORs the kinds of value it met (the JIT's next step, as
-	// Ignition's): none yet, its room kept here and in the frame record,
-	// which a call switches and a return gives back, and R14, which no
-	// handler uses, kept for it to be pinned in, so that a handler's note
-	// is one OR to memory and spills nothing.
+	// fv is room for the top frame's feedback vector pinned in a
+	// register, kept here and in the frame record, which a call switches
+	// and a return gives back, and R14, which no handler uses, kept for
+	// it: none yet. The feedback dispatcher reaches the operand lattice
+	// through the frame's cc (jit_lattice.go) instead, as it does the
+	// counts, since a pinned vector would have plain's call and return
+	// handlers, which a runtime without the JIT runs, switch it; baseline
+	// code, which has no plain variant, may pin it.
 	fv uintptr
 
 	// What only Go reads: the frame's state, the records frames points

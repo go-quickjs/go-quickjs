@@ -32,6 +32,22 @@ func feedbackAMD64(v *variant) (*block, error) {
 		if jumps, bc := feedbackJumps(op); jumps {
 			feedbackEdgeAMD64(a, bc)
 		}
+		if latticeRecords(op) {
+			var numbers *Label
+			big, _ := feedbackMarksBig(op)
+			if big {
+				l := a.NewLabel()
+				numbers = &l
+			}
+			tail := latticeAMD64(a, op, numbers)
+			if big, ab := feedbackMarksBig(op); big {
+				feedbackBigAMD64(a, v, op, ab)
+				a.Bind(*numbers)
+			}
+			a.JmpMem(R13, 8*int32(v.slotPlain(op)))
+			tail()
+			continue
+		}
 		if big, ab := feedbackMarksBig(op); big {
 			feedbackBigAMD64(a, v, op, ab)
 			continue
@@ -55,6 +71,10 @@ func feedbackAMD64(v *variant) (*block, error) {
 			a.Jcc(CondG, skip)
 			a.MovImm(R8, 1)
 			a.Store8(R9, enters, R8)
+			// The lattice's last byte: the function has run to a return.
+			a.Bind(skip)
+			skip = a.NewLabel()
+			latticeRanAMD64(a, skip)
 		} else {
 			// counts[1+C]++, the calls at site C.
 			a.MovRR(RCX, RAX)

@@ -3,9 +3,9 @@
 package vm
 
 // nativeFeedback is the dispatcher of a runtime that runs the JIT
-// (nativeDispatch): its handlers that record the JIT's feedback OR the
-// kinds of value they met into the function's feedback slot (ctx.fv),
-// every other handler plain's. Its table and its own handlers are
+// (nativeDispatch): its handlers record the JIT's feedback -- the calls'
+// and runs' counts, the operand lattice (jit_lattice.go) -- every other
+// handler plain's. Its table and its own handlers are
 // generated (native_handlers_feedback_<arch>.s), in builds with the JIT
 // alone, and not in the build that reads the package's layout for the
 // generator (native_layout.go), which must not need them.

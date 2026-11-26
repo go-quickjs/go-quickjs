@@ -31,9 +31,13 @@ import (
 // feedbackOps are the feedback variant's own handlers: the calls --
 // call_w, call_method_w and those in tail position -- and the returns;
 // and the operators plain's handlers make of two BigInts held in their
-// Values (feedbackBigOps), in handlerOps' order; the jumps; and the fused
-// operations whose partner is a jump (feedbackUnfused).
-var feedbackOps = append(append([]bytecode.ROp{
+// Values (feedbackBigOps), in handlerOps' order; the jumps; the fused
+// operations whose partner is a jump (feedbackUnfused); and, after them,
+// the operations of the operand lattice none of those is (lattice.go).
+var feedbackOps = append(slices.Clone(feedbackBaseOps), latticeNewOps...)
+
+// feedbackBaseOps are feedbackOps before the lattice's.
+var feedbackBaseOps = append(append([]bytecode.ROp{
 	bytecode.RAdd, bytecode.RSub, bytecode.RMul,
 	bytecode.RJLt, bytecode.RJNLt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 	bytecode.RCallW, bytecode.RCallMW, bytecode.RRet, bytecode.RRetUndef,

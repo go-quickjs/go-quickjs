@@ -630,9 +630,21 @@ the exit stub through the table, whose handler makes it and marks the site
 by what it met (`regBigOf`); anything else goes on in plain's handler. A
 site is left so once, and the JIT's first compile makes it natively
 (`regBigSeen`) rather than learning it at a first exit from native code,
-deoptimizing. Plain's handlers do none of it. None ORs the kinds of value
-it met into the function's feedback slot yet (the native context's `fv`,
-kept in a register no handler uses: amd64's R14, arm64's R15).
+deoptimizing. Plain's handlers do none of it. Its arithmetic, comparisons and bitwise
+operators (bytecode's `LatticeOps`: of two registers, of a register and an
+immediate, of one register, and the compare-and-branches of two registers
+and of a register and an immediate) OR the kinds of their operands into
+their instruction's byte of the function's operand lattice (the closure
+code's `jitRegOps`, jit_lattice.go; nativegen's lattice.go), made at the
+template's first run where the runtime runs the JIT on the native
+handlers: an int32's number (not -0), another number, an oddball, a
+BigInt in the int64 range, another BigInt, a string, anything else
+(`abi.Operands`), an immediate an int32's. It is reached through the
+frame's cc, as the counts are, not a pinned register: the native
+context's `fv` and the register kept for it (amd64's R14, arm64's R15) stay
+for a vector pinned where no plain variant has to switch it, baseline
+code's. `TestJITLattice` runs every form on operands of every kind and
+checks each byte against `jitLatticeKind`.
 `TestRegNativeFeedbackSelected` checks a runtime picks its table, and
 `TestRegNativePlainSameWithJIT` that a build with the JIT makes plain's as a
 build without does.

@@ -611,6 +611,14 @@ type jitCodeFields struct {
 	// calls made at each of its call sites; nil until its call sites'
 	// caches are made, and in a runtime that runs no JIT.
 	jitRegCounts []uint64
+	// jitRegOps is the function's register code's operand lattice
+	// (jit_lattice.go): a byte for each instruction, of the kinds of
+	// value the operands of an arithmetic, comparison or bitwise one met
+	// (abi.Operands), which the feedback dispatcher ORs in, and two past
+	// them, whether it has run to a return and whether a compile took it
+	// for nothing (jitLatticeRan); nil in a runtime that runs no feedback
+	// dispatcher.
+	jitRegOps []uint8
 	// jitRegTick counts down the runs of the function's register code
 	// left of its budget, from jitRegTickSet, which the feedback
 	// dispatcher's returns count (jitRegArm): at 0 they mark its calls

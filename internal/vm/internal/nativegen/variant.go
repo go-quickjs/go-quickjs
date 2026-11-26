@@ -58,9 +58,10 @@ const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windo
 //     with it alone: its handlers record the JIT's feedback, every other
 //     handler plain's. Its calls count the calls made at each call site
 //     and its returns the function's runs, for the JIT's call frequencies,
-//     and its arithmetic and compares of two BigInts leave a site to Go
-//     until it is marked as one that met them (feedback.go); none ORs
-//     kinds into the feedback slot (ctx.fv) yet.
+//     its arithmetic and compares of two BigInts leave a site to Go
+//     until it is marked as one that met them (feedback.go), and its
+//     arithmetic, comparisons and bitwise operators OR the kinds of their
+//     operands into the function's operand lattice (lattice.go).
 //
 // A mode's table -- the debugger's -- would be one more.
 //   - typed is the dispatcher of typed register code (typed.go), in every

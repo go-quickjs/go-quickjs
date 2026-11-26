@@ -84,6 +84,7 @@ func (*Runtime) jitRegEnter(*frame, *closure, *regCode, int, int) (Value, error)
 }
 func (*Runtime) jitRegLoop(st *regState, target int) int { return target }
 func (*Runtime) jitRegCountsMake(*closureCode, int)      {}
+func (*Runtime) jitLatticeMake(*closureCode, *regCode)   {}
 func (*closureCode) jitRegUncount(int)                   {}
 
 func regGenNative(*bytecode.Function, *regCode) bool { return false }

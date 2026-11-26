@@ -95,6 +95,62 @@ const (
 	RecordDirect = 1 << 61
 )
 
+// Operands is what an arithmetic, comparison or bitwise site of register
+// code met in the interpreter: a byte for each register instruction, into
+// which the feedback dispatcher's handler of it ORs the kinds of its
+// operands each time it runs (package vm's jit_lattice.go, nativegen's
+// lattice), as V8's interpreter ORs a site's BinaryOperationHint and
+// CompareOperationHint into its feedback vector. An immediate operand is
+// an int32's number. None of the bits is none: a site that never ran.
+type Operands uint8
+
+// The kinds an operand is of, each a bit of Operands.
+const (
+	// OperandInt32 is a number that is an int32, not -0.
+	OperandInt32 Operands = 1 << iota
+	// OperandNumber is any other number.
+	OperandNumber
+	// OperandOddball is undefined, null or a boolean.
+	OperandOddball
+	// OperandBigInt64 is a BigInt in the int64 range, held in its Value.
+	OperandBigInt64
+	// OperandBigInt is any other BigInt.
+	OperandBigInt
+	// OperandString is a string.
+	OperandString
+	// OperandOther is anything else: an object, a symbol.
+	OperandOther
+)
+
+// OperandRuns is how many runs to a return the interpreter makes of a
+// function before its lattice says what a site that met nothing did:
+// that it never ran. Its count is the lattice's last byte, which the
+// feedback dispatcher's returns count up to it. V8 allocates a function's
+// feedback vector after 8 invocations' worth of its bytecode, and
+// optimizes it only after a budget of hundreds more.
+const OperandRuns = 8
+
+// The lattice's points, as the builder speculates on them: what the bits
+// met allow, the least that holds them all.
+const (
+	// OperandsNumber are the numbers: int32s or not.
+	OperandsNumber = OperandInt32 | OperandNumber
+	// OperandsNumeric are the numbers and the oddballs, which convert to
+	// numbers without running script.
+	OperandsNumeric = OperandsNumber | OperandOddball
+	// OperandsBigInt are the BigInts.
+	OperandsBigInt = OperandBigInt64 | OperandBigInt
+)
+
+// Generic reports whether k is the lattice's top: it met a string or
+// something else no number, oddball or BigInt is -- an object, a symbol --
+// where the builder speculates nothing and Go makes the operation. A
+// BigInt beside a number is not: the BigInts' own feedback, which knows
+// the operation's results, decides it (ssa.BigIntFeedback).
+func (k Operands) Generic() bool {
+	return k&(OperandString|OperandOther) != 0
+}
+
 // Bounds are how deep a run's native calls go, which depends on how deep
 // the VM's frames were where Go entered the code, and which Go sets before
 // every entry, once for every context, all of which point here

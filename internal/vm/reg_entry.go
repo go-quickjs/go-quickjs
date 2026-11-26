@@ -52,6 +52,11 @@ func errNoRegCode(fn *bytecode.Function) error {
 // closure is first given its register code (cl.reg), which every entry
 // into the code reads but those a plan makes (regBindPlan).
 func (r *Runtime) regExtend(cl *closure, c *regCode) {
+	if jitBuilt {
+		// The operand lattice the feedback dispatcher records into
+		// (jit_lattice.go), from the template's first run.
+		r.jitLatticeMake(cl.closureCode, c)
+	}
 	if c.initPlan != nil && cl.ctorInit == nil {
 		// The native initializer's cache, which it fills.
 		cl.ctorInit = newInitCache(c.initPlan)

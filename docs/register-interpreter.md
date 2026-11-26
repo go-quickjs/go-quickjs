@@ -659,7 +659,9 @@ below `tagBase` -- so a comparison with the threshold answers the same
 with the bit set, and the exact tag checks compare the bits from 16 up
 alone. No handler uses `R14` (`R15` on arm64), kept for a feedback vector
 to be pinned in should one be needed, so that a handler's note would be
-one OR to memory. On arm64 the pinned registers are `R19` to `R25` in
+one OR to memory: the feedback dispatcher's operand lattice is reached
+through the frame's closure code instead (below), since a pinned vector
+would have plain's calls and returns switch it. On arm64 the pinned registers are `R19` to `R25` in
 that order, with `R7` the write-barrier flag as Go last left it, `R0` the
 instruction word, `R1` to `R6`, `R16`, `R17` and `D0` to `D3` the scratch;
 the code uses `R26` only for an exit's func value and `R27` only as the
@@ -858,7 +860,13 @@ without the JIT, and the one a runtime that does not run the JIT uses in
 builds with it. `feedback`, in JIT builds alone, is a runtime's that runs
 the JIT ([Inline caches and feedback](#inline-caches-and-feedback)): its own
 handlers record what the JIT needs and then go on in plain's handler, so
-that plain's code has no part of it. A variant's block holds only the
+that plain's code has no part of it. Among them, each arithmetic,
+comparison and bitwise operation (bytecode's `LatticeOps`) ORs the kinds
+of its operands -- an int32, another number, an oddball, a BigInt in the
+int64 range, another BigInt, a string, anything else (`abi.Operands`) --
+into its instruction's byte of the function's operand lattice, the
+closure code's `jitRegOps`, which the JIT's builder speculates on
+(internal/jit/README.md, "Feedback"). A variant's block holds only the
 handlers it overrides (`native_handlers_feedback_<arch>.s`, sorted after
 plain's block so that the stubs before plain's lie where they do without
 the JIT), its table
