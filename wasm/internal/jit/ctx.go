@@ -115,6 +115,12 @@ type Ctx struct {
 	// MemSizePtr is the address of a shared memory 0's size, which other
 	// threads change, read at each access.
 	MemSizePtr uintptr
+	// Datas and Elems are the instance's data and element segments, each
+	// the address of the first of their entries, Layout.Segment bytes
+	// apart, or 0 where it has none: an entry is the address of the
+	// segment's first byte or reference, a word, then its length, a word,
+	// 0 once the segment is dropped.
+	Datas, Elems uintptr
 }
 
 // MemLimitSlack is the most bytes past its address an access may reach
@@ -238,16 +244,18 @@ const (
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.
 const (
-	TrapUnreachable          = 1
-	TrapMemOutOfBounds       = 2
-	TrapUnalignedAccess      = 3
-	TrapDivByZero            = 4
-	TrapDivUnrepresentable   = 5
-	TrapRemByZero            = 6
-	TrapFloatUnrepresentable = 7
-	TrapTableOutOfBounds     = 8
-	TrapNullDereference      = 13
-	TrapIllegalCast          = 14
-	TrapArrayOutOfBounds     = 15
-	TrapStackOverflow        = 18
+	TrapUnreachable               = 1
+	TrapMemOutOfBounds            = 2
+	TrapUnalignedAccess           = 3
+	TrapDivByZero                 = 4
+	TrapDivUnrepresentable        = 5
+	TrapRemByZero                 = 6
+	TrapFloatUnrepresentable      = 7
+	TrapTableOutOfBounds          = 8
+	TrapDataSegmentOutOfBounds    = 11
+	TrapElementSegmentOutOfBounds = 12
+	TrapNullDereference           = 13
+	TrapIllegalCast               = 14
+	TrapArrayOutOfBounds          = 15
+	TrapStackOverflow             = 18
 )

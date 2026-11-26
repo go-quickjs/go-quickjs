@@ -13,11 +13,11 @@ import (
 // in its second word, the first cell its header; an array is a header, its
 // length, and its elements, packed numbers or references, in memory of
 // their own (Layout). Native code reads and writes fields and elements,
-// tests and casts, makes i31s, and makes structs and arrays from the pools
-// the engine fills (structNew, arrayNew); what else allocates runs in Go
-// from the allocation stub (StubOp), and what copies or fills ranges in Go
-// (ExitOp), whose allocations charge the instance's budget as the
-// interpreter's do.
+// tests and casts, makes i31s, makes structs and arrays from the pools the
+// engine fills (structNew, arrayNew) and arrays from segments
+// (arrayNewSeg); what else allocates runs in Go from the allocation stub
+// (StubOp), and what copies or fills ranges in Go (ExitOp), whose
+// allocations charge the instance's budget as the interpreter's do.
 
 // cellOf returns the offset of the cell of field fi of struct type ti
 // from the struct's start: the header's cell first, a v128 taking two.
@@ -65,12 +65,7 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	l := c.req.Layout
 	switch op {
 	case opcode.StructNew, opcode.StructNewDefault:
-		ti := c.r.u32()
-		if !pooled(m, ti) {
-			c.goOp(op, at, uint64(ti), 0)
-			break
-		}
-		c.structNew(ti, op == opcode.StructNew, at)
+		c.structNew(c.r.u32(), op == opcode.StructNew, at)
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
 		ti := c.r.u32()
 		if n := c.stack[len(c.stack)-1]; n.k == kConst {
@@ -97,8 +92,14 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		c.goOp(op, at, uint64(ti), uint64(n))
 	case opcode.ArrayFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
-	case opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
-		opcode.ArrayInitData, opcode.ArrayInitElem:
+	case opcode.ArrayNewData, opcode.ArrayNewElem:
+		ti, seg := c.r.u32(), c.r.u32()
+		if segPooled(m, l, ti, seg) && c.refSlotOff(len(c.stack)-2)/16 < AllocLength {
+			c.arrayNewSeg(ti, seg, op == opcode.ArrayNewData, at)
+			break
+		}
+		c.goOp(op, at, uint64(ti), uint64(seg))
+	case opcode.ArrayCopy, opcode.ArrayInitData, opcode.ArrayInitElem:
 		x := uint64(c.r.u32())
 		c.goOp(op, at, x, uint64(c.r.u32()))
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
@@ -249,17 +250,6 @@ func StubOp(op opcode.Opcode) bool {
 	return false
 }
 
-// pooled reports whether native code makes the structs of type ti from
-// the engine's pools: a type without v128 fields.
-func pooled(m *module.Module, ti uint32) bool {
-	for _, f := range m.Types[ti].Struct.Fields {
-		if f.Type.Kind == module.KindV128 {
-			return false
-		}
-	}
-	return true
-}
-
 // structNew compiles struct.new, or, without fields, struct.new_default,
 // of type ti: a struct taken from the level's pool of the type's (Ctx.Pools,
 // poolTake), each field stored from its operand, the struct's reference
@@ -295,11 +285,16 @@ func (c *compiler) structNew(ti uint32, fields bool, at uint32) {
 	c.poolTake(p, q, ti, -1, slow)
 	off := int32(16)
 	for i, f := range fs {
-		if f.Type.IsRef() {
+		switch {
+		case f.Type.IsRef():
 			src := c.refOf(vals[i])
 			c.copyWord(mem{p, off}, src)
 			c.copyWord(mem{p, off + 8}, mem{src.base, src.off + 8})
-		} else {
+		case f.Type.Kind == module.KindV128:
+			// Its halves in the payload words of its two cells.
+			c.storeCells(p, off+8, c.readX(vals[i]))
+			off += 16
+		default:
 			c.storeField(f.Type.Kind, vals[i], p, off+8, true)
 		}
 		off += 16
@@ -328,11 +323,10 @@ const arrayNewMost = 16
 // largest blocks have room for, and for array.new (fill) no more than
 // arrayNewMost of them -- and the class of their blocks.
 func arrayPooled(m *module.Module, l *Layout, ti, n uint32, fill bool) (int, bool) {
-	et := m.Types[ti].Array.Elem.Type
-	if et.Kind == module.KindV128 || fill && n > arrayNewMost {
+	if fill && n > arrayNewMost {
 		return 0, false
 	}
-	u := (uint64(n)*uint64(elemSize(et.Kind)) + 15) / 16
+	u := (uint64(n)*uint64(elemSize(m.Types[ti].Array.Elem.Type.Kind)) + 15) / 16
 	if u >= uint64(len(l.ArrayClass)) {
 		return 0, false
 	}
@@ -343,7 +337,7 @@ func arrayPooled(m *module.Module, l *Layout, ti, n uint32, fill bool) (int, boo
 // a length not constant from the engine's pools, where they have room for
 // them: arrays of numbers or references, not v128s.
 func lengthPooled(m *module.Module, l *Layout, ti uint32) bool {
-	return len(l.ArrayClass) > 0 && m.Types[ti].Array.Elem.Type.Kind != module.KindV128
+	return len(l.ArrayClass) > 0
 }
 
 // arrayNewLength compiles array.new_default of type ti of a length not
@@ -427,6 +421,11 @@ func (c *compiler) arrayNewFill(ti uint32, at uint32) {
 	// fillElems stores the value into each of the k elements of array p.
 	fillElems := func() {
 		c.loadWord(e, mem{p, l.ArrayElems})
+		if et.Kind == module.KindV128 {
+			x := c.readX(val)
+			c.fillLoop(e, k, size, func() { c.storeVecAt(e, 0, x) })
+			return
+		}
 		c.fillLoop(e, k, size, func() {
 			if et.IsRef() {
 				src := c.refOf(val)
@@ -472,10 +471,90 @@ func (c *compiler) arrayNewFill(ti uint32, at uint32) {
 	c.pushRef()
 }
 
+// segPooled reports whether native code makes the arrays of type ti from
+// segment seg itself (arrayNewSeg): an array of numbers but v128s, or of
+// references, where the layout gives the segments' entries and the
+// pools' classes, and the segment's entry is within a 32-bit offset.
+func segPooled(m *module.Module, l *Layout, ti, seg uint32) bool {
+	return l.Segment > 0 && len(l.ArrayClass) > 0 && int64(seg)*int64(l.Segment) < 1<<30
+}
+
+// arrayNewSeg compiles array.new_data (data) or array.new_elem of type ti
+// from segment seg, of a length not constant: the segment's range -- the
+// offset and the length's elements, in bytes for data, in references for
+// elements -- checked against its length (Ctx.Datas, Ctx.Elems; a
+// dropped segment's is 0), a trap past it; the array taken from the pool
+// of its class as arrayNewLength takes one, its length stored, or, past
+// the pools, made by the engine into the offset's position's reference
+// slot (ExitAlloc, AllocMake); and the segment's bytes or references
+// copied into its elements -- a reference plainly, as a new struct's
+// field is, the segment holding it meanwhile -- before the array is in its
+// slot. Every entry is in its slot or a constant across the exits.
+func (c *compiler) arrayNewSeg(ti, seg uint32, data bool, at uint32) {
+	l := c.req.Layout
+	et := c.m.Types[ti].Array.Elem.Type
+	base := len(c.stack) - 2
+	for h := range c.stack {
+		if c.stack[h].k != kConst {
+			c.spill(h)
+		}
+	}
+	src, length := c.stack[base], c.stack[base+1]
+	c.stack = c.stack[:base]
+	slot := uint64(c.refSlotOff(base) / 16)
+	p := c.allocG(0)
+	q := c.allocG(1 << p)
+	k := c.allocG(1<<p | 1<<q)
+	e := c.allocG(1<<p | 1<<q | 1<<k)
+	shift := uint8(bits.TrailingZeros(uint(elemSize(et.Kind))))
+	segs, trap, unit := offDatas, uint64(TrapDataSegmentOutOfBounds), shift
+	if !data {
+		segs, trap, unit = offElems, TrapElementSegmentOutOfBounds, 0
+	}
+	entry := int32(seg) * l.Segment
+	retry, slow, big, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(retry)
+	c.loadLength(k, length, true)
+	c.segRange(e, k, src, segs, entry, unit, c.trap(trap, at))
+	c.arrayClassAt(k, shift, big)
+	c.poolTakeClass(p, q, k, ti, slow)
+	c.loadLength(k, length, false)
+	c.storeReg(p, l.ArrayLen, k)
+	// The pool's word's address waits in the context's Arg3, q copying.
+	c.storeReg(rCtx, offArg0+24, q)
+	c.segCopy(p, k, e, q, src, segs, entry, shift, data)
+	c.loadWord(q, mem{rCtx, offArg0 + 24})
+	c.refPut(c.refPos(base), regWord(p), immWord(0))
+	c.ptrPut(mem{q, 0}, immWord(0))
+	c.a.Bind(done)
+	c.freeG(p)
+	c.freeG(q)
+	c.freeG(k)
+	c.freeG(e)
+	c.later(func() {
+		c.a.Bind(slow)
+		resume := c.a.NewLabel()
+		c.exitAlloc(resume, uint64(ti)|AllocLength<<32, uint64(at))
+		c.resumeAt(resume)
+		c.jmp(retry)
+	})
+	c.later(func() {
+		c.a.Bind(big)
+		resume := c.a.NewLabel()
+		c.exitAlloc(resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
+		c.resumeAt(resume)
+		c.loadWord(p, c.refPos(base))
+		c.loadLength(k, length, false)
+		c.segCopy(p, k, e, q, src, segs, entry, shift, data)
+		c.jmp(done)
+	})
+	c.pushRef()
+}
+
 // elemSize returns the bytes an array element of storage type t takes: a
-// reference's two words, or its number's.
+// reference's two words, or its number's, a v128's 16 bytes.
 func elemSize(t module.Kind) int {
-	if t == module.KindRef {
+	if t == module.KindRef || t == module.KindV128 {
 		return 16
 	}
 	return storageSize(t)
@@ -521,11 +600,14 @@ func (c *compiler) arrayNew(op opcode.Opcode, ti, n uint32, class int, at uint32
 			v = vals[i]
 		}
 		off := l.ArrayBlock + i*size
-		if et.IsRef() {
+		switch {
+		case et.IsRef():
 			src := c.refOf(v)
 			c.copyWord(mem{p, off}, src)
 			c.copyWord(mem{p, off + 8}, mem{src.base, src.off + 8})
-		} else {
+		case et.Kind == module.KindV128:
+			c.storeVecAt(p, off, c.readX(v))
+		default:
 			c.storeField(et.Kind, v, p, off, false)
 		}
 	}

@@ -143,6 +143,9 @@ type Layout struct {
 	// a pool for each class, a word each.
 	ArrayBlock int32
 	ArrayClass []uint8
+	// Segment is the bytes between two entries of the data or the element
+	// segments (Ctx.Datas, Ctx.Elems).
+	Segment int32
 }
 
 // Code is a function's native code. Its offsets are from its start.
@@ -200,6 +203,8 @@ var (
 	offExitAddr   = int32(unsafe.Offsetof(Ctx{}.ExitAddr))
 	offResume     = int32(unsafe.Offsetof(Ctx{}.Resume))
 	offPools      = int32(unsafe.Offsetof(Ctx{}.Pools))
+	offDatas      = int32(unsafe.Offsetof(Ctx{}.Datas))
+	offElems      = int32(unsafe.Offsetof(Ctx{}.Elems))
 )
 
 // Available reports whether this build compiles native code.

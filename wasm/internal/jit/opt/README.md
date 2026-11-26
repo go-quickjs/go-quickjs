@@ -127,8 +127,9 @@ each trapping where the instruction does; br_on_cast and br_on_cast_fail
 are a test and a branch on it, the reference staying in its slot both
 ways; any.convert_extern and extern.convert_any are nothing. A number read
 is a value like any load's, but never shared or moved: a `ref` value has
-an effect. struct.new and struct.new_default of a type without v128 fields
-are `ref` values too (`refStructNew`): the numeric fields their
+an effect. struct.new and struct.new_default are `ref` values too
+(`refStructNew`): the numeric fields -- a v128 one's halves into its two
+cells -- their
 arguments, the reference fields in their positions' slots, the struct
 taken from the level's pool of its type's (the baseline README's GC
 objects) and left in the first operand's position's slot; so are
@@ -139,14 +140,18 @@ each, or zero -- in the immediate, the numbers their arguments, the
 references in their positions' slots; array.new_default's length, where
 it is not constant, its argument, and array.new's, where it is not or is
 past 16, its last, the value in each element stored by a loop in two
-temporaries of the instruction's (the baseline README's GC objects). What
-else allocates -- array.new_fixed of other arrays, array.new_data,
-array.new_elem, struct.new_default of a type with v128 fields -- and
-array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
-their references in their positions' slots from `Pos` and the object made
-left in the first's; Go makes the objects and charges the instance's
-budget as the interpreter does, and they forget nothing the block knows
-of memory and globals.
+temporaries of the instruction's (the baseline README's GC objects).
+array.new_data and array.new_elem are `ref` values (`refArraySeg`), the
+segment's offset and the length their arguments: the range checked
+against the segment's length (`Ctx.Datas`, `Ctx.Elems`), the array taken
+from a pool or made by the engine past them, and the segment copied in by
+a loop in three temporaries of the instruction's. What else allocates --
+array.new_fixed of other arrays -- and array.fill, array.copy,
+array.init_data and array.init_elem are `goop`s, their references in
+their positions' slots from `Pos` and the object made left in the
+first's; Go makes the objects -- those that allocate from the allocation
+stub -- and charges the instance's budget as the interpreter does, and
+they forget nothing the block knows of memory and globals.
 
 ## Building SSA
 

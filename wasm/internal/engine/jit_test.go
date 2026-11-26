@@ -353,6 +353,8 @@ func TestJITTrapCodes(t *testing.T) {
 		{wjit.TrapRemByZero, TrapRemByZero},
 		{wjit.TrapFloatUnrepresentable, TrapFloatUnrepresentable},
 		{wjit.TrapTableOutOfBounds, TrapTableOutOfBounds},
+		{wjit.TrapDataSegmentOutOfBounds, TrapDataSegmentOutOfBounds},
+		{wjit.TrapElementSegmentOutOfBounds, TrapElementSegmentOutOfBounds},
 		{wjit.TrapNullDereference, TrapNullDereference},
 		{wjit.TrapIllegalCast, TrapIllegalCast},
 		{wjit.TrapArrayOutOfBounds, TrapArrayOutOfBounds},

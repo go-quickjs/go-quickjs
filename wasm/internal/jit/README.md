@@ -313,6 +313,9 @@ and X0 on arm64:
   exit's work begins.
 - `Pools`: the level's table of pools of new structs (GC objects), by the
   module's type index, 0 until the level's first `ExitAlloc`.
+- `Datas`, `Elems`: the instance's data and element segments, an entry
+  each of the segment's address and length, `Layout.Segment` bytes apart,
+  which array.new_data and array.new_elem read (GC objects).
 
 ## Entry, exits and resumption
 
@@ -854,21 +857,22 @@ object whose header's runtime information has, at the type's depth among
 its supertypes, the type's canonical index -- the depth and the index
 known when the code is compiled.
 
-struct.new and struct.new_default of a type without v128 fields take a
-struct from a pool the engine fills ahead (`engine/jit_gc.go`), as the
+struct.new and struct.new_default take a struct from a pool the engine
+fills ahead (`engine/jit_gc.go`), as the
 JavaScript JIT takes its objects: the level's table of pools
 (`Ctx.Pools`), by the module's type index, a struct type's entry its pool,
 each a count and the pointers to that many objects, their headers written
 and their fields or elements zero (`Layout.PoolCount`, `Layout.PoolObjs`).
 The code takes the last -- the count decremented -- stores the fields from
-their operands, the struct's reference into the first operand's
-position's slot, and clears the pool's word of it; the struct stays in the
-pool, where the collector sees it, until it is in its slot.
+their operands, a v128's halves into its two cells' payload words, the
+struct's reference into the first operand's position's slot, and clears
+the pool's word of it; the struct stays in the pool, where the collector
+sees it, until it is in its slot.
 
 An array is taken so too: array.new_fixed, and array.new and
-array.new_default of a constant length, of an array type without v128
-elements, whose elements take at most 480 bytes, and for array.new are at
-most 16. An array type's entry of the table is a table of pools by the
+array.new_default of a constant length, whose elements take at most 480
+bytes -- a v128's 16, as a reference's -- and for array.new are at most
+16. An array type's entry of the table is a table of pools by the
 class of the block the array is made in -- the allocator's size classes,
 from the header's 32 bytes to 512 (`Layout.ArrayClass`, the class of
 elements of up to 16*u bytes at u) -- so that a pool's arrays have room
@@ -884,7 +888,23 @@ Arg2 for the exits, shifted to its elements' bytes, compared with 480 and
 looked up in `Layout.ArrayClass` at its address. Past 480 bytes the code
 exits (`ExitAlloc`, `AllocMake` and the operand's reference slot) for the
 engine to make the array into that slot, or to trap, as the interpreter
-does, and goes on past the instruction. A table belongs to one
+does, and goes on past the instruction.
+
+array.new_data and array.new_elem are native too, in both tiers, of any
+element type: the context has the instance's data and element segments
+(`Ctx.Datas`, `Ctx.Elems`), each an entry of the segment's address and
+length -- 0 once dropped, as the interpreter sees it -- `Layout.Segment`
+bytes apart. The code checks the range, the offset and the length's
+elements -- in bytes for data, in references for elements -- against the
+segment's length, a trap past it (`TrapDataSegmentOutOfBounds`,
+`TrapElementSegmentOutOfBounds`); takes the array from the pool of its
+length's class, as array.new_default of a length not constant does, or,
+past 480 bytes, has the engine make it into the first operand's
+position's reference slot (`AllocMake`); and copies the segment's bytes,
+or its references, two words each, into the elements, eight bytes at a
+time and then the bytes left, before the array goes into its slot. A
+reference is copied plainly, as a new struct's field is: the segment
+holds it meanwhile, and a drop of the segment, in Go, shades it. A table belongs to one
 level at a time, so the take is plain loads and stores: the level's first
 `ExitAlloc` takes one of the instance's (or shares the table of a level
 below of the same instance), and the level gives it back when it ends. An
@@ -931,10 +951,10 @@ allocator's that the instruction takes, `lsra.Inst.Temps`). An array of 8
 i32s took 20 ns where Go's ExitOp took 56, one of 256 268 ns where it took
 450 (`BenchmarkJITAlloc`'s fills).
 
-What else allocates -- struct.new of a type with v128 fields, array.new,
-array.new_default and array.new_fixed of v128s, array.new_fixed of
-elements past 480 bytes, array.new_data, array.new_elem (`StubOp`) -- runs
-in Go from the allocation stub, in both tiers: the code stores the
+What else allocates -- array.new_fixed of elements past 480 bytes, and
+array.new_data and array.new_elem of a segment whose entry is past a
+32-bit offset (`StubOp`) -- runs in Go from the allocation stub, in both
+tiers: the code stores the
 instruction's `ExitOp` record, its operands in their slots as for the
 exit, and jumps to the stub, whose Go (`jitNew`) makes the object as the
 interpreter does and leaves it in the first operand's position's
@@ -942,14 +962,15 @@ reference slot, without leaving native code. What would trap -- a
 segment's range passed, an array past the most it may hold -- or a charge
 the budget holds only once what is reachable is counted again, it
 declines, and the code takes the exit, whose Go traps, or charges with
-the native frames' reference slots counted among what is live. On
-`micro/literals` (strings from data segments, arrays from an element
-segment, long literal arrays, arrays of v128s), whose 800,000
-instructions a run were each an exit (`ExitOp`, or `ExitInstr` in the
-optimizing tier for the v128s), they are none: the baseline 96.5 to 83.3
-ms, tiered 117 to 85.9, optimized 115 to 84.1 (the median of 5 rounds of
-3 processes, CPUs 0-15). array.fill, array.copy, array.init_data and
-array.init_elem run in Go (`ExitOp`).
+the native frames' reference slots counted among what is live; it stores
+array.new_fixed's operands from their slots as the element type wants
+them (`fixedElems`). On `micro/literals` (strings from data segments,
+arrays from an element segment, long literal arrays, arrays of v128s),
+whose 800,000 instructions a run were each an exit (`ExitOp`, or
+`ExitInstr` in the optimizing tier for the v128s), they are none, and
+600,000 of them native code's own: the 200,000 long literal arrays are the
+stub's. array.fill, array.copy, array.init_data and array.init_elem run in
+Go (`ExitOp`).
 
 ## Exceptions
 

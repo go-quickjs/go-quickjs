@@ -82,6 +82,8 @@ var (
 	offArg0      = int32(unsafe.Offsetof(wjit.Ctx{}.Arg0))
 	offExitFn    = int32(unsafe.Offsetof(wjit.Ctx{}.ExitFn))
 	offExitAddr  = int32(unsafe.Offsetof(wjit.Ctx{}.ExitAddr))
+	offDatas     = int32(unsafe.Offsetof(wjit.Ctx{}.Datas))
+	offElems     = int32(unsafe.Offsetof(wjit.Ctx{}.Elems))
 	offPools     = int32(unsafe.Offsetof(wjit.Ctx{}.Pools))
 	offResume    = int32(unsafe.Offsetof(wjit.Ctx{}.Resume))
 )
@@ -661,6 +663,9 @@ const (
 	// refArrayNew v, into the slot past off from R, as code's type, and
 	// goes on at to.
 	stubFill
+	// stubSeg copies refArraySeg v's segment into the array the engine
+	// made past the pools into the slot at off from R, and goes on at to.
+	stubSeg
 	// stubTrapWide is where the widened check of access v fails, s0
 	// the farthest end it checked: it traps at the first of the accesses
 	// the check covers whose end is past the memory's.
@@ -766,6 +771,11 @@ func (g *gen) stub(st *stub) {
 		a.Bind(st.l)
 		g.mark("cold array fill")
 		g.fillMade(st.v, st.off, uint32(st.code))
+		a.Jmp(st.to)
+	case stubSeg:
+		a.Bind(st.l)
+		g.mark("cold array copy")
+		g.segMade(st.v, st.off)
 		a.Jmp(st.to)
 	case stubCallExit:
 		// The function's exit for a call of a function through Go

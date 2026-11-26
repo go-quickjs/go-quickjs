@@ -247,6 +247,8 @@ func (g *gen) gcRef(v *Value) bool {
 		g.structNew(v, dst)
 	case refArrayNew:
 		g.arrayNew(v, dst)
+	case refArraySeg:
+		g.arraySeg(v, dst)
 	default:
 		return false
 	}
@@ -284,19 +286,25 @@ func (g *gen) structNew(v *Value, dst int32) {
 	a.Load(s1, s1, lay.PoolObjs)
 	j := 0
 	for i, f := range fs {
-		if !f.Type.IsRef() {
-			g.storeNum(v.Args[j], s1, int32(16*(i+1))+8, f.Type.Kind, true)
-			j++
+		switch {
+		case f.Type.IsRef():
+			continue
+		case f.Type.Kind == module.KindV128:
+			g.storeV128(v.Args[j], s1, cellOf(m, ti, uint32(i))+8, true)
+		default:
+			g.storeNum(v.Args[j], s1, cellOf(m, ti, uint32(i))+8, f.Type.Kind, true)
 		}
+		j++
 	}
 	if hasRefField(fs) {
 		a.Load(s0, rCtx, offR)
 		for i, f := range fs {
 			if f.Type.IsRef() {
+				off := cellOf(m, ti, uint32(i))
 				a.LoadF(x0, s0, dst+int32(16*i))
-				a.StoreF(s1, int32(16*(i+1)), x0)
+				a.StoreF(s1, off, x0)
 				a.LoadF(x0, s0, dst+int32(16*i)+8)
-				a.StoreF(s1, int32(16*(i+1))+8, x0)
+				a.StoreF(s1, off+8, x0)
 			}
 		}
 	}
@@ -360,6 +368,14 @@ func (g *gen) arrayNew(v *Value, dst int32) {
 				}
 				a.StoreF(s1, lay.ArrayBlock+16*i+w, x0)
 			}
+		}
+	case et.Kind == module.KindV128:
+		for i := int32(0); i < int32(n); i++ {
+			x := v.Args[0]
+			if mode == arrayFixed {
+				x = v.Args[i]
+			}
+			g.storeV128(x, s1, lay.ArrayBlock+i*size, false)
 		}
 	default:
 		for i := int32(0); i < int32(n); i++ {
@@ -445,6 +461,140 @@ func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind, fill
 	a.Bind(done)
 }
 
+// arraySeg lowers refArraySeg v: the segment's range -- the offset
+// Args[0] and the length Args[1]'s elements, in bytes for a data segment,
+// in references for an element segment -- checked against its length
+// (Ctx.Datas, Ctx.Elems; a dropped segment's is 0), a trap past it; the
+// array taken from the pool of its class, as arrayNewLength takes one, or
+// made by the engine into dst past the pools; the segment's elements
+// copied into it (segCopy) -- a reference plainly, as a new struct's
+// field, the segment holding it meanwhile -- and the array put into dst
+// and its pool's word cleared through the barrier.
+func (g *gen) arraySeg(v *Value, dst int32) {
+	a := g.a
+	lay := g.req.Layout
+	idx := v.Aux >> 8
+	ti, seg, data := uint32(idx&(1<<24-1)), uint32(idx>>24&(1<<31-1)), idx>>55&1 != 0
+	et := g.req.Module.Types[ti].Array.Elem.Type
+	shift := uint8(bits.TrailingZeros(uint(elemSize(et.Kind))))
+	segs, trap, unit := offDatas, uint64(wjit.TrapDataSegmentOutOfBounds), shift
+	if !data {
+		segs, trap, unit = offElems, wjit.TrapElementSegmentOutOfBounds, 0
+	}
+	entry := int32(seg) * lay.Segment
+	end := arm64.Reg(g.temp(v, 0))
+	retry, slow, big, made, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | wjit.AllocLength<<32, at: v.At},
+		stub{kind: stubAlloc, l: big, to: made, code: uint64(ti) | uint64(wjit.AllocMake|uint32(dst/16))<<32, at: v.At},
+		stub{kind: stubSeg, l: made, to: done, v: v, off: dst})
+	a.Bind(retry)
+	g.mark("array.new_data %d %d", ti, seg)
+	g.movG(s0, v.Args[1])
+	a.MovRR32(s0, s0)
+	a.Store(rCtx, offArg0+16, s0)
+	g.movG(end, v.Args[0])
+	a.MovRR32(end, end)
+	a.AddLsl(end, end, s0, unit)
+	a.Load(s1, rCtx, segs)
+	a.Load(s1, s1, entry+8)
+	a.Cmp(end, s1, true)
+	a.BCond(arm64.HI, g.trap(trap, v.At))
+	if shift > 0 {
+		a.ShiftImm(arm64.Lsl, s0, s0, shift, true)
+	}
+	a.CmpImm(s0, int64(16*(len(lay.ArrayClass)-1)), true)
+	a.BCond(arm64.HI, big)
+	a.AddImm(s0, s0, 15, true)
+	a.ShiftImm(arm64.Lsr, s0, s0, 4, true)
+	a.MovImm(s1, uint64(uintptr(unsafe.Pointer(&lay.ArrayClass[0]))))
+	a.LoadU8Idx(s0, s1, s0)
+	a.Load(s1, rCtx, offPools)
+	a.Cbz(s1, slow, true)
+	a.Load(s1, s1, int32(8*ti))
+	a.Cbz(s1, slow, true)
+	a.AddLsl(s1, s1, s0, 3)
+	a.Load(s1, s1, 0)
+	a.Cbz(s1, slow, true)
+	a.Load(s0, s1, lay.PoolCount)
+	a.Cbz(s0, slow, true)
+	a.AddImm(s0, s0, -1, true)
+	a.Store(s1, lay.PoolCount, s0)
+	a.AddLsl(s1, s1, s0, 3)
+	a.AddImm(s1, s1, int64(lay.PoolObjs), true)
+	a.Store(rCtx, offArg0+24, s1)
+	a.Load(s1, s1, 0)
+	a.Load(s0, rCtx, offArg0+16)
+	a.Store(s1, lay.ArrayLen, s0)
+	g.segCopy(v, segs, entry, shift, data)
+	a.FMovToF(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.Store(s0, dst+8, arm64.ZR)
+	g.barrierStore(s0, dst, s1)
+	a.Load(s1, rCtx, offArg0+24)
+	a.FMovToF(x0, arm64.ZR)
+	g.barrierStore(s1, 0, s0)
+	a.Bind(done)
+}
+
+// segCopy copies refArraySeg v's elements, as many as s0 holds, of 1<<shift
+// bytes each, from the segment whose entry is entry bytes into the table
+// at the context's segs into the array in s1: eight bytes at a time, then
+// the bytes left, through its three temporaries. s1 is kept.
+func (g *gen) segCopy(v *Value, segs, entry int32, shift uint8, data bool) {
+	a := g.a
+	e, n, s := arm64.Reg(g.temp(v, 0)), arm64.Reg(g.temp(v, 1)), arm64.Reg(g.temp(v, 2))
+	g.mark("array copy")
+	g.movG(s, v.Args[0])
+	a.MovRR32(s, s)
+	a.Load(n, rCtx, segs)
+	a.Load(n, n, entry)
+	if data {
+		a.Op(arm64.Add, s, n, s, true)
+	} else {
+		a.AddLsl(s, n, s, 4)
+	}
+	a.Load(e, s1, g.req.Layout.ArrayElems)
+	a.ShiftImm(arm64.Lsl, n, s0, shift, true)
+	words, bytes, end := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(words)
+	a.CmpImm(n, 8, true)
+	a.BCond(arm64.LO, bytes)
+	a.Load(s0, s, 0)
+	a.Store(e, 0, s0)
+	a.AddImm(s, s, 8, true)
+	a.AddImm(e, e, 8, true)
+	a.AddImm(n, n, -8, true)
+	a.B(words)
+	a.Bind(bytes)
+	if data && shift < 3 {
+		a.Cbz(n, end, true)
+		a.LoadU8(s0, s, 0)
+		a.Store8(e, 0, s0)
+		a.AddImm(s, s, 1, true)
+		a.AddImm(e, e, 1, true)
+		a.AddImm(n, n, -1, true)
+		a.B(bytes)
+	}
+	a.Bind(end)
+}
+
+// segMade copies refArraySeg v's segment into the array the engine made
+// into the slot at dst from R, past the pools.
+func (g *gen) segMade(v *Value, dst int32) {
+	a := g.a
+	idx := v.Aux >> 8
+	ti, seg, data := uint32(idx&(1<<24-1)), uint32(idx>>24&(1<<31-1)), idx>>55&1 != 0
+	et := g.req.Module.Types[ti].Array.Elem.Type
+	segs := offDatas
+	if !data {
+		segs = offElems
+	}
+	a.Load(s0, rCtx, offR)
+	a.Load(s1, s0, dst)
+	a.Load(s0, rCtx, offArg0+16)
+	g.segCopy(v, segs, int32(seg)*g.req.Layout.Segment, uint8(bits.TrailingZeros(uint(elemSize(et.Kind)))), data)
+}
+
 // fillArray stores refArrayNew v's value into each element of the array in
 // s1, of the length in s0, through its two temporaries: a reference from
 // its slot at dst from R, plainly, as a new struct's field. s1 is kept.
@@ -466,6 +616,8 @@ func (g *gen) fillArray(v *Value, dst int32, ti uint32) {
 		a.StoreF(e, 0, x0)
 		a.LoadF(x0, s0, dst+8)
 		a.StoreF(e, 8, x0)
+	} else if et.Kind == module.KindV128 {
+		g.storeV128(v.Args[0], e, 0, false)
 	} else {
 		g.storeNum(v.Args[0], e, 0, et.Kind, false)
 	}

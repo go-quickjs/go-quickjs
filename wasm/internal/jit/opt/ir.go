@@ -297,6 +297,13 @@ const (
 	// the array is taken from the pool of its class where the pools have
 	// room for it, else made by the engine into dst (wjit.AllocMake).
 	refArrayNew
+	// refArraySeg makes dst a new array of type idx's low 24 bits from
+	// segment idx>>24 -- a data segment where idx>>55 is 1, else an
+	// element segment -- at Args[0], of length Args[1] (segAux): taken
+	// from the pool of its class where the pools have room for it, else
+	// made by the engine into dst, its elements copied from the segment;
+	// past the segment's length it traps at At.
+	refArraySeg
 )
 
 // opFlags says what an operation does besides compute its value.

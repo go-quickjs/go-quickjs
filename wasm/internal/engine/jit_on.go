@@ -242,7 +242,16 @@ var jitLayout = &wjit.Layout{
 	PoolObjs:   int32(unsafe.Offsetof(gcPool{}.objs)),
 	ArrayBlock: int32(arrayHeader),
 	ArrayClass: arrayClassOf[:],
+	Segment:    int32(unsafe.Sizeof([]byte(nil))),
 }
+
+// A segment's entry, as native code reads it (wjit.Ctx.Datas): a slice's
+// address, then its length, a word; the element segments' alike.
+var (
+	_ [unsafe.Sizeof([]byte(nil)) - unsafe.Sizeof([]Ref(nil))]struct{}
+	_ [unsafe.Sizeof([]Ref(nil)) - unsafe.Sizeof([]byte(nil))]struct{}
+	_ [unsafe.Sizeof(int(0)) - 8]struct{}
+)
 
 // A type's supertypes are 4 bytes each, as native code reads them.
 var _ [unsafe.Sizeof(module.CanonicalIndex(0)) - 4]struct{}
@@ -1249,6 +1258,8 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		Inst:      uintptr(unsafe.Pointer(inst)),
 		Frames:    uintptr(unsafe.Pointer(&cj.frames[0])),
 		RFrames:   uintptr(unsafe.Pointer(&cj.rframes[0])),
+		Datas:     sliceAddr(inst.datas),
+		Elems:     sliceAddr(inst.elems),
 	}
 	lv.r0 = ctx.R
 	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {

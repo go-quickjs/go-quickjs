@@ -89,6 +89,62 @@ func (c *compiler) arrayClassAt(r arm64.Reg, shift uint8, big arm64.Label) {
 	a.LoadU8Idx(r, rTmp, r)
 }
 
+// segRange checks the range of k elements of 1<<unit bytes from src, an
+// i32 zero-extended, of the segment whose entry is entry bytes into the
+// table at the context's off (Ctx.Datas, Ctx.Elems), going to oob past the
+// segment's length. e is lost.
+func (c *compiler) segRange(e, k arm64.Reg, src value, off, entry int32, unit uint8, oob arm64.Label) {
+	a := c.a
+	c.loadLength(rTmp2, src, false)
+	a.AddLsl(e, rTmp2, k, unit)
+	a.Load(rTmp2, rCtx, off)
+	a.Load(rTmp2, rTmp2, entry+8)
+	a.Cmp(e, rTmp2, true)
+	a.BCond(arm64.HI, oob)
+}
+
+// segCopy copies k elements of 1<<shift bytes of the segment whose entry
+// is entry bytes into the table at the context's off, from its element src
+// -- a byte offset for a data segment, an index of its references for an
+// element segment -- to array p's elements: eight bytes at a time, then
+// the bytes left, walking in s and e. k is lost.
+func (c *compiler) segCopy(p, k, e, s arm64.Reg, src value, off, entry int32, shift uint8, data bool) {
+	a := c.a
+	c.loadLength(s, src, false)
+	a.Load(e, rCtx, off)
+	a.Load(e, e, entry)
+	if data {
+		a.Op(arm64.Add, s, e, s, true)
+	} else {
+		a.AddLsl(s, e, s, 4)
+	}
+	a.Load(e, p, c.req.Layout.ArrayElems)
+	if shift > 0 {
+		a.ShiftImm(arm64.Lsl, k, k, shift, true)
+	}
+	words, bytes, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(words)
+	a.CmpImm(k, 8, true)
+	a.BCond(arm64.LO, bytes)
+	a.Load(rTmp, s, 0)
+	a.Store(e, 0, rTmp)
+	a.AddImm(s, s, 8, true)
+	a.AddImm(e, e, 8, true)
+	a.AddImm(k, k, -8, true)
+	a.B(words)
+	a.Bind(bytes)
+	if data && shift < 3 {
+		a.Cbz(k, done, true)
+		a.LoadU8(rTmp, s, 0)
+		a.Store8(e, 0, rTmp)
+		a.AddImm(s, s, 1, true)
+		a.AddImm(e, e, 1, true)
+		a.AddImm(k, k, -1, true)
+		a.B(bytes)
+	}
+	a.Bind(done)
+}
+
 // fillLoop runs body for each of the n elements of size bytes from e, e
 // moving past each. n and e are lost.
 func (c *compiler) fillLoop(e, n arm64.Reg, size int32, body func()) {

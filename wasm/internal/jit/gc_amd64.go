@@ -90,6 +90,64 @@ func (c *compiler) arrayClassAt(r amd64.Reg, shift uint8, big amd64.Label) {
 	a.LoadU8(r, r, 0)
 }
 
+// segRange checks the range of k elements of 1<<unit bytes from src, an
+// i32 zero-extended, of the segment whose entry is entry bytes into the
+// table at the context's off (Ctx.Datas, Ctx.Elems), going to oob past the
+// segment's length. e is lost.
+func (c *compiler) segRange(e, k amd64.Reg, src value, off, entry int32, unit uint8, oob amd64.Label) {
+	a := c.a
+	a.MovRR(e, k)
+	if unit > 0 {
+		a.ShiftImm(amd64.Shl, e, unit, true)
+	}
+	c.loadLength(rTmp, src, false)
+	a.Op(amd64.Add, e, rTmp, true)
+	a.Load(rTmp, rCtx, off)
+	a.CmpMem(e, rTmp, entry+8, true)
+	a.Jcc(amd64.CondA, oob)
+}
+
+// segCopy copies k elements of 1<<shift bytes of the segment whose entry
+// is entry bytes into the table at the context's off, from its element src
+// -- a byte offset for a data segment, an index of its references for an
+// element segment -- to array p's elements: eight bytes at a time, then
+// the bytes left, walking in s and e. k is lost.
+func (c *compiler) segCopy(p, k, e, s amd64.Reg, src value, off, entry int32, shift uint8, data bool) {
+	a := c.a
+	c.loadLength(s, src, false)
+	if !data {
+		a.ShiftImm(amd64.Shl, s, 4, true)
+	}
+	a.Load(e, rCtx, off)
+	a.Load(e, e, entry)
+	a.Op(amd64.Add, s, e, true)
+	a.Load(e, p, c.req.Layout.ArrayElems)
+	if shift > 0 {
+		a.ShiftImm(amd64.Shl, k, shift, true)
+	}
+	words, bytes, done := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(words)
+	a.OpImm(amd64.Cmp, k, 8, true)
+	a.Jcc(amd64.CondB, bytes)
+	a.Load(rTmp, s, 0)
+	a.Store(e, 0, rTmp)
+	a.OpImm(amd64.Add, s, 8, true)
+	a.OpImm(amd64.Add, e, 8, true)
+	a.OpImm(amd64.Sub, k, 8, true)
+	a.Jmp(words)
+	a.Bind(bytes)
+	if data && shift < 3 {
+		c.jumpZero(k, done)
+		a.LoadU8(rTmp, s, 0)
+		a.Store8(e, 0, rTmp)
+		a.OpImm(amd64.Add, s, 1, true)
+		a.OpImm(amd64.Add, e, 1, true)
+		a.OpImm(amd64.Sub, k, 1, true)
+		a.Jmp(bytes)
+	}
+	a.Bind(done)
+}
+
 // fillLoop runs body for each of the n elements of size bytes from e, e
 // moving past each. n and e are lost.
 func (c *compiler) fillLoop(e, n amd64.Reg, size int32, body func()) {

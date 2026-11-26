@@ -1146,7 +1146,9 @@ WASI:
 
 ## Follow-ups
 
-- array.new_fixed of more than 480 bytes of elements, array.new_data and
-  array.new_elem still exit to Go; array.new of any length is native, its
-  value stored in a loop (20 ns an array of 8 i32s, where the exit took
-  56).
+- array.new_fixed of more than 480 bytes of elements is made by Go from
+  the JIT's allocation stub, without an exit; array.new_data,
+  array.new_elem, arrays of v128s and structs with v128 fields are native
+  in both tiers. The interpreter's native handlers still leave
+  array.new_data, array.new_elem and arrays of v128s to their Go
+  handlers.

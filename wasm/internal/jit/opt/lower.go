@@ -428,6 +428,10 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 					// registers of its own.
 					temps = g.addTemps(lf, temps, v, 2, classGPR)
 				}
+				if segArray(v) {
+					// The copy from the segment walks both and counts.
+					temps = g.addTemps(lf, temps, v, 3, classGPR)
+				}
 			case OpDivS, OpDivU, OpRemS, OpRemU, OpMulHU, OpMulHS:
 				clobber = clob(clobDiv)
 			case OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg, OpAtomicCmpxchg:

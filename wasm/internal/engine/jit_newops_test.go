@@ -195,11 +195,12 @@ func newOpsCases() []jitCase {
 	}
 }
 
-// Native code makes the objects of the instructions it leaves to Go
-// through the allocation stub, in the baseline's code and optimized, idle,
-// marking and with the registers clobbered: the results and the traps are
-// the interpreter's, and only the traps, which the engine leaves to the
-// exit, and the segments' drops are exits.
+// Native code makes arrays from segments and of v128s, and structs with
+// v128 fields, itself, and the long literal arrays through the
+// allocation stub, in the
+// baseline's code and optimized, idle, marking and with the registers
+// clobbered: the results and the traps are the interpreter's, and only
+// the traps and the segments' drops are exits.
 func TestJITNewOps(t *testing.T) {
 	want, werr := runCases(t, thresholdInstance(t, newOpsWAT, math.MaxInt32), newOpsCases())
 	traps := 0
@@ -225,11 +226,27 @@ func TestJITNewOps(t *testing.T) {
 				got, gerr := runCases(t, inst, newOpsCases())
 				sameOutcomes(t, tier, newOpsCases(), want, werr, got, gerr)
 				ops, stubs = c.ops.Load()-ops, c.opStubs.Load()-stubs
-				// Each trap is an ExitOp, the engine declining the
-				// instruction in the stub first, and so are data.drop
-				// and elem.drop.
-				if ops != int64(traps)+2 || stubs < 2000 {
+				// A trap native code makes itself is an ExitTrap; one of
+				// an instruction Go makes is an ExitOp, the engine
+				// declining it in the stub; data.drop and elem.drop are
+				// ExitOps.
+				if ops > int64(traps)+2 || stubs == 0 {
 					t.Fatalf("%d ExitOps for %d traps and 2 drops, %d instructions run from the stub", ops, traps, stubs)
+				}
+				// The arrays from segments and of v128s, and the struct
+				// with a v128 field, are native code's own.
+				before := c.opStubs.Load()
+				if _, err := refCall(t, inst, "data", Val{N: 3}, Val{N: 30}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := refCall(t, inst, "elems", Val{N: 1}, Val{N: 5}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := refCall(t, inst, "vecs", Val{N: 9}, Val{N: 20}); err != nil {
+					t.Fatal(err)
+				}
+				if n := c.opStubs.Load() - before; n != 0 {
+					t.Fatalf("%d arrays from segments or of v128s made by Go", n)
 				}
 				for _, name := range []string{"data", "elems", "fixed", "vecs", "keep"} {
 					if opt && !optimized(inst, name) || !opt && !nativeRan(inst, name) {

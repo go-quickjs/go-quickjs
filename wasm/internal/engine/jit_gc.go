@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"encoding/binary"
 	"unsafe"
 
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
@@ -146,15 +147,12 @@ func (x *exec) jitNew(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFram
 		}
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayNewFixed:
-		et := m.Types[a].Array.Elem.Type
 		// The operands stay in their slots until the result is put.
 		ar := array(b)
 		if ar == nil {
 			return false
 		}
-		for i := range int(b) {
-			arraySet(ar, et, i, get(i, et.Unpacked()))
-		}
+		f.fixedElems(ar, m.Types[a].Array.Elem.Type.Kind, slot)
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayNewData:
 		src, cnt := u32(0), u32(1)
@@ -188,6 +186,49 @@ func (x *exec) jitNew(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFram
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	}
 	return true
+}
+
+// fixedElems stores array.new_fixed's operands, of storage type t, from
+// the stack positions of f from the one whose numeric slot is slot, into
+// the elements of ar, as many: each straight from its slot, as arraySet
+// stores it.
+func (f *exitFrame) fixedElems(ar *Array, t module.Kind, slot int) {
+	if ar.n == 0 {
+		return
+	}
+	switch t {
+	case module.KindRef:
+		e := unsafe.Slice((*Ref)(ar.e), ar.n)
+		for i := range e {
+			e[i] = f.r[f.rslot(slot+2*i)]
+		}
+	case module.KindI8:
+		e := unsafe.Slice((*byte)(ar.e), ar.n)
+		for i := range e {
+			e[i] = uint8(f.l[slot+2*i])
+		}
+	case module.KindI16:
+		e := unsafe.Slice((*byte)(ar.e), 2*ar.n)
+		for i := range ar.n {
+			binary.LittleEndian.PutUint16(e[2*i:], uint16(f.l[slot+2*i]))
+		}
+	case module.KindI32, module.KindF32:
+		e := unsafe.Slice((*byte)(ar.e), 4*ar.n)
+		for i := range ar.n {
+			binary.LittleEndian.PutUint32(e[4*i:], uint32(f.l[slot+2*i]))
+		}
+	case module.KindV128:
+		e := unsafe.Slice((*byte)(ar.e), 16*ar.n)
+		for i := range ar.n {
+			binary.LittleEndian.PutUint64(e[16*i:], f.l[slot+2*i])
+			binary.LittleEndian.PutUint64(e[16*i+8:], f.l[slot+2*i+1])
+		}
+	default:
+		e := unsafe.Slice((*byte)(ar.e), 8*ar.n)
+		for i := range ar.n {
+			binary.LittleEndian.PutUint64(e[8*i:], f.l[slot+2*i])
+		}
+	}
 }
 
 // Pools of new objects.

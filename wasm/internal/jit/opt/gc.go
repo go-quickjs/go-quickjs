@@ -10,7 +10,8 @@ import (
 // written in place, by reference instructions (OpRef) on the slot that
 // holds the object: a number read is a value, a reference read goes into
 // its position's slot, as every reference does. The tests and casts read
-// the slot too. What allocates other than from the pools, and array.fill,
+// the slot too. What allocates other than from the pools and the segments
+// (refStructNew, refArrayNew, refArraySeg), and array.fill,
 // array.copy and the array.init instructions, run in Go (OpGoOp) -- what
 // allocates from the allocation stub (wjit.StubOp) -- whose allocations
 // charge the instance's budget: their numeric operands are staged in the
@@ -114,17 +115,6 @@ func heapTestOf(m *module.Module, h module.HeapType) (test heapTest, canon uint3
 	return testNone, 0, 0
 }
 
-// pooled reports whether the code makes the structs of type ti from the
-// engine's pools (refStructNew): a type without v128 fields.
-func pooled(m *module.Module, ti uint32) bool {
-	for _, f := range m.Types[ti].Struct.Fields {
-		if f.Type.Kind == module.KindV128 {
-			return false
-		}
-	}
-	return true
-}
-
 // newFields returns the fields refStructNew's index idx stores: its type's,
 // or none for struct.new_default.
 func newFields(m *module.Module, idx uint64) []module.FieldType {
@@ -187,10 +177,6 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	switch op {
 	case opcode.StructNew, opcode.StructNewDefault:
 		ti := r.u32()
-		if !pooled(m, ti) {
-			bd.gcGo(op, ti, 0, at)
-			break
-		}
 		n := 0
 		if op == opcode.StructNew {
 			n = len(m.Types[ti].Struct.Fields)
@@ -217,14 +203,12 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 				bd.arrayNew(op, ti, uint32(n.Aux), at)
 				break
 			}
-		} else if op == opcode.ArrayNewDefault && len(bd.ws.arrayClass) > 0 &&
-			m.Types[ti].Array.Elem.Type.Kind != module.KindV128 && bd.rpos(h-1) < wjit.AllocLength {
+		} else if op == opcode.ArrayNewDefault && len(bd.ws.arrayClass) > 0 && bd.rpos(h-1) < wjit.AllocLength {
 			bd.refOp(bd.b, refArrayNew, bd.rpos(h-1), bd.rpos(h-1), uint64(ti)|arrayLength<<32|arrayDefault<<48, TNone, at, bd.pop())
 			bd.pushRef()
 			break
 		}
-		if op == opcode.ArrayNew && len(bd.ws.arrayClass) > 0 &&
-			m.Types[ti].Array.Elem.Type.Kind != module.KindV128 && bd.rpos(h-1) < wjit.AllocLength {
+		if op == opcode.ArrayNew && len(bd.ws.arrayClass) > 0 && bd.rpos(h-1) < wjit.AllocLength {
 			// Of a length not constant, or past what is stored one by one:
 			// the value stored in a loop, the array made past the pools
 			// into the length's position's slot.
@@ -252,8 +236,16 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 			break
 		}
 		bd.gcGo(op, ti, 0, at)
-	case opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
-		opcode.ArrayInitData, opcode.ArrayInitElem:
+	case opcode.ArrayNewData, opcode.ArrayNewElem:
+		ti, seg := r.u32(), r.u32()
+		if aux, ok := segAux(m, bd.ws.arrayClass, ti, seg, op == opcode.ArrayNewData); ok && bd.rpos(h-2) < wjit.AllocLength {
+			length, src := bd.pop(), bd.pop()
+			bd.refOp(bd.b, refArraySeg, bd.rpos(h-2), 0, aux, TNone, at, src, length)
+			bd.pushRef()
+			break
+		}
+		bd.gcGo(op, ti, seg, at)
+	case opcode.ArrayCopy, opcode.ArrayInitData, opcode.ArrayInitElem:
 		x := r.u32()
 		bd.gcGo(op, x, r.u32(), at)
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
@@ -378,6 +370,26 @@ const (
 // of a length not constant, its last argument.
 const arrayLength = 0xffff
 
+// segAux is refArraySeg's index for array.new_data (data) or
+// array.new_elem of type ti from segment seg, and whether the code makes
+// the array itself: an array of numbers but v128s, or of references,
+// where the pools have classes, of a type and a segment whose indices the
+// index holds.
+func segAux(m *module.Module, classes []uint8, ti, seg uint32, data bool) (uint64, bool) {
+	if len(classes) == 0 || ti >= 1<<24 || seg >= 1<<31 {
+		return 0, false
+	}
+	aux := uint64(ti) | uint64(seg)<<24
+	if data {
+		aux |= 1 << 55
+	}
+	return aux, true
+}
+
+// segArray reports whether v is refArraySeg, whose copy walks in
+// registers of its own.
+func segArray(v *Value) bool { return v.Op == OpRef && v.Aux&0xff == refArraySeg }
+
 // fillsArray reports whether v is refArrayNew of a length not constant
 // that stores its value into each element, in a loop.
 func fillsArray(v *Value) bool {
@@ -399,11 +411,10 @@ const arrayNewMost = 16
 // largest blocks have room for, and for array.new (fill) no more than
 // arrayNewMost of them -- and the class of their blocks.
 func arrayPooled(m *module.Module, classes []uint8, ti, n uint32, fill bool) (int, bool) {
-	et := m.Types[ti].Array.Elem.Type
-	if et.Kind == module.KindV128 || fill && n > arrayNewMost {
+	if fill && n > arrayNewMost {
 		return 0, false
 	}
-	u := (uint64(n)*uint64(elemSize(et.Kind)) + 15) / 16
+	u := (uint64(n)*uint64(elemSize(m.Types[ti].Array.Elem.Type.Kind)) + 15) / 16
 	if u >= uint64(len(classes)) {
 		return 0, false
 	}
@@ -413,7 +424,7 @@ func arrayPooled(m *module.Module, classes []uint8, ti, n uint32, fill bool) (in
 // elemSize is the bytes an array element of storage type t takes: a
 // reference's two words, or its number's.
 func elemSize(t module.Kind) int {
-	if t == module.KindRef {
+	if t == module.KindRef || t == module.KindV128 {
 		return 16
 	}
 	return storageSize(t)
