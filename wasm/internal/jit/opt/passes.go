@@ -365,13 +365,17 @@ func foldValue(ws *workspace, v *Value) {
 	}
 }
 
-// eqzEqz makes eqz of an eqz of x -- Go's code's test of a bool it made
-// from a comparison with zero -- x != 0, a comparison that a branch on it
-// fuses with, where it was two tests and two SETcc. v is block's value i;
-// eqzEqz returns the number of values it puts before it, the zero it
-// makes.
+// eqzEqz makes eqz of an eqz of x, or of its i64 extension -- Go's code's
+// test of a bool it made from a comparison with zero -- x != 0, a
+// comparison that a branch on it fuses with, where it was two tests and two
+// SETcc. v is block's value i; eqzEqz returns the number of values it puts
+// before it, the zero it makes.
 func eqzEqz(f *Func, v *Value, i int) int {
 	a := resolve(v.Args[0])
+	if a.Op == OpExtendU {
+		// An eqz's 0 or 1 widened to an i64 is zero where it is.
+		a = resolve(a.Args[0])
+	}
 	if a.Op != OpEqz {
 		return 0
 	}
