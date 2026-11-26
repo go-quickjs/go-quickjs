@@ -38,7 +38,11 @@ const jitWorkUpdate = "QUICKJS_JIT_WORK"
 // Optimize leaves; of the backend, for amd64 and for arm64 both, each
 // compiled on any host from the same SSA, each phase's steps in the loops
 // whose length is not the item's own (mir.Times' Steps) and the bytes it
-// allocates. The collector is off while they are counted. A count of
+// allocates; and the bytes each phase allocates in workspaces the same
+// compile has grown (warm), which hold the workspaces' discipline -- a
+// table a compile no longer cuts from them, or that they no longer keep,
+// shows there, where a compile outside them allocates its tables
+// whatever it does. The collector is off while they are counted. A count of
 // steps, values or blocks is the record's within 10% either way -- they do
 // not vary from one run to the next, so a change that moves one by more
 // is a change of the compiler's work, to record if it is meant -- and one
@@ -168,10 +172,11 @@ func readJITWorkRecord(t *testing.T) map[string]int64 {
 }
 
 // jitWorkItem is a function of the corpus, by name: build makes its SSA,
-// from its lowered program and its feedback as a compile of it would.
+// from its lowered program and its feedback as a compile of it would, in
+// the workspace it is given, or in none.
 type jitWorkItem struct {
 	name  string
-	build func() *ssa.Func
+	build func(*ssa.Workspace) *ssa.Func
 }
 
 // jitWorkCorpus is TestJITCompileWork's functions: one of each of
@@ -247,10 +252,17 @@ func jitWorkCorpus(t *testing.T) []jitWorkItem {
 }
 
 // jitWorkBuild is a build of p, cl's register code c lowered, as the JIT
-// builds it: its feedback asked anew at each.
-func jitWorkBuild(t *testing.T, r *Runtime, p *ir.Program, cl *closure, c *regCode) func() *ssa.Func {
-	return func() *ssa.Func {
-		f, err := ssa.BuildWith(p, r.jitRegFeedbackFor(cl, p))
+// builds it: its feedback asked anew at each; in w, or, w nil, in no
+// workspace.
+func jitWorkBuild(t *testing.T, r *Runtime, p *ir.Program, cl *closure, c *regCode) func(*ssa.Workspace) *ssa.Func {
+	return func(w *ssa.Workspace) *ssa.Func {
+		var f *ssa.Func
+		var err error
+		if w != nil {
+			f, err = ssa.BuildIn(w, p, r.jitRegFeedbackFor(cl, p))
+		} else {
+			f, err = ssa.BuildWith(p, r.jitRegFeedbackFor(cl, p))
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +272,10 @@ func jitWorkBuild(t *testing.T, r *Runtime, p *ir.Program, cl *closure, c *regCo
 }
 
 // jitWorkOf measures it's compile work (TestJITCompileWork), each figure
-// given to put by measure.
+// given to put by measure: in no workspace, what the compile's tables
+// cost, and in a workspace the same compile has grown, what the compile
+// allocates once its tables are kept (warm) -- its code and what describes
+// it, its feedback's answers, and what the workspaces do not yet hold.
 func jitWorkOf(t *testing.T, it jitWorkItem, put func(item, what string, n int64)) {
 	t.Helper()
 	var ms runtime.MemStats
@@ -272,7 +287,7 @@ func jitWorkOf(t *testing.T, it jitWorkItem, put func(item, what string, n int64
 	opts.CheckAllocations = false
 	for _, arch := range []string{"amd64", "arm64"} {
 		a0 := alloc()
-		f := it.build()
+		f := it.build(nil)
 		a1 := alloc()
 		ssa.Optimize(f)
 		a2 := alloc()
@@ -298,6 +313,44 @@ func jitWorkOf(t *testing.T, it jitWorkItem, put func(item, what string, n int64
 		for p := mir.PhasePrepare; p < mir.NumPhases; p++ {
 			put(it.name, fmt.Sprintf("%s %s steps", arch, p), tm.Steps[p])
 			put(it.name, fmt.Sprintf("%s %s bytes", arch, p), tm.Ticks[p])
+		}
+	}
+	// Warm: each compiled twice in the same workspaces, rewound between as
+	// a pooled workspace is (jit.PutWorkspace), the second measured.
+	var sw ssa.Workspace
+	for _, arch := range []string{"amd64", "arm64"} {
+		var mw mir.Workspace
+		for round := range 2 {
+			a0 := alloc()
+			f := it.build(&sw)
+			a1 := alloc()
+			ssa.Optimize(f)
+			a2 := alloc()
+			tm := &mir.Times{Clock: alloc}
+			o := opts
+			o.Timing = tm
+			tm.Start()
+			var err error
+			if arch == "amd64" {
+				_, err = mir.CompileAMD64In(&mw, f, jitEncoding, o)
+			} else {
+				_, err = mir.CompileARM64In(&mw, f, jitEncoding, o)
+			}
+			if err != nil {
+				t.Fatalf("%s %s, in a workspace: %v", it.name, arch, err)
+			}
+			sw.RewindAt(0)
+			mw.RewindAt(0)
+			if round == 0 {
+				continue
+			}
+			if arch == "amd64" {
+				put(it.name, "warm ssa build bytes", a1-a0)
+				put(it.name, "warm ssa optimize bytes", a2-a1)
+			}
+			for p := mir.PhasePrepare; p < mir.NumPhases; p++ {
+				put(it.name, fmt.Sprintf("warm %s %s bytes", arch, p), tm.Ticks[p])
+			}
 		}
 	}
 }

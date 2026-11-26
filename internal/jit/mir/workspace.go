@@ -276,6 +276,19 @@ func CompileWith(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (*Co
 	return compileAMD64(w, f, enc, opts)
 }
 
+// CompileAMD64In and CompileARM64In are CompileWith for amd64 and for
+// arm64 whatever the host, in w: for a measure of a compile in a workspace
+// its compiles before have grown (TestJITCompileWork).
+func CompileAMD64In(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (*Code, error) {
+	w.init()
+	return compileAMD64(w, f, enc, opts)
+}
+
+func CompileARM64In(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (*Code, error) {
+	w.init()
+	return compileARM64(w, f, enc, opts)
+}
+
 // The core's tables, from its workspace if it has one.
 
 func (c *core) bools(n int) []bool {
