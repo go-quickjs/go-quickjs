@@ -734,11 +734,6 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	for v, w := range webs {
-		if w != nil && w.calls && len(w.members) > 1 && !vacr[v].calls {
-			w.weight -= defW[v]
-		}
-	}
 	// Hints: a two-address definition wants its operand's register, a phi
 	// its arguments' where they are not one web, and they its.
 	webOf := func(v VReg) *web {
@@ -767,9 +762,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
+	// The webs, each once, by its first member, in the walk that takes the
+	// last of what weighs (above) from their weights: the definitions of a
+	// web's registers that live across no call, where it is joined with
+	// one that does. The hints read no weight.
 	list := al.list[:0]
 	for v, w := range webs {
-		if w != nil && w.members[0] == VReg(v) {
+		if w == nil {
+			continue
+		}
+		if w.calls && len(w.members) > 1 && !vacr[v].calls {
+			w.weight -= defW[v]
+		}
+		if w.members[0] == VReg(v) {
 			list = append(list, w)
 		}
 	}
