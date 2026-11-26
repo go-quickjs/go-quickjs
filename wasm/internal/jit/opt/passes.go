@@ -405,9 +405,7 @@ func constIs(v *Value, c int64) bool {
 
 // foldValue folds v if its arguments let it, any list it makes in ws.
 func foldValue(ws *workspace, v *Value) {
-	for i, a := range v.Args {
-		v.Args[i] = resolve(a)
-	}
+	resolveArgs(v.Args)
 	switch len(v.Args) {
 	case 1:
 		foldUnary(ws, v)
