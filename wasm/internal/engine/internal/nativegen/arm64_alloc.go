@@ -82,6 +82,13 @@ func (g *armGen) storeVal(kind int32, base Reg) {
 		a.Op(Add, aT, base, a9, true)
 		a.StoreQ(aT, 0, V0)
 		return
+	case rd.NatE128:
+		a.AddLsl(a9, aL, a9, 3)
+		a.LoadQ(V0, a9, 0)
+		a.LoadU32(a9, aD, rd.NatTo)
+		a.Op(Add, aT, base, a9, true)
+		a.StoreQ(aT, 0, V0)
+		return
 	case rd.NatV128:
 		a.AddLsl(a9, aL, a9, 3)
 		a.Load(aW, a9, 0)
@@ -216,7 +223,7 @@ func (g *armGen) alloc() {
 			switch x {
 			case rd.XArrayNewFixed:
 				a.Load(aK, aS, rd.ArrayElems)
-				g.storeVals(aK, []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef})
+				g.storeVals(aK, []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef, rd.NatE128})
 			case rd.XArrayNew:
 				g.fillElems()
 			}
@@ -236,16 +243,20 @@ func (g *armGen) fillElems() {
 	a.Load(aD, aC, rd.GCNatVals)
 	a.LoadU32(aK, aD, rd.NatKind)
 	end := a.NewLabel()
-	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef} {
+	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef, rd.NatE128} {
 		skip := a.NewLabel()
 		a.CmpImm(aK, int64(k), false)
 		a.BCond(NE, skip)
 		a.LoadU32(a9, aD, rd.NatFrom)
-		if k == rd.NatRef {
+		switch k {
+		case rd.NatRef:
 			a.Load(aT, aCtx, rd.CtxR)
 			a.AddLsl(a9, aT, a9, 4)
 			a.LoadQ(V0, a9, 0)
-		} else {
+		case rd.NatE128:
+			a.AddLsl(a9, aL, a9, 3)
+			a.LoadQ(V0, a9, 0)
+		default:
 			a.LoadIdx(aW, aL, a9, true)
 		}
 		g.arrayLength()
@@ -256,7 +267,7 @@ func (g *armGen) fillElems() {
 		a.Cbz(a8, end, true)
 		size := int64(8)
 		switch k {
-		case rd.NatRef:
+		case rd.NatRef, rd.NatE128:
 			a.StoreQ(aD, 0, V0)
 			size = 16
 		case rd.Nat64:

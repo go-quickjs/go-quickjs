@@ -271,7 +271,7 @@ func (g *gen) storeElems() {
 	a.Op(Test, R8, R8, true)
 	a.Jcc(CondE, end)
 	next := a.NewLabel()
-	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef} {
+	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef, rd.NatE128} {
 		skip := a.NewLabel()
 		a.LoadU32(R9, RDX, rd.NatKind)
 		a.OpImm(Cmp, R9, k, false)
@@ -292,17 +292,21 @@ func (g *gen) storeElems() {
 // elements' first (the context's cd word) plus the natVal's offset.
 func (g *gen) storeValAt(kind int32) {
 	a := g.a
-	if kind == rd.NatRef {
+	switch kind {
+	case rd.NatRef:
 		a.ShiftImm(Shl, R9, 4, true)
 		a.OpMem(Add, R9, RDI, rd.CtxR, true)
 		a.LoadVec(XM0, R9, 0)
-	} else {
+	case rd.NatE128:
+		a.LeaIdx(R9, R12, R9, 8, 0)
+		a.LoadVec(XM0, R9, 0)
+	default:
 		a.LoadIdx(RAX, R12, R9, 8, 0)
 	}
 	a.LoadU32(R9, RDX, rd.NatTo)
 	a.OpMem(Add, R9, RDI, rd.CtxCd, true)
 	switch kind {
-	case rd.NatRef:
+	case rd.NatRef, rd.NatE128:
 		a.StoreVec(R9, 0, XM0)
 	case rd.Nat64:
 		a.Store(R9, 0, RAX)
@@ -324,17 +328,21 @@ func (g *gen) fillElems() {
 	a.LoadU32(R8, RDX, rd.NatKind)
 	a.Store(RDI, rd.CtxCd, R8)
 	end := a.NewLabel()
-	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef} {
+	for _, k := range []int32{rd.Nat64, rd.NatE32, rd.NatE16, rd.NatE8, rd.NatRef, rd.NatE128} {
 		skip := a.NewLabel()
 		a.LoadU32(R8, RDI, rd.CtxCd)
 		a.OpImm(Cmp, R8, k, false)
 		a.Jcc(CondNE, skip)
 		// The value, the elements' first in RDX, the count in R8.
-		if k == rd.NatRef {
+		switch k {
+		case rd.NatRef:
 			a.ShiftImm(Shl, R9, 4, true)
 			a.OpMem(Add, R9, RDI, rd.CtxR, true)
 			a.LoadVec(XM0, R9, 0)
-		} else {
+		case rd.NatE128:
+			a.LeaIdx(R9, R12, R9, 8, 0)
+			a.LoadVec(XM0, R9, 0)
+		default:
 			a.LoadIdx(RAX, R12, R9, 8, 0)
 		}
 		g.arrayLength()
@@ -346,7 +354,7 @@ func (g *gen) fillElems() {
 		a.Jcc(CondE, end)
 		size := int32(8)
 		switch k {
-		case rd.NatRef:
+		case rd.NatRef, rd.NatE128:
 			a.StoreVec(RDX, 0, XM0)
 			size = 16
 		case rd.Nat64:

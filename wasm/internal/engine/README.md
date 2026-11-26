@@ -640,8 +640,7 @@ always true; a bottom type is Go's. A null where an object is needed, an
 index out of bounds and a failed cast exit to Go, which traps.
 
 **Allocations.** `struct.new`, `struct.new_default`, `array.new`,
-`array.new_default` and `array.new_fixed` (but of v128 elements) are
-native (native_gc.go, internal/nativegen's `*_alloc.go`): the object is
+`array.new_default` and `array.new_fixed` are native (native_gc.go, internal/nativegen's `*_alloc.go`): the object is
 taken from a pool of the exec's table for the instance -- the JIT's pools
 and tables (gcpool.go), a struct type's entry its pool, an array type's a
 table of pools by the class of its block, its address the exec's
@@ -659,7 +658,9 @@ it declines, and the handler exits to the instruction's Go handler, which
 allocates as the Go table does. A fill is charged whole as it is made, as
 the JIT's are. `TestNativeGC` holds every kind, the traps and the casts to
 the Go table with the marking flag read set and clear, and fails where a
-loop of them leaves to Go but for an array of v128s; `TestNativeAlloc`
+loop of them leaves to Go, arrays of v128s included (their elements'
+16 bytes stored whole from the value's two slots, `NatE128`);
+`TestNativeAlloc`
 every kind of allocation, lengths each side of the classes and past them,
 the traps, and no allocation leaving native code but a trapping one;
 `TestNativeAllocBudget` the budget; `TestNativeAllocConvention` the
@@ -767,7 +768,7 @@ was padded to whole pages.
 
 ## Open work
 
-1. array.new_data and array.new_elem, and arrays of v128s, natively.
+1. array.new_data and array.new_elem natively, as the JIT makes them.
 2. Forms with a 32-bit immediate in the word after the instruction for the
    hot ones -- compare-and-branch, add, sub, and, or, xor, mul -- where a
    constant past 16 bits is reloaded every turn today (`i32.lt_u i

@@ -129,8 +129,8 @@ const (
 // natVal.kind): a number into a struct's cell's payload, all 64 bits (Nat64),
 // the low 32, 16 or 8 zero-extended (NatW32, NatW16, NatW8), or a v128 into
 // two cells' payloads (NatV128); a number into an array's element, of 8, 4,
-// 2 or 1 bytes (Nat64, NatE32, NatE16, NatE8); or a reference, the whole
-// slot (NatRef).
+// 2 or 1 bytes (Nat64, NatE32, NatE16, NatE8), or a v128's 16, from its two
+// slots (NatE128); or a reference, the whole slot (NatRef).
 const (
 	Nat64 = iota + 1
 	NatW32
@@ -141,6 +141,7 @@ const (
 	NatE16
 	NatE8
 	NatRef
+	NatE128
 )
 
 // How native code tests a reference (the engine's regGC.mode).

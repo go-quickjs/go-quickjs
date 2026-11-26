@@ -1150,5 +1150,4 @@ WASI:
   the JIT's allocation stub, without an exit; array.new_data,
   array.new_elem, arrays of v128s and structs with v128 fields are native
   in both tiers. The interpreter's native handlers still leave
-  array.new_data, array.new_elem and arrays of v128s to their Go
-  handlers.
+  array.new_data and array.new_elem to their Go handlers.

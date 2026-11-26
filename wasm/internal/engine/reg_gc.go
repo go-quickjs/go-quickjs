@@ -91,7 +91,7 @@ func natCell(t module.ValueType) uint32 {
 }
 
 // natElem is how a value of array element type t is stored, natively, and
-// the log2 of its bytes; false for a v128, which native code leaves to Go.
+// the log2 of its bytes.
 func natElem(t module.ValueType) (kind, shift uint32, ok bool) {
 	switch t.Kind {
 	case module.KindI8:
@@ -104,6 +104,8 @@ func natElem(t module.ValueType) (kind, shift uint32, ok bool) {
 		return regdef.Nat64, 3, true
 	case module.KindRef:
 		return regdef.NatRef, 4, true
+	case module.KindV128:
+		return regdef.NatE128, 4, true
 	}
 	return 0, 0, false
 }

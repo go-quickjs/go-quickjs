@@ -10,7 +10,7 @@ import (
 )
 
 // nativeAllocSrc makes structs of every field kind by struct.new, and
-// arrays of every element kind but v128 by array.new, array.new_default
+// arrays of every element kind by array.new, array.new_default
 // and array.new_fixed, each read back whole: of lengths given at run time,
 // from the pools' classes and past them, and too long, a trap.
 var nativeAllocSrc = func() string {
@@ -59,6 +59,7 @@ var nativeAllocSrc = func() string {
 		{"f32", "f32", "f32", "array.get", "(i64.extend_i32_u (i32.reinterpret_f32 %s))"},
 		{"f64", "f64", "f64", "array.get", "(i64.reinterpret_f64 %s)"},
 		{"ref", "(ref null $box)", "(ref null $box)", "array.get", "(i64.extend_i32_u (if (result i32) (ref.is_null %[1]s) (then (i32.const 7)) (else (struct.get $box 0 %[1]s))))"},
+		{"v128", "v128", "v128", "array.get", "(i64.add (i64x2.extract_lane 0 %[1]s) (i64.rotl (i64x2.extract_lane 1 %[1]s) (i64.const 9)))"},
 	} {
 		get := fmt.Sprintf(t.ext, fmt.Sprintf("(%s $%s (local.get $a) (local.get $i))", t.get, t.name))
 		fmt.Fprintf(&b, "  (type $%s (array (mut %s)))\n", t.name, t.storage)
@@ -99,17 +100,21 @@ var nativeAllocSrc = func() string {
 func nativeAllocCalls() []regCall {
 	calls := []regCall{{"structs", []Val{{N: 1}, {N: 0x8123456789abcdef}}}, {"structs", []Val{{N: 300}, {N: 0xfedc}}},
 		{"defaults", []Val{{N: 1000}}}}
-	sizes := map[string]uint64{"i8": 1, "i16": 2, "i32": 4, "i64": 8, "f32": 4, "f64": 8, "ref": 16}
+	sizes := map[string]uint64{"i8": 1, "i16": 2, "i32": 4, "i64": 8, "f32": 4, "f64": 8, "ref": 16, "v128": 16}
 	vals := map[string]uint64{"i8": 0xfffffff3, "i16": 0xffff8001, "i32": 0x89abcdef, "i64": 0x8123456789abcdef,
-		"f32": 0x7fc00001, "f64": 0x7ff8000000000003, "ref": 0x1234}
-	for _, name := range []string{"i8", "i16", "i32", "i64", "f32", "f64", "ref"} {
+		"f32": 0x7fc00001, "f64": 0x7ff8000000000003, "ref": 0x1234, "v128": 0x0123456789abcdef}
+	for _, name := range []string{"i8", "i16", "i32", "i64", "f32", "f64", "ref", "v128"} {
 		edge := 480 / sizes[name]
+		v := Val{N: vals[name]}
+		if name == "v128" {
+			v.Hi = 0xfedcba9876543210
+		}
 		for _, n := range []uint64{0, 1, 2, 16, 17, edge - 1, edge, edge + 1, 1000, 0x7fffffff, 0xffffffff} {
 			for _, f := range []string{"", "_default"} {
-				calls = append(calls, regCall{name + f, []Val{{N: n}, {N: vals[name]}}})
+				calls = append(calls, regCall{name + f, []Val{{N: n}, v}})
 			}
 		}
-		calls = append(calls, regCall{name + "_fixed", []Val{{N: 0}, {N: vals[name]}}})
+		calls = append(calls, regCall{name + "_fixed", []Val{{N: 0}, v}})
 	}
 	return calls
 }
